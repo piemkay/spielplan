@@ -1,19 +1,6 @@
-"""The acquisition spine's three tables, asserted by trying to violate them. Spec v2.1 §8.
-
-`test_migrations.py` checks that every migration applies and what shape it leaves behind; this
-file checks what that shape *refuses*, for the reason `test_schema_contracts.py` states at its
-own head: a CHECK constraint that is never tried is a comment with punctuation.
-
-Two of `0024_acquisition.sql`'s load-bearing claims are absences, which is the kind of decision a
-later reader repairs on sight. `acquisition_task` carries **no foreign key to `title`** because
-§8 stage 1 is what mints the title (decision 322, and `connectors/resolve.py:216-222`'s refusal
-to invent one), and `raw_document.content_sha256` carries **no UNIQUE** because two fetches that
-return identical bytes share one file and must still leave two rows of history. Neither absence
-can be asserted by reading the DDL, so each is asserted here in the direction that catches its
-repair: the task outlives the title, and one hash keeps two rows.
-
-Skipped without TEST_DATABASE_URL; see tests/conftest.py.
-"""
+"""The acquisition spine's three tables, asserted by trying to violate them (§8). The absences (no
+FK from task to title, no UNIQUE on content_sha256) are asserted in the direction that catches a repair.
+Needs TEST_DATABASE_URL."""
 
 from __future__ import annotations
 
@@ -36,22 +23,9 @@ async def _index_defs(db, table: str) -> str:
     return " ".join(row["indexdef"] for row in rows)
 
 
-# --- decision 322: the durable (kind, key) queue --------------------------------------
-
-
 async def test_enqueueing_the_same_kind_and_key_twice_is_refused(db):
-    """`mdc/queue.py:1-8`: "Task identity is (kind, key). Enqueueing the same pair twice is a
-    no-op."
-
-    The no-op will be the writer's `ON CONFLICT`; what is asserted here is the constraint
-    underneath it, because a uniqueness enforced by the writer is a uniqueness that holds until
-    two writers run -- and §8.4's flywheel is the second writer, enqueueing titles the nightly
-    sweep is enqueueing at the same time.
-
-    The second half is the half that says what the identity *is*: the same key under a different
-    kind is a different task, so a title can be at `identify` and `enrich` in the same table
-    without either collapsing into the other.
-    """
+    """A uniqueness enforced by the writer holds only until
+    two writers run; §8.4's flywheel is the second."""
     await db.execute("INSERT INTO acquisition_task (kind, key) VALUES ('identify', 'jf:a1')")
     with pytest.raises(asyncpg.UniqueViolationError):
         await db.execute("INSERT INTO acquisition_task (kind, key) VALUES ('identify', 'jf:a1')")
@@ -60,16 +34,8 @@ async def test_enqueueing_the_same_kind_and_key_twice_is_refused(db):
 
 
 async def test_the_state_check_refuses_a_state_the_drain_cannot_read(db):
-    """The queue and the board have different vocabularies, and the confusion is one word wide.
-
-    `acquisition_job.status` is `queued|running|parked|ready|failed` (`0005_ledger.sql:136`) and
-    is what §6.6's board shows; `acquisition_task.state` is the corpus's
-    `pending|leased|done|failed|skipped`, which is what the drain's `WHERE state = 'pending'`
-    reads. They overlap on `failed` only. A writer that reaches for the board's spelling while
-    holding the queue's row has to be refused here, because the row it would write is one no
-    lease query would ever see again -- work that is silently invisible rather than loudly
-    wrong. [decision 322; decision 336 on what `parked` means and where it lives]
-    """
+    """The board's `status` and the queue's `state` overlap
+    on `failed` only; a board word here is never leased."""
     with pytest.raises(asyncpg.CheckViolationError):
         await db.execute(
             "INSERT INTO acquisition_task (kind, key, state) VALUES ('identify', 'jf:a2', $1)",
@@ -78,19 +44,7 @@ async def test_the_state_check_refuses_a_state_the_drain_cannot_read(db):
 
 
 async def test_a_new_task_is_free_and_immediately_claimable(db):
-    """Two defaults the drain depends on, asserted together because they are one statement.
-
-    `paid` is false, so a generic drain that leases whatever is ready cannot bill the household
-    on its first tick: §8's paid stage (6) arrives at M5.5 and sets the flag itself, and until
-    then every task in this table is a crawl. `mdc/sources/base.py:51-53` carries the same flag
-    for the same reason -- at corpus scale the difference between a free pass and a paid one is
-    roughly a hundred euros a click.
-
-    `next_attempt_at` is NOT NULL with a default of now(), where the corpus defaults to 0. Both
-    mean "due immediately"; what matters is that it is never NULL, because the lease query reads
-    `next_attempt_at <= now()` over `acquisition_task_ready` and a NULL there is a row that is
-    enqueued, indexed, and never leased by anybody.
-    """
+    """A NULL `next_attempt_at` is enqueued, indexed and never leased by anybody."""
     row = await db.fetchrow(
         "INSERT INTO acquisition_task (kind, key) VALUES ('identify', 'jf:a3') "
         "RETURNING paid, state, attempts, next_attempt_at"
@@ -105,18 +59,7 @@ async def test_a_new_task_is_free_and_immediately_claimable(db):
 
 
 async def test_a_leased_task_cannot_be_written_without_a_lease_to_expire(db):
-    """The one state that must never be half-written. §8's "killed and resumed" is this row.
-
-    Recovery is by lease expiry and not by a shutdown handler -- "the only way that actually
-    survives `kill -9`" (`mdc/queue.py:1-8`) -- so the reaper's whole mechanism is
-    `lease_expires < now()`. A row marked `leased` with no expiry is work nothing can ever
-    reclaim: not the worker that took it (it is gone) and not the next one (it sees a lease that
-    never ends).
-
-    The second half asserts the direction the constraint deliberately leaves open. It is stated
-    as an implication and not a biconditional, so whether a finished row keeps the owner that
-    finished it stays the drain's business -- provenance a later admin surface may well want.
-    """
+    """Recovery is by lease expiry (survives `kill -9`), so a lease with no expiry is never reclaimed."""
     with pytest.raises(asyncpg.CheckViolationError):
         await db.execute(
             "INSERT INTO acquisition_task (kind, key, state) "
@@ -129,17 +72,7 @@ async def test_a_leased_task_cannot_be_written_without_a_lease_to_expire(db):
 
 
 async def test_the_queue_is_indexed_for_the_lease_and_for_the_reaper(db):
-    """The two reads the drain makes every tick, per §5.3's sequential single-process loop.
-
-    Asserted because an index is the first thing a later migration drops when it looks redundant.
-    The lease FILTERS on (state, next_attempt_at) -- the corpus's own `ix_task_ready`, whose third
-    column `priority` is along for the ride rather than serving the sort; the reaper reads the
-    leases that have expired, which is a partial index because a row that is not leased can never
-    be reclaimed.
-
-    WHAT THIS DOES NOT PIN is the lease's ORDER BY: a substring match on `pg_indexes` cannot see a
-    sort key. [M5.1 review cycle 4, M51-C4-QUEUE-01]
-    """
+    """An index is the first thing a later migration drops when it looks redundant."""
     defs = await _index_defs(db, "acquisition_task")
     assert "(state, next_attempt_at, priority)" in defs, (
         "the lease query has no index for its filter: claimable rows, then the ones whose time "
@@ -151,21 +84,7 @@ async def test_the_queue_is_indexed_for_the_lease_and_for_the_reaper(db):
 
 
 async def test_deleting_a_title_keeps_its_task_and_takes_its_board_row(db):
-    """Decision 322, in the only place it can be observed: the two tables behave differently.
-
-    `acquisition_job` is the per-title board and cascades from `title`
-    (`0005_ledger.sql:134`); that CASCADE is pinned by
-    `test_schema_contracts.py::test_a_title_carrying_only_derived_rows_still_deletes` and is not
-    this file's to restate. `acquisition_task` is the queue and has no foreign key at all,
-    because it is keyed on the Jellyfin item or the provider id and has to be able to hold work
-    for a title that does not exist yet -- §8 stage 1's job is to mint that title, and
-    `connectors/resolve.py:216-222` says the boundary in as many words: "An unresolved item is
-    *reported*, never invented ... Acquiring genuinely new titles is §8's pipeline."
-
-    So the assertion is the surviving row. A later reader who adds the foreign key that looks
-    missing fails here, which is cheaper than discovering at M5.2 that nothing can be enqueued
-    until the thing the enqueue exists to create already exists.
-    """
+    """`acquisition_task` has no FK: stage 1 is what mints the title (decision 322)."""
     target = await _title(db, 700)
     await db.execute(
         "INSERT INTO acquisition_job (title_id, stage, status) VALUES ($1, 2, 'parked')", target
@@ -190,19 +109,8 @@ async def test_deleting_a_title_keeps_its_task_and_takes_its_board_row(db):
     )
 
 
-# --- §8: the raw store's index --------------------------------------------------------
-
-
 async def test_two_fetches_of_identical_bytes_share_a_file_and_keep_two_rows(db):
-    """`mdc/rawstore.py:1-11`, which is the requirement §8 restates as "All fetched bytes land in
-    the app's own raw store, so re-parsing is free forever" (spec:398).
-
-    "Two fetches that return identical bytes share one file but get two rows, so the fetch
-    history stays visible without duplicating bulk." A UNIQUE on `content_sha256` would collapse
-    the history into the storage and make "when did we last see this" unanswerable -- which is
-    the question a conditional re-fetch and §6.6's board both ask. The store's own dedupe is the
-    content-addressed path, and that is asserted here too: one path, two rows.
-    """
+    """A UNIQUE on `content_sha256` would collapse the fetch history into the storage."""
     for _ in range(2):
         await db.execute(
             "INSERT INTO raw_document (source, kind, entity_key, url, http_status, "
@@ -221,32 +129,13 @@ async def test_two_fetches_of_identical_bytes_share_a_file_and_keep_two_rows(db)
 
 
 async def test_the_raw_store_is_indexed_for_the_derive_and_for_the_store(db):
-    """The two reads the plan requires (`docs/milestones/M5.1-plan.md` §5, step A2).
-
-    The derive reads by entity to re-parse one title without a crawl; the store reads by hash to
-    find the file it already has. Both are on the hot path of the promise that a bad derive is
-    cheap to fix, which is the whole reason the bytes are kept.
-    """
     defs = await _index_defs(db, "raw_document")
     assert "(entity_key, source, kind)" in defs, "the per-title re-parse has no index"
     assert "(content_sha256)" in defs, "the store cannot find the file it already holds"
 
 
-# --- decision 340: the fetcher's per-host memory ---------------------------------------
-
-
 async def test_the_robots_cache_holds_one_row_per_host(db):
-    """Per host, because that is what robots.txt is, and what a circuit breaker must be.
-
-    One row per host is what keeps a breaker opened by a hostile host from burning the whole run
-    and from leaking into another host's pacing. A second row for the same host would be a second
-    answer to "may we fetch this", and §14 risk 5 is about exactly that shape.
-
-    The second half asserts that the robots columns are nullable: a host whose robots.txt has not
-    been fetched yet, or whose fetch failed, still has to be recordable -- the breaker's counters
-    are the first thing written about a host that is refusing connections, and requiring a robots
-    body first would make the failing case the one that cannot be written down.
-    """
+    """The robots columns are nullable: a refusing host's breaker counters come before any robots body."""
     await db.execute(
         "INSERT INTO fetch_host_state (host, robots_txt, robots_status, robots_fetched_at) "
         "VALUES ('example.test', 'User-agent: *', 200, now())"

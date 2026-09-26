@@ -1,28 +1,6 @@
-"""§6.0's M2 Home and §6.7's rail. Spec v2.1 §6.0, §6.7, §4.1 rules 1/2/5, §5.1, §5.2, §7.3;
-decisions 18 and 117; proposals 20–33 and 150.
-
-Four claims are under test, and the fixture below is built to break each one rather than to
-look plausible:
-
-* **the why-line** — three DECOY titles per kind carry `obsession` + `period` but not
-  `morally-grey`. The prototype's rule ("admit on any two shared terms, then name the anchor's
-  first two") admits them under a why-line they do not satisfy, so any implementation that
-  labels a list instead of filtering by the terms it claims fails
-  `test_a_card_carrying_only_one_of_the_two_named_terms_is_not_on_the_shelf`.
-* **the banner** — one seen title's only verdict row is marked superseded. §4.2 is append-only
-  and "has a verdict" means "has a LIVE verdict", so that title is unrated and belongs in the
-  banner; a bare `NOT EXISTS (SELECT 1 FROM verdict …)` drops it and the count comes back 5.
-* **the partition** — EVERY series outscores EVERY film. A merged top-12 is therefore all
-  series and the Films section comes back empty, which is §4.1 rule 5's measured landmine (the
-  unpartitioned crowd top-10 is 8/10 TV series) reproduced in miniature. The catalog grid, by
-  contrast, is *supposed* to interleave, and one test asserts exactly that — decision 18's
-  point is that the falsifiable property is the ORDERING, not the rendering.
-* **the toggle** — β is seeded at 0.62, not 0.8, so a hard-coded constant in the why-line is
-  visible; and the whole payload is walked for model keys with the toggle off, so a gate
-  applied at four call sites and forgotten at the fifth fails.
-
-Skipped without TEST_DATABASE_URL; see tests/conftest.py.
-"""
+"""§6.0's Home and §6.7's rail. The fixture is built to break each claim: decoys carrying one of shelf 1's
+two named terms, a superseded-only verdict in the banner, every series outscoring every film, and β at 0.62.
+Needs TEST_DATABASE_URL."""
 
 from __future__ import annotations
 
@@ -55,18 +33,11 @@ DECOYS = (5, 6, 7)              # carry obsession + period, NOT morally-grey —
 FRONTIER = (8, 9, 10, 11)       # carry `neon`, which no seen title carries; also the cold ones
 LIKED = (12, 13, 14)            # seen, high CDF, carry `cosy` — the frontier's named neighbour
 PENDING = (21, 22, 23)          # seen, no live verdict — the banner's population
-# Decision 475 builds the shelves in a claim order and no title repeats on a second shelf of its
-# kind, so every shelf here has a population of its own: "Your top picks" is the twelve SEEN
-# titles (rewatches included, and nobody else wants them), shelf 1 is MEMBERS, the frontier is
-# FRONTIER, the sweet spot is DECOYS, and "Under 110 minutes" is SHORT - short, unseen, owned and
-# on no earlier shelf. FILLER is owned, unseen and lowest-scored: it is what puts DECOYS above the
-# sweet spot's 0.70 floor in a library whose top twelve are all seen, and it carries no DNA.
+# No title repeats on a second shelf of its kind (decision 475), so every shelf has its own population.
 SHORT = (24, 25, 26, 27)
 FILLER = tuple(range(24, 50))
 
-# §6.0 shelf 5: strict `<`, and a NULL runtime is excluded because a shelf that claims a
-# runtime bound must know the runtime. 1005/1105 and 1028/1128 sit exactly ON the threshold,
-# and 1029/1129 have no runtime - the latter two among the titles no earlier shelf claims.
+# Strict `<`, NULL runtime excluded; some titles sit exactly ON the threshold and some have none.
 RUNTIME = {
     1: 95, 2: 100, 3: 105, 4: 90, 5: 110, 6: None, 7: 130,
     8: 140, 9: 150, 10: 160, 11: 170,
@@ -78,22 +49,16 @@ SERIES_RUNTIME = {
     24: 20, 25: 25, 26: 30, 27: 35, 28: 45, 29: None,
 }
 
-# §5.1's blend weight, seeded away from the measured 0.8 so a why-line printing the constant
-# rather than this profile's fitted number is visible in the copy.
+# β seeded away from 0.8, so a why-line printing the constant is visible.
 FITTED_BETA = 0.62
 
 
-# The unseen titles' score order: DECOYS first, so they are the unseen titles both people rate
-# highest - the sweet spot's population once the shelves before it have claimed theirs.
+# DECOYS rank highest among the unseen: the sweet spot's population.
 UNSEEN_ORDER = DECOYS + MEMBERS + FRONTIER
 
 
 def score_of(title_id: int) -> float:
-    """EVERY series outscores EVERY film. §4.1 rule 5's landmine, in miniature.
-
-    The seen titles (12-23) are the top twelve, so "Your top picks" - which ranks rewatches too -
-    claims only titles no later shelf would show (decision 475).
-    """
+    """§4.1 rule 5's landmine in miniature: EVERY series outscores EVERY film."""
     base = 1000 if title_id < 1100 else 1100
     offset = title_id - base
     if offset == ANCHOR:
@@ -115,17 +80,13 @@ def ids(base: int, offsets) -> list[int]:
     return [base + o for o in offsets]
 
 
-# --- the world -------------------------------------------------------------------------------
-
-
 class World:
     def __init__(self, client, db, patrick, jenny, jenny_otp, app):
         self.client, self.db, self.app = client, db, app
         self.patrick, self.jenny, self.jenny_otp = patrick, jenny, jenny_otp
 
     async def sign_in_jenny(self):
-        """§3.1: a member's account is locked to a password change at first login, so a client
-        that only logs in with the OTP is not yet an `ActiveUser`."""
+        """§3.1: an OTP-only login is not yet an `ActiveUser`."""
         client = self.app()
         await client.post("/api/auth/login", json={"name": "jenny", "password": self.jenny_otp})
         await client.post(
@@ -171,8 +132,7 @@ async def _seed_vocabulary(conn) -> None:
 
 
 async def _tag(conn, title_id: int, term: str, facet: str, salience: int) -> None:
-    """The extracted tier. §4.1: 'a tag without its quote is unfalsifiable' — so every one of
-    these carries evidence, exactly as the importer requires."""
+    """§4.1: every extracted tag carries its evidence, as the importer requires."""
     tag_id = await conn.fetchval(
         """
         INSERT INTO dna_tag (title_id, version, term, facet, salience, provider)
@@ -211,10 +171,7 @@ async def seed(conn, *, patrick: int, jenny: int) -> None:
         table = RUNTIME if kind == "movie" else SERIES_RUNTIME
         runtime = table.get(offset, 120 if kind == "movie" else 50)
         placement = "cold_tower" if title_id in cold else "warm"
-        # `placement_bundle` is not decoration here: `title_placement_has_basis`
-        # (0023_import_state.sql) makes "placed" and "names a basis" one fact, so a fixture that
-        # stamps only the badge is the state decision 249 exists to forbid. BUNDLE is this
-        # world's active row, inserted above, and it is the basis every placement here means.
+        # `title_placement_has_basis` makes "placed" and "names a basis" one fact.
         await conn.execute(
             """
             INSERT INTO title
@@ -229,16 +186,8 @@ async def seed(conn, *, patrick: int, jenny: int) -> None:
             BUNDLE,
         )
 
-    # §6.0 shelf 1's world: an anchor, four titles carrying BOTH of its terms, and three decoys
-    # carrying only one of them plus a term the anchor also has.
-    #
-    # The projected weights are `n_sources` counts, not confidences: `importer/dna.py` writes the
-    # bundle's 1..8 source count into `dna_projected.weight`, which is finding 20's whole subject.
-    # Seeded as 0.6 and 0.5 this fixture could not see decision 188 at all — under the expression
-    # it replaced they weighed 0.18 and 0.15, far below the extracted floor of 0.733, so every
-    # assertion in this file passed with the pre-M4.9 fragment restored and the guard on the
-    # milestone's most far-reaching read was a substring compare. The anchor's 8 is the corpus
-    # maximum and weighs 2.40 under the old form. [M4.9 review cycle 1: M49-D188-02]
+    # Projected weights are `n_sources` counts (the anchor's
+    # 8 is the corpus maximum), as the importer writes.
     for base in BASES:
         await _tag(conn, base + ANCHOR, "obsession", "themes", 3)
         await _tag(conn, base + ANCHOR, "morally-grey", "character", 2)
@@ -256,8 +205,7 @@ async def seed(conn, *, patrick: int, jenny: int) -> None:
         for offset in LIKED:
             await _tag(conn, base + offset, "cosy", "mood", 3)
 
-    # Seen state. Patrick has 13 seen of each kind, which clears FRONTIER_MIN_SEEN = 10; Jenny
-    # has 11, leaving 1001–1011 / 1101–1111 unseen by BOTH for the sweet-spot shelf.
+    # Patrick has 13 seen per kind (>= FRONTIER_MIN_SEEN); Jenny 11, leaving some unseen by BOTH.
     for base in BASES:
         for offset in [ANCHOR] + list(range(12, 24)):
             await conn.execute(
@@ -271,17 +219,14 @@ async def seed(conn, *, patrick: int, jenny: int) -> None:
                 jenny, base + offset,
             )
 
-    # Live verdicts on the anchor and offsets 12..20; 21..23 are seen and unrated — the banner.
+    # Live verdicts on the anchor and offsets 12..20; 21..23 are seen and unrated: the banner.
     for base in BASES:
         for offset in [ANCHOR] + list(range(12, 21)):
             await conn.execute(
                 "INSERT INTO verdict (user_id, title_id, value) VALUES ($1, $2, 2)",
                 patrick, base + offset,
             )
-    # THE FALSIFIER for the banner's `superseded_by IS NULL`. §4.2 is append-only and a
-    # re-rating supersedes rather than mutates, so a row marked superseded is not a live
-    # verdict and its title is still unrated. The column is nullable and unconstrained across
-    # titles — what the predicate asks is "is this row current", not "where did it go".
+    # The falsifier for `superseded_by IS NULL`: a superseded row is not a live verdict.
     live = await conn.fetchval(
         "SELECT id FROM verdict WHERE user_id = $1 AND title_id = 1000", patrick
     )
@@ -342,7 +287,7 @@ async def seed(conn, *, patrick: int, jenny: int) -> None:
                 user_id, title_id, kind_of(title_id), BUNDLE, score_of(title_id),
             )
 
-    # §6.0: "credits, each person tappable → filters the library to their filmography".
+    # §6.0: credits filter the library to a filmography.
     await conn.execute("INSERT INTO person (id, name) VALUES (900, 'Ada Cross-Kind')")
     for title_id in (1001, 1101):
         await conn.execute(
@@ -367,17 +312,8 @@ async def world(app, db):
     return World(client, db, patrick, jenny, member.json()["one_time_password"], app)
 
 
-# --- library-rate-shelf-why-line --------------------------------------------------------------
-
-
 async def test_every_section_carries_a_why_line_and_every_card_carries_every_named_term(world):
-    """§6.0: "a shelf that cannot say why it exists doesn't ship"; proposal 24: "nor does one
-    that says the wrong why … The why-line must name terms **every** item on the shelf carries".
-
-    Walks the whole payload: every section has a non-empty why, and every term the why-line
-    names with role `member` — plus every term the section reports as shared — is present in
-    `dna_tagged` for EVERY card on that section, not only for the anchor.
-    """
+    """Every term a why-line names, and every shared term, is on EVERY card of that section."""
     payload = await world.home()
     assert payload["shelves"], "no shelves at all — the fixture is not exercising the surface"
 
@@ -399,8 +335,7 @@ async def test_every_section_carries_a_why_line_and_every_card_carries_every_nam
                     f"{len(card_ids)} cards carry it"
                 )
                 checked += 1
-            # Every anchor_side term is the OTHER kind of claim (§6.4's named edge): it
-            # describes the user's liked region, not the cards, and must be labelled as such.
+            # An `anchor_side` term describes the liked region, not the cards, and is labelled so.
             for term in section["why_terms"]:
                 assert term["role"] in ("member", "anchor_side")
                 assert term["tier"] in ("extracted", "projected")
@@ -408,13 +343,7 @@ async def test_every_section_carries_a_why_line_and_every_card_carries_every_nam
 
 
 async def test_a_card_carrying_only_one_of_the_two_named_terms_is_not_on_the_shelf(world):
-    """The prototype admits on "any two shared terms" and then names the anchor's first two,
-    so a card can be shown under a reason it does not satisfy (proposal 24).
-
-    The decoys carry `obsession` + `period`; the anchor carries `obsession`, `morally-grey` and
-    `period`. Under the prototype's rule they are admitted. Under proposal 24's — the terms are
-    chosen first and membership is "carries both" — they are not.
-    """
+    """Decoys carry two of the anchor's terms but not both named ones; they must not be admitted."""
     payload = await world.home()
     for base in BASES:
         section = world.section(payload, "because_anchor", kind_of(base))
@@ -423,28 +352,20 @@ async def test_a_card_carrying_only_one_of_the_two_named_terms_is_not_on_the_she
         assert {t["term"] for t in section["why_terms"]} == {"morally-grey", "obsession"}
         assert not set(ids(base, DECOYS)) & {c["title_id"] for c in section["items"]}
         assert section["why"] == "shares morally-grey + obsession with it"
-        # Decision 476: "you put" is only for a title the person placed on Rank; this anchor
-        # carries a live liked verdict and no tier edit, so the headline says what they did.
+        # Decision 476: "you put" only for a title the person placed on Rank.
         assert section["title"] == f"Because you liked Home {'Film' if base == 1000 else 'Series'} " \
                                   f"{base}"
 
 
 async def test_the_ledger_shelf_names_the_beta_its_own_ranking_used(world):
-    """§6.0 row 2 names β. Printing the measured constant 0.8 while this profile's fitted β is
-    0.62 is exactly the decorative why-line §6.0 forbids — the number would have had no part in
-    the ordering the person is looking at.
-
-    Decision 476 moves the number out of the sentence and decision 486 puts it behind Show the
-    model: with the switch off the why-line carries no β at all, and with it on `why_numbers`
-    carries the fitted one, never the constant.
-    """
+    """With the switch off no β; with it on the fitted β, never the constant."""
     payload = await world.home()
     for kind in ("movie", "series"):
         section = world.section(payload, "top_of_ledger", kind)
         assert section is not None
         assert "β" not in section["why"] and "0.62" not in section["why"], section["why"]
         assert "why_numbers" not in section, "a model number reached a member with the switch off"
-        assert "rewatches included" in section["why"]   # proposal 25's stated exception
+        assert "rewatches included" in section["why"]
 
     await world.client.post("/api/auth/preferences", json={"show_model": True})
     payload = await world.home()
@@ -455,20 +376,8 @@ async def test_the_ledger_shelf_names_the_beta_its_own_ranking_used(world):
 
 
 async def test_the_optimum_the_ledger_shelf_prints_is_this_apps_own_and_not_the_corpuss(world):
-    """Decision 167. §5.1 quotes the corpus's 0.8, but the corpus's table is headed `blend beta
-    (1.0 = crowd only)`: that number weighs the CROWD, and β here weighs the personal half. So
-    the optimum in these coordinates is 1 − 0.8 = **0.2**, which is also where this app's own
-    held-out Spearman peaks over 150 real raters and where the median fitted β already sits.
-
-    The consequence is copy, not ranking — the cross-validation searches and serves in one
-    orientation, so every stored number was always right. What was wrong is what a person reads:
-    `beta_optimum` travels on every "Top of your ledger" section, and a member fitted at the
-    optimum was being measured against a constant that is the complement of it.
-
-    Decision 486 puts the optimum behind Show the model with every other model number, so it is
-    read with the switch on; the caption that carried it to members (and quoted §5.1 to them) is
-    gone, and the unfitted profile's sentence says in words what the number said.
-    """
+    """Decision 167: the corpus's 0.8 weighs the crowd, so
+    this app's optimum is 0.2; behind Show the model."""
     await world.client.post("/api/auth/preferences", json={"show_model": True})
     payload = await world.home()
     for kind in ("movie", "series"):
@@ -477,8 +386,7 @@ async def test_the_optimum_the_ledger_shelf_prints_is_this_apps_own_and_not_the_
         assert section["why_numbers"]["beta_optimum"] == pytest.approx(0.2, abs=1e-9)
         assert section["caption"] is None, section["caption"]
 
-    # The first evening of a household, before the first nightly run: never fitted, so ranked by
-    # the crowd alone - and said so without a β or a section number.
+    # Never fitted: ranked by the crowd alone, and said so without a β.
     await world.db.execute(
         "DELETE FROM user_vector WHERE user_id = $1 AND purpose = 'foldin'", world.patrick
     )
@@ -492,15 +400,8 @@ async def test_the_optimum_the_ledger_shelf_prints_is_this_apps_own_and_not_the_
 
 
 async def test_the_school_night_shelf_names_the_threshold_its_cards_obey(world):
-    """Proposal 27: "Under the Series partition this shelf restates itself as 'Episodes under 45
-    minutes' … the thresholds (110 min film, 45 min episode) are constants, not copy."
-
-    The prototype applied 110 to per-episode runtimes and swallowed the series catalog. Also
-    checks the strict `<` (a title at exactly the threshold is not under it) and the NULL
-    exclusion (a shelf claiming a runtime bound must know the runtime).
-    """
-    # With the switch on, because the threshold also rides `why_numbers` and decision 486 gates
-    # that block; the title states it either way.
+    """110 min for films, 45 for episodes; strict `<`, NULL runtimes excluded."""
+    # With the switch on, because the threshold also rides `why_numbers`.
     await world.client.post("/api/auth/preferences", json={"show_model": True})
     payload = await world.home()
     expected = {"movie": ("Under 110 minutes", 110), "series": ("Episodes under 45 minutes", 45)}
@@ -512,7 +413,7 @@ async def test_the_school_night_shelf_names_the_threshold_its_cards_obey(world):
         assert section["title"] == title
         assert section["why"] == "for a school night"
         assert section["why_numbers"]["max_minutes"] == threshold
-        # SHORT, and not MEMBERS, which are as short: shelf 1 claimed them first (decision 475).
+        # SHORT, and not MEMBERS, which are as short: shelf 1 claimed them first.
         assert [c["title_id"] for c in section["items"]] == sorted(ids(base, SHORT))
         for card in section["items"]:
             assert card["runtime_min"] is not None
@@ -524,16 +425,7 @@ async def test_the_school_night_shelf_names_the_threshold_its_cards_obey(world):
 
 
 async def test_a_shelf_that_cannot_justify_itself_is_absent_not_empty(world):
-    """§6.0: absent, never present-and-empty. Proposal 28 puts the floor at three.
-
-    Two of shelf 1's four members lose `morally-grey` and one decoy loses `period`, so NO pair
-    of the anchor's terms covers three unseen owned films — and the shelf must disappear from
-    `shelves` entirely rather than render short. The series half is untouched and still ships,
-    which is the second half of the claim: the suppression is per section, not per shelf.
-
-    With "show the model" on, `suppressed` names the count and the floor, so the absence is
-    distinguishable from a bug.
-    """
+    """Absent, never present-and-empty (floor of three); suppression is per section."""
     for title_id in (1002, 1003):
         await world.db.execute(
             "DELETE FROM dna_tag WHERE title_id = $1 AND term = 'morally-grey'", title_id
@@ -559,16 +451,7 @@ async def test_a_shelf_that_cannot_justify_itself_is_absent_not_empty(world):
 
 
 async def test_the_new_in_library_shelf_only_carries_titles_with_no_crowd_support(world):
-    """§6.0 row 6's why is "placed by the Cold Tower — no crowd data yet", and proposal 33 says
-    what makes that checkable: `item_n`, the count of crowd ratings behind a title. (Not
-    "§5.1's gate input", which is the same number only while every row carries a coordinate --
-    a cold-masked row has crowd support and no n_t, and `title_prior.gate` is the column that
-    carries the gate. [M4.13 cycle 2, M413-C2-DIM5-01])
-
-    Title 1007 is `warm` with 4,213 crowd ratings (gate 0.998). A shelf that selected on recency
-    alone, or on `placement` without asking what the model actually has, would show it under a
-    claim of no crowd data.
-    """
+    """"No crowd data" is checked by `item_n`; 1007 is warm with 4,213 ratings and must not appear."""
     payload = await world.home()
     for base in BASES:
         section = world.section(payload, "new_in_library", kind_of(base))
@@ -576,7 +459,7 @@ async def test_the_new_in_library_shelf_only_carries_titles_with_no_crowd_suppor
         # Decision 476's words for the same claim.
         assert section["why"] == "no outside ratings yet, so we placed them by what they're about"
         shown = [c["title_id"] for c in section["items"]]
-        # Ordered by recency, newest first — the one shelf that is not score-ordered.
+        # Ordered by recency, newest first: the one shelf that is not score-ordered.
         assert shown == sorted(ids(base, FRONTIER), reverse=True)
         assert base + 7 not in shown, "a warm title with 4213 crowd ratings is not 'new'"
         for card in section["items"]:
@@ -590,13 +473,7 @@ async def test_the_new_in_library_shelf_only_carries_titles_with_no_crowd_suppor
 
 
 async def test_the_frontier_shelf_names_a_term_no_seen_title_carries(world):
-    """§6.0 row 3 / §6.4: "unvisited region of DNA space next to what you like".
-
-    "Never" is literal — zero coverage, not low coverage — and the neighbour is an
-    `anchor_side` term, because the cards are unvisited by definition and cannot carry the term
-    that describes the region they sit beside. §6.4: "Every connection is *nameable* — edges are
-    DNA terms, never opaque similarity", and the edge is that neighbour, printed.
-    """
+    """"Never" is literal zero coverage; the named neighbour is an `anchor_side` term."""
     payload = await world.home()
     for base in BASES:
         section = world.section(payload, "never_watched_term", kind_of(base))
@@ -620,18 +497,13 @@ async def test_the_frontier_shelf_names_a_term_no_seen_title_carries(world):
 
 
 async def test_the_sweet_spot_is_unseen_by_both_and_high_for_both(world):
-    """§6.0 row 4 / §6.5: "the region both like — doubles as the couple's watch-now prior".
-
-    Ordered by the PLAIN AVERAGE of the two scores, which is what §6.2 step 3 ranks the Tonight
-    pool by ("nothing dominates averaging; dominance rules cost −0.012") — that shared
-    arithmetic is what makes "doubles as the Tonight prior" true rather than decorative.
-    """
+    """The plain average of the two scores, which is also how Tonight's pool ranks."""
     payload = await world.home()
     assert payload["partner"]["name"] == "jenny"
     for base in BASES:
         section = world.section(payload, "shared_sweet_spot", kind_of(base))
         assert section is not None
-        # Decision 476: the title says what the shelf predicts, over titles neither has seen.
+        # Decision 476: the title says what the shelf predicts.
         assert section["title"] == "You and jenny would both enjoy these"
         assert section["why"] == "neither of you has seen them — a good pick for a night in together"
         assert section["caption"] is None
@@ -649,17 +521,7 @@ async def test_the_sweet_spot_is_unseen_by_both_and_high_for_both(world):
 
 
 async def test_the_sweet_spot_floor_is_read_against_the_owned_library(world):
-    """The floor is a rank within the set the shelf is about, and that set is the owned library.
-
-    `user_score` holds a row for every coordinated title of the kind - on the first household 9.5k
-    films, most of them unowned - and the ranking CTE ranked all of them, so the owned library's
-    mean rank was 0.42-0.46 and a catalogue nobody could play decided which owned titles cleared
-    0.70. Forty unowned titles per kind scored above everything owned would have pushed every
-    sweet-spot card below the floor and emptied the shelf; read against the owned library they
-    change nothing. One function for WA's and WB's two copies of this fix, derived against
-    decision 475's world, where the sweet spot is DECOYS in both kinds.
-    [owner instruction of 2026-09-25 after the first household user test, C1.7]
-    """
+    """The floor is a rank within the owned library, not the whole scored catalogue."""
     def shelf(payload):
         shown = {}
         for base in BASES:
@@ -671,7 +533,7 @@ async def test_the_sweet_spot_floor_is_read_against_the_owned_library(world):
     assert all(before.values()), before
     for base in BASES:
         kind = kind_of(base)
-        # 1060-1099 and 1160-1199: past each kind's owned ids, so `kind_of` still reads them.
+        # Past each kind's owned ids, so `kind_of` still reads them.
         for title_id in range(base + 60, base + 100):
             await world.db.execute(
                 "INSERT INTO title (id, kind, name, year, is_owned) VALUES ($1, $2, $3, 2000, false)",
@@ -693,28 +555,12 @@ async def test_the_sweet_spot_floor_is_read_against_the_owned_library(world):
     assert after == before
 
 
-# --- library-rate-shelf-anchor-is-a-rated-title-in-the-tier-its-owner-assigned ----------------
-
-
 async def test_a_synced_seen_but_unobserved_title_cannot_anchor_shelf_one(world):
-    """§6.3's "every rated title" is `ledger_state.observed`, and shelf 1's anchor is one.
-
-    Proposal 24 puts the anchor on the top-scoring SEEN title, which the shelf read as "seen and
-    carrying a fitted tier". Those are not the same population: `refit_user` writes a
-    `ledger_state` row for every owned title of the kind, observed or not
-    (`ledger/refit.py:350-374`), so every title §7.2's Jellyfin sync marked watched arrived here
-    with an `s`, a `tier` and no observation at all — and won the ORDER BY whenever its prior beat
-    the rated titles. Home then said "Because you put Home Film 1021 in A" about a title this
-    person has never rated, which is not even on the Rank board the sentence is quoting
-    (`rank/read.py:106`). The two predicates stay independent in both directions: a verdict
-    implies seen (`ledger/observations.py:640-641`), a duel or a tier edit does not.
-    [M4.9 finding 15]
-    """
-    # The toggle is on throughout so the suppressed list is readable: this test's failure mode is
-    # a shelf that anchors on the wrong title, and the reason line is what names which.
+    """The anchor must be an observed title: `refit_user`
+    writes `ledger_state` rows for unobserved ones too."""
+    # The toggle is on so the suppressed reason names which title anchored.
     await world.client.post("/api/auth/preferences", json={"show_model": True})
-    # 1021 is seen (the sweep marked it watched) and has no live verdict — the banner's own
-    # population. Nothing has been observed about it, and its prior beats every rated title's.
+    # 1021 is seen and unrated, and its prior beats every rated title's.
     await world.db.execute(
         """
         INSERT INTO ledger_state (user_id, title_id, s, sigma, cdf, tier, kind, observed)
@@ -730,9 +576,7 @@ async def test_a_synced_seen_but_unobserved_title_cannot_anchor_shelf_one(world)
     )
     assert "Home Film 1021" not in film["title"], film["title"]
 
-    # And with nothing rated at all the shelf is absent, with a reason naming BOTH predicates —
-    # they fail for different reasons and are repaired by different actions, so a line naming
-    # only "seen" sends a person who has rated nothing off to mark titles watched.
+    # With nothing rated the reason names both predicates: they are fixed by different actions.
     await world.db.execute(
         "UPDATE ledger_state SET observed = false WHERE user_id = $1 AND kind = 'movie'",
         world.patrick,
@@ -750,23 +594,13 @@ async def test_a_synced_seen_but_unobserved_title_cannot_anchor_shelf_one(world)
 
 
 async def test_the_anchor_headline_names_the_tier_the_owner_assigned(world):
-    """§6.0 row 1's verb is "you PUT", and §6.3 says where a title a person dropped renders.
-
-    `rank/board.py:20-27`: "the most recent `tier_edit` decides where a title renders, and the
-    model decides it only when there is no edit." The headline read `ledger_state.tier` and never
-    looked at `tier_edit`, so dropping the anchor from A to F on Rank left Home still saying
-    "in A" — the same title, the same person, two surfaces disagreeing about the one thing the
-    sentence claims they did. Decision 187 keeps the shelf-card BADGE on the model's tier and
-    fixes only this sentence, because only this sentence has that verb. [M4.9 finding 16]
-    """
+    """The latest `tier_edit` decides where a title renders, so "you put X in" must read it."""
     tier_set = shelves.DEFAULT_TIER_SET
     model_tier = await world.db.fetchval(
         "SELECT tier FROM ledger_state WHERE user_id = $1 AND title_id = 1000", world.patrick
     )
     assert tier_set[model_tier] == "A", "the fixture's anchor is fitted into A"
-    # Decision 475 anchors on the tier the board shows before `s`, so a title dropped to F loses
-    # the anchor to any title still in A. The other rated films are unobserved here to leave 1000
-    # the only candidate: what this test is about is the tier the sentence NAMES.
+    # The other rated films are unobserved so 1000 stays the only candidate.
     await world.db.execute(
         "UPDATE ledger_state SET observed = false "
         "WHERE user_id = $1 AND kind = 'movie' AND title_id <> 1000",
@@ -781,16 +615,7 @@ async def test_the_anchor_headline_names_the_tier_the_owner_assigned(world):
     assert film["anchor"]["tier"] == "F", "Home is still naming the tier the model fitted"
     assert film["title"] == "Because you put Home Film 1000 in F", film["title"]
 
-    # AND after the nightly refit, which is where the prototype's answer changed a second time:
-    # the fit absorbs the drop and moves `ledger_state.tier` part of the way, so a headline
-    # reading the model said "in A", then "in B", then "in C" while the person's own last action
-    # never changed. `tier_edit` is append-only (§4.2), so the sentence is stable by construction.
-    #
-    # Only the anchor stays `seen`, so the refit cannot hand shelf 1 to a different film: the
-    # drop is the only asymmetric observation this profile has, so it also decides which title
-    # ends up top, and without this the test would be measuring where the optimiser moved the
-    # anchor rather than which tier the sentence names. Membership is untouched — 1001-1004 are
-    # unseen owned films carrying both of the anchor's terms, which is what shelf 1 selects on.
+    # After the refit too: `tier_edit` is append-only, so the sentence is stable by construction.
     await world.db.execute(
         "DELETE FROM user_title WHERE user_id = $1 AND title_id BETWEEN 1001 AND 1099",
         world.patrick,
@@ -812,18 +637,7 @@ async def test_the_anchor_headline_names_the_tier_the_owner_assigned(world):
 
 
 async def test_the_anchor_headline_names_the_tier_rank_renders_after_a_k_change(world):
-    """dd06, across two surfaces. §6.0 row 1's verb is "you PUT", so the headline is a quotation
-    of where §6.3 renders the title — and a quotation that names a different tier is a bug the
-    person can see without leaving the app.
-
-    Decision 11 keeps the `tier_edit` row across a change in K and §4.2 never rewrites it, so the
-    stored index has to be re-read against the set it is being shown in. Both surfaces used to
-    CLAMP, which agreed by accident: a drop into tier 6 of 7 read as tier 6 of 12 on Home and on
-    Rank alike — mid-board, with the top five tiers empty. M4.13 maps it by cumulative prior mass
-    through one helper, and the assertion that matters is that it is the SAME helper: mapping on
-    the Rank side alone would have left Home quoting a tier Rank no longer shows, which is ml01's
-    measured symptom ("Home showing T4 and Rank T7 for one title") reached from the other side.
-    """
+    """Home and Rank must map a drop across a K change through the SAME helper."""
     labels = [f"T{i}" for i in range(12)]
     await world.db.execute(
         "INSERT INTO tier_edit (user_id, title_id, tier, via, n_levels) "
@@ -858,21 +672,8 @@ async def test_the_anchor_headline_names_the_tier_rank_renders_after_a_k_change(
     assert rows[1000].assigned_tier == 11, "the two surfaces disagree about the person's own drop"
 
 
-# --- library-rate-cold-badge-follows-crowd-support-not-placement -------------------------------
-
-
 def no_crowd_data(card: dict) -> bool:
-    """`PosterCard.svelte:34-38`'s expression, in Python, over one shelf card.
-
-    Restated rather than imported because the component is JavaScript and this is the payload
-    contract it consumes: what is under test here is whether the SERVER sends the two fields that
-    expression prefers. The component's own precedence is pinned by
-    `test_static_contracts.py::test_the_cold_badge_expression_reads_e_source_not_placement`.
-
-    A title with crowd ratings behind it is never "new", whatever `e_source` says: the bundle's
-    evaluation holdout serves crowd-rated rows from the Cold Tower, and §8 stage 10 names the
-    badge by the absence of ratings (the owner instruction of 2026-09-25's user test).
-    """
+    """`PosterCard.svelte`'s badge expression over one card; crowd ratings mean never "new"."""
     if (card.get("item_n") or 0) > 0:
         return False
     if card.get("e_source"):
@@ -883,17 +684,8 @@ def no_crowd_data(card: dict) -> bool:
 
 
 async def test_shelf_cards_carry_e_source_outside_the_model_block(world):
-    """§8 stage 10's badge is PRODUCT, so it must not ride decision 117's debugging gate.
-
-    `PosterCard`'s comment is the specification — "Off `e_source`/`item_n`, NOT off
-    `title.placement`" — and `shelves.py` put both inside `card["model"]`, which `rail.redact`
-    removes wholesale. With the toggle off, which is every account by default, `placement` was
-    the only branch the card could reach; and `0008_placement.sql:54-58` stamps `cold_tower` on
-    any title with a Backbone row and `item_n < 90`, so on the reference library 111 of the 130
-    badges Home drew were false. [M4.9 finding 18]
-    """
-    # Exactly 0008's case: a real Backbone row, crowd support under §5.1's warm gate, and the
-    # Cold Tower stamp that follows from it. The title is one of shelf 1's four members.
+    """`e_source` and `item_n` ship outside the gated `model` block: the badge is product."""
+    # A real Backbone row under the warm gate, and the Cold Tower stamp 0008 puts on it.
     await world.db.execute("UPDATE title SET placement = 'cold_tower' WHERE id = 1001")
     await world.db.execute(
         "UPDATE title_prior SET e_source = 'backbone', item_n = 40 WHERE title_id = 1001"
@@ -913,27 +705,18 @@ async def test_shelf_cards_carry_e_source_outside_the_model_block(world):
         assert not no_crowd_data(card), (
             "a title with a Backbone row wears 'no crowd data yet' on Home"
         )
-        # The falsifier, stated rather than trusted: the card as it shipped before this change —
-        # `placement` and nothing else — badges the same title.
+        # The falsifier: `placement` alone badges the same title.
         assert no_crowd_data({"placement": card["placement"]}), (
             "the placement-only fallback no longer reproduces the defect this test is for"
         )
 
-    # And the honest case still badges: `new_in_library`'s cards have no Backbone row at all.
+    # And the honest case still badges: these cards have no Backbone row at all.
     cold = world.section(await world.home(), "new_in_library", "movie")["items"][0]
     assert cold["e_source"] == "cold_tower" and no_crowd_data(cold)
 
 
-# --- library-rate-pending-verdicts-banner -----------------------------------------------------
-
-
 async def test_the_banner_is_exactly_the_seen_titles_with_no_live_verdict(world):
-    """§6.0 + §7.3. The population is computed independently in SQL and compared as a SET.
-
-    Includes the row that falsifies a bare `NOT EXISTS (SELECT 1 FROM verdict …)`: title 1021's
-    only verdict row is marked superseded, so it has no LIVE verdict and is unrated (§4.2 is
-    append-only — a re-rating supersedes rather than mutates).
-    """
+    """Compared as a SET; 1021's only verdict is superseded, so it is unrated."""
     expected = {
         r["id"] for r in await world.db.fetch(
             """
@@ -957,8 +740,7 @@ async def test_the_banner_is_exactly_the_seen_titles_with_no_live_verdict(world)
 
 
 async def test_the_banner_that_names_at_most_three_counts_the_rest(world):
-    """Proposal 21: "At most three titles are named; beyond that the list reads '{title},
-    {title} and N more'." Six pending, so two names and "and 4 more"."""
+    """At most three titles are named; beyond that "and N more"."""
     payload = await world.home()
     banner = payload["banner"]
     assert banner["count"] == 6
@@ -973,7 +755,7 @@ async def test_the_banner_that_names_at_most_three_counts_the_rest(world):
 
 
 async def test_three_pending_titles_are_all_named(world):
-    """The other side of proposal 21's cap: at three, all three are named and none is counted."""
+    """At three, all three are named and none is counted."""
     for title_id in (1121, 1122, 1123):
         await world.db.execute(
             "INSERT INTO verdict (user_id, title_id, value) VALUES ($1, $2, 1)",
@@ -987,12 +769,7 @@ async def test_three_pending_titles_are_all_named(world):
 
 
 async def test_the_banner_cta_carries_exactly_the_named_titles_as_the_queue_head(world):
-    """Proposal 150: "The CTA enters the §6.1 queue **with the named titles at its head** — a
-    prompt that names titles and then presents a different one is worse than no prompt."
-
-    The route is built by the SERVER, so the head cannot drift from the copy the server just
-    rendered. Parsing the emitted link back is what falsifies the link rather than the copy.
-    """
+    """The server builds the link, so parsing it back falsifies the link, not only the copy."""
     from urllib.parse import parse_qs, urlsplit
 
     banner = (await world.home())["banner"]
@@ -1001,9 +778,7 @@ async def test_the_banner_cta_carries_exactly_the_named_titles_as_the_queue_head
 
     query = parse_qs(urlsplit(banner["cta"]["route"]).query)
     assert urlsplit(banner["cta"]["route"]).path == "/rate"
-    # Decision 203: the link carries `head=` and nothing else. It used to lead with
-    # `mode=sweep`, which `api/rate.py`'s `current` does not declare and `rate/+page.svelte`
-    # does not read, so the banner stated a control neither end has.
+    # Decision 203: the link carries `head=` and nothing else.
     assert "mode" not in query, query
     assert list(query) == ["head"], query
     assert [int(t) for t in query["head"]] == named
@@ -1012,14 +787,7 @@ async def test_the_banner_cta_carries_exactly_the_named_titles_as_the_queue_head
 
 
 async def test_following_the_banners_own_link_serves_the_first_named_title(world):
-    """The other half of the coverage row: "its CTA opens the §6.1 queue with those titles at
-    the head of the queue, not at whatever position the standing queue held".
-
-    Follows the link the BANNER emitted rather than one this test built, so it falsifies the
-    link and not only the copy. §6.1's queue is another module; this asserts the boundary
-    between them — `GET /api/rate` takes `head` as a repeated integer parameter, and a
-    comma-joined `head=1,2` would come back 422 here rather than silently ignored.
-    """
+    """`head` is a repeated integer parameter; a comma-joined one would be a 422."""
     banner = (await world.home())["banner"]
     served = await world.client.get(banner["cta"]["api"])
     assert served.status_code == 200, served.text
@@ -1031,19 +799,7 @@ async def test_following_the_banners_own_link_serves_the_first_named_title(world
 
 
 async def test_the_banner_names_only_the_kinds_the_live_session_can_serve(world):
-    """§6.0's banner names what §6.1's queue can serve, and nothing else. [M4.10 finding 23]
-
-    The fixture makes this falsifiable rather than plausible: 1023 and 1123 carry the same
-    `state_changed_at` and the tie breaks on `t.id DESC`, so the most recently seen pending
-    title is a SERIES. With no kind predicate a films-only session was handed a banner whose
-    first named title was that series and a CTA that served a film instead — proposal 150's own
-    failure mode, "a prompt that names titles and then presents a different one is worse than no
-    prompt", reached by the one surface that quotes it.
-
-    The session is opened through §6.1's own control rather than by writing `rate_session`, so
-    what is under test is the chain a person walks: the control narrows the queue, and the
-    banner reads the narrowing.
-    """
+    """A films-only session must not be named a series the CTA cannot serve."""
     both = (await world.home())["banner"]
     assert both["count"] == 6
     assert "series" in {c["kind"] for c in both["named"]}, both["named"]
@@ -1055,12 +811,7 @@ async def test_the_banner_names_only_the_kinds_the_live_session_can_serve(world)
     assert {c["kind"] for c in films["named"]} == {"movie"}
     assert "Home Series" not in films["copy"]["wide"], films["copy"]["wide"]
 
-    # The property the copy and the link have to share, asserted against the link the BANNER
-    # emitted: following it opens on the FIRST title it named. The stashed card is cleared
-    # first, which is the state the session is in the moment after a tap and the state a person
-    # reaching Home mid-sitting is in -- `ensure_card` keeps a stashed card that is already one
-    # of the named titles, so leaving whatever the control happened to draw on the table would
-    # assert the idempotency branch instead of the pin.
+    # The stashed card is cleared first, so the pin is asserted, not `ensure_card`'s idempotency.
     await world.db.execute(
         "UPDATE rate_session SET current_card = NULL, card_token = NULL "
         "WHERE user_id = $1 AND ended_at IS NULL",
@@ -1072,8 +823,7 @@ async def test_the_banner_names_only_the_kinds_the_live_session_can_serve(world)
         "the queue served a different card than the banner named"
     )
 
-    # The filter is the live session's rather than a standing narrowing of the banner: widen the
-    # session and the series is nameable again.
+    # Widen the session and the series is nameable again.
     widened = await world.client.post(
         "/api/rate/session", json={"kinds": ["movie", "series"]}
     )
@@ -1082,8 +832,7 @@ async def test_the_banner_names_only_the_kinds_the_live_session_can_serve(world)
 
 
 async def test_rendering_home_writes_nothing(world):
-    """Proposal 150: the banner "never writes `seen`". Home is a read, all the way down —
-    §7.3's finish prompt is the surface that writes, and it is a different one."""
+    """Home is a read all the way down: the banner never writes `seen`."""
     before = (
         await world.db.fetchval("SELECT count(*) FROM user_title"),
         await world.db.fetchval("SELECT count(*) FROM verdict"),
@@ -1099,17 +848,8 @@ async def test_rendering_home_writes_nothing(world):
     assert before == after
 
 
-# --- library-rate-shelves-partition-both-kinds ------------------------------------------------
-
-
 async def test_every_shelf_returns_one_section_per_kind_and_no_shelf_has_items(world):
-    """§4.1 rule 5 as decision 18 reads it: a surface that RANKS "renders two headed sections
-    and never one interleaved ranking".
-
-    Asserted by SHAPE, not by inspection of an ordering: no shelf object carries an `items`
-    key, so there is no top-level list a client could render as one row; and every card in a
-    section carries that section's own kind.
-    """
+    """Asserted by SHAPE: no shelf object carries a top-level `items` list."""
     payload = await world.home()
     assert payload["kinds"] == ["movie", "series"]
     for shelf in payload["shelves"]:
@@ -1122,11 +862,7 @@ async def test_every_shelf_returns_one_section_per_kind_and_no_shelf_has_items(w
 
 
 async def test_a_kind_that_loses_a_merged_ranking_still_gets_its_own_section(world):
-    """The measured landmine, in miniature: EVERY series outscores EVERY film, so a merged
-    top-12 is 12/12 series and the Films section comes back empty.
-
-    The film section must be exactly the top twelve films by `user_score.score`, in that order.
-    """
+    """A merged top-12 would be all series; the film section must be the top twelve films."""
     payload = await world.home()
     top = await world.db.fetch(
         "SELECT title_id FROM user_score WHERE user_id = $1 AND kind = 'movie' "
@@ -1144,8 +880,7 @@ async def test_a_kind_that_loses_a_merged_ranking_still_gets_its_own_section(wor
 
 
 async def test_selecting_one_kind_returns_one_section_and_selecting_none_is_a_422(world):
-    """Decision 18: two toggles, either or both active, never neither. `?kind=` is a validation
-    error rather than a silent "everything", which is the unpartitioned query rule 5 forbids."""
+    """`?kind=` empty is a 422, never a silent "everything"."""
     only_films = await world.home(kinds=("movie",))
     assert only_films["kinds"] == ["movie"]
     for shelf in only_films["shelves"]:
@@ -1168,18 +903,7 @@ class _Anon:
 
 
 async def test_the_catalog_grid_may_interleave_the_two_kinds(world):
-    """The other half of decision 18, and the reason the partition claim is falsifiable at all:
-    "A surface that merely **lists** in a kind-independent order — the catalog, sorted by year
-    or title — may interleave freely."
-
-    So the property under test is the ORDERING, not the rendering. This asserts the grid DOES
-    interleave — an implementation that partitioned everything would fail here, and one that
-    merged everything would fail the test above. Both cases are distinguished.
-
-    Two orders now, and both are kind-independent. A person filter lists by year. A search lists
-    best match first (decision 472): match quality is a property of the text, so an exact match
-    of either kind leads, and titles that match equally well still interleave.
-    """
+    """The catalog grid MAY interleave: the property under test is the ordering."""
     for offset in range(1, 7):
         for base in BASES:
             await world.db.execute(
@@ -1207,13 +931,8 @@ async def test_the_catalog_grid_may_interleave_the_two_kinds(world):
     )
 
 
-# --- §6.0's mode switch -----------------------------------------------------------------------
-
-
 async def test_a_person_filter_switches_home_into_the_grid_and_clearing_it_restores_shelves(world):
-    """§6.0: "Search or an active person-filter switches Home into the catalog grid; clearing it
-    returns the shelves." The server owns the mode, so the two states are mutually exclusive by
-    construction — with one set, the payload carries no shelves to render."""
+    """The server owns the mode: with a person filter the payload carries no shelves."""
     person = await world.home(person_id=900)
     assert person["mode"] == "grid"
     assert person["shelves"] == []
@@ -1228,15 +947,7 @@ async def test_a_person_filter_switches_home_into_the_grid_and_clearing_it_resto
 
 
 async def test_the_greeting_uses_the_household_clock_and_has_four_bands(world):
-    """Proposal 22's four bands, evaluated server-side against §2's `TZ` so the band is the
-    household clock rather than the device clock — and so it is assertable without a browser.
-
-    The band the LIVE payload carries is asserted next door, against a zone chosen to move it.
-    The set-membership assertion that used to stand here accepted all four bands and therefore
-    accepted every possible answer, including the one `_now_local`'s bare `except` produces
-    [M4.9 finding 22]; what is left is the part this test is actually for — the four bands and
-    the copy — with each boundary named as a number rather than as a range.
-    """
+    """Four bands with each boundary named as a number."""
     payload = await world.home()
     assert payload["greeting"]["text"].endswith(", patrick")
     assert payload["greeting"]["tz"]
@@ -1248,9 +959,8 @@ async def test_the_greeting_uses_the_household_clock_and_has_four_bands(world):
     assert shelves.greeting(at.replace(hour=21), "p")["text"] == "Good evening, p"
 
 
-# Spread across the dial so at least one of them is in a different greeting band from the
-# process's own clock whatever hour the suite runs at. Named rather than computed from an
-# offset, because §2's `TZ` is an IANA name and the point is that the app resolves one.
+# Spread across the dial so one differs from the process's
+# band at any hour; IANA names, as §2's `TZ` is one.
 FAR_ZONES = (
     "Pacific/Kiritimati",   # UTC+14
     "Pacific/Midway",       # UTC-11
@@ -1261,14 +971,7 @@ FAR_ZONES = (
 
 
 def _zone_that_moves_the_band() -> str | None:
-    """A zone this checkout can resolve whose band differs from the process clock's, or None.
-
-    None has two causes and they are the same case for this test: a checkout with no tz database
-    at all (a Windows checkout has neither `/usr/share/zoneinfo` nor, unless someone installed
-    it, the `tzdata` wheel — see `test_worker_schedule._resolvable_zone`), or the freak hour at
-    which every candidate happens to share a band with the host. In both, `_now_local` takes its
-    §3.1 fallback or its answer is not falsifiable, and the test asserts the half that still is.
-    """
+    """None when there is no tz database (Windows) or every candidate shares the host's band."""
     here = shelves.greeting(datetime.now(), "p")["band"]  # noqa: DTZ005 - the naive fallback
     for name in FAR_ZONES:
         try:
@@ -1281,22 +984,8 @@ def _zone_that_moves_the_band() -> str | None:
 
 
 async def test_the_greeting_band_is_computed_in_the_household_zone(world, monkeypatch):
-    """§2's `TZ`, proposal 22: "a greeting in four bands against §2's TZ" — the HOUSEHOLD clock.
-
-    `api/home.py:_now_local` converts to that zone behind a bare `except`, and nothing exercised
-    it: the assertion next door accepted the complete set of bands, and the four real assertions
-    call `shelves.greeting()` with hand-built datetimes, which is the pure function and not the
-    route. So the band could have come from the process's clock, from UTC, or from the fallback
-    branch, and every test in the file would still have been green. [M4.9 finding 22]
-
-    Three arms, none of them skipped. The payload must NAME the configured zone whichever branch
-    `_now_local` took — §6.8's rule that the app does not report a setting it did not honour.
-    Where the zone resolves, the band is asserted to be that zone's, against a candidate picked
-    so its band differs from the process's own: without that difference "equal to `greeting()` in
-    that zone" would be incidentally true and would prove nothing. Where it does not resolve, the
-    §3.1 fallback is asserted instead — the process's own naive clock, not UTC and not a constant
-    — so a checkout with no tz database still falsifies something rather than skipping.
-    """
+    """The payload names the configured zone; the band is that
+    zone's, or the naive fallback where it cannot resolve."""
     zone = _zone_that_moves_the_band()
     resolved, zone = zone is not None, zone or FAR_ZONES[0]
     monkeypatch.setenv("TZ", zone)
@@ -1307,9 +996,7 @@ async def test_the_greeting_band_is_computed_in_the_household_zone(world, monkey
             "the payload names the zone the greeting was computed in, or the client cannot tell "
             "a household clock from a device clock"
         )
-        # Bracketing the request rather than sampling once: the two agree at every instant except
-        # a band boundary crossed mid-request, and a one- or two-element set is still an
-        # assertion about THIS clock — which is the whole difference from the four-band set.
+        # Bracketing the request: the two agree except across a band boundary crossed mid-request.
         def band_now() -> str:
             at = datetime.now(ZoneInfo(zone)) if resolved else datetime.now()  # noqa: DTZ005
             return shelves.greeting(at, "p")["band"]
@@ -1328,20 +1015,8 @@ async def test_the_greeting_band_is_computed_in_the_household_zone(world, monkey
         settings.cache_clear()
 
 
-# --- §6.7 / decision 117: the show-the-model gate ----------------------------------------------
-
-# Every key that carries a number about THIS VIEWER's model. Walked recursively, so a builder
-# that adds a seventh annotation under a new name is caught by the shape of the test rather
-# than by someone remembering to extend a list of call sites.
-#
-# `e_source` LEFT THIS SET IN M4.9, and it is the one entry that ever should. It is not a number
-# about this viewer: it names which half of §5.1 produced the item's prior, it is identical for
-# every account, and §8 stage 10 requires the card to badge on it — "a 'new — model placement,
-# no crowd data' badge until ratings accrue" — which is product copy, not a debugging
-# annotation. Gating it left `title.placement` as the only branch `PosterCard` could reach with
-# the toggle off, and 0008 stamps that column on any title with a Backbone row and item_n < 90.
-# `test_shelf_cards_carry_e_source_outside_the_model_block` asserts the other half: that it is
-# present with the toggle in both positions. [M4.9 finding 18]
+# Every key carrying a number about THIS VIEWER's model,
+# walked recursively. `e_source` is product, not in the set.
 MODEL_KEYS = frozenset(
     {"model", "rail", "suppressed", "score", "cf", "sigma", "cdf", "s",
      "tier_index", "mine_cdf", "theirs_cdf", "pair_score"}
@@ -1362,29 +1037,21 @@ def model_keys_in(node, path="") -> list[str]:
 
 
 async def test_with_the_toggle_off_no_model_annotation_is_in_the_payload(world):
-    """Decision 117: "It governs the rail and every inline annotation."
-
-    ABSENT, not hidden. A number removed by CSS is still on the wire, in the network tab and in
-    the service-worker cache, so the promise would be cosmetic. The whole payload is walked.
-    """
+    """ABSENT, not hidden: a number removed by CSS is still on the wire."""
     assert await world.db.fetchval(
         "SELECT show_model FROM app_user WHERE id = $1", world.patrick
     ) is False, "decision 117: default off"
 
     payload = await world.home()
     assert model_keys_in(payload) == []
-    # `suppressed` alone, and not `rail` beside it: no route emits a `rail` key any more, so
-    # asserting its absence here would pass by being unable to fail. The one drawer reads
-    # `/api/model-log`, which is gated by `rail.visible_to` at the route rather than by
-    # `redact`. [M4.9 review cycle 1: M49-HOME-04]
+    # No route emits `rail` any more; the drawer reads `/api/model-log`, gated at the route.
     assert "suppressed" not in payload
     for shelf in payload["shelves"]:
         for section in shelf["sections"]:
             assert section["items"], shelf["id"]
             for card in section["items"]:
                 assert "model" not in card
-                # …while proposal 29's chrome survives: rank, the seen dot and the settled tier
-                # are what a shelf card IS, not an annotation about the model.
+                # Rank, the seen dot and the settled tier are what a card IS, not model annotations.
                 assert card["rank"] >= 1
                 assert "seen" in card and "tier" in card
 
@@ -1392,32 +1059,15 @@ async def test_with_the_toggle_off_no_model_annotation_is_in_the_payload(world):
 async def test_the_gated_model_block_reads_the_fold_ins_rho_against_the_bundles_own_figures(
     world,
 ):
-    """§14 risk 1's mitigation is "expectations instrumented, not assumed", and `user_vector.cv_rho`
-    was neither: the fold-in stores a held-out Spearman per (user, kind) and nothing in the app knew
-    what a good one looked like. The corpus ships the reference - `cold_eval.json`, cold 0.35225
-    against a ceiling of 0.39193 - in a file that was in no list and read nowhere.
-
-    Three properties, and the middle one is the reason the other two are not enough:
-
-    * the figures travel WITH the rho, so the number is never printed alone;
-    * §0's pipeline variance (0.003-0.008 Spearman) is applied, so 0.355 against the corpus's
-      0.35225 reads as a TIE and not as a win - the series row here is 0.00275 ahead, which a
-      comparison without the floor would report as better than the corpus;
-    * it is inside `model`, which decision 117's gate deletes wholesale. §6.0 mandates β on the
-      why-line and on the title card, which is why those two are ungated; a held-out correlation is
-      in neither sentence, and `rail.py` warns that a builder inventing a new top-level numeric
-      block does not inherit the gate.
-
-    [M4.13 step 35, cs-31]
-    """
+    """The rho travels with the bundle's figures, a tie inside
+    §0's noise floor reads as a tie, and all of it is gated."""
     from spielplan.models.artifacts import ColdEval
 
     yardstick = ColdEval(
         cold=0.35225, ceiling=0.39193, hybrid=0.37, delta=0.0191, ci95=(0.0043, 0.0339),
         n_test=1876,
     )
-    # One rho clear of the floor, one inside it. Both are real `user_vector` rows: the world seeds
-    # a fitted profile per kind and `cv_rho` is the column the nightly pass writes.
+    # One rho clear of the floor, one inside it.
     for kind, rho in (("movie", 0.41), ("series", 0.355)):
         assert await world.db.fetchval(
             "UPDATE user_vector SET cv_rho = $3 WHERE user_id = $1 AND kind = $2 "
@@ -1447,18 +1097,13 @@ async def test_the_gated_model_block_reads_the_fold_ins_rho_against_the_bundles_
         "reporting it as a win is the comparison this whole block exists to make honest"
     )
 
-    # The gate, asserted the way the toggle test asserts it: the whole payload is walked.
+    # The gate, asserted by walking the whole payload.
     assert model_keys_in(rail.redact(payload, show_model=False)) == []
     assert "fit" not in rail.redact(payload, show_model=False).get("model", {})
 
 
 async def test_with_no_bundle_reference_the_rho_is_not_printed_at_all(world):
-    """The defect was a number with nothing to read it against, so the fallback is silence rather
-    than a bare rho. A bundle older than `cold_eval.json` is legal (the file is optional in
-    `BUNDLE_FILES`), and on that install the fold-in's quality is in the logs and the table where it
-    always was - it is the *comparison* that cannot be made, and a payload that printed one half of
-    it would be inviting the reader to supply the other from memory. [M4.13 step 35]
-    """
+    """With no reference, silence rather than a bare rho."""
     payload = await shelves.build_home(
         world.db, user=_Anon(world.patrick), kinds=["movie"], bundle_version=BUNDLE,
         now_local=datetime.now(UTC),
@@ -1477,11 +1122,7 @@ async def test_turning_the_toggle_on_reveals_the_numbers_for_that_user_only(worl
     assert on.json() == {"ok": True, "show_model": True}
 
     payload = await world.home()
-    # The events are read from `/api/model-log`, and Home carries no copy of them. This payload
-    # used to ship up to RAIL_LIMIT events on every load because the drawer was mounted on Home
-    # and decision 117's gate was asked of the response; M4.9 moved the mount into the layout,
-    # so `ModelRail` refetches on every open and the key had no reader — one drawer, not one per
-    # route, the same rule `api/tonight.py` states. [M4.9 review cycle 1: M49-HOME-04]
+    # The events come from `/api/model-log`; Home carries no copy.
     assert "rail" not in payload, "one drawer, not one per route"
     events = (await world.client.get("/api/model-log")).json()["events"]
     assert events[0]["text"].startswith("verdict(patrick, Home Film 1000) = liked")
@@ -1489,7 +1130,7 @@ async def test_turning_the_toggle_on_reveals_the_numbers_for_that_user_only(worl
     assert card["model"]["beta"] == pytest.approx(FITTED_BETA, abs=1e-6)
     assert card["model"]["b"] is not None and card["model"]["gate"] is not None
 
-    # A second account, signed in separately, is unchanged — the preference is per user.
+    # A second account, signed in separately, is unchanged: the preference is per user.
     jenny = await world.sign_in_jenny()
     hers = await jenny.get("/api/home", params=[("kind", "movie"), ("kind", "series")])
     assert hers.status_code == 200, hers.text
@@ -1501,13 +1142,7 @@ async def test_turning_the_toggle_on_reveals_the_numbers_for_that_user_only(worl
 
 
 async def test_the_title_card_model_line_is_absent_with_the_toggle_off_and_present_with_it_on(world):
-    """Decision 486, amending decision 117: §6.7's toggle governs §6.0's model line too.
-
-    Decision 117 left this one line ungated as the M0 transparency promise. The 2026-09-25 user
-    test put it in front of two members with the switch off, and β and σ in it are this viewer's
-    own fit, not crowd provenance - so it is ABSENT from the payload with the switch off, as the
-    rail is, and present the moment it is on.
-    """
+    """Decision 486: the title card's model line is gated by the toggle too."""
     assert await world.db.fetchval(
         "SELECT show_model FROM app_user WHERE id = $1", world.patrick
     ) is False
@@ -1540,17 +1175,8 @@ async def test_the_model_log_route_omits_the_events_key_when_the_toggle_is_off(w
     assert on["events"][0]["at"] >= on["events"][-1]["at"], "newest first"
 
 
-# --- library-rate-model-log-limit-cannot-exceed-the-buffer -------------------------------------
-
-
 async def test_the_model_log_refuses_a_limit_above_the_buffer(world):
-    """§6.7: "an ephemeral log (last ~15 events, never persisted)". The route's ceiling IS that.
-
-    It declared `le=50` against a 15-deep buffer, so the one number in §6.7's sentence and the
-    one number the URL would accept were three and a bit apart. Refused at the edge rather than
-    silently truncated: a client that asks for fifty and receives fifteen cannot tell a capped
-    answer from an exhausted buffer, and this route is the debugging instrument. [M4.9 finding 26]
-    """
+    """The route's ceiling IS the 15-deep buffer; refused rather than silently truncated."""
     await world.client.post("/api/auth/preferences", json={"show_model": True})
     for i in range(rail.RAIL_LIMIT * 2):
         rail.record(kind="verdict", user_id=world.patrick, line=f"verdict(patrick, {i}) = liked")
@@ -1568,13 +1194,7 @@ async def test_the_model_log_refuses_a_limit_above_the_buffer(world):
 
 
 async def test_recent_caps_before_it_merges_the_two_deques(world):
-    """The other half of finding 26, and the half the route's `le` cannot reach.
-
-    `recent` concatenated the caller's deque and the household's and only then sliced, so two
-    RAIL_LIMIT-deep buffers answered with up to thirty events — the buffer was bounded and the
-    response was not. Called directly here because `rail.recent` is public and `api/tonight.py`
-    used to call it with a limit of its own; the property is the function's, not the route's.
-    """
+    """Two deques are capped before merging, or the response exceeds the buffer."""
     rail.forget()
     for i in range(rail.RAIL_LIMIT):
         rail.record(kind="verdict", user_id=world.patrick, line=f"verdict(patrick, {i}) = liked")
@@ -1586,8 +1206,7 @@ async def test_recent_caps_before_it_merges_the_two_deques(world):
     assert rail.recent(user_id=world.patrick, limit=0) == [], (
         "an empty ask must be empty, not the whole buffer — `[-0:]` is the whole list"
     )
-    # Newest-first survives the earlier slice: ids come from one process-wide counter, so the
-    # newest `keep` of each deque contains everything the merged newest `keep` can contain.
+    # Ids come from one counter, so newest-first survives the earlier slice.
     events = rail.recent(user_id=world.patrick, limit=50)
     assert [e["id"] for e in events] == sorted((e["id"] for e in events), reverse=True)
     assert {e["scope"] for e in events} == {"you", "household"}, (
@@ -1597,9 +1216,7 @@ async def test_recent_caps_before_it_merges_the_two_deques(world):
 
 
 async def test_the_rail_narrates_a_model_write_in_one_human_readable_line(world):
-    """§6.7's four example lines, rendered at write time (0012's rule) so the rail shows what
-    the model believed when it acted rather than a sentence recomposed from numbers that have
-    since moved."""
+    """Rendered at write time, so the rail shows what the model believed when it acted."""
     assert rail.verdict_line("jenny", "Heat", "liked", refit_ms=31.0) == (
         "verdict(jenny, Heat) = liked → ordered-logit arm, incremental refit 31 ms"
     )
@@ -1609,8 +1226,7 @@ async def test_the_rail_narrates_a_model_write_in_one_human_readable_line(world)
     assert rail.session_answer_line("p", 4, "A") == "session_answer(p, pair 4) = A — pool-centred tilt"
     assert rail.parse_line("has(robots)", 0) == "parse → predicate has(robots) · 0 survivors → flywheel"
 
-    # A household-wide write — a nightly refit has no observation row of its own (0012) — is
-    # visible to every member, because it is what explains Home changing overnight.
+    # A household-wide write has no observation row, and explains Home changing overnight.
     rail.record(kind="ledger_refit",
                 line=rail.refit_line("movie", n_titles=900, seconds=0.31, rho=0.42))
     await world.client.post("/api/auth/preferences", json={"show_model": True})
@@ -1625,25 +1241,7 @@ async def test_the_rail_narrates_a_model_write_in_one_human_readable_line(world)
 
 
 def test_a_title_name_too_long_for_the_rail_is_elided_rather_than_refused():
-    """Finding 8's third raise site, closed in the renderer. [M4.10 finding 8]
-
-    `api/rank.py` composes its duel line AFTER `record_duel` has committed and `rank/drop.py`
-    composes its tier-edit line after the edit has, so a renderer that can refuse is a route
-    that can answer 500 over a durable row: measured, two 260-390 character names made the
-    answer route 500 with the duel written and the retry wrote a fifth. `rank/tiers.py:56-62`'s
-    `MAX_LABEL` comment records the same failure for tier labels and took the other branch,
-    because a label is a choice somebody made and a title name is bundle data.
-
-    The two refusals that survive are the ones that are programming errors rather than data,
-    and they survive on purpose: the Rank routes lean on that half of the contract.
-
-    `verdict_line` is asserted here too, because the rule is every renderer that interpolates a
-    name and not only the two the Rank routes call. It was written without either `_elide`, and it
-    is §6.7's commonest line on the surface this milestone is named for: `rate/session.py`'s
-    `payload` records it after the verdict has committed, so at the 64 characters `AccountName`
-    allows a 280-character title name was a 500 over a durable row whose retry the nulled card
-    token then answered 409. [M4.10 cycle 1, M410-R1-01]
-    """
+    """A line composed after a durable write must never raise, so long names are elided."""
     name = ("The Assassination of Jesse James by the Coward Robert Ford " * 6)[:300]
     assert len(name) == 300, len(name)
 
@@ -1653,10 +1251,7 @@ def test_a_title_name_too_long_for_the_rail_is_elided_rather_than_refused():
     edit = rail.tier_edit_line(name, "A", via="drag_drop", neighbour_duels=2)
     assert len(edit) <= rail.MAX_LINE
     assert rail.record(kind="tier_edit", user_id=-1, line=edit) > 0
-    # The longest name `AccountName` (`api/setup.py`) permits, against the same 300 characters the
-    # coverage row tests the Rank half with: 64 + 300 and a 67-character chrome is 431 of 400, and
-    # at the 33 characters of "Grandma's iPad in the living room" it is exactly 400 — the threshold
-    # sits inside the range of names a household actually types.
+    # The longest `AccountName` allows puts the threshold inside the names households type.
     member = "Grandma's iPad in the living room and the one in the kitchen :-)"
     assert len(member) == 64, len(member)
     spoken = rail.verdict_line(member, name, "disliked", refit_ms=31.4)
@@ -1664,16 +1259,13 @@ def test_a_title_name_too_long_for_the_rail_is_elided_rather_than_refused():
     assert rail.record(kind="verdict", user_id=-1, line=spoken) > 0
     rail.forget(user_id=-1)
 
-    # Elided, not emptied: §6.7's line still names the titles it narrates, once per name.
+    # Elided, not emptied: the line still names each title once.
     assert name[:40] in line and line.count("…") == 2
     assert line.endswith("uniform-random, held out")
     short = rail.tier_edit_line("Drive", "A", via="drag_drop", neighbour_duels=2)
     assert "…" not in short and "Drive" in short
 
-    # The bound holds for the longest line either renderer can compose, not only for this name.
-    # Every other piece is bounded elsewhere, which is what `MAX_NAME_IN_LINE`'s arithmetic
-    # assumes: 0005's CHECKs on `duel.outcome` and `duel.context`, `ARM_PHRASES`, and the tier
-    # label's own bound -- imported rather than restated, because it belongs to that module.
+    # The bound holds for the longest line either renderer can compose; the tier label bound is imported.
     from spielplan.rank import tiers
 
     absurd = "x" * 4000
@@ -1686,15 +1278,13 @@ def test_a_title_name_too_long_for_the_rail_is_elided_rather_than_refused():
         absurd, "L" * tiers.MAX_LABEL, via="drag_drop", neighbour_duels=999
     )
     assert len(widest) <= rail.MAX_LINE, len(widest)
-    # The verdict's chrome is bounded by `VERDICT_LABELS` and by the millisecond count, so both
-    # move while the names stay absurd -- a six-figure refit is already a pathology.
+    # The verdict's chrome is bounded by `VERDICT_LABELS` and the millisecond count.
     for label in ("liked", "fine", "disliked"):
         for refit_ms in (None, 0.4, 31.4, 123456.7):
             said = rail.verdict_line(absurd, absurd, label, refit_ms=refit_ms)
             assert len(said) <= rail.MAX_LINE, (label, refit_ms, len(said))
 
-    # And the refusals the data argument does not reach stay refusals, because the Rank routes
-    # read them as the signal that the CALLER is wrong rather than the bundle.
+    # Refusals that signal a CALLER error stay refusals.
     with pytest.raises(rail.RailError):
         rail.record(kind="duel", line="")
     with pytest.raises(rail.RailError):
@@ -1704,35 +1294,24 @@ def test_a_title_name_too_long_for_the_rail_is_elided_rather_than_refused():
 
 
 def test_the_gate_removes_gated_keys_at_every_depth():
-    """`redact` is the one place decision 117 is enforced, so it is tested on its own: a nested
-    annotation must not survive because it was three levels down."""
+    """A nested annotation must not survive because it was three levels down."""
     payload = {"a": 1, "model": {"b": 2}, "rows": [{"model": {"c": 3}, "name": "x"}]}
     assert rail.redact(payload, show_model=True) == payload
     assert rail.redact(payload, show_model=False) == {"a": 1, "rows": [{"name": "x"}]}
 
 
-# --- degraded states --------------------------------------------------------------------------
-
-
 async def test_a_profile_with_no_verdicts_gets_the_seed_route_not_a_meaningless_ranking(world):
-    """Proposal 20: "Bundle imported, zero verdicts … tier badges, ledger weights and every
-    score-ordered shelf are meaningless, so Home falls back to the catalog grid plus a route
-    into the §6.1 seed-list queue."
-
-    `new_in_library` is ordered by recency rather than by a ledger nobody has yet, so it
-    survives — a reading of the phrase, stated rather than assumed.
-    """
+    """Zero verdicts: the catalog grid plus a route into the seed queue; `new_in_library` survives."""
     await world.db.execute("DELETE FROM verdict WHERE user_id = $1", world.patrick)
     payload = await world.home()
     assert payload["verdict_count"] == 0
     assert payload["degraded"]["state"] == "zero_verdicts"
-    assert payload["degraded"]["cta"]["route"] == "/rate"  # decision 203
+    assert payload["degraded"]["cta"]["route"] == "/rate"
     assert [s["id"] for s in payload["shelves"]] == ["new_in_library"]
 
 
 async def test_a_bundle_less_app_says_so_instead_of_erroring(app, db):
-    """§3.1: a bundle-less app is a legal state and "artifact-dependent surfaces render an
-    explicit 'no bundle imported' state instead of erroring"."""
+    """§3.1: a bundle-less app renders an explicit state, not an error."""
     client = app()
     await client.post("/api/setup/admin", json={"name": "patrick", "password": "an-admin-password"})
     response = await client.get("/api/home", params=[("kind", "movie"), ("kind", "series")])
@@ -1743,9 +1322,6 @@ async def test_a_bundle_less_app_says_so_instead_of_erroring(app, db):
     assert payload["banner"] is None
 
 
-# --- the pieces, on their own ------------------------------------------------------------------
-
-
 def test_the_name_list_copy_matches_proposal_21():
     assert shelves._name_list(["A"], 1) == "A"
     assert shelves._name_list(["A", "B"], 2) == "A and B"
@@ -1754,9 +1330,7 @@ def test_the_name_list_copy_matches_proposal_21():
 
 
 async def test_the_term_reader_keeps_the_two_tiers_distinguishable(world):
-    """§4.1 rule 1: 14,181 (title,term) pairs exist in both tiers and "must stay
-    distinguishable"; a term present in both is named ONCE and never upgraded to `extracted`
-    by accident — nor downgraded from it."""
+    """A term in both tiers is named ONCE, neither upgraded nor downgraded."""
     await world.db.execute(
         "INSERT INTO dna_projected (title_id, version, term, facet, weight, via) "
         "VALUES (1001, $1, 'obsession', 'themes', 0.9, 'keyword')",
@@ -1773,14 +1347,7 @@ async def test_the_term_reader_keeps_the_two_tiers_distinguishable(world):
 
 
 async def test_an_inferred_term_never_leads_the_why_lines_term_pool(world):
-    """§4.1 rule 1 through the reader Home actually calls, not through the SQL string.
-
-    `terms_for` is where a shelf's terms are chosen and where §6.0's why-line gets the term it
-    names first, so decision 188's band is a property of this list — the anchor carries an
-    8-source projection, the loudest an import can produce, and it still ranks below a salience-2
-    quote. Asserting the fragment's text instead would pass over any future reader that stops
-    spending it. [M4.9 review cycle 1: M49-D188-02]
-    """
+    """Through the reader Home calls: an 8-source projection still ranks below a salience-2 quote."""
     for base in BASES:
         terms = await why_mod.terms_for(world.db, base + ANCHOR, version=VOCAB)
         assert [t.term for t in terms] == ["obsession", "morally-grey", "period"], terms
@@ -1789,14 +1356,7 @@ async def test_an_inferred_term_never_leads_the_why_lines_term_pool(world):
 
 
 async def _live_row_count(db) -> int:
-    """Rows in every public table, counted exactly.
-
-    This used to read `sum(n_tup_ins) FROM pg_stat_user_tables`, which is a *cumulative* view
-    fed asynchronously by the statistics reporter — so on a long suite run the second read
-    picks up earlier tests' inserts flushing late and the delta is nonzero with nothing having
-    been written in between. A proxy that drifts under load cannot answer "did this call write
-    anything"; `count(*)` over the live tables can, and it is the stronger assertion anyway.
-    """
+    """`count(*)` over live tables, not `pg_stat_user_tables`, which flushes asynchronously."""
     return int(
         await db.fetchval(
             """
@@ -1815,17 +1375,7 @@ async def _live_row_count(db) -> int:
 
 
 async def test_the_rail_is_ephemeral_and_reaches_no_table(world):
-    """§6.7: "an **ephemeral** log (last ~15 events, **never persisted**)".
-
-    This project shipped the rail as a `model_event` table first, on the argument that a nightly
-    refit and a Cold Tower placement are model writes with no row of their own, so a rail derived
-    from the observation tables would omit exactly what a person turns the rail on to see. The
-    argument is sound; it is also not what the spec says, and "never persisted" is a normative
-    sentence about a debugging instrument rather than a gap to be improved on.
-
-    Two assertions, because "we deleted the migration" is not the property. The property is that
-    recording an event writes nothing anywhere and that the buffer does not survive the process.
-    """
+    """§6.7: "never persisted". Recording writes nothing, and the buffer does not survive the process."""
     before = await _live_row_count(world.db)
     rail.record(
         kind="ledger_refit", user_id=world.patrick,
@@ -1838,16 +1388,14 @@ async def test_the_rail_is_ephemeral_and_reaches_no_table(world):
         "the rail must not have a table; §6.7 says never persisted"
     )
 
-    # And it is genuinely gone on restart — the buffer is process state, not a cache over one.
+    # And it is genuinely gone on restart.
     assert rail.recent(user_id=world.patrick), "the event is readable while the process lives"
     rail.forget()
     assert rail.recent(user_id=world.patrick) == []
 
 
 async def test_one_persons_rail_never_shows_another_persons_events(world):
-    """Decision 117 scopes the toggle per user, and §6.7's rail "narrates every model write" —
-    the reader's own, plus the household's. A shared buffer that leaked across accounts would
-    make the toggle reveal someone else's ratings, which is a different feature entirely."""
+    """A shared buffer leaking across accounts would reveal someone else's ratings."""
     rail.forget()
     rail.record(kind="verdict", user_id=world.patrick, line="verdict(patrick, A) = liked")
     rail.record(kind="verdict", user_id=world.patrick + 5000, line="verdict(other, B) = liked")
@@ -1859,9 +1407,7 @@ async def test_one_persons_rail_never_shows_another_persons_events(world):
 
 
 def test_a_noisy_account_cannot_push_another_accounts_events_out_of_its_rail():
-    """One deque per user rather than one global deque. With a single shared buffer, a member
-    mid-rating-session would evict a quieter member's entire rail inside fifteen taps — and the
-    rail would be empty exactly for the person who just turned it on to see why."""
+    """One deque per user, so a busy member cannot evict another's rail."""
     rail.forget()
     rail.record(kind="verdict", user_id=1, line="verdict(quiet, A) = liked")
     for i in range(rail.RAIL_LIMIT * 3):
@@ -1873,20 +1419,8 @@ def test_a_noisy_account_cannot_push_another_accounts_events_out_of_its_rail():
     rail.forget()
 
 
-# --- library-rate-verdict-rail-line-names-the-person-and-the-title -----------------------------
-
-
 def _rail_record_kinds() -> set[str]:
-    """Every `kind` a `rail.record` call in `backend/spielplan` can actually write.
-
-    AST and not a regex, and with ONE hop of resolution, because five of the thirteen kinds are
-    not spelled at a `rail.record` call at all: `rate/session.py:1259` writes
-    `rail.record(kind=event_kind, ...)` and `api/rate.py` passes `event_kind="verdict"`,
-    `"not_seen"`, `"duel"` and `"undo"` into `session.payload`. A guard that read only the
-    literals at the record sites would report those four as unproduced and the tuple below would
-    have to absorb them — which would make `AWAITING_PRODUCER` a list of "kinds the guard cannot
-    see" instead of decision 189's list of "kinds nothing writes".
-    """
+    """AST with one hop of resolution: some kinds reach `rail.record` through a variable."""
     root = Path(rail.__file__).resolve().parent.parent
     trees = [ast.parse(p.read_text(encoding="utf-8")) for p in sorted(root.rglob("*.py"))]
 
@@ -1937,32 +1471,8 @@ def _rail_record_kinds() -> set[str]:
 
 
 def test_every_declared_rail_kind_has_a_producer_or_is_declared_pending():
-    """§6.7's rail "narrates every model write", and `ModelRail` colours thirteen kinds.
-
-    Seven of them were written by nothing. `ledger_refit`, `ledger_incremental`, `foldin`,
-    `blend_weight`, `placement`, `reconcile` and `bundle_swap` — exactly the writes a person
-    cannot otherwise see — had renderers, colour rules and a place in the filter row, and no
-    call site, so a household turning the toggle on to find out why Home changed overnight saw
-    nothing about the refit that changed it. [M4.9 finding 24]
-
-    Decision 189 answers it in two halves and this guard holds both. Five kinds are worker-side
-    — the nightly MAP refit, the incremental refit, the fold-in, the blend-weight fit and the
-    placement sweep — and §6.7's "never persisted" makes the buffer per process, so there is no
-    channel for them and they are declared pending by name, in one tuple. `bundle_swap` and
-    `reconcile` were the other half: they were written inside the WEB process, so they were held
-    to "has a producer".
-
-    Decision 263 moves them across, because M4.14 step E2 moved the writer. The hot swap and the
-    in-request rebuild sweep now run in the worker's `_bundle_import`, so those two `rail.record`
-    calls were writing into a process-local buffer that no web request reads — the one event
-    that invalidates every fitted number in the app, narrated to nobody, behind a comment saying
-    the opposite. Seven kinds are pending and none of the seven has a call site, which is what
-    makes "declared pending" mean something a reader can check.
-
-    What the guard forbids is the third state the rail was actually in: a kind that is neither
-    written nor declared, a filter chip for events that cannot arrive.
-    [M4.14 cycle 1, m414-c1-dim-lock-02, decision 263]
-    """
+    """Every declared kind has a producer or is in
+    `AWAITING_PRODUCER`; a kind that is neither is forbidden."""
     produced = _rail_record_kinds()
     pending = set(rail.AWAITING_PRODUCER)
 
@@ -1980,16 +1490,8 @@ def test_every_declared_rail_kind_has_a_producer_or_is_declared_pending():
 
 
 async def test_the_hidden_count_is_what_the_toggle_would_actually_reveal(db, world):
-    """§6.0's count line exists so a toggle cannot hide things silently — "6 films · 2 series
-    hidden". The number therefore has to be what turning the toggle on would show.
-
-    It was the whole catalog's count of the unselected kind, ignoring every filter the listing
-    had applied. With a person filter over a four-title filmography that read "26 series
-    hidden", promising twenty-six things the toggle could not produce — a worse answer than no
-    number, and precisely the silent-truncation failure inverted.
-    """
-    # `person.id` comes from the corpus, not a sequence (§4.1 rule 4 keeps upstream ids), so
-    # the fixture supplies one.
+    """The count must be what the other toggle would actually reveal under the same filters."""
+    # `person.id` comes from the corpus, not a sequence, so the fixture supplies one.
     person_id = 90210
     await db.execute("INSERT INTO person (id, name) VALUES ($1, 'Ada Cross-Kind')", person_id)
     credited = [MOVIES[0], MOVIES[1], SERIES[0]]
@@ -2007,12 +1509,9 @@ async def test_the_hidden_count_is_what_the_toggle_would_actually_reveal(db, wor
         "turning Series on reveals this person's ONE series, so that is what the line must say"
     )
 
-    # And the promise holds: the count is exactly what the other toggle produces.
+    # The count is exactly what the other toggle produces.
     both = await world.home(kinds=("movie", "series"), person_id=person_id)
     assert both["catalog"]["total"] == catalog["total"] + catalog["hidden"]["series"]
-
-
-# --- decision 475: how Home's shelves choose their titles ------------------------------------
 
 
 def _claiming_sections(payload, kind):
@@ -2027,9 +1526,7 @@ def _claiming_sections(payload, kind):
 
 
 async def test_a_title_appears_on_at_most_one_shelf_per_kind(world):
-    """Decision 475. The first household's Home drew three score-ordered shelves off the top of
-    one list, and three titles each appeared twice in one render. "New in the library" is the
-    stated exemption: it reports an arrival rather than ranking one."""
+    """Decision 475: no title twice per kind; "New in the library" is the stated exemption."""
     payload = await world.home()
     for kind in ("movie", "series"):
         sections = _claiming_sections(payload, kind)
@@ -2044,14 +1541,7 @@ async def test_a_title_appears_on_at_most_one_shelf_per_kind(world):
 
 
 async def test_your_top_picks_claims_first_and_keeps_its_whole_list(world):
-    """Its why-line promises "the ones we think you'll enjoy most", so no shelf may thin it: the
-    shelf that loses a title to it is the one below. Shelf 1's best member is raised into the top
-    twelve here - "Your top picks" shows it and shelf 1 fills from its next candidates.
-
-    Which next candidates is decision 513's: with 1001 gone, the three members left hold less
-    specificity-weighted likeness than the three decoys, whose `period` is carried by four owned
-    films against `morally-grey`'s five, so the shelf names the decoys' pair. It named the three
-    members when likeness was a count of shared terms (decision 475)."""
+    """"Your top picks" claims first; shelf 1 then names the decoys' pair by decision 513's weighting."""
     await world.db.execute(
         "UPDATE user_score SET score = 5.0 WHERE title_id = 1001 AND user_id = $1", world.patrick
     )
@@ -2066,10 +1556,7 @@ async def test_your_top_picks_claims_first_and_keeps_its_whole_list(world):
 
 
 async def test_the_floor_applies_after_the_claim_and_says_so(world):
-    """Two of shelf 1's four members and one of the three decoys raised into the top twelve leave
-    each of the anchor's pairs two titles, under proposal 28's floor of three: the shelf is
-    absent, and the reason names the claim rather than reading as a library with nothing like the
-    anchor in it. (With the decoys whole, the shelf would rightly fall back to their pair.)"""
+    """The floor applies after the claim, and the reason names the claim."""
     await world.db.execute(
         "UPDATE user_score SET score = 5.0 WHERE title_id IN (1001, 1002, 1005) AND user_id = $1",
         world.patrick,
@@ -2094,13 +1581,7 @@ async def test_the_payload_keeps_the_tables_order_though_the_claim_runs_in_anoth
 
 
 async def test_shelf_one_prefers_titles_most_like_the_anchor_over_the_widest_pair(world):
-    """Decision 475. The widest-pair rule named Zootopia's most generic pair and showed whatever
-    covered it. Here three titles share FOUR of the anchor's terms and four share two; the widest
-    pair is the two-term one, and the shelf must show the three.
-
-    The terms are DOTTED ids with shipped labels that are not their leaf (`era.wwii` is "World
-    War II"), because this file's vocabulary is otherwise dotless and could never show a raw id
-    in a why-line (decision 486)."""
+    """Most-alike titles beat the widest pair; dotted ids with non-leaf labels guard against raw ids."""
     labelled = (
         ("era.wwii", "era", "World War II"),
         ("mood.tense", "mood", "on the edge of your seat"),
@@ -2131,8 +1612,7 @@ async def test_shelf_one_prefers_titles_most_like_the_anchor_over_the_widest_pai
 
 
 async def test_the_anchor_is_the_highest_tier_before_the_highest_s(world):
-    """Decision 475. An argmax of the Ledger's `s` let one coordinate's scale choose the anchor
-    (21.8 against 9.7 on the first household). The tier the board shows comes first."""
+    """The board's tier comes before `s`, whose scale varies by coordinate."""
     # 1012 carries the anchor's two named terms, sits one tier above it, and has the lower `s`.
     await _tag(world.db, 1012, "obsession", "themes", 3)
     await _tag(world.db, 1012, "morally-grey", "character", 3)
@@ -2149,9 +1629,7 @@ async def test_the_anchor_is_the_highest_tier_before_the_highest_s(world):
 
 
 async def test_the_anchor_headline_says_what_the_person_did(world):
-    """Decision 476, withdrawing decision 187's fallback headline. "you put X in {tier}" was said
-    of titles the person had never placed - on the first household nobody had a single
-    `tier_edit` row, and one member read that he had put Mission: Impossible in S."""
+    """Decision 476: the headline says what the person did, never "you put" for an unplaced title."""
     await world.db.execute(
         "UPDATE ledger_state SET observed = false "
         "WHERE user_id = $1 AND kind = 'movie' AND title_id <> 1000",
@@ -2175,9 +1653,7 @@ async def test_the_anchor_headline_says_what_the_person_did(world):
 
 
 async def _reask(db, user_id: int, title_id: int, *, real: int, reask: int) -> None:
-    """The person answers `real`, then §13's silent re-ask answers `reask`, each stamped as
-    `record_verdict` stamps it: every write supersedes the row before it, the re-ask included, so
-    the only un-superseded row left is the instrument's."""
+    """Every write supersedes the previous one, so only the re-ask's row is un-superseded."""
     async def write(value: int, *, reask_of: int | None) -> int:
         row = await db.fetchval(
             "INSERT INTO verdict (user_id, title_id, value, is_reask, reask_of) "
@@ -2195,10 +1671,7 @@ async def _reask(db, user_id: int, title_id: int, *, real: int, reask: int) -> N
 
 
 async def test_the_anchor_headline_reads_the_persons_verdict_not_the_reask(world):
-    """Decisions 475/476 read "the latest live verdict", and a re-ask is not one: §13's stream
-    measures a judgement and must not be one (`LIVE_LABEL_SQL`). After a re-ask the only
-    un-superseded row is the instrument's, so `superseded_by IS NULL` let a "fine" title whose
-    re-ask came back "liked" be headlined "Because you liked", and the reverse."""
+    """A re-ask is not the person's verdict, so the headline must not read it."""
     await world.db.execute(
         "UPDATE ledger_state SET observed = false "
         "WHERE user_id = $1 AND kind = 'movie' AND title_id <> 1000",
@@ -2214,12 +1687,10 @@ async def test_the_anchor_headline_reads_the_persons_verdict_not_the_reask(world
 
 
 async def test_the_anchor_tie_break_reads_the_persons_verdict_not_the_reask(world):
-    """The same read, in the tie-break: at one tier a live "liked" outranks a "fine" whatever the
-    re-ask said, before the Ledger's `s` is consulted (decision 475)."""
+    """The tie-break reads the person's verdict too."""
     await _tag(world.db, 1012, "obsession", "themes", 3)
     await _tag(world.db, 1012, "morally-grey", "character", 3)
-    # 1000 (s 3.0) and 1012 (s 2.0) share tier A. 1000's own answer is "fine"; its re-ask said
-    # "liked", which would tie it with 1012 on the verdict and hand it the anchor on `s`.
+    # Same tier; 1000's own answer is "fine", its re-ask "liked".
     await _reask(world.db, world.patrick, 1000, real=1, reask=2)
     section = world.section(await world.home(), "because_anchor", "movie")
     assert section["anchor"]["title_id"] == 1012, section["anchor"]
@@ -2227,10 +1698,7 @@ async def test_the_anchor_tie_break_reads_the_persons_verdict_not_the_reask(worl
 
 
 async def test_the_anchor_is_the_highest_tier_the_board_shows_after_a_k_change(world):
-    """Decision 475 anchors on "the highest tier the board shows", and after a change in K the
-    board shows a drop through `rescale_level` (decision 11). Ordered by the raw index, an S drop
-    on the 7-level board (6) sorted below a title fitted at T9 of 12, although Rank renders the
-    drop at T11 - so the anchor was not the title in the highest tier on the board."""
+    """After a K change the board shows drops via `rescale_level`; the anchor follows the board."""
     labels = [f"T{i}" for i in range(12)]
     await _tag(world.db, 1012, "obsession", "themes", 3)
     await _tag(world.db, 1012, "morally-grey", "character", 3)
@@ -2261,13 +1729,9 @@ async def test_the_anchor_is_the_highest_tier_the_board_shows_after_a_k_change(w
 
 
 async def test_a_card_says_whether_its_letter_is_the_one_the_rank_board_shows(world):
-    """Decision 476's "tier B, as on your Rank board" quotes §6.3's board, and decision 187 keeps
-    the letter on the fitted tier. The card therefore carries what the board shows beside it, so
-    the sentence is said only where it is true (decision 486 clause 7): a title marked watched and
-    never rated is on no board (`ls.observed`, as `rank/read.py` reads it), and a title the person
-    moved renders at their drop, not the fit."""
-    # 1021 is seen with no rating, and `refit_user` still writes it a fitted tier (Dunkirk on the
-    # first household). 1015 is fitted B and dropped into A+ on Rank. 1012 is fitted A, no drop.
+    """The card says whether its letter is the board's: unrated
+    titles are on no board, drops render at the drop."""
+    # 1021 seen and unrated; 1015 fitted B and dropped to A+; 1012 fitted A, no drop.
     await world.db.execute(
         """
         INSERT INTO ledger_state (user_id, title_id, s, sigma, cdf, tier, kind, observed)
@@ -2292,7 +1756,7 @@ async def test_a_card_says_whether_its_letter_is_the_one_the_rank_board_shows(wo
     )
     board = {r.title_id: r for r in await read.items(world.db, user_id=world.patrick, kind="movie")}
     assert 1021 not in board and board[1015].assigned_tier == 5
-    # Every card on every shelf carries the pair, so no card can fall back to `seen`.
+    # Every card on every shelf carries the pair.
     for shelf in (await world.home())["shelves"]:
         for sec in shelf["sections"]:
             for card in sec["items"]:
@@ -2300,9 +1764,7 @@ async def test_a_card_says_whether_its_letter_is_the_one_the_rank_board_shows(wo
 
 
 async def test_a_cold_placed_title_with_crowd_ratings_is_not_new(world):
-    """§8 stage 10 names the badge by the absence of crowd data. The bundle's evaluation holdout
-    serves crowd-rated rows from the Cold Tower, so on the first household Raiders of the Lost
-    Ark (192,061 ratings) wore "new" and led "New in the library"."""
+    """The evaluation holdout serves crowd-rated rows from the Cold Tower; those are not "new"."""
     await world.db.execute("UPDATE title_prior SET item_n = 192061 WHERE title_id = 1008")
     payload = await world.home()
     fresh = world.section(payload, "new_in_library", "movie")
@@ -2313,8 +1775,7 @@ async def test_a_cold_placed_title_with_crowd_ratings_is_not_new(world):
     assert not no_crowd_data(card), "a title with 192,061 crowd ratings is badged 'new'"
 
 
-# The model's working vocabulary and the spec's references, as decision 486 bars them from a
-# member's screen. Checked over every string a shelf renders as a sentence.
+# Decision 486's barred vocabulary, checked over every sentence a shelf renders.
 _MODEL_WORDS = re.compile(
     r"§|β|σ|\bcos\b|\bcdf\b|\d\.\d\d|\bledger\b|fold-in|\bprior\b|Cold Tower|crowd data|"
     r"\bdecision \d|\bproposal \d|\bM[0-7]\b|\blabels\b",
@@ -2323,9 +1784,7 @@ _MODEL_WORDS = re.compile(
 
 
 async def test_no_shelf_sentence_carries_a_model_word_with_the_switch_off(world):
-    """Decision 476 restates §6.0's table in the member register (decision 486): no β, cosine,
-    CDF floor, "ledger", "fold-in", "prior", "Cold Tower" or section sign in a title, why-line or
-    caption, and no `why_numbers` block at all with Show the model off."""
+    """No model word and no `why_numbers` with Show the model off."""
     await world.db.execute(
         "DELETE FROM user_vector WHERE user_id = $1 AND purpose = 'foldin'", world.patrick
     )
@@ -2346,9 +1805,7 @@ async def test_no_shelf_sentence_carries_a_model_word_with_the_switch_off(world)
 
 
 async def test_every_shelf_card_carries_its_original_title_and_language(world):
-    """Decision 516: a German viewer's card leads with the original title where it is German, so
-    every shelf card - whichever builder's statement produced it - carries both fields, null where
-    the corpus recorded none."""
+    """Decision 516: every card carries its original title and language, null where unknown."""
     await world.db.execute(
         "UPDATE title SET original_name = 'Wunderschön', original_language = 'de' WHERE id = ANY($1)",
         list(MOVIES),
@@ -2363,8 +1820,7 @@ async def test_every_shelf_card_carries_its_original_title_and_language(world):
 
 
 async def test_home_counts_the_library_the_shelves_draw_on(world):
-    """Home's count line stated the whole catalog - "13,330 films · 5,747 series hidden" - above
-    shelves holding only owned titles. The payload names what the shelves draw on."""
+    """The count line names the owned library the shelves draw on."""
     await world.db.execute(
         "INSERT INTO title (id, kind, name, year, is_owned) "
         "VALUES (1099, 'movie', 'Unowned', 2000, false)"
@@ -2373,14 +1829,7 @@ async def test_home_counts_the_library_the_shelves_draw_on(world):
     assert payload["library"] == {"movie": len(MOVIES), "series": len(SERIES)}
 
 
-# --- decision 512: what a member has disliked stays off their shelves --------------------------
-#
-# Patrick's live verdicts are "liked" on the anchor and on offsets 12-20 of each kind, and "fine"
-# on 21 (the superseded row `seed` writes is the newest non-re-ask one). Jenny has none. A pattern
-# is made here by tagging four of his rated SERIES with one term and turning those verdicts into
-# "disliked" - series, because the evidence reads both kinds and his films then keep the ten
-# liked verdicts the runtime ceiling needs. The term is a `mood`: the avoid set reads the mood,
-# themes and sensibility facets only.
+# Four of Patrick's rated series share one mood term and become dislikes; his films keep ten likes.
 
 GORE = ("gore", "mood", "gory")
 GORE_CARRIERS = (1117, 1118, 1119, 1120)
@@ -2394,7 +1843,7 @@ async def _term(db, term: str, facet: str, label: str | None = None) -> None:
 
 
 async def _verdict(db, user_id: int, title_id: int, value: int) -> None:
-    """One live verdict, replacing any earlier one - `seed` wrote exactly one per title."""
+    """One live verdict, replacing the one `seed` wrote."""
     await db.execute("DELETE FROM verdict WHERE user_id = $1 AND title_id = $2", user_id, title_id)
     await db.execute(
         "INSERT INTO verdict (user_id, title_id, value) VALUES ($1, $2, $3)",
@@ -2407,11 +1856,7 @@ def _claiming_ids(payload, kind) -> set[int]:
 
 
 async def test_a_pattern_the_member_disliked_four_times_leaves_every_ranking_shelf(world):
-    """Decision 512. A member who has disliked four titles carrying one term, and liked none, is
-    shown no film carrying it on any shelf that ranks for them: not shelf 1 (1001), not the
-    frontier (1008), not the sweet spot (1005), not "Under 110 minutes" (1024). "New in the
-    library" reports an arrival and keeps 1008. The payload names what is left out by label,
-    beside the runtime ceiling his ten liked films of 120 minutes set."""
+    """Decision 512: four dislikes and no like leave the term off every ranking shelf."""
     term, facet, label = GORE
     await _term(world.db, term, facet, label)
     for title_id in GORE_CARRIERS:
@@ -2425,8 +1870,7 @@ async def test_a_pattern_the_member_disliked_four_times_leaves_every_ranking_she
     shown = _claiming_ids(payload, "movie")
     assert not shown & {1001, 1005, 1008, 1024}, shown
     first = world.section(payload, "because_anchor", "movie")
-    # Three members left and three decoys, one of them avoided: the members' pair is the only
-    # one still carried by three.
+    # Three members and three decoys, one avoided: the members' pair is the only one left carried by three.
     assert [c["title_id"] for c in first["items"]] == [1002, 1003, 1004]
     frontier = world.section(payload, "never_watched_term", "movie")
     assert sorted(c["title_id"] for c in frontier["items"]) == [1009, 1010, 1011]
@@ -2438,8 +1882,7 @@ async def test_a_pattern_the_member_disliked_four_times_leaves_every_ranking_she
 
 
 async def test_a_pattern_the_member_also_liked_is_not_avoided(world):
-    """Decision 512: never avoided if any liked title carries it - four dislikes beside one like
-    is a taste with an exception, not a pattern to hide."""
+    """One liked title carrying the term means it is not avoided."""
     term, facet, label = GORE
     await _term(world.db, term, facet, label)
     for title_id in (*GORE_CARRIERS, 1116):
@@ -2451,14 +1894,12 @@ async def test_a_pattern_the_member_also_liked_is_not_avoided(world):
     payload = await world.home(kinds=("movie",))
     assert payload["avoiding"]["labels"] == [], payload["avoiding"]
     first = world.section(payload, "because_anchor", "movie")
-    # 1001 is back, last: the extra term it now carries makes it a little less like the anchor.
+    # 1001 is back, last: its extra term makes it a little less like the anchor.
     assert [c["title_id"] for c in first["items"]] == [1002, 1003, 1004, 1001]
 
 
 async def test_the_shared_shelf_leaves_out_what_either_member_avoids(world):
-    """Decision 512: "you would both enjoy these" is false of a title one of them has turned down
-    the pattern of four times. Jenny avoids gore; Patrick liked the same four films, so his own
-    shelves still carry them and only the shared one leaves 1005 out."""
+    """The shared shelf leaves out what either member avoids."""
     term, facet, label = GORE
     await _term(world.db, term, facet, label)
     for title_id in (1012, 1013, 1014, 1015):
@@ -2475,10 +1916,7 @@ async def test_the_shared_shelf_leaves_out_what_either_member_avoids(world):
 
 
 async def test_a_film_far_longer_than_anything_the_member_liked_leaves_the_shelves(world):
-    """Decision 512's runtime ceiling: once a member has liked ten films, a film running more than
-    half an hour past the longest of them - and past three hours - is left out. Patrick's ten
-    liked films run 120 minutes, so the ceiling is three hours: 1021 at 250 minutes leaves "Your
-    top picks", 1022 at exactly 180 stays, and a liked film's own length moves the ceiling."""
+    """Past 30 minutes over the longest liked film and past three hours is left out; exactly 180 stays."""
     await world.db.execute("UPDATE title SET runtime_min = 250 WHERE id = 1021")
     await world.db.execute("UPDATE title SET runtime_min = 180 WHERE id = 1022")
     payload = await world.home(kinds=("movie",))
@@ -2493,14 +1931,8 @@ async def test_a_film_far_longer_than_anything_the_member_liked_leaves_the_shelv
     assert 1021 in top, top
 
 
-# --- decision 513: shelf 1's likeness is specificity-weighted and keeps the anchor's form -------
-
-
 async def test_shelf_one_weighs_a_shared_term_by_how_rare_it_is(world):
-    """Decision 513. Every candidate here shares exactly two of the anchor's terms, so a count
-    cannot tell them apart and the widest pair wins: seventeen films carry `common` + `obsession`.
-    Weighted by rarity in the owned library, the three films carrying `rare-a` + `rare-b` (four
-    carriers each, the anchor's included) are the anchor's nearest, and the shelf names them."""
+    """Decision 513: rare shared terms outweigh common ones."""
     for term, label in (("common", "common thread"), ("rare-a", "rare one"),
                         ("rare-b", "rare two")):
         await _term(world.db, term, "themes", label)
@@ -2527,9 +1959,7 @@ async def _animated(db, *title_ids: int) -> None:
 
 
 async def test_shelf_one_keeps_to_the_anchors_form(world):
-    """Decision 513: a live-action anchor draws live-action titles and an animated one animated
-    titles ("Because you liked Chernobyl" drew Attack on Titan). Read through decision 473's
-    canonical Animation, so trakt's "anime" would answer too."""
+    """Decision 513: live-action anchors draw live action; animation is read through canonical Animation."""
     await _animated(world.db, *ids(1000, MEMBERS))
     live = world.section(await world.home(kinds=("movie",)), "because_anchor", "movie")
     assert [c["title_id"] for c in live["items"]] == ids(1000, DECOYS), (
@@ -2541,14 +1971,8 @@ async def test_shelf_one_keeps_to_the_anchors_form(world):
     assert [c["title_id"] for c in drawn["items"]] == ids(1000, MEMBERS)
 
 
-# --- decision 514: the frontier's "which you like" is the member's own word ---------------------
-
-
 async def test_which_you_like_rests_on_three_liked_titles_not_on_the_ledger(world):
-    """Decision 514. `cosy` sits on three rated films whose Ledger CDF is 0.90, which is all the
-    old reading asked; turn one of the three verdicts into "fine" and only two liked titles
-    carry it, so "close to cosy, which you like" is no longer a sentence the person said. The
-    film frontier is absent and says why; the series one, untouched, still ships."""
+    """Decision 514: "which you like" needs three liked titles, not a Ledger CDF."""
     await _verdict(world.db, world.patrick, 1014, 1)
     await world.client.post("/api/auth/preferences", json={"show_model": True})
     payload = await world.home()
@@ -2562,9 +1986,7 @@ async def test_which_you_like_rests_on_three_liked_titles_not_on_the_ledger(worl
 
 
 async def test_the_frontier_names_a_neighbour_from_another_facet(world):
-    """Decision 514: inside one facet a near term is the same thing under a narrower or broader
-    name, and "never watched World War I, close to turn of the 20th century, which you like"
-    reads as the contradiction it is. Filed under neon's own facet, cosy is no neighbour."""
+    """Decision 514: the neighbour must come from another facet."""
     await world.db.execute(
         "UPDATE dna_tag SET facet = 'visual' WHERE term = 'cosy' AND title_id < 1100"
     )
@@ -2574,14 +1996,8 @@ async def test_the_frontier_names_a_neighbour_from_another_facet(world):
     assert series["why"] == "close to cosy, which you like"
 
 
-# --- the sweet spot on one scale (§6.2 step 3, decision 477) ------------------------------------
-
-
 async def test_the_sweet_spot_ranks_the_two_members_on_one_scale(world):
-    """§6.0 row 4's "ranked as Tonight's pool is" is §6.2 step 3's plain average of each member's
-    scores rank-standardised over the library (decision 477). Jenny's scores are shrunk to a
-    hundredth, and she prefers 1007 to the others by a wide rank margin: averaged raw, Patrick's
-    units decide ([1005, 1006, 1007]); on one scale her preference counts as much as his."""
+    """Decision 477: scores are rank-standardised per member before averaging."""
     await world.db.execute(
         "UPDATE user_score SET score = score * 0.01 WHERE user_id = $1", world.jenny
     )
@@ -2594,9 +2010,6 @@ async def test_the_sweet_spot_ranks_the_two_members_on_one_scale(world):
     assert [c["title_id"] for c in sweet["items"]] == [1007, 1005, 1006]
 
 
-# --- decision 515: the catalogue for you, and the card's why ----------------------------------
-
-
 async def _titles(client, **params):
     query = [("kind", k) for k in params.pop("kinds", ("movie", "series"))]
     query += [(k, v) for k, v in params.items()]
@@ -2606,10 +2019,7 @@ async def _titles(client, **params):
 
 
 async def test_the_catalogue_is_for_you_by_default_and_partitions_by_kind(world):
-    """Decision 515. Patrick's fold-in is fitted to his own ratings for both kinds, so the grid
-    orders by his score by default - and because that is a ranking, films first and then series
-    (§4.1 rule 5, decision 18): every series here outscores every film, so a merged ranking would
-    open on a series."""
+    """Decision 515: "for you" ranks by the member's own fit, films then series."""
     listing = await _titles(world.client)
     assert listing["sort"] == "for_you" and listing["for_you_available"] is True
     kinds = [item["kind"] for item in listing["items"]]
@@ -2620,16 +2030,14 @@ async def test_the_catalogue_is_for_you_by_default_and_partitions_by_kind(world)
 
 
 async def test_the_catalogue_is_newest_first_until_the_members_own_ratings_rank_it(world):
-    """Decision 515: "for you" is the default only for a profile fitted to the member's own
-    ratings. Jenny has none, so she gets the year order even when she asks, and the response says
-    which order it is really in. A fit whose personal half has no weight (β 0) is the crowd's
-    order - "what most people rate highest" - and is not "for you" either."""
+    """"For you" needs the member's own ratings (β > 0);
+    otherwise the year order, and the response says so."""
     jenny = await world.sign_in_jenny()
     listing = await _titles(jenny, sort="for_you")
     assert listing["sort"] == "newest"
     years = [item["year"] for item in listing["items"]]
     assert years == sorted(years, reverse=True)
-    # And it says so, so the grid offers no "For you" that answers newest (review finding UX-1).
+    # So the grid offers no "For you" that answers newest.
     assert listing["for_you_available"] is False
 
     await world.db.execute("UPDATE user_vector SET blend_beta = 0 WHERE user_id = $1", world.patrick)
@@ -2638,8 +2046,7 @@ async def test_the_catalogue_is_newest_first_until_the_members_own_ratings_rank_
 
 
 async def test_newest_and_a_search_keep_their_own_orders(world):
-    """Asked for, the year order stands; under a search the order is best match first (decision
-    472) whichever sort was asked, and `sort` says `match`."""
+    """Year order stands when asked; a search is best match first, and `sort` says `match`."""
     newest = await _titles(world.client, sort="newest")
     assert newest["sort"] == "newest"
     years = [item["year"] for item in newest["items"]]
@@ -2660,9 +2067,7 @@ async def _why(client, title_id: int):
 
 
 async def test_the_title_card_says_which_liked_title_it_is_like(world):
-    """Decision 515: one member-register sentence, true of this title for this reader. 1001 shares
-    the anchor's two quoted terms, and the anchor is a film Patrick liked; the rarer and more
-    prominent of the two is named first. Jenny has liked nothing and ranked nothing: None."""
+    """One member-register sentence naming the liked title this one is like."""
     assert await _why(world.client, 1001) == (
         "Because you liked Home Film 1000 — they share morally-grey + obsession"
     )
@@ -2671,8 +2076,7 @@ async def test_the_title_card_says_which_liked_title_it_is_like(world):
 
 
 async def test_the_title_card_says_nothing_of_a_title_seen_or_avoided(world):
-    """Nothing is suggested about a title the member has seen, and the card does not argue for a
-    title their shelves leave out (decision 512)."""
+    """Nothing is suggested about a seen or avoided title."""
     assert await _why(world.client, 1012) is None
     term, facet, label = GORE
     await _term(world.db, term, facet, label)
@@ -2684,8 +2088,7 @@ async def test_the_title_card_says_nothing_of_a_title_seen_or_avoided(world):
 
 
 async def test_the_title_card_names_a_top_pick_that_nothing_liked_explains(world):
-    """With no liked title alike enough, a title the member's own ratings put in the top tenth of
-    the owned films reads as Your top picks does; 1030 carries no terms at all."""
+    """With no liked title alike enough, a top-tenth title reads as Your top picks does."""
     assert await _why(world.client, 1030) is None
     await world.db.execute(
         "UPDATE user_score SET score = 5.0 WHERE user_id = $1 AND title_id = 1030", world.patrick

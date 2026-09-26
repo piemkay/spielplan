@@ -1,8 +1,4 @@
-"""The one allow-list of image hosts this app may fetch cover art from. Decision 483.
-
-No database: `art/hosts.py` is pure, and the art route and the importer's card resolution both
-take their answer from it, so what is pinned here is what both of them serve and store.
-"""
+"""The one allow-list of image hosts cover art may be fetched from (decision 483)."""
 
 from __future__ import annotations
 

@@ -1,25 +1,5 @@
-"""Launch: exactly the selected rows, held against the cap inside its own transaction.
-
-Spec v2.1 §8.4 ("picks a batch and providers, sees the cost estimate, launches"), §6.6 Data's
-approve/spend controls; decisions 325, 343, 441, 442 and 443. Plan §7 checks 5 and 6: "cap set below
-the total | Launch disabled; the reason names the cap" and "Launch inside the cap | exactly the
-selected rows change state".
-
-WHAT "EXACTLY" IS MEASURED ON. Three queued thin-facet rows and two of them launched: the two are
-running under the batch the launch wrote, the third is untouched; the two titles are leasable by the
-drain and carry the batch plan stage 6 will read, the third's task is still deferred and carries
-none; and the board says, for each launched title, where it resumes and with what. Decision 443's
-three steps are one transaction, so every refusal below is checked against all four tables it could
-have touched - `flywheel_item`, `flywheel_batch`, `acquisition_task`, `acquisition_job` - byte for
-byte, `updated_at` included.
-
-THE SERVER IS THE GATE. Nothing the launch is handed carries a figure, and the money refusals are
-the domain's own sentences, read inside the launch transaction: no cap (`spend.NO_CAP_REASON`), a
-reservation over the room left, a model nobody priced, a provider with no key. Exactly the room
-left launches.
-
-Integration tests are skipped without TEST_DATABASE_URL; see tests/conftest.py.
-"""
+"""Launch: exactly the selected rows, held against the cap inside its own transaction (decision 443).
+Every refusal is checked against all four tables it could touch, byte for byte. Needs TEST_DATABASE_URL."""
 
 from __future__ import annotations
 
@@ -34,9 +14,7 @@ from spielplan.connectors import registry
 from spielplan.flywheel import batch, store
 from spielplan.llm import spend
 
-# Three owned titles, each walked past stage 8 and found thin: the board parked at stage 9 for want
-# of a bundle - where a real walk past the observation stops on a bundle-less database - and the
-# task deferred behind that park.
+# Three owned titles walked past stage 8 and found thin, parked at stage 9 for want of a bundle.
 A, B, C = 11, 12, 13
 PARKED_AT_NINE = "stage 9 parked by this test: no bundle is active"
 BIG_CAP = 25
@@ -44,8 +22,7 @@ PLAN = {"providers": ["gemini", "anthropic"], "passes": 2}
 
 
 async def _cap(db, cap: float | None = None, **fields) -> None:
-    """The `llm` row: Gemini assigned at one pass, and the cap when the test gives one. Partial, as
-    `registry.save_connector` is, so a test that never sets a cap has none (decision 325)."""
+    """Partial, as `registry.save_connector` is, so a test that never sets a cap has none."""
     settings = {"extraction_provider": "gemini", "parallel": False, "passes": 1, **fields}
     if cap is not None:
         settings["cap_usd"] = cap
@@ -53,9 +30,8 @@ async def _cap(db, cap: float | None = None, **fields) -> None:
 
 
 async def _install(db) -> dict[int, int]:
-    """Three thin titles with their queue rows, Gemini and Anthropic keyed, OpenAI not, and no cap.
-    Returns each title's queue row id. A function as well as the fixture below, so
-    `test_flywheel_api.py` installs the same queue under the app without importing a fixture."""
+    """A function as well as a fixture, so `test_flywheel_api.py`
+    can install the same queue under the app."""
     rows = {}
     for title_id in (A, B, C):
         await db.execute(
@@ -107,14 +83,7 @@ def _launched_reason(batch_id: int, *, number: int = 5, name: str = "dna pack") 
                                  providers="gemini + anthropic", passes=2)
 
 
-# --- exactly the selected rows (plan check 6, decision 443) ------------------------------------
-
-
 async def test_a_launch_marks_exactly_the_selected_rows_and_makes_exactly_their_titles_due(db, queued):
-    """Two of three rows launched: those two run under the batch, the third stays queued with no
-    batch; the two titles' tasks are due now carrying the plan and the batch under the one key stage
-    6 reads (`stages.task_plan`), the third's is still deferred and carries no plan; the drain
-    leases exactly the two; and each launched board says where it resumes and with what."""
     await _cap(db, BIG_CAP)
 
     launched = await batch.launch(db, item_ids=[queued[B], queued[A], queued[A]], **PLAN)
@@ -144,9 +113,7 @@ async def test_a_launch_marks_exactly_the_selected_rows_and_makes_exactly_their_
 
 
 async def test_the_batch_row_records_the_figures_the_launch_was_held_against(db, queued):
-    """Decision 443's step 1: providers, passes, the titles counted and the two figures decision 441
-    computes - the total, and the reservation of both attempts - priced over the batch's own plan
-    (decision 442), and never over the stored one-provider, one-pass settings."""
+    """Priced over the batch's own plan (decision 442), never the stored one-provider settings."""
     await _cap(db, BIG_CAP)
 
     launched = await batch.launch(db, item_ids=[queued[A], queued[B]], **PLAN)
@@ -168,8 +135,7 @@ async def test_the_batch_row_records_the_figures_the_launch_was_held_against(db,
 
 
 async def test_a_title_whose_board_is_behind_the_pack_stage_resumes_where_it_is_and_says_so(db, queued):
-    """`make_due` never moves a job forward, so a title an operator retried from stage 3 after it was
-    found thin resumes at 3 - and the board's sentence names stage 3, since it is shown verbatim."""
+    """`make_due` never moves a job forward, so a title retried from stage 3 resumes at 3."""
     await _cap(db, BIG_CAP)
     await pipeline.write_board(db, A, stage=3, status=pipeline.FAILED, reason="a stage raised")
 
@@ -181,8 +147,6 @@ async def test_a_title_whose_board_is_behind_the_pack_stage_resumes_where_it_is_
 
 
 async def test_the_queue_shows_a_launched_row_running_with_its_titles_board(db, queued):
-    """The admin queue's own read after a launch: the row is running under its batch, and the board
-    row it carries says why the title is waiting now, verbatim (§6.6 Data)."""
     await _cap(db, BIG_CAP)
     launched = await batch.launch(db, item_ids=[queued[A]], **PLAN)
 
@@ -193,9 +157,6 @@ async def test_the_queue_shows_a_launched_row_running_with_its_titles_board(db, 
     assert rows[A]["board"] == {"stage": 5, "status": "queued",
                                 "reason": _launched_reason(launched["batch"]["id"])}
     assert rows[B]["status"] == "queued" and rows[B]["board"]["status"] == pipeline.PARKED
-
-
-# --- the money refusals (plan check 5, decision 441) --------------------------------------------
 
 
 async def _over_the_cap(db) -> None:
@@ -228,9 +189,6 @@ async def _keyless(db) -> None:
 async def test_each_money_refusal_is_its_own_sentence_and_writes_nothing(
     db, queued, arrange, providers, opens
 ):
-    """Four ways Launch is disabled, each refused again inside the transaction with its own sentence
-    whatever a client displayed - and nothing written anywhere: no batch, no row running, no task
-    due, no board moved."""
     await arrange(db)
     before = await _snapshot(db)
 
@@ -254,8 +212,7 @@ async def test_the_over_cap_sentence_names_the_reservation_the_cap_and_what_is_l
 
 
 async def test_a_reservation_exactly_equal_to_the_room_left_launches(db, queued):
-    """`spend.cap_check`'s reading, which the launch keeps: a month that ends on its cap has not
-    passed it. One micro-dollar less and the same launch is refused."""
+    """A month that ends on its cap has not passed it; one micro-dollar less is refused."""
     plan = await spend.extraction_plan(db)
     reserved = batch.totals([p.price for p in plan.providers], passes=1, titles=1)[2]
     await _cap(db, float(reserved - Decimal("0.000001")))
@@ -271,9 +228,6 @@ async def test_a_reservation_exactly_equal_to_the_room_left_launches(db, queued)
     assert await db.fetchval("SELECT count(*) FROM flywheel_batch") == 1
 
 
-# --- a selection the launch cannot take whole (decision 443) -----------------------------------
-
-
 async def test_a_row_already_launched_refuses_the_whole_launch(db, queued):
     await _cap(db, BIG_CAP)
     await batch.launch(db, item_ids=[queued[A]], **PLAN)
@@ -283,8 +237,7 @@ async def test_a_row_already_launched_refuses_the_whole_launch(db, queued):
         await batch.launch(db, item_ids=[queued[B], queued[A]], **PLAN)
 
     assert refused.value.reason.startswith(f"row {queued[A]} is running and not queued"), refused.value
-    # The one way a running row comes back to the queue is named where a relaunch finds it shut
-    # (decision 448). [M5.6 review cycle 1, M56-MONEY-01]
+    # The one way a running row comes back to the queue is named where a relaunch finds it shut.
     assert "abandon its title's job on the board" in refused.value.reason, refused.value.reason
     assert await _snapshot(db) == before
 
@@ -292,12 +245,8 @@ async def test_a_row_already_launched_refuses_the_whole_launch(db, queued):
 async def test_a_title_that_failed_stage_six_for_good_is_not_launched_until_the_board_retries_it(
     db, queued
 ):
-    """Decision 431 makes an admin retry of the task that failed for good "the only way back", and a
-    launch revives every failed task of its titles, the mark included - so a queued row whose title
-    had since failed stage 6 for good bought attempt 1 and the named retry again from a provider that
-    had already refused the contract twice. The launch refuses the whole batch naming the title, the
-    task and the board's retry, writes nothing, and launches once the board has retried it (decision
-    448). [M5.6 review cycle 1, M56-MONEY-02]"""
+    """A launch revives every failed task of its titles, so
+    a title that failed stage 6 for good must refuse."""
     await _cap(db, BIG_CAP)
     await db.execute(
         "UPDATE acquisition_task SET state = 'failed', attempts = 1, last_error = 'broke the contract'"
@@ -333,8 +282,7 @@ async def test_an_id_the_queue_does_not_hold_refuses_the_whole_launch(db, queued
 
 
 async def test_a_row_whose_producer_is_m6s_refuses_the_whole_launch_naming_m6(db, queued):
-    """Decision 443: rows of the two kinds M6 produces are shown and selectable, and a launch naming
-    one is refused with a sentence naming M6, because no M5 stage can act on a query."""
+    """No M5 stage can act on a query, so rows M6 produces refuse the launch naming M6."""
     await _cap(db, BIG_CAP)
     m6 = await store.enqueue(db, kind=store.EMPTY_PREDICATE, detail={"terms": ["themes.robots"]},
                              reason="no owned title carries robots")
@@ -351,10 +299,7 @@ async def test_a_row_whose_producer_is_m6s_refuses_the_whole_launch_naming_m6(db
 async def test_a_title_in_flight_refuses_the_whole_launch_and_undoes_the_titles_already_made_due(
     db, queued, pg_url
 ):
-    """A walk holds B (the driver's session lock, `pipeline._TITLE_LOCK`, taken on another
-    connection as a worker takes it). A is made due first - the launch walks titles in order - so the
-    refusal at B has to roll A's board, task and row back with it, which is what one transaction
-    means."""
+    """A is made due before B is refused, so one transaction must roll A back."""
     await _cap(db, BIG_CAP)
     before = await _snapshot(db)
     walker = await asyncpg.connect(pg_url)

@@ -1,12 +1,4 @@
-"""Where a poster comes from, and how often anyone is asked for it. Spec v2.1 §6.8, §7.1, §8's
-politeness clause; decisions 483 and 485.
-
-No database: `sources.read` is replaced by the row the test states, the third-party image host is
-an `httpx.MockTransport`, and the household's Jellyfin is `ops/fake_jellyfin.py` mounted
-in-process - the double answers with the bytes a real server sends and refuses what one refuses,
-so the first source is asked over HTTP rather than assumed. The clock is injected so a 180-day
-re-fetch is asserted rather than waited for.
-"""
+"""Where a poster comes from, and how often anyone is asked for it (§6.8). No database."""
 
 from __future__ import annotations
 
@@ -37,8 +29,6 @@ class Clock:
 
 
 class Host:
-    """The image host: what it was asked, and what it answers."""
-
     def __init__(self, answer=None) -> None:
         self.asked: list[str] = []
         self.answer = answer or (lambda request: httpx.Response(
@@ -51,8 +41,6 @@ class Host:
 
 
 class Pool:
-    """`connect()` as the route hands it in, counting what is held."""
-
     def __init__(self) -> None:
         self.held = 0
         self.opened = 0
@@ -75,7 +63,7 @@ def _row(**overrides) -> sources.PosterRow:
 
 @pytest.fixture
 def row(monkeypatch):
-    """The title the route read; a test replaces `row["row"]` to change what the database says."""
+    """A test replaces `row["row"]` to change what the database says."""
     state = {"row": _row()}
 
     async def read(conn, title_id):
@@ -104,7 +92,6 @@ async def service(tmp_path):
 
 @pytest.fixture
 def jellyfin(fake_jellyfin, monkeypatch):
-    """The household's server, configured, with the double behind `registry.make_client`."""
     module, transport = fake_jellyfin
 
     async def load(conn):
@@ -119,8 +106,7 @@ def jellyfin(fake_jellyfin, monkeypatch):
 
 
 async def test_a_tmdb_poster_is_fetched_at_w342_once_and_then_served_from_disk(row, service):
-    """The corpus stored w500; decision 483 serves w342 by rewriting the segment, never by
-    prefixing it, and the second view of the same card costs a disk read and no request."""
+    """The corpus stored w500; w342 is served by rewriting the size segment, never by prefixing it."""
     host, pool = Host(), Pool()
     svc = await service(host)
     first = await svc.poster(7, connect=pool.connect)
@@ -132,8 +118,6 @@ async def test_a_tmdb_poster_is_fetched_at_w342_once_and_then_served_from_disk(r
 
 
 async def test_imdb_hosted_art_never_reaches_the_transport(row, service):
-    """`m.media-amazon.com` is never fetched, proxied or stored - so a title whose only art is
-    there is the tinted panel, and the request that would have fetched it is never made."""
     row["row"] = _row(poster_path=AMAZON, lookup_owed=True)
     host = Host()
     svc = await service(host)
@@ -157,8 +141,7 @@ async def test_an_upstream_404_is_remembered_and_not_asked_again_inside_its_ttl(
 
 
 async def test_a_host_that_refuses_is_asked_again_after_ten_minutes(row, service):
-    """A refusal that is not "no such file" - a CDN's 403 here, which the fetcher does not retry -
-    is no answer about the poster, so it is kept ten minutes and not a week."""
+    """A CDN's 403 is no answer about the poster, so it is kept ten minutes and not a week."""
     clock = Clock()
     host = Host(lambda request: httpx.Response(403))
     svc = await service(host, clock=clock)
@@ -223,8 +206,6 @@ async def test_a_tmdb_file_is_fetched_again_after_180_days(row, service):
 
 
 async def test_a_new_source_is_a_new_question_under_the_same_url(row, service):
-    """A title re-derived with a different poster, or become owned, is not answered from the
-    entry the old sources wrote."""
     host = Host()
     svc = await service(host)
     await svc.poster(7, connect=Pool().connect)
@@ -259,8 +240,7 @@ async def test_a_title_jellyfin_holds_no_image_for_falls_through_to_tmdb(row, se
 async def test_jellyfin_down_falls_through_to_tmdb_and_is_asked_again_tomorrow(
     row, service, jellyfin, monkeypatch
 ):
-    """§3.3: the app works when Jellyfin is down, and an owned title must not 404 for it - the
-    TMDB file stands in for a day rather than for 180, so the household's own art comes back."""
+    """§3.3: the app works when Jellyfin is down; the TMDB file stands in for a day, not 180."""
     def unreachable(request):
         raise httpx.ConnectError("no route to host")
 
@@ -279,8 +259,7 @@ async def test_jellyfin_down_falls_through_to_tmdb_and_is_asked_again_tomorrow(
 async def test_with_egress_off_no_image_host_is_asked_and_jellyfin_still_is(
     row, service, jellyfin
 ):
-    """Decision 483's switch, which e2e and CI run under: no internet host is asked for a poster,
-    and the fake Jellyfin - which is not the internet - still serves one."""
+    """e2e and CI run with egress off; the fake Jellyfin is not the internet, so it is still asked."""
     host = Host()
     svc = await service(host, egress=False)
     none = await svc.poster(7, connect=Pool().connect)
@@ -325,10 +304,8 @@ def test_the_candidates_are_jellyfin_then_the_stored_path_then_the_lookup():
 
 
 def test_both_image_hosts_are_declared_with_the_reasoning_for_their_robots_override():
-    """Decision 340 as the art route meets it: each servable host has a measured row §6.6 can
-    show, and neither is left on the slow default with robots honoured - which, in a fetcher that
-    lives as long as the web process, would let one unanswered robots.txt refuse every poster from
-    that host until a restart (decision 485)."""
+    """A fetcher living as long as the web process must not let one unanswered robots.txt
+    refuse every poster from a host until restart (decision 485)."""
     from spielplan.acquire.hosts import HOST_POLICIES, undocumented_overrides
     from spielplan.art.hosts import SERVABLE_HOSTS
 
@@ -340,10 +317,7 @@ def test_both_image_hosts_are_declared_with_the_reasoning_for_their_robots_overr
 
 
 def test_the_page_remembers_a_404_no_longer_than_the_shortest_one_it_is_sent():
-    """`lib/art.js` stops a card asking for a poster the route has just answered 404 for, for as
-    long as the browser's own cache would give the same answer. That holds only while the page's
-    memory is no longer than the shortest max-age a 404 carries; a longer one would hide art the
-    browser would already fetch again (decision 483's cacheable 404s)."""
+    """`lib/art.js` remembers a 404; that memory must not outlast the shortest max-age a 404 carries."""
     import re
     from pathlib import Path
 
@@ -355,7 +329,6 @@ def test_the_page_remembers_a_404_no_longer_than_the_shortest_one_it_is_sent():
 
 
 async def test_the_jellyfin_client_reads_the_primary_image_as_bytes(fake_jellyfin):
-    """§7.1's client, against the double: the resized Primary image, None for an item with none."""
     module, transport = fake_jellyfin
     client = JellyfinClient(JELLYFIN_URL, module.API_KEY, transport=transport)
     data, content_type = await client.primary_image("jf-1")

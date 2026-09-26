@@ -1,14 +1,5 @@
-"""A software WebAuthn authenticator, for testing the real ceremonies.
-
-Spec v2.1 §3.2 makes passkeys primary and §14.4 promises that changing `PUBLIC_URL`
-invalidates them. Neither claim can be checked by mocking `verify_authentication_response` —
-that would assert we call the library we call. This produces genuine CTAP2 structures signed
-by a real P-256 key, so `core.webauthn` runs its actual verification path and the interesting
-cases are reachable: an assertion for the wrong origin, an assertion for the wrong rp_id, and
-a replay whose signature is perfectly valid and whose counter has not moved.
-
-Only the pieces the app uses: ES256, attestation format "none", no extensions.
-"""
+"""A software WebAuthn authenticator: real CTAP2 structures signed by a P-256 key, so `core.webauthn`
+runs its real verification path. Only ES256, attestation "none" and no extensions."""
 
 from __future__ import annotations
 
@@ -35,7 +26,6 @@ def b64(raw: bytes) -> str:
 
 
 def _cose_key(public: ec.EllipticCurvePublicKey) -> bytes:
-    """COSE_Key for ES256, the encoding an authenticator puts in attested credential data."""
     numbers = public.public_numbers()
     return cbor2.dumps(
         {
@@ -60,8 +50,6 @@ class SoftAuthenticator:
         default_factory=lambda: ec.generate_private_key(ec.SECP256R1())
     )
 
-    # --- pieces ---------------------------------------------------------------------
-
     def _client_data(self, *, kind: str, challenge: bytes, origin: str | None = None) -> bytes:
         return json.dumps(
             {
@@ -82,10 +70,8 @@ class SoftAuthenticator:
             data += public
         return data
 
-    # --- ceremonies -----------------------------------------------------------------
-
     def register(self, challenge: bytes, *, origin: str | None = None, rp_id: str | None = None):
-        """Produce a registration response. `origin`/`rp_id` override for the negative tests."""
+        """`origin`/`rp_id` override for the negative tests."""
         client_data = self._client_data(kind="webauthn.create", challenge=challenge, origin=origin)
         auth_data = self._auth_data(
             rp_id=rp_id, flags=FLAG_UP | FLAG_UV | FLAG_AT, count=self.sign_count
@@ -112,17 +98,8 @@ class SoftAuthenticator:
         advance: bool = True,
         uv: bool = True,
     ):
-        """Produce an assertion.
-
-        `advance=False` replays the current counter — a signature that verifies perfectly and
-        must still be refused, which is the only reason §4.2 stores `sign_count` at all.
-
-        `uv=False` clears the user-verification flag: a roaming key that was merely *touched*.
-        §3.2's passkey is "Face ID / Touch ID / Android biometrics", so such an assertion is a
-        valid sign-in that must not satisfy the 24 h admin re-prompt — and with the flag
-        hardcoded here, nothing in the suite could produce one. Registration keeps UV set: this
-        models an authenticator that can verify and did not, not one that cannot.
-        """
+        """`advance=False` replays the counter: a valid signature that must still be refused.
+        `uv=False` clears user verification: a touched key must not satisfy the admin re-prompt."""
         if advance:
             self.sign_count += 1
         client_data = self._client_data(kind="webauthn.get", challenge=challenge, origin=origin)

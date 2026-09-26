@@ -1,24 +1,6 @@
-"""Decision 337's run arithmetic and the per-provider write. Spec v2.1 §6.6, §4.1 rules 1 and 2.
+"""Decision 337's run arithmetic and the per-provider write (§6.6, §4.1). Needs TEST_DATABASE_URL.
 
-§6.6 merges runs by "union with per-tag agreement as confidence" and §4.1 rule 2 makes agreement a
-weight and never a filter, and neither states the function between them. Decision 337 ports the
-corpus's: the share of runs that found a term, the count beside it, the highest salience any run
-assigned, every run's evidence, and a tag one run of one found written at a confidence of 1.0. The
-first half of this file pins that arithmetic with no database; the second half pins the write, one
-`dna_tag` row per provider through `UNIQUE (title_id, version, term, provider)`, against Postgres,
-because the four-column key and the cascade are the schema's and a test without them would be
-asserting what the code meant rather than what the table kept.
-
-A RUN IS ONE PROVIDER AT ONE PASS. Two tests exist because "counts runs" has two readings a port
-could get wrong and still pass the other: two providers at one pass each must give exactly what two
-passes of one provider give, and a term both providers found in three runs must weigh two of three,
-not two providers of two.
-
-The rule-2 half of the coverage row is not re-tested here. `test_landmine_guards.py`'s pair already
-reads every module under `spielplan/`, this one included, and is registered on the row directly.
-
-Integration tests are skipped without TEST_DATABASE_URL; see tests/conftest.py.
-"""
+A run is one provider at one pass: agreement counts runs, never providers."""
 
 from __future__ import annotations
 
@@ -37,8 +19,6 @@ V0 = "v0"
 
 
 def tag(term: str, salience: int = 2, quote: str | None = None, source: str = "trakt:comment"):
-    """One tag as `verify_payload` hands it forward. The facet is the term's prefix, as it is for
-    every facet this app's vocabulary carries."""
     return VerifiedTag(
         term=term, facet=term.split(".")[0], salience=salience, source=source,
         quote=quote or f"a quote about {term}",
@@ -47,9 +27,6 @@ def tag(term: str, salience: int = 2, quote: str | None = None, source: str = "t
 
 def weights(merged) -> dict[str, tuple[int, float, int]]:
     return {m.term: (m.salience, m.confidence, m.n_sources) for m in merged}
-
-
-# --- the arithmetic, no database ------------------------------------------------------------
 
 
 def test_two_passes_of_one_provider_weigh_each_term_by_the_share_that_found_it():
@@ -107,8 +84,7 @@ def test_a_tag_found_by_one_run_of_one_is_kept_at_a_confidence_of_one():
 
 
 def test_a_run_that_found_nothing_is_still_a_run():
-    """`n_runs` is `len(passes)`, as the corpus counts it. A run that came back empty disagreed
-    with every other run about every term, and leaving it out would double the weight of each."""
+    """A run that came back empty disagreed about every term; leaving it out would double each weight."""
     merged, n_runs = consensus.merge_passes({"gemini:1": [tag("mood.tense")], "gemini:2": []})
 
     assert n_runs == 2
@@ -123,9 +99,6 @@ def test_the_highest_salience_any_run_assigned_wins_in_every_run_order():
 
 
 def test_the_evidence_of_every_run_that_found_the_term_is_kept():
-    """Not only the winner's: the run that assigned the top level quoted one sentence, and the two
-    that assigned less quoted others, and every one of the three is a falsifiable reason the tag
-    exists. Two runs quoting one sentence stay two items, told apart by their run."""
     merged, _ = consensus.merge_passes({
         "gemini:1": [tag("mood.tense", 1, "the air is thin")],
         "gemini:2": [tag("mood.tense", 3, "every scene holds its breath")],
@@ -143,9 +116,7 @@ def test_the_evidence_of_every_run_that_found_the_term_is_kept():
     "key", ["gemini", ":1", "gemini:", "gemini:0", "gemini:-1", "gemini:x", "gemini:١"]
 )
 def test_a_key_that_spells_no_run_is_refused(key):
-    """The provider half of the key is written into `dna_tag`'s unique key, so a key that does not
-    parse is refused -- even for a run that found nothing and so writes nothing -- rather than
-    guessed at."""
+    """The provider half of the key goes into `dna_tag`'s unique key, so it is refused, never guessed."""
     with pytest.raises(ValueError, match="names no run"):
         consensus.merge_passes({key: []})
 
@@ -155,9 +126,6 @@ def test_the_key_stage_6_spells_is_the_key_the_merge_reads():
 
     assert key == "anthropic:2"
     assert consensus.provider_of(key) == "anthropic"
-
-
-# --- the write, against Postgres ------------------------------------------------------------
 
 
 async def seed(db) -> None:
@@ -174,8 +142,6 @@ async def seed(db) -> None:
 
 
 async def tier(db, title_id: int = TITLE, version: str = V1) -> dict:
-    """The extracted tier as the table holds it: per (term, provider), the three weights and that
-    row's own evidence as (quote, source, run)."""
     out = {}
     for row in await db.fetch(
         "SELECT id, term, provider, salience, confidence, n_sources FROM dna_tag "
@@ -222,10 +188,6 @@ async def test_a_term_two_providers_found_is_two_rows_with_the_pooled_weights_an
 
 
 async def test_a_second_store_replaces_the_first_whoever_wrote_it(db):
-    """Replace, not accumulate. The first tier here is the bundle importer's `''` row and then an
-    earlier extraction's; the second write leaves neither a stale term nor a duplicate-key error,
-    their evidence goes with them through the cascade, and the other title and the other version
-    keep exactly what they had."""
     await seed(db)
     for title_id, version, provider in ((TITLE, V1, ""), (TITLE, V0, ""), (OTHER_TITLE, V1, "")):
         tag_id = await db.fetchval(
@@ -278,9 +240,7 @@ async def test_a_tag_one_run_in_three_found_is_written_and_not_dropped(db):
 
 
 async def test_a_write_that_fails_part_way_leaves_the_previous_tier_standing(db):
-    """The delete and the inserts are one transaction. The second write fails on its SECOND row --
-    after the delete and after one insert have run -- on `dna_tag`'s salience CHECK, and what the
-    title carried before is still exactly what it carries."""
+    """The second write fails on its SECOND row (the salience CHECK), after the delete and one insert."""
     await seed(db)
     good, n_good = consensus.merge_passes({"gemini:1": [tag("mood.tense"), tag("pacing.slow_burn")]})
     await consensus.store_title(db, TITLE, V1, good, n_runs=n_good)
@@ -294,8 +254,7 @@ async def test_a_write_that_fails_part_way_leaves_the_previous_tier_standing(db)
 
 
 async def test_no_run_at_all_never_erases_a_tier_and_empty_runs_do(db):
-    """Runs that all came back empty are a verdict -- nothing verified against this pack -- and
-    replace the tier with nothing. No run at all is the absence of a verdict and deletes nothing."""
+    """All-empty runs are a verdict and replace the tier with nothing; no run at all deletes nothing."""
     await seed(db)
     merged, n_runs = consensus.merge_passes({"gemini:1": [tag("mood.tense")]})
     await consensus.store_title(db, TITLE, V1, merged, n_runs=n_runs)

@@ -1,19 +1,5 @@
-"""Role gating and identity, at the route. Spec v2.1 §3.1, §3.2, §6.6.
-
-`test_auth_logic.py` proves the predicates and `test_auth_integration.py` proves the rows.
-This proves the *wiring*: that every admin path in the running app is actually behind the
-dependency, that the navigation payload a member receives does not contain the admin entries
-at all, and that the PIN switch changes who you are only when the PIN is right.
-
-The admin-route test enumerates paths by walking the running app's dependency graph rather
-than from a list kept by hand, and rather than from the `/api/admin` path prefix it used to
-match: a list would be correct on the day it was written, and a prefix says nothing about what
-a route is actually behind. `POST /api/setup/connectors` is admin-gated and lives outside the
-prefix, so the sweep was not covering it — which is the shape of failure both alternatives
-produce and neither reports.
-
-Skipped without TEST_DATABASE_URL; see tests/conftest.py.
-"""
+"""Role gating and identity, at the route (§3.1, §3.2, §6.6). Admin paths are found by walking the
+running app's dependency graph, not a hand list or the `/api/admin` prefix. Needs TEST_DATABASE_URL."""
 
 from __future__ import annotations
 
@@ -36,57 +22,16 @@ ADMIN_PASSWORD = "an-admin-password"
 MEMBER_PASSWORD = "a-member-password"
 
 
-# The count the walk finds today. Stated as a number so that a router accidentally dropped
-# from `create_app` — or a `deps.admin_user` quietly swapped for `ActiveUser` — fails here
-# with an arithmetic complaint rather than passing a sweep over a shorter list.
-#
-# Equality rather than a floor, and the number is the walk's own: a floor set one below the
-# real count tolerates exactly the loss it was raised to catch, and `>=` cannot tell a dropped
-# gate from a number that was never right. Equality also fails when an admin route is *added*,
-# which is wanted — re-stating the number by hand is how the two sweeps below become known to
-# be covering every route someone meant to gate. What it still cannot see is a new route that
-# never had `AdminUser` at all: a walk over gated routes has nothing to enumerate it with.
-# 21 until M4.7 added §6.6's System card (`GET /api/admin/system`, decision 182), and 22 until
-# M4.9 added the Data card's sources-and-terms list (`GET /api/admin/data/sources`, decisions
-# 191 and 193 — the eleven frozen sources' licence terms, and §6.4's unauthored axis artifact as
-# an outstanding task). Re-stated by hand, which is what the paragraph above says this number is
-# for: the equality failing on the added route is the check working.
-# 23 until M5.1 added §6.6's Acquisition board as two reads - `GET /api/admin/acquisition` and
-# `GET /api/admin/acquisition/{title_id}` (`api/acquisition.py`, decision 345). Both arrive here
-# by taking `AdminUser` and nowhere else: the two sweeps below walk the dependency graph, so a
-# router that is admin-gated is swept whether or not anyone remembered to list it.
-# 25 until M5.2 gave §6.6's library pick something to pick from - `GET /api/admin/connectors/
-# jellyfin/libraries` (`api/admin.py`, decision 364). It is a read of the media server behind the
-# same `AdminUser` as the two beside it, and re-stating the number here is the whole of what this
-# equality asks of the milestone that added it.
-# 26 until M5.5 added §6.6's LLM settings read and the one connector test dispatch - `GET
-# /api/admin/llm` and `POST /api/admin/connectors/{name}/test` (`api/llm.py`, decision 433) - and
-# no write, which is M5.7's. The dispatch's pattern also matches Jellyfin's own test path, and the
-# two are counted apart because they are two routes: the walk sees both, and Jellyfin's is the one
-# that answers, because `app.py` mounts the dispatch after `admin`.
-# 28 until M5.6 gave §6.6 Data its controls: the board's three actions (`api/acquisition.py`,
-# decision 444), the extraction queue's read, quote and launch (`api/flywheel.py`, decisions
-# 441-443), and the three ledger editors' four routes each with the review's two reads
-# (`api/curated.py`, decisions 445 and 446). Each arrives here by taking `AdminUser`, and
-# re-stating the number is the whole of what this equality asks of the milestone that added them.
-# M5.7 then brought the writes decision 433 left to its cards - `POST /api/admin/llm/preview`
-# and `PUT /api/admin/llm`, the preview and the confirm that must carry its figure (decision 450),
-# `PUT /api/admin/llm/cap`, and `GET /api/admin/connectors` and `PUT /api/admin/connectors/{name}`,
-# the credentials read and write that never change an estimate (decision 452). The generic PUT's
-# pattern matches Jellyfin's own save too, and Jellyfin's answers, mounted first.
+# The count the walk finds today, as an equality: a dropped router or a swapped gate fails here, and an
+# added admin route fails until the number is re-stated.
 ADMIN_ROUTE_COUNT = 53
 
 METHODS = ("GET", "POST", "PUT", "DELETE", "PATCH")
 
 
 def _routes(routes):
-    """Every route object carrying a `dependant`, however deeply the app nests its routers.
-
-    FastAPI 0.141 stops flattening `include_router`: an included router is one opaque route
-    whose children are reached through `effective_candidates()`, with the prefixes already
-    applied. Recursing rather than reading `app.routes` directly is what keeps this from
-    finding one route and reporting it as a clean sweep.
-    """
+    """FastAPI 0.141 stops flattening `include_router`;
+    children are reached through `effective_candidates()`."""
     for route in routes:
         candidates = getattr(route, "effective_candidates", None)
         if callable(candidates):
@@ -98,21 +43,13 @@ def _routes(routes):
 
 
 def _behind(dependant, target) -> bool:
-    """Whether `target` is anywhere in this route's dependency tree.
-
-    Recursive because nothing declares `admin_user` directly: it depends on `active_user`,
-    which depends on `current_user`, and a route asks only for `AdminUser`.
-    """
+    """Recursive: `admin_user` depends on `active_user`, which depends on `current_user`."""
     return any(sub.call is target or _behind(sub, target) for sub in dependant.dependencies)
 
 
 def paths_behind(target) -> set[tuple[str, str]]:
-    """Every (method, path) in the running app whose dependency tree reaches `target`.
-
-    A route that takes no auth dependency at all — `/api/setup/admin`, `/api/auth/login` — is
-    behind nothing and so appears in none of these sets, which is how the anonymous surface
-    excludes itself rather than by a hand-kept exemption.
-    """
+    """A route with no auth dependency appears in none of these
+    sets, which is how the anonymous surface excludes itself."""
     return {
         (method, route.path)
         for route in _routes(create_app().routes)
@@ -122,12 +59,7 @@ def paths_behind(target) -> set[tuple[str, str]]:
     }
 
 
-# Each session loader with the first-login gate in front of it. Two pairs since decision 483: the
-# poster route loads the session on a connection it releases before its body waits on an image
-# host (`deps.current_user_brief`), which is `current_user` called on a shorter-lived connection
-# and not a second door. A walk that followed only the first pair would pass over that route in
-# both halves of the subtraction below - authenticated nowhere, gated nowhere - which is exactly
-# the invisibility decision 225 took the Tonight socket out of.
+# Two loader pairs since decision 483: the poster route's `current_user_brief` would otherwise be invisible.
 SESSION_LOADERS = (deps.current_user, deps.current_user_brief)
 FIRST_LOGIN_GATES = (deps.active_user, deps.active_user_brief)
 
@@ -137,29 +69,16 @@ def paths_behind_any(targets) -> set[tuple[str, str]]:
 
 
 def admin_paths() -> list[tuple[str, str]]:
-    """Every (method, path) actually behind `deps.admin_user` in the running app.
-
-    Not `path.startswith("/api/admin")`. The prefix is a naming convention and the gate is a
-    dependency, so the two can disagree in both directions — and they do: `/api/setup/connectors`
-    is admin-gated and outside the prefix, while `/api/setup/admin` takes no auth dependency at
-    all and is excluded here automatically rather than by a hand-kept exemption.
-    """
+    """Not the path prefix: `/api/setup/connectors` is admin-gated outside it."""
     return sorted(paths_behind(deps.admin_user))
 
 
 def concrete(path: str) -> str:
-    """Fill path parameters with values that exist nowhere — the gate must fire first.
-
-    Every `{...}` rather than a named pair, because the locked sweep below walks routes the
-    admin sweep never reaches and a parameter nobody listed would otherwise be probed as the
-    literal string `{event_id}` — a request that still routes, and so reports a pass it did not
-    earn on the day the route starts reading its parameter before the dependency runs.
-    """
+    """Every `{...}`, or an unlisted parameter would be probed as the literal `{event_id}`."""
     return re.sub(r"\{[^}]+\}", "999999", path)
 
 
 async def _bootstrap(app):
-    """An admin and a member, each on their own client."""
     admin = app()
     created = await admin.post(
         "/api/setup/admin", json={"name": "patrick", "password": ADMIN_PASSWORD}
@@ -182,45 +101,22 @@ async def _bootstrap(app):
     return admin, member
 
 
-# --- §6.6: admin routes are admin-only ----------------------------------------------------
-
-
 def test_a_route_without_conn_still_holds_a_pooled_connection_for_its_session():
-    """Dropping `conn: DB` from a handler is tidiness, never pool relief.
-
-    `api/home.py:model_log` reads an in-process ring buffer and took a `conn` it never used;
-    M4.9 removed the parameter and argued the removal saved an acquisition. It saved none.
-    `ActiveUser` resolves `active_user` -> `current_user`, and `current_user` takes `conn: DB`
-    (`api/deps.py:115`) to load the session; FastAPI caches a dependency per request, so the
-    route's own parameter was a second reference to the connection the session load had already
-    taken. `deps.db` holds it for the whole request by design ("One pooled connection for the
-    whole request").
-
-    Asserted on the dependency graph rather than on the docstring, so it is the WIRING that
-    keeps the sentence honest: on the day `current_user` stops needing a connection this goes
-    red, and the paragraph in `model_log` has to be rewritten rather than quietly become true
-    by accident. §7.3's poll and §6.7's drawer are both surfaces a phone reopens repeatedly, and
-    `max_size` is 10. [M4.9 review cycle 1: M49-HOME-02]
-    """
+    """`current_user` takes `conn: DB` and FastAPI caches
+    it per request, so dropping `conn` saves nothing."""
     behind_db = paths_behind(deps.db)
     assert ("GET", "/api/model-log") in behind_db, (
         "the route that takes no `conn` is not behind `deps.db` either - if that is now true, "
         "`api/home.py:model_log`'s docstring says the opposite and is the thing to fix"
     )
-    # Not a property of this one route: every authenticated route is behind it, because the
-    # session load is. A sweep, so a future connection-free route cannot be read as free.
+    # Every authenticated route is behind the session load, so a connection-free route is impossible.
     behind_user = paths_behind(deps.active_user)
     assert behind_user <= behind_db, sorted(behind_user - behind_db)
 
 
 def test_the_poster_route_is_gated_and_holds_no_pooled_connection_for_its_request():
-    """The other side of the sweep above, for the one route written to be its exception.
-
-    Decision 483's poster route waits on an image host, and sixty of them answer a cold Home at
-    once against a pool of ten, so it must NOT be behind `deps.db` - and must still be behind §3.1's
-    lock, which is why it takes `ActiveUserBrief` rather than no gate at all. Asserted on the graph
-    for the reason the test above gives: the wiring is what keeps the sentence true.
-    """
+    """Sixty posters against a pool of ten: this route must
+    not be behind `deps.db`, yet stays behind §3.1's lock."""
     brief = paths_behind(deps.active_user_brief)
     assert ("GET", "/api/art/{title_id}/poster") in brief, sorted(brief)
     held = brief & paths_behind(deps.db)
@@ -239,37 +135,8 @@ def test_the_app_actually_has_admin_routes_to_gate():
 
 
 async def test_the_spa_fallback_does_not_answer_for_the_api_namespace(tmp_path):
-    """The routing of a *built* app, which no other test in the suite exercises.
-
-    `create_app()` mounts the SPA catch-all only when `SPIELPLAN_STATIC_DIR` names a directory,
-    which the container sets (`ops/backend.Dockerfile`) and pytest does not — so every 404 this
-    suite asserts on a deleted API route is asserted in the one configuration where the
-    catch-all is absent. Registered as a GET, it used to *partially* match a POST to an unrouted
-    `/api/...` path, and Starlette answers a partial match with 405: `POST /api/setup/members`,
-    the route decision 164 deleted, answered 405 in the shipped app while answering 404 here,
-    and no client could tell a deleted route from a mistyped verb.
-
-    Three claims, because the fix is a decline and a decline can be too wide: nothing under
-    `/api` reaches the shell, a real route still refuses a wrong verb with 405 rather than
-    pretending it is not there, and a client-side route still gets the shell.
-
-    AND `/events`, since M5.1. §7.2's `POST /events/jellyfin`, §7.3's `POST /events/playback`
-    and §11 all put routes under it, so it is a namespace and not one route - and until decision
-    332 the fallback declined only `api`, which left that namespace with both halves of the
-    failure above at once: a GET to an unrouted `/events/...` path served the app shell on a
-    built container, and a POST to one was the same partial match this test exists for and
-    answered 405. ALL FOUR probes above are repeated against it now, in the same order and with
-    the same expectations: M5.2 mounts §7.2's `POST /events/jellyfin`, so the fourth finally has a
-    real route for a wrong verb to be refused by and `GET /events/jellyfin` is 405 for exactly the
-    reason `POST /api/auth/me` is. The two unrouted probes moved to `/events/playback` in the same
-    edit and kept their assertions and their messages verbatim - they are about what an UNROUTED
-    path in the namespace answers, and `/events/jellyfin` stopped being one. §7.3 names
-    `/events/playback` and decision 290 files it at M7, so it is the `/events` path that will still
-    be unrouted several milestones from now, which is what an unrouted probe needs to be about.
-    That the answers match is the third clause of the coverage row: the decline is ONE rule over
-    the path's head segment rather than a clause each, so `/api` and `/events` can only diverge if
-    that rule has stopped being one. [decision 332; §7.2, §7.3]
-    """
+    """The SPA catch-all is mounted only with `SPIELPLAN_STATIC_DIR`; it must decline `/api` and `/events`
+    by head segment, while real routes still answer 405 to a wrong verb and client routes get the shell."""
     build = tmp_path / "static"
     (build / "_app").mkdir(parents=True)
     (build / "index.html").write_text("<html>shell</html>", encoding="utf-8")
@@ -279,8 +146,7 @@ async def test_the_spa_fallback_does_not_answer_for_the_api_namespace(tmp_path):
     settings.cache_clear()
     try:
         built = create_app()
-        # No lifespan: every assertion below is decided by the router before a handler runs, and
-        # the one that does run (the shell) reads a file. Nothing here touches the database.
+        # No lifespan: every assertion is decided by the router before a handler runs.
         client = httpx.AsyncClient(
             transport=httpx.ASGITransport(app=built), base_url="http://test"
         )
@@ -300,11 +166,7 @@ async def test_the_spa_fallback_does_not_answer_for_the_api_namespace(tmp_path):
                 "to it is a method mismatch and 405 is the honest answer"
             )
 
-            # The same probes against `/events`, which M5.1 makes a namespace rather than a path
-            # the shell happens to swallow. The POST is the one that cannot be seen from a pytest
-            # run at all: with no static build the fallback is not mounted, so the 404 a no-DB
-            # suite asserts is the 404 of a route that does not exist, while the container
-            # answered 405. [decision 332; §7.2, §7.3, §11]
+            # With no static build the fallback is not mounted, so only this build can see the 405.
             unrouted = await client.get("/events/playback")
             assert unrouted.status_code == 404, (
                 "an unrouted /events path must be 404 in the app that ships, not the shell: "
@@ -321,41 +183,16 @@ async def test_the_spa_fallback_does_not_answer_for_the_api_namespace(tmp_path):
                 f"a partial match and Starlette answers 405: {posted.status_code}"
             )
 
-            # THE FOURTH PROBE, WHICH HAD NO ANALOGUE UNTIL NOW, and it is what finishes decision
-            # 332's third clause rather than adding a fourth. The other three ask what an UNROUTED
-            # path in the namespace answers, and every one of them is satisfied by a namespace
-            # nothing is mounted in - which is to say they were all still true on the day `/events`
-            # was declined and empty. This one can only be asked of a namespace with a route in it:
-            # §7.2's webhook is a POST, so a GET to it is a method mismatch, and 405 here is the
-            # decline having stayed narrow enough to let the router see a real route underneath it.
-            # A GET rather than the POST because it is refused by the router before any dependency
-            # runs, which is what keeps this test's no-lifespan build honest: the POST reaches the
-            # handler and asks for a database that was deliberately never opened.
-            #
-            # Read beside the three above, the pair of namespaces now answers identically in all
-            # four positions, and THAT is the third clause: two namespaces that agree everywhere
-            # can only start disagreeing if the one rule has stopped being one. [decision 332; §7.2]
+            # A GET to §7.2's POST route is a method mismatch,
+            # which only a namespace with a route in it can show.
             events_wrong_verb = await client.get("/events/jellyfin")
             assert events_wrong_verb.status_code == 405, (
                 "the decline must not swallow a real route: POST /events/jellyfin exists, so a "
                 "GET to it is a method mismatch and 405 is the honest answer"
             )
 
-            # A LEADING DOUBLE SLASH IS THE SAME REQUEST TO THE SAME NAMESPACE, and the head
-            # segment this rule reads was the EMPTY STRING for it. The catch-all captures
-            # `/events/jellyfin` out of `//events/jellyfin`, so `path.split("/", 1)[0]` was `""`,
-            # which is in neither namespace - and both halves of the failure decision 332 exists
-            # to remove came back at once: the shell answered the GET and the GET-only fallback
-            # partially matched the POST, which Starlette answers 405. Nothing normalises it on
-            # the way in: uvicorn puts the raw target into `scope["path"]` unchanged, and the
-            # compose file publishes the backend's port directly rather than behind an ingress
-            # that might merge slashes. One expression on the rule closes it for both namespaces
-            # at once, which is what makes it still ONE rule.
-            #
-            # ASKED WITH AN ABSOLUTE URL, because httpx reads the relative reference
-            # `//events/jellyfin` as RFC 3986's network-path form - authority `events`, path
-            # `/jellyfin` - and would quietly probe `/jellyfin`, a client-side route that answers
-            # 200 shell before and after any fix. [M5.1 review cycle 3, M51-C3-332-01]
+            # A leading double slash made the head segment "", and
+            # httpx reads `//x` as an authority, hence absolute URLs.
             for probe in ("http://test//events/jellyfin", "http://test//api/nope"):
                 doubled = await client.get(httpx.URL(probe))
                 assert doubled.status_code == 404, (
@@ -369,12 +206,7 @@ async def test_the_spa_fallback_does_not_answer_for_the_api_namespace(tmp_path):
                     "contract says it can never 405 answered 405"
                 )
 
-            # The decline is a HEAD SEGMENT and not a string prefix, which is the half a
-            # decline can get wrong in the other direction. `/eventsish` is a client-side
-            # route that shares every character of the namespace's name, and the shipped
-            # bug this project has already paid for was exactly that reading: a boundary
-            # held with `startswith` let a DATA_DIR of `/data` admit `/database`
-            # (`api/artifacts.py:118-130`, M4.14 finding 2.7).
+            # A head segment, not a string prefix: `/eventsish` shares every character of the namespace.
             sibling = await client.get("/eventsish")
             assert sibling.status_code == 200 and "shell" in sibling.text, (
                 "the decline swallowed a client-side route whose name merely starts with a "
@@ -406,13 +238,8 @@ async def test_every_admin_route_refuses_a_signed_out_caller(app, method, path):
     assert response.status_code == 401
 
 
-# --- §6.6 / §3.1: the navigation payload ---------------------------------------------------
-
-
 async def test_a_member_receives_no_admin_entry_in_its_navigation(app):
-    """"Hidden, not merely disabled": the entry must be absent from what the browser receives.
-    A client-side role check hides a link from someone looking at the screen and shows it to
-    anyone looking at the response — and the prototype hardcoded the capability flag to true."""
+    """"Hidden, not merely disabled": a client-side check still ships the link in the response."""
     _admin, member = await _bootstrap(app)
     payload = (await member.get("/api/auth/me")).json()
     keys = {entry["key"] for entry in payload["nav"]["account"]}
@@ -429,9 +256,7 @@ async def test_an_admin_receives_the_admin_entries(app):
 
 
 async def test_both_roles_see_every_shipped_surface(app):
-    """§6: the surface names are normative and none of them is role-gated; decision 488: a
-    surface whose §12 milestone has not shipped is in neither role's navigation, nor behind any
-    other entry point to it."""
+    """Decision 488: an unshipped surface is in neither role's navigation."""
     admin, member = await _bootstrap(app)
     for client in (admin, member):
         payload = (await client.get("/api/auth/me")).json()
@@ -443,8 +268,7 @@ async def test_both_roles_see_every_shipped_surface(app):
 
 
 async def test_a_surface_enters_navigation_in_its_place_when_it_ships(app, monkeypatch):
-    """Decision 488's other half: the flag is what hides a surface, so flipping it is all M6 has
-    to do, and the surface arrives in §6's order - between Rank and Taste, not appended."""
+    """Flipping the flag is all a milestone does, and the surface arrives in §6's order."""
     from spielplan.api import auth as auth_api
 
     shipped = tuple({**s, "built": True} if s["key"] == "map" else s for s in auth_api.SURFACES)
@@ -455,9 +279,6 @@ async def test_a_surface_enters_navigation_in_its_place_when_it_ships(app, monke
         "home", "rate", "tonight", "rank", "map"
     ]
     assert auth_api.shipped("map") and not auth_api.shipped("taste")
-
-
-# --- §3.2: the 24-hour admin re-prompt ------------------------------------------------------
 
 
 async def test_a_stale_admin_session_is_re_prompted(db, app):
@@ -472,7 +293,7 @@ async def test_a_stale_admin_session_is_re_prompted(db, app):
     assert stale.status_code == 401
     assert stale.headers.get("X-Spielplan-Reauth") == "admin"
 
-    # Signing in again with the password is what clears it — that is the whole re-prompt.
+    # Signing in again with the password is what clears it: that is the whole re-prompt.
     await admin.post("/api/auth/login", json={"name": "patrick", "password": ADMIN_PASSWORD})
     assert (await admin.get("/api/admin/users")).status_code == 200
 
@@ -482,9 +303,6 @@ async def test_the_me_payload_reports_the_re_prompt(app, db):
     admin, _member = await _bootstrap(app)
     await db.execute("UPDATE auth_session SET admin_verified_at = now() - interval '25 hours'")
     assert (await admin.get("/api/auth/me")).json()["admin_reauth_required"] is True
-
-
-# --- §3.2: the PIN switch -------------------------------------------------------------------
 
 
 async def test_a_wrong_pin_leaves_the_session_identity_unchanged(db, app):
@@ -517,7 +335,7 @@ async def test_a_correct_pin_switches_the_session(app):
 
 
 async def test_switching_to_an_account_with_no_pin_is_refused(app):
-    """The chip only offers profiles that set one — otherwise it is a door with no lock."""
+    """The chip only offers profiles that set one; otherwise it is a door with no lock."""
     admin, member = await _bootstrap(app)
     jenny = (await member.get("/api/auth/me")).json()["id"]
     refused = await admin.post("/api/auth/switch", json={"user_id": jenny, "pin": "4821"})
@@ -535,8 +353,7 @@ async def test_the_switch_list_only_names_profiles_with_a_pin(app):
 
 
 async def test_the_switch_route_refuses_an_anonymous_caller(app):
-    """A 4-digit PIN accepted from nobody in particular would be the entire authentication
-    story for every account that set one — 10,000 guesses against an ungated route."""
+    """A 4-digit PIN accepted from anyone would be 10,000 guesses against an ungated route."""
     _admin, member = await _bootstrap(app)
     await member.post(
         "/api/auth/pin", json={"pin": "4821", "current_password": MEMBER_PASSWORD}
@@ -563,12 +380,7 @@ async def test_a_locked_out_account_refuses_even_the_right_pin(db, app):
     assert (await admin.get("/api/auth/me")).json()["name"] == "patrick"
 
 
-# --- §3.1: the forced first-login change gates everything else -------------------------------
-
-# Decision 179: "the reachable set while the lock stands is **four** routes — /api/auth/me,
-# /api/auth/password, /api/auth/logout and /api/auth/switch. Every other authenticated route in
-# the app moves behind ActiveUser." Ordered rather than a set at the call site because /logout
-# ends the session it is called on, so it has to be probed last.
+# Decision 179's four; ordered, because /logout ends the session and must be probed last.
 REACHABLE_WHILE_LOCKED = (
     ("GET", "/api/auth/me"),
     ("POST", "/api/auth/password"),
@@ -576,50 +388,27 @@ REACHABLE_WHILE_LOCKED = (
     ("POST", "/api/auth/logout"),
 )
 
-# /logout is one of the four and takes no auth dependency at all: it opens the cookie itself and
-# answers `{"ok": true}` either way, so the dependency walk cannot see it and the walk below
-# subtracts it by name. The live sweep is what actually holds it to the decision.
+# /logout takes no auth dependency, so the walk subtracts it by name; the live sweep holds it.
 UNGATED_BY_DESIGN = {("POST", "/api/auth/logout")}
 
-# The half of the sweep a dependency walk cannot do. `paths_behind` sees a route's auth only
-# where it is *declared*, so a route that reads the session cookie in its own body appears in
-# neither set and passes through the subtraction as neither authenticated nor gated. That is how
-# both `GET /api/setup/state` — which called `current_user` as a plain function — and the Tonight
-# WebSocket, which read `socket.cookies` itself, handed a locked account payloads decision 179 puts
-# out of its reach while the sweep still reported the reachable set as four.
+# A route that reads the session cookie in its own body is invisible to a dependency walk.
 SESSION_READERS = ("current_user", "load_session", "open_session_cookie")
 
-# Every hand-rolled reader in `api/`, with what makes it legitimate. A new one is a route the
-# walk above is blind to, so it fails the sweep until it is either declared with `Depends` or
-# named here alongside the live test that holds it to §3.1's lock.
-#
-# The Tonight WebSocket was the fifth entry, on the ground that a socket cannot take a dependency.
-# It can — only not an HTTP one — so M4.12 gave `api/deps.py` the two a socket can take
-# (`current_user_ws` / `active_user_ws`, whose bodies read `socket.cookies` and raise
-# `WebSocketException(1008)`), and the route declares the gate like every other route in the app.
-# `deps.py` is skipped by the scan because it *is* the declared dependency, so the entry leaves
-# rather than moving: the channel is now visible to the walk above instead of exempted from it.
-# Its live test stays where it was and gained the anonymous half. [decision 225; finding 20]
+# Every hand-rolled reader in `api/`, with what makes it legitimate; a new one fails the sweep until named.
 AUTHENTICATES_BY_HAND = {
-    # Both sign-in doors read the *incoming* cookie only to destroy the session this device was
-    # already holding (dd24), after the credential check. Nothing is granted on it.
+    # Both sign-in doors read the incoming cookie only to
+    # destroy the old session, after the credential check.
     ("auth", "login"): "destroys the stale session",
     ("passkeys", "login"): "destroys the stale session",
-    # One of decision 179's four, and ungated by design — see UNGATED_BY_DESIGN above.
+    # One of decision 179's four, and ungated by design.
     ("auth", "logout"): "clears the cookie for whoever holds it",
-    # Held by test_a_locked_account_sees_only_the_anonymous_setup_state below.
+    # Held by `test_a_locked_account_sees_only_the_anonymous_setup_state` below.
     ("setup", "_optional_user"): "a locked session is served as the stranger it still is",
 }
 
 
 def hand_rolled_session_readers() -> set[tuple[str, str]]:
-    """(module, function) for every call to a session reader across `spielplan/api/`.
-
-    Source rather than dependency graph, because the two forms are exactly what the graph cannot
-    tell apart: `Depends(current_user)` names the function and the walk follows it, while
-    `await current_user(...)` calls it and leaves no trace in `route.dependant` at all. `deps.py`
-    is skipped — it *is* the declared dependency every other module is measured against.
-    """
+    """Source, not the graph: `await current_user(...)` leaves no trace in `route.dependant`."""
     found: set[tuple[str, str]] = set()
     for path in sorted(Path(spielplan.api.__file__).parent.glob("*.py")):
         if path.name == "deps.py":
@@ -638,7 +427,6 @@ def hand_rolled_session_readers() -> set[tuple[str, str]]:
 
 
 async def _locked_member(app):
-    """A member session sitting in §3.1's forced first-login change, and the admin that made it."""
     admin = app()
     await admin.post("/api/setup/admin", json={"name": "patrick", "password": ADMIN_PASSWORD})
     otp = (
@@ -653,38 +441,16 @@ async def _locked_member(app):
 
 
 async def test_a_locked_account_cannot_reach_the_app(app):
-    """§3.1: an account created with a one-time password is locked to a password change, and
-    the auth layer enforces it — not the UI."""
+    """The auth layer enforces the lock, not the UI."""
     member = await _locked_member(app)
     assert (await member.get("/api/titles")).status_code == 403
     assert (await member.get("/api/prompts/finish")).status_code == 403
-    # …but /me and the password route stay reachable, or there would be no way out.
+    # ...but /me and the password route stay reachable, or there would be no way out.
     assert (await member.get("/api/auth/me")).status_code == 200
 
 
 def test_the_forced_change_gate_covers_every_authenticated_route_but_four():
-    """Decision 179's set is four, and this is the walk that says so — not a docstring.
-
-    The row `platform-forced-first-login-change` promised "a sweep over every other
-    authenticated route in the app" for two milestones while naming two column-level database
-    tests, and the gate only checks that a named test exists. What that hid: `POST
-    /api/auth/reauth` sat on `CurrentUser`, a fifth route, letting an account locked to a
-    password change stamp `admin_verified_at`. This is the half a hand-picked probe list cannot
-    do — it fails for a route nobody thought to add to a list.
-
-    And the walk on its own was not enough either: it can only see auth that is *declared*, so
-    `GET /api/setup/state` and `GET /api/tonight/channel` were invisible to both sides of the
-    subtraction below and served a locked account regardless. The source scan is the second half
-    — a route the graph cannot classify fails here rather than passing unseen.
-
-    The channel is now on the declared side of that line: M4.12 gave `deps.py` the two dependencies
-    a socket can take and the route asks for `ActiveUserWS`, so it leaves `AUTHENTICATES_BY_HAND`
-    and the scan above is what makes the departure true rather than a claim. It still does not
-    appear in either `paths_behind` set — those are `(METHOD, path)` pairs and a WebSocket has no
-    method — which is why its own live test below is what holds it, and why
-    `test_tonight_channel.py::test_the_channel_is_behind_the_dependency_graph_and_never_behind_deps_db`
-    asserts the dependant directly. [decision 225]
-    """
+    """The walk finds any route nobody listed; the source scan finds auth the walk cannot see."""
     hand_rolled = hand_rolled_session_readers()
     assert hand_rolled == set(AUTHENTICATES_BY_HAND), (
         "a route in api/ reads the session cookie where the dependency walk cannot see it: "
@@ -695,8 +461,7 @@ def test_the_forced_change_gate_covers_every_authenticated_route_but_four():
     authenticated = paths_behind_any(SESSION_LOADERS)
     gated = paths_behind_any(FIRST_LOGIN_GATES)
     assert gated, "the walk found nothing behind active_user — it is sweeping an empty set"
-    # `active_user` depends on `current_user`, so the gated set is a strict subset by construction;
-    # asserting it catches a future gate wired around the session loader rather than through it.
+    # A strict subset by construction; this catches a gate wired around the session loader.
     assert gated < authenticated
 
     assert authenticated - gated == set(REACHABLE_WHILE_LOCKED) - UNGATED_BY_DESIGN, (
@@ -706,12 +471,8 @@ def test_the_forced_change_gate_covers_every_authenticated_route_but_four():
 
 
 async def test_every_other_authenticated_route_refuses_a_locked_account(app):
-    """The other half of the sweep: the dependency is wired *and* it fires.
-
-    One session against every gated route rather than a parametrised case each, because all 76
-    of them today are refused inside the dependency before a route body or a body validator
-    runs — nothing is written, so nothing needs a clean database between them.
-    """
+    """One session against every gated route: all are
+    refused inside the dependency, so nothing is written."""
     member = await _locked_member(app)
     for method, path in sorted(paths_behind_any(FIRST_LOGIN_GATES)):
         response = await member.request(method, concrete(path), json={})
@@ -722,31 +483,15 @@ async def test_every_other_authenticated_route_refuses_a_locked_account(app):
 
 
 async def test_the_four_routes_that_are_the_way_out_stay_reachable(app):
-    """A gate that refused all 79 of them would pass the sweep above and lock the household out.
-
-    "Not 403" rather than 200: /password and /switch are probed with an empty body, and the 422
-    that answers is itself the proof — `active_user` raises before FastAPI validates a body, so
-    a refusal would have arrived instead.
-    """
+    """"Not 403": the empty-body 422 proves `active_user` let it through before validation."""
     member = await _locked_member(app)
     for method, path in REACHABLE_WHILE_LOCKED:
         response = await member.request(method, path, json={})
         assert response.status_code != 403, f"{method} {path} is the way out and it is shut"
 
 
-# --- §3.1: the two routes that authenticate by hand, probed live ----------------------------
-
-
 async def test_a_locked_account_sees_only_the_anonymous_setup_state(app):
-    """`GET /api/setup/state` serves a first-booting stranger and a signed-in operator both, so
-    it cannot take `ActiveUser` — and that is how it became a fifth reachable route.
-
-    Compared field for field rather than by status code, because this route answers 200 either
-    way: what decision 179 denies a locked account is the privileged half — the install
-    fingerprint sec-14 took off the anonymous surface — and not the two fields the first-boot
-    redirect reads. `test_the_setup_state_an_anonymous_caller_sees_is_two_fields` holds the other
-    end: an unlocked operator still gets all six.
-    """
+    """It answers 200 either way, so the payload is compared field for field."""
     member = await _locked_member(app)
     locked = await member.get("/api/setup/state")
     assert locked.status_code == 200
@@ -758,13 +503,8 @@ async def test_a_locked_account_sees_only_the_anonymous_setup_state(app):
 
 
 async def _websocket(client, path: str) -> list[dict]:
-    """Drive one WebSocket handshake over ASGI and return what the app sent.
-
-    httpx has no WebSocket transport, so the app is called directly rather than through the
-    client — the cookie jar the fixture's client holds is what makes it the locked member's
-    socket. `websocket.disconnect` follows the connect so the handler's read loop ends and its
-    `finally` unsubscribes instead of leaving the hub holding a socket.
-    """
+    """httpx has no WebSocket transport, so the app is called
+    directly; the disconnect lets the handler unsubscribe."""
     cookies = "; ".join(f"{name}={value}" for name, value in client.cookies.items())
     scope = {
         "type": "websocket", "asgi": {"version": "3.0", "spec_version": "2.3"},
@@ -787,20 +527,7 @@ async def _websocket(client, path: str) -> list[dict]:
 
 
 async def test_the_tonight_channel_refuses_a_locked_account(app):
-    """Decision 179 is about the account, not the transport: `GET /api/tonight/rooms` refuses a
-    locked session and the socket carrying the same rooms — and each room's per-seat progress —
-    must refuse it too.
-
-    Three halves now, and the third is why this test was extended rather than copied. M4.12 moved
-    the check off the route body and onto `deps.active_user_ws`, so the refusal and the *reason*
-    for it are no longer in the same place: a dependency that only asked about
-    `must_change_password` would satisfy the locked assertion and serve a caller holding no cookie
-    at all. Both refusals are therefore measured here, by their close code rather than by the frame
-    type alone — 1008 is the policy close §3.2's door owes a socket, and a close with no code is
-    what a handshake that failed for some other reason looks like. The served member is the other
-    direction: closing every socket would pass the two refusals and lock the household out of the
-    lobby banner instead. [decision 225; finding 20]
-    """
+    """The close code 1008 is asserted, and an unlocked member must still be served."""
     admin, member = await _bootstrap(app)
     otp = (
         await admin.post("/api/admin/users", json={"name": "kim", "role": "member"})
@@ -831,43 +558,10 @@ async def test_the_tonight_channel_refuses_a_locked_account(app):
     assert [frame["type"] for frame in served][:2] == ["websocket.accept", "websocket.send"]
 
 
-# --- §3.2: the refusal must not leak which names exist ---------------------------------------
-
-
 async def test_a_wrong_name_and_a_wrong_password_cost_the_same(app, monkeypatch):
-    """One message for both cases is not enough on its own. argon2 costs tens of milliseconds
-    and an index miss costs none, so short-circuiting on "no such account" answers in the
-    timing what the body refuses to say — and the names it leaks are exactly the ones worth
-    guessing passwords against.
-
-    Counted, not clocked. A wall-clock comparison on a box that also runs Postgres and a
-    browser is a coin flip dressed as a proof: it passed while a real short-circuit was in
-    place and it failed while the code was right, so the number it reported meant nothing
-    either way. What the rule actually says is that both requests do the same argon2 work,
-    and that is a call count.
-
-    The patch goes on the *sync* primitive because `verify_password_async` hands that global
-    to `asyncio.to_thread` and resolves it at call time (step 14). Patching the async wrapper
-    instead would leave every real caller unmeasured and count zero, which is why the
-    assertion below refuses a zero.
-
-    Round trips are counted alongside the verifies, because argon2 parity alone was not the
-    whole rule and the shipped code did not have it: the present-name path paid a second SELECT
-    and a failure-increment UPDATE the absent path skipped, which measured as a systematic
-    ~3.6 ms head start for a name nobody holds. A locked account is measured too — it used to
-    skip the increment and so answer at the absent path's speed, reading lock state off the
-    clock for anyone who could already tell the two apart.
-
-    Statements rather than a count of them, and the rows they write rather than the statements,
-    because equal counts are not equal work: the increment matches one row for a name that
-    exists and is not locked out and none for the other two, which is a heap tuple and its WAL
-    against nothing, and measures at ~1.5 ms on a ~37 ms refusal. That residual is asserted
-    below as the number it is rather than smoothed over — `check_password`'s docstring says why
-    `app_user` has nowhere to keep a sentinel row for the absent path to write to, and the
-    coverage row says the same. If the three ever do write the same number of rows, this
-    assertion is where that shows up, and the three places that call the gap open are what the
-    change has to close with it.
-    """
+    """Counted, not clocked: both paths must do the same argon2 work and the
+    same round trips. The patch is on the sync primitive `to_thread`
+    resolves; the one-row write residual is asserted as the number it is."""
     admin, _member = await _bootstrap(app)
 
     calls: list[str] = []
@@ -879,13 +573,8 @@ async def test_a_wrong_name_and_a_wrong_password_cost_the_same(app, monkeypatch)
 
     monkeypatch.setattr(auth, "verify_password", counted)
 
-    # On `asyncpg.Connection` rather than the pool proxy the route actually holds: the proxy
-    # resolves each method with `getattr(con, name)` at call time, so patching the class is what
-    # sees every query, and patching the proxy would see the wrapper and not the work.
-    # The command tag comes back from `execute` only, and it is what says how much work the
-    # statement did: `UPDATE 1` writes a row and `UPDATE 0` writes none. `fetchval` returns
-    # strings of its own (a password hash is one), so tags are read from the one method that
-    # reports them.
+    # Patched on `asyncpg.Connection`: the pool proxy resolves
+    # methods at call time. Tags come from `execute`.
     queries: list[tuple[str, str | None]] = []
     for name in ("execute", "fetch", "fetchrow", "fetchval"):
         real_query = getattr(asyncpg.Connection, name)
@@ -930,7 +619,7 @@ async def test_a_wrong_name_and_a_wrong_password_cost_the_same(app, monkeypatch)
     assert existing[0] > 0, "the counter was installed somewhere the login path does not reach"
     assert existing[1], "the query counter was installed somewhere the login path misses"
 
-    # The residual, stated as a measurement rather than claimed away. See the docstring above.
+    # The residual, stated as a measurement rather than claimed away.
     assert (existing[2], absent[2], locked[2]) == (1, 0, 0), (
         f"the failure increment wrote {existing[2]} rows for an existing name, {absent[2]} for "
         f"an absent one and {locked[2]} for a locked-out one. (1, 0, 0) is the known gap this "

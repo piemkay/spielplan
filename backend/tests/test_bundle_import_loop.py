@@ -1,20 +1,6 @@
-"""The press, and the event loop it is not allowed to take. Spec v2.1 §10 step 1, §6.6, §5.3.
+"""The Validate press must never take the event loop (§10 step 1). Needs TEST_DATABASE_URL.
 
-The §7 exit criterion measures two things about the operator's press: that the request answers in
-under 5 s, and that "/api/health answers every second from the press to the flip, each under 5 s".
-The second clause is published on the worker-job row of `spec_coverage.toml` as "and /api/health
-keeps answering throughout", and until this file nothing asserted it anywhere: the one instrument
-that measures it (`ops/m414_exit_criterion.py`) tars the corpus and OPENS it before `create_app()`
-is called, so every request it has ever recorded took `_unpack`'s reuse path and the extraction an
-operator's first press pays was outside every measurement taken. Driven through the app instead,
-that press was 5.88-6.27 s for a 1.04 GB archive with `/api/health` taking 5.2 s to answer - past
-the image HEALTHCHECK's own 5 s timeout. [M4.14 cycle 4, m414-c4-waveE-02 and m414-c4-rec-01]
-
-Decision 287 put the validation in a thread and `api/artifacts._open` now does the same for the
-extraction, so what this file holds is the whole of the press: no part of it may own the loop.
-
-Skipped without TEST_DATABASE_URL; see tests/conftest.py.
-"""
+Only the FIRST press on an archive pays the extraction, so it is the one measured."""
 
 from __future__ import annotations
 
@@ -30,12 +16,8 @@ from tests.fixtures import make_bundle as fx
 
 ADMIN_PASSWORD = "an-admin-password"
 
-# The pad is the instrument, and it is sized rather than guessed: `tarfile.extractall` costs about
-# 0.6 ms per MB on the reference box, so 192 MiB is ~120 ms of extraction - long enough that a
-# blocked loop is unmistakable beside a 5 ms heartbeat, short enough that the file is written,
-# tarred, extracted and deleted inside one test. The assertions below calibrate against the
-# extraction this press actually paid rather than against a constant, because the same 192 MiB is
-# seconds on a household spinning disk and the property is the same there.
+# `tarfile.extractall` costs ~0.6 ms per MB, so 192 MiB is ~120 ms: unmistakable beside a 5 ms
+# heartbeat. The assertions calibrate against the extraction actually paid, not a constant.
 PAD_BYTES = 192 << 20
 HEARTBEAT_S = 0.005
 HEALTH_EVERY_S = 0.05
@@ -61,7 +43,6 @@ async def _heartbeat(stop: asyncio.Event, gaps: list[float]) -> None:
 
 
 async def _health(client, stop: asyncio.Event, statuses: list[int]) -> None:
-    """The published clause itself, sampled the way §7 samples it - every probe, its status."""
     while not stop.is_set():
         answer = await client.get("/api/health")
         statuses.append(answer.status_code)
@@ -69,7 +50,6 @@ async def _health(client, stop: asyncio.Event, statuses: list[int]) -> None:
 
 
 async def _press(admin, watcher, path: Path) -> tuple[float, float, list[int]]:
-    """One press of Validate, with the loop watched from beside it."""
     gaps: list[float] = []
     statuses: list[int] = []
     stop = asyncio.Event()
@@ -77,7 +57,6 @@ async def _press(admin, watcher, path: Path) -> tuple[float, float, list[int]]:
         asyncio.create_task(_heartbeat(stop, gaps)),
         asyncio.create_task(_health(watcher, stop, statuses)),
     ]
-    # Let both watchers reach their first await, then drop what they measured getting there.
     await asyncio.sleep(0.05)
     gaps.clear()
     statuses.clear()
@@ -96,29 +75,13 @@ async def _press(admin, watcher, path: Path) -> tuple[float, float, list[int]]:
 
 
 async def test_the_first_press_on_an_archive_leaves_the_loop_free_for_api_health(app, tmp_path):
-    """m414-c4-waveE-02: the extraction used to run on the request loop, and only the FIRST press
-    pays it - which is why three review cycles and every recorded run of the exit criterion missed
-    it.
-
-    The measurement is calibrated on this box rather than against a constant, because the same
-    192 MiB is a tenth of a second on an NVMe developer box and seconds on a household spinning
-    disk while the property is the same on both. So: one press against the bundle DIRECTORY, whose
-    numbers are thrown away and which is here to pay this process's one-time costs (torch's import
-    inside `validate`, the pool's first statements); then the extraction timed on its own in a
-    thread and removed again; then the press that is measured, which extracts it a second time.
-
-    The loop-gap assertion is the one with teeth at fixture scale: a `/api/health` probe answers
-    503 only after `app._HEALTH_TIMEOUT_S` (2 s) of not reaching the pool, and 192 MiB of tar does
-    not block anything for two seconds on a developer's box. The statuses are asserted anyway
-    because they are the published clause, and because the regression this guards against is
-    unbounded in exactly the direction that trips them: the archive an operator imports is 1.04 GB.
-    """
+    """A warm-up press pays the process's one-time costs; the extraction is then timed alone in a thread.
+    The loop gap is the assertion with teeth: `/api/health` turns 503 only after 2 s."""
     admin = await _admin(app)
     watcher = app()
     root = fx.make_bundle(tmp_path / "import" / "test-v1", version="test-v1")
     pad = root / "pad.bin"
-    # After `make_bundle`, so BUNDLE.json does not inventory it: this file is bytes for the
-    # extraction to move and must not be a `bundle-integrity` finding as well.
+    # After `make_bundle`, so BUNDLE.json does not inventory it and it is no `bundle-integrity` finding.
     chunk = os.urandom(1 << 20)
     with pad.open("wb") as fh:
         for _ in range(PAD_BYTES >> 20):

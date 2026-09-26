@@ -1,10 +1,4 @@
-"""The worker's TMDB lookup for a title with no servable poster. Spec v2.1 §1, §6.8, §8's
-politeness clause; decision 484.
-
-Against the test database, with TMDB as an `httpx.MockTransport`: the lookup's whole contract is
-what it asks and what it writes, and both are rows and requests a test can read. Skipped without
-TEST_DATABASE_URL; see tests/conftest.py.
-"""
+"""The worker's TMDB lookup for a title with no servable poster (§6.8). Needs TEST_DATABASE_URL."""
 
 from __future__ import annotations
 
@@ -19,8 +13,6 @@ KEY = "tmdb-key-not-a-real-one-0484"
 
 
 class Tmdb:
-    """TMDB's API as the lookup meets it: what it was asked, and a table of answers by path."""
-
     def __init__(self, answers: dict[str, httpx.Response] | None = None) -> None:
         self.asked: list[httpx.URL] = []
         self.answers = answers or {}
@@ -152,8 +144,6 @@ async def test_a_refused_key_stops_the_batch_and_records_nothing_against_the_tit
 
 
 async def test_the_lookup_writes_art_lookup_and_nothing_on_the_title(keyed):
-    """Decisions 162 and 372: `title`, `title_meta` and the identity columns are what they were,
-    byte for byte, after the answer lands - the answer lives beside the title and is droppable."""
     await _title(keyed, 9, kind="movie", imdb_id="tt0087004", placement="warm")
     await keyed.execute(
         "INSERT INTO title_meta (title_id, source, payload) VALUES (9, 'omdb', $1)",
@@ -177,9 +167,6 @@ async def test_the_lookup_writes_art_lookup_and_nothing_on_the_title(keyed):
 async def test_the_worker_fires_the_lookup_from_its_own_registry_and_pool(
     keyed, pg_url, monkeypatch
 ):
-    """§1: acquisition is the worker's. The job is a row in `worker.JOBS`, on the drain's
-    half-hour, and its body is the drain above over the worker's own pool - the web process
-    never reaches `lookup.drain` at all (`api/` imports nothing from it)."""
     from spielplan import worker
     from spielplan.db import pool
 
@@ -203,7 +190,6 @@ async def test_the_worker_fires_the_lookup_from_its_own_registry_and_pool(
 
 
 async def test_placed_titles_nobody_viewed_are_filed_warm_first_and_viewed_ones_lead(keyed):
-    """What a member looked at is asked first; then what Rate is about to show them."""
     await _title(keyed, 20, imdb_id="tt0000020", placement="cold_tower")
     await _title(keyed, 21, imdb_id="tt0000021", placement="warm")
     await _title(keyed, 22, imdb_id="tt0000022", placement="unplaced")

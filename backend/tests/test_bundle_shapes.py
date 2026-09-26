@@ -1,19 +1,5 @@
-"""The fixture is held to the shape of a bundle the corpus actually produced.
-
-`tests/fixtures/make_bundle.py` stands in for the corpus export, and until now nothing checked
-that it stood in for anything real. It reproduced every measured landmine faithfully -- both DNA
-tiers overlapping, the frozen `rating_source` ids, duplicate `tmdb_id`s, NULL alias PK
-components, CJK and emoji -- and invented every *structure* around them, so the whole import
-layer was verified against this repo's reading of §10 rather than against the artifact.
-
-`tests/fixtures/real_bundle_shapes.json` is the ground truth: shapes only, extracted from a real
-bundle by `ops/bundle_shapes.py`, carrying no values (a feature column is recorded as
-`p:<s>:<s>`, never `p:director:Adam Arkin`). These tests hold the fixture to it, and hold a real
-bundle to it too when `CORPUS_BUNDLE_DIR` is set -- so a corpus-side format change fails here
-rather than surfacing as a mystery at import time.
-
-Milestone M4.5, row `data-rules-fixture-matches-the-shipped-artifact`.
-"""
+"""The fixture held to the shape of a bundle the corpus actually produced: `real_bundle_shapes.json`,
+shapes only (no values), extracted by `ops/bundle_shapes.py`; a real bundle too with `CORPUS_BUNDLE_DIR`."""
 
 from __future__ import annotations
 
@@ -49,7 +35,6 @@ shapes_mod = _load_shapes_module()
 
 @pytest.fixture(scope="module")
 def shipped() -> dict:
-    """The shape of a bundle the corpus actually built."""
     if not SHAPES.is_file():                                    # pragma: no cover - see docstring
         pytest.fail(
             f"{SHAPES} is missing. It is the ground truth for every assertion in this file; "
@@ -60,10 +45,7 @@ def shipped() -> dict:
 
 @pytest.fixture(scope="module")
 def bundle_root(tmp_path_factory) -> Path:
-    """The bundle itself, built once. `built` below reduces it to shapes; the three tests at
-    the foot of this file read its rows, which is where the corpus's awkward shapes live -- a
-    shape manifest carries no values by design, so it cannot see a facet naming or a duplicate
-    department."""
+    """The three tests at the foot read its rows, which a shape manifest by design cannot carry."""
     root = tmp_path_factory.mktemp("fixture-bundle")
     make_bundle.make_bundle(root)
     return root
@@ -71,23 +53,14 @@ def bundle_root(tmp_path_factory) -> Path:
 
 @pytest.fixture(scope="module")
 def built(bundle_root) -> dict:
-    """The shape of the bundle `make_bundle` produces, read the same way."""
     return shapes_mod.extract(bundle_root)
 
 
-# --- the feature contract: §4.3's "exhaustive definition of the tower's input" ----------------
-
-
 def test_the_fixture_contract_declares_the_keys_the_shipped_contract_declares(shipped, built):
-    """§4.3 calls `feature_contract.json` the exhaustive definition of the tower's input and
-    §8 stage 9 builds vectors "from this file and nothing else". A fixture whose contract has a
-    different top level is not a scale model of that file; it is a different file."""
+    """§4.3 calls `feature_contract.json` the exhaustive definition of the tower's input."""
     ours = set(built["json"]["artifacts/feature_contract.json"]["keys"])
     theirs = set(shipped["json"]["artifacts/feature_contract.json"]["keys"])
-    # Equality, not `theirs <= ours`. A subset check passes the moment the fixture *adds* the
-    # shipped keys while keeping its own `blocks`/`block_order` — and `contract.py` reads
-    # `blocks`, so the real artifact would still be rejected with the test green. That is the
-    # M4 pattern (a test that cannot fail) reintroduced in the test written to prevent it.
+    # Equality, not a subset: a fixture that added the shipped keys while keeping its own would pass.
     assert ours == theirs, (
         f"fixture contract keys {sorted(ours)} != shipped {sorted(theirs)}. "
         "Extra fixture keys are as bad as missing ones: they are what the parser reads."
@@ -95,9 +68,7 @@ def test_the_fixture_contract_declares_the_keys_the_shipped_contract_declares(sh
 
 
 def test_the_fixture_lists_feature_names_the_way_the_shipped_contract_does(shipped, built):
-    """The shipped contract carries ONE flat list of 6,435 column names. The fixture carried a
-    dict keyed by block. Same word, different data structure, and the difference is what let the
-    credit block's key grammar go unnoticed."""
+    """The shipped contract is one flat list of 6,435 names, not a dict keyed by block."""
     theirs = shipped["json"]["artifacts/feature_contract.json"]
     ours = built["json"]["artifacts/feature_contract.json"]
     assert "feature_names.item_patterns" in theirs, "manifest is stale; regenerate it"
@@ -108,26 +79,11 @@ def test_the_fixture_lists_feature_names_the_way_the_shipped_contract_does(shipp
 
 
 def test_the_fixture_uses_the_shipped_column_grammar_in_every_block(shipped, built):
-    """Every block, not just credit -- and checking only credit is how the scale of the defect
-    was missed the first time.
-
-    The shipped contract prefixes every column with its block tag: `kw:`, `dna:`, `g:`, `p:`,
-    `genre:`, `country:`, `lang:`, `decade:`, `runtime:`, `award:`, `kind:`. The builders in
-    `placement/features.py` emit bare keys for most of them and `person_id::text` for credit,
-    so all nine content blocks miss, not one. The fixture declared `<block>:<n>` throughout,
-    which the parser reduces to the bare key the builder happens to produce -- so the fixture
-    agreed with the implementation about a grammar neither shares with the corpus.
-
-    Direction is `ours <= theirs`: a scale model may use fewer grammars, never a grammar the
-    shipped contract does not contain.
-    """
+    """Every block uses a `<tag>:` prefix; a scale model may use fewer grammars, never an unshipped one."""
     theirs = set(shipped["json"]["artifacts/feature_contract.json"]["feature_names.item_patterns"])
     ours = set(built["json"]["artifacts/feature_contract.json"].get("feature_names.item_patterns", []))
     assert "p:<s>:<s>" in theirs, f"manifest is stale; shipped patterns are {sorted(theirs)}"
-    # Without this the assertion below passes vacuously: the fixture's `feature_names` is a
-    # dict rather than a flat list, so the extractor records no patterns at all and the empty
-    # set is a subset of everything. An emptiness that satisfies the check is the same failure
-    # this file exists to catch, one level further in.
+    # Without this the subset below passes vacuously on an empty set.
     assert ours, (
         "the fixture's contract yields no column patterns at all -- `feature_names` is not a "
         "flat list of names, so this comparison would pass without comparing anything."
@@ -139,22 +95,12 @@ def test_the_fixture_uses_the_shipped_column_grammar_in_every_block(shipped, bui
     )
 
 
-# decision 162 requires the model bundle to carry an identity column row-aligned to
-# `title_ids`, and the exporter does not write one yet — so the fixture ships it and the gap is
-# DECLARED here, the same way the axis TSVs above are. `validate.py` refuses a bundle without
-# it, which is the whole point: a check that is skipped on every bundle in existence is not a
-# check. The test below also asserts the exception is still needed, so it cannot rot.
+# Decision 162's `title_identity` is not exported yet: the fixture ships it and the gap is declared here.
 DECISION_162_NOT_YET_SHIPPED = {"artifacts/backbone.npz": {"title_identity"}}
 
 
 def test_the_fixture_npz_arrays_are_named_the_way_the_corpus_names_them(shipped, built):
-    """`backbone.npz` ships `title_ids`; `backbone.py:84` requires `title_id`, and so do
-    `reconcile.py:110` and the validator. `review_text_emb.npz` ships `title_ids` and
-    `features.py:166` reads `title_id`. One character, and §8 stage 9 cannot find a coordinate.
-
-    Only files present in both are compared: a scale model may omit an artifact, but an
-    artifact it does ship must be named the way the corpus names it.
-    """
+    """`title_ids` versus `title_id`: one character, and stage 9 cannot find a coordinate."""
     theirs = shipped["npz"]
     ours = built["npz"]
     shared = sorted(set(ours) & set(theirs))
@@ -172,32 +118,21 @@ def test_the_fixture_npz_arrays_are_named_the_way_the_corpus_names_them(shipped,
     assert not mismatched, f"npz array names differ from the shipped bundle: {mismatched}"
 
 
-# §6.4 makes the per-facet axis TSVs "a shipped, authored artifact … shipped in `dna_vocab/v1/`",
-# and the corpus does not ship them — proposal 140 asks for them to be added to §4.3's and §10's
-# manifests, and the exporter has not done it. The fixture therefore carries them under the name
-# the app reads, and the gap is DECLARED here rather than hidden by a looser assertion. The test
-# below also asserts the exception is still needed, so it cannot rot into a permanent excuse.
-# Named file by file rather than by a directory prefix since decision 173: the axes sit beside
-# the vocabulary files now, because the exporter does not descend into subdirectories and an
-# `axes/` directory is a layout no real bundle can carry. Built off `make_bundle.AXES` so the
-# exception cannot come to cover a file the fixture stopped writing.
+# §6.4's axis TSVs are not shipped yet; declared file by file, built off `make_bundle.AXES`.
 SPEC_REQUIRED_NOT_YET_SHIPPED = tuple(
     f"artifacts/dna_vocab/v1/{facet}.tsv" for facet in sorted(make_bundle.AXES)
 )
 
 
 def test_the_fixture_ships_the_dna_vocabulary_files_the_corpus_ships(shipped, built):
-    """`importer/dna.py` reads `terms.tsv`, `aliases.tsv` and `adjudications.tsv`; the corpus
-    ships `vocab_<facet>_v1.tsv`, `alias_map_v1.tsv` and a per-*title* `adjudications_v1.tsv`.
-    The whole naming layer is written against files that do not exist, and `dna_tag` /
-    `dna_projected` both FK to `dna_vocabulary(version)`, so no DNA row can load at all."""
+    """`dna_tag` and `dna_projected` FK to `dna_vocabulary(version)`,
+    so misnamed files load no DNA at all."""
     theirs = {f for f in shipped["files"] if f.startswith("artifacts/dna_vocab/")}
     ours = {f for f in built["files"] if f.startswith("artifacts/dna_vocab/")}
     assert theirs, "manifest is stale; the shipped bundle has no dna_vocab directory"
 
     declared = {f for f in ours if f.startswith(SPEC_REQUIRED_NOT_YET_SHIPPED)}
-    # The exception has to still be an exception. If the corpus starts shipping axis TSVs, this
-    # fails and the allowlist goes away rather than quietly covering a real drift.
+    # The exception must still be one: if the corpus starts shipping axes, this fails.
     assert not (declared & theirs), (
         f"the corpus now ships {sorted(declared & theirs)} — delete the "
         "SPEC_REQUIRED_NOT_YET_SHIPPED entry and compare them like everything else."
@@ -208,21 +143,9 @@ def test_the_fixture_ships_the_dna_vocabulary_files_the_corpus_ships(shipped, bu
     )
 
 
-# --- the checkpoint: the only place the architecture is written down ---------------------------
-
-
 def test_the_fixture_checkpoint_names_its_tensors_the_way_the_corpus_does(shipped, built):
-    """`cold_tower.pt` is a bare `torch.save(model.state_dict())`, so the tensor names are the
-    whole of §4.3's "the exporter must ship v2" that a bundle actually carries.
-    `placement/tower.py` pins them as `TRUNK_FIRST` / `EMBED_HEAD` / `PRIOR_HEAD` — three
-    constants that were checked against a comment, because the manifest had no `.pt` branch and
-    recorded the checkpoint as a bare filename.
-
-    Shapes are compared by rank, not by value: the fixture's trunk is 128-wide and the shipped
-    one 768-wide, and pinning a hidden width would make the manifest churn on every retrain.
-    The rank is what the loader reads — `head_e.weight` must be 2-d for `nn.Linear` to be
-    rebuilt from it.
-    """
+    """`cold_tower.pt` is a bare state_dict, so tensor
+    names are the architecture; shapes compared by rank."""
     from spielplan.placement import tower
 
     theirs = shipped["pt"]["artifacts/cold_tower.pt"]
@@ -239,9 +162,7 @@ def test_the_fixture_checkpoint_names_its_tensors_the_way_the_corpus_does(shippe
 
 
 def test_the_shipped_checkpoint_embeds_at_the_dimension_every_consumer_assumes(shipped):
-    """§5.1's e(t) is 64-d and so is §5.2's user vector, §4.2's `user_vector.vec` and
-    `title_placement.dim CHECK (dim = 64)`. That number is a constant in this repo and a trained
-    weight shape in the corpus; nothing compared the two."""
+    """64-d is a constant here and a trained weight shape in the corpus."""
     from spielplan.placement.tower import EMBED_DIM
 
     head = shipped["pt"]["artifacts/cold_tower.pt"]["head_e.weight"]
@@ -250,22 +171,8 @@ def test_the_shipped_checkpoint_embeds_at_the_dimension_every_consumer_assumes(s
     )
 
 
-# --- cold_eval.json: the one reference value the bundle ships ----------------------------------
-
-
 def test_the_shipped_cold_eval_carries_the_arms_the_app_reads(shipped, built):
-    """§14 risk 1's mitigation is "expectations instrumented, not assumed", and until M4.13 this
-    file was in no list and read nowhere: `user_vector.cv_rho` is a held-out Spearman per
-    (user, kind) with no reference value anywhere in the app, while the corpus had measured the
-    cold path (0.35225) against the warm ceiling (0.39193) and shipped both.
-
-    `models/artifacts.ColdEval` now reads it, so the keys it reaches for are pinned HERE rather
-    than against a hand-written fixture - that is this file's whole argument, and it applies with
-    more force to a file the fixture does not write at all. Note what is therefore NOT asserted:
-    the fixture ships no `cold_eval.json`, so there is no fixture-versus-shipped comparison to
-    make. The file is optional in `BUNDLE_FILES` for exactly that reason, and the absent case has
-    its own tests (`test_boot_logging.py`, `test_home.py`). [M4.13 step 35, cs-31]
-    """
+    """The fixture ships no `cold_eval.json`, so only the shipped file's keys are pinned."""
     ours = shipped["json"]["artifacts/cold_eval.json"]
     assert {"cold", "ceiling"} <= set(ours["keys"]), (
         f"ColdEval reads the cold and ceiling arms and the shipped file has {sorted(ours['keys'])}"
@@ -285,18 +192,7 @@ def test_the_shipped_cold_eval_carries_the_arms_the_app_reads(shipped, built):
 
 
 def test_the_cold_tower_report_line_says_the_version_was_assumed(bundle_root):
-    """§4.3: "the earlier `cold_tower` run is superseded - the exporter must ship v2", and
-    `tower.py` checked that against values it had substituted itself.
-
-    The corpus writes `torch.save(model.state_dict())`: a bare mapping of eight tensors with no
-    `version`, no `arch` and no `input_dim`. The loader filled in its own 2 and 'cold_tower_v2' and
-    then tested those against its own allow-lists, so the guard could not fail on any bundle that
-    has ever been produced while the error string presented it as enforcing the spec. It is
-    deliberately NOT tightened into a refusal - that would refuse every shipped bundle - so what
-    changes is that the assumption is visible where an operator reads a bundle's claims, which §10
-    makes the import report. The guard that does bite on this format is the input-width cross-check
-    against `feature_contract.json`, and it is untouched. [M4.13 step 36, cs-54]
-    """
+    """The checkpoint carries no version, so the report states the version was assumed, not enforced."""
     report = bundle_import.validate(bundle_import.Bundle.open(bundle_root))
     notes = [f for f in report.findings if f.rule == "cold-tower"]
     assert notes, f"the tower was not constructed at all: {report.render()}"
@@ -305,7 +201,7 @@ def test_the_cold_tower_report_line_says_the_version_was_assumed(bundle_root):
     assert "bare state_dict" in line and "not a check" in line, line
     assert notes[0].detail["assumed"], "the assumption has to be machine-readable too"
     assert line.isascii(), f"an import report line a cp1252 console cannot print: {line!r}"
-    # The tower itself carries it, which is what makes the log line and the report line one fact.
+    # The tower itself carries it, which makes the log line and the report line one fact.
     from spielplan.models.artifacts import ArtifactStore
     from spielplan.placement.contract import FeatureContract
     from spielplan.placement.tower import load_tower
@@ -315,13 +211,8 @@ def test_the_cold_tower_report_line_says_the_version_was_assumed(bundle_root):
     assert any("assumed v2" in note for note in load_tower(store, contract).notes)
 
 
-# --- the curated ledgers ---------------------------------------------------------------------
-
-
 def test_the_fixture_corrections_ledger_has_the_shipped_header(shipped, built):
-    """§8 stage 3 re-applies `corrections_v1.tsv` at every derive and §14.5 is the scar for what
-    happens when it is not applied. The importer reads a column the shipped file does not have,
-    so the real ledger raises KeyError instead of loading."""
+    """The importer read a column the shipped ledger does not have, so the real one raised KeyError."""
     theirs = shipped["tsv"]["artifacts/corrections_v1.tsv"]
     ours = built["tsv"]["artifacts/corrections_v1.tsv"]
     assert ours == theirs, (
@@ -330,14 +221,7 @@ def test_the_fixture_corrections_ledger_has_the_shipped_header(shipped, built):
 
 
 def test_the_fixture_seed_list_entries_carry_the_shipped_keys(shipped, built):
-    """§4.3's "100-title decade-stratified onboarding list". The shipped entries are keyed
-    `kind, pct_dislike, pct_like, pct_ok, raters, title, title_id, year` — there is no `decade`
-    anywhere, and `dna.py` read `int(item["decade"])`, so every real bundle's onboarding list
-    loaded with a NULL decade and the stratification the list exists for was lost on import.
-
-    This comparison is the one the file was missing: `seed_list.json` was in the manifest and
-    nothing compared it, which is why the fixture could keep declaring a key of its own.
-    """
+    """The shipped entries have no `decade`; reading one loaded every onboarding list with NULL decades."""
     theirs = shipped["json"]["artifacts/seed_list.json"]
     ours = built["json"]["artifacts/seed_list.json"]
     assert theirs["type"] == "list" and theirs["entry_type"] == "dict", "manifest is stale"
@@ -347,25 +231,13 @@ def test_the_fixture_seed_list_entries_carry_the_shipped_keys(shipped, built):
     )
 
 
-# §6.3's two thresholds are proposal 157 ("any threshold that is a bare sigma constant belongs
-# in ledger_hyperparams.json") and the corpus does not ship them yet. The fixture carries them
-# under the name `from_mapping` reads, and the gap is DECLARED here the way the axis TSVs and
-# `title_identity` are — with a guard below that the exception is still an exception.
+# Proposal 157's two thresholds are not shipped yet: declared here like the axes and `title_identity`.
 PROPOSAL_157_NOT_YET_SHIPPED = frozenset({"straddle_z", "tension_credible_mass"})
 
 
 def test_the_fixture_hyperparameters_are_the_constants_the_corpus_ships(shipped, built):
-    """§4.3: "`ledger_hyperparams.json` — the tuned constants of the §5.2 recipe … re-tunable
-    offline". `ledger_hyperparams.json` was asserted to be IN the manifest and then never
-    compared, and the two files share three key names out of twelve: the corpus ships
-    `anchor_ridge_lambda`, `bt_weight_lam_bt`, `learning_rate`, `margin_weight_form` and a
-    nested `sigma_inflation` object, while `ledger/hyperparams.py` reads `lambda_ridge`,
-    `lambda_bt`, `lr`, `margin_form`, `sigma_inflation_c` and `sigma_inflation_cap`.
-
-    Every unmatched name is a constant the corpus project re-tunes and this app silently
-    replaces with its own default — rule 1 of that module ("every constant comes from the
-    bundle") failing with a note nobody reads rather than a refusal.
-    """
+    """The two files shared three key names of twelve; every
+    unmatched one is a silently defaulted constant."""
     theirs = set(shipped["json"]["artifacts/ledger_hyperparams.json"]["keys"])
     ours = set(built["json"]["artifacts/ledger_hyperparams.json"]["keys"])
     assert theirs, "manifest is stale; the shipped bundle has no ledger_hyperparams.json"
@@ -381,24 +253,7 @@ def test_the_fixture_hyperparameters_are_the_constants_the_corpus_ships(shipped,
 
 
 def test_the_declared_exception_carries_the_thresholds_the_app_actually_ships(bundle_root):
-    """The other half of the exception above: the fixture is the ONLY bundle that ships §6.3's
-    two thresholds, so whatever it writes is what every stack this repo can boot runs on.
-
-    `app.py`'s lifespan caches `hyperparams.load(store)` and `api/rank.py` badges with
-    `hp.straddle_z`, so a bundle constant beats the default everywhere — and because the corpus
-    does not ship these two keys (the guard above), the fixture's literal is the only source
-    there is for `npm --prefix e2e run fresh`. Decision 214
-    retuned `straddle_z` from 1.0 to 0.15 for exactly the reason `ledger/hyperparams.py` records
-    — at 1.0 a fitted 120-title board badges 120 of 120 and §6.3's badge stops singling anything
-    out — and the fixture kept 1.0, so the retune was inert on every stack the household can
-    look at while the test that grades the clause passed `DEFAULTS` and could not see it.
-
-    Against `DEFAULTS` rather than the literal 0.15: the fixture stands in for a producer that
-    does not ship these keys yet, so the value it carries has no independent ground truth to be
-    held to — what it must not be is a number the app retired. The next re-tune then fails here
-    instead of leaving the fixture behind again.
-    [M4.12 cycle 1, M412-RND-01; decision 214]
-    """
+    """The fixture is the only bundle that ships §6.3's thresholds, so it must not carry a retired value."""
     raw = json.loads(
         (bundle_root / "artifacts" / "ledger_hyperparams.json").read_text(encoding="utf-8")
     )
@@ -415,20 +270,8 @@ def test_the_declared_exception_carries_the_thresholds_the_app_actually_ships(bu
     )
 
 
-# --- BUNDLE.json: the corpus's own record of what a bundle is ---------------------------------
-
-
 def test_the_fixture_bundle_json_records_what_the_corpus_records(shipped, built):
-    """The identity file the fixture invented, one directory over from the fixture this
-    milestone exists to correct: it declared `vocabulary_version` and `title_count`, neither of
-    which the corpus writes, and omitted `tables`, `files`, `validations`, `source_provenance`
-    and the rest of what it does.
-
-    `bundle.py` reads `vocabulary_version` from here and decision 163's refusal depends on that
-    read; `ArtifactStore.summary()` wants a title count. Both are answerable from the shipped
-    file — the vocabulary from the `dna_vocab/<version>/` directory, the count from `tables` —
-    and neither is answerable from a key the corpus has never written.
-    """
+    """The fixture invented `vocabulary_version` and `title_count`; the corpus writes neither."""
     theirs = set(shipped["json"]["BUNDLE.json"]["keys"])
     ours = set(built["json"]["BUNDLE.json"]["keys"])
     assert "tables" in theirs and "files" in theirs, "manifest is stale"
@@ -436,26 +279,14 @@ def test_the_fixture_bundle_json_records_what_the_corpus_records(shipped, built)
         f"fixture BUNDLE.json keys {sorted(ours)} != shipped {sorted(theirs)}. Invented: "
         f"{sorted(ours - theirs)}; missing: {sorted(theirs - ours)}."
     )
-    # `tables` is a row count per shipped table, and it is where a title count comes from. A
-    # fixture free to name tables of its own would make that read untestable.
+    # `tables` is where a title count comes from, so the fixture may not name tables of its own.
     assert set(built["json"]["BUNDLE.json"]["tables.keys"]) <= set(
         shipped["json"]["BUNDLE.json"]["tables.keys"]
     ), "the fixture's BUNDLE.json counts tables the corpus does not ship"
 
 
-# --- reviews.sqlite: the columns the loader actually selects -----------------------------------
-
-
 def test_the_review_loader_reads_columns_the_shipped_table_has(shipped):
-    """§10 ships the review bodies "needed for future re-extraction and text embedding", and
-    `reviews.py` selected `rating`, `published_at` and `is_critic` — the names of the *Postgres*
-    columns it writes. `reviews.sqlite` has none of the three: the data sits in `rating_norm`,
-    `created_date` and `author_kind`. All 485,602 rows therefore loaded with a NULL rating, no
-    date and no critic flag, under a single warn line.
-
-    The mapping is asserted here rather than in a review test because the manifest is what makes
-    the claim checkable: it is the shipped schema, not this repo's reading of it.
-    """
+    """The loader selected Postgres column names that `reviews.sqlite` does not have."""
     from spielplan.importer.reviews import REVIEW_SOURCE
 
     theirs = set(shipped["sqlite"]["reviews.sqlite"]["review"])
@@ -466,21 +297,15 @@ def test_the_review_loader_reads_columns_the_shipped_table_has(shipped):
     )
 
 
-# --- content.sqlite: no invented structure ----------------------------------------------------
-
-
 def test_the_fixture_invents_no_table_the_corpus_does_not_ship(shipped, built):
-    """A scale model may ship fewer tables. It may not ship tables the corpus has never
-    produced, because then the importer is written against a database that does not exist."""
+    """A scale model may ship fewer tables, never tables the corpus has never produced."""
     theirs = set(shipped["sqlite"]["content.sqlite"])
     ours = set(built["sqlite"]["content.sqlite"])
     assert ours <= theirs, f"the fixture invents tables the bundle does not ship: {sorted(ours - theirs)}"
 
 
 def test_the_fixture_invents_no_column_the_corpus_does_not_ship(shipped, built):
-    """Same rule, one level down -- and this is what the `seed_list` collision looks like from
-    here: the fixture's `seed_list` is Spielplan's onboarding list, while the corpus ships a
-    238-row *list registry* under that name."""
+    """The fixture's `seed_list` is an onboarding list; the corpus ships a list registry under that name."""
     theirs = shipped["sqlite"]["content.sqlite"]
     ours = built["sqlite"]["content.sqlite"]
     invented = {
@@ -493,28 +318,19 @@ def test_the_fixture_invents_no_column_the_corpus_does_not_ship(shipped, built):
     )
 
 
-# --- the real bundle, when one is available ---------------------------------------------------
-
-
 @pytest.mark.skipif(
     not os.environ.get("CORPUS_BUNDLE_DIR"),
     reason="CORPUS_BUNDLE_DIR is unset; set it to a real bundle directory to check the manifest",
 )
 def test_a_real_bundle_still_matches_the_committed_manifest(shipped):
-    """The manifest is a snapshot, and a snapshot rots. When a real bundle is reachable, the
-    committed shapes are checked against it -- so a corpus-side format change fails this repo's
-    suite instead of arriving as an import-time mystery."""
+    """A snapshot rots; a real bundle, when reachable, is checked against it."""
     live = shapes_mod.extract(Path(os.environ["CORPUS_BUNDLE_DIR"]))
     assert live["tsv"] == shipped["tsv"], "a shipped TSV header changed"
     assert live["npz"] == shipped["npz"], "a shipped npz array set changed"
-    # Exact shapes here, not ranks: against a real bundle a changed hidden width or input_dim
-    # IS the architecture changing under §8 stage 9, which is the mystery this file prevents.
+    # Exact shapes here: against a real bundle a changed width IS the architecture changing.
     assert live["pt"] == shipped["pt"], "a shipped checkpoint's tensor names or shapes changed"
     assert live["sqlite"] == shipped["sqlite"], "a shipped sqlite schema changed"
     assert live["json"] == shipped["json"], "a shipped JSON shape changed"
-
-
-# --- self-test: the extractor must not leak values, and must not flatten distinctions ---------
 
 
 @pytest.mark.parametrize(
@@ -530,9 +346,7 @@ def test_a_real_bundle_still_matches_the_committed_manifest(shipped):
     ],
 )
 def test_the_pattern_reducer_keeps_the_grammar_and_drops_the_value(name, pattern):
-    """The manifest is committed, so it must carry no film title, no person's name and no review
-    text. `column_pattern` is what guarantees that, and a reducer that cannot be checked is a
-    privacy claim nobody has tested."""
+    """The committed manifest must carry no title, name or review text."""
     assert shapes_mod.column_pattern(name) == pattern
 
 
@@ -542,66 +356,35 @@ def test_the_pattern_reducer_separates_grammars_that_differ():
     assert shapes_mod.column_pattern("decade:1990") != shapes_mod.column_pattern("genre:crime")
 
 
-# --- the committed manifest carries no prose: an allow-list, and why it has to be one ---------
-#
-# `ops/bundle_shapes.py` promises in the manifest's own `_note` that it is "shapes only -- no
-# values", and §10's bundle is a film corpus: a leaked leaf is a film title, a person's name or
-# a line of review text sitting in a file this repo commits and ships. Until M4.14 the guard
-# below rejected a leaf only when it contained a space, so `Heat`, `Kurosawa` and `tt0113277`
-# were all admitted by a test whose docstring promised none of them could be. [M4.14, tq1]
-#
-# The repair is an allow-list, not a longer reject-list: prose is unbounded and cannot be
-# enumerated, while what a *shape* manifest legitimately carries is short and can be -- table
-# and column names, the bundle's own file paths, the `<s>`/`<n>` patterns `column_pattern`
-# reduces a feature column to, the type names `_json_shape` writes, the frozen `rating_source`
-# ids that key `equating_map` and `fitted_cuts` (§4.1 rule 4), and §8's share-cut grids.
-#
-# Rejecting every string was the other option and it is worse than the defect it fixes: 242 of
-# the 1,502 leaves in the committed manifest are `content.sqlite` column names and 203 are TSV
-# headers, so a guard that fails on `title_id` is a guard that gets waived inside a week.
+# An allow-list, not a reject-list: prose is unbounded, while a shape manifest's legitimate leaves
+# (names, paths, patterns, type names, frozen ids, cut grids) are few and can be enumerated.
 
-# `_json_shape` records `type(value).__name__` and its own `"object"` / `"list"` tag, so these
-# are structure. They are admitted by name rather than by form because `NoneType` is the one
-# capitalised token in the set and a form that admitted it would admit `Kurosawa`.
+# Admitted by name: `NoneType` is capitalised, and a form admitting it would admit `Kurosawa`.
 _TYPE_NAMES = frozenset({"NoneType", "bool", "dict", "float", "int", "list", "object", "str"})
 
-# The suffixes the corpus ships, including `VOCABULARY.md` and `projection_capped_v1.txt` under
-# `dna_vocab/v1/`. A path whose suffix is not here is admitted only by being in the manifest's
-# own `files` list -- a file the bundle declares is part of the bundle by construction, and a
-# new extension arriving as somebody's JSON key is worth reading rather than waving through.
+# The suffixes the corpus ships; any other path is admitted only by the manifest's own `files` list.
 _BUNDLE_SUFFIXES = frozenset({".json", ".md", ".npz", ".pt", ".sqlite", ".tsv", ".txt"})
 
-# The manifest's own punctuation: `/` between path segments, `.` in a filename and in a decimal,
-# `:` in the feature contract's block grammar and in `cold_eval.json`'s metric keys, `_` and `-`
-# inside a name. Everything between two separators has to be a schema-shaped token.
+# The manifest's own punctuation; everything between two separators must be a schema-shaped token.
 _MANIFEST_SEPARATORS = re.compile(r"[/.:_-]")
 
-# A letter run followed immediately by three or more digits is an external id -- `tt0113277`,
-# `nm0000233` -- and never a schema name. The long digit runs the manifest does carry
-# (`ts_pre_1990`, `s_pruned_20260825`, `letterboxd-2020`) all sit behind a separator, which is
-# the whole of what makes the two distinguishable by form.
+# A letter run followed by three or more digits is an external id (`tt0113277`).
 _EXTERNAL_ID = re.compile(r"[A-Za-z][0-9]{3,}")
 
-# `biB` and `muB` are shipped `backbone.npz` array names: a lower-case stem and a capitalised
-# variant tag. `Heat` and `Kurosawa` are the other way round -- capital first, lower-case after
-# -- and that asymmetry is the only thing separating an array name from a title at this width.
+# `biB` is lower-case stem then capitals; `Heat` is the other way round.
 _VARIANT_TAG = re.compile(r"[a-z0-9]+[A-Z]+")
 
-# §8's calibration writes its share sweeps under a cut grid: `shares_fixed.json` is keyed
-# `0.20/0.35/0.45`. Nothing else in the manifest is a slash-joined run of decimals.
+# `shares_fixed.json` is keyed by slash-joined decimals like `0.20/0.35/0.45`.
 _CUT_GRID = re.compile(r"[0-9]+\.[0-9]{2}(?:/[0-9]+\.[0-9]{2})+")
 
 
 def _is_schema_token(text: str) -> bool:
-    """The conservative form every admitted leaf must have: separator-joined segments, each one
-    a lower-case word, an all-capital tag (`E`, `BUNDLE`), a lower-case stem with a capitalised
-    variant tag (`biB`), a bare number, or a `<s>`/`<n>` placeholder."""
     if not text or _EXTERNAL_ID.search(text):
         return False
     for segment in _MANIFEST_SEPARATORS.split(text):
         if segment in ("<s>", "<n>") or segment.isdigit():
             continue
-        # Rejects the empty segment too, which is how a leading slash and a `..` get out.
+        # Rejects the empty segment too, which is how a leading slash and `..` get out.
         if not segment.isalnum():
             return False
         if not (segment.islower() or segment.isupper() or _VARIANT_TAG.fullmatch(segment)):
@@ -610,22 +393,13 @@ def _is_schema_token(text: str) -> bool:
 
 
 def _is_bundle_path(text: str) -> bool:
-    """A bundle-relative path -- `artifacts/dna_vocab/v1/vocab_mood_v1.tsv` -- or one of the
-    upstream `prep/` and `datasets/` paths BUNDLE.json's `source_provenance` records, which are
-    real paths that the shipped bundle does not itself contain."""
+    """Includes upstream `prep/` and `datasets/` paths from BUNDLE.json's `source_provenance`."""
     stem, dot, suffix = text.rpartition(".")
     return bool(stem) and dot == "." and f".{suffix}" in _BUNDLE_SUFFIXES
 
 
 def _prose_in_manifest(manifest: dict) -> list[str]:
-    """Every leaf string the allow-list does not admit, as `<json path>: <leaf>`.
-
-    The leaf is rendered with `ascii()` because a leaked one is precisely the kind of string
-    that is not ASCII -- the corpus ships CJK titles and emoji, and `make_bundle` reproduces
-    both on purpose -- and CLAUDE.md's rule is that anything a Windows cp1252 console has to
-    print stays ASCII. A guard whose failure output crashes the console it prints on is a guard
-    read out of a traceback instead of out of a test summary.
-    """
+    """Rendered with `ascii()`: a leaked leaf is likely non-ASCII and must not crash a cp1252 console."""
     files = set(manifest.get("files", ()))
     found: list[str] = []
 
@@ -635,10 +409,8 @@ def _prose_in_manifest(manifest: dict) -> list[str]:
         if not _is_schema_token(leaf):
             return False
         if leaf.isdigit():
-            # The only bare numbers a shape manifest has business carrying. §4.1 rule 4 freezes
-            # the `rating_source` ids and says they key `fitted_cuts` and `equating_map`, which
-            # is exactly where the manifest holds them; a leaked `tmdb_id` fails here instead of
-            # reading as a scale point.
+            # The frozen `rating_source` ids (§4.1 rule 4) are
+            # the only bare numbers a shape manifest carries.
             return int(leaf) in FROZEN_RATING_SOURCE_IDS
         if "/" in leaf or "." in leaf:
             return leaf in files or _is_bundle_path(leaf) or bool(_CUT_GRID.fullmatch(leaf))
@@ -659,16 +431,7 @@ def _prose_in_manifest(manifest: dict) -> list[str]:
 
 
 def test_the_committed_manifest_carries_no_prose(shipped):
-    """Belt and braces on the same promise: nothing in the committed file reads like data -- no
-    film title, no person's name, no review text.
-
-    An allow-list since M4.14, because the reject-list it replaced could only see a space, and
-    `Heat`, `Kurosawa` and `tt0113277` are each a value the docstring promised was impossible
-    and the assertion could not catch. The two self-tests below are what make the promise
-    readable: one proves the guard rejects those four, the other proves it still admits a column
-    name, an artifact path and a reduced pattern -- the half a stricter guard gets waived over.
-    [M4.14, tq1]
-    """
+    """An allow-list, with self-tests proving it rejects values and admits schema tokens."""
     found = _prose_in_manifest(shipped)
     assert not found, (
         f"{len(found)} leaf string(s) in the committed manifest are not shapes the allow-list "
@@ -676,8 +439,7 @@ def test_the_committed_manifest_carries_no_prose(shipped):
     )
 
 
-# The three the space test could not see, and the one it could. Each is a leaf shape the
-# manifest's own `_note` promises is absent: a title, a person, an external id, a two-word name.
+# A title, a person, an external id and a two-word name.
 _PROSE_THE_MANIFEST_MUST_NEVER_CARRY = (
     ("Heat", "a one-word film title -- invisible to the space test this replaced"),
     ("Kurosawa", "a person's name, the second thing the manifest's `_note` promises is absent"),
@@ -687,10 +449,7 @@ _PROSE_THE_MANIFEST_MUST_NEVER_CARRY = (
 
 
 def _manifest_carrying(leaf: str | None) -> dict:
-    """A manifest shaped like the committed one, optionally with `leaf` planted in the three
-    places a value can reach it: a `content.sqlite` column list, a JSON object's key set, and
-    the file list. Every other leaf here is copied out of `real_bundle_shapes.json`, so a
-    rejection is the planted leaf and not the scaffolding."""
+    """The leaf is planted in a column list, a JSON key set and the file list; everything else is copied."""
     planted = [leaf] if leaf is not None else []
     return {
         "_note": "Shapes only -- no values. Regenerate with ops/bundle_shapes.py.",
@@ -713,14 +472,7 @@ def _manifest_carrying(leaf: str | None) -> dict:
 
 @pytest.mark.parametrize(("leaf", "why"), _PROSE_THE_MANIFEST_MUST_NEVER_CARRY)
 def test_the_manifest_guard_rejects_the_values_it_promises_are_absent(leaf, why):
-    """The guard above is a privacy claim about a file this repo distributes, and a privacy
-    claim nobody has tested is a comment. Three of these four passed it until M4.14.
-
-    Planted in all three positions rather than one, because the old guard was uniform over
-    positions and its replacement has to be too: the leak channel nobody predicted is the one
-    that matters, and `_json_shape` records the key set of any object the corpus happens to key
-    by name. [M4.14, tq1]
-    """
+    """Planted in all three positions, because the leak channel nobody predicted is the one that matters."""
     assert not _prose_in_manifest(_manifest_carrying(None)), (
         "the scaffolding this test plants into is not itself clean, so a rejection below would "
         "prove nothing about the planted leaf"
@@ -737,10 +489,8 @@ def test_the_manifest_guard_rejects_the_values_it_promises_are_absent(leaf, why)
 @pytest.mark.parametrize(
     "leaf",
     [
-        "title_id",                                  # a column name; 242 of the 1,502 leaves are
-        "imdb_id",                                   # these, and failing on them gets us waived
-                                                     # -- and `imdb_id` is the column whose VALUE
-                                                     # is the `tt0113277` rejected just above
+        "title_id",                                  # column names: rejecting them gets the guard waived
+        "imdb_id",
         "content.sqlite",                            # a path in the manifest's own `files` list
         "artifacts/dna_vocab/v1/vocab_mood_v1.tsv",  # a path admitted by form, not by that list
         "prep/cold_tower_artifacts.npz",             # upstream, in BUNDLE.json's provenance map
@@ -759,24 +509,14 @@ def test_the_manifest_guard_rejects_the_values_it_promises_are_absent(leaf, why)
     ],
 )
 def test_the_manifest_guard_admits_what_a_shape_manifest_legitimately_carries(leaf):
-    """The other half of the bargain, and the reason this is an allow-list rather than a ban on
-    strings: every one of these is a leaf the committed manifest carries today. A guard that
-    fails on a column name or an artifact path is one that gets waived rather than fixed, and
-    the waiver would take the four above with it. [M4.14, tq1]
-
-    Planted at the JSON key set because that is the position carrying all of the admitted
-    categories in the shipped manifest -- `files.keys` holds paths, `fitted_cuts.keys` holds the
-    frozen ids, `shares_fixed.json`'s top level holds the cut grids -- and a JSON object's keys
-    are the one thing in a bundle the corpus, not this repo, gets to name.
-    """
+    """Every one is a leaf the committed manifest carries today."""
     manifest = _manifest_carrying(None)
     manifest["json"]["artifacts/manifest.json"]["keys"].append(leaf)
     assert not _prose_in_manifest(manifest), f"{leaf!r} is a shape the manifest carries today"
 
 
 def test_the_manifest_covers_the_artifacts_the_app_reads(shipped):
-    """A manifest that omitted the files under test would pass every assertion above while
-    pinning nothing."""
+    """A manifest that omitted the files under test would pin nothing."""
     files = set(shipped["files"])
     for required in (
         "BUNDLE.json",
@@ -788,15 +528,14 @@ def test_the_manifest_covers_the_artifacts_the_app_reads(shipped):
         "artifacts/corrections_v1.tsv",
         "artifacts/ledger_hyperparams.json",
         "artifacts/seed_list.json",
-        # M4.13: the only reference value in the bundle for a number the app computes itself.
+        # The only reference value in the bundle for a number the app computes itself.
         "artifacts/cold_eval.json",
     ):
         assert required in files, f"{required} is absent from the manifest"
 
 
 def test_sqlite_shapes_are_read_without_row_counts(tmp_path):
-    """The manifest pins structure, not volume: a fixture with eight titles and a bundle with
-    19,071 must agree, or the manifest churns and nobody regenerates it."""
+    """Structure, not volume: eight titles and 19,071 must agree."""
     db = tmp_path / "x.sqlite"
     conn = sqlite3.connect(db)
     conn.execute("CREATE TABLE t (a integer, b text)")
@@ -806,14 +545,7 @@ def test_sqlite_shapes_are_read_without_row_counts(tmp_path):
     assert shapes_mod._sqlite_shapes(db) == {"t": ["a", "b"]}
 
 
-# --- the shapes the corpus ships and the old fixture could not express -------------------------
-#
-# Everything above compares STRUCTURE, because `real_bundle_shapes.json` is shapes-only by
-# design (its own `_note` says so: a committed manifest may carry no film title and no person's
-# name). That is exactly why the three defects below were invisible to it -- a duplicated
-# department, a facet spelling and a pool size are all *values*. These three read the built
-# bundle's rows instead, and they are the reason `bundle_root` above is a fixture of its own.
-# Milestone M4.8, row `platform-fixture-carries-the-corpus-awkward-shapes`.
+# A duplicated department, a facet spelling and a pool size are values, so these read the built rows.
 
 
 def _content(root: Path) -> sqlite3.Connection:
@@ -821,17 +553,7 @@ def _content(root: Path) -> sqlite3.Connection:
 
 
 def test_the_fixture_ships_a_credit_recorded_under_two_departments(bundle_root):
-    """§4.1: "credit (dedupe at read time, never at import)" -- so the collision has to survive
-    the import and reach the read layer intact, and a fixture that cannot emit one cannot
-    falsify what the read layer does with it.
-
-    TMDB files one job under two department spellings. The real export carries 7,918
-    (title, person, job) triples spanning more than one department across 1,216 of its 19,071
-    titles, 816 of them inside the twelve credits §6.0's card renders. Until this row the only
-    bundle in the suite gave every credit a distinct (title, person, department, job), so the
-    duplicate existed only where `test_import_integration.py` inserted one by hand -- a test
-    that proves the query, and proves nothing about the input the importer is handed.
-    """
+    """§4.1: credits dedupe at read time, never at import, so the fixture must ship a collision."""
     db = _content(bundle_root)
     try:
         collisions = db.execute(
@@ -847,28 +569,8 @@ def test_the_fixture_ships_a_credit_recorded_under_two_departments(bundle_root):
 
 
 def test_the_fixture_ships_both_facet_namings(bundle_root):
-    """The two namings coexist in one bundle, which is the whole of the defect.
-
-    `dna_tag.facet` and `dna_projected.facet` carry the corpus's *extraction* labels
-    (`mood_tone`, `narrative_themes`, `character_dynamics`) while the term ids and every
-    vocabulary file carry the short facet id the term is prefixed with (`mood.dread` ->
-    `mood`). 29,188 of 31,540 real `dna_tag` rows and 206,151 of 223,136 `dna_projected` rows
-    mismatch, and `0004_dna.sql:73-90` and `:104-116` give neither column a foreign key to
-    `dna_facet`, which is precisely why nothing raises: `importer/dna.py:295-310` and `:365-380`
-    copy the shipped column verbatim and `load_vocabulary` derives its facet from the prefix, so
-    the join is empty and every facet renders in the neutral colour.
-
-    Both directions are asserted. A fixture whose facets ALL mismatched would be as useless as
-    one where none did: the app's own read path has to keep working on the rows that agree,
-    which is what makes the failure partial and therefore silent.
-    """
-    # The three labels the review measured on the real bundle, written out here rather than read
-    # from `make_bundle.EXTRACTION_LABELS`, because that dict cannot be its own witness: a fourth
-    # label invented in the fixture would be added there too, and a check that read it would agree
-    # with the invention. Step 4b bolds the prohibition -- "Invent no fourth label: three measured
-    # labels plus the identical remainder IS the shape, and a guessed label would be exactly the
-    # fixture-invents-a-structure failure M4.5 exists to end".
-    # [M4.8 review cycle 3: m48-rev3-fixture-01]
+    """Both namings coexist, which is what makes the failure partial and silent."""
+    # Written out, not read from `make_bundle.EXTRACTION_LABELS`, which cannot be its own witness.
     measured = {"mood_tone", "narrative_themes", "character_dynamics"}
     db = _content(bundle_root)
     try:
@@ -885,14 +587,8 @@ def test_the_fixture_ships_both_facet_namings(bundle_root):
                 f"no {table} row's facet equals its term's prefix, so the fixture ships one "
                 "naming rather than the two that coexist in a real bundle"
             )
-            # WHICH label, not merely that one differs. `shipped_facet` (make_bundle.py:131-136)
-            # is the rule the milestone wrote for this column and then applied to the generated
-            # pool only -- the authored EXTRACTED/PROJECTED literals are inserted verbatim -- so
-            # a row whose facet was spelled from the line above it rather than from the mapping
-            # passed both assertions above. Measured: `mood.cosy` moved back to `mood` while
-            # `mood.dread` keeps `mood_tone` ships one facet under two extraction labels in one
-            # export, a shape the corpus does not produce, and `visual.neon` filed under
-            # `visual_style` invents the fourth label; both were green.
+            # WHICH label: a facet spelled from the line above
+            # rather than the mapping passed both checks above.
             wrong = [(t, f) for t, f in rows if f != make_bundle.shipped_facet(t)]
             assert wrong == [], (
                 f"{table} rows whose facet is not the one the mapping gives their term: {wrong}; "
@@ -908,20 +604,7 @@ def test_the_fixture_ships_both_facet_namings(bundle_root):
 
 
 def test_the_scale_mode_grows_the_pool_without_widening_the_contract(tmp_path, bundle_root):
-    """The pool is opt-in and costs the contract nothing.
-
-    The real bundle yields 696 owned movies at §6's default 130-minute room, where the Tonight
-    selector's replay cost is measured in tens of seconds against a 1.5 s budget. The pair
-    search itself no longer needs a bundle to be guarded -- e87deed times `select` against a
-    synthesized belief dict at 716 and 696 candidates -- but a belief dict is not a pool: it is
-    ints to floats, and it cannot reach the importer, the database or `GET /seats/{id}/round`.
-    The half M4.12's exit script measures is the seeded round, and at eight titles nothing in
-    this suite can seed it. `pool_titles` supplies one -- and it must supply *only* that: the
-    generated titles reuse the authored genres, keywords, people, terms and axes, so
-    `feature_contract.json` is unchanged and every assertion above still holds against the
-    default bundle. A pool that widened a block would move the tower's `input_dim` and make the
-    timing fixture a different model.
-    """
+    """The pool is opt-in and must not widen the contract, or the tower's `input_dim` moves."""
     root = make_bundle.make_bundle(tmp_path / "pool", pool_titles=700)
 
     db = _content(root)
@@ -943,11 +626,8 @@ def test_the_scale_mode_grows_the_pool_without_widening_the_contract(tmp_path, b
     )
     assert scaled["input_dim"] == default["input_dim"]
 
-    # §6.4's axis TSVs are the one artifact this fixture ships that the corpus does not
-    # (SPEC_REQUIRED_NOT_YET_SHIPPED above), so nothing else would notice if the pool stopped
-    # writing them -- and an axis with no file is a facet with no coordinate. Beside the
-    # vocabulary files since decision 173, and asserted here as well as up there because a
-    # subdirectory is the location `importer/dna.load_axes` no longer reads at all.
+    # Axis TSVs are the one artifact the corpus does not ship,
+    # so only this notices if the pool stops writing them.
     vocab = root / "artifacts" / "dna_vocab" / "v1"
     assert {f"{facet}.tsv" for facet in make_bundle.AXES} <= {p.name for p in vocab.glob("*.tsv")}
     assert not (vocab / "axes").exists(), "an axis in a subdirectory cannot reach a real bundle"

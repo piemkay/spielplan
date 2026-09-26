@@ -1,20 +1,5 @@
-"""The Backbone cache against a bundle directory that gets rewritten under it. §10, §4.3.
-
-ml10. `scoring/backbone.py`'s `_CACHE` was keyed on `(store.version, str(store.root))` under a
-docstring asserting that "a bundle directory is immutable for the life of its version" — and the
-importer rmtree's and re-copytree's exactly that directory on every import of that version:
-`importer/bundle.py` stages with `shutil.rmtree(staged)` then `shutil.copytree(...)`, which is
-reached by a retry after a failed import and by M4.14's restage of the ACTIVE version, where
-same-version-by-definition is the whole point. So the second import of a version served the first
-import's arrays for the life of the process, with nothing in any log saying so.
-
-The two tests below are the two halves of the fix, and the second exists because the first has a
-wrong answer that passes it: deleting the cache. §5.3 budgets "<1 s/title" for steady-state work
-and reading a 14,397-row basis is not per-title work, so the cache has to keep caching.
-
-No database and no bundle fixture: a four-row synthetic `backbone.npz` states the property, and
-`data/import`'s real one would only make the numbers harder to see. [M4.14, ml10]
-"""
+"""The Backbone cache against a bundle directory rewritten under it (§10). The importer re-copies a
+version's directory, so a cache keyed on version and root alone serves stale arrays."""
 
 from __future__ import annotations
 
@@ -30,12 +15,7 @@ VERSION = "v20260828"
 
 
 def _write_backbone(root: Path, *, e00: float, mu: float) -> Path:
-    """A minimal §4.3 basis: the arrays `Backbone.open` requires, and nothing else.
-
-    Every row carries a real coordinate — a zero row is an ABSENT row (cs-01), so a fixture of
-    zeros would index nothing and both tests would read the same empty basis whatever the cache
-    did. `e00` is the number the assertions follow from disk to `embedding()`.
-    """
+    """A zero row is an ABSENT row, so every row carries a real coordinate."""
     e = np.random.default_rng(20260912).standard_normal((4, 64)).astype(np.float32)
     e[0, 0] = e00
     np.savez(
@@ -51,15 +31,7 @@ def _write_backbone(root: Path, *, e00: float, mu: float) -> Path:
 
 
 def test_a_restage_of_the_same_version_is_re_read_not_served_from_cache(tmp_path):
-    """ml10, the reproduction. §10 stages to `/data/artifacts/<version>/` and flips; it does not
-    promise that a version's directory is written once, and the importer's own rmtree/copytree is
-    the proof it is not. A second store over a rewritten directory must see the rewritten numbers.
-
-    The store is re-opened rather than reused, because that is what production does: the worker
-    builds a fresh `ArtifactStore` per job through `_active_store`, and `app.py`'s lifespan builds
-    one per boot. A fresh store with the same version and root is exactly the object that used to
-    hit the stale entry.
-    """
+    """Re-opened, not reused: production builds a fresh `ArtifactStore` per job and per boot."""
     bb.forget_cached()
     root = tmp_path / "artifacts" / VERSION
     root.mkdir(parents=True)
@@ -68,9 +40,7 @@ def test_a_restage_of_the_same_version_is_re_read_not_served_from_cache(tmp_path
     first = bb.load_for(ArtifactStore.open(root, VERSION))
     assert first.embedding(1)[0] == np.float32(1.0)
 
-    # The restage: same version, same root, different arrays. mtime is set rather than left to
-    # the clock because two writes inside one filesystem tick is a property of the test machine,
-    # not of the thing under test; a real restage takes the corpus's own mtime through copytree.
+    # mtime is set, not left to the clock: two writes in one filesystem tick would look unchanged.
     before = path.stat().st_mtime_ns
     _write_backbone(root, e00=2.0, mu=0.75)
     os.utime(path, ns=(before + 2_000_000_000, before + 2_000_000_000))
@@ -82,17 +52,12 @@ def test_a_restage_of_the_same_version_is_re_read_not_served_from_cache(tmp_path
     assert second.mu == 0.75
     assert second is not first
 
-    # The swap window still holds two, not one per restage: an unbounded cache is a second bug
-    # wearing the fix's clothes.
+    # The swap window still holds two, not one per restage.
     assert len(bb._CACHE) <= 2
 
 
 def test_an_unchanged_bundle_directory_is_read_once(tmp_path):
-    """The other half. §5.3's per-title budget is why this module caches at all, and the cheap
-    wrong fix for ml10 — drop the cache, or re-open on every call — re-reads the whole basis on
-    every request that asks for it. Identity is the assertion because a second `Backbone.open`
-    cannot return the object the first one built.
-    """
+    """§5.3's per-title budget is why this caches at all; dropping the cache would pass the test above."""
     bb.forget_cached()
     root = tmp_path / "artifacts" / VERSION
     root.mkdir(parents=True)
@@ -102,6 +67,6 @@ def test_an_unchanged_bundle_directory_is_read_once(tmp_path):
     again = bb.load_for(ArtifactStore.open(root, VERSION))
     assert again is first, "an untouched directory must not be re-read on every load_for"
 
-    # And `forget_cached` still forgets: five call sites in `test_model_basis.py` depend on it.
+    # `forget_cached` must still forget: `test_model_basis.py` depends on it.
     bb.forget_cached()
     assert bb.load_for(ArtifactStore.open(root, VERSION)) is not first

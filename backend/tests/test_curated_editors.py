@@ -1,28 +1,6 @@
-"""§6.6 Data's three ledger editors: three artifacts, household rows only, applied at once.
-
-Spec v2.1 §6.6 Data as v2.1.3 amends it ("Three separate editors with separate semantics, never one
-merged screen ... they write household rows beside the bundle's, which are read-only in the app, and
-export the household's rows on demand in the importer's own columns"), §8 stage 3, §14.5, §6.4;
-decisions 326, 342, 423 and 445. Plan §7 checks 10 and 11.
-
-WHAT THE SCAR LOOKS LIKE FROM HERE. Decision 171's Cost paragraph recorded it before any editor
-existed: "an in-app-authored correction absent from the next bundle's TSV is wiped (probed: P4
-removed the app row)". Decision 326 scoped the importer's DELETEs and decision 423 ordered the
-appliers so the household's row wins; what neither could test is the row an editor actually writes,
-because there was no editor. So the survival test below authors through the editor, re-imports
-through the importer's own models-only loader, and reads the card through the applier the derive
-calls -- three real functions and no row typed into a table by the test.
-
-THE EXPORTS ARE READ BACK BY THE IMPORTER'S OWN READERS AND BY NOTHING WRITTEN HERE. A round trip
-checked by a parser in this file would prove the writer and the test agree, which is a weaker claim
-than §6.6's "the TSV formats the corpus project already uses": `validate._read_tsv`,
-`dna.parse_corrections`, `dna.load_adjudications` and `dna.load_axes` are what a bundle is read
-with, so they are what an export has to satisfy. Each round trip carries a tab, a newline and a
-quote character inside a field, because those are the three bytes a naive join-on-TAB writer breaks
-and a hand-typed note is exactly where they arrive.
-
-Integration tests are skipped without TEST_DATABASE_URL; see tests/conftest.py.
-"""
+"""§6.6 Data's three ledger editors: three artifacts, household rows only,
+applied at once (decision 445). Exports are read back by the importer's
+own readers, never by a parser written here. Needs TEST_DATABASE_URL."""
 
 from __future__ import annotations
 
@@ -43,15 +21,12 @@ from tests.fixtures import make_bundle as fx
 
 CURATED = Path(__file__).resolve().parents[1] / "spielplan" / "curated"
 
-# The title the shipped `corrections_v1.tsv` names (`make_bundle.py:721-724`); every other title
-# here is one the bundle's credit ledger does not mention.
+# The title the shipped `corrections_v1.tsv` names; no other title here is in the bundle's credit ledger.
 CORRECTED = 8
 BUNDLE_COMPOSER = "Kunihiko Murai"
 HOUSEHOLD_COMPOSER = "The Household Composer"
 
-# A facet `make_bundle.VOCAB` declares and `make_bundle.AXES` ships no axis for: the household's
-# axis lands beside the bundle's three rather than over one of them (decision 445: a bundle row is
-# read-only in the app).
+# A facet with no shipped axis, so the household's axis lands beside the bundle's rather than over one.
 UNSHIPPED_FACET = "structure"
 
 # The three bytes a writer that joins on TAB and ends lines on LF corrupts.
@@ -60,8 +35,8 @@ AWKWARD = 'a line\twith a tab\nand a second, "quoted" line'
 
 @pytest.fixture
 def bundle_dir(tmp_path) -> Path:
-    """`test_dna_import.py`'s fixture, restated rather than imported (a fixture reached by import
-    is an unused name to ruff and a collection-order dependency between two files)."""
+    """Restated rather than imported: an imported fixture is
+    an unused name to ruff and couples collection order."""
     fx.make_bundle(tmp_path / "bundle")
     return tmp_path / "bundle"
 
@@ -72,9 +47,7 @@ def vocab_dir(bundle_dir) -> Path:
 
 
 async def _install(conn, bundle_dir: Path) -> None:
-    """The titles, the vocabulary and the bundle's three curated ledgers, the way an import loads
-    them, with the counts asserted so that a fixture that stopped shipping one cannot turn a test
-    below green over an editor with nothing beside it."""
+    """Counts asserted, so a fixture that stopped shipping a ledger cannot turn a test green."""
     await conn.executemany(
         "INSERT INTO title (id, kind, name, year) VALUES ($1, $2, $3, $4)",
         [(t[0], t[1], t[2], t[4]) for t in fx.TITLES],
@@ -90,7 +63,6 @@ async def _install(conn, bundle_dir: Path) -> None:
 
 
 async def _tag(conn, title_id: int, term: str, facet: str) -> None:
-    """One extracted tag with the quote §4.1 rule 1 makes it carry."""
     tag_id = await conn.fetchval(
         "INSERT INTO dna_tag (title_id, version, term, facet, salience, provider)"
         " VALUES ($1, 'v1', $2, $3, 2, '') RETURNING id",
@@ -108,7 +80,6 @@ async def _terms(conn, title_id: int) -> list[str]:
 
 
 async def _music(conn, title_id: int) -> list[tuple[str, str]]:
-    """This title's music credits by `apply_corrections`' own predicate, as (name, source)."""
     return [(r["name"], r["source"]) for r in await conn.fetch(
         "SELECT p.name, c.source FROM credit c JOIN person p ON p.id = c.person_id"
         " WHERE c.title_id = $1 AND (lower(c.job) LIKE '%composer%' OR lower(c.job) LIKE '%music%')"
@@ -116,7 +87,6 @@ async def _music(conn, title_id: int) -> list[tuple[str, str]]:
 
 
 async def _source_credit(conn, title_id: int, name: str) -> None:
-    """A music credit a source wrote, which is what a correction overrules or stands beside."""
     person_id = await ids.upsert_person(conn, name=name)
     await conn.execute(
         "INSERT INTO credit (title_id, person_id, department, job, role_class, source)"
@@ -126,7 +96,7 @@ async def _source_credit(conn, title_id: int, name: str) -> None:
 
 
 async def _ledgers(conn) -> dict[str, list[tuple]]:
-    """Every row of the four curated tables, ids included, so "left alone" means byte-for-byte."""
+    """Ids included, so "left alone" means byte-for-byte."""
     return {
         "dna_adjudication": [tuple(r) for r in await conn.fetch(
             "SELECT id, origin, scope, title_id, term, verdict, target, quote, source, note"
@@ -142,7 +112,6 @@ async def _ledgers(conn) -> dict[str, list[tuple]]:
 
 
 async def _axis(conn, facet: str) -> tuple:
-    """One stored axis as (origin, left, right, ((term, weight), ...))."""
     head = await conn.fetchrow(
         "SELECT origin, left_pole, right_pole FROM dna_axis WHERE version = 'v1' AND facet = $1", facet
     )
@@ -153,16 +122,14 @@ async def _axis(conn, facet: str) -> tuple:
     return (*tuple(head), tuple(tuple(r) for r in terms)) if head else ()
 
 
-# The verb and the table it writes, read out of the string literals a module hands the driver. `DO
-# UPDATE` is an upsert's second half and `FOR UPDATE` a row lock; neither names a table it writes.
+# `DO UPDATE` is an upsert's second half and `FOR UPDATE` a row lock; neither names a table written.
 _WRITE = re.compile(
     r"\b(?:INSERT\s+INTO|DELETE\s+FROM|(?<!DO )(?<!FOR )UPDATE)\s+(\w+)", re.IGNORECASE
 )
 
 
 def _sql_of(source: str) -> str:
-    """A module's string literals, docstrings excluded: the SQL it can send, and none of its prose
-    (a docstring saying "update the row" is not a write to a table named `the`)."""
+    """Docstrings excluded: a docstring saying "update the row" is not a write to a table named `the`."""
     tree = ast.parse(source)
     docstrings = {
         id(node.body[0].value)
@@ -178,9 +145,7 @@ def _sql_of(source: str) -> str:
 
 
 def _saved(tmp_path: Path, name: str, text: str) -> Path:
-    """The export as a household would save it. Bytes, not `write_text`: on Windows text mode
-    turns the LF inside a quoted field into CRLF, which is this test's platform and not the
-    writer's defect."""
+    """Bytes, not `write_text`: Windows text mode turns the LF inside a quoted field into CRLF."""
     folder = tmp_path / "export"
     folder.mkdir(exist_ok=True)
     path = folder / name
@@ -188,15 +153,9 @@ def _saved(tmp_path: Path, name: str, text: str) -> Path:
     return path
 
 
-# --- plan check 10: three editors, three artifacts, household rows only -------------------------
-
-
 async def test_each_editor_writes_only_its_own_table_and_only_as_the_household(db, bundle_dir):
-    """Decision 445: "The editors write only rows with `origin = 'household'`. A bundle row is
-    read-only in the app", and "Three modules write three tables". Each write below is checked
-    against all four curated tables, so an editor that also touched a sibling's table -- the merged
-    write path §6.6 forbids -- or rewrote a bundle row in its own is caught at the write that did it.
-    """
+    """Each write is checked against all four curated tables,
+    so a sibling-table write is caught where it happens."""
     await _install(db, bundle_dir)
     start = await _ledgers(db)
 
@@ -240,16 +199,7 @@ async def test_each_editor_writes_only_its_own_table_and_only_as_the_household(d
 
 
 def test_three_modules_write_three_tables_and_share_no_write_function():
-    """Plan check 10: "three artifacts; `grep` finds no shared write function".
-
-    Read out of the three module sources, because the property is about where the writes are
-    SPELLED: a shared helper that took a table name would pass every behavioural test above while
-    being the merged write path §6.6 rules out ("never one merged screen"), and proposal 105's
-    "separate semantics" is §14.5's two-ledger scar one layer up -- DNA verdicts and credit facts
-    apply at different points of the derive, and one writer for both is how they come to be
-    treated as one thing. The appliers the editors CALL are `derive/ledgers.py`'s and write
-    `dna_tag` and `credit`; they are the derive's, not the editors', and they are not read here.
-    """
+    """Read from source, because a shared helper taking a table name would pass every behavioural test."""
     own = {
         "adjudications": {"dna_adjudication"},
         "corrections": {"credit_correction"},
@@ -281,17 +231,10 @@ def test_three_modules_write_three_tables_and_share_no_write_function():
                 and not (isinstance(n, ast.ImportFrom) and n.module == "__future__")]
 
 
-# --- the exports, read back by the importer's own readers --------------------------------------
-
-
 async def test_the_verdict_export_folds_back_through_the_importers_reader_and_loader(
     db, bundle_dir, tmp_path
 ):
-    """Decision 445: "Verdicts are written in the corpus's own spelling (DROP / REPOINT /
-    DROP_EVIDENCE), so the export folds back unchanged", and "Export is household rows only, in
-    the importer's column set". The loader is the last step and not the parser alone, because the
-    loader is what a bundle carrying this file back would run: it has to land the same rows.
-    """
+    """The loader, not the parser alone, because it is what a bundle carrying this file back would run."""
     await _install(db, bundle_dir)
     await adjudications.author(
         db, scope="title", title_id=2, term="mood.dread", action="DROP_EVIDENCE",
@@ -334,9 +277,6 @@ async def test_the_verdict_export_folds_back_through_the_importers_reader_and_lo
 
 
 async def test_the_correction_export_folds_back_through_parse_corrections(db, bundle_dir, tmp_path):
-    """The credit ledger's round trip, through the parser `load_corrections` uses and in the
-    bundle's own file name (`importer/bundle.py` reads `corrections_v1.tsv`). The bundle's row is
-    absent from the export: decision 445 exports the household's rows only."""
     await _install(db, bundle_dir)
     await corrections.author(
         db, title_id=1, kind="composer", value="Elliot Goldenthal",
@@ -361,10 +301,7 @@ async def test_the_correction_export_folds_back_through_parse_corrections(db, bu
 
 
 async def test_the_axis_export_is_the_file_load_axes_reads(db, bundle_dir, tmp_path):
-    """Decision 342: the editor "exports `<facet>.tsv` in §6.4's format: the two poles alone on the
-    header line, then one term-TAB-weight row per line". The household's axis is withdrawn before
-    the file is loaded, because `load_axes` now leaves a household axis in place (the survival
-    test below) and would otherwise decline the very file this is checking."""
+    """The household axis is withdrawn first, since `load_axes` leaves a household axis in place."""
     await _install(db, bundle_dir)
     await axes.author(
         db, facet=UNSHIPPED_FACET, left_pole='linear, "straight"', right_pole="fractured",
@@ -388,22 +325,10 @@ async def test_the_axis_export_is_the_file_load_axes_reads(db, bundle_dir, tmp_p
     assert await _axis(db, UNSHIPPED_FACET) == ("bundle", *stored[1:])
 
 
-# --- plan check 11 and decision 423: what survives a re-import --------------------------------
-
-
 async def test_a_household_correction_survives_a_models_only_re_import_and_still_takes_effect(
     db, bundle_dir
 ):
-    """Plan check 11 -- "app-authored correction, then a models-only re-import | the row survives
-    (decision 326)" -- and the half decision 423 adds, that it is still the fix on the card.
-
-    Title 8 is the title the bundle's own ledger corrects, so the household's row stands beside a
-    bundle row naming the same credit: the population decision 423 says the credit editor exists
-    for. `load_corrections` of the shipped TSV is decision 247's models-only path; the TSV does not
-    carry the household's row, and before decision 326 that absence was the wipe decision 171
-    probed. The editor applies at once (decision 445), so the card is right before the re-import;
-    after it, the applier the derive calls is what has to keep it right.
-    """
+    """Before decision 326, a correction absent from the next bundle's TSV was wiped by the re-import."""
     await _install(db, bundle_dir)
 
     written = await corrections.author(
@@ -440,14 +365,8 @@ async def test_a_household_correction_survives_a_models_only_re_import_and_still
 async def test_a_title_correction_is_true_at_once_and_withdrawing_it_takes_its_credit_back(
     db, bundle_dir
 ):
-    """Decision 445: "A title-scoped verdict or correction is applied to its title at once" and
-    "Withdrawing a correction re-applies, and the applier reclaims the credit it minted".
-
-    `composer_add` first, because it leaves the source's own credit standing: the withdrawal then
-    has to take back exactly the one row the applier minted and nothing the source wrote. `composer`
-    second, which replaces the source's credit -- and whose withdrawal restores nothing, on a bundle
-    title for good (the test below).
-    """
+    """`composer_add` first: its withdrawal must take back
+    exactly the minted row and nothing the source wrote."""
     await _install(db, bundle_dir)
     await _source_credit(db, 1, "A Source Composer")
 
@@ -476,12 +395,7 @@ async def test_a_title_correction_is_true_at_once_and_withdrawing_it_takes_its_c
 
 
 async def test_withdrawing_a_composer_correction_on_a_bundle_title_brings_no_credit_back(db, bundle_dir):
-    """What the correction editor tells the household before it saves a `composer` row and again
-    before it withdraws one (`ledgerEditors.svelte.js`'s `COMPOSER_WARNING`), held to the server: the
-    applier replaces the title's music credits, the withdrawal reclaims only the one it minted, and a
-    bundle title - no raw store (decision 162), never re-derived (decision 445) - gets nothing back
-    from a derive either. `withdraw`'s docstring once promised the next derive would restore it.
-    [M5.6 review cycle 1, m56-curated-01]"""
+    """A bundle title has no raw store and is never re-derived, so nothing brings the credit back."""
     await _install(db, bundle_dir)
     await _source_credit(db, 1, "The Bundle's Composer")
 
@@ -496,12 +410,6 @@ async def test_withdrawing_a_composer_correction_on_a_bundle_title_brings_no_cre
 
 
 async def test_a_global_drop_is_true_at_once_on_every_title_that_carries_the_term(db, bundle_dir):
-    """Decision 445: "A blanket verdict is applied at once to every title that carries the term at
-    the active version. Bundle titles are never re-derived, so a fix typed today is true today".
-
-    And withdrawal "stops it applying and restores nothing it dropped (§8 stage 7)": the dropped
-    tag stays dropped, and a fresh extraction of the term is no longer ruled on.
-    """
     await _install(db, bundle_dir)
     await _tag(db, 2, "mood.dread", "mood")
     await _tag(db, 2, "themes.obsession", "themes")
@@ -530,15 +438,7 @@ async def test_a_global_drop_is_true_at_once_on_every_title_that_carries_the_ter
 
 
 async def test_a_household_axis_survives_a_bundle_that_ships_the_same_facet(db, bundle_dir, vocab_dir):
-    """Decision 342: "`importer/dna.load_axes` leaves in place, with a warning on the import report,
-    any facet whose stored axis is household-authored. That is decision 423's rule applied to the
-    third ledger: the household's curated row takes effect."
-
-    The axis is authored first and the bundle's file for the same facet arrives after it, which is
-    the order a household that typed an axis and then imported the day the corpus authored one
-    would meet. Without the guard the loader rewrites the poles and replaces every weight while the
-    row still says `household` -- the household's axis gone under its own label.
-    """
+    """Without the guard the loader overwrote the axis while the row still said `household`."""
     await _install(db, bundle_dir)
     await axes.author(
         db, facet=UNSHIPPED_FACET, left_pole="linear", right_pole="fractured",
@@ -560,15 +460,8 @@ async def test_a_household_axis_survives_a_bundle_that_ships_the_same_facet(db, 
     assert (await _axis(db, "mood"))[0] == "bundle", "the bundle's own facets stopped loading"
 
 
-# --- what the editors refuse, and what nothing may withdraw -----------------------------------
-
-
 async def test_a_bundle_row_is_read_only_in_every_editor(db, bundle_dir):
-    """Decision 445: "A bundle row is read-only in the app ... The household may withdraw only its
-    own rows." A bundle row withdrawn in the app comes back at the next models-only import, so the
-    withdrawal would be a fix that lasts until the household forgets it made one. The axis half is
-    the same rule over a key with room for one row: `dna_axis` is keyed on (version, facet), so a
-    household axis over a shipped facet could only be written by overwriting the bundle's."""
+    """A bundle row withdrawn in the app comes back at the next models-only import."""
     await _install(db, bundle_dir)
     before = await _ledgers(db)
     verdict = await db.fetchval("SELECT id FROM dna_adjudication WHERE origin = 'bundle' LIMIT 1")
@@ -597,12 +490,7 @@ async def test_a_bundle_row_is_read_only_in_every_editor(db, bundle_dir):
 
 
 async def test_the_verdict_editor_refuses_what_the_applier_could_not_apply(db, bundle_dir):
-    """Each refusal is a row the applier would store and then ignore or miscount: a re-point onto a
-    term `dna_term` does not carry (`derive/ledgers._repoint` counts `repoint_target_unknown` and
-    moves nothing), a DROP_EVIDENCE with no quote (which drops every quote the term has on the
-    title), a DROP_EVIDENCE with no title (the blanket sweep never reaches that action), and a title
-    this install does not hold. Refused here, where the admin sees why, rather than written as a
-    fix that is never true. No vocabulary refuses first: `dna_adjudication.version` is an FK."""
+    """Each refusal is a row the applier would store and then ignore or miscount."""
     with pytest.raises(Refused, match="vocabulary"):
         await adjudications.author(db, scope="global", term="mood.dread", action="DROP")
     await _install(db, bundle_dir)
@@ -629,10 +517,8 @@ async def test_the_verdict_editor_refuses_what_the_applier_could_not_apply(db, b
 
 
 async def test_the_correction_editor_refuses_an_opinion_and_a_title_nobody_holds(db, bundle_dir):
-    """`derive/ledgers.apply_corrections` stores an evidence-less row and refuses it at apply time
-    ("a correction without evidence is an opinion"), which in an editor is a saved fix that never
-    reaches the card; so the editor refuses it where the admin can see why. A kind outside
-    `CORRECTION_KINDS` is the applier's `unknown_kind` for the same reason."""
+    """The applier refuses an evidence-less row at apply time,
+    so the editor refuses it where the admin sees why."""
     await _install(db, bundle_dir)
     before = await _ledgers(db)
 
@@ -651,11 +537,6 @@ async def test_the_correction_editor_refuses_an_opinion_and_a_title_nobody_holds
 
 
 async def test_the_axis_editor_refuses_every_file_load_axes_would_refuse(db, bundle_dir):
-    """Decision 342: it "validates facet, terms and weights exactly as `importer/dna.load_axes`
-    does, including at least one weight row (decision 264), so nothing the editor saves is a file
-    the loader would refuse". An unknown facet is the FK `load_axes` checks before it writes; a
-    weight outside [-1, 1] is its `report.fail`; a non-number is its skipped row; zero weight rows
-    is decision 264's truncated export; a duplicated term is two rows the key holds as one."""
     with pytest.raises(Refused, match="vocabulary"):
         await axes.author(db, facet="mood", left_pole="a", right_pole="b", weights=[("mood.dread", 1)])
     await _install(db, bundle_dir)

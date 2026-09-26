@@ -1,32 +1,5 @@
-"""A launched batch's plan, and the one reading of it the gate, stage 6 and the retry share.
-
-Spec v2.1 §8.4 ("picks a batch and providers, sees the cost estimate, launches"; the pass count is
-chosen per batch), §8 stage 6, §9; decisions 324, 325, 441 and 442.
-
-Decision 442's whole reason is a quote that priced one plan over a stage that ran another: without a
-carried plan a three-provider, two-pass batch would be gated on the stored one-by-one reservation
-and bill six runs, and the admin's pass choice would silently not reach stage 6. So what this file
-pins is that there is ONE plan, and it is asserted from both ends of the money:
-
-  * THE RESERVATION. `spend.cap_check` with a batch reserves that batch's providers at that batch's
-    passes at both attempts (decision 325), exactly the figure the stored plans of the same
-    providers sum to -- read off the refusal the meter writes, whose digits are the ones it compared.
-  * THE BILL. A task whose payload carries a plan walks stage 6 through the real driver against
-    `ops/fake_llm.py`, and the provider calls the double received are providers x passes x the
-    attempts each run used; the gate that let it through read the same plan, which a cap too small
-    for the batch and large enough for the stored plan would not have let through.
-
-And the two things a batch may not do: raise its own cap or reach a key or a model nobody configured
-(the merge covers four settings and nothing else), and fail quietly - a batch that does not read is a
-`PLAN` refusal naming the batch, never the stored settings run in its place.
-
-The install is `test_llm_stage.py`'s, restated as fixtures here over that file's own helpers - the
-suite's convention is to share helpers and restate fixtures: a title at stage 6 with a `title:<id>`
-task, the active vocabulary, all three providers keyed against the double, and the pack in the raw
-store. The double is a refuser and is used as shipped.
-
-Integration tests are skipped without TEST_DATABASE_URL; see tests/conftest.py.
-"""
+"""A launched batch's plan, and the one reading of it the gate, stage 6 and the retry share (decision 442).
+Asserted from both ends of the money: the reservation and the bill. Needs TEST_DATABASE_URL."""
 
 from __future__ import annotations
 
@@ -59,15 +32,13 @@ from tests.test_llm_stage import (
     _vocabulary,
 )
 
-# Small enough that any reservation is over it and the meter says by how much: the refusal's
-# `reserved_usd` is then the figure `cap_check` compared, read back rather than recomputed here.
+# Small enough that any reservation is over it: the refusal's `reserved_usd` is then read back.
 TINY = 0.000001
 BATCH = {"providers": ["gemini", "anthropic"], "passes": 2}
 
 
 @pytest.fixture
 def double():
-    """`ops/fake_llm.py` with a fresh request log, loaded as `test_llm_stage.py` loads it."""
     spec = importlib.util.spec_from_file_location("fake_llm", DOUBLE)
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
@@ -78,7 +49,6 @@ def double():
 
 @pytest.fixture
 def data_dir(tmp_path, monkeypatch):
-    """`DATA_DIR` under this test's tmp_path, so the pack and every paid answer land there."""
     monkeypatch.setenv("DATA_DIR", str(tmp_path / "data"))
     settings.cache_clear()
     yield settings().data_dir
@@ -87,8 +57,6 @@ def data_dir(tmp_path, monkeypatch):
 
 @pytest.fixture
 async def packed(db, data_dir, secrets_key, double) -> int:
-    """A title at stage 6 with its `title:<id>` task, the active vocabulary, one bundle row, all
-    three providers keyed against the double, and the title's pack kept in the raw store."""
     await _vocabulary(db)
     await db.execute(
         "INSERT INTO title (id, kind, name, year, is_owned) VALUES ($1, 'movie', 'Grey Harbour', 2021,"
@@ -104,29 +72,21 @@ async def packed(db, data_dir, secrets_key, double) -> int:
 
 
 async def _reserved(db, **batch) -> Decimal:
-    """The reservation `cap_check` held this title against, under the month as it stands."""
     refusal = await spend.cap_check(db, title_id=TITLE, **batch)
     assert refusal is not None and refusal.kind == spend.OVER_CAP, refusal
     return Decimal(refusal.detail["reserved_usd"])
 
 
 async def _carry(db, plan) -> None:
-    """The plan a launch writes onto the title's task (decision 443), under the one key stage 6's
-    reader spells (`stages.PLAN_KEY`)."""
+    """Under the one key stage 6's reader spells (`stages.PLAN_KEY`)."""
     await db.execute(
         "UPDATE acquisition_task SET payload = payload || $2::text::jsonb WHERE key = $1",
         TASK_KEY, json.dumps({stages.PLAN_KEY: plan}),
     )
 
 
-# --- the reservation --------------------------------------------------------------------------
-
-
 async def test_a_batch_reserves_its_own_providers_at_its_own_passes_and_both_attempts(db, packed):
-    """Two providers at two passes is four runs, each reserved at two attempts: the figure is twice
-    what the two providers' stored one-pass plans reserve between them, to the micro-dollar, because
-    `pricing.estimate_title` is priced per provider and multiplied by passes. And the stored setting
-    is untouched by having been overridden for one question."""
+    """`pricing.estimate_title` is priced per provider and multiplied by passes, so the figure is exact."""
     await _settings(db, cap_usd=TINY, extraction_provider="anthropic")
     anthropic = await _reserved(db)
     await _settings(db, cap_usd=TINY)
@@ -148,10 +108,7 @@ async def test_a_batch_reserves_its_own_providers_at_its_own_passes_and_both_att
 
 
 async def test_a_batch_cannot_raise_the_cap_or_name_a_key_or_a_model(db, packed, double):
-    """Decision 442: the merge covers `extraction_provider`, `parallel`, `parallel_providers` and
-    `passes`, never `cap_usd`, a key or a model - so a batch chooses among what the household has
-    configured and can neither lift its own ceiling nor reach a provider nobody keyed. Everything
-    else a batch carries is not read at all, including the stored settings' own names."""
+    """Decision 442: the merge covers four settings, never `cap_usd`, a key or a model."""
     await _settings(db, cap_usd=TINY)
     smuggled = {
         "providers": ["gemini"], "passes": 1,
@@ -183,11 +140,7 @@ async def test_a_batch_cannot_raise_the_cap_or_name_a_key_or_a_model(db, packed,
     "gemini x 2",
 ])
 async def test_a_batch_that_does_not_read_is_a_plan_refusal_naming_the_batch(db, packed, batch):
-    """A malformed batch is refused, and refused as the batch's fault: the sentence an operator
-    reads on the board names the flywheel batch, not "the llm connector's" settings, which are
-    fine and which an operator sent there would find nothing wrong with. Never the stored plan run
-    in its place - that is the quote-over-another-plan decision 442 exists to prevent. With no cap
-    at all, decision 348's sentence still comes first (decision 325's order)."""
+    """The sentence names the flywheel batch, not the llm connector's settings, which are fine."""
     await _settings(db)
     assert (await spend.cap_check(db, title_id=TITLE, batch=batch)).kind == spend.NO_CAP
 
@@ -201,9 +154,6 @@ async def test_a_batch_that_does_not_read_is_a_plan_refusal_naming_the_batch(db,
 
 
 async def test_the_retry_pre_check_prices_the_batch_the_task_carries(db, packed):
-    """The admin retry's advice is `cap_check`'s answer for the plan the revived task will walk
-    with (decision 444), so a month with room for the stored plan and not for the batch refuses the
-    batch's retry and lets the stored one through - one state, one answer, whichever plan it is."""
     await _settings(db, cap_usd=TINY)
     stored = await _reserved(db)
     await _settings(db, cap_usd=float(2 * stored))
@@ -216,13 +166,7 @@ async def test_the_retry_pre_check_prices_the_batch_the_task_carries(db, packed)
     assert "2 pass(es) x 2 provider(s)" in refused, refused
 
 
-# --- the plan through the driver ----------------------------------------------------------------
-
-
 async def test_the_gate_reserves_for_the_plan_the_task_carries(db, packed, double):
-    """The driver's gate is `spend.cap_check` asked with the task's plan: a month with room for no
-    reservation parks the title naming the batch's own arithmetic, two passes of two providers, and
-    not the stored settings' one by one. Nothing is asked of any provider."""
     await _settings(db, cap_usd=TINY)
     await _carry(db, BATCH)
 
@@ -241,12 +185,7 @@ async def test_the_gate_reserves_for_the_plan_the_task_carries(db, packed, doubl
 async def test_stage_six_runs_the_plan_the_task_carries_and_the_gate_let_it_through(
     db, packed, double
 ):
-    """Decision 442's other end: the stage that bills runs the batch's plan. The stored settings are
-    Gemini at one pass, which the double's default answer - one invented term, then compliance on
-    the named retry - bills in two calls; the batch is Gemini and Anthropic at two passes each, four
-    runs, and the double received eight, four per provider, every run's retry among them. The cap
-    admits both attempts of all four runs, so the gate that let the title through asked about the
-    same plan the stage then ran - the test above is that gate refusing when it does not."""
+    """The double bills one invented term then compliance on the retry: two calls per run."""
     await _settings(db, cap_usd=100)
     await _carry(db, BATCH)
 
@@ -265,14 +204,7 @@ async def test_stage_six_runs_the_plan_the_task_carries_and_the_gate_let_it_thro
 async def test_abandoning_a_launched_title_takes_it_out_of_its_batch_so_a_relaunch_can_replan_it(
     db, packed, double
 ):
-    """Decision 448, amending 443. A launched title the gate parks over the cap - two launches in one
-    month each fit the room alone, and the second one's titles are the ones parked - kept its row
-    `running` and its batch plan through every retry, so the household could neither relaunch it on
-    a cheaper plan nor retry it below the paid stage without pricing the dear one again, and the month
-    rolling over billed the plan it could not revise. Abandoning its job is the lever: the row is
-    queued again with no batch, no task of the title carries the plan or the batch any more, and a
-    relaunch at one provider and one pass walks the paid stage on that plan and bills only it.
-    [M5.6 review cycle 1, M56-MONEY-01]"""
+    """Decision 448: abandoning the job takes the title out of its batch, so a relaunch can replan it."""
     await _settings(db, cap_usd=TINY)
     stored, dear = await _reserved(db), await _reserved(db, batch=BATCH)
     cheaper = await flywheel_batch.quote(db, titles=1, providers=["gemini"], passes=1)

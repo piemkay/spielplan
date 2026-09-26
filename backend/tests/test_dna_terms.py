@@ -1,11 +1,6 @@
-"""A vocabulary term by its name and never by its id. Spec v2.1 §6.8; decision 486.
+"""A vocabulary term by its label, never its id (§6.8).
 
-§6.8 wants every why "in vocabulary terms", and `era.wwii` is the key while "World War II" is the
-term. `db/dna_terms.label_of` is the one fallback for a row with no label and `labels_for` the one
-read every payload builder takes a label from. Every id below is dotted and every label differs
-from its leaf, because the fixture vocabulary `test_home.py` builds on is dotless and an id printed
-raw there reads as plain words - no test built on it could see the defect this file is for.
-"""
+Every id here is dotted and every label differs from its leaf, so a raw id cannot pass for words."""
 
 from __future__ import annotations
 
@@ -41,9 +36,6 @@ async def _vocabulary(db, version: str, imported_at: datetime, terms) -> None:
 
 
 async def test_labels_for_reads_the_active_vocabulary_and_never_answers_an_id(db):
-    """Scoped to the newest vocabulary (the same `ACTIVE_VERSION` every DNA read takes), an entry
-    for every term asked about, and no answer that is an id: a NULL label and a term the vocabulary
-    does not carry both come back as the leaf in plain words, with no gloss for the unknown one."""
     await _vocabulary(db, "v1", datetime(2026, 1, 1, tzinfo=UTC), [
         ("era.wwii", "era", "the war (superseded)", "old gloss"),
     ])

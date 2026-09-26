@@ -1,12 +1,5 @@
-"""End-to-end import against a real Postgres 16. Spec v2.1 §4.1, §10, §12 (M0 exit criterion).
-
-These are the tests the unit suite could not be: `copy_records_to_table` resolves its encoders
-from the *destination column types*, so type mismatches only exist against a real server. Two
-shipped bugs lived exactly here — SQLite integer booleans into `boolean` columns, and json
-columns arriving as text and being iterated character by character.
-
-Skipped without TEST_DATABASE_URL; see tests/conftest.py.
-"""
+"""End-to-end import against a real Postgres 16 (§4.1, §10). `copy_records_to_table` picks encoders from the
+destination column types, so type mismatches only exist against a real server. Needs TEST_DATABASE_URL."""
 
 from __future__ import annotations
 
@@ -37,13 +30,7 @@ def bundle(tmp_path) -> bundle_import.Bundle:
 
 
 def _models_only(root: Path) -> Path:
-    """decision 162's re-import shape: the seed bundle minus its two content databases.
-
-    `fx.reinventory` because BUNDLE.json is the corpus's inventory of the tree and M4.14 reads
-    the 42 `{bytes, sha256}` entries in it before the first row is written. A bundle made
-    models-only by deleting two files it still lists is a bundle whose own manifest no longer
-    describes it — a real refusal, and not the one any of these tests is about.
-    """
+    """Re-inventoried, or deleting two listed files would be a different refusal from the one under test."""
     (root / "content.sqlite").unlink()
     (root / "reviews.sqlite").unlink()
     fx.reinventory(root)
@@ -54,9 +41,6 @@ async def _import(db, bundle, artifacts_root: Path):
     report = await bundle_import.import_bundle(db, bundle, artifacts_root)
     assert report.ok, report.render()
     return report
-
-
-# --- M0 exit criterion: "bundle imports clean" ----------------------------------------
 
 
 async def test_bundle_imports_clean(db, bundle, tmp_path):
@@ -70,8 +54,7 @@ async def test_bundle_imports_clean(db, bundle, tmp_path):
 
 
 async def test_sqlite_integer_booleans_reach_postgres_boolean_columns(db, bundle, tmp_path):
-    """SQLite has no boolean type. Without an explicit cast asyncpg's binary COPY raises
-    `TypeError: a boolean is required` on `title.is_owned` — the first, required mapping."""
+    """SQLite has no boolean type; binary COPY raises on `title.is_owned` without a cast."""
     await _import(db, bundle, tmp_path / "artifacts")
     owned = await db.fetchval("SELECT count(*) FROM title WHERE is_owned")
     assert owned == len(fx.TITLES)
@@ -86,26 +69,20 @@ async def test_the_bundle_becomes_the_one_active_row(db, bundle, tmp_path):
 
 
 async def test_the_report_is_stored_as_json_not_as_a_string(db, bundle, tmp_path):
-    """The json codec bug in miniature: a jsonb column read back as text is a string that
-    every consumer will iterate one character at a time."""
+    """A jsonb column read back as text is a string every consumer iterates by character."""
     await _import(db, bundle, tmp_path / "artifacts")
     report = await db.fetchval("SELECT report FROM artifact_bundle WHERE version = 'test-v1'")
     assert isinstance(report, dict)
     assert report["ok"] is True
     manifest = await db.fetchval("SELECT manifest FROM artifact_bundle WHERE version = 'test-v1'")
     assert isinstance(manifest, dict)
-    # `artifact_bundle.manifest` is BUNDLE.json, the corpus's own identity record — not
-    # `artifacts/manifest.json`, which §4.3 defines as the fitted cut-points and which this row
-    # held until M4.5. `vocabulary_version` was asserted here and no bundle has ever written it;
-    # the version travels in its own column, off the `dna_vocab/<version>/` directory.
+    # `artifact_bundle.manifest` is BUNDLE.json, the corpus's
+    # identity record, not `artifacts/manifest.json`.
     assert {"bundle_version", "tables", "files"} <= set(manifest)
     assert manifest["bundle_version"] == "test-v1"
     assert await db.fetchval(
         "SELECT vocabulary_version FROM artifact_bundle WHERE version = 'test-v1'"
     ) == "v1"
-
-
-# --- §4.1 rules, verified against the real schema --------------------------------------
 
 
 async def test_rule1_both_tiers_land_separately_and_shared_pairs_survive(db, bundle, tmp_path):
@@ -163,19 +140,8 @@ async def test_rule3_platform_ratings_land_in_the_display_schema_only(db, bundle
     assert in_public == 0
 
 
-# --- §10: a re-import is a planned event, not a collision ------------------------------
-
-
 async def test_reimporting_the_same_bundle_is_refused_while_it_is_active(db, bundle, tmp_path):
-    """§10: a bundle already flipped active is not re-staged over itself.
-
-    Reaching that rule now takes a second version. Decision 162 gave the *seed's* version string
-    a more specific refusal — a models-only bundle exported under it would rewrite the one
-    `artifact_bundle` row recording that content was ever seeded — and `refuse_on_install_state`
-    runs before anything is staged, so at that version the operator gets that line instead. Both
-    are asserted, in the order they fire: without the first the version rule looks reachable at
-    the seed's version when it is not, and without the second it is not exercised at all.
-    """
+    """At the seed's version decision 162's refusal fires first; the version rule needs a second version."""
     await _import(db, bundle, tmp_path / "artifacts")
     _models_only(bundle.root)
 
@@ -188,8 +154,7 @@ async def test_reimporting_the_same_bundle_is_refused_while_it_is_active(db, bun
         "under its own version string" in f.message for f in at_the_seeds_version.failures
     )
 
-    # And the version rule itself, at the only version that can still reach it: a model bundle
-    # of this install's own, imported once and then offered again while it is the active row.
+    # The version rule at the only version that can reach it: an active model bundle offered again.
     fx.make_bundle(tmp_path / "bundle2", version="test-v2")
     _models_only(tmp_path / "bundle2")
     await _import(db, bundle_import.Bundle.open(tmp_path / "bundle2"), tmp_path / "artifacts")
@@ -202,16 +167,7 @@ async def test_reimporting_the_same_bundle_is_refused_while_it_is_active(db, bun
 
 
 async def test_a_second_bundle_version_swaps_the_models_over_the_seeded_content(db, bundle, tmp_path):
-    """§10's re-import at a second version, in decision 162's shape: models re-ship, content
-    does not.
-
-    This asserted "the content tables are replaced and `title` is upserted — no primary-key
-    collision" while the second bundle carried a second copy of the corpus's spine. Under
-    decision 162 that import is refused outright, and the collision it was defending against is
-    gone by construction rather than survived: no content loader runs, so no row is rewritten.
-    What is left to assert is that the seeded spine comes through the swap *untouched* — a
-    models-only import that quietly rewrote a title would be the same defect one level down.
-    """
+    """Decision 162: models re-ship, content does not; the seeded spine must come through untouched."""
     await _import(db, bundle, tmp_path / "artifacts")
     spine = [dict(r) for r in await db.fetch("SELECT id, name, kind FROM title ORDER BY id")]
 
@@ -220,8 +176,7 @@ async def test_a_second_bundle_version_swaps_the_models_over_the_seeded_content(
     second = bundle_import.Bundle.open(tmp_path / "bundle2")
     report = await _import(db, second, tmp_path / "artifacts")
 
-    # Not `== 0`: a count of zero is a claim about what the bundle shipped, and this bundle
-    # ships no spine at all. The report says so in words instead (see the counts test below).
+    # Not `== 0`: this bundle ships no spine, which the report says in words.
     assert "loaded:title" not in report.table_counts
     assert await db.fetchval("SELECT count(*) FROM title") == len(fx.TITLES)
     assert [
@@ -238,14 +193,7 @@ async def test_a_second_bundle_version_swaps_the_models_over_the_seeded_content(
 
 
 async def test_ledger_observations_survive_a_reimport(db, bundle, tmp_path):
-    """§10: 'Ledger observations always survive re-import.'
-
-    `verdict` references `title(id) ON DELETE CASCADE`, so a re-import that DELETEd titles would
-    take the user's entire rating history with it. Under decision 162 a re-import carries no
-    content at all, so that particular path is closed by construction and what this now guards
-    is the other cascade on the same claim: 0015 makes `user_vector.bundle_version` SET NULL
-    rather than CASCADE, and a re-import that pruned a bundle row used to take the fold-in with
-    it."""
+    """§10: observations survive re-import; `user_vector.bundle_version` is SET NULL, not CASCADE."""
     await _import(db, bundle, tmp_path / "artifacts")
     user_id = await db.fetchval(
         "INSERT INTO app_user (name, role) VALUES ('patrick', 'member') RETURNING id"
@@ -257,17 +205,13 @@ async def test_ledger_observations_survive_a_reimport(db, bundle, tmp_path):
         "INSERT INTO user_title (user_id, title_id, state) VALUES ($1, 1, 'seen')", user_id
     )
 
-    # decision 162's re-import shape: the corpus re-ships models, never content. The claim is
-    # unchanged — the observations reference `title.id`, and a re-import must not disturb them.
+    # Decision 162's re-import shape: the corpus re-ships models, never content.
     fx.make_bundle(tmp_path / "bundle2", version="test-v2")
     _models_only(tmp_path / "bundle2")
     await _import(db, bundle_import.Bundle.open(tmp_path / "bundle2"), tmp_path / "artifacts")
 
     assert await db.fetchval("SELECT count(*) FROM verdict") == 1
     assert await db.fetchval("SELECT count(*) FROM user_title") == 1
-
-
-# --- M0 exit criterion: "Library list and title card render imported titles" ------------
 
 
 async def test_library_lists_titles_partitioned_by_kind(db, bundle, tmp_path):
@@ -292,8 +236,7 @@ async def test_both_kinds_selected_returns_everything(db, bundle, tmp_path):
 
 
 async def test_selecting_no_kind_is_an_error_not_everything(db, bundle, tmp_path):
-    """An empty selection silently meaning 'everything' is the unpartitioned query §4.1 rule 5
-    exists to prevent."""
+    """An empty selection meaning "everything" is the unpartitioned query rule 5 prevents."""
     await _import(db, bundle, tmp_path / "artifacts")
     with pytest.raises(ValueError, match="at least one kind"):
         await library.list_titles(db, kinds=[])
@@ -307,8 +250,7 @@ async def test_hidden_counts_report_the_unselected_kind(db, bundle, tmp_path):
 
 
 async def test_a_person_filter_keeps_the_kind_partition(db, bundle, tmp_path):
-    """Owner decision: the person filter does NOT suspend the partition — selecting both kinds
-    is how you see a whole filmography."""
+    """The person filter does NOT suspend the partition; both kinds is how a filmography is seen."""
     await _import(db, bundle, tmp_path / "artifacts")
     both, total = await library.list_titles(db, kinds=["movie", "series"], person_id=1)
     assert total >= 1
@@ -329,14 +271,11 @@ async def test_library_search_matches_titles_and_aliases(db, bundle, tmp_path):
     await _import(db, bundle, tmp_path / "artifacts")
     hits, total = await library.list_titles(db, kinds=["movie"], q="chungking")
     assert total >= 1
-    # id 5 carries "Chungking Express" only as an ALIAS; its name is the CJK original.
+    # Id 5 carries "Chungking Express" only as an ALIAS; its name is the CJK original.
     assert 5 in {t["id"] for t in hits}
 
 
-# `role_class = 'cast'`, which the corpus writes on every credit (NULL on none of the seeded
-# install's 281,655 rows). The insert used to leave it NULL, and since the read folds per (person,
-# class) a classless row keys on its job and stands apart from the fixture's classed ones - the
-# shape of no real bundle. [C9.3 of the 2026-09-25 user test]
+# `role_class = 'cast'`, as the corpus writes on every credit; a classless row would stand apart.
 _CROSS_DEPARTMENT = (
     "INSERT INTO credit (title_id, person_id, department, job, character, billing_order, source,"
     " role_class) VALUES ($1, $2, $3, 'Actor', $4, $5, $6, 'cast')"
@@ -346,22 +285,11 @@ _CROSS_DEPARTMENT = (
 async def test_a_credit_is_one_row_per_person_and_job_across_department_spellings(
     db, bundle, tmp_path
 ):
-    """§4.1: "credit (dedupe at read time, never at import)" + §6.0's title card.
-
-    TMDB files one job under two department spellings, and the real export carries 7,918
-    (title, person, job) triples spanning more than one of them across 1,216 of 19,071 titles —
-    816 inside the twelve credits the card renders. Grouping the read on the department handed
-    the card two rows that differ in nothing it shows, and Svelte 5's keyed each throws on the
-    duplicate key in the production branch as well as in dev, so with no `+error.svelte` the
-    panel died mid-render: no platform scores, no DNA tiers, no model line.
-    """
+    """One job under two department spellings used to yield
+    duplicate keys that crashed the card's keyed each."""
     await _import(db, bundle, tmp_path / "artifacts")
 
-    # Three rows, not two. The fixture itself now files Al Pacino's one job under both `Acting`
-    # and `Actor` (M4.8, `platform-fixture-carries-the-corpus-awkward-shapes`), so the collision
-    # arrives through the importer the way it arrives from the corpus; this insert stays because
-    # it adds the second SOURCE, its own spelling of the character and a later billing order,
-    # which is what the two assertions below are actually about.
+    # This insert adds a second SOURCE, a different character spelling and a later billing order.
     await db.execute(_CROSS_DEPARTMENT, 1, 4, "Actor", "Lt. Hanna", 6, "omdb")
     assert await db.fetchval(
         "SELECT count(*) FROM credit WHERE title_id = 1 AND person_id = 4"
@@ -370,26 +298,19 @@ async def test_a_credit_is_one_row_per_person_and_job_across_department_spelling
     credits = await library.credits_for(db, 1)
     rows = [c for c in credits if c["person_id"] == 4 and c["job"] == "Actor"]
     assert len(rows) == 1
-    # Both spellings stay visible — §4.1 rule 1 keeps what the sources said — while the single
-    # `department` the card reads resolves to the TMDB canonical one.
+    # Both spellings stay visible, while `department` resolves to TMDB's canonical one.
     assert sorted(rows[0]["departments"]) == ["Acting", "Actor"]
     assert rows[0]["department"] == "Acting"
     assert sorted(rows[0]["sources"]) == ["omdb", "tmdb"]
 
-    # The client key is total: one `person_id:(role_class ?? job)` per row - the expression
-    # `TitleDetail.svelte` keys on since the read folds per class - which is what stops the throw.
+    # The client key is total: one `person_id:(role_class ?? job)` per row, as `TitleDetail.svelte` keys.
     keys = {f"{c['person_id']}:{c['role_class'] or c['job']}" for c in credits}
     assert len(keys) == len(credits)
 
     # The directing-first sort survives losing `c.department` as a grouping column.
     assert credits[0]["job"] == "Director"
 
-    # The character is the lowest billing order's, not the heap's: 2,300 (title, person) pairs
-    # in the corpus carry more than one distinct character across sources, and an unordered
-    # `array_agg(...)[1]` made the value this PAYLOAD carried a function of COPY order. It is
-    # the payload that is under test and not a rendering: §6.0's card list does not name the
-    # character and `TitleDetail.svelte` prints name and job alone, so the field ships and no
-    # surface shows it (decision 197). That is the reason the ordered aggregate stays.
+    # The lowest billing order's character: an unordered `array_agg(...)[1]` depended on COPY order.
     assert rows[0]["character"] == "Vincent Hanna"
     await db.execute("DELETE FROM credit WHERE title_id = 1 AND person_id = 4")
     await db.execute(_CROSS_DEPARTMENT, 1, 4, "Actor", "Lt. Hanna", 6, "omdb")
@@ -406,16 +327,7 @@ _CREDIT = (
 
 
 async def test_a_crew_member_is_one_row_per_role_across_job_spellings(db, bundle, tmp_path):
-    """§4.1's read-time dedupe, keyed on what the credit IS rather than how a source spelled it.
-
-    Heat on the seeded install: TMDB's 'Original Music Composer' and Wikidata's 'Composer' put
-    Elliot Goldenthal on the card twice, and TMDB's 'Writer' beside Wikidata's 'Screenplay' made
-    Michael Mann his own film's writer twice over. Both carry the corpus's `role_class`, so the
-    card gets one row per (person, class), TMDB's label on it, every spelling in `jobs`, and every
-    source that agreed. Mann's directing credit is a different class and stays its own row, first.
-    The five `crew` composer credits the corpus corrections ledger wrote are classed by
-    `derive/ids.class_of` and fold with the rest. [C9.3 of the 2026-09-25 user test]
-    """
+    """One row per (person, class): TMDB's label on it, every spelling in `jobs`, every agreeing source."""
     await _import(db, bundle, tmp_path / "artifacts")
     await db.execute("INSERT INTO person (id, name) VALUES (70, 'Elliot Goldenthal')")
     await db.executemany(_CREDIT, [
@@ -445,14 +357,7 @@ async def test_a_crew_member_is_one_row_per_role_across_job_spellings(db, bundle
 
 
 async def test_one_name_with_ids_that_cannot_disagree_is_one_credit_row(db, bundle, tmp_path):
-    """The corpus mints a person per id it saw, so one human arrives as an imdb-only row and a
-    tmdb-only row with one name: John Williams twice on Schindler's List, 1,685 such groups across
-    the seeded install's bundle titles. Within one title and one class, people whose `loose_name`
-    agrees are one row when their ids cannot disagree, `person_ids` names them all, and the one
-    carrying the most ids leads. Two people of one name with two different imdb ids are two people
-    and stay two rows, and a name in a script `loose_name` does not fold never merges on an empty
-    key. [C9.4 of the 2026-09-25 user test]
-    """
+    """Same `loose_name`, same class, ids that cannot disagree: one row naming all `person_ids`."""
     await _import(db, bundle, tmp_path / "artifacts")
     await db.executemany(
         "INSERT INTO person (id, name, imdb_id, tmdb_id) VALUES ($1, $2, $3, $4)",
@@ -490,28 +395,20 @@ async def test_title_card_payload_is_complete(db, bundle, tmp_path):
     assert title["name"] == "Heat"
 
     credits = await library.credits_for(db, 1)
-    # §4.1: "credit (dedupe at read time, never at import)" — the fixture stores the director
-    # twice, from tmdb and omdb, and the card must show one row citing both.
+    # The fixture stores the director twice (tmdb, omdb); the card shows one row citing both.
     directors = [c for c in credits if c["job"] == "Director"]
     assert len(directors) == 1
     assert sorted(directors[0]["sources"]) == ["omdb", "tmdb"]
-    # Four stored rows behind three rendered ones: the director twice (tmdb and omdb) and Al
-    # Pacino twice, under the two department spellings TMDB files leads under. The second is
-    # M4.8's fixture row — "dedupe at read time, never at import" is only testable against a
-    # bundle that carries the duplicate.
+    # Four stored rows behind three rendered: dedupe at read time, never at import.
     assert await db.fetchval("SELECT count(*) FROM credit WHERE title_id = 1") == 4
 
-    # `version` is required since M4.9: the card resolves the active vocabulary once and hands
-    # it down, so two imported bundles cannot put two vocabularies on one card (finding 10).
+    # `version` is required: two imported bundles cannot put two vocabularies on one card.
     dna = await library.dna_for(db, 1, version="v1")
-    # The corpus's term ids are `<facet>.<term>`, dotted and facet-prefixed — `obsession` and
-    # `morally-grey` were this repo's own spelling, and the feature contract's `dna:` columns
-    # are keyed by the shipped id.
+    # The corpus's term ids are `<facet>.<term>`, as the contract's `dna:` columns key them.
     assert {t["term"] for t in dna["extracted"]} == {"themes.obsession", "characters.morally_grey"}
     assert {t["term"] for t in dna["projected"]} == {"themes.obsession", "era.period"}
 
-    # The json-codec bug: evidence must be a list of dicts, not a JSON string that the UI
-    # would iterate one character at a time.
+    # Evidence must be a list of dicts, not a JSON string iterated by character.
     obsession = next(t for t in dna["extracted"] if t["term"] == "themes.obsession")
     assert isinstance(obsession["evidence"], list)
     assert obsession["evidence"][0]["quote"] == "the work eats the man and he lets it"
@@ -537,8 +434,7 @@ async def test_seen_filter_treats_a_missing_row_as_unseen(db, bundle, tmp_path):
 
 
 async def test_combined_filters_number_their_parameters_correctly(db, bundle, tmp_path):
-    """`list_titles` builds SQL by hand with a $N counter; combining every filter at once is
-    the case where an off-by-one in that counter shows up."""
+    """`list_titles` counts `$N` by hand; every filter at once is where an off-by-one shows."""
     await _import(db, bundle, tmp_path / "artifacts")
     user_id = await db.fetchval(
         "INSERT INTO app_user (name, role) VALUES ('mia', 'member') RETURNING id"
@@ -558,9 +454,6 @@ async def test_combined_filters_number_their_parameters_correctly(db, bundle, tm
     )
     assert total == 1
     assert rows[0]["name"] == "Heat"
-
-
-# --- §6.0: the catalog's filters, each able to fail --------------------------------------
 
 
 async def test_genre_and_decade_filters_actually_narrow(db, bundle, tmp_path):
@@ -594,9 +487,7 @@ async def test_pagination_returns_each_title_once(db, bundle, tmp_path):
 
 
 async def test_the_person_filter_hides_the_other_kind_until_both_are_selected(db, bundle, tmp_path):
-    """Owner decision 18: the person filter does NOT suspend the kind partition — selecting
-    both kinds is how a whole filmography is seen. The fixture credits Ada Cross-Kind on a
-    film and a series precisely so this can fail."""
+    """Ada Cross-Kind is credited on a film and a series so this can fail."""
     await _import(db, bundle, tmp_path / "artifacts")
     ada = await db.fetchval("SELECT id FROM person WHERE name = 'Ada Cross-Kind'")
 
@@ -616,12 +507,8 @@ async def test_hidden_counts_answer_why_the_list_is_short(db, bundle, tmp_path):
     assert await library.count_by_kind(db, exclude=["series"]) == {"movie": 6}
 
 
-# --- §10: the report is the diff material -----------------------------------------------
-
-
 async def test_the_report_counts_every_loaded_table(db, bundle, tmp_path):
-    """§10: "a migration report (counts per table, validation failures, vocabulary version)".
-    Those counts are what a re-import is diffed against."""
+    """§10's per-table counts are what a re-import is diffed against."""
     report = await _import(db, bundle, tmp_path / "artifacts")
     counts = report.table_counts
 
@@ -636,8 +523,7 @@ async def test_the_report_counts_every_loaded_table(db, bundle, tmp_path):
 
 
 async def test_an_unmapped_bundle_column_is_reported_not_dropped_silently(db, bundle, tmp_path):
-    """§4.1's shape note: the corpus export is the authority on its own column names, and this
-    app must survive it gaining one — visibly."""
+    """The corpus owns its column names; a new one must be visible, not dropped."""
     import sqlite3
 
     con = sqlite3.connect(bundle.content_db)
@@ -651,17 +537,7 @@ async def test_an_unmapped_bundle_column_is_reported_not_dropped_silently(db, bu
 
 
 async def test_a_models_only_reimport_leaves_the_seed_counts_standing_as_the_diff(db, bundle, tmp_path):
-    """§10: "a planned admin event with a migration report — never a silent sync". The
-    comparison only means something if the counts are comparable, and under decision 162 the two
-    sides of it are no longer two imports of the same tables.
-
-    The re-import ships no content, so it states no content counts — and the seed's counts are
-    what the install is still described by. That makes two things load-bearing: the seed's
-    report has to survive the swap (it is one half of the diff), and it has to remain *true*
-    after it. A models-only import that reported `loaded:title: 0`, or one that left the spine
-    at a different size than the seed counted, would both make the two reports read as a
-    library that emptied itself.
-    """
+    """The seed's report must survive the swap and stay true of the spine afterwards."""
     first = await _import(db, bundle, tmp_path / "artifacts")
     fx.make_bundle(tmp_path / "bundle2", version="test-v2")
     _models_only(tmp_path / "bundle2")
@@ -681,8 +557,7 @@ async def test_a_models_only_reimport_leaves_the_seed_counts_standing_as_the_dif
     ), "the report does not say why it counts no content"
     assert first.vocabulary_version == second.vocabulary_version == "v1"
 
-    # Both halves are readable side by side afterwards: §10's diff is between stored reports,
-    # and the flip must not overwrite the one the new bundle is being diffed against.
+    # The flip must not overwrite the report the new bundle is diffed against.
     stored = {
         r["version"]: r["report"]
         for r in await db.fetch("SELECT version, report FROM artifact_bundle")
@@ -692,37 +567,9 @@ async def test_a_models_only_reimport_leaves_the_seed_counts_standing_as_the_dif
 
 
 async def test_the_import_recomputes_the_rebuild_set_before_it_flips(db, bundle, tmp_path):
-    """§10's sequence: "validate -> stage -> recompute the rebuild set against the **staged**
-    bundle -> transactionally flip".
-
-    M0 shipped the *report* of the rebuild set with nothing behind it, which was correct then —
-    none of the four things existed before M2. What that leaves behind is an import that reads
-    as if it rebuilt and did not, so this asserts the work actually happened: a user vector and
-    a ledger state exist afterwards, both stamped with the bundle that was staged.
-
-    Before the flip matters as much as the recompute. Run after it, a failing rebuild leaves a
-    new basis active with every fitted number still expressed in the old one — §10's "garbage
-    against a new one", made active and served.
-
-    And what data-01 COST at this seam, which is what the last two statements below add. Step 3
-    built its coordinates with no version threaded, so `placement_embeddings` took its
-    `$2 IS NULL` branch and joined `b.state = 'active'` — the OUTGOING bundle, because the flip is
-    still ahead — and `_write_fit` stamped the outgoing version from `active_bundle_version`.
-    Everything this test already checked was true of that fit: rows existed, stamped with the
-    staged version for the fold-in, and the report named four steps. Measured
-    ||v_step3 - v_correct|| = 0.397 against ||v_correct|| = 0.782, and after the flip `load_cache`
-    refused the fit the rebuild had just made, so the first Rate/Rank tap per (user, kind)
-    refitted on the request path against the still-old in-process Backbone and stamped THAT as
-    the new version.
-
-    The stamp and the cache are the observable consequences, and they are what this test asserts.
-    The basis ITSELF is asserted next door, by
-    `test_model_basis.py::test_the_rebuild_fits_against_the_staged_bundle_and_stamps_the_staged_version`,
-    because the version reaches the coordinates and the stamp through two independent arguments
-    and a fit can carry the right stamp over the wrong basis. Saying so here rather than leaving
-    this docstring claiming a basis assertion its body does not make.
-    [M4.13, data-01; M4.13 cycle 1, m413-rev1-cov-01]
-    """
+    """§10: recompute the rebuild set against the STAGED bundle, before the
+    flip. Step 3 must stamp the staged version, or the cache refuses the
+    fit after the flip; the basis itself is `test_model_basis.py`'s."""
     from spielplan.ledger import observations, refit
     from spielplan.ledger.hyperparams import load as load_hp
     from spielplan.models.artifacts import ArtifactStore
@@ -736,8 +583,7 @@ async def test_the_import_recomputes_the_rebuild_set_before_it_flips(db, bundle,
     for title_id, value in ((1, 2), (2, 1), (3, 0), (4, 2), (5, 1)):
         await observations.record_verdict(db, user_id=patrick, title_id=title_id, value=value)
 
-    # A models-only re-import at a second version, which is the case §10 is actually about
-    # once decision 162 has settled that content arrives once and models re-ship.
+    # A models-only re-import at a second version, the case §10 is about under decision 162.
     fx.make_bundle(tmp_path / "b2", version="test-v2")
     _models_only(tmp_path / "b2")
     second = bundle_import.Bundle.open(tmp_path / "b2")
@@ -755,8 +601,7 @@ async def test_the_import_recomputes_the_rebuild_set_before_it_flips(db, bundle,
     ) > 0, "step 1 wrote no fold-in vector against the staged basis"
     assert await db.fetchval("SELECT count(*) FROM ledger_state WHERE user_id = $1", patrick) > 0
 
-    # Step 3's stamp names the bundle its coordinates came from, and the cache therefore ACCEPTS
-    # the fit across the flip rather than refusing it and queueing a refit for every member.
+    # The stamp names the staged bundle, so the cache ACCEPTS the fit across the flip.
     stamped = await db.fetchval(
         "SELECT bundle_version FROM ledger_fit WHERE user_id = $1 AND kind = 'movie'", patrick
     )
@@ -768,26 +613,15 @@ async def test_the_import_recomputes_the_rebuild_set_before_it_flips(db, bundle,
 
 
 async def test_a_freshly_activated_bundle_serves_its_cold_titles_immediately(db, bundle, tmp_path):
-    """§10's rebuild set exists so that the moment a bundle goes active, every fitted number is
-    expressed in its basis. That has to include the coordinates the other three steps read.
-
-    §10 lists the fold-in first and the Cold Tower re-placement fourth, and the first
-    implementation executed them in that order — so `title_prior` and every `user_score` row
-    were materialised against a `title_placement` table the new bundle had not been written into
-    yet. The import returned ok, the flip happened, and the library served from that instant had
-    its coordinate-less titles missing from every ranked list and its low-support titles shrunk
-    toward μ instead of toward b̂ — until the next nightly sweep, hours later.
-
-    The listing order is §10's prose; the execution order is what the steps actually need.
-    """
+    """The Cold Tower re-placement runs before the priors and
+    scores that read it, whatever §10's listing order."""
     patrick = await db.fetchval(
         "INSERT INTO app_user (name, role) VALUES ('Patrick', 'admin') RETURNING id"
     )
     report = await _import(db, bundle, tmp_path / "artifacts")
     assert report.ok, report.render()
 
-    # Title 8 has no Backbone row at all (the fixture makes §5.1's cold branch reachable), so it
-    # exists only if step 4 ran before the step that materialised the priors.
+    # Title 8 has no Backbone row, so it exists only if step 4 ran before the priors.
     priced = await db.fetchrow(
         "SELECT b, e_source FROM title_prior WHERE title_id = 8 AND bundle_version = 'test-v1'"
     )
@@ -798,39 +632,22 @@ async def test_a_freshly_activated_bundle_serves_its_cold_titles_immediately(db,
     )
     assert priced["b"] is not None
 
-    # And the report still reads in §10's order, so the import screen matches the spec's prose.
+    # The report still reads in §10's order.
     rebuild = [f.message for f in report.findings if f.rule == "rebuild"]
     assert len(rebuild) == 4
     assert "fold-in" in rebuild[0] and "Cold Tower" in rebuild[3]
     assert patrick
 
 
-# --- M4.7: the unpacked tree is scratch space, not a second copy of the bundle -----------------
-
-
 def _tarred(root: Path, target: Path) -> Path:
-    """The shape an operator drops into `/data/import`: one `.tar` holding the bundle directory.
-
-    Every import test above hands `Bundle.open` a directory, which is the one shape that never
-    unpacks — so the tree `_unpack` writes existed in the suite nowhere at all, and neither did
-    the fact that nothing ever removed it.
-    """
+    """A directory never unpacks, so only an archive reaches `_unpack`'s tree."""
     with tarfile.open(target, "w") as tar:
         tar.add(root, arcname=root.name)
     return target
 
 
 async def test_a_committed_import_removes_the_tree_it_unpacked(db, tmp_path):
-    """`_unpack` was the only writer of `.unpacked-<name>/` and there was no cleaner anywhere.
-
-    The unpack is a full second copy of the bundle, `content.sqlite` and `reviews.sqlite`
-    included — 790 MB of a 1042 MB bundle, and the two files the staged
-    `/data/artifacts/<version>/` copy deliberately does not carry. The same bundle offered as
-    `.tar` and as `.tar.zst` is two archives and leaves two trees; the measured total was 3.6 GB
-    for one bundle. `docker-compose.yml` binds `./data/import` from the host, so that is the
-    household's own disk, and `POST /validate` — documented as writing nothing — is what spends
-    it. [M4.7 dd10]
-    """
+    """The unpacked tree is a 790 MB second copy on the household's disk; a committed import removes it."""
     fx.make_bundle(tmp_path / "bundle")
     archive = _tarred(tmp_path / "bundle", tmp_path / "spielplan-bundle.tar")
     bundle = bundle_import.Bundle.open(archive)
@@ -844,19 +661,13 @@ async def test_a_committed_import_removes_the_tree_it_unpacked(db, tmp_path):
     assert [f.message for f in report.findings if f.rule == "cleanup"] == [
         f"removed the unpacked bundle tree at {unpacked}"
     ]
-    # What survives is what §10 says survives: the staged artifacts, and the archive itself.
+    # What survives is what §10 says: the staged artifacts and the archive itself.
     assert (tmp_path / "artifacts" / "test-v1").is_dir()
     assert archive.is_file()
 
 
 async def test_a_failed_import_keeps_its_unpacked_tree_for_the_retry(db, tmp_path):
-    """The other half, and the reason the cleanup is not in a `finally`.
-
-    A models-only bundle into an install with no content is refused before it writes anything,
-    and a refusal is exactly when the operator tries again — with the same file, usually after
-    doing the thing the report told them to. Making them re-extract a gigabyte to do it would be
-    a punishment for a failure that is not theirs. [M4.7 dd10]
-    """
+    """A refusal is when the operator retries, so the tree is kept rather than re-extracted."""
     fx.make_bundle(tmp_path / "models", version="test-v2")
     _models_only(tmp_path / "models")
     archive = _tarred(tmp_path / "models", tmp_path / "models-only.tar")
@@ -874,24 +685,7 @@ async def test_a_failed_import_keeps_its_unpacked_tree_for_the_retry(db, tmp_pat
 async def test_a_cleanup_that_could_not_remove_the_tree_says_so_rather_than_claiming_it_did(
     db, tmp_path, monkeypatch
 ):
-    """The note followed the call, not the outcome.
-
-    `_clean_unpacked` removes the tree with `ignore_errors=True` — correctly, because a committed
-    import must not be failed by its own housekeeping — and then added the "removed" note
-    unconditionally. `ignore_errors` swallows EACCES, EBUSY, ENOTEMPTY and "cannot call rmtree on
-    a symbolic link" alike, so every one of those was reported to the household as a success.
-    The install that meets it is this milestone's own: a `.unpacked-*` tree written by the
-    previous root container, which the uid-1000 image can read and reuse but cannot unlink out of
-    a root-owned 0755 directory. The Data tab then says 790 MB were freed while they are still on
-    the host disk — and dd10 exists precisely to report that fact.
-
-    `rmtree` is replaced rather than a real EACCES provoked: POSIX chmod does not stop root and
-    Windows needs an ACL, so a genuine failure is not portable, and a no-op is exactly what
-    `ignore_errors=True` degenerates to when the unlink fails. The patch is on the module
-    attribute, so it covers `import_bundle`'s other `rmtree` too — the one that clears a staged
-    `/data/artifacts/<version>` before re-copying it — which is not reached here because this
-    version has never been staged into `tmp_path`. [M4.7 cycle 2 finding 12]
-    """
+    """`rmtree(ignore_errors=True)` swallows EACCES; the note must follow the outcome, not the call."""
     fx.make_bundle(tmp_path / "bundle")
     archive = _tarred(tmp_path / "bundle", tmp_path / "spielplan-bundle.tar")
     bundle = bundle_import.Bundle.open(archive)
@@ -910,26 +704,7 @@ async def test_a_cleanup_that_could_not_remove_the_tree_says_so_rather_than_clai
 async def test_the_one_exit_that_returns_no_report_still_says_what_it_did_to_the_disk(
     db, tmp_path, monkeypatch, caplog
 ):
-    """`import_bundle`'s `except BaseException` arm re-raises, so its report is never read.
-
-    That arm is right to: "what happened is the caller's to report, and this arm owes only the
-    disk." But it calls `_drop_orphan_staging`, which writes its conclusion into `report` - and on
-    this exit `report` dies with the frame. `worker._bundle_import`'s crash arm builds a FRESH
-    `ImportReport` and `_reap_abandoned_import` builds another, so on an abandonment at the job's
-    300 s budget every line that function wrote went nowhere. The line that matters is the one
-    cycle 3 added: `shutil.rmtree(..., ignore_errors=True)` swallows EACCES, EBUSY and ENOTEMPTY
-    alike, so a staged `/data/artifacts/<version>/` can survive with no `artifact_bundle` row
-    naming it - and the only thing the operator is told is the reaper's generic "no process
-    reported the outcome of this import", which says nothing about a directory the next import of
-    that version will meet and did not write.
-
-    `KeyboardInterrupt` rather than a real cancellation, because it is what this arm is for: a
-    `CancelledError` is not an `Exception`, which is the whole reason the arm is `BaseException`,
-    and a BaseException raised at a known point is the same frame without a race. `rmtree` is
-    replaced for the reason the test above gives - a genuine EACCES is not portable - and a no-op
-    is exactly what `ignore_errors=True` degenerates to when the unlink fails.
-    [M4.14 cycle 4, M414-C4-REF-06]
-    """
+    """The `BaseException` arm re-raises, so its disk conclusion must reach a report that survives."""
     fx.make_bundle(tmp_path / "bundle")
     bundle = bundle_import.Bundle.open(tmp_path / "bundle")
     artifacts_root = tmp_path / "artifacts"
@@ -955,25 +730,11 @@ async def test_the_one_exit_that_returns_no_report_still_says_what_it_did_to_the
     assert all(bundle.version in m for m in logged), logged
 
 
-# --- M4.9: the rows the real export ships ------------------------------------------------------
-#
-# Four of these need a shape the committed fixture does not carry, and `make_bundle.py` is M4.8's
-# file rather than this milestone's. So each helper below writes the corpus's own shape into the
-# bundle's sqlite before the import, exactly as `test_load_mapping.py::_add_duplicate_per_source_rows`
-# already does for 0015's three tables — the DDL comes from `fixtures/real_bundle_shapes.json`,
-# which is the committed manifest of a real bundle. Each helper names the shape `make_bundle.py`
-# would have to gain for it to become unnecessary.
+# Each helper writes a corpus shape the committed fixture lacks, from `real_bundle_shapes.json`.
 
 
 def _add_company_rows(root: Path) -> None:
-    """`title_company` as the corpus ships it: keyed per source, so one company credited by two
-    sources on one title is two rows.
-
-    The committed fixture has no `title_company` table at all — the loader named the whole table
-    in `SKIPPED_TABLES` until M4.9, so there was nothing for a fixture to feed. `country` is
-    shipped and deliberately unmapped (the mapping says why), and is written here so the
-    unmapped-column report line is exercised rather than assumed.
-    """
+    """`title_company` keyed per source; `country` is shipped and deliberately unmapped."""
     db = sqlite3.connect(root / "content.sqlite")
     with db:
         db.execute(
@@ -985,8 +746,7 @@ def _add_company_rows(root: Path) -> None:
             "INSERT INTO title_company (title_id, source, company, role, country)"
             " VALUES (?,?,?,?,?)",
             [
-                # One company, one role, one title, two sources: 8,594 groups of this shape in
-                # the shipped bundle, every one a collision under the app's pre-0018 key.
+                # One company, one role, one title, two sources: a collision under the old key.
                 (1, "tmdb", "Warner Bros.", "production", "US"),
                 (1, "omdb", "Warner Bros.", "production", "US"),
                 (1, "tmdb", "Regency Enterprises", "production", "US"),
@@ -998,23 +758,7 @@ def _add_company_rows(root: Path) -> None:
 
 
 async def test_title_company_lands_per_source_and_is_not_reported_skipped(db, tmp_path):
-    """Decision 193 and 0018 section 3: the fourth per-source table, four days late.
-
-    `0003_content.sql:120-125` keyed the table (title_id, company, role), one component coarser
-    than the corpus, so `load.py` named it in `SKIPPED_TABLES` and none of its 47,607 shipped
-    rows landed: 8,594 duplicate groups under the app's key, 11,654 rows discarded (decision
-    195). §4.1's "tables mirror the corpus export" is what the load stands on.
-
-    The last block is decision 194, and it is the half that was recorded wrongly across this
-    milestone: `features.py:403` counts company rows into the thin-title meta block and
-    `'companies'` sits in `_COUNT_KEYS`, so `_n_companies` really does go non-zero — but
-    `n_companies_log` is a column of no contract this app has loaded, and `build_vector`
-    (features.py:104-111) counts a key the block does not declare as a miss and moves on. The
-    count is produced and discarded. Asserted here rather than argued in a comment, because the
-    two acts a reader draws from the wrong version are both wrong: re-running placement over
-    19,071 titles that would not move, or writing the counts into columns §4.3 calls "the
-    exhaustive definition of the tower's input".
-    """
+    """Decision 193: rows land per source. Decision 194: the company count reaches no contract column."""
     root = fx.make_bundle(tmp_path / "bundle")
     _add_company_rows(root)
     report = await _import(db, bundle_import.Bundle.open(root), tmp_path / "artifacts")
@@ -1031,19 +775,12 @@ async def test_title_company_lands_per_source_and_is_not_reported_skipped(db, tm
     # The column this app has no home for is a report line, not a silent drop (§4.1).
     assert "country" in report.unmapped_columns["title_company"]
 
-    # ...and the feature contract's thin-title signal can see them. `_meta` is the block
-    # `features.py` builds by hand, and `_n_companies` is the count `_COUNT_KEYS` turns into
-    # `n_companies_log`.
+    # ...and the thin-title meta block can see them.
     meta = await features._meta(db, [1, 2], "v1")
     assert meta[1]["_n_companies"] == 3.0
     assert meta[2]["_n_companies"] == 0.0, "a title with no company rows still produces a block"
 
-    # ...and the count reaches no coordinate. `n_companies_log` is in `contract.META_PRODUCTIONS`'
-    # grammar and in the shipped contract's `meta` block nowhere: v20260828 declares 57 one-hot
-    # columns there (13 `decade:`, 2 `kind:`, 5 `runtime:`, 37 `lang:`) and the fixture's
-    # `_contract_columns` builds the same four families, so `Block.column` answers None and
-    # `build_vector` counts the key as unmapped. Whatever loading this table changes, it is not
-    # an input the checkpoint was trained on. [decision 194]
+    # ...and the count reaches no coordinate: `n_companies_log` is in no loaded contract.
     shipped = FeatureContract.load_path(
         next((tmp_path / "artifacts").rglob("feature_contract.json"))
     )
@@ -1057,14 +794,7 @@ async def test_title_company_lands_per_source_and_is_not_reported_skipped(db, tm
 
 
 def _add_second_video_source(root: Path) -> None:
-    """Two sources reporting one trailer — the shape that turns a clean validate into a unique
-    violation on COPY under the app's pre-0018 key.
-
-    The shipped bundle has exactly one distinct `title_video.source` (`tmdb`) and zero duplicate
-    groups, so no artifact can falsify the key; only a fixture can. `make_bundle.py`'s `VIDEOS`
-    would have to gain a second row sharing `(title_id, site, key)` under a different `source`
-    for this helper to become unnecessary.
-    """
+    """Two sources for one trailer: a unique violation under the pre-0018 key."""
     db = sqlite3.connect(root / "content.sqlite")
     with db:
         db.execute(
@@ -1076,15 +806,7 @@ def _add_second_video_source(root: Path) -> None:
 
 
 async def test_two_video_sources_sharing_a_site_and_key_both_land(db, tmp_path):
-    """§4.1 "tables mirror the corpus export"; 0018 section 4.
-
-    The corpus keys `title_video` (title_id, source, key); the app keyed it (title_id, site, key)
-    and dropped `source` at the mapping, so the first export in which a second source lists a
-    trailer the first already has raises `UniqueViolationError` inside the transaction that
-    carries the whole seed — a 500 reading "database error" while a household watches an import.
-    Latent rather than live, which is precisely the shape 0015's three tables had the week before
-    they were live.
-    """
+    """The corpus keys `title_video` by source; dropping it would raise mid-seed."""
     root = fx.make_bundle(tmp_path / "bundle")
     _add_second_video_source(root)
     report = await _import(db, bundle_import.Bundle.open(root), tmp_path / "artifacts")
@@ -1098,26 +820,12 @@ async def test_two_video_sources_sharing_a_site_and_key_both_land(db, tmp_path):
     ]
 
 
-# The four frozen ids that state no version. Measured read-only against v20260828: `url`,
-# `license` and `notes` are non-NULL and non-empty on all eleven rows, and `version` is a real
-# string on seven — `rt_kaggle`, `api v2`, `ml-32m` and their siblings on 7, 11, 21, 23, 26, 28
-# and 31 — while ids 1 (tmdb-users), 2 (metacritic-users), 3 (metacritic-critics) and 4
-# (trakt-comments) ship the empty string. [M4.9 review cycle 1: M49-MIG-04]
+# Ids 1-4 ship `version` as the empty string on v20260828; the other seven carry one.
 UNVERSIONED_RATING_SOURCE_IDS = (1, 2, 3, 4)
 
 
 def _add_rating_source_terms(root: Path) -> dict[int, tuple[str, str, str, str]]:
-    """The per-dataset terms the corpus ships on all eleven frozen ids.
-
-    The fixture writes id/name/family/audience/origin/scale_lo/scale_hi and leaves the four terms
-    columns NULL, because until 0018 section 5 there was nowhere for them to land.
-
-    The values below carry the artefact's SHAPE and not a uniformly populated one: four of the
-    eleven state no version, and the empty string is what they state it with. That is why the
-    mapping leaves these four columns out of `coalesce_empty` (rule 6's NULL-to-`''`): a NULL
-    means the bundle said nothing, `''` means the dataset publishes none, and the importer must
-    not merge the two before the card has had a chance to render both as absent.
-    """
+    """`version` is not rule-6 coalesced: NULL (said nothing) and '' (publishes none) stay distinct."""
     terms = {
         i: (
             f"https://example.invalid/dataset/{i}",
@@ -1139,13 +847,7 @@ def _add_rating_source_terms(root: Path) -> dict[int, tuple[str, str, str, str]]
 
 
 async def test_rating_source_url_license_version_and_notes_survive_the_import(db, tmp_path):
-    """§4.1 rule 4 + §10: the eleven frozen ids arrive with the terms that govern them.
-
-    This is the one place the corpus recorded them — the Netflix Prize's research-use-only
-    clause, the CC BY attributions naming their authors — and `load.py:191-198` mapped
-    `id/name/scale_hi` alone, so no surface could print the attribution those licences require
-    and no operator could tell which source bars redistribution of a movie-data archive.
-    """
+    """The licences require attribution and one bars redistribution, so the terms must land."""
     root = fx.make_bundle(tmp_path / "bundle")
     shipped = _add_rating_source_terms(root)
     await _import(db, bundle_import.Bundle.open(root), tmp_path / "artifacts")
@@ -1157,28 +859,16 @@ async def test_rating_source_url_license_version_and_notes_survive_the_import(db
     assert {
         r["id"]: (r["url"], r["license"], r["version"], r["notes"]) for r in rows
     } == shipped
-    # The restrictive licence has to stay legible as such, not collapse into an empty string.
+    # The restrictive licence has to stay legible as such.
     assert [r["id"] for r in rows if "no redistribution" in (r["license"] or "")], (
         "a source barring redistribution must still say so after the import"
     )
-    # And an unversioned dataset arrives unversioned: the empty string four of the eleven ship
-    # on v20260828 is stored as the empty string, neither turned into a NULL nor invented into a
-    # value. It is the Data card's job to render that as absent rather than as a blank cell.
+    # An unversioned dataset arrives as '', neither NULL nor invented.
     assert {r["id"] for r in rows if r["version"] == ""} == set(UNVERSIONED_RATING_SOURCE_IDS)
 
 
 async def test_the_data_card_reads_the_terms_the_import_carried(db, tmp_path):
-    """The other half of the same row: the payload §6.6's sources-and-terms list renders from.
-
-    The test above proves the four columns land in `rating_source`; nothing proved they leave it
-    again. `admin.data_sources` is the route the Data card fetches (step 8.3: "no UI beyond that
-    list"), and it could have been reduced to the `id/name/scale` it answered before this
-    milestone with every gate still green — the row would have kept printing as covered while
-    the surface that answers "which of the eleven bars redistribution" had nothing to print.
-    Called directly rather than over HTTP because the claim is about the SELECT and this file
-    has a real Postgres and a real import; `test_api_gating.py` owns the route's admin gate.
-    [M4.9 review cycle 1: M49-MIG-02]
-    """
+    """The Data card's route must carry the terms back out."""
     root = fx.make_bundle(tmp_path / "bundle")
     shipped = _add_rating_source_terms(root)
     await _import(db, bundle_import.Bundle.open(root), tmp_path / "artifacts")
@@ -1194,22 +884,8 @@ async def test_the_data_card_reads_the_terms_the_import_carried(db, tmp_path):
 
 
 def _add_genome_slice(root: Path) -> None:
-    """The three MovieLens tables as the corpus exports them, on a fixture that ships none.
-
-    `ml_link` is keyed by external ids with no `title_id` for the app to read, which is how
-    MovieLens publishes it and therefore how the bundle carries it. The rows exist so the
-    refusal below is falsifiable: a bundle that ships the slice must be *declined with a
-    reason*, and a test fed an empty table cannot tell a decline from an import of nothing.
-
-    One `ml_genome_score` row names a `tag_id` the slice does not carry. That is the shape a cut
-    which dropped a tag produces, and the corpus's own DDL admits it -- MovieLens declares no
-    foreign key on the score table, which is why it is reproduced here rather than asserted. It
-    is here because `validate.py` went on gating the slice after decision 291 declined it, so a
-    bundle carrying that row was refused before anything was written, over a table no COPY
-    reaches; the plan's clause is that the importer "accept a bundle with or without them", and
-    a fixture of perfectly clean rows cannot tell acceptance from a refusal that never fires.
-    [decision 291; M4.16 cycle 1, M416-291-03]
-    """
+    """One score names a `tag_id` the slice lacks, so the
+    decline must not depend on the slice's integrity."""
     db = sqlite3.connect(root / "content.sqlite")
     imdb = [r[0] for r in db.execute("SELECT imdb_id FROM title WHERE imdb_id IS NOT NULL")]
     assert len(imdb) >= 3, "the fixture spine must carry imdb ids for the slice to look loadable"
@@ -1241,19 +917,7 @@ def _add_genome_slice(root: Path) -> None:
 async def test_a_bundle_carrying_the_genome_slice_is_declined_with_the_clause_it_upholds(
     db, tmp_path
 ):
-    """Decision 291, and §10's "counts per table" is what makes declining it auditable.
-
-    `media-graph-spec_v1.1.md:175` fixed the genome as a corpus-side artefact — "validation
-    artifact only, never shipped or imported into the app" — and three `TableMap`s had reversed
-    that silently. The bundle still ships the tables (the corpus is not asked to re-cut it), so
-    the importer meets them on every real import and the only question is what it says. Not
-    nothing: an unloaded table with no line is how `title_meta`'s 46,318 rows went missing for
-    five milestones. A skip note carrying the clause is a decision an operator can read.
-
-    The counts are asserted in Postgres, not only in the report, because `0003_content.sql`'s
-    three tables stay in the schema (decision 291) and a report that said "skipped" over rows
-    that landed anyway would be the worse of the two failures.
-    """
+    """Decision 291: declined with a skip note, and nothing lands in the three tables."""
     root = fx.make_bundle(tmp_path / "bundle")
     _add_genome_slice(root)
     report = await _import(db, bundle_import.Bundle.open(root), tmp_path / "artifacts")
@@ -1264,27 +928,14 @@ async def test_a_bundle_carrying_the_genome_slice_is_declined_with_the_clause_it
         assert await db.fetchval(f"SELECT count(*) FROM {table}") == 0
     skipped = {f.detail["table"] for f in report.findings if f.rule == "table-skipped"}
     assert {"ml_genome_tag", "ml_link", "ml_genome_score"} <= skipped
-    # And the decline does not depend on what the slice CONTAINS. `validate.py`'s integrity gates
-    # key off the bundle's own schema rather than off `load.MAPPINGS`, so they went on checking a
-    # table the app had declined: the orphan `tag_id` the fixture carries above refused this whole
-    # import -- the household's one content seed -- before a row was written, over a table no COPY
-    # reaches. [decision 291; M4.16 cycle 1, M416-291-03]
+    # The integrity gates must not refuse the seed over a table no COPY reaches.
     integrity = [f.message for f in report.findings if f.rule.startswith("integrity-")]
     assert not [m for m in integrity if "ml_" in m], integrity
-    # Declined, not unaccounted for. `_import` above already asserts `report.ok`, and that is
-    # the half this needs: `unaccounted_tables` FAILS the import, so a slice routed there instead
-    # of to `SKIPPED_TABLES` would take every real import down with it.
+    # Declined, not unaccounted for: `unaccounted_tables` would fail every real import.
 
 
 async def test_a_bundle_without_the_genome_slice_says_nothing_about_it(db, bundle, tmp_path):
-    """The other half of decision 291, and the half a warning would have broken.
-
-    While the three tables were optional MAPPINGS, the committed fixture — which ships none of
-    them — produced three "bundle has no `ml_link` — target left empty" warnings on every run.
-    §10's report is what the wizard and the Data tab render, and a warning about a table this app
-    has decided it does not want is noise that teaches an operator to skim the one place the
-    import speaks.
-    """
+    """A warning about a declined table would be noise on the one screen the import speaks."""
     report = await _import(db, bundle, tmp_path / "artifacts")
 
     named = [f.message for f in report.findings
@@ -1300,23 +951,8 @@ async def test_a_bundle_without_the_genome_slice_says_nothing_about_it(db, bundl
 async def test_the_import_writes_no_rail_line_because_the_rail_could_not_read_it(
     db, bundle, tmp_path
 ):
-    """Decision 263: the import stopped being a web-process write, so it stopped narrating.
-
-    `bundle_swap` and `reconcile` were recorded here because both happened inside the request,
-    where §6.7's per-process ring buffer is the one `GET /api/home/model-log` reads. Step E2 moved
-    the whole import into the worker, and the two calls went with it - into a buffer with no
-    reader, in a process with no HTTP surface, under comments still arguing that "`rail.recent`
-    merges the household buffer into every member's rail". A write nobody can read is worse than
-    a declared gap, because `test_home.py`'s producer guard walks call sites and would have gone
-    on reporting both kinds as narrated.
-
-    What replaces the two lines is not nothing: the flip's `swap` note carries the superseded
-    version it used to put on the rail, and `artifact_bundle.report` is persisted and is what the
-    Data tab renders - which is the surface an operator watching an import is actually looking
-    at. The rail gets the two kinds back when the milestone that builds a cross-process channel
-    arrives; until then `rail.AWAITING_PRODUCER` names them.
-    [M4.14 cycle 1, m414-c1-dim-lock-02, decision 263]
-    """
+    """Decision 263: the import runs in the worker, whose
+    ring buffer nobody reads, so it writes no rail line."""
     rail.forget()
 
     report = await _import(db, bundle, tmp_path / "artifacts")
@@ -1330,14 +966,7 @@ async def test_the_import_writes_no_rail_line_because_the_rail_could_not_read_it
 
 
 def _add_a_marked_but_unrepairable_review(root: Path) -> str:
-    """One review body carrying a mojibake marker the conservative repair declines.
-
-    This is the shipped corpus's actual state in miniature: 86 of 485,602 rows carry a marker and
-    none repairs, because the damage is a truncated sequence rather than a whole-string cp1252
-    round trip. The committed fixture's three bodies are all clean, so without this row the
-    import cannot reach the branch at all. `make_bundle.py` would have to gain a marked body for
-    it to become unnecessary.
-    """
+    """A mojibake marker the conservative repair declines, as the shipped corpus has 86 of."""
     body = "Un film Ãƒ voir"
     db = sqlite3.connect(root / "reviews.sqlite")
     with db:
@@ -1352,16 +981,7 @@ def _add_a_marked_but_unrepairable_review(root: Path) -> str:
 
 
 async def test_marked_review_rows_that_repair_nothing_are_a_warning_not_a_note(db, tmp_path):
-    """§4.1 rule 8 + §10: "0 repaired" over a clean corpus and over a broken one are two facts.
-
-    The old line was a note reading "0 review row(s) repaired … (expected around 73)", which is
-    what a clean bundle prints and what the shipped one prints, and the report could not tell
-    them apart. Nothing in this repository enumerates those 73 rows, so the expectation was a
-    claim the report had no way to check; what it can say is how many rows carry a marker, and
-    that none of them could be repaired without guessing at bytes the corpus lost. The repair
-    stays conservative on purpose — `Ã` plus a non-continuation byte is ambiguous between
-    é/ã/á/à and would corrupt `L'Âge d'Or`. [M4.9 finding 33]
-    """
+    """"0 repaired" over a clean and a broken corpus are two facts; marked rows are a warning."""
     root = fx.make_bundle(tmp_path / "bundle")
     body = _add_a_marked_but_unrepairable_review(root)
     report = await _import(db, bundle_import.Bundle.open(root), tmp_path / "artifacts")
@@ -1371,22 +991,15 @@ async def test_marked_review_rows_that_repair_nothing_are_a_warning_not_a_note(d
     assert rule8[0].detail == {"marked": 1, "repaired": 0, "total": 4}
     assert "expected around 73" not in report.render()
 
-    # Rule 8's other half, in the same breath: the row is stored exactly as it arrived. A
-    # warning is what the app owes here, not a repair it cannot make.
+    # Rule 8's other half: the row is stored exactly as it arrived.
     assert await db.fetchval(
         "SELECT count(*) FROM review_store.review WHERE body = $1", body
     ) == 1
 
 
 async def test_every_dna_row_carries_the_terms_own_facet_prefix(db, bundle, tmp_path):
-    """§4.3 + §6.8: the app's facet is the vocabulary's facet id, which is the term's prefix.
-
-    `dna_facet`, `dna_term`, §6.4's axes and §6.8's fixed colour per facet all key on it, and
-    `0004_dna.sql:73-88` gives neither tag table an FK to `dna_facet` — so a `facet` that joins
-    nothing raises nothing anywhere. On the shipped bundle 29,188 of 31,540 `dna_tag` rows and
-    206,151 of 223,136 `dna_projected` rows were in that state, which is 92.5% of the chips on
-    the card rendering in the neutral colour §6.8 reserves for "no facet".
-    """
+    """The facet is the term's prefix; neither tag table
+    has an FK to `dna_facet`, so a mismatch is silent."""
     shipped = {row[2] for row in fx.EXTRACTED} | {row[2] for row in fx.PROJECTED}
     assert shipped & set(fx.EXTRACTION_LABELS.values()), (
         "the fixture must ship the corpus's extraction labels or this test asserts nothing"
@@ -1406,27 +1019,17 @@ async def test_every_dna_row_carries_the_terms_own_facet_prefix(db, bundle, tmp_
         )
         assert wrong == 0, f"{table}.facet is not the term's own prefix"
 
-    # The label is gone from the data — and it was not simply absent from the bundle.
+    # The label is gone from the data, and it was not simply absent from the bundle.
     stored = {r["facet"] for r in await db.fetch("SELECT DISTINCT facet FROM dna_tag")}
     assert not stored & set(fx.EXTRACTION_LABELS.values())
     assert "characters" in stored, "the facet whose palette entry was misspelled for seven files"
 
 
-# --- M4.14: two imports at once, the stored report, and the errors that were 500s -------------
-#
-# Of 1110 backend tests exactly one used `asyncio.gather` before this milestone, and it drove a
-# domain function. These two drive `import_bundle` itself, on two connections, because the thing
-# under test is a Postgres session lock and a lock taken twice on one session is not a lock.
+# These drive `import_bundle` on two connections: the lock under test is per session.
 
 
 async def _second_connection(pg_url: str):
-    """A second session against the same database, with the `db` fixture's json codecs.
-
-    `pg_try_advisory_lock` is SESSION-scoped, so the second import has to arrive on a different
-    connection or the reproduction cannot exist: one session takes the same lock twice happily.
-    The codecs are copied rather than shared because `artifact_bundle.report` is `jsonb`, and a
-    jsonb column read back as text is the M0 bug this file was written for.
-    """
+    """`pg_try_advisory_lock` is SESSION-scoped; the codecs are copied so jsonb reads as objects."""
     conn = await asyncpg.connect(pg_url)
     for typename in ("json", "jsonb"):
         await conn.set_type_codec(
@@ -1436,13 +1039,7 @@ async def _second_connection(pg_url: str):
 
 
 async def _staggered_imports(db, other, bundle, second, artifacts_root, monkeypatch):
-    """Start one import, let it reach the rebuild, then start a second. Returns both reports.
-
-    `run_rebuild` is slowed rather than the test racing on wall clock: §10 puts the rebuild
-    inside the transaction and after the staging, so a winner that is still in it is a winner
-    holding the lock with its tree on disk — which is exactly the moment the reproduction
-    measured. The 0.15 s stagger is data-09's own.
-    """
+    """`run_rebuild` is slowed so the second import arrives while the first holds the lock."""
     real_rebuild = bundle_import.placement.run_rebuild
 
     async def slow_rebuild(*args, **kwargs):
@@ -1460,16 +1057,7 @@ async def _staggered_imports(db, other, bundle, second, artifacts_root, monkeypa
 async def test_two_concurrent_imports_produce_one_ok_report_and_one_named_refusal(
     db, bundle, tmp_path, pg_url, monkeypatch
 ):
-    """`grep -rn advisory backend/spielplan` was empty: nothing serialised two imports.
-
-    Reproduced twice. With a 0.15 s stagger on the same version the second request passed every
-    check — the first's `artifact_bundle` row was uncommitted and therefore invisible to it —
-    then deleted and re-copied the very tree the first was about to hand to `run_rebuild`, and
-    died on `UniqueViolationError title_alias_pkey`, which `app.py` turns into a 500 naming a
-    constraint. With two different seed versions, `artifact_bundle` held one version while
-    `/data/artifacts` held two. The operator-facing trigger is ordinary: a retry after a proxy
-    timeout, which §5.3 budgets this request at "minutes" to provoke.
-    """
+    """Without the advisory lock the second import deleted the first's staged tree and raised a 500."""
     artifacts_root = tmp_path / "artifacts"
     fx.make_bundle(tmp_path / "again")
     other = await _second_connection(pg_url)
@@ -1497,14 +1085,7 @@ async def test_two_concurrent_imports_produce_one_ok_report_and_one_named_refusa
 async def test_the_loser_never_deletes_the_winners_staged_tree(
     db, bundle, tmp_path, pg_url, monkeypatch
 ):
-    """The destructive half of the same race, asserted on the file operations themselves.
-
-    `rmtree` then `copytree` run outside the transaction, so the loser's staging pass rewrote the
-    directory the winner had already staged and was at that moment rebuilding against. Counting
-    the calls rather than diffing the tree, because a re-copy of the same bytes is invisible in
-    the tree and is still the defect: the winner's `run_rebuild` was reading a directory another
-    request was deleting.
-    """
+    """Counted file operations: a re-copy of the same bytes is invisible in the tree."""
     artifacts_root = tmp_path / "artifacts"
     fx.make_bundle(tmp_path / "again")
     staged_copies: list[str] = []
@@ -1530,9 +1111,7 @@ async def test_the_loser_never_deletes_the_winners_staged_tree(
 
     assert first.ok, first.render()
     assert not second.ok
-    # `shutil.copytree` recurses into itself for every subdirectory, so only the calls whose
-    # destination IS the staged root are staging passes; the rest are `dna_vocab/` and its
-    # version directory being copied inside one of them.
+    # `copytree` recurses into itself, so only calls whose destination IS the staged root count.
     staged = str((artifacts_root / "test-v1").resolve())
     passes = [dst for dst in staged_copies if dst == staged]
     assert passes == [staged], f"the tree was staged {len(passes)} times"
@@ -1542,14 +1121,7 @@ async def test_the_loser_never_deletes_the_winners_staged_tree(
 async def test_the_stored_report_carries_the_rebuild_the_swap_and_the_rebuild_set(
     db, bundle, tmp_path
 ):
-    """§10 calls a re-import "a planned admin event with a migration report" and this row is it.
-
-    `artifact_bundle.report` was INSERTed with `report.as_dict()` before §10's rebuild ran and
-    nothing updated it afterwards: measured, the set difference between the returned report's
-    rules and the stored one's was exactly {rebuild, swap, rebuild-set}, so the database's own
-    record said the rebuild had not been performed. Once the import is a worker job and the Data
-    tab polls rather than reading the response, this row is the only thing there is to render.
-    """
+    """The stored report was written before the rebuild; the Data tab renders only this row."""
     report = await _import(db, bundle, tmp_path / "artifacts")
     stored = await db.fetchval("SELECT report FROM artifact_bundle WHERE version = 'test-v1'")
 
@@ -1566,12 +1138,7 @@ async def test_the_stored_report_carries_the_rebuild_the_swap_and_the_rebuild_se
     ]
     assert rebuilt == list(bundle_import.REBUILD_SET)
 
-    # This row's `what` in `spec_coverage.toml` claims the text encodes to ASCII "for both the
-    # fixture and a real bundle", and nothing checked it against a report an import actually
-    # produced: `test_render_encodes_to_ascii` builds its input by hand out of ASCII, so it can
-    # only ever measure the frame. This is the fixture half, asserted where a real report already
-    # exists -- the messages here come from `validate.py`, `dna.py` and `load.py`, which write
-    # section citations and em dashes. [M4.14 cycle 2 close-out, finding 2.24]
+    # The fixture half of render()'s ASCII rule, over a report an import actually produced.
     rendered = report.render()
     offenders = sorted({c for c in rendered if ord(c) > 127})
     assert not offenders, (
@@ -1582,20 +1149,8 @@ async def test_the_stored_report_carries_the_rebuild_the_swap_and_the_rebuild_se
 
 
 async def test_the_bundles_table_counts_are_compared_against_the_report(db, tmp_path):
-    """BUNDLE.json's `tables` is what the corpus says it exported; the report counts what arrived.
-
-    The corpus ships 29 of them and the importer read `tables.title` and nothing else, so an
-    export whose manifest was written from the wrong side of a filter agreed with every sha256 it
-    shipped and disagreed with itself about how many rows it carried. The counts are compared
-    after the load and INSIDE the transaction, so the disagreement rolls the import back rather
-    than becoming the seed decision 162 will not let the household take a second time.
-
-    The drifted bundle is imported first, because a second content bundle would meet seed-once
-    before it ever reached the load — and the manifest is edited rather than the database: the
-    corpus writes BUNDLE.json last, over the tree it has just described, so BUNDLE.json is not in
-    its own `files` map and every hash the bundle ships is still correct. That is what makes this
-    check a separate one from B1's: a re-hash agrees, and the bundle still lies about itself.
-    """
+    """The counts are compared inside the transaction; the
+    manifest is edited, since BUNDLE.json hashes itself out."""
     fx.make_bundle(tmp_path / "drifted", version="test-drift")
     manifest = tmp_path / "drifted" / "BUNDLE.json"
     payload = json.loads(manifest.read_text(encoding="utf-8"))
@@ -1614,8 +1169,7 @@ async def test_the_bundles_table_counts_are_compared_against_the_report(db, tmp_
 
     fx.make_bundle(tmp_path / "bundle")
     clean = await _import(db, bundle_import.Bundle.open(tmp_path / "bundle"), tmp_path / "artifacts")
-    # Two `bundle-integrity` notes and they are two different checks: B1's 33 hashes, and this
-    # one's table counts. Named rather than counted, so neither can pass for the other.
+    # Two `bundle-integrity` notes for two different checks, named so neither passes for the other.
     integrity = [f.message for f in clean.findings if f.rule == "bundle-integrity"]
     assert len(integrity) == 2, integrity
     assert any("size and sha256 verified" in m for m in integrity)
@@ -1623,28 +1177,7 @@ async def test_the_bundles_table_counts_are_compared_against_the_report(db, tmp_
 
 
 async def test_no_import_path_turns_a_postgres_error_into_a_five_hundred(db, tmp_path):
-    """The four shapes that used to raise inside the transaction, each now a report line.
-
-    `validate_content` checked the eight §4.1 landmine rules and nothing about referential
-    integrity, so nine orphan variants and the NULL cases all validated `ok` and then raised
-    `ForeignKeyViolationError` / `NotNullViolationError` inside the load — the first two shapes
-    below. `bundle.py` catches only `_Rollback`, `api/artifacts.py` has no `try`, and `app.py`
-    turns any `PostgresError` into `500 {"detail": "database error"}` — with the staged tree left
-    behind and no line naming the table. Decision 162's seed-once makes that the household's
-    first and only content import, which is the one moment the report IS the product.
-
-    Asserted through `import_bundle`, not through the validator: the claim is that no import PATH
-    raises, and the validator being right is only half of that.
-
-    The last two shapes are the ones the first pair could not see, because they are refused by
-    `load_content` rather than by any rule the validator owns: a renamed column (`load.py`'s "the
-    mapping names a column the bundle does not ship") and a shipped table nothing accounts for.
-    Both make `load_content` return before it writes a single `title` row - and `import_bundle`
-    read no `report.ok` between that return and `load_tags`, which then INSERTed `dna_tag` rows
-    against an empty `title` and died on `dna_tag_title_id_fkey`. Not `_Rollback`, so the
-    staged tree outlived the transaction with no row naming it and the operator's report was a
-    constraint name. [M4.14 cycle 1, m414-c1-dim-refusals-02 and m414-c1-dim-lock-05]
-    """
+    """Asserted through `import_bundle`: no import PATH may turn a PostgresError into a 500."""
     artifacts_root = tmp_path / "artifacts"
     for name, statement in (
         ("orphan",
@@ -1675,33 +1208,8 @@ async def test_no_import_path_turns_a_postgres_error_into_a_five_hundred(db, tmp
 async def test_an_import_that_crashes_inside_the_transaction_leaves_no_staged_tree(
     db, tmp_path, pg_url, monkeypatch
 ):
-    """D1's sentence is "a failed import leaves no staged tree", and the cleanup ran on ONE exit.
-
-    `shutil.copytree` happens before the transaction opens, so every way out of that transaction
-    owes the disk the same thing - and `_drop_orphan_staging` was reached from the `except
-    _Rollback` arm alone. The two exits that arm cannot see are an exception raised inside the
-    transaction (a loader, `run_rebuild`, a Postgres error this importer has no rule for) and the
-    `CancelledError` `_tick`'s `asyncio.wait_for` delivers at the 300 s budget. Both left
-    `/data/artifacts/<version>/` - 205 MB of the real bundle - with no `artifact_bundle` row
-    naming it, no surface that can name it and no cleaner anywhere in the app.
-
-    Both arms are asserted here because they end differently on purpose: a database refusal
-    becomes the report line section 10 promises, while a `RuntimeError` is a bug and is re-raised
-    unchanged. What they share is the disk. [M4.14 cycle 1, m414-c1-dim-lock-05]
-
-    THE THIRD EXIT IS THE ONE THE JOB REGISTRY PRODUCES, and it was named in this docstring and
-    asserted nowhere. `except BaseException:` is what catches it, and both halves above reach
-    that arm through `Exception` - a `RuntimeError` is one - so narrowing it to `except
-    Exception:`, which is the obvious tidy-up on a handler that reads like a smell, left this
-    test and the whole suite green while the budget's abandonment leaked 205 MB of
-    `/data/artifacts/<version>/` with no `artifact_bundle` row naming it and no cleaner anywhere
-    in the app. Cancelled AT THE REBUILD rather than on a wall clock, because that is where
-    `_tick`'s `asyncio.wait_for` finds this job - the worker spends 213 s and almost all of it is
-    inside `run_rebuild` - and because a cancel delivered mid-COPY aborts the connection asyncpg
-    is running it on, which is a different defect's reproduction and not this one's. On a second
-    session for the reason `_second_connection` gives: the assertions below are read after that
-    connection has been cancelled. [M4.14 cycle 4, m414-c4-rec-03]
-    """
+    """Every exit, `CancelledError` included, owes the disk the
+    same cleanup; `except BaseException` is load-bearing."""
     artifacts_root = tmp_path / "artifacts"
 
     def explode(exc):
@@ -1749,8 +1257,7 @@ async def test_an_import_that_crashes_inside_the_transaction_leaves_no_staged_tr
     )
     try:
         await asyncio.wait_for(at_the_rebuild.wait(), 60)
-        # `task.cancel()` is what `asyncio.wait_for` does at `worker.BUNDLE_IMPORT_TIMEOUT`, so
-        # this is the budget's own mechanism rather than a stand-in for it.
+        # `task.cancel()` is what `asyncio.wait_for` does at the budget.
         abandoned.cancel()
         with pytest.raises(asyncio.CancelledError):
             await abandoned
@@ -1765,24 +1272,7 @@ async def test_an_import_that_crashes_inside_the_transaction_leaves_no_staged_tr
 async def test_a_staging_failure_is_a_report_line_and_leaves_no_half_copied_tree(
     db, tmp_path, monkeypatch
 ):
-    """D1's other two exits: the `rmtree` and the `copytree` themselves.
-
-    Both run BEFORE the inner `try:`, so none of the four arms that call `_drop_orphan_staging`
-    could see either - and the `except (PostgresError, DatabaseError, OSError)` arm's own comment
-    names "a disk that fills" as a case it covers while the largest disk write of the import sits
-    outside it. `shutil.copytree` on a full disk creates the destination, collects a per-entry
-    `OSError` for each file it could not write and raises `shutil.Error` (an `OSError`) at the
-    end, so the escape left `/data/artifacts/<version>/` half written with no `artifact_bundle`
-    row naming it, no finding, and no surface or cleaner anywhere in the app that could name it.
-
-    The two halves end differently on purpose and that difference IS decision 249: a version no
-    row names loses its half-copied tree, and a version a row DOES name keeps its files even
-    though the import that meant to replace them failed - those are the bundle a restore rolls
-    back to. Injected rather than provoked, for the reason
-    `test_a_cleanup_that_could_not_remove_the_tree_says_so_and_the_import_still_stands` gives:
-    ENOSPC and a root-owned mount are the reference box's states, not this suite's.
-    [M4.14 cycle 2, m414-c2-refusals-03, step D1]
-    """
+    """Decision 249: a version no row names loses its half copy; a named version keeps its files."""
     artifacts_root = tmp_path / "artifacts"
     real_copytree = bundle_import.shutil.copytree
 
@@ -1804,14 +1294,12 @@ async def test_a_staging_failure_is_a_report_line_and_leaves_no_half_copied_tree
     assert len(staging) == 1 and "No space left on device" in staging[0], stopped.render()
     assert not (artifacts_root / "test-full").exists(), "a failed copy left a half-staged tree"
     assert await db.fetchval("SELECT count(*) FROM artifact_bundle") == 0
-    # The session advisory lock is released on every exit, so the retry is not refused as a
-    # second concurrent import.
+    # The advisory lock is released on every exit, so the retry is not refused as concurrent.
     monkeypatch.setattr(bundle_import.shutil, "copytree", real_copytree)
     retry = await bundle_import.import_bundle(db, bundle_import.Bundle.open(root), artifacts_root)
     assert retry.ok, retry.render()
 
-    # The other statement, over a version the table names: the tree it was about to replace is
-    # provenance and stays (decision 249), and the operator gets a line rather than a traceback.
+    # A version the table names keeps its tree (decision 249), and the operator gets a line.
     fx.make_bundle(tmp_path / "bundle-model", version="test-model")
     model = _models_only(tmp_path / "bundle-model")
     validated = await bundle_import.import_bundle(
@@ -1836,9 +1324,7 @@ async def test_a_staging_failure_is_a_report_line_and_leaves_no_half_copied_tree
 
 
 def _stops_half_way(src, dst, *args, **kwargs):
-    """A `copytree` that creates its destination, writes one file and raises, which is what
-    CPython's does on a disk that fills: it `makedirs` first, collects a per-entry `OSError` and
-    raises `shutil.Error` - an `OSError` - at the end, leaving the destination on disk."""
+    """CPython's `copytree` makes the destination first and raises `shutil.Error` at the end."""
     Path(dst).mkdir(parents=True)
     (Path(dst) / "audit.json").write_bytes(b"the first file of a copy that stopped")
     raise shutil.Error([(str(src), str(dst), "[Errno 28] No space left on device")])
@@ -1847,19 +1333,7 @@ def _stops_half_way(src, dst, *args, **kwargs):
 async def test_a_failed_restage_leaves_no_half_tree_and_the_repair_stays_open(
     db, tmp_path, monkeypatch
 ):
-    """D2's restage, and the two ways its copy can stop before it has copied a bundle.
-
-    `_drop_orphan_staging` keeps a staged tree whenever an `artifact_bundle` row names the
-    version, on decision 249's provenance argument. On the restage path the active row ALWAYS
-    names it - that is the branch's precondition - so a `copytree` that died part way left
-    `/data/artifacts/<active>/` half written, and the next attempt met `restaging and
-    staged.exists()`, which answers "bundle <v> is already the active bundle" plus seed-once: the
-    repair D2 exists to provide, closed by its own output, on an install that already had no
-    basis to serve from. The rollback note meanwhile told the operator those files "are
-    overwritten by the next import of this version", which is false on precisely this path. Half
-    a copy is nobody's provenance - here there was nothing at that path to preserve at all.
-    [M4.14 cycle 3, m414-c3-dim23-restage-half-copy, m414-c3-dimlock-01 and -02]
-    """
+    """On a restage the active row always names the version, so a half copy must still be removed."""
     artifacts_root = tmp_path / "artifacts"
     real_copytree = bundle_import.shutil.copytree
     root = tmp_path / "bundle"
@@ -1868,9 +1342,7 @@ async def test_a_failed_restage_leaves_no_half_tree_and_the_repair_stays_open(
     # README's "database restored, files missing", which is the state D2 was written for.
     shutil.rmtree(artifacts_root / "test-v1")
 
-    # A copy that never began: an artifacts root that exists and this process cannot write into,
-    # the case the stage failure's own sentence names. The note may not say files "remain on
-    # disk" at a path nothing ever created.
+    # A copy that never began: the note may not claim files "remain on disk".
     def unwritable(src, dst, *args, **kwargs):
         raise PermissionError(13, "the artifacts directory is not writable")
 
@@ -1913,17 +1385,7 @@ async def test_a_failed_restage_leaves_no_half_tree_and_the_repair_stays_open(
 async def test_a_replacement_that_fails_says_the_copy_it_removed_is_gone(
     db, tmp_path, monkeypatch
 ):
-    """The other side of the same rule: the tree a row names, destroyed by the import that meant
-    to replace it.
-
-    `_drop_orphan_staging`'s clause says a row that names this version keeps its files because a
-    `superseded` row is the bundle a restore rolls back to - but the `rmtree` runs first, so by
-    the time the clause is asked those files are already gone and what it protects is the half
-    copy that replaced them. The report said nothing about the loss and its rollback note said
-    those artifacts "remain on disk": two statements that together read as "nothing happened",
-    over a version directory that had just been emptied. [M4.14 cycle 3,
-    m414-c3-dim23-a-failed-replacement-destroys-the-bundle-decision-249-says-it-protects]
-    """
+    """The `rmtree` runs first, so a failed replacement must report the copy it removed."""
     artifacts_root = tmp_path / "artifacts"
     real_copytree = bundle_import.shutil.copytree
     fx.make_bundle(tmp_path / "bundle", version="test-v1")

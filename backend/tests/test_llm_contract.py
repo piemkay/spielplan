@@ -1,23 +1,5 @@
-"""The one extraction contract, its prompt, and the retry that names a violation. Spec v2.1 §9.
-
-§9: "The schema is a cost-saving device, not the guarantee - the guarantee is the validator ...
-Two-attempt pattern: retry once with the specific contract violation named." This file holds the
-three things `llm/contract.py` owes that sentence, and none of them is a check:
-
-  * ONE SCHEMA. Each adapter projects its own mechanism from it - Anthropic's `input_schema` as
-    it stands, OpenAI's strict schema with the unsupported keywords stripped, Gemini's
-    `responseSchema` - so the three cannot diverge in what they ask for.
-  * THE PROMPT, ported from `mdc/dna/prompt.py` with its two measured clauses, and with the
-    per-facet ceilings keyed on the facets THIS app's `dna_facet` stores.
-  * THE RETRY MESSAGE, which formats M5.4's verdicts and never re-derives one: each violated rule
-    and the value that broke it, deduplicated, bounded and escaped - never a bare "try again"
-    (plan C4), because a generic retry is a second full input pass for nothing.
-
-The rejections every retry test formats are produced by `verify_payload` itself over a vocabulary
-built in the test, so the formatter is read against the verdicts it will really be handed rather
-than against `Rejection`s typed to agree with it. One test takes the database, for the vocabulary
-read; it skips without TEST_DATABASE_URL (see tests/conftest.py).
-"""
+"""The one extraction contract, its prompt, and the retry that names a violation (§9).
+Retry tests format rejections produced by `verify_payload` itself, not hand-typed ones."""
 
 from __future__ import annotations
 
@@ -32,8 +14,7 @@ from spielplan.llm import contract, gemini, openai
 
 CONTRACT_SOURCE = (Path(__file__).resolve().parents[1] / "spielplan" / "llm" / "contract.py")
 
-# This app's eleven facet ids, which are its term prefixes (`importer/dna.py`'s
-# DEFAULT_FACET_COLOURS; `0018_read_layer.sql`'s facet backfill), in an order of our choosing.
+# This app's eleven facet ids, which are its term prefixes, in an order of our choosing.
 APP_FACETS = ("themes", "structure", "mood", "visual", "sound", "pacing", "era", "place",
               "characters", "sensibility", "register")
 
@@ -59,12 +40,9 @@ async def _rejects(tags):
     return judged.rejects
 
 
-# --- one schema, three projections --------------------------------------------------------------
-
-
 def test_one_schema_is_the_contract_and_each_mechanism_is_a_projection_of_it():
-    """An object root, because Anthropic's tool `input_schema` and OpenAI's strict `json_schema`
-    both require one, holding `tags`: four required strings-and-an-integer, nothing else."""
+    """An object root, because Anthropic's `input_schema`
+    and OpenAI's strict `json_schema` both require one."""
     tag = {
         "type": "object",
         "properties": {
@@ -104,10 +82,8 @@ def test_one_schema_is_the_contract_and_each_mechanism_is_a_projection_of_it():
 
 
 def test_the_contract_formats_verdicts_and_performs_no_check_of_its_own():
-    """§9's separation, one module over from `test_dna_verify.py`'s: the validator is the
-    guarantee, so the module that talks to the model may not grow a second copy of it. It
-    imports neither the fold the quote test runs on nor the alias map the term test repairs
-    through, and it never calls `norm`."""
+    """§9: the validator is the guarantee, so the module
+    that talks to the model must not grow a copy of it."""
     tree = ast.parse(CONTRACT_SOURCE.read_text(encoding="utf-8"))
     imported = set()
     for node in ast.walk(tree):
@@ -122,13 +98,8 @@ def test_the_contract_formats_verdicts_and_performs_no_check_of_its_own():
     assert "norm" not in called
 
 
-# --- the prompt ---------------------------------------------------------------------------------
-
-
 def test_the_prompt_asks_for_the_object_the_schema_declares():
-    """Named change 1: the corpus's "Return ONLY a JSON array" would contradict the object root
-    two of the three mechanisms require, and a prompt that disagrees with its schema is a
-    prompt the model is asked to disobey one way or the other."""
+    """The corpus's "Return ONLY a JSON array" would contradict the object root two mechanisms require."""
     text = contract.instructions(_vocabulary())
     assert "Return ONLY a JSON object" in text
     assert '{"tags": [' in text
@@ -137,12 +108,7 @@ def test_the_prompt_asks_for_the_object_the_schema_declares():
 
 
 def test_the_two_measured_clauses_survive_the_port():
-    """`mdc/dna/prompt.py:9-19`: two clauses exist "because their absence caused a measured
-    failure", and the warning not to clean them up without re-running the A/B is ported with
-    them. The anti-quota clause is in the instructions verbatim; the prefix warning is in the
-    vocabulary header, verbatim wherever it is true (a facet whose ids do not begin with its own
-    name) and restated as the true sentence where the prefix IS the facet id, which is every
-    facet this app stores (named change 3)."""
+    """`mdc/dna/prompt.py`: both clauses exist because their absence caused a measured failure."""
     text = contract.instructions(_vocabulary())
     assert ("Ceilings are upper bounds only; do not work toward the ceiling; a\n"
             "   thinly-discussed film should end up with noticeably fewer tags.") in text
@@ -161,11 +127,8 @@ def test_the_two_measured_clauses_survive_the_port():
 
 
 def test_the_ceilings_are_the_corpus_numbers_keyed_on_this_apps_facets():
-    """Named change 2: `mdc/dna/vocab.py:67-72`'s ceilings are keyed on the corpus's extraction
-    labels (`narrative_themes`, `plot_structure`), which name no facet this app stores - M4.9
-    finding 1 measured what importing that naming costs. So the map is written out onto this
-    app's facet ids, number for number, and a facet the map does not cover is SAID to have no
-    ceiling rather than handed one nobody measured."""
+    """The corpus's ceilings are keyed on labels this app does
+    not store, so they are rewritten onto its facet ids."""
     assert contract.FACET_MAX == {
         "themes": 8, "structure": 5, "mood": 6, "visual": 5, "sound": 4, "pacing": 3,
         "era": 3, "place": 3, "characters": 4, "sensibility": 3, "register": 3,
@@ -190,14 +153,8 @@ def test_the_system_prompt_user_prompt_and_prompt_sha_are_the_corpus_s():
     assert contract.prompt_sha(voc) != contract.prompt_sha(_vocabulary(facets=("mood",)))
 
 
-# --- the verifier's shape -----------------------------------------------------------------------
-
-
 async def test_as_verifier_payload_speaks_verify_payloads_shape_and_names_only_its_own_title():
-    """`verify_payload` takes `{"titles": {"<id>": [tags]}}`. The object the schema asks for and
-    a bare array from a model that ignored the root both become this title's tags; anything else
-    is handed through AS this title's tags, so verify refuses it as `schema` - and a model can
-    never address a title it was not asked about, because the title key is the caller's."""
+    """The title key is the caller's, so a model can never address a title it was not asked about."""
     tag = {"term": "mood.bleak", "salience": 2, "source": "imdb:1", "quote": "bleak"}
     assert contract.as_verifier_payload(7, {"tags": [tag]}) == {"titles": {"7": [tag]}}
     assert contract.as_verifier_payload(7, [tag]) == {"titles": {"7": [tag]}}
@@ -213,13 +170,8 @@ async def test_as_verifier_payload_speaks_verify_payloads_shape_and_names_only_i
         assert judged.n_kept == 0
 
 
-# --- the retry message --------------------------------------------------------------------------
-
-
 async def test_the_retry_names_each_violated_rule_and_its_offending_value():
-    """Plan C4 and exit check 2: "unknown_term: 'themes.mecha' is not in vocabulary v1" is
-    actionable, "try again" is a second full input pass for nothing. Every line is a rule verify
-    reported and the value it reported it about."""
+    """A bare "try again" is a second full input pass for nothing."""
     rejects = await _rejects([
         {"term": "themes.mecha", "salience": 2, "source": "imdb:1", "quote": "bleak"},
         {"term": "pacing.slow_burn", "salience": 2, "source": "imdb:1",
@@ -243,10 +195,7 @@ async def test_the_retry_names_each_violated_rule_and_its_offending_value():
 
 
 def test_the_retry_message_is_deduplicated_bounded_and_escaped():
-    """The offending values are the model's own output, so they are untrusted text: shown
-    through `repr` (a newline or a quote inside one cannot start a line of its own), cut at a
-    fixed width, and the list is cut at `MAX_NAMED` with the remainder counted rather than
-    dropped silently. The same refusal twice is named once."""
+    """The offending values are the model's own output, so they are untrusted text."""
     same = [Rejection(7, "p", "themes.mecha", "unknown_term", "not in vocabulary")] * 3
     assert contract.violation_prompt(same, version="v1").count("themes.mecha") == 1
 
@@ -267,18 +216,13 @@ def test_the_retry_message_is_deduplicated_bounded_and_escaped():
 
 
 def test_a_retry_with_nothing_to_name_is_refused():
-    """Any rejection is a contract violation and none is not: a retry built from no verdict
-    would be the bare "try again" plan C4 forbids."""
+    """A retry built from no verdict would be the bare "try again" plan C4 forbids."""
     with pytest.raises(ValueError, match="nothing to name"):
         contract.violation_prompt([], version="v1")
 
 
-# --- the vocabulary, read from the install ------------------------------------------------------
-
-
 async def test_the_prompt_vocabulary_is_one_version_read_in_facet_order(db):
-    """`dna_term` and `dna_facet` for ONE version (§14 risk 7), facets in `ord` order, and the
-    active version when none is named - `db/dna_terms.py`'s one derivation of which is live."""
+    """§14 risk 7: every read is scoped to one version."""
     assert await contract.load_prompt_vocabulary(db) is None
 
     await db.execute("INSERT INTO dna_vocabulary (version, facet_count, term_count) "

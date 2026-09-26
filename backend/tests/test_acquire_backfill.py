@@ -1,11 +1,5 @@
-"""The metadata walk: §8 stages 2 (TMDB's two kinds) and 3 for a bundle title the corpus never
-fetched TMDB for. Spec v2.1 §8, §6.0, §6.8; decisions 372, 411, 484, 499, 501 and 522.
-
-Against the test database and a raw store of the test's own, with TMDB as an
-`httpx.MockTransport` answering real captured documents (`fixtures/sources/`, `fixtures/http/`):
-what the walk asks, what it lets the derive write, and what it leaves alone are all rows and
-requests a test can read. Skipped without TEST_DATABASE_URL; see tests/conftest.py.
-"""
+"""The metadata walk: §8 stages 2 and 3 for a bundle title the corpus never fetched TMDB for.
+Needs TEST_DATABASE_URL; TMDB answers captured documents from `fixtures/`."""
 
 from __future__ import annotations
 
@@ -31,8 +25,6 @@ KEY = "tmdb-key-not-a-real-one-0522"
 
 
 class Tmdb:
-    """TMDB's API as the walk meets it: what it was asked, and answers by path."""
-
     def __init__(self, answers: dict[str, httpx.Response] | None = None) -> None:
         self.asked: list[httpx.URL] = []
         self.answers = answers or {}
@@ -52,8 +44,6 @@ def _found(tmdb_id: int) -> httpx.Response:
 
 @pytest.fixture
 def raw_root(tmp_path, monkeypatch):
-    """A raw store of this test's own, reached the way the worker reaches it
-    (`test_derive_rebuild.py`'s fixture, for its reason)."""
     monkeypatch.setenv("DATA_DIR", str(tmp_path / "data"))
     settings.cache_clear()
     yield settings().raw_dir
@@ -99,13 +89,9 @@ async def _task(db, title_id: int):
     )
 
 
-# --- the card arrives through the derive --------------------------------------------------------
-
-
 async def test_a_skeleton_bundle_title_gets_tmdb_s_text_and_poster_through_stage_three(keyed):
-    """Moulin Rouge (1952)'s state at the second household test: an imdb id, an MPST synopsis
-    decision 499 keeps off the card, no overview and no poster. TMDB is asked twice - resolve,
-    then the detail - and the card is what §8 stage 3's resolution makes of the answer."""
+    """An imdb id and an MPST synopsis, no overview, no
+    poster: TMDB is asked to resolve, then for detail."""
     await _title(keyed, 20, imdb_id="tt2543164", placement="warm", year=2016)
     await keyed.execute(
         "INSERT INTO title_meta (title_id, source, payload) VALUES (20, 'mpst', $1)",
@@ -135,10 +121,8 @@ async def test_a_skeleton_bundle_title_gets_tmdb_s_text_and_poster_through_stage
 
 
 async def test_a_field_the_title_holds_is_replaced_only_by_tmdb_s_own_value(keyed):
-    """Decision 522's condition, "never overwrites a better existing field". The year and the
-    runtime the title carries are filled and never overwritten (they differ from TMDB's here), the
-    overview TMDB leads the corpus's order for is TMDB's, and a field TMDB answers empty keeps the
-    value another source gave it - a TVmaze poster stays when TMDB has none."""
+    """Decision 522: "never overwrites a better existing
+    field"; a TVmaze poster stays when TMDB has none."""
     await _title(keyed, 21, imdb_id="tt2543164", placement="warm", year=2015, runtime_min=111)
     tvmaze = "https://static.tvmaze.com/uploads/images/medium_portrait/1/2.jpg"
     await keyed.execute(
@@ -162,10 +146,7 @@ async def test_a_field_the_title_holds_is_replaced_only_by_tmdb_s_own_value(keye
 
 
 async def test_the_walk_leaves_the_extracted_dna_tier_alone(keyed, tmp_path):
-    """The owner's second condition. The bundle's shipped per-title verdict drops `mood.cosy` on
-    title 1 whenever the adjudication ledger is applied (`test_derive_ledgers.py`), and §8 stage 3
-    applies it; this walk's derive does not, so the tag and its quote survive byte for byte - and
-    the ledger is shown live afterwards, so the survival is not a vacuous one."""
+    """§8 stage 3 applies the adjudication ledger and this walk does not; it is shown live afterwards."""
     fx.make_bundle(tmp_path / "bundle")
     vocab = tmp_path / "bundle" / "artifacts" / "dna_vocab" / "v1"
     imported = ImportReport()
@@ -190,12 +171,7 @@ async def test_the_walk_leaves_the_extracted_dna_tier_alone(keyed, tmp_path):
     assert (await ledgers.apply_adjudications(keyed, 1))["dropped"] == 1
 
 
-# --- who first, and who not at all ----------------------------------------------------------------
-
-
 async def test_owned_then_seen_or_rated_then_the_seed_list_then_placed_then_the_rest(keyed):
-    """The owner's order, as the filing priority `queue.lease` sorts by. A title with TMDB's block
-    already, an acquired title and a title with no id to ask by are not filed at all."""
     await _title(keyed, 31, imdb_id="tt0000031")                                   # the rest
     await _title(keyed, 32, imdb_id="tt0000032", placement="warm")                 # placed, warm
     await _title(keyed, 33, imdb_id="tt0000033", placement="cold_tower")           # placed
@@ -222,14 +198,10 @@ async def test_owned_then_seen_or_rated_then_the_seed_list_then_placed_then_the_
 
 
 async def test_the_drain_never_leases_the_walk_s_work(keyed):
-    """Its own queue kind: `pipeline.drain` leases `acquire` tasks and the board's actions revive
-    them, so neither can take a title into the ten-stage walk this one exists to stay out of."""
+    """Its own queue kind, so neither the drain nor the board can take a title into the ten-stage walk."""
     await _title(keyed, 41, imdb_id="tt0000041", placement="warm")
     await backfill.file_candidates(keyed, room=10)
     assert await queue.lease(keyed, [pipeline.TASK_KIND], limit=10) == []
-
-
-# --- what TMDB says, and what the walk does with it -----------------------------------------------
 
 
 async def test_tmdb_holding_no_record_is_asked_again_after_thirty_days(keyed):
@@ -272,10 +244,8 @@ async def test_no_key_no_walk(db, raw_root):
 
 
 async def test_an_id_another_title_already_carries_is_given_back(keyed):
-    """The corpus's split rows: an imdb-only row and a tmdb-only row for one film. TMDB answers the
-    first with the second's id, and the card is rightly the same film's - but a second holder of
-    one id makes the resolver's provider arms answer arbitrarily, so the id the walk filled goes
-    back to NULL. The same for an imdb id `tmdb:detail` offers that another row already holds."""
+    """A second holder of one id makes the resolver answer
+    arbitrarily, so the filled id goes back to NULL."""
     await _title(keyed, 60, tmdb_id=329865, placement="warm", name="Arrival")
     await keyed.execute("INSERT INTO title_meta (title_id, source, payload) VALUES (60, 'tmdb', '{}')")
     await _title(keyed, 61, imdb_id="tt2543164", placement="warm", name="Arrival")
@@ -301,8 +271,7 @@ async def test_an_id_another_title_already_carries_is_given_back(keyed):
 
 
 async def test_a_title_a_pipeline_walk_holds_is_handed_back_untouched(keyed, pg_url):
-    """The pipeline's per-title lock: a title an acquisition walk is writing is not written here
-    at the same time. It is due again at once and spends no attempt."""
+    """The pipeline's per-title lock: due again at once, and no attempt spent."""
     import asyncpg
 
     await _title(keyed, 70, imdb_id="tt0000070", placement="warm")
@@ -321,8 +290,6 @@ async def test_a_title_a_pipeline_walk_holds_is_handed_back_untouched(keyed, pg_
 
 
 async def test_the_worker_fires_the_walk_from_its_own_registry(keyed, pg_url, monkeypatch):
-    """§1: acquisition is the worker's. The job is a row in `worker.JOBS` on the drain's half
-    hour, and the web process's job list names it for §6.6's System card."""
     from spielplan import worker
     from spielplan.api import admin
     from spielplan.db import pool

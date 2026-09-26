@@ -1,23 +1,6 @@
-"""The polite per-host fetcher, asserted as arithmetic. Spec v2.1 §8, decision 340.
-
-§8 says the fetcher "is polite, and says so in a form that can be failed" (`spec:404`), which is
-the whole reason decision 340 exists: politeness that is only claimed in a docstring cannot be
-reviewed. So this file asserts the numbers rather than the intent - how long a 429 costs, how far
-the backoff curve climbs, how many requests a paced host is allowed, and which host a breaker
-takes down.
-
-**Nothing here reaches the network.** Every request is served by an `httpx.MockTransport` double
-in the test that needs it, and the clock is injected, so a test that asserts a two-minute pause
-runs in microseconds and asserts the pause exactly rather than approximately. That is the point:
-`asyncio.sleep`ing for real would make the difference between a 120-second pause and a 1.12-second
-one invisible, and that difference is the defect this layer exists to prevent
-(`docs/milestones/M5.1-plan.md` §8: M5.1 fetches nothing real).
-
-Three tests take the integration layer, because three of the fetcher's promises are promises about
-Postgres and cannot be asserted anywhere else: the robots cache that decision 340 puts in the
-database, the breaker's refusal surviving the worker that opened it, and the conditional request
-built from the previous `raw_document` row. Skipped without TEST_DATABASE_URL; see tests/conftest.py.
-"""
+"""The polite per-host fetcher, asserted as arithmetic (§8, decision 340). No network: MockTransport doubles
+and an injected clock, so a two-minute pause is asserted exactly. The robots cache, breaker persistence
+and conditional request need TEST_DATABASE_URL."""
 
 from __future__ import annotations
 
@@ -51,25 +34,16 @@ from spielplan.acquire.hosts import (
     undocumented_overrides,
 )
 
-# Two hosts whose declared policy turns robots off, so a test about pacing is about pacing: with
-# `respect_robots=True` the fetcher's first act on a new host is to read its robots.txt, which is a
-# request the test would have to serve and then subtract from every count it makes.
+# Hosts whose declared policy turns robots off, so a pacing count carries no robots.txt request.
 FAST = "api.themoviedb.org"       # rps 18, burst 20, threshold 8, cooldown 300
 SECOND = "api.trakt.tv"           # rps 2.5, burst 3 - a different host, which is the whole point
 
 
 class _Clock:
-    """A clock that moves only when something sleeps on it.
+    """Replaces `time.monotonic` and `asyncio.sleep` together:
+    the bucket must see the time a sleep claimed."""
 
-    Injected in place of `time.monotonic` and `asyncio.sleep` together, because the two are one
-    fiction: the assertion every pacing test makes is "it slept for exactly this long", and the
-    bucket's refill arithmetic then has to see that time actually passed.
-    """
-
-    # A bucket that cannot satisfy its own wait does not fail, it spins, and a spinning test is a
-    # hung suite with no message - which is how this file first ran. The bound turns that into an
-    # assertion so a regression in `_TOKEN_EPSILON` reads as a failure rather than as a machine
-    # that has to be killed by hand.
+    # A bucket that cannot satisfy its own wait spins; the bound turns a hung suite into a failure.
     _SPIN_LIMIT = 100
 
     def __init__(self, start: float = 1000.0) -> None:
@@ -110,18 +84,8 @@ def _always(status: int, **kwargs):
     return handler
 
 
-# --- hosts.py: the policies as data (decision 340) ------------------------------------
-
-
 def test_the_two_html_connectors_stage_two_names_are_kept_deliberately_slow():
-    """§8 stage 2 names `rt:page` and `metacritic:page->reviews`, and this is what that costs.
-
-    Seven-tenths of a request a second, one at a time, with a quarter-hour cooldown rather than the
-    usual five minutes - the rate the corpus crawled both hosts at without being blocked. Asserted
-    as four numbers because "deliberately slow" is the kind of intent a later performance pass
-    tunes away in good faith: these are measurements, and raising them is a decision somebody has
-    to take rather than a value somebody can nudge.
-    """
+    """The rate the corpus crawled both hosts at unblocked; raising it is a decision, not a tune."""
     for host in ("www.rottentomatoes.com", "www.metacritic.com"):
         policy = HOST_POLICIES[host]
         assert policy.rps == 0.7, f"{host} is one of the two hosts section 8 stage 2 scrapes"
@@ -131,19 +95,7 @@ def test_the_two_html_connectors_stage_two_names_are_kept_deliberately_slow():
 
 
 def test_every_robots_override_records_the_reasoning_that_licenses_it():
-    """Decision 340, and §8: an override is permitted "only where it is documented with its
-    reasoning beside the policy it changes" (`spec:404`).
-
-    A permission with no enforcement is a comment, so the clause is read as a query over the
-    table. The second assertion is what stops the first from passing vacuously - if a later edit
-    turned robots back on everywhere, `undocumented_overrides()` would be empty for the wrong
-    reason and this guard would go quiet exactly when it stopped guarding anything.
-
-    The third names the corpus's one worked override by its evidence rather than by its host, so
-    that copying the row without its argument fails here: Wikimedia disallows `/w/` to keep
-    crawlers off the script endpoints, and the batched action API is the sanctioned route to the
-    awards, box-office and country claims that honouring the blanket rule lost entirely.
-    """
+    """An override needs its reasoning beside it; the second assertion stops the first passing vacuously."""
     assert undocumented_overrides() == []
     overridden = [h for h, p in HOST_POLICIES.items() if not p.respect_robots]
     assert len(overridden) >= 5, "the table has overrides; a guard over none of them guards nothing"
@@ -151,28 +103,8 @@ def test_every_robots_override_records_the_reasoning_that_licenses_it():
 
 
 def test_the_households_own_jellyfin_is_not_a_third_party():
-    """§8: "The household's own Jellyfin server is exempt: it is reached with the household's own
-    key and is not a third party to be polite to."
-
-    Both halves of the exemption, because either one alone is useless: throttling the owned-library
-    sync to a stranger's rate would make it take hours, and honouring Jellyfin's stock robots.txt
-    would block it outright.
-
-    The last two are the exemption's edges. Case-insensitive, because a hostname is, and an admin
-    who typed the server in mixed case would otherwise silently get the slow default. Whole-host
-    and not a suffix match, because `evil.jellyfin.example` is a third party that merely ends in
-    the household's name - the shape that turns a convenience into a hole.
-
-    AND THE SPELLING THE APP ACTUALLY HOLDS, which every assertion above missed because every one
-    of them passes a bare hostname. The only Jellyfin location this app stores is a URL
-    (`connectors/registry.py:85`, `:225`, `.env.example`), and `normalise_host` takes a netloc:
-    handed `http://jelly.home:8096` it returns the literal string `'http'`, so the exemption fails
-    silently in BOTH directions - the household's own server throttled to DEFAULT_RPS with its
-    stock robots.txt honoured, and any host whose key really is `http` handed the 8 rps exemption.
-    The http-on-80 row is the same miss by a second mechanism: `get` keys a request under the
-    scheme it was made with, so a configured value normalised under a hardcoded https default kept
-    a port the request side had already dropped. [M5.1 review cycle 2, port-JF-01, M51-C2-340-04]
-    """
+    """§8's Jellyfin exemption: both halves, case-insensitive,
+    whole-host, and from the URL the app stores."""
     home = "jellyfin.home.example"
     exempt = policy_for(home, jellyfin_host=home)
     assert exempt.respect_robots is False
@@ -197,21 +129,11 @@ def test_the_households_own_jellyfin_is_not_a_third_party():
         assert policy_for("http", jellyfin_host=url).rps == DEFAULT_RPS, (
             f"a configured {url!r} handed the exemption to a host literally spelled 'http'"
         )
-    # A bare netloc carries no scheme, so an explicitly written default port is not a
-    # distinguishing port - and `get` keys an http request to port 80 as the bare host.
+    # A bare netloc has no scheme, so an explicit default port is not a distinguishing port.
     assert policy_for("jelly.lan", jellyfin_host="jelly.lan:80").rps == 8.0
     assert policy_for("jelly.lan:8096", jellyfin_host="jelly.lan:80").rps == DEFAULT_RPS
 
-    # AND A DECLARED ROW OUTRANKS THE CONNECTOR URL, which is the edge the exemption had left
-    # open in the one direction that matters. `jellyfin_host` is whatever an admin typed into
-    # section 6.6's Jellyfin card (`api/admin.py` validates its LENGTH and nothing else), and the
-    # test came first in `policy_for`, so that text field could replace any row in the table: point
-    # it at one of the two hosts section 8 stage 2 scrapes - by a typo, by a reverse proxy that
-    # fronts both, or by being talked into it - and that host is crawled at 8 rps with its
-    # robots.txt ignored, while `declared_policies()` and `undocumented_overrides()` both keep
-    # reporting the measured numbers because neither takes a `jellyfin_host` argument at all. No
-    # household runs Jellyfin on one of these names, so the guard costs nothing and the exemption
-    # still wins everywhere else. [M5.1 review cycle 3, M51-C3-340-03]
+    # A declared row outranks the configured Jellyfin host, or a typo there crawls a stage-2 host at 8 rps.
     for declared in ("www.rottentomatoes.com", "www.metacritic.com", "www.film-rezensionen.de"):
         hijacked = policy_for(declared, jellyfin_host=f"https://{declared}")
         assert hijacked.rps == HOST_POLICIES[declared].rps, (
@@ -223,30 +145,14 @@ def test_the_households_own_jellyfin_is_not_a_third_party():
 
 
 def test_an_unknown_host_is_crawled_at_the_slow_default():
-    """One request a second and robots honoured, for a host nobody has measured.
-
-    The default is the safety property of the whole table: a stage that reaches a host before
-    anyone tuned it cannot hurt that host, and the cost of being wrong is slowness rather than a
-    block. It is also what makes adding a row to `HOST_POLICIES` a deliberate act.
-    """
+    """The table's safety property: an unmeasured host costs slowness, not a block."""
     policy = policy_for("nobody-has-measured-this.example")
     assert policy.rps == DEFAULT_RPS
     assert policy.respect_robots is True
 
 
 def test_the_three_paid_provider_hosts_are_declared_with_the_corpus_numbers_and_their_reasoning():
-    """§8 stage 6's three hosts, with `mdc/config.py:98-110`'s numbers verbatim. [M5.5 phase B]
-
-    M5.1 dropped these rows on purpose - "a rate declared here for `api.anthropic.com` would be
-    configuration for a feature with no caller" - and asserted their absence, which was true for
-    exactly as long as nothing in the tree could reach a provider. M5.5 is the caller: every
-    provider POST goes through this fetcher (§9, "one POST per provider through the rate-limited
-    fetcher"), so each host needs the rate the corpus set for it, and each turns robots off, which
-    decision 340 permits only "documented with its reasoning beside the policy it changes". So the
-    absence test is replaced rather than deleted: the three rows exist with the corpus's numbers,
-    each override carries a note that argues it, `undocumented_overrides()` is still empty, and no
-    fourth provider host has crept in under a spelling the substring check would catch.
-    """
+    """§8 stage 6's provider hosts with the corpus's numbers; each robots override carries its argument."""
     expected = {
         "api.anthropic.com": (2.0, 4, 4),
         "api.openai.com": (2.0, 4, 4),
@@ -270,11 +176,7 @@ def test_the_three_paid_provider_hosts_are_declared_with_the_corpus_numbers_and_
 
 
 def test_the_board_can_read_every_policy_including_its_reasoning():
-    """§8: policies are carried "as data rather than as constants, so §6.6 can show them".
-
-    The read exists and is complete, which is the whole of M5.1's obligation here - the surface
-    that renders it is M5.7's. Sorted, so an operator reading the list twice reads the same list.
-    """
+    """§8: policies are data "so §6.6 can show them"; sorted, so two reads agree."""
     rows = declared_policies()
     assert len(rows) == len(HOST_POLICIES)
     assert [r["host"] for r in rows] == sorted(HOST_POLICIES)
@@ -284,17 +186,8 @@ def test_the_board_can_read_every_policy_including_its_reasoning():
     }
 
 
-# --- the pacing and backoff arithmetic ------------------------------------------------
-
-
 async def test_a_host_is_paced_at_its_declared_rate_once_its_burst_is_spent():
-    """Rotten Tomatoes' numbers: burst 1, then one request every 1/0.7 seconds.
-
-    The burst is spent without waiting - that is what a burst is - and every request after it
-    waits exactly as long as one token takes to accrue. Asserted to the fraction because the
-    failure this catches is a bucket that is a little too generous, which no crawl notices until
-    the host does.
-    """
+    """The burst is spent without waiting; each later request waits exactly one token's accrual."""
     clock = _Clock()
     bucket = TokenBucket(0.7, 1, clock=clock, sleep=clock.sleep, jitter=_low)
     await bucket.acquire()
@@ -305,13 +198,7 @@ async def test_a_host_is_paced_at_its_declared_rate_once_its_burst_is_spent():
 
 
 async def test_the_bucket_never_refills_past_its_burst():
-    """An idle hour does not buy a thundering herd.
-
-    Tokens accrue at `rps` and are capped at `burst`, so a stage that reaches a host for the first
-    time in an hour gets `burst` requests and then the declared rate - not 3,600 of them. This is
-    the half of the algorithm that is invisible in a busy crawl and decisive in an idle one, which
-    is exactly this app: the pipeline runs per title, minutes apart.
-    """
+    """Tokens cap at `burst`, so an idle hour buys `burst` requests, not 3,600."""
     clock = _Clock()
     bucket = TokenBucket(1.0, 2, clock=clock, sleep=clock.sleep, jitter=_low)
     clock.advance(3600)
@@ -323,20 +210,7 @@ async def test_the_bucket_never_refills_past_its_burst():
 
 
 async def test_the_bucket_cannot_spin_when_the_wait_it_computed_lands_a_float_short():
-    """The one correction this port makes to the corpus's bucket, pinned by its own numbers.
-
-    Trakt's declared policy, from a clock at 1000 seconds: three requests spend the burst, and the
-    fourth computes a 0.4-second wait to buy one token back. `(now - updated) * rps` does not
-    return that token - the subtraction cancels most of a large clock's significant digits and the
-    product lands at 0.9999999999999432 - so a full-precision "have I got a token" reads "not yet",
-    computes a 2e-14 second wait that the clock cannot even represent at that magnitude, and asks
-    again for ever.
-
-    The corpus never meets this because its jitter overshoots the shortfall on every call, which is
-    what makes it worth a test rather than a comment: the defect appears exactly when the pacing is
-    made deterministic, and a spin of zero-length sleeps inside §5.3's sequential tick takes every
-    other job offline with the process still looking healthy.
-    """
+    """`(now - updated) * rps` lands at 0.9999999999999432 on a large clock; full precision would spin."""
     clock = _Clock(start=1000.0)
     bucket = TokenBucket(2.5, 3, clock=clock, sleep=clock.sleep, jitter=_low)
     for _ in range(3):
@@ -347,13 +221,7 @@ async def test_the_bucket_cannot_spin_when_the_wait_it_computed_lands_a_float_sh
 
 
 def test_the_backoff_curve_doubles_jitters_and_is_capped_at_a_minute():
-    """1.6s, 3.2s, 6.4s ... capped at 60, spread +/-30 percent. The corpus's curve, verbatim.
-
-    The cap is what stops a fourth retry against a dead host from being a quarter of an hour inside
-    a worker tick measured in seconds. The spread is what stops a hundred tasks that failed
-    together from retrying together and failing together again - asserted as a band rather than a
-    value, because a jitter that is secretly a constant would pass any single-point assertion.
-    """
+    """The cap bounds a retry inside a worker tick; the band catches a jitter that is secretly constant."""
     assert _backoff(1, _low) == pytest.approx(1.6 * 0.7)
     assert _backoff(2, _low) == pytest.approx(3.2 * 0.7)
     assert _backoff(3, _low) == pytest.approx(6.4 * 0.7)
@@ -366,22 +234,8 @@ def test_the_backoff_curve_doubles_jitters_and_is_capped_at_a_minute():
 
 
 def test_retry_after_is_read_in_seconds_capped_and_never_guessed():
-    """The header in both forms RFC 9110 §10.2.3 permits, through one cap.
-
-    Unparseable means "no instruction", which sends the caller to the backoff curve rather than to
-    zero - the difference between backing off politely and hammering a host that just asked for
-    quiet.
-
-    THE DATE FORM USED TO RETURN None, and the reason given was that "a date mis-read as a number
-    would be a pause of geological length". Neither half is possible: `float()` RAISES on all
-    three date productions rather than returning a number, and the five-minute cap bounds any
-    misreading anyway. What the omission did was discard an explicit instruction - measured, a
-    host answering 429 with a date an hour out was hit four times inside twenty-four seconds where
-    the coverage row for this layer says a 429 "backs off at least as far" - and the form is the
-    one Cloudflare and several API gateways emit, which is what the two HTML hosts §8 stage 2
-    names sit behind. A date already past is an expired instruction and not a negative pause.
-    [M5.1 review cycle 4, M51-C4-340-03]
-    """
+    """Both RFC 9110 §10.2.3 forms through one cap; unparseable
+    means the backoff curve, a past date expired."""
     assert _retry_after({"retry-after": "120"}) == 120.0
     assert _retry_after({"retry-after": "9999"}) == 300.0, "capped at five minutes"
     assert _retry_after({}) is None
@@ -403,42 +257,21 @@ def test_retry_after_is_read_in_seconds_capped_and_never_guessed():
         "an instruction that has expired is not a negative pause"
     )
 
-    # AND THE SECONDS FORM THROUGH THE SAME FLOOR, which is the half the sentence above promised
-    # and only the date branch delivered: `min(float(raw), 300.0)` had no lower bound, so a host
-    # answering `-1` bought `await self._sleep(-1.0)` - a pause `asyncio.sleep` returns from
-    # immediately - and the four attempts of the backoff curve landed inside one event-loop turn.
-    # Zero is not "no instruction": it is falsy, so the caller's `_retry_after(...) or _backoff(...)`
-    # sends it to the curve, which is what an expired instruction already means one branch down.
-    # The non-finite pair come free with the clamp and are worth pinning, because `nan` reached
-    # `asyncio.sleep` and raised `ValueError` out of `get`, which `FetchError`'s own docstring says
-    # is the one type this layer raises. [M5.1 review cycle 4 second pass, M51-C4-340-07]
+    # The seconds form through the same floor: negative or non-finite values go to the curve.
     for header in ("-1", "-99999", "nan", "-inf"):
         assert _retry_after({"retry-after": header}) == 0.0, header
     assert _retry_after({"retry-after": "inf"}) == 300.0, "the cap holds for the other infinity"
 
 
 def test_the_retryable_set_is_the_corpus_list_including_cloudflares_family():
-    """520-524 are in the set on purpose, and are the ones a rewrite drops.
-
-    They are Cloudflare's origin-side family, and they matter here because the two HTML hosts §8
-    stage 2 names sit behind it: an unhappy origin answers 520 where a plain server answers 502,
-    and a fetcher that treats 520 as a real answer parks a title on a blip. 404 is outside the set
-    for the mirror-image reason - retrying a real answer is how one wrong url becomes four.
-    """
+    """520-524 are Cloudflare's origin-side family, in front
+    of both §8 stage 2 HTML hosts; 404 is an answer."""
     assert sorted(RETRYABLE_STATUS) == [408, 425, 429, 500, 502, 503, 504, 520, 521, 522, 524]
     assert 404 not in RETRYABLE_STATUS
 
 
-# --- the retry loop, against a local double -------------------------------------------
-
-
 async def test_a_429_is_paused_for_as_long_as_the_host_asked():
-    """§8's politeness where it costs something: the host said two minutes, so it is two minutes.
-
-    `Retry-After` is honoured and never shortened. The backoff would have chosen 3.36 seconds and
-    is overruled, which is the direction that matters - a fetcher that quietly preferred its own
-    curve would look polite in code review and be a rate-limit violation on the wire.
-    """
+    """`Retry-After` is honoured and never shortened; the backoff's 3.36 s is overruled."""
     clock = _Clock()
     async with _fetcher(_always(429, headers={"Retry-After": "120"}), clock) as f:
         with pytest.raises(FetchError) as caught:
@@ -449,12 +282,7 @@ async def test_a_429_is_paused_for_as_long_as_the_host_asked():
 
 
 async def test_a_429_with_an_optimistic_retry_after_still_costs_three_backoffs():
-    """The other direction, and the reason the rule is a `max` rather than a preference.
-
-    A host that is rate limiting in earnest sometimes answers `Retry-After: 1`, and taking it at
-    its word is how a crawl gets itself blocked. The floor is three times the backoff the attempt
-    would otherwise have chosen: 3.36 seconds where the header asked for one.
-    """
+    """The rule is a `max`: an optimistic `Retry-After: 1` still costs three backoffs."""
     clock = _Clock()
     async with _fetcher(_always(429, headers={"Retry-After": "1"}), clock) as f:
         with pytest.raises(FetchError):
@@ -463,12 +291,7 @@ async def test_a_429_with_an_optimistic_retry_after_still_costs_three_backoffs()
 
 
 async def test_a_retryable_status_without_an_instruction_follows_the_backoff_curve():
-    """A 503 with no header: the curve, and one sleep fewer than the attempts.
-
-    Two sleeps for three attempts, because the last attempt raises rather than waiting for a fourth
-    that will never happen - a fetcher that slept after its final attempt would add a minute of
-    dead time to every permanently failing url.
-    """
+    """The last attempt raises rather than sleeping for a fourth that will never happen."""
     clock = _Clock()
     async with _fetcher(_always(503), clock) as f:
         with pytest.raises(FetchError) as caught:
@@ -478,13 +301,7 @@ async def test_a_retryable_status_without_an_instruction_follows_the_backoff_cur
 
 
 async def test_a_404_is_an_answer_and_is_raised_without_a_retry():
-    """A 4xx outside the retryable set is the host answering, not the host failing.
-
-    So it is raised at once, non-retryable, and - the half that is easy to get wrong - it does not
-    count toward the breaker. A pipeline that asks for fifty titles a stranger's API has never
-    heard of would otherwise trip the breaker on its own bad guesses and park a host that was
-    behaving perfectly.
-    """
+    """A 4xx outside the retryable set is an answer: raised at once and not counted toward the breaker."""
     clock = _Clock()
     async with _fetcher(_always(404), clock) as f:
         with pytest.raises(FetchError) as caught:
@@ -496,20 +313,8 @@ async def test_a_404_is_an_answer_and_is_raised_without_a_retry():
 
 
 async def test_the_breaker_opens_for_one_host_and_the_other_host_keeps_fetching():
-    """§8's "one hostile host cannot burn the whole run", asserted as an isolation property.
-
-    Eight consecutive failures is the declared threshold, so the ninth call is refused before a
-    request is made - `HostPaused`, retryable, raised without sleeping, because a five-minute
-    cooldown inside a twenty-second worker tick is a task to hand back rather than a wait to sit
-    through. The second host is the assertion that matters: the breaker is per host, and a table of
-    per-host policies whose breaker was global would be a table with one entry.
-
-    That second host is fetched once BEFORE the failures and again after, which is not ceremony. A
-    drain builds a host's runtime lazily, on first use, so a breaker that leaked across hosts would
-    still leave an untouched host working and the isolation would be asserted against a host the
-    leak had not reached yet - a mutation that paused every known host passed this test until the
-    warm-up was added.
-    """
+    """The second host is warmed up BEFORE the failures, or
+    a breaker leaking to every known host would pass."""
     clock = _Clock()
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -534,13 +339,7 @@ async def test_the_breaker_opens_for_one_host_and_the_other_host_keeps_fetching(
 
 
 async def test_robots_disallowed_is_not_retryable_and_costs_one_request():
-    """Decision 340, and the one failure a retry loop must never treat as transient.
-
-    The answer will be the same tomorrow and the attempt itself is the impoliteness, so
-    `RobotsDisallowed` is raised before the request is built and carries `retryable=False`. The
-    counter is the second assertion: exactly one request went out, the robots.txt, and the url the
-    caller asked for was never touched.
-    """
+    """The answer will be the same tomorrow, so `retryable=False`, and only the robots.txt went out."""
     clock = _Clock()
     seen: list[str] = []
 
@@ -559,29 +358,8 @@ async def test_robots_disallowed_is_not_retryable_and_costs_one_request():
 
 
 async def test_every_request_declares_the_user_agent_that_names_the_app():
-    """Decision 340: "It declares a User-Agent naming the app."
-
-    Named, so a host that wants to address this crawler in its robots.txt or block it by name can.
-    `urllib.robotparser` matches on the token before the slash, which is why the app's name comes
-    first and the parenthetical follows - a `User-agent: Spielplan` rule has to apply to this.
-
-    EVERY REQUEST MEANS FOUR KINDS OF REQUEST, and the first form of this test could reach only
-    one of them. It fetched `FAST`, whose declared policy sets `respect_robots=False` - the two
-    hosts at the top of this file are chosen precisely so that no robots request is made - and
-    then asserted `sent == [USER_AGENT]`, a one-element equality that structurally forbids a
-    second request. So the robots.txt fetch, the retries and the post-redirect request were all
-    outside its reach, and the robots fetch is the one that matters most: it is the file a host
-    reads to decide how to treat this crawler, and it is the one request that does not go through
-    `get`'s header path at all. Moving `_fetch_robots` onto a client of its own - a plausible
-    repair for any of this cycle's robots findings - would have shipped it anonymously with the
-    old assertion green. Run here over an unmeasured host, which honours robots at the slow
-    default, and asserted on the recorded headers rather than on a count.
-    [M5.1 review cycle 1, M51-340-08]
-
-    The path list is what stops the header assertion passing vacuously: it names the four kinds
-    of request by hand, so a change that stops exercising one of them reddens here rather than
-    quietly reducing what "every request" is asserted over.
-    """
+    """`urllib.robotparser` matches the token before the slash, so the app's name comes first. Asserted over
+    all four kinds of request, named by hand; the robots.txt fetch does not go through `get`'s headers."""
     clock = _Clock()
     sent: list[tuple[str, str]] = []
     flaky = {"left": 2}
@@ -615,13 +393,7 @@ async def test_every_request_declares_the_user_agent_that_names_the_app():
 
 
 async def test_the_request_counter_starts_at_zero_and_counts_what_went_out():
-    """The counter the exit criterion reads when it asserts a re-parse costs nothing.
-
-    Check 7 of `ops/m51_exit_criterion.py` measures "zero outbound requests" against this number,
-    so it has to start at zero on a fresh fetcher and move only when something is actually sent.
-    Bytes are counted alongside for the same reason: a 304 that returned a body would be invisible
-    in a request count and obvious here.
-    """
+    """A re-parse must cost zero requests; bytes are counted too, so a 304 carrying a body would show."""
     clock = _Clock()
     async with _fetcher(_always(200, content=b"seven!!"), clock) as f:
         assert f.total_requests == 0
@@ -632,19 +404,8 @@ async def test_the_request_counter_starts_at_zero_and_counts_what_went_out():
         assert f.total_errors == 0
 
 
-# --- the three promises that are promises about Postgres ------------------------------
-
-
 async def test_robots_txt_is_cached_in_postgres_and_read_back_on_the_next_drain(db):
-    """Decision 340: robots.txt is "fetched per host and cached in Postgres".
-
-    The corpus caches it in the process, which is enough for a CLI whose process is the crawl.
-    This runs inside §5.3's worker, which restarts, and a fetcher that re-read every host's
-    robots.txt on every restart would be impolite by exactly the mechanism meant to make it polite.
-
-    So the second half is the test: a fresh fetcher against the same database issues no request at
-    all and still refuses the disallowed path. The refusal came out of Postgres.
-    """
+    """The worker restarts, so a fresh fetcher over the same database must refuse from the cache unasked."""
     seen: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -661,12 +422,7 @@ async def test_robots_txt_is_cached_in_postgres_and_read_back_on_the_next_drain(
     assert row["robots_status"] == 200
     assert "Disallow: /private" in row["robots_txt"]
     assert row["robots_fetched_at"] is not None
-    # TWO, and not the one this test used to assert. Port change 8 says a robots fetch is an
-    # outbound request and that "a counter that quietly omits a class of request is a counter that
-    # can lie", and then counted it only on the process-wide `total_requests` - leaving
-    # `rt.requests`, which is what `host_report()` publishes and this column stores, short by
-    # exactly that class. The drain made two requests: robots.txt and the page.
-    # [M5.1 review cycle 1, port-07, M51-340-10]
+    # Two: the robots.txt fetch is an outbound request and is counted like the page.
     assert row["requests"] == 2, "the drain's counters are flushed once, on the way out"
 
     seen.clear()
@@ -678,16 +434,8 @@ async def test_robots_txt_is_cached_in_postgres_and_read_back_on_the_next_drain(
 
 
 async def test_the_breakers_refusal_survives_the_worker_it_opened_in(db):
-    """A worker killed after opening a breaker must not come back and resume hammering.
-
-    §5.3's worker restarts, and its tick is twenty seconds against a five-minute cooldown - so a
-    breaker held only in memory would protect a host for one tick and then forget. `paused_until`
-    is written the moment the breaker opens rather than on the way out, because the process that
-    opened it is precisely the process that may not get to run its shutdown path.
-
-    Stored and read back as an interval against the database's own `now()`, so nothing has to
-    reconcile Postgres's wall clock with the monotonic clock the fetcher paces itself by.
-    """
+    """`paused_until` is written when the breaker opens, since that process may never reach its shutdown
+    path. Stored as an interval against Postgres's `now()`, so no wall clock meets the monotonic one."""
     async with _fetcher(_always(500), _Clock(), conn=db) as first:
         for _ in range(8):
             with pytest.raises(FetchError):
@@ -707,15 +455,7 @@ async def test_the_breakers_refusal_survives_the_worker_it_opened_in(db):
 
 
 async def test_a_stored_validator_conditions_the_next_request_and_a_304_costs_no_bytes(db):
-    """§8: "All fetched bytes land in the app's own raw store, so re-parsing is free forever."
-
-    This is the other half of that promise - the half that keeps the *fetch* cheap when the bytes
-    have not changed. The validators come off the newest **successful** `raw_document` row for the
-    url, which is why the fixture plants a newer failed row carrying a different ETag: a validator
-    taken from an error page is how a store comes to hold a 503 under the name of the document.
-
-    A 304 hands back no body, and `total_bytes` is the assertion that nothing was transferred.
-    """
+    """Validators come from the newest SUCCESSFUL row, hence a newer failed row with another ETag."""
     url = f"https://{FAST}/3/movie/603"
     for fetched_at, ok, etag in (("now() - interval '2 days'", True, '"good-etag"'),
                                  ("now() - interval '1 hour'", False, '"error-page-etag"')):
@@ -741,30 +481,9 @@ async def test_a_stored_validator_conditions_the_next_request_and_a_304_costs_no
     assert response.content == b""
 
 
-# --- review cycle 1: politeness, on the wire rather than in a docstring ------------------------
-#
-# Each of these reddens against the layer as this milestone first shipped it, and each is a
-# property §8's clause (`spec:404`) claims and M5.3 through M5.7 will inherit unchanged. Decision
-# 340 exists so a reviewer "can fail the behaviour instead of debating it"; this is where the
-# failing happens.
-
-
 async def test_a_robots_txt_the_host_could_not_serve_refuses_rather_than_allowing():
-    """RFC 9309 §2.3.1.4: when robots.txt is unreachable a crawler "MUST assume complete disallow".
-
-    Every failure mode used to allow the request instead. `_parse_robots` read anything that was
-    not a 200 as an empty ruleset, which `urllib.robotparser` answers as allow-all, and the
-    `except` in `_fetch_robots` took the same branch for a timeout or a connection reset - so a
-    host that 500s during a deploy, or one a DNS blip hid for a second, was crawled on the
-    household's IP under a file this app had never read. That is the most permissive possible
-    reading of an answer that does not exist.
-
-    RETRYABLE, which is what makes the refusal affordable. The old code's counter-argument was
-    sound about the exception it had - `RobotsDisallowed` is `retryable=False`, so refusing a host
-    over one outage would park every task for it as permanently refused - so this is a different
-    exception, in `HostPaused`'s mould: a stage parks with a deadline and the next drain asks
-    again. [M5.1 review cycle 1, M51-340-03]
-    """
+    """RFC 9309 §2.3.1.4: an unreachable robots.txt means
+    "complete disallow"; retryable, so a drain asks again."""
     def unreachable(_request: httpx.Request) -> httpx.Response:
         raise httpx.ConnectError("no route to host")
 
@@ -781,14 +500,7 @@ async def test_a_robots_txt_the_host_could_not_serve_refuses_rather_than_allowin
 
 
 async def test_a_host_that_published_no_rules_is_still_crawlable():
-    """The other side of the line, and it is RFC 9309 §2.3.1.3's: the whole 4xx range is
-    "unavailable", where "the crawler MAY access any resources".
-
-    Without this the fix above would be a refusal to crawl anything that does not publish a
-    robots.txt, which is most of the web and all four of the blogs `hosts.py` declares. 404, 403
-    and 401 alike: a 403 on robots.txt is an anti-bot reflex rather than a rule, and inventing a
-    rule out of it is as much a guess as ignoring one.
-    """
+    """RFC 9309 §2.3.1.3: any 4xx on robots.txt is "unavailable", so the host stays crawlable."""
     for status in (404, 403, 401, 410):
         def handler(request: httpx.Request, status=status) -> httpx.Response:
             if request.url.path == "/robots.txt":
@@ -800,20 +512,8 @@ async def test_a_host_that_published_no_rules_is_still_crawlable():
 
 
 async def test_a_robots_failure_is_not_cached_as_permission(db):
-    """Decision 340 puts the robots cache in Postgres, and the cache used to hold non-answers.
-
-    `_fetch_robots` wrote `fetch_host_state` outside its own `try`, so a transport failure landed
-    with `robots_txt = ''`, `robots_status = 0` and `robots_fetched_at = now()` - and
-    `_load_host_state` gated only on age, so for `ROBOTS_TTL_SECONDS` (24 h) across every worker
-    restart that host was read as allow-all and never asked again. Because the write is
-    `ON CONFLICT DO UPDATE` it also CLOBBERED a `Disallow: /` this app had already read and was
-    obeying.
-
-    The owner's review question for decision 340 was whether "the cache cannot pin a stale allow".
-    This is that question, asked of the database: the failed drain must leave no robots row, and a
-    second fetcher over the same connection must ask again - and then obey what it is told.
-    [M5.1 review cycle 1, M51-340-01, M51-340-03, port-02]
-    """
+    """A failed robots fetch leaves no cached row, or it
+    pins allow-all for 24 h and clobbers a `Disallow`."""
     host = "pinned.example"
 
     def broken(request: httpx.Request) -> httpx.Response:
@@ -845,21 +545,7 @@ async def test_a_robots_failure_is_not_cached_as_permission(db):
 
 
 async def test_a_redirect_is_gated_by_the_host_it_goes_to():
-    """§8 (`spec:404`): the fetcher "honours each host's robots.txt" and "carries per-host rate and
-    concurrency policies as data". A hop is a request, and every hop used to skip all of it.
-
-    `follow_redirects=True` was taken verbatim from `mdc/http.py:128`, where it was harmless: the
-    corpus is a developer's CLI. Here httpx expanded one `request` call into a chain of requests
-    inside the layer that was supposed to be gating them, so a target host's robots.txt was never
-    read, its declared policy never applied, its bucket never charged, its breaker never consulted,
-    and `host_report()` attributed the whole chain to the host that redirected.
-
-    TWO ASSERTIONS AND THE SECOND IS THE SHARPER ONE. A cross-host hop into a host that disallows
-    everything must be refused; and a SAME-host hop into a disallowed PATH must be refused too,
-    which is the ordinary slug-miss shape M5.3 will meet on Rotten Tomatoes and Metacritic - the
-    fetcher refusing a url when asked for it and fetching the identical url when redirected to it.
-    [M5.1 review cycle 1, M51-340-02]
-    """
+    """A hop is a request: the target's robots, policy and bucket apply, same-host hops included."""
     def cross_host(request: httpx.Request) -> httpx.Response:
         if request.url.host == "start.example":
             if request.url.path == "/robots.txt":
@@ -894,12 +580,7 @@ async def test_a_redirect_is_gated_by_the_host_it_goes_to():
 
 
 async def test_a_redirect_chain_is_capped_rather_than_followed_to_exhaustion():
-    """httpx's own default is twenty hops, which is a number for a browser.
-
-    Every hop is a request on the household's IP, and a chain that needs more than a handful is a
-    loop or a redirector. The cap is a refusal rather than a silent stop, because a 3xx body
-    returned as an answer is a redirect page handed to a parser. [M5.1 review cycle 1, M51-340-02]
-    """
+    """httpx's default twenty hops is a browser's number; past the cap is a refusal, not a 3xx body."""
     def loops(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/robots.txt":
             return httpx.Response(200, text="User-agent: *\nAllow: /\n")
@@ -913,35 +594,20 @@ async def test_a_redirect_chain_is_capped_rather_than_followed_to_exhaustion():
 
 
 async def test_a_port_the_scheme_already_implies_is_the_same_host():
-    """`urlparse(url).netloc` keeps the port and any userinfo. The policy table is keyed by host.
-
-    So `www.rottentomatoes.com:443` missed every row and took `DEFAULT_RPS` - 1.0 rps, burst 2,
-    a five-minute cooldown - instead of the 0.7/1/900 the corpus measured for that host. Worse
-    than the rate: it keyed a SECOND runtime for one physical host, so the two spellings had two
-    buckets and two breakers, and §6.6's board would have shown one host twice with neither number
-    right. A url built from third-party provider data is exactly where an explicit `:443` comes
-    from. [M5.1 review cycle 1, M51-340-04]
-    """
+    """`netloc` keeps port and userinfo; `:443` must neither
+    miss the policy row nor key a second runtime."""
     assert normalise_host("www.rottentomatoes.com:443") == "www.rottentomatoes.com"
     assert normalise_host("WWW.Rottentomatoes.COM") == "www.rottentomatoes.com"
     assert normalise_host("anyuser@www.rottentomatoes.com") == "www.rottentomatoes.com"
     assert normalise_host("host:80", scheme="http") == "host"
-    # A non-default port stays, because it is part of the host: a household Jellyfin on
-    # `192.168.1.10:8096` needs it, or two services on one box would share one exemption.
+    # A non-default port is part of the host: two services on one box must not share an exemption.
     assert normalise_host("jelly.lan:8096") == "jelly.lan:8096"
-    # Both sides of the Jellyfin comparison go through the same normalisation, so the exemption
-    # does not stop matching when M5.2 stores the configured host with an explicit default port.
+    # Both sides of the Jellyfin comparison go through the same normalisation.
     assert policy_for(normalise_host("JELLY.lan:8096"), jellyfin_host="jelly.lan:8096").rps == 8.0
     assert policy_for(normalise_host("evil.jelly.lan"), jellyfin_host="jelly.lan").rps == 1.0
 
-    # THE DNS ROOT LABEL IS THE THIRD SPELLING OF ONE AUTHORITY and it was the one left keying a
-    # second runtime. `www.rottentomatoes.com.` resolves to the same server, misses HOST_POLICIES,
-    # and so takes DEFAULT_RPS with its own bucket and its own breaker - the exact harm the port
-    # and userinfo rules above were added to close. It also widens the Jellyfin exemption, which
-    # `policy_for` guards with `host not in HOST_POLICIES`: a spelling that is not in the table is
-    # a spelling an admin's configured Jellyfin url can capture, so a declared host came back at
-    # 8 rps with `respect_robots=False`. The last assertion is that guard holding for all three
-    # spellings. [M5.1 review cycle 4 second pass, M51-C4-340-08]
+    # The trailing root dot is a third spelling of one host;
+    # unnormalised it escapes the table and its guard.
     assert normalise_host("www.rottentomatoes.com.") == "www.rottentomatoes.com"
     assert normalise_host("WWW.Rottentomatoes.COM.:443") == "www.rottentomatoes.com"
     assert normalise_host("[::1]") == "[::1]", "an IPv6 literal carries no root label to strip"
@@ -960,12 +626,7 @@ async def test_a_port_the_scheme_already_implies_is_the_same_host():
         await f.get(f"https://{host}/m/a")
         await f.get(f"https://{host}:443/m/b")
         assert list(f._hosts) == [host], "one physical host, two buckets and two breakers"
-        # TWO WAITS FOR THREE REQUESTS, and the first of the three is the robots.txt. This host
-        # declares `respect_robots=True`, so the fetcher reads its rules before either page - and
-        # that read is now charged to the same bucket, which it was not when this assertion was
-        # first written. One wait was the arithmetic of a burst of 1 spent on the page rather than
-        # on the robots fetch, which is the effective burst of 2 M51-C2-340-05 measured on exactly
-        # the two hosts §8 stage 2 names. [M5.1 review cycle 2, M51-C2-340-05]
+        # Two waits for three requests: the robots.txt is charged to the same bucket as the pages.
         assert clock.slept == [pytest.approx(1 / 0.7), pytest.approx(1 / 0.7)], (
             "robots.txt and both pages are three requests to one host at its declared pace"
         )
@@ -973,17 +634,8 @@ async def test_a_port_the_scheme_already_implies_is_the_same_host():
 
 
 async def test_a_decoding_failure_is_a_fetch_error_and_counts_against_the_host():
-    """`FetchError`'s own docstring: "Every failure this layer raises, so a caller can catch one
-    type." Two httpx failures were not that type.
-
-    The `except` named `TimeoutException`, `TransportError` and `ProtocolError`, which is
-    `mdc/http.py:253` verbatim. In httpx 0.28 `DecodingError` and `TooManyRedirects` are
-    `RequestError` but NOT `TransportError`, so a host serving a truncated gzip escaped this layer
-    entirely: not wrapped, `_note_failure` never called, the breaker unable to open on it, and the
-    task retried until its attempts were spent - burning the host again on every one. The obvious
-    stage body is `try: ... except FetchError as e: park(e)`, and it would not have caught this.
-    [M5.1 review cycle 1, M51-340-05]
-    """
+    """httpx's `DecodingError` and `TooManyRedirects` are not
+    `TransportError`, yet must surface as `FetchError`."""
     def truncated(_request: httpx.Request) -> httpx.Response:
         raise httpx.DecodingError("gzip stream ends early")
 
@@ -997,20 +649,7 @@ async def test_a_decoding_failure_is_a_fetch_error_and_counts_against_the_host()
 
 
 async def test_allow_status_does_not_buy_an_unpaced_429():
-    """`allow_status` names a status a caller can read. It is not an override of the politeness.
-
-    The condition read `status in RETRYABLE_STATUS and status not in allow_status`, so a caller
-    passing `allow_status=(429,)` - to read a provider's error body, which is an ordinary reason
-    to pass it - fell through to `_note_success` and got the 429 back as a success: `Retry-After`
-    never read, no pause, no breaker count, and the run of consecutive failures RESET on the one
-    status that means the host is complaining about load. §8 permits exactly one kind of
-    politeness override, documented in `HOST_POLICIES` with its reasoning and enforced by
-    `undocumented_overrides()`; this was a second one, per call, that the guard cannot see.
-
-    The body is still reachable, which is the half the caller actually wanted: the pause and the
-    breaker count come first, and the allowed status is handed back once the attempts are spent.
-    [M5.1 review cycle 1, M51-340-06]
-    """
+    """`allow_status` makes a status readable, not unpaced: the pause and breaker count come first."""
     clock = _Clock()
     async with _fetcher(_always(429, headers={"Retry-After": "600"}), clock) as f:
         response = await f.get(f"https://{FAST}/3/movie/603", max_attempts=2,
@@ -1024,17 +663,8 @@ async def test_allow_status_does_not_buy_an_unpaced_429():
 
 
 async def test_a_caller_may_not_replace_the_user_agent():
-    """Decision 340: "It declares a User-Agent naming the app."
-
-    httpx lets a per-request header win over the client's, and `_check_robots` judges the request
-    against this module's own `USER_AGENT` - so a stage that copied a browser or bot agent into
-    `headers=` to get past a wall would have misrepresented the household to a third party while
-    being allowed by a rule written for a name it was no longer sending. The registered test for
-    the declared agent passes no headers, so it stayed green throughout.
-
-    A refusal rather than a silent merge: the caller has to learn that it asked for something this
-    layer will not do. [M5.1 review cycle 1, M51-340-07]
-    """
+    """httpx lets a per-request header win; a replaced agent
+    would be judged under a name it no longer sends."""
     clock = _Clock()
     async with _fetcher(_always(200, content=b"ok"), clock) as f:
         for spelling in ("User-Agent", "user-agent"):
@@ -1044,15 +674,8 @@ async def test_a_caller_may_not_replace_the_user_agent():
 
 
 async def test_the_run_of_failures_a_host_is_on_survives_the_drain_that_counted_it(db):
-    """`fetch_host_state.consecutive_failures` was write-only, and always the literal zero.
-
-    `_note_failure` wrote the row only when the breaker OPENED, and that write hardcodes the
-    counter back to 0 (correctly - the breaker resets it); `_load_host_state` did not select the
-    column at all. So the number §6.6 would show was 0 for every host that had not tripped, and
-    the breaker could only ever be reached inside ONE drain: a host failing seven times a drain,
-    every drain, against a threshold of eight, was never parked at all.
-    [M5.1 review cycle 1, M51-340-09]
-    """
+    """The failure run is read back across drains, or a host
+    failing seven times a drain against eight never trips."""
     async with _fetcher(_always(500), _Clock(), conn=db) as first:
         for _ in range(7):
             with pytest.raises(FetchError):
@@ -1072,25 +695,8 @@ async def test_the_run_of_failures_a_host_is_on_survives_the_drain_that_counted_
         )
 
 
-# --- review cycle 2: the classes the first cycle's boundaries let through ----------------------
-
-
 async def test_a_robots_txt_the_host_only_redirected_is_not_an_answer(db):
-    """RFC 9309 §2.3.1.2 gives a redirect its own subsection: a 3xx is not the served file.
-
-    Review cycle 1 closed a non-answer being cached as permission and drew the line at 500, so a
-    301, 302, 307 or 308 on `/robots.txt` still read as "the host answered". Nobody follows it -
-    the client is built `follow_redirects=False` and `_fetch_robots` calls `self._client.get`
-    rather than `get`'s own hop loop - so `body` was `""`, which `urllib.robotparser` answers as
-    allow-all, and the unconditional UPSERT wrote that into `fetch_host_state` with
-    `robots_fetched_at = now()`. `_load_host_state` then honoured it for a day, across every
-    worker restart, issuing no further robots request: one CDN hop and this app crawls every path
-    a host disallows, on the household's own IP, and CLOBBERS a `Disallow: /` it had already read.
-
-    Both halves are asserted, because the first cycle's finding was that either alone is useless:
-    the request is REFUSED, and the redirect is not written to the cache - so the next drain asks
-    again and then obeys what it is told. [M5.1 review cycle 2, M51-C2-340-01]
-    """
+    """RFC 9309 §2.3.1.2: a 3xx on robots.txt is not the file; refused, and not cached as allow-all."""
     for status in (301, 302, 307, 308):
         host = f"redirected-{status}.example"
 
@@ -1113,19 +719,7 @@ async def test_a_robots_txt_the_host_only_redirected_is_not_an_answer(db):
 
 
 async def test_the_request_counter_counts_a_request_that_went_out_and_failed():
-    """Port change 8: "a counter that quietly omits a class of request is a counter that can lie".
-
-    `_note_success` counted the request and `_note_failure` counted only the error, so a host
-    answering 429 to four attempts durably recorded that this app had made ZERO requests to the
-    host that was rate limiting it - `persist_host_state` accumulates `rt.requests` into
-    `fetch_host_state` and `host_report()` publishes it. `_fetch_robots` meanwhile counted the
-    request before its `try` AND the error after it, so one failed robots fetch recorded one
-    request and one error for the same single request: within one module and one table, `requests`
-    meant two different things depending on which path wrote the row.
-
-    The registered counter test above asserts the rule in its own name - it "counts what went
-    out" - and passed only because it exercises the 200 path. [M5.1 review cycle 2, M51-C2-340-02]
-    """
+    """A request that went out and failed is still one request, counted once, on every path."""
     clock = _Clock()
     async with _fetcher(_always(503), clock) as f:
         with pytest.raises(FetchError):
@@ -1138,22 +732,8 @@ async def test_the_request_counter_counts_a_request_that_went_out_and_failed():
 
 
 async def test_a_published_crawl_delay_is_honoured_rather_than_the_apps_own_number(db):
-    """§8 (`spec:404`): the fetcher "honours each host's robots.txt".
-
-    `Crawl-delay` and `Request-rate` are the only two directives in robots.txt that are about RATE
-    rather than about paths - the one way a site can ask a crawler in writing to slow down - and
-    `urllib.robotparser` had already parsed both onto the object this layer holds. `_check_robots`
-    read that object for `can_fetch` and nothing else, so a small review site publishing
-    `Crawl-delay: 30` was crawled at `DEFAULT_RPS = 1.0` by an unattended household appliance:
-    thirty times faster than it asked, in the file this app fetched and stored. Four of the rows
-    `hosts.py` declares are "small sites run by individuals".
-
-    The declared row stays the CEILING, which is the assertion the third host makes: a robots.txt
-    asking to be crawled FASTER buys nothing, because `hosts.py`'s number is a measurement of what
-    that host survived. The cached path is asserted too, because a rate honoured on the drain that
-    read the file and forgotten on every drain that read the Postgres cache would honour a
-    `Crawl-delay` about once a day. [M5.1 review cycle 2, M51-C2-340-03]
-    """
+    """`Crawl-delay` and `Request-rate` are honoured from the
+    fetch and the cache; the declared row is the ceiling."""
     def publisher(rules: str):
         def handler(request: httpx.Request) -> httpx.Response:
             if request.url.path == "/robots.txt":
@@ -1170,7 +750,7 @@ async def test_a_published_crawl_delay_is_honoured_rather_than_the_apps_own_numb
         "six pages behind a published Crawl-delay of 30 cost 150 seconds, not 4"
     )
 
-    # The same rules out of the Postgres cache, on a fetcher that issues no robots request at all.
+    # The same rules from the Postgres cache, with no robots request.
     cached = _Clock()
     async with _fetcher(slow, cached, conn=db) as f:
         for n in range(3):
@@ -1178,24 +758,21 @@ async def test_a_published_crawl_delay_is_honoured_rather_than_the_apps_own_numb
         assert f.total_requests == 3, "the robots.txt came out of the cache"
     assert cached.slept == [pytest.approx(30.0)] * 2
 
-    # `Request-rate: 1/60` says the same thing in the other spelling, and the stricter of the two
-    # wins when a host publishes both.
+    # `Request-rate: 1/60` is the other spelling; the stricter of the two wins.
     rate = _Clock()
     async with _fetcher(publisher("User-agent: *\nRequest-rate: 1/60\nCrawl-delay: 5\n"), rate) as f:
         await f.get("https://rated.example/a")
         await f.get("https://rated.example/b")
     assert rate.slept == [pytest.approx(60.0)], "the stricter of the two directives"
 
-    # And a host asking to be crawled faster than its declared row does not get it.
+    # A host asking to be crawled faster than its declared row does not get it.
     eager = _Clock()
     async with _fetcher(publisher("User-agent: *\nCrawl-delay: 0.05\n"), eager) as f:
         for n in range(3):
             await f.get(f"https://unmeasured.example/{n}")
     assert eager.slept == [pytest.approx(1.0)] * 2, "DEFAULT_RPS is a ceiling a host cannot raise"
 
-    # The declared burst is not handed back by the clamp: this host allows one request at a time,
-    # the robots.txt is that request, and the page after it waits the delay rather than going out
-    # beside it. `www.rottentomatoes.com` is one of the two §8 stage 2 names by hand.
+    # The robots.txt spends the burst of one, so the page after it waits the delay.
     tight = _Clock()
     async with _fetcher(publisher("User-agent: *\nCrawl-delay: 10\n"), tight) as f:
         for path in ("/m/a", "/m/b"):
@@ -1206,33 +783,10 @@ async def test_a_published_crawl_delay_is_honoured_rather_than_the_apps_own_numb
 
 
 async def test_a_robots_txt_larger_than_the_parsing_limit_is_cut_between_lines(db):
-    """RFC 9309 §2.5 ("Limits"): a crawler's parsing limit is "at least 500 kibibytes".
-
-    This is the one request in the app that takes arbitrary bytes from a stranger before any of
-    that host's policy applies, and there was no bound on it: a multi-megabyte robots.txt was
-    parsed inside §5.3's sequential tick, written whole into a Postgres column, and re-read and
-    re-parsed on the first touch of that host in every drain for twenty-four hours. A third party
-    chose how much of the household's database and worker tick it occupied.
-
-    CUT BETWEEN LINES, which is the half that decides the direction of the error: a cut inside a
-    path shortens the prefix a rule covers and a cut inside the directive name drops the rule, so
-    a byte-exact truncation relaxes a refusal - the direction review cycle 1 spent two findings
-    closing. The rules published before the limit are still obeyed, which is the assertion that
-    stops this from passing by refusing the host outright.
-    [M5.1 review cycle 2, M51-C2-340-06]
-
-    IN BOTH ALPHABETS, because the cheap character test was joined to the byte test with `or` and
-    so decided the ACCEPT on its own. The premise it rested on - a str never encodes to fewer
-    bytes than it has characters - licenses a REJECT on the character count and nothing else, so
-    for a body with substantial non-ASCII the characters fit, the bytes did not, and the arbitrary
-    byte `_fetch_robots` stopped the stream at survived as the last rule: an ASCII padding is the
-    one shape where the two tests cannot disagree, which is why this passed for two cycles. The
-    German arm below is the shape one of the four blogs `hosts.py` declares would serve, and the
-    rule it leaves half-written is a rate directive. [M5.1 review cycle 4, M51-C4-340-05]
-    """
+    """RFC 9309 §2.5: the parse is capped and cut between lines, since a cut mid-line relaxes a rule.
+    Measured in bytes, not characters: non-ASCII text can fit one and not the other."""
     ascii_line = "# padding that no crawler is obliged to read"
-    # Every umlaut is one character and two bytes, so this body's character count stays well
-    # under the cap while its byte count passes it - which is the whole disagreement.
+    # Each umlaut is one character and two bytes, so the characters fit and the bytes do not.
     latin_line = "# keine Beruecksichtigung: \u00e4\u00f6\u00fc\u00df" * 3
     plain = f"{ascii_line}\n" * 30_000
     latin = f"{latin_line}\n" * 5_200
@@ -1265,24 +819,8 @@ async def test_a_robots_txt_larger_than_the_parsing_limit_is_cut_between_lines(d
 
 
 async def test_a_redirect_this_layer_cannot_follow_is_refused_rather_than_parsed():
-    """`MAX_REDIRECTS`'s own comment: "a truncated chain returned as an answer is a 3xx body handed
-    to a parser." The cap refuses a chain that is too LONG and watched only that door.
-
-    A 3xx is in neither `RETRYABLE_STATUS` nor the `>= 400` arm, and the hop loop breaks out when
-    there is no `Location` to follow - so a 301 from a WAF with no `Location` header fell through
-    to `_note_success` and came back as an ordinary `Response`: status 301, body
-    `<html>Moved Permanently</html>`. A stage written as the obvious
-    `try: ... except FetchError as e: park(e)` sees no error, stores those bytes in the raw store
-    under the document's url, and parses a redirect page as the title's page. The two HTML hosts
-    §8 stage 2 names sit behind exactly the intermediary class that emits these -
-    `RETRYABLE_STATUS`'s own comment says so about 520-524.
-
-    Three ways in and the whole class is refused: no `Location` at all; a 300, which is
-    deliberately not in `REDIRECT_STATUS` because there is nothing to follow; and a 304 answering
-    a request this layer never conditioned, which is an empty body presented as a fresh answer.
-    A caller that names the status in `allow_status` still gets it, because that is what
-    `allow_status` is for. [M5.1 review cycle 2, M51-C2-340-07]
-    """
+    """A 3xx with nothing to follow (no `Location`, a 300,
+    an unconditioned 304) is refused, not answered."""
     def stuck(status: int):
         def handler(request: httpx.Request) -> httpx.Response:
             if request.url.path == "/robots.txt":
@@ -1303,32 +841,13 @@ async def test_a_redirect_this_layer_cannot_follow_is_refused_rather_than_parsed
         assert named.status == 301, "`allow_status` still names a status a caller can read"
 
 
-# How many turns of the event loop the gate below is held shut for. The measurement is how
-# many requests can be on the wire AT ONCE, so every task has to reach the place it will be
-# stopped before any of them is let go: a gate opened on the first turn would measure the
-# scheduler's order rather than the declared cap. Each `get` needs a handful of turns to reach
-# the transport and they advance in parallel, so sixty-four is two orders of magnitude of
-# headroom for a yield that costs nothing. [M5.1 review cycle 1, M51-340-11]
+# Event-loop turns the gate stays shut, so every task reaches it before any is let go.
 _SETTLE_TURNS = 64
 
 
 async def test_a_host_is_held_to_the_concurrency_it_declares_and_not_only_to_its_rate():
-    """§8 (`spec:404`): the fetcher "carries per-host rate and concurrency policies as data".
-
-    Eighteen tests were registered on that clause and `max_concurrency` reached two of them as
-    DATA alone - `policy.max_concurrency == 1` in the stage-2 policy test, and the key name in
-    `declared_policies()`'s row shape - so the `async with hop_rt.sem` in `get` could have been
-    deleted with every one of them green. Measured rather than argued: with the semaphore
-    neutered, the sequential and token-bucket traces that every pacing test in this file asserts
-    come out byte-identical, while the peak in flight for a host declaring twelve goes to twenty.
-
-    The two halves are not the same promise. A bucket paces requests over TIME and says nothing
-    about how many are open at once, which is the half a host feels as load rather than as
-    frequency - and it is the half M5.3 inherits, because a fan-out over one provider is exactly
-    where a cap that nothing asserts stops being a cap. So the burst is spent deliberately here:
-    the bucket is asked to permit every one of these requests, and anything that holds one back
-    is the semaphore. [M5.1 review cycle 1, M51-340-11]
-    """
+    """The bucket paces over time, not concurrency; its burst
+    covers every request, so only the semaphore holds."""
     policy = HOST_POLICIES[FAST]
     assert policy.burst > policy.max_concurrency, (
         "this test needs a host whose bucket permits more at once than its semaphore does; "
@@ -1364,37 +883,9 @@ async def test_a_host_is_held_to_the_concurrency_it_declares_and_not_only_to_its
 
 
 
-# --- review cycle 3: the seams six milestones inherit ------------------------------------------
-#
-# M5.1 ships no caller that passes a credential, fetches nothing real and reads no robots.txt on a
-# household's IP. Every test below is about the shape M5.2 through M5.7 are written against, which
-# is what this milestone exists to publish: a fetcher that is wrong here is wrong six times over,
-# and each of those milestones will have built on it before anyone notices.
-
-
 async def test_a_hop_into_another_origin_does_not_carry_the_callers_credentials():
-    """The protection named change 10 took off httpx and did not replace.
-
-    `mdc/http.py:128` set `follow_redirects=True`, so httpx popped `Authorization` when a redirect
-    crossed an origin (`_client.py:552-556`) and `Cookie` on every redirect at all. Driving the
-    hops in this module - which is what buys the per-hop robots, policy, bucket and breaker - took
-    both of those out of the path and put nothing back: `hop_headers` was copied to the next host
-    unchanged apart from the two conditional validators.
-
-    M5.3's eight adapters are "a thin `HandlerSpec` over M5.1's fetcher" porting "the corpus's
-    request shapes verbatim", and those shapes are header-borne credentials handed straight to
-    `ctx.fetcher.get(headers=...)` - `{"Authorization": f"Bearer {tmdb_bearer}"}`,
-    `{"trakt-api-key": ...}`, `{"X-Emby-Token": ...}`. One `Location` out of a CDN, a consent edge
-    or a hijacked record and the household's provider keys are delivered to that host in the
-    clear, from the household's own IP, with no log line and no park.
-
-    THREE ARMS, because a rule that dropped everything always would be a different defect. A
-    cross-origin hop drops the caller's headers; a same-origin hop keeps them, which is the
-    ordinary slug-miss shape M5.3 meets on the two HTML hosts; and a host upgrading its own http
-    to https keeps them, which is httpx's own carve-out and what every redirecting site expects.
-    The first arm's control is that the credentials really were on the wire before the hop.
-    [M5.1 review cycle 3, M51-C3-340-01]
-    """
+    """A cross-origin hop drops the caller's headers;
+    same-origin hops and http->https upgrades keep them."""
     creds = {
         "Authorization": "Bearer SECRET-TMDB-TOKEN",
         "trakt-api-key": "SECRET-TRAKT-CLIENT-ID",
@@ -1460,21 +951,7 @@ async def test_a_hop_into_another_origin_does_not_carry_the_callers_credentials(
 
 
 async def test_a_hop_into_a_paused_host_is_refused_before_its_robots_txt_is_asked_for():
-    """`_fetch_robots`'s own docstring: "the breaker is consulted before this (`_raise_if_paused`
-    runs first in `get`), so a paused host is not even asked". That was true of the host `get` was
-    called for and false of every host a redirect reached.
-
-    The entry path is `_runtime`, `_raise_if_paused`, `_check_robots`. The hop path was `_runtime`,
-    `_check_robots`, and the cooldown check only on the next turn of the loop - so a redirect into
-    a host whose breaker is open charged that host's bucket and put a `/robots.txt` on its wire
-    before anything read `paused_until`.
-
-    THE SECOND ASSERTION IS THE OPERATOR-FACING HALF and is the sharper one. A host in cooldown is
-    a host that has been failing, so its robots.txt is failing too - and the walk therefore parked
-    with `RobotsUnavailable`'s sentence, which decision 336 shows verbatim on section 6.6's board.
-    The board reported a robots problem for a host whose actual state was a breaker cooldown, which
-    is the one thing the operator could have waited out. [M5.1 review cycle 3, M51-C3-340-02]
-    """
+    """A hop into a paused host is refused before its robots.txt is asked, and reported as a pause."""
     wire: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -1501,23 +978,7 @@ async def test_a_hop_into_a_paused_host_is_refused_before_its_robots_txt_is_aske
 
 
 async def test_a_robots_honouring_host_is_not_reached_over_plain_http():
-    """RFC 9309 section 2.3 scopes a robots.txt to the URI authority, which includes the scheme.
-
-    This layer files one robots answer per HOST: `HostRuntime.robots` is one field, `normalise_host`
-    drops a port equal to the scheme's default so `http://x` and `https://x` collapse to one key,
-    and `fetch_host_state` is `host text PRIMARY KEY`. So a host's http and https sites are two
-    published files, and this app read whichever url the drain happened to lease first and applied
-    it to both - nondeterministically, and for `ROBOTS_TTL_SECONDS` across worker restarts. It errs
-    in both directions and the impolite one is the one decision 340 exists to prevent: a
-    `Disallow: /` published for the plain-http site ignored for a day because an https url touched
-    the host first.
-
-    REFUSED RATHER THAN KEYED, which needs no column and is falsifiable here: every url in this
-    tree and in the corpus M5.3 ports is https. The control is the second half - a host whose
-    declared policy turns robots OFF has no rules to conflate, and the household's own Jellyfin on
-    `http://192.168.1.10:8096` is exactly that row, so the refusal must not reach it.
-    [M5.1 review cycle 3, M51-C3-340-04]
-    """
+    """RFC 9309 §2.3 scopes robots.txt by scheme but the cache is per host, so plain http is refused."""
     wire: list[str] = []
 
     def either(request: httpx.Request) -> httpx.Response:
@@ -1539,23 +1000,8 @@ async def test_a_robots_honouring_host_is_not_reached_over_plain_http():
 
 
 async def test_a_robots_txt_is_bounded_on_the_wire_and_not_only_after_it_is_parsed():
-    """`ROBOTS_MAX_BYTES`'s own comment says what the bound is for: this is "the one request in the
-    app that takes arbitrary bytes from a stranger BEFORE any of that host's policy applies", and
-    unbounded "a misconfigured or hostile host chooses how much of the household's database and
-    worker tick it occupies". The database was bounded and the tick was not.
-
-    `_truncate_robots` cut the string AFTER `self._client.get` had read and decoded the whole body,
-    so the host chose the allocation. The client declares `Accept-Encoding: gzip, deflate`, so it
-    chose it cheaply: measured, a 240 KB gzip decompressed to 70 MB in the worker process and
-    peaked a quarter of a gigabyte of heap before `_truncate_robots` saw a character.
-    `ROBOTS_TIMEOUT_S` is an `httpx.Timeout`, which bounds each operation and never a total, so
-    nothing else was holding this.
-
-    MEASURED AS BYTES CONSUMED and not as bytes kept, which is the distinction the registered size
-    test cannot make: it asserts what landed in Postgres, and that assertion is green either way.
-    The published rules are still obeyed, which is what stops a bound from being a refusal.
-    [M5.1 review cycle 3, M51-C3-340-05]
-    """
+    """The robots body is bounded while streaming: a small
+    gzip must not decompress to 70 MB before the cut."""
     chunk = b"# padding that no crawler is obliged to read\n" * 1500
     served: list[int] = []
 
@@ -1586,26 +1032,7 @@ async def test_a_robots_txt_is_bounded_on_the_wire_and_not_only_after_it_is_pars
 
 
 async def test_the_validator_is_keyed_on_the_url_the_request_was_made_against(db):
-    """A conditional re-fetch has two halves in two modules, and they have to agree on one string.
-
-    `mdc/http.py` held both: `_cache_lookup(url)` at :229 and `_cache_store(url, ...)` at :289, one
-    function and one variable, so read key and write key could not disagree. Named change 1 deleted
-    the write - `acquire/rawstore` owns `raw_document` now - and left two natural spellings behind:
-    `_validators` read the BARE url while `params` went to httpx separately, and `Response.url` is
-    the url that was actually on the wire.
-
-    BOTH DIRECTIONS FAIL, which is why the key and not the documentation is the fix. Six of the
-    eight adapters M5.3 ports fetch a shared endpoint where the query is the only thing that
-    distinguishes one title's document from another's (`mdc/sources/omdb.py:37` is one url for
-    every title), so one document's ETag conditioned another document's request; and an adapter
-    storing the value the fetcher handed it got no conditioning at all, for ever, with no error, no
-    log and nothing in `total_bytes` to see it by.
-
-    `Response.request_url` is what closes it rather than a rule in a docstring: the string the
-    validators were read under is carried on the answer, so `rawstore.store(url=...)` has one
-    value to be handed and an adapter cannot key the two sides differently.
-    [M5.1 review cycle 3, port-C3-01]
-    """
+    """The validator is keyed on the url with its query, carried back as `Response.request_url`."""
     url = f"https://{FAST}/3/movie/603"
     await db.execute(
         "INSERT INTO raw_document (source, kind, url, content_sha256, content_path, "
@@ -1642,19 +1069,7 @@ async def test_the_validator_is_keyed_on_the_url_the_request_was_made_against(db
 
 
 async def test_the_report_says_what_the_drain_did_after_the_context_has_closed(db):
-    """`host_report()`'s own docstring: "What this drain did, per host, for section 6.6 and for the
-    drain's own job detail." The drain assembles its job detail after the `async with` block.
-
-    `__aexit__` calls `persist_host_state`, which zeroed `rt.requests` and `rt.errors` as it
-    flushed them - so the obvious shape, and the one M5.3's stage 2 will write, published "this
-    drain made no requests to any host" on the same tick `fetch_host_state` recorded that it had.
-    Two numbers about one drain, disagreeing, with the wrong one on the surface section 6.6 reads.
-
-    THE FLUSH STILL ADDS EACH REQUEST EXACTLY ONCE, which is the second assertion: the counters
-    are a high-water mark and the flush writes the delta, so `persist_host_state`'s "a second call
-    adds nothing" is the delta being zero rather than the counter being cleared.
-    [M5.1 review cycle 3, port-C3-06]
-    """
+    """`host_report()` is read after the context closes, so the flush writes a delta and zeroes nothing."""
     async with _fetcher(_always(200, content=b"{}"), _Clock(), conn=db) as f:
         await f.get(f"https://{FAST}/3/movie/603")
         await f.get(f"https://{FAST}/3/movie/604")
@@ -1672,17 +1087,7 @@ async def test_the_report_says_what_the_drain_did_after_the_context_has_closed(d
 
 
 async def test_the_report_carries_the_rate_actually_in_use_and_not_only_the_declared_one():
-    """Decision 340 puts the per-host rate in section 6.6 "as data rather than as constants, so
-    section 6.6 can show them" - and `_pace_from_robots` can move that rate down with nothing
-    recording it.
-
-    A host publishing `Crawl-delay: 30` is crawled at a thirtieth of a request a second while
-    `host_report()` published `rt.policy.rps`, the declared ceiling: fifteen times wrong for
-    `www.film-rezensionen.de`, and four of the rows `hosts.py` declares are "small sites run by
-    individuals", which is the population most likely to publish one. Every other key in that row
-    is a measured fact about the drain, so the one that is a configured ceiling has to say which
-    it is. [M5.1 review cycle 3, port-C3-05]
-    """
+    """The report shows the rate in use after `Crawl-delay`, not only the declared ceiling."""
     host = "www.film-rezensionen.de"
 
     def publisher(request: httpx.Request) -> httpx.Response:
@@ -1700,17 +1105,8 @@ async def test_the_report_carries_the_rate_actually_in_use_and_not_only_the_decl
     )
 
 
-# --- review cycle 4: the answers a robots fetch only half received -------------------------------
-
-
 class _BreaksMidBody(httpx.AsyncByteStream):
-    """A response whose headers arrive and whose body does not.
-
-    httpx's `stream()` returns once the response headers are read, so `resp.status_code` is
-    already 200 by the time the body fails - which is the whole shape of the defect below. The
-    four exceptions this stands in for are the ordinary ones: a reset, a truncated chunked body,
-    a corrupt gzip (this client declares `Accept-Encoding: gzip, deflate`) and a read timeout.
-    """
+    """httpx's `stream()` returns after the headers, so the status is already 200 when the body fails."""
 
     def __init__(self, first: bytes, exc: Exception) -> None:
         self._first, self._exc = first, exc
@@ -1721,21 +1117,7 @@ class _BreaksMidBody(httpx.AsyncByteStream):
 
 
 async def test_a_robots_txt_whose_body_never_arrives_is_not_a_200(db):
-    """RFC 9309 §2.3.1.4 again, in the one status class the earlier repairs could not reach.
-
-    `_fetch_robots` assigns `status` INSIDE the `stream` block and `body` only after it closes, so
-    a failure while the body was being read was swallowed with `status` already 200 and `body`
-    still `""`. `_is_robots_answer(200)` is True, so the refusal was skipped, `rt.errors` was not
-    incremented, `_parse_robots("", 200)` parsed an EMPTY ruleset - which `urllib.robotparser`
-    answers as allow-all - and the unconditional UPSERT wrote that non-answer into
-    `fetch_host_state` with `robots_fetched_at = now()`, where `_load_host_state` reads it back as
-    a valid cache for twenty-four hours across every worker restart. Measured: a host publishing
-    `Disallow: /` was crawled, the board showed zero errors, and the log line said "refusing this
-    host for now" while the request went out.
-
-    The host chooses the transfer encoding and can cut the body, so it can trigger this itself.
-    [M5.1 review cycle 4, M51-C4-340-01]
-    """
+    """RFC 9309 §2.3.1.4: a 200 whose body never arrived is unreachable, refused, and not cached."""
     strict = b"User-agent: *\nDisallow: /\n"
 
     for name, exc in (
@@ -1764,8 +1146,7 @@ async def test_a_robots_txt_whose_body_never_arrives_is_not_a_200(db):
             f"{name}: a body that never arrived was cached as this host's published rules"
         )
 
-    # The control: the same file, whole. The refusal is the host's own and the cache is the
-    # host's own, which is what makes the three arms above a defect rather than a policy.
+    # The control: the same file, whole, is obeyed and cached.
     def intact(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/robots.txt":
             return httpx.Response(200, content=strict)
@@ -1781,21 +1162,7 @@ async def test_a_robots_txt_whose_body_never_arrives_is_not_a_200(db):
 
 
 async def test_the_robots_decision_is_taken_against_the_url_the_request_is_made_against():
-    """§8 (`spec:404`): the fetcher "honours each host's robots.txt". `can_fetch` matches on QUERY.
-
-    `get` took the robots decision against the caller's `url` and computed `request_url` - the
-    string httpx actually puts on the wire - twenty-four lines later. So a caller passing its
-    query as `params=`, which this module's own port-C3-01 comment records as the convention six
-    of the eight adapters M5.3 ports use and which is how `mdc/blogs.py` fetches
-    `/wp-json/wp/v2/posts` against four hosts `hosts.py` declares with the default
-    `respect_robots=True`, had its robots decision taken against a url that never went out.
-
-    ONE FUNCTION, TWO ANSWERS, ONE BYTE-IDENTICAL REQUEST: the hop path joins the `Location` in
-    first and judges the joined url, so the same url reached by a redirect was refused while the
-    url asked for directly was fetched. This is the read-key/write-key split port-C3-01 closed for
-    `_validators`, left open on the other consumer of the same string.
-    [M5.1 review cycle 4, M51-C4-340-02]
-    """
+    """`can_fetch` matches on the query, so robots is judged against the url with `params=` merged in."""
     def rules(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/robots.txt":
             return httpx.Response(200, text="User-agent: *\nDisallow: /wp-json/wp/v2/posts?per_page=100\n")
@@ -1809,8 +1176,7 @@ async def test_the_robots_decision_is_taken_against_the_url_the_request_is_made_
             await f.get(posts, params={"per_page": 100})
         assert "per_page=100" in str(caught.value), str(caught.value)
 
-        # The other side of the line, so this is not a refusal of the endpoint: the same endpoint
-        # under a query the host did not disallow is still fetched, and both spellings agree.
+        # The same endpoint under an allowed query is still fetched.
         assert (await f.get(f"{posts}?per_page=10")).status == 200
         answer = await f.get(posts, params={"per_page": 10})
         assert answer.status == 200
@@ -1818,20 +1184,7 @@ async def test_the_robots_decision_is_taken_against_the_url_the_request_is_made_
 
 
 async def test_a_robots_cache_timestamped_in_the_future_is_not_a_cache(db):
-    """Decision 340's own review question: "the cache cannot pin a stale allow."
-
-    `_load_host_state` gated the cached row on `age < ROBOTS_TTL_SECONDS` with no lower bound,
-    where `age` is `now() - robots_fetched_at`. A row timestamped in the FUTURE is a negative age,
-    which satisfies that test for as long as the clock takes to catch up - indefinitely for a box
-    whose RTC booted ahead before NTP pulled it back, or for a dump restored from one that had.
-    `rt.robots_checked` then suppresses every further robots request, so the host is never asked
-    again and any `Disallow` it publishes in the meantime is not seen.
-
-    The sibling read in the same function fails the safe way under the same skew -
-    `paused_remaining_s > 0` merely pauses the host longer - and this one failed OPEN, which is
-    the direction the paragraph above it says it was written to close. [M5.1 review cycle 4,
-    M51-C4-340-04]
-    """
+    """A row timestamped in the future has a negative age, which would pass the TTL test indefinitely."""
     host = "skewed.example"
     asked: list[str] = []
 
@@ -1853,9 +1206,7 @@ async def test_a_robots_cache_timestamped_in_the_future_is_not_a_cache(db):
         asked.clear()
         async with _fetcher(strict, _Clock(), conn=db) as f:
             if label == "a fresh row":
-                # The control: a row the database could have written IS a cache, so the allow-all
-                # it records is honoured and no robots request goes out. Without this the
-                # assertion below would also pass on a build that never cached anything.
+                # The control: a row in the past IS a cache, so no robots request goes out.
                 assert (await f.get(f"https://{host}/private/thing")).status == 200
                 assert asked == ["/private/thing"], asked
             else:
@@ -1866,31 +1217,8 @@ async def test_a_robots_cache_timestamped_in_the_future_is_not_a_cache(db):
                 )
 
 
-# --- review cycle 4, second pass: the two fail-opens a third party spells ------------------------
-
-
 async def test_a_robots_txt_whose_first_line_outruns_the_limit_is_not_an_answer(db):
-    """Named change 11: "a robots.txt this app could not read refuses the request rather than
-    allowing it, and is not written to the cache".
-
-    `_truncate_robots` cuts at a line boundary, and when the host's FIRST line is longer than
-    `ROBOTS_MAX_BYTES` nothing survives the cut at all. `status` was still 200, so
-    `_is_robots_answer` skipped the refusal, `_parse_robots("", 200)` parsed an empty ruleset that
-    `urllib.robotparser` answers as allow-all, and the unconditional UPSERT wrote that non-answer
-    into `fetch_host_state` where `_load_host_state` honours it for `ROBOTS_TTL_SECONDS` across
-    every worker restart - asking the host nothing for a day. That is the same fail-open
-    M51-340-01/03 closed for a 5xx, M51-C2-340-01 for a 3xx and M51-C4-340-01 for a body that
-    never arrived, in the one class those repairs could not reach: the read SUCCEEDS and no rule
-    survives the cut.
-
-    THE CUT IS WHAT MAKES IT A NON-ANSWER, and the two controls below are where the line is drawn.
-    A host that genuinely publishes an empty file was read in full, so allow-all is its own
-    answer and is cached; a host whose rules precede the cut is obeyed, which is
-    `test_a_robots_txt_larger_than_the_parsing_limit_is_cut_between_lines`' whole assertion and the
-    reason RFC 9309 section 2.5's parsing limit is legitimate. Only "bytes arrived and this app
-    read no rule out of them" is RFC 9309 2.3.1.4's unreachable.
-    [M5.1 review cycle 4 second pass, M51-C4-340-06]
-    """
+    """A first line past the limit leaves nothing after the cut: a non-answer, refused and not cached."""
     host = "onelongline.example"
     asked: list[str] = []
 
@@ -1912,8 +1240,7 @@ async def test_a_robots_txt_whose_first_line_outruns_the_limit_is_not_an_answer(
         "a file this app read no rule out of was pinned as this host's published rules for a day"
     )
 
-    # Control one: a host that really does publish nothing. The whole file arrived, so allow-all
-    # is the host's own answer and the cache is the host's own cache.
+    # Control: an empty file was read in full, so allow-all is the host's own answer.
     def silent(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/robots.txt":
             return httpx.Response(200, text="")
@@ -1925,8 +1252,7 @@ async def test_a_robots_txt_whose_first_line_outruns_the_limit_is_not_an_answer(
         "SELECT robots_status FROM fetch_host_state WHERE host = 'silent.example'"
     ) == 200
 
-    # Control two: a rule before the cut is still obeyed, so this refuses damage rather than
-    # refusing every large file.
+    # Control: a rule before the cut is still obeyed.
     def rules_then_padding(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/robots.txt":
             padding = "# padding no crawler must read\n" * 30_000
@@ -1940,15 +1266,7 @@ async def test_a_robots_txt_whose_first_line_outruns_the_limit_is_not_an_answer(
 
 
 async def test_a_negative_retry_after_does_not_delete_the_backoff_curve():
-    """`Retry-After` is a header a third party chooses, and `-1` switched this layer's pacing off.
-
-    The seconds branch was `min(float(raw), 300.0)` with no floor, so a negative value survived
-    the cap and reached `await self._sleep(-1.0)`, which returns immediately. Only the 429 arm
-    escaped it, because `max(delay, _backoff(attempt) * 3)` rescues a negative delay there - and
-    429 is the only status the registered drives carry a `Retry-After` on, so nine of the eleven
-    members of `RETRYABLE_STATUS` had no assertion standing over this at all. A broken gateway
-    with a skewed clock emits exactly this value. [M5.1 review cycle 4 second pass, M51-C4-340-07]
-    """
+    """A negative `Retry-After` must not become a zero sleep on any retryable status."""
     clock = _Clock()
     async with _fetcher(_always(503, headers={"Retry-After": "-1"}), clock) as f:
         with pytest.raises(FetchError) as caught:
@@ -1958,8 +1276,7 @@ async def test_a_negative_retry_after_does_not_delete_the_backoff_curve():
         "a host chose this fetcher's backoff curve away with one header"
     )
 
-    # And `nan` reached `asyncio.sleep`, which raises `ValueError` - out of `get`, past the type
-    # `FetchError`'s docstring says is "every failure this layer raises".
+    # `nan` reached `asyncio.sleep`, which raises `ValueError` rather than a `FetchError`.
     nan_clock = _Clock()
     async with _fetcher(_always(503, headers={"Retry-After": "nan"}), nan_clock) as f:
         with pytest.raises(FetchError):
@@ -1967,21 +1284,12 @@ async def test_a_negative_retry_after_does_not_delete_the_backoff_curve():
     assert nan_clock.slept == [pytest.approx(1.6 * 0.7)]
 
 
-# --- a request that is not idempotent (decision 436 (1)) ------------------------------------
-
-
 @pytest.mark.parametrize(("failure", "posts"), [
     (httpx.ReadTimeout, 1), (httpx.RemoteProtocolError, 1), (503, 1), (504, 1), (520, 1),
     (httpx.ConnectError, 3), (httpx.PoolTimeout, 3), (429, 3), (408, 3),
 ])
 async def test_a_post_is_sent_again_only_when_it_provably_never_reached_the_host(failure, posts):
-    """RFC 9110 9.2.2: POST is not idempotent. This layer's retry loop was written for GETs and ran
-    every method through it, so a POST whose reply was lost, or which a gateway timed out after the
-    origin had done the work, was sent again up to `max_attempts` times -- and the one POST this app
-    makes is a paid LLM generation. A POST is re-sent now only on a connect-phase failure, which never
-    delivered it, or on 408, 425 or 429, which the host answered without doing the work; anything
-    else raises after the one send. The GET below keeps every retry it had.
-    [M5.5 review cycle 1, M55-METER-02, M55-BUDGET-01]"""
+    """RFC 9110 §9.2.2: a POST (a paid generation) is re-sent only on a connect failure or 408/425/429."""
     sent: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
@@ -2003,11 +1311,7 @@ async def test_a_post_is_sent_again_only_when_it_provably_never_reached_the_host
 
 
 async def test_a_server_error_outside_the_retry_set_counts_toward_the_breaker():
-    """A 5xx outside `RETRYABLE_STATUS` -- Anthropic's 529 "overloaded_error" is the one this app
-    meets -- fell into the 4xx arm and called `_note_success`, RESETTING the host's run of failures on
-    the one status its provider uses to say it is overloaded. It is still not retried here; it is
-    counted as the failure it is. A 4xx outside the set stays an answer. [M5.5 review cycle 1,
-    M55-DBL-05]"""
+    """A 5xx outside the retry set (Anthropic's 529) is not retried but counts toward the breaker."""
     async with _fetcher(_always(529), _Clock()) as f:
         for _ in range(2):
             with pytest.raises(FetchError) as caught:

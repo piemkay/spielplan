@@ -1,31 +1,5 @@
-"""The three provider adapters, driven through the real fetcher. Spec v2.1 §9, §8 stage 6, §2.
-
-§9 is two hard-won corrections and one constraint, and each is asserted here against the bytes
-that cross the wire rather than against the code that builds them:
-
-  * "no vendor SDKs; one POST per provider through the rate-limited fetcher" -- every call below
-    runs through a REAL `acquire.fetch.Fetcher`, served by an `httpx.MockTransport`, so the
-    request a provider would see is the request the test reads: the method, the url, the header
-    the key travels in, the declared User-Agent, and the body's structured-output mechanism.
-  * "header-only API key so credentials never hit logs" -- the handler asserts the key arrived in
-    the provider's documented header and that the url carries neither the key nor any query, the
-    httpx INFO line the fetcher's client writes is read back, and a static read of every module
-    under `spielplan/llm/` finds no string that builds a url with a key in it.
-  * "Gemini bills thinking tokens as output - counting visible JSON understates cost ~5x" -- the
-    Gemini sum is asserted with and without `thoughtsTokenCount`, and OpenAI's
-    `completion_tokens` is asserted to be used as it comes, because it already folds reasoning in.
-
-THE ENVELOPES ARE THE PROVIDERS' OWN, NOT THIS APP'S. Each builder below carries the reference page
-its shape was read from, with only the payload and the counts changed. An envelope written to
-agree with the parser proves nothing about the parser -- which is `ops/fake_jellyfin.py`'s whole
-argument and the finding M5.2's last review cycle made about a double that agreed with the code
-where a real server would not.
-
-NO DATABASE. A `Fetcher` with no connection keeps its pacing and breaker in memory, and the
-parity test judges each adapter's answer with M5.4's `verify_payload` over a vocabulary built in
-the test, because the verdict is a function of its arguments (`dna/verify.py`'s named change 1).
-The clock is injected, so the fetcher's backoff on an exhausted 5xx costs nothing to wait out.
-"""
+"""The three provider adapters through a real `Fetcher` over `httpx.MockTransport` (§9). Envelopes
+are the providers' published ones, never written to agree with the parser. No database."""
 
 from __future__ import annotations
 
@@ -47,8 +21,7 @@ LLM_PACKAGE = Path(__file__).resolve().parents[1] / "spielplan" / "llm"
 # A key no response, url or log line could contain by accident.
 KEY = "sk-test-KEY-4f1c9a0b7e"
 
-# The corpus's DEFAULT_MODELS (`mdc/config.py:169-173`), because they are the models an install
-# is most likely to be pointed at and the ones whose envelopes the corpus measured.
+# The corpus's DEFAULT_MODELS, the models whose envelopes the corpus measured.
 MODELS = {"anthropic": "claude-sonnet-5", "openai": "gpt-5.6-terra", "gemini": "gemini-3.7-flash"}
 
 URLS = {
@@ -61,15 +34,10 @@ TAGS = [{"term": "mood.bleak", "salience": 3, "source": "imdb:1",
          "quote": "a bleak and unforgiving portrait of a town"}]
 
 
-# --- the providers' published envelopes ------------------------------------------------------
-
-
 def _anthropic_ok(payload, *, usage=None):
-    """A forced tool call, answered. The envelope is https://docs.anthropic.com/en/api/messages's
-    documented response (id, type "message", role, model, content, stop_reason, stop_sequence,
-    usage); the content block is the `tool_use` block
-    https://docs.anthropic.com/en/docs/agents-and-tools/tool-use/implement-tool-use shows, with
-    `stop_reason` "tool_use", which is where that page says a forced tool call ends."""
+    """https://docs.anthropic.com/en/api/messages and
+    https://docs.anthropic.com/en/docs/agents-and-tools/tool-use/implement-tool-use:
+    `stop_reason` "tool_use"."""
     return {
         "id": "msg_01Aq9w938a90dw8q", "type": "message", "role": "assistant",
         "model": "claude-sonnet-5",
@@ -81,7 +49,6 @@ def _anthropic_ok(payload, *, usage=None):
 
 
 def _anthropic_prose(stop_reason):
-    """The same documented envelope with a `text` block where the tool call should be."""
     return {
         "id": "msg_01Aq9w938a90dw8r", "type": "message", "role": "assistant",
         "model": "claude-sonnet-5",
@@ -92,14 +59,8 @@ def _anthropic_prose(stop_reason):
 
 
 def _anthropic_cut_off_mid_call(payload):
-    """A forced tool call cut off at the cap, in the shape Anthropic documents for it: "the truncated
-    response contains an incomplete tool use block", checked by `stop_reason == "max_tokens"` beside
-    `content[-1].type == "tool_use"`
-    (https://platform.claude.com/docs/en/build-with-claude/handling-stop-reasons). The thinking block
-    in front is Sonnet 5's default -- "thinking is already on", `display` "omitted" returns it "with an
-    empty `thinking` field" (https://platform.claude.com/docs/en/build-with-claude/thinking) -- and the
-    thinking is inside `output_tokens`, itemised under `output_tokens_details.thinking_tokens`
-    (https://platform.claude.com/docs/en/build-with-claude/thinking-steering-and-cost)."""
+    """https://platform.claude.com/docs/en/build-with-claude/handling-stop-reasons:
+    an incomplete `tool_use` block."""
     return {
         "id": "msg_01Aq9w938a90dw8s", "type": "message", "role": "assistant",
         "model": "claude-sonnet-5",
@@ -113,13 +74,8 @@ def _anthropic_cut_off_mid_call(payload):
 
 
 def _anthropic_refusal():
-    """The safety classifiers' stop before any output: "a normal HTTP 200 response, not an error" (the
-    stop-reasons page), in the shape the refusals page prints -- `content` empty, `stop_details` naming
-    the category, `output_tokens` 0 -- and NOT billed: "`content` is empty, and token counts appear in
-    `usage` but are not charged"
-    (https://platform.claude.com/docs/en/build-with-claude/refusals-and-fallback). This fixture used to
-    carry 412 output tokens beside the empty content and be billed for them, a refusal no page
-    describes. [M5.5 review cycle 1, M55-DBL-08]"""
+    """https://platform.claude.com/docs/en/build-with-claude/refusals-and-fallback:
+    empty and not charged."""
     return {
         "id": "msg_01Aq9w938a90dw8t", "type": "message", "role": "assistant",
         "model": "claude-opus-5", "content": [], "stop_reason": "refusal",
@@ -130,9 +86,7 @@ def _anthropic_refusal():
 
 
 def _anthropic_refusal_after_output():
-    """The same stop after the model had produced output -- its thinking, here -- which the same page
-    bills: "A mid-stream refusal bills the input tokens and the output already streamed at normal
-    rates". [M5.5 review cycle 1, M55-DBL-08]"""
+    """"A mid-stream refusal bills the input tokens and the output already streamed at normal rates"."""
     return {
         **_anthropic_refusal(),
         "id": "msg_01Aq9w938a90dw8u",
@@ -143,11 +97,8 @@ def _anthropic_refusal_after_output():
 
 
 def _openai_ok(content, *, usage=None, finish_reason="stop", refusal=None, choices=True):
-    """https://platform.openai.com/docs/api-reference/chat/object's chat completion object.
-    `refusal` is the field https://platform.openai.com/docs/guides/structured-outputs documents
-    under "Refusals"; `completion_tokens_details.reasoning_tokens` is the breakdown
-    https://platform.openai.com/docs/guides/reasoning documents, and that page's point is that
-    the reasoning is already inside `completion_tokens`."""
+    """https://platform.openai.com/docs/api-reference/chat/object;
+    reasoning is inside `completion_tokens`."""
     message = {"role": "assistant", "content": content, "refusal": refusal, "annotations": []}
     return {
         "id": "chatcmpl-B9MHDbslfkBeAs8l4bebGdFOJ6PeG", "object": "chat.completion",
@@ -166,10 +117,8 @@ def _openai_ok(content, *, usage=None, finish_reason="stop", refusal=None, choic
 
 
 def _gemini_ok(text, *, usage=None, finish_reason="STOP", parts=True):
-    """https://ai.google.dev/api/generate-content#v1beta.GenerateContentResponse's response
-    (candidates, usageMetadata, modelVersion, responseId). `thoughtsTokenCount` is the field
-    https://ai.google.dev/gemini-api/docs/thinking documents beside `candidatesTokenCount`, and
-    the pricing that page links bills it as output."""
+    """https://ai.google.dev/api/generate-content#v1beta.GenerateContentResponse;
+    thoughts bill as output."""
     content = {"parts": [{"text": text}], "role": "model"} if parts else {"role": "model"}
     return {
         "candidates": [{"content": content, "finishReason": finish_reason, "index": 0}],
@@ -180,8 +129,7 @@ def _gemini_ok(text, *, usage=None, finish_reason="STOP", parts=True):
 
 
 def _gemini_blocked():
-    """A prompt refused before generation: no candidates, and `promptFeedback.blockReason`, per
-    https://ai.google.dev/api/generate-content#PromptFeedback."""
+    """https://ai.google.dev/api/generate-content#PromptFeedback"""
     return {
         "promptFeedback": {"blockReason": "SAFETY", "safetyRatings": [
             {"category": "HARM_CATEGORY_DANGEROUS_CONTENT", "probability": "HIGH"}]},
@@ -221,12 +169,8 @@ OK = {
 }
 
 
-# --- the harness --------------------------------------------------------------------------------
-
-
 class _Clock:
-    """Injected as the fetcher's clock and sleeper together, so a backoff is waited out at once
-    and the token bucket still sees the time it waited pass (`test_acquire_fetch.py`'s fiction)."""
+    """The token bucket still sees the time it waited pass."""
 
     def __init__(self) -> None:
         self.now = 1000.0
@@ -268,24 +212,11 @@ def _body(request: httpx.Request) -> dict:
     return json.loads(request.content)
 
 
-# --- the key travels in a header, and the request is one POST through the fetcher -------------
-
-
 @pytest.mark.parametrize("provider", ["anthropic", "openai", "gemini"])
 async def test_each_adapter_posts_once_through_the_fetcher_with_the_key_in_its_documented_header(
     provider, caplog
 ):
-    """§9's "header-only API key so credentials never hit logs", read off the request itself.
-
-    One request, and it is the POST: a provider host is declared with robots off beside its
-    reasoning (decision 340), so the fetcher asks no robots.txt of a paid endpoint first. The key
-    is in the header each provider documents -- `x-api-key` for Anthropic, `Authorization: Bearer`
-    for OpenAI, `x-goog-api-key` for Gemini, whose documented `?key=` query parameter is the trap
-    plan 2.5 names -- and the url carries neither the key nor any query at all. The fetcher's own
-    User-Agent went out (decision 340: a caller may not replace it). And the one httpx INFO line
-    the fetcher's client wrote for the request names the url and not the key, which is the line
-    `push/send.py` had to install a filter against for its own credential.
-    """
+    """The key travels only in the documented header; the url carries no query and the INFO line no key."""
     caplog.set_level(logging.INFO, logger="httpx")
     seen: list[httpx.Request] = []
     result = await _complete(provider, OK[provider]({"tags": TAGS}), seen=seen)
@@ -318,9 +249,7 @@ async def test_each_adapter_posts_once_through_the_fetcher_with_the_key_in_its_d
 
 
 async def test_the_anthropic_request_forces_the_one_tool_and_sends_no_temperature():
-    """Forced tool-use: one tool whose `input_schema` IS the contract, forced by `tool_choice`,
-    and no `temperature` - a hard 400 on the current Sonnet/Opus models that no retry can fix
-    (`mdc/llm/client.py:166-170`)."""
+    """`temperature` is a hard 400 on the current Sonnet/Opus models that no retry can fix."""
     seen: list[httpx.Request] = []
     await _complete("anthropic", _anthropic_ok({"tags": TAGS}), seen=seen)
     body = _body(seen[0])
@@ -335,9 +264,7 @@ async def test_the_anthropic_request_forces_the_one_tool_and_sends_no_temperatur
 
 
 async def test_the_openai_request_is_strict_and_uses_max_completion_tokens():
-    """Strict schema with the unsupported keywords stripped, and `max_completion_tokens` rather
-    than the deprecated `max_tokens`, which "the reasoning-capable models reject ... outright"
-    (`mdc/llm/client.py:221-222`)."""
+    """The reasoning-capable models reject `max_tokens` outright."""
     seen: list[httpx.Request] = []
     await _complete("openai", _openai_ok(json.dumps({"tags": TAGS})), seen=seen)
     body = _body(seen[0])
@@ -355,7 +282,6 @@ async def test_the_openai_request_is_strict_and_uses_max_completion_tokens():
 
 
 async def test_the_gemini_request_carries_the_response_schema_under_generation_config():
-    """`responseSchema` under `generationConfig`, temperature 0, JSON mime type."""
     seen: list[httpx.Request] = []
     await _complete("gemini", _gemini_ok(json.dumps({"tags": TAGS})), seen=seen)
     body = _body(seen[0])
@@ -371,9 +297,7 @@ async def test_the_gemini_request_carries_the_response_schema_under_generation_c
 
 
 async def test_a_gemini_model_name_stays_one_path_segment_and_never_opens_a_query():
-    """The model is interpolated into Gemini's path, and here it comes from an admin's text field
-    rather than from the corpus's `.env`. A `?` in it would open the query string - the one place
-    §9 says a credential must never go - and a `/` would address a different resource."""
+    """The model comes from an admin's text field: a `?` would open the query, a `/` another resource."""
     seen: list[httpx.Request] = []
     with pytest.raises(client.LLMError):
         await _complete("gemini", GEMINI_404, status=404, seen=seen,
@@ -385,8 +309,7 @@ async def test_a_gemini_model_name_stays_one_path_segment_and_never_opens_a_quer
 
 
 def test_strip_keywords_removes_exactly_the_corpus_set():
-    """`mdc/llm/client.py:102-113`, verbatim: strict mode rejects the array-length and
-    numeric-range keywords, so they are removed at every depth and nothing else is."""
+    """Strict mode rejects the array-length and numeric-range keywords at every depth."""
     dropped = openai._STRICT_UNSUPPORTED
     assert dropped == {
         "minItems", "maxItems", "minimum", "maximum", "minLength", "maxLength", "pattern",
@@ -409,21 +332,15 @@ def test_strip_keywords_removes_exactly_the_corpus_set():
 
 
 def test_the_adapters_name_their_structured_output_mechanisms():
-    """§6.6's provider card captions each mechanism, and decision 338 means Gemini's is not
-    "batch": batch mode does not ship at M5, so the word would describe something absent."""
+    """Decision 338: batch mode does not ship, so "batch" would describe something absent."""
     assert anthropic.STRUCTURED_OUTPUT == "forced tool-use"
     assert openai.STRUCTURED_OUTPUT == "strict schema"
     assert gemini.STRUCTURED_OUTPUT == "responseSchema"
     assert client.PROVIDERS == ("anthropic", "openai", "gemini")
 
 
-# --- the bill: what each provider reports as billed output ------------------------------------
-
-
 async def test_the_gemini_bill_counts_its_thinking_tokens_as_output():
-    """Exit check 5: 1,600 candidate tokens plus 2,300 thought tokens is 3,900 billed, and a
-    response that reports no thoughts is billed at its candidates alone. §9's ~5x correction
-    lives in this one sum: the thoughts are billed as output and never appear in the response."""
+    """§9's ~5x: thoughts bill as output and never appear in the response."""
     thought = await _complete("gemini", _gemini_ok(json.dumps({"tags": TAGS})))
     assert (thought.tokens_in, thought.tokens_out) == (14230, 3900)
     assert thought.model == "gemini-3.7-flash"
@@ -434,8 +351,7 @@ async def test_the_gemini_bill_counts_its_thinking_tokens_as_output():
 
 
 async def test_openai_completion_tokens_are_used_as_they_come():
-    """Exit check 6: `completion_tokens` already folds the reasoning in, so adding
-    `reasoning_tokens` to it would bill the reasoning twice."""
+    """Adding `reasoning_tokens` to `completion_tokens` would bill the reasoning twice."""
     result = await _complete("openai", _openai_ok(json.dumps({"tags": TAGS})))
     assert (result.tokens_in, result.tokens_out) == (1117, 3812)
     assert result.model == "gpt-5.6-terra"
@@ -448,17 +364,13 @@ async def test_anthropic_tokens_come_from_its_usage_block():
     assert result.provider == "anthropic" and result.model == "claude-sonnet-5"
 
 
-# --- every error branch, with its retryability ------------------------------------------------
-
 BRANCHES = [
     # (id, provider, status, envelope, retryable, fragment, requests)
     ("anthropic-prose", "anthropic", 200, _anthropic_prose("end_turn"), False,
      "stop_reason=end_turn", 1),
     ("anthropic-cut-off", "anthropic", 200, _anthropic_prose("max_tokens"), True,
      "stop_reason=max_tokens", 1),
-    # A cut-off that ends in the forced call's own block is still a cut-off: the block is a prefix
-    # of the answer, and a prefix of tags that verifies would be written as the whole tier.
-    # [M5.5 review cycle 1, M55-DBL-01]
+    # A prefix of tags that verifies would be written as the whole tier.
     ("anthropic-cut-off-mid-call", "anthropic", 200, _anthropic_cut_off_mid_call({"tags": TAGS}),
      True, "stop_reason=max_tokens", 1),
     ("anthropic-refusal", "anthropic", 200, _anthropic_refusal(), False, "stop_reason=refusal", 1),
@@ -483,9 +395,7 @@ BRANCHES = [
     ("gemini-not-json", "gemini", 200, _gemini_ok("tags: none"), True, "not JSON", 1),
     ("gemini-400", "gemini", 400, GEMINI_400, False, "INVALID_ARGUMENT", 1),
     ("gemini-404", "gemini", 404, GEMINI_404, False, "NOT_FOUND", 1),
-    # ONE request, where it was four: a paid POST the provider may already have generated is never
-    # re-sent from inside the fetcher (decision 436 (1)), and a 503 goes to the queue's curve
-    # behind the cap gate instead. [M5.5 review cycle 1, M55-METER-02, M55-BUDGET-01]
+    # ONE request: a paid POST the provider may have generated is never re-sent (decision 436).
     ("openai-503-exhausted", "openai", 503, {"error": {"message": "overloaded"}}, True,
      "HTTP 503", 1),
     ("gemini-envelope-not-json", "gemini", 200, b"<html>502 Bad Gateway</html>", True,
@@ -498,12 +408,7 @@ BRANCHES = [
 async def test_every_error_branch_is_a_named_llm_error_with_its_retryability(
     provider, status, envelope, retryable, fragment, requests
 ):
-    """Decision 431 reads `retryable` and nothing else: a non-retryable error fails stage 6 for
-    good, a retryable one is an ordinary fail on the queue's curve. So each branch the corpus
-    names keeps the corpus's answer (`mdc/llm/client.py:186-303`), and the three this port adds
-    are argued in `client.py`: a provider 4xx read out of its documented error envelope is
-    final; a 5xx is the provider's own failure even when the fetcher does not retry it, which is
-    Anthropic's 529; and an envelope that is not JSON at all is a proxy's page, not an answer."""
+    """Decision 431 reads `retryable` and nothing else."""
     seen: list[httpx.Request] = []
     with pytest.raises(client.LLMError) as caught:
         await _complete(provider, envelope, status=status, seen=seen)
@@ -514,13 +419,7 @@ async def test_every_error_branch_is_a_named_llm_error_with_its_retryability(
         assert caught.value.status == status
 
 
-# --- decision 436: what an attempt that failed was billed ------------------------------------------
-
-# Every 200 envelope an adapter refuses, and the usage it reported: the figure the provider bills
-# whatever the adapter thought of the answer. A cut-off bills the cap, a refusal what was read and
-# thought, a blocked prompt its input, and truncated JSON everything it generated -- except the one
-# usage block its provider says it does not charge: Anthropic's refusal before any output, reported
-# and settled to nothing, where one after output bills what it reported. [M55-DBL-08]
+# The usage each refused 200 reported, which the provider bills whatever the adapter thought.
 BILLED_FAILURES = [
     ("anthropic-prose", "anthropic", _anthropic_prose("end_turn"), (2095, 8000)),
     ("anthropic-cut-off-mid-call", "anthropic", _anthropic_cut_off_mid_call({"tags": TAGS}),
@@ -542,13 +441,7 @@ BILLED_FAILURES = [
 @pytest.mark.parametrize(("provider", "envelope", "billed"), [b[1:] for b in BILLED_FAILURES],
                          ids=[b[0] for b in BILLED_FAILURES])
 async def test_a_failed_answer_carries_the_usage_its_envelope_reported(provider, envelope, billed):
-    """Decision 436 (3): an attempt is settled to the envelope's reported usage "whenever a 200
-    envelope's usage block is readable, whether the attempt succeeded or failed". The adapters used
-    to raise from these envelopes with nothing but `retryable`, so stage 6 metered every one of them
-    at zero while the provider billed the cap -- and a retryable cut-off, re-run on the queue's curve,
-    billed again each time behind a cap that read $0. The error now carries the answer's usage in
-    the adapter's own arithmetic (Gemini's candidates plus thoughts), and the bytes, url and status
-    the raw store keeps. [M5.5 review cycle 1, M55-METER-01, M55-BUDGET-02, M55-SPEND-01]"""
+    """Decision 436: a failed attempt is settled to the envelope's reported usage."""
     with pytest.raises(client.LLMError) as caught:
         await _complete(provider, envelope)
     answer = caught.value.answer
@@ -560,8 +453,7 @@ async def test_a_failed_answer_carries_the_usage_its_envelope_reported(provider,
 
 
 class _Script:
-    """A transport that answers each request from a script -- a status, or an exception raised
-    AFTER the request was handed over -- and counts what reached it."""
+    """Exceptions are raised AFTER the request was handed over."""
 
     def __init__(self, *steps):
         self.steps = list(steps)
@@ -586,14 +478,8 @@ async def _scripted(provider, script, *, key=KEY):
                                      schema=contract.EXTRACTION_SCHEMA)
 
 
-# (id, provider, what the transport does, sends, unbilled). RFC 9110 9.2.2: POST is not idempotent,
-# so a paid POST that may have reached the provider is sent ONCE; only a connect-phase failure, which
-# never delivered it, and 408/425/429, which the provider answered without doing the work, are sent
-# again under the fetcher's own pacing. `unbilled` is decision 436 (3)'s settle: zero when the
-# provider's status or a never-sent failure says no work was done, the ceiling when the answer may
-# have been produced and was lost -- a read-phase failure, or a 504/524 from Anthropic or OpenAI. A
-# Gemini 5xx is unbilled whatever its number: "If your request fails with a 400 or 500 error, you
-# won't be charged for the tokens used" (https://ai.google.dev/gemini-api/docs/billing).
+# RFC 9110 9.2.2: POST is not idempotent, so only a connect failure or 408/425/429 is re-sent.
+# A Gemini 5xx is unbilled (https://ai.google.dev/gemini-api/docs/billing).
 RESENDS = [
     ("read-timeout", "anthropic", httpx.ReadTimeout, 1, False),
     ("read-error", "openai", httpx.ReadError, 1, False),
@@ -605,9 +491,7 @@ RESENDS = [
     ("504-anthropic", "anthropic", 504, 1, False),
     ("504-openai", "openai", 504, 1, False),
     ("524-openai", "openai", 524, 1, False),
-    # Cloudflare's 520: "the origin server returns an empty, unknown, or unexpected response" -- the
-    # request was taken and the answer lost, as with 524 (https://developers.cloudflare.com/support/
-    # troubleshooting/http-status-codes/cloudflare-5xx-errors/error-520/). [M55-C2-METER-02]
+    # Cloudflare's 520: the request was taken and the answer lost, as with 524.
     ("520-anthropic", "anthropic", 520, 1, False),
     ("520-gemini", "gemini", 520, 1, True),
     ("504-gemini", "gemini", 504, 1, True),
@@ -625,13 +509,7 @@ RESENDS = [
 async def test_a_paid_post_is_sent_again_only_when_it_never_reached_the_provider(
     provider, step, sends, unbilled
 ):
-    """Decision 436 (1). `client.post` handed every paid call to `fetch.get` with its default four
-    attempts, and the fetcher re-sent any `RequestError` and any status in `RETRYABLE_STATUS`
-    whatever the method -- so a reply lost after the provider generated it, or a gateway 504 after
-    the generation finished, was bought up to four times and metered once at zero. Now a POST that
-    may have been delivered is sent exactly once, and the error says whether anything was done:
-    `unbilled` is what the meter's settle reads. [M5.5 review cycle 1, M55-METER-02, M55-BUDGET-01,
-    M55-SPEND-04]"""
+    """`unbilled` is what the meter's settle reads."""
     script = _Script(step)
     with pytest.raises(client.LLMError) as caught:
         await _scripted(provider, script)
@@ -642,23 +520,18 @@ async def test_a_paid_post_is_sent_again_only_when_it_never_reached_the_provider
 
 
 async def test_a_connect_failure_that_clears_is_sent_again_and_answers():
-    """The one failure that provably delivered nothing is still re-sent under the fetcher's pacing:
-    a connection refused, then an answer, is one answered call and not a stage failure."""
+    """A connection refused, then an answer, is one answered call and not a stage failure."""
     script = _Script(httpx.ConnectError, (200, _gemini_ok(json.dumps({"tags": TAGS}))))
     result = await _scripted("gemini", script)
     assert len(script.seen) == 2 and result.payload == {"tags": TAGS}
 
 
 def _usage_of(envelope, provider, **fields):
-    """The envelope with its usage block's named fields replaced."""
     key = {"anthropic": "usage", "openai": "usage", "gemini": "usageMetadata"}[provider]
     return {**envelope, key: {**envelope[key], **fields}}
 
 
-# Envelopes whose inner members have the wrong TYPE, which a provider's schema change or a proxy's
-# 200 produces. Each is an `LLMError` -- decision 431 reads nothing else -- carrying the usage when the
-# usage block still reads, and none when it does not, which leaves the attempt at its write-ahead
-# ceiling. The refusal field that is not a string is still a refusal.
+# Wrong member TYPES, as a schema change or a proxy's 200 produces; still an `LLMError`.
 MALFORMED = [
     ("anthropic-block-is-a-string", "anthropic", {**_anthropic_ok({"tags": TAGS}), "content": ["oops"]},
      True, (2095, 503)),
@@ -685,11 +558,7 @@ MALFORMED = [
 async def test_a_malformed_answer_is_an_llm_error_and_keeps_the_usage_it_can_read(
     provider, envelope, retryable, billed
 ):
-    """Client named change 5 promises that every failure `complete` can meet is an `LLMError`, and
-    the adapters indexed the envelope without asking what each member was: a string where a block or
-    a choice belonged raised `AttributeError`, a usage count written as text `ValueError`, and an
-    object where OpenAI's refusal string belonged `KeyError` -- each escaping stage 6 unmetered and
-    re-run on the queue's curve. [M5.5 review cycle 1, M55-METER-04]"""
+    """Every failure `complete` can meet is an `LLMError`, or stage 6 re-runs it unmetered."""
     with pytest.raises(client.LLMError) as caught:
         await _complete(provider, envelope)
     assert caught.value.retryable is retryable, str(caught.value)
@@ -698,13 +567,7 @@ async def test_a_malformed_answer_is_an_llm_error_and_keeps_the_usage_it_can_rea
 
 
 async def test_openai_cache_writes_and_reads_are_read_out_of_the_prompt_breakdown():
-    """GPT-5.6 and later write the prompt to OpenAI's cache by default and bill the write at 1.25x the
-    input rate ("Prompt caching is enabled by default"; "cache writes cost 1.25x the standard, uncached
-    input-token rate", https://developers.openai.com/api/docs/guides/prompt-caching), reporting it as
-    `usage.prompt_tokens_details.cache_write_tokens` beside `cached_tokens`, both inside
-    `prompt_tokens` (https://developers.openai.com/api/reference/resources/chat). The adapter read
-    `prompt_tokens` alone, so the meter charged a written prompt at the flat rate -- about 11% of a
-    default call unmetered. [M5.5 review cycle 1, M55-DBL-02, M55-METER-07, M55-DOC-05]"""
+    """Cache writes bill 1.25x input (https://developers.openai.com/api/docs/guides/prompt-caching)."""
     usage = {"prompt_tokens": 23_500, "completion_tokens": 3_900, "total_tokens": 27_400,
              "prompt_tokens_details": {"cached_tokens": 0, "cache_write_tokens": 23_500},
              "completion_tokens_details": {"reasoning_tokens": 2_300}}
@@ -730,16 +593,8 @@ async def test_openai_cache_writes_and_reads_are_read_out_of_the_prompt_breakdow
 async def test_each_adapter_reads_the_price_setting_its_envelope_says_it_was_billed_at(
     provider, envelope, rate
 ):
-    """An OpenAI request with no `service_tier` "will be processed with the service tier configured in
-    the Project settings", and the response reports "the processing mode actually used" (the Chat
-    Completions reference, https://developers.openai.com/api/reference/resources/chat), Fast reported
-    as "priority" at twice the Standard row (https://developers.openai.com/api/docs/pricing); an
-    Anthropic request with no `inference_geo` takes the workspace's `default_inference_geo`, reported
-    as `usage.inference_geo`, and "US-only inference ... is priced at 1.1x the standard rate"
-    (https://platform.claude.com/docs/en/manage-claude/data-residency). OpenAI's request now pins the
-    standard tier -- "processed with the standard pricing and performance for the selected model" --
-    and each adapter carries the multiplier its envelope names, a tier the pricing page does not price
-    at its dearest published one. [M5.5 review cycle 2, M55-C2-METER-01, DBL-C2-01]"""
+    """OpenAI reports the tier actually used and Anthropic `usage.inference_geo` (US-only is 1.1x);
+    each adapter carries the multiplier its envelope names."""
     seen: list[httpx.Request] = []
     result = await _complete(provider, envelope, seen=seen)
     assert result.rate == rate
@@ -749,8 +604,7 @@ async def test_each_adapter_reads_the_price_setting_its_envelope_says_it_was_bil
     assert "inference_geo" not in body, "a pinned geo is refused by a workspace that does not allow it"
 
 
-# (id, provider, envelope) where a field the adapter quotes into its error carries the request's key,
-# which is what a proxy that echoes the request does to a 200. [M5.5 review cycle 2, M55-KEYS-C2-03]
+# A field the adapter quotes carries the request's key, as an echoing proxy's 200 does.
 ECHOED = "{key}" + "z" * 4000
 FIELD_ECHOES = [
     ("anthropic-prose-stop", "anthropic",
@@ -771,11 +625,7 @@ FIELD_ECHOES = [
 async def test_a_field_an_adapter_quotes_is_redacted_and_bounded_like_the_text_beside_it(
     provider, envelope
 ):
-    """Named change 8 is "the key taken out of any message this module raises", and five branches put
-    an envelope field -- Anthropic's `stop_reason`, OpenAI's `finish_reason`, Gemini's `blockReason`
-    and `finishReason` -- into the message unquoted, where the text beside each already went through
-    `client.shown`. Only stage 6's second redaction kept the key out of the row, and nothing kept the
-    field's length out of it: a 40,000-character field reached `llm_call.error` whole."""
+    """Envelope fields quoted into a message go through `client.shown` like the text beside them."""
     with pytest.raises(client.LLMError) as caught:
         await _complete(provider, envelope(KEY))
     said = str(caught.value)
@@ -784,16 +634,14 @@ async def test_a_field_an_adapter_quotes_is_redacted_and_bounded_like_the_text_b
 
 
 async def test_a_markdown_fence_costs_no_retry():
-    """`_loads`, verbatim: a model that ignores the constraint once should not cost a retry over
-    three backticks."""
+    """A model that ignores the constraint once should not cost a retry over three backticks."""
     fenced = "```json\n" + json.dumps({"tags": TAGS}) + "\n```"
     result = await _complete("openai", _openai_ok(fenced))
     assert result.payload == {"tags": TAGS}
 
 
 async def test_an_error_message_never_repeats_the_key():
-    """A provider that echoes the credential it refused would otherwise put it in an exception
-    message, which is a log line and a park reason on §6.6's board."""
+    """An error message is a log line and a park reason on §6.6's board."""
     echoed = {"error": {"message": f"Incorrect API key provided: {KEY}.",
                         "type": "invalid_request_error", "code": "invalid_api_key"}}
     with pytest.raises(client.LLMError) as caught:
@@ -804,10 +652,7 @@ async def test_an_error_message_never_repeats_the_key():
 
 @pytest.mark.parametrize("pad", [250, 270, 280, 290, 299])
 async def test_a_key_quoted_across_the_cut_is_redacted_before_the_message_is_cut(pad):
-    """`error_text` cut the provider's message at 300 characters and only then took the key out, so
-    a key that straddled the cut was never matched and its prefix survived into `llm_call.error`,
-    the board and the test card -- most of the key at the right offset. Redacted whole, then cut.
-    [M5.5 review cycle 1, KEYS-C1-02]"""
+    """Redacted whole, then cut: a key straddling the cut left its prefix behind."""
     echoed = {"error": {"message": "x" * pad + f" {KEY} was refused",
                         "type": "invalid_request_error", "code": "invalid_api_key"}}
     with pytest.raises(client.LLMError) as caught:
@@ -820,7 +665,6 @@ async def test_a_key_quoted_across_the_cut_is_redacted_before_the_message_is_cut
 
 
 async def test_a_proxy_page_that_echoes_the_key_across_the_cut_is_redacted_too():
-    """The same ordering in `envelope`, whose refusal of a 200 that is not JSON quoted the body raw."""
     page = ("<html>" + "y" * 270 + f" {KEY} </html>").encode()
     with pytest.raises(client.LLMError) as caught:
         await _complete("gemini", page)
@@ -829,12 +673,7 @@ async def test_a_proxy_page_that_echoes_the_key_across_the_cut_is_redacted_too()
 
 @pytest.mark.parametrize("spoiled", [f"{KEY}\n", f"{KEY}\r\n", f"  {KEY}\t"])
 async def test_a_key_with_whitespace_around_it_is_sent_trimmed(spoiled):
-    """A key pasted with a trailing newline -- a quoted `.env` value, a card's text field -- used to
-    reach httpx as it was, where h11 refused the header with `LocalProtocolError("Illegal header value
-    b'<key>\\n'")`. The fetcher re-sent it four times, and both redactors missed the key inside that
-    bytes repr, so the whole working key went into `llm_call.error`, the board and the test card.
-    Whitespace around a key is no part of it and is taken off before the header is built.
-    [M5.5 review cycle 1, KEYS-C1-01]"""
+    """h11 refuses a header with a trailing newline and quotes the whole key in its error."""
     seen: list[httpx.Request] = []
     result = await _complete("anthropic", _anthropic_ok({"tags": TAGS}), seen=seen, key=spoiled)
     assert result.payload == {"tags": TAGS}
@@ -843,10 +682,7 @@ async def test_a_key_with_whitespace_around_it_is_sent_trimmed(spoiled):
 
 @pytest.mark.parametrize("spoiled", [f"{KEY[:8]}\n{KEY[8:]}", f"{KEY}\x00x", f"{KEY}\u200b"])
 async def test_a_key_no_header_can_carry_is_refused_before_any_request_and_never_quoted(spoiled):
-    """A key with a control character or a non-ASCII letter INSIDE it cannot be a header value at all,
-    and nothing can mend it without guessing: refused before the fetcher is touched, final, unbilled,
-    and in words that name the fault and not the key. A non-ASCII key used to escape as a raw
-    `UnicodeEncodeError`, outside named change 5. [M5.5 review cycle 1, KEYS-C1-01]"""
+    """Refused before the fetcher is touched, final, unbilled, and naming the fault, not the key."""
     seen: list[httpx.Request] = []
     with pytest.raises(client.LLMError) as caught:
         await _complete("openai", _openai_ok(json.dumps({"tags": TAGS})), seen=seen, key=spoiled)
@@ -857,19 +693,14 @@ async def test_a_key_no_header_can_carry_is_refused_before_any_request_and_never
 
 
 def test_every_spelling_of_the_key_an_exception_can_carry_is_redacted():
-    """h11 quotes a refused header value as a bytes repr, a traceback quotes a string as a str repr,
-    and a key typed with a newline after it is the key itself plus one character. Each is taken out."""
+    """h11 quotes a bytes repr, a traceback a str repr, and a pasted key may carry a newline."""
     key = f"{KEY}\n"
     for text in (f"Illegal header value b'{KEY}\\n'", f"key={key!r}", f"key={KEY} ok", f"{key} ok"):
         assert KEY not in client._redacted(text, key), text
 
 
 async def test_an_overloaded_anthropic_counts_toward_its_hosts_breaker():
-    """Anthropic's 529 is "The API is temporarily overloaded" (https://platform.claude.com/docs/en/api/
-    errors). It is outside `RETRYABLE_STATUS`, so `fetch.get` treated it as a 4xx answer and called
-    `_note_success`: the host's run of consecutive failures was RESET on the one status its provider
-    uses to say it is overloaded, the breaker could never open, and the host read healthy on §6.6.
-    A 5xx is the server's own failure whatever its number. [M5.5 review cycle 1, M55-DBL-05]"""
+    """529 is the provider saying it is overloaded; it must count toward the breaker."""
     clock = _Clock()
     async with fetch.Fetcher(transport=_serve(529, ANTHROPIC_529, []), clock=clock, sleep=clock.sleep,
                              jitter=lambda low, high: 0.0) as fetcher:
@@ -881,25 +712,10 @@ async def test_an_overloaded_anthropic_counts_toward_its_hosts_breaker():
     assert (host["requests"], host["errors"]) == (3, 3), host
 
 
-# The account-level refusals each provider documents: the provider refusing the HOUSEHOLD'S ACCOUNT
-# until a limit resets or a balance is topped up, not refusing this title's answer. Anthropic: "402 -
-# billing_error"; a spend limit the household set is a 400 whose "message begins `You have reached
-# your specified API usage limits`"; the tier's monthly cap is a 429 whose `error.details.error_code`
-# is `enforced_spend_limit_reached` (https://platform.claude.com/docs/en/api/errors,
-# https://platform.claude.com/docs/en/api/rate-limits). OpenAI: the 429 codes `credit_balance_exhausted`,
-# `organization_spend_limit_exceeded`, `project_spend_limit_exceeded` and
-# `organization_usage_limit_exceeded`, with "Retrying billing, spend, or quota errors won't restore API
-# access" (https://developers.openai.com/api/docs/guides/error-codes), whose same page adds that "The
-# broader `error.type` can still be `insufficient_quota`" -- so a billing 429 under a code outside the
-# four, the legacy `insufficient_quota` among them, is the account's too. Gemini: 402 "Your Prepay
-# credit balance is depleted ... Don't retry", and a spent daily quota, which generateContent answers
-# as google.rpc.Status -- `code` 429, `status` RESOURCE_EXHAUSTED, "the API returns a `429
-# RESOURCE_EXHAUSTED` error" and "Requests per day (RPD) quotas reset at midnight Pacific time"
-# (https://ai.google.dev/gemini-api/docs/rate-limits) -- with the `QuotaFailure` detail Google's error
-# model defines "if a daily limit was exceeded for the calling project"
-# (https://github.com/googleapis/googleapis/blob/master/google/rpc/error_details.proto). This row used
-# to carry the Interactions API's string `code` "quota_exceeded", a shape the endpoint this app calls
-# never sends. [M5.5 review cycle 2, DBL-C2-03, DBL-C2-06]
+# Account-level refusals, each in its provider's documented shape
+# (https://platform.claude.com/docs/en/api/errors,
+# https://developers.openai.com/api/docs/guides/error-codes,
+# https://ai.google.dev/gemini-api/docs/rate-limits): they lift when a limit resets or a balance is paid.
 GEMINI_DAILY_QUOTA = {"error": {
     "code": 429, "message": "You exceeded your current quota, please check your plan and billing details.",
     "status": "RESOURCE_EXHAUSTED",
@@ -946,14 +762,7 @@ ACCOUNT_REFUSALS = [
 async def test_a_billing_or_spend_refusal_is_the_accounts_and_says_so_in_the_providers_words(
     provider, status, envelope, fragment, sends
 ):
-    """A refusal of the household's account is not a refusal of this title: it lifts when the month
-    rolls over or a balance is topped up, which is decision 336's "waiting on something that may
-    change" -- so it is marked `account`, which stage 6 parks on rather than failing every title for
-    good (decision 431's provider 4xx) or burning four walks each (its exhausted 429). And it carries
-    the provider's own words: `ERROR_STATUS` held neither 402 nor 429, so both read "HTTP 402" and
-    "HTTP 429 ... asked again on the queue's schedule", and a household out of credit could not tell
-    it from a rate limit. The 429s are still paced and re-sent by the fetcher first: the provider
-    answered without doing the work. [M5.5 review cycle 1, M55-BUDGET-07, M55-DBL-06]"""
+    """Marked `account`, so stage 6 parks rather than failing every title, in the provider's own words."""
     seen: list[httpx.Request] = []
     with pytest.raises(client.LLMError) as caught:
         await _complete(provider, envelope, status=status, seen=seen)
@@ -967,8 +776,7 @@ async def test_a_billing_or_spend_refusal_is_the_accounts_and_says_so_in_the_pro
     ("openai", 429, {"error": {"message": "Rate limit reached for requests", "type": "requests",
                                "param": None, "code": "rate_limit_exceeded"}},
      True, "rate_limit_exceeded: Rate limit reached"),
-    # A per-minute Gemini quota is the same status and the same detail type, and is a rate limit: only
-    # a per-day `quotaId` is the account's. [M5.5 review cycle 2, DBL-C2-03]
+    # A per-minute Gemini quota is a rate limit: only a per-day `quotaId` is the account's.
     ("gemini", 429, {"error": {**GEMINI_DAILY_QUOTA["error"], "details": [
         {"@type": "type.googleapis.com/google.rpc.QuotaFailure", "violations": [
             {"quotaId": "GenerateRequestsPerMinutePerProjectPerModel-FreeTier"}]}]}},
@@ -982,8 +790,7 @@ async def test_a_billing_or_spend_refusal_is_the_accounts_and_says_so_in_the_pro
 async def test_a_rate_limit_or_a_request_refusal_is_not_the_accounts_and_keeps_its_words(
     provider, status, envelope, retryable, fragment
 ):
-    """The other side of the line: a rate limit stays on the queue's curve and a request the provider
-    refused as it stands stays final (decision 431) -- now in the provider's words either way."""
+    """A rate limit stays on the queue's curve; a refused request stays final."""
     with pytest.raises(client.LLMError) as caught:
         await _complete(provider, envelope, status=status)
     assert caught.value.account is False
@@ -997,8 +804,7 @@ async def test_a_rate_limit_or_a_request_refusal_is_not_the_accounts_and_keeps_i
     ("openai", KEY, "", "no model"),
 ])
 async def test_a_call_that_cannot_succeed_is_refused_before_any_request(provider, key, model, fragment):
-    """The corpus's `resolve()` checks, rewritten for a caller that reads connector_config: an
-    unknown provider, a missing key or a missing model is final and costs nothing."""
+    """Unknown provider, missing key or model: final and costs nothing."""
     seen: list[httpx.Request] = []
     with pytest.raises(client.LLMError) as caught:
         async with _fetcher(200, {}, seen) as fetcher:
@@ -1009,19 +815,8 @@ async def test_a_call_that_cannot_succeed_is_refused_before_any_request(provider
     assert seen == []
 
 
-# --- one contract, three mechanisms, one verdict ------------------------------------------------
-
-
 async def test_one_schema_valid_answer_reaches_the_same_verdict_through_all_three_adapters():
-    """The parity the two-attempt row claims: "identical across the Gemini, Anthropic and OpenAI
-    adapters despite their different structured-output mechanisms".
-
-    One answer, schema-valid on every provider, carrying the three contract violations §9 names
-    as the normal case -- a term vocabulary v1 does not carry, an evidence string not in the pack,
-    a salience outside {1,2,3} -- beside one good tag. Through each adapter it parses to the same
-    payload, M5.4's `verify_payload` reaches the same verdict on it, and the retry message names
-    the same violations: the mechanism differs and the enforcement does not.
-    """
+    """The mechanism differs and the enforcement does not."""
     payload = {"tags": [
         TAGS[0],
         {"term": "themes.mecha", "salience": 2, "source": "imdb:1", "quote": "unforgiving portrait"},
@@ -1055,8 +850,6 @@ async def test_one_schema_valid_answer_reaches_the_same_verdict_through_all_thre
     assert "stated level 4 is outside the declared domain" in retry
 
 
-# --- the test button: a free models-list read ---------------------------------------------------
-
 MODELS_LISTS = {
     # https://docs.anthropic.com/en/api/models-list
     "anthropic": ("https://api.anthropic.com/v1/models?limit=1000", {
@@ -1079,10 +872,7 @@ MODELS_LISTS = {
 
 @pytest.mark.parametrize("provider", ["anthropic", "openai", "gemini"])
 async def test_the_probe_reads_the_free_models_list_with_the_key_in_a_header(provider):
-    """Decision 433's test button: a GET of the provider's documented models list, nothing
-    generated and nothing metered, with the key where the paid call puts it and never in the
-    url. `model_listed` answers whether the configured model is on the list - and is not
-    "usable", which the probe's docstring says with the corpus's evidence."""
+    """`model_listed` is not "usable": a listed model can still refuse to generate."""
     url, listing = MODELS_LISTS[provider]
     seen: list[httpx.Request] = []
     async with _fetcher(200, listing, seen) as fetcher:
@@ -1117,28 +907,19 @@ async def test_a_probe_with_no_key_asks_nothing():
 
 
 def test_open_fetcher_is_one_fetcher_on_the_callers_connection():
-    """The one construction site outside a drain, module-level so a test replaces it the way
-    `registry.make_client` is replaced; the registry's provider test calls it by this name."""
+    """Module-level, so a test replaces it the way `registry.make_client` is replaced."""
     sentinel = object()
     built = client.open_fetcher(sentinel)
     assert isinstance(built, fetch.Fetcher)
     assert built.conn is sentinel
 
 
-# --- the static half: no llm module builds a url with a key in it -----------------------------
-
-# A url whose query names a key: `?key=`, `&key=`, `?api_key=`, `?apikey=` - the spellings
-# Gemini's reference documents and the ones a "simplification" would reach for.
+# The spellings Gemini's reference documents and a "simplification" would reach for.
 _KEY_IN_URL = re.compile(r"[?&](?:api_?key|key)\b", re.IGNORECASE)
 
 
 def _key_in_url_builders(source: str) -> list[str]:
-    """Every string literal or f-string that builds a url naming a key, and every call passing
-    `params=` - which is how a query is added without writing a `?` at all.
-
-    A docstring builds no url, so a bare string statement is skipped: a module is allowed to say
-    that Gemini's documented `?key=` is the trap, and saying so is what the warning is for.
-    Comments are not in the tree to begin with."""
+    """Docstrings are skipped: a module may say that Gemini's `?key=` is the trap."""
     tree = ast.parse(source)
     prose = {id(node.value) for node in ast.walk(tree)
              if isinstance(node, ast.Expr) and isinstance(node.value, ast.Constant)}
@@ -1160,12 +941,7 @@ def _key_in_url_builders(source: str) -> list[str]:
 
 
 def test_no_llm_module_builds_a_url_with_a_key_or_passes_params():
-    """The "no llm module builds a URL containing a key" clause, by reading the modules.
-
-    The request tests above see the urls one test's inputs produce; this sees every url the
-    package could build, including a branch no test reaches. `params=` is refused outright
-    because the fetcher hands it to httpx separately and it lands in `raw_document.url` and
-    the INFO line exactly as a hand-written query would."""
+    """`params=` lands in `raw_document.url` and the INFO line exactly as a hand-written query would."""
     modules = sorted(LLM_PACKAGE.glob("*.py"))
     names = {path.name for path in modules}
     assert {"__init__.py", "client.py", "anthropic.py", "openai.py", "gemini.py",

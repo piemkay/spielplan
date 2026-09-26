@@ -1,27 +1,6 @@
-"""The ten-stage driver: the names, the park, the resume, the mint, and the two shipped stages.
-
-Spec v2.1 §8 (the pipeline, "Failure at any stage parks the job with a reason, retryable from
-admin", "paid stages (6) never auto-retry past the spend cap"), §4.1 (the id partition), §5.3,
-§6.0 row 6; decisions 162, 322, 323, 336.
-
-TWO HALVES, and the split is the one the plan's "What must be asserted where" draws.
-
-  * **No database.** The ten names, read back out of `docs/spielplan-spec_v2.1.md`'s own §8 block
-    rather than out of a list retyped here, and the spend gate's refusal - which is a pure
-    decision about a `Stage` and needs nothing but the stage.
-  * **Postgres.** Everything else, because everything else is a claim about two tables agreeing:
-    the mint lands above 1e9 and the board row appears with it; a park writes its reason verbatim
-    and the resume re-enters at that stage; a second run duplicates nothing. None of those is
-    checkable against a stub connection, and the one that matters most - the nightly sweep cannot
-    drag a title in flight backwards - is a claim about an `ON CONFLICT` clause.
-
-STAGES 2-8 ARE DECLARED NO-OPS AT M5.1, which is what makes the walk from 1 to 9 to 10 runnable
-at all. That is the point of D3 rather than a limitation of these tests: the spine is provable
-before any lane opens, and every test below that walks the whole pipeline is also a test that the
-stubs advance rather than silently ending the run.
-
-Skipped without TEST_DATABASE_URL; see tests/conftest.py.
-"""
+"""The ten-stage driver: the names, the park, the resume, the mint and the shipped stages (§8, §4.1, §5.3).
+The names and the spend gate need no database; the rest are claims about tables agreeing.
+Needs TEST_DATABASE_URL."""
 
 from __future__ import annotations
 
@@ -50,47 +29,19 @@ from spielplan.models.artifacts import ArtifactStore
 from spielplan.placement import reconcile
 from tests.fixtures import make_bundle as fx
 
-# The tuple as this build ships it, captured before any test patches it. A test that put the
-# stages back by reading `pipeline.STAGES` would read whatever the patch left there.
+# Captured before any test patches it, so a test restoring stages does not read the patch back.
 SHIPPED = pipeline.STAGES
-
-# --- the names (backend, no DB) -----------------------------------------------------------------
 
 
 def test_stage_six_is_the_only_paid_stage_and_every_stub_names_the_milestone_that_owes_it():
-    """§8: "paid stages (6) never auto-retry past the spend cap" - the number is in the spec and
-    it is the only one there. No stage is still a stub since M5 (decisions 461, 462, 463)."""
+    """§8: "paid stages (6) never auto-retry past the spend cap"; no stage is still a stub."""
     assert [s.number for s in SHIPPED if s.paid] == [6]
     assert {s.number: s.owner for s in SHIPPED if not s.implemented} == {}
 
 
 async def test_an_implemented_paid_stage_is_refused_while_a_declared_no_op_is_not(monkeypatch):
-    """The seam M5.1 owes M5.5, asserted on the gate itself.
-
-    §8 says a paid stage "never auto-retries past the spend cap", which is a rule about a stage
-    that BILLS - so the contract has to carry a stage that refuses to run rather than one that
-    runs and then checks. `refuse_uncapped_spend` asks exactly that question, and the two answers
-    below are the two halves of it:
-
-      * a declared no-op spends nothing, so refusing it would park every task at stage 6 today
-        and make M5.1's own exit criterion unsatisfiable;
-      * an implemented paid stage can spend, and no cap exists yet, so it parks - never fails,
-        because a failure spends attempts and four of them would lose the title over a setting
-        nobody has configured (decision 336).
-
-    The day M5.5 gives `stages.dna_extract` a body, `implemented` becomes True and this refusal
-    starts firing. That is the seam holding rather than a test of a flag.
-
-    M5.5 IS THAT DAY, AND THE GATE NOW ASKS THE CAP. The shipped stage 6 is implemented (decision
-    432), so the gate no longer answers from the flag alone: it asks `llm/spend.cap_check`, and the
-    answer here is whatever that function says. It is replaced for this test, which keeps it off
-    the database and makes the MAPPING the subject - an unset cap parks under decision 348's own
-    sentence, an over-cap refusal parks under the meter's, both with a deadline, and None runs the
-    stage. What `cap_check` itself decides is `test_llm_spend.py`'s, and what the driver does with
-    these parks on both tables is `test_llm_stage.py`'s. The two stages that cannot spend - a
-    declared no-op and a free stage - are waved through WITHOUT asking, which is the half that
-    keeps every walk-to-ready test in this file from reading a meter.
-    """
+    """`cap_check` is replaced, so the mapping is the subject: an unset cap and an over-cap refusal both
+    park with a deadline, None runs the stage, and a stage that cannot spend is waved through unasked."""
     asked: list[int | None] = []
     answers: list[spend.Refusal | None] = []
 
@@ -109,11 +60,7 @@ async def test_an_implemented_paid_stage_is_refused_while_a_declared_no_op_is_no
     assert refusal.verb == stages.PARK
     assert refusal.reason == pipeline.NO_SPEND_CAP
     assert refusal.detail == {"paid_stage": "dna extract"}
-    # WITH A DEADLINE, which is the one property of this gate nothing asserted while its own
-    # paragraph called a deadline-less park "strictly worse than the failure this paragraph
-    # rejects". Deleting the `until=` from the shipped gate passed every test in the tree and
-    # started closing tasks on their first refusal. [M5.1 review cycle 4 second pass,
-    # M51-C4-PAID-04]
+    # With a deadline: a park without one closes the task on its first refusal.
     assert refusal.until is not None, (
         "a park with no deadline is queue.skip, which closes the task on attempt one - and "
         "nothing in this tree moves a row out of skipped before decision 330 arrives at M5.6"
@@ -132,14 +79,10 @@ async def test_an_implemented_paid_stage_is_refused_while_a_declared_no_op_is_no
 
     declared = pipeline.Stage(6, "dna extract", stages.dna_extract, paid=True, implemented=False)
     assert await pipeline.refuse_uncapped_spend(declared, ctx) is None
-    # Built as the declared paid one above is, because no shipped stage is a declared no-op since
-    # M5 (decisions 461-463) and the gate's answer to a free one is still this test's subject.
+    # No shipped stage is a declared no-op any more, so the free one is built by hand.
     free = pipeline.Stage(5, "dna pack", stages.dna_pack, implemented=False)
     assert await pipeline.refuse_uncapped_spend(free, ctx) is None
     assert len(asked) == 3, "a stage that cannot spend was made to read the meter"
-
-
-# --- the integration fixtures --------------------------------------------------------------------
 
 
 MOVIE = {
@@ -157,8 +100,7 @@ THIRD = {
     "RunTimeTicks": 131 * 60 * 10_000_000,
     "ProviderIds": {"Imdb": "tt5000003"},
 }
-# `ops/fake_jellyfin.py:52-53`'s own awkward fixture, restated: an item Jellyfin gives no provider
-# id for. Decision 323 says this one parks with the reason "no provider id" and mints nothing.
+# `ops/fake_jellyfin.py`'s item with no provider id: decision 323 parks it and mints nothing.
 NO_IDS = {
     "Id": "jf-acq-4", "Name": "Tampopo", "Type": "Movie", "ProductionYear": 1985,
     "RunTimeTicks": 114 * 60 * 10_000_000, "ProviderIds": {},
@@ -167,14 +109,8 @@ NO_IDS = {
 
 @pytest.fixture
 def data_dir(tmp_path, monkeypatch):
-    """`DATA_DIR`, and therefore `settings().artifacts_dir`, under this test's own tmp_path.
-
-    Through the environment rather than a parameter, because that is how `stages.active_store`
-    reaches it in production - `ArtifactStore.load_active(conn, settings().artifacts_dir)`,
-    `worker.py:390`'s own call. A test that passed a path in would be exercising an argument that
-    does not exist on the real path. `settings()` is `lru_cache`d, so the cache is cleared on the
-    way in and on the way out (`test_acquire_rawstore.py` does the same for `raw_dir`).
-    """
+    """Through the environment, as `stages.active_store` reads
+    it; `settings()` is cached, so cleared both ways."""
     monkeypatch.setenv("DATA_DIR", str(tmp_path / "data"))
     settings.cache_clear()
     yield settings().data_dir
@@ -183,15 +119,8 @@ def data_dir(tmp_path, monkeypatch):
 
 @pytest.fixture
 async def bundled(db, data_dir, tmp_path):
-    """A real bundle, imported and active, so stage 9 has a basis to place against.
-
-    The fixture contract's column NAMES are the shipped placeholders rather than
-    `test_placement.py`'s realistic rewrite, and that is deliberate here: an acquired title has no
-    genres, keywords, credits or DNA rows of its own at M5.1 because stages 2 and 3 are declared
-    no-ops, so it is thin whatever the contract says. Thin is the state this milestone's titles
-    are actually in on a real install today, and it is the state `_park_thin` reacts to - which is
-    the collision this file has to prove is harmless.
-    """
+    """A real active bundle so stage 9 can place; acquired
+    titles stay thin, which `_park_thin` reacts to."""
     root = fx.make_bundle(tmp_path / "bundle")
     report = await bundle_import.import_bundle(
         db, bundle_import.Bundle.open(root), settings().artifacts_dir
@@ -201,12 +130,7 @@ async def bundled(db, data_dir, tmp_path):
 
 
 async def _leased(db, *, item=None, title_id=None) -> queue.Task:
-    """Enqueue one task and lease it, the way a drain tick would.
-
-    Leased rather than constructed, because `queue.lease` is what counts the attempt and sets the
-    expiry, and a driver test that handed itself a `Task` it built would be testing the driver
-    against a row no worker could ever hold.
-    """
+    """Leased, not constructed: `queue.lease` counts the attempt and sets the expiry."""
     if item is not None:
         assert await pipeline.enqueue_item(db, item) is True
     else:
@@ -226,57 +150,9 @@ async def _task_row(db, key: str):
     )
 
 
-# --- keeping the driver's own tests off the open web ----------------------------------------------
-#
-# M5.3 gave stages 2, 3 and 4 bodies, and every test in this file that walks a task was written
-# against a pipeline where they were declared no-ops. That is not an accident of timing: their
-# subject is the DRIVER - the mint, the advisory lock, the park, the resume, the board's two
-# writers, the fourth exit - and M5.1 chose declared no-ops for stages 2-8 precisely so the spine
-# could be proved before any lane opened. A test about `pg_try_advisory_lock` that also has to
-# supply a canned web, a TMDB credential and two review sources is a test about three things, and
-# it reddens for the crawl's reasons.
-#
-# So the three stages stand down by default and the tests whose subject they ARE opt back in with
-# `live`. Two properties come with that and both are the point:
-#
-#   * NOTHING IN THIS FILE CAN REACH THE OPEN WEB BY FORGETTING. `pipeline._default_fetcher` is
-#     replaced by one that refuses, so a test that reaches a stage with `fetches=True` without
-#     supplying a factory fails with a sentence saying so rather than crawling eight hosts from
-#     whatever machine is running the suite. CLAUDE.md's rule for doubles - "test doubles are
-#     refusers, not mocks" - is the same rule, and this is the milestone that makes it matter.
-#   * A MINTED TITLE NO LONGER REACHES `ready` BY ITSELF, which is stage 4 working. A brand-new
-#     acquired title has no plot and no reviews, so the reviews gate parks it with a thirty-day
-#     window - correct, and fatal to twenty tests that assert the walk ends at 10. Standing the
-#     three stages down restores exactly the pipeline those tests were written against and changes
-#     no assertion in any of them.
-#
-# The substitutes keep `paid`, `implemented` (stage 6's excepted, below) and `owner` and change
-# only `run` and `fetches`, so the tuple a test reads for its flags is still the shipped one. The
-# tests that read the SHIPPED flags statically read `SHIPPED`, which is captured above for this
-# reason.
-#
-# M5.5 GAVE STAGE 6 ITS BODY AND IT STANDS DOWN TOO, WITH ONE FLAG CHANGED (decision 432). Stage 6
-# is paid, and the driver's gate reads `implemented` before it reads anything else: a substitute
-# that kept the shipped `implemented=True` would still be a billing stage to the gate, which then
-# asks the meter, finds no cap on a test database and parks every walk-to-ready test in this file
-# at stage 6 under decision 348's sentence - for a body the substitute does not even have. So a
-# paid stage stands down as what it now is, a DECLARED NO-OP, which is the one shape decision 348
-# says cannot spend and the gate waves through. That is exactly the pipeline these tests were
-# written against: stage 6 was a declared no-op from M5.1 until this milestone. The tests whose
-# subject IS stage 6 put it back with `extraction_live`, and `test_llm_stage.py` walks it through
-# the driver against the refusing double.
-#
-# M5 GAVE STAGES 5, 7 AND 8 THEIR BODIES, AND 5 AND 7 STAND DOWN TOO, in decision 432's pattern
-# and for its reason. A live stage 5 reads the active vocabulary before anything else, and a test
-# database with no bundle has none, so it parks every walk that reaches it with a deadline
-# (decision 461) where these tests expect stage 9's own park - and on a database with a bundle it
-# builds a pack and files it in the raw store, which is not what a test of the mint or the lock is
-# about. Stage 7 is not these tests' subject either: it records what stage 6 filed, and stage 6
-# is stood down. Neither is paid, so each keeps `implemented=True` in its substitute and the gate
-# waves it through without a read. STAGE 8 STAYS LIVE: an acquired title with no keywords projects
-# no row and advances, and a bundle title takes the branch that leaves its projected tier alone
-# (decision 463), so every walk here crosses the shipped stage 8 unchanged. The tests whose
-# subject is stage 5 or 7 put them back with `dna_live`.
+# Stages 2-7 stand down so these tests are about the driver; `live`,
+# `extraction_live` and `dna_live` put them back. Stage 6 stands down as a
+# declared no-op, or the spend gate parks every walk. Stage 8 stays live.
 STOOD_DOWN = "stage {} stood down by this file's fixture; the live stages are asserted under `live`"
 STANDS_DOWN = (2, 3, 4, 5, 6, 7)
 
@@ -307,9 +183,7 @@ def enrichment_stands_down(monkeypatch):
 
 
 def _put_back(monkeypatch, numbers: tuple[int, ...]) -> None:
-    """The shipped stage for each of `numbers`, over whatever the tuple holds now. Stage by stage
-    rather than the whole tuple, so `live` and `extraction_live` commute: either order of the two
-    fixtures leaves both sets of stages shipped."""
+    """Stage by stage rather than the whole tuple, so the `live` fixtures commute in either order."""
     monkeypatch.setattr(pipeline, "STAGES", tuple(
         shipped if shipped.number in numbers else current
         for shipped, current in zip(SHIPPED, pipeline.STAGES, strict=True)
@@ -318,76 +192,27 @@ def _put_back(monkeypatch, numbers: tuple[int, ...]) -> None:
 
 @pytest.fixture
 def live(monkeypatch):
-    """Put the shipped stages back. For the tests whose subject is §8 stages 2, 3 and 4.
-
-    A fixture and not a `monkeypatch.setattr` in each test, because the autouse one above has
-    already patched the attribute and the order between two patches of one name is the kind of
-    thing that works until someone reorders a decorator. pytest runs autouse fixtures of a scope
-    before the explicitly requested ones, so this always lands second.
-
-    STAGE 6 STAYS A DECLARED NO-OP UNDER `live`, which is what this fixture meant when it was
-    written: the tests that take it walk a title through the crawl, the derive and the gate to
-    `ready`, and a shipped stage 6 would park every one of them at the spend gate with no cap on
-    a test database (decision 432). `extraction_live` is the way back for stage 6.
-
-    STAGES 5 AND 7 STAY STOOD DOWN UNDER IT TOO, since M5 gave them bodies: a shipped stage 5 would
-    file a pack for every title these tests walk to `ready`, and `dna_live` is the way back for both.
-    """
+    """The shipped stages 2-4. A fixture rather than a `setattr`, because pytest runs autouse
+    fixtures first. Stages 5-7 stay stood down: `extraction_live` and `dna_live` put them back."""
     _put_back(monkeypatch, (2, 3, 4))
 
 
 @pytest.fixture
 def extraction_live(monkeypatch):
-    """Put stage 6's shipped body back. For the tests whose subject is §8 stage 6 in the driver.
-
-    `live`'s shape and its reason, for the one stage M5.5 wrote: the autouse fixture stands stage 6
-    down as a declared no-op, and a test about what the shipped stage does has to say so.
-    """
+    """Stage 6's shipped body back, for tests whose subject is stage 6 in the driver."""
     _put_back(monkeypatch, (6,))
 
 
 @pytest.fixture
 def dna_live(monkeypatch):
-    """Put stages 5 and 7's shipped bodies back. For the tests whose subject is §8's DNA stages.
-
-    `extraction_live`'s shape and its reason, for the two stages M5 wired that this file stands
-    down (decisions 461, 462); stage 8 is never stood down. Stage 6 stays a declared no-op unless
-    the test also takes `extraction_live`, and the three fixtures commute (`_put_back`).
-    """
+    """Stages 5 and 7's shipped bodies back; stage 8 is never stood down."""
     _put_back(monkeypatch, (5, 7))
 
 
-# --- the mint, the placement and the badge -------------------------------------------------------
-
-
 async def test_an_item_with_provider_ids_is_minted_placed_and_badged(db, bundled):
-    """§8 stages 1, 9 and 10 end to end, which is M5.1's exit criterion in one test.
-
-    THREE ITEMS AND NOT ONE, because the surface this ends at has a floor. §6.0's shelves suppress
-    below `SECTION_FLOOR` (proposal 28's floor of three), so a single minted title would prove the
-    board and prove nothing about Home - and "appears on Home" is half of what §8 stage 10 claims.
-    Three also makes the drain do its real job: one tick, three tasks, sequential.
-
-    What each assertion is for:
-
-      * `id >= 1e9` and `origin = 'acquired'` - §4.1's partition, which `0015_seed.sql:39-44`
-        names this write path as the beneficiary of. Nothing in the tree wrote `'acquired'` before
-        this milestone.
-      * `placement = 'cold_tower'` with a `title_placement` row in the ACTIVE bundle's basis -
-        stage 9 ran through `reconcile`'s `app_acquired` scope, which had no caller anywhere in
-        the tree until now.
-      * the board at stage 10, `status = 'ready'` - stage 10's state, and the one an operator
-        reads.
-      * the shelf - `home/shelves.py:1015-1053`, built at M4.9 with no producer because nothing
-        ever stamped `origin = 'acquired'`. This is that producer.
-
-    THE BADGE IS ASSERTED THROUGH ITS INPUTS AND NOT THROUGH A STRING, because that is where it
-    lives: `shelves.py:474-484` computes `item_n` and `e_source` OUTSIDE the card's `model` block
-    on purpose, so decision 117's gate cannot make the badge vanish, and `PosterCard.svelte:47-55`
-    draws it "off `e_source`/`item_n`, NOT off `title.placement`". A card carrying `placement =
-    'cold_tower'` with neither is a card that badges; asserting a rendered sentence here would be
-    asserting the front end from the wrong side of the API.
-    """
+    """§8 stages 1, 9 and 10 end to end. Three items, because §6.0's shelves
+    suppress below a floor of three. The badge is asserted through `item_n`
+    and `e_source`, which the card draws it from, not as a string."""
     for item in (MOVIE, SECOND, THIRD):
         assert await pipeline.enqueue_item(db, item) is True
     report = await pipeline.drain(db, limit=3)
@@ -429,15 +254,7 @@ async def test_an_item_with_provider_ids_is_minted_placed_and_badged(db, bundled
         assert board["reason"] is None, "a ready job carries no park reason"
         assert board["detail"]["identify"]["identified"] == "minted"
         assert board["detail"]["place"]["placement"] == "cold_tower"
-        # STAGES 2, 3 AND 4 STOOD DOWN FOR THIS WALK, and the assertion says so rather than
-        # asserting nothing. This test's subject is §8 stages 1, 9 and 10 - the mint, the Cold
-        # Tower coordinate and Home's shelf - and it was written when stages 2-8 were declared
-        # no-ops, which is why three titles can be minted from bare Jellyfin items and still reach
-        # `ready`. They cannot any more: M5.3's reviews gate parks a title with no plot and no
-        # reviews, correctly, and a version of this test that satisfied the gate would be
-        # asserting the crawl, the parsers and the derive in a test about a badge. What stage 2
-        # actually records is asserted where it is the subject:
-        # `test_a_title_walks_all_ten_stages_with_the_crawl_the_derive_and_the_gate_live`.
+        # Stages 2-4 stood down here, and the board says so; stage 2's record is asserted in the live walk.
         assert board["detail"]["enrich"]["stood_down"] == STOOD_DOWN.format(2)
         assert board["detail"]["reviews gate"]["stood_down"] == STOOD_DOWN.format(4)
 
@@ -450,9 +267,7 @@ async def test_an_item_with_provider_ids_is_minted_placed_and_badged(db, bundled
     section, suppressed = await shelves.new_in_library(db, ctx=ctx, kind="movie")
     assert section is not None, suppressed
     assert section.title == "New in the library"
-    # The why-line is compared by its two claims rather than as one literal, as it was when the
-    # copy carried a typographic dash. Decision 476 restated it in the member register (decision
-    # 486); the two claims - no crowd ratings, placed by content - are the same.
+    # Compared by its two claims rather than as one literal, since the copy has been reworded.
     assert section.why.startswith("no outside ratings yet")
     assert "placed them by what they're about" in section.why
     shown = {card["title_id"]: card for card in section.items}
@@ -465,19 +280,8 @@ async def test_an_item_with_provider_ids_is_minted_placed_and_badged(db, bundled
 
 
 async def test_an_item_with_no_provider_id_parks_at_stage_one_and_mints_nothing(db, data_dir):
-    """Decision 323, and §8 stage 1's amended clause: an item Jellyfin supplies no provider id for
-    "parks here with the reason 'no provider id' and mints nothing, because a name-and-year mint
-    is the wrong match the resolver already refuses".
-
-    Measured on the corpus this resolves against: 2,438 titles share `(kind, lower(name))` and 573
-    groups still collide with the year applied (`connectors/resolve.py:189-194`), so a
-    name-and-year mint is a silent wrong write into a spine decision 162 makes permanent.
-
-    NO BOARD ROW, and that is the point rather than an omission. `acquisition_job`'s primary key is
-    `title_id`; there is no title, and inventing one to hang a reason on would be the mint this
-    decision forbids. The reason lives on the TASK, where `queue.skip` puts it, and `skipped` is
-    the state for work that is legitimately not applicable until an operator changes something.
-    """
+    """Decision 323: no provider id parks and mints nothing, since name-and-year collides 573
+    times in the corpus. No board row: its key is `title_id`, so the reason lives on the task."""
     task = await _leased(db, item=NO_IDS)
     report = await pipeline.run_task(db, task)
 
@@ -497,18 +301,8 @@ async def test_an_item_with_no_provider_id_parks_at_stage_one_and_mints_nothing(
     assert row["last_error"] is None
 
 
-# --- park, resume and idempotence ----------------------------------------------------------------
-
-
 def _park_at(monkeypatch, number: int, outcome: stages.Outcome):
-    """Replace one shipped stage with one that parks, keeping the rest of the tuple intact.
-
-    Stages 2 through 8 are declared no-ops at M5.1, so the only shipped parks are stage 9's and
-    stage 10's - §8 stage 4's thirty-day window is M5.3's, and a park at an arbitrary stage is
-    what a resume has to be asserted against. The park/resume contract is M5.1's and has to be
-    asserted now, against the driver rather than against a stage: a contract discovered by M5.3 is
-    a contract M5.2 was already written against.
-    """
+    """One stage replaced by a park, the rest of the tuple intact."""
     async def parking(_ctx):
         return outcome
 
@@ -523,21 +317,8 @@ def _park_at(monkeypatch, number: int, outcome: stages.Outcome):
 async def test_a_park_writes_its_reason_verbatim_and_the_resume_re_enters_at_that_stage(
     db, bundled, monkeypatch
 ):
-    """§8: "Failure at any stage parks the job with a reason, retryable from admin."
-
-    THREE CLAIMS, and the third is the one the raw store's whole value rests on.
-
-      * the reason is written VERBATIM. `acquisition_job.reason`'s own comment says "shown
-        verbatim on the admin board" (`0005_ledger.sql:138`), so a driver that summarised,
-        truncated or prefixed it would put a sentence in front of an operator that no stage wrote.
-      * a park with a time defers the task to that instant and spends no attempt, and the board
-        carries the same instant in `retry_after` - decision 336's "waiting on something that may
-        change", which never auto-fails.
-      * the resume RE-ENTERS AT THE PARKED STAGE. §8's other promise is "All fetched bytes land in
-        the app's own raw store, so re-parsing is free forever" (`spec:398`), and a resume that
-        restarted at stage 1 would re-fetch by construction - the promise would be cashed by
-        nobody. Here that shows as stage 5 being the first stage of the second run.
-    """
+    """§8: the reason is verbatim, a timed park spends no
+    attempt, and the resume re-enters at the parked stage."""
     until = datetime.now(UTC) + timedelta(days=30)
     reason = "thin: 1 review source, 0 words of plot; the window closes in 30 days"
     stood_down = pipeline.STAGES
@@ -561,10 +342,8 @@ async def test_a_park_writes_its_reason_verbatim_and_the_resume_re_enters_at_tha
     assert row["result_note"] == reason
     assert row["last_error"] is None, "waiting is not failing (decision 336)"
 
-    # The stage stops parking and the window closes. Nothing else about the world is moved by
-    # hand -- see the note on moving time in `test_acquire_queue.py`. The tuple put back is the
-    # one the fixture installed and not `SHIPPED`: the resume walks 5 to 10, and a shipped stage 6
-    # would park this walk at the spend gate, which is not this test's subject (decision 432).
+    # The window closes; the tuple put back is the fixture's,
+    # since a shipped stage 6 parks at the spend gate.
     monkeypatch.setattr(pipeline, "STAGES", stood_down)
     await db.execute(
         "UPDATE acquisition_task SET next_attempt_at = now() - interval '1 second'"
@@ -580,19 +359,7 @@ async def test_a_park_writes_its_reason_verbatim_and_the_resume_re_enters_at_tha
 
 
 async def test_running_the_same_task_twice_duplicates_nothing(db, bundled):
-    """D5, which is §14 risk 5's invariant applied to the driver rather than to the derive.
-
-    Idempotence is cheap to hold here and expensive to retrofit, and the reason it holds is worth
-    naming because a later stage could break it without noticing: stage 1 resolves before it mints
-    and the mint sets `jellyfin_id`, so the second run finds the first run's row on the resolver's
-    first branch; stage 9's upsert is `ON CONFLICT (title_id, bundle_version) DO UPDATE`; stage 10
-    is a status. Every one of those is a property of a statement rather than of a guard, which is
-    what makes it survive a stage being rewritten.
-
-    Re-running a task the first run COMPLETED, deliberately. That is the shape a reclaim after a
-    crash between the completion and the commit takes, and it is also what an operator's retry
-    will be at M5.6.
-    """
+    """Re-running a COMPLETED task: the shape of a reclaim after a crash between completion and commit."""
     task = await _leased(db, item=MOVIE)
     first = await pipeline.run_task(db, task)
     assert first.status == "ready"
@@ -613,13 +380,8 @@ async def test_running_the_same_task_twice_duplicates_nothing(db, bundled):
 
     assert second.status == "ready"
     assert second.title_id == first.title_id
-    # `identify` runs again and `ready` runs again; the eight stages between them do not. The
-    # leased `Task` this test re-runs carries the payload the LEASE handed back, which predates
-    # `_remember_title`'s write, so the second run arrives knowing no title -- exactly the state a
-    # worker killed between the mint and that write leaves behind. Stage 1 finds the first run's
-    # row on the resolver's first branch (the mint set `jellyfin_id`), the board says 10, and the
-    # driver jumps there rather than walking 2 through 9 a second time. Two stages ran and nothing
-    # in the four tables moved.
+    # The re-run task's payload predates `_remember_title`,
+    # so stage 1 re-resolves and the driver jumps to 10.
     assert second.stages_run == ["identify", "ready"]
     assert dict(after) == dict(before)
 
@@ -627,20 +389,8 @@ async def test_running_the_same_task_twice_duplicates_nothing(db, bundled):
 async def test_a_task_whose_worker_died_resumes_at_the_stage_the_board_records(
     db, bundled, monkeypatch
 ):
-    """The crash path, end to end through the driver rather than through the queue alone.
-
-    `test_acquire_queue.py` proves a killed worker's lease is reclaimed; this proves what the NEXT
-    worker then does with it, which is the half the driver owns: it re-enters at the stage the
-    BOARD records and completes the title exactly once, with no duplicated derived row.
-
-    The kill is simulated by expiring the lease in place. No test can wait 900 s, and `freezegun`
-    cannot move `now()` inside Postgres - which is the clock every statement in `acquire/queue.py`
-    reads on purpose, because the worker and the backend are separate containers.
-
-    The board is written before the crash by the stages that advanced, so the resume point survives
-    a process that never ran another line. That is the ordering argument in `_record_stop` and in
-    `run_task`'s per-stage board write, asserted rather than asserted-about.
-    """
+    """A killed worker's task re-enters at the stage the BOARD records and completes exactly once.
+    The lease is expired in place: `freezegun` cannot move Postgres's `now()`, which the queue reads."""
     boom = []
 
     async def dies(_ctx):
@@ -659,9 +409,7 @@ async def test_a_task_whose_worker_died_resumes_at_the_stage_the_board_records(
         await pipeline.run_task(db, task)
     assert boom == ["reached"]
 
-    # A `KeyboardInterrupt` is a `BaseException` and is NOT written to the board as a stage
-    # failure: the driver's `except Exception` lets it through, for the same reason `_tick`'s
-    # cancellation must propagate. What is left behind is a leased row and a board at stage 7.
+    # A `KeyboardInterrupt` is not a stage failure: it leaves a leased row and a board at stage 7.
     title_id = await db.fetchval("SELECT id FROM title WHERE origin = 'acquired'")
     board = await _board(db, title_id)
     assert (board["stage"], board["status"]) == (7, "running")
@@ -679,8 +427,7 @@ async def test_a_task_whose_worker_died_resumes_at_the_stage_the_board_records(
     assert report.tasks[0].stages_run == [s.name for s in pipeline.STAGES if s.number >= 7]
     assert report.tasks[0].title_id == title_id
     assert await db.fetchval("SELECT count(*) FROM title WHERE origin = 'acquired'") == 1
-    # Scoped to this title: the bundle import placed the fixture's own titles, and a bare count
-    # would be asserting how many rows that import wrote rather than how many this task did.
+    # Scoped to this title: the bundle import placed the fixture's own titles.
     assert await db.fetchval(
         "SELECT count(*) FROM title_placement WHERE title_id = $1", title_id
     ) == 1
@@ -689,15 +436,7 @@ async def test_a_task_whose_worker_died_resumes_at_the_stage_the_board_records(
 async def test_the_driver_refuses_to_run_a_paid_stage_rather_than_running_it(
     db, data_dir, monkeypatch
 ):
-    """§8: "paid stages (6) never auto-retry past the spend cap." The driver half of the seam.
-
-    The gate's own decision is asserted without a database above; this asserts that the DRIVER
-    consults it, and that it does so BEFORE calling the stage. The difference is the whole point:
-    a driver that ran the stage and then asked has already spent the money, and there is no shape
-    of cap that can undo a billed call.
-
-    Stage 6 is made `implemented=True` with a callable that records having run. It must not run.
-    """
+    """The driver consults the gate BEFORE calling the stage, since a billed call cannot be undone."""
     ran: list[str] = []
 
     async def bills(_ctx):
@@ -722,12 +461,7 @@ async def test_the_driver_refuses_to_run_a_paid_stage_rather_than_running_it(
     assert (board["stage"], board["status"]) == (6, "parked")
     assert board["reason"] == pipeline.NO_SPEND_CAP
     row = await _task_row(db, "jellyfin:jf-acq-1")
-    # A park and not a failure: a failure spends attempts, and four of them would lose the title
-    # over a setting nobody has configured yet (decision 336). DEFERRED and not skipped, which is
-    # review cycle 1's correction and is the same argument one step further: `queue.skip` writes
-    # `skipped`, `queue.lease` claims `pending` only, and nothing in the tree moves a row out of
-    # `skipped` - so the state chosen to avoid losing the title closed it on attempt one, and
-    # supplying the cap would have revived nothing. [M51-CRASH-01]
+    # Deferred, not failed or skipped: a failure spends attempts, and nothing moves a row out of `skipped`.
     assert row["state"] == queue.PENDING
     assert row["attempts"] == 0, "a deferral hands the attempt back (decision 336)"
     assert row["next_attempt_at"] > datetime.now(UTC)
@@ -736,30 +470,9 @@ async def test_the_driver_refuses_to_run_a_paid_stage_rather_than_running_it(
     assert board["retry_after"] is not None, "the board shows the wait it is describing"
 
 
-# --- stage 9's two refusals ----------------------------------------------------------------------
-
-
 async def test_placement_parks_rather_than_raising_on_an_install_with_no_bundle(db, data_dir):
-    """§3.1 makes a bundle-less install legal, and `title_placement.bundle_version` is `NOT NULL
-    REFERENCES artifact_bundle(version)` (`0008_placement.sql:14`), so an acquired title on such
-    an install genuinely cannot be placed.
-
-    PARK, DO NOT RAISE. A raise here would be `failed` under decision 336 - "this stage raised and
-    will raise again" - and would spend the title's attempts against a state the household is
-    entitled to be in, so the title would be closed by `max_attempts` before anyone imported a
-    bundle. Importing a bundle is the thing that may change, and it is a thing a person does.
-
-    AND THE PARK CARRIES A DEADLINE, which is review cycle 1's correction and is asserted here
-    rather than left to the reason string to promise. A park with no time is `queue.skip`, and
-    nothing in this tree moves a row out of `skipped`: no lease, no reclaim, no sweep, and
-    `queue.enqueue`'s `ON CONFLICT DO NOTHING` refuses to revive the key. So the state chosen to
-    protect the title closed it on attempt one, while the reason shown verbatim on §6.6's board
-    told the household "Import a bundle from Admin and this title is placed on the next drain".
-    [M51-CRASH-01, M51-REV-03]
-
-    The mint still happens, which is the second half of the claim: stage 1 does not need a bundle,
-    so the household's new film is recorded and placed later rather than refused at the door.
-    """
+    """Park with a deadline, never raise: a raise spends the attempts on a legal bundle-less install,
+    and a park without a time is `skipped`, which nothing revives. The mint still happens."""
     task = await _leased(db, item=MOVIE)
     report = await pipeline.run_task(db, task)
 
@@ -790,19 +503,8 @@ async def test_placement_parks_rather_than_raising_on_an_install_with_no_bundle(
 async def test_the_bundle_less_household_comes_back_when_the_bundle_arrives(
     db, data_dir, tmp_path
 ):
-    """The half the test above was missing: the household does what the reason tells them to.
-
-    A reason shown verbatim on §6.6's board is a promise about what the machine will do, and the
-    only way to hold a promise like that is to make the machine do it in a test. So: park on a
-    bundle-less install, import a bundle, put the clock forward past the deferral the park wrote,
-    and drain. The title must reach `ready`.
-
-    THE DEFERRAL IS STEPPED OVER RATHER THAN WAITED OUT. `queue.defer` writes an instant into
-    `next_attempt_at` and `queue.lease` claims `next_attempt_at <= now()`, so a test that did not
-    move that column would prove only that a day is longer than a test run - and would pass just
-    as happily against a task that had been skipped. Moving it is the same manoeuvre
-    `test_acquire_queue.py` uses for the same reason. [M51-CRASH-01, M51-REV-03]
-    """
+    """The household does what the board's reason says: import a bundle, and the title reaches `ready`.
+    `next_attempt_at` is moved, or the test would pass against a skipped task too."""
     task = await _leased(db, item=MOVIE)
     parked = await pipeline.run_task(db, task)
     assert (parked.status, parked.stage) == ("parked", 9)
@@ -831,29 +533,8 @@ async def test_the_bundle_less_household_comes_back_when_the_bundle_arrives(
 async def test_the_nightly_sweep_cannot_drag_a_title_in_flight_back_to_stage_two(
     db, bundled, monkeypatch
 ):
-    """`placement/reconcile._park_thin` is the other writer of `acquisition_job` in this tree, and
-    its insert is `ON CONFLICT (title_id) DO NOTHING` with its own reason: "a title already moving
-    through the pipeline must not be dragged back to stage 2 by a nightly sweep"
-    (`reconcile.py:250-254`, `:368-376`).
-
-    That arrangement is asserted here rather than assumed, and asserted WITHOUT editing
-    `reconcile.py`: §5.3's sweep is run for real, and two thin acquired titles go into it.
-
-      * A is held by the driver at stage 5. Its board row must not move.
-      * B is not held: it has no board row at all. It must GET one, at stage 2.
-
-    B is the control, and it is what stops this test passing for the wrong reason. `DO NOTHING`
-    also does nothing when the sweep never reaches the title, when nothing is thin, and when
-    `_park_thin` is never called - three ways for a green assertion about A to mean nothing. B
-    proves the same sweep, in the same call, wrote a board row it was entitled to write.
-
-    Both are genuinely thin: stages 2 and 3 are declared no-ops at M5.1, so an acquired title has
-    no genres, keywords, credits or DNA rows and drops those blocks.
-
-    THE DRIVER MUST NEVER RELY ON THE SWEEP TO ADVANCE ANYTHING, which is the converse and the
-    reason this matters: the sweep's insert is a no-op on every row this pipeline has written, so
-    work left for it would be left for ever.
-    """
+    """`_park_thin`'s `ON CONFLICT DO NOTHING` must not move a title the driver holds (A); B, never boarded,
+    is the control that the same sweep did write a row."""
     reason = "held at dna pack while the operator looks at it"
     _park_at(monkeypatch, 5, stages.park(reason))
     task = await _leased(db, item=MOVIE)
@@ -889,15 +570,7 @@ async def test_the_nightly_sweep_cannot_drag_a_title_in_flight_back_to_stage_two
 
 
 async def test_the_sweeps_parked_rows_are_an_inbox_the_driver_resumes_from(db, bundled):
-    """Decision 336: the `(stage = 2, status = 'parked')` rows `_park_thin` has been writing since
-    M4.13 "are the pipeline's inbox, not a backlog of failures".
-
-    `acquisition_job` is not empty on a real install and never has been - §5.3 says thin titles are
-    "placed, badged, and parked as acquisition jobs for M5 enrichment" - and until this milestone
-    nothing drained them. A task enqueued against such a title re-enters at the stage the board
-    records, which is 2, and not at 1: there is nothing to identify about a title that already
-    exists, and stage 1 says so rather than resolving a Jellyfin item it was never given.
-    """
+    """Decision 336: `_park_thin`'s stage-2 parked rows are an inbox; the task re-enters at 2, not 1."""
     thin = await db.fetchval(
         "INSERT INTO title (kind, name, year, is_owned, origin)"
         " VALUES ('movie', 'A Thin Title', 1999, true, 'acquired') RETURNING id"
@@ -917,30 +590,17 @@ async def test_the_sweeps_parked_rows_are_an_inbox_the_driver_resumes_from(db, b
     board = await _board(db, thin)
     assert (board["stage"], board["status"]) == (10, "ready")
     assert board["reason"] is None, "the park reason is cleared by the stage that moved past it"
-    # One row for this title, still: the driver UPDATEs the inbox row rather than racing a second
-    # one beside it. Scoped to the title because the bundle import parked the fixture's own thin
-    # titles, and a bare count would be asserting that import's arithmetic rather than this walk's.
+    # One row still: the driver UPDATEs the inbox row. Scoped to the title, as the import parked its own.
     assert await db.fetchval(
         "SELECT count(*) FROM acquisition_job WHERE title_id = $1", thin
     ) == 1
 
 
-# --- a stage that raises --------------------------------------------------------------------------
-
-
 async def test_a_stage_that_raises_is_failed_and_the_board_says_whether_it_will_retry(
     db, data_dir, monkeypatch
 ):
-    """Decision 336: `failed` is "a stage that raised and will raise again" and is the only state
-    offering a plain retry. An unhandled exception is exactly that sentence, so the driver writes
-    it rather than letting the task die leased.
-
-    The board also carries whether a retry is coming, which is the one thing an operator cannot
-    infer from `failed` itself. It is computed from the leased task's own `attempts` rather than
-    read back from `queue.fail`: the queue computes that branch in SQL against the row - one
-    statement, so two drains failing one task cannot both read one counter - and attempts are
-    counted on the CLAIM, so the number is already in hand.
-    """
+    """Decision 336: a raise is `failed`; whether a retry
+    is coming is computed from the leased `attempts`."""
     async def raises(_ctx):
         raise RuntimeError("the parser hit markup it has never seen")
 
@@ -972,21 +632,7 @@ async def test_a_stage_that_raises_is_failed_and_the_board_says_whether_it_will_
 async def test_a_stage_that_fails_for_good_closes_its_task_and_the_board_says_no_retry_is_coming(
     db, data_dir, monkeypatch
 ):
-    """Decision 431's driver half: a stage that KNOWS a retry cannot change its answer says so, and
-    the driver hands that to `queue.fail(permanent=True)` - a parameter the queue has carried since
-    M5.1, "for a stage that knows it never should", with nothing able to reach it.
-
-    §8 stage 6 is the stage that needs it: a provider that has twice answered in breach of the
-    contract it was told about would otherwise be re-run on the queue's curve, two more paid calls
-    a time, and "retried exactly once" would hold per walk and not per title. So the task is closed
-    on its FIRST attempt, with three left, and the board says no retry is coming - the one thing an
-    operator cannot read off `failed` itself, and here the true answer is that only they can act.
-
-    Asserted on a stand-in stage rather than on stage 6, because the subject is the driver's
-    bookkeeping and not the extraction; `test_llm_stage.py` walks stage 6's own verdict through it.
-    The field defaults to False, so every outcome an existing stage returns is unchanged, which the
-    test above this one holds.
-    """
+    """Decision 431: a stage that knows a retry cannot help closes its task on the first attempt."""
     assert stages.fail("boom").permanent is False, "a stage that says nothing keeps the curve"
     reason = "the provider broke the contract again after the retry that named it"
 
@@ -1014,22 +660,8 @@ async def test_a_stage_that_fails_for_good_closes_its_task_and_the_board_says_no
     assert await queue.lease(db, [pipeline.TASK_KIND], limit=1) == []
 
 
-# --- the seams the stage contract has to keep ----------------------------------------------------
-
-
 async def test_stage_one_never_mints_a_second_row_for_a_title_the_resolver_can_find(db, data_dir):
-    """Fill-never-clobber, from the driver's side. §7.1's resolver is the one implementation of
-    identity in this app and stage 1 calls it FIRST, always.
-
-    A second implementation here would disagree with M4.11's nightly sweep about which title a
-    library item is, and the two disagreeing is how a household ends up with two rows for one film
-    in a spine decision 162 makes unrewritable: "a corrupted write into the content spine can only
-    be undone by dropping the database".
-
-    The bundle title carries `tt0113277`; the item does too, under a Jellyfin item id the title
-    has never seen. The resolver matches on the provider id, so nothing is minted and nothing
-    about the existing row is rewritten - `identify` is a READ of `title` and never a write to one.
-    """
+    """§7.1's resolver runs first, always: a matching provider id mints nothing and rewrites nothing."""
     await db.execute(
         "INSERT INTO title (id, kind, name, year, imdb_id, is_owned) "
         "VALUES (1, 'movie', 'Heat', 1995, 'tt0113277', true)"
@@ -1050,19 +682,8 @@ async def test_stage_one_never_mints_a_second_row_for_a_title_the_resolver_can_f
 
 
 async def test_the_mint_refuses_to_write_below_the_apps_own_id_range(db, data_dir):
-    """§4.1's partition, asserted in the direction that catches its defeat.
-
-    `0015_seed.sql:20-25`: "A disjoint range makes the collision arithmetically impossible instead
-    of contingent on the corpus standing still", and `:39-44` names this write path as the
-    beneficiary - "this is the backstop for every other write path, including §8 stage 1". The
-    backstop is the sequence's `MINVALUE`, which nothing in this module sets; what this module
-    owes is to be LOUD when it has been defeated, because a title minted into the corpus's half is
-    a collision the next bundle import cannot resolve and decision 162 cannot undo.
-
-    The defeat is reproduced the way it would actually happen - a repair script that reset the
-    column default - rather than by patching the assertion's input, and the refusal is checked to
-    have left no row behind: the mint and its assertion share one transaction for exactly that.
-    """
+    """§4.1: a mint below the app's range must be loud;
+    defeated by a reset column default, it leaves no row."""
     await db.execute("ALTER TABLE title ALTER COLUMN id SET DEFAULT 42")
     task = await _leased(db, item=MOVIE)
     report = await pipeline.run_task(db, task)
@@ -1076,18 +697,8 @@ async def test_the_mint_refuses_to_write_below_the_apps_own_id_range(db, data_di
 
 
 async def test_the_task_key_is_one_spelling_for_the_sweep_and_the_flywheel(db, data_dir):
-    """`UNIQUE (kind, key)` is only worth having if both enqueuers spell the key the same way.
-
-    M4.11's nightly sweep and §8.4's flywheel will both enqueue the same title at different
-    cadences and neither can know what the other has done, which is the no-op `queue.enqueue`
-    exists for. A second enqueuer that built its key its own way would defeat it silently - two
-    tasks, two walks of the pipeline, two writers on one title.
-
-    The item id first because it is the household's own identity for the thing and the first
-    branch `resolve.resolve_title_id` tries; a provider id as the fallback, so the flywheel can
-    enqueue work for something Jellyfin has never shown us. Prefixed, because a bare `tt0113277`
-    and a bare `500001` in one column is a key space where two namespaces can collide.
-    """
+    """Both enqueuers must spell `UNIQUE (kind, key)` one way;
+    prefixed, so item and provider ids cannot collide."""
     assert pipeline.key_for_item(MOVIE) == "jellyfin:jf-acq-1"
     assert pipeline.key_for_item(dict(MOVIE, Id="")) == "imdb:tt5000001"
     assert pipeline.key_for_item({"ProviderIds": {"Tmdb": "500002"}}) == "tmdb:500002"
@@ -1100,18 +711,8 @@ async def test_the_task_key_is_one_spelling_for_the_sweep_and_the_flywheel(db, d
 
 
 def test_the_stage_contract_is_a_return_value_and_not_an_exception():
-    """The one named change from the corpus's handler contract, kept honest.
-
-    `mdc/runner.py:161-205` catches five exception types to decide what to tell the queue, which
-    works when every handler is one HTTP fetch and its failure modes are the fetcher's. §8's
-    stages fail in ways that are not exceptional at all - "if thin, retry window 30 days" is the
-    normal outcome of stage 4 on a film released last week - and a normal outcome raised as an
-    exception is one a later `except Exception` swallows into a failure.
-
-    So the three verbs are values, and this asserts the shape every one of M5.2 through M5.7 will
-    write against: `until` only on a park, and `title_id` carried out of band because stage 1 is
-    the only stage that can establish one.
-    """
+    """§8's normal outcomes (a thirty-day window) are values,
+    not exceptions an `except Exception` would swallow."""
     assert stages.advance().verb == stages.ADVANCE
     assert stages.advance(title_id=1_000_000_001).title_id == 1_000_000_001
     assert stages.advance().until is None and stages.advance().reason == ""
@@ -1128,30 +729,13 @@ def test_the_stage_contract_is_a_return_value_and_not_an_exception():
         stages.advance().verb = stages.FAIL          # frozen: the board and the queue read one
 
 
-# The modules a stage machine and a parser may not import. `acquire.fetch` is the app's own
-# transport; the rest are the ways a file reaches a socket without it, which is the thing
-# decision 340's politeness clause is enforced at one door for.
-#
-# THE LIST IS `test_derive_parse.py:1097`'S, MINUS `spielplan.connectors`, and it was four names
-# until this cycle. Four caught `httpx` and `requests` and let `socket`, `http.client`, `aiohttp`
-# and `urllib3` through - on the one module in this tree that drives eleven adapters at eight
-# third-party hosts. The sibling file's own meta-test states the standard this failed: "a static
-# check that catches four of them is a check whose absence a later author discovers by shipping
-# the fifth". `spielplan.connectors` stays off deliberately and is not an oversight: `stages.py`
-# imports `connectors.resolve` for §7.1's identity, and the assertion above says so.
-# [M5.3 review cycle 1, M53-C1-NET-04]
+# Transport modules a stage machine or parser may not import; `spielplan.connectors` is allowed, for §7.1.
 TRANSPORT = ("httpx", "requests", "urllib.request", "urllib3", "http.client", "socket",
              "aiohttp", "spielplan.acquire.fetch")
 
 
 def _absolute(node: ast.ImportFrom, package: str) -> str:
-    """`from .fetch import HostPaused` inside `spielplan.acquire` is `spielplan.acquire.fetch`.
-
-    `test_derive_parse.py:1101-1107`'s helper, and the half this file did not have. It matters
-    more here than there, because `acquire/stages.py` is a SIBLING of `acquire/fetch.py`: the
-    relative spellings are the SHORTEST way to write decision 373's violation anywhere in this
-    tree, and `node.module or ""` reports nothing at all for them.
-    """
+    """Relative imports resolve to absolute names, or `from .fetch import ...` reports nothing."""
     if not node.level:
         return node.module or ""
     parts = package.split(".")
@@ -1160,15 +744,8 @@ def _absolute(node: ast.ImportFrom, package: str) -> str:
 
 
 def _transport_imports(source: str, *, package: str = "spielplan.acquire") -> list[str]:
-    """Every transport module `source` imports. `test_derive_parse.py:1109-1131`'s helper.
-
-    Repeated rather than imported across test modules, which is this suite's convention for a
-    static guard: a helper shared between two files is a helper one file's change can weaken for
-    the other, and the whole value of a guard is that it says one thing about one tree. What that
-    convention cost is on the line above: the copy made here was the weaker one, which is the
-    failure mode the argument exists to avoid, so it is brought back to the sibling's strength
-    rather than shared with it.
-    """
+    """Every transport module `source` imports; repeated from
+    `test_derive_parse.py` so neither can weaken the other."""
     modules: set[str] = set()
     for node in ast.walk(ast.parse(source)):
         if isinstance(node, ast.Import):
@@ -1176,9 +753,8 @@ def _transport_imports(source: str, *, package: str = "spielplan.acquire") -> li
         elif isinstance(node, ast.ImportFrom):
             module = _absolute(node, package)
             modules.add(module)
-            # `from spielplan.acquire import fetch` records `spielplan.acquire.fetch` as well,
-            # which is the likeliest spelling of the violation and the one a module-name list
-            # misses if only the left-hand side is recorded.
+            # `from spielplan.acquire import fetch` records
+            # `spielplan.acquire.fetch` too, the likeliest spelling.
             modules.update(f"{module}.{alias.name}" for alias in node.names if module)
     return sorted(
         m for m in modules
@@ -1187,27 +763,9 @@ def _transport_imports(source: str, *, package: str = "spielplan.acquire") -> li
 
 
 def _fetcher_uses(source: str) -> list[str]:
-    """Every use of a `.fetcher` attribute in `source` other than asking whether it is there.
-
-    THE BYPASS NO IMPORT GUARD CAN SEE, which `test_sources_adapters.py`'s `_reaches_for_the_fetcher`
-    was rebuilt for and this file's guard was not: decision 373 hands the fetcher over on
-    `StageContext.fetcher`, set at stage 2 and never cleared, so `await ctx.fetcher.get(url)` in
-    `stages.py` or under `derive/` needs no import whatsoever. A presence test is the one use the
-    stage machine has - `enrich` fails on `ctx.fetcher is None` rather than asking nobody - so that
-    shape alone is let through; a call, an alias or an argument is a request made by the stage
-    machine instead of by an adapter through `sources/_views`. [decision 373; M5.3 review cycle
-    2, M53-C2-NET-04]
-
-    AND ONE HAND-OFF, SPELLED EXACTLY: `extract.extract_title(..., fetcher=ctx.fetcher)`, which is
-    §8 stage 6 giving the drain's one Fetcher to the LLM layer (decisions 373, 432). It is stage
-    2's own arrangement one layer along rather than an exception to it. Stage 2 hands its adapters
-    the whole context and never names the attribute; stage 6 hands `llm/extract.py` the handle by
-    keyword, because that module takes no `StageContext` - it imports nothing from the stage
-    machine, on purpose - and every request it makes is one `llm/client` POST that the raw store
-    and the meter both record, which is the property "one no board row records" was guarding.
-    Only that callee and only that keyword: the same attribute passed to anything else, or passed
-    to it positionally, is still the stage machine reaching for the network.
-    """
+    """Every use of `.fetcher` other than a presence test: `ctx.fetcher.get(url)`
+    needs no import at all. One hand-off is allowed, spelled exactly:
+    `extract.extract_title(..., fetcher=ctx.fetcher)` (decision 432)."""
     tree = ast.parse(source)
     presence = {
         id(node.left)
@@ -1232,21 +790,8 @@ def _fetcher_uses(source: str) -> list[str]:
 
 
 def test_the_transport_guard_reports_every_spelling_of_the_violation():
-    """The guard below is only worth having if it can fail, so it is shown failing.
-
-    Every spelling, because a static check that catches four of them is a check whose absence a
-    later author discovers by shipping the fifth. The two `from ... import` forms are the ones
-    `test_layering_guards.py`'s own helper names as its known limit.
-
-    THE RELATIVE ONES AND THE STDLIB ONES ARE THE ADDITIONS, and they are the spellings this file
-    was weakest on while `test_derive_parse.py:1097` one file over already refused them. Both
-    matter HERE more than there: `acquire/stages.py` is a SIBLING of `acquire/fetch.py`, so
-    `from . import fetch` and `from .fetch import HostPaused` are the shortest spellings of
-    decision 373's violation available anywhere in the tree, and `stages.py:1091-1092` says in its
-    own voice that naming `fetch.HostPaused` is the thing a later author will want. `socket` and
-    `http.client` need no dependency and no import of ours at all.
-    [M5.3 review cycle 1, M53-C1-NET-04]
-    """
+    """Every spelling is shown failing, relative and stdlib
+    ones included: `from . import fetch` is the shortest."""
     for spelling in (
         "import httpx",
         "import httpx as h",
@@ -1274,8 +819,7 @@ def test_the_transport_guard_reports_every_spelling_of_the_violation():
         "async def f(ctx):\n    return await ctx.fetcher.get('u')\n",
         "def f(ctx):\n    client = ctx.fetcher\n",
         "def f(ctx):\n    return helper(ctx.fetcher)\n",
-        # Stage 6's hand-off is let through by callee AND keyword, so each half alone is refused,
-        # and so is a use of the handle dressed up as the keyword's value. [M5.5, decision 432]
+        # Stage 6's hand-off passes only by callee AND keyword, so each half alone is refused.
         "async def f(ctx):\n    return await other.extract_title(ctx.conn, fetcher=ctx.fetcher)\n",
         "async def f(ctx):\n    return await extract.extract_title(ctx.conn, ctx.fetcher)\n",
         "async def f(ctx):\n    return await extract.extract_title(fetcher=ctx.fetcher.client)\n",
@@ -1289,30 +833,8 @@ def test_the_transport_guard_reports_every_spelling_of_the_violation():
 
 
 def test_the_stage_machine_and_the_derive_do_not_reach_for_the_fetcher():
-    """The halves of M5.1's guard that decision 373 leaves true, and one it adds.
-
-    THIS TEST USED TO SAY `pipeline.py` IMPORTS NO FETCHER AND M5.3 MADE THAT FALSE. Something
-    has to construct the one `fetch.Fetcher` a drain paces every host through, and decision 373
-    puts it in `drain` - so the import moved down one level rather than out, and the property
-    worth guarding moved with it. It is re-pointed rather than deleted because what it was really
-    claiming survives the change and is now STRONGER:
-
-      * `acquire/stages.py` imports no transport at all. §8 stage 2 lives there and drives eleven
-        source adapters, and it does so through a handle whose type it never names - not even
-        under `TYPE_CHECKING`, which is why `StageContext.fetcher` is annotated `Any`. A stage
-        machine that could name `fetch.HostPaused` would be one exception away from deciding a
-        verb on the transport layer's vocabulary instead of decision 334's.
-      * NOTHING UNDER `spielplan/derive/` imports transport either, which is the half this test
-        did not have and the half §8's "re-parsing is free forever" (`spec:398`) actually rests
-        on. Stage 3 reads the content-addressed raw store; a parser that could reach a host would
-        make a bad derive cost another crawl, which is the whole of what the raw store buys.
-        `derive/parse.py` and `derive/rebuild.py` each carry a per-package guard of their own; the
-        claim is repeated here because THIS is the file that decides what stage 3 is called with,
-        and a driver-side statement of it is what a reader of `run_task` needs.
-
-    `pipeline.py` is deliberately absent from the loop. It imports `acquire.fetch` on purpose now,
-    and the assertion below says so rather than leaving its absence to be read as an oversight.
-    """
+    """`acquire/stages.py` and everything under `derive/` import no transport: a parser that could reach
+    a host would make a bad derive cost a crawl. `pipeline.py` imports `acquire.fetch` on purpose."""
     source = Path(pipeline.__file__).read_text(encoding="utf-8")
     driver = Path(stages.__file__).read_text(encoding="utf-8")
     # The guard sees something: both files really do import from the package it is scanning.
@@ -1322,9 +844,8 @@ def test_the_stage_machine_and_the_derive_do_not_reach_for_the_fetcher():
     )
     assert "from spielplan.connectors import resolve" in driver
 
-    # The package each file's RELATIVE imports resolve against, carried beside its text because
-    # the two halves of this walk sit in different packages and `from . import fetch` means a
-    # different module in each.
+    # Each file's package, carried with its text, since `from
+    # . import fetch` means a different module in each.
     guarded = {"acquire/stages.py": (driver, "spielplan.acquire")}
     derive_dir = Path(stages.__file__).resolve().parents[1] / "derive"
     for path in sorted(derive_dir.glob("*.py")):
@@ -1332,12 +853,7 @@ def test_the_stage_machine_and_the_derive_do_not_reach_for_the_fetcher():
     assert len(guarded) >= 6, f"the walk found only {sorted(guarded)}; it is looking in the wrong place"
 
     for name, (text, package) in sorted(guarded.items()):
-        # `ast` AND NOT A SUBSTRING, which is what this test used to do and cannot any more. Every
-        # one of these files ARGUES IN PROSE about the layer it does not use - `derive/parse.py`
-        # and `derive/rebuild.py` both name `spielplan.acquire.fetch` in a docstring describing
-        # their own guard - so a substring check now fails on the comment that explains why the
-        # import is absent. `test_derive_parse.py`'s helper is the idiom and the reason it records
-        # `from x import y` as `x.y` too is exactly `from spielplan.acquire import fetch`.
+        # `ast`, not a substring: these files name the fetcher in prose explaining their own guard.
         offenders = _transport_imports(text, package=package)
         assert offenders == [], (
             f"{name} imports transport {offenders}: stage 2 drives its adapters "
@@ -1352,53 +868,11 @@ def test_the_stage_machine_and_the_derive_do_not_reach_for_the_fetcher():
         )
 
 
-# --- review cycle 1: the seams M5.2 through M5.7 are written against -----------------------------
-#
-# Every test below reddens against the code as this milestone first shipped it. They are grouped
-# here rather than filed among the tests above because they share one subject: the driver is the
-# bridge between a queue with no foreign key and a board whose primary key IS one, and it is the
-# only thing in the tree that crosses between them. Eighteen stage bodies are still to be written
-# against this shape, so what the driver does with a stage that misbehaves is a published contract
-# and not an implementation detail.
-
-
 async def test_every_stage_declared_a_no_op_returns_its_stub_marker():
-    """`Stage.implemented` is a hand-written literal, and this is what ties it to reality.
-
-    The spend gate reads that flag and nothing else: `refuse_uncapped_spend` refuses a paid stage
-    only when `implemented` is True. So the day M5.5 writes the real LLM call into
-    `stages.dna_extract` and does not also edit a boolean in `pipeline.STAGES`, the gate returns
-    None, the driver calls the stage, and the household is billed with no cap in existence - while
-    `ruff` is clean and the suite is green, because the two assertions that read the flag
-    (`test_stage_six_is_the_only_paid_stage...`) are satisfied precisely by leaving it False.
-
-    The refusal's own docstring used to claim that "neither milestone has to remember, because
-    neither can forget". Nothing made that true. This does: a declared no-op is a function whose
-    whole body is `advance({"stub": NOT_IMPLEMENTED.format(owner)})`, so giving one a body stops
-    it returning that marker and reddens the build AT THE STAGE THAT GOT ONE. The only way to
-    green it again is to set `implemented=True`, which is the moment the gate starts firing.
-
-    No database and no context: a stub reads nothing, which is the property being asserted.
-    [M5.1 review cycle 1, M51-REV-04, M51-REV-PAID-01]
-
-    AND A BODY THAT RAISES SAYS THE SAME SENTENCE, because the paragraph above promised a message
-    naming the stage and delivered one only for a body that RETURNS. A real stage body's first
-    line touches the context - `await ctx.conn.fetchval(...)`, `ctx.task.payload` - so the likely
-    shape of M5.5's mistake reddened this test with `AttributeError: 'NoneType' object has no
-    attribute 'fetchval'`, which names neither the stage nor the flag and reads like a fixture
-    that needs a connection. The build still goes red either way; what was missing is the sentence
-    that says why, and a maintainer who reads "the test needs a context" is one step from giving
-    it one. [M5.1 review cycle 4, M51-C4-PAID-03]
-
-    NO STAGE IS A DECLARED NO-OP SINCE M5 (decisions 461, 462, 463), and the test keeps its name
-    and both halves. The loop runs over nothing on the shipped build and still names the stage in
-    a doctored one - the build the test below hands it - and the assertion after it refuses the
-    next stage a milestone declares with no body, which is now the only way the list can grow.
-    """
+    """`Stage.implemented` is hand-written and the spend gate reads nothing else, so a no-op must
+    return its stub marker; a body that raises reports the same sentence, naming the stage."""
     ctx = stages.StageContext(conn=None, task=None)
-    # `SHIPPED` AND NOT `pipeline.STAGES`, because the flag under test is the one the build ships:
-    # this file's autouse fixture stands stage 6 down as a declared no-op, and reading the patched
-    # tuple would call the fixture's substitute and count it as a stub.
+    # `SHIPPED`, not `pipeline.STAGES`: the autouse fixture stands stage 6 down as a no-op.
     stubs = [s for s in SHIPPED if not s.implemented]
     stale = (
         "is declared `implemented=False` and no longer returns the stub marker - it has a body, "
@@ -1416,35 +890,13 @@ async def test_every_stage_declared_a_no_op_returns_its_stub_marker():
         assert outcome.detail == {"stub": stages.NOT_IMPLEMENTED.format(stage.owner)}, (
             f"stage {stage.number} ({stage.name}) {stale}"
         )
-    # NONE SINCE M5, after M5.3 gave stages 2, 3 and 4 their bodies, M5.5 stage 6 (decision 432) and
-    # M5 the last three. AFTER THE LOOP AND NOT BEFORE IT, which is load-bearing: a body written
-    # behind a stale `implemented=False` is a stub the list counts, so a count asserted first would
-    # redden on the count and never reach the sentence that names the stage - the failure
-    # `test_the_stub_marker_check_names_the_stage_when_a_body_raises` asserts. What this line still
-    # catches that the loop cannot is a stage declared a no-op that really is one.
+    # After the loop, so a stale `implemented=False` reddens with the sentence naming the stage.
     assert stubs == [], "no stage is a declared no-op since M5 (decisions 461, 462, 463)"
 
 
 async def test_a_malformed_provider_id_parks_at_stage_one_and_mints_nothing(db, data_dir):
-    """Decision 323 says a row is minted "only on a provider id". A value is not an id.
-
-    `resolve.identity` was built for LOOKUP, where a junk key merely fails to match; `_mint` used
-    its output as the thing it WROTE and as the join key every later lookup resolves against.
-    Three measured consequences, each permanent under decision 162:
-
-      * `{"Tmdb": "0"}` - what Kodi and Emby NFO writers emit for a file they failed to scrape -
-        minted a title with `tmdb_id = 0`, and every later zero-id item in the library then
-        resolved onto that one row. One title standing for N different films, owned and placed.
-      * `{"Tmdb": "tt0113277"}` - an imdb id filed under the wrong key - minted `tmdb_id = 113277`
-        because `resolve._as_int` keeps the digits and drops the rest, so the real tmdb 113277
-        resolved onto the wrong film and minted nothing of its own.
-      * `{"Imdb": "   "}` survived `provider_ids`, which drops only falsy values, and became a
-        title whose identity is whitespace.
-
-    `title` carries no UNIQUE on these columns (0003 rule 6), so nothing below the driver refuses
-    any of it. The park is a skip and not a deferral: an id nobody has corrected in Jellyfin will
-    be exactly as malformed tomorrow. [M5.1 review cycle 1, M51-REV-05]
-    """
+    """Decision 323 mints only on a provider id: `Tmdb: "0"`, an imdb id under `Tmdb` and
+    whitespace are not ids. A skip, not a deferral: the id will be as malformed tomorrow."""
     junk = [
         ("jf-bad-1", {"Tmdb": "0"}),
         ("jf-bad-2", {"Tmdb": "tt0113277"}),
@@ -1466,8 +918,7 @@ async def test_a_malformed_provider_id_parks_at_stage_one_and_mints_nothing(db, 
     assert await db.fetchval("SELECT count(*) FROM title WHERE origin = 'acquired'") == 0
     assert await db.fetchval("SELECT count(*) FROM acquisition_job") == 0
 
-    # The control, without which "mints nothing" is also what a broken stage 1 looks like: a
-    # well-formed id of each kind still mints.
+    # The control: a well-formed id of each kind still mints.
     good = {"Id": "jf-good-1", "Name": "Heat", "Type": "Movie", "ProductionYear": 1995,
             "ProviderIds": {"Imdb": "tt0113277", "Tmdb": "113277"}}
     minted = await pipeline.run_task(db, await _leased(db, item=good))
@@ -1479,31 +930,9 @@ async def test_a_malformed_provider_id_parks_at_stage_one_and_mints_nothing(db, 
 async def test_a_task_naming_a_title_that_is_gone_is_closed_on_the_queue_not_on_the_board(
     db, data_dir
 ):
-    """Decision 322 gives this queue no foreign key to `title`, and the board's primary key IS one.
-
-    The driver is the only thing that crosses between them, and it crossed without looking. A task
-    whose payload names a title that is no longer there walks stage 1 - `stages.identify`
-    short-circuits on a payload title id without touching the database, "there is nothing to
-    identify" - and the first thing the driver then does is INSERT the stage-2 board row, which is
-    a `ForeignKeyViolationError` raised from the driver's own bookkeeping, outside `_run_stage`'s
-    only handler and therefore outside `run_task` and `drain` as well. The tick died, and every
-    other task the batch had already leased went with it.
-
-    `test_acquire_schema.py::test_deleting_a_title_keeps_its_task_and_takes_its_board_row` builds
-    exactly this state on purpose and stops one step short of driving it. This drives it.
-
-    The reason lives on the TASK, which has no foreign key - the same shape `run_task`'s docstring
-    already argues for an item with no provider id, and for the same reason: there is no title for
-    §6.6 to show a row about. [M5.1 review cycle 1, seam322-01, M51-REV-06]
-
-    AND THE REASON NAMES ITS OWN CONSTRAINT, which is the rule `stages.NO_PROVIDER_ID` states and
-    this sentence broke: "a reason shown verbatim to an operator has to name the lever that
-    exists". The park is a `queue.skip`, so THIS key is closed and `queue.enqueue`'s
-    `ON CONFLICT (kind, key) DO NOTHING` makes re-enqueueing the same item a no-op against it -
-    measured below rather than argued, because an operator who followed the old advice would have
-    watched nothing happen and had nothing telling them why.
-    [M5.1 review cycle 2, M51-C2-322-05]
-    """
+    """Decision 322: the queue has no foreign key to `title` and the board's
+    key is one, so a task naming a gone title is closed on the queue; the
+    reason names the `(kind, key)` conflict that blocks re-enqueueing."""
     gone = 1_000_000_777
     assert await pipeline.enqueue_title(db, gone) is True
     assert await db.fetchval("SELECT count(*) FROM title WHERE id = $1", gone) == 0
@@ -1529,16 +958,7 @@ async def test_a_task_naming_a_title_that_is_gone_is_closed_on_the_queue_not_on_
 
 
 async def test_a_title_that_vanishes_mid_walk_is_reported_and_not_raised(db, bundled, monkeypatch):
-    """`stages.ready` carries `fail(f"title {id} no longer exists")`, and that guard was dead.
-
-    `_record_stop` writes the board BEFORE it writes the task, and the board write is the foreign
-    key violation - so the one sentence the module wrote for this state could only ever be
-    replaced by a traceback, and the task was left `leased` with the sentence recorded nowhere.
-    Either the guard was needless and should have gone, or the driver had to be able to honour it.
-
-    Driven through a stage that removes the title under the pipeline, which is what an operator
-    with psql does after a mis-matched acquisition. [M5.1 review cycle 1, seam322-01]
-    """
+    """A title deleted mid-walk must end in `stages.ready`'s sentence, not a foreign key traceback."""
     seen: list[int] = []
 
     async def vanishes(ctx):
@@ -1569,20 +989,8 @@ async def test_a_title_that_vanishes_mid_walk_is_reported_and_not_raised(db, bun
 async def test_one_tasks_unserialisable_detail_does_not_cost_the_rest_of_the_batch(
     db, bundled, monkeypatch
 ):
-    """`drain` leases the whole batch before it runs any of it, and counts an attempt on the claim.
-
-    So a raise that escaped `run_task` left every task ordered after the broken one `leased`, never
-    run, and one attempt poorer - and `queue.reclaim_expired` then read that as a killed worker
-    and, four cycles later, closed them all for good with a sentence saying a worker had been
-    stopped. Up to `DRAIN_LIMIT` titles closed by a defect in one of them, none of the innocents
-    carrying a board row, and nothing naming the cause.
-
-    THE POISON IS A `detail` THE BOARD COULD NOT SERIALISE, which is the shape a stage-4 author
-    reaches for first: `Outcome.detail` is published as `dict[str, Any]` with no serialisation
-    contract anywhere in the package, and `park(until=...)` hands stage authors a datetime in the
-    same breath. `write_board` dumped it with a bare `json.dumps`.
-    [M5.1 review cycle 1, M51-REV-01, M51-CRASH-02]
-    """
+    """`drain` leases the whole batch first, so one
+    unserialisable `detail` must not strand the rest leased."""
     class Unserialisable:
         def __repr__(self) -> str:
             return "<a value json.dumps has never heard of>"
@@ -1616,15 +1024,7 @@ async def test_one_tasks_unserialisable_detail_does_not_cost_the_rest_of_the_bat
 
 
 async def test_a_task_that_breaks_the_driver_fails_alone(db, bundled, monkeypatch):
-    """The other half of the guard above: one task's failure costs one task.
-
-    Two ways in, because both are outside the one handler the driver had. A stage that RAISES was
-    always caught; a GATE that raises was not - `_run_stage` called it one line above its own
-    `try`, and `StageGate` is exactly the seam M5.5 fills with a spend cap read out of the
-    database, which is an await that can fail. A cap that cannot be read is decision 336's `failed`
-    ("this stage raised and will raise again"), not the end of the tick.
-    [M5.1 review cycle 1, M51-CRASH-02]
-    """
+    """A raising gate is `failed` for its task alone, like a raising stage."""
     async def breaks(ctx):
         if ctx.item.get("Id") == "jf-acq-2":
             raise RuntimeError("boom")
@@ -1660,15 +1060,7 @@ async def test_a_task_that_breaks_the_driver_fails_alone(db, bundled, monkeypatc
 async def test_a_stage_that_returns_something_other_than_an_outcome_fails_that_task(
     db, bundled, monkeypatch
 ):
-    """The driver's contract with a stage author is that a stage cannot break the tick.
-
-    That contract stopped at the `return`. `_run_stage` turned a RAISE into `fail`, and `run_task`
-    then dereferenced `outcome.detail` and `outcome.verb` outside any handler - so a stage with a
-    branch that falls off the end raised `AttributeError: 'NoneType' object has no attribute
-    'detail'` from the driver, left the task `leased`, froze the board at `running`, and named
-    nothing. Eighteen stage bodies are still to be written against this shape, so the refusal says
-    which stage and what it returned. [M5.1 review cycle 1, seam322-05]
-    """
+    """A stage returning a non-`Outcome` fails its task with the stage and value named, not the tick."""
     async def returns_nothing(_ctx):
         return None
 
@@ -1692,27 +1084,9 @@ async def test_a_stage_that_returns_something_other_than_an_outcome_fails_that_t
 async def test_a_job_whose_worker_never_came_back_stops_reading_running_on_the_board(
     db, bundled, monkeypatch
 ):
-    """`queue.reclaim_expired` closes the task and could not close the job.
-
-    It is the only writer for the one state decision 336's two words cannot describe - a worker
-    that died, whose lease expired, whose attempts are spent - and it names one table, because
-    decision 322 keeps `queue.py` free of any knowledge of titles. So §6.6's board kept whatever
-    the last advance wrote, which for a worker killed mid-pipeline is `status = 'running'` with
-    `reason = NULL`: an operator reading a list of titles in flight, none of which was running and
-    none of which ever would be again, with the sentence explaining why written to a column the
-    list view does not select.
-
-    `_record_stop` argues the opposite trade in its own docstring - a crash should leave a row that
-    OVERSTATES how stuck a job is - and `worker.py`'s `_reap_abandoned_import`, which `queue.py`
-    cites as this reaper's model, exists precisely so "the Data tab would not poll a `running`
-    phase for ever". The bundle import has one row, so closing the claim and closing the operator's
-    view are one write; decision 322 made them two tables and only half the reaper was ported.
-    [M5.1 review cycle 1, seam322-03, M51-CRASH-03]
-    """
+    """`reclaim_expired` closes the task; the board must not keep reading `running` for a dead worker."""
     async def dies(_ctx):
-        # A BaseException, which `_run_stage` declines to catch on purpose: `_tick` bounds every
-        # job with `asyncio.wait_for`, which CANCELS, and a cancellation must leave a lease for
-        # the reaper rather than a board row claiming the stage failed.
+        # A BaseException, which `_run_stage` does not catch: a cancellation leaves a lease for the reaper.
         raise KeyboardInterrupt("the process was killed mid-stage")
 
     patched = tuple(
@@ -1744,13 +1118,7 @@ async def test_a_job_whose_worker_never_came_back_stops_reading_running_on_the_b
 
 
 async def test_a_board_row_whose_other_task_is_still_in_flight_is_left_alone(db, bundled):
-    """The guard the close above needs, because a title can carry two tasks.
-
-    `pipeline.enqueue_title`'s own docstring says so: the sweep's `jellyfin:<item>` task and §8.4's
-    flywheel `title:<id>` task are two claims on one title, and a board row whose other task is
-    still pending is a job that really is in flight. Closing it would be the inverse of the defect.
-    [M5.1 review cycle 1, seam322-03]
-    """
+    """A title can carry two tasks; a board row whose other task is still pending really is in flight."""
     task = await _leased(db, item=MOVIE)
     report = await pipeline.run_task(db, task)
     title_id = report.title_id
@@ -1769,34 +1137,11 @@ async def test_a_board_row_whose_other_task_is_still_in_flight_is_left_alone(db,
     assert (await _board(db, title_id))["status"] == "running"
 
 
-# --- review cycle 2: the three writes stage 1 and stage 9 could not take back ---------------------
-
-
 async def test_a_title_the_cold_tower_did_not_place_waits_rather_than_being_closed(
     db, bundled, monkeypatch
 ):
-    """Stage 9's second refusal, and it was the one park in the file carrying no deadline.
-
-    `place` reads the title back because `place_titles` reports a non-finite placement per title
-    and CONTINUES (`reconcile.py:298-301`), so a report with `placed > 0` does not say THIS title
-    was placed. The handling it chose for that was `park(NOT_PLACED)` with no `until` - which
-    `_record_stop` turns into `queue.skip`, and nothing in this tree moves a row out of `skipped`:
-    no lease, no reclaim, no sweep, and `queue.enqueue`'s `ON CONFLICT DO NOTHING` refuses to
-    revive the key. The task was closed for ever on a condition that clears itself, and stage 10
-    reads the IDENTICAL predicate one call later and parks it WITH a deadline.
-
-    THE PATH HERE NEEDS A BROKEN VECTOR SINCE 2026-09-25. It used to need none: stage 1 resolves
-    onto an existing corpus title, and stage 9 ran `app_acquired` (`WHERE origin = 'acquired'`),
-    so that title was structurally absent from the work list and waited for §5.3's 03:00 sweep.
-    That wait is gone - stage 9 now runs the sweep's own scope for a title the corpus supplied, and
-    the first household's eight parked additions are placed on arrival
-    (`test_a_bundle_title_jellyfin_adds_is_placed_at_stage_nine`). A forward pass that returns no
-    finite vector is the case left, and decision 336's "waiting on something that may change" is
-    still its reading: a tower or a contract the next bundle import replaces.
-
-    So the second half changes the world the reason names - the tower answers again, and the
-    sweep's own scope runs - and drains again. [M5.1 review cycle 2, d323-park-02]
-    """
+    """`place_titles` continues past a non-finite placement, so the title is re-read; unplaced, it parks
+    WITH a deadline, since a skip is never revived. The second half changes the world and drains again."""
     import numpy as np
 
     from spielplan.placement import tower as tower_module
@@ -1826,8 +1171,7 @@ async def test_a_title_the_cold_tower_did_not_place_waits_rather_than_being_clos
     assert task_row["state"] == queue.PENDING, task_row["state"]
     assert task_row["attempts"] == 0, "a deferral hands the attempt back (decision 336)"
 
-    # The world changes exactly as the reason says it does: the tower answers, and §5.3's nightly
-    # reconciliation places what is still unplaced.
+    # The world changes as the reason says: the tower answers, and the nightly reconciliation places.
     monkeypatch.setattr(tower_module.Tower, "place", answers)
     store = await stages.active_store(db)
     swept = await reconcile.reconcile(db, store, scope="owned_missing")
@@ -1845,16 +1189,8 @@ async def test_a_title_the_cold_tower_did_not_place_waits_rather_than_being_clos
 
 
 async def test_a_bundle_title_jellyfin_adds_is_placed_at_stage_nine(db, bundled):
-    """§8 stage 9, "feature vector per the feature contract -> Cold Tower -> e(t), b(t)", for a
-    title the corpus supplied and the household has only just added to Jellyfin.
-
-    Stage 9 ran `app_acquired`, whose work list is `origin = 'acquired'`, so a Jellyfin add that
-    resolved onto a corpus title placed nothing and parked until §5.3's 03:00 sweep - while it
-    ranked as a raw thin Backbone row, or, with no row, not at all. The first household parked
-    eight on its first afternoon; The Rivals of Amziah King (item_n 6) became an owned #1 on
-    exactly that path. The sweep's own scope covers such a title, so stage 9 runs it on arrival.
-    [owner instruction of 2026-09-25 after the first household user test]
-    """
+    """§8 stage 9 runs the sweep's own scope for a corpus
+    title Jellyfin just added, rather than waiting a night."""
     await db.execute(
         "INSERT INTO title (id, kind, name, year, imdb_id, is_owned, owned_checked_at) "
         "VALUES (900000001, 'movie', 'The Duellists', 1977, 'tt5000001', true, now())"
@@ -1873,22 +1209,8 @@ async def test_a_bundle_title_jellyfin_adds_is_placed_at_stage_nine(db, bundled)
 
 
 async def test_a_mint_for_an_item_jellyfin_never_showed_us_claims_no_ownership(db, bundled):
-    """§7.2: `is_owned` is "re-derived from Jellyfin, never trusted stale". The mint asserted it.
-
-    `_mint` wrote `is_owned` and `owned_checked_at` as SQL LITERALS - `true, now()` - and argued
-    that "seeing the item in the library IS the derivation". That argument does not reach the path
-    this same module publishes: `pipeline.key_for_item` falls back to a provider id precisely "so
-    §8.4's flywheel can enqueue work for something Jellyfin has never shown us", and an item with
-    no `Id` mints `jellyfin_id = NULL`. `sync/seen._falsify_ownership` is the ONE statement in the
-    codebase that can un-own a title and it is scoped `WHERE is_owned AND jellyfin_id IS NOT NULL`
-    (`seen.py:1168-1169`), so no sweep can ever see that row: under decision 162 the household's spine
-    would permanently claim a film it does not have, on the flag Home's shelf, §6.2's candidate
-    pool and Tonight's pool all filter.
-
-    Stage 10 then does the right thing with the honest flag, which is the second assertion: it
-    parks with "no ownership flag" and a deadline rather than stamping `ready` over a title Home
-    cannot show. [M5.1 review cycle 2, d323-owned-03]
-    """
+    """§7.2: a mint for an item with no `Id` claims no ownership,
+    since `jellyfin_id IS NULL` escapes every un-own."""
     absent = {"Name": "Never In This House", "Type": "Movie", "ProductionYear": 2026,
               "ProviderIds": {"Imdb": "tt5009001", "Tmdb": "509001"}}
     assert pipeline.key_for_item(absent) == "imdb:tt5009001", "the flywheel's own key"
@@ -1923,23 +1245,8 @@ async def test_a_mint_for_an_item_jellyfin_never_showed_us_claims_no_ownership(d
 async def test_a_provider_id_the_content_spines_columns_cannot_hold_parks_rather_than_failing(
     db, data_dir
 ):
-    """`_mintable_ids` asked for shape and sign and never for the one bound the column has.
-
-    `title.tmdb_id` and `title.tvdb_id` are `integer` and `title.year` is `smallint`, and asyncpg
-    binds a Python int against the column's own type. A runaway numeric id out of a mis-scraped
-    NFO therefore passed the validator whose own docstring says it exists to ask "is this a value
-    I am willing to make a title's permanent identity", and the refusal arrived from the database
-    instead: `resolve.resolve_title_id` looks up on the same unvalidated value thirteen lines
-    earlier, so stage 1 came back `DataError: invalid input for query argument $1 ... (value out
-    of int32 range)` - decision 336's `failed`, which burns all four attempts re-learning the same
-    thing and writes a database's internal message onto the column `0005_ledger.sql:138` says is
-    "shown verbatim on the admin board", where the identical class of input one line further on is
-    told exactly which field to correct in Jellyfin.
-
-    Nothing is written either way, which is the half that was already right and is asserted so a
-    repair cannot trade one defect for a breach of decision 162.
-    [M5.1 review cycle 2, d323-int32-04]
-    """
+    """An id past `integer`'s range parks naming the field,
+    rather than failing four times on a `DataError`."""
     assert stages._mintable_ids({"ProviderIds": {"Tmdb": "99999999999999999999"}})["tmdb_id"] is None
     assert stages._mintable_ids({"ProviderIds": {"Tvdb": "2147483648"}})["tvdb_id"] is None
     assert stages._mintable_ids({"ProviderIds": {"Tmdb": "2147483647"}})["tmdb_id"] == 2147483647
@@ -1963,8 +1270,7 @@ async def test_a_provider_id_the_content_spines_columns_cannot_hold_parks_rather
     assert await db.fetchval("SELECT count(*) FROM title") == 0
     assert await db.fetchval("SELECT count(*) FROM acquisition_job") == 0
 
-    # And an item the RESOLVER never asks about the year for - no name to fall back on - still
-    # mints, with the year dropped rather than the mint raising from inside its own transaction.
+    # An item the resolver never asks about the year for still mints, with the year dropped.
     nameless = {"Id": "jf-huge-4", "Name": "", "Type": "Movie", "ProductionYear": 999999,
                 "ProviderIds": {"Tmdb": "509999"}}
     minted = await pipeline.run_task(db, await _leased(db, item=nameless))
@@ -1973,31 +1279,9 @@ async def test_a_provider_id_the_content_spines_columns_cannot_hold_parks_rather
     assert (row["name"], row["year"], row["tmdb_id"]) == ("(untitled)", None, 509999)
 
 
-# --- review cycle 2: the seams two workers and a killed one share -------------------------------
-
-
 async def test_two_workers_cannot_walk_one_title_at_the_same_time(db, bundled, pg_url):
-    """Decision 322 gives one title two keys on purpose, and nothing stopped both from running.
-
-    `enqueue_item` keys `jellyfin:<item>` and `enqueue_title` keys `title:<id>`; `UNIQUE (kind,
-    key)` does not relate them, `acquisition_task` has no title column, and `queue.lease` filters
-    on `(state, next_attempt_at, paid, kind)` with `FOR UPDATE SKIP LOCKED` - which is exactly
-    what hands the two rows to two workers. `queue.lease`'s own docstring calls two loops "the
-    ordinary state during a rolling restart" and this milestone ships a test for it, so the
-    operating model is the code's and not this test's invention.
-
-    THE BOARD IS NOT A LOCK, which is what `enqueue_title`'s docstring implied by saying
-    "`run_task` reconciles them through the board". `_resume_index` is a `SELECT` with no
-    `FOR UPDATE`, read at most twice per walk, with no transaction around the walk: it decides
-    where a walk STARTS. Under concurrency both walks started at 0 and both ran every stage, which
-    at M5.3 is two derives racing into a spine decision 162 makes permanently unrewritable and at
-    M5.5 is two billed extractions for one title - invisible today only because every shipped
-    stage is a no-op or an idempotent upsert, which is exactly why it would have shipped.
-
-    The second connection carries the pool's own codecs, because `db/pool._init_connection`
-    registers them and a bare `asyncpg.connect` does not - a walk on a codec-less connection would
-    be testing asyncpg rather than the driver. [M5.1 review cycle 2, seam322-06]
-    """
+    """Decision 322's two keys for one title lease to two workers, and the board is not a lock. The second
+    connection carries the pool's codecs, which a bare `asyncpg.connect` does not."""
     first = await _leased(db, item=MOVIE)
     minted = await pipeline.run_task(db, first)
     title_id = minted.title_id
@@ -2015,11 +1299,8 @@ async def test_two_workers_cannot_walk_one_title_at_the_same_time(db, bundled, p
         by_item, by_title = await queue.lease(db, [pipeline.TASK_KIND], limit=2)
         assert {by_item.key, by_title.key} == {"jellyfin:jf-acq-1", f"title:{title_id}"}
 
-        # GATED RATHER THAN GATHERED, so the overlap is a fact and not a scheduling accident: the
-        # first walk is held inside stage 10 until the second has run to completion, which is the
-        # window a real drain's fetches and forward passes make wide. Two `gather`ed walks of a
-        # ten-stub pipeline can finish in whichever order the sockets answer, and a test that
-        # passed on that would be asserting the event loop.
+        # Gated, not gathered: the first walk is held in stage 10
+        # until the second completes, so the overlap is a fact.
         ran: list[str] = []
         inside, carry_on = asyncio.Event(), asyncio.Event()
         original = stages.ready
@@ -2039,10 +1320,7 @@ async def test_two_workers_cannot_walk_one_title_at_the_same_time(db, bundled, p
             patch.setattr(pipeline, "STAGES", patched)
             winner = asyncio.create_task(pipeline.run_task(db, by_item))
             await asyncio.wait_for(inside.wait(), 10)
-            # BOUNDED, because the failure this asserts is a walk that proceeds rather than one
-            # that raises: with no exclusion the second walk reaches the same gated stage 10 and
-            # both sit there, which without a bound is a hung suite with no message rather than a
-            # test that says what happened.
+            # Bounded: without exclusion both walks wait at the gate, which unbounded is a hung suite.
             try:
                 loser = await asyncio.wait_for(pipeline.run_task(other, by_title), 10)
             except TimeoutError:
@@ -2079,23 +1357,8 @@ async def test_two_workers_cannot_walk_one_title_at_the_same_time(db, bundled, p
 
 
 async def test_a_task_that_breaks_the_driver_closes_its_board_row_too(db, bundled, monkeypatch):
-    """`run_task`'s own docstring: "the three exits, and each writes BOTH tables". There is a
-    fourth, and it wrote one.
-
-    `drain`'s `except Exception` is the catch-all review cycle 1 added for the errors that escape
-    `run_task` itself - a raise in the driver's own bookkeeping rather than in a stage - and it
-    called `queue.fail` and nothing else. So a task closed through it left §6.6's board
-    permanently at `status = 'running'` with `reason = NULL`: the operator-facing lie
-    M51-CRASH-03 was filed to remove, reached through the exit that fix did not cover.
-    `close_abandoned_boards` cannot correct it either, because its EXISTS clause matches
-    `last_error = queue.ABANDONED` exactly and this handler writes a different sentence - so the
-    row renders as in flight on `GET /api/admin/acquisition` for ever, with no lever behind it.
-
-    The break is planted in `write_board` rather than in a stage, because a stage raise is caught
-    by `_run_stage` and never reaches this handler - which is precisely why the handler had no
-    test: `test_a_task_that_breaks_the_driver_fails_alone` raises from a stage body and from a
-    gate, and both of those are inside `_run_stage`'s guard. [M5.1 review cycle 2, M51-CRASH-09]
-    """
+    """`drain`'s catch-all is a fourth exit and closes the board
+    too; the break is in `write_board`, past `_run_stage`."""
     real = pipeline.write_board
 
     async def breaks(conn, title_id, **kwargs):
@@ -2124,23 +1387,8 @@ async def test_a_task_that_breaks_the_driver_closes_its_board_row_too(db, bundle
 
 
 async def test_a_task_abandoned_after_the_board_reached_ready_is_completed_not_failed(db, bundled):
-    """The half of the reaper's question `queue.py`'s change 6 cited and did not port.
-
-    Its model is `worker.py`'s `_reap_abandoned_import`, whose own docstring is headed "IT REPORTS
-    WHAT IT READ AND NOTHING ELSE" because it once said a thing it had not checked - it now asks
-    `_committed_import` whether the work actually landed before it records a failure.
-    `reclaim_expired` took the closing half alone, correctly (decision 322 keeps `queue.py` free
-    of any knowledge of titles), and nothing else asked.
-
-    `run_task` writes the board `ready` and then calls `queue.complete`: two autocommit
-    statements. A worker that dies between them - or one whose `_tick` budget expires between them
-    - leaves a task the reaper closes `failed` with a sentence saying a worker abandoned it,
-    beside a board row saying the title is ready. Both are on `GET /api/admin/acquisition/{id}`'s
-    envelope today, in one response, contradicting each other, with `queue.enqueue`'s
-    `ON CONFLICT DO NOTHING` refusing to revive the task and decision 330 deferring the revive
-    lever to M5.6 - so the one sentence an operator could act on was about work that was done.
-    [M5.1 review cycle 2, port-REAP-01]
-    """
+    """Board `ready` and `queue.complete` are two statements;
+    a task abandoned between them is completed, not failed."""
     task = await _leased(db, item=MOVIE)
     done = await pipeline.run_task(db, task)
     assert done.status == "ready"
@@ -2177,30 +1425,9 @@ async def test_a_task_abandoned_after_the_board_reached_ready_is_completed_not_f
     assert (await _task_row(db, second.key))["state"] == queue.FAILED
 
 
-# --- review cycle 3: the mint, under two workers and under a value it cannot look up again -------
-
-
 async def test_two_workers_cannot_mint_one_film_twice(db, bundled, pg_url):
-    """The arm `test_two_workers_cannot_walk_one_title_at_the_same_time` structurally cannot reach.
-
-    That test mints with `run_task` FIRST and then races two tasks against the title that exists,
-    so both walks enter carrying a title id and meet `_TITLE_LOCK`. The window BEFORE one exists
-    was covered by nothing: `_claim_title` is taken only once `stages.identify` has returned, so
-    `resolve.resolve_title_id` and `_mint` ran with no mutual exclusion at all.
-
-    ONE FILM, TWO LIBRARY ITEMS is the ordinary case and this app's own documented one:
-    `connectors/resolve.upsert_item` says "a household whose libraries ship 'Movies' and
-    'Movies 4K' gives one film several items", `key_for_item` keys on the item id, so those are two
-    `(kind, key)` rows that `UNIQUE (kind, key)` deliberately does not relate, and `queue.lease`'s
-    `FOR UPDATE SKIP LOCKED` is what hands them to two workers. Under READ COMMITTED neither walk
-    can see the other's uncommitted mint, so both resolved to None and both minted - and `title`
-    carries no UNIQUE on `imdb_id`, `tmdb_id` or `jellyfin_id` (§4.1 rule 6, `0003_content.sql:24`),
-    so nothing below the driver refused the second row. Under decision 162 it cannot be taken back.
-
-    GATED INSIDE THE MINT, so the overlap is a fact rather than a scheduling accident, and gated
-    ONCE so that an unfixed build produces the duplicate this asserts against rather than a
-    deadlock with no message. [M5.1 review cycle 3, d322-MINT-RACE-01, M51-C3-CRASH-01]
-    """
+    """Two library items of one film, before either walk holds a title id, and `title` has no
+    UNIQUE. Gated once inside the mint, so an unfixed build duplicates rather than deadlocks."""
     four_k = {
         "Id": "jf-copy-4k", "Name": "Barry Lyndon", "Type": "Movie", "ProductionYear": 1975,
         "RunTimeTicks": 185 * 60 * 10_000_000,
@@ -2259,9 +1486,7 @@ async def test_two_workers_cannot_mint_one_film_twice(db, bundled, pg_url):
     assert held["state"] == queue.PENDING, "the loser must come back rather than be closed"
     assert held["attempts"] == 0, "yielding is not an attempt (decision 336)"
 
-    # And it is a lock and not a refusal: with the winner committed, the loser's own second walk
-    # resolves onto the row the winner minted and mints nothing - which is the whole reason a park
-    # with a deadline is the right verb here.
+    # A lock, not a refusal: the loser's second walk resolves onto the winner's row and mints nothing.
     again = await pipeline.drain(db)
     assert again.leased == 1 and again.ready == 1, again.as_dict()
     assert await db.fetchval("SELECT count(*) FROM title WHERE origin = 'acquired'") == 1
@@ -2269,27 +1494,8 @@ async def test_two_workers_cannot_mint_one_film_twice(db, bundled, pg_url):
 
 
 async def test_stage_one_refuses_an_identity_it_could_not_look_up_again(db, data_dir):
-    """`identify`'s own idempotence claim: "the mint below sets `jellyfin_id`, so a second run of
-    this task finds the row the first run minted on the resolver's first branch and mints nothing.
-    A worker killed between the mint and the board write leaves exactly that state, and the reclaim
-    is a no-op rather than a duplicate."
-
-    It was a duplicate for any item whose identity is not already in its canonical form. `_mint`
-    wrote `str(item["Id"]).strip()` and `(offered["imdb"] or "").strip()`; `resolve.resolve_title_id`
-    looks the SAME item up with `str(item["Id"])` and `provider_ids`' un-stripped string. So the
-    mint wrote a value the resolver can never find again, and `_remember_title` is a separate
-    autocommit statement AFTER the mint's transaction commits - a window `_run_stage`'s own
-    `asyncio.wait_for` budget can land in without any worker dying. Under decision 162 the second
-    title is permanent.
-
-    REFUSED RATHER THAN NORMALISED, which is decision 323's own side of the door. Canonicalising
-    the item here and handing that to the resolver would make this module and the nightly sweep
-    resolve the same item differently, which is the second identity implementation property 2 of
-    this file's header exists to forbid. `tmdb`/`tvdb` need no refusal and get none: `resolve._as_int`
-    reduces the lookup side to digits exactly as `_mintable_ids` reduces the write side, so those
-    two agree already - the control below proves the rule is about the gap and not about
-    whitespace. [M5.1 review cycle 3, d323-C3-MINT-01]
-    """
+    """The mint must write the value the resolver looks up
+    with; an unstripped id is refused, not normalised."""
     for expected, item in (
         ("malformed provider id", {
             "Id": "jf-pad-1", "Name": "Padded", "Type": "Movie",
@@ -2314,11 +1520,8 @@ async def test_stage_one_refuses_an_identity_it_could_not_look_up_again(db, data
         )
         assert await db.fetchval("SELECT count(*) FROM acquisition_job") == 0
 
-    # THE CONTROL, and it is the property the paragraph above claims rather than a re-statement of
-    # the refusal: a mint the resolver finds again. A `tmdb` id arrives padded and is minted,
-    # because both sides of that column reduce it the same way; no `ProductionYear`, so the
-    # resolver's name-and-year fallback cannot rescue either item and what is asserted is the
-    # first branch.
+    # The control: a padded `tmdb` id mints, since both sides
+    # reduce it; no year, so the first branch is asserted.
     clean = {
         "Id": "jf-pad-9", "Name": "Andrei Rublev", "Type": "Movie",
         "ProviderIds": {"Imdb": "tt5000129", "Tmdb": " 500129 "},
@@ -2334,29 +1537,8 @@ async def test_stage_one_refuses_an_identity_it_could_not_look_up_again(db, data
 
 
 async def test_a_parked_board_promising_a_retry_is_closed_when_nothing_will_lease_it(db, bundled):
-    """`complete_landed_boards`'s claim that "every other disagreement between the two tables is a
-    state one of them is entitled to be in" is false for exactly one pair.
-
-    `_record_stop` writes the board and then the queue, two autocommit statements: board first, so
-    that a crash between them "leaves a row that OVERSTATES how stuck the job is rather than one
-    that understates it". For a park WITH a deadline it understates it, permanently. The board says
-    parked at stage 9 with §3.1's reason and a date; `reclaim_expired` closes the task with
-    `queue.ABANDONED`; `close_abandoned_boards` matched `running` only and `complete_landed_boards`
-    matched `ready` only, so neither reached it, `queue.enqueue`'s `ON CONFLICT DO NOTHING` refuses
-    to revive the key, and decision 330 defers the revive lever to M5.6. The one sentence the
-    operator can act on is the false one.
-
-    THE PARK IS KEPT IN THE SENTENCE rather than overwritten, because "import a bundle" is still
-    why this walk stopped and the abandonment is what happened to it afterwards; and `retry_after`
-    is cleared, because a board that still names a date is still promising the drain that will
-    never come.
-
-    A DEADLINE IS WHAT MAKES IT A CRASH MARKER, which is the second arm. Every park this pipeline
-    writes with a deadline is a park whose task was `defer`red, so a terminal task beside one is a
-    write that did not land; a park with NO deadline is `reconcile._park_thin`'s inbox row, which
-    is the state a real install is full of and which nothing here may touch.
-    [M5.1 review cycle 3, M51-C3-CRASH-02]
-    """
+    """A park with a deadline beside a terminal task is a crash marker: closed, reason kept,
+    `retry_after` cleared. A park with no deadline is `_park_thin`'s inbox and is left alone."""
     task = await _leased(db, item=MOVIE)
     walked = await pipeline.run_task(db, task)
     title_id = walked.title_id
@@ -2383,9 +1565,7 @@ async def test_a_parked_board_promising_a_retry_is_closed_when_nothing_will_leas
     assert closed["retry_after"] is None, "a date nothing will honour is a date not to show"
     assert int(closed["stage"]) == 9
 
-    # The inbox is not a crash marker. `_park_thin` writes `(stage 2, parked)` with no deadline for
-    # every thin-but-placed title, the fixture's import has just written a page of them, and an
-    # abandoned task for one of those titles must leave its row exactly as it found it.
+    # The inbox is not a crash marker: `_park_thin` writes stage-2 parks with no deadline, and they stay.
     inbox = await db.fetchrow(
         "SELECT title_id, reason FROM acquisition_job"
         " WHERE status = 'parked' AND retry_after IS NULL AND title_id <> $1 LIMIT 1",
@@ -2402,31 +1582,9 @@ async def test_a_parked_board_promising_a_retry_is_closed_when_nothing_will_leas
     assert (still["status"], still["reason"]) == ("parked", inbox["reason"])
 
 
-# --- review cycle 4: the claim set, the gate's return, and the title deleted mid-advance ---------
-
-
 async def test_two_workers_cannot_mint_one_film_twice_on_disjoint_provider_ids(db, bundled, pg_url):
-    """The arm `test_two_workers_cannot_mint_one_film_twice` structurally cannot reach.
-
-    That test builds its second item as `{**four_k, "Id": ...}`, so the two items carry IDENTICAL
-    ProviderIds and their claim sets are equal by construction - the fully-overlapping half of the
-    race, and the only half it pins. The disjoint half is the ordinary one: a household ships
-    "Movies" and "Movies 4K" (`resolve.upsert_item`'s own example) where one copy's NFO carries
-    only an imdb id and the other only a tmdb id, or a series scraped by Sonarr in one library
-    (tvdb) and by the TMDb plugin in another.
-
-    `_mint_claims` built its claims from `_mintable_ids` alone, so those two items took DISJOINT
-    claims, both passed `pg_try_advisory_xact_lock`, and both read nothing under READ COMMITTED -
-    while `resolve.resolve_title_id` has a fourth matching branch on kind + year + name that no
-    claim covered, which is exactly the branch that makes the SEQUENTIAL pair resolve onto one
-    row. Measured against a scratch database with no monkeypatching: sequential one title,
-    concurrent two, in 1 of 20 runs of a real `asyncio.gather` over two connections. Under
-    decision 162 the second row cannot be taken back.
-
-    GATED INSIDE THE MINT for the sibling test's reason: the overlap has to be a fact rather than
-    a scheduling accident, and an unfixed build then produces the duplicate this asserts against
-    rather than passing on the luck of the sockets. [M5.1 review cycle 4, d322-C4-MINT-01]
-    """
+    """Items with DISJOINT provider ids for one film must still exclude each other, or the name-and-year arm
+    resolves one row sequentially and two concurrently. Gated inside the mint, as the sibling test is."""
     imdb_only = {
         "Id": "jf-disjoint-hd", "Name": "The Long Corridor", "Type": "Movie",
         "ProductionYear": 1988, "RunTimeTicks": 170 * 60 * 10_000_000,
@@ -2483,44 +1641,16 @@ async def test_two_workers_cannot_mint_one_film_twice_on_disjoint_provider_ids(d
     assert loser.title_id is None, "the loser minted nothing, so it names no title"
     assert (await _task_row(db, loser.key))["attempts"] == 0, "yielding is not an attempt"
 
-    # And the claim is a lock and not a refusal: the loser's own second walk resolves onto the
-    # winner's row through the very branch the claim now covers, and mints nothing.
-    #
-    # THAT HOLDS BECAUSE THIS PAIR'S NAME ARM IS UNAMBIGUOUS, and the comment above used to state
-    # it as a general property of the claim. `resolve_title_id`'s fourth arm answers only for
-    # exactly one candidate, so the loser resolves onto the winner only while the spine holds no
-    # other title of that name and year - and the winner's mint has just added one. Where two
-    # already collided, this second drain minted a second row with the lock working perfectly:
-    # serialising a pair does not reconcile it. That case is
-    # `test_a_name_and_year_the_spine_cannot_tell_apart_parks_rather_than_minting`, which seeds
-    # the colliders this fixture deliberately has none of.
-    # [M5.1 review cycle 4 second pass, M51-C4-MINT-AMBIG-01]
+    # A lock, not a refusal: the loser resolves onto the winner's row through the arm the claim covers. That
+    # holds only while the name arm is unambiguous; the colliding case has its own test.
     again = await pipeline.drain(db)
     assert again.leased == 1 and again.ready == 1, again.as_dict()
     assert await db.fetchval("SELECT count(*) FROM title WHERE origin = 'acquired'") == 1
 
 
 async def test_a_provider_id_python_cannot_parse_parks_rather_than_raising(db, data_dir):
-    """`str.isdigit()` is TRUE for characters `int()` refuses, and the guard used the wrong one.
-
-    `_mintable_ids` asked `digits.isdigit() and 0 < int(digits) <= _INT32_MAX`, which admits the
-    superscripts and subscripts - `"12345\u00b2"`, a tmdb id copied out of a page carrying a
-    footnote marker - and then raised `ValueError` out of the function whose whole job is to
-    refuse what it will not make permanent. It raised from `_mint_claims`, BEFORE `identify` has
-    taken a claim, and `_run_stage` turns a raise into decision 336's `failed`: four attempts
-    spent re-learning a value only an editor can change, with a Python exception message as the
-    sentence `0005_ledger.sql:138` shows verbatim on section 6.6's board.
-
-    TWO GUARDS, BECAUSE THERE ARE TWO READERS. `isdecimal` is exactly what `int()` accepts, so the
-    mint side refuses the value; the LOOKUP side is `resolve._as_int`, in a file this milestone
-    does not touch (`connectors/resolve.py`), and it raises the same `ValueError` from inside
-    `resolve.resolve_title_id` one line before the mint validator runs. That raise is caught where
-    `DataError` already was, for the identical reason: same cause, same remedy, same person.
-
-    The Arabic-Indic control is the half that says the fix is a narrowing and not a new refusal -
-    `int()` parses those digits, so the value that minted 949 yesterday mints 949 today.
-    [M5.1 review cycle 4, d323-C4-MINT-02]
-    """
+    """`str.isdigit()` accepts superscripts that `int()`
+    refuses; the mint and the lookup side both park them."""
     assert stages._mintable_ids({"ProviderIds": {"Tmdb": "12345\u00b2"}})["tmdb_id"] is None
     assert stages._mintable_ids({"ProviderIds": {"Tvdb": "\u00b2"}})["tvdb_id"] is None
     assert stages._mintable_ids({"ProviderIds": {"Tmdb": "\u0669\u0664\u0669"}})["tmdb_id"] == 949
@@ -2546,22 +1676,8 @@ async def test_a_provider_id_python_cannot_parse_parks_rather_than_raising(db, d
 async def test_a_gate_that_answers_with_anything_but_none_or_an_outcome_costs_only_its_task(
     db, bundled
 ):
-    """`_run_stage`'s contract is that a stage cannot break the tick - only its own task.
-
-    That contract was enforced on `stage.run`'s return and not on the gate's: `return refusal` left
-    the `try` three lines above the `isinstance` guard, so a gate answering with a string, a dict
-    or a cap record landed on `run_task`'s own `outcome.detail` with no handler between. Through
-    `drain` that is "the driver failed outside any stage", which names no stage and spends an
-    attempt; through `run_task`, which every M5.2-M5.7 test and `ops/` script calls directly, the
-    task is left `leased` with nothing written at all.
-
-    AND `advance()` IS THE WORSE SHAPE, which is why it is refused rather than obeyed. It is the
-    obvious reading of an `Outcome | None` signature for "the cap is fine", and it does not crash:
-    the stage is SKIPPED, the walk runs on with that stage's name in its report and its body never
-    called, and the board shows a clean walk. Decision 348 gives a gate two answers - None means
-    run it - and this is where that is enforced instead of hoped for. M5.5 fills this seam with
-    code that bills real money. [M5.1 review cycle 4, M51-C4-PAID-01]
-    """
+    """A gate answering anything but None or an `Outcome` fails
+    its task; `advance()` would silently skip the stage."""
     answers = ("over spend cap", {}, {"cap_cents": 500}, stages.advance({"gate": "fine"}))
     for n, answer in enumerate(answers):
         async def gate(stage, _ctx, answer=answer):
@@ -2594,19 +1710,8 @@ async def test_a_gate_that_answers_with_anything_but_none_or_an_outcome_costs_on
 async def test_a_title_deleted_while_a_stage_advances_parks_rather_than_raising(
     db, bundled, monkeypatch
 ):
-    """`write_board`'s "THE CALLER OWES THIS FUNCTION A LIVE TITLE", on the path that did not pay.
-
-    `run_task` checked once, at the top, against the payload's title id; `_record_stop` checks
-    before every stop write. The three advance-path writes checked nothing, and a title stage 1
-    established can be deleted DURING the walk - an operator repairing a bad mint with psql, which
-    `test_a_title_that_vanishes_mid_walk_is_reported_and_not_raised` already treats as the
-    realistic trigger. That test's stage FAILS, so it routes through the guarded stop path; this
-    one ADVANCES, which is the arm nothing covered: the next board write raised
-    `ForeignKeyViolationError` out of every handler, `drain`'s outer arm closed the task with "the
-    driver failed outside any stage" naming no stage, and an attempt was spent - where
-    `TITLE_GONE` already names the state and tells the operator what to do about it.
-    [M5.1 review cycle 4, seam322-C4-01]
-    """
+    """A title deleted while a stage ADVANCES parks under
+    `TITLE_GONE` rather than raising from a board write."""
     seen: list[int] = []
 
     async def deletes_and_advances(ctx):
@@ -2635,29 +1740,8 @@ async def test_a_title_deleted_while_a_stage_advances_parks_rather_than_raising(
 
 
 async def test_the_stub_marker_check_names_the_stage_when_a_body_raises(monkeypatch):
-    """The diagnostic `refuse_uncapped_spend` cites is a published contract, so it is asserted.
-
-    `pipeline.py`'s spend gate says its flag is held to reality by a test that makes "a stage that
-    gains a body redden the build with a message naming the stage that got one". That held for a
-    body that RETURNS and not for one that touches the context on its first line - which is what a
-    real stage body does - where the message was `AttributeError: 'NoneType' object has no
-    attribute 'fetchval'`, naming neither the stage nor the flag and reading like a fixture that
-    needs a connection. The build went red either way; what was missing is the sentence saying
-    why, and a maintainer who reads "the test needs a context" is one step from giving it one.
-    [M5.1 review cycle 4, M51-C4-PAID-03]
-
-    RE-POINTED FROM STAGE 6 TO STAGE 7 AT M5.5, and from `pipeline.STAGES` to `SHIPPED`. Stage 6
-    now ships its body with the flag set (decision 432), so the mistake this test rehearses is no
-    longer available there; it is available on M5.4's three owed stages, and stage 7 is one of
-    them. And the check reads `SHIPPED` now (its own comment says why), so the doctored build goes
-    where the check looks - which is what this test did before, through the attribute the check
-    used to read.
-
-    AND THE DOCTORED STAGE IS DECLARED `implemented=False` OUTRIGHT SINCE M5, where it copied the
-    shipped flag. Stage 7 now ships its body with the flag set (decision 462), so a copy would
-    doctor a build with no stub in it and the check would pass over it; the mistake rehearsed is a
-    body behind a stale False, so the False is written here.
-    """
+    """A body behind a stale `implemented=False` that touches
+    the context still gets the sentence naming the stage."""
     async def bodied(ctx):
         return await ctx.conn.fetchval("SELECT 1")
 
@@ -2674,33 +1758,9 @@ async def test_the_stub_marker_check_names_the_stage_when_a_body_raises(monkeypa
     assert "the flag the spend gate reads is stale" in message, message
 
 
-# --- review cycle 4, second pass: the mint's last question, and the gate's deadline --------------
-
-
 async def test_a_name_and_year_the_spine_cannot_tell_apart_parks_rather_than_minting(db):
-    """`resolve_title_id` returning None means two different things and stage 1 read one of them.
-
-    Its fourth arm takes `LIMIT 2` and answers only for exactly ONE candidate, so None is "there is
-    no such title" OR "there are several and I will not guess" - and the mint treated both as
-    licence to write. The consequence is arithmetic rather than a race: with two pre-existing rows
-    sharing `(kind, lower(name), year)`, walk A sees two candidates, gets None and mints, and walk
-    B then sees THREE and mints again. Every mint adds a candidate, so the winner's commit makes
-    the arm more ambiguous rather than less - which is why `_MINT_LOCK` cannot close it. The loser
-    parks `FILM_IN_FLIGHT` with a deadline of now, comes back on the next tick, and mints beside
-    the row it was waiting for.
-
-    `connectors/resolve.py:189-194` measures the trigger on the corpus this resolves against -
-    2,438 titles share `(kind, lower(name))` and 573 groups still collide with the year applied -
-    and `pipeline.enqueue_item`'s documented input is `ResolveReport.unmatched`, which
-    `resolve.py:233` appends to on exactly that refusal. The queue's input is enriched for this
-    state by construction.
-
-    THE CONTROL IS THE ARM WITH ONE COLLIDER, and it is what says this is a refusal to guess
-    rather than a refusal to acquire: at one matching row the resolver answers, the walk resolves
-    onto it and mints nothing, which is decision 323 working. At two it cannot answer, and decision
-    360 declines to write a third row into a spine decision 162 cannot rewrite.
-    [M5.1 review cycle 4 second pass, M51-C4-MINT-AMBIG-01]
-    """
+    """The name-and-year arm answers None for "none" and for "several", so at two colliders
+    the walk parks rather than minting a third row; at one collider it resolves."""
     async def seed(name: str, year: int, title_id: int) -> None:
         await db.execute(
             "INSERT INTO title (id, kind, name, year, origin) VALUES ($1, 'movie', $2, $3, "
@@ -2737,16 +1797,13 @@ async def test_a_name_and_year_the_spine_cannot_tell_apart_parks_rather_than_min
     )
     assert (await _task_row(db, "jellyfin:jf-ambig-2"))["state"] == queue.SKIPPED
 
-    # And the second walk of the SAME film mints nothing either, which is the shape the double
-    # mint actually took: the claim serialises the pair and the loser comes back to a spine that
-    # is MORE ambiguous than the one it left.
+    # The second walk of the same film mints nothing either: the claim serialises the pair.
     third = {**item, "Id": "jf-ambig-3", "ProviderIds": {"Tmdb": "700001"}}
     again = await pipeline.run_task(db, await _leased(db, item=third))
     assert again.status == "parked" and again.stage == 1, again.as_dict()
     assert await db.fetchval("SELECT count(*) FROM title WHERE origin = 'acquired'") == 0
 
-    # The control at the other end: no collision at all is an ordinary acquisition, so this is not
-    # a refusal of the mint.
+    # The control at the other end: no collision at all is an ordinary acquisition.
     clean = {**item, "Id": "jf-ambig-4", "Name": "A Corridor Nobody Else Named",
              "ProviderIds": {"Imdb": "tt7000004"}}
     minted = await pipeline.run_task(db, await _leased(db, item=clean))
@@ -2754,24 +1811,8 @@ async def test_a_name_and_year_the_spine_cannot_tell_apart_parks_rather_than_min
 
 
 async def test_an_original_title_the_resolver_never_probes_does_not_mint_a_second_row(db):
-    """The resolver's fourth arm is DIRECTIONAL, and `_mint` writes the column it never probes.
-
-    `resolve.py:195-213` binds the ITEM's `Name` and compares it against the candidate's `name`,
-    `original_name` and aliases; the item's `OriginalTitle` is never a probe. `_mint` writes
-    `original_name` from exactly that field (`stages.py`'s INSERT), so the arm answers in one
-    direction and not the other - and which direction a household gets is decided by which of its
-    two library copies Jellyfin returns first. A German and an English copy of one film with
-    disjoint provider ids therefore produced one title in one ordering and TWO in the other, with
-    no concurrency at all: their `_mint_claims` sets do not even intersect, so there is nothing for
-    the claim to serialise and nothing a wider claim set could repair. A lock cannot make a
-    non-matching lookup match.
-
-    `_mint_claims`' own residue paragraph filed this under the claim discipline and justified it by
-    saying the uncovered arms "are lookups into rows that already exist". That is true of
-    `title_alias`, which nothing in M5.1 writes, and false of `original_name`, which this pipeline
-    is the thing that creates - which is why the paragraph was corrected rather than kept.
-    [M5.1 review cycle 4 second pass, M51-C4-MINT-ORIGINAL-03]
-    """
+    """The resolver never probes the item's `OriginalTitle`, which
+    `_mint` writes, so both copy orders must give one title."""
     english = {
         "Id": "jf-orig-en", "Name": "The Long Corridor", "OriginalTitle": "Der lange Gang",
         "Type": "Movie", "ProductionYear": 1988, "ProviderIds": {"Imdb": "tt6000100"},
@@ -2784,16 +1825,15 @@ async def test_an_original_title_the_resolver_never_probes_does_not_mint_a_secon
         "the two items must share no claim, or the lock would be doing the work this tests"
     )
 
-    # The ordering that already worked: the English copy mints `original_name`, and the German
-    # copy's Name matches it through the arm the resolver does probe.
+    # The ordering that already worked: the German copy's Name matches the English row's `original_name`.
     first = await pipeline.run_task(db, await _leased(db, item=english))
     assert first.title_id is not None and first.title_id >= stages.APP_ID_MIN
     second = await pipeline.run_task(db, await _leased(db, item=german))
     assert second.title_id == first.title_id, "the German copy is the same film"
     assert await db.fetchval("SELECT count(*) FROM title WHERE origin = 'acquired'") == 1
 
-    # The ordering that did not, on a clean spine: the German copy mints first, and the English
-    # copy's probe - its `Name` - matches neither the row's `name` nor its NULL `original_name`.
+    # The other ordering, on a clean spine: the English `Name`
+    # matches neither `name` nor a NULL `original_name`.
     await db.execute("DELETE FROM title WHERE origin = 'acquired'")
     await db.execute("DELETE FROM acquisition_task")
     de_first = await pipeline.run_task(
@@ -2812,27 +1852,8 @@ async def test_an_original_title_the_resolver_never_probes_does_not_mint_a_secon
 
 
 async def test_a_runaway_runtime_drops_the_value_rather_than_losing_the_title(db, bundled):
-    """The doctrine at the head of this module named two functions and `_mint` binds three values.
-
-    `_year` and `_mintable_ids` were bounded by their columns in review cycle 2 under
-    d323-int32-04, on the argument that "a shape check that does not ask the one question the
-    column actually asks is a validator that passes the value it exists to refuse".
-    `_runtime_min` is the third value `_mint` binds against a bounded column - `runtime_min
-    integer`, at `$5` - and it was `int(round(int(ticks) / ...))` with no bound and no guard on the
-    parse. Jellyfin declares `RunTimeTicks` as an int64; M5.2's `/events` webhook will hand this
-    same dict out of a Handlebars-rendered body where a number commonly arrives as a string.
-
-    Both shapes raise from inside `_mint`'s own transaction, outside `_resolve_or_mint`'s handler -
-    which wraps the resolver call alone - so `_run_stage` records decision 336's `failed` with a
-    database's or Python's internal sentence on the board column `0005_ledger.sql:138` shows
-    verbatim, four attempts re-learn a value only a re-encode can change, `ON CONFLICT (kind, key)
-    DO NOTHING` makes a re-enqueue a no-op, and decision 330's revive is M5.6's. The film is
-    unacquirable for good over a duration.
-
-    DROPPED AND NOT PARKED, which is `_year`'s disposal: the column is nullable and a runtime is
-    not an identity, so the title is kept and the value is not.
-    [M5.1 review cycle 4 second pass, M51-C4-MINT-RUNTIME-02]
-    """
+    """A runaway or non-numeric runtime is dropped, not parked:
+    the column is nullable and a runtime is no identity."""
     assert stages._runtime_min({"RunTimeTicks": 120 * 60 * 10_000_000}) == 120
     assert stages._runtime_min({"RunTimeTicks": 9 * 10**18}) is None, "int32 is the column"
     assert stages._runtime_min({"RunTimeTicks": "not a number"}) is None
@@ -2863,25 +1884,8 @@ async def test_a_runaway_runtime_drops_the_value_rather_than_losing_the_title(db
 
 
 async def test_a_gate_that_parks_with_no_deadline_is_refused_rather_than_closing_the_task(db):
-    """`_run_stage` guarded the two gate mistakes that cost a stage and let through the one that
-    costs the task.
-
-    A gate answering `stages.park("over spend cap")` is well typed and is not `advance`, so it
-    passed both existing arms untouched. `_record_stop` turns a park with no `until` into
-    `queue.skip`, and `stages.waiting_on_the_world`'s own docstring says what `skipped` means here:
-    `lease` claims `pending` only, `defer` is fenced on pending-or-leased, neither reaper matches,
-    `enqueue` is `ON CONFLICT DO NOTHING`, and decision 330's revive is M5.6's. So the first
-    refusal closes the task for good while section 6.6's board shows "parked at 6" with
-    `retry_after = NULL` - a wait that will never end, under a sentence promising otherwise.
-
-    IT IS THE SPELLING M5.5 IS BEING POINTED AT. `ROADMAP-M5.md:324` words the cap refusal as
-    "stage 6 parks `over spend cap` ... and never auto-retries", `stages.park` makes `until`
-    keyword-optional, and in this tree a park WITH a deadline is `queue.defer` - so the roadmap's
-    own prose reads as an instruction to omit the one keyword that makes the refusal survivable.
-    M5.1 made this mistake twice inside its own milestone, in `refuse_uncapped_spend` and in
-    `stages.place`, which is why the extension point it publishes gets the guard rather than the
-    hope. [M5.1 review cycle 4 second pass, M51-C4-PAID-04]
-    """
+    """A gate parking with no deadline is refused: a park without
+    `until` is `queue.skip`, closing the task for good."""
     async def no_deadline(stage, _ctx):
         return stages.park("over spend cap") if stage.number == 6 else None
 
@@ -2897,8 +1901,7 @@ async def test_a_gate_that_parks_with_no_deadline_is_refused_rather_than_closing
     )
     assert row["state"] == queue.PENDING, "a failure that has attempts left comes back"
 
-    # The control: the same refusal carrying the deadline decision 336 gives a park. That one is a
-    # `defer` - no attempt spent, the task due again - which is what the shipped gate does today.
+    # The control: the same refusal with a deadline is a `defer`, no attempt spent.
     async def dated(stage, _ctx):
         return (
             stages.park("over spend cap", until=stages.waiting_on_the_world())
@@ -2917,17 +1920,8 @@ async def test_a_gate_that_parks_with_no_deadline_is_refused_rather_than_closing
     assert held["next_attempt_at"] > datetime.now(UTC), "and it comes back by itself"
 
 
-# --- M5.3: stages 2, 3 and 4 have bodies ---------------------------------------------------------
-#
-# Everything below runs the SHIPPED stages, through `live`, against a canned web. It is the half
-# of this file the fixture above stands down, and it is deliberately the only half: a driver test
-# and a crawl test that share a fixture are two tests that redden for each other's reasons. Stage
-# 6 is the one shipped stage `live` leaves standing down (decision 432; see the fixture).
-#
-# THE CANNED WEB IS A REFUSER BY DEFAULT. An unrouted host answers 404, which is what the five
-# sources these tests do not route are meant to get - decision 334 makes each of them a note and
-# the walk carries on. So every route below is a source a test is making a claim about, and the
-# absence of a route is itself an assertion.
+# The shipped stages 2-4 through `live`, against a canned web that 404s any unrouted host, so every route
+# is a source the test makes a claim about.
 
 TMDB_HOST = "api.themoviedb.org"
 TRAKT_HOST = "api.trakt.tv"
@@ -2935,14 +1929,8 @@ MC_HOST = "www.metacritic.com"
 
 
 class _Clock:
-    """A clock that moves only when something sleeps on it. `test_sources_adapters.py`'s idiom.
-
-    Injected in place of `time.monotonic` and `asyncio.sleep` together, because the two are one
-    fiction. It is here so the two scraped hosts can be crawled at the rate their policy actually
-    declares - `acquire/hosts.py` runs both deliberately slowly with a long breaker cooldown -
-    without this file's tests taking seconds per page. Make the TEST tolerant, never the policy
-    faster.
-    """
+    """Replaces `time.monotonic` and `asyncio.sleep`, so the scraped
+    hosts keep their declared rate without taking seconds."""
 
     def __init__(self, start: float = 1000.0) -> None:
         self.now = start
@@ -2959,13 +1947,7 @@ class _Clock:
 
 
 class _CannedWeb:
-    """A route table keyed on (host, path), and a log of every request that was made.
-
-    The log is the assertion surface for the two measures that are about requests NOT made: exit
-    criterion 5 ("outbound request count = 0" on a resume) and a drain whose tasks never reach
-    stage 2. `robots.txt` is served permissively because two of the eight hosts are crawled with
-    `respect_robots=True` and a test about a park would otherwise be a test about a missing file.
-    """
+    """Requests are logged for the measures about requests NOT made; robots.txt is served permissively."""
 
     ROBOTS = b"User-agent: *\nAllow: /\n"
 
@@ -3008,11 +1990,7 @@ def _factory(site: _CannedWeb, clock: _Clock):
     return make
 
 
-# A plot and two reviewers, sized clear of decision 335's floor rather than at it: the gate wants a
-# non-empty `title.overview`, two DISTINCT sources and fifty words across them, and a fixture that
-# cleared it by one word would be a fixture whose failures read as arithmetic. The boundary itself
-# is asserted where the predicate lives
-# (`test_reviews_gate.py::test_fifty_words_is_the_floor_and_forty_nine_is_below_it`).
+# Sized clear of decision 335's floor rather than at it; the boundary is asserted in `test_reviews_gate.py`.
 PLOT = (
     "Two men who are very good at their work circle one another across a city that neither of "
     "them can leave, and the film gives each of them exactly as much sympathy as the other."
@@ -3029,13 +2007,8 @@ TRAKT_COMMENT = (
 
 
 def _tmdb_detail(tmdb_id: int, imdb_id: str, *, title: str = "The Duellists") -> dict:
-    """One TMDB movie payload with the appended blocks §8 stage 3 actually parses.
-
-    `reviews` is INSIDE the detail document rather than fetched separately because that is what
-    the shipped adapter asks for: `tmdb.MOVIE_APPEND` carries `reviews`, and
-    `derive/rebuild.REVIEW_DOCUMENTS` maps `("tmdb", "movie_detail")` onto the `tmdb` review
-    source for exactly that reason. One request, and it is the required one.
-    """
+    """`reviews` is appended to the detail document, as
+    `tmdb.MOVIE_APPEND` asks: one request, the required one."""
     return {
         "id": tmdb_id, "title": title, "original_title": title, "overview": PLOT,
         "release_date": "1977-01-01", "runtime": 100, "original_language": "en",
@@ -3073,26 +2046,16 @@ def _enrichable(tmdb_id: int = 500001, imdb_id: str = "tt5000001") -> dict:
 
 @pytest.fixture
 async def keyed(db, secrets_key):
-    """TMDB and Trakt configured where §2 puts them: `connector_config`, behind the DEK.
-
-    OMDb is deliberately left out. Decision 377 makes an absent credential a note rather than a
-    park, and an install that has configured two of the three is §3.1's half-configured boot -
-    which is the state most households are actually in, and therefore the state the walk below
-    should be proved against rather than a fully-keyed one nobody has.
-    """
+    """OMDb is left out: decision 377 makes an absent key
+    a note, and half-configured is the common install."""
     await secrets.put_connector_secrets(db, "tmdb", {}, {"api_key": "tmdb-test-key"})
     await secrets.put_connector_secrets(db, "trakt", {"client_id": "trakt-test"}, None)
     return db
 
 
 async def _documents(db, title_id: int) -> list[dict]:
-    """This title's raw store rows, reached the way §6.6's board reaches them.
-
-    Through the task key and not through `title_id`, because that is the join decision 345 leaves
-    the board with (`acquire/board.py:92-101`): `raw_document.entity_key` is the TASK's key, so a
-    document filed any other way is one an operator can never see. A test that read the rows by a
-    column the board does not join on would pass for a store the board cannot show.
-    """
+    """Through the task key, not `title_id`: `raw_document.entity_key`
+    is the join the board uses (decision 345)."""
     rows = await db.fetch(
         "SELECT d.source, d.kind, d.ok, d.http_status, d.byte_size"
         "  FROM raw_document d JOIN acquisition_task t ON t.key = d.entity_key"
@@ -3105,21 +2068,8 @@ async def _documents(db, title_id: int) -> list[dict]:
 async def test_a_title_walks_all_ten_stages_with_the_crawl_the_derive_and_the_gate_live(
     db, bundled, keyed, live
 ):
-    """§8's ten stages end to end with 2, 3 and 4 doing their real work. M5.3's own exit walk.
-
-    THIS IS THE TEST `test_an_item_with_provider_ids_is_minted_placed_and_badged` USED TO BE, for
-    the pipeline that now exists. One title rather than three, because the shelf floor that made
-    three necessary is asserted there and what is asserted here is the SEQUENCE: a Jellyfin item
-    becomes a title, the title becomes bytes in the raw store, the bytes become rows, the rows
-    clear a quality bar, and only then is a coordinate computed and a badge stamped.
-
-    FIVE OF THE EIGHT SOURCES 404 AND THE WALK DOES NOT CARE, which is decision 334 and is the
-    half of this test worth having. OMDb is not configured at all, Wikidata, Wikipedia, Rotten
-    Tomatoes and Metacritic answer the canned web's default 404, and TVmaze is not applicable to a
-    movie - and the job still reaches `ready`, because §8 stage 2's quality bar is not stage 2's.
-    It is stage 4's, and the two sources that did answer carry a plot and fifty words between
-    them.
-    """
+    """§8's ten stages with 2, 3 and 4 live. Five of eight sources 404 or are absent and
+    the walk still reaches `ready`, since the quality bar is stage 4's (decision 334)."""
     clock = _Clock()
     site = _CannedWeb(_enrichable())
     assert await pipeline.enqueue_item(db, MOVIE) is True
@@ -3144,8 +2094,8 @@ async def test_a_title_walks_all_ten_stages_with_the_crawl_the_derive_and_the_ga
     assert "metacritic:page" in enrich["notes"] and "rt:page" in enrich["notes"], enrich
     assert enrich["documents"] >= 4
 
-    # Stage 3 wrote rows, and both ledgers ran even though this title carries neither - the counts
-    # are on the board because §14.5's failure is a derive that quietly skips them.
+    # Both ledgers ran though this title carries neither:
+    # §14.5's failure is a derive that quietly skips them.
     derived = board["detail"]["derive"]
     assert derived["rows"]["credit"] >= 2, derived
     assert "adjudications" in derived and "corrections" in derived, derived
@@ -3163,8 +2113,7 @@ async def test_a_title_walks_all_ten_stages_with_the_crawl_the_derive_and_the_ga
     assert row["trakt_slug"] == "the-duellists", "stage 2 wrote the identity it was handed"
     assert (row["placement"], row["origin"]) == ("cold_tower", "acquired")
 
-    # And the household's own server was never in the batch: §8's exemption is for the Jellyfin
-    # host and this walk is eight third parties.
+    # The household's own server was never in the batch: §8's exemption is for the Jellyfin host.
     assert site.hosts() <= {TMDB_HOST, TRAKT_HOST, "query.wikidata.org", "en.wikipedia.org",
                             "www.rottentomatoes.com", MC_HOST, "www.omdbapi.com",
                             "api.tvmaze.com"}, site.hosts()
@@ -3173,18 +2122,8 @@ async def test_a_title_walks_all_ten_stages_with_the_crawl_the_derive_and_the_ga
 async def test_every_stage_two_response_is_in_the_raw_store_before_stage_three_reads_one(
     db, bundled, keyed, live, monkeypatch
 ):
-    """Exit criterion measure 6: "every response has a `raw_document` row before any parse".
-
-    §8's preamble is the claim - "All fetched bytes land in the app's own raw store, so re-parsing
-    is free forever" (`spec:398`) - and the word that makes it worth a test is BEFORE. A stage 2
-    that stored its documents on the way out, or a stage 3 that parsed a response it still held in
-    memory, would satisfy every count this file could take afterwards and would leave a household
-    one worker crash away from bytes it paid for and cannot re-read.
-
-    So the measurement is taken from INSIDE stage 3, on its first statement, against the request
-    log: at the moment the derive begins, every request that was not a robots.txt read has a row.
-    Counting afterwards proves nothing, because stage 2's own last statement could be the write.
-    """
+    """Measured from INSIDE stage 3's first statement: every
+    non-robots request already has a `raw_document` row."""
     clock = _Clock()
     site = _CannedWeb(_enrichable())
     seen: dict = {}
@@ -3197,8 +2136,7 @@ async def test_every_stage_two_response_is_in_the_raw_store_before_stage_three_r
         )
         return await real_derive(ctx)
 
-    # Over `live`'s tuple and not `SHIPPED`, which would park this walk at the spend gate before it
-    # reached `ready` - stage 6 stays a declared no-op here (decision 432).
+    # Over `live`'s tuple, not `SHIPPED`, which would park the walk at the spend gate.
     monkeypatch.setattr(pipeline, "STAGES", tuple(
         pipeline.Stage(s.number, s.name, watched, s.paid, s.implemented, s.owner, s.fetches)
         if s.number == 3 else s
@@ -3214,8 +2152,7 @@ async def test_every_stage_two_response_is_in_the_raw_store_before_stage_three_r
         f"stage 3 began with {seen['stored']} raw_document rows for "
         f"{len(seen['requests'])} requests: {seen['requests']}"
     )
-    # And the failures are in there too, which is what makes a 404 readable off the board rather
-    # than only off a log: `rawstore.latest` filters on `ok`, so a failure row reaches no parser.
+    # Failure rows are stored too, readable off the board; `rawstore.latest` filters on `ok`.
     documents = await _documents(db, report.tasks[0].title_id)
     assert any(d["ok"] for d in documents) and any(not d["ok"] for d in documents), documents
     assert {d["source"] for d in documents} >= {"tmdb", "trakt", "metacritic"}, documents
@@ -3224,14 +2161,7 @@ async def test_every_stage_two_response_is_in_the_raw_store_before_stage_three_r
 async def test_a_metacritic_404_with_tmdb_answering_is_a_note_and_the_walk_reaches_stage_three(
     db, bundled, keyed, live
 ):
-    """Exit criterion measure 7: "Metacritic 404 with TMDB ok = a note, not a park" (decision 334).
-
-    The canned web routes TMDB and Trakt and nothing else, so Metacritic answers 404 - which is
-    what a slug guessed from a title does most of the time, and is the ordinary state of seven of
-    §8's eight sources rather than an error. The assertion is that the walk got PAST stage 3: a
-    park at 2 would have left the board at stage 2 and stage 3 unrun, and the eight documents
-    already on disk unparsed.
-    """
+    """Decision 334: a Metacritic 404 with TMDB answering is a note, and the walk gets PAST stage 3."""
     clock = _Clock()
     site = _CannedWeb(_enrichable())
     assert await pipeline.enqueue_item(db, MOVIE) is True
@@ -3256,20 +2186,7 @@ async def test_a_metacritic_404_with_tmdb_answering_is_a_note_and_the_walk_reach
 async def test_a_paused_best_effort_host_is_a_sentence_per_view_and_costs_no_request(
     db, bundled, keyed, live
 ):
-    """Decision 422: a circuit-breaker pause on a best-effort host is that source's note.
-
-    Metacritic's breaker is OPEN when the walk starts - `fetch_host_state.paused_until` in the
-    future, which is what eight consecutive failures during another title's walk leave behind and
-    what a worker restart reads back (`fetch._load_host_state`). The host must not be asked, the
-    stage must advance under decision 334, and the board must say what happened in a sentence.
-
-    THE SENTENCE AND THE SECOND VIEW ARE WHAT CHANGED. `sources/_views.capture` re-raised the
-    pause, claiming the driver would park on it; the driver never did - `stages.enrich` caught it
-    as a note spelled `HostPaused: host ... paused for 900s`, and the raise abandoned the source at
-    its first paused view, so the kind's second view was never recorded at all. Each view is now
-    recorded on its own and the note names the host, the cooldown and the consequence.
-    [M5.3 review cycle 2, M53-C2-NET-01]
-    """
+    """Decision 422: an open breaker on a best-effort host is a note per view, and the host is not asked."""
     await db.execute(
         "INSERT INTO fetch_host_state (host, paused_until) VALUES ($1, now() + interval '900 s')",
         MC_HOST,
@@ -3296,19 +2213,7 @@ async def test_a_paused_best_effort_host_is_a_sentence_per_view_and_costs_no_req
 async def test_the_required_source_failing_parks_at_stage_two_and_names_it(
     db, bundled, keyed, live
 ):
-    """Exit criterion measure 8: "required source failing = a park naming it" (decision 334).
-
-    TMDB is CONFIGURED here and answers 500, which is the state decision 334 distinguishes from an
-    absent credential: the source ran and did not answer. An install with no TMDB key is §3.1's
-    legal half-configured boot and is a note - asserted in the test below this one - and reading
-    the two the same way would park every title on every install that has not yet typed a key into
-    §6.6's TMDB card.
-
-    A PARK WITH A DEADLINE, which is the half a reader should check rather than assume. A park
-    with no `until` is `queue.skip` and closes the task for good (`stages.waiting_on_the_world`),
-    and what this one waits on - a host that comes back, a key an operator corrects - is decision
-    336's "something that may change" in its plainest form.
-    """
+    """Decision 334: a configured TMDB answering 500 parks at stage 2 naming it, with a deadline."""
     clock = _Clock()
     routes = _enrichable()
     routes[(TMDB_HOST, "/3/movie/500001")] = (500, b"upstream is having a day", "text/html")
@@ -3328,15 +2233,11 @@ async def test_the_required_source_failing_parks_at_stage_two_and_names_it(
     assert (board["stage"], board["status"]) == (2, "parked")
     assert board["reason"] == walk.reason, "§6.6 shows the reason verbatim (0005_ledger.sql:138)"
     assert board["retry_after"] is not None, "the board shows the wait it is describing"
-    # The other sources were still asked, and their bytes are on disk: a park is not a rollback,
-    # and the next walk re-reads them instead of re-fetching.
+    # A park is not a rollback: the other sources' bytes are on disk for the next walk.
     assert board["detail"]["enrich"]["answered"], board["detail"]["enrich"]
     documents = await _documents(db, walk.title_id)
     assert {d["source"] for d in documents} >= {"trakt", "metacritic"}, documents
-    # AND TMDB'S 500 LEFT NO ROW AT ALL, which is `sources/_views.capture`'s rule and not an
-    # oversight here: only a NON-retryable failure is stored, because "a timeout or a 503 will be
-    # asked again on the next drain, and a row per attempt would turn one flaky host into a board
-    # nobody can read". Metacritic's 404 is stored for the opposite reason - it is an answer.
+    # TMDB's 500 left no row: only non-retryable failures are stored; Metacritic's 404 is an answer.
     assert not any(d["source"] == "tmdb" for d in documents), documents
 
     row = await _task_row(db, "jellyfin:jf-acq-1")
@@ -3348,27 +2249,8 @@ async def test_the_required_source_failing_parks_at_stage_two_and_names_it(
 async def test_a_title_tmdb_holds_no_record_of_walks_on_rather_than_parking_stage_two(
     db, bundled, keyed, live
 ):
-    """Decision 334's word RAN, for the state `available_kinds` cannot see.
-
-    THE TWO TESTS AROUND THIS ONE ARE THE TWO STATES THAT WERE ALREADY APART: TMDB configured and
-    answering 500 parks, TMDB unconfigured is a note. This is the third, and until M5.3's first
-    review cycle it was read as the first. `THIRD` carries an IMDb id and no TMDB one - stage 1
-    mints on any of imdb/tmdb/tvdb (decision 323) - and TMDB has no record for it, which `_find`
-    answers by writing no `tmdb_id`. No later kind supplies one and `wikidata:resolve` does not
-    yield it, so `tmdb:detail` had nothing to ask about on this drain and will have nothing to ask
-    about on every drain after it.
-
-    WHAT THE PARK COST IS THE POINT. `OPERATOR_WAIT` is one day and a stage-2 park re-enters at
-    stage 2, so the title re-walked all eight sources daily, for ever - including Rotten Tomatoes
-    and Metacritic, which `acquire/hosts.py` paces at seven-tenths of a request a second with a
-    quarter-hour breaker - under a reason telling an operator to check a TMDB connector that is
-    working. Reaching stage 4 instead costs a thirty-day window and, on the retry, zero requests:
-    `test_a_retry_of_a_parked_gate_resumes_at_stage_four_and_makes_no_request` is that half.
-
-    AND `answered` STAYS TRUE. The fix is not "report ok": `tmdb:detail` is absent from the
-    board's answered list, where it belongs, and the note under its own name is what says why.
-    [M5.3 review cycle 1, M53-334-01]
-    """
+    """TMDB answering "no record" is a fact about the film: the
+    title walks on to stage 4 rather than re-walking daily."""
     clock = _Clock()
     routes = _enrichable()
     routes[(TMDB_HOST, "/3/find/tt5000003")] = _json_route({"movie_results": [], "tv_results": []})
@@ -3384,9 +2266,7 @@ async def test_a_title_tmdb_holds_no_record_of_walks_on_rather_than_parking_stag
     enrich = board["detail"]["enrich"]
     assert "tmdb:detail" not in enrich["answered"], enrich
     assert enrich["notes"]["tmdb:detail"] == "no tmdb id on the title, so TMDB could not be asked"
-    # `tmdb:resolve` IS ANSWERED, and that is what walks this title on rather than a special case:
-    # TMDB said it holds no record, which is a fact about the film. The test below is the state
-    # this one used to be confused with. [M5.3 review cycle 2, m53-c2-334-01]
+    # `tmdb:resolve` is answered, which is what walks this title on; the next test is the failing case.
     assert "tmdb:resolve" in enrich["answered"], enrich
     assert "TMDB has no record for tt5000003" in enrich["notes"]["tmdb:resolve"], enrich
 
@@ -3395,19 +2275,8 @@ async def test_a_title_tmdb_holds_no_record_of_walks_on_rather_than_parking_stag
 async def test_a_refused_or_failed_tmdb_resolve_parks_stage_two_naming_it(
     db, bundled, keyed, live, status
 ):
-    """Decision 334's park, for the required source failing at the kind BEFORE the required one.
-
-    THE SAME TITLE AS THE TEST ABOVE, AND THE OPPOSITE OUTCOME, because the source did something
-    different. `THIRD` carries only an IMDb id, so `tmdb:detail` has nothing to ask about until
-    `tmdb:resolve` has filled `title.tmdb_id`. Above, TMDB answered and holds no record, and the
-    title walks on to stage 4. Here the key is refused, or the host is down: TMDB RAN and did not
-    answer, which is decision 334's park condition in its own words. Read at the KIND, the two
-    were one state - the column is empty either way - and this one walked on too: fourteen
-    requests across six hosts, a thirty-day park at stage 4 with "no plot yet, 0 sources" and a
-    `reason` naming no connector at all, while the SAME broken key on a title that already
-    carried a `tmdb_id` parked here for a day naming TMDB. One key, two operator experiences.
-    [M5.3 review cycle 2, m53-c2-334-01]
-    """
+    """The same title with TMDB refusing or down: it RAN and
+    did not answer, so it parks at stage 2 naming TMDB."""
     clock = _Clock()
     routes = _enrichable()
     routes[(TMDB_HOST, "/3/find/tt5000003")] = _json_route({"status_message": "no"}, status=status)
@@ -3430,17 +2299,8 @@ async def test_a_refused_or_failed_tmdb_resolve_parks_stage_two_naming_it(
 
 
 async def test_an_install_with_no_tmdb_key_notes_it_and_walks_on(db, bundled, live):
-    """Decision 377: "a source whose credential is absent is a stage-2 note ... never a park".
-
-    THE TWO DECISIONS ARE ONLY BOTH TRUE IF THESE TWO STATES ARE READ APART, which is why this
-    test sits next to the one above it. Decision 334 requires `tmdb:detail`; decision 377 says an
-    absent credential is a note. `sources/base.available_kinds` is what reconciles them: a kind
-    whose capability is off is filtered out and never runs, so there is no failure to park on.
-
-    §3.1 makes this install legal, and the title is not lost by walking on - it arrives at stage 4
-    with no plot and no reviews and parks THERE, with the counts in its reason, which is the
-    honest sentence for a title nobody has given this app a way to enrich.
-    """
+    """Decision 377: an absent TMDB key filters the kind
+    out as a note; the title parks at stage 4 instead."""
     clock = _Clock()
     site = _CannedWeb({})
     assert await pipeline.enqueue_item(db, MOVIE) is True
@@ -3459,27 +2319,11 @@ async def test_an_install_with_no_tmdb_key_notes_it_and_walks_on(db, bundled, li
     )
 
 
-# --- stage 4's park, and the resume that costs nothing --------------------------------------------
-
-
 async def test_a_thin_title_parks_at_the_reviews_gate_with_both_counts_and_a_thirty_day_window(
     db, bundled, keyed, live
 ):
-    """Exit criterion measure 4, and §8 stage 4: "if thin, retry window 30 days".
-
-    THE TITLE IS THIN THE WAY A REAL ONE IS. TMDB answers with the plot and its own reviewer, and
-    Trakt holds nothing - so the gate sees a plot, ONE source and plenty of words, which is the
-    case decision 335's `count(DISTINCT source) >= 2` exists for and the case a word-count-only
-    gate would wave through. §8 says "multi-source" and `mdc/dna/packs.py:46` says why: "so no
-    single reviewer culture dominates".
-
-    TWO WRITES, ONE TRUTH, ONE CONSTANT, AND THE SECOND WRITE WAS ALREADY THE DRIVER'S. The stage
-    returns one instant; `_record_stop` passes it to `queue.defer` AND to `write_board`, so the
-    date an operator reads on §6.6's board and the date the queue will lease on are the same
-    value rather than two computed from one duration. This test asserts them against each other
-    rather than each against thirty days, because two dates that are both about right and not
-    equal is precisely the defect that arrangement exists to prevent.
-    """
+    """Decision 335: one source with plenty of words is thin. The board's and the queue's dates are asserted
+    equal, since `_record_stop` writes one instant to both."""
     clock = _Clock()
     routes = _enrichable()
     for sort in ("likes", "lowest", "highest"):
@@ -3496,8 +2340,7 @@ async def test_a_thin_title_parks_at_the_reviews_gate_with_both_counts_and_a_thi
     assert walk.stage == 4, walk.as_dict()
     assert walk.stages_run == ["identify", "enrich", "derive", "reviews gate"], walk.as_dict()
 
-    # The reason carries BOTH counts, which is decision 335 and is what tells an operator whether
-    # the title is close. The plot is named only when it is missing, so it is not named here.
+    # Both counts tell an operator how close the title is; the plot is named only when missing.
     assert walk.reason.startswith("reviews gate: 1 source, "), walk.reason
     assert "retry window 30 days" in walk.reason, walk.reason
     assert "no plot" not in walk.reason, "the plot is there; naming it reads as a complaint"
@@ -3518,8 +2361,7 @@ async def test_a_thin_title_parks_at_the_reviews_gate_with_both_counts_and_a_thi
     assert row["next_attempt_at"] == window, (
         "the queue leases on one instant and the board shows another: two writes, one truth"
     )
-    # NO ATTEMPT SPENT. Decision 336: a park with a deadline is a re-ask, and thirty days of them
-    # would otherwise close a title for the crime of being new.
+    # No attempt spent: decision 336's timed park is a re-ask.
     assert row["state"] == queue.PENDING and row["attempts"] == 0, dict(row)
     assert row["last_error"] is None, "nothing raised, so nothing is recorded as an error"
 
@@ -3527,25 +2369,8 @@ async def test_a_thin_title_parks_at_the_reviews_gate_with_both_counts_and_a_thi
 async def test_a_retry_of_a_parked_gate_resumes_at_stage_four_and_makes_no_request(
     db, bundled, keyed, live
 ):
-    """Exit criterion measure 5: "resumes at stage 4; outbound request count = 0; no duplicated
-    derived row".
-
-    THIS IS THE MEASUREMENT THE RAW STORE EXISTS FOR. §8 promises "All fetched bytes land in the
-    app's own raw store, so re-parsing is free forever" (`spec:398`), and the only way to cash
-    that promise is a resume that re-enters at the stage it parked in: a walk restarted at stage 1
-    would re-fetch by construction, and every one of this household's eight hosts would be asked
-    again for bytes already on its own disk.
-
-    ZERO IS ASSERTED THREE WAYS because each can be true while another is false. The request log
-    is empty - nothing reached the transport. The factory was never called - no HTTP client was
-    even constructed, which is `_OneFetcher`'s whole point. And `stages_run` begins at the reviews
-    gate rather than at identify - the resume point is the BOARD's stage and not the task's.
-
-    AND THE DERIVE THAT RAN IN BETWEEN DUPLICATED NOTHING. The second walk's stage 4 re-measures
-    against the same `review_store.review` rows the first walk's stage 3 wrote; a derive keyed on
-    anything but `(title_id, source)` would have doubled them and the gate would then pass on
-    arithmetic rather than on reviews.
-    """
+    """Zero requests asserted three ways: an empty log, an
+    uncalled factory, and `stages_run` starting at the gate."""
     clock = _Clock()
     routes = _enrichable()
     for sort in ("likes", "lowest", "highest"):
@@ -3560,8 +2385,7 @@ async def test_a_retry_of_a_parked_gate_resumes_at_stage_four_and_makes_no_reque
     counted = await _derived_counts(db, title_id)
     assert counted["review"] >= 1 and counted["credit"] >= 1, counted
 
-    # The admin retry: §8's "retryable from admin" is a task due now, which is what decision 330's
-    # button will write. The window is what makes it wait, not the state.
+    # The admin retry is a task due now; the window, not the state, is what makes it wait.
     await db.execute(
         "UPDATE acquisition_task SET next_attempt_at = now() - interval '1 minute'"
         " WHERE kind = $1 AND key = $2", pipeline.TASK_KIND, "jellyfin:jf-acq-1",
@@ -3587,24 +2411,8 @@ async def test_a_retry_of_a_parked_gate_resumes_at_stage_four_and_makes_no_reque
 async def test_the_window_closing_asks_the_sources_again_and_counts_what_accrued(
     db, bundled, keyed, live
 ):
-    """§8 stage 4's parenthetical, measured: "retry window 30 days (new releases accrue reviews
-    over weeks)". Decision 421.
-
-    THE TEST ABOVE IS AN OPERATOR MAKING THE TASK DUE WHILE THE WINDOW IS STILL OPEN, and this is
-    the window itself closing - the event §8 wrote the thirty days for. The two used to be one
-    walk: `pipeline._resume_index` answered the board's stage, so the task that came back after
-    thirty days re-entered at `reviews gate`, re-counted the rows stage 3 had written on day one,
-    opened no socket and parked again with a byte-identical reason, every thirty days, for ever.
-    The only stages that can move what the gate measures - 2, which fetches the reviews, and 3,
-    which writes them - were behind the resume point, so the accrual §8 names could not be
-    observed by construction.
-
-    THE WORLD CHANGES BETWEEN THE TWO WALKS AND NOTHING ELSE DOES. Week 0: Trakt holds no comment
-    and the title parks with one source. Then Trakt carries the comment - the accrual - and the
-    window's instant passes, which is BOTH writes of it moving into the past together, because
-    `_record_stop` wrote them as one value and thirty days moves both. The walk must ask the hosts
-    again, write the comment, and clear the gate on it.
-    """
+    """Decision 421: when the window itself closes the walk
+    re-enters at stage 2, so accrued reviews are fetched."""
     clock = _Clock()
     routes = _enrichable()
     accrued = dict(routes)
@@ -3648,13 +2456,7 @@ async def test_the_window_closing_asks_the_sources_again_and_counts_what_accrued
 async def test_a_title_still_thin_when_the_window_closes_parks_for_another_window(
     db, bundled, keyed, live
 ):
-    """Decision 421's other outcome: the sources were asked again and still hold too little.
-
-    The re-ask is a re-crawl and not a promise, so a film nobody has reviewed yet parks again,
-    with its counts and a NEW thirty-day window measured from this walk - the board's
-    `retry_after` and the queue's `next_attempt_at` moving together, as they did on day one. No
-    attempt is spent: decision 336's park with a deadline is a re-ask, never a retry budget.
-    """
+    """Still thin after the re-ask parks for a NEW window, with no attempt spent."""
     clock = _Clock()
     routes = _enrichable()
     for sort in ("likes", "lowest", "highest"):
@@ -3692,18 +2494,8 @@ async def test_a_title_still_thin_when_the_window_closes_parks_for_another_windo
 async def test_a_key_typed_in_during_the_window_is_asked_when_it_closes(
     db, bundled, live, secrets_key
 ):
-    """The one sentence §6.6 renders, held to what it tells the operator it can wait for.
-
-    THE GATE'S REASON USED TO SAY "Nothing is asked of an operator", unconditionally, and this was
-    the title it was most wrong about: acquired before anyone typed a TMDB key, so no plot and no
-    source at all because nothing could be asked - the state the no-TMDB-key test above walks
-    into - and told to wait thirty days for a walk that would ask nothing either. The
-    sentence now promises that the sources are asked again when the window closes, which is
-    decision 421's re-entry at stage 2; this is that promise measured on the population it was
-    false for. The key goes in between the walks, which is the ordinary order for a household
-    that lets the first sweep run before it opens Admin, and the close of the window asks TMDB.
-    [decisions 335, 377, 421; M5.3 review cycle 2, m53-c2-gate-02]
-    """
+    """A key typed in during the window is asked when it
+    closes, as the gate's reason promises (decision 421)."""
     clock = _Clock()
     site = _CannedWeb(_enrichable())
     assert await pipeline.enqueue_item(db, MOVIE) is True
@@ -3739,13 +2531,7 @@ async def test_a_key_typed_in_during_the_window_is_asked_when_it_closes(
 
 
 async def _derived_counts(db, title_id: int) -> dict:
-    """One count per table §8 stage 3 writes into, for the rows belonging to this title.
-
-    `review` is read out of `review_store` because that is the schema it lives in, and `person` is
-    read through `credit` because a person is shared and the count that matters is how many this
-    title points at. Together they are the three places a derive can duplicate without the
-    database refusing it (`test_derive_rebuild.py` argues the same three).
-    """
+    """One count per table stage 3 writes: the three places a derive can duplicate unrefused."""
     return {
         "credit": await db.fetchval("SELECT count(*) FROM credit WHERE title_id = $1", title_id),
         "review": await db.fetchval(
@@ -3760,19 +2546,8 @@ async def _derived_counts(db, title_id: int) -> dict:
     }
 
 
-# --- decision 373: who builds the fetcher, and when -----------------------------------------------
-
-
 async def test_a_drain_whose_tasks_never_reach_stage_two_opens_no_socket(db, data_dir, live):
-    """Decision 373's lazy half, on the walk that is a household's commonest one.
-
-    An item Jellyfin supplies no provider id for parks at stage 1 (decision 323) and never reaches
-    a stage that fetches. Nothing should be constructed for it: not a request, not an
-    `httpx.AsyncClient`, not the `connector_config` read `_default_fetcher` makes to find the
-    Jellyfin host. A drain that built one anyway would be correct and wasteful; what makes it
-    worth a test is the SAME mechanism carrying exit criterion measure 5, where being wasteful
-    means asking eight hosts for bytes already on disk.
-    """
+    """Decision 373: a walk that never reaches stage 2 constructs no client and makes no connector read."""
     built: list[str] = []
 
     async def never(conn):
@@ -3790,27 +2565,8 @@ async def test_a_drain_whose_tasks_never_reach_stage_two_opens_no_socket(db, dat
 async def test_only_the_stage_that_declares_it_fetches_is_given_the_fetcher(
     db, bundled, keyed, live, monkeypatch
 ):
-    """`Stage.fetches` is a hand-written literal, and this is what ties it to reality.
-
-    The same shape as `implemented` and for the same reason: the driver reads the flag BEFORE
-    calling the stage, so nothing about the stage's body can correct a flag that is wrong. The
-    property is that the Fetcher is built AT the first stage that declared it needs one and not
-    before - stage 1 runs on a context whose `fetcher` is still None, and on a walk that never
-    reaches stage 2 nothing is built at all (the two tests either side of this one).
-
-    IT STAYS ON THE CONTEXT AFTERWARDS, AND THAT IS THE DESIGN RATHER THAN A LEAK. Decision 373
-    puts `fetcher` on `StageContext`, which is per WALK: one drain has one Fetcher and one walk
-    has one context, so stages 3 to 10 are handed the same object stage 2 was. Nothing keeps them
-    from calling it except the thing that actually does - `spielplan/derive/` imports no transport
-    at all, which is a static fact about the tree rather than a hope about a context field, and
-    `test_the_stage_machine_and_the_derive_do_not_reach_for_the_fetcher` is where it is asserted.
-    Clearing the field after stage 2 would buy nothing and would cost M5.5 the handle its own
-    billed HTTP call will want.
-
-    Recorded per stage rather than as a single boolean, because "some stage got one" is satisfied
-    by a driver that builds one before the loop and hands it to all ten - which is exactly the
-    implementation this test exists to distinguish itself from.
-    """
+    """`Stage.fetches` is hand-written: the Fetcher is built AT the first stage declaring it, recorded
+    per stage. It stays on the context afterwards by design; `derive/` imports no transport."""
     handed: dict = {}
 
     def watching(stage):
@@ -3820,9 +2576,7 @@ async def test_only_the_stage_that_declares_it_fetches_is_given_the_fetcher(
         return pipeline.Stage(stage.number, stage.name, run, stage.paid, stage.implemented,
                               stage.owner, stage.fetches)
 
-    # Over `live`'s tuple rather than `SHIPPED`: this walk ends at `ready`, and a shipped stage 6
-    # would park it at the spend gate (decision 432). Stage 2 is still the FIRST stage that fetches,
-    # which is the property; stage 6's own fetch is `test_llm_stage.py`'s, through the driver.
+    # Over `live`'s tuple: a shipped stage 6 parks this walk at the spend gate.
     monkeypatch.setattr(pipeline, "STAGES", tuple(watching(s) for s in pipeline.STAGES))
     assert await pipeline.enqueue_item(db, MOVIE) is True
     report = await pipeline.drain(db, limit=1,
@@ -3835,9 +2589,7 @@ async def test_only_the_stage_that_declares_it_fetches_is_given_the_fetcher(
         "rather than at the stage that declared it - and a walk that parks at stage 1 then pays "
         "for an HTTP client it never uses"
     )
-    # TWO SINCE M5.5, and the second arrived exactly the way this message said it would: §8 stage
-    # 6 posts to an LLM provider through the drain's one Fetcher (decisions 373, 432) and set the
-    # same flag on its own row.
+    # Stage 6 posts to its provider through the drain's one Fetcher (decisions 373, 432).
     assert [s.number for s in SHIPPED if s.fetches] == [2, 6], (
         "§8 stages 2 and 6 are the stages that reach the network; another one sets the same "
         "flag on the same line rather than teaching the driver a stage number"
@@ -3845,18 +2597,8 @@ async def test_only_the_stage_that_declares_it_fetches_is_given_the_fetcher(
 
 
 async def test_a_stage_two_handed_no_fetcher_fails_and_names_the_driver(db, bundled, keyed, live):
-    """A stage never builds its own Fetcher, and says so in a sentence an operator can place.
-
-    `run_task` is called directly by `ops/` scripts and by every milestone's tests, so `None` is a
-    reachable value rather than a theoretical one. The refusal is a FAILURE and not a park, which
-    is the one easy call in `stages.py`: decision 336 gives `failed` to "this stage raised and
-    will raise again", and a driver that did not build a fetcher will not build one next drain
-    either - nothing an operator does to this title changes it.
-
-    A stage that quietly made its own would be a second set of per-host token buckets and a second
-    circuit breaker pacing the same hosts at twice their declared rate, which is §8's politeness
-    clause (`spec:404`) broken by the machinery meant to keep it.
-    """
+    """A stage handed no Fetcher fails, never parks or builds
+    its own: a second bucket would double the rate."""
     task = await _leased(db, item=MOVIE)
     report = await pipeline.run_task(db, task)
 
@@ -3875,15 +2617,7 @@ async def test_a_stage_two_handed_no_fetcher_fails_and_names_the_driver(db, bund
 async def test_a_stage_six_handed_no_fetcher_fails_and_names_the_driver(
     db, data_dir, secrets_key, extraction_live
 ):
-    """The test above, for the other stage that fetches: §8 stage 6 posts to an LLM provider
-    through the drain's one Fetcher (decisions 373, 432) and never builds one of its own.
-
-    Reached through the gate, which is the order the driver keeps: a cap is set and Gemini is keyed
-    and assigned, so `refuse_uncapped_spend` finds room - no pack is stored, so there is nothing to
-    reserve, and the stage is the one that would say so - and lets stage 6 run. It then fails with
-    a sentence naming the driver, for stage 2's reason: a failure and not a park, because the
-    repair is a code change, and nothing was asked of any provider because nothing could be.
-    """
+    """Stage 6 likewise, reached through the gate with a cap set; no provider is asked."""
     await registry.save_connector(db, "gemini", api_key="GEMINI-KEY-NOT-A-REAL-ONE-0006")
     await registry.save_connector(db, "llm", extraction_provider="gemini", cap_usd=100)
 
@@ -3900,20 +2634,12 @@ async def test_a_stage_six_handed_no_fetcher_fails_and_names_the_driver(
     assert await db.fetchval("SELECT count(*) FROM llm_call") == 0
 
 
-# --- M5: stages 5, 7 and 8 wired (decisions 461-463, 467) -----------------------------------------
-#
-# The two stages this file stands down, put back with `dna_live` and walked by the driver on a
-# leased task, because each claim lives in the driver's reach: stage 5 files a document under the
-# task's key and the walk's run, stage 7 reads what this walk's run filed, and a stage-6 park
-# re-enters at stage 5 only through `_resume_index`. Stage 8's two branches are
-# `test_flywheel_feed.py`'s, beside the observation that follows them.
+# Stages 5 and 7 put back with `dna_live` and walked by the driver on a leased task.
+# Stage 8's two branches are `test_flywheel_feed.py`'s.
 
 DNA_VERSION = "v1"
 DNA_RUN = 4601
-# A plot and two review sources over `packs.MIN_WORDS`, so the base pack interleaves real reviews,
-# and a Wikipedia article carrying one craft section, so `craft.augment` appends a supplement.
-# WITHOUT THE ARTICLE THE TEST PROVES NOTHING about decision 461's trap: a pack with no supplement
-# is its base, and the base `PackInfo` stored unchanged is then exactly right.
+# A Wikipedia craft section, so the pack has a supplement: without one the base `PackInfo` is right anyway.
 DNA_PLOT = "Two officers of Napoleon's cavalry fight a string of duels across sixteen years."
 DNA_REVIEWS = (("tmdb", " ".join(["duel"] * 60)), ("trakt", " ".join(["sabre"] * 60)))
 DNA_ARTICLE = (
@@ -3921,8 +2647,7 @@ DNA_ARTICLE = (
     "== Music ==\nHoward Blake's score is a spare chamber piece for strings, held back through the "
     "long rides and let loose only at the duels, which it scores as ceremony rather than action.\n"
 )
-# What an M5.5-M5.7 install wrote on the board for every title that reached stage 6 (decision 467's
-# upgraded install), restated rather than imported: `llm/extract.py` no longer says it.
+# What an M5.5-M5.7 install wrote for titles reaching stage 6, restated: `llm/extract.py` no longer says it.
 UNWIRED_NO_PACK = (
     "no DNA pack is stored for this title under vocabulary v1, so there is nothing to extract from "
     "and no provider is called. Section 8 stage 5 builds the pack, and stage 5 is not wired in this "
@@ -3987,16 +2712,8 @@ async def _dna_rows(db) -> tuple:
 async def test_stage_five_stores_the_augmented_pack_under_the_task_key_and_stage_six_reads_it_back(
     db, data_dir, dna_live
 ):
-    """Decision 461: §8 stage 5 is "ported packs.py ... + craft supplement", and what it stores is
-    what stage 6 reads - `llm/extract` sends exactly the text `verify.read_pack` returns.
-
-    THE SUPPLEMENT IS WHAT MAKES THIS A TEST. `craft.augment` returns a `CraftInfo` that
-    `store_pack` cannot take, and `store_pack` refuses a `PackInfo` whose digest and length are
-    not the offered text's own, so the stage recomputes both from the augmented text; with the
-    article below the base info is wrong, and a stage that stored it would raise here. The pack is
-    also a document §6.6's board lists, which it is only when filed under the task's key and the
-    walk's run (decision 345).
-    """
+    """Decision 461: the stored pack is the AUGMENTED text
+    with a recomputed digest, filed under the task key."""
     await _dna_vocabulary(db)
     title_id = await _dna_title(db)
     task = await _leased(db, title_id=title_id)
@@ -4037,10 +2754,7 @@ async def test_stage_five_stores_the_augmented_pack_under_the_task_key_and_stage
 
 
 async def test_stage_five_parks_with_a_deadline_when_no_vocabulary_is_active(db, data_dir, dna_live):
-    """§3.1's bundle-less install, one stage earlier than stage 6 meets it. `dna_pack` is keyed by
-    vocabulary version, so there is nothing to store under; nothing raised and a retry cannot
-    supply one, so it is a park and not a failure (decision 336) - and a park WITH a deadline,
-    because a park with none is `queue.skip`, which closes the task for good (decision 461)."""
+    """No active vocabulary parks stage 5 with a deadline, not a failure (decisions 336, 461)."""
     title_id = await _dna_title(db)
     task = await _leased(db, title_id=title_id)
     await pipeline.write_board(db, title_id, stage=5, status=pipeline.RUNNING)
@@ -4065,10 +2779,7 @@ async def test_stage_five_parks_with_a_deadline_when_no_vocabulary_is_active(db,
 async def test_stage_seven_advances_with_the_rejects_stage_six_filed_and_asks_no_second_verdict(
     db, data_dir, dna_live, monkeypatch
 ):
-    """Decision 462: the verdict is stage 6's (decision 432), so stage 7 records it and reaches
-    none of its own. Its detail is the title's extracted-tier count and THIS run's refusals by rule
-    - not another run's, not a run-less one's - with no call to the validator or the extraction and
-    no row written, and the board keeps it beside stage 6's for the life of the job."""
+    """Decision 462: stage 7 records stage 6's verdict and this run's refusals only, and writes nothing."""
     await _dna_vocabulary(db)
     title_id = await _dna_title(db)
     task = await _leased(db, title_id=title_id)
@@ -4095,9 +2806,7 @@ async def test_stage_seven_advances_with_the_rejects_stage_six_filed_and_asks_no
 
 
 async def test_stage_seven_with_no_run_reads_no_reject(db, data_dir, dna_live):
-    """`run_id = $2` and not `IS NOT DISTINCT FROM`: a walk with no run - every `run_task` an ops
-    script or a test calls directly - reads none, where the null-safe form would report every
-    run-less refusal the title ever had as this walk's (decision 462)."""
+    """`run_id = $2`, not `IS NOT DISTINCT FROM`, so a run-less walk reads no refusal as its own."""
     await _dna_vocabulary(db)
     title_id = await _dna_title(db)
     task = await _leased(db, title_id=title_id)
@@ -4115,11 +2824,7 @@ async def test_stage_seven_with_no_run_reads_no_reject(db, data_dir, dna_live):
 async def test_an_expired_stage_six_park_re_enters_at_stage_five_and_stores_a_pack(
     db, data_dir, dna_live, extraction_live
 ):
-    """Decision 467: a title an M5.5-M5.7 install parked at stage 6 on a missing pack, whose own
-    deadline has passed, re-enters at stage 5 - `reask_from=5` - and the pack it waited for is
-    stored before stage 6 is asked again. The shipped gate still runs before stage 6, so the re-ask
-    costs one local build and nothing billed: with no cap set it parks under decision 348's
-    sentence, having asked no provider."""
+    """Decision 467: an expired stage-6 park re-enters at stage 5 and stores the pack before the gate."""
     await _dna_vocabulary(db)
     title_id = await _dna_title(db)
     assert await pipeline.enqueue_title(db, title_id) is True
@@ -4139,11 +2844,7 @@ async def test_an_expired_stage_six_park_re_enters_at_stage_five_and_stores_a_pa
 async def test_a_stage_six_park_made_due_early_resumes_at_stage_six(
     db, data_dir, dna_live, extraction_live
 ):
-    """The other half of decision 467, which is decision 421's: the same park made due BEFORE its
-    deadline - an operator's retry or a Launch writes the task due now and leaves the board's
-    deadline ahead - resumes at the board's stage and builds nothing, so `test_llm_stage.py` and
-    `ops/m55_exit_criterion.py`, which make parks due early over a pack placed by hand, walk as
-    they did."""
+    """Decision 467: the same park made due early resumes at stage 6 and builds nothing."""
     await _dna_vocabulary(db)
     title_id = await _dna_title(db)
     assert await pipeline.enqueue_title(db, title_id) is True
@@ -4161,12 +2862,7 @@ async def test_a_stage_six_park_made_due_early_resumes_at_stage_six(
 async def test_a_launched_bundle_title_nobody_owns_parks_at_stage_ten_and_resumes_there(
     db, bundled, dna_live
 ):
-    """Plan section 9's risk, which is worth one test: the first walks past stage 6 on a real
-    install will be Launches of bundle titles (decision 443), through stages 9 and 10 that were only
-    ever walked by acquired titles. A placed bundle title nobody owns walks from stage 5 - a real
-    pack, stage 7's record, stage 8's bundle branch (decision 463) - places on its existing
-    coordinate and parks at stage 10 on "no ownership flag" with a deadline. When the deadline
-    passes it is re-asked at stage 10 alone, two column reads, never stage 5 or 6 again."""
+    """A launched bundle title nobody owns parks at stage 10 and is re-asked there alone."""
     title_id = await db.fetchval(
         "SELECT t.id FROM title t WHERE t.origin = 'bundle' AND t.placement IN ('cold_tower', 'warm')"
         "   AND NOT EXISTS (SELECT 1 FROM acquisition_job j WHERE j.title_id = t.id)"

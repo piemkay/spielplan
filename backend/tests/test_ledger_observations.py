@@ -1,26 +1,5 @@
-"""The Ledger's database side. Spec v2.1 §4.1, §4.2, §5.2, §5.3, §6.1, §12, §13, decision 35.
-
-Three questions, and the tests are grouped by which one they answer.
-
-**What may the fit see?** §4.2 makes `verdict` append-only so that §5.2's fourth arm — "rewatch
-re-ratings → new ordinal observation → drift signal for free" — has a history to be. That arm
-exists only while `load_observations` returns *both* the superseded row and the live one, and
-the way to delete it is not to delete code: it is to add `WHERE superseded_by IS NULL` to a
-query, which looks like tidying. §13 pulls in the opposite direction on two other streams: the
-uniform-random 10% "is the *only* data used to evaluate the tier model", so a pair the model
-was fitted on is not held out, and a silent re-ask measures judgement noise rather than
-supplying a second judgement. Four tests below are the guards on those three rules.
-
-**What may write?** Nothing updates a verdict's value; only `undo` deletes a row, and only
-within decision 35's block. A static half of that greps the package, because "no other write
-path does this" is a claim about code that no runtime test can make.
-
-**Does it fit inside §5.3's budgets?** Measured, with the numbers printed, on a library at the
-spec's own scale. `test_a_full_map_refit_of_both_users_over_the_owned_library_lands_inside_the_budget`
-builds 900 titles because §1 says "Ledger refit for 2 users over 839+ titles — seconds".
-
-Skipped without TEST_DATABASE_URL; see tests/conftest.py.
-"""
+"""The Ledger's database side (§4.2, §5.2, §5.3, §13): what the fit may see (both superseded and live
+verdicts, no held-out or re-ask rows), what may write, and §5.3's budgets. Needs TEST_DATABASE_URL."""
 
 from __future__ import annotations
 
@@ -44,9 +23,7 @@ from tests.fixtures import make_bundle as fx
 
 PACKAGE = Path(__file__).resolve().parents[1] / "spielplan"
 
-# A deterministic 64-d basis. No RNG in the fixture's embeddings: §5.3's budgets and §5.2's
-# "same observations, same constants, same fit" are both claims that need the input to be the
-# same on two machines.
+# No RNG: §5.3's budgets and "same observations, same fit" need the same input on every machine.
 def _embedding(title_id: int) -> np.ndarray:
     rng = np.random.default_rng(1000 + title_id)
     vector = rng.normal(size=64)
@@ -85,7 +62,6 @@ async def make_user(db, name, role="member"):
 
 @pytest.fixture
 async def world(db):
-    """One person and eight owned titles: six films, two series."""
     await make_titles(
         db,
         [(i, "movie" if i <= 6 else "series", f"Title {i}") for i in range(1, 9)],
@@ -93,45 +69,29 @@ async def world(db):
     return {"user": await make_user(db, "patrick", "admin")}
 
 
-# --- §5.1's coordinate, for the tests that assert the fit sees the one the app serves ---------
-
 BUNDLE = "test-v1"
 
-# fx.ITEM_SUPPORT, restated as `test_scoring.py` restates it: a fixture change that moves the gate
-# should show up as a diff here rather than as a test going quietly green on another number.
-# Title 8 is the one entry that is not what the FILE says: its row ships `item_n` 900 and is
-# flagged in `cold_mask`, so the support the app can use is the 0 below (cs-01).
+# Restated so a fixture change shows as a diff; title 8
+# is flagged in `cold_mask`, so its usable support is 0.
 SUPPORT = {1: 4218, 2: 900, 3: 120, 4: 30, 5: 6, 6: 240, 7: 55, 8: 0}
 
-# Which titles the §5.3 sweep would have placed. `classify_warm` writes NO `title_placement` row
-# for a title at or above WARM_SUPPORT, so a warm title has only its Backbone row and e_source
-# 'backbone' — which is why this set is the thin ones (item_n 30, 6, 55) plus the one with no row
-# at all. Placing a warm title here would manufacture a blend production never computes.
+# `classify_warm` writes no placement for a warm title, so only thin titles and the rowless one appear.
 COLD_PLACEMENTS = {4: 0.55, 5: 0.69, 7: 0.31, 8: 0.41}
 
 
 def cold_vector(title_id: int) -> np.ndarray:
-    """The same deterministic stand-in for ê(t) `test_scoring.py` uses, and for the same reason:
-    PCG64 is platform-independent, so the blend this fixture produces is the same on every box."""
+    """PCG64 is platform-independent, so the blend is the same on every box."""
     v = np.random.default_rng(20260830 + 1000 + title_id).standard_normal(64)
     return v / np.linalg.norm(v)
 
 
 def placed_vector(title_id: int) -> np.ndarray:
-    """`cold_vector` as it comes back OUT of `title_placement`.
-
-    0008's convention is "64 x float32 LE", so the stored ê is the float32 rounding of whatever the
-    tower produced, and the blend is computed from the rounded value. A test that compared the fit
-    to the float64 original would be asserting numpy's round trip rather than §5.1's arithmetic,
-    and it would have to loosen its tolerance to do it — which is exactly the tolerance that would
-    then hide a real rescaling. So the round trip is made explicit and the equality stays exact.
-    """
+    """Stored as float32, so the blend is computed from the rounded value and the equality stays exact."""
     return bb.unpack_vec(bb.pack_vec(cold_vector(title_id)))
 
 
 @pytest.fixture(scope="session")
 def store(tmp_path_factory) -> ArtifactStore:
-    """The shipped fixture bundle, built once: §4.3's real backbone.npz, not a stand-in."""
     root = tmp_path_factory.mktemp("ledger-bundle")
     fx.make_bundle(root)
     return ArtifactStore.open(root / "artifacts", BUNDLE)
@@ -139,12 +99,7 @@ def store(tmp_path_factory) -> ArtifactStore:
 
 @pytest.fixture
 async def served(db, store):
-    """A library with a real basis and the placements §5.3's sweep would have written.
-
-    The `world` fixture above cannot be reused: it assigns kinds by id, and `make_bundle`'s eight
-    titles have the corpus's own (6 and 7 are the series). A test that compares the fit's
-    coordinate to the serving path's has to agree with the bundle about which title is which.
-    """
+    """`world` assigns kinds by id; the bundle's own kinds differ (6 and 7 are series)."""
     await db.execute(
         "INSERT INTO artifact_bundle (version, manifest, state) VALUES ($1, '{}'::jsonb, 'active')",
         BUNDLE,
@@ -172,7 +127,6 @@ async def served(db, store):
 
 
 async def fitted_row(db, served_world, title_id: int) -> np.ndarray:
-    """What `standard_embeddings` would hand `model.fit` for one title, in this basis."""
     matrix, embedded = await observations.resolve_embeddings(
         observations.standard_embeddings(
             db, served_world["backbone"], bundle_version=BUNDLE
@@ -192,16 +146,8 @@ async def live_verdicts(db, user_id, title_id):
     )
 
 
-# --- §4.2: append-only ---------------------------------------------------------------------
-
-
 async def test_a_re_rating_inserts_a_row_and_stamps_the_old_one_rather_than_mutating_it(db, world):
-    """§4.2: a re-rating supersedes rather than overwrites.
-
-    The assertion that matters is not "there are two rows" — it is that the FIRST row is
-    byte-identical to what it was before the second write. A path that updated `value` in place
-    and inserted an audit row would pass a row count and fail this.
-    """
+    """The FIRST row must be byte-identical afterwards; an audit-row design would pass a row count."""
     user = world["user"]
     first = await observations.record_verdict(db, user_id=user, title_id=1, value=0)
     before = (await live_verdicts(db, user, 1))[0]
@@ -225,13 +171,7 @@ async def test_a_re_rating_inserts_a_row_and_stamps_the_old_one_rather_than_muta
 
 
 async def test_the_fit_sees_both_the_superseded_verdict_and_the_live_one(db, world):
-    """§5.2's fourth arm: "Rewatch re-ratings — new ordinal observation — drift signal for free".
-
-    This is the test that fails the moment anyone adds `WHERE superseded_by IS NULL` to the
-    observation query, which is the single most likely regression in this subsystem. A fit that
-    saw only the live row would have no history and no fourth arm, and nothing else in the
-    suite would notice.
-    """
+    """Fails the moment anyone adds `WHERE superseded_by IS NULL`, which looks like tidying."""
     user = world["user"]
     await observations.record_verdict(db, user_id=user, title_id=1, value=0)
     await observations.record_verdict(db, user_id=user, title_id=1, value=2)
@@ -248,12 +188,7 @@ async def test_the_fit_sees_both_the_superseded_verdict_and_the_live_one(db, wor
 
 
 async def test_the_insert_and_the_supersede_stamp_are_one_transaction(db, world, monkeypatch):
-    """A half-superseded state — two live verdicts, or none — must not be reachable.
-
-    The write is INSERT, then stamp, then the implied `seen`. Failing at the last step is the
-    cheapest way to ask whether the first two share a transaction; if they did not, the new row
-    would survive the failure and the old one would already be stamped.
-    """
+    """Failing at the last step asks whether the insert and the stamp share a transaction."""
     user = world["user"]
     first = await observations.record_verdict(db, user_id=user, title_id=1, value=0)
 
@@ -270,12 +205,7 @@ async def test_the_insert_and_the_supersede_stamp_are_one_transaction(db, world,
 
 
 async def test_a_verdict_implies_seen_and_undo_restores_the_exact_prior_state(db, world):
-    """§6.1: "Verdict implies `seen`." §7.3: `jf_synced_at` is the loop guard.
-
-    So undo must put back the stamp as well as the state. Restoring `seen` with a NULL stamp
-    where the row previously had one would make the next 15-minute sweep push a write nobody
-    asked for — the compensating write would create work instead of undoing it.
-    """
+    """Undo restores `jf_synced_at` too, or the next sweep pushes a write nobody asked for."""
     user = world["user"]
     stamp = datetime(2026, 1, 2, 3, 4, 5, tzinfo=UTC)
     await db.execute(
@@ -301,8 +231,6 @@ async def test_a_verdict_implies_seen_and_undo_restores_the_exact_prior_state(db
 
 
 async def test_not_seen_writes_no_observation_row_and_keeps_the_history(db, world):
-    """§4.2, owner decision 2026-08-29: "no 'forgotten' state — 'seen, don't remember' is marked
-    plain `unseen`; verdict/duel history is append-only and survives the flip"."""
     user = world["user"]
     await observations.record_verdict(db, user_id=user, title_id=1, value=2)
     write = await observations.record_not_seen(db, user_id=user, title_id=1)
@@ -322,7 +250,6 @@ async def test_not_seen_writes_no_observation_row_and_keeps_the_history(db, worl
 
 
 def _functions_containing(pattern: str) -> set[tuple[str, str]]:
-    """(module path, enclosing function) for every line of the package matching `pattern`."""
     hits: set[tuple[str, str]] = set()
     for path in sorted(PACKAGE.rglob("*.py")):
         source = path.read_text(encoding="utf-8")
@@ -343,13 +270,7 @@ def _functions_containing(pattern: str) -> set[tuple[str, str]]:
 
 
 def test_no_write_path_outside_undo_deletes_a_verdict_or_edits_its_value():
-    """§4.2's append-only rule, as a property of the source rather than of one code path.
-
-    A runtime test can only prove that the paths it calls behave. This asserts that no other
-    path exists: across the whole package, `DELETE FROM verdict`, `DELETE FROM duel` and
-    `UPDATE verdict SET value` occur only inside `ledger/observations.py::undo`, which is
-    decision 35's compensating write and is scoped to one block.
-    """
+    """A static read, because "no other path exists" is a claim no runtime test can make."""
     for pattern in ("DELETE FROM verdict", "DELETE FROM duel", "UPDATE verdict SET value"):
         found = _functions_containing(pattern)
         assert found <= {("spielplan/ledger/observations.py", "undo")}, (
@@ -362,15 +283,7 @@ def test_no_write_path_outside_undo_deletes_a_verdict_or_edits_its_value():
 
 
 async def test_undo_unstamps_the_row_it_superseded_and_stops_at_the_block_boundary(db, world):
-    """Decision 35: "an observation journal with compensating writes rather than a lastAction
-    variable", scoped to the current block of 15.
-
-    Two halves. Undoing a re-rating must leave the *earlier* verdict live again — a delete that
-    forgot the stamp would leave a title with a history and no current rating. And an
-    observation from before the block began is refused rather than silently reached: the
-    person's "one more tap" ends at the block boundary, and a compensating write they cannot
-    see is not an undo.
-    """
+    """The earlier verdict must be live again, and an observation from before the block is refused."""
     user = world["user"]
     first = await observations.record_verdict(db, user_id=user, title_id=1, value=0)
     second = await observations.record_verdict(db, user_id=user, title_id=1, value=2)
@@ -396,18 +309,8 @@ async def test_undo_refuses_another_persons_observation(db, world):
         await observations.undo(db, user_id=other, write=write)
 
 
-# --- §13 and §4.1 rule 5: what the fit may not see -------------------------------------------
-
-
 async def test_the_uniform_random_held_out_duels_never_reach_the_fit(db, world):
-    """§13 stream (a): "the 10% uniform-random comparison stream is the *only* data used to
-    evaluate the tier model — adaptively-selected pairs inflate reliability (measured effect;
-    the guard is non-negotiable)."
-
-    A pair the model was fitted on is not held out. The rows stay in the table — the evaluation
-    reads them — but the observation set must not contain them, or the project loses the one
-    unbiased instrument it has and cannot tell that it has.
-    """
+    """§13: the uniform-random stream is the only unbiased evaluation data, so it never reaches the fit."""
     user = world["user"]
     for selection in ("random", "boundary", "exploration"):
         await observations.record_duel(
@@ -431,18 +334,7 @@ async def test_the_uniform_random_held_out_duels_never_reach_the_fit(db, world):
 
 
 async def test_a_silent_re_ask_is_not_a_second_observation(db, world):
-    """§13 stream (b): "a separate silent re-ask stream — ~10% of comparisons/verdicts re-asked
-    after ≥3 days; ~200 re-asks measure the flip rate σ".
-
-    A re-ask is the same judgement posed twice to measure judgement *noise*, not a second
-    judgement about taste, so it is excluded from the fit — while still superseding, because it
-    is the person's latest answer and the card shows it. The two facts are separate: the fit
-    does not filter on `superseded_by` at all.
-
-    The exclusion keys on `is_reask` (NOT NULL, DEFAULT false), never on `reask_of` (nullable,
-    ON DELETE SET NULL). Asserted below by nulling `reask_of` — a rule keyed on it would start
-    counting both rows at that moment, and would fail open rather than loud.
-    """
+    """Keyed on `is_reask` (NOT NULL), not `reask_of` (SET NULL on delete), or it fails open."""
     user = world["user"]
     original = await observations.record_verdict(db, user_id=user, title_id=1, value=2)
     reask = await observations.record_verdict(
@@ -468,13 +360,7 @@ async def test_a_silent_re_ask_is_not_a_second_observation(db, world):
 
 
 async def test_the_fit_is_partitioned_by_kind_and_a_cross_kind_duel_is_refused(db, world):
-    """§4.1 rule 5: "every ranking surface partitions by it (measured: the unpartitioned crowd
-    top-10 is 8/10 TV series)."
-
-    The refusal is at the write, not in the loader's filter: a row nothing ever reads is worse
-    than an error, because the count the person sees and the count the fit uses then differ with
-    no message anywhere.
-    """
+    """Refused at the write: a row nothing reads is worse than an error."""
     user = world["user"]
     await observations.record_verdict(db, user_id=user, title_id=1, value=2)   # movie
     await observations.record_verdict(db, user_id=user, title_id=7, value=0)   # series
@@ -496,13 +382,7 @@ async def test_the_fit_is_partitioned_by_kind_and_a_cross_kind_duel_is_refused(d
 
 
 async def test_a_margin_less_duel_carries_the_hesitant_weight_from_hyperparams(db, world):
-    """§4.2: "margin optional: decisive vs hesitant". §6.1: a "decisive switch ... sets the
-    margin weight (~1.6 vs 1.0)" (decision 520).
-
-    §6.3's drag-drop neighbour duels are margin-*less*, which is not weightless: they are
-    ordinary, non-decisive comparisons. The number comes from `hp`, so a corpus re-tune of
-    `margin_hesitant` reaches them — asserted here by re-loading under a changed constant.
-    """
+    """§6.3's drag-drop neighbour duels are margin-less, which is hesitant, not weightless."""
     user = world["user"]
     await observations.record_duel(
         db, user_id=user, title_a=1, title_b=2, outcome="A", context="tier_insert"
@@ -518,9 +398,7 @@ async def test_a_margin_less_duel_carries_the_hesitant_weight_from_hyperparams(d
     loaded = await observations.load_observations(
         db, user_id=user, kind="movie", hp=DEFAULTS, embeddings=fixture_embeddings
     )
-    # `duel.margin` is `real`, so the decisive weight comes back as float4's nearest neighbour
-    # to 1.6. §4.3 normalises margins by their mean before they weigh anything, so a seventh
-    # decimal place cannot matter — but an exact comparison here would be asserting float4.
+    # `duel.margin` is float4, and §4.3 normalises by the mean, so the comparison is approximate.
     assert loaded.obs.duel_margin.tolist() == pytest.approx(
         [DEFAULTS.margin_hesitant, DEFAULTS.margin_decisive], rel=1e-6
     )
@@ -533,9 +411,7 @@ async def test_a_margin_less_duel_carries_the_hesitant_weight_from_hyperparams(d
 
 
 async def test_a_bundle_less_household_still_produces_an_observation_set(db, world):
-    """§3.1 makes an empty artifact store a legal state, and M2's exit criterion is about two
-    people rating. With no Backbone and no placement, e = 0 and s = μ + r: the fit still ranks
-    what the person has rated."""
+    """With no Backbone e = 0 and s = μ + r: the fit still ranks what was rated."""
     user = world["user"]
     for title_id, value in ((1, 2), (2, 0), (3, 1)):
         await observations.record_verdict(db, user_id=user, title_id=title_id, value=value)
@@ -548,22 +424,8 @@ async def test_a_bundle_less_household_still_produces_an_observation_set(db, wor
     assert fit.s[0] > fit.s[1], "with no bundle the fit stopped ranking what it was told"
 
 
-# --- §5.1: the fit sees the coordinate the app serves ------------------------------------------
-
-
 async def test_a_warm_title_is_fitted_at_its_backbone_row_outright(db, served):
-    """§5.1's FIRST line: `e(t) = E[t] if rated (warm)`. The row itself, not a rounded copy.
-
-    Title 1 carries item_n = 4218, far above WARM_SUPPORT, and the §5.3 sweep deliberately writes
-    no `title_placement` row for a title like it — so there is nothing to blend and the gate-1
-    limit is the row. The assertion is bit equality, because the old behaviour was ALSO "the row"
-    for this title and the regression this guards is the opposite one: a repair that blended every
-    title would move a warm row by (1-g)·(ê-E) and still look right to six decimals.
-
-    Since decision 471 the Ledger reads the coordinate's gate-weighted DIRECTION, as the fold-in
-    does (decision 469): the served coordinate is still the row itself, and the fit reads that row
-    scaled to the length of its gate - pointing exactly where the row points.
-    """
+    """Bit equality: a repair that blended every title would still pass to six decimals."""
     assert SUPPORT[1] >= bb.WARM_SUPPORT and 1 not in COLD_PLACEMENTS
     fit_e = await fitted_row(db, served, 1)
     served_e = (await serve.coordinates(db, served["backbone"], bundle_version=BUNDLE))[1]
@@ -576,26 +438,7 @@ async def test_a_warm_title_is_fitted_at_its_backbone_row_outright(db, served):
 
 
 async def test_a_thin_title_is_fitted_at_the_blend_rather_than_at_its_raw_backbone_row(db, served):
-    """dd02, and §5.1's MIDDLE line. The one the Ledger never applied.
-
-    `standard_embeddings` composed `backbone_embeddings` in front of `placement_embeddings` through
-    `chain`, and `chain` hands the title to the first source that has a row for it while
-    `Backbone.embedding` returns `E[row]` for ANY covered title regardless of `item_n`. So the
-    placement was consulted only for titles with no Backbone row at all, and every title below
-    WARM_SUPPORT — 3,860 of the real bundle's 14,397 rows carry one — was fitted at its raw E while
-    `serve.coordinates` served it at the blend. §6.1's held-out instrument was measuring a v the
-    serving path does not use.
-
-    Title 4 is the case the spec's arithmetic makes round: item_n = 30, gate = 0.75, so the fitted
-    coordinate is exactly three parts E to one part ê. Measured on this fixture, the raw row and
-    the blend are ||Δe|| = 0.72 apart at item_n 30, 1.94 at 6 and 0.40 at 55 — against row norms
-    of 2.2 to 2.9, so a third of the coordinate was in the wrong place.
-
-    Since decision 471 the fit reads that blend's direction (weight 1: the Cold Tower contributed
-    to it), so the assertion is that the fitted row is the direction of the BLEND and not of the
-    raw row. The published gaps are between the served coordinate and the raw row, which is where
-    dd02 lived and what the three places below quote.
-    """
+    """`chain` handed thin titles their raw row; the fit must read the direction of the BLEND."""
     assert SUPPORT[4] == 30
     raw = served["backbone"].embedding(4).astype(np.float64)
     e_hat = placed_vector(4)
@@ -620,25 +463,12 @@ async def test_a_thin_title_is_fitted_at_the_blend_rather_than_at_its_raw_backbo
         "the gap between the blend and the raw row must shrink as the crowd support grows"
     )
     assert 0.5 < deltas[4] < 1.0 and 1.5 < deltas[5] < 2.5
-    # And the figures themselves, to two decimals, because three places publish them as a
-    # measurement of THIS fixture: this docstring, `observations.standard_embeddings` and the
-    # coverage row. A fixture change has to arrive as a diff here rather than as three sentences
-    # quietly describing a bundle that no longer exists - the same rule `SUPPORT` above states.
-    # `observations.py` carried 1.81 / 0.72 / 0.35, copied from an ad-hoc probe rather than from
-    # this fixture, for the life of the milestone. [M4.13 cycle 2, M413-C2-DIM5-04]
+    # These figures are published as this fixture's measurement, so a fixture change must show here.
     assert [round(deltas[t], 2) for t in (5, 4, 7)] == [1.94, 0.72, 0.40], deltas
 
 
 async def test_a_title_with_no_backbone_row_is_fitted_at_its_placement_alone(db, served):
-    """§5.1's THIRD line, which is the gate-0 limit of the first two rather than a third rule.
-
-    Title 8 has no row in the basis (§8 stage 10: a title the crowd has not placed) — since M4.13
-    the fixture expresses that the way the corpus does, as a row `cold_mask` flags rather than an
-    absent one — so n_t = 0, the gate is exactly 0.0 and both terms collapse onto the Cold Tower's.
-    Exactly, not approximately: that is what makes "no row" and "pure Cold Tower" one statement.
-    Since decision 471 the fit reads ê's unit direction, weight 1, for the reason §5.1's third
-    line takes ê outright.
-    """
+    """n_t = 0 gives a gate of exactly 0.0, so "no row" and "pure Cold Tower" are one statement."""
     assert SUPPORT[8] == 0 and served["backbone"].row(8) is None
     fit_e = await fitted_row(db, served, 8)
     e_hat = placed_vector(8)
@@ -647,18 +477,7 @@ async def test_a_title_with_no_backbone_row_is_fitted_at_its_placement_alone(db,
 
 
 async def test_the_fitted_coordinate_equals_the_served_coordinate_for_every_title(db, served):
-    """The whole of dd02 in one assertion, over every title in the library rather than a chosen one.
-
-    `standard_embeddings` is the fit's input and `serve.coordinates` is what the §6.0 card, the
-    shelves and the fold-in read; §5.2 says the MAP fit takes §5.1's coordinates, so these are the
-    same function of the same two inputs or the Ledger is fitting a basis nobody is served at. The
-    loop is over `title`, so a title the bundle does not cover is included and the two paths have
-    to agree about it being absent too.
-
-    What both paths read of that coordinate is its gate-weighted direction since decisions 469
-    and 471 - `fit_user` through `backbone.directions` and the Ledger through
-    `backbone.direction` - so the fitted row is the served coordinate's direction, bit for bit.
-    """
+    """Every title, including uncovered ones: the fit and the served coordinate are the same function."""
     backbone = served["backbone"]
     coords = await serve.coordinates(db, backbone, bundle_version=BUNDLE)
     ids = [int(r["id"]) for r in await db.fetch("SELECT id FROM title ORDER BY id")]
@@ -675,8 +494,7 @@ async def test_the_fitted_coordinate_equals_the_served_coordinate_for_every_titl
         else:
             assert not embedded[i], f"title {title_id} is fitted at a coordinate nobody serves"
 
-    # Anti-vacuity: the two paths would also "agree" if every title took its raw Backbone row, so
-    # at least one title has to be somewhere the precedence chain could not have put it.
+    # Anti-vacuity: at least one title must be somewhere the precedence chain could not put it.
     blended = [t for t, c in coords.items() if c.e_source == "blended"]
     assert len(blended) >= 3, f"the fixture has no blended titles to disagree about: {blended}"
     for title_id in blended:
@@ -684,10 +502,7 @@ async def test_the_fitted_coordinate_equals_the_served_coordinate_for_every_titl
         assert not np.allclose(matrix[ids.index(title_id)], raw / np.linalg.norm(raw))
     assert {c.e_source for c in coords.values()} == {"backbone", "blended", "cold_tower"}
 
-    # The three single-source forms are KEPT — §3.1's bundle-less install has no basis to blend and
-    # the seam's own contract (a callable returning a matrix and a mask) is specified one source at
-    # a time — and they still work. What they are no longer is the STANDARD source, and the two
-    # assertions below are why: `chain` hands a thin title its raw Backbone row, which is dd02.
+    # The single-source forms stay for the bundle-less install; they are just not the standard source.
     chained, _ = await observations.resolve_embeddings(
         observations.chain(
             observations.backbone_embeddings(backbone),
@@ -710,18 +525,8 @@ async def test_the_fitted_coordinate_equals_the_served_coordinate_for_every_titl
     assert np.array_equal(alone[1], placed_vector(8))
 
 
-# --- decision 11: a tier level outlives the tier set it was written in -------------------------
-
-
 async def _set_tier_set(db, user_id: int, labels: Sequence[str], *, kind: str = "movie") -> None:
-    """What `rank.tiers.save_tier_set` leaves behind, written directly.
-
-    Directly because this file is about what the FIT reads: the production path, its refit queue
-    and its "one user never touches another's" half are asserted in `test_rank_integration.py`,
-    and reaching across to `rank` from here would make a Ledger test fail for a settings reason.
-    The boundaries are `initial_cutpoints(K)`, which is the shape `save_tier_set` itself falls back
-    to with nothing fitted, and they satisfy 0022's length and ascending CHECKs.
-    """
+    """Written directly: this file is about what the FIT reads, not about `rank`'s settings path."""
     boundaries = [float(b) for b in model.initial_cutpoints(len(labels))]
     await db.execute(
         """
@@ -735,22 +540,8 @@ async def _set_tier_set(db, user_id: int, labels: Sequence[str], *, kind: str = 
 
 
 def test_rescale_level_maps_by_cumulative_prior_mass_and_clamps_only_last():
-    """dd06's helper, stated as arithmetic. §5.2 arm 3, §4.2's `tier_edit`, decision 11.
-
-    Four properties, and each is a way the three clamps this replaces were wrong:
-
-      * MASS, not index. Growing 7 -> 12, level 6 of 7 is the top 8% of the population and the
-        band holding that mass at K = 12 is level 11 — not 6, which is where a raw index and a
-        clamp both leave it, mid-board, with the top five tiers empty.
-      * MONOTONE. A map that crossed two levels over would reorder a person's own drops.
-      * IDENTITY at k_from == k_to, for every K from 2 to 20: a band's midpoint lies strictly
-        inside that band, so the short-circuit in the helper is an optimisation of an answer the
-        arithmetic already gives, not a special case that could disagree with it.
-      * THE CLAMP IS LAST. `tier_edit.tier` is a bare smallint with no CHECK against the set, so
-        a level the column can hold but no set can index still has to land in range — after the
-        mapping, not instead of it. 7 -> 12 of level 6 is the one case where the two differ
-        visibly: clamping first gives 6, mapping gives 11.
-    """
+    """MASS, not index; monotone; identity at equal K; and the clamp is LAST (7 -> 12 of level 6 is 11,
+    not 6). `tier_edit.tier` has no CHECK against the set."""
     rescale = observations.rescale_level
 
     assert [rescale(level, k_from=7, k_to=12) for level in range(7)] == [0, 0, 2, 4, 7, 10, 11]
@@ -770,8 +561,7 @@ def test_rescale_level_maps_by_cumulative_prior_mass_and_clamps_only_last():
     for level in (-40, -1, 7, 12, 400):
         assert 0 <= rescale(level, k_from=7, k_to=4) <= 3
         assert 0 <= rescale(level, k_from=None, k_to=7) <= 6
-    # An unknown board (0022 leaves `n_levels` nullable on purpose) is read as written, which is
-    # what every reader did before — clamp included, mapping not.
+    # An unknown board (`n_levels` NULL) is read as written.
     assert rescale(5, k_from=None, k_to=7) == 5
     assert rescale(5, k_from=None, k_to=4) == 3
     with pytest.raises(ValueError, match="at least one level"):
@@ -779,14 +569,7 @@ def test_rescale_level_maps_by_cumulative_prior_mass_and_clamps_only_last():
 
 
 async def test_a_tier_edit_records_the_tier_set_size_it_was_written_under(db, world):
-    """dd06. Decision 11 keeps these rows across a change in K, and the row is the only place
-    the K can be recorded: `ledger_cutpoints.tier_set` is overwritten in place, so there is no
-    history to join against after the fact.
-
-    §4.2 is the other half — the row is append-only, so the edit written under 7 still says 7
-    after the set grows to 12. A writer that "fixed up" old rows on save would destroy the one
-    fact that makes them readable.
-    """
+    """`ledger_cutpoints.tier_set` is overwritten in place, so the row is the only record of its K."""
     user = world["user"]
     first = await observations.record_tier_edit(db, user_id=user, title_id=1, tier=6)
     assert await db.fetchval("SELECT n_levels FROM tier_edit WHERE id = $1", first.row_id) == 7
@@ -802,15 +585,7 @@ async def test_a_tier_edit_records_the_tier_set_size_it_was_written_under(db, wo
 
 
 async def test_an_edit_at_six_of_seven_is_read_at_eleven_of_twelve(db, world):
-    """dd06, end to end through the loader. Simulated with 200 edits, the raw index left every S
-    edit rendered at tier 6 of 12 and emptied the top five model tiers; 36 of 60 later drops came
-    back in tension. Here: one drop into the top tier of 7, then a 12-label set, and the fit has
-    to see the top tier of 12.
-
-    The verdict beside it is what makes the fit's OWN reading checkable — `model.fit` over a tier
-    arm alone has no second arm to anchor `s`, and the assertion that matters is the level the
-    loader handed it, which is read off `obs.ord_level`.
-    """
+    """The raw index left every S edit at tier 6 of 12; the fit must see the top tier."""
     user = world["user"]
     await observations.record_verdict(db, user_id=user, title_id=1, value=2)
     await observations.record_tier_edit(db, user_id=user, title_id=1, tier=6)
@@ -826,19 +601,13 @@ async def test_an_edit_at_six_of_seven_is_read_at_eleven_of_twelve(db, world):
     assert tier_levels == [11], "the edit is still being read as level 6 of a 12-level set"
     assert loaded.obs.n_levels == 12
 
-    # And the stored row is untouched: §4.2 is append-only, so the rescale is a READ.
+    # §4.2 is append-only, so the rescale is a READ.
     stored = await db.fetchrow("SELECT tier, n_levels FROM tier_edit WHERE user_id = $1", user)
     assert dict(stored) == {"tier": 6, "n_levels": 7}
 
 
 async def test_shrinking_to_four_labels_keeps_an_s_edit_above_a_b_edit(db, world):
-    """The shrink direction, and the property the old clamp destroyed.
-
-    7 -> 4 clamped B..S into the top tier — 280 of 320 titles in the simulation — so a person who
-    had sorted their library lost the distinction between "fine" and "best" in one settings save.
-    Mapped by mass, S (the top 8%) lands in the top quarter and B (the 25-50% band) in the second
-    from the bottom, and the ORDER survives, which is the whole of what a tier list is.
-    """
+    """Mapped by mass the ORDER survives a shrink, where the clamp merged B..S."""
     user = world["user"]
     await observations.record_verdict(db, user_id=user, title_id=3, value=1)
     await observations.record_tier_edit(db, user_id=user, title_id=1, tier=6)   # S of F..S
@@ -857,9 +626,6 @@ async def test_shrinking_to_four_labels_keeps_an_s_edit_above_a_b_edit(db, world
     assert by_title[1] > by_title[2], "the clamp collapsed S and B into one tier"
 
 
-# --- the nightly refit ------------------------------------------------------------------------
-
-
 async def _rate(db, user, *, verdicts=(), duels=(), tier_edits=()):
     for title_id, value in verdicts:
         await observations.record_verdict(db, user_id=user, title_id=title_id, value=value)
@@ -873,9 +639,7 @@ async def _rate(db, user, *, verdicts=(), duels=(), tier_edits=()):
 
 
 async def test_the_nightly_refit_writes_the_board_the_cutpoints_and_the_cache(db, world):
-    """§5.3's "Ledger full MAP refit + cutpoints + σ", and §5.2's "the cutpoints ARE the
-    displayed tier boundaries" — so `ledger_cutpoints.boundaries` is the tier arm's fitted
-    vector and not a percentile of anything."""
+    """§5.2: the cutpoints ARE the displayed boundaries, not a percentile."""
     user = world["user"]
     await _rate(
         db, user,
@@ -913,17 +677,14 @@ async def test_the_nightly_refit_writes_the_board_the_cutpoints_and_the_cache(db
     cache = await refit.load_cache(db, user_id=user, kind="movie", hp=DEFAULTS, lock=False)
     assert cache is not None and cache.n_observed == 6
     assert cache.title_ids.tolist() == sorted(cache.title_ids.tolist())
-    # §4.3: "every constant comes from ledger_hyperparams.json". A cache built under other
-    # constants is wrong, not stale, so the digest is a precondition and not a hint.
+    # A cache built under other constants is wrong, not stale.
     assert await refit.load_cache(
         db, user_id=user, kind="movie", hp=Hyperparams(lambda_ridge=30.0), lock=False
     ) is None
 
 
 async def test_every_owned_title_gets_a_coordinate_even_unrated(db, world):
-    """§12's M2 exit criterion: "every owned title has a coordinate". §5.2 gives an unobserved
-    title one at zero extra parameters — it has no r, so s = μ + ⟨v, e⟩ — and its σ is the σ it
-    would have if it had never been rated, which is exactly what it has."""
+    """An unobserved title has no r: s = μ + ⟨v, e⟩, with the σ it would have if never rated."""
     user = world["user"]
     await _rate(db, user, verdicts=[(1, 2), (2, 0), (3, 1)])
     await refit.refit_user(
@@ -943,13 +704,7 @@ async def test_every_owned_title_gets_a_coordinate_even_unrated(db, world):
 
 
 async def test_the_displayed_weight_is_the_cdf_of_the_persons_own_s_per_kind(db, world):
-    """§5.2: "the 0..1 weight is the empirical CDF of the user's own fitted `s` values, computed
-    per kind (their best-ranked title → ~1.0, worst → ~0.0)".
-
-    Per kind is the half that is easy to lose: a person whose films are all liked and whose two
-    series are both disliked must still get a best-series near 1.0, because §4.1 rule 5 says the
-    two surfaces are separate rankings and not one interleaved one.
-    """
+    """Per kind: §4.1 rule 5 makes films and series separate rankings."""
     user = world["user"]
     await _rate(db, user, verdicts=[(1, 2), (2, 2), (3, 2), (4, 1), (5, 0), (6, 0)])
     await _rate(db, user, verdicts=[(7, 0), (8, 0)], duels=[(7, 8, "A")])
@@ -969,13 +724,7 @@ async def test_the_displayed_weight_is_the_cdf_of_the_persons_own_s_per_kind(db,
 
 
 async def test_freshness_inflates_sigma_eff_and_never_the_fitted_sigma(db, world):
-    """§5.2: "after 12 months untouched, a title's σ inflates Glicko-style at rate c per √month,
-    capped at the prior σ" — "ambient recalibration rather than chores".
-
-    Inflation is a display and queue quantity. Letting it into the likelihood would be
-    re-weighting history by the calendar, which the spec's freshness sentence deliberately does
-    not do, so `ledger_state.sigma` must be identical at both clock readings.
-    """
+    """Inflation is for display and queueing; `ledger_state.sigma` must not move with the calendar."""
     user = world["user"]
     await _rate(db, user, verdicts=[(1, 2), (2, 0), (3, 1), (4, 1)])
     now = datetime.now(UTC)
@@ -1003,14 +752,7 @@ async def test_freshness_inflates_sigma_eff_and_never_the_fitted_sigma(db, world
 
 
 async def test_a_non_finite_fit_never_reaches_a_shelf(db, world, monkeypatch):
-    """Postgres accepts NaN in a `double precision` column and sorts it ABOVE every real number,
-    and `ledger_state_rank` is `(user_id, kind, s DESC)`.
-
-    So one poisoned title is not a missing row: it is the top of every §6.0 shelf until somebody
-    notices. Both halves are asserted — a single bad title is dropped and the rest of the board
-    still lands, and a fit whose dense block has gone non-finite is refused outright so the
-    previous board survives instead of being replaced by nothing.
-    """
+    """Postgres sorts NaN ABOVE every real, so one poisoned title would top every shelf."""
     user = world["user"]
     await _rate(db, user, verdicts=[(1, 2), (2, 0), (3, 1), (4, 1)])
     await refit.refit_user(
@@ -1049,7 +791,7 @@ async def test_a_non_finite_fit_never_reaches_a_shelf(db, world, monkeypatch):
 
 
 async def test_refit_all_covers_every_active_person_and_both_kinds(db, world):
-    """§5.3's nightly row is over the household, and §4.1 rule 5 makes that two fits per person."""
+    """§4.1 rule 5 makes the nightly row two fits per person."""
     user = world["user"]
     other = await make_user(db, "jenny")
     await _rate(db, user, verdicts=[(1, 2), (2, 0), (3, 1)])
@@ -1065,18 +807,8 @@ async def test_refit_all_covers_every_active_person_and_both_kinds(db, world):
     ) == 0
 
 
-# --- the <50 ms path ---------------------------------------------------------------------------
-
-
 async def test_the_incremental_block_solve_is_a_stationary_point_of_the_same_objective(db, world):
-    """The invariant the whole design rests on: incremental and nightly are one model at two
-    resolutions, not two models.
-
-    So after an incremental update the residual gradient of the FULL objective — assembled by
-    `model` itself over every observation, at the cached (μ, v, γ, cuts, ψ) — must be zero at
-    the titles that moved. A sign error in the local assembly, or a margin normalised over the
-    local subset instead of the fit set, breaks this and nothing else in the suite would.
-    """
+    """The residual gradient of the FULL objective must be zero at the moved titles."""
     user = world["user"]
     await _rate(
         db, user,
@@ -1088,8 +820,7 @@ async def test_the_incremental_block_solve_is_a_stationary_point_of_the_same_obj
         db, user_id=user, kind="movie", hp=DEFAULTS, embeddings=fixture_embeddings
     )
 
-    # A duel is the hard case: two coupled coordinates, and a margin whose weight depends on the
-    # mean over the whole fit set rather than over the two rows the block sees.
+    # A duel's margin weight depends on the mean over the whole fit set.
     await observations.record_duel(
         db, user_id=user, title_a=2, title_b=5, outcome="B",
         context="tier_queue", selection="boundary", decisive=True, hp=DEFAULTS,
@@ -1122,10 +853,7 @@ async def test_the_incremental_block_solve_is_a_stationary_point_of_the_same_obj
 
 
 async def test_the_incremental_path_serves_an_undo_with_the_same_call(db, world):
-    """Decision 35's compensating write needs the Ledger put back too. `update_incrementally`
-    re-reads the observations rather than being told what changed, so retracting a row and
-    adding one are the same call — which is why there is no second, differently-wrong
-    `revert_observation`."""
+    """It re-reads the observations, so a retraction and a write are the same call."""
     user = world["user"]
     await _rate(db, user, verdicts=[(1, 1), (2, 1), (3, 1), (4, 1)], duels=[(1, 2, "A")])
     await refit.refit_user(
@@ -1149,26 +877,10 @@ async def test_the_incremental_path_serves_an_undo_with_the_same_call(db, world)
 
 
 async def test_an_undo_leaves_the_freshness_clock_where_the_observation_put_it(db, world):
-    """§5.2's freshness clock is a property of the observation, and an undo is not an observation.
-
-    The sibling above is why this arm exists at all: `update_incrementally` serves a retraction with
-    the same call as a write, "which is why there is no second, differently-wrong
-    `revert_observation`". The cost of that reuse was here. `touched` came from the rows, but the
-    stamps were `[now if o else None ...]` and the months passed to `inflate_sigma` were
-    `np.zeros(...)` - so undoing a re-rating restamped the verdict that REMAINS as if it had just
-    been made. Reproduced: `last_observed_at 2025-07-30` with `sigma_eff 1.4276` became
-    `2026-09-03` with `sigma_eff == sigma`. Retracting something switched off §5.2's "ambient
-    recalibration rather than chores" for a title nobody had touched in over a year, and the one
-    surface that would have shown it - §6.3's queue, which orders by the inflated sigma - simply
-    stopped offering the title.
-
-    `DEFAULTS` rather than the fixture bundle's constants, because the bundle marks
-    `sigma_inflation` provisional and `hyperparams.load` therefore sets the rate to 0.0 on purpose:
-    a test of the clock must run where the clock has an effect.
-    """
+    """The rate is 0.0 under the fixture's provisional constants, so `DEFAULTS` is used here."""
     user = world["user"]
     await _rate(db, user, verdicts=[(1, 2), (2, 0), (3, 1), (4, 1)])
-    # Thirteen months back, i.e. past §5.2's twelve-month grace period, for the whole history.
+    # Past §5.2's twelve-month grace period, for the whole history.
     long_ago = datetime.now(UTC) - timedelta(days=400)
     await db.execute("UPDATE verdict SET created_at = $2 WHERE user_id = $1", user, long_ago)
     now = datetime.now(UTC)
@@ -1202,7 +914,7 @@ async def test_an_undo_leaves_the_freshness_clock_where_the_observation_put_it(d
     )
     assert rerated["sigma_eff"] == pytest.approx(rerated["sigma"]), "inflated inside the grace"
 
-    # …and retracting it leaves the thirteen-month-old verdict, which is what the clock must say.
+    # ...and retracting it leaves the thirteen-month-old verdict, which is what the clock must say.
     await observations.undo(db, user_id=user, write=write)
     await refit.update_incrementally(
         db, user_id=user, kind="movie", title_ids=[1], hp=DEFAULTS,
@@ -1223,18 +935,7 @@ async def test_an_undo_leaves_the_freshness_clock_where_the_observation_put_it(d
 
 
 async def test_a_cache_from_other_hyperparameters_is_refitted_rather_than_trusted(db, world):
-    """§4.3: "every constant comes from `ledger_hyperparams.json`". A cache built under other
-    constants does not produce a stale `s`, it produces a wrong one — so a digest mismatch is a
-    miss, like having no cache at all, and the delta says plainly that it was not the <50 ms path.
-
-    What a miss costs changed in M4.10 (finding 9): it used to run the whole MAP fit here, inside
-    the request that made the observation — §5.3 budgets that at "seconds" and this row at
-    "<50 ms", measured at 6.96 s over 2000 titles. The miss now stamps
-    `ledger_cutpoints.refit_requested_at` for the 60 s sweep and returns with no rows, because
-    the observation the caller made is already durable and rebuilding the cache *is* the fit.
-    `ledger_fit` is left untouched rather than rewritten under the new digest: a cache nobody
-    fitted would be a wrong one wearing the right name.
-    """
+    """A digest mismatch is a miss: it stamps a refit request and returns no rows, never fitting inline."""
     user = world["user"]
     await _rate(db, user, verdicts=[(1, 2), (2, 0), (3, 1)])
     retuned = Hyperparams(lambda_ridge=30.0)
@@ -1253,18 +954,13 @@ async def test_a_cache_from_other_hyperparameters_is_refitted_rather_than_truste
 
 
 async def test_a_fit_in_another_coordinate_geometry_is_refused_and_owed_to_the_tick(db, world):
-    """0031, decision 471. The same bundle read two ways is two bases: a cached v fitted to raw
-    coordinates, applied by a tap to the directions `standard_embeddings` now returns, solves a
-    residual against a vector scaled for rows a hundred times longer. So `load_cache` refuses it,
-    as it refuses another bundle's, and `refreshes_owed` hands the board to the 60 s tick whatever
-    its growth - an upgraded install's boards are refitted within the minute, not overnight.
-    """
+    """Another coordinate geometry is another basis, so `load_cache` refuses it and the tick refits."""
     user = world["user"]
     await _rate(db, user, verdicts=[(1, 2), (2, 0), (3, 1)])
     await refit.refit_user(
         db, user_id=user, kind="movie", hp=DEFAULTS, embeddings=fixture_embeddings
     )
-    # Decision 508 widens the Ledger's stamp to the scale its tiers are read on as well.
+    # Decision 508 widens the stamp to the scale its tiers are read on.
     assert await db.fetchval(
         "SELECT geometry FROM ledger_fit WHERE user_id = $1 AND kind = 'movie'", user
     ) == refit.LEDGER_GEOMETRY
@@ -1287,16 +983,8 @@ async def test_a_fit_in_another_coordinate_geometry_is_refused_and_owed_to_the_t
 
 
 async def test_one_verdict_on_an_off_scale_coordinate_does_not_decide_the_board(db, served):
-    """Decision 471, and the board the first household saw: Zootopia at #1 of an S tier with
-    s 21.8 and σ 36 on a single "liked", above The Intouchables, which had won its duels.
-
-    The Ledger's s = μ + ⟨v, e⟩ + r read the raw coordinate, and a Cold Tower placement sits at
-    ||ê|| ~ 30-80 against Backbone rows of 0.01 to 127, so an unobserved direction of v was
-    multiplied by the norm - into σ through the (μ, v) posterior and into s through v. Title 9
-    here is that placement (||ê|| = 78, liked once); title 1 is liked and wins every duel it is in.
-    Read raw, title 9's prior σ is an order above the board's; read as a direction, every title's
-    σ is on one scale and the title the person put first by their own answers is first.
-    """
+    """A Cold Tower placement sits at ||ê|| ~30-80, so a raw
+    read inflated s and σ; directions share one scale."""
     await db.execute(
         "INSERT INTO title (id, kind, name, is_owned) VALUES (9, 'movie', 'Off Scale', true)"
     )
@@ -1350,15 +1038,13 @@ async def test_one_verdict_on_an_off_scale_coordinate_does_not_decide_the_board(
         bundle_version=BUNDLE,
     )
     read = await board()
-    # On one scale: tau (decision 509's 2.0) plus a bounded (mu, v) part, against 44 read raw.
+    # On one scale: tau (2.0) plus a bounded (mu, v) part, against 44 read raw.
     assert max(sp for _s, sp in read.values()) < 1.5 * DEFAULTS.b_i_tau, read
     assert read[9][1] < 1.5 * min(sp for _s, sp in read.values()), read
     assert max(read, key=lambda t: read[t][0]) == 1, (
         f"the title that won every duel is not first: {sorted(read, key=lambda t: -read[t][0])}"
     )
 
-
-# --- §5.3's budgets, measured --------------------------------------------------------------------
 
 BUDGET_TITLES = 900          # §1: "Ledger refit for 2 users over 839+ titles — seconds"
 BUDGET_VERDICTS = 100        # §5.2: "Aim for 50-100 in the first sitting or two"
@@ -1367,8 +1053,7 @@ BUDGET_TIER_EDITS = 20
 
 
 async def _rate_at_scale(db, user, pool, rng, taste, *, n_verdicts, n_duels, n_edits):
-    """One person's sitting over one kind, straight through SQL — the write path has its own
-    tests, and a per-row round trip would put the fixture's cost inside the measurement."""
+    """Straight through SQL, so the fixture's cost stays outside the measurement."""
     truth = {int(t): float(_embedding(int(t)) @ taste) for t in pool}
     rated = rng.choice(pool, size=min(n_verdicts, len(pool)), replace=False)
     await db.execute(
@@ -1378,9 +1063,7 @@ async def _rate_at_scale(db, user, pool, rng, taste, *, n_verdicts, n_duels, n_e
         """,
         user,
         [int(t) for t in rated],
-        # §5.2's measured 5x lever: "spreading verdicts across all three classes matters ~5x
-        # more than anything the corpus side can tune". A fixture that is 60% "liked" would be
-        # measuring a labeller the spec tells the UI to warn about.
+        # Spread across three classes: a 60% "liked" fixture measures a labeller the spec warns about.
         [int(np.searchsorted([-0.002, 0.002], truth[int(t)])) for t in rated],
     )
     pairs = rng.choice(rated, size=(n_duels, 2))
@@ -1423,12 +1106,7 @@ async def _big_world(
     n_duels=BUDGET_DUELS,
     n_edits=BUDGET_TIER_EDITS,
 ):
-    """A library at the spec's scale, rated by two people across both kinds.
-
-    Deterministic — a budget that depends on an RNG seed is a budget that is met on some runs —
-    and both kinds are rated, because §4.1 rule 5 makes the nightly job two fits per person and
-    a household where only the films are rated would measure half of it.
-    """
+    """Deterministic, and both kinds, since the nightly job is two fits per person."""
     specs = [(i, "movie" if i % 3 else "series", f"Title {i}") for i in range(1, n_titles + 1)]
     await make_titles(db, specs)
     by_kind = {
@@ -1451,14 +1129,7 @@ async def _big_world(
 
 
 async def test_a_full_map_refit_of_both_users_over_the_owned_library_lands_inside_the_budget(db):
-    """§5.3: "Ledger full MAP refit + cutpoints + σ — nightly — seconds", and §1's measured
-    expectation: "Ledger refit for 2 users over 839+ titles — seconds (LBFGS, 64-d)".
-
-    Two people × two kinds × 900 owned titles, each person with 100 verdicts, ~300 duels and 20
-    tier edits — the shape §5.2 asks a first sitting to produce. The budget asserted is 60 s for
-    the whole household, which is a generous reading of "seconds"; the measured number is
-    printed so a regression shows up as a number moving rather than as a test going red one day.
-    """
+    """60 s for the household is a generous "seconds"; the measured number is printed."""
     users = await _big_world(db)
     started = time.perf_counter()
     reports = await refit.refit_all(db, DEFAULTS, embeddings=fixture_embeddings)
@@ -1484,17 +1155,7 @@ async def test_a_full_map_refit_of_both_users_over_the_owned_library_lands_insid
 
 
 async def test_an_incremental_update_lands_inside_the_fifty_millisecond_budget(db):
-    """§5.3: "Ledger incremental update — every observation — <50 ms".
-
-    Measured end to end against a real Postgres — the cache read, the block solve, and both
-    writes — because that is what happens on a tap, and a budget measured on the numpy alone
-    would be measuring the half that was never in doubt. Fifty observations, median reported,
-    on the same 900-title library the nightly test uses.
-
-    The paired assertion is the property the budget is a proxy for: an incremental update
-    touches one or two titles. A path that re-solved the library could still come in under
-    50 ms on a fast machine at this scale and would fail here on any machine.
-    """
+    """Measured end to end on Postgres; an incremental update must touch one or two titles."""
     users = await _big_world(db, users=("patrick",))
     user = users[0]
     await refit.refit_user(
@@ -1537,16 +1198,7 @@ async def test_an_incremental_update_lands_inside_the_fifty_millisecond_budget(d
 
 
 async def test_the_incremental_cost_does_not_grow_with_the_library(db):
-    """The half of §5.3's budget that survives being run on a slow machine.
-
-    A path that re-solved everything would still pass a wall-clock threshold on fast hardware at
-    household scale. This times the same call against a small library and a large one and
-    asserts the ratio is small — a statement about the algorithm rather than about the CPU.
-
-    The *observation* count is held fixed and only the library grows, so the two runs differ in
-    exactly the quantity the incremental path is supposed to be independent of. A version that
-    re-fitted, or that rewrote every `ledger_state` row, would show the 15x here.
-    """
+    """The library grows 15x and the observation count stays fixed, so a re-solve would show."""
     ratios = []
     for n_titles in (60, BUDGET_TITLES):
         users = await _big_world(
@@ -1557,10 +1209,7 @@ async def test_the_incremental_cost_does_not_grow_with_the_library(db):
         await refit.refit_user(
             db, user_id=user, kind="movie", hp=DEFAULTS, embeddings=fixture_embeddings
         )
-        # Films only. `_big_world` rates both kinds (§4.1 rule 5 makes the nightly two fits per
-        # person), and this loop calls the movie board's incremental path, so an unfiltered id
-        # list handed it series titles and wrote `ledger_state` rows stamped 'movie' for them --
-        # the cross-partition row `0022_model_basis.sql`'s composite FK now refuses outright.
+        # Films only: this loop calls the movie board, and 0022's composite FK refuses a series row.
         rated = [
             int(r["title_id"])
             for r in await db.fetch(
@@ -1587,8 +1236,7 @@ async def test_the_incremental_cost_does_not_grow_with_the_library(db):
 
     small, large = ratios
     print(f"\nincremental median: {small:.1f} ms at 60 titles, {large:.1f} ms at {BUDGET_TITLES}")
-    # Measured on this machine at 1.2x for a 15x library. The threshold leaves room for a loaded
-    # CI box without leaving room for a re-solve, which would track the 15x.
+    # Measured at 1.2x for a 15x library.
     assert large / small < 2.5, (
         f"the incremental cost grew {large / small:.1f}x for a {BUDGET_TITLES / 60:.0f}x "
         "library — something is re-solving the whole fit"

@@ -1,8 +1,4 @@
-"""The artifact store. Spec v2.1 §4.3, §3.1, §10.
-
-The store is what makes "a bundle-less app is a legal state" true, so the empty case is the
-first thing tested here, not an afterthought.
-"""
+"""The artifact store (§4.3, §3.1, §10). An empty store is a legal state, tested first."""
 
 from __future__ import annotations
 
@@ -21,9 +17,6 @@ def artifacts(tmp_path):
     return tmp_path / "bundle" / "artifacts"
 
 
-# --- §3.1: an empty store is a value, not an error ------------------------------------
-
-
 def test_empty_store_is_legal_and_says_so():
     store = ArtifactStore.empty()
     assert store.is_empty
@@ -32,20 +25,13 @@ def test_empty_store_is_legal_and_says_so():
 
 
 def test_empty_store_refuses_to_hand_out_paths():
-    """Better a clear error at the call site than a path built from None."""
     with pytest.raises(RuntimeError, match="no artifact bundle loaded"):
         ArtifactStore.empty().path("backbone.npz")
 
 
-# --- loading a real bundle -------------------------------------------------------------
-
-
 def test_open_reads_the_manifest_and_the_vocabulary_version(artifacts):
-    """M4.5: `artifacts/manifest.json` is the ratings-model manifest and carries the fitted
-    cut-points and nothing else — no `bundle_version`, no `vocabulary_version`, no title count.
-    The bundle's identity lives in `BUNDLE.json` at the bundle ROOT, which never reaches
-    `/data/artifacts/<version>/`, so the vocabulary version is read off the directory the
-    bundle ships it in."""
+    """`artifacts/manifest.json` holds only the fitted
+    cut-points, so the version comes from the directory."""
     store = ArtifactStore.open(artifacts, "test-v1")
     assert not store.is_empty
     assert store.version == "test-v1"
@@ -54,19 +40,8 @@ def test_open_reads_the_manifest_and_the_vocabulary_version(artifacts):
 
 
 def test_the_store_derives_the_vocabulary_the_same_way_the_bundle_does(artifacts):
-    """M4.14: one derivation — `importer/vocab.version_of` — or §10's invariant is checked
-    against whichever answer the reader that happened to run gave.
-
-    This test IS the probe that failed. The fixture ships `dna_vocab/v1`; drop a stray
-    `zz_notes.txt` beside it and this store answered `'zz_notes.txt'`, because its fallback was
-    `sorted((root / "dna_vocab").glob("*"))[-1].name` and a glob does not filter directories,
-    while the importer's reader answered `v1`. Agreement is asserted in BOTH shapes, because two
-    readers agreeing on a wrong answer would still be one derivation: with the stray alone both
-    name `v1`, and with a second vocabulary directory both refuse (decision 163), rather than one
-    refusing while the other quietly names a loser. The refusal reaches this caller as an
-    exception on purpose: `ArtifactStore.open` writes no import report, so there is nowhere for a
-    sentinel to be read. [M4.14, decision 256, imp-vocabulary-version-derived-four-ways]
-    """
+    """One derivation (`importer/vocab.version_of`), asserted
+    in both shapes: a stray file and two versions."""
     (artifacts / "dna_vocab" / "zz_notes.txt").write_text("keeping v1\n", encoding="utf-8")
     assert vocab.version_of(artifacts) == "v1"
     assert ArtifactStore.open(artifacts, "test-v1").vocab_version == "v1"
@@ -78,15 +53,8 @@ def test_the_store_derives_the_vocabulary_the_same_way_the_bundle_does(artifacts
         ArtifactStore.open(artifacts, "test-v1")
 
 
-# M4.13 added `cold_eval.json` and `content_summary.json` to `BUNDLE_FILES` - the corpus ships
-# both, §4.3 calls that list exhaustive, and until then nothing could read the one reference value
-# the bundle carries for `user_vector.cv_rho`. `make_bundle.py` writes neither, and deliberately
-# stays that way here: the corpus-shaped fixture is M4.8's train, and both files are optional
-# precisely because a bundle without them is older rather than broken. Since decision 299 that
-# choice reaches past this test: `e2e/run.mjs` phase 0 rebuilds `data/import` from this same module
-# on every browser run, so what `make_bundle.py` writes IS what the browser suite then imports.
-# Named rather than counted, so the next file added to either side fails this test instead of
-# widening a tolerance. [M4.13 step 35, cs-31; decision 299]
+# Written by neither `make_bundle.py` nor this fixture: both files are optional. Named rather
+# than counted, so the next file added to either side fails this test.
 NOT_IN_THE_FIXTURE = frozenset({"cold_eval.json", "content_summary.json"})
 
 
@@ -101,9 +69,7 @@ def test_presence_map_covers_every_declared_bundle_file(artifacts):
         "a file the fixture does not ship may not be a REQUIRED one"
     )
 
-    # The absent branch, against a real absence rather than whatever the fixture happens not to
-    # ship. It asserted `backbone.npz is False` until M2 gave the fixture a Backbone — at which
-    # point it was testing the fixture's contents, not the presence map.
+    # The absent branch, against a real absence rather than whatever the fixture happens not to ship.
     (artifacts / "cold_tower.pt").unlink()
     stripped = ArtifactStore.open(artifacts, "test-v1")
     assert stripped.present["cold_tower.pt"] is False
@@ -122,25 +88,12 @@ def test_missing_required_lists_only_required_absences(artifacts):
 def test_json_is_cached_and_returns_the_file(artifacts):
     store = ArtifactStore.open(artifacts, "test-v1")
     contract = store.json("feature_contract.json")
-    # §4.3 freezes the review-text scale INSIDE `text_block`; the top level has no such key,
-    # and reading it there found nothing on every bundle the corpus has exported.
+    # §4.3 freezes the review-text scale INSIDE `text_block`; the top level has no such key.
     assert contract["text_block"]["text_scale"] == pytest.approx(2.0)
     assert store.json("feature_contract.json") is contract    # second read is cached
 
 
 def test_the_vocabulary_version_comes_from_the_directory_and_not_from_the_manifest(artifacts):
-    """M4.14: §4.3 names the vocabulary by `dna_vocab/<version>/`, so the tree is the derivation.
-
-    This test asserted the opposite half until M4.14 -- that a `vocabulary_version` in
-    `artifacts/manifest.json` WINS over the directory, "or the fallback would be silently
-    authoritative over the corpus's own statement". The corpus makes no such statement there:
-    M4.5 established that the shipped manifest is the ratings-model manifest and carries the
-    fitted cut-points and nothing else, and the real `v20260828` confirms it, so the preferred
-    branch was a derivation with no source -- while the branch every real bundle takes went
-    unchecked for being a fallback. Two derivations of one fact is the defect; a manifest key
-    that could quietly disagree with the staged tree is the shape of it, and §4.3 says which of
-    the two is the vocabulary. [M4.14, decision 256]
-    """
     manifest = json.loads((artifacts / "manifest.json").read_text(encoding="utf-8"))
     assert "vocabulary_version" not in manifest, "the shipped manifest carries no such key"
     assert ArtifactStore.open(artifacts, "test-v1").vocab_version == "v1"
@@ -149,9 +102,6 @@ def test_the_vocabulary_version_comes_from_the_directory_and_not_from_the_manife
     (artifacts / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
     assert ArtifactStore.open(artifacts, "test-v1").vocab_version == "v1"
     assert vocab.version_of(artifacts) == "v1"
-
-
-# --- §10: no process may score or refit with a bundle other than the active one --------
 
 
 def test_assert_matches_accepts_the_active_version(artifacts):
@@ -169,17 +119,9 @@ def test_assert_matches_refuses_scoring_with_no_bundle_at_all():
         ArtifactStore.empty().assert_matches("test-v1")
 
 
-# --- the title count the Data tab renders ----------------------------------------------
-
-
 def test_the_title_count_comes_from_the_bundles_own_identity_record(artifacts, tmp_path):
-    """`summary()['titles']` read `title_count` out of `artifacts/manifest.json`, a key no
-    bundle has ever written, so the Data tab's "N titles" has always rendered nothing.
-
-    §10 stages only the bundle's `artifacts/` subtree, so BUNDLE.json — which does carry the
-    counts, as `tables` — cannot be read from the store's root. It reaches the store from
-    `artifact_bundle.manifest`, which is where `importer/bundle.py` records it.
-    """
+    """§10 stages only `artifacts/`, so BUNDLE.json's counts
+    reach the store via `artifact_bundle.manifest`."""
     identity = json.loads(
         (tmp_path / "bundle" / "BUNDLE.json").read_text(encoding="utf-8")
     )
@@ -191,18 +133,14 @@ def test_the_title_count_comes_from_the_bundles_own_identity_record(artifacts, t
 
 
 def test_a_store_nobody_handed_an_identity_reports_no_count_rather_than_a_wrong_one(artifacts):
-    """§3.1's empty-ish case: the count is a fact about the bundle, and a store opened without
-    one has to say it does not know. `owned` is absent from the summary entirely — §7.2
-    re-derives ownership from Jellyfin per install, so no bundle could carry it."""
+    """§7.2 re-derives ownership per install, so no bundle carries `owned`."""
     summary = ArtifactStore.open(artifacts, "test-v1").summary()
     assert summary["titles"] is None
     assert "owned" not in summary
 
 
 def test_a_jsonb_column_handed_back_as_text_still_yields_the_count(artifacts, tmp_path):
-    """The app's pool registers a json codec, so `artifact_bundle.manifest` normally arrives
-    decoded. A connection without one hands back the raw string, and a store that then reported
-    nothing would be indistinguishable from a bundle that shipped nothing."""
+    """A connection without the pool's json codec hands back the raw string."""
     raw = (tmp_path / "bundle" / "BUNDLE.json").read_text(encoding="utf-8")
     from spielplan.models.artifacts import _as_mapping
 
@@ -211,27 +149,10 @@ def test_a_jsonb_column_handed_back_as_text_still_yields_the_count(artifacts, tm
     assert _as_mapping(None) == {}
 
 
-# --- §6.6's Data tab, §6.0's Home and /api/config all read the yardstick through summary() -----
-
-
 def test_a_yardstick_that_is_not_utf8_degrades_to_none_rather_than_500ing_three_surfaces(
     artifacts,
 ):
-    """`ColdEval.from_mapping` promises it "never raises: a malformed yardstick must not take a
-    boot or a shelf with it", and every malformed SHAPE honours that - an empty file, a JSON
-    array, a truncated object and NUL bytes all come back as `cold_eval: None`. A malformed
-    ENCODING did not: `json()` reads with `encoding="utf-8"` and strict errors, so one cp1252
-    byte in a hand-written note raised `UnicodeDecodeError`, which is a `ValueError` and not a
-    `json.JSONDecodeError` and so escaped the catch.
-
-    Three surfaces, not one, and none of them is the boot: `api/home.py`'s `cold_eval_of` on
-    every GET /api/home, §6.6's Data tab through `summary()`, and `/api/library/config`, which
-    is the unauthenticated route the shell bootstraps from. Nothing upstream decodes this file -
-    `importer/validate.py` tests `(root / name).exists()` and nothing else - so validation,
-    staging and the flip all pass and the first read is a request. The exception is raised before
-    `self._cache[key] = parsed`, so it is not even memoised: every request pays it again.
-    [M4.13 cycle 2, M413-C2-DIM-CE-03]
-    """
+    """`json()` reads strict UTF-8, and `UnicodeDecodeError` is not a `JSONDecodeError`."""
     good = {"cold": {"spearman": 0.35}, "ceiling": {"spearman": 0.39}}
     (artifacts / "cold_eval.json").write_text(json.dumps(good), encoding="utf-8")
     assert ArtifactStore.open(artifacts, "yard-ok").summary()["cold_eval"] is not None

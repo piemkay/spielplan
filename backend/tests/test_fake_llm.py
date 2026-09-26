@@ -1,29 +1,5 @@
-"""`ops/fake_llm.py`, the refusing double: that it speaks the providers and not the app. Spec v2.1 §9.
-
-M5.5-plan.md phase F: "the double must speak all three or 'identical across three adapters' is
-untested", and its first §9 risk: "the refusing double must produce one [fabricated term] by default
-rather than on request". A double is only worth what its fidelity is worth -- M5.2's last review cycle
-found a double that agreed with the code where a real server would not, and every real webhook add was
-dropped -- so this file asserts three things about it, each against a real request rather than a
-hand-built one:
-
-  * THE ENVELOPES ARE THE PROVIDERS' OWN. Every answer is read back through the llm-adapters stage's
-    real adapters inside a real `acquire.fetch.Fetcher`, with the double mounted as the fetcher's
-    transport, and each envelope's fields are checked against the fields its provider's reference
-    documents -- so a field the double invented, or one the adapter reads and the provider never
-    sends, fails here.
-  * THE REFUSALS ARE THE SERVERS' OWN, in their documented error shapes: a wrong or missing key,
-    OpenAI's `max_tokens` on a reasoning model, a strict schema carrying a keyword strict mode still
-    refuses, Gemini's `additionalProperties`. And the double is not stricter than its server: what the
-    published references now say is supported is answered, and Gemini's documented `?key=` is taken.
-  * THE CONTENT COMES FROM THE REQUEST. Terms from the vocabulary block of a system prompt built by
-    `llm/contract.py` over a vocabulary built here, quotes cut verbatim out of a pack built by
-    `dna/packs.render_pack`, and M5.4's `verify_payload` judging the answer -- so "exactly one
-    fabricated term" and "a retry drops the named tag" are the validator's verdicts, not this file's.
-
-NO DATABASE. `verify_payload` is a function of its arguments and a `Fetcher` with no connection keeps
-its pacing in memory; the clock is injected so no pacing is waited out in real time.
-"""
+"""`ops/fake_llm.py`, the refusing double: its envelopes and refusals are the providers' own, and its
+content comes from the request, judged by `verify_payload`. No database."""
 
 from __future__ import annotations
 
@@ -55,8 +31,7 @@ URLS = {
 }
 DOCUMENTED_HEADER = {"anthropic": "x-api-key", "openai": "authorization", "gemini": "x-goog-api-key"}
 
-# One version's vocabulary, as `contract.load_prompt_vocabulary` would read it, and the verifier's view
-# of the same rows. Six terms over four facets, so an answer's three real tags leave spare terms.
+# Six terms over four facets, so an answer's three real tags leave spare terms.
 PROMPT_VOC = contract.PromptVocabulary(
     version="v1",
     facets=("mood", "themes", "pacing", "place"),
@@ -87,9 +62,8 @@ USER = contract.user_prompt(PACK)
 
 @pytest.fixture
 def double():
-    """`ops/fake_llm.py` loaded the way `conftest.fake_jellyfin` loads its sibling: registered in
-    `sys.modules` before it runs, because it carries `from __future__ import annotations` and Pydantic
-    resolves its control model's annotations through that entry."""
+    """Registered in `sys.modules` before it runs: Pydantic
+    resolves the control model's annotations there."""
     spec = importlib.util.spec_from_file_location("fake_llm", DOUBLE)
     module = importlib.util.module_from_spec(spec)
     sys.modules[spec.name] = module
@@ -131,8 +105,7 @@ async def _judge(payload, pack=PACK):
 
 
 async def _direct(double, method, url, **kwargs) -> httpx.Response:
-    """A request the adapters would never make, sent straight to the double -- how a refusal of a
-    request the app does not send is shown to be the server's and not a gap in the double."""
+    """A request the adapters never make, sent straight to the double, to show a refusal is the server's."""
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=double.app)) as http:
         return await http.request(method, url, **kwargs)
 
@@ -141,22 +114,15 @@ async def _scenario(double, **fields) -> httpx.Response:
     return await _direct(double, "POST", "http://fake-llm/_test/scenario", json=fields)
 
 
-# --- the envelopes -------------------------------------------------------------------------------------
-
-# The fields each reference documents for a successful answer, at each level the adapters read. The
-# double's envelope must be a SUBSET of these (no invented field) and must carry the ones each adapter
-# reads (no field the provider never sends).
+# The double's envelope must be a SUBSET of these and carry every field each adapter reads.
 DOCUMENTED = {
-    # https://docs.anthropic.com/en/api/messages; `output_tokens_details` is the thinking breakdown
-    # https://platform.claude.com/docs/en/build-with-claude/thinking-steering-and-cost documents
+    # https://docs.anthropic.com/en/api/messages; thinking breakdown per the thinking-steering page.
     "anthropic": {
-        # `stop_details`: "Structured information about a refusal", null otherwise
-        # (https://platform.claude.com/docs/en/api/messages/create). [M55-DBL-08]
+        # `stop_details`: "Structured information about a refusal", null otherwise.
         "top": {"id", "type", "role", "content", "model", "stop_reason", "stop_details",
                 "stop_sequence", "usage", "container"},
-        # `inference_geo`: "The response `usage` object includes an `inference_geo` field indicating
-        # where inference ran" (https://platform.claude.com/docs/en/manage-claude/data-residency).
-        # [M5.5 review cycle 2, DBL-C2-01]
+        # `inference_geo`: where inference ran
+        # (https://platform.claude.com/docs/en/manage-claude/data-residency).
         "usage": {"input_tokens", "output_tokens", "cache_creation_input_tokens",
                   "cache_read_input_tokens", "cache_creation", "server_tool_use", "service_tier",
                   "output_tokens_details", "inference_geo"},
@@ -193,13 +159,6 @@ DOCUMENTED = {
 
 @pytest.mark.parametrize("provider", ["anthropic", "openai", "gemini"])
 async def test_each_provider_answers_in_its_published_envelope(double, provider):
-    """F2: the double speaks each provider's envelope, read back through that provider's real adapter.
-
-    Every field the double sends is one the reference documents, and every field the adapter reads is
-    present -- the mechanism each provider uses to carry the structured answer included: a `tool_use`
-    block at `stop_reason` "tool_use" for Anthropic's forced tool call, JSON text in
-    `choices[0].message.content` beside a null `refusal` for OpenAI's strict schema, and JSON text in
-    `candidates[0].content.parts` at `finishReason` "STOP" for Gemini's responseSchema."""
     result = await _complete(double, provider)
     raw, doc = result.raw, DOCUMENTED[provider]
     assert set(raw) <= doc["top"], set(raw) - doc["top"]
@@ -207,15 +166,14 @@ async def test_each_provider_answers_in_its_published_envelope(double, provider)
         assert {"id", "type", "role", "content", "model", "stop_reason", "usage"} <= set(raw)
         assert (raw["type"], raw["role"], raw["stop_reason"]) == ("message", "assistant", "tool_use")
         assert "stop_sequence" in raw and raw["stop_sequence"] is None
-        # Sonnet 5 thinks by default, so the tool call comes after a thinking block, and the adapter
-        # finds it by type rather than by position. [M5.5 review cycle 1, M55-DBL-03]
+        # Sonnet 5 thinks by default, so the adapter finds the tool call by type, not position.
         thinking, block = raw["content"]
         assert set(thinking) <= doc["thinking"] and thinking["type"] == "thinking"
         assert thinking["thinking"] == "" and thinking["signature"]
         assert set(block) <= doc["block"] and block["type"] == "tool_use"
         assert block["name"] == client.TOOL_NAME and block["id"].startswith("toolu_")
         assert set(raw["usage"]) <= doc["usage"]
-        # Where inference ran, which is what US-only inference is billed on. [DBL-C2-01]
+        # Where inference ran, which is what US-only inference is billed on.
         assert raw["usage"]["inference_geo"] == "global"
     elif provider == "openai":
         assert (raw["object"], len(raw["choices"])) == ("chat.completion", 1)
@@ -226,7 +184,7 @@ async def test_each_provider_answers_in_its_published_envelope(double, provider)
         assert json.loads(choice["message"]["content"]) == result.payload
         assert set(raw["usage"]) <= doc["usage"]
         assert set(raw["usage"]["completion_tokens_details"]) == {"reasoning_tokens"}
-        # The tier the answer was served at, which the app pins to the standard one. [DBL-C2-01]
+        # The tier the answer was served at, which the app pins to the standard one.
         assert raw["service_tier"] == "default"
     else:
         [candidate] = raw["candidates"]
@@ -241,9 +199,6 @@ async def test_each_provider_answers_in_its_published_envelope(double, provider)
 
 @pytest.mark.parametrize("content", ["fabricate", "unquotable", "salience", "clean"])
 async def test_the_three_adapters_read_identical_tags_and_verdicts_from_the_double(double, content):
-    """The two-attempt row's "identical across the Gemini, Anthropic and OpenAI adapters despite their
-    different structured-output mechanisms", made testable: one scenario, three envelopes, one payload,
-    one verdict from M5.4's validator, one retry message."""
     await _scenario(double, content=content)
     seen = {}
     for provider in client.PROVIDERS:
@@ -265,9 +220,7 @@ VIOLATIONS = [
 
 
 async def test_the_default_first_answer_carries_exactly_one_term_the_vocabulary_does_not(double):
-    """Plan §9's first risk, as the validator reads it: with no scenario set, the answer is schema-valid
-    and carries exactly one fabricated term beside real tags that all verify. The fabricated term is
-    not rescued by M5.4's prefix repair either, because no term in the vocabulary has its tail."""
+    """No term in the vocabulary has the fabricated term's tail, so prefix repair cannot rescue it."""
     result = await _complete(double, "gemini")
     tags = result.payload["tags"]
     invented = [t["term"] for t in tags if t["term"] not in VOC.terms]
@@ -281,9 +234,6 @@ async def test_the_default_first_answer_carries_exactly_one_term_the_vocabulary_
 @pytest.mark.parametrize(("content", "reason", "fragment"),
                          VIOLATIONS + [("clean", None, None)], ids=[v[0] for v in VIOLATIONS] + ["clean"])
 async def test_each_content_scenario_breaks_exactly_the_rule_it_names(double, content, reason, fragment):
-    """Each scenario is one schema-valid answer breaking one contract rule -- a term vocabulary v1 does
-    not carry, an evidence string not in the pack, a salience outside {1,2,3} -- and `clean` breaks
-    none. The retry message the contract formats from the verdict names that rule and its value."""
     await _scenario(double, content=content)
     result = await _complete(double, "anthropic")
     judged = await _judge(result.payload)
@@ -300,10 +250,8 @@ async def test_each_content_scenario_breaks_exactly_the_rule_it_names(double, co
 async def test_every_quote_the_double_did_not_embellish_is_cut_verbatim_from_the_pack_it_was_sent(
     double, content
 ):
-    """THE CONTENT IS BUILT FROM THE REQUEST. Every quote but the `unquotable` scenario's embellished one
-    is a character-for-character substring of the pack in the user message -- not merely equal under
-    `norm()` -- and every source is one of that pack's markers. A second pack gets quotes of its own,
-    so nothing here is a canned answer."""
+    """Character-for-character substrings, not merely equal
+    under `norm()`, so nothing is a canned answer."""
     await _scenario(double, content=content)
     markers = {line.strip("[]") for line in PACK.splitlines() if line.startswith("[") and ":" in line}
     tags = (await _complete(double, "openai")).payload["tags"]
@@ -322,12 +270,6 @@ async def test_every_quote_the_double_did_not_embellish_is_cut_verbatim_from_the
 
 @pytest.mark.parametrize("provider", ["anthropic", "openai", "gemini"])
 async def test_a_retry_in_comply_drops_the_named_tag_and_in_stubborn_repeats_it(double, provider):
-    """The two-attempt loop's second attempt, against each provider. The retry is the corpus's shape --
-    the original user message, then the violation named (`mdc/sources/llm.py:86-88`) -- worded by
-    `contract.violation_prompt` from M5.4's verdict. A complying provider drops exactly the tag the
-    retry names and the answer then verifies clean with the same three real tags; a stubborn one
-    repeats the violation, the case decision 431 fails permanently. The double's log keeps the retry
-    as it RECEIVED it, which is what exit check 2 reads: the violated rule and the offending value."""
     first = await _judge((await _complete(double, provider)).payload)
     [reject] = first.rejects
     retry = f"{USER}\n\n{contract.violation_prompt(first.rejects, version='v1')}"
@@ -347,17 +289,12 @@ async def test_a_retry_in_comply_drops_the_named_tag_and_in_stubborn_repeats_it(
 
 
 def test_the_retry_opening_the_double_recognises_is_the_one_the_app_sends(double):
-    """The double holds the corpus's retry opening (`mdc/aspects/prompt.py:674`) rather than importing
-    the app's, so that it is not built from the code under test -- and this is the line that says the
-    two still agree. If the contract's wording moved, the double would stop seeing retries, and every
-    two-attempt test built on it would be testing attempt 1 twice."""
+    """The double holds the corpus's retry opening rather
+    than importing the app's; this pins that they agree."""
     refused = Rejection(7, "p", "mood.mecha", "unknown_term", "not in vocabulary")
     retry = contract.violation_prompt([refused], version="v1")
     assert double.RETRY_MARKER == contract.RETRY_MARKER
     assert retry.startswith(double.RETRY_MARKER)
-
-
-# --- the refusals ---------------------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(("provider", "status", "fragment"), [
@@ -368,10 +305,7 @@ def test_the_retry_opening_the_double_recognises_is_the_one_the_app_sends(double
 async def test_a_wrong_key_is_refused_in_each_providers_documented_error_shape(
     double, provider, status, fragment
 ):
-    """Read back through the real adapters, so each refusal is the provider's documented error envelope
-    as `client.error_text` parses it: Anthropic's `error.type`, OpenAI's `error.code`, Gemini's
-    `error.status` -- and Gemini answers a bad key with 400, not 401, as its troubleshooting page
-    says."""
+    """Gemini answers a bad key with 400, not 401, as its troubleshooting page says."""
     with pytest.raises(client.LLMError) as caught:
         await _complete(double, provider, key="not-the-key")
     assert caught.value.status == status and caught.value.retryable is False
@@ -384,24 +318,14 @@ async def test_a_wrong_key_is_refused_in_each_providers_documented_error_shape(
     (URLS["gemini"], 403, ("error", "status"), "PERMISSION_DENIED"),
 ])
 async def test_a_missing_key_is_refused_before_anything_is_read(double, url, status, field, value):
-    """The adapters refuse an empty key before any request (`client.complete`), so this is sent
-    directly: a request with no credential at all is refused on every provider, in its own shape."""
+    """The adapters refuse an empty key before any request, so this is sent directly."""
     resp = await _direct(double, "POST", url, json={"model": "m", "messages": [], "contents": []})
     assert resp.status_code == status
     assert value in resp.json()[field[0]][field[1]]
 
 
 async def test_anthropic_refuses_what_its_reference_and_the_corpus_say_it_refuses(double):
-    """The version header is required; an unknown model is a 404 naming it; a sampling parameter off
-    its default is a hard 400 on the current models (`mdc/llm/client.py:166-170`, measured, and the
-    Messages reference's line -- `temperature` 1.0 and `top_p` from 0.99 accepted, `top_k` never); and
-    manual extended thinking is refused on every model served here, forced tool or not, in the errors
-    page's words -- all in `{"type": "error", "error": {...}}`.
-
-    AND NOTHING THE SERVER ANSWERS IS REFUSED. This used to refuse `temperature` whatever it said, the
-    accepted 1.0 included, to answer any `top_p` and `top_k`, and to refuse extended thinking only beside
-    a forced tool in a sentence no provider sends -- each a place the double had parted from the page
-    it cites. [M5.5 review cycle 1, M55-DBL-09]"""
+    """Accepted values are answered: the double must not be stricter than the server."""
     key = {"x-api-key": double.KEYS["anthropic"]}
     version = {**key, "anthropic-version": "2023-06-01"}
     body = {"model": MODELS["anthropic"], "max_tokens": 10, "system": SYSTEM,
@@ -442,14 +366,8 @@ def _strict(schema):
 
 
 async def test_openai_refuses_max_tokens_and_a_temperature_its_reasoning_models_do_not_take(double):
-    """`mdc/llm/client.py:221-222`: "the reasoning-capable models reject [`max_tokens`] outright" -- and
-    the documented refusal names its replacement. A non-default temperature is refused the same way
-    while the model reasons, and only then: "When reasoning effort is not `none`, remove
-    `temperature`" (https://developers.openai.com/api/docs/guides/latest-model), and gpt-5.6-terra's
-    reasoning effort "supports: none, low, medium (default)"
-    (https://developers.openai.com/api/docs/models/gpt-5.6-terra). The double refused a temperature
-    whatever the effort, the stricter-than-server shape its docstring rules out; gpt-5-mini, which
-    lists no `none`, still refuses it. [M5.5 review cycle 2, DBL-C2-07]"""
+    """"When reasoning effort is not `none`, remove `temperature`"
+    (https://developers.openai.com/api/docs/guides/latest-model)."""
     auth = {"Authorization": f"Bearer {double.KEYS['openai']}"}
     old = await _direct(double, "POST", URLS["openai"], headers=auth, json={
         **{k: v for k, v in _openai_body().items() if k != "max_completion_tokens"}, "max_tokens": 100})
@@ -472,22 +390,8 @@ async def test_openai_refuses_max_tokens_and_a_temperature_its_reasoning_models_
 
 
 async def test_openai_strict_mode_refuses_what_its_subset_lacks_and_answers_what_it_now_carries(double):
-    """Structured Outputs' supported schemas, both halves.
-
-    REFUSED, in the server's words ("Invalid schema for response_format '<name>': In context=(...), ..."):
-    a keyword strict mode still does not carry (`minLength`, `uniqueItems`), an object without
-    `additionalProperties: false`, a property missing from `required`, and a root that is not an object.
-    And the composition keywords the guide lists as "not yet supported" -- "`allOf`, `not`,
-    `dependentRequired`, `dependentSchemas`, `if`, `then`, `else`", with "If you turn on Structured
-    Outputs by supplying `strict: true` and call the API with an unsupported JSON Schema, you will
-    receive an error" (https://developers.openai.com/api/docs/guides/structured-outputs) -- which the
-    double answered, and walked `allOf` as a valid branch: a lenient double, M5.2's own failure.
-    [M5.5 review cycle 2, DBL-C2-07]
-
-    ANSWERED: `minimum`, `maximum`, `minItems` and `maxItems`, which the guide now lists as supported.
-    A double that refused them would be stricter than OpenAI -- M5.2's failure turned round -- so the
-    app's stripping of them (`openai._STRICT_UNSUPPORTED`, the corpus's 2024 set) is harmless and no
-    longer required, and the salience bound stays the validator's to enforce either way."""
+    """Refused and answered exactly as https://developers.openai.com/api/docs/guides/structured-outputs
+    lists: a lenient double and a stricter-than-server double are both failures."""
     auth = {"Authorization": f"Bearer {double.KEYS['openai']}"}
     item = contract.EXTRACTION_SCHEMA["properties"]["tags"]["items"]
 
@@ -538,10 +442,7 @@ async def test_openai_strict_mode_refuses_what_its_subset_lacks_and_answers_what
 
 
 async def test_gemini_refuses_a_response_schema_field_its_schema_object_does_not_declare(double):
-    """`mdc/llm/client.py:14-16`: responseSchema "rejects `additionalProperties`" -- because the request
-    is parsed as a protocol buffer and the Schema message has no such field, so the refusal names the
-    field and where it was found. The contract's own schema, sent unprojected, is refused on exactly
-    that; `gemini._gemini_schema`'s projection is what gets through."""
+    """The request is parsed as a protocol buffer and the Schema message has no `additionalProperties`."""
     headers = {"x-goog-api-key": double.KEYS["gemini"]}
 
     def body(schema):
@@ -560,14 +461,8 @@ async def test_gemini_refuses_a_response_schema_field_its_schema_object_does_not
     assert projected.status_code == 200, projected.text
 
 
-# --- the key, as the double recorded it -------------------------------------------------------------------
-
-
 async def test_gemini_takes_the_key_in_either_place_the_real_api_does_and_the_log_says_which(double):
-    """Gemini documents `?key=` as well as `x-goog-api-key`, so the double answers both: refusing the
-    query form would be stricter than Google, and the app's header-only rule (§9) would then be held by
-    a refusal production does not make. What holds it instead is the log -- which records a key found
-    in the url, and records the url with the key taken out."""
+    """Refusing `?key=` would be stricter than Google; the log is what holds the app's header-only rule."""
     body = {"contents": [{"role": "user", "parts": [{"text": USER}]}]}
     by_header = await _direct(double, "POST", URLS["gemini"], json=body,
                               headers={"x-goog-api-key": double.KEYS["gemini"]})
@@ -582,10 +477,7 @@ async def test_gemini_takes_the_key_in_either_place_the_real_api_does_and_the_lo
 
 
 async def test_the_log_keeps_each_url_and_header_name_the_adapters_sent_and_never_a_key(double, caplog):
-    """What the fetcher actually put on the wire, as the provider saw it: the production url with no
-    query, the key in the header each provider documents, and nowhere else -- not in the url the double
-    received, not in the httpx INFO line the fetcher's client wrote, and not in anything the double
-    kept, which stores header NAMES only."""
+    """The double stores header NAMES only."""
     caplog.set_level(logging.INFO, logger="httpx")
     for provider in client.PROVIDERS:
         await _complete(double, provider)
@@ -606,16 +498,11 @@ async def test_the_log_keeps_each_url_and_header_name_the_adapters_sent_and_neve
         assert record["status"] == 200
 
 
-# --- the envelope scenarios and the bill ------------------------------------------------------------------
-
-
 @pytest.mark.parametrize(("provider", "envelope", "retryable", "fragment"), [
-    # The forced call cut short is a `tool_use` block at `max_tokens`, as Anthropic documents it, and
-    # no longer the text block the provider never sends under a forced tool. [M55-DBL-01]
+    # The forced call cut short is a `tool_use` block at `max_tokens`, as Anthropic documents it.
     ("anthropic", "max_tokens", True, "tool_use block is incomplete (stop_reason=max_tokens)"),
     ("anthropic", "prose", False, "no tool_use block (stop_reason=end_turn)"),
-    # Anthropic's refusal is its classifiers', which Claude Opus 5 carries and Sonnet 5 does not; see
-    # `test_an_anthropic_refusal_is_the_published_empty_one_and_bills_nothing`. [M55-DBL-08]
+    # Anthropic's refusal comes from classifiers Opus 5 carries and Sonnet 5 does not.
     ("anthropic", "refusal", False, "no tool_use block (stop_reason=refusal)"),
     ("openai", "refusal", False, "refused: I'm sorry"),
     ("openai", "max_tokens", True, "empty content (finish_reason=length)"),
@@ -626,9 +513,6 @@ async def test_the_log_keeps_each_url_and_header_name_the_adapters_sent_and_neve
 async def test_each_documented_failure_envelope_reaches_the_adapters_named_error(
     double, provider, envelope, retryable, fragment
 ):
-    """F1's list -- a refusal, a cut-off at the cap, prose where a tool call was forced, a prompt
-    blocked before generation -- in the envelope each provider documents for it, each reaching the
-    adapter's named error with the retryability decision 431 reads."""
     await _scenario(double, provider=provider, envelope=envelope)
     model = "claude-opus-5" if (provider, envelope) == ("anthropic", "refusal") else None
     with pytest.raises(client.LLMError) as caught:
@@ -645,13 +529,8 @@ async def test_each_documented_failure_envelope_reaches_the_adapters_named_error
 async def test_an_openai_server_error_is_answered_in_the_shape_its_error_page_publishes(
     double, fault, published
 ):
-    """OpenAI's error-codes page: "503 - Model temporarily overloaded | Type: `service_unavailable_error`
-    Code: `server_is_overloaded`", and "500 - The server had an error while processing your request"
-    with no type or code published (https://developers.openai.com/api/docs/guides/error-codes), so a
-    500 is held to its words only. The double sent its 503 as a `server_error` with a null code, and
-    its comment quoted the heading as "503 Model Overloaded" -- a shape the provider does not send,
-    which an adapter reading `type` would have met for the first time in production.
-    [M5.5 review cycle 2, DBL-C2-04]"""
+    """The shapes https://developers.openai.com/api/docs/guides/error-codes
+    publishes; a 500 has no type or code."""
     assert (await _scenario(double, provider="openai", fault=fault)).status_code == 200
     auth = {"Authorization": f"Bearer {double.KEYS['openai']}"}
 
@@ -663,16 +542,8 @@ async def test_an_openai_server_error_is_answered_in_the_shape_its_error_page_pu
 
 
 async def test_an_anthropic_refusal_is_the_published_empty_one_and_bills_nothing(double):
-    """Anthropic's refusal as the refusals page prints it and bills it
-    (https://platform.claude.com/docs/en/build-with-claude/refusals-and-fallback): `content` empty,
-    `stop_details` naming the category, `usage` reported with `output_tokens` 0 -- "token counts appear
-    in `usage` but are not charged" -- so the double's own log, which is the bill every meter test reads,
-    records it as billing nothing, and the adapter settles it to nothing while keeping the envelope.
-
-    Only where the classifiers are. The page names Claude Fable 5.1, Fable 5, Opus 5.5 and Opus 5; the
-    same scenario on Sonnet 5, which has none, is answered as Sonnet 5 answers. This envelope used to
-    arrive on Sonnet 5 carrying a thinking block and billed output, a refusal the provider charges for,
-    and the meter's settle to reported usage passed against it. [M5.5 review cycle 1, M55-DBL-08]"""
+    """"Token counts appear in `usage` but are not charged": a
+    refusal bills nothing, and only where classifiers are."""
     await _scenario(double, provider="anthropic", envelope="refusal")
     with pytest.raises(client.LLMError) as caught:
         await _complete(double, "anthropic", model="claude-opus-5")
@@ -694,13 +565,8 @@ async def test_an_anthropic_refusal_is_the_published_empty_one_and_bills_nothing
 
 @pytest.mark.parametrize("model", ["claude-opus-5-5", "claude-fable-5-1", "claude-mythos-5-1"])
 async def test_a_model_that_refuses_forced_tool_use_is_listed_and_refuses_it_as_published(double, model):
-    """The three current Anthropic models that "don't support forced tool use" answer a forced
-    `tool_choice` with the errors page's 400, in its words, on every request, and answer `auto`
-    (https://platform.claude.com/docs/en/api/errors, "Forced tool use not supported"). They are on the
-    models list, as on the real one. The double used to 404 them and leave them off the list, so the
-    test button read `model_listed` False where the provider says True, and no test could see the
-    adapter meet the 400 that fails a title for good under decision 431. [M5.5 review cycle 1,
-    M55-DBL-04]"""
+    """https://platform.claude.com/docs/en/api/errors,
+    "Forced tool use not supported": listed, and a 400."""
     headers = {"x-api-key": double.KEYS["anthropic"], "anthropic-version": "2023-06-01"}
     page = await _direct(double, "GET", "https://api.anthropic.com/v1/models?limit=1000", headers=headers)
     assert model in {entry["id"] for entry in page.json()["data"]}
@@ -719,11 +585,7 @@ async def test_a_model_that_refuses_forced_tool_use_is_listed_and_refuses_it_as_
 
 
 async def test_the_usage_blocks_bill_thinking_the_way_each_provider_reports_it(double):
-    """Exit checks 5 and 6 against the double's defaults, which are the corpus's measurement
-    (`mdc/config.py:181-185`: "~1.6k output plus ~2.3k thoughts"). Gemini reports the thoughts apart and
-    the adapter bills 1,600 + 2,300 = 3,900; a response with no thinking carries no
-    `thoughtsTokenCount` at all and bills 1,600. OpenAI folds the same reasoning into
-    `completion_tokens` and itemises it, and the adapter bills that figure as it comes."""
+    """Gemini reports thoughts apart (1,600 + 2,300 billed); OpenAI folds them into `completion_tokens`."""
     thought = await _complete(double, "gemini")
     usage = thought.raw["usageMetadata"]
     assert (usage["candidatesTokenCount"], usage["thoughtsTokenCount"]) == (1600, 2300)
@@ -735,12 +597,8 @@ async def test_the_usage_blocks_bill_thinking_the_way_each_provider_reports_it(d
     assert reasoned.raw["usage"]["completion_tokens_details"]["reasoning_tokens"] == 2300
     assert reasoned.tokens_out == 3900
 
-    # Anthropic bills the thinking inside `output_tokens` and itemises it under
-    # `output_tokens_details.thinking_tokens` ("`output_tokens` remains the inclusive, authoritative
-    # total used for billing", the steering page), so the adapter takes the first figure as it comes;
-    # adding the breakdown Gemini-style would bill the thinking twice. The double used to send no
-    # thinking for Anthropic at all, so nothing could tell the two readings apart.
-    # [M5.5 review cycle 1, M55-METER-06, M55-DBL-03]
+    # `output_tokens` is Anthropic's inclusive billing
+    # total; adding the breakdown would bill thinking twice.
     thought_through = await _complete(double, "anthropic")
     assert thought_through.raw["usage"]["output_tokens"] == 3900
     assert thought_through.raw["usage"]["output_tokens_details"] == {"thinking_tokens": 2300}
@@ -755,15 +613,8 @@ async def test_the_usage_blocks_bill_thinking_the_way_each_provider_reports_it(d
     assert "output_tokens_details" not in unthought.raw["usage"] and unthought.tokens_out == 1600
 
 
-# --- the models lists, the hosts and the control surface -------------------------------------------------
-
-
 async def test_a_listed_gemini_model_can_still_refuse_to_generate(double):
-    """The corpus's measured trap (`mdc/config.py:152-154`): the 2.5 family "still appears in ListModels
-    but `generateContent` answers 404 'no longer available to new users'". The probe says listed; the
-    paid call says no, and says it as Google's NOT_FOUND -- which is why `client.probe` calls listed
-    not usable. Anthropic's list refuses a page past its documented 1,000, which the probe asks for
-    exactly."""
+    """The 2.5 family is still listed but `generateContent` answers 404: listed is not usable."""
     async with _fetcher(double) as fetcher:
         listed = await client.probe(fetcher, "gemini", key=double.KEYS["gemini"], model="gemini-2.5-flash")
     assert listed["ok"] is True and listed["model_listed"] is True
@@ -778,8 +629,7 @@ async def test_a_listed_gemini_model_can_still_refuse_to_generate(double):
 
 
 async def test_a_provider_route_answers_only_on_its_own_host(double):
-    """The Host header is how the double knows which provider it is being, as it is how the real three
-    are told apart: Anthropic's path on OpenAI's host, or OpenAI's list on Google's, is a 404."""
+    """The Host header is how the double knows which provider it is being."""
     auth = {"Authorization": f"Bearer {double.KEYS['openai']}"}
     assert (await _direct(double, "POST", "https://api.openai.com/v1/messages", headers=auth,
                           json=_openai_body())).status_code == 404
@@ -788,12 +638,11 @@ async def test_a_provider_route_answers_only_on_its_own_host(double):
 
 
 async def test_the_control_surface_refuses_an_envelope_its_provider_does_not_document(double):
-    """A scenario is one of each provider's DOCUMENTED ways to fail, never an approximation: a Gemini
-    "refusal" or an Anthropic "blocked" would be a shape the double invented."""
+    """A scenario is one of each provider's DOCUMENTED ways to fail, never an invented shape."""
     assert (await _scenario(double, provider="gemini", envelope="refusal")).status_code == 422
     assert (await _scenario(double, envelope="prose")).status_code == 422
     assert (await _scenario(double, content="nonsense")).status_code == 422
-    # A price setting the provider does not offer, likewise. [M5.5 review cycle 2, DBL-C2-01]
+    # A price setting the provider does not offer, likewise.
     assert (await _scenario(double, project_tier="turbo")).status_code == 422
     assert (await _scenario(double, geo="eu")).status_code == 422
     ok = await _scenario(double, provider="openai", envelope="refusal", posture="stubborn")
@@ -805,10 +654,7 @@ async def test_the_control_surface_refuses_an_envelope_its_provider_does_not_doc
 
 
 def test_the_double_imports_nothing_of_the_app_and_runs_without_its_settings():
-    """`ops/fake_jellyfin.py`'s constraint, and the reason the content is parsed out of the request: a
-    double that imported `spielplan` could build its answer from the app's own vocabulary loader, and
-    would then agree with the code by construction. Loaded in a fresh interpreter with the backend off
-    the path and no settings in the environment, it builds its app."""
+    """A double that imported `spielplan` would agree with the code by construction."""
     tree = ast.parse(DOUBLE.read_text(encoding="utf-8"))
     imported = {alias.name.split(".")[0] for node in ast.walk(tree) if isinstance(node, ast.Import)
                 for alias in node.names}

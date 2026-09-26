@@ -1,14 +1,5 @@
-"""Account linking through the admin routes. Spec v2.1 §3.3, §6.6, §7.3, §14.3.
-
-"Admin view maps each app user <-> one Jellyfin user (`GET /Users`), **optional, one-to-one**.
-… Authentication is **never** delegated to Jellyfin (the app must work when Jellyfin is down)."
-
-The whole app is pointed at `ops/fake_jellyfin.py` by replacing one function
-(`registry.make_client`), so these exercise the real routes end to end — including the parts
-that only exist over HTTP, like the API key never coming back out of a GET.
-
-Skipped without TEST_DATABASE_URL; see tests/conftest.py.
-"""
+"""Account linking through the admin routes (§3.3, §7.3, §14.3), end to end against `ops/fake_jellyfin.py`
+behind `registry.make_client`. Needs TEST_DATABASE_URL."""
 
 from __future__ import annotations
 
@@ -27,7 +18,6 @@ JENNY_JF = "jf-user-jenny"
 
 @pytest.fixture
 async def admin(secrets_key, app, fake_jellyfin, monkeypatch):
-    """An admin session with the app's Jellyfin client pointed at the in-process fake."""
     module, transport = fake_jellyfin
 
     monkeypatch.setattr(
@@ -59,25 +49,11 @@ async def _users(client) -> dict[str, dict]:
     return {u["name"]: u for u in (await client.get("/api/admin/users")).json()}
 
 
-# --- §6.6: configuring the connector ------------------------------------------------------
-
-
 async def test_the_connector_starts_unconfigured_and_says_so(admin):
     client, _module = admin
     body = (await client.get("/api/admin/connectors/jellyfin")).json()
-    # M4.7 dd03: "nothing configured" and "configured but the credentials will not decrypt" are
-    # two different things the card has to say differently, so the payload carries both.
-    #
-    # And M4.11 adds §7.1's probed pair, whose unconfigured reading is the one that matters: an
-    # empty version with `server_supported: null` is "nobody has probed", which `played_write_refusal`
-    # must not treat as a refusal. A stored `false` is the other thing entirely. [M4.11 finding 16]
-    #
-    # And M5.2 adds §7.2's token as a third boolean, for `has_api_key`'s reason (decision 332,
-    # §14.3): an install that has minted none holds `False` here, and the value itself appears in
-    # exactly one response in this app, which is not this one.
-    #
-    # And M5.7 adds §6.6's webhook status as facts (decision 455), whose unconfigured reading is
-    # nulls and a zero: nothing has arrived and no poll has run, which is an answer and not a 500.
+    # "Nothing configured" and "credentials will not decrypt" are different states; an unprobed server
+    # is `server_supported: null`, never a refusal; the webhook token itself appears in one response only.
     assert body == {"url": "", "has_api_key": False, "configured": False,
                     "library_ids": [], "linked_users": 0, "secrets_unreadable": False,
                     "has_webhook_token": False,
@@ -92,8 +68,7 @@ async def test_the_connector_starts_unconfigured_and_says_so(admin):
 
 
 async def test_the_api_key_never_comes_back_out(admin):
-    """§14.3: the key is admin-equivalent on the whole media server. A GET that returned it
-    would turn every admin session into a copy of it."""
+    """§14.3: the key is admin-equivalent on the whole media server."""
     client, module = admin
     await _configure(client, module)
     body = (await client.get("/api/admin/connectors/jellyfin")).json()
@@ -102,8 +77,7 @@ async def test_the_api_key_never_comes_back_out(admin):
 
 
 async def test_editing_the_url_does_not_blank_the_key(admin):
-    """The form shows a mask, so an empty field means "leave it alone" — otherwise correcting
-    a typo in the address silently disconnects the server."""
+    """The form shows a mask, so an empty field means "leave it alone"."""
     client, module = admin
     await _configure(client, module)
     await client.put(
@@ -129,9 +103,7 @@ async def test_routes_that_need_jellyfin_refuse_cleanly_when_it_is_unconfigured(
     for path in (
         "/api/admin/connectors/jellyfin/test",
         "/api/admin/connectors/jellyfin/users",
-        # The third read of the same kind, added with §6.6's library pick: "there is no server to
-        # ask" is 409 here as it is above, and not the `ok: false` the route answers for a server
-        # that refused -- an unconfigured connector is not a connector that failed (decision 364).
+        # An unconfigured connector is 409, not the `ok: false` of a server that refused (decision 364).
         "/api/admin/connectors/jellyfin/libraries",
     ):
         response = await (
@@ -141,21 +113,8 @@ async def test_routes_that_need_jellyfin_refuse_cleanly_when_it_is_unconfigured(
         assert "not configured" in response.json()["detail"]
 
 
-# --- §6.6 + decision 364: the library pick gets a list, a writer and a reader ------------------
-
-
 async def test_the_libraries_the_pick_picks_from_are_listed_from_the_server(admin):
-    """§6.6's card has named a "library pick" since M1 and nothing could enumerate what to pick.
-
-    Not decoration: decision 364 makes `library_ids` the boundary §7.2's intake paths are scoped
-    by, and the double's third library is the household's own camcorder footage. An admin who
-    cannot see that library listed cannot say that acquisition should leave it alone.
-
-    Read off the fake's own table rather than re-typed, because the shapes a Jellyfin server sends
-    belong to the double (`ops/fake_jellyfin.py`) and a test that authors them has turned the
-    refuser into a mock -- including the envelope, which is `{"Items": [...]}` here where `/Users`
-    is a bare list.
-    """
+    """Read off the fake's own table: the shapes a server sends belong to the double, not the test."""
     client, module = admin
     await _configure(client, module)
 
@@ -166,28 +125,14 @@ async def test_the_libraries_the_pick_picks_from_are_listed_from_the_server(admi
     assert ("jf-lib-home", "Home Videos") in listed, (
         "the library nobody would acquire from is what makes a pick mean anything"
     )
-    # The app's own spelling, as the user-mapping read next door also answers in: nothing of
-    # Jellyfin's `BaseItemDto` reaches the browser through this route.
+    # The app's own spelling: nothing of Jellyfin's `BaseItemDto` reaches the browser.
     assert all(set(lib) == {"id", "name"} for lib in body["libraries"]), body
 
 
 async def test_a_server_that_will_not_list_its_libraries_is_reported_rather_than_raised(
     admin, monkeypatch
 ):
-    """The read an admin makes while repairing a connector must not fail along with it.
-
-    The failure this refuses is not a 500 but a plausible empty list. Decision 364 reads an EMPTY
-    pick as "the whole server", so a card handed `[]` because Jellyfin refused the key would be
-    showing the admin the shape of a deliberate choice nobody made -- and the admin would save it.
-    The test button one screen up reports the same way for the same reason.
-
-    The second half is the one that reached the card as the wrong answer. A refusal only became
-    `ok: false` by way of `JellyfinError`, and `_request` does not raise for a 200 it cannot read:
-    a forward-auth portal's sign-in page collapsed to an empty envelope and was reported as a
-    server with no libraries, while a body that parsed as a bare list left the route as an
-    `AttributeError` -- a 500, which is worse than the 502 this route exists to avoid.
-    [review cycle 1: m52-rev-lib-04]
-    """
+    """An EMPTY pick means "the whole server" (decision 364), so a refusal must never read as `[]`."""
     client, _module = admin
     saved = await client.put(
         "/api/admin/connectors/jellyfin",
@@ -219,13 +164,6 @@ async def test_a_server_that_will_not_list_its_libraries_is_reported_rather_than
 
 
 async def test_the_library_pick_is_stored_by_the_save_and_reported_by_the_card(admin):
-    """`library_ids` has been stored, merged and served since M1 with no writer and no reader.
-
-    Decision 364 gives it both in one milestone, and this is the writer. Without it the row
-    `spec_coverage.toml` registers -- "the same item after the library is picked enqueues once" --
-    is reachable only by calling `save_jellyfin` from Python, which is not a gesture §6.6 offers
-    anybody, and §7.2 would ship a boundary no household could ever draw.
-    """
     client, module = admin
     await _configure(client, module)
 
@@ -242,14 +180,8 @@ async def test_the_library_pick_is_stored_by_the_save_and_reported_by_the_card(a
 
 
 async def test_a_partial_save_keeps_the_stored_pick_and_an_explicit_empty_list_widens_it(admin):
-    """Decision 364's two answers, which one "empty means keep it" field cannot both give.
-
-    Absent is the partial save the masked-key form already makes on every URL correction. `[]` is
-    an admin deselecting the last library, which decision 364 reads as "the whole server" -- the
-    state of every install in existence, since nothing has ever written this field. Collapsed into
-    one answer the second gesture becomes unperformable: a household that picked one library once
-    would have §7.2 acquire from that library alone for ever, with the UI offering no way back.
-    """
+    """Absent keeps the pick; `[]` widens it to the whole
+    server. One answer for both would lose a gesture."""
     client, module = admin
     await _configure(client, module)
     await client.put(
@@ -276,23 +208,7 @@ async def test_a_partial_save_keeps_the_stored_pick_and_an_explicit_empty_list_w
 async def test_a_library_id_this_column_cannot_hold_is_refused_at_the_edge_and_not_by_postgres(
     admin,
 ):
-    """Decision 364 made the pick the acquisition boundary, and this is the first route that ever
-    wrote it. The bounds were argued in the model's own comment -- "the only caller that would not
-    stop at the number of folders a server actually has is a crafted body ... the place to answer
-    for one is the edge, as a 422" -- and then only two thirds of that sentence was written.
-
-    A NUL is the third. `library_ids` is stored as jsonb on the connector row, `db/pool.py`
-    registers `json.dumps` as that codec, and `\u0000` is a character Postgres holds nowhere in a
-    jsonb string: the write raised, `app.py`'s `asyncpg.PostgresError` handler answered
-    500 `{"detail": "database error"}`, and the admin's save was lost to a value the schema could
-    have named. `_no_control_characters` had already answered the identical byte for account names
-    (sec-04, as-11); this field is the one it did not cover. [review cycle 2: m52-c2-libid-01,
-    m52-c2-lib-03]
-
-    The two length bounds are asserted beside it because they had no test either: they are the
-    same clause of the same comment, and a `max_length` nothing exercises is a number rather than
-    a bound.
-    """
+    """Postgres holds no NUL in a jsonb string, so the edge refuses it as a 422 before the write 500s."""
     client, module = admin
     await _configure(client, module)
 
@@ -314,17 +230,8 @@ async def test_a_library_id_this_column_cannot_hold_is_refused_at_the_edge_and_n
 
 
 async def test_the_pick_is_stored_once_in_the_servers_spelling_and_never_blank_or_nil(admin):
-    """Three values the edge stored verbatim and a real server reads as something else entirely.
-
-    A pick of `[" "]` reaches `ParentId` as whitespace, which ASP.NET binds to a null `Guid?` --
-    so the read covers the WHOLE SERVER, and the boundary the admin drew is silently widened to
-    every library they deselected, which is decision 364's harm exactly. The all-zero GUID names
-    no folder and is answered 400 on every scoped read. And one library spelled three ways
-    (dashed, braced, upper case -- all of which Jellyfin accepts) was three scopes and three reads
-    of the same folder per key, and three ids a comparison against `/Library/MediaFolders`'s own
-    undashed spelling could never match. A GUID is stored as the server spells it, once; a blank
-    or nil id is a 422. [review cycle 3: M52-C3-LIB-04]
-    """
+    """Whitespace binds to a null `Guid?` (the whole server);
+    a GUID is stored once, in the server's spelling."""
     client, module = admin
     await _configure(client, module)
     dashed = "6213b704-a0d9-5429-3110-f4d561b0f614"
@@ -349,18 +256,8 @@ async def test_the_pick_is_stored_once_in_the_servers_spelling_and_never_blank_o
         assert refused.status_code == 422, f"{label}: {refused.status_code} {refused.text}"
 
 
-# --- §7.2 + decision 332: the webhook token, shown once ---------------------------------------
-
-
 async def test_a_save_the_connectors_page_sends_mints_no_token_nobody_would_see(admin, db):
-    """Decision 418. The only client of this route that ships is §6.6's connectors page, and its
-    `save()` sends `{url, api_key}` and discards the answer -- so when every PUT minted, the first
-    Save any admin pressed sealed a token, showed it to nobody, and left no route that could ever
-    show or replace it: `has_webhook_token` read true, the reveal read null for ever, and every
-    real `ItemAdded` was 401 for the life of the install. The exact body the page sends mints
-    nothing now, and the card goes on saying that no token exists.
-    [M5.2 review cycle 4: M52-C4-TOKEN-01]
-    """
+    """The page's `save()` discards the answer, so a mint on every PUT sealed a token nobody ever saw."""
     client, module = admin
 
     saved = await client.put(
@@ -374,12 +271,7 @@ async def test_a_save_the_connectors_page_sends_mints_no_token_nobody_would_see(
 
 
 async def test_a_url_no_request_can_be_sent_to_is_saved_rather_than_answered_500(admin, db):
-    """The save commits before the version probe, and the probe met `httpx.InvalidURL` -- which is
-    not an `httpx.HTTPError` -- for a port with a letter in it, so the PUT answered 500 over a save
-    that had already happened. The probe is best-effort (§3.1 makes a half-configured install
-    legal), so a URL no request can be sent to is stored with no verdict and answered 200.
-    [M5.2 review cycle 4: M52-C4-TOKEN-01]
-    """
+    """`httpx.InvalidURL` is not an `httpx.HTTPError`; the probe is best-effort after the save commits."""
     client, module = admin
 
     typo = await client.put(
@@ -394,18 +286,7 @@ async def test_a_url_no_request_can_be_sent_to_is_saved_rather_than_answered_500
 async def test_the_first_save_shows_the_webhook_token_once_and_no_later_save_rotates_it(
     admin, db
 ):
-    """Decision 332: the token is "generated at first save and shown once" on §6.6's card.
-
-    Three facts in one test because they are one gesture. The save that leaves the connector
-    configured is the save that mints -- an address with no key is not a connector yet (§3.1 makes
-    that half-configured state legal). The value appears in that response and in no other. And no
-    later save changes it: an operator who has pasted the token into the Webhook plugin's header
-    field must not have it rotated under them by an unrelated edit to the URL, because §7.2's
-    intake would then answer the household's own server 401 with nothing on any surface saying so.
-
-    "First save" is the first save that ASKS (decision 418): a client that can render the reveal
-    sends `mint_webhook_token`, and the test above holds the body that does not.
-    """
+    """A later save must not rotate a token already pasted into the Webhook plugin."""
     client, module = admin
 
     address_only = await client.put(
@@ -435,12 +316,7 @@ async def test_the_first_save_shows_the_webhook_token_once_and_no_later_save_rot
 
 
 async def test_the_webhook_token_never_comes_back_out_of_the_card(admin):
-    """§14.3's rule about the API key, applied to the credential §7.2 adds beside it.
-
-    Whoever holds this token can file acquisition work in the household's name, so the card says
-    that one exists and never what it is: the GET is read by every admin session on every visit,
-    long after the single appearance decision 332 allows the value itself.
-    """
+    """Whoever holds the token can file acquisition work in the household's name."""
     client, module = admin
     before = (await client.get("/api/admin/connectors/jellyfin")).json()
     assert before["has_webhook_token"] is False
@@ -457,9 +333,6 @@ async def test_the_webhook_token_never_comes_back_out_of_the_card(admin):
     assert token not in str(card)
 
 
-# --- §3.3: the mapping ----------------------------------------------------------------------
-
-
 async def test_jellyfin_users_are_listed_for_the_mapping_table(admin):
     client, module = admin
     await _configure(client, module)
@@ -468,8 +341,7 @@ async def test_jellyfin_users_are_listed_for_the_mapping_table(admin):
 
 
 async def test_a_link_without_credentials_is_real_but_incomplete(admin):
-    """§7.3's least-privilege path costs "one-time password entry per linked user". Until that
-    happens the link attributes playback and cannot write Played state."""
+    """Until the password entry happens the link attributes playback and cannot write Played state."""
     client, module = admin
     await _configure(client, module)
     users = await _users(client)
@@ -507,8 +379,7 @@ async def test_linking_with_credentials_stores_that_users_own_token(admin):
 
 
 async def test_credentials_for_a_different_jellyfin_user_are_refused(admin):
-    """Signing in as jenny and mapping the row to patrick's Jellyfin id would store a token
-    that can only ever write the wrong person's state."""
+    """A token for another Jellyfin user could only ever write the wrong person's state."""
     client, module = admin
     await _configure(client, module)
     users = await _users(client)
@@ -543,8 +414,8 @@ async def test_a_wrong_jellyfin_password_is_refused_and_links_nothing(admin):
 
 
 async def test_one_jellyfin_user_cannot_be_linked_to_two_accounts(admin):
-    """§3.3: one-to-one, held by the partial unique index rather than by a lookup — two admins
-    linking at once would both pass a lookup."""
+    """Held by the partial unique index, not a lookup: two
+    admins linking at once would both pass a lookup."""
     client, module = admin
     await _configure(client, module)
     users = await _users(client)
@@ -588,7 +459,6 @@ async def test_linking_an_unknown_account_is_a_404(admin):
 
 
 async def test_unlinking_leaves_a_working_account(admin):
-    """§3.3: the link is optional, so removing it must not break anything."""
     client, module = admin
     await _configure(client, module)
     users = await _users(client)
@@ -611,12 +481,8 @@ async def test_unlinking_leaves_a_working_account(admin):
     assert (await client.get("/api/auth/me")).status_code == 200
 
 
-# --- §3.3: authentication is never delegated to Jellyfin -------------------------------------
-
-
 async def test_signing_in_works_while_jellyfin_is_unreachable(secrets_key, app, monkeypatch):
-    """The promise that decides the whole connector design: the app must work when Jellyfin is
-    down. Nothing on the auth path may touch it."""
+    """The app must work when Jellyfin is down, so nothing on the auth path may touch it."""
     monkeypatch.setattr(
         registry, "make_client",
         lambda cfg: JellyfinClient("http://127.0.0.1:1", "key", timeout=0.2),
@@ -642,9 +508,7 @@ async def test_sync_now_reports_cleanly_with_nothing_linked(admin):
 
 
 async def test_re_mapping_without_credentials_drops_the_old_token(admin):
-    """A token belongs to one Jellyfin identity. Keeping it across a re-map would send the
-    previous user's credential with the new user's id — which fails, but only after the app
-    has tried."""
+    """A token belongs to one Jellyfin identity."""
     client, module = admin
     await _configure(client, module)
     users = await _users(client)
@@ -669,34 +533,9 @@ async def test_re_mapping_without_credentials_drops_the_old_token(admin):
     assert after["jellyfin_link_state"] == "needs_relink"
 
 
-# --- M4.11: the link is one read-modify-write, and §7.1's pin is stored rather than shown ------
-
-
 async def test_two_members_linked_at_the_same_time_both_keep_their_token(admin, monkeypatch):
-    """§14.3's sealed token map, merged by two requests at once.
-
-    Reproduced before the fix, against this same in-process fake: both responses answered
-    `has_token: true` and `state: linked`, and `GET /api/admin/users` then showed jenny linked
-    with `has_jellyfin_token: false` while the card counted `linked_users: 1`. The map is
-    AEAD-sealed, so the merge happens in Python and cannot be expressed in SQL — and on an
-    autocommit connection both requests read the same map, each added one entry, and the second
-    write overwrote the first. `registry.save_jellyfin` re-read and merged again, so the window
-    existed twice over.
-
-    The account left behind is not cosmetically wrong. "Linked with no token" is exactly the
-    state §7.3's sweep treats as a missing credential, which before this milestone stopped that
-    member's whole reconciliation at their first owed row for ever — so a lost token here is a
-    person whose seen states silently stop flowing, with nothing on any surface saying so.
-
-    **The barrier is what makes this a test rather than a coin toss.** `asyncio.gather` alone does
-    not reliably put both requests inside the window: each one makes a sign-in and four database
-    round trips first, and measured against the unfixed route the two simply took turns and both
-    tokens survived. So the sign-ins are made to finish together — which is also the real shape of
-    this, two people on two phones doing §7.3's one-time password entry side by side on the sofa —
-    and from there every step is an await that yields, so both requests are genuinely in the
-    read-modify-write at once. The barrier releases *before* either request opens a transaction,
-    so it cannot itself wedge the row lock the fix takes.
-    """
+    """The sealed token map is merged in Python, so concurrent links lost a token. The barrier makes both
+    sign-ins finish together so both requests are inside the read-modify-write at once."""
     client, module = admin
     await _configure(client, module)
     users = await _users(client)
@@ -734,31 +573,13 @@ async def test_two_members_linked_at_the_same_time_both_keep_their_token(admin, 
     } == {"patrick": ("linked", True), "jenny": ("linked", True)}, (
         "an account reads 'linked' with no token: one of the two merges was lost (§14.3)"
     )
-    # The card's own count, which reads the token map rather than the badge — the two have to
-    # agree, or §6.6 shows a household with more links than credentials.
+    # The card counts the token map, not the badge; the two must agree.
     assert (await client.get("/api/admin/connectors/jellyfin")).json()["linked_users"] == 2
 
 
 async def test_linking_an_account_while_it_is_being_unlinked_does_not_deadlock(admin, monkeypatch):
-    """The two writers of this pair of rows, taking their locks in the same order.
-
-    Link and Unlink are adjacent controls in §6.6's mapping table and they write the same two
-    things: the account's badge in `app_user`, and that member's entry in the connector's sealed
-    token map. `seen.unlink` has taken them in that order since M1; this route now takes a lock on
-    the second, so it has to agree — in the opposite order the two transactions hold what the
-    other is waiting for, and Postgres breaks the tie by aborting one of them with a deadlock
-    error, which reaches the admin as a 500 on a button that was supposed to be idempotent.
-
-    Measured with the locks in the other order (the connector row first, as the `write_txn(lock=)`
-    idiom would suggest): `asyncpg.exceptions.DeadlockDetectedError`, and one of the two requests
-    answering 500. Hence the handshake rather than a bare `gather`: the unlink is held between its
-    two rows until the link's sign-in has returned, which is the one interleaving that produces it.
-
-    Either order of commits is a correct answer — an admin who presses both buttons gets whichever
-    landed second — so the assertion is that both requests answered and that the account ends up
-    self-consistent. A token stored against an account that is no longer linked is the state
-    `forget_token` exists to prevent (§7.3).
-    """
+    """Both writers take `app_user` then the connector
+    row; the other order deadlocks and one answers 500."""
     client, module = admin
     await _configure(client, module)
     users = await _users(client)
@@ -782,8 +603,8 @@ async def test_linking_an_account_while_it_is_being_unlinked_does_not_deadlock(a
         return result
 
     async def hold_the_unlink_between_its_two_rows(conn, app_user_id):
-        # The unlink has updated `app_user` and has not yet reached the connector row. Waiting for
-        # the link's sign-in puts it at the head of its own transaction at this exact moment.
+        # The unlink has updated `app_user` and not reached the
+        # connector row; the link's sign-in now takes its turn.
         await asyncio.wait_for(signed_in.wait(), timeout=10)
         await asyncio.sleep(0.05)
         return await real_forget_token(conn, app_user_id)
@@ -808,20 +629,7 @@ async def test_linking_an_account_while_it_is_being_unlinked_does_not_deadlock(a
 async def test_the_probed_version_and_its_verdict_are_stored_by_save_and_by_test(
     admin, db, monkeypatch
 ):
-    """§7.1 pins Jellyfin >= 10.9 for the *write*, and the pin was a sentence in a button.
-
-    `MIN_SERVER_VERSION` and `supported` have existed since M1; the test button returned the
-    verdict to the browser and nothing stored it, so nothing on the write path could consult it.
-    A 10.8 install therefore passed every visible check while `POST /UserPlayedItems` — the route
-    that version pins — 404ed for the life of the household, which together with the sweep's
-    missing failed-push counter read as a healthy quiet sync.
-
-    Both routes, because an admin uses both and the write must be gated whichever they pressed:
-    Save is where the credentials are known to be fresh, Test is where they go to prove it. The
-    second half of this test is the case the stored verdict exists for — a server that *fell*
-    below the pin, which is a downgrade or a restored VM, and which nothing would notice if the
-    pair were only ever written once.
-    """
+    """§7.1's >= 10.9 pin must be stored by Save and Test, so a server that fell below it is noticed."""
     client, module = admin
 
     saved = await client.put(
@@ -835,8 +643,7 @@ async def test_the_probed_version_and_its_verdict_are_stored_by_save_and_by_test
     card = (await client.get("/api/admin/connectors/jellyfin")).json()
     assert (card["server_version"], card["server_supported"]) == (module.SERVER_VERSION, True)
 
-    # The same server, answering a version below the pin. The fake reads its constant per request,
-    # so this is the server changing under a configuration that did not.
+    # The fake reads its constant per request: the server changes under an unchanged configuration.
     monkeypatch.setattr(module, "SERVER_VERSION", "10.8.13")
     probe = (await client.post("/api/admin/connectors/jellyfin/test")).json()
     assert (probe["ok"], probe["supported"]) == (True, False)
@@ -845,9 +652,7 @@ async def test_the_probed_version_and_its_verdict_are_stored_by_save_and_by_test
         "the test button computed the verdict and threw it away again"
     )
 
-    # And the stored pair is what the one write reads. Built the way `registry.make_client` builds
-    # it rather than through that function, because this file's fixture replaces it to reach the
-    # fake — so the assertion would otherwise be about the fixture instead of the connector row.
+    # Built as `make_client` builds it, since this file's fixture replaces that function.
     cfg = await registry.load_jellyfin(db)
     refusal = JellyfinClient(
         cfg.url, cfg.api_key,
@@ -857,20 +662,7 @@ async def test_the_probed_version_and_its_verdict_are_stored_by_save_and_by_test
 
 
 async def test_sync_now_says_a_sweep_is_already_running_rather_than_starting_a_second(admin, db):
-    """§6.6's "sync now" against §5.3's 15-minute job, which is a real collision on a live box:
-    the button is pressed because something looks wrong, and the thing that looks wrong is
-    usually a sweep in flight.
-
-    Two sweeps of one household decide adoptions from two different library snapshots, so the
-    loser reports instead of racing — as a 200 the card can print, not an exception. The lock is
-    held here from a second connection, which is what the worker process is.
-
-    The body is also the admin card's whole data, so the counters this milestone added are
-    asserted by name: `push_failed` and `push_errors` are the app->Jellyfin direction's health,
-    `owed_no_token` the repairable debt, `unowned` §7.2's falsified ownership, and `resolve`
-    carries the unmatched items. A card that cannot see them is how a dead write direction read
-    as "pushed 0 - adopted 0 - unchanged N" for a whole install.
-    """
+    """Two sweeps would decide adoptions from two snapshots, so the loser reports as a 200."""
     client, module = admin
     await _configure(client, module)
     users = await _users(client)
