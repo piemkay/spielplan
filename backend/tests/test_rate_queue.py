@@ -158,14 +158,23 @@ async def test_a_fresh_households_first_queue_is_the_seed_list_most_likely_seen_
     assert {c.source for c in cards} == {"seed"}
     decades = dict(SEED)
     for card in cards:
-        # The number that placed the card, on the card -- as on every other card (§6.1's
-        # "queued because: 72% likely you have seen it").
+        # The number that placed the card travels with it -- as on every other card -- and the
+        # sentence does not print it: P(seen) is the queue's model, behind Show the model since
+        # the second household test (A3 of 2026-09-26).
         assert card.p_seen == pytest.approx(expected_p(card.title_id), abs=1e-9)
-        assert card.reason == (
-            f"queued because: a starter title from the {decades[card.title_id]}s · "
-            f"{round(card.p_seen * 100)}% likely you have seen it"
-        )
+        crowd = math.log1p(ITEM_N[card.title_id]) / math.log1p(queue.CROWD_SATURATION)
+        if crowd >= queue.WELL_KNOWN_CROWD:
+            assert card.reason == f"A well-known film from the {decades[card.title_id]}s."
+        else:
+            # 900 crowd ratings is not "well-known", whatever list the title is on.
+            assert card.reason == (
+                f"A film from the {decades[card.title_id]}s we ask everyone about first."
+            )
         assert "position" not in card.reason, "a 0-based file index is not a reason"
+        assert "%" not in card.reason and "starter" not in card.reason, card.reason
+    assert {c.title_id for c in cards if "well-known" not in c.reason} == {8}, (
+        "the fixture no longer puts one seed title on each side of the well-known line"
+    )
 
 
 async def test_the_seed_list_still_leads_titles_outside_it_until_it_is_answered(db, world):
@@ -349,7 +358,7 @@ async def test_p_seen_moves_the_queue_when_a_signal_moves(db, world):
     )
     assert with_co_seen[0].title_id == 5, "the household's other member is a named §6.1 input"
     assert with_co_seen[0].p_seen == pytest.approx(expected_p(5, co_seen=1.0), abs=1e-9)
-    assert "someone else in the house has seen it" in with_co_seen[0].reason
+    assert with_co_seen[0].reason == "Someone else in the house has seen it."
 
     # §6.1's "Jellyfin history": §7.3's >=90% poll fired on title 3 and nobody answered it.
     await db.execute(
@@ -361,8 +370,73 @@ async def test_p_seen_moves_the_queue_when_a_signal_moves(db, world):
         db, user_id=patrick, kinds=["movie"], limit=5, rng=random.Random(0)
     )
     assert with_playback[0].title_id == 3
-    assert "you played it through" in with_playback[0].reason
+    assert with_playback[0].reason == "You played it to the end."
     assert with_playback[0].p_seen == pytest.approx(expected_p(3, playback=True), abs=1e-9)
+
+
+def test_unfamiliarity_only_lowers_and_needs_the_answers_to_keep_saying_so():
+    """The person's own answers per language and kind, shrunk towards "no opinion" by two
+    pseudo-answers each way and read only below a half (H7 of 2026-09-26)."""
+    assert queue.unfamiliarity(0, 0) == 0.0, "no answers, no opinion"
+    assert queue.unfamiliarity(0, 1) == pytest.approx(-0.2)
+    assert queue.unfamiliarity(0, 3) == pytest.approx(2 * (2 / 7 - 0.5))
+    assert queue.unfamiliarity(0, 30) < queue.unfamiliarity(0, 3) < queue.unfamiliarity(0, 1)
+    assert queue.unfamiliarity(0, 10_000) > -1.0
+    for seen, answered in ((1, 2), (5, 5), (16, 21), (40, 41)):
+        assert queue.unfamiliarity(seen, answered) == 0.0, "a known language is never raised"
+    # And it can only ever take P(seen) down: the weight is positive and the feature is not.
+    assert queue.WEIGHTS.unfamiliar > 0
+    base = queue.Features(owned=True, crowd=0.5)
+    assert queue.p_seen(base) > queue.p_seen(
+        queue.Features(owned=True, crowd=0.5, unfamiliar=queue.unfamiliarity(0, 3))
+    )
+    assert queue.dominant(queue.Features(unfamiliar=-0.5)) is None, "it is never the named cause"
+
+
+async def test_a_persons_not_seen_answers_lower_that_languages_titles_and_nothing_else(db, world):
+    """H7 of the second household test: Rate's series queue drifted into anime.
+
+    Jenny answered "not seen" to Attack on Titan and to Berserk, and Monster came three cards
+    later; today Death Note leads her series queue on the `owned` term, because the household
+    owns 39 Japanese series and nothing in §6.1's P(seen) signals was about her. Her own answers
+    are: three "not seen" on one language's series lower that language's series for her, and for
+    nobody else, and nothing she knows is raised. The why-line does not change -- the term is a
+    correction to the ordering, not a cause the card can name.
+    """
+    patrick, mia = world["patrick"], world["mia"]
+    await db.execute(
+        "INSERT INTO title (id, kind, name, year, is_owned, original_language) VALUES "
+        "(51, 'series', 'Anime 1', 2010, true, 'ja'), (52, 'series', 'Anime 2', 2010, true, 'ja'),"
+        "(53, 'series', 'Anime 3', 2010, true, 'ja'), (54, 'series', 'Anime 4', 2010, true, 'ja'),"
+        "(55, 'series', 'Drama 1', 2010, true, 'en'), (56, 'series', 'Drama 2', 2010, true, 'en')"
+    )
+
+    async def queue_for(user):
+        cards = await queue.next_sweep_cards(
+            db, user_id=user, kinds=["series"], limit=10, exclude=(9, 10), reask_rate=0.0
+        )
+        return {card.title_id: card for card in cards}
+
+    before = await queue_for(patrick)
+    assert before[54].p_seen == pytest.approx(before[55].p_seen), "the fixture is otherwise even"
+
+    for title_id in (51, 52, 53):
+        await observations.record_not_seen(db, user_id=patrick, title_id=title_id)
+    after = await queue_for(patrick)
+    assert set(after) == {54, 55, 56}, "an answered 'not seen' is never asked again"
+    assert list(after)[-1] == 54, "the fourth Japanese series now waits behind the English two"
+    age = min(1.0, (datetime.now(UTC).year - 2010) / queue.AGE_SATURATION_YEARS)
+    assert after[54].p_seen == pytest.approx(
+        queue.p_seen(
+            queue.Features(owned=True, age=age, unfamiliar=queue.unfamiliarity(0, 3))
+        ),
+        abs=1e-9,
+    ), "SQL orders and Python explains: the two spellings of the term agree"
+    assert after[55].p_seen == pytest.approx(before[55].p_seen), "nothing else moves"
+    assert after[54].reason == before[54].reason == "It's in your library."
+
+    theirs = await queue_for(mia)
+    assert theirs[54].p_seen == pytest.approx(before[54].p_seen), "Patrick's answers are his own"
 
 
 async def test_a_title_the_app_already_holds_as_seen_leads_the_queue(db, world):
@@ -385,18 +459,28 @@ async def test_a_title_the_app_already_holds_as_seen_leads_the_queue(db, world):
 
 async def test_every_card_carries_the_one_line_why_that_names_its_dominant_cause(db, world):
     """§6.8: "every shelf, recommendation, question and conflict carries a one-line why". §6.1
-    quotes the form on this very card: "queued because: 72% likely you have seen it"."""
+    quoted the form "queued because: 72% likely you have seen it", which the second household
+    test read as the queue's working: the line is a whole sentence naming the dominant cause, and
+    its probability is not in it (A3 of 2026-09-26; decision 486's model number)."""
     patrick = world["patrick"]
     await rate_all(db, patrick, [t for t, _ in SEED])
     cards = await queue.next_sweep_cards(
         db, user_id=patrick, kinds=["movie"], limit=5, rng=random.Random(0)
     )
+    sentences = {
+        phrase.format(years=f"{y} years", noun=noun)
+        for phrase in queue.PHRASES.values()
+        for y in range(0, 80)
+        for noun in ("film", "series")
+    } | {queue.UNSURE_REASON}
     for card in cards:
-        assert card.reason.startswith("queued because: ")
-        assert f"{round(card.p_seen * 100)}% likely you have seen it" in card.reason
-        assert card.reason.split(" · ")[-1] in [
-            phrase.format(years=y) for phrase in queue.PHRASES.values() for y in range(0, 80)
-        ]
+        assert card.reason in sentences, card.reason
+        assert "%" not in card.reason and "queued because" not in card.reason, card.reason
+    # The fixture's films are all owned: a crowd of ~1,000 ratings or more is named, and one below
+    # that line (title 5, 300 ratings) is not called well-known -- the library is named instead.
+    reasons = {c.title_id: c.reason for c in cards}
+    assert reasons[5] == "It's in your library.", reasons
+    assert set(reasons.values()) <= {"A well-known film.", "It's in your library."}, reasons
 
 
 async def test_the_age_why_line_prints_the_titles_real_age_and_not_the_saturation_point(db, world):
@@ -439,11 +523,11 @@ async def test_the_age_why_line_prints_the_titles_real_age_and_not_the_saturatio
 
     for title_id, released in ((41, 1975), (42, 2021)):
         years = this_year - released
-        assert cards[title_id].reason.endswith(f"it has been out {years} years"), (
+        assert cards[title_id].reason == f"It has been out {years} years.", (
             f"title {title_id} was released in {released} and the card says: "
             f"{cards[title_id].reason!r}"
         )
-    assert "it has been out 40 years" not in cards[41].reason, (
+    assert "40 years" not in cards[41].reason, (
         "the 1975 film printed the saturation point rather than its age"
     )
 
@@ -606,20 +690,22 @@ def test_no_pair_exists_until_one_class_holds_two_titles():
     assert battle.draw(split, rng=rng) is None, "same class, different kinds, is not a pair"
 
 
-def test_the_battle_why_line_names_the_shared_answer_and_the_random_draw_and_no_section():
+def test_the_battle_why_line_names_the_shared_answer_and_no_section():
     """§6.8's one-line why on the battle card, in decision 486's register.
 
     The line carried 54a's whole clause, "(§6.3)" and "(§6.2)" included, about fifty words under
     two posters: on an iPhone that pushed Tie, the decisive toggle and Skip below the fold, and a
-    member was shown two section numbers on the surface they rate on. It now says what this card
-    is about -- the pair shares the person's own answer and was drawn at random -- and §6.1's
-    pair-selection sentence, restated by decision 491, lives whole in the rail. The deleted
-    falsehood of finding 22 stays pinned as an absence. [M4.10 finding 22; decisions 486, 491]
+    member was shown two section numbers on the surface they rate on. Then "queued because: you
+    rated both liked · random pairs build your profile best", which the second household test
+    still read as the queue talking about itself. It now says the one fact that makes the pair a
+    fair question -- the person put both in the same place -- under the card's own question, and
+    how pairs are drawn is the rail's to say. The deleted falsehood of finding 22 stays pinned as
+    an absence. [M4.10 finding 22; decisions 486, 491; A1 and A3 of 2026-09-26]
     """
     for verdict_class, label in enumerate(("disliked", "fine", "liked")):
         line = battle.reason_for(verdict_class)
-        assert line.startswith(f"queued because: you rated both {label}"), line
-        assert "random" in line
+        assert line == f"You rated both of these {label}.", line
+        assert "queued because" not in line and "profile" not in line, line
         assert "§" not in line and "tier queue" not in line, line
         assert "only pay off" not in line, "the clause 54a deleted is back"
         assert len(line) < 80, f"the why-line has to fit a phone card: {len(line)} chars"
@@ -765,7 +851,7 @@ async def test_the_battle_pool_is_only_titles_that_are_both_seen_and_verdicted(d
     )
     assert {pair.title_a, pair.title_b} == {1, 2}
     assert pair.verdict_class == 2
-    assert pair.reason.startswith("queued because: you rated both liked")
+    assert pair.reason == "You rated both of these liked."
 
     assert (
         await battle.next_battle_pair(

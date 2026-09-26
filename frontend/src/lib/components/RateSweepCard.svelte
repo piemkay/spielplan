@@ -27,6 +27,8 @@
     reveal = null,
     holding = false,
     busy = false,
+    pending = null,
+    showModel = false,
     onVerdict,
     onNotSeen,
     onSkip,
@@ -34,6 +36,9 @@
   } = $props();
 
   const title = $derived(card?.title ?? {});
+  // P(seen) rides under `model`, which the server strips for a viewer with Show the model off
+  // (decision 486); read here only while the viewer's switch is on as well.
+  const pSeen = $derived(showModel ? (card?.model?.p_seen ?? null) : null);
   const labels = $derived(
     card?.verdict_labels ?? [
       [0, 'disliked'],
@@ -55,6 +60,10 @@
     <!-- §6.8: "every shelf, recommendation, question and conflict carries a one-line why".
          Proposal 39 puts it under the meta line and above the recall aid. -->
     <p class="why" data-testid="rate-queue-reason">{card?.reason ?? ''}</p>
+    {#if pSeen != null}
+      <!-- §6.8's data voice, the number beside its name (decision 486). -->
+      <p class="data model" data-testid="rate-queue-p-seen">P(seen) {pSeen.toFixed(2)}</p>
+    {/if}
 
     <!-- `substituted_for` stays on the wire and is not rendered here any more. The line it drove
          -- "a battle was due in this slot, serving a sweep card instead" -- told a member about the
@@ -85,11 +94,16 @@
     {:else}
       <!-- Proposal 52: lowercase, worst → best, matching the stored ordinal. -->
       <div class="verdicts" role="group" aria-label="Your verdict">
+        <!-- The tapped answer stays lit and says it is being saved while the others wait: A4 of
+             the 2026-09-26 household test was every button greying out at once, with nothing
+             saying which answer had been taken. -->
         {#each labels as [value, label] (value)}
           <button
             class="verdict v{value}"
+            class:picked={pending === `verdict-${value}`}
             data-testid="rate-verdict-{value}"
             data-verdict-label={label}
+            aria-busy={pending === `verdict-${value}`}
             disabled={busy}
             onclick={() => onVerdict(value)}
           >{label}</button>
@@ -98,12 +112,26 @@
       <div class="secondary">
         <!-- Owner decision 2026-08-29: one seen-state control. A title you cannot remember
              is plain `unseen` (§4.2) — there is no third state to offer. -->
-        <button class="text" data-testid="rate-not-seen" disabled={busy} onclick={onNotSeen}>
+        <button
+          class="text"
+          class:picked={pending === 'not_seen'}
+          data-testid="rate-not-seen"
+          aria-busy={pending === 'not_seen'}
+          disabled={busy}
+          onclick={onNotSeen}
+        >
           not seen
         </button>
         <!-- Proposal 38: writes no observation, suppresses the redraw for this sitting,
              and is covered by the persistent Undo like everything else. -->
-        <button class="text" data-testid="rate-skip" disabled={busy} onclick={onSkip}>
+        <button
+          class="text"
+          class:picked={pending === 'skip'}
+          data-testid="rate-skip"
+          aria-busy={pending === 'skip'}
+          disabled={busy}
+          onclick={onSkip}
+        >
           skip
         </button>
       </div>
@@ -193,6 +221,19 @@
   .verdict:disabled {
     opacity: 0.45;
     cursor: default;
+  }
+  /* The answer in flight: selected, in §6.8's one accent, while its neighbours wait dimmed. */
+  .verdict.picked:disabled {
+    opacity: 1;
+    border-color: var(--ember);
+    background: var(--ember-wash);
+    color: var(--ink);
+  }
+  .text.picked:disabled {
+    color: var(--ink-2);
+  }
+  .model {
+    margin: 4px 0 0;
   }
   .secondary {
     display: flex;

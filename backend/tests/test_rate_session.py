@@ -387,7 +387,8 @@ async def test_the_empty_state_names_the_pool_that_is_empty_rather_than_claiming
         "the first-week member has rated nothing at all: "
         f"{battle['drained']['text']!r}"
     )
-    assert "Sweep" in battle["drained"]["text"], "and the copy points at what fills the pool"
+    # In plain words since the second household test, not the old mode name (A3 of 2026-09-26).
+    assert "one by one" in battle["drained"]["text"], "and the copy points at what fills the pool"
 
     # The same person with Series selected: this household has no series at all, so the sweep
     # queue really is spent for that partition and the old sentence is the true one.
@@ -887,12 +888,15 @@ async def test_one_battle_answer_writes_exactly_one_duel_row(db, rated, outcome)
     assert out.session.slot == 2
 
 
-async def test_the_decisive_toggle_is_persistent_and_sets_the_stored_margin(db, rated):
-    """§6.1: "a persistent **decisive toggle** sets the margin weight (~1.6 vs 1.0)".
+async def test_the_decisive_switch_weights_one_pair_and_resets_for_the_next(db, rated):
+    """§6.1's decisive switch sets the margin weight (~1.6 vs 1.0) -- for the pair it is set on.
 
-    Persistent means it belongs to the session, not to the request: one tap on the toggle
-    changes every answer after it. The two numbers come from `hp.margin_for`, so they stay in
-    `ledger_hyperparams.json` where §4.3 puts them.
+    §6.1 called it persistent: one tap changed every answer after it. On the second household
+    test that is what made it wrong -- Patrick turned it on for one clear pick and his next pair
+    was written at the decisive weight too (duels 5 and 7 on the live install, 1.6 each). So the
+    switch is the pair's: the answer to the pair on the table carries it, and the next pair
+    starts with it off. The two numbers come from `hp.margin_for`, so they stay in
+    `ledger_hyperparams.json` where §4.3 puts them. [decision 520; A6 of 2026-09-26]
     """
     user = rated["user"]
     s = await open_session(db, user, mode="battle")
@@ -900,16 +904,51 @@ async def test_the_decisive_toggle_is_persistent_and_sets_the_stored_margin(db, 
     s = (await session.record_duel(db, s, card_token=token(s), outcome="A", hp=HP)).session
 
     s = await session.set_controls(db, s, decisive=True)
-    assert s.current_card is not None, "the toggle changes the weight, not the question"
+    assert s.current_card is not None, "the switch changes the weight, not the question"
+    assert s.decisive is True
     s = (await session.record_duel(db, s, card_token=token(s), outcome="B", hp=HP)).session
+    assert s.decisive is False, "the next pair starts with the switch off"
+    assert (await session.payload(db, s))["session"]["decisive"] is False
     s = (await session.record_duel(db, s, card_token=token(s), outcome="A", hp=HP)).session
 
     margins = [
         r["margin"]
         for r in await db.fetch("SELECT margin FROM duel WHERE user_id = $1 ORDER BY id", user)
     ]
-    assert margins == pytest.approx([1.0, 1.6, 1.6])
+    assert margins == pytest.approx([1.0, 1.6, 1.0])
     assert HP.margin_for(True) == 1.6 and HP.margin_for(False) == 1.0
+
+
+async def test_the_decisive_switch_leaves_with_its_pair_on_a_skip_an_undo_and_a_mode_change(
+    db, rated
+):
+    """Decision 520 from the other three doors a pair leaves by. A skip, a mode change and an
+    Undo each put a different question on the table, and a switch set for the pair that left
+    must not weigh the answer to the one that came -- Undo included, because the pair it brings
+    back is asked afresh and the popped answer's weight left with the answer."""
+    user = rated["user"]
+    s = await open_session(db, user, mode="battle")
+
+    s = await session.set_controls(db, s, decisive=True)
+    s = (await session.record_skip(db, s, card_token=token(s))).session
+    assert s.decisive is False, "a skipped pair takes its switch with it"
+
+    s = await session.set_controls(db, s, decisive=True)
+    s = await session.set_controls(db, s, mode="mix")
+    assert s.decisive is False, "a mode change redraws, and the switch goes with the old card"
+
+    s = await session.ensure_card(db, await session.set_controls(db, s, mode="battle"))
+    s = await session.set_controls(db, s, decisive=True)
+    s = (await session.record_duel(db, s, card_token=token(s), outcome="A", hp=HP)).session
+    s = await session.set_controls(db, s, decisive=True)
+    s = (await session.undo(db, s, hp=HP)).session
+    assert s.current_card["type"] == "battle", "the undone pair is back on the table"
+    assert s.decisive is False, "and it is asked afresh, with the switch off"
+
+    # A control that names no switch leaves it where the person put it on this pair.
+    s = await session.set_controls(db, s, decisive=True)
+    s = await session.set_controls(db, s, kinds=["movie"])
+    assert s.decisive is True, "narrowing to the kind already on the table redraws nothing"
 
 
 async def test_one_answer_may_override_the_toggle_without_moving_it(db, rated):
@@ -2434,6 +2473,123 @@ async def test_the_verdict_is_durable_before_jellyfin_answers(
     ) is True
 
 
+async def test_a_handed_off_push_answers_the_tap_first_and_settles_the_same_bookkeeping(
+    db, pg_url, fake_jellyfin, linked_sweep
+):
+    """A4 of the second household test: the verdict buttons sat greyed for seconds after a tap.
+
+    Measured on the live install, read-only: a film verdict spent 64 ms of its 98 ms route in
+    Jellyfin's `POST /UserPlayedItems`, and Jenny's "liked" on Lost -- a SERIES, which Jellyfin
+    marks played episode by episode -- 3,269 ms of 3,317. With `later` the tap answers before the
+    push and the push settles on a pooled connection of its own: the same Played write, the same
+    §7.3 stamp, the same `prior_state.pushed` correction Undo reads (decision 207), and §6.7's
+    line for how it ended, recorded when it ends. [§6 preamble, §7.3]
+    """
+    from spielplan.db import pool as db_pool
+
+    await db_pool.open_pool(pg_url, min_size=1, max_size=2)
+    module, transport = fake_jellyfin
+    user = linked_sweep["user"]
+    jf = session.Jellyfin(
+        client=JellyfinClient(
+            "http://jellyfin.test", module.API_KEY, transport=_SlowPlayed(transport, 0.5)
+        ),
+        cfg=linked_sweep["jf"].cfg,
+    )
+    s = await open_session(db, user, mode="sweep")
+    title_id = s.current_card["title_id"]
+    rail.forget(user_id=user)
+
+    started = time.monotonic()
+    out = await session.record_verdict(
+        db, s, card_token=token(s), value=2, hp=HP, jf=jf, later=session.settle_in_background
+    )
+    elapsed = time.monotonic() - started
+    assert elapsed < 0.4, f"the tap waited {elapsed:.2f} s for a push that sleeps 0.5 s"
+    assert "user_title.state = seen -> Jellyfin push follows" in out.log
+    assert out.session.current_card is not None, "and the next card rode in with the answer"
+    assert module.state.write_log == [], "the push had not happened when the tap was answered"
+
+    await session.settled()
+    assert module.state.write_log == [
+        {"user": "jf-user-patrick", "item": f"jf-{title_id}", "played": True}
+    ]
+    assert await db.fetchval(
+        "SELECT jf_synced_at IS NOT NULL FROM user_title WHERE user_id = $1 AND title_id = $2",
+        user,
+        title_id,
+    ) is True
+    stored = await db.fetchval(
+        "SELECT prior_state FROM rate_observation WHERE session_id = $1 ORDER BY seq DESC LIMIT 1",
+        s.id,
+    )
+    assert stored[0]["pushed"] is True, "Undo reads this flag to hand the Played flag back"
+    assert "user_title.state = seen -> Jellyfin Played true" in [
+        e["text"] for e in rail.recent(user_id=user)
+    ], "the rail says how the push ended once it has"
+
+
+async def test_the_rate_routes_hand_the_push_off_and_answer_without_waiting_for_it(
+    db, rate_client, fake_jellyfin, monkeypatch
+):
+    """The same, through the routes a phone calls: verdict, not-seen and a title card's answer
+    each return while a 0.5 s Jellyfin is still being told, and each push lands afterwards."""
+    from spielplan.api import rate as rate_routes
+
+    client, user_id = rate_client
+    module, transport = fake_jellyfin
+    owned = [item["Id"].removeprefix("jf-") for item in module.ITEMS if item["Id"] != "jf-x"]
+    await make_titles(db, [(int(i), "movie", f"Title {i}") for i in owned])
+    await db.execute("UPDATE title SET jellyfin_id = 'jf-' || id")
+    await db.execute(
+        "UPDATE app_user SET jellyfin_user_id = 'jf-user-patrick', jellyfin_link_state = 'linked' "
+        "WHERE id = $1",
+        user_id,
+    )
+    plain = JellyfinClient("http://jellyfin.test", module.API_KEY, transport=transport)
+    _jf_id, jf_token = await plain.authenticate_by_name("patrick", module.PASSWORD)
+    jf = session.Jellyfin(
+        client=JellyfinClient(
+            "http://jellyfin.test", module.API_KEY, transport=_SlowPlayed(transport, 0.5)
+        ),
+        cfg=JellyfinConfig(
+            url="http://jellyfin.test", api_key=module.API_KEY, user_tokens={str(user_id): jf_token}
+        ),
+    )
+
+    async def slow_jellyfin(_conn):
+        return jf
+
+    monkeypatch.setattr(rate_routes, "_jellyfin", slow_jellyfin)
+    # §6.7's rail is where the push's line is read, and it is Show the model's to open.
+    await client.post("/api/auth/preferences", json={"show_model": True})
+    await client.post("/api/rate/session", json={"mode": "sweep"})
+    card = (await client.get("/api/rate")).json()["card"]
+
+    answered, asked = [], set()
+    for path, body in (
+        ("/api/rate/verdict", {"value": 2}),
+        ("/api/rate/not-seen", {}),
+    ):
+        asked.add(card["title"]["id"])
+        started = time.monotonic()
+        reply = await client.post(path, json={"card_token": card["token"], **body})
+        answered.append(time.monotonic() - started)
+        assert reply.status_code == 200, reply.text
+        assert any("Jellyfin push follows" in line for line in reply.json()["log"]), reply.json()
+        card = reply.json()["card"]
+    untouched = next(int(i) for i in owned if int(i) not in asked)
+    started = time.monotonic()
+    reply = await client.post(f"/api/rate/title/{untouched}", json={"answer": "fine"})
+    answered.append(time.monotonic() - started)
+    assert reply.status_code == 200, reply.text
+    assert max(answered) < 0.45, f"a Rate route waited for Jellyfin: {answered}"
+
+    await session.settled()
+    assert len(module.state.write_log) == 3, module.state.write_log
+    assert {w["played"] for w in module.state.write_log} == {True, False}
+
+
 async def test_the_journal_records_the_push_that_happened_and_not_the_one_intended(
     db, linked_sweep
 ):
@@ -2848,7 +3004,7 @@ async def test_a_pin_lifts_this_sittings_skip_and_an_earlier_not_seen(db, world)
 
     s = await session.ensure_card(db, s, head=[not_seen])
     assert s.current_card["title_id"] == not_seen
-    assert s.current_card["reason"] == "queued because: you picked it"
+    assert s.current_card["reason"] == "You picked this one."
 
 
 async def test_a_pin_of_the_other_kind_widens_the_session_to_serve_it(db, rate_client):
@@ -2886,7 +3042,7 @@ async def test_the_search_finds_a_title_and_its_pick_is_rated_on_the_card(db, ra
 
     card = (await client.get("/api/rate", params=[("head", 40)])).json()["card"]
     assert card["type"] == "sweep" and card["title"]["id"] == 40
-    assert card["reason"] == "queued because: you picked it"
+    assert card["reason"] == "You picked this one."
     answered = await client.post(
         "/api/rate/verdict", json={"card_token": card["token"], "value": 2, "head": [40]}
     )
@@ -2926,6 +3082,34 @@ async def test_the_reveal_carries_its_number_only_behind_show_the_model(db, rate
     ).json()
     assert re.search(r" · cdf \d\.\d\d$", body["reveal"]["text"]), body["reveal"]["text"]
     assert body["reveal"]["cdf"] == pytest.approx(MARKER_CDF)
+
+
+async def test_the_sweep_cards_p_seen_travels_only_behind_show_the_model(db, rate_client):
+    """A3 of the second household test: "queued because: ... 86% likely you have seen it" printed
+    the queue's model in the why-line. The line is a plain sentence now, and P(seen) rides under
+    the card's `model` key, which the payload strips for a viewer with Show the model off
+    (decision 486: gated where the payload is built, never hidden by the client). A card the
+    queue did not place by P(seen) -- recorded seen, which a §13 re-ask also is -- carries no
+    `model` at all, so the key cannot tell the two apart."""
+    client, user_id = rate_client
+    await make_titles(db, [(i, "movie", f"Title {i}") for i in range(1, 9)])
+
+    card = (await client.get("/api/rate")).json()["card"]
+    assert card["type"] == "sweep"
+    assert "model" not in card and "p_seen" not in card, card
+    assert "%" not in card["reason"] and "likely" not in card["reason"], card["reason"]
+
+    await client.post("/api/auth/preferences", json={"show_model": True})
+    card = (await client.get("/api/rate")).json()["card"]
+    assert 0.0 < card["model"]["p_seen"] < 1.0, card
+    assert "%" not in card["reason"], "the number is beside the line, not in it"
+
+    await db.execute(
+        "INSERT INTO user_title (user_id, title_id, state) VALUES ($1, 7, 'seen')", user_id
+    )
+    fresh = (await client.post("/api/rate/session", json={"restart": True})).json()["card"]
+    assert fresh["title"]["id"] == 7 and fresh["reason"] == "You have this marked as seen."
+    assert "model" not in fresh, "a recorded-seen card looks exactly like a re-ask"
 
 
 async def test_the_recall_aid_never_shows_an_mpst_synopsis(db, world):

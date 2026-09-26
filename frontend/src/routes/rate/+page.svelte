@@ -46,6 +46,7 @@
     findTitles,
     finder,
     load,
+    modeName,
     notSeen,
     rate,
     rateTitle,
@@ -68,15 +69,13 @@
 
   const kinds = $derived(rate.session?.kinds ?? []);
   const mode = $derived(rate.session?.mode ?? 'mix');
-  // While a reveal holds, the counter belongs to the card being shown, not to the next one.
-  const held = $derived(rate.frozenBlock ?? rate.session?.block ?? null);
-  // The server's `serving` is what the slot *would* draw. Undo can restore a card of the other
-  // type — a sweep card popped back while the mode says battle — and the counter has to name
-  // the card in front of the person rather than the one the slot would have dealt.
-  const block = $derived(held && rate.card ? { ...held, serving: rate.card.type } : held);
+  // While a reveal holds, the counter belongs to the card being shown, not to the next one. The
+  // line names the chosen mode rather than the card type (A2 of the 2026-09-26 household test),
+  // so the served type no longer has to be patched onto it.
+  const block = $derived(rate.frozenBlock ?? rate.session?.block ?? null);
   const reveal = $derived(revealLine(rate.reveal));
   const showModel = $derived(!!session.user?.show_model);
-  const modeWhy = $derived(MODES.find(([key]) => key === mode)?.[1] ?? '');
+  const modeWhy = $derived(MODES.find(([key]) => key === mode)?.[2] ?? '');
 
   // Read synchronously at init, before the first `load()`. `onMount` runs ahead of the effect
   // below, so a deep link arriving as `/rate?head=41&head=57` would otherwise open its first
@@ -155,20 +154,21 @@
   <header>
     <div class="titles">
       <h1>Rate</h1>
-      <RateBlockCounter {block} {kinds} />
+      <RateBlockCounter {block} {kinds} {mode} />
     </div>
 
     <div class="controls">
       <!-- §6.1's three modes. Mix is where every entry point lands (proposal 36); a mode
-           becomes sticky only once the person changes it themselves. -->
+           becomes sticky only once the person changes it themselves. Named by what each asks,
+           not by the spec's words for them (decision 519). -->
       <div class="group modes" role="group" aria-label="Mode">
-        {#each MODES as [key] (key)}
+        {#each MODES as [key, name] (key)}
           <button
             class="pill"
             data-testid="rate-mode-{key}"
             aria-pressed={mode === key}
             onclick={() => setMode(key)}
-          >{key}</button>
+          >{name}</button>
         {/each}
       </div>
 
@@ -262,7 +262,7 @@
   <!-- §6.8's register: the control says what it is, and one line says what it does. Hanging
        that sentence off each pill's `title` would make it a tooltip no phone can read and
        would give the button an accessible name it does not want. -->
-  <p class="why mode-why" data-testid="rate-mode-note">{mode} — {modeWhy}</p>
+  <p class="why mode-why" data-testid="rate-mode-note">{modeName(mode)}: {modeWhy}</p>
 
   {#if rate.notice}
     <p class="banner notice why" role="status" data-testid="rate-notice">{rate.notice}</p>
@@ -281,6 +281,8 @@
           {reveal}
           holding={rate.holding}
           busy={rate.busy}
+          pending={rate.pending}
+          {showModel}
           onVerdict={verdict}
           onNotSeen={notSeen}
           onSkip={skip}
@@ -291,6 +293,7 @@
           card={rate.card}
           decisive={!!rate.session?.decisive}
           busy={rate.busy}
+          pending={rate.pending}
           onDuel={duel}
           onCorrect={correct}
           onSkip={skip}
@@ -318,7 +321,7 @@
               data-testid="rate-drained-cta"
               disabled={rate.busy}
               onclick={() => setMode('sweep')}
-            >Switch to Sweep</button>
+            >Switch to Singles</button>
           {:else}
             <h2>Nothing left to queue</h2>
             <p class="why">{rate.drained.text}</p>
@@ -332,8 +335,8 @@
     </div>
 
     <div class="side">
-      <RateClassBalance balance={rate.balance} />
-      <RateRail balance={rate.balance} {mode} {showModel} />
+      <RateClassBalance balance={rate.balance} {kinds} />
+      <RateRail balance={rate.balance} {mode} {kinds} {showModel} />
       {#if showModel}
         <!-- §6.7, per-user toggle, default off. Everything in it describes a write that has
              already landed, which is the only reason it may be shown at all. -->
@@ -531,8 +534,12 @@
     .group.modes {
       flex: 1 1 250px;
     }
+    /* The modes' names are words now (decision 519), so the segments give their padding to the
+       name rather than let the row outgrow a phone. */
     .group.modes .pill {
       flex: 1;
+      padding-left: 6px;
+      padding-right: 6px;
     }
     /* The magnifier alone on a phone: the word is the one thing in that row that can go. */
     .find {

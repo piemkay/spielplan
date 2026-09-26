@@ -207,11 +207,14 @@ def reason_for(verdict_class: int) -> str:
     the person's own answer, and it was drawn at random -- and §6.1's pair-selection sentence,
     restated in plain words by decision 491, lives whole in the rail's "why these questions?"
     card, which the phone reaches with one tap. [decisions 486, 491; C5.6]
+
+    Then "queued because: you rated both liked · random pairs build your profile best" read as
+    the queue talking about itself on the second household test, over a card that never asked
+    its question. The card asks it now ("Which did you enjoy more?"), and this line is the one
+    fact that makes the pair a fair question: the person put both titles in the same place. How
+    the pairs are drawn is the rail's to say. [§6.1, §6.8; A1 and A3 of the 2026-09-26 test]
     """
-    return (
-        f"queued because: you rated both {VERDICT_LABELS[verdict_class]} · "
-        "random pairs build your profile best"
-    )
+    return f"You rated both of these {VERDICT_LABELS[verdict_class]}."
 
 
 _POOL = f"""

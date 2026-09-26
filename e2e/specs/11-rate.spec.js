@@ -78,14 +78,15 @@ const undoChip = (page) => page.getByTestId('rate-undo');
 
 /**
  * The counter line, spelled out. §6.1's "blocks of 15" with proposal 46's partition and the
- * card type actually on the table: `2 / 15 this block · film + series · battle`.
+ * mode the person chose, by its plain name: `2 / 15 this block · film + series · Pairs`. It
+ * named the card type served until the second household test, where "· battle" under a pressed
+ * Mix pill read as the header disagreeing with the person (A2 of 2026-09-26; decision 519).
  *
- * Written as one exact string rather than three `toContainText` calls because the alternation
- * test's whole claim is that the slot and the served type move together — a partial match
- * would pass while they disagreed.
+ * Written as one exact string rather than three `toContainText` calls because the slot and the
+ * rest have to move together — a partial match would pass while they disagreed.
  */
-const counterLine = (slot, serving, kinds = 'film + series') =>
-  `${slot} / 15 this block · ${kinds} · ${serving}`;
+const counterLine = (slot, mode, kinds = 'film + series') =>
+  `${slot} / 15 this block · ${kinds} · ${mode}`;
 
 /** The Rate envelope, read exactly as the surface reads it. */
 async function envelope(page) {
@@ -288,13 +289,15 @@ test.describe('rate', () => {
     await expect(page.getByTestId('rate-mode-sweep')).toHaveAttribute('aria-pressed', 'false');
     await expect(page.getByTestId('rate-mode-battle')).toHaveAttribute('aria-pressed', 'false');
 
-    await expect(counter(page)).toHaveText(counterLine(1, 'sweep'));
+    await expect(counter(page)).toHaveText(counterLine(1, 'Mixed'));
     await expect(sweepCard(page)).toBeVisible();
     await expect(page.getByTestId('rate-card-title')).not.toBeEmpty();
 
-    // §6.8: "every shelf, recommendation, question and conflict carries a one-line why", and
-    // §6.1 fixes this one's shape: "queued because: 72% likely you have seen it".
-    await expect(page.getByTestId('rate-queue-reason')).toContainText(/queued because:/);
+    // §6.8: "every shelf, recommendation, question and conflict carries a one-line why" -- a
+    // whole sentence since decision 519, with no probability in it: that is the model's number
+    // and waits behind Show the model (decision 486).
+    await expect(page.getByTestId('rate-queue-reason')).toHaveText(/^[A-Z].*\.$/);
+    await expect(page.getByTestId('rate-queue-reason')).not.toContainText(/%|queued because/);
 
     // Decision 35: the chip disables visibly, not silently — including on the first card,
     // where there is nothing behind it to pop.
@@ -403,11 +406,11 @@ test.describe('rate', () => {
     // is `test_mix_serves_single_titles_until_a_block_of_ratings_stands` and
     // `test_mix_keeps_alternating_across_the_block_roll`.
     await openFreshBlock(page);
-    await expect(counter(page)).toHaveText(counterLine(1, 'sweep'));
-    await expect(page.getByTestId('rate-mode-note')).toContainText('pairs from 15 ratings on');
+    await expect(counter(page)).toHaveText(counterLine(1, 'Mixed'));
+    await expect(page.getByTestId('rate-mode-note')).toContainText('the pairs start at 15 ratings');
 
     expect(await tapAnswer(page, { value: 2 })).toBe('sweep');
-    await expect(counter(page)).toHaveText(counterLine(2, 'sweep'));
+    await expect(counter(page)).toHaveText(counterLine(2, 'Mixed'));
     await expect(sweepCard(page)).toBeVisible();
     await expect(battleCard(page)).toHaveCount(0);
     await expect(page.getByTestId('rate-substituted')).toHaveCount(0);
@@ -434,7 +437,7 @@ test.describe('rate', () => {
     await undoChip(page).click();
     await expect(sweepCard(page)).toBeVisible();
     await expect(page.getByTestId('rate-card-title')).toHaveText(title);
-    await expect(counter(page)).toHaveText(counterLine(1, 'sweep'));
+    await expect(counter(page)).toHaveText(counterLine(1, 'Mixed'));
     // The compensating write, visible: the label the tap added is gone again.
     await expect(page.getByTestId('rate-balance-total')).toHaveText(labelsBefore);
     await expect(undoChip(page)).toBeDisabled();
@@ -456,7 +459,7 @@ test.describe('rate', () => {
     await hit.click();
 
     await expect(page.getByTestId('rate-card-title')).toHaveText(unrated.name);
-    await expect(page.getByTestId('rate-queue-reason')).toHaveText('queued because: you picked it');
+    await expect(page.getByTestId('rate-queue-reason')).toHaveText('You picked this one.');
     await expect(page.getByTestId('rate-find')).toHaveCount(0);
     await tapAnswer(page, { value: 1 });
 
@@ -489,18 +492,18 @@ test.describe('rate', () => {
     await tapAnswer(page);
     await chooseMode(page, 'battle');
     await expect(battleCard(page)).toBeVisible();
-    await expect(counter(page)).toHaveText(counterLine(2, 'battle'));
+    await expect(counter(page)).toHaveText(counterLine(2, 'Pairs'));
     const left = await page.getByTestId('rate-battle-left').getAttribute('data-title-id');
     const right = await page.getByTestId('rate-battle-right').getAttribute('data-title-id');
 
     await tapAnswer(page);
-    await expect(counter(page)).toHaveText(counterLine(3, 'battle'));
+    await expect(counter(page)).toHaveText(counterLine(3, 'Pairs'));
 
     await undoChip(page).click();
     await expect(battleCard(page)).toBeVisible();
     await expect(page.getByTestId('rate-battle-left')).toHaveAttribute('data-title-id', left);
     await expect(page.getByTestId('rate-battle-right')).toHaveAttribute('data-title-id', right);
-    await expect(counter(page)).toHaveText(counterLine(2, 'battle'));
+    await expect(counter(page)).toHaveText(counterLine(2, 'Pairs'));
     // One pop, not a rewind: the verdict underneath it is still there to be undone next.
     await expect(undoChip(page)).toBeEnabled();
     await expect(undoChip(page)).toHaveAttribute('data-undo-kind', 'verdict');
@@ -581,22 +584,23 @@ test.describe('rate', () => {
     expect(await seenState(page, right)).toBe('seen');
   });
 
-  test('the decisive toggle survives a reload — the server holds it, not the tab', async () => {
-    // §6.1: "a persistent **decisive toggle** sets the margin weight (~1.6 vs 1.0)". Persistent
-    // is the load-bearing word: a client-side toggle would silently reset every time the phone
-    // discarded the tab, and the margins would drift with it.
+  test('the clear-favourite switch holds for its pair across a reload, and is off for the next', async () => {
+    // §6.1's decisive switch sets the margin weight (~1.6 vs 1.0), and the server holds it, so a
+    // phone that discards the tab mid-pair keeps it. It belongs to the pair on the table: on the
+    // second household test a switch that stayed on weighed Patrick's next pick as clear too
+    // (decision 520; A6 of 2026-09-26). The pair card asks its question (A1).
     await openFreshBlock(page);
     await chooseMode(page, 'battle');
     await expect(battleCard(page)).toBeVisible();
+    await expect(page.getByTestId('rate-battle-question')).toHaveText('Which did you enjoy more?');
 
     const toggle = page.getByTestId('rate-decisive');
     await expect(toggle).toHaveAttribute('aria-checked', 'false');
+    await expect(toggle).toContainText('clear favourite');
     await toggle.click();
     await expect(toggle).toHaveAttribute('aria-checked', 'true');
-    // §6.1 asks the toggle to carry its own reason rather than leaving it two cards down.
-    await expect(page.getByTestId('rate-decisive-why')).toHaveText(
-      'a decisive pick teaches more than a hesitant one'
-    );
+    // §6.1 asks the switch to carry its own reason rather than leaving it two cards down.
+    await expect(page.getByTestId('rate-decisive-why')).toContainText('resets for the next pair');
 
     await openRate(page);
     await expect(page.getByTestId('rate-decisive')).toHaveAttribute('aria-checked', 'true');
@@ -604,8 +608,11 @@ test.describe('rate', () => {
       true
     );
 
-    await page.getByTestId('rate-decisive').click();
-    await expect(page.getByTestId('rate-decisive')).toHaveAttribute('aria-checked', 'false');
+    await tapAnswer(page);
+    expect((await envelope(page)).session.decisive, 'the next pair starts with it off').toBe(false);
+    if ((await battleCard(page).count()) > 0) {
+      await expect(page.getByTestId('rate-decisive')).toHaveAttribute('aria-checked', 'false');
+    }
   });
 
   test('the kind toggles are either or both, and the empty selection is refused, not sent', async () => {
@@ -624,6 +631,9 @@ test.describe('rate', () => {
     await expect(series).toHaveAttribute('aria-pressed', 'true');
     // Proposal 46: the counter names the active partition, so the toggle is legible from it.
     await expect(counter(page)).toContainText('· series ·');
+    // And so does the spread's count, which is per kind on purpose: "9 ratings" under Series
+    // alone read as fifty ratings lost on the second household test (A5 of 2026-09-26).
+    await expect(page.getByTestId('rate-balance-total')).toHaveText(/^\d+ series ratings?$/);
 
     let sent = 0;
     const watch = (req) => {
@@ -677,10 +687,12 @@ test.describe('rate', () => {
     await expect(counter(page)).toContainText('1 / 15 this block');
     expect((await envelope(page)).session.block.index, 'the block rolled').toBe(block + 1);
     // Eight titles, all rated in the first eight slots, so every card since has been §6.1's
-    // drained state -- battles sharpening what was said -- and the counter names the card's own
-    // type. Decision 200's alternation across the roll needs fifteen ratings (decision 492) and
-    // is `test_mix_keeps_alternating_across_the_block_roll`'s to assert.
-    await expect(counter(page)).toContainText('· battle');
+    // drained state -- pairs sharpening what was said -- while the counter names the mode the
+    // person chose (A2 of the 2026-09-26 household test). Decision 200's alternation across the
+    // roll needs fifteen ratings (decision 492) and is
+    // `test_mix_keeps_alternating_across_the_block_roll`'s to assert.
+    await expect(counter(page)).toContainText('· Mixed');
+    await expect(battleCard(page)).toBeVisible();
 
     // DECISION 199: the roll is not the commit. `advance` moves the block index ON the fifteenth
     // observation, so comparing block indexes alone disabled the chip in the same round trip

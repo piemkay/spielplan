@@ -325,6 +325,7 @@ async def verdict(
             jf=await _jellyfin(conn),
             latency_ms=body.latency_ms,
             head=body.head,
+            later=session.settle_in_background,
         )
     except session.StaleCard as exc:
         raise _stale(exc) from exc
@@ -347,6 +348,7 @@ async def not_seen(body: CardBody, conn: DB, user: ActiveUser) -> dict[str, Any]
             jf=await _jellyfin(conn),
             latency_ms=body.latency_ms,
             head=body.head,
+            later=session.settle_in_background,
         )
     except session.StaleCard as exc:
         raise _stale(exc) from exc
@@ -398,7 +400,8 @@ async def correction(body: CorrectionBody, conn: DB, user: ActiveUser) -> dict[s
     s = await _resume(conn, user.id)
     try:
         outcome = await session.record_correction(
-            conn, s, card_token=body.card_token, side=body.side, jf=await _jellyfin(conn)
+            conn, s, card_token=body.card_token, side=body.side, jf=await _jellyfin(conn),
+            later=session.settle_in_background,
         )
     except session.StaleCard as exc:
         raise _stale(exc) from exc
@@ -483,6 +486,7 @@ async def answer_from_title_card(
             embeddings=_embeddings(request, conn),
             bundle_version=_basis(request),
             jf=await _jellyfin(conn),
+            later=session.settle_in_background,
         )
     except LookupError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "no such title") from exc

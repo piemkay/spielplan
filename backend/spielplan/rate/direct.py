@@ -37,10 +37,10 @@ from spielplan.rate import LIVE_LABEL, VERDICT_LABELS, session
 Answer = Literal["disliked", "fine", "liked", "not_seen"]
 ANSWERS: tuple[str, ...] = (*VERDICT_LABELS, "not_seen")
 
-# The sweep card's own "queued because:" line, for the one place a title-card card is ever read
-# back: Undo restores the journal's card verbatim (decision 35), so after an undo on Rate this is
-# the reason that card shows. Plain words, because it is member copy (decision 486).
-REASON = "queued because: you rated it from its title card"
+# The sweep card's own why-line, for the one place a title-card card is ever read back: Undo
+# restores the journal's card verbatim (decision 35), so after an undo on Rate this is the reason
+# that card shows. A whole sentence, like every other card's since the second household test.
+REASON = "You rated it from its title card."
 SOURCE = "title_card"
 
 
@@ -98,12 +98,14 @@ async def answer(
     embeddings: EmbeddingSource | None = None,
     bundle_version: Any = refit.BASIS_UNSTATED,
     jf: session.Jellyfin | None = None,
+    later: session.Later | None = None,
 ) -> session.Outcome:
     """Answer `title_id` from its card: one of `ANSWERS`, written as §6.1's sweep answer.
 
     Raises `LookupError` for a title that does not exist and `ValueError` for an answer outside
     `ANSWERS`; `session.StaleCard` when another tap replaced the card between the stash and the
-    answer, which the route turns into §6.1's 409 like any other stale token.
+    answer, which the route turns into §6.1's 409 like any other stale token. `later` is the
+    sweep answer's own: §7.3's push after the response rather than inside it.
     """
     if choice not in ANSWERS:
         raise ValueError(f"answer must be one of {ANSWERS}, not {choice!r}")
@@ -111,7 +113,7 @@ async def answer(
     s = await _put_on_table(conn, s, title_id=title_id)
     token = str(s.card_token)
     if choice == "not_seen":
-        return await session.record_not_seen(conn, s, card_token=token, jf=jf)
+        return await session.record_not_seen(conn, s, card_token=token, jf=jf, later=later)
     return await session.record_verdict(
         conn,
         s,
@@ -121,6 +123,7 @@ async def answer(
         embeddings=embeddings,
         bundle_version=bundle_version,
         jf=jf,
+        later=later,
     )
 
 

@@ -34,21 +34,36 @@ export const HOLD_MS = 1200;
 export const KIND_LABELS = { movie: 'film', series: 'series' };
 
 /**
- * §6.1's three modes; Mix is the default and every entry point lands on it (proposal 36).
- * Decision 492: Mix serves single titles until 15 ratings stand, so its line says when the pairs
- * begin rather than promising them from the second card.
+ * §6.1's three modes as [key, name, what it does]; Mix is the default and every entry point
+ * lands on it (proposal 36). Decision 492: Mix serves single titles until 15 ratings stand, so
+ * its line says when the pairs begin rather than promising them from the second card.
+ *
+ * The keys are the wire's and the tests'; the names are what a member reads. "mix / sweep /
+ * battle" read as jargon on the second household test, so each mode is named by what it asks
+ * (decision 519; A3 and policy (h) of 2026-09-26).
  */
 export const MODES = [
-  ['mix', 'single titles, and pairs from 15 ratings on'],
-  ['sweep', 'one title at a time'],
-  ['battle', 'two posters, pick one']
+  ['mix', 'Mixed', 'single titles and pairs in turn - the pairs start at 15 ratings'],
+  ['sweep', 'Singles', 'one title at a time - say how you liked it'],
+  ['battle', 'Pairs', 'two titles you rated the same way - pick the one you enjoyed more']
 ];
 
+/** @param {string | null | undefined} mode */
+export function modeName(mode) {
+  return MODES.find(([key]) => key === mode)?.[1] ?? '';
+}
+
+/** The pair card's question (A1 of the 2026-09-26 household test: it asked none). */
+export const PAIR_QUESTION = 'Which did you enjoy more?';
+
 /**
- * Proposal 47: the decisive toggle "carries that copy on itself as a one-line why".
- * §6.1 fixes the sentence and §5.2 the weights.
+ * Proposal 47: the decisive switch "carries that copy on itself as a one-line why". §5.2 fixes
+ * the weights. Decision 519 says it plainly, and decision 520 makes the switch the pair's own,
+ * so the line says it resets -- a switch that stayed on was the second household test's A6.
  */
-export const DECISIVE_COPY = 'a decisive pick teaches more than a hesitant one';
+export const DECISIVE_LABEL = 'clear favourite';
+export const DECISIVE_COPY =
+  'Turn this on when one is clearly better - that answer counts for more. It resets for the next pair.';
 
 /**
  * Proposal 53: "Random pairs." turns a defence into a statement. §6.1 supplies the rest.
@@ -63,11 +78,15 @@ export const DECISIVE_COPY = 'a decisive pick teaches more than a hesitant one';
  * is the whole point: 54a amends the explanation, not the rule. [§6.1, §6.8, 54a; finding 22]
  *
  * Decision 491 restates it for members: the same claim and the same distinction, with the two
- * places named by what a person taps rather than by section number (decision 486).
+ * places named by what a person taps rather than by section number (decision 486). Decision 519
+ * restates it once more, because "smarter picking only pays off when the question is which of a
+ * few" still read as jargon on the second household test: the same claim, in words.
  */
 export const PAIR_SELECTION_COPY =
-  'Random pairs. For building your profile nothing beats random - smarter picking only pays ' +
-  "off when the question is which of a few: Sharpen my ranking on Rank, and Tonight's round.";
+  'Pairs are picked at random from titles you rated the same way. For learning your taste, ' +
+  'random works as well as anything cleverer. Choosing pairs cleverly only helps when the ' +
+  "question is which of a few is best - that is what Sharpen my ranking on Rank and Tonight's " +
+  'round do.';
 
 /**
  * §6.1's learning curve. Proposal 49: the copy is the caption, the position is the point.
@@ -97,10 +116,18 @@ export function undoKindLabel(kind) {
   return UNDO_KIND_LABELS[kind] ?? kind.replace(/_/g, ' ');
 }
 
-/** One rating, two ratings — the count the balance widget and the rail both print. */
-export function ratingsLabel(n) {
+/**
+ * One rating, two ratings — the count the balance widget and the rail both print.
+ *
+ * The count is over the session's kinds, because each kind is its own model (§4.1 rule 5) and
+ * decisions 491 and 492 read the number that way. So with one kind selected it names the kind:
+ * on the second household test "9 ratings" under Series alone read as fifty ratings lost (A5).
+ */
+export function ratingsLabel(n, kinds = []) {
   const count = Number(n) || 0;
-  return `${count} ${count === 1 ? 'rating' : 'ratings'}`;
+  const noun = count === 1 ? 'rating' : 'ratings';
+  const only = (kinds ?? []).length === 1 ? KIND_LABELS[kinds[0]] : null;
+  return only ? `${count} ${only} ${noun}` : `${count} ${noun}`;
 }
 
 /** §12's M2 exit criterion, which proposal 49 makes legible to the person doing the labelling. */
@@ -112,6 +139,13 @@ export const rate = $state({
   loading: true,
   booted: false,
   busy: false,
+  /**
+   * Which answer is in flight (`verdict-2`, `duel-A`, `skip`...), so the control that was tapped
+   * can say so while the rest wait. A4 of the second household test: every button greyed out at
+   * once after a tap and nothing said which answer had been taken.
+   * @type {string | null}
+   */
+  pending: null,
   error: '',
   /** A refusal we can explain and recover from — a stale card, an Undo at the boundary. */
   notice: '',
@@ -197,16 +231,22 @@ export function kindLabel(kinds) {
 }
 
 /**
- * §6.1's counter, with proposal 46's partition and the card type it is serving:
- * "7 / 15 this block · film · sweep". Decision 35 makes this the number Undo is measured in,
+ * §6.1's counter, with proposal 46's partition and the mode the person chose:
+ * "7 / 15 this block · film · Mixed". Decision 35 makes this the number Undo is measured in,
  * so it is built from the server's own `counter` string rather than recomputed here.
+ *
+ * It named the card type being served ("· sweep", "· battle") until the second household test,
+ * where both members read that as the mode and saw it disagree with the pill they had pressed
+ * (A2). The card says what it is by its own shape, and now asks its question; the header says
+ * what was chosen.
  */
-export function counterLine(block, kinds) {
+export function counterLine(block, kinds, mode) {
   if (!block) return '';
   const parts = [`${block.counter} this block`];
   const kind = kindLabel(kinds);
   if (kind) parts.push(kind);
-  if (block.serving) parts.push(block.serving);
+  const name = modeName(mode);
+  if (name) parts.push(name);
   return parts.join(' · ');
 }
 
@@ -357,9 +397,10 @@ async function onError(err) {
   rate.error = message || 'something went wrong';
 }
 
-async function send(fn, { holdReveal = false } = {}) {
+async function send(fn, { holdReveal = false, pending = null } = {}) {
   if (rate.busy) return;
   rate.busy = true;
+  rate.pending = pending;
   rate.notice = '';
   rate.error = '';
   try {
@@ -369,6 +410,7 @@ async function send(fn, { holdReveal = false } = {}) {
     await onError(err);
   } finally {
     rate.busy = false;
+    rate.pending = null;
   }
 }
 
@@ -394,8 +436,11 @@ export const setMode = (mode) => send(() => controls({ mode }));
 /** Proposal 46: the Rate surface carries the film/series partition itself. */
 export const setKinds = (kinds) => send(() => controls({ kinds }));
 
-/** §6.1's persistent decisive toggle — the backend stores it, so it outlives the session. */
-export const setDecisive = (decisive) => send(() => controls({ decisive }));
+/**
+ * §6.1's decisive switch. The backend stores it for the pair on the table and turns it off with
+ * that pair (decision 520), so the envelope that brings the next pair brings it off.
+ */
+export const setDecisive = (decisive) => send(() => controls({ decisive }), { pending: 'decisive' });
 
 export const restart = () => send(() => controls({ restart: true }));
 
@@ -404,20 +449,24 @@ export function verdict(value) {
   if (!token || rate.holding) return;
   return send(
     () => post('/rate/verdict', { card_token: token, value, latency_ms: latency(), head }),
-    { holdReveal: true }
+    { holdReveal: true, pending: `verdict-${value}` }
   );
 }
 
 export function notSeen() {
   const token = rate.card?.token;
   if (!token || rate.holding) return;
-  return send(() => post('/rate/not-seen', { card_token: token, latency_ms: latency(), head }));
+  return send(() => post('/rate/not-seen', { card_token: token, latency_ms: latency(), head }), {
+    pending: 'not_seen'
+  });
 }
 
 export function skip() {
   const token = rate.card?.token;
   if (!token || rate.holding) return;
-  return send(() => post('/rate/skip', { card_token: token, latency_ms: latency(), head }));
+  return send(() => post('/rate/skip', { card_token: token, latency_ms: latency(), head }), {
+    pending: 'skip'
+  });
 }
 
 /**
@@ -441,14 +490,16 @@ export function duel(outcome, opts = {}) {
   if (opts.token !== undefined && opts.token !== token) return;
   const body = { card_token: token, outcome, latency_ms: latency(), head };
   if (opts.decisive !== undefined) body.decisive = opts.decisive;
-  return send(() => post('/rate/duel', body));
+  return send(() => post('/rate/duel', body), { pending: `duel-${outcome}` });
 }
 
 /** §6.1's corrections row. Writes no duel row and does not advance the counter. */
 export function correct(side) {
   const token = rate.card?.token;
   if (!token || rate.holding) return;
-  return send(() => post('/rate/correction', { card_token: token, side }));
+  return send(() => post('/rate/correction', { card_token: token, side }), {
+    pending: `correction-${side}`
+  });
 }
 
 /**
@@ -473,6 +524,7 @@ export function reset() {
   rate.holding = false;
   rate.reveal = null;
   rate.frozenBlock = null;
+  rate.pending = null;
   clearFinder();
 }
 

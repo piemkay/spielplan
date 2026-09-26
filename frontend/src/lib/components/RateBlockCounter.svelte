@@ -1,7 +1,7 @@
 <script>
   /**
-   * §6.1's block counter — "blocks of 15" — with proposal 46's partition and the card type
-   * being served: `7 / 15 this block · film · sweep`.
+   * §6.1's block counter — "blocks of 15" — with proposal 46's partition and the mode the
+   * person chose: `7 / 15 this block · film · Mixed` (A2 of the 2026-09-26 household test).
    *
    * Decision 35 is the reason this is a component and not a string in the header: "the depth
    * matches the counter the user is already reading (\"7 / 15 this block\")". The number here
@@ -14,9 +14,9 @@
    */
   import { counterLine } from '$lib/rate.svelte.js';
 
-  let { block, kinds } = $props();
+  let { block, kinds, mode } = $props();
 
-  const line = $derived(counterLine(block, kinds));
+  const line = $derived(counterLine(block, kinds, mode));
   const size = $derived(block?.size ?? 15);
   const slot = $derived(block?.slot ?? 0);
   const ticks = $derived(Array.from({ length: size }, (_, i) => i + 1));

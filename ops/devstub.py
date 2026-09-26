@@ -2545,8 +2545,11 @@ def _sweep_card(title: dict[str, Any], *, source: str) -> dict[str, Any]:
         "type": "sweep",
         "kind": title["kind"],
         "title_id": title["id"],
-        "reason": queue.reason_for(features, source=source, years_out=years_out),
-        # Decision 490: a seed card carries its P(seen) like every other card.
+        "reason": queue.reason_for(
+            features, source=source, kind=title["kind"], years_out=years_out
+        ),
+        # Decision 490: a seed card carries its P(seen) like every other card -- server-side,
+        # projected under `model` only (see `_public_card`).
         "p_seen": queue.p_seen(features),
         # §13: `source` and `reask_of` are both re-ask markers. They live on the card the
         # server holds and are never projected — see `_public_card`.
@@ -2685,18 +2688,22 @@ def _public_card(s: dict[str, Any]) -> dict[str, Any] | None:
     if card is None or s["card_token"] is None:
         return None
     if card["type"] == "sweep":
-        return {
+        public = {
             "type": "sweep",
             "token": s["card_token"],
             "kind": card["kind"],
             "title": _card_title(card["title_id"]),
             "reason": card["reason"],
-            "p_seen": card.get("p_seen"),
             "substituted_for": card.get("substituted_for"),
             # §6.8 / proposal 52: lowercase, worst -> best, matching the stored ordinal.
             "verdict_labels": [[i, label] for i, label in enumerate(VERDICT_LABELS)],
             "controls": ["verdict", "not_seen", "skip"],
         }
+        # `rate.session.public_card`'s rule: P(seen) under the gated `model` key, and only where
+        # the queue placed the card by it.
+        if card.get("source") in ("seed", "p_seen") and card.get("p_seen") is not None:
+            public["model"] = {"p_seen": round(float(card["p_seen"]), 2)}
+        return public
     return {
         "type": "battle",
         "token": s["card_token"],
@@ -2762,6 +2769,8 @@ def _append(
     })
     s["block_index"], s["slot"] = block_index, slot
     s["current_card"], s["card_token"] = None, None
+    # Decision 520: the decisive switch belongs to the pair just answered.
+    s["decisive"] = False
 
 
 def _prior_of(user_id: int, title_id: int) -> dict[str, Any]:
@@ -2988,13 +2997,16 @@ def rate_controls(
     s = _rate(user)
     # Changing the mode or the kinds drops the card on the table — a battle pair is meaningless
     # once Sweep is selected, and a film pair is meaningless once Films is switched off. The
-    # decisive toggle does not: it changes the WEIGHT of the next answer, not the question.
+    # decisive switch does not: it changes the WEIGHT of the answer to the pair on the table,
+    # not the question -- and it goes with that pair when a redraw drops it (decision 520).
     wanted = kinds if kinds is not None else s["kinds"]
     redraw = (body.mode is not None and body.mode != s["mode"]) or wanted != s["kinds"]
     s["mode"] = body.mode or s["mode"]
     s["kinds"] = wanted
     if body.decisive is not None:
         s["decisive"] = body.decisive
+    elif redraw:
+        s["decisive"] = False
     if redraw:
         _stash(s, None)
     return _rate_payload(_ensure_card(s, head=body.head))
@@ -3245,6 +3257,7 @@ def rate_undo(spielplan_session: str | None = Cookie(default=None)) -> dict[str,
     # The EXACT card comes back, so a battle pair is itself rather than a reshuffle.
     s["block_index"], s["slot"] = row["block_index"], row["slot"]
     _stash(s, row["card"])
+    s["decisive"] = False  # decision 520: the restored pair is asked afresh
     arm = {"verdict": "verdict", "duel": "duel", "tie": "duel",
            "not_seen": "not_seen", "correction": "not_seen"}.get(row["kind_of"])
     ledger = None

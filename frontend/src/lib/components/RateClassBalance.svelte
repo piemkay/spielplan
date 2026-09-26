@@ -22,7 +22,9 @@
    */
   import { ratingsLabel, sharePct } from '$lib/rate.svelte.js';
 
-  let { balance } = $props();
+  // `kinds`: the counts are over the session's kinds (decisions 491 and 492), so the total names
+  // the kind when only one is selected -- "9 ratings" under Series alone read as fifty lost (A5).
+  let { balance, kinds = [] } = $props();
 
   let open = $state(false);
 
@@ -43,8 +45,10 @@
     aria-expanded={open}
     onclick={() => (open = !open)}
   >
-    <span class="eyebrow">YOUR MIX</span>
-    <span class="data" data-testid="rate-balance-total">{ratingsLabel(total)}</span>
+    <!-- Not "YOUR MIX" any more: Mixed is a mode's name now (decision 519), and this is the
+         spread of the answers the warning below talks about. -->
+    <span class="eyebrow">YOUR SPREAD</span>
+    <span class="data" data-testid="rate-balance-total">{ratingsLabel(total, kinds)}</span>
   </button>
 
   <div class="bar" role="img" aria-label={labels.map((l, i) => `${l} ${counts[i]}`).join(', ')}>
