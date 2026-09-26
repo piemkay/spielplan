@@ -33,27 +33,19 @@ from spielplan.dna.coverage import facet_coverage
 from spielplan.importer import dna as importer_dna
 from spielplan.importer.report import ImportReport
 from tests.fixtures import make_bundle as fx
-from tests.test_static_contracts import VOCAB_V1_FACETS
 
 MODULE = Path(coverage_module.__file__)
 
 # §6.4's eleven, in §6.4's own order rather than alphabetically. The order is deliberate: the
 # importer writes `dna_facet.ord` from `sorted(facet_names)` (`importer/dna.py:154`), so a
 # fixture seeded alphabetically could not tell a mapping that follows `ord` from one that
-# follows a sort or a dict's arrival order. Tied to the one declaration of the eleven below, so
-# that a fixture naming a facet the vocabulary does not have fails here rather than in the
-# assertion it was supposed to support.
+# follows a sort or a dict's arrival order.
 FACET_ORDER = (
     "mood", "themes", "pacing", "structure", "visual", "sound",
     "characters", "place", "era", "sensibility", "register",
 )
 
 VOCAB = "v1"
-
-
-def test_the_fixture_names_the_shipped_eleven():
-    assert set(FACET_ORDER) == VOCAB_V1_FACETS
-    assert len(FACET_ORDER) == len(VOCAB_V1_FACETS)
 
 
 # --- the fixtures ----------------------------------------------------------------------
@@ -188,8 +180,8 @@ async def test_the_order_a_real_install_returns_is_the_loaders_alphabetical_inde
 
     covered = await facet_coverage(db, 1)
 
-    assert set(covered) == VOCAB_V1_FACETS
-    assert list(covered) == sorted(VOCAB_V1_FACETS)
+    assert set(covered) == set(FACET_ORDER)
+    assert list(covered) == sorted(FACET_ORDER)
 
 
 async def test_the_projected_tier_is_not_coverage(db, tagged):

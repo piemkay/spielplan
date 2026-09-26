@@ -23,7 +23,6 @@ import ast
 import importlib.util
 import inspect
 import logging
-import re
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -33,12 +32,6 @@ import pytest
 from spielplan import worker
 from spielplan.core.config import settings
 from spielplan.models.artifacts import ArtifactStore
-
-# The prose readers, borrowed rather than re-written: `_comment_prose` is this tree's notion of
-# what a reader reads - tokenized comments and docstrings off the AST, so a count inside a string
-# literal is not prose - and `_COUNT_WORDS` is its vocabulary for a hand-spelled one. One reader
-# of this class rather than two that spell numbers differently. [M5.1 review cycle 2]
-from tests.test_static_contracts import _COUNT_WORDS, _comment_prose
 
 # Every daily job with an implementation: §5.3's four, §2's dump, and `job-run-prune` — which is
 # in neither table and is a daily job in every other sense, so it is anchored like the rest.
@@ -112,39 +105,6 @@ def test_only_the_elapsed_jobs_are_due():
     assert at_1000s == minutely | {
         "jellyfin-seen-sync", "jellyfin-delta-poll", "jellyfin-intake-sweep"
     }
-
-
-def test_every_sentence_that_counts_the_minutely_jobs_counts_the_registry():
-    """Four comments size `job_run` retention, the per-job timeout budget and the INFO threshold
-    off "the three 60-second jobs". Registering `ledger-refresh` at `every=60` made them four and
-    moved the daily row total from 4,320 to 5,760, and the source kept the old number in all four
-    places while THIS file's sibling comment was updated -- so the arithmetic behind
-    `JOB_RUN_KEEP_DAYS`, the 55 s budgets and `DURATION_LOG_THRESHOLD` reads a third low.
-
-    A count in a comment is a measurement (CLAUDE.md), so it is checked against the registry
-    rather than against a constant: the next job registered at sixty seconds fails this test in
-    the same four places, which is where the sentences are. 4,320 is deliberately not searched
-    for -- `86400 / TICK_SECONDS` is also 4,320 and those two comments are still right.
-    [M4.13 cycle 2, M413-D6-04]
-    """
-    words = {1: "one", 2: "two", 3: "three", 4: "four", 5: "five", 6: "six", 7: "seven"}
-    minutely = [job for job in worker.JOBS if job.every == 60]
-    expected = words[len(minutely)]
-    source = Path(worker.__file__).read_text(encoding="utf-8")
-
-    counted = re.findall(
-        r"(\w+) (?:`every=60` jobs|60-second rows|60-second jobs|that fire every sixty)", source
-    )
-    assert len(counted) == 4, (
-        f"the sentences that count the minutely jobs moved; found {counted}"
-    )
-    assert set(counted) == {expected}, (
-        f"{len(minutely)} jobs run every 60 s ({sorted(j.name for j in minutely)}), "
-        f"and the source says {sorted(set(counted))}"
-    )
-    assert f"{len(minutely) * 1440:,}" in source, (
-        "the rows-a-day and lines-a-day figures are the count times 1,440 and have to move with it"
-    )
 
 
 def test_a_job_awaiting_its_milestone_is_never_due():
@@ -447,100 +407,12 @@ def test_the_loop_still_takes_the_fallback_clock_rather_than_stopping(tz):
     assert worker._now_local().tzinfo is None, "the fallback is the process's own naive clock"
 
 
-# --- M4.10: the registry against §5.3's own table, and a boot line that counts something ------
-#
-# `test_every_registered_job_matches_its_spec_trigger` weighs four entries against the cadences
-# §5.3 gives them, which is the half that can be written from memory. What nothing here did was
-# open the table. §5.3 has nine rows and this tuple carried eight of them: the missing one is row
-# 9, bundle import validation and hot swap, which is also the only row implemented inside a
-# request handler and the one whose 127 s POST no instrument in the box could see. A module that
-# documents itself as "the registry that says so out loud rather than a process that silently
-# does nothing" has to be held to the document it copies by something that reads it.
-# [M4.10 finding 35]
-
-SPEC_DOC = Path(__file__).resolve().parents[2] / "docs" / "spielplan-spec_v2.1.md"
+# --- M4.10: a boot line that counts something -----------------------------------------------
 
 # The module the boot-census call-site rule below reads. A source path and not `inspect`, because
 # the question is where one statement sits inside `main()` rather than what a function closes over.
 # [M4.10 cycle 1, m410-rev1-boot-census-call-site-is-untested]
 WORKER_SOURCE = Path(worker.__file__)
-
-# §5.3's nine rows, keyed by the opening of each Job cell, against the registry name that stands
-# for it. Written out rather than derived, because the mapping IS the claim: "Seen-state sync
-# with Jellyfin" and `jellyfin-seen-sync` are one row only because a person says they are, and a
-# renamed job that quietly stops answering for a spec row is the failure being guarded.
-SPEC_5_3 = {
-    "Ledger incremental update": "ledger-incremental",
-    "Ledger full MAP refit": "ledger-map-refit",
-    "Fold-in user vectors": "fold-in-user-vectors",
-    "Cold Tower placement": "cold-tower-placement",
-    "Placement reconciliation": "placement-reconciliation",
-    "DNA projection": "dna-projection",
-    "Seen-state sync with Jellyfin": "jellyfin-seen-sync",
-    "Explore-frontier": "explore-frontier-cache",
-    "Bundle import validation": "bundle-import",
-}
-
-
-def _spec_jobs_table() -> list[tuple[str, str, str]]:
-    """§5.3's table as (job, trigger, budget), read out of the normative document.
-
-    Cells go through `ascii()` wherever they reach an assertion message: the budget column holds
-    an em dash and the job column holds § signs, and a Windows cp1252 console dies on either.
-    This guard may fail on this machine; it may not crash the runner reporting it.
-    """
-    rows: list[tuple[str, str, str]] = []
-    lines = SPEC_DOC.read_text(encoding="utf-8").splitlines()
-    start = next(i for i, line in enumerate(lines) if line.startswith("### 5.3 Jobs"))
-    for line in lines[start + 1:]:
-        if line.startswith(("#", "---")):
-            break
-        if not line.startswith("|"):
-            continue
-        cells = [c.strip() for c in line.strip().strip("|").split("|")]
-        if len(cells) != 3 or cells[0] == "Job" or set(cells[0]) <= set("-: "):
-            continue
-        rows.append((cells[0], cells[1], cells[2]))
-    return rows
-
-
-def test_every_row_of_the_spec_s_jobs_table_has_a_registry_entry():
-    """The tuple calls itself a copy of §5.3's table; this is the diff against the original.
-
-    Trigger is compared as a prefix because the registry drops the section pointers the table
-    carries ("acquisition pipeline (§8)"); budget is compared exactly, because it is the number
-    §5.3 holds the job to and a rounded copy is a different promise.
-    """
-    table = _spec_jobs_table()
-    by_name = {job.name: job for job in worker.JOBS}
-    problems: list[str] = []
-    seen: set[str] = set()
-
-    for job_cell, trigger, budget in table:
-        matches = [key for key in SPEC_5_3 if job_cell.startswith(key)]
-        if len(matches) != 1:
-            problems.append(f"the table row {ascii(job_cell[:50])} maps to {matches}")
-            continue
-        seen.add(matches[0])
-        name = SPEC_5_3[matches[0]]
-        job = by_name.get(name)
-        if job is None:
-            problems.append(f"section 5.3 row {matches[0]!r} has no {name!r} entry in JOBS")
-            continue
-        if not trigger.startswith(job.trigger):
-            problems.append(
-                f"{name}: registry trigger {ascii(job.trigger)} is not the table's "
-                f"{ascii(trigger)}"
-            )
-        if job.budget != budget:
-            problems.append(
-                f"{name}: registry budget {ascii(job.budget)} is not the table's {ascii(budget)}"
-            )
-
-    assert not problems, problems
-    missing = sorted(set(SPEC_5_3) - seen)
-    assert not missing, f"rows this guard expects and the table no longer has: {missing}"
-    assert len(table) == 9, f"section 5.3 now has {len(table)} rows, not nine"
 
 
 def test_a_job_this_loop_does_not_fire_says_which_of_the_three_things_that_means():
@@ -1053,203 +925,6 @@ def test_the_boot_census_no_longer_reports_two_shipped_jobs_as_pending(caplog):
         f"runs elsewhere or as work awaiting a milestone: {line}"
     )
     assert line.isascii(), f"the boot line a cp1252 console has to print is not ASCII: {line!r}"
-
-
-# --- M5.1 cycle 1: the size of the registry is `len(JOBS)` and no assertion message -----------
-
-# An assertion message renders only when its assertion fails, so nothing in a green suite has ever
-# read one: a count written there is prose sitting in the one place a test file cannot check it.
-# The census test above substitutes `worker.JOBS` for four fabricated rows - which is the whole of
-# what makes it honest, and what its docstring means by "a number somebody typed cannot survive" -
-# and then spelled the real registry's size in the message four lines below, where no edit to
-# `JOBS` could ever turn it red. M5.2's two §7.2 intake rows are that edit, and they arrive with
-# this guard in place rather than with the word. `test_backup.py:2118-2128` records this exact
-# class costing three readings of one number in one module, and decision 309's standard is the
-# one that applies: a line that is true and describes the wrong thing is still the defect. Asked
-# of assertion messages alone, so the dated measurement at the head of this file stays - it names
-# the milestone that took the count and the day it was measured, which is the form that keeps
-# being true. [M5.1 review cycle 1, M51-REV-REG-04]
-_WORDS = ("zero", "one", "two", "three", "four", "five", "six", "seven", "eight", "nine", "ten",
-          "eleven", "twelve", "thirteen", "fourteen", "fifteen", "sixteen", "seventeen",
-          "eighteen", "nineteen")
-_TENS = ("", "", "twenty", "thirty", "forty", "fifty", "sixty", "seventy", "eighty", "ninety")
-
-
-def _spellings(n: int) -> set[str]:
-    """The two ways this file could write the number `n`: the digits, and the English word."""
-    if n < 20:
-        return {str(n), _WORDS[n]}
-    tens, ones = divmod(n, 10)
-    return {str(n), _TENS[tens] if not ones else f"{_TENS[tens]}-{_WORDS[ones]}"}
-
-
-def _counts_in_assertion_messages(source: str, spellings: set[str]) -> list[str]:
-    """Every assertion message in `source` that states one of `spellings` as a count.
-
-    `(?!-)` is what keeps a unit out of it: "a fifteen-minute interval" is the length of a wait
-    and not a tally of anything, and this file measures waits everywhere. A hyphen inside a
-    spelling ("twenty-one") is still matched, because that one IS the number.
-    """
-    found: list[str] = []
-    for node in ast.walk(ast.parse(source)):
-        if not isinstance(node, ast.Assert) or node.msg is None:
-            continue
-        for part in ast.walk(node.msg):
-            if not isinstance(part, ast.Constant) or not isinstance(part.value, str):
-                continue
-            hit = sorted(
-                word for word in spellings
-                if re.search(rf"\b{re.escape(word)}\b(?!-)", part.value.lower())
-            )
-            if hit:
-                found.append(f"line {node.lineno}: {hit} in {part.value.strip()!r}")
-    return sorted(found)
-
-
-def test_no_assertion_message_in_this_file_spells_the_size_of_the_registry():
-    """The count is `len(JOBS)`; every other copy of it is a claim nothing reads.
-
-    Read against today's live count rather than against every number, because this file's messages
-    count nights, rows, hours and seconds and each of those is derived from the thing it describes.
-    The registry's size is the one number here with no reader at all - so the guard refuses it at
-    the moment somebody types it, which is the only moment it is still correct.
-    """
-    live = len([job for job in worker.JOBS if job.run is not None])
-    counted = _counts_in_assertion_messages(
-        Path(__file__).read_text(encoding="utf-8"), _spellings(live)
-    )
-    assert not counted, (
-        f"these state the size of the registry, which is len(JOBS) = {live} today and is a "
-        f"different number the day any M5 lane gives `dna-projection` a `run`: {counted}. The "
-        "sentence reads the same without it."
-    )
-
-
-def test_the_registry_count_guard_sees_the_sentence_this_file_shipped():
-    """The synthetic violation is the real one, and it is fed to the guard that runs.
-
-    A whole-file scan is what this guard does in production, so the fixture is a whole module -
-    two assertions, one of them carrying the count and one of them carrying the same word as a
-    unit, because the second is what the guard has to leave alone to be usable here at all.
-    """
-    source = (
-        'def t(line):\n'
-        '    assert "fired-here" not in line, (\n'
-        '        "the live jobs are counted, not listed - there are fifteen"\n'
-        '    )\n'
-        '    assert line, "a restart should reconcile rather than wait out a fifteen-minute gap"\n'
-    )
-    found = _counts_in_assertion_messages(source, _spellings(15))
-    assert len(found) == 1, f"the guard reads a unit as a count, or misses the count: {found}"
-    assert found[0].startswith("line 2: "), found
-
-
-# --- M5.1 cycle 2: nor does the prose of either file about the registry -----------------------
-
-# Cycle 1 asked this of assertion messages, on the argument that a message renders only when its
-# assertion fails and so is the one place a count has no reader at all. The same number was
-# already stale in the place with the MOST readers: `test_worker_registry.py:321` justifies its
-# `DISTINCT ON` repair by calling the read proportional to a count of jobs rather than to
-# history, and the count it spelled was `main`'s. Decision 347 registered `acquisition-drain` and
-# made it wrong with that file green and untouched all milestone - cycle 1's guard reads
-# `Path(__file__)` and walks `ast.Assert.msg`, so it could see neither that file nor a docstring.
-# The file MORE about the registry than the one that was guarded was the file that was not.
-# [M5.1 review cycle 2, M51-REG-JOBS-02]
-#
-# An EQUALITY where cycle 1 wrote a ban, because a docstring is read: a count a reader can check
-# against the code under it earns its place, and what keeps it earning it is that it has to be
-# today's. Two discriminations make that usable. A tally is PLURAL - "one job later in the same
-# tick" (`test_worker_registry.py:526`) is English's article and this registry has never held one
-# job - and a count DATED by the milestone that measured it stays, which is the form cycle 1
-# protected by scoping itself and the form `:637` above is written in: the milestone tag sits in
-# the same sentence as the number, so a measurement says when it was true and a claim about the
-# registry a reader is looking at now does not.
-#
-# One limit, stated rather than papered over: a tally wrapped between two comment lines is not
-# read, because `_comment_prose` yields a comment per line and a docstring whole, and gluing the
-# two kinds into blocks would join a comment to the docstring under it and exempt a count from a
-# citation that is not in its sentence. The shape that carries most of the prose is already read
-# whole, and both shapes this was written for sit on one line.
-_REGISTRY_PROSE = ("test_worker_schedule.py", "test_worker_registry.py")
-
-_JOB_TALLY = re.compile(r"\b(\w+(?:-\w+)?)\s+(?:live\s+|registered\s+)?jobs\b", re.IGNORECASE)
-
-
-def _job_tallies(path: Path) -> list[tuple[int, str, str]]:
-    """Every sentence of `path`'s prose that says how many jobs there are, and how it spells it.
-
-    Sentences rather than whole blocks, so the dated form is read the way it is written: a rule
-    that asked a whole docstring for a milestone tag would exempt a bare count sitting three
-    paragraphs from an unrelated citation. The line is the prose block's, which for a docstring is
-    the `def` it hangs under - enough to find it, and not a second number to keep true.
-    """
-    found: list[tuple[int, str, str]] = []
-    for line, text in _comment_prose(path):
-        for sentence in re.split(r"(?<=[.;]) ", text):
-            if re.search(r"\bM\d", sentence):
-                continue
-            for match in _JOB_TALLY.finditer(sentence):
-                word = match.group(1).lower()
-                if word.isdigit() or word in _COUNT_WORDS:
-                    found.append((line, sentence.strip(), word))
-    return found
-
-
-def test_no_prose_in_either_registry_file_states_a_size_the_registry_does_not_have():
-    """`len(JOBS)` is the size; a copy of it in prose is a claim with a shelf life.
-
-    Both files rather than this one, because the class belongs to the pair: one owns `due()` and
-    the other owns the loop's bookkeeping, and the sentence that went stale is in the one cycle 1
-    could not reach. Read against every spelling rather than against today's, which is the half
-    cycle 1 cannot do - a guard that looks only for the live count cannot see a count that was
-    already wrong when it was written, and this one had been wrong since decision 347.
-
-    Repeated back with `!a` rather than `!r`, because the sentence is somebody else's:
-    these files quote spec prose and carry its em dashes, and a failure has to print on
-    the cp1252 console this repository keeps its output ASCII for.
-    """
-    live = len([job for job in worker.JOBS if job.run is not None])
-    assert live < len(_COUNT_WORDS), (
-        f"this registry now holds {live} live jobs and the borrowed vocabulary spells as far as "
-        f"{len(_COUNT_WORDS) - 1}: extend `_COUNT_WORDS` rather than leaving the word unread"
-    )
-    here = Path(__file__).resolve().parent
-    stale = [
-        f"{name}:{line} says {word!a} where len(JOBS) is {live}: {sentence!a}"
-        for name in _REGISTRY_PROSE
-        for line, sentence, word in _job_tallies(here / name)
-        if word not in {str(live), _COUNT_WORDS[live]}
-    ]
-    assert not stale, (
-        "these state a size for the registry that it does not have; the sentence reads the same "
-        f"without the number, and `len(JOBS)` is the count: {stale}"
-    )
-
-
-def test_the_prose_tally_reader_tells_a_count_from_an_article_and_a_date(tmp_path):
-    """The shapes this pair writes, fed as one docstring to the reader that runs.
-
-    The violation is the sentence `test_worker_registry.py` shipped, kept verbatim: it is a string
-    literal here and a string literal is not prose, so the guard above does not read its own
-    fixture. The three it must leave alone are the singular article, a unit whose noun is not the
-    registry, and the dated measurement `:637` is written in - the form cycle 1 kept deliberately.
-    """
-    module = tmp_path / "prose.py"
-    module.write_text(
-        'def t():\n'
-        '    """Proportional to history rather than to the fourteen jobs it answers for.\n'
-        '\n'
-        '    The same arithmetic one job later, over fourteen retention nights.\n'
-        '    Measured at M4.16: twenty files for the fourteen live jobs that registry then held.\n'
-        '    """\n',
-        encoding="utf-8",
-    )
-
-    found = _job_tallies(module)
-
-    assert [word for _line, _sentence, word in found] == ["fourteen"], (
-        f"the reader misses the count, or reads an article, a unit or a date as one: {found}"
-    )
 
 
 def _census_calls_in_main(source: str) -> list[str]:

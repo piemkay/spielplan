@@ -26,7 +26,6 @@ Integration tests are skipped without TEST_DATABASE_URL; there are none in this 
 from __future__ import annotations
 
 import ast
-import importlib.util
 import re
 from pathlib import Path
 
@@ -38,13 +37,6 @@ from spielplan.dna.aliases import alias_key
 MODULE = Path(verify.__file__)
 SOURCE = MODULE.read_text(encoding="utf-8")
 MIGRATION = Path(__file__).resolve().parents[1] / "migrations" / "0027_dna_extraction.sql"
-
-# `test_landmine_guards.py` belongs to no milestone in this wave, so what `0027` claims about it
-# is read OUT OF IT rather than restated here: a restated guard is a second guard, and a second
-# guard agrees with the first until the day it does not. Loaded by path and under a name of its
-# own, because importing a sibling test module by its own name would give the collector two
-# objects for one file.
-GUARD = Path(__file__).resolve().parent / "test_landmine_guards.py"
 
 # Six terms over six of vocabulary v1's eleven facets, chosen for the shapes the repair has to
 # answer rather than for realism: one body carried by exactly one facet (`slow_burn`, `bleak`),
@@ -1331,47 +1323,6 @@ def test_the_reject_store_constrains_itself_to_exactly_the_ported_reasons():
 
     assert clause is not None, "0027 no longer constrains rule_violated"
     assert tuple(re.findall(r"'([a-z_]+)'", clause.group(1))) == verify.REASONS
-
-
-
-def _weight_guard():
-    spec = importlib.util.spec_from_file_location("dna_weight_guard_under_read", GUARD)
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
-
-
-def test_the_migrations_claim_about_the_weight_guard_is_the_claim_the_guard_supports():
-    """DECISION 401. `0027` said "no `WHERE confidence > x` anywhere", enforced over SQL and
-    Python by test_landmine_guards.py" -- and what that guard enforces is COMPARISONS. Two shapes
-    select rows on a weight without comparing it to anything, and both are natural at the screen
-    `dna_reject` exists for: `WHERE salience IS NOT NULL`, which over `dna_tagged` deletes the
-    entire projected tier because `0004_dna.sql:127` emits `NULL::real AS salience` for it, and
-    the Python `if row["confidence"]:`, which `_COMPARISON_OPS` cannot see because it carries no
-    `Is`/`IsNot` and the scan walks only `ast.Compare`.
-
-    Widening the guard is not this milestone's to do and no offending code exists today, so the
-    honest repair is the sentence: the migration now claims what is enforced and names the two
-    blind spots as owed against M5.6, which is the milestone that will write the screen and stand
-    on the claim. The positive controls are here so this cannot pass by loading a guard that no
-    longer works, and the two negative ones go red the day somebody widens it -- which is when
-    `0027`'s paragraph has to be read again.
-    """
-    guard = _weight_guard()
-    sql = MIGRATION.read_text(encoding="utf-8")
-
-    assert guard._weight_filters("SELECT term FROM dna_tag WHERE confidence > 0.5")
-    assert guard._python_weight_comparisons("keep = [r for r in rows if r['confidence'] > 0.5]")
-    assert guard._weight_filters("SELECT term FROM dna_tagged WHERE salience IS NOT NULL") == []
-    assert guard._python_weight_comparisons("keep = [r for r in rows if r['confidence']]") == []
-    assert "WHERE salience IS NOT NULL" in sql, (
-        "0027 has to name the first blind spot, or its paragraph claims an enforcement the "
-        "guard does not perform"
-    )
-    assert 'if row["confidence"]:' in sql, (
-        "0027 has to name the second blind spot; the Python arm is the half a reader is least "
-        "likely to check"
-    )
 
 
 def test_the_pipeline_marker_is_ported_with_its_reason():

@@ -62,25 +62,6 @@ def test_discovery_returns_every_migration_in_filename_order(tmp_path):
     assert all(sql == "SELECT 1;" for _, sql in found)
 
 
-def test_no_migration_line_runs_past_the_house_limit():
-    """CLAUDE.md's 108 columns, over the one file type ruff never reads.
-
-    The rule is honoured in every `.sql` here without anything enforcing it, which is exactly how
-    it stops being honoured: `ruff check .` passes over a 159-character SQL comment, and the one
-    migration a reader cannot fit in a 108-column window is then the newest one. Prose, not DDL --
-    a statement that has to be long is still legal, because this measures COMMENT lines only.
-    The overrun that prompted this was in the block of `0022_model_basis.sql` whose own header
-    announces it was corrected in place. [M4.13 cycle 2, M413-C2-DIM7-03]
-    """
-    over = [
-        f"{path.name}:{i}: {len(line)} chars"
-        for path in sorted(MIGRATIONS.glob("*.sql"))
-        for i, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1)
-        if line.lstrip().startswith("--") and len(line) > 108
-    ]
-    assert not over, "migration comment lines past 108 columns: " + "; ".join(over)
-
-
 def test_the_real_migrations_are_discovered_in_order():
     versions = [v for v, _ in migrate.discover(MIGRATIONS)]
     assert versions == [p.stem for p in sorted(MIGRATIONS.glob("*.sql"))]

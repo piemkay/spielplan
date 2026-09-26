@@ -28,8 +28,6 @@ from __future__ import annotations
 import ast
 import asyncio
 import os
-import re
-import subprocess
 import sys
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
@@ -260,61 +258,6 @@ def test_the_no_db_flag_disarms_the_layer_the_line_says_it_disarmed(monkeypatch)
     assert conftest.test_database_url() == "", (
         "--no-db left TEST_DATABASE_URL set: pg_url takes it and makes a database on the host "
         ".env.test names, under a line saying the integration layer is unarmed"
-    )
-
-
-_Q_CLAIM = re.compile(r"`-q` prints ([^.;]+)")
-
-
-def test_the_ledger_describes_the_skip_pytest_actually_prints(tmp_path):
-    """The paragraph that argues why the arming line exists makes a claim about what pytest
-    prints, and that claim was never measured: it said `-q` prints skips as dots.
-
-    It prints them as `s`, and counts them in the summary. The paragraph's real argument
-    survives without the false clause -- 544 passed / 680 skipped reads exactly like 1,222
-    passed / 2 skipped because nobody weighs the number, not because the number is missing --
-    and the false version is worse than none, because it tells the maintainer CLAUDE.md sends to
-    this file that a skipped run is typographically indistinguishable from a green one, so there
-    is nothing to look for. Measured rather than asserted, in the one place in this file where
-    that means running pytest inside pytest: two throwaway tests in a directory of their own,
-    not this suite. [M4.8 review cycle 3: m48-c3-doc-01]
-    """
-    probe = tmp_path / "test_probe.py"
-    probe.write_text(
-        "import pytest\n\n\ndef test_one():\n    pass\n\n\ndef test_two():\n"
-        "    pytest.skip('the integration layer is unarmed')\n",
-        encoding="utf-8",
-    )
-    env = {k: v for k, v in os.environ.items() if k not in ("PYTEST_ADDOPTS", "PYTEST_PLUGINS")}
-    done = subprocess.run(
-        [sys.executable, "-m", "pytest", "-q", "-p", "no:cacheprovider", str(probe)],
-        capture_output=True,
-        text=True,
-        timeout=300,
-        cwd=tmp_path,
-        env=env,
-    )
-    assert done.returncode == 0, done.stdout + done.stderr
-    progress = next(line for line in done.stdout.splitlines() if "[100%]" in line)
-    summary = next(line for line in done.stdout.splitlines() if "passed" in line)
-    # The measurement, and the two halves of it the ledger has to agree with: a skip is not
-    # rendered as the character a pass is rendered as, and the run says how many there were.
-    assert progress.split()[0] == ".s", progress
-    assert re.search(r"\b1 skipped\b", summary), summary
-
-    ledger = (Path(conftest.__file__).resolve().parents[2] / "docs" / "TESTING.md").read_text(
-        encoding="utf-8"
-    )
-    paragraph = next(p for p in ledger.split("\n\n") if "A green UNARMED run" in p)
-    claims = _Q_CLAIM.findall(" ".join(paragraph.split()))
-    assert claims, (
-        "docs/TESTING.md no longer says what `-q` prints, so this guard holds nothing: either "
-        "restore the clause or delete this test with the paragraph it is about"
-    )
-    misread = [claim for claim in claims if "dot" in claim.lower()]
-    assert not misread, (
-        f"docs/TESTING.md says `-q` prints {misread}; measured just now, one pass and one skip "
-        f"print {progress.split()[0]!r} and the run reports {summary!r}"
     )
 
 

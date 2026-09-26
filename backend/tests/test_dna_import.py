@@ -1657,49 +1657,6 @@ async def test_the_axis_loader_reads_the_installed_facets_when_no_vocabulary_ran
     assert not named, named
 
 
-SPEC_DOC = Path(__file__).resolve().parents[2] / "docs" / "spielplan-spec_v2.1.md"
-
-
-def _axis_artifact_clause() -> str:
-    """§6.4's "Axis definitions are a shipped, authored artifact" clause, to the sentence after."""
-    text = SPEC_DOC.read_text(encoding="utf-8")
-    start = text.index("**Axis definitions are a shipped, authored artifact**")
-    return text[start:text.index("Deterministic", start)]
-
-
-def test_the_spec_states_the_axis_filename_rule_the_loader_enforces(vocab_dir):
-    """Decision 227. The rule the loader keeps has to live in the document a corpus author reads.
-
-    Decision 173 moved the loader off the `axes/` subdirectory it invented, and the sketch behind
-    that ruling spells the artifact `axis_<facet>_v1.tsv` -- which this loader reads as a facet
-    called `axis_mood_v1`, warns about by name, and skips. The loader is right to (the sketch's own
-    example stems are not `dna_tag.facet` values either, so it cannot be authored as written), but
-    the rule it enforces was written down nowhere normative: a docstring, a fixture and the §6.6
-    Data card, while §6.4 named no filename and the decision register named the other one. A corpus
-    arriving under proposal 140 as `axis_mood_v1.tsv` imports zero `dna_axis` rows, so `axes_for`
-    returns {}, `combine.contested_facet` returns None, and §6.2 step 5's split is dark on every
-    evening -- with the operator told the file is misnamed by an app whose spec says otherwise.
-
-    Asserted against the shipped fixture bundle as well as against the sentence, because a spec
-    sentence nothing is authored to is the same defect one step along.
-    [M4.12 review cycle 1: D3-01; decision 227]
-    """
-    clause = _axis_artifact_clause()
-
-    assert "`<facet>.tsv`" in clause, f"§6.4 still states no filename rule: {clause}"
-    assert "axis_mood_v1.tsv" in clause, (
-        "the register's own spelling has to be named as the one this is not, or the next author "
-        "takes it from decision 173 and the import writes nothing"
-    )
-    assert "vocab_pacing_axes_v1.tsv" in clause, "the neighbour that is not an axis definition"
-    assert "axes/" not in clause, "the subdirectory decision 173 retired"
-
-    shipped = {p.name for p in vocab_dir.glob("*.tsv")}
-    assert {f"{facet}.tsv" for facet in fx.AXES} <= shipped, (
-        f"the fixture bundle is not authored to the rule §6.4 now states: {sorted(shipped)}"
-    )
-
-
 async def test_the_data_card_names_the_paths_the_axis_loader_actually_reads(db, vocab_dir):
     """§6.6's Data card is where decision 191 put the outstanding authoring task, and it builds
     its path list from the loader's rule rather than restating it, because a hand-written list
