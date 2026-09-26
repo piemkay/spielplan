@@ -1,29 +1,5 @@
-"""§6.6's "webhook status", as the facts of what arrived rather than a mode somebody set.
-
-Spec v2.1 §6.6 (Connectors: "Jellyfin (URL, API key, library pick, user-mapping table, test button,
-sync now, webhook status)"), §7.2; decisions 332, 365, 409, 455; proposal 106's sketch;
-docs/milestones/M5.7-plan.md Phase D2 ("Do not invent a mode flag nobody sets; report both facts and
-let the operator read which path is working").
-
-§7.2 gives Jellyfin two ways to tell this app about an add: the webhook is the trigger and the
-fifteen-minute delta poll the fallback, and both end in the same enqueue (decision 366). From
-Tonight the two are indistinguishable from each other and from a household that added nothing, so
-the card's status is the only place an operator can read which of them is carrying the load. That
-makes each fact load-bearing in one direction:
-
-  * the last `ItemAdded` is NOT the last delivery. A Webhook plugin pointed at the wrong template
-    delivers `PlaybackStart` bodies every evening, and a status that counted those would report a
-    healthy trigger on an install whose trigger has never once fired;
-  * a refusal is shown with its reason, because decision 365 records what it cannot act on and
-    this card is where the operator reads the record;
-  * the delta poll's newest run and its newest success are two rows on the install that needs
-    reporting, the one whose poll has been failing since Tuesday.
-
-The rows are written the way the handler writes them (`intake.record_event`, `record_refusal`) and
-aged with an UPDATE, because the status reads rows and not payloads: which bodies become which rows
-is `test_jellyfin_intake.py`'s, against the double's own template. Skipped without
-TEST_DATABASE_URL; see tests/conftest.py.
-"""
+"""The last `ItemAdded` is not the last delivery (a wrong template delivers `PlaybackStart`), and
+the poll's newest run and newest success are separate facts."""
 
 from __future__ import annotations
 
@@ -84,17 +60,9 @@ def _close(stamp: str | datetime | None, expected: datetime) -> bool:
     return abs(value - expected) < timedelta(milliseconds=1)
 
 
-# --- the webhook's facts ------------------------------------------------------------------------
-
-
 async def test_the_webhook_status_names_the_last_item_added_not_the_last_delivery(db):
-    """Five deliveries across eight days, each written by the handler's own two writers.
-
-    The newest delivery is a refusal and the one before it a `PlaybackStart`, and neither is an
-    `ItemAdded`: the status names the enqueued add an hour ago as the last one, the refusal as the
-    last delivery and the newest refusal, and counts four deliveries in the week - the add from
-    eight days ago is history, not this week's traffic.
-    """
+    """The newest delivery is a refusal and the one before a `PlaybackStart`; the add eight days ago
+    is outside the week's count."""
     pending = await intake.record_event(db, _added(GUID_OTHER))
     enqueued = await intake.record_event(db, _added(GUID_MOVIE))
     playback = await intake.record_event(db, {"NotificationType": "PlaybackStart",
@@ -122,12 +90,7 @@ async def test_the_webhook_status_names_the_last_item_added_not_the_last_deliver
 
 
 async def test_a_trigger_that_only_ever_received_the_wrong_template_has_no_item_added(db):
-    """The misconfigured plugin, which is the reason the two instants are two keys.
-
-    Every delivery arrived and none was an `ItemAdded`: the card has a last delivery, a refusal
-    naming why, and no last add at all - which is the true and actionable reading ("the plugin is
-    sending, but not the template §7.2 reads").
-    """
+    """Every delivery arrived and none was an `ItemAdded`: no last add at all."""
     await intake.record_event(db, {"NotificationType": "PlaybackStop", "ItemId": GUID_MOVIE})
     await intake.record_event(db, [1, 2, 3])
     await intake.record_refusal(db, intake.DELIVERY_INTERRUPTED)
@@ -140,18 +103,8 @@ async def test_a_trigger_that_only_ever_received_the_wrong_template_has_no_item_
     assert webhook["last_refusal"]["reason"] == intake.DELIVERY_INTERRUPTED
 
 
-# --- the delta poll's facts ---------------------------------------------------------------------
-
-
 async def test_the_delta_poll_status_is_its_watermark_its_newest_run_and_its_newest_success(db):
-    """Decision 455: the watermark, when the poll last ran, whether that run was ok, how many
-    titles it filed, and when it last succeeded.
-
-    Asked twice, because the two rows only differ once the poll starts failing. With one good run
-    the newest run and the newest success are the same row and it filed three; with a newer
-    failure the newest run is the failure - which filed nothing it could report - while the last
-    success still names the good run, so the operator can read how long the fallback has been down.
-    """
+    """Decision 455. The two rows differ only once the poll starts failing, so it is asked twice."""
     watermark = datetime(2026, 9, 24, 7, 55, tzinfo=UTC)
     good_started, good_finished = await _run(db, ok=True, ago=timedelta(minutes=20),
                                              detail={"read": 5, "enqueued": 3})
@@ -176,9 +129,7 @@ async def test_the_delta_poll_status_is_its_watermark_its_newest_run_and_its_new
 
 
 async def test_a_poll_still_running_is_neither_ok_nor_failed(db):
-    """`worker._record_start` writes the row before the call, so a poll in flight - or one a
-    SIGKILL ended - is a row with no outcome, and the status says so rather than calling it a
-    failure (the System card's own rule, `test_admin_system.py`)."""
+    """A row with no outcome (in flight, or SIGKILLed) is neither ok nor failed."""
     await _run(db, ok=True, ago=timedelta(minutes=20), detail={"enqueued": 0})
     running, _ = await _run(db, ok=None, ago=timedelta(seconds=30))
 
@@ -190,12 +141,8 @@ async def test_a_poll_still_running_is_neither_ok_nor_failed(db):
     assert poll["last_ok_at"] is not None
 
 
-# --- over HTTP ------------------------------------------------------------------------------------
-
-
 async def test_an_unconfigured_install_answers_the_trigger_with_nulls_and_zeros(secrets_key, db, app):
-    """§3.1's half-configured boot is legal, and the connector card is the screen an admin sets it
-    up from, so the status of a trigger nobody has configured is an answer and never a 500."""
+    """A half-configured boot is legal (§3.1), so this is an answer, never a 500."""
     admin = await _admin(app)
 
     got = await admin.get("/api/admin/connectors/jellyfin")
@@ -211,14 +158,7 @@ async def test_an_unconfigured_install_answers_the_trigger_with_nulls_and_zeros(
 
 
 async def test_the_connector_card_carries_the_trigger_and_never_its_credentials(secrets_key, db, app):
-    """The card's GET gains `trigger` and keeps every key it had.
-
-    The key and the webhook token are both in hand while this runs - the token from the one save
-    that mints it (decision 418) - and neither appears anywhere in the body: the status reports
-    that a delivery arrived and what became of it, never the header it arrived with (§14.3,
-    decision 332). The poll's watermark is the stored one, which the card reads off the same
-    `load_jellyfin` its other keys come from.
-    """
+    """Neither the key nor the webhook token appears in the body (§14.3, decision 332)."""
     admin = await _admin(app)
     saved = await admin.put(
         "/api/admin/connectors/jellyfin",
@@ -254,9 +194,6 @@ async def test_the_connector_card_carries_the_trigger_and_never_its_credentials(
 
 
 def test_the_card_asks_for_the_poll_the_worker_registers():
-    """`api/admin.py` passes the job's name in rather than `intake.py` spelling it, because the name
-    is the worker registry's and `JOB_NAMES` is where the web process spells it (pinned to the
-    registry by `test_worker_registry.py`). A drifted name here is a poll the card reports as never
-    having run."""
+    """The name is the worker registry's (`JOB_NAMES`); a drifted one reads as a poll that never ran."""
     assert admin_api.DELTA_POLL_JOB == POLL
     assert admin_api.DELTA_POLL_JOB in admin_api.JOB_NAMES

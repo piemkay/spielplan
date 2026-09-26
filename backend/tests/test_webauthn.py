@@ -1,12 +1,5 @@
-"""Passkeys, with a real authenticator. Spec v2.1 §3.2, §3.3, §14.4, §4.2 webauthn_credential.
-
-Every ceremony here is genuine: `tests/fixtures/soft_authenticator.py` signs real CTAP2
-structures with a real P-256 key, so `core.webauthn` runs its actual verification. That is what
-makes the negative cases meaningful — an assertion for the wrong origin, one for the wrong
-rp_id, and a replay whose signature verifies perfectly and whose counter has not moved.
-
-Skipped without TEST_DATABASE_URL; see tests/conftest.py.
-"""
+"""Real ceremonies: `soft_authenticator.py` signs real CTAP2 with P-256, so the negative cases
+exercise `core.webauthn`'s actual verification."""
 
 from __future__ import annotations
 
@@ -48,18 +41,13 @@ async def _register(db, user_id: int, device: SoftAuthenticator, *, label="phone
 
 
 async def _authenticate(db, device: SoftAuthenticator, *, name=None, **kwargs) -> int:
-    """The user id only. `authenticate` also reports the authenticator's user-verification
-    flag, which is what decides the admin stamp (§3.2); it is asserted where that is the
-    subject rather than in every ceremony here."""
+    """The user id only; the user-verification flag is asserted where it is the subject."""
     ceremony = await webauthn.authentication_options(db, name=name)
     challenge = webauthn.base64url_to_bytes(ceremony.options["challenge"])
     user_id, _user_verified = await webauthn.authenticate(
         db, handle=ceremony.id, credential=device.authenticate(challenge, **kwargs)
     )
     return user_id
-
-
-# --- §3.2: registration ------------------------------------------------------------------
 
 
 async def test_a_passkey_registers_and_then_signs_in(db, device):
@@ -69,7 +57,7 @@ async def test_a_passkey_registers_and_then_signs_in(db, device):
 
 
 async def test_the_credential_is_bound_to_the_public_url_origin(db, device, rp):
-    """§14 risk 4: WebAuthn origin coupling is why PUBLIC_URL is required config."""
+    """§14 risk 4: origin coupling is why PUBLIC_URL is required config."""
     rp_id, _origin = rp
     user_id = await _user(db)
     await _register(db, user_id, device)
@@ -81,7 +69,6 @@ async def test_the_credential_is_bound_to_the_public_url_origin(db, device, rp):
 
 
 async def test_a_user_may_hold_several_passkeys(db, rp):
-    """§3.2: "multiple passkeys per user (phone + desktop)"."""
     rp_id, origin = rp
     user_id = await _user(db)
     phone = SoftAuthenticator(rp_id=rp_id, origin=origin)
@@ -96,16 +83,12 @@ async def test_a_user_may_hold_several_passkeys(db, rp):
 
 
 async def test_an_existing_passkey_is_excluded_from_a_new_registration(db, device):
-    """`excludeCredentials` is what stops the same authenticator producing a second row that
-    shadows the first."""
+    """`excludeCredentials` stops one authenticator making a second, shadowing row."""
     user_id = await _user(db)
     await _register(db, user_id, device)
     ceremony = await webauthn.registration_options(db, user_id=user_id, user_name="jenny")
     excluded = {c["id"] for c in ceremony.options["excludeCredentials"]}
     assert b64(device.credential_id) in excluded
-
-
-# --- §3.2 / §14.4: origin and rp_id ------------------------------------------------------
 
 
 async def test_registration_from_a_different_origin_is_refused(db, device):
@@ -116,8 +99,7 @@ async def test_registration_from_a_different_origin_is_refused(db, device):
 
 
 async def test_an_assertion_for_a_different_rp_id_is_refused(db, device, rp):
-    """The rp_id is hashed into authenticatorData, so a credential answering for another
-    relying party fails verification rather than being trusted."""
+    """The rp_id is hashed into authenticatorData."""
     user_id = await _user(db)
     await _register(db, user_id, device)
     with pytest.raises(webauthn.PasskeyError):
@@ -133,8 +115,7 @@ async def test_an_assertion_from_a_different_origin_is_refused(db, device):
 
 
 async def test_a_credential_registered_for_another_address_stops_working(db, device):
-    """§14.4: "changing PUBLIC_URL later invalidates registered passkeys." The row survives —
-    and is listed as unusable — rather than being verified against an origin it never had."""
+    """§14.4: the row survives, listed as unusable, rather than verified against a foreign origin."""
     user_id = await _user(db)
     await _register(db, user_id, device)
     await db.execute("UPDATE webauthn_credential SET rp_id = 'old.example' WHERE user_id = $1",
@@ -147,12 +128,8 @@ async def test_a_credential_registered_for_another_address_stops_working(db, dev
     assert listed[0]["usable"] is False
 
 
-# --- §4.2: sign_count is a replay guard --------------------------------------------------
-
-
 async def test_a_replayed_assertion_is_refused(db, device):
-    """The signature verifies perfectly; only the counter says it is a replay. This is the one
-    reason §4.2 stores `sign_count`."""
+    """The signature verifies; only the counter says it is a replay."""
     user_id = await _user(db)
     await _register(db, user_id, device)
     assert await _authenticate(db, device) == user_id
@@ -176,9 +153,6 @@ async def test_the_stored_counter_advances_with_each_use(db, device):
     assert second["last_used_at"] is not None
 
 
-# --- the challenge -----------------------------------------------------------------------
-
-
 async def test_a_challenge_is_single_use(db, device):
     user_id = await _user(db)
     await _register(db, user_id, device)
@@ -186,13 +160,13 @@ async def test_a_challenge_is_single_use(db, device):
     ceremony = await webauthn.authentication_options(db, name=None)
     challenge = webauthn.base64url_to_bytes(ceremony.options["challenge"])
     credential = device.authenticate(challenge)
-    # The pair the route splits: who it is, and whether the authenticator verified them (§3.2).
+    # Who it is, and whether the authenticator verified them (§3.2).
     assert await webauthn.authenticate(db, handle=ceremony.id, credential=credential) == (
         user_id,
         True,
     )
 
-    # The very same, valid, unexpired assertion — refused, because the challenge is gone.
+    # A valid, unexpired assertion refused because the challenge is gone.
     with pytest.raises(webauthn.PasskeyError, match="expired"):
         await webauthn.authenticate(db, handle=ceremony.id, credential=credential)
 
@@ -249,18 +223,10 @@ async def test_pruning_removes_only_expired_challenges(db):
     assert [r["id"] for r in remaining] == [fresh.id]
 
 
-# --- §3.2: the sign-in surface must not leak the roster ----------------------------------
-
-
 async def test_an_unknown_name_yields_an_ordinary_ceremony(db):
-    """The login screen must not become an oracle for which household members exist."""
+    """The login screen must not become a roster oracle."""
     ceremony = await webauthn.authentication_options(db, name="nobody-here")
     assert ceremony.options["allowCredentials"] == []
-
-
-
-
-# --- §3.2: logout, and the account it belongs to -----------------------------------------
 
 
 async def test_logout_leaves_the_passkey_registered(db, device):
@@ -304,13 +270,8 @@ async def test_one_user_cannot_delete_anothers_passkey(db, device):
 
 
 async def test_a_credential_id_cannot_be_claimed_by_another_account(db, rp):
-    """The registration response is composed by the client and attestation format "none" means
-    nothing vouches for it, so the credential id in it is attacker-chosen.
-
-    An upsert here would overwrite the victim's stored public key while the row kept its
-    original `user_id` — and the attacker's next assertion would then verify *as the victim*.
-    The registration is refused instead, and the victim's passkey keeps working.
-    """
+    """With attestation "none" the credential id is attacker-chosen; an upsert would let the attacker
+    verify as the victim."""
     rp_id, origin = rp
     victim = await _user(db, "jenny")
     attacker = await _user(db, "mallory")
@@ -333,12 +294,8 @@ async def test_a_credential_id_cannot_be_claimed_by_another_account(db, rp):
     assert await _authenticate(db, victims_device) == victim
 
 
-# --- §14.4: the binding is to PUBLIC_URL, not to whatever the default happens to be --------
-
-
 async def test_the_credential_records_the_configured_origin_not_the_default(db, monkeypatch):
-    """The other origin test compares `settings().rp_id` to `settings().rp_id` — true of any
-    value, including a wrong one. This pins a literal, under a PUBLIC_URL nothing else uses."""
+    """Pins a literal under a PUBLIC_URL nothing else uses; comparing `rp_id` to itself passes anything."""
     from spielplan.core.config import settings
 
     monkeypatch.setenv("PUBLIC_URL", "https://spielplan.example.tld")
@@ -361,8 +318,7 @@ async def test_the_credential_records_the_configured_origin_not_the_default(db, 
 
 
 async def test_a_credential_from_the_old_origin_is_refused_after_the_move(db, device, monkeypatch):
-    """§14.4: "changing PUBLIC_URL later invalidates registered passkeys." Registered under the
-    default origin, then the app moves — the same authenticator must stop working."""
+    """§14.4: after the move the same authenticator must stop working."""
     from spielplan.core.config import settings
 
     user_id = await _user(db)
@@ -377,13 +333,8 @@ async def test_a_credential_from_the_old_origin_is_refused_after_the_move(db, de
         settings.cache_clear()
 
 
-# --- §3.2: the sign-in ceremony is not an account oracle -----------------------------------
-
-
 async def test_a_sign_in_ceremony_never_narrows_to_an_account(db, device):
-    """The route needs no session. A name-narrowed `allowCredentials` would tell an anonymous
-    caller which household members exist and which of them hold a passkey — the same roster
-    `/auth/switchable` keeps behind a session."""
+    """A name-narrowed `allowCredentials` would reveal who holds a passkey."""
     user_id = await _user(db, "jenny")
     await _register(db, user_id, device)
 
@@ -393,5 +344,5 @@ async def test_a_sign_in_ceremony_never_narrows_to_an_account(db, device):
             f"the ceremony for {name!r} disclosed credentials"
         )
 
-    # …and sign-in still works, because the credential is discoverable.
+    # The credential is discoverable.
     assert await _authenticate(db, device) == user_id

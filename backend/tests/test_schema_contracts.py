@@ -1,10 +1,4 @@
-"""The constraints, asserted by trying to violate them. Spec v2.1 §4.1, §4.2, §10.
-
-`test_migrations.py` checks the schema's *shape* against PGlite. These check its *behaviour*
-against a real server: a CHECK constraint that is never tried is a comment with punctuation.
-
-Skipped without TEST_DATABASE_URL; see tests/conftest.py.
-"""
+"""Constraints asserted by trying to violate them: a CHECK never tried is a comment with punctuation."""
 
 from __future__ import annotations
 
@@ -32,9 +26,6 @@ async def _user(db, name="patrick", role="member") -> int:
     )
 
 
-# --- §4.1 rule 5: kind ----------------------------------------------------------------
-
-
 async def test_kind_is_not_null_and_constrained_to_two_values(db):
     with pytest.raises(asyncpg.NotNullViolationError):
         await db.execute("INSERT INTO title (id, kind, name) VALUES (900, NULL, 'x')")
@@ -43,7 +34,6 @@ async def test_kind_is_not_null_and_constrained_to_two_values(db):
 
 
 async def test_kind_is_indexed(db):
-    """Every ranking surface partitions by it, so it is on the hot path of every list."""
     indexes = await db.fetch(
         "SELECT indexdef FROM pg_indexes WHERE tablename = 'title' AND schemaname = 'public'"
     )
@@ -51,18 +41,11 @@ async def test_kind_is_indexed(db):
     assert "(kind)" in defs or "(kind, " in defs
 
 
-# --- §4.1 rule 4: the frozen rating_source ids ----------------------------------------
-
-
 async def test_the_database_refuses_a_renumbered_rating_source(db):
-    """The validator catches this at import; the CHECK is the second line, for anything that
-    reaches the table another way. These ids key fitted_cuts and equating_map."""
+    """The validator catches this at import; the CHECK is the second line. These ids key fitted_cuts."""
     await db.execute("INSERT INTO rating_source (id, name) VALUES (1, 'ok')")
     with pytest.raises(asyncpg.CheckViolationError):
         await db.execute("INSERT INTO rating_source (id, name) VALUES (99, 'renumbered')")
-
-
-# --- §4.1 rule 6: no UNIQUE on the external ids ---------------------------------------
 
 
 async def test_duplicate_tmdb_ids_are_accepted(db):
@@ -72,27 +55,9 @@ async def test_duplicate_tmdb_ids_are_accepted(db):
     assert await db.fetchval("SELECT count(*) FROM title WHERE tmdb_id = 42") == 2
 
 
-# --- §4.1 rule 1 + §6.6: the extracted tier's arbiter ---------------------------------
-
-
 async def test_dna_tag_provider_is_not_null_so_its_unique_index_fires(db):
-    """`0004_dna.sql:83` declares `UNIQUE (title_id, version, term, provider)` and 0018 is what
-    makes it mean anything.
-
-    NULLs are distinct in a unique index, and the importer never wrote `provider`, so every row
-    carried NULL and the arbiter matched no pair of rows at all — a constraint that reads as
-    enforced in the DDL and enforces nothing. §6.6's parallel extraction mode is the case it
-    exists for: two providers naming the same term for one title must be one row per provider,
-    and until 0018 they were unbounded rows per provider.
-
-    The two halves are separate assertions because neither implies the other. A default of `''`
-    with the column still nullable would leave every row the importer writes explicitly as NULL
-    outside the index; NOT NULL without the default would make the importer's current INSERT
-    fail rather than key correctly. Written as the violation rather than as a catalogue lookup
-    for this file's reason (module docstring): a constraint that is never tried is a comment
-    with punctuation. Before 0018 the second INSERT below landed cleanly and the row count was
-    2. [M4.9, decision 162's install is repaired by the same migration]
-    """
+    """NULLs are distinct in a unique index, so a NULL `provider` defeated it. Default and NOT NULL
+    are separate assertions: neither implies the other."""
     column = await db.fetchrow(
         "SELECT is_nullable, column_default FROM information_schema.columns "
         "WHERE table_schema = 'public' AND table_name = 'dna_tag' AND column_name = 'provider'"
@@ -116,12 +81,7 @@ async def test_dna_tag_provider_is_not_null_so_its_unique_index_fires(db):
     assert await db.fetchval("SELECT count(*) FROM dna_tag") == 1
 
 
-# --- §4.2: seen state ------------------------------------------------------------------
-
-
 async def test_seen_state_has_exactly_two_values(db):
-    """Owner decision 2026-08-29: there is no 'forgotten'. A title you cannot remember is
-    plain `unseen` — one control, one sync rule."""
     user_id = await _user(db)
     await _title(db)
     await db.execute(
@@ -135,7 +95,6 @@ async def test_seen_state_has_exactly_two_values(db):
 
 
 async def test_flipping_seen_to_unseen_keeps_the_history(db):
-    """§4.2: "verdict/duel history is append-only and survives the flip"."""
     user_id = await _user(db)
     await _title(db)
     await _title(db, 2)
@@ -156,9 +115,6 @@ async def test_flipping_seen_to_unseen_keeps_the_history(db):
     assert await db.fetchval("SELECT count(*) FROM duel WHERE user_id = $1", user_id) == 1
 
 
-# --- §4.2: the ledger arms -------------------------------------------------------------
-
-
 async def test_a_verdict_is_one_of_three_classes(db):
     user_id = await _user(db)
     await _title(db)
@@ -171,7 +127,7 @@ async def test_a_verdict_is_one_of_three_classes(db):
 
 
 async def test_a_duel_records_ties_and_refuses_a_self_pairing(db):
-    """§4.2: "about the same" is first-class data — 22% of random pairs are genuine ties."""
+    """22% of random pairs are genuine ties."""
     user_id = await _user(db)
     await _title(db)
     await _title(db, 2)
@@ -189,8 +145,7 @@ async def test_a_duel_records_ties_and_refuses_a_self_pairing(db):
 
 
 async def test_the_uniform_holdout_stream_is_addressable(db):
-    """§13: the 10% uniform-random stream is the ONLY data admissible for evaluating the tier
-    model. It has to be separable by query, or the guard is unenforceable."""
+    """The held-out stream must be separable by query, or §13's guard is unenforceable."""
     user_id = await _user(db)
     await _title(db)
     await _title(db, 2)
@@ -207,8 +162,7 @@ async def test_the_uniform_holdout_stream_is_addressable(db):
 
 
 async def test_cutpoints_must_match_the_tier_set(db):
-    """§4.2: "length = |tier set| − 1". Decision 11 makes the set per-user, so the invariant
-    has to hold per row rather than globally."""
+    """Decision 11 makes the tier set per-user, so the invariant holds per row."""
     user_id = await _user(db)
     await db.execute(
         "INSERT INTO ledger_cutpoints (user_id, kind, boundaries, tier_set) "
@@ -225,7 +179,6 @@ async def test_cutpoints_must_match_the_tier_set(db):
 
 
 async def test_one_user_changing_their_tier_set_leaves_another_alone(db):
-    """Decision 11: the tier set is a per-user preference."""
     a = await _user(db, "patrick")
     b = await _user(db, "jenny")
     for user_id in (a, b):
@@ -246,14 +199,8 @@ async def test_one_user_changing_their_tier_set_leaves_another_alone(db):
     assert other == 7
 
 
-# --- §10: exactly one active bundle ----------------------------------------------------
-
-
 async def test_only_one_bundle_can_be_active(db):
-    """§10's invariant, enforced by a partial unique index rather than by discipline."""
-    # One seed, then a model bundle: decision 162's two kinds, because 0015's
-    # `artifact_bundle_one_seed` index makes a second `kind = 'seed'` row impossible and the
-    # rule under test here is the ACTIVE one.
+    # 0015's `artifact_bundle_one_seed` allows one seed row, so the second is a model bundle.
     for version, kind in (("v1", "seed"), ("v2", "model")):
         await db.execute(
             "INSERT INTO artifact_bundle (version, manifest, state, kind)"
@@ -265,16 +212,8 @@ async def test_only_one_bundle_can_be_active(db):
         await db.execute("UPDATE artifact_bundle SET state = 'active' WHERE version = 'v2'")
 
 
-# --- §10 + §4.2: an artifact_bundle row is provenance. Decision 249 ---------------------
-
-
 async def _bundle(db, version: str, state: str) -> str:
-    """One bundle row in a named state.
-
-    `kind = 'model'` on every call: `kind` defaults to 'seed' and `artifact_bundle_one_seed`
-    (0015_seed.sql:121) allows one seed row per install, so a second defaulted row would fail on
-    that index rather than on the rule under test.
-    """
+    """`kind = 'model'`: `artifact_bundle_one_seed` (0015) allows one seed row per install."""
     await db.execute(
         "INSERT INTO artifact_bundle (version, manifest, state, kind) "
         "VALUES ($1, '{}', $2, 'model')",
@@ -284,20 +223,7 @@ async def _bundle(db, version: str, state: str) -> str:
 
 
 async def test_the_active_bundle_row_cannot_be_deleted(db):
-    """0023's trigger, on the one row §10's whole swap sequence is about.
-
-    Nothing in the tree deletes an `artifact_bundle` row today, which is exactly why the rule had
-    to be said in the schema rather than in a function: data-07's reproduction was refused by
-    `session_bundle_version_fkey` only because a session happened to exist, and an install with
-    no session at all deletes the active row outright -- keeping every score, prior and placement
-    computed in it, now naming a basis the install can no longer describe. `0015_seed.sql:131-135`
-    calls itself "the migration that makes them prunable"; decision 249 is the answer it left
-    open, and this is the state that answer is mostly about.
-
-    The message is asserted and not merely the raise. What an operator at a psql prompt gets
-    today is "violates foreign key constraint session_bundle_version_fkey", which says nothing
-    about why the row exists, so the version and the state are the payload of the fix.
-    """
+    """The message names version and state: a bare FK error says nothing about why the row exists."""
     await _bundle(db, "active-v1", "active")
     with pytest.raises(asyncpg.RaiseError, match="active-v1 is state active and is provenance"):
         await db.execute("DELETE FROM artifact_bundle WHERE version = 'active-v1'")
@@ -307,20 +233,8 @@ async def test_the_active_bundle_row_cannot_be_deleted(db):
 
 
 async def test_a_superseded_bundle_row_cannot_be_deleted_either(db):
-    """The state the word "prunable" was written for, and the one that must not be pruned.
-
-    A superseded row is the only one a reading of `0015_seed.sql:131-135` would ever point a
-    prune at, and it is where the DDL's three answers do the most damage at once: `user_score`
-    and `title_prior` are ON DELETE CASCADE (`0009_scoring.sql:12,34`), `title_placement` too
-    (`0008_placement.sql:14`), and `title.placement_bundle` is SET NULL
-    (`0008_placement.sql:59-60`) -- so one DELETE silently empties §5.1's scores and §5.3's
-    priors for that basis and strands the title at 'warm' with no version naming where the
-    coordinate came from.
-
-    The survivors are asserted rather than only the raise, because enumerating what the prune
-    would have taken is the whole content of the word "provenance": a test that stopped at
-    `pytest.raises` would document the trigger and not its reason.
-    """
+    """Deleting it would cascade §5.1's scores and §5.3's priors and SET NULL the title's basis, so
+    the survivors are asserted, not just the raise."""
     user = await _user(db)
     target = await _title(db, 1)
     await _bundle(db, "sup-v1", "superseded")
@@ -355,26 +269,8 @@ async def test_a_superseded_bundle_row_cannot_be_deleted_either(db):
 
 
 async def test_a_staged_or_failed_row_may_be_deleted(db):
-    """The other half of decision 249, and the half a blanket refusal would have eaten.
-
-    'staged' and 'failed' name an import that never became anybody's basis, so a row in either
-    state that nothing cites records an attempt and no more. What a blanket refusal would eat is
-    a row somebody made by hand, and not an abandoned import: no path in this tree writes either
-    state -- the importer inserts 'validated' inside the transaction that flips (decision 253),
-    a failed import rolls that row back with everything else, and 'staged' survives only as the
-    column default (`0001_system.sql:40`) that no INSERT here leaves to itself. The hatch is for
-    a psql operator and for a state a later milestone may start writing.
-
-    The row nothing cites is the whole of the hatch, which is why the sibling test below exists:
-    decision 249's premise is that these two states are nobody's basis, and a hand-built row can
-    falsify it.
-
-    'validated' is asserted on the other side of the line deliberately. It is the state decision
-    253 has the importer write INSIDE the transaction that flips a bundle active, so a WHEN
-    clause widened to "anything that is not active" would let a crashed import's row be removed
-    while `/data/artifacts/<version>` stays on disk -- the broken install D2 exists to repair,
-    with the row that identifies it gone.
-    """
+    """Nothing cites staged or failed rows, so they may go. 'validated' is on the other side: the
+    importer writes it inside the flip transaction (decision 253)."""
     await _bundle(db, "staged-v1", "staged")
     await _bundle(db, "failed-v1", "failed")
     await _bundle(db, "validated-v1", "validated")
@@ -387,21 +283,8 @@ async def test_a_staged_or_failed_row_may_be_deleted(db):
 
 
 async def test_a_staged_or_failed_row_something_still_cites_is_refused_with_the_rule(db):
-    """The hatch's premise, checked rather than assumed. Decision 249.
-
-    "Nothing downstream can be pointing at them" is true of every row this app makes and false
-    of one a psql operator builds by hand -- and 0023 opens by naming what the operator gets
-    when it is false. Measured on a fresh 0001-0023 database before this was closed: a title at
-    `placement_bundle` of a 'failed' row answered the DELETE with `title_placement_has_basis`
-    and the entire title row in the DETAIL, and a session citing a 'staged' row answered with
-    `session_bundle_version_fkey` -- verbatim the two error shapes the migration's header calls
-    the defect it repairs, reproduced on the only two states the rule leaves open.
-
-    Both arms, because they fail differently and a test that took one would leave the other's
-    constraint name reachable: `title.placement_bundle` is SET NULL (`0008_placement.sql:59-60`)
-    and trips the CHECK this same migration adds, while `session.bundle_version` is NOT NULL and
-    RESTRICTs (`0013_tonight.sql:49`).
-    """
+    """A hand-built row can falsify decision 249's premise. The arms fail differently: SET NULL
+    trips a CHECK, while `session.bundle_version` RESTRICTs."""
     target = await _title(db, 1)
     await _bundle(db, "failed-v1", "failed")
     await db.execute(
@@ -426,17 +309,8 @@ async def test_a_staged_or_failed_row_something_still_cites_is_refused_with_the_
 
 
 async def test_the_rule_asks_every_table_that_can_be_citing_the_row(db):
-    """The hatch's list is hand-maintained, so the schema is asked whether it is still complete.
-
-    `artifact_bundle_is_provenance` names six tables one by one, and a later migration that adds
-    a seventh foreign key to `artifact_bundle` would reopen the hole the test above closes with
-    nothing to say so -- the same failure mode `REBUILD_SET` is defined once to avoid. The
-    catalog knows the real list, so it is the catalog that is asked.
-
-    `user_vector` is the one exclusion, and it is decision 249's own: §10 says a vector expressed
-    in the old basis is garbage and a NULL stamp is how every read already recognises that
-    (`0015_seed.sql:138-143`), so a vector is not something that keeps a bundle row alive.
-    """
+    """The trigger's six tables are hand-kept, so the catalog is asked for every FK. `user_vector`
+    is excluded by decision 249: a NULL stamp already marks it stale."""
     referencing = [
         r["referencing"] for r in await db.fetch(
             "SELECT DISTINCT conrelid::regclass::text AS referencing FROM pg_constraint "
@@ -459,26 +333,9 @@ async def test_the_rule_asks_every_table_that_can_be_citing_the_row(db):
 
 
 async def test_a_placed_title_with_no_placement_bundle_is_refused_by_the_check(pg_url, tmp_path):
-    """0023's backfill and its CHECK, over a row that was already in the reproduced state.
-
-    A database of its own rather than the `db` fixture's, for the reason
-    `test_the_tier_edit_k_column_is_backfilled_from_the_users_own_tier_set` gives at the foot of
-    this file: every other layer of this suite applies the migrations to an EMPTY database, so
-    the `UPDATE title SET placement = 'unplaced'` this migration opens with would otherwise never
-    run over a row at all. Deleting that UPDATE would leave every test here green and every
-    install that has been through §10's re-import failing the ALTER at boot, inside
-    `db/migrate.py`, with no way forward -- the file is checksummed the moment it lands.
-
-    The state staged below is the one data-07 reproduced: `title.placement_bundle`'s ON DELETE
-    SET NULL (`0008_placement.sql:59-60`) leaves a title at 'cold_tower' with no version naming
-    the basis, so §12's M2 exit-criterion index (`0008_placement.sql:64`,
-    `count(*) FROM title WHERE is_owned AND placement = 'unplaced'`, which must be 0) reports
-    nothing waiting to be placed for a title that has no coordinate at all. `reconcile.py`'s
-    sweep does not rescue it either: that sweep only resets rows it can see are stale ('warm'
-    with no Backbone row), and a 'cold_tower' row in this state is never re-examined by anything.
-    """
-    # Not the module's `UNDER_TEST`: that names 0022, whose own drill stages the migrations
-    # BELOW it, and pointing both at one constant would silently move that test's cut line.
+    """A database of its own: every other layer migrates an EMPTY database, so this backfill's
+    UPDATE would never run over a row."""
+    # Not `UNDER_TEST` (0022): that drill stages the migrations below it.
     under_test = "0023_import_state"
     earlier = [version for version, _ in migrate.discover() if version < under_test]
     admin, name, url = _sibling(pg_url, "_basis")
@@ -513,11 +370,7 @@ async def test_a_placed_title_with_no_placement_bundle_is_refused_by_the_check(p
             "SELECT placement, placement_at, placement_bundle FROM title WHERE id = 21"
         )
         assert stranded["placement"] == "unplaced", "a coordinate with no basis is not a placement"
-        # About THIS row, not about 'unplaced': the backfill clears the stamp because that
-        # timestamp dated a placement which never happened. There is no rule here for a reader to
-        # carry away -- `classify_warm`'s demote is the one statement that puts a row back to
-        # 'unplaced' and it writes `placement_at = now()` doing it (`reconcile.py:157-162`), so
-        # an unplaced title carries a stamp again after the first sweep.
+        # The backfill clears the stamp because it dated a placement that never happened.
         assert stranded["placement_at"] is None, "this row's stamp dated a placement that never was"
 
         placed = await conn.fetchrow(
@@ -531,9 +384,7 @@ async def test_a_placed_title_with_no_placement_bundle_is_refused_by_the_check(p
             "SELECT count(*) FROM title WHERE is_owned AND placement = 'unplaced'"
         ) == 1, "M2's index now counts the title that has no coordinate"
 
-        # Both halves of the biconditional, because both are reachable: the first from a writer
-        # that stamps `placement` alone, the second from the SET NULL the FK still performs on
-        # `title.placement_bundle` wherever decision 249's trigger is not what fires first.
+        # Both halves are reachable: a writer stamping `placement` alone, and the FK's SET NULL.
         with pytest.raises(asyncpg.CheckViolationError, match="title_placement_has_basis"):
             await conn.execute(
                 "INSERT INTO title (id, kind, name, placement) "
@@ -546,9 +397,6 @@ async def test_a_placed_title_with_no_placement_bundle_is_refused_by_the_check(p
     finally:
         await conn.close()
         await _drop(admin, name)
-
-
-# --- §2: connector secrets --------------------------------------------------------------
 
 
 async def test_a_connector_secret_cannot_be_stored_without_naming_its_key(db):
@@ -567,19 +415,13 @@ async def test_a_connector_secret_cannot_be_stored_without_naming_its_key(db):
         )
 
 
-# --- §4.2 + 54g: the Tonight session block ----------------------------------------------
-
-
 async def _session(db, host: int, *, kind: str = "movie", budget: int = 130) -> int:
-    """§10: a session records the basis its pool was built in, so it needs a bundle to exist.
-    That is the point of the NOT NULL — a Tonight session has no pool without §5.1 scores, and
-    §5.1 scores have no meaning without an active bundle."""
+    """A session's NOT NULL basis needs a bundle row to exist (§10)."""
     await db.execute(
         "INSERT INTO artifact_bundle (version, manifest, state) VALUES ('test-v1', '{}', 'active') "
         "ON CONFLICT DO NOTHING"
     )
-    # A distinct code per call: `session_room_code_live` is unique among live rooms, which is
-    # the constraint under test elsewhere and merely scaffolding here.
+    # `session_room_code_live` is unique among live rooms, so a distinct code per call.
     return await db.fetchval(
         "INSERT INTO session (room_code, host_user_id, kind, runtime_budget_min, bundle_version) "
         "VALUES ('MX-' || nextval('session_id_seq')::text, $1, $2, $3, 'test-v1') RETURNING id",
@@ -596,9 +438,7 @@ async def _seat(db, session_id: int, *, user_id=None, role="guest", seat=1) -> i
 
 
 async def test_a_session_answer_is_one_of_four_values(db):
-    """Decision 154: `A | B | EITHER | NEITHER`. `EITHER` lifts both, `NEITHER` lowers both —
-    opposite signals, not two names for a shrug. The prototype collected `NO_PULL` and threw
-    it away in `tilt()`; the CHECK is what stops that value ever being stored again."""
+    """Decision 154: `EITHER` lifts both and `NEITHER` lowers both; the prototype's `NO_PULL` is refused."""
     user = await _user(db)
     a, b = await _title(db, 1), await _title(db, 2)
     sid = await _session(db, user)
@@ -618,10 +458,7 @@ async def test_a_session_answer_is_one_of_four_values(db):
 
 
 async def test_a_session_answer_names_the_stream_it_belongs_to(db):
-    """54b, §13's non-negotiable guard: the hold-out arm must be identifiable end to end, and
-    a client must never be able to file an adaptive pair as held-out or the reverse. The
-    spelling is `uniform_holdout`, the same string `duel.selection` already uses — a second
-    spelling is how an exclusion silently stops matching."""
+    """The spelling is `uniform_holdout`, as in `duel.selection`: a second spelling breaks exclusions."""
     user = await _user(db)
     a, b = await _title(db, 1), await _title(db, 2)
     sid = await _session(db, user)
@@ -643,7 +480,6 @@ async def test_a_session_answer_names_the_stream_it_belongs_to(db):
 
 
 async def test_a_pair_never_names_the_same_title_twice(db):
-    """A "which one tonight?" between a title and itself is not a question."""
     user = await _user(db)
     a = await _title(db, 1)
     sid = await _session(db, user)
@@ -657,8 +493,7 @@ async def test_a_pair_never_names_the_same_title_twice(db):
 
 
 async def test_a_participant_round_ends_with_exactly_one_named_reason(db):
-    """54c/54g: `ended_by: converged | cap | escape` — §14 risk 6 wants the rate of each, and
-    a fourth value nobody defined would make that rate unreadable."""
+    """§14 risk 6 wants the rate of each; an undefined fourth value makes it unreadable."""
     user = await _user(db)
     sid = await _session(db, user)
     await db.execute(
@@ -678,14 +513,7 @@ async def test_a_participant_round_ends_with_exactly_one_named_reason(db):
 
 
 async def test_converged_at_is_stamped_only_when_the_round_converged(db):
-    """54c: the round ends for a person "when the shortlist boundary is resolved … subject to a
-    hard cap of 20", and from the sixth pair an escape ends it early. Neither of those is a
-    convergence, so neither may carry a convergence timestamp — otherwise §14 risk 6's "how
-    often does the cap fire?" is answered by a column that quietly says "never".
-
-    Both directions, because either alone is satisfiable by an implementation that never
-    stamps the column at all.
-    """
+    """Both directions: either alone passes for an implementation that never stamps the column."""
     user = await _user(db)
     sid = await _session(db, user)
     with pytest.raises(asyncpg.CheckViolationError):
@@ -707,9 +535,7 @@ async def test_converged_at_is_stamped_only_when_the_round_converged(db):
 
 
 async def test_two_guest_seats_coexist_in_one_session(db):
-    """§4.2: "user_id NULL — NULL = guest slot on the host phone", and §6.2 step 2 hands that
-    phone round, so *two* guests is the designed case rather than the edge one. A
-    (session_id, user_id) key would seat the first and drop the second."""
+    """Two guests on the host phone is the designed case; a (session_id, user_id) key drops one."""
     user = await _user(db)
     sid = await _session(db, user)
     first = await _seat(db, sid, seat=1)
@@ -723,9 +549,7 @@ async def test_two_guest_seats_coexist_in_one_session(db):
 
 
 async def test_one_member_cannot_hold_two_seats_in_one_session(db):
-    """§6.2 step 2's "join channels, all equivalent" — a member who arrives twice, by code and
-    then from the open-rooms list, must re-attach rather than seat twice. Two seats would
-    change the participant count every average and §13's approval share are computed over."""
+    """A member arriving twice must re-attach; two seats would skew every per-participant average."""
     user = await _user(db)
     other = await _user(db, name="jenny")
     sid = await _session(db, user)
@@ -736,8 +560,6 @@ async def test_one_member_cannot_hold_two_seats_in_one_session(db):
 
 
 async def test_a_ballot_is_one_row_per_participant_and_title(db):
-    """54e: the approval ballot is a multi-select over the finalists and the wildcard. One
-    participant approving one title twice would inflate the approval share §13 evaluates on."""
     user = await _user(db)
     sid = await _session(db, user)
     pid = await _seat(db, sid, user_id=user, role="host")
@@ -756,8 +578,6 @@ async def test_a_ballot_is_one_row_per_participant_and_title(db):
 
 
 async def test_an_approval_share_outside_zero_to_one_is_refused(db):
-    """§13's headline metric is a fraction of participants; a value outside [0, 1] is a
-    counting bug that would otherwise be discovered in a chart months later."""
     user = await _user(db)
     sid = await _session(db, user)
     title = await _title(db, 1)
@@ -775,22 +595,12 @@ async def test_an_approval_share_outside_zero_to_one_is_refused(db):
         )
 
 
-# --- 0021 / decision 220: the reserved slot, labelled ---------------------------------------
-
-# 54d's axis, hand-seeded. Decision 173 ships no `dna_axis_weight` rows, so `contested` is None on
-# every real night and no row is ever written with `reserved = true` on release data — which is
-# exactly why the column is exercised here against a real server rather than left to the day the
-# corpus work (proposal 140) lands. [M4.12 finding 24]
+# Decision 173 ships no `dna_axis_weight` rows, so release data never writes `reserved = true`.
 _PACE = {"pace": {"slow": -1.0, "fast": 1.0}}
 
 
 async def _slate_session(db, *, titles, scores, tilts):
-    """A started two-member room whose frozen pool carries `_PACE`, ready for `play.finish`.
-
-    The pool is written straight into `session.context` rather than built by `play.start`: the
-    claim under test is what the combine's slate does to `session_result`, and a real pool would
-    need `user_score` rows, a fold-in and a bundle the axes are attached to for no extra coverage.
-    """
+    """The pool goes straight into `session.context`: a real pool needs scores, fold-in and a bundle."""
     host = await _user(db, name="patrick")
     other = await _user(db, name="jenny")
     sid = await _session(db, host)
@@ -807,8 +617,7 @@ async def _slate_session(db, *, titles, scores, tilts):
         sid,
         {"pool": {
             "candidates": {str(t): {"name": f"t{t}"} for t in titles},
-            # Per seat, because D is Ledger divergence over these very numbers: a pool that scores
-            # both members identically has D = 0 and surfaces nothing to reserve a slot for.
+            # Per seat: D is Ledger divergence, and identical scores give D = 0 and nothing to reserve.
             "scores": {
                 str(t): {str(p): v for p, v in zip(seats, scores[t], strict=True)}
                 for t in titles
@@ -822,11 +631,7 @@ async def _slate_session(db, *, titles, scores, tilts):
 
 
 async def test_a_slate_row_is_not_reserved_until_something_reserves_it(db):
-    """`reserved boolean NOT NULL DEFAULT false`: every row already stored is a slate that had no
-    reservation — it either surfaced no split or surfaced one before the label existed — so false
-    is the truth about those rows and not a placeholder. NULL is refused rather than read as
-    "unknown", because a card either is the other side of the split or is not. [decision 220]
-    """
+    """NOT NULL DEFAULT false: every stored row predates any reservation (decision 220)."""
     user = await _user(db)
     sid = await _session(db, user)
     title = await _title(db, 1)
@@ -840,9 +645,7 @@ async def test_a_slate_row_is_not_reserved_until_something_reserves_it(db):
     ) is False, "a slate written without a reservation carries none"
     with pytest.raises(asyncpg.NotNullViolationError):
         await db.execute("UPDATE session_result SET reserved = NULL WHERE session_id = $1", sid)
-    # Orthogonal to the slot, which is the whole argument for a boolean over a fourth `slot`
-    # value: the reserved title is still a finalist, and every `slot IN ('finalist','wildcard')`
-    # filter keeps counting it.
+    # Orthogonal to the slot: `slot IN ('finalist','wildcard')` filters keep counting it.
     await db.execute(
         "UPDATE session_result SET reserved = true WHERE session_id = $1", sid
     )
@@ -852,18 +655,7 @@ async def test_a_slate_row_is_not_reserved_until_something_reserves_it(db):
 
 
 async def test_the_reserved_finalist_is_the_one_the_stored_slate_labels(db):
-    """54d: the third slot is reserved for the opposite-pole title "**labelled as such**", and
-    nothing labelled it — `combine` gave it `SLOT_FINALIST` like the other two and no string
-    `reserved` or `opposite` existed anywhere between the rule and the screen. So the household
-    was told "here's one of each" over three cards and could not see which was the counterweight.
-    [M4.12 finding 24; decision 220; migration 0021]
-
-    Through `play.finish` and `result.slate` rather than against the pure slate, because the claim
-    spans three layers that each used to drop the field: the rule computes it, the INSERT carries
-    it, and the reveal reads it back. Four titles lean slow and one leans fast, with the divergent
-    Ledger on the leader, so the reservation has to reach past the group's top three — which is
-    also what makes the stored ranks visible as slate order rather than score order.
-    """
+    """Through `play.finish` and `result.slate`: rule, INSERT and reveal each used to drop the field."""
     from spielplan.tonight import play
     from spielplan.tonight import result as result_rules
     from spielplan.tonight import round as round_rules
@@ -872,8 +664,7 @@ async def test_the_reserved_finalist_is_the_one_the_stored_slate_labels(db):
               5: {"fast": 1.0}}
     sid, seats = await _slate_session(
         db, titles=titles,
-        # Group scores 0.95 / 0.90 / 0.85 / 0.80 / 0.30, with the two members 0.60 apart on the
-        # leader: mean - min is 0.30, over §6.2 step 5's D >= 0.20.
+        # Group scores 0.95/0.90/0.85/0.80/0.30; the members are 0.60 apart on the leader, so D = 0.30.
         scores={1: (1.25, 0.65), 2: (0.90, 0.90), 3: (0.85, 0.85), 4: (0.80, 0.80),
                 5: (0.30, 0.30)},
         tilts=({"slow": 1.0}, {"fast": 1.0}),
@@ -896,10 +687,7 @@ async def test_the_reserved_finalist_is_the_one_the_stored_slate_labels(db):
     )
     assert rows[3]["slot"] == "wildcard"
 
-    # Every seat votes first, because the reveal now also carries each seat's approval breadth and
-    # refuses it, as `ballot.tally` refuses the counts, until every ballot is in (54e; the
-    # 2026-09-25 wave replaced "Unanimous." with it). A reveal read over an unvoted ballot is not a
-    # reveal this app can produce, so the fixture stops asking for one.
+    # Every seat votes first: the reveal refuses until every ballot is in (54e).
     from spielplan.tonight import ballot as ballot_rules
 
     for seat in seats:
@@ -914,25 +702,12 @@ async def test_the_reserved_finalist_is_the_one_the_stored_slate_labels(db):
     assert reveal["wildcard"]["reserved"] is False
 
 
-# --- M4.13 / 0022_model_basis: the schema sweep -------------------------------------------
-#
-# Every test below attempts the write the OLD constraint accepted. That is the only honest shape
-# for this section: each of these rules was already in the DDL under a name that promised it, and
-# what made them decorative was that nothing had ever tried them. Reproduced against a database
-# migrated to 0020 -- `DELETE FROM title WHERE id = 1` succeeded and left every observation table
-# at 0 rows; `ARRAY['movie','movie']` inserted; `seat = -3` inserted; a verdict superseded itself;
-# a strictly descending six-element boundary array inserted; an empty tier set inserted, because
-# `array_length('{}', 1)` is NULL and `NULL = NULL - 1` is NULL, which a CHECK accepts.
-# [M4.13 plan §5 items 1-6; findings 33 and 34; decision 239]
+# Each test below attempts the write the OLD constraint accepted.
 
-# The migration these tests are about. Named once, because the backfill test has to stage the
-# release that comes before it and hardcoding the neighbour would go stale at the next number.
+# Named once: the backfill test stages the release before it.
 UNDER_TEST = "0022_model_basis"
 
-# The tables §4.2 and §13 call observations -- a person asserted every row -- keyed by what counts
-# them for one title. This is the list 0022 moved from CASCADE to RESTRICT, and it is a constant
-# rather than eight assertions because the two tests below need the same list for opposite
-# purposes: one deletes against it, the other counts it afterwards.
+# The tables 0022 moved from CASCADE to RESTRICT, shared by the delete and the count below.
 _OBSERVATIONS = {
     "verdict": "SELECT count(*) FROM verdict WHERE title_id = $1",
     "duel": "SELECT count(*) FROM duel WHERE title_a = $1 OR title_b = $1",
@@ -946,11 +721,7 @@ _OBSERVATIONS = {
 
 
 async def _observed(db, target: int = 1) -> int:
-    """One row in every table `_OBSERVATIONS` names, all of them naming `target`.
-
-    `duel` and `session_answer` get two rows each, because both carry a title on either side and a
-    constraint re-added on only one of them would pass a single-sided fixture.
-    """
+    """`duel` and `session_answer` get two rows each: a title sits on either side."""
     user = await _user(db)
     await _title(db, target)
     other = await _title(db, target + 1, kind="series")
@@ -999,32 +770,15 @@ async def _observed(db, target: int = 1) -> int:
 
 
 async def test_deleting_a_title_that_carries_observations_is_refused(db):
-    """§10 line 387: "Ledger observations always survive re-import".
-
-    Until 0022 that sentence was kept by the convention that no code deletes a title, not by the
-    schema: every one of these tables declared ON DELETE CASCADE, and `DELETE FROM title WHERE
-    id = 1` left all of them at zero rows without an error or a log line. M5's acquisition pipeline
-    and any "remove a mis-acquired title" admin action are the first writers that will not know the
-    convention, and taste data is the one thing this app cannot re-derive.
-    """
+    """Taste data is the one thing this app cannot re-derive; until 0022 CASCADE emptied it silently."""
     target = await _observed(db)
     with pytest.raises(asyncpg.ForeignKeyViolationError):
         await db.execute("DELETE FROM title WHERE id = $1", target)
 
 
 async def test_every_observation_row_survives_the_refused_delete(db):
-    """The caller's half of the refusal: the rows are where they were, not half-cleared.
-
-    The docstring that stood here argued that this test told a partial refusal from a whole one.
-    It cannot, and no test that goes through a single DELETE can: the statement is atomic, so
-    Postgres rolls back the cascades its RI triggers had already performed along with the raise,
-    and these counts read identically whether ten of the ten columns are RESTRICT or one is.
-    Reproduced with nine reverted to CASCADE -- both this and the test above pass. What the pair
-    holds is the runtime refusal and the caller's view of it, which is worth having and is not the
-    extent of it; the extent is asserted off the catalogue, column by column, in
-    `test_every_observation_foreign_key_is_declared_restrict_by_name` below.
-    [M4.13 cycle 2, M413-C2-D6-01]
-    """
+    """The DELETE is atomic, so these counts cannot tell a partial RESTRICT from a whole one; the
+    catalogue test below does."""
     target = await _observed(db)
     before = {name: await db.fetchval(q, target) for name, q in _OBSERVATIONS.items()}
     missing = [name for name, count in before.items() if not count]
@@ -1038,10 +792,7 @@ async def test_every_observation_row_survives_the_refused_delete(db):
     assert await db.fetchval("SELECT count(*) FROM title WHERE id = $1", target) == 1
 
 
-# The ten foreign-key columns 0022 section 2 re-declares, by the names the migration gives them.
-# Ten over eight tables, because `duel` and `session_answer` carry a title on either side -- and
-# spelled out here rather than derived from `_OBSERVATIONS`, since a derivation would be the same
-# guess the schema is being asked about.
+# Spelled out, not derived from `_OBSERVATIONS`: a derivation would be the guess under test.
 _RESTRICTED = (
     ("verdict", "title_id", "verdict_title_id_fkey"),
     ("duel", "title_a", "duel_title_a_fkey"),
@@ -1057,24 +808,8 @@ _RESTRICTED = (
 
 
 async def test_every_observation_foreign_key_is_declared_restrict_by_name(db):
-    """Which of the ten refuses, which the pair above cannot say.
-
-    A DELETE that raises tells the caller that SOMETHING refused and nothing else: the rollback
-    hides how much had already been cascaded away, so nine of these ten can be on CASCADE with
-    both tests above green and `ops/m413_exit_criterion.py` still printing 6/6 -- its check 6
-    wraps the same DELETE in a transaction and counts rows after it. That is the whole of §10's
-    "observations always survive" resting on whichever RI trigger Postgres happens to reach first.
-
-    So the action is read off the catalogue instead of inferred from a raise, which is also the
-    argument `test_migrations.py::test_every_observation_table_can_be_searched_by_the_title_it_names`
-    makes for the sibling indexes: an ALTER that named the wrong column would still apply. The
-    column is asserted beside the action, so a constraint that kept its name over a different
-    column cannot pass, and the eight tables are swept afterwards so a new observation column
-    cannot arrive on CASCADE without this test being read. The derived tables are deliberately
-    absent: `test_a_title_carrying_only_derived_rows_still_deletes` is the other half of that
-    choice, and a title that could never be removed is not the guarantee 0022 wanted.
-    [M4.13 cycle 2, M413-C2-D6-01]
-    """
+    """Read off the catalogue: a raise hides which of the ten refused. The column is asserted beside
+    the action, and the tables swept so a new column cannot arrive on CASCADE."""
     rows = await db.fetch(
         """
         -- ::text because `confdeltype` is a `"char"`, which asyncpg hands back as b'r' -- and a
@@ -1114,19 +849,8 @@ async def test_every_observation_foreign_key_is_declared_restrict_by_name(db):
 
 
 async def test_a_title_carrying_only_derived_rows_still_deletes(db):
-    """RESTRICT on the observations must not become an obstruction everywhere else.
-
-    `ledger_state`, `user_score`, `title_prior`, `title_placement` and `acquisition_job` are
-    recomputed outputs -- the next refit and the next sweep rewrite every row of them -- so a
-    delete that had to be hand-cleared of them first would make the guarantee above read as "a
-    title can never be removed". They stay on CASCADE, and this is the half of that choice a
-    constraint cannot state.
-
-    `display.platform_rating` is the exception, and the exception is deliberate: `0003:177-184`
-    refuses it a cross-schema FK so that a display row can never put rule 3's schema in the feature
-    builder's query plan, which leaves it behind as an orphan. Asserted rather than assumed,
-    because it is what the reaping in `importer/load.py` exists to clear.
-    """
+    """Derived tables stay on CASCADE. `display.platform_rating` has no cross-schema FK (rule 3), so
+    it is left as an orphan for the importer to reap."""
     user = await _user(db)
     target = await _title(db, 7)
     await db.execute(
@@ -1183,14 +907,7 @@ async def test_a_title_carrying_only_derived_rows_still_deletes(db):
 
 
 async def test_the_reload_path_reaps_a_display_row_whose_title_is_gone(db):
-    """Decision 239: the reaping lives in the importer, not in a cross-schema FK.
-
-    `0003:177-184` keeps `display.platform_rating` un-referenced on purpose, so nothing in the
-    database can clear the orphan the test above leaves. The reload path is the one place that can:
-    it is the only code that sees the catalogue's id set change, and §10 calls a re-import "a
-    planned admin event with a migration report", which is exactly when a stale display row
-    should go.
-    """
+    """Decision 239: only the reload path sees the id set change, so it reaps the orphan."""
     from spielplan.importer import load
 
     kept = await _title(db, 3)
@@ -1206,14 +923,8 @@ async def test_the_reload_path_reaps_a_display_row_whose_title_is_gone(db):
     assert await db.fetchval("SELECT title_id FROM display.platform_rating") == kept
 
 
-# --- §4.2: "length = |tier set| - 1, ordered ascending", as a constraint -------------------
-
-
 async def test_cutpoints_refuse_an_empty_or_one_level_tier_set(db):
-    """`array_length('{}', 1)` is NULL, so the shipped `cutpoints_length` passed for exactly the
-    two rows it existed to refuse. A board with no levels has no tiers to render and a board with
-    one has no boundary to fit; both are refused on the write side by `rank/tiers.py`'s MIN_TIERS,
-    and 0022 is the second line under it."""
+    """`array_length('{}', 1)` is NULL, so the old CHECK passed exactly the rows it should refuse."""
     user = await _user(db)
     for tier_set in ("ARRAY[]::text[]", "ARRAY['only']"):
         with pytest.raises(asyncpg.CheckViolationError, match="cutpoints_length"):
@@ -1226,15 +937,8 @@ async def test_cutpoints_refuse_an_empty_or_one_level_tier_set(db):
 
 
 async def test_cutpoints_refuse_descending_boundaries_and_accept_coincident_ones(db):
-    """Both halves, because the easy constraint here is the wrong one.
-
-    §4.2 says "ordered ascending" and nothing enforced it: a strictly descending six-element array
-    inserted. But the fitter's cone is CLOSED -- `ledger/model.py:151-155` admits coincident
-    cutpoints and `rank/tiers.py:105-108` refuses to nudge them apart, because a person whose whole
-    board sits on one value has levels of genuinely zero width. A CHECK that demanded a strict
-    increase would be a nightly refit failing its INSERT inside a background transaction, which is
-    the `0009_scoring.sql:56-65` incident in a different column.
-    """
+    """The fitter's cone is CLOSED: coincident cutpoints are legal, so a strict-increase CHECK
+    would fail a nightly refit's INSERT."""
     user = await _user(db)
     seven = "ARRAY['F','D','C','B','A','A+','S']"
     with pytest.raises(asyncpg.CheckViolationError, match="cutpoints_ascend"):
@@ -1254,26 +958,16 @@ async def test_cutpoints_refuse_descending_boundaries_and_accept_coincident_ones
     assert kept == [0.1, 0.1, 0.3, 0.3, 0.5, 0.5]
 
 
-# --- Three CHECKs that mean their names ----------------------------------------------------
-
-
 async def test_a_rate_session_cannot_name_one_kind_twice(db):
-    """`kinds <@ ARRAY['movie','series']` is containment, and containment ignores duplicates, so
-    `['movie','movie']` satisfied it and the cardinality bound together -- a session with two of
-    one kind and none of the other, which §4.1 rule 5 has no reading for.
-
-    The canonical order is pinned in the same breath: `db/library.py`'s `normalise_kinds` builds
-    its answer by filtering KINDS, so ('series', 'movie') is not a preference a caller expressed
-    but a writer that went around the helper.
-    """
+    """Containment ignores duplicates, so `['movie','movie']` passed. The canonical order is pinned:
+    `normalise_kinds` filters KINDS."""
     user = await _user(db)
     for kinds in ("ARRAY['movie','movie']", "ARRAY['series','movie']"):
         with pytest.raises(asyncpg.CheckViolationError, match="rate_session_kinds_distinct"):
             await db.execute(
                 f"INSERT INTO rate_session (user_id, kinds) VALUES ($1, {kinds})", user
             )
-    # Ended, because `rate_session_one_live` allows one live session per user and the subject here
-    # is the kinds array, not that index.
+    # Ended: `rate_session_one_live` allows one live session per user.
     for kinds in ("ARRAY['movie']", "ARRAY['series']", "ARRAY['movie','series']"):
         await db.execute(
             f"INSERT INTO rate_session (user_id, kinds, ended_at) VALUES ($1, {kinds}, now())",
@@ -1283,8 +977,7 @@ async def test_a_rate_session_cannot_name_one_kind_twice(db):
 
 
 async def test_a_session_seat_below_one_is_refused(db):
-    """§6.2's seat is the 1-based hand-the-phone order. `session_participant_seat` is unique on
-    (session_id, seat), which made -3 as acceptable as 2 while reading like a validity check."""
+    """The seat is 1-based; the unique (session_id, seat) index accepted -3."""
     user = await _user(db)
     sid = await _session(db, user)
     for seat in (-3, 0):
@@ -1294,13 +987,7 @@ async def test_a_session_seat_below_one_is_refused(db):
 
 
 async def test_a_verdict_can_neither_supersede_nor_re_ask_itself(db):
-    """§4.2 makes the verdict chain append-only and `observations.py` walks it -- a row pointing at
-    itself is a cycle of length one with no terminating case. Both columns are nullable, so the
-    constraint is IS DISTINCT FROM rather than <>.
-
-    `duel.reask_of` carries the same defect and the same one-line fix, and it is asserted here
-    rather than in a test of its own because it is the same constraint under a second name.
-    """
+    """Both columns are nullable, hence IS DISTINCT FROM. `duel.reask_of` has the same constraint."""
     user = await _user(db)
     await _title(db)
     await _title(db, 2, kind="series")
@@ -1319,18 +1006,8 @@ async def test_a_verdict_can_neither_supersede_nor_re_ask_itself(db):
         await db.execute("UPDATE duel SET reask_of = id WHERE id = $1", duel)
 
 
-# --- §4.1 rule 5 lives in the data, and now in a constraint --------------------------------
-
-
 async def test_a_ledger_state_row_whose_kind_disagrees_with_its_title_is_refused(db):
-    """`0009_scoring.sql:27-33` says `kind` is in the row "so no ranked query can sort across the
-    partition by omission: §4.1 rule 5 lives in the data, not in a convention someone has to
-    remember" -- and then nothing tied the copy to `title.kind`. A 'series' row for a movie title
-    inserted, which is a board mixing the two partitions every read is written to keep apart.
-
-    The composite FK is one constraint doing the work of two: it holds the reference and the
-    agreement, which is why the single-column FK is dropped rather than kept beside it.
-    """
+    """A composite FK holds the reference and the kind agreement, so the single-column FK is dropped."""
     user = await _user(db)
     movie = await _title(db, 1)
     with pytest.raises(asyncpg.ForeignKeyViolationError, match="ledger_state_title_kind_fkey"):
@@ -1348,15 +1025,7 @@ async def test_a_ledger_state_row_whose_kind_disagrees_with_its_title_is_refused
 
 
 async def test_a_user_score_row_whose_kind_disagrees_with_its_title_is_refused(db):
-    """The §5.1 half of the same rule: `user_score.kind` is what `user_score_rank` sorts within, so
-    a disagreeing copy puts a film in the series chart with no query able to notice.
-
-    The re-import's own path is asserted too, because it is the reason the FK carries ON UPDATE
-    CASCADE: `load.py`'s `_upsert_titles` sets `kind` from EXCLUDED, so a corpus reclassification
-    moves a title between partitions, and under the default NO ACTION that UPDATE would fail for
-    any reclassified title a member has a score for -- a schema repair becoming an outage of the
-    one job §10 promises.
-    """
+    """ON UPDATE CASCADE: a re-import reclassifying `kind` must move scored titles, not fail."""
     user = await _user(db)
     movie = await _title(db, 1)
     await db.execute(
@@ -1380,25 +1049,9 @@ async def test_a_user_score_row_whose_kind_disagrees_with_its_title_is_refused(d
     assert moved == "series", "a reclassified title must take its derived rows with it"
 
 
-# --- The K a tier edit was written under, backfilled over rows that were already there -----
-
-
 async def test_the_tier_edit_k_column_is_backfilled_from_the_users_own_tier_set(pg_url, tmp_path):
-    """0022's backfill, run over rows that existed before it. §4.2 tier_edit; decision 11.
-
-    A database of its own rather than the `db` fixture's, for the reason `test_upgrade_drill.py`
-    opens with: every other layer of this suite applies the migrations to an EMPTY database, so no
-    `UPDATE ... SET` backfill in this repository has ever run over a row that was already there --
-    and "the migration applied" and "the migration computed the right value" are different claims.
-    This is the only test of 0022 that can make the second one.
-
-    The value has to come through the TITLE, because `tier_edit` has no `kind` of its own and
-    `ledger_cutpoints` is keyed (user_id, kind): the board a drop was made on is the board for that
-    title's kind. So one person with a 12-label movie board and no series row gets 12 on a film and
-    7 -- §4.2's default set -- on a series, and a person with no cutpoints row at all gets 7
-    everywhere. A backfill that read the person's only row regardless of kind would stamp the series
-    edit 12, which is precisely the mislabelling the column exists to end.
-    """
+    """A database of its own, so the backfill runs over existing rows. K comes through the title's
+    kind: 12 on a film, 7 (the default) on a series or with no cutpoints row."""
     earlier = [version for version, _ in migrate.discover() if version < UNDER_TEST]
     admin, name, url = _sibling(pg_url, "_nlevels")
     await _recreate(admin, name)

@@ -1,19 +1,5 @@
-"""§5.3's nightly passes, actually run. Spec v2.1 §5.3, §5.2, §5.1, §3.1.
-
-`test_worker_schedule.py` asserts the registry is a faithful copy of §5.3's table — the right
-jobs, the right milestones, the right cadences. What it cannot see is whether a job's `run`
-callable works, because a registry entry is satisfied by any callable at all.
-
-That gap has teeth here: all three M2 jobs were wired to functions in three modules built in
-parallel by three people who never imported each other's code. A wrong keyword, a renamed
-dataclass field, an interface that turned out to be async — every one of those is invisible
-until 3 a.m. on the night the job first fires, and a background job that raises leaves no
-surface anywhere in the product.
-
-So each job is run twice: once against a household with no bundle, which §3.1 makes a legal
-state the job must skip rather than crash in, and once against a real imported bundle with real
-observations, where it has to produce the writes the surfaces read.
-"""
+"""A registry entry is satisfied by any callable, so each job is run twice: bundle-less (it must
+skip, §3.1) and over a real bundle (it must produce the writes the surfaces read)."""
 
 from __future__ import annotations
 
@@ -39,19 +25,13 @@ from tests.fixtures import make_bundle as fx
 pytestmark = pytest.mark.anyio
 
 M2_JOBS = ("ledger-map-refit", "fold-in-user-vectors", "placement-reconciliation")
-# M3 adds one, and it earns the same treatment for the same reason: decision 11's "queued
-# for that user alone" is serviced by a callable nothing else calls.
+# Decision 11's "queued for that user alone" is serviced by a callable nothing else calls.
 M3_JOBS = ("tier-set-refit",)
 
 
 @pytest.fixture
 async def worker_env(db, pg_url, tmp_path, monkeypatch):
-    """The worker's own view of the world: a real pool and a real data dir.
-
-    The jobs take no connection — they acquire from the pool, exactly as the loop calls them —
-    so this opens the real pool against the test database rather than handing them `db`. That is
-    the point: the production call path is what is under test.
-    """
+    """The jobs acquire from the pool as the loop calls them, so this opens the real pool."""
     monkeypatch.setenv("DATA_DIR", str(tmp_path / "data"))
     monkeypatch.setenv("DATABASE_URL", pg_url)
     settings.cache_clear()
@@ -86,13 +66,7 @@ async def two_members(db):
 
 
 async def _wait_out_the_pause(conn, user_id: int) -> None:
-    """Make the fold-in tick's debounce window have elapsed, without sleeping through it.
-
-    `foldin._is_stale` refits only a pair that moved AND settled (`foldin.PAUSE_SECONDS`), so a
-    test that rates and ticks in the same millisecond is asking for the one thing the debounce
-    exists to refuse. Both clocks shift by the same interval, so every ordering between them --
-    which is all `_is_stale` compares -- is preserved. [M4.13, perf-04; plan step 22]
-    """
+    """The tick refits only a pair that moved AND settled; shifting both clocks keeps their order."""
     from spielplan.scoring import foldin
 
     shift = foldin.PAUSE_SECONDS + 10
@@ -108,27 +82,14 @@ async def _wait_out_the_pause(conn, user_id: int) -> None:
     )
 
 
-# --- the bundle-less household (§3.1) ---------------------------------------------------------
-
-
 @pytest.mark.parametrize("name", M2_JOBS + M3_JOBS)
 async def test_a_nightly_job_skips_a_household_with_no_bundle_rather_than_failing(
     name, worker_env, two_members
 ):
-    """§3.1: "an empty artifact store is legal" — a household can run for a week before any
-    corpus export exists. A nightly job that raises on that is a job that fills the log with a
-    stack trace every night for a state the spec calls normal.
-
-    The Ledger job is the interesting one: it must still *run*, because §5.2's fit works with no
-    embeddings at all (that is what `embedded=False` is for), and skipping it would leave a
-    bundle-less household with no tiers.
-    """
+    """The Ledger job must still run: §5.2's fit works with no embeddings."""
     job = next(j for j in worker.JOBS if j.name == name)
     assert job.run is not None, f"the registry lists {name}, so its milestone owes it code"
     await job.run()
-
-
-# --- the real thing ---------------------------------------------------------------------------
 
 
 @pytest.fixture
@@ -148,8 +109,7 @@ async def rated(db, worker_env, two_members):
 
 
 async def test_the_nightly_refit_writes_a_tier_for_every_owned_title(rated, db):
-    """§5.2: "refit nightly (full-history MAP)". §12's M2 exit criterion is that every owned
-    title carries a ledger state, not only the ones that were rated."""
+    """Every owned title carries a ledger state, not only the rated ones."""
     _store, patrick = rated
     job = next(j for j in worker.JOBS if j.name == "ledger-map-refit")
     await job.run()
@@ -166,9 +126,7 @@ async def test_the_nightly_refit_writes_a_tier_for_every_owned_title(rated, db):
 
 
 async def test_the_nightly_fold_in_writes_a_user_vector_and_the_priors_it_needs(rated, db):
-    """§5.3: "User fold-in + blend weights — nightly". §5.1's score needs both halves: the
-    per-user vector and `title_prior`, and a fold-in that wrote one without the other would
-    leave every score null while looking like it had run."""
+    """A fold-in writing one half without the other leaves every score null."""
     _store, patrick = rated
     job = next(j for j in worker.JOBS if j.name == "fold-in-user-vectors")
     await job.run()
@@ -178,15 +136,13 @@ async def test_the_nightly_fold_in_writes_a_user_vector_and_the_priors_it_needs(
         patrick,
     )
     assert vec is not None and vec["label_count"] > 0
-    # `blend_beta` is `real`, so §5.1's ceiling reads back as float4(0.8) = 0.800000011920929.
-    # Comparing it to 0.8 exactly is the same widening bug 0009's CHECK had.
+    # `blend_beta` is `real`, so 0.8 reads back as 0.800000011920929; exact comparison is 0009's bug.
     assert 0.0 <= vec["blend_beta"] <= float(np.float32(0.8)), "§5.1 caps β at the optimum"
     assert await db.fetchval("SELECT count(*) FROM title_prior") > 0
 
 
 async def test_the_nightly_sweep_leaves_no_owned_title_without_a_coordinate(rated, db):
-    """§12's M2 exit criterion, run through the job that is supposed to guarantee it rather than
-    through the function the job calls."""
+    """Run through the job, not the function it calls."""
     job = next(j for j in worker.JOBS if j.name == "placement-reconciliation")
     await job.run()
     assert await db.fetchval(
@@ -197,26 +153,12 @@ async def test_the_nightly_sweep_leaves_no_owned_title_without_a_coordinate(rate
 async def test_the_nightly_refit_generalises_to_titles_the_person_never_rated(
     db, worker_env, two_members
 ):
-    """§5.2's whole point: "Generalisation via the 64-d user vector". §12's exit criterion is
-    that 50-100 verdicts produce *visibly personal rankings*, and a ranking is only personal
-    over titles the person has not themselves rated.
-
-    This is the test the previous one could not be. It asserted that `ledger_state` rows exist
-    and that `s` is not NaN — both true when the fit is degenerate. The nightly job passed the
-    Cold Tower placement source alone, and `classify_warm` deliberately writes no
-    `title_placement` row for a warm title, so every Backbone-covered title entered the MAP fit
-    with e = 0. `v` came out at zero, and `refit` then wrote every unrated owned title as
-    `s = mu + 0`: one identical score, one identical tier, one identical straddle badge across
-    the whole library, behind numbers that all looked well-formed.
-
-    So the assertion is that the unrated titles are told APART, which no degenerate fit can do.
-    """
+    """Unrated titles must be told APART: a fit with e = 0 for warm titles wrote one identical `s`."""
     store = await _import_bundle(db, worker_env)
     patrick = two_members[0]
     await db.execute("UPDATE title SET is_owned = true")
 
-    # Rate two of the warm titles and leave the rest — the shape §12 actually describes, where
-    # most of the library is unrated and the vector has to carry the ordering.
+    # Two warm titles rated and the rest left: the vector must carry the ordering.
     await observations.record_verdict(db, user_id=patrick, title_id=1, value=2)
     await observations.record_verdict(db, user_id=patrick, title_id=6, value=0)
 
@@ -242,13 +184,7 @@ async def test_the_nightly_refit_generalises_to_titles_the_person_never_rated(
         f"the user vector carries no information: {sorted(scores)}"
     )
 
-    # And the vector itself is non-trivial. A zero `v` is exactly what a placement-only basis
-    # produces on a Backbone-covered library, and it is invisible in `s` alone.
-    # Under the constants the JOB fitted with, which are the bundle's — `_ledger_map_refit`
-    # calls `hyperparams.load(store)` and §4.3 makes those numbers the corpus's to tune. Read
-    # back under `DEFAULTS` this is a cache miss by design (`ledger_fit.hp_digest` is a
-    # precondition, not a hint), and the fixture ships the corpus's own λ_bt, learning rate and
-    # step count rather than this app's fallbacks since M4.5.
+    # Under the bundle's constants, as the job fitted; `DEFAULTS` would be a cache miss by design.
     hp, _notes = load_hp(store)
     assert hp.source == "bundle" and hp.digest() != DEFAULTS.digest(), (
         "the fixture bundle must tune something, or this asserts nothing about the digest"
@@ -263,20 +199,8 @@ async def test_the_nightly_refit_generalises_to_titles_the_person_never_rated(
 async def test_a_sitting_of_verdicts_moves_the_ranking_the_shelves_are_built_from(
     db, worker_env, two_members
 ):
-    """§12's M2 exit criterion, end to end: "50-100 verdicts each produce **visibly personal
-    rankings**".
-
-    Nothing tested this loop. `test_home.py` hand-writes `user_score` and `user_vector` rows, so
-    every shelf assertion is made against a fabricated fold-in; `test_rate_session.py` stops at
-    `ledger_state`; `test_scoring.py` starts from labels already in the database. Each half was
-    correct against an interface the other half never called, and the join between them — the
-    one thing the milestone exists to demonstrate — was not exercised anywhere.
-
-    It did not work. Rating writes `ledger_state`, so the tier badges moved within the sitting;
-    every §6.0 shelf orders by `user_score`, which only the fold-in writes, and the fold-in ran
-    nightly. A household could rate all evening and watch the badges change while the shelves
-    stayed in the order they had that morning.
-    """
+    """Rating writes `ledger_state` but the shelves read `user_score`, which only the fold-in writes;
+    the tick must carry a sitting's verdicts to the shelves."""
     from spielplan.scoring import serve
 
     await _import_bundle(db, worker_env)
@@ -295,17 +219,10 @@ async def test_a_sitting_of_verdicts_moves_the_ranking_the_shelves_are_built_fro
     assert before, "the fold-in wrote no scores at all, so no shelf can be built"
     order_before = [r["title_id"] for r in before]
 
-    # A second sitting that contradicts the first: what was liked is now disliked. If the
-    # ranking the shelves read cannot notice that, it is not personal.
+    # A contradicting second sitting: a personal ranking must notice.
     for title_id, value in ((1, 0), (2, 0), (3, 0), (4, 2), (5, 2)):
         await observations.record_verdict(db, user_id=patrick, title_id=title_id, value=value)
-    # The sitting has to be OVER. The tick is debounced since M4.13's step 22 — §12 M2's sentence
-    # is "after a sitting", and a partition rewritten every sixty seconds while somebody is still
-    # rating is 14,000 deletes and 14,000 inserts nobody reads — so a label written this instant is
-    # deliberately not refit. Moving both stamps back by the same interval is what waiting the
-    # pause out looks like without spending it: the ORDER of the two clocks, which is what
-    # staleness is about, is untouched. The first sitting above needs nothing, because a member who
-    # has never been fitted is stale whatever the clocks say. [M4.13, perf-04]
+    # The tick is debounced, so the sitting must be OVER. A never-fitted member is stale regardless.
     await _wait_out_the_pause(db, patrick)
     await next(j for j in worker.JOBS if j.name == "fold-in-tick").run()
 
@@ -321,7 +238,7 @@ async def test_a_sitting_of_verdicts_moves_the_ranking_the_shelves_are_built_fro
         "orders by is not reachable from the Rate surface"
     )
 
-    # And the read the shelves actually make sees it.
+    # And the read the shelves make sees it.
     section = await serve.ranked_section(
         db, user_id=patrick, kind="movie", bundle_version="test-v1"
     )
@@ -331,17 +248,9 @@ async def test_a_sitting_of_verdicts_moves_the_ranking_the_shelves_are_built_fro
     )
 
 
-# --- M3: decision 11's second trigger for §5.3's nightly fit -----------------------------------
-
-
 async def test_the_tier_set_refit_job_fits_the_person_who_asked_and_clears_the_request(rated, db):
-    """Decision 11: "a Ledger refit is queued for that user alone".
-
-    The save re-initialises the boundaries to equal-mass quantiles immediately, so the board is
-    usable at once; the *fit* is what this job does, and until it runs those boundaries are
-    quantiles of the old `s` rather than cutpoints of the new likelihood. A job that dropped the
-    request without fitting would look identical on the board and be wrong in the model.
-    """
+    """The save re-initialises boundaries at once; the job does the fit. Dropping the request
+    unfitted would look identical on the board."""
     from spielplan.rank import tiers
 
     _store, patrick = rated
@@ -366,8 +275,7 @@ async def test_the_tier_set_refit_job_fits_the_person_who_asked_and_clears_the_r
 
 
 async def test_the_tier_set_refit_job_is_a_no_op_when_nobody_asked(rated, db):
-    """It runs every minute. A job that did work on an empty queue would be a nightly MAP fit
-    sixty times an hour."""
+    """It runs every minute; work on an empty queue would be a MAP fit sixty times an hour."""
     from spielplan.rank import tiers
 
     _store, patrick = rated
@@ -377,17 +285,8 @@ async def test_the_tier_set_refit_job_is_a_no_op_when_nobody_asked(rated, db):
     assert await db.fetchval("SELECT count(*) FROM ledger_state") == before
 
 
-# --- M4.10: the sweep, per item ----------------------------------------------------------------
-#
-# Two properties, and they belong together because each one is what makes the other observable.
-# The tier-set half (finding 5) lives in `rank/tiers.py` and `ledger/refit.py`: `refits_owed`
-# hands out the stamp it read, `clear_refit_request` clears only what it was handed, and
-# `refit_user` refuses to write cutpoints for a tier set it did not fit against. The isolation
-# half (finding 6) lives here: without a per-item `try` the sweep dies on the first refusal, so
-# the second owed row is never reached and nothing downstream of it can be asserted at all.
-#
-# Both halves shipped in the same milestone and in different files. Nobody else checks that they
-# meet, which is what these two tests are for. [M4.10 findings 5 and 6; decision 11]
+# Finding 5 (the compare-and-set) and finding 6 (per-item isolation) live in different files;
+# these two tests check they meet.
 
 NINE_TIERS = ["T1", "T2", "T3", "T4", "T5", "T6", "T7", "T8", "T9"]
 
@@ -395,20 +294,8 @@ NINE_TIERS = ["T1", "T2", "T3", "T4", "T5", "T6", "T7", "T8", "T9"]
 async def test_a_tier_set_put_that_lands_during_the_sweep_is_not_reverted_and_is_still_owed(
     rated, db, monkeypatch
 ):
-    """The measured failure, through the job that produced it.
-
-    Reproduced before the fix: PUT K = 5 queued a refit, PUT K = 9 landed while the fit was
-    running, and after the sweep the movie row read K = 5 with `refit_requested_at` NULL - the
-    person's second choice reverted and its request discarded - while the series row read K = 9.
-    `GET /api/rank/tiers` then answered five labels and a legal drop into tier 7 came back 422.
-    Decision 11's control is a settings pill that invites exactly this ("how many tiers do I
-    want?" is answered by trying one), so a change made twice inside a minute is ordinary use.
-
-    The PUT is issued from `load_observations`' return rather than from its entry, and the
-    ordering is the whole fixture: the fit has to have READ K = 5 before the person chooses
-    K = 9, or the compare-and-set sees no conflict and this asserts nothing. A second connection
-    (`db`) rather than the sweep's own, because a settings save is a different request.
-    """
+    """The PUT is issued from `load_observations`' return, so the fit has READ K = 5 before K = 9
+    lands. On `db`, a different connection: a settings save is a different request."""
     from spielplan.rank import drop as drop_rules
     from spielplan.rank import tiers
 
@@ -439,17 +326,15 @@ async def test_a_tier_set_put_that_lands_during_the_sweep_is_not_reverted_and_is
     assert len(refused) == 1 and refused[0]["kind"] == "movie", detail["refits"]
     assert "tier set changed" in refused[0]["error"], refused[0]["error"]
 
-    # Both rows read the person's last choice. The films row is the one the fit was about to
-    # overwrite; the series row is the one that never disagreed and must not start now, because
-    # every caller that asks for a set asks for one kind's.
+    # Both rows read the person's last choice.
     assert await tiers.tier_set_of(db, user_id=patrick, kind="movie") == tuple(NINE_TIERS)
     assert await tiers.tier_set_of(db, user_id=patrick, kind="series") == tuple(NINE_TIERS)
 
-    # And the request the person is actually waiting on survived the sweep that did not serve it.
+    # The request the person is waiting on survived the sweep that did not serve it.
     still_owed = {(u, k) for u, k, _t in await tiers.refits_owed(db)}
     assert still_owed == {(patrick, "movie"), (patrick, "series")}, still_owed
 
-    # §6.3's board, at the top of a set that only exists if the PUT held: tier 7 of nine.
+    # Tier 7 of nine exists only if the PUT held.
     await drop_rules.drop(db, user_id=patrick, title_id=1, tier=7, title_name="Heat")
     await drop_rules.drop(db, user_id=patrick, title_id=6, tier=7, title_name="Severance")
     assert await db.fetchval(
@@ -460,20 +345,7 @@ async def test_a_tier_set_put_that_lands_during_the_sweep_is_not_reverted_and_is
 async def test_one_members_failing_refit_does_not_strand_another_members(
     rated, db, two_members, monkeypatch
 ):
-    """Decision 11 queues a refit "for that user alone". A loop with no per-item guard made one
-    person's bad fit everybody's.
-
-    Reproduced: the job raised on the first owed row and all four stayed owed, so the tick
-    re-ran sixty seconds later, and again, on the loop that also carries §7.3's playback poll and
-    §2's nightly dump - one member burning a full MAP fit a minute while everyone behind them in
-    `ORDER BY refit_requested_at` waited for ever. `refit_all` has isolated per user since M2
-    ("One person's bad fit must not stop the others'"); this loop is the one that did not.
-
-    The refusal is injected at `refit_user` because that is the call this loop makes and the
-    behaviour under test is this loop's. The real raise is `ledger/refit.py`'s non-finite guard,
-    and Ana's fit is the genuine article - the wrapper delegates for her - so the test is not two
-    stubs agreeing with each other.
-    """
+    """Refusal injected at `refit_user`, the call this loop makes; Ana's fit is genuine."""
     from spielplan.rank import tiers
 
     _store, patrick = rated
@@ -513,9 +385,7 @@ async def test_one_members_failing_refit_does_not_strand_another_members(
         "Ana's fit has to have actually run against her four-level set, not merely been reached"
     )
 
-    # Cleared even where it failed. A permanently failing fit that stays owed is a full MAP fit
-    # every sixty seconds for ever; §5.3's nightly pass fits the same (user, kind) anyway, so the
-    # work moves to the cadence such a failure deserves rather than being lost.
+    # Cleared even where it failed: the nightly pass fits the same (user, kind) anyway.
     assert await tiers.refits_owed(db) == [], (
         "a fit that raises leaves its request owed, so the tick re-runs it a minute later"
     )
@@ -524,37 +394,20 @@ async def test_one_members_failing_refit_does_not_strand_another_members(
     ) <= 3, "Ana's board is still indexed against the seven-level set the fit replaced"
 
 
-# --- M4.11: §5.3's budget, the prune that reaches, and the two failures the log never named ----
-#
-# All five are about the loop rather than about the work: one job that never returns used to be
-# the end of this process as a worker, and the two sweeps it carries could fail completely while
-# writing a log indistinguishable from a quiet, healthy household. [M4.11 findings 9, 17, 21]
+# The loop, not the work: a wedged job used to end the worker, and failing sweeps logged like
+# quiet ones.
 
-# A household afternoon, in the shape `_tick` wants it. A fixed offset rather than a named zone:
-# a Windows checkout has no system tz database, which is what `worker._now_local`'s fallback is
-# for, and `due` reads `.hour` and `.date()` and nothing else.
+# A fixed offset, not a named zone: Windows has no tz database, and `due` reads only `.hour`
+# and `.date()`.
 NOON = datetime(2026, 9, 7, 12, 0, tzinfo=timezone(timedelta(hours=2)))
 
-# Far longer than any budget a test declares, so "it stopped" and "it finished" cannot be
-# confused: a job that sleeps this long and a tick that returns in a fraction of it is the whole
-# assertion.
+# Far longer than any budget, so "stopped" and "finished" cannot be confused.
 WEDGED_SECONDS = 30
 
 
 def test_every_job_this_loop_fires_declares_a_budget_that_fits_inside_its_interval():
-    """§5.3 gives every job a budget, and until M4.11 the column was prose.
-
-    Two properties, and the second is the one with teeth. A budget longer than the job's own
-    interval is a budget that cannot be kept: `_tick` awaits due jobs one after another, so such a
-    job can only hold its cadence by eating the slot of everything behind it — and the three
-    60-second rows are what §7.3's prompt timing and §12's M2 exit criterion rest on.
-
-    The backup is checked against the other timeout in the codebase rather than against a number
-    written here. `backup/nightly.DUMP_TIMEOUT_SECONDS` kills a blocked `pg_dump` and deletes the
-    half-written file; a job budget at or under it would fire first, abandon the job while the
-    child process kept running, and make that constant unreachable. The two live in different
-    modules, so nothing but this assertion holds them in order.
-    """
+    """`_tick` runs due jobs in sequence, so a budget over the interval eats the next job's slot.
+    The backup budget must exceed `backup/nightly.DUMP_TIMEOUT_SECONDS`."""
     from spielplan.backup import nightly
 
     for job in worker.JOBS:
@@ -577,21 +430,8 @@ def test_every_job_this_loop_fires_declares_a_budget_that_fits_inside_its_interv
 async def test_a_job_that_never_returns_is_abandoned_at_its_budget_and_the_tick_goes_on(
     worker_env, db, caplog, monkeypatch
 ):
-    """The failure this whole field exists for, met once instead of never.
-
-    `_tick` awaited `job.run()` with nothing around it, so one job that does not return takes the
-    entire worker offline — permanently and invisibly. No finish prompts, no refit, no fold-in, no
-    placement sweep, no nightly dump, not even the heartbeat file the compose healthcheck reads,
-    with the process alive and `docker compose ps` saying Up. It is not hypothetical: the sweep
-    reads the whole library and `all_items` paged for ever against a server that ignores
-    `StartIndex` (`connectors/jellyfin.MAX_PAGES` is the other half of the same finding).
-
-    So the assertions are the three facts an operator needs: the tick came back, the job after the
-    wedged one ran, and both outcomes are in `job_run` — a row that says "abandoned" and names the
-    budget is the difference between a reader who knows and a reader who waits. The log line is
-    asserted too, because §6.6 names the log as the operator's data and an ERROR is what a
-    `docker compose logs` grep finds. [M4.11 finding 17; §5.3, §8]
-    """
+    """One job that never returns used to take the whole worker offline, healthcheck included.
+    The tick returns, the next job runs, and `job_run` says "abandoned" with the budget."""
     ran: list[str] = []
 
     async def never_returns() -> dict[str, object]:
@@ -633,24 +473,8 @@ async def test_a_job_that_never_returns_is_abandoned_at_its_budget_and_the_tick_
 async def test_a_subscription_that_never_delivered_is_pruned_by_age_and_a_live_one_is_not(
     worker_env, db, two_members
 ):
-    """§4.2's push targets, pruned by the only clock a never-delivered row has.
-
-    This prune filtered on `last_seen_ok IS NOT NULL`, so the row it exists for was the one row
-    it could never reach: measured before the fix, a 400-day-old subscription with a NULL
-    `last_seen_ok` survived this statement, which is a bearer capability (`push/send.py`) kept for
-    ever for a phone whose browser dropped its `PushSubscription` a year ago.
-
-    Four rows, because `COALESCE` has two directions and only one of them is the bug. The
-    year-old-but-pushed-to-yesterday row is the assertion that matters most: a bare `created_at`
-    filter would delete the household's actual phone.
-
-    What that row cannot say by itself is how it comes to have a `last_seen_ok` at all — while
-    `api/push.py` reset the column on every re-post, an /account open turned this exact row into
-    the first one and the live phone was deleted that night.
-    `test_push.py::test_resubscribing_keeps_the_delivery_mark_so_the_nightly_prune_spares_a_live_phone`
-    is that composition, driven through the route; these four are the statement's own arithmetic.
-    [M4.11 finding 21; review cycle 1; §4.2]
-    """
+    """`COALESCE(last_seen_ok, created_at)`: a never-delivered row ages by `created_at`; the year-old
+    row pushed to yesterday must survive."""
     patrick = two_members[0]
     for label, created_days, seen_days in (
         ("never-delivered-and-old", 400, None),
@@ -677,21 +501,8 @@ async def test_a_subscription_that_never_delivered_is_pruned_by_age_and_a_live_o
 async def test_a_playback_session_that_matched_no_title_is_named_in_the_log(
     worker_env, caplog, monkeypatch
 ):
-    """§7.3's prompt that never arms, and the one place that could say why.
-
-    `WatchReport.unresolved` has always been filled — a session whose item is in no
-    `title_jellyfin_item` row and whose ProviderIds matched nothing (§7.1) — and it went into
-    `job_run.detail` and no further. A household whose television plays something this app cannot
-    attach to a title simply gets no prompt, and before this line nothing anywhere said so.
-
-    The poll itself is substituted, because the behaviour under test is this loop's logging and
-    not the resolver's: `sync/playback.py` is tested against a real fake Jellyfin in
-    `test_playback_prompt.py`, and driving a genuinely unresolvable session from here would assert
-    the same thing through four more moving parts. [M4.11 finding 9]
-
-    `_last_unresolved` is reset because it is module state that outlives one test: the line is a
-    state change now, so a sibling that named the same stranger first would make this one DEBUG.
-    """
+    """The poll is substituted: this tests the loop's logging. `_last_unresolved` is module state,
+    so it is reset."""
     from spielplan.sync import playback
 
     async def poll_with_a_stranger(conn, client=None):
@@ -709,21 +520,7 @@ async def test_a_playback_session_that_matched_no_title_is_named_in_the_log(
 async def test_the_same_unresolvable_session_is_named_once_and_not_once_a_minute(
     worker_env, caplog, monkeypatch
 ):
-    """The condition is persistent, so the line has to be a state and not a stream.
-
-    `_observe` re-derives `unresolved` from `/Sessions` on every pass and writes nothing, and
-    `sessions()` filters on nothing but a `NowPlayingItem` — so a film paused at 95% on the
-    living-room client produces the identical line once a minute until that client disconnects.
-    The code's own comment concedes the producing condition is "ordinary on a library this app
-    has not imported", where every finished playback is unresolvable, so the ordinary case IS the
-    repeating case: ~480 identical lines by morning, interleaved with the nightly backup and the
-    refit reports §6.6 promises the operator. That is the arithmetic M4.11 finding 18 (`ops-15`)
-    used to rate-limit the sibling job in this same module, and `DURATION_LOG_THRESHOLD` states
-    the rule for the three 60-second jobs outright.
-
-    A NEW stranger is still loud, which is the half a plain "log it once" would lose.
-    [review cycle 1: m411-rev1-unresolved-session-logs-a-line-a-minute]
-    """
+    """A paused session repeats every minute, so the line is a state change; a NEW stranger is loud."""
     from spielplan.sync import playback
 
     strangers = ["jf-who-is-this"]
@@ -754,19 +551,8 @@ async def test_the_same_unresolvable_session_is_named_once_and_not_once_a_minute
 async def test_a_sweep_whose_played_writes_all_failed_is_an_error_in_the_log(
     worker_env, caplog, monkeypatch
 ):
-    """The sweep's worst outcome, which used to produce the log of its best one.
-
-    The INFO line fired on `pushed or adopted or needs_relink`. A server below §7.1's pin, a proxy
-    that drops DELETE, a 500 on every write: all of them push nothing, adopt nothing and flag no
-    re-link, so the entire app->Jellyfin direction could be dead for the life of an install while
-    the log read exactly like a quiet household. `push_failed` is counted now, and an ERROR is
-    what makes it findable — §6.6 promises the operator "last syncs", and this is the line that
-    tells them the half that is not working.
-
-    `sync_all` is substituted for the same reason the poll is above: the counters are
-    `test_seen_sync.py`'s to earn against a real fake, and this asserts only that the loop says
-    them out loud. [M4.11 findings 3, 21; §7.3]
-    """
+    """All writes failing used to log like a quiet household; `push_failed` is an ERROR now.
+    `sync_all` is substituted: the counters are `test_seen_sync.py`'s."""
     from spielplan.sync import seen
 
     async def a_sweep_that_could_not_write(conn, client=None):
@@ -775,8 +561,7 @@ async def test_a_sweep_whose_played_writes_all_failed_is_an_error_in_the_log(
         return report
 
     monkeypatch.setattr(seen, "sync_all", a_sweep_that_could_not_write)
-    # Module state that outlives one test: the ERROR is a state change now, so a sibling that
-    # named the same reason first would make this one DEBUG. Same reason as `_last_unresolved`.
+    # Module state that outlives one test, like `_last_unresolved`.
     monkeypatch.setattr(worker, "_push_failure_reported", None)
     with caplog.at_level(logging.INFO, logger="spielplan.worker"):
         detail = await next(j for j in worker.JOBS if j.name == "jellyfin-seen-sync").run()
@@ -786,17 +571,12 @@ async def test_a_sweep_whose_played_writes_all_failed_is_an_error_in_the_log(
     assert errors, f"a sweep that wrote nothing it owed logged no error: {caplog.text}"
     assert "2 Played write(s) failed" in errors[0].getMessage()
     assert "-> 404" in errors[0].getMessage()
-    # And the report itself still reaches the INFO line, which is where the counters are read.
+    # The report still reaches the INFO line.
     assert "'push_failed': 2" in caplog.text
 
 
 async def test_a_quiet_healthy_sweep_still_says_nothing(worker_env, caplog, monkeypatch):
-    """The negative case, and the reason the condition above is a list rather than `if True`.
-
-    Widening the log had to stay a widening: §5.3 fires this job every fifteen minutes, so a
-    household where nothing happened must produce no line at all, or the operator's log is 96
-    sweeps a day of nothing and the ERROR above is lost in it.
-    """
+    """Every fifteen minutes, so a quiet household must log nothing."""
     from spielplan.sync import seen
 
     async def nothing_to_do(conn, client=None):
@@ -812,26 +592,8 @@ async def test_a_quiet_healthy_sweep_still_says_nothing(worker_env, caplog, monk
 async def test_the_same_failed_played_write_is_an_error_once_and_not_ninety_six_times_a_day(
     worker_env, caplog, monkeypatch
 ):
-    """The condition this ERROR reports is permanent by construction, so the line has to be a
-    state and not a stream.
-
-    A sweep pushes only rows with `jf_synced_at IS NULL` and `_push` stamps only on success, so a
-    refused write stays owed and is re-attempted -- and re-counted -- every fifteen minutes for the
-    life of the install. The milestone's most-cited cause for it is exactly such a permanent state:
-    a server below §7.1's 10.9 pin has no `/UserPlayedItems` route to take, so `docker compose logs
-    worker` for one day held 96 copies of the same ERROR, interleaved with the nightly backup and
-    the refit reports §6.6 promises the operator. That is the same arithmetic this milestone used
-    three times over to turn a stream back into a state change (`playback._note_unreachable`,
-    `seen._failed_users_logged`, `worker._last_unresolved`), and `_failed_users_logged`'s own
-    comment gives the deciding argument: "the state now has a surface -- §6.6's card names the
-    member -- so the log does not have to repeat it 96 times a day". `push_failed` has that
-    surface too and is one level louder.
-
-    Nothing is hidden by the down-level: the INFO summary carries `push_failed` and its reasons on
-    every single sweep, which the last assertion pins. A reason that was not there before is loud
-    again, which is the half a plain "log it once" would lose.
-    [M4.11 review cycle 2: m411-c2-worker-03; M4.7 ops-15]
-    """
+    """A refused write is re-counted every sweep, so the ERROR is a state change, not 96 a day. The
+    INFO summary still carries `push_failed` every sweep; a new reason is loud again."""
     from spielplan.sync import seen
 
     reasons = ["POST /UserPlayedItems/jf-1 -> 404"]
@@ -868,21 +630,8 @@ async def test_the_same_failed_played_write_is_an_error_once_and_not_ninety_six_
 async def test_a_television_session_whose_series_could_not_be_listed_gets_its_own_sentence(
     worker_env, caplog, monkeypatch
 ):
-    """The other reason a television session arms nothing, and it is not the one the log said.
-
-    `observe` put two different outcomes into one list: a session that resolved to no title, and a
-    session that resolved to a title whose series episode list could not be read (decision 210(c),
-    "undecidable is not yes"). `report.unresolved` is the only thing that leaves the module, and
-    this loop states the first meaning as fact -- "matched no title", with a comment prescribing
-    the repair as "an import or a provider id, not an outage". For the second, every clause of that
-    is false: the title is imported, the ProviderIds matched, and the episode id the operator is
-    handed to paste into Jellyfin resolves there perfectly. The actual cause was written once, at
-    DEBUG, from `sync/playback.py` -- and `worker.py` runs at INFO, so it was not emitted at all.
-
-    Rationed the same way and by its own memo, because the producing condition is a standing proxy
-    rule or a server error: without that this would be 1,440 lines a day.
-    [M4.11 review cycle 2: m411-rev2-pb-02; decision 210(c), ops-15]
-    """
+    """A series whose episodes could not be listed is not "matched no title": its own sentence,
+    rationed by its own memo (decision 210(c))."""
     from spielplan.sync import playback
 
     async def poll_with_an_unlistable_series(conn, client=None):
@@ -907,30 +656,14 @@ async def test_a_television_session_whose_series_could_not_be_listed_gets_its_ow
         assert len(again) == 1, "a standing proxy rule is a state, not a line a minute"
 
 
-# --- M4.13: the tick's budget names the two costs it actually pays -----------------------------
-
-
 async def test_the_fold_in_budget_string_names_what_the_tick_measures(rated, db):
-    """§5.3's budget column is the number a job is held to, and this job's said "ms".
-
-    The ridge solve earns that word -- 6-7 ms for 100 labels -- but `serve.replace_scores` behind
-    it rewrites the whole (user, kind) partition: 14,000 DELETEs and 14,000 INSERTs, 325-590 ms
-    and 5-8 MB of WAL per stale pair measured at corpus scale, 0.7-1.5 s for two raters in one
-    tick. A reader holding that against "ms" cannot tell a job inside its budget from one four
-    orders outside it, so `FoldInReport` splits the two halves and the registry names both.
-
-    The split is asserted as an ORDERING, not against a literal: on this fixture both numbers are
-    tiny (eight titles), and what has to stay true is which half grows -- four round trips and a
-    partition rewrite against two numpy calls. Measured here: see the assertion messages, which
-    print what this run actually spent. [M4.13, perf-04; plan step 22]
-    """
+    """The partition rewrite, not the ridge solve, is the cost; `FoldInReport` splits them and the
+    registry names both. Asserted as an ORDERING: on eight titles both are tiny."""
     from spielplan.scoring import backbone as bb
     from spielplan.scoring import foldin
 
     store, patrick = rated
-    # The import itself ran a full fold-in (§10 step 1), so these pairs are fitted and the
-    # verdicts the fixture records afterwards are seconds old: the tick declines them, which is
-    # the debounce doing its job rather than a broken fixture. The sitting is over here.
+    # The import's fold-in makes the new verdicts seconds old, so the tick would decline them.
     await _wait_out_the_pause(db, patrick)
     job = next(j for j in worker.JOBS if j.name == "fold-in-tick")
     assert job.budget != "ms", "the budget is still the solve's word for the whole job"
@@ -942,9 +675,7 @@ async def test_the_fold_in_budget_string_names_what_the_tick_measures(rated, db)
     assert detail is not None and detail["refit"], "nothing was refit, so nothing was measured"
     assert set(detail) >= {"ms", "numpy_ms", "db_ms"}, sorted(detail)
 
-    # Again, unrounded, because `as_dict` rounds to a tenth of a millisecond and the fit over
-    # seven labels lands under that. `only_stale=False` so the debounce is not what is being
-    # measured: this is the cost of a pass that does the work, not of one that declines to.
+    # Unrounded, and `only_stale=False`, so the measured pass does the work.
     report = await foldin.run(
         db, bb.load_for(store), bundle_version="test-v1", only_stale=False, with_priors=False
     )
@@ -959,40 +690,20 @@ async def test_the_fold_in_budget_string_names_what_the_tick_measures(rated, db)
     )
 
 
-# --- M4.13: the board a sitting leaves behind, and the loop that finishes it ---------------------
-#
-# §5.2 gives the fit two cadences, "nightly" and "incrementally on each new observation", and this
-# module's own docstring calls them "the same model at two resolutions, not two models". The
-# resolution the incremental row cannot reach is `v`: it re-solves the TOUCHED titles' residuals
-# against the cached fit's (mu, v), so every title the person has not rated keeps whatever the last
-# full fit said about it - and after M4.10 took the full fit off the tap path, that fit is the one
-# over the single first verdict. Measured on the real bundle after 50 verdicts and ~41 battles per
-# member: the 715 unrated owned movies had sd(s) 0.070 against 2.77-3.27 after a full refit, and
-# their order correlated -0.135 with a taste the full refit recovers at +0.57. The nightly then
-# moved 252 and then 724 of 765 tier badges at once, which is the snap §6.3 says the design avoids,
-# delivered by the job that exists to prevent it. [M4.13, dd22; plan step 27]
+# The incremental path cannot move `v`, so after a sitting unrated titles keep the n = 1 fit's
+# estimate; a refresh tick restores a full fit.
 
-# Enough generated owned movies that "the spread over the unrated library" is a measurement rather
-# than an anecdote. `make_bundle`'s own parameter, drawn entirely from the authored vocabulary, so
-# the contract and the tower are the ones the rest of the suite loads.
+# Enough generated movies that the unrated spread is a measurement.
 POOL_TITLES = 40
 
-# The first tap, then six more, which is one past `REFRESH_GROWTH` rather than exactly on it: a
-# fixture sitting on the threshold would pass whatever the constant meant. The authored movies are
-# 1-5 and 8 (6 and 7 are the two series) and `POOL_ID_BASE` is 1001, so the last one is a pool
-# title - which also makes the sitting reach past the eight titles every other test rates.
+# One past `REFRESH_GROWTH`, not on it. Movies are 1-5 and 8; `POOL_ID_BASE` is 1001.
 FIRST_TAP = (1, 2)
 THE_REST = ((2, 2), (3, 1), (4, 0), (5, 1), (8, 2), (1001, 0))
 
 
 @pytest.fixture
 async def sitting(db, worker_env, two_members):
-    """One member's evening, through the real request path: (patrick, hp, embeddings).
-
-    The first tap is the one M4.10 made a *queue* rather than a fit, so the 60 s `tier-set-refit`
-    sweep is what produces the only full fit this board has ever had - at n = 1. Six taps then land
-    on top of it, which is what an ordinary sitting looks like from `ledger_fit`'s point of view.
-    """
+    """The first tap queues the only full fit (n = 1); six taps then land on it."""
     from spielplan.scoring import backbone as bb
 
     root = fx.make_bundle(worker_env / "bundle", pool_titles=POOL_TITLES)
@@ -1028,16 +739,7 @@ def _refresh_job():
 async def test_a_sittings_worth_of_verdicts_returns_the_board_to_a_full_fit_within_one_tick(
     sitting, db
 ):
-    """§12's M2 criterion is about what a person sees within a sitting, and `fit_source` is the
-    honest name for what they are looking at.
-
-    The budget is what makes a tick possible at all: §5.3 gives the full fit "seconds" and it
-    measures 0.11-0.14 s per (user, kind) at this scale, so asking for it once a minute while
-    somebody is rating is cheaper than the `user_score` partition rewrite the fold-in tick beside it
-    already pays. §5.3's nightly row is untouched - this is the same job at a cadence §5.3 permits
-    because more often than nightly is a superset of nightly, which is the argument
-    `scoring.foldin.run` makes for the fold-in.
-    """
+    """A full fit measures 0.11-0.14 s here, cheaper than the fold-in's partition rewrite."""
     patrick, _hp, _emb = sitting
     before = await db.fetchrow(
         "SELECT fit_source, n_observed FROM ledger_fit WHERE user_id = $1 AND kind = 'movie'",
@@ -1079,24 +781,8 @@ async def test_a_sittings_worth_of_verdicts_returns_the_board_to_a_full_fit_with
 async def test_a_sitting_of_re_ratings_and_battles_does_not_move_the_refresh_trigger(
     sitting, db
 ):
-    """The other half of a §6.1 sitting, and the limit of the trigger this milestone chose.
-
-    `refreshes_owed` compares `ledger_fit.n_observed` against `cdf_reference.size`, and BOTH count
-    TITLES: `_merge_cache` increments `n_observed` only on the branch that inserts a title the
-    cache did not already hold. A §4.2 supersede is an additional ordinal row in the likelihood
-    (`load_observations` loads superseded verdicts on purpose) and a §6.1 battle pairs two titles
-    the person has already rated the same way, so neither can reach that branch -- and "battle" is
-    one of `rate/session.MODES`, a whole sitting a member can choose. Both move `v` for the full
-    fit and neither moves the predicate, so an evening spent changing one's mind keeps the board
-    the previous full fit produced until the nightly.
-
-    Asserted rather than left to be rediscovered, because the registered pair above only ever
-    exercises the newly-rated arm (`THE_REST` is six DISTINCT ids) and this is the sentence that
-    keeps the row's "a sitting's worth of verdicts" honest about which sitting. Widening the
-    trigger to count OBSERVATIONS, or to fire on `max(created_at) > fitted_at` the way
-    `foldin._is_stale` does, is a different trigger and the owner's call; `refreshes_owed`'s
-    docstring records both options. [M4.13 cycle 2, M413-D6-03]
-    """
+    """`n_observed` counts TITLES, so re-ratings and battles never move the trigger. Asserted so
+    this limit is not rediscovered; widening it is the owner's call."""
     patrick, hp, emb = sitting
     assert await refit.refreshes_owed(db) == [(patrick, "movie", len(THE_REST))]
     await _refresh_job().run()
@@ -1107,8 +793,7 @@ async def test_a_sitting_of_re_ratings_and_battles_does_not_move_the_refresh_tri
         "SELECT n_observed FROM ledger_fit WHERE user_id = $1 AND kind = 'movie'", patrick
     )
 
-    # Every one of them a title the board already holds: re-rate all seven, then fight duels
-    # between them. Nothing here is a new title, and nothing here is invisible to the full fit.
+    # Every one a title the board already holds.
     for title_id in rated:
         await observations.record_verdict(db, user_id=patrick, title_id=title_id, value=1)
         await refit.update_incrementally(
@@ -1146,18 +831,7 @@ async def test_a_sitting_of_re_ratings_and_battles_does_not_move_the_refresh_tri
 async def test_the_board_spreads_unrated_titles_rather_than_holding_the_first_taps_estimate(
     sitting, db
 ):
-    """The measurement, not the bookkeeping: what the person's board actually says.
-
-    `s` for an unrated title is `mu + <v, e>` (§5.2: "no r, so s = mu + <v, e>"), so the spread over
-    the unrated library is a direct reading of how much the 64-d vector has learned. Fitted over one
-    verdict it has learned almost nothing, and the incremental path cannot change that however many
-    taps follow - every row below was written by that one fit and not one of them moved during the
-    sitting, which the `fit_source` assertion pins before anything else.
-
-    The numbers are printed rather than asserted against a literal: the DIRECTION is the claim (a
-    board that tells unrated titles apart, and an order that is not the one an n = 1 fit produced),
-    and a threshold tuned on a fixture bundle is a threshold that means nothing on the real one.
-    """
+    """The direction is the claim, printed rather than thresholded: a fixture threshold means nothing."""
     patrick, _hp, _emb = sitting
 
     async def unrated():
@@ -1206,19 +880,8 @@ async def test_the_board_spreads_unrated_titles_rather_than_holding_the_first_ta
 async def test_refit_all_isolates_a_failure_that_is_not_a_value_error(
     rated, db, two_members, monkeypatch
 ):
-    """"One person's bad fit must not stop the others'" is a claim about failures, not classes.
-
-    The clause was `(RefitRefused, ValueError)`, and the finding's reason for widening it - a
-    singular matrix escaping - is REFUTED: `np.linalg.LinAlgError` IS a `ValueError`, and probed
-    against the narrow clause the report carried `error = 'Singular matrix'` with the other member
-    fitted. What actually aborted the night is everything else: an asyncpg `DataError` from a row
-    the schema admits and numpy does not, a lock timeout raised behind an import, a `MemoryError` in
-    `_laplace`'s dense (p+n)x(p+n) inverse - which is the one injected here, because it is the only
-    one of the three whose cause is the library size §5.3 budgets for.
-
-    The refusal is injected at `_refit_user`, i.e. inside the transaction `refit_user` opens, so the
-    test also says that an isolated failure cannot leak a partial write. [M4.13, plan step 29]
-    """
+    """`LinAlgError` IS a `ValueError`; what aborted the night was a `MemoryError` and others.
+    Injected inside `refit_user`'s transaction, so no partial write leaks."""
     store, patrick = rated
     ana = two_members[1]
     for title_id, value in ((1, 2), (2, 0), (3, 1), (6, 2), (7, 0)):
@@ -1252,22 +915,8 @@ async def test_refit_all_isolates_a_failure_that_is_not_a_value_error(
 async def test_a_dead_connection_stops_the_ledger_refresh_tick_rather_than_reporting_a_skip(
     sitting, db, monkeypatch
 ):
-    """The third copy of step 29's shape, which had the shape and no guard.
-
-    `_ledger_refresh_tick` re-raises `PostgresConnectionError`/`InterfaceError` and isolates every
-    other exception into a `RefitReport(error=...)`, exactly as `refit.refit_all` and
-    `worker._tier_set_refits` do -- and those two are named by
-    `test_a_dead_connection_stops_the_night_rather_than_being_reported_as_a_skip` below while this
-    one was named nowhere. The only three references to this job in the suite run it on a happy
-    path and on the empty queue, so folding the three copies together, or dropping the asyncpg arm
-    because "log.exception covers it", passed the whole suite.
-
-    What it costs here is smaller than in the other two loops and worth stating so the next reader
-    does not over-correct: this tick reads state rather than a queue and clears nothing, so the
-    work is still owed sixty seconds later. What is lost is the report -- `_tick` records a job as
-    failed only when it raises, so §6.6's System card would read green for a minute of fits that
-    did not happen, and `RETRY_AFTER` would never be consulted. [M4.13 cycle 2, M413-D6-05]
-    """
+    """This tick isolates like the other two loops but had no test. It clears nothing, so work stays
+    owed; what is lost is the report."""
     patrick, _hp, _emb = sitting
     assert await refit.refreshes_owed(db), "nothing is owed, so the tick returns before it can raise"
 
@@ -1286,13 +935,7 @@ async def test_a_dead_connection_stops_the_ledger_refresh_tick_rather_than_repor
 async def test_a_dead_connection_stops_the_night_rather_than_being_reported_as_a_skip(
     rated, db, monkeypatch
 ):
-    """The one failure the widened clause must NOT swallow, on both loops that widened.
-
-    A connection that is gone fails every remaining (user, kind) the same way, so an isolated
-    report would hand `_tick` a full account of a night nobody ran - and `_tick` records a job as
-    failed only when it raises, so §6.6's System card would show green. `RETRY_AFTER` then decides
-    when the next tick tries with a fresh connection from the pool. [M4.13, plan step 29]
-    """
+    """A dead connection fails every remaining pair alike, so it must raise, not report a skip."""
     from spielplan.rank import tiers
 
     store, patrick = rated
@@ -1307,7 +950,7 @@ async def test_a_dead_connection_stops_the_night_rather_than_being_reported_as_a
     with pytest.raises(asyncpg.PostgresConnectionError):
         await refit.refit_all(db, hp)
 
-    # The same shape in the sweep beside it, which catches `Exception` per item for finding 6.
+    # The same shape in the sweep, which catches `Exception` per item.
     async def the_interface_is_closed(conn, **kwargs):
         raise asyncpg.InterfaceError("cannot perform operation: another operation is in progress")
 

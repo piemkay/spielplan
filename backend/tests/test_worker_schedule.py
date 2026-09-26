@@ -1,21 +1,5 @@
-"""The worker's schedule. Spec v2.1 §5.3, §2 (Backups, TZ); decision 181.
-
-§5.3's table gives each job a trigger, and the registry is meant to be a readable copy of it.
-Before M1 the loop ran everything once an hour, which was fine while the only jobs were
-hourly and daily prunes — and would have quietly turned §7.3's 1-minute `/Sessions` poll into
-a 1-hour one, so a finish prompt would arrive long after the television was off.
-
-M4.7 added the other half. §2's "rotation 14" is a promise about fourteen *nights*, and the
-loop measured uptime: `last_run` was an in-process dict with no memory across restarts, a
-job that had never run was due immediately, and `ZoneInfo` appeared nowhere in the module —
-so every `docker compose up` fired all five daily jobs at once and spent a retention slot,
-and fourteen restarts inside twenty-one minutes erased a fortnight of real dumps. The daily
-jobs now carry an `anchor_hour` and fire once per local calendar date; the sub-hour ones keep
-the monotonic interval, which is what they mean.
-
-`due` is pure, so the schedule is testable without waiting or mocking a clock — including the
-wall clock, which the caller supplies rather than this function reading.
-"""
+"""Daily jobs carry an `anchor_hour` and fire once per local date (§2's fourteen nights, not
+uptime); sub-hour jobs keep the monotonic interval. `due` is pure: the caller supplies clocks."""
 
 from __future__ import annotations
 
@@ -33,26 +17,20 @@ from spielplan import worker
 from spielplan.core.config import settings
 from spielplan.models.artifacts import ArtifactStore
 
-# Every daily job with an implementation: §5.3's four, §2's dump, and `job-run-prune` — which is
-# in neither table and is a daily job in every other sense, so it is anchored like the rest.
+# Every daily job with an implementation, `job-run-prune` included.
 NIGHTLY = (
     "job-run-prune", "push-subscription-prune", "placement-reconciliation", "ledger-map-refit",
     "fold-in-user-vectors", "nightly-backup",
 )
 
-# Europe/Berlin's two offsets, written as fixed offsets rather than as `ZoneInfo("Europe/Berlin")`.
-# `due` reads `.hour` and `.date()` and nothing else, so the zone object is incidental here — and a
-# Windows checkout has no system tz database (which is exactly what `_now_local`'s fallback is
-# for), so a named zone would make these tests error on the platform CLAUDE.md says to keep
-# working. The spring-forward case below builds the transition out of these two by hand, which is
-# also the more honest fixture: it asserts what the loop sees, an hour that never appears.
+# Fixed offsets, not `ZoneInfo`: `due` reads only `.hour` and `.date()`, and Windows has no tz
+# database. The spring-forward case builds the missing hour from these two.
 CET = timezone(timedelta(hours=1))
 CEST = timezone(timedelta(hours=2))
 
 
 def test_every_registered_job_matches_its_spec_trigger():
-    """The `trigger` column is prose from §5.3; `every` is what the loop obeys. They have to
-    agree, or the registry is documentation that lies."""
+    """`trigger` is §5.3's prose and `every` what the loop obeys; they must agree."""
     by_name = {job.name: job for job in worker.JOBS}
     assert by_name["jellyfin-sessions-poll"].every == 60
     assert by_name["jellyfin-seen-sync"].every == 900        # "15 min + webhook"
@@ -61,20 +39,14 @@ def test_every_registered_job_matches_its_spec_trigger():
 
 
 def test_the_tick_is_shorter_than_the_shortest_job():
-    """Otherwise the shortest interval is a fiction: a job can never run more often than the
-    loop wakes."""
+    """A job can never run more often than the loop wakes."""
     live = [job.every for job in worker.JOBS if job.run is not None]
     assert min(live) > worker.TICK_SECONDS
 
 
 def test_an_interval_job_that_has_never_run_is_due_immediately():
-    """A worker restart should reconcile, not wait out a fifteen-minute interval it has no
-    memory of.
-
-    Still true, and now only of the interval jobs: with no wall clock supplied no anchored job
-    is due, which is `due`'s honest answer to a question asked without one. That the daily jobs
-    are *not* in this set is the fix — "has never run" used to fire them all at every boot.
-    """
+    """Only interval jobs: with no wall clock no anchored job is due, which is what stops every boot
+    firing the daily jobs."""
     names = {job.name for job in worker.due(now=0.0, last_run={})}
     assert "jellyfin-seen-sync" in names
     assert names == {
@@ -85,31 +57,21 @@ def test_an_interval_job_that_has_never_run_is_due_immediately():
 
 def test_only_the_elapsed_jobs_are_due():
     last = {job.name: 0.0 for job in worker.JOBS}
-    # The minute-interval jobs, and only those. `tier-set-refit` joined them at M3: decision 11
-    # adds a second trigger for §5.3's nightly fit, and a person who just changed their tier set
-    # should not spend a day looking at equal-mass quantiles instead of fitted cutpoints.
-    # `ledger-refresh` joined them at M4.13 and is a *third* trigger for the same fit: the
-    # incremental path moves r and not v, so the rest of the library holds the first tap's estimate
-    # until a full fit runs. [M4.13, dd22; plan step 27]
+    # The minute-interval jobs. `tier-set-refit` (decision 11) and `ledger-refresh` are extra triggers
+    # for §5.3's fit.
     minutely = {"jellyfin-sessions-poll", "fold-in-tick", "tier-set-refit", "ledger-refresh"}
     at_90s = {job.name for job in worker.due(now=90.0, last_run=last)}
     assert at_90s == minutely
 
     at_1000s = {job.name for job in worker.due(now=1000.0, last_run=last)}
-    # §7.2's two intake paths joined at M5.2, and neither is a fifth minute-interval row:
-    # `jellyfin-intake-sweep` runs every 300 s, which is why it is absent from `at_90s` above and
-    # present here, and `jellyfin-delta-poll` carries §7.2's own fifteen minutes. Decision 368
-    # argues the 300 s rather than 60 against the four arithmetic sentences in `worker.py` that
-    # are sized on the `every=60` count, and this pair of assertions is where that choice is
-    # visible: one set says the sweep is not minutely, the other says it is not hourly either.
+    # Decision 368: the intake sweep runs every 300 s, neither minutely nor hourly.
     assert at_1000s == minutely | {
         "jellyfin-seen-sync", "jellyfin-delta-poll", "jellyfin-intake-sweep"
     }
 
 
 def test_a_job_awaiting_its_milestone_is_never_due():
-    """§5.3's later rows are declared so the registry reads like the spec, and `run=None` is
-    what says "not yet" out loud instead of a silent omission."""
+    """`run=None` says "not yet" out loud."""
     pending = [job for job in worker.JOBS if job.run is None]
     assert pending, "the registry should still name the jobs later milestones own"
     due_names = {job.name for job in worker.due(now=1e9, last_run={})}
@@ -126,38 +88,22 @@ def test_the_registry_covers_the_milestones_it_claims():
 
 
 def test_the_placement_sweep_runs_before_the_fits_that_read_its_coordinates():
-    """§5.3 lists the two nightly fits above the placement sweep, but both fits read the
-    coordinates the sweep writes: §5.1's `e(t)` needs ê for a cold or low-support title, and
-    §5.2's fit takes the same coordinates as its embeddings.
-
-    Left in table order, the night a bundle arrives fits every user against a library whose
-    newly-owned titles have no coordinate yet, and the sweep corrects it a day later — once per
-    import, silently, and only ever in the direction that makes the first night's tiers worse.
-    The registry stays in §5.3's order for reading; `due` sorts by `stage`.
-    """
-    # Late enough in the household's day that all three anchors have passed, which is the tick a
-    # first boot in the evening produces — the one case where they do share a tick.
+    """Both fits read the coordinates the sweep writes, so `due` sorts by `stage`; the registry stays
+    in §5.3's order for reading."""
+    # Late enough that all three anchors have passed: an evening first boot.
     late = datetime(2026, 9, 7, 23, 0, tzinfo=CET)
     order = [j.name for j in worker.due(1e9, {}, local=late, last_date={})]
     assert order.index("placement-reconciliation") < order.index("fold-in-user-vectors")
     assert order.index("placement-reconciliation") < order.index("ledger-map-refit")
 
-    # …and the table itself is still §5.3's, so the registry has not been reordered to fake it.
+    # The table itself is still §5.3's order.
     table = [j.name for j in worker.JOBS]
     assert table.index("ledger-map-refit") < table.index("placement-reconciliation")
 
 
 def test_the_fold_in_runs_often_enough_to_answer_within_a_sitting():
-    """§12's M2 exit criterion — "50-100 verdicts each produce visibly personal rankings" — is a
-    claim about what a person sees during a sitting, and every §6.0 shelf orders by a table only
-    the fold-in writes.
-
-    A strictly nightly fold-in cannot meet it: the tier badges move within the sitting (the
-    interactive path writes `ledger_state` — under the hand where the fit cache is warm, on the
-    60 s sweep finding 9 hands a miss to) while the shelves stay in the order they had that
-    morning, for up to a day. §5.3's nightly pass stays exactly as §5.3 writes it; this asserts
-    the tick exists alongside it and is measured in minutes, not hours.
-    """
+    """The shelves order by what only the fold-in writes, so a minutes-scale tick runs alongside the
+    nightly pass."""
     tick = next(j for j in worker.JOBS if j.name == "fold-in-tick")
     nightly = next(j for j in worker.JOBS if j.name == "fold-in-user-vectors")
     assert tick.run is not None, "M2 owes this one an implementation"
@@ -165,16 +111,8 @@ def test_the_fold_in_runs_often_enough_to_answer_within_a_sitting():
     assert nightly.every == 86400, "§5.3's nightly pass is not replaced by the tick"
 
 
-# --- M4.7: a night is a night, not 24 hours of uptime -----------------------------------------
-
-
 def _one_day(local: datetime, now: float, last_run, last_date) -> list[str]:
-    """One tick, stamped exactly the way `_tick` stamps a *successful* run.
-
-    The stamping is the half a pure `due` test cannot skip: the schedule is `due` plus what the
-    caller records, and the defect this file now guards was in the second half — nothing recorded
-    anything across a restart at all.
-    """
+    """Stamped as `_tick` stamps a success: the schedule is `due` plus what the caller records."""
     fired = [job.name for job in worker.due(now, last_run, local=local, last_date=last_date)]
     for job in worker.JOBS:
         if job.name not in fired:
@@ -186,9 +124,7 @@ def _one_day(local: datetime, now: float, last_run, last_date) -> list[str]:
 
 
 def test_every_live_daily_job_is_anchored_to_an_hour_of_the_household_s_day():
-    """§2's "rotation 14" and §5.3's "nightly" are claims about nights. A daily job with no
-    anchor is one that means "every 24 h of uptime", which is the defect, so the registry is
-    what has to carry the anchor rather than a comment."""
+    """A daily job with no anchor means every 24 h of uptime."""
     unanchored = [
         j.name for j in worker.JOBS
         if j.run is not None and j.every == 86400 and j.anchor_hour is None
@@ -201,15 +137,8 @@ def test_every_live_daily_job_is_anchored_to_an_hour_of_the_household_s_day():
 
 
 def test_the_nightly_anchors_are_staggered_so_one_night_is_not_one_tick():
-    """`_tick` awaits due jobs one after another, so every daily job sharing a tick is one long
-    block during which §7.3's minute poll does not run — and one of them is a `pg_dump` whose
-    budget §5.3 writes as "minutes".
-
-    The order is asserted too, because it is not arbitrary: the sweep writes the coordinates both
-    fits read (`stage`), and the dump goes last so it captures the night's work. `job-run-prune`
-    goes first so the fortnight it keeps is fourteen whole nights rather than thirteen and part of
-    tonight.
-    """
+    """`_tick` runs due jobs in sequence, so shared anchors block the minute poll. The sweep precedes
+    the fits, the dump goes last, and `job-run-prune` first."""
     anchors = {j.name: j.anchor_hour for j in worker.JOBS if j.anchor_hour is not None}
     assert len(set(anchors.values())) == len(anchors), f"two jobs share an hour: {anchors}"
     assert anchors["placement-reconciliation"] < anchors["ledger-map-refit"]
@@ -219,11 +148,7 @@ def test_the_nightly_anchors_are_staggered_so_one_night_is_not_one_tick():
 
 
 def test_a_nightly_job_fires_once_per_local_calendar_date_at_its_anchor():
-    """Two whole days, read hour by hour on the household's clock (§2's `TZ`).
-
-    The old rule was `now - last_run >= 86400`, which is a claim about elapsed uptime: it fires
-    at whatever hour the worker happened to start and drifts by however long each tick took.
-    """
+    """`now - last_run >= 86400` fired at whatever hour the worker started, and drifted."""
     start = datetime(2026, 9, 7, 0, 0, tzinfo=CET)
     last_run: dict[str, float] = {}
     last_date: dict[str, date] = {}
@@ -239,8 +164,7 @@ def test_a_nightly_job_fires_once_per_local_calendar_date_at_its_anchor():
 
 
 def test_a_nightly_job_is_not_due_before_its_anchor_hour():
-    """Midnight is not the night §2 means, and a job that fires the moment the date rolls over
-    would run against a database still serving whoever is up at 00:05."""
+    """Midnight is not the night §2 means."""
     backup = next(j for j in worker.JOBS if j.name == "nightly-backup")
     for hour in range(backup.anchor_hour):
         local = datetime(2026, 9, 7, hour, 30, tzinfo=CET)
@@ -253,19 +177,13 @@ def test_a_nightly_job_is_not_due_before_its_anchor_hour():
 
 
 def test_fourteen_restarts_inside_an_hour_do_not_erase_a_fortnight():
-    """The measured failure, in the units §2 promises: fourteen simulated restarts inside
-    twenty-one minutes over a directory holding fourteen nights left zero nights of history.
-
-    A restart is modelled the way `main` produces one — `last_run` and `last_date` re-derived
-    from `job_run`'s newest successful run per job — so what is under test is that the seed is
-    load-bearing, not that a long-lived dict remembers.
-    """
+    """A restart re-derives `last_run` and `last_date` from `job_run`, as `main` does."""
     local = datetime(2026, 9, 7, 23, 0, tzinfo=CET)
     seeded_run = {name: -3600.0 for name in NIGHTLY}   # ran an hour ago, per job_run
     seeded_date = {name: local.date() for name in NIGHTLY}
 
     for restart in range(14):
-        # Each restart's loop clock starts near zero and the seed carries the previous run's age.
+        # Each restart's loop clock starts near zero; the seed carries the previous run's age.
         names = {
             j.name
             for j in worker.due(90.0 * restart, dict(seeded_run), local=local,
@@ -275,8 +193,7 @@ def test_fourteen_restarts_inside_an_hour_do_not_erase_a_fortnight():
 
 
 def test_the_night_after_a_seeded_run_still_fires():
-    """The other half of the same seed, and the reason the plan says not to stamp `now()` at
-    boot: a schedule that cannot re-fire trades spending a night for silently skipping one."""
+    """The seed must not stop the next night firing."""
     yesterday = date(2026, 9, 6)
     tonight = datetime(2026, 9, 7, 23, 0, tzinfo=CET)
     seeded_run = {name: -86400.0 for name in NIGHTLY}
@@ -288,13 +205,8 @@ def test_the_night_after_a_seeded_run_still_fires():
 
 
 def test_a_spring_forward_night_is_not_skipped():
-    """Europe/Berlin loses 02:00-03:00 on 2026-03-29, and `push-subscription-prune` is anchored
-    at 02:00 — the hour that does not exist that night.
-
-    The readings are what the loop would see: 00 and 01 on CET, then 03 onwards on CEST, with no
-    02 anywhere. "At or after the anchor, once per date" survives that. "Exactly at the anchor
-    hour" would have skipped a night once a year, silently, in the direction nobody checks.
-    """
+    """`push-subscription-prune` is anchored at 02:00, the hour Berlin skips on 2026-03-29; "at or
+    after the anchor, once per date" survives it."""
     prune = next(j for j in worker.JOBS if j.name == "push-subscription-prune")
     assert prune.anchor_hour == 2, "this test is about the job anchored inside the lost hour"
 
@@ -316,22 +228,11 @@ def test_a_spring_forward_night_is_not_skipped():
     assert fired[1].hour == 3, f"the lost hour pushed it to {fired[1]}"
 
 
-# --- M4.7 cycle 2: which clock the anchors were actually resolved against ----------------------
-#
-# The anchoring above is only as good as `TZ`, and M4.7 is what made `TZ` load-bearing: six jobs,
-# §2's nightly dump among them, now fire at an hour of the household's own day. A zone that does
-# not resolve is still not a refusal — §3.1 keeps a boot legal and a job fired against the wrong
-# clock beats a loop that will not start — but it stopped being allowed to be silent.
+# An unresolvable `TZ` still boots (§3.1), but must be reported.
 
 
 def _resolvable_zone() -> str | None:
-    """A zone name this checkout can actually resolve, or None if it has no tz database at all.
-
-    A Windows checkout has neither `/usr/share/zoneinfo` nor, unless someone installed it, the
-    `tzdata` wheel — which is exactly the condition `_now_local`'s fallback exists for, and why
-    the *fallback* branch is the one that can be asserted everywhere while the resolved branch
-    is skipped where there is nothing to resolve. CI runs on Linux and asserts both.
-    """
+    """Windows has no tz database, so the resolved branch skips there; CI asserts both."""
     for name in ("Europe/Berlin", "UTC"):
         try:
             ZoneInfo(name)
@@ -353,16 +254,7 @@ def tz(monkeypatch):
 
 
 def test_a_tz_the_container_cannot_resolve_is_reported_at_boot(tz, caplog):
-    """The typo that moves the whole night, said out loud once.
-
-    `_now_local`'s fallback swallowed an unresolvable zone at no log level at all, and the one
-    line the worker writes at boot printed `settings().tz` — the string that was *asked* for — as
-    though it had been honoured. So `TZ=Europe/Berln` gave a container that boots green, a log
-    that agrees with the operator's spelling, and a household whose 06:00 dump, placement sweep
-    and both fits silently moved to the process's own zone, which in a container is UTC. Every
-    instrument in the box confirmed the configuration that was not in force.
-    [M4.7 cycle 2 finding 11]
-    """
+    """`TZ=Europe/Berln` booted green and logged the requested zone while jobs ran on UTC."""
     tz("Europe/Berln")
 
     with caplog.at_level(logging.INFO, logger="spielplan.worker"):
@@ -383,7 +275,7 @@ def test_a_tz_the_container_cannot_resolve_is_reported_at_boot(tz, caplog):
     _resolvable_zone() is None, reason="no tz database in this checkout; CI asserts this branch"
 )
 def test_a_tz_that_does_resolve_is_named_as_itself_and_warns_about_nothing(tz, caplog):
-    """The counterpart, so the report cannot become a warning every household reads every boot."""
+    """So the report is not a warning every boot."""
     zone = _resolvable_zone()
     tz(zone)
 
@@ -396,48 +288,20 @@ def test_a_tz_that_does_resolve_is_named_as_itself_and_warns_about_nothing(tz, c
 
 
 def test_the_loop_still_takes_the_fallback_clock_rather_than_stopping(tz):
-    """§3.1's half of the rule, unchanged: reporting the substitution is not refusing it.
-
-    A worker that would not start on a mistyped `TZ` would take the whole household's sync,
-    prompts and dumps down over a spelling — a worse failure than the one being reported.
-    """
+    """A worker refusing to start over a spelling would take the household down."""
     tz("Europe/Berln")
 
     assert worker._local_zone() is None
     assert worker._now_local().tzinfo is None, "the fallback is the process's own naive clock"
 
 
-# --- M4.10: a boot line that counts something -----------------------------------------------
-
-# The module the boot-census call-site rule below reads. A source path and not `inspect`, because
-# the question is where one statement sits inside `main()` rather than what a function closes over.
-# [M4.10 cycle 1, m410-rev1-boot-census-call-site-is-untested]
+# A source path, not `inspect`: the question is where one statement sits inside `main()`.
 WORKER_SOURCE = Path(worker.__file__)
 
 
 def test_a_job_this_loop_does_not_fire_says_which_of_the_three_things_that_means():
-    """`run=None` meant three states at once, and the registry could not tell them apart.
-
-    One of them is code that ships in another process: the incremental Ledger update runs in the
-    web process on every tap. One is code that ships and is reached through another job - the
-    Cold Tower's forward pass, which the placement sweep calls until §8's acquisition pipeline
-    exists. Only the last row here is genuinely unwritten. Pinned as sets rather than as counts,
-    because the failure being guarded is a row drifting from one bucket to another silently,
-    which a count cannot see. [M4.10 finding 35]
-
-    **`dna-projection` crossed into the first set at M5**, the way `cold-tower-placement` sits
-    there: §8 stage 8 calls `dna.project.project_title` inside the walk that holds the title
-    (decision 463), so the row is reached through the acquisition drain and this loop does not fire
-    it. It carries an `owner` and no `run`, and the census stops naming it as awaiting M5.
-
-    **`bundle-import` was in the first set until M4.14 and is now live.** It was the sharpest
-    example the paragraph above had - work that ships and is triggered by a request - and §5.3
-    files it as a job with a "minutes" budget, so the 127 s it spent on the web process's event
-    loop was the registry pointing at its own defect. `_bundle_import` claims the `job_run` row
-    the route writes, which is what moves it across this line; the `owner` had to go with it,
-    because a live job carrying one is counted twice by the census below and reads as
-    documentation that this loop is not the caller. [M4.14 step E2, decision 253]
-    """
+    """`run=None` meant three states; pinned as sets, since a count cannot see a row changing bucket.
+    `dna-projection` is reached through the drain (decision 463); `bundle-import` is live."""
     elsewhere = {j.name: j.owner for j in worker.JOBS if j.run is None and j.owner is not None}
     awaiting = {j.name: j.milestone for j in worker.JOBS if j.run is None and j.owner is None}
 
@@ -451,39 +315,17 @@ def test_a_job_this_loop_does_not_fire_says_which_of_the_three_things_that_means
         assert importlib.util.find_spec(module) is not None, (
             f"{name} names {module!r} as its implementation and that module does not exist"
         )
-    # `owner` means "this loop does not fire it". A live job carrying one would make the census
-    # below double-count and, worse, would read as documentation that the loop is not the caller.
+    # `owner` means this loop does not fire it; a live job carrying one is counted twice.
     assert not [j.name for j in worker.JOBS if j.run is not None and j.owner is not None]
 
 
-# The three names that acquire the ACTIVE bundle inside this process: `_active_store`, the
-# worker's one door to it and the place §10's two assertions are made; `load_active`, the door
-# `_active_store` itself opens; and `ArtifactStore.open`, the constructor `load_active` itself
-# tail-calls and the idiom a job that wants the staged DIRECTORY rather than the mapping reaches
-# for (`importer/bundle.py`, `importer/validate.py`). A job that reaches any of the three fits in
-# that basis and writes numbers expressed in it.
-#
-# The third is spelled with its type because neither half of it is a door alone: `open` by itself
-# is every `Path.open` in a body, and `ArtifactStore` by itself is `ArtifactStore.empty()` -
-# §3.1's bundle-less sentinel, which three of today's six spell - and the annotations on
-# `_active_store` and `_report_basis`. Matching the type holds a job out of the loop for naming
-# the EMPTY store, which is `probe-comment`'s failure wearing a different hat.
-# [M4.14 cycle 2, m414-c2-dimlock-derivation-misses-artifactstore-open]
+# The three doors to the ACTIVE bundle. `ArtifactStore.open` is spelled with its type: `open`
+# alone is every `Path.open`, and the type alone is the bundle-less `ArtifactStore.empty()`.
 _BASIS_NAMES = frozenset({"_active_store", "load_active", "ArtifactStore.open"})
 
 
 def _named(fn: ast.AST) -> set[str]:
-    """Every name this function body mentions, attribute access included: `_active_store(c)` and
-    `worker._active_store(c)` are the same acquisition seen from two modules.
-
-    `X.y` is emitted qualified as well as bare, because the third door in `_BASIS_NAMES` can only
-    be named by both of its halves at once - the comment there argues why.
-    [M4.14 cycle 2, m414-c2-dimlock-derivation-misses-artifactstore-open]
-
-    The qualified form is what carries the walk across a file too: `bb.load_for` is the alias and
-    the function in one string, which is all `_one_module_out` needs to find the file.
-    [M4.14 cycle 3, m414-c3-dimlock-04]
-    """
+    """Attribute access included; `X.y` is emitted qualified too, which carries the walk across files."""
     out: set[str] = set()
     for node in ast.walk(fn):
         if isinstance(node, ast.Name):
@@ -496,14 +338,7 @@ def _named(fn: ast.AST) -> set[str]:
 
 
 def _imports(tree: ast.AST, source: Path) -> dict[str, tuple[str, str | None]]:
-    """`alias -> (module, attribute)` for every import a file carries, top level or not.
-
-    Not only the top level, because a job imports its helpers inside the body that uses them -
-    `_ledger_map_refit` opens with three such lines and `worker.py`'s module scope names almost
-    nothing a model job actually calls. A name that meant two different modules in two functions
-    of one file would collapse here, and is not a shape this codebase writes.
-    [M4.14 cycle 3, m414-c3-dimlock-04]
-    """
+    """Not only top-level imports: jobs import helpers inside their bodies."""
     out: dict[str, tuple[str, str | None]] = {}
     for node in ast.walk(tree):
         if isinstance(node, ast.Import):
@@ -511,10 +346,7 @@ def _imports(tree: ast.AST, source: Path) -> dict[str, tuple[str, str | None]]:
                 bare = alias.name.split(".")[0]
                 out[alias.asname or bare] = (alias.name if alias.asname else bare, None)
         elif isinstance(node, ast.ImportFrom):
-            # A relative import resolves to nothing here, so the job carrying it would be cleared
-            # for a reason that is this function's and not the job's - the silent clearing this
-            # whole derivation exists to refuse. `spielplan` spells every import absolutely today;
-            # this assertion is what says so out loud if that ever stops being true.
+            # A relative import resolves to nothing, which would clear a job silently.
             assert not node.level, (
                 f"{source.name} carries a relative import, which this resolution cannot follow: "
                 "spell it absolutely rather than leaving a job cleared by an unresolved call"
@@ -524,11 +356,7 @@ def _imports(tree: ast.AST, source: Path) -> dict[str, tuple[str, str | None]]:
     return out
 
 
-# Parsed once per file, because the walk below re-enters `worker.py` for every job in the registry
-# and crosses into a dozen more: measured at M4.16, twenty files for the fourteen live jobs that
-# registry then held, in 0.04 s. M5.1's `acquisition-drain` makes fifteen and M5.2's two §7.2
-# intake rows make seventeen; the figure is left as the measurement it was rather than grown by
-# arithmetic nobody ran.
+# Parsed once per file: the walk re-enters `worker.py` for every job.
 _PARSED: dict[Path, tuple[dict, dict]] = {}
 
 
@@ -547,26 +375,17 @@ def _parse(source: Path) -> tuple[dict, dict]:
 
 
 def _one_module_out(mention: str, imports: dict[str, tuple[str, str | None]]) -> tuple[Path, str] | None:
-    """The file and the function a mention names in another module of this package, or None.
-
-    The walk stops at the PACKAGE rather than one module short of it: `spielplan` is the only code
-    that can acquire this install's basis - a call into asyncpg or numpy cannot - and inside it a
-    job's helper is as likely to sit in `scoring/` or `placement/` as beside the job, which is
-    where CLAUDE.md puts rules ("rules live in the domain packages under `backend/spielplan/`").
-    [M4.14 cycle 3, m414-c3-dimlock-04]
-    """
+    """The walk stops at the package: only `spielplan` can acquire this install's basis."""
     alias, _, attr = mention.partition(".")
     if attr:
-        # `bb.load_for`, after `from spielplan.scoring import backbone as bb`: the alias names the
-        # module and the attribute names the function in it.
+        # `bb.load_for`: the alias names the module, the attribute the function.
         target = imports.get(alias)
         if target is None:
             return None
         module = target[0] if target[1] is None else f"{target[0]}.{target[1]}"
         func = attr
     else:
-        # `load_hp`, after `from spielplan.ledger.hyperparams import load as load_hp`: the
-        # function came in by name and its alias carries the module it came from.
+        # `load_hp`: the function came in by name, and its alias carries the module.
         target = imports.get(mention)
         if target is None or target[1] is None:
             return None
@@ -576,55 +395,16 @@ def _one_module_out(mention: str, imports: dict[str, tuple[str, str | None]]) ->
     try:
         spec = importlib.util.find_spec(module)
     except ImportError:
-        # `settings.artifacts_dir` resolves `settings` to `spielplan.core.config.settings`, which
-        # is a callable and not a module. Nothing to follow, and nothing wrong.
+        # `settings` is a callable, not a module: nothing to follow.
         return None
     origin = spec.origin if spec is not None else None
     return (Path(origin), func) if origin and origin.endswith(".py") else None
 
 
 def _reaches_the_basis(run) -> bool:
-    """Does `run` acquire the active bundle - itself, or through a helper it calls?
-
-    `"_active_store" in inspect.getsource(job.run)` was the first form of this, and it is a text
-    property of ONE function rather than the property the test below claims. Three ways past it,
-    all of them ordinary: a job that reaches the basis one call frame out - which is the refactor
-    a seventh fit invites, once there are six to share a helper with - a job that calls
-    `ArtifactStore.load_active` itself, and, in the other direction, a job whose COMMENT names
-    `_active_store`, which the substring forced INTO the set. The first two leave the guard green
-    while `_tick` never skips the job, which is exactly the silent failure a hand-kept list
-    produces. `ast` is also what makes the third go away for free: a comment is not a node.
-    [M4.14 cycle 1, m414-c1-dim-lock-06]
-
-    A fourth shape went past the `ast` form too, and past the substring before it: a job that
-    resolves the active version itself and builds the store with `ArtifactStore.open`, because it
-    wants the DIRECTORY rather than the None-for-empty mapping `_active_store` returns.
-    `dna-projection` - the seventh `worker.JOBS` already carries, `run=None` and M5 owing it an
-    implementation - is that shape, and `importer/bundle.py` and `importer/validate.py` both write
-    the idiom today. The paragraph above listed `load_active` among the doors it had closed and
-    `open` is that constructor's sibling, so the guard claimed this one shut a milestone before it
-    was. [M4.14 cycle 2, m414-c2-dimlock-derivation-misses-artifactstore-open]
-
-    One module deep was the boundary until cycle 3, and it cleared the fifth shape - which is the
-    first one's, moved one file out. The assertion below guards `run` ITSELF, so a job whose `run`
-    is a module-level function and whose acquisition sits one call away in `scoring/` or
-    `placement/` - the shared helper this docstring has anticipated since cycle 1, put where
-    CLAUDE.md puts rules - was not asserted on and was not derived: seen, cleared, and never
-    skipped while an import held the lock. So the walk follows a call into any module of this
-    package, resolved from the imports the file itself carries.
-
-    What that boundary was protecting is answered by a name instead. The basis is loaded outside
-    the worker too - `importer/bundle.active_backbone_coverage` opens it for decision 248's
-    reverse coverage check - so a package-wide walk derives `bundle-import` into the set, and
-    skipping the import job while an import holds the lock is the one thing `_tick` must never
-    do. Measured over today's registry the walk derives `MODEL_JOBS` and that one job and nothing
-    else, at one hop and at every depth past it, so the guard below drops it by
-    `worker.BUNDLE_IMPORT_JOB` rather than by keeping the walk too short to see it. The package is
-    where the walk does stop, because code this repository did not write cannot open this
-    install's basis; and a `run` that is not a module-level function is still an assertion rather
-    than a False, because a derivation that cannot see a job has to say so instead of clearing it.
-    [M4.14 cycle 3, m414-c3-dimlock-04]
-    """
+    """An AST walk, not a substring of one function: a helper one frame or one module out, or
+    `ArtifactStore.open` directly, must count; a comment must not. `bundle-import` is dropped by
+    name because the package walk derives it."""
     source = Path(inspect.getsourcefile(run))
     defs, _ = _parse(source)
     assert run.__name__ in defs, (
@@ -674,52 +454,20 @@ async def _probe_only_names_the_basis_in_a_comment() -> None:
 
 
 async def _probe_opens_the_active_directory_by_path() -> None:
-    """A model job that resolves the active version itself and opens that DIRECTORY.
-
-    The shape `dna-projection` will have: it needs the tree's files, not `_active_store`'s
-    None-for-empty mapping, so it makes `load_active`'s own SELECT and calls the constructor
-    `load_active` tail-calls. It writes in the active basis and names neither of the other two
-    doors, so before this cycle it derived False, stayed out of `MODEL_JOBS`, and was never
-    skipped while an import held the lock - a projection started against v1 and committed after
-    §10's flip, in a basis the install no longer serves.
-    [M4.14 cycle 2, m414-c2-dimlock-derivation-misses-artifactstore-open]
-    """
+    """A job that resolves the active version itself and opens that DIRECTORY with the constructor."""
     conn = None  # never called: this body exists to be parsed, like the three above.
     version = await conn.fetchval("SELECT version FROM artifact_bundle WHERE state = 'active'")
     ArtifactStore.open(settings().artifacts_dir / version, version)
 
 
 async def _probe_names_the_type_without_the_door() -> None:
-    """A job that touches `ArtifactStore` and acquires no basis at all.
-
-    The guard on the cure rather than on the disease. Closing `probe-open` by putting the TYPE
-    in `_BASIS_NAMES` also derives this one - §3.1's bundle-less sentinel and an annotation,
-    which is what `_ledger_map_refit`, `_fold_in_tick` and `_tier_set_refits` each spell in their
-    own bodies - and a job held out of the loop for naming the empty store is `probe-comment`'s
-    failure in a new hat. Measured: with `"ArtifactStore"` as the name, this probe derives True.
-    [M4.14 cycle 2, m414-c2-dimlock-derivation-misses-artifactstore-open]
-    """
+    """The type alone must not count: this probe names `ArtifactStore` and acquires no basis."""
     store: ArtifactStore = ArtifactStore.empty()
     assert store.is_empty
 
 
 async def _probe_reaches_the_basis_one_module_out() -> None:
-    """A job whose `run` is module-level and whose basis acquisition is one module away.
-
-    The shape the first paragraph above anticipates - "the refactor a seventh fit invites, once
-    there are six to share a helper with" - with the shared helper where CLAUDE.md puts rules
-    ("rules live in the domain packages under `backend/spielplan/`") rather than in `worker.py`.
-    `run` IS a module-level function here, so the assertion that guards the boundary never fires
-    and there is nothing to widen: the walk ran out of MODULE and returned False, and the job was
-    seen, cleared, and never skipped while an import held the lock - `probe-helper`'s failure with
-    the helper one import away.
-
-    `active_backbone_coverage` rather than an invented helper, because it is the acquisition one
-    module out that this codebase already writes: decision 248's reverse coverage check, opening
-    on `ArtifactStore.load_active`. The import sits inside the body for the same reason every
-    model job's does, and this body is never executed, so naming it costs this file no import.
-    [M4.14 cycle 3, m414-c3-dimlock-04]
-    """
+    """`run` is module-level and the acquisition one module away, in `importer/bundle`."""
     from spielplan.importer import bundle as importer
 
     conn = None  # never called: this body exists to be parsed, like the four above.
@@ -727,33 +475,8 @@ async def _probe_reaches_the_basis_one_module_out() -> None:
 
 
 def test_the_model_job_derivation_sees_a_basis_reached_through_a_helper():
-    """The guard above is a derivation, and this is what keeps the derivation honest.
-
-    `MODEL_JOBS` and the set derived from today's six agree under any rule that reads the six
-    bodies, so the test above cannot fail for the reason it exists: every one of them spells
-    `_active_store` in its own first lines. What it is FOR is the seventh, and the seventh is
-    written by somebody who has six to copy from - so it is asserted here against jobs that do
-    not exist yet, which is the only place the difference between the rules is visible.
-
-    Three probes, because there were three ways past the substring this replaced. Two of them
-    leave `MODEL_JOBS` short while the guard stays green - a fold-in started against v1 and
-    committed after §10's flip then stamps `user_vector` and `ledger_fit` with a version the
-    install no longer serves, which is the defect D1 exists to prevent and the one §10's
-    invariant cannot see from inside the job. The third goes the other way and is the cheaper
-    failure: a job forced into the skip because a comment mentioned the door.
-    [M4.14 cycle 1, m414-c1-dim-lock-06]
-
-    Five now. `probe-open` is the fourth way past, and the first one this docstring got wrong:
-    it is the same silent shape as the first two, and it survived the rule that replaced the
-    substring. `probe-sentinel` is the fifth and points the other way - it is what stops the
-    obvious fix for the fourth, naming `ArtifactStore` itself, from re-opening `probe-comment`.
-    [M4.14 cycle 2, m414-c2-dimlock-derivation-misses-artifactstore-open]
-
-    Six. `probe-one-out` is the way past a walk bounded by one FILE, and the one the boundary's
-    own paragraph promised could not happen: it is `run` itself that the assertion there guards,
-    so a job whose `run` is module-level and whose acquisition is not was cleared in silence.
-    [M4.14 cycle 3, m414-c3-dimlock-04]
-    """
+    """Today's six all spell `_active_store` themselves, so the rules differ only on jobs not yet
+    written: these probes are those jobs."""
     probes = (
         worker.Job("probe-helper", "M5", "nightly", "seconds", _probe_fits_through_a_helper),
         worker.Job("probe-direct", "M5", "nightly", "seconds", _probe_loads_the_store_itself),
@@ -775,32 +498,9 @@ def test_the_model_job_derivation_sees_a_basis_reached_through_a_helper():
 
 
 def test_every_job_that_fits_against_the_active_bundle_is_named_in_model_jobs():
-    """`MODEL_JOBS` is a list kept by hand, and this is what keeps it honest.
-
-    `_tick` skips those rows while a bundle import holds the lock, because §10's flip replaces
-    the basis they fit in and a fold-in that starts against v1 and commits after the swap stamps
-    `user_vector` and `ledger_fit` with a version this install no longer serves. The set is
-    therefore a claim about which jobs WRITE in a basis, and the property that makes a job one of
-    them is visible in its source: it acquires the basis through one of `_BASIS_NAMES`' three
-    doors. Derived from that rather than restated, so the seventh model job cannot join this loop
-    and silently not join the skip - which is the failure a hand-kept list produces, and it
-    produces it silently.
-
-    The other direction too: a name in the set whose job does not read the store is a job being
-    held out of the loop for no reason anybody can see. [M4.14 step D1, finding 2.2]
-
-    "Visible in its source" is `_reaches_the_basis` and not a substring of one function's text,
-    for the reasons that function argues; the difference between the two rules is asserted in
-    `test_the_model_job_derivation_sees_a_basis_reached_through_a_helper`, because today's six
-    agree under both. [M4.14 cycle 1, m414-c1-dim-lock-06]
-    """
-    # `bundle-import` is excluded by name, which is what lets the derivation above cross a module
-    # boundary rather than stopping one short of `importer/bundle.active_backbone_coverage`. It is
-    # the one job that opens the store on purpose and the one job this skip must never take: it IS
-    # §10's flip, and holding it out of the loop while the import lock is held is what that
-    # docstring calls the one thing `_tick` must never do. Asserted rather than assumed, because a
-    # name excluded from a set it was never in is a comment that has stopped being true.
-    # [M4.14 cycle 3, m414-c3-dimlock-04]
+    """`_tick` skips these during an import. Derived from the source, so a new model job cannot join
+    the loop and silently miss the skip; the reverse holds too."""
+    # `bundle-import` is excluded by name: it IS §10's flip and must never be skipped.
     importer = next(j for j in worker.JOBS if j.name == worker.BUNDLE_IMPORT_JOB)
     assert _reaches_the_basis(importer.run), (
         "the exclusion below is by name because the walk derives the import job, and it no longer "
@@ -821,14 +521,7 @@ def test_every_job_that_fits_against_the_active_bundle_is_named_in_model_jobs():
 
 
 def test_the_boot_line_does_not_call_a_broken_install_legal(caplog, tmp_path):
-    """dd01, in the one line this process prints about its own basis.
-
-    `is_empty` is True for a household that has never imported a bundle and for one whose active
-    bundle's directory is gone, and this line said "(section 3.1: that is legal)" for both - so
-    an operator whose model jobs were all about to refuse read, at every `docker compose up`,
-    that the state was normal. Three cases because there are three, and the third is the one that
-    must stay silent: a loaded bundle is not news.
-    """
+    """`is_empty` is True both for no bundle and for a missing directory; only the first is legal."""
     with caplog.at_level(logging.INFO, logger="spielplan.worker"):
         worker._report_basis(ArtifactStore.empty())
     assert "that is legal" in caplog.text, "section 3.1's bundle-less household is still legal"
@@ -867,13 +560,7 @@ def _census_line(caplog) -> str:
 def test_the_boot_census_counts_the_registry_rather_than_a_number_somebody_typed(
     monkeypatch, caplog
 ):
-    """Four fabricated rows, one of each state, and the line has to follow them.
-
-    The old line derived "awaiting their milestone" from `run is None` alone, so its arithmetic
-    was right and its category was wrong. Substituting the registry is the only way to assert
-    that the counts are computed here rather than restated: against a tuple whose names the real
-    one does not share, a number somebody typed cannot survive.
-    """
+    """Four fabricated rows, one per state, so a typed number cannot survive."""
     async def _noop() -> None:
         return None
 
@@ -898,13 +585,7 @@ def test_the_boot_census_counts_the_registry_rather_than_a_number_somebody_typed
 
 
 def test_the_boot_census_no_longer_reports_two_shipped_jobs_as_pending(caplog):
-    """The sentence an operator actually read, against the registry they actually have.
-
-    "4 awaiting their milestone: ledger-incremental(M2), cold-tower-placement(M2), ..." was false
-    about half of what it named, at every boot, in the one line this process writes about its own
-    contents. The remainder is asserted exactly rather than counted, because the count was never
-    the part that was wrong.
-    """
+    """Asserted exactly: the count was never what was wrong."""
     with caplog.at_level(logging.INFO, logger="spielplan.worker"):
         worker._report_registry()
 
@@ -913,13 +594,9 @@ def test_the_boot_census_no_longer_reports_two_shipped_jobs_as_pending(caplog):
     outside = line.split("run outside it: ", 1)[1].split(";", 1)[0]
     assert "ledger-incremental(spielplan.ledger.refit)" in outside
     assert "cold-tower-placement(spielplan.placement.tower)" in outside
-    # M5 wired §8 stage 8, which reaches the projection through the drain (decision 463).
+    # Reached through the drain (decision 463).
     assert "dna-projection(spielplan.dna.project)" in outside
-    # M4.14 moved the bundle import into this loop, so it is counted among the live and named
-    # nowhere - the census lists the two categories that are NOT running here. Asserted as an
-    # absence rather than deleted, because the line an operator reads would look the same if the
-    # row had simply been dropped from the registry, and that is the other way this sentence
-    # goes wrong. [M4.14 step E2]
+    # Live now, so it is named nowhere; asserted as an absence, since a dropped row would look the same.
     assert "bundle-import" not in line, (
         "bundle-import is live in this loop now, so the census must not list it as work that "
         f"runs elsewhere or as work awaiting a milestone: {line}"
@@ -928,14 +605,8 @@ def test_the_boot_census_no_longer_reports_two_shipped_jobs_as_pending(caplog):
 
 
 def _census_calls_in_main(source: str) -> list[str]:
-    """Where `main()` calls `_report_registry`, and what stands between it and the boot path.
-
-    A list of descriptions rather than a bool, because there are three ways to lose the line and
-    the operator cannot tell them apart: no call at all, a call behind a branch this container
-    never takes, and a call in some other function that nothing boots. A `try` body and an
-    `async with` body are unconditional once `main` is running, so they are walked through; an
-    `if`, a loop, an `except` and a `try`'s `else` are not.
-    """
+    """Three ways to lose the line: no call, a call behind a branch, a call nothing boots. `try` and
+    `async with` bodies are unconditional; `if`, loops, `except` and `else` are not."""
     tree = ast.parse(source)
     main = next(
         (
@@ -951,9 +622,7 @@ def _census_calls_in_main(source: str) -> list[str]:
     found: list[str] = []
 
     def walk(body: list[ast.stmt], guard: str | None) -> None:
-        # The compound statements are descended into and then skipped, so a call inside one is
-        # reported once, under its own guard, rather than twice -- `ast.walk` over a whole
-        # statement would find it again and call it unconditional.
+        # Compound statements are descended into and then skipped, so a call is reported once.
         for stmt in body:
             if isinstance(stmt, ast.Try):
                 walk(stmt.body, guard)
@@ -990,22 +659,8 @@ def _census_calls_in_main(source: str) -> list[str]:
 
 
 def test_the_boot_census_is_actually_called_at_boot():
-    """The two tests above call `_report_registry()` themselves, so neither can see the one call
-    site that makes the line a boot line.
-
-    `grep -rn "_report_registry" backend/` finds three places: the definition, one call inside
-    `main()`, and those tests. Delete the call and all four registry tests stay green while the
-    coverage row goes on claiming that an operator reads these counts at every boot — which is
-    the shape of the very defect this row repairs, a line nobody read telling nobody something
-    false for two milestones.
-
-    Read off the source rather than by booting `main()`: booting it needs a pool, the migration
-    wait and a signal handler, and what is in doubt is one statement's position, which is a fact
-    about the code. `test_auth_logic.py:124` reads the CSPRNG the same way and for the same
-    reason. Unconditional matters as much as present: behind the migration wait's `else`, or
-    behind `if store.is_empty`, the line would be missing on exactly the boots an operator is
-    reading the log for. [M4.10 finding 35; cycle 1, m410-rev1-boot-census-call-site-is-untested]
-    """
+    """The tests above call `_report_registry()` themselves, so only this sees the boot call site.
+    Read off the source: booting `main()` needs a pool, the migration wait and signals."""
     calls = _census_calls_in_main(WORKER_SOURCE.read_text(encoding="utf-8"))
     assert calls == ["unconditional"], (
         "main() must call _report_registry() exactly once and on every boot; found: "
@@ -1039,5 +694,5 @@ def test_the_boot_census_is_actually_called_at_boot():
     ],
 )
 def test_the_boot_census_call_site_guard_catches_a_real_violation(name, source, expected):
-    """A guard that cannot see its own violation is the M4.7 lesson, so each shape is named."""
+    """Each shape named, so the guard can see its own violation."""
     assert _census_calls_in_main(source) == expected, name

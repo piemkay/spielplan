@@ -1,20 +1,5 @@
-"""§6.6's test buttons for TMDB, OMDb and Trakt, against a canned host. Spec v2.1 §6.6, §8 stage 2,
-§9; decisions 340, 433, 434, 453.
-
-Decision 453 gives each keyed source one cheap request that fails on a bad key, sent through the
-shared fetcher under the host policy `acquire/hosts.py` already declares, and nothing written to the
-raw store. TMDB v3 and OMDb take their key only as a query parameter, which is the whole reason this
-file exists: httpx writes every request url into an INFO line of its own, so a naive test button
-copies a working key into the web process's log on every press, and a host that quotes the url back
-in its refusal puts it into the card's error text as well. So what is asserted is the request each
-probe puts on the wire, exactly; the three answers (accepted, refused, never asked); and that the key
-is in neither the answer nor httpx's line.
-
-Nothing here reaches the network: every request is served by an `httpx.MockTransport`, on a real
-`Fetcher` over this test's database, the shape `test_sources_adapters.py` established.
-
-Integration tests are skipped without TEST_DATABASE_URL; see tests/conftest.py.
-"""
+"""TMDB v3 and OMDb take their key as a query parameter and httpx logs every url at INFO, so the
+wire request, the three answers, and the key's absence from answer and log are asserted."""
 
 from __future__ import annotations
 
@@ -36,8 +21,6 @@ TRAKT_ID = "trakt-probe-client-id-0123456789"
 
 
 class _Host:
-    """A canned web: one answer per host, and a record of every request that reached it."""
-
     def __init__(self, answers: dict[str, httpx.Response]) -> None:
         self.answers = answers
         self.seen: list[httpx.Request] = []
@@ -53,16 +36,14 @@ async def _no_sleep(seconds: float) -> None:
 
 
 def _opener(host: _Host):
-    """`client.open_fetcher`'s shape, over the canned host: the real Fetcher, on the probe's own
-    connection, so the host's declared policy, pacing and breaker apply to the button."""
+    """The real Fetcher on the probe's own connection, so host policy, pacing and breaker apply."""
     return lambda conn: fetch.Fetcher(conn=conn, transport=httpx.MockTransport(host.handler),
                                       sleep=_no_sleep, jitter=lambda low, high: 0.0)
 
 
 @pytest.fixture
 async def keyed(db, secrets_key):
-    """The three sources configured the way §2 stores them: two sealed keys, and Trakt's client id in
-    the plaintext half (`registry.env_seeds`' own split)."""
+    """Two sealed keys, and Trakt's client id in the plaintext half (`registry.env_seeds`)."""
     await secrets.put_connector_secrets(db, "tmdb", {}, {"api_key": KEY_TMDB})
     await secrets.put_connector_secrets(db, "omdb", {}, {"api_key": KEY_OMDB})
     await secrets.put_connector_config(db, "trakt", {"client_id": TRAKT_ID})
@@ -74,9 +55,6 @@ def _json(status: int, body) -> httpx.Response:
 
 
 async def test_each_probe_asks_its_host_the_documented_question(keyed):
-    """The three requests decision 453 names, asserted on the wire: TMDB's configuration read with
-    the v3 key as its query parameter, one OMDb lookup of a fixed IMDb id, and Trakt's trending list
-    at one item with its three headers. Each host answering as it does for a good key is `ok`."""
     host = _Host({
         "api.themoviedb.org": _json(200, {"images": {"base_url": "http://image.tmdb.org/t/p/"}}),
         "www.omdbapi.com": _json(200, {"Title": "The Shawshank Redemption", "Response": "True"}),
@@ -123,9 +101,7 @@ async def test_each_probe_asks_its_host_the_documented_question(keyed):
     ],
 )
 async def test_a_refused_key_is_not_ok_and_the_refusal_never_quotes_it(keyed, probe, host, answer, key):
-    """A host refusing the key is `ok: false` with its own words, and those words with the key taken
-    out wherever the host quoted it -- in prose or inside a url -- because the answer is rendered on
-    the card and a quoted key there is the credential in the DOM."""
+    """The refusal is rendered on the card, so a quoted key (prose or url) must be taken out."""
     result = await probe(keyed, open_fetcher=_opener(_Host({host: answer})))
     assert (result["ok"], result["status"]) == (False, answer.status_code), result
     assert result["error"], result
@@ -133,10 +109,7 @@ async def test_a_refused_key_is_not_ok_and_the_refusal_never_quotes_it(keyed, pr
 
 
 async def test_a_probe_with_no_key_asks_nobody_and_says_what_is_missing(db, secrets_key, monkeypatch):
-    """The answers known without a request are given without one: no key typed yet, per source; and,
-    for the two sealed keys, a key this SECRETS_KEY cannot open, in the rail's own sentence. Trakt's
-    client id is plaintext, so an unreadable DEK does not stop its button -- the adapters read it
-    the same way (`credentials.trakt_headers`)."""
+    """Trakt's client id is plaintext, so an unreadable DEK does not stop its button."""
     host = _Host({})
     opener = _opener(host)
     assert await probes.tmdb(db, open_fetcher=opener) == {
@@ -155,8 +128,7 @@ async def test_a_probe_with_no_key_asks_nobody_and_says_what_is_missing(db, secr
 
 
 async def test_a_probe_stores_nothing_in_the_raw_store(keyed):
-    """Decision 453: a test press is a question about a key, not a document of a title, so nothing it
-    reads lands in `raw_document` -- where §6.6's board would show it against no title at all."""
+    """Decision 453: a probe is a question about a key, so nothing lands in `raw_document`."""
     host = _Host({
         "api.themoviedb.org": _json(200, {"images": {}}),
         "www.omdbapi.com": _json(200, {"Response": "True"}),
@@ -169,8 +141,7 @@ async def test_a_probe_stores_nothing_in_the_raw_store(keyed):
 
 
 async def test_httpx_logs_the_probe_request_with_the_query_key_masked(keyed, caplog):
-    """Decision 453's logging filter, installed when the probe module loads: httpx still writes its
-    INFO line -- the trace an operator reads -- with the value of `api_key` and `apikey` masked."""
+    """Decision 453's logging filter masks `api_key` and `apikey` in httpx's INFO line."""
     caplog.set_level(logging.INFO, logger="httpx")
     host = _Host({
         "api.themoviedb.org": _json(200, {"images": {}}),
@@ -189,9 +160,6 @@ async def test_httpx_logs_the_probe_request_with_the_query_key_masked(keyed, cap
 
 
 async def test_the_dispatch_serves_the_three_source_buttons(keyed, app, monkeypatch):
-    """The three probes are the three `ConnectorSpec.test` entries, so plan A4's one dispatch serves
-    them (decision 433): the source cards' buttons are `POST /api/admin/connectors/{name}/test`,
-    reaching the host through the one fetcher built outside a drain."""
     host = _Host({
         "api.themoviedb.org": _json(200, {"images": {}}),
         "www.omdbapi.com": _json(200, {"Response": "True"}),

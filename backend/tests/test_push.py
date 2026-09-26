@@ -1,23 +1,3 @@
-"""Push subscriptions, over HTTP, against a real database. Spec v2.1 §4.2, §6 preamble, §7.3.
-
-§4.2 shipped the `push_subscription` table in M0 and the worker has been pruning it ever
-since; M2 owes the write that fills it, because §7.3's "when undeliverable, the prompt queues
-and surfaces as an in-app banner" only means something once there is a deliverable path.
-
-The five properties asserted here are the ones that go wrong quietly rather than loudly:
-
-  * a device that re-registers must not become two devices (§4.2's UNIQUE endpoint);
-  * a subscription is the *member's*, so the other phone in the household never receives it;
-  * declining stores nothing and still completes §3.1's fifth step, or the wizard blocks
-    forever;
-  * the endpoint and the auth key are secrets — a push endpoint is a bearer capability — so
-    they leave neither in a response body nor in a log line;
-  * and a stored endpoint is an address this backend will POST to, so what the route accepts is
-    what it can be made to reach (§14.3, sec-13).
-
-Skipped without TEST_DATABASE_URL; see tests/conftest.py.
-"""
-
 from __future__ import annotations
 
 import logging
@@ -29,8 +9,7 @@ from spielplan.api import push
 ADMIN_PASSWORD = "an-admin-password"
 MEMBER_PASSWORD = "a-real-member-password"
 
-# A subscription shaped exactly like `PushSubscription.toJSON()` — that object is what the
-# browser hands the client and what the client posts unchanged.
+# Shaped like `PushSubscription.toJSON()`, which the client posts unchanged.
 PHONE = {
     "endpoint": "https://push.example.test/f/jenny-phone-1",
     "keys": {"p256dh": "BJ-test-public-key", "auth": "test-auth-secret"},
@@ -45,11 +24,7 @@ LAPTOP = {
 
 @pytest.fixture
 async def household(app, db):
-    """§3.1's household: an admin and a member, each on their own cookie jar.
-
-    The member's forced first-login password change is done here, because §3.1 locks the
-    account until it is and onboarding (§6 preamble) is the step *after* it.
-    """
+    """The member's forced password change is done here: §3.1 locks the account until it is."""
     admin = app()
     created = await admin.post(
         "/api/setup/admin", json={"name": "patrick", "password": ADMIN_PASSWORD}
@@ -74,9 +49,6 @@ async def _count(db) -> int:
     return await db.fetchval("SELECT count(*) FROM push_subscription")
 
 
-# --- §4.2: one row per device ---------------------------------------------------------------
-
-
 async def test_granting_push_permission_stores_exactly_one_subscription(household, db):
     _admin, _admin_id, member, member_id = household
     stored = await member.post("/api/push/subscribe", json=PHONE)
@@ -94,9 +66,7 @@ async def test_granting_push_permission_stores_exactly_one_subscription(househol
 async def test_resubscribing_the_same_endpoint_updates_the_row_rather_than_adding_a_second(
     household, db
 ):
-    """§4.2 makes `endpoint` UNIQUE, and a phone re-registers its service worker on every app
-    update. If that inserted, one phone would collect a row per release and every §7.3 prompt
-    would arrive n times."""
+    """A phone re-registers on every app update; an insert would multiply every prompt."""
     _admin, _admin_id, member, _member_id = household
     first = (await member.post("/api/push/subscribe", json=PHONE)).json()
 
@@ -107,34 +77,19 @@ async def test_resubscribing_the_same_endpoint_updates_the_row_rather_than_addin
     assert second["id"] == first["id"], "the same device must keep its row"
     row = await db.fetchrow("SELECT p256dh, auth, device_label FROM push_subscription")
     assert (row["p256dh"], row["auth"]) == ("BJ-rotated", "rotated-auth")
-    # The label was not resent; it must survive rather than be blanked by the re-registration.
+    # The label was not resent; it must survive.
     assert row["device_label"] == "Jenny's iPhone"
 
 
 async def test_resubscribing_keeps_the_delivery_mark_so_the_nightly_prune_spares_a_live_phone(
     household, db
 ):
-    """§4.2: subscriptions are "pruned on 404/410 from the push service", and the worker's 90-day
-    sweep is the only other thing allowed to take a row.
-
-    The route and the prune are asserted together because neither is wrong on its own. The prune
-    reads `COALESCE(last_seen_ok, created_at)` so that a subscription which never delivered is
-    judged by its own age; the route used to reset `last_seen_ok` to NULL on every re-post, on
-    the reading that a re-registered device has delivered nothing yet. Compose them and an
-    ordinary household loses its phone: `created_at` is never rewritten, `push.js` re-posts the
-    unchanged endpoint on every /account open, and after ninety days of ownership that open put
-    the row back on `created_at` and the 02:00 prune deleted a live device — silently, with the
-    browser still holding a working `PushSubscription`.
-
-    Driven through the shipped route and the shipped job rather than retyped SQL, because the
-    defect is in how the two compose. [review cycle 1:
-    m411-rev1-push-prune-deletes-a-live-device-that-just-re-registered; §4.2]
-    """
+    """The prune reads `COALESCE(last_seen_ok, created_at)`; a re-post that reset `last_seen_ok`
+    put a live phone back on `created_at`, and the 90-day prune deleted it."""
     from spielplan import worker
 
     _admin, _admin_id, member, _member_id = household
     await member.post("/api/push/subscribe", json=PHONE)
-    # The household's actual phone: subscribed a year ago, pushed to yesterday.
     await db.execute(
         "UPDATE push_subscription SET created_at = now() - interval '400 days', "
         "last_seen_ok = now() - interval '1 day'"
@@ -152,23 +107,8 @@ async def test_resubscribing_keeps_the_delivery_mark_so_the_nightly_prune_spares
 
 
 async def test_resubscribing_a_device_that_never_received_a_push_spares_it_too(household, db):
-    """The other half of the same composition, and the half neither shipped test could see.
-
-    The one above re-posts a row whose `last_seen_ok` is a day old -- the case in which the
-    missing stamp cannot matter -- and `test_worker_jobs.py`'s four rows never re-post at all. In
-    between sits the ordinary household that has simply never sent a push: with no Jellyfin link
-    nothing arms a §7.3 prompt, and §6.2's invitation never goes to the host, so `last_seen_ok`
-    stays NULL for ever and the prune's clock is `created_at`. Neither column moved on a re-post,
-    so `push.js::syncSubscription` could say "push subscription stored" on day 89 and the 02:00
-    prune deleted the row on day 90 -- browser subscription still valid, permission still granted,
-    `send_to_user` returning `[]` in silence from then on. Measured end to end before the fix.
-
-    A conflicting endpoint IS the device: the browser only hands the same `PushSubscription` back
-    while it is live, so a lapsed one would mint a new endpoint and INSERT rather than conflict.
-    Pre-M4.11 this row was unreachable by the DELETE at any age (`last_seen_ok IS NOT NULL`), so
-    the window is this milestone's own to close.
-    [M4.11 review cycle 2: m411-c2-push-01; §4.2]
-    """
+    """A household that never sent a push keeps `last_seen_ok` NULL, so a re-post must move the
+    prune's clock too. A conflicting endpoint IS the live device."""
     from spielplan import worker
 
     _admin, _admin_id, member, _member_id = household
@@ -190,8 +130,6 @@ async def test_resubscribing_a_device_that_never_received_a_push_spares_it_too(h
 
 
 async def test_two_devices_for_one_member_are_two_rows(household, db):
-    """§3.2's "multiple passkeys per user (phone + desktop)" has its counterpart here: the
-    person, not the device, is the account — but each device is its own push target."""
     _admin, _admin_id, member, member_id = household
     await member.post("/api/push/subscribe", json=PHONE)
     await member.post("/api/push/subscribe", json=LAPTOP)
@@ -205,19 +143,11 @@ async def test_two_devices_for_one_member_are_two_rows(household, db):
                              member_id) == 2
 
 
-# --- §14.3 (sec-13): a stored endpoint is a URL this server will later POST to ----------------
-#
-# `push/send.py` sends to the stored string verbatim with the VAPID JWT attached, and until this
-# milestone the whole contract on it was 1..2048 characters. Verified before the fix: a
-# subscription on `http://127.0.0.1:5432/anything` was stored with a 201 and the sender's
-# captured request URL was that endpoint. The method is fixed and the body is ciphertext, so the
-# reachable half is probing rather than a crafted request — §14.3 does not grade that difference.
+# §14.3: `push/send.py` POSTs to the stored string verbatim, with the VAPID JWT attached.
 
 
 async def test_a_plain_http_endpoint_is_refused_and_stores_nothing(household, db):
-    """The scheme rule is about the *push service*, which is Apple's, Google's or Mozilla's and
-    always https. It says nothing about how the household reaches the app: §2 puts this app
-    behind "one plain-HTTP port", which is the whole reason `send.py::vapid_subject` exists."""
+    """The push service is always https; §2's plain-HTTP port is about the app, not the endpoint."""
     _admin, _admin_id, member, _member_id = household
     refused = await member.post(
         "/api/push/subscribe", json={**PHONE, "endpoint": "http://push.example.test/f/x"}
@@ -229,21 +159,8 @@ async def test_a_plain_http_endpoint_is_refused_and_stores_nothing(household, db
 
 
 async def test_an_endpoint_on_this_machine_or_the_private_network_is_refused(household, db):
-    """Each of these is an address the backend can reach and no push service ever has.
-
-    The IPv6 forms are here because `urlsplit` is what strips the brackets and a check written
-    against the raw netloc would pass `[::1]` straight through; the trailing dot because
-    `localhost.` resolves exactly like `localhost` and a bare `==` comparison misses it.
-
-    100.64.0.0/10 is here because it is the one range an enumeration of the obvious ones misses,
-    and it is not obscure: it is RFC 6598 shared address space, which is exactly what Tailscale
-    assigns every node on a tailnet -- the deployment the validator's own docstring names four
-    lines above the check. CVE-2024-4032 took that block out of `ipaddress`'s `is_private` in
-    3.12.4, so a five-way `is_loopback or is_private or is_link_local or is_reserved or
-    is_unspecified` stored `https://100.101.102.103/probe` with a 201 and the sender then issued a
-    signed POST to a household machine. Judged by `is_global` instead, one predicate covers all
-    six. [M4.11 review cycle 2: m411-c2-push-02; §14.3]
-    """
+    """IPv6 forms because `urlsplit` strips the brackets; `localhost.` resolves like `localhost`.
+    100.64.0.0/10 (Tailscale) left `is_private` in 3.12.4, hence `is_global`."""
     _admin, _admin_id, member, _member_id = household
     for host in (
         "127.0.0.1", "localhost", "localhost.", "LocalHost", "[::1]",
@@ -258,20 +175,12 @@ async def test_an_endpoint_on_this_machine_or_the_private_network_is_refused(hou
 
 
 async def test_an_endpoint_naming_the_households_own_servers_is_refused(household, db, monkeypatch):
-    """The half that cannot live in the schema, because it needs a database read.
-
-    §3.3's Jellyfin server and the app itself are public names on a real install, so they pass
-    every rule a validator can apply — and neither is ever a push service. The connector row is
-    written here without secrets on purpose: §3.1 makes a boot whose DEK will not open legal, and
-    subscribing a phone must not be the route that discovers it, so the URL is read straight out
-    of `connector_config` rather than through the connector loader.
-    """
+    """Written without secrets: a boot whose DEK will not open is legal, so the URL is read
+    straight from `connector_config`."""
     from spielplan.core.config import settings
 
     _admin, _admin_id, member, _member_id = household
-    # A dict, not a JSON string: the `db` fixture installs a jsonb codec, so a string parameter
-    # is encoded as a JSON *string* and `config ->> 'url'` then answers NULL — which this route
-    # reads, correctly, as "no connector configured".
+    # A dict, not a JSON string: the `db` fixture's jsonb codec would store a JSON *string*.
     await db.execute(
         "INSERT INTO connector_config (name, config) VALUES ('jellyfin', $1::jsonb)",
         {"url": "https://jellyfin.example.test:8096"},
@@ -297,9 +206,6 @@ async def test_an_endpoint_naming_the_households_own_servers_is_refused(househol
 
 
 async def test_an_ordinary_push_service_endpoint_is_still_stored_exactly_once(household, db):
-    """The negative case, which is the one a rule like this gets wrong: every real browser's
-    endpoint is an https host on somebody else's network, and a household that cannot subscribe
-    gets no §7.3 prompt and no §6.2 invitation on the phone either."""
     _admin, _admin_id, member, _member_id = household
     stored = await member.post("/api/push/subscribe", json=PHONE)
 
@@ -308,13 +214,7 @@ async def test_an_ordinary_push_service_endpoint_is_still_stored_exactly_once(ho
     assert await db.fetchval("SELECT endpoint FROM push_subscription") == PHONE["endpoint"]
 
 
-# --- §4.2 / §7.3: the subscription is the member's, never the household's -------------------
-
-
 async def test_a_subscription_belongs_to_the_member_who_granted_it(household, db):
-    """§7.3 arms a *per-user* prompt. A household-scoped subscription would send Jenny's
-    "did you finish X?" to Patrick's phone — the one failure mode that cannot be undone by
-    tapping "no"."""
     admin, _admin_id, member, member_id = household
     await member.post("/api/push/subscribe", json=PHONE)
 
@@ -324,9 +224,7 @@ async def test_a_subscription_belongs_to_the_member_who_granted_it(household, db
 
 
 async def test_one_member_cannot_unsubscribe_anothers_device(household, db):
-    """The DELETE is scoped by user_id as well as endpoint. Without that, an endpoint string —
-    which travels, in a shared browser or a pasted bug report — is enough to silence somebody
-    else's phone."""
+    """An endpoint string travels (shared browsers, bug reports), so the DELETE is scoped by user too."""
     admin, _admin_id, member, member_id = household
     await member.post("/api/push/subscribe", json=PHONE)
 
@@ -339,10 +237,7 @@ async def test_one_member_cannot_unsubscribe_anothers_device(household, db):
 
 
 async def test_a_phone_handed_to_another_member_moves_rather_than_duplicating(household, db):
-    """§4.2's endpoint is UNIQUE across the household, and an endpoint is minted per browser
-    profile: the only way an existing one arrives under a different member is that the same
-    browser is now signed in as that member. The notification must follow the person holding
-    the phone, so the row moves — and the previous owner's list loses it."""
+    """An endpoint is minted per browser profile, so it moves with the member signed in there."""
     admin, admin_id, member, _member_id = household
     await member.post("/api/push/subscribe", json=PHONE)
 
@@ -366,8 +261,6 @@ async def test_unsubscribing_removes_the_device(household, db):
 
 
 async def test_the_push_routes_refuse_a_caller_with_no_session(app):
-    """A push endpoint is a bearer capability; an unauthenticated write would let anyone
-    register a target that then receives a member's §7.3 prompts."""
     anonymous = app()
     assert (await anonymous.get("/api/push/state")).status_code == 401
     assert (await anonymous.post("/api/push/subscribe", json=PHONE)).status_code == 401
@@ -378,13 +271,8 @@ async def test_the_push_routes_refuse_a_caller_with_no_session(app):
     ).status_code == 401
 
 
-# --- §3.1 fifth step / §6 preamble: declining is a completion --------------------------------
-
-
 async def test_declining_stores_nothing_and_still_completes_onboarding(household, db):
-    """§6's preamble makes onboarding a guided act, and §3.1 makes it the wizard's fifth step.
-    Someone who says no to notifications has finished that step — treating "declined" as
-    "unfinished" is what blocks the wizard forever."""
+    """Treating "declined" as "unfinished" blocks the wizard forever."""
     _admin, _admin_id, member, member_id = household
     assert (await member.get("/api/push/state")).json()["onboarding_complete"] is False
 
@@ -398,9 +286,7 @@ async def test_declining_stores_nothing_and_still_completes_onboarding(household
 
 
 async def test_onboarding_is_recorded_per_member_so_the_other_phone_is_still_asked(household):
-    """"Member first-run onboarding then walks *each phone*" (§3.1). One member finishing it
-    must not silence the prompt for the other — install and push permission are per-device
-    acts, and there is no household-wide way to grant them."""
+    """Install and push permission are per-device acts (§3.1)."""
     admin, _admin_id, member, _member_id = household
     await member.post("/api/setup/onboarding/complete")
 
@@ -412,13 +298,8 @@ async def test_onboarding_is_recorded_per_member_so_the_other_phone_is_still_ask
     assert (await member.get("/api/push/state")).json()["onboarding_complete"] is True
 
 
-# --- the keys are secrets --------------------------------------------------------------------
-
-
 async def test_the_endpoint_and_auth_key_never_come_back_out_of_the_api(household):
-    """The endpoint URL is a bearer capability — anyone holding it can push to that device —
-    and `auth` is the message-encryption key. Neither is needed by any screen, so neither is
-    returned; devices are named to the UI by a hash of the endpoint instead."""
+    """The endpoint is a bearer capability and `auth` the encryption key; the UI gets a hash."""
     _admin, _admin_id, member, _member_id = household
     stored = (await member.post("/api/push/subscribe", json=PHONE)).text
     listed = (await member.get("/api/push/state")).text
@@ -440,7 +321,7 @@ async def test_the_endpoint_and_auth_key_never_reach_the_log(household, caplog):
     assert PHONE["endpoint"] not in caplog.text
     assert PHONE["keys"]["auth"] not in caplog.text
     assert PHONE["keys"]["p256dh"] not in caplog.text
-    # The device handle is what an operator correlates on instead, so it had better be there.
+    # The device handle is what an operator correlates on instead.
     assert push.device_handle(PHONE["endpoint"]) in caplog.text
 
 
@@ -452,22 +333,11 @@ def test_the_device_handle_is_stable_and_does_not_contain_the_endpoint():
     assert PHONE["endpoint"] not in handle
 
 
-# --- the key the browser needs at subscribe time ----------------------------------------------
-
-
 async def test_the_state_route_reports_no_application_server_key_until_one_is_configured(
     household, db
 ):
-    """Chrome refuses `pushManager.subscribe()` without an application server key, so the
-    screen has to know the difference between "not configured yet" and "your browser said no" —
-    answering null is how it can say so honestly.
-
-    M4 changed where the key comes from, not what null means: §2 generates the pair at first
-    boot and stores it, so "not configured" is now the pair being absent — §3.1's legal
-    half-configured boot, without SECRETS_KEY to seal a private half under. The
-    `VAPID_PUBLIC_KEY` env var this test used to set is gone with M2's stopgap: a public half
-    whose private half nothing holds makes every browser subscribe against a key the sender
-    cannot sign with, and every delivery is then rejected with nothing failing visibly."""
+    """Chrome refuses `subscribe()` without a key, so null means "not configured", not "denied".
+    The pair is generated at first boot and is absent without SECRETS_KEY."""
     _admin, _admin_id, member, _member_id = household
     stored = await db.fetchval(
         "SELECT value ->> 'public_key' FROM app_setting WHERE key = 'push.vapid'"

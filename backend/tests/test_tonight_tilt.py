@@ -1,25 +1,5 @@
-"""The mood tilt: chosen-minus-rejected DNA, centred on the candidate-pool mean.
-
-Spec v2.1 §6.2 steps 4-5, §0 row 4, §4.1 rules 1 and 2, §4.2 `session_participant.tilt`.
-
-§0 row 4 is the measurement this exists for: the stored 8-axis mood profile is worth **0.000**
-for choose-tonight, while **3 shortlist-anchored answers ≈ +0.088 AUC**, and "centring on the
-shortlist matters more than question form". So the centring is not a normalisation detail — it
-is the one piece of the deleted mood machinery that earned its place, and a tilt that is not
-pool-relative is measurably the worthless version.
-
-THE ARITHMETIC PROBLEM §6.2's WORDING HIDES, stated here because these tests are what force the
-resolution. For a *difference*, additive centring cancels exactly:
-
-    (a - m) - (b - m) = a - b
-
-so "chosen-minus-rejected DNA centred on the pool mean", read as subtraction alone, is
-literally a no-op on every A/B answer and cannot be the measured lever. The pool has to reach
-the tilt some other way, and the coverage row says which: "the identical answer on the identical
-pair produces a different tilt when the surrounding pool differs". Standardising — centre on the
-pool mean and scale by the pool's own spread — is the reading under which every word of §6.2 is
-true and the row's requirement holds. Recorded as a spec defect for v2.2.
-"""
+"""Additive centring cancels in a difference: (a - m) - (b - m) = a - b. So the tilt standardises
+by the pool's spread, which makes the same answer mean different things in different pools."""
 
 from __future__ import annotations
 
@@ -50,7 +30,6 @@ def test_a_candidate_is_expressed_as_its_deviation_from_the_pool():
 
 
 def test_a_separating_answer_tilts_toward_the_chosen_title():
-    """§6.2 step 5: "chosen-minus-rejected DNA"."""
     frame = T.frame(POOL)
     moved = T.observe({}, chosen=POOL[1], rejected=POOL[2], frame=frame)
 
@@ -59,12 +38,7 @@ def test_a_separating_answer_tilts_toward_the_chosen_title():
 
 
 def test_the_same_answer_on_the_same_pair_tilts_differently_in_a_different_pool():
-    """The row's own test, and the reason the centring is not decoration: an answer means
-    something different in a pool where everything is cosy than in one where nothing is.
-
-    A no-op implementation — plain `chosen - rejected` — returns the identical vector for both,
-    which is exactly the version §0 row 4 measured at 0.000.
-    """
+    """A plain `chosen - rejected` returns the same vector for both pools: §0 row 4's 0.000 version."""
     narrow = {1: POOL[1], 2: POOL[2], 3: {"cosy": 0.49, "dread": 0.51}}
     wide = {1: POOL[1], 2: POOL[2], 3: {"cosy": 0.5, "dread": 0.5},
             4: {"cosy": 5.0, "dread": -5.0}, 5: {"cosy": -5.0, "dread": 5.0}}
@@ -82,8 +56,7 @@ def test_the_same_answer_on_the_same_pair_tilts_differently_in_a_different_pool(
 
 
 def test_centring_on_a_library_mean_instead_of_the_pool_is_a_different_answer():
-    """§0 row 4: "**centring on the shortlist** matters more than question form". A frame built
-    from the whole library is the version that was measured worse."""
+    """§0 row 4: centring on the shortlist beats a library-wide frame."""
     library = {**POOL, 9: {"cosy": 9.0, "dread": 9.0}, 10: {"cosy": -9.0, "dread": -9.0}}
     on_pool = T.observe({}, chosen=POOL[1], rejected=POOL[2], frame=T.frame(POOL))
     on_library = T.observe({}, chosen=POOL[1], rejected=POOL[2], frame=T.frame(library))
@@ -92,13 +65,8 @@ def test_centring_on_a_library_mean_instead_of_the_pool_is_a_different_answer():
 
 
 def test_either_lifts_the_pool_frame_toward_both_and_neither_away_from_both():
-    """Decision 154 reaches the tilt too: `either` says *both of these would do*, which is a
-    statement about a region of DNA space, and `neither` says the opposite of it.
-
-    The pair is two cosy films rather than the pool's two extremes: "either of these" between a
-    film and its opposite is genuinely directionless, and a fixture that used it would assert
-    the level answer is a no-op while proving only that the pair was symmetric.
-    """
+    """Decision 154: `either` lifts toward both, `neither` away. Two cosy films, because a film and
+    its opposite would make the level answer trivially directionless."""
     frame = T.frame(POOL)
     cosy_pair = dict(first=POOL[1], second={"cosy": 0.9, "dread": 0.1})
     either = T.observe_level({}, **cosy_pair, frame=frame, toward=True)
@@ -111,16 +79,14 @@ def test_either_lifts_the_pool_frame_toward_both_and_neither_away_from_both():
 
 
 def test_a_level_answer_about_the_pools_own_centre_says_nothing():
-    """Title 3 sits at the pool mean on both facets, so "either of these" between it and itself
-    carries no directional information — which is the property centring buys, and the reason a
-    pair of unremarkable films is not a mood."""
+    """Title 3 sits at the pool mean on both facets, so a level answer about it carries nothing."""
     frame = T.frame(POOL)
     moved = T.observe_level({}, first=POOL[3], second=POOL[3], frame=frame, toward=True)
     assert all(v == pytest.approx(0.0, abs=1e-9) for v in moved.values())
 
 
 def test_the_tilt_accumulates_across_answers():
-    """§4.2 stores one tilt per participant, not one per answer: the round's answers compound."""
+    """One tilt per participant: answers compound."""
     frame = T.frame(POOL)
     once = T.observe({}, chosen=POOL[1], rejected=POOL[2], frame=frame)
     twice = T.observe(once, chosen=POOL[1], rejected=POOL[2], frame=frame)
@@ -129,16 +95,13 @@ def test_the_tilt_accumulates_across_answers():
 
 
 def test_an_empty_tilt_changes_no_score():
-    """A participant who has answered nothing is ranked by their Ledger alone — 54f's solo mode
-    "ranked by the personal Ledger with **no tilt**" depends on this being exactly zero."""
+    """54f's solo is ranked with no tilt, which relies on this being exactly zero."""
     frame = T.frame(POOL)
     assert T.adjustment({}, POOL[1], frame) == pytest.approx(0.0)
 
 
 def test_the_tilt_raises_candidates_that_look_like_what_was_chosen():
-    """The tilt is applied against the *centred* candidate, not the raw one — the same frame on
-    both sides, or the adjustment would measure a candidate's absolute DNA rather than its
-    position in tonight's pool."""
+    """The same frame on both sides, or it would measure absolute DNA, not position in the pool."""
     frame = T.frame(POOL)
     tilted = T.observe({}, chosen=POOL[1], rejected=POOL[2], frame=frame)
 
@@ -148,8 +111,7 @@ def test_the_tilt_raises_candidates_that_look_like_what_was_chosen():
 
 
 def test_a_facet_the_pool_does_not_vary_on_contributes_nothing():
-    """A facet every candidate shares carries no information about tonight, and dividing by its
-    zero spread would be an infinity rather than an insight."""
+    """Dividing by a zero spread would be infinity, not insight."""
     flat = {1: {"period": 1.0, "cosy": 1.0}, 2: {"period": 1.0, "cosy": 0.0}}
     frame = T.frame(flat)
     moved = T.observe({}, chosen=flat[1], rejected=flat[2], frame=frame)
@@ -162,8 +124,7 @@ def test_a_facet_the_pool_does_not_vary_on_contributes_nothing():
 
 
 def test_the_tilt_round_trips_through_json():
-    """§4.2 stores it as jsonb on `session_participant`, so it has to be a plain mapping of
-    term to float — not a numpy array, and not a class the column cannot hold."""
+    """Stored as jsonb: a plain mapping of term to float."""
     import json
 
     frame = T.frame(POOL)
@@ -171,24 +132,12 @@ def test_the_tilt_round_trips_through_json():
     assert json.loads(json.dumps(moved)) == pytest.approx(moved)
 
 
-# --- decision 218: an untagged candidate is a zero, not the pool's anti-title -----------------
-#
-# M4.12 finding 27. `dna.vectors_for` returns `{}` for a title with no rows and 32% of the shipped
-# library has none, so this is not an edge case: it is a third of every pool. The old `centred`
-# read an absent term as 0.0 and then centred it, which made every untagged candidate the same
-# NEGATIVE point on every term the pool carries — so they rose or fell together, by about 0.44 sd
-# of the real score spread. The two-title symmetric fixtures above cancel that exactly, which is
-# why the whole file passed while the corpus did not.
+# Decision 218: 32% of the library has no DNA; centring an absent term made every untagged
+# candidate the same negative point, moving them as a block.
 
 
 def test_an_untagged_candidate_is_a_zero_rather_than_the_pools_anti_title():
-    """`centred`'s own docstring already promised this: "this film is unremarkable tonight" and
-    "this film is not in the pool" are the same statement. Decision 218 makes the code say it.
-
-    Two untagged titles rather than one, because the defect's shape is that they move as a BLOCK:
-    a single untagged candidate scoring below the tagged ones is a plausible ranking, and the same
-    number on every one of them is a bias.
-    """
+    """Two untagged titles: the defect is that they move as a BLOCK."""
     mixed = {1: {"cosy": 1.0}, 2: {"cosy": 0.0}, 3: {}, 4: {}}
     f = T.frame(mixed)
     tilted = T.observe({}, chosen=mixed[1], rejected=mixed[2], frame=f)
@@ -202,13 +151,8 @@ def test_an_untagged_candidate_is_a_zero_rather_than_the_pools_anti_title():
 
 
 def test_a_term_the_rejected_title_does_not_carry_is_absent_rather_than_fabricated():
-    """Decision 218's acknowledged cost, asserted rather than left as a note: the same function
-    centres both sides of §6.2 step 5's difference, so this changes A/B OBSERVATIONS too.
-
-    The chosen film carries `cosy` and the rejected one does not. The answer now moves the tilt by
-    the chosen film's own coordinate; before, it moved it by that coordinate *minus* a negative
-    number the rejected film never earned — a stronger statement about `cosy` than the person made.
-    """
+    """Decision 218 changes A/B observations too: the answer moves the tilt by the chosen film's own
+    coordinate, not minus one the rejected film never earned."""
     mixed = {1: {"cosy": 1.0, "dread": 0.2}, 2: {"dread": 1.0}, 3: {"cosy": 0.4, "dread": 0.5}}
     f = T.frame(mixed)
     moved = T.observe({}, chosen=mixed[1], rejected=mixed[2], frame=f)
@@ -219,18 +163,11 @@ def test_a_term_the_rejected_title_does_not_carry_is_absent_rather_than_fabricat
     ), "a term both titles carry is still the difference of the two"
 
 
-# --- finding 37: one answer, applied in one place ---------------------------------------------
-#
-# The same four-branch dispatch stood in `play.record_answer`, `play.retract` and `solo.picks`,
-# and the three had already drifted: only the two in `play` looked their titles up in the frozen
-# pool. §10's re-import guard lives in `round.replay`, twenty lines above solo's copy of the loop,
-# and solo's copy did not have it.
+# Finding 37: one helper for the three call sites that had drifted.
 
 
 def test_one_answer_reaches_the_tilt_the_same_way_whichever_caller_applies_it():
-    """Decision 154's four answers, each equal to what the caller used to spell out by hand. The
-    equivalence is the point: a helper that quietly disagreed with one of the three call sites it
-    replaced would move a stored tilt without anything saying so."""
+    """Each of decision 154's four answers equals what the callers spelled out by hand."""
     f = T.frame(POOL)
     vectors = dict(POOL)
     kw = dict(title_a=1, title_b=2, vectors=vectors, frame=f)
@@ -250,13 +187,7 @@ def test_one_answer_reaches_the_tilt_the_same_way_whichever_caller_applies_it():
 
 
 def test_an_answer_naming_a_title_that_has_left_the_pool_moves_nothing():
-    """§10: "a re-import can change the pool under a stored answer", and `round.replay` skips it
-    — "the alternative is inventing a belief for a title that is no longer a candidate".
-
-    The tilt owes the same answer to the same question, and for the same reason: a posterior and
-    a tilt built from two different subsets of one evening's answers are two histories of one
-    evening. The predicate is public because 54f's provenance line counts with it.
-    """
+    """The posterior and the tilt must skip the same answers (§10), or they are two histories."""
     f = T.frame(POOL)
     started = T.observe({}, chosen=POOL[1], rejected=POOL[2], frame=f)
 
@@ -269,14 +200,7 @@ def test_an_answer_naming_a_title_that_has_left_the_pool_moves_nothing():
 
 
 def test_an_answer_naming_one_title_twice_is_not_two_candidates():
-    """The docstring above `applies` says "two candidates", and membership alone does not say it.
-
-    One title named twice passed, so solo counted such an answer into 54f's "tilted by your N
-    answers" while `applied` returned a delta of exactly zero -- and `round.replay`'s membership
-    guard read the same way, so the belief moved a long way on a comparison that compares nothing.
-    The posterior and the tilt have to skip the same rows or they are two histories of one evening,
-    which is this predicate's whole reason for existing. [M4.12 review cycle 1: M412-SOLO-04]
-    """
+    """Membership alone passes one title named twice."""
     f = T.frame(POOL)
     started = T.observe({}, chosen=POOL[1], rejected=POOL[2], frame=f)
 
@@ -287,14 +211,7 @@ def test_an_answer_naming_one_title_twice_is_not_two_candidates():
 
 
 def test_the_frame_counts_an_absent_term_as_a_zero_and_centred_gives_it_no_coordinate():
-    """The two sentences the module now states side by side, held apart by a measurement.
-
-    `frame` is about the pool's distribution and `centred` is about one candidate's position, so
-    absence is an observation in the first and no statement in the second (decision 218). Nothing
-    pinned the first: the toy pool above carries every term on every title, so applying `centred`'s
-    rule to `frame` -- the mistaken generalisation an unreconciled pair invites -- left this module
-    entirely green while changing every stored pool frame. [M4.12 review cycle 1: D3-04]
-    """
+    """Absence is an observation in `frame` and no statement in `centred` (decision 218)."""
     with_an_untagged_title = T.frame({**POOL, 4: {}})
 
     assert with_an_untagged_title.mean["cosy"] == pytest.approx(0.375), (

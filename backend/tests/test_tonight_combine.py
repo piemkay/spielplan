@@ -1,23 +1,5 @@
-"""§6.2 step 5's combine, and the one string that is a hard rule.
-
-Spec v2.1 §6.2 step 5 (rewritten, 54d), §6.4, §6.5, §0 rows 3 and 4, §14 risk 6.
-
-Four things here, and three of them are traps the prototype fell into.
-
-  * **Zeroing is not an alternative.** Removing a facet's influence cannot put a title on the
-    other pole into the result. The prototype printed "here's one of each" over a plain top-3
-    that could land wholly on one side, so the test that matters is the one where zeroing alone
-    would produce a same-pole slate.
-  * **"Below that, decide silently" is half the rule.** A surfacing that fires on every
-    measurable disagreement turns §6.8's repair register into background noise, and §14 risk 6
-    needs the fire rate before anyone re-tunes the threshold.
-  * **The third slot is *replaced*, not appended.** Four finalists is a different promise from
-    the one §6.2 makes, and it is the easy mistake — appending is one line shorter.
-  * **The conflict copy is bounded on the way out.** §6.6 hands the phrasing to an LLM, and an
-    LLM asked to explain a disagreement reaches for "someone will hate this" because it reads
-    better. AUC 0.610 does not support that sentence, so a prompt asking nicely is not the
-    guarantee — the filter is.
-"""
+"""Zeroing an axis cannot by itself put the other pole on the slate; the reserved slot replaces the
+third, never appends. The conflict copy is bounded by a filter, not by a polite prompt."""
 
 from __future__ import annotations
 
@@ -47,9 +29,6 @@ def scores(**per_seat):
     return {int(k[1:]): v for k, v in per_seat.items()}
 
 
-# --- 54d: three finalists, one wildcard ---------------------------------------------------
-
-
 def test_the_slate_is_exactly_three_finalists_and_one_wildcard():
     slate = C.combine(
         per_participant=scores(p1={1: 0.9, 2: 0.8, 3: 0.7, 4: 0.6, 5: 0.5},
@@ -64,8 +43,7 @@ def test_the_slate_is_exactly_three_finalists_and_one_wildcard():
 
 
 def test_the_finalists_are_the_top_three_by_the_plain_average():
-    """§0 row 3 again, at the combine rather than at the pool: averaging, not a dominance rule.
-    Title 4 is p1's worst and the group's best."""
+    """§0 row 3: averaging, not a dominance rule. Title 4 is p1's worst and the group's best."""
     slate = C.combine(
         per_participant=scores(p1={1: 0.60, 2: 0.55, 3: 0.50, 4: 0.10, 5: 0.05},
                                p2={1: 0.20, 2: 0.25, 3: 0.30, 4: 0.99, 5: 0.05}),
@@ -76,13 +54,8 @@ def test_the_finalists_are_the_top_three_by_the_plain_average():
 
 
 def test_the_wildcard_is_a_step_outside_rather_than_the_fourth_best():
-    """§6.4: the exploratory slot is "regions of DNA space near the user's liked regions but
-    **unvisited**". A wildcard drawn by rank is the fourth-best film and not a step outside
-    anything.
-
-    The fixture makes the two readings disagree: title 7 is next in rank and all but a
-    duplicate of the finalists, while title 4 is further down and on the opposite pole. A
-    rank-drawn wildcard returns 7; an honest one returns 4."""
+    """Title 7 is next in rank and near-duplicates the finalists; title 4 is on the opposite pole.
+    A rank-drawn wildcard returns 7; an honest one returns 4."""
     slate = C.combine(
         per_participant=scores(p1={1: 0.9, 2: 0.8, 3: 0.7, 7: 0.6, 4: 0.1},
                                p2={1: 0.9, 2: 0.8, 3: 0.7, 7: 0.6, 4: 0.1}),
@@ -94,8 +67,7 @@ def test_the_wildcard_is_a_step_outside_rather_than_the_fourth_best():
 
 
 def test_every_candidate_lands_in_exactly_one_slot():
-    """§4.2's `session_result` stores one row per candidate carrying its slot, so the slots
-    have to partition the pool rather than overlap it."""
+    """`session_result` stores one row per candidate, so the slots partition the pool."""
     slate = C.combine(
         per_participant=scores(p1={t: 1.0 - 0.1 * t for t in range(1, 7)},
                                p2={t: 1.0 - 0.1 * t for t in range(1, 7)}),
@@ -111,12 +83,8 @@ def test_every_candidate_lands_in_exactly_one_slot():
     assert by_slot[C.SLOT_WILDCARD] == [slate.wildcard]
 
 
-# --- 54d: D, and the silence below it -----------------------------------------------------
-
-
 def test_d_is_the_mean_minus_the_minimum_of_the_seated_members():
-    """Owner decision 2026-08-29, recovered from the prototype's `spread()` because DNA_MODEL
-    is not vendored here. One member cannot disagree with themselves."""
+    """Recovered from the prototype's `spread()`; DNA_MODEL is not vendored here."""
     assert C.divergence([0.6, 0.2]) == pytest.approx(0.2)
     assert C.divergence([0.5, 0.5]) == pytest.approx(0.0)
     assert C.divergence([0.9]) == pytest.approx(0.0)
@@ -124,15 +92,8 @@ def test_d_is_the_mean_minus_the_minimum_of_the_seated_members():
 
 
 def test_the_threshold_is_inclusive_at_exactly_its_value():
-    """§6.2 step 5: "**D ≥** the threshold". An implementation using `>` fires just above it and
-    not on it, which is invisible on real data and wrong on the boundary the spec names.
-
-    The value is 0.40 on the rank-standardised scale since decision 478: decision 217 left 0.20
-    uncalibrated pending one real evening, and the first household evening put the leader across
-    0.40 on 13-17% of simulated nights over its own Ledgers — §6.2's ~14.5%. This test was
-    `..._at_exactly_twenty_hundredths` and pinned the old number; the inclusivity is what it is
-    about, so the name no longer carries a value that moves with a calibration.
-    """
+    """`>` would fire just above the threshold and not on it. 0.40 since decision 478; the name no
+    longer carries the value."""
     assert C.D_THRESHOLD == 0.40
     at = C.combine(
         per_participant=scores(p1={1: 0.9, 2: 0.5, 3: 0.4, 4: 0.3},
@@ -145,8 +106,7 @@ def test_the_threshold_is_inclusive_at_exactly_its_value():
 
 
 def test_below_the_threshold_the_split_is_decided_silently():
-    """"~14.5% of nights; **below that, decide silently**". No copy, no zeroed facet, no
-    reserved slot — and still a full slate of three."""
+    """No copy, no zeroed facet, no reserved slot, and still three."""
     quiet = C.combine(
         per_participant=scores(p1={1: 0.9, 2: 0.5, 3: 0.4, 4: 0.3},
                                p2={1: 0.9, 2: 0.5, 3: 0.4, 4: 0.3}),
@@ -160,8 +120,7 @@ def test_below_the_threshold_the_split_is_decided_silently():
 
 
 def test_the_fire_rate_is_recoverable_from_the_slate():
-    """§14 risk 6 wants the rate at which surfacing fires, so whether it fired has to be a
-    fact on the session rather than an inference from the copy."""
+    """§14 risk 6 needs the fire rate, so whether it fired is stored, not inferred from copy."""
     quiet = C.combine(
         per_participant=scores(p1={1: 0.9, 2: 0.5, 3: 0.4, 4: 0.3},
                                p2={1: 0.9, 2: 0.5, 3: 0.4, 4: 0.3}),
@@ -172,8 +131,7 @@ def test_the_fire_rate_is_recoverable_from_the_slate():
 
 
 def test_divergent_answers_surface_a_split_even_when_d_is_zero():
-    """§6.2 step 5's *other* trigger: "divergent answers on the leading candidates". Two people
-    with identical Ledgers can still have answered tonight in opposite directions."""
+    """Identical Ledgers can still answer tonight in opposite directions."""
     assert C.divergent_answers(
         [{1: 0.9, 2: 0.1}, {1: 0.1, 2: 0.9}], leading=[1, 2]
     )
@@ -182,13 +140,8 @@ def test_divergent_answers_surface_a_split_even_when_d_is_zero():
     ), "agreeing about the order but not the amount is not a divergence"
 
 
-# --- 54d: the reserved third slot ---------------------------------------------------------
-
-
 def test_a_surfaced_split_reserves_the_third_slot_for_the_opposite_pole():
-    """The construction 54d exists for. Every high-scoring title here is on the LEFT pole, so
-    zeroing the axis alone leaves a slate of three left-pole films under copy that promises one
-    of each — the prototype's exact defect."""
+    """Every high-scoring title is on the left pole, so zeroing alone gives three left-pole films."""
     slate = C.combine(
         per_participant=scores(p1={1: 0.90, 2: 0.85, 3: 0.80, 4: 0.30, 5: 0.20},
                                p2={1: 0.90, 2: 0.85, 3: 0.80, 4: 0.30, 5: 0.20}),
@@ -204,17 +157,7 @@ def test_a_surfaced_split_reserves_the_third_slot_for_the_opposite_pole():
 
 
 def test_the_reserved_slot_goes_to_the_best_title_on_the_opposite_pole():
-    """54d: the third slot is reserved "for the **highest-scoring** title on the opposite pole".
-
-    The test above asserts the slate contains one of each, which is a weaker claim: it holds for
-    any opposite-pole title, so an implementation reaching for the wrong end of the same list
-    passed every test in this file (checked, by making it `opposite[-1]`).
-
-    This board is built so the reservation has to CHOOSE. Zeroing the mood axis lifts the
-    off-pole title 4 into the leading two, which flips the lead pole to the right, so the
-    opposite-pole candidates are the left-pole 2 (0.90) and 3 (0.85) — both outside the two
-    slots already filled, and one of them better than the other. `opposite[-1]` reserves 3 here.
-    """
+    """Built so the reservation must CHOOSE between 2 (0.90) and 3 (0.85); `opposite[-1]` picks 3."""
     per = {1: 0.95, 2: 0.90, 3: 0.85, 4: 0.40, 5: 0.20}
     slate = C.combine(
         per_participant=scores(p1=per, p2=per),
@@ -230,8 +173,7 @@ def test_the_reserved_slot_goes_to_the_best_title_on_the_opposite_pole():
 
 
 def test_the_reserved_slot_replaces_the_third_rather_than_being_appended():
-    """"replacing the third-ranked title, not appended alongside it". Four finalists is a
-    different promise from the one §6.2 makes — and appending is the shorter implementation."""
+    """Four finalists is a different promise, and appending is the shorter implementation."""
     slate = C.combine(
         per_participant=scores(p1={1: 0.90, 2: 0.85, 3: 0.80, 4: 0.30, 5: 0.20},
                                p2={1: 0.90, 2: 0.85, 3: 0.80, 4: 0.30, 5: 0.20}),
@@ -243,16 +185,8 @@ def test_the_reserved_slot_replaces_the_third_rather_than_being_appended():
 
 
 def test_the_contested_axis_stops_explaining_the_ranking():
-    """"The contested axis is **zeroed, not averaged**" — its INFLUENCE is removed, which is a
-    statement about how much of the ranking it explains.
-
-    An earlier version subtracted the axis position from the score, and the review measured
-    what that costs: `axis_position` is normalised to [−1, 1] while a group score sits on
-    §5.1's scale, where a whole pool may span 0.1. Subtracting one from the other does not zero
-    the axis — it multiplies its influence with the sign flipped, so the two unreserved slots
-    end up decided by the axis's own pole convention, which is the opposite of what 54d asks.
-    The assertion is corrected to the property rather than to the arithmetic.
-    """
+    """The axis's INFLUENCE is removed. Subtracting the [-1, 1] position from a §5.1-scale score
+    multiplied its influence with the sign flipped."""
     # A pool the axis explains completely: score rises with the mood position.
     base = {1: 0.10, 3: 0.15, 2: 0.20, 5: 0.60, 4: 0.70}
     poles = {t: C.axis_position(DNA[t], AXES["mood"]) for t in base}
@@ -273,16 +207,13 @@ def test_the_contested_axis_stops_explaining_the_ranking():
 
 
 def test_a_pool_the_axis_does_not_explain_is_left_alone():
-    """Zeroing an axis nothing varies on is a no-op, not a rescale — a title off the axis
-    entirely must not move because two other titles disagree about mood."""
+    """A title off the axis must not move because two others disagree about mood."""
     flat = {6: 0.5, 1: 0.4}
     assert C.zeroed(flat, facet="pacing", dna=DNA, axes=AXES) == pytest.approx(flat)
 
 
 def test_a_pool_with_nothing_on_the_other_pole_does_not_promise_one():
-    """A library with no counterweight is a fact about the library. Surfacing a split whose
-    alternative does not exist is the promise §0's surfacing rule forbids — "a surfaced split
-    must never ship bare"."""
+    """A split whose alternative does not exist must never ship bare."""
     one_sided = {t: {"dread": 1.0} for t in (1, 2, 3, 4, 5)}
     slate = C.combine(
         per_participant=scores(p1={t: 1.0 - 0.05 * t for t in (1, 2, 3, 4, 5)},
@@ -303,9 +234,6 @@ def test_the_contested_facet_needs_two_people_pulling_opposite_ways():
     assert C.contested_facet([{"dread": 1.0}], AXES) is None
 
 
-# --- §6.2 step 5 / §6.5: the hard rule on the copy ------------------------------------------
-
-
 def test_the_sanctioned_line_says_only_what_d_supports():
     line = copy_rules.D_LINE.format(d=0.24)
     assert "below your usual" in line
@@ -324,9 +252,7 @@ def test_the_sanctioned_line_says_only_what_d_supports():
     ],
 )
 def test_a_phrasing_that_predicts_a_feeling_never_reaches_the_participant(phrase):
-    """"D predicts 'one of you is likely to land below your usual tonight' (AUC 0.610), never
-    'someone will hate this' — a hard rule on the §6.6 conflict-phrasing LLM task." Replaced,
-    not edited: editing out the word leaves the sentence that wanted to say it."""
+    """AUC 0.610 supports "likely to land below your usual", never "will hate". Replaced, not edited."""
     assert copy_rules.overclaims(phrase)
     assert copy_rules.bounded(phrase, d=0.24) == copy_rules.D_LINE.format(d=0.24)
 
@@ -340,22 +266,19 @@ def test_a_phrasing_that_predicts_a_feeling_never_reaches_the_participant(phrase
     ],
 )
 def test_a_phrasing_that_stays_within_the_measurement_is_passed_through(phrase):
-    """The bound is on the CLAIM, not on tone: a model that writes a better sentence than the
-    sanctioned one keeps it, which is the whole reason §6.6 assigns the task to an LLM."""
+    """The bound is on the claim, not the tone."""
     assert not copy_rules.overclaims(phrase)
     assert copy_rules.bounded(phrase, d=0.24) == phrase
 
 
 def test_an_absent_phrasing_falls_back_to_the_sanctioned_string():
-    """The LLM connector is M5. Until then — and whenever a call fails — the split still has to
-    say something, and §6.2 already wrote it."""
+    """Until the LLM connector exists, or when a call fails, §6.2's sentence is the fallback."""
     assert copy_rules.bounded(None, d=0.31) == copy_rules.D_LINE.format(d=0.31)
     assert copy_rules.bounded("", d=0.31) == copy_rules.D_LINE.format(d=0.31)
 
 
 def test_the_headline_is_the_specs_own_sentence_and_never_a_models():
-    """§6.2 step 5 fixes the headline verbatim; only the explanation is generated. Keeping them
-    apart is what stops a model rewriting the sentence the spec wrote."""
+    """Only the explanation is generated; the headline is the spec's verbatim."""
     block = C.combine(
         per_participant=scores(p1={1: 0.90, 2: 0.85, 3: 0.80, 4: 0.30, 5: 0.20},
                                p2={1: 0.90, 2: 0.85, 3: 0.80, 4: 0.30, 5: 0.20}),
@@ -370,18 +293,9 @@ def test_the_headline_is_the_specs_own_sentence_and_never_a_models():
     assert block["explanation"] == copy_rules.D_LINE.format(d=block["d"])
 
 
-# --- §6.2 step 6 / §0 row 4: nothing re-ranks within the evening --------------------------
-
-
 def test_the_tonight_package_never_reaches_the_ledger_refit_or_the_serving_stack():
-    """§6.2 step 6: "Votes *choose*; nothing re-ranks within the evening by predicted enjoyment
-    (measured: worth 0.000)."
-
-    Structural rather than behavioural: the pool is computed once at session open from
-    `user_score`, and no module under `spielplan/tonight/` may import the fitter or the scorer,
-    so a mid-session refit is unreachable rather than merely absent. A behavioural test would
-    pass on the day someone adds the import and forgets the call.
-    """
+    """Structural: no `spielplan/tonight/` module may import the fitter or scorer, so a mid-session
+    refit is unreachable. A behavioural test would pass until someone adds the call."""
     from pathlib import Path
 
     package = Path(__file__).resolve().parents[1] / "spielplan" / "tonight"
@@ -390,8 +304,7 @@ def test_the_tonight_package_never_reaches_the_ledger_refit_or_the_serving_stack
     offenders = []
     for path in sorted(package.glob("*.py")):
         text = path.read_text(encoding="utf-8")
-        # Only import lines: the words may legitimately appear in a comment explaining why they
-        # are not imported, which is exactly what the package docstring does.
+        # Import lines only: the package docstring names these words to explain their absence.
         imports = "\n".join(
             line for line in text.splitlines()
             if line.startswith(("import ", "from ")) or line.lstrip().startswith(("import ", "from "))
@@ -404,46 +317,24 @@ def test_the_tonight_package_never_reaches_the_ledger_refit_or_the_serving_stack
 
 
 def test_the_wildcard_carries_its_honest_label():
-    """§6.2 step 5: "one exploratory pick **honestly labelled**" — §6.4 gives the words ("a step
-    outside your usual, honestly labelled") and the cost it is honest about (≈ −1 pp top-hit
-    rate). An unlabelled wildcard is just a worse recommendation.
-
-    Asserting the constant against its own value was a tautology over dead code: the label the
-    household actually read was spelled a second time in the client, and nothing anywhere read
-    this one. The route now serves it, and `test_the_wildcard_card_carries_the_label_it_is
-    _honest_about` is where that is asserted. What is left here is the two properties the words
-    themselves have to have.
-    """
+    """The route serves the label (tested there); here only the words' two properties."""
     assert C.WILDCARD_LABEL, "an unlabelled wildcard is just a worse recommendation"
-    # §6.8's register: it names the cost to the person, in their words, and does not hedge.
+    # It names the cost to the person, in their words, and does not hedge.
     assert "usual" in C.WILDCARD_LABEL
     assert not any(w in C.WILDCARD_LABEL.lower() for w in ("explor", "epsilon", "random"))
 
 
-# --- M4.12: the split branch, repaired -----------------------------------------------------
-#
-# EVERY TEST BELOW IS GREEN ON A BRANCH THAT CANNOT EXECUTE ON THE SHIPPED BUNDLE, and saying so
-# is part of the coverage. Decision 173 ships no `dna_axis_weight` rows, so `tonight/dna.axes_for`
-# returns {}, `contested_facet` iterates zero axes and returns None, and no real evening reaches
-# any of this. The axes here are hand-seeded, which makes these statements about the RULE and
-# never about what a household will see this month; §14 risk 6's split rate reads a permanent 0
-# until proposal 140's corpus work lands, which is a different repository. The repairs land now so
-# that the day the axes arrive the branch is not four defects deep. [M4.12 findings 21-24]
+# Decision 173 ships no `dna_axis_weight` rows, so these hand-seeded axes test the RULE; no
+# real evening reaches this branch yet.
 
-# One authored axis with two poles and nothing else, so a title's position is exactly the sign of
-# the term it carries and the arithmetic in each fixture can be read off the page.
+# A title's position is exactly the sign of its term.
 PACE = {"pace": {"slow": -1.0, "fast": 1.0}}
 # Two people pulling opposite ways on it, which is all `contested_facet` asks for.
 PULLING_APART = [{"slow": 1.0}, {"fast": 1.0}]
 
 
 def _split(dna, per, *, top):
-    """A two-member evening that agrees on the ranking and diverges on `top` in the Ledger.
-
-    D carries the split rather than `divergent_answers`, so the fixtures below can hold the group
-    order fixed and vary only the DNA - mean minus min of [1.3, 0.1] is 0.60, comfortably over the
-    0.40 threshold (decision 478; it read [0.7, 0.1] = 0.30 against the old 0.20).
-    """
+    """D carries the split (mean minus min of [1.3, 0.1] = 0.60 > 0.40), so only the DNA varies."""
     return C.combine(
         per_participant={10: per, 20: per},
         member_ledger={top: [1.3, 0.1], **{t: [0.5, 0.5] for t in per if t != top}},
@@ -452,15 +343,8 @@ def _split(dna, per, *, top):
 
 
 def test_a_neutral_leader_still_gets_the_counterweight_the_split_promises():
-    """40.6% of the real corpus carries no DNA at all, so the title the zeroed ranking leads with
-    routinely has no position on the contested axis - and the reservation was keyed off *its*
-    pole. Every product against 0.0 is 0.0, so the opposite set came out empty, the spanning test
-    failed too, and the else branch dropped the copy and shipped the zeroed ranking bare: 31.8% of
-    splits that HAD a counterweight, silenced by a property of one title. [finding 21]
-
-    Title 1 leads and sits off the axis; the pool holds two slow titles and two fast ones, so
-    there is plainly something on both sides for the slate to say "one of each" about.
-    """
+    """40.6% of the corpus has no DNA, so the leader often sits off the axis; the reservation must not
+    key off its pole."""
     dna = {1: {}, 2: {"slow": 1.0}, 3: {"slow": 0.9}, 4: {"fast": 1.0}, 5: {"fast": 0.8}}
     slate = _split(dna, {1: 0.95, 2: 0.90, 3: 0.85, 4: 0.40, 5: 0.30}, top=1)
 
@@ -475,15 +359,7 @@ def test_a_neutral_leader_still_gets_the_counterweight_the_split_promises():
 
 
 def test_a_pool_with_no_counterweight_ships_the_ranking_its_scores_show():
-    """The else branch is the honest one - a library with nothing on the other pole cannot be
-    promised one - but it shipped `adjusted_order[:3]`. Nothing is surfaced there, so the three
-    cards were drawn from a ranking the household is never shown, under no copy explaining why: a
-    rank-5 title on the slate with a rank-3 title beneath it as a runner-up. [finding 21, second
-    half]
-
-    Every title here leans slow; their positions still differ (mixed vectors), so zeroing genuinely
-    reorders the pool and the two rankings disagree about the top three.
-    """
+    """The else branch must ship the ranking the scores show, not the unshown zeroed one."""
     dna = {
         1: {"slow": 1.0}, 2: {"slow": 1.0, "fast": 0.5}, 3: {"slow": 1.0, "fast": 0.8},
         4: {"slow": 1.0, "fast": 0.2}, 5: {"slow": 1.0, "fast": 0.9},
@@ -504,14 +380,7 @@ def test_a_pool_with_no_counterweight_ships_the_ranking_its_scores_show():
 
 
 def test_a_split_over_two_candidates_returns_a_slate_rather_than_raising():
-    """`next(t for t, _ in adjusted_order if t not in finalists)` had no default, and on a pool of
-    exactly two the free slots have consumed both. The unhandled StopIteration fires inside
-    `play.finish`, which runs inside the answer handler - a 500 on the last answer of the evening.
-
-    It was unreachable only because a round over two candidates could never end (finding 6), so
-    decision 215's small-pool fix would have turned one silent hang into one outage. Two finalists
-    spanning the axis is a complete slate over a pool of two, not an error. [finding 22]
-    """
+    """On a pool of two the free slots consume both; `next()` without a default was a 500."""
     dna = {1: {"slow": 1.0}, 2: {"fast": 1.0}}
     slate = C.combine(
         per_participant={10: {1: 0.9, 2: 0.1}, 20: {1: 0.1, 2: 0.9}},
@@ -525,15 +394,8 @@ def test_a_split_over_two_candidates_returns_a_slate_rather_than_raising():
 
 
 def test_neither_free_finalist_on_the_reference_pole_reserves_slot_two_as_well():
-    """Repairing the neutral leader does not finish the job: with the reference pole taken from
-    the first free finalist that carries one, 219 of 1,971 random pools still came out
-    [neutral, neutral, one pole] - one titled card under copy promising one of each.
-
-    §6.2 fixes that sentence verbatim and `copy.SPLIT_LINE` keeps it out of the model's reach, and
-    dropping `contested` is finding 21 again. So the slate is made true instead: slot 2 takes the
-    best title on the reference pole and slot 3 the best on the opposite one. Exactly three
-    finalists still - 54d fixes the count. [decision 221]
-    """
+    """Two neutral free finalists: slot 2 takes the best on the reference pole and slot 3 the best on
+    the opposite one, still three (decision 221)."""
     dna = {1: {}, 2: {}, 3: {"slow": 1.0}, 4: {"fast": 1.0}, 5: {"fast": 0.5}}
     slate = _split(dna, {1: 0.95, 2: 0.90, 3: 0.60, 4: 0.50, 5: 0.40}, top=1)
 
@@ -550,15 +412,8 @@ def test_neither_free_finalist_on_the_reference_pole_reserves_slot_two_as_well()
 
 
 def test_the_wildcard_comes_from_the_ranking_the_finalists_came_from():
-    """A surfaced split rebuilds the finalists from the zeroed ranking and then drew §6.4's
-    exploratory pick from the unzeroed one - two rankings deciding one slate. [finding 23]
-
-    The fixture makes them disagree where it is decidable. Titles 8 and 9 are mirror images about
-    the finalists' DNA centre, so `wildcard_from`'s distance is bit-for-bit equal for both and the
-    tie falls to whichever the ranking it was handed puts first. The group score prefers 9; the
-    zeroed score prefers 8, because 9 sits on the pole whose influence the zeroing removed. An
-    honest "step outside your usual" is the one the slate's own ranking names.
-    """
+    """8 and 9 mirror the finalists' DNA centre, so distance ties; the wildcard must come from the
+    slate's own (zeroed) ranking."""
     dna = {1: {"slow": 1.0}, 2: {}, 3: {"fast": 1.0}, 8: {"slow": 0.6}, 9: {"fast": 0.6}}
     per = {3: 0.95, 2: 0.85, 1: 0.60, 9: 0.52, 8: 0.50}
     slate = _split(dna, per, top=3)
@@ -581,14 +436,7 @@ def test_the_wildcard_comes_from_the_ranking_the_finalists_came_from():
 
 
 def test_the_persisted_ranks_read_in_slate_order_on_a_surfaced_split():
-    """`ballot.slate_of` and `result.slate` both ORDER BY rank, and on a surfaced split the
-    finalists are no longer a prefix of the group-score order - the reservation reaches down the
-    ranking for the counterweight. Stamping the group-score rank therefore listed the wildcard
-    above one of the three finalists, on the ballot and on the reveal. [finding 23]
-
-    `session_result_rank` is UNIQUE (session_id, rank) over a NOT NULL smallint CHECK (rank >= 1),
-    so the reordering has to stay a permutation of 1..n rather than a re-labelling of some of it.
-    """
+    """The reservation reaches down the ranking, so ranks are re-stamped as a permutation of 1..n."""
     dna = {t: {"slow": 1.0} for t in (1, 2, 3, 4)} | {5: {"fast": 1.0}}
     slate = _split(dna, {1: 0.95, 2: 0.90, 3: 0.85, 4: 0.80, 5: 0.30}, top=1)
 
@@ -609,15 +457,7 @@ def test_the_persisted_ranks_read_in_slate_order_on_a_surfaced_split():
 
 
 def test_exactly_the_reserved_finalist_is_labelled_as_such():
-    """54d: the third slot is reserved for the opposite-pole title "**labelled as such**". Which
-    of the three cards that is was computable and stated nowhere - no `reserved` or `opposite`
-    anywhere in the router, the domain package or the Tonight page - so a household told "here's
-    one of each" could not see which card was the other side of the split. [decision 220]
-
-    One row, not two: under decision 221 slot 2 can be placed by construction as well, and
-    labelling both tells the person nothing about which is which. The counterweight is the card
-    the copy is about.
-    """
+    """Only the counterweight is labelled: slot 2 may be placed by construction too (decision 221)."""
     dna = {t: {"slow": 1.0} for t in (1, 2, 3, 4)} | {5: {"fast": 1.0}}
     slate = _split(dna, {1: 0.95, 2: 0.90, 3: 0.85, 4: 0.80, 5: 0.30}, top=1)
     assert slate.reserved == 5
@@ -635,17 +475,11 @@ def test_exactly_the_reserved_finalist_is_labelled_as_such():
     )
 
 
-# --- decision 479: an axis-less split is surfaced by person ---------------------------------
-#
-# The corpus bundle ships no axis artifact (decision 173), so every split above is unreachable on
-# release data and the first household evening — D = 5.07 on raw scores — was decided silently.
-# With no axis loaded the alternative in hand is a person's.
+# Decision 479: with no axis artifact (decision 173), a split is surfaced by person.
 
 from spielplan.tonight import pool as pool_rules  # noqa: E402
 
-# Nine titles, two members whose tops are disjoint: A-F (1-6) are Patrick's order, X-Z (7-9) are
-# Jenny's top three and Patrick's bottom three. On the rank-standardised scale the plain top three
-# is 1, 2, 3 — Patrick's top three — and none of Jenny's own top three is on it.
+# Nine titles; the members' tops are disjoint, so the plain top three is Patrick's alone.
 PATRICK = pool_rules.rank_normal({1: .9, 2: .8, 3: .7, 4: .6, 5: .5, 6: .4, 9: .3, 8: .2, 7: .1})
 JENNY = pool_rules.rank_normal({7: .9, 8: .8, 9: .7, 1: .6, 2: .5, 3: .4, 4: .3, 5: .2, 6: .1})
 
@@ -676,8 +510,7 @@ def test_an_axisless_split_is_surfaced_by_person_not_silenced():
 
 
 def test_a_person_split_keeps_three_finalists_and_never_claims_the_axis_counterweight():
-    """Two reservations with two meanings, kept apart: `reserved` is the axis counterweight and
-    prints "the other side of the split"; a seat's pick is `reserved_for`. Still exactly three."""
+    """`reserved` is the axis counterweight; a seat's pick is `reserved_for`. Still exactly three."""
     slate = _household()
     assert len(slate.finalists) == C.FINALISTS
     assert slate.reserved is None
@@ -686,8 +519,7 @@ def test_a_person_split_keeps_three_finalists_and_never_claims_the_axis_counterw
 
 
 def test_below_the_threshold_an_axisless_evening_stays_silent():
-    """"below that, decide silently" still holds on release data: the same disjoint tonight
-    scores over a household whose LEDGERS agree carry no conflict and no reservation."""
+    """Agreeing Ledgers carry no conflict, however disjoint tonight's scores."""
     slate = C.combine(
         per_participant={10: PATRICK, 20: JENNY},
         member_ledger={t: [PATRICK[t], PATRICK[t]] for t in PATRICK},
@@ -698,8 +530,7 @@ def test_below_the_threshold_an_axisless_evening_stays_silent():
 
 
 def test_divergent_answers_alone_never_surface_an_axisless_split():
-    """Decision 217 measured `divergent_answers` firing on 84-97% of evenings, so the person split
-    is D's alone: opposite orders on the leading three with equal Ledgers stay silent."""
+    """Decision 217 measured `divergent_answers` firing on 84-97% of evenings, so D alone decides."""
     ledger = {t: [0.5, 0.5] for t in range(1, 6)}
     slate = C.combine(
         per_participant={10: {1: 0.9, 2: 0.8, 3: 0.7, 4: 0.1, 5: 0.0},
@@ -723,8 +554,7 @@ def test_a_seat_already_holding_one_of_its_own_needs_no_reservation():
 
 
 def test_a_room_the_slots_cannot_serve_gets_the_headline_without_the_promise():
-    """Four seats pulling four ways outnumber the two slots after the leader, so "here's one for
-    each of you" would be false; the split is still surfaced, under the sentence that is true."""
+    """Four seats outnumber the two slots after the leader, so "one for each of you" would be false."""
     n = 12
     tops = {10: [1, 2, 3], 20: [4, 5, 6], 30: [7, 8, 9], 40: [10, 11, 12]}
     per = {}
@@ -744,9 +574,7 @@ def test_a_room_the_slots_cannot_serve_gets_the_headline_without_the_promise():
 
 
 def test_the_wildcard_is_drawn_from_near_the_top_of_the_ranking_not_its_tail():
-    """§6.4 ranks the explore slot "by prior + proximity". The first household evening's
-    wildcard was the most distant title of 719 at rank 105; bounded to the best twentieth (and
-    never fewer than twelve), distance decides only among titles the ranking already favours."""
+    """Bounded to the best twentieth (at least twelve), distance decides only among favoured titles."""
     n = 40
     per = {t: 1.0 - t / n for t in range(1, n + 1)}
     dna = {t: {"slow": 1.0} for t in range(1, n + 1)}
@@ -763,10 +591,8 @@ def test_the_wildcard_is_drawn_from_near_the_top_of_the_ranking_not_its_tail():
 
 
 def test_a_member_reads_the_plain_sentence_and_never_the_number():
-    """Decision 486's register on the conflict: D is a model number and "the axis is zeroed" is
-    model vocabulary, so a member with Show the model off is sent neither — `for_member` is what
-    the reveal's payload builder applies. A phrasing that passed `bounded` is the household's own
-    sentence and is left alone."""
+    """Decision 486: D and "the axis is zeroed" are model vocabulary; `for_member` strips them.
+    A phrasing that passed `bounded` is left alone."""
     person = copy_rules.for_member(copy_rules.person_conflict(d=0.61, one_for_each=True))
     assert "d" not in person
     assert person["explanation"] == copy_rules.D_LINE_PLAIN
@@ -785,11 +611,7 @@ def test_a_member_reads_the_plain_sentence_and_never_the_number():
 
 
 def test_the_pull_lines_say_what_their_branch_establishes_in_plain_words():
-    """The second household evening's reveal read "pulls Patrick with pulp + escapist" as jargon:
-    "pulls ... with" is the round's own verb and "+" is notation. Each pull branch has its own
-    sentence now, and each claims only what the branch establishes — the person's answers leaned
-    toward those terms tonight, or the title is not below their usual. Neither over-claims a
-    feeling (DNA_MODEL §5.3's bound on this surface)."""
+    """Each pull branch claims only what it establishes, in plain words."""
     leaned = copy_rules.leaned("Patrick", ["pulp", "escapist"])
     assert leaned == "Patrick leaned toward pulp and escapist tonight"
     usual = copy_rules.usual("Jenny", ["escapist", "charismatic lead"])

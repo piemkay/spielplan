@@ -1,25 +1,5 @@
-"""§6.6's spend guard, write side: the number before the setting, the cap, and the keys. Spec v2.1
-§6.6, §8 stage 6, §9; decisions 324, 325, 343, 339, 450, 451, 452.
-
-§6.6 asks for a "per-title cost estimate before enabling", and plan §7's checks 1-3 put the whole
-milestone in three lines: the number comes first, and saying no costs nothing. So what this file
-holds is an ORDERING, asserted on the rows rather than on any one page's behaviour:
-
-* **A PREVIEW WRITES NOTHING** (decision 450). Every change the spend guard can propose is previewed
-  and `connector_config` is compared row for row, ciphertext and timestamps included, before and
-  after -- not "the setting did not change" but "nothing was written", an upsert or a new row for a
-  provider nobody configured included.
-* **A CONFIRM CARRIES THE FIGURE IT WAS SHOWN.** `PUT /api/admin/llm` without it is 422, with a wrong
-  or stale one is 409 carrying the fresh preview and nothing stored, and with the right one stores
-  exactly the change and bills nothing.
-* **NO PROVIDER ENTERS THE PLAN WITHOUT A USABLE KEY**, whichever way it would enter, because a key
-  typed later would otherwise start spend at a figure nobody was shown.
-* **THE CAP TAKES EFFECT AT ONCE** (decision 452) and refuses every value that is not a finite
-  number of at least zero; zero is a cap (decision 325).
-* **A KEY IS WRITE-ONLY** everywhere a response, a 422 or a log line could carry it.
-
-Integration tests are skipped without TEST_DATABASE_URL; see tests/conftest.py.
-"""
+"""The spend guard's ORDERING, asserted on the rows: a preview writes nothing, a confirm carries
+the figure it was shown, and no provider enters the plan without a usable key."""
 
 from __future__ import annotations
 
@@ -54,9 +34,6 @@ CONFIRM = "/api/admin/llm"
 CAP = "/api/admin/llm/cap"
 
 
-# --- the install ---------------------------------------------------------------------------------
-
-
 async def _admin(app) -> httpx.AsyncClient:
     client_ = app()
     created = await client_.post(
@@ -78,8 +55,7 @@ async def _preview(admin, change: dict) -> dict:
 
 
 async def _confirm(admin, change: dict) -> httpx.Response:
-    """Preview, then confirm with the figure the preview showed: the one client path decision 450
-    leaves to `PUT /api/admin/llm`."""
+    """Decision 450's one client path to `PUT /api/admin/llm`."""
     shown = (await _preview(admin, change))["estimate"]["per_title_usd"]
     return await admin.put(CONFIRM, json={**change, "accepted_estimate": shown})
 
@@ -92,8 +68,7 @@ async def _keyed(db) -> None:
 
 
 async def _pack_document(db) -> int:
-    """A raw document for a metered call to cite (0028: `pack_document_id` is NOT NULL), written
-    through the raw store the app fixture pointed at this test's own DATA_DIR."""
+    """0028 makes `pack_document_id` NOT NULL, so a metered call needs a raw document to cite."""
     return await rawstore.store(
         db, source="pack", kind="dna", url="pack:title:7", content=b"[source:1] a pack",
         entity_key="title:7", content_type="text/plain; charset=utf-8", http_status=None,
@@ -106,9 +81,6 @@ async def _task(db, key: str, *, kind: str = pipeline.TASK_KIND, priority: int =
         "INSERT INTO acquisition_task (kind, key, priority, created_at) VALUES ($1, $2, $3, $4)",
         kind, key, priority, datetime.now(UTC) - age,
     )
-
-
-# --- the preview writes nothing ------------------------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -127,9 +99,7 @@ async def _task(db, key: str, *, kind: str = pipeline.TASK_KIND, priority: int =
     ],
 )
 async def test_a_preview_of_any_change_writes_nothing(secrets_key, db, app, change):
-    """Plan §7 checks 1 and 2. The preview answers the three figures -- the per-title estimate, the
-    projected month and the meter with its remaining cap -- and the stored configuration is
-    byte-identical afterwards: every row, both halves, every timestamp, and no row added."""
+    """The stored configuration is byte-identical afterwards: every row, both halves, every timestamp."""
     admin = await _admin(app)
     await _keyed(db)
     await registry.save_connector(db, "gemini", price_input=0.5, price_output=2.5)
@@ -143,14 +113,10 @@ async def test_a_preview_of_any_change_writes_nothing(secrets_key, db, app, chan
     assert await _rows(db) == before
 
 
-# --- the confirm carries its figure --------------------------------------------------------------
-
-
 async def test_a_confirm_without_the_figure_is_422_and_with_the_wrong_one_is_409_storing_nothing(
     secrets_key, db, app
 ):
-    """Decision 450: the figure is part of the write, so a client that never showed one cannot write,
-    and one that showed a different figure is shown the right one instead of having it accepted."""
+    """Decision 450: the figure is part of the write."""
     admin = await _admin(app)
     await _keyed(db)
     before = await _rows(db)
@@ -169,9 +135,7 @@ async def test_a_confirm_without_the_figure_is_422_and_with_the_wrong_one_is_409
 
 
 async def test_a_confirmed_change_is_stored_exactly_and_bills_nothing(secrets_key, db, app):
-    """Plan §7 check 3: confirming stores the change and leaves the meter where it was. Nothing is
-    sent to a provider, so no `llm_call` row appears and the month's spend is unchanged; and only the
-    fields the change named move, beside the cap and the key they sit next to."""
+    """Nothing reaches a provider, so no `llm_call` row and no spend; only the named fields move."""
     admin = await _admin(app)
     await _keyed(db)
     meter_before = await spend.meter(db)
@@ -196,9 +160,7 @@ async def test_a_confirmed_change_is_stored_exactly_and_bills_nothing(secrets_ke
 async def test_a_figure_gone_stale_between_preview_and_confirm_is_refused_with_the_new_one(
     secrets_key, db, app
 ):
-    """The case the figure is carried for: a price edited in another tab between the preview and the
-    confirm. The confirm is refused 409 with the figure the admin has not seen, and nothing it
-    carried is stored."""
+    """A price edited in another tab between preview and confirm."""
     admin = await _admin(app)
     await _keyed(db)
     shown = (await _preview(admin, {"passes": 2}))["estimate"]["per_title_usd"]
@@ -215,17 +177,13 @@ async def test_a_figure_gone_stale_between_preview_and_confirm_is_refused_with_t
     assert "passes" not in (await registry.load_connector(db, "llm")).config
 
 
-# --- no provider without a usable key ------------------------------------------------------------
-
-
 @pytest.mark.parametrize(
     "change,named",
     [
         pytest.param({"extraction_provider": "openai"}, "openai", id="keyless"),
         pytest.param({"parallel": True, "parallel_providers": ["gemini", "openai"]}, "openai",
                      id="parallel-entry-keyless"),
-        # The plan refuses Gemini's unpriced model first, and the keyless second provider must still
-        # be found: a price fixed later through this route would otherwise be the only gate left.
+        # Gemini's unpriced model is refused first; the keyless second provider must still be found.
         pytest.param({"parallel": True, "parallel_providers": ["gemini", "openai"],
                       "providers": {"gemini": {"model": "gemini-9-ultra"}}}, "openai",
                      id="keyless-behind-another-refusal"),
@@ -235,13 +193,11 @@ async def test_a_figure_gone_stale_between_preview_and_confirm_is_refused_with_t
 async def test_a_provider_without_a_usable_key_is_blocked_and_its_confirm_refused(
     secrets_key, db, app, change, named
 ):
-    """Decision 450's third clause. A change that would put a provider with no usable key into the
-    plan is `blocked` in the preview and refused 409 by the confirm even when it carries the figure
-    the preview showed -- because that figure is "unknown", and a key typed later would turn it into
-    spend nobody was shown. The block names the provider and never a key."""
+    """The figure for a keyless provider is "unknown", and a key typed later would make it unseen
+    spend, so the confirm is refused even with the figure. The block never names a key."""
     admin = await _admin(app)
     await registry.save_connector(db, "gemini", api_key=KEY_GEMINI)
-    # A key no header can carry: whitespace inside it (`client.header_key`).
+    # Whitespace inside: no header can carry it (`client.header_key`).
     await registry.save_connector(db, "anthropic", api_key="sk-ant two words")
     await registry.save_connector(db, "llm", extraction_provider="gemini", cap_usd=25)
     before = await _rows(db)
@@ -257,9 +213,7 @@ async def test_a_provider_without_a_usable_key_is_blocked_and_its_confirm_refuse
 
 
 async def test_an_unreadable_key_is_blocked_too(secrets_key, db, app, monkeypatch):
-    """A key this SECRETS_KEY cannot open is a key stage 6 cannot send (M4.7 dd03), and the one that
-    reappears by itself the day the right SECRETS_KEY is restored -- which is exactly the key typed
-    later that decision 450 refuses to let start spend at an unseen figure."""
+    """An unreadable key comes back by itself when the right SECRETS_KEY returns (M4.7 dd03)."""
     admin = await _admin(app)
     await registry.save_connector(db, "anthropic", api_key=KEY_ANTHROPIC)
     await registry.save_connector(db, "llm", cap_usd=25)
@@ -275,13 +229,8 @@ async def test_an_unreadable_key_is_blocked_too(secrets_key, db, app, monkeypatc
     assert await _rows(db) == before
 
 
-# --- the figure ----------------------------------------------------------------------------------
-
-
 async def test_the_figure_scales_with_the_passes_and_the_providers(secrets_key, db, app):
-    """Plan §7 check 4, the card half (the flywheel half is M5.6's, decision 456). One provider at two
-    passes is twice one run, and two providers at two passes -- both priced alike -- four times: the
-    "4x the single-run figure" decision 324 keeps parallel mode off by default to spare a household."""
+    """Decision 324 keeps parallel off by default because two providers at two passes is 4x."""
     admin = await _admin(app)
     await _keyed(db)
     alike = {"price_input": 1, "price_output": 5}
@@ -302,10 +251,7 @@ async def test_the_figure_scales_with_the_passes_and_the_providers(secrets_key, 
 async def test_a_fresh_install_previews_decision_324s_default_of_one_provider_at_one_pass(
     secrets_key, db, app
 ):
-    """Decision 324, now assertable (the row's old note forbade it until the decision was taken):
-    parallel mode is off and extraction runs one pass on a fresh install. Assigning a provider and
-    nothing else previews that provider alone at one pass, and confirming it stores the assignment
-    and no default beside it -- absent stays the default, so the default lives in `llm/spend` once."""
+    """Absent stays the default, so decision 324's default lives in `llm/spend` once."""
     admin = await _admin(app)
     await registry.save_connector(db, "gemini", api_key=KEY_GEMINI)
     assert (await registry.load_connector(db, "llm")).config == {}
@@ -325,9 +271,7 @@ async def test_a_fresh_install_previews_decision_324s_default_of_one_provider_at
 async def test_the_projection_counts_what_this_install_filed_in_the_last_thirty_days(
     secrets_key, db, app
 ):
-    """Decision 451. No task ever filed is "no history" and no figure; then the month is the
-    per-title estimate times the `acquire` tasks filed in the trailing thirty days -- not the older
-    ones, not another kind's, and not the re-offers stage 1 closes unwalked (decision 411)."""
+    """Decision 451: trailing thirty days of `acquire` tasks, excluding re-offers (decision 411)."""
     admin = await _admin(app)
     await _keyed(db)
 
@@ -358,14 +302,9 @@ async def test_the_projection_counts_what_this_install_filed_in_the_last_thirty_
     assert "no spend cap" in uncapped["reason"]
 
 
-# --- the cap -------------------------------------------------------------------------------------
-
-
 async def test_the_cap_takes_effect_at_once_and_at_the_cap_the_park_names_it(secrets_key, db, app):
-    """Decision 452: the cap is written in place and needs no preview, because it is the guard itself.
-    The next read of the cap is the new one, the route answers the meter, and with the month spent
-    to the cap the preview's meter has nothing left and the gate stage 6 asks parks under the reason
-    the board and M5.6's admin retry both show, `over spend cap` (decision 325, `retry_refusal`)."""
+    """Decision 452: the cap is the guard itself, so it needs no preview. At the cap stage 6 parks
+    under `over spend cap` (decision 325)."""
     admin = await _admin(app)
     await _keyed(db)
 
@@ -409,9 +348,8 @@ async def test_the_cap_takes_effect_at_once_and_at_the_cap_the_park_names_it(sec
 async def test_the_cap_route_refuses_what_is_not_a_finite_number_of_at_least_zero(
     secrets_key, db, app, raw
 ):
-    """Decision 452's refusals, each one a value that `spend._cap_of` would otherwise read as "no cap"
-    and log, or -- for infinity -- as a cap that never binds. Python's JSON reader takes `NaN` and
-    `Infinity` literally, so they are sent as bytes to reach the route at all."""
+    """Each would read as "no cap" or, for infinity, never bind. Python's JSON reader accepts `NaN`
+    and `Infinity`, so they are sent as bytes."""
     admin = await _admin(app)
     await registry.save_connector(db, "llm", cap_usd=25)
     before = await _rows(db)
@@ -422,7 +360,7 @@ async def test_the_cap_route_refuses_what_is_not_a_finite_number_of_at_least_zer
 
 
 async def test_a_cap_of_zero_is_stored_as_a_cap(secrets_key, db, app):
-    """Zero is a real cap meaning "spend nothing" (decision 325), not a falsy value read as unset."""
+    """Zero is a real cap (decision 325), not a falsy unset."""
     admin = await _admin(app)
     stored = await admin.put(CAP, json={"cap_usd": 0})
     assert stored.status_code == 200, stored.text
@@ -431,17 +369,10 @@ async def test_a_cap_of_zero_is_stored_as_a_cap(secrets_key, db, app):
     assert stored.json()["meter"]["cap_usd"] == "0"
 
 
-# --- keys ----------------------------------------------------------------------------------------
-
-
 async def test_an_empty_key_field_keeps_the_stored_key_and_no_answer_carries_one(
     secrets_key, db, app, monkeypatch, caplog
 ):
-    """Plan §7 checks 8 and 9. A key saved through the generic route is sealed and answered as a
-    boolean; an empty field and an absent one keep it. Then every route this milestone serves is
-    asked something -- the read, the preview, a confirm, the cap, the connectors read, a key write,
-    a source test whose host echoes the key back -- and each body, and every log line the app wrote
-    meanwhile, is searched for every stored key and client id."""
+    """Every body and log line is searched for every stored key and client id."""
     caplog.set_level(logging.DEBUG)
     admin = await _admin(app)
     await registry.save_connector(db, "llm", extraction_provider="gemini", cap_usd=25)
@@ -480,9 +411,7 @@ async def test_an_empty_key_field_keeps_the_stored_key_and_no_answer_carries_one
         ("PUT", CAP, {"cap_usd": 30}),
         ("PUT", "/api/admin/connectors/omdb", {"api_key": ""}),
         ("POST", "/api/admin/connectors/tmdb/test", None),
-        # A 422 for a key that is too long, and for one holding a control character, must not quote
-        # what it refused: FastAPI's own 422 echoes the input, and a card that shows the error
-        # would put the key into the DOM.
+        # FastAPI's own 422 echoes the input, and the card would put the key in the DOM.
         ("PUT", "/api/admin/connectors/openai", {"api_key": KEY_OPENAI * 20}),
         ("PUT", "/api/admin/connectors/openai", {"api_key": KEY_OPENAI + "\n"}),
         ("PUT", "/api/admin/connectors/openai", {"apikey": KEY_OPENAI}),
@@ -510,12 +439,8 @@ async def _no_sleep(seconds: float) -> None:
 async def test_the_key_route_refuses_estimate_fields_and_the_llm_row_and_leaves_jellyfin_alone(
     secrets_key, db, app, fake_jellyfin, monkeypatch
 ):
-    """Decision 452. The generic route writes credentials and nothing else: a model or a price
-    override would change the estimate outside decision 450's figure, so each is 422 and nothing in
-    the same body is stored; a field another connector owns is 422; the `llm` row is 409 naming the
-    route that writes it; an unknown name is the registry's 404. And `PUT /connectors/jellyfin` is
-    still `api/admin.put_jellyfin`, mounted first -- asserted by the fields only that handler
-    answers with."""
+    """A model or price override here would change the estimate outside decision 450's figure.
+    `PUT /connectors/jellyfin` is still `api/admin.put_jellyfin`, mounted first."""
     admin = await _admin(app)
     for body in ({"model": "gemini-3.6-flash"}, {"price_input": 1, "price_output": 2},
                  {"api_key": KEY_GEMINI, "model": "gemini-3.6-flash"}):
@@ -547,16 +472,8 @@ async def test_the_key_route_refuses_estimate_fields_and_the_llm_row_and_leaves_
 async def test_whitespace_around_a_key_is_no_part_of_it_and_whitespace_alone_keeps_the_stored_one(
     secrets_key, db, app
 ):
-    """Decision 452's "an empty field keeps the stored value", for a field that only LOOKS empty, and
-    `client.header_key`'s rule for every keyed connector rather than for the three providers alone.
-
-    A stray space and Save replaced the household's working key with three spaces while the card
-    still said "(stored)", and a key copied with a trailing space was stored with it: TMDB and OMDb
-    send it as `api_key=KEY+`, which the host refuses, so stage 2 parked every title on a key the
-    admin believed they had pasted correctly. Whitespace around a key is trimmed, whitespace alone
-    keeps what is stored, and a character no request can carry -- whitespace inside, anything past
-    printable ASCII -- is a 422 that names the fault and never the value. [M5.7 review cycle 1,
-    M57-KEYS-C1-02]"""
+    """Whitespace around a key is trimmed and whitespace alone keeps the stored key: a trailing space
+    was sent as `api_key=KEY+` and refused. A character no request can carry is a 422."""
     admin = await _admin(app)
     stored = {
         ("gemini", "api_key"): KEY_GEMINI, ("anthropic", "api_key"): KEY_ANTHROPIC,
@@ -587,14 +504,8 @@ async def test_whitespace_around_a_key_is_no_part_of_it_and_whitespace_alone_kee
 
 
 async def test_the_setup_route_writes_no_spend_setting_and_no_provider(secrets_key, db, app):
-    """Decision 450's ordering is a property of the API, so it holds on the one other route that writes
-    `connector_config`: `POST /api/setup/connectors` takes any name and any config and stores them
-    whole, and it stays mounted after first boot. Through it a plan at three passes over two
-    providers, a provider priced at zero -- whose calls then meter $0, so the cap never binds -- and
-    a keyless assignment that a key saved later on the card turns billable were each stored with no
-    figure ever shown. The spend settings and the three providers are 409 there, naming the routes
-    that write them, and nothing is stored; a source's key still seeds through it, as
-    `test_secrets_custody.py` relies on. [M5.7 review cycle 1, M57-THESIS-01]"""
+    """`POST /api/setup/connectors` stores any config whole and stays mounted, so spend settings and
+    providers are 409 there; a source's key still seeds through it."""
     admin = await _admin(app)
     await _keyed(db)
     before = await _rows(db)
@@ -624,14 +535,8 @@ async def test_the_setup_route_writes_no_spend_setting_and_no_provider(secrets_k
     assert seeded.status_code == 200, seeded.text
 
 
-# --- unset ---------------------------------------------------------------------------------------
-
-
 async def test_an_explicit_null_returns_each_setting_to_its_default(secrets_key, db, app):
-    """Decision 450: in the body an absent field keeps and an explicit null unsets. A model returns to
-    `pricing.DEFAULT_MODELS`, a null price pair returns the provider to the table, and an unassigned
-    extraction provider parks stage 6 naming the assignment rather than guessing one (decision 324).
-    Half a price pair is refused, because decision 343 reads half an override as none at all."""
+    """An absent field keeps, an explicit null unsets. Half a price pair is refused (decision 343)."""
     admin = await _admin(app)
     await _keyed(db)
     await registry.save_connector(db, "gemini", model="gemini-3.6-flash", price_input=1, price_output=4)
@@ -662,9 +567,6 @@ async def test_an_explicit_null_returns_each_setting_to_its_default(secrets_key,
     assert empty.status_code == 422, empty.text
 
 
-# --- the price basis -----------------------------------------------------------------------------
-
-
 def _spelled(basis: pricing.PriceBasis) -> dict:
     return {
         "provider": basis.provider, "model": basis.model, "source": basis.source,
@@ -675,10 +577,7 @@ def _spelled(basis: pricing.PriceBasis) -> dict:
 
 
 async def test_every_estimate_names_its_model_and_its_price_basis(secrets_key, db, app):
-    """The new row's first clause. The estimate, and each card, name the model and the price basis the
-    figure was computed from -- `table` with its `valid_until` and the price after it, or `override`
-    -- so the caption can say which price and which date an accepted figure rested on. The expected
-    basis is `pricing.price_basis`'s on the install's own day, the day the route prices on."""
+    """The figure names its model and price basis; the expected basis is priced on the install's day."""
     admin = await _admin(app)
     await _keyed(db)
     today = datetime.now(UTC).astimezone(spend.local_zone()).date()
@@ -705,9 +604,7 @@ async def test_every_estimate_names_its_model_and_its_price_basis(secrets_key, d
 async def test_an_unknown_model_estimates_to_unknown_and_prints_no_figure_for_it(
     secrets_key, db, app
 ):
-    """Plan §7 check 5 through the new route: a model nobody priced previews as "unknown" with no basis
-    and a projected month that is "unknown" too -- never a number. Confirming that figure stores the
-    model, and stage 6 then parks naming it rather than billing at a guess (decision 343)."""
+    """Stage 6 then parks naming the model rather than billing at a guess (decision 343)."""
     admin = await _admin(app)
     await _keyed(db)
     await _task(db, "jf:one")

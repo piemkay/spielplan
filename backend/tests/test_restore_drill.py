@@ -1,34 +1,5 @@
-"""The restore drill. Spec v2.1 §2 (Backups), §3.1, §3.3, §10; decision 181;
-docs/milestones/M4.7-plan.md §2 findings 18 and 22, §6 exit criteria 1 and 2.
-
-§2 promises a nightly dump and, one clause later, that the operator can get their household
-back from it. Nothing in this repository ever performed that second half. The M0 row said it
-did: `test_backup.py::test_a_dump_restored_without_secrets_key_leaves_connector_config_undecryptable`
-restores into `blank_url`, whose own docstring says it exists because "a migrated one already
-has them" — a database with no schema, which is not the target any operator has. It never runs
-`migrate.apply_all` on the restored `schema_migration` table, never starts the lifespan, never
-touches a route, and never tries the changed-key branch. Two failure modes shipped past it:
-
-  * the only documented command (`pg_restore -d ... /backups/<dump>`, the compose file's own
-    comment until M4.7) exits 1 against the target `docker compose up` produces, with
-    `connector_config` empty and the *fresh install's* VAPID keypair still in `app_setting` —
-    an install that boots, accepts logins, reports Jellyfin as unconfigured and holds a public
-    key none of the household's phones is subscribed against;
-  * restored under a `SECRETS_KEY` that is not the one from that night, every member write and
-    both admin connector routes answered 500, including the PUT that would have repaired it.
-
-So this file restores the way the compose comment and README now say to, into the target they
-name, and then **drives the routes**. That is the whole methodological point (plan §8): the
-degradation dd03 asks for is a property of `POST /api/titles/{id}/state`, not of
-`registry.load_jellyfin`, and a test of the helper would certify the fix the way the M0 row
-certified the bug.
-
-`pg_dump`/`pg_restore` come from the postgres:16 container when the box has no libpq client,
-through `tests/test_backup.py`'s resolver — one definition of "how this machine reaches a
-`pg_dump`", because two would drift and the second would be the one that silently skips.
-
-Skipped without TEST_DATABASE_URL; see tests/conftest.py.
-"""
+"""Restores the documented way into the target `docker compose up` produces, then drives the
+routes: the degradation is a property of the routes, not of a helper."""
 
 from __future__ import annotations
 
@@ -57,22 +28,16 @@ MEMBER_PASSWORD = "a-member-password"
 JELLYFIN_URL = "http://jellyfin.test"
 JELLYFIN_KEY = "JF-ADMIN-KEY-UNSCOPED"
 
-# The operator who restored the dumps and not the `.env` beside them, or who regenerated the
-# variable — §2 warns about exactly this and until M4.7 the warning had no landing place.
+# The operator restored the dumps but not the `.env` beside them (§2's warning).
 OTHER_KEY = "a-different-secrets-key-not-a-real-one"
 
-# Two, because §6's exit criterion says two: a degradation that happens to hold for the account
-# the drill happens to drive is not a household-wide property.
+# Two members: a degradation that holds for one driven account is not household-wide.
 MEMBERS = ("mira", "tom")
 
 
 def _restore(dump: Path, database_url: str, *, clean: bool) -> subprocess.CompletedProcess:
-    """`pg_restore` as the operator runs it, with and without the two flags that matter.
-
-    `--no-owner` because §2's restore target is a `docker compose up` whose `POSTGRES_USER` the
-    operator is free to have changed; `--clean --if-exists` because the target has already
-    booted. `check=False`: the exit code is one of the assertions.
-    """
+    """`--no-owner`: the operator may have changed `POSTGRES_USER`; `--clean --if-exists`: the target
+    has already booted. `check=False`: the exit code is an assertion."""
     argv = [*_client("pg_restore")]
     if clean:
         argv += ["--clean", "--if-exists"]
@@ -85,15 +50,9 @@ def _restore(dump: Path, database_url: str, *, clean: bool) -> subprocess.Comple
 
 @contextlib.asynccontextmanager
 async def _boot(monkeypatch, database_url: str, data_dir: Path):
-    """One whole application lifespan against `database_url` — a container start.
-
-    The `app` fixture cannot serve: every assertion here is about what a *second* process does
-    against a database the first one never saw, or about a boot under a different key. Yields a
-    client factory, so one test can hold an admin session and two member sessions at once.
-    """
-    # NOT translated: this is the APP's connection, made from this host by asyncpg, and
-    # 127.0.0.1:5432 from here is a different checkout's database entirely. Only the DSN handed
-    # to a container-run pg_dump is addressed from inside; see _inside_the_container.
+    """A whole application lifespan: a second process against a database the first never saw."""
+    # NOT translated: this is the app's own asyncpg connection from this host; only a
+    # container-run pg_dump's DSN is addressed from inside.
     monkeypatch.setenv("DATABASE_URL", database_url)
     monkeypatch.setenv("DATA_DIR", str(data_dir))
     settings.cache_clear()
@@ -121,12 +80,7 @@ async def _boot(monkeypatch, database_url: str, data_dir: Path):
 
 
 async def _sign_in(make, name: str, password: str) -> httpx.AsyncClient:
-    """A phone opening the app after the restore, through the front door.
-
-    Not the cookie the source install issued: the restored `auth_session` row and the same
-    `SESSION_SECRET` would carry it, but then the drill would prove a cookie survived rather
-    than that the account did.
-    """
+    """Through the front door: a surviving cookie would prove the cookie, not the account."""
     client = make()
     signed = await client.post("/api/auth/login", json={"name": name, "password": password})
     assert signed.status_code == 200, signed.text
@@ -135,11 +89,7 @@ async def _sign_in(make, name: str, password: str) -> httpx.AsyncClient:
 
 @pytest.fixture
 async def target(pg_url):
-    """The database the dump is restored into, next to the test one and dropped after.
-
-    A second database rather than the source: restoring over the database the dump came from
-    proves nothing at all, which is the shape of the hole this file closes.
-    """
+    """A second database: restoring over the source proves nothing."""
     admin, name, url = _sibling(pg_url, "_drill")
     await _recreate(admin, name)
     try:
@@ -150,17 +100,8 @@ async def target(pg_url):
 
 @pytest.fixture
 async def installed(secrets_key, db, pg_url, tmp_path, monkeypatch):
-    """A household as it stands on the night of the backup, and the dump taken from it.
-
-    Everything the restore has to carry is here and each piece is here for a reason finding 18
-    names: the sealed connector credential (`connector_config` + `data_encryption_key`, whose
-    foreign key is what a plain restore fails on), the VAPID keypair (`app_setting`, whose
-    primary key is the other failure), two member accounts created the only way M4.6 allows,
-    and a playback event each so the finish prompt has something to answer.
-
-    `secrets_key` precedes the boot deliberately: the lifespan mints the DEK, and a key set
-    afterwards is a key the install never had.
-    """
+    """`secrets_key` precedes the boot: the lifespan mints the DEK, and a later key was never the
+    install's."""
     await db.execute(
         """
         INSERT INTO title (id, kind, name, is_owned, jellyfin_id, overview)
@@ -180,17 +121,15 @@ async def installed(secrets_key, db, pg_url, tmp_path, monkeypatch):
             assert account.status_code == 201, account.text
             otp = account.json()["one_time_password"]
             user_id = account.json()["id"]
-            # §3.1's forced first-login change, done before the backup: an account still locked
-            # to it can reach four routes and none of them is a member write.
+            # §3.1's forced first-login change, before the backup: a locked account reaches no member write.
             phone = await _sign_in(make, name, otp)
             changed = await phone.post(
                 "/api/auth/password",
                 json={"current_password": otp, "new_password": MEMBER_PASSWORD},
             )
             assert changed.status_code == 200, changed.text
-            # Decision 117 gates §6.7's rail behind a per-user toggle, and the rail line is
-            # where the Rate surface reports why a push did not happen. Without it the reason
-            # is redacted and the assertions below would be vacuous.
+            # Decision 117 gates the rail line where Rate says why a push did not happen; without it the
+            # assertions below would be vacuous.
             await db.execute("UPDATE app_user SET show_model = true WHERE id = $1", user_id)
             event_id = await db.fetchval(
                 "INSERT INTO playback_event (source, title_id, user_id, finished) "
@@ -236,12 +175,7 @@ async def installed(secrets_key, db, pg_url, tmp_path, monkeypatch):
 
 
 async def _first_boot(monkeypatch, target: str, tmp_path: Path) -> dict[str, str]:
-    """`docker compose up` against an empty database: the state every restore lands in.
-
-    It mints a DEK and a VAPID keypair of its own, and those two rows are what a restore has to
-    replace. Returning them is what lets the assertions be "the source's, not this install's"
-    rather than merely "present".
-    """
+    """Returns the fresh install's DEK and VAPID key, so assertions can say "the source's"."""
     async with _boot(monkeypatch, target, tmp_path / "target") as make:
         state = await make().get("/api/setup/state")
         assert state.status_code == 200, state.text
@@ -259,26 +193,12 @@ async def _first_boot(monkeypatch, target: str, tmp_path: Path) -> dict[str, str
         await conn.close()
 
 
-# --- exit criterion 1: the README procedure, into the target the operator has ------------------
-
-
 @pytest.mark.parametrize("booted", [True, False])
 async def test_the_documented_restore_carries_custody_and_the_app_writes_through_the_route(
     installed, target, tmp_path, monkeypatch, booted
 ):
-    """§2's restore, run as README's Recovery block runs it, and then used.
-
-    Both targets, because the two documents describe the same command against different
-    databases and both have to hold. `booted=True` is the one that has ever failed and the one
-    an operator actually has — `docker compose up` is what produces a database before anyone
-    can restore anything, and it arrives holding its own DEK row and its own VAPID keypair.
-    `booted=False` is README's advice taken literally: a database nothing has touched.
-
-    The pass conditions are §6's, in its order: `pg_restore` exit 0; `apply_all` applies
-    **zero** migrations over the restored `schema_migration`; the connector row, the DEK row and
-    the VAPID public key are the *source's* rather than this install's; the app boots; and a
-    member's own seen-state write answers 200 over HTTP.
-    """
+    """`booted=True` is the target an operator actually has, holding its own DEK and VAPID rows;
+    `booted=False` is a database nothing has touched."""
     before = await _first_boot(monkeypatch, target, tmp_path) if booted else {}
 
     done = _restore(installed["dump"], target, clean=True)
@@ -342,18 +262,8 @@ async def test_the_documented_restore_carries_custody_and_the_app_writes_through
 async def test_the_command_the_compose_file_used_to_give_loses_custody_and_says_so_in_its_exit(
     installed, target, tmp_path, monkeypatch
 ):
-    """The negative control, so the two flags above are load-bearing rather than decorative.
-
-    `docker compose exec db pg_restore -d ... /backups/<dump>` was the sole restore instruction
-    in this repository until M4.7. Against the target `docker compose up` produces it exits
-    non-zero with hundreds of ignored errors, and the two that matter are silent in the result:
-    `connector_config`'s COPY fails on its foreign key to a `data_encryption_key` row that
-    cannot be inserted over the fresh install's, so the table ends **empty**, and
-    `app_setting`'s COPY fails on the primary key, so the push keypair stays the one no phone
-    is subscribed against. `get_connector_secrets` returns `{}` for a missing row rather than
-    raising, so the install reports Jellyfin as merely unconfigured and nothing says anything
-    was lost.
-    """
+    """The negative control: without the flags `connector_config` restores empty and the VAPID key
+    stays the fresh one, and nothing says so."""
     before = await _first_boot(monkeypatch, target, tmp_path)
 
     done = _restore(installed["dump"], target, clean=False)
@@ -377,28 +287,17 @@ async def test_the_command_the_compose_file_used_to_give_loses_custody_and_says_
         await conn.close()
 
 
-# --- exit criterion 2: the same dump under a changed SECRETS_KEY -------------------------------
-
-
 async def test_the_same_dump_under_a_changed_secrets_key_boots_and_every_member_write_commits(
     installed, target, tmp_path, monkeypatch, caplog
 ):
-    """§2's warning, arriving as an operator meets it: the dumps were copied, the `.env` was not.
-
-    §3.1 keeps a half-configured boot legal and §3.3 makes the app-side write independent of
-    Jellyfin, so the whole matrix is 200s with a truthful reason — for **both** members, over
-    the four routes a member's tap reaches. The one number that is not negotiable is the last:
-    zero 500s anywhere, because a 500 here is `cryptography`'s `InvalidTag` reaching a phone as
-    "database error", and it used to include the admin PUT that would have fixed it.
-    """
+    """Zero 500s anywhere: a 500 here is `InvalidTag` reaching a phone as "database error"."""
     assert _restore(installed["dump"], target, clean=True).returncode == 0
     monkeypatch.setenv("SECRETS_KEY", OTHER_KEY)
     settings.cache_clear()
 
     with caplog.at_level(logging.ERROR, logger="spielplan"):
         async with _boot(monkeypatch, target, tmp_path / "restored") as make:
-            # The operator's first chance to learn: one ERROR at boot naming the variable and
-            # the key_id, on a container that came up rather than one that crash-looped.
+            # One ERROR at boot naming the variable and key_id, on a container that came up.
             assert any(
                 "SECRETS_KEY" in record.getMessage() and installed["key_id"] in record.getMessage()
                 for record in caplog.records
@@ -409,8 +308,7 @@ async def test_the_same_dump_under_a_changed_secrets_key_boots_and_every_member_
             assert connector.status_code == 200, connector.text
             assert connector.json()["secrets_unreadable"] is True
             assert connector.json()["configured"] is False
-            # The URL survives, because "re-enter the key" is only actionable if the admin can
-            # see which server the household is pointed at.
+            # The URL survives: "re-enter the key" is only actionable if the admin sees which server.
             assert connector.json()["url"] == JELLYFIN_URL
 
             answered: list[tuple[str, str, int]] = []
@@ -470,8 +368,7 @@ async def test_the_same_dump_under_a_changed_secrets_key_boots_and_every_member_
 
     conn = await asyncpg.connect(target)
     try:
-        # §3.3: the tap is kept. Both members, both titles — the reason is a report about
-        # Jellyfin, not a refusal of the person's own state.
+        # §3.3: the tap is kept; the reason reports on Jellyfin, not on the person's state.
         for member in installed["members"]:
             assert await conn.fetchval(
                 "SELECT count(*) FROM user_title WHERE user_id = $1 AND state = 'seen' "
@@ -486,24 +383,13 @@ async def test_the_same_dump_under_a_changed_secrets_key_boots_and_every_member_
 async def test_reset_then_a_put_with_a_new_api_key_ends_the_drill_on_a_working_connector(
     installed, target, tmp_path, monkeypatch, capsys
 ):
-    """The last line of §6's second criterion, and the only way back that does not need psql.
-
-    Every ciphertext in the restored database names a DEK row this `SECRETS_KEY` cannot open,
-    and `ensure_dek` unwraps the active row before it can seal anything — so on the install that
-    needs it most, re-entering the credential failed with the error it was there to clear.
-    `spielplan-secrets reset` retires what it cannot open (retires, not deletes: if the right
-    `.env` turns up on a USB stick, every ciphertext naming that key still opens) and clears the
-    columns that named it, which is what lets the PUT mint a fresh DEK and seal under it.
-    """
+    """`reset` retires (not deletes) what this key cannot open, so the PUT can mint a fresh DEK."""
     assert _restore(installed["dump"], target, clean=True).returncode == 0
     monkeypatch.setenv("SECRETS_KEY", OTHER_KEY)
     settings.cache_clear()
 
     async with _boot(monkeypatch, target, tmp_path / "restored") as make:
-        # In a thread because `main` calls `asyncio.run`, which refuses to nest — and through
-        # `main` rather than its internals because the runbook names the command, not the
-        # helper. `settings().database_url` is the restored target, as `docker compose exec`
-        # would make it.
+        # In a thread because `main` calls `asyncio.run`; through `main` because the runbook names it.
         assert await asyncio.to_thread(secrets_cli.main, ["reset"]) == 0
         printed = capsys.readouterr().out
         assert installed["key_id"] in printed, printed
@@ -522,8 +408,7 @@ async def test_reset_then_a_put_with_a_new_api_key_ends_the_drill_on_a_working_c
         assert got.status_code == 200 and got.json()["has_api_key"] is True
         assert got.json()["secrets_unreadable"] is False
 
-    # The app's own connection shape: `get_connector_secrets` reads `config` back as a dict,
-    # and a bare connection hands jsonb over as text (db/pool.py's codecs are why).
+    # A bare connection hands jsonb back as text; `get_connector_secrets` expects a dict.
     conn = await asyncpg.connect(target)
     for typename in ("json", "jsonb"):
         await conn.set_type_codec(
@@ -542,37 +427,11 @@ async def test_reset_then_a_put_with_a_new_api_key_ends_the_drill_on_a_working_c
         await conn.close()
 
 
-# --- cs-68: content restored, model bundle not yet, and what the card says then ----------------
-
-
 async def test_a_restored_install_with_no_model_bundle_says_so_on_the_title_card(
     installed, target, tmp_path, monkeypatch
 ):
-    """§3.1's explicit "no bundle imported" state, on the surface that has to render it, in the
-    state a restore actually leaves behind. §6.0 (the model line in the data voice), §3.1,
-    decision 162. [M4.16, cs-68]
-
-    The M0 row `library-rate-model-line-no-bundle` shipped with a waiver saying this branch was
-    unreachable — "with no bundle there are no titles, so there is no card to open" — and booked
-    it to M5. Decision 162 retired that premise without retiring the waiver: it split content
-    from models, so movie data restores on its own and the sibling row
-    `platform-backup-restore-ordering-is-explicit` makes "content present, model bundle absent"
-    the explicitly correct intermediate state rather than a corner. It is also the state every
-    recovering household is in on the way through — content back, bundle not re-imported yet —
-    so the first card opened after a restore was the untested path.
-
-    The seed marker is written here the way `backup/movie_data.py` writes it, 'superseded' and
-    never 'active', because the archive carries rows and never the artifacts tree. That is what
-    keeps the fixture from being merely "an install that has never imported anything": a reading
-    of §3.1's question as "has this household ever been seeded?" rather than as
-    `ArtifactStore.load_active`'s "is there an active row?" would print numbers it has no basis
-    for here and still pass against an install with no `artifact_bundle` row at all.
-
-    The reason string is asserted and not only the flag, because §3.1 asks for an *explicit*
-    state: a bare `available: false` leaves the household unable to tell which repair is theirs.
-    The key set is the other half of the row's claim — with no basis there is no honest b(t),
-    beta or gate, so the line carries no number at all.
-    """
+    """The seed marker is 'superseded', never 'active', as `backup/movie_data.py` writes it. The
+    reason string is asserted: §3.1 asks for an explicit state."""
     assert _restore(installed["dump"], target, clean=True).returncode == 0
 
     conn = await asyncpg.connect(target)
@@ -585,24 +444,20 @@ async def test_a_restored_install_with_no_model_bundle_says_so_on_the_title_card
         await conn.close()
 
     async with _boot(monkeypatch, target, tmp_path / "restored") as make:
-        # DATA_DIR is this test's own directory, so the artifacts tree is absent on disk as well
-        # as inactive in the database. Asked through the app's own words rather than through
-        # `app.state`: if this answered True the model-line assertion below would be vacuous.
+        # DATA_DIR is this test's own, so the artifacts tree is absent on disk too.
         config = await make().get("/api/config")
         assert config.status_code == 200, config.text
         assert config.json()["has_bundle"] is False, config.text
 
         member = installed["members"][0]
         phone = await _sign_in(make, str(member["name"]), MEMBER_PASSWORD)
-        # The model line is Show the model's since decision 486 (amending decision 117), so the
-        # member asks for it first - or the assertions below would read an absent key.
+        # The model line is Show the model's (decision 486), so the member asks for it first.
         shown = await phone.post("/api/auth/preferences", json={"show_model": True})
         assert shown.status_code == 200, shown.text
         card = await phone.get("/api/titles/1")
         assert card.status_code == 200, card.text
 
         body = card.json()
-        # Content present, which is the half of the state that makes the other half interesting.
         assert body["title"]["name"] == "Title 1"
         assert body["title"]["is_owned"] is True
 
