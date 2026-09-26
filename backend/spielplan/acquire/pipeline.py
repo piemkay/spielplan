@@ -1,85 +1,7 @@
 """The ten-stage driver: park, resume, and the one place §8's stage names are spelled.
 
-Spec v2.1 §8 (the pipeline and "Failure at any stage parks the job with a reason, retryable from
-admin; paid stages (6) never auto-retry past the spend cap"), §5.3, §6.6; decisions 162, 322,
-323, 336.
-
-WHAT THIS MODULE IS. `acquire/stages.py` holds the ten callables and the contract they answer to;
-this file holds the ORDER, the registry that says which of them costs money, and the loop that
-turns one leased task into writes on two tables - `acquisition_task` (the schedule) and
-`acquisition_job` (§6.6's board). Every one of M5.2 through M5.7 implements a stage against this
-shape, so it is published here before those lanes open rather than discovered inside one of them.
-
-ONE SPELLING OF THE TEN NAMES. `STAGES` carries §8's labels verbatim and in order, and
-`test_acquire_pipeline.py` reads them back out of `docs/spielplan-spec_v2.1.md`'s own §8 block
-rather than out of a list a test author retyped - so the tuple cannot drift from the spec without
-the build saying so. Proposal 136 (`spec-v2.2-proposals.md:1617`) argues §6.6's board should show
-these strings verbatim; whether that clause is adopted is decision 330's, which is M5.6's to take.
-The code carries one tuple either way, because two spellings is the state where a board label and
-a park reason name different stages.
-
-PARK AND RESUME, AND WHERE THE RESUME POINT LIVES. §8: "Failure at any stage parks the job with a
-reason, retryable from admin". The reason lives on the board, verbatim, and the STAGE NUMBER is
-the resume point: a job parked at 4 re-enters at 4 and not at 1. That is what makes the raw store
-worth having - §8's other promise, "All fetched bytes land in the app's own raw store, so
-re-parsing is free forever" (`spec:398`), is only cashed if a resumed job re-reads those bytes
-instead of re-fetching, and a resume that restarted at stage 1 would re-fetch by construction.
-
-TWO TABLES, AND WHICH ONE ANSWERS WHICH QUESTION (decision 322). `acquisition_task` is the
-schedule: what runs next, when, how many attempts are left, who holds the lease. `acquisition_job`
-is the board: one row per title, what an operator sees. They are not redundant. The task can exist
-before its title does, because stage 1 is what mints it; the board row cannot, because its primary
-key is `title_id`. So the board is written from the moment stage 1 establishes a title and never
-before.
-
-TWO WRITERS REACH `acquisition_job` DURING A DRAIN, and the arrangement between them is what
-keeps that safe. This module's `write_board` is one, with `DO UPDATE`. The other is
-`placement/reconcile._park_thin`, whose insert is `ON CONFLICT (title_id) DO NOTHING`
-(`reconcile.py:250-254`) and whose own comment says why: "a title already moving through the
-pipeline must not be dragged back to stage 2 by a nightly sweep". It is NOT only the nightly
-sweep, and this paragraph used to say it was: `stages.place` calls
-`reconcile(scope="app_acquired")`, so stage 9 reaches `_park_thin` on the driver's own call stack,
-inside a transaction the driver did not open. That is safe for exactly one reason and it is worth
-stating rather than relying on - THE DRIVER HAS ALREADY WRITTEN A BOARD ROW FOR THIS TITLE BEFORE
-STAGE 9 RUNS, so `DO NOTHING` does nothing. Drop or reorder that pre-stage-9 write and
-`_park_thin` becomes the CREATOR of the row, at `(stage = 2, status = 'parked')`, and this title's
-own stage-9 result lands on a history that is a sweep's. [M5.1 review cycle 1, M51-CRASH-07]
-
-THE DRIVER MUST NEVER RELY ON THE SWEEP TO ADVANCE ANYTHING: the sweep's insert is a no-op on
-every row this module has already written, so a stage that left work for it would leave it for
-ever.
-
-THE PAID SEAM, WHICH IS ALL M5.1 OWED M5.5. §8: "paid stages (6) never auto-retry past the spend
-cap." A stage that runs and then checks a cap has already spent the money, so the contract has to
-carry a stage that REFUSES TO RUN. `Stage.paid` marks which one, the driver consults a gate before
-calling it, and `refuse_uncapped_spend` is the default: it lets a declared no-op through and asks
-the cap about an IMPLEMENTED paid stage, parking it while no cap is configured or while the month
-has no room for it. No cap, no price table and no meter are built here - they are M5.5's
-`llm/spend.py`, which the gate asks, and M5.7 renders them. What M5.1 built was the refusal, and
-the reason it was built first is that it cannot be retrofitted: the day stage 6 got a body was the
-day the gate had to already exist, or the first drain after that commit would have billed the
-household. M5.5 is that day, and the gate kept its name and became the cap check (decision 348).
-
-THIS FILE BUILDS THE FETCHER AND `stages.py` STILL DOES NOT NAME IT (decision 373). It used to
-say "NOTHING HERE FETCHES ... a dependency on the HTTP layer would be a dependency on a module
-this file does not use", which was M5.1's true sentence and stopped being true the moment stage 2
-got a body: something has to construct the one `fetch.Fetcher` a drain paces every host through,
-and the only honest place is the loop that knows what a drain IS. So the import moved down one
-level rather than out: `drain` builds one per drain inside `async with`, behind a factory a test
-replaces with an `httpx.MockTransport`, and hands it to `run_task`, which puts it on the context.
-`acquire/stages.py` imports no transport at all - it drives eleven source adapters through a
-handle it never names the type of - and neither does anything under `spielplan/derive/`, which is
-what "re-parsing is free forever" (`spec:398`) rests on.
-
-ONE FETCHER PER DRAIN, BUILT ON THE FIRST STAGE THAT ASKS. `fetch.Fetcher`'s own docstring says
-the instance is the unit: the per-host token buckets, the semaphores and the circuit breaker live
-on it and are rebuilt from `fetch_host_state` at the top of the next drain. Two instances in one
-drain would pace one host at twice its declared rate, which is §8's politeness clause (`spec:404`)
-broken by the machinery meant to keep it. And the construction is LAZY - `Stage.fetches` says
-which stages need one - so a drain that leases nothing, or whose tasks all park at stage 1, or
-whose retry resumes at stage 4 from the raw store, builds no HTTP client and opens no socket.
-That last one is not a micro-optimisation: it is exit criterion measure 5, "resumes at stage 4;
-outbound request count = 0".
+Writes `acquisition_task` (the schedule) and `acquisition_job` (the board, from stage 1 on). The board
+stage is the resume point. Builds at most one Fetcher per drain, lazily (decision 373).
 """
 
 from __future__ import annotations
@@ -102,35 +24,15 @@ from spielplan.llm import spend
 
 log = logging.getLogger("spielplan.acquire.pipeline")
 
-# One kind for the whole pipeline, where the corpus has one kind per SOURCE. The corpus's kinds
-# are its unit of work; here the unit of work is a title walking ten stages, and splitting it per
-# stage would put the sequence in the queue's ORDER BY - where two tasks of one title can be
-# leased by two workers at once, which is exactly the write §14 risk 5 and decision 162 forbid.
-#
-# ONE KIND DOES NOT ITSELF PREVENT THAT STATE, and this comment implied it did. `enqueue_item`
-# keys `jellyfin:<item>` and `enqueue_title` keys `title:<id>` - two rows, one kind, deliberately
-# (see `enqueue_title`) - and `queue.lease` filters on `(state, next_attempt_at, paid, kind)` with
-# `FOR UPDATE SKIP LOCKED`, which is exactly what hands the two rows to two workers. The board is
-# read once per walk and is not a lock, so "`run_task` reconciles them through the board" holds
-# only while the walks are SEQUENTIAL. `_TITLE_LOCK` below is the exclusion that makes it hold
-# under the two-loop operating model this queue's own lease docstring calls "the ordinary state
-# during a rolling restart". [M5.1 review cycle 2, seam322-06]
+# One kind for the whole pipeline. One kind alone does not stop two workers walking one title via two
+# keys; `_TITLE_LOCK` does.
 TASK_KIND = "acquire"
 
-# The namespace half of the per-title advisory lock, following `sync/seen.py:101-102`'s note that
-# a namespace is what stops a title id colliding with another feature's lock on the same integer.
-# (`stages._MINT_LOCK = 8002` is its sibling: the claim stage 1 takes on a film's IDENTITY before
-# any title id exists. Both numbers are registered in both comments so neither can move alone.)
-# The existing numbers are a spec section and a serial - 6202 §6.2's finish, 6206 the ballot, 6303
-# and 6304 §6.3's, 7303 and 7304 §7.3's - and §8 has no subsection, so this is 80 and the first
-# serial. Two ints and not the single-argument `hashtext(name)` form, which `api/deps.py` records
-# as a different lock space again.
+# Advisory-lock namespace for per-title locks (`stages._MINT_LOCK = 8002` is its sibling). Two ints,
+# a different lock space from the one-argument `hashtext` form.
 _TITLE_LOCK = 8001
 
-# What the drain takes in one tick. Small on purpose: `worker.py`'s loop is sequential (§5.3,
-# `worker.py:987-1006`), so every task in a batch is time the rest of the loop does not get, and
-# a batch that outruns the job's own budget is cancelled mid-stage. The bound that matters is the
-# JOB's timeout against its interval; this is the number that keeps one tick's work predictable.
+# Small: the worker loop is sequential and a batch must fit the job's budget.
 DRAIN_LIMIT = 8
 
 
@@ -138,55 +40,9 @@ DRAIN_LIMIT = 8
 class Stage:
     """One stage of §8's pipeline: its number, its name verbatim, and what the driver must know.
 
-    `implemented` is not decoration and not a to-do marker. The spend gate reads it: a stage that
-    is declared a no-op cannot spend money, so refusing it would make the spine untestable end to
-    end - which is D3's whole purpose - while refusing an implemented paid stage with no cap is
-    §8's rule. `owner` is the milestone that owes the body - or, once there is one, the milestone
-    that wrote it, which is how the default already reads on stages 1, 9 and 10 - so a stub
-    surviving into M5.6 is visible in the tuple as well as in its own docstring.
-
-    `fetches` IS `paid`'s SHAPE FOR A SECOND QUESTION THE DRIVER MUST ANSWER BEFORE THE CALL
-    (decision 373). `paid` asks "will running this spend money"; `fetches` asks "will running this
-    need the drain's one `fetch.Fetcher`", and both have to be answerable without calling the
-    stage - the first because a stage that runs and then checks a cap has already spent, the
-    second because a Fetcher built for a walk that never reaches stage 2 is an HTTP client built
-    for nothing. A boolean on the stage rather than a stage number in `run_task` because the
-    number is exactly the kind of fact that goes stale: §8's stage 2 was the only one that fetched
-    when this was written, M5.5's stage 6 then took the same handle for its LLM provider calls
-    (decision 432) by setting the same flag, and a driver testing `if stage.number == 2` would have
-    been a second spelling of the stage list this module exists to keep single. Like
-    `implemented`, it is a hand-written literal and a test is what ties it to reality:
-    `test_acquire_pipeline.py::test_only_the_stage_that_declares_it_fetches_is_given_the_fetcher`.
-
-    `reask_from` IS WHERE A PARK AT THIS STAGE RE-ENTERS ONCE ITS OWN DEADLINE HAS PASSED, and two
-    stages declare one. The board is the resume point, which is right for every park whose answer
-    can change without the pipeline doing anything - a key typed into Admin, a spend cap - and
-    wrong for one whose answer can only change if an EARLIER stage runs again. §8 stage 4 was the
-    first: the reviews gate counts rows stage 3 wrote out of documents stage 2 fetched, so a window
-    that re-entered at 4 re-counted day one's rows, opened no socket and parked again, and §8's
-    "new releases accrue reviews over weeks" could not be observed. §8 stage 6 is the second
-    (decision 467): its no-pack park reads the pack stage 5 stores, keyed by vocabulary version, so
-    a title parked there - by a build that had not wired stage 5, or after a bundle import moved
-    the active vocabulary - could only re-ask at 6 and park again. An expired stage-6 park now
-    rebuilds the pack before the gate asks again: one local build and one stored document per
-    re-ask, never a paid call, because the gate still runs before stage 6. Keyed on the deadline
-    PASSING rather than on the park alone, because the same park made due EARLY is an operator's
-    retry or a Launch, which resumes at the board's stage - §12's M5.3 row says a retry of the gate
-    resumes at stage 4 with no request made (decision 421) - and the window's instant is
-    `retry_after`, which `_record_stop` wrote with the queue's `next_attempt_at` as one value, so the
-    clock is what tells the two events apart. A field for `fetches`' reason: a driver testing a
-    stage number would be a second spelling of this tuple.
-    [M5.3 review cycle 2, m53-c2-gate-01, M53-C2-NET-03; decisions 421, 467]
-
-    `observes_coverage` IS WHERE §8.4's THIN-FACET FEED IS WRITTEN, and only stage 8 carries it
-    (decision 440). §8.4 says a thin-facet title's row "is written the moment its walk finishes
-    stage 8", and when that was decided the stage it names had no body: stage 8 was M5.4's declared
-    no-op, and the stub-marker test decision 348's gate relies on refused it one. So the fact lives
-    on the row and the driver acts on it - `run_task` calls `flywheel.thin.observe_title` once the
-    stage has advanced and before the next board write, inside the walk that holds the title - in
-    `fetches`' idiom and for its reason: `if stage.number == 8` would be a third spelling of this
-    tuple, and a job could not keep "the moment" at all. It stays the driver's now that stage 8 has
-    a body (decision 463), because that body has two branches and the observation belongs to both.
+    Flags the driver reads before calling: `implemented` (the spend gate), `paid`, `fetches` (needs the
+    drain's Fetcher), `reask_from` (where an expired park re-enters, decisions 421/467) and
+    `observes_coverage` (§8.4's thin-facet feed, decision 440). Flags, not stage numbers.
     """
 
     number: int
@@ -200,54 +56,31 @@ class Stage:
     observes_coverage: bool = False
 
 
-# §8's ten, verbatim and in order (`docs/spielplan-spec_v2.1.md` §8's own block). The names carry
-# spaces because the spec's do; the callables carry underscores because Python's do, and the test
-# that reads the spec back asserts the pair rather than either alone.
-#
-# STAGES 2, 3 AND 4 KEEP `owner="M5.3"` NOW THAT THEY HAVE BODIES, and the alternative was to let
-# them fall back to the default. They are not stubs any more, so "the milestone that owes the
-# body" no longer describes them - but the default is `"M5.1"`, which stages 1, 9 and 10 carry
-# because M5.1 WROTE them, so dropping the string would file three stages under a milestone that
-# did not write a line of them. The field reads as provenance the moment a stage ships, and that
-# is the reading the two assertions over it already allow: both are scoped to
-# `if not s.implemented`, so what `owner` means for an implemented stage was never asserted and is
-# settled here rather than left to whoever next reads the tuple. [M5.3, decision 373]
-#
-# Stage 2 was the only `fetches=True`. Not a list of "the network stages": one boolean per row,
-# where the row already carries `paid`, so the day M5.5's extraction wanted the same handle it set
-# the same flag on the same line - which is stage 6 below.
+# §8's ten, verbatim and in order; a test reads them back out of the spec. `owner` is provenance
+# once a stage has a body.
 STAGES: tuple[Stage, ...] = (
     Stage(1, "identify", stages.identify),
     Stage(2, "enrich", stages.enrich, owner="M5.3", fetches=True),
     Stage(3, "derive", stages.derive, owner="M5.3"),
     Stage(4, "reviews gate", stages.reviews_gate, owner="M5.3", reask_from=2),
-    # Stages 5, 7 and 8 have had bodies since M5 (decisions 461, 462, 463), each a call into the
-    # package M5.4 built, so they keep `owner="M5.4"` as provenance by the rule above.
+    # Stages 5, 7 and 8 have had bodies since M5 (decisions 461, 462, 463).
     Stage(5, "dna pack", stages.dna_pack, owner="M5.4"),
-    # The only paid one, and since M5.5 the only stage besides 2 that fetches. Both flags M5.5 set
-    # are on this one line: `implemented`, which the spend gate reads before the call, and
-    # `fetches`, which hands the stage the drain's one Fetcher (decisions 348, 373, 432). See
-    # `refuse_uncapped_spend`. `reask_from=5` is decision 467: an expired park here rebuilds the
-    # pack at stage 5 before the gate asks again (`Stage`'s docstring).
+    # The only paid stage. `reask_from=5` (decision 467): an expired park rebuilds the pack first.
     Stage(6, "dna extract", stages.dna_extract, paid=True, implemented=True, owner="M5.5", fetches=True,
           reask_from=5),
     Stage(7, "verify", stages.verify, owner="M5.4"),
-    # Its finish is where the driver observes the title's facets (decision 440,
-    # `Stage.observes_coverage`), on both branches its body has (decision 463).
+    # The driver observes the title's facets when this stage finishes (decision 440).
     Stage(8, "project", stages.project, owner="M5.4", observes_coverage=True),
     Stage(9, "place", stages.place),
     Stage(10, "ready", stages.ready),
 )
 
-# The board's terminal state for a job that walked all ten. `acquisition_job.status`'s CHECK
-# already admits it (`0005_ledger.sql:136`), written at M0 against a pipeline that did not exist.
+# The board's terminal state for a job that walked all ten.
 READY = "ready"
 RUNNING = "running"
 PARKED = "parked"
 FAILED = "failed"
-# Written by the admin board's actions and a flywheel launch (`acquire/actions.make_due`, decisions
-# 443 and 444) and by nothing in this module; spelled here, and read there, because that module
-# imports this one and `close_abandoned_boards` has to name it.
+# Written by board actions and flywheel launches (`actions.make_due`), never here.
 QUEUED = "queued"
 
 NO_SPEND_CAP = (
@@ -255,19 +88,8 @@ NO_SPEND_CAP = (
     "the extraction providers and the cap in Admin, and this title resumes here"
 )
 
-# A task that names a title the database no longer has. Shown on the queue and never on the board,
-# because the board row went with the title: `acquisition_job.title_id` is
-# `REFERENCES title(id) ON DELETE CASCADE`. [M5.1 review cycle 1, seam322-01]
-#
-# THE ADVICE NAMES ITS OWN CONSTRAINT, which is `stages.NO_PROVIDER_ID`'s rule applied to the
-# sentence that rule's own fix introduced: "a reason shown verbatim to an operator has to name the
-# lever that exists". This park is a `queue.skip`, so THIS task's key is closed and
-# `queue.enqueue`'s `ON CONFLICT (kind, key) DO NOTHING` makes re-enqueueing the same item a no-op
-# against it. Re-enqueueing is still the right advice and is still the only lever - for a
-# `title:<id>` task it is a different key and works outright, and for a `jellyfin:` task it works
-# once decision 330's revive action arrives at M5.6 - but an operator who tried it and watched
-# nothing happen would be reading a sentence that had not told them why.
-# [M5.1 review cycle 2, M51-C2-322-05]
+# A task naming a deleted title; shown on the queue, since the board row cascaded away. The key is
+# closed, so re-enqueueing only helps a `title:<id>` task or after a board revive.
 TITLE_GONE = (
     "title {} no longer exists, so there is nothing left for this task to work on. Its board row "
     "went with it. Re-enqueue the Jellyfin item if the title should come back, or - if this task "
@@ -281,69 +103,12 @@ StageGate = Callable[[Stage, stages.StageContext], Awaitable[stages.Outcome | No
 async def refuse_uncapped_spend(stage: Stage, ctx: stages.StageContext) -> stages.Outcome | None:
     """The default gate. None means "run it"; an `Outcome` means "do not, and record this".
 
-    §8's clause is about a stage that BILLS: "paid stages (6) never auto-retry past the spend
-    cap". Two readings were available and only one of them survives contact with M5.1's tree.
-
-    A gate that refused every paid stage unconditionally would have parked every task at stage 6
-    from the day M5.1 marked it `paid=True`, while it was still a declared no-op. §8's own
-    ten-stage walk would then have been unreachable and M5.1's exit criterion - a task reaching
-    `ready` with stages 2-8 declared no-ops - unsatisfiable, so the spine could not have been
-    proved before the lanes that plug into it opened.
-
-    So the gate asks the question §8 is actually asking: is this stage going to spend money? A
-    declared no-op cannot, and is waved through without a read. An implemented paid stage can,
-    and M5.5 gave `stages.dna_extract` its body with `implemented=True` on the same row (decision
-    432) - the moment this gate started firing, which is the seam holding: M5.5 could not ship a
-    billing stage that runs without a cap having been supplied, and it did not.
-
-    THE GATE KEPT ITS NAME AND BECAME THE CAP CHECK, rather than being routed around (decision
-    348, three documents and the tests cite it by this name). It asks and does not decide: the
-    arithmetic is `llm/spend.cap_check`'s, in the order decision 325 gives it - no cap, then a
-    plan the settings cannot make, then a month already at the cap (nothing is estimated), then a
-    month this title's reservation of BOTH attempts of every run would take past it - and the gate
-    maps its answer onto the driver's verbs. None runs the stage. An unset cap parks under
-    `NO_SPEND_CAP`, M5.1's sentence unchanged, because no default cap ships (decision 325) and an
-    install that has not set one is in exactly the state M5.1 wrote that sentence for. Every other
-    refusal parks under the meter's own sentence, which is what §6.6's board shows and what an
-    admin retry is refused with - `over spend cap: ...` for the month, the missing setting or the
-    unpriced model for a plan (decisions 324, 343). A check that raises - a meter the database will
-    not answer, a stored pack whose bytes are not the ones its row names - raises inside
-    `_run_stage`'s guard, which records decision 336's `failed` rather than running the stage on an
-    answer nobody got.
-
-    WHAT HOLDS `implemented` TO REALITY IS A TEST AND NOT A CONSTRUCTION, and the sentence that
-    used to stand here - "neither milestone has to remember, because neither can forget" - was
-    false. `implemented` is a hand-written literal in `STAGES` below and nothing in the tree ties
-    it to whether `stages.dna_extract` has a body, so a milestone that wrote the billing call and
-    left the flag would pass this gate and run.
-    `test_acquire_pipeline.py::test_every_stage_declared_a_no_op_returns_its_stub_marker` is what
-    makes that impossible: it calls every `implemented=False` stage and asserts the stub marker,
-    so a stage that gains a body reddens the build with a message naming the stage that got one -
-    and the only way to green it is to set the flag, which is the moment this gate starts firing.
-    [M5.1 review cycle 1, M51-REV-04, M51-REV-PAID-01]
-
-    A park and not a failure, and the difference is not cosmetic: `fail` spends an attempt and
-    four of them close the task for good, so a household that has not yet configured a cap would
-    lose the title rather than wait for the setting. WITH A DEADLINE, for the same reason and by
-    the same arithmetic: a park with no deadline is `queue.skip`, which closes the task on attempt
-    one and is therefore strictly worse than the failure this paragraph rejects. Configuring a cap
-    is a thing a person does, so this is `stages.waiting_on_the_world()`; the stage never runs and
-    nothing is billed while it waits. [M5.1 review cycle 1, M51-CRASH-01]
-
-    THE OVER-CAP PARK CARRIES THE SAME DEADLINE, and it is a different sentence about a different
-    state - a cap that EXISTS and is reached - which is the state §8's "never auto-retry past the
-    spend cap" is about. Parked is not retried: the task is deferred with its attempt handed back,
-    re-asked once a day, and each re-ask is this gate and not a paid call, so a title resumes by
-    itself only when the month has rolled over or the cap has been raised - the two events after
-    which running it is no longer "past the cap" at all (decision 325). The driver refuses a gate
-    park with no deadline (`_run_stage`), so this is also the one spelling that reaches the board.
+    Declared no-ops pass; an implemented paid stage asks `llm/spend.cap_check` and parks with its
+    sentence (`NO_SPEND_CAP` when no cap is set) and a deadline, never a failure (decision 348).
     """
     if not stage.paid or not stage.implemented:
         return None
-    # THE TASK'S BATCH PLAN, WHEN IT CARRIES ONE, and read through `stages.task_plan` - the reader
-    # stage 6 hands the same plan to the LLM layer through - so the reservation asked here is of the
-    # runs that stage will pay for (decision 442). The keyword is passed only when there is a plan:
-    # with none, the stored settings apply unchanged (decision 324) and the call is M5.5's exactly.
+    # The task's batch plan, through the same reader stage 6 uses (decision 442).
     batch = stages.task_plan(ctx.task)
     asked = {"title_id": ctx.title_id} if batch is None else {"title_id": ctx.title_id, "batch": batch}
     refusal = await spend.cap_check(ctx.conn, **asked)
@@ -365,14 +130,8 @@ async def refuse_uncapped_spend(stage: Stage, ctx: stages.StageContext) -> stage
 # --- the board -----------------------------------------------------------------------------------
 
 
-# `detail` is CONCATENATED rather than replaced, so the board accumulates one key per stage and an
-# operator reading a parked job can see what the stages before it did. jsonb `||` is a shallow
-# merge, which is what is wanted: one stage's key never silently merges into another's.
-#
-# `$6::text::jsonb` and not `$6::jsonb`, for the reason `acquire/queue.py::enqueue` states and
-# `backup/movie_data.py:767-770` states before it: `db/pool.py` registers `json.dumps` as the
-# jsonb encoder, so a dict passed against a `jsonb`-typed parameter is encoded twice and stored as
-# a JSON *string* that every reader then iterates character by character.
+# `detail` accumulates one key per stage (jsonb `||`). `$6::text::jsonb`: the pool's encoder
+# would double-encode a dict.
 _BOARD = """
 INSERT INTO acquisition_job (title_id, stage, status, reason, retry_after, detail)
 VALUES ($1, $2, $3, $4, $5, $6::text::jsonb)
@@ -398,38 +157,8 @@ async def write_board(
 ) -> None:
     """§6.6's board row for one title. The pipeline's only writer of `acquisition_job`.
 
-    `reason` is written EXACTLY as the stage gave it, including on an advance where it is NULL:
-    the column's own comment says "shown verbatim on the admin board" (`0005_ledger.sql:138`), and
-    a reason left over from a park the next stage cleared is a sentence describing a state the row
-    is no longer in.
-
-    `retry_after` is written whenever the park carried a time. The column was added for §8 stage
-    4's thirty-day review-accrual window and its comment names that case, but the fact it records
-    - when this job comes back by itself - is the same fact at any stage, and a board that could
-    not state it for a job deferred by the spend cap would be showing an operator a wait with no
-    end date.
-
-    THE CALLER OWES THIS FUNCTION A LIVE TITLE. `acquisition_job.title_id` is
-    `PRIMARY KEY REFERENCES title(id)` (`0005_ledger.sql:134`), so an id naming a row that is gone
-    is a `ForeignKeyViolationError` from a statement every stop path runs. `run_task` and
-    `_record_stop` below check before they call; M5.2 through M5.7 will call this too, and the
-    same debt is theirs. [M5.1 review cycle 1, seam322-01]
-
-    THAT SENTENCE WAS TRUE OF THE STOP PATHS AND NOT OF THE ADVANCE PATH, which checked once at
-    the top of `run_task` against the payload's title id and then wrote three more times against a
-    title stage 1 had established - a title another session can delete while a stage runs. Every
-    advance-path write now pays the same `SELECT 1`, so the debt this paragraph describes is one
-    the driver actually settles; the one write still taken on trust says so where it is made.
-    A later author adding a call here inherits the debt, not an exemption.
-    [M5.1 review cycle 4, seam322-C4-01]
-
-    `default=str` ON THE DUMP, because `detail` is whatever a stage returned and `Outcome.detail`
-    is published as `dict[str, Any]` with no serialisation contract anywhere in this package. A
-    stage-4 author writing `{"window_closes": <datetime>}` - the obvious shape for the thirty-day
-    window - or an M5.4 stage handing back a numpy scalar out of a projection would otherwise
-    raise `TypeError` from inside the driver's own bookkeeping. `str` and not a refusal: a board
-    detail is an operator's diagnostic, and losing the type of one value is a far smaller harm
-    than losing the row. [M5.1 review cycle 1, M51-REV-01, M51-CRASH-02]
+    `reason` is written exactly as given, NULL included. The caller owes a live title (FK).
+    `default=str` so any detail value serialises.
     """
     await conn.execute(
         _BOARD, title_id, stage, status, reason or None, retry_after,
@@ -441,16 +170,9 @@ async def write_board(
 
 
 def key_for_item(item: dict[str, Any]) -> str:
-    """The `(kind, key)` key for a Jellyfin item. Decision 322's "keyed on the Jellyfin item".
+    """The `(kind, key)` key for a Jellyfin item: `jellyfin:<id>`, else a prefixed provider id.
 
-    The item id first, because it is the household's own identity for the thing and is what
-    `resolve.resolve_title_id` tries first; a provider id as the fallback, so §8.4's flywheel can
-    enqueue work for something Jellyfin has never shown us. Prefixed, because a bare `tt0113277`
-    and a bare `949` in one column is a key space where two namespaces can collide.
-
-    This function is the one spelling. A second enqueuer that built the key its own way would
-    defeat `UNIQUE (kind, key)` - the whole point of which is that the nightly sweep and the
-    flywheel enqueueing the same title is a no-op rather than two crawls.
+    The one spelling, so `UNIQUE (kind, key)` dedupes every enqueuer.
     """
     jellyfin_id = str(item.get("Id") or "").strip()
     if jellyfin_id:
@@ -469,10 +191,7 @@ async def enqueue_item(
 ) -> bool:
     """Enqueue one Jellyfin item for the pipeline. True when a task was created.
 
-    The payload carries the ITEM and not a title id, because there may be no title yet - that is
-    decision 322's reason for a queue table with no foreign key to `title`. M4.11's sweep already
-    produces exactly this input: `ResolveReport.unmatched` is the list §12's note calls "M5's
-    acquisition pipeline consumes this sweep's unmatched report".
+    The payload carries the item, not a title id: the title may not exist yet (decision 322).
     """
     return await queue.enqueue(
         conn, TASK_KIND, key_for_item(item), {"item": item}, priority=priority
@@ -482,25 +201,10 @@ async def enqueue_item(
 async def enqueue_title(
     conn: asyncpg.Connection, title_id: int, *, priority: int = 100
 ) -> bool:
-    """Enqueue a title that already exists. True when a task was created.
+    """Enqueue a title that already exists (`title:<id>`). True when a task was created.
 
-    THE INBOX IS NOT EMPTY ON A REAL INSTALL. `placement/reconcile._park_thin` has been writing
-    `(stage = 2, status = 'parked')` rows since M4.13 for every thin-but-placed title, and §5.3
-    calls them what they are: "parked as acquisition jobs for M5 enrichment". Nothing has ever
-    drained them, because until this milestone there was nothing to drain them with. Those rows
-    are the pipeline's inbox rather than a backlog of failures (decision 336), and a task made
-    here re-enters at the stage the board records - 2, enrich - rather than at 1.
-
-    Keyed `title:<id>` and therefore distinct from the same title's `jellyfin:<item>` task. That
-    is a deliberate consequence rather than an oversight: the two keys are two different claims
-    about what the work is, and `run_task` reconciles them through the board, which is the row
-    that knows how far the title actually got.
-
-    THE BOARD RECONCILES THE TWO CLAIMS AND DOES NOT SERIALISE THEM, which this paragraph used to
-    run together. `_resume_index` is a `SELECT` with no `FOR UPDATE` and the walk holds no
-    transaction, so the reconciliation is a snapshot: it makes a second walk START where the first
-    one got to, and says nothing about the two running at once. `run_task` takes `_TITLE_LOCK` for
-    that. [M5.1 review cycle 2, seam322-06]
+    Drains `_park_thin`'s inbox rows, which re-enter at the board's stage. A second key for one title;
+    `_TITLE_LOCK` keeps two walks apart.
     """
     return await queue.enqueue(
         conn, TASK_KIND, f"title:{title_id}", {"title_id": int(title_id)}, priority=priority
@@ -550,25 +254,8 @@ class DrainReport:
 async def _resume_index(conn: asyncpg.Connection, title_id: int) -> int:
     """Where this title's board says the pipeline is, as an index into `STAGES`.
 
-    The BOARD is the resume point and the task is not, because the board is per title and the task
-    is per key: a title can carry a `jellyfin:` task from the sweep and a `title:` task from the
-    flywheel, and both must re-enter where the title actually got to rather than where their own
-    row was created. A title with no board row has not started, which is index 0.
-
-    A job already at `ready` re-enters at stage 10, which re-checks and re-stamps rather than
-    doing nothing. That is D5's idempotence rather than a wasted call: the alternative - returning
-    "past the end" - would make a re-run of a finished task a silent no-op, and a silent no-op is
-    indistinguishable from a driver that stopped working.
-
-    A PARK WHOSE OWN DEADLINE HAS PASSED RE-ENTERS AT ITS STAGE'S `reask_from`, when it declares
-    one - §8 stage 4's window, which re-enters at stage 2 so that the reviews written in the
-    meantime are fetched and derived before the gate counts again, and §8 stage 6's park, which
-    re-enters at stage 5 so that the pack it waited on is stored before the gate asks again
-    (decision 467). `now()` and not this process's
-    clock, because the queue leases on `next_attempt_at <= now()` and the window has to close by
-    the same clock that made the task due. A `retry_after` still in the future is an operator
-    making the task due early, and that re-enters at the board's stage as it always did.
-    [M5.3 review cycle 2, m53-c2-gate-01, M53-C2-NET-03; decision 421]
+    The board, not the task, is the resume point; `ready` re-enters at stage 10. A park whose deadline
+    has passed (by the database clock) re-enters at its stage's `reask_from`.
     """
     row = await conn.fetchrow(
         "SELECT stage, status = $2 AND retry_after <= now() AS closed"
@@ -585,14 +272,7 @@ async def _resume_index(conn: asyncpg.Connection, title_id: int) -> int:
 
 
 async def _remember_title(conn: asyncpg.Connection, task: queue.Task, title_id: int) -> None:
-    """Record on the task which title stage 1 established.
-
-    Written by the worker HOLDING THE LEASE and adding a key, which is the one safe shape for a
-    payload write: `queue.enqueue`'s `ON CONFLICT DO NOTHING` refuses to touch a payload precisely
-    because "a second enqueue that clobbered the payload of a task already leased would change the
-    work under a running stage". This does not change the work; it records what the work turned
-    out to be, so a reclaim after a crash does not have to re-derive it.
-    """
+    """Record on the task which title stage 1 established; written by the lease holder only."""
     await conn.execute(
         "UPDATE acquisition_task SET payload = payload || $2::text::jsonb, updated_at = now()"
         " WHERE id = $1",
@@ -600,12 +280,8 @@ async def _remember_title(conn: asyncpg.Connection, task: queue.Task, title_id: 
     )
 
 
-# The drain's second extension point, and the shape is `StageGate`'s for the same reason: a test
-# has to be able to answer the question differently without the driver knowing it is a test.
-# `FetcherFactory` makes an UN-ENTERED `Fetcher`; the drain enters it, so `__aexit__` - which
-# closes the client and flushes `fetch_host_state` - runs exactly once and is the drain's to own
-# rather than a factory's to remember. `FetcherSupply` is what `run_task` is handed: call it and
-# get the drain's one Fetcher, built on the first call and returned unchanged on every later one.
+# `FetcherFactory` makes an un-entered Fetcher that the drain enters and exits once;
+# `FetcherSupply` hands `run_task` the drain's one Fetcher, built on first call.
 FetcherFactory = Callable[[asyncpg.Connection], Awaitable[fetch.Fetcher]]
 FetcherSupply = Callable[[], Awaitable[fetch.Fetcher]]
 
@@ -613,19 +289,7 @@ FetcherSupply = Callable[[], Awaitable[fetch.Fetcher]]
 async def _default_fetcher(conn: asyncpg.Connection) -> fetch.Fetcher:
     """The fetcher a real drain uses. One per drain, paced from `fetch_host_state`.
 
-    THE JELLYFIN HOST IS READ FROM `connector_config` AND NOT FROM A SETTING, because that is
-    where §2 puts it - "configured in the admin UI and stored in `connector_config`" - and because
-    `hosts.policy_for` needs the value an admin actually typed in order to apply `JELLYFIN_POLICY`
-    to the right host. `fetch.py`'s port verdict 6 records why the fetcher takes the hostname
-    rather than reaching for it: "reaching for it here would couple the fetcher to the connector
-    layer and to the secrets boundary for one hostname comparison". So the coupling lands here,
-    in the driver, which already imports the connector layer for `resolve`.
-
-    THE EXEMPTION IS NOT WIDENED BY ONE CHARACTER. `registry.load_jellyfin` degrades to an empty
-    url when the DEK will not open, and `hosts.policy_for` reads an empty `jellyfin_host` as "no
-    exemption" - so an install whose secrets are unreadable crawls every host politely rather than
-    crawling one of them fast. `jellyfin_key` takes the URL whole, `policy_for` refuses to let a
-    declared row be overridden by it (`hosts.py:292-300`), and none of that is restated here.
+    The Jellyfin host comes from `connector_config`; an unreadable one means no exemption.
     """
     jellyfin = await registry.load_jellyfin(conn)
     return fetch.Fetcher(conn=conn, jellyfin_host=jellyfin.url)
@@ -634,16 +298,7 @@ async def _default_fetcher(conn: asyncpg.Connection) -> fetch.Fetcher:
 class _OneFetcher:
     """One `Fetcher` per drain, built on the first stage that declares it fetches.
 
-    Not a `functools.cache` and not a module-level singleton: the instance holds this drain's
-    per-host token buckets and its view of the breaker, and `fetch.Fetcher`'s own docstring says
-    the unit is the worker job rather than the process. It also holds the connection, which is the
-    drain's and goes back to the pool when the drain ends.
-
-    THE POINT IS THE CALL THAT NEVER HAPPENS. A drain whose tasks all park at stage 1, or whose
-    one task resumes at stage 4 and re-reads the raw store, never reaches a stage with
-    `fetches=True`, so `__call__` is never awaited, `httpx.AsyncClient` is never constructed and
-    nothing is put on the wire. That is measurable from the outside - the factory is not called -
-    which is what makes exit criterion measure 5 a test rather than an argument.
+    A drain that never reaches such a stage never builds an HTTP client (exit measure 5).
     """
 
     def __init__(
@@ -669,82 +324,9 @@ async def _run_stage(
 ) -> stages.Outcome:
     """One stage, gated, with a raise turned into `fail` and a bad return turned into one too.
 
-    `except Exception` and NOT `except BaseException`: `worker.py`'s `_tick` bounds every job with
-    `asyncio.wait_for`, which CANCELS, and `CancelledError` is not an `Exception` in this Python -
-    so a cancellation must propagate rather than be written to the board as a stage failure. The
-    task it leaves behind is `leased` with an expiry, which is the row `queue.reclaim_expired`
-    exists for and the only recovery that survives a `kill -9` at all.
-
-    THE GATE IS INSIDE THE GUARD. It was one line above it, which made the one extension point
-    this milestone publishes - `StageGate`, which M5.5 fills with a spend cap read out of the
-    database - the one call in the driver whose failure could not be described as a stage outcome.
-    A cap that cannot be read is decision 336's `failed` exactly ("this stage raised and will raise
-    again"), and it is now recorded as one instead of escaping `run_task`.
-    [M5.1 review cycle 1, M51-CRASH-02]
-
-    AND THE RETURN VALUE IS CHECKED, because this function's contract with a stage author is that
-    a stage cannot break the tick - only its own task. That contract stopped at the `return`: a
-    stage with a branch that falls off the end returns None, and `run_task` then dereferenced
-    `.detail` on it and raised `AttributeError` from the driver, with the task left `leased`, the
-    board frozen at `running` and nothing naming the stage. Eighteen stage bodies are still to be
-    written against this shape, so the refusal says which stage and what it returned, which
-    `AttributeError: 'NoneType'` does not. [M5.1 review cycle 1, seam322-05]
-
-    THE GATE'S RETURN IS CHECKED BY THE SAME SENTENCE, because the paragraph above was written
-    about this function's whole contract and then applied to one of its two calls. `return
-    refusal` left the `try` three lines above the guard, so a gate answering with anything other
-    than an `Outcome` landed on `run_task`'s own `outcome.detail` with no handler between: through
-    `drain` that is a task failed with "the driver failed outside any stage", naming no stage and
-    spending an attempt, and through `run_task` - which every M5.2-M5.7 test and `ops/` script
-    calls directly - it is a task left `leased` with nothing written at all. `StageGate` is the one
-    extension point this milestone publishes and `Outcome | None` is a type annotation nothing in
-    this repo enforces, so the gate deserves the guard the stage already has, not less of one.
-
-    AND AN `ADVANCE` FROM A GATE IS REFUSED, which is the worse shape rather than the loud one.
-    Decision 348 gives a gate exactly two answers - None means "run it", anything else means "do
-    not, and record this" - so a gate answering "the cap is fine" with `advance()` is not a near
-    miss, it is the stage SKIPPED: the walk runs on with the billing stage's name in its report
-    and its body never called, and §6.6's board shows a clean walk. A gate that means "run it" has
-    to say None, and this is where that is enforced rather than hoped for.
-    [M5.1 review cycle 4, M51-C4-PAID-01]
-
-    AND A GATE'S PARK CARRIES A DEADLINE, which is the one gate mistake of the three that cannot
-    be taken back. `_record_stop` turns a park with no `until` into `queue.skip`, and
-    `stages.waiting_on_the_world`'s docstring states what that means in this tree: nothing moves a
-    row out of `skipped` - `lease` claims `pending` only, `defer` is fenced on pending-or-leased,
-    neither reaper matches, `enqueue` is `ON CONFLICT DO NOTHING`, and decision 330's revive is
-    M5.6's. So where the other two arms cost one stage or one attempt, this one closes the task on
-    its first refusal, and `stages.park`'s signature makes `until` optional while
-    `ROADMAP-M5.md:324` spells M5.5's cap refusal as the bare sentence "stage 6 parks `over spend
-    cap`" - which is the natural reading of a gate that "never auto-retries". A STAGE may
-    legitimately park with no deadline: stage 1's `NO_PROVIDER_ID` waits on a person editing
-    Jellyfin and says so. A GATE may not, because what a gate waits on is configuration - a cap
-    that is set, a period that rolls over, a setting an operator changes - which is decision 336's
-    "waiting on something that may change" in its plainest form. M5.1 made this exact mistake in
-    `refuse_uncapped_spend` (cycle 1) and in `stages.place` (cycle 2); a class this milestone has
-    shipped twice is not hypothetical at the one extension point it publishes for a milestone that
-    bills real money. [M5.1 review cycle 4 second pass, M51-C4-PAID-04]
-
-    THE FETCHER IS OPENED BETWEEN THE GATE AND THE STAGE, which is the one order that honours both
-    of decision 373's reasons at once. `run_task` used to open it before calling this function, so
-    a title the gate then parked had its HTTP client built for a walk that would make no request --
-    every daily re-ask of every title parked at stage 6 -- and a factory that raised turned a park,
-    which refunds the attempt, into the drain's failure, which spends it: four such re-asks closed
-    a waiting title for good. It is still opened OUTSIDE the stage's guard, for the reason
-    `run_task` gave: a factory that raises is the drain's fault and not this title's.
-    [M5.5 review cycle 1, NBR-02, M55-SPEND-05]
-
-    AND A PAID STAGE IS HANDED THE SUPPLY, NOT THE FETCHER. Opening between the gate and the stage
-    kept the client off a title the GATE parks and still built it before the stage's own parks: stage
-    6's no pack, no vocabulary and failed-for-good reads all come after it, and the gate lets a title
-    with no stored pack through by design (`spend.cap_check` step 4) -- which decision 432 said was
-    every title's state at stage 6 until stage 5 was wired (decision 461), and which a walk resumed
-    past stage 5 can still be in. So each daily re-ask of a capped install's
-    waiting title built the Fetcher, and a factory that raised turned the park into the drain's
-    failure, four of which closed it: the harm the paragraph above says was removed. A paid stage gets
-    `ctx.open_fetcher`, and `llm/extract` asks it once every read that could refuse has passed and a
-    request is next; a factory that raises there fails the stage that was about to send, which is
-    the true sentence for it. Stage 2 keeps the opened fetcher. [M5.5 review cycle 2, NBR-C2-01]
+    `except Exception`, so a cancellation propagates. The gate runs inside the guard and must return
+    None or a park/fail with a deadline; an `advance` is refused. The fetcher opens after the gate,
+    outside the guard; a paid stage gets the supply and opens it only when a request is next.
     """
     try:
         refusal = await gate(stage, ctx)
@@ -801,65 +383,16 @@ async def run_task(
 ) -> TaskReport:
     """Walk one task through §8's stages from wherever its title's board row says it is.
 
-    The three exits, and each writes BOTH tables because they answer different questions:
-
-      * every stage advanced - the board reads `stage = 10, status = 'ready'` and the task is
-        `complete`d;
-      * a stage parked - the board reads that stage with the reason verbatim, and the task is
-        `defer`red to the park's own instant or `skip`ped when the park named none. Decision 336:
-        a park with a time waits for the world, a park without one waits for an operator, and
-        neither spends an attempt;
-      * a stage failed - the board reads `failed` with the reason, and `queue.fail` decides in SQL
-        whether that is a retry or the end of the task's attempts.
-
-    NOTHING IS WRITTEN TO THE BOARD BEFORE STAGE 1 ESTABLISHES A TITLE, because the board's
-    primary key is `title_id` and decision 322's whole point is that the task can exist first. A
-    task that parks at stage 1 - "no provider id", decision 323 - therefore writes no board row at
-    all, and the reason lives on the TASK, where `queue.skip` puts it. That is the honest place
-    for it: there is no title for §6.6 to show a row about, and inventing one to hang a reason on
-    would be the mint decision 323 forbids.
-
-    AND A FOURTH OUTCOME, WHICH IS NOT A STAGE'S: this walk yields because another worker is
-    already walking this title. `_TITLE_LOCK` is taken the moment a title is established - from
-    the payload at the top, or from stage 1's mint below - and released at every exit. Decision
-    322 gives one title two keys on purpose (`enqueue_title`), `queue.lease` filters on the kind
-    and not on the title, and `FOR UPDATE SKIP LOCKED` is what hands those two rows to two
-    workers - so under the rolling restart `queue.lease`'s own docstring calls "the ordinary
-    state", two loops walked one title in parallel and both wrote. The board cannot stop that: it
-    is read at most twice per walk, with no `FOR UPDATE` and no transaction around it, so it
-    decides where a walk STARTS and nothing about what runs at the same time. A session-level
-    advisory lock is this tree's answer to that question in five other places
-    (`ledger/refit.py`, `rank/drop.py`, `sync/seen.py`, `tonight/ballot.py`, `importer/bundle.py`),
-    it costs nothing when uncontended, and Postgres releases it if the worker dies - which is the
-    only release that survives a `kill -9`. The loser DEFERS with no attempt spent and writes no
-    board row, because the row belongs to the walk that holds the title.
-    [M5.1 review cycle 2, seam322-06]
-
-    `open_fetcher` IS ASKED FOR ONLY BY A STAGE THAT DECLARED IT FETCHES (decision 373), and it is
-    asked for INSIDE the walk rather than before it - which is what makes "a resume at stage 4
-    opens no socket" a property of the loop rather than of a caller remembering. None is a legal
-    value and means nobody supplied one: `stages.enrich` and `stages.dna_extract` then fail with a
-    reason naming the driver instead of constructing a Fetcher of their own, because one drain has
-    one set of per-host token buckets or it has none (`_OneFetcher`).
+    Advance, park or fail each write both tables. No board row before stage 1 establishes a title. A
+    walk that cannot take `_TITLE_LOCK` yields. `open_fetcher` is asked only by stages that fetch.
     """
     ctx = stages.StageContext(
         conn=conn, task=task, title_id=_payload_title_id(task), run_id=run_id
     )
     report = TaskReport(task_id=task.id, key=task.key, title_id=ctx.title_id)
     if ctx.title_id is not None and not await _title_exists(conn, ctx.title_id):
-        # A task whose payload names a title that is no longer there. Decision 322 gives this queue
-        # no foreign key to `title` on purpose - so that a task can exist before its title does -
-        # and the same absence lets one outlive its title, which `test_acquire_schema.py` builds
-        # deliberately. `stages.identify` short-circuits on a payload title id without touching the
-        # database, so the first thing the driver would do with such a task is INSERT the stage-2
-        # board row, and `acquisition_job.title_id` is `REFERENCES title(id)`: a
-        # ForeignKeyViolationError from the driver's own bookkeeping, outside every handler.
-        #
-        # Handled the way decision 323 handles an item with no provider id, and for the same
-        # reason `run_task`'s docstring gives below: there is no title for §6.6 to show a row
-        # about, so the reason lives on the TASK, which has no foreign key. A skip and not a fail,
-        # because nothing raised and no retry can put the title back.
-        # [M5.1 review cycle 1, seam322-01, M51-REV-06]
+        # The payload names a title that no longer exists: skip with the reason on the task (no board row
+        # can reference it).
         report.status = PARKED
         report.reason = TITLE_GONE.format(ctx.title_id)
         await queue.skip(conn, task.id, report.reason)
@@ -878,16 +411,7 @@ async def run_task(
         while index < len(STAGES):
             stage = STAGES[index]
             report.stage = stage.number
-            # The fetcher is opened inside `_run_stage`, AFTER the gate and OUTSIDE the stage's
-            # guard. A factory that raises is the drain's failure and not this stage's: it means the
-            # connector read or the client construction broke, which will break identically for
-            # every task in this batch, and `drain`'s own `except Exception` closes the task with
-            # "the driver failed outside any stage" - which is the true sentence. That spends the
-            # attempt the lease took, exactly as a stage failure would; what it no longer does is
-            # spend it for a title the gate would have parked, because the gate now answers first.
-            # [M5.5 review cycle 1, NBR-02] A paid stage is handed the supply instead and opens it
-            # only when a request is next, so its own parks build nothing either (`_run_stage`).
-            # [M5.5 review cycle 2, NBR-C2-01]
+            # A factory that raises is the drain's failure, not this stage's.
             outcome = await _run_stage(stage, ctx, gate, open_fetcher)
             report.stages_run.append(stage.name)
             detail = {stage.name: outcome.detail} if outcome.detail else {}
@@ -902,24 +426,15 @@ async def run_task(
                 ctx.title_id = int(outcome.title_id)
                 report.title_id = ctx.title_id
                 await _remember_title(conn, task, ctx.title_id)
-                # A minted title is one nobody else can hold; a RESOLVED one is exactly the title
-                # another worker's `title:<id>` task may be walking right now, and stage 1 is the
-                # first moment this walk knows which it got. [M5.1 review cycle 2, seam322-06]
+                # A resolved title may be walked by another worker's `title:<id>` task.
                 if not await _claim_title(conn, ctx.title_id):
                     return await _yield_the_title(conn, task, report, ctx.title_id)
                 held = ctx.title_id
-                # The board may know more than the task does. A title reached through one key can
-                # already be in flight under another - the sweep's `jellyfin:` task and the
-                # flywheel's `title:` task are two claims about one title - and the board is the
-                # row that knows how far it actually got. Jumping FORWARD only: a board behind
-                # this run is a row this run is about to correct.
+                # Jump forward to the board's stage; the board knows how far the title got.
                 resumed = await _resume_index(conn, ctx.title_id)
                 if resumed > index:
                     index = resumed
-                    # Not guarded by `_title_exists` the way the two writes below are: `_resume_index`
-                    # one line up read the board row whose existence is the foreign key, so this
-                    # branch is only reached when the title was there a round trip ago. The window
-                    # left is the one no read can close.
+                    # The board row just read is the FK, so the title existed a round trip ago.
                     await write_board(
                         conn, ctx.title_id, stage=STAGES[index].number, status=RUNNING,
                         detail=detail,
@@ -928,19 +443,10 @@ async def run_task(
 
             index += 1
             if ctx.title_id is None:
-                # Stage 1 advanced without establishing a title. Nothing can: every later stage
-                # needs one, and `stages.place` and `stages.ready` say so by failing.
+                # Stage 1 advanced without establishing a title; later stages fail on it.
                 continue
-            # CHECKED ON THE ADVANCE PATH TOO, which is what `write_board`'s "the caller owes this
-            # function a live title" was asserting about `run_task` while `run_task` checked once,
-            # at the top, against the payload's title id. A title established by stage 1 can be
-            # deleted DURING the walk - an operator repairing a bad mint is the live case - and
-            # the next board write is then a `ForeignKeyViolationError` raised from the driver's
-            # own bookkeeping, outside every handler: `drain` catches it and closes the task with
-            # "the driver failed outside any stage", which names no stage and spends an attempt,
-            # where `TITLE_GONE` already names the state and the lever. Skipped for the reason the
-            # top-of-function check gives: nothing raised, and no retry can put the title back.
-            # [M5.1 review cycle 4, seam322-C4-01]
+            # The title can be deleted during the walk; skip with `TITLE_GONE` rather than an FK
+            # violation.
             if not await _title_exists(conn, ctx.title_id):
                 report.status = PARKED
                 report.reason = TITLE_GONE.format(ctx.title_id)
@@ -948,11 +454,8 @@ async def run_task(
                 log.warning("acquisition task %d lost title %d mid-walk at stage %d",
                             task.id, ctx.title_id, stage.number)
                 return report
-            # §8.4's thin-facet feed, written the moment the stage that carries the flag finishes
-            # (decision 440): after the title is known to still exist, before the board says the walk
-            # moved on, and committed when the call returns, so the admin queue reads the row with no
-            # tick in between. NOT GUARDED: a failed write propagates, and `drain` records the walk's
-            # failure, because a feed that silently skipped a title is the one nobody could diagnose.
+            # §8.4's feed, written as the stage finishes (decision 440). Not guarded: a failed write fails
+            # the walk.
             if stage.observes_coverage:
                 await thin.observe_title(conn, ctx.title_id)
             if index < len(STAGES):
@@ -966,12 +469,7 @@ async def run_task(
                 report.status = READY
                 await queue.complete(conn, task.id, f"ready at stage {stage.number}")
     finally:
-        # UNCONDITIONALLY, and on every exit including a cancellation. A session-level advisory
-        # lock outlives its transaction and travels back into the pool with the connection, which
-        # is the cost `sync/seen.py:296-300` states for the same choice - so a walk that forgot to
-        # release would wedge that title for the life of the connection with nothing saying so.
-        # Suppressed for the same reason the release in `drain` is: an unlock that fails must not
-        # replace whatever this walk was already reporting. [M5.1 review cycle 2, seam322-06]
+        # Always release: a session lock travels back into the pool with the connection. Suppressed.
         if held is not None:
             with contextlib.suppress(Exception):
                 await _release_title(conn, held)
@@ -985,12 +483,8 @@ TITLE_IN_FLIGHT = (
 
 
 async def _claim_title(conn: asyncpg.Connection, title_id: int) -> bool:
-    """Take this title for this walk, or say that someone else has it. Never waits.
-
-    `pg_try_advisory_lock` and not `pg_advisory_lock`: §5.3's loop is sequential, so a drain that
-    BLOCKED on another worker's title would hold the whole tick behind it, and a task handed back
-    is exactly what the queue is for. Two ints rather than the one-argument `hashtext` form, whose
-    lock space is a different one (`api/deps.py`), and a title id is already an int4.
+    """Take this title for this walk, or say that someone else has it. Never waits (the loop is
+    sequential).
     """
     return bool(
         await conn.fetchval("SELECT pg_try_advisory_lock($1, $2)", _TITLE_LOCK, int(title_id))
@@ -1006,14 +500,7 @@ async def _yield_the_title(
 ) -> TaskReport:
     """Hand this task back because another worker holds its title. Decision 336's `parked`.
 
-    DEFERRED AND NOT SKIPPED: the thing that may change is the other walk finishing, which it will
-    - the drain's budget is a fraction of `LEASE_SECONDS` - so this is a wait with a deadline, and
-    the deadline is now: the next tick leases it, by which time the other walk is over. No attempt
-    is spent, because nothing was attempted.
-
-    AND NO BOARD ROW IS WRITTEN. §6.6's row for this title belongs to the walk that holds it, and
-    stamping "parked" over its `running` would show an operator a stalled title while the pipeline
-    was moving it. [M5.1 review cycle 2, seam322-06]
+    Deferred to now with no attempt spent, and no board row written.
     """
     report.status = PARKED
     report.reason = TITLE_IN_FLIGHT
@@ -1032,32 +519,8 @@ async def _record_stop(
 ) -> None:
     """Write a park or a failure to both tables, board first.
 
-    Board first, and the order is not arbitrary: the board is what an operator reads and the task
-    is what the drain reads, so a crash between the two leaves a row that OVERSTATES how stuck the
-    job is rather than one that understates it. The task is then still `leased`, its lease expires,
-    `reclaim_expired` returns it, and the next drain re-enters at the stage the board recorded -
-    which is the same place it would have resumed from anyway.
-
-    A FAILURE RECORDS WHETHER A RETRY IS COMING, computed here rather than read back from
-    `queue.fail`'s return. The queue computes that branch in SQL against the row's own `attempts`
-    - one statement rather than a read and a write, so two drains failing one task cannot both
-    read one counter - and the same arithmetic is available here because attempts are counted on
-    the CLAIM: the leased task already carries the number the SQL will compare. The board's
-    `status` is `failed` either way (decision 336 makes `failed` the state that "raised and will
-    raise again"); what the detail adds is the one thing an operator cannot infer from it, which
-    is whether the machine will try again or whether they must.
-
-    A PERMANENT FAILURE IS THE THIRD INPUT TO THAT SAME ARITHMETIC (decision 431). The stage says
-    it on the outcome, `queue.fail` receives it as the `permanent` it has carried since M5.1 and
-    closes the task in the same statement, and `retrying` is false whatever attempts are left -
-    because the queue will not try again, and a board that said it would would send the operator
-    away from the only lever that exists, the admin retry.
-
-    AND THE PERMANENCE IS WRITTEN ONTO THE TASK, in one transaction with `queue.fail`: the payload
-    gains `stages.FAILED_FOR_GOOD_MARK` on a permanent failure and loses it on any other. Stage 6
-    reads it to park a title's other keys (decision 431 per title), and used to infer it from
-    `attempts < max_attempts` instead -- which a permanent failure on the task's last attempt does not
-    satisfy, since it writes exactly the row exhaustion writes. [M5.5 review cycle 2, C2-PAID-01]
+    Board first, so a crash overstates rather than understates. The detail says whether a retry is
+    coming; a permanent failure (decision 431) is also marked on the task payload.
     """
     task = ctx.task
     if outcome.verb == stages.FAIL:
@@ -1065,11 +528,7 @@ async def _record_stop(
             "attempts": task.attempts,
             "retrying": not outcome.permanent and task.attempts < task.max_attempts,
         }}
-    # CHECKED HERE TOO, and not only at the top of `run_task`, because a title can vanish DURING a
-    # walk and `stages.ready` has a guard for exactly that - `fail(f"title {id} no longer exists")`.
-    # That guard was dead: its failure routed straight into this function, whose board write is
-    # the FK violation, so the one sentence written for the state could only ever be replaced by a
-    # traceback. The task keeps the reason either way. [M5.1 review cycle 1, seam322-01]
+    # A title can vanish mid-walk; only write the board if it still exists.
     if ctx.title_id is not None and await _title_exists(conn, ctx.title_id):
         await write_board(
             conn, ctx.title_id,
@@ -1090,8 +549,7 @@ async def _record_stop(
             await queue.fail(conn, task.id, outcome.reason, permanent=outcome.permanent)
 
 
-# `jsonb_build_object` rather than a bound jsonb, for `_BOARD`'s reason above: a dict bound against a
-# jsonb parameter is encoded twice by `db/pool.py`'s codec. `payload` is NOT NULL (0024).
+# `jsonb_build_object` rather than a bound jsonb, for `_BOARD`'s reason. `payload` is NOT NULL.
 _PERMANENCE = (
     "UPDATE acquisition_task SET payload = CASE WHEN $2::bool"
     f" THEN payload || jsonb_build_object('{stages.FAILED_FOR_GOOD_MARK}', true)"
@@ -1105,14 +563,7 @@ def _payload_title_id(task: queue.Task) -> int | None:
 
 
 async def _title_exists(conn: asyncpg.Connection, title_id: int) -> bool:
-    """Does the board's foreign key still have something to point at?
-
-    One `SELECT 1` per stop, and per task that arrived carrying a title id. That is the price of
-    the bridge decision 322 built: `acquisition_task` has no foreign key to `title` so that a task
-    can name work for a title that does not exist yet, and `acquisition_job.title_id` is a foreign
-    key so that a board row cannot describe a title nobody has. The driver is the only thing that
-    crosses between them, so the driver is where the check belongs.
-    """
+    """Does the board's foreign key still have something to point at?"""
     return bool(await conn.fetchval("SELECT 1 FROM title WHERE id = $1", title_id))
 
 
@@ -1126,54 +577,8 @@ async def drain(
 ) -> DrainReport:
     """Reclaim what died, lease up to `limit` ready tasks, and walk each one. §5.3's job body.
 
-    RECLAIM FIRST, which is `mdc/runner.py:94-98`'s order and for its reason: a task whose worker
-    was killed is `leased` past its expiry and invisible to the lease query, so a drain that
-    leased before reclaiming would report an empty queue while holding work nobody is doing.
-
-    SEQUENTIAL, one task after another, and no pool. §5.3's worker loop is sequential
-    (`worker.py:987-1006`) and every budget in `JOBS` is at or under its own interval because of
-    it; a per-kind worker pool is a real change to what the box does under load and needs its own
-    decision (plan §8). The corpus runs a pool of four because it is crawling nineteen thousand
-    titles against eleven hosts; a household acquiring a film a week is not that problem.
-
-    `paid` IS NOT PASSED, so `queue.lease` takes free work only - its default, and the WHERE-clause
-    refusal its docstring argues for. A paid task kind does not exist at M5.1; when one does, the
-    caller that drains it will be the one that knows a cap has been checked. §8 STAGE 6 BILLS AND
-    IS NOT ONE: an acquisition task stays `paid=False` for its whole walk, because what costs money
-    is one STAGE of it and the cap is asked at that stage, by the gate, before the call
-    (decision 348). Enqueueing acquisition work as paid would not add a check; it would hide every
-    title from this lease.
-
-    ONE TASK'S FAILURE COSTS ONE TASK, which the loop below is written to guarantee and did not.
-    `queue.lease` claims the whole batch in one statement and counts an attempt ON THE CLAIM, so a
-    raise anywhere in `run_task` used to leave every task ordered after it `leased`, never run, and
-    one attempt poorer - and `queue.reclaim_expired` then read that as a killed worker and, four
-    ticks later, closed up to `DRAIN_LIMIT` untouched titles for good with a sentence saying a
-    worker had been stopped. `mdc/runner.py:161-205` does not have this shape: the corpus wraps the
-    whole per-task body, handler AND bookkeeping, and fails that task. The port narrowed the guard
-    to `stage.run` alone, and this restores it.
-
-    A CANCELLATION STILL PROPAGATES - `_run_stage`'s reason, and this loop keeps it - BUT IT NO
-    LONGER COSTS THE BATCH. `_tick` bounds this job with `asyncio.wait_for`, which cancels, and
-    the corpus's own arm for that (`mdc/runner.py:200-202`) was the one thing the port did not
-    take. Without it the paragraph above was true of a raise and false of a budget: every task
-    ordered after the one in flight stayed `leased`, never run, one attempt poorer, and four such
-    ticks closed them for good with `reclaim_expired`'s sentence about a worker that was stopped.
-    The arm below hands those back through `queue.release`, refunded, and re-raises; the task that
-    actually ate the budget keeps its attempt, so `max_attempts` still bounds a stage that cannot
-    finish inside one tick. [M5.1 review cycle 2, port-CANCEL-01]
-    [M5.1 review cycle 1, M51-REV-01, M51-CRASH-02]
-
-    ONE FETCHER FOR THE WHOLE BATCH, AND IT IS BUILT ONLY IF SOMETHING ASKS (decision 373). The
-    `AsyncExitStack` is what makes "inside `async with`" true across a loop that may or may not
-    need one: nothing is entered until `_OneFetcher` is called, and whatever was entered is exited
-    on the way out - closing the client and flushing this drain's per-host counters into
-    `fetch_host_state`, which is the row §6.6 reads and the row the NEXT drain rebuilds its pacing
-    and its breaker from. The stack wraps the CANCELLATION arm too, and that matters: `_tick`
-    bounds this job with `asyncio.wait_for`, and a drain cancelled at its budget must still flush
-    the requests it already made, or a household's politeness accounting resets every time a tick
-    runs long. `fetcher_factory` is the seam a test replaces with an `httpx.MockTransport`, in
-    `StageGate`'s shape and for its reason.
+    Sequential. Free work only: stage 6 is gated, the task is not paid. One task's raise costs one task;
+    a cancellation refunds the untouched rest. One Fetcher for the batch, flushed on every exit.
     """
     report = DrainReport()
     report.reclaimed = await queue.reclaim_expired(conn)
@@ -1199,50 +604,19 @@ async def _walk_batch(
     run_id: int | None,
     open_fetcher: FetcherSupply,
 ) -> None:
-    """`drain`'s loop, lifted out whole so the fetcher's `async with` can wrap it.
+    """`drain`'s loop, lifted out so the fetcher's `async with` can wrap it.
 
-    EVERY LINE BELOW IS `drain`'s AND ONE OF THEM MOVED: the `run_task` call gained
-    `open_fetcher`, and nothing else changed - including the two arms `drain`'s docstring argues
-    at length, the cancellation refund and the fourth exit that writes both tables. It is a
-    function rather than an extra indentation level because the loop is forty lines of
-    comment-dense bookkeeping and re-wrapping it in `async with` would have re-flowed every one of
-    them, turning a two-line change into a diff nobody could read for the thing that actually
-    moved. The report is passed in and mutated for the same reason: `drain` still owns it, and
-    this function returns nothing precisely so it cannot become a second place the counters are
-    decided.
-
-    A CANCELLATION STILL PROPAGATES THROUGH THE STACK, which is what makes the split safe rather
-    than merely tidy. `_tick` bounds the job with `asyncio.wait_for`; the arm below hands the
-    untouched tasks back and re-raises, `drain`'s `AsyncExitStack` then exits the Fetcher on the
-    way out, and this drain's per-host counters reach `fetch_host_state` even though the tick ran
-    long. Without that, a household whose ticks regularly overran would keep no politeness
-    accounting at all. `test_acquire_drain.py`'s budget test is what holds it.
+    The report is `drain`'s and is mutated here; nothing is returned.
     """
     for position, task in enumerate(leased):
         try:
             outcome = await run_task(conn, task, gate=gate, run_id=run_id,
                                      open_fetcher=open_fetcher)
         except asyncio.CancelledError:
-            # `_tick`'s budget, not a worker dying, and the difference is the rest of this batch.
-            # `queue.lease` claims the whole batch in one statement and counts the attempt ON THE
-            # CLAIM, so a cancellation here left every task after this one `leased`, never run and
-            # one attempt poorer - invisible for `LEASE_SECONDS` and, four ticks later, closed for
-            # good by `reclaim_expired` with a sentence saying a worker had been stopped. That is
-            # the same collateral M51-REV-01 removed for a raise, through the exit that fix could
-            # not cover: a `CancelledError` is not an `Exception`.
-            #
-            # THE TASK IN FLIGHT IS NOT RELEASED, deliberately. It ran, and it is the one that ate
-            # the budget, so it keeps its charged attempt and its lease for `reclaim_expired` -
-            # which is what stops a stage that can never finish inside one tick from being
-            # refunded for ever, the failure `queue.py`'s change 6 exists to prevent. The tasks
-            # behind it did nothing and are charged for nothing.
-            #
-            # The await is inside the handler on purpose and on this tree's own precedent:
-            # `importer/bundle.py:1828` and `backup/movie_data.py:521` both take a cancellation,
-            # do their cleanup and re-raise, for the same reason - `asyncio.wait_for` CANCELS, so
-            # this is the only place the work can be handed back. Suppressed because a release
-            # that itself fails must not replace the cancellation with a different exception; the
-            # lease expiry is still the backstop. [M5.1 review cycle 2, port-CANCEL-01]
+            # Cancelled at the budget: refund the tasks behind this one (they did nothing); the one in
+            # flight
+            # keeps its attempt so a never-finishing stage stays bounded. Suppressed so the cancellation
+            # wins.
             with contextlib.suppress(Exception):
                 released = await queue.release(
                     conn, [t.id for t in leased[position + 1:]],
@@ -1257,25 +631,9 @@ async def _walk_batch(
         except Exception as exc:                                         # noqa: BLE001
             log.exception("acquisition task %d (%s) broke the driver", task.id, task.key)
             reason = f"the driver failed outside any stage: {type(exc).__name__}: {exc}"
-            # THE FOURTH EXIT WRITES BOTH TABLES TOO. `run_task`'s docstring says "the three
-            # exits, and each writes BOTH tables"; this one is the fourth and wrote only the
-            # queue, so a task closed here left §6.6's board permanently at `status = 'running'`
-            # with `reason = NULL` - the operator-facing lie M51-CRASH-03 was filed to remove,
-            # reachable through the exit that fix did not cover. `close_abandoned_boards` cannot
-            # correct it either: its EXISTS clause matches `last_error = queue.ABANDONED` exactly,
-            # and this handler writes a different sentence.
-            #
-            # The board's own stage is kept rather than guessed: the last `write_board(RUNNING)`
-            # named the stage this walk was in, and that is the stage it stopped in. A missing row
-            # means stage 1 never established a title, in which case there is nothing for §6.6 to
-            # show and the reason lives on the task - `run_task`'s own rule. Board first, for
-            # `_record_stop`'s reason: a crash between the two overstates how stuck the job is.
-            #
-            # READ BACK THROUGH THE TASK ROW and not off `task.payload`: the in-memory `Task` is
-            # the row as it was LEASED, and stage 1 writes the title onto the payload afterwards
-            # (`_remember_title`), so an item-keyed task that broke after minting carries no title
-            # id here at all - which is the common case and the one this arm exists for.
-            # [M5.1 review cycle 2, M51-CRASH-09]
+            # The fourth exit writes both tables too, at the board's own stage. Read the title back
+            # through
+            # the task row: stage 1 wrote it after the lease.
             stopped = await conn.fetchrow(
                 "SELECT j.title_id, j.stage FROM acquisition_task t"
                 "  JOIN acquisition_job j ON j.title_id::text = t.payload ->> 'title_id'"
@@ -1296,46 +654,9 @@ async def _walk_batch(
             report.failed += 1
 
 
-# A board row still reading `running` is the crash marker: `write_board(RUNNING)` is written
-# immediately before the stage it names, and every ordinary exit overwrites it. So this statement
-# closes exactly the rows whose worker died mid-stage and whose task the reaper has since given up
-# on - and nothing else, because `status = 'running'` stops matching the moment it has run once.
-#
-# AND A PARK THAT NAMED A DATE IS THE SECOND CRASH MARKER, which this statement did not reach.
-# `_record_stop` writes the board and then the queue, two autocommit statements, board first so
-# that a crash between them "leaves a row that OVERSTATES how stuck the job is rather than one that
-# understates it" - and for a park WITH a deadline it understated it permanently. The board read
-# `parked at stage 9, import a bundle and this title is placed on the next drain, retry tomorrow`
-# while `reclaim_expired` had closed the task for good; `close_abandoned_boards` matched `running`
-# only and `complete_landed_boards` matched `ready` only, so neither reached it, `queue.enqueue`'s
-# `ON CONFLICT DO NOTHING` refuses to revive the key, and decision 330 defers the revive lever to
-# M5.6. The only sentence an operator could act on was the false one.
-#
-# `retry_after IS NOT NULL` IS WHAT MAKES IT A MARKER rather than a state. Every park this driver
-# writes with a deadline is a park whose task it `defer`red, so a TERMINAL task beside one is a
-# write that did not land; a park with no deadline is `queue.skip`'s, whose task is `skipped` and
-# never matches below, or it is `placement/reconcile._park_thin`'s inbox row - `(stage 2, parked)`,
-# no deadline, written for every thin-but-placed title since M4.13 - which is the state a real
-# install is full of and which nothing here may touch.
-#
-# THE PARK IS KEPT IN THE SENTENCE and the date is cleared. "Import a bundle" is still why this
-# walk stopped and the abandonment is what happened to it afterwards, so an operator reading §6.6
-# needs both; a `retry_after` still naming a date is still promising the drain that will never
-# come. [M5.1 review cycle 3, M51-C3-CRASH-02]
-#
-# The NOT EXISTS is the guard a title with two tasks needs: a `jellyfin:` task from the sweep and a
-# `title:` task from §8.4's flywheel are two claims on one title (`enqueue_title`), and a board row
-# whose other task is still pending or leased is a job that really is in flight.
-#
-# AND `queued` IS THE THIRD MARKER, which M5.6 wrote without its arm. `actions.make_due` writes the
-# board `queued` at the stage a retry or a launch resumes at, and the board keeps it until the
-# resumed walk advances past that stage - so a walk that dies inside it on every attempt left the
-# board reading "retried from the admin board" beside a task the reaper had closed for good, in a
-# state decision 444 gives no action: no retry, no abandon, and no drain would ever lease it. Every
-# revivable task is pending once `make_due` has run, so a terminal task beside `queued` is the same
-# write that did not land; the NOT EXISTS leaves a job that is really still waiting alone. The
-# sentence keeps what it was queued with, for the park's reason above. [M5.6 review cycle 1,
-# M56-BOARD-QUEUED-WEDGE]
+# Terminal tasks beside a board still `running`, `parked` with a deadline, or `queued` are crash
+# markers (a write that did not land). The NOT EXISTS skips titles with another live task; the
+# reason is kept and the date cleared.
 _CLOSE_ABANDONED = """
 UPDATE acquisition_job j
    SET status = $2,
@@ -1362,25 +683,7 @@ RETURNING j.title_id
 async def close_abandoned_boards(conn: asyncpg.Connection) -> int:
     """Say on §6.6's board what `queue.reclaim_expired` has just said on the queue.
 
-    THE REAPER CLOSES A TASK AND COULD NOT CLOSE ITS JOB. `queue.reclaim_expired` is the only
-    writer for the one state decision 336's two words cannot describe - a worker that died, whose
-    lease expired, whose attempts are spent - and it names one table, because decision 322 keeps
-    `acquire/queue.py` free of any knowledge of titles. So the board kept whatever the last advance
-    wrote, which for a worker killed mid-pipeline is `status = 'running'` with `reason = NULL`: an
-    operator opening the Acquisition board after a power cut read a list of titles in flight, none
-    of which was running and none of which would ever run again, with the sentence explaining why
-    written to a column the list view does not select.
-
-    That is the inverse of the trade `_record_stop` argues for. It writes the board first so a
-    crash between the two OVERSTATES how stuck a job is; this understated it, permanently, and
-    `placement/reconcile._park_thin`'s `DO NOTHING` means no sweep could ever correct it.
-
-    The write lives here and not in `queue.py` because decision 322 puts the board in this module.
-    `_reap_abandoned_import` (`worker.py:797-861`) is the idiom `queue.py`'s own change 6 cites as
-    its model, and it exists precisely so "the Data tab would not poll a `running` phase for ever";
-    the bundle import has one row, so closing the claim and closing the operator's view are one
-    write. Decision 322 made them two tables, and only half the reaper was ported.
-    [M5.1 review cycle 1, seam322-03, M51-CRASH-03]
+    The reaper closes tasks but knows no titles (decision 322), so the board is corrected here.
     """
     closed = await conn.fetch(
         _CLOSE_ABANDONED, RUNNING, FAILED, queue.ABANDONED,
@@ -1394,25 +697,8 @@ async def close_abandoned_boards(conn: asyncpg.Connection) -> int:
     return len(closed)
 
 
-# The other half of the reaper's question, and the half the port left behind. `queue.py`'s change 6
-# cites `_reap_abandoned_import` (`worker.py:797-861`) as its model, and that function's own
-# docstring is headed "IT REPORTS WHAT IT READ AND NOTHING ELSE" precisely because it once said a
-# thing it had not checked: it now calls `_committed_import` to see whether the work actually
-# landed before it records a failure. `reclaim_expired` took the closing half and not the reading
-# half - correctly, because decision 322 keeps `acquire/queue.py` free of any knowledge of titles -
-# so nothing in the tree ever asked it.
-#
-# The window is real and narrow: `run_task` writes the board `ready` and then calls
-# `queue.complete`, two autocommit statements, so a worker that dies between them - or one whose
-# `_tick` budget expires between them - leaves a task the reaper will close `failed` with a
-# sentence saying a worker abandoned it, beside a board row saying the title is ready. Both are on
-# `GET /api/admin/acquisition/{title_id}`'s envelope today, in the same response, contradicting
-# each other, with `queue.enqueue`'s `ON CONFLICT DO NOTHING` refusing to revive the task and
-# decision 330 deferring the revive lever to M5.6.
-#
-# `result_note` AND NOT `last_error`: decision 336 puts a sentence about a completed walk in the
-# note, and leaving the abandonment in `last_error` would keep a failure showing on a task the
-# board says finished. [M5.1 review cycle 2, port-REAP-01]
+# A worker that died between writing `ready` and `queue.complete`: complete the task instead of
+# leaving it failed beside a ready board. The note, not `last_error`.
 _COMPLETE_LANDED = """
 UPDATE acquisition_task t
    SET state = $2, last_error = NULL, result_note = left($5::text, 500), updated_at = now()
@@ -1435,23 +721,7 @@ LANDED = (
 async def complete_landed_boards(conn: asyncpg.Connection) -> int:
     """Correct a task the reaper closed for work the board says actually landed.
 
-    Asked here and not in `queue.py` for `close_abandoned_boards`'s reason: decision 322 makes the
-    board this module's table and the schedule that one's, and the driver is the only thing that
-    crosses between them. Run in `drain` immediately after the reaper, so the pair an operator
-    reads is consistent by the time anything renders it.
-
-    NARROW ON PURPOSE. Only a task the reaper itself closed (`last_error = queue.ABANDONED`) and
-    only against a board reading `ready`, which `run_task` writes at exactly one place and only
-    after all ten stages advanced. [M5.1 review cycle 2, port-REAP-01]
-
-    THIS PARAGRAPH USED TO END "every other disagreement between the two tables is a state one of
-    them is entitled to be in", and there was one it was wrong about: a board `parked` with a
-    deadline beside a task the reaper had closed for good, which is the same two-statement window
-    one exit earlier. `close_abandoned_boards` above takes that pair, for the reason stated with
-    its statement. What is left is genuinely legitimate - a `skipped` task beside its park, a
-    `pending` task beside the stage it is about to re-enter - but "what is left" is a claim that
-    has now been wrong once, so a later reader should enumerate rather than trust it.
-    [M5.1 review cycle 3, M51-C3-CRASH-02]
+    Only reaper-closed tasks (`last_error = queue.ABANDONED`) beside a `ready` board.
     """
     landed = await conn.fetch(
         _COMPLETE_LANDED, queue.FAILED, queue.DONE, queue.ABANDONED, READY, LANDED,

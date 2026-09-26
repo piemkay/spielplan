@@ -1,44 +1,6 @@
-"""Trakt - the rating distribution, and the only review text that arrives with a rating on it.
+"""Trakt: the rating distribution, and comments carrying the commenter's own rating.
 
-Spec v2.1 §8 stage 2 ("trakt:summary->comments", `spec:367`), §8 stage 6; decisions 334, 340,
-372, 377.
-
-Two things Trakt gives that nothing else gives cheaply: a rating DISTRIBUTION - how the 1-10
-votes are spread, which is a diversity signal in its own right - and user comments that carry the
-commenter's own rating, which is exactly the rating-labelled review text §8 stage 6's aspect
-extraction needs (`mdc/sources/trakt.py:1-7`).
-
-PORT VERDICT: **ported with named changes** from `mdc/sources/trakt.py` (133 lines). Taken
-verbatim: `API` (`:19`), the three headers (`:25-29`, and they live in `credentials.trakt_headers`
-under decision 377), the `/{movies|shows}/{imdb}?extended=full` summary shape (`:47`), the
-`/ratings` and `/stats` companions (`:60-61`), `COMMENT_SORTS` (`:79`) with its argument, and the
-comments request (`:97-98`) with `page`, `limit=25` and `extended=full`.
-
-`COMMENT_SORTS` IS THE PORT THAT MATTERS AND ITS COMMENT IS PORTED WITH IT. Trakt sorts comments
-by the COMMENTER'S OWN RATING, which is "the one API-sanctioned way to guarantee a rating spread
-per title rather than hoping the default ordering happens to contain a dissenter" (`:75-78`).
-`likes` gives the well-written middle and `highest`/`lowest` bracket it. Five requests at most,
-and §8 stage 5's pack is built out of the spread they produce - a pack assembled from one end of
-the distribution is a pack that agrees with itself.
-
-NAMED CHANGE 1: NO SELF-ENQUEUE. `:70-71` enqueues `trakt:comments` from inside `trakt:summary`.
-Here both are registered kinds of one stage and the driver runs them in priority order - 40 then
-45 - for the reason `acquire/pipeline.py:46-60` gives: §8's unit of work is one title walking ten
-stages, and a task per source puts the sequence into the queue's ORDER BY where two workers can
-lease two tasks of one title at once.
-
-NAMED CHANGE 2: THE PAGE KEY IS `enumerate`d RATHER THAN `.index()`ed. `:112` computes the raw
-store's page number as `COMMENT_SORTS.index((sort, max_pages)) * 10 + page`, which is a lookup by
-VALUE - so two sorts given the same page budget would collapse onto one key and the store's
-newest-per-page view would hide one of them. The number itself is unchanged, and the spacing of
-ten is what keeps two sorts' pages from colliding.
-
-NAMED CHANGE 3: A 404 IS A NOTE. `:50` and `:120` raise `Permanent("not on trakt")`. Trakt is not
-the required source (decision 334), so not being on Trakt is a sentence in
-`acquisition_job.detail` under this source's name and stage 2 advances.
-
-`trakt.chart` (`:127-133`) IS NOT PORTED. It is a seed helper for discovering titles to crawl,
-and §8 stage 1 takes its titles from the household's own Jellyfin library.
+Comments are fetched sorted by rating from both ends, the one sanctioned way to get a spread.
 """
 
 from __future__ import annotations
@@ -54,12 +16,10 @@ if TYPE_CHECKING:
 SOURCE = "trakt"
 API = "https://api.trakt.tv"
 
-# `mdc/sources/trakt.py:79`, verbatim: (sort, pages of 25). See the port verdict above for why
-# these three and not the default ordering.
+# (sort, pages of 25).
 COMMENT_SORTS = (("likes", 2), ("lowest", 2), ("highest", 1))
 
-# What the store's `page` column spaces two sorts apart by. Ten, because no sort is given more
-# than ten pages and a collision would make one sort's comments invisible to the derive.
+# Spaces two sorts' page numbers apart; no sort gets more than ten pages.
 _SORT_STRIDE = 10
 
 
@@ -77,9 +37,7 @@ def _no_credential(kind: str) -> SourceResult:
 async def summary(ctx: StageContext) -> SourceResult:
     """Three requests: the title, its rating distribution, and its watch statistics.
 
-    The two companions are fetched even when one of them fails, which is the corpus's `continue`
-    (`:62-65`) as a return value: a distribution without the watch counts is still a
-    distribution, and the alternative is to lose both to whichever host hiccup came first.
+    Companions are fetched even when one fails.
     """
     kind = "trakt:summary"
     row = await _ids.title_row(ctx.conn, ctx.title_id)
@@ -105,9 +63,7 @@ async def summary(ctx: StageContext) -> SourceResult:
                             note="unchanged since the last fetch")
 
     ids = captured.response.json().get("ids") or {}
-    # Both halves of Trakt's own identity, offered together because they arrive together and the
-    # request that fetches one has already fetched the other. `set_ids` is COALESCE, so neither
-    # can overwrite what the bundle imported (decision 372).
+    # Arrive together; `set_ids` is COALESCE (decision 372).
     filled = await _ids.set_ids(ctx.conn, row["id"], trakt_id=ids.get("trakt"),
                                trakt_slug=ids.get("slug"))
 
@@ -131,10 +87,7 @@ async def summary(ctx: StageContext) -> SourceResult:
 async def comments(ctx: StageContext) -> SourceResult:
     """The rating-labelled review text, taken from three ends of the distribution.
 
-    Stops early on a short page, because a page under the limit is the last one and asking for
-    the next is a request that returns `[]` (`:115-116`). Stops entirely on a 404, because that
-    is Trakt saying it does not hold this title at all and the remaining sorts would each say it
-    again (`:100-102`, `:117-118`).
+    Stops early on a short page, and entirely on a 404.
     """
     kind = "trakt:comments"
     row = await _ids.title_row(ctx.conn, ctx.title_id)
@@ -157,15 +110,10 @@ async def comments(ctx: StageContext) -> SourceResult:
                 ctx, source=SOURCE, kind="comments",
                 url=f"{API}/{base}/{imdb_id}/comments/{sort}", headers=headers,
                 params={"page": page, "limit": 25, "extended": "full"},
-                # Unique per (sort, page) or the raw store's newest-per-page view collapses two
-                # sorts into one document (`mdc/sources/trakt.py:110-112`).
+                # Unique per (sort, page), or the store's newest-per-page view collapses two sorts.
                 page=index * _SORT_STRIDE + page,
                 request_meta={"sort": sort, "imdb_id": imdb_id}, name=f"{sort} p{page}",
-                # THE ONE JSON SHAPE IN §8 STAGE 2 THAT IS NOT AN OBJECT. A comment page is an
-                # array, so `capture`'s default `json_object` would file every good page of every
-                # sort as not-a-document. The body still has to parse - which is the half that
-                # keeps a proxy's interception page out of the store - and the loop below already
-                # reads `items` as a sequence. [M5.3 review cycle 1, M53-C1-NET-02]
+                # A comment page is a JSON array, so not `json_object`.
                 verdict=_views.json_body,
             )
             if not captured.ok:
