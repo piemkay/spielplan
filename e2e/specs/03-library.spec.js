@@ -77,6 +77,8 @@ test('the API refuses an empty kind selection outright', async ({ page }) => {
 
 test('the facet vocabulary follows the selection', async ({ page }) => {
   // A genre that only exists in the kind you switched off must not linger in the control.
+  // The control is in the Filters panel since decision 516.
+  await page.getByTestId('filter-toggle').click();
   const genre = page.getByLabel('Genre');
   const filmGenres = await genre.locator('option').allTextContents();
 
@@ -91,6 +93,7 @@ test('the genre control offers one canonical name per genre', async ({ page }) =
   // Decision 473: TMDB's genre names, read across every structured source. The fixture's tmdb
   // "Sci-Fi" is offered as "Science Fiction", and no name is offered twice in two spellings.
   await kindToggle(page, 'Both').click();
+  await page.getByTestId('filter-toggle').click();
   const genre = page.getByLabel('Genre');
   await expect(genre.locator('option', { hasText: 'Science Fiction' })).toHaveCount(1);
   const names = (await genre.locator('option').allTextContents()).map((t) => t.trim().toLowerCase());
@@ -108,7 +111,9 @@ test('an exact title is the first search hit', async ({ page }) => {
 
 test('owned titles are marked in the catalog and one pill narrows to them', async ({ page }) => {
   // The catalog lists the whole bundle and the household owns a fraction of it: the cards that
-  // Play works on say so, and "in my library" shows only those.
+  // Play works on say so, and "in my library" shows only those - in the Filters panel since
+  // decision 516, and a chip once the panel is shut.
+  await page.getByTestId('filter-toggle').click();
   await page.getByTestId('filter-owned').click();
   await expect(page.getByTestId('home-mode')).toHaveAttribute('data-mode', 'grid');
   await expect(page.getByTestId('filter-owned')).toHaveAttribute('aria-pressed', 'true');
@@ -117,6 +122,9 @@ test('owned titles are marked in the catalog and one pill narrows to them', asyn
   await expect(cards.first()).toBeVisible();
   const n = await cards.count();
   await expect(page.locator('.grid [data-testid="owned-chip"]')).toHaveCount(n);
+  await page.getByTestId('filter-toggle').click();
+  await expect(page.getByTestId('filter-toggle')).toHaveText('Filters · 1');
+  await expect(page.getByTestId('owned-filter-chip')).toBeVisible();
 });
 
 test('search matches an alias, not just the title', async ({ page }) => {
@@ -131,6 +139,53 @@ test('a query with no matches says so instead of showing an empty grid', async (
   await page.getByLabel('Search titles').fill('zzzzzzzz');
   await expect(page.getByRole('heading', { name: 'No matches' })).toBeVisible();
   await expect(countLine(page)).toContainText('0 films');
+});
+
+test('a search that finds only the other kind says where, and switches there', async ({ page }) => {
+  // Searching "Broadchurch" with Films selected said "No matches - Nothing in the library
+  // matches" about a series the switch was hiding (second household test, U7; decision 516).
+  await expect(kindToggle(page, 'Films')).toHaveAttribute('aria-pressed', 'true');
+  await page.getByLabel('Search titles').fill('severance');
+  await expect(page.getByTestId('found-elsewhere')).toHaveText('Found in Series: Severance');
+  await expect(page.getByRole('heading', { name: 'No matches' })).toHaveCount(0);
+  await page.getByTestId('found-elsewhere-switch').click();
+  await expect(kindToggle(page, 'Series')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.locator('.grid .card-wrap').first()).toContainText('Severance');
+});
+
+test('a search keeps its close matches in view and folds the looser ones', async ({ page }) => {
+  // "Up" listed 361 films, "Superman" and "Cupid" among them (second household test, U14). On
+  // the fixture "p" starts Prisoners and Paddington 2 and only sits inside Tampopo: the close
+  // matches are the grid, the rest wait behind one button (decision 516).
+  await page.getByLabel('Search titles').fill('p');
+  const card = (name) => page.locator('.grid .card-wrap', { hasText: name });
+  await expect(card('Prisoners')).toBeVisible();
+  await expect(card('Paddington 2')).toBeVisible();
+  const more = page.getByTestId('weak-matches-toggle');
+  await expect(more).toHaveText(/^Show \d+ looser match(es)?$/);
+  await expect(card('Tampopo')).toHaveCount(0);
+  await more.click();
+  await expect(page.getByTestId('weak-matches-head')).toBeVisible();
+  await expect(card('Tampopo')).toBeVisible();
+});
+
+test('a filtered grid names the order it is in, with the other one tap away', async ({ page }) => {
+  // Filtering used to turn the shelves into a catalogue by year (second household test, H5).
+  // The server reads a filtered grid "for you" when the member has a fitted score for the kind
+  // and by year otherwise, and says which (`sort`); the control shows that and switches it.
+  await page.getByTestId('filter-toggle').click();
+  await page.getByTestId('filter-owned').click();
+  const order = page.getByRole('group', { name: 'Order' });
+  await expect(order).toBeVisible();
+  await expect(order.getByRole('button', { pressed: true })).toHaveCount(1);
+  const newest = page.getByTestId('sort-newest');
+  await newest.click();
+  await expect(newest).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByTestId('sort-for_you')).toHaveAttribute('aria-pressed', 'false');
+  // A search is best match first and offers no other order.
+  await page.getByLabel('Search titles').fill('heat');
+  await expect(page.getByTestId('home-mode')).toHaveAttribute('data-reason', 'search');
+  await expect(order).toHaveCount(0);
 });
 
 test('non-ASCII titles survive to the screen', async ({ page }) => {
@@ -197,9 +252,11 @@ test('the no-matches state names only controls that exist', async ({ page }) => 
     expect(copy, `the empty state does not name ${dimension}`).toContain(dimension);
   }
 
-  // And every control it names is on the screen it is naming them from. A rescue line that
+  // And every control it names is on the screen it is naming them from - the four filters one
+  // tap away, behind the Filters control the line names (decision 516). A rescue line that
   // sends someone to a control this build does not ship is the defect, not the wording.
   await expect(page.getByRole('group', { name: 'Kind' })).toBeVisible();
+  await page.getByTestId('filter-toggle').click();
   await expect(page.getByTestId('filter-genre')).toBeVisible();
   await expect(page.getByTestId('filter-decade')).toBeVisible();
   await expect(page.getByTestId('filter-seen')).toBeVisible();

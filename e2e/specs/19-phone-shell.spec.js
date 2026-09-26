@@ -523,7 +523,8 @@ test('a 401 returns the member to the sign-in page', async ({ page, context }) =
   );
   try {
     await page.goto('/account');
-    const card = page.locator('section.card', { hasText: 'Switch PIN' });
+    // Named by what it does since decision 518 ("Switch PIN" named the mechanism).
+    const card = page.getByTestId('pin-card');
     await expect(card).toBeVisible();
     await card.locator('input[autocomplete="current-password"]').fill('not-the-password');
     await card.locator('input[inputmode="numeric"]').fill('1234');
@@ -893,6 +894,12 @@ test('the data sources are attributed once, on /account, and on no card', async 
   // the top asks every test added here to say: it writes nothing - no observation, no member, no
   // preference - and reads two surfaces.
   await page.goto('/account');
+  // One tap away under "Technical details" since decision 518 - on the page, in the product,
+  // reachable by every member, which is what decision 293 asks - rather than a screen of licence
+  // text a member scrolled past on the way to their PIN.
+  const technical = page.getByTestId('account-technical');
+  await expect(technical).toBeVisible();
+  await technical.locator('summary').click();
   const block = page.getByTestId('data-sources');
   await expect(block.getByRole('heading', { name: 'Data sources' })).toBeVisible();
 

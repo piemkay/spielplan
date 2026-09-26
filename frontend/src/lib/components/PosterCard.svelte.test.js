@@ -70,6 +70,8 @@ describe('the "in library" chip', () => {
   });
 
   it('is absent from an unowned card and from a card that does not say', () => {
+    // (Unchanged by the second household test: the shelves say once, above them, that they are
+    // the household's library - `ShelfList`'s `shelves-from-library` line.)
     // A shelf card never says: every shelf is owned-only, and a chip on each of its cards would
     // carry no information (`toPosterTitle` does not pass `is_owned`).
     for (const t of [title({ is_owned: false }), title()]) {
@@ -77,5 +79,36 @@ describe('the "in library" chip', () => {
       expect(target.querySelector('[data-testid="owned-chip"]')).toBeNull();
       unmount(app);
     }
+  });
+});
+
+describe('the name on the card (decision 516)', () => {
+  const langs = Object.getOwnPropertyDescriptor(Navigator.prototype, 'languages');
+  afterEach(() => {
+    if (langs) Object.defineProperty(Navigator.prototype, 'languages', langs);
+  });
+  const speak = (tags) =>
+    Object.defineProperty(Navigator.prototype, 'languages', { configurable: true, get: () => tags });
+  const wunder = { name: 'Wonderfully Beautiful', original_name: 'Wunderschön', original_language: 'de' };
+
+  it('is the German original on a German phone, with the English one in the label', () => {
+    speak(['de-DE']);
+    const app = render(title(wunder));
+    expect(target.querySelector('.name').textContent).toBe('Wunderschön');
+    expect(target.querySelector('.card-wrap').getAttribute('title')).toBe(
+      'Wunderschön (Wonderfully Beautiful)'
+    );
+    unmount(app);
+  });
+
+  it('is the name everywhere else, and on a card that does not carry the language', () => {
+    speak(['en-GB']);
+    let app = render(title(wunder));
+    expect(target.querySelector('.name').textContent).toBe('Wonderfully Beautiful');
+    unmount(app);
+    speak(['de-DE']);
+    app = render(title({ name: 'Wonderfully Beautiful', original_name: 'Wunderschön' }));
+    expect(target.querySelector('.name').textContent).toBe('Wonderfully Beautiful');
+    unmount(app);
   });
 });

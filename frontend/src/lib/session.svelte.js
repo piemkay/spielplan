@@ -252,12 +252,23 @@ export function clearUser() {
  * `passkeys` and `has_pin` since M1; this reads them. The password is named when there is no
  * passkey rather than omitted, because §3.2 keeps it always available and "no credentials" is
  * not a state any account is ever in.
+ *
+ * In words since the second household test (decision 518): "member · password" read as a code,
+ * and "PIN" alone said nothing about what it is for. The inventory is the same.
  */
 export function authMethodLine(user) {
   if (!user) return '';
-  return [user.passkeys > 0 ? 'passkey' : 'password', user.has_pin ? 'PIN' : null]
+  return [
+    user.passkeys > 0 ? 'signs in with a passkey' : 'signs in with a password',
+    user.has_pin ? 'PIN set for quick switching' : null
+  ]
     .filter(Boolean)
-    .join(' + ');
+    .join(' · ');
+}
+
+/** The account chip's role, as a word rather than the column value (decision 518). */
+export function roleWord(role) {
+  return role === 'admin' ? 'Admin' : role === 'member' ? 'Member' : String(role ?? '');
 }
 
 /** Where the shell should send someone, given what bootstrap found. */

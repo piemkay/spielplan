@@ -17,7 +17,7 @@
    * title, and its first tap writes `seen`; this one is a standing element over titles that are
    * already seen, and it writes nothing.
    */
-  import { bannerHref, bannerLabel, bannerText } from '$lib/home.svelte.js';
+  import { bannerCountLine, bannerHref, bannerLabel, bannerText } from '$lib/home.svelte.js';
 
   let { banner } = $props();
 
@@ -44,9 +44,9 @@
   <div class="banner" role="status" data-testid="pending-verdicts" data-count={banner.count}>
     <div class="text">
       <div class="line" data-testid="pending-verdicts-copy">{text}</div>
-      <div class="data names">
-        {banner.count} seen, no verdict · {banner.named.length} named
-      </div>
+      <!-- How many are waiting in all, in words: it read "16 seen, no verdict · 2 named", which
+           counted how the sentence above was built (second household test, U6). -->
+      <div class="why names" data-testid="pending-verdicts-count">{bannerCountLine(banner)}</div>
     </div>
     {#if href}
       <a class="btn-primary" {href} data-testid="pending-verdicts-cta" data-head={banner.head_title_ids.join(' ')}>

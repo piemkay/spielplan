@@ -174,3 +174,46 @@ describe('the welcome hand-off from the forced password change', () => {
     }
   });
 });
+
+// --- the second household test: the account page in plain words (decision 518) ------------------
+
+describe('the account page in plain words', () => {
+  const PASSKEY = { id: 1, label: 'iPhone', rp_id: 'spielplan.example', sign_count: 3, usable: true };
+
+  it('names passkeys, the PIN and the Rank letters by what they do', async () => {
+    answers({ credentials: [PASSKEY] });
+    const app = await open();
+    try {
+      const text = target.textContent;
+      for (const word of ['WebAuthn', 'Switch PIN', 'Tier set', 'switch PIN', 'authenticator']) {
+        expect(text, word).not.toContain(word);
+      }
+      expect(headings()).toContain('PIN for switching profiles');
+      expect(headings()).toContain('Rank letters');
+      expect(target.querySelector('[data-testid="tier-set-current"]').textContent).toBe('D · C · B · A');
+    } finally {
+      unmount(app);
+    }
+  });
+
+  it('folds the Rank letters editor and the data sources, and drops neither', async () => {
+    answers({ credentials: [PASSKEY] });
+    const app = await open();
+    try {
+      const edit = target.querySelector('[data-testid="tier-set-edit"]');
+      expect(edit.tagName).toBe('DETAILS');
+      expect(edit.open).toBe(false);
+      expect(edit.contains(target.querySelector('[data-testid="tier-set-input"]'))).toBe(true);
+
+      // Decision 293's notices are in the product, one tap away.
+      const technical = target.querySelector('[data-testid="account-technical"]');
+      expect(technical.tagName).toBe('DETAILS');
+      expect(technical.open).toBe(false);
+      expect(technical.contains(target.querySelector('[data-testid="data-sources"]'))).toBe(true);
+      // §14.4's answer stays on the passkey's own row.
+      expect(target.querySelector('.list li').textContent).toContain('spielplan.example');
+    } finally {
+      unmount(app);
+    }
+  });
+});

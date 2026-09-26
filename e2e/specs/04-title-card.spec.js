@@ -29,6 +29,17 @@ async function showModel(page, on) {
   expect(set.ok(), 'the preference did not save').toBeTruthy();
 }
 
+/**
+ * Open "More about this film". Since the second household test the card leads with its why line,
+ * the answers, Play and the synopsis, and the rest of the credits, the platform scores and both
+ * DNA tiers wait behind one disclosure (decision 517) - on the card, one tap away.
+ */
+async function openMore(panel) {
+  const more = panel.getByTestId('title-more');
+  if (!(await more.evaluate((el) => el.open))) await panel.getByTestId('title-more-toggle').click();
+  await expect(more).toHaveAttribute('open', '');
+}
+
 test('the card carries metadata, overview and the model line', async ({ page }) => {
   let panel = page.getByLabel('Title detail');
   await expect(panel.getByRole('heading', { name: 'Heat' })).toBeVisible();
@@ -77,6 +88,29 @@ async function expectTheModelLine(panel) {
   await expect(panel.locator('.modelline')).toContainText(/b\(t\) -?\d+\.\d\d/);
 }
 
+test('the card leads with the answers and Play, and folds the rest behind one disclosure', async ({
+  page
+}) => {
+  // Second household test (U3, U9; decision 517): a member read twelve cast rows, nine platform
+  // scores and fifty tags, and the answers ran Liked / Fine / Disliked against Rate's worst-first
+  // order. The answers read as Rate's do; the long sections are on the card, folded.
+  const panel = page.getByLabel('Title detail');
+  const answers = panel.getByTestId('title-rate').locator('[data-answer]');
+  await expect(answers).toHaveCount(4);
+  expect(await answers.evaluateAll((els) => els.map((el) => el.dataset.answer))).toEqual([
+    'disliked', 'fine', 'liked', 'not_seen'
+  ]);
+  await expect(panel.getByRole('button', { name: 'Play on Jellyfin' })).toBeVisible();
+  const more = panel.getByTestId('title-more');
+  await expect(more).not.toHaveAttribute('open', '');
+  await expect(panel.getByTestId('title-more-toggle')).toHaveText('More about this film');
+  await expect(panel.locator('.scores')).toBeHidden();
+  await expect(panel.locator('.tag').first()).toBeHidden();
+  await openMore(panel);
+  await expect(panel.locator('.scores')).toBeVisible();
+  await expect(panel.locator('.tag').first()).toBeVisible();
+});
+
 test('Play is disabled with its reason, and Show on map waits for the Map', async ({ page }) => {
   // §6.0 names two actions. A missing Jellyfin link must read as its real reason, not as "this
   // film cannot be played" - and not as a milestone label, which the card printed until the
@@ -90,14 +124,22 @@ test('Play is disabled with its reason, and Show on map waits for the Map', asyn
   await expect(panel.getByRole('link', { name: 'Show on map' })).toHaveCount(0);
 });
 
-test('the two DNA tiers are visibly distinct and a shared term appears in both', async ({
+test('the two DNA tiers are visibly distinct, and a term in both is shown once, quoted', async ({
   page,
 }) => {
-  // §4.1 rule 1: "14,181 (title,term) pairs exist in both and must stay distinguishable."
-  // The fixture reproduces that overlap in miniature; this is where it becomes visible. The
-  // headings say what each tier is in the member register (decision 486); the distinction is
-  // the rule, the words were the operator's.
+  // §4.1 rule 1: "14,181 (title,term) pairs exist in both and must stay distinguishable." The
+  // fixture reproduces that overlap in miniature. The payload keeps both tiers apart and carries
+  // the pair in each; the card shows the term once, in the tier with a quote behind it, because
+  // Heat read "loneliness" as a quote and as a guess at once (second household test, U4;
+  // decision 517). The headings say what each tier is in the member register (decision 486).
+  const listing = await (await page.request.get('/api/titles?kind=movie&q=heat')).json();
+  const heat = listing.items.find((t) => t.name === 'Heat');
+  const dna = (await (await page.request.get(`/api/titles/${heat.id}`)).json()).dna;
+  expect(dna.extracted.map((t) => t.term)).toContain('themes.obsession');
+  expect(dna.projected.map((t) => t.term)).toContain('themes.obsession');
+
   const panel = page.getByLabel('Title detail');
+  await openMore(panel);
   await expect(panel.getByText("WHAT IT'S LIKE")).toBeVisible();
   await expect(panel.getByText('PROBABLY ALSO')).toBeVisible();
 
@@ -105,12 +147,13 @@ test('the two DNA tiers are visibly distinct and a shared term appears in both',
   const extracted = panel.locator('.tag .term');
   const projected = panel.locator('.chip .chiplabel');
   await expect(extracted.filter({ hasText: /^obsession$/ })).toBeVisible();
-  await expect(projected.filter({ hasText: /^obsession$/ })).toBeVisible();
+  await expect(projected.filter({ hasText: /^obsession$/ })).toHaveCount(0);
 });
 
 test('every extracted tag shows its evidence quote and source', async ({ page }) => {
   // §4.1 rule 1: "a tag without its quote is unfalsifiable."
   const panel = page.getByLabel('Title detail');
+  await openMore(panel);
   const tags = panel.locator('.tag');
   await expect(tags.first()).toBeVisible();
 
@@ -134,14 +177,20 @@ test('a quote cut mid-sentence says so and a one-source projection is fainter, n
   // §4.1 rules 1 and 2, and C9.5/C9.6 of the 2026-09-25 user test. Heat's extracted
   // themes.obsession quotes "the work eats the man and he lets it", a span with neither a sentence's
   // start nor its end, so it is printed as the fragment it is; the stored quote is untouched. Its
-  // projected tier carries two terms, one on two sources and one on a single source: both are on
-  // the card, and only the single-source one is drawn fainter.
+  // projected tier carries two terms: obsession on two sources, which the quotes already carry
+  // and the card shows once, quoted; and era.period on a single source, which is drawn fainter
+  // and folded behind its own "less certain" disclosure - on the card, never dropped (decision
+  // 517).
   const panel = page.getByLabel('Title detail');
+  await openMore(panel);
   await expect(panel.locator('.quote', { hasText: 'the work eats the man' })).toHaveText(
     '“…the work eats the man and he lets it…”'
   );
-  await expect(panel.locator('.chips .chip')).toHaveCount(2);
+  await expect(panel.locator('.chips .chip')).toHaveCount(1);
   await expect(panel.locator('.chips .chip.faint')).toHaveCount(1);
+  const fold = panel.getByTestId('title-weak-chips');
+  await fold.locator('summary').click();
+  await expect(fold.locator('.chip.faint')).toBeVisible();
 });
 
 test("salience is Show the model's, and nothing is filtered by it", async ({ page }) => {
@@ -155,6 +204,7 @@ test("salience is Show the model's, and nothing is filtered by it", async ({ pag
   await showModel(page, true);
   try {
     panel = await openTitle(page, 'Heat');
+    await openMore(panel);
     await expect(panel.locator('.tag').first().getByText(/sal [123]/)).toBeVisible();
     await expect(panel.locator('.tag')).toHaveCount(tags);
   } finally {
@@ -179,6 +229,7 @@ test('platform scores travel with their display-only caption', async ({ page }) 
   // features. The caption is the only thing stopping a reader assuming otherwise, and it says
   // so in the member register (decision 486); `display_only` travels on the payload.
   const panel = page.getByLabel('Title detail');
+  await openMore(panel);
   await expect(panel.locator('.scores')).toBeVisible();
   await expect(panel.getByText(/never affect your suggestions/)).toBeVisible();
 });
@@ -328,6 +379,10 @@ test('the credit list says how many it is hiding and the disclosure reveals them
 
   try {
     const panel = await openTitle(page, 'Heat');
+    // The first few names lead the card; the rest, the count and the disclosure are behind
+    // "More about this film" since decision 517. The count still counts every row shown.
+    await expect(panel.locator('.people .person').first()).toBeVisible();
+    await openMore(panel);
     // The heading names what is on screen against what is held, in the data voice.
     await expect(panel.getByTestId('credit-count')).toHaveText(`${FOLD} of ${TOTAL}`);
     await expect(panel.locator('.people .person')).toHaveCount(FOLD);
@@ -397,9 +452,11 @@ test('the worst cross-department titles open without a console error', async ({ 
   for (const title of worst) {
     const panel = await openTitle(page, title.name);
     // Past CAST & CREW, which is where the throw was: a card that dies mid-render still shows
-    // its heading.
-    await expect(panel.getByTestId('credit-count')).toBeVisible();
+    // its heading. The fold after the first few names is the next thing drawn (decision 517),
+    // so a card that reaches it has drawn every credit row before it.
     await expect(panel.locator('.people .person').first()).toBeVisible();
+    await openMore(panel);
+    await expect(panel.getByText("WHAT IT'S LIKE")).toBeVisible();
   }
   expect(errors, `the card threw on ${worst.map((t) => t.name).join(', ')}`).toEqual([]);
 });

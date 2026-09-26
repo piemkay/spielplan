@@ -34,8 +34,16 @@
   // `0h 24m` there. [M4.9 finding 37]
   import { runtimeLabel } from '$lib/rate.svelte.js';
   import { posterSrc } from '$lib/art.js';
+  import { displayNames } from '$lib/titleCard.js';
 
-  let { title, onSelect } = $props();
+  // `chrome` is a row the caller draws between the art and the name - a shelf's rank and tier. It
+  // used to be pinned over the poster 30 px from its top, where it sat on the title lettering of
+  // half the posters on a shelf: Kiki's, Schindler's List (second household test, U5).
+  let { title, onSelect, chrome = null } = $props();
+
+  // Decision 516: the name the viewer knows leads - "Wunderschön" on a German phone, not its English
+  // release title - and the other name rides in the pointer's tooltip and the button's label.
+  const names = $derived(displayNames(title));
 
   // A stable hue per title. FNV-1a over the name, so the same film is the same colour
   // everywhere it appears.
@@ -62,7 +70,11 @@
   let failed = $state(null);
 </script>
 
-<button class="card-wrap" onclick={onSelect} title={title.name}>
+<button
+  class="card-wrap"
+  onclick={onSelect}
+  title={names.secondary ? `${names.primary} (${names.secondary})` : names.primary}
+>
   <div
     class="poster"
     style:background="linear-gradient(150deg, hsl({h} 22% 17%), hsl({(h + 40) % 360} 18% 11%))"
@@ -108,8 +120,11 @@
       <span class="owned data" data-testid="owned-chip">in library</span>
     {/if}
   </div>
+  {#if chrome}
+    <div class="chrome">{@render chrome()}</div>
+  {/if}
   <div class="meta">
-    <div class="name">{title.name}</div>
+    <div class="name">{names.primary}</div>
     <div class="data">{meta}</div>
   </div>
 </button>
@@ -184,6 +199,16 @@
     background: rgba(13, 13, 15, 0.72);
     border: 1px solid var(--line-2);
     color: var(--ink-2);
+  }
+  /* Under the art, never on it: a rank at one end and a tier at the other, the corners they held
+     on the poster. */
+  .chrome {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 6px;
+    min-height: 18px;
+    margin-top: -2px;
   }
   .name {
     font-size: 12.5px;

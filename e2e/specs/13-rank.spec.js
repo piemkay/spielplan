@@ -599,8 +599,10 @@ test.describe('rank', () => {
     await expect(section).toContainText('works them out again shortly');
     await expect(page.getByTestId('tier-set-current')).toContainText('S');
 
+    // The editor waits behind "Change the letters" since decision 518; the letters stay in view.
+    await page.getByTestId('tier-set-edit').locator('summary').click();
     await page.getByTestId('tier-set-input').fill('bad ok good');
-    await page.getByRole('button', { name: 'Save tier set' }).click();
+    await page.getByRole('button', { name: 'Save letters' }).click();
     await expect(page.getByTestId('tier-set-current')).toHaveText('bad · ok · good');
 
     // §4.2 fixes length = |tier set| - 1, so the board now renders three rows and no letters.

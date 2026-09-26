@@ -536,7 +536,7 @@ milestone = "M0"
 kind = "integration"
 what = "The title detail payload returns extracted and projected DNA as two separate labelled lists — never merged or unioned — every extracted tag carries its evidence quote, and a (title, term) pair present in both tiers appears in both lists and stays distinguishable."
 why = "14,181 (title,term) pairs exist in both tiers; a tag without its quote is unfalsifiable."
-tests = ["backend/tests/test_import_integration.py::test_title_card_payload_is_complete", "backend/tests/test_import_integration.py::test_rule1_every_extracted_tag_keeps_its_quote", "backend/tests/test_import_integration.py::test_rule1_both_tiers_land_separately_and_shared_pairs_survive", "backend/tests/test_landmine_guards.py::test_the_only_sanctioned_dna_union_is_the_tier_labelled_view", "e2e/specs/04-title-card.spec.js::the two DNA tiers are visibly distinct and a shared term appears in both", "e2e/specs/04-title-card.spec.js::every extracted tag shows its evidence quote and source"]
+tests = ["backend/tests/test_import_integration.py::test_title_card_payload_is_complete", "backend/tests/test_import_integration.py::test_rule1_every_extracted_tag_keeps_its_quote", "backend/tests/test_import_integration.py::test_rule1_both_tiers_land_separately_and_shared_pairs_survive", "backend/tests/test_landmine_guards.py::test_the_only_sanctioned_dna_union_is_the_tier_labelled_view", "e2e/specs/04-title-card.spec.js::the two DNA tiers are visibly distinct, and a term in both is shown once, quoted", "e2e/specs/04-title-card.spec.js::every extracted tag shows its evidence quote and source"]
 
 [[requirement]]
 id = "library-rate-person-filter-keeps-partition"
@@ -11880,7 +11880,7 @@ id = "library-rate-title-card-speaks-the-member-register"
 spec = "§6.0 (the title detail card); §6.7 (the per-user toggle); §6.8 (quiet reasons); decision 486"
 milestone = "M5"
 kind = "integration"
-what = "With the viewer's Show the model off, the title card's payload carries no model line and no extracted-tag weight (salience, confidence, n_sources); with it on, both come back. Every DNA term travels with its vocabulary label and gloss, the platform caption keeps `display_only` and speaks plainly, and the card renders the kind in words, the trailer as a labelled link, evidence sources by name, a quote cut mid-sentence with an ellipsis at the cut, each projected term with the number of sources behind it (quieter at one, never hidden), one credit row per person and role with only the jobs that are different credits, and the seen toggle's note in plain words under the actions."
+what = "With the viewer's Show the model off, the title card's payload carries no model line and no extracted-tag weight (salience, confidence, n_sources); with it on, both come back. Every DNA term travels with its vocabulary label and gloss, the platform caption keeps `display_only` and speaks plainly, and the card renders the kind in words, the trailer as a labelled link, evidence sources by name, a quote cut mid-sentence with an ellipsis at the cut, each projected term quieter at one source and never dropped (the count of sources behind it is Show the model's since the second household test), one credit row per person and role with only the jobs that are different credits, and the seen toggle's note in plain words under the actions."
 why = "Two members read the title card with the switch off and met b(t)/β/σ/gate, `cold_tower · bundle v20260925`, raw ids such as `register.plays_it_straight`, `sal 2`, `metacritic:critic`, `TRAILER F-eMt3SrfFU`, one composer twice and a sync note run into CAST & CREW. §6.8's register is quiet reasons, and the model's numbers are §6.7's toggle's (owner instruction of 2026-09-25)."
 tests = [
     "backend/tests/test_title_card.py::test_a_card_read_with_the_switch_off_carries_no_model_number",
@@ -11890,7 +11890,7 @@ tests = [
     "e2e/specs/04-title-card.spec.js::salience is Show the model's, and nothing is filtered by it",
     "frontend/src/lib/components/TitleDetail.svelte.test.js::names terms by label, drops the weights and the raw ids, and names sources",
     "frontend/src/lib/components/TitleDetail.svelte.test.js::marks a quote cut from a longer sentence at the end it was cut",
-    "frontend/src/lib/components/TitleDetail.svelte.test.js::shows how many sources suggest each inferred term, quieter at one, and hides none",
+    "frontend/src/lib/components/TitleDetail.svelte.test.js::keeps every inferred term, folds the one-source guess, and leaves the count to Show the model",
     "frontend/src/lib/components/TitleDetail.svelte.test.js::print one row per person and role, with only the jobs that are different credits",
     "frontend/src/lib/components/TitleDetail.svelte.test.js::links the trailer by what it is and never prints its key",
     "frontend/src/lib/components/TitleDetail.svelte.test.js::sits under the actions and outside the credits, in the display face",
@@ -12301,4 +12301,131 @@ tests = [
     "backend/tests/test_static_contracts.py::test_the_member_register_guard_leaves_path_data_comments_and_styles_alone",
     "backend/tests/test_static_contracts.py::test_the_member_register_guard_reads_backend_copy_and_not_its_sql_or_logs",
     "backend/tests/test_static_contracts.py::test_the_member_register_walk_follows_imports_and_stops_at_the_operator_routes",
+]
+
+# The owner's instruction of 2026-09-26, after the second household user test: presentation
+# (stream S4 of round 3). The rows below cite sections only until the wave records their
+# decisions (516 Home, 517 the title card, 518 the account surfaces); the integration step appends
+# "; decision N" to each spec field then, as the round-1 rows above did.
+[[requirement]]
+id = "library-rate-home-opens-on-the-shelves-with-filters-behind-one-control"
+spec = "§6 preamble (\"phone-first (48 px targets, one-handed)\") + §6.0 (filter/search on title/alias/genre/decade/seen-state; the kind control)"
+milestone = "M5"
+kind = "e2e"
+what = "On a phone Home's first screen is the greeting, the pending banner, the kind switch, the search box and one Filters control ahead of the shelves: genre, decade, seen state and \"in my library\" open in a panel from it, the control counts the filters set, every set filter stays a removable chip while the panel is shut, and neither the document nor the page scrolls under the shell - the shelves' mode marker is in flow, where `main`, the scroller, holds it."
+why = "The second household test's first Home screen on a phone was seven filter controls with the shelves below the fold (U1), and an absolutely placed marker escaped `main` - which is not a containing block - so the document scrolled under the tab bar and, with a classic scrollbar, a few pixels sideways (U11)."
+tests = [
+    "e2e/specs/06-responsive.spec.js::a phone opens Home on the shelves, with the filters behind one control",
+    "e2e/specs/06-responsive.spec.js::the document never scrolls under the shell",
+    "e2e/specs/03-library.spec.js::owned titles are marked in the catalog and one pill narrows to them",
+    "frontend/src/routes/home-page.test.js::shows the kind switch and the search, and the four filters only when asked",
+    "frontend/src/routes/home-page.test.js::counts what is set on the control, and keeps each set filter as a chip once it is shut",
+    "frontend/src/routes/home-page.test.js::keeps the shelves marker in flow, where the scroller holds it",
+]
+
+[[requirement]]
+id = "library-rate-home-grid-names-the-order-it-is-read-in"
+spec = "§6.0 (the catalog grid; a search lists best match first)"
+milestone = "M5"
+kind = "e2e"
+what = "A filtered grid or a filmography offers For you and Newest with the order the server echoes as `sort` pressed and asks for the other on a tap; a search - best match first - offers no order control, and neither does a grid the server names no order for."
+why = "A genre filter or \"in my library\" turned the shelves into a catalogue by year, newest first, and there was no \"best sci-fi for me in my library\" (second household test, H5; the server's default order is stream S3's)."
+tests = [
+    "e2e/specs/03-library.spec.js::a filtered grid names the order it is in, with the other one tap away",
+    "frontend/src/routes/home-page.test.js::offers For you and Newest with the echoed order pressed, and asks for the other on a tap",
+    "frontend/src/routes/home-page.test.js::offers no order control where the server names none, or on a search",
+    "frontend/src/lib/home.test.js::offers the order control for a filtered or a person grid the server named an order for",
+]
+
+[[requirement]]
+id = "library-rate-home-search-says-where-its-matches-are"
+spec = "§6.0 (filter/search on title/alias; a search lists best match first; the kind control)"
+milestone = "M5"
+kind = "e2e"
+what = "An empty search whose other kind holds matches says \"Found in Series: {names}\" (two named, the rest counted) and offers the switch, instead of \"No matches\"; the empty state no longer calls the catalog \"the library\"; a search's hits that only contain the query inside a word wait behind one \"Show N looser matches\" control after every closer hit, never dropped; and a kind switch keeps a genre and decade the new kind carries and says which one it cleared."
+why = "\"Broadchurch\" with Films selected said \"No matches - Nothing in the library matches\" about a series outside the library (U7); \"Up\" listed 361 films (U14); switching Films and Series silently cleared the genre (U8) - second household test."
+tests = [
+    "e2e/specs/03-library.spec.js::a search that finds only the other kind says where, and switches there",
+    "e2e/specs/03-library.spec.js::a search keeps its close matches in view and folds the looser ones",
+    "frontend/src/routes/home-page.test.js::says \"Found in Series: Broadchurch\" and switches on a tap",
+    "frontend/src/routes/home-page.test.js::shows the close matches and one button for the rest",
+    "frontend/src/routes/home-page.test.js::keeps a shared genre and names one it had to clear",
+    "frontend/src/lib/home.test.js::cuts after the last strong hit, and nowhere when nothing is strong",
+]
+
+[[requirement]]
+id = "library-rate-home-shelves-say-they-are-the-library-and-keep-the-art-clear"
+spec = "§6.0 M2 (the shelves; the pending-verdicts banner) + §6.8 (quiet reasons; poster-forward 2:3 cards)"
+milestone = "M5"
+kind = "e2e"
+what = "Home says once that every shelf title is in the household's library; a shelf card's rank and tier sit in a row under its art, never over it; \"New in the library\", whose why-line is the no-crowd-data reason, does not repeat it as a note while every other row still says it once; and the pending banner counts what waits in words (\"16 titles you watched are waiting for your rating\")."
+why = "Search cards said \"in library\" and shelf cards nothing (U2); the badges covered poster lettering (U5); the banner read \"16 seen, no verdict · 2 named\" (U6); and \"New in the library\" printed its reason twice (U10) - second household test."
+tests = [
+    "e2e/specs/10-home.spec.js::the shelves say they are the library, and a card keeps its art clear",
+    "e2e/specs/08-jellyfin.spec.js::the first tap writes seen, and the card does not come back",
+    "frontend/src/lib/components/ShelfRow.svelte.test.js::draws the rank and the tier under the art, never over it",
+    "frontend/src/lib/components/ShelfRow.svelte.test.js::is not said a second time on the shelf whose why-line already says it",
+    "frontend/src/lib/home.test.js::says how many are waiting and nothing about how the sentence was built",
+]
+
+[[requirement]]
+id = "library-rate-cards-lead-with-the-viewers-original-title"
+spec = "§6.0 (the title detail card's metadata; the catalog) + §6.8 (poster-forward cards)"
+milestone = "M5"
+kind = "integration"
+what = "The title card, every catalog card and every shelf card carry the title's original name and original language, null where the corpus recorded none; a viewer whose browser language is the original's reads the original title first with the English one beside it, and every other viewer reads the name as before, with the original beside it on the title card."
+why = "On a German phone \"Wonderfully Beautiful\" hid \"Wunderschön\", the title a German viewer knows (second household test, U13). The household install holds four owned titles with a German original that differs from the name; `title_alias` holds 3,219 German release titles (232 owned titles), which no payload carries yet."
+tests = [
+    "backend/tests/test_title_card.py::test_the_card_and_the_catalog_carry_the_original_title_and_its_language",
+    "backend/tests/test_home.py::test_every_shelf_card_carries_its_original_title_and_language",
+    "frontend/src/lib/components/PosterCard.svelte.test.js::is the German original on a German phone, with the English one in the label",
+    "frontend/src/lib/components/TitleDetail.svelte.test.js::leads with the German original on a German phone and keeps the English beside it",
+    "frontend/src/lib/titleCard.test.js::leads with the original where it is in the viewer language",
+]
+
+[[requirement]]
+id = "library-rate-title-card-leads-with-why-and-folds-the-rest"
+spec = "§6.0 (the title detail card) + §6.1 (Liked / Fine / Disliked, Not seen) + §6.8 (quiet reasons) + §4.1 rule 2 (weights, never filters)"
+milestone = "M5"
+kind = "e2e"
+what = "The title card leads with the poster, the name, the server's one-line why when it sends one, the answers in Rate's worst-to-best order (Disliked, Fine, Liked, then Not seen), Play and the synopsis, then the first five credits; the rest of the credits, the platform scores and both DNA tiers are on the card behind one closed \"More about this film\" (or series); an inferred chip's source count is Show the model's, and a one-source or pace-contradicting guess is folded behind \"N less certain\", never dropped."
+why = "A member read twelve cast rows, nine platform scores and about fifty tags, contradictory ones and \"psychedelic 1\" among them, before the end of the card, which never said why the title was suggested; and the answers ran Liked / Fine / Disliked against Rate's disliked / fine / liked (second household test, U3, U9, H6)."
+tests = [
+    "e2e/specs/04-title-card.spec.js::the card leads with the answers and Play, and folds the rest behind one disclosure",
+    "e2e/specs/04-title-card.spec.js::a quote cut mid-sentence says so and a one-source projection is fainter, never dropped",
+    "frontend/src/lib/components/TitleDetail.svelte.test.js::says why the title is suggested, and nothing when the payload gives no reason",
+    "frontend/src/lib/components/TitleDetail.svelte.test.js::shows the first few names and folds the rest, the scores and both tiers behind one disclosure",
+    "frontend/src/lib/components/TitleDetail.svelte.test.js::reads the answers worst to best, as Rate does",
+    "frontend/src/lib/components/TitleDetail.svelte.test.js::folds a guess that contradicts the title's own quoted pace",
+    "frontend/src/lib/components/TitleDetail.svelte.test.js::keeps every inferred term, folds the one-source guess, and leaves the count to Show the model",
+]
+
+[[requirement]]
+id = "library-rate-title-card-says-each-thing-once"
+spec = "§4.1 rule 1 (the tiers never merged, and distinguishable) + §6.0 (the DNA card)"
+milestone = "M5"
+kind = "e2e"
+what = "The payload keeps both DNA tiers apart with a term in both carried in each; the card draws one block per quoted term with each quote once, and an inferred term the quotes already carry is not drawn again as a chip."
+why = "Collateral's Metacritic \"Los Angeles\" quote appeared twice - two extraction runs stored it, 894 such pairs on the household install - and Heat showed \"loneliness\" as a quote and as an inferred chip (second household test, U4)."
+tests = [
+    "e2e/specs/04-title-card.spec.js::the two DNA tiers are visibly distinct, and a term in both is shown once, quoted",
+    "frontend/src/lib/components/TitleDetail.svelte.test.js::prints one block per quoted term with each quote once, and never repeats it as a guess",
+    "frontend/src/lib/titleCard.test.js::draws one block per term and keeps every provider row on it",
+    "frontend/src/lib/titleCard.test.js::shows a quoted term once, quoted, and folds the one-source guess without dropping it",
+]
+
+[[requirement]]
+id = "platform-account-surfaces-speak-plainly"
+spec = "§3.2 (the account chip; passkeys; the PIN) + §6.8 (member register)"
+milestone = "M5"
+kind = "e2e"
+what = "The account chip's second line says the role and the sign-in inventory in words (\"Member · signs in with a passkey · PIN set for quick switching\"); the account page names the PIN by what it does, the tier set as the Rank letters with its editor folded, says passkeys and never WebAuthn, and keeps the data sources' notices on the page one tap away under \"Where the film information comes from\"."
+why = "A member read \"member · password\", \"switch PIN\", \"Nobody else has a switch PIN yet\", a free-text \"Tier set F D C B A A+ S\", \"This browser has no WebAuthn support\" and a screen of licence notices (second household test, U12)."
+tests = [
+    "e2e/specs/02-shell.spec.js::the account chip states the role and the auth method",
+    "e2e/specs/02-shell.spec.js::the account page speaks plainly and folds what a member need not act on",
+    "e2e/specs/19-phone-shell.spec.js::the data sources are attributed once, on /account, and on no card",
+    "frontend/src/routes/account/account-page.test.js::names passkeys, the PIN and the Rank letters by what they do",
+    "frontend/src/routes/account/account-page.test.js::folds the Rank letters editor and the data sources, and drops neither",
+    "frontend/src/lib/session.svelte.test.js::states both for the account that has both, as §3.2 example does",
 ]

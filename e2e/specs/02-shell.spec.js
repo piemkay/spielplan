@@ -83,12 +83,38 @@ test('the account chip states the role and the auth method', async ({ page }) =>
   // 'admin · password'; on the phone project, which runs after both, the same account holds
   // both. Asking the server what it holds is the one assertion that is true in both places and
   // that a constant cannot pass.
+  //
+  // In words since the second household test (decision 518): "member · password" read as a code.
+  // The inventory is the same, and so is the assertion's shape.
   const me = await (await page.request.get('/api/auth/me')).json();
-  const method = [me.passkeys > 0 ? 'passkey' : 'password', me.has_pin ? 'PIN' : null]
+  const method = [
+    me.passkeys > 0 ? 'signs in with a passkey' : 'signs in with a password',
+    me.has_pin ? 'PIN set for quick switching' : null
+  ]
     .filter(Boolean)
-    .join(' + ');
+    .join(' · ');
+  const role = me.role === 'admin' ? 'Admin' : 'Member';
   const menu = await openAccountMenu(page);
-  await expect(menu.locator('.data').first()).toHaveText(`${me.role} · ${method}`);
+  await expect(menu.getByTestId('account-line')).toHaveText(`${role} · ${method}`);
+});
+
+test('the account page speaks plainly and folds what a member need not act on', async ({ page }) => {
+  // Second household test (U12; decision 518): "member · password", "switch PIN", a free-text
+  // "Tier set", "This browser has no WebAuthn support" and a screen of licence notices. The
+  // controls and the facts are all still on the page; the words are a member's.
+  await page.goto('/account');
+  await expect(page.getByRole('heading', { name: 'Account' })).toBeVisible();
+  const body = (await page.locator('main').textContent()) ?? '';
+  for (const word of ['WebAuthn', 'Switch PIN', 'switch PIN', 'Tier set']) {
+    expect(body, `the account page says "${word}"`).not.toContain(word);
+  }
+  await expect(page.getByRole('heading', { name: 'PIN for switching profiles' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Rank letters' })).toBeVisible();
+  await expect(page.getByTestId('tier-set-current')).toBeVisible();
+  await expect(page.getByTestId('tier-set-input')).toBeHidden();
+  await expect(page.getByTestId('data-sources')).toBeHidden();
+  await page.getByTestId('account-technical').locator('summary').click();
+  await expect(page.getByTestId('data-sources')).toBeVisible();
 });
 
 test('show the model is off by default, toggles, and persists', async ({ page }) => {

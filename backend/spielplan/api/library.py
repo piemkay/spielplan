@@ -71,6 +71,8 @@ async def list_titles(
         limit=limit,
         offset=offset,
     )
+    # Decision 516: the card leads with the original title where it is the viewer's language.
+    await library.carry_original_names(conn, rows)
     return {
         "kinds": kinds,
         "total": total,
@@ -137,6 +139,8 @@ async def title_detail(title_id: int, conn: DB, user: ActiveUser, request: Reque
                 "id", "kind", "name", "original_name", "year", "runtime_min", "overview",
                 "tagline", "poster_path", "backdrop_path", "trailer_key", "is_owned",
                 "placement", "seen_state", "imdb_id", "tmdb_id",
+                # Decision 516: the card leads with the original title in the viewer's language.
+                "original_language",
             )
         },
         "credits": await library.credits_for(conn, title_id),

@@ -250,6 +250,10 @@ test.describe('jellyfin', () => {
     // reload would prove the route and say nothing about the wiring, which is the thing that was
     // missing (`onAnswered`, `+page.svelte`).
     await expect(page.getByTestId('pending-verdicts')).toContainText('Severance');
+    // Its count in words: it read "16 seen, no verdict · 2 named" (second household test, U6).
+    await expect(page.getByTestId('pending-verdicts-count')).toHaveText(
+      /^\d+ titles? you watched (is|are) waiting for your rating\.$/
+    );
 
     const panel = await openTitle(page, 'Severance');
     await expect(panel.getByRole('button', { name: 'Seen', exact: true })).toHaveAttribute(

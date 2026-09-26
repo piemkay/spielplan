@@ -29,12 +29,16 @@
   <p class="data" data-testid="shelves-loading">building your shelves…</p>
 {:else if rows.length}
   <div class="shelves" data-testid="shelves" data-shelf-count={payload?.shelves_total ?? 0}>
-    {#if lettered}
-      <p class="why legend" data-testid="tier-legend">
-        Letters are tiers — a dashed outline means it's our guess, for a title you haven't rated
-        yet.
-      </p>
-    {/if}
+    <!-- Every shelf draws on the household's own library (`home/shelves.py` reads owned titles
+         only), and nothing said so: the search grid marks owned cards "in library" and the shelves
+         carry no such chip, so a member read the shelves as the wider catalog (second household
+         test, U2). Said once for the screen, since a chip on every card would say nothing. -->
+    <p class="why legend" data-testid="shelves-from-library">
+      Everything on these shelves is in your library.{#if lettered}{' '}<span data-testid="tier-legend"
+          >Letters are tiers — a dashed outline means it's our guess, for a title you haven't rated
+          yet.</span
+        >{/if}
+    </p>
     {#if both}
       {#each regions as region (region.kind)}
         <section class="region" data-testid="kind-region" data-kind={region.kind}>

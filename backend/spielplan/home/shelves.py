@@ -1407,6 +1407,11 @@ async def build_home(
         zero_verdicts=(verdicts == 0 and bundle_version is not None),
         partner=partner,
     )
+    # Decision 516: every card carries its original title and language, so a German viewer's card
+    # leads with "Wunderschön". One read for every card on every shelf, after the builders.
+    await library.carry_original_names(
+        conn, [card for shelf in shelves for s in shelf.sections for card in s.items], key="title_id"
+    )
     payload["shelves"] = [s.as_dict() for s in shelves]
     payload["sections"] = sections_by_kind(shelves, chosen)
     payload["shelves_total"] = len(shelves)

@@ -5,7 +5,7 @@
    *    (the chip reads 'member · passkey + PIN'). Logout clears the session cookie only —
    *    passkeys remain registered."
    */
-  import { authMethodLine, refreshUser, session, setShowModel } from '$lib/session.svelte.js';
+  import { authMethodLine, refreshUser, roleWord, session, setShowModel } from '$lib/session.svelte.js';
   import { get, post } from '$lib/api.js';
   import { modelGateSettled } from '$lib/home.svelte.js';
   import { dismiss } from '$lib/dismiss.js';
@@ -96,7 +96,8 @@
     <div class="menu">
       <div class="head">
         <div class="name">{session.user?.name}</div>
-        <div class="data">{session.user?.role} · {method}</div>
+        <!-- §3.2's inventory in words (decision 518): "member · password" read as a code. -->
+        <div class="why line" data-testid="account-line">{roleWord(session.user?.role)} · {method}</div>
       </div>
 
       {#if switching}
@@ -156,7 +157,7 @@
 
         {#if others.length}
           <div class="group bordered">
-            <div class="data heading">SWITCH USER</div>
+            <div class="data heading">SWITCH PROFILE</div>
             {#each others as u (u.id)}
               <button
                 class="switch"
@@ -177,13 +178,16 @@
                was not there and §3.2's switch looked unimplemented. A profile becomes
                switchable by setting a PIN, and that is on the account page (fe-13). -->
           <div class="group bordered">
-            <div class="data heading">SWITCH USER</div>
+            <div class="data heading">SWITCH PROFILE</div>
+            <!-- In words (decision 518): "Nobody else has a switch PIN yet" named the mechanism
+                 and not what it does. -->
             <div class="why hint">
-              Nobody else has a switch PIN yet — a profile joins this list once it has one.
+              No one else can be switched to yet. Each person sets a four-digit PIN on their
+              account page, and then appears here.
               <!-- The menu's other navigating link, and it closes for the same reason the entries
                    above do: the shell is persistent, so a link that does not dismiss carries the
                    dropdown onto /account with it. -->
-              <a href="/account" onclick={closeMenu}>Set yours on the account page.</a>
+              <a href="/account" onclick={closeMenu}>Set your PIN on the account page.</a>
             </div>
           </div>
         {/if}
@@ -256,6 +260,11 @@
   .name {
     font-size: 13px;
     font-weight: 600;
+  }
+  .line {
+    margin-top: 2px;
+    font-size: 12px;
+    line-height: 1.4;
   }
   .group {
     padding: 6px;
