@@ -1,119 +1,7 @@
 """The ten stages of §8's per-title pipeline, and the contract every one of them answers to.
 
-Spec v2.1 §8 (the ten-stage pipeline and "Failure at any stage parks the job with a reason,
-retryable from admin"), §4.1 (the id partition), §5.3 (placement reconciliation), §6.0 row 6.
-
-PORT VERDICT: **new code, shaped by the corpus and matching none of its units.** The corpus has
-no per-title stage machine at all. `mdc probe` (`mdc/cli.py:813-897`) enqueues one task per
-SOURCE kind and drains them in any order, because in a wholesale crawl the order between two
-fetchers does not matter; §8's pipeline is a SEQUENCE - "per-title parse of raw docs", then a
-gate, then a pack, then an extraction, then a placement - where stage n+1 reads what stage n
-wrote. What IS ported, with named changes, is the corpus's handler contract:
-
-  * `mdc/sources/base.py:41-54`'s `HandlerSpec` - a callable, plus the metadata the driver needs
-    to decide whether to run it at all, including `paid`. Changed: the unit of registration is a
-    STAGE of one pipeline rather than a task KIND of many, so the registry is an ordered tuple
-    in `pipeline.py` and not a dict keyed by name.
-  * `mdc/sources/base.py:23-34`'s `Ctx` - the per-run handle a stage is given. Changed: the
-    `fetcher` is a HANDLE THIS MODULE NEVER NAMES THE TYPE OF, and `title_id` is on it, because
-    a stage of a per-title pipeline always has a title while a corpus handler only has a key.
-    M5.1 left the fetcher off entirely - "nothing fetches at M5.1, and `acquire/fetch.py` is
-    deliberately not imported here so this module does not depend on a layer it does not use" -
-    and decision 373 puts it back as a field the DRIVER fills: `pipeline.drain` builds one per
-    drain and hands it down, so §8 stage 2 drives eleven source adapters without this file
-    importing a transport, an HTTP client or one of the fetcher's exception types. That is why
-    `StageContext.fetcher` is annotated `Any` and why every failure an adapter can suffer
-    arrives here as a `sources.base.SourceResult` rather than as an exception to catch.
-  * `mdc/runner.py:161-205`'s `_execute` - the mapping from what a handler did to what the queue
-    is told. Changed from EXCEPTIONS to RETURN VALUES: the corpus raises `Skip`, `Permanent`,
-    `HostPaused`, `RobotsDisallowed` and `FetchError` and catches five arms in the runner, which
-    works when every handler is one HTTP fetch and its failure modes are the fetcher's. §8's
-    stages fail in ways that are not exceptional at all - "if thin, retry window 30 days" is the
-    normal outcome of stage 4 on a film released last week - and a normal outcome raised as an
-    exception is one a later `except Exception` swallows into a failure. So a stage RETURNS
-    `advance` / `park` / `fail` and the driver keeps one `except Exception` arm for the case a
-    return value cannot describe: a stage that genuinely broke.
-
-THE THREE VERBS, and decision 336 is the line between the last two.
-
-  * `advance` - this stage is done; the next one may run. Optionally carries the `title_id`
-    stage 1 established, which is the only fact a stage hands forward out of band.
-  * `park(reason, until=None)` - "waiting on something that may change": the 30-day review
-    window, the spend cap, thin-block enrichment, a bundle-less install. It NEVER auto-fails.
-    With a time it is a `defer` on the task; without one it is a `skip`, because nothing will
-    change without an operator. `reason` is shown VERBATIM on §6.6's board, so it is written for
-    a person and not for a log.
-  * `fail(reason)` - "this stage raised and will raise again". The only state offering a plain
-    retry, and the driver also writes it for an unhandled exception, because an exception is
-    exactly that sentence. `fail(reason, permanent=True)` is the one variant, for a stage that
-    KNOWS the next attempt would give the same answer at the same cost: the task is closed rather
-    than put back on the curve, and only the admin retry runs it again (decision 431, §8 stage 6).
-
-WHAT MAKES EVERY WRITE IN THIS FILE SAFE, stated because decision 162 makes it unrecoverable if
-it is not: the corpus is no longer somewhere the content can be fetched from again, so a
-corrupted write into `title` and its derived tables can only be undone by dropping the database.
-Three properties, each of which a later reader must keep:
-
-  1. **A mint is an INSERT of a NEW row and never an UPDATE of an existing one.** `_mint` writes
-     no `id`, so `title_id_seq`'s DEFAULT applies (`0015_seed.sql:24-27`, `MINVALUE 1000000000`),
-     and the row lands in the app's half of the namespace where no bundle can ever collide with
-     it. The insert asserts that before its transaction commits: a sequence that was reset by
-     hand, or a column default someone dropped, would otherwise mint quietly into the corpus's
-     half and overwrite a bundle title on the next import. `origin = 'acquired'`
-     (`0008_placement.sql:46-48`) is what makes the row distinguishable afterwards.
-  2. **No stage in this file UPDATES a title the bundle imported.** `identify` READS one
-     through `connectors/resolve.resolve_title_id` and never writes it: that function is
-     fill-never-clobber by construction and this module does not extend it, because §7.1's rule is
-     that "the bundle is derived from a curated corpus and Jellyfin's ProviderIds are whatever a
-     scraper guessed; when they disagree the corpus wins" (`connectors/resolve.py:15-17`). And it
-     never re-implements identity either, which is the same property from the other side: a second
-     resolver here would disagree with the nightly sweep about which title a library item is.
-     THIS PARAGRAPH USED TO SAY THE NARROWER AND FALSE THING - that `identify` is the only stage
-     that touches a title it did not mint, and that every other write here is an UPDATE of a row
-     this pipeline owns. `place` calls `reconcile(scope="app_acquired")`, whose work list is
-     `SELECT id FROM title WHERE origin = 'acquired'` - EVERY acquired title in the install - and
-     which UPSERTs a `title_placement` row and runs an unguarded
-     `UPDATE title SET placement, placement_bundle, placement_at` over all of them
-     (`placement/reconcile.py:233-247`, `:334-338`). So one task's stage 9 rewrites rows this walk
-     did not mint and does not hold `_TITLE_LOCK` for. What makes THAT safe is stated where it is
-     done, in `place`'s own docstring, and it is a different argument: the write is derived rather
-     than curated, it is idempotent under `ON CONFLICT (title_id, bundle_version) DO UPDATE`, it is
-     scoped by `origin = 'acquired'` so no corpus title is reachable, and it is computed against a
-     basis `active_store` has already asserted matches the active bundle. The list a stage author
-     for M5.2-M5.7 reads before adding a write has to name it.
-     [M5.1 review cycle 3, d323-C3-SPINE-03]
-     M5.5 NAMES ITS OWN, as that sentence asks: `dna_extract` writes the title's extracted tier
-     - `dna_tag` and `dna_evidence`, never `title` - through `llm/extract.py`, which REPLACES the
-     tier for the active vocabulary rather than adding to it (decision 337's "Replace, not
-     accumulate"), so rows a bundle import wrote for this title are among the rows replaced. What
-     makes that safe is argued in `llm/extract.py` and `llm/consensus.py`: nothing is written
-     unless every planned run passed M5.4's validator, the replace is one transaction with the
-     curation ledger applied inside it (a household's verdict outlives the write), and the stage
-     runs only for the title this walk holds `_TITLE_LOCK` on. [decisions 337, 432]
-  3. **A minted row is written in ONE transaction with its assertion**, so a refusal leaves no
-     half-minted title - and that transaction also holds the claim on the film's identity, so two
-     workers cannot both discover there is no such title and both create one. Every other write
-     this file makes ITSELF is an UPDATE of a row this pipeline owns.
-     WHICH IDENTITIES THAT CLAIM COVERS IS `_mint_claims`' OWN DOCSTRING AND NOT THIS LINE. The
-     sentence above was true of the resolver's provider arms and false of its fourth, and two
-     items for one film with disjoint provider ids both minted through the gap; the claim set now
-     mirrors the name arm too and names the arms it still does not mirror. A property asserted
-     here and enforced somewhere else is a property worth reading in the place that enforces it.
-     [M5.1 review cycle 4, d322-C4-MINT-01]
-
-WHY NO STAGE IS A DECLARED NO-OP ANY MORE, AND WHY SEVEN OF THEM ONCE WERE. Until a lane wrote its
-body, each of stages 2 to 8 advanced with `not implemented at M5.1 - owned by M5.<n>` in the
-board's `detail` and named its owner in its own docstring. That is what made the spine testable end
-to end before any lane opened - a task could walk 1 to 9 to 10 and prove the driver, the queue and
-the shipped stages agreed - and what made a stub that survived visible to a `grep` rather than
-invisible in a registry table. The owners were the roadmap's (`ROADMAP-M5.md:279-296`, `:298-312`,
-`:314-329`), and every row keeps its owner as provenance. M5.3 gave stages 2, 3 and 4 their bodies,
-M5.5 stage 6 (decision 432), and M5 the last three: stage 5 stores the augmented pack stage 6 reads
-(decision 461), stage 7 records the verdict stage 6 reached (decision 462), and stage 8 projects an
-acquired title and leaves a bundle title's projected tier alone (decision 463). `NOT_IMPLEMENTED`
-stays, because the stub-marker test decision 348's gate relies on still needs the sentence for the
-next stage somebody declares without a body - and that test now also asserts there is none, which
-holds this paragraph's claim in the build rather than in a count written here.
+Stages return `advance`, `park` (with `until` a defer, without one a skip) or `fail`, never raising
+for an ordinary outcome. Stage 1 only ever INSERTs a new title (decision 162). No transport imports.
 """
 
 from __future__ import annotations
@@ -147,22 +35,11 @@ ADVANCE = "advance"
 PARK = "park"
 FAIL = "fail"
 
-# `title_id_seq`'s MINVALUE, restated here as an assertion rather than imported from a migration
-# nothing loads at runtime. `0015_seed.sql:20-25` states what it buys: "A disjoint range makes the
-# collision arithmetically impossible instead of contingent on the corpus standing still."
+# `title_id_seq`'s MINVALUE, asserted after every mint.
 APP_ID_MIN = 1_000_000_000
 
-# §8 stage 1's own clause, as the spec file now carries it (decision 323): an item Jellyfin
-# supplies no provider id for "parks here with the reason 'no provider id' and mints nothing,
-# because a name-and-year mint is the wrong match the resolver already refuses". The reason OPENS
-# with the spec's three words because §6.6 shows it verbatim and an operator scanning a board
-# column reads the first clause; the rest is there so the one person who can act on it knows
-# what acting would mean. `ops/fake_jellyfin.py:52-53`'s "Tampopo" is this fixture.
-# THE SECOND SENTENCE IS WHAT THE MACHINE ACTUALLY DOES, and it used to say "the next sweep will
-# enqueue it again". It cannot: this park carries no deadline, so the task is `skipped`, and
-# `queue.enqueue` is `ON CONFLICT (kind, key) DO NOTHING` - the sweep's next pass over the same
-# Jellyfin item is a no-op against the closed row. A reason shown verbatim to an operator has to
-# name the lever that exists. [M5.1 review cycle 1, M51-CRASH-01]
+# §8 stage 1 (decision 323), shown verbatim. The park has no deadline, so the key is closed and the
+# next sweep cannot re-enqueue it: the sentence names the real lever.
 NO_PROVIDER_ID = (
     "no provider id: Jellyfin supplies no imdb, tmdb or tvdb id for this item, so there is "
     "nothing to mint a title against. Add the id in Jellyfin, then revive this task from the "
@@ -170,9 +47,7 @@ NO_PROVIDER_ID = (
     "(decision 323)"
 )
 
-# An item that carries a provider id Jellyfin's own field names promise and the value denies.
-# A skip and not a deferral: nothing changes here without a person editing the id, which is the
-# same shape as `NO_PROVIDER_ID` and is what `park`'s docstring calls the honest outcome.
+# A provider id whose value is malformed; a person must edit it, so a skip.
 MALFORMED_PROVIDER_ID = (
     "malformed provider id: Jellyfin reports {} for this item, which is not an id this app can "
     "mint a title against - an imdb id is tt plus at least seven digits, and a tmdb or tvdb id is "
@@ -180,14 +55,8 @@ MALFORMED_PROVIDER_ID = (
     "then revive this task from the acquisition board (decision 323)"
 )
 
-# An item carrying a value no column in the content spine can hold. Distinct from
-# `MALFORMED_PROVIDER_ID` because the cause is not always a provider id: `resolve.resolve_title_id`
-# binds `tmdb_id`/`tvdb_id` (`integer`) AND the name-and-year fallback's `t.year` (`smallint`), so
-# the same refusal arrives for an item whose `ProductionYear` is junk, and a reason shown verbatim
-# on §6.6's board must not name the wrong field. The database's own sentence is carried in `{}`
-# rather than paraphrased, because it is the only thing that says which value was refused - and
-# it is carried INSIDE a sentence that names the lever rather than being the whole reason, which
-# is what this park used to be. [M5.1 review cycle 2, d323-int32-04]
+# A value no content-spine column can hold (resolver binds integer ids and a smallint year); the
+# database's sentence is carried inside one naming the lever.
 UNUSABLE_METADATA = (
     "unusable item metadata: this item carries a value the content spine cannot hold - a tmdb or "
     "tvdb id is a 32-bit whole number and the production year is 16-bit - and the lookup refused "
@@ -195,64 +64,34 @@ UNUSABLE_METADATA = (
     "board (decision 323)"
 )
 
-# An item that is neither a Movie nor a Series. `title.kind` is `NOT NULL CHECK (kind IN
-# ('movie','series'))` (`0003_content.sql:29`) and §4.1 rule 5 makes that column the partition
-# every ranking surface uses, so there is no honest value to write for a Box Set, a Playlist or a
-# music video. A park rather than a failure because nothing raised and no retry can help.
+# `title.kind` admits movie or series only (§4.1 rule 5).
 UNSUPPORTED_KIND = (
     "unsupported item type: this app holds movies and series only, and Jellyfin reports this "
     "item as something else (spec v2.1 §4.1 rule 5)"
 )
 
-# §3.1 makes a bundle-less install legal, and `title_placement.bundle_version` is `NOT NULL
-# REFERENCES artifact_bundle(version)` (`0008_placement.sql:14`), so an acquired title on such an
-# install genuinely cannot be placed. That is a wait and not a failure: importing a bundle is the
-# thing that may change, and it is a thing the household does.
+# §3.1 allows a bundle-less install, but a placement needs a bundle; a wait, not a failure.
 NO_ACTIVE_BUNDLE = (
     "no artifact bundle is active, so there is no basis to place a coordinate in. Import a "
     "bundle from Admin and this title is placed on the next drain (spec v2.1 §3.1, §8 stage 9)"
 )
 
-# The stage got its forward pass and the title still has no coordinate. `place_titles` reports a
-# non-finite placement per title rather than raising (`placement/reconcile.py:298-301`), so the
-# only way to learn that THIS title was the one that failed is to read the row back.
-#
-# NAMES THE LEVER, like `NO_ACTIVE_BUNDLE` above and for the same reason: this park carries a
-# deadline (see `place`), so what an operator reads has to say that the title comes back by itself.
-# §5.3's nightly reconciliation runs `scope="owned_missing"`, whose work list is origin-blind and
-# is exactly the owned titles still reading `placement = 'unplaced'`, so the condition this park
-# describes is one that clears itself. [M5.1 review cycle 2, d323-park-02]
+# The forward pass left this title without a coordinate; the nightly reconciliation may place it,
+# so the park has a deadline and says it comes back by itself.
 NOT_PLACED = (
     "the Cold Tower produced no coordinate for this title; §6.6's placement report says why. "
     "§5.3's nightly reconciliation places what is still unplaced, so this title is re-asked once "
     "a day and needs nothing from an operator unless that report names something"
 )
 
-# Stage 10 badges a title on the strength of two columns, and if either is missing the badge is a
-# claim about a title that has none. `home/shelves.py:1015-1053`'s shelf reads `t.is_owned` and
-# `t.placement = 'cold_tower'`, so a title missing either is stamped `ready` into a board an
-# operator then cannot reconcile with a Home page that does not show it.
+# Stage 10 checks the two columns Home's shelf reads before stamping `ready`.
 NOT_BADGEABLE = (
     "this title is not ready to be shown: Home's \"New in the library\" shelf needs an owned "
     "title carrying a Cold Tower placement, and this one carries {}"
 )
 
-# An item whose identity would be WRITTEN in a form the resolver cannot LOOK UP again. `_mint`
-# writes `str(item["Id"]).strip()`; `connectors/resolve.resolve_title_id` looks the same item up
-# with `str(item["Id"])`, unstripped. So an item id carrying surrounding whitespace mints a title
-# the next walk of this very task cannot find, and `_remember_title` is a separate autocommit
-# statement after the mint's transaction commits - a window `_run_stage`'s own `asyncio.wait_for`
-# budget can land in with no worker dying at all. The second walk mints a second title for one
-# film, and decision 162 makes it permanent.
-#
-# REFUSED AND NOT NORMALISED, which is decision 323's side of the door. Canonicalising the item
-# here and handing THAT to the resolver would make this module and the nightly sweep resolve one
-# item differently, which is the second identity implementation property 2 of this file's header
-# forbids. The same rule covers the imdb id one function below, where it needs no code: dropping
-# the `.strip()` lets `_IMDB_ID.fullmatch` refuse a padded value into `MALFORMED_PROVIDER_ID`.
-# `tmdb`/`tvdb` need no rule and get none - `resolve._as_int` reduces the LOOKUP side to digits
-# exactly as `_mintable_ids` reduces the WRITE side, so those two agree already.
-# [M5.1 review cycle 3, d323-C3-MINT-01]
+# `_mint` writes the item id stripped but the resolver looks it up unstripped, so a padded id would
+# mint a second title. Refused, not normalised: one identity rule, the resolver's.
 UNCANONICAL_ITEM_ID = (
     "unusable Jellyfin item id: this item's Id carries leading or trailing whitespace, so the "
     "value this app would write as the title's deep link is not the value it looks an item up by "
@@ -261,15 +100,7 @@ UNCANONICAL_ITEM_ID = (
     "(decision 323)"
 )
 
-# The resolver returned "no match" and this walk asked WHY before writing. `resolve_title_id`'s
-# fourth arm takes `LIMIT 2` and answers only for exactly one candidate (`connectors/resolve.py:
-# 161-179`), so its None means one of two different things - "the spine holds nothing like this"
-# and "the spine holds several and I will not guess" - and stage 1 read both as licence to mint.
-# Decision 360 is the refusal: when the app cannot tell an item from titles it already holds, it
-# writes no third row. A park is recoverable and a mint is not, and that asymmetry is decision
-# 162's whole content. Names the lever, because a provider id is a thing an operator can add in
-# Jellyfin and is exactly what makes the resolver's stronger arms answer.
-# [M5.1 review cycle 4 second pass, M51-C4-MINT-AMBIG-01, M51-C4-MINT-ORIGINAL-03]
+# The resolver's None can mean "several and I won't guess"; decision 360 refuses to mint a third row.
 AMBIGUOUS_IDENTITY = (
     "this film's name or original title already matches {} from {} in the library, and its "
     "provider ids match none of them - so the app cannot tell whether this item is a title the "
@@ -278,96 +109,45 @@ AMBIGUOUS_IDENTITY = (
     "revive this task from the acquisition board (decision 360)"
 )
 
-# An item that resolves to a title the bundle supplied and the app has already PLACED, which is
-# M5.2-plan §9's risk made into an exit: "A library re-scan can re-stamp items the household has
-# had for years ... the job must then find the title already owned and exit at stage 1 rather
-# than re-acquiring. Assert that, or a re-scan bills the household for its whole library."
-# Nothing exited. A resolved title advanced and `pipeline.run_task` resumed it from its board
-# row, so a re-stamped owned title walked stages 2 to 10 -- stubs today, which stamped §8's "new
-# - model placement, no crowd data" badge over warm corpus titles and wrote `ready` over the
-# `(2, parked)` row `placement/reconcile._park_thin` leaves for a thin title, a row `_PARK`'s
-# `ON CONFLICT DO NOTHING` can never put back; and the day M5.3 and M5.5 give those stages bodies,
-# eight-source enrichment and the paid extract for every title a re-scan touched.
-#
-# A BUNDLE TITLE ALREADY PLACED IS THE TEST, and not "owned", which is decision 411's reading of
-# the plan's word. `is_owned` is the full sweep's column and moves on the sweep's schedule, so it
-# cannot say whether §8 has anything left to do. Two columns can: `origin = 'bundle'` says the
-# curated corpus already did this title's acquisition, and a placement says stages 2 to 9 have
-# nothing left to produce. Each half keeps a walk M5.1 built on purpose. A bundle title still
-# `unplaced` -- a Jellyfin add the nightly reconciliation has not reached -- walks to stage 9,
-# which places it through the sweep's own scope (see `place`), and waits there as `NOT_PLACED`
-# argues only if the tower produced nothing. A title THIS PIPELINE minted resumes from its own
-# board row, because that row is unfinished work of the pipeline's: a reclaim after a worker died
-# between the mint and `_remember_title`, and the loser of a copy race resolving onto the winner's
-# row, both finish that way. A thin title's `(2, parked)` inbox row is left for the `title:` task
-# whose job it is. A skip with no board row, because the title's row belongs to whichever walk
-# holds it and this task established no title of its own. [M5.2 review cycle 3: m52-c3-own-01]
+# Decision 411: a bundle title already placed exits at stage 1, or a library re-scan would re-walk
+# (and bill) every title. Unplaced bundle titles and this pipeline's own mints still walk.
 ALREADY_PLACED = (
     "this item resolves to title {}, which the corpus bundle supplied and the app has already "
     "placed, so there is nothing for the pipeline to acquire: a Jellyfin re-scan re-stamps items "
     "the household has had for years, and this was one of them (decision 411)"
 )
 
-# Two tasks for one film reached stage 1 at once, and the one that lost the claim waited. Decision
-# 336's `parked`, with a deadline of now: the thing that may change is the other walk committing,
-# which it will, and nothing was attempted so nothing is charged. `pipeline.TITLE_IN_FLIGHT` is
-# the same sentence one step later, for a title that already exists.
+# Two tasks for one film reached stage 1 at once; the loser waits, nothing charged.
 FILM_IN_FLIGHT = (
     "another worker is already identifying this film, so this task waited rather than minting "
     "beside it. It is due again immediately and has spent no attempt (decision 322)"
 )
 
-# The namespace half of the advisory lock stage 1 mints under, and a DIFFERENT one from
-# `pipeline._TITLE_LOCK = 8001` because the thing being claimed is different: that one is a title
-# id, this one is the identity of a film that may not have a row yet. The two must not share a
-# namespace or a title id could collide with a hashed provider id on the same integer, which is
-# the hazard `sync/seen.py:101-102` records for the whole scheme. §8 has no subsection, so 80 and
-# the second serial. Declared here rather than in `pipeline.py` beside its sibling because
-# `pipeline` imports this module and not the other way round; the pair is registered in both
-# comments so neither can be renumbered alone. [M5.1 review cycle 3, d322-MINT-RACE-01]
+# Advisory-lock namespace for the film-identity claim; `pipeline._TITLE_LOCK = 8001` is its sibling.
+# Declared here because `pipeline` imports this module.
 _MINT_LOCK = 8002
 
-# D3's sentence, one spelling. The milestone named is the one `ROADMAP-M5.md` gives the work.
+# The stub marker, one spelling.
 NOT_IMPLEMENTED = "not implemented at M5.1 - owned by {}"
 
-# §8's own name for stage 2, which is also the `phase` every adapter in `sources/` registers
-# under (`sources/base.HandlerSpec.phase`). Spelled once because it is the filter stage 2 selects
-# its kinds by: a driver that asked for a phase the registry does not use would run nothing and
-# report a clean walk, which is the failure mode a registry exists to prevent.
+# §8's name for stage 2, and the `phase` every adapter registers under.
 ENRICH_PHASE = "enrich"
 
-# Decision 334's one required source, as the registry spells it. `derive/rebuild.REQUIRED_DOCUMENTS`
-# is the same fact on the other side of the raw store - the two KINDS that document arrives under,
-# `tmdb:movie_detail` and `tmdb:tv_detail` - and the two cannot be one constant because one names a
-# handler and the other names stored bytes. They are registered in both comments so a rename of the
-# handler cannot leave the derive looking for a document nothing produces.
+# Decision 334's one required source; `derive/rebuild.REQUIRED_DOCUMENTS` is its stored-bytes twin.
 REQUIRED_KIND = "tmdb:detail"
 
-# The SOURCE that kind belongs to, which is what decision 334's park is a rule about: "a required
-# source that RAN and did not answer parks with that source named". Derived from the kind rather
-# than written out, because the two must not be able to drift apart.
+# Derived so the two cannot drift apart.
 REQUIRED_SOURCE = REQUIRED_KIND.split(":", 1)[0]
 
-# A stage 2 that was handed no fetcher. A FAILURE and not a park, which is the one place in this
-# file where that is the easy call: decision 336 gives `failed` to "this stage raised and will
-# raise again", and a driver that did not build a fetcher will not build one on the next drain
-# either - nothing an operator does to this title changes it. Decision 373 puts the construction
-# in `pipeline.drain` precisely so that there is one per drain; a stage that quietly made its own
-# would be a second set of per-host token buckets and a second circuit breaker pacing the same
-# hosts at twice their declared rate, which is the defect `fetch.Fetcher._runtime` already guards
-# against INSIDE one instance. The sentence names the driver because the repair is a code change
-# and the person reading §6.6's board needs to know that it is not theirs.
+# A failure, not a park: the driver builds the fetcher (decision 373), and a stage must never build
+# its own (a second set of token buckets).
 NO_FETCHER = (
     "stage 2 was handed no fetcher, so no source could be asked. Every request this app makes "
     "goes through the one rate-limited fetcher `pipeline.drain` builds per drain (spec v2.1 §8, "
     "decision 373); this is a defect in the driver rather than anything about this title"
 )
 
-# The same refusal for §8 stage 6, the other stage that declares it fetches, and for the same
-# reason: a provider call made through a Fetcher the stage built for itself would be paced and
-# broken by nothing the drain knows about (decision 373). Its own sentence rather than a `format`
-# of the one above, because "no source could be asked" is stage 2's state and not this one - and
-# ASCII, since it is shown verbatim on §6.6's board and printed by the exit scripts.
+# The same refusal for stage 6. ASCII: shown verbatim and printed by exit scripts.
 NO_EXTRACTION_FETCHER = (
     "stage 6 was handed no fetcher, so no extraction provider could be asked. Every provider call "
     "goes through the one rate-limited fetcher `pipeline.drain` builds per drain (spec v2.1 section "
@@ -375,13 +155,7 @@ NO_EXTRACTION_FETCHER = (
     "title"
 )
 
-# Decision 334's park: the one source §8 stage 2 requires answered and did not answer well.
-# Written for §6.6's board, which `0005_ledger.sql:138` says shows this string verbatim, and it
-# names the lever twice over - the TMDB card in Admin for the configuration case, and the retry
-# for the transient one - because `_run_stage`'s own rule is that a reason an operator reads has
-# to name a lever that exists. It carries the source's note inside the sentence for
-# `UNUSABLE_METADATA`'s reason: the note is the only thing that says WHICH way it failed, and a
-# reason that is nothing but a note is a log line on a product surface.
+# Decision 334's park: the required source ran and failed; names both levers and carries the note.
 ENRICH_REQUIRED_FAILED = (
     "enrichment stopped: {} is the one source §8 stage 2 requires and it answered \"{}\". The "
     "other sources were still asked and whatever they returned is in this job's detail. Check "
@@ -389,12 +163,7 @@ ENRICH_REQUIRED_FAILED = (
     "here and re-reads what is already in the raw store (decision 334)"
 )
 
-# The same park, for the state where the required KIND never got to ask because a sibling kind of
-# the required SOURCE failed first. `tmdb:detail` has no request to make until `tmdb:resolve` has
-# filled `title.tmdb_id`, so a refused key or a 500 on the resolve kind leaves the required kind
-# unasked. A separate sentence rather than a second `format` of the one above because "it answered"
-# is untrue here - the required kind was never asked at all - and a reason an operator reads has to
-# describe the state it was written for. [M5.3 review cycle 2, m53-c2-334-01]
+# The required kind never asked because a sibling kind of the same source failed first.
 ENRICH_REQUIRED_UNASKED = (
     "enrichment stopped: {} is the one source §8 stage 2 requires and it could not be asked, "
     "because {} answered \"{}\". The other sources were still asked and whatever they returned "
@@ -403,89 +172,38 @@ ENRICH_REQUIRED_UNASKED = (
     "(decision 334)"
 )
 
-# A provider id this pipeline is allowed to MINT against. Decision 323 says a row is minted "only
-# on a provider id (imdb/tmdb/tvdb)", and `resolve.identity` answers a different question: it was
-# built for LOOKUP, where a junk key merely fails to match, and `_mint` reuses its output as the
-# value it WRITES and as the join key every later lookup resolves against. The two measured
-# consequences of trusting it are both permanent under decision 162: `{"Tmdb": "0"}`, which Kodi
-# and Emby NFO writers emit on a mis-scraped file, mints a title with `tmdb_id = 0` that every
-# later zero-id item then resolves onto; and `{"Tmdb": "tt0113277"}` mints `tmdb_id = 113277`,
-# which a legitimate tmdb 113277 then resolves onto. `title` carries no UNIQUE on these columns
-# (0003 rule 6), so nothing below this line refuses the collision.
-# [M5.1 review cycle 1, M51-REV-05]
+# The shape a mint accepts: `resolve.identity` is for lookup and would let junk (`Tmdb: "0"`,
+# `"tt..."` under Tmdb) become a permanent identity.
 _IMDB_ID = re.compile(r"tt\d{7,}")
 
-# The ceilings the COLUMNS have, restated here because `_mintable_ids`, `_year` and `_runtime_min`
-# are the three functions that decide what this pipeline writes into them - it said TWO while
-# `_mint` bound three computed values against bounded columns, and the one the rule was never
-# applied to is the one that raised out of the mint. [M5.1 review cycle 4 second pass,
-# M51-C4-MINT-RUNTIME-02]
-# `title.tmdb_id` and `title.tvdb_id`
-# are `integer` and `title.year` is `smallint` (`0003_content.sql:35-36`, `:32`), and asyncpg binds
-# a Python int against the column's own type - so a runaway numeric id out of a mis-scraped NFO
-# does not park with an operator's sentence, it raises `DataError: value out of int32 range` from
-# inside the driver's bookkeeping and puts a database's internal message on §6.6's board, which
-# `0005_ledger.sql:138` says is "shown verbatim". A shape check that does not ask the one question
-# the column actually asks is a validator that passes the value it exists to refuse.
-# [M5.1 review cycle 2, d323-int32-04]
+# Column ceilings (`integer` ids, `smallint` year) for the values `_mint` binds, so junk parks or
+# drops instead of raising `DataError`.
 _INT32_MAX = 2**31 - 1
 _SMALLINT_MAX = 2**15 - 1
 
-# What a park waits when the thing that may change is a person doing something: a bundle import,
-# a spend cap, a library repair. Decision 336 gives a park with a deadline back to the pool
-# WITHOUT spending an attempt (`queue.defer`), so this is a re-ask and never a retry budget.
-#
-# ONE DAY, AND THE ARITHMETIC IS THE REASON. The drain runs every 1800 s and takes
-# `DRAIN_LIMIT = 8` tasks a tick, which is 384 walks a day; a household re-asking once a day pays
-# one no-op walk per parked title against that ceiling, and a bundle-less install's walk stops at
-# stage 9's first statement because `active_store` returns None before any placement runs. An
-# acquired set large enough to crowd that ceiling is the same measurement `place` below already
-# defers to M5.6 or M5.7, with §6.6's board in front of them. Shorter would ask an operator's
-# unchanged install more often than they could possibly act; longer would make "import a bundle
-# and this title is placed" a promise about the day after tomorrow.
+# A daily re-ask for parks that wait on a person; `queue.defer` spends no attempt.
 OPERATOR_WAIT = timedelta(days=1)
 
 
 def waiting_on_the_world() -> datetime:
     """The instant a park that waits on a person or a sweep comes back by itself.
 
-    THE PARK THAT CARRIES NO TIME IS TERMINAL, and that is what this function exists to avoid.
-    `pipeline._record_stop` turns a park with no `until` into `queue.skip`, `queue.lease` claims
-    `state = 'pending'` only, and nothing in the tree moves a row out of `skipped` - `retry_failed`
-    was deliberately not ported (decision 330 is M5.6's), and `queue.enqueue` is
-    `ON CONFLICT (kind, key) DO NOTHING`, so even a later sweep enqueueing the same key is a
-    no-op. So a stage that parked "waiting on something that may change" with no deadline was
-    waiting for a drain that could never come, while its reason told an operator on §6.6's board
-    that importing a bundle would place the title "on the next drain". `park`'s own docstring
-    names that state a bug for everything except "no provider id". [M5.1 review cycle 1,
-    M51-CRASH-01, M51-REV-03]
+    A park with no time becomes `queue.skip`, which nothing revives; use this unless that is intended.
     """
     return datetime.now(UTC) + OPERATOR_WAIT
 
 
 @dataclass(frozen=True)
 class Outcome:
-    """What a stage did, in the three verbs the driver knows.
-
-    Frozen because the driver writes the board from it and then hands the same object to the
-    queue: two writers reading one mutable record is how a reason shown on a board stops being
-    the reason a task was deferred with.
-    """
+    """What a stage did, in the three verbs the driver knows. Frozen: board and queue read one record."""
 
     verb: str
     reason: str = ""
     until: datetime | None = None
     detail: dict[str, Any] = field(default_factory=dict)
-    # Stage 1 only. The task is keyed on a Jellyfin item or a provider id and can exist before
-    # its title does (decision 322), so the title id is established rather than known, and this
-    # is the one fact a stage hands forward out of band.
+    # Stage 1 only: the one fact a stage hands forward out of band.
     title_id: int | None = None
-    # A `fail` only: this stage knows a retry cannot change its answer (decision 431). The driver
-    # hands it to `queue.fail(permanent=...)`, which has carried the parameter since M5.1 "for a
-    # stage that knows it never should" with no way for a stage to say so. §8 stage 6 is the one
-    # that must: a provider that has twice broken the contract it was told about, re-run on the
-    # queue's curve, bills two more calls a time, and §9's "retry once" would hold per walk and
-    # not per title. False by default, so every outcome an existing stage returns is unchanged.
+    # A `fail` only: a retry cannot change the answer (decision 431), so `queue.fail` closes the task.
     permanent: bool = False
 
 
@@ -498,10 +216,7 @@ def park(
 ) -> Outcome:
     """Waiting on something that may change (decision 336). Never auto-fails.
 
-    `until` is the whole difference between the two shapes of waiting: with a time the task is
-    deferred and comes back by itself, without one it is skipped and comes back when an operator
-    does something. A park with no time and no operator action is a title that sits for ever,
-    which is the honest outcome for "no provider id" and a bug for anything else.
+    With `until` the task is deferred; without it, skipped until an operator acts.
     """
     return Outcome(PARK, reason=reason, until=until, detail=detail or {})
 
@@ -511,32 +226,17 @@ def fail(
 ) -> Outcome:
     """This stage raised and will raise again (decision 336). The only plain-retry state.
 
-    `permanent=True` closes the task instead of scheduling the retry, and only the admin retry
-    runs it again (decision 431). It is for a stage that KNOWS the next attempt would give the
-    same answer at the same cost - never for a fault that might clear, which keeps the curve.
+    `permanent=True` closes the task; only the admin retry runs it again (decision 431).
     """
     return Outcome(FAIL, reason=reason, detail=detail or {}, permanent=permanent)
 
 
 @dataclass
 class StageContext:
-    """What one stage is handed. The corpus's `Ctx`, with the title added and the fetcher back.
+    """What one stage is handed: the corpus's `Ctx`, with the title added and the fetcher back.
 
-    `title_id` is None until stage 1 has run, and is the reason this is a mutable dataclass where
-    `Outcome` is frozen: the driver sets it once, between stage 1 and stage 2, and every later
-    stage reads it. `fetcher` is set the same way and for a second reason of its own, below.
-
-    `fetcher: Any` IS THE WHOLE OF HOW THIS MODULE STAYS FREE OF TRANSPORT (decision 373). It
-    holds the fetcher, the one door §8's politeness clause (`spec:404`) is enforced at, and
-    naming that type here would mean importing it - under `TYPE_CHECKING`, which costs nothing at
-    runtime, but which is still an import node and still repeals the property
-    `test_the_stage_machine_and_the_derive_do_not_reach_for_the_fetcher` states. The annotation is
-    not laziness about a type: an adapter calls `ctx.fetcher.get(...)` and this module never calls it
-    at all, so what stage 2 needs to know about the object is that it has one, which is exactly
-    what `None` and not-`None` say. `pipeline.drain` builds it, so a stage handed none FAILS with
-    a reason naming the driver rather than constructing one for itself - a stage that built its
-    own would be a second answer to "how many Fetchers does one drain have", and the per-host
-    token buckets and the circuit breaker are per instance (`fetch.Fetcher`'s own docstring).
+    `title_id` is set by the driver after stage 1. `fetcher` is `Any` so this module never imports a
+    transport; a stage handed none fails rather than building one.
     """
 
     conn: asyncpg.Connection
@@ -544,9 +244,7 @@ class StageContext:
     title_id: int | None = None
     run_id: int | None = None
     fetcher: Any = None
-    # The drain's SUPPLY of that fetcher, handed to a paid stage in place of the opened fetcher so it
-    # is asked for only when a request is next -- `Any` for the reason above. See
-    # `pipeline._run_stage`. [M5.5 review cycle 2, NBR-C2-01]
+    # The drain's supply of the fetcher, handed to a paid stage so it opens only when a request is next.
     open_fetcher: Any = None
 
     @property
@@ -563,69 +261,20 @@ async def identify(ctx: StageContext) -> Outcome:
     """§8 stage 1: "Jellyfin ProviderIds -> title row (fill-never-clobber); a row is MINTED only
     on a provider id (imdb/tmdb/tvdb)".
 
-    RESOLVE FIRST, ALWAYS. `connectors/resolve.resolve_title_id` is shipped and is the one
-    implementation of §7.1's identity rules - jellyfin_id, then imdb, then tmdb/tvdb qualified by
-    kind, then a name-and-year fallback that refuses when it is ambiguous. A second implementation
-    here would disagree with the nightly sweep about which title a library item is, and the two
-    disagreeing is how a household ends up with two rows for one film in a spine that cannot be
-    rewritten (decision 162).
-
-    Resolving is also what makes this stage IDEMPOTENT, which is the property the whole driver
-    rests on: the mint below sets `jellyfin_id`, so a second run of this task finds the row the
-    first run minted on the resolver's first branch and mints nothing. A worker killed between
-    the mint and the board write leaves exactly that state, and the reclaim is a no-op rather
-    than a duplicate.
-
-    THAT IDEMPOTENCE IS NOT FREE AND THIS DOCSTRING USED TO ASSERT IT AS IF IT WERE. It holds only
-    because `_mintable_ids` and `UNCANONICAL_ITEM_ID` now refuse to mint an identity whose WRITTEN
-    form is not the form the resolver LOOKS UP: `_mint` wrote stripped values while
-    `resolve.resolve_title_id` reads the raw ones, so one space around a provider id turned "the
-    reclaim is a no-op" into "the reclaim mints a second title for the same film".
-    [M5.1 review cycle 3, d323-C3-MINT-01]
-
-    AND IT IS NOT ENOUGH ON ITS OWN, because it is a claim about ONE task run twice and decision
-    322 gives one film several tasks. `key_for_item` keys on the Jellyfin item, so a household
-    whose libraries ship "Movies" and "Movies 4K" - `resolve.upsert_item`'s own example - has two
-    tasks for one film that `UNIQUE (kind, key)` deliberately does not relate, and `queue.lease`'s
-    `FOR UPDATE SKIP LOCKED` hands them to two workers under the rolling restart that module calls
-    "the ordinary state". Under READ COMMITTED neither sees the other's uncommitted INSERT, so both
-    resolve to nothing and both mint; `title` carries no UNIQUE on these columns (§4.1 rule 6), so
-    nothing below refuses it. `_MINT_LOCK` is taken on the film's IDENTITY - not on a title id,
-    which does not exist yet - and held to the end of the transaction the mint commits in, which is
-    the only release a `kill -9` cannot skip. TRIED AND NEVER WAITED FOR, for `_claim_title`'s
-    reason: §5.3's loop is sequential, so a drain that blocked would hold the whole tick behind
-    another worker, and a task handed back is what the queue is for.
-    [M5.1 review cycle 3, d322-MINT-RACE-01, M51-C3-CRASH-01]
-
-    THE MINT IS THE ONE WRITE THIS PIPELINE CANNOT TAKE BACK, so it happens only on a provider id
-    (decision 323). A name-and-year mint is the silent wrong match the resolver already refuses,
-    measured on this corpus at 2,438 titles sharing `(kind, lower(name))` and 573 groups still
-    colliding with the year applied (`connectors/resolve.py:189-194`).
-
-    A PROVIDER ID IS NECESSARY AND IT IS NOT SUFFICIENT, which decision 360 is the fourth reading
-    of after `UNSUPPORTED_KIND`, `MALFORMED_PROVIDER_ID` and `UNCANONICAL_ITEM_ID`. The measurement
-    quoted one line up is not only an argument against a name-and-year MINT; it is also the state
-    in which the resolver's name arm refuses, and stage 1 read that refusal as "there is no such
-    title" when it can equally mean "there are several and I will not guess". So the last thing
-    asked before the door is whether the spine already holds a title this item cannot be told from
-    - `_indistinguishable_titles` - and a walk that cannot tell parks instead of writing. A park is
-    recoverable and a mint is not; under decision 162 that is the whole argument.
-    [M5.1 review cycle 4 second pass, M51-C4-MINT-AMBIG-01, M51-C4-MINT-ORIGINAL-03]
+    Resolve first via `connectors/resolve` (the one identity implementation); the mint sets
+    `jellyfin_id`, so a re-run resolves instead. Mints run under `_MINT_LOCK` on the film's identity
+    (tried, never waited for) and refuse when the spine holds titles this item cannot be told from.
     """
     item = ctx.item
     if ctx.title_id is not None:
-        # A task enqueued against a title that already exists - the inbox `_park_thin` has been
-        # writing since M4.13, or §8.4's flywheel. There is nothing to identify.
+        # A task enqueued against an existing title; nothing to identify.
         return advance({"identified": "the task names the title"}, title_id=ctx.title_id)
     if not item:
         return fail("the task payload carries neither a Jellyfin item nor a title id")
 
     claims = _mint_claims(item)
     if not claims:
-        # Nothing this item offers could become a title, so this walk cannot create a row and
-        # there is nothing to serialise: every exit below it is a read or a park. Running it
-        # outside a transaction keeps the stage in the autocommit `rawstore.store` documents for
-        # every other stage in this file.
+        # No mintable identity, so no claim: every exit below is a read or a park, in autocommit.
         return await _resolve_or_mint(ctx, item)
     async with ctx.conn.transaction():
         for claim in claims:
@@ -642,72 +291,8 @@ async def identify(ctx: StageContext) -> Outcome:
 def _mint_claims(item: dict[str, Any]) -> list[str]:
     """Every identity a mint of this item would make permanent, named so two tasks agree.
 
-    The name has to be one two DIFFERENT Jellyfin items for one film both produce, which is why it
-    is built from the provider ids and never from the task key: decision 322's whole point is that
-    `jellyfin:jf-4k` and `jellyfin:jf-hd` are unrelated keys for one film.
-
-    ALL OF THEM AND NOT THE STRONGEST, because the resolver matches on ANY of them. An item
-    offering imdb and tmdb and an item offering only tmdb are one film to
-    `resolve.resolve_title_id`, so claiming only the first item's imdb id would leave exactly that
-    pair racing. Taken in a fixed order, which costs nothing here - `pg_try_advisory_xact_lock`
-    never waits, so there is no lock-ordering deadlock to avoid - and a claim this walk did take
-    before failing on a later one is released with the transaction.
-
-    The imdb claim carries no kind and the other two do, which is `resolve_title_id`'s own shape:
-    "`imdb_id` is globally unique across kinds when present; tmdb and tvdb ids are only unique
-    *within* a kind (§4.1 rule 6)". A claim narrower than the lookup it protects is a claim two
-    walks can both hold. [M5.1 review cycle 3, d322-MINT-RACE-01]
-
-    AND THE FOURTH BRANCH IS CLAIMED TOO, because the rule in the paragraph above was stated and
-    then applied to three of the resolver's four matching arms. `resolve.resolve_title_id` also
-    matches on kind + year + name (`connectors/resolve.py:195-213`), and that arm is precisely
-    what merges two walks whose PROVIDER ids are disjoint: a household shipping "Movies" and
-    "Movies 4K" where one copy's NFO carries only an imdb id and the other only a tmdb id, or a
-    series scraped by Sonarr in one library (tvdb) and by the TMDb plugin in another. Their claim
-    sets did not intersect, both walks took every claim they asked for, both read nothing under
-    READ COMMITTED, and both minted - measured 1 run in 20 against a scratch database with no
-    monkeypatching and no injected delay, and 5 in 5 with the window widened. `_mint` writes the
-    stripped `Name` and `_year(item)`, so the row one walk mints is reachable by the other's
-    name-and-year lookup WHEN THAT LOOKUP CAN ANSWER, which is why the same pair run sequentially
-    produced one title and run concurrently produced two. [M5.1 review cycle 4, d322-C4-MINT-01]
-
-    THAT CONDITION IS NOT A DETAIL AND THIS PARAGRAPH USED TO STATE IT UNCONDITIONALLY. The arm
-    the claim mirrors answers only for exactly ONE candidate, so the loser's second walk resolves
-    onto the winner's row only where the spine holds no other title of that name and year - and
-    the winner's own mint has just added a candidate to it. Where two already collided, the loser
-    came back and minted, with the lock working perfectly: serialising a pair does not reconcile
-    it. What closes that is a refusal rather than a wider claim, and it is
-    `_indistinguishable_titles` under decision 360, which asks the ambiguity question directly
-    before the mint. [M5.1 review cycle 4 second pass, M51-C4-MINT-AMBIG-01]
-
-    CLAIMED ONLY WHERE THIS WALK COULD MINT. The name key is appended after the provider claims
-    and only when there is at least one, so an item that offers no mintable id still returns the
-    empty list `identify` reads as "nothing to serialise" - a lock taken for a walk that is about
-    to park `NO_PROVIDER_ID` would buy nothing and would cost `identify`'s documented autocommit.
-    It mints nothing by itself either: decision 323 still says a title is minted only on a
-    provider id, and what a claim decides is which walk may ASK, never what may be written.
-
-    WHAT THIS STILL DOES NOT COVER, said plainly because the sentence above is the one a later
-    reader will rely on. The resolver's fourth arm also matches `original_name` and any
-    `title_alias`, and it compares with Postgres's `lower()` rather than Python's; this claim
-    mirrors the `lower(t.name)` arm alone. So two items for one film that agree on NOTHING but an
-    alias are still two claims.
-
-    THE RESIDUE THAT LEAVES IS NOT A RACE, which is the correction review cycle 4's second pass
-    made here. This paragraph filed it under the claim discipline and justified the gap by saying
-    the remaining arms "are lookups into rows that already exist", so a walk that would match one
-    resolves rather than mints. That is sound for `title_alias`, which nothing in M5.1 writes, and
-    it is FALSE for `original_name`, because `_mint` writes that column from the item's
-    `OriginalTitle` - and the arm is directional: the resolver probes with the item's `Name` only.
-    A German and an English copy of one film therefore mint twice in one ordering and once in the
-    other, with no concurrency, no claim overlap and nothing for a wider claim set to serialise. A
-    lock is the wrong instrument for a lookup that genuinely does not match, so the repair is the
-    refusal in `_indistinguishable_titles` (decision 360), which probes with BOTH names this mint
-    would write and declines to write a row the spine cannot be told apart from. What is left
-    here is the alias arm alone, and it is left because a claim built from a column this item does
-    not carry is a claim the other walk cannot compute - while the refusal covers it from the
-    other side, since an alias belongs to a title that already exists.
-    [M5.1 review cycle 4 second pass, M51-C4-MINT-ORIGINAL-03]
+    Built from provider ids (never the task key), all of them, plus kind+year+name when there is at
+    least one. Alias matches are not claimed; `_indistinguishable_titles` covers that side.
     """
     kind = resolve.kind_of(item)
     if kind is None:
@@ -731,40 +316,12 @@ def _mint_claims(item: dict[str, Any]) -> list[str]:
 
 
 async def _resolve_or_mint(ctx: StageContext, item: dict[str, Any]) -> Outcome:
-    """Stage 1's body, run under the claim `identify` takes on this item's identity.
-
-    Split out rather than nested so the claim and the work it protects are one `async with` and
-    not an indented hundred lines; every paragraph arguing what happens here is on `identify`.
-    """
+    """Stage 1's body, run under the claim `identify` takes on this item's identity."""
     try:
         found = await resolve.resolve_title_id(ctx.conn, item)
     except (asyncpg.DataError, ValueError) as exc:
-        # THE RESOLVER RUNS BEFORE THE MINT VALIDATOR AND BINDS THE SAME UNVALIDATED VALUES.
-        # `resolve.resolve_title_id` looks up on `tmdb_id`/`tvdb_id` (`integer`) and on the
-        # name-and-year fallback's `t.year` (`smallint`), so an item carrying a runaway numeric id
-        # raises `DataError: value out of int32 range` thirteen lines before `_mintable_ids` gets
-        # to refuse it - and the driver turns a raised stage into decision 336's `failed`, which
-        # burns every attempt re-learning the same thing and writes the DATABASE's sentence onto a
-        # board column `0005_ledger.sql:138` says is "shown verbatim". Caught rather than
-        # pre-validated, because resolving FIRST is decision 323's rule and this branch must not
-        # refuse an item that would have resolved on its Jellyfin id.
-        #
-        # A SKIP and not a failure, by `MALFORMED_PROVIDER_ID`'s argument: nothing about the value
-        # changes without a person editing it, so a retry today learns the same thing four times
-        # and then closes the task with a database's internal message as its epitaph.
-        # [M5.1 review cycle 2, d323-int32-04]
-        #
-        # `ValueError` TOO, AND IT IS THE SAME SENTENCE RATHER THAN A SECOND ONE. `resolve._as_int`
-        # keeps every character `str.isdigit()` accepts and then calls `int()`, which accepts fewer
-        # - so a tmdb id of `"12345\u00b2"` raises out of the resolver on the line above, in
-        # PYTHON, before any value reaches a column. `_mintable_ids` refuses that value on this
-        # side of the door, but refusing it here would break decision 323's order (resolve first,
-        # so an item that would have resolved on its Jellyfin id still does), and the fix on the
-        # lookup side is in `connectors/resolve.py`, which this milestone does not touch. The
-        # cause, the remedy and the person who has to act are identical to the `DataError` case,
-        # so the park is identical: the alternative is `_run_stage` turning it into decision 336's
-        # `failed` and four attempts spent re-learning a value only an editor can change.
-        # [M5.1 review cycle 4, d323-C4-MINT-02]
+        # The resolver binds unvalidated values before `_mintable_ids` runs, so a runaway or unparseable
+        # id raises here; park it (a person must fix it) rather than fail four times.
         offered = resolve.provider_ids(item)
         log.info("acquisition stage 1: %s refused an item's metadata: %s",
                  type(exc).__name__, exc)
@@ -775,8 +332,8 @@ async def _resolve_or_mint(ctx: StageContext, item: dict[str, Any]) -> Outcome:
         )
     if found is not None:
         if await _nothing_left_to_acquire(ctx.conn, int(found)):
-            # `ALREADY_PLACED` argues the exit. No `title_id` on the outcome, so the driver
-            # establishes no title for this walk and writes no board row over the one that exists.
+            # `ALREADY_PLACED`: no `title_id` on the outcome, so no board row is written over the existing
+            # one.
             return park(
                 ALREADY_PLACED.format(int(found)),
                 detail={"name": str(item.get("Name") or ""), "title_id": int(found)},
@@ -801,9 +358,7 @@ async def _resolve_or_mint(ctx: StageContext, item: dict[str, Any]) -> Outcome:
 
     raw_id = str(item.get("Id") or "")
     if raw_id != raw_id.strip():
-        # The last thing checked, because it is the least likely and the most confusing to be told
-        # about while a provider id is also wrong: `MALFORMED_PROVIDER_ID` above names the field an
-        # operator can actually fix. [M5.1 review cycle 3, d323-C3-MINT-01]
+        # Last: a reason naming a fixable field beats one about the library's shape.
         return park(
             UNCANONICAL_ITEM_ID,
             detail={"name": str(item.get("Name") or ""), "item_id": raw_id},
@@ -811,12 +366,7 @@ async def _resolve_or_mint(ctx: StageContext, item: dict[str, Any]) -> Outcome:
 
     collides = await _indistinguishable_titles(ctx.conn, item, kind=kind)
     if collides:
-        # THE LAST QUESTION BEFORE THE ONE-WAY DOOR, and it is asked here rather than in the
-        # resolver for decision 323's order: an item that would have resolved on its Jellyfin id
-        # or a provider id has already done so, so this branch only ever sees a walk that is about
-        # to WRITE. Last for the reason `UNCANONICAL_ITEM_ID` is second-to-last: a reason naming a
-        # field an operator can fix beats a reason about the shape of the library.
-        # [M5.1 review cycle 4 second pass, M51-C4-MINT-AMBIG-01, M51-C4-MINT-ORIGINAL-03]
+        # The last question before the one-way door (decision 360).
         return park(
             AMBIGUOUS_IDENTITY.format(
                 "1 title" if collides == 1 else f"{collides} titles", _year(item)
@@ -835,10 +385,7 @@ async def _resolve_or_mint(ctx: StageContext, item: dict[str, Any]) -> Outcome:
 
 
 async def _nothing_left_to_acquire(conn: asyncpg.Connection, title_id: int) -> bool:
-    """Decision 411's test: a title the bundle supplied that already carries a placement.
-    `ALREADY_PLACED` argues both halves; `title_placement_has_basis` ties `placement <>
-    'unplaced'` to a basis bundle, so it is the one column that already says a coordinate
-    exists."""
+    """Decision 411's test: a bundle title that already carries a placement."""
     return bool(await conn.fetchval(
         "SELECT origin = 'bundle' AND placement <> 'unplaced' FROM title WHERE id = $1",
         int(title_id),
@@ -848,16 +395,8 @@ async def _nothing_left_to_acquire(conn: asyncpg.Connection, title_id: int) -> b
 async def re_offered_title(conn: asyncpg.Connection, item: dict[str, Any]) -> int | None:
     """The title an item resolves to, when stage 1 would exit on it; None otherwise.
 
-    Published for §7.2's two feeders, which file such an item below every genuine add (decision
-    411): a task that exits at stage 1 still takes one of the drain's `DRAIN_LIMIT` slots, and a
-    re-scan's re-stamps filed at the default priority queued ahead of a film the household had
-    really just added. The SAME resolver and the same test as `_resolve_or_mint`, so the feeders
-    and the stage cannot disagree about which item is a re-offer.
-
-    A value the resolver's columns refuse is not a re-offer, for `_resolve_or_mint`'s reason: that
-    item is stage 1's to park with the database's sentence, and filing it at the default priority
-    is what gets it there. Called OUTSIDE any transaction by both feeders, because the refusal is
-    a Postgres error and one inside a transaction would abort the enqueue it was deciding.
+    For §7.2's feeders, which file such items below genuine adds. Same resolver and test as stage 1.
+    Called outside any transaction, since a refusal is a Postgres error.
     """
     try:
         found = await resolve.resolve_title_id(conn, item)
@@ -873,44 +412,12 @@ async def _indistinguishable_titles(
 ) -> int:
     """How many titles this mint could not be told apart from, counted to a ceiling of two.
 
-    WHY A REFUSAL IS NEEDED AT ALL, since `resolve_title_id` has already answered None.
-    `connectors/resolve.py:195-213` takes `LIMIT 2` and returns a match only for exactly one
-    candidate - deliberately, because "an arbitrary match is strictly worse than no match" for a
-    LOOKUP, where a refusal is merely reported. Stage 1 is not a lookup: it reads the same None as
-    "there is no such title" and WRITES. Measured on the corpus this resolves against, 2,438 titles
-    share `(kind, lower(name))` and 573 groups still collide with the year applied
-    (`connectors/resolve.py:189-194`), and `pipeline.enqueue_item`'s documented input is
-    `ResolveReport.unmatched` - which `resolve.py:233` appends to on exactly that refusal - so the
-    items reaching this stage are enriched for ambiguity by construction. Two library copies of one
-    film with disjoint provider ids then mint TWO rows: the winner's mint makes the arm MORE
-    ambiguous rather than less, so the loser of `_MINT_LOCK` comes back and mints beside it. A lock
-    that serialises but does not reconcile is not a fix for a one-way door.
-
-    AND THE FOURTH ARM IS DIRECTIONAL, which is the second half and needs no concurrency at all.
-    It binds the ITEM's `Name` and compares it against the candidate's `name`, `original_name` and
-    aliases; the item's `OriginalTitle` is never a probe, while `_mint` WRITES `original_name` from
-    it. So a German and an English copy of one film resolve in one order and mint twice in the
-    other, deterministically, on one connection. Both names this mint would write are probed here
-    for that reason, which is also what makes the answer symmetric: whatever a later walk could
-    match this row on, this walk asks about first.
-
-    THIS IS NOT A SECOND RESOLVER, which the header's property 2 forbids and would be the wrong
-    repair. It returns a COUNT and never an id, it never decides which title an item is, and it is
-    incapable of resolving anything: the only thing it can do is refuse. Widening the resolver so
-    that stage 1 matches rows the nightly sweep would not is the disagreement property 2 names;
-    declining to write when the two cannot agree is the opposite of it.
-
-    `LIMIT 2` inside the count because the answer is only ever used as 0, 1 or "more than one", and
-    the wording of the park is the only thing that reads the number. Lowered by POSTGRES on both
-    sides, as `resolve_title_id` does it: Python's `str.lower` and Postgres's `lower()` do not
-    agree on every alphabet, and a probe that disagreed with the arm it mirrors would refuse and
-    permit different rows. [M5.1 review cycle 4 second pass, M51-C4-MINT-AMBIG-01,
-    M51-C4-MINT-ORIGINAL-03; decision 360]
+    The resolver's None may mean "ambiguous". Probes both names this mint would write, lowered by
+    Postgres like the resolver. Returns a count only: it can refuse, never resolve (decision 360).
     """
     year = _year(item)
     if year is None:
-        # The arm this mirrors does not run without a year either ("a name with no year is not an
-        # identity"), so there is nothing here to be ambiguous WITH.
+        # The arm this mirrors needs a year too.
         return 0
     names = [
         name for name in (
@@ -945,37 +452,12 @@ def _mintable_ids(item: dict[str, Any]) -> dict[str, Any]:
     """The provider ids this item may be MINTED against: the same shape as `resolve.identity`,
     with every value that is not a well-formed id of its kind dropped.
 
-    THE VALIDATION IS HERE AND NOT IN `resolve.py`, which is M5.2's file and which this milestone
-    is told not to edit - and which is also the right place for it not to be. `resolve.identity`
-    serves LOOKUP: a junk key there merely fails to match a row, which is harmless. The mint is
-    the one write decision 162 makes unrecoverable, so the question it asks is a stricter one -
-    "is this a value I am willing to make a title's permanent identity" - and only the caller that
-    mints can ask it.
-
-    WHY THE RAW STRINGS AND NOT `identity`'s OUTPUT. `resolve._as_int` keeps the digits and drops
-    everything else, so `"tt0113277"` filed under a `Tmdb` key becomes the perfectly plausible
-    integer 113277 and `"-5"` becomes 5. Reading `provider_ids` - which only lowercases Jellyfin's
-    own keys, so this is not a second implementation of identity - lets an id that is the wrong
-    SHAPE for its field be refused rather than silently reinterpreted. `"0"` is refused as well:
-    it is the value an NFO writer emits for a file it failed to scrape, and the first item
-    carrying it would mint the row every later one resolves onto.
-
-    WHAT THIS DOES NOT CLOSE, said here because a later reader will ask. `resolve.resolve_title_id`
-    still LOOKS UP on the unvalidated ids and `resolve.upsert_item`'s fill path can still write one
-    onto a corpus title from the nightly sweep; both are in M5.2's file. This closes the pipeline's
-    own door - the only one M5.1 owns and the only one that mints.
-    [M5.1 review cycle 1, M51-REV-05]
+    Reads the raw strings, not `identity`'s digits-only output, so a wrong-shaped id is refused rather
+    than reinterpreted. `"0"` is refused (an unscraped NFO).
     """
     offered = resolve.provider_ids(item)
-    # NOT STRIPPED, AND THAT IS THE RULE RATHER THAN AN OVERSIGHT. `resolve.resolve_title_id` looks
-    # up `WHERE imdb_id = $1` on `provider_ids`' raw string, so a value this function trimmed on
-    # the way in is a value the resolver can never find on the way back - `identify`'s idempotence
-    # paragraph rests on it finding exactly the row the mint wrote. `_IMDB_ID.fullmatch` already
-    # refuses anything that is not canonical, so the whole repair is the absent `.strip()` and the
-    # existing `MALFORMED_PROVIDER_ID` park, which says what to correct in Jellyfin. The two
-    # columns below keep theirs: `resolve._as_int` reduces the lookup side to digits exactly as
-    # `.strip().isdigit()` reduces this one, so those two agree already and refusing a padded tmdb
-    # id would cost a household a title for nothing. [M5.1 review cycle 3, d323-C3-MINT-01]
+    # Not stripped: the resolver looks up the raw string, so a stripped write could never be found
+    # again. Padded values fail `_IMDB_ID` into `MALFORMED_PROVIDER_ID`.
     imdb = offered.get("imdb") or ""
     mintable: dict[str, Any] = {
         "imdb_id": imdb if _IMDB_ID.fullmatch(imdb) else None,
@@ -984,52 +466,22 @@ def _mintable_ids(item: dict[str, Any]) -> dict[str, Any]:
     }
     for column, key in (("tmdb_id", "tmdb"), ("tvdb_id", "tvdb")):
         digits = (offered.get(key) or "").strip()
-        # BOUNDED BY THE COLUMN, which is the one question this function's own docstring says it
-        # exists to ask - "is this a value I am willing to make a title's permanent identity" - and
-        # the one it did not ask. Shape and sign alone passed `99999999999999999999`, which the
-        # `integer` column cannot hold. [M5.1 review cycle 2, d323-int32-04]
-        #
-        # `isdecimal` AND NOT `isdigit`, because `str.isdigit()` is TRUE for characters `int()`
-        # cannot parse - the superscripts and subscripts, so `"12345\u00b2"` out of a page with a
-        # footnote marker in it. The guard then let the value through and `int()` raised, from a
-        # function whose whole job is to REFUSE what it will not make permanent, and from
-        # `_mint_claims` - before `identify` has taken a claim. `_run_stage` turns that into
-        # decision 336's `failed`, which burns four attempts re-learning it and writes a Python
-        # exception message onto a board column `0005_ledger.sql:138` shows verbatim, where
-        # `MALFORMED_PROVIDER_ID` already names the field and the lever. `isdecimal` is exactly
-        # what `int()` accepts on a digits-only string, so nothing that parses today changes: the
-        # Arabic-Indic id `"\u0669\u0664\u0669"` still mints 949 and still re-resolves onto itself.
-        # [M5.1 review cycle 4, d323-C4-MINT-02]
+        # Bounded by the `integer` column. `isdecimal`, not `isdigit`: `int()` rejects superscripts.
         if digits.isdecimal() and 0 < int(digits) <= _INT32_MAX:
             mintable[column] = int(digits)
     return mintable
 
 
 def _year(item: dict[str, Any]) -> int | None:
-    """Jellyfin's `ProductionYear` as an int, digits only.
-
-    Spelled here rather than reaching into `connectors/resolve.py`'s private helper: that module
-    parses the same field for the name-and-year fallback this stage is forbidden to use
-    (decision 323), and a public function of this shape is not something to add to a file M5.2
-    owns while M5.1 is open.
-    """
+    """Jellyfin's `ProductionYear` as an int, digits only."""
     raw = item.get("ProductionYear")
     if raw is None:
         return None
-    # `isdecimal` for `_mintable_ids`' reason one function up, and it matters MORE here now that
-    # `_mint_claims` reads this value: a `ProductionYear` of `"1995\u00b2"` kept the superscript
-    # through an `isdigit` filter and raised out of `int()` before any claim had been taken.
-    # Dropping the character rather than raising is what "digits only" already said this does.
-    # [M5.1 review cycle 4, d323-C4-MINT-02, d322-C4-MINT-01]
+    # `isdecimal` so a superscript is dropped rather than raising out of `int()`.
     digits = "".join(c for c in str(raw) if c.isdecimal())
     if not digits:
         return None
-    # `title.year` is `smallint`, so a runaway value out of a mis-scraped NFO is the same defect
-    # `_mintable_ids` refuses one function above: bound by the column, or the mint raises a
-    # `DataError` from inside a transaction the driver then reports as a stage that failed.
-    # Dropped rather than parked, because unlike a provider id the year is not an identity - the
-    # column is nullable and 21% of the corpus already carries no imdb id either.
-    # [M5.1 review cycle 2, d323-int32-04]
+    # `smallint` bound; an out-of-range year is dropped (nullable, not an identity).
     year = int(digits)
     return year if 0 < year <= _SMALLINT_MAX else None
 
@@ -1037,37 +489,11 @@ def _year(item: dict[str, Any]) -> int | None:
 def _runtime_min(item: dict[str, Any]) -> int | None:
     """Jellyfin's `RunTimeTicks` in whole minutes, or None.
 
-    `TICKS_PER_SECOND` is imported rather than restated: `connectors/jellyfin.py:80` already owns
-    that constant and two spellings of it is one of them going stale. Rounded rather than
-    truncated because §4.3's `runtime:>160` meta column is a threshold and a 160.6-minute film
-    truncated to 160 falls out of a bucket it belongs in.
-
-    BOUNDED BY ITS COLUMN AND TOLERANT OF A VALUE THAT WILL NOT PARSE, which is `_year`'s rule one
-    function up and the doctrine at the head of this file: `_mintable_ids` and `_year` are named
-    there as "the two functions that decide what this pipeline writes into" a bounded column, and
-    this is the THIRD value `_mint` binds against one - `runtime_min integer`
-    (`0003_content.sql:33`), at `$5`. Jellyfin declares `RunTimeTicks` as an int64 and M5.2's
-    `/events` webhook will carry the same dict out of a Handlebars-rendered body where a number
-    commonly arrives as a string, so both shapes are real: an absurd tick count raised
-    `DataError: value out of int32 range` and a non-numeric one raised `ValueError`, both from
-    inside `_mint`'s own transaction and both landing as decision 336's `failed` with a database's
-    or Python's internal sentence on a board column `0005_ledger.sql:138` says is shown verbatim.
-    Four attempts then re-learn a value only a re-encode can change and `ON CONFLICT (kind, key)
-    DO NOTHING` makes the sweep's next pass a no-op, so the film is unacquirable for good - in a
-    file where `MALFORMED_PROVIDER_ID` and `UNUSABLE_METADATA` exist so that never happens.
-
-    DROPPED RATHER THAN PARKED, which is `_year`'s disposal and for `_year`'s reason: the column is
-    nullable and a runtime is not an identity, so the honest outcome is to lose the value and keep
-    the title. Positive AND bounded, because a negative tick count yields a negative runtime that
-    is truthy and fits in `integer` - stored rather than refused, which is the same validator
-    passing the value it exists to reject. [M5.1 review cycle 4 second pass,
-    M51-C4-MINT-RUNTIME-02; M5.1 review cycle 2, d323-int32-04]
+    Rounded (a 160.6-minute film belongs above §4.3's `runtime:>160`). Positive and bounded by the
+    `integer` column; anything unparseable or out of range is dropped, never raised.
     """
     try:
-        # `OverflowError` beside the other two because `int()` raises THAT one for a float
-        # infinity, and Python's `json` decoder accepts the `Infinity` literal by default - which
-        # is the decoder M5.2's webhook body goes through. A guard that names two of the three
-        # exceptions its own conversion raises is the shape this paragraph is about.
+        # `OverflowError` too: `int()` raises it for the `Infinity` JSON literal.
         ticks = int(item.get("RunTimeTicks") or 0)
     except (TypeError, ValueError, OverflowError):
         return None
@@ -1080,44 +506,9 @@ async def _mint(
 ) -> int:
     """Insert the one new `title` row §8 stage 1 is allowed to create. Returns its id.
 
-    NO `id` IN THE COLUMN LIST. That is the whole mechanism: `0015_seed.sql:27` sets
-    `nextval('title_id_seq')` as the column default and the sequence is `MINVALUE 1000000000`, so
-    the row lands above the corpus's half of the namespace without this code knowing a number.
-    `0015_seed.sql:39-44` names this write path as the beneficiary - "this is the backstop for
-    every other write path, including §8 stage 1" - and the assertion below is what makes a
-    defeated backstop loud instead of silent: a sequence someone reset by hand, or a default
-    someone dropped in a repair, would otherwise mint into the corpus's half and the next bundle
-    import would find a collision it cannot resolve. Inside the transaction, so a refusal leaves
-    no row (decision 162).
-
-    `is_owned` and `owned_checked_at` are DERIVED FROM THE ITEM and not asserted. §7.2 says the
-    flag is "re-derived from Jellyfin, never trusted stale", and seeing the item in the library IS
-    the derivation - `connectors/resolve.py:250-253` says exactly that about the same two columns.
-    The derivation is `Id`: an item that carries one is an item Jellyfin showed us, and an item
-    that carries none is not.
-
-    IT USED TO BE THE SQL LITERAL `true`, WHICH THAT ARGUMENT DOES NOT REACH. `pipeline.key_for_item`
-    falls back to a provider id precisely "so §8.4's flywheel can enqueue work for something
-    Jellyfin has never shown us", and `test_acquire_pipeline.py` pins that path with an item that
-    has no `Id` at all - which mints `jellyfin_id = NULL`. `sync/seen._falsify_ownership` is the
-    ONE statement in the codebase that can un-own a title and it is scoped
-    `WHERE is_owned AND jellyfin_id IS NOT NULL` (`seen.py:1168-1169`), so such a row is invisible to
-    every nightly sweep for ever: under decision 162 the household's spine would permanently claim
-    ownership of a film it does not have, and Home's "New in the library" shelf, §6.2's candidate
-    pool and Tonight's pool all read that flag. `resolve.py:179-183` names this exact harm as the
-    thing its own refusals exist to avoid.
-
-    Nothing is lost by deriving it: stage 10 already parks a title that is not badgeable with "no
-    ownership flag" and a deadline, which is the correct state for a title the household has not
-    acquired yet, and the flag flips the moment a sweep resolves the item onto this row.
-    [M5.1 review cycle 2, d323-owned-03]
-
-    `jellyfin_id` is set here and only here. §7.1 keeps one item id per title as the deep link,
-    elected once per sweep by `resolve._elect_representatives` from the whole page-set; that
-    election keeps the current id while it is still a copy of this title, so the item that caused
-    the mint is kept and not flipped. `title_jellyfin_item` is deliberately NOT written: that map
-    is the sweep's, it is pruned against a completed library read, and a row inserted here would
-    be a copy nobody verified against the library.
+    No `id` in the column list: the sequence default mints above `APP_ID_MIN`, asserted before commit.
+    `is_owned` derives from the item carrying an `Id` (a provider-only item is not owned).
+    `title_jellyfin_item` is the sweep's, not written here.
     """
     jellyfin_id = str(item.get("Id") or "").strip() or None
     async with conn.transaction():
@@ -1137,8 +528,7 @@ async def _mint(
             _runtime_min(item),
             ids["imdb_id"], ids["tmdb_id"], ids["tvdb_id"],
             jellyfin_id,
-            # The stamp goes with the flag: §7.2's column records WHEN the derivation was made,
-            # and a timestamp beside `is_owned = false` would date a derivation that said no.
+            # The stamp goes with the flag.
             jellyfin_id is not None,
         )
         if int(minted) < APP_ID_MIN:
@@ -1157,18 +547,7 @@ async def _mint(
 async def _capabilities(conn: asyncpg.Connection) -> dict[str, bool]:
     """Which of the three keyed sources this install has configured. Decision 377's narrow read.
 
-    `sources/base.available_kinds` takes this map and drops every kind whose `requires` is not in
-    it, so this is what makes §3.1's half-configured boot a legal state for stage 2 rather than a
-    stage full of identical "no credential" notes: a household that has set up TMDB and not OMDb
-    asks seven sources and never builds a request for the eighth. The five keyless sources carry
-    `requires = None` and are not in this map at all, which is why the map is asked for by name
-    rather than defaulted - a keyless source filtered out by a missing key would be §8's own
-    source list quietly shortened.
-
-    Three reads and not one. `credentials` deliberately exposes no generic loader (decision 377),
-    because the day M5.5's `ConnectorSpec` lands it deletes this file rather than reconciling a
-    second design with it. The cost is three indexed `connector_config` lookups per title, which
-    is the same order as the two `SELECT 1 FROM title` the driver already pays per stop.
+    Unconfigured keyed sources are filtered out, so a half-configured install is legal (§3.1).
     """
     return {
         credentials.TMDB: await credentials.tmdb_auth(conn) is not None,
@@ -1181,113 +560,25 @@ async def enrich(ctx: StageContext) -> Outcome:
     """§8 stage 2: "tmdb:resolve -> tmdb:detail ... wikidata:resolve ... rt:page,
     metacritic:page->reviews" (`spec:365-368`), each through the one polite fetcher.
 
-    THE ORDER IS THE REGISTRY'S AND NOT A LIST HERE. `sources/base.available_kinds` sorts on
-    `default_priority`, and §8's sequence is load-bearing rather than cosmetic: `wikidata:resolve`
-    "halves guessing" because it yields the MC/RT/Letterboxd slugs, so running it before `rt:page`
-    and `metacritic:page` is the difference between reading a slug and building a url out of a
-    name that cannot tell two films apart. A driver that spelled the eleven kinds out would be the
-    second place that order lives, and the day a source moved, the two would disagree with nothing
-    to say so. This function names exactly one kind - the required one, below - and that one is a
-    decision rather than an ordering.
-
-    DECISION 334 IS THE WHOLE OF THE MAPPING FROM ELEVEN ANSWERS TO ONE VERB. Only `tmdb:detail`
-    is required; every other source's 404, timeout, refused slug or missing credential is a note
-    in `acquisition_job.detail` under that source's name and the stage still advances. That is not
-    leniency - it is what makes the raw store worth having. Seven sources answered, their bytes
-    are on disk, and §8 stage 4's gate is the quality bar that decides whether what they said is
-    enough. A stage that parked on the first 404 would throw away eight good documents over one
-    host that had never heard of this film.
-
-    AND THE REQUIRED SOURCE PARKS ONLY WHEN IT RAN - THE SOURCE, WHICH THIS USED TO TEST AS ONE
-    KIND. Decision 377 says in terms that "a source
-    whose credential is absent is a stage-2 note under decision 334, never a park and never an
-    exception", and decision 334 says a FAILURE of `tmdb:detail` parks. Both are true of the code
-    below because the two states are different: a TMDB that is not configured is filtered out by
-    `available_kinds` and never runs, which §3.1 makes a legal install rather than a broken one,
-    while a TMDB that was asked and did not answer is the one failure §8 stage 2 cannot shrug off.
-    Read the other way round this stage would park every task on every install that has not yet
-    typed a key into §6.6's TMDB card.
-    The unconfigured title is not lost: it reaches stage 4 with no plot and no reviews and parks
-    THERE, with the counts in its reason, which is the honest sentence for it.
-
-    THERE IS A THIRD STATE AND `available_kinds` CANNOT SEE IT, because it filters on capability
-    and this one is a fact about the title's data. `tmdb:detail` has no request to make when the
-    row carries no `tmdb_id` - a file Jellyfin identified by an IMDb id TMDB has no record of, or
-    files under the other `kind` - and no later kind supplies one, so that title would park here
-    on every drain for ever. `SourceResult.ran` is what tells this loop the difference, and the
-    outcome is the paragraph above's: not lost, parked at stage 4 with the counts.
-    [M5.3 review cycle 1, M53-334-01]
-
-    AND THAT THIRD STATE HAS TWO CAUSES THAT LOOK IDENTICAL FROM HERE, which is why the park below
-    reads the SOURCE and not the kind. An empty `tmdb_id` means either "TMDB holds no record of
-    this film", which is an answer, or "`tmdb:resolve` could not ask" - a refused key, a 500, a
-    host this drain could not reach. The second is decision 334's park condition exactly, and
-    testing the required KIND walked past it: the stage advanced, the title parked at stage 4 for
-    thirty days with zero counts, and the `reason` column §6.6 renders named no connector at all,
-    while the SAME broken credential on a title that already carried a `tmdb_id` produced a
-    one-day park naming TMDB. One key, two opposite operator experiences, and the wrong one went
-    to every newly acquired IMDb-only title. `sources/tmdb.resolve` now answers the no-record case
-    ok - it did what it exists to do and spent one request - so `ok=False` on a tmdb kind means a
-    request that failed, and a failure at any kind of the required source parks.
-    [M5.3 review cycle 2, m53-c2-334-01]
-
-    EVERY FAILURE IS A NOTE, INCLUDING ONE THIS MODULE CANNOT NAME. An adapter returns a
-    `SourceResult`; `sources/_views.capture` turns a 404, a robots refusal, a short body and the
-    circuit breaker into one. So the `except Exception` below catches a provider's malformed JSON
-    and an outright bug in one adapter, and records both as that source's note - which is decision
-    334's own reading ("a source raising anything else is that source's note, not the stage's
-    failure") and is also the only shape available, because naming the transport's exceptions
-    here would import the layer decision 373 keeps out of this file. A paused host that is TMDB's
-    parks below with a deadline, which is decision 336's shape for it.
-
-    A PAUSED HOST THAT IS ANY OTHER SOURCE'S IS A NOTE AND THE STAGE ADVANCES, AND THAT CAN COST
-    THE TITLE THAT SOURCE. This paragraph used to end "a source that said nothing this drain and
-    will be asked again on the next", which was false: `pipeline._resume_index` answers the
-    BOARD's stage, so a title past stage 2 does not reach it again on the next drain, and stage 2
-    is the only stage that fetches. Decision 422 keeps the behaviour - decision 334 already rules
-    that a source which did not answer is a note, a breaker pause is eight of its timeouts in a
-    row, and parking every title drained inside a 900-second cooldown would re-walk the seven
-    sources that DID answer every quarter of an hour for as long as one host is down, which one
-    blocked host would turn into a stalled pipeline - and states the price. A title the missing
-    source leaves short parks at stage 4, and decision 421 re-enters it at this stage when that
-    window closes, so it IS asked again, thirty days on. A title that clears stage 4 without it
-    keeps what it has until an operator can re-run stage 2 (decision 330, M5.6).
-    `sources/_views.capture` writes the note as a sentence naming the host and the cooldown, so
-    the board says which it was. [M5.3 review cycle 2, M53-C2-NET-01; decision 422]
-
-    THE PARK CARRIES A DEADLINE. `OPERATOR_WAIT`'s arithmetic is the argument and it is the same
-    one `place` makes: a park with no `until` is `queue.skip`, which closes the task for good, and
-    what this park waits on - a network that heals, a key an operator types - is decision 336's
-    "something that may change" in its plainest form. The daily re-ask costs one walk that stops
-    at this stage.
+    Order is the registry's `default_priority`. Only a failure of the required source that actually
+    ran parks (decision 334), with a deadline; every other failure, a raise or a paused host
+    included, is that source's note (decision 422).
     """
     if ctx.title_id is None:
         return fail("stage 2 reached with no title id; stage 1 did not establish one")
     if ctx.fetcher is None:
         return fail(NO_FETCHER)
 
-    # Idempotent and cheap after the first call - `importlib.import_module` hands back what is
-    # already in `sys.modules` - and called here rather than at import time because the adapters
-    # import `sources/_views`, which imports `acquire.fetch`, which would close a cycle through a
-    # module this file is forbidden to name. A registry populated by the first drain rather than
-    # by the first import is also what lets `load_all`'s discovery stay discovery.
+    # Loaded here, not at import: the adapters import `acquire.fetch`, which would close a cycle.
     sources.load_all()
     capabilities = await _capabilities(ctx.conn)
-    # `include_paid=False`, which is `available_kinds`' own argument applied one layer up: the
-    # driver's spend gate reads `Stage.paid` and stage 2 is not a paid STAGE, so a paid KIND run
-    # from inside it would bill the household behind the refusal §8 requires. None of §8 stage 2's
-    # eight sources is paid today; the flag exists so that the first one that is cannot arrive
-    # through this loop by default (`sources/base.py`'s `paid_kinds`).
+    # Stage 2 is not a paid stage, so no paid kind may run inside it.
     wanted = sources.available_kinds(capabilities, ENRICH_PHASE, include_paid=False)
 
     answered: list[str] = []
     notes: dict[str, str] = {}
-    # The kinds that returned without putting a request on the wire, which is the distinction
-    # decision 334 draws with the word RAN and `SourceResult.ran` carries. Collected for every
-    # kind although only the required one is read, because a set built for one member is a set
-    # the day a second source becomes required. An adapter that RAISED is in neither collection
-    # and parks the required source, which is the conservative reading: nothing survived the
-    # exception to say whether a request went out.
+    # Kinds that returned without a request (`SourceResult.ran`). An adapter that raised is in neither
+    # set and so counts as having run.
     unasked: set[str] = set()
     documents = 0
     for kind in wanted:
@@ -1310,11 +601,7 @@ async def enrich(ctx: StageContext) -> Outcome:
         else:
             notes[kind] = result.note or "no answer"
 
-    # A kind the registry holds and this install cannot run. Reported under its own name rather
-    # than omitted, because §6.6's board showing eight sources on one install and eleven on
-    # another with nothing saying why is the state decision 377's note exists to prevent. Computed
-    # from `requires` alone so that a kind filtered for any OTHER reason - `include_paid` above is
-    # the live one - is not described to an operator as a missing credential.
+    # Unrunnable kinds are reported by name, based on `requires` alone.
     for kind, spec in sorted(sources.REGISTRY.items()):
         if spec.phase != ENRICH_PHASE or kind in wanted:
             continue
@@ -1324,21 +611,7 @@ async def enrich(ctx: StageContext) -> Outcome:
     detail: dict[str, Any] = {"answered": answered, "documents": documents}
     if notes:
         detail["notes"] = notes
-    # AND THE PARK FIRES ONLY WHEN THE REQUIRED SOURCE RAN, which these lines now test rather than
-    # assert. `available_kinds` closes one half of decision 334's distinction - a TMDB nobody has
-    # configured never reaches the loop - and `SourceResult.ran` closes the other: a title whose
-    # `tmdb_id` column is empty because TMDB holds no record of it is one TMDB was never asked
-    # about, and parking it here spends a full eight-source re-crawl a day, for ever, under a
-    # reason naming a connector that is working. It advances instead, and stage 4 parks it with
-    # the counts and a thirty-day window. [M5.3 review cycle 1, M53-334-01]
-    #
-    # `failed` IS THE KINDS THAT RAN AND DID NOT ANSWER - in neither collection, which includes an
-    # adapter that RAISED, for the reason `unasked`'s own comment gives: nothing survived the
-    # exception to say whether a request went out. Decision 334's park is about the required
-    # SOURCE, so a failure at any of its kinds is the condition and the reason names the kind that
-    # actually failed. `wanted` is priority-ordered, so `required[0]` is the earliest one -
-    # `tmdb:resolve` before `tmdb:detail`, which is the order the failure propagated in.
-    # [M5.3 review cycle 2, m53-c2-334-01]
+    # Park only when a kind of the required source ran and failed; name the earliest that failed.
     failed = [kind for kind in wanted if kind not in answered and kind not in unasked]
     required = [kind for kind in failed if kind.split(":", 1)[0] == REQUIRED_SOURCE]
     if REQUIRED_KIND in wanted and REQUIRED_KIND not in answered and required:
@@ -1357,25 +630,7 @@ async def derive(ctx: StageContext) -> Outcome:
     """§8 stage 3: "per-title parse of raw docs -> title_meta/credit/review/...", ending by
     applying both curated ledgers, corrections last (`spec:375-379`, §14.5).
 
-    IT WRITES AND IT DOES NOT FETCH, which is the property the whole milestone is named for. Every
-    byte this stage reads came out of the content-addressed raw store stage 2 filled, so a parser
-    that was wrong is repaired by re-running this stage and never by asking a host again - §8's
-    "All fetched bytes land in the app's own raw store, so re-parsing is free forever"
-    (`spec:398`). `derive/rebuild.py` imports no transport at all and a test holds it to that, so
-    the property is a fact about the module rather than a promise about this call.
-
-    THE COUNTS GO ON THE BOARD BECAUSE NOTHING ELSE CAN SAY THEM. `DeriveReport` carries the two
-    ledgers' outcomes apart - §14.5 names "two distinct ledgers" and a board line reading "3
-    curated rows applied" could not tell an operator which one applied them, or whether the other
-    ran at all - and it carries `refused`, which is the scraped page that turned out to be another
-    film. A derive that logged these instead would put the only account of what it did somewhere
-    decision 345 says §6.6 cannot reach.
-
-    A MISSING TITLE RAISES AND IS MEANT TO. `derive_title` answers `LookupError` rather than an
-    empty report, `_run_stage` turns a raise into `fail`, and `_record_stop` checks the title
-    exists before writing the board - so the one state this stage cannot describe is handled by
-    the driver that already handles it, rather than by a second guard here that would disagree
-    with `ready`'s.
+    Reads the raw store, never fetches. The ledger counts go on the board. A missing title raises.
     """
     if ctx.title_id is None:
         return fail("stage 3 reached with no title id; stage 1 did not establish one")
@@ -1397,45 +652,8 @@ async def reviews_gate(ctx: StageContext) -> Outcome:
     """§8 stage 4: "pack requires plot + multi-source reviews >=50 words; if thin, retry window 30
     days (new releases accrue reviews over weeks)" (`spec:380-381`).
 
-    THE PREDICATE IS `derive/gate.py`'s AND NOT A SECOND ONE HERE. Decision 335 fixes it as one
-    query - a non-whitespace `title.overview`, two distinct `review_store.review` sources, fifty
-    words across them off the generated stored column - and this stage asks it, reads the answer
-    and decides a verb. That split is what lets the boundary be asserted at 49 against 50 without
-    a database walk of the whole pipeline, and it is why `measure` and `passes` are two calls: the
-    counts go on the board whether the gate passed or not, because a title that cleared with two
-    sources and fifty-one words is one an operator may want to look at.
-
-    THIS IS THE PARK DECISION 336 WAS WRITTEN FOR, and it is the only one in this file whose
-    deadline is not `waiting_on_the_world()`. The thing §8 says may change is not an operator - it
-    is the world writing reviews of a film that came out last week - so the window is §8's own
-    thirty days, counted from now by `gate.window_deadline()` and spelled in exactly one place.
-    Nothing is asked of anybody, no attempt is spent (`queue.defer`), and the task comes back by
-    itself. A park that auto-failed here would close a title for the crime of being new.
-
-    WHAT COMES BACK WHEN THE WINDOW CLOSES IS A CRAWL, NOT A RE-COUNT, and for one review cycle it
-    was a re-count. The two stages that can move these counts are stage 2, which fetches the
-    reviews, and stage 3, which writes them; `pipeline._resume_index` answered the BOARD's stage,
-    so the task that came back after thirty days re-entered HERE, re-ran `gate.measure` over the
-    rows day one wrote, opened no socket and parked again with the same sentence, for ever - and
-    the accrual §8 wrote the window for could not be seen by construction. The stage now declares
-    `reask_from=2` in `pipeline.STAGES`, and a park here whose deadline has PASSED re-enters at
-    stage 2. One made due BEFORE its deadline is an operator's retry, which still re-enters here
-    and asks nothing of anyone - check 5 of this milestone's exit criterion and
-    `test_a_retry_of_a_parked_gate_resumes_at_stage_four_and_makes_no_request` measure that - so
-    the clock against the board's `retry_after` is what tells the two events apart.
-    [M5.3 review cycle 2, m53-c2-gate-01, M53-C2-NET-03; decision 421]
-
-    TWO WRITES, ONE TRUTH, ONE CONSTANT - AND THE SECOND WRITE IS ALREADY THE DRIVER'S. The queue
-    decides when the task leases again and `acquisition_job.retry_after` is what §6.6 renders;
-    `pipeline._record_stop` passes `outcome.until` to BOTH - `queue.defer` and `write_board` - so
-    this stage returns one instant and cannot put two different dates in front of an operator.
-    `write_board`'s own docstring records that the column "was added for §8 stage 4's thirty-day
-    review-accrual window", written at M5.1 for this call; a stage that wrote the board itself
-    would be the second writer of `acquisition_job` that `ready`'s docstring refuses.
-
-    A MISSING TITLE RAISES, for `derive`'s reason one function up: `gate.measure` answers
-    `LookupError` rather than zeros, because "0 sources, 0 words" on §6.6's board for a row that
-    is absent is a sentence about a title that does not exist.
+    The predicate is `derive/gate.py`'s. The park's deadline is the window, and the expired park
+    re-enters at stage 2 (`reask_from`, decision 421); the driver writes that one instant to both tables.
     """
     if ctx.title_id is None:
         return fail("stage 4 reached with no title id; stage 1 did not establish one")
@@ -1450,10 +668,7 @@ async def reviews_gate(ctx: StageContext) -> Outcome:
 
 # --- stage 5: the pack, with its craft supplement ------------------------------------------------
 
-# A bundle-less install at stage 5: stage 6's own `extract.NO_VOCABULARY` state, one stage earlier
-# and with the same lever. `dna_pack` is keyed by vocabulary version (0027), so there is no version
-# to store a pack under and nothing downstream could verify against one. Written for §6.6's board,
-# which shows it verbatim, and ASCII, since the exit scripts print it.
+# A bundle-less install at stage 5: no vocabulary version to store a pack under. ASCII.
 NO_PACK_VOCABULARY = (
     "no DNA vocabulary is active on this install, so there is no version to store this title's "
     "pack under and nothing that could verify an extraction from it (section 3.1: a bundle-less "
@@ -1463,43 +678,10 @@ NO_PACK_VOCABULARY = (
 
 async def dna_pack(ctx: StageContext) -> Outcome:
     """§8 stage 5: "ported packs.py (interleaving, caps, norm()) + craft supplement".
-    **Built by M5.4** as a package with no caller (decision 387, `ROADMAP-M5.md:298-312`), and
-    called here since M5 (decision 461).
 
-    THE AUGMENTED PACK, NOT THE BASE ONE. §8's line names both halves and decision 391 ships both:
-    `packs.build_pack` interleaves and caps the reviews, and `craft.augment` appends the
-    encyclopaedia's craft sections and the short critic notices the pack's word floor drops, cut
-    at `craft.SENTINEL` so the base survives as an exact prefix. What is stored is what stage 6
-    reads - `llm/extract` sends exactly the text `verify.read_pack` returns - so a base pack stored
-    here would be an extraction that never saw the supplement, and a quote from the supplement
-    that could never verify against the pack it was measured by.
-
-    THE DIGEST IS RECOMPUTED, AND IT IS THE ONE LINE HERE A LATER READER WILL "SIMPLIFY". `augment`
-    returns a `CraftInfo`, which `store_pack` cannot take, so the only `PackInfo` in scope is the
-    base pack's - and `store_pack` refuses an info whose `sha` and `chars` are not the offered
-    text's own (decision 382), which the base's are not the moment a supplement exists. So the base
-    info is kept for what it truly describes - the title and the review and source counts, which
-    the supplement does not change - and its `chars` and `sha` are taken from the augmented text.
-    Stored unchanged it would raise for every title with a Wikipedia article or a critic notice and
-    pass for every title without one, which is the half a test with no article sees.
-
-    ONE TRANSACTION, FILED WHERE THE BOARD LOOKS. `store_pack` is two writes and deliberately not a
-    transaction itself (its own docstring says why), so this stage opens one. The document goes
-    under `ctx.task.key` and this walk's run, the only spelling `acquire/board.py` joins on: a pack
-    filed under anything else is a document §6.6's board can never list, and decision 345 makes
-    that board the only window onto bytes the backend cannot open. A rebuilt pack replaces its own
-    `dna_pack` row and adds a `raw_document` row; the store keeps the history.
-
-    NO VOCABULARY PARKS AND DOES NOT FAIL. A bundle-less install is legal under §3.1, nothing raised
-    and a retry cannot supply a version, so decision 336 calls it a wait - with a deadline, as stage
-    6 parks on the same state, because a park with none is `queue.skip` and closes the task for
-    good. A MISSING TITLE FAILS, as stages 3 and 4 do: `build_pack` answers None for a missing row
-    and for nothing else, and a pack for a title that is not there is not something to wait for.
-
-    NEITHER PAID NOR FETCHING. Every byte comes from the derived tables and the raw store stages 2
-    and 3 filled, so the stage is handed no Fetcher and builds none (decision 373), and it costs one
-    local build and one `raw_document` row - which is what makes decision 467's re-entry here from
-    an expired stage-6 park cheap enough to run without anyone asking.
+    Stores the augmented pack stage 6 reads, with `chars`/`sha` recomputed from the augmented text (or
+    `store_pack` refuses it). One transaction, filed under `ctx.task.key`. No vocabulary parks with a
+    deadline; a missing title fails. Neither paid nor fetching.
     """
     if ctx.title_id is None:
         return fail("stage 5 reached with no title id; stage 1 did not establish one")
@@ -1511,8 +693,7 @@ async def dna_pack(ctx: StageContext) -> Outcome:
         return fail(f"title {ctx.title_id} no longer exists")
     text, base = built
     augmented, craft_info = await craft.augment(ctx.conn, ctx.title_id, text)
-    # The base info with the augmented text's own length and digest - see "THE DIGEST IS
-    # RECOMPUTED" above. Neither `craft_info` nor `base` unchanged would pass `store_pack`.
+    # The augmented text's own length and digest.
     info = replace(base, chars=len(augmented), sha=packs.sha(augmented))
     async with ctx.conn.transaction():
         document = await packs.store_pack(
@@ -1528,20 +709,8 @@ async def dna_pack(ctx: StageContext) -> Outcome:
     })
 
 
-# Another key's task for this title that a stage failed for good, and the sentence the other key waits
-# under. See `dna_extract`.
-#
-# READ OFF A MARK AND NOT OFF THE COUNT. This used to be "closed with attempts still left", which only
-# `queue.fail(permanent=True)` does -- and on a task's LAST attempt a permanent failure writes exactly
-# the row exhaustion writes (failed, attempts = max_attempts). Attempts are spent by any earlier
-# transient failure, a stage-2 fetch or a 529 at this stage, and none refunds its attempt, so a title
-# whose extraction failed for good on its fourth walk was not seen, and every other key of it walked
-# back in and bought attempt 1 and the named retry again. `pipeline._record_stop` now writes the
-# outcome's permanence onto the task's payload in the statement's transaction with `queue.fail` --
-# set on a permanent failure, removed on any other -- so a revived task that later fails on the curve
-# does not keep a stale mark, and a revived one that is `pending` does not match at all. The count is
-# kept beside it for a task closed early by any `queue.fail(permanent=True)` that did not come through
-# the driver. [M5.5 review cycle 2, C2-PAID-01]
+# Read off the payload mark `pipeline._record_stop` writes, not off attempt counts: a permanent
+# failure on the last attempt looks like exhaustion.
 FAILED_FOR_GOOD_MARK = "failed_for_good"
 _FAILED_FOR_GOOD = (
     "SELECT key FROM acquisition_task"
@@ -1555,11 +724,8 @@ FAILED_FOR_GOOD = (
     "extraction again, and resumes by itself once that task is retried"
 )
 
-# The two payload keys a flywheel launch writes onto the tasks it makes due (decision 443): the
-# batch's plan - `{"providers": [...], "passes": n}` - and the `flywheel_batch` row it was launched
-# under. Spelled here and nowhere else, because the plan has three readers that must agree - the
-# driver's gate, this stage's call and the board's retry pre-check (decision 442) - and a reader
-# that spelled the key its own way would price one plan and run another.
+# The payload keys a flywheel launch writes (decision 443); the plan has three readers that must
+# agree (decision 442).
 PLAN_KEY = "plan"
 BATCH_KEY = "flywheel_batch"
 
@@ -1567,12 +733,7 @@ BATCH_KEY = "flywheel_batch"
 def task_plan(task: queue.Task | None) -> Any:
     """The batch plan a task carries, or None when it carries none - the one reader of `PLAN_KEY`.
 
-    None, absent and `null` alike, is decision 324's install exactly: the stored `llm` settings
-    apply unchanged. ANYTHING ELSE IS HANDED ON AS IT IS, and `llm/spend` is what judges it: a
-    present plan that is not providers and passes is a `PLAN` refusal naming the batch (decision
-    442), and a reader that returned None for it would run the stored settings in the batch's place
-    - the one outcome that refusal exists to prevent. A None task is a context built without one,
-    which the gate's own tests do.
+    A malformed plan is passed on for `llm/spend` to refuse, never read as None.
     """
     if task is None:
         return None
@@ -1580,84 +741,25 @@ def task_plan(task: queue.Task | None) -> Any:
 
 
 async def dna_extract(ctx: StageContext) -> Outcome:
-    """§8 stage 6: the LLM structured call(s). **Written by M5.5** (`ROADMAP-M5.md:314-329`).
+    """§8 stage 6: the LLM structured call(s).
 
-    THE ONLY PAID STAGE, AND THE CAP IS ASKED BEFORE THIS FUNCTION RUNS, NOT INSIDE IT. It was
-    marked `paid=True` from M5.1 while it was still a declared no-op, because the flag is what the
-    driver's spend gate reads and a flag first set by the milestone that starts billing is a flag
-    nobody tested. M5.5 gave it this body and set `implemented=True` on the same row, which is the
-    moment decision 348's refusal started firing: `pipeline.refuse_uncapped_spend` now asks
-    `llm/spend.cap_check` before the driver calls this function, and parks the title - no cap, a
-    plan it cannot make, or a month without room for both attempts of every run (decision 325) -
-    with nothing billed. That is §8's "paid stages (6) never auto-retry past the spend cap" held
-    where it can be held, since a stage that ran and then checked would already have spent.
-    The milestone that owns this stage owns what it parks against, so M5.5 supplies the cap, as
-    decision 348's own title has it - "M5.1 owns the refusal, M5.5 owns the cap". THE MILESTONE IN
-    THAT SENTENCE ONCE READ M5.7, which owns the SURFACE for setting a spend guard
-    (`ROADMAP-M5.md:348`) and not the cap's existence; `ROADMAP-M5.md:314-329` puts the cap and
-    `0028` in M5.5. [M5.1 review cycle 4 second pass, M51-C4-PAID-06]
-
-    THE VERDICT IS REACHED INSIDE THIS STAGE (decision 432), because §9's retry has to name its
-    violation to a call that has not yet returned: `llm/extract.extract_title` calls each planned
-    provider through the drain's one Fetcher, judges every answer with M5.4's `verify_payload`,
-    retries once with the violation named, meters both attempts, and writes the tier only when
-    every run was accepted. Nothing in that sentence is decided here. This function turns what
-    it came to into a verb, and decision 431 is the whole of the mapping:
-
-      * `written` advances, with the rows and the calls on the board;
-      * no pack, no vocabulary or a plan the settings cannot make PARKS WITH A DEADLINE - each
-        waits on something a person or stage 5 does, and a deadline-less park is a task closed for
-        good (`waiting_on_the_world`). No pack was the state every title reached this stage in
-        until stage 5 was wired (decision 461); it is now a walk that resumed past stage 5 without
-        one, and once the park's own deadline passes the title re-enters at stage 5, which stores
-        the pack before this stage asks again (decision 467). The reason says so;
-      * a second contract violation, or a provider's own final refusal, FAILS PERMANENTLY: asking
-        again cannot change the answer and would bill for it, so only the admin retry runs the
-        title again -- except a refusal of the household's ACCOUNT (a balance, a spend limit, a
-        quota), which PARKS WITH A DEADLINE beside the three above, because it lifts by itself, and
-        a 404 for the model, which `extract` answers as a plan to correct (review cycle 2,
-        DBL-C2-05);
-      * a transient provider failure is an ordinary failure on the queue's curve, every re-run of
-        it behind the same gate -- except the breaker refusing to send before anything was billed,
-        which parks until the pause ends (review cycle 2, C2-PAID-02).
-
-    THE FETCHER IS HANDED ON, NEVER NAMED. `llm/extract` takes the handle by keyword and this
-    module still imports no transport (decision 373): stage 2 gives its adapters the whole
-    context, stage 6 gives the LLM layer the drain's supply of the one Fetcher, which `extract`
-    asks only when a request is next, and neither builds one - a stage handed none fails naming
-    the driver, for `NO_FETCHER`'s reason. The verbs are decided on
-    `extract`'s plain statuses and never on a transport exception's type, which is the property
-    `StageContext.fetcher`'s annotation exists to keep.
-
-    WHAT HOLDS `implemented` TO REALITY IS STILL A TEST AND NOT A CONSTRUCTION:
-    `test_acquire_pipeline.py::test_every_stage_declared_a_no_op_returns_its_stub_marker` calls
-    every `implemented=False` stage and asserts the stub marker, so the next stage to gain a body
-    without its flag reddens the build at that stage - and since M5 gave the last three their
-    bodies (decisions 461, 462, 463) it also asserts that no stage is declared one.
-    [M5.1 review cycle 1, M51-REV-04, M51-REV-PAID-01]
+    The cap is checked by the driver's gate before this runs. `llm/extract` reaches the verdict; this
+    maps its status to a verb (decision 431): written advances; no pack, no vocabulary, plan and
+    account refusals park with a deadline; violations and final refusals fail permanently; transient
+    failures stay on the curve; a breaker pause parks.
     """
     if ctx.title_id is None:
         return fail("stage 6 reached with no title id; stage 1 did not establish one")
     closed = await ctx.conn.fetchval(_FAILED_FOR_GOOD, ctx.task.kind, queue.FAILED, ctx.task.id,
                                      str(ctx.title_id))
     if closed is not None:
-        # PERMANENCE IS THE TITLE'S, NOT THE TASK'S (decision 431): "retried exactly once" would
-        # otherwise be "true per walk and false per title". `queue.fail(permanent=True)` closes one
-        # task, and decision 322 gives a title several keys by design, so a second library copy of a
-        # film whose extraction had failed for good walked back into this stage and paid for attempt
-        # 1 and the named retry again with no admin action -- while the board told the operator only
-        # an admin retry could. Which task failed for good is read off the mark `_FAILED_FOR_GOOD`
-        # describes. Read before any call and before the fetcher is asked for -- which is true since
-        # this stage is handed the drain's supply and `extract` asks it only when a request is next
-        # -- and answered with a park that carries a deadline, so this key comes back by itself once
-        # the admin revives the task that failed. [M5.5 review cycle 1, M55-BUDGET-06; review cycle 2,
-        # C2-PAID-01, NBR-C2-01]
+        # Permanence is the title's (decision 431): another key of a title that failed for good parks
+        # instead of buying the attempts again.
         return park(FAILED_FOR_GOOD.format(key=closed), until=waiting_on_the_world(),
                     detail={"failed_for_good_under": closed})
     if ctx.fetcher is None and ctx.open_fetcher is None:
         return fail(NO_EXTRACTION_FETCHER)
-    # The task's batch plan, read by the one reader the gate read it through a moment ago, so the
-    # runs this stage pays for are the runs the gate reserved for (decision 442).
+    # The same plan reader the gate used (decision 442).
     extraction = await extract.extract_title(
         ctx.conn, title_id=ctx.title_id, fetcher=ctx.fetcher, task_key=ctx.task.key,
         run_id=ctx.run_id, open_fetcher=ctx.open_fetcher, batch=task_plan(ctx.task),
@@ -1665,14 +767,10 @@ async def dna_extract(ctx: StageContext) -> Outcome:
     status = extraction.status
     if status == extract.WRITTEN:
         return advance({**extraction.detail, "tags": extraction.n_tags, "calls": extraction.calls})
-    # A refusal of the household's account waits like a missing setting does: it lifts when the
-    # provider's period rolls over or the balance is topped up (decision 336), where failing it
-    # would close every title that reached stage 6 while the account was refused. [M55-BUDGET-07]
+    # Account refusals lift by themselves, so park rather than fail.
     if status in (extract.NO_PACK, extract.NO_VOCABULARY, extract.PLAN, extract.ACCOUNT):
         return park(extraction.reason, until=waiting_on_the_world(), detail=extraction.detail)
-    # A breaker pause met before anything was billed waits out the pause and no longer, with its
-    # attempt refunded like every park: the next drain asks again once the host may answer.
-    # [M5.5 review cycle 2, C2-PAID-02]
+    # A pause met before anything was billed parks until it ends, attempt refunded.
     if status == extract.PAUSED:
         paused = float(extraction.detail.get("paused_for_s") or 0.0)
         return park(extraction.reason, until=datetime.now(UTC) + timedelta(seconds=max(paused, 1.0)),
@@ -1689,41 +787,10 @@ async def dna_extract(ctx: StageContext) -> Outcome:
 
 async def verify(ctx: StageContext) -> Outcome:
     """§8 stage 7: "ported trust boundary verbatim ... Failures drop, never repaired" - reached
-    inside stage 6 and recorded here (decision 462). **Built by M5.4** (`dna/verify.py`,
-    `ROADMAP-M5.md:298-312`).
+    inside stage 6 and recorded here (decision 462).
 
-    THE VERDICT IS STAGE 6's (decision 432), because §9's retry has to name its violation to a call
-    that has not yet returned: `llm/extract` asks `verify_payload` of every answer inside the
-    two-attempt loop, files each refusal in `dna_reject` under the walk's run as it is reached
-    (decision 341), and writes the tier only when every run was accepted. By the time a walk
-    reaches this stage there is nothing left to decide.
-
-    SO IT RECORDS, AND THE TWO OTHER READINGS ARE REFUSED. A second check of the stored tier is
-    refused on decision 432's ground and a stronger one: the rows it would read are post-merge and
-    post-ledger - `consensus.store_title` merged the runs and `apply_adjudications` applied the
-    household's verdicts inside the same transaction - so it would judge rows stage 6 never judged,
-    and a disagreement would have no action §8 allows, since failures drop and are "never
-    repaired". A pass-through is refused because it is a stub flagged `implemented=True`: it would
-    advance having done nothing, and the stub-marker test decision 348's gate relies on calls only
-    the stages declared `implemented=False`, so nothing could ever see it.
-
-    WHAT IT READS IS THIS WALK'S, AND THE BOARD KEEPS IT. The title's extracted-tier count under the
-    active vocabulary, and the refusals filed under THIS run, grouped by the rule each broke - with
-    `run_id = $2` and deliberately not `IS NOT DISTINCT FROM`: a walk with no run reads none, where
-    the null-safe form would report every run-less refusal the title ever had as this walk's. The
-    board's upsert merges each stage's detail (`detail = acquisition_job.detail || EXCLUDED.detail`,
-    `pipeline.write_board`), so this detail stands beside stage 6's for the life of the job, the
-    board's lasting per-title record of what the trust boundary dropped. It asks no verdict, calls
-    no provider and writes no row.
-
-    THE WORKER'S WALKS CARRY THEIR TICK'S RUN (decision 468): `worker._acquisition_drain` hands
-    `pipeline.drain` the `job_run` id `_tick` opened for it, so on a real install stage 6 files its
-    refusals under the run this stage reads. Until M5's review cycle it handed none, and this detail
-    read `{}` on every real title while a walk driven with an explicit run - the exit scripts, the
-    tests - read its own. A walk with no run still reads none: a `run_task` called directly, or a
-    tick whose `job_run` row could not be written. Reading the run-less rows instead would report
-    other walks' refusals as this one's, so the record is exact where a run exists and empty, never
-    wrong, where it does not. [M5 review cycle 1, M5-DNA-01]
+    Records the extracted-tier count and this run's refusals by rule (`run_id = $2`, deliberately not
+    null-safe) into the board's detail. Decides nothing, calls nothing, writes no row.
     """
     if ctx.title_id is None:
         return fail("stage 7 reached with no title id; stage 1 did not establish one")
@@ -1742,9 +809,7 @@ async def verify(ctx: StageContext) -> Outcome:
     })
 
 
-# What stage 8 records for a title the bundle supplied, shown on §6.6's board. §8 stage 8 projects
-# "for an acquired title"; a bundle title's projected rows came out of the corpus's own wholesale
-# projection, which decision 162 seeds once and no import can restore.
+# A bundle title's projected rows are seeded content (decision 162); not re-derived.
 BUNDLE_PROJECTION_KEPT = (
     "a bundle title's projected rows are seeded once by the bundle import (decision 162), so this "
     "stage leaves them as they are and projects nothing (decision 463)"
@@ -1753,26 +818,10 @@ BUNDLE_PROJECTION_KEPT = (
 
 async def project(ctx: StageContext) -> Outcome:
     """§8 stage 8: "per-title alias-map projection of its keywords (incremental - new code, same
-    alias map) for an acquired title". **Built by M5.4** (`dna/project.py`,
-    `ROADMAP-M5.md:298-312`), and called here since M5 (decision 463); `worker.py`'s
-    `dna-projection` row names that module as what this stage reaches.
+    alias map) for an acquired title".
 
-    TWO BRANCHES, BECAUSE BUNDLE TITLES REACH THIS STAGE. The pipeline mints acquired titles, and
-    it also walks titles the bundle supplied: an add resolving to an unplaced bundle title walks on
-    to stage 9 (decision 411), an admin retry of a thin title's inbox row walks from the stage it
-    names (decision 444), and a flywheel Launch makes titles due at stage 5 (decision 443) - and
-    `title.origin` defaults to `bundle` (`0008_placement.sql:46`). `project_title` refuses any title
-    that is not acquired, rightly: a bundle title's projected tier is content decision 162 seeds
-    once, and re-deriving it would overwrite the corpus's `n_sources` weight with a local inventory
-    count no import could put back. Called unconditionally it would fail every such walk, after
-    stage 6 had billed for it. So an acquired title is projected and any other advances naming
-    decision 162, and the refusal stays in `project_title` as the guard behind this branch rather
-    than being caught here.
-
-    THE OBSERVATION IS NOT THIS FUNCTION'S. §8.4's thin-facet row is written "the moment its walk
-    finishes stage 8" by the driver, on the row's `observes_coverage` flag, once this stage has
-    advanced (decision 440) - so it fires on both branches, and a bundle title a Launch re-extracted
-    is measured as surely as a new acquisition. A missing title fails, as stage 10's does.
+    Bundle titles also reach this stage; they advance without projecting (decision 162). The thin-facet
+    observation is the driver's, on both branches.
     """
     if ctx.title_id is None:
         return fail("stage 8 reached with no title id; stage 1 did not establish one")
@@ -1788,27 +837,9 @@ async def project(ctx: StageContext) -> Outcome:
 
 
 async def active_store(conn: asyncpg.Connection) -> ArtifactStore | None:
-    """The basis stage 9 places against, acquired the one way this app allows.
+    """The basis stage 9 places against, via `worker.py`'s three steps in the same order.
 
-    `worker.py:363-393`'s `_active_store` is the argument and this is the same three lines in the
-    same order: load the active row, `assert_not_broken`, `assert_matches`. It is repeated rather
-    than imported because `worker.py` is the process loop and a domain package importing it would
-    invert the direction every other module in `spielplan/` keeps - and repeated in FULL rather
-    than partially, because the order is the whole of it: an `artifact_bundle` row that is active
-    while its directory is gone loads with that version and `broken = True`, so the §10 comparison
-    passes for an install that cannot produce one coordinate.
-
-    Both guards RAISE, deliberately, and the driver turns a raised stage into `failed` - decision
-    336's "this stage raised and will raise again", which is exactly what a broken install is. The
-    bundle-LESS install is the other case and is not a failure at all: None comes back, the stage
-    parks with `NO_ACTIVE_BUNDLE`, and §3.1 says that household is legal.
-
-    THIS FUNCTION IS WHY THE DRAIN JOB IS A MODEL JOB. `worker.py`'s `MODEL_JOBS` names every job
-    that fits against the active bundle, and `test_every_job_that_fits_against_the_active_bundle_
-    is_named_in_model_jobs` derives that set by walking the call graph - so the job that calls
-    `pipeline.drain` reaches `ArtifactStore.load_active` through here and must be named there.
-    That is also correct behaviour rather than a guard to satisfy: a placement started against v1
-    and committed after §10's flip stamps `title_placement` with a basis the app no longer serves.
+    A broken install raises; a bundle-less one returns None. The drain job is a model job because of this.
     """
     store = await ArtifactStore.load_active(conn, settings().artifacts_dir)
     store.assert_not_broken()
@@ -1819,49 +850,18 @@ async def active_store(conn: asyncpg.Connection) -> ArtifactStore | None:
 async def place(ctx: StageContext) -> Outcome:
     """§8 stage 9: "feature vector per the feature contract -> Cold Tower -> e(t), b(t)".
 
-    THIS STAGE IS SHIPPED AND THIS FUNCTION IS ITS FIRST CALLER. `placement/reconcile.py:208-212`
-    is the `app_acquired` branch - `SELECT id FROM title WHERE origin = 'acquired' ORDER BY id` -
-    and until now `app_acquired` appeared nowhere in the tree outside `reconcile.py` itself. M5.1
-    supplies the caller and builds no part of stage 9 or 10.
-
-    `app_acquired` IS A SCOPE-WIDE LIST AND NOT A PER-TITLE CALL. One task's stage 9 re-places
-    every acquired title, which is cheap while that set is small - it is empty on every install
-    today - and is a forward pass of one chunk (`CHUNK = 512`) for a household that has acquired
-    a few hundred. A per-title scope is NOT added to `reconcile.py`: that module is §5.3's job and
-    a fifth scope whose only caller is this one would put a second definition of "who needs
-    placing" in the file whose two definitions disagreeing is what M4.13 records as ml05. If the
-    acquired set grows enough to matter it is M5.6's or M5.7's measurement to take, with the
-    board in front of them.
-
-    Re-placing is idempotent by construction: `_UPSERT` is `ON CONFLICT (title_id, bundle_version)
-    DO UPDATE` (`reconcile.py:233-247`), so a second run rewrites the same coordinate rather than
-    adding a row. That is what makes D5's "running the same task twice produces the same rows"
-    hold across a stage that touches more titles than its own.
-
-    READ THE TITLE BACK. `place_titles` reports a non-finite placement per title and continues
-    (`reconcile.py:298-301`), so a report with `placed > 0` does not say THIS title was placed.
-    Stage 10 badges on the strength of a coordinate, so the stage that produces one has to be the
-    one that checks it exists.
+    Calls `reconcile` with scope `app_acquired` (every acquired title; idempotent upserts), or the
+    sweep's scope for a bundle title. Reads the title back: a report count does not say this one placed.
     """
     if ctx.title_id is None:
         return fail("stage 9 reached with no title id; stage 1 did not establish one")
     store = await active_store(ctx.conn)
     if store is None:
-        # WITH A DEADLINE, because importing a bundle is the thing that may change and a park with
-        # no deadline is a task no drain can ever lease again. The re-ask costs a walk of eight
-        # declared no-ops and one `artifact_bundle` read: `active_store` refuses here, before any
-        # placement runs, so the bundle-less household's daily re-ask is the cheapest walk this
-        # pipeline has. [M5.1 review cycle 1, M51-CRASH-01, M51-REV-03]
+        # With a deadline; the bundle-less re-ask is the cheapest walk there is.
         return park(NO_ACTIVE_BUNDLE, until=waiting_on_the_world())
 
-    # A title the corpus supplied is not in `app_acquired`'s work list (`origin = 'acquired'`), so
-    # a Jellyfin add that resolved onto one walked here, placed nothing and parked until §5.3's
-    # 03:00 sweep - while it ranked as a raw thin row, or not at all. The first household parked
-    # eight that way on its first afternoon (The Rivals of Amziah King, Lanterns, The Count of
-    # Monte Cristo among them). The sweep's own scope is the one that covers such a title - it is
-    # owned and unplaced - so stage 9 runs it: the same work list, asked for when the title arrives
-    # rather than at night, and no fifth definition of "who needs placing".
-    # [owner instruction of 2026-09-25 after the first household user test]
+    # A bundle title is not in `app_acquired`'s list, so use the nightly sweep's scope now rather than
+    # at 03:00.
     origin = await ctx.conn.fetchval("SELECT origin FROM title WHERE id = $1", ctx.title_id)
     scope = "app_acquired" if origin == "acquired" else "owned_missing"
     report = await reconcile.reconcile(ctx.conn, store, scope=scope)
@@ -1875,15 +875,7 @@ async def place(ctx: StageContext) -> Outcome:
         "bundle_version": store.version,
     }
     if placement not in ("cold_tower", "warm"):
-        # WITH A DEADLINE, and this was the one park in the file that carried none. A park with no
-        # `until` is `queue.skip`, `queue.lease` claims `state = 'pending'` only, nothing in the
-        # tree moves a row out of `skipped`, and `queue.enqueue` is `ON CONFLICT DO NOTHING` - so
-        # the task was CLOSED FOR EVER on a condition that clears itself, while §6.6's board froze
-        # at "stage 9, parked" for a title the nightly sweep may well place an hour later. That is
-        # `waiting_on_the_world`'s own rule broken in the branch it was written for, and stage 10
-        # one call later reads the IDENTICAL predicate - `placement not in ('cold_tower','warm')` -
-        # and parks it WITH a deadline, so the two stages disagreed about one fact.
-        # [M5.1 review cycle 2, d323-park-02; M5.1 review cycle 1, M51-CRASH-01, M51-REV-03]
+        # With a deadline: the condition can clear itself overnight.
         return park(NOT_PLACED, until=waiting_on_the_world(),
                     detail=detail | {"notes": report.notes[:4]})
     return advance(detail | {"placement": placement})
@@ -1896,29 +888,7 @@ async def ready(ctx: StageContext) -> Outcome:
     """§8 stage 10: "appears in ranking/search/explore with a 'new - model placement, no crowd
     data' badge until ratings accrue".
 
-    THE BADGE AND THE SHELF ARE ALREADY BUILT AND THIS STAGE ADDS NO UI. `home/shelves.py:1015-
-    1053` is the "New in the library" shelf, `why = "placed by the Cold Tower - no crowd data
-    yet"`, and `shelves.py:474-484` computes the card's badge fields OUTSIDE `model` on purpose so
-    §6.7's gating cannot make them vanish. This stage produces the state they read.
-
-    So what is there to do? CHECK THE TWO COLUMNS THE SHELF READS, and refuse to stamp `ready`
-    over a title that will not appear. `ready` is the board's terminal state; an operator reading
-    it is reading a claim that the household can now see this title. A title stamped `ready`
-    while Home cannot show it is a board that lies, and the two ways to get there are both real:
-    a title that lost `is_owned` to a sweep between stage 1 and here, and one whose placement the
-    Cold Tower could not produce.
-
-    The board write itself is the DRIVER's, not this function's, for the same reason every park
-    and every failure is: one writer of `acquisition_job` inside this pipeline means the stage
-    number, the status and the reason are always written together and always from one place. A
-    stage that wrote its own terminal status would be a second writer racing the first on the
-    only row §6.6 reads.
-
-    A GAP LEFT ON PURPOSE. `home/rail.py:395-397` has `placement_line` for stage 10 and no builder
-    for an acquisition-stage line, so §6.8's rail says nothing about a title moving through this
-    pipeline. Adding one here is not this milestone's: `rail.py` is M5.6's hotspot file
-    (`ROADMAP-M5.md:331-346`) and a line added by M5.1 would be a second author in the file whose
-    single ownership is the reason the milestones were split the way they were.
+    Checks the two columns Home's shelf reads before `ready` is stamped; the board write is the driver's.
     """
     if ctx.title_id is None:
         return fail("stage 10 reached with no title id; stage 1 did not establish one")
@@ -1933,9 +903,6 @@ async def ready(ctx: StageContext) -> Outcome:
             missing.append("no ownership flag")
         if row["placement"] not in ("cold_tower", "warm"):
             missing.append(f"placement {row['placement']!r}")
-        # With a deadline: both columns are written by things that run on a timer - §7.2's sweep
-        # re-derives `is_owned` from Jellyfin, and §5.3's nightly reconciliation places what is
-        # unplaced - so this is decision 336's "waiting on something that may change" in its
-        # plainest form, and the re-ask is two column reads. [M5.1 review cycle 1, M51-REV-03]
+        # With a deadline: both columns are set by timed jobs.
         return park(NOT_BADGEABLE.format(" and ".join(missing)), until=waiting_on_the_world())
     return advance({"badge": "new - model placement, no crowd data", "placement": row["placement"]})

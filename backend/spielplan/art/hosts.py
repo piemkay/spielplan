@@ -1,11 +1,6 @@
-"""The image hosts this app may fetch cover art from, and TMDB's size segment. Decision 483.
+"""Image hosts cover art may be fetched from, and TMDB's size segment (decision 483).
 
-An `<img src>` in this app never points at a third-party host: the art route fetches upstream and
-serves the bytes from its own origin, so a phone's IP and Referer never reach the host and the
-route can be session-gated. Two hosts are servable - TMDB's image CDN and TVmaze's static store -
-and IMDb's (`m.media-amazon.com`) is not. `https` only and the host matched exactly: a scheme, a
-port, a userinfo or a subdomain the tuple does not name is a different origin and is refused
-rather than normalised into one it resembles.
+https only, host matched exactly; IMDb's host is deliberately not servable.
 """
 
 from __future__ import annotations
@@ -15,8 +10,7 @@ from urllib.parse import urlsplit, urlunsplit
 
 SERVABLE_HOSTS = ("image.tmdb.org", "static.tvmaze.com")
 
-# TMDB serves one file at several widths under `/t/p/<size>/<file>`. The size tokens it documents
-# are `w<n>`, `h<n>` and `original`; anything else would build a path TMDB answers with 404.
+# TMDB's documented size tokens; any other segment 404s.
 _TMDB_SIZE = re.compile(r"(?:w|h)\d+|original")
 _TMDB_PATH = re.compile(r"^/t/p/[^/]+/")
 
@@ -29,8 +23,7 @@ def servable(url: str | None) -> bool:
         parts = urlsplit(url)
     except ValueError:
         return False
-    # `netloc == hostname` refuses a port and a userinfo in one comparison; `hostname` is already
-    # lower-cased, so a netloc spelled in capitals is refused too rather than silently folded.
+    # `netloc == hostname` also refuses a port, a userinfo and a capitalised host.
     return (
         parts.scheme == "https"
         and parts.hostname in SERVABLE_HOSTS
@@ -39,12 +32,7 @@ def servable(url: str | None) -> bool:
 
 
 def tmdb_size(url: str, size: str = "w342") -> str:
-    """`url` with TMDB's `/t/p/<size>/` segment rewritten to `size`; any other URL unchanged.
-
-    A rewrite of the segment that is there and never a prefix: a URL already at `size` comes back
-    identical, and a URL with no `/t/p/<size>/` segment - a bare `/abc.jpg`, a TVmaze URL - is not
-    turned into `/t/p/w342/t/p/w500/abc.jpg` or given a host it did not name.
-    """
+    """`url` with TMDB's `/t/p/<size>/` segment rewritten to `size`; any other URL unchanged."""
     if not _TMDB_SIZE.fullmatch(size):
         raise ValueError(f"not a TMDB image size: {size!r}")
     if not servable(url):

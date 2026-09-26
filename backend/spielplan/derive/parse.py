@@ -1,79 +1,7 @@
 """§8 stage 3's parsers: raw bytes in, derived rows out, and nothing in between.
 
-Spec v2.1 §8 stage 3 ("per-title parse of raw docs into title_meta/credit/review/..., keyed
-`entity_key`"), §8's preamble (`spec:398`, "All fetched bytes land in the app's own raw store, so
-re-parsing is free forever"), §4.1's content spine and §3.1's seven roles; decisions 372, 374,
-375.
-
-PORT VERDICT: **ported with two named changes**, both structural, from
-`mdc/parse/titles.py` (1,032 lines). All fourteen entry points are here --
-`parse_tmdb_detail`, `parse_omdb_awards`, `parse_omdb`, `parse_jellyfin_item`,
-`parse_trakt_summary`, `parse_trakt_ratings`, `parse_tvmaze`, `parse_wikipedia`, `parse_mpst`,
-`parse_wikidata_entity`, `parse_letterboxd_page`, `parse_rt_page`, `page_belongs_to_title` and
-`parse_metacritic_page` -- with their field selections, their regexes and the arguments their
-comments make. The corpus's header is still the rule that governs all of them and is quoted
-rather than paraphrased: "Every source writes into the same tables tagged with its own `source`,
-and nothing is merged or reconciled here. Keeping TMDB's genres and OMDb's genres side by side
-rather than picking a winner is deliberate: disagreement between sources is information."
-`importer/meta.SOURCE_PRIORITY` is the app's half of that bargain -- the reader picks, per field,
-and the writer keeps every answer.
-
-THE TWO NAMED CHANGES.
-
-  1. **sqlite3 -> Postgres, which here means NO CONNECTION AT ALL.** Every corpus parser takes a
-     `sqlite3.Connection` for one reason: to call `upsert_person` inline. A parser that holds a
-     connection is a parser that cannot be re-run over the raw store without one, and it is one
-     import away from holding a fetcher too. So a credit row carries the PERSON AS DATA -- name,
-     imdb id, tmdb id, profile path -- and `derive.ids.upsert_person` is called by the derive,
-     once, where the transaction is. `classify_role` and `keep_credit` stay here, because which
-     credits survive is a property of the document and not of the database.
-  2. **The sink callback becomes a return value.** `emit(table, tuple)` becomes
-     `ParsedTitle.rows[table]`, and a row is a MAPPING rather than a positional tuple. The
-     corpus can afford positions because one hand-written INSERT per table sits next to the
-     emit; here the rows cross a module boundary, and a column added to `title_meta` in the
-     middle would silently shift nineteen values one place to the left with every type still
-     matching. The KEYS are the corpus's own column names (`tests/fixtures/real_bundle_shapes.json`
-     records them), because `title_meta.payload` is literally that dict on the app side --
-     `importer/meta._meta_rows` builds it from the shipped columns -- and a derived row that
-     spelled `plot` where an imported one spells `plot_full` would be invisible to `meta.best`
-     and so to every card.
-
-WHAT THIS MODULE MAY IMPORT, and why the list is this short: `spielplan.sources._htmlutil`,
-`spielplan.derive.ids` and the standard library. That is exactly `mdc/parse/titles.py`'s own
-import list, and it is the whole of "re-parsing is free forever". A parser that can reach the
-network is a parser whose next bug costs another crawl of somebody else's host, on a household's
-IP address, against eight rate limits. `test_derive_parse.py` reads every module under
-`spielplan/derive/` with `ast` and fails on an import of `httpx`, `requests`, `urllib.request` or
-`spielplan.acquire.fetch`.
-
-TWO PARSERS ARE HERE FOR SOURCES NOTHING FETCHES, and that is deliberate rather than an
-oversight. Decision 374 does not port `mdc/sources/letterboxd.py` (§8 stage 2 names eight sources
-and Letterboxd is not one of them) and ports only `wikidata:resolve` of the three Wikidata
-handlers, so no adapter in this app produces a `letterboxd` page or a `wikidata` entity.
-`parse_letterboxd_page` and `parse_wikidata_entity` are still owed, for the same reason
-`parse_mpst` and `parse_jellyfin_item` are: the bundle's `title_meta` already carries rows under
-those source names and `importer/meta.SOURCE_PRIORITY` orders all eleven of them, so a re-parse
-path that cannot read a source the install already holds is a hole in §8 stage 3 rather than a
-saving. NOBODY SHOULD ADD A CRAWLER TO MATCH: the parser existing is not a decision that the
-source should be fetched, and decision 374 is the one that says it should not.
-
-ORDERING IS WRITTEN INTO THE ROWS, not left to the reader. Decision 375 makes "no changed
-ordering" a property of the data, so every list this module walks keeps the source payload's own
-order in `position` / `billing_order`, and `credit` rows come out in the order the document
-billed them. A derive that re-inserts in a different order and relies on `bigserial` to sort
-would be idempotent in content and not in appearance, which is the half of §14 risk 5 that only
-shows up on a card.
-
-A PARSER MAY EMIT THE SAME ROW TWICE AND THE DERIVE MUST EXPECT IT. TMDB names a film's primary
-language once in `spoken_languages` and again in `original_language`, and names a country once in
-`production_countries` and again in `origin_country`, so `parse_tmdb_detail` emits two identical
-`title_language` rows and two identical `title_country` rows for Arrival. That is the corpus's
-behaviour and the corpus writes through `INSERT OR IGNORE` for all seven multi-row tables
-(`mdc/parse/rebuild.py:40-53`) and `INSERT OR REPLACE` for `title_meta` (`:30`). The app's keys
-are the same facts -- `(title_id, source, language, role)` and `(title_id, source, country)`,
-0015_seed.sql sections 9 -- so the derive's INSERT needs `ON CONFLICT DO NOTHING` or the first
-acquisition to reach it dies on a unique violation. Deduplicating here instead would be the wrong
-end: two sources agreeing is information §4.1 keeps, and the key is where the app already says so.
+No connection and no transport: rows carry people as data. Every source's rows are kept side by
+side; the reader picks. Rows may repeat, so the derive inserts with `ON CONFLICT DO NOTHING`.
 """
 
 from __future__ import annotations
@@ -88,41 +16,21 @@ from typing import Any
 from spielplan.derive.ids import CAST_BILLING_LIMIT, classify_role, keep_credit, loose_name
 from spielplan.sources._htmlutil import clean_text, ld_json, next_data, unescape, walk
 
-# The eleven derived tables §8 stage 3 writes, and the whole vocabulary of `ParsedTitle.rows`.
-# Named so a typo in an emit is a KeyError here rather than a table the derive silently never
-# writes -- the corpus's `emit` takes the table name as a string and has the same exposure.
+# The eleven derived tables; a typo in an emit is a KeyError here.
 TABLES: tuple[str, ...] = (
     "title_meta", "title_genre", "title_keyword", "title_language", "title_country",
     "title_company", "title_alias", "title_video", "credit", "award", "platform_rating",
 )
 
-# TWO CORPUS COLUMNS ARE DELIBERATELY NOT EMITTED, for one reason: this app's tables do not have
-# them, so a row carrying them would read as data the install keeps and does not.
-#
-#   * the keyword table's corpus-side weight column. The corpus ships it
-#     (`tests/fixtures/real_bundle_shapes.json`) and `importer/load.py`'s `MAPPINGS` drops it,
-#     because `0003_content.sql:96-102` is `(title_id, keyword, source)`. All three parsers here
-#     would emit the constant 1.0 anyway - the corpus's real keyword weights come from the
-#     MovieLens genome, which is a different loader and `ml_genome_score`'s own table. Putting it
-#     back would also be read as a rule-2 filter by `test_landmine_guards.py`'s SQL scan, which
-#     sees a keyword argument of that name beside a Python `or` as a predicate; that is a false
-#     positive and NOT why the field is absent, but it is a second reason to leave it out.
-#   * `person.gender`, argued where the person is written (`derive/ids.py`, change note 3).
-#
-# Both are still in the raw store, so the migration that adds either column is followed by a
-# re-derive and not by a re-crawl (`spec:398`).
+# The corpus keyword weight and `person.gender` are not emitted: this schema has no such columns.
 
 
 @dataclass(frozen=True)
 class ParsedTitle:
     """What one raw document says, as rows, before anything has touched the database.
 
-    `source` is the DOCUMENT's source and is what decision 375's replace-by-`(title_id, source)`
-    scope is keyed on. It is NOT always the `source` on the rows: `parse_omdb` files its
-    `platform_rating` rows under `imdb`, `rottentomatoes` and `metacritic`, because OMDb serves
-    other people's scores and the corpus records whose they are. The derive has to scope its
-    delete by the set of row sources it is about to re-insert rather than by this field, or an
-    OMDb re-parse leaves last run's IMDb rating behind beside the new one.
+    `source` is the document's; rows may be filed under others (OMDb relays IMDb/RT/MC scores), so
+    the derive scopes its delete by `row_sources`.
     """
 
     source: str
@@ -134,12 +42,7 @@ class ParsedTitle:
 
     @property
     def meta(self) -> Mapping[str, Any] | None:
-        """The `title_meta` payload this document produced, or None when it produced none.
-
-        One row per document by construction: `title_meta`'s primary key is `(title_id, source)`
-        (`0003_content.sql:72-79`) and decision 375 keeps it that way, so a parser emitting two
-        would be a unique violation the derive could not resolve.
-        """
+        """The `title_meta` payload this document produced, or None; at most one per document."""
         rows = self.table("title_meta")
         return rows[0] if rows else None
 
@@ -152,12 +55,7 @@ class ParsedTitle:
 
 
 class _Rows:
-    """The corpus's `emit` sink, one indirection shorter.
-
-    `mdc/parse/titles.py` is written against `Sink = Callable[[str, tuple], None]` so the same
-    parsers can feed a rebuild, a projection and an ingest. This app has one consumer, so the
-    sink is a collector and the parsers read line for line against the corpus's.
-    """
+    """The corpus's `emit` sink, as a collector."""
 
     def __init__(self, source: str) -> None:
         self._source = source
@@ -179,24 +77,12 @@ class _Rows:
 def _payload(data: Any) -> Mapping[str, Any] | None:
     """`data` if it is a non-empty mapping, else None.
 
-    Every JSON parser below starts here. A source that answers 200 with a list, a string or null
-    -- which is what a rate limiter, a CDN error page and a changed API all look like once
-    `json.loads` has succeeded -- must produce no rows rather than an AttributeError that the
-    driver would record as a failed stage. Decision 334 makes a source that did not answer a note
-    on the job; a source that answered nonsense is the same fact.
-
-    AN EMPTY MAPPING IS NOTHING TO READ AND NOT A TITLE WITH EVERY FIELD NULL. The corpus emits
-    its `title_meta` row unconditionally because it is only ever handed a payload it just
-    fetched; here the same document is re-parsed for ever, so an all-NULL row would put a source
-    into `title_meta` for the title, `meta.best` would walk it on every field, and §6.0's card
-    would show a source that said nothing. `ParsedTitle.rows == {}` is the honest answer.
+    A 200 that decoded to a list, string or `{}` yields no rows, never an exception or an all-NULL row.
     """
     return data if isinstance(data, Mapping) and data else None
 
 
-# ---------------------------------------------------------------------------
 # TMDB
-# ---------------------------------------------------------------------------
 
 
 def _year(date: str | None) -> int | None:
@@ -210,12 +96,7 @@ def _tmdb_img(path: str | None, size: str = "w500") -> str | None:
 
 
 def _tmdb_certification(data: Mapping[str, Any], *, is_movie: bool) -> str | None:
-    """The one age rating kept, from the three markets this household's catalog is rated in.
-
-    Lifted out of `parse_tmdb_detail`'s body, which is where the corpus keeps it
-    (`mdc/parse/titles.py:44-58`); the two nested loops and the `break` that leaves both are the
-    only part of that function a reader has to trace twice.
-    """
+    """The one age rating kept, from the three markets this household's catalog is rated in."""
     if is_movie:
         for entry in (data.get("release_dates") or {}).get("results") or []:
             if entry.get("iso_3166_1") in ("US", "GB", "DE"):
@@ -232,11 +113,7 @@ def _tmdb_certification(data: Mapping[str, Any], *, is_movie: bool) -> str | Non
 def parse_tmdb_detail(data: Any) -> ParsedTitle:
     """TMDB's `movie/{id}` or `tv/{id}` with its append_to_response blocks.
 
-    The richest single document in the crawl and the one `SOURCE_PRIORITY` puts first, so the
-    field selection here decides most title cards. `is_movie` is inferred from the payload rather
-    than passed in because the same function serves both endpoints and TMDB's own shapes are the
-    honest discriminator; §8 stage 1 has already decided `title.kind` and decision 372 forbids an
-    enrichment flipping it.
+    `is_movie` comes from the payload's shape; `title.kind` is never flipped (decision 372).
     """
     data = _payload(data)
     if data is None:
@@ -345,11 +222,7 @@ def parse_tmdb_detail(data: Any) -> ParsedTitle:
 def _tmdb_credits(rows: _Rows, data: Mapping[str, Any]) -> None:
     """`credits` for a film, `aggregate_credits` for a series, which differ in one shape.
 
-    A series' cast entry carries `roles: [{character, episode_count}]` instead of a flat
-    `character`, and its crew entry carries `jobs: [...]` instead of a flat `job` -- one person,
-    several jobs, each with its own episode count. Flattening a series crew entry to its first
-    job would lose the others; keeping the entry whole would file a director under whichever job
-    TMDB happened to list first.
+    A series crew entry carries several `jobs`; each is classified separately.
     """
     credits = data.get("credits") or data.get("aggregate_credits") or {}
 
@@ -390,28 +263,19 @@ def _tmdb_credits(rows: _Rows, data: Mapping[str, Any]) -> None:
             )
 
 
-# ---------------------------------------------------------------------------
 # OMDb
-# ---------------------------------------------------------------------------
 
 _OMDB_NA = {"N/A", "", None}
 
 
 def _omdb_val(value: Any) -> Any:
-    """OMDb's value, with its "N/A" sentinel mapped to NULL and entities decoded.
-
-    OMDb serves JSON but its strings come straight out of IMDb's HTML, so `C&ocirc;te
-    d&amp;#x27;Ivoire` arrives escaped - twice - inside a field nothing else would think to
-    decode.
-    """
+    """OMDb's value, with "N/A" mapped to NULL and (doubly escaped) entities decoded."""
     if value in _OMDB_NA:
         return None
     return unescape(value) if isinstance(value, str) else value
 
 
-# IMDb - and so OMDb - writes a qualified language name inverted and comma separated: "Norse,
-# Old" is Old Norse, "Greek, Ancient (to 1453)" is Ancient Greek. Splitting the field on commas
-# turns each of those into two languages, one of which ("Old") is not a language at all.
+# IMDb writes qualified languages inverted: "Norse, Old" is Old Norse, not two languages.
 _LANG_QUALIFIERS = {"old", "ancient", "middle", "modern", "classical"}
 
 
@@ -421,9 +285,7 @@ def _omdb_languages(raw: str | None) -> list[str]:
         part = part.strip()
         if not part:
             continue
-        # OMDb's literal for a silent film. It is a statement about the absence of language, not
-        # a language, and storing it as one makes 'None' the 40th most common language in the
-        # corpus.
+        # OMDb's literal for a silent film: not a language.
         if part.lower() == "none":
             continue
         head = re.sub(r"\s*\([^)]*\)", "", part).strip()
@@ -434,9 +296,7 @@ def _omdb_languages(raw: str | None) -> list[str]:
     return out
 
 
-# "Won 7 Oscars. 21 wins & 43 nominations total" - and, when OMDb's own templating slips,
-# "Nominated for 1 BAFTA Award1 nomination total". The headline award name is therefore read up
-# to whatever comes first: a full stop, the start of the tally, or the end of the string.
+# The headline award name runs to a full stop, the start of the tally, or the end.
 _AWARD_HEADLINE = re.compile(
     r"\b(Won|Nominated for)\s+(\d+)\s+(.+?)\s*(?=\d+\s+(?:win|nomination)|\.|$)", re.I)
 _AWARD_TALLY = re.compile(r"(\d+)\s+(win|nomination)s?\b", re.I)
@@ -445,11 +305,7 @@ _AWARD_TALLY = re.compile(r"(\d+)\s+(win|nomination)s?\b", re.I)
 def parse_omdb_awards(blurb: str | None) -> list[tuple[str, str, str, int]]:
     """Turn OMDb's awards sentence into rows of (award, category, result, n).
 
-    OMDb gives one free-text summary per title and no structured award data at all, so this is
-    the whole of what can be recovered: which headline award the film won or was nominated for,
-    and its total wins and nominations. Per-category and per-year detail is genuinely not in the
-    payload - that comes from Wikidata's P166/P1411 statements, which land in the same table
-    under source='wikidata'.
+    Only the headline award and totals are recoverable; per-category detail comes from Wikidata.
     """
     text = (blurb or "").strip()
     if not text:
@@ -480,11 +336,7 @@ def _money(value: Any) -> int | None:
     return int(digits) if digits else None
 
 
-# OMDb's `Ratings` block, and the source each score is really about. Lifted out of the corpus's
-# if/elif chain (`mdc/parse/titles.py:335-350`) into data because the interesting fact is the
-# third column: these rows are NOT filed under `omdb`. OMDb is the messenger, and a
-# `platform_rating` row saying `omdb` held IMDb's 8.1 would make OMDb look like a rating
-# platform the household could weigh. `ParsedTitle.row_sources` exists for this.
+# The third column is the source each score is really about: OMDb only relays them.
 _OMDB_RATINGS: tuple[tuple[str, str, str, float, str], ...] = (
     ("Internet Movie Database", r"([\d.]+)/10", "imdb", 10.0, "user_score"),
     ("Rotten Tomatoes", r"(\d+)%", "rottentomatoes", 100.0, "critic_score"),
@@ -493,13 +345,7 @@ _OMDB_RATINGS: tuple[tuple[str, str, str, float, str], ...] = (
 
 
 def parse_omdb(data: Any) -> ParsedTitle:
-    """OMDb's `?i=tt...` detail blob: IMDb's fields, flattened into strings.
-
-    Everything here is prose that was a field once, so almost every value needs a regex to become
-    one again -- `Runtime` is "116 min", `Year` is "2016" or "2016-2019", `BoxOffice` is
-    "$100,546,139". Nothing else in the crawl needs this much repair, which is why `_omdb_val`,
-    `_omdb_languages` and `_money` exist and are used nowhere else.
-    """
+    """OMDb's `?i=tt...` detail blob: IMDb's fields, flattened into strings needing regex repair."""
     data = _payload(data)
     if data is None:
         return ParsedTitle(source="omdb")
@@ -552,9 +398,7 @@ def parse_omdb(data: Any) -> ParsedTitle:
     for field_name, department, job, role in (("Director", "Directing", "Director", "director"),
                                               ("Writer", "Writing", "Writer", "writer")):
         for name in (_omdb_val(data.get(field_name)) or "").split(","):
-            # OMDb parenthesises the contribution -- "Eric Heisserer (screenplay)" -- and that
-            # belongs in `job`, which this source does not carry at that resolution, rather than
-            # in a person's name.
+            # The parenthesised contribution belongs in `job`, not the name.
             name = re.sub(r"\s*\([^)]*\)", "", name).strip()
             if not name:
                 continue
@@ -578,8 +422,7 @@ def parse_omdb(data: Any) -> ParsedTitle:
                 rows.emit("platform_rating", source=source, metric=metric,
                           value=float(found.group(1)), scale=scale, votes=votes)
 
-    # The free-text blurb itself is kept in title_meta.extra above, so nothing is lost by storing
-    # only the structured reading of it here.
+    # The blurb itself is kept in `title_meta.extra`.
     for name, category, result, count in parse_omdb_awards(_omdb_val(data.get("Awards"))):
         rows.emit("award", award=name, category=category, year=None, result=result,
                   person=None, count=count)
@@ -587,20 +430,11 @@ def parse_omdb(data: Any) -> ParsedTitle:
     return rows.done()
 
 
-# ---------------------------------------------------------------------------
 # Jellyfin  (owned-library presentation signals)
-# ---------------------------------------------------------------------------
 
 
 def parse_jellyfin_item(item: Any) -> ParsedTitle:
-    """The household's own copy: codecs, channels, subtitle languages, the file.
-
-    Not one of §8 stage 2's eight sources and not fetched by stage 3 either -- the item comes
-    from §7's sweep, which is M5.2's -- but the bundle ships `jellyfin` rows in `title_meta` and
-    `SOURCE_PRIORITY` orders them sixth, so the re-parse path owes it a reader. The presentation
-    block is the whole reason this source exists: it is the only one that knows whether tonight's
-    copy is the 4K HDR one or a 720p rip.
-    """
+    """The household's own copy: codecs, channels, subtitle languages, the file."""
     item = _payload(item)
     if item is None:
         return ParsedTitle(source="jellyfin")
@@ -670,9 +504,7 @@ def parse_jellyfin_item(item: Any) -> ParsedTitle:
         if not keep_credit(role, order):
             continue
         providers = {k.lower(): v for k, v in (person.get("ProviderIds") or {}).items()}
-        # Jellyfin's `Role` is the character for an actor and the JOB for crew, so passing it
-        # through unconditionally filed "Director" and "Screenplay" as character names on 2,029
-        # credits.
+        # Jellyfin's `Role` is the job for crew, so only actors get it as a character.
         rows.emit(
             "credit",
             person={"name": person.get("Name") or "?", "imdb_id": providers.get("imdb")},
@@ -684,9 +516,7 @@ def parse_jellyfin_item(item: Any) -> ParsedTitle:
     return rows.done()
 
 
-# ---------------------------------------------------------------------------
 # Trakt / TVmaze
-# ---------------------------------------------------------------------------
 
 
 def parse_trakt_summary(data: Any) -> ParsedTitle:
@@ -724,12 +554,7 @@ def parse_trakt_summary(data: Any) -> ParsedTitle:
 
 
 def parse_trakt_ratings(data: Any) -> ParsedTitle:
-    """Trakt's rating histogram, one `platform_rating` row per star.
-
-    Kept as ten rows rather than one blob because the display schema's `platform_rating` is keyed
-    `(title_id, platform, metric)` (`0015_seed.sql:207-210`) and a distribution collapsed into
-    `extra` would be unreadable by the only surface that renders this table.
-    """
+    """Trakt's rating histogram, one `platform_rating` row per star."""
     rows = _Rows("trakt")
     for star, count in ((_payload(data) or {}).get("distribution") or {}).items():
         rows.emit("platform_rating", metric=f"dist_{star}", value=float(count), scale=None,
@@ -790,18 +615,10 @@ def parse_tvmaze(data: Any) -> ParsedTitle:
     return rows.done()
 
 
-# ---------------------------------------------------------------------------
 # Wikipedia / Wikidata
-# ---------------------------------------------------------------------------
 
-# `mdc/sources/wikipedia.py:22` and `:164-183`, moved here rather than into `spielplan/sources/`.
-# It is a pure function over the plaintext extract -- no request shape, no URL, no key -- and the
-# only two callers are parsers, one in this module and one in `derive/reviews.py`. Filed with the
-# source in the corpus because that is where the `action=query&prop=extracts` request lives; here
-# the fetcher for it is an adapter the `sources` package owns and this is the reading of what it
-# stored. One definition, because `parse_wikipedia` and `parse_wikipedia_reception` MUST agree
-# about where a section starts: they divide one article between them and a disagreement stores
-# the reception prose twice, once as craft material and once as a review.
+# Shared by `parse_wikipedia` and `parse_wikipedia_reception`, which must agree on section starts
+# or the reception prose is stored twice.
 SECTION_RE = re.compile(r"^==+\s*(.+?)\s*==+\s*$", re.M)
 
 
@@ -826,11 +643,7 @@ def split_sections(text: str) -> dict[str, str]:
     return out
 
 
-# Sections worth keeping in full. These are where Wikipedia describes HOW A FILM WAS MADE - which
-# is the only free, hallucination-resistant source of `craft` material (§3.3.1: long takes,
-# practical effects, painterly, sound-design-forward) and of `theme` material stated by someone
-# other than the marketing department. Reception sections are handled separately as critic
-# reviews and are excluded here to avoid storing them twice.
+# Sections where Wikipedia describes how a film was made; Reception is handled as critic reviews.
 KEEP_SECTIONS = {
     "themes", "analysis", "interpretation", "style", "themes and analysis",
     "themes and interpretation", "production", "development", "writing",
@@ -847,9 +660,7 @@ SECTION_CHAR_CAP = 12000
 def parse_wikipedia(data: Any) -> ParsedTitle:
     """The article's lead, its plot, and a capped budget of craft prose.
 
-    The cap is a budget across all kept sections rather than a limit per section, so a film with
-    one long Production section and a film with eight short ones cost the same. It is spent in
-    the order `split_sections` returns, which is the article's own order.
+    The cap is a budget across all kept sections, spent in article order.
     """
     pages = ((_payload(data) or {}).get("query") or {}).get("pages") or []
     if not pages:
@@ -894,21 +705,8 @@ def parse_wikipedia(data: Any) -> ParsedTitle:
 def parse_mpst(data: Any) -> ParsedTitle:
     """MPST synopsis and tags.
 
-    The synopsis is the longest plot text in the corpus - a median ~4,900 chars against
-    Wikipedia's ~2,900 - because it is a full retelling rather than a lead paragraph, and it
-    gives away the ending either way. It lands in `plot_full` under its own source, next to the
-    others, unreconciled, and `SOURCE_PRIORITY` puts mpst LAST for exactly that reason
-    (`importer/meta.py:33-37`: "a poor default and a good last resort").
-
-    The tags come from a closed 71-term vocabulary, so unlike TMDB's open keyword list or
-    MovieLens' inferred genome they are a controlled label set. `extra` records which of the 71
-    were applied. They are crowd annotations, not expert ones, so treat them as a precision
-    check, never as negatives.
-
-    Nothing in this app fetches MPST -- it is a bulk dataset the corpus joined once, not one of
-    §8 stage 2's eight sources -- and this parser exists for the reason the module header gives
-    for `parse_letterboxd_page`: the shipped bundle carries `mpst` rows and a re-parse path that
-    cannot read them is a hole.
+    The synopsis is the longest plot text and spoils the ending, so `SOURCE_PRIORITY` puts mpst last.
+    Tags are a closed 71-term crowd vocabulary: a precision check, never negatives.
     """
     data = _payload(data)
     if data is None:
@@ -933,11 +731,7 @@ def parse_mpst(data: Any) -> ParsedTitle:
     return rows.done()
 
 
-# Wikidata models writing duos, sibling teams and bands as entities in their own right, so a
-# P57/P58 statement can point at "the Wachowskis" rather than at a person. Stored as people they
-# become graph nodes sitting BESIDE the humans they are made of - Fargo's editors read
-# ['Coen brothers', 'Ethan Coen', 'Joel Coen'], and "Ben Davis and Camille Griffin" holds 19 dp
-# credits next to Ben Davis's own.
+# Wikidata models duos and teams as entities; stored as people they sit beside their members.
 _COLLECTIVE = re.compile(r"(\s(and|&)\s|/|\b(brothers|sisters|bros|brothers\.|team)\b)", re.I)
 
 
@@ -948,10 +742,8 @@ def is_collective(name: str | None) -> bool:
         return False
     if _COLLECTIVE.search(n):
         return True
-    # "Zucker, Abrahams and Zucker" style. Hyphenated pen-names for pairs ("Salim-Javed",
-    # "Boileau-Narcejac") are deliberately NOT caught: real surnames and given names hyphenate
-    # too (Hou Hsiao-hsien, Jean-Pierre Jeunet), and a rule that fires on those would cost far
-    # more than it saves.
+    # "Zucker, Abrahams and Zucker" style. Hyphenated pair pen-names are deliberately not caught:
+    # real names hyphenate too.
     return n.count(",") >= 2
 
 
@@ -970,16 +762,8 @@ def _wd_value(statement: Mapping[str, Any]) -> Any:
 def parse_wikidata_entity(entity: Any, labels: Mapping[str, str] | None = None) -> ParsedTitle:
     """A `wbgetentities` entity plus the label lookup its Q-ids resolve through.
 
-    NOTHING IN THIS APP FETCHES THIS DOCUMENT. Decision 374 ports only `wikidata:resolve` of the
-    corpus's three Wikidata handlers, because `wikidata:entity` and `wikidata:labels` are batch
-    kinds -- shapes of a wholesale crawl over nineteen thousand titles -- and §8's unit is one
-    title. The parser is still owed: the bundle ships `wikidata` rows in `title_meta`, `credit`
-    and `award`, so a re-parse path without it cannot re-derive a title the corpus enriched. A
-    reader who wants the data crawled again is looking at a decision, not a missing function.
-
-    `labels` is separate because Wikidata's entity holds Q-ids and not names: P57 says the
-    director is Q193570, and the label lookup is the batch the corpus resolved separately. An
-    absent label is a credit NOT emitted rather than a credit named "Q193570".
+    Nothing fetches this document (decision 374); the bundle ships its rows. An absent label emits no
+    credit rather than one named "Q193570".
     """
     entity = _payload(entity)
     if entity is None:
@@ -991,12 +775,8 @@ def parse_wikidata_entity(entity: Any, labels: Mapping[str, str] | None = None) 
     def qids(prop: str, *, credits: bool = False) -> list[str]:
         """Q-ids from a property's statements.
 
-        With `credits=True`, honour the two things Wikidata uses to say "not really": a
-        DEPRECATED rank, and qualifiers that scope the claim to something other than the work
-        itself. Ignoring them put Sam Mendes and Danny Boyle on *No Time to Die* (both explicitly
-        deprecated), Danny Boyle on *28 Weeks Later*, the Spanish dubbing director on *The Jungle
-        Book*, and John Lasseter on *Toy Story 4* via an end-time qualifier - 142 deprecated
-        statements over six credit properties.
+        With `credits=True`, skips DEPRECATED ranks and qualifiers scoping the claim elsewhere (142
+        deprecated statements put wrong directors on films).
         """
         out = []
         for statement in claims.get(prop, []):
@@ -1013,11 +793,7 @@ def parse_wikidata_entity(entity: Any, labels: Mapping[str, str] | None = None) 
         return out
 
     def qids_with_year(prop: str) -> list[tuple[str, int | None]]:
-        """Q-ids plus the statement's "point in time" qualifier (P585).
-
-        That qualifier is what makes an award row answerable by year - the mainsnak alone says
-        only THAT the film won something.
-        """
+        """Q-ids plus the statement's "point in time" qualifier (P585), which dates an award."""
         out: list[tuple[str, int | None]] = []
         for statement in claims.get(prop, []):
             value = _wd_value(statement)
@@ -1094,9 +870,7 @@ def parse_wikidata_entity(entity: Any, labels: Mapping[str, str] | None = None) 
     return rows.done()
 
 
-# ---------------------------------------------------------------------------
 # Score-only pages (Letterboxd / RT / Metacritic)
-# ---------------------------------------------------------------------------
 
 
 def _as_int(value: Any) -> int | None:
@@ -1111,12 +885,7 @@ def _as_int(value: Any) -> int | None:
 def parse_letterboxd_page(content: bytes) -> ParsedTitle:
     """Letterboxd's film page: an aggregate rating out of 5, and its genres.
 
-    DECISION 374 DOES NOT PORT THE CRAWLER. §8 stage 2 names eight sources and Letterboxd is not
-    among them, so `mdc/sources/letterboxd.py` stays in the corpus and nothing in this app fetches
-    this page. `title.letterboxd_slug` keeps being written -- by `wikidata:resolve`, which yields
-    it -- so the column is filled and the source is not crawled. The parser is here because the
-    bundle ships `letterboxd` rows and `SOURCE_PRIORITY` orders them; adding an adapter to match
-    would be reversing a decision, not filling a gap.
+    Nothing fetches this page (decision 374); the bundle ships its rows.
     """
     rows = _Rows("letterboxd")
     for blob in ld_json(content):
@@ -1146,14 +915,8 @@ _RT_REVIEW_LINK = re.compile(
 def parse_rt_page(content: bytes) -> ParsedTitle:
     """RT renders the scorecard server-side as custom elements.
 
-    Scoped to the `<media-scorecard>` element deliberately: the same `slot="critics-score"` markup
-    is reused by the related-titles carousel further down the page, so an unscoped scan picks up a
-    neighbouring film's percentage instead of this one's.
-
-    Historically the scores lived in an embedded JSON blob; that shape is still handled because
-    older captures in the raw store use it - which is the raw store earning its keep. A source
-    that changed its markup twice is a source whose every past capture is still parseable by
-    whichever branch fits, without a request.
+    Scoped to `<media-scorecard>`: the related-titles carousel reuses the same markup. The older
+    embedded-JSON shape is still read for old captures.
     """
     rows = _Rows("rottentomatoes")
     text = content.decode("utf-8", "replace")
@@ -1217,16 +980,8 @@ _MC_TITLE_SCORE = re.compile(
 def parse_metacritic_page(content: bytes) -> ParsedTitle:
     """Metacritic's title page: the Metascore and the user score, both from an attribute.
 
-    The scores are read off the `title=` attribute rather than the element text because the
-    attribute states its own scale -- "Metascore 81 out of 100", "User score 8.2 out of 10" --
-    and the two scales differ by a factor of ten. A reader taking the digits from the element
-    would have to know which one it was looking at, and the page's class names are Tailwind and
-    change constantly.
-
-    THE FIRST OCCURRENCE OF EACH IS THE PAGE'S OWN, and everything after it belongs to the
-    "best movies" carousel further down: a real capture of this page carries forty-two matches,
-    of which two are about this film. That is the same class of defect `_RT_SCORECARD` scopes
-    away, one page over, caught by ordering instead of by scope.
+    The `title=` attribute states its scale. Only the first occurrence of each is this film's;
+    the rest belong to a carousel.
     """
     rows = _Rows("metacritic")
     text = content.decode("utf-8", "replace")
@@ -1260,18 +1015,11 @@ def parse_metacritic_page(content: bytes) -> ParsedTitle:
     return rows.done()
 
 
-# ---------------------------------------------------------------------------
 # Did the slug land on the right film?
-# ---------------------------------------------------------------------------
 
 
 def _ld_year(content: bytes, *, fields: tuple[str, ...]) -> int | None:
-    """Release year from a page's schema.org block, if it states one.
-
-    Both RT and Metacritic embed a `Movie`/`TVSeries` node describing THE PAGE'S OWN TITLE, which
-    is the only thing on either page that can settle whether a guessed slug landed on the right
-    film.
-    """
+    """Release year from a page's schema.org block describing the page's own title, if it states one."""
     for blob in ld_json(content):
         for item in (blob if isinstance(blob, list) else [blob]):
             if not isinstance(item, Mapping):
@@ -1297,9 +1045,7 @@ def rt_page_year(content: bytes) -> int | None:
     year = _ld_year(content, fields=("dateCreated", "datePublished"))
     if year:
         return year
-    # RT only disambiguates in the page title when it has to - "Alpha (2026)" exists because
-    # "Alpha" is already taken - which is exactly the case a guessed slug gets wrong, so it is
-    # worth reading.
+    # RT only puts the year in the title when disambiguating, which is exactly the risky case.
     match = _RT_TITLE_YEAR.search(content)
     return int(match.group(1)) if match else None
 
@@ -1322,17 +1068,8 @@ def page_people(content: bytes) -> set[str]:
     return out
 
 
-# A page's stated release date and our title's year routinely differ by a year or two - festival
-# vs general release, US vs original market - and by much more for a restoration: Metacritic
-# dates `movie/black-orpheus` 2006, the Criterion re-release of a 1959 film. So the year alone
-# cannot decide.
-#
-# THE TOLERANCE IS TWO YEARS AND IS PORTED EXACTLY. Widening it re-admits the collision it
-# exists to catch: `movie/alpha` is the 2018 film and there is a 2026 one, eight years apart, but
-# same-name pairs two and three years apart are ordinary. Narrowing it to zero refuses a film
-# whose festival premiere and general release straddle a new year, which is a large minority of
-# everything a household acquires in January. The corpus measured both failures on real pages and
-# this is where it landed; a change here needs the same measurement, not an opinion.
+# Festival vs general release and restorations shift years. Ported exactly: wider re-admits
+# same-name collisions, zero refuses January releases. Change only with a new measurement.
 PAGE_YEAR_TOLERANCE = 2
 
 
@@ -1340,28 +1077,9 @@ def page_belongs_to_title(content: bytes, *, year: int | None, people: set[str],
                           mode: str = "metacritic", people_decide: bool = True) -> bool:
     """Is this scraped page really about the title we asked for?
 
-    A slug guessed from the title cannot tell two films of the same name apart, and the site
-    keeps whichever one it has: `movie/alpha` is the 2018 film, not the 2026 one, and every
-    review on it would otherwise be written against the wrong `title_id` - with text that
-    discusses a different film entirely, which no dedup or length filter can catch. §8 stage 7's
-    quote verification cannot catch it either, and that is the reason this check is not optional
-    here: a quote lifted from the wrong film's pack IS a genuine substring of that pack, so the
-    verifier passes it and the household is shown a sentence about another film.
-
-    It is the scraped-source twin of the refusal `connectors/resolve.py:145-179` makes at the
-    Jellyfin end, and for the same stated reason - a wrong match is worse than no match, because
-    nothing downstream can tell.
-
-    Two independent signals, and a shared cast is much the stronger one. The year alone cannot
-    decide: it clears a same-name, same-year collision (Metacritic's `tv/heartland` is the
-    American 2007 series, not the Canadian one) and it condemns legitimate restorations
-    (`movie/black-orpheus` is dated 2006, the re-release of a 1959 film).
-
-    `people_decide` says how much a disjoint cast is worth on its own, and that is set by what
-    the page carries. A Metacritic page brings REVIEW TEXT, so a wrong one poisons the corpus and
-    a disjoint cast is enough to refuse it. A Rotten Tomatoes page brings only two percentages,
-    while its cast list is the English dub for every anime series we hold - so there either
-    signal may vouch for the page, and only a page that fails both is dropped.
+    A wrong page's quotes pass §8 stage 7's verifier, so this check is not optional. A shared cast is
+    the stronger signal; `people_decide` sets whether a disjoint cast alone refuses (Metacritic) or
+    either signal may vouch (RT, whose casts are English dubs).
     """
     year_of = metacritic_page_year if mode == "metacritic" else rt_page_year
     theirs = page_people(content)
@@ -1378,20 +1096,10 @@ def page_belongs_to_title(content: bytes, *, year: int | None, people: set[str],
     return not people_known
 
 
-# ---------------------------------------------------------------------------
 # dispatch
-# ---------------------------------------------------------------------------
 
-# `(source, kind prefix)` -> the parser for it, and whether the parser wants decoded JSON. The
-# kinds are the corpus's raw-document kinds (`mdc/sources/*.py`), which are what M5.1's raw store
-# records verbatim, so a document stored by an adapter routes here on the two columns the store
-# already carries (`entity_key` aside) and no third vocabulary is invented.
-# THE THIRD COLUMN IS THE `source` THE ROWS ARE FILED UNDER, and it is not always the first.
-# The raw store records what was crawled (`mpst_bulk`) and `title_meta` records who said it
-# (`mpst`), and they differ for exactly one entry - which is enough to need the column, because
-# decision 375's delete scope is the row source. A parse that returns ZERO rows still has to
-# delete last run's rows for the source it was about, and `ParsedTitle.row_sources` is empty
-# precisely then, so the scope has to be knowable without a successful parse.
+# `(source, kind prefix)` -> (parser, wants JSON, row source). The row source can differ from the
+# store source (`mpst_bulk` -> `mpst`) and must be known even when a parse yields nothing.
 _JSON_PARSERS: dict[tuple[str, str], tuple[Any, str]] = {
     ("tmdb", "movie_detail"): (parse_tmdb_detail, "tmdb"),
     ("tmdb", "tv_detail"): (parse_tmdb_detail, "tmdb"),
@@ -1414,22 +1122,8 @@ _BYTE_PARSERS: dict[tuple[str, str], tuple[Any, str]] = {
 def parse_document(source: str, kind: str, content: bytes) -> ParsedTitle:
     """One raw document to its rows, and NEVER an exception.
 
-    `mdc/parse/reviews.py:459-485` is the same dispatch with the same blanket `except`, and the
-    argument for it is in that module's header: "Each source yields whatever it can rather than
-    failing the document. A site that changes its markup costs a parser fix and a rebuild, never
-    a re-crawl." Decision 334 is this app's version -- every source but `tmdb:detail` is
-    best-effort and its failure is a note on the job, not a park -- and a parser that raised on
-    changed markup would convert that note into a failed stage for a document already in the raw
-    store, which no retry can improve until someone edits this file.
-
-    THE SWALLOW IS BOUNDED AND VISIBLE, which is what keeps it from hiding a bug in this module:
-    it returns an EMPTY `ParsedTitle` carrying the source, so the derive can see that a document
-    it holds produced nothing and say so on the board. An unknown `(source, kind)` returns the
-    same empty result rather than raising, because the raw store is append-only and holds kinds
-    from crawls this version of the parser predates.
-
-    `kind` is matched on its prefix before the colon: the store records `page:main` and
-    `reviews:critics`, and only the part before the colon chooses a parser.
+    Changed markup costs a parser fix, never a failed stage. Failures and unknown kinds return an empty
+    `ParsedTitle` carrying the source, so the derive can report it. `kind` matches on its prefix.
     """
     head = kind.split(":", 1)[0]
     entry = _BYTE_PARSERS.get((source, head))
@@ -1450,12 +1144,7 @@ def parse_document(source: str, kind: str, content: bytes) -> ParsedTitle:
 
 
 def parsed_sources() -> Mapping[tuple[str, str], str]:
-    """`(store source, kind prefix)` -> the `source` its rows are filed under.
-
-    The derive's map from a `raw_document` row to a delete scope, and this module's own answer to
-    "which documents can I read at all". Returned as a copy: the registry is not a thing a caller
-    may add to, because a parser it did not import would not exist.
-    """
+    """`(store source, kind prefix)` -> the `source` its rows are filed under. Returns a copy."""
     return {**_JSON_PARSERS_LABELS, **_BYTE_PARSERS_LABELS}
 
 

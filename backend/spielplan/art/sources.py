@@ -1,11 +1,6 @@
-"""Where a title's poster may come from, read once per request. Spec v2.1 §6.8, §7.1, §8 (the
-household's Jellyfin is exempt from politeness); decisions 483 and 484.
+"""Where a title's poster may come from, in decision 483's order.
 
-The order is decision 483's: the household's own Jellyfin first, for a title it holds, because it
-is the art the household's own server shows beside the same file; then `title.poster_path` when
-`hosts.servable` passes it, at TMDB's w342 rather than the w500 the corpus stored; then the
-poster the worker's TMDB lookup found for a title that had neither (decision 484). A title with no
-candidate at all is the tinted 2:3 panel, which §6.8 keeps as a designed state.
+Household Jellyfin first, then a servable `poster_path` at w342, then decision 484's lookup.
 """
 
 from __future__ import annotations
@@ -20,7 +15,7 @@ JELLYFIN = "jellyfin"
 POSTER_PATH = "poster_path"
 LOOKUP = "lookup"
 
-# decision 484's lookup states, as `art_lookup.outcome` spells them (0034_art_lookup.sql).
+# `art_lookup.outcome` values.
 FOUND = "found"
 NONE = "none"
 FAILED = "failed"
@@ -29,8 +24,7 @@ FAILED = "failed"
 @dataclass(frozen=True)
 class Candidate:
     source: str
-    # What identifies this source's answer: the Jellyfin item for a Jellyfin candidate, the URL
-    # for the other two. The cache compares these and nothing else (see `art/cache.py`).
+    # The cache compares these keys and nothing else.
     key: str
     url: str | None = None
     jellyfin_id: str | None = None
@@ -65,19 +59,14 @@ class PosterRow:
 
 
 def servable_prefixes() -> list[str]:
-    """`LIKE` patterns for the allow-list, for a query that has to pre-filter on the server. The
-    Python test is still applied to every row it returns; this only keeps the scan short."""
+    """`LIKE` pre-filter for the allow-list; `servable` is still applied to every row."""
     return [f"https://{host}/%" for host in SERVABLE_HOSTS]
 
 
 async def read(conn: asyncpg.Connection, title_id: int) -> PosterRow | None:
-    """The title's sources, and a lookup filed for it when it has no servable poster of its own.
+    """The title's sources; files a lookup when it has no servable poster of its own.
 
-    The one write a poster view makes, and it is a request rather than a fetch: §1 puts
-    acquisition in the worker and decision 340 gives a host one bucket, so the web process never
-    asks TMDB's API itself (decision 484) - it files the title, and `art-lookup` asks. `ON
-    CONFLICT DO NOTHING`, so a title viewed a hundred times is filed once. A title with neither a
-    TMDB nor an IMDb id is not filed: there is nothing to look it up by.
+    The web process never asks TMDB itself (decision 484). `ON CONFLICT DO NOTHING` files a title once.
     """
     row = await conn.fetchrow(
         """

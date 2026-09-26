@@ -1,23 +1,6 @@
-"""The worker's TMDB lookup for a title with no servable poster. Spec v2.1 §1 (acquisition is the
-worker's), §6.8, §8's politeness clause (decision 340); decision 484.
+"""The worker's TMDB lookup for a title with no servable poster (decision 484).
 
-The seed corpus fetched TMDB's detail for about half its titles, and §8 stage 2 runs for acquired
-titles only, so a warm seed title Rate serves every week - The Village, Outbreak, Starman - can
-carry no poster for the life of the install. Every one of them has a `tmdb_id` or an `imdb_id`,
-and TMDB answers either: `/3/{movie|tv}/{tmdb_id}` when the id is known, chosen by `title.kind`
-because §4.1 rule 6 records movie/series pairs sharing one; otherwise `/3/find/{imdb_id}`, taking
-the result list that matches `kind`.
-
-WHAT THIS WRITES IS `art_lookup` AND NOTHING ELSE. Not `title.poster_path` (decision 372 keeps
-card fields as §8 stage 3's), not `tmdb_id` (the stage-2 adapter's `_find` would; this is not
-stage 2 and records no identity), not the raw store. The answer is a URL the art route may serve,
-kept beside the title and droppable, so decisions 162 and 372 stand exactly as they were.
-
-IN THE WORKER AND ONLY THERE. The web process files a row and never asks: `api.themoviedb.org` is
-paced by the worker's drains at the rate `acquire/hosts.py` declares, and a second process asking
-the same host would be a second bucket for it. `art-lookup` runs inside the worker's sequential
-tick, so it never overlaps a drain and the host sees one bucket whichever of the two is asking,
-persisted to `fetch_host_state` like any drain's.
+Writes `art_lookup` only. Worker-only, so `api.themoviedb.org` sees one token bucket (§8).
 """
 
 from __future__ import annotations
@@ -40,25 +23,16 @@ log = logging.getLogger("spielplan.art.lookup")
 API = "https://api.themoviedb.org/3"
 IMAGE = "https://image.tmdb.org/t/p/w342"
 
-# One run's reach. At the declared 18 rps a batch this size is a quarter of a minute of pacing and
-# well inside the job's budget, and at a half-hourly cadence the seed's ~9,200 posterless titles
-# are asked about inside a day - the ones a member has viewed first, then the placed ones Rate
-# will serve, warm before cold.
+# At 18 rps a batch is ~15 s of pacing.
 BATCH = 300
 
-# Asked again after these, decision 484's numbers: TMDB holding no poster is an answer that can
-# change (an image is added), a host that did not answer is not an answer at all.
+# Decision 484's retry intervals.
 NONE_AFTER = timedelta(days=30)
 FAILED_AFTER = timedelta(days=1)
 
 
 async def _file_placed(conn: asyncpg.Connection, room: int) -> int:
-    """File placed titles with no servable poster that nobody has viewed yet, warm first.
-
-    The art route files what a member looks at; this files what Rate is about to show them, so
-    its cards have art before the first view rather than after it. Pre-filtered in SQL on the
-    allow-list's own hosts (`sources.servable_prefixes`, one list), then held to `servable`.
-    """
+    """File placed, never-viewed titles with no servable poster, warm first."""
     if room <= 0:
         return 0
     rows = await conn.fetch(
@@ -110,9 +84,7 @@ async def ask(
 ) -> tuple[str, str | None, str]:
     """`(outcome, poster_url, note)` for one title. Raises `HostPaused` and a refused key.
 
-    By `tmdb_id` first, and by `imdb_id` when that id names nothing of this title's kind: a 404
-    there is the movie/series duplicate §4.1 rule 6 records, and the IMDb id is a second, separate
-    question TMDB can still answer.
+    Falls back to `imdb_id` when `tmdb_id` 404s for this kind (§4.1 rule 6 movie/series pairs).
     """
     headers, params = auth
     kind = "movie" if row["kind"] == "movie" else "tv"
@@ -153,12 +125,12 @@ async def drain(
     limit: int = BATCH,
     transport: httpx.AsyncBaseTransport | None = None,
 ) -> dict[str, object] | None:
-    """One batch of owed lookups, answered and recorded. None when there was nothing to do."""
+    """One batch of owed lookups; None when there was nothing to do."""
     if not settings().art_egress:
         return None
     auth = await credentials.tmdb_auth(conn)
     if auth is None:
-        # Decision 484: no key, no lookup - and nothing filed is lost, it waits for one.
+        # No key, no lookup; filed rows wait for one.
         return None
     owed = await _owed(conn, limit)
     filed = await _file_placed(conn, limit - len(owed))
@@ -178,8 +150,7 @@ async def drain(
                 break
             except FetchError as exc:
                 if exc.status in (401, 403):
-                    # A key TMDB refuses refuses every title alike, so nothing is recorded against
-                    # them and the batch stops: rotating the key is the repair, not a retry.
+                    # A refused key refuses every title: stop the batch, record nothing.
                     stopped = f"TMDB refused the configured key (HTTP {exc.status})"
                     log.warning("art lookup stopped: %s", stopped)
                     break

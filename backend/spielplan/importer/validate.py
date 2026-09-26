@@ -1,9 +1,7 @@
 """Bundle validation — every §4.1 landmine rule, checked before anything is written.
 
-Each check names the rule it enforces and the measured fact behind it, because the numbers are
-the reason the rule exists. A check that finds the *expected* violation (duplicate tmdb_ids,
-shared (title,term) pairs across the two DNA tiers) records a `note`, not a failure: those
-duplicates are legitimate and a bundle without them is the suspicious one.
+Expected violations (duplicate tmdb_ids, shared pairs across the DNA tiers) are notes, not
+failures: a bundle without them is the suspicious one. Every refusal is a report line, never raised.
 """
 
 from __future__ import annotations
@@ -24,57 +22,29 @@ from spielplan.importer.report import ImportReport
 # the dataset arrays. Never renumber."
 FROZEN_RATING_SOURCE_IDS = {1, 2, 3, 4, 7, 11, 21, 23, 26, 28, 31}
 
-# §4.1 rule 7: "Deny-list %_bak% / %_good tables and every stale JSONL in data/export/ —
-# export reads live tables only (the JSONLs predate the adjudication repairs)."
-#
-# The two wildcards are anchored the way the rule writes them: `%_bak%` is a substring and
-# `%_good` ENDS the name. Both were matched as substrings, so a future `title_goodness` — not a
-# stale copy of anything, just the next plausible table the corpus adds — would have refused the
-# whole first boot under a rule about pre-adjudication leftovers. [M4.14 finding 2.22, cs-48]
+# §4.1 rule 7, anchored as written: `%_bak%` is a substring and `%_good` ends the name.
 
 
 def denied_tables(tables: Iterable[str]) -> list[str]:
     """The tables §4.1 rule 7 denies, sorted, so the report can name them and not only count."""
     return sorted(t for t in tables if t.endswith("_good") or "_bak" in t)
 
-# Measured expectations from the spec. Present as *notes* with the observed value next to the
-# expected one, so a re-import diff shows drift instead of hiding it.
-#
-# Rule 8's row count is no longer one of them. Rule 8 as it read until M4.16 named "the 73
-# known-mojibake review rows", and `mojibake_review_rows: 73` sat in this dict as a fourth
-# expectation that nothing read and nothing could check: `dna_shared_pairs` is the only key this
-# module ever prints, and no artifact in this tree enumerates those rows. The amended clause is a
-# heuristic whose census is 86 marked rows and 0 repairs over 485,602, which `importer/reviews.py`
-# reports as a warning; a second place to read 73 from was only ever a second place to believe it.
-# [§4.1 rule 8; M4.16 cycle 4, M416-C4-SPEC-03]
+# Measured expectations, reported as notes beside the observed value so drift shows.
 EXPECTED = {
     "dna_shared_pairs": 14_181,      # rule 1
     "dna_extracted_titles": 2_016,   # rule 1
     "dna_projected_titles": 11_324,  # rule 1
 }
 
-# decision 162: "the model bundle carries an identity column row-aligned to its title ids so a
-# corpus-side re-identification is caught rather than trusted." It travels in `backbone.npz`,
-# beside the ids it qualifies, because a separate file can go missing without the ids noticing.
+# Decision 162: the model bundle's identity column, row-aligned in `backbone.npz`.
 IDENTITY_ARRAY = "title_identity"
 
 # `title` reduced to what an identity token can be checked against: (kind, imdb_id, tmdb_id,
-# name). One shape whether it was read from the bundle's own spine or from the installed one,
-# because decision 162 makes the second the normal case and two shapes would drift.
+# name). One shape for the bundle's spine and the installed one.
 Spine = dict[int, tuple[str | None, str | None, int | None, str | None]]
 
-# The version string comes out of the bundle's own manifest — untrusted input that becomes a
-# directory name under /data/artifacts AND an rmtree target. Anything outside this alphabet
-# could escape the artifacts root or point the delete somewhere else entirely.
-#
-# It lives in the VALIDATOR because that is where the operator meets it. `Bundle.open` mapped an
-# unsafe token to "unknown" while `_read_bundle_identity` wrote the raw string into
-# `report.bundle_version` and failed only on absence, so `/validate` answered 200 with
-# `report.bundle_version = 'v2026/08'` beside a top-level `bundle_version: 'unknown'` — two
-# versions of one bundle on one screen — and `import_bundle` refused after the operator had
-# committed. `validate`'s own docstring is the contract ("every refusal an import can raise has
-# to be reachable here"), and `bundle.py` imports this module, so the dependency runs the legal
-# way round. [M4.14 step B7, finding 2.11]
+# The version becomes a directory name and an rmtree target under /data/artifacts, so it is
+# untrusted input. Checked here, where the operator meets it.
 _SAFE_VERSION = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 
 
@@ -85,16 +55,7 @@ def safe_version(raw: object) -> str:
 
 
 def _tables(db: sqlite3.Connection) -> set[str]:
-    """The bundle's TABLES — `type = 'table'`, the one word `load.py` reads.
-
-    It read `type IN ('table','view')` while `load.unaccounted_tables` and
-    `_account_for_shipped_tables` both read `type = 'table'`, so the two halves of §10's "counts
-    per table" enumerated different sets: a shipped view was COUNTED here and then claimed by
-    nobody on the load side, which is a hole in the exit criterion's "0 unaccounted" — the count
-    says rows arrived and no target holds them. v20260828 ships no view, so this costs nothing
-    against the artifact that exists and closes the case the next export can open.
-    [M4.14 step B9, finding 2.23]
-    """
+    """The bundle's TABLES (`type = 'table'`), the same set `load.py` accounts for."""
     return {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
 
 
@@ -121,13 +82,7 @@ def _guard(
 ) -> bool:
     """True when `table` exists with every one of `columns`; otherwise one report line naming it.
 
-    §10 promises "a migration report (counts per table, validation failures, vocabulary
-    version)" — a *list*, and a list is only enumerable if the enumeration survives the first
-    surprise. Rule 1's evidence check asked for `dna_evidence.dna_tag_id` and `dna_tag.id`,
-    neither of which any exported bundle has ever carried, so against the real artifact the
-    operator got an `OperationalError` where §10 promises a page and every rule after it went
-    unreached. Every query below therefore names its table and its columns here first: a schema
-    this app does not expect costs one line per surprise instead of the whole report.
+    An unexpected schema costs one line per surprise instead of the whole report.
     """
     if table not in schema:
         report.fail(
@@ -153,27 +108,8 @@ def _read_tsv(
 ) -> list[dict[str, str]] | None:
     """One reader for every curated TSV in the bundle, or one report line saying why not.
 
-    THE CONTRACT: this is the only opener of a curated TSV in the importer.
-    `bundle.validate_id_partition` reads `corrections_v1.tsv` and
-    `dna_vocab/<version>/adjudications_v1.tsv` through it, and so do `dna.parse_corrections`,
-    `dna._load_aliases` and `dna.load_adjudications` — five call sites, one handler, because
-    the handler is the whole point and five copies of it is five chances to omit one. Both
-    halves of that sentence were false until M4.14 cycle 1: the loader had been renamed public
-    by this milestone's own step C2 and the name here still pointed at nothing, and
-    `validate_id_partition` was opening both ledgers itself. [M4.14 cycle 1, M414-REV-247-05]
-
-    §10 promises the operator a report and `/validate`'s own docstring promises it writes
-    nothing — but `validate_id_partition` opened `corrections_v1.tsv` and `adjudications_v1.tsv`
-    with `encoding="utf-8"` and no handler, so one latin-1 byte left that route as a
-    `UnicodeDecodeError` with no finding at all. These are the hand-edited ledgers (6 corrections
-    and 828 adjudications on v20260828), which makes them exactly the files a stray byte reaches.
-
-    `None` rather than an empty list on a refusal, because the two mean different things to every
-    caller: decision 247 makes a ledger that parses to nothing a refusal to REPLACE rather than
-    an instruction to delete 828 curated verdicts, and that distinction is gone once an
-    unreadable file has been flattened into "no rows". The header check is the same rule one
-    column over — a name upstream never wrote reads nothing and now says so.
-    [M4.14 step B2, finding 2.12]
+    The only opener of a curated TSV in the importer. Returns `None` on a refusal, distinct from `[]`:
+    an unreadable ledger must never read as an empty one (decision 247).
     """
     try:
         with path.open(encoding="utf-8", newline="") as fh:
@@ -195,19 +131,12 @@ def _read_tsv(
     return rows
 
 
-# BUNDLE.json cannot list its own sha256, so it is the one legitimate member of "present but
-# unlisted". Verified on both artifacts: 42 files listed in v20260828, 33 in the fixture, and in
-# each case BUNDLE.json is the only file on disk outside the map.
+# BUNDLE.json cannot list its own sha256.
 _UNLISTED_EXEMPT = "BUNDLE.json"
 
 
 def _bundle_manifest(root: Path) -> dict[str, Any] | None:
-    """`BUNDLE.json` read without a report line. ONE FILE, ONE OWNER.
-
-    `_read_bundle_identity` owns the absent/unparseable BUNDLE.json failure and states it in the
-    operator's terms. A second reader emitting a second line for the same broken file is the
-    misattribution `validate_hyperparams` refuses one file type over.
-    """
+    """`BUNDLE.json` read without a report line; `_read_bundle_identity` owns its failure."""
     path = root / _UNLISTED_EXEMPT
     if not path.is_file():
         return None
@@ -219,8 +148,7 @@ def _bundle_manifest(root: Path) -> dict[str, Any] | None:
 
 
 def _sha256(path: Path) -> str:
-    """The file's digest, read in chunks: `content.sqlite` is 374 MB and `reviews.sqlite` 416 MB,
-    and a bundle must not have to fit in memory to be checked."""
+    """The file's digest, read in chunks: a bundle must not have to fit in memory to be checked."""
     digest = hashlib.sha256()
     with path.open("rb") as fh:
         for chunk in iter(lambda: fh.read(1 << 20), b""):
@@ -231,29 +159,8 @@ def _sha256(path: Path) -> str:
 def _verify_bundle_files(root: Path, report: ImportReport) -> None:
     """Every file BUNDLE.json lists, stat'd and hashed, before a single row is written.
 
-    THE CONTRACT: `bundle.validate()` calls this FIRST — ahead of `validate_id_partition` and of
-    every content rule — because everything after it is a statement about bytes that nothing else
-    has checked. §10 puts validation before the flip so a bad bundle never becomes the active
-    one, and a `content.sqlite` truncated in transit is a bad bundle that every other rule reads
-    as a small one.
-
-    The corpus ships the evidence and nothing read it: `files` is a 42-entry map of
-    `{bytes, sha256}`, `validations` is 68 rows with an `ok` flag, `total_bytes` is
-    1,042,461,726 — and only `bundle_version`, `vocabulary_version` and `tables.title` were ever
-    looked at. Measured against v20260828: a zeroed `equating_map.json` validated clean, a
-    truncated `reviews.sqlite` validated and then died as an uncaught `sqlite3.DatabaseError`
-    inside the import transaction, and a truncated `content.sqlite` made `validate` itself a 500
-    — after which `artifact_bundle_one_seed` makes the redo impossible.
-    [M4.14 step B1, findings 2.4 and 2.5]
-
-    HASHING IS NOT OPTIONAL FOR A SEED, and it costs what it was measured to cost: 42 files,
-    1.04 GB, 0.64 s re-measured in this worktree with a warm page cache, plus about 1.0 s for the
-    two `PRAGMA quick_check`s. Seconds on the reference box's disk, not minutes — and it is a
-    once-per-import read of files the import is about to read anyway.
-
-    A note for the caller that wires this in: a bundle whose files are edited after the corpus
-    wrote BUNDLE.json IS a bundle whose inventory no longer matches, and a test fixture that
-    mutates `content.sqlite` after `make_bundle()` is in exactly that state.
+    Called first by `bundle.validate()`: every later rule assumes intact bytes, and a corrupted seed
+    is unrepeatable. ~1-2 s for 1 GB. Editing a file after `make_bundle()` breaks the inventory.
     """
     payload = _bundle_manifest(root)
     if payload is None:
@@ -275,8 +182,7 @@ def _verify_bundle_files(root: Path, report: ImportReport) -> None:
     for name in sorted(listed):
         relative = Path(name)
         if relative.is_absolute() or ".." in relative.parts:
-            # A `files` key is untrusted input that this function turns into a path — the same
-            # rule the version token is held to, one file down. [M4.14 step B1]
+            # A `files` key becomes a path, so it gets the version token's rule.
             report.fail(
                 "bundle-integrity",
                 f"BUNDLE.json lists {name!r}, which is not a path inside the bundle",
@@ -293,27 +199,8 @@ def _verify_bundle_files(root: Path, report: ImportReport) -> None:
         if not isinstance(declared_bytes, int) or not (
             isinstance(declared_hash, str) and declared_hash
         ):
-            # THE LEAF, which every level above it already guards, and the two coercions this
-            # loop made on it are two halves of one defect. `int(declared_bytes)` on a value read
-            # straight out of BUNDLE.json raised ValueError out of `validate()`,
-            # `validate_for_install` and both routes - none of which has an `except`, and none of
-            # `app.py`'s nine registered handlers names ValueError or TypeError - so a manifest
-            # this app cannot parse reached the operator as "Internal Server Error", verbatim the
-            # class the row `data-rules-validation-reports-rather-than-raises` calls "never
-            # exceptions". And `bool(declared_hash)` made the digest OPTIONAL: an entry declaring
-            # none took the success branch below, counted itself verified, and the note at the
-            # foot of this function then asserted that every listed file had been sha256-verified
-            # when none of them had. Measured against the fixture under a size-only
-            # `{name: bytes}` inventory: a zeroed `artifacts/equating_map.json` - finding 2.4's
-            # own example - validated `ok=True` behind that affirming sentence.
-            #
-            # Both are refusals rather than tolerances, because the exit criterion is that every
-            # file listed in BUNDLE.json is sha256-verified before a single row is written, and
-            # an inventory that declares nothing to check means the tree on disk is not the tree
-            # the corpus inventoried - the same rule as listed-but-missing, one field further in.
-            # A digest the corpus could not compute is a bundle defect the corpus must fix, and
-            # decision 162 plus `artifact_bundle_one_seed` are what make the seed it would
-            # corrupt unrepeatable. [M4.14 cycle 4, M414-C4-REF-01 and M414-C4-REF-02]
+            # A size that is not an int or a missing digest is a refusal: the inventory must declare what
+            # to check.
             report.fail(
                 "bundle-integrity",
                 f"BUNDLE.json's inventory entry for {name} is {entry!r}, and an entry is an "
@@ -327,22 +214,7 @@ def _verify_bundle_files(root: Path, report: ImportReport) -> None:
             size = path.stat().st_size
             digest = _sha256(path)
         except OSError as exc:
-            # The readable/unreadable boundary, which is the one this loop had no branch for: a
-            # file that is ABSENT is reported two lines up, and a file that is PRESENT and cannot
-            # be opened escaped `validate()`, `validate_for_install` and both routes as an
-            # uncaught exception - `api/artifacts._open` guards `Bundle.open` alone, and
-            # `app.py`'s last-resort `OSError` handler deliberately re-raises anything that is
-            # not one of five network errnos, so EACCES on the operator's first press of Validate
-            # arrived as "Internal Server Error". That is the state the reference box produces on
-            # its own: the image runs as uid 1000, `/data/import` is a host bind mount, and a
-            # bundle copied in by root (scp, `docker cp`, an older root container's
-            # `.unpacked-*` tree) carries files this process can stat and cannot read. A listed
-            # file removed or replaced between the stat and the hash is the same frame.
-            #
-            # `_read_tsv` one screen up catches the same class for step B2's stated reason, and
-            # this is the same sentence one reader over: §10 promises a report, and the milestone
-            # thesis is that every way this importer can refuse becomes a report line.
-            # [M4.14 cycle 2, m414-c2-refusals-01, step B1]
+            # A listed file that exists but cannot be read (e.g. root-owned) is a report line, not a 500.
             report.fail(
                 "bundle-integrity",
                 f"{name} is in the bundle and cannot be read: {type(exc).__name__}: {exc}. Its "
@@ -376,9 +248,7 @@ def _verify_bundle_files(root: Path, report: ImportReport) -> None:
         and p.relative_to(root).as_posix() != _UNLISTED_EXEMPT
     )
     if unlisted:
-        # The SAME rule as listed-but-missing, and deliberately so: both mean the tree on disk is
-        # not the tree the corpus inventoried, and an extra file is the shape a half-extracted
-        # archive and a hand-edited bundle both take.
+        # Same rule as listed-but-missing: the tree is not the one the corpus inventoried.
         report.fail(
             "bundle-integrity",
             f"{len(unlisted)} file(s) in the bundle are not in BUNDLE.json's inventory: "
@@ -398,10 +268,7 @@ def _verify_bundle_files(root: Path, report: ImportReport) -> None:
             files=[m["file"] for m in mismatched], first=first,
         )
     elif not missing and not unlisted and not undeclared:
-        # `undeclared` joins the guard for the reason the sentence exists: it is the one line in
-        # this report that says the hashing happened, and on an inventory that declared no
-        # digests it printed "0 file(s) ... verified" beside 33 failures - two contradictory
-        # sentences about one bundle on one screen. [M4.14 cycle 4, M414-C4-REF-02]
+        # Only claim verification when digests were actually checked.
         report.note(
             "bundle-integrity",
             f"{verified} file(s), {checked_bytes:,} bytes: size and sha256 verified against "
@@ -417,13 +284,7 @@ def _verify_bundle_files(root: Path, report: ImportReport) -> None:
 
 
 def _report_export_validations(payload: dict[str, Any], report: ImportReport) -> None:
-    """The corpus's own export checks, which this app has never read (finding 2.4).
-
-    68 rows on v20260828, every one `ok: true` — and the corpus runs there precisely the
-    referential checks `_validate_integrity` below now runs here, then writes the verdict into a
-    list nothing opened. Both projects believed the other was checking. A failed row is a failure
-    and not a note because the exporter is saying, inside the bundle, that the bundle is wrong.
-    """
+    """The corpus's own export checks (BUNDLE.json `validations`); a failed row is a failure."""
     validations = payload.get("validations")
     if not isinstance(validations, list):
         return
@@ -446,12 +307,7 @@ def _report_export_validations(payload: dict[str, Any], report: ImportReport) ->
 def _quick_check(path: Path, report: ImportReport) -> None:
     """`PRAGMA quick_check` on a shipped SQLite file, as a report line rather than an exception.
 
-    A truncated `content.sqlite` made `validate` itself a 500 and a truncated `reviews.sqlite`
-    died inside the import transaction, because in both cases the first thing to touch the file
-    was a query that assumed it. `quick_check` and not `integrity_check`: it skips the
-    index-versus-table cross-checks, which is the expensive half, and this is a transport check
-    rather than a forensic one. Measured on v20260828: 0.57 s for the 374 MB `content.sqlite`
-    and 0.42 s for the 416 MB `reviews.sqlite`. [M4.14 step B1, finding 2.5]
+    `quick_check`, not `integrity_check`: a transport check, ~0.5 s per file.
     """
     db = None
     try:
@@ -478,39 +334,14 @@ def _quick_check(path: Path, report: ImportReport) -> None:
 def compare_table_counts(root: Path, report: ImportReport) -> None:
     """BUNDLE.json's own per-table counts against the ones this import measured.
 
-    THE CONTRACT: `bundle.validate()` calls this once `validate_content` has filled
-    `report.table_counts`, and `bundle.import_bundle` calls it again after the load. Twice
-    because the two are different moments and not different facts - the validator's call is the
-    one the operator reads before they commit, the import's is the backstop for a tree that
-    changed between them - and the answer is identical at both, since the `loaded:<target>` keys
-    the loaders add below are never compared and `declared` never carries that prefix. The
-    report records one statement once, so the second call adds no second line.
-    [M4.14 cycle 1, m414-c1-dim-refusals-03]
-
-    The comparison is cheap and independent of the hashes above:
-    `tables` is what the corpus says it exported and `report.table_counts` is what the shipped
-    `content.sqlite` actually holds, so a disagreement means the file is not the one the manifest
-    describes even in the case where a re-hash would agree — an export that wrote its manifest
-    from the wrong side of a filter.
-
-    The `loaded:<target>` counts the loaders add are deliberately NOT compared: they are a
-    different fact (rows per POSTGRES target, after mapping, after the display split), and a
-    bundle table that legitimately feeds no target would read as a shortfall. [M4.14 step B1]
+    Called by `validate()` and again after the load, with the same answer; the report dedups. The
+    `loaded:<target>` counts are a different fact and are not compared.
     """
     payload = _bundle_manifest(root)
     declared = payload.get("tables") if payload else None
     if not isinstance(declared, dict) or not report.table_counts:
         return
-    # `_verify_bundle_files`' leaf rule, asked of this manifest's other map. `int(n)` on a value
-    # the corpus wrote raised ValueError out of both routes as a 500, and it is the WORSE of the
-    # two sites for it: this function is called a second time inside the import transaction,
-    # where a ValueError is none of `import_bundle`'s named refusals and falls to the
-    # `except BaseException` arm, so the job closes "the import did not run to a report" with an
-    # exception type as its only evidence. A count this app cannot read is a report line, because
-    # §10 promises a report and the row `data-rules-validation-reports-rather-than-raises` says
-    # "never exceptions". Enumerated rather than returned on, for the reason that row's `why`
-    # gives: a validator that dies on the first surprise cannot name the rest.
-    # [M4.14 cycle 4, M414-C4-REF-01]
+    # A count that is not an int is a report line; enumerated so the rest are still named.
     unreadable = sorted(table for table, n in declared.items() if not isinstance(n, int))
     if unreadable:
         shown = "; ".join(f"{table}: {declared[table]!r}" for table in unreadable[:5])
@@ -546,19 +377,7 @@ def compare_table_counts(root: Path, report: ImportReport) -> None:
 
 
 def validate_reviews(db: sqlite3.Connection, report: ImportReport) -> ImportReport:
-    """`reviews.sqlite`, held to the same rules as `content.sqlite`.
-
-    THE CONTRACT: `bundle.validate()` calls this beside `validate_content`, with a read-only
-    connection to `reviews.sqlite`.
-
-    Rule 7 is a rule about the BUNDLE and it was applied to half of one. `validate` opened
-    `content.sqlite` only; `reviews.sqlite` was first opened inside the load; and the report's
-    note "no %_bak% / %_good tables present" read as a statement about the bundle. §8 stage 5
-    re-extracts DNA from these bodies and §4.3's review-text block is an SVD over them, so a
-    stale `review_bak` here is precisely the class rule 7 exists to catch: the extracted tier
-    rebuilt from a pre-adjudication copy, with nothing in the read path calling it an error.
-    [M4.14 step B8, finding 2.22]
-    """
+    """`reviews.sqlite`, held to the same rules as `content.sqlite` (rule 7 applies to both)."""
     try:
         schema = _schema(db)
     except sqlite3.DatabaseError as exc:
@@ -582,47 +401,15 @@ def validate_reviews(db: sqlite3.Connection, report: ImportReport) -> ImportRepo
             database="reviews.sqlite",
         )
 
-    # The columns the loader SELECTs, checked here rather than discovered as an
-    # `OperationalError` mid-COPY. Three of these eight were named after the Postgres side and
-    # selected verbatim from SQLite, where they do not exist, and 485,602 rows loaded with no
-    # rating, no date and no critic flag under a single warn. [M4.9; M4.14 step B8]
+    # The columns the loader SELECTs, checked before COPY.
     from spielplan.importer.reviews import REVIEW_SOURCE
 
     _guard(schema, report, "rule7-denylist", "review", *sorted(set(REVIEW_SOURCE.values())))
     return report
 
 
-# The app's foreign keys, mirrored onto the tables the CORPUS names, because this runs against
-# `content.sqlite` and not against Postgres. `(child, column, parent, parent column)`.
-#
-# Nine synthetic orphan variants passed `validate()` and `validate_for_install()` and then raised
-# `ForeignKeyViolationError` inside the transaction, where `app.py`'s handler turns any
-# `PostgresError` into 500 {"detail": "database error"} — the staged tree left behind, no row
-# naming it, and §10's promised report replaced by two words. The real v20260828 is clean on
-# every shape below, so this is next-export exposure; but the corpus already runs these checks at
-# export and writes them into `BUNDLE.json`'s `validations`, a list nothing read (finding 2.4).
-# Both projects believed the other was checking. Measured: 0.49 s over the 374 MB content.sqlite.
-#
-# `title_company.title_id` and `title_list_membership.list_id` are here and not in the plan's own
-# enumeration, on the enumeration's stated rule — 0003:124 gives `title_company` the same
-# `REFERENCES title(id)` as its four siblings and M4.9 moved the table into `MAPPINGS`, and
-# 0015:80 keys a membership row to `title_list(id)`, which is `seed_list` under the corpus's
-# name. A list of "the app's FKs" that omits two of them checks what it happens to remember.
-# [M4.14 step B3, finding 2.9]
-#
-# Both this tuple and `_NOT_NULL_COLUMNS` below are about what a COPY will hit, so both name only
-# tables this app actually loads. They did not: decision 291 declined the MovieLens slice and left
-# one foreign key and five NOT NULL expectations standing over `ml_genome_score` and
-# `ml_genome_tag`. Neither loop keys off `load.MAPPINGS` -- the duplicate loop does, which is why
-# that one disarmed itself and these two did not -- and the tables still arrive on every real
-# import, because the corpus is NOT asked to re-cut the bundle. So an export whose cut dropped a
-# tag one score row still names would have refused the household's ONE content seed (decision 162)
-# over a table this build has decided it does not want, leaving the operator an export-side fix to
-# data the app will never read. Decision 291's own clause is that the importer accepts a bundle
-# with or without the slice. The rule, not the two names, is held by
-# `test_bundle_validation.py::test_every_table_the_integrity_gates_name_is_one_this_app_actually_loads`,
-# so the next declined table cannot leave a gate behind it. [decision 291; M4.16 cycle 1,
-# M416-291-03]
+# The app's foreign keys, mirrored onto the corpus's tables: `(child, column, parent, parent column)`.
+# Only tables this app loads (declined tables must not gate a seed; tested).
 _FOREIGN_KEYS: tuple[tuple[str, str, str, str], ...] = (
     ("dna_tag", "title_id", "title", "id"),
     ("dna_projected", "title_id", "title", "id"),
@@ -645,22 +432,7 @@ _FOREIGN_KEYS: tuple[tuple[str, str, str, str], ...] = (
     ("watchlist", "title_id", "title", "id"),
 )
 
-# Bundle columns COPY will hit that are NOT NULL on the Postgres side and have no rule 6
-# `coalesce_empty` answer in `load.MAPPINGS` — so a NULL here is a `NotNullViolationError` inside
-# the one transaction that carries the whole seed, which `app.py:113-117` turns into the same
-# empty-report 500 as the orphans above. Named as the corpus names them, against the migration
-# that declares the target NOT NULL. [M4.14 step B3, finding 2.9]
-#
-# The five `ml_genome_*` entries that stood here went with the slice. `0003_content.sql` still
-# declares those columns NOT NULL and its tables stay (decision 291), but no import this build
-# performs writes a row into them -- they are empty on every install THIS BUILD seeds, and only a
-# box seeded before 291 still carries rows there (decision 311) -- so the failure message's own
-# sentence -- "the column this app loads them into is NOT NULL" -- had stopped being true of
-# them. Until M4.16 cycle 4 this gave that emptiness as unconditional, which is the universal
-# decision 311 narrowed everywhere else; the phrase is not repeated here, because the rule that
-# now reads for it is a substring search and a quotation would redden the repair. See the tuple
-# above for the argument.
-# [M4.16 cycle 1, M416-291-03; decision 311, cycle 4]
+# Bundle columns that are NOT NULL in Postgres with no rule 6 coalesce. Only tables this app loads.
 _NOT_NULL_COLUMNS: tuple[tuple[str, str], ...] = (
     ("award", "award"),                     # 0003: award.body text NOT NULL
     ("title_video", "key"),                 # 0018: PRIMARY KEY (title_id, source, key)
@@ -692,12 +464,7 @@ def _duplicate_groups_through_the_loader(
 ) -> tuple[int, list[tuple]]:
     """The same count for a key column the mapping TRANSFORMS, read through the loader's reader.
 
-    `title_language.role` is `_primary_role(is_primary)`, which collapses 0 and NULL onto '' — so
-    two rows that differ in SQLite are one row under the app's key, a `GROUP BY` over the source
-    columns would report no duplicate, and COPY would still roll the whole seed back. What COPY
-    sees is what has to be counted, and it is counted through `load._rows` rather than through a
-    second SQL spelling of the transform, which is the "two readers of one file drift" failure
-    this module keeps citing. One table takes this path (47,302 rows on v20260828).
+    `title_language.role` collapses 0 and NULL to '', so only what COPY sees can be counted.
     """
     from spielplan.importer import load
 
@@ -718,21 +485,8 @@ def _validate_integrity(
 ) -> None:
     """Referential integrity, NOT NULLs and this app's own keys — before anything is staged.
 
-    §4.1's rules are about what the corpus MEANS; these three are about what Postgres will
-    accept, and the importer checked neither until now: `validate_content` enforced the eight
-    landmine rules and nothing about foreign keys, NULLs or the keys this app narrows the
-    corpus's rows onto. Every one of those violations reached the database as an exception
-    inside the single transaction that carries the whole seed, and §10's report — the one thing
-    the operator is standing in front of — could not name a single offending row.
-
-    Each finding names the table, the column, the count and the first offending ids, because the
-    operator's next move is an export-side fix and "a foreign key failed" is not a bug report.
-
-    The duplicate-group check is derived from `load.MAPPINGS`' own `key` rather than from a second
-    list kept here: a key that drifts from the migration is exactly how 17,342 duplicate
-    `title_language` groups reached a COPY that rolled the seed back (0015), and a hand-maintained
-    copy in the validator would drift the same way one file further from the DDL.
-    [M4.14 step B3, finding 2.9]
+    Each finding names the table, column, count and first offending ids. Keys come from
+    `load.MAPPINGS`, never a second list.
     """
     from spielplan.importer import load
 
@@ -800,19 +554,13 @@ def validate_content(db: sqlite3.Connection, report: ImportReport) -> ImportRepo
     try:
         schema = _schema(db)
     except sqlite3.DatabaseError as exc:
-        # The same DatabaseError -> report.fail shape `_guard` applies one query later. This is
-        # the first query this module makes, above every guard, so a truncated `content.sqlite`
-        # raised out of `validate` itself and the operator got a 500 where §10 promises a page.
-        # [M4.14 step B1, finding 2.5]
+        # The first query: a truncated file must be a report line.
         report.fail("bundle", f"content.sqlite cannot be read: {exc}")
         return report
     tables = set(schema)
 
     # ---- rule 7: deny-list ------------------------------------------------
-    # Named rather than counted, and the database it examined named with them: this pass reads
-    # `content.sqlite` and `validate_reviews` reads the other half, and the old note ("no %_bak%
-    # / %_good tables present") read as a statement about the whole bundle when it had never
-    # opened `reviews.sqlite`. [M4.14 step B8, finding 2.22]
+    # Named per database: this pass reads `content.sqlite` only.
     denied = denied_tables(tables)
     if denied:
         report.fail(
@@ -931,9 +679,7 @@ def validate_content(db: sqlite3.Connection, report: ImportReport) -> ImportRepo
             f"(dna_tag={'yes' if have_tag else 'no'}, dna_projected={'yes' if have_proj else 'no'})",
         )
     else:
-        # Both guards run before either result is used: a `and` here would report the first
-        # broken tier and leave the second unexamined, which is the enumeration failure this
-        # whole pass exists to end.
+        # Both guards run first, so a broken second tier is still reported.
         tiers_ok = _guard(schema, report, "rule1-two-tiers", "dna_tag", "title_id", "term")
         tiers_ok &= _guard(schema, report, "rule1-two-tiers", "dna_projected", "title_id", "term")
         if tiers_ok:
@@ -952,19 +698,8 @@ def validate_content(db: sqlite3.Connection, report: ImportReport) -> ImportRepo
                 extracted_titles=extracted_titles, projected_titles=projected_titles,
             )
 
-        # The corpus's two namings, counted rather than rewritten in silence. §4.3 keys a
-        # vocabulary id as `facet.term` and the corpus files the extraction pass that found the
-        # tag under its own label (`character_dynamics` for `characters.*`), so the shipped
-        # `facet` column and the term's prefix legitimately disagree on 29,188 of 31,540
-        # `dna_tag` rows and 206,151 of 223,136 `dna_projected` rows. `importer/dna.app_facet`
-        # stores the prefix, because `dna_facet`, `dna_term`, §6.4's axes and §6.8's palette all
-        # key on it — and §10 promises a report, so the size of that rewrite is a line in it.
-        #
-        # A NOTE, not a warn: neither naming is wrong upstream, and nothing about the bundle
-        # needs an operator's attention. What would deserve one is this number changing shape
-        # between bundles, which is why it is counted per tier. [M4.9 finding 1, step 2.2]
-        # `&=` and not `and`, for the reason the block above states: a short circuit would
-        # report the first broken tier and leave the second unexamined.
+        # The corpus's extraction label and the term prefix disagree on most rows; a note counting the
+        # rewrite `app_facet` makes. `&=`, not `and`, so both tiers are examined.
         facets_ok = _guard(schema, report, "rule1-two-tiers", "dna_tag", "facet", "term")
         facets_ok &= _guard(schema, report, "rule1-two-tiers", "dna_projected", "facet", "term")
         if facets_ok:
@@ -991,10 +726,7 @@ def validate_content(db: sqlite3.Connection, report: ImportReport) -> ImportRepo
         elif tiers_ok and _guard(
             schema, report, "rule1-evidence", "dna_evidence", "title_id", "term"
         ):
-            # The link is `(title_id, term)`. The shipped `dna_evidence` is
-            # (id, title_id, term, pass_id, src, quote) and `dna_tag` has no surrogate key at
-            # all — its primary key IS (title_id, term) — so `e.dna_tag_id = g.id` named two
-            # columns that have never existed together in one bundle.
+            # The link is `(title_id, term)`: `dna_tag` has no surrogate key.
             orphans = _count(
                 db,
                 "SELECT count(*) FROM (SELECT title_id, term FROM dna_tag "
@@ -1010,8 +742,7 @@ def validate_content(db: sqlite3.Connection, report: ImportReport) -> ImportRepo
                 report.note("rule1-evidence", "every extracted tag carries at least one quote")
 
         # rule 2 sanity: weights must be present and in range — but never used as a filter.
-        # `NOT IN` is NULL-blind, and `salience` is NOT NULL in the target schema — a NULL
-        # here would sail past validation and die mid-load instead.
+        # `NOT IN` is NULL-blind and `salience` is NOT NULL in the target.
         if _guard(schema, report, "rule2-weights", "dna_tag", "salience"):
             salience_bad = _count(
                 db,
@@ -1038,16 +769,13 @@ def validate_content(db: sqlite3.Connection, report: ImportReport) -> ImportRepo
         "RTL scripts, ZWSP and emoji",
     )
 
-    # §4.1's eight rules are about what the corpus MEANS. These three are about what Postgres
-    # will accept, and they run before the counts because the report reads top-down and a count
-    # is the one line a bundle that cannot be imported at all can still produce. [M4.14 step B3]
+    # What Postgres will accept, before the counts.
     _validate_integrity(db, schema, report)
 
     # ---- counts -----------------------------------------------------------
     views = _views(db)
     if views:
-        # Counted as a table until M4.14, and then claimed by nobody on the load side, which is
-        # a count saying rows arrived with no target holding them. [M4.14 step B9, finding 2.23]
+        # Views are noted, never counted as tables.
         report.note(
             "table-view",
             f"{len(views)} view(s) shipped and not counted as tables: {', '.join(sorted(views))}"
@@ -1060,8 +788,7 @@ def validate_content(db: sqlite3.Connection, report: ImportReport) -> ImportRepo
         try:
             report.table_counts[table] = _count(db, f'SELECT count(*) FROM "{table}"')
         except sqlite3.DatabaseError:
-            # A table whose pages are unreadable. `_verify_bundle_files`'s `quick_check` names
-            # that case as what it is; here it costs one count rather than the whole report.
+            # Unreadable pages: `quick_check` names it; here it costs one count.
             continue
 
     return report
@@ -1073,22 +800,12 @@ def validate_artifacts(
 ) -> ImportReport:
     """Validate the `artifacts/` side of the bundle against §4.3.
 
-    `spine` is the *installed* title rows, supplied by the caller that has a connection. Under
-    decision 162 a models-only bundle carries no `content.sqlite`, so the identity column below
-    has nothing in the bundle to be checked against and the only spine that exists is this one.
-
-    `active_coverage` is the set of title ids the ACTIVE backbone covers among this install's
-    `origin='bundle'` titles, supplied by the same caller from the same connection. Decision 248
-    makes coverage that goes BACKWARDS the refusal a models-only re-import needs: the corpus
-    keeps its own catalogue, so a retrained backbone legitimately covers titles this install
-    never seeded, while a title that had a coordinate and stops having one is a merge or a
-    dropped row and `§5.1` would go on scoring it from a basis that no longer knows it.
-    `None` means the caller had no install to ask — the pre-flight tools and the fixture tests.
+    `spine` is the installed title rows (a models-only bundle has none); `active_coverage` is the ids
+    the active backbone covers (decision 248). `None` means no install to ask.
     """
     from spielplan.models.artifacts import BUNDLE_FILES
 
-    # Read before anything else: every later failure is reported under this bundle's name, and
-    # §10's re-import diff is only a diff if the two reports name different versions.
+    # First, so every later failure names this bundle.
     _read_bundle_identity(root.parent, report)
 
     manifest_path = root / "manifest.json"
@@ -1096,18 +813,14 @@ def validate_artifacts(
         report.fail("artifacts", "artifacts/manifest.json is missing")
         return report
     if _read_json(manifest_path, report, "artifacts") is None:
-        # Every check below reads the bundle through `ArtifactStore`, which parses this file on
-        # open. Reported here rather than raised out of the third caller down (§10).
+        # Every check below reads through `ArtifactStore`, which parses this file.
         return report
 
     missing = [name for name, required in BUNDLE_FILES.items() if required and not (root / name).exists()]
     if missing:
         report.fail("artifacts", f"required artifact(s) missing: {', '.join(missing)}", missing=missing)
 
-    # `_REPORTED_AS_FAILURES` is excluded here and not from `BUNDLE_FILES`: decision 251 makes
-    # those three absences failures, and a warn beside a failure for one file says the absence is
-    # tolerable and not tolerable at once — the two-lines-for-one-fact misattribution
-    # `validate_hyperparams` refuses one file type over.
+    # Decision 251's three are failures, so not also warned about.
     optional_missing = [
         name for name, required in BUNDLE_FILES.items()
         if not required and name not in _REPORTED_AS_FAILURES and not (root / name).exists()
@@ -1120,25 +833,16 @@ def validate_artifacts(
             missing=optional_missing,
         )
 
-    # §4.3: the feature contract is the *exhaustive* definition of the tower's input, and §8
-    # stage 9 builds vectors "from this file and nothing else". If it is here, it must be sane.
+    # §4.3: the feature contract is the tower's exhaustive input definition; it must be sane.
     from spielplan.placement.contract import ContractError, FeatureContract
 
     contract_path = root / "feature_contract.json"
     contract: FeatureContract | None = None
     raw = _read_json(contract_path, report, "feature-contract") if contract_path.is_file() else None
     if raw is not None:
-        # `content_blocks` is a list of {name, size} and the widths live there; the app read a
-        # `blocks` dict, which no shipped contract has, so this drift check summed nothing and
-        # passed on every bundle.
+        # Widths live in `content_blocks`, a list of {name, size}.
         declared = raw.get("content_blocks")
-        # The third unguarded coercion of the same shape, and the only one of the three that
-        # predates M4.14 - a block that is not an object raised AttributeError and a `size` that
-        # is not a number raised ValueError or TypeError, both out of a route with no `except`.
-        # A warn rather than a failure because the branch it guards is one: the contract is
-        # parsed by §8 stage 9's own parser twenty lines down, and that is the reader whose
-        # refusal is the failure. This one only has to stop being an exception.
-        # [M4.14 cycle 4, M414-C4-REF-01]
+        # Malformed entries warn here; the real parser below owns the failure.
         blocks = declared if isinstance(declared, list) else []
         sized = [b for b in blocks if isinstance(b, dict) and isinstance(b.get("size"), int)]
         if len(sized) != len(blocks):
@@ -1156,10 +860,7 @@ def validate_artifacts(
                 f"content blocks sum to {total}, not the documented 6,435 columns",
                 observed=total, expected=6435,
             )
-        # §4.3 freezes `text_scale` at export time, and the corpus writes it INSIDE `text_block`
-        # beside the truncation it belongs to. Read at the top level it was absent from every
-        # real bundle, so the one number §4.3 calls frozen was reported missing and then
-        # defaulted downstream — which moves every coordinate a little, and nothing raises.
+        # §4.3 freezes `text_scale` inside `text_block`, not at the top level.
         text_block = raw.get("text_block")
         scale = text_block.get("text_scale") if isinstance(text_block, dict) else None
         if scale is None:
@@ -1178,47 +879,23 @@ def validate_artifacts(
             report.note("feature-contract", f"review-text block frozen at text_scale {scale}",
                         text_scale=float(scale))
 
-        # Parse it with the SAME parser §8 stage 9 uses, and report its refusal as a validation
-        # failure. Two readers of one file drift; more to the point, §10 now recomputes the
-        # rebuild set during import, so a contract this parser rejects takes the whole import
-        # down — and without this the operator gets a stack trace out of a background step
-        # instead of a line in the report they are standing in front of.
+        # Parsed with §8 stage 9's own parser, so its refusal is a report line, not an import crash.
         try:
             contract = FeatureContract.load_path(contract_path)
         except ContractError as exc:
             report.fail("feature-contract", str(exc))
         except (ValueError, AttributeError, TypeError) as exc:
-            # A width or a scale of the wrong TYPE reaches the parser as an int()/float()
-            # conversion rather than as its own refusal. Still a bundle the app cannot read, so
-            # still a report line: §10 has no room for a traceback.
-            #
-            # AttributeError and TypeError join it for the same reason one cycle later: the
-            # parser's own type-checks reach `spec.get("size")` only once `spec.get("name")` has
-            # worked, so a `content_blocks` ENTRY that is not an object - the shape the sum above
-            # now warns about - raises out of `contract.py:407` instead, past the one arm that
-            # was written to keep this file's defects out of the operator's face. Closing it here
-            # rather than in `placement/contract.py` keeps the rule where §10's report is owed:
-            # `FeatureContract` is §8 stage 9's parser and its refusals are ContractError by
-            # design; what this arm owes is that NONE of its readings escapes as a traceback.
-            # [M4.14 cycle 4, M414-C4-REF-01]
+            # Type errors inside the contract are report lines too; none may escape as a traceback.
             report.fail("feature-contract", f"feature_contract.json cannot be parsed: {exc}")
 
     _validate_seed_list(root, report, spine)
     _validate_model_artifacts(root, report, contract, spine, active_coverage)
 
-    # ONE derivation, in `importer/vocab.py`, shared with `bundle.py` and `ArtifactStore.open`.
-    # This function used to repeat the listing inline — lexicographic, so `v2` beat `v10` — a
-    # hundred lines from the copy in `bundle._vocabulary_version`. [M4.14 step B5, finding 2.14]
+    # One derivation of the version, in `importer/vocab.py`.
     from spielplan.importer import vocab
 
     vocab_dir = root / "dna_vocab"
-    # The tree is read whatever BUNDLE.json declares, and the declaration then decides the
-    # ANSWER rather than whether the question is asked. Guarded on `is None`, the one bundle
-    # decision 163 exists to refuse - a tree carrying two vocabularies - skipped this branch
-    # entirely the moment it declared one, and the refusal reached the operator as a traceback
-    # from `_validate_model_artifacts` instead. A declaration is the corpus's statement and the
-    # directory is this app's inference from it, which is why the declaration still wins; what
-    # it may not do is stop the inference being made. [M4.14 cycle 1]
+    # The tree is always read; a declaration decides the answer, never whether to ask.
     declared = report.vocabulary_version
     try:
         derived = vocab.version_of(root)
@@ -1226,11 +903,7 @@ def validate_artifacts(
         report.fail("vocabulary", str(exc), versions=list(exc.versions))
         derived = None
     if declared and derived and declared != derived:
-        # The second reader's half of the same rule, argued at `bundle._vocabulary_version`: a
-        # declaration that contradicts the tree leaves one bundle with two vocabularies, and the
-        # one this report carries is not the one the STAGED tree will answer with. Both values
-        # are in hand here, so both are named rather than one silently winning.
-        # [M4.14 cycle 3, M414-C3-VOCAB-01, decisions 163 and 256]
+        # Declaration and tree disagree: name both (decisions 163, 256).
         report.fail(
             "vocabulary",
             f"BUNDLE.json declares DNA vocabulary {declared!r} and this bundle ships "
@@ -1241,31 +914,14 @@ def validate_artifacts(
         )
     report.vocabulary_version = declared or derived
 
-    # `dna_tag`/`dna_projected` carry a FK to `dna_vocabulary(version)`, and `validate_content`
-    # ran first and counted both tiers. If the bundle ships DNA rows and no vocabulary to create
-    # that row from, the load dies mid-transaction on a raw foreign-key violation
-    # (`0004_dna.sql:76`) instead of here, where the operator can read why: reproduced as
-    # `validate.ok=True`, `/validate` 200, `/import` 500. The comment two branches down has
-    # described this exact failure since M4.5 while guarding only the other branch.
-    #
-    # The warning stays for a bundle with no DNA rows: §3.1 makes an empty naming layer legal,
-    # and a models-only bundle is the kind least likely to ship a `dna_vocab/` tree at all.
-    # [M4.14 step B4, finding 2.10]
-    # Counted and reported SEPARATELY, never summed. §4.1 rule 1 is a claim about rows, and a
-    # sum drops the tier discriminator exactly as a UNION does: an operator reading one "17 DNA
-    # rows" cannot tell whether the vocabulary this bundle is missing names extracted tags,
-    # projected ones or both, which is the first thing the answer turns on. `_strip_scalar_tier
-    # _counts` in `test_landmine_guards.py` already sanctions a per-tier count as "a labelled
-    # number, not a row" and sanctions no addition of two; its Python arm rejected `tagged +
-    # projected` by the spelling, and the spelling was the defect. [M4.14 step B4, finding 2.10]
+    # DNA rows with no vocabulary to reference would fail the FK mid-load, so fail here. Tiers are
+    # counted apart, never summed (§4.1 rule 1).
     tagged_rows = report.table_counts.get("dna_tag") or 0
     projected_rows = report.table_counts.get("dna_projected") or 0
     resolved = report.vocabulary_version
     version_dir = vocab_dir / resolved if resolved else None
     if version_dir is not None and version_dir.is_dir():
-        # The corpus ships one combined `vocab_<version>_all.tsv` plus a per-facet TSV each
-        # (`vocab_mood_v1.tsv`, …). `terms.tsv` was this app's own name for a file no bundle has
-        # ever contained, so this check failed on every real bundle and on no broken one.
+        # The corpus ships `vocab_<version>_all.tsv` plus one TSV per facet.
         if not sorted(version_dir.glob("vocab_*.tsv")):
             report.fail(
                 "vocabulary",
@@ -1284,12 +940,7 @@ def validate_artifacts(
             dna_tag=tagged_rows, dna_projected=projected_rows, version=resolved,
         )
     elif resolved:
-        # The same statement about a bundle that DID name a vocabulary and shipped no tree for
-        # it - which is precisely what decision 256's refusal asks the operator to produce. The
-        # sentence below said "it names nothing" over a report whose header carries the name the
-        # bundle declared, two elements from decision 266's line quoting that same name: two
-        # answers about one field on one screen, the shape step B7 removed one field over.
-        # [M4.14 cycle 3, M414-C3-VOCAB-03, decisions 256 and 266]
+        # The bundle named a vocabulary and shipped no tree for it (decision 266).
         report.warn(
             "vocabulary",
             f"this bundle declares DNA vocabulary {resolved!r} and carries no "
@@ -1299,12 +950,7 @@ def validate_artifacts(
             version=resolved,
         )
     else:
-        # A statement about the BUNDLE, because that is the only thing this function has read.
-        # "The naming layer will be empty" is true of a seed and false of the models-only
-        # re-import decision 162 makes the recurring shape: the install's naming layer is
-        # whatever its last content import left, and this validator has no connection with which
-        # to know. An operator reading it on a model bundle was sent to look at an install that
-        # was intact. [M4.14 cycle 2, m414-c2-dim247-declared-vocabulary-no-tree, decision 266]
+        # A statement about the bundle only: this function has no connection to see the install.
         report.warn(
             "vocabulary",
             "no dna_vocab/ in this bundle and no DNA rows, so it names nothing: a seed from it "
@@ -1318,57 +964,22 @@ def validate_artifacts(
 def validate_hyperparams(store_dir: Path, report: ImportReport) -> ImportReport:
     """§4.3's constants file, read by the app's own reader before §10 stages it.
 
-    §10's sequence is validate -> stage -> recompute the rebuild set -> flip -> restart, and the
-    restart is why this check belongs at step 1 and nowhere later: `hyperparams.from_mapping`
-    raises `ValueError` on a constant outside its range, and that refusal has no catcher between
-    here and the three Ledger routers — so a bundle that reaches the flip with a hand-edited λ or
-    a non-positive `straddle_z` turns the Rate and Rank surfaces into refusals on a box whose
-    operator has already walked away, with `artifacts/<version>/` staged and the active row
-    flipped. Checked here it is one report line naming the key, in the report the operator is
-    standing in front of, with nothing written and nothing staged.
-
-    A `fail` and not a `warn`, for the same reason the routers refuse rather than default: §4.3
-    makes this file the single source of the §5.2 constants, and importing on substituted
-    defaults changes `hp_digest`, which invalidates every cached fit in the install.
-
-    Through `hyperparams.load` rather than a second parser, which is the rule `feature_contract`
-    above already follows: one reader of a bundle file, so the validator cannot pass a file the
-    app will then refuse. It is the staged directory's own layout — `ledger_hyperparams.json`
-    beside `manifest.json` — that decides whether the file is there at all.
-    [M4.10 finding 10; ml06]
+    A `fail`: an out-of-range constant would otherwise surface as refusals on Rate and Rank after the
+    flip, and defaults would change `hp_digest`. Read through `hyperparams.load`, never a second parser.
     """
     from spielplan.ledger import hyperparams
     from spielplan.models.artifacts import ArtifactStore
 
     constants = store_dir / "ledger_hyperparams.json"
     if not (constants.exists() or constants.is_symlink()):
-        # §4.3 lists the file as optional and `validate_artifacts` has already warned about every
-        # absent optional artifact by name. A second line for this one would report one absence
-        # twice, and §3.1 makes the defaults legal.
-        #
-        # ABSENT, not merely unopenable: the guard was `is_file()`, which is false for a path that
-        # exists as a directory, so an artifacts tree assembled by an extraction that made one
-        # returned this report untouched — no failure and not even the "constants read" note, while
-        # the app booted on DEFAULTS under a different `hp_digest`. `hyperparams.load` draws the
-        # same distinction for the same reason. [M4.10 cycle 1, M410-R1-06]
+        # Optional and already warned about by name; absent means not there at all, not unopenable.
         return report
-    # Constructed rather than `ArtifactStore.open`ed, which is the one place this section departs
-    # from how every other reader addresses a store. `open` re-parses `manifest.json`, and a
-    # manifest that is not readable JSON therefore raised out of it into the handler below and was
-    # reported as the CONSTANTS file's parse error: one truncated manifest, two failures, and an
-    # operator sent to open a `ledger_hyperparams.json` in which every key is in range. That is
-    # exactly the misattribution the clause below refuses one file type over, and §10 makes this
-    # report the decision point. `validate_artifacts` owns the manifest line and has already
-    # emitted it by name; `hyperparams.load` reads only `is_empty` and `path()`, so the constants
-    # are still checked on a bundle whose manifest is broken and the operator gets both facts in
-    # one pass. [M4.10 cycle 2, m410-c2-validate-blames-the-constants-for-a-broken-manifest]
+    # Constructed, not `open`ed: a broken manifest is `validate_artifacts`' line, not this file's.
     store = ArtifactStore(version=report.bundle_version or "staged", root=store_dir)
     try:
         hp, _notes = hyperparams.load(store)
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-        # Before the `ValueError` clause, and not merely for tidiness: `json.JSONDecodeError` IS
-        # a `ValueError`, so the broader clause would report an unparseable file as a constant
-        # out of range and send the operator looking for a key that is not the problem.
+        # Before the `ValueError` clause: `JSONDecodeError` is a `ValueError`.
         report.fail("hyperparams", f"ledger_hyperparams.json is not readable JSON: {exc}")
     except ValueError as exc:
         report.fail(
@@ -1376,8 +987,7 @@ def validate_hyperparams(store_dir: Path, report: ImportReport) -> ImportReport:
             f"ledger_hyperparams.json carries a constant the §5.2 fit cannot use: {exc}",
         )
     else:
-        # The digest, because §10's re-import report is a diff: two bundles whose constants agree
-        # produce the same fits, and the operator cannot tell that from a line that only says ok.
+        # The digest, so a re-import report shows whether the constants changed.
         report.note(
             "hyperparams",
             f"§5.2 constants read from the bundle; fit digest {hp.digest()}",
@@ -1387,11 +997,7 @@ def validate_hyperparams(store_dir: Path, report: ImportReport) -> ImportReport:
 
 
 def _read_json(path: Path, report: ImportReport, rule: str) -> dict[str, Any] | None:
-    """Parse a bundle JSON file, or report why it cannot be parsed.
-
-    §10's report is what the operator is standing in front of; a `JSONDecodeError` out of a
-    validation pass is the same defect as the OperationalError above, one file type over.
-    """
+    """Parse a bundle JSON file, or report why it cannot be parsed."""
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -1404,15 +1010,9 @@ def _read_json(path: Path, report: ImportReport, rule: str) -> dict[str, Any] | 
 
 
 def _read_bundle_identity(bundle_root: Path, report: ImportReport) -> None:
-    """The bundle's own name for itself, read from where the bundle records it.
+    """The bundle's own name for itself, from `BUNDLE.json` at the bundle root.
 
-    §10's report opens with the bundle and vocabulary versions, and both live in `BUNDLE.json`
-    at the bundle ROOT — beside `artifacts/`, not inside it. `artifacts/manifest.json` carries
-    the fitted 3-class cut-points (§4.3) and no identity at all, so reading the version from
-    there named every bundle the corpus has ever built "unknown": no artifact directory an
-    operator can recognise, and no version to diff a re-import against (§10: "never a silent
-    sync"). The vocabulary version falls back to the `dna_vocab/<version>/` directory the bundle
-    ships, which is where a bundle that predates the field records it.
+    The vocabulary falls back to the `dna_vocab/<version>/` directory.
     """
     path = bundle_root / "BUNDLE.json"
     if not path.is_file():
@@ -1435,12 +1035,7 @@ def _read_bundle_identity(bundle_root: Path, report: ImportReport) -> None:
             "names would be shared by every bundle",
         )
     else:
-        # The SAME token rule the import refuses on, applied where the operator reads the answer.
-        # This wrote the raw string into `report.bundle_version` and failed only on absence, so a
-        # bundle named `v2026/08` validated 200 with `report.bundle_version = 'v2026/08'` beside a
-        # top-level `bundle_version: 'unknown'` from `Bundle.open` - two versions of one bundle on
-        # one screen - and `import_bundle` refused after the operator had committed.
-        # [M4.14 step B7, finding 2.11]
+        # The same token rule the import refuses on.
         safe = safe_version(version)
         if safe == "unknown":
             report.fail(
@@ -1453,33 +1048,15 @@ def _read_bundle_identity(bundle_root: Path, report: ImportReport) -> None:
         report.bundle_version = safe
     vocabulary = payload.get("vocabulary_version")
     if isinstance(vocabulary, str) and vocabulary:
-        # The test `bundle._vocabulary_version` applies to the same key, applied where the second
-        # reader is. Anything truthy was accepted here and coerced with `str()`, so an export
-        # writing a JSON number put "v1" in this report's header - the other reader had rejected
-        # the number and fallen to the directory - and "no dna_vocab/1/" in the failure beneath
-        # it: two vocabularies for one bundle on one screen, and a refusal naming a directory the
-        # corpus never wrote. That is the shape step B7 removed one field over.
-        # [M4.14 cycle 1, m414-c1-declaration-read-twice]
+        # Only a string counts as a declared vocabulary, as in `bundle._vocabulary_version`.
         report.vocabulary_version = vocabulary
     _validate_nullable_pk_columns(payload, report)
 
 
 def _validate_nullable_pk_columns(payload: dict[str, Any], report: ImportReport) -> None:
-    """rule 6's landmine, read from where the corpus declares it.
+    """rule 6's landmine, read from where the corpus declares it (`nullable_pk_columns`).
 
-    `nullable_pk_columns` names the primary-key components SQLite let through as NULL, and the
-    corpus's own `nullable_pk_note` states the contract this app is held to in as many words:
-    "the Postgres importer coalesces TEXT-affinity components to '' (spec §4.1 rule 6)". So the
-    refusal is exactly about that promise - a column this app COALESCES whose declared affinity
-    is not TEXT would write '' into a column that cannot hold one, and COPY rejects the seed.
-
-    Measured on v20260828, which is why the rule is not the shorter "not TEXT is a failure": the
-    real bundle declares four entries and two of them are INTEGER (`ml_genome_score.movie_id`
-    and `.tag_id`). This app coalesces neither, and since decision 291 it does not load them at
-    all - the slice is declined, so no COPY reaches those columns and nothing here can be owed
-    about them. Failing on affinity alone would refuse the only bundle that exists.
-    [M4.14 step B3; corrected at M4.16 cycle 1, M416-291-03, where the same decision removed
-    `_validate_integrity`'s NOT NULL scan over the slice that this paragraph used to lean on]
+    Fails only a column this app coalesces whose affinity is not TEXT.
     """
     declared = payload.get("nullable_pk_columns")
     if not isinstance(declared, dict):
@@ -1525,24 +1102,10 @@ def _spine_ids(content_db: Path) -> set[int] | None:
 
 
 def _validate_seed_list(root: Path, report: ImportReport, spine: Spine | None) -> None:
-    """`seed_list.json`'s shape and its title ids, read here rather than inside the transaction.
+    """`seed_list.json`'s shape and its title ids, checked before the transaction.
 
-    `bundle.validate_id_partition` swallows a parse error into `payload = []` and
-    `dna.load_seed_list` then re-raises it inside the transaction through a bare `json.loads` and
-    `int(item["title_id"])`. And `seed_list.title_id` is a NOT NULL foreign key to `title(id)`
-    (`0003_content.sql`), so one entry naming a title the install does not carry aborts the whole
-    import on a constraint violation that names a constraint rather than a file.
-
-    Checked to the shape the loader may then rely on: a list, or `{"titles": [...]}`, every entry
-    an object with an integer `title_id`. v20260828 writes the first (100 entries of `title_id`,
-    `title`, `year`, `kind` and the three rating shares); the second is what a hand-edited list
-    arrives as and costs one branch.
-
-    An id the spine does not carry is a FAILURE against the bundle's own `content.sqlite` - the
-    bundle disagreeing with itself - and a counted NOTE against an INSTALLED spine, which is
-    decision 247's rule for the loader: `load_seed_list` skips and counts those entries because
-    the corpus's catalogue is not frozen at this install's seed (decision 248).
-    [M4.14 step B2, findings 2.12 and 2.15]
+    A list, or `{"titles": [...]}`, of objects with an integer `title_id`. An unknown id fails against
+    the bundle's own spine and is a counted note against an installed one (decision 248).
     """
     path = root / "seed_list.json"
     if not path.is_file():
@@ -1577,17 +1140,7 @@ def _validate_seed_list(root: Path, report: ImportReport, spine: Spine | None) -
             rows=malformed, entries=len(entries),
         )
 
-    # `year`'s SHAPE, which this function's contract covers ("checked to the shape the loader may
-    # then rely on") and which it read nothing of. `dna._decade` turns this field into
-    # `seed_list.decade`, and a `year` of `NaN` - the spelling an unresolved year arrives in from
-    # a frame, since `json.dumps` writes the bare literal and `json.loads` accepts it - raised
-    # ValueError inside the import transaction, past every arm that could have named it. The
-    # loader now keeps a NULL decade for it, as its own docstring always promised; this is the
-    # half that says so before the operator commits, which is `validate_for_install`'s contract.
-    # A note and not a failure, on the loader's trade: a hole in §4.3's stratification is a
-    # smaller loss than a refused seed. The DERIVATION stays in `dna._decade` alone and is not
-    # repeated here - this asks only whether the field is a number, which is a question about the
-    # file. [M4.14 cycle 4, m414-c4-dim247-03]
+    # A non-numeric `year` gives a NULL decade in the loader; noted here before commit.
     unreadable_years = [
         entry.get("title_id") for entry in entries
         if isinstance(entry, dict) and entry.get("year") is not None
@@ -1629,14 +1182,8 @@ def _validate_seed_list(root: Path, report: ImportReport, spine: Spine | None) -
         )
 
 
-# decision 251: an absent `feature_contract.json`, `cold_tower.pt` or `backbone.npz` is a
-# validation FAILURE on both bundle kinds, and the argument is recorded with the files rather
-# than left implicit. §10 step 4 recomputes the rebuild set on EVERY import, and
-# `placement/reconcile.py` reaches all three without a guard that a real import can miss.
-#
-# `BUNDLE_FILES`' `required` flags stay exactly as they are: they answer a different question
-# (what this store can be LOADED with at all, which §3.1 makes legal to answer with "nothing")
-# and they feed the Data tab's `missing_required` summary. [M4.14 step B6, finding 2.13]
+# Decision 251: these three absent are failures on both bundle kinds; every import's rebuild
+# reaches them. `BUNDLE_FILES`' `required` flags answer a different question.
 _REPORTED_AS_FAILURES: dict[str, tuple[str, str]] = {
     "feature_contract.json": (
         "feature-contract",
@@ -1662,16 +1209,7 @@ def _validate_model_artifacts(
 ) -> None:
     """§4.3's model files, checked against each other rather than only for presence.
 
-    §10's sequence puts validation before the flip precisely so a bad bundle never becomes the
-    active one. Without this, the failures below all surface later and somewhere else: a Backbone
-    with no id array raises on the first fold-in, and a tower whose input width disagrees
-    with the contract does not raise at all — it broadcasts a short vector into a wide layer and
-    places the whole library at plausible, wrong coordinates. That one is the reason this
-    function exists; it is silent by construction everywhere except here.
-
-    Every array is named the way the corpus names it. The app demanded `title_id` where both
-    `backbone.npz` and `review_text_emb.npz` ship `title_ids`, so on a real bundle the id vector
-    was reported absent while it was sitting in the file.
+    A tower whose input width disagrees with the contract never raises: it places the library wrongly.
     """
     import numpy as np
 
@@ -1684,10 +1222,7 @@ def _validate_model_artifacts(
         try:
             with np.load(backbone, allow_pickle=False) as npz:
                 keys = set(npz.files)
-                # §4.3 names E, E_full, b_i, μ and item_n — and no id mapping, which is the gap.
-                # E is a matrix of rows with no stated correspondence to `title.id`, so without
-                # `title_ids` the basis is unusable: every row would be matched by position, and
-                # a wrong index is a plausible number for the wrong film.
+                # Without `title_ids`, rows of E would be matched by position.
                 if "title_ids" not in keys:
                     report.fail(
                         "backbone",
@@ -1732,14 +1267,7 @@ def _validate_model_artifacts(
                             "block is columns 0..63 of this embedding, matched to titles by id",
                             keys=sorted(keys),
                         )
-                # `covered` is the third required array, not an optional extra: the feature
-                # contract's own `preprocessing.missing_review_text` is "zeros when
-                # covered=False", and the shipped bundle sets it False on 6,010 of 14,397 rows
-                # whose `emb` is float noise around 1e-16. Without the flag those rows read as
-                # review text, so the review-text block is *present* for 42% of titles that
-                # have none — §5.3's thin badge stays off and §8 stage 2 never parks the
-                # acquisition job that is the only thing which can fill it. Silent by
-                # construction everywhere except here.
+                # Required: `covered=False` rows carry noise embeddings that would read as review text.
                 if "covered" not in keys:
                     report.fail(
                         "review-text",
@@ -1766,9 +1294,7 @@ def _validate_model_artifacts(
                             "rows and the mapping disagree",
                         )
                     elif contract is not None and emb.shape[1] < contract.text_used:
-                        # §4.3 truncates; it never pads. A narrower embedding than the contract
-                        # truncates to is a text block the app cannot build at the declared
-                        # width, and the tower is fed that width or nothing.
+                        # §4.3 truncates; it never pads.
                         report.fail(
                             "review-text",
                             f"emb has {emb.shape[1]} columns and the contract takes the first "
@@ -1788,11 +1314,7 @@ def _validate_model_artifacts(
         )
         return
 
-    # Loaded by the SAME loader §8 stage 9 uses, for the reason the contract is parsed by §8
-    # stage 9's parser: two readers of one file drift. The corpus writes
-    # `torch.save(model.state_dict())` — a bare mapping with no `version`, `arch` or `input_dim`
-    # — so a validator hand-reading those keys reported every real bundle as version None while
-    # the loader that actually has to build the module was never asked.
+    # Loaded by §8 stage 9's own loader.
     from spielplan.importer import vocab
     from spielplan.models.artifacts import ArtifactStore
     from spielplan.placement.tower import TowerError, load_tower
@@ -1800,17 +1322,7 @@ def _validate_model_artifacts(
     try:
         store = ArtifactStore.open(root, report.bundle_version or "unvalidated")
     except vocab.VocabularyError as exc:
-        # `ArtifactStore.open` derives the vocabulary through `vocab.version_of`, which RAISES on
-        # a tree holding two - correctly, since its own docstring argues that the one caller with
-        # no report to write is the one where the exception has to carry the sentence. This
-        # caller HAS a report, and it is three hundred lines above the branch that catches the
-        # same exception, so decision 163's refusal left `validate()`, left
-        # `validate_for_install`, and left both routes as a 500 with no findings at all: neither
-        # `_open` (BundleOpenError/TarError/ZstdError/OSError) nor `app.py` catches a
-        # `RuntimeError`. Reachable exactly when the bundle DECLARES a vocabulary, because the
-        # declaration is what disarms the two report-producing derivations - and decision 256's
-        # own refusal message asks the corpus to start writing that declaration.
-        # [M4.14 cycle 1, m414-c1-vocab-two-version-refusal-is-a-500]
+        # This caller has a report, so the two-vocabulary refusal becomes a line, not a 500.
         report.fail("vocabulary", str(exc), versions=list(exc.versions))
         return
     try:
@@ -1820,10 +1332,7 @@ def _validate_model_artifacts(
     except Exception as exc:                                       # noqa: BLE001
         report.fail("cold-tower", f"cold_tower.pt is unreadable: {exc}")
     else:
-        # `tower.notes` rides in the same line rather than a second finding: it qualifies this
-        # claim (the version in it was assumed from the tensor names, not read off the file), and
-        # a qualification in a separate note is one an operator can read without the claim.
-        # [M4.13 step 36, cs-54]
+        # `tower.notes` qualifies the claim, so it rides in the same line.
         report.note(
             "cold-tower",
             f"cold_tower.pt loads as {tower.arch} v{tower.version}: {tower.input_dim} input "
@@ -1837,40 +1346,10 @@ def _validate_model_artifacts(
 def _validate_identity(bundle_root: Path, ids: Any, npz: Any, keys: set[str],
                        report: ImportReport, spine: Spine | None = None,
                        active_coverage: set[int] | None = None) -> None:
-    """decision 162: the identity column, checked against the spine rather than trusted.
+    """Decision 162: the identity column, checked against the spine rather than trusted.
 
-    Range partitioning stops two minters colliding; it cannot see the corpus *merging* two
-    titles, which changes what an id MEANS without changing the id. `scoring/backbone.py`
-    records that a wrong row "produces plausible numbers for the wrong films", and the
-    strictly-increasing check above cannot see a merge — after one the ids still ascend.
-
-    Measured on the shipped bundle: 2,139 of 14,397 backbone titles carry no `imdb_id`, and none
-    carry neither `imdb_id` nor `tmdb_id`. So the identity is decided per ROW, not once for the
-    vector: `imdb:<imdb_id>` where the exporter had one, `tmdb:<tmdb_id>:<kind>` where it did
-    not — §4.1's "imdb_id … must never be the join key" is about joining, and this is not a
-    join; it is the assertion that row r of E is the film the spine calls `title_ids[r]`.
-
-    The check is made on the axis the token names and only that axis. A spine row that has since
-    GAINED an imdb_id is not a re-identification — §8 stage 2's enrichment does exactly that —
-    while a token naming an id the spine disagrees with is one, and fails naming the title.
-
-    `spine` is the installed one when the caller had a connection. Under decision 162 a
-    models-only bundle is the only kind that will ever arrive again and it carries no spine of
-    its own, so reading one out of `content.sqlite` alone made this check skip exactly the case
-    it exists for: a corpus-side merge reaches an install through a model bundle and nothing
-    else.
-
-    WHICH DIRECTION IS THE REFUSAL is decision 248, and it is not the one this check started
-    with. The corpus keeps its own catalogue - `sqlite_sequence` stood at title 21442 against the
-    19,071 the bundle exported - so a retrained `backbone.npz` covers whatever the corpus had at
-    export time, and rows for titles this install lacks are INERT: a `Backbone` lookup is by id
-    and never reaches them, while the merge this check exists for is visible on the rows that do
-    match. Failing on them refused the first retrained backbone, which is the first model bundle
-    this app will ever meet. The refusal is the other direction: coverage that goes BACKWARDS.
-    `active_coverage` is the id set the ACTIVE backbone covers among the install's
-    `origin='bundle'` titles, from the caller that has a connection; a title that had a
-    coordinate and would stop having one is a dropped or merged row, and §5.1 would go on scoring
-    it against a basis that no longer knows it. [M4.14, decision 248, finding 2.16]
+    Per row, `imdb:<id>` or `tmdb:<id>:<kind>`, on the axis the token names. Extra rows for titles the
+    install lacks are inert; coverage going backwards is the refusal (decision 248).
     """
     if active_coverage:
         dropped = sorted(set(active_coverage) - {int(i) for i in ids.tolist()})
@@ -1891,20 +1370,8 @@ def _validate_identity(bundle_root: Path, ids: Any, npz: Any, keys: set[str],
             )
 
     if IDENTITY_ARRAY not in keys:
-        # A SEED carries `content.sqlite`, which is a better identity source than the vector: it
-        # names all 19,071 titles where the vector would name only the 14,397 with a model row,
-        # and it is the same fact from the same export. So a seed without the vector is checked
-        # against its own spine and warned; a MODEL bundle has no spine of its own, and there
-        # the vector is the only thing standing between a corpus-side merge and a silent
-        # re-identification — absent, it is a failure.
-        #
-        # No bundle this app has SEEN carries the array: v20260828's `backbone.npz` holds E,
-        # E_full, E_hat, b_hat, b_i, cold_mask, item_n, mu and title_ids, and nothing else. What
-        # is no longer true is the reason this comment gave - `mdc export-bundle` DOES write
-        # `title_identity` as of movie_data_curator@3666eaa; the export has simply not been
-        # re-run since. So failing a seed on the array would still refuse the only bundle that
-        # exists today, and stops being a concession the first time the corpus exports again.
-        # [M4.14 step C5]
+        # A seed without the vector is checked against its own spine and warned; a model bundle without
+        # it fails. The corpus exporter writes it now but has not re-run.
         if not (bundle_root / "content.sqlite").is_file():
             report.fail(
                 "identity",
@@ -1971,10 +1438,7 @@ def _validate_identity(bundle_root: Path, ids: Any, npz: Any, keys: set[str],
             )
 
     if absent and not (bundle_root / "content.sqlite").is_file():
-        # decision 248, argued in the docstring: on a MODELS-ONLY bundle the spine is the
-        # install's, the corpus's catalogue has moved on since it was seeded, and these rows are
-        # inert. Counted, because the count is the merge signal an operator reads - a retrain
-        # that suddenly covers thousands more titles is a fact about the corpus, not a fault.
+        # Decision 248: inert rows on a models-only bundle, counted.
         report.note(
             "identity",
             f"{len(absent):,} backbone row(s) name a corpus title this install never seeded "
@@ -1983,8 +1447,7 @@ def _validate_identity(bundle_root: Path, ids: Any, npz: Any, keys: set[str],
             rows=len(absent), title_ids=absent[:20],
         )
     elif absent:
-        # A SEED is checked against its OWN content.sqlite, and there this is the bundle
-        # disagreeing with itself: a row of E that no title in the same export claims.
+        # On a seed, a row no title in the same export claims.
         report.fail(
             "identity",
             f"{len(absent):,} backbone row(s) name a title the spine does not carry "
@@ -2019,11 +1482,7 @@ def _validate_identity(bundle_root: Path, ids: Any, npz: Any, keys: set[str],
 
 
 def _spine_identities(content_db: Path, report: ImportReport) -> Spine | None:
-    """`title` reduced to what an identity token can be checked against.
-
-    Read here rather than passed in because §10 validates the artifacts after the content
-    connection is closed, and this is the one check that spans both halves of the bundle.
-    """
+    """`title` reduced to what an identity token can be checked against."""
     if not content_db.is_file():
         report.note(
             "identity",
