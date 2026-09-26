@@ -1,30 +1,5 @@
-"""Admin routes for the Jellyfin connector, the household's accounts and the System card.
-Spec v2.1 §6.6 (Connectors, Users, System), §3.1, §3.3, §7.
-
-§6.6's Connectors card: "Jellyfin (URL, API key, library pick, user-mapping table, test
-button, sync now, webhook status)". M1 ships all of it but the library pick and the webhook —
-§7.2's webhook belongs to the acquisition trigger, which is M5. M5.2 adds the API half of both
-and none of their UI: the pick gains a writer and a list to pick from (decision 364), and the
-webhook token gains the single appearance decision 332 allows it. M5.7 renders them, and the card's
-GET gains the webhook status itself, as the facts `acquire/intake.trigger_status` reads (decision
-455).
-
-§6.6's Users card is "the household's whole user management, and the **only** place accounts
-are made (decision 166)". The routes under `/api/admin/users` below are that card's row editor:
-create, rename, change role, password reset, PIN reset, the passkey list and its per-credential
-revoke, disable and delete. Jellyfin re-link/unlink are the two routes that already existed here.
-
-§6.6's System card is `GET /system` at the bottom of this file: decision 182's three facts, and
-since M5.7 the queue depth, last syncs and recent log lines that complete the five §6.6 lists
-(decision 454). Read-only: nothing on that surface is a control, so there is no second route.
-
-Every route in this module is `AdminUser`, which means three things at once (§3.1, §3.2,
-§6.6): a member gets 403, a signed-out caller gets 401, and an admin whose last password
-authentication is older than 24 h is re-prompted before the route resolves.
-
-The API key never comes back out. `has_api_key` is a boolean and the field posts empty to mean
-"leave it alone" — §14.3 is blunt that this key is admin-equivalent on the whole media server,
-and a GET that returns it turns every admin session into a copy of it.
+"""Admin routes: §6.6's Jellyfin connector, Users card (the only place accounts are made, decision
+166) and System card. Every route is `AdminUser`. The API key never comes back out (§14.3).
 """
 
 from __future__ import annotations
@@ -55,39 +30,14 @@ router = APIRouter(prefix="/api/admin", tags=["admin"])
 
 
 def _no_control_characters(value: str) -> str:
-    """A NUL byte in a name reaches Postgres and answers 500 (sec-04, as-11).
-
-    Unicode's `Cc` category is exactly the C0 and C1 controls, and none of them is typeable in
-    a household name — one only ever arrives from a paste or a crafted body, and the place to
-    answer for it is the edge, as a 422.
-    """
+    """Control characters are never typeable, and a NUL reaches Postgres as a 500: refuse at the edge."""
     if any(unicodedata.category(ch) == "Cc" for ch in value):
         raise ValueError("must not contain control characters")
     return value
 
 
-# Jellyfin's own ids are 32-character GUIDs and a household install has a handful of libraries,
-# so both bounds sit far above anything §6.6's pick can produce. They exist because decision 364
-# makes this value the acquisition boundary: it is stored as jsonb on the connector row and read
-# on every intake event, and the only caller that would not stop at the number of folders a server
-# actually has is a crafted body. The place to answer for one is the edge, as a 422 -- the same
-# argument `_no_control_characters` makes above, which is why that validator is now applied here
-# rather than only cited: a crafted body's NUL is a character jsonb holds nowhere, so the save
-# reached `db/pool.py`'s `json.dumps` codec, raised, and answered 500 `database error` over a
-# pick this line could have named. Three bounds and only two of them enforced is the shape that
-# comment had for a whole milestone. [review cycle 2: m52-c2-libid-01, m52-c2-lib-03]
-#
-# AND THREE VALUES A REAL SERVER READS AS SOMETHING ELSE WERE STORED VERBATIM. Whitespace reaches
-# `ParentId` as a blank that ASP.NET binds to a null `Guid?` -- a read of the WHOLE SERVER, the
-# boundary silently widened to every library the admin deselected, which is decision 364's harm
-# exactly -- so it is stripped, and a blank is then the empty id refused above. The nil GUID names
-# no folder and is answered 400 on every scoped read. And one library spelled dashed, braced or in
-# upper case (Jellyfin accepts all three) was a separate scope per spelling and an id no
-# comparison against `/Library/MediaFolders`'s own undashed spelling could match, so a GUID is
-# stored as the server spells it and the list keeps each library once. An id that is not a GUID
-# is not refused, for decision 415's reason: the test double's are not, and a library deleted
-# after the pick cannot be refused at save time anyway -- that one is decision 410's.
-# [review cycle 3: M52-C3-LIB-04]
+# Decision 364 makes the pick the acquisition boundary, so it is validated at the edge: whitespace
+# would bind as a null ParentId (the whole server), and a GUID is stored as the server spells it.
 
 
 def _a_folder_jellyfin_could_name(value: str) -> str:
@@ -110,61 +60,38 @@ LibraryId = Annotated[
 
 
 class JellyfinSettings(BaseModel):
-    # Empty means "keep the stored one" for both fields: the form shows the key as a mask and
-    # a partial save must never blank the half it did not send.
+    # Empty means "keep the stored one": a partial save must never blank the half it did not send.
     url: str = Field(default="", max_length=512)
-    # Trimmed at the edge, for `llm/client.header_key`'s reason: whitespace around a key is no part
-    # of it. Double-click a key in Jellyfin's API Keys table and the trailing space comes with it;
-    # stored as typed, h11 refused it as a header value and quoted the whole key into the error the
-    # library pick prints and the WARNING §6.6's log panel holds (§14.3: admin-equivalent), and a
-    # field of spaces replaced the working key. Blank once trimmed is the empty field: keep.
-    # [M5.7 review cycle 1, M57-KEYS-C1-01]
+    # Trimmed: a double-clicked key carries a trailing space. Blank once trimmed means keep.
     api_key: Annotated[str, StringConstraints(strip_whitespace=True)] = ""
-    # §6.6's "library pick", which decision 364 turns from a stored value nothing ever read into
-    # the boundary §7.2's intake paths are scoped by. Nullable rather than empty-by-default, alone
-    # among the fields here, because absent and empty are different answers and both have to be
-    # sayable: absent is the partial save above ("keep the stored pick"), while an explicit `[]` is
-    # an admin deselecting the last library, which decision 364 reads as "the whole server".
-    # Collapsing the two the way `url` and `api_key` collapse theirs would make the second gesture
-    # unperformable -- a pick could be narrowed for ever and never widened again.
+    # Nullable: None keeps the stored pick, while `[]` means the whole server (decision 364).
     library_ids: Annotated[
         list[LibraryId], Field(max_length=64), AfterValidator(_each_library_once)
     ] | None = None
-    # §7.2's webhook token is minted only when the caller ASKS, because the only client of this
-    # route that ships -- §6.6's connectors page -- throws the response away, and decision 332
-    # gives the value one appearance: minted on its Save, the token was sealed, shown to nobody and
-    # unrecoverable, and every real delivery was 401 for the life of the install. The page never
-    # sends this; a client that renders the reveal does (decision 418).
+    # Minted only when asked (decision 418): the value has one appearance (decision 332), and the
+    # connectors page discards the response.
     mint_webhook_token: bool = False
 
 
 class LinkRequest(BaseModel):
     jellyfin_user_id: str = Field(min_length=1, max_length=64)
-    # §7.3's least-privilege write path costs "one-time password entry per linked user".
-    # Optional: a link without a token still drives the P(seen) prior and attribution, it just
-    # cannot write Played state until someone completes it.
+    # Optional (§7.3): a link without a token attributes playback but cannot write Played state.
     jellyfin_username: str | None = None
     jellyfin_password: str | None = None
 
 
-# Trimmed at the edge because the unique index is on `lower(name)` with no trim
-# (0002_users.sql:26): ' Tom ' and 'Tom' were two accounts, two identical-looking chips in the
-# switch list, and only one of them answered to what a person types (as-11).
+# Trimmed: the unique index is on `lower(name)` with no trim.
 AccountName = Annotated[
     str,
     StringConstraints(strip_whitespace=True, min_length=1, max_length=64),
     AfterValidator(_no_control_characters),
 ]
 
-# Decision 166: two roles and no others. A `Literal` rather than a pattern so `role='guest'`
-# is a 422 from the schema, in the one place §6.6 leaves for making an account — the CHECK
-# migration 0016 narrows is the same rule one layer down, not a substitute for this one.
+# Decision 166: two roles; a Literal makes `role='guest'` a 422.
 AccountRole = Literal["member", "admin"]
 
-# §6.6: "at least one active admin always exists — the last one can be neither demoted nor
-# disabled nor deleted". Every route that could take an admin out of that count reads it and
-# then writes, and two such routes running at once would each see the other's admin and both
-# succeed. The name is the seam, not the row: demoting A while disabling B is the race.
+# §6.6's admin floor is a check then a write, so every route that could break it takes this lock.
+# The name is the seam, not the row: demoting A while disabling B is the race.
 _ROSTER_LOCK = "app_user_admin_floor"
 
 
@@ -174,8 +101,6 @@ class CreateUser(BaseModel):
 
 
 class EditUser(BaseModel):
-    """§6.6's "rename" and "change role", in one row editor and so in one request."""
-
     name: AccountName | None = None
     role: AccountRole | None = None
 
@@ -194,23 +119,8 @@ async def _client(conn) -> JellyfinClient:
 
 
 async def _store_probed_version(conn, cfg: JellyfinConfig) -> JellyfinConfig:
-    """§7.1's pin, stored where the write can read it rather than returned and discarded.
-
-    `MIN_SERVER_VERSION` and the verdict have existed since M1, and the only caller was the test
-    button below — which handed `supported` to the browser, rendered one sentence about reads, and
-    kept nothing. So a 10.8 install passed every visible check while `POST /UserPlayedItems`, the
-    route §7.1 actually pins the version for, 404ed for the life of the household. The verdict lives
-    in the connector's config half (no secret, no migration) and `JellyfinClient.played_write_refusal`
-    is what reads it back; the sweep re-probes at its own head, because an operator upgrades the
-    media server without ever returning to this page.
-
-    Best-effort on purpose. §3.1 makes a half-configured install legal and the admin types the
-    address before pasting the key, so a server that is not up yet must not fail the save — the
-    stored pair simply stays as it was, `server_supported is None` does not refuse a write, and the
-    next sweep or test button fills it in. Saved only when it changed: this row carries the
-    AEAD-sealed credentials, and re-sealing them to store an unchanged version string is work with
-    no reader. [M4.11 finding 16; §7.1, §3.1]
-    """
+    """§7.1's version verdict, stored so the Played write can refuse (`played_write_refusal`).
+    Best-effort: an unreachable server leaves the stored verdict; saved only when it changed."""
     client = registry.make_client(cfg)
     if client is None:
         return cfg
@@ -226,13 +136,8 @@ async def _store_probed_version(conn, cfg: JellyfinConfig) -> JellyfinConfig:
 
 @router.get("/connectors/jellyfin")
 async def get_jellyfin(_: AdminUser, conn: DB) -> dict[str, object]:
-    """§6.6's Connectors card, plus the one state it could not previously describe.
-
-    `secrets_unreadable` is not the same fact as `configured: false`. A restored dump under a
-    changed or missing SECRETS_KEY leaves a real connector row whose credentials will not open
-    (M4.7 dd03), and the card has to say "re-enter the API key" rather than "set one up" — the
-    PUT below is what repairs it, by sealing under a fresh DEK.
-    """
+    """`secrets_unreadable` (restored dump, wrong SECRETS_KEY) differs from `configured: false`: the
+    card must say "re-enter the key"."""
     cfg = await load_jellyfin(conn)
     return {
         "url": cfg.url,
@@ -241,23 +146,12 @@ async def get_jellyfin(_: AdminUser, conn: DB) -> dict[str, object]:
         "library_ids": cfg.library_ids,
         "linked_users": len(cfg.user_tokens),
         "secrets_unreadable": cfg.secrets_unreadable,
-        # §7.2's webhook token, reported exactly the way `has_api_key` reports the API key and for
-        # the same reason one paragraph up in this module's docstring: whoever holds this value can
-        # file acquisition work in the household's name (§14.3), so a GET that returned it would
-        # turn every admin session into a copy of it. Decision 332 gives the value one appearance,
-        # on the save that mints it, and the card's job here is only to say that the operator has
-        # something to paste into the Webhook plugin -- or that nobody has minted one yet.
+        # Whether a webhook token exists, never the token (§14.3; decision 332).
         "has_webhook_token": bool(cfg.webhook_token),
-        # §7.1's pin as this install last measured it, so the card can say that Played writes are
-        # refused without the admin pressing Test first — the state a 10.8 server is in every day,
-        # not only in the minute after a probe. `null` is "nobody has probed", which must stay
-        # distinguishable from a stored `false` (`registry.JellyfinConfig`). [M4.11 finding 16]
+        # `null` means never probed, distinct from a stored `false`.
         "server_version": cfg.server_version,
         "server_supported": cfg.server_supported,
-        # §6.6's "webhook status", as the facts of what arrived and what the fallback did rather
-        # than a mode flag somebody sets (decision 455, plan D2). The domain reads both tables,
-        # because the vocabulary of an intake row and of a poll's report is `acquire/intake.py`'s;
-        # this route names the job and hands over the watermark it has already loaded.
+        # §6.6's webhook status, as facts from `acquire/intake` (decision 455).
         "trigger": await intake.trigger_status(
             conn, poll_job=DELTA_POLL_JOB, watermark=cfg.delta_watermark
         ),
@@ -266,32 +160,9 @@ async def get_jellyfin(_: AdminUser, conn: DB) -> dict[str, object]:
 
 @router.put("/connectors/jellyfin")
 async def put_jellyfin(body: JellyfinSettings, _: AdminUser, conn: DB) -> dict[str, object]:
-    """§6.6's Save. It also probes, because a save is the one moment the credentials are known to
-    be fresh and §7.1's verdict is what gates every later Played write (`_store_probed_version`).
-
-    It is also the one response in this app that ever carries §7.2's webhook token, and the only
-    caller that may ask for one to be minted (decision 416). Decision 332 gives the value one
-    appearance, so the gesture that mints it has to be one somebody is watching: every other
-    caller of `save_jellyfin` is a background job, and a token minted there is sealed into the
-    database and shown to nobody, for ever. And a Save is not such a gesture either, because the
-    page that sends it drops the answer -- so this route asks only when the body does
-    (`mint_webhook_token`, decision 418), and the merge decides whether there was anything to mint.
-    [M5.2 review cycle 4: M52-C4-TOKEN-01]
-
-    A key no header can carry -- whitespace or a control character inside it, anything past
-    printable ASCII -- is refused here rather than by the model, because FastAPI's own 422 quotes
-    the input it refused, and a card that renders its error would print the key (`api/llm._body`).
-    [M5.7 review cycle 1, M57-KEYS-C1-01]
-
-    `save_jellyfin` mints deep inside the merge it serialises, so the only way to tell the save
-    that minted one from the hundred that carry it forward is to read what was stored a moment
-    earlier and compare. That read is deliberately outside the merge's lock: holding the row
-    across `_store_probed_version` would serialise every save of this connector behind a network
-    call to the media server. The worst a race can now do is show two simultaneous first saves
-    the same freshly minted value -- one admin being told one token twice rather than a
-    disclosure to anybody else -- which is true because the merge takes the connector row before
-    it reads it, and was not while the first save had no row to lock.
-    """
+    """§6.6's Save, which also probes §7.1's version. The only response that carries a freshly minted
+    webhook token (decisions 416, 418). A key no header can carry is refused here, since FastAPI's
+    422 would quote it back."""
     if body.api_key and header_key(body.api_key) is None:
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_CONTENT,
@@ -310,16 +181,9 @@ async def put_jellyfin(body: JellyfinSettings, _: AdminUser, conn: DB) -> dict[s
         "url": cfg.url,
         "has_api_key": bool(cfg.api_key),
         "configured": cfg.configured,
-        # Echoed because M5.2 is the milestone in which this field starts meaning something, and
-        # the merge's two answers are indistinguishable from the caller's side otherwise: `None`
-        # keeps the stored pick and `[]` widens the boundary to the whole server (decision 364).
-        # A save whose whole content was the second of those would come back looking like a save
-        # that had been ignored.
+        # Echoed: `None` kept the pick and `[]` widened it, and the caller cannot tell otherwise.
         "library_ids": cfg.library_ids,
-        # `null` on every save but the minting one, rather than an absent key. §6.6's card shows a
-        # one-time reveal, and a client that had to tell "this save minted a token" from "this
-        # response does not mention tokens" would get it wrong in the direction that leaves the
-        # value on screen for ever. The GET above reports only whether one exists (§14.3).
+        # `null` unless this save minted it, so a one-time reveal can never linger.
         "webhook_token": (
             cfg.webhook_token
             if cfg.webhook_token and cfg.webhook_token != before.webhook_token
@@ -332,18 +196,13 @@ async def put_jellyfin(body: JellyfinSettings, _: AdminUser, conn: DB) -> dict[s
 
 @router.post("/connectors/jellyfin/test")
 async def test_jellyfin(_: AdminUser, conn: DB) -> dict[str, object]:
-    """§6.6's test button. §7.1 pins Jellyfin >= 10.9, so the probe reports the version and
-    whether it clears that bar rather than only whether the socket opened."""
+    """§6.6's test button: reports the version and whether it clears §7.1's >= 10.9 pin."""
     client = await _client(conn)
     try:
         probe = await client.check()
     except JellyfinError as exc:
         return {"ok": False, "error": str(exc), "status": exc.status}
-    # Stored, not only shown. `check` computes the same verdict `_store_probed_version` does and
-    # this route was where it went to die (finding 16). Stored as `check` returns it, `None`
-    # included: `bool()` here turned "the server did not report a version" into "below the pin",
-    # which is a refusal that cannot name the version it refuses and is exactly the pair
-    # `save_jellyfin`'s docstring forbids. [review cycle 1: m411-rev-jf-04]
+    # Stored as `check` returns it: `None` must stay "not reported", never "below the pin".
     await save_jellyfin(
         conn,
         server_version=str(probe.get("version") or ""),
@@ -365,21 +224,8 @@ async def jellyfin_users(_: AdminUser, conn: DB) -> list[dict[str, object]]:
 
 @router.get("/connectors/jellyfin/libraries")
 async def jellyfin_libraries(_: AdminUser, conn: DB) -> dict[str, object]:
-    """§6.6's "library pick", given something to pick from (decision 364).
-
-    The read exists because the pick does: decision 364 makes `library_ids` the boundary §7.2's
-    intake paths are scoped by, and a pick over folders nobody can see listed is a pick nobody can
-    make -- a connector method with no caller is the same defect as a stored field with no reader,
-    which is the one this milestone is repairing.
-
-    An envelope rather than the bare list `/connectors/jellyfin/users` answers with, because here
-    the empty list is a meaningful answer in its own right: decision 364 reads an empty pick as
-    "the whole server", so a card handed `[]` because Jellyfin was unreachable would be showing the
-    admin the shape of a deliberate choice. `ok: false` with the server's own words says which of
-    the two it is. Reported rather than raised, the way the test button above reports -- this is a
-    read an admin makes while repairing a connector, and a 502 takes the card down along with the
-    server it is trying to describe.
-    """
+    """Library folders for §6.6's pick (decision 364). An envelope: `[]` from an unreachable server
+    must not look like a deliberate whole-server pick."""
     client = await _client(conn)
     try:
         folders = await client.libraries()
@@ -387,10 +233,7 @@ async def jellyfin_libraries(_: AdminUser, conn: DB) -> dict[str, object]:
         return {"ok": False, "error": str(exc), "status": exc.status, "libraries": []}
     return {
         "ok": True,
-        # The app's own spelling, as `/connectors/jellyfin/users` above also does rather than
-        # handing Jellyfin's `BaseItemDto` keys to the browser. A folder with no id is dropped
-        # instead of listed: the pick is stored as ids, so such a row could be tapped and never
-        # saved.
+        # A folder with no id is dropped: the pick is stored as ids.
         "libraries": [
             {"id": str(folder["Id"]), "name": str(folder.get("Name") or "")}
             for folder in folders
@@ -416,15 +259,8 @@ async def app_users(_: AdminUser, conn: DB) -> list[dict[str, object]]:
     ]
 
 
-# --- §6.6 Users: the row editor -----------------------------------------------------------
-
-
 async def _target(conn: asyncpg.Connection, user_id: int) -> asyncpg.Record:
-    """The account a row-editor route acts on, read inside its own transaction.
-
-    Read there and not before: every floor below is a check followed by a write, and a check
-    made outside the transaction that writes is a check against a roster that may have moved.
-    """
+    """Read inside the writing transaction, so each floor check sees the roster the write changes."""
     row = await conn.fetchrow(
         "SELECT id, name, role, is_active FROM app_user WHERE id = $1", user_id
     )
@@ -434,13 +270,8 @@ async def _target(conn: asyncpg.Connection, user_id: int) -> asyncpg.Record:
 
 
 async def _refuse_if_last_active_admin(conn: asyncpg.Connection, row, verb: str) -> None:
-    """§6.6: "at least one active admin always exists — the last one can be neither demoted nor
-    disabled nor deleted" (decision 166).
-
-    A floor rather than a warning because it is a security rule: `POST /api/setup/admin` takes
-    no auth dependency at all and is gated only on there being no admin (§3.1), so an install
-    that reaches zero admins lets anyone who can see the origin mint one.
-    """
+    """§6.6's admin floor (decision 166). A security rule: with zero admins `POST /api/setup/admin`
+    lets anyone mint one."""
     if row["role"] != "admin" or not row["is_active"]:
         return
     others = await conn.fetchval(
@@ -456,13 +287,7 @@ async def _refuse_if_last_active_admin(conn: asyncpg.Connection, row, verb: str)
 
 
 def _refuse_self(admin: auth.SessionUser, user_id: int, what: str) -> None:
-    """§6.6: "an admin cannot reset their own credentials from this tab (§3.2's 24-hour
-    re-prompt governs the rest)".
-
-    The tab issues one-time passwords for other people, and §3.1's one-time password is a value
-    an admin hands over rather than one they read for themselves; disabling yourself here is the
-    same shape, an admin ending their own session from the screen that governs everyone else's.
-    """
+    """§6.6: an admin cannot reset or disable their own account from this tab."""
     if admin.id == user_id:
         raise HTTPException(
             status.HTTP_409_CONFLICT, f"an admin cannot {what} from the Users tab (§6.6)"
@@ -471,16 +296,9 @@ def _refuse_self(admin: auth.SessionUser, user_id: int, what: str) -> None:
 
 @router.post("/users", status_code=status.HTTP_201_CREATED)
 async def create_user(body: CreateUser, _: AdminUser, conn: DB) -> dict[str, object]:
-    """§6.6's "create (name + role ∈ {member, admin})", and §3.1's one-time password.
-
-    The one-time password is returned exactly once, here. It is stored only as an argon2 hash
-    and no route reads it back, so a lost one is reissued below rather than looked up — which is
-    what §3.1's "an admin never sees, sets or types a member's password" costs, and why this
-    body carries a name and a role and no password field at all.
-    """
+    """Returns the one-time password exactly once; only its hash is stored (§3.1)."""
     otp = auth.new_one_time_password()
-    # Hashed before the transaction opens: argon2 is tens of milliseconds by design (§3.2), and
-    # a transaction held open across it is a row lock held across it.
+    # Hashed before the transaction: argon2 inside it would hold the row lock for tens of ms.
     password_hash = await auth.hash_password_async(otp)
     try:
         async with write_txn(conn):
@@ -494,8 +312,7 @@ async def create_user(body: CreateUser, _: AdminUser, conn: DB) -> dict[str, obj
                 password_hash,
             )
     except asyncpg.UniqueViolationError as exc:
-        # `app_user_name_key` is on lower(name): the index reports the collision a
-        # check-then-insert would miss between two admins creating at once (as04).
+        # The `lower(name)` index catches what a check-then-insert would miss.
         raise HTTPException(
             status.HTTP_409_CONFLICT, f"a user named {body.name!r} already exists"
         ) from exc
@@ -510,7 +327,6 @@ async def create_user(body: CreateUser, _: AdminUser, conn: DB) -> dict[str, obj
 
 @router.patch("/users/{user_id}")
 async def edit_user(user_id: int, body: EditUser, _: AdminUser, conn: DB) -> dict[str, object]:
-    """§6.6's "rename" and "change role", which the roster opens as one row editor."""
     if body.name is None and body.role is None:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, "send a name, a role, or both")
     try:
@@ -536,13 +352,7 @@ async def edit_user(user_id: int, body: EditUser, _: AdminUser, conn: DB) -> dic
 
 @router.post("/users/{user_id}/reset-password")
 async def reset_password(user_id: int, admin: AdminUser, conn: DB) -> dict[str, object]:
-    """§6.6's "password reset (reissues the one-time password and re-arms the first-login
-    change — an admin never sees, sets or types a member's password)".
-
-    Every session for the account goes with it. The reset happens because the old credential is
-    lost or no longer trusted, and a device already holding a cookie would otherwise keep the
-    account for the rest of its sliding 90 days (§3.2) without ever meeting the new one.
-    """
+    """Reissues the one-time password and re-arms the first-login change; every session goes too."""
     _refuse_self(admin, user_id, "reset their own password")
     otp = auth.new_one_time_password()
     password_hash = await auth.hash_password_async(otp)
@@ -553,8 +363,7 @@ async def reset_password(user_id: int, admin: AdminUser, conn: DB) -> dict[str, 
             user_id,
             password_hash,
         )
-        # The account being reset may be locked out by the guesses that made the reset
-        # necessary, and that count must not survive onto the credential replacing them (§3.2).
+        # Clear the guesses that made the reset necessary (§3.2).
         await auth.clear_password_lockout(conn, user_id)
         revoked = await auth.destroy_user_sessions(conn, user_id)
     return {
@@ -568,12 +377,7 @@ async def reset_password(user_id: int, admin: AdminUser, conn: DB) -> dict[str, 
 
 @router.post("/users/{user_id}/reset-pin")
 async def reset_pin(user_id: int, admin: AdminUser, conn: DB) -> dict[str, object]:
-    """§6.6's "PIN reset".
-
-    The counters go with the hash. A member locked out of their own PIN is exactly who needs
-    this, and clearing the hash while `pin_locked_until` still stands would hand them an account
-    that refuses the PIN they are about to set (§3.2).
-    """
+    """The counters clear with the hash, or the new PIN would be locked out (§3.2)."""
     _refuse_self(admin, user_id, "reset their own PIN")
     async with write_txn(conn):
         await _target(conn, user_id)
@@ -587,16 +391,7 @@ async def reset_pin(user_id: int, admin: AdminUser, conn: DB) -> dict[str, objec
 
 @router.get("/users/{user_id}/passkeys")
 async def list_passkeys(user_id: int, _: AdminUser, conn: DB) -> list[dict[str, object]]:
-    """The *list* half of §6.6's "passkey list with per-credential revoke".
-
-    Without it the revoke below is unreachable from any client: the roster carries a count, and
-    a count cannot name the credential a lost phone holds. `webauthn.list_credentials` is the
-    same projection the account page reads for itself — label, rp_id, timestamps, sign count,
-    and no public key, because a client has nothing to do with one and §14.3's rule about
-    admin-equivalent secrets is the same rule about credential material.
-
-    `_target` first, so a roster one delete out of date answers 404 like every route beside it.
-    """
+    """The list half of §6.6's per-credential revoke; no public keys."""
     await _target(conn, user_id)
     return await webauthn.list_credentials(conn, user_id)
 
@@ -605,13 +400,7 @@ async def list_passkeys(user_id: int, _: AdminUser, conn: DB) -> list[dict[str, 
 async def revoke_passkey(
     user_id: int, credential_id: str, _: AdminUser, conn: DB
 ) -> dict[str, bool]:
-    """§6.6's "passkey list with per-credential revoke", on someone else's account.
-
-    Scoped to the named account: `delete_credential` matches on (user_id, credential_id), so an
-    id read off one roster row cannot revoke another account's key. §3.2 keeps password login
-    always available, so revoking the last passkey strands nobody. `{credential_id:path}`
-    mirrors the member-side route — the id is base64url straight off the wire.
-    """
+    """Scoped to the named account: an id off one row cannot revoke another account's key."""
     async with write_txn(conn):
         await _target(conn, user_id)
         removed = await webauthn.delete_credential(conn, user_id, credential_id)
@@ -624,22 +413,12 @@ async def revoke_passkey(
 async def set_active(
     user_id: int, body: ActiveRequest, admin: AdminUser, conn: DB
 ) -> dict[str, object]:
-    """§6.6's "disable (`is_active = false`: every session and passkey assertion refused, the
-    account and its Ledger kept, the user gone from switch lists, rating partners and Tonight
-    lobbies)", and the undo the same control has to have.
-
-    The refusals are already the auth layer's — `load_session`, the login lookup and the passkey
-    assertion lookup all require `is_active`. Deleting the sessions is what makes a disable take
-    effect on a device holding one right now rather than at its next lapse.
-    """
+    """§6.6's disable and its undo. Sessions are deleted so a disable takes effect on a live device now."""
     async with write_txn(conn, lock=_ROSTER_LOCK):
         row = await _target(conn, user_id)
         revoked = 0
         if not body.is_active:
-            # The floor first, because it is the wider rule: the only caller who can reach it
-            # is an admin disabling themselves (anyone else disabling them is a second active
-            # admin, so the floor does not bind), and that person needs to hear that the
-            # household would have no admin — not that this tab is for other people.
+            # The floor first: an admin disabling themselves needs to hear the household would have none.
             await _refuse_if_last_active_admin(conn, row, "disabled")
             _refuse_self(admin, user_id, "disable their own account")
         await conn.execute(
@@ -657,15 +436,8 @@ async def set_active(
 
 @router.delete("/users/{user_id}")
 async def delete_user(user_id: int, _: AdminUser, conn: DB) -> dict[str, bool]:
-    """§6.6's "delete" — the destructive half of the pair whose other half, disable, keeps "the
-    account and its Ledger".
-
-    Everything referencing the row goes with it, and one of those references is not obvious:
-    `session.host_user_id` is ON DELETE CASCADE (0013_tonight.sql:30), so deleting a member
-    deletes every Tonight session they hosted, including the other member's answers and ballots.
-    §6.6 asks for a delete, so the route deletes; saying what is lost before asking is the
-    roster's job.
-    """
+    """Everything referencing the row goes, including every Tonight session they hosted
+    (`session.host_user_id` cascades)."""
     async with write_txn(conn, lock=_ROSTER_LOCK):
         row = await _target(conn, user_id)
         await _refuse_if_last_active_admin(conn, row, "deleted")
@@ -677,24 +449,12 @@ async def delete_user(user_id: int, _: AdminUser, conn: DB) -> dict[str, bool]:
 async def link_jellyfin(
     user_id: int, body: LinkRequest, _: AdminUser, conn: DB
 ) -> dict[str, object]:
-    """§3.3: the map is optional and one-to-one.
-
-    One-to-one is held by the partial unique index on `jellyfin_user_id`, not by a lookup
-    before the write: two admins linking at once would both pass the lookup. The 409 below is
-    the index reporting the collision it actually prevented.
-    """
+    """§3.3: optional and one-to-one, held by the partial unique index rather than a lookup."""
     if not await conn.fetchval("SELECT 1 FROM app_user WHERE id = $1", user_id):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "no such user")
 
-    # §7.3's tokens live in the connector's sealed column, so an unreadable DEK cannot enumerate
-    # them: `load_jellyfin` reports the dict empty and `seen.forget_token` below concludes there
-    # is nothing to drop. The mapping would change while the previous Jellyfin identity's token
-    # stayed sealed, and `seen.linked_users` pairs the stored mapping with `token_for` without
-    # reading `link_state` — so the correct .env returning is what sends one member's credential
-    # under another's id, which is the whole reason `forget_token` exists. Refused rather than
-    # cleared: that ciphertext also holds the admin key and every other member's token, unreadable
-    # only until that .env comes back (§2). The PUT above is the cure and drops the tokens itself.
-    # [M4.7 dd03]
+    # Refused while secrets are unreadable: the old identity's token cannot be dropped and would later
+    # be sent under the new mapping. The connector PUT is the cure.
     if (await load_jellyfin(conn)).secrets_unreadable:
         raise HTTPException(
             status.HTTP_409_CONFLICT,
@@ -719,32 +479,9 @@ async def link_jellyfin(
                 "those Jellyfin credentials belong to a different Jellyfin user",
             )
 
-    # One transaction over the badge and the token, with the connector row locked for the read the
-    # merge is made from. Both halves were needed and neither was there. The sealed `user_tokens`
-    # map is AEAD-encrypted, so the merge happens in Python and cannot be expressed in SQL: on an
-    # autocommit connection two members being linked on two phones each read the same map, each
-    # added one entry, and the second write dropped the first — reproduced against the in-process
-    # fake, where both responses answered `has_token: true / linked` and `GET /api/admin/users`
-    # then showed the second account linked with `has_jellyfin_token: false` and the card counting
-    # one link. And an account that reads "linked" with no token is not a cosmetic loss: it is the
-    # state §7.3's sweep treats as a missing credential, which until this milestone stopped that
-    # member's whole reconciliation at their first owed row for ever.
-    # `load_jellyfin(for_update=True)` argues why the lock is the connector row and not an advisory
-    # key (the secret cannot be merged in SQL, so the row is the seam).
-    #
-    # `app_user` first and the connector row second, which is `seen.unlink`'s order and therefore
-    # `seen.forget_token`'s: the two routes that write this pair are Link and Unlink, they are
-    # adjacent buttons in §6.6's mapping table, and taking the two locks in opposite orders is a
-    # deadlock on the one account both of them name. (`registry.save_jellyfin` does hold the
-    # connector row while it de-links every account on an origin change — §14.3 — so that one save
-    # and a simultaneous link are the residual pair; it is an admin retyping the server address
-    # while another admin links, Postgres detects it rather than hanging, and ordering this route
-    # the other way would trade a plausible collision for a rare one.)
-    #
-    # The `authenticate_by_name` network call stays above this block, where it already was: §3.3
-    # makes Jellyfin's availability the app's problem and never the database's, and holding a row
-    # lock across a sign-in to another server would turn one slow media server into a lock queue.
-    # [M4.11 finding 19; §14.3, §7.3, §3.3]
+    # One transaction, connector row locked: the sealed token map merges in Python, so concurrent
+    # links would lose an entry. `app_user` before the connector row, as `seen.unlink` does, to avoid
+    # deadlock. The Jellyfin sign-in stays outside the lock.
     try:
         async with write_txn(conn):
             await conn.execute(
@@ -752,8 +489,7 @@ async def link_jellyfin(
                 "WHERE id = $1",
                 user_id,
                 body.jellyfin_user_id,
-                # A link with no token is real but incomplete: it attributes playback and feeds the
-                # P(seen) prior, and it cannot write Played state until someone signs in (§7.3).
+                # Linked without a token: attributes playback, cannot write Played state (§7.3).
                 "linked" if token else "needs_relink",
             )
             if token:
@@ -762,14 +498,10 @@ async def link_jellyfin(
                 tokens[str(user_id)] = token
                 await save_jellyfin(conn, user_tokens=tokens)
             else:
-                # A stored token belongs to one Jellyfin identity. Re-pointing this account at a
-                # different Jellyfin user without a new sign-in must drop the old one, or the next
-                # Played write sends the previous user's credential with the new user's id.
+                # Re-pointed without a sign-in: drop the old identity's token.
                 await seen.forget_token(conn, user_id)
     except asyncpg.UniqueViolationError as exc:
-        # Caught outside the block, because the violation aborts the transaction: the badge and the
-        # token are rolled back together, which is what keeps a refused re-map from leaving a token
-        # stored against a mapping that never happened.
+        # Outside the block: the violation rolls back badge and token together.
         raise HTTPException(
             status.HTTP_409_CONFLICT,
             "that Jellyfin user is already linked to another account (§3.3: one-to-one)",
@@ -792,45 +524,28 @@ async def unlink_jellyfin(user_id: int, _: AdminUser, conn: DB) -> dict[str, boo
 
 @router.post("/connectors/jellyfin/sync")
 async def sync_now(_: AdminUser, conn: DB) -> dict[str, object]:
-    """§6.6's "sync now", and the same code path as the 15-minute job (§5.3)."""
+    """§6.6's sync now: the same code path as the 15-minute job (§5.3)."""
     cfg = await load_jellyfin(conn)
     return (await seen.sync_all(conn, registry.make_client(cfg))).as_dict()
 
 
 @router.post("/connectors/jellyfin/poll")
 async def poll_now(_: AdminUser, conn: DB) -> dict[str, object]:
-    """The /Sessions watcher, on demand. §7.3's arming path runs on a 1-minute trigger; this
-    is the same call, so an admin can prove the prompt arrives without waiting for one."""
+    """§7.3's 1-minute /Sessions watcher, on demand."""
     cfg = await load_jellyfin(conn)
     return (await playback.poll(conn, registry.make_client(cfg))).as_dict()
 
 
-# --- §6.6 System: six facts, and no controls ----------------------------------------------
-
-# The one job §2 makes a promise about ("nightly pg_dump to /data/backups, rotation 14"), so it is
-# the one job this card reports on by name. Spelled here rather than imported from
-# `spielplan.worker`: `api/` decides HTTP shapes (CLAUDE.md) and importing the registry would pull
-# every job's module — torch included — into the web process. `test_worker_registry.py` pins the
-# string to the registry entry, which is the drift this trade risks.
+# Job names are spelled here, not imported: the worker registry pulls torch into the web process.
+# `test_worker_registry.py` pins them.
 BACKUP_JOB = "nightly-backup"
 
-# §7.2's fallback, spelled here for the same reason and pinned by the same test: the Jellyfin card
-# asks for its newest run as the poll's half of the webhook status (decision 455).
 DELTA_POLL_JOB = "jellyfin-delta-poll"
 
-# The worker's probe of the five `/data` mounts, spelled here for the same reason and pinned by the
-# same test. [C10.2]
 STORAGE_JOB = "storage-check"
 
-# The registry's live job names, in its order, for the same reason and pinned by the same test.
-# They are a *parameter* rather than documentation: the card asks for the newest row of each named
-# job, which the `job_run_name_started` index (0017_ops.sql) answers with one lookup per name.
-# Asked the other way round — "the newest row per distinct name in the table" — Postgres 16 has no
-# way to skip: `DISTINCT ON (name) ... ORDER BY name, started_at DESC` reads every row that has
-# ever been written. Measured on a seeded table: 4,469 rows (one day) 2.1 ms, 402,210 rows (ninety
-# days) 34 ms, 1,631,185 rows (a year) 7.1 s and 770,000 buffers, against 0.7 ms flat for the form
-# below. `job-run-prune` bounds the table; this bounds the read regardless.
-# [M4.7 ops-11; decision 182]
+# A parameter: the newest row per named job is one index lookup each, where DISTINCT ON reads the
+# whole table.
 JOB_NAMES: tuple[str, ...] = (
     "session-prune",
     "push-subscription-prune",
@@ -842,54 +557,21 @@ JOB_NAMES: tuple[str, ...] = (
     "fold-in-tick",
     "tier-set-refit",
     "placement-reconciliation",
-    # M5.1 registered §8's drain, so the spine that walks a new Jellyfin add to "ready" is a
-    # job this loop fires and the card answers for it like any other. It belongs here more than
-    # most: it is the only job whose failure is INVISIBLE to a member - a prune that stops
-    # leaves rows, a fit that stops leaves yesterday's placements, but a drain that stops leaves
-    # a library that simply never grows, which looks exactly like a household that added
-    # nothing. §6.6's acquisition board (`api/acquisition.py`) answers "what happened to THIS
-    # title"; this tuple answers "is the thing that walks them running at all", and the second
-    # question is the one an operator asks first. [M5.1; decisions 321 and 336]
+    # The one job whose failure is invisible to a member: a library that simply never grows.
     "acquisition-drain",
-    # Decision 522's metadata walk: a walk that has stopped leaves a bundle title's card without
-    # the text and poster TMDB would give it, which looks exactly like a title nobody wrote about.
     "metadata-backfill",
-    # Decision 484's poster lookup, the drain's neighbour in the registry and on this card: a
-    # lookup that has stopped leaves every posterless card tinted, which from Home looks exactly
-    # like a title that has no art anywhere.
     "art-lookup",
     "jellyfin-seen-sync",
     "jellyfin-sessions-poll",
-    # M5.2 registered §7.2's two intake paths, and they are the drain's entry above read from the
-    # other end: the drain answers "is the thing that walks a new title running", and these two
-    # answer "is anything telling it there IS one". A stopped sweep and a stopped poll look, from
-    # Tonight, exactly like a household that has added nothing. So the newest `job_run` row for
-    # each is answered here like any other job's, `last_syncs` below says when each last actually
-    # succeeded (decision 454), and the connector card's webhook status reads the poll's newest run
-    # beside the webhook's own deliveries (decision 455). [M5.2; decisions 363, 368]
     DELTA_POLL_JOB,
     "jellyfin-intake-sweep",
-    # M4.14 gave §5.3's ninth row a `run`, so the import is a job this loop fires and the card
-    # answers for it like any other. Its own PHASE, and the report the Data tab renders while it
-    # waits, stay on `GET /api/admin/bundle/state` - decision 182 put job HEALTH here and the
-    # import's progress there, and a name in this tuple asks only for the newest `job_run` row.
-    # [M4.14 step E2, decision 253]
+    # Its phase and report stay on `/api/admin/bundle/state`; here only job health (decision 182).
     "bundle-import",
-    # Whether the worker can write the five `/data` mounts, named with the chown that fixes them.
-    # A job row like any other here, and the System page lifts it above the list, because on the
-    # install that needs it every other failure on the card is this one wearing its own path.
-    # [C10.2]
     STORAGE_JOB,
     BACKUP_JOB,
 )
 
-# Decision 454's "last syncs": the jobs that talk to a connector, each with the connector a person
-# would name. A subset of `JOB_NAMES` (asserted in `test_admin_system.py`) and a list of its own
-# because the question differs: `jobs` is the newest run of every job whatever it said, and this is
-# when each connector last actually answered - the split `backup` already makes for the dump, and
-# read by the same statement for that reason. "Answered" is `job_health`'s predicate and not `ok`.
-# The drain's row is the newest tick that had work (a batch leased, or expired leases reclaimed),
-# which is when stage 2 asks the sources; whether they answered is each title's row on the board.
+# Decision 454's last syncs: when each connector last actually answered. A subset of JOB_NAMES.
 SYNC_JOBS: dict[str, str] = {
     "jellyfin-seen-sync": "Jellyfin",
     DELTA_POLL_JOB: "Jellyfin",
@@ -898,26 +580,13 @@ SYNC_JOBS: dict[str, str] = {
     "acquisition-drain": "Metadata sources",
 }
 
-# §2 promises one dump a night. 36 hours is a night plus half a day of slack: it cannot fire on a
-# household whose dump ran at last night's anchor hour, and it does fire before a second night has
-# been missed — which is the point, because the failure this exists for is silent and repeats.
+# A night plus half a day of slack: fires before a second night is missed.
 BACKUP_STALE_AFTER = timedelta(hours=36)
 
 
 async def job_health(conn) -> dict[str, object]:
-    """The worker's outcomes, as §6.6's System card reports them.
-
-    Three keys and not one: `jobs` is the newest row per job whatever it says, and `backup` is the
-    newest *successful* dump — which is a different row on precisely the install that needs
-    reporting, the one whose backup has been failing since Tuesday. `last_syncs` is the same
-    distinction made for every job that talks to a connector (decision 454), so it is read by the
-    statement that used to read `backup` alone: one lookup per name down `job_run_name_started`,
-    and no second statement for the second question.
-
-    A name the registry no longer has drops off the card rather than lingering: the question this
-    answers is "how are this build's jobs doing", and a row left by a job that was renamed two
-    upgrades ago is history for a chart, not health for an operator. [M4.7 ops-11; decision 182]
-    """
+    """`jobs` is the newest run per job; `backup` and `last_syncs` are the newest that succeeded, a
+    different row on exactly the install that needs reporting."""
     jobs = await conn.fetch(
         "SELECT j.name, r.started_at, r.finished_at, r.ok, r.detail "
         "  FROM unnest($1::text[]) AS j(name) "
@@ -928,14 +597,8 @@ async def job_health(conn) -> dict[str, object]:
         " ORDER BY j.name",
         list(JOB_NAMES),
     )
-    # A sync job's row is a last sync only when its server answered, which `ok` does not say: the
-    # worker closes a run ok when no connector is set up and when the server is down (§3.3), so a
-    # fresh install and a week-long outage both read "synced a minute ago". A run that returned no
-    # report asked nobody (the intake jobs and the drain, with nothing to do or no client), and a
-    # report's own `reached` says whether the server answered; one without that field -- the delta
-    # poll, which raises on an outage -- answered if it reported at all. The dump keeps `ok` alone.
-    # `worker._prune_job_runs` exempts the newest such row, or a fortnight's outage would age it out
-    # and turn "15 days ago" into "never". [M5.7 review cycle 1, M57-JFSYS-01]
+    # A sync counts only when its server answered, which `ok` does not say: `detail->>'reached'`, or
+    # any report at all for the delta poll.
     succeeded = {
         r["name"]: r
         for r in await conn.fetch(
@@ -958,18 +621,13 @@ async def job_health(conn) -> dict[str, object]:
         "jobs": [dict(r) for r in jobs],
         "backup": {
             "at": backup_at,
-            # `BackupReport.as_dict()`'s own key. Read defensively because a row written by an
-            # older build, or by a job whose report gains a field, must not 500 this page.
+            # Read defensively: older rows may lack the field.
             "bytes": (backup["detail"] or {}).get("bytes") if backup else None,
-            # A household that has never completed a dump is stale by the same rule, and saying so
-            # is the whole point: "no backup yet" and "no backup since Tuesday" are the same
-            # problem to the person who needs one.
+            # Never having dumped is stale too.
             "stale": backup_at is None or datetime.now(UTC) - backup_at > BACKUP_STALE_AFTER,
             "stale_after_hours": int(BACKUP_STALE_AFTER.total_seconds() // 3600),
         },
-        # Every sync job, in `SYNC_JOBS`' order, and a null where none ever succeeded: "never" is
-        # the answer an operator setting up a connector needs to be able to read, and a job left
-        # off the list would read as one that does not exist.
+        # A null means never: a job left off would read as nonexistent.
         "last_syncs": [
             {
                 "name": name,
@@ -983,12 +641,6 @@ async def job_health(conn) -> dict[str, object]:
 
 
 # What the missing axis artifact costs, one sentence per surface.
-#
-# Both sentences were overtaken in the user-test wave and are restated as what the tree holds:
-# the Map renders no state at all, because it is not built and decision 488 keeps it out of
-# navigation until it is; and a split no axis can name is now surfaced by person (decision 479),
-# so `session_result.conflict` is no longer NULL on every evening. What stays off is the FACET
-# split and 54c's axis tie-break. [WE's C8.6 note of the 2026-09-25 user test]
 AXES_DISABLES = (
     "§6.4's Map, when it ships (§12 M6; not built yet, decision 488), has no axes to plot.",
     "Tonight's facet split (§6.2 step 5) is off: a split is surfaced by person and never names a "
@@ -998,39 +650,8 @@ AXES_DISABLES = (
 
 @router.get("/data/sources")
 async def data_sources(_: AdminUser, conn: DB) -> dict[str, object]:
-    """The §6.6 Data card's two read-only lists: dataset terms, and the axes nobody authored.
-
-    **Sources and terms.** §4.1 rule 4 freezes eleven `rating_source` ids and the corpus ships
-    each one's `url`, `license`, `version` and `notes` — the Netflix Prize's research-use-only
-    clause, the CC BY attributions naming their authors. The loader dropped all four until M4.9,
-    so an operator about to share a movie-data archive had no way to learn which of the eleven
-    bars redistribution and no surface could print the attribution those licences require. This
-    is that list and nothing more: no control, no edit, no per-source page (plan step 8.3, "no
-    UI beyond that list").
-
-    **The axes.** `importer/dna.load_axes` reads the TSVs of `dna_vocab/<version>/` and takes
-    each axis file's stem as the facet; the shipped `dna_vocab/v1/` carries no axis definition at
-    all, so §6.4's eleven authored axes have never been authored anywhere and the loader's
-    warning goes into an import report nobody re-reads. Decision 191 surfaced the gap here as an
-    outstanding authoring task instead; decision 173 has since moved the loader off the `axes/`
-    subdirectory it used to read, onto the flat `dna_vocab/v1/` that §6.4's own sentence names,
-    because the corpus exporter does not descend into subdirectories and a file authored there
-    could never reach a bundle — so until M4.12 this card was sending an operator to a path that
-    cannot work, in eleven lines of it. The paths are still built from the
-    loader's own rule, off the facets this install actually has, rather than restated: a
-    hand-written list is exactly how a card comes to name files the loader does not look for.
-    (Decision 191's prose spells them `axis_<facet>_v1.tsv`; that spelling names a facet called
-    `axis_mood_v1`, which `dna_axis`'s FK to `dna_facet` refuses. The loader reports that file by
-    name, and this card names the spelling that loads.)
-
-    **What it costs.** `disables` names both surfaces, because naming only the Map is what let
-    this read as cosmetic for five milestones. Decision 173 ships the release without axes, so
-    this card is where "the app never tells us we're split" gets its answer: §6.2 step 5 cannot
-    fire with `dna_axis_weight` empty, and §14 risk 6 then watches a split rate that is a
-    permanent 0 and says nothing about the households it is watching. The sentences come from
-    here rather than from the page, for the same reason the paths do — a claim about what the
-    importer does belongs beside the importer. [M4.12 finding 25]
-    """
+    """§6.6 Data's two read-only lists: dataset terms (§4.1 rule 4's licences) and the axis files the
+    loader expects, built from the loader's own rule over this install's facets."""
     sources = await conn.fetch(
         "SELECT id, name, scale, url, license, version, notes FROM rating_source ORDER BY id"
     )
@@ -1042,8 +663,7 @@ async def data_sources(_: AdminUser, conn: DB) -> dict[str, object]:
             "SELECT facet FROM dna_facet WHERE version = $1 ORDER BY ord, facet", version
         )
     ] if version else []
-    # No bundle, or a bundle whose vocabulary never loaded: the palette is still the eleven
-    # names the app ships with, and naming them is more use to an operator than an empty list.
+    # No vocabulary loaded: name the app's default facets rather than nothing.
     if not facets:
         facets = sorted(dna.DEFAULT_FACET_COLOURS)
     loaded = await conn.fetchval(
@@ -1062,43 +682,13 @@ async def data_sources(_: AdminUser, conn: DB) -> dict[str, object]:
 
 @router.get("/system")
 async def system_card(_: AdminUser, conn: DB) -> dict[str, object]:
-    """§6.6's System card: "job health, queue depth, last syncs, backup status, logs", and custody.
-
-    Decision 182's three facts first: the newest successful backup with its age, the SECRETS_KEY
-    fingerprint with the active `key_id`, and the newest `job_run` row per job. What pulled those
-    forward to M4.7 is that it gave `job_run` and secrets custody a readable state and no surface
-    read either — and "did last night's dump happen" is a question an operator has to be able to
-    answer without psql, which is the finding (ops-11) rather than a nice-to-have.
-
-    Decision 454's three complete §6.6's list, and each is a read an operator without shell access
-    had no other way to make. `queue` is M5.1's `acquire.queue.stats` per kind and state with the
-    per-state totals beside it; `last_syncs` is when each connector's job last reached its server
-    (`job_health`), which `jobs` cannot say on the install whose sync has been failing for a week,
-    and `ok` cannot either, since a sync that swallows an outage closes ok; and `logs` is this
-    process's own recent `spielplan` lines, redacted, held in memory since it started
-    (`core/logs.py`) — the worker's stay in its container log, and its failures are `jobs`.
-
-    Read-only by construction, and M5.7 keeps it so (plan E5). Rotation and repair are
-    `spielplan-secrets`, an operator command (§2: "an explicit admin action"), §2's dump is the
-    worker's, and draining the queue is an acquisition action that belongs on the board if
-    anywhere; a card that could start any of them would be a different surface from this one. The
-    log level filter is applied on the card and issues no request.
-
-    `secrets.unreadable` is asked here rather than inferred from the connector card: a household
-    with no Jellyfin row at all still has custody, and the boot probe in `app.py` says this once
-    into a log nobody keeps. `key_id` and `fingerprint` are two halves of one answer — the id
-    names the row the ciphertexts point at, the fingerprint names the env that has to open it.
-    [M4.7 ops-11, dd03; decision 182]
-    """
+    """§6.6's System card, read-only: decision 182's backup, custody and job facts, plus decision 454's
+    queue depth, last syncs and this process's log lines."""
     cfg = settings()
     key_id = await secrets.active_key_id(conn)
     unreadable = False
     if cfg.secrets_key:
-        # `core.secrets` owns the question, because `spielplan-secrets reset` is the repair this
-        # card sends the operator to and the two must not be able to disagree — see
-        # `unreadable_key_ids` for the install where they did. Never raised, only reported: §3.1
-        # keeps a half-configured boot legal and this route's whole job is to describe custody,
-        # so of every route in the app this is the one that must not answer 500 with it.
+        # `core.secrets` owns the question, so this and `spielplan-secrets reset` agree. Never raises.
         unreadable = bool(await secrets.unreadable_key_ids(conn))
     depth = await queue.stats(conn)
     by_state = dict.fromkeys((queue.PENDING, queue.LEASED, queue.DONE, queue.FAILED, queue.SKIPPED), 0)
@@ -1106,13 +696,11 @@ async def system_card(_: AdminUser, conn: DB) -> dict[str, object]:
         by_state[row["state"]] = by_state.get(row["state"], 0) + row["count"]
     return {
         **await job_health(conn),
-        # Every state the table allows, zero included, so "nothing failed" is a 0 the card prints
-        # rather than a key it has to infer from an absence; `by_kind` is `stats` unchanged.
+        # Every state, zero included.
         "queue": {"by_state": by_state, "by_kind": depth},
         "logs": logs.snapshot(),
         "secrets": {
-            # Absent is a legal state, not a failure: §3.1 lets an install boot before anyone
-            # has configured a connector, and `require_secrets_key` is the refusal that binds.
+            # Absent is legal (§3.1).
             "configured": bool(cfg.secrets_key),
             "fingerprint": secrets.key_fingerprint(cfg.secrets_key) if cfg.secrets_key else None,
             "key_id": key_id,

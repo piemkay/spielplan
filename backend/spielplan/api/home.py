@@ -1,11 +1,5 @@
-"""Home and the model-log rail, over HTTP. Spec v2.1 §6.0, §6.7; decisions 18 and 117.
-
-`kind` is required and repeated exactly as `/api/titles` does it, so the empty selection stays
-unrepresentable in the URL (decision 18: either or both, never neither).
-
-Every response leaves through `rail.redact`. Decision 117 says the toggle "governs the rail and
-every inline annotation", and a gate applied at one exit is a gate that cannot be forgotten at
-another — which is why no route below assembles its own payload shape.
+"""Home and the model-log rail (§6.0, §6.7). Every response leaves through `rail.redact`, so decision
+117's toggle is one gate at one exit.
 """
 
 from __future__ import annotations
@@ -31,18 +25,8 @@ router = APIRouter(prefix="/api", tags=["home"])
 
 
 def _report_build(route: str, payload: dict[str, Any], elapsed_ms: float) -> None:
-    """perf-10's measurement, written where an operator can read it.
-
-    §6.0's Home runs six shelf builders per selected kind, each with its own reads over
-    `dna_tagged`, and the M2/M3 numbers that said it was fast enough came from fixtures. This is
-    the instrument that measures it wherever it runs, the real corpus included, and it is
-    deliberately a LOG line rather than a payload field: decision 117's gate is a deletion,
-    `rail.py`'s docstring warns that a builder which
-    invents a new top-level numeric block does not inherit it, and a per-request timing is an
-    annotation about this viewer. The roll-up `build_home` carries rides inside the gated `model`
-    block for the same reason. DEBUG and not INFO because Home is the default surface: a line per
-    load at INFO would be the loudest thing in the log of an app three people use.
-    """
+    """A DEBUG log line, never a payload field: a per-request timing is an annotation about this viewer
+    that decision 117's gate would not cover."""
     if not log.isEnabledFor(logging.DEBUG):
         return
     sections = (payload.get("model") or {}).get("sections_ms") or []
@@ -57,8 +41,7 @@ def _report_build(route: str, payload: dict[str, Any], elapsed_ms: float) -> Non
 
 
 def _now_local() -> tuple[datetime, str]:
-    """§2's `TZ`. Proposal 22 puts the greeting on the household clock, not the device clock —
-    which also makes the band assertable without a browser."""
+    """The household clock (§2's `TZ`), not the device's."""
     tz = settings().tz
     try:
         return datetime.now(ZoneInfo(tz)), tz
@@ -74,20 +57,8 @@ def _kinds(kind: list[str]) -> list[str]:
 
 
 async def _bundle(request: Request, conn: asyncpg.Connection) -> str | None:
-    """The ACTIVE bundle, from the database rather than from the process's loaded store.
-
-    §10: "everything expressed in the old Backbone's basis is garbage against a new one." The
-    scores and priors Home reads are bound to a bundle_version column, so the version that
-    matters is the one those rows were written against — which is the row in `artifact_bundle`,
-    not whatever the store happened to open at boot. They agree in normal operation; when they
-    disagree, the store is the stale one.
-
-    Through `models.artifacts.active_bundle_version`, which is THE resolver as of M4.13 (it was
-    four reads). This function keeps its own name because it is not the same question: it adds
-    the store fallback below, which no other caller wants - Home is §3.1's no-bundle surface and
-    has to name a version even on an install whose `artifact_bundle` row has not landed yet,
-    where every other caller of the resolver wants None to mean None. [M4.13, arch-03]
-    """
+    """The ACTIVE bundle row: scores are bound to it, and a stale store is the one that is wrong (§10).
+    Falls back to the loaded store so a pre-row Home can still name a version."""
     active = await artifacts.active_bundle_version(conn)
     if active is not None:
         return active
@@ -108,16 +79,8 @@ async def home(
     limit: int = Query(60, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ) -> dict[str, Any]:
-    """§6.0's Home payload.
-
-    `mode` is the server's answer to §6.0's own sentence — "Search or an active person-filter
-    switches Home into the catalog grid; clearing it returns the shelves". With `q` or
-    `person_id` set the response carries `catalog` (one flat list, best match first under a
-    search, that MAY interleave the kinds, per decisions 18 and 472) and no shelves; with
-    neither, it carries the shelves (one kind-headed section each, never one interleaved
-    ranking) and no catalog. The two modes
-    cannot both be rendered, because only one of them is ever in the payload.
-    """
+    """`q` or `person_id` switches to the catalog grid (may interleave kinds); otherwise kind-headed
+    shelves (§6.0; decisions 18, 472). Only one of the two is ever in the payload."""
     now_local, tz = _now_local()
     started = perf_counter()
     payload = await shelves.build_home(
@@ -131,11 +94,7 @@ async def home(
         person_id=person_id,
         limit=limit,
         offset=offset,
-        # The bundle's own evaluation of the cold path, from the store this process loaded -
-        # `shelves.fit_yardstick` reads the fold-in's cv_rho against it, inside the gated `model`
-        # block. From the STORE and not from `_bundle` above, because this is a file in the bundle
-        # directory rather than a row: on a swap the directory this process opened is the one whose
-        # numbers its scores were computed with. [M4.13 step 35]
+        # From the loaded store, not the active row: the numbers its scores were computed with.
         cold_eval=artifacts.cold_eval_of(getattr(request.app.state, "artifacts", None)),
     )
     _report_build("/api/home", payload, (perf_counter() - started) * 1000.0)
@@ -149,12 +108,7 @@ async def home_shelves(
     request: Request,
     kind: list[Literal["movie", "series"]] = Query(...),
 ) -> dict[str, Any]:
-    """The shelves alone, for a client that renders the greeting and banner separately.
-
-    Same builder, same gate, same partition. It exists so the shelf row can be refetched on a
-    kind toggle without re-running the banner's population query, and it deliberately cannot be
-    asked for the grid: a caller who wants the grid wants `/api/titles`.
-    """
+    """For a kind toggle, without re-running the banner's population query. Never the grid."""
     now_local, tz = _now_local()
     started = perf_counter()
     payload = await shelves.build_home(
@@ -178,12 +132,7 @@ async def home_shelves(
 
 @router.get("/home/pending-verdicts")
 async def pending(conn: DB, user: ActiveUser) -> dict[str, Any]:
-    """§6.0's banner on its own. Reads only — proposal 150: "it never writes `seen`".
-
-    Returns `{count: 0, ...}` rather than 404 for an empty population: "nothing to rate" is an
-    answer, and a client that has to distinguish an error from an empty banner will get it
-    wrong on the first flaky request.
-    """
+    """Reads only (it never writes `seen`); an empty population is `count: 0`, not 404."""
     banner = await shelves.pending_verdicts(conn, user_id=user.id)
     return banner or {"count": 0, "named": [], "head_title_ids": [], "copy": None, "cta": None}
 
@@ -192,30 +141,8 @@ async def pending(conn: DB, user: ActiveUser) -> dict[str, Any]:
 async def model_log(
     user: ActiveUser, limit: int = Query(rail.RAIL_LIMIT, ge=1, le=rail.RAIL_LIMIT)
 ):
-    """§6.7's rail. Decision 117: one per-user toggle, default off.
-
-    With the toggle OFF the response has no `events` key at all — not an empty list, not a list
-    the client is trusted to hide. §6.7's promise is that the numbers are not there, and a
-    promise kept in CSS is not kept: the payload would still be in the network tab and in the
-    service-worker cache.
-
-    `le=rail.RAIL_LIMIT`, NOT 50, and not `RAIL_LIMIT` raised to 30 to legalise what the code
-    did. §6.7 is a sentence about the instrument — "an ephemeral log (last ~15 events, never
-    persisted)" — so the buffer's depth is the spec's number and the route's ceiling is that
-    same name rather than a second constant that can drift from it. `?limit=50` used to return
-    up to thirty because `rail.recent` merged two RAIL_LIMIT-deep deques before slicing; both
-    halves are fixed, and this one refuses at the edge rather than truncating silently.
-    [M4.9 finding 26]
-
-    No `conn`: this route reads an in-process ring buffer and has never touched the database.
-    That is tidiness and NOT pool relief, and the difference matters to anyone sizing the drawer's
-    refetch rate against `max_size 10`. `ActiveUser` resolves `active_user` -> `current_user`,
-    which takes `conn: DB` (`api/deps.py:115`) to load the session, and FastAPI caches a
-    dependency per request — so this request checks out exactly one pooled connection and holds
-    it for its whole life, with the parameter and without it. Dropping the parameter removed a
-    second reference to the connection the session load had already taken, not an acquisition.
-    [M4.9 review cycle 1: M49-HOME-02]
-    """
+    """Decision 117: with the toggle off there is no `events` key at all; a promise kept in CSS is not
+    kept. `le=RAIL_LIMIT`: §6.7's ~15 is the buffer's depth."""
     if not rail.visible_to(user):
         return {
             "show_model": False,

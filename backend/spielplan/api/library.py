@@ -1,11 +1,5 @@
-"""Library / Home routes. Spec v2.1 §6.0.
-
-M0 scope: "a paginated list over `title`, partitioned by kind (§4.1 rule 5), filter/search on
-title/alias/genre/decade/seen-state, and the title detail card". Home shelves are M2 (§12).
-
-`kind` is a required query parameter on the listing route. That is not defensiveness; §4.1
-rule 5 makes an unpartitioned list a measured bug ("the unpartitioned crowd top-10 is 8/10 TV
-series"), and a default would hide it.
+"""Library routes (§6.0). `kind` is required and repeated everywhere: an unpartitioned list is a
+measured bug (§4.1 rule 5), and a default would hide it.
 """
 
 from __future__ import annotations
@@ -43,26 +37,12 @@ async def list_titles(
     limit: int = Query(60, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ) -> dict[str, Any]:
-    """Owner decision 2026-08-29: kind is two toggles, either or both active, never neither.
-
-    Repeated rather than comma-joined (`?kind=movie&kind=series`) so the empty selection is
-    unrepresentable in the URL — `?kind=` is a validation error, not a silent "everything".
-
-    `person_id` repeats the same way: a credit row can stand for several person rows of one
-    human (`db/library.fold_credits`), and a tap on it filters by the whole set.
-
-    `sort` (decision 515): `for_you` orders by the member's own score, films then series, and is
-    the default once their own ratings rank a selected kind; `newest` is the year order. The
-    response's `sort` is the order the list is really in - `match` under a search (decision 472),
-    and `newest` when nothing of theirs ranks the selection yet, whatever was asked - and
-    `for_you_available` says whether their own order exists for this selection at all, so the
-    grid never offers a "For you" that answers `newest` (review finding UX-1). Under a search
-    each item carries `match`, 'strong' or 'weak' (`db/library.search_order_sql`).
-    """
+    """`kind` and `person_id` repeat (`?kind=` is a 422, never "everything"). The response's `sort` is
+    the order really used: `match` under a search, `newest` when nothing of the member's ranks the
+    selection (decision 515); `for_you_available` says whether their order exists."""
     try:
         kinds = library.normalise_kinds(kind)
-        # Decision 473: a genre outside the canonical vocabulary is a wrong question, and an
-        # empty grid would answer it as "you own nothing like that".
+        # Decision 473: an unknown genre is a wrong question, not an empty grid.
         genre = genres.canonical(genre) if genre else None
     except ValueError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
@@ -100,9 +80,7 @@ async def list_titles(
         "sort": effective,
         "for_you_available": bool(personal),
         "total": total,
-        # §6.0: a toggle that hides things has to say how many. Silent truncation is the
-        # failure this control was introduced to fix, so the count travels with the list —
-        # under the SAME filters, or the number promises more than the toggle can reveal.
+        # §6.0: the hidden count, under the SAME filters as the list.
         "hidden": await library.count_by_kind(
             conn, exclude=kinds, user_id=user.id, q=q, genre=genre, decade=decade,
             seen=seen, person_id=person_id, owned_only=owned_only,
@@ -115,45 +93,33 @@ async def list_titles(
 
 @router.get("/titles/{title_id}")
 async def title_detail(title_id: int, conn: DB, user: ActiveUser, request: Request) -> dict[str, Any]:
-    """The §6.0 title detail card.
-
-    Everything the card shows is labelled with its provenance: the DNA tiers stay separate,
-    platform scores are marked display-only, and the model line reports what it actually has
-    rather than inventing numbers when no bundle is loaded.
-    """
+    """§6.0's title card: every section labelled with its provenance."""
     title = await library.get_title(conn, title_id, user_id=user.id)
     if title is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "no such title")
 
     store = request.app.state.artifacts
-    # Decision 486: model numbers reach a member only while their Show the model is on, and the
-    # gate is here, where the payload is built, so a card read with the switch off carries none.
+    # Decision 486: model numbers only while Show the model is on, gated where the payload is built.
     show_model = rail.visible_to(user)
-    # Resolved once and handed down, so the card cannot show one vocabulary's tags beside
-    # another's — §10's "a bundle re-import leaves two vocabularies coexisting" (M4.9 finding 10).
+    # Resolved once, so the card cannot mix two vocabularies (§10).
     dna = await library.dna_for(conn, title_id, version=await dna_terms.active_version(conn))
-    # Decision 486 clause 4: a term is shown by the label the vocabulary ships, never its id.
+    # Decision 486: a term is shown by its shipped label, never its id.
     labels = await dna_terms.labels_for(
         conn, [t["term"] for t in dna["extracted"]] + [p["term"] for p in dna["projected"]]
     )
 
-    # Read whether or not the title has a Jellyfin copy, because the two reasons Play can be
-    # unavailable are different sentences: the card told every unowned title "Play needs a linked
-    # Jellyfin server" on an install whose server was linked (user test 2026-09-25). Hoisted out of
-    # the branch rather than queried twice, which `test_layering_guards`' ratchet counts.
+    # Read unconditionally: "no server" and "not in your library" are different sentences.
     jf_base = await conn.fetchval(
         "SELECT config->>'url' FROM connector_config WHERE name = 'jellyfin'"
     )
     jf_url = None
     play_reason = None
-    # The server first: with none linked no title has a copy to find, and "not in your library"
-    # would blame the title for the household's missing connector.
     if not jf_base:
         play_reason = "no_server"
     elif not title.get("jellyfin_id"):
         play_reason = "not_in_library"
     else:
-        # §7.1: deep-link to the server's web player; direct playback is a later refinement.
+        # §7.1: deep-link to the server's web player.
         jf_url = f"{jf_base.rstrip('/')}/web/#/details?id={title['jellyfin_id']}"
 
     body: dict[str, Any] = {
@@ -163,14 +129,11 @@ async def title_detail(title_id: int, conn: DB, user: ActiveUser, request: Reque
                 "id", "kind", "name", "original_name", "year", "runtime_min", "overview",
                 "tagline", "poster_path", "backdrop_path", "trailer_key", "is_owned",
                 "placement", "seen_state", "imdb_id", "tmdb_id",
-                # Decision 516: the card leads with the original title in the viewer's language.
                 "original_language",
             )
         },
         "credits": await library.credits_for(conn, title_id),
-        # §4.1 rule 3 — labelled at the boundary so the client cannot forget. `display_only` is
-        # the flag the rule rests on; the note is the same fact in the member register (decision
-        # 486), because "popularity conduit" and "model features" are the operator's words.
+        # §4.1 rule 3: labelled at the boundary; the note is the same fact for members (decision 486).
         "platform_ratings": {
             "display_only": True,
             "note": "For reference only - these scores never affect your suggestions.",
@@ -182,33 +145,23 @@ async def title_detail(title_id: int, conn: DB, user: ActiveUser, request: Reque
             "projected": [{**p, **labels[p["term"]]} for p in dna["projected"]],
             "note": "extracted tags are quote-verified; projected tags are inferred",
         },
-        # Decision 487: the person's own answer, so the card can show which one is standing.
+        # Decision 487: the person's own standing answer.
         "my_verdict": await direct.live_verdict(conn, user_id=user.id, title_id=title_id),
-        # Decision 515: one plain sentence on why this title is suggested to this member, or
-        # None where nothing is being suggested (seen, rated, avoided, or simply not a pick).
+        # Decision 515: why this title is suggested, or None.
         "why": await suggest.why_suggested(
             conn, user_id=user.id, title_id=title_id,
             bundle_version=await artifacts.active_bundle_version(conn),
         ),
         "actions": {
             "play_on_jellyfin": jf_url,
-            # Which of the two causes it is when Play is unavailable; None when it is not.
             "play_reason": play_reason,
-            # Decision 488: §6.0's second action waits, absent, until §6.4's Map ships - the same
-            # flag that keeps Map out of navigation, so the two cannot disagree.
+            # Decision 488: absent until §6.4's Map ships, on the same flag as navigation.
             "show_on_map": {"title_id": title_id} if auth_api.shipped("map") else None,
         },
     }
     if show_model:
-        # §6.0: "the model line in the data voice (`b(t) 0.52 · β 0.8 · gate 0.93`)". With no
-        # bundle there is nothing honest to print, so the card says so (§3.1).
-        #
-        # Behind Show the model since decision 486, which amends decision 117: that decision
-        # left this one line ungated as "the M0 transparency promise", and the code argued the
-        # line was crowd-level provenance rather than a statement about the viewer - but β is read
-        # from this viewer's fit and σ from this viewer's ledger row (`serve.model_line`), and the
-        # 2026-09-25 user test put it in front of two members who could read none of it. The
-        # promise is one tap away in the account menu now, not deleted.
+        # §6.0's model line, behind Show the model since decision 486: it reads this viewer's fit. With no
+        # bundle there is nothing honest to print (§3.1).
         body["model_line"] = (
             {"available": False, "reason": "no artifact bundle imported"}
             if store.is_empty
@@ -219,15 +172,13 @@ async def title_detail(title_id: int, conn: DB, user: ActiveUser, request: Reque
     return body
 
 
-# The extracted tier's weights, which are model numbers: §4.1 rule 2 makes them weights and never
-# filters, and decision 486 makes them a Show-the-model annotation rather than member copy.
+# The extracted tier's weights: a Show-the-model annotation, never member copy (decision 486).
 _TAG_NUMBERS = ("salience", "confidence", "n_sources")
 
 
 def _extracted(
     tag: dict[str, Any], labels: dict[str, dict[str, Any]], show_model: bool
 ) -> dict[str, Any]:
-    """One extracted tag, named by its label, with its weights only while the switch is on."""
     shaped = {**tag, **labels[tag["term"]]}
     if not show_model:
         for key in _TAG_NUMBERS:
@@ -245,32 +196,14 @@ async def similar_by_term(
     ),
     limit: int = Query(12, ge=1, le=60),
 ) -> dict[str, Any]:
-    """§6.4 wander: neighbours by *shared term*, each edge labelled with the terms it rides on.
-    Every connection is nameable — edges are DNA terms, never opaque similarity.
-
-    Extracted and projected neighbours are returned separately (rule 1).
-
-    `kind` is required here for the same reason it is required on the listing route above:
-    §4.1 rule 5 makes an unpartitioned ranking a measured bug, and this route ranks — it selects
-    `t.kind` into the SELECT list and the GROUP BY, and until M4.9 into no predicate at all, so
-    a wander from a film returned films and series in one shared-term ordering. It is the
-    caller's selection and **not** the anchor's kind: a person exploring from a film may well
-    want the series that share its terms, and inferring the partition from the anchor would be a
-    different rule wearing rule 5's name. [M4.9 finding 13]
-
-    `limit` is bounded rather than passed through. It reached `LIMIT $2` unvalidated, so `-1`
-    was a 500 through the PostgresError handler and `100000` a 200 over the whole join; the
-    sibling catalog route two dozen lines up has been `Query(60, ge=1, le=200)` since M0.
-    Sixty, not a hundred: this is a wander, and the ceiling is the one the finding that names
-    this route's test settled on. [M4.9 finding 14]
-    """
+    """§6.4 wander: neighbours by shared DNA term, one list per tier (rule 1). `kind` is the caller's
+    selection, not the anchor's (§4.1 rule 5)."""
     try:
         kinds = library.normalise_kinds(kind)
     except ValueError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
 
-    # One vocabulary for both tiers and for the card that links here (M4.9 finding 10). Resolved
-    # once: two calls could straddle an import and answer from two versions inside one response.
+    # Resolved once: two reads could straddle an import.
     version = await dna_terms.active_version(conn)
 
     async def neighbours(table: str) -> list[dict[str, Any]]:
@@ -314,9 +247,7 @@ async def similar_by_term(
             )
         ]
 
-    # Two statements, one per tier, exactly as §4.1 rule 1 requires — the kind predicate is
-    # written into each rather than into a shared subquery, because a shared one is where the
-    # tiers would meet.
+    # One statement per tier (§4.1 rule 1); a shared subquery is where the tiers would meet.
     return {
         "kinds": kinds,
         "extracted": await neighbours("dna_tag"),
@@ -330,7 +261,6 @@ async def facets(
     _: ActiveUser,
     kind: list[Literal["movie", "series"]] = Query(default=["movie"]),
 ) -> dict[str, Any]:
-    """Filter vocabulary for the catalog controls, over the selected kinds."""
     try:
         kinds = library.normalise_kinds(kind)
     except ValueError as exc:
@@ -351,17 +281,8 @@ async def person_detail(
         ..., description="§4.1 rule 5: one or both, never neither. Repeat the parameter for both."
     ),
 ) -> dict[str, Any]:
-    """§6.0: 'credits, each person tappable → filters the library to their filmography'.
-
-    The sentence says *filters the library*, and the library is partitioned by kind — so this
-    takes the same required selection the listing route takes rather than answering one
-    interleaved list. Decision 18's reading applies unchanged: "a filmography is complete across
-    two sections", not "a filter suspends the partition". [M4.9 finding 13]
-
-    `t.id` closes the ORDER BY for the same reason it closes the catalog's: a person with two
-    titles from one year is a tie, and a tie under an incomplete sort is a different answer on
-    every call. [M4.9 finding 11]
-    """
+    """§6.0's filmography filter, partitioned by the selected kinds like the listing (decision 18);
+    `t.id` makes the order total."""
     try:
         kinds = library.normalise_kinds(kind)
     except ValueError as exc:
@@ -387,19 +308,15 @@ async def person_detail(
 
 @router.get("/config")
 async def client_config(request: Request) -> dict[str, Any]:
-    """What the shell needs before a user is known: whether a bundle exists, and the origin.
-    Deliberately unauthenticated and deliberately free of any user or connector detail."""
+    """Unauthenticated: only what the shell needs before a user is known, no user or connector detail."""
     store = request.app.state.artifacts
     return {
         "public_url": settings().public_url,
         "bundle": store.summary() if not store.is_empty else None,
         "has_bundle": not store.is_empty,
-        # A bundle IS imported and this process could not load it, which is not §3.1's "no bundle
-        # imported" and must not be rendered as it: the header says a restart is owed instead.
-        # From memory and not from the database (`basis.unloaded`), because this route is the
-        # unauthenticated bootstrap whose failure semantics decision 271 defines. [decision 497]
+        # A bundle is imported but this process could not load it: the header says a restart is owed.
+        # From memory, not the database (decision 271).
         "restart_required": basis.unloaded(request.app.state),
-        # The version an app-minted title's poster URL carries (`art/poster.url_epoch`), read at
-        # boot and held in memory like the line above. An opaque digest, not a date.
+        # The poster URL version (`art/poster.url_epoch`): an opaque digest, not a date.
         "art_epoch": getattr(request.app.state, "art_epoch", None),
     }
