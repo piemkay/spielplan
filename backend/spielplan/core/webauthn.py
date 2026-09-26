@@ -1,27 +1,6 @@
-"""WebAuthn passkeys. Spec v2.1 §3.2 (primary auth), §3.3, §14.4, §4.2 webauthn_credential.
-
-"**Primary: WebAuthn passkeys** … viable because the Traefik+Cloudflare origin gives real
-TLS. Registration from the profile page; multiple passkeys per user (phone + desktop)."
-
-Three properties this module exists to hold, each one a way passkeys fail quietly:
-
-  * **Origin binding.** `PUBLIC_URL` is required config precisely because a credential is
-    bound to an origin (§14 risk 4). Both ceremonies check `expected_rp_id` and
-    `expected_origin` against it, and a stored credential registered under a *different*
-    rp_id is refused before verification even runs — after a `PUBLIC_URL` change those rows
-    are archaeology, and §14.4 promises they stop working rather than half-working.
-  * **Single-use challenges.** Issued here, stored server-side, deleted on first use. This is
-    the replay guard: a captured assertion is a signature over a challenge that no longer
-    exists, so it cannot be spent twice however valid its bytes are.
-  * **A counter that never goes backwards.** §4.2 stores `sign_count` for the cloned-hardware
-    case — a roaming security key that was copied eventually asserts with a counter behind the
-    one this server last saw. It is not the replay guard and cannot be one, because the synced
-    passkeys §3.2 actually targets (iCloud Keychain, Google Password Manager) report 0 forever,
-    so their every assertion ties the stored value. The UPDATE below is therefore the check:
-    it refuses a counter that moved backwards and accepts the 0-to-0 a synced passkey is.
-
-Fallbacks stay: §3.2 keeps password login always available, so a household that cannot
-register a passkey is never locked out.
+"""WebAuthn passkeys (§3.2, §14.4). A credential from another rp_id is refused before verifying,
+challenges are single-use (the replay guard), and the sign-count UPDATE refuses a counter that
+went backwards while admitting synced passkeys' constant 0.
 """
 
 from __future__ import annotations
@@ -47,31 +26,8 @@ from spielplan.core.config import settings
 CHALLENGE_TTL = timedelta(minutes=5)
 RP_NAME = "Spielplan"
 
-# `POST /api/auth/passkey/login/options` takes no session, so a stranger who can reach the
-# origin can make this table grow one row per call. §2 puts that origin behind Tailscale, which
-# bypasses the Cloudflare rate limiting the rest of the surface leans on. A household holds a
-# handful of devices and a ceremony lives five minutes, so more than this many *unanswered*
-# sign-ins at once is not a household.
-#
-# The bound is held by evicting the oldest rows and never by refusing the caller. Refusing was
-# the worse defect: the count is global and the route is anonymous, so twenty unexpired rows from
-# one burst answered every passkey sign-in in the household 429 for the full five-minute TTL —
-# renewably, forever — and §3.2 makes the passkey primary. Sweeping the *expired* rows does not
-# help, because the rows occupying a full table are exactly the unexpired ones.
-#
-# WHAT EVICTION DOES AND DOES NOT BUY, because the first draft of this comment claimed the
-# opposite of what the SQL does. Eviction sorts on AGE, so it is a household device's row that
-# leaves when a burst arrives *after* the person has tapped Sign in — the ordering the eviction
-# is weakest against, not strongest. What it buys over the 429 is that the window is the length
-# of one ceremony (seconds) instead of the whole TTL, and that it closes by itself.
-#
-# So the number is what carries the rest, and it is sized to be unreachable by accident rather
-# than to be a security boundary: a burst must now land 500 unanswered sign-ins inside the few
-# seconds between a tap and a touch to displace one, against 20 before. The table is still
-# bounded — 500 rows of a five-minute TTL is nothing — and `webauthn_challenge_expiry` indexes
-# the sweep. An anonymous endpoint that allocates state cannot be made safe by a number in this
-# module; the real remedy is a per-caller limit at the ingress, which §2 puts in the operator's
-# Traefik and which M4.7 owns. Named here rather than implied.
+# Anonymous callers can grow this table, so the oldest rows are evicted, never refused: a 429 would
+# lock the household out. Sized to be unreachable by accident, not as a security boundary.
 MAX_OPEN_SIGN_INS = 500
 
 
@@ -81,8 +37,6 @@ class PasskeyError(RuntimeError):
 
 @dataclass(frozen=True)
 class Ceremony:
-    """What the client needs to run one ceremony: the handle and the options JSON."""
-
     id: str
     options: dict[str, Any]
 
@@ -98,17 +52,12 @@ def _origin() -> str:
 async def _issue(
     conn: asyncpg.Connection, *, purpose: str, user_id: int | None, challenge: bytes
 ) -> str:
-    # The hourly worker prune is the floor, not the ceiling: between two runs of it an
-    # anonymous caller was free to leave a row per request behind. Sweeping the same purpose
-    # inline makes the table's size a function of the five-minute TTL instead of the schedule.
+    # Swept inline too, so table size follows the five-minute TTL, not the hourly prune.
     await conn.execute(
         "DELETE FROM webauthn_challenge WHERE purpose = $1 AND expires_at < now()", purpose
     )
     if purpose == "authenticate":
-        # Room for the row about to be inserted, taken from the oldest end (see the cap above).
-        # `expires_at` is `created_at` plus a constant TTL, so it orders by age and the index
-        # `webauthn_challenge_expiry` already exists for it; the id breaks a tie so that two
-        # rows issued in the same microsecond still evict in a defined order.
+        # Evict oldest first: `expires_at` orders by age (constant TTL), `id` breaks ties.
         await conn.execute(
             """
             DELETE FROM webauthn_challenge
@@ -130,7 +79,7 @@ async def _issue(
 
 
 async def _consume(conn: asyncpg.Connection, handle: str, purpose: str) -> asyncpg.Record:
-    """Take a challenge and destroy it in the same statement — single use, no race."""
+    """Take and destroy in one statement: single use, no race."""
     row = await conn.fetchrow(
         "DELETE FROM webauthn_challenge WHERE id = $1 AND purpose = $2 RETURNING *",
         handle, purpose,
@@ -140,7 +89,6 @@ async def _consume(conn: asyncpg.Connection, handle: str, purpose: str) -> async
     if row["expires_at"] < datetime.now(UTC):
         raise PasskeyError("that sign-in attempt has expired — start again")
     if row["rp_id"] != _rp_id():
-        # §14.4: PUBLIC_URL changed between the two halves of one ceremony.
         raise PasskeyError("this app's address changed mid-sign-in — start again")
     return row
 
@@ -150,16 +98,10 @@ async def prune_challenges(conn: asyncpg.Connection) -> int:
     return int(str(result).rsplit(" ", 1)[-1]) if str(result).startswith("DELETE") else 0
 
 
-# --- registration -----------------------------------------------------------------------
-
-
 async def registration_options(
     conn: asyncpg.Connection, *, user_id: int, user_name: str
 ) -> Ceremony:
-    """§3.2: 'Registration from the profile page; multiple passkeys per user (phone +
-    desktop).' The existing credentials go out as `excludeCredentials` so registering the same
-    authenticator twice is refused by the authenticator itself rather than producing a second
-    row that shadows the first."""
+    """Existing credentials go out as `excludeCredentials`, so the authenticator itself refuses a twin."""
     existing = await conn.fetch(
         "SELECT credential_id FROM webauthn_credential WHERE user_id = $1 AND rp_id = $2",
         user_id, _rp_id(),
@@ -174,8 +116,7 @@ async def registration_options(
             PublicKeyCredentialDescriptor(id=bytes(r["credential_id"])) for r in existing
         ],
         authenticator_selection=AuthenticatorSelectionCriteria(
-            # Discoverable so the phone can offer the account without it being typed first —
-            # that is the whole "Face ID and you are in" experience §3.2 is buying.
+            # Discoverable, so the phone offers the account without it being typed (§3.2).
             resident_key=ResidentKeyRequirement.PREFERRED,
             user_verification=UserVerificationRequirement.PREFERRED,
         ),
@@ -201,10 +142,7 @@ async def register(
             expected_origin=_origin(),
         )
     except WebAuthnException as exc:
-        # The base class, not `InvalidRegistrationResponse`: py_webauthn raises siblings of it
-        # (`InvalidJSONStructure`, `InvalidCBORData`, `InvalidAuthenticatorDataStructure`,
-        # `InvalidBackupFlags`) for a payload that is merely malformed, and those escaped as
-        # 500s. A response this server cannot parse is a ceremony that did not verify.
+        # The base class: a malformed payload raises siblings of `InvalidRegistrationResponse`.
         raise PasskeyError(f"that passkey could not be registered: {exc}") from exc
 
     try:
@@ -223,12 +161,8 @@ async def register(
             _rp_id(),
         )
     except asyncpg.UniqueViolationError as exc:
-        # Deliberately NOT an upsert. The credential id comes out of a response the client
-        # composes, and attestation format "none" means nothing vouches for it — so an upsert
-        # would let one account overwrite another account's stored public key while the row
-        # kept its original `user_id`, and the attacker's next assertion would verify *as that
-        # user*. A collision is either a duplicate registration `excludeCredentials` should
-        # have stopped, or that. Both are refusals.
+        # Never an upsert: with attestation "none" the credential id is client-chosen, so an upsert would
+        # let one account overwrite another's public key.
         raise PasskeyError("that passkey is already registered") from exc
     return {
         "credential_id": bytes_to_base64url(verified.credential_id),
@@ -242,25 +176,9 @@ def _transports(credential: dict) -> list[str]:
     return [str(t) for t in raw]
 
 
-# --- authentication ---------------------------------------------------------------------
-
-
 async def authentication_options(conn: asyncpg.Connection, *, name: str | None = None) -> Ceremony:
-    """Issue a sign-in ceremony. Always with an empty allow-list.
-
-    A name-narrowed `allowCredentials` would be an unauthenticated oracle: a non-empty list
-    means "that account exists, is active, and has a passkey here", an empty one means it does
-    not, and this route needs no session at all. §3.2 keeps the household roster behind a
-    session for exactly that reason, so the sign-in screen must not hand it out by another door.
-
-    Nothing is lost by it. Registration asks for a discoverable credential
-    (`ResidentKeyRequirement.PREFERRED`), which is what makes the phone offer "sign in as
-    Jenny" on its own — the allow-list was only ever a hint. An authenticator that stores no
-    discoverable credential falls back to the password, which §3.2 keeps always available.
-
-    `name` is accepted and ignored so the client may keep sending what the user typed without
-    that choice changing what the server discloses.
-    """
+    """Always an empty allow-list: a name-narrowed one would tell an anonymous caller which accounts
+    exist. `name` is accepted and ignored."""
     _ = name
     options = webauthn.generate_authentication_options(
         rp_id=_rp_id(),
@@ -276,17 +194,8 @@ async def authentication_options(conn: asyncpg.Connection, *, name: str | None =
 async def authenticate(
     conn: asyncpg.Connection, *, handle: str, credential: dict
 ) -> tuple[int, bool]:
-    """Verify an assertion and return the app user id it proves and whether the authenticator
-    verified the *user*.
-
-    The second half of that pair is what §3.2 means by a passkey: "Face ID / Touch ID / Android
-    biometrics". A bare presence tap on a roaming key proves possession of the key and nothing
-    about who is holding it, so it signs the person in but must not satisfy the 24 h admin
-    re-prompt — `create_session` takes the flag and decides the stamp there, at INSERT.
-
-    Every refusal in here is deliberately the same sentence to the user; the distinctions
-    matter to this code, not to the person holding the phone.
-    """
+    """Returns (user id, whether the authenticator verified the user): a presence-only tap signs in
+    but must not satisfy the 24 h admin re-prompt. Every refusal is the same sentence."""
     row = await _consume(conn, handle, "authenticate")
 
     raw_id = credential.get("rawId") or credential.get("id")
@@ -308,8 +217,7 @@ async def authenticate(
     if stored is None:
         raise PasskeyError("that passkey is not registered here")
     if stored["rp_id"] != _rp_id():
-        # §14.4: the credential belongs to a previous PUBLIC_URL. Refusing beats verifying
-        # against an origin it was never bound to.
+        # Registered under a previous PUBLIC_URL (§14.4): refuse rather than verify against it.
         raise PasskeyError("that passkey was registered for a different address")
 
     try:
@@ -322,17 +230,11 @@ async def authenticate(
             credential_current_sign_count=int(stored["sign_count"]),
         )
     except WebAuthnException as exc:
-        # The base class, not `InvalidAuthenticationResponse`: this route is anonymous, and its
-        # structural siblings turned a malformed body from any passer-by into a 500 — after the
-        # challenge had already been consumed, so the honest user's retry failed too (sec-04).
+        # The base class: a malformed body would otherwise 500 after the challenge was consumed.
         raise PasskeyError(f"that passkey could not be verified: {exc}") from exc
 
-    # The counter check is the UPDATE, not a read followed by a write. py_webauthn compares
-    # `new_sign_count` against the value read above, and two assertions in flight read the same
-    # value, so a cloned hardware key racing the real one would have both writes land. Making
-    # the row the arbiter (§4.2) collapses that to one winner. `$2 = 0 AND sign_count = 0` is
-    # the synced-passkey case the module docstring names: iCloud Keychain and Google Password
-    # Manager report 0 for every assertion, and refusing those would refuse §3.2's primary auth.
+    # The UPDATE is the counter check, so two racing assertions cannot both land.
+    # `$2 = 0 AND sign_count = 0` admits synced passkeys, which always report 0.
     advanced = await conn.fetchval(
         "UPDATE webauthn_credential SET sign_count = $2, last_used_at = now() "
         "WHERE credential_id = $1 AND (sign_count < $2 OR ($2 = 0 AND sign_count = 0)) "
@@ -355,9 +257,7 @@ async def list_credentials(conn: asyncpg.Connection, user_id: int) -> list[dict[
             "id": bytes_to_base64url(bytes(r["credential_id"])),
             "label": r["label"],
             "rp_id": r["rp_id"],
-            # §14.4 made legible: a credential from an older PUBLIC_URL is listed and marked
-            # dead rather than vanishing, so "my passkey stopped working" has an answer on
-            # screen instead of in the logs.
+            # Listed as dead rather than hidden, so "my passkey stopped working" has an answer (§14.4).
             "usable": r["rp_id"] == _rp_id(),
             "created_at": r["created_at"],
             "last_used_at": r["last_used_at"],

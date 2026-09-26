@@ -1,24 +1,6 @@
-"""Catalog queries. Spec v2.1 §6.0 (M0), §4.1 rules 1, 2, 3, 5.
-
-Three rules are enforced here rather than trusted to callers:
-
-* **rule 5** — `kinds` is a *required, non-empty* argument on every listing function. There is
-  no "all titles" query in this module, because "the unpartitioned crowd top-10 is 8/10 TV
-  series". Owner decision 2026-08-29: kind is a *selection* of one or both, not a one-of-two
-  switch — but selecting both is a selection, not a merge. This module only ever LISTS, in a
-  kind-independent order, so it may interleave; a surface that RANKS (Rank, Tonight, the Home
-  shelves) must render two headed sections and never one interleaved ranking, because the
-  measured failure is a shared *ranking*, not a shared screen.
-* **rule 1** — the two DNA tiers are returned as two labelled lists. Nothing here unions them.
-* **rule 2** — `salience`, `confidence` and `n_sources` appear in ORDER BY and in the payload,
-  never in a WHERE. `test_landmine_guards.py::test_no_weight_column_is_used_as_a_filter` greps
-  this package to keep it that way.
-
-`0004_dna.sql`'s comment names `db/dna.py` as the read layer that holds rule 2; the reads live
-here and in `home/why.py`, and there is no `db/dna.py`. The migration is applied and
-sha256-checksummed, so correcting it in place is a hard startup error rather than an edit — the
-correction is therefore recorded here, where the reads actually are. [M4.16 spec-15]
-"""
+"""Catalog queries (§6.0, §4.1). Rule 5: every listing takes a required, non-empty `kinds`, and a
+surface that ranks renders kinds apart. Rule 1: the DNA tiers stay two lists. Rule 2: weights
+never appear in a WHERE."""
 
 from __future__ import annotations
 
@@ -36,70 +18,35 @@ from spielplan.importer import meta
 Kind = Literal["movie", "series"]
 KINDS: tuple[Kind, ...] = ("movie", "series")
 SeenFilter = Literal["any", "seen", "unseen"]
-# Decision 515: the catalogue's two orders. A search has its own (decision 472) whichever is set.
 Sort = Literal["for_you", "newest"]
 
-# Postgres's LIKE takes backslash as its escape character unless ESCAPE says otherwise, so the
-# three characters a needle has to lose their meaning are the backslash itself and the two
-# wildcards. Order matters: the backslash is doubled first, or the escapes added after it would
-# be escaped in turn.
+# LIKE's default escape is backslash. Order matters: double it first, or later escapes get escaped.
 _LIKE_SPECIALS = (("\\", "\\\\"), ("%", "\\%"), ("_", "\\_"))
 
 
 def _like_needle(q: str) -> str:
-    """`q` as a substring LIKE pattern that matches it **literally**.
-
-    §6.0 asks for "filter/search on title/alias" and both search surfaces built `%{q.lower()}%`
-    straight from the input, so the wildcards kept their meaning: `%` returned the whole
-    catalogue, `_` matched every one-character name, `h_at` returned *Heat*, and a title with a
-    percent sign in it (`100% Wolf`) could not be searched for exactly. §6.0's count line was
-    wrong in the same way, because it is computed from the same predicate.
-
-    This is not injection and the fix is not sanitising: the value stays a bound parameter and
-    nothing about it reaches the SQL text. §4.1 rule 8's distinction applies — escaping is how a
-    metacharacter keeps being the character the person typed, and cleaning would be discarding
-    it. `100%` still finds `100% Wolf`; it just no longer finds everything else too.
-
-    Shared with `scoring/serve.py`, which imported it rather than keeping the second copy that
-    made this one bug two. [M4.9 finding 12]
-    """
+    """`q` as a LIKE pattern matching it literally: `%` and `_` are the characters typed."""
     needle = q.lower()
     for character, escaped in _LIKE_SPECIALS:
         needle = needle.replace(character, escaped)
     return f"%{needle}%"
 
 
-# --- search order (decision 472) ------------------------------------------------------------
-#
-# §6.0 M0 asks for "filter/search on title/alias" and says nothing about order, so a search kept
-# the catalog's year order: on the first household install "up" put Up at 131 of 362, behind
-# "Godzilla x Kong: Supernova", and "heat" put Heat tenth, behind a National Theatre recording.
-# The PREDICATE is untouched - `_like_needle`'s literal substring, so the count line and the
-# hidden count still describe the same set - and only the order learns what was typed.
-#
-# Both sides are normalised the same way, in SQL, so the database's own idea of a letter decides
-# (en_US.utf8's [:alnum:] covers accented and CJK letters) and punctuation stops deciding the
-# order: "Spider-Man" is an exact match for "spider-man". Padded with a space at each end, so a
-# whole word is ` word ` and a word start is ` word`. Nothing left in the normalised query is a
-# LIKE metacharacter - `%`, `_` and `\` are not [:alnum:] - so the LIKEs below need no escaping.
+# Search order (decision 472): both sides are normalised in SQL to space-padded alnum words, so
+# punctuation never decides and nothing left in the query is a LIKE metacharacter.
 
 
 def _norm_sql(expr: str) -> str:
     return f"(' ' || btrim(regexp_replace(lower({expr}), '[^[:alnum:]]+', ' ', 'g')) || ' ')"
 
 
-# A leading English article is not part of what a person types for "The Godfather": without this
-# the 1991 "Godfather" (25 ratings) was an exact match and the 1972 film was not, and "matrix"
-# ranked three sequels above The Matrix. The better of the two readings counts, unpenalised, and
-# the crowd tie-break then settles "Heat" against "The Heat".
+# A leading article does not count: "godfather" must match "The Godfather" exactly.
 _ARTICLE = "'^ (the|a|an) '"
 
-# 0 the whole text; 1 the phrase starts it; 2 a word starting it begins with the phrase; 3 the
-# phrase as whole words anywhere; 4 a word anywhere begins with it; 5 anywhere inside a word
-# ("theatre" for "heat"); 6 not in this text at all - the predicate matched the other one.
+# Tiers: 0 whole text; 1 starts it; 2 a starting word begins with it; 3 whole words anywhere;
+# 4 a word begins with it; 5 inside a word; 6 absent (the predicate matched the other text).
 SEARCH_TIERS = 7
-# Decision 516's line between a search's matches and its looser ones: from here on, a hit only
-# contains the query inside a word.
+# Decision 516: from here on a hit only contains the query inside a word.
 WEAK_TIER = 5
 
 
@@ -121,29 +68,9 @@ def _text_tier_sql(n: str, nq: str) -> str:
 
 
 def search_order_sql(q_param: str) -> tuple[str, str, str]:
-    """(joins, ORDER BY keys, match select) that rank a searched listing best match first.
-    Decision 472.
-
-    A title's match is its name's tier doubled, or its best alias's tier doubled plus one - so a
-    name beats an alias of the same quality and an alias beats a worse name. Inside a match:
-    owned first (the household can press Play on it), then the crowd's rating count as a
-    percentile WITHIN THE TITLE'S OWN KIND, then year, name and id.
-
-    Within the kind, because `item_n` sits on two scales - film median 265, series median 0 - and
-    a raw count with both kinds on is the cross-kind crowd comparison §4.1 rule 5 was measured
-    against: it put the 1988 film "The Bear" above the 2022 series. A percentile only breaks
-    ties inside one match tier and is never a score, so the grid stays a list (decision 18).
-
-    `t.id` stays the last key: §6.0 pages this list by OFFSET and a partial order duplicates and
-    drops rows between pages (M4.9 finding 11).
-
-    The third part selects `match`, the same first key read as §6.0's two groups (decision 516):
-    'weak' for a hit that only contains the query inside a word, on its name and on every alias
-    alike (tier 5, or 6 where the literal predicate matched across punctuation the normalisation
-    reads as a break), 'strong' for the rest. The client folds the weak hits; it read the name
-    alone before, so an alias hit at a word start - Fast Five through "Fast & Furious 5: Rio
-    Heist" for "heist" - was folded with the substrings (review finding R3-SPEC-03).
-    """
+    """(joins, ORDER BY, match select), best match first (decision 472): name tier x2 or alias tier x2+1,
+    then owned, crowd percentile within the title's own kind, year, name, id (a total order for OFFSET).
+    `match` is 'weak' from WEAK_TIER on, for the client to fold (decision 516)."""
     joins = f"""
           CROSS JOIN (SELECT {_norm_sql(f'{q_param}::text')} AS n) sq
           CROSS JOIN LATERAL (SELECT {_norm_sql('t.name')} AS n) sn
@@ -171,11 +98,7 @@ def search_order_sql(q_param: str) -> tuple[str, str, str]:
 
 
 def normalise_kinds(kinds: Sequence[str] | None) -> list[Kind]:
-    """One or both, never neither and never something else.
-
-    An empty selection would silently mean "everything", which is the unpartitioned query
-    rule 5 exists to prevent — so it is an error, not a default.
-    """
+    """An empty selection is an error, not "everything" (§4.1 rule 5)."""
     chosen = [k for k in KINDS if kinds and k in kinds]
     if not chosen:
         raise ValueError("select at least one kind: 'movie', 'series', or both")
@@ -183,29 +106,8 @@ def normalise_kinds(kinds: Sequence[str] | None) -> list[Kind]:
 
 
 async def household_ids(conn: asyncpg.Connection) -> list[int]:
-    """The household, as §5.3's two nightly passes both have to mean it: active, admin or member.
-
-    One predicate in one place because two passes over the same people disagreed about who they
-    are. `scoring/foldin.run` spelled `role IN ('admin', 'member')` and `ledger/refit.refit_all`
-    spelled `is_active`, so a deactivated account got no Ledger and a fresh `user_vector` plus a
-    full `user_score` partition rewrite on every 60 s tick — the fold-in paying its most expensive
-    write for somebody who cannot sign in. `home/shelves.partner_for` already spells the
-    intersection (`u.is_active AND u.role IN ('admin', 'member')`), which is what makes this the
-    household rather than a third opinion about it; it stays an inline clause there because §6.0's
-    partner is one row of a co-seen ranking and not an id list.
-
-    Here rather than in either domain package for `db/dna_terms`' reason: importing one domain
-    package from the other for a shared fragment is worse coupling than a shared module underneath
-    both, and `scoring` already imports this module for `KINDS`.
-
-    **Both halves are load-bearing, even though the schema now enforces one of them.** Decision
-    166 settles what a guest is — a Tonight session seat with no account and no profile — and
-    M4.6's `0016_users.sql` narrowed `app_user.role` to two values accordingly, so the role clause
-    matches every row today. It is spelled anyway: the household is "the accounts a person signs
-    in with", the clause is what `partner_for` and §6.0 already read, and a predicate that is
-    true by a CHECK in another file is not the same statement as a predicate that is true by
-    accident. [M4.13, ml04-foldin-and-ledger-disagree-about-the-household; decision 166; §3.1]
-    """
+    """Active admins and members: the one household predicate both nightly passes share (§5.3).
+    The role clause stays although a CHECK makes it true today."""
     rows = await conn.fetch(
         "SELECT id FROM app_user WHERE is_active AND role IN ('admin', 'member') ORDER BY id"
     )
@@ -213,18 +115,8 @@ async def household_ids(conn: asyncpg.Connection) -> list[int]:
 
 
 def _dna_term_matches(needle: str) -> str:
-    """Whether the `dna_tagged` row `dt` is the term a person typed, as SQL over the bound `needle`
-    (already stripped and lower-cased).
-
-    Four spellings of one term: the id (`era.wwii`), its bare leaf (`wwii`), and the two names a
-    member reads for it (decision 486 clause 4) - the label the vocabulary ships ("World War II",
-    `dna_term.label`) and, where it shipped none, `label_of`'s fallback, the leaf with its
-    underscores as spaces. A member types the word the card and the shelves showed them, and
-    the filter only knew the key, so "World War II" found nothing on a title the card tagged
-    with it. The label is read in the active vocabulary, the one both callers scope `dt` to, and
-    uncorrelated so the label lookup runs once per query rather than once per tag row. Shared by
-    `_filters` and `dna_tiers_for`, which have to agree clause for clause.
-    """
+    """`dt` matches the typed `needle` (stripped, lower-cased) by id, leaf, shipped label or fallback
+    label. Shared by `_filters` and `dna_tiers_for`, which must agree clause for clause."""
     leaf = "split_part(lower(dt.term), '.', 2)"
     return (
         f"(lower(dt.term) = {needle} OR {leaf} = {needle}"
@@ -248,14 +140,7 @@ def _filters(
     runtime_min: int | None = None,
     dna: str | None = None,
 ) -> tuple[str, list[Any]]:
-    """The catalog's WHERE clause and its arguments, over alias `t`.
-
-    Extracted so the listing and the hidden-by-kind count are the *same* predicate. They were
-    not: the count read every title of the unselected kinds, ignoring the filters the listing
-    had applied, so a person filter over a four-title filmography reported "26 series hidden".
-    §6.0's count line exists to name what a toggle is hiding, and a number larger than anything
-    the toggle could reveal is a worse answer than no number.
-    """
+    """The catalog's WHERE over alias `t`; the listing and the hidden-by-kind count share it."""
     where = ["t.kind = ANY($1)"]
     args: list[Any] = [normalise_kinds(kinds)]
 
@@ -271,9 +156,7 @@ def _filters(
             f"))"
         )
     if genre:
-        # Decision 473: one canonical genre, answered by every structured source's spelling of
-        # it. A genre outside the vocabulary binds no label and so matches nothing; the catalog
-        # route refuses it before this point, and Rank's board keeps its empty answer.
+        # Decision 473: an unknown genre binds no label and so matches nothing.
         where.append(
             genre_vocab.predicate(
                 arg(genre_vocab.raw_labels(genre)), arg(list(genre_vocab.EXCLUDED_SOURCES))
@@ -282,50 +165,20 @@ def _filters(
     if decade is not None:
         where.append(f"t.year >= {arg(decade)} AND t.year < {arg(decade + 10)}")
     if person_id is not None:
-        # One person or a set. `fold_credits` folds the person rows two sources minted for one
-        # human into one credit row and names them all in `person_ids`, so a tap on that row asks
-        # for the set: the lead id alone was half the filmography. [C9.3, C9.4 of the 2026-09-25
-        # user test]
+        # A set: `fold_credits` folds one human's person rows and names them all in `person_ids`.
         ids = [person_id] if isinstance(person_id, int) else [int(p) for p in person_id]
         where.append(
             "EXISTS (SELECT 1 FROM credit c WHERE c.title_id = t.id"
             f" AND c.person_id = ANY({arg(ids)}::int[]))"
         )
-    # §6.3's two filters the §6.0 catalog does not have. Runtime is a bound on `runtime_min`
-    # (the column is minutes, the parameter is the ceiling the person asked for) and a NULL
-    # runtime is excluded rather than kept: "under 110 minutes" is a claim, and a title whose
-    # length nobody knows cannot make it.
+    # `runtime_min` is minutes; an unknown runtime cannot satisfy a bound, so NULL is excluded.
     if runtime_max is not None:
         where.append(f"t.runtime_min IS NOT NULL AND t.runtime_min <= {arg(runtime_max)}")
     if runtime_min is not None:
         where.append(f"t.runtime_min IS NOT NULL AND t.runtime_min >= {arg(runtime_min)}")
     if dna:
-        # §6.3: "DNA facet/term predicates ("show only `mood.cosy`")". Two rules meet here.
-        #
-        # Rule 1 — the two tiers are never merged. `dna_tagged` (0004) is the ONE sanctioned
-        # union and exists precisely so the `tier` discriminator cannot be dropped; a predicate
-        # written against `dna_tag` alone would silently answer "no" for the 11,324 projected
-        # titles, and one written against a fresh UNION would lose the tier.
-        #
-        # Rule 2 — no threshold on `confidence`, `salience` or `n_sources`. The obvious
-        # implementation of "only good matches" is a confidence cut, and a 0.5 cut deletes 44%
-        # of the extracted tier. Membership is membership; the weights rank, they never filter.
-        #
-        # §4.3: the vocabulary id IS `facet.term`. The corpus ships `dna:mood.cosy`, the loader
-        # stores that string whole, and `facet` is the id's own prefix — so the qualified form
-        # is not built here, it is what the column already holds. The predicate that shipped
-        # constructed `facet || '.' || term` and therefore matched `mood_tone.mood.cosy` and
-        # nothing a person would type: `?dna=cosy` (the bare term the §6.3 placeholder invites)
-        # matched no row at all. `split_part(term, '.', 2)` is the other half of the same id,
-        # so both spellings select the same titles and a wrong facet still selects none.
-        # [M4.9 finding 2]
-        #
-        # §4.3 + §10 — one vocabulary. `dna_vocabulary` is versioned and a re-import leaves two
-        # versions coexisting; `home/why.py` scoped the shelves for that reason and this
-        # predicate did not, so the first vocabulary migration would have put a superseded
-        # term's titles on the board. The version arrives as a subquery rather than a bound
-        # argument because this builder is synchronous and shared with the Rank board, which
-        # has no awaitable seam to thread one through; `db/dna_terms.py` owns both spellings.
+        # §4.1 rules 1 and 2: `dna_tagged` keeps the tier, and no weight filters. The term id is already
+        # `facet.term`; the version is a subquery because this builder is synchronous.
         needle = arg(dna.strip().lower())
         where.append(
             "EXISTS (SELECT 1 FROM dna_tagged dt WHERE dt.title_id = t.id"
@@ -334,8 +187,7 @@ def _filters(
     if owned_only:
         where.append("t.is_owned")
     if seen != "any" and user_id is not None:
-        # A title with no user_title row is unseen — the absence of a row is the default state,
-        # so `unseen` must include it rather than only matching explicit rows.
+        # No user_title row means unseen.
         uid = arg(user_id)
         if seen == "seen":
             where.append(
@@ -352,12 +204,7 @@ def _filters(
 
 @dataclass(frozen=True)
 class RankFilters:
-    """§6.3's six filter dimensions, minus `kind`, which the board already partitions by.
-
-    A frozen record rather than eight keyword arguments threaded through three call sites: the
-    board, its count and the queue's pool all have to agree about what the person asked for,
-    and the M0 bug this module's `_filters` was extracted to fix was two of those disagreeing.
-    """
+    """§6.3's filters minus `kind`; one record so the board, its count and the queue agree."""
 
     q: str | None = None
     genre: str | None = None
@@ -368,7 +215,7 @@ class RankFilters:
     dna: str | None = None
 
     def active(self) -> dict[str, Any]:
-        """What is switched on, for the "no match" state to list back (proposal 80)."""
+        """What is switched on, for the "no match" state to list back."""
         return {
             name: value
             for name, value in vars(self).items()
@@ -379,12 +226,7 @@ class RankFilters:
 def rank_filters(
     *, kind: str, user_id: int, filters: RankFilters | None = None
 ) -> tuple[str, list[Any]]:
-    """§6.3's board predicate, over alias `t`, through the *same* builder the catalog uses.
-
-    One builder, deliberately. §6.0's count line and its listing drifted apart at M0 because
-    each had its own WHERE; a Rank-specific copy would re-open that class of bug against a
-    surface where the number on screen is a tier list rather than a count.
-    """
+    """The catalog's builder, so a board and its count cannot drift apart."""
     f = filters or RankFilters()
     return _filters(
         kinds=[kind],
@@ -402,17 +244,7 @@ def rank_filters(
 async def dna_tiers_for(
     conn: asyncpg.Connection, *, title_ids: Sequence[int], dna: str
 ) -> dict[int, list[str]]:
-    """Which DNA tier(s) matched each survivor of a `dna` predicate.
-
-    §4.1 rule 1: the two tiers "must stay distinguishable", and a filter that returns a title
-    without saying whether the match was quote-verified or inferred has merged them in the only
-    place it matters — the answer a person reads.
-
-    The predicate is `_filters`'s, clause for clause, version scope included: this reports
-    *which tier admitted* a row the filter already returned, so a spelling or a vocabulary the
-    two disagree about would badge a title under a term that did not select it — or, as it
-    shipped, report nothing for every row the board is showing. [M4.9 findings 2 and 10]
-    """
+    """Which tier admitted each survivor of a `dna` filter (§4.1 rule 1). Same predicate as `_filters`."""
     if not title_ids:
         return {}
     rows = await conn.fetch(
@@ -449,13 +281,8 @@ async def list_titles(
     sort: Sort = "newest",
     bundle_version: str | None = None,
 ) -> tuple[list[dict[str, Any]], int]:
-    """Return (rows, total). `kinds` is mandatory and non-empty — see rule 5 above.
-
-    `sort="for_you"` orders by the member's own score in `bundle_version` (decision 515), and
-    because that is a RANKING it partitions by kind: every film, then every series, each by the
-    score, never one interleaved ranking (§4.1 rule 5, decision 18). A title with no score row
-    closes its kind's run in year order. The filters and the count are untouched.
-    """
+    """`kinds` is mandatory (rule 5). `for_you` ranks by the member's score one kind at a time
+    (decision 515); unscored titles close their kind in year order."""
     clause, args = _filters(
         kinds=kinds, user_id=user_id, q=q, genre=genre, decade=decade, seen=seen,
         person_id=person_id, owned_only=owned_only,
@@ -472,10 +299,7 @@ async def list_titles(
         seen_select = "COALESCE(ut.state, 'unseen') AS seen_state"
         seen_join = f"LEFT JOIN user_title ut ON ut.title_id = t.id AND ut.user_id = {arg(user_id)}"
 
-    # A search is ordered by how well it matched (decision 472); a listing without one keeps the
-    # year order, which is decision 18's kind-independent order unchanged - or, asked for the
-    # member's own order, is ranked by it one kind at a time (decision 515). `$1` is the kinds in
-    # `KINDS` order (`_filters`), so films lead.
+    # Unsearched listings keep the year order. `$1` holds kinds in `KINDS` order, so films lead.
     search_joins, order, match = "", "t.year DESC NULLS LAST, lower(t.name), t.id", ""
     if q and q.strip():
         search_joins, order, match = search_order_sql(arg(q))
@@ -533,16 +357,7 @@ async def count_by_kind(
     person_id: int | Sequence[int] | None = None,
     owned_only: bool = False,
 ) -> dict[str, int]:
-    """How many titles each unselected kind holds **under the same filters as the listing**.
-
-    §6.0's count line has to be able to say "6 films · 2 series hidden": a toggle that hides
-    things without saying how many is the silent truncation this control was introduced to fix.
-
-    The filters are not optional decoration. Counting the whole catalog instead made a person
-    filter over a four-title filmography report "26 series hidden" — a promise the toggle cannot
-    keep, since turning Series on reveals two. Every caller that filters the listing must pass
-    the same arguments here.
-    """
+    """Under the listing's own filters: a count wider than the toggle can reveal is wrong (§6.0)."""
     hidden = [k for k in KINDS if k not in set(exclude)]
     if not hidden:
         return {}
@@ -575,13 +390,7 @@ async def get_title(
 async def carry_original_names(
     conn: asyncpg.Connection, cards: Sequence[dict[str, Any]], *, key: str = "id"
 ) -> None:
-    """Put each card's original title and its language on it, in place, in one read.
-
-    A German viewer knows "Wunderschön" and not "Wonderfully Beautiful", the English release title
-    `title.name` holds; the client leads with the original where it is the viewer's own language
-    (decision 516). One statement for a whole page of cards, rather than two more columns in each
-    of the statements that build them - the catalog's and every shelf's.
-    """
+    """Original title and language onto each card, in place, in one read (decision 516)."""
     ids = sorted({int(card[key]) for card in cards})
     if not ids:
         return
@@ -606,26 +415,8 @@ _CREDIT_ROWS = """
 
 
 def fold_credits(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
-    """One title's credit rows folded to the rows §6.0's card lists.
-
-    ONE ROW PER (person, §3.1 class), and the job string is no longer the key. Two sources spell
-    one credit two ways - TMDB's 'Original Music Composer' is Wikidata's 'Composer', its 'Writer'
-    is Wikidata's 'Screenplay' - so Heat showed Elliot Goldenthal twice and Michael Mann as Writer
-    and as Screenplay. `role_class` is the corpus's own normalisation and is NULL on none of the
-    seeded install's rows; a stored class outside the closed vocabulary (the five `crew` rows the
-    corpus corrections ledger wrote) is classed by `derive/ids.class_of`, and a row with no class
-    at all keys on its job as before. `job` is the label of the highest-priority source that
-    credited it (`importer/meta.SOURCE_PRIORITY`, so TMDB's wins) and `jobs` keeps every
-    spelling, in that order, because a writer credited for Novel and for Screenplay is two facts.
-
-    AND ONE PERSON WRITTEN AS TWO ON ONE TITLE IS ONE ROW. The corpus mints a person per id it
-    saw, so an imdb-only row and a tmdb-only row for one human (John Williams on Schindler's List)
-    reach this read as two person ids with one name. Within a title and a class, people whose
-    `loose_name` agrees are one row when their ids cannot disagree - at most one imdb id and at
-    most one tmdb id among them - and stay apart when they can. `person_id` is the one carrying
-    the most ids, then the lowest id; `person_ids` lists them all. [C9.3, C9.4 of the 2026-09-25
-    user test; §4.1 "dedupe at read time"]
-    """
+    """One row per (person, §3.1 class): two sources spell one job two ways. People whose `loose_name`
+    agrees and whose ids cannot disagree are one row; `person_ids` lists them all."""
     rank = {source: i for i, source in enumerate(meta.SOURCE_PRIORITY)}
     order: dict[int, int] = {}
     people: dict[int, Mapping[str, Any]] = {}
@@ -649,7 +440,6 @@ def fold_credits(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
         )
         for part in ([keys] if agree else [[k] for k in keys]):
             credit = _credit_row([row for key in part for row in groups[key]], part, people, rank)
-            # Directing first, then billing, then name: the order the SQL read used to end in.
             folded.append(((
                 "Directing" not in credit["departments"], credit["ord"] is None,
                 credit["ord"] or 0, min(order[pid] for pid, _ in part),
@@ -694,58 +484,16 @@ def _credit_row(rows, keys, people, rank) -> dict[str, Any]:
 
 
 async def credits_for(conn: asyncpg.Connection, title_id: int) -> list[dict[str, Any]]:
-    """§4.1: 'credit (dedupe at read time, never at import)'.
-
-    The same person/job can arrive from several sources; import keeps every row so a source can
-    be dropped later. Here we collapse to **one row per (person, class)** - `fold_credits` says
-    why the job stopped being the key - keeping the smallest billing order and listing which
-    sources agreed.
-
-    NOT per (person, department, job). TMDB records the same job under two department spellings
-    — `Acting`/`Actor`, `Directing`/`Director`, `Editing`/`Editor` — and the real export carries
-    7,918 (title, person, job) triples spanning more than one of them across 1,216 of 19,071
-    titles. Grouping on the department therefore returned two rows the §6.0 card cannot tell
-    apart, and Svelte 5's keyed each throws on the duplicate key in the production branch too.
-    §4.1's dedupe is a statement about the *person and the job*; the department is how a source
-    files it.
-
-    The departments are aggregated rather than chosen between (a sorted list, the same shape
-    `sources` already has), because §4.1 rule 1 keeps what the sources said, and nothing
-    here normalises a spelling: eighteen ship. `department` stays a single string for the callers
-    that read it and `min()` is what picks it — an alphabetical accident, not a rule, and the
-    corpus is the proof. Of its 7,918 colliding groups, min() lands on the TMDB canonical
-    spelling for 6,565 (`Actor`/`Acting` → Acting, `Editing`/`Editor` → Editing,
-    `Director`/`Directing` → Directing) and on the other spelling for 1,353
-    (`Writer`/`Writing` → **Writer**, `Sound`/`Music` → Music, `Production Designer`/`Art` →
-    Art). Which is why `departments` is what carries the truth and this key is compatibility.
-
-    The response key stays `ord` although 0015 renamed the column `billing_order`, because §6.0's
-    card reads it; and `character` is the lowest billing order's, ties by source, because 2,300
-    (title, person) pairs carry more than one across sources and an unordered pick made the
-    payload a function of COPY order. §6.0's card list does not name the character, so the field
-    ships and no surface shows it (decision 197). The fold is in Python because the class of a
-    `crew` row is `classify_role`'s answer and the name merge is `loose_name`'s, and a second
-    spelling of either in SQL is the drift `derive/ids.py` exists to prevent.
-    """
+    """§4.1: credits dedupe at read time, never at import. `departments` carries every spelling; the
+    min `department` and `ord` stay for callers. In Python so `derive/ids` stays the one classifier."""
     return fold_credits([dict(r) for r in await conn.fetch(_CREDIT_ROWS, title_id)])
 
 
 async def dna_for(
     conn: asyncpg.Connection, title_id: int, *, version: str | None
 ) -> dict[str, list[dict[str, Any]]]:
-    """§4.1 rule 1: two tiers, two lists, never merged, never unioned.
-
-    The extracted tier carries its evidence quotes; §4.1: 'a tag without its quote is
-    unfalsifiable'. No confidence/salience predicate appears anywhere below (rule 2).
-
-    `version` is the active vocabulary and is required rather than defaulted, because a card
-    that silently showed every version's tags is exactly the failure §10 warns about ("a bundle
-    re-import leaves two vocabularies coexisting") and a default would have hidden it a second
-    time. `None` means no bundle has been imported, and then there is nothing to show: the
-    caller resolves it once through `db/dna_terms.active_version` and hands the same string to
-    §6.4's neighbour queries, so one card cannot mix two vocabularies within one response.
-    [M4.9 finding 10]
-    """
+    """§4.1 rule 1: two tiers, two lists, never merged. `version` is required so one card cannot mix
+    vocabularies; None means nothing is imported."""
     if version is None:
         return {"extracted": [], "projected": []}
     extracted = await conn.fetch(
@@ -778,23 +526,8 @@ async def dna_for(
 
 
 async def platform_ratings(conn: asyncpg.Connection, title_id: int) -> list[dict[str, Any]]:
-    """§4.1 rule 3: display-only. This is the ONLY function that reads `display`, and its
-    result is labelled all the way to the UI. Aggregate platform scores are a popularity
-    conduit and are banned as model features.
-
-    The row is per (platform, metric) since 0015, because that is how the corpus keys it, and
-    one platform legitimately has two: metacritic ships a critic_score and a user_score on
-    different scales, and collapsing them left whichever one COPY reached last.
-
-    **What the card shows: the metrics that are scores.** The corpus also keeps `popularity`,
-    `critic_review_count`, `audience_rating_count` and trakt's ten `dist_N` histogram buckets
-    in this table — 12 of one measured title's 22 shipped rows. §6.0 requires the caption to
-    travel with the number, and those have no caption they could honestly print: `dist_7 =
-    2197` is not a rating out of anything. The corpus marks the difference itself by recording
-    `scale` for a score and NULL for the rest, so that is the predicate. Nothing is being
-    hidden from a model here — rule 3 already forbids every row in this table from becoming a
-    feature; this is a rendering choice about a display block.
-    """
+    """§4.1 rule 3: display-only, the one reader of `display`. Only rows with a `scale` are scores with
+    an honest caption; popularity and histogram buckets are not."""
     rows = await conn.fetch(
         "SELECT platform, metric, score, scale, votes FROM display.platform_rating "
         "WHERE title_id = $1 AND scale IS NOT NULL ORDER BY platform, metric",
@@ -804,11 +537,7 @@ async def platform_ratings(conn: asyncpg.Connection, title_id: int) -> list[dict
 
 
 async def genres(conn: asyncpg.Connection, kinds: Sequence[str]) -> list[str]:
-    """The genre facet over the selected kinds, in decision 473's canonical vocabulary.
-
-    The distinct raw labels are read and mapped here rather than listed: a raw DISTINCT offered
-    434 values for films, case duplicates and Wikidata's free text among them (`db/genres.py`).
-    """
+    """Raw labels mapped to decision 473's vocabulary rather than listed raw."""
     rows = await conn.fetch(
         "SELECT DISTINCT lower(g.genre) AS genre FROM title_genre g JOIN title t ON t.id = g.title_id "
         "WHERE t.kind = ANY($1) AND g.source <> ALL($2::text[])",

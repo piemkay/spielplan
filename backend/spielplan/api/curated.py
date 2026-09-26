@@ -1,35 +1,6 @@
-"""§6.6 Data's three ledger editors and its reject review, over HTTP. Spec v2.1 §6.6 Data, §8
-stages 3, 6 and 7, §6.4, §4.1 rule 2; decisions 330, 341, 342, 445 and 446.
-
-THREE EDITORS, THREE ROUTE FAMILIES, AND NO HANDLER THAT REACHES TWO OF THEM. Proposal 105, adopted
-as provenance for §6.6 Data under decision 445, is "three separate editors with separate semantics,
-never one merged screen", and the domain keeps it by writing three tables from three modules that
-share no function. A route layer that dispatched on a ledger name, or a handler that called two of
-them, would be the merged write path one level up, so each handler below calls exactly one
-`curated` module - `test_curated_api.py` reads this file's handlers for it - and the only code the
-families share is the spelling of a refusal and of a TSV download.
-
-EACH LEDGER'S LIST SAYS WHAT RE-APPLIES IT (proposal 105's own clause: "each showing its rows, its
-provenance and the derive that will re-apply it"). The rows carry `origin`, which is the provenance;
-`applies` is the one sentence the domain does not hold, because it is about where each ledger is
-read rather than about any row: verdicts at ingest (§8 stage 3's derive and stage 6's extraction),
-credit facts last at every derive, the axes read live by §6.2 step 5 and by the Map at M6. Written
-here as ASCII with "section" for the sign, because it reaches a console as often as a screen.
-
-A REFUSAL IS 409 WITH THE EDITOR'S SENTENCE, A MISSING ROW 404. `curated.Refused` carries the
-sentence the editor composed and `api/acquisition.py` maps its domain's refusals to 409 the same
-way. Only a bare `LookupError` is a 404, for `api/llm.connector_test`'s reason: the editors raise it
-for a row or facet that is not there, and a `KeyError` from inside one is a fault in this build that
-a 404 would report as the row not existing.
-
-THE REVIEW IS TWO ORDERINGS AND NO FILTER (decision 446): the rejects newest first and a title's
-extracted tags weakest first, both `dna/review`'s, handed on as read. No parameter here narrows
-either list, and none may: a weight behind a query parameter is §4.1 rule 2's cut one layer up.
-
-THIN BY CONSTRUCTION: no statement lives here, so the module is absent from
-`test_layering_guards.py`'s `ALLOWED_RESIDUE`. Every route takes `AdminUser`, so
-`test_api_gating.py`'s sweeps drive each one as a stranger and as a member.
-"""
+"""§6.6 Data's three ledger editors and reject review. Each handler calls exactly one `curated`
+module, never two (decision 445). No parameter filters the review lists: a weight behind a query
+parameter would be §4.1 rule 2's cut."""
 
 from __future__ import annotations
 
@@ -92,8 +63,6 @@ class AxisWeight(BaseModel):
 
 
 class Axis(BaseModel):
-    """One facet's axis, whole: its two poles and every term that turns it (§6.4)."""
-
     facet: str
     left_pole: str
     right_pole: str
@@ -101,7 +70,7 @@ class Axis(BaseModel):
 
 
 async def _answer[T](call: Awaitable[T]) -> T:
-    """Await one editor call, mapping its refusal to 409 and a missing row to 404."""
+    """Only a bare LookupError is a 404: a KeyError from inside an editor is a fault, not a missing row."""
     try:
         return await call
     except Refused as exc:
@@ -113,8 +82,6 @@ async def _answer[T](call: Awaitable[T]) -> T:
 
 
 def _download(exported: tuple[str, str]) -> Response:
-    """An export as the file a household saves and a bundle carries back: the importer's own name
-    and columns, UTF-8, served as an attachment."""
     name, text = exported
     return Response(
         content=text.encode("utf-8"), media_type=_TSV,
@@ -122,12 +89,8 @@ def _download(exported: tuple[str, str]) -> Response:
     )
 
 
-# --- DNA verdicts (`adjudications_v1.tsv`) ------------------------------------------------------
-
-
 @router.get("/curated/adjudications")
 async def list_verdicts(_: AdminUser, conn: DB) -> dict[str, Any]:
-    """Every verdict at the active vocabulary, the bundle's and the household's, and what applies them."""
     return {"rows": await adjudications.rows(conn), "applies": APPLIES_VERDICTS}
 
 
@@ -139,7 +102,6 @@ async def author_verdict(body: Verdict, _: AdminUser, conn: DB) -> dict[str, Any
 
 @router.get("/curated/adjudications/export")
 async def export_verdicts(_: AdminUser, conn: DB) -> Response:
-    """The household's verdicts as `adjudications_<version>.tsv`, in the importer's columns."""
     return _download(await _answer(adjudications.export(conn)))
 
 
@@ -150,12 +112,8 @@ async def withdraw_verdict(row_id: int, _: AdminUser, conn: DB) -> Response:
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
-# --- credit facts (`corrections_v1.tsv`) --------------------------------------------------------
-
-
 @router.get("/curated/corrections")
 async def list_corrections(_: AdminUser, conn: DB) -> dict[str, Any]:
-    """Every credit correction, the bundle's and the household's, and what applies them."""
     return {"rows": await corrections.rows(conn), "applies": APPLIES_CORRECTIONS}
 
 
@@ -167,7 +125,6 @@ async def author_correction(body: Correction, _: AdminUser, conn: DB) -> dict[st
 
 @router.get("/curated/corrections/export")
 async def export_corrections(_: AdminUser, conn: DB) -> Response:
-    """The household's corrections as `corrections_v1.tsv`, in `CORRECTIONS_COLUMNS` order."""
     return _download(await _answer(corrections.export(conn)))
 
 
@@ -178,12 +135,8 @@ async def withdraw_correction(row_id: int, _: AdminUser, conn: DB) -> Response:
     return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
-# --- the per-facet axes (§6.4, decision 342) ----------------------------------------------------
-
-
 @router.get("/curated/axes")
 async def list_axes(_: AdminUser, conn: DB) -> dict[str, Any]:
-    """Every axis at the active vocabulary with its terms, the declared facets, and what reads them."""
     return {**await axes.rows(conn), "applies": APPLIES_AXES}
 
 
@@ -207,9 +160,6 @@ async def withdraw_axis(facet: str, _: AdminUser, conn: DB) -> Response:
 async def export_axis(facet: str, _: AdminUser, conn: DB) -> Response:
     """The household's axis as `<facet>.tsv`, the file §6.4 names and `load_axes` reads."""
     return _download(await _answer(axes.export(conn, facet)))
-
-
-# --- the review (decision 446) ------------------------------------------------------------------
 
 
 @router.get("/dna/rejects")

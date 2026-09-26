@@ -1,17 +1,5 @@
-"""First-boot wizard. Spec v2.1 §3.1.
-
-The sequence is normative and it ends at the bundle: create admin -> optional env-seeded
-connector config -> bundle import (the *same* importer the §6.6 Data tab exposes). A
-bundle-less app is a legal state, so the bundle step is skippable and the wizard reports
-that explicitly rather than blocking.
-
-Accounts are not made here. Decision 164 moves member creation to §6.6's Users card — the
-wizard is reachable only until an admin exists, so the one path that could create an account
-disappeared the moment first boot ended, and a household that wanted a third member had none.
-
-Member first-run onboarding (PWA install + push permission, §6 preamble) is not a wizard step
-either: it is a per-phone act the member performs on their own device, and this module keeps
-only the route that records it, per user.
+"""First-boot wizard (§3.1): admin, optional connector seed, then the same bundle importer §6.6 uses.
+Accounts are made at §6.6's Users card (decision 164).
 """
 
 from __future__ import annotations
@@ -29,16 +17,12 @@ from spielplan.llm import client, spend
 
 router = APIRouter(prefix="/api/setup", tags=["setup"])
 
-# Decision 164: "members" is gone from the wizard's sequence, not merely hidden — the step it
-# recorded was the one account-creating path in the app, and it now lives at §6.6's Users card.
 STEPS = ("admin", "connectors", "bundle", "onboarding")
 
-# The ribbon the prototype prints on every wizard step, as data rather than copy baked into the
-# client. It is the one thing besides `required` that the anonymous login page needs.
+# The wizard ribbon, as data: the one thing besides `required` the anonymous login page needs.
 NOTE = "first boot · a bundle-less app is a legal state"
 
-# §3.1 stores this name and `lower(name)` is what login resolves against, so the trim happens
-# before the row exists rather than being papered over at every read (as-11).
+# Trimmed before storing: login resolves on `lower(name)` (§3.1).
 AccountName = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=64)]
 
 
@@ -53,10 +37,8 @@ class ConnectorSeed(BaseModel):
     secrets: dict | None = None
 
 
-# The rows §6.6's spend guard owns: the `llm` settings and the three providers, whose model, price
-# override and key each change what stage 6 bills. None is seeded here, because this route stores a
-# config whole and with no figure, and it stays mounted after first boot (decision 450: the order
-# is "a property of the API", a hand-typed request included). The sentence names the three doors.
+# The rows §6.6's spend guard owns. This route stays mounted after first boot and would store a
+# billable config with no figure shown (decision 450).
 _SPEND_GUARDED = frozenset((spend.SETTINGS, *client.PROVIDERS))
 _SPEND_GUARDED_REFUSAL = (
     " is not seeded here: the extraction plan, the models and the price overrides are written by"
@@ -69,19 +51,7 @@ _SPEND_GUARDED_REFUSAL = (
 async def _optional_user(
     request: Request, response: Response, conn: DB
 ) -> auth.SessionUser | None:
-    """`current_user`, but a missing or dead cookie is an answer rather than a 401.
-
-    `GET /state` is the one route that must serve both a first-booting stranger and a signed-in
-    operator, so it cannot be gated and cannot be open either (sec-14). Re-using `current_user`
-    rather than re-reading the cookie here keeps the slide it already applies to `response`;
-    only its refusal is swallowed.
-
-    A session locked to §3.1's forced first-login change counts as a stranger here. Decision 179
-    puts every other authenticated route behind `ActiveUser`, and the privileged half of `/state`
-    is precisely the install fingerprint sec-14 took off the anonymous surface — member count,
-    bundle version, how far the wizard got. Answering it as anonymous rather than 403 is what
-    keeps `required` — the bit the first-boot redirect reads — the same bit for everyone.
-    """
+    """`current_user`, but a missing, dead or password-locked session is a stranger, not a 401 (sec-14)."""
     try:
         user = await current_user(request, response, conn)
     except HTTPException:
@@ -94,15 +64,7 @@ OptionalUser = Annotated[auth.SessionUser | None, Depends(_optional_user)]
 
 @router.get("/state")
 async def state(user: OptionalUser, conn: DB) -> dict[str, object]:
-    """§3.1's wizard state, cut to what the caller is entitled to know.
-
-    An anonymous caller gets the two fields the login page and the wizard's first screen are
-    written against and nothing else. The full payload fingerprints the install to anyone who can
-    reach the origin — how many members the household has, which bundle version is loaded and
-    when, how far the operator got — and §2 puts that origin on Tailscale, where Cloudflare's
-    rate limit does not stand in front of a prober (sec-14). `required` is the same bit either
-    way, so the redirect on first boot still works before anyone can sign in.
-    """
+    """Anonymous callers get `required` and `note` only: the full payload fingerprints the install."""
     has_admin = await conn.fetchval("SELECT count(*) FROM app_user WHERE role = 'admin'") > 0
     # §3.1: the wizard is needed until an admin exists; after that it is a revisitable page.
     if user is None:
@@ -125,19 +87,9 @@ async def state(user: OptionalUser, conn: DB) -> dict[str, object]:
 
 @router.post("/admin", status_code=status.HTTP_201_CREATED)
 async def create_admin(body: AdminInit, response: Response, conn: DB) -> dict[str, object]:
-    """Only callable while no admin exists — otherwise this would be a privilege-escalation
-    endpoint reachable by anyone who can see the setup page.
-
-    The check and the three writes are one transaction under one lock (as04). Unserialised, the
-    count-then-INSERT let two submits with different names each pass the check and each become
-    "the only admin", and a failure between the writes left an admin row whose password had been
-    typed once into a form that errored while `/state` already reported `required=false` — a
-    first boot that can never be re-run. The lock is what makes the loser read what the winner
-    committed; the transaction is what makes the account, the wizard step and the session arrive
-    together or not at all.
-    """
-    # argon2 is tens of milliseconds by design (§3.2), so the hash is computed before the lock
-    # is taken rather than inside it, and off the event loop that is serving everyone else.
+    """Only while no admin exists. The check and the three writes are one transaction under one lock,
+    so two submits cannot both become the only admin."""
+    # Hashed before the lock and off the event loop: argon2 takes tens of ms by design.
     password_hash = await auth.hash_password_async(body.password)
     try:
         async with write_txn(conn, lock="setup_admin"):
@@ -157,8 +109,7 @@ async def create_admin(body: AdminInit, response: Response, conn: DB) -> dict[st
             )
             sid = await auth.create_session(conn, user_id, auth_method="password")
     except asyncpg.UniqueViolationError as exc:
-        # A pre-existing non-admin row already holds the name. `app_user_name_key` says so; the
-        # generic PostgresError handler (`app.py:114-117`) would say "database error", 500.
+        # A pre-existing non-admin row holds the name: say so rather than 500.
         raise HTTPException(
             status.HTTP_409_CONFLICT, f"a user named {body.name!r} already exists"
         ) from exc
@@ -168,23 +119,13 @@ async def create_admin(body: AdminInit, response: Response, conn: DB) -> dict[st
 
 @router.post("/connectors")
 async def seed_connector(body: ConnectorSeed, _: AdminUser, conn: DB) -> dict[str, object]:
-    """§2: connectors are configured in the admin UI and stored in `connector_config`;
-    env vars may only *seed* them on first boot. Writing a secret requires SECRETS_KEY —
-    the app refuses rather than falling back.
-
-    Not for the rows the spend guard owns (`_SPEND_GUARDED`): through here a plan at three passes, a
-    provider priced at zero -- whose calls then meter $0, so the cap never binds -- or a keyless
-    assignment a key saved later turns billable was each stored with no figure shown. 409 before
-    anything is read or written, with the sentence naming the three routes that do write them.
-    [M5.7 review cycle 1, M57-THESIS-01]"""
+    """§2: an env or wizard seed. Refuses the spend-guarded rows with 409, naming the three routes that
+    do write them."""
     if body.name in _SPEND_GUARDED:
         raise HTTPException(status.HTTP_409_CONFLICT, f"{body.name}{_SPEND_GUARDED_REFUSAL}")
     if body.secrets:
         settings().require_secrets_key()
-    # `retire_unreadable`: the same admin gesture as the Connectors card's PUT, on the same page
-    # of the wizard and behind the same `AdminUser` — an admin typing a credential into an
-    # install whose stored DEK will not open. Without it this route answered a bare 500 from
-    # `ensure_dek` (M4.7 dd03), which is the one thing §3.1's half-configured boot must not do.
+    # `retire_unreadable`: an admin typing a credential is the repair, as on the Connectors card.
     await secrets.put_connector_secrets(
         conn, body.name, body.config, body.secrets, retire_unreadable=True
     )
@@ -196,14 +137,8 @@ async def seed_connector(body: ConnectorSeed, _: AdminUser, conn: DB) -> dict[st
 
 @router.post("/onboarding/complete")
 async def complete_onboarding(user: ActiveUser, conn: DB) -> dict[str, bool]:
-    """§6 preamble: iOS has no programmatic install prompt, so onboarding is a guided act the
-    phone confirms. Recorded per user because the ask is per phone: decision 180 amends that
-    preamble to ask once and honour a decline, and this row is what "once" is counted against.
-
-    `ActiveUser`, not `CurrentUser`: §3.1 locks an account created with a one-time password to
-    the password change, and onboarding is the step *after* it (spec-05). /me, /password,
-    /logout and /switch are the whole reachable set until the change is done.
-    """
+    """Recorded per user: decision 180 asks each phone once. `ActiveUser`: onboarding comes after
+    §3.1's forced password change."""
     await conn.execute(
         """
         INSERT INTO setup_step (step, detail) VALUES ('onboarding', $1)

@@ -1,20 +1,6 @@
-"""The Rate surface's routes. Spec v2.1 §6.1, §6.7, §7.3, §13, decision 35.
-
-Thin by design: every rule this surface has lives in `spielplan.rate.session`, and the only
-things decided here are the HTTP shapes.
-
-Two of those shapes are load-bearing.
-
-  * **A write names a `card_token`, never a title.** §6.1 puts the card in the server's hands
-    (the prediction may not travel with it, the re-ask may not be visible in it, the block
-    counter may not be the client's), and a route that accepted `{"title_id": 41, "value": 2}`
-    would give all three back. A token that no longer matches is a 409 with a reason, which is
-    also the double-tap guard.
-  * **Every response is the same envelope, and it carries the next card.** §6 preamble:
-    "<2 s per sweep card, <1.5 s per battle, undo everywhere, next card preloaded."
-
-Exported as `router`; `app.py` registers it.
-"""
+"""Rate routes (§6.1); the rules live in `spielplan.rate.session`. A write names a `card_token`, never
+a title, so the card stays the server's; a stale token is the 409 double-tap guard. Every response
+carries the next card (§6 preamble)."""
 
 from __future__ import annotations
 
@@ -43,8 +29,7 @@ Head = Annotated[list[int], Field(default_factory=list)]
 
 
 class ControlsBody(BaseModel):
-    """§6.1's three controls. Every field is optional: the same route starts a session and
-    changes one knob on an existing one."""
+    """Every field is optional: the same route starts a session and changes one knob."""
 
     mode: Literal["mix", "sweep", "battle"] | None = None
     kinds: list[Literal["movie", "series"]] | None = None
@@ -69,7 +54,7 @@ class CardBody(BaseModel):
 class DuelBody(BaseModel):
     card_token: str
     outcome: Literal["A", "B", "TIE"]
-    # One answer's override of the session's persistent toggle — §6.1's long-press accelerator.
+    # One answer's override of the session toggle (§6.1's long-press).
     decisive: bool | None = None
     latency_ms: int | None = None
     head: Head
@@ -81,27 +66,9 @@ class CorrectionBody(BaseModel):
 
 
 def _hyperparams(request: Request) -> Hyperparams:
-    """§4.3's constants, from the active bundle when there is one.
-
-    `app.state.hyperparams` is where the lifespan's one read lands (`app.py`), and that is the
-    normal path: §10 makes a bundle swap a restart, so nothing in a running process can change
-    these numbers and re-reading the file per tap bought nothing but a file read, a
-    `from_mapping` validation and a discarded note list on every request.
-
-    The fallback stays because tests construct the app without its lifespan, and because §3.1
-    makes a bundle-less household legal — there the defaults are the honest answer. What it no
-    longer does is let `from_mapping`'s `ValueError` out: a hand-edited or badly restored
-    constant turned every Rate write and every Rank board into a 500 for everyone, with nothing
-    on screen saying why. Refused with a 503 instead, and deliberately NOT defaulted: the
-    defaults have a different `hp_digest`, so serving them would invalidate every cached fit in
-    the install and re-fit the whole household behind a number nobody chose. [M4.10 finding 10]
-
-    `OSError` beside `ValueError` because `hyperparams.load` no longer reads a constants file that
-    is present and unopenable — a path that is a directory, a dangling symlink — as an absent one:
-    the refusal this clause exists to render is the same refusal whether the file cannot be parsed
-    or cannot be opened, and only a silent fall back to DEFAULTS would be worse than either.
-    [M4.10 cycle 1, M410-R1-03 / M410-R1-06]
-    """
+    """§4.3's constants, pinned at boot. The fallback serves lifespan-less tests and a bundle-less
+    household; unreadable or unopenable constants are a 503, never defaults (a new `hp_digest`
+    refits everyone)."""
     cached = getattr(request.app.state, "hyperparams", None)
     if cached is not None:
         return cached
@@ -118,46 +85,9 @@ def _hyperparams(request: Request) -> Hyperparams:
 
 
 async def _assert_active_basis(request: Request, conn: asyncpg.Connection) -> None:
-    """§10's invariant, on the request path: 409 rather than a fit in a basis nobody serves.
-
-    "No process may score or refit with a loaded bundle version different from the active row."
-    This process pins its store and its Backbone (`models/basis.py`) and re-pins them a few
-    seconds after a flip rather than at a restart (decision 497) - so between the flip and the
-    re-pin `app.state.backbone` is the OUTGOING basis while
-    every `title_placement` row, every `user_vector` and every `ledger_fit` stamp the flip made
-    visible is the incoming one. Left unguarded, the first tap per (user, kind) ran a full MAP fit
-    over half-and-half coordinates and stamped it with the NEW version, which `load_cache` then
-    trusted until the next nightly: measured ||v_tap - v_correct|| = 0.643 against
-    ||v_correct|| = 0.782.
-
-    There was no 409 to raise; this is where it is minted, and it carries
-    `api/artifacts.py::RESTART_REQUIRED` verbatim so the sentence the import screen showed the
-    admin is the sentence the refusal shows. 409 and not 503: the conflict is between two
-    versions of the world, the state is recoverable by the re-pin the message waits for, and §3.1's
-    genuinely bundle-less install is unaffected because None == None.
-
-    Called at the TOP of every route that fits, before `_resume` and before any write. §6.1's
-    anchoring rule and M4.10 finding 8 both forbid the other placement: a refusal raised after
-    `record_verdict` has committed loses the tap and invites a retry that writes a second row.
-    [M4.13, arch-03, data-01]
-
-    AND THE SECOND ARM, WHICH THE VERSION COMPARISON CANNOT SEE. `load_active` carries a broken
-    install's own version so its stamp is honest, and that is precisely what makes `assert_matches`
-    PASS for a store that cannot produce one coordinate -- the trap
-    `test_a_broken_store_carries_the_active_version_and_still_refuses_on_its_own_flag` exists to
-    name. data-03 wired the refusal into the worker and nowhere else, so on a broken install every
-    model job refused while these five routes kept fitting: `hyperparams.load` returns DEFAULTS for
-    an empty store, its digest equals the stamped one whenever the bundle shipped no
-    `ledger_hyperparams.json`, `load_cache` therefore accepted a fit computed in a REAL basis, and
-    the tap rewrote `ledger_state` against `e = 0` -- measured on the fixture at s 1.5735/1.5699
-    healthy against 0.8001/0.8001 broken, two rated titles collapsed onto one number. Refused here
-    rather than queued, because §10's invariant is "score OR refit" and the reveal this route
-    carries is a score; refused before the write, so the tap is declined and never lost; and
-    `is_empty` still reads True, so §3.1's SURFACES keep rendering their no-bundle state, which is
-    the line `models/artifacts.py::is_empty` draws. A different sentence from the swap's, because
-    restarting this process would fix nothing: the files are gone.
-    [M4.13 cycle 1, m413-c1-dim1-broken-bundle-refusal-is-worker-only]
-    """
+    """§10's invariant: 409 before any write rather than a fit in a basis nobody serves (the backend
+    re-pins within seconds, decision 497). Both arms: a broken store carries the active version, so
+    only `assert_not_broken` refuses it."""
     store = getattr(request.app.state, "artifacts", None)
     if store is None:
         return
@@ -180,32 +110,14 @@ async def _assert_active_basis(request: Request, conn: asyncpg.Connection) -> No
 
 
 def _basis(request: Request) -> Any:
-    """Which bundle THIS PROCESS is fitting in — the other half of `_embeddings`, stated.
-
-    `_assert_active_basis` above compares it to the active row at the top of the route; this hands
-    the same version to the fit, which re-asks after it has taken the board lock. The two are not
-    one check: a tap that waits out an import passed the first and would fail the second, and the
-    seconds between them are exactly when §10's flip becomes visible. `refit.BASIS_UNSTATED` when
-    this process has no store at all, which is not §3.1's bundle-less install (`None`) but "there
-    is nothing here to compare" — the state a test app or a boot without artifacts is in.
-    [M4.13 cycle 1, finding 15]
-    """
+    """Which bundle this process fits in; the fit re-checks after the board lock, since a tap can wait
+    out an import. BASIS_UNSTATED when there is no store at all."""
     store = getattr(request.app.state, "artifacts", None)
     return refit.BASIS_UNSTATED if store is None else store.version
 
 
 def _embeddings(request: Request, conn: asyncpg.Connection) -> EmbeddingSource:
-    """§5.1's coordinate source: the warm Backbone row first, the Cold Tower placement second.
-
-    One definition, in `observations.standard_embeddings`, because the nightly job and §10's
-    rebuild both got this wrong by passing the placement source alone.
-
-    The version travels with the two sources it describes: `app.state.artifacts.version` is the
-    bundle whose Backbone `app.state.backbone` holds, so the `title_placement` rows read for the
-    cold half are the same bundle's and the `ledger_fit` stamp this source's fit earns says so.
-    `_assert_active_basis` has already refused the case where that version is not the active row.
-    [M4.13, data-01]
-    """
+    """§5.1's coordinates (warm Backbone, then Cold Tower), with the version whose files they came from."""
     store = getattr(request.app.state, "artifacts", None)
     return observations.standard_embeddings(
         conn,
@@ -220,8 +132,7 @@ async def _jellyfin(conn: asyncpg.Connection) -> session.Jellyfin:
 
 
 def _stale(exc: session.StaleCard) -> HTTPException:
-    """§6.1's card is the server's. Refusing an answer to a card that is no longer on the table
-    is what makes that true over HTTP — and it is the double-tap guard."""
+    """The double-tap guard: an answer to a card no longer on the table is a 409."""
     return HTTPException(
         status.HTTP_409_CONFLICT,
         detail={
@@ -248,9 +159,7 @@ async def current(
         description="§7.3/§6.0: title ids pinned to the front (the banner, Rate it, search).",
     ),
 ) -> dict[str, Any]:
-    """Open or resume, then serve the card. Idempotent: a second GET returns the same card
-    under the same token, because a card that redrew under a refresh would make every "next
-    card preloaded" promise in §6 a lie."""
+    """Idempotent: a second GET returns the same card under the same token."""
     s = await _resume(conn, user.id)
     s = await session.ensure_card(conn, s, head=head)
     return await session.payload(conn, s, user=user)
@@ -260,12 +169,7 @@ async def current(
 async def controls(
     body: ControlsBody, conn: DB, user: ActiveUser, request: Request
 ) -> dict[str, Any]:
-    """§6.1's mode and kind controls, plus the decisive switch for the pair on the table (decision
-    520).
-
-    A fresh session opens in Mix — §6.1 makes it the default, and every entry point into the
-    surface lands on the same card type as a result.
-    """
+    """§6.1's mode, kind and decisive controls (decision 520). A fresh session opens in Mix."""
     try:
         s = await session.open_or_resume(
             conn, user_id=user.id, kinds=body.kinds, restart=body.restart
@@ -282,8 +186,7 @@ async def controls(
 
 @router.delete("/session")
 async def end(conn: DB, user: ActiveUser) -> dict[str, Any]:
-    """Close the live session. The journal stays: §4.2 is append-only and the rows are the
-    record of what the person actually said."""
+    """The journal stays (§4.2 is append-only)."""
     return {"ended": await session.end_session(conn, user_id=user.id)}
 
 
@@ -294,11 +197,7 @@ async def search(
     q: str = Query("", max_length=200, description="A title, or part of one, the person knows."),
     limit: int = Query(search_rules.DEFAULT_LIMIT, ge=1, le=20),
 ) -> dict[str, Any]:
-    """Rate's "a title you know": the hits, each saying whether the person already rated it.
-
-    Choosing one is not a write and has no route of its own: the client pins it with `head=`,
-    and the verdict is given on §6.1's card like every other. See `rate/search.py`.
-    """
+    """Choosing a hit is not a write: the client pins it with `head=`."""
     return {"q": q, "items": await search_rules.find(conn, user_id=user.id, q=q, limit=limit)}
 
 
@@ -306,12 +205,7 @@ async def search(
 async def verdict(
     body: VerdictBody, conn: DB, user: ActiveUser, request: Request
 ) -> dict[str, Any]:
-    """§6.1: `Liked / Fine / Disliked`. Verdict implies `seen`.
-
-    The reveal rides on this response and on no other, which is §6.1's anchoring rule
-    (Cosley 2003) expressed as a route: the card carried no belief, the answer to the card
-    carries it.
-    """
+    """§6.1's verdict (implies `seen`). The reveal rides on this response only: the anchoring rule."""
     await _assert_active_basis(request, conn)
     s = await _resume(conn, user.id)
     try:
@@ -338,8 +232,7 @@ async def verdict(
 
 @router.post("/not-seen")
 async def not_seen(body: CardBody, conn: DB, user: ActiveUser) -> dict[str, Any]:
-    """§6.1's one seen-state control. Owner decision 2026-08-29: a title you cannot remember is
-    plain `unseen`, and the verdict and duel rows survive the flip (§4.2)."""
+    """A title you cannot remember is plain `unseen`; the verdict and duel rows survive (§4.2)."""
     s = await _resume(conn, user.id)
     try:
         outcome = await session.record_not_seen(
@@ -397,7 +290,7 @@ async def duel(body: DuelBody, conn: DB, user: ActiveUser, request: Request) -> 
 
 @router.post("/correction")
 async def correction(body: CorrectionBody, conn: DB, user: ActiveUser) -> dict[str, Any]:
-    """§6.1's corrections row. Writes no duel row, does not advance the counter, syncs §7.3."""
+    """No duel row and no counter advance; syncs §7.3."""
     s = await _resume(conn, user.id)
     try:
         outcome = await session.record_correction(
@@ -413,9 +306,7 @@ async def correction(body: CorrectionBody, conn: DB, user: ActiveUser) -> dict[s
 
 @router.post("/undo")
 async def undo(conn: DB, user: ActiveUser, request: Request) -> dict[str, Any]:
-    """Decision 35. Refused at the block boundary with a reason, never silently no-opped — the
-    chip has to be able to disable visibly, and `GET /api/rate` carries the same
-    `undo.available` flag so it can do that before the tap."""
+    """Decision 35: refused at the block boundary with a reason, never a silent no-op."""
     await _assert_active_basis(request, conn)
     s = await _resume(conn, user.id)
     try:
@@ -447,11 +338,7 @@ async def undo(conn: DB, user: ActiveUser, request: Request) -> dict[str, Any]:
 
 @router.get("/balance")
 async def class_balance(conn: DB, user: ActiveUser) -> dict[str, Any]:
-    """§5.2's running class balance on its own, for the widget's own poll.
-
-    Not partitioned by kind: §4.1 rule 5 binds surfaces that *rank*, and this one ranks
-    nothing — it describes a labelling habit, and the 5x lever is about the labeller.
-    """
+    """Not partitioned by kind: it describes the labeller, not a ranking (§4.1 rule 5)."""
     s = await _resume(conn, user.id)
     return (await session.payload(conn, s, user=user))["class_balance"]
 
@@ -464,18 +351,9 @@ class TitleAnswerBody(BaseModel):
 async def answer_from_title_card(
     title_id: int, body: TitleAnswerBody, conn: DB, user: ActiveUser, request: Request
 ) -> dict[str, Any]:
-    """Decision 487: §6.0's title card answers a title with §6.1's four sweep answers.
-
-    The one route here that names a title rather than a `card_token`, and the module docstring's
-    rule still holds, because the title never reaches a writer as a title: `rate.direct` puts it
-    on the person's own table as a sweep card under a fresh token and answers that token through
-    `rate.session`, so the card, the block counter, Undo and the after-the-tap reveal are §6.1's
-    own. The envelope is the Rate surface's, so the reveal rides on this response and no other.
-    """
-    # First, and for all four answers: three of them score and refit, and the route is one
-    # fitting route to `test_model_basis`'s inventory whichever answer arrives. Refusing a
-    # not-seen on a swapped basis costs a retry after the restart; skipping the guard for it
-    # would make the route's first statement depend on its body.
+    """Decision 487: the title card's four answers, put on the person's table as a sweep card under a
+    fresh token, so §6.1's card, counter, Undo and reveal all apply."""
+    # First, for all four answers, so the route's first statement never depends on its body.
     await _assert_active_basis(request, conn)
     try:
         outcome = await direct.answer(

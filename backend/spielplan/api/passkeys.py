@@ -1,15 +1,5 @@
-"""Passkey routes. Spec v2.1 §3.2 — "Primary: WebAuthn passkeys".
-
-Two ceremonies, four routes each half. Registration requires a session (§3.1 prompts it after
-the forced first password change, so there is always one) — and specifically a `CredentialedUser`
-one, because §3.2 makes the password the account credential and the PIN a convenience for a
-handed-over device, so minting or revoking a permanent passkey from a 4-digit switch is not a
-thing this surface allows. Sign-in cannot require a session, which is the whole point of it.
-
-The verification itself lives in `core.webauthn`; this module is the HTTP shape and the
-session it produces. A passkey sign-in creates exactly the same session row a password does,
-with `auth_method = 'passkey'` — §3.2 makes passkeys primary and passwords the fallback, not
-two different classes of session.
+"""Passkey routes (§3.2). Registration needs a `CredentialedUser` (never a PIN session); sign-in needs
+no session and creates the same session row a password does.
 """
 
 from __future__ import annotations
@@ -24,13 +14,8 @@ router = APIRouter(prefix="/api/auth/passkey", tags=["auth"])
 
 
 class PasskeyCredential(BaseModel):
-    """The shape of a `PublicKeyCredential` as the browser serialises it.
-
-    Declared so that a body missing `response` is a 422 from FastAPI *before* the route runs.
-    It used to be a bare `dict`, and the ceremony consumed its single-use challenge and only
-    then failed on the missing key — so the honest user's retry was refused as expired too
-    (sec-04). The field names are the wire's, not this codebase's.
-    """
+    """The browser's `PublicKeyCredential`, declared so a malformed body is a 422 before the single-use
+    challenge is consumed. Field names are the wire's."""
 
     id: str
     rawId: str
@@ -86,8 +71,7 @@ async def credentials(user: ActiveUser, conn: DB) -> list[dict[str, object]]:
 async def remove_credential(
     credential_id: str, user: CredentialedUser, conn: DB
 ) -> dict[str, bool]:
-    """Deleting the last passkey is allowed: §3.2 keeps password login always available, so
-    there is no lock-out to protect against and refusing would just strand a lost device."""
+    """Deleting the last passkey is allowed: password login always remains (§3.2)."""
     removed = await webauthn.delete_credential(conn, user.id, credential_id)
     if not removed:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "no such passkey on this account")
@@ -96,9 +80,7 @@ async def remove_credential(
 
 @router.post("/login/options")
 async def login_options(body: LoginOptions, conn: DB) -> dict[str, object]:
-    # The one anonymous write in the app (sec-14). Its bound is enforced by eviction inside
-    # `_issue` rather than by a refusal here: a global cap on an anonymous route is a refusal
-    # a stranger chooses for the household, and §3.2 makes this the primary way in.
+    # The one anonymous write; bounded by eviction in `_issue`, never by a refusal (§3.2).
     ceremony = await webauthn.authentication_options(conn, name=body.name)
     return {"ceremony_id": ceremony.id, "options": ceremony.options}
 
@@ -117,14 +99,8 @@ async def login(
     row = await conn.fetchrow(
         "SELECT id, name, role, must_change_password FROM app_user WHERE id = $1", user_id
     )
-    # The session this device was already holding does not survive a fresh sign-in on it, for
-    # the reason `api/auth.py`'s login gives: one cookie names one row, and the row the cookie
-    # stops naming otherwise stays live for its full sliding 90 days (dd24). After the assertion
-    # verifies, never before — a failed ceremony must not be able to sign a device out.
-    # The pair is one duty and runs inside `write_txn`, for the reason `api/auth.py`'s login
-    # gives at the same seam: on autocommit the DELETE committed before the INSERT was
-    # attempted, so a failure between them signed the device out of the session it arrived
-    # holding — and §3.2 makes this the primary way back in.
+    # Replaces this device's existing session only after the assertion verifies, in one transaction,
+    # as `api/auth.py`'s login does.
     stale = auth.open_session_cookie(request.cookies.get(auth.SESSION_COOKIE))
     async with write_txn(conn):
         if stale:
@@ -134,9 +110,7 @@ async def login(
             user_id,
             auth_method="passkey",
             device_label=body.device_label,
-            # §3.2's passkey is biometric; a presence-only tap signs in but does not answer the
-            # admin re-prompt, so the authenticator's UV flag — not the ceremony's success — is
-            # what stamps `admin_verified_at`.
+            # The UV flag, not the ceremony's success, answers the admin re-prompt (§3.2).
             verified=user_verified,
         )
     set_session_cookie(response, sid)

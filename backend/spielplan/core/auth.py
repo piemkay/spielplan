@@ -1,17 +1,3 @@
-"""Authentication primitives. Spec v2.1 §3.
-
-Passkeys are primary (§3.2) and land at M1; M0 ships the fallbacks the spec always keeps
-available: argon2 password login, per-device long-lived session cookies, and the per-user PIN
-used for fast switching on a shared/TV device.
-
-§3.1: user creation issues a ONE-TIME PASSWORD and locks the account to a password change at
-first login. That lock is `app_user.must_change_password`, and it is the auth layer's job —
-not the UI's — to refuse every route but the four that are the way out of it: `/api/auth/me`,
-`/api/auth/password`, `/api/auth/logout` and `/api/auth/switch`. The switch is in that set by
-decision 179 — a member locked to a forced change on a handed-over phone must still be able to
-switch away, so the lock guards the product surfaces and not the door out of the wrong account.
-"""
-
 from __future__ import annotations
 
 import asyncio
@@ -34,9 +20,7 @@ _COOKIE_SALT = "spielplan/session/v1"
 
 
 def _serializer() -> URLSafeSerializer:
-    # §2: "Rotating SESSION_SECRET invalidates sessions only and never touches stored secrets."
-    # That is only true if the secret is actually load-bearing, so the session id travels
-    # signed: a cookie signed under the old secret stops verifying the moment it rotates.
+    # Signed, so rotating SESSION_SECRET invalidates every session (§2).
     return URLSafeSerializer(settings().session_secret, _COOKIE_SALT)
 
 
@@ -45,7 +29,6 @@ def seal_session_id(sid: str) -> str:
 
 
 def open_session_cookie(cookie: str | None) -> str | None:
-    """Return the session id inside a cookie, or None if it is missing or not ours."""
     if not cookie:
         return None
     try:
@@ -54,8 +37,7 @@ def open_session_cookie(cookie: str | None) -> str | None:
         return None
     return value if isinstance(value, str) else None
 
-# §3.1: a one-time password the operator reads aloud once. Ambiguous glyphs removed —
-# it is transcribed by hand from an admin screen to a phone.
+# No ambiguous glyphs: it is read off an admin screen and typed by hand (§3.1).
 _OTP_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789"
 
 
@@ -83,29 +65,15 @@ def needs_rehash(stored_hash: str) -> bool:
     return _hasher.check_needs_rehash(stored_hash)
 
 
-# argon2 at the library defaults (t=3, m=65536 KiB, p=4) costs 30-34 ms of CPU and 64 MiB per
-# call, and every one of them ran synchronously inside `async def`: eight concurrent
-# wrong-password logins took an unrelated GET /api/health from 38 ms to 223 ms. argon2-cffi
-# releases the GIL while hashing, so a worker thread actually buys the parallelism, and §2 puts
-# this origin behind Tailscale — which bypasses Cloudflare's rate limiting — on a 4 vCPU box.
-# Four at a time is the ceiling because 4 x 64 MiB is the memory a stranger may make the box
-# spend, and the bound is process-wide rather than per-request for the same reason.
-# Do not answer this by lowering the argon2 parameters: the work factor is the credential's
-# defence (§3.2), the CPU is not.
+# argon2 costs ~30 ms CPU and 64 MiB per call: run it in threads, at most 4 at once to bound memory.
+# Do not lower the argon2 parameters instead: the work factor is the credential's defence (§3.2).
 _ARGON2_PARALLELISM = 4
 _argon2_slots: asyncio.Semaphore | None = None
 _argon2_slots_loop: asyncio.AbstractEventLoop | None = None
 
 
 def _argon2_gate() -> asyncio.Semaphore:
-    """The one bound, re-made when the event loop under it changes.
-
-    An `asyncio.Semaphore` binds itself to the loop of its first *contended* acquire and raises
-    on every other one (CPython `Lib/asyncio/mixins.py`). The app has exactly one loop, so this
-    re-creates nothing in production; the suite gives every test its own, and the tests that
-    matter here — five simultaneous guesses against one account — are precisely the contended
-    ones, so a single module-level semaphore would poison every later test that contends.
-    """
+    """Re-made per event loop: a Semaphore binds to the loop of its first contended acquire."""
     global _argon2_slots, _argon2_slots_loop
     loop = asyncio.get_running_loop()
     if _argon2_slots is None or _argon2_slots_loop is not loop:
@@ -124,17 +92,12 @@ async def hash_password_async(password: str) -> str:
         return await asyncio.to_thread(hash_password, password)
 
 
-# A real argon2 hash of a value nobody has, so the "no such account" branch of a login can pay
-# the same tens of milliseconds the "wrong password" branch does. Without it the two answer in
-# very different times while saying the same thing, and the route becomes an account-name
-# oracle for anyone who can measure a round trip.
+# Lets the no-such-account branch pay the same argon2 time, so login is no account-name oracle.
 ABSENT_ACCOUNT_HASH = _hasher.hash(pysecrets.token_urlsafe(32))
 
 
 def hash_pin(pin: str) -> str:
-    """§3.2: a 4-digit PIN. argon2 anyway — but the search space is 10^4, so the work factor is
-    not the defence. `check_pin` below is: a PIN is only ever accepted from an already
-    authenticated session, and failures lock the account out with a growing delay."""
+    """The work factor is no defence for a 10^4 space; `check_pin`'s lockout is."""
     return _hasher.hash(pin)
 
 
@@ -146,15 +109,12 @@ async def hash_pin_async(pin: str) -> str:
     return await hash_password_async(pin)
 
 
-# A 4-digit PIN has 10,000 possibilities; without a lockout an attacker with a session on the
-# shared device walks the space in minutes. Five tries, then a lockout that doubles.
 PIN_ATTEMPT_LIMIT = 5
 PIN_LOCKOUT_BASE = timedelta(minutes=1)
 PIN_LOCKOUT_MAX = timedelta(hours=1)
 
 
 async def check_pin(conn: asyncpg.Connection, user_id: int, pin: str) -> tuple[bool, str | None]:
-    """Verify a switch PIN under a lockout. Returns (ok, refusal reason)."""
     row = await conn.fetchrow(
         "SELECT pin_hash, pin_failed_count, pin_locked_until FROM app_user "
         "WHERE id = $1 AND is_active",
@@ -174,19 +134,8 @@ async def check_pin(conn: asyncpg.Connection, user_id: int, pin: str) -> tuple[b
         )
         return True, None
 
-    # Incremented in the database, not in Python. The read above happens before an argon2
-    # verify that takes tens of milliseconds — and now suspends the task while a worker thread
-    # does it — so a read-modify-write here would let every request that got its SELECT in
-    # first write the same number: ten concurrent guesses would cost one failure. The lockout
-    # is the actual defence for a 10^4 keyspace (the hash is not), so it has to count every
-    # attempt.
-    #
-    # The exponent is capped *inside* power() (as-01). Postgres multiplies before the outer
-    # least() ever runs, so `interval '1 minute' * power(2, n)` raises
-    # DatetimeFieldOverflowError from n=38 — pin_failed_count 42 — the route answers 500, and
-    # neither the counter nor pin_locked_until is written: from the 42nd guess on there is no
-    # lockout at all, which is exactly where one is needed. 2^6 minutes already saturates the
-    # 1 h cap, so capping the exponent changes no reachable lockout, only the overflow.
+    # Incremented in SQL: across the argon2 await, a read-modify-write would lose concurrent failures.
+    # The exponent is capped inside power(): Postgres overflows the interval from n=38 and the lockout dies.
     updated = await conn.fetchrow(
         """
         UPDATE app_user
@@ -207,41 +156,19 @@ async def check_pin(conn: asyncpg.Connection, user_id: int, pin: str) -> tuple[b
     return False, "too many attempts — try again later" if locked else "wrong PIN"
 
 
-# §3.2 keeps the argon2 password available as the fallback behind the passkey, and it was the
-# one credential nothing counted: no per-account limit, no per-IP limit, no concurrency cap.
-# The same curve as the PIN's above rather than a second scheme — one escalation, one bound,
-# one place to get the overflow right. It buys the same trade the PIN already accepts: someone
-# who knows a name can hold that account locked, which is why §3.2 makes the passkey primary
-# and why the ceiling stays an hour.
-#
-# The count belongs to the credential and not to the front door, so `check_password` below is
-# the only place the account password is verified. Three routes used to verify the same
-# `app_user.password_hash` with a bare `verify_password_async` and count nothing —
-# `/api/auth/password`, `/api/auth/reauth` and `/api/auth/pin` — so any session on an account
-# was an unthrottled oracle on its password: 60 guesses through the first of them left
-# `password_failed_count` at 0 while the front door still answered the correct password. Each
-# route keeps its own status code and wording; what none of them keeps is its own verify.
+# Same curve as the PIN. `check_password` is the only verify of the account password, so every guess counts.
 PASSWORD_ATTEMPT_LIMIT = 5
 PASSWORD_LOCKOUT_BASE = timedelta(minutes=1)
 PASSWORD_LOCKOUT_MAX = timedelta(hours=1)
 
-# One sentence for every refusal — no such name, wrong password, locked out. A distinct
-# "locked" message would say "this account exists and someone is guessing at it" to the person
-# doing the guessing, and undo the enumeration defence ABSENT_ACCOUNT_HASH pays for in time.
+# One sentence for every refusal: a distinct "locked" message would reveal that the account exists.
 PASSWORD_REFUSAL = "wrong name or password"
 
-# The id `check_password` addresses when the name matched nothing, so that the absent path
-# issues the same statements as the present one instead of skipping them (see there).
 _NO_SUCH_ACCOUNT = 0
 
 
 async def clear_password_lockout(conn: asyncpg.Connection, user_id: int) -> None:
-    """Forget the failures. §3.2: proving the password is what clears the count.
-
-    A password *change* clears it too, and through this same function: an account locked out by
-    guesses, whose owner then resets it from an admin-issued one-time password, must not stay
-    locked against the credential that replaced the one being guessed at.
-    """
+    """A password change clears it too, so a reset account is not locked against its new password."""
     await conn.execute(
         "UPDATE app_user SET password_failed_count = 0, password_locked_until = NULL "
         "WHERE id = $1",
@@ -252,44 +179,9 @@ async def clear_password_lockout(conn: asyncpg.Connection, user_id: int) -> None
 async def check_password(
     conn: asyncpg.Connection, user_id: int | None, password: str
 ) -> tuple[bool, str | None]:
-    """Verify a login password under a lockout. Returns (ok, refusal reason). §3.2.
-
-    `user_id` is None for a name that matched no active account, and that branch exists here
-    rather than in the route because it is the branch that has to cost the same: argon2 takes
-    tens of milliseconds and an index miss takes none, so a caller that short-circuits on "no
-    such name" answers it in the timing while the body says nothing (see ABSENT_ACCOUNT_HASH
-    above). One verification happens on every path through this function — absent, locked,
-    wrong and right alike — and every refusal is the same sentence.
-
-    The same is true of the database, and argon2 was not on its own enough: the present-name
-    path used to pay a SELECT and a failure-increment UPDATE the absent path skipped entirely,
-    which measured as a systematic ~3.6 ms head start for a name nobody holds and a second one
-    for a name that is locked out — the enumeration oracle again, one layer down, and readable
-    off a few hundred samples on §2's Tailscale origin where no rate limit stands in front. So
-    the statements are unconditional and it is the *row* they address that varies: `probe` is
-    the real id, or one no sequence hands out. Both paths issue the same two round trips.
-
-    Equal statements are not equal work, and this docstring used to claim the second where it
-    could only show the first. The increment below matches one row for a name that exists and
-    is not currently locked out, and no row for an absent name or a locked one — a heap tuple,
-    its WAL record and the commit that flushes it, against nothing. Measured over 200
-    interleaved pairs on a 4 vCPU box: a name that exists refuses ~1.5 ms slower than one that
-    does not, on a ~37 ms refusal. It is small beside argon2 and it is still a signal a few
-    hundred samples separate.
-
-    Closing it needs a row the absent path can write to, and `app_user` has nowhere to keep
-    one: `role` admits 'admin' and 'member' and nothing else (decision 166), §6.6's roster
-    lists disabled accounts as well as active ones, and the wizard's `member_count` counts by
-    role — a sentinel row there is a ghost account on a household screen. A sink in another
-    table would be a different tuple in a different index, and a shared one would serialise
-    every absent-name attempt behind one row lock, which is a fresh oracle pointing the other
-    way. So the residual is named — here, in
-    `test_a_wrong_name_and_a_wrong_password_cost_the_same`, which measures the rows each path
-    writes rather than only counting its calls, and in the coverage row.
-    """
-    # app_user.id is a bigserial starting at 1, so nothing is ever stored under this id: the
-    # SELECT below returns no row and the UPDATE matches none, at the cost of the same primary
-    # key probe and the same round trip the present-name path pays.
+    """Every path (absent, locked, wrong, right) pays one argon2 verify and the same two statements, so
+    timing does not reveal a name. Residual: the UPDATE writes a row only for a present, unlocked name."""
+    # bigserial starts at 1, so this id matches nothing yet costs the same round trips.
     probe = user_id if user_id is not None else _NO_SUCH_ACCOUNT
     row = await conn.fetchrow(
         "SELECT password_hash, password_failed_count, password_locked_until FROM app_user "
@@ -299,10 +191,7 @@ async def check_password(
     locked_until = row["password_locked_until"] if row is not None else None
     locked = locked_until is not None and locked_until > datetime.now(UTC)
 
-    # Verified before the lockout is honoured, and the answer thrown away when it stands. A
-    # locked account that returned early would answer in a millisecond where every other
-    # refusal takes thirty, and that timing is a probe for "which of these names is worth
-    # attacking" — the same oracle the unconditional verify closes for absent names.
+    # Verified even when locked, so a locked account does not refuse faster than the rest.
     stored = row["password_hash"] if row is not None else None
     matched = await verify_password_async(stored or ABSENT_ACCOUNT_HASH, password)
 
@@ -310,15 +199,8 @@ async def check_password(
         await clear_password_lockout(conn, probe)
         return True, None
 
-    # In SQL for the reason check_pin's comment gives: the verify above suspends the task, so a
-    # read-modify-write would let a burst of guesses cost one failure between them. The
-    # exponent is capped inside power() for the reason as-01 gives there — an overflow here
-    # raises, the route answers 500, and the failure that triggered it is never written down.
-    #
-    # It is issued on every refusing path, and which failures it actually counts is decided in
-    # the WHERE rather than by returning early above: an absent name addresses a row that does
-    # not exist, and an account already locked out is excluded here exactly as the early return
-    # excluded it — the lockout is a delay, not a counter that grows while you wait it out.
+    # In SQL and capped for `check_pin`'s reasons. The WHERE, not an early return, skips absent and
+    # locked rows, so every refusing path issues the same statement.
     await conn.execute(
         """
         UPDATE app_user
@@ -347,12 +229,8 @@ class SessionUser:
     session_id: str
     auth_method: str
     admin_verified_at: datetime | None
-    # §6.7, owner decision 2026-08-29: one global per-user "show the model" preference,
-    # default off, toggled from the account dropdown. Debugging, not a product surface.
     show_model: bool = False
-    # §3.2's window slides in the row and in the cookie together or not at all. This says the
-    # row moved on *this* request, which is how `api.deps.current_user` knows to re-issue the
-    # cookie — at most once a day, because that is how often `load_session` moves the row.
+    # The row slid on this request, so `api.deps.current_user` re-issues the cookie with it (§3.2).
     session_slid: bool = False
 
     @property
@@ -360,7 +238,6 @@ class SessionUser:
         return self.role == "admin"
 
     def admin_reauth_required(self, now: datetime | None = None) -> bool:
-        """§3.2: admin routes re-prompt after 24 h."""
         if not self.is_admin:
             return True
         if self.admin_verified_at is None:
@@ -377,13 +254,8 @@ async def create_session(
     device_label: str | None = None,
     verified: bool = True,
 ) -> str:
-    """`verified` says the credential proved *who* is holding the device, not only that the
-    device is the right one — which is the difference §3.2 draws when it makes a passkey "Face
-    ID / Touch ID / Android biometrics". It defaults to True because the two callers that do not
-    pass it have nothing to report: a typed password is itself the verification, and a PIN is
-    excluded by the CASE below either way. Only a passkey assertion carries a separate flag, and
-    a presence-only tap must not open the admin surface without the 24 h re-prompt.
-    """
+    """`verified`: the credential proved who holds the device. Only a passkey assertion can say False,
+    and a presence-only tap must not skip the 24 h admin re-prompt."""
     sid = pysecrets.token_urlsafe(32)
     expires = datetime.now(UTC) + timedelta(days=settings().session_days)
     await conn.execute(
@@ -403,18 +275,7 @@ async def create_session(
 
 
 async def stamp_admin_verified(conn: asyncpg.Connection, sid: str) -> bool:
-    """Answer §3.2's "admin routes re-prompt after 24 h" in place. Returns False for a PIN
-    session, which cannot be the proof.
-
-    `admin_verified_at` was written at INSERT above and nowhere else, so the only way past a
-    stale stamp was signing in again — which mints a second session and leaves the stale one
-    live for its full sliding window. Re-authenticating on the session in hand ends that.
-
-    The `auth_method <> 'pin'` guard is `create_session`'s CASE, restated: a 4-digit PIN is a
-    switch convenience on a device someone is already signed in on (§3.2), so it cannot clear a
-    re-prompt that a password or a verified passkey is there to answer. The boolean says the
-    row was not stamped, so the route refuses rather than reporting a silent no-op as success.
-    """
+    """Re-stamp the session in hand. False for a PIN session, which cannot be the proof (§3.2)."""
     stamped = await conn.fetchval(
         "UPDATE auth_session SET admin_verified_at = now() "
         "WHERE id = $1 AND auth_method <> 'pin' RETURNING 1",
@@ -435,12 +296,7 @@ async def load_session(conn: asyncpg.Connection, sid: str) -> SessionUser | None
     )
     if row is None:
         return None
-    # 90-day *sliding* window (§3.2): touch on use, but at most once a day. Unconditional, this
-    # was one serialised row update plus one rewrite of `auth_session_expiry` for every request
-    # in a page's fan-out, and the browser saw none of it — the cookie's Max-Age was written
-    # once at login, so a daily user's cookie still died 90 days after the last sign-in while
-    # the row it named stayed valid. The RETURNING is what tells the caller the row moved, so
-    # the Set-Cookie goes out on the same beat.
+    # Slides at most once a day; RETURNING tells the caller to re-issue the cookie on the same beat.
     slid = await conn.fetchval(
         "UPDATE auth_session SET last_seen_at = now(), expires_at = now() + ($2 || ' days')::interval"
         " WHERE id = $1 AND last_seen_at < now() - interval '1 day' RETURNING 1",
@@ -461,16 +317,10 @@ async def load_session(conn: asyncpg.Connection, sid: str) -> SessionUser | None
 
 
 async def destroy_session(conn: asyncpg.Connection, sid: str) -> None:
-    """§3.2: 'Logout clears the session cookie only — passkeys remain registered.'"""
     await conn.execute("DELETE FROM auth_session WHERE id = $1", sid)
 
 
 async def destroy_other_sessions(conn: asyncpg.Connection, user_id: int, keep: str) -> int:
-    """Revoke every other session for a user — what a password change has to mean.
-
-    Without this, changing a password because it leaked leaves every device that already has a
-    cookie signed in indefinitely (the window is 90 days, sliding, so in practice forever).
-    """
     result = await conn.execute(
         "DELETE FROM auth_session WHERE user_id = $1 AND id <> $2", user_id, keep
     )
@@ -478,13 +328,6 @@ async def destroy_other_sessions(conn: asyncpg.Connection, user_id: int, keep: s
 
 
 async def destroy_user_sessions(conn: asyncpg.Connection, user_id: int) -> int:
-    """Every session an account holds, which is what §6.6's disable and password reset mean.
-
-    `destroy_other_sessions` above keeps the caller's own row because there the caller *is* the
-    account holder, changing their own password. Here an admin is acting on someone else, and
-    both duties say the same thing: the credential that opened those sessions is gone — lost,
-    guessed at, or taken away — so no device may keep what it opened.
-    """
     result = await conn.execute("DELETE FROM auth_session WHERE user_id = $1", user_id)
     return int(str(result).rsplit(" ", 1)[-1]) if str(result).startswith("DELETE") else 0
 
