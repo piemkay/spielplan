@@ -2,37 +2,20 @@ import { defineConfig, devices } from '@playwright/test';
 import { baseUrl } from './env.mjs';
 
 /**
- * End-to-end tests against the real stack.
+ * End-to-end tests against the real stack, in the two phases `node e2e/run.mjs` implements:
+ * `@first-boot` names the file phase 1 owns, and nothing else.
  *
- * `BASE_URL` points at whatever is serving the app: by default the real backend serving the
- * built PWA on :8080, or the Vite dev server on :5173 in front of that same backend.
- *
- * The suite runs in TWO PHASES, and `node e2e/run.mjs` is what implements them: phase 1 runs
- * `specs/01-first-boot.spec.js` alone against an empty database, the services restart so the
- * bundle it imported is loaded (§10), and phase 2 runs everything else with
- * `--grep-invert @first-boot`. So `@first-boot` is a statement about which phase owns a file and
- * nothing else. A test that needs the real backend does not need a tag; it needs the phase 2
- * the runner gives it.
- *
- * Most of the files that need an IMPORTED bundle skip themselves on `config.has_bundle`; the
- * rest need no bundle and carry no guard, and two of those skip on `browserName`, which is a
- * different axis. `08-jellyfin.spec.js` is the deliberate exception and has to stay one: it is
- * the spec that still FAILS on a stack that imported nothing, which is all that stands between
- * such a run and a suite of skips reported as a green job — so giving it the guard for
- * consistency is the tidy-up `test_the_jellyfin_spec_is_not_given_a_has_bundle_guard` fails the
- * build over. [M4.8 review cycle 3: m48-c3-e2e-03]
+ * `08-jellyfin.spec.js` deliberately has no `config.has_bundle` skip: it is the spec that fails
+ * when no bundle was imported, so such a run cannot pass as a suite of skips.
  */
-// Must be the app's own PUBLIC_URL origin, not merely an address that reaches it. WebAuthn
-// binds credentials to the origin (§2, §14.4), so a passkey registered from
-// http://127.0.0.1:8080 against an rp_id of `localhost` is refused — correctly, and
-// confusingly. Same host, same port, different origin.
+// Must be the app's own PUBLIC_URL origin: WebAuthn binds passkeys to the origin, so 127.0.0.1
+// against an rp_id of `localhost` is refused.
 const BASE_URL = baseUrl();
 
 export default defineConfig({
   testDir: './specs',
   outputDir: './.results',
-  // The suite drives a first-boot wizard and imports a bundle; those are stateful and must
-  // not race each other. Files run in order, one worker.
+  // Stateful: files run in order, one worker.
   fullyParallel: false,
   workers: 1,
   forbidOnly: !!process.env.CI,
@@ -48,7 +31,6 @@ export default defineConfig({
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
     video: process.env.CI ? 'retain-on-failure' : 'off',
-    // The app is dark-first and single-theme (§6.8); pinning this keeps screenshots stable.
     colorScheme: 'dark',
   },
 
@@ -58,32 +40,12 @@ export default defineConfig({
       use: { ...devices['Desktop Chrome'], viewport: { width: 1400, height: 900 } },
     },
     {
-      // §6 preamble: phone-first, 48 px targets, one-handed. The phone is not a variant of
-      // the desktop layout here — it is the primary one, so it gets its own project rather
-      // than a handful of resize calls.
+      // The primary form factor (§6 preamble).
       name: 'phone',
       use: { ...devices['iPhone 13'] },
-      // §6.3's tap-to-tier is a phone gesture — "tap a title (it lifts), tap a tier (it
-      // drops)" — so 13-rank runs here as well as on desktop. It seeds a member per
-      // project, because §4.2's observations are append-only and the two runs would
-      // otherwise share a board.
-      //
-      // 14-tonight joins them for the same reason: §6.2 step 2's hand-the-phone is a
-      // statement about a PHONE ("Guests use the initiator's phone"), and solo is the
-      // one-tap path §6's preamble is written around. 15-tonight-group needs two browser
-      // contexts, so it stays on desktop. It named a third file until decision 165 retired
-      // the TV client, which is the whole of why results are a phone surface too.
-      //
-      // 20-admin-data joins them because M5.6's plan puts its surface there by name: the board's
-      // stage names and verbatim reasons, the review's ordering, Launch disabled with its reason
-      // and the 48 px selection controls a batch of spend is chosen with. Its tests only read.
-      // 21-connectors joins them for the preamble's other number. M5.7's plan §7 check 14 is
-      // "every control on both pages is at least 48 px on the phone", which only this project
-      // can measure, and the rest of that file runs here too, so the admin's key fields, the
-      // spend guard's Confirm and the library pick are driven with a thumb as well as a mouse.
-      // Playwright runs the whole desktop pass before this one on the same stack, so every
-      // test in it reads its starting state and puts back what it changed (decisions 450,
-      // 452, 455).
+      // Playwright runs the whole desktop pass first on the same stack, so a spec here reads its
+      // starting state and puts back what it changed. 15-tonight-group needs two contexts and
+      // stays on desktop. `shell` matches 02-shell and 19-phone-shell (decision 267).
       testMatch: /(shell|library|responsive|13-rank|14-tonight|20-admin-data|21-connectors)\.spec\.js/,
     },
   ],

@@ -1,24 +1,6 @@
-"""Extract the *shape* of a real corpus bundle, so the test fixture can be held to it.
-
-Spec v2.1 §10 lists what a bundle contains; it does not pin the shapes, and that gap is what
-let `backend/tests/fixtures/make_bundle.py` drift into a bundle the importer could read and the
-corpus has never produced. The fixture reproduced every measured landmine and invented every
-structure around them, so the whole import layer was verified against the implementation's own
-reading of the spec rather than against the artifact.
-
-This script reads a bundle and writes a manifest of shapes only -- table names and their
-columns, file names, JSON key sets, TSV headers, npz array names, and the *pattern* of the
-feature contract's column names. **No values.** Film titles, people's names and review text
-never enter the manifest: what is recorded for a feature column is `p:<s>:<s>` (a `p:` prefix
-and three colon-separated segments), never `p:director:Adam Arkin`.
-
-Usage:
+"""Extract the *shape* of a real corpus bundle -- names, keys, headers, never values.
 
     python ops/bundle_shapes.py <bundle-dir> -o backend/tests/fixtures/real_bundle_shapes.json
-
-The output is committed. `test_bundle_shapes.py` holds the fixture to it on every run, and
-holds a real bundle to it too when `CORPUS_BUNDLE_DIR` is set -- so a corpus-side change to the
-bundle format fails this repo's suite instead of surfacing as a mystery at import time.
 """
 
 from __future__ import annotations
@@ -32,10 +14,7 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
-# A column name is reduced to its punctuation skeleton: every run of non-separator characters
-# becomes `<s>`, every digit run `<n>`. `p:director:Adam Arkin` -> `p:<s>`; `decade:1990` ->
-# `decade:<n>`. That keeps the *grammar* of a block's keys -- which is what the vector builder
-# has to reproduce -- and discards the vocabulary, which is data.
+# A column name keeps its grammar and drops its vocabulary: `decade:1990` -> `decade:<n>`.
 _SEG = re.compile(r"[^:]+")
 
 
@@ -46,14 +25,12 @@ def column_pattern(name: str) -> str:
     head, sep, rest = name.partition(":")
     if not sep:
         return _SEG.sub(one, name)
-    # Keep the block prefix literal -- `p:`, `genre:`, `kw:` are the contract's own vocabulary
-    # of block tags, not data -- and reduce everything after it.
+    # The block prefix (`p:`, `genre:`) is the contract's vocabulary, not data.
     return f"{head}:{_SEG.sub(one, rest)}"
 
 
 def _sqlite_shapes(path: Path) -> dict[str, list[str]]:
-    """Table -> ordered column names. Row counts are deliberately excluded: they change with
-    every crawl, and a manifest that churns is a manifest nobody re-generates."""
+    """Table -> ordered column names. No row counts: they churn with every crawl."""
     conn = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
     try:
         tables = sorted(
@@ -102,29 +79,16 @@ def _npz_keys(path: Path) -> list[str]:
 
 
 def _pt_shapes(path: Path) -> dict[str, list[int]]:
-    """Checkpoint tensor name -> shape. Names and shapes; never a weight.
-
-    §4.3 calls `cold_tower.pt` "the live model" and says nothing about its interior, and the
-    corpus ships `torch.save(model.state_dict())` — a bare OrderedDict with no `arch`, no
-    `version` and no `input_dim`. So the tensor NAMES *are* the architecture contract:
-    `placement/tower.py` reconstructs the module from `trunk.0.weight` and `head_e.weight`, and
-    until this branch existed the manifest recorded the file as a bare filename, leaving those
-    three names pinned to a comment rather than to the artifact.
-
-    `weights_only=True` because a checkpoint is data: unpickling a bundle's arbitrary objects
-    to read its key names would be a worse defect than the one this manifest exists to catch.
-    """
+    """Checkpoint tensor name -> shape, never a weight: the bare state dict's names are the
+    architecture contract `placement/tower.py` rebuilds from. `weights_only` because it is data."""
     import torch
 
     obj = torch.load(path, map_location="cpu", weights_only=True)
-    # A wrapper carrying `state_dict` is the shape this app used to demand; a bare state dict is
-    # the shape the corpus ships. Both are read, so the manifest records what is there.
     state = obj.get("state_dict", obj) if isinstance(obj, dict) else obj
     return {name: list(tensor.shape) for name, tensor in state.items()}
 
 
 def extract(root: Path) -> dict[str, Any]:
-    """The whole manifest for one bundle directory."""
     shapes: dict[str, Any] = {
         "_note": "Shapes only -- no values. Regenerate with ops/bundle_shapes.py.",
         "files": [],
@@ -151,8 +115,7 @@ def extract(root: Path) -> dict[str, Any]:
             elif path.suffix == ".pt":
                 shapes["pt"][rel] = _pt_shapes(path)
         except Exception as exc:                                  # noqa: BLE001
-            # A file this script cannot read is recorded as unreadable rather than skipped:
-            # silence here would reproduce the exact failure the manifest exists to prevent.
+            # Recorded, not skipped: silence is the failure the manifest exists to catch.
             shapes.setdefault("unreadable", {})[rel] = f"{type(exc).__name__}: {exc}"
     return shapes
 

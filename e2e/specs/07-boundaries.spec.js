@@ -2,19 +2,13 @@ import { expect, test } from '@playwright/test';
 
 import { ADMIN, signedIn } from '../helpers.js';
 
-/** A request context with no cookies. The bare `request` fixture already is one, but making
- * it explicit keeps these tests honest about what they are proving. */
+/** A request context with no cookies, explicitly. */
 const anonymousContext = (playwright, baseURL) => playwright.request.newContext({ baseURL });
 
-/**
- * Regressions for the boundaries an adversarial review found open. Each of these shipped once;
- * each is cheap to reopen. They are asserted at the HTTP layer because that is where they
- * failed — a UI test would not have caught any of them.
- */
+/** Boundaries that each shipped open once, asserted at the HTTP layer where they failed. */
 
 test('the SPA fallback cannot be walked out of its directory', async ({ request }) => {
-  // The fallback joined the raw URL path onto the static root with no containment and no auth.
-  // `GET /..%2f..%2fdata/backups/dump.sql` returned the file.
+  // `GET /..%2f..%2fdata/backups/dump.sql` once returned the file.
   for (const attack of [
     '/../../etc/passwd',
     '/..%2f..%2f..%2fetc%2fpasswd',
@@ -39,8 +33,7 @@ test('an unknown API route answers JSON 404, not the app shell', async ({ reques
 });
 
 test('profile switching requires an existing session', async ({ playwright, baseURL }) => {
-  // §3.2's PIN is a convenience for a device someone is already signed in on. Accepting one
-  // from an anonymous caller would make a 4-digit secret the whole authentication story.
+  // §3.2's PIN is for a device someone is already signed in on, never a way in.
   const anonymous = await anonymousContext(playwright, baseURL);
   const res = await anonymous.post('/api/auth/switch', {
     data: { user_id: 1, pin: '1234' },
@@ -67,8 +60,6 @@ test('admin routes refuse a signed-out caller', async ({ playwright, baseURL }) 
 });
 
 test('the bundle path cannot point outside the data directory', async ({ page }) => {
-  // An admin-only route that takes a filesystem path still gets a boundary, so a typo cannot
-  // make the app read arbitrary host files.
   await signedIn(page);
   const res = await page.request.post('/api/admin/bundle/validate', {
     data: { path: '/etc' },
@@ -84,8 +75,7 @@ test('the session cookie is HttpOnly and same-site', async ({ page, context }) =
   expect(cookie, 'a session cookie must exist after signing in').toBeTruthy();
   expect(cookie.httpOnly, 'JS must not be able to read the session').toBe(true);
   expect(cookie.sameSite).toBe('Lax');
-  // §2 signs it, so rotating SESSION_SECRET invalidates sessions. A raw opaque id would not
-  // survive that promise.
+  // §2 signs it, so rotating SESSION_SECRET invalidates sessions.
   expect(cookie.value).toContain('.');
 });
 

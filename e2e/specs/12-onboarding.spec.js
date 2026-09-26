@@ -3,48 +3,15 @@ import { devices, expect, test } from '@playwright/test';
 import { signedIn } from '../helpers.js';
 
 /**
- * Member first-run onboarding, in a real browser. Spec v2.1 §6 preamble, §3.1, §4.2, §12 (M2).
- *
- * §6's preamble is the requirement and the reason this file is shaped the way it is:
- *
- *   "on iPhone, Web Push works only for a PWA added to the home screen (iOS 16.4+) … iOS has
- *    no programmatic install prompt, so member first-run onboarding *guides* Share → Add to
- *    Home Screen, detects standalone mode, and nags until push is granted."
- *
- * WHAT A BROWSER CANNOT PROVE HERE, stated plainly so nobody reads more into a green run:
- *
- *   - **Installation itself.** Playwright cannot install a PWA, cannot open Chrome's install
- *     dialog and cannot press Safari's Share sheet. The install half is tested as far as our
- *     own code goes — which branch renders, and that the button spends the browser's event —
- *     and no further.
- *   - **A real `beforeinstallprompt`.** Chromium fires it on its own installability heuristics,
- *     never reliably inside a test run, so the event here is dispatched by the test. That
- *     proves our handling of the event, not that Chrome will hand us one.
- *   - **Web Push end to end.** There is no push service behind a test browser: `subscribe()`
- *     fails in headless Chromium with no endpoint to give. The tests that need a
- *     subscription stub the service-worker registration it comes from, so the *endpoint is
- *     fabricated* and everything after it — the permission gate, the POST, the row, the
- *     screen — is real. The `push` and `notificationclick` handlers are not exercised at all;
- *     they need a sender, which is M4.
- *   - **A second real device.** Two browser contexts each holding a live subscription is not
- *     available for the same reason, so the member's *other* phone is registered through
- *     `POST /api/push/subscribe` with a fabricated endpoint and the browser under test is the one
- *     that is real — genuinely holding no subscription of its own, with the app's own service
- *     worker. That is the configuration finding 21 is about, and it is the half a browser can
- *     prove: what the screen derives "is this device on" from.
- *   - **iOS.** A WebKit/iOS user agent is not an iPhone. It proves the platform branch, not
- *     that Add to Home Screen works or that iOS 16.4 will deliver a push to it.
- *
- * `backend/tests/test_push.py` owns the row-level properties (one row per endpoint, ownership,
- * the secrets never leaving). This file owns the screen.
+ * Member first-run onboarding (§6 preamble, §3.1, §4.2): Share → Add to Home Screen guidance and
+ * the push prompt. What a browser cannot prove here: installation itself, a real
+ * `beforeinstallprompt` (dispatched by the test), a push service (the registration is stubbed, so
+ * the endpoint is fabricated and everything after it is real), a second real device, or iOS.
  */
 test.describe.configure({ mode: 'serial' });
 
-// The stub above, injected into a context before anything loads. It replaces the whole
-// `navigator.serviceWorker` container rather than reaching into the real one: a Proxy over a
-// native container loses `this` on every method and throws "Illegal invocation" on the first
-// call. The cost is that the real service worker is not registered in that context — which is
-// why the test below that checks the real one runs in a context with no stub at all.
+// Replaces the whole `navigator.serviceWorker`: a Proxy over the native one throws "Illegal
+// invocation". So the real service worker is tested in a context without the stub.
 function pushServiceStub(endpoint) {
   const subscription = {
     endpoint,
@@ -56,8 +23,7 @@ function pushServiceStub(endpoint) {
     }),
     unsubscribe: async () => true
   };
-  // Survives a reload, because a real phone does: the browser hands the same subscription back
-  // on the next open, which is the case the server's upsert exists for.
+  // Survives a reload, as a real phone's subscription does.
   const HELD = 'e2e-push-subscription';
   const registration = {
     scope: `${location.origin}/`,
@@ -82,11 +48,7 @@ function pushServiceStub(endpoint) {
 
 let sequence = 0;
 
-/**
- * A member on their very first run: created by the admin, signed in with the one-time password,
- * through §3.1's forced password change — which lands them on `/account?welcome=1`, the screen
- * this file is about.
- */
+/** A member on first run, through §3.1's forced password change to `/account?welcome=1`. */
 async function firstRunMember(admin, browser, contextOptions = {}) {
   const name = `e2e-onboard-${Date.now()}-${sequence++}`;
   const created = await admin.request.post('/api/admin/users', {
@@ -127,8 +89,6 @@ test.describe('onboarding', () => {
   });
 
   test('a member arrives at the onboarding prompt and is asked once', async ({ browser }) => {
-    // §3.1 puts onboarding after the forced password change; that redirect is the whole reason
-    // a member ever sees this screen without being sent a link.
     const { context, page } = await firstRunMember(admin, browser);
     try {
       const card = page.getByTestId('onboarding');
@@ -145,7 +105,7 @@ test.describe('onboarding', () => {
     browser
   }) => {
     // §6 preamble: "iOS has no programmatic install prompt … onboarding *guides* Share → Add
-    // to Home Screen". An Install button on an iPhone would be a button that cannot work.
+    // to Home Screen".
     const { context, page } = await firstRunMember(admin, browser, { ...devices['iPhone 13'] });
     try {
       await expect(page.getByTestId('onboarding')).toHaveAttribute('data-platform', 'ios-safari');
@@ -165,12 +125,11 @@ test.describe('onboarding', () => {
   }) => {
     const { context, page } = await firstRunMember(admin, browser);
     try {
-      // Before the event: no button, and the screen says why rather than showing a dead one.
       await expect(page.getByTestId('onboarding-install')).toHaveCount(0);
       await expect(page.getByTestId('onboarding-install-unavailable')).toBeVisible();
       await expect(page.getByTestId('onboarding')).toHaveAttribute('data-platform', 'browser');
 
-      // Dispatched by the test — see the header. Chromium will not fire this on demand.
+      // Chromium will not fire this on demand.
       await page.evaluate(() => {
         const event = new Event('beforeinstallprompt');
         // @ts-expect-error — the real event carries these; this is the shape we consume.
@@ -187,11 +146,9 @@ test.describe('onboarding', () => {
       await expect(page.getByTestId('onboarding')).toHaveAttribute('data-platform', 'installable');
 
       await install.click();
-      // The button must open the browser's own dialog — the event is the only way to do that,
-      // and an install "confirmed" without calling prompt() would be a lie on the screen.
+      // The button must call the event's prompt(), the only way to the browser's own dialog.
       expect(await page.evaluate(() => window.__installPrompts)).toBe(1);
       await expect(page.getByTestId('onboarding-install-outcome')).toContainText('Installed');
-      // The event is single-use, so the button goes with it.
       await expect(install).toHaveCount(0);
     } finally {
       await context.close();
@@ -201,7 +158,6 @@ test.describe('onboarding', () => {
   test('granting push permission registers exactly one device, and re-opening adds none', async ({
     browser
   }) => {
-    // §4.2's `push_subscription`, written for the first time by the act §6's preamble describes.
     const endpoint = `https://push.example.test/e2e/${Date.now()}`;
     const { context, page } = await firstRunMember(admin, browser);
     try {
@@ -209,8 +165,7 @@ test.describe('onboarding', () => {
       await context.addInitScript(pushServiceStub, endpoint);
       await page.reload();
 
-      // Asserted before the click so a missing button fails with the state it was in rather
-      // than hanging on an element that will never appear.
+      // Before the click, so a missing button fails with its state.
       await expect(page.getByTestId('onboarding')).toHaveAttribute('data-push-state', 'off');
       await page.getByTestId('onboarding-push-enable').click();
       await expect(page.getByTestId('onboarding')).toHaveAttribute('data-push-state', 'on');
@@ -218,10 +173,9 @@ test.describe('onboarding', () => {
 
       const state = await pushState(page);
       expect(state.subscriptions).toHaveLength(1);
-      // Never the endpoint or the keys — the account page identifies a device by a hash.
+      // Never the endpoint or the keys: a device is identified by a hash.
       expect(JSON.stringify(state)).not.toContain(endpoint);
 
-      // §3.1's fifth step is recorded by the same act, and the nag stops.
       expect(state.onboarding_complete).toBe(true);
       await expect(page.getByTestId('onboarding')).toHaveAttribute(
         'data-onboarding-state',
@@ -230,17 +184,14 @@ test.describe('onboarding', () => {
       await expect(page.getByTestId('onboarding-prompt')).toHaveCount(0);
       await expect(page.getByTestId('onboarding-decline')).toHaveCount(0);
 
-      // Re-opening the app re-posts the subscription the browser still holds (a phone
-      // re-registers its service worker on every update, and resubscribes with it). One
-      // device, still — and the SAME row, which is the property §4.2's UNIQUE endpoint buys.
+      // Re-opening re-posts the held subscription: the SAME row (§4.2's UNIQUE endpoint).
       await page.reload();
       await expect(page.getByTestId('onboarding-device')).toHaveCount(1);
       await expect(page.getByTestId('onboarding-prompt')).toHaveCount(0);
       const after = await pushState(page);
       expect(after.subscriptions).toHaveLength(1);
       expect(after.subscriptions[0].id).toBe(state.subscriptions[0].id);
-      // The nag stops; the control does not. Turning notifications off later has to be
-      // possible from the same place they were turned on.
+      // The nag stops; the control does not.
       await expect(page.getByTestId('onboarding-push-disable')).toBeVisible();
     } finally {
       await context.close();
@@ -250,8 +201,7 @@ test.describe('onboarding', () => {
   test('declining stores nothing, finishes the step, and is not asked again', async ({
     browser
   }) => {
-    // The load-bearing half of §3.1's fifth step: "declined" is a completion. It also shows the
-    // scoping — the member above has a device row, and this member's list is empty.
+    // §3.1's fifth step: "declined" is a completion.
     const { context, page } = await firstRunMember(admin, browser);
     try {
       await page.getByTestId('onboarding-decline').click();
@@ -267,9 +217,8 @@ test.describe('onboarding', () => {
       await page.reload();
       await expect(page.getByTestId('onboarding-prompt')).toHaveCount(0);
       await expect(page.getByTestId('onboarding-decline')).toHaveCount(0);
-      // The section stays and still says where this device stands — a completed step silences
-      // the nag, not the settings. (A test browser reports notifications as already blocked,
-      // so what shows here is the "change it in site settings" line rather than the button.)
+      // A completed step silences the nag, not the settings. (A test browser reports
+      // notifications as blocked, so this is the "site settings" line, not the button.)
       await expect(page.getByTestId('onboarding-push-state')).toBeVisible();
       expect((await pushState(page)).subscriptions).toEqual([]);
     } finally {
@@ -278,11 +227,8 @@ test.describe('onboarding', () => {
   });
 
   /**
-   * The member's OTHER phone, registered the only way a test can register one: through §4.2's own
-   * route, with an endpoint no push service minted. `https://push.example.test/...` is deliberate
-   * and not arbitrary — `SubscriptionIn` refuses plain HTTP, `localhost` and every private or
-   * loopback literal (sec-13: a stored endpoint is a URL this server later POSTs to), and this
-   * host is a public name on nobody's network.
+   * The member's OTHER phone, through §4.2's route. `push.example.test`: `SubscriptionIn` refuses
+   * plain HTTP and private or loopback hosts (sec-13).
    */
   async function registerTheOtherPhone(page) {
     const created = await page.request.post('/api/push/subscribe', {
@@ -299,18 +245,11 @@ test.describe('onboarding', () => {
   test('a browser holding no subscription of its own reads off and is offered the switch', async ({
     browser
   }) => {
-    // §6's preamble makes install and notifications per-device and §4.2 keys the table on the
-    // member, so the member's device LIST cannot answer "is this browser registered". Deriving it
-    // from that list told every member's second phone it was already on, marked the first phone's
-    // row as though it were this one, and hid the enable control in an unreachable `else` — so the
-    // second phone could never be registered at all, which is the whole of finding 21. Only the
-    // browser knows what the browser holds, and nothing here is stubbed for exactly that reason:
-    // this context has the app's own service worker and no subscription.
+    // The account's device list cannot say whether THIS browser is registered; only the browser
+    // knows. Nothing is stubbed here: the app's own service worker, and no subscription.
     const { context, page } = await firstRunMember(admin, browser);
     try {
-      // Granted, not blocked: a test browser reports `Notification.permission === 'denied'` out of
-      // the box, and `denied` is a different screen with a different (correct) answer — "we cannot
-      // ask again from here". The state under test is the one nearly every second phone is in.
+      // Granted: a test browser starts `denied`, which is a different screen.
       await context.grantPermissions(['notifications']);
       await registerTheOtherPhone(page);
       await page.reload();
@@ -318,15 +257,10 @@ test.describe('onboarding', () => {
       const card = page.getByTestId('onboarding');
       await expect(card).toHaveAttribute('data-push-state', 'off');
       await expect(page.getByTestId('onboarding-push-enable')).toBeVisible();
-      // The off switch belongs to a device this browser is not, and it used to be the only
-      // control on screen.
       await expect(page.getByTestId('onboarding-push-disable')).toHaveCount(0);
 
-      // The list is the ACCOUNT's, so it renders for a device that is off as readily as for one
-      // that is on — inside the `on` branch it was invisible to exactly the device that needed to
-      // see it. `unknown` rather than "this device": §2 puts the app behind one plain HTTP port,
-      // where `crypto.subtle` does not exist, so a browser cannot hash its own endpoint and a row
-      // is never called somebody else's on a guess.
+      // The ACCOUNT's list, shown whether this device is on or off. `unknown`: over plain HTTP
+      // there is no `crypto.subtle` to hash this browser's endpoint with.
       const rows = page.getByTestId('onboarding-device');
       await expect(rows).toHaveCount(1);
       await expect(rows.first()).toHaveAttribute('data-device', 'unknown');
@@ -334,8 +268,6 @@ test.describe('onboarding', () => {
         'None of these is this browser'
       );
 
-      // And the server's half is unchanged and must stay so: the route answers with the member's
-      // devices, all of them, which is what makes the screen's own question the client's to ask.
       expect((await pushState(page)).subscriptions).toHaveLength(1);
     } finally {
       await context.close();
@@ -345,11 +277,7 @@ test.describe('onboarding', () => {
   test('turning notifications off on one device leaves the other one registered', async ({
     browser
   }) => {
-    // The second half of the same story. §4.2 keys the table on the member and the DELETE answers
-    // with what is LEFT, but the screen resolved a missing list the worst way available —
-    // `?? []` ran for every answer, including the one where nothing was deleted — and blanked a
-    // list of devices that were all still subscribed. A member reading that was told notifications
-    // were off for the household while their other phone kept receiving them. [M4.11 finding 21]
+    // The DELETE answers with what is LEFT; the other phone must still be listed.
     const endpoint = `https://push.example.test/this-browser/${Date.now()}`;
     const { context, page } = await firstRunMember(admin, browser);
     try {
@@ -358,14 +286,11 @@ test.describe('onboarding', () => {
       const otherPhone = await registerTheOtherPhone(page);
       await page.reload();
 
-      // Off, because this browser holds nothing yet — with the other phone's row already there.
       await expect(page.getByTestId('onboarding')).toHaveAttribute('data-push-state', 'off');
       await page.getByTestId('onboarding-push-enable').click();
       await expect(page.getByTestId('onboarding')).toHaveAttribute('data-push-state', 'on');
 
-      // Two devices, and the screen knows which is the one in the member's hand — from the act
-      // itself and not from a re-read, since `GET /api/push/state` answers the same list to both
-      // of them.
+      // "this" comes from the act itself: the state route answers the same list to both.
       await expect(page.getByTestId('onboarding-device')).toHaveCount(2);
       await expect(
         page.locator('[data-testid="onboarding-device"][data-device="this"]')
@@ -376,8 +301,6 @@ test.describe('onboarding', () => {
 
       await page.getByTestId('onboarding-push-disable').click();
       await expect(page.getByTestId('onboarding')).toHaveAttribute('data-push-state', 'off');
-      // Off for this device is an invitation, not a dead end: the enable control is how the same
-      // phone comes back, and the other phone's row is still on screen and still unknown to it.
       await expect(page.getByTestId('onboarding-push-enable')).toBeVisible();
       const rows = page.getByTestId('onboarding-device');
       await expect(rows).toHaveCount(1);
@@ -386,8 +309,7 @@ test.describe('onboarding', () => {
       const left = await pushState(page);
       expect(left.subscriptions).toHaveLength(1);
       expect(left.subscriptions[0].id, 'the surviving row is the OTHER phone').toBe(otherPhone);
-      // Never the endpoint or the keys, here least of all: this one was deleted and the other is
-      // a bearer capability for somebody's lock screen.
+      // Never the endpoint: the other one is a bearer capability for somebody's lock screen.
       expect(JSON.stringify(left)).not.toContain(endpoint);
     } finally {
       await context.close();
@@ -397,9 +319,8 @@ test.describe('onboarding', () => {
   test('the service worker push depends on is served, registers, and caches no api response', async ({
     browser
   }) => {
-    // Web Push does not exist without a service worker — the push event is delivered there and
-    // nowhere else. And §6's "service-worker shell cache" must stay a *shell* cache: a cached
-    // /api/rate card would hand back a card the server has already collected an answer for.
+    // §6's "service-worker shell cache" must stay a shell cache: a cached /api/rate card would
+    // hand back a card already answered.
     const { context, page } = await firstRunMember(admin, browser);
     try {
       const served = await page.request.get('/service-worker.js');
@@ -423,7 +344,6 @@ test.describe('onboarding', () => {
       });
       expect(cached.names.some((name) => name.startsWith('spielplan-shell-'))).toBeTruthy();
       expect(cached.paths.filter((path) => path.startsWith('/api/'))).toEqual([]);
-      // It is a shell cache, so the shell had better be in it.
       expect(cached.paths).toContain('/manifest.webmanifest');
     } finally {
       await context.close();

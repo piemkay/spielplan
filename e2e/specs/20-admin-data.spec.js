@@ -3,42 +3,15 @@ import { expect, test } from '@playwright/test';
 import { signedIn } from '../helpers.js';
 
 /**
- * Admin · Data as an operator's instrument. Spec v2.1 §6.6 Data, §8, §8.4, §4.1 rule 2, §8 stage 7,
- * §6 preamble; decisions 330, 336, 342, 345, 441, 444, 445 and 446 (M5.6).
- *
- * WHAT A BROWSER HAS TO SAY THAT THE BACKEND SUITE CANNOT. The routes are held by
- * `test_acquire_actions.py`, `test_flywheel_launch.py`, `test_curated_api.py` and
- * `test_dna_review.py`; what only this file can hold is that the page shows what those routes
- * answer - §8's ten names in the board's own legend, each reason byte for byte as the server sent
- * it, a failed job and a parked one told apart with only their admitted actions, the review's order
- * on the screen and no control anywhere on a weight, Launch dark with its reason as text, and the
- * selection controls at 48 px on an iPhone 13.
- *
- * EVERY TEST HERE ONLY READS, AND THAT IS LOAD-BEARING. A retry from the board makes a real task due
- * and the worker would walk it from stage 2 against real hosts; a Launch or a Save writes household
- * state the specs after this one would inherit. So nothing here presses Retry, Abandon, Launch or
- * Save. Where a state the stack does not hold is needed - a failed job, two queued thin-facet rows,
- * a household axis - the page's own read is fetched from the real route and one fixture row is added
- * to it before the page sees it (the `route.fetch` then `fulfill` precedent in `10-home.spec.js`),
- * so the component renders the server's shape and only the rows under test are invented.
- *
- * THE PHONE PROJECT RUNS THIS FILE (`playwright.config.js`'s testMatch), after
- * `19-phone-shell.spec.js`'s phone run; being read-only is what makes that order safe.
+ * Admin · Data (§6.6, §8, §8.4; decisions 336, 441, 444): that the page shows what the routes
+ * answer. EVERY TEST ONLY READS: a Retry or a Launch would make real work due. A state the stack
+ * lacks is made by adding one row to the real route's answer before the page sees it.
  */
 
-/**
- * NO SERVICE WORKER IN THIS CONTEXT, for decision 284's reason. Every row this file invents reaches the
- * page through `page.route`, and on the phone project - iPhone 13, WebKit - a fetch that passes
- * through `src/service-worker.js` never reaches the route at all: the worker refuses to cache `/api`,
- * but it is still what the request goes through. Left registered, the three reshaped reads came back
- * as the server's own on WebKit - no failed copy on the board, no queued rows, no household axis - and
- * only Chromium's interception, which sees past the worker, kept the desktop run green. The shell
- * cache is `19-phone-shell.spec.js`'s subject, not this file's, so blocking it here costs no claim.
- */
+// No service worker (decision 284): on WebKit `page.route` would not see the invented rows' reads.
 test.use({ serviceWorkers: 'block' });
 
-// §8's ten stage names, in order, written out here - and only here and in the spec - so the board's
-// legend and the route's `stages` are both compared with the section's own words.
+// §8's ten stage names, in the section's own words.
 const SECTION_8 = [
   'identify',
   'enrich',
@@ -57,8 +30,7 @@ const FLYWHEEL = /\/api\/admin\/flywheel(\?.*)?$/;
 const AXES = /\/api\/admin\/curated\/axes(\?.*)?$/;
 const WEIGHT_NAMED = /confidence|salience|n_sources|threshold/i;
 
-/** `19-phone-shell.spec.js`'s pair, restated for the reason that file gives: a box measured while
- *  it animates is a box measured mid-flight, and both axes are the floor, not the height alone. */
+// `19-phone-shell.spec.js`'s pair: measure at rest, in both axes.
 async function hasStoppedMoving(locator) {
   await locator.evaluate(async (el) => {
     const moving = [];
@@ -93,8 +65,7 @@ test('the board names the ten stages of section 8 in order and shows each reason
   page
 }) => {
   await signedIn(page);
-  // The envelope the page itself rendered, not a second read: the worker may move a job between
-  // two reads, and "verbatim" is a claim about what this screen was sent.
+  // The envelope the page rendered: the worker may move a job between two reads.
   const read = page.waitForResponse(
     (res) => BOARD.test(new URL(res.url()).pathname) && res.request().method() === 'GET'
   );
@@ -110,8 +81,7 @@ test('the board names the ten stages of section 8 in order and shows each reason
   await expect(board.getByTestId('board-stage')).toHaveCount(SECTION_8.length);
   expect(await board.getByTestId('board-stage').allTextContents()).toEqual(SECTION_8);
 
-  // The fixture bundle's import parks its thin-but-placed titles at stage 2
-  // (`placement/reconcile._park_thin`), so the board is not empty on this stack by construction.
+  // The import parks thin titles at stage 2, so the board is never empty here.
   const parked = envelope.jobs.filter((job) => job.status === 'parked' && job.reason != null);
   expect(
     parked.length,
@@ -182,8 +152,6 @@ test(
   "the reject review orders a title's tags by confidence ascending and offers no control on a weight",
   async ({ page }) => {
     await signedIn(page);
-    // FOUND through the real read route, not named: which titles carry two extracted tags is a
-    // property of the imported bundle.
     const listing = await (
       await page.request.get('/api/titles?kind=movie&kind=series&limit=200')
     ).json();
@@ -214,14 +182,14 @@ test(
     const served = chosen.tags.map((tag) => tag.term);
     expect(drawn, 'the screen keeps the ascending-confidence order').toEqual(served);
 
-    // Section 4.1 rule 2 one layer up: no slider, no threshold, no toggle, nothing named for a weight.
+    // §4.1 rule 2: no control on a weight.
     await expect(review.locator('input[type=range]')).toHaveCount(0);
     for (const role of ['button', 'checkbox', 'switch', 'slider', 'combobox', 'textbox', 'spinbutton']) {
       const named = review.getByRole(role, { name: WEIGHT_NAMED });
       await expect(named, `a ${role} named for a weight`).toHaveCount(0);
     }
     await expect(review.getByRole('button', { name: /accept/i })).toHaveCount(0);
-    // Section 8 stage 7: the one action is a ledger row, and every row offers it.
+    // §8 stage 7: the one action is a ledger row.
     const rows = review.locator('[data-testid="evidence-tag"], [data-testid="dna-reject"]');
     for (const row of await rows.all()) {
       await expect(row.getByRole('button', { name: 'Write a ledger row' })).toHaveCount(1);
@@ -254,15 +222,14 @@ test('Launch is disabled with its reason and the selection controls meet the tou
   try {
     await page.goto('/admin/data');
     const queue = page.getByTestId('flywheel-queue');
-    // Section 8.4 as v2.1.3 amends it: each row carries a "queued just now" marker read off its own
-    // creation time, and these two were stamped a moment ago. [M5.6 review cycle 1, M56-DATA-01]
+    // §8.4: a "queued just now" marker from each row's own creation time.
     for (const item of injected) {
       const card = queue
         .getByTestId('flywheel-row')
         .filter({ has: page.getByLabel(`Select row ${item.id}`) });
       await expect(card.getByTestId('flywheel-queued')).toHaveText('queued just now');
     }
-    // The REAL quote route answers for the two rows: watched from before the ticks that ask it.
+    // The REAL quote route answers; watched from before the ticks.
     const quoted = page.waitForResponse(
       (res) =>
         new URL(res.url()).pathname === '/api/admin/flywheel/quote' &&
@@ -271,11 +238,8 @@ test('Launch is disabled with its reason and the selection controls meet the tou
     for (const item of injected) await queue.getByLabel(`Select row ${item.id}`).check();
     await expect(queue.getByTestId('flywheel-titles')).toHaveText('2');
     const quote = await (await quoted).json();
-    // Refused on both runs, under a sentence this file does not own. The cap and the extraction
-    // assignment are 21-connectors': it restores the assignment it found, none on a reset stack, so
-    // the page's default batch names no provider (decision 442); but it cannot put back "no cap"
-    // (decision 452), so the desktop run here meets no cap and the phone run meets its cap. Which
-    // refusal the route gives is the suite's order; that the page shows the one it gave is this test.
+    // Refused on both runs, for a reason that depends on 21-connectors' order; the claim is that
+    // the page shows the route's reason, whichever it is.
     expect(quote.launchable, 'launchable: a provider is assigned beside a cap on this stack').toBe(false);
     expect(quote.reason, 'the quote refused Launch without a reason').toMatch(/\S/);
 
@@ -283,7 +247,7 @@ test('Launch is disabled with its reason and the selection controls meet the tou
     await expect(launch).toBeDisabled();
     const reason = queue.getByTestId('flywheel-launch-reason');
     await expect(reason).toBeVisible();
-    // The route's own sentence, whole and as text (decision 441), not a refusal one stack state gives.
+    // The route's own sentence, whole (decision 441).
     await expect(reason).toHaveText(quote.reason);
 
     if (testInfo.project.name === 'phone') {
@@ -292,8 +256,6 @@ test('Launch is disabled with its reason and the selection controls meet the tou
         await meetsTheTouchFloor(label, `the selection box for queue row ${item.id}`);
       }
       await meetsTheTouchFloor(launch, 'Launch');
-      // The pass picker doubles the reservation from 1 to 2, and one digit is narrower than a
-      // thumb. [M5.6 review cycle 1, M56-DATA-04]
       await meetsTheTouchFloor(queue.locator('.passes select'), 'the pass picker');
     }
   } finally {
@@ -303,8 +265,7 @@ test('Launch is disabled with its reason and the selection controls meet the tou
 
 test('three separate editors each export their own artifact', async ({ page }) => {
   await signedIn(page);
-  // One household axis added to the page's read, so the axis editor draws the per-facet export it
-  // offers a household row (section 6.4's `<facet>.tsv`); the bundle ships none (decision 173).
+  // One household axis added, so the axis editor draws its per-facet export (§6.4).
   let facet = null;
   await reshape(page, AXES, (body) => {
     facet = body.facets?.[0] ?? null;
@@ -322,7 +283,6 @@ test('three separate editors each export their own artifact', async ({ page }) =
       'corrections',
       'axes'
     ]);
-    // The axis editor's standing sentence is the route's own (`api/curated.APPLIES_AXES`).
     const axes = page.locator('[data-ledger="axes"]');
     const notice = axes.getByTestId('ledger-applies');
     await expect(notice).toContainText('No axis file has been authored and the bundle ships none');

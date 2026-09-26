@@ -3,101 +3,35 @@ import { expect, test } from '@playwright/test';
 import { createMember, login, openAccountMenu, signInAsMember, signedIn } from '../helpers.js';
 
 /**
- * The box the whole app sits inside. Spec v2.1 §6 preamble, §6.8, §3.1, §3.2.
+ * The shell on the phone (§6 preamble, §6.8, §3.1, §3.2): the 16 px and 48 px rules, dismissal,
+ * the 401 seam, request deadlines, the offline card, and a clean hand-over on a shared device.
  *
- * §6's preamble - "responsive PWA, phone-first (48 px targets, one-handed, swipe), desktop as
- * progressive enhancement, installable, service-worker shell cache" - is normative and had no
- * owner: §12 schedules screens, every surface milestone built its own and left the chrome
- * alone, and `06-responsive` was held by nothing in this map until M4.15's own two rows -
- * `platform-every-touch-target-meets-the-token` and
- * `platform-shell-clears-the-status-bar-and-the-toolbar` - took it. The three `02-shell` ids this
- * map held were M0's session-cookie contract and M4.9's model rail, neither of them the preamble.
- * (Re-scoped at M4.16: raising `current_milestone` past M4.15 put those two rows outside the
- * current-milestone exclusion in `test_no_record_says_this_map_never_named_a_spec_it_did`, which
- * is the outcome that guard calls right rather than a false alarm. This was the fourth and last
- * copy of the universal; the map, the instrument and the ledger carry the other three.)
- * M4.15 decides those rules once, in the six files every other frontend milestone is forbidden
- * to touch, and this is where a browser is asked whether they hold.
+ * The filename must end in `shell.spec.js`: that is how the phone project selects it (decision
+ * 267). Playwright runs the whole desktop pass first, so this file's desktop run is followed by
+ * 20-admin-data and 21-connectors, then the phone runs of 02-shell, 03-library, 06-responsive,
+ * 13-rank and 14-tonight before this file, and 20-admin-data and 21-connectors after it. The
+ * durable footprint is one reused member, `shell-switch`; a test that writes more must be argued
+ * safe for those specs.
  *
- * THE FILENAME IS LOAD-BEARING AND MUST NOT BE "TIDIED". `playwright.config.js`'s phone project
- * selects files with
- * `testMatch: /(shell|library|responsive|13-rank|14-tonight|21-connectors)\.spec\.js/`, and
- * the alternation is anchored on `\.spec\.js` immediately after - so only a name ENDING in
- * `shell.spec.js` runs on the phone at all. The plan's `17-shell-phone.spec.js` would have run
- * on desktop only, which is the one project where none of this can be measured; 17 and 18 are
- * taken by M4.6 and M4.7 besides. Hence `19-phone-shell.spec.js` (decision 267). Renaming it
- * back does not fail: it quietly stops running where it matters.
- *
- * NINETEEN IS THE RIGHT POSITION WITHIN A PROJECT, WHICH IS NOT THE WHOLE ORDER. The specs are
- * stateful and filename-ordered on one worker, so inside either project everything that must not
- * meet this file's state - cleared cookies, the network taken away, a second household member
- * signed in on the same device - has already run. Playwright groups by PROJECT first, though:
- * every desktop test runs before the phone project starts, so the DESKTOP run of this file
- * completes, 20-admin-data's and 21-connectors' desktop runs follow it, and then seven phone specs -
- * 02-shell, 03-library, 06-responsive, 13-rank and 14-tonight before this file's own phone run,
- * and 20-admin-data (M5.6) and 21-connectors (M5.7, decisions 454 and 455) after it. 20-admin-data
- * reads the Data page and writes nothing: it never presses Retry, Abandon, Launch or Save.
- *
- * What crosses that boundary is narrow, and is named here rather than covered by the sentence
- * above. Cookies live in per-test contexts and the offline flag with them; decision 117's switch
- * is put back in a `finally`. The durable footprint is one household member - `shell-switch`,
- * created with `reuse: true` and given a password - and whatever a test here writes against a
- * member. Nothing downstream reads the roster as a count (13-rank and 14-tonight seed per
- * project, 17-users is desktop-only, and 21-connectors measures the mapping table's controls
- * whatever rows it holds), so this costs nothing today; but a test added here that writes an
- * observation, deletes a member or leaves a preference standing has to be argued safe for those
- * six specs rather than assumed safe by position.
- * [decision 267; review cycle 3: M415-C3-E2E-05]
- *
- * WHAT THIS FILE CANNOT SEE, SAID OUT LOUD. `env()` resolves to 0 in every engine the suite
- * runs and Playwright's viewport IS the visible viewport by construction, so three facts - the
- * header clearing the status bar in installed standalone mode, the tab bar staying above
- * Safari's toolbar at every scroll position, and the absence of focus zoom on a real device -
- * cannot be produced here at all. They are owed in `docs/TESTING.md` as an unsigned device
- * check (decision 281), and the source-level guards in `backend/tests/test_static_contracts.py`
- * are their only standing substitute. A green run of this file is not that signature.
+ * Not measurable here: the status-bar inset in standalone mode, Safari's toolbar, and focus zoom
+ * on a real device are owed as manual device checks in docs/TESTING.md (decision 281).
  */
 
-/**
- * NO SERVICE WORKER IN THIS CONTEXT, EXCEPT IN THE ONE BLOCK WHERE THE CACHE IS THE SUBJECT.
- *
- * Three tests below hold a request open or answer one themselves, and network interception is a
- * Chromium-only instrument once a service worker is in the middle. `src/service-worker.js`
- * refuses to cache anything under `/api`, but it is still what every request passes through, so
- * on the phone project - iPhone 13, WebKit, the form factor this whole file exists for -
- * `page.route` never saw one: the room opened for real while the test waited for the sentence a
- * held request produces, and the two 401s the seam test fulfils would have been answered by the
- * live server instead. A test that cannot fail is worse than one that does. So this context
- * registers no worker, and what the routes say is what the app gets. Playwright says the same in
- * its own note on `page.route` - it "will not intercept requests intercepted by Service Worker"
- * (microsoft/playwright#1090) - and recommends this option for exactly this reason.
- * `02-shell.spec.js:210` wrote half of it down in M4.9 and read it as universal; it is not, which
- * is why three desktop-only specs route `/api` happily. [decision 284]
- */
+// No service worker except in the shell-cache block: `page.route` does not see requests a
+// service worker mediates (microsoft/playwright#1090), so on WebKit a route would never fire.
 test.use({ serviceWorkers: 'block' });
 
 test.beforeEach(async ({ page }) => {
   await signedIn(page);
 });
 
-/** Decision 117's switch, set through the route the account dropdown PATCHes, as `02-shell`
- *  does: the rail is not this file's subject anywhere except as chrome that has to dismiss and
- *  be tappable, and re-opening the dropdown to reach the toggle would be another chance for an
- *  unrelated flake in a file that already drives four surfaces. The preference is read at boot,
- *  so the caller reloads after setting it. */
+/** Decision 117's switch, through the API. Read at boot, so the caller reloads after it. */
 async function showModel(page, on) {
   const res = await page.request.post('/api/auth/preferences', { data: { show_model: on } });
   expect(res.ok(), `setting show_model=${on}: ${res.status()}`).toBeTruthy();
 }
 
-/**
- * Tonight, at the door.
- *
- * The restore is a round trip (§6.2 step 4: a reload must not cost somebody their evening), so
- * a device already seated in a live room comes back INTO it rather than to the controls. The
- * `Back` control is the household's own way out and leaves the seat alone, so this is the same
- * gesture a person makes, not a reset the test invented.
- */
+/** Tonight, at the door: a seated device is restored into its room, so step `Back` out first. */
 async function atTonightDoor(page) {
   await page.goto('/tonight');
   await expect(page.getByTestId('tonight-surface')).toBeVisible();
@@ -107,22 +41,13 @@ async function atTonightDoor(page) {
   await expect(page.getByTestId('tonight-controls')).toBeVisible();
 }
 
-/**
- * The `phone` project is the subject of clauses 3 and 4 of this milestone's exit criterion, and
- * this is the sentence the desktop run prints instead of pretending to have measured them.
- */
 const FINGERS = 'a finger is what this measures, and the desktop project has none';
 
 // ---------------------------------------------------------------------------------------------
 // 1. The 16 px rule
 // ---------------------------------------------------------------------------------------------
 
-/**
- * The input types iOS Safari never zooms for, because none of them takes text: a checkbox, a
- * radio, a slider, a file picker and the button-shaped inputs have no caret to magnify the page
- * around. `design.css`'s coarse rule excludes exactly the first four by selector, which is why
- * they are named here rather than left to fail a rule that was never about them.
- */
+// Input types with no caret, which iOS Safari never zooms for.
 const NO_CARET = [
   'checkbox',
   'radio',
@@ -136,8 +61,7 @@ const NO_CARET = [
   'color'
 ];
 
-/** Every text-taking control on the page that computes under 16 px, described well enough to
- *  find in a stylesheet: iOS names neither the element nor the rule when it zooms. */
+/** Every text-taking control computing under 16 px, described well enough to find in a stylesheet. */
 async function controlsThatWouldZoom(page) {
   return page.evaluate((skip) => {
     const describe = (el) => {
@@ -153,7 +77,6 @@ async function controlsThatWouldZoom(page) {
       const type = (el.getAttribute('type') || '').toLowerCase();
       if (el.tagName === 'INPUT' && skip.includes(type)) continue;
       const rect = el.getBoundingClientRect();
-      // A control with no box cannot be focused, so it cannot zoom anything.
       if (!rect.width && !rect.height) continue;
       const size = parseFloat(getComputedStyle(el).fontSize);
       if (!(size >= 16)) out.push(`${describe(el)} computes ${size}px`);
@@ -165,19 +88,8 @@ async function controlsThatWouldZoom(page) {
 test('no form control on the member path zooms on focus', async ({ page, context, isMobile }) => {
   test.skip(!isMobile, FINGERS);
 
-  // iOS Safari zooms the page on focus for any control whose text is under 16 px and does not
-  // zoom back out; there is no gesture that says "undo that". §6's preamble makes the phone the
-  // primary form factor and §3.1 puts a new member's very first tap in the /login name field,
-  // so this is the app's first impression as well as its rule.
-  //
-  // THIS IS THE ONLY PLACE THE SPECIFICITY WORK IS VISIBLE. `design.css`'s coarse `input` rule
-  // is (0,4,1) and outranks every scoped input rule in the tree, while a bare `select` is
-  // (0,0,1) and LOSES to any component's own - so the global rule reaching a control is a claim
-  // about cascade arithmetic, not about intent, and reading the COMPUTED size is what turns it
-  // into a measurement. A scoped rule that still wins shows up here and nowhere else.
-  //
-  // /login is measured signed OUT, because that is the only state it renders in: `guard()`
-  // sends a live session straight back to Home, so a signed-in visit would measure Home twice.
+  // iOS Safari zooms on focus below 16 px and does not zoom back. The COMPUTED size, because
+  // whether the global rule wins is cascade arithmetic. /login only renders signed out.
   await context.clearCookies();
   await page.goto('/login');
   await expect(page.getByRole('heading', { name: 'Sign in' })).toBeVisible();
@@ -204,28 +116,8 @@ test('no form control on the member path zooms on focus', async ({ page, context
 // ---------------------------------------------------------------------------------------------
 
 /**
- * Measure a box only once nothing is still moving it.
- *
- * `boundingBox()` does not read layout. It reads the control's quads mapped through every
- * ancestor transform, and that arithmetic is single precision. All three controls below open
- * inside an overlay wearing `design.css`'s `fadeIn` - `transform: translateY(4px)`, 120 ms on
- * `.menu` and on the model rail, 140 ms on the title panel - so a read landing inside that
- * window maps the box through a fractional translate and rounds. At rest it cannot: every
- * ordinate WebKit lays out is a multiple of 1/64 px, and every such value under 2^18 px is
- * exact in binary32, so the corner subtraction is exact and a 48 px box measures 48.
- *
- * Which is why this waits rather than tolerating a near miss. On the M4.16 gate the account
- * menu's first entry came back 47.99999237060547 px tall - 48 minus 2^-17, two binary32 ulps -
- * from a rule that specifies `min-height: var(--touch)` on a border-box element with no border
- * and 9 px of vertical padding, whose computed height is 48px and whose `offsetHeight` is 48.
- * Nothing in the cascade subtracts, and nothing this milestone touched moved that box; the
- * trace puts the read 71-98 ms into a 120 ms animation. A tolerance would have rounded away the
- * floor M4.15 spent a milestone establishing in both dimensions to hide a box that was merely
- * still arriving. [§6 preamble]
- *
- * The walk is up the ancestors because the transform is not on the control - it is on `.menu`,
- * on `.panel` and on the rail. `frontend/src` declares one keyframe set and no infinite
- * animation, so every promise waited on here settles.
+ * Wait until no ancestor is animating. `boundingBox()` maps through transforms in single
+ * precision, so mid-`fadeIn` a 48 px box can measure 47.99999; at rest it is exact.
  */
 async function hasStoppedMoving(locator) {
   await locator.evaluate(async (el) => {
@@ -235,10 +127,7 @@ async function hasStoppedMoving(locator) {
   });
 }
 
-/** Both dimensions, always. `design.css`'s coarse block raises `min-height` and never
- *  `min-width`, so every control it reaches passes a height-only assertion by construction and
- *  the narrow axis is where this app's failures actually were: two overlay exits at 48 by 32,
- *  and a stack of account links at 34 that the block's selector list never named. */
+/** Both dimensions: `design.css`'s coarse block raises `min-height` and never `min-width`. */
 async function meetsTheTouchFloor(locator, what) {
   await hasStoppedMoving(locator);
   const box = await locator.boundingBox();
@@ -253,10 +142,7 @@ async function meetsTheTouchFloor(locator, what) {
   ).toBeGreaterThanOrEqual(48);
 }
 
-/** Phase 2 always has a bundle: `run.mjs` refuses to enter it otherwise, precisely so that a
- *  suite of skips cannot exit 0 and be read as a pass (§10's swap sequence). Asserting rather
- *  than skipping keeps that guarantee visible here instead of turning a broken stack into a
- *  quiet green. */
+/** Asserted, not skipped: `run.mjs` never enters phase 2 without a bundle. */
 async function withABundle(page) {
   const config = await page.evaluate(() => fetch('/api/config').then((r) => r.json()));
   expect(
@@ -271,10 +157,7 @@ test("the account menu's entries and the overlay exits meet the touch floor", as
 }) => {
   test.skip(!isMobile, FINGERS);
 
-  // §6 preamble: "phone-first (48 px targets, one-handed)", and `design.css` sets --touch: 48px.
-  // These three controls are the ones `06-responsive`'s sweep could not see, and between them
-  // they are the only phone path to /account and /admin and the only exit from a panel that
-  // covers the screen.
+  // The controls `06-responsive`'s sweep cannot reach: the menu entries and the overlay exits.
   const menu = await openAccountMenu(page);
   const entries = menu.locator('[data-nav]');
   expect(await entries.count(), 'the account menu carries no entries at all').toBeGreaterThan(0);
@@ -297,12 +180,7 @@ test("the account menu's entries and the overlay exits meet the touch floor", as
     await page.getByTestId('model-rail-open').click();
     await expect(page.getByTestId('model-rail')).toBeVisible();
     await meetsTheTouchFloor(page.getByTestId('model-rail-close'), "the model rail's close button");
-    // And the kind filters, eight lines under that close button in the same component and left
-    // behind by its repair: `min-width` on one and not the other, so the exit came out 48 by 32
-    // and the filters 48 by 36. The row is `{#if kinds.length > 1}`, so it is measured where it
-    // renders and named where it does not - a loop over zero locators asserts nothing, which is
-    // the vacuity this file exists to stop rather than to reproduce. The static guard holds the
-    // rule on every tree; this holds it on the device.
+    // The kind filters render only with more than one kind.
     const all = page.getByTestId('model-rail-filter-all');
     if (await all.isVisible()) {
       await meetsTheTouchFloor(all, "the rail's \"all\" filter");
@@ -311,24 +189,10 @@ test("the account menu's entries and the overlay exits meet the touch floor", as
       }
     }
   } finally {
-    // Default off is part of decision 117's contract, and every spec after this one opens on it.
     await showModel(page, false);
   }
 
-  // THE ONE NAMED EXEMPTION, named here rather than absent from a selector.
-  //
-  // §3.1's wizard sequence is walkable - a step already done can be gone back to - so its
-  // progress indicator is a 3 px hairline drawn as buttons, and `design.css`'s coarse
-  // `button { min-height: var(--touch) }` rendered it as three 48 px grey blocks above the
-  // heading on the first screen a household ever meets. Decision 280 exempts the indicator and
-  // refuses the wide fix: no blanket `button { min-height: auto }` in design.css, which would
-  // spare this hairline by giving up the floor for everything else. The skip is by testid so
-  // the exemption is legible in a failure message, and the hairline's own rule is held by
-  // `test_static_contracts.py::test_the_wizard_step_indicator_stays_a_hairline` - a control
-  // this sweep steps over is a control this sweep cannot hold.
-  //
-  // Step 0 and no further: the last step mounts `BundleImport`, which another milestone is
-  // rewriting this wave, and nothing here needs to walk the wizard to measure its chrome.
+  // The one named exemption: the wizard's step indicator is a 3 px hairline (decision 280).
   await page.goto('/setup');
   await expect(page.getByRole('heading', { level: 1 })).toBeVisible();
   await expect(page.getByTestId('setup-step').first()).toBeVisible();
@@ -344,29 +208,13 @@ test("the account menu's entries and the overlay exits meet the touch floor", as
 // ---------------------------------------------------------------------------------------------
 
 test('every menu and overlay dismisses by outside tap and by Escape', async ({ page }) => {
-  // Proposal 131: "Every popover, menu and sheet dismisses on outside click and on Escape - the
-  // prototype has neither, and an implementation copying it ships a menu you cannot click
-  // away." All three of this app's overlays copied it. The menu was the worst of them:
-  // navigation is client-side inside a persistent layout, so an undismissed dropdown followed
-  // the person onto the next surface and sat over it.
-  //
-  // The brand in the header is the outside tap for all three, and it is outside all three by
-  // construction rather than by luck: the title panel and the rail are both anchored BELOW the
-  // header (`top: calc(54px + env(safe-area-inset-top))`, and the rail's phone form is a bottom
-  // sheet), and the account menu hangs under the chip. It is a plain span with no handler of
-  // its own, so what dismisses is the document-level listener and nothing else.
-  //
-  // `.click()` rather than `.tap()`: tap needs a touch-enabled context and would throw on the
-  // desktop project, and the dismissal listens for `pointerdown`, which the mouse path emits on
-  // both. That the listener is `pointerdown` at all is the phone's doing - a tap that drifts
-  // produces no `click` - and is argued in `src/lib/dismiss.js`.
+  // Proposal 131: "Every popover, menu and sheet dismisses on outside click and on Escape".
+  // The header brand is outside all three by construction and has no handler of its own.
+  // `.click()`: `.tap()` throws on desktop, and the listener is on `pointerdown`.
   await withABundle(page);
   const outside = page.getByText('SPIELPLAN', { exact: true });
 
-  // --- the account menu. `openAccountMenu` clicks the chip and waits for `.menu`; the dismiss
-  // action sits on `.wrap`, with the chip INSIDE it, so the helper is unchanged and still
-  // correct - an outside-handler scoped to `.menu` would have fired on the chip's own
-  // pointerdown, closed, and let the click reopen it.
+  // --- the account menu
   const menu = await openAccountMenu(page);
   await outside.click();
   await expect(menu, 'the account menu has no outside-tap dismissal').toHaveCount(0);
@@ -388,9 +236,7 @@ test('every menu and overlay dismisses by outside tap and by Escape', async ({ p
   await outside.click();
   await expect(panel, 'the title panel has no outside-tap dismissal').toHaveCount(0);
 
-  // --- the model rail. Proposal 118 makes it a bottom sheet on compact layouts, which is the
-  // shape that most needs a way out: 62vh of screen whose only exit was the control in its
-  // corner.
+  // --- the model rail
   await showModel(page, true);
   try {
     await page.goto('/');
@@ -406,11 +252,8 @@ test('every menu and overlay dismisses by outside tap and by Escape', async ({ p
     await outside.click();
     await expect(rail, 'the model rail has no outside-tap dismissal').toHaveCount(0);
 
-    // The trigger is OUTSIDE the drawer and it toggles, so a plain outside-tap dismissal closes
-    // on its pointerdown and the click that follows reopens it - the control that opens the
-    // drawer would permanently stop being able to close it, and every "the drawer is open"
-    // assertion in this suite would still pass. `ModelRail.svelte` exempts the opener from its
-    // own dismissal for exactly that reason; this is the assertion that the exemption is there.
+    // The trigger sits outside the drawer and toggles: without its exemption from the outside-tap
+    // dismissal, its pointerdown would close and its click reopen.
     await page.getByTestId('model-rail-open').click();
     await expect(rail).toBeVisible();
     await page.getByTestId('model-rail-open').click();
@@ -422,8 +265,7 @@ test('every menu and overlay dismisses by outside tap and by Escape', async ({ p
     await showModel(page, false);
   }
 
-  // --- and the half that is not a dismissal gesture at all: the menu's own links. The entry
-  // navigates inside the same document, so nothing unmounts the dropdown on the way.
+  // --- and the menu's own links, which navigate inside the same document.
   const again = await openAccountMenu(page);
   await again.locator('[data-nav="account"]').click();
   await expect(page).toHaveURL(/\/account$/);
@@ -438,26 +280,11 @@ test('every menu and overlay dismisses by outside tap and by Escape', async ({ p
 // ---------------------------------------------------------------------------------------------
 
 test('a 401 returns the member to the sign-in page', async ({ page, context }) => {
-  // §3.2 makes the session a server fact the shell must obey. Before `api.js` had a seam there
-  // was no interceptor at all: every store turned its own 401 into its own red line, so a
-  // rotated SESSION_SECRET, a restored backup or the hourly prune printed `api/deps.py`'s "not
-  // signed in" on Rate, then on Rank, then on Home - with the person's name still in the chip
-  // and Log out the only way forward.
-  //
-  // THIS ASSERTION CANNOT PASS BY ACCIDENT, and that is worth stating because the obvious way
-  // to write it can. The shell re-reads `/auth/me` at BOOT and nowhere else - no route change
-  // calls `refreshUser` - so a client-side navigation with the cookie gone produces exactly one
-  // thing that knows the session ended: the surface's own 401. `guard()` still holds the old
-  // `session.user` and routes nobody. Without the seam this page stays on /rank with a red line
-  // on it. A `page.goto` instead of a nav tap would have booted the app afresh and landed on
-  // /login with no seam involved at all.
+  // §3.2: the session is a server fact. A nav TAP, not a `goto`: the shell reads `/auth/me` only
+  // at boot, so only the surface's own 401 can know the session ended.
   await page.goto('/');
   await expect(page.getByTestId('home-greeting')).toBeVisible();
-  // And Home's own reads finished, posters included. Since decision 483 every card draws its art
-  // from the session-gated `/api/art/<id>/poster`, and those images keep arriving after the
-  // greeting: a cookie cut while they are still in flight 401s them on the surface the member
-  // was already on, which is not the navigation under test. Cut after they land, and a Home read
-  // that fires AFTER the tap is still a failure of the line below.
+  // Home's posters are session-gated and arrive after the greeting; cut the cookie after them.
   await page.waitForLoadState('networkidle');
 
   const unauthorized = [];
@@ -476,44 +303,23 @@ test('a 401 returns the member to the sign-in page', async ({ page, context }) =
   await expect(page.getByRole('heading', { name: 'Sign in' })).toBeVisible();
   page.off('response', watch);
 
-  // "Within one request": the household met the refusal on ONE surface. Every 401 seen belongs
-  // to the board they tapped; a second surface's path in this list is the failure the seam
-  // exists to end.
-  //
-  // WHICH IS TWO PATHS, because Rank makes two reads and always has. `rank/+page.svelte:52-53`
-  // asks for §4.1's kind-scoped genre and decade vocabulary beside the board itself, and both
-  // are in flight from the same `onMount` before either can answer - so `/api/facets` here IS
-  // the board they tapped, and naming only `/api/rank` described the surface wrongly rather than
-  // describing a second one. Enumerating what one surface reads is not the same act as
-  // forgiving a path because it went red: Home's `/api/home`, `/api/titles` and
-  // `/api/prompts/finish` and Rate's `/api/rate` all still fail this line, and they are the
-  // failure it was written for.
+  // Every 401 belongs to the surface tapped: Rank reads `/api/rank` and `/api/facets`.
   const rankReads = (path) => path.startsWith('/api/rank') || path === '/api/facets';
   expect(
     unauthorized.filter((path) => !rankReads(path)),
     'the member met a 401 on a surface they never asked for'
   ).toEqual([]);
 
-  // No backend sentence anywhere on the way out. §6.8: the copy a household reads is the app's,
-  // and "not signed in" under a header carrying their own name is neither true nor actionable.
+  // No backend sentence on the way out (§6.8).
   await expect(page.locator('[role=alert]')).toHaveCount(0);
   await expect(page.locator('.err')).toHaveCount(0);
-  // And the client-side session went with it: the chip that carried the name is gone. What a
-  // reload would have cleared anyway is asserted where it belongs, in the sign-out test below.
   await expect(page.getByTestId('account-chip')).toHaveCount(0);
 
-  // --- and now the two 401s that are NOT a lost session, which is the half that is easy to get
-  // wrong in the direction that hurts more.
+  // --- and the two 401s that are NOT a lost session.
   await login(page);
 
-  // A 401 from a route that VERIFIES a credential is the server answering the question that was
-  // asked. Mistyping the account password into §3.2's PIN box must cost a sentence, not the
-  // session it was typed from.
-  //
-  // Driven with `page.route` rather than with a genuinely wrong password: `api/auth.py:416`
-  // counts every failed verify toward §3.2's lockout, and a test that spends one of a household
-  // admin's attempts to prove a client-side rule has reached past its own subject. What is
-  // under test is which paths `api.js` exempts, and that is decided entirely by the response.
+  // A route that VERIFIES a credential: a wrong password costs a sentence, not the session.
+  // Routed rather than real, so no lockout attempt is spent (§3.2).
   await page.route('**/api/auth/pin', (route) =>
     route.fulfill({
       status: 401,
@@ -523,7 +329,6 @@ test('a 401 returns the member to the sign-in page', async ({ page, context }) =
   );
   try {
     await page.goto('/account');
-    // Named by what it does since decision 518 ("Switch PIN" named the mechanism).
     const card = page.getByTestId('pin-card');
     await expect(card).toBeVisible();
     await card.locator('input[autocomplete="current-password"]').fill('not-the-password');
@@ -539,11 +344,7 @@ test('a 401 returns the member to the sign-in page', async ({ page, context }) =
     await page.unroute('**/api/auth/pin');
   }
 
-  // And §3.2's 24-hour admin re-prompt, which is a 401 meaning "prove it again", not "you are
-  // out". The server says so with a header, and that header is the only place it says so
-  // outside `/auth/me` - which is read at boot and therefore still claims the clock is clear.
-  // sec-05: the flag was parsed in `api.js` and consumed nowhere, so an admin past 24 hours met
-  // raw 401s on every admin fetch with nothing on screen to explain them.
+  // And §3.2's 24-hour admin re-prompt: a 401 with a header meaning "prove it again".
   await page.route('**/api/admin/users', (route) =>
     route.fulfill({
       status: 401,
@@ -563,22 +364,11 @@ test('a 401 returns the member to the sign-in page', async ({ page, context }) =
   }
 });
 
-/**
- * The sentence `api.js` says when its own deadline expires.
- *
- * Written as an escape rather than as the character, so this file stays ASCII on a Windows
- * cp1252 console while still asserting the literal the app ships: the em dash is the house
- * register for copy a household reads (`rank.svelte.js` is the precedent), and an ASCII hyphen
- * here would match nothing and quietly stop asserting.
- */
+// `api.js`'s deadline sentence. The em dash as an escape keeps console output ASCII.
 const NO_ANSWER = 'the network did not answer \u2014 try again';
 
 test('a request that never answers ends with a sentence, not a dead surface', async ({ page }) => {
-  // §2 puts this app on a LAN or a Tailscale address, where a request that never lands is the
-  // ordinary failure rather than the exotic one. `fetch` has no timeout of its own, so before
-  // the deadline the promise simply never settled: the door stayed busy, the control stayed
-  // disabled, and nothing on the screen ever said what had happened. Ten seconds, declared in
-  // `api.js`, for every route but the three long ones (decision 269).
+  // `fetch` has no timeout of its own; `api.js` gives most routes 10 s (decision 269).
   const OPEN_ROOM = /\/api\/tonight\/sessions$/;
   let held = null;
   await page.route(OPEN_ROOM, (route) => {
@@ -588,16 +378,13 @@ test('a request that never answers ends with a sentence, not a dead surface', as
     await atTonightDoor(page);
     await page.getByTestId('tonight-open').click();
 
-    // Longer than the 10 s deadline, because the deadline IS the subject and the config's
-    // expect timeout is exactly 10 s. The test timeout is 60 s, so this fits with room to
-    // report in rather than to fail on the clock it is measuring.
+    // Longer than the 10 s deadline being measured.
     await expect(
       page.getByTestId('tonight-error'),
       'the request never ended in anything a person could read'
     ).toHaveText(NO_ANSWER, { timeout: 25_000 });
 
-    // "Not a dead surface" is the other half, and the reason the deadline was worth having: the
-    // controls are back, so the household can try again on the same screen.
+    // And the controls are back, to try again.
     await expect(page.getByTestId('tonight-controls')).toBeVisible();
     await expect(page.getByTestId('tonight-open')).toBeEnabled();
   } finally {
@@ -607,21 +394,14 @@ test('a request that never answers ends with a sentence, not a dead surface', as
 });
 
 test('a refused field says which field and why', async ({ page }) => {
-  // FastAPI's `HTTPException` puts a string in `detail` and this app's importer puts an object
-  // with a `text`, but pydantic's validation failure puts a LIST of `{type, loc, msg}` - which
-  // matched neither case, so every refused field reached the household as the HTTP reason
-  // phrase or as the empty string. Tonight's guests box is one of the two places an ordinary
-  // control reaches that branch with no client-side guard in the way: Svelte's numeric binding
-  // writes `null` when the field is emptied, and `api/tonight.py:248` bounds the field.
+  // A pydantic 422 `detail` is a LIST of `{type, loc, msg}`. An emptied guests box sends `null`.
   await atTonightDoor(page);
   await page.getByTestId('tonight-guests').fill('');
   await page.getByTestId('tonight-open').click();
 
   const error = page.getByTestId('tonight-error');
   await expect(error).toBeVisible();
-  // The field, then the server's own sentence about it. The sentence is pydantic's and is left
-  // unpinned on purpose - pinning a library's copy is how a test starts failing on an upgrade
-  // that broke nothing - but the two things the household was NOT told are pinned hard.
+  // The field, then pydantic's sentence, which is left unpinned.
   await expect(error).toHaveText(/^guests: .+/);
   await expect(error).not.toHaveText('Unprocessable Entity');
 });
@@ -631,10 +411,7 @@ test('a refused field says which field and why', async ({ page }) => {
 // ---------------------------------------------------------------------------------------------
 
 test.describe('the shell cache', () => {
-  // The one block that needs a service worker, and decision 284's stated exception: an offline
-  // boot IS the cache serving the document, so a context that registers no worker would be
-  // asserting nothing. Nothing in here holds or answers a request, so nothing in here needs the
-  // interception the rest of the file blocks the worker for.
+  // Decision 284's exception: an offline boot IS the cache serving the document.
   test.use({ serviceWorkers: 'allow' });
 
   test('an offline boot keeps the session and says the appliance is unreachable', async ({
@@ -642,31 +419,16 @@ test.describe('the shell cache', () => {
     context,
     browserName
   }) => {
-    // Not on WebKit, and not because the app fails there. Playwright's WebKit refuses the
-    // navigation itself while the context is offline - `page.reload` returns "WebKit encountered
-    // an internal error" nine milliseconds in, before the worker that holds the cached shell is
-    // ever asked - so what a run here would measure is the harness. Reaching the state another
-    // way costs the claim: with the worker blocked there is no cache to boot from, and with the
-    // API stubbed instead the document comes off the network, which is the half being asserted.
-    // So it is owed on a real device beside decision 281's other three, and NOT pre-signed.
-    // [decision 284; §6 preamble]
+    // Playwright's WebKit refuses any navigation while offline, so this is a device check there.
     test.skip(
       browserName === 'webkit',
       'Playwright/WebKit cannot load a document while offline; owed as a device check'
     );
-    // §6's preamble builds the shell cache for exactly this phone, and §3.1 asks for "an explicit
-    // state instead of erroring". `bootstrap()` rethrew every non-401 `/auth/me` failure AFTER
-    // setting `booted`, so the shell's own guard never ran, the already-armed effect read a user
-    // nobody had managed to fetch, and an appliance that was merely restarting sent every open
-    // phone to a sign-in form whose POST could not leave the device - with the session cookie
-    // untouched the whole time. A failed read is not a sign-out; the 401 branch is.
+    // §3.1: "an explicit state instead of erroring". A failed read is not a sign-out.
     await page.goto('/');
     await expect(page.getByTestId('home-greeting')).toBeVisible();
 
-    // The cache has to be IN CHARGE before the network goes, or the reload below is not an
-    // offline boot of the app - it is a browser error page, and the test would be measuring
-    // Playwright. `install` caches the shell and `activate` calls `clients.claim()`, so what is
-    // waited for is the controller rather than the registration.
+    // The worker must CONTROL the page before going offline, or the reload is a browser error.
     const controlled = await page.evaluate(async () => {
       if (!('serviceWorker' in navigator)) return false;
       const timeout = new Promise((resolve) => setTimeout(() => resolve(false), 20000));
@@ -695,32 +457,20 @@ test.describe('the shell cache', () => {
       expect(new URL(page.url()).pathname, 'an unreachable appliance is not a sign-out').toBe('/');
       await expect(page.getByRole('heading', { name: 'Sign in' })).toHaveCount(0);
 
-      // The session is a server fact and nothing here touched it: the cookie the phone holds is
-      // the same one it held a moment ago, which is why routing to /login would have been both
-      // useless and wrong.
       const cookies = await context.cookies();
       expect(
         cookies.some((c) => c.name === 'spielplan_session'),
         'the shell threw away the session over a read that never arrived'
       ).toBeTruthy();
 
-      // Decision 271, seen from its cheapest side. The header's one line that states a fact about
-      // the household rather than rendering one asserted "no bundle imported" from the initial
-      // value whenever `/config` failed. The tri-state's own case - `/auth/me` answering while
-      // `/config` does not - is asserted in `session.svelte.test.js`, where the two reads can be
-      // failed independently; what a browser can say is that a shell which read nothing claims
-      // nothing.
+      // Decision 271: a shell that read nothing claims nothing.
       await expect(page.getByText('no bundle imported')).toHaveCount(0);
     } finally {
       await context.setOffline(false);
     }
 
-    // Back without a manual reload. In an installed standalone web view there is no reload
-    // gesture to find, so asking again by itself is not a convenience - it is the only way back.
-    // The `online` event is the fast path and it is NOT what this measures: Chromium's offline
-    // emulation restores the network without dispatching one, which is the same silence a LAN
-    // box that restarts under a live interface produces. What answers here is the shell's own
-    // retry while the card is up (decision 283), which is the half a household can rely on.
+    // Back without a reload, which a standalone web view has no gesture for: the shell's own
+    // retry (decision 283), since Chromium's emulation dispatches no `online` event.
     await expect(
       page.getByTestId('home-greeting'),
       'the shell stayed on the unreachable card after the network came back'
@@ -729,32 +479,17 @@ test.describe('the shell cache', () => {
 });
 
 test("the next person to sign in sees none of the previous one's surfaces", async ({ page }) => {
-  // §3.2's chip and the per-user Ledger exist to keep two members apart on one device. The
-  // three surface stores are module-level `$state` singletons that outlive a client-side
-  // navigation, and logout reset Rank alone: Rate kept `card`, `session`, `ledger`, `log` and
-  // `booted = true`, and `tonight.svelte.js`'s `bootstrap()` writes state only `if (mine)`, so
-  // a member seated in no live room kept the previous person's controls, step, lobby, ballot
-  // slate, ticked approvals and result indefinitely. On the family tablet that is one member's
-  // taste shown to another.
+  // Surface stores are module-level singletons that outlive a client-side navigation, so the
+  // previous member's state must not reach the next one on a shared device.
   await withABundle(page);
 
-  // A second household account with a password of its own, through §6.6's Users card - the same
-  // path an operator walks (decisions 164 and 166).
   const member = await createMember(page, 'shell-switch', { reuse: true });
   await signInAsMember(page, member);
-  // `signInAsMember` leaves this context holding the MEMBER's cookie, which is how it sets the
-  // password. Back to the admin through the form, so the rest of this test starts where a
-  // household does.
+  // Back to the admin through the form.
   await page.request.post('/api/auth/logout');
   await login(page);
 
-  // The previous person leaves a trace on two surfaces. Tonight's controls are the sharper of
-  // the two because they need no room and no clean-up: they are module state, they are on
-  // screen the moment the door opens, and nothing on the server has heard of them.
-  //
-  // BOTH TRACES HAVE TO BE LEFT IN ONE DOCUMENT, which is why Rate is reached by a nav tap: a
-  // `page.goto` between them would load a fresh page and reset `tonight.controls` before the
-  // sign-out this test is about had a chance to fail to.
+  // Traces on two surfaces, in ONE document: Rate by a nav tap, since a `goto` resets the stores.
   const nav = page.getByRole('navigation', { name: 'Surfaces' });
   await atTonightDoor(page);
   await page.getByTestId('tonight-kind-series').click();
@@ -771,19 +506,8 @@ test("the next person to sign in sees none of the previous one's surfaces", asyn
   const theirTitle = (await theirCard.textContent())?.trim();
   expect(theirTitle, 'the card on screen carries no title to recognise it by').toBeTruthy();
 
-  // Out through the chip, as a person does.
-  //
-  // LEAVING THE DOCUMENT IS THE SUBJECT AND IT HAS TO BE WAITED FOR. Decision 272 clears the
-  // previous person by leaving the document rather than by three hand-written `clearAll()`
-  // functions in three files: a document load is total by construction and cannot miss a field a
-  // store gains next month. Decision 285 then named the destination - `location.assign('/login')`
-  // and NOT `goto` followed by `location.reload()`, because a reload has no destination of its
-  // own: it takes whatever is in the address bar, which at the third browser gate was /rate, and
-  // Rate mounted for nobody and latched `api/deps.py`'s sentence into the next person's session.
-  // If the document is never left, everything below runs inside the previous person's page -
-  // which is the defect itself. `load` is the right instrument for it either way, which is why
-  // this assertion cannot tell the two shapes apart and the sentence above has to.
-  // [decisions 272, 285]
+  // Logout leaves the document (`location.assign('/login')`, decisions 272 and 285), which
+  // clears every store at once.
   const reloaded = page.waitForEvent('load', { timeout: 20_000 }).then(
     () => true,
     () => false
@@ -797,11 +521,7 @@ test("the next person to sign in sees none of the previous one's surfaces", asyn
       "inside the previous person's page"
   ).toBeTruthy();
 
-  // Signed in ON THE FORM THAT IS ALREADY THERE, and NOT through `loginAsMember`: that helper
-  // opens with `page.goto('/login')`, and a fresh document load clears the stores whether or
-  // not logging out had - so the assertions below would hold against the unfixed app, which is
-  // the one thing they must not do. This is also the real journey: tap Log out, hand the phone
-  // over, sign in as somebody else on the form that appears.
+  // On the form already there, not `loginAsMember`, whose `goto` would clear the stores itself.
   await expect(page.getByRole('heading', { name: 'Sign in' })).toBeVisible();
   await page.locator('input[type=text]').first().fill(member.name);
   await page.locator('input[type=password]').fill(member.password);
@@ -820,9 +540,7 @@ test("the next person to sign in sees none of the previous one's surfaces", asyn
   });
 
   try {
-    // The frame the reload closes, and the only thing here worth holding a request open for:
-    // the new person's first read is still in flight, so anything on screen now belongs to
-    // somebody else. Reached by a nav TAP rather than a `goto`, for the reason above.
+    // With the new person's first read held open, anything on screen belongs to somebody else.
     await nav.getByRole('link', { name: 'Rate', exact: true }).click();
     await expect(page.getByTestId('rate-surface')).toBeVisible();
     await expect(page.getByTestId('rate-loading')).toBeVisible();
@@ -833,10 +551,7 @@ test("the next person to sign in sees none of the previous one's surfaces", asyn
       "the previous person's card is on the new person's screen"
     ).toHaveCount(0);
 
-    // Rank's own `reset()` has run on logout since M3 - but it clears the lift, the log and
-    // `booted`, and leaves `tiers` standing, so the previous person's board is what a held read
-    // would still be painting under. The board element itself is unconditional (proposal 82:
-    // empty tiers stay on screen as valid drop targets), so what is counted is the rows in it.
+    // The board element is always drawn (proposal 82), so count its rows.
     await nav.getByRole('link', { name: 'Rank', exact: true }).click();
     await expect(page.getByTestId('rank-surface')).toBeVisible();
     await expect(
@@ -850,8 +565,7 @@ test("the next person to sign in sees none of the previous one's surfaces", asyn
     await heldRank?.abort().catch(() => {});
   }
 
-  // And Tonight, which needs nothing held: the controls render from module state before any
-  // read lands at all, so the previous person's choices would be on screen immediately.
+  // Tonight's controls render from module state before any read lands.
   await nav.getByRole('link', { name: 'Tonight', exact: true }).click();
   await expect(page.getByTestId('tonight-surface')).toBeVisible();
   await expect(page.getByTestId('tonight-booting')).toHaveCount(0, { timeout: 20_000 });
@@ -867,8 +581,7 @@ test("the next person to sign in sees none of the previous one's surfaces", asyn
     page.getByTestId('tonight-guests'),
     "the previous person's guests carried over"
   ).toHaveValue('0');
-  // No ballot, no approvals, no reveal: all three live past the door, and `Back` is rendered
-  // only when this device is somewhere past it.
+  // `Back` renders only past the door.
   await expect(page.getByTestId('tonight-back')).toHaveCount(0);
 });
 
@@ -876,37 +589,22 @@ test("the next person to sign in sees none of the previous one's surfaces", asyn
 // The notices the displayed data's own terms require (M4.16, decisions 293 and 298)
 // ---------------------------------------------------------------------------------------------
 
-/** Every source whose data this app puts on a screen, as one alternation, used below only as an
- *  ABSENCE. The licences require a notice within the PRODUCT and none of them asks for a credit
- *  on every tile, which is what makes 6.8's quiet register decisive here rather than merely
- *  preferable: a source name stamped on a poster satisfies no licence and breaks the register in
- *  the same line. [decision 293] */
+// Used only as an ABSENCE: the licences want a notice in the product, not a credit per tile
+// (decision 293).
 const SOURCE_NAMES = /IMDb|TMDB|TVmaze|Wikipedia|OMDb/i;
 
 test('the data sources are attributed once, on /account, and on no card', async ({ page }) => {
-  // HERE AND NOT IN `09-passkeys`, WHICH IS THE OTHER SPEC THAT DRIVES /account. The phone
-  // project's `testMatch` anchors its alternation on `\.spec\.js` immediately after
-  // (`playwright.config.js:79`), so only a filename ending in one of those five runs on a phone
-  // at all. Decision 293's claim is that the notice is reachable "by every signed-in member on a
-  // phone"; asserted in a desktop-only file it would be a desktop claim about a phone promise.
-  //
-  // Its position at the end of the file is free rather than load-bearing, which the paragraph at
-  // the top asks every test added here to say: it writes nothing - no observation, no member, no
-  // preference - and reads two surfaces.
+  // Here, on the phone project: decision 293's notice is reachable "by every signed-in member on
+  // a phone". It writes nothing.
   await page.goto('/account');
-  // One tap away under "Technical details" since decision 518 - on the page, in the product,
-  // reachable by every member, which is what decision 293 asks - rather than a screen of licence
-  // text a member scrolled past on the way to their PIN.
+  // One tap away under "Technical details" (decision 518).
   const technical = page.getByTestId('account-technical');
   await expect(technical).toBeVisible();
   await technical.locator('summary').click();
   const block = page.getByTestId('data-sources');
   await expect(block.getByRole('heading', { name: 'Data sources' })).toBeVisible();
 
-  // Verbatim, all five, because the words ARE the permission: these are the sentences the terms
-  // make a condition of DISPLAYING the data, and a paraphrase of a licence notice is not one.
-  // Playwright normalises whitespace even under `exact`, so what this pins is the words and not
-  // the column the markup happens to wrap at. [decision 298]
+  // Verbatim: the words ARE the permission (decision 298).
   for (const notice of [
     'Information courtesy of IMDb (https://www.imdb.com). Used with permission.',
     'This product uses TMDB and the TMDB APIs but is not endorsed, certified, or otherwise ' +
@@ -918,29 +616,13 @@ test('the data sources are attributed once, on /account, and on no card', async 
     await expect(block.getByText(notice, { exact: true }), notice).toBeVisible();
   }
 
-  // NO LOGO IS ASSERTED, deliberately and in both directions. Decision 298 makes the TMDB logo an
-  // owed asset the owner drops in from TMDB's own brand page - no agent here may fabricate or
-  // fetch a trademark file - so the block renders a named slot that is empty in this tree. An
-  // assertion that the image is present would be a claim outrunning its evidence, which is the
-  // defect this milestone exists to close; an assertion that it is ABSENT would go red on the day
-  // the debt is paid, which is the wrong thing for a test to punish.
+  // No logo is asserted either way: the TMDB logo is an owed asset (decision 298).
 
-  // And the half the register owns, which nothing else in the suite holds: the notice is inside
-  // the product and the names are not on the tiles. The poster cards are measured
-  // unconditionally - `withABundle` refuses a stack with no bundle, and Home draws cards in
-  // either of its modes - while shelves render only in the mode a household's own data puts Home
-  // in, so that locator is named here and is empty when the grid is on screen. A loop over zero
-  // elements asserts nothing, and the card half is what stops this passing vacuously.
+  // And no source names on the tiles. Cards always render; shelves only in shelf mode.
   await withABundle(page);
   await page.goto('/');
   const cards = page.locator('.card-wrap');
-  // Web-first, because `expect(await cards.count())` is a snapshot with no retry and this is a
-  // client-rendered surface: `goto` resolves on `load`, and on the M4.16 gate the count ran
-  // 0.5 ms after it and answered 0 while the shell was still asking `/api/auth/me` - 5.6 ms
-  // BEFORE the app requested `/api/home` at all, which answered two shelves and nine cards
-  // 10 ms later and is the Home the failure snapshot then photographed. The payload was never
-  // the question. A precondition that cannot wait reinstates the exact vacuity the paragraph
-  // above is about, one line after naming it.
+  // Web-first: a count snapshot right after `goto` can precede `/api/home` entirely.
   await expect(
     cards.first(),
     'Home drew no poster card, so nothing was checked for a source name'

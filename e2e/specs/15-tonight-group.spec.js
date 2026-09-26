@@ -3,28 +3,9 @@ import { expect, test } from '@playwright/test';
 import { createMember, seedFilmLedger, signInAsMember, signedIn, waitForPool } from '../helpers.js';
 
 /**
- * Tonight with two people in two browsers. Spec v2.1 §6.2 steps 2, 6 and 7 (rewritten 54c–54e).
- *
- * This is the first spec in the suite that needs **two clients at once**, and that is the whole
- * point of it: three of M4's rows are claims about what one device shows while another device
- * is doing something, and a single context cannot fail any of them.
- *
- *   `tonight-rank-open-rooms-discovery` — §6.2 step 2's list is "visible to every household
- *   device", with "tappable empty seats". One browser opens a room; the other has to see it and
- *   be able to sit down without typing a code.
- *
- *   `tonight-rank-lobby-live-over-the-session-channel` — §6.2 step 2's live banner "over the
- *   WebSocket". The falsifiable half is *without a reload*: a lobby that needed a refresh to
- *   show an arrival passes every server test and is the thing a household talks over.
- *
- *   `tonight-rank-result-card-inventory` — §6.2 step 7 and proposal 60. The prototype's result
- *   screen was a poster, the word "Unanimous." and two buttons; the share, the match lines, the
- *   runners-up and the wildcard were all specified and none was drawn.
- *
- * TWO PAGES FOR THE FILE, built once. Playwright hands each test a fresh context, which would
- * throw away both seeded members — the same reason `13-rank.spec.js` keeps one page for its
- * file. Desktop only: two contexts is what this file is about, and the phone project runs
- * `14-tonight` for the one-device gestures.
+ * Tonight with two people in two browsers (§6.2 steps 2, 6, 7): the open-rooms list and the lobby
+ * update live without a reload, the round is blind, and the result card carries its whole
+ * inventory. Two pages for the file, built once. Desktop only.
  */
 test.describe('tonight together', () => {
   /** @type {import('@playwright/test').Page} */
@@ -34,9 +15,7 @@ test.describe('tonight together', () => {
   const contexts = [];
 
   test.beforeAll(async ({ browser, baseURL }) => {
-    // §5.3's fold-in tick writes `user_score` once a minute, and this hook waits for it for
-    // each member in turn. The file's own budget is the config's 60 s test timeout, which is
-    // shorter than the thing being waited for.
+    // Waits on the worker's minute tick for each member, longer than the config's 60 s.
     test.setTimeout(360_000);
     for (const label of ['host', 'mate']) {
       const context = await browser.newContext({ baseURL });
@@ -47,8 +26,6 @@ test.describe('tonight together', () => {
         const config = await (await page.request.get('/api/config')).json();
         test.skip(!config.has_bundle, 'needs an imported bundle — run 01-first-boot first');
       }
-      // One account per seat, reused across runs rather than minted anew — see 14-tonight, and
-      // twice over here because this file seeds two of them. [M4.8, finding 8]
       await signInAsMember(page, await createMember(page, `tonight-${label}`, { reuse: true }));
       await seedFilmLedger(page);
       await waitForPool(page);
@@ -61,24 +38,15 @@ test.describe('tonight together', () => {
     for (const context of contexts) await context.close();
   });
 
-  /** A fresh room, hosted by `a`, with `b` joined by the channel the test names.
-
-   * The surface restores a device into a room it is still seated in (a reload must not strand
-   * a participant mid-round), so opening the next room starts by stepping back out to the door
-   * — the same control a household uses to look at the open-rooms list without leaving. */
+  /** Back to the door: the surface restores a seated device into its room. */
   async function toDoor(page) {
     await page.goto('/tonight');
-    // `ssr = false`, so wait for the surface before asserting the placeholder is gone —
-    // otherwise "no placeholder" is true of a page that has not rendered anything yet.
+    // `ssr = false`: "no placeholder" is also true of a page not rendered yet.
     await expect(page.getByTestId('tonight-surface')).toBeVisible();
     await expect(page.getByTestId('tonight-booting')).toHaveCount(0);
     const back = page.getByTestId('tonight-back');
     const controls = page.getByTestId('tonight-controls');
-    // Settle on ONE of the two before reading either. `isVisible()` is a point-in-time read, and
-    // the surface has a moment where neither is drawn — the step has moved into a room but that
-    // room's payload has not arrived, so the door is gone and its replacement is not there yet.
-    // Reading `back` inside that window answers "not visible", the click is skipped, and the
-    // room paints a beat later over an assertion that is already waiting for the door.
+    // Settle on one of the two first: there is a moment where neither is drawn.
     await expect(back.or(controls).first()).toBeVisible();
     if (await back.isVisible()) await back.click();
     await expect(controls).toBeVisible();
@@ -100,25 +68,10 @@ test.describe('tonight together', () => {
     return code;
   }
 
-  /** Answer through one person's whole round, wherever that round has got to.
-   *
-   * THE WAIT IS FOR "THIS DEVICE HAS REACHED ITS ROUND OR PASSED IT", and the second half is
-   * what this helper was missing. 54c ends a seat's round when the shortlist boundary stops
-   * being straddled, and decision 214 sets that threshold at `BOUNDARY_Z = 0.6` — calibrated
-   * against pools of 12/20/40 for a median of 8.5-13 pairs, which is §6.2 step 4's "~10
-   * candidate votes". The fixture library is six admissible films, so its rank-3/rank-4
-   * boundary is one comparison wide and ONE answer resolves it: replayed from the rows the
-   * gate wrote, `round.replay` selects the same pair the app served and returns `converged`
-   * at seq 1. So a caller that has already answered a pair — the blind test below answers one
-   * deliberately, to give the other device a count to read — arrives here with this seat over
-   * and the round correctly gone from the screen. Waiting for `tonight-round` alone failed
-   * that caller for the surface behaving exactly as the decision requires.
-   *
-   * Settling on ONE of the three is `toDoor`'s own idiom above and it is here for the same
-   * reason: the surface has a beat where neither is drawn, so a point-in-time read of either
-   * answers "not visible" for a device that is merely between payloads. A seat whose round is
-   * over is on 54c's progress view, or on 54e's ballot once every seat is (decision 215 makes
-   * the second reachable without this seat answering at all).
+  /**
+   * Answer one person's round to its end, wherever it has got to. On the fixture's six films
+   * one answer can end a round (decision 214), so the round may already be over: settle on the
+   * round, 54c's progress view or 54e's ballot.
    */
   async function playOut(page) {
     const round = page.getByTestId('tonight-round');
@@ -127,10 +80,7 @@ test.describe('tonight together', () => {
     ).toBeVisible({ timeout: 20_000 });
     for (let i = 0; i < 24; i++) {
       if (!(await round.isVisible())) break;
-      // The write, not a guess at how long it takes: §6.2's round is one POST per pair. Worse
-      // here than anywhere else in the suite, because two devices are answering against one
-      // session — a 120 ms sleep that runs short leaves this person clicking the pair the
-      // channel has already moved them off. [M4.8, finding 8]
+      // Wait on the write: §6.2's round is one POST per pair.
       await Promise.all([
         page.waitForResponse(
           (res) =>
@@ -143,8 +93,7 @@ test.describe('tonight together', () => {
   }
 
   test('a room one member opens appears on the other device, live, with a tappable seat', async () => {
-    // The second device sits on the door screen it loaded BEFORE the room existed; the channel
-    // is what puts the room on it. A reload here would prove nothing.
+    // Loaded BEFORE the room existed: only the channel can put the room on it.
     await toDoor(b);
     await expect(b.getByTestId('tonight-rooms')).toBeVisible();
 
@@ -152,22 +101,18 @@ test.describe('tonight together', () => {
     const row = b.getByTestId(`tonight-room-${code}`);
     await expect(row).toBeVisible({ timeout: 25_000 });
 
-    // §6.2 step 2's own example string, on the row.
     await expect(row).toContainText(code);
     await expect(row).toContainText('Film');
     await expect(row).toContainText('min');
 
-    // "with tappable empty seats" — no code typed, no notification involved.
     await b.getByTestId(`tonight-seat-${code}`).click();
     await expect(b.getByTestId('tonight-lobby')).toBeVisible();
     await expect(b.getByTestId('tonight-room-code')).toContainText(code);
 
-    // And the host's lobby learns about the arrival over the same channel, without a reload.
     await expect(a.getByTestId('tonight-seats').locator('li')).toHaveCount(2, {
       timeout: 25_000
     });
 
-    // Resolve the room so the next test's open-rooms list is its own.
     await a.getByTestId('tonight-start').click();
     await playOut(a);
     await playOut(b);
@@ -175,18 +120,12 @@ test.describe('tonight together', () => {
 
   test('the round is blind: neither device shows the other any answer', async () => {
     // 54c: "Someone who finishes early sees the others' progress and never their answers."
-    //
-    // Asserting that the second screen does not happen to *contain* an answer is close to
-    // vacuous — no template draws one, so the assertion holds on a build with no blindness rule
-    // at all. What makes this falsifiable is going after the data instead: the second device
-    // asks the API for the first device's seat, with its own session cookie, and the answer has
-    // to be a refusal rather than the round.
+    // Falsifiable at the API: b asks for a's seat with its own cookie and must be refused.
     await room();
     await a.getByTestId('tonight-start').click();
     await expect(a.getByTestId('tonight-round')).toBeVisible();
     await a.getByTestId('tonight-pick-A').click();
 
-    // b's own view of the room names the seats, so it knows the id to ask for.
     const sessionId = await b.evaluate(async () => {
       const rooms = await (await fetch('/api/tonight/rooms')).json();
       return rooms.rooms.find((r) => r.viewer_seated).session_id;
@@ -197,10 +136,8 @@ test.describe('tonight together', () => {
 
     const refused = await b.request.get(`/api/tonight/seats/${theirs}/round`);
     expect(refused.status(), "one seat read another seat's round").toBe(403);
-    // And it is a refusal about the seat, not about being logged out: b's own seat still reads.
     expect((await b.request.get(`/api/tonight/seats/${mine}/round`)).status()).toBe(200);
 
-    // What b DOES get is the count, live, and the payload it arrives in carries no answer.
     const progress = await b.evaluate(async (id) => {
       const seen = await (await fetch(`/api/tonight/sessions/${id}`)).json();
       return seen.progress;
@@ -220,7 +157,6 @@ test.describe('tonight together', () => {
     await playOut(a);
     await playOut(b);
 
-    // 54e: the ballot is a multi-select over the three finalists and the wildcard.
     await expect(a.getByTestId('tonight-ballot')).toBeVisible({ timeout: 25_000 });
     await expect(b.getByTestId('tonight-ballot')).toBeVisible({ timeout: 25_000 });
     const options = a.locator('[data-testid^="tonight-approve-"]');
@@ -232,7 +168,6 @@ test.describe('tonight together', () => {
     await a.getByTestId(first).click();
     await a.getByTestId('tonight-submit-ballot').click();
 
-    // BLIND: one submission is not every submission, so nothing is revealed here.
     await expect(a.getByTestId('tonight-reveal')).toHaveCount(0);
 
     await b.getByTestId(first).click();
@@ -240,14 +175,12 @@ test.describe('tonight together', () => {
 
     for (const page of [a, b]) {
       await expect(page.getByTestId('tonight-reveal')).toBeVisible({ timeout: 25_000 });
-      // proposal 60: the beat comes BEFORE the winner. Asserted as document order, because
-      // "renders somewhere on the page" is not what the sentence says.
+      // Proposal 60: the beat comes BEFORE the winner.
       const beat = await page.getByTestId('tonight-beat').boundingBox();
       const winner = await page.getByTestId('tonight-winner').boundingBox();
       expect(beat.y).toBeLessThan(winner.y);
       await expect(page.getByTestId('tonight-beat')).toHaveText('VOTES REVEALED TOGETHER');
 
-      // §6.2 step 7's inventory, item by item.
       await expect(page.getByTestId('tonight-approval-share')).toContainText(
         /\d+ of \d+ approved/
       );
@@ -258,18 +191,14 @@ test.describe('tonight together', () => {
       await expect(page.getByTestId('tonight-runners-up')).toBeVisible();
       await expect(page.getByTestId('tonight-play')).toBeVisible();
     }
-    // Both approved the same one title. The reveal used to call that out as "Unanimous." — which
-    // was just as true over an evening where one person approved four and the other one. It says
-    // how broad each person's yes was instead, and whose only yes the winner was.
+    // Not "Unanimous.", which says nothing about how broad each yes was.
     await expect(a.getByTestId('tonight-unanimous')).toHaveCount(0);
     await expect(a.getByTestId('tonight-breadth')).toContainText(/said yes to 1 of \d/);
     await expect(a.getByTestId('tonight-only-yes')).toHaveCount(2);
   });
 
   test('a ?room= link lands the other device in the room, and the lobby offers the link', async () => {
-    // Decision 481: the lobby said "or send the link" and there was no link. The link is the
-    // room code's own URL, which the push invitation also carries; opening it on a device that is
-    // signed in seats that member in the room with no code typed.
+    // Decision 481: the room's URL seats a signed-in member with no code typed.
     await room({ join: false });
     await expect(a.getByTestId('tonight-share')).toBeVisible();
     await expect(a.getByTestId('tonight-share-caption')).not.toContainText('send the link');
@@ -285,21 +214,16 @@ test.describe('tonight together', () => {
   });
 
   test("each member rules out their own three, and one member's three leave the other theirs", async () => {
-    // Decision 505. On the second household evening the host tapped three chips first and the
-    // other member found "sexual violence" greyed out and could add nothing. Each member now holds
-    // up to three, the other phone names whose they are, and the open-rooms row shows the union.
-    // Ended rather than started, so the fixture's small pool is never asked to survive the vetoes.
+    // Decision 505: up to three vetoes each, named on the other phone, the union on the row.
+    // Ended, not started, so the small pool never has to survive the vetoes.
     const code = await room();
     for (const key of ['violence', 'horror', 'harrowing']) {
       await a.getByTestId(`tonight-veto-${key}`).click();
       await expect(a.getByTestId(`tonight-veto-${key}`)).toHaveAttribute('aria-pressed', 'true');
     }
     await expect(a.getByTestId('tonight-veto-sexual_violence')).toBeDisabled();
-    // A mood is said with the round's own answers, and the lobby says how.
     await expect(a.getByTestId('tonight-mood-caption')).toContainText('Neither pulls me tonight');
 
-    // The other phone learns of them over the channel, as a line with the host's name, and its
-    // own four chips are all still its to set.
     await expect(b.getByTestId('tonight-others-vetoes')).toContainText('violence, horror, harrowing', {
       timeout: 15_000
     });

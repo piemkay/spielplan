@@ -6,9 +6,7 @@ import { createMember, signedIn, signInAsMember } from '../helpers.js';
  * §6 preamble: "responsive PWA, phone-first (48 px targets, one-handed, swipe), desktop as
  * progressive enhancement, installable, service-worker shell cache."
  *
- * The phone project runs this file at iPhone 13 dimensions with touch emulation; the desktop
- * project runs it at 1400×900. Assertions branch on which, because the point is that both are
- * correct, not that they are identical.
+ * Runs on both projects; assertions branch on which, because both must be correct.
  */
 
 test.beforeEach(async ({ page }) => {
@@ -38,12 +36,7 @@ test('the navigation adapts: a rail on desktop, a bottom bar on a phone', async 
 test('touch targets meet the 48 px rule on a phone', async ({ page, isMobile }) => {
   test.skip(!isMobile, 'the rule is about fingers');
 
-  // 48, not 44. `design.css` defines `--touch: 48px` and no 44-47 px value exists anywhere in
-  // `frontend/src`, so a title promising 48 that asserted 44 admitted every control this
-  // milestone had to find: the number was the one thing the test could not be wrong about and
-  // was. The token is named in each message because a bare "44" in a failure sends the reader
-  // looking for a constant that is not there.
-  // [tq4-48px-rule-asserted-at-44-against-a-48px-token]
+  // `design.css`'s `--touch: 48px`.
   const nav = page.getByRole('navigation', { name: 'Surfaces' });
   for (const link of await nav.getByRole('link').all()) {
     const box = await link.boundingBox();
@@ -51,13 +44,7 @@ test('touch targets meet the 48 px rule on a phone', async ({ page, isMobile }) 
     expect(box.width, 'nav targets are at least --touch (48px) wide').toBeGreaterThanOrEqual(48);
   }
 
-  // §6.8's coarse-pointer rule reaches every interactive primitive, not only the nav — that
-  // was the whole finding: a 48 px rule that lives in one component is not a rule.
-  //
-  // BOTH dimensions here too, which the second half of this loop never asked for. `design.css`'s
-  // coarse block raises `min-height` and never `min-width`, so a control 48 px tall and 32 px
-  // wide satisfied every 48 px assertion the suite had; that is exactly the shape the two
-  // overlays' close buttons shipped in, and a height-only sweep is how they shipped.
+  // Both dimensions: `design.css`'s coarse block raises `min-height` and never `min-width`.
   for (const control of await page.getByRole('group', { name: 'Kind' }).getByRole('button').all()) {
     const box = await control.boundingBox();
     const name = (await control.textContent())?.trim();
@@ -73,24 +60,9 @@ test('the bottom bar sits inside the visible viewport, not the large one', async
 }) => {
   test.skip(!isMobile, 'the desktop rail is a column down the side and has no toolbar over it');
 
-  // §6 preamble: "phone-first (48 px targets, one-handed, swipe)". One-handed means the surface
-  // switcher is under the thumb, and on iOS Safari a shell sized to `100vh` puts it under the
-  // browser's own toolbar instead: `100vh` is the LARGE viewport (745 px on an iPhone 13) while
-  // 664 px are visible with the toolbar expanded, and because the document is then exactly the
-  // layout viewport nothing overflows, so Safari never collapses the toolbar and reveals it.
-  // Every member's first session happens in a tab, because §3.1 puts the install after the
-  // sign-in.
-  //
-  // WHAT THIS TEST IS, HONESTLY. Playwright's viewport IS the visible viewport by construction:
-  // there is no browser toolbar in it, so `100vh` and `100dvh` resolve to the same number here
-  // and a shell that dropped the `100dvh` line would still pass. That is precisely why
-  // `06-responsive` was green while the bar was covered on a real phone. The rule itself is
-  // asserted where it can be - at the source, by
-  // `test_static_contracts.py::test_the_shell_uses_the_dynamic_viewport` - and the device fact
-  // is owed as an unsigned check in `docs/TESTING.md` (decision 281). What this adds is the
-  // geometry that engine CAN see and that no assertion held: the bar is inside the viewport
-  // rather than below its fold, and it stays there when the surface behind it is scrolled,
-  // which is the half a fixed-position mistake would break here as well as on the phone.
+  // On iOS Safari `100vh` is the large viewport, under the toolbar. Playwright has no toolbar, so
+  // `100vh` and `100dvh` agree here: this holds only the geometry, at rest and scrolled
+  // (the device fact is a manual check in docs/TESTING.md, decision 281).
   const nav = page.getByRole('navigation', { name: 'Surfaces' });
   await expect(nav).toBeVisible();
 
@@ -105,9 +77,7 @@ test('the bottom bar sits inside the visible viewport, not the large one', async
 
   await measure('at rest');
 
-  // Scroll everything that can scroll. The shell is a column of its own height with the surface
-  // scrolling inside it, so the window may not move at all - which is the point: whichever one
-  // takes the gesture, the bar must not travel with it.
+  // Whichever element takes the gesture, the bar must not travel with it.
   await page.evaluate(() => {
     window.scrollTo(0, document.body.scrollHeight);
     for (const el of document.querySelectorAll('main, .shell, .body')) {
@@ -121,27 +91,11 @@ test('the header grows by the status-bar inset when one is reported', async ({
   page,
   browserName
 }) => {
-  // CDP, so Chromium only - the same shape `09-passkeys` uses for the virtual authenticator.
   test.skip(browserName !== 'chromium', 'Emulation.* is CDP, and WebKit has no CDP');
 
-  // §6 preamble: installable. `app.html` sets `viewport-fit=cover` and a translucent status bar,
-  // so the installed web view starts at the physical top edge and the header has to reserve
-  // `env(safe-area-inset-top)` in both its padding and its height (decision 279).
-  //
-  // THE PREMISE THIS TEST FALSIFIES. Three places in this repository said env() cannot be
-  // exercised in any engine the suite runs, so the rule was asserted at the source and nowhere
-  // else. It can be: Chromium exposes `Emulation.setSafeAreaInsetsOverride`, which overrides the
-  // values `env(safe-area-inset-*)` resolves to, and under it the two header rules COMPOSE - the
-  // padding, the height, the phone block's min-height and the cascade between them - which is
-  // the half a text guard cannot read. A `box-sizing` regression, a later `padding-top: 0`, a
-  // `min-height: unset`: none of those writes the literal the static sweep looks for, and all
-  // three are visible here.
-  //
-  // What it still does NOT measure, and why `docs/TESTING.md` keeps its owed device check
-  // unsigned: this is desktop Chromium with a number injected. There is no installed standalone
-  // web view, no real inset, no rotation, and no iOS WebKit. The ARITHMETIC is measured; the
-  // DEVICE FACT is not, and a green run here is not evidence for it (decisions 281, 284).
-  // [§6 preamble; decision 279; M4.15 review cycle 1: M415-C1-COV-02]
+  // Decision 279: the header reserves `env(safe-area-inset-top)` in its padding and its height.
+  // Chromium's `Emulation.setSafeAreaInsetsOverride` injects the inset: the arithmetic is
+  // measured here, not the device fact (decisions 281, 284).
   const header = page.locator('.shell > header');
   await expect(header).toBeVisible();
 
@@ -163,37 +117,17 @@ test('the header grows by the status-bar inset when one is reported', async ({
       'the status bar'
   ).toBe(INSET);
 
-  // The content, not only the box: the wordmark is the leftmost thing in that row, and the
-  // account chip beside it is a 32 px control centred in it.
   const brand = await page.locator('.shell > header .brand').boundingBox();
   expect(
     brand.y,
     'the header reserved the inset and drew its content inside it anyway'
   ).toBeGreaterThanOrEqual(INSET);
 
-  // AND THE HALF DECISION 279 IS ACTUALLY ABOUT, which this test claimed and did not measure.
-  // The inset is written in TWO places because M4.9 gave the phone header `height: auto` so four
-  // badges can wrap, which silently discards the base rule's `calc()` on exactly the form factor
-  // the inset exists for. Everything above runs at the project's 1400 px, where
-  // `@media (max-width: 720px)` is inert - so a `padding-top: 0` or a `min-height: unset` added
-  // to the phone block would pass here, and the static guard reads one property inside that block
-  // and would pass too. Same Chromium page, resized: no new test, no new project, and the
-  // override is what decides the box.
+  // And at phone width: the phone header's `height: auto` discards the base rule's `calc()`, so
+  // the inset is repeated there on min-height.
   await page.setViewportSize({ width: 390, height: 844 });
-  // Re-sent rather than assumed: `setViewportSize` issues its own device-metrics override, and
-  // whether that clears a safe-area override is not a contract Playwright states either way.
-  //
-  // And the BOTTOM inset with it, because the same instrument takes it and one line of CSS in the
-  // whole tree depends on it. `NavRail.svelte`'s phone block reserves
-  // `max(6px, env(safe-area-inset-bottom))`, and until this it was held by nothing at any layer:
-  // the static guard beside this test is scoped to `env(safe-area-inset-top)` by an explicit
-  // comment naming the bottom one as the near miss it must REJECT; the 48 px sweep measures link
-  // boxes, which a container's padding does not move; and `the bottom bar sits inside the visible
-  // viewport` asserts the nav's own box against innerHeight, which holds identically at 6 px and
-  // at 34. Delete the line and every iPhone in portrait draws the bottom 34 px of six primary
-  // targets under the home indicator with the whole gate green - the same failure as the header's,
-  // on the same component, in the same milestone's exclusive file.
-  // [§6 preamble; review cycle 3: M415-C3-E2E-02]
+  // Re-sent: whether `setViewportSize` clears a safe-area override is not a Playwright contract.
+  // With the bottom inset, which `NavRail.svelte`'s `env(safe-area-inset-bottom)` reserves.
   const BOTTOM = 34; // iPhone 13, portrait: the home indicator.
   await cdp.send('Emulation.setSafeAreaInsetsOverride', {
     insets: { top: INSET, bottom: BOTTOM }
@@ -228,8 +162,6 @@ test('the header grows by the status-bar inset when one is reported', async ({
         'under the home indicator on every iPhone in portrait'
     })
     .toBe(`${BOTTOM}px`);
-  // The content, not only the box: the six links are what a thumb aims at, and reserving the
-  // inset is only worth something if it lifts them out of it.
   const inner = await page.evaluate(() => window.innerHeight);
   const link = await bar.locator('a').last().boundingBox();
   expect(
@@ -239,8 +171,6 @@ test('the header grows by the status-bar inset when one is reported', async ({
 });
 
 test('the page never scrolls sideways', async ({ page }) => {
-  // Horizontal overflow on a phone is the classic responsive failure and is invisible in a
-  // screenshot taken at the top of the page.
   const overflow = await page.evaluate(
     () => document.documentElement.scrollWidth - document.documentElement.clientWidth
   );
@@ -248,10 +178,7 @@ test('the page never scrolls sideways', async ({ page }) => {
 });
 
 test('the document never scrolls under the shell', async ({ page }) => {
-  // `main` is the scroller. Home's absolutely placed mode marker escaped it - `main` is not a
-  // containing block - and sat at its static position below the fold, so the DOCUMENT scrolled
-  // too: a second scrollbar, a blank band under the tab bar, and with a classic scrollbar the few
-  // pixels of sideways scroll the second household test photographed (U11; decision 516).
+  // `main` is the scroller; an absolutely placed marker once escaped it (decision 516).
   await expect(page.getByTestId('home-mode')).toHaveCount(1);
   const overflow = await page.evaluate(() => ({
     down: document.documentElement.scrollHeight - document.documentElement.clientHeight,
@@ -265,9 +192,7 @@ test('a phone opens Home on the shelves, with the filters behind one control', a
   page,
   isMobile
 }) => {
-  // The first screen of Home was seven filter controls and the shelves began below the fold
-  // (second household test, U1; decision 516). The kind switch and the search stay; genre,
-  // decade, seen state and "in my library" wait behind Filters.
+  // Decision 516: the kind switch and search stay; the other filters wait behind Filters.
   test.skip(!isMobile, 'the fold is a phone measurement');
   await expect(page.getByRole('group', { name: 'Kind' })).toBeVisible();
   await expect(page.getByTestId('home-search')).toBeVisible();
@@ -276,8 +201,7 @@ test('a phone opens Home on the shelves, with the filters behind one control', a
   }
   const toggle = page.getByTestId('filter-toggle');
   await expect(toggle).toHaveAttribute('aria-expanded', 'false');
-  // The count line sits under two rows of controls with room for the shelves under it on the
-  // first screen: the bottom bar is 61 px, and a shelf's heading and the top of its row need more.
+  // Room for a shelf under the count line on the first screen, above the 61 px bottom bar.
   const count = await page.getByTestId('count-line').boundingBox();
   expect(count.y + count.height).toBeLessThan(page.viewportSize().height - 160);
   await toggle.click();
@@ -285,11 +209,8 @@ test('a phone opens Home on the shelves, with the filters behind one control', a
 });
 
 test('a long genre option does not widen the page', async ({ page }) => {
-  // The first household's Wikidata labels ran to 37 characters, and a native select is as wide
-  // as its longest option: at the phone's 16 px monospace the Genre control overflowed and Home
-  // scrolled sideways. Decision 473's vocabulary removed those labels; this puts one back to
-  // prove the row holds any option, the fixture's short names being why the sweep above passed.
-  // The control is in the Filters panel since decision 516.
+  // A native select is as wide as its longest option; the fixture's genres are all short, so
+  // this adds a long one.
   await page.getByTestId('filter-toggle').click();
   const genre = page.getByTestId('filter-genre');
   await expect(genre).toBeVisible();
@@ -322,16 +243,13 @@ test('on a phone every Rate control is on screen, and a battle keeps Tie and its
   page,
   isMobile
 }) => {
-  // §6 preamble: "phone-first (48 px targets, one-handed)", and §6.1's "persistent Undo" and
-  // decisive switch (decision 520). The household test found the control row scrolling sideways
-  // under a hidden scrollbar -- the Series toggle and Undo off the right edge -- and the battle
-  // card's Tie, toggle and Skip below the fold. [C5.6 of the 2026-09-25 household test]
+  // §6.1's "persistent Undo" and the decisive switch (decision 520) must be on the screen, not
+  // past a hidden scrollbar or below the fold.
   test.skip(!isMobile, 'the wrap and the fold are the phone layout');
   const config = await page.evaluate(() => fetch('/api/config').then((r) => r.json()));
   test.skip(!config.has_bundle, 'needs an imported bundle');
 
-  // A member of its own, with three films liked so a pair exists; the admin's queue is other
-  // specs' fixture (19-phone-shell reads the admin's sweep card).
+  // Three films liked so a pair exists. Not the admin: 19-phone-shell reads the admin's queue.
   await signInAsMember(page, await createMember(page, 'rate-phone'));
   await page.request.post('/api/rate/session', {
     data: { restart: true, mode: 'sweep', kinds: ['movie'] }
@@ -371,8 +289,7 @@ test('on a phone every Rate control is on screen, and a battle keeps Tie and its
 });
 
 test('the app is installable: a manifest, an icon, and a theme colour', async ({ page }) => {
-  // §6 preamble, and it is load-bearing: on iOS, Web Push works only for a PWA added to the
-  // home screen, so the manifest is not decoration.
+  // On iOS, Web Push works only for a PWA added to the home screen.
   const href = await page.locator('link[rel=manifest]').getAttribute('href');
   expect(href).toBeTruthy();
 
@@ -385,25 +302,8 @@ test('the app is installable: a manifest, an icon, and a theme colour', async ({
   expect(icon.ok(), 'the manifest must not point at a missing icon').toBeTruthy();
   await expect(page.locator('meta[name=theme-color]')).toHaveAttribute('content', '#0d0d0f');
 
-  // AND THE THREE METAS THIS MILESTONE ARGUES FROM, which nothing in this repository read.
-  // `app.html` is one of M4.15's six exclusive files and no static guard CAN see it:
-  // `_frontend_sources()` filters to .css/.js/.svelte, so the .html is outside every sweep by
-  // construction, and the only mentions of it anywhere in backend/tests or e2e are prose. They
-  // land on this test rather than on a new one because installability is what makes them matter,
-  // and this test already reads the live document on both projects.
-  //
-  // What was unheld: delete the twenty characters `, viewport-fit=cover` and the installed web
-  // view still starts at the physical top edge - that is what `black-translucent` does - while
-  // `env(safe-area-inset-top)` resolves to 0, so the header's padding and its `calc()` both
-  // collapse and the wordmark sits under the clock, which is decision 279's whole defect. Nothing
-  // would have gone red, the CDP test above least of all: `Emulation.setSafeAreaInsetsOverride`
-  // writes what `env()` resolves to, below the viewport-fit gate that produces it in production.
-  // Delete `apple-mobile-web-app-capable` and Add to Home Screen opens a Safari tab on iOS below
-  // 16.4, which retires three of the four owed device checks as unperformable while
-  // `manifest.display === 'standalone'` keeps the assertions above green. And the inverse is
-  // unheld too: `maximum-scale=1` would stop Safari's focus zoom the wrong way, satisfy the owed
-  // check by taking pinch zoom from everybody, and redden nothing.
-  // [§6 preamble; decisions 279, 281; review cycle 3: M415-C3-E2E-01]
+  // `app.html`'s metas, which no static guard reads. The CDP test above injects past the
+  // viewport-fit gate, so only this sees it removed.
   const metas = await page.evaluate(() =>
     Object.fromEntries([...document.querySelectorAll('meta[name]')].map((m) => [m.name, m.content]))
   );
@@ -430,7 +330,7 @@ test('the app is installable: a manifest, an icon, and a theme colour', async ({
 });
 
 test('fonts are self-hosted, not fetched from a third party', async ({ page }) => {
-  // The app has to render on the LAN and over Tailscale with no route to the internet.
+  // The app renders on the LAN and over Tailscale with no route to the internet.
   const external = await page.evaluate(() =>
     [...document.querySelectorAll('link[rel=stylesheet], link[rel=preload], link[rel=preconnect]')]
       .map((l) => l.href)

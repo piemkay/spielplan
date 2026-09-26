@@ -5,15 +5,8 @@ import { env } from './env.mjs';
 export const ADMIN = { name: 'e2e-admin', password: 'e2e-first-boot-pw' };
 
 /**
- * Read the app's own view of where it is in the first-boot sequence (§3.1).
- *
- * Every helper takes `page.request`, not the bare `request` fixture: the fixture is a separate
- * API context with no cookies, so it answers 401 for anything authenticated. `page.request`
- * shares the browser context, which is what the app actually sees.
- *
- * A caller with no session gets `{required, note}` and nothing else (sec-14: the full payload
- * fingerprints the install to anyone who can reach the origin), so read `required` rather than
- * `has_admin` — the same bit, and the only one present before anyone signs in.
+ * Helpers take `page.request`, not the bare `request` fixture, which has no cookies.
+ * Before sign-in the state carries only `{required, note}`, so read `required`.
  */
 export async function setupState(request) {
   const res = await request.get('/api/setup/state');
@@ -27,55 +20,35 @@ export async function health(request) {
   return res.json();
 }
 
-/** Create the admin through the wizard UI, as a first-booting operator would. */
 export async function createAdminThroughWizard(page, admin = ADMIN) {
   await page.goto('/setup');
   await expect(page.getByRole('heading', { name: 'Create the admin account' })).toBeVisible();
   await page.getByLabel('NAME').or(page.locator('input[type=text]').first()).fill(admin.name);
   await page.locator('input[type=password]').fill(admin.password);
   await page.getByRole('button', { name: 'Create admin' }).click();
-  // The operator now walks the rest of §3.1's sequence instead of being thrown off it. The shell
-  // used to bounce /setup to Home the instant the admin row existed, which made the last two
-  // steps unreachable; the guard now bounces only a caller who is not a signed-in admin, and the
-  // wizard ends at the bundle import (decision 164). Both remaining steps are skippable — a
-  // bundle-less app is a legal state — so this walks them and finishes.
+  // The remaining steps are skippable: a bundle-less app is a legal state.
   await expect(page.getByRole('heading', { name: 'Connectors' })).toBeVisible();
   await page.getByRole('button', { name: 'Continue' }).click();
   await expect(page.getByRole('heading', { name: 'Import the bundle' })).toBeVisible();
   await page.getByRole('button', { name: 'Finish' }).click();
-  // The wizard signs the new admin in and its last step lands on Home (§3.1).
   await expect(page.getByTestId('home-greeting')).toBeVisible();
 }
 
-// Landing on Home is the assertion, not the sentence Home happens to open with. These
-// waited on /Good (morning|afternoon|evening)/ until M2 moved the greeting server-side, where
-// proposal 22 gives it FOUR bands against §2's TZ — the fourth is "Up late". Every e2e run
-// between 00:00 and 05:00 Europe/Berlin would have timed out here, in a helper, with a failure
-// pointing at whichever spec happened to run first.
+// Asserts landing on Home, not the greeting's words, which change with the time of day.
 export async function login(page, admin = ADMIN) {
   await page.goto('/login');
   await page.locator('input[type=text]').first().fill(admin.name);
   await page.locator('input[type=password]').fill(admin.password);
-  // Not before /login has the layout it keeps. SvelteKit calls a route's loader twice - once to
-  // preload, once to load (`client.js`'s `load_route`, then `load_node`) - and Vite's preload helper
-  // awaits a CSS dependency on the first call only, so the form mounts on its JS alone. On the phone
-  // project that stylesheet then comes over a fresh WebKit connection, which pays libcurl's 200 ms
-  // IPv6 fallback (the stack publishes on 127.0.0.1 and `localhost` tries ::1 first), and until it
-  // lands the button sits unstyled, 81 px wide, 155 px above where it ends up. A click aimed at that
-  // box and delivered after the move lands in NAME and submits nothing: no POST in the trace, and
-  // `home-greeting` never comes (4 of 70 phone sign-ins measured). A stylesheet's `sheet` is null
-  // until it has loaded, so this waits on the condition itself; Playwright's `stable` check samples
-  // two frames and cannot see a stylesheet that is still on the wire. [M5.6 browser gate]
+  // The form can mount before its stylesheet on the phone, and the button then moves from under
+  // the click. Playwright's `stable` check cannot see a stylesheet still on the wire.
   await page.waitForFunction(() =>
     [...document.querySelectorAll('link[rel="stylesheet"]')].every((link) => link.sheet !== null)
   );
-  // `exact`, because M1 put "Sign in with a passkey" on the same page (§3.2 keeps password
-  // login always available alongside it) and a substring match now resolves to two buttons.
+  // `exact`: "Sign in with a passkey" is on the same page.
   await page.getByRole('button', { name: 'Sign in', exact: true }).click();
   await expect(page.getByTestId('home-greeting')).toBeVisible();
 }
 
-/** Ensure we are signed in, creating the admin on a first-boot app. */
 export async function signedIn(page, admin = ADMIN) {
   const state = await setupState(page.request);
   if (state.required) {
@@ -85,7 +58,6 @@ export async function signedIn(page, admin = ADMIN) {
   }
 }
 
-/** Run the §10 swap sequence through the Data tab: validate, then import. */
 export async function importBundle(page) {
   await page.goto('/admin/data');
   await expect(page.getByRole('heading', { name: 'Artifact bundle' })).toBeVisible();
@@ -94,31 +66,17 @@ export async function importBundle(page) {
   await expect(page.locator('.verdict')).toHaveText('valid');
 
   await page.getByRole('button', { name: 'Import and activate' }).click();
-  // The report re-renders with the load-stage notes once the import lands.
   await expect(page.locator('.finding', { hasText: 'artifacts staged to' })).toBeVisible();
 }
 
-/**
- * The account dropdown, opened.
- *
- * By the chip's own test id, not by `.chip`. That class is §6.8's small-pill shape and four
- * other components wear it — `RateUndo.svelte`, `ModelRail.svelte`'s filters,
- * `TitleDetail.svelte`'s facet chips and Rank's — so it was never a name for this control; it
- * merely happened to be unambiguous on Home, which is where every caller used to open the menu.
- * Opened on Rate it resolves to two elements and Playwright's strict mode refuses. Fixed here
- * because this file is the one seeding path (decision 186) and a spec with a private copy is
- * how the next surface re-learns this.
- */
+/** By test id: `.chip` is a shared pill class and is ambiguous off Home. */
 export async function openAccountMenu(page) {
   await page.getByTestId('account-chip').click();
   await expect(page.locator('.menu')).toBeVisible();
   return page.locator('.menu');
 }
 
-/**
- * Home's kind switch (decision 474, replacing decision 18's two toggles on Home): Films, Series
- * or Both - one position pressed, never none.
- */
+/** Home's kind switch (decision 474): Films, Series or Both, one position pressed. */
 export function kindToggle(page, label) {
   return page.getByRole('group', { name: 'Kind' }).getByRole('button', { name: label, exact: true });
 }
@@ -127,7 +85,6 @@ export async function kindIsOn(page, label) {
   return (await kindToggle(page, label).getAttribute('aria-pressed')) === 'true';
 }
 
-/** The switch position that shows exactly these kinds. */
 export function kindPosition(kinds) {
   return kinds.includes('Films') && kinds.includes('Series')
     ? 'Both'
@@ -137,42 +94,20 @@ export function kindPosition(kinds) {
 }
 
 /**
- * The fake Jellyfin from `ops/compose.e2e.yml`. Two addresses for one server, because the
- * backend and the test are in different networks: the app reaches it by service name, the test
- * reaches its published port.
- *
- * THE PUBLISHED PORT IS PER-CHECKOUT AND THE SERVICE NAME IS NOT, which is the whole of why
- * these two lines read differently. `ops/compose.e2e.yml` publishes the fake on
- * `${JELLYFIN_FAKE_PORT:-8096}` so two worktrees can hold a stack each; inside the compose
- * network it is `jellyfin-fake:8096` in both. A constant here is the same defect `e2e/env.mjs`
- * was extracted for, one address further on, and §7.3 is what it costs: `markPlayedInJellyfin`
- * set Played on the OTHER lane's fake, the app's own sweep then read a library in which nothing
- * had been played and adopted nothing, and `08-jellyfin.spec.js`'s "a flag set in jellyfin
- * arrives in the app" failed against a sweep that was reporting itself healthy and telling the
- * truth. Measured on the M4.12 gate: the fake on 8096 held `jf-1` played with no tokens and no
- * writes (the test process had reached it and the app never had), the fake on 8097 held the
- * member's token and no Played flag at all.
+ * The fake Jellyfin from `ops/compose.e2e.yml`. The app reaches it by service name, the same in
+ * every checkout; the test reaches its published port, which is per checkout.
  */
 export const JELLYFIN = {
-  // as the backend container sees it
   url: process.env.FAKE_JELLYFIN_URL ?? 'http://jellyfin-fake:8096',
-  // As this test process sees it — the PUBLISHED port, which `ops/compose.e2e.yml` parameterises
-  // as `${JELLYFIN_FAKE_PORT:-8096}` so a checkout per lane can hold a stack each. A constant
-  // here was the fourth address of that class and the only one that WROTE: M4.12's gate reset
-  // and played titles into the primary worktree's fake on 8096 while its own app read 8097, so
-  // the sweep truthfully reported a library in which nothing had been played. `url` above stays
-  // a constant on purpose — it is the compose network's service name, identical in every lane.
   control:
     process.env.FAKE_JELLYFIN_CONTROL ??
     `http://127.0.0.1:${env('JELLYFIN_FAKE_PORT') ?? '8096'}`,
   apiKey: process.env.FAKE_JELLYFIN_API_KEY ?? 'e2e-jellyfin-key',
   password: process.env.FAKE_JELLYFIN_PASSWORD ?? 'e2e-jellyfin-password',
-  // The fake's own users, fixed in ops/fake_jellyfin.py.
   user: { patrick: 'jf-user-patrick', jenny: 'jf-user-jenny' },
   item: { heat: 'jf-1', severance: 'jf-6' },
 };
 
-/** Reset the fake to a clean library: nothing played, no sessions, no tokens. */
 export async function resetJellyfin(request) {
   const res = await request.post(`${JELLYFIN.control}/_test/reset`);
   expect(res.ok(), 'the fake Jellyfin must be running — see ops/compose.e2e.yml').toBeTruthy();
@@ -184,7 +119,6 @@ export async function jellyfinState(request) {
   return res.json();
 }
 
-/** Simulate someone marking a title watched *in Jellyfin* — the other direction. */
 export async function markPlayedInJellyfin(request, itemId, played = true) {
   const res = await request.post(`${JELLYFIN.control}/_test/played`, {
     data: { user_id: JELLYFIN.user.patrick, item_id: itemId, played },
@@ -192,7 +126,6 @@ export async function markPlayedInJellyfin(request, itemId, played = true) {
   expect(res.ok()).toBeTruthy();
 }
 
-/** Put a session on the fake at a given fraction of the runtime. */
 export async function playInJellyfin(request, itemId, fraction = 0.96, sessionId = 'sess-e2e') {
   const res = await request.post(`${JELLYFIN.control}/_test/session`, {
     data: {
@@ -206,16 +139,8 @@ export async function playInJellyfin(request, itemId, fraction = 0.96, sessionId
 }
 
 /**
- * Open a title's detail panel from the catalog.
- *
- * Two details that are the difference between this working and this being a coin flip:
- *
- *  - the card is matched by NAME, not by position. The search box is debounced, so clicking
- *    `.card-wrap` first opens whatever the *unfiltered* grid happened to show — which is
- *    Paddington 2, because the catalog is ordered by year descending.
- *  - the kinds it needs go on. Home opens with Films only, so a series like Severance is not in
- *    the grid at all until the switch is on Series or Both (decision 474). A caller testing the
- *    partition itself passes `['Films']` to leave the default alone.
+ * Open a title's detail panel from the catalog. The card is matched by name, because the search
+ * is debounced; Home shows Films only, so pass `['Films']` to leave that default alone.
  */
 export async function openTitle(page, name, { ensureKinds = ['Films', 'Series'] } = {}) {
   await page.goto('/');
@@ -230,25 +155,9 @@ export async function openTitle(page, name, { ensureKinds = ['Films', 'Series'] 
 }
 
 /**
- * Create a household member and sign this page in as them. Spec v2.1 §6.6, §3.1.
- *
- * Lifted out of `13-rank.spec.js`, which had it first: §4.2's observations are append-only, so
- * a shared account cannot be rewound between runs and every spec that needs a ledger of its own
- * needs an account of its own. The sequence is §3.1's: a one-time password, a forced change,
- * then the member is usable.
- *
- * The route is §6.6's Users card, not the wizard's fourth step: decision 164 makes that card the
- * only place accounts are made, so seeding through it is the same path an operator walks.
- *
- * `reuse` gives a spec ONE account per (spec, project) instead of a fresh one on every run. The
- * names carried a timestamp and nothing ever removed the accounts, so a household box that has
- * run this suite a hundred times has a hundred members in §6.6's roster — and `reset.mjs` is not
- * always run before it. The account is looked up on the roster and its credential reissued
- * through §6.6's password reset, which is the only way back to a one-time password an admin may
- * hand over ("an admin never sees, sets or types a member's password", decision 166); creating
- * the same name twice is a 409 on `app_user_name_key`, not a second account. A caller that needs
- * a member with NO history — a first passkey, a first PIN — leaves it off and gets a new one.
- * [M4.8, finding 8]
+ * Create a household member. Observations are append-only (§4.2), so a spec needing a ledger of
+ * its own needs an account of its own. `reuse` keeps one account per label across runs by
+ * reissuing its one-time password; leave it off for a member with no history.
  */
 export async function createMember(page, label, { reuse = false } = {}) {
   const password = `${label}-e2e-password`;
@@ -278,26 +187,9 @@ export async function signInAsMember(page, member) {
     data: { current_password: member.otp, new_password: member.password }
   });
   expect(changed.ok(), 'setting a password unlocks the rest of the app').toBeTruthy();
-  // Sign in again with the password just set. The route answers 200 and sends no Set-Cookie -
-  // `destroy_other_sessions` keeps the caller's own row, and driving the same flow through the
-  // forced-change FORM leaves the browser signed in and on Home. But WebKit's APIRequestContext
-  // and the browser context diverge here: `page.request` stops sending the cookie the browser
-  // still holds, which left 13-rank and 14-tonight unauthenticated from this point on. Signing
-  // in again is what a member holding a password can always do (S3.2), and it is what makes the
-  // seeding that follows reach the app at all. 13-rank kept a PRIVATE copy of this pair that
-  // never got the re-login and was refused from here on; decision 186 deletes that copy, so the
-  // specs that import this file seed through one path. NOT the whole suite: `11-rate.spec.js`
-  // declares a third copy of the pair at :209-230 and decision 186's Cost paragraph keeps it
-  // deliberately — desktop-only, green, named by no finding — so a repair made here does not
-  // reach it, and this milestone's own `reuse` is the standing example of one that did not.
-  // [M4.8 review cycle 3: m48-c3-one-path-overclaim] [M4.10, decision 208] The paragraph above
-  // describes the route as it stood: it now rotates the session it was called on, so every
-  // session for the account ends - the caller's own included - and the response carries one
-  // fresh Set-Cookie (S3.2). A context still holding the pre-change id is therefore refused
-  // rather than silently signed in, and the id it should hold arrives on the change's own
-  // response. That makes the app's half well-defined; it is not a diagnosis of WebKit, whose
-  // two contexts diverging stays the harness's half, which is why the re-login below stays
-  // exactly where decision 186 put it.
+  // Sign in again: the change rotates the session, and WebKit's `page.request` then stops sending
+  // the browser's cookie. `11-rate.spec.js` keeps its own copy of this pair (decision 186), which
+  // a repair here does not reach.
   const back = await page.request.post('/api/auth/login', {
     data: { name: member.name, password: member.password }
   });
@@ -314,12 +206,8 @@ export async function loginAsMember(page, member) {
 }
 
 /**
- * Give this session's member a ledger, through §6.1's own routes.
- *
- * Films, not series: §6.2's pool for a film session is what Tonight needs, and it needs more
- * than three candidates or the round has no shortlist boundary to resolve (three titles ARE the
- * shortlist). `include_rewatches` then keeps the rated titles in the pool, since a verdict
- * implies `seen`.
+ * Give this session's member a film ledger through §6.1's routes: Tonight needs more than three
+ * candidates, or the round has no shortlist boundary.
  */
 export async function seedFilmLedger(page, rounds = 8) {
   await page.request.post('/api/rate/session', {
@@ -327,41 +215,19 @@ export async function seedFilmLedger(page, rounds = 8) {
   });
   for (let i = 0; i < rounds; i++) {
     const { card } = await (await page.request.get('/api/rate')).json();
-    // §6.1's drained state is the one legitimate way out of this loop, and `createMember`'s
-    // `reuse` is why it has to stay one: a re-run against a stack `reset.mjs` never touched gets
-    // the account this helper seeded last time, whose sweep pool it already spent.
+    // Drained is the one legitimate exit: a `reuse`d account may have spent its sweep already.
     if (!card) break;
-    // The other half of that condition was a second `break`, and it was the silent one. Sweep
-    // mode has no fallback to a battle — `card_type_for` answers "sweep" for every index and
-    // `ensure_card`'s substitution arm is guarded by `s.mode != "sweep"` — so a card of another
-    // type here is the route breaking §6.1's own contract, and the `break` reported that as an
-    // empty ledger nine lines below: the consequence, named instead of the cause. Loud, in the
-    // shape M4.8's finding 8 gave the write below. [§6.1, decision 200; M4.8 finding 8]
+    // Sweep mode never serves another card type; one here is the route breaking §6.1.
     expect(card.type, `a sweep session was served a ${card.type} card (§6.1)`).toBe('sweep');
     const answered = await page.request.post('/api/rate/verdict', {
       data: { card_token: card.token, value: i % 3 },
       failOnStatusCode: false
     });
-    // Loud, not silent — the rule `13-rank.spec.js` already states over its own seeding. The
-    // `break` this replaces turned a refused write into an empty ledger, and the caller then met
-    // `waitForPool`'s poll and failed 150 s later blaming the worker's fold-in tick for a seed
-    // that never happened. [M4.8, finding 8]
+    // Loud: a refused write must not surface later as an empty pool.
     expect(answered.ok(), `seeding a verdict (§6.1): ${answered.status()}`).toBeTruthy();
   }
-  // The state the caller needs, not the number of writes this run made: `createMember`'s `reuse`
-  // hands a re-run the account it seeded last time, whose sweep is already drained and which
-  // therefore legitimately answers nothing above.
-  //
-  // Read from §5.2's class-balance widget and no longer from §6.3's board. `class_balance`
-  // counts the LIVE labels (`rate/balance.py`: `FROM label l`), which are the same rows
-  // `foldin.live_labels` fits §6.2's pool from and the rows the verdict writes in its own
-  // transaction — so it is true the instant the loop ends, which is what an assertion made here
-  // has to be. The board is not: M4.10's finding 9 took the full MAP fit off the request path,
-  // so the first tap of all per (user, kind) queues it instead (see `waitForBoard`) and
-  // `ledger_state` — every row `GET /api/rank` reads — is still empty at this line. It answered
-  // `rated: 0` for a seed that had just written eight verdicts, under a message blaming the
-  // seed. A spec that needs the board waits for it; this one needs the ledger, and §6.2's pool
-  // is fitted from the labels rather than from the board. [§5.2, §6.2; M4.10 finding 9]
+  // The ledger's state, not this run's writes (a `reuse`d account wrote nothing). Read from the
+  // live labels, which the verdict writes; the board is fitted later by the worker.
   const seeded = await page.request.get('/api/rate');
   expect(seeded.ok(), 'reading the seeded ledger back (§6.1)').toBeTruthy();
   const rated = (await seeded.json()).class_balance.total;
@@ -372,36 +238,12 @@ export async function seedFilmLedger(page, rounds = 8) {
 }
 
 /**
- * Wait until §6.3's board holds this member's ratings.
- *
- * §6.3's board is "every **rated** title", and every row of it is read from `ledger_state`
- * (`rank/read.py`'s `items`) — which a verdict no longer writes. M4.10's finding 9 took the full
- * MAP fit off the request path: §5.3 budgets the incremental row at "<50 ms" and the full fit at
- * "seconds", and the fit was measured at 0.39 s over 300 titles and 33.4 s over 4000, on the
- * backend event loop, for an observation the caller had already committed. So a cache miss — and
- * the first tap of all per (user, kind) is one — stamps `ledger_cutpoints.refit_requested_at`
- * and returns, and the board a person has just rated into is empty until that fit runs.
- *
- * It runs in `worker.py`'s `tier-set-refit` job, `every=60` — decision 11's sweep, whose column
- * nothing reserved for tier-set changes. Which makes this the same shape as `waitForPool` below
- * and for the same kind of reason: a worker tick owns the write, so a spec that read the moment
- * its seeding returned would fail for a reason that has nothing to do with what it is testing.
+ * Wait until §6.3's board holds this member's ratings. A verdict only queues the full fit; the
+ * worker's `tier-set-refit` job (`every=60`) writes the board.
  */
 export async function waitForBoard(page, { kind = 'movie', atLeast = 1 } = {}) {
-  // Re-cut in M4.11, which is not this helper's milestone and owes the reason. The job this waits
-  // out is `tier-set-refit`, and M4.11 finding 17 is the one that changed what waiting on it means:
-  // `_tick` awaited each due job with nothing around it, so a wedged sweep took the loop offline
-  // permanently, and the repair gives every row a budget — `Job.timeout`, with `timeout=55` on
-  // `tier-set-refit` beside its own `every=60` (`worker.py`). An abandoned sweep now leaves its
-  // unprocessed rows owed and is re-armed by `RETRY_AFTER`, so "the worker is behind" became a
-  // TRANSIENT state where it used to be a permanent one — and a 120 s poll cannot tell a transient
-  // from a seed that queued nothing by looking at an empty board. Hence the split below.
-  //
-  // What the route says about the fit, kept across the poll so the failure can name WHICH of the
-  // states below it is. `fitting` is `ledger_cutpoints.refit_requested_at IS NOT NULL` on the wire
-  // (decision 209, `api/rank.py`), and it is the only thing that tells "the worker owes this
-  // account a fit" from "nothing ever asked for one" — which are opposite repairs and were both
-  // reported as "suspect the seeded ledger or a stopped worker".
+  // `fitting` (decision 209) tells "the worker owes a fit" from "nothing asked for one", which
+  // are opposite repairs; kept across the poll so the failure can say which.
   let owed = null;
   try {
     await expect
@@ -411,9 +253,6 @@ export async function waitForBoard(page, { kind = 'movie', atLeast = 1 } = {}) {
             failOnStatusCode: false
           });
           if (!res.ok()) {
-            // Recorded rather than swallowed: this arm returned 0 for a 401 or a 500 too, so a
-            // route that never answered read as a board that was never fitted, for 120 s, under a
-            // message about the worker.
             owed = `the route answered ${res.status()}`;
             return 0;
           }
@@ -422,11 +261,7 @@ export async function waitForBoard(page, { kind = 'movie', atLeast = 1 } = {}) {
           return payload.tiers.flatMap((tier) => tier.entries).length;
         },
         {
-          // Two ticks, counted the way `waitForPool` counts its own: the sweep is `every=60`, so a
-          // verdict written a moment after one tick waits out the rest of it and lands on the
-          // next, and 120 s is one whole missed tick plus a whole spare one. The fit itself fits
-          // inside the spare one at any fixture scale — finding 9's own measurement puts it at
-          // 0.39 s over 300 titles.
+          // Two 60 s ticks: one missed plus a spare.
           message:
             'no board after 120s: §6.3\'s board is every row of `ledger_state`, which a verdict ' +
             'no longer writes - it queues the full refit and the tier-set-refit sweep runs it ' +
@@ -437,10 +272,6 @@ export async function waitForBoard(page, { kind = 'movie', atLeast = 1 } = {}) {
       )
       .toBeGreaterThanOrEqual(atLeast);
   } catch (err) {
-    // The three states this can be, told apart rather than listed. A diagnostic that names the
-    // wrong suspects costs more than no diagnostic: it sends the next reader to the worker for a
-    // seed that never wrote an observation, and M4.9/M4.10's version of this message named a
-    // stopped worker and "the seeded ledger" and could not distinguish them.
     const why =
       owed === true
         ? 'a fit IS owed for this account (`fitting: true`), so the queue did its half and the ' +
@@ -461,12 +292,8 @@ export async function waitForBoard(page, { kind = 'movie', atLeast = 1 } = {}) {
 }
 
 /**
- * Wait until §5.1's per-user scores exist for this member.
- *
- * `user_score` is written by the worker's fold-in tick — `every=60` in `worker.py`, which is the
- * worker's own addition and not a row of §5.3's table, where the fold-in has a nightly cadence —
- * and not by the verdict, so a spec that opened a room the instant it finished rating would meet
- * §6.2's empty pool and fail for a reason that has nothing to do with what it is testing.
+ * Wait until §5.1's per-user scores exist for this member: the worker's 60 s tick writes them,
+ * not the verdict.
  */
 export async function waitForPool(page, { budget = 200 } = {}) {
   await expect
@@ -480,15 +307,7 @@ export async function waitForPool(page, { budget = 200 } = {}) {
         return ((await res.json()).picks ?? []).length;
       },
       {
-        // Two ticks, named as two ticks. The tick is `every=60` in
-        // `backend/spielplan/worker.py`, which says over the registration in as many words that
-        // it is not in §5.3's table — §5.3 gives the fold-in a nightly cadence, and the tick is
-        // the worker's addition for what a person sees within a sitting. So a verdict written a
-        // moment after one tick waits out the rest of it and lands on the next: 120 s is one
-        // whole missed tick plus a whole spare one. The old 150 s was a number with no
-        // arithmetic behind it, and a ceiling nobody can derive is a ceiling nobody can read a
-        // failure against — which is equally true of one derived from the wrong document, since
-        // §5.3 read on its own says nightly. [M4.8 review cycle 3: m48-c3-foldin-citation]
+        // Two 60 s ticks: one missed plus a spare.
         message:
           'no picks after 120s: the fold-in tick runs every 60 s (worker.py; §5.3 gives the ' +
           'fold-in a nightly cadence), so two ticks have passed - suspect the seeded ledger',
