@@ -61,9 +61,10 @@ import logging
 from dataclasses import dataclass
 
 import asyncpg
+import numpy as np
 
 from spielplan.home import rail
-from spielplan.ledger import observations
+from spielplan.ledger import model, observations
 from spielplan.rank import tiers
 
 log = logging.getLogger("spielplan.rank.drop")
@@ -136,12 +137,8 @@ async def _tiers_of(
     """
     rows = await conn.fetch(
         """
-        SELECT ls.title_id,
-               COALESCE(
-                   te.tier,
-                   (SELECT count(*) FROM unnest(c.boundaries) AS b WHERE b <= ls.s)
-               ) AS tier,
-               te.n_levels AS assigned_k
+        SELECT ls.title_id, te.tier AS assigned, te.n_levels AS assigned_k, lv.value AS verdict,
+               (SELECT count(*) FROM unnest(c.boundaries) AS b WHERE b <= ls.s) AS fitted
         FROM ledger_state ls
         LEFT JOIN ledger_cutpoints c ON c.user_id = ls.user_id AND c.kind = ls.kind
         LEFT JOIN (
@@ -149,18 +146,33 @@ async def _tiers_of(
             FROM tier_edit WHERE user_id = $1
             ORDER BY title_id, created_at DESC, id DESC
         ) te ON te.title_id = ls.title_id
+        LEFT JOIN (
+            SELECT DISTINCT ON (title_id) title_id, value
+            FROM verdict WHERE user_id = $1 AND NOT is_reask
+            ORDER BY title_id, created_at DESC, id DESC
+        ) lv ON lv.title_id = ls.title_id
         WHERE ls.user_id = $1 AND ls.observed AND ls.title_id = ANY($2::int[])
         """,
         user_id,
         [int(t) for t in title_ids],
     )
-    return {
-        int(r["title_id"]): observations.rescale_level(
-            int(r["tier"]), k_from=r["assigned_k"], k_to=levels
-        )
-        for r in rows
-        if r["tier"] is not None
-    }
+    out: dict[int, int] = {}
+    for r in rows:
+        if r["assigned"] is not None:
+            out[int(r["title_id"])] = observations.rescale_level(
+                int(r["assigned"]), k_from=r["assigned_k"], k_to=levels
+            )
+        elif r["fitted"] is not None:
+            # Decision 508's hold, as `board.build` applies it: a rated title with no drop renders
+            # inside the band its live verdict names, so a neighbour named off the board is found.
+            held, _reach = model.hold_to_verdict(
+                np.array([observations.rescale_level(int(r["fitted"]), k_from=None, k_to=levels)]),
+                np.array([-1]),
+                np.array([-1 if r["verdict"] is None else int(r["verdict"])]),
+                levels,
+            )
+            out[int(r["title_id"])] = int(held[0])
+    return out
 
 
 async def drop(

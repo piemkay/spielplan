@@ -68,7 +68,7 @@ const board = (over = {}) => ({
   rated_total: 40,
   fitting: false,
   queue_eligible: 1,
-  why: '40 rated · 4 compared · tiers follow a typical split until you place a title yourself',
+  why: '40 rated · 4 compared · liked from A up, fine in B, disliked from C down',
   filters: {},
   dna_tiers: null,
   ...over
@@ -276,6 +276,33 @@ describe('the board in the member register (decision 486)', () => {
     expect($('rank-letter-S').textContent).toBe('S');
     expect($('rank-tier-S').textContent).toContain('1');
     expect($('rank-tier-A').textContent).toContain('2');
+  });
+
+  it('filters by title as the person types, without waiting for Enter (round-2 R5)', async () => {
+    await open();
+    const box = $('rank-filter');
+    box.value = 'Taxi';
+    box.dispatchEvent(new Event('input', { bubbles: true }));
+    flushSync();
+    await new Promise((resolve) => setTimeout(resolve, 260));
+    await settle();
+    const reads = fetchMock.mock.calls.map(([url]) => url).filter((u) => u.includes('/api/rank?'));
+    expect(reads.at(-1)).toContain('q=Taxi');
+  });
+
+  it('names every picker above it, and the runtime box no longer clips its name (R5)', async () => {
+    await open();
+    for (const [testid, caption] of [
+      ['rank-genre', 'genre'],
+      ['rank-decade', 'decade'],
+      ['rank-runtime', 'max minutes'],
+      ['rank-seen', 'seen']
+    ]) {
+      const label = $(testid).closest('label');
+      expect(label, `${testid} has no label`).toBeTruthy();
+      expect(label.querySelector('.caption').textContent).toBe(caption);
+    }
+    expect($('rank-runtime').getAttribute('placeholder')).toBe('any');
   });
 
   it('claims for each filter box only what it searches, and names no DNA or model noun', async () => {

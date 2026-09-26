@@ -493,18 +493,21 @@ def test_the_why_line_speaks_the_member_register_and_keeps_decision_209s_window(
     cutpoints learn from `tier_edit` alone and nobody had moved a title, so they were the prior
     shape exactly; and the board moves on every answer (§6.3, "incremental immediately"). The
     line now says what is true of the board and nothing about the model's machinery - and decision
-    209's window keeps its own words, with no number and no duration."""
-    assert board.why_line(rated=0, compared=0, placed_by_you=0, fitting=True) == (
-        "tiers are still being fitted"
-    )
-    fresh = board.why_line(rated=59, compared=12, placed_by_you=0, fitting=False)
+    209's window keeps its own words, with no number and no duration.
+
+    Decision 508 gives the line what the letters mean, which the "typical split" it said before
+    was not: liked from A up, fine in B, disliked from C down."""
+    assert board.why_line(
+        rated=0, compared=0, placed_by_you=0, fitting=True, tier_set=TIER_SET
+    ) == "tiers are still being fitted"
+    fresh = board.why_line(rated=59, compared=12, placed_by_you=0, fitting=False, tier_set=TIER_SET)
     assert fresh == (
-        "59 rated · 12 compared · tiers follow a typical split until you place a title yourself"
+        "59 rated · 12 compared · liked from A up, fine in B, disliked from C down"
     )
-    moved = board.why_line(rated=59, compared=12, placed_by_you=3, fitting=True)
-    assert moved == "59 rated · 12 compared · 3 placed by you", (
-        "a refit owed over a board that already reads keeps its counts (decision 11's window)"
-    )
+    moved = board.why_line(rated=59, compared=12, placed_by_you=3, fitting=True, tier_set=TIER_SET)
+    assert moved == (
+        "59 rated · 12 compared · 3 placed by you · liked from A up, fine in B, disliked from C down"
+    ), "a refit owed over a board that already reads keeps its counts (decision 11's window)"
     for line in (fresh, moved):
         for noun in ("cutpoint", "refit", "learned", "ledger", "nightly", "overnight"):
             assert noun not in line, line
@@ -591,3 +594,39 @@ def test_no_out_of_range_assignment_can_take_the_board_down(assigned):
     entry = by_id(tiers)[1]
     assert 0 <= entry.tier < len(TIER_SET)
     assert entry.assigned_tier is not None and 0 <= entry.assigned_tier < len(TIER_SET)
+
+
+def test_a_rated_title_renders_inside_the_tiers_its_verdict_names():
+    """Round-2 finding R1 and decision 508: La La Land, disliked, rendered in A, between two films
+    the person called fine. The board holds a rated title inside its verdict's tiers - disliked in
+    F/D/C, fine in B, liked in A/A+/S - orders it by `s` inside them, and names as its straddle
+    the next tier toward where the fit put it, so the chip and the queue stay one predicate. A
+    title the person dropped is theirs to place, and the hold leaves it alone."""
+    cuts = model.initial_cutpoints(7)                     # C/B at -1.10, B/A at 0
+    rows = [
+        board.Item(title_id=1, name="La La Land", s=0.5, sigma=0.01, verdict=0),
+        board.Item(title_id=2, name="Psycho", s=0.4, sigma=0.01, verdict=1),
+        board.Item(title_id=3, name="Heat", s=-0.3, sigma=0.01, verdict=2),
+        board.Item(title_id=4, name="Twilight", s=-1.5, sigma=0.01, verdict=0),
+        board.Item(title_id=5, name="Saw", s=0.6, sigma=0.01, verdict=0, assigned_tier=5),
+    ]
+    tiers = {t.label: t for t in board.build(rows, cuts=cuts, tier_set=TIER_SET, hp=DEFAULTS)}
+    placed = {e.name: (label, e) for label, t in tiers.items() for e in t.entries}
+    assert placed["La La Land"][0] == "C" and placed["La La Land"][1].straddle == 3
+    assert placed["La La Land"][1].straddle_badge == "C/B"
+    assert [e.name for e in tiers["C"].entries] == ["La La Land", "Twilight"]
+    assert placed["Psycho"][0] == "B" and placed["Heat"][0] == "A"
+    assert placed["Saw"][0] == "A+" and placed["Saw"][1].model_tier == 4, "a drop is not held"
+    eligible = [i.title_id for i in rows if board.straddles(i, cuts=cuts, hp=DEFAULTS) is not None]
+    assert 1 in eligible, "the held title's chip and its queue eligibility are one predicate"
+
+
+def test_the_why_line_names_the_verdict_tiers_in_the_persons_own_letters():
+    """Decision 508's rule, spelled from whatever tier set the person saved (decision 11)."""
+    assert board.why_line(
+        rated=3, compared=0, placed_by_you=0, fitting=False, tier_set=("meh", "ok", "great")
+    ) == "3 rated · 0 compared · liked in great, fine in ok, disliked in meh"
+    five = ("1", "2", "3", "4", "5")
+    assert board.why_line(rated=3, compared=0, placed_by_you=0, fitting=False, tier_set=five) == (
+        "3 rated · 0 compared · liked from 4 up, fine in 2 to 3, disliked in 1"
+    )

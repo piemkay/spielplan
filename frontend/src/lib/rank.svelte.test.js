@@ -5,6 +5,7 @@ import {
   ROUND_SIZE,
   TAP_FOOTNOTE,
   TIER_THRESHOLD,
+  TYPING_PAUSE_MS,
   answer,
   apply,
   chipFor,
@@ -30,7 +31,8 @@ import {
   reset,
   roundLine,
   sharpenWhy,
-  tapTile
+  tapTile,
+  typed
 } from './rank.svelte.js';
 
 /**
@@ -94,7 +96,7 @@ const board = (over = {}) => ({
   rated: 3,
   rated_total: 3,
   queue_eligible: 1,
-  why: '3 rated · 0 compared · tiers follow a typical split until you place a title yourself',
+  why: '3 rated · 0 compared · liked from A up, fine in B, disliked from C down',
   filters: {},
   dna_tiers: null,
   ...over
@@ -377,6 +379,37 @@ describe('filters', () => {
     await clearFilters();
     expect(draft.dna).toBe('');
     expect(fetchMock.mock.calls[0][0]).not.toContain('dna=');
+  });
+
+  it('read the typed title after one pause, once for a burst of keystrokes (round-2 R5)', async () => {
+    vi.useFakeTimers();
+    try {
+      respond(board());
+      for (const text of ['T', 'Ta', 'Tax', 'Taxi']) {
+        draft.q = text;
+        typed();
+      }
+      vi.advanceTimersByTime(TYPING_PAUSE_MS - 1);
+      expect(fetchMock).not.toHaveBeenCalled();
+      vi.advanceTimersByTime(1);
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      expect(fetchMock.mock.calls[0][0]).toContain('q=Taxi');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('forget a read the last keystroke scheduled when the surface resets', () => {
+    vi.useFakeTimers();
+    try {
+      draft.q = 'Heat';
+      typed();
+      reset();
+      vi.advanceTimersByTime(TYPING_PAUSE_MS * 2);
+      expect(fetchMock).not.toHaveBeenCalled();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
 

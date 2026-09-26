@@ -12,7 +12,8 @@ FOUR THINGS, AND EACH ONE IS A SENTENCE OF THAT PARAGRAPH
 
   1. Equal-mass quantiles of *their own* fitted `s`, not the measured F3/D7/C15/B25/A25/A+17/S8
      shape: that shape is authored for K = 7 and means nothing at any other K. At K = 7 the
-     initialisation the *model* uses is still the measured one (`model.initial_cutpoints`) —
+     prior the *model* uses is still the measured one, anchored on the person's verdict
+     cutpoints since decision 508 (`model.cut_prior_mean`) —
      this is a re-initialisation of an existing board, which is a different question, and a
      board that already has an `s` distribution should be cut where that distribution is.
   2. A refit queued for that user alone. Recorded rather than run: §5.3 budgets a full MAP

@@ -1117,14 +1117,14 @@ async def test_the_why_line_counts_every_answer_and_claims_no_learned_cutpoints(
     """The board's why-line said "{n} rated · learned cutpoints, refit nightly" - proposal 81's
     wording, and false on the first household: nobody had moved a title, so the cutpoints were
     the prior exactly (they learn from `tier_edit` alone), and the board had been moving on every
-    answer. It now says how much the person has told the board and whether the tier lines are
-    still the typical split. The comparison count moves on a held-out answer as on any other -
-    a count that stood still one answer in ten would name the held-out one (M4.10 finding 16)."""
+    answer. It now says how much the person has told the board and what the letters mean
+    (decision 508). The comparison count moves on a held-out answer as on any other - a count
+    that stood still one answer in ten would name the held-out one (M4.10 finding 16)."""
     client, _user_id = ranked
     before = (await client.get("/api/rank?kind=movie")).json()
     n = before["rated_total"]
     assert before["why"] == (
-        f"{n} rated · 4 compared · tiers follow a typical split until you place a title yourself"
+        f"{n} rated · 4 compared · liked from A up, fine in B, disliked from C down"
     )
     for noun in ("cutpoint", "refit", "learned", "ledger"):
         assert noun not in before["why"], before["why"]
@@ -1138,7 +1138,7 @@ async def test_the_why_line_counts_every_answer_and_claims_no_learned_cutpoints(
 
     await client.post("/api/rank/drop?kind=movie", json={"title_id": 1, "tier": 6})
     placed = (await client.get("/api/rank?kind=movie")).json()["why"]
-    assert placed.endswith("· 1 placed by you"), placed
+    assert "· 1 placed by you ·" in placed, placed
 
 
 async def test_the_recent_window_reads_neither_battles_nor_the_held_out_stream(db, ranked):

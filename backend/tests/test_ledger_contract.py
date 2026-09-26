@@ -271,3 +271,23 @@ def test_the_search_never_applies_a_step_it_rejected(fits):
         assert f.objective <= at_start + 1e-9, (
             "the fit must never be worse than the point it started from"
         )
+
+
+def test_a_verdict_band_that_closes_is_walked_to_rather_than_overflowed():
+    """The search's log-gap step cap (`model.MAX_LOG_GAP_STEP`). At decision 509's tau one board
+    of this very population - 41 titles, 355 random duels, almost no fine verdicts - closes its
+    verdict band to 0.0013, where the log gap is nearly flat: the preconditioned step along it
+    was 3e9, `_from_raw` clipped it to e^30, every step the line search may try overflowed, and
+    the fit stopped at iteration 139 of 200, 7 above its optimum. Capped, the same direction is
+    walked at a length the exponential can take, and the fit reaches the optimum."""
+    rng = np.random.default_rng(20260830)
+    obs = [board(rng) for _ in range(26)][25]
+    budget = dataclasses.replace(DEFAULTS, steps=2000)
+    walked = model.fit(obs, budget)
+    assert walked.converged, (walked.iterations, walked.grad_inf)
+    assert walked.gamma[1] - walked.gamma[0] > 1.0, "the band reopened where its data puts it"
+
+    default = model.fit(obs, DEFAULTS)
+    assert default.iterations[1] == DEFAULTS.steps, (
+        "the search stopped before its budget, which is the stall and not a slow walk"
+    )

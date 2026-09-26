@@ -1080,11 +1080,10 @@ async def test_a_refit_over_an_empty_observation_set_empties_the_board_it_cannot
     The tier SET survives, because decision 11 makes it a preference; the BOUNDARIES go back to
     the prior, which is the only thing left to say once the labels that moved them are gone.
 
-    TIER EDITS as well as verdicts, and they are not decoration: §5.2's cut-points are fitted by
-    the TIER arm alone, so a fit with verdicts only leaves them exactly at `initial_cutpoints(K)` --
-    the prior is the optimum when the arm has no data -- and the boundary half of this test would
-    then be asserting that an unchanged vector is unchanged. Measured: with five verdicts the
-    fitted boundaries sit within 1e-15 of the prior; the five edits below move them.
+    TIER EDITS as well as verdicts, and they are not decoration: with no tier edit §5.2's cut-points
+    sit exactly on their prior mean -- since decision 508 the shape anchored on the verdict
+    cutpoints -- so the edits are what make the fitted boundaries plainly not the prior the empty
+    fit falls back to, and the boundary half of this test more than an unchanged vector.
     """
     await _import(db, tmp_path / "b1", tmp_path / "artifacts")
     user_id = await _user(db)

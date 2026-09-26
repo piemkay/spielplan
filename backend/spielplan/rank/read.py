@@ -102,7 +102,7 @@ async def items(
     rows = await conn.fetch(
         f"""
         SELECT ls.title_id, t.name, ls.s, COALESCE(ls.sigma_eff, ls.sigma) AS sigma,
-               te.tier AS assigned_tier, te.n_levels AS assigned_k,
+               te.tier AS assigned_tier, te.n_levels AS assigned_k, lv.value AS verdict,
                -- The K the drop is being READ against, in the same round trip as the drop: a
                -- rescale that depends on a second call is a rescale a caller can forget, and this
                -- file already argues (see `Cutpoints.refit_owed`) that a board read does not get a
@@ -120,6 +120,14 @@ async def items(
             WHERE user_id = {user}
             ORDER BY title_id, created_at DESC, id DESC
         ) te ON te.title_id = ls.title_id
+        -- The live verdict, which holds the model tier inside its band (decision 508). The same
+        -- reading as `observations.LIVE_LABEL_SQL`: the latest non-re-ask row per title.
+        LEFT JOIN (
+            SELECT DISTINCT ON (title_id) title_id, value
+            FROM verdict
+            WHERE user_id = {user} AND NOT is_reask
+            ORDER BY title_id, created_at DESC, id DESC
+        ) lv ON lv.title_id = ls.title_id
         WHERE ls.user_id = {user} AND ls.kind = ${len(args) + 2} AND ls.observed
           AND {where}
         ORDER BY ls.s DESC, ls.title_id
@@ -149,6 +157,7 @@ async def items(
                     k_to=int(r["tier_set_k"] or len(DEFAULT_TIER_SET)),
                 )
             ),
+            verdict=None if r["verdict"] is None else int(r["verdict"]),
         )
         for r in rows
     ]

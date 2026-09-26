@@ -548,6 +548,32 @@ test.describe('rank', () => {
     await expect(page.locator('[data-kind="series"]')).toHaveAttribute('aria-pressed', 'false');
   });
 
+  test('the title box filters as it is typed in, and every picker says what it picks', async () => {
+    // Round-2 finding R5: Rank's box waited for Enter while Home's is live, the pickers read
+    // "1990s" with nothing saying it was a decade, and "max minutes" clipped to "max minute".
+    await openRank(page);
+    const first = board(page).locator('[data-title]').first();
+    const name =
+      (await first.locator('[data-testid^="rank-open-"] .name').textContent())?.trim() ?? '';
+    expect(name, 'the seeded board has a title to look for').not.toBe('');
+    const read = page.waitForResponse(
+      (res) => res.url().includes('/api/rank?') && res.url().includes('q=')
+    );
+    await page.getByTestId('rank-filter').pressSequentially(name.slice(0, 6));
+    await read;
+    await expect(board(page).locator('[data-title]').first()).toBeVisible();
+    for (const [id, caption] of [
+      ['rank-genre', 'genre'],
+      ['rank-decade', 'decade'],
+      ['rank-runtime', 'max minutes'],
+      ['rank-seen', 'seen']
+    ]) {
+      await expect(page.locator('label', { has: page.getByTestId(id) })).toContainText(caption);
+    }
+    await page.getByTestId('rank-filter').fill('');
+    await page.waitForResponse((res) => res.url().includes('/api/rank?'));
+  });
+
   test('every control on the board meets the 48 px touch floor', async ({}, testInfo) => {
     // §6 preamble: "responsive PWA, phone-first (48 px targets, one-handed, swipe)". The review
     // found nine controls at 32-36 px because a scoped rule outranks design.css's global

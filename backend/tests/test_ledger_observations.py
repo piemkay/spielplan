@@ -1264,9 +1264,10 @@ async def test_a_fit_in_another_coordinate_geometry_is_refused_and_owed_to_the_t
     await refit.refit_user(
         db, user_id=user, kind="movie", hp=DEFAULTS, embeddings=fixture_embeddings
     )
+    # Decision 508 widens the Ledger's stamp to the scale its tiers are read on as well.
     assert await db.fetchval(
         "SELECT geometry FROM ledger_fit WHERE user_id = $1 AND kind = 'movie'", user
-    ) == bb.COORDINATE_GEOMETRY
+    ) == refit.LEDGER_GEOMETRY
     assert await refit.load_cache(db, user_id=user, kind="movie", hp=DEFAULTS, lock=False)
     assert (user, "movie") not in [(u, k) for u, k, _ in await refit.refreshes_owed(db)]
 
@@ -1349,7 +1350,8 @@ async def test_one_verdict_on_an_off_scale_coordinate_does_not_decide_the_board(
         bundle_version=BUNDLE,
     )
     read = await board()
-    assert max(sp for _s, sp in read.values()) < 2.0, read
+    # On one scale: tau (decision 509's 2.0) plus a bounded (mu, v) part, against 44 read raw.
+    assert max(sp for _s, sp in read.values()) < 1.5 * DEFAULTS.b_i_tau, read
     assert read[9][1] < 1.5 * min(sp for _s, sp in read.values()), read
     assert max(read, key=lambda t: read[t][0]) == 1, (
         f"the title that won every duel is not first: {sorted(read, key=lambda t: -read[t][0])}"

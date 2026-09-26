@@ -12119,11 +12119,12 @@ id = "tonight-rank-copy-in-the-member-register"
 spec = "§6.8 (\"a one-line why\") + §6.3 + decision 11 + decision 209; decision 486"
 milestone = "M5"
 kind = "integration"
-what = "Every sentence the Rank surface shows a member is true and plain: the board's why-line counts what the person has rated and compared (held-out answers included) and says the tiers follow a typical split until they place a title themselves, never 'learned cutpoints, refit nightly', and keeps decision 209's 'still being fitted' in its window; the tension chip says 'your other answers still point to C', not 'the ledger'; the tier-set warning keeps decision 11's two facts without 'cutpoints' or 'refit'; the footnote says how to use the board and claims no write; the title filter claims only titles and the tag filter says 'tag'; the DNA tiers read 'quoted' and 'inferred'; and none of it names a model noun or a spec reference."
+what = "Every sentence the Rank surface shows a member is true and plain: the board's why-line counts what the person has rated and compared (held-out answers included) and says what the letters mean in the person's own labels - liked from A up, fine in B, disliked from C down on the default set - never 'learned cutpoints, refit nightly', and keeps decision 209's 'still being fitted' in its window; the tension chip says 'your other answers still point to C', not 'the ledger'; the tier-set warning keeps decision 11's two facts without 'cutpoints' or 'refit'; the footnote says how to use the board and claims no write; the title filter claims only titles and the tag filter says 'tag'; the DNA tiers read 'quoted' and 'inferred'; and none of it names a model noun or a spec reference."
 why = "Decision 486's member register (owner instruction of 2026-09-25): 'learned cutpoints, refit nightly' was false while nobody had moved a title, the footnote promised duels a phone tap never writes, and 'filter - title or DNA term, e.g. cosy' sent people typing a tag into a box that searches names only (M4.9 finding 19's lie, on this surface)."
 tests = [
     "backend/tests/test_rank_board.py::test_the_why_line_speaks_the_member_register_and_keeps_decision_209s_window",
     "backend/tests/test_rank_routes.py::test_the_why_line_counts_every_answer_and_claims_no_learned_cutpoints",
+    "backend/tests/test_rank_board.py::test_the_why_line_names_the_verdict_tiers_in_the_persons_own_letters",
     "backend/tests/test_rank_board.py::test_a_tension_badge_names_both_tiers",
     "backend/tests/test_rank_routes.py::test_the_tier_set_route_round_trips_and_warns",
     "e2e/specs/13-rank.spec.js::the board carries its tiers, a why-line and the standing footnote",
@@ -12344,4 +12345,69 @@ tests = [
     "frontend/src/lib/art.test.js::remembers a preload that found no image, so the card it was for draws no <img>",
     "frontend/src/lib/components/posters.svelte.test.js::is not drawn as an <img> by the next card for the same title",
     "backend/tests/test_art_poster.py::test_the_page_remembers_a_404_no_longer_than_the_shortest_one_it_is_sent",
+]
+
+# The second household user test (owner instruction of 2026-09-26): the tier board contradicted
+# what the person said, picks did not move it, and the card's guess disagreed with Home's letter.
+# Filed at M5 as the first wave's rows were; the spec fields cite sections until the round's
+# decisions are recorded.
+[[requirement]]
+id = "data-rules-the-tier-shape-sits-on-the-verdict-scale"
+spec = "§5.2 (\"3-class verdicts | ordered logit, free per-user cutpoints\"; the tier arm's cutpoints \"**are** the displayed tier boundaries\") + §6.3 (\"learned cutpoints, not percentile cuts\"; initialised from the measured quantile shape, \"then learned\")"
+milestone = "M5"
+kind = "integration"
+what = "The tier arm's prior mean is realised on the verdict arm's scale: the measured shape's C/B and B/A cuts sit on the person's own disliked/fine and fine/liked cutpoints, the other cuts keep the shape's logistic distance from the nearer one, and at the verdict prior it is exactly the old shape for every tier set from 2 to 12 levels; so with no tier edit disliked renders in F/D/C, fine in B and liked in A/A+/S, a rated title is held inside its verdict's tiers wherever the fit leaves its s (its chip then naming the next tier toward s, one predicate with queue eligibility), a dropped title is not held, the stored tier and the drop's neighbour check read the same hold, and a fit stamped before the change is refused and handed to the 60 s tick."
+why = "On the second household's boards La La Land (disliked) sat in A between two films called fine, every film Jenny disliked sat in B, fine films split across B and A, and C, D and F stayed empty: the shape was realised on a standard logistic scale no person's s spreads on (M3-open-points 2.8), with its B/A cut in the middle of the fine band."
+tests = [
+    "backend/tests/test_ledger_model.py::test_the_tier_prior_is_the_old_shape_at_the_verdict_prior_for_every_tier_set",
+    "backend/tests/test_ledger_model.py::test_with_no_tier_edit_the_c_b_and_b_a_boundaries_are_the_verdict_cutpoints",
+    "backend/tests/test_ledger_model.py::test_the_coupled_cutpoint_prior_has_the_curvature_it_claims",
+    "backend/tests/test_ledger_model.py::test_each_verdict_names_the_tiers_it_renders_in",
+    "backend/tests/test_ledger_model.py::test_a_rated_title_is_held_inside_its_verdicts_tiers_and_reaches_toward_its_s",
+    "backend/tests/test_ledger_model.py::test_the_live_verdict_is_the_last_one_and_a_drop_holds_nothing",
+    "backend/tests/test_ledger_model.py::test_the_second_households_three_complaints_do_not_happen_on_a_board_like_theirs",
+    "backend/tests/test_rank_board.py::test_a_rated_title_renders_inside_the_tiers_its_verdict_names",
+    "backend/tests/test_rank_verdict_scale.py::test_a_film_the_taste_vector_loves_and_the_person_disliked_sits_in_a_disliked_tier",
+    "backend/tests/test_rank_verdict_scale.py::test_a_title_its_verdict_holds_is_a_neighbour_where_the_board_shows_it",
+    "backend/tests/test_rank_verdict_scale.py::test_a_board_fitted_on_the_old_tier_scale_is_refitted_by_the_tick",
+]
+
+[[requirement]]
+id = "data-rules-a-pick-moves-the-winner-up"
+spec = "§5.2 (\"Per-title residuals `b_i^u` capture direct effects\"; the Davidson duel arm) + §4.3 (\"b_i prior τ (or its CV grid)\") + §6.3 (\"The model refits (incremental immediately, exact nightly)\")"
+milestone = "M5"
+kind = "integration"
+what = "The residual prior's scale is 2.0, so the person's own answers outweigh the taste vector on their own titles: one hesitant pick in the comparison queue lifts the winner above the title it beat on the incremental path a sitting is shown, two films called about the same and rated alike share a tier, and a board whose verdict band closes on the way to its optimum is walked to it rather than stalled by an overflowing step."
+why = "Patrick picked A Good Day to Die Hard over Black Widow and then over Justice League and it stayed below both; replayed through the incremental path, the two sittings honoured 10 of 13 and 11 of 15 answers at a residual scale of 1.0, which had no measurement behind it."
+tests = [
+    "backend/tests/test_rank_verdict_scale.py::test_a_pick_in_the_queue_lifts_the_winner_over_the_title_it_beat",
+    "backend/tests/test_ledger_model.py::test_the_second_households_three_complaints_do_not_happen_on_a_board_like_theirs",
+    "backend/tests/test_ledger_contract.py::test_a_verdict_band_that_closes_is_walked_to_rather_than_overflowed",
+]
+
+[[requirement]]
+id = "rate-the-reveal-reads-the-letter-home-shows"
+spec = "§6.1 (\"Prediction reveal strictly *after* the tap\"; \"we'd have guessed {class}\") + §5.2 (free per-user verdict cutpoints) + §6.0 (the shelf card's tier badge)"
+milestone = "M5"
+kind = "integration"
+what = "The reveal's guessed class is the verdict class the title's tier letter stands for, read off the stored row where there is one and off the cached fit's cuts where there is not, so the title card's guess and the letter on Home can never name different classes; and a title nobody has rated wears its guessed class's middle tier (C, B or A on the default set) rather than a grade inside it, which only the person's own answers can give."
+why = "Jenny's Amelie wore A on Home while the title card said \"We'd have guessed fine\": the badge read the tier cutpoints and the reveal banded the cdf by the person's label shares, two readings of one title. And nearly every guess letter on Patrick's Home was A+, so the letters carried no information."
+tests = [
+    "backend/tests/test_rank_verdict_scale.py::test_the_guess_on_the_card_is_the_class_the_letter_on_home_stands_for",
+    "backend/tests/test_ledger_model.py::test_an_unrated_title_is_guessed_a_class_and_not_a_grade",
+]
+
+[[requirement]]
+id = "tonight-rank-filters-are-live-and-labelled"
+spec = "§6.3 (\"**Filters:** genre ..., kind ..., decade, runtime, seen-state, DNA facet/term predicates\") + §6 preamble (\"responsive PWA, phone-first\")"
+milestone = "M5"
+kind = "e2e"
+what = "Rank's title box filters as the person types after the pause Home's search waits, once for a burst of keystrokes and never after the surface resets; each picker wears its name above it, and the runtime box's name is a caption rather than a placeholder that clips."
+why = "The second household typed a title into Rank and saw nothing happen until Enter, while Home's box is live; the dropdowns read '1990s' with nothing saying it was a decade, and 'max minutes' clipped to 'max minute'."
+tests = [
+    "frontend/src/lib/rank.svelte.test.js::read the typed title after one pause, once for a burst of keystrokes (round-2 R5)",
+    "frontend/src/lib/rank.svelte.test.js::forget a read the last keystroke scheduled when the surface resets",
+    "frontend/src/routes/rank/rank-page.test.js::filters by title as the person types, without waiting for Enter (round-2 R5)",
+    "frontend/src/routes/rank/rank-page.test.js::names every picker above it, and the runtime box no longer clips its name (R5)",
+    "e2e/specs/13-rank.spec.js::the title box filters as it is typed in, and every picker says what it picks",
 ]

@@ -882,7 +882,7 @@ async def _predicted_coordinate(
     kind: str,
     hp: Hyperparams,
     embeddings: EmbeddingSource | None,
-) -> tuple[float, float] | None:
+) -> tuple[float, float, int, int] | None:
     """§5.2's zero-parameter prediction for a title with no `ledger_state` row of its own.
 
     §5.2 gives an unobserved title a coordinate at no extra parameters — it has no residual, so
@@ -919,7 +919,9 @@ async def _predicted_coordinate(
         # The same refusal `refit` makes of a non-finite update: say nothing rather than band a
         # number that is not one.
         return None
-    return s, cdf
+    # The tier this title would render in, against the same cuts a stored row is written with, so
+    # the guess below is read off the letter Home shows (decision 510).
+    return s, cdf, int(model.tier_of(np.asarray([s]), cache.cuts)[0]), cache.n_levels
 
 
 async def predicted_class(
@@ -936,13 +938,11 @@ async def predicted_class(
     Reading it after the row lands would make "we'd have guessed the same" trivially true: the
     incremental update touches exactly this title.
 
-    The band is the person's own. §5.2: the displayed 0..1 weight "is the **empirical CDF of
-    the user's own fitted `s` values, computed per kind**", and their own three-class habit
-    says where the cuts on that axis fall — a labeller who calls 20% of what they watch
-    disliked has their disliked band at the bottom 20% of their own ranking. So the prediction
-    uses two quantities that already exist (`ledger_state.cdf` and the live verdict counts) and
-    invents no threshold of its own. Before the first fit there is no CDF, and the reveal says
-    so rather than banding a number it does not have.
+    The band is the person's own: the class the title's tier stands for, and the tiers sit on the
+    verdict arm's own fitted cutpoints (decisions 508 and 510, as proposal 153 asked). So the
+    prediction invents no threshold of its own and cannot disagree with the letter the title
+    wears elsewhere. Before the first fit there is nothing to read, and the reveal says so rather
+    than banding a number it does not have.
 
     The stored row first, the cached fit second: `ledger_state` is where the nightly job and the
     incremental update leave the numbers every other surface reads, and an unowned queue title
@@ -950,11 +950,14 @@ async def predicted_class(
     `load_cache` compares it: a cache built under other constants is wrong, not stale.
     """
     row = await conn.fetchrow(
-        "SELECT s, sigma, cdf, tier FROM ledger_state WHERE user_id = $1 AND title_id = $2",
+        "SELECT ls.s, ls.sigma, ls.cdf, ls.tier, "
+        "       (SELECT cardinality(c.tier_set) FROM ledger_cutpoints c "
+        "         WHERE c.user_id = ls.user_id AND c.kind = ls.kind) AS k "
+        "  FROM ledger_state ls WHERE ls.user_id = $1 AND ls.title_id = $2",
         user_id,
         title_id,
     )
-    if row is None or row["cdf"] is None:
+    if row is None or row["cdf"] is None or row["tier"] is None:
         coordinate = await _predicted_coordinate(
             conn, user_id=user_id, title_id=title_id, kind=kind, hp=hp, embeddings=embeddings
         )
@@ -962,9 +965,11 @@ async def predicted_class(
             # Decision 486: "fitted ranking" and "labels" are the model's nouns; the member is
             # told what they can do about it.
             return {"available": False, "reason": NO_GUESS_YET}
-        predicted_s, predicted_cdf = coordinate
+        predicted_s, predicted_cdf, predicted_tier, levels = coordinate
     else:
         predicted_s, predicted_cdf = float(row["s"]), float(row["cdf"])
+        predicted_tier = int(row["tier"])
+        levels = int(row["k"] or len(observations.DEFAULT_TIER_SET))
     counts = [0, 0, 0]
     for label in await conn.fetch(
         """
@@ -983,9 +988,12 @@ async def predicted_class(
         return {"available": False, "reason": NO_GUESS_YET}
 
     cdf = predicted_cdf
-    low = counts[0] / total
-    high = (counts[0] + counts[1]) / total
-    guess = 0 if cdf < low else (1 if cdf < high else 2)
+    # Decision 510: the guess is the class the tier letter stands for (decision 508 puts disliked
+    # in F/D/C, fine in B and liked in A/A+/S, on the person's own fitted cutpoints), so the card's
+    # "we'd have guessed" and the badge on Home are one reading of one number. It used to band the
+    # cdf by the person's label shares, a second reading that told Jenny "we'd have guessed fine"
+    # about Amelie under an A badge.
+    guess = model.verdict_class_of_tier(predicted_tier, levels)
     return {
         "available": True,
         "predicted": guess,
