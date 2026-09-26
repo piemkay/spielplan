@@ -1,35 +1,7 @@
-"""The session's life: opening a room, seating people, and the open-rooms list.
+"""The session's life: opening a room, seating people, and the open-rooms list (§6.2 steps 1-2).
 
-Spec v2.1 §6.2 steps 1 and 2, §4.2, §11; §12's M4 row ("lobby + open-rooms discovery").
-
-    "**2. Join channels, all equivalent:** push to members' phones (best-effort, §6 preamble);
-     **room code / QR** in the lobby; a live in-app lobby banner over the WebSocket; the
-     **open-rooms list** — active sessions are visible to every household device ('MX-2210 ·
-     hosted by Mia · 3 min ago · Film · 60 min · skips seen') with tappable empty seats.
-     **Guests use the initiator's phone after the initiator finishes** (hand-the-phone,
-     sequential turns)."
-
-The quotation is three channels and not four because decision 165 struck the fourth from the
-sentence itself (spec:249): a quotation that kept it would be quoting a line the spec no
-longer has, which is the one way a docstring can be wrong about the spec it cites.
-
-"ALL EQUIVALENT" IS A CLAIM ABOUT WHAT A JOIN PRODUCES, not a list of affordances. Every
-channel lands in `join`, and `join` is idempotent per member: a person who arrives by code and
-then taps the same room in the open-rooms list re-attaches to the seat they already have. Two
-seats for one member would change the participant count that every average, every tally and
-§13's approval share are computed over — silently, and in the direction that makes a household
-look bigger than it is. The schema holds the line too (0013's partial unique index), so the
-rule survives a caller that forgets it.
-
-THE GUEST SEAT IS NOT AN ACCOUNT. §4.2: "user_id NULL — NULL = guest slot on the host phone".
-Guests are seats with no user, seated at open time by count, and they take their turns after
-the initiator on the initiator's device. `seat` carries the order.
-
-THE ROOM CODE IS THE CHANNEL THAT STILL WORKS. §6 preamble makes push best-effort and the
-WebSocket needs the app open; the code needs neither, and §11 hands it to a Home Assistant
-dashboard. It is unique among *live* rooms — two live rooms sharing a code walks a household
-member into the wrong evening — and reusable afterwards, because a code is a handle on a room
-and not a permanent name.
+`join` is idempotent per member, so every channel is "equivalent". Guests are seats with no user
+(§4.2). A room code is unique among live rooms only.
 """
 
 from __future__ import annotations
@@ -47,15 +19,12 @@ from spielplan.tonight.pool import MAX_VETOES, VETOES, Seat
 
 log = logging.getLogger("spielplan.tonight.rooms")
 
-# §6.2's own example is `MX-2210`. Two letters, a dash, four digits — read aloud across a room
-# and typed on a phone, so I and O and 0 and 1 are out: a code nobody can dictate is not a
-# channel that works when push does not.
+# §6.2's example is `MX-2210`; no I, O, 0 or 1, so a code can be dictated across a room.
 CODE_LETTERS = "".join(c for c in string.ascii_uppercase if c not in "IO")
 CODE_DIGITS = "23456789"
 CODE_LENGTH = 4
 
-# §6.2 step 1: "members and/or N guests". Guests share one phone and take turns in sequence, so
-# the cap is a fact about an evening rather than about the schema.
+# §6.2 step 1: "members and/or N guests"; guests share one phone in turn.
 MAX_GUESTS = 6
 
 STATE_OPEN = "open"
@@ -89,17 +58,8 @@ async def _open_with_code(
 ) -> tuple[int, str]:
     """Insert the session under a code no live room holds, and return both.
 
-    The check and the insert are one loop rather than two steps. 0013's partial unique index is
-    what actually keeps two live rooms from sharing a code — the check only keeps the common
-    case off it — and between a check that passed and an insert that follows, another device can
-    take the code. Two people tapping "Together" at the same moment is the ordinary event in a
-    household, not the rare one, and the cost of not catching it here is the main control of the
-    surface answering with the name of a database index — `app.py` maps a lost uniqueness race to
-    409 `conflict: session_room_code_live` — where §6.8's register wants a room. The retry is the
-    same answer `sync/playback.py` gives a lost race.
-
-    Bounded, then a plain failure: an unbounded loop on a 32^2 * 8^4 space that is somehow
-    exhausted is a hang rather than an error.
+    Retries on a lost uniqueness race (0013's partial index) instead of answering with its name;
+    bounded, so an exhausted space fails rather than hangs.
     """
     for _ in range(20):
         code = make_code(rng)
@@ -109,10 +69,7 @@ async def _open_with_code(
         if taken:
             continue
         try:
-            # A savepoint, not a bare statement: a UniqueViolationError aborts the transaction
-            # it lands in, so a caller that wrapped this loop in one would find the retry itself
-            # refused. `conn.transaction()` is a savepoint when nested and a real transaction
-            # when not, which is the same line for both callers.
+            # A savepoint: a UniqueViolationError aborts the transaction it lands in.
             async with conn.transaction():
                 session_id = await conn.fetchval(insert, code, *args)
         except asyncpg.UniqueViolationError:
@@ -132,20 +89,12 @@ async def open_session(
     guests: int = 0,
     rng: random.Random | None = None,
 ) -> dict[str, Any]:
-    """Open a room. The host takes seat 1; guest seats follow, in turn order.
-
-    Guests are seated at open time rather than as they arrive, because they do not arrive — the
-    host says how many are on the sofa. Their seats exist from the start so the lobby can show
-    them and the round can refuse to open a guest's turn early (§6.2 step 2's sequential
-    hand-off).
-    """
+    """Open a room. The host takes seat 1; guest seats, counted by the host, follow in turn order."""
     if guests < 0 or guests > MAX_GUESTS:
         raise RoomError("guest_count", f"between 0 and {MAX_GUESTS} guests")
     rng = rng or random.SystemRandom()
 
-    # One transaction, because the room, its seats and the abandonment below are one fact. Every
-    # statement here used to stand alone, which was survivable while none of them took anything
-    # away — and stopped being survivable when the abandon arrived.
+    # One transaction: the room, its seats and the abandonment below are one fact.
     async with conn.transaction():
         session_id, code = await _open_with_code(
             conn,
@@ -169,20 +118,8 @@ async def open_session(
                 session_id, ROLE_GUEST, 2 + i,
             )
 
-        # 0013 admits `abandoned` and only a result ever ended a room, so one opened and drifted
-        # away from stayed live forever: on §6.2 step 2's list for every household device with
-        # an age that only grows, and still holding the host's seat, so every later visit to the
-        # surface restored them into a room nobody was in. A host cannot be hosting two rooms
-        # nobody has started, and the second tap is the one moment that intent is unambiguous —
-        # so it is read here rather than by adding a control the spec does not name. Only `open`
-        # rooms: a round in progress is people answering on their own devices, and 54e's reveal
-        # waits for every seat.
-        #
-        # LAST, and not first. Allocating a code can fail after twenty collisions, and every
-        # insert above can fail; done first, any of those left the host's previous evening
-        # abandoned and no new room in its place — a tap on "Together" that answers 409 and
-        # takes the room they were in. `id <> $1` because the room just made is the host's and
-        # is `open`, so it would otherwise abandon itself.
+        # Abandon the host's other unstarted rooms, which otherwise stay live forever. Last, so a
+        # failed open never costs the room the host was in; `id <> $4` spares the new one.
         await conn.execute(
             "UPDATE session SET state = $1, ended_at = now() "
             "WHERE host_user_id = $2 AND state = $3 AND ended_at IS NULL AND id <> $4",
@@ -206,33 +143,10 @@ async def resolve_code(conn: asyncpg.Connection, room_code: str) -> int:
 async def join(conn: asyncpg.Connection, *, session_id: int, user_id: int) -> dict[str, Any]:
     """Seat a member. Idempotent — this is what "all equivalent" means.
 
-    A member who is already seated gets their existing seat back, whichever channel they used.
-    The alternative is a second seat, which changes the participant count every average and
-    §13's approval share are computed over, in the direction that makes a household look bigger
-    than it is.
-
-    THE SESSION'S STATE IS READ INSIDE THE LOOP, AND THE RULE IS A PROPERTY OF THE INSERT. The
-    read used to sit above the loop and the INSERT carried no predicate, so "anyone who joins
-    before you start is in" was decided from a row that was already minutes old by the time the
-    statement ran — and `play.start` took tens of seconds to build its pool, which is exactly how
-    long the window was. The seat that landed in it had no entry in the frozen `scores` map, and
-    from there nothing could end the round or close the room. [M4.12 finding 5]
-
-    `FOR SHARE` IS WHAT MAKES THE TWO STATEMENTS SERIALISE, and the predicate alone does not.
-    `play.start` claims the room in its first statement and holds that claim in a transaction for
-    the whole pool build, so an ordinary MVCC read here still sees `open` and seats the member
-    anyway (measured: the insert succeeds mid-claim). The share lock waits for that transaction
-    instead and then re-evaluates: refused once the claim commits, admitted if it rolled back —
-    and a join that takes the lock first makes `start`'s own UPDATE wait, so its `seats_of` sees
-    this seat. One statement's worth of lock on one row, which is the cost of not needing either
-    side to be lucky.
+    The state is a predicate of the INSERT, with `FOR SHARE` so a join serialises against
+    `play.start`'s claim: refused once it commits, admitted if it rolls back.
     """
-    # Read, decide, insert — and everything between those is another device doing the same
-    # thing. The code, the banner and the open-rooms row are "all equivalent", and two of them
-    # are one tap apart on the same screen, so arriving twice AT ONCE is as ordinary as arriving
-    # twice in a row. 0013's two indexes are what actually keep one member to one seat and one
-    # seat to one member; losing the race made them do it by raising into the route, and the
-    # person was told the join had failed on a room they were by then in. Re-read and try again.
+    # Two channels one tap apart race each other: on a unique violation, re-read and retry.
     for _ in range(5):
         row = await conn.fetchrow(
             "SELECT state, ended_at FROM session WHERE id = $1", session_id
@@ -250,11 +164,7 @@ async def join(conn: asyncpg.Connection, *, session_id: int, user_id: int) -> di
                     "role": existing["role"], "created": False}
 
         if row["state"] != STATE_OPEN:
-            # §6.2 says nothing about when joining closes, so the smallest rule that keeps a
-            # round coherent: once the pairs are being served, the participant set the pool was
-            # built for is fixed. A late arrival joins the next session. Checked here as well as
-            # in the statement below because this is where the reason gets its sentence — the
-            # INSERT can only return nothing.
+            # Once pairs are served the participant set is fixed; the INSERT re-checks this.
             raise RoomError("started", "that room has already started")
 
         seat = await conn.fetchval(
@@ -272,8 +182,7 @@ async def join(conn: asyncpg.Connection, *, session_id: int, user_id: int) -> di
         except asyncpg.UniqueViolationError:
             continue
         if participant_id is None:
-            # The room moved while this statement waited on it, which is the one outcome the
-            # stale read above could not produce.
+            # The room moved while the statement waited on it.
             raise RoomError("started", "that room has already started")
         return {"participant_id": participant_id, "seat": seat, "role": ROLE_MEMBER,
                 "created": True}
@@ -281,12 +190,7 @@ async def join(conn: asyncpg.Connection, *, session_id: int, user_id: int) -> di
 
 
 async def seats_of(conn: asyncpg.Connection, session_id: int) -> list[Seat]:
-    """The session's seats, as the pool needs them.
-
-    `is_member` is the taste question (§6.2 step 3: "Guests contribute no taste term unless they
-    have a grid profile"), so it is `role <> 'guest'` today and will be `role <> 'guest' OR has
-    a grid profile` when M7 ships the grid.
-    """
+    """The session's seats; `is_member` is `role <> 'guest'` until M7's grid (§6.2 step 3)."""
     rows = await conn.fetch(
         "SELECT id, user_id, role FROM session_participant WHERE session_id = $1 ORDER BY seat",
         session_id,
@@ -298,12 +202,7 @@ async def seats_of(conn: asyncpg.Connection, session_id: int) -> list[Seat]:
 
 
 async def lobby(conn: asyncpg.Connection, session_id: int) -> dict[str, Any]:
-    """Everything the lobby screen renders — which, since decision 165, is every surface that
-    renders a room at all.
-
-    Deliberately carries no candidate, no pool and no ranking: §6.2 step 3's pool is "internal —
-    never shown as a step", and the lobby is the screen most likely to leak it.
-    """
+    """Everything the lobby screen renders; no candidate, pool or ranking (§6.2 step 3)."""
     row = await conn.fetchrow(
         """
         SELECT s.id, s.room_code, s.state, s.kind, s.runtime_budget_min, s.include_rewatches,
@@ -337,10 +236,7 @@ async def lobby(conn: asyncpg.Connection, session_id: int) -> dict[str, Any]:
         "include_rewatches": row["include_rewatches"],
         "started_at": row["started_at"],
         "host": {"user_id": row["host_user_id"], "name": row["host_name"]},
-        # §6.2 step 1's "not tonight" control (decision 480): what the room has vetoed, and the
-        # fixed list it may choose from, by label. Controls of the room rather than facts about
-        # the pool, so they sit beside the budget and carry no candidate. `vetoes` is the union
-        # the pool will exclude; each seat below carries its own (decision 505).
+        # §6.2 step 1's "not tonight" control: the union the pool excludes (decisions 480, 505).
         "vetoes": _vetoes_payload(
             vetoes_of({"vetoes": row["vetoes"], "vetoes_by": row["vetoes_by"]})
         ),
@@ -351,14 +247,12 @@ async def lobby(conn: asyncpg.Connection, session_id: int) -> dict[str, Any]:
                 "seat": p["seat"],
                 "role": p["role"],
                 "user_id": p["user_id"],
-                # A guest is "Guest 1" and not a person's name: §4.2 gives them no account, and
-                # inventing one on screen is how a guest ends up looking like a member.
+                # A guest has no account (§4.2), so no invented name.
                 "name": p["name"] or f"Guest {p['seat'] - 1}",
                 "avatar": p["avatar"],
                 "answered_count": p["answered_count"],
                 "ended_by": p["ended_by"],
-                # What this member ruled out, so each phone can show its own chips and name whose
-                # the others are (decision 505).
+                # This member's own vetoes (decision 505).
                 "vetoes": _vetoes_payload(by_seat.get(p["id"], [])),
             }
             for p in people
@@ -367,13 +261,7 @@ async def lobby(conn: asyncpg.Connection, session_id: int) -> dict[str, Any]:
 
 
 async def open_rooms(conn: asyncpg.Connection, *, viewer_id: int) -> list[dict[str, Any]]:
-    """§6.2 step 2's open-rooms list: "active sessions are visible to **every household
-    device**".
-
-    Every live room, not only the viewer's own — that is the whole feature. The row carries the
-    six facets the spec's example string names, plus whether this viewer already has a seat, so
-    the client can render "tappable empty seats" without a second round trip.
-    """
+    """§6.2 step 2's open-rooms list: every live room, visible to every household device."""
     rows = await conn.fetch(
         """
         SELECT s.id, s.room_code, s.state, s.kind, s.runtime_budget_min, s.include_rewatches,
@@ -403,11 +291,9 @@ async def open_rooms(conn: asyncpg.Connection, *, viewer_id: int) -> list[dict[s
             "skips_seen": not r["include_rewatches"],
             "seated": int(r["seated"]),
             "viewer_seated": bool(r["viewer_seated"]),
-            # A room that has started is still listed — the household can see the evening is
-            # happening — but its seat is not tappable. Hiding it would be a worse lie.
+            # A started room is listed but not joinable.
             "joinable": r["state"] == STATE_OPEN and not r["viewer_seated"],
-            # Shown on the row so somebody deciding whether to join knows what tonight has
-            # already ruled out (decision 480): the union, whoever ruled it out (decision 505).
+            # What tonight has already ruled out, whoever ruled it out (decisions 480, 505).
             "vetoes": _vetoes_payload(
                 vetoes_of({"vetoes": r["vetoes"], "vetoes_by": r["vetoes_by"]})
             ),
@@ -417,16 +303,14 @@ async def open_rooms(conn: asyncpg.Connection, *, viewer_id: int) -> list[dict[s
 
 
 def _decoded(value: Any, empty: Any) -> Any:
-    """A jsonb value in either shape it reaches here in — decoded by `db/pool.py`'s codec, or a
-    string where a connection has none."""
+    """A jsonb value decoded by `db/pool.py`'s codec, or a raw string where there is none."""
     if isinstance(value, str):
         value = json.loads(value)
     return value if value else empty
 
 
 def vetoes_by_seat(context: Any) -> dict[int, list[str]]:
-    """Each seated member's own veto keys, by participant id (decision 505): known keys only and in
-    `VETOES` order, and a seat with none is absent rather than listed empty."""
+    """Each seated member's own known veto keys, by participant id; a seat with none is absent."""
     ctx = _decoded(context, {})
     out: dict[int, list[str]] = {}
     for seat, keys in _decoded(ctx.get("vetoes_by"), {}).items():
@@ -437,18 +321,9 @@ def vetoes_by_seat(context: Any) -> dict[int, list[str]]:
 
 
 def vetoes_of(context: Any) -> list[str]:
-    """The veto keys the room's pool excludes, known keys only and in `VETOES` order.
+    """The veto keys the room's pool excludes: the union of every seat's own (decision 505).
 
-    THE UNION OF EVERY SEAT'S OWN (decision 505). Decision 480 kept one set per room, replaced on
-    each change, and on the second household evening the first member to tap took all three slots:
-    Patrick found "sexual violence" greyed out and could add nothing. Each member now holds up to
-    three, and a title any of them ruled out is out for everyone, because a veto is a person saying
-    what they will not watch tonight and a room that averaged it away would not be one. The
-    room-wide `vetoes` a room opened before decision 505 wrote is still read, so an evening in
-    flight across the deploy keeps what it ruled out.
-
-    Tolerant of a key a later build retired, which simply stops vetoing anything rather than
-    failing the room.
+    A pre-505 room-wide `vetoes` is still read; a retired key stops vetoing rather than failing.
     """
     ctx = _decoded(context, {})
     union = set(_decoded(ctx.get("vetoes"), []))
@@ -464,19 +339,10 @@ def _vetoes_payload(keys: Sequence[str]) -> list[dict[str, str]]:
 async def set_vetoes(
     conn: asyncpg.Connection, *, session_id: int, user_id: int, keys: Sequence[str]
 ) -> list[str]:
-    """Replace THIS member's "not tonight" vetoes. §6.2 step 1 as decisions 480 and 505 amend it.
+    """Replace THIS member's "not tonight" vetoes (decisions 480, 505): any seat, before Start.
 
-    ANY SEATED MEMBER, and only before Start. The first household evening's member who wanted
-    "nothing violent" was not the host, so a host-only control would have left her exactly where
-    she was; and the pool is built once at Start and frozen (§6.2 step 6, "nothing re-ranks"), so
-    a veto after that would be a promise the evening cannot keep. The state predicate is in the
-    UPDATE for `join`'s reason: a veto racing the host's Start either lands before the claim or is
-    refused, never written into a room whose pool is already built without it.
-
-    UP TO THREE EACH, keyed by the member's seat, and the pool excludes the union (`vetoes_of`).
-    One statement merges this seat's list into `vetoes_by` and leaves every other seat's alone, so
-    two phones tapping at once cannot overwrite each other: under READ COMMITTED the second UPDATE
-    waits for the first and re-evaluates its SET against the row the first committed.
+    One statement merges this seat's list into `vetoes_by`, so two phones cannot overwrite each
+    other, and its state predicate refuses a veto racing Start.
     """
     unknown = sorted(set(keys) - set(VETOES))
     if unknown:
@@ -514,33 +380,9 @@ async def set_state(conn: asyncpg.Connection, session_id: int, state: str) -> No
 
 
 async def end_session(conn: asyncpg.Connection, session_id: int) -> None:
-    """The host closes the evening. §6.2 step 2's open-rooms list; §14 risk 6; decision 169.
+    """The host closes the evening, started or not (decision 169). Abandoned, never deleted.
 
-    NOTHING COULD END A ROOM THAT HAD STARTED. `open_session`'s abandon clause above takes rooms in
-    state `open` only, and it says why: a round in progress is people answering on their own phones,
-    and 54e's reveal waits for every seat. There is no Tonight job in `worker.py`'s registry either.
-    So a room that reached `voting` and lost a seat — a phone that never came back, a seat the
-    frozen snapshot had no scores for — was live for ever: on §6.2 step 2's list for every
-    household device with an age that only grows, still holding each member's seat so every later
-    visit to the surface restored them into it, and unfinishable. Recovery was SQL against
-    `session`. Decision 169 ships the control in the same diff as `play.settle`, and the two are one
-    lifecycle: `settle` moves a room whose seats have all ended, and this is what the host taps when
-    they never will. Not a 6 h idle sweep — that is M4.7's worker registry if it is built at all,
-    and a household that wants its evening back wants it now.
-
-    ABANDONED, NEVER DELETED. §14 risk 6 reads `session_answer`, `session_participant.ended_by` and
-    `session_outcome` for the rates it asks for, and the evenings a household cut short are exactly
-    the evenings those rates are about. 0013's `session_ended_states` CHECK already ties `ended_at`
-    to this state, so `set_state` is the whole write and no migration is owed.
-
-    THE ROW IS TAKEN `FOR UPDATE` AND THE REFUSAL IS WHAT KEEPS A RESOLVED EVENING RESOLVED. Two
-    taps on End, or an End from a lobby whose room has since reached its reveal, would otherwise
-    rewrite `state` over `resolved` and leave `session_outcome` hanging off a room recorded as
-    abandoned. The lock is M4.10's idiom (`api/deps.py`'s `write_txn`) at a second seam, and it buys
-    one more thing: `play.start` claims the session row in its first statement and holds it for the
-    whole pool build, so an End arriving mid-claim waits and then ends the started room rather than
-    racing the claim over the same row. Any live room, whatever it is doing — a host who taps End
-    on a room nobody started is saying the same thing as one who taps it on a round.
+    `FOR UPDATE` and the `ended_at` refusal keep a resolved evening resolved.
     """
     async with conn.transaction():
         live = await conn.fetchval(
@@ -554,9 +396,7 @@ async def end_session(conn: asyncpg.Connection, session_id: int) -> None:
 async def members_to_invite(
     conn: asyncpg.Connection, *, session_id: int, host_user_id: int
 ) -> Sequence[int]:
-    """Who §6.2 step 2's push invitation goes to: every household member who is not the host
-    and not already seated. Admin and member alike — §3.1 makes admin "full product, plus
-    admin", not a different kind of household."""
+    """Who §6.2 step 2's push goes to: every active member not the host and not seated."""
     rows = await conn.fetch(
         """
         SELECT u.id FROM app_user u
@@ -579,24 +419,8 @@ async def invite(
 ) -> None:
     """§6.2 step 2's push to members' phones. Never fatal, by construction.
 
-    THE SENDER IS AN ARGUMENT. It used to be imported inside a closure in `api/tonight.py`, which
-    made "who is invited" and "what the invitation says" observable only through the ASGI app and
-    a push transport — two rules about an evening, testable only with a web-push stack standing
-    up. The callable is also what lets the route hand the whole dispatch to a background task
-    with a connection of its own (arch-06, finding 42). `api/tonight.py` still resolves the
-    import, because a household whose SECRETS_KEY is unset (§3.1's half-configured boot) must be
-    able to open a room and be joined by code, and that is the route's question rather than this
-    module's.
-
-    `tag` and `url` are the two fields the service worker cannot invent (syncpush-10). A tag is a
-    replacement key, and with none set every notification the household received took the
-    worker's default and overwrote the previous one whatever it was: a §6.2 invitation silently
-    replaced an unread §7.3 finish prompt, on the phone, where the banner fallback is not the
-    thing the member is looking at. Keying it on the session makes two rooms two notifications
-    and a re-announced room one. `url` is where a tap lands, and §6.2 step 2's answer to an
-    invitation is the lobby, not Home — the room's own join link, so the tap seats the member in
-    THIS room rather than at the two doors with a code to type (decision 481). The service
-    worker stays a dumb renderer and keeps its default for a sender that sets neither.
+    `tag` keys the notification on the session so it replaces nothing else; `url` is the room's
+    own join link (decision 481).
     """
     invited = await members_to_invite(
         conn, session_id=session_id, host_user_id=host_user_id
@@ -610,16 +434,7 @@ async def invite(
                  "tag": f"tonight:{session_id}", "url": f"/tonight?room={room_code}"},
             )
         except Exception:
-            # Best-effort, per member: §6's preamble guarantees an in-app equivalent for every
-            # push, and the room code and the open-rooms list are both already live. One
-            # member's unreachable phone is not the next member's problem, which is why the
-            # try sits inside the loop.
-            #
-            # WARNING with the traceback, not INFO with a sentence. This was logged at INFO
-            # saying only that a delivery had not happened, so a real sender bug — a malformed
-            # payload, an expired VAPID key, a TypeError in the encryption path — looked exactly
-            # like a phone that was off, at a level nothing in §7.3's operator story reads.
-            # [M4.12 finding 42]
+            # Best-effort per member (§6 preamble); WARNING with traceback, so a sender bug shows.
             log.warning(
                 "push invitation to user %s was not delivered", user_id, exc_info=True
             )

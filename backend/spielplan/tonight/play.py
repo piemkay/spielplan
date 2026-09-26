@@ -1,29 +1,7 @@
-"""The round's write path: start, serve, answer, retract, escape, finish.
+"""The round's write path: start, serve, answer, retract, escape, finish (§6.2 steps 3-6).
 
-Spec v2.1 §6.2 steps 3-6 (rewritten, 54b-54e), §4.2, §6 preamble, §13, §14 risk 6.
-
-THE POOL IS SNAPSHOT AT START, AND THAT IS THE IMPLEMENTATION OF ONE OF §6.2's RULES. Step 6:
-"Votes *choose*; nothing re-ranks within the evening by predicted enjoyment (measured: worth
-0.000)." A pool rebuilt on every request would re-rank silently the moment the nightly fit ran
-mid-evening, or the moment somebody marked a title seen in the other room. So `start` computes
-the pool once, with its DNA and its axes, and writes it into `session.context`; every read
-afterwards is of that snapshot. The rule stops being a thing to remember and becomes a thing
-the data does.
-
-EVERY ANSWER NAMES A SEALED PAIR, NEVER TWO TITLE IDS. Same reason `api/rank.py` seals a queue
-pair: 54b/§13 make `selection` a discriminator the *evaluation* depends on, and a route that
-accepted `{"title_a": 4, "title_b": 9, "selection": "adaptive"}` would let the client decide
-which stream its answer belonged to. The seal carries the participant, the sequence number and
-the arm, and it is single-use per LIVE ANSWER COUNT because that is what it carries — answering
-moves the counter, so a replay is a stale card and gets a 409, while an undo lowers the counter and
-re-opens that seq with the card it already issued (`_round_of` seals the draw, decision 223).
-§13's figures count *rows*, and §4.2's tables are append-only, so a replay that landed would weight
-one judgement N-fold in the data admitted to evaluate the round, and could not be taken back.
-
-BLIND BY CONSTRUCTION, IN THE QUERY. 54c: "Someone who finishes early sees the others'
-**progress and never their answers**." `progress()` selects counts and never titles, so the
-blind property is a fact about what the statement can return rather than a decision the UI
-makes — "the payload cannot carry the answers, not that the UI declines to draw them".
+The pool is snapshot at start, so nothing re-ranks within the evening. Every answer names a sealed
+pair, so the client cannot choose its stream (§13). `progress()` selects counts, never titles.
 """
 
 from __future__ import annotations
@@ -48,8 +26,7 @@ from spielplan.tonight import rooms
 from spielplan.tonight import round as round_rules
 from spielplan.tonight import tilt as tilt_rules
 
-# The namespace half of `finish`'s advisory lock. Two ints rather than one so a session
-# id can never collide with another feature's lock on the same number.
+# Advisory-lock namespace for `finish`; two ints so a session id cannot collide with other locks.
 _FINISH_LOCK = 6202
 
 
@@ -61,29 +38,18 @@ class RoundError(Exception):
 
 @dataclass(frozen=True)
 class Snapshot:
-    """The frozen evening: which titles, what each seat scores them, their DNA, the axes.
-
-    Everything the round and the combine need, and nothing that changes while the evening runs.
-    """
+    """The frozen evening: which titles, what each seat scores them, their DNA, the axes."""
 
     candidates: dict[int, dict[str, Any]]
     scores: dict[int, dict[int, float]]      # title_id -> {participant_id: §5.1 score}
     dna: dict[int, dict[str, float]]
     axes: dict[str, dict[str, float]]
     version: str | None
-    # §13's hold-out draw, sealed against this evening. Frozen with the pool because that is the
-    # right lifetime: the pair a seat is shown at a given answer count must be the same pair on
-    # every read of it, and the pool is the thing the round is drawn from (decision 223). None
-    # for a room started before this shipped — `_round_of` says what it falls back to and why.
+    # §13's hold-out draw, sealed with the pool (decision 223); None for older rooms.
     holdout_seed: str | None = None
-    # Which rule turns `scores` into what every Tonight purpose reads, frozen with the pool for the
-    # hold-out nonce's reason: a deploy must not move the prior, the next pair or the combine of an
-    # evening already in flight. `pool.SCALE_MARKER` for a room started since decision 477; None
-    # for one started before it, which keeps reading the raw §5.1 scores it was started on.
+    # The scale rule, frozen with the pool so a deploy cannot move an evening in flight (decision 477).
     scale: str | None = None
-    # title_id -> {participant_id: the score every Tonight purpose reads}. Derived from `scores`
-    # under `scale` in `_as_snapshot`, never stored: the raw scores stay the provenance and the
-    # derivation is a pure function of them, so two reads of one room cannot disagree.
+    # Derived from `scores` under `scale` in `_as_snapshot`, never stored.
     ledger: dict[int, dict[int, float]] = field(default_factory=dict)
 
     @property
@@ -91,13 +57,9 @@ class Snapshot:
         return list(self.candidates)
 
     def pool_scores_for(self, participant_id: int) -> dict[int, float]:
-        """One seat's Ledger over the pool, on the room's scale — the round's prior for a member.
+        """One seat's Ledger over the pool, on the room's scale; empty for a guest (54c).
 
-        Rank-standardised over tonight's pool for a room carrying the scale marker, so each
-        member's stable taste spans the same range and neither Ledger can outvote the other by
-        its units (decision 477). A guest has no entry anywhere in `scores`, so this is empty for
-        them, which is exactly 54c's "starts from the pool prior and is carried entirely by their
-        answers".
+        Rank-standardised so neither member's Ledger outvotes the other by its units (decision 477).
         """
         return {
             t: seat_scores[participant_id]
@@ -106,14 +68,9 @@ class Snapshot:
         }
 
     def member_average(self) -> dict[int, float]:
-        """The pool's own order (§6.2 step 3), which is what a profile-less guest is ranked by.
+        """The pool's own order (§6.2 step 3), a profile-less guest's prior, on the room's scale.
 
-        The plain average of the members' scores ON THE ROOM'S SCALE: step 3's order is read by
-        the evening only here, as a guest's prior, and a prior averaged over raw scores would be
-        the widest-scaled member's Ledger wearing the pool's name (decision 477).
-
-        Never a member's Ledger wearing the guest's name — the prototype's `const u = guest ?
-        'p' : who` is a privacy-shaped bug, not "contributes no taste term".
+        Never a member's Ledger wearing the guest's name.
         """
         return {t: pool_rules.group_score(s) for t, s in self.ledger.items()}
 
@@ -127,11 +84,7 @@ class Snapshot:
 
 
 def _on_scale(scores: dict[int, dict[int, float]], scale: str | None) -> dict[int, dict[int, float]]:
-    """`scores` as the room's scale reads them. Each member is standardised over the titles THEY
-    scored in the frozen pool — which is every candidate, since `pool.build` admits only titles
-    every seated member has scored — and an unknown marker is refused rather than guessed at,
-    because reading a room under the wrong rule is the in-flight change the marker exists to stop.
-    """
+    """`scores` as the room's scale reads them; an unknown marker is refused, never guessed at."""
     if scale is None:
         return scores
     if scale != pool_rules.SCALE_MARKER:
@@ -179,28 +132,10 @@ async def snapshot_of(conn: asyncpg.Connection, session_id: int) -> Snapshot:
 async def _refuse_unscored_members(
     conn: asyncpg.Connection, session_id: int, *, bundle_version: str
 ) -> None:
-    """§6.8's register, applied to the one refusal a household could not act on.
+    """Name the members with no scores for this bundle, rather than refusing with `empty_pool`.
 
-    `pool_rules.build` keeps only titles EVERY seated member has scored, so a member whose
-    fold-in has not run for this bundle — a freshly created account before the 60 s tick, a
-    worker that is down, the minutes after a re-import — removes every candidate, and the round
-    then refused with `empty_pool`: "widen the budget or include rewatches". The host widens,
-    retries, gets the same sentence, and nothing anywhere names the member. Reproduced over
-    HTTP. [M4.12 finding 34; decision 216]
-
-    ANY score for this bundle, and deliberately not a score of this session's kind. The kind-
-    scoped question has a second answer — a household whose library holds no series at all —
-    and a refusal that named a member for that would be this defect again with a different
-    sentence. A member with movie scores and no series scores is told the library has nothing
-    for tonight, which is true.
-
-    The threshold stays zero rather than becoming §6.1's label count: `cs-16`'s other half would
-    derive `has_profile` from a live observation count and let a thin member's seat carry the
-    pool average, which rewrites §6.2 step 3's arithmetic and needs a number nobody has read off
-    §6.1's curve (decision 216). `has_profile` therefore remains `role != guest`, and the role
-    predicate below says so rather than leaning on a guest's NULL `user_id`: §6.2 step 3's
-    "unless they have a grid profile" is a guest seat with an account attached, which M7 makes
-    real and which the join alone would start naming in this refusal.
+    Any score for the bundle, not one of this kind: a library with no series is not a member's
+    fault. Guests are excluded by role (decision 216).
     """
     missing = await conn.fetch(
         """
@@ -218,9 +153,7 @@ async def _refuse_unscored_members(
     if not missing:
         return
     who = ", ".join(r["name"] for r in missing)
-    # Decision 486's register: this sentence reaches the household, so it names no model noun, and
-    # it says "a couple of minutes" because that is how often the fold-in tick writes scores (the
-    # worker's `every=60`); "the nightly fit" was the wrong job and the wrong clock.
+    # No model nouns (decision 486); the fold-in tick writes scores every minute.
     raise RoundError(
         "unscored_member",
         f"{who} has no scores yet — Tonight ranks from every member's scores, and new ones "
@@ -231,43 +164,8 @@ async def _refuse_unscored_members(
 async def start(conn: asyncpg.Connection, session_id: int) -> Snapshot:
     """Close the join window, build the pool once, and freeze it.
 
-    §6.2 step 2's rule as the host's lobby states it — "Anyone who joins before you start is
-    in" — is exactly this transition: after it the seats are fixed, which is what makes the
-    participant count the averages are over a constant of the evening.
-
-    THE CLAIM IS THE FIRST STATEMENT, AND ALL OF THIS IS ONE TRANSACTION. "Anyone who joins
-    before you start is in" is a promise about two outcomes, and this function used to produce a
-    third: it read the seats, built the pool and flipped the state LAST, so a join was admitted
-    for the whole duration of the build — tens of seconds on a 696-title library — and the seat
-    that arrived in that window had no entry in the frozen `scores` map. `pool_scores_for` is
-    then empty, `round.boundary` is None, `stop_reason` is `converged` at zero answers, and
-    `_end` is unreachable from every write path there is: nothing could ever close the room.
-    Reproduced twice, including through the real HTTP routes. [M4.12 finding 5]
-
-    ONE TRANSACTION RATHER THAN A CLAIM THAT COMMITS ON ITS OWN, for two reasons that point the
-    same way. The first is the refusals below: `empty_pool` and `unscored_member` both raise
-    AFTER the claim, and a room left in `voting` with no snapshot is a new instance of the defect
-    this closes — worse than the original, because `state_for`'s belt-and-braces reads an empty
-    snapshot as a seat that can never be asked anything and would end the evening before it
-    began. Rolling back is the only release that cannot itself be skipped. The second is that a
-    room must never be *visible* in `voting` without its pool: another device's GET of a seat's
-    round lands during the build, and that is the same empty snapshot. This is `deps.write_txn`'s
-    shape taken inside the rule rather than at the route, because the invariant belongs to the
-    rule: every caller of `start` owes it, not only the handler. No advisory lock, because the
-    claim's own row is the thing two callers contend for and the UPDATE already serialises them.
-
-    That row lock also reaches `rooms.open_session`'s abandon clause, which is the behaviour its
-    own test asserts: a host opening a second room mid-start waits for this transaction and then
-    re-evaluates `state = 'open'`, so the room being started is skipped rather than abandoned
-    underneath the build.
-
-    `rooms.join` IS THE OTHER HALF, AND THE PREDICATE ALONE IS NOT ENOUGH. A join's
-    `INSERT ... SELECT ... FROM session WHERE state = 'open'` reads under MVCC, so while this
-    transaction is uncommitted it still sees `open` and seats the member anyway (measured: the
-    insert succeeds mid-claim). `join`'s `FOR SHARE` is what makes the two statements serialise
-    on the session row — it waits for this transaction and then re-evaluates its predicate, so
-    it is refused if we committed and admitted if we rolled back, and a join that took the share
-    lock first makes this UPDATE wait until its seat is visible to `seats_of` below.
+    One transaction whose first statement is the claim, so a join cannot land mid-build and a
+    refusal rolls the claim back; `rooms.join`'s `FOR SHARE` serialises against it.
     """
     async with conn.transaction():
         row = await conn.fetchrow(
@@ -276,17 +174,7 @@ async def start(conn: asyncpg.Connection, session_id: int) -> Snapshot:
             session_id, rooms.STATE_VOTING, rooms.STATE_OPEN,
         )
         if row is None:
-            # Three reasons share one empty result, and the caller's statuses differ (404 against
-            # 409), so the second read is worth one round trip on a path that is already over.
-            #
-            # AND `ended_at` IS ONE OF THE THREE. The claim tests `state = 'open'` only, so a room
-            # the household ended — or one that reached its reveal — came back as a room that "has
-            # already started": false of an abandoned room, unactionable on either, and 409 where
-            # the same module answers a join on the same row 404 "that session has ended"
-            # (`rooms.join`), which is also what finding 8 put into `_participant`. A host whose
-            # lobby outlived their own End taps Start and is sent looking for a round that does not
-            # exist. §6.8's register is what a refusal owes, and this is one column on a statement
-            # already being run. [M4.12 review cycle 1: M412-PLAY-3; decision 216]
+            # Three reasons share one empty result, with different statuses: ask which.
             live = await conn.fetchrow("SELECT ended_at FROM session WHERE id = $1", session_id)
             if live is None:
                 raise RoundError("no_room", "no such session")
@@ -309,16 +197,8 @@ async def start(conn: asyncpg.Connection, session_id: int) -> Snapshot:
             dna_version=version,
         )
         if len(candidates) < 2:
-            # §6.2 defines the happy path only. An empty or one-title pool is not a round, and
-            # saying so is better than serving a pair that does not exist. A pool of two or
-            # three IS admitted: it has no shortlist boundary to resolve, so every seat ends
-            # itself at zero answers and the evening goes straight to 54e's ballot rather than
-            # being refused a round a household with three owned shows could never have
-            # (decision 215).
-            #
-            # And a pool the room's vetoes emptied says so: "widen the budget" is not the
-            # remedy for "nothing is left after vetoing violence", and a refusal the household
-            # cannot act on is the §6.8 failure decision 216 already fixed once. [decision 480]
+            # A pool of two or three is admitted and ends at zero answers (decision 215). A pool
+            # the vetoes emptied says so (decision 480).
             named = pool_rules.veto_labels(vetoes)
             raise RoundError(
                 "empty_pool",
@@ -327,9 +207,7 @@ async def start(conn: asyncpg.Connection, session_id: int) -> Snapshot:
             )
 
         ids = [c.title_id for c in candidates]
-        # The pair card's plain description of a title nobody at the table knows, frozen with the
-        # candidate it describes so every read of a card says the same thing. Genres rather than
-        # DNA: the card is shown before anything is decided and must not preview the pool's order.
+        # Genres rather than DNA: the card must not preview the pool's order.
         genres = await pool_rules.genres_of(conn, ids)
         payload = {
             "candidates": {
@@ -351,26 +229,16 @@ async def start(conn: asyncpg.Connection, session_id: int) -> Snapshot:
             },
             "axes": await dna_reads.axes_for(conn, version=version or ""),
             "version": version,
-            # §13's draw, sealed for the evening (decision 223). It rides in the pool payload
-            # rather than in a column because that is the lifetime it wants and jsonb costs no
-            # migration; `secrets` rather than `random` because a client that could guess it
-            # could pre-compute every hold-out pair of an evening it is about to be asked about.
+            # §13's draw, sealed for the evening (decision 223); `secrets` so a client cannot predict it.
             "holdout_seed": secrets.token_hex(16),
-            # Decision 477's rule, named with the pool it applies to. `scores` above stays the raw
-            # §5.1 read — the provenance, and what a reader comparing this evening with the Ledger
-            # needs — and `_as_snapshot` derives the standardised read from it under this marker.
+            # Decision 477's rule; `scores` stays the raw §5.1 read and `_as_snapshot` derives the rest.
             "scale": pool_rules.SCALE_MARKER,
-            # The vetoes this pool was built under, frozen for §14 risk 6's reader: the lobby
-            # stops accepting changes at Start, and an evening's candidates are only explicable
-            # beside the filters that made them. [decision 480] The union the pool excluded, and
-            # whose each one was, since each member now holds their own. [decision 505]
+            # Frozen for §14 risk 6's reader, with whose each one was (decisions 480, 505).
             "vetoes": vetoes,
             "vetoes_by": {str(s): k for s, k in rooms.vetoes_by_seat(row["context"]).items()},
         }
         await conn.execute(
-            # The dict, not a dumped string: `db/pool.py` registers a JSON codec on jsonb, so a
-            # pre-dumped argument is encoded twice and lands as a JSON *string*. The state moved
-            # in the claim above, so this statement carries the snapshot alone.
+            # The dict, not a dumped string: the jsonb codec would encode it twice.
             "UPDATE session SET context = jsonb_set(context, '{pool}', $2) WHERE id = $1",
             session_id, payload,
         )
@@ -380,80 +248,36 @@ async def start(conn: asyncpg.Connection, session_id: int) -> Snapshot:
 # --- one participant's round -----------------------------------------------------------------
 
 
-# The seat every write path reads first, and the same statement with the seat's row locked. One
-# column list rather than two copies of it: two statements here would drift, and the drift would be
-# silent, because the locked read is the one every guard below is evaluated against.
+# One column list for the plain and the locked read, so the two cannot drift.
 _SEAT = """
     SELECT p.id, p.session_id, p.user_id, p.role, p.seat, p.tilt, p.answered_count,
            p.ended_by, s.state, s.ended_at
       FROM session_participant p JOIN session s ON s.id = p.session_id
      WHERE p.id = $1
 """
-# `OF p`, and the `OF` is the load-bearing part: the statement joins `session`, so a bare
-# FOR UPDATE would lock that row too and make every answer in the room queue behind `start`'s
-# claim and behind `rooms.set_state` over a row this read only looks at.
+# `OF p`: a bare FOR UPDATE would lock the joined session row too.
 _SEAT_LOCKED = _SEAT + " FOR UPDATE OF p"
 
 
 async def _participant(
     conn: asyncpg.Connection, participant_id: int, *, lock: bool = False
 ) -> asyncpg.Record:
-    """This seat as the write paths read it — optionally holding it until the caller commits.
+    """This seat as the write paths read it, optionally locked until the caller commits.
 
-    EVERY GUARD IN THIS MODULE WAS A CHECK-THEN-ACT ON AN AUTOCOMMIT CONNECTION, which is the one
-    shape all of M4.12's write races have. Two taps on one card both read `answered_count = 0`,
-    both satisfied `seq == answered_count + 1`, and the loser's INSERT collided with 0014's partial
-    unique index. `app.py`'s `_conflict` (M4.7, decision 181) answers that 409
-    `conflict: session_answer_seq` — a status the client re-reads on, but carrying no `reason` the
-    round's contract defines, over a card that no longer exists, and naming a database object at a
-    household. An undo interleaved with an answer was worse, because it left the counter behind
-    the highest live seq, so every LATER tap collided too — for ever, on a seat nothing but an
-    answer can end. [M4.12 findings 10 and 11]
-
-    THE SEAM ANSWERS 409, AND THIS PARAGRAPH SAID 500 IN NINE PLACES. That was written from the
-    plan's own finding 12, which cites an `app.py` that predates M4.7's handler; the tree has
-    asserted the 409 since (`test_http_seam.py`, "the seam M4.10 and M4.12 plug into, asserted
-    here so they can point at it"). The repairs below are unchanged and were never about the
-    status code — the answer race left a reused seq and a wedged seat, and the ballot's loser had
-    its whole vote rolled back — but the record of why has to be the seam's actual behaviour, or
-    the next person to weigh an unguarded write against a lock reads this file and concludes this
-    app answers a lost race with a 500. [M4.12 review cycle 1: M412-CONC-02]
-
-    `lock=True` is only meaningful inside `async with conn.transaction()`, because that is what
-    decides how long the lock is held; a locked read on an autocommit connection releases it with
-    the implicit transaction of its own statement and buys nothing. It is M4.10's idiom
-    (`api/deps.py`'s `write_txn`, and `finish`'s advisory lock below) applied at the three seams
-    that still had none: the loser WAITS and then re-reads, so it refuses on what the winner
-    actually committed rather than on what it read before the winner existed.
+    `lock=True` only means something inside a transaction: the loser of a race waits and refuses
+    on what the winner committed, instead of colliding with a unique index.
     """
     row = await conn.fetchrow(_SEAT_LOCKED if lock else _SEAT, participant_id)
     if row is None:
         raise RoundError("no_seat", "no such participant")
     if row["ended_at"] is not None:
-        # A SEAT IN A ROOM THAT HAS ENDED IS NOT A SEAT. The statement selected the session's state
-        # and never its `ended_at`, so an abandoned room kept serving every seat in it: the round
-        # read answered 200 with a pair and a fresh card token, an answer landed in an evening that
-        # was over, and the undo was accepted. On the client `tonight.svelte.js`'s `refresh` had
-        # branches for revealed / `ballot` / `voting` only — this same diff adds the `abandoned`
-        # one (finding 7's client half) and the `open` one (finding 15) — so the member's phone
-        # showed a lobby for a room that no longer existed and nothing it asked for contradicted
-        # that. One refusal here covers `state_for` and all three writes, which is why it is in
-        # the read they share rather than in four handlers. [M4.12 finding 8]
-        #
-        # `ended_at` and not the state name: 0013's `session_ended_states` CHECK ties the timestamp
-        # to `resolved` and `abandoned` together, so this asks the schema's own question and a later
-        # ended state needs no edit here. `resolved` is in scope deliberately — an evening that
-        # reached its winner has no round left to play either.
-        #
-        # `no_room` rather than a reason of its own: `_room_error` maps it to 404, which is what the
-        # room now is, and §6.8's register for a thing that is not there.
+        # An ended room (`ended_at`, per 0013's CHECK) has no seats; 404 via `no_room`.
         raise RoundError("no_room", "that evening has ended")
     return row
 
 
 async def _answers(conn: asyncpg.Connection, participant_id: int) -> list[round_rules.Answered]:
-    """This seat's live answers. A retracted row is skipped — §6's undo means the answer no
-    longer counts, while §14 risk 6's "log every vote" means the row itself stays."""
+    """This seat's live answers; retracted rows stay in the table (§14 risk 6) but are skipped."""
     rows = await conn.fetch(
         "SELECT seq, title_a, title_b, answer, selection FROM session_answer "
         "WHERE participant_id = $1 AND retracted_at IS NULL ORDER BY seq",
@@ -469,13 +293,7 @@ async def _answers(conn: asyncpg.Connection, participant_id: int) -> list[round_
 
 
 async def _turn_is_open(conn: asyncpg.Connection, row: asyncpg.Record) -> None:
-    """§6.2 step 2: "Guests use the initiator's phone **after the initiator finishes**
-    (hand-the-phone, sequential turns)."
-
-    A guest seat cannot answer until every earlier seat has ended, which is both halves of the
-    rule: the initiator goes first, and guests take turns one at a time on the one device.
-    Members on their own phones are unaffected — their seats are not guest seats.
-    """
+    """§6.2 step 2: guests answer on the initiator's phone, in turn, after every earlier seat ends."""
     if row["role"] != rooms.ROLE_GUEST:
         return
     blocking = await conn.fetchval(
@@ -496,43 +314,10 @@ async def _turn_is_open(conn: asyncpg.Connection, row: asyncpg.Record) -> None:
 async def _round_of(
     snapshot: Snapshot, row: asyncpg.Record, answers: list[round_rules.Answered], *, z: float,
 ) -> round_rules.Round:
-    """One seat's whole round, replayed off the event loop.
+    """One seat's whole round, replayed off the event loop (the search is CPU-bound).
 
-    THE SEARCH IS CPU AND THE LOOP IS SHARED. `round.select` is the only expensive thing Tonight
-    does — vectorised in this same milestone, but still a `searchsorted` over every straddling
-    pair of a 696-title pool, and `axis_positions` below is a second pass over every candidate's
-    DNA vector. Run inline it stops everything else this process is doing for its whole duration:
-    the other phone's GET of its own round, the WebSocket hub's next frame, `/api/health`. §6's
-    preamble budgets 1.5 s per battle and §2 names a 4 vCPU box, so "fast enough on my laptop" is
-    not the measurement. Nothing in here touches the database or the clock, which is what makes a
-    thread legal at all; the numpy half releases the GIL, which is what makes it worth having.
-    [M4.12 finding 2]
-
-    One hop for both pure halves rather than one per call: `axis_positions` feeds `replay`, and
-    two `to_thread` calls would pay the switch twice to compute one round. The generator crosses
-    into the thread with them and is not a second thing to synchronise: it is made here, per call,
-    and belongs to the single caller awaiting this.
-
-    AND THE DRAW IS SEALED HERE, WHICH IS THE WHOLE OF §13's GUARD ON THIS SURFACE. The route used
-    to hand its own `SystemRandom` down, so the hold-out pair was redrawn on every GET and nothing
-    persisted it: twelve reads at `answered = 9` returned twelve DISTINCT "uniform-random" pairs,
-    every one of them sealed into a valid card token, and answering with the first-minted one was
-    accepted — §13's only admissible stream, chosen by the client. Honest clients hit it too, since
-    `refresh()` re-reads the round on every `rooms.changed` / `lobby` / `reveal` frame and on
-    reconnect, so the card changed under the person's thumb after a screen lock. The generator is
-    now a function of (the nonce frozen with the pool, this seat, this answer count), so the pair
-    is a fact about the round rather than about when it was asked, and the token minted from it is
-    byte-identical on every read. [M4.12 findings 28 and 29; decision 223]
-
-    `seq` IS THE LIVE ANSWER COUNT PLUS ONE — the same number `replay` selects at — so an undo
-    re-opens the seq it retracted with the same card rather than a new one. That is what closes
-    finding 29 by construction instead of by a second check: a token stashed before the undo is
-    the token the server re-issues after it, so replaying it names the pair the seat is looking at.
-
-    The fallback keys a room started before this shipped by its own ids. It is weaker on purpose —
-    session and participant ids travel in URLs, so a client could compute the seed — and that
-    costs nothing the seal is about: predicting a uniform draw is not choosing it, and the
-    alternative is changing the pair under the thumb of an evening already in progress.
+    The hold-out draw is seeded by (the pool's sealed nonce, this seat, live answer count + 1), so
+    every read shows the same pair and an undo re-opens its seq with the same card (decision 223).
     """
     is_member = row["role"] != rooms.ROLE_GUEST
     prior = snapshot.pool_scores_for(row["id"]) if is_member else snapshot.member_average()
@@ -545,10 +330,7 @@ async def _round_of(
         return round_rules.replay(
             prior, answers, z=z, has_profile=is_member,
             axes=combine_rules.axis_positions(snapshot.dna, snapshot.axes),
-            # The seat, and never the seed: 54b's arm has a second caller with no participant and
-            # no pool, so the key is the one thing both can name (decision 223). A group answer's
-            # arm is stored on its row anyway, drawn from the sealed pair at serve time — this is
-            # what decides the arm of the pair that has not been answered yet.
+            # The seat, never the seed: 54b's arm has a second caller with no pool (decision 223).
             holdout_key=str(row["id"]),
             rng=rng, escaped=escaped,
         )
@@ -568,22 +350,8 @@ def _card(
 ) -> dict[str, Any]:
     """What one seat's device renders: the next pair, or that they are done.
 
-    Carries the escape's availability rather than leaving the client to compute it from a
-    count — 54c makes the control a property of the round's state, and a client that decided
-    for itself would be a second implementation of the rule.
-
-    ONE SHAPE FOR THE READ AND FOR THE THREE WRITES. `state_for` built this dict, and the answer,
-    undo and escape routes got theirs by calling `state_for` again after their own write — a
-    second decode of the frozen pool out of jsonb and a second run of the whole round, per tap
-    (finding 3). They build it from the round they have already replayed now, so the shape has to
-    live where all four can reach it: a second copy would drift, and the copy that drifted would
-    be the one the phone sees after a tap rather than the one it sees on a reload.
-
-    `played is None` is a seat with no round to report, which is two real states rather than a
-    defensive branch: the escape, whose seat is over before anything would be selected for it,
-    and the stale ending in `_next_card` below. The pair and the stop reason are mutually
-    exclusive in `replay`'s own return, and that invariant is kept here rather than in each
-    caller.
+    One shape for the read and the three writes. `played is None` is a seat with no round to
+    report (an escape, or a stale ending in `_next_card`).
     """
     pair = None if played is None or stop_reason is not None else played.next_pair
     candidates = {} if snapshot is None else snapshot.candidates
@@ -592,17 +360,10 @@ def _card(
         "answered": answered,
         "ended_by": ended_by,
         "stop_reason": stop_reason,
-        # THE ESCAPE CLOSES WITH THE ROUND. The flag was the count alone, so a seat that had
-        # converged, hit the cap or taken the escape itself kept advertising a control `escape`
-        # answers with `round_over` — on the one surface whose docstring above says the availability
-        # travels precisely so the client does not decide for itself. `round.escape_available` stays
-        # the pure predicate about the count; whether this seat may still be asked anything is a
-        # fact about the seat, and it is added here rather than folded into the predicate so the two
-        # questions keep their own homes. [M4.12 finding 9]
+        # The escape closes with the round: an ended seat is never offered it.
         "escape_available": ended_by is None and round_rules.escape_available(answered),
         "cap": round_rules.CAP_PAIRS,
-        # What the header says to expect: the sweep's median, not the cap. "pair 1 · cap 20" read
-        # as the plan for the evening, when the cap is the ending the round is built to avoid.
+        # The header's expectation: the typical round, not the cap.
         "typical": round_rules.TYPICAL_PAIRS,
         "pair": None if pair is None else {
             "selection": pair.selection,
@@ -613,17 +374,8 @@ def _card(
         "_pair": pair,
         "_round": played,
         "_snapshot": snapshot,
-        # DID THIS CALL END THE SEAT? Private, like the three above it, and it exists for one
-        # caller: `api/tonight.py`'s round read, the only handler that neither settles nor pushes
-        # a frame. `state_for`'s belt-and-braces below is the ONLY thing that can end a seat on a
-        # pool of two or three candidates (decision 215) -- there is no pair to answer and the
-        # escape is refused below pair six -- so on such an evening the device that read the last
-        # un-ended seat left the room in `voting` with every seat `converged`, woke nobody, and
-        # issued no further read: the client's one GET of the session runs BEFORE its round read,
-        # in the same `refresh()`, so the order the rule needs is the one order it never produces.
-        # The flag rather than settling on every round read: the ordinary poll stays one statement,
-        # and the read that actually moved the seat pays for the progress frame the other phones
-        # are waiting on. [M4.12 review cycle 2: M412-PLAY-4; decision 215]
+        # Private: whether this call ended the seat, so the round read (the only handler that
+        # neither settles nor pushes a frame) can announce it (decision 215).
         "_ended_now": ended_now,
     }
 
@@ -637,35 +389,10 @@ async def _next_card(
     snapshot: Snapshot,
     z: float,
 ) -> dict[str, Any]:
-    """The card a write hands straight back — §6 preamble's "next card preloaded", paid for once.
+    """The card a write hands straight back: one snapshot read and one replay for the whole tap.
 
-    One snapshot read and one replay for the whole tap. The write paths used to return a small
-    `{seq, stop_reason}` dict and let the route call `state_for`, which re-read the frozen pool
-    (on the order of a megabyte of jsonb on a 300-title pool, decoded into four dicts on every
-    read) and replayed the round a second time to produce a card the write had already computed.
-    [M4.12 finding 3]
-
-    AND THE ENDING IS DECIDED HERE, OUTSIDE THE SEAT'S ROW LOCK, WHICH IS WHY IT IS CONDITIONAL.
-    Finding 2 moves the replay off the event loop, and a thread that is awaited inside
-    `record_answer`'s transaction would hold the `FOR UPDATE OF p` lock for the whole search —
-    the one thing finding 2 exists to stop. So the replay runs after the commit, and in that
-    window another request for this seat can commit its own write: an undo from the same phone,
-    which is the interleaving finding 11 is about. Ending a seat on a replay whose answer count
-    is no longer the seat's would report somebody who is still playing as finished, and nothing
-    but an answer can reopen a round — finding 6's stranding arriving through this repair's own
-    door. `_end`'s `when_answered` guard is in the statement, and when it refuses, this replay
-    describes a seat that no longer exists: the card then reports the row and carries no pair, so
-    the client re-reads (`tonight.svelte.js`'s `answer`, which refreshes when a write hands back no
-    pair) rather than acting on a round that has moved.
-
-    A crash between the commit and the ending leaves the seat un-ended with its answers intact,
-    which is exactly the state `state_for`'s belt-and-braces was written for: the next read of
-    the round ends it and `settle` moves the room on. One fewer thing inside the transaction is
-    not one more thing that can be lost.
-
-    `row` is the one the caller's write locked, not a re-read of it: `_round_of` takes the seat's
-    role, its id and whether it was escaped, and a write that adds an answer moves none of the
-    three. `answered` is passed separately precisely because it IS the one thing that moved.
+    Runs after the commit, so the ending is conditional on the answer count (`when_answered`): on
+    a refusal the card reports the row with no pair and the client re-reads.
     """
     played = await _round_of(snapshot, row, answers, z=z)
     ended_by, stop_reason = row["ended_by"], played.stop_reason
@@ -686,11 +413,7 @@ async def _next_card(
 async def state_for(
     conn: asyncpg.Connection, participant_id: int, *, z: float
 ) -> dict[str, Any]:
-    """What one participant's device renders, read fresh: the next pair, or that they are done.
-
-    The shape is `_card`'s, which the three write paths also return — this is the reload, not the
-    thing that runs after every tap (finding 3).
-    """
+    """What one participant's device renders, read fresh (the reload); `_card`'s shape."""
     row = await _participant(conn, participant_id)
     snapshot = await snapshot_of(conn, row["session_id"])
     answers = await _answers(conn, participant_id)
@@ -700,61 +423,10 @@ async def state_for(
     stop_reason = played.stop_reason
     ended_now = False
     if stop_reason is not None and ended_by is None:
-        # THE BELT AND BRACES THAT MAKES A STRANDED SEAT UNREPRESENTABLE. `replay` returns a
-        # reason and a pair that are mutually exclusive, so a reason here means there is nothing
-        # this seat can be asked — and until this line the only ways to record that were an
-        # answer (which needs a pair) and the escape (refused below five answers). A seat the
-        # round cannot ask anything therefore kept `ended_by` NULL for ever,
-        # `everyone_finished` stayed false, and no route could close the room: the lobby said
-        # `voting`, the ballot answered with an empty slate, every write was refused. Two
-        # ordinary evenings land here — a pool of two or three candidates, which has no
-        # shortlist boundary to resolve (decision 215), and a seat the frozen snapshot holds no
-        # scores for (finding 5). [M4.12 finding 6]
-        #
-        # A WRITE ON A READ, deliberately: this is the same shape as `settle` one screen down,
-        # and for the same reason. The household is in the room holding a phone, so the rule has
-        # to fire where the state is computed rather than in a sweep that measures its latency
-        # in minutes. Idempotent by the `ended_by IS NULL` guard, so re-reading the round is not
-        # a second ending; the transition to the ballot is picked up by the next `settle`, which
-        # every read of the session, the ballot and the result calls — AND, since this write is
-        # the only one a two- or three-candidate evening has, the round read itself, which
-        # announces when `_ended_now` comes back true. That sentence used to name three reads the
-        # client makes in the wrong order for it: `refresh()` reads the session and THEN the
-        # round, so the read that ended the last seat was followed by nothing at all.
-        # [M4.12 review cycle 2: M412-PLAY-4]
-        #
-        # Stamped with the replay's OWN reason rather than a fourth value: 0013's
-        # `session_ended_states` CHECK admits `converged | cap | escape` and is
-        # sha256-checksummed, and `converged` is honest about the mechanism — the boundary is
-        # empty — if generous about the word (decision 215).
-        #
-        # The payload reports THIS read's reason, while `_end`'s own guard means the ROW keeps
-        # whichever writer arrived first. The two differ only when an escape and this read land
-        # together, and then the row is the one that matters: it is what §14 risk 6 counts, and
-        # to the device both readings say the same thing — this seat is done.
-        #
-        # AND `when_answered`, like the write paths one screen down. This read ships with a replay
-        # off the loop (finding 2), so the gap between `_answers` above and this statement is a
-        # real await point in which another request for the seat commits — an undo, which lowers
-        # the count and gives the round a pair again. It first shipped without the guard, argued
-        # as "a read that refused to end a stranded seat because the count moved under it would be
-        # the seat nothing ends again". That is false in both halves: the writer that moved the
-        # count evaluates the ending for its own count in `_next_card`, and if it dies before
-        # doing so the NEXT read of this seat replays the answers that are actually there and ends
-        # it correctly. Refusing costs one read; ending on a stale reason costs the round and
-        # nothing but an answer can reopen it. `_card` suppresses the pair on the stop reason and
-        # never on `ended_by`, so the stamped seat was then served a live pair it could not
-        # answer — every tap 409 `round_over`, re-read, re-rendered, until a frame dragged the
-        # room to the ballot. The belt-and-braces case is untouched: an unrankable seat has
-        # `answered_count = 0` and no writer that can move it.
-        # [M4.12 review cycle 1: M412-CONC-01]
-        #
-        # TWO REFUSALS, and they are not the same refusal. A count that moved means this replay
-        # describes a round the seat no longer has, so the card reports the ROW and carries no
-        # pair — `_next_card`'s shape, and the client re-reads rather than acting on it. An
-        # `ended_by` that is already set means another writer got there first, which is the
-        # deliberate case above: the row keeps theirs, the payload reports this read's reason, and
-        # to the device both readings say the same thing.
+        # A reason with no pair means nothing can be asked, so end the seat here or it strands
+        # (a pool of two or three, decision 215). A write on a read, idempotent, and guarded by
+        # `when_answered`: if the count moved, report the row with no pair; if another writer
+        # ended it first, the row keeps theirs.
         if await _end(conn, participant_id, stop_reason, when_answered=answered):
             ended_by, ended_now = stop_reason, True
         else:
@@ -782,41 +454,9 @@ async def record_answer(
 ) -> dict[str, Any]:
     """Write one answer, move the tilt, and hand back the next card.
 
-    Inside one transaction: the row, the counter and the tilt are one fact, and a crash between
-    them would leave `answered_count` disagreeing with the rows it counts — which is the number
-    the lobby and the waiting screen both display.
-
-    AND THE GUARDS ARE INSIDE THAT TRANSACTION NOW, BEHIND THE SEAT'S ROW LOCK. They used to sit
-    above it on an autocommit connection, so two taps on one card both passed the seq check and
-    the loser's INSERT collided with 0014's partial unique index — which `app.py`'s `_conflict`
-    answers 409 `conflict: session_answer_seq`. The client re-reads the round on a 409 and only on
-    a 409 (`tonight.svelte.js`'s `answer`, whose sole re-read is its 409 branch), so the second tap
-    did re-read; what it got was a constraint name where §6.8's register wants a sentence, over a
-    card that no longer existed, and a `session_answer` row whose seq had been reused. Reproduced 5
-    races of 6. The lock makes the loser wait, re-read and refuse on `stale_pair`, which the
-    existing mapping already answers 409: the same status by the statement order rather than by
-    how fast the two phones were, and with a reason the round itself defines.
-    [M4.12 finding 10; M4.12 review cycle 1: M412-CONC-02]
-
-    0014's index stays as the backstop, and nothing here catches a `UniqueViolationError`: a
-    repair that caught one would be this same check-then-act with the race moved into an except
-    branch, and `app.py`'s own handler for it is M4.7's.
-
-    THE SEQ IS MINTED FROM THE ROWS, NOT FROM THE COUNTER. `seq` arrives in the sealed card as
-    `answered_count + 1` and is checked against exactly that, because that is §13's single-use
-    seal — answering moves the counter, so a replay is a stale card. But the row's own seq is the
-    next one that has never been issued, tombstones included, which makes the two numbers
-    independent: `answered_count` is displayed progress and `seq` is identity. They were one
-    number before, and an undo interleaved with an answer is what that cost (finding 11, and
-    `retract` below).
-
-    THE ROUND IS REPLAYED AFTER THE COMMIT, WHICH IS THE WHOLE POINT OF `_next_card`. The tilt and
-    the counter do not depend on it, and the search is tens of seconds of CPU on a real pool: held
-    inside this transaction it held the seat's row lock for its whole duration, so the undo button
-    and the next tap queued behind a computation neither of them needs. `rng` travels from the
-    route for the same reason the card does — the hold-out arm draws its pair from it (§13), and a
-    card selected under a different generator than the reload's would be the route quietly using
-    two selectors.
+    Guards run under the seat's row lock, so a double tap refuses as `stale_pair`. The row's seq
+    is minted from the rows (tombstones included), independent of `answered_count`; the round is
+    replayed after the commit.
     """
     async with conn.transaction():
         row = await _participant(conn, participant_id, lock=True)
@@ -826,14 +466,11 @@ async def record_answer(
         if answer not in round_rules.ANSWERS:
             raise RoundError("bad_answer", f"answer must be one of {round_rules.ANSWERS}")
         if seq != row["answered_count"] + 1:
-            # The single-use guard. §13's figures count rows and §4.2's tables are append-only, so
-            # a replay weights one judgement twice in the data admitted to evaluate the round.
+            # Single-use: a replay would weight one judgement twice in §13's data.
             raise RoundError("stale_pair", "that pair is no longer on the table")
 
         snapshot = await snapshot_of(conn, row["session_id"])
-        # Tombstones included, which is the whole point: §14 risk 6 keeps a retracted answer as a
-        # row, so reusing its seq is how the replacement answer collided with it. The count is
-        # read under the lock, so there is no second writer between this and the INSERT.
+        # Tombstones included: reusing a retracted seq collides with its row.
         written_seq = await conn.fetchval(
             "SELECT coalesce(max(seq), 0) + 1 FROM session_answer WHERE participant_id = $1",
             participant_id,
@@ -847,56 +484,30 @@ async def record_answer(
             row["session_id"], participant_id, written_seq,
             pair.title_a, pair.title_b, answer, pair.selection, latency_ms,
         )
-        # §6.2 step 4's tilt. Held-out answers move it as little as they move the posterior:
-        # 54b says they are "used for neither selection nor stopping", and the tilt feeds the
-        # tonight score the shortlist is built from, so it is the same stream.
+        # §6.2 step 4's tilt; held-out answers never move it (54b).
         tilt = dict(row["tilt"] or {})
         if pair.selection != round_rules.SELECTION_HOLDOUT:
-            # One helper, three callers (here, `retract` below and `solo.picks`), because the
-            # four-branch dispatch had already drifted between them — see `tilt.applied`. The
-            # §10 membership check travels inside it, which costs nothing here (the pair is
-            # minted from this same frozen snapshot) and is the whole point on the other two.
+            # `tilt.applied` carries the §10 membership check for all three callers.
             tilt = tilt_rules.applied(
                 tilt, answer=answer, title_a=pair.title_a, title_b=pair.title_b,
                 vectors=snapshot.dna, frame=snapshot.frame(),
             )
-        # The literal rather than `answered_count + 1` in SQL, because the locked read above is
-        # what makes it exact — and because `_set_answered` can only hold the invariant if it is
-        # handed the number the caller means to write.
         await _set_answered(conn, participant_id, count=row["answered_count"] + 1, tilt=tilt)
         answers = await _answers(conn, participant_id)
     card = await _next_card(
         conn, row, answered=row["answered_count"] + 1, answers=answers, snapshot=snapshot, z=z,
     )
-    # `seq` is the one that was WRITTEN, which after an undo is no longer the one the card carried.
-    # The route prints it back as `wrote.seq`, and a number that named a different row than the one
-    # in `session_answer` would make §14 risk 6's log unreadable from the outside.
+    # The seq WRITTEN, which after an undo differs from the one the card carried.
     return {**card, "seq": written_seq, "tilt": tilt}
 
 
 async def _set_answered(
     conn: asyncpg.Connection, participant_id: int, *, count: int, tilt: dict[str, float]
 ) -> None:
-    """Move the displayed progress and the tilt together, and refuse to move the counter past the
-    rows it claims to count.
+    """Move the displayed progress and the tilt together, never the counter past the rows.
 
-    A COUNTER THAT DISAGREED WITH THE ROWS WAS THE WEDGE, not a symptom of it. While the row's seq
-    WAS `answered_count + 1`, a counter the retract had left behind the highest live seq minted the
-    next card at a seq that already existed, and every tap from then on was a unique violation —
-    three taps after the interleaving that caused it, on a seat whose round nothing but an answer
-    can end. Minting from the rows is what removes that particular collision; this is what keeps
-    the counter itself honest, because it is still the number the lobby and the waiting screen
-    display and §14 risk 6 still counts the rows. `max(seq) >= count` is the cheap form of it: one
-    indexed aggregate in the same statement, and true of every legal history — an answer moves both
-    by one, and a retract only ever lowers the count while the tombstone holds the seq.
-    [M4.12 finding 11]
-
-    THE GUARD IS IN THE STATEMENT, for `_end`'s reason one screen down: a check in a caller is a
-    check another caller can be written without, and this one has two callers already. A raised
-    `AssertionError` rather than the `assert` statement, because `python -O` strips the statement
-    and this is what stands between a bug here and a seat whose progress nobody can read; and
-    raised rather than logged, because both callers are inside a transaction, so refusing the write
-    rolls back a seat that is still playable instead of committing one that is not.
+    Raises rather than asserts (`-O` strips asserts); both callers are in a transaction, so the
+    refusal rolls back a playable seat.
     """
     moved = await conn.fetchval(
         """
@@ -918,28 +529,9 @@ async def _set_answered(
 async def _end(
     conn: asyncpg.Connection, participant_id: int, reason: str, *, when_answered: int | None = None
 ) -> bool:
-    """0013's CHECK ties `converged_at` to `ended_by = 'converged'`, so the two cannot drift —
-    §14 risk 6 wants the rate at which each of the three fires. True if this call ended the seat.
+    """End a seat; True if this call ended it. The first ending recorded is the one that happened.
 
-    `AND ended_by IS NULL`: THE FIRST ENDING RECORDED IS THE ONE THAT HAPPENED. Both callers
-    check `ended_by` before they get here and neither ever means to overwrite one, but since
-    `state_for` became a caller there are two writers that can race — a device reading the round
-    of a seat that has just converged while the person taps "just pick for us" on another. Last
-    write wins would report that seat as `converged` when the household escaped it, and §14 risk
-    6's whole use for this column is the rate at which each of the three fires. The guard is in
-    the statement rather than in the three callers because a check in a caller is a check another
-    caller can be written without. [M4.12 finding 6]
-
-    `when_answered`: AND THE REPLAY THIS REASON CAME FROM IS STILL THIS SEAT'S ROUND. The write
-    paths replay after their transaction commits, because a search held inside it holds the seat's
-    row lock (finding 2), so between the commit and this statement another request for the seat can
-    land — an undo, which lowers the count and gives the round a pair again. Ending on the stale
-    reason would report somebody who is still playing as finished, on a seat nothing but an answer
-    can reopen. Every caller that can be raced passes it and reads the return: the two write paths
-    because they moved the count themselves, and `state_for` because its own replay is off the loop
-    too, so the same undo commits between the answers it read and this statement. `escape` is the
-    exception and needs none — it decides inside the transaction that holds `FOR UPDATE OF p`, so
-    nothing can move under it. [M4.12 findings 2, 3; M4.12 review cycle 1: M412-CONC-01]
+    `when_answered` refuses to end on a replay whose answer count is no longer the seat's.
     """
     ended = await conn.fetchval(
         "UPDATE session_participant SET ended_by = $2, "
@@ -952,38 +544,10 @@ async def _end(
 
 
 async def retract(conn: asyncpg.Connection, participant_id: int, *, z: float) -> dict[str, Any]:
-    """§6 preamble's "undo everywhere", reaching the round.
+    """§6 preamble's "undo everywhere", reaching the round: your latest live answer, while playing.
 
-    Your own most recent live answer, and only while your own round is still running. Tombstone
-    rather than DELETE (§14 risk 6: "log every vote"), and the tilt is recomputed from the
-    surviving rows rather than subtracted — subtracting assumes the frame has not moved and the
-    arithmetic is exact, and one of those is a floating-point hope.
-
-    THE SAME ROW LOCK AS THE ANSWER, BECAUSE THE TWO INTERLEAVED INTO A DEAD END. This read, the
-    choice of which row to tombstone and the recount all used to sit outside the transaction that
-    writes, so an answer committing in the window was counted by the recount that was meant to
-    exclude it: live seqs {1, 2, 4} with `answered_count = 3`, the next card minted at a seq that
-    already existed, and every subsequent tap collided with it for ever — 409 `conflict:
-    session_answer_seq` out of `app.py`'s handler, which is a status the client re-reads on and a
-    round it can never advance — the exact dead end 0014's
-    own comment says it removed, arriving through the undo the index was added for. Reproduced here
-    as live {1, 3} with the counter at 2, and `UniqueViolationError` on (participant, seq) = (1, 3)
-    two taps later. [M4.12 finding 11]
-
-    Both writers take the seat's row, so they serialise: the undo either lands before the answer
-    (and the answer's card is then stale, which the client re-reads on) or after it (and takes it
-    back). Either is a correct evening. What neither is any longer is a counter that disagrees with
-    the rows, which is why `_set_answered` writes it.
-
-    AND IT RETURNS THE CARD, which is finding 3's other half and not only a saving. The route used
-    to call `state_for` after this, so the undo's own payload cost a second pool decode and a
-    second round; but `state_for` is also what ends a seat the round can no longer ask anything
-    (finding 6), and an undo CAN reach that state — a round with fewer answers has a different
-    boundary, and a pool can run out of distinct pairs. Returning the card from here without
-    `_next_card`'s ending would leave that seat un-ended with nothing on the undo path to read it
-    again: the client goes to `waiting` (`tonight.svelte.js`'s `loadRound`, which is where a card
-    with no pair lands whichever tap fetched it) and the room never settles. So
-    the belt and braces travel with the card.
+    A tombstone, not a DELETE (§14 risk 6); the tilt is rebuilt from the surviving rows. Under the
+    seat's row lock, like the answer; returns `_next_card`, which may end the seat.
     """
     async with conn.transaction():
         row = await _participant(conn, participant_id, lock=True)
@@ -1007,10 +571,7 @@ async def retract(conn: asyncpg.Connection, participant_id: int, *, z: float) ->
         for a in answers:
             if a.selection == round_rules.SELECTION_HOLDOUT:
                 continue
-            # The rebuild reads the same rows `round.replay` reads and must skip the same ones:
-            # §10 lets a re-import take a title out from under a stored answer, and a tilt that
-            # counted a row the posterior ignored would leave the two describing two different
-            # histories of one evening. `tilt.applied` holds that predicate for all three callers.
+            # Skip the same rows `round.replay` skips (§10); `tilt.applied` holds that predicate.
             tilt = tilt_rules.applied(
                 tilt, answer=a.answer, title_a=a.title_a, title_b=a.title_b,
                 vectors=snapshot.dna, frame=frame,
@@ -1025,19 +586,7 @@ async def retract(conn: asyncpg.Connection, participant_id: int, *, z: float) ->
 async def escape(conn: asyncpg.Connection, participant_id: int) -> dict[str, Any]:
     """54c's "just pick for us": end this seat's round on what is known so far.
 
-    Refused before pair 6 rather than ignored — a control that silently does nothing is worse
-    than one that is not there — and recorded as `escape` so §14 risk 6 can count it.
-
-    The same locked read as the answer and the undo, because this decides on `answered_count` and
-    the other two move it: without the lock "just pick for us" tapped on the fifth answer's reply
-    can be refused `too_early` on a count that has already reached six, or admitted on one that
-    has just been undone back to five. One writer at a time on a seat, so the refusal is evaluated
-    against the count that is actually there. [M4.12 finding 10]
-
-    The card it returns needs neither the frozen pool nor a round: the seat is over, so there is
-    nothing to select, and `replay`'s own answer for an escaped seat is the reason just written.
-    The route called `state_for` here, which decoded the whole pool out of jsonb and replayed every
-    answer in order to be told that (finding 3). Zero of each is the honest cost of ending a round.
+    Refused before pair 6 and recorded as `escape` (§14 risk 6); decided under the row lock.
     """
     async with conn.transaction():
         row = await _participant(conn, participant_id, lock=True)
@@ -1055,12 +604,7 @@ async def escape(conn: asyncpg.Connection, participant_id: int) -> dict[str, Any
 
 
 async def progress(conn: asyncpg.Connection, session_id: int) -> list[dict[str, Any]]:
-    """54c's waiting state: "**progress and never their answers**".
-
-    The blind property is a fact about what this statement can return. There is no join to
-    `session_answer` here and no title column anywhere in it, so a payload carrying somebody's
-    answer is not something a caller could produce by mistake.
-    """
+    """54c's waiting state: "**progress and never their answers**"; no join to `session_answer`."""
     rows = await conn.fetch(
         """
         SELECT p.id, p.seat, p.role, p.answered_count, p.ended_by, u.name
@@ -1084,18 +628,9 @@ async def progress(conn: asyncpg.Connection, session_id: int) -> list[dict[str, 
 
 
 def expected_pairs(answered: int) -> int | None:
-    """§6.2 step 4's "Mia 4/~10": an ESTIMATE of a seat's round, never the cap (decision 477).
+    """§6.2 step 4's "Mia 4/~10": the typical round until reached, then None (decision 507).
 
-    The typical round until the seat reaches it, and then NOTHING (decision 507). It was one more
-    than the seat had answered, so the second household evening's waiting line read "Jenny 12/~13"
-    — a number that moved with every tap and promised the end was one pair away, when the round
-    measured past the typical is the one least likely to end soon: over 60 seeded rounds on a
-    700-title pool, 18 of the 40 still running after ten answers ran on to the cap. Past the
-    typical the count alone is the honest line ("Jenny 12 so far").
-
-    A function of the count alone, which is what keeps this statement blind: an estimate read off
-    the seat's own straddlers would put answer-derived data into the one payload 54c promises
-    carries none.
+    A function of the count alone, which keeps this payload blind.
     """
     if answered >= round_rules.TYPICAL_PAIRS:
         return None
@@ -1122,31 +657,8 @@ async def _match_lines(
 ) -> dict[str, Any]:
     """§6.2 step 7's per-person match lines, "in DNA terms including the honest negative".
 
-    THE INVARIANT, BORROWED FROM §6.0. `home/why.py` was inverted so a shelf's why-line names
-    terms every card actually carries — "a card can be shown under a reason it does not
-    satisfy" is the defect it exists to make unrepresentable. The winner card is the same claim
-    on the screen the whole round exists to produce, so the terms come from the title's own
-    `dna_tagged` rows and the participant's tilt only *orders* them.
-
-    Three branches: the pull line, the honest negative §6.2 step 7 fixes verbatim ("nothing here
-    is their pull — *bleak* works against them"), and — for a guest with no grid profile — a line
-    rather than silence, because every participant gets one. Step 7 asks for the pull "in DNA
-    terms" and fixes no sentence for it; solo's "pulls you with {terms}" is step 8's, and the group
-    card says it in plainer words (`copy.leaned` / `copy.usual`).
-
-    THE NEGATIVE IS FOR A TITLE BELOW THE PERSON'S USUAL, AND ONLY THEN. The branch read the tilt
-    alone, so on the first household evening the winner — the other member's own top Ledger
-    title — was printed under "nothing here is their pull" because six answers had moved no term
-    it carries upward. §6.2 step 4 defines the tonight score as stable taste plus the tilt, and
-    step 5's bound is "land below your usual", so `tonight` (the combine's per-seat scores)
-    decides whether a negative can be true: below the seat's median over the pool it may be
-    printed; at or above it the title is theirs by stable taste, and the line names what it
-    carries the way solo's pull line does ("pulls you with {terms}", §6.2 step 8).
-
-    AND EVERY LINE NAMES ITS PERSON AND SPEAKS IN LABELS (decision 486). The honest negative was
-    the one template with no name in it, so two on one card could not be told apart, and the
-    terms reached the screen as vocabulary ids ("characters.charismatic_lead"). The id stays on
-    `terms` for the invariant above; the words are `dna_term.label`.
+    Terms come from the title's own rows and the tilt only orders them. The negative is printed
+    only for a title below the seat's median tonight score; every line names its person in labels.
     """
     carried = await dna_reads.terms_carried_by(
         conn, title_id, version=snapshot.version or "", limit=8
@@ -1170,8 +682,7 @@ async def _match_lines(
             continue
         own = tonight.get(seat["id"]) or {}
         below_usual = title_id in own and own[title_id] < statistics.median(own.values())
-        # The tilt weights the terms the title carries. It never admits one: a term the title
-        # does not carry cannot appear here whatever the tilt says about it.
+        # The tilt weights carried terms; it never admits one.
         scored = sorted(
             ((t["term"], tilt.get(t["term"], 0.0), t["tier"]) for t in carried),
             key=lambda x: -x[1],
@@ -1179,13 +690,9 @@ async def _match_lines(
         pulls = [x for x in scored if x[1] > 0.0][:2]
         leaned = bool(pulls)
         if not pulls and not below_usual:
-            # Theirs by stable taste: the title's own loudest carried terms, which is what solo
-            # already says of a pick the Ledger put on top (`solo.PULL_WHY`).
+            # Theirs by stable taste: the title's own loudest terms, as solo says (`solo.PULL_WHY`).
             pulls = [(t["term"], 0.0, t["tier"]) for t in carried[:2]]
         if pulls:
-            # Each branch's own plain sentence rather than one "pulls {name} with a + b" for both,
-            # which read as jargon at the second household evening's reveal: the first is what
-            # this person's answers leaned toward, the second a title not below their usual.
             words = [word(t) for t, _, _ in pulls]
             lines[str(seat["id"])] = {
                 "name": name,
@@ -1204,8 +711,7 @@ async def _match_lines(
                 "sign": "against",
             }
             continue
-        # Nothing the title carries moves this person either way, which is a real state on a
-        # short round: say so rather than inventing a term to fill the line.
+        # Nothing carried moves this person either way: say so rather than invent a term.
         lines[str(seat["id"])] = {
             "name": name, "line": f"nothing here reads either way for {name} yet",
             "terms": [], "sign": "neutral",
@@ -1217,15 +723,9 @@ async def _match_lines(
 async def finish(
     conn: asyncpg.Connection, session_id: int, *, z: float, phrasing: str | None = None
 ) -> combine_rules.Slate | None:
-    """§6.2 step 5, against the stored rows, persisted to `session_result`.
+    """§6.2 step 5, against the stored rows, persisted to `session_result` (§14 risk 6).
 
-    The slate is written rather than recomputed on read: §4.2 gives the round a durable
-    per-title table, and a slate re-derived later cannot be compared against the votes that
-    produced it — which is what §14 risk 6 exists to require.
-
-    None, and nothing written, when the household ended the evening while this combine was
-    running. The transition at the foot of the transaction below says why that is a predicate on
-    the session row rather than a bare write.
+    None, and nothing written, when the household ended the evening while this ran.
     """
     snapshot = await snapshot_of(conn, session_id)
     seats = await conn.fetch(
@@ -1245,25 +745,12 @@ async def finish(
             snapshot.pool_scores_for(seat["id"]) if is_member else snapshot.member_average()
         )
         answers = await _answers(conn, seat["id"])
-        # Off the loop, one seat at a time, for `_round_of`'s reason: this is the same search, and
-        # it runs once PER SEAT on the answer that finishes the room — the request a household is
-        # most obviously waiting on. Sequentially rather than gathered: the combine is one slate
-        # over all of them, and four threads competing for a 4 vCPU box (§2) finish no sooner.
+        # Off the loop (see `_round_of`), one seat at a time: threads on four vCPUs finish no sooner.
         played = await asyncio.to_thread(
             round_rules.replay, prior, answers, z=z, has_profile=is_member,
-            # The seat, as `_round_of` keys it. The combine reads only the beliefs, so the arm
-            # decides nothing here — but a key it could reach a different answer with would be a
-            # second definition of the same thing (decision 223).
+            # The seat, as `_round_of` keys it (decision 223).
             holdout_key=str(seat["id"]),
-            # AND NO PAIR, because nobody is shown one: the line below reads `played.beliefs` and
-            # nothing else. Left at the default this searched O(n^2) over the straddling set for a
-            # pair it then discarded — 95-101 ms per seat at 696 candidates, against 0.7-1.0 ms
-            # with the flag off — and it did so precisely for the seats that end at 54c's escape,
-            # since a converged seat has nothing left to straddle and a capped one short-circuits.
-            # Two or three "just pick for us" taps is 200-300 ms of §6's 1.5 s budget spent on
-            # pairs that do not exist. `select` never touches the beliefs (they are accumulated
-            # before the flag is read), which is why `solo.picks` can already pass it for the same
-            # reason (finding 35). [M4.12 review cycle 1: M412-PLAY-2]
+            # No pair: only `played.beliefs` is read, and the pair search is the expensive part.
             select=False,
         )
         tilt = dict(seat["tilt"] or {})
@@ -1276,17 +763,14 @@ async def finish(
 
     slate = combine_rules.combine(
         per_participant=per_participant,
-        # On the room's scale, which is the scale decision 478 recalibrated the threshold on; the
-        # raw §5.1 read measured D = 5.07 on a title both members rank first.
+        # On the room's scale, the one decision 478 recalibrated the threshold on.
         member_ledger=snapshot.member_ledger(),
         tilts=tilts,
         axes=snapshot.axes,
         dna=snapshot.dna,
         phrasing=phrasing,
     )
-    # Match lines for the slate the ballot is over. Runners-up carry them too (§6.2 step 7:
-    # "Match lines appear on the winner card and each runner-up"), but the pool's tail does not
-    # — a line per candidate on a fifty-title pool is a query nobody reads.
+    # Match lines for the ballot's titles only (§6.2 step 7), not the pool's tail.
     on_the_slate = set(slate.ballot_titles)
     matches = {
         title_id: await _match_lines(
@@ -1295,46 +779,10 @@ async def finish(
         for title_id in on_the_slate
     }
     async with conn.transaction():
-        # 54e's reveal is simultaneous, so the combine runs on whichever answer finishes the
-        # room — and when two people finish at the same moment, that is both of them.
-        # `settle` below reads the session state and calls this in a separate statement with
-        # nothing in between, and `everyone_finished` turns true the instant the last of the two
-        # final answers commits. Both callers then arrive here, and the second one's DELETE
-        # cannot see the first's uncommitted rows: it deletes nothing, inserts, and is refused
-        # by `session_result_pkey` — 409 `conflict: session_result_pkey` out of `app.py`'s
-        # handler on the last answer of somebody's round, or on whichever read called `settle`,
-        # over a room that is by then perfectly fine.
-        #
-        # The lock rather than a caught exception, because it makes the loser WAIT and then do
-        # the work correctly: by the time it proceeds the winner has committed, so its DELETE
-        # sees those rows and replaces them, and the room ends with one slate either way. It is
-        # taken inside this transaction, after the slate is computed, so the LLM call above is
-        # not holding it. `ballot.resolve` was made idempotent for this same beat at the other
-        # end; this is the same promise on this end.
+        # Two final answers can both reach the combine: the lock makes the loser wait and replace.
         await conn.execute("SELECT pg_advisory_xact_lock($1, $2)", _FINISH_LOCK, session_id)
-        # AND THE ROOM IS STILL THE ONE THIS COMBINE WAS RUN FOR. The transition at the foot of
-        # this transaction used to be a bare `set_state(..., 'ballot')` — a statement with no
-        # predicate, and `set_state` writes `ended_at = NULL` for every state that is not an ended
-        # one, which makes it the only write in this codebase that can move a session from an
-        # ended state back to a live one. `settle` reads the state in its own unlocked statement
-        # and the whole of this function runs between that read and that write, so a host's End
-        # committing inside the window was silently undone: their phone had its 200
-        # {"state": "abandoned"} and left the room, and the room came back in `ballot` with
-        # `ended_at` NULL — on §6.2 step 2's open-rooms list for every household device and
-        # holding its code against `session_room_code_live`. That is precisely the room decision
-        # 169's control exists for, and every other phone in it is polling the lobby and therefore
-        # calling `settle`. The advisory lock above serialises two combines and nothing else;
-        # `rooms.end_session` contends on the session ROW, so the two met on nothing at all.
-        #
-        # `ended_at IS NULL` rather than `state = 'voting'`, for `_participant`'s reason: 0013's
-        # `session_ended_states` CHECK ties the timestamp to `resolved` and `abandoned` together,
-        # so this asks the schema's own question, and re-running the combine over a room already
-        # in `ballot` stays the idempotent thing the lock above argues for. `FOR UPDATE` takes the
-        # same row `end_session` takes, so the two serialise the way `start`'s claim and
-        # `end_session` already do: an End arriving after this point waits and then ends the
-        # balloted room, which is a correct evening. Returning before the DELETE is what makes the
-        # refusal free — there is nothing to roll back.
-        # [M4.12 review cycle 1: M412-PLAY-1; decision 169]
+        # Still a live room: a bare `set_state` would resurrect a room the host ended meanwhile.
+        # `FOR UPDATE` serialises with `rooms.end_session` (decision 169).
         live = await conn.fetchval(
             "SELECT id FROM session WHERE id = $1 AND ended_at IS NULL FOR UPDATE", session_id
         )
@@ -1352,16 +800,9 @@ async def finish(
                 session_id, row["title_id"], row["rank"], row["slot"], row["group_score"],
                 matches.get(row["title_id"], {}),
                 slate.conflict if slate.conflict and row["slot"] != "runner_up" else None,
-                # 54d's "**labelled as such**", persisted with the slate rather than recomputed:
-                # the same reason the slate itself is written down, since which card was the
-                # counterweight cannot be re-derived once the axes move under it. False on every
-                # row of every night that surfaced no split, which is all of them on the shipped
-                # bundle. [decision 220; migration 0021]
+                # 54d's counterweight, persisted: it cannot be re-derived once axes move (decision 220).
                 row["reserved"],
-                # The person reservation's own discriminator, never `reserved` above: that column
-                # means "the other pole of the contested axis" to every reader and every test that
-                # pins it, and a seat's pick is a different claim with a different label.
-                # [decision 479; migration 0033]
+                # The person reservation, a different claim from `reserved` (decision 479).
                 row["reserved_for"],
             )
         await rooms.set_state(conn, session_id, rooms.STATE_BALLOT)
@@ -1371,40 +812,16 @@ async def finish(
 async def settle(conn: asyncpg.Connection, session_id: int, *, z: float) -> bool:
     """Move a room whose every seat has ended on to the ballot. True if THIS call moved it.
 
-    §6.2 steps 5-6 (54e). THE LIFECYCLE NEEDS AN OWNER A READ CAN CALL. This transition used to
-    exist only inside `api/tonight.py`'s `_announce`, which made a phone's POST its only caller —
-    so a combine that raised once left the answer standing, the request 500ing, and the room in
-    `voting` for the rest of the evening with every seat's `ended_by` set: the lobby reported
-    `voting`, the ballot answered 200 with an empty slate, the result answered 409 `still_voting`,
-    and every write was refused because each seat had finished. The votes were all in the
-    database and nothing could reach them; recovery was SQL against `session`. A dropped
-    connection and a container restart mid-request are both ordinary, and one of them costs the
-    evening. [M4.12 finding 4]
-
-    So the rule lives here and every read calls it: the session, the ballot and the result. That
-    is cheap — two counts on indexed columns in the common case, and the common case is a room
-    that has not finished — and it is safe to repeat by construction rather than by arrangement:
-    `finish` above takes `pg_advisory_xact_lock` and then DELETEs and re-INSERTs the slate in one
-    transaction, and `ballot.resolve` is idempotent at the other end.
-
-    NOT A WORKER SWEEP, and nothing swallowed. A sweep measures its own latency in minutes and
-    the household is waiting now, in the room, holding a phone. And a settle that caught its own
-    exception would answer 200 over a room it had failed to move — which is how this defect
-    survived a milestone with a green suite: the fault has to travel, to the log and to the
-    status code, so the combine's own failure is visible where it happens.
+    Every read calls it (session, ballot, result), so a failed combine does not strand the room;
+    repeatable because `finish` locks and `ballot.resolve` is idempotent. Nothing is swallowed.
     """
     if not await everyone_finished(conn, session_id):
         return False
     state = await conn.fetchval("SELECT state FROM session WHERE id = $1", session_id)
-    # The state is the claim, not the seat counts: a room already in `ballot` (or resolved, or
-    # abandoned) has had its combine, and a room still `open` has no snapshot to combine — and
-    # `everyone_finished` is vacuously true of a session with no seats at all.
+    # The state is the claim: only a `voting` room has a combine to run.
     if state != rooms.STATE_VOTING:
         return False
-    # The state read above is a check-then-act over the whole combine, which is seconds on a real
-    # pool. `finish` re-asks the question under the session row's own lock and answers None when
-    # the household ended the evening in that window, so "THIS call moved it" stays true of the
-    # return value rather than of the read that preceded it. [M4.12 review cycle 1: M412-PLAY-1]
+    # `finish` re-checks under the row lock, so the return stays true of THIS call.
     return await finish(conn, session_id, z=z) is not None
 
 

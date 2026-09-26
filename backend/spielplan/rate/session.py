@@ -1,26 +1,7 @@
-"""The Rate surface's state machine. Spec v2.1 §6.1, §6.7, §6.8, §7.3, §13, decision 35.
+"""The Rate surface's state machine (§6.1, §6.7, §13, decision 35).
 
-The session lives on the server, and three of §6.1's rules are enforceable only because it
-does:
-
-  * **The block counter is the server's.** §6.1: "Mix (default — alternates sweep and battle);
-    blocks of 15." Decision 35 measures Undo's depth in that counter — "back to the start of
-    the current block of 15 and no further" — so a counter the client owns is a counter the
-    client can lie about, and Undo's boundary becomes unenforceable.
-  * **The card in front of the person is the server's.** A write names a `card_token`, never a
-    title id, so a client cannot answer a card it was never served, a battle pair does not
-    reshuffle under the person's thumb between the draw and the tap, and §13's silent re-ask
-    marker has a home no serialiser can reach.
-  * **The card type is a function of the counter, never of the last card served.** §6.1's Mix
-    "alternates sweep and battle", and the counter is what alternates — the monotone
-    observation index across blocks (`observation_index`), not the slot inside one, because
-    fifteen is odd and the slot made every roll serve two sweeps in a row (decision 200).
-    Deriving the next type from what was last *answered* is the bug this module exists not to
-    have: a run of duels then never returns a sweep card.
-
-What this module is not: it draws no cards itself. `rate.queue`, `rate.battle` and
-`rate.balance` own what to ask; this owns when, in what order, under which token, and how to
-take it back.
+The server owns the block counter, the card on the table and its token, so Undo's boundary and a
+stale tap are enforceable. It draws no cards itself: `queue` and `battle` decide what to ask.
 """
 
 from __future__ import annotations
@@ -52,9 +33,7 @@ from spielplan.sync import seen
 
 log = logging.getLogger("spielplan.rate.session")
 
-# §6.1: "blocks of 15". Not a tuned constant — it is the spec's own number and the unit
-# decision 35 measures Undo's depth in, so it is fixed here rather than in
-# `ledger_hyperparams.json`, which §4.3 reserves for what the corpus project re-tunes offline.
+# §6.1: "blocks of 15", the unit decision 35 measures Undo's depth in.
 BLOCK_SIZE = 15
 
 # Decision 492: Mix starts battling once the person holds one block of live ratings. See `warm_up`.
@@ -68,33 +47,12 @@ Side = Literal["left", "both", "right"]
 # genuine ties), so TIE is an outcome here and never a skip.
 OUTCOMES: tuple[str, ...] = ("A", "B", "TIE")
 
-# §6.1's battle context. A profile battle is drawn at random by design (§0 row 6's measured
-# null), so it is neither boundary-targeted nor part of §13 stream (a)'s held-out sample.
+# Random by design (§0 row 6), so neither boundary-targeted nor in §13 stream (a)'s holdout.
 BATTLE_CONTEXT = "profile_battle"
 BATTLE_SELECTION = "random"
 
 
-# §6.1's empty state, keyed by the CAUSE of the empty state rather than by nothing at all.
-#
-# There is one way to have no card and three reasons for it, and `payload` could not tell them
-# apart: the sweep queue is spent (Sweep), no verdict class yet holds two titles so no pair can
-# be drawn (Battle), or both (Mix). One sentence served all three, so a person in their first
-# week who tapped Battle — the case where the pool is *empty* rather than exhausted, because the
-# pool is the conjunction "seen AND verdicted within one class" — was told "You've rated
-# everything we can queue right now", which is the opposite of true and sends them to Rank
-# instead of back to the sweep that would fix it. §6.8 makes every line the app says about its
-# own state a matter of honesty, and `cause` travels beside the copy so a client can pick its
-# own heading instead of inferring one. No new session state: the cause is the mode, because the
-# mode is what decided which draws were attempted (see `ensure_card`). [M4.10 finding 20]
-#
-# The pool sentences no longer say "not two of them yet": a band can now be empty of NEW pairs
-# as well as of titles -- `battle.draw` serves no pair the person has already compared, and
-# decision 493 keeps the disliked band out of a first sitting -- so they say what is true in all
-# three cases, and "band" goes with the model's vocabulary (decision 486).
-#
-# The modes are named by what they ask since the second household test ("mix / sweep / battle"
-# read as jargon: now Mixed, Singles and Pairs), so the sentences say "pairs" and "one by one" in
-# plain words rather than the old names. [A3, 2026-09-26]
+# §6.1's empty state, keyed by its cause: the mode decided which draws were attempted.
 DRAINED_CAUSES: dict[str, dict[str, str]] = {
     "queue": {
         "cause": "queue",
@@ -121,13 +79,7 @@ DRAINED_CAUSES: dict[str, dict[str, str]] = {
 
 
 def drained_for(mode: str) -> dict[str, str]:
-    """Which empty state this is, from the mode that decided which pools were tried.
-
-    Mix tries both and lands here only when both came back empty; Sweep and Battle each tried
-    one. Defaulting to `both` rather than raising: a mode outside `MODES` cannot reach here
-    (`set_controls` validates), and an empty state is not the place to turn a surprise into a
-    500. [M4.10 finding 20]
-    """
+    """Which empty state this is, from the mode that decided which pools were tried."""
     if mode == "sweep":
         return DRAINED_CAUSES["queue"]
     if mode == "battle":
@@ -136,12 +88,7 @@ def drained_for(mode: str) -> dict[str, str]:
 
 
 class StaleCard(Exception):
-    """The answer names a card that is not the one on the table.
-
-    A double tap, a back button, a second device — all three arrive as a token that no longer
-    matches `rate_session.card_token`, and all three must be refused rather than applied to
-    whatever card happens to be current now.
-    """
+    """The answer names a card that is not the one on the table (double tap, back, second device)."""
 
     def __init__(self, reason: str = "stale_card") -> None:
         super().__init__(reason)
@@ -149,11 +96,7 @@ class StaleCard(Exception):
 
 
 class UndoUnavailable(Exception):
-    """Decision 35: "back to the start of the current block of 15 and no further".
-
-    Raised rather than silently no-opped, because the chip has to disable *visibly* at the
-    boundary and a tap that quietly does nothing is the failure this replaces.
-    """
+    """Decision 35: "back to the start of the current block of 15 and no further"."""
 
     def __init__(self, reason: Literal["empty", "block_boundary"]) -> None:
         super().__init__(reason)
@@ -162,8 +105,7 @@ class UndoUnavailable(Exception):
 
 @dataclass(frozen=True)
 class Jellyfin:
-    """§7.3's write path, injected. `client is None` is a legal, reported state (§3.3: the app
-    must work when Jellyfin is down), and then the app-side write simply stays owed."""
+    """§7.3's write path, injected. `client is None` is legal (§3.3): the write then stays owed."""
 
     client: JellyfinClient | None
     cfg: JellyfinConfig
@@ -186,17 +128,8 @@ class RateSession:
 class RailLine(str):
     """A log line that remembers which title it narrates.
 
-    §6.7's event carries a `title_id` field and every producer left it null, so the line the
-    client rendered named a film it could not link. The id has to travel WITH the line rather
-    than be looked up beside it, because §6.7's sentence is composed at the write — see
-    `rail.record`'s contract, "the rail shows what the model believed when it acted" — while
-    `rail.record` itself is called one call later, in `payload`, by which time `s.current_card`
-    is the NEXT card and the answered one is gone.
-
-    A `str` subclass rather than a pair or a second tuple beside `log`: `Outcome.log` is also
-    §6.1's per-response echo, so every line in it is serialised into the payload and read with
-    `in` by tests and by `RateModelLog`. Subclassing leaves all of that working untouched and
-    makes the id readable by exactly the one caller that wants it.
+    A `str` subclass because `Outcome.log` is serialised and read with `in`; the id travels with
+    the line because `rail.record` runs after `s.current_card` has moved on.
     """
 
     def __new__(cls, text: str, *, title_id: int | None = None) -> RailLine:
@@ -221,16 +154,9 @@ class Outcome:
 
 
 def observation_index(block_index: int, slot: int) -> int:
-    """How many observations this session has taken, from the two numbers it stores.
+    """The monotone observation count decision 200 derives the card type from.
 
-    The monotone counter decision 200 derives the card type from. `rate_session.seq` is the
-    journal's row count and is deliberately NOT this number: a correction appends a row without
-    advancing (§6.1 makes it a repair of the question, not an answer to it), and Undo moves the
-    block and slot back while leaving `seq` where it was — so a type derived from `seq` would
-    contradict the card Undo had just restored and would re-create the double sweep below one
-    undo later. The index over (block, slot) is the same number in the ordinary case, moves only
-    when the counter the person is reading moves, and is defined by `advance`'s own arithmetic.
-    [decision 200]
+    Not `rate_session.seq`: a correction appends without advancing, and Undo moves this back.
     """
     return block_index * BLOCK_SIZE + slot - 1
 
@@ -238,17 +164,8 @@ def observation_index(block_index: int, slot: int) -> int:
 def card_type_for(mode: str, index: int) -> CardType:
     """§6.1: "Mix (default — alternates sweep and battle); blocks of 15."
 
-    A pure function of the MONOTONE observation index (`observation_index` above), not of the
-    slot. Index 0 — slot 1 of the first block — is a sweep, so a new labeller opens on the one
-    card they can answer with no ratings of their own. Sweep and Battle modes serve only their
-    own type; the counter still advances, so switching modes mid-block does not restart it.
-
-    It was the slot, and fifteen is odd: slot 15 was a sweep and `advance` rolls slot 15 to slot
-    1, which is a sweep too. So every block ended and the next began with a sweep — eight sweeps
-    to seven battles and one consecutive-same pair per block, which over §6.1's 50-100-verdict
-    target is three to seven fewer duels than "alternates" promises, in the arm §5.2 credits with
-    within-liked resolution. §6.1 is not amended: the spec says alternates, and it now does.
-    [M4.10 finding 24, decision 200]
+    On the monotone index, not the slot: fifteen is odd, so the slot served two sweeps at every
+    roll (decision 200). Index 0 is a sweep.
     """
     if mode == "sweep":
         return "sweep"
@@ -260,17 +177,7 @@ def card_type_for(mode: str, index: int) -> CardType:
 def warm_up(wanted: CardType, *, mode: str, labels: int) -> CardType:
     """Decision 492: in Mix, no battle until `MIX_WARMUP_LABELS` live ratings stand.
 
-    §6.1's Mix alternated from the second card, so both household members met their first battle
-    on card 4 from a pool of three titles -- one eligible pair, served three times in eight cards --
-    and both switched to Sweep before card 10. A first block of single titles gives the pool
-    something to draw from, and §6.1's "50-100 in the first sitting" counts verdicts anyway.
-
-    It changes the counter's CALL, not the card under it. Written as a marked substitution the
-    warm-up would have printed "a battle was due in this slot" on half of a new member's first
-    fifteen cards and left `serving` saying battle; here the counter says sweep and nothing is
-    marked. Applied over `card_type_for` rather than inside it, so decision 200's alternation is
-    the same pure function of the monotone index from the moment Mix starts battling. Sweep and
-    Battle modes are what the person chose and are left alone.
+    Changes the counter's call, not the card under it, so nothing is marked as a substitution.
     """
     if mode == "mix" and labels < MIX_WARMUP_LABELS:
         return "sweep"
@@ -280,13 +187,8 @@ def warm_up(wanted: CardType, *, mode: str, labels: int) -> CardType:
 def advance(block_index: int, slot: int) -> tuple[int, int]:
     """§6.1: "the counter runs 1..15 and rolls into a new block."
 
-    Rolling is decision 35's boundary, and decision 199 is precise about where that boundary
-    falls: a block is committed when the FIRST observation of the NEXT block lands, not when the
-    fifteenth of this one does. So the roll moves the counter and nothing else — the fifteenth
-    tap stays undoable while the new block is still empty, which is what decision 174 ruled and
-    what `_undo_reaches` implements. Everything in the old block stops being undoable one tap
-    later. Stated as arithmetic rather than as a separate rule, so the two cannot disagree.
-    [decisions 35, 174, 199]
+    The roll moves the counter only: the fifteenth tap stays undoable until the next block's
+    first observation lands (decisions 174, 199).
     """
     if slot >= BLOCK_SIZE:
         return block_index + 1, 1
@@ -321,12 +223,7 @@ async def open_or_resume(
     kinds: Sequence[str] | None = None,
     restart: bool = False,
 ) -> RateSession:
-    """One live session per person, which is what `rate_session_one_live` says in DDL.
-
-    Resuming rather than restarting is the point: a person who closes the app at slot 7 comes
-    back to slot 7, with the same seven observations still undoable. `restart=True` ends the
-    live session first, which is the only way to get a fresh block counter.
-    """
+    """One live session per person (`rate_session_one_live`); `restart=True` ends it first."""
     wanted = normalise_kinds(kinds) if kinds else list(observations.KINDS)
     async with conn.transaction():
         if restart:
@@ -335,8 +232,7 @@ async def open_or_resume(
                 "WHERE user_id = $1 AND ended_at IS NULL",
                 user_id,
             )
-        # The conflict target names the partial index's own predicate, so the DDL's uniqueness
-        # rule is honoured by the insert rather than fought with an exception handler.
+        # The conflict target names the partial index's own predicate.
         row = await conn.fetchrow(
             f"""
             INSERT INTO rate_session (user_id, kinds, mode)
@@ -377,11 +273,8 @@ async def set_controls(
 ) -> RateSession:
     """§6.1's three controls: the mode, the kind toggles, and the decisive switch.
 
-    Changing the mode or the kinds drops the card on the table — a battle pair is meaningless
-    once Sweep is selected, and a film pair is meaningless once Films is switched off — so the
-    next `ensure_card` draws fresh. The decisive switch does not: it changes the *weight* of
-    the answer to the pair on the table, not the question. It belongs to that pair, so a redraw
-    turns it off with the card it was set for (see `_append`).
+    A mode or kind change drops the card on the table; the decisive switch belongs to the pair on
+    the table, so a redraw turns it off.
     """
     if mode is not None and mode not in MODES:
         raise ValueError(f"mode must be one of {MODES}, not {mode!r}")
@@ -413,20 +306,10 @@ async def set_controls(
 async def _observed_title_ids(
     conn: asyncpg.Connection, session_id: int, *, kinds_of: Sequence[str] | None = None
 ) -> list[int]:
-    """What this sitting has already put in front of the person.
+    """What this sitting has already put in front of the person; Undo lifts the suppression.
 
-    `undone_at IS NULL` is what makes Undo lift the suppression along with the observation.
-
-    The two card types want *different* answers out of this, which is why it takes a filter:
-
-      * The **sweep queue** excludes everything. A rated title does not come back, a skipped
-        one does not come back, and a title cannot be asked about twice in one sitting.
-      * The **battle pool** excludes only what was skipped. Mix exists to ask two different
-        questions about the same titles — §6.1 draws pairs "from the user's seen titles within
-        verdict bands", and those bands are built out of exactly the verdicts the sweep half
-        just collected. Excluding them would leave a person who arrived with no ratings unable
-        to reach a battle at all, which is the alternation the surface is named for. A skip is
-        the one signal that means "not this, not now", and it holds for the sitting.
+    The sweep excludes everything; the battle pool excludes only skips, because Mix battles over
+    the very verdicts the sweep half just collected.
     """
     rows = await conn.fetch(
         "SELECT DISTINCT unnest(title_ids) AS title_id FROM rate_observation "
@@ -469,11 +352,7 @@ async def _draw_pinned(
 ) -> dict[str, Any] | None:
     """A sweep card for the first drawable pinned title, or None.
 
-    The pin lifts this sitting's suppression for the titles it names: a person who skipped a
-    film, then searched for it or tapped "Rate it" on it, has asked for it again, and a pin the
-    queue quietly refused looked exactly like a search that did nothing. `rate.svelte.js` drops a
-    pin from `head` once its card has been served, so an answer to the pinned card -- a skip, a
-    "not seen" -- does not bring the same card straight back.
+    A pin lifts this sitting's suppression of the titles it names: the person asked for them again.
     """
     pinned = set(head)
     card = await _draw_sweep(
@@ -487,12 +366,8 @@ async def _admit_pinned_kinds(
 ) -> RateSession:
     """A pin of a kind the session does not hold widens the session to hold it.
 
-    Rate's search looks through both kinds and the title card's "Rate it" knows nothing of the
-    session at all, so a films-only session handed a series pin would otherwise keep its card and
-    say nothing. Widening rather than serving across the partition keeps proposal 46's counter
-    naming the partition the card is drawn from, and §4.1 rule 5 is untouched: the queue still
-    ranks inside the selection it is given. Only for a pin the queue could serve -- a rated title
-    is never drawn, so it widens nothing.
+    Widening rather than serving across the partition keeps §4.1 rule 5; a rated title widens
+    nothing.
     """
     rows = await conn.fetch(
         """
@@ -514,8 +389,7 @@ async def _admit_pinned_kinds(
 
 
 async def _live_labels(conn: asyncpg.Connection, s: RateSession) -> int:
-    """The person's live ratings over the session's kinds: the class-balance widget's own total,
-    so the number the widget shows and the number decisions 492 and 493 test are one number."""
+    """The person's live ratings over the session's kinds: the class-balance widget's own total."""
     return (await balance.class_balance(conn, user_id=s.user_id, kinds=s.kinds)).total
 
 
@@ -541,8 +415,7 @@ def _battle_card(kind: str, pair: battle.BattlePair) -> dict[str, Any]:
         "kind": kind,
         "title_a": pair.title_a,
         "title_b": pair.title_b,
-        # §6.1 draws pairs "within verdict bands"; the band is the pair's, and it stays
-        # server-side — see `public_card`.
+        # Server-side only; see `public_card`.
         "verdict_class": pair.verdict_class,
         "reason": pair.reason,
         "reask_of": pair.reask_of,
@@ -558,30 +431,9 @@ async def ensure_card(
 ) -> RateSession:
     """Idempotent: draws only when the table is empty.
 
-    A GET that redrew would make the card a moving target and every §6 preamble promise about
-    preloading a lie. The substitution rule is the one wrinkle: when the slot calls for a
-    battle and the person has not yet rated two titles in any one class, a sweep is served in
-    its place and **the slot is not changed** — so alternation resumes by itself the moment a
-    pool exists, rather than the surface silently becoming Sweep-only.
-
-    `head` is the exception to the idempotency, and it has to be. §6.0's pending-verdicts banner
-    names up to three titles and its CTA "opens the §6.1 queue with those titles at the head of
-    the queue, **not** at whatever position the standing queue held" — and a person who taps it
-    almost always has a standing session with a card already stashed. Treated as a plain
-    refresh, the banner names three films and then serves a battle about two others, which is
-    the exact failure the requirement exists to prevent ("naming titles and then presenting a
-    different card is worse than no prompt").
-
-    So an explicit `head` that the stashed card does not satisfy redraws once. It stays
-    idempotent, because after the redraw the card *is* one of the named titles; and when none of
-    them can be drawn — all rated already, or no such title — the stashed card is kept rather than
-    the surface flickering on every GET.
-
-    Rate's search and the title card's "Rate it" pin through the same `head`, and three things
-    changed for them (C5.2 of the 2026-09-25 household test): a pin of another kind widens the
-    session to it (`_admit_pinned_kinds`), a pin lifts this sitting's suppression of the title
-    (`_draw_pinned`), and a pin is served on an EMPTY table too, before the slot's own draw --
-    the table is empty after every tap, and a battle slot used to spend the pin on a pair.
+    A battle slot with no drawable pair serves a sweep without changing the slot, so alternation
+    resumes by itself. An explicit `head` the stashed card does not satisfy redraws once (§6.0's
+    banner must serve the titles it names); a pin is also served on an empty table first.
     """
     head = tuple(int(t) for t in head)
     if head:
@@ -597,9 +449,7 @@ async def ensure_card(
         replacement = await _draw_pinned(conn, s, served=served, head=head)
         if replacement is None:
             return s
-        # The banner's redraw is a sweep whatever the counter called for, so it is a
-        # substitution exactly as much as the thin-pool one below is, and it said so nowhere.
-        # [M4.10 finding 21]
+        # The banner's redraw is a sweep whatever the counter called for: mark it.
         return await _stash_if_unchanged(
             conn, s, _mark_substitution(replacement, instead_of=wanted)
         )
@@ -634,19 +484,7 @@ def _mark_substitution(
 ) -> dict[str, Any] | None:
     """Mark a card the counter did not call for, wherever the type flips.
 
-    Three sites stash a card of the other type and only one of them marked it: the thin-pool
-    substitution did, while `ensure_card`'s banner redraw and both of `_redraw_pair`'s fallbacks
-    did not. `public_card` ships `substituted_for`, so an unmarked substitution was a payload
-    that changed the question and said nothing — while its own `serving` went on naming the type
-    the counter wanted. One rule, applied at every flip, so the three sites cannot drift again.
-
-    The field carries the TYPE and no cause: these three sites have three different ones (a thin
-    pool, §6.0's pinned head, an emptied verdict band) and the marker cannot tell them apart. The
-    sweep card no longer prints a sentence off it at all -- "a battle was due in this slot" was
-    the block machine talking to a member (decision 486) -- and the battle card's line names the
-    one cause a battle can stand in for, a drained sweep queue. The marker stays on the wire for
-    the payload's own consistency, which `serving` relies on. [M4.10 finding 21, cycle 1
-    M410-D8-07; C4.5 of the 2026-09-25 household test]
+    The type and no cause: three sites flip for three different reasons. `serving` relies on it.
     """
     if card is not None and card["type"] != instead_of:
         card["substituted_for"] = instead_of
@@ -658,18 +496,8 @@ async def stash_card(
 ) -> RateSession:
     """Write the card and a fresh token in one statement, replacing whatever is there.
 
-    `rate_session_card_has_token` makes "a card with no token" unrepresentable; issuing the
-    token here rather than at the route is what makes that CHECK an invariant instead of a
-    reminder.
-
-    Unconditional, and only two callers may be: `record_correction`'s repaired pair, which
-    DELIBERATELY replaces a standing card — a corrected pair that kept the old card would go on
-    asking about a title the person has just said they have not seen — and which is serialised
-    anyway, because `_claim_card`'s `FOR UPDATE` is the first statement of its transaction; and
-    `rate/direct.py`'s title-card answer (decision 487), which takes the same row lock first. The
-    banner's head redraw replaces a standing card just as deliberately but holds no lock at all,
-    so it goes through `_stash_if_unchanged`; everything else goes through `_stash_if_empty`.
-    [M4.10 finding 4, cycle 1 m410-rev-02]
+    Unconditional, so only callers holding the session row lock may use it (`record_correction`,
+    `rate/direct.py`); everything else goes through `_stash_if_empty` or `_stash_if_unchanged`.
     """
     row = await conn.fetchrow(
         f"""
@@ -690,28 +518,8 @@ async def _stash_if_unchanged(
 ) -> RateSession:
     """Replace the card this request read, or serve the card another request put there instead.
 
-    §6.0's banner CTA "opens the §6.1 queue with those titles at the head", so this write has to
-    replace a standing card — `_stash_if_empty`'s predicate would refuse it and serve the battle
-    the banner had just promised not to. What it must not do is replace a card it never read.
-    Finding 4's repair covered the empty-table branch and left this one writing with no predicate
-    at all, so two devices following the same banner CTA both redrew and both stashed: two tokens
-    for one session, last write wins, and the losing device's first tap was refused with "that card
-    has already been answered" over a card nobody had answered. Measured at the route: one split in
-    40 gathered redraws, and deterministic once the two draws were aligned.
-
-    The token predicate is the whole fix, and a miss has three outcomes, not the two
-    `_stash_if_empty` enumerates for its own callers. Another redraw won: serve it — both requests
-    drew from the same pool under the same `head`, so it is a named title too. A tap answered the
-    card and left the table empty: fill it with ours. Or — the commonest of the three, and the one
-    `_stash_if_empty`'s "the same card either way" does not cover — a tap answered the card and
-    `ensure_card` refilled it, because every `record_*` ends by drawing the next card, and a tap
-    from a device that is not carrying the banner's `head` refills it with a title the banner did
-    not name. Then the `card_token IS NULL` predicate misses as well and the re-read serves that
-    card: §6.0 is not honoured on that request, and it is still the right answer, because the
-    alternative is taking a card out from under the device that is holding its token — the refusal
-    over a card nobody answered that this helper exists to stop. The banner's promise is kept on
-    the next redraw; a clobbered token is not recoverable from the client at all.
-    [M4.10 finding 4, cycle 1 m410-rev-02, cycle 2 M410-C2-D2-01]
+    The `card_token = $4` predicate keeps two devices following one banner CTA from clobbering
+    each other's token; on a miss, `_stash_if_empty` serves whichever card now stands.
     """
     row = await conn.fetchrow(
         f"""
@@ -735,19 +543,8 @@ async def _stash_if_empty(
 ) -> RateSession:
     """Stash a freshly drawn card, or serve the one another request stashed first.
 
-    `ensure_card` decides to draw from `s.current_card is None` — a snapshot `_resume` read on
-    an autocommit connection — and the old unconditional UPDATE then wrote whatever it drew.
-    Two GETs on a session with an empty table therefore both drew and both stashed: same title,
-    two tokens, last write wins, and `api/rate.py`'s own docstring promise ("a second GET
-    returns the same card under the same token") was false. Reproduced: two tokens back, the
-    first verdict 200 and the second 409, on nothing more exotic than a phone that reloaded
-    while a laptop was open. The phone and the laptop are §6.2's household, not an edge case.
-
-    `AND card_token IS NULL` makes the decision and the write one statement, so the loser's
-    UPDATE matches no row; it then re-reads and serves the winner's card, which is the same
-    card either way (both drew from the same pool) under the one token the surface will accept.
-    A drawn card that is thrown away costs nothing durable: the draw writes nothing.
-    [M4.10 finding 4]
+    `card_token IS NULL` makes the decision and the write one statement, so two concurrent GETs
+    end up under one token.
     """
     row = await conn.fetchrow(
         f"""
@@ -770,8 +567,7 @@ async def _stash_if_empty(
     return _session(current)
 
 
-# `overview_is_mpst`: whether the overview IS the title's MPST synopsis. On v20260925 that is 965
-# titles, 25 of them on the seed list, and exactly the titles whose only plot source is MPST.
+# `overview_is_mpst`: the overview IS the title's MPST synopsis, a full retelling.
 _TITLE_CARDS = """
 SELECT t.id, t.kind, t.name, t.year, t.runtime_min, t.poster_path, t.overview,
        EXISTS (
@@ -787,9 +583,7 @@ SELECT t.id, t.kind, t.name, t.year, t.runtime_min, t.poster_path, t.overview,
 async def _title_cards(conn: asyncpg.Connection, ids: Sequence[int]) -> dict[int, dict[str, Any]]:
     """The poster-forward card of §6.8, and nothing else.
 
-    The column list is the first half of the anchoring guard: `ledger_state` is not joined,
-    `user_score` is not joined, and `title.placement` — the §8 stage-10 cold badge — is not
-    read, because a badge that says "no crowd data yet" is still a statement about the model.
+    No `ledger_state`, `user_score` or `title.placement`: the card must not anchor on the model.
     """
     rows = await conn.fetch(_TITLE_CARDS, list(ids))
     return {
@@ -800,13 +594,7 @@ async def _title_cards(conn: asyncpg.Connection, ids: Sequence[int]) -> dict[int
             "year": r["year"],
             "runtime_min": r["runtime_min"],
             "poster_path": r["poster_path"],
-            # §6.1's task on a sweep card is "did you see this?", so the aid is a plot logline --
-            # and never an MPST synopsis. Those are full retellings, ending included (the reason
-            # `importer/meta.py` ranks the source last), some opening with an IMDb user's
-            # editorial note: The Grudge's aid read "The film begins with the suicide of Peter,
-            # and ends with Karen in the hospital". A card with no aid still asks its question;
-            # a card that spoils the film answers it. §4.1 rule 8 is about non-ASCII text and
-            # has nothing to say here. [C9.2 of the 2026-09-25 household test]
+            # A recall aid, never an MPST synopsis: those retell the ending.
             "recall_aid": None if r["overview_is_mpst"] else _recall_aid(r["overview"]),
         }
         for r in rows
@@ -827,14 +615,7 @@ async def public_card(
 ) -> dict[str, Any] | None:
     """§6.1: "Prediction reveal strictly *after* the tap (anchoring; Cosley 2003)."
 
-    Built field by field from an allow-list. It never copies `current_card` and deletes keys:
-    a deny-list leaks the first time a field is added, and the two fields it would leak are
-    §13's re-ask reference and the pair's verdict band — the model's belief and the person's
-    own prior label, the two things a card must not carry.
-
-    Nothing that reaches this payload comes from `ledger_state`, `user_score` or
-    `ledger_cutpoints`. The prediction exists and is computable; it is served in the response
-    to the verdict, which is `predicted_class` below.
+    Built from an allow-list: `reask_of` and the pair's verdict band must never reach the card.
     """
     card = s.current_card
     if card is None or s.card_token is None:
@@ -848,26 +629,19 @@ async def public_card(
             "kind": card["kind"],
             "title": titles.get(card["title_id"]),
             "reason": card["reason"],
-            # `source` stays server-side with `reask_of`: "reask" would mark the re-ask exactly
-            # as loudly as the reference itself, and §13 wants the slot indistinguishable.
+            # `source` stays server-side with `reask_of` (§13).
             "substituted_for": card.get("substituted_for"),
             # §6.8 / proposal 52: lowercase, worst -> best, matching the stored ordinal.
             "verdict_labels": [[i, label] for i, label in enumerate(VERDICT_LABELS)],
             "controls": ["verdict", "not_seen", "skip"],
         }
-        # P(seen) is the queue's model, and the why-line no longer prints it (decision 486; A3 of
-        # the 2026-09-26 household test). It travels under `model`, which `rail.redact` strips
-        # for a viewer with Show the model off, and only where the queue placed the card by it:
-        # a recorded-seen card and a §13 re-ask both carry 1.0 and neither carries this, so the
-        # key cannot tell the two apart.
+        # P(seen) travels under `model`, which `rail.redact` strips with Show the model off, and
+        # only where the queue placed the card by it.
         if card.get("source") in ("seed", "p_seen") and card.get("p_seen") is not None:
             public["model"] = {"p_seen": round(float(card["p_seen"]), 2)}
         return public
     titles = await _title_cards(conn, [card["title_a"], card["title_b"]])
-    # Named `left`/`right` rather than `a`/`b` because §6.1's corrections row names the sides
-    # exactly that way ("not seen: [left] [both] [right]"), and one vocabulary for the two
-    # controls that sit on the same card is one fewer mapping for the client to get wrong. The
-    # outcome letter each poster writes travels with it.
+    # `left`/`right` match §6.1's corrections row; each poster carries its outcome letter.
     return {
         "type": "battle",
         "token": token,
@@ -886,8 +660,7 @@ async def public_card(
 
 # --- the reveal, which happens only after the tap ------------------------------------------
 
-# Proposal 153's suppressed reveal, in the member register (decision 486): both reasons it can be
-# dark -- no fit yet, no labels to band against -- have one remedy, and that is what it says.
+# Proposal 153's suppressed reveal: no fit yet or no labels, one remedy.
 NO_GUESS_YET = "no guess yet - rate a few more first"
 
 
@@ -902,27 +675,8 @@ async def _predicted_coordinate(
 ) -> tuple[float, float, int, int] | None:
     """§5.2's zero-parameter prediction for a title with no `ledger_state` row of its own.
 
-    §5.2 gives an unobserved title a coordinate at no extra parameters — it has no residual, so
-    `s = mu + <v, e>` — and §5.2's displayed weight is the empirical CDF of the person's own
-    fitted values. Both are in the cached fit, so this is arithmetic over numbers that already
-    exist rather than a fit: exactly what `refit._update_incrementally` computes with r = 0, and
-    what `refit_user` writes for every *owned* unrated title.
-
-    IT HAS TO BE COMPUTED HERE BECAUSE `ledger_state` IS SIZED TO THE OWNED LIBRARY ON PURPOSE,
-    and the sweep queue is not. `refit_user` writes rows for observed titles plus owned ones, and
-    §6.1's first-run queue is the imported seed list — in v20260828, 100 titles of which 80 are
-    unowned. Measured on that bundle, two members each rating 50 titles got `available: False` on
-    50 of 50 taps and on 9 of 10 even after a full refit, so §6.1's "prediction reveal strictly
-    after the tap" — the anchoring-safe feedback the whole surface is built around — was dark for
-    precisely the sitting §12's M2 exit criterion is defined over. Widening the refit's row
-    universe to the whole catalog was the other way and is the wrong one: it would write 19,000
-    rows per person per kind for a number any one of them can be recomputed from in microseconds.
-
-    Not locked (`lock=False`): this is a read for one sentence on one card, taken deliberately
-    before the write transaction opens, and `load_cache`'s `FOR UPDATE` exists to serialise
-    observations against each other — holding it here would make the reveal contend with the
-    refit for no gain. Returns None rather than a reason: the caller owns the copy.
-    [M4.10 finding 26, §5.2]
+    `ledger_state` is sized to the owned library and the seed-list queue is not, so this computes
+    `s = mu + <v, e>` from the cached fit. Unlocked: a read for one card, before the write.
     """
     cache = await refit.load_cache(conn, user_id=user_id, kind=kind, hp=hp, lock=False)
     if cache is None or cache.cdf_reference.size < 2:
@@ -933,11 +687,9 @@ async def _predicted_coordinate(
     s = float(cache.mu + matrix[0] @ cache.v)
     cdf = float(model.empirical_cdf(cache.cdf_reference, np.asarray([s]))[0])
     if not (math.isfinite(s) and math.isfinite(cdf)):
-        # The same refusal `refit` makes of a non-finite update: say nothing rather than band a
-        # number that is not one.
+        # The same refusal `refit` makes of a non-finite update.
         return None
-    # The tier this title would render in, against the same cuts a stored row is written with, so
-    # the guess below is read off the letter Home shows (decision 510).
+    # The tier Home would show, against the stored cuts (decision 510).
     return s, cdf, int(model.tier_of(np.asarray([s]), cache.cuts)[0]), cache.n_levels
 
 
@@ -950,21 +702,10 @@ async def predicted_class(
     hp: Hyperparams,
     embeddings: EmbeddingSource | None = None,
 ) -> dict[str, Any]:
-    """What the model would have guessed — read BEFORE the write, served after it.
+    """What the model would have guessed, read BEFORE the write and served after it.
 
-    Reading it after the row lands would make "we'd have guessed the same" trivially true: the
-    incremental update touches exactly this title.
-
-    The band is the person's own: the class the title's tier stands for, and the tiers sit on the
-    verdict arm's own fitted cutpoints (decisions 508 and 510, as proposal 153 asked). So the
-    prediction invents no threshold of its own and cannot disagree with the letter the title
-    wears elsewhere. Before the first fit there is nothing to read, and the reveal says so rather
-    than banding a number it does not have.
-
-    The stored row first, the cached fit second: `ledger_state` is where the nightly job and the
-    incremental update leave the numbers every other surface reads, and an unowned queue title
-    simply has no row there — see `_predicted_coordinate`. `hp` is required for the same reason
-    `load_cache` compares it: a cache built under other constants is wrong, not stale.
+    The class the title's tier stands for, on the person's own cutpoints (decision 510). The
+    stored row first, the cached fit second (see `_predicted_coordinate`).
     """
     row = await conn.fetchrow(
         "SELECT ls.s, ls.sigma, ls.cdf, ls.tier, "
@@ -979,8 +720,6 @@ async def predicted_class(
             conn, user_id=user_id, title_id=title_id, kind=kind, hp=hp, embeddings=embeddings
         )
         if coordinate is None:
-            # Decision 486: "fitted ranking" and "labels" are the model's nouns; the member is
-            # told what they can do about it.
             return {"available": False, "reason": NO_GUESS_YET}
         predicted_s, predicted_cdf, predicted_tier, levels = coordinate
     else:
@@ -1005,11 +744,7 @@ async def predicted_class(
         return {"available": False, "reason": NO_GUESS_YET}
 
     cdf = predicted_cdf
-    # Decision 510: the guess is the class the tier letter stands for (decision 508 puts disliked
-    # in F/D/C, fine in B and liked in A/A+/S, on the person's own fitted cutpoints), so the card's
-    # "we'd have guessed" and the badge on Home are one reading of one number. It used to band the
-    # cdf by the person's label shares, a second reading that told Jenny "we'd have guessed fine"
-    # about Amelie under an A badge.
+    # Decision 510: the class the tier letter stands for, so the reveal matches the badge on Home.
     guess = model.verdict_class_of_tier(predicted_tier, levels)
     return {
         "available": True,
@@ -1022,13 +757,7 @@ async def predicted_class(
 
 
 def reveal_for(prediction: dict[str, Any], value: int) -> dict[str, Any]:
-    """§6.1's phrasing: "we'd have guessed the same" / "we'd have guessed {class}".
-
-    The sentence carries no number any more. §6.1 mandates only the phrasing; the " · cdf 0.71"
-    beside it rested on proposal 42's example, which is provenance, and decisions 486 and 491 put
-    the model's numbers behind Show the model -- where `viewer_reveal` adds it back in the data
-    voice beside its name (§6.8).
-    """
+    """§6.1's phrasing: "we'd have guessed the same" / "we'd have guessed {class}"; no number."""
     if not prediction.get("available"):
         return dict(prediction)
     agreed = prediction["predicted"] == value
@@ -1043,9 +772,7 @@ _REVEAL_NUMBERS = ("cdf", "s", "label_count")
 
 
 def viewer_reveal(reveal: dict[str, Any] | None, *, show_model: bool) -> dict[str, Any] | None:
-    """The reveal as one viewer may see it: decisions 486 and 491, gated where the payload is
-    built so a member with the switch off is SENT no model number rather than sent one to hide.
-    The guessed class stays either way -- it is §6.1's whole reveal."""
+    """The reveal as one viewer may see it: with Show the model off, no model number is sent."""
     if reveal is None or not reveal.get("available"):
         return reveal
     if not show_model:
@@ -1063,26 +790,12 @@ async def _push_state(
     user_id: int,
     title_id: int,
 ) -> tuple[bool, str | None]:
-    """Settle §7.3's debt now rather than in fifteen minutes — and outside the transaction.
+    """Push the committed state to Jellyfin now; callers run this after their transaction closes.
 
-    `observations.record_*` has already made the app-side write and left `jf_synced_at` NULL,
-    which is precisely "the person acted and Jellyfin has not been told yet" — the sweep would
-    push it eventually. `seen.push_owed` reads that owed row and pushes it, so the person sees
-    their media server agree while the card is still on screen. With no connector the debt
-    simply stands.
-
-    It no longer takes a `state` and no longer calls `seen.set_state`: that call rewrote the
-    same `user_title` row the observation had just written, one statement earlier, and then
-    awaited a socket with a 15 s client budget — all of it inside `conn.transaction()`. Every
-    caller below now calls this AFTER its transaction closes, and the state it pushes is the
-    committed one rather than one passed alongside it. [M4.10 finding 11]
+    With no connector the §7.3 debt simply stands.
     """
     if jf is None or jf.client is None:
-        # Answered without a query, because `api/rate.py._jellyfin` hands every tap a `Jellyfin`
-        # whether the household has a connector or not, and a house with none is the common
-        # case. §6.7's rail prints this reason verbatim, so an unreadable DEK must not read
-        # there as "not configured" — the connector is configured and its credentials will not
-        # open (M4.7 dd03). `seen.push_owed` draws the same distinction for the same string.
+        # §6.7 prints this verbatim, so an unreadable DEK must not read as "not configured".
         if jf is not None and jf.cfg.secrets_unreadable:
             return False, SECRETS_UNREADABLE_REASON
         return False, "Jellyfin not configured"
@@ -1109,33 +822,10 @@ async def _mark_pushed(
     seq: int,
     entries: Sequence[dict[str, Any]],
 ) -> None:
-    """Decision 207: correct the journal's `pushed` flags once the push has actually resolved.
+    """Decision 207: correct the journal's `pushed` flags once the push has resolved.
 
-    The journal row is written inside the observation's transaction and the push happens after
-    it, so at the moment `_append` runs the honest value of `pushed` is not yet known and false
-    is what gets stored. Leaving it there would be a lie with teeth: `_state_entries`' own
-    docstring says why — "Undo compensates what it did, not what it intended" — and `undo` reads
-    exactly this field to decide whether to hand Jellyfin its Played flag back. A permanently
-    false `pushed` silently drops the compensating write for every title Jellyfin *was* told
-    about, and the next §7.3 sweep then reads our own write back as the household's history.
-
-    One statement, outside the transaction, and best-effort: the observation is durable and the
-    person's tap is answered either way, so a failure here is logged and the reconciliation is
-    left to §7.3's sweep rather than turned into a 500 over a row that was written. Skipped
-    entirely when nothing was pushed, which is every household with no connector.
-
-    `AND undone_at IS NULL` is not tidiness, and neither is the compensation behind it. The row
-    is visible and undoable for the whole of the push — §3.3's slow server makes that the 15 s
-    client budget — and in that window it says `pushed = false`, so an Undo taken there skips
-    `seen.retract` and leaves Jellyfin holding a Played flag the app has no record of. There is
-    nothing left to reconcile it from either: `observations.undo` deletes the `user_title` row a
-    first verdict created, so §7.3 reads an absent row plus Played and adopts it — the app taking
-    its own write back as the household's history, which is the harm the paragraph above says
-    this flag exists to prevent. When the UPDATE matches nothing the tap therefore owes the
-    retraction the undo could not make, and it is the tap that makes it. `undo` takes the journal
-    row `FOR UPDATE`, so both interleavings are covered: an undo that commits first is seen here
-    as a tombstone, and one that commits later blocks on the row lock and then reads the corrected
-    `pushed = true`. [§3.3, §7.3, decision 207; M4.10 cycle 2, M410-C2-F11-01]
+    Best-effort and outside the transaction. If the row was undone mid-push the UPDATE matches
+    nothing, and the tap makes the retraction the undo could not.
     """
     if not any(entry.get("pushed") for entry in entries):
         return
@@ -1178,10 +868,7 @@ async def _mark_pushed(
                 prior_state=entry.get("state") if entry.get("existed") else None,
             )
     except asyncpg.PostgresError as exc:
-        # Logged and not raised, for the rule the rest of this milestone is about: the tap's
-        # observation is durable and, here, already retracted, so a 500 would be a refusal over a
-        # row the person cannot retry. A refused Played write inside `seen.retract` is already a
-        # `(False, reason)` rather than an exception, so this catches the database half only.
+        # Logged, not raised: the observation is durable and there is nothing to retry.
         log.warning(
             "observation %d/%d was undone mid-push and its Played flag could not be retracted: %s",
             session_id,
@@ -1197,26 +884,16 @@ Later = Callable[[Settle], None]
 
 _SETTLING: set[asyncio.Task[None]] = set()
 
-# How many handed-off settlements may hold a pooled connection at once. A push holds its connection,
-# and the title's advisory lock on it, for the whole Jellyfin round trip - up to the client's 15 s
-# per copy - and a tap is answered in about a tenth of a second, so unbounded, one phone rating
-# behind a slow or hung Jellyfin took all ten of the web pool's connections and every route
-# answered 503: the harm `sync/seen.py` names against "a pool of ten", against §3.3's "the app
-# must work when Jellyfin is down". Two leave eight for requests, and Jellyfin sees at most two
-# Played writes from here at once; the rest wait in memory, holding nothing. [review of the second
-# household test's wave, ops-async-push-pool-exhaustion]
+# Unbounded, a slow Jellyfin let one phone's pushes take the whole web pool; two leave eight.
 SETTLE_SLOTS = 2
-# A slot's connection is acquired with the bound `api/deps.py` gives a request, for its reason: a
-# saturated pool answers rather than hangs. A settlement that gets none is left owed, which §7.3's
-# seen-state sweep settles, so nothing is lost by giving up.
+# Bounded like a request's acquire; a settlement that gets none stays owed to §7.3's sweep.
 SETTLE_ACQUIRE_TIMEOUT_S = 10
 
 _slots: tuple[asyncio.AbstractEventLoop, asyncio.Semaphore] | None = None
 
 
 def _settle_slots() -> asyncio.Semaphore:
-    """The one semaphore for this event loop. Made on first use and per loop, because a semaphore
-    that has once made a caller wait is bound to that loop, and each test runs on its own."""
+    """The one semaphore for this event loop, made per loop because a semaphore binds to one."""
     global _slots
     loop = asyncio.get_running_loop()
     if _slots is None or _slots[0] is not loop:
@@ -1286,21 +963,8 @@ async def _settle_push(
 ) -> list[str]:
     """§7.3's push for one tap, now or after the response; returns §6.7's line per title.
 
-    It used to be awaited here, after the commit, on every tap -- and Jellyfin answers a Played
-    write on a SERIES by marking every episode played. On the second household test Jenny's
-    "liked" on Lost took 3,317 ms from the transaction to the response, 3,269 of them in
-    `POST /UserPlayedItems` for the series; every film verdict spent 64 ms of its 98 there. The
-    verdict buttons sat greyed for the whole of it, against §6's "<2 s per sweep card". Nothing
-    in the response depends on Jellyfin's answer, so a route passes `later` and the push runs on
-    a connection of its own once the person has their next card. `_mark_pushed` corrects the
-    journal when it ends, exactly as it did in the synchronous shape -- decision 207's
-    undo-mid-push compensation already covered a push that finishes after the tap's transaction
-    -- and §6.7's rail gets two true lines instead of one: that the push follows, in the
-    response, and how it ended, recorded by the job when it does.
-
-    Inline when there is no client to send with: `_push_state` then answers without a query, so
-    its reason reaches the rail in the same response. [§6 preamble, §7.3; A4 of the 2026-09-26
-    household test]
+    With `later` and a client, the push runs on its own connection after the response (a series
+    Played write can take seconds); with no client, inline, since `_push_state` needs no query.
     """
     writes, title_ids = tuple(writes), tuple(title_ids)
     if later is not None and jf is not None and jf.client is not None:
@@ -1321,14 +985,7 @@ async def _settle_push(
 def settle_in_background(job: Settle) -> None:
     """Run one tap's §7.3 settlement after the response, on a pooled connection of its own.
 
-    ITS OWN CONNECTION, NEVER THE REQUEST'S: `deps.db` releases the request's connection when the
-    response is produced, and this outlives it by design -- `api/tonight.py::_invite` states the
-    same rule for the same reason. It is not bounded by a timeout of its own: a push cancelled
-    mid-flight may already have reached Jellyfin while the journal still says it did not, which
-    is the Played flag decision 207 exists to keep Undo able to take back. The client's own
-    15 s budget bounds it, and a push that never lands is still owed, which §7.3's sweep settles.
-    What IS bounded is how many run at once (`SETTLE_SLOTS`) and how long one waits for its
-    connection (`SETTLE_ACQUIRE_TIMEOUT_S`), both before the push starts.
+    No timeout of its own: a cancelled push may have reached Jellyfin while the journal says not.
     """
     task = asyncio.get_running_loop().create_task(_run_settlement(job))
     _SETTLING.add(task)
@@ -1336,8 +993,7 @@ def settle_in_background(job: Settle) -> None:
 
 
 async def _run_settlement(job: Settle) -> None:
-    # Nothing may raise out of a bare task: there is no request to carry it, and the tap it
-    # belongs to has already been answered. The app-side write is durable either way.
+    # Nothing may raise out of a bare task; the app-side write is durable either way.
     try:
         async with _settle_slots():
             connections = db_pool.pool()
@@ -1366,9 +1022,7 @@ async def _run_settlement(job: Settle) -> None:
 async def settled(timeout: float | None = None) -> None:
     """Wait for every settlement handed off so far. For tests and shutdown, never a request.
 
-    With `timeout`, stop waiting after that long and cancel nothing: a push cut off mid-flight may
-    already have reached Jellyfin while the journal says it did not (`settle_in_background`), so
-    what is still running is left to finish or to §7.3's sweep.
+    With `timeout`, stop waiting and cancel nothing (see `settle_in_background`).
     """
     loop = asyncio.get_running_loop()
     deadline = None if timeout is None else loop.time() + timeout
@@ -1395,28 +1049,10 @@ async def _append(
     prior_state: Sequence[dict[str, Any]] = (),
     latency_ms: int | None = None,
 ) -> RateSession:
-    """One journal row, then the cursor moves. Decision 35's "observation journal with
-    compensating writes rather than a lastAction variable".
+    """One journal row, then the cursor moves (decision 35's observation journal).
 
-    `advances` is derived from `kind_of` here and pinned by the migration's
-    `rate_observation_advances_rule` CHECK — a correction is a repair, not an observation, so
-    it redraws the pair in place and the counter the person is reading does not move.
-
-    The two statements are atomic HERE and not only at the call sites, because for a year they
-    were atomic at four of the five: `record_skip` called this bare. The INSERT is at `seq + 1`
-    and the UPDATE is what moves the session to it, so a process death, a dropped pool
-    connection or a cancelled task between them leaves the journal at N+1 with the session at
-    N — and `rate_observation_seq` then refuses every later append in that session for ever.
-    Reproduced from that state: verdict, skip and not-seen all 500, `GET /api/rate` kept
-    serving a card that could not be answered, undo tombstoned the phantom row and the next
-    verdict still 500'd (the unique index is not partial on `undone_at`), and only
-    `DELETE /api/rate/session` recovered it. Skip is the most frequent tap in a sweep.
-
-    A guard rather than an unconditional `conn.transaction()` so the four callers that already
-    hold one pay nothing: asyncpg would nest as a savepoint, which is correct but is two more
-    round trips on a path §6 budgets at 2 s. `test_static_contracts.py` asserts the call sites
-    independently, because this fallback is the second line of defence and not the contract.
-    [M4.10 finding 3, decision 35]
+    A correction does not advance (`rate_observation_advances_rule`). The INSERT and UPDATE are
+    atomic here too: split, they leave the journal a row ahead and every later append refused.
     """
     advances = kind_of != "correction"
     block_index, slot = (
@@ -1453,20 +1089,9 @@ async def _append(
         except asyncpg.UniqueViolationError as exc:
             if exc.constraint_name != "rate_observation_seq":
                 raise
-            # Belt and braces behind `_claim_card`'s row lock, and the reason it stays: two taps
-            # that both reached this INSERT answered the same card, so the second one is
-            # §6.1's stale card and must leave through the 409 the surface can act on rather
-            # than through `app.py`'s generic conflict handler, which names a constraint the
-            # client has no rule for. `tonight/rooms.py:102-108` maps its own natural key the
-            # same way. [M4.10 finding 2]
+            # Two taps on one card: §6.1's stale card, the 409 the client can act on.
             raise StaleCard("stale_card") from exc
-        # `decisive = false`: the switch is set for one pair and the card it was set for has just
-        # been answered. §6.1 called it persistent, and on the second household test that is what
-        # made it wrong -- Patrick turned it on for one clear pick and his next pair was written at
-        # the decisive weight too (duels 5 and 7 on the live install, 1.6 each), an answer he never
-        # marked as clear. A per-pair switch can only under-weight a pick the person did not
-        # bother to mark; a sticky one over-weights every pick after the one they did.
-        # [decision 520; A6 of the 2026-09-26 household test]
+        # The decisive switch belongs to the pair just answered (decision 520).
         row = await conn.fetchrow(
             f"""
             UPDATE rate_session
@@ -1486,23 +1111,8 @@ async def _append(
 async def _claim_card(conn: asyncpg.Connection, s: RateSession, card_token: str) -> None:
     """Take the card under a row lock, as the first statement of the write's transaction.
 
-    `_take_card` validates against the snapshot `_resume` read on an autocommit connection, so
-    two taps on one token both pass it: a double tap, a second tab, a phone and a laptop on one
-    account. The loser used to get as far as `INSERT INTO rate_observation`, collide with
-    `rate_observation_seq` and roll back — no duplicate observation, but by then its Jellyfin
-    Played write had already gone out for a card someone else had answered. M4.7's handler turned
-    what the person then saw from a blanket 500 into a 409 naming that constraint, which is
-    better and is still not §6.1's refusal: the client has a rule for `stale_card` and none for
-    the name of an index. §6.1 makes the card the server's; this is what makes that true when
-    two answers arrive together, and it does so before the socket rather than after it.
-
-    `FOR UPDATE` on `rate_session` and not on anything else, because that row is what every tap
-    ends by writing (`_append`'s UPDATE) — so the loser blocks here, wakes after the winner
-    commits, re-reads `card_token` as NULL and leaves through `api/rate.py`'s existing 409
-    BEFORE any observation is written and before the socket is touched. Deliberately not taken
-    in `_resume` / `open_or_resume`: those are shared with the GET and the controls route,
-    where a lock held across a draw would serialise reading the surface as well as writing it.
-    [M4.10 finding 2]
+    Two taps on one token both pass `_take_card`'s snapshot check; the loser blocks here, re-reads
+    a NULL token and leaves as §6.1's 409 before any write or push. Not taken on the GET.
     """
     row = await conn.fetchrow(
         "SELECT card_token FROM rate_session WHERE id = $1 FOR UPDATE", s.id
@@ -1529,21 +1139,9 @@ async def _verdict_rail_line(
     value: int,
     refit_ms: float | None,
 ) -> RailLine:
-    """§6.7's commonest line, rendered here because here is where its four facts are true.
+    """§6.7's commonest line, composed here where the title, label and refit time are all in hand.
 
-    `ledger/observations.py` keeps its own sentence — `verdict(title 5) = liked -> ordered-logit
-    arm · implies seen` — and the two are DELIBERATELY different. That one is the domain layer's
-    audit record of the row it wrote: it belongs to callers that never saw a person or a rail,
-    and its qualifiers (`implies seen`, §13's re-ask marker) are facts about the row rather than
-    about the model write. This one is §6.7's narration of the same write, and it names the
-    person and the film because §6.8 forbids a bare model number — a bare title id is exactly
-    one, and nothing on the client can resolve it back into a film.
-
-    The two names cost one round trip on a path §6 budgets at 2 s, taken here rather than
-    threaded down from the route because this is the only moment that holds the title, the
-    label and the incremental refit's own milliseconds together; `rail.record`'s docstring is
-    explicit that a line recomposed later "from numbers that have since moved" is the thing to
-    avoid. [M4.9 finding 23, plan step 7.1]
+    Deliberately not `ledger/observations.py`'s audit sentence: §6.8 wants names, not ids.
     """
     row = await conn.fetchrow(
         "SELECT (SELECT name FROM app_user WHERE id = $1) AS rater,"
@@ -1551,9 +1149,7 @@ async def _verdict_rail_line(
         user_id,
         title_id,
     )
-    # Both rows exist by foreign key — the verdict this line narrates references them — so these
-    # fall back only for a database that has already broken its own constraints, and they say so
-    # rather than printing `None` or reaching for the id §6.8 rules out.
+    # Both exist by foreign key; the fallbacks cover a database that broke its constraints.
     rater = row["rater"] or "an unknown rater"
     title_name = row["title"] or "an unknown title"
     return RailLine(
@@ -1582,13 +1178,8 @@ async def record_verdict(
 ) -> Outcome:
     """§6.1's `Liked / Fine / Disliked`, and "Verdict implies `seen`".
 
-    `bundle_version` travels beside `embeddings` and says which basis it is expressed in, because
-    the two are one fact and `refit.load_cache` has to be able to check it. See
-    `refit.update_incrementally`: the route pins both at boot and the tap can outlive the flip.
-    [M4.13 cycle 1, finding 15]
-
-    `later` takes §7.3's push off the response (`_settle_push`); without it the push is awaited
-    here, which is what every caller that is not a route wants.
+    `bundle_version` names the basis `embeddings` is in, so `refit.load_cache` can check it.
+    `later` takes §7.3's push off the response (`_settle_push`).
     """
     card = _take_card(s, card_token, want="sweep")
     if value not in (0, 1, 2):
@@ -1625,16 +1216,12 @@ async def record_verdict(
             title_ids=write.title_ids,
             verdict_id=write.row_id,
             superseded_verdict_id=write.superseded_id,
-            # `pushed` is false here and corrected by `_mark_pushed` below: the push has not
-            # happened yet, and this row must say what was done, not what is about to be.
+            # `pushed` is corrected by `_mark_pushed` once the push has happened.
             prior_state=_state_entries(write, {}),
             latency_ms=latency_ms,
         )
 
-    # §7.3's socket, deliberately after the commit. `observations.record_verdict` has already
-    # written `user_title` with `jf_synced_at = NULL` inside the transaction above, which is
-    # precisely §7.3's "owed" — so what the transaction keeps is the person's action and what it
-    # loses is a foreign server's 15 s budget. [M4.10 finding 11]
+    # §7.3's push after the commit: the row already stands as owed (`jf_synced_at` NULL).
     sync_lines = await _settle_push(
         conn, jf, later, state="seen", event_kind="verdict", user_id=s.user_id,
         session_id=s.id, seq=s.seq, writes=(write,), title_ids=(title_id,),
@@ -1649,12 +1236,7 @@ async def record_verdict(
         embeddings=embeddings,
         bundle_version=bundle_version,
     )
-    # §6.7's line is composed here, one statement after the millisecond count it quotes and
-    # while the answered card and the label are still in hand. It REPLACES `write.log` on this
-    # arm rather than joining it: `payload` turns every line in `log` into one rail event, so
-    # carrying both would narrate one write twice, in two formats. The audit sentence itself
-    # is untouched in `ledger/observations.py` — `_verdict_rail_line` says why the two are
-    # allowed to read differently. [M4.9 finding 23, plan step 7.1]
+    # Replaces `write.log` on this arm, so one write is narrated once.
     line = await _verdict_rail_line(
         conn,
         user_id=s.user_id,
@@ -1695,9 +1277,7 @@ async def record_not_seen(
     head: Sequence[int] = (),
     later: Later | None = None,
 ) -> Outcome:
-    """§6.1's `Not seen`, and the owner decision of 2026-08-29: there is no third state. A
-    title you cannot remember is plain `unseen`, and §4.2's append-only history survives the
-    flip — this writes no observation row and deletes none. `later` as `record_verdict`'s."""
+    """§6.1's `Not seen`: plain `unseen` (no third state); writes no observation row, deletes none."""
     card = _take_card(s, card_token, want="sweep")
     title_id = card["title_id"]
     async with conn.transaction():
@@ -1731,9 +1311,7 @@ async def record_skip(
     rng: Any = None,
     head: Sequence[int] = (),
 ) -> Outcome:
-    """`Skip` writes nothing to any arm. The journal row *is* the suppression: the card's
-    titles are in `title_ids`, and `_observed_title_ids` keeps them out of the rest of the
-    sitting. It is not a `not_seen`, so §13's not-seen-rate instrument does not count it."""
+    """`Skip` writes to no arm; its journal row suppresses the card's titles for the sitting."""
     if s.current_card is None or s.card_token is None:
         raise StaleCard("no_card")
     if str(s.card_token) != str(card_token):
@@ -1742,9 +1320,7 @@ async def record_skip(
     titles = (
         [card["title_id"]] if card["type"] == "sweep" else [card["title_a"], card["title_b"]]
     )
-    # Wrapped like its four siblings, and for decision 35's reason rather than for tidiness:
-    # `_append` is an INSERT at `seq + 1` and an UPDATE that moves the session to it, and this
-    # was the one tap that issued them on the autocommit connection. See `_append`. [finding 3]
+    # In a transaction like its siblings; see `_append`.
     async with conn.transaction():
         await _claim_card(conn, s, card_token)
         s = await _append(conn, s, kind_of="skip", card=card, title_ids=titles,
@@ -1767,17 +1343,10 @@ async def record_duel(
     rng: Any = None,
     head: Sequence[int] = (),
 ) -> Outcome:
-    """§6.1's battle answer: exactly one duel row, context `profile_battle`.
+    """§6.1's battle answer: exactly one duel row, context `profile_battle`; a TIE is data.
 
-    A `TIE` is one of those rows and never a skip — §4.2: "'about the same' is first-class
-    data: 22% of random pairs are genuine ties" — and dropping it would starve the Davidson
-    tie term the arm is built around.
-
-    The margin comes from the session's decisive switch (§6.1: "~1.6 vs 1.0"), which holds for
-    the pair on the table and resets with it (decision 520), read through `hp.margin_for` so the
-    two numbers stay in `ledger_hyperparams.json` where §4.3 puts them. A per-request `decisive`
-    overrides for one answer without moving the switch, which is where the long-press
-    accelerator lands.
+    The margin comes from the session's per-pair decisive switch (decision 520) via
+    `hp.margin_for`; a per-request `decisive` overrides it for one answer.
     """
     card = _take_card(s, card_token, want="battle")
     if outcome not in OUTCOMES:
@@ -1832,16 +1401,10 @@ async def record_correction(
     rng: Any = None,
     later: Later | None = None,
 ) -> Outcome:
-    """§6.1's corrections zone: "`not seen: [left] [both] [right]` -> sets that side `unseen`,
-    swaps it out of the pair (`both` swaps the whole pair), **writes no duel row**, syncs per
-    §7.3, covered by the persistent Undo."
+    """§6.1's corrections zone: `not seen: [left] [both] [right]`, writing no duel row.
 
-    It does not advance. A correction is a repair of the question, not an answer to it, and
-    the migration's `rate_observation_advances_rule` CHECK is what stops that from drifting.
-
-    The corrected title's own verdicts and duels are untouched: §4.2's history is append-only
-    and survives the flip. The title leaves the battle pool because the pool is a conjunction —
-    marked seen AND carrying a live verdict — not because anything was deleted.
+    It does not advance (`rate_observation_advances_rule`). History is untouched; the title
+    leaves the pool because the pool needs "marked seen".
     """
     card = _take_card(s, card_token, want="battle")
     if side not in ("left", "both", "right"):
@@ -1873,8 +1436,6 @@ async def record_correction(
         replacement = await _redraw_pair(conn, s, card, corrected=corrected, rng=rng)
         s = await stash_card(conn, s, replacement)
 
-    # Both pushes after the commit, for finding 11's reason — and `both` makes the cost of the
-    # old shape plainest: two 15 s-budget sockets awaited in series inside one transaction.
     lines.extend(
         await _settle_push(
             conn, jf, later, state="unseen", event_kind="not_seen", user_id=s.user_id,
@@ -1898,22 +1459,10 @@ async def _redraw_pair(
     corrected: Sequence[int],
     rng: Any = None,
 ) -> dict[str, Any] | None:
-    """Keep the half the person did not correct; replace the half they did.
+    """Keep the half the person did not correct, against a fresh opponent from its own band.
 
-    §6.1's correction exists to remove a title from the duel pool without inventing a comparison
-    the person never made — so the half they kept must keep its place, against a fresh opponent
-    from its own verdict band.
-
-    The opponent is drawn from the band DIRECTLY. It used to be drawn by asking
-    `battle.next_battle_pair` for a whole pair and rejecting any that fell outside the
-    survivor's class, eight times. `battle.draw` weights strata by pair count n(n-1)/2, so the
-    chance of hitting a small band is small by construction: on a 60/20/20 labeller — exactly
-    the shape §5.2's class-balance warning pushes people toward — correcting a title in one of
-    the minority bands missed on every attempt about half the time, and the battle silently
-    became a sweep card with nothing on screen saying why.
-
-    Uniform within the band, for the same reason `battle.draw` is: §0 row 6 measured that no
-    selection rule beats random for profiles (best +0.0013, CI spans 0).
+    Drawn from the band directly and uniformly (§0 row 6): a whole-pair draw rarely hits a small
+    band.
     """
     survivor = next((t for t in (card["title_a"], card["title_b"]) if t not in corrected), None)
     exclude = set(await _skipped_title_ids(conn, s.id)) | set(corrected)
@@ -1921,8 +1470,7 @@ async def _redraw_pair(
         pair = await _draw_battle(conn, s, exclude=sorted(exclude), rng=rng)
         if pair is not None:
             return pair
-        # `both` left nothing to keep and no pair to draw, so the slot falls through to a sweep —
-        # marked, because the counter still wants the battle this card was. [M4.10 finding 21]
+        # Nothing to keep and no pair to draw: a marked sweep, as the counter wanted a battle.
         return _mark_substitution(
             await _draw_sweep(
                 conn, s, exclude=sorted(await _observed_title_ids(conn, s.id)), head=()
@@ -1936,8 +1484,7 @@ async def _redraw_pair(
         kinds=[card["kind"]],
         exclude=tuple(sorted(exclude | {survivor})),
     )
-    # Not an opponent the survivor has already been compared with: the repaired pair is a draw
-    # like any other, and `battle.draw`'s no-repeat rule holds here too.
+    # `battle.draw`'s no-repeat rule holds for the repaired pair too.
     answered = await battle.answered_pairs(conn, user_id=s.user_id, kinds=[card["kind"]])
     band = sorted(
         m.title_id
@@ -1957,9 +1504,7 @@ async def _redraw_pair(
             "reason": card["reason"],
             "reask_of": None,
         }
-    # No second title left in the survivor's class: the pair cannot be repaired, so the slot
-    # falls back the same way `ensure_card` does when the pool is thin — and is marked the same
-    # way, which it was not. [M4.10 finding 21]
+    # The survivor's band is empty: fall back to a marked sweep, as `ensure_card` does.
     return _mark_substitution(
         await _draw_sweep(
             conn,
@@ -1977,29 +1522,10 @@ async def _redraw_pair(
 async def _undo_reaches(
     conn: asyncpg.Connection, s: RateSession, *, block_index: int, slot: int
 ) -> bool:
-    """Decision 35's depth, with decision 199's boundary: is this journal row still undoable?
+    """Decision 35's depth with decision 199's boundary: is this journal row still undoable?
 
-    Decision 35 says "back to the start of the current block of 15 and no further", and decision
-    174 says when a block is finished: when the FIRST observation of the next block lands, "which
-    is literally what decision 35 says". `advance` rolls the counter on the fifteenth observation,
-    so comparing block indexes alone disabled the chip on the same round trip that answered card
-    15 — 6.7% of every observation a household makes, at the end of a run where fatigue mis-taps
-    live, and in Battle mode a duel, which §4.2 gives no supersede path.
-
-    So the previous block is reachable too, under decision 199's arithmetic: the person is at slot
-    1 and the row they are reaching for is the fifteenth of the block before.
-
-    THE SECOND STATEMENT IS WHAT MAKES "UNTIL THE SIXTEENTH LANDS" MEAN WHAT IT SAYS. The
-    arithmetic alone is `s.slot == 1`, and undo restores the session to the block and slot of the
-    row it pops — so after the sixteenth tap had been made AND retracted the session would be back
-    at slot 1 and the fifteenth reachable again, which is not "the sixteenth commits the block it
-    ended" (decision 199's own title, and `library-rate-undo-block-depth`'s requirement text) and
-    leaves decision 35's "and no further" bounding one tap rather than a walk: every earlier block
-    would come back, one undo at a time. So the journal is asked whether the new block has EVER
-    held a row, tombstones included. It runs only at the boundary — the common case returns on the
-    first comparison — and the rest of decision 199 is untouched: `advance`, the block and slot
-    each row stores, and the reach inside one block all stand.
-    [decisions 35, 174, 199; M4.10 finding 25]
+    The fifteenth row of the previous block stays reachable at slot 1 until the new block has
+    ever held a row, tombstones included; otherwise undo would walk back block by block.
     """
     if block_index == s.block_index:
         return True
@@ -2038,20 +1564,8 @@ async def undo(
 ) -> Outcome:
     """Pop the most recent observation of any kind and put the card that produced it back.
 
-    Decision 35 in three parts, all here:
-
-      * **Any kind.** Verdict, not-seen, skip, duel, tie and correction all leave a journal
-        row, so all six are undoable by the same tap. A `lastAction` variable could not cover
-        the corrections row at all.
-      * **The exact card.** `rate_observation.card` holds the card verbatim, so a battle pair
-        comes back as itself rather than reshuffling, and the person lands on what they
-        answered rather than on the neighbouring queue position.
-      * **One block.** The journal row's own `block_index` and `slot` are the test, in
-        `_undo_reaches` — shared with `undo_availability` so the chip and the refusal cannot
-        disagree. They are compared here rather than passed to `observations.undo` as a
-        `block_started_at` timestamp, because the journal row is written *after* the ledger row
-        it describes — a timestamp comparison would refuse the first observation of every block
-        by a few microseconds.
+    Decision 35: any kind, the exact card (`rate_observation.card`), one block (`_undo_reaches`).
+    Compared on the row's block and slot, not a timestamp: the journal row lands after the ledger's.
     """
     async with conn.transaction():
         row = await conn.fetchrow(
@@ -2085,10 +1599,8 @@ async def undo(
 
         undone: observations.Undo | None = None
         if arm is not None:
-            # The only code permitted to delete a verdict or a duel row (§4.2 is append-only
-            # for everything else). `not_seen` covers both the Not-seen tap and the
-            # corrections row: neither wrote an observation, and both need `user_title` and
-            # §7.3's `jf_synced_at` put back exactly as they were.
+            # The only code permitted to delete a verdict or duel row (§4.2 is append-only).
+            # `not_seen` covers the corrections row too: both restore `user_title` exactly.
             undone = await observations.undo(
                 conn,
                 user_id=s.user_id,
@@ -2100,8 +1612,7 @@ async def undo(
         await conn.execute(
             "UPDATE rate_observation SET undone_at = now() WHERE id = $1", row["id"]
         )
-        # The restored pair is asked afresh, so the decisive switch starts off for it as it does
-        # for every pair (decision 520): the popped answer's weight left with the answer.
+        # The restored pair is asked afresh, so the decisive switch starts off (decision 520).
         restored = await conn.fetchrow(
             f"""
             UPDATE rate_session
@@ -2120,10 +1631,6 @@ async def undo(
 
     for prior in priors:
         if pushed.get(prior.title_id) and jf is not None:
-            # `seen.retract` and no longer a private copy of it: the copy had drifted, and what
-            # it had lost was §7.3's "a 401 on write -> re-link prompt" — an expired token
-            # discovered on an Undo left the link reading `linked` with nothing asking the
-            # person to fix it. [M4.10 finding 11]
             await seen.retract(
                 conn,
                 jf.client,
@@ -2161,19 +1668,8 @@ async def payload(
     event_kind: str | None = None,
     user: Any = None,
 ) -> dict[str, Any]:
-    """One envelope for every route, so the client has one shape to render.
-
-    The next card travels in the response to the write. §6 preamble: "<2 s per sweep card,
-    <1.5 s per battle, undo everywhere, next card preloaded" — a client that has to ask for
-    the next card after every tap cannot make that budget.
-    """
-    # §6.7's rail, fed from the lines this response already carries. `event_kind` is None for a
-    # read and for a skip: §6.7 narrates "every model write", and a skip writes no observation —
-    # its own log line says so. Recording it would put a non-write in the log of writes.
-    #
-    # `title_id` is read off the line rather than passed beside it because only some lines are
-    # about one title — the verdict's is, the Jellyfin push line that follows it is not — and
-    # the handler that knows which is which has already returned. See `RailLine`.
+    """One envelope for every route; the next card travels in the response to the write (§6)."""
+    # §6.7's rail narrates model writes only, so a read or a skip passes no `event_kind`.
     if event_kind is not None:
         for line in log:
             rail.record(
@@ -2197,26 +1693,8 @@ async def payload(
                 "size": BLOCK_SIZE,
                 # §6.1's counter, and the unit decision 35's Undo depth is measured in.
                 "counter": f"{s.slot} / {BLOCK_SIZE}",
-                # What the counter CALLS FOR, which is not always what is on the table: a
-                # substitution is served in place and the slot is deliberately not moved, so the
-                # flip is reported on the card as `substituted_for` rather than by quietly
-                # rewriting this.
-                #
-                # The two disagree on a substitution, which the card explains — and on one flip no
-                # draw-time marker can see, which it does not: `set_controls` drops the card on a
-                # mode change and keeps the counter, and `undo` restores the journal's card verbatim
-                # without restoring the mode it was drawn under, so Mix -> Sweep -> Mix -> Undo puts
-                # a sweep card under `serving: "battle"` with no marker. That is the field doing
-                # exactly what it says (the counter, in the mode now in force, calls for a battle),
-                # and no member reads it: the counter line named the card's own type from M2 and
-                # names the mode the person chose since decision 519 (`counterLine` in
-                # rate.svelte.js). Deriving `serving` from the card instead — the plan's other
-                # option — was weighed and refused: it would make the field a second spelling of
-                # `card.type` and leave the counter's call nowhere.
-                # [M4.10 finding 21, decision 200, cycle 1 M410-D8-03]
-                #
-                # Decision 492's warm-up is part of the call, over the same label count
-                # `ensure_card` drew under, so a new member's counter reads sweep and not battle.
+                # What the counter calls for, which a substitution does not move (the card says
+                # `substituted_for`); includes decision 492's warm-up.
                 "serving": warm_up(
                     card_type_for(s.mode, observation_index(s.block_index, s.slot)),
                     mode=s.mode,
@@ -2225,27 +1703,19 @@ async def payload(
             },
         },
         "card": card,
-        # Keyed by cause, because "no card" has three of them and one of the three is not a
-        # drained queue at all. [M4.10 finding 20]
+        # Keyed by cause: one of the three is not a drained queue at all.
         "drained": None if card else drained_for(s.mode),
-        # §5.2: "the rating UI shows a running class balance" — the measured 5x lever. Rendered
-        # by `balance`'s own projection, so the widget's copy and its threshold have one home.
+        # §5.2's measured 5x lever, rendered by `balance`'s own projection.
         "class_balance": shares.as_dict(),
         "undo": await undo_availability(conn, s),
         "reveal": reveal if user is None else viewer_reveal(
             reveal, show_model=rail.visible_to(user)
         ),
         "ledger": ledger,
-        # §6.7's rail. Also recorded above, into the ephemeral buffer §6.7 asks for; the
-        # response carries them too so the client can show the line for the tap just made
-        # without a second request.
+        # §6.7's rail, also carried here so the client shows this tap's line without a request.
         "log": list(log),
     }
-    # Decision 117: with the toggle off the rail and every inline number are ABSENT, not hidden.
-    # Same gate as §6.0's Home, so one preference cannot mean two things on two surfaces — and a
-    # surface that shipped the numbers and let the client hide them would make the promise
-    # cosmetic. `reveal` survives: §6.1 requires the prediction after the tap -- its guessed
-    # class, which is §6.1's; its numbers went with `viewer_reveal` above (decision 491).
+    # Decision 117: with the toggle off the numbers are absent, not hidden; same gate as Home.
     return rail.redact(body, show_model=rail.visible_to(user)) if user is not None else body
 
 

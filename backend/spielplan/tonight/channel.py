@@ -1,25 +1,7 @@
-"""The session channel. Spec v2.1 §6.2 step 2, §1 ("REST + WebSocket"), §6 preamble.
+"""The session channel (§6.2 step 2): household frames to every device, session frames per room.
 
-    "a live in-app lobby banner over the WebSocket … the **open-rooms list** — active sessions
-     are visible to every household device"
-    54c: "Someone who finishes early sees the others' **progress and never their answers**."
-
-WHY A HUB AND NOT A BROADCAST. §6 makes push best-effort, so the in-app channel is the one that
-has to work on the iPhone that never delivers a notification — and it carries two different
-things to two different audiences. **Household** frames announce that a room opened, and go to
-every signed-in device so the open-rooms list and the lobby banner are live. **Session** frames
-carry a room's seats and progress, and go only to devices watching that room.
-
-BLIND BY CONSTRUCTION, HERE TOO. Every frame this hub sends is built by `rooms.lobby` or
-`play.progress`, or is `ballot_frame`'s two integers, and none can return an answer: one has no
-join to `session_answer` at all, the next selects counts and never titles, the last takes no row.
-So the blind property is a fact about what the
-payload builders can produce, not a rule this module has to remember — which matters because a
-hub is exactly the place a later feature reaches for "just send them everything".
-
-AT-MOST-ONCE, IN MEMORY, AND THAT IS THE RIGHT SCALE. A household is a handful of devices and
-one backend process (§1's compose file has one `backend`). A dropped frame costs a stale lobby
-until the next REST read, which every client does on reconnect; a broker would cost a service.
+Blind by construction: every frame is built from `rooms.lobby`, `play.progress` or two integers.
+At-most-once and in memory; a dropped frame costs a stale lobby until the next REST read.
 """
 
 from __future__ import annotations
@@ -34,34 +16,20 @@ from typing import Any, Protocol
 
 log = logging.getLogger("spielplan.tonight.channel")
 
-# Frame kinds. Named rather than free-form so a client can switch on them, and so the two
-# audiences below stay legible at every call site.
 ROOMS_CHANGED = "rooms.changed"
 LOBBY = "lobby"
 PROGRESS = "progress"
 BALLOT = "ballot"
 REVEAL = "reveal"
 
-# How long one device gets to take one frame. A household WebSocket fails two ways: the phone
-# has gone away, which raises, and the phone is on a bad connection or the laptop suspended
-# mid-write, which does neither. Only the first ends by itself. Five seconds is far longer than
-# a small JSON frame needs and far shorter than a lobby can go without being live.
+# Per-device send bound: a stalled phone neither raises nor ends by itself.
 SEND_TIMEOUT = 5.0
 
 
 def wire(value: Any) -> Any:
     """A frame, in the types a WebSocket can actually put on the wire.
 
-    `WebSocket.send_json` is plain `json.dumps` — unlike a FastAPI response, which runs
-    `jsonable_encoder` first. So `session.started_at` (a `datetime`, and the "3 min ago" in
-    §6.2 step 2's own example row) raises `TypeError` on the very first frame, the socket dies
-    before it has ever delivered anything, and the lobby silently falls back to whatever the
-    last REST read said. Nothing logs on the client and nothing is visibly broken on the
-    server — the e2e is what found it.
-
-    Converted here rather than at each call site, and here rather than by importing FastAPI's
-    encoder, because the hub takes a `Socket` Protocol precisely so it can be tested without an
-    ASGI server; a framework import would take that back.
+    `send_json` is plain `json.dumps` (no `jsonable_encoder`): a `datetime` would kill the socket.
     """
     if isinstance(value, datetime | date):
         return value.isoformat()
@@ -75,47 +43,28 @@ def wire(value: Any) -> Any:
 
 
 class Socket(Protocol):
-    """What the hub needs of a connection. A Protocol rather than `fastapi.WebSocket` so the
-    hub is testable without a browser or an ASGI server — the same reason
-    `connectors/jellyfin.py` takes an injected transport.
-
-    `close` is here because giving up on a device is two statements and the hub only ever made one:
-    see `close_quietly` below for what the missing half cost. [M4.12 finding 17]
-    """
+    """What the hub needs of a connection; a Protocol so the hub is testable without ASGI."""
 
     async def send_json(self, data: Any) -> None: ...
 
     async def close(self, code: int = 1000) -> None: ...
 
 
-# What the hub closes a socket it has given up on with. Informational — the client reconnects from
-# `onclose` whatever the code says (`tonight.svelte.js`) — so the only requirement is that it is not
-# 1000: a normal closure is the one code a future client could read as "we are done, do not come
-# back", and a device the hub dropped is a device it wants back.
+# Not 1000: a normal closure could read as "do not come back", and the hub wants the device back.
 GAVE_UP = 1011
 
 
 async def close_quietly(socket: Socket) -> None:
     """Tell a device the hub has given up on it, bounded, and never raise.
 
-    The client's only re-read path is `socket.onclose` (`tonight.svelte.js`), so a hub that
-    unsubscribed and did nothing else left that phone connected, deaf, and certain its lobby was
-    live for the rest of the evening — the exact failure §6's preamble makes this channel the
-    answer to, arriving through the timeout written to contain it. [M4.12 finding 17]
-
-    BOUNDED, BECAUSE A CLOSE IS A SEND. It writes a close frame through the same transport that
-    has just stalled, so an unbounded await here would put the fan-out back on the clock the
-    timeout took it off — one suspended laptop and every device behind it again. And suppressed,
-    because the ordinary case is a socket that has already raised: closing it raises again, and
-    the tidy-up for one device that left must not cost the others the frame they are waiting for.
+    The client re-reads only on `onclose`, so an unclosed dropped socket is deaf all evening. The
+    close is itself a send, hence the timeout.
     """
     with contextlib.suppress(Exception):
         await asyncio.wait_for(socket.close(code=GAVE_UP), timeout=SEND_TIMEOUT)
 
 
-# `eq=False` so a Subscriber hashes by identity. Two devices can hold indistinguishable field
-# values — same user, same room, a socket object that compares equal — and they are still two
-# subscribers; value equality would silently collapse them into one and drop a phone's frames.
+# `eq=False`: two devices with equal fields are still two subscribers.
 @dataclass(eq=False)
 class Subscriber:
     socket: Socket
@@ -145,14 +94,7 @@ class Hub:
         return len(self._subscribers)
 
     async def _deliver(self, targets: Iterable[Subscriber], frame: dict[str, Any]) -> int:
-        """One frame to many devices, concurrently, and each on its own clock.
-
-        Awaiting the sockets in turn put every device behind the slowest one, and behind a
-        device that had stopped draining it put them behind nothing at all: the household's
-        lobbies quietly stopped being live while one phone was suspended. A raise is not the
-        only way a socket fails, so the timeout is what makes "dropped rather than allowed to
-        stall the hub" true — the comment above the queue field that nothing ever read.
-        """
+        """One frame to many devices, concurrently, each on its own clock (`SEND_TIMEOUT`)."""
         subscribers = list(targets)
         payload = wire(frame)
 
@@ -160,11 +102,9 @@ class Hub:
             try:
                 await asyncio.wait_for(sub.socket.send_json(payload), timeout=SEND_TIMEOUT)
             except Exception:
-                # A device that has gone away must not stop the frame reaching the others: the
-                # lobby is the screen a household is looking at while somebody's phone locks.
+                # A gone device must not stop the frame reaching the others.
                 log.debug("dropping a session subscriber that stopped answering")
-                # Unsubscribed first and closed second: the subscription is what the next frame
-                # reads, and the close is the half that can take time. [M4.12 finding 17]
+                # Unsubscribed first: the close is the half that can take time.
                 self.unsubscribe(sub)
                 await close_quietly(sub.socket)
                 return False
@@ -174,8 +114,7 @@ class Hub:
         return sum(results)
 
     async def to_household(self, frame: dict[str, Any]) -> int:
-        """Every signed-in device. Used for "a room opened" — §6.2 step 2's open-rooms list is
-        "visible to every household device", so the *existence* of a room is household news."""
+        """Every signed-in device: a room's existence is household news (§6.2 step 2)."""
         return await self._deliver(self._subscribers, frame)
 
     async def to_session(self, session_id: int, frame: dict[str, Any]) -> int:
@@ -184,9 +123,7 @@ class Hub:
 
 
 def rooms_changed(rooms: list[dict[str, Any]] | None = None) -> dict[str, Any]:
-    """The banner frame. Carries the room list the receiving device is entitled to see, or
-    nothing at all — a device that gets `{"kind": "rooms.changed"}` re-reads over REST, which is
-    what a reconnecting client does anyway."""
+    """The banner frame; an empty one makes the device re-read over REST."""
     return {"kind": ROOMS_CHANGED, "rooms": rooms or []}
 
 
@@ -195,11 +132,7 @@ def lobby_frame(lobby: dict[str, Any]) -> dict[str, Any]:
 
 
 def progress_frame(session_id: int, progress: list[dict[str, Any]]) -> dict[str, Any]:
-    """54c's waiting view: "Patrick 6/6 ✓ · Jenny 9/~12 · Mia 4/~10 · waiting for 2".
-
-    Built by `play.progress`, which has no join to `session_answer` — so this frame cannot
-    carry an answer even if a later caller wanted it to.
-    """
+    """54c's waiting view, built by `play.progress`, which cannot carry an answer."""
     return {
         "kind": PROGRESS,
         "session_id": session_id,
@@ -209,25 +142,12 @@ def progress_frame(session_id: int, progress: list[dict[str, Any]]) -> dict[str,
 
 
 def ballot_frame(session_id: int, *, submitted: int, seated: int) -> dict[str, Any]:
-    """54e's waiting count, live: "1 of 2 submitted".
-
-    The ballot screen prints this count, and a submit that did not complete the reveal used to
-    push the ROUND's progress frame instead — which the client files under the round, so the other
-    phone read "0 of 2 submitted" for as long as it stayed on the screen (the first household
-    evening: still 0 of 2 eighteen seconds after the other vote was in). Two integers and nothing
-    else, because this is the frame most tempting to enrich with who voted for what, and 54e's
-    blindness holds until the reveal.
-    """
+    """54e's waiting count, live: two integers and nothing else until the reveal."""
     return {"kind": BALLOT, "session_id": session_id, "submitted": submitted, "seated": seated}
 
 
 def reveal_frame(session_id: int) -> dict[str, Any]:
-    """54e's simultaneity, as a moment rather than a state: "Approvals … are revealed together."
-
-    Deliberately carries no result. Every device fetches the reveal over REST when this lands,
-    so the ballot guard in `ballot.tally` is the single place the blind rule is enforced — a
-    frame that carried the winner would be a second path to the same data with no guard on it.
-    """
+    """54e's reveal moment. Carries no result: `ballot.tally` stays the one guarded path."""
     return {"kind": REVEAL, "session_id": session_id}
 
 
