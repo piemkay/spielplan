@@ -1,23 +1,5 @@
-"""§6.0's title card after the 2026-09-25 household user test. Decisions 486, 487, 488.
-
-Three decisions meet on this one route and this file holds each of them where it is decided -
-at the payload, over HTTP, against a real Postgres - because every one of them is a claim about
-what a member's browser RECEIVES, and a client that hid a number it was sent would satisfy a
-render test while breaking the promise.
-
-* **The member register (decision 486).** With Show the model off the card carries no model
-  number: no model line (which amends decision 117, whose exemption let it through), no tag
-  weight. Terms travel with the label the vocabulary ships, so no surface needs to print an id.
-  The platform-score caption keeps `display_only` and says the same fact in plain words.
-* **The card's own answer (decision 487).** Liked / Fine / Disliked / Not seen from the card,
-  written as §6.1's sweep answer through the person's own Rate session - the journal row, the
-  counter, Undo and the reveal are §6.1's, which is what decision 212 required of any second
-  place a verdict could be given.
-* **An unbuilt Map (decision 488).** Show on map is absent while §6.4 is, from the same flag that
-  keeps Map out of navigation; and Play names which of its two reasons it is unavailable for.
-
-Skipped without TEST_DATABASE_URL; see tests/conftest.py.
-"""
+"""Asserted at the payload over HTTP: a client that hid a number it was sent would pass a render
+test while breaking decision 486's promise."""
 
 from __future__ import annotations
 
@@ -52,11 +34,8 @@ async def _member(app):
 
 @pytest.fixture
 async def card(db, app):
-    """Heat, owned and on Jellyfin; an unowned film; a film to rate; one vocabulary.
-
-    `era.wwii` ships a label that is not its leaf - the shape 201 of the real 582 terms have -
-    and `mood.gritty` ships none, so both halves of `labels_for` are on one card.
-    """
+    """`era.wwii` ships a label that is not its leaf and `mood.gritty` none, so both halves of
+    `labels_for` are on one card."""
     await db.executemany(
         "INSERT INTO title (id, kind, name, year, is_owned, jellyfin_id) VALUES ($1, $2, $3, $4, $5, $6)",
         [
@@ -97,11 +76,8 @@ async def card(db, app):
     return await _member(app)
 
 
-# --- decision 486: the member register, at the payload -----------------------------------------
-
-
 async def test_a_card_read_with_the_switch_off_carries_no_model_number(card):
-    """Decision 486 clause 3, where it can be kept: the payload, not the render."""
+    """Decision 486 clause 3 is kept at the payload, not the render."""
     body = (await card.get("/api/titles/1")).json()
     assert "model_line" not in body, "the model line reached a member with Show the model off"
     (tag,) = body["dna"]["extracted"]
@@ -112,7 +88,7 @@ async def test_a_card_read_with_the_switch_off_carries_no_model_number(card):
 
 
 async def test_the_switch_brings_the_model_line_and_the_weights_back(card):
-    """The numbers are behind the switch, not deleted: §6.7's toggle governs them all now."""
+    """Behind the switch, not deleted."""
     assert (await card.post("/api/auth/preferences", json={"show_model": True})).status_code == 200
     body = (await card.get("/api/titles/1")).json()
     assert body["model_line"]["available"] is False, "no bundle is imported in this fixture"
@@ -122,8 +98,7 @@ async def test_the_switch_brings_the_model_line_and_the_weights_back(card):
 
 
 async def test_the_card_names_every_term_by_its_shipped_label(card):
-    """Decision 486 clause 4: the label the vocabulary ships, or the leaf in words - never the id
-    as the only name a client holds. The gloss travels with it as the tap-to-explain line."""
+    """Decision 486 clause 4: the shipped label, or the leaf in words; never the id alone."""
     body = (await card.get("/api/titles/1")).json()
     (extracted,) = body["dna"]["extracted"]
     (projected,) = body["dna"]["projected"]
@@ -131,14 +106,12 @@ async def test_the_card_names_every_term_by_its_shipped_label(card):
     assert extracted["label"] == "World War II"
     assert extracted["gloss"] == "set during the Second World War"
     assert projected["label"] == "gritty"
-    # §4.1 rule 2: the projected weight is how many sources suggested the term, shown as such.
+    # §4.1 rule 2: the projected weight is how many sources suggested the term.
     assert projected["weight"] == 1
 
 
 async def test_the_card_and_the_catalog_carry_the_original_title_and_its_language(db, card):
-    """Decision 516: a German viewer knows "Wunderschön" and not its English release title, and
-    the client can lead with the original only where the payload says which language it is in -
-    on the title card and on every catalog card, the grid the search box and the filters open."""
+    """Decision 516: the client leads with the original title only where the payload names its language."""
     await db.execute(
         "INSERT INTO title (id, kind, name, original_name, original_language, year, is_owned) "
         "VALUES (5, 'movie', 'Wonderfully Beautiful', 'Wunderschön', 'de', 2022, true)"
@@ -151,27 +124,21 @@ async def test_the_card_and_the_catalog_carry_the_original_title_and_its_languag
     assert (hit["name"], hit["original_name"], hit["original_language"]) == (
         "Wonderfully Beautiful", "Wunderschön", "de"
     )
-    # A title with no recorded original says so with nulls, never a missing key.
+    # No recorded original is nulls, never a missing key.
     heat = (await card.get("/api/titles", params={"kind": "movie", "q": "heat"})).json()["items"][0]
     assert heat["original_name"] is None and heat["original_language"] is None
 
 
 async def test_the_platform_caption_is_plain_and_the_flag_still_travels(card):
-    """§4.1 rule 3 rests on `display_only`, which stays; the caption says the same thing to a
-    member instead of "popularity conduit ... model features"."""
+    """§4.1 rule 3 rests on `display_only`, which stays."""
     ratings = (await card.get("/api/titles/1")).json()["platform_ratings"]
     assert ratings["display_only"] is True
     assert "never affect your suggestions" in ratings["note"]
     assert "model" not in ratings["note"] and "conduit" not in ratings["note"]
 
 
-# --- the two actions: Play's honest reason, and decision 488's absent Show on map ---------------
-
-
 async def test_play_names_which_of_its_two_reasons_it_is(db, card):
-    """Every unowned title read "Play needs a linked Jellyfin server" on an install whose server
-    was linked. The route now says which: the title is not in the library, or there is no
-    server."""
+    """The route says which reason: not in the library, or no server."""
     await db.execute(
         """INSERT INTO connector_config (name, config)
            VALUES ('jellyfin', '{"url": "http://jellyfin.test/"}'::jsonb)
@@ -185,8 +152,7 @@ async def test_play_names_which_of_its_two_reasons_it_is(db, card):
     assert owned["play_on_jellyfin"] == "http://jellyfin.test/web/#/details?id=jf-1"
     assert owned["play_reason"] is None
 
-    # With no server, the server is the reason for every title, owned or not: "not in your
-    # library" would blame the title for a connector the household never linked.
+    # With no server, the server is the reason for every title, owned or not.
     await db.execute("DELETE FROM connector_config WHERE name = 'jellyfin'")
     for title_id in (1, 2):
         serverless = (await card.get(f"/api/titles/{title_id}")).json()["actions"]
@@ -195,15 +161,12 @@ async def test_play_names_which_of_its_two_reasons_it_is(db, card):
 
 
 async def test_show_on_map_is_absent_until_the_map_ships(card, monkeypatch):
-    """Decision 488: the title card's entry point to §6.4 follows the flag navigation follows."""
+    """Decision 488: follows the flag navigation follows."""
     assert (await card.get("/api/titles/1")).json()["actions"]["show_on_map"] is None
 
     shipped = tuple({**s, "built": True} if s["key"] == "map" else s for s in auth_api.SURFACES)
     monkeypatch.setattr(auth_api, "SURFACES", shipped)
     assert (await card.get("/api/titles/1")).json()["actions"]["show_on_map"] == {"title_id": 1}
-
-
-# --- decision 487: the card's own answer, through §6.1's session ------------------------------
 
 
 async def _journal(db) -> list[dict]:
@@ -214,10 +177,8 @@ async def _journal(db) -> list[dict]:
 
 
 async def test_a_verdict_from_the_card_is_a_sweep_answer_in_the_rate_session(db, card):
-    """Decision 212's three conditions for any second place a verdict is given - a rate session,
-    a card token, §6.1's block counter - are met by writing through the session itself. So the
-    answer is a journal row Undo reverses (decision 35), the counter moves, and the reveal rides
-    on this response and no earlier one (§6.1's anchoring rule)."""
+    """Written through the Rate session (decision 212): a journal row Undo reverses, the counter
+    moves, and the reveal rides on this response only."""
     answered = await card.post("/api/rate/title/3", json={"answer": "liked"})
     assert answered.status_code == 200, answered.text
     body = answered.json()
@@ -246,8 +207,7 @@ async def test_a_verdict_from_the_card_is_a_sweep_answer_in_the_rate_session(db,
 
 
 async def test_the_card_answers_a_title_the_queue_would_never_serve(db, card):
-    """The queue rightly never re-asks a rated title; a person on a title's card has already
-    chosen the question. A second verdict supersedes the first (§4.2), it does not add to it."""
+    """A second verdict supersedes the first (§4.2)."""
     assert (await card.post("/api/rate/title/3", json={"answer": "liked"})).status_code == 200
     again = await card.post("/api/rate/title/3", json={"answer": "fine"})
     assert again.status_code == 200, again.text
@@ -259,7 +219,7 @@ async def test_the_card_answers_a_title_the_queue_would_never_serve(db, card):
 
 
 async def test_not_seen_from_the_card_flips_the_state_and_keeps_the_verdict(db, card):
-    """§4.2's owner decision of 2026-08-29: Not seen is a state, the verdict survives the flip."""
+    """Not seen is a state; the verdict survives the flip."""
     assert (await card.post("/api/rate/title/3", json={"answer": "disliked"})).status_code == 200
     flipped = await card.post("/api/rate/title/3", json={"answer": "not_seen"})
     assert flipped.status_code == 200, flipped.text
@@ -274,8 +234,7 @@ async def test_not_seen_from_the_card_flips_the_state_and_keeps_the_verdict(db, 
 
 
 async def test_the_card_answer_takes_the_table_and_the_old_token_goes_stale(card):
-    """The card replaces whatever Rate had parked. A device still holding the parked card's token
-    meets §6.1's ordinary stale-card refusal rather than answering a card that is gone."""
+    """A device holding the parked card's token meets the ordinary stale-card refusal."""
     parked = (await card.get("/api/rate")).json()["card"]
     assert parked is not None and parked["type"] == "sweep"
     target = 4 if parked["title"]["id"] != 4 else 3

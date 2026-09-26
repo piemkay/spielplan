@@ -1,31 +1,5 @@
-"""The Rate session: the block machine, the six taps, and Undo. Spec v2.1 §4.2, §6.1, §7.3,
-§13, decision 35.
-
-Four questions, and the tests are grouped by which one they answer.
-
-**What is served next?** §6.1's Mix "alternates sweep and battle" over "blocks of 15". The
-prototype's bug — which the counter design exists to make unreachable — was that the index
-advanced only on a verdict, so once Mix reached an odd slot no number of duels ever brought a
-sweep card back. The test that matters is therefore not "sweep, battle, sweep" in the happy
-case: it is the case where the card actually *served* is not the card the slot called for
-(a battle with no pool substitutes a sweep), because that is the only sequence where "flip
-from the slot" and "flip from the last card served" give different answers.
-
-**What may the card carry?** Nothing the model believes about the title being rated (§6.1,
-citing Cosley 2003). The reveal is computed before the write and served after it, and the
-assertions run over the *serialised* payload so a nested field three levels down still counts.
-
-**What does a tap write?** A verdict implies `seen`; `Not seen` writes `unseen`; there is no
-third state (owner decision 2026-08-29). One battle answer is exactly one `duel` row —
-including a Tie, which is data and never a dropped row. A correction writes no duel row at
-all, and does not advance the counter.
-
-**What can be taken back?** Decision 35: an observation journal with compensating writes,
-bounded to the current block, restoring the exact card rather than the neighbouring queue
-position.
-
-Skipped without TEST_DATABASE_URL; see tests/conftest.py.
-"""
+"""Mix alternates on a monotone counter; the test that matters is a substituted card, where
+"flip from the slot" and "flip from the last card served" disagree."""
 
 from __future__ import annotations
 
@@ -49,27 +23,19 @@ from spielplan.rate import session
 
 HP = DEFAULTS
 
-# §6.1's three refusals, as `api/rate.py._stale` names them. A double tap must leave through
-# one of these and never through `app.py`'s generic conflict handler, which reports the name of
-# a database constraint the surface has no rule for. [M4.10 finding 2]
+# §6.1's three refusals: a double tap must never reach `app.py`'s generic conflict handler.
 STALE_REASONS = {"no_card", "stale_card", "wrong_card_type"}
 
-# A race that passes once has not passed: the reproductions behind this milestone's findings 1
-# and 2 failed in four and five of six attempts, not in six of six. Every gathered assertion
-# below therefore runs at least eight times. [M4.10 plan, "assertions by layer"]
+# A race that passes once has not passed: the reproductions failed four and five of six.
 RACES = 8
 
-# Every model quantity that would anchor a rating, and the marker values the fixtures write
-# into `ledger_state` so a leak is visible as a literal string in the JSON.
+# Marker values the fixtures write into `ledger_state`, so a leak shows as a literal in the JSON.
 FORBIDDEN_CARD_KEYS = {
     "predicted", "predicted_label", "s", "sigma", "cdf", "tier", "straddle",
     "score", "rank", "verdict_class", "band", "reask_of", "b", "gate", "beta",
 }
 MARKER_S = 0.777123
 MARKER_CDF = 0.913357
-
-
-# --- fixtures --------------------------------------------------------------------------------
 
 
 async def make_titles(db, specs) -> None:
@@ -93,11 +59,7 @@ async def make_user(db, name="patrick", role="admin") -> int:
 
 
 async def label(db, user_id: int, title_id: int, value: int = 2) -> None:
-    """Seen and verdicted — the battle pool's conjunction — written directly.
-
-    Going through the surface would consume slots and cards; the pool is a fact about the
-    tables, and these tests are about what the surface does with it.
-    """
+    """Written directly: going through the surface would consume slots and cards."""
     await db.execute(
         "INSERT INTO user_title (user_id, title_id, state) VALUES ($1, $2, 'seen') "
         "ON CONFLICT (user_id, title_id) DO UPDATE SET state = 'seen'",
@@ -114,25 +76,21 @@ async def label(db, user_id: int, title_id: int, value: int = 2) -> None:
 
 @pytest.fixture
 async def world(db):
-    """One person and twenty owned films. Twenty, because the block test spends fifteen."""
+    """Twenty films, because the block test spends fifteen."""
     await make_titles(db, [(i, "movie", f"Title {i}") for i in range(1, 21)])
     return {"user": await make_user(db)}
 
 
 @pytest.fixture
 async def rated(db, world):
-    """Four titles already in one verdict class, so a battle pair exists from the first slot."""
+    """Four titles in one verdict class, so a battle pair exists from the first slot."""
     for title_id in (1, 2, 3, 4):
         await label(db, world["user"], title_id, 2)
     return world
 
 
 async def rated_elsewhere(db, user_id: int, ids, value: int) -> None:
-    """Live labels on titles outside the sweep queue's twenty — rated already, so never served.
-
-    Decision 492 holds Mix's battles back until one block of ratings stands, so a test about
-    Mix's alternation needs fifteen labels without spending the queue it is about to walk.
-    """
+    """Rated titles outside the queue's twenty: Mix battles only past fifteen labels (decision 492)."""
     await db.execute(
         """
         INSERT INTO title (id, kind, name, is_owned, overview)
@@ -147,9 +105,7 @@ async def rated_elsewhere(db, user_id: int, ids, value: int) -> None:
 
 @pytest.fixture
 async def warm(db, rated):
-    """`rated`, holding a block of ratings: the four liked titles plus eleven disliked ones, so
-    Mix battles from its second slot (decision 492) and every pair still comes from the liked
-    four -- a first sitting leaves the disliked band out of its battles (decision 493)."""
+    """Past decision 492's warm-up, and every pair still comes from the liked four (decision 493)."""
     await rated_elsewhere(db, rated["user"], range(21, 32), 0)
     return rated
 
@@ -166,32 +122,18 @@ def token(s: session.RateSession) -> str:
     return str(s.card_token)
 
 
-# --- §6.1: the block machine -----------------------------------------------------------------
-
-
 def test_the_card_type_is_a_pure_function_of_the_monotone_counter_and_the_block_rolls_at_fifteen():
-    """§6.1: "Mix (default — alternates sweep and battle); blocks of 15."
-
-    Index 0 — slot 1 of the first block — is a sweep, so Mix opens on the one card a person with
-    no ratings can answer.
-
-    The arithmetic the type is derived from is the whole content of decision 200, so it is
-    asserted as arithmetic: the index runs on past the roll, which is what the SLOT cannot do.
-    Fifteen is odd, so a slot-derived type made slot 15 and the next block's slot 1 both sweeps —
-    eight sweeps to seven battles and one consecutive-same pair per block.
-    """
+    """Asserted as arithmetic: fifteen is odd, so a slot-derived type put two sweeps across each roll."""
     assert [session.card_type_for("mix", n) for n in range(0, 6)] == [
         "sweep", "battle", "sweep", "battle", "sweep", "battle"
     ]
     assert session.card_type_for("sweep", 1) == "sweep"
     assert session.card_type_for("battle", 0) == "battle"
 
-    # The counter the person reads, as one number: 15 per block, starting at 0.
     assert session.observation_index(0, 1) == 0
     assert session.observation_index(0, 15) == 14
     assert session.observation_index(1, 1) == 15
     assert session.observation_index(3, 8) == 52
-    # And therefore alternation survives the roll, which is decision 200's whole claim.
     assert session.card_type_for("mix", session.observation_index(0, 15)) == "sweep"
     assert session.card_type_for("mix", session.observation_index(1, 1)) == "battle"
 
@@ -202,19 +144,8 @@ def test_the_card_type_is_a_pure_function_of_the_monotone_counter_and_the_block_
 
 
 async def test_mix_alternates_on_the_counter_and_not_on_the_last_card_served(db, world):
-    """§6.1's Mix, and the mutant this is built to kill.
-
-    The sequence is chosen so that "flip from the slot" and "flip from the last card served"
-    disagree. At slot 2 the counter calls for a battle and the person has exactly one rated
-    title in a band a first sitting may draw from, so no pair exists and a sweep is substituted
-    — the slot is untouched, which the payload says out loud (`substituted_for: 'battle'`). At
-    slot 3 the counter calls for a sweep again. An implementation that flipped off the last card
-    served would hand back a battle there; this asserts a sweep, and that the marker is gone.
-
-    The person holds a block of disliked ratings first: decision 492 lets Mix battle only past
-    fifteen live ratings, and decision 493 keeps those fifteen out of the pairs, so the pool is
-    thin in exactly the way the slot-2 substitution needs.
-    """
+    """At slot 2 no pair exists and a sweep stands in; at slot 3 the counter calls a sweep again,
+    where flipping from the last card served would give a battle."""
     user = world["user"]
     await rated_elsewhere(db, user, range(21, 36), 0)
     s = await open_session(db, user)
@@ -224,7 +155,6 @@ async def test_mix_alternates_on_the_counter_and_not_on_the_last_card_served(db,
     out = await session.record_verdict(db, s, card_token=token(s), value=2, hp=HP)
     s = out.session
     assert s.slot == 2
-    # The counter says battle; the pool holds one title, so a pair is impossible.
     assert s.current_card["type"] == "sweep"
     assert s.current_card["substituted_for"] == "battle"
 
@@ -241,12 +171,7 @@ async def test_mix_alternates_on_the_counter_and_not_on_the_last_card_served(db,
 
 
 async def test_a_run_of_duels_still_returns_sweep_cards(db, warm):
-    """§6.1, and the prototype bug proposal 36 names: the queue index advanced only on a
-    verdict, so a Mix session that reached an odd slot never came back from battles.
-
-    Four duels in a row, and the sweep cards keep arriving between them. `warm`, because
-    decision 492 holds Mix's battles until a block of ratings stands.
-    """
+    """The prototype advanced the index only on a verdict, so Mix never came back from battles."""
     user = warm["user"]
     s = await open_session(db, user)
     served: list[str] = []
@@ -265,20 +190,7 @@ async def test_a_run_of_duels_still_returns_sweep_cards(db, warm):
 
 
 async def test_mix_keeps_alternating_across_the_block_roll(db, warm):
-    """§6.1's "alternates sweep and battle" over "blocks of 15", asserted AT the roll.
-
-    Fifteen is odd. A type derived from the slot therefore made slot 15 a sweep and the next
-    block's slot 1 a sweep as well, so every block ended and the next began with the same card
-    type: eight sweeps to seven battles, which over §6.1's 50-100-verdict target is three to
-    seven fewer duels than the clause promises — in the arm §5.2 credits with within-liked
-    resolution. The alternation test beside this one asserts the sequence WITHIN a block and so
-    cannot see the one place it breaks; this one spends sixteen taps to cross it.
-
-    Sixteen taps through the real taps rather than through `card_type_for`, because the claim is
-    about what the surface serves: the pool grows as the sweeps are answered, so every battle
-    slot has a pair and no substitution can stand in for the card under test. [decision 200]
-    `warm` holds a block of ratings already, which is where decision 492 lets Mix battle from.
-    """
+    """Asserted AT the roll through real taps; the within-block test cannot see it (decision 200)."""
     s = await open_session(db, warm["user"])
     served: list[str] = []
     for _ in range(16):
@@ -303,9 +215,7 @@ async def test_mix_keeps_alternating_across_the_block_roll(db, warm):
 
 
 async def test_every_kind_of_observation_advances_the_counter_by_exactly_one(db, rated):
-    """§6.1: "each observation … advances the block counter by one". Verdict, not-seen, skip,
-    duel and tie all do; only the corrections row does not, and the migration's
-    `rate_observation_advances_rule` CHECK is what keeps that pinned to `kind_of`."""
+    """Only the corrections row does not advance; the `rate_observation_advances_rule` CHECK pins it."""
     user = rated["user"]
     s = await open_session(db, user, mode="sweep")
 
@@ -337,15 +247,7 @@ async def test_every_kind_of_observation_advances_the_counter_by_exactly_one(db,
 
 
 async def test_the_counter_runs_to_fifteen_and_rolls_into_a_new_block(db, world):
-    """§6.1: "the counter runs 1..15 and rolls into a new block."
-
-    The counter claim alone, and deliberately: the roll used to be read as decision 35's commit
-    as well, and decision 199 moved that point one observation later, to the first tap of the
-    block the roll opens. Where it falls is asserted by
-    `test_the_fifteenth_tap_stays_undoable_until_the_sixteenth_lands`; a second statement of it
-    here would be a rule the code no longer has, 870 lines from the test that holds the rule it
-    does have. [M4.10 cycle 2, M410-C2-D19-04; decisions 35, 199]
-    """
+    """The counter alone: undo's commit point moved one tap later (decision 199) and is tested below."""
     user = world["user"]
     s = await open_session(db, user, mode="sweep")
     slots = []
@@ -360,24 +262,11 @@ async def test_the_counter_runs_to_fifteen_and_rolls_into_a_new_block(db, world)
     ) == 15
 
 
-# --- §6.8: what the surface says when the card is not the one the counter asked for ----------
-
-
 async def test_the_empty_state_names_the_pool_that_is_empty_rather_than_claiming_it_is_all_rated(
     db, world
 ):
-    """§6.8, on the one sentence a person sees when there is no card at all.
-
-    There is one way to have no card and three reasons for it, and a single string served all
-    three. The one that matters is Battle on a young profile: the pool is "seen AND verdicted
-    within one class", so a member in their first week who taps Battle has an *empty* pool rather
-    than an exhausted queue — and was told "You've rated everything we can queue right now", which
-    is both false and points them at Rank instead of at the sweep that would fix it.
-
-    Three sessions rather than one parametrisation, because the three causes are three different
-    worlds: nothing rated (Battle), nothing left in the selected kinds (Sweep), and both (Mix).
-    [M4.10 finding 20]
-    """
+    """A young profile's empty battle pool must not read "You've rated everything" (finding 20).
+    Three sessions: nothing rated, a spent kind, and both."""
     user = world["user"]
 
     battle = await session.payload(db, await open_session(db, user, mode="battle"))
@@ -387,11 +276,9 @@ async def test_the_empty_state_names_the_pool_that_is_empty_rather_than_claiming
         "the first-week member has rated nothing at all: "
         f"{battle['drained']['text']!r}"
     )
-    # In plain words since the second household test, not the old mode name (A3 of 2026-09-26).
     assert "one by one" in battle["drained"]["text"], "and the copy points at what fills the pool"
 
-    # The same person with Series selected: this household has no series at all, so the sweep
-    # queue really is spent for that partition and the old sentence is the true one.
+    # This household has no series, so the sweep queue really is spent there.
     await session.end_session(db, user_id=user)
     sweep = await session.payload(
         db, await open_session(db, user, mode="sweep", kinds=("series",))
@@ -410,22 +297,13 @@ async def test_the_empty_state_names_the_pool_that_is_empty_rather_than_claiming
 
 
 async def test_every_card_that_stands_in_for_another_type_carries_its_marker(db, warm):
-    """§6.1's substitution rule: "the slot is not changed", so the payload has to say why the
-    card in front of the person is not the type the counter names.
-
-    Three sites stash a card of the other type and only the first of them marked it. The banner's
-    head redraw (§6.0's CTA, which "opens the §6.1 queue with those titles at the head") and both
-    of `_redraw_pair`'s fallbacks left `substituted_for` unset, so `RateSweepCard`'s explanation
-    disappeared and the payload contradicted itself: `serving` said battle over an unmarked sweep
-    card. [M4.10 finding 21]
-    """
+    """`substituted_for` must be set wherever a card of the other type is stashed (finding 21)."""
     user = warm["user"]
     s = await open_session(db, user)
     assert s.current_card["type"] == "sweep" and s.current_card.get("substituted_for") is None
 
-    # 1. The thin-pool substitution, which always worked — the guard that this stayed marked.
-    #    A block of disliked ratings puts the lonely member past decision 492's warm-up while
-    #    decision 493 keeps every one of them out of a first sitting's pairs.
+    # 1. The thin-pool substitution: disliked ratings pass decision 492's warm-up, and decision
+    #    493 keeps them out of a first sitting's pairs.
     lonely = await make_user(db, "lonely", "member")
     await rated_elsewhere(db, lonely, range(21, 36), 0)
     thin = await open_session(db, lonely)
@@ -464,28 +342,13 @@ async def test_every_card_that_stands_in_for_another_type_carries_its_marker(db,
 
 
 async def test_an_undo_across_a_mode_change_leaves_the_counter_naming_its_own_call(db, warm):
-    """The one flip no draw-time marker can see, pinned so the payload's promise stays the truth.
-
-    `_mark_substitution` marks a flip at the moment a card is DRAWN, which covers all three draws
-    that stand one type in for another — and cannot cover this one: `set_controls` drops the card on
-    a mode change and keeps the counter, and `undo` restores the journal's card verbatim without
-    restoring the mode it was drawn under. So Mix -> Sweep -> Mix -> Undo puts a sweep card on the
-    table while the counter, in the mode now in force, calls for a battle, with `substituted_for`
-    null because nothing stood in for anything.
-
-    That is `serving` doing what its own line says — "what the counter CALLS FOR, which is not always
-    what is on the table" — and `payload`'s comment briefly claimed the opposite, that the two could
-    disagree only on a marked substitution. This test is the claim's falsifier: it fails either if
-    the marker is made to cover a flip it cannot see or if `serving` is quietly redefined as a second
-    spelling of `card.type`, which would leave the counter's call nowhere.
-    [M4.10 finding 21, cycle 1 M410-D8-03]
-    """
+    """A mode change drops the card but keeps the counter, and undo restores the card without the
+    mode, so `serving` and `card.type` may disagree unmarked. Fails if either is redefined."""
     user = warm["user"]
     s = await open_session(db, user)
     s = (await session.record_verdict(db, s, card_token=token(s), value=2, hp=HP)).session
     assert s.slot == 2 and s.current_card["type"] == "battle", "slot 2 of block 0 is a battle"
 
-    # Sweep for one tap, then back to Mix: the mode change drops the card and leaves the counter.
     s = await session.set_controls(db, s, mode="sweep")
     s = await session.ensure_card(db, s)
     assert s.current_card["type"] == "sweep"
@@ -506,9 +369,6 @@ async def test_an_undo_across_a_mode_change_leaves_the_counter_naming_its_own_ca
         "draw-time marker can see -- so the two disagree here with nothing marked, and the comment "
         "that said otherwise was the defect"
     )
-
-
-# --- §6.1: no prediction before the tap ------------------------------------------------------
 
 
 def _walk(node: Any, path: str = "card"):
@@ -533,17 +393,8 @@ def assert_no_model_belief(card: dict[str, Any]) -> None:
 
 
 async def seed_ledger(db, user_id: int, title_ids, *, fitted: bool = False) -> None:
-    """A ranking for every title, all carrying the same two marker numbers, so a leak into any
-    card shows up as a literal string.
-
-    `fitted=True` runs a real `refit_user` first, and only then paints the markers over what it
-    wrote. Since M4.10 finding 9 a Ledger cache MISS no longer fits inline — it stamps
-    `refit_requested_at` and returns `rows=[]` for the 60 s job — so rows written straight into
-    `ledger_state` with no `ledger_fit` behind them are a ranking the incremental path will not
-    touch. A test whose subject is what the incremental update does to that number therefore
-    needs the cache to exist; the ones that only need a belief to hide from a card do not, and
-    pay nothing.
-    """
+    """Every title carries two marker numbers, so a leak shows as a literal. `fitted=True` runs a
+    real refit first: without a cached fit the incremental path touches nothing."""
     if fitted:
         await refit.refit_user(db, user_id=user_id, kind="movie", hp=HP)
     for title_id in title_ids:
@@ -562,13 +413,7 @@ async def seed_ledger(db, user_id: int, title_ids, *, fitted: bool = False) -> N
 async def test_the_sweep_card_carries_no_model_belief_and_the_reveal_arrives_with_the_verdict(
     db, rated
 ):
-    """§6.1: "Prediction reveal strictly *after* the tap (anchoring; Cosley 2003)", phrased
-    "we'd have guessed the same" / "we'd have guessed {class}".
-
-    Both halves are asserted, and the second half is what stops the first from being trivially
-    satisfiable by a surface that simply never computes a prediction: the same numbers that are
-    absent from the card are present, by name, in the response to the tap.
-    """
+    """The numbers absent from the card must be present in the tap's response, or omission is trivial."""
     user = rated["user"]
     await seed_ledger(db, user, range(1, 21))
     s = await open_session(db, user, mode="sweep")
@@ -586,23 +431,18 @@ async def test_the_sweep_card_carries_no_model_belief_and_the_reveal_arrives_wit
     assert out.reveal["predicted"] in (0, 1, 2)
     assert out.reveal["cdf"] == pytest.approx(MARKER_CDF)
     assert out.reveal["text"].startswith("we'd have guessed")
-    # Decision 491: the number rides beside its name (§6.8) for a viewer with Show the model on,
-    # and a member with it off is sent the guessed class and no number at all.
+    # Decision 491: the number rides beside its name only with Show the model on.
     modelled = session.viewer_reveal(out.reveal, show_model=True)
     assert "cdf 0.91" in modelled["text"], "§6.8: the number appears beside its name"
     member = session.viewer_reveal(out.reveal, show_model=False)
     assert member["text"] == out.reveal["text"] and "cdf" not in member["text"]
     assert {"cdf", "s", "label_count"}.isdisjoint(member)
     assert member["predicted_label"] == out.reveal["predicted_label"]
-    # And the card that comes back with it is still clean.
     assert_no_model_belief(await session.public_card(db, out.session))
 
 
 async def test_the_battle_card_hides_the_verdict_band_it_was_drawn_from(db, rated):
-    """The band is the person's own label rather than a model belief, and it still does not
-    travel: it costs nothing to omit and it is an anchoring vector on a card whose whole job is
-    to elicit a fresh comparison. Server-side it stays on `current_card`, because the write
-    path needs it to repair the pair after a correction."""
+    """The band is the person's own label but still an anchor; it stays server-side for corrections."""
     s = await open_session(db, rated["user"], mode="battle")
     assert s.current_card["verdict_class"] == 2
     card = await session.public_card(db, s)
@@ -615,17 +455,8 @@ async def test_the_battle_card_hides_the_verdict_band_it_was_drawn_from(db, rate
 
 
 async def test_the_reveal_is_read_before_the_write_and_not_after_it(db, rated):
-    """Order of operations, made falsifiable: the reveal reports the ranking as it stood before
-    this label existed. A handler that read `ledger_state` after the incremental update would
-    report the number the label just moved — and "we'd have guessed the same" would be true by
-    construction.
-
-    `fitted=True` because the tripwire below asserts that the incremental update *did* move the
-    number, and since M4.10 finding 9 an update with no cached fit behind it legitimately moves
-    nothing: it queues the refit for the 60 s job and returns. Without a real `ledger_fit` this
-    test would have gone on passing its first assertion while asserting the absence of a write
-    it had stopped asking for.
-    """
+    """A handler reading after the update would make "we'd have guessed the same" true by
+    construction. `fitted=True`: without a cached fit the update queues and moves nothing."""
     user = rated["user"]
     await seed_ledger(db, user, range(1, 21), fitted=True)
     s = await open_session(db, user, mode="sweep")
@@ -640,8 +471,7 @@ async def test_the_reveal_is_read_before_the_write_and_not_after_it(db, rated):
 
 
 async def test_the_reveal_is_suppressed_rather_than_invented_before_the_first_fit(db, world):
-    """§3.1 makes a household with no fit a legal state, and a banded guess off a CDF that does
-    not exist would be a number with no provenance."""
+    """No fit is legal (§3.1); a guess off a CDF that does not exist has no provenance."""
     s = await open_session(db, world["user"], mode="sweep")
     out = await session.record_verdict(db, s, card_token=token(s), value=1, hp=HP)
     assert out.reveal["available"] is False
@@ -649,9 +479,7 @@ async def test_the_reveal_is_suppressed_rather_than_invented_before_the_first_fi
 
 
 def _embeddings_from(vectors: dict[int, Any]):
-    """§5.1's coordinate, from a fixture dict. The shape `observations.resolve_embeddings`
-    enforces — (n, 64) and a mask — with one axis carrying the signal so the fitted `v` has a
-    direction a test can reason about."""
+    """(n, 64) and a mask, with one axis carrying the signal so `v` has a direction."""
 
     def rows(title_ids):
         matrix = np.zeros((len(title_ids), 64))
@@ -677,21 +505,8 @@ async def _unowned(db, title_id: int, name: str) -> None:
 
 
 async def test_the_reveal_fires_on_an_unowned_queue_title_with_no_ledger_state_row(db, world):
-    """§6.1: "Prediction reveal strictly *after* the tap", on the cards the queue actually deals.
-
-    `predicted_class` read `ledger_state`, `refit_user` writes rows for observed titles plus
-    *owned* ones, and §6.1's first queue is the imported seed list — 80 of whose 100 titles are
-    unowned in v20260828. So measured on the real bundle the reveal was unavailable on 50 of 50
-    taps for two members, and on 9 of 10 even after a full refit: the anchoring-safe feedback the
-    whole surface is built around was dark for exactly the sitting §12's M2 exit criterion is
-    defined over. §5.2 gives an unobserved title a coordinate at zero extra parameters, so the
-    number was always computable from the cached fit; nothing was missing but the arithmetic.
-
-    THE DISCRIMINATING ASSERTION IS THE PAIR. Two unowned titles, one pointing the way this
-    person's liked titles point and one the opposite way, must come back with different numbers —
-    an implementation that answered `mu` for every unobserved title would satisfy "available" and
-    say the same thing about every film in the catalog. [M4.10 finding 26, §5.2]
-    """
+    """The seed list is mostly unowned, with no `ledger_state` row; the cached fit still places them
+    (§5.2). Two titles pointing opposite ways must differ, or `mu` for all would pass."""
     user = world["user"]
     await _unowned(db, 98, "Pointing with them")
     await _unowned(db, 99, "Pointing against them")
@@ -731,8 +546,7 @@ async def test_the_reveal_fires_on_an_unowned_queue_title_with_no_ledger_state_r
         assert reveal["predicted"] in (0, 1, 2)
         assert 0.0 <= reveal["cdf"] <= 1.0, reveal
         assert reveal["text"].startswith("we'd have guessed")
-    # Banded against the person's own labels, which is six for the first tap and seven for the
-    # second — the first tap added one, and §5.2's band counts are live rather than fitted.
+    # §5.2's band counts are live: six labels for the first tap and seven for the second.
     assert (reveals[98]["label_count"], reveals[99]["label_count"]) == (6, 7)
     assert reveals[98]["s"] > reveals[99]["s"], (
         "the two unowned titles got the same ranking, so the coordinate was not read: "
@@ -745,15 +559,7 @@ async def test_the_reveal_fires_on_an_unowned_queue_title_with_no_ledger_state_r
 async def test_the_reveal_is_dark_only_until_the_first_fit_and_not_for_the_whole_sitting(
     db, world
 ):
-    """The first-sitting shape of finding 26, which is what §12's M2 criterion measures.
-
-    Three taps on unowned titles — the queue a fresh household actually gets. The first two are
-    dark and say so: §3.1 makes a fit-less household legal, §5.2's displayed weight is the CDF of
-    the person's own fitted values, and one label is not a distribution. Then the fit runs, which
-    is the 60 s `tier-set-refit` job doing what finding 9 moved out of the request, and the third
-    tap is lit — on a title with no `ledger_state` row of its own, which before this milestone was
-    the permanent state of the whole first sitting.
-    """
+    """One label is not a distribution, so the first two taps are dark; after the fit, lit."""
     user = world["user"]
     for title_id, name in ((97, "First"), (98, "Second"), (99, "Third")):
         await _unowned(db, title_id, name)
@@ -774,8 +580,7 @@ async def test_the_reveal_is_dark_only_until_the_first_fit_and_not_for_the_whole
     second = await tap(98, 0)
     assert second["available"] is False, "two labels, and nothing fitted them yet"
 
-    # What the sweep does sixty seconds later (finding 9: the first tap queues the fit rather than
-    # running §5.3's "seconds" row inside a request that has already committed).
+    # What the 60 s sweep does: the first tap queues the fit rather than running it (finding 9).
     assert (await refit.refit_user(db, user_id=user, kind="movie", hp=HP)).fitted
     assert await db.fetchval(
         "SELECT count(*) FROM ledger_state WHERE user_id = $1 AND title_id = 99", user
@@ -787,12 +592,7 @@ async def test_the_reveal_is_dark_only_until_the_first_fit_and_not_for_the_whole
     assert 0.0 <= third["cdf"] <= 1.0
 
 
-# --- §4.2 / §6.1: the two seen states ---------------------------------------------------------
-
-
 async def test_a_verdict_writes_seen_and_not_seen_writes_unseen(db, rated):
-    """§6.1: "Verdict implies `seen`", and the `Not seen` control is the one seen-state control
-    (owner decision 2026-08-29: a title you cannot remember is plain `unseen`)."""
     user = rated["user"]
     s = await open_session(db, user, mode="sweep")
     verdicted = s.current_card["title_id"]
@@ -814,8 +614,7 @@ async def test_a_verdict_writes_seen_and_not_seen_writes_unseen(db, rated):
 
 
 async def test_no_third_seen_state_is_reachable_from_the_write_path_or_the_column(db, world):
-    """Owner decision 2026-08-29 removed `forgotten`. Both halves are asserted: the column
-    refuses it, and the surface has no tap that could ask for it."""
+    """Both halves: the column refuses `forgotten`, and no tap can ask for it."""
     user = world["user"]
     with pytest.raises(asyncpg.PostgresError):
         await db.execute(
@@ -833,9 +632,7 @@ async def test_no_third_seen_state_is_reachable_from_the_write_path_or_the_colum
 async def test_flipping_a_rated_title_back_to_unseen_leaves_its_verdicts_and_duels_in_place(
     db, rated
 ):
-    """§4.2: "verdict/duel history is append-only and survives the flip." The title leaves the
-    battle pool because the pool is a conjunction — marked seen AND carrying a live verdict —
-    not because anything was deleted."""
+    """The title leaves the battle pool because the pool is a conjunction, not because of a delete."""
     user = rated["user"]
     s = await open_session(db, user, mode="battle")
     pair = (s.current_card["title_a"], s.current_card["title_b"])
@@ -858,14 +655,9 @@ async def test_flipping_a_rated_title_back_to_unseen_leaves_its_verdicts_and_due
     ) == 1
 
 
-# --- §6.1 / §4.2: the duel write ---------------------------------------------------------------
-
-
 @pytest.mark.parametrize("outcome", ["A", "B", "TIE"])
 async def test_one_battle_answer_writes_exactly_one_duel_row(db, rated, outcome):
-    """§4.2: outcome A | B | TIE, context `profile_battle`. A Tie is a stored outcome feeding
-    the Davidson tie term — 22% of random pairs are genuine ties — and never a skip, never a
-    dropped row."""
+    """A Tie feeds the Davidson tie term (22% of random pairs); never a skip or a dropped row."""
     user = rated["user"]
     s = await open_session(db, user, mode="battle")
     a, b = s.current_card["title_a"], s.current_card["title_b"]
@@ -877,8 +669,7 @@ async def test_one_battle_answer_writes_exactly_one_duel_row(db, rated, outcome)
     assert (row["title_a"], row["title_b"]) == (a, b)
     assert row["outcome"] == outcome
     assert row["context"] == "profile_battle"
-    # §13 stream (a) evaluates the TIER model against adaptively-selected pairs; a profile
-    # battle is random by design and is not part of that held-out sample.
+    # A profile battle is random by design, outside §13's held-out sample.
     assert row["selection"] == "random"
     journal = await db.fetchrow(
         "SELECT kind_of, duel_id, title_ids FROM rate_observation WHERE session_id = $1", s.id
@@ -889,15 +680,8 @@ async def test_one_battle_answer_writes_exactly_one_duel_row(db, rated, outcome)
 
 
 async def test_the_decisive_switch_weights_one_pair_and_resets_for_the_next(db, rated):
-    """§6.1's decisive switch sets the margin weight (~1.6 vs 1.0) -- for the pair it is set on.
-
-    §6.1 called it persistent: one tap changed every answer after it. On the second household
-    test that is what made it wrong -- Patrick turned it on for one clear pick and his next pair
-    was written at the decisive weight too (duels 5 and 7 on the live install, 1.6 each). So the
-    switch is the pair's: the answer to the pair on the table carries it, and the next pair
-    starts with it off. The two numbers come from `hp.margin_for`, so they stay in
-    `ledger_hyperparams.json` where §4.3 puts them. [decision 520; A6 of 2026-09-26]
-    """
+    """Decision 520: the decisive switch belongs to the pair it was set on. The weights come from
+    `hp.margin_for`, which keeps them in `ledger_hyperparams.json`."""
     user = rated["user"]
     s = await open_session(db, user, mode="battle")
     assert s.decisive is False
@@ -922,10 +706,7 @@ async def test_the_decisive_switch_weights_one_pair_and_resets_for_the_next(db, 
 async def test_the_decisive_switch_leaves_with_its_pair_on_a_skip_an_undo_and_a_mode_change(
     db, rated
 ):
-    """Decision 520 from the other three doors a pair leaves by. A skip, a mode change and an
-    Undo each put a different question on the table, and a switch set for the pair that left
-    must not weigh the answer to the one that came -- Undo included, because the pair it brings
-    back is asked afresh and the popped answer's weight left with the answer."""
+    """A skip, a mode change and an Undo each bring a new question, so the switch leaves with its pair."""
     user = rated["user"]
     s = await open_session(db, user, mode="battle")
 
@@ -952,8 +733,6 @@ async def test_the_decisive_switch_leaves_with_its_pair_on_a_skip_an_undo_and_a_
 
 
 async def test_one_answer_may_override_the_toggle_without_moving_it(db, rated):
-    """§6.1 keeps long-press "as an optional accelerator only": a decisive answer without a
-    trip to the toggle, and the toggle is where it was afterwards."""
     s = await open_session(db, rated["user"], mode="battle")
     out = await session.record_duel(
         db, s, card_token=token(s), outcome="A", decisive=True, hp=HP
@@ -962,13 +741,8 @@ async def test_one_answer_may_override_the_toggle_without_moving_it(db, rated):
     assert await db.fetchval("SELECT margin FROM duel") == pytest.approx(1.6)
 
 
-# --- §6.1: the corrections row -----------------------------------------------------------------
-
-
 @pytest.mark.parametrize("side", ["left", "right"])
 async def test_a_correction_unsees_exactly_the_named_side_and_writes_no_duel(db, rated, side):
-    """§6.1: "`not seen: [left] [both] [right]` -> sets that side `unseen`, swaps it out of the
-    pair … writes no duel row, syncs per §7.3, covered by the persistent Undo.\""""
     user = rated["user"]
     s = await open_session(db, user, mode="battle")
     a, b = s.current_card["title_a"], s.current_card["title_b"]
@@ -1010,9 +784,7 @@ async def test_both_swaps_the_whole_pair(db, rated):
 
 
 async def test_a_correction_does_not_advance_the_counter(db, rated):
-    """§6.1's corrections zone repairs the question rather than answering it, and the
-    migration's `rate_observation_advances_rule` CHECK pins that to `kind_of` so the two
-    cannot drift apart."""
+    """Corrections repair the question; `rate_observation_advances_rule` pins that to `kind_of`."""
     user = rated["user"]
     s = await open_session(db, user, mode="battle")
     before = (s.block_index, s.slot)
@@ -1036,11 +808,9 @@ async def test_a_correction_does_not_advance_the_counter(db, rated):
 
 @pytest.fixture
 async def linked(db, fake_jellyfin, secrets_key):
-    """A household whose Jellyfin is reachable and whose person has their own token — §7.3's
-    least-privilege write path, not the admin key."""
+    """The person's own token: §7.3's least-privilege write path, not the admin key."""
     module, transport = fake_jellyfin
-    # Ids the fake server actually carries: the pair is drawn at random, so every member of the
-    # pool has to be a real Jellyfin item or the assertion depends on the draw.
+    # Every pool member must be a real fake-server item: the pair is drawn at random.
     owned = [item["Id"].removeprefix("jf-") for item in module.ITEMS if item["Id"] != "jf-x"]
     await make_titles(db, [(int(i), "movie", f"Title {i}") for i in owned])
     await db.execute("UPDATE title SET jellyfin_id = 'jf-' || id")
@@ -1067,8 +837,7 @@ async def linked(db, fake_jellyfin, secrets_key):
 
 
 async def test_a_correction_queues_the_jellyfin_seen_state_sync(db, linked):
-    """§6.1: the correction "syncs per §7.3", and §7.3's mapping is the plain boolean:
-    `unseen` -> Played = false, written with that user's own token."""
+    """§7.3's mapping: `unseen` -> Played = false, with that user's own token."""
     user, jf, module = linked["user"], linked["jf"], linked["module"]
     s = await open_session(db, user, mode="battle")
     corrected = s.current_card["title_a"]
@@ -1084,13 +853,7 @@ async def test_a_correction_queues_the_jellyfin_seen_state_sync(db, linked):
 
 
 async def test_undo_pushes_back_exactly_what_the_forward_action_pushed(db, linked):
-    """Decision 35's compensating write reaches Jellyfin too, and symmetrically.
-
-    The app-side row is restored byte for byte by `observations.undo` — §7.3's `jf_synced_at`
-    loop guard included — so the only thing left owed is the Played flag we ourselves set. If
-    the retraction did not push, the next sweep would read our own write back as Jellyfin's
-    history and re-apply it.
-    """
+    """If the retraction did not push, the next sweep would read our own write back as history."""
     user, jf, module = linked["user"], linked["jf"], linked["module"]
     s = await open_session(db, user, mode="battle")
     corrected = s.current_card["title_a"]
@@ -1109,9 +872,7 @@ async def test_undo_pushes_back_exactly_what_the_forward_action_pushed(db, linke
 
 
 async def test_undo_pushes_nothing_where_the_forward_action_pushed_nothing(db, linked):
-    """The other half of the symmetry: a title Jellyfin does not carry was never pushed, so its
-    retraction writes nothing there either. Undo compensates what it did, not what it
-    intended."""
+    """Undo compensates what it did, not what it intended."""
     user, jf, module = linked["user"], linked["jf"], linked["module"]
     await db.execute("UPDATE title SET jellyfin_id = NULL")
     s = await open_session(db, user, mode="battle")
@@ -1124,9 +885,7 @@ async def test_undo_pushes_nothing_where_the_forward_action_pushed_nothing(db, l
 
 
 async def test_with_no_connector_the_push_is_owed_rather_than_lost(db, rated):
-    """§3.3: the app must work when Jellyfin is down. §7.3's table reads a present row with a
-    NULL `jf_synced_at` as "the person acted and Jellyfin has not been told yet", which is
-    exactly the queued sync the next sweep settles."""
+    """A present row with NULL `jf_synced_at` means Jellyfin is owed the change (§7.3)."""
     user = rated["user"]
     s = await open_session(db, user, mode="battle")
     corrected = s.current_card["title_b"]
@@ -1141,19 +900,9 @@ async def test_with_no_connector_the_push_is_owed_rather_than_lost(db, rated):
     assert any("not pushed" in line for line in out.log)
 
 
-# --- decision 35: undo -------------------------------------------------------------------------
-
-
 async def test_undo_pops_a_verdict_restores_the_exact_card_and_retracts_the_row(db, rated):
-    """Decision 35: "an observation journal with compensating writes", and the card that comes
-    back is the card that produced the observation — not the neighbouring queue position.
-
-    `fitted=True` for the reason `test_the_reveal_is_read_before_the_write_and_not_after_it`
-    gives, and for the assertion below: with no `ledger_fit` behind it the retraction's update is
-    a cache miss, which queues the refit and applies nothing, so `applied is True` was reading a
-    report that claimed a fit the request had not run. [M4.10 cycle 2,
-    m410-c2-cache-miss-reports-a-refit-that-did-not-run]
-    """
+    """The card that comes back is the one that produced the observation. `fitted=True`: a cache
+    miss queues the refit and applies nothing."""
     user = rated["user"]
     await seed_ledger(db, user, range(1, 21), fitted=True)
     s = await open_session(db, user, mode="sweep")
@@ -1165,8 +914,7 @@ async def test_undo_pops_a_verdict_restores_the_exact_card_and_retracts_the_row(
 
     out = await session.undo(db, s, hp=HP)
     s = out.session
-    # The compensating *Ledger* write, not merely a tombstone: §5.3's incremental update runs
-    # again over the title the retraction touched.
+    # The compensating Ledger write, not merely a tombstone.
     assert out.ledger["applied"] is True
     assert await db.fetchval("SELECT count(*) FROM verdict WHERE title_id = $1", title_id) == 0
     assert await db.fetchval(
@@ -1183,9 +931,7 @@ async def test_undo_pops_a_verdict_restores_the_exact_card_and_retracts_the_row(
 async def test_undo_restores_the_pair_it_was_asked_about_rather_than_reshuffling_it(
     db, rated, outcome
 ):
-    """Decision 35's other half: a battle pair is drawn at random, so an Undo that redrew would
-    land the person on a question they never answered. Both journal kinds are covered — a tie
-    is a `kind_of` of its own and must retract exactly like the duel it is."""
+    """The pair was drawn at random, so an Undo that redrew would ask something never answered."""
     s = await open_session(db, rated["user"], mode="battle")
     pair = (s.current_card["title_a"], s.current_card["title_b"])
     s = (await session.record_duel(db, s, card_token=token(s), outcome=outcome, hp=HP)).session
@@ -1198,8 +944,7 @@ async def test_undo_restores_the_pair_it_was_asked_about_rather_than_reshuffling
 
 @pytest.mark.parametrize("tap", ["not_seen", "skip", "correction"])
 async def test_undo_pops_an_observation_of_any_kind(db, rated, tap):
-    """The coverage row's word is ANY: "verdict, not-seen, skip, duel, tie, correction". A
-    single last-verdict slot could not cover the corrections row at all."""
+    """ANY kind, including a correction, which a last-verdict slot could not cover."""
     user = rated["user"]
     mode = "battle" if tap == "correction" else "sweep"
     s = await open_session(db, user, mode=mode)
@@ -1230,8 +975,7 @@ async def test_undo_pops_an_observation_of_any_kind(db, rated, tap):
 
 
 async def test_undo_lifts_the_skip_suppression_so_the_card_can_be_answered(db, rated):
-    """The journal row *is* the suppression (`undone_at IS NULL` in the exclusion predicate),
-    so undoing a skip has to put the title back in play, not merely back on screen."""
+    """The journal row is the suppression, so the title must come back into play."""
     user = rated["user"]
     s = await open_session(db, user, mode="sweep")
     title_id = s.current_card["title_id"]
@@ -1247,21 +991,8 @@ async def test_undo_lifts_the_skip_suppression_so_the_card_can_be_answered(db, r
 
 
 async def test_undo_stops_at_the_block_boundary_and_reports_it_rather_than_no_opping(db, world):
-    """Decision 35: "back to the start of the current block of 15 and no further; … the chip
-    disables visibly at the boundary."
-
-    Two boundaries, and both are refusals with a reason: an empty journal, and the start of the
-    block the person is in once the block before it has been committed.
-
-    WHERE THAT COMMIT FALLS MOVED IN M4.10. Decision 199 applies decision 174's ruling — a block
-    is finished when the FIRST observation of the next one lands, not when the fifteenth of this
-    one does — so the fifteenth-tap claim this test used to make is gone, to
-    `test_the_fifteenth_tap_stays_undoable_until_the_sixteenth_lands` below. What is asserted here
-    is the boundary that remains: the sixteenth tap commits block 0, and retracting the sixteenth
-    does not hand it back. Otherwise undo's depth would be a walk rather than a block — every
-    earlier block would return one tap at a time, because undo restores the session to the block
-    the row it popped was made in. [decisions 35, 174, 199]
-    """
+    """Decision 199: a block commits when the next block's first tap lands, so retracting the 16th
+    does not hand block 0 back."""
     user = world["user"]
     s = await open_session(db, user, mode="sweep")
     with pytest.raises(session.UndoUnavailable) as empty:
@@ -1272,10 +1003,7 @@ async def test_undo_stops_at_the_block_boundary_and_reports_it_rather_than_no_op
         s = (await session.record_skip(db, s, card_token=token(s))).session
     assert (s.block_index, s.slot) == (1, 2), "fifteen taps rolled the block and one landed in it"
 
-    # The sixteenth tap is the commit, so its own retraction comes back and the block it closed
-    # does not: decision 199's "until the sixteenth lands", which is where decision 35's "and no
-    # further" now bites. The fifteenth tap's own reachability — before the sixteenth — is the
-    # test below this one.
+    # The sixteenth tap is the commit: its retraction comes back, the block it closed does not.
     assert await session.undo_availability(db, s) == {
         "available": True, "kind": "skip", "reason": None
     }
@@ -1295,21 +1023,8 @@ async def test_undo_stops_at_the_block_boundary_and_reports_it_rather_than_no_op
 
 
 async def test_the_fifteenth_tap_stays_undoable_until_the_sixteenth_lands(db, world):
-    """Decision 199, which is decision 174's ruling applied: a block is committed when the FIRST
-    observation of the NEXT block lands.
-
-    `advance` rolls the counter on the fifteenth observation, so comparing the journal row's
-    block with the session's disabled the chip on the same round trip that answered card 15 —
-    6.7% of every observation a household makes, at the end of a run where the fatigue mis-taps
-    live, and in Battle mode a duel, which §4.2 gives no supersede path. Decision 35's reason for
-    the depth is "the depth matches the counter the user is already reading", and the person
-    reading "1 / 15" has just made a tap they can see and could not take back.
-
-    Three things are asserted, because the rule has three halves: the fifteenth tap is reachable
-    while the new block is empty, undoing it lands the session back at 15 with the card it
-    answered (the journal's stored block and slot are what restores it, and decision 199 did not
-    touch them), and one observation in the new block closes the old one for good.
-    """
+    """Decision 199: a block commits when the FIRST observation of the next block lands, so the
+    fifteenth tap stays undoable until then."""
     user = world["user"]
     s = await open_session(db, user, mode="sweep")
     for _ in range(14):
@@ -1333,8 +1048,7 @@ async def test_the_fifteenth_tap_stays_undoable_until_the_sixteenth_lands(db, wo
         "SELECT count(*) FROM verdict WHERE user_id = $1 AND title_id = $2", user, fifteenth
     ) == 0, "the mis-tap is gone from §4.2's history, which only undo may do"
 
-    # Re-answer it, then spend one tap in the new block: that is the commit. The fifteenth is out
-    # of reach from there on — the chip disables, visibly, one tap later than it used to.
+    # One tap in the new block is the commit; the fifteenth is out of reach from there.
     s = (await session.record_verdict(db, s, card_token=token(s), value=2, hp=HP)).session
     assert (s.block_index, s.slot) == (1, 1)
     s = (await session.record_verdict(db, s, card_token=token(s), value=2, hp=HP)).session
@@ -1347,8 +1061,6 @@ async def test_the_fifteenth_tap_stays_undoable_until_the_sixteenth_lands(db, wo
 
 
 async def test_undo_walks_back_to_the_first_observation_of_the_block_and_then_refuses(db, rated):
-    """Repeated Undo, which is how a person actually uses it. Three taps come back one at a
-    time; the fourth is refused."""
     user = rated["user"]
     s = await open_session(db, user, mode="sweep")
     for value in (0, 1, 2):
@@ -1367,8 +1079,7 @@ async def test_undo_walks_back_to_the_first_observation_of_the_block_and_then_re
 
 
 async def test_undo_of_a_re_rating_makes_the_previous_verdict_live_again(db, rated):
-    """§4.2: a re-rating supersedes rather than overwrites, so its undo has to *un*-supersede —
-    `observations.undo` splices the chain, and this is the surface end of that."""
+    """A re-rating supersedes, so its undo must un-supersede (`observations.undo` splices the chain)."""
     user = rated["user"]
     original = await db.fetchval(
         "SELECT id FROM verdict WHERE user_id = $1 AND title_id = 1", user
@@ -1390,18 +1101,9 @@ async def test_undo_of_a_re_rating_makes_the_previous_verdict_live_again(db, rat
     ) == 1
 
 
-# --- §13 stream (b): the write half of the silent re-ask ------------------------------------
-
-
 async def test_a_re_ask_is_written_distinguishably_and_shown_indistinguishably(db, rated):
-    """§13: "~10% of comparisons/verdicts re-asked after >= 3 days" — invisible in the payload,
-    distinguishable in the row, and counted once.
-
-    The draw belongs to `rate.queue` and `rate.reask`; what is asserted here is the half this
-    module owns: the card the server holds carries the reference, the card the client gets does
-    not, the written row carries `is_reask`/`reask_of`, and the class-balance widget — which is
-    what a person actually reads — does not count the answer twice.
-    """
+    """The server-held card carries the reference and the client's does not; the row carries
+    `is_reask`/`reask_of`, and the widget counts the answer once."""
     user = rated["user"]
     original = await db.fetchval(
         "SELECT id FROM verdict WHERE user_id = $1 AND title_id = 1", user
@@ -1427,12 +1129,8 @@ async def test_a_re_ask_is_written_distinguishably_and_shown_indistinguishably(d
     assert after == before, "a re-ask measures a judgement rather than adding one"
 
 
-# --- the card token ------------------------------------------------------------------------------
-
-
 async def test_a_card_can_only_be_answered_once_and_only_by_the_control_it_carries(db, rated):
-    """The token is why a client cannot answer a card it was never served. It is also the
-    double-tap guard: the second tap names a card that is no longer on the table."""
+    """The token is also the double-tap guard: the second tap names a card no longer on the table."""
     user = rated["user"]
     s = await open_session(db, user, mode="sweep")
     stale = token(s)
@@ -1448,12 +1146,8 @@ async def test_a_card_can_only_be_answered_once_and_only_by_the_control_it_carri
     assert wrong.value.reason == "wrong_card_type"
 
 
-# --- the session itself ---------------------------------------------------------------------------
-
-
 async def test_one_live_session_per_person_and_a_resume_returns_the_same_card(db, world):
-    """`rate_session_one_live` says one; two would each hold a block counter and Undo would
-    have to guess which one a tap belonged to."""
+    """Two live sessions would each hold a counter, and Undo would have to guess."""
     user = world["user"]
     first = await open_session(db, user)
     again = await session.ensure_card(db, await session.open_or_resume(db, user_id=user))
@@ -1472,16 +1166,13 @@ async def test_one_live_session_per_person_and_a_resume_returns_the_same_card(db
 
 
 async def test_a_fresh_session_opens_in_mix(db, world):
-    """§6.1: "Modes: **Mix** (default …)". Every entry point lands on the same card type."""
     s = await session.open_or_resume(db, user_id=world["user"])
     assert s.mode == "mix"
     assert sorted(s.kinds) == ["movie", "series"]
 
 
 async def test_changing_the_kinds_drops_the_card_and_never_leaves_neither_selected(db, world):
-    """Decision 18: Films and Series are two toggles, "either or both active, never neither" —
-    enforced by `library.normalise_kinds`, which is already tested, rather than re-implemented
-    here. A film pair is meaningless once Films is off, so the card is dropped."""
+    """Decision 18: "never neither" is `library.normalise_kinds`'s; a film pair drops with Films."""
     user = world["user"]
     s = await open_session(db, user, kinds=("movie", "series"))
     assert s.current_card is not None
@@ -1489,9 +1180,6 @@ async def test_changing_the_kinds_drops_the_card_and_never_leaves_neither_select
     assert s.current_card is None and s.card_token is None
     with pytest.raises(ValueError, match="at least one kind"):
         await session.set_controls(db, s, kinds=[])
-
-
-# --- the routes ------------------------------------------------------------------------------------
 
 
 @pytest.fixture
@@ -1508,8 +1196,7 @@ async def rate_client(app):
 async def test_the_route_serves_a_card_with_its_counter_its_balance_and_its_undo_state(
     db, rate_client
 ):
-    """One envelope for every route, and the next card rides in the response to the write —
-    §6 preamble: "<2 s per sweep card … next card preloaded"."""
+    """The next card rides in the write's response (§6: next card preloaded)."""
     client, user_id = rate_client
     await make_titles(db, [(i, "movie", f"Title {i}") for i in range(1, 9)])
     await seed_ledger(db, user_id, range(1, 9))
@@ -1523,8 +1210,7 @@ async def test_the_route_serves_a_card_with_its_counter_its_balance_and_its_undo
     assert first["card"]["type"] == "sweep"
     assert first["undo"] == {"available": False, "kind": None, "reason": "empty"}
     assert first["class_balance"]["counts"] == [0, 0, 4]
-    # 4 of 4 liked is past the 60% line, and four labels are not yet a habit: decision 491
-    # arms the warning at fifteen and says so on the wire.
+    # Four labels are not yet a habit: decision 491 arms the warning at fifteen.
     assert first["class_balance"]["warn"] is False
     assert first["class_balance"]["arms_at"] == 15
     assert_no_model_belief(first["card"])
@@ -1569,7 +1255,6 @@ async def test_the_route_refuses_a_stale_card_token(db, rate_client):
 
 
 async def test_the_route_reports_undo_as_unavailable_rather_than_no_opping(db, rate_client):
-    """Decision 35, over HTTP: the refusal carries the reason the chip renders."""
     client, _user_id = rate_client
     await make_titles(db, [(i, "movie", f"Title {i}") for i in range(1, 6)])
     await client.get("/api/rate")
@@ -1579,14 +1264,11 @@ async def test_the_route_reports_undo_as_unavailable_rather_than_no_opping(db, r
 
 
 async def test_the_route_rejects_an_empty_kind_selection(rate_client):
-    """Decision 18: never neither."""
     client, _user_id = rate_client
     assert (await client.post("/api/rate/session", json={"kinds": []})).status_code == 422
 
 
 async def test_the_rate_routes_need_a_signed_in_account(app, db):
-    """Every other router in `spielplan/api/` sits behind the same dependency; a surface that
-    wrote to one person's ledger without a session would be a different kind of bug."""
     client = app()
     assert (await client.get("/api/rate")).status_code == 401
     assert (
@@ -1595,17 +1277,8 @@ async def test_the_rate_routes_need_a_signed_in_account(app, db):
 
 
 async def test_a_tap_reaches_the_transparency_rail(db, rate_client):
-    """§6.7: the rail narrates "**every model write** in one human-readable line", and calls
-    itself "the primary M2 debugging instrument".
-
-    Every route already returns its lines in `log`, which is what the client renders for the tap
-    just made. Nothing recorded them anywhere, so the rail — the thing the toggle exists to
-    reveal — was empty in production while every unit test of the formatters passed. This is the
-    test that the producer exists at all.
-
-    A skip is deliberately absent: §6.7 says every model *write*, and a skip writes no
-    observation row. Its own log line says so.
-    """
+    """The rail must be recorded, not only returned: it was empty in production. A skip writes no
+    observation, so it has no line."""
     from spielplan.home import rail
 
     client, user_id = rate_client
@@ -1622,10 +1295,8 @@ async def test_a_tap_reaches_the_transparency_rail(db, rate_client):
     assert events, "the verdict never reached the rail"
     assert {e["kind"] for e in events} == {"verdict"}
 
-    # Decision 117: with the toggle off the lines are ABSENT from the response, not hidden by
-    # the client. Recording them still happens — the buffer is what the toggle reveals, so it
-    # has to have been filling while the toggle was off, or turning it on would show nothing
-    # until the next tap.
+    # Decision 117: absent from the response with the toggle off, but still recorded, so turning
+    # it on shows the buffer.
     assert "log" not in body and "ledger" not in body
 
     await client.post("/api/auth/preferences", json={"show_model": True})
@@ -1644,26 +1315,8 @@ async def test_a_tap_reaches_the_transparency_rail(db, rate_client):
 async def test_the_verdict_rail_line_names_the_person_the_title_and_the_refit_ms(
     db, rate_client
 ):
-    """§6.7's commonest line: `verdict(jenny, Heat) = liked -> ordered-logit arm, incremental
-    refit 31 ms` — the person, the film, and what the write actually cost.
-
-    What shipped instead was `ledger/observations.py`'s audit sentence forwarded unchanged,
-    `verdict(title 3) = liked -> ordered-logit arm`: a bare integer, which §6.8 rules out
-    because nothing on the client can resolve it into the film it names. `rail.verdict_line`
-    had rendered §6.7's format since M2 and was called only from `test_home.py`. The event's own
-    `title_id` field was null at every producer, and the incremental refit's milliseconds were
-    computed in the same handler and thrown away.
-
-    Driven through the route rather than through `record_verdict`, because the four facts meet
-    in three different places: the person is the request's session user, the film and the label
-    are the handler's, and the milliseconds come from the ledger delta the same response
-    reports under `ledger.ms` — which is what lets the number in the line be checked against
-    something other than itself.
-
-    The films are named rather than numbered on purpose. `Title 5` would satisfy the negative
-    assertion below by accident; a cast with no digit in it makes any digit in the sentence one
-    the renderer put there.
-    """
+    """Through the route: person, film and milliseconds meet in three places. The films are named
+    without digits, so any digit in the line is the renderer's."""
     from spielplan.home import rail
 
     films = ["Heat", "Drive", "Ronin", "Collateral", "Thief", "Sicario", "Zodiac", "Michael Clayton"]
@@ -1672,11 +1325,7 @@ async def test_the_verdict_rail_line_names_the_person_the_title_and_the_refit_ms
     await make_titles(db, [(i, "movie", films[i - 1]) for i in range(1, 9)])
     for title_id in (1, 2, 3, 4):
         await label(db, user_id, title_id, 2)
-    # The labels first and `fitted=True` after them, because `refit_user` writes no `ledger_fit`
-    # for a person with no observations — and without one the tap's update is a cache miss, which
-    # since finding 9 queues the refit and times nothing. The assertion below said as much in its
-    # own message ("the fixture owes a real incremental refit"); it was passing on a report that
-    # claimed the fit anyway. [M4.10 cycle 2, m410-c2-cache-miss-reports-a-refit-that-did-not-run]
+    # Labels first, then `fitted=True`: with no `ledger_fit` the tap is a cache miss and times nothing.
     await seed_ledger(db, user_id, range(1, 9), fitted=True)
     await client.post("/api/auth/preferences", json={"show_model": True})
     rater = (await client.get("/api/auth/me")).json()["name"]
@@ -1700,26 +1349,22 @@ async def test_the_verdict_rail_line_names_the_person_the_title_and_the_refit_ms
     )
     line = next(e for e in events if e["text"].startswith("verdict("))
 
-    # (a) §6.7's format, naming the person and the film's NAME. Compared against the renderer
-    # rather than against a literal because `test_home.py` already pins what that renderer
-    # emits; what is under test here is that the producer calls it, with these four facts.
+    # (a) Against the renderer, which `test_home.py` pins; here the producer must call it.
     assert line["text"] == rail.verdict_line(rater, rated_name, "liked", refit_ms=ms)
     assert f"verdict({rater}, {rated_name}) = liked" in line["text"]
     assert "ordered-logit arm" in line["text"]
 
-    # (b) the milliseconds are the delta's own, not a decoration: the same number the response
-    # reports under `ledger.ms`, which `refit.update_incrementally` measured.
+    # (b) The same number the response reports under `ledger.ms`.
     printed = re.search(r"incremental refit (\d+) ms", line["text"])
     assert printed is not None, line["text"]
     assert printed.group(1) == f"{ms:.0f}"
 
-    # (c) the event's own field, null at every producer before this one.
+    # (c) The event's own field.
     assert line["title_id"] == rated_id
 
-    # And the negative the finding is named after.
     assert re.search(r"title \d", line["text"]) is None, line["text"]
 
-    # One sentence, not two renderings: §6.1's per-response echo is the same line the rail took.
+    # One sentence, not two renderings.
     assert body["log"][0] == line["text"]
     rail.forget()
 
@@ -1727,21 +1372,7 @@ async def test_the_verdict_rail_line_names_the_person_the_title_and_the_refit_ms
 async def test_a_cache_miss_says_the_fit_is_owed_rather_than_timing_one_that_never_ran(
     db, rate_client
 ):
-    """Finding 9's repair, on the two sentences it drives — §6.7's rail and the model log.
-
-    A miss no longer fits inline: it stamps `refit_requested_at` and returns `rows=[]` for the
-    60 s sweep. The report handed to the client kept `refit: true` and the millisecond count the
-    inline fit used to earn, so the first tap per (user, kind) rendered "ledger movie - refit
-    12.6 ms" under the toggle and recorded ", incremental refit 13 ms" on the rail, while
-    `ledger_fit` held nothing, `ledger_state` had not moved and nothing anywhere said a fit was
-    owed. Before this milestone the same branch really did run the fit, so both numbers described
-    work that had been done; the repair removed the work and kept the sentences.
-
-    Asserted on a household that has just turned decision 117's toggle on, because that is when
-    it is read: every tap is a miss until the sweep lands, and so is every tap after a bundle
-    import, after an `hp_digest` change and on the NaN fallback.
-    [M4.10 cycle 2, m410-c2-cache-miss-reports-a-refit-that-did-not-run]
-    """
+    """A cache miss queues the fit, so neither the rail nor the model log may time one."""
     client, user_id = rate_client
     rail.forget()
     await make_titles(db, [(i, "movie", f"Title {i}") for i in range(1, 9)])
@@ -1778,15 +1409,7 @@ async def test_a_cache_miss_says_the_fit_is_owed_rather_than_timing_one_that_nev
 
 
 async def test_the_banner_cta_serves_a_named_title_even_over_a_standing_session(db, rate_client):
-    """§6.0's pending-verdicts banner: its CTA "opens the §6.1 queue with those titles at the
-    head of the queue, **not** at whatever position the standing queue held" — because "naming
-    titles and then presenting a different card is worse than no prompt".
-
-    The case that matters is the only one that happens in practice: the person already has a
-    session with a card stashed. `GET /api/rate` is deliberately idempotent so a refresh cannot
-    redraw, and that idempotency swallowed the head — the banner named three films and the
-    surface served whatever was already sitting there.
-    """
+    """`GET /api/rate` is idempotent, which swallowed the banner's head over a stashed card."""
     client, _user_id = rate_client
     await make_titles(db, [(i, "movie", f"Title {i}") for i in range(1, 8)])
 
@@ -1807,14 +1430,7 @@ async def test_the_banner_cta_serves_a_named_title_even_over_a_standing_session(
 
 
 async def test_a_head_that_cannot_be_drawn_leaves_the_standing_card_alone(db, rate_client):
-    """The other half: if none of the named titles can be served — already rated, or no such
-    title — the surface must keep the card it has rather than redrawing on every GET. A head
-    that never matches would otherwise make the card a moving target, which is what the
-    idempotency exists to prevent.
-
-    A title of the other kind used to be the third case. It is not any more: a pin now widens the
-    session to its kind (`test_a_pin_of_the_other_kind_widens_the_session_to_serve_it`), because
-    Rate's search and the title card's "Rate it" pin titles of either kind."""
+    """A head that never matches must not redraw on every GET."""
     client, user_id = rate_client
     await make_titles(db, [(i, "movie", f"Title {i}") for i in range(1, 5)])
     await make_titles(db, [(90, "series", "A Series")])
@@ -1830,20 +1446,8 @@ async def test_a_head_that_cannot_be_drawn_leaves_the_standing_card_alone(db, ra
 
 
 async def test_a_correction_repairs_the_pair_from_the_survivors_own_band(db, rate_client):
-    """§6.1: "`not seen: [left] [both] [right]` sets exactly the named side(s) to unseen" — the
-    other half keeps its place, against a fresh opponent from its own verdict band.
-
-    The opponent used to be found by asking for whole PAIRS and rejecting any outside the
-    survivor's class, eight times. `battle.draw` weights strata by pair count n(n-1)/2, so on a
-    60/20/20 labeller — the shape §5.2's class-balance warning pushes people toward — a minority
-    band was missed on all eight attempts about half the time, and the battle silently became a
-    sweep card with nothing on screen saying why.
-
-    Driven directly rather than through whatever the surface happens to deal: the failure only
-    shows when the SURVIVOR is in a small band, and a test that waits for random draws to put it
-    there detects the bug about two times in three. Here the band is chosen, so the assertion is
-    about the rule rather than about the draw.
-    """
+    """The survivor's opponent comes from its own band; drawing whole pairs missed small bands.
+    Driven directly: random draws put the survivor in a small band only sometimes."""
     client, user_id = rate_client
     await make_titles(db, [(i, "movie", f"Title {i}") for i in range(1, 25)])
     for title_id in range(1, 19):          # a large majority band: 18 liked, 153 pairs
@@ -1878,21 +1482,8 @@ async def test_a_correction_repairs_the_pair_from_the_survivors_own_band(db, rat
 
 
 async def test_a_correction_through_the_surface_swaps_only_the_named_side(db, rate_client):
-    """The same rule as the test above, through the route the person actually taps — the pair
-    that comes back keeps the half they did not correct.
-
-    This one takes whatever band the draw deals, so it says nothing about small bands; the
-    deterministic test above is what pins that. Kept because the wiring between the route, the
-    correction and the redraw is not exercised anywhere else.
-
-    ITS TWO LOAD-BEARING ASSERTIONS USED TO BE UNDER `if after["type"] == "battle":`, and the
-    regression its sibling's docstring names — "the survivor was abandoned and the slot fell
-    through to a sweep card" — is exactly what makes that condition false. Verified by forcing the
-    fallback: the test stayed green and asserted nothing. They are unconditional now, which the
-    fixture supports by construction (the smallest band here is four titles, so the survivor
-    always has an opponent), and the loop above is bounded rather than infinite: a surface that
-    stopped dealing battles hung the suite instead of failing it. [M4.10 finding 31, plan step 8]
-    """
+    """Takes whatever band the draw deals; kept for the route wiring. Its assertions are
+    unconditional and its loop bounded: the fixture's smallest band has four titles."""
     client, user_id = rate_client
     await make_titles(db, [(i, "movie", f"Title {i}") for i in range(1, 25)])
     for title_id in range(1, 13):
@@ -1933,21 +1524,12 @@ async def test_a_correction_through_the_surface_swaps_only_the_named_side(db, ra
     ) == "unseen"
 
 
-# --- M4.10: one card, one transaction, and the socket outside it -------------------------------
-#
-# Every guard on this surface used to be a check-then-act on an autocommit connection, so a
-# double tap, a second tab, or a phone and a laptop on one account all reached the write
-# together. The four taps are separate tests rather than one loop because the fixtures differ
-# and a failure has to name the tap.
+# Four taps as separate tests: the fixtures differ and a failure must name the tap.
 
 
 async def _second_connection(pg_url: str) -> asyncpg.Connection:
-    """A second connection, because two coroutines on one connection are not concurrent.
-
-    The jsonb codecs are the ones `conftest.py`'s `db` fixture installs: `rate_observation.card`
-    and `rate_session.current_card` are jsonb, and without them asyncpg hands back a string and
-    the card comes out of the journal as text.
-    """
+    """Two coroutines on one connection are not concurrent. Installs `db`'s jsonb codecs, or the
+    cards come back as text."""
     conn = await asyncpg.connect(pg_url)
     for typename in ("json", "jsonb"):
         await conn.set_type_codec(
@@ -1958,13 +1540,7 @@ async def _second_connection(pg_url: str) -> asyncpg.Connection:
 
 @pytest.fixture
 async def two_devices(app):
-    """One account reached from two devices over one cookie jar — §6.2's household.
-
-    Both pool connections are opened before any write starts, and concurrently. Warming them one
-    after the other is itself a serialisation: `test_account_security.py`'s first-boot race used
-    to pass with its advisory lock removed because the loser's connection cost was what ordered
-    the two requests, and that lesson is this milestone's too.
-    """
+    """Both pool connections open concurrently before any write: warming them in turn serialises."""
     phone = app()
     created = await phone.post(
         "/api/setup/admin", json={"name": "patrick", "password": "an-admin-password"}
@@ -1978,12 +1554,7 @@ async def two_devices(app):
 
 
 async def _both(first, second) -> tuple[list[int], list[Any]]:
-    """Two gathered requests, as sorted statuses and the responses themselves.
-
-    `return_exceptions=True` with a loud failure rather than `raise_app_exceptions=False` on the
-    transport: an exception that escapes every handler in `app.py` is a 500 to the person, and a
-    message naming it is worth more here than a bare `500` in a list of status codes.
-    """
+    """`return_exceptions=True`: an escaped exception is a 500 to the person, worth a loud message."""
     answers = await asyncio.gather(first, second, return_exceptions=True)
     for answer in answers:
         if isinstance(answer, BaseException):
@@ -2009,17 +1580,7 @@ def _refusal(answers: list[Any], attempt: int) -> dict[str, Any]:
 
 @pytest.mark.parametrize("tap", ("verdict", "not-seen", "skip"))
 async def test_two_taps_on_one_card_token_leave_one_observation_and_one_409(db, two_devices, tap):
-    """§6.1: the card is the server's, and a token that no longer matches is a 409 with a reason.
-
-    `_take_card` validated the token against the snapshot `_resume` had read on an autocommit
-    connection, so both taps passed it and the loser got as far as `INSERT INTO rate_observation`
-    before `rate_observation_seq` refused it. What the person then saw was `app.py`'s generic
-    conflict — a string naming a database constraint — over a card that had in fact been
-    recorded, which `rate.svelte.js` treats as a hard error and does not re-read from.
-
-    Eight attempts per tap, and the counts are checked after each one: a race that writes two
-    rows in one attempt of eight is exactly as broken as one that writes two every time.
-    """
+    """Eight attempts per tap, counts checked after each: two rows in one of eight is as broken."""
     phone, laptop, user_id = two_devices
     await make_titles(db, [(i, "movie", f"Title {i}") for i in range(1, 41)])
     await phone.post("/api/rate/session", json={"mode": "sweep"})
@@ -2034,8 +1595,7 @@ async def test_two_taps_on_one_card_token_leave_one_observation_and_one_409(db, 
         assert statuses == [200, 409], f"attempt {attempt + 1}: {statuses}"
         _refusal(answers, attempt)
 
-        # One journal row and one advanced slot: decision 35's counter is defined over a
-        # sequence, and two rows at one slot would make Undo's depth unanswerable.
+        # Decision 35's counter is over a sequence; two rows at one slot make Undo's depth unanswerable.
         assert await db.fetchval(
             "SELECT count(*) FROM rate_observation WHERE user_id = $1", user_id
         ) == attempt + 1, f"attempt {attempt + 1}: the journal took two rows for one card"
@@ -2058,12 +1618,7 @@ async def test_two_taps_on_one_card_token_leave_one_observation_and_one_409(db, 
 
 
 async def test_two_answers_to_one_battle_card_write_exactly_one_duel(db, two_devices):
-    """The same race on the duel arm, with the two taps answering *differently*.
-
-    A and B for one pair is what the unserialised shape produced on the Rank queue, and it is
-    the worst case here too: one of the two is a judgement the person never made, in a table
-    §4.2 makes append-only.
-    """
+    """The taps answer differently: one would be a judgement the person never made."""
     phone, laptop, user_id = two_devices
     await make_titles(db, [(i, "movie", f"Title {i}") for i in range(1, 41)])
     for title_id in range(1, 41):
@@ -2088,14 +1643,7 @@ async def test_two_answers_to_one_battle_card_write_exactly_one_duel(db, two_dev
 
 
 async def test_a_slow_jellyfin_does_not_widen_the_double_tap_window(db, two_devices, monkeypatch):
-    """The same race with §7.3's push made slow, which is how it is reached in a house.
-
-    With the push inside the transaction — where it was — a Jellyfin taking 300 ms turned a
-    millisecond-wide window into a third of a second, which is comfortably longer than the gap
-    between two impatient taps. The push is outside the transaction now, so the winner commits
-    and the loser wakes before the socket is even opened; the assertion is that the outcome is
-    the same shape whatever the network does.
-    """
+    """The push is outside the transaction, so a slow Jellyfin cannot widen the window."""
     real = session._push_state
 
     async def slow(*args, **kwargs):
@@ -2124,14 +1672,7 @@ async def test_a_slow_jellyfin_does_not_widen_the_double_tap_window(db, two_devi
 async def test_two_concurrent_gets_on_an_empty_table_serve_one_card_under_one_token(
     db, two_devices
 ):
-    """`api/rate.py`'s own promise: "a second GET returns the same card under the same token".
-
-    It was false whenever the table was empty. `ensure_card` decided to draw from a snapshot and
-    `stash_card` then wrote unconditionally, so two GETs both drew and both stashed — the same
-    title under two tokens, last write wins. Reproduced as two tokens back, the first verdict
-    200 and the second 409, on nothing more exotic than a phone that reloaded while a laptop was
-    open. [M4.10 finding 4]
-    """
+    """Two GETs on an empty table both drew and stashed: one title under two tokens (finding 4)."""
     phone, laptop, user_id = two_devices
     await make_titles(db, [(i, "movie", f"Title {i}") for i in range(1, 21)])
     await phone.post("/api/rate/session", json={"mode": "sweep"})
@@ -2165,23 +1706,8 @@ async def test_two_concurrent_gets_on_an_empty_table_serve_one_card_under_one_to
 
 
 async def test_a_banner_redraw_never_replaces_a_card_it_did_not_read(db, world):
-    """§6.0's banner CTA, and the branch finding 4's repair did not reach.
-
-    `_stash_if_empty` closed the empty-table draw; the head redraw went on writing with no
-    predicate at all. Two devices following the same pending-verdicts CTA therefore both redrew and
-    both stashed — two tokens for one session, last write wins — and the losing device's first tap
-    was refused with "that card has already been answered" over a card nobody had answered.
-
-    Asserted as the state the race produces rather than as the race: over the route two gathered
-    redraws split once in 40 attempts, and a race that passes once has not passed. The second
-    device's `ensure_card` is driven from the snapshot it read before the first device's redraw
-    landed, which is exactly what the losing request holds.
-
-    Three arms, because the compare-and-set has three outcomes and only two of them were covered:
-    redraw-against-redraw here, and at the end the one the helper's own enumeration denied — a tap
-    wins, refills the table from its own queue position, and the losing banner redraw is served a
-    title the banner did not name. [M4.10 finding 4, cycle 1 m410-rev-02, cycle 2 M410-C2-D2-01]
-    """
+    """Asserted as the state the race produces: over the route it split once in 40. Three arms of
+    the compare-and-set, including a tap refilling the table first."""
     user = world["user"]
     s = await open_session(db, user)
     pinned = next(i for i in range(1, 21) if i != s.current_card["title_id"])
@@ -2206,13 +1732,8 @@ async def test_a_banner_redraw_never_replaces_a_card_it_did_not_read(db, world):
     out = await session.record_verdict(db, loser, card_token=winner, value=2, hp=HP)
     assert out.session.slot == 2
 
-    # The third outcome of a missed compare-and-set, which the helper's enumeration denied: a tap
-    # does not leave the table empty, because every `record_*` ends in `ensure_card`. So a tap from
-    # a device that is not carrying the banner's `head` refills the table with a title the banner
-    # did not name, the losing redraw misses `card_token IS NULL` as well, and the person who
-    # followed a CTA naming three films is shown a fourth. Asserted as the property that decides
-    # the behaviour: the card served is the card stored, so it is answerable — which is why serving
-    # it beats clobbering a card another device is holding. [M4.10 cycle 2, M410-C2-D2-01]
+    # A tap refills the table via `ensure_card`, so the losing redraw serves the card stored:
+    # answerable, rather than clobbering another device's card.
     s = out.session
     stale = s
     s = (await session.record_skip(db, s, card_token=token(s))).session
@@ -2234,21 +1755,8 @@ async def test_a_banner_redraw_never_replaces_a_card_it_did_not_read(db, world):
 async def test_a_skip_that_dies_between_its_two_statements_leaves_no_phantom_journal_row(
     db, rated, monkeypatch
 ):
-    """Decision 35's journal, and the one tap that wrote it outside a transaction.
-
-    `_append` is an INSERT at `seq + 1` followed by the UPDATE that moves the session to it.
-    `record_skip` issued both on the autocommit connection, so a process death, a dropped pool
-    connection or a cancelled task between them left the journal at N+1 with the session at N —
-    and `rate_observation_seq` then refused every later append in that session for ever.
-    Reproduced from that state: verdict, skip and not-seen all 500, `GET /api/rate` went on
-    serving a card that could not be answered, undo tombstoned the phantom row and the next
-    verdict still 500'd, and only `DELETE /api/rate/session` recovered. Skip is the most
-    frequent tap in a sweep. [M4.10 finding 3]
-
-    The failure is injected at the cursor move rather than by killing a process, because what
-    has to hold is that the two statements are one unit — and that is the same property either
-    way.
-    """
+    """`_append` is an INSERT then an UPDATE; on autocommit, a death between them wedged the
+    session. Injected at the cursor move: the two statements must be one unit."""
     user = rated["user"]
     s = await open_session(db, user, mode="sweep")
     real = asyncpg.Connection.fetchrow
@@ -2276,12 +1784,7 @@ async def test_a_skip_that_dies_between_its_two_statements_leaves_no_phantom_jou
 
 @pytest.fixture
 async def linked_sweep(db, linked):
-    """`linked`, with the labels dropped so the sweep queue is full.
-
-    `linked` rates every owned title so that a battle pair always exists. The §7.3 push this
-    milestone moved out of the transaction rides on the sweep taps — verdict, not-seen and the
-    correction — so those need a queue with something in it.
-    """
+    """`linked` rates every owned title; the sweep taps that push need a non-empty queue."""
     await db.execute("DELETE FROM verdict")
     await db.execute("DELETE FROM user_title")
     return linked
@@ -2290,29 +1793,8 @@ async def linked_sweep(db, linked):
 async def test_the_loser_of_a_double_tap_never_tells_jellyfin(
     db, pg_url, linked_sweep, monkeypatch
 ):
-    """The half of finding 2 that M4.7's conflict handler did not close.
-
-    `_push_state` ran between the observation and the journal row, inside the transaction. The
-    loser's observation rolled back — so no duplicate label — but its Played write had already
-    gone out over the wire, where nothing rolls back: Jellyfin was told the household had seen a
-    title this app has no record of anyone rating. With the card claimed under a row lock the
-    loser never reaches the observation, let alone the socket.
-
-    Driven at the domain layer on two real connections, because the thing being counted is the
-    write log of a media server and the thing being raced is one function's transaction. The
-    app-side state is reset between attempts and the fake's write log is not: the fake carries
-    six items and refuses a Played write for any other id, so eight attempts have to reuse them
-    while the thing being counted goes on accumulating.
-
-    `observations.record_verdict` is counted as well as the write log, and that count is the one
-    assertion in the suite that can tell the lock apart from its backstop. Both refusals leave as
-    `StaleCard("stale_card")` — `_append` maps `rate_observation_seq` to the same exception on
-    purpose — so with `_claim_card` removed every other assertion here still holds: the loser's
-    INSERT collides, rolls back, and since finding 11 moved the socket out it never reaches
-    Jellyfin either. What changes is that the loser gets as far as writing the ledger row and
-    `user_title`, which is the work the lock exists to stop and which shows up nowhere else.
-    [M4.10 cycle 1, m410-rev-01]
-    """
+    """The loser's Played write used to go out before its rollback. Counting `record_verdict` tells
+    the lock from its backstop. The fake refuses unknown ids, so attempts reuse its six items."""
     user, jf, module = linked_sweep["user"], linked_sweep["jf"], linked_sweep["module"]
     observed = 0
     real_record = observations.record_verdict
@@ -2374,19 +1856,8 @@ class _SlowPlayed(httpx.AsyncBaseTransport):
 async def test_the_verdict_is_durable_before_jellyfin_answers(
     db, pg_url, fake_jellyfin, linked_sweep
 ):
-    """§3.3, and the sentence `sync/seen.py` and `ledger/observations._set_state` both already
-    carried: "the app-side write is committed before the network call and never depends on it".
-
-    It was false for the most frequent caller of both. Measured with a transport sleeping 1.5 s:
-    the tap took 1.66 s, a second connection could not see the verdict row until 1.67 s, one
-    backend sat `idle in transaction` for the whole wait against a pool of ten, and a second
-    connection's UPDATE of the same row blocked 0.97 s behind a 1.0 s call. The budget §6's
-    preamble gives a sweep card is 2 s *in total*.
-
-    Half a second here rather than one and a half: enough that the 10 ms poll below can tell the
-    two shapes apart by an order of magnitude, short enough not to spend it on every suite run.
-    [M4.10 finding 11]
-    """
+    """The app-side write commits before the network call. 0.5 s so the 10 ms poll separates the
+    two shapes by an order of magnitude."""
     module, transport = fake_jellyfin
     user = linked_sweep["user"]
     jf = session.Jellyfin(
@@ -2415,19 +1886,8 @@ async def test_the_verdict_is_durable_before_jellyfin_answers(
                 title_id,
             ):
                 visible = time.monotonic() - started
-            # Whose latency is being held, in the only terms Postgres reports it in. The watcher
-            # excludes itself; the only other backend in this database is the one running the tap.
-            #
-            # A DURATION and not a state, sampled on every poll rather than only while the row is
-            # invisible. `idle in transaction` on its own is what the correct shape ALSO reports:
-            # the tap's own observation transaction is three round trips with the backend idle
-            # between them, and `refit.update_incrementally` opens another one after the push — so
-            # the plain predicate was a statement about how coarsely it was sampled, and with the
-            # row usually visible on the first poll it was not sampled at all. A 0.3 s floor is
-            # above both of those and far below the 0.5 s the transport sleeps, so it reads 1 on
-            # the pre-M4.10 shape and 0 on this one at any poll resolution. `clock_timestamp()`
-            # rather than `now()` because `now()` is the transaction's own start.
-            # [M4.10 cycle 1, f11-04]
+            # A duration, not a state: `idle in transaction` is normal between round trips. 0.3 s is above
+            # that and below the 0.5 s sleep. `clock_timestamp()`: `now()` is the transaction's start.
             samples += 1
             held = max(
                 held,
@@ -2474,15 +1934,8 @@ async def test_the_verdict_is_durable_before_jellyfin_answers(
 async def test_a_handed_off_push_answers_the_tap_first_and_settles_the_same_bookkeeping(
     db, pg_url, fake_jellyfin, linked_sweep
 ):
-    """A4 of the second household test: the verdict buttons sat greyed for seconds after a tap.
-
-    Measured on the live install, read-only: a film verdict spent 64 ms of its 98 ms route in
-    Jellyfin's `POST /UserPlayedItems`, and Jenny's "liked" on Lost -- a SERIES, which Jellyfin
-    marks played episode by episode -- 3,269 ms of 3,317. With `later` the tap answers before the
-    push and the push settles on a pooled connection of its own: the same Played write, the same
-    §7.3 stamp, the same `prior_state.pushed` correction Undo reads (decision 207), and §6.7's
-    line for how it ended, recorded when it ends. [§6 preamble, §7.3]
-    """
+    """With `later` the tap answers first and the push settles on its own pooled connection, with
+    the same stamp, `prior_state.pushed` correction (decision 207) and rail line."""
     from spielplan.db import pool as db_pool
 
     await db_pool.open_pool(pg_url, min_size=1, max_size=2)
@@ -2530,8 +1983,6 @@ async def test_a_handed_off_push_answers_the_tap_first_and_settles_the_same_book
 async def test_the_rate_routes_hand_the_push_off_and_answer_without_waiting_for_it(
     db, rate_client, fake_jellyfin, monkeypatch
 ):
-    """The same, through the routes a phone calls: verdict, not-seen and a title card's answer
-    each return while a 0.5 s Jellyfin is still being told, and each push lands afterwards."""
     from spielplan.api import rate as rate_routes
 
     client, user_id = rate_client
@@ -2559,7 +2010,7 @@ async def test_the_rate_routes_hand_the_push_off_and_answer_without_waiting_for_
         return jf
 
     monkeypatch.setattr(rate_routes, "_jellyfin", slow_jellyfin)
-    # §6.7's rail is where the push's line is read, and it is Show the model's to open.
+    # Show the model opens §6.7's rail, where the push's line is read.
     await client.post("/api/auth/preferences", json={"show_model": True})
     await client.post("/api/rate/session", json={"mode": "sweep"})
     card = (await client.get("/api/rate")).json()["card"]
@@ -2589,13 +2040,8 @@ async def test_the_rate_routes_hand_the_push_off_and_answer_without_waiting_for_
 
 
 async def test_handed_off_pushes_behind_a_hung_jellyfin_leave_the_pool_to_the_requests(db, pg_url):
-    """Each handed-off push holds a pooled connection, and the title's advisory lock on it, for its
-    whole Jellyfin round trip - up to the client's 15 s per copy - while its tap was answered in a
-    tenth of a second. Unbounded, a phone rating once a second behind a hung Jellyfin held all ten
-    of the web pool's connections within ten taps, and every route's bounded acquire answered 503:
-    §3.3's "the app must work when Jellyfin is down", lost to the fix that stopped waiting for it. At most
-    `SETTLE_SLOTS` hold a connection at once; the rest wait in memory, holding nothing, and every
-    one still runs. [review of the second household test's wave]"""
+    """At most `SETTLE_SLOTS` pushes hold a connection; the rest wait in memory, so a hung Jellyfin
+    cannot drain the web pool."""
     from spielplan.db import pool as db_pool
 
     await db_pool.open_pool(pg_url)                  # the web pool's own ten
@@ -2624,9 +2070,7 @@ async def test_handed_off_pushes_behind_a_hung_jellyfin_leave_the_pool_to_the_re
 async def test_a_handed_off_push_that_gets_no_connection_is_left_owed_and_raises_nothing(
     db, pg_url, monkeypatch, caplog
 ):
-    """The slot's acquire is bounded as a request's is (`api/deps.py`), so a saturated pool is
-    answered rather than waited on for ever; the settlement is logged and left to §7.3's sweep,
-    which owes it anyway, and nothing raises out of the bare task."""
+    """The slot's acquire is bounded like a request's; the settlement is left to §7.3's sweep."""
     from spielplan.db import pool as db_pool
 
     monkeypatch.setattr(session, "SETTLE_ACQUIRE_TIMEOUT_S", 0.2)
@@ -2650,10 +2094,7 @@ async def test_a_handed_off_push_that_gets_no_connection_is_left_owed_and_raises
 async def test_a_stop_lets_the_handed_off_pushes_land_before_the_pool_closes(
     db, pg_url, tmp_path, monkeypatch
 ):
-    """The lifespan closed the pool without waiting for Rate's handed-off pushes, so one still
-    waiting for its slot met "pool is closing" and waited for the fifteen-minute sweep, with the
-    journal Undo reads (decision 207) not yet corrected. A stop now waits, bounded, for all of
-    them. [review of the second household test's wave]"""
+    """A stop waits, bounded, for handed-off pushes before the pool closes."""
     from spielplan.core.config import settings
     from spielplan.models import basis
 
@@ -2686,16 +2127,7 @@ async def test_a_stop_lets_the_handed_off_pushes_land_before_the_pool_closes(
 async def test_the_journal_records_the_push_that_happened_and_not_the_one_intended(
     db, linked_sweep
 ):
-    """Decision 207. The journal row is written inside the transaction and the push happens
-    after it, so `prior_state.pushed` is false at the moment it is stored and is corrected by
-    one follow-up UPDATE once the push has resolved.
-
-    The field is not bookkeeping: `undo` reads exactly it to decide whether to hand Jellyfin
-    back the Played flag, which is what `_state_entries`' docstring means by "Undo compensates
-    what it did, not what it intended". Left permanently false, every retraction on a linked
-    household would be silently skipped and §7.3's next sweep would read our own write back as
-    the household's history.
-    """
+    """`prior_state.pushed` is corrected after the push resolves; `undo` reads exactly it."""
     user, jf = linked_sweep["user"], linked_sweep["jf"]
     s = await open_session(db, user, mode="sweep")
     title_id = s.current_card["title_id"]
@@ -2726,21 +2158,8 @@ async def test_the_journal_records_the_push_that_happened_and_not_the_one_intend
 
 
 async def test_an_undo_of_a_not_seen_hands_back_the_played_flag_it_set(db, linked):
-    """Decision 207's third arm, which nothing reached.
-
-    `_mark_pushed` is called from `record_verdict`, `record_not_seen` and `record_correction`. The
-    verdict's copy is asserted above; the correction's is pinned indirectly, because
-    `test_undo_pushes_back_exactly_what_the_forward_action_pushed` requires a retraction that `undo`
-    gates on `prior_state.pushed`. Not-seen's was pinned by nothing — deleting its call left the
-    suite green — and it is the arm where the lost flag costs most: `observations.undo` restores
-    `user_title` byte for byte, §7.3's `jf_synced_at` stamp included, so a skipped retraction leaves
-    Jellyfin's Played flag false with nothing owed, and §7.3's next sweep reads our own write back
-    as the household's history. [M4.10 decision 207, cycle 1 f11-02]
-
-    A title already `seen` and not yet verdicted is what the sweep queue serves first (`NOT s.seen`
-    is the second key of its ORDER BY), so dropping one verdict from `linked` puts one on the table
-    — and `seen` is the prior state the retraction has to put back.
-    """
+    """Not-seen's `_mark_pushed` was pinned by nothing. A `seen`, unverdicted title is served first,
+    so dropping one verdict from `linked` puts it on the table."""
     user, jf, module = linked["user"], linked["jf"], linked["module"]
     target = await db.fetchval(
         "SELECT title_id FROM verdict WHERE user_id = $1 ORDER BY title_id LIMIT 1", user
@@ -2776,25 +2195,8 @@ async def test_an_undo_of_a_not_seen_hands_back_the_played_flag_it_set(db, linke
 async def test_an_undo_taken_while_the_push_is_in_flight_still_hands_the_played_flag_back(
     db, pg_url, fake_jellyfin, linked_sweep
 ):
-    """Decision 207's window, from the side the decision's own cost paragraph waved through.
-
-    Step 4 made the journal row visible and undoable while the push is still on the wire, and the
-    follow-up UPDATE corrects `pushed` only afterwards. In between the row reads `pushed = false`
-    and `undo` gates the compensating write on exactly that field, so an Undo in that window
-    skipped `seen.retract` and the Played flag the tap had just set stayed true on the media
-    server with nothing owed anywhere — `observations.undo` deletes the `user_title` row a first
-    verdict created, so there is no `jf_synced_at` left for §7.3 to reconcile from and the next
-    sweep adopts our own write back as the household's history. That is the harm `_mark_pushed`'s
-    docstring says the flag exists to prevent, and it did not exist before this milestone: at HEAD
-    the push and the journal row were inside one transaction, so the row was never visible
-    carrying a provisional `pushed`.
-
-    Raced rather than argued, on a second connection because two coroutines on one connection are
-    not concurrent, with the §3.3 slow server the 15 s client budget is kept for. `undo`'s
-    `FOR UPDATE` on the journal row is what makes the repair total in both interleavings: an undo
-    that commits first is seen as a tombstone, and one that commits later blocks on the row lock
-    and then reads `pushed = true`. [M4.10 cycle 2, M410-C2-F11-01]
-    """
+    """An Undo while the push is in flight read `pushed = false`. `undo`'s `FOR UPDATE` on the
+    journal row makes the repair hold in both interleavings."""
     module, transport = fake_jellyfin
     user = linked_sweep["user"]
     jf = session.Jellyfin(
@@ -2805,13 +2207,7 @@ async def test_an_undo_taken_while_the_push_is_in_flight_still_hands_the_played_
     )
     s = await open_session(db, user, mode="sweep")
     title_id = s.current_card["title_id"]
-    # The card is dealt, so this is a prior the retraction is allowed to put back rather than a
-    # change to what the queue serves. `linked_sweep` empties `user_title`, and M4.11's decision 210
-    # makes `seen.retract` refuse a prior of "no row at all": sending Played = false there would
-    # push the app's absence over Jellyfin's history, which is the one row `sync/seen.py`'s own
-    # header says never happens. The window this test is about — the journal row visible while the
-    # push is still on the wire — is unchanged by that, and an explicit prior `unseen` is what a
-    # re-rating of a title the household had marked not-seen actually looks like.
+    # An explicit prior `unseen`: decision 210 makes `seen.retract` refuse a prior of no row.
     await db.execute(
         "INSERT INTO user_title (user_id, title_id, state, state_changed_at, jf_synced_at) "
         "VALUES ($1, $2, 'unseen', now(), now())",
@@ -2823,8 +2219,7 @@ async def test_an_undo_taken_while_the_push_is_in_flight_still_hands_the_played_
         tap = asyncio.create_task(
             session.record_verdict(db, s, card_token=token(s), value=2, hp=HP, jf=jf)
         )
-        # The window opens at the commit and closes at `_mark_pushed`, so the undo is timed off
-        # the journal row becoming visible rather than off a sleep.
+        # Timed off the journal row becoming visible, not a sleep.
         while not await other.fetchval(
             "SELECT count(*) FROM rate_observation WHERE user_id = $1", user
         ):
@@ -2863,14 +2258,7 @@ async def test_an_undo_taken_while_the_push_is_in_flight_still_hands_the_played_
 
 
 async def test_an_undo_whose_token_has_expired_asks_for_a_re_link(db, linked):
-    """§7.3: "a 401 on write -> re-link prompt" — on the retraction too.
-
-    `rate/session.py` carried its own copy of the push path for Undo, and the copy had drifted:
-    it returned silently where the person's link had no usable token and where Jellyfin rejected
-    it, so a token that expired between the tap and the Undo left `jellyfin_link_state` reading
-    `linked` with nothing anywhere asking the person to fix it — and the retraction quietly lost.
-    Going through `sync/seen.retract`, which goes through `_push`, is the repair. [finding 11]
-    """
+    """§7.3: a 401 on the retraction's write also asks for a re-link."""
     user, jf, module = linked["user"], linked["jf"], linked["module"]
     s = await open_session(db, user, mode="battle")
     corrected = s.current_card["title_a"]
@@ -2901,19 +2289,9 @@ async def test_an_undo_whose_token_has_expired_asks_for_a_re_link(db, linked):
     ) == "seen"
 
 
-# --- the two routes this milestone owned and nothing named ------------------------------------
-
-
 async def test_the_not_seen_route_writes_unseen_advances_and_preloads_the_next_card(
     db, rate_client
 ):
-    """§6.1's one seen-state control over HTTP, and the owner decision of 2026-08-29: a title
-    you cannot remember is plain `unseen`, with no third state.
-
-    The route was reachable only through other milestones' fixtures — `test_restore_drill.py`
-    and `test_secrets_custody.py` both tap it on the way to something else — so nothing asserted
-    what it writes. M4.10's route inventory counts it as named from here. [M4.10 finding 34]
-    """
     client, user_id = rate_client
     await make_titles(db, [(i, "movie", f"Title {i}") for i in range(1, 6)])
     await client.post("/api/rate/session", json={"mode": "sweep"})
@@ -2940,36 +2318,19 @@ async def test_the_not_seen_route_writes_unseen_advances_and_preloads_the_next_c
 
 
 async def test_two_long_names_on_the_rail_do_not_lose_the_verdict(db, rate_client):
-    """Exit criterion clause 4's Rate half: after the observation commits, no route raises.
-
-    `payload` records §6.7's verdict line after `record_verdict`'s transaction has closed, and
-    `rail.verdict_line` interpolated the member's name and the title's name without eliding either
-    — so the line could exceed `MAX_LINE`, `rail.record` refused it, and `app.py` rendered a 500
-    over a durable `verdict` and `rate_observation`. The retry is worse than the 500: `_claim_card`
-    has already nulled the card token, so the person is told the card was already answered and has
-    no way to try again. `rank/tiers.py`'s `MAX_LABEL` comment records the same failure for tier
-    labels, and the Rank half of this rule is `test_rank_routes.py`'s.
-
-    Both names are data rather than choices: `title.name` is bundle free text with no length rule
-    anywhere in `importer/validate.py`, and `AccountName` (`api/setup.py`) allows 64 characters, so
-    a household whose member is "Grandma's iPad in the living room" needs no unusual title to reach
-    it. [M4.10 cycle 1, M410-R1-01]
-    """
+    """After the commit no route may raise: `_claim_card` has nulled the token, so a retry cannot
+    succeed. Both names are unconstrained data."""
     client, user_id = rate_client
     member = "Grandma's iPad in the living room and the one in the kitchen :-)"
     assert len(member) <= 64, "longer than AccountName allows, so the test cheats"
     await db.execute("UPDATE app_user SET name = $1 WHERE id = $2", member, user_id)
     long_name = ("The Assassination of Jesse James by the Coward Robert Ford " * 6)[:310]
     await make_titles(db, [(1, "movie", long_name)])
-    # The arithmetic that makes this bite rather than pass by luck: the chrome around the two names
-    # is 42 characters with no refit clause and 71 with a six-figure millisecond count, so these
-    # two names are over `MAX_LINE` whichever the incremental refit reports.
+    # 42 characters of chrome with no refit clause, 71 with one: over `MAX_LINE` either way.
     assert len(member) + len(long_name) + 42 > rail.MAX_LINE
 
     card = (await client.get("/api/rate")).json()["card"]
-    # §6.7's buffer is per process and keyed by user id, so it carries whatever an earlier test in
-    # this file recorded for the same id. Emptied here rather than read with a filter, because the
-    # assertion below is that this tap recorded exactly one line.
+    # §6.7's buffer is per process and keyed by user id, so earlier tests leave lines in it.
     rail.forget(user_id=user_id)
     answered = await client.post(
         "/api/rate/verdict", json={"card_token": card["token"], "value": 0}
@@ -2993,13 +2354,7 @@ async def test_two_long_names_on_the_rail_do_not_lose_the_verdict(db, rate_clien
 
 
 async def test_the_balance_route_serves_the_widgets_own_poll(db, rate_client):
-    """§5.2's running class balance on its own, for the widget that polls it.
-
-    Named by nothing at any layer before this: `test_account_security.py` probes the path for a
-    401 and no test had ever read its body. It must be exactly the `class_balance` block of the
-    envelope — two copies of one number that can disagree is the finding `_verdict_rail_line`
-    was written against. [M4.10 finding 34]
-    """
+    """Exactly the envelope's `class_balance` block: two copies of one number could disagree."""
     client, user_id = rate_client
     await make_titles(db, [(i, "movie", f"Title {i}") for i in range(1, 9)])
     for title_id in (1, 2, 3, 4, 5):
@@ -3017,19 +2372,8 @@ async def test_the_balance_route_serves_the_widgets_own_poll(db, rate_client):
     )
 
 
-# --- the 2026-09-25 household test: a first sitting, a title you know, and plain words --------
-
-
 async def test_mix_serves_single_titles_until_a_block_of_ratings_stands(db, world):
-    """Decision 492. Mix alternated from the second card, so both household members met their
-    first battle on card 4 from a pool of three titles -- one eligible pair, served three times --
-    and both switched to Sweep before card 10.
-
-    The warm-up changes the counter's CALL rather than marking a substitution: a marked one would
-    have printed "a battle was due in this slot" on half of a new member's first fifteen cards and
-    left `serving` saying battle. So every card here is an unmarked sweep under `serving: sweep`,
-    and the sixteenth -- index 15, odd, with fifteen ratings standing -- is a battle.
-    """
+    """Decision 492: the warm-up changes the counter's CALL rather than marking a substitution."""
     user = world["user"]
     s = await open_session(db, user)
     for n in range(session.MIX_WARMUP_LABELS):
@@ -3052,8 +2396,7 @@ async def test_mix_serves_single_titles_until_a_block_of_ratings_stands(db, worl
 
 
 async def test_the_warm_up_is_mixes_alone(db, rated):
-    """Decision 492 holds back the battles Mix would have chosen; Battle mode is what the person
-    chose, and four ratings in one band are a pair."""
+    """Decision 492 holds back Mix's choice only; Battle mode is the person's."""
     s = await open_session(db, rated["user"], mode="battle")
     assert s.current_card["type"] == "battle"
     assert session.warm_up("battle", mode="battle", labels=0) == "battle"
@@ -3063,10 +2406,7 @@ async def test_the_warm_up_is_mixes_alone(db, rated):
 
 
 async def test_a_pin_is_served_on_an_empty_table_even_where_a_battle_was_due(db, warm):
-    """C5.2. Every tap ends by drawing the next card on an empty table, and the pin used to win
-    only over a card already stashed: in Mix a battle slot spent a "Rate it" or a search pick on
-    a pair, and the client carried the pin on to the tap after. A pin now leads whatever the slot
-    called for, marked as the substitution it is."""
+    """C5.2: a pin leads whatever the slot called for, marked as the substitution it is."""
     user = warm["user"]
     s = await open_session(db, user)
     assert s.current_card["type"] == "sweep" and s.current_card["title_id"] != 9
@@ -3080,9 +2420,7 @@ async def test_a_pin_is_served_on_an_empty_table_even_where_a_battle_was_due(db,
 
 
 async def test_a_pin_lifts_this_sittings_skip_and_an_earlier_not_seen(db, world):
-    """C5.2. A person who skipped a film, or once said they had not seen it, and then searched for
-    it has asked for it again: the pin re-opens both. It re-opens nothing else -- a rated title
-    stays out (`test_rate_queue.py::test_a_pinned_title_is_served_even_after_a_not_seen_answer`)."""
+    """C5.2: the pin re-opens a skip and a "not seen", nothing else."""
     user = world["user"]
     s = await open_session(db, user, mode="sweep")
     skipped = s.current_card["title_id"]
@@ -3101,11 +2439,7 @@ async def test_a_pin_lifts_this_sittings_skip_and_an_earlier_not_seen(db, world)
 
 
 async def test_a_pin_of_the_other_kind_widens_the_session_to_serve_it(db, rate_client):
-    """Rate's search looks through both kinds and the title card's "Rate it" knows nothing of
-    the session, so a films-only session handed a series pin kept its card and said nothing. It
-    widens to take the pin instead, which keeps proposal 46's counter naming the partition the
-    card is drawn from; a pin nobody can serve widens nothing
-    (`test_a_head_that_cannot_be_drawn_leaves_the_standing_card_alone`)."""
+    """A pin of the other kind widens the session, keeping proposal 46's counter honest."""
     client, _user_id = rate_client
     await make_titles(db, [(i, "movie", f"Title {i}") for i in range(1, 5)])
     await make_titles(db, [(90, "series", "A Series")])
@@ -3118,9 +2452,6 @@ async def test_a_pin_of_the_other_kind_widens_the_session_to_serve_it(db, rate_c
 
 
 async def test_the_search_finds_a_title_and_its_pick_is_rated_on_the_card(db, rate_client):
-    """C5.2, through the routes a person taps: `GET /api/rate/search` finds a film they know,
-    choosing it pins it (`head=`), and the verdict is given on §6.1's card under its token --
-    even for a film they once answered "not seen". Afterwards the search says it is rated."""
     client, user_id = rate_client
     await make_titles(db, [(i, "movie", f"Title {i}") for i in range(1, 9)])
     await make_titles(db, [(40, "movie", "Dunkirk")])
@@ -3147,9 +2478,7 @@ async def test_the_search_finds_a_title_and_its_pick_is_rated_on_the_card(db, ra
 
 
 async def test_the_reveal_carries_its_number_only_behind_show_the_model(db, rate_client):
-    """Decisions 486 and 491: "we'd have guessed the same" is §6.1's reveal; the " · cdf 0.91"
-    beside it is the model's number, so it reaches a member only with Show the model on -- and
-    is gated where the payload is built, so a member with the switch off is not SENT it."""
+    """Gated where the payload is built: a member with Show the model off is not SENT the number."""
     client, user_id = rate_client
     await make_titles(db, [(i, "movie", f"Title {i}") for i in range(1, 9)])
     await seed_ledger(db, user_id, range(1, 9))
@@ -3178,12 +2507,8 @@ async def test_the_reveal_carries_its_number_only_behind_show_the_model(db, rate
 
 
 async def test_the_sweep_cards_p_seen_travels_only_behind_show_the_model(db, rate_client):
-    """A3 of the second household test: "queued because: ... 86% likely you have seen it" printed
-    the queue's model in the why-line. The line is a plain sentence now, and P(seen) rides under
-    the card's `model` key, which the payload strips for a viewer with Show the model off
-    (decision 486: gated where the payload is built, never hidden by the client). A card the
-    queue did not place by P(seen) -- recorded seen, which a §13 re-ask also is -- carries no
-    `model` at all, so the key cannot tell the two apart."""
+    """Gated in the payload (decision 486). A card not placed by P(seen) has no `model` at all, so
+    the key cannot tell a re-ask."""
     client, user_id = rate_client
     await make_titles(db, [(i, "movie", f"Title {i}") for i in range(1, 9)])
 
@@ -3206,10 +2531,7 @@ async def test_the_sweep_cards_p_seen_travels_only_behind_show_the_model(db, rat
 
 
 async def test_the_recall_aid_never_shows_an_mpst_synopsis(db, world):
-    """C9.2. An MPST synopsis is a full retelling, ending included, and some open with an IMDb
-    user's editorial note: The Grudge's sweep card read "The film begins with the suicide of
-    Peter, and ends with Karen in the hospital". Where the overview IS the title's MPST text the
-    card goes without an aid; an overview from any other source keeps it."""
+    """C9.2: an MPST synopsis retells the ending; an overview that IS the MPST text gets no aid."""
     spoiler = "The film begins with the suicide of Peter, and ends with Karen in the hospital."
     await db.execute("UPDATE title SET overview = $1 WHERE id = 7", spoiler)
     await db.execute(

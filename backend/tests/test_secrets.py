@@ -1,10 +1,3 @@
-"""Spec §2 secrets custody, exercised without a database.
-
-The load-bearing properties: SECRETS_KEY never falls back to SESSION_SECRET, a wrapped DEK
-round-trips, ciphertext is unreadable under the wrong key, and rotation re-wraps rather than
-re-encrypts every secret.
-"""
-
 from __future__ import annotations
 
 import os
@@ -32,13 +25,7 @@ def test_dek_wrap_round_trip():
 
 
 def test_dek_unwrap_fails_under_wrong_key():
-    """M4.7 dd03: the failure is now typed and says which variable is wrong.
-
-    The bare `InvalidTag` this replaces carried no message at all, which is how a wrong
-    SECRETS_KEY reached a member as "database error" — nothing between the cipher and the HTTP
-    response could name the cause. `SecretsUnreadable` is a `RuntimeError` so that
-    `push/keys.ensure_keypair`'s existing `except RuntimeError` keeps the boot alive.
-    """
+    """`SecretsUnreadable` must stay a `RuntimeError`: `push/keys.ensure_keypair` catches that at boot."""
     blob = sec._wrap(os.urandom(32), "right")
     with pytest.raises(sec.SecretsUnreadable) as exc:
         sec._unwrap(blob, "wrong", key_id="k7")
@@ -51,7 +38,7 @@ def test_seal_round_trip_and_tamper_detection():
     dek = os.urandom(32)
     payload = {"api_key": "jf-unscoped-admin-equivalent", "url": "https://jellyfin.home.lan"}
     blob = sec.seal(dek, payload)
-    assert b"jf-unscoped" not in blob          # plaintext must not survive in the ciphertext
+    assert b"jf-unscoped" not in blob
     assert sec.open_sealed(dek, blob) == payload
 
     tampered = bytearray(blob)
@@ -67,8 +54,7 @@ def test_rotation_rewraps_the_dek_without_touching_secrets():
 
     wrapped_new = sec.rewrap_dek(wrapped_old, "old-secrets-key", "new-secrets-key")
 
-    # The DEK is unchanged, so every existing ciphertext still opens — that is the point
-    # of wrapping one key rather than encrypting under SECRETS_KEY directly.
+    # Rotation re-wraps the DEK, so every existing ciphertext still opens.
     assert sec._unwrap(wrapped_new, "new-secrets-key") == dek
     assert sec.open_sealed(sec._unwrap(wrapped_new, "new-secrets-key"), sealed) == {"token": "abc"}
 

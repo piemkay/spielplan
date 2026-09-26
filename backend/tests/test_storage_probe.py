@@ -1,17 +1,5 @@
-"""Whether this app can write where it has to, asked before a job fails on it. Spec v2.1 §2 (the
-`/data` mounts, Backups), §6.6 System, §10 step 1; C10.2 of the first household user test.
-
-The household's install learned about its root-owned host directories one failure at a time: the
-nightly dump on `/data/backups`, the import's staging twenty seconds into the worker on
-`/data/artifacts`, the heartbeat once into a log. These tests hold the four places the question is
-now asked - the probe itself, the worker's `storage-check` job on the System card, the validate
-step that decides an import, and `/api/health` - and the one place it must never write a file.
-
-"Unwritable" is produced by refusing the probe's own `mkstemp` rather than by `chmod`, because the
-suite runs on Windows, where a directory's mode does not stop a file being created in it, and as
-root in CI, where nothing does; the one real `chmod` case skips on both. The first four tests need
-no database. The rest are skipped without TEST_DATABASE_URL; see tests/conftest.py.
-"""
+""""Unwritable" is made by refusing the probe's `mkstemp`, not `chmod`: Windows ignores the mode
+and CI runs as root."""
 
 from __future__ import annotations
 
@@ -32,8 +20,7 @@ from tests.fixtures import make_bundle as fx
 
 ADMIN_PASSWORD = "an-admin-password"
 
-# Captured before any test patches it, so a second patch inside one test wraps the real function
-# and not the first patch: `storage.tempfile` IS the `tempfile` module.
+# Captured before any patch, so nested patches wrap the real function.
 _REAL_MKSTEMP = tempfile.mkstemp
 
 
@@ -53,9 +40,7 @@ def _refuse_mkstemp_in(monkeypatch, *refused: Path) -> list[Path]:
 
 
 def test_the_probe_names_an_unwritable_mount_with_the_chown_that_fixes_it(tmp_path, monkeypatch):
-    """One sentence an operator can act on: which directory, why, and the command - narrowed to
-    the directories that need it, and ASCII, because it is printed to a container log and stored
-    in `job_run` as it is."""
+    """ASCII: it goes to a container log and into `job_run` as it is."""
     for name in storage.MOUNTS:
         (tmp_path / name).mkdir()
     _refuse_mkstemp_in(monkeypatch, tmp_path / "backups")
@@ -74,10 +59,8 @@ def test_the_probe_names_an_unwritable_mount_with_the_chown_that_fixes_it(tmp_pa
 
 
 def test_the_import_mount_is_asked_by_permission_and_never_written_into(tmp_path, monkeypatch):
-    """The verifier's correction, held: `importer/validate.py` walks the bundle root with
-    `rglob("*")`, dot files included, and fails any file BUNDLE.json does not list - and the
-    bundle root IS `/data/import` on the live install. A probe file there that overlapped a
-    validation would fail the import with a misleading integrity finding."""
+    """The bundle root IS `/data/import`, and validate fails any file BUNDLE.json does not list, so a
+    probe file there would fail an import."""
     for name in storage.MOUNTS:
         (tmp_path / name).mkdir()
     tried = _refuse_mkstemp_in(monkeypatch)
@@ -95,8 +78,7 @@ def test_the_import_mount_is_asked_by_permission_and_never_written_into(tmp_path
 
 
 def test_a_mount_that_is_not_there_yet_is_not_a_failure(tmp_path):
-    """The importer and the dump both create their directories, so a missing one is the ordinary
-    state of a first boot outside Docker; what can refuse is the parent, asked without writing."""
+    """The importer and the dump create their directories; only the parent is asked, without writing."""
     assert storage.writable(tmp_path / "artifacts") is None
     assert not (tmp_path / "artifacts").exists(), "asking about a directory created it"
 
@@ -113,9 +95,6 @@ def test_a_real_read_only_directory_is_reported(tmp_path):
         assert storage.writable(locked) is not None
     finally:
         locked.chmod(0o755)
-
-
-# --- the install (Postgres) --------------------------------------------------------------------
 
 
 async def _admin(app):
@@ -148,9 +127,7 @@ async def _newest(db):
 async def test_the_storage_check_job_fails_with_the_chown_and_passes_after_it(
     app, db, tmp_path, monkeypatch
 ):
-    """The row §6.6's System card lifts into its Storage fact: failed, naming the directory and
-    the command, while the mount is unwritable - and green on the next run after the operator's
-    chown, with nothing restarted. `app` supplies the pool and DATA_DIR = tmp_path."""
+    """Green on the next run after the chown, with nothing restarted."""
     admin = await _admin(app)
     for name in storage.MOUNTS:
         (tmp_path / name).mkdir(exist_ok=True)
@@ -173,10 +150,7 @@ async def test_the_storage_check_job_fails_with_the_chown_and_passes_after_it(
 async def test_validate_refuses_an_unwritable_artifacts_root_before_anything_is_queued(
     app, db, tmp_path, monkeypatch
 ):
-    """`validate_for_install`'s contract is that every refusal an import can raise is reachable at
-    validate, and the ownership of the staging tree was the one that was not: the household's
-    import validated "ok", was queued, and failed in the worker. Now the Data tab's decision point
-    says it, with the chown, and the import is refused at the door with no `job_run` row."""
+    """Every refusal an import can raise must be reachable at validate, before queueing."""
     admin = await _admin(app)
     root = fx.make_bundle(tmp_path / "import" / "test-v1", version="test-v1")
     artifacts = settings().artifacts_dir
@@ -198,9 +172,7 @@ async def test_validate_refuses_an_unwritable_artifacts_root_before_anything_is_
 
 
 async def test_health_names_an_unwritable_backend_mount_and_keeps_its_status(app):
-    """The unauthenticated probe says which of the backend's three mounts it cannot write - names,
-    never paths or errors - and a read-only cache does not turn a serving backend into a 503,
-    because the three consumers of the status code ask whether it serves."""
+    """Names, never paths or errors; a read-only cache does not make a serving backend a 503."""
     client = app()
     watch = client._transport.app.state.storage
     watch.result = {"artifacts": None, "cache": "/data/cache is not writable", "import": None}

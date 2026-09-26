@@ -1,13 +1,3 @@
-"""Seen state and the finish prompt, over HTTP. Spec v2.1 §4.2, §7.3.
-
-`test_seen_sync.py` and `test_playback_prompt.py` prove the behaviour; this proves the route
-contract the front end is written against — the status codes, the shape of the reply, and the
-fact that one person's prompt is not answerable by another over the wire either. Including, since
-decision 211, that *both* taps on the prompt write a state: the card's "no" is an action.
-
-Skipped without TEST_DATABASE_URL; see tests/conftest.py.
-"""
-
 from __future__ import annotations
 
 import pytest
@@ -29,9 +19,6 @@ async def signed_in(app, db):
     return client, user_id
 
 
-# --- §4.2: the two states ------------------------------------------------------------------
-
-
 async def test_marking_seen_and_back_again(signed_in):
     client, _user_id = signed_in
     assert (await client.get("/api/titles/1/state")).json()["state"] == "unseen"
@@ -47,8 +34,7 @@ async def test_marking_seen_and_back_again(signed_in):
 
 
 async def test_an_untouched_title_reads_as_unseen_without_a_row(signed_in, db):
-    """§4.2: the default is an absence, not a row — which is also why the sync never pushes it
-    over Jellyfin's history."""
+    """§4.2: the default is an absence, which the sync never pushes over Jellyfin's history."""
     client, _user_id = signed_in
     assert (await client.get("/api/titles/1/state")).json() == {
         "state": "unseen", "state_changed_at": None, "jf_synced_at": None
@@ -89,17 +75,12 @@ async def test_seen_state_is_per_person(app, db):
     assert (await member.get("/api/titles/1/state")).json()["state"] == "unseen"
 
 
-# --- §7.3: the queued prompt ------------------------------------------------------------------
-
-
 async def test_the_prompt_queue_is_empty_by_default(signed_in):
     client, _user_id = signed_in
     assert (await client.get("/api/prompts/finish")).json() == []
 
 
 async def test_an_armed_prompt_surfaces_and_its_first_tap_writes_seen(signed_in, db):
-    """§7.3: "the prompt queues and surfaces as an in-app banner on next open … one tap sets
-    `seen`"."""
     client, user_id = signed_in
     await playback.arm(db, user_id=user_id, title_id=1, session_id="s", progress=0.96)
 
@@ -117,15 +98,7 @@ async def test_an_armed_prompt_surfaces_and_its_first_tap_writes_seen(signed_in,
 
 
 async def test_declining_the_prompt_writes_unseen_and_closes_it(signed_in, db):
-    """Renamed from `..._writes_nothing_and_closes_it` under decision 211, which makes the old
-    name false.
-
-    Over the wire the reply is what the card reads, so both halves are asserted here: the route
-    still answers 200 and the queue still empties, and the state the person declined into is now a
-    row rather than §4.2's default absence — which is what the 15-minute sweep used to overwrite
-    with Jellyfin's Played flag inside the quarter hour. `state` reads `unseen` either way, so the
-    row itself has to be checked for this to assert anything at all.
-    """
+    """`state` reads `unseen` either way, so the row itself is checked (decision 211)."""
     client, user_id = signed_in
     await playback.arm(db, user_id=user_id, title_id=1, session_id="s", progress=0.96)
     queued = (await client.get("/api/prompts/finish")).json()

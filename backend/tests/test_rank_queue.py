@@ -1,18 +1,4 @@
-"""§6.3's comparison queue, and the guard §13 calls non-negotiable.
-
-Spec v2.1 §6.3, §13 stream (a), §0 row 6; proposals 73, 120, 146, decision 54b.
-
-No database, and for the same reason `rate/battle.py`'s draw is tested here rather than there:
-"over a long draw the queue yields 70% / 20% / 10%" is a claim about a distribution, and the
-only way to check a distribution is to draw from it twenty thousand times.
-
-The mix is not the interesting half. §13's guard is: "the 10% uniform-random comparison stream
-is the *only* data used to evaluate the tier model — adaptively-selected pairs inflate
-reliability (measured effect; the guard is non-negotiable)". Everything that could quietly
-break it is a test below — a held-out pair labelled as something else, a held-out arm whose
-rate moves with the model's own confidence, a held-out draw that is uniform over strata
-instead of over pairs.
-"""
+"""No database: the 70/20/10 mix is a distribution, checked by drawing twenty thousand times."""
 
 from __future__ import annotations
 
@@ -31,15 +17,7 @@ CUTS = model.initial_cutpoints(7)
 
 
 def sigma_for(reach: float) -> float:
-    """The σ whose ±z·σ interval reaches exactly `reach`, at whatever `straddle_z` ships.
-
-    Every board below is built to make a stated number of titles straddle, and what decides that
-    is the REACH z·σ, not σ. Decision 214 retunes `straddle_z` from 1.0 to 0.15: written as a bare
-    σ, "every title straddles" quietly became 41 of 60 and the two-settled-titles board became
-    twenty-one, so the arms these tests are about were being exercised on a different board than
-    the docstrings describe. The geometry is pinned to the reach and is now the same at any
-    positive threshold.
-    """
+    """Spelled as the reach z·σ, not σ: decision 214 retuned `straddle_z`, reshaping bare-σ boards."""
     return reach / DEFAULTS.straddle_z
 
 
@@ -47,12 +25,7 @@ STRADDLING = sigma_for(0.35)   # the default board's σ, as the reach it is chos
 
 
 def pool(n=60, *, sigma=STRADDLING, seed=2, comparisons=None):
-    """A board wide enough that every arm can actually draw: titles spread across the whole
-    cutpoint range with a σ that makes many of them straddle, and every tier populated.
-
-    `sigma` takes a sequence as well as a scalar, because finding 12's failure is a statement
-    about a board where *some* titles have settled and the rest have not.
-    """
+    """`sigma` takes a sequence too: finding 12 is about a board where only some titles settled."""
     rng = np.random.default_rng(seed)
     values = np.linspace(float(CUTS[0]) - 1.0, float(CUTS[-1]) + 1.0, n)
     values = values + rng.normal(scale=0.05, size=n)
@@ -66,11 +39,7 @@ def pool(n=60, *, sigma=STRADDLING, seed=2, comparisons=None):
     )
 
 
-# --- §6.3's mix ---------------------------------------------------------------------------
-
-
 def test_a_long_draw_is_seventy_twenty_ten():
-    """§6.3: "70% posterior-straddling pairs / 20% exploration / 10% uniform-random held out"."""
     candidates = pool()
     rng = random.Random(17)
     draws = [queue.draw(candidates, rng=rng) for _ in range(20_000)]
@@ -84,8 +53,7 @@ def test_a_long_draw_is_seventy_twenty_ten():
 
 
 def test_the_shares_are_the_specs_own_numbers():
-    """§4.3 is for constants the corpus project re-tunes offline. These three are §6.3's own
-    text, so they are not a bundle knob and must not become one."""
+    """§6.3's own text, not a §4.3 bundle knob."""
     assert dict(queue.SHARES) == {
         queue.ARM_BOUNDARY: 0.70,
         queue.ARM_EXPLORATION: 0.20,
@@ -94,13 +62,8 @@ def test_the_shares_are_the_specs_own_numbers():
     assert sum(share for _, share in queue.SHARES) == pytest.approx(1.0)
 
 
-# --- §13's guard --------------------------------------------------------------------------
-
-
 def test_a_held_out_pair_is_never_labelled_boundary_targeted():
-    """Proposal 120: the prototype pushed "boundary-targeted pair (70/20/10 policy)"
-    unconditionally, so every tenth line asserted boundary-targeting about the one stream that
-    must not be adaptively selected. The arm a pair reports is the arm that drew it."""
+    """The arm a pair reports is the arm that drew it (proposal 120)."""
     candidates = pool()
     rng = random.Random(5)
     for _ in range(5_000):
@@ -113,9 +76,7 @@ def test_a_held_out_pair_is_never_labelled_boundary_targeted():
 
 
 def test_the_held_out_arm_is_uniform_over_pairs_not_over_strata():
-    """A draw that picks a tier first and a pair inside it second is uniform over *strata*,
-    which over-samples the sparse ones — `rate/battle.py` argues the same point at length. Over
-    a small pool every unordered pair must come up about equally often."""
+    """Tier first, then pair, is uniform over strata and over-samples the sparse ones."""
     candidates = pool(n=8, sigma=0.35)
     rng = random.Random(3)
     seen = Counter()
@@ -140,15 +101,8 @@ def test_the_held_out_arm_is_uniform_over_pairs_not_over_strata():
     ],
 )
 def test_the_held_out_share_does_not_move_with_the_pool(label, candidates):
-    """§13's whole point, as one measurement: the evaluation stream's *rate* must be
-    independent of the model's own confidence.
-
-    The M3 review found the previous version of this test asserting the `len(pool) < 2` arity
-    guard — it passed against a `_boundary(...) or _holdout(...)` fallback AND against a
-    `_holdout(...) or _exploration(...)` one. Neither of those changes the shares on a healthy
-    board; both change them on a degenerate one, which is where a fallback fires. So the pools
-    below are the degenerate ones, and the assertion is that 10% holds across all of them.
-    """
+    """The evaluation stream's rate must not depend on the model's confidence. Degenerate pools,
+    because that is where a fallback fires."""
     rng = random.Random(23)
     arms = Counter(queue.draw(candidates, rng=rng).arm for _ in range(8_000))
     share = arms[queue.ARM_HOLDOUT] / 8_000
@@ -158,7 +112,6 @@ def test_the_held_out_share_does_not_move_with_the_pool(label, candidates):
 
 
 def test_the_held_out_arm_never_receives_a_fallback():
-    """A pool with nothing to sharpen returns nothing rather than manufacturing held-out rows."""
     single = pool(n=1)
     rng = random.Random(1)
     assert queue.draw(single, rng=rng) is None
@@ -168,9 +121,7 @@ def test_the_held_out_arm_never_receives_a_fallback():
 
 
 def test_a_pool_with_no_straddler_falls_back_to_exploration_and_says_so():
-    """§6.3 gives shares for a board that has straddlers. One that has none has nothing to
-    target, and the honest answer is exploration under its own name — a fallback that reported
-    "boundary" would put the lie proposal 120 names into the other 70%."""
+    """No straddler: exploration under its own name, never a "boundary" label (proposal 120)."""
     candidates = pool(sigma=1e-6)
     assert not [c for c in candidates if c.straddle is not None]
 
@@ -182,12 +133,8 @@ def test_a_pool_with_no_straddler_falls_back_to_exploration_and_says_so():
     assert arms[queue.ARM_HOLDOUT] / 4_000 == pytest.approx(0.10, abs=0.02)
 
 
-# --- what each arm actually draws ----------------------------------------------------------
-
-
 def test_a_boundary_pair_crosses_the_cutpoint_the_title_straddles():
-    """§6.3 gives the share and not the construction. A straddler paired with an arbitrary
-    partner settles no boundary; the pair that settles one is the pair that spans it."""
+    """A straddler's pair settles a boundary only if it spans it."""
     candidates = pool()
     by_id = {c.title_id: c for c in candidates}
     rng = random.Random(31)
@@ -206,8 +153,6 @@ def test_a_boundary_pair_crosses_the_cutpoint_the_title_straddles():
 
 
 def test_exploration_reaches_the_least_compared_title():
-    """The arm that is neither boundary-targeted nor uniform reduces uncertainty where no
-    cutpoint is at stake. It has to actually find the title nobody has compared."""
     candidates = pool(sigma=1e-6, comparisons={i: 50 for i in range(1, 61)} | {42: 0})
     rng = random.Random(4)
     pair = queue._exploration(candidates, rng)
@@ -216,16 +161,8 @@ def test_exploration_reaches_the_least_compared_title():
 
 
 def test_exploration_anchors_on_the_least_compared_title_of_the_whole_pool():
-    """Finding 12. The arm used to pick its anchor out of `[c for c in pool if c.straddle is
-    None] or list(pool)`, and §6.3 licenses no such restriction — it names the share and calls
-    the arm "exploration".
-
-    On a young board nothing is in that list, so the arm silently drew straddlers; the moment one
-    title settled, the list inverted into the handful the model is *most* sure about, and the
-    least-compared title among THOSE was served while `pair.reason` said "the least-compared
-    title on your board". Simulated over 500 answers with the route's own semantics, |away| was
-    1-2 of 900 from answer 110 on and its anchor ended with the most comparisons on the board.
-    """
+    """The anchor is drawn from the whole pool (finding 12): a non-straddler filter inverted into
+    the handful the model is most sure about."""
     counts = {i: 50 for i in range(1, 61)} | {42: 0}
     candidates = pool(sigma=STRADDLING, comparisons=counts)
     by_id = {c.title_id: c for c in candidates}
@@ -241,14 +178,7 @@ def test_exploration_anchors_on_the_least_compared_title_of_the_whole_pool():
 
 
 def test_exploration_never_re_serves_a_pair_it_has_already_asked():
-    """Finding 12's other half. Each repeat counts as an independent Davidson row, so ten
-    repeats of one judgement shrink that pair's posterior by √10 on the strength of one answer
-    — the reliability inflation §13 guards against, arriving by a different door
-    (M3-open-points §3.1, which `tonight/round.py`'s `select` already answers with `asked`).
-
-    The board here is the one that broke it: two titles settled, everything else straddling, so
-    the old filter left an `away` of exactly two and one pair served 78 of 109 draws.
-    """
+    """Each repeat is an independent Davidson row, so repeats inflate reliability (§13)."""
     sigmas = [sigma_for(3.0)] * 60
     sigmas[6] = sigmas[49] = 1e-6
     assert len([c for c in pool(sigma=sigmas) if c.straddle is None]) == 2
@@ -266,16 +196,8 @@ def test_exploration_never_re_serves_a_pair_it_has_already_asked():
         counts[pair.title_b] += 1
     assert len(asked) == 200
 
-    # And through `draw`, because the route hands the set to the selector and not to the arm.
-    #
-    # Counted rather than guarded by a bare `if`: the clause that used to stand here ran a single
-    # `draw` behind `if served.arm == queue.ARM_EXPLORATION:`, and off this generator's state that
-    # roll is 0.968 -- the held-out band. The branch never executed, so a `draw` that dropped
-    # `asked=asked` on its way to `_exploration` passed it, which is the only forwarding the route
-    # depends on. Two hundred draws over §6.3's mix give the arm its 20%, and the count says so
-    # rather than hoping. The other two arms are deliberately not asserted here: the held-out arm
-    # must not consult `asked` at all (§13), and the boundary arm's no-repeat rule has tests of
-    # its own below (decision 494). [M4.10 cycle 1, M410-REV3]
+    # Through `draw`, and counted over two hundred draws: a single roll landed in the held-out band
+    # and never ran the branch.
     explored = 0
     for draw in range(200):
         served = queue.draw(pool(sigma=sigmas, comparisons=counts), rng=rng, asked=asked)
@@ -291,8 +213,7 @@ def test_exploration_never_re_serves_a_pair_it_has_already_asked():
 
 
 def test_exploration_rotates_as_comparisons_accrue():
-    """It has to move on its own, or the queue serves one pair forever: answering increments
-    both titles' counts, so the least-compared title is a different one next time."""
+    """Answering increments both counts, so the least-compared title moves on."""
     counts = {i: 5 for i in range(1, 61)}
     rng = random.Random(6)
     served = set()
@@ -315,30 +236,16 @@ def test_a_pair_is_never_a_title_against_itself():
 
 
 def test_the_selector_reads_no_held_out_comparison():
-    """§13: the held-out stream feeds neither the selection rule nor any quality figure.
-
-    The selector's only view of a title's comparison history is `Candidate.comparisons`, and
-    the query that fills it excludes `selection = 'uniform_holdout'` (asserted against a real
-    database in test_rank_integration.py). What is asserted here is the other half — that
-    there is no second path: nothing in a `Candidate` carries a duel row, so a selector that
-    wanted to read one would have to be given it.
-    """
+    """Nothing in a `Candidate` carries a duel row, so there is no second path to the stream."""
     candidate = pool(n=2)[0]
     fields = set(vars(candidate))
     assert fields == {"item", "comparisons", "straddle", "tier"}
     assert not hasattr(candidate.item, "duels")
 
 
-# --- decision 494: which pair inside an adaptive arm ------------------------------------------
-
-
 def board_of(spec, *, comparisons=None):
-    """A board laid out title by title: `(title_id, s, reach)`, reach 0 for a settled title.
-
-    The value-weight and partner tests are claims about WHERE on the board a straddler sits and
-    which titles are near it across the cut, so the board is written out rather than spread by
-    `pool()`. The cuts are §6.3's prior shape: B/A at 0.0, A+/S at 2.442.
-    """
+    """`(title_id, s, reach)`, reach 0 for a settled title. The cuts are §6.3's prior: B/A at 0.0,
+    A+/S at 2.442."""
     items = [
         board.Item(
             title_id=title_id, name=f"T{title_id}", s=float(s),
@@ -351,8 +258,7 @@ def board_of(spec, *, comparisons=None):
     )
 
 
-# Three straddlers at B/A (tier 3 reaching 4), three at A+/S (5 reaching 6), and settled titles in
-# A and S for each of them to be paired across the cut with.
+# Three straddlers at B/A, three at A+/S, and settled titles across each cut.
 TWO_BOUNDARIES = [
     (1, -0.01, 0.05), (2, -0.02, 0.05), (3, -0.03, 0.05),
     (4, 2.43, 0.05), (5, 2.42, 0.05), (6, 2.41, 0.05),
@@ -362,13 +268,8 @@ TWO_BOUNDARIES = [
 
 
 def test_the_boundary_arm_favours_boundaries_near_the_top():
-    """Decision 494: the anchor is drawn in proportion to the height of the boundary it straddles
-    (the index of the cut's upper tier), so A+/S (6) is drawn 1.5 times as often as B/A (4).
-
-    Drawn uniformly, the two groups split 50/50 - and on the first household's boards the B/A cut
-    held most of the straddlers, because while nobody has moved a title the cut sits at s = 0 in
-    the middle of the verdict arm's "fine" band: 15 of Patrick's 21 straddlers were films he had
-    rated fine, and the boundary arm spent itself on pairs of them."""
+    """Decision 494: anchors are weighted by boundary height, so A+/S (6) is drawn 1.5 times as
+    often as B/A (4)."""
     candidates = board_of(TWO_BOUNDARIES)
     by_id = {c.title_id: c for c in candidates}
     assert {by_id[t].straddle for t in (1, 2, 3)} == {4}
@@ -384,10 +285,7 @@ def test_the_boundary_arm_favours_boundaries_near_the_top():
 
 
 def test_a_boundary_partner_is_the_least_compared_of_the_five_nearest_across_the_cut():
-    """Decision 494's partner, which is M3-open-points §3.1's fix shape ("draw the partner from
-    the k nearest"). The nearest title across the cut is the most informative one and also the one
-    every draw lands on - Patrick's first sitting partnered Ready Player One in four of six boundary
-    draws. The sixth-nearest is never reached for, however rarely it has been compared."""
+    """Decision 494: the least-compared of the five nearest across the cut; the sixth is never reached."""
     spec = [(1, -0.01, 0.05)] + [(10 + i, 0.1 * i, 0) for i in range(1, 7)]
     comparisons = {11: 10, 12: 3, 13: 0, 14: 5, 15: 5, 16: 0}
     candidates = board_of(spec, comparisons=comparisons)
@@ -397,11 +295,7 @@ def test_a_boundary_partner_is_the_least_compared_of_the_five_nearest_across_the
 
 
 def test_the_boundary_arm_never_re_serves_a_pair_it_has_already_asked():
-    """M3-open-points §3.1's remaining half, closed by decision 494. The partner used to be the
-    nearest title across the cut with no memory, so whenever the shuffle landed on the same anchor
-    it served the same pair: Jenny answered the same pair twice in four answers, and each repeat is
-    an independent Davidson row - one judgement asked twice shrinks that pair's posterior by root
-    two (§13's reliability inflation, reached through the selector)."""
+    """Each repeat is an independent Davidson row (decision 494)."""
     spec = [(1, -0.01, 0.05), (11, 0.3, 0), (12, 0.5, 0), (13, 0.7, 0)]
     candidates = board_of(spec)
     asked = {frozenset((1, 11)), frozenset((1, 12))}
@@ -410,8 +304,6 @@ def test_the_boundary_arm_never_re_serves_a_pair_it_has_already_asked():
         pair = queue._boundary(candidates, rng, asked=asked)
         assert frozenset((pair.title_a, pair.title_b)) == frozenset((1, 13))
 
-    # And over a whole board, answering each pair as it comes until the arm has nothing left:
-    # nothing comes back, and the arm ends rather than repeating itself.
     candidates = pool()
     served: set[frozenset[int]] = set()
     rng = random.Random(29)
@@ -428,11 +320,7 @@ def test_the_boundary_arm_never_re_serves_a_pair_it_has_already_asked():
 
 
 def test_a_title_its_verdict_holds_is_a_candidate_in_the_tier_the_board_renders():
-    """Decision 508 rule 5: the hold applies wherever a rated title's tier is computed, and the
-    queue computes one. The candidates' straddle was held while their tier was the raw `tier_of`,
-    so two liked films the fit left in B - both rendered in A, both chipped A/B - were paired as
-    "its posterior crosses this boundary", and a disliked film the fit left in A was weighed as an
-    A boundary while the board showed it in C. The queue's tier is the board's tier."""
+    """Decision 508 rule 5: the queue's tier is the board's held tier, not the raw `tier_of`."""
     settled = 1e-6
     items = [
         board.Item(title_id=1, name="L1", s=-0.5, sigma=settled, verdict=2),
@@ -462,10 +350,7 @@ def test_a_title_its_verdict_holds_is_a_candidate_in_the_tier_the_board_renders(
 
 
 def test_an_exhausted_boundary_arm_falls_through_to_exploration_and_says_so():
-    """A board whose every straddler has been asked against every partner across its cut has no
-    boundary pair left. The roll that picked the boundary arm then draws an exploration pair and
-    reports it as exploration - never a boundary label on a pair that is not one (proposal 120),
-    and never a fall into the held-out arm, whose rate must not move (§13)."""
+    """An exhausted boundary arm draws exploration under its own name, never the held-out arm."""
     spec = [(1, -0.01, 0.05), (11, 0.3, 0), (12, 0.5, 0), (21, -0.5, 0), (22, -0.7, 0)]
     candidates = board_of(spec)
     asked = {frozenset((1, 11)), frozenset((1, 12))}
@@ -484,9 +369,7 @@ def test_an_exhausted_boundary_arm_falls_through_to_exploration_and_says_so():
 
 
 def test_a_tie_in_s_is_broken_by_the_draw_and_not_by_the_lowest_id():
-    """About ten films on each first-household board have no coordinate at all and sit on one `s`
-    set by their verdict alone (five of Jenny's fine films at 0.224). `_nearest` broke every such
-    tie by title id, so the same film won it on every draw."""
+    """Films with no coordinate share one verdict-set `s`; an id tie-break always picked the same one."""
     spec = [(1, -0.01, 0.05)] + [(10 + i, 0.5, 0) for i in range(1, 5)]
     candidates = board_of(spec)
     rng = random.Random(2)
@@ -496,9 +379,7 @@ def test_a_tie_in_s_is_broken_by_the_draw_and_not_by_the_lowest_id():
 
 
 def test_the_recent_window_holds_a_title_back_while_another_can_take_its_place():
-    """Decision 494's window: a title from one of the last few answered pairs does not come
-    straight back as anchor or partner while another can serve (Meet Joe Black was in three of
-    Jenny's ten answers). Soft, so a board with nothing else still draws."""
+    """Soft, so a board with nothing else still draws."""
     spec = [(1, -0.01, 0.05), (2, -0.02, 0.05), (11, 0.1, 0), (12, 0.2, 0)]
     candidates = board_of(spec)
     rng = random.Random(5)
@@ -510,7 +391,6 @@ def test_the_recent_window_holds_a_title_back_while_another_can_take_its_place()
     assert queue._boundary(candidates, rng, recent=everything) is not None
     assert queue._exploration(candidates, rng, recent=everything) is not None
 
-    # The exploration arm's anchor: equally compared, the recent one waits.
     settled = board_of([(1, 0.5, 0), (2, 0.6, 0), (3, 0.7, 0)])
     for _ in range(200):
         pair = queue._exploration(settled, rng, recent={3})
@@ -518,10 +398,7 @@ def test_the_recent_window_holds_a_title_back_while_another_can_take_its_place()
 
 
 def test_exploration_breaks_ties_toward_the_top_of_the_board():
-    """Decision 494: among equally compared titles the higher tier anchors first. The widest
-    posterior used to decide, and on a real board the widest σ belonged to off-scale embeddings at
-    the far tails - Grease against Miss Congeniality at s = -17 and -14, which no answer could move
-    out of F."""
+    """Decision 494: the widest σ used to decide, and it belonged to off-scale tails no answer moves."""
     spec = [(i, s, 0) for i, s in enumerate((-4.0, -3.0, -1.5, -0.5, 0.5, 1.5, 3.0, 3.5), start=1)]
     candidates = board_of(spec)
     by_id = {c.title_id: c for c in candidates}
@@ -532,9 +409,7 @@ def test_exploration_breaks_ties_toward_the_top_of_the_board():
 
 
 def test_exploration_still_explores_a_board_that_is_all_bottom_tiers():
-    """The weighting orders the anchors and removes none. A restricted anchor set is how M4.10's
-    finding 12 served one pair 78 times in 109, so a board that is all F and D - somebody who has
-    so far rated only what they disliked - must still be explored until its pairs run out."""
+    """The weighting orders anchors and removes none, so an all-F/D board is still explored."""
     spec = [(i, -4.0 + 0.2 * i, 0) for i in range(1, 7)]
     candidates = board_of(spec)
     assert {c.tier for c in candidates} <= {0, 1}
@@ -548,9 +423,7 @@ def test_exploration_still_explores_a_board_that_is_all_bottom_tiers():
 
 
 def test_a_board_with_every_adaptive_pair_asked_still_draws_the_held_out_tenth():
-    """The held-out arm reads neither `asked` nor the window (§13): with every pair answered and
-    every title recent, the adaptive arms have nothing, `draw` is None nine times in ten, and the
-    tenth is still a uniform held-out pair. Its rate did not move with what the model was told."""
+    """The held-out arm reads neither `asked` nor the window (§13), so its tenth survives."""
     candidates = pool(n=4, sigma=STRADDLING)
     asked = {frozenset((a, b)) for a in range(1, 5) for b in range(a + 1, 5)}
     rng = random.Random(11)

@@ -1,33 +1,5 @@
-"""Which basis is this? Spec v2.1 §10, §5.1, §5.2, §4.3, §3.1; decision 11.
-
-Three questions that look like one and are not, which is why they get one file:
-
-  * **Which bundle was a fit computed in?** Threaded by the caller, stamped on the fit. Nobody
-    threaded it, so §10's step 3 -- the step whose entire purpose is to re-express every fitted
-    number in the staged basis -- read the OUTGOING bundle's placements and stamped the outgoing
-    version, and the first tap after the flip re-fitted on the request path against the old
-    in-process Backbone and stamped THAT as the new one.
-  * **Which bundle is the app serving?** The `artifact_bundle` active row, and §10's invariant is
-    that a process whose loaded store disagrees with it may neither score nor refit. That
-    invariant had one enforcement point, no caller, and a docstring claiming otherwise.
-  * **Is there a bundle at all?** §3.1 makes a bundle-less household legal (None == None passes
-    every guard here), and an active row whose directory is gone is a THIRD state that used to
-    load as the second one -- so the worker fitted every board from zero coordinates under
-    DEFAULTS and stamped it with the version whose files were missing.
-
-The order of the two guards in `worker._active_store` is the subtlest thing in this milestone and
-the reason `test_a_broken_store_carries_the_active_version_and_still_refuses_on_its_own_flag`
-exists: carrying a broken install's version is what makes its stamp honest, and it is also what
-makes `assert_matches` PASS for it. The refusal has to rest on the flag.
-
-A broken bundle is produced here by pointing the active row at a version that was never staged,
-never by deleting a staged directory. The two states are identical to every reader of
-`artifact_bundle` -- an active row, no directory -- and the second one cannot be produced
-reliably on Windows, where a memory-mapped `backbone.npz` keeps an open handle inside the tree a
-test would have to remove.
-
-Integration-kind against a real Postgres; skipped without TEST_DATABASE_URL (see conftest.py).
-"""
+"""A broken bundle is made by pointing the active row at a never-staged version: deleting a
+staged directory fails on Windows, where the mapped backbone.npz holds a handle."""
 
 from __future__ import annotations
 
@@ -57,9 +29,6 @@ from spielplan.scoring import backbone as bb
 from tests.fixtures import make_bundle as fx
 
 PKG = Path(__file__).resolve().parents[1] / "spielplan"
-# Five verdicts over the fixture's Backbone-covered movies, which is enough for §5.2 to produce a
-# fit with something in every band. Small on purpose: every assertion below is about the basis a
-# fit was computed in, never about its numbers.
 LABELS = ((1, 2), (2, 2), (3, 1), (4, 0), (5, 1))
 SERIES_LABELS = ((6, 2), (7, 0))
 
@@ -75,10 +44,7 @@ def _as_vector(blob: bytes) -> np.ndarray:
 
 
 def _as_fitted(blob: bytes) -> np.ndarray:
-    """What `standard_embeddings` hands the Ledger for a title the Cold Tower alone placed: the
-    placement's unit direction (decision 471 - the fit reads the fold-in's gate-weighted
-    direction, and a tower coordinate is weighted 1). The basis each test threads is the claim;
-    the reading of the coordinate is the same in both."""
+    """The placement's unit direction, as the fit reads a tower-only title (decision 471)."""
     vector = _as_vector(blob)
     return vector / np.linalg.norm(vector)
 
@@ -93,13 +59,9 @@ async def _import(db, root: Path, artifacts_root: Path, *, version: str = "test-
                   models_only: bool = False) -> None:
     fx.make_bundle(root, version=version)
     if models_only:
-        # decision 162: content seeds once and models re-ship, so this is the re-import §10 is
-        # actually about and the only one that can carry a second version at all.
         (root / "content.sqlite").unlink()
         (root / "reviews.sqlite").unlink()
-        # BUNDLE.json is the corpus's inventory of the tree and M4.14 reads it before the first
-        # row is written, so a bundle made models-only by deleting two files it still lists is a
-        # bundle whose own manifest no longer describes it. [M4.14 step B1]
+        # BUNDLE.json must still describe the tree, or the import refuses it before writing a row.
         fx.reinventory(root)
     report = await bundle_import.import_bundle(
         db, bundle_import.Bundle.open(root), artifacts_root
@@ -108,7 +70,6 @@ async def _import(db, root: Path, artifacts_root: Path, *, version: str = "test-
 
 
 async def _place(db, title_id: int, version: str, seed: int) -> None:
-    """One `title_placement` row, written directly. The sweep's own columns, its own values."""
     await db.execute(
         """
         INSERT INTO title_placement
@@ -122,11 +83,8 @@ async def _place(db, title_id: int, version: str, seed: int) -> None:
 
 
 async def _make_active(db, version: str) -> None:
-    """Flip the active row to `version`, inserting the row if it is not there.
-
-    The partial unique index allows exactly one active row, so the supersede comes first. A
-    version with no staged directory is data-03's state: an active row the files are missing for.
-    """
+    """The partial unique index allows one active row, so supersede first. A version with no
+    staged directory is the broken-bundle state."""
     await db.execute(
         "INSERT INTO artifact_bundle (version, manifest, state, kind) "
         "VALUES ($1, '{}'::jsonb, 'validated', 'model') ON CONFLICT (version) DO NOTHING",
@@ -141,12 +99,7 @@ async def _make_active(db, version: str) -> None:
 
 @pytest.fixture
 async def worker_env(db, pg_url, tmp_path, monkeypatch):
-    """The worker's own view of the world: the real pool, and DATA_DIR where `installed` stages.
-
-    `DATA_DIR` is `tmp_path` itself rather than a subdirectory, so `settings().artifacts_dir` is
-    the `artifacts_root` every `_import` below writes to -- the jobs have to find the bundle the
-    test staged or a refusal proves nothing about the guard under test.
-    """
+    """`DATA_DIR` is `tmp_path` itself, so `artifacts_dir` is where `_import` staged the bundle."""
     monkeypatch.setenv("DATA_DIR", str(tmp_path))
     monkeypatch.setenv("DATABASE_URL", pg_url)
     settings.cache_clear()
@@ -162,11 +115,7 @@ async def worker_env(db, pg_url, tmp_path, monkeypatch):
 
 @pytest.fixture
 async def installed(db, tmp_path):
-    """A seeded install at `test-v1`, one admin, five verdicts, and the store the app would pin.
-
-    Returns `(store, user_id)`. Every title owned, because §5.2 writes a row for each owned title
-    and what is under test is the stamp, not the population.
-    """
+    """Returns `(store, user_id)`."""
     await _import(db, tmp_path / "b1", tmp_path / "artifacts")
     user_id = await _user(db)
     await db.execute("UPDATE title SET is_owned = true")
@@ -179,18 +128,8 @@ def _job(name: str):
     return next(j for j in worker.JOBS if j.name == name)
 
 
-# --- the version is threaded, not inferred (data-01) -----------------------------------------
-
-
 async def test_standard_embeddings_reads_the_placements_of_the_version_it_was_given(db, tmp_path):
-    """`placement_embeddings` has taken a `bundle_version` since M2 and `standard_embeddings`
-    never passed one, so every caller got the `$2 IS NULL` branch:
-    `JOIN artifact_bundle b ON b.state = 'active'`. During §10's pre-flip rebuild the active row
-    is the OUTGOING bundle, and that is the whole of data-01.
-
-    Asserted on the coordinates rather than through a fit, because a coordinate is the thing that
-    differs between two bases and a fitted `v` is a function of many of them at once.
-    """
+    """Asserted on coordinates, not through a fit: a fitted `v` blends many of them."""
     await _import(db, tmp_path / "b1", tmp_path / "artifacts")
     await _import(db, tmp_path / "b2", tmp_path / "artifacts",
                   version="test-v2", models_only=True)
@@ -218,14 +157,8 @@ async def test_standard_embeddings_reads_the_placements_of_the_version_it_was_gi
 async def test_a_source_with_no_version_threaded_falls_back_to_the_active_row_as_the_bundle_less_path(
     db, tmp_path
 ):
-    """The `$2 IS NULL` branch is the bundle-less path, and it stays one.
-
-    Two halves, because "no version" means two different things. A caller with no bundle at all
-    (§3.1's install, and every test source) gets the active row, which is the only answer
-    available to it. And a fit over `zero_embeddings` is stamped NULL rather than with whatever
-    row happens to be active -- dd01's NULL stamp, which is what lets `load_cache` accept a
-    bundle-less household's cached fit across a restart instead of refitting it on every boot.
-    """
+    """No version threaded: the active row supplies coordinates, and a fit stamps NULL so
+    `load_cache` accepts a bundle-less fit across restarts."""
     await _import(db, tmp_path / "b1", tmp_path / "artifacts")
     await _import(db, tmp_path / "b2", tmp_path / "artifacts",
                   version="test-v2", models_only=True)
@@ -241,11 +174,7 @@ async def test_a_source_with_no_version_threaded_falls_back_to_the_active_row_as
         "the no-version branch must read the ACTIVE row's placements"
     )
 
-    # The other half, on an install with no ACTIVE bundle row. This read `DELETE FROM
-    # artifact_bundle` until decision 249 made the row provenance -- a row that has been
-    # somebody's basis is never deleted -- and superseding says the same thing to every reader
-    # this half has: `active_bundle_version` is `WHERE state = 'active'`, so §3.1's bundle-less
-    # household is one with no ACTIVE basis, not one whose history was erased.
+    # Superseded, not deleted: a row that was ever a basis is never deleted (decision 249).
     await db.execute("UPDATE artifact_bundle SET state = 'superseded'")
     user_id = await _user(db, name="Ana", role="member")
     for title_id, value in LABELS:
@@ -263,32 +192,15 @@ async def test_a_source_with_no_version_threaded_falls_back_to_the_active_row_as
 async def test_the_rebuild_fits_against_the_staged_bundle_and_stamps_the_staged_version(
     db, tmp_path
 ):
-    """§10 step 3, which ran against the bundle it exists to replace.
-
-    The flip happens AFTER `run_rebuild`, by design -- "a rebuild that fails takes the whole
-    import down rather than leaving a new basis active with every fitted number still expressed
-    in the old one" -- so during the rebuild the active row is the outgoing version.
-    `_rebuild_ledger_refit` ignored its `version` argument, `standard_embeddings` passed none, and
-    `refit_all` stamped `active_bundle_version`: measured ||v_step3 - v_correct|| = 0.397 against
-    ||v_correct|| = 0.782.
-
-    Both halves of the name are asserted, because the version is threaded at TWO independent
-    seams -- into `standard_embeddings` for the coordinates the fit READS, and into `refit_all`
-    for the version it is STAMPED with -- so a fit can carry the staged stamp over the outgoing
-    bundle's coordinates. That mixed-basis write IS data-01 as it was measured, and no assertion
-    on a stamp can see it. [M4.13 cycle 1, m413-rev1-cov-01]
-    """
+    """The version is threaded at two seams, coordinates read and stamp written; a fit can carry
+    the staged stamp over the outgoing coordinates, so both are asserted."""
     await _import(db, tmp_path / "b1", tmp_path / "artifacts")
     user_id = await _user(db)
     await db.execute("UPDATE title SET is_owned = true")
     for title_id, value in LABELS:
         await observations.record_verdict(db, user_id=user_id, title_id=title_id, value=value)
-    # The two bases are MADE to differ rather than assumed to: `fx.make_bundle` writes model
-    # files that do not depend on the version, so b1 and b2 place every title identically and a
-    # fit over either reads the same numbers. Title 8 is the lever -- its Backbone row is
-    # cold-masked and therefore read as ABSENT (§5.1's gate -> 0 limit), so its coordinate is its
-    # Cold Tower placement and nothing else -- and the OUTGOING version's row for it is
-    # overwritten here with a vector the sweep never produces.
+    # `make_bundle` places every title identically in both versions, so title 8 (cold-masked,
+    # tower-only) is overwritten in the outgoing version to make the bases differ.
     await observations.record_verdict(db, user_id=user_id, title_id=8, value=1)
     await _place(db, 8, "test-v1", seed=11)
 
@@ -311,12 +223,7 @@ async def test_the_rebuild_fits_against_the_staged_bundle_and_stamps_the_staged_
     basis = bb.load_for(store)
 
     async def _v_over(version: str) -> np.ndarray:
-        """Refit over `version`'s placements, stamped STAGED so `load_cache` hands it back.
-
-        The wrong-basis fit is stamped `test-v2` on purpose: that is the shape data-01 wrote, and
-        a fit stamped `test-v1` would be refused after the flip for its version rather than read
-        for its numbers -- which would make this a second stamp assertion and not a basis one.
-        """
+        """Stamped `test-v2` on purpose: `test-v1` would be refused for its version, not its numbers."""
         report = await refit.refit_user(
             db, user_id=user_id, kind="movie", hp=hp, bundle_version="test-v2",
             embeddings=observations.standard_embeddings(db, basis, bundle_version=version),
@@ -345,15 +252,6 @@ async def test_the_rebuild_fits_against_the_staged_bundle_and_stamps_the_staged_
 async def test_the_cache_accepts_the_staged_fit_after_the_flip_and_the_first_tap_refits_nothing(
     db, tmp_path
 ):
-    """The cost of the wrong stamp, where a person feels it.
-
-    `load_cache` refuses a fit whose bundle is not the active row -- correctly, §10 -- so a step-3
-    fit stamped with the OUTGOING version was refused by the cache the moment the flip made the
-    new version active. Every (user, kind)'s first tap then paid §5.3's "seconds" row inside its
-    "<50 ms" one; since M4.10 took the inline fit off the request path it pays it as a QUEUED miss
-    instead, which is a board that reads `fitting` rather than one that moves. Stamped correctly,
-    the rebuild's own fit IS the cache and the first tap is an ordinary incremental update.
-    """
     await _import(db, tmp_path / "b1", tmp_path / "artifacts")
     user_id = await _user(db)
     await db.execute("UPDATE title SET is_owned = true")
@@ -384,25 +282,8 @@ async def test_the_cache_accepts_the_staged_fit_after_the_flip_and_the_first_tap
 async def test_a_tap_holding_the_outgoing_basis_queues_rather_than_updating_the_staged_fit(
     db, tmp_path
 ):
-    """The window the sibling above opens, and the one `load_cache` could not see.
-
-    Its three preconditions ask whether the fit's stamp is the ACTIVE row. That is the right
-    question for the household and the wrong one for the caller: between §10's flip and §10's
-    restart this process still holds the outgoing Backbone, and the tap that reaches this line is
-    the one that WAITED for the flip. `importer/bundle.py` rebuilds and flips inside one
-    transaction, `refit_user` takes the board's advisory lock inside it, and `_update_incrementally`
-    takes that same lock before it reads -- so a tap arriving mid-import blocks until the commit
-    and then sees the staged stamp and the new active row at once. Both agree, the cache came back,
-    and the tap solved its residual with v in the incoming basis against e in the outgoing one:
-    data-01's mixed-basis write, inherited, because the accepted branch's UPDATE does not rewrite
-    `bundle_version`. The route's pre-write `_assert_active_basis` cannot catch it; it ran minutes
-    earlier, which is what makes this a second check and not a duplicate one.
-
-    Asserted through `update_incrementally_reporting` and on `ledger_state`, because what the
-    finding is about is a WRITE: refusing the cache is only worth anything if the row does not
-    move. QUEUED and not an exception, for `refit.py`'s standing rule -- a fit that refuses is a
-    model problem and never a reason to lose the tap. [M4.13 cycle 1, finding 15]
-    """
+    """The tap waited on the import's advisory lock, so it sees the staged stamp and new active row
+    while this process still holds the outgoing Backbone. It must queue, not write."""
     await _import(db, tmp_path / "b1", tmp_path / "artifacts")
     user_id = await _user(db)
     await db.execute("UPDATE title SET is_owned = true")
@@ -441,8 +322,6 @@ async def test_a_tap_holding_the_outgoing_basis_queues_rather_than_updating_the_
         user_id,
     ) is not None, "the refused tap owes a full refit and nobody was told"
 
-    # The control, and it is exit-criterion check 1: after §10's restart the caller, the stamp and
-    # the active row are all test-v2, and the same tap is an ordinary incremental update.
     staged = ArtifactStore.open(tmp_path / "artifacts" / "test-v2", "test-v2")
     bb.forget_cached()
     fresh = await refit.update_incrementally_reporting(
@@ -458,11 +337,6 @@ async def test_a_tap_holding_the_outgoing_basis_queues_rather_than_updating_the_
 async def test_every_fitted_pair_carries_the_version_its_basis_came_from_after_a_models_only_reimport(
     db, tmp_path
 ):
-    """Every (user, kind), not the one the test happened to look at.
-
-    `refit_all` loops the household and both kinds and the stamp is handed down through it, so
-    this is the assertion that the threading reaches the leaf rather than the entry.
-    """
     await _import(db, tmp_path / "b1", tmp_path / "artifacts")
     patrick = await _user(db)
     ana = await _user(db, name="Ana", role="member")
@@ -483,21 +357,8 @@ async def test_every_fitted_pair_carries_the_version_its_basis_came_from_after_a
     assert {r["bundle_version"] for r in rows} == {"test-v2"}, [dict(r) for r in rows]
 
 
-# --- §10's invariant has production callers (arch-03, tq1) ------------------------------------
-
-
 async def test_every_read_path_reports_the_one_active_version(db, tmp_path):
-    """Four definitions of "the active bundle version", now one resolver and its callers.
-
-    `app.py` pinned a store at boot, `refit.active_bundle_version` read the row,
-    `api/home.py::_bundle` read it again with a store fallback, and `api/tonight.py` spelled the
-    SELECT a fourth time -- four answers to one question, which inside §10's window between the
-    flip and the restart is four chances to disagree.
-
-    Behaviour first, then the static half: the literal query survives in exactly two files, and
-    the importer's copy is the `already_active` read inside its own flip transaction, which has to
-    run before its two UPDATEs and says so where it is written.
-    """
+    """The importer keeps its own copy: the `already_active` read inside its flip transaction."""
     await _import(db, tmp_path / "b1", tmp_path / "artifacts")
     store = ArtifactStore.open(tmp_path / "artifacts" / "test-v1", "test-v1")
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(artifacts=store)))
@@ -519,16 +380,7 @@ async def test_every_read_path_reports_the_one_active_version(db, tmp_path):
 async def test_a_worker_model_job_whose_bundle_is_not_the_active_row_refuses_and_advances_nothing(
     db, worker_env, installed, monkeypatch
 ):
-    """§10's window, in the worker, through a job that would have written in it.
-
-    The interleaving is injected where it really happens rather than stubbed: `_active_store`
-    loads the store and then resolves the active row, and an import running in the backend
-    process can flip that row in between. Before this guard nothing anywhere in the app could
-    detect a stale process at all.
-
-    Through the placement sweep, which does not fit, so "advances nothing" is a statement about
-    the refusal and not about a fit that happened to produce no rows.
-    """
+    """The flip is injected between `_active_store` loading the store and resolving the active row."""
     _store, _user_id = installed
     flipped: list[str] = []
     real = ArtifactStore.load_active
@@ -554,12 +406,7 @@ async def test_a_worker_model_job_whose_bundle_is_not_the_active_row_refuses_and
 async def test_the_refit_entrypoint_refuses_a_stale_bundle_and_names_both_versions(
     db, worker_env, installed, monkeypatch
 ):
-    """The same window, on the Ledger refit -- the job whose writes are the expensive ones.
-
-    Both versions in the message, because an operator reading one line has to know which process
-    is behind AND which bundle it is behind on; "bundle mismatch" sends them to a second service's
-    log to find out.
-    """
+    """Both versions in the message: an operator needs which process is behind, and on what."""
     _store, user_id = installed
     await _job("ledger-map-refit").run()
     before = await db.fetchval(
@@ -588,17 +435,7 @@ async def test_the_refit_entrypoint_refuses_a_stale_bundle_and_names_both_versio
 async def test_a_scoring_request_on_a_stale_bundle_answers_409_with_the_restart_wording(
     db, app, tmp_path
 ):
-    """The request half of §10's window: 409, carrying the sentence the import screen showed.
-
-    The process pins its store and its Backbone at boot because §10 makes a swap a restart, so
-    after a flip `app.state.backbone` is the outgoing basis while every row the flip made visible
-    is the incoming one. Unguarded, the tap fitted over half-and-half coordinates and stamped the
-    result with the NEW version: ||v_tap - v_correct|| = 0.643.
-
-    Both surfaces, because both fit, and asserted on `reason` rather than on the status alone --
-    Rate already answers 409 for a stale card, so a test that accepted any 409 would pass on the
-    wrong one.
-    """
+    """Asserted on `reason`: Rate already answers 409 for a stale card."""
     client = app()
     created = await client.post(
         "/api/setup/admin", json={"name": "patrick", "password": "an-admin-password"}
@@ -606,8 +443,7 @@ async def test_a_scoring_request_on_a_stale_bundle_answers_409_with_the_restart_
     assert created.status_code == 201
     await _import(db, tmp_path / "b1", tmp_path / "artifacts")
     await db.execute("UPDATE title SET is_owned = true")
-    # The store the app pinned at boot is the empty one (the import came after), so pin the one it
-    # WOULD have loaded: the disagreement under test is a version against a version.
+    # The app pinned the empty store at boot; pin the one it would have loaded.
     client._transport.app.state.artifacts = ArtifactStore.open(
         tmp_path / "artifacts" / "test-v1", "test-v1"
     )
@@ -632,16 +468,7 @@ async def test_a_scoring_request_on_a_stale_bundle_answers_409_with_the_restart_
 
 
 async def test_a_bundle_less_install_passes_the_invariant_rather_than_refusing(db, worker_env):
-    """§3.1: "a bundle-less app is a legal state". None == None, through every new guard.
-
-    The guards raise, so the bundle-less case is what proves they are guards on a disagreement and
-    not a second `is_empty` check: there is nothing here to be wrong about, and a household can
-    run for a week before the first corpus export exists.
-
-    The request-path guard is called directly with the empty store the app would pin, because the
-    property is the guard's and not any one route's -- the 409 those routes raise has its own test
-    above.
-    """
+    """§3.1: None == None passes every guard."""
     ArtifactStore.empty().assert_matches(None)
     ArtifactStore.empty().assert_not_broken()
     assert await artifacts.active_bundle_version(db) is None
@@ -658,19 +485,11 @@ async def test_a_bundle_less_install_passes_the_invariant_rather_than_refusing(d
         await _job(name).run()
 
 
-# --- a broken basis refuses rather than fitting at zero (data-03) -----------------------------
-
-
 async def test_a_broken_store_carries_the_active_version_and_still_refuses_on_its_own_flag(
     db, tmp_path
 ):
-    """THE TRAP, asserted so that nobody closes it the easy way.
-
-    Carrying the active row's version is what makes a broken install's stamp honest -- and it is
-    also what makes `store.version == active_version`, so §10's invariant PASSES for a store that
-    cannot produce one coordinate. The refusal therefore cannot be the version comparison; it has
-    to be the flag. And `is_empty` has to stay True, so every §3.1 surface keeps rendering.
-    """
+    """THE TRAP: a broken store carries the active version, so `assert_matches` passes; the refusal
+    must rest on the flag, and `is_empty` stays True."""
     await _make_active(db, "test-v1")
     store = await ArtifactStore.load_active(db, tmp_path / "artifacts")
 
@@ -679,7 +498,7 @@ async def test_a_broken_store_carries_the_active_version_and_still_refuses_on_it
     assert store.is_empty is True, (
         "§3.1's surfaces read is_empty and have to keep their no-bundle state"
     )
-    # The trap, as an assertion rather than as a comment: this call must NOT raise.
+    # This call must NOT raise.
     store.assert_matches(await artifacts.active_bundle_version(db))
     with pytest.raises(RuntimeError, match="does not exist"):
         store.assert_not_broken()
@@ -688,10 +507,7 @@ async def test_a_broken_store_carries_the_active_version_and_still_refuses_on_it
 
 
 def test_the_two_refusals_rate_and_rank_render_speak_the_member_register():
-    """Rate and Rank render a 409's `message` as it is, so both of §10's refusal sentences are read
-    by the person holding the phone (decision 486): the restore's named a bundle, a basis, a refit
-    and /data/artifacts to them (WJ's integration note of the 2026-09-25 user test). Each still
-    names its own repair - the operator's words for it are the log line beside the 409."""
+    """Rate and Rank show a 409's `message` verbatim to the member (decision 486)."""
     for message in (artifacts_api.RESTART_REQUIRED, artifacts_api.RESTORE_REQUIRED):
         for noun in ("bundle", "basis", "refit", "process", "/data", "ledger", "fold-in"):
             assert noun not in message.lower(), f"{noun!r} reaches a member in {message!r}"
@@ -702,26 +518,8 @@ def test_the_two_refusals_rate_and_rank_render_speak_the_member_register():
 async def test_a_fitting_request_on_a_broken_bundle_answers_409_and_writes_nothing(
     db, app, tmp_path
 ):
-    """The half of data-03 that had no caller: the routes fit too.
-
-    `assert_not_broken` shipped with exactly one production caller, `worker._active_store`. So on a
-    broken install the model jobs refused every sweep while `POST /api/rate/verdict`, `/duel`,
-    `/undo` and `POST /api/rank/drop`, `/queue/answer` kept fitting -- and the version comparison
-    cannot catch them, because a broken store carries the active row's own version on purpose. The
-    only thing standing in front of those five was an accident: `hyperparams.load` returns DEFAULTS
-    for an empty store, so the digest matched whenever the active bundle shipped no
-    `ledger_hyperparams.json` (legal, `BUNDLE_FILES` marks it optional) and `load_cache` handed
-    back a fit computed in a REAL basis for a tap to update with `e = 0`. Measured on the fixture:
-    s 1.5735 / 1.5699 / 0.0787 healthy against 0.8001 / 0.8001 / 0.1799 broken -- two rated titles
-    collapsed onto one number, in rows nothing corrects until the directory is back and a nightly
-    runs, while the Data tab tells the operator "the model jobs refuse rather than refitting in a
-    zero basis".
-
-    Asserted on `reason` and on the absence of the row: 409 before the write is a refusal, and a
-    refusal after one would be the loss M4.10 finding 8 costed. The wording is the restore's, not
-    the swap's, because restarting this process would fix nothing.
-    [M4.13 cycle 1, m413-c1-dim1-broken-bundle-refusal-is-worker-only]
-    """
+    """The version check cannot catch a broken store, which carries the active version on purpose.
+    Asserted on the absent row too: a refusal after the write would lose the tap."""
     client = app()
     assert (await client.post(
         "/api/setup/admin", json={"name": "patrick", "password": "an-admin-password"}
@@ -729,7 +527,7 @@ async def test_a_fitting_request_on_a_broken_bundle_answers_409_and_writes_nothi
     await _make_active(db, "test-v1")
     store = await ArtifactStore.load_active(db, tmp_path / "artifacts")
     assert store.broken and store.version == "test-v1"
-    # The trap, restated where it bites: §10's comparison passes for this store.
+    # §10's comparison passes for this store.
     store.assert_matches(await artifacts.active_bundle_version(db))
     client._transport.app.state.artifacts = store
 
@@ -757,23 +555,8 @@ async def test_a_fitting_request_on_a_broken_bundle_answers_409_and_writes_nothi
 async def test_a_process_that_is_both_stale_and_broken_is_diagnosed_by_the_caller_that_asks(
     db, app, tmp_path, worker_env
 ):
-    """The one state in which the ORDER of the two guards decides the answer, pinned per caller.
-
-    `models/artifacts.py`'s module docstring used to claim `assert_not_broken` is asked first, full
-    stop; the grep it cites shows one caller doing that and two doing the reverse. Levelling them
-    to match the sentence is the natural repair, and it would change what an operator is told in
-    exactly this state: a process pinned at boot to a version whose directory is gone, while the
-    active row has since moved on. Both facts are true, both refusals fire, and only the order
-    picks which 409 the Rate surface returns.
-
-    The request path is right to answer the SWAP: its store was pinned once (`app.py`) and is
-    never re-pinned, so the restart §10 already asks for loads the new active bundle, whose
-    directory exists. Telling the operator to restore the superseded version's directory instead
-    would send them at the one thing that does not need to be there. The worker asks the flag
-    first for the opposite reason: it RELOADS the store per job, so what it holds is the active
-    row itself, and a missing directory is the only fact left to report.
-    [M4.13 cycle 2, M413-C2-D1-02]
-    """
+    """Stale AND broken: the request path answers the swap (its store is pinned once, a restart
+    fixes it); the worker reloads per job, so only the missing directory is left to report."""
     client = app()
     assert (await client.post(
         "/api/setup/admin", json={"name": "patrick", "password": "an-admin-password"}
@@ -800,10 +583,7 @@ async def test_a_process_that_is_both_stale_and_broken_is_diagnosed_by_the_calle
         await worker._active_store(db)
 
 
-# The routes data-03's row calls "the fitting routes", named here because the row's sentence is
-# a claim about an inventory, and an inventory nobody wrote down is a grep. Five until the
-# 2026-09-25 user test; the sixth is the title card's answer (decision 487), which writes a
-# verdict through `rate.session` and threads `_basis(request)` into it like `verdict` does.
+# The title card's answer (decision 487) is the sixth; it writes through `rate.session`.
 _FITTING_ROUTES = (
     "rate.py::verdict", "rate.py::duel", "rate.py::undo", "rank.py::drop", "rank.py::answer",
     "rate.py::answer_from_title_card",
@@ -811,32 +591,8 @@ _FITTING_ROUTES = (
 
 
 def test_every_fitting_route_awaits_the_basis_guard_as_its_first_statement():
-    """The row said five, and six since the title card answers (decision 487); the two 409 tests
-    above drive two of them.
-
-    Both window tests -- the swap arm at
-    `test_a_scoring_request_on_a_stale_bundle_answers_409_with_the_restart_wording` and the broken
-    arm above -- post `/api/rate/verdict` and `POST /api/rank/drop`, and `app.state.artifacts` is
-    assigned in no other test. Measured by deleting `await _assert_active_basis(request, conn)`
-    from `rate.py::duel`, `rate.py::undo` and `rank.py::answer`: this file stayed green, and so did
-    `ops/m413_exit_criterion.py`, whose check 2 calls the helper on a stub request and counts
-    `assert_matches` call SITES rather than routes. Three of the five were held by nothing.
-
-    Driving the other three through both arms would cost a fixture per arm and buy the same fact
-    twice; what rots is the WIRING -- a refactored route body, a merge, a sixth fitting route --
-    so the wiring is what is asserted. A route that fits is one that threads `_basis(request)` into
-    the write, which is the expression the row's sentence is about, and the guard has to be its
-    FIRST statement: that is the placement `_assert_active_basis`'s own docstring claims ("before
-    `_resume` and before any write") and the one M4.10 finding 8 costed, because a refusal raised
-    after the tap has committed loses the tap and invites a retry that writes a second row.
-
-    The inventory is frozen at the five names the row publishes, so a sixth fitting route cannot
-    ship without this test being read. Static rather than integration for the reason
-    `test_assert_matches_is_called_from_the_entrypoints_its_docstring_names` is: the property is
-    that no route is MISSING the call, and a test that can only see the routes it remembers to
-    post is exactly how three of them came to be claimed and not checked.
-    [M4.13 cycle 2, M413-C2-D1-01]
-    """
+    """Static: the property is that no route is MISSING the call. The guard must come first,
+    because a refusal after the tap commits loses it."""
     guarded: dict[str, bool] = {}
     for module in ("rate.py", "rank.py"):
         tree = ast.parse((PKG / "api" / module).read_text(encoding="utf-8"))
@@ -873,14 +629,6 @@ def test_every_fitting_route_awaits_the_basis_guard_as_its_first_statement():
 async def test_the_model_jobs_refuse_a_broken_bundle_and_leave_ledger_fit_where_it_was(
     db, worker_env, installed
 ):
-    """data-03, measured where it hurt: every board refitted in a zero basis, and stamped.
-
-    `load_active` returned `empty()`, the worker mapped it to None, and `_ledger_map_refit` fitted
-    from `zero_embeddings` under DEFAULTS, pruned and rewrote `ledger_state`, rewrote
-    `ledger_cutpoints`, and stamped `ledger_fit` with the version whose files were gone -- so every
-    unrated owned title came out at s = mu with one score, one tier and one badge, and
-    `load_cache` accepted it. Recovery was an accident of the digest happening to differ.
-    """
     _store, user_id = installed
     await _job("ledger-map-refit").run()
     before = dict(
@@ -928,15 +676,8 @@ async def test_the_model_jobs_refuse_a_broken_bundle_and_leave_ledger_fit_where_
 async def test_a_refused_job_leaves_the_refit_owed_rather_than_swallowing_it(
     db, worker_env, installed
 ):
-    """Decision 11's queue, across the refusal.
-
-    `_tier_set_refits` clears a request even when the fit raised, deliberately (M4.10 finding 6):
-    a fit that fails inside the person's own data fails again in sixty seconds, and §5.3's nightly
-    pass fits the same (user, kind) anyway. A broken BASIS is the other kind of failure -- nothing
-    is wrong with the person's data and the operator can fix it -- so the refusal comes before the
-    loop, and the work stays owed for the tick after the restore instead of being cleared by a
-    sweep that did nothing.
-    """
+    """A broken basis is the operator's to fix, so the refit stays owed rather than being cleared
+    like a failing fit (M4.10 finding 6)."""
     _store, user_id = installed
     await tiers.save_tier_set(db, user_id=user_id, tier_set=["F", "D", "C", "B", "A"])
     owed = {(u, k) for u, k, _t in await tiers.refits_owed(db)}
@@ -952,13 +693,7 @@ async def test_a_refused_job_leaves_the_refit_owed_rather_than_swallowing_it(
 
 
 async def test_the_admin_bundle_state_reports_broken_and_names_the_missing_path(db, tmp_path):
-    """§6.6: the Data tab is where an operator reads this, not the backend log.
-
-    `restart_required` cannot express it. `active != store.version` is False for a broken install
-    -- because the store now carries the active row's own version -- and `loaded` is None because
-    `is_empty` stays True, so the page said: a bundle is active, none is loaded, no restart is
-    needed. Which describes nothing that can happen.
-    """
+    """`restart_required` cannot say it: a broken store carries the active version."""
     await _make_active(db, "test-v1")
     store = await ArtifactStore.load_active(db, tmp_path / "artifacts")
     payload = await artifacts_api.bundle_state(
@@ -974,22 +709,8 @@ async def test_the_admin_bundle_state_reports_broken_and_names_the_missing_path(
 async def test_a_refit_over_an_empty_observation_set_empties_the_board_it_cannot_justify(
     db, tmp_path
 ):
-    """ml02: the branch whose comment said the shelves are "better empty" and left them full.
-
-    Reproduced before the fix: a nightly with zero observations returned `fitted = False` with
-    `ledger_state` still at 6 rows, one of them `observed = True`, the learned cutpoints in place
-    and a `ledger_fit` row holding the old `n_observed` -- which `load_cache` accepted, so the next
-    first tap solved incrementally from residuals for verdicts that no longer exist. Decision 35's
-    Undo and decision 174's hard-DELETE are how a household reaches this state.
-
-    The tier SET survives, because decision 11 makes it a preference; the BOUNDARIES go back to
-    the prior, which is the only thing left to say once the labels that moved them are gone.
-
-    TIER EDITS as well as verdicts, and they are not decoration: with no tier edit §5.2's cut-points
-    sit exactly on their prior mean -- since decision 508 the shape anchored on the verdict
-    cutpoints -- so the edits are what make the fitted boundaries plainly not the prior the empty
-    fit falls back to, and the boundary half of this test more than an unchanged vector.
-    """
+    """The tier set survives (decision 11); boundaries return to the prior. The tier edits are
+    what make the fitted boundaries differ from the prior at all."""
     await _import(db, tmp_path / "b1", tmp_path / "artifacts")
     user_id = await _user(db)
     await db.execute("UPDATE title SET is_owned = true")
@@ -1030,30 +751,14 @@ async def test_a_refit_over_an_empty_observation_set_empties_the_board_it_cannot
     assert [float(b) for b in row["boundaries"]] == pytest.approx(prior)
 
 
-# --- K is the third correctness precondition on the cache (ml01) ------------------------------
-
-
 async def test_the_cache_refuses_a_fit_whose_k_no_longer_matches_the_tier_set(db, tmp_path):
-    """`load_cache` validated `hp_digest` and `bundle_version` and not K.
-
-    Decision 11 keeps the `tier_edit` rows across a tier-set change and queues a refit, so between
-    the PUT and the 60 s sweep every drop went through `_update_incrementally` at the OLD K:
-    growing 7 -> 12, a drop into tier 7 of 12 was clamped to 6 of 7 and written as
-    `ledger_state.tier = 4` while the displayed K = 12 boundaries give 8 -- Home showing T4 and
-    Rank T7 for one title.
-
-    The K row registers its route-level assertion in `test_rank_integration.py`; this is the same
-    precondition at the function that holds it, and it lives here because `load_cache` is this
-    stage's file.
-    """
+    """Between a tier-set PUT and the refit sweep, a cached fit at the old K clamped drops wrongly."""
     await _import(db, tmp_path / "b1", tmp_path / "artifacts")
     user_id = await _user(db)
     await db.execute("UPDATE title SET is_owned = true")
     for title_id, value in LABELS:
         await observations.record_verdict(db, user_id=user_id, title_id=title_id, value=value)
-    # Without `bundle_version`, deliberately: the stamp is data-01's concern and this test is
-    # ml01's. A bundle-less fit stamps NULL and `load_cache` compares NULL to the active row, so
-    # the version arm would refuse first and K would never be reached.
+    # No `bundle_version`: a NULL stamp would be refused on version before K is reached.
     await db.execute("DELETE FROM title_placement")
     await db.execute("UPDATE artifact_bundle SET state = 'superseded' WHERE state = 'active'")
     assert (await refit.refit_user(db, user_id=user_id, kind="movie", hp=DEFAULTS)).fitted

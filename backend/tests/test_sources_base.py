@@ -1,37 +1,5 @@
-"""§8 stage 2's scaffolding: the handler registry, the markup helpers, the credential read.
-
-Spec v2.1 §8 stage 2 (`spec:365-368`) and §8's preamble (`spec:398`, "All fetched bytes land in
-the app's own raw store, so re-parsing is free forever"); decisions 334, 372, 373, 374, 377.
-
-Three subjects, one file, because they are one shipment: `sources/base.py` is what an adapter
-declares itself in, `sources/_htmlutil.py` is what the parsers read scraped bytes with, and
-`sources/credentials.py` is what the three keyed sources ask for their key. No adapter exists
-yet - they are the next phase of this milestone - so everything here is asserted against
-handlers this file registers itself and against markup written inline.
-
-WHAT IS ACTUALLY BEING MEASURED, since a registry is easy to test vacuously:
-
-  * A second handler for one kind is REFUSED. The corpus overwrites (`mdc/sources/base.py:65`)
-    and can afford to; here the kind is how the stage-2 driver names a source at all, so an
-    overwrite would retire a source §8 requires with no row, no log and no failure.
-  * `available_kinds` returns kinds in PRIORITY order, not alphabetical order. §8 says
-    `wikidata:resolve` "halves guessing" because it yields the MC/RT/Letterboxd slugs, so a
-    driver that ran `metacritic:page` first would scrape a guessed slug for a source whose real
-    one was one request away. That ordering is measure 11 of this milestone's exit criterion.
-  * The two modules the PARSERS depend on import no transport. Decision 373 keeps that half of
-    M5.1's guard because it is the whole of "re-parsing is free forever": a parser that can
-    reach the network is a parser whose next bug costs another crawl of somebody else's host.
-  * An absent or unopenable credential is `None` and never an exception, because decision 334
-    makes it a note on the job rather than a park.
-
-The ast helpers below are deliberately a second copy of `test_layering_guards.py`'s rather than
-an import from it: that file's own header records the same choice, "the ast helpers below would
-otherwise move to a fourth file that none of the three owns". This copy differs in one way that
-matters and is not a simplification - it records `from x import y` as `x.y` as well as `x`, so
-`from spielplan.acquire import fetch` cannot walk past a guard that only compares module
-strings. M5.1's text-based version checked both spellings for the same reason
-(`test_acquire_pipeline.py:1014-1015`).
-"""
+"""The ast helpers copy `test_layering_guards.py`'s but also record `from x import y` as `x.y`,
+so `from spielplan.acquire import fetch` cannot slip past."""
 
 from __future__ import annotations
 
@@ -50,22 +18,8 @@ from spielplan.sources import _htmlutil, base, credentials
 
 @pytest.fixture(autouse=True)
 def _registry_is_restored():
-    """`REGISTRY` is module-global, so a test that registers must not leak into the next one.
-
-    EMPTIED BEFORE THE TEST AND NOT ONLY AFTER IT, which is what the eight adapters made
-    necessary. These tests are about the registry MECHANISM - the refusal, the description
-    fallback, the capability filter, the priority ordering - and every one of them registers a
-    fake under a kind name §8 stage 2 really uses. Once `sources/tmdb.py` and the rest exist,
-    importing any of them anywhere in the session populates this dict, and `handler` then does
-    exactly what it is built to do: refuse a second handler for `tmdb:detail`. That is the rule
-    working, in a file whose subject is the rule, so the repair is to give these tests the empty
-    registry they were always written against rather than to rename their fakes to kinds no
-    source claims - which would make the refusal test refuse something the driver never selects.
-
-    Restoring the saved copy afterwards is unchanged and is the half that matters to everyone
-    else: `test_sources_adapters.py` asserts the order §8 lists its eleven kinds in, and it must
-    see the registry the adapters built.
-    """
+    """Emptied before the test too: once the adapters are imported, a fake under a real kind would
+    be refused. Restored after, for `test_sources_adapters.py`."""
     saved = dict(base.REGISTRY)
     base.REGISTRY.clear()
     yield
@@ -76,9 +30,6 @@ def _registry_is_restored():
 async def _noop(ctx):
     """A source that does nothing."""
     return base.SourceResult(source="x", kind="x:y", ok=True)
-
-
-# --- the registry --------------------------------------------------------------------------
 
 
 def test_the_registry_holds_what_the_driver_needs_to_decide_with():
@@ -110,12 +61,7 @@ def test_an_explicit_description_wins_over_the_docstring():
 
 
 def test_a_second_handler_for_one_kind_is_refused():
-    """The named change from `mdc/sources/base.py:65`, which overwrites in silence.
-
-    An overwrite here would leave the registry holding eight kinds and one of them running the
-    wrong source, which is a state nothing in the pipeline can report: the driver selects by
-    kind, and the kind is still there.
-    """
+    """The corpus overwrites silently; here the driver selects by kind, so an overwrite is unreportable."""
     @base.handler("rt:page", source="rt")
     async def first(ctx):
         """The real one."""
@@ -131,11 +77,7 @@ def test_a_second_handler_for_one_kind_is_refused():
 
 
 def test_registering_the_same_handler_again_is_not_a_duplicate():
-    """A module reload builds a new function object with the same qualified name.
-
-    That is the one case the refusal must not catch, because it is not two handlers - and
-    `load_all` is idempotent only if it does not.
-    """
+    """A module reload builds a new function with the same qualified name; `load_all` relies on it."""
     async def resolve(ctx):
         """Find the tmdb id."""
         return base.SourceResult(source="tmdb", kind="tmdb:resolve", ok=True)
@@ -161,11 +103,7 @@ def test_available_kinds_filters_by_phase():
 
 
 def test_available_kinds_filters_by_the_capability_a_kind_requires():
-    """Decision 377's capability map, where the corpus read `cfg.enabled_sources`.
-
-    The five keyless sources declare no `requires` and must not be filtered out by a map that
-    says nothing about them - an install with no TMDB key still crawls Wikipedia.
-    """
+    """Keyless sources declare no `requires` and must survive a map that says nothing about them."""
     base.handler("tmdb:detail", source="tmdb", requires="tmdb")(_noop)
     base.handler("omdb:detail", source="omdb", requires="omdb")(_noop)
     base.handler("wikipedia:article", source="wikipedia")(_noop)
@@ -189,13 +127,8 @@ def test_paid_kinds_are_opt_in_by_name():
 
 
 def test_available_kinds_puts_the_cheap_resolve_before_the_scrape():
-    """§8 stage 2's ordering, which "halves guessing" (`spec:366`) - exit criterion measure 11.
-
-    Sorted by name, `metacritic:page` and `rt:page` both precede `wikidata:resolve`, and a
-    driver taking this list in order would scrape a guessed slug for a source whose real one was
-    one request away. The corpus's own priorities are the evidence the ordering is the intent:
-    `wikidata:resolve` 15, `rt:page` 76, `metacritic:page` 77.
-    """
+    """By name, `metacritic:page` and `rt:page` precede `wikidata:resolve`; the corpus's priorities
+    (15, 76, 77) show the intent."""
     base.handler("metacritic:page", source="metacritic", priority=77)(_noop)
     base.handler("rt:page", source="rt", priority=76)(_noop)
     base.handler("wikidata:resolve", source="wikidata", priority=15)(_noop)
@@ -222,9 +155,6 @@ def test_the_source_result_cannot_be_edited_after_the_driver_reads_it():
         result.ok = False
 
 
-# --- json_get ------------------------------------------------------------------------------
-
-
 def test_json_get_answers_the_default_for_every_way_a_path_can_miss():
     """`mdc/sources/base.py:117-129`, ported verbatim: five misses and one answer."""
     assert base.json_get({"a": [{"b": 3}]}, "a", 0, "b") == 3
@@ -245,16 +175,8 @@ def test_json_get_answers_the_default_for_every_way_a_path_can_miss():
     assert base.json_get({"a": 0}, "a", default="miss") == 0
 
 
-# --- load_all ------------------------------------------------------------------------------
-
-
 def test_load_all_imports_the_adapters_and_none_of_the_scaffolding():
-    """Discovery rather than the corpus's hand-written list (`mdc/sources/base.py:103-106`).
-
-    Asserted as a property rather than as a count, because the eight adapters land in the next
-    phase of this milestone and a test that pinned the empty list would have to be edited by the
-    commit that ships the first one.
-    """
+    """A property, not a count: the adapters land later."""
     assert base._is_adapter("tmdb") and base._is_adapter("metacritic")
     for scaffolding in ("base", "credentials", "_htmlutil", "__init__", "__main__"):
         assert not base._is_adapter(scaffolding), scaffolding
@@ -264,9 +186,6 @@ def test_load_all_imports_the_adapters_and_none_of_the_scaffolding():
     assert not set(loaded) & {"base", "credentials", "_htmlutil"}
     # Idempotent: `handler` refuses only a DIFFERENT function for a kind it already holds.
     assert base.load_all() == loaded
-
-
-# --- the markup helpers --------------------------------------------------------------------
 
 
 _RT_SNIPPET = (
@@ -318,8 +237,7 @@ def test_unescape_peels_two_layers_and_no_more():
     """`&amp;#x27;` is one escaping pass too many upstream; a third peel would eat real text."""
     assert _htmlutil.unescape("Hello&amp;#x27;s") == "Hello's"
     assert _htmlutil.unescape("&#x27;quoted&#x27;") == "'quoted'"
-    # Two passes and no more: a thrice-escaped ampersand keeps its last layer rather than
-    # having text that legitimately reads "&amp;" after one decode eaten by a third peel.
+    # Two passes and no more: a third peel would eat text that legitimately reads "&amp;".
     assert _htmlutil.unescape("AT&amp;amp;amp;T") == "AT&amp;T"
     assert _htmlutil.unescape(None) == ""
 
@@ -344,44 +262,17 @@ def test_clean_text_repairs_one_mojibake_run_and_leaves_real_accents_alone():
 
 
 def test_the_per_run_repair_is_why_this_tree_carries_a_second_mojibake_function():
-    """`mdc/sources/_htmlutil.py:185-213` against `importer/reviews.py:76-98`, on one string.
-
-    The corpus's docstring is the measurement that separates them: "Metacritic serves bodies
-    where one byte of the pair was already lost ... and a whole-string attempt fails on those
-    and gives up on the recoverable parts of the same review too". The damaged word below
-    carries exactly that loss - a cp1252 lead byte whose continuation is gone - beside an
-    intact pair. Asserted rather than argued, because a second implementation of a repair
-    is the thing this codebase refuses everywhere else: it is kept only because the inputs
-    and the outcomes genuinely differ.
-    """
+    """The corpus's per-run repair recovers bodies where one byte of a pair was lost, which the
+    whole-string repair gives up on; kept only because inputs and outcomes differ."""
     damaged = "d\u00c3tail caf\u00c3\u00a9"
     assert _htmlutil.fix_mojibake(damaged) == "d\u00c3tail caf\u00e9"
     assert repair_mojibake(damaged) == (damaged, False)
 
 
 def test_a_scraped_review_body_goes_through_both_repairs_and_that_is_the_deliberate_shape():
-    """The composition `_htmlutil`'s rule used to forbid, pinned so a reader cannot delete half.
-
-    `derive/reviews.review_row` runs `importer/reviews.repair_mojibake` over a body `clean_text`
-    has already put through `fix_mojibake`, and the paragraph in `_htmlutil` said the two "must
-    not both run over one string". One of the two had to move. The measurement decided it: over
-    200,000 randomly mangled strings compared against their own ground truth the second pass
-    recovered 8,278, and what is left for it is the DOUBLY-encoded body below, which the per-run
-    pass reduces to a singly-encoded one and has no second pass of its own to finish.
-
-    ASSERTED AT THE SEAM AND NOT ON THE TWO FUNCTIONS, because the claim is about the order a
-    review body really travels in: what the parsers hand `review_row`, and what `review_row`
-    stores. [M5.3 review cycle 1, m53-c1-slug-05]
-
-    THIS DOCSTRING ADDED "AND DAMAGED NONE, BECAUSE BOTH PASSES DECLINE A STRING WITH NO TELL-TALE
-    SHAPE", and the two passes do not test the same shape. The per-run guard wants a marker and a
-    continuation character; the importer's wants the marker alone. So a marker immediately before
-    cp1252's C1 punctuation is left alone by the first and re-encoded by the second, and the last
-    assertion below is that cost, pinned beside what the composition buys - the trade `_htmlutil`'s
-    paragraph measures, synthetic and on the corpus's own Metacritic bytes, and keeps. A change to
-    either guard that closes it reddens here, which is the prompt to re-measure rather than to
-    delete a line. [M5.3 review cycle 2, m53-c2-moji-01]
-    """
+    """`review_row` runs the importer's repair after `clean_text`'s per-run one: the second pass
+    finishes doubly-encoded bodies. The last assertion pins the cost (a marker before C1
+    punctuation); if it reddens, re-measure."""
     truth = "Th\u00e9r\u00e8se"
     doubly = truth.encode("utf-8").decode("cp1252").encode("utf-8").decode("cp1252")
     once = _htmlutil.clean_text(doubly)
@@ -396,17 +287,13 @@ def test_a_scraped_review_body_goes_through_both_repairs_and_that_is_the_deliber
     )
     # And the pass that is already correct is left alone - here.
     assert review_row(ParsedReview(body=truth, source="metacritic"), 1)["body"] == truth
-    # Not everywhere: A-circumflex before an ellipsis is correct text the per-run guard declines,
-    # and the whole-string pass turns it into the invisible control U+0085.
+    # Â before an ellipsis is correct text; the whole-string pass turns it into U+0085.
     marker_then_ellipsis = _htmlutil.clean_text("Â…")
     assert marker_then_ellipsis == "Â…", "the per-run guard is expected to decline it"
     stored = review_row(ParsedReview(body=marker_then_ellipsis, source="metacritic"), 1)["body"]
     assert stored == "\x85", (
         "the composition's recorded cost is gone; re-measure it and correct _htmlutil's paragraph"
     )
-
-
-# --- the credential read -------------------------------------------------------------------
 
 
 class _Conn:
@@ -422,12 +309,7 @@ class _Conn:
 
 
 async def test_a_credential_that_is_not_configured_is_none_rather_than_an_exception():
-    """Decision 334: an absent credential is a note under that source's name, not a park.
-
-    Through the real read path (`secrets.get_connector_secrets` answers `({}, {})` for a
-    connector with no row), so this also holds that the module asks the shipped reader rather
-    than a query of its own.
-    """
+    """Decision 334: an absent credential is a note, not a park. Through the shipped reader."""
     conn = _Conn()
     assert await credentials.tmdb_auth(conn) is None
     assert await credentials.omdb_key(conn) is None
@@ -482,12 +364,7 @@ async def test_a_configured_connector_with_an_empty_key_is_still_none(monkeypatc
 
 
 async def test_a_secret_that_will_not_open_is_none_and_is_logged(monkeypatch, caplog):
-    """M4.7 dd03: a restored dump whose `.env` did not travel with it.
-
-    `registry.load_jellyfin` degrades rather than raising, and the same answer is owed here:
-    a drain that died on this would take the five keyless sources down with the three keyed
-    ones, and the repair is an admin gesture rather than a retry.
-    """
+    """A drain that died on this would take the keyless sources down too; the repair is an admin's."""
     async def fake(conn, name):
         raise secrets.SecretsUnreadable("the stored secret does not open", "dek-1")
 
@@ -503,18 +380,12 @@ async def test_a_secret_that_will_not_open_is_none_and_is_logged(monkeypatch, ca
     assert "connector tmdb secrets are unreadable" in logged[0]
 
 
-# --- the static guards ---------------------------------------------------------------------
-
-
 _PACKAGE = Path(base.__file__).resolve().parent
 
-# What a module the parsers depend on may not reach. `httpx` is the client `acquire/fetch.py`
-# wraps and `spielplan.acquire.fetch` is the wrapper; either one turns "re-parsing is free
-# forever" into "re-parsing may cost another crawl" (decision 373, `spec:398`).
+# Either turns "re-parsing is free forever" into another crawl (decision 373).
 TRANSPORT = ("httpx", "spielplan.acquire.fetch")
 
-# The modules the PARSERS import. `credentials.py` is not here: it reads the connector store and
-# is a dependency of the adapters, not of the parse.
+# The modules the PARSERS import; `credentials.py` is an adapter dependency.
 GUARDED = ("base.py", "_htmlutil.py")
 
 
@@ -528,13 +399,7 @@ def _absolute(node: ast.ImportFrom, package: str) -> str:
 
 
 def _imported_modules(source: str, *, package: str = "spielplan.sources") -> set[str]:
-    """Every module `source` imports, by absolute name, plus each `from x import y` as `x.y`.
-
-    The second half is the one that matters here: `from spielplan.acquire import fetch` records
-    only `spielplan.acquire` under `test_layering_guards.py`'s helper, which that file's header
-    names as a known limit ("The guard reads modules, not names"). For a two-name forbidden list
-    the limit is the likeliest violation, so both spellings are recorded.
-    """
+    """Also `from x import y` as `x.y`: the layering helper records only `x`."""
     modules: set[str] = set()
     for node in ast.walk(ast.parse(source)):
         if isinstance(node, ast.Import):
@@ -555,12 +420,7 @@ def _transport(source: str) -> list[str]:
 
 
 def test_the_registry_and_the_markup_helpers_import_no_transport():
-    """Decision 373's surviving half of M5.1's guard, one package down.
-
-    `mdc/parse/titles.py` imports `ids` and `_htmlutil` and no transport at all, and that is the
-    whole of "All fetched bytes land in the app's own raw store, so re-parsing is free forever"
-    (`spec:398`). The adapters fetch; what they hand the parsers is bytes.
-    """
+    """Decision 373: the adapters fetch; the parsers get bytes."""
     for name in GUARDED:
         source = (_PACKAGE / name).read_text(encoding="utf-8")
         imports = _imported_modules(source)
@@ -601,12 +461,7 @@ def _db_calls(source: str) -> list[str]:
 
 
 def test_the_credential_read_issues_no_sql_of_its_own():
-    """Decision 377: it asks the shipped reader, which `registry.load_jellyfin` also asks.
-
-    A second `SELECT ... FROM connector_config` here would be a second answer to "what is
-    configured" the day §6.6's admin cards start writing these rows - and it would be the answer
-    that never learned about the DEK.
-    """
+    """Decision 377: a second SELECT here would answer "what is configured" without the DEK."""
     source = Path(credentials.__file__).resolve().read_text(encoding="utf-8")
     assert "get_connector_secrets" in source, "the guard is reading the wrong file"
     assert _db_calls(source) == [], f"sources/credentials.py queries directly: {_db_calls(source)}"

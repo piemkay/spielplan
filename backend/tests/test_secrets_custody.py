@@ -1,23 +1,5 @@
-"""Secrets custody when the key is wrong, and the two executors that repair it.
-
-Spec v2.1 §2 (Configuration, Backups), §3.1, §3.3, §14.3, §14 risk 3; decision 181;
-docs/milestones/M4.7-plan.md §2 findings 1-4.
-
-The defect these tests close was invisible from every layer the suite already had. A wrong or
-lost `SECRETS_KEY` boots green: the lifespan completes (the VAPID public half is read without
-unwrapping), `/api/health` says `ok: true`, login and `/me` succeed — and then the seen-state
-write, the verdict, the not-seen, the finish prompt and both admin connector routes answer 500,
-because `cryptography`'s `InvalidTag` is caught nowhere and `app.py`'s only handler is for
-`asyncpg.PostgresError`. Worse, `PUT /api/admin/connectors/jellyfin` is on that list, so the one
-route that could have re-entered the key dies of the problem it exists to fix.
-
-**These tests drive the routes.** The M0 row that was supposed to cover this proved its property
-with a bare asyncpg connection against a database nobody restores into, and shipped both failure
-modes past itself. A test of `load_jellyfin` would do the same thing again: the assertion that
-matters is that a member's tap answers 200 over HTTP, and the only thing that can say so is HTTP.
-
-Skipped without TEST_DATABASE_URL; see tests/conftest.py.
-"""
+"""A wrong `SECRETS_KEY` boots green and then 500s the member writes; these tests drive the routes,
+because only HTTP can say that a member's tap answers 200."""
 
 from __future__ import annotations
 
@@ -41,28 +23,19 @@ ADMIN_PASSWORD = "an-admin-password"
 JELLYFIN_URL = "http://jellyfin.test"
 JELLYFIN_KEY = "JF-ADMIN-KEY-UNSCOPED"
 
-# The operator regenerated `SECRETS_KEY`, or restored a dump without its .env. Both are the same
-# fact to the app, and both are over the config floor `core/config` now enforces.
+# A regenerated key, or a dump restored without its .env: the same fact to the app.
 OTHER_KEY = "a-different-secrets-key-not-a-real-one"
 
 
 def _use_key(monkeypatch, value: str) -> None:
-    """Point the process at a different SECRETS_KEY, the way editing .env and restarting does.
-
-    `settings()` is `lru_cache`d, so the clear is not optional: without it every later read
-    would still hold the key the fixture set.
-    """
+    """`settings()` is `lru_cache`d, so the clear is not optional."""
     monkeypatch.setenv("SECRETS_KEY", value)
     settings.cache_clear()
 
 
 @contextlib.asynccontextmanager
 async def _boot(monkeypatch, pg_url, tmp_path):
-    """One whole application lifespan against the test database — a container start.
-
-    The `app` fixture cannot serve here: half of these assertions are about what a *second*
-    process does, or about a boot under a key the first boot did not have.
-    """
+    """A whole lifespan: these assertions are about a second process, or a boot under another key."""
     monkeypatch.setenv("DATABASE_URL", pg_url)
     monkeypatch.setenv("DATA_DIR", str(tmp_path))
     settings.cache_clear()
@@ -76,20 +49,15 @@ async def _boot(monkeypatch, pg_url, tmp_path):
 
 @pytest.fixture
 async def custody(secrets_key, db, app):
-    """A configured household: an admin, twenty owned films, a sealed Jellyfin credential.
-
-    `secrets_key` precedes `app` deliberately — the lifespan mints the DEK, so a key set after
-    it is a key the first boot never saw and the whole scenario is the wrong one.
-    """
+    """`secrets_key` precedes `app`: the lifespan mints the DEK, so a later key was never the install's."""
     client = app()
     created = await client.post(
         "/api/setup/admin", json={"name": "patrick", "password": ADMIN_PASSWORD}
     )
     assert created.status_code == 201, created.text
     user_id = (await client.get("/api/auth/me")).json()["id"]
-    # Decision 117 gates §6.7's rail behind a per-user toggle, and the rail line is where the
-    # Rate surface reports why a push did not happen. Without this the reason is redacted out
-    # of the response and the assertion below would be vacuous.
+    # Decision 117 gates the rail line where Rate says why a push did not happen; without it the
+    # assertion below would be vacuous.
     await db.execute("UPDATE app_user SET show_model = true WHERE id = $1", user_id)
     await db.execute(
         """
@@ -108,22 +76,15 @@ async def custody(secrets_key, db, app):
         "VALUES ('jellyfin', 2, $1, true) RETURNING id",
         user_id,
     )
-    # §6.1's Mix alternates sweep and battle; sweep throughout is what lets one session answer
-    # both a verdict and a not-seen, which are two of the four member writes under test.
+    # Sweep throughout, so one session answers both a verdict and a not-seen.
     assert (await client.post("/api/rate/session", json={"mode": "sweep"})).status_code == 200
     return {"client": client, "user_id": user_id, "event_id": event_id}
 
 
 @pytest.fixture
 async def no_connector_yet(secrets_key, db, app):
-    """An install that has a DEK row and has never configured a connector.
-
-    The state every wrong-key test above was blind to. `custody` seals a Jellyfin credential
-    first, so `load_jellyfin` always had a ciphertext to fail on and the repair was always armed
-    by `secrets_unreadable`; here first boot mints the DEK for the VAPID pair alone
-    (`push/keys.ensure_keypair`) and `connector_config` is empty — which is every household that
-    has not opened the Connectors card yet, including every fresh install.
-    """
+    """A DEK minted for the VAPID pair alone and no connector yet: every fresh install, and the state
+    where `load_jellyfin` has no ciphertext to fail on."""
     client = app()
     created = await client.post(
         "/api/setup/admin", json={"name": "patrick", "password": ADMIN_PASSWORD}
@@ -134,19 +95,10 @@ async def no_connector_yet(secrets_key, db, app):
     return client
 
 
-# --- dd03: the wrong key degrades, and never 500s -------------------------------------------
-
-
 async def test_every_member_write_still_commits_under_a_changed_secrets_key(
     custody, db, monkeypatch
 ):
-    """§3.3: "the app must work when Jellyfin is down" — and a sealed credential that will not
-    open is the same thing one layer down. §3.1 keeps a half-configured boot legal.
-
-    All four writes the finding names, over HTTP: 200, the row committed, `synced` false, and a
-    reason naming the variable the admin has to fix rather than "Jellyfin not configured", which
-    would be a lie about an install whose Jellyfin is configured.
-    """
+    """The reason must name the variable, not "Jellyfin not configured": Jellyfin IS configured."""
     client, user_id, event_id = custody["client"], custody["user_id"], custody["event_id"]
     _use_key(monkeypatch, OTHER_KEY)
 
@@ -182,12 +134,7 @@ async def test_every_member_write_still_commits_under_a_changed_secrets_key(
 async def test_no_admin_connector_route_answers_500_under_a_changed_secrets_key(
     custody, monkeypatch
 ):
-    """The six admin reads the finding lists, plus the three that reach Jellyfin.
-
-    409 is a legitimate answer for the three that need a client — "Jellyfin is not configured"
-    is what `_client` already says when there is nothing to talk to. 500 is not: it is the
-    unhandled `InvalidTag` reaching the transport with `{"detail": "database error"}` on it.
-    """
+    """409 is legitimate for the three that need a client; 500 is the unhandled `InvalidTag`."""
     client = custody["client"]
     _use_key(monkeypatch, OTHER_KEY)
 
@@ -199,8 +146,7 @@ async def test_no_admin_connector_route_answers_500_under_a_changed_secrets_key(
     body = got.json()
     assert body["secrets_unreadable"] is True
     assert body["configured"] is False and body["has_api_key"] is False
-    # The URL survives: the admin has to see which server the household is pointed at in order
-    # to know that re-entering the key is all that is missing.
+    # The URL survives: the admin must see which server to know only the key is missing.
     assert body["url"] == JELLYFIN_URL
 
     for method, path in (
@@ -216,14 +162,8 @@ async def test_no_admin_connector_route_answers_500_under_a_changed_secrets_key(
 async def test_the_put_that_re_enters_the_api_key_succeeds_by_sealing_under_a_fresh_dek(
     custody, db, monkeypatch
 ):
-    """The recovery path, and the reason it did not exist.
-
-    `save_jellyfin` begins by reading the current row, and `ensure_dek` unwraps the active DEK
-    before it can seal anything — so on the install that needs it most the repair route failed
-    with exactly the error it was there to clear. Retiring the unreadable row is what lets a
-    fresh one be minted; the retired row stays, so every ciphertext naming it still opens if the
-    correct .env ever comes back.
-    """
+    """`ensure_dek` unwraps the active DEK before sealing, so the repair retires the unreadable row
+    and mints a fresh one; the retired row stays for when the right .env returns."""
     client = custody["client"]
     _use_key(monkeypatch, OTHER_KEY)
 
@@ -250,18 +190,8 @@ async def test_the_put_that_re_enters_the_api_key_succeeds_by_sealing_under_a_fr
 async def test_the_first_connector_save_under_an_unreadable_dek_is_not_a_500(
     no_connector_yet, db, monkeypatch
 ):
-    """The same repair, on the install that has nothing sealed yet — where it did not exist.
-
-    The repair was derived from `load_jellyfin` reporting `secrets_unreadable`, which it can only
-    do for a row that already holds a ciphertext. On an install whose DEK was minted for the
-    VAPID pair alone, `save_jellyfin` saw a perfectly ordinary unconfigured connector, called
-    `ensure_dek`, and the `SecretsUnreadable` went out through the route with no handler on it at
-    all — not even the JSON `{"detail": ...}` shape, because `app.py`'s handlers cover
-    `PostgresError` and `HTTPException`. The two facts the admin sees on the way in are asserted
-    too, because they are what makes the 500 baffling rather than merely wrong: the Connectors
-    card says "not configured" while the System card says custody is broken.
-    [M4.7 dd03; docs/milestones/M4.7-plan.md section 2 finding 1]
-    """
+    """With nothing sealed yet `load_jellyfin` reports no failure, so the repair must belong to the
+    DEK, not to a connector's ciphertext."""
     client = no_connector_yet
     _use_key(monkeypatch, OTHER_KEY)
 
@@ -290,10 +220,7 @@ async def test_the_first_connector_save_under_an_unreadable_dek_is_not_a_500(
 async def test_the_setup_wizards_connector_route_seals_under_a_fresh_dek_too(
     no_connector_yet, db, monkeypatch
 ):
-    """`POST /api/setup/connectors` reaches `put_connector_secrets` on the same page of the
-    wizard, takes `AdminUser` and is not gated on setup being incomplete — so it is the second
-    front door onto the state above, and an admin who lands on it gets the same 500 unless the
-    repair belongs to the DEK rather than to one connector's stored ciphertext."""
+    """`POST /api/setup/connectors` is a second front door onto the same state."""
     _use_key(monkeypatch, OTHER_KEY)
 
     posted = await no_connector_yet.post(
@@ -308,15 +235,8 @@ async def test_the_setup_wizards_connector_route_seals_under_a_fresh_dek_too(
 async def test_a_seeded_connector_does_not_take_the_boot_down_under_an_unreadable_dek(
     secrets_key, db, pg_url, tmp_path, monkeypatch, caplog
 ):
-    """§3.1 keeps a half-configured boot legal, and the env seed runs before anything else can.
-
-    `seed_from_env` writes any connector with no row yet, unguarded, and `app.py`'s lifespan
-    calls it first — so on an install whose DEK will not open the exception escaped the lifespan
-    and the container never started. M4.7 is what made it reachable: before step 8 none of the
-    six seed variables reached a container at all, and `x-app-env` now forwards every one. The
-    operator's repair is `docker compose exec backend spielplan-secrets reset`, which needs a
-    container that is up. [M4.7 dd03; docs/milestones/M4.7-plan.md section 2 finding 2]
-    """
+    """The env seed runs first in the lifespan, so an unreadable DEK must not stop the container:
+    `spielplan-secrets reset` needs one that is up."""
     await sec.ensure_dek(db)
     monkeypatch.setenv("TMDB_API_KEY", "a-tmdb-key-from-the-env-file")
     _use_key(monkeypatch, OTHER_KEY)
@@ -342,13 +262,8 @@ async def test_a_seeded_connector_does_not_take_the_boot_down_under_an_unreadabl
 async def test_a_url_only_save_under_a_wrong_key_does_not_destroy_the_ciphertext(
     secrets_key, custody, db, monkeypatch
 ):
-    """The admin corrects the address and has not found the old .env yet.
-
-    `put_connector_secrets(..., secrets=None)` means "this connector has no secret" and NULLs
-    both sealed columns — correct when the caller read the secret and carried it forward, and a
-    silent deletion when the caller could not read it at all. The ciphertext is unreadable, not
-    worthless: the right key may still be on a USB stick.
-    """
+    """`secrets=None` NULLs both sealed columns; an unreadable ciphertext is not worthless, since the
+    right key may still turn up."""
     client = custody["client"]
     before = await db.fetchval(
         "SELECT secrets_encrypted FROM connector_config WHERE name = $1", registry.JELLYFIN
@@ -376,18 +291,10 @@ async def test_a_url_only_save_under_a_wrong_key_does_not_destroy_the_ciphertext
 async def test_moving_the_server_under_a_wrong_key_drops_the_ciphertext_it_cannot_read(
     secrets_key, custody, db, monkeypatch
 ):
-    """The other half of the save above, and the one case where preserving is the wrong answer.
-
-    §14.3 binds the API key and §7.3's per-user tokens to the server that issued them, so a
-    changed origin drops both — but the preservation this milestone added for an unreadable DEK
-    ran first and kept them, which meant the household's whole credential set survived a save
-    that said it had discarded it. Restoring the original .env then handed the old server's
-    admin-equivalent key, in a header, to whatever host had been typed in. One gesture reaches
-    it: the Connectors card prefills the URL and posts the key field empty, so correcting the
-    address while custody is broken is exactly this request.
-    """
+    """A changed origin must drop the credentials (§14.3), even while the DEK is unreadable:
+    otherwise the old key is sent to the new host once the .env returns."""
     client, user_id = custody["client"], custody["user_id"]
-    # A token too, because §7.3's credentials travel the same column and the same code path.
+    # A token too: §7.3's credentials travel the same column and code path.
     await registry.save_jellyfin(db, user_tokens={str(user_id): "OLD-SERVER-USER-TOKEN"})
     _use_key(monkeypatch, OTHER_KEY)
 
@@ -401,9 +308,7 @@ async def test_moving_the_server_under_a_wrong_key_drops_the_ciphertext_it_canno
         "SELECT secrets_encrypted FROM connector_config WHERE name = $1", registry.JELLYFIN
     ) is None
 
-    # The .env the card and the README tell the admin to look for comes back. Nothing returns
-    # with it, which is the point: those credentials were dead to this install the moment the
-    # origin changed.
+    # Nothing returns with the original .env: the credentials died when the origin changed.
     _use_key(monkeypatch, secrets_key)
     cfg = await registry.load_jellyfin(db)
     assert cfg.url == "http://new-jellyfin.test:8096"
@@ -414,17 +319,8 @@ async def test_moving_the_server_under_a_wrong_key_drops_the_ciphertext_it_canno
 async def test_relinking_under_a_wrong_key_is_refused_rather_than_keeping_a_stale_token(
     secrets_key, custody, db, monkeypatch
 ):
-    """§7.3's token belongs to one Jellyfin identity, and an unreadable DEK cannot enumerate it.
-
-    `seen.forget_token` decides whether there is anything to drop by reading `cfg.user_tokens`,
-    which `load_jellyfin` reports empty for exactly this install — so the no-password branch of
-    the link route answered 200, left the previous identity's token sealed, and re-bound it to
-    the new `jellyfin_user_id` as soon as the right .env came back: `seen.linked_users` pairs the
-    stored mapping with `token_for` and never reads `link_state`. Refused rather than cleared,
-    because that ciphertext also holds the admin key and every other member's token, unreadable
-    only until that .env returns (§2) — and the PUT that re-enters the key clears the tokens as
-    part of the repair, so the refusal has a cure the admin is already being sent to.
-    """
+    """An unreadable DEK cannot enumerate the old token, so relinking is refused rather than cleared;
+    the key-re-entering PUT already clears tokens."""
     client, user_id = custody["client"], custody["user_id"]
     linked = await client.post(
         f"/api/admin/users/{user_id}/jellyfin", json={"jellyfin_user_id": "jf-user-A"}
@@ -452,13 +348,8 @@ async def test_relinking_under_a_wrong_key_is_refused_rather_than_keeping_a_stal
 async def test_a_dek_row_without_a_vapid_row_still_boots_under_a_changed_key(
     secrets_key, db, pg_url, tmp_path, monkeypatch
 ):
-    """The branch that did not merely 500 — it stopped the container from starting.
-
-    `ensure_keypair` catches `RuntimeError` for §2's no-SECRETS_KEY refusal, and the bare
-    `InvalidTag` sailed straight through it, out of the lifespan, with a traceback that never
-    named `SECRETS_KEY`. `SecretsUnreadable` subclassing `RuntimeError` is what fixes it, which
-    is why that base class is load-bearing rather than decorative.
-    """
+    """`ensure_keypair` catches `RuntimeError`, so `SecretsUnreadable` must subclass it or the
+    container never starts."""
     await sec.ensure_dek(db)
     assert await db.fetchval("SELECT count(*) FROM app_setting") == 0, "no VAPID row yet"
     _use_key(monkeypatch, OTHER_KEY)
@@ -475,17 +366,8 @@ async def test_a_dek_row_without_a_vapid_row_still_boots_under_a_changed_key(
     )
 
 
-# --- sec-10: a ciphertext belongs to its row, and there is one DEK row ----------------------
-
-
 async def test_a_ciphertext_moved_to_another_row_does_not_open(secrets_key, db):
-    """§14 risk 3: a leaked Jellyfin key is admin-equivalent on the whole media server.
-
-    The DEK wrap has always used associated data; `seal`/`open_sealed` passed None, so a
-    ciphertext was bound to nothing at all. Copying `jellyfin`'s two columns onto the `tmdb` row
-    made `get_connector_secrets('tmdb')` hand back the Jellyfin admin key with every CHECK
-    constraint satisfied.
-    """
+    """§14 risk 3: without associated data a ciphertext copied to another row opened there."""
     await sec.put_connector_secrets(
         db, registry.JELLYFIN, {"url": JELLYFIN_URL}, {"api_key": JELLYFIN_KEY}
     )
@@ -509,18 +391,8 @@ async def test_a_ciphertext_moved_to_another_row_does_not_open(secrets_key, db):
 async def test_a_row_sealed_before_the_binding_still_opens_and_is_bound_by_that_read(
     secrets_key, db
 ):
-    """The migration-era fallback in `open_sealed`, and the write that makes it migration-era.
-
-    Every install predating M4.7 holds ciphertexts sealed with no associated data. They must open
-    on the next read — a binding that stranded them would turn a security improvement into the
-    very data loss it is defending against — and they must not stay unbound afterwards. The
-    fallback's comment said they are "re-sealed by the next save", but the only writers of a
-    connector row are `seed_from_env` (first boot only), the setup route and an admin save, so a
-    household that never reopens the Connectors card would carry an unbound ciphertext for ever
-    and the branch could never be deleted. The re-seal happens on the read that opens it, where
-    the DEK is already in hand, exactly as `push/keys._rebind_to_its_row` does for the VAPID
-    pair. [M4.7 sec-10; docs/milestones/M4.7-plan.md section 2 finding 5]
-    """
+    """Pre-M4.7 rows (no associated data) must still open, and are re-sealed on that read: a household
+    that never reopens the Connectors card would otherwise stay unbound for ever."""
     key_id, dek = await sec.ensure_dek(db)
     unbound = sec.seal(dek, {"api_key": "sealed-before-m4.7"})
     await db.execute(
@@ -544,16 +416,7 @@ async def test_a_row_sealed_before_the_binding_still_opens_and_is_bound_by_that_
 async def test_a_pre_m4_7_row_that_has_been_read_once_no_longer_opens_in_another_row(
     secrets_key, db
 ):
-    """sec-10's reproduction, run against the rows M4.7 is actually protecting.
-
-    The move above is asserted over two ciphertexts that `put_connector_secrets` wrote — which
-    is to say, over rows sealed *after* the binding existed. Every row on a real install predates
-    it, carries no associated data, and opens in whatever row it is copied into: `open_sealed`'s
-    fallback said it "cannot weaken the binding above", and that was true only of blobs the fix
-    itself had written. The re-seal is what closes it, and this is the assertion that says so —
-    one ordinary read of the row, then the same move, and now it fails.
-    [M4.7 sec-10; docs/milestones/M4.7-plan.md section 2 finding 5]
-    """
+    """Rows sealed before the binding open anywhere until one read re-seals them; then the move fails."""
     key_id, dek = await sec.ensure_dek(db)
     await db.execute(
         "INSERT INTO connector_config (name, config, secrets_encrypted, secrets_key_id) "
@@ -582,9 +445,7 @@ async def test_a_pre_m4_7_row_that_has_been_read_once_no_longer_opens_in_another
 
 
 async def test_concurrent_first_boots_leave_exactly_one_active_dek_row(secrets_key, db, pg_url):
-    """§2 says "the one DEK row". `ensure_dek` was SELECT-then-INSERT with no lock, and three
-    concurrent calls on separate connections produced two active rows — harmless for reads, and
-    fatal for a rotation executor that has to know which row it is re-wrapping."""
+    """Three concurrent first boots produced two active rows; a rotation must know which to re-wrap."""
     conns = [await asyncpg.connect(pg_url) for _ in range(3)]
     try:
         results = await asyncio.gather(*(sec.ensure_dek(c) for c in conns))
@@ -602,12 +463,7 @@ async def test_concurrent_first_boots_leave_exactly_one_active_dek_row(secrets_k
 async def test_first_boot_creates_exactly_one_active_random_256_bit_key(
     secrets_key, app, db
 ):
-    """The M0 row's headline property, asserted at last against a real first boot.
-
-    Three of its four named tests are pure-function tests of `_wrap`/`_unwrap` in a file with no
-    `db` fixture, and the fourth inserts a one-byte fake key — so "exactly one random 256-bit
-    key" was permanently green and could not see sec-10's race at all.
-    """
+    """Against a real first boot, not a pure function or a one-byte fake key."""
     rows = await db.fetch("SELECT key_id, wrapped_dek, retired_at FROM data_encryption_key")
     assert len(rows) == 1
     assert rows[0]["retired_at"] is None
@@ -618,8 +474,7 @@ async def test_first_boot_creates_exactly_one_active_random_256_bit_key(
 async def test_a_second_lifespan_adopts_the_first_boots_key_id(
     secrets_key, db, pg_url, tmp_path, monkeypatch
 ):
-    """A restart must not mint a second key: every ciphertext names a `key_id`, and a second
-    active row is the state 0017's partial unique index exists to make impossible."""
+    """A second active row is what 0017's partial unique index forbids."""
     async with _boot(monkeypatch, pg_url, tmp_path):
         pass
     first = await db.fetchval("SELECT key_id FROM data_encryption_key")
@@ -631,30 +486,16 @@ async def test_a_second_lifespan_adopts_the_first_boots_key_id(
     assert await db.fetchval("SELECT key_id FROM data_encryption_key") == first
 
 
-# --- spec-08: rotation has an executor ------------------------------------------------------
-
-
 async def _run_cli(*argv: str) -> int:
-    """`spielplan-secrets` as an operator runs it, argparse and `asyncio.run` included.
-
-    In a thread because `main` calls `asyncio.run`, which refuses to nest inside the loop pytest
-    is already running. Driving `main` rather than its internals is the point: the coverage row
-    names the command, and a test of the helper would leave the argument parsing and the exit
-    codes — the parts an operator actually meets — unasserted.
-    """
+    """In a thread because `main` calls `asyncio.run`; through `main` so argument parsing and exit
+    codes are asserted too."""
     return await asyncio.to_thread(secrets_cli.main, list(argv))
 
 
 async def test_rewrap_moves_the_wrapping_and_leaves_every_ciphertext_untouched(
     secrets_key, db, pg_url, monkeypatch, capsys
 ):
-    """§2: "rotating SECRETS_KEY is an explicit admin action that re-wraps the one DEK row."
-
-    The whole promise is that the DEK does not change, so no ciphertext has to be rewritten and
-    no `key_id` advances. Until now the only implementation was a pure function whose sole caller
-    was a unit test, and an operator who followed `.env.example` and edited the variable landed
-    in dd03 instead.
-    """
+    """The DEK does not change, so no ciphertext is rewritten and no `key_id` advances."""
     await sec.put_connector_secrets(
         db, registry.JELLYFIN, {"url": JELLYFIN_URL}, {"api_key": JELLYFIN_KEY}
     )
@@ -679,8 +520,7 @@ async def test_rewrap_moves_the_wrapping_and_leaves_every_ciphertext_untouched(
     assert bytes(after["secrets_encrypted"]) == bytes(before["secrets_encrypted"])
     assert bytes(after["wrapped_dek"]) != bytes(before["wrapped_dek"])
 
-    # The old key no longer opens it, and the new one does — with the plaintext unchanged, which
-    # is the half `platform-key-rotation-semantics` has always claimed and never asserted.
+    # The old key no longer opens it, the new one does, and the plaintext is unchanged.
     with pytest.raises(sec.SecretsUnreadable):
         await sec.get_connector_secrets(db, registry.JELLYFIN)
     _use_key(monkeypatch, OTHER_KEY)
@@ -691,13 +531,8 @@ async def test_rewrap_moves_the_wrapping_and_leaves_every_ciphertext_untouched(
 async def test_rewrap_refuses_when_more_than_one_row_is_un_retired(
     secrets_key, db, pg_url, monkeypatch, capsys
 ):
-    """The guard for the install that lost sec-10's race before 0017 existed.
-
-    The index is dropped here on purpose: on a database that has applied 0017 this state cannot
-    be created, and the only install that can reach the executor holding two active rows is one
-    where the migration itself refused to apply. Guessing which row is current is a data decision
-    a command must not take on the operator's behalf.
-    """
+    """The index is dropped on purpose: only an install where 0017 refused to apply can reach this.
+    Guessing which row is current is the operator's call."""
     await sec.ensure_dek(db)
     await db.execute("DROP INDEX data_encryption_key_one_active")
     await db.execute(
@@ -715,16 +550,8 @@ async def test_rewrap_refuses_when_more_than_one_row_is_un_retired(
 async def test_rewrap_refuses_a_new_key_the_app_would_refuse_to_boot_with(
     secrets_key, db, pg_url, monkeypatch, capsys
 ):
-    """The one executor that WRITES a SECRETS_KEY must hold the floor the validator holds.
-
-    `cs-44` put a 32-character floor on SECRETS_KEY in `core/config`, and this command wrote a
-    new wrapping under anything at all and then told the operator to "put the new value in .env
-    and restart" — so following its own success message left an app that refuses to start and a
-    CLI that refuses to run, both with a `ValidationError`, and a DEK now wrapped under the key
-    neither will accept. Same floor, same message, same generator one-liner: a refusal an
-    operator meets once is worth more than two that contradict each other.
-    [M4.7 cs-44, spec-08; docs/milestones/M4.7-plan.md section 2 finding 4]
-    """
+    """The same 32-character floor as `core/config` (cs-44): a key the app would refuse must not be
+    written."""
     await sec.ensure_dek(db)
     before = bytes(await db.fetchval("SELECT wrapped_dek FROM data_encryption_key"))
     monkeypatch.setenv("DATABASE_URL", pg_url)
@@ -740,26 +567,17 @@ async def test_rewrap_refuses_a_new_key_the_app_would_refuse_to_boot_with(
 async def test_rewrap_still_accepts_a_short_old_key_because_that_is_the_install_it_rescues(
     db, pg_url, monkeypatch, capsys
 ):
-    """The floor is on the value being written, not on the value being replaced.
-
-    An install that ran M4.6 with `SECRETS_KEY=x` is exactly the install `cs-44`'s floor is
-    about, and after the upgrade its app will not boot. Its way out is to generate a real key,
-    put it in `.env` so the CLI can construct `Settings` at all, and rewrap from the short one —
-    so refusing `--old-key` on length would close the only door out of the state the floor was
-    added to end. A wrong `--old-key` is already refused by the unwrap, with the message that
-    names SECRETS_KEY. [M4.7 cs-44]
-    """
+    """The floor is on the value being written: `--old-key` may be short, since that is the install
+    being rescued."""
     short = "x"
     dek = b"\x02" * 32
-    # Wrapped by hand rather than by `ensure_dek`, because no process can mint this row any more:
-    # `Settings` refuses the key that wrapped it, which is precisely the install being rescued.
+    # Wrapped by hand: `Settings` refuses the short key that wrapped it.
     await db.execute(
         "INSERT INTO data_encryption_key (key_id, wrapped_dek) VALUES ('a-pre-floor-row', $1)",
         sec._wrap(dek, short),
     )
 
-    # What the operator does before running the command: the real key goes into the environment
-    # first, because `spielplan-secrets` constructs `Settings` before it opens a connection.
+    # The real key goes into the environment first: `spielplan-secrets` builds `Settings` first.
     _use_key(monkeypatch, OTHER_KEY)
     monkeypatch.setenv("DATABASE_URL", pg_url)
     settings.cache_clear()
@@ -774,12 +592,7 @@ async def test_rewrap_still_accepts_a_short_old_key_because_that_is_the_install_
 async def test_reset_retires_what_it_cannot_unwrap_and_says_what_was_lost(
     custody, db, pg_url, monkeypatch, capsys
 ):
-    """The lossy repair, and the only way back on an install whose key is simply gone.
-
-    `rewrap` needs the old key. An operator who regenerated `SECRETS_KEY`, or who restored a dump
-    without its .env, does not have it — and without `reset` the sealed columns keep pointing at
-    a key nothing can open, which is a permanent 500 in every code path that reads them.
-    """
+    """`rewrap` needs the old key; without `reset` a lost key is a permanent 500 on every read."""
     _use_key(monkeypatch, OTHER_KEY)
     monkeypatch.setenv("DATABASE_URL", pg_url)
     settings.cache_clear()
@@ -797,16 +610,13 @@ async def test_reset_retires_what_it_cannot_unwrap_and_says_what_was_lost(
         "WHERE name = $1",
         registry.JELLYFIN,
     ) is True
-    # The whole row for the VAPID pair, not two NULLed columns: the public half left behind is
-    # not a smaller pair, it is a key the subscribe screen keeps offering while nothing can sign
-    # for it — and `ensure_keypair` short-circuited on exactly that column, so the row that
-    # survived this repair blocked every later boot from minting the replacement the message
-    # above promises. See the boot test below for the other half of the same fix.
+    # The whole VAPID row goes: a public half left behind is offered to browsers while nothing can
+    # sign for it.
     assert await db.fetchval(
         "SELECT count(*) FROM app_setting WHERE key = 'push.vapid'"
     ) == 0
 
-    # And the card is fillable again: the next save mints a fresh DEK and seals under it.
+    # The next save mints a fresh DEK and seals under it.
     put = await custody["client"].put(
         "/api/admin/connectors/jellyfin",
         json={"url": JELLYFIN_URL, "api_key": "re-entered-after-the-reset"},
@@ -819,22 +629,8 @@ async def test_reset_retires_what_it_cannot_unwrap_and_says_what_was_lost(
 async def test_reset_reaches_the_rows_the_connectors_card_repair_retired(
     custody, db, pg_url, monkeypatch, capsys
 ):
-    """The two repairs in the order the UI offers them, which is where `reset` became a no-op.
-
-    The card's repair retires the unreadable row and mints a fresh one, so "which *active* row
-    will not open" answers no from that moment on while every other ciphertext — a second
-    connector, `app_setting/push.vapid` — is still sealed under the retired one. `reset` asked
-    that question and `api/admin`'s System card asked "which key does any sealed row name that
-    will not open", so the operator who took the repair the Connectors card offers first and then
-    followed its own advice to run `reset` was told "custody is intact" beside a System card
-    still reporting `unreadable: true`. Nothing could then bring web-push back: `/api/push/state`
-    keeps handing browsers an application server key the household cannot sign for, which is the
-    failure `push/keys`' module docstring is written against.
-
-    One question, in `core.secrets`, is the fix — so the card and the command cannot answer
-    differently, and a third caller cannot invent a fourth version.
-    [M4.7 dd03, ops-11; docs/milestones/M4.7-plan.md section 2 finding 3]
-    """
+    """After the card's repair the active row opens but older rows still name the retired key; one
+    question in `core.secrets` keeps `reset` and the System card from disagreeing."""
     client = custody["client"]
     await sec.put_connector_secrets(db, "tmdb", {}, {"api_key": "a-tmdb-key"})
     retired = await sec.active_key_id(db)
@@ -858,8 +654,7 @@ async def test_reset_reaches_the_rows_the_connectors_card_repair_retired(
 
     assert (await client.get("/api/admin/system")).json()["secrets"]["unreadable"] is False
     assert await push_keys.public_key(db) is None, "the pair is gone, so the next boot mints one"
-    # And the credential the card's repair sealed is untouched: `reset` clears what named the
-    # rows it cannot open, and the fresh row is not one of them.
+    # `reset` clears only what names unopenable rows; the fresh credential is not one.
     _config, secret = await sec.get_connector_secrets(db, registry.JELLYFIN)
     assert secret["api_key"] == "a-freshly-issued-jellyfin-key"
 
@@ -867,8 +662,7 @@ async def test_reset_reaches_the_rows_the_connectors_card_repair_retired(
 async def test_reset_touches_nothing_when_custody_is_intact(
     custody, db, pg_url, monkeypatch, capsys
 ):
-    """A destructive command run by mistake must be a no-op, not a wipe. The read that decides
-    is the same unwrap every other caller does, so "intact" cannot mean something else here."""
+    """A destructive command run by mistake must be a no-op; "intact" is the same unwrap as elsewhere."""
     monkeypatch.setenv("DATABASE_URL", pg_url)
     settings.cache_clear()
 
@@ -881,22 +675,10 @@ async def test_reset_touches_nothing_when_custody_is_intact(
     assert secret["api_key"] == JELLYFIN_KEY
 
 
-# --- and the repair leaves an install a boot can finish -------------------------------------
-
-
 async def test_a_boot_after_reset_mints_the_replacement_keypair_it_promised(
     secrets_key, db, pg_url, tmp_path, monkeypatch, capsys
 ):
-    """`reset` says web-push comes back; before this, nothing could ever bring it back.
-
-    The repair cleared the *private* half of `app_setting/push.vapid` while `ensure_keypair`
-    short-circuited on the *public* one, so every later boot found a row, minted nothing, and
-    `load()` answered None for ever — with `/api/push/state` still handing browsers a key the
-    server could no longer sign for, which is the one failure `push/keys`' module docstring is
-    written against. The only way out was `DELETE FROM app_setting` by hand, named in no
-    document. Reproduced exactly here: install with a pair, change the key, reset, reboot.
-    [M4.7 dd03; decision 181]
-    """
+    """`ensure_keypair` short-circuited on the public half, so a reset install never minted a new pair."""
     stale = await push_keys.ensure_keypair(db)
     assert stale is not None
     _use_key(monkeypatch, OTHER_KEY)
@@ -921,14 +703,8 @@ async def test_a_boot_after_reset_mints_the_replacement_keypair_it_promised(
 async def test_a_keypair_row_whose_private_half_is_gone_is_not_offered_and_is_replaced(
     secrets_key, db, pg_url, tmp_path, monkeypatch
 ):
-    """The same repair, asserted against the column rather than against `reset`'s SQL.
-
-    `reset` is not the only way a row can lose its sealed half — a partial restore or an
-    operator's own UPDATE reaches the same state — so the boot decides on the half that matters
-    rather than trusting one command to have removed the whole row. Both readers of the row have
-    to agree while it is in that state: `load` has always called it no pair, and `public_key`
-    calling it a pair is what let a phone subscribe against a dead key.
-    """
+    """The boot decides on the private half: a partial restore reaches this state too, and `load`
+    and `public_key` must agree."""
     stale = await push_keys.ensure_keypair(db)
     await db.execute(
         "UPDATE app_setting SET secret = NULL, secret_key_id = NULL WHERE key = $1",
@@ -949,15 +725,8 @@ async def test_a_keypair_row_whose_private_half_is_gone_is_not_offered_and_is_re
 async def test_a_vapid_row_sealed_before_the_binding_is_re_sealed_by_the_next_boot(
     secrets_key, db
 ):
-    """`open_sealed`'s migration-era branch is only temporary if something re-seals the row.
-
-    Its comment promises the row is "re-sealed with it by the next save through
-    `put_connector_secrets` / `ensure_keypair`" and says to delete the branch "once no install
-    predates M4.7". `ensure_keypair` had no save path for an existing row at all, so for the
-    VAPID pair the promise was false for ever and the branch could never be removed. The row is
-    rewound here through the app's own writer rather than hand-built, so the test cannot drift
-    from the shape a pre-M4.7 install actually holds. [M4.7 sec-10; decision 181]
-    """
+    """`ensure_keypair` must re-seal a pre-binding row, or the fallback branch can never be removed.
+    Rewound through the app's own writer so it matches a real pre-M4.7 row."""
     public = await push_keys.ensure_keypair(db)
     key_id, dek = await sec.ensure_dek(db)
     aad = sec.aad_for("app_setting", push_keys.SETTING_KEY)
@@ -978,8 +747,6 @@ async def test_a_vapid_row_sealed_before_the_binding_is_re_sealed_by_the_next_bo
     ))
     assert sec.open_sealed(dek, stored, aad) == opened, "the same private half, still readable"
     with pytest.raises(InvalidTag):
-        # The binding, asserted from the other side: after the re-seal the ciphertext no longer
-        # opens with no associated data, so a blob moved to another row fails (sec-10) and the
-        # fallback branch has one fewer install to keep it alive.
+        # After the re-seal the blob no longer opens without associated data (sec-10).
         sec.open_sealed(dek, stored, None)
     assert (await push_keys.load(db)).public_key == public

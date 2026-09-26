@@ -1,22 +1,4 @@
-"""§6.3's board and its three badges. Spec v2.1 §6.3, §5.2, §4.3.
-
-No database. The board is a pure function of the fit's output — `s`, `sigma`, the learned
-cutpoints, the tier set, and whatever the person last dragged — and every rule §6.3 states
-about it is a rule about that function. Pushing these through Postgres would test the same
-arithmetic through a socket.
-
-Three of §6.3's sentences are load-bearing here and each has a way of going quietly wrong:
-
-  * "learned cutpoints, **not percentile cuts**". A percentile implementation reproduces the
-    measured shape on every board, which looks *more* right than the truth on a lopsided one.
-    The two are told apart by their invariances, not by their output on a healthy board.
-  * "a straddling title shows 'A/S' **and becomes queue-eligible**" — one predicate doing two
-    jobs. The prototype badged at sigma > .13 and queued at sigma > .09, so a title at .11 was
-    queue-eligible and unbadged (proposal 157).
-  * "if the model disagrees strongly, the title's badge shows the tension **rather than
-    snapping back**". Snapping back is the failure; a board that quietly re-sorts a dropped
-    title is the exact thing the clause forbids.
-"""
+"""No database: the board is a pure function of the fit's output."""
 
 from __future__ import annotations
 
@@ -34,8 +16,7 @@ TIER_SET = ("F", "D", "C", "B", "A", "A+", "S")
 
 
 def items(values, *, sigma=0.01, assigned=None, names=None):
-    """A board from bare `s` values. σ is tiny by default so nothing straddles unless a test
-    asks for it — a straddle badge appearing in a test about neighbourhoods is noise."""
+    """σ is tiny by default so nothing straddles unless a test asks for it."""
     assigned = assigned or {}
     return [
         board.Item(
@@ -50,13 +31,7 @@ def items(values, *, sigma=0.01, assigned=None, names=None):
 
 
 def reach_sigma(reach: float) -> float:
-    """The σ whose ±z·σ interval reaches exactly `reach`, at whatever `straddle_z` ships.
-
-    A fixture whose point is "this interval stretches one tier over" is making a claim about the
-    REACH, and the reach is z·σ — so spelling it as a bare σ pins it to one value of a constant
-    §4.3 says is tunable. Decision 214 retunes `straddle_z` from 1.0 to 0.15 and three tests here
-    stopped straddling at all, which is a fixture breaking rather than a rule changing.
-    """
+    """Spelled as a reach, not a bare σ: `straddle_z` is tunable (§4.3), and decision 214 moved it."""
     return reach / DEFAULTS.straddle_z
 
 
@@ -69,19 +44,9 @@ def by_id(tiers) -> dict[int, board.Entry]:
     return {e.title_id: e for t in tiers for e in t.entries}
 
 
-# --- §6.3: learned cutpoints, not percentile cuts ---------------------------------------------
-
-
 def test_an_unrated_tier_set_starts_at_the_measured_quantile_shape():
-    """§6.3: "initialised from DNA_MODEL §4.5's measured quantile shape F 3 / D 7 / C 15 /
-    B 25 / A 25 / A+ 17 / S 8 %, then learned".
-
-    The literal percentages, written out. Comparing `initial_cutpoints` against
-    `MEASURED_TIER_SHARES` proves only that logit and sigmoid round-trip — the M3 review
-    mutation-proved it by swapping S and A+ in the constant and watching all 71 pure tests stay
-    green. The authored shape is a measurement from another project, so the number has to
-    appear on this side of the assertion too.
-    """
+    """The literal percentages: comparing against `MEASURED_TIER_SHARES` only proves that logit and
+    sigmoid round-trip."""
     authored = (0.03, 0.07, 0.15, 0.25, 0.25, 0.17, 0.08)
     assert authored == MEASURED_TIER_SHARES, "§6.3's shape, F first"
     assert sum(authored) == pytest.approx(1.0)
@@ -89,34 +54,25 @@ def test_an_unrated_tier_set_starts_at_the_measured_quantile_shape():
     cuts = model.initial_cutpoints(7)
     implied = np.diff(np.concatenate([[0.0], 1.0 / (1.0 + np.exp(-cuts)), [1.0]]))
     assert np.allclose(implied, authored, atol=1e-9)
-    # …and the cutpoints themselves, which is what every downstream tier actually reads.
     assert np.allclose(
         cuts, [-3.4761, -2.1972, -1.0986, 0.0, 1.0986, 2.4423], atol=1e-4
     )
 
 
 def test_the_tier_a_title_shows_comes_from_the_cutpoints_it_was_given():
-    """The distinguishing invariance. Percentile cuts are computed *from* the population, so
-    shifting the boundaries cannot move anybody; learned cutpoints live on the same scale as
-    `s`, so shifting them past the whole population empties every tier but one.
-
-    A percentile implementation passes every "the shape looks right" assertion and fails this
-    one, which is why this is the test and not the shape."""
+    """Percentile cuts cannot move when boundaries shift; learned ones empty every tier but one."""
     values = np.linspace(-1.0, 1.0, 40)
     cuts = model.initial_cutpoints(7)
 
     here = board.build(items(values), cuts=cuts, tier_set=TIER_SET, hp=DEFAULTS)
     assert sum(len(t.entries) for t in here if t.entries) > 1, "the board spans several tiers"
 
-    # Same population, boundaries moved above everything. Percentiles would not notice.
     shifted = board.build(items(values), cuts=cuts + 50.0, tier_set=TIER_SET, hp=DEFAULTS)
     assert all(e.tier == 0 for e in by_id(shifted).values())
 
 
 def test_a_lopsided_board_keeps_its_learned_boundaries():
-    """§6.3's shape is an initialisation and a prior mean, not a rendering rule. A person who
-    has dragged everything to the two ends has a board that *is* lopsided, and a renderer that
-    re-derives the measured shares every time would hide exactly that."""
+    """The measured shape is an initialisation, not a rendering rule."""
     values = np.concatenate([np.full(18, -3.0), np.full(18, 3.0)])
     tiers = board.build(items(values), cuts=model.initial_cutpoints(7), tier_set=TIER_SET,
                         hp=DEFAULTS)
@@ -129,8 +85,7 @@ def test_a_lopsided_board_keeps_its_learned_boundaries():
 
 
 def test_the_board_renders_best_first_and_keeps_empty_tiers():
-    """§6.3 lists the tiers ascending (F … S); the board renders them best-first, and an empty
-    tier stays on screen because it is still a drop target."""
+    """An empty tier stays on screen: it is still a drop target."""
     tiers = board.build(items([-3.0, 3.0]), cuts=model.initial_cutpoints(7),
                         tier_set=TIER_SET, hp=DEFAULTS)
     assert [t.label for t in tiers] == ["S", "A+", "A", "B", "C", "D", "F"]
@@ -139,19 +94,13 @@ def test_the_board_renders_best_first_and_keeps_empty_tiers():
 
 
 def test_within_a_tier_the_board_is_ordered_by_the_ledger():
-    """Proposal 78's point restated as a rule the neighbourhood badge depends on: a
-    neighbourhood claim over an ordering nobody renders is unverifiable."""
     tiers = board.build(items([0.10, 0.30, 0.20]), cuts=np.array([-9.0, 9.0]),
                         tier_set=("low", "mid", "high"), hp=DEFAULTS)
     mid = next(t for t in tiers if t.label == "mid")
     assert [e.title_id for e in mid.entries] == [2, 3, 1]
 
 
-# --- §6.3: "Badge shows tier + neighbourhood" -------------------------------------------------
-
-
 def test_the_badge_names_the_two_neighbours_inside_its_own_tier():
-    """§6.3's own example: "A — between Heat and Prisoners"."""
     names = {1: "Heat", 2: "Drive", 3: "Prisoners"}
     tiers = board.build(
         items([0.30, 0.20, 0.10], names=names),
@@ -184,8 +133,6 @@ def test_a_title_alone_in_its_tier_claims_no_neighbours():
 
 
 def test_the_badge_never_names_the_title_it_is_attached_to():
-    """The off-by-one this guards is the same family as proposal 76's "S/S": an index clamp
-    that returns the title's own position at the end of a list."""
     values = np.linspace(-1.0, 1.0, 30)
     tiers = board.build(items(values), cuts=model.initial_cutpoints(7), tier_set=TIER_SET,
                         hp=DEFAULTS)
@@ -195,21 +142,15 @@ def test_the_badge_never_names_the_title_it_is_attached_to():
 
 
 def test_a_neighbour_is_never_borrowed_from_another_tier():
-    """The badge already names the tier, so a neighbour from a different one contradicts the
-    letter beside it."""
     tiers = board.build(items([1.0, -1.0]), cuts=np.array([0.0]), tier_set=("F", "S"),
                         hp=DEFAULTS)
     for entry in by_id(tiers).values():
         assert entry.above is None and entry.below is None
 
 
-# --- §6.3: the straddle badge IS queue eligibility --------------------------------------------
-
-
 @pytest.mark.parametrize("seed", range(6))
 def test_the_badged_set_and_the_queue_pool_are_the_same_set(seed):
-    """§6.3: "a straddling title shows \"A/S\" and becomes queue-eligible" — one predicate,
-    two jobs. The prototype had two thresholds and therefore two sets (proposal 157)."""
+    """One predicate, two jobs; the prototype's two thresholds made two sets (proposal 157)."""
     from spielplan.rank import queue
 
     rng = np.random.default_rng(seed)
@@ -227,13 +168,8 @@ def test_the_badged_set_and_the_queue_pool_are_the_same_set(seed):
     assert badged == eligible
     assert badged, "the fixture has to actually produce straddlers or this proves nothing"
 
-    # Again with every title dropped somewhere, because `board.build` renders the person's drop
-    # and `queue.eligible` never sees one. This half is a guard and not a regression test, and it
-    # says so rather than claiming finding 14: `board.straddles` forwards `item.s` and
-    # `item.sigma` and never reads `assigned_tier`, so `Entry.straddle` is the same value on a
-    # dropped board as on an undropped one and this line passes on both sides of the repair. What
-    # it would catch is a later `board.build` that clamped the REACH to the rendered tier, which
-    # is a different edit from the one that mispaired the chip.
+    # A guard, not a regression test: `board.straddles` never reads `assigned_tier`, so this passes
+    # either side of finding 14. It catches a reach clamped to the rendered tier.
     dropped = [
         dataclasses.replace(item, assigned_tier=int(rng.integers(0, 7)))
         for item in pool
@@ -242,14 +178,7 @@ def test_the_badged_set_and_the_queue_pool_are_the_same_set(seed):
     badged_after_drops = {e.title_id for e in entries.values() if e.straddle is not None}
     assert badged_after_drops == eligible
 
-    # And the CHIP, which is the half finding 14 actually broke and the half §6.3 states the
-    # identity about: "a straddling title shows \"A/S\" AND becomes queue-eligible" is a sentence
-    # about what the person sees. Measured against the pre-M4.10 expression
-    # (`labels[index]/labels[reached]`, suppressed on `reached == index`, where `index` is the
-    # rendered tier) over these six seeds: 9 chips where 13 were owed, 6 where 9, 7 where 16, 6
-    # where 16, 5 where 11, 5 where 7 -- at worst ten of sixteen queue-eligible titles wearing
-    # nothing. The two mirror tests each pin one (s, sigma, assigned) triple; this pins the set.
-    # [M4.10 finding 14; cycle 1, M410-REV4]
+    # The CHIP is the half finding 14 broke: §6.3's identity is about what the person sees.
     chipped = {e.title_id for e in entries.values() if e.straddle_badge is not None}
     assert chipped == {
         e.title_id for e in entries.values() if e.straddle is not None and e.tension is None
@@ -257,8 +186,7 @@ def test_the_badged_set_and_the_queue_pool_are_the_same_set(seed):
 
 
 def test_moving_the_straddle_threshold_moves_both_sets_together():
-    """§4.3 / proposal 157: the threshold is a bundle constant, not a literal in a renderer.
-    If either side hard-coded it, the two sets would come apart here."""
+    """The threshold is a bundle constant (§4.3); a hard-coded side would split the two sets."""
     from spielplan.rank import queue
 
     rng = np.random.default_rng(11)
@@ -279,30 +207,15 @@ def test_moving_the_straddle_threshold_moves_both_sets_together():
 
 
 def test_a_fitted_boards_straddle_badge_is_a_minority_of_the_board():
-    """Decision 214's half of §6.3: what "a straddling title" has to single out.
-
-    Every other test here builds `s` and `sigma` by hand, so none of them can see the number
-    that decides whether the badge means anything — the ratio between the posterior spread the
-    fit actually produces and the width of the tiers it learns. On the household fitted below
-    that is a median sigma of 0.87 against tier widths of 0.75 to 1.08, so at the old
-    `straddle_z` of 1.0 the interval is nearly two tiers wide and 120 of 120 titles badge: "a
-    straddling title shows 'A/S'" names the whole board, "and becomes queue-eligible" says
-    nothing, and §6.3's 70% boundary arm draws from exactly the pool its 20% exploration arm
-    does. A threshold with no discrimination is the same defect as no threshold.
-
-    Asserted as a minority rather than at a number: 0.15 measures 31 of 120 here, and the value is
-    §4.3's to retune offline (proposal 157) — what must not move is that the badge picks titles
-    out rather than covering them. The Tonight side of the same decision is
-    `test_tonight_round.py::test_the_badge_threshold_and_the_rounds_boundary_cannot_be_one_constant`.
-    """
+    """Hand-built `s`/`sigma` cannot show whether the badge discriminates; a fitted board can (at
+    `straddle_z` 1.0 every title badged). A minority, not a number: §4.3 retunes the value."""
     from spielplan.rank import queue
 
     rng = np.random.default_rng(5)
     n = 120
     embeddings = rng.normal(size=(n, 64)) / 8.0
     truth = 0.3 + (embeddings @ (rng.normal(size=64) / 8.0)) + rng.normal(scale=0.25, size=n)
-    # A household that has rated everything once and dropped three quarters of it into tiers,
-    # which is a maturer board than the release ships and therefore the generous case.
+    # A maturer board than the release ships, so the generous case.
     verdicts = np.searchsorted(np.array([-0.4, 0.4]), truth, side="right")
     dropped = rng.choice(n, size=90, replace=False)
     tier_cuts = np.quantile(truth, np.linspace(0, 1, 8)[1:-1])
@@ -343,20 +256,15 @@ def test_a_fitted_boards_straddle_badge_is_a_minority_of_the_board():
         f"{len(badged)} of {n} titles straddle at straddle_z={DEFAULTS.straddle_z}; the badge "
         "has to single titles out, and a threshold that badges the board singles out nothing"
     )
-    # Proposal 157's identity, at the value that makes it load-bearing: the queue's 70% arm draws
-    # from this set and its 20% arm from the whole pool, so they are different arms only while
-    # the set is a proper subset.
+    # The queue's 70% arm draws from this set and its 20% arm from all, so it must be a proper subset.
     eligible = {i.title_id for i in queue.eligible(fitted, cuts=fit.cuts, hp=DEFAULTS)}
     assert eligible == badged
     assert eligible < {i.title_id for i in fitted}
 
 
 def test_the_top_and_bottom_tiers_never_straddle_into_themselves():
-    """Proposal 76: the prototype rendered "S/S" because it clamped an index instead of asking
-    which tier the posterior reached. At the ends there is only one direction to reach in, so
-    the badge names the tier on that side — "S/A+", "F/D" — and never the title's own."""
+    """At the ends there is one direction to reach, so the badge names that side, never its own tier."""
     cuts = model.initial_cutpoints(7)
-    # Just inside the top and bottom tiers, with an interval that reaches exactly one tier over.
     tiers = board.build(
         items([float(cuts[-1]) + 0.15, float(cuts[0]) - 0.15], sigma=reach_sigma(0.4)),
         cuts=cuts, tier_set=TIER_SET, hp=DEFAULTS,
@@ -368,19 +276,11 @@ def test_the_top_and_bottom_tiers_never_straddle_into_themselves():
 
 
 def test_a_straddle_badge_never_repeats_the_titles_own_tier():
-    """The invariant behind proposal 76, asserted where the clamp bug would live: a posterior
-    so wide it spans the whole scale still has to name a *different* tier or none at all.
-
-    §6.3's badge is "tier / the adjacent tier the posterior also reaches", so both halves come
-    from the posterior: the first is the tier the MODEL places the title in and the second the
-    neighbour it reaches. The rendered tier is the person's drop (§6.3's "stays in the assigned
-    tier") and says nothing about what the model believes, so leading with it pairs two levels
-    the interval does not span — which is finding 14, and is what this line used to assert."""
+    """Both halves of the badge come from the posterior; the rendered tier is the person's drop."""
     cuts = model.initial_cutpoints(7)
     rng = np.random.default_rng(7)
     pool = items(rng.normal(scale=2.0, size=120), sigma=rng.uniform(0.01, 4.0, size=120))
-    # Assigned tiers too: the "S/S" family the test is named for is an index taken from the
-    # wrong place, and with every tier model-derived there is no wrong place to take it from.
+    # Assigned tiers too, so an index taken from the wrong place would show.
     rng2 = np.random.default_rng(8)
     assigned = {i + 1: int(rng2.integers(0, len(TIER_SET))) for i in range(120)}
     for board_pool in (pool, items(rng.normal(scale=2.0, size=120), sigma=1.2, assigned=assigned)):
@@ -397,17 +297,7 @@ def test_a_straddle_badge_never_repeats_the_titles_own_tier():
 
 
 def test_the_straddle_chip_is_built_from_the_posteriors_own_placement():
-    """Finding 14: the chip is a statement about the posterior, so both halves are the
-    posterior's.
-
-    Measured case: s = 0.9 with an interval reaching 1.0 sits in A and reaches A+, dropped into
-    A+ (the σ that produces that reach is `straddle_z`'s to decide, hence `reach_sigma`). The
-    chip read
-    "A+/B" — the tier the person chose, against the tier the old `straddle` named two levels
-    under the model's own — describing a span the interval does not have and omitting the level
-    it occupies. The drop still decides where the row renders (§6.3: "stays in the assigned
-    tier"); it decides nothing about what the model believes.
-    """
+    """The drop decides where the row renders and nothing about the chip (finding 14)."""
     cuts = model.initial_cutpoints(7)
     entry = by_id(board.build(
         items([0.9], sigma=reach_sigma(1.0), assigned={1: 5}),
@@ -420,14 +310,7 @@ def test_the_straddle_chip_is_built_from_the_posteriors_own_placement():
 
 
 def test_a_queue_eligible_title_dropped_into_the_tier_it_reaches_still_wears_a_chip():
-    """Finding 14's mirror, and the half that breaks §6.3's one-sentence identity.
-
-    The suppression used to be `reached != rendered`, so dropping a straddler into the very
-    tier the model said it reached removed the chip while `straddles()` went on returning
-    non-None — a queue-eligible title wearing no badge, which is exactly the split proposal 157
-    exists to prevent. Suppression belongs to `reached == model_tier`, which the adjacency fix
-    makes unreachable, so the guard is a statement rather than a branch anybody hits.
-    """
+    """Dropping a straddler into the tier it reaches must keep the chip: the queue still counts it."""
     cuts = model.initial_cutpoints(7)
     entry = by_id(board.build(
         items([0.9], sigma=reach_sigma(1.0), assigned={1: 3}),
@@ -438,12 +321,8 @@ def test_a_queue_eligible_title_dropped_into_the_tier_it_reaches_still_wears_a_c
     assert entry.straddle_badge == "A/A+"
 
 
-# --- §6.3: tension, not snapping back ----------------------------------------------------------
-
-
 def test_a_tier_outside_the_eighty_percent_interval_is_tension():
-    """Proposal 71's operational reading of §6.3's "disagrees strongly": the tier the person
-    assigned and the posterior's 80% credible interval are disjoint."""
+    """Proposal 71's "disagrees strongly": the assigned tier and the 80% interval are disjoint."""
     tiers = board.build(
         items([0.0], sigma=0.01, assigned={1: 6}),
         cuts=model.initial_cutpoints(7), tier_set=TIER_SET, hp=DEFAULTS,
@@ -454,10 +333,8 @@ def test_a_tier_outside_the_eighty_percent_interval_is_tension():
 
 
 def test_a_one_level_disagreement_inside_the_interval_is_not_tension():
-    """§6.3's rule is "disagrees *strongly*". A neighbouring tier the posterior still reaches
-    is a difference, not a disagreement — badging it would badge most of the board."""
+    """A neighbouring tier the posterior reaches is not tension; badging it would badge most rows."""
     cuts = model.initial_cutpoints(7)
-    # Sit just below a boundary with a σ wide enough to cross it, and assign the tier above.
     s = float(cuts[3]) - 0.05
     below = model.tier_of(np.array([s]), cuts)[0]
     tiers = board.build(
@@ -470,33 +347,21 @@ def test_a_one_level_disagreement_inside_the_interval_is_not_tension():
 
 
 def test_a_tension_badge_names_both_tiers():
-    """§6.7's register: the rail exists so "drag-and-drop is data, not override" is legible,
-    and a badge that says only "disagrees" is not."""
-    # s = -1.5 sits inside C's band (the cutpoints are logits of the measured shares), so the
-    # two tiers in the line are genuinely different and the copy is checked against real ones.
+    # s = -1.5 sits inside C's band, so the two tiers in the line are genuinely different.
     tiers = board.build(
         items([-1.5], sigma=0.01, assigned={1: 6}, names={1: "Drive"}),
         cuts=model.initial_cutpoints(7), tier_set=TIER_SET, hp=DEFAULTS,
     )
     entry = by_id(tiers)[1]
     assert entry.model_tier == 2 and entry.tier == 6
-    # Both tiers, in the member register (decision 486): "the ledger" was the model's noun on a
-    # chip every member reads, and what disagrees with the drop is the rest of their answers.
+    # Member register (decision 486): no model nouns on a chip every member reads.
     assert entry.tension == "you put it in S — your other answers still point to C"
     assert "ledger" not in entry.tension
 
 
 def test_the_why_line_speaks_the_member_register_and_keeps_decision_209s_window():
-    """The board's why-line, as `board.why_line` words it (decision 486).
-
-    "{n} rated · learned cutpoints, refit nightly" was false twice on the first household: the
-    cutpoints learn from `tier_edit` alone and nobody had moved a title, so they were the prior
-    shape exactly; and the board moves on every answer (§6.3, "incremental immediately"). The
-    line now says what is true of the board and nothing about the model's machinery - and decision
-    209's window keeps its own words, with no number and no duration.
-
-    Decision 508 gives the line what the letters mean, which the "typical split" it said before
-    was not: liked from A up, fine in B, disliked from C down."""
+    """The cutpoints learn from `tier_edit` alone, so "learned cutpoints, refit nightly" was false.
+    Decision 209's window keeps its own words; decision 508 adds what the letters mean."""
     assert board.why_line(
         rated=0, compared=0, placed_by_you=0, fitting=True, tier_set=TIER_SET
     ) == "tiers are still being fitted"
@@ -514,8 +379,6 @@ def test_the_why_line_speaks_the_member_register_and_keeps_decision_209s_window(
 
 
 def test_the_board_never_moves_a_title_out_of_the_tier_it_was_dropped_in():
-    """§6.3: "shows the tension rather than **snapping back**". Across the whole range of
-    disagreement — none, mild, extreme — the rendered tier is the assigned one."""
     cuts = model.initial_cutpoints(7)
     for assigned_tier in range(len(TIER_SET)):
         tiers = board.build(
@@ -529,8 +392,6 @@ def test_the_board_never_moves_a_title_out_of_the_tier_it_was_dropped_in():
 
 
 def test_an_untouched_title_is_placed_by_the_model():
-    """The other half of the same rule: with no `tier_edit` there is nothing to override, so
-    the ledger decides and `assigned_tier` is absent rather than invented."""
     cuts = model.initial_cutpoints(7)
     entry = by_id(board.build(items([0.42]), cuts=cuts, tier_set=TIER_SET, hp=DEFAULTS))[1]
     assert entry.assigned_tier is None
@@ -539,8 +400,7 @@ def test_an_untouched_title_is_placed_by_the_model():
 
 
 def test_the_tension_threshold_comes_from_the_bundle():
-    """§4.3 owns the constant. A wider credible interval must make tension strictly rarer;
-    a hard-coded 80% would not move at all."""
+    """A wider credible interval must make tension strictly rarer; a hard-coded 80% would not move."""
     cuts = model.initial_cutpoints(7)
     rng = np.random.default_rng(4)
     values = rng.normal(size=50)
@@ -555,19 +415,9 @@ def test_the_tension_threshold_comes_from_the_bundle():
     assert counts[0] > counts[1] > counts[2]
 
 
-# --- decision 11's leftovers: a tier edit that outlived its tier set ---------------------------
-
-
 def test_a_tier_edit_above_the_new_tier_set_renders_instead_of_crashing():
-    """Decision 11 keeps `tier_edit` rows across a change in K, so the board is guaranteed to
-    meet a level that no longer exists — and it is the *only* consumer that indexes the
-    cutpoint array directly.
-
-    `ledger.observations.load_observations` already clamps this case and logs that it did, so
-    the fit survives a shrink; the board did not, and `_band(6, cuts)` walked off a two-element
-    array. The whole surface 500ed for that person until they re-dropped every affected title.
-    Found by the M3 review, reproduced here first.
-    """
+    """Decision 11 keeps `tier_edit` rows across a K change, and the board indexes the cutpoint
+    array directly, so it must clamp."""
     cuts = model.initial_cutpoints(3)
     tiers = board.build(
         items([0.1], sigma=0.3, assigned={1: 6}),
@@ -583,9 +433,7 @@ def test_a_tier_edit_above_the_new_tier_set_renders_instead_of_crashing():
 
 @pytest.mark.parametrize("assigned", [-3, -1, 7, 40])
 def test_no_out_of_range_assignment_can_take_the_board_down(assigned):
-    """Every level outside 0..K-1, from both ends. `tier_edit.tier` is a `smallint` with no
-    CHECK against the tier set (§4.2 makes it "an index into the user's configured tier set",
-    and 0005 cannot express that), so the board has to survive anything the column can hold."""
+    """`tier_edit.tier` has no CHECK against the tier set, so survive anything a smallint holds."""
     cuts = model.initial_cutpoints(7)
     tiers = board.build(
         items([0.0], sigma=0.4, assigned={1: assigned}),
@@ -597,11 +445,8 @@ def test_no_out_of_range_assignment_can_take_the_board_down(assigned):
 
 
 def test_a_rated_title_renders_inside_the_tiers_its_verdict_names():
-    """Round-2 finding R1 and decision 508: La La Land, disliked, rendered in A, between two films
-    the person called fine. The board holds a rated title inside its verdict's tiers - disliked in
-    F/D/C, fine in B, liked in A/A+/S - orders it by `s` inside them, and names as its straddle
-    the next tier toward where the fit put it, so the chip and the queue stay one predicate. A
-    title the person dropped is theirs to place, and the hold leaves it alone."""
+    """Decision 508: a rated title stays inside its verdict's tiers (disliked F/D/C, fine B, liked
+    A/A+/S), ordered by `s`; its straddle names the next tier toward the fit. Drops are left alone."""
     cuts = model.initial_cutpoints(7)                     # C/B at -1.10, B/A at 0
     rows = [
         board.Item(title_id=1, name="La La Land", s=0.5, sigma=0.01, verdict=0),
@@ -622,7 +467,6 @@ def test_a_rated_title_renders_inside_the_tiers_its_verdict_names():
 
 
 def test_the_why_line_names_the_verdict_tiers_in_the_persons_own_letters():
-    """Decision 508's rule, spelled from whatever tier set the person saved (decision 11)."""
     assert board.why_line(
         rated=3, compared=0, placed_by_you=0, fitting=False, tier_set=("meh", "ok", "great")
     ) == "3 rated · 0 compared · liked in great, fine in ok, disliked in meh"

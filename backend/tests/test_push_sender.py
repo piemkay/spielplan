@@ -1,28 +1,5 @@
-"""Sending a web push, against a real database. Spec v2.1 §2, §4.2, §6 preamble, §7.3, §12 (M4).
-
-M2 stored subscriptions; §12's M4 row ("push join") and §7.3 ("push arrives with the M4
-stack") owe the delivery. Four things go wrong here quietly rather than loudly, and each one
-has its register below:
-
-  * **A regenerated keypair breaks every subscription in silence.** The browser bound its
-    subscription to the key it saw; a second pair means the push service keeps answering 201
-    and the phone never rings again. §2 puts the pair in the database, sealed like every other
-    secret, and first boot is the only place it may be minted.
-  * **A DER signature is a valid signature that no push service accepts.** `cryptography`
-    produces DER; JWS wants raw r||s (RFC 7515 A.3). The failure is a 401 from the push
-    service, in production, on somebody's Friday night.
-  * **Pruning on the wrong status code deletes a live phone.** §4.2 names 404 and 410 and no
-    others: everything else is a push service having a bad minute.
-  * **The endpoint is a bearer capability.** Anyone holding it can push to that device, and
-    `auth` decrypts the messages. Neither may reach a log line or a returned value.
-
-The transport is a fake push service, injected the way `connectors/jellyfin.py` injects one:
-the real request building runs — encryption, signing, headers — and only the socket is absent.
-The bodies are decrypted here with the subscription's own private key, so what is asserted is
-that a *browser* could read them, not that we can read our own output.
-
-Skipped without TEST_DATABASE_URL; see tests/conftest.py.
-"""
+"""The transport is a fake push service: encryption, signing and headers run for real, and
+bodies are decrypted with the subscription's own private key, as a browser would."""
 
 from __future__ import annotations
 
@@ -52,13 +29,8 @@ from spielplan.push.send import device_handle
 PAYLOAD = {"kind": "session-invite", "room": "GOLD-42"}
 
 
-# --- the fake push service --------------------------------------------------------------------
-
-
 @dataclass
 class Device:
-    """One browser's subscription, with the private half a real phone would keep."""
-
     id: int
     endpoint: str
     p256dh: str
@@ -67,12 +39,7 @@ class Device:
 
 
 class FakePushService(httpx.AsyncBaseTransport):
-    """A push service is an HTTPS POST that answers a status code; that is all this is.
-
-    `answers` and `fails` are keyed by endpoint so one call can be told to succeed for one
-    device and fail for another — which is the only way to assert that a prune took exactly
-    one row.
-    """
+    """`answers` and `fails` are keyed by endpoint, so a prune can be shown to take exactly one row."""
 
     def __init__(self) -> None:
         self.answers: dict[str, int] = {}
@@ -100,7 +67,6 @@ async def _member(db, name: str) -> int:
 
 
 async def _device(db, user_id: int, endpoint: str) -> Device:
-    """Register a device the way `POST /api/push/subscribe` would, with real browser keys."""
     private = ec.generate_private_key(ec.SECP256R1())
     p256dh = keys.b64(
         private.public_key().public_bytes(Encoding.X962, PublicFormat.UncompressedPoint)
@@ -130,7 +96,6 @@ class Household:
 
 @pytest.fixture
 async def household(db, secrets_key) -> Household:
-    """§4.2's two members, one of them with two devices, and the household's VAPID pair."""
     await keys.ensure_keypair(db)
     jenny = await _member(db, "jenny")
     patrick = await _member(db, "patrick")
@@ -184,29 +149,17 @@ async def _count(db) -> int:
 
 
 def _compact(payload: dict) -> bytes:
-    """The bytes `send_to_user` encrypts: its own `json.dumps(..., separators=(",", ":"))`.
-
-    Spelled here so the record-size assertions below compare against the plaintext the sender
-    actually framed, not against a length this test chose.
-    """
+    """The sender's own compact framing, so size assertions compare against the real plaintext."""
     return json.dumps(payload, separators=(",", ":")).encode("utf-8")
 
 
 def _payload_of(size: int) -> dict:
-    """A payload whose compact JSON encoding is exactly `size` bytes."""
     envelope = len(_compact({"pad": ""}))
     return {"pad": "x" * (size - envelope)}
 
 
-# --- §2: the keypair is minted once, at first boot, and sealed like every other secret ---------
-
-
 async def test_first_boot_generates_one_keypair_and_a_restart_reuses_it(db, secrets_key):
-    """§2: "A web-push VAPID keypair is generated at first boot and stored the same way."
-
-    A second pair would invalidate every subscription registered against the first while every
-    layer keeps reporting success — the household simply stops being notified.
-    """
+    """A second pair would silently invalidate every subscription made against the first."""
     first = await keys.ensure_keypair(db)
     second = await keys.ensure_keypair(db)
 
@@ -218,9 +171,6 @@ async def test_first_boot_generates_one_keypair_and_a_restart_reuses_it(db, secr
 
 
 async def test_the_private_half_is_sealed_under_the_dek_and_carries_its_key_id(db, secrets_key):
-    """§2 puts this pair on the same footing as a connector secret: AEAD under the DEK, with a
-    `key_id` beside the ciphertext so rotation stays possible. §14.3 is why that matters — the
-    private half is what lets anyone push to this household's phones."""
     public = await keys.ensure_keypair(db)
     row = await db.fetchrow(
         "SELECT value, secret, secret_key_id FROM app_setting WHERE key = 'push.vapid'"
@@ -230,22 +180,17 @@ async def test_the_private_half_is_sealed_under_the_dek_and_carries_its_key_id(d
     assert row["secret_key_id"] == await db.fetchval("SELECT key_id FROM data_encryption_key")
 
     _key_id, dek = await secrets.ensure_dek(db)
-    # M4.7 sec-10: the sealed payload is bound to the row that holds it, so opening it names
-    # that row. Without the AAD this fails to decrypt, which is the binding working.
+    # The sealed payload is bound to its row by AAD; opening it names that row.
     sealed = secrets.open_sealed(
         dek, row["secret"], secrets.aad_for("app_setting", keys.SETTING_KEY)
     )
-    # The BASE64URL TEXT, not the raw scalar. `seal` stores `{"private_key": "<b64url>"}`, and
-    # those 32 raw bytes never appear in that JSON whether or not it is encrypted — so the raw
-    # form passes against a no-op cipher and asserts nothing. Verified: with `seal` replaced by
-    # a pass-through the raw check stayed green and this one goes red.
+    # The base64url TEXT, not the raw scalar: the raw bytes never appear in the JSON, sealed or not.
     assert sealed["private_key"].encode() not in bytes(row["secret"]), "not stored in clear"
     assert keys.unb64(sealed["private_key"]) not in bytes(row["secret"])
 
 
 async def test_the_loaded_pair_signs_for_the_public_half_it_hands_the_browser(db, secrets_key):
-    """The two halves have to be one pair. A browser subscribes against the public half and the
-    push service verifies the signature against it; a mismatch is a 401 on every delivery."""
+    """A mismatched pair is a 401 on every delivery."""
     public = await keys.ensure_keypair(db)
     vapid = await keys.load(db)
 
@@ -261,9 +206,7 @@ async def test_the_loaded_pair_signs_for_the_public_half_it_hands_the_browser(db
 async def test_a_boot_without_a_secrets_key_stores_no_keypair_and_does_not_raise(
     db, no_secrets_key
 ):
-    """§3.1 makes a half-configured boot a legal state — the app must still serve the wizard
-    that configures it — and §2 forbids falling back to SESSION_SECRET. So there is nowhere to
-    put a private half, and the honest answer is None rather than a crash at startup."""
+    """§3.1 makes a half-configured boot legal and §2 forbids falling back to SESSION_SECRET."""
     assert await keys.ensure_keypair(db) is None
     assert await db.fetchval("SELECT count(*) FROM app_setting") == 0
     assert await keys.public_key(db) is None
@@ -271,9 +214,7 @@ async def test_a_boot_without_a_secrets_key_stores_no_keypair_and_does_not_raise
 
 
 async def test_no_route_returns_the_private_half(secrets_key, app, db):
-    """§4.2's keys are secrets and this one is the household's. The onboarding screen needs the
-    public half and nothing else; a private half that can be serialised is one an `api/` route
-    can return by accident, so it is held as a key object with no repr and no accessor."""
+    """Held as a key object with no repr and no accessor, so no route can serialise it by accident."""
     client = app()
     await client.post("/api/setup/admin", json={"name": "patrick", "password": "an-admin-pw"})
 
@@ -291,14 +232,10 @@ async def test_no_route_returns_the_private_half(secrets_key, app, db):
     assert private not in repr(await keys.load(db))
 
 
-# --- RFC 8292: the VAPID signature -------------------------------------------------------------
-
-
 async def test_the_authorization_header_is_the_vapid_scheme_with_a_token_and_the_key(
     household, db
 ):
-    """RFC 8292 §3: `Authorization: vapid t=<JWT>, k=<public key>`. The `k` is how the push
-    service ties the request to the key the subscription was created against."""
+    """RFC 8292 §3: `Authorization: vapid t=<JWT>, k=<public key>`."""
     service = FakePushService()
     await send.send_to_user(db, household.jenny, PAYLOAD, transport=service)
 
@@ -310,10 +247,7 @@ async def test_the_authorization_header_is_the_vapid_scheme_with_a_token_and_the
 
 
 async def test_the_jwt_names_the_push_services_origin_an_expiry_and_a_contact(household, db):
-    """RFC 8292 §2: `aud` is the origin of the push service, `exp` is at most 24 h away, `sub`
-    is how its operator reaches whoever runs this application server. The audience is the
-    origin and not the endpoint — the endpoint is a bearer capability, and a token naming it
-    hands that capability to every log the service keeps."""
+    """RFC 8292 §2. The audience is the origin, not the endpoint: the endpoint is a bearer capability."""
     service = FakePushService()
     await send.send_to_user(db, household.jenny, PAYLOAD, transport=service)
 
@@ -323,16 +257,13 @@ async def test_the_jwt_names_the_push_services_origin_an_expiry_and_a_contact(ho
     assert header == {"typ": "JWT", "alg": "ES256"}
     assert claims["aud"] == "https://push.example.test"
     assert household.phone.endpoint not in json.dumps(claims)
-    # RFC 8292 caps the lifetime at 24 h; the lower bound matters as much, because a one-second
-    # token would satisfy a bare `<= 24h` and be expired before the push service read it.
+    # RFC 8292 caps it at 24 h; the lower bound stops a token that expires before it is read.
     assert 3600 <= claims["exp"] - time.time() <= 24 * 3600
     assert claims["sub"].startswith(("http", "mailto:"))
 
 
 async def test_the_jwt_signature_is_raw_r_s_and_not_der(household, db):
-    """RFC 7515 A.3: ES256 signatures are the two 32-byte integers, concatenated. The DER
-    envelope `cryptography` produces instead is a perfectly valid signature that every push
-    service rejects — and the rejection arrives in production, not here."""
+    """RFC 7515 A.3: raw r||s. The DER `cryptography` produces is valid, and push services reject it."""
     service = FakePushService()
     await send.send_to_user(db, household.jenny, PAYLOAD, transport=service)
 
@@ -353,13 +284,8 @@ async def test_the_jwt_signature_is_raw_r_s_and_not_der(household, db):
     )
 
 
-# --- RFC 8291: the payload is encrypted for the device, not for the push service ---------------
-
-
 async def test_the_body_is_one_aes128gcm_record_the_subscribed_browser_can_read(household, db):
-    """RFC 8291/8188: salt, record size, key id length, the ephemeral public key, then the
-    record. The push service forwards this without being able to read it, which is the point:
-    §4.2's `p256dh` and `auth` are what make the household's prompts private from it."""
+    """RFC 8291/8188: salt, record size, key id length, the ephemeral public key, then the record."""
     service = FakePushService()
     await send.send_to_user(db, household.jenny, PAYLOAD, transport=service)
 
@@ -368,13 +294,8 @@ async def test_the_body_is_one_aes128gcm_record_the_subscribed_browser_can_read(
     assert len(body[:16]) == 16, "a 16-byte salt"
     assert int.from_bytes(body[16:20], "big") == send._RECORD_SIZE
     assert body[20] == 65, "one uncompressed P-256 point as the key id"
-    # What a record costs, exactly, rather than that it fits: the old `<= _RECORD_SIZE` here was
-    # true with 4,037 bytes to spare for this 59-byte record, so it held for any framing the
-    # sender might have produced (tq2). RFC 8188 §2 says the overhead is one padding delimiter
-    # plus the AES-GCM tag and nothing else, and that number is the only reason `_encrypt`'s
-    # ceiling check can be trusted: if a second delimiter, a length prefix or a second record
-    # ever appeared, the arithmetic at `send.py`'s size check would be wrong by that much and a
-    # payload it accepted would arrive past `rs` — a 201 and a phone that shows nothing.
+    # RFC 8188 §2: the overhead is one padding delimiter plus the GCM tag, exactly; `send.py`'s size
+    # check depends on that number.
     record = body[21 + body[20] :]
     assert len(record) == len(_compact(PAYLOAD)) + send._PAD_AND_TAG
     assert _decrypt(body, household.phone) == PAYLOAD
@@ -383,9 +304,6 @@ async def test_the_body_is_one_aes128gcm_record_the_subscribed_browser_can_read(
 async def test_a_body_encrypted_for_one_device_does_not_decrypt_with_anothers_keys(
     household, db
 ):
-    """Each device's copy is encrypted for that device alone. If one body opened with another
-    subscription's keys, a phone that once shared a household could read prompts meant for a
-    member it no longer is."""
     service = FakePushService()
     await send.send_to_user(db, household.jenny, PAYLOAD, transport=service)
 
@@ -395,12 +313,8 @@ async def test_a_body_encrypted_for_one_device_does_not_decrypt_with_anothers_ke
         _decrypt(for_phone, household.laptop)
 
 
-# --- §4.2: "pruned on 404/410 from the push service", and on nothing else ----------------------
-
-
 async def test_a_delivered_push_stamps_last_seen_ok(household, db):
-    """§4.2's 90-day sweep in `worker.py` reads `last_seen_ok`; nothing else writes it. A
-    delivered push that did not stamp it lets the sweep delete a phone that works."""
+    """`last_seen_ok` is what the 90-day sweep reads; a delivery that did not stamp it loses the phone."""
     service = FakePushService()
     results = await send.send_to_user(db, household.jenny, PAYLOAD, transport=service)
 
@@ -415,9 +329,6 @@ async def test_a_delivered_push_stamps_last_seen_ok(household, db):
 
 
 async def test_a_404_prunes_exactly_that_device(household, db):
-    """§4.2 names 404 because it is the push service saying the endpoint is not one of its
-    endpoints any more. The other device of the same member is a different row, on a different
-    endpoint, and must survive."""
     service = FakePushService()
     service.answers[household.phone.endpoint] = 404
     results = await send.send_to_user(db, household.jenny, PAYLOAD, transport=service)
@@ -433,9 +344,6 @@ async def test_a_404_prunes_exactly_that_device(household, db):
 
 
 async def test_a_410_prunes_exactly_that_device(household, db):
-    """410 Gone is the code a push service uses when the subscription was revoked — the member
-    uninstalled the PWA or turned notifications off. Keeping the row means retrying that phone
-    forever."""
     service = FakePushService()
     service.answers[household.laptop.endpoint] = 410
     results = await send.send_to_user(db, household.jenny, PAYLOAD, transport=service)
@@ -450,9 +358,7 @@ async def test_a_410_prunes_exactly_that_device(household, db):
 
 
 async def test_a_500_a_429_and_a_timeout_each_leave_the_subscription_in_place(household, db):
-    """Everything that is not 404 or 410 is the push service having a bad minute. Pruning on a
-    500, a rate limit or a timeout deletes a live phone over a transient outage — and the
-    member finds out weeks later, by not being invited to anything."""
+    """Only 404 and 410 prune (§4.2); anything else is transient."""
     service = FakePushService()
     service.answers[household.phone.endpoint] = 500
     service.answers[household.laptop.endpoint] = 429
@@ -473,9 +379,6 @@ async def test_a_500_a_429_and_a_timeout_each_leave_the_subscription_in_place(ho
 
 
 async def test_only_that_members_devices_are_sent_to_or_pruned(household, db):
-    """§4.2 keys the table on `user_id` and §7.3's prompt is per-user: the household has no
-    shared notification. A send that reached the other member's phone would deliver Jenny's
-    "did you finish X?" to Patrick — the one mistake tapping "no" cannot undo."""
     service = FakePushService()
     service.answers[household.patricks_phone.endpoint] = 410
     results = await send.send_to_user(db, household.jenny, PAYLOAD, transport=service)
@@ -489,24 +392,16 @@ async def test_only_that_members_devices_are_sent_to_or_pruned(household, db):
 
 
 async def test_a_member_with_no_device_is_a_silent_no_op(household, db):
-    """§6's preamble: push is best-effort and every prompt has an in-app equivalent. A member
-    who declined notifications is a normal household, not an error state."""
     lonely = await _member(db, "a-member-who-declined")
     assert await send.send_to_user(db, lonely, PAYLOAD, transport=FakePushService()) == []
 
 
-# --- §6 preamble: best-effort means no send outcome reaches the caller -------------------------
-
-
 async def test_a_failing_send_never_raises_into_the_caller(household, db):
-    """§6's preamble makes push best-effort *because* of the iPhone that may never receive one:
-    "every push-carried prompt also exists as an in-app banner". A lobby (§6.2) that raised on
-    a delivery failure would break on exactly the device the constraint was written about."""
+    """A lobby that raised on a delivery failure would break on the iPhone push may never reach."""
     service = FakePushService()
     service.fails[household.phone.endpoint] = httpx.ConnectError("no route to host")
     service.answers[household.laptop.endpoint] = 400
-    # A subscription whose keys are unusable — M2 rows predate this sender, and a browser may
-    # send anything. Encryption fails before the request is even built.
+    # Unusable keys (M2 rows predate this sender): encryption fails before the request is built.
     await db.execute(
         "UPDATE push_subscription SET p256dh = 'not-a-key' WHERE id = $1", household.laptop.id
     )
@@ -520,8 +415,6 @@ async def test_a_failing_send_never_raises_into_the_caller(household, db):
 
 
 async def test_a_household_with_no_keypair_sends_nothing_and_raises_nothing(household, db):
-    """§3.1's half-configured install, mid-session. Nothing to sign with is a logged fact and
-    a fallback to §6's banner, not an exception in the middle of opening a session."""
     await db.execute("DELETE FROM app_setting WHERE key = 'push.vapid'")
     service = FakePushService()
 
@@ -529,17 +422,10 @@ async def test_a_household_with_no_keypair_sends_nothing_and_raises_nothing(hous
     assert service.requests == []
 
 
-# --- the endpoint and the auth key are secrets -------------------------------------------------
-
-
 async def test_the_endpoint_and_the_auth_key_never_reach_a_log_line_or_a_result(
     household, db, caplog
 ):
-    """The endpoint URL is a bearer capability — anyone holding it can push to that device —
-    and `auth` is the message-encryption key. Every outcome here logs, so every outcome is a
-    chance to leak one: the device handle from `api/push.py` is what an operator correlates on
-    instead. httpx puts the URL in several of its exception messages, which is why the failure
-    path logs the exception's type and never the exception."""
+    """httpx puts the URL in its exception messages, so failures log the exception's type only."""
     service = FakePushService()
     service.answers[household.phone.endpoint] = 410
     service.answers[household.laptop.endpoint] = 500
@@ -560,27 +446,13 @@ async def test_the_endpoint_and_the_auth_key_never_reach_a_log_line_or_a_result(
 
 
 def _service() -> FakePushService:
-    """A service that accepts everything — the default for tests about what the sender puts on
-    the wire rather than about what a failure does."""
+    """Accepts everything: for tests about what goes on the wire."""
     return FakePushService()
 
 
-
-# --- the properties the RFC makes catastrophic to lose ---------------------------------------
-
-
 async def test_every_message_gets_a_fresh_salt_and_a_fresh_ephemeral_key(household, db):
-    """RFC 8291 derives the content-encryption key and the nonce from the record salt and the
-    ephemeral ECDH secret, so reusing either across two messages to one device reuses an
-    AES-GCM (key, nonce) pair. That is a two-time pad: XOR the two bodies and both plaintexts
-    fall out, and a valid tag can be forged for anything the service worker will accept —
-    by the push service itself, or by anyone holding the endpoint.
-
-    The code is correct; the *guard* is what this adds. A reviewer hoisting
-    `ec.generate_private_key` out of the per-device loop — a correct-looking optimisation, it
-    costs ~100 µs a call — breaks this and nothing else in the file notices, because the
-    cross-device test survives on the differing ECDH secrets alone.
-    """
+    """Reusing the salt or ephemeral key reuses an AES-GCM (key, nonce): a two-time pad. Hoisting
+    `ec.generate_private_key` out of the loop breaks only this test."""
     first = _service()
     await send.send_to_user(db, household.jenny, PAYLOAD, transport=first)
     second = _service()
@@ -600,14 +472,7 @@ async def test_every_message_gets_a_fresh_salt_and_a_fresh_ephemeral_key(househo
 
 
 async def test_a_payload_too_large_for_one_record_is_refused_rather_than_sent(household, db):
-    """A body past the record size the header declares violates RFC 8188 §2: a decoder splits
-    it at `rs`, decrypts a fragment and fails the tag. A push service that does not enforce the
-    limit answers 201 — so without this the send reports success, `last_seen_ok` is stamped,
-    and the phone silently drops the message.
-
-    `send_to_user` takes an arbitrary dict, and a §6.2 lobby invite that grows a title list or
-    an overview string crosses 4 KB without anyone noticing.
-    """
+    """RFC 8188 §2: a body past `rs` fails the browser's tag while the push service answers 201."""
     service = _service()
     huge = {"kind": "session-invite", "filler": "x" * 5000}
     results = await send.send_to_user(db, household.jenny, huge, transport=service)
@@ -626,15 +491,7 @@ async def test_a_payload_too_large_for_one_record_is_refused_rather_than_sent(ho
 async def test_the_largest_payload_that_fits_one_record_is_sent_and_one_byte_more_is_not(
     household, db
 ):
-    """The boundary `send.py`'s size check draws, asserted from both sides (tq2).
-
-    `test_a_payload_too_large_for_one_record_is_refused_rather_than_sent` above proves a 5 KB
-    body is refused, which an off-by-seventeen would also satisfy; the interesting input is the
-    last one that must work. At exactly `_RECORD_SIZE - _PAD_AND_TAG` the record fills `rs` to
-    the byte and a browser still decrypts it, so a ceiling set one byte low silently truncates
-    the household's longest §6.2 invitation, and one byte high puts a body past the `rs` the
-    header declares — which the push service answers 201 to and the phone drops.
-    """
+    """At exactly `_RECORD_SIZE - _PAD_AND_TAG` the record fills `rs` to the byte and still decrypts."""
     fits = _payload_of(send._RECORD_SIZE - send._PAD_AND_TAG)
     assert len(_compact(fits)) == send._RECORD_SIZE - send._PAD_AND_TAG
 
@@ -645,8 +502,7 @@ async def test_the_largest_payload_that_fits_one_record_is_sent_and_one_byte_mor
     assert len(body[21 + body[20] :]) == send._RECORD_SIZE, "the record fills `rs` exactly"
     assert _decrypt(body, household.phone) == fits, "and a browser can still read it"
 
-    # One byte more is refused at the seam that owns the rule, by name: `_encrypt` raises before
-    # anything reaches the wire, and `_deliver` turns that into a logged, un-pruned failure.
+    # Refused in `_encrypt`, before the wire; `_deliver` logs it without pruning.
     with pytest.raises(ValueError, match="must fit one"):
         send._encrypt(
             _compact(_payload_of(send._RECORD_SIZE - send._PAD_AND_TAG + 1)),
@@ -656,13 +512,8 @@ async def test_the_largest_payload_that_fits_one_record_is_sent_and_one_byte_mor
 
 
 async def test_a_compressed_subscription_key_is_refused_rather_than_sent(household, db):
-    """RFC 8291 §3.4 assumes the uncompressed point on both sides: the raw point is mixed into
-    `key_info`, so a 33-byte compressed one derives an IKM the browser does not, and the phone
-    gets a body it cannot read while every layer reports success.
-
-    No shipping browser sends one — but `POST /api/push/subscribe` accepts any 256-character
-    string, so a hand-rolled subscription reaches here and earns a permanent 201-and-silence.
-    """
+    """RFC 8291 §3.4 mixes the uncompressed point into `key_info`, so a compressed one derives the
+    wrong IKM. The subscribe route accepts any string."""
     compressed = keys.b64(b"\x02" + b"\x11" * 32)
     await db.execute(
         "UPDATE push_subscription SET p256dh = $2 WHERE endpoint = $1",
@@ -680,12 +531,8 @@ async def test_a_compressed_subscription_key_is_refused_rather_than_sent(househo
 
 
 def test_the_vapid_subject_is_one_the_push_service_will_accept():
-    """RFC 8292 §2.1 sanctions a `mailto:` or an **https:** URI. §2 puts this app behind "one
-    plain-HTTP port" with the operator's Traefik in front, so `PUBLIC_URL` is `http://…` on a
-    LAN or Tailscale install — and APNs, the service §6's preamble makes push exist for,
-    answers 403 to a `sub` it does not accept. That failure is invisible: an un-pruned row, one
-    log line, and a household that never gets a notification.
-    """
+    """RFC 8292 §2.1 allows `mailto:` or https; APNs answers 403 to an http `sub`, and `PUBLIC_URL`
+    is http on a LAN install."""
     assert send.vapid_subject("https://spielplan.example.tld") == "https://spielplan.example.tld"
     assert send.vapid_subject("https://spielplan.example.tld/") == "https://spielplan.example.tld"
     assert send.vapid_subject("http://localhost:8080") == "mailto:admin@localhost"
@@ -694,23 +541,9 @@ def test_the_vapid_subject_is_one_the_push_service_will_accept():
         assert send.vapid_subject(public_url).startswith(("https://", "mailto:"))
 
 
-# --- CLAUDE.md: the rules live in the domain packages, `api/` decides HTTP shapes -------------
-
-
 def test_naming_a_device_is_a_domain_rule_and_this_module_imports_no_api_layer():
-    """`device_handle` lives here, and nothing under `spielplan/push/` reaches into `api/`.
-
-    It was defined in `api/push.py` and imported back down, which was the only inversion of
-    CLAUDE.md's direction in the codebase (arch-02) and had a cost beyond tidiness: `worker.py`
-    imports `sync.playback`, which imports this module, so every worker process loaded FastAPI
-    and every router's import-time side effects to hash a string. A cycle was one refactor away
-    the moment `api/push.py` wanted a second helper from here.
-
-    The source is parsed rather than `sys.modules` inspected, because by the time this test runs
-    the app fixture has imported `spielplan.api` anyway — a runtime check would pass with the bad
-    import still in the file. `ast.walk` reaches a function-level import too, which is how the
-    same dependency would come back if it came back at all.
-    """
+    """`worker.py` imports this via `sync.playback`, so an `api/` import loads FastAPI in the worker.
+    Parsed, not `sys.modules`: the app fixture has imported `spielplan.api` anyway."""
     assert send.device_handle is device_handle
     assert device_handle.__module__ == "spielplan.push.send"
     assert device_handle("https://push.example.test/f/x") != "https://push.example.test/f/x"

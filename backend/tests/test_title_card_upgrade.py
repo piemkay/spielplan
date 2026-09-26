@@ -1,21 +1,6 @@
-"""What `0037_title_card_and_alias_kind.sql` does to an install seeded before it.
-
-Spec v2.1 §4.1, §6.0, §6.8, §8 stage 8; decisions 162, 383, 483, 499, 500 and 501; the owner
-instruction of 2026-09-25 after the first household user test.
-
-The live install was seeded by the importer this change corrects, and decision 162 seeds content
-once, so its cards change only if a migration changes them. db/migrate.py applies SQL and nothing
-else, so 0037 cannot call `importer/meta.resolve_title_fields`; its claim is that for every title it
-touches it writes what that function now answers, and it was measured against the seeded install to
-change exactly the 968 overviews and 157 posters the new walk changes. This file holds the claim on
-the shapes behind those numbers: the install is staged one migration short, seeded as the old
-importer left it, upgraded - and then resolved by the new walk, which must find nothing to change.
-
-A database of its own, for `test_flywheel_schema.py`'s reason: the point is a schema that is
-deliberately not this build's, and the `db` fixture exists to guarantee the opposite.
-
-Skipped without TEST_DATABASE_URL; see tests/conftest.py.
-"""
+"""0037 cannot call `importer/meta.resolve_title_fields`, so the install is staged one migration
+short, seeded as the old importer left it, upgraded, and resolved again: nothing may change.
+A database of its own, as the `db` fixture guarantees this build's schema."""
 
 from __future__ import annotations
 
@@ -64,8 +49,7 @@ UPGRADED = {
 
 
 def _last_before_the_migration() -> str:
-    """Found rather than spelled, for `test_flywheel_schema.py`'s reason: a sibling lane's
-    migration may land in this directory at the merge."""
+    """Found, not spelled: a sibling migration may land at the merge."""
     earlier = [version for version, _ in migrate.discover() if version < MIGRATION]
     assert earlier, f"no migration sorts before {MIGRATION}"
     return earlier[-1]
@@ -128,16 +112,8 @@ async def _cards(conn: asyncpg.Connection) -> dict[int, tuple]:
 async def test_0037_writes_what_the_new_walk_answers_and_the_walk_then_changes_nothing(
     before_the_migration,
 ):
-    """The migration's whole claim, on the shapes the seeded install holds: an MPST-only card and a
-    Moulin Rouge pair lose their overview, a Wikipedia page two titles share leaves both, a title
-    with a plot of its own keeps it beside an mpst row, an IMDb-hosted poster gives way to TVmaze's
-    where one exists and to nothing where none does, and TMDB art is untouched. Then the importer's
-    own resolution runs over the upgraded rows and must move nothing - which is what "measured
-    equivalent" means for a statement that cannot call the function it stands in for.
-
-    The control is the seed read back before the upgrade: a card already at its new value would
-    make every later assertion true of a migration that did nothing.
-    """
+    """The control is the seed read back before the upgrade: a card already at its new value would
+    make every assertion true of a migration that did nothing."""
     conn, directory = before_the_migration
     await _seed(conn)
     assert await _cards(conn) == {t: card for t, (_rows, card) in SEEDED.items()}
@@ -154,10 +130,7 @@ async def test_0037_writes_what_the_new_walk_answers_and_the_walk_then_changes_n
 
 
 async def test_0037_classes_the_crew_credit_and_marks_the_lexicon_aliases(before_the_migration):
-    """Decision 500 and the closed class vocabulary. The corpus lexicon row and the presence
-    keyword become `lexicon`; a lead-role spelling of the same term, a row nobody named and a kind
-    already stored are left exactly as they were. The five `crew` composer credits are classed
-    as `derive/ids.classify_role` classes that job."""
+    """Decision 500: the lexicon row and presence keyword become `lexicon`; the rest stay as they were."""
     conn, directory = before_the_migration
     await _seed(conn)
     _complete(directory)

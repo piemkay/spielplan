@@ -1,9 +1,5 @@
-"""The invariants that live in files with no runtime to assert them.
-
-Each guards a property a regression would break silently: the CPU-only torch index, one backend
-process, one plain-HTTP port, the /data/* bind mounts, the frozen rating_source ids, and member
-surfaces free of spec references (decision 486).
-"""
+"""Invariants in files with no runtime: CPU-only torch, one process, one plain-HTTP port, the
+/data bind mounts, the frozen rating_source ids, and member copy free of spec references."""
 
 from __future__ import annotations
 
@@ -27,10 +23,8 @@ def _src(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-# --- §1, §2: the compose stack -------------------------------------------------------------
-#
-# Read by block structure rather than by substring, so a mount or port that was commented out is
-# a mount or port that is not there. `test_worker_registry.py` imports these readers.
+# Read by block structure, so a commented-out mount or port is absent.
+# `test_worker_registry.py` imports these readers.
 
 # §1 names /data/pg, /data/raw, /data/artifacts and /data/cache; §2's nightly pg_dump adds
 # /data/backups.
@@ -116,8 +110,7 @@ def _published_ports(compose: str) -> list[str]:
 
 
 def test_the_app_publishes_one_plain_http_port_and_terminates_no_tls():
-    """§2: "the app itself serves plain HTTP on one internal port; the operator's existing
-    Traefik + Cloudflare terminates TLS"."""
+    """§2: plain HTTP on one internal port; the operator's Traefik terminates TLS."""
     compose = _compose()
     published = _published_ports(compose)
     assert len(published) == 1, f"expected exactly one published app port, found {published}"
@@ -130,7 +123,7 @@ def test_the_app_publishes_one_plain_http_port_and_terminates_no_tls():
 
 
 def test_every_data_volume_the_spec_names_is_mounted():
-    """§1 and §2: a missing mount is data that does not survive a container replacement."""
+    """A missing mount is data that does not survive a container replacement."""
     compose = _compose()
     mounted = {path for name in _service_names(compose) for path, _ in _mounts(compose, name)}
     missing = SPEC_VOLUMES - mounted
@@ -146,13 +139,9 @@ def _ignored(dockerignore: str) -> set[str]:
     }
 
 
-# --- §1: the image -------------------------------------------------------------------------
-
-
 def test_the_image_pulls_torch_from_the_cpu_index_only():
-    """§1: "every in-app model update runs on CPU... The image must build and run on a GPU-less
-    VM." Torch is pinned to an `explicit` CPU index in pyproject.toml, which every consumer
-    honours, and no index strategy in the Dockerfile picks a winner by version."""
+    """Torch is pinned to an `explicit` CPU index in pyproject.toml, and no Dockerfile index strategy
+    picks a winner by version."""
     dockerfile = DOCKERFILE.read_text(encoding="utf-8")
     pyproject_text = PYPROJECT.read_text(encoding="utf-8")
     uv = tomllib.loads(pyproject_text).get("tool", {}).get("uv", {})
@@ -200,14 +189,10 @@ def _multi_worker_reason(dockerfile: str) -> str | None:
 
 
 def test_the_image_starts_exactly_one_application_process():
-    """§6.7's rail buffers, Tonight's lobby hub and the push in-flight set are process-global:
-    `--workers 2` silently splits the household into two lobbies and two rails. `app.py` refuses
-    at boot for the settings this file cannot see. [M4.7 arch-09]"""
+    """The rail, the lobby hub and the push set are process-global, so `--workers 2` splits them.
+    `app.py` refuses at boot for settings this file cannot see."""
     reason = _multi_worker_reason(DOCKERFILE.read_text(encoding="utf-8"))
     assert reason is None, f"ops/backend.Dockerfile starts more than one process: {reason}"
-
-
-# --- §4.1: the frozen rating_source ids ----------------------------------------------------
 
 
 def test_frozen_rating_source_ids_match_the_spec():
@@ -218,13 +203,9 @@ def test_frozen_rating_source_ids_match_the_spec():
     assert "CHECK (id IN (1, 2, 3, 4, 7, 11, 21, 23, 26, 28, 31))" in ddl
 
 
-# --- Decision 486 clause 2: no member surface renders a spec or milestone reference ---------
-#
-# The member register never renders "§N", "decision N", "proposal N" or a milestone label (M0-M7);
-# references stay in comments, commit bodies and admin surfaces. Read: every route except `admin/`
-# and `setup/` and every module those routes import, plus the backend that writes member copy.
-# Not read: comments, styles, SVG geometry, Python docstrings, logger arguments, OpenAPI
-# `description=` and SQL comments. [decision 486 clauses 1-2; §6.8 "Member register"]
+# Decision 486: members never see "§N", "decision N", "proposal N" or M0-M7. Read: every route
+# but `admin/` and `setup/` and what they import. Not read: comments, styles, docstrings, logger
+# arguments, OpenAPI `description=`, SQL comments.
 
 _SPEC_REFERENCE = re.compile(
     r"§\s?\d+(?:\.\d+)*|\b(?:[Dd]ecision|[Pp]roposal)s?\s+\d+|\bM[0-7](?:\.\d+)?\b"
@@ -269,12 +250,8 @@ def _blank(match: re.Match[str]) -> str:
 
 
 def _js_literals(source: str) -> list[tuple[int, str]]:
-    """(line, text) of every string literal in a JavaScript source, comments skipped.
-
-    A lexer rather than a pattern: a `//` inside a string must not read as a comment, and an
-    apostrophe inside a comment must not read as a quote. Template literals yield their text
-    halves and a `${...}` inside one is code. A `/` opens a regex where an operand is expected.
-    """
+    """A lexer, not a pattern: `//` inside a string and an apostrophe inside a comment must not
+    confuse it. A `/` opens a regex where an operand is expected."""
     out: list[tuple[int, str]] = []
     templates: list[int] = []  # the brace depth each open `${` returns to
     depth = 0
@@ -395,11 +372,7 @@ def _member_sources(routes: Path = FRONTEND / "routes", lib: Path = FRONTEND / "
 
 
 def _python_register_leaks(path: Path, names: tuple[str, ...] | None = None) -> list[str]:
-    """Every spec or milestone reference in the strings a backend module can hand a member.
-
-    `names` narrows a module to the constants of those names, for a module whose other strings
-    belong to an admin surface.
-    """
+    """`names` narrows a module to those constants, for a module whose other strings are admin copy."""
     tree = ast.parse(_src(path))
     skip = _docstrings(tree)
     roots: list[ast.AST] = [tree]
@@ -440,10 +413,7 @@ def _member_copy_modules() -> list[tuple[Path, tuple[str, ...] | None]]:
 
 
 def test_member_surfaces_render_no_spec_or_milestone_reference():
-    """Decision 486 clause 2, over every file a member's screen is made of.
-
-    The walk is asserted before the scan, because a scan over nothing passes.
-    """
+    """The walk is asserted before the scan: a scan over nothing passes."""
     sources = _member_sources()
     read = {path.relative_to(FRONTEND).as_posix() for path in sources}
     expected = {

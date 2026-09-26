@@ -1,16 +1,5 @@
-"""The board honours what the person said. Spec v2.1 §5.2, §6.1, §6.3; decisions 508-510; owner
-instruction of 2026-09-26 after the second household user test.
-
-Round 2 put two members in front of their boards after about seventy verdicts and twenty-odd
-comparisons each, and the tier list contradicted them three ways: La La Land, disliked, sat in A
-between two films the person called fine, and C, D and F stayed empty (R1); A Good Day to Die Hard,
-picked over Black Widow and then over Justice League, stayed below both (R2); two films called
-"about the same" landed a tier apart (R3). And Home's letter and the title card's "we'd have
-guessed" disagreed about one film (R4). `test_ledger_model.py` pins the arithmetic; these pin the
-tables every surface reads - `ledger_state`, the board, the drop's neighbour check and the reveal.
-
-Skipped without TEST_DATABASE_URL; see tests/conftest.py.
-"""
+"""Round 2's contradictions (decisions 508-510): R1 a disliked film in A, R2 a pick left below
+what it beat, R3 ties a tier apart, R4 Home's letter against the card's guess."""
 
 from __future__ import annotations
 
@@ -83,9 +72,7 @@ async def _rows(db, user):
 async def test_a_film_the_taste_vector_loves_and_the_person_disliked_sits_in_a_disliked_tier(
     db, household
 ):
-    """R1. The stored tier - what Home's letter, the library and the reveal read - and the tier
-    the board renders are both in F/D/C, below every film the person liked; the fine films share
-    B; and C holds what they disliked rather than standing empty."""
+    """R1: stored and rendered tiers both put the disliked film in F/D/C; fine films share B."""
     await _fit(db, household)
     stored = await _rows(db, household)
     assert stored[LA_LA_LAND][1] <= 2, stored[LA_LA_LAND]
@@ -102,9 +89,7 @@ async def test_a_film_the_taste_vector_loves_and_the_person_disliked_sits_in_a_d
 
 
 async def test_a_pick_in_the_queue_lifts_the_winner_over_the_title_it_beat(db, household):
-    """R2, on the path the person actually sees during a round: the incremental update after one
-    hesitant answer. The disliked film the taste vector likes least, picked over La La Land,
-    sits above it once the answer lands (decision 509)."""
+    """R2 (decision 509): the incremental update after one pick lifts the winner over the loser."""
     await _fit(db, household)
     loser = LA_LA_LAND
     winner = 1
@@ -124,10 +109,7 @@ async def test_a_pick_in_the_queue_lifts_the_winner_over_the_title_it_beat(db, h
 
 
 async def test_a_title_its_verdict_holds_is_a_neighbour_where_the_board_shows_it(db, household):
-    """Decision 508's hold reaches the drop's neighbour check. La La Land is made to win three
-    picks over films the person liked, so the fit puts its `s` above the disliked band and the hold
-    renders it in C; a drag that lands beside it in C names it as the neighbour it is on screen,
-    and must not be refused as "not in C any more"."""
+    """The hold renders La La Land in C, so a drag beside it there must not be refused."""
     liked = [t for t in range(1, 25) if _verdict(t) == 2][:3]
     for other in liked:
         await observations.record_duel(
@@ -148,9 +130,7 @@ async def test_a_title_its_verdict_holds_is_a_neighbour_where_the_board_shows_it
 
 
 async def test_the_guess_on_the_card_is_the_class_the_letter_on_home_stands_for(db, household):
-    """R4 and decision 510: Jenny's Amelie wore A on Home while the card said "we'd have guessed
-    fine". The reveal now reads the class off the title's tier, for an owned title with a stored
-    row and for an unowned one read off the cached fit alike."""
+    """R4 (decision 510): the reveal reads the class off the title's tier, owned or not."""
     await _fit(db, household)
     for title_id in (26, 27, 12):
         guess = await rate_session.predicted_class(
@@ -182,9 +162,7 @@ async def test_the_guess_on_the_card_is_the_class_the_letter_on_home_stands_for(
 
 
 async def test_a_board_fitted_on_the_old_tier_scale_is_refitted_by_the_tick(db, household):
-    """Decision 508 changes no constant a digest can see, so the Ledger's stamp carries the tier
-    scale as well as the coordinate's reading: a fit stamped before it is refused and handed to
-    the 60 s tick, not served until the nightly."""
+    """Decision 508 changes no digest-visible constant, so the stamp carries the tier scale too."""
     await _fit(db, household)
     assert refit.LEDGER_GEOMETRY != COORDINATE_GEOMETRY
     await db.execute(
