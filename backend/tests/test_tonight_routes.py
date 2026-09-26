@@ -1566,10 +1566,11 @@ async def test_a_ballot_submit_pushes_the_submitted_count_and_no_approvals(app, 
     )
 
 
-async def test_any_seated_member_sets_the_rooms_vetoes_over_http(app, db, library):
-    """Decision 480's control through the route: the member (not only the host) sets the chips,
-    the lobby and the open-rooms row both carry them, a key off the fixed list is a 422, and
-    somebody with no seat in the room is refused."""
+async def test_each_seated_member_sets_their_own_vetoes_over_http(app, db, library):
+    """Decisions 480 and 505 through the route: the member (not only the host) sets chips, each
+    member up to three of their own, and the host's full set leaves the member theirs; the lobby
+    carries the union and each seat's own, the open-rooms row the union, a key off the fixed list
+    or a fourth of one's own is a 422, and somebody with no seat in the room is refused."""
     host, host_id = await admin_client(app)
     member, member_id = await member_client(app, host)
     await score(db, host_id, library)
@@ -1585,23 +1586,37 @@ async def test_any_seated_member_sets_the_rooms_vetoes_over_http(app, db, librar
     assert outsider.status_code == 403, outsider.text
 
     await member.post("/api/tonight/sessions/join", json={"session_id": sid})
-    set_ = await member.post(f"/api/tonight/sessions/{sid}/vetoes", json={"vetoes": ["violence"]})
+    full = await host.post(
+        f"/api/tonight/sessions/{sid}/vetoes", json={"vetoes": ["violence", "horror", "harrowing"]}
+    )
+    assert full.status_code == 200, full.text
+    set_ = await member.post(
+        f"/api/tonight/sessions/{sid}/vetoes", json={"vetoes": ["sexual_violence"]}
+    )
     assert set_.status_code == 200, set_.text
-    assert set_.json()["vetoes"] == [{"key": "violence", "label": "violence"}]
+    union = ["violence", "sexual_violence", "horror", "harrowing"]
+    assert [v["key"] for v in set_.json()["vetoes"]] == union
+    mine = next(s for s in set_.json()["seats"] if s["user_id"] == member_id)
+    assert mine["vetoes"] == [{"key": "sexual_violence", "label": "sexual violence"}]
     lobby = (await host.get(f"/api/tonight/sessions/{sid}")).json()
-    assert lobby["vetoes"] == [{"key": "violence", "label": "violence"}]
+    assert [v["key"] for v in lobby["vetoes"]] == union
+    assert [v["key"] for v in lobby["me"]["vetoes"]] == ["violence", "horror", "harrowing"]
     rooms_row = next(
         r for r in (await host.get("/api/tonight/rooms")).json()["rooms"] if r["session_id"] == sid
     )
-    assert rooms_row["vetoes"] == [{"key": "violence", "label": "violence"}]
+    assert [v["key"] for v in rooms_row["vetoes"]] == union
 
     bad = await member.post(f"/api/tonight/sessions/{sid}/vetoes", json={"vetoes": ["gore"]})
     assert bad.status_code == 422, bad.text
+    four = await member.post(
+        f"/api/tonight/sessions/{sid}/vetoes", json={"vetoes": union}
+    )
+    assert four.status_code == 422, four.text
 
 
 async def test_the_round_card_says_what_to_expect_rather_than_the_cap(solo_room):
     """"pair 1 · cap 20" read as the plan for the evening. The card carries the sweep's median
-    beside the cap, so the header can say "usually about ten" and keep the cap for a quiet line."""
+    beside the cap, so the header can say "often about ten" and keep the cap for a quiet line."""
     client, seat = solo_room["client"], solo_room["seat"]
     card = (await client.get(f"/api/tonight/seats/{seat}/round")).json()
     assert card["typical"] == rnd.TYPICAL_PAIRS

@@ -283,4 +283,38 @@ test.describe('tonight together', () => {
     await a.getByTestId('tonight-end-room').click();
     await a.getByTestId('tonight-end-room-confirm').click();
   });
+
+  test("each member rules out their own three, and one member's three leave the other theirs", async () => {
+    // Decision 505. On the second household evening the host tapped three chips first and the
+    // other member found "sexual violence" greyed out and could add nothing. Each member now holds
+    // up to three, the other phone names whose they are, and the open-rooms row shows the union.
+    // Ended rather than started, so the fixture's small pool is never asked to survive the vetoes.
+    const code = await room();
+    for (const key of ['violence', 'horror', 'harrowing']) {
+      await a.getByTestId(`tonight-veto-${key}`).click();
+      await expect(a.getByTestId(`tonight-veto-${key}`)).toHaveAttribute('aria-pressed', 'true');
+    }
+    await expect(a.getByTestId('tonight-veto-sexual_violence')).toBeDisabled();
+    // A mood is said with the round's own answers, and the lobby says how.
+    await expect(a.getByTestId('tonight-mood-caption')).toContainText('Neither pulls me tonight');
+
+    // The other phone learns of them over the channel, as a line with the host's name, and its
+    // own four chips are all still its to set.
+    await expect(b.getByTestId('tonight-others-vetoes')).toContainText('violence, horror, harrowing', {
+      timeout: 15_000
+    });
+    const other = b.getByTestId('tonight-veto-sexual_violence');
+    await expect(other).toBeEnabled();
+    await other.click();
+    await expect(other).toHaveAttribute('aria-pressed', 'true');
+    await expect(b.getByTestId('tonight-veto-violence')).toHaveAttribute('aria-pressed', 'false');
+
+    await toDoor(b);
+    await expect(b.getByTestId(`tonight-room-${code}`)).toContainText(
+      'not tonight: violence, sexual violence, horror, harrowing',
+      { timeout: 15_000 }
+    );
+    await a.getByTestId('tonight-end-room').click();
+    await a.getByTestId('tonight-end-room-confirm').click();
+  });
 });

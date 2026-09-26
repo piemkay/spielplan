@@ -268,8 +268,9 @@ class BallotBody(BaseModel):
 
 
 class VetoBody(BaseModel):
-    """§6.2 step 1's "not tonight" chips (decision 480), as the whole set the room now holds —
-    a replace rather than a toggle, so two phones tapping at once cannot leave half of each."""
+    """§6.2 step 1's "not tonight" chips (decision 480), as the whole set THIS member now holds
+    (decision 505) — a replace rather than a toggle, so two taps on one phone cannot leave half of
+    each, and another member's set is never touched."""
 
     vetoes: list[str] = Field(default_factory=list, max_length=8)
 
@@ -460,9 +461,12 @@ async def lobby(session_id: int, user: ActiveUser, conn: DB) -> dict[str, object
 async def set_vetoes(
     session_id: int, body: VetoBody, user: ActiveUser, conn: DB
 ) -> dict[str, object]:
-    """Decision 480's lobby control: any seated member, before Start. The rule is
-    `rooms.set_vetoes`; this pushes the lobby to the room and the row to the household, because
-    §6.2 step 2's open-rooms list shows what a room has ruled out before anybody joins it."""
+    """Decision 480's lobby control: any seated member, before Start, up to three each (decision
+    505). The rule is `rooms.set_vetoes`; this pushes the lobby to the room and the row to the
+    household, because §6.2 step 2's open-rooms list shows what a room has ruled out before anybody
+    joins it. The answer is the room's union and the seats with their own, which is the lobby's
+    shape for both, so the phone that tapped redraws its chips from the same fields a frame gives
+    every other phone."""
     try:
         await rooms.set_vetoes(conn, session_id=session_id, user_id=user.id, keys=body.vetoes)
         lobby = await rooms.lobby(conn, session_id)
@@ -470,7 +474,7 @@ async def set_vetoes(
         raise _room_error(exc) from exc
     _nudge(HUB.to_session(session_id, channel_rules.lobby_frame(lobby)))
     _nudge(HUB.to_household(channel_rules.rooms_changed()))
-    return {"session_id": session_id, "vetoes": lobby["vetoes"]}
+    return {"session_id": session_id, "vetoes": lobby["vetoes"], "seats": lobby["seats"]}
 
 
 @router.post("/sessions/{session_id}/start")

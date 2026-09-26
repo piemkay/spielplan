@@ -482,7 +482,7 @@ describe('the first household evening, on the screen (owner instruction of 2026-
       expect(art, 'no shared poster inside the pick').not.toBeNull();
       expect(art.getAttribute('data-title-id'), 'the poster was not keyed on the title').toBe(id);
     }
-    expect(byTestId('tonight-round-count').textContent).toContain('pair 1 · usually about 10');
+    expect(byTestId('tonight-round-count').textContent).toContain('pair 1 · often about 10');
     expect(byTestId('tonight-round-count').textContent).not.toContain('cap');
   });
 
@@ -557,7 +557,18 @@ describe('the first household evening, on the screen (owner instruction of 2026-
   });
 
   it('offers the lobby its share link and the not-tonight chips', () => {
-    tonight.lobby = { ...room, state: 'open', vetoes: [{ key: 'violence', label: 'violence' }] };
+    // The chips are this phone's own since decision 505, and the other member's are named under
+    // them: the second household evening's second member found the room's three taken, greyed.
+    const violence = [{ key: 'violence', label: 'violence' }];
+    const theirs = ['horror', 'harrowing', 'sexual_violence'].map((k) => ({ key: k, label: k }));
+    const other = { ...hostSeat, participant_id: 13, user_id: 2, name: 'Jenny', vetoes: theirs };
+    tonight.lobby = {
+      ...room,
+      state: 'open',
+      vetoes: [...violence, ...theirs],
+      seats: [{ ...hostSeat, vetoes: violence }, other],
+      me: { ...hostSeat, vetoes: violence }
+    };
     tonight.step = 'lobby';
     app = mount(TonightPage, { target });
     flushSync();
@@ -566,6 +577,86 @@ describe('the first household evening, on the screen (owner instruction of 2026-
     expect(byTestId('tonight-share-caption').textContent).not.toContain('send the link');
     expect(byTestId('tonight-veto-violence').getAttribute('aria-pressed')).toBe('true');
     expect(byTestId('tonight-veto-harrowing').getAttribute('aria-pressed')).toBe('false');
+    expect(
+      byTestId('tonight-veto-harrowing').disabled,
+      "another member's three do not use up this phone's own"
+    ).toBe(false);
+    expect(byTestId('tonight-others-vetoes').textContent).toBe(
+      'Jenny: horror, harrowing, sexual_violence'
+    );
+    expect(byTestId('tonight-mood-caption').textContent).toContain('Neither pulls me tonight');
+  });
+
+  it('describes each title on a pair card for somebody who does not know it', () => {
+    // The second household evening: "Warriors of the Wind" said "1984 · fits your 120 min".
+    tonight.lobby = room;
+    tonight.round = {
+      participant_id: 11, answered: 12, cap: 20, typical: 10, ended_by: null, stop_reason: null,
+      escape_available: true, card_token: 'card-11',
+      pair: {
+        a: { title_id: 5, name: 'Warriors of the Wind', year: 1984, kind: 'movie',
+             runtime_min: 117, genres: ['Adventure', 'Animation'] },
+        b: { title_id: 6, name: 'Wicked', year: 2024, kind: 'movie', runtime_min: 160,
+             over_budget_min: 40, fit_line: 'runs 40 min over', genres: ['Drama', 'Fantasy'] }
+      }
+    };
+    tonight.step = 'round';
+    app = mount(TonightPage, { target });
+    flushSync();
+
+    const facts = (side) =>
+      [...target.querySelectorAll(`[data-testid="tonight-pair-fact-${side}"]`)].map((n) => n.textContent);
+    expect(facts('A')).toEqual(['1984 · 1h 57m', 'Adventure, Animation']);
+    expect(facts('B')).toEqual(['2024 · 2h 40m', 'runs 40 min over', 'Drama, Fantasy']);
+    expect(byTestId('tonight-round-count').textContent).toBe(
+      'pair 13 · a longer round than most · at most 20'
+    );
+  });
+
+  it('says under the slider that the budget is soft', () => {
+    tonight.step = 'door';
+    tonight.booted = true;
+    app = mount(TonightPage, { target });
+    flushSync();
+    expect(byTestId('tonight-budget-soft').textContent).toContain('up to 40 min longer');
+  });
+
+  it('lists the wildcard once, with its own count, and on the winner card when it won', () => {
+    // The second household evening listed Everything Everywhere All at Once under Runners-up as
+    // "0 approved" and again as the Wildcard.
+    const base = {
+      beat: 'VOTES REVEALED TOGETHER', approval_share: 1, participants: 2, breadth: [],
+      finalists: []
+    };
+    tonight.lobby = { ...room, state: 'resolved' };
+    tonight.result = {
+      ...base,
+      winner: { title_id: 1, name: 'Raiders', approvals: 2, match_lines: [], label: null },
+      runners_up: [{ title_id: 2, name: 'Kiki', approvals: 1, slot: 'finalist' }],
+      wildcard: { title_id: 4, name: 'Everything Everywhere All at Once', approvals: 0,
+                  label: 'a step outside your usual', slot: 'wildcard' }
+    };
+    tonight.step = 'reveal';
+    app = mount(TonightPage, { target });
+    flushSync();
+    expect(byTestId('tonight-runner-up-4'), 'the wildcard among the runners-up').toBeNull();
+    expect(byTestId('tonight-wildcard-line').textContent.trim()).toBe(
+      'a step outside your usual · 0 approved'
+    );
+    expect(byTestId('tonight-winner-label')).toBeNull();
+    unmount(app);
+
+    tonight.result = {
+      ...base,
+      winner: { title_id: 4, name: 'Everything Everywhere All at Once', approvals: 2,
+                match_lines: [], label: 'a step outside your usual', slot: 'wildcard' },
+      runners_up: [{ title_id: 2, name: 'Kiki', approvals: 0, slot: 'finalist' }],
+      wildcard: null
+    };
+    app = mount(TonightPage, { target });
+    flushSync();
+    expect(byTestId('tonight-wildcard')).toBeNull();
+    expect(byTestId('tonight-winner-label').textContent).toBe('a step outside your usual');
   });
 
   it('joins the room a ?room= link names, and takes the link off the address bar', async () => {

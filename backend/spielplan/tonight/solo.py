@@ -58,16 +58,19 @@ PROVENANCE_REWATCH = "{budget} min budget · rewatches included"
 NAMED_TERMS = 2
 
 
-def _pair_side(candidate) -> dict[str, Any] | None:
+def _pair_side(candidate, genres: Mapping[int, list[str]]) -> dict[str, Any] | None:
     """One side of a sharpen pair, as the card needs it. Explicit rather than `vars()`: a
     candidate also carries its per-seat scores, and a payload that shipped those would put the
-    pool's own ranking on the screen §6.2 step 3 keeps it off."""
+    pool's own ranking on the screen §6.2 step 3 keeps it off. The same fields the group round's
+    card carries (`play.start`), genres included, because the two draw the same card."""
     if candidate is None:
         return None
     return {
         "title_id": candidate.title_id, "name": candidate.name, "year": candidate.year,
-        "runtime_min": candidate.runtime_min, "poster_path": candidate.poster_path,
-        "fit_line": candidate.fit_line,
+        "kind": candidate.kind, "runtime_min": candidate.runtime_min,
+        "poster_path": candidate.poster_path, "fit_line": candidate.fit_line,
+        "over_budget_min": candidate.over_budget_min,
+        "genres": genres.get(candidate.title_id, []),
     }
 
 
@@ -241,6 +244,8 @@ async def picks(
             ],
         }
 
+    nxt = None if played.stop_reason else played.next_pair
+    pair_genres = await pool_rules.genres_of(conn, [nxt.title_a, nxt.title_b]) if nxt else {}
     return {
         "picks": [await card(t, stretch=False) for t in chosen],
         "wildcard": None if wildcard is None else await card(wildcard, stretch=True),
@@ -263,14 +268,12 @@ async def picks(
         # [M4.12 review cycle 1: M412-FE-2, M412-SOLO-02; decision 222]
         "wrapped": bool(offset) and (start + PICKS > span or start < offset * PICKS),
         # 54f's sharpen round, on the same pool. None once it has converged or hit the cap.
-        "pair": None if played.stop_reason else (
-            None if played.next_pair is None else {
-                "selection": played.next_pair.selection,
-                "reason": played.next_pair.reason,
-                "a": _pair_side(by_id.get(played.next_pair.title_a)),
-                "b": _pair_side(by_id.get(played.next_pair.title_b)),
-            }
-        ),
+        "pair": None if nxt is None else {
+            "selection": nxt.selection,
+            "reason": nxt.reason,
+            "a": _pair_side(by_id.get(nxt.title_a), pair_genres),
+            "b": _pair_side(by_id.get(nxt.title_b), pair_genres),
+        },
         "stop_reason": played.stop_reason,
         "tilt": tilt,
     }

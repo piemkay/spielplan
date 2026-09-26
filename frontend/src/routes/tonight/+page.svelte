@@ -32,9 +32,11 @@
     JOIN_CAPTION,
     MAX_GUESTS,
     MAX_VETOES,
+    MOOD_CAPTION,
     RESERVED_LABEL,
     REVEAL_BEAT,
     SHARE_CAPTION,
+    VETO_CAPTION,
     WRAPPED_LINE,
     answer,
     approvalShare,
@@ -42,6 +44,8 @@
     ballotWaitingLine,
     bootstrap,
     breadthLine,
+    budgetSoftLine,
+    chooseKind,
     leave,
     connect,
     endRoom,
@@ -54,10 +58,15 @@
     loadRooms,
     loadRound,
     loadSolo,
+    myVetoKeys,
     onlyYesLines,
     openRoom,
+    othersVetoLines,
+    pairFacts,
     pickLabel,
     progressLine,
+    rememberBudget,
+    restoreBudget,
     roomLine,
     roundHeader,
     shareRoom,
@@ -106,6 +115,9 @@
   }
 
   onMount(async () => {
+    // The slider opens where this member last left it for this kind (decision 506): the second
+    // household evening set 120, and the next visit opened at 130 again.
+    restoreBudget(session.user?.id);
     // `bootstrap` returns the session this device is already seated in, if any — a reload, a
     // backgrounded phone or a navigation away and back must not cost somebody their evening
     // (§6.2 step 4 puts them on their own device for up to twenty pairs, and 54e's reveal
@@ -132,8 +144,9 @@
    * other key a payload carries can name a different title. One adapter rather than a spread. */
   const posterOf = (t) => (t ? { ...t, id: t.title_id } : null);
 
-  /** The chips the room has on, by key. */
-  const vetoKeys = $derived((tonight.lobby?.vetoes ?? []).map((v) => v.key));
+  /** The chips THIS member has on, by key, and whose the rest of the room's are (decision 505). */
+  const vetoKeys = $derived(myVetoKeys(tonight.lobby, session.user?.id));
+  const othersVetoes = $derived(othersVetoLines(tonight.lobby, session.user?.id));
   onDestroy(() => {
     destroyed = true;
     disconnect();
@@ -199,9 +212,18 @@
     sharpening = false;
   }
 
+  /** The budget an evening is actually opened with is the one this device remembers for this
+   * member and kind (decision 506) — on use rather than on every nudge of the slider. */
+  function rememberControls() {
+    rememberBudget(session.user?.id, tonight.controls.kind, tonight.controls.runtime_budget_min);
+  }
+
   async function openAndWatch() {
     const room = await openRoom();
-    if (room) watch(room.session_id);
+    if (room) {
+      rememberControls();
+      watch(room.session_id);
+    }
   }
 
   async function joinAndWatch(args) {
@@ -268,7 +290,7 @@
           <button
             class="pill"
             aria-pressed={tonight.controls.kind === value}
-            onclick={() => (tonight.controls.kind = value)}
+            onclick={() => chooseKind(value, session.user?.id)}
             data-testid={`tonight-kind-${value}`}>{label}</button
           >
         {/each}
@@ -300,6 +322,11 @@
             : ''}</span
         >
       </label>
+      <!-- §6.2 step 1's budget is soft, and this is where it is set: said here, before the
+           evening, rather than discovered on a card that "runs 40 min over". -->
+      <p class="why soft" data-testid="tonight-budget-soft">
+        {budgetSoftLine(tonight.controls.kind)}
+      </p>
       <label class="row">
         <span class="data label">REWATCHES</span>
         <input
@@ -333,7 +360,10 @@
       </button>
       <button
         class="door"
-        onclick={() => loadSolo()}
+        onclick={() => {
+          rememberControls();
+          loadSolo();
+        }}
         disabled={tonight.busy}
         data-testid="tonight-solo-door"
       >
@@ -420,9 +450,11 @@
           </li>
         {/each}
       </ul>
-      <!-- Decision 480's "not tonight": any seated member, before Start, up to three. A title
-           carrying the term with a quote behind it leaves tonight's list; an inference alone does
-           not, which is what kept Raiders of the Lost Ark in a "no violence" evening. -->
+      <!-- Decision 480's "not tonight": any seated member, before Start. Up to three EACH, and
+           the pool leaves out everything anyone ruled out (decision 505) — the chips are this
+           phone's own, and the lines under them say whose the others are. A title goes if it
+           may carry the term in either tier, quoted or inferred (decision 504), which is what the
+           caption's "may contain" is honest about. -->
       <div class="vetoes" data-testid="tonight-vetoes">
         <p class="data label">NOT TONIGHT</p>
         <div class="row">
@@ -432,12 +464,19 @@
               class="pill veto"
               aria-pressed={on}
               disabled={tonight.busy || (!on && vetoKeys.length >= MAX_VETOES)}
-              onclick={() => toggleVeto(option.key)}
+              onclick={() => toggleVeto(option.key, session.user?.id)}
               data-testid={`tonight-veto-${option.key}`}>{option.label}</button
             >
           {/each}
         </div>
-        <p class="why">Anyone here can rule out up to three before the round starts.</p>
+        {#each othersVetoes as line (line)}
+          <p class="data" data-testid="tonight-others-vetoes">{line}</p>
+        {/each}
+        <p class="why">{VETO_CAPTION}</p>
+        <!-- The mood the second household evening asked for a control to say: the answers carry
+             it already, so the lobby says how rather than adding a question (§0's stored-mood
+             measurement; decision 480 keeps the mood round deleted). -->
+        <p class="why" data-testid="tonight-mood-caption">{MOOD_CAPTION}</p>
       </div>
       {#if isHost}
         <p class="why">Start whenever you are ready. Anyone who joins before you start is in.</p>
@@ -476,14 +515,21 @@
           >
             <span class="art"><RatePoster title={posterOf(title)} showName={false} /></span>
             <span class="big">{title?.name}</span>
-            <span class="why">{title?.year} · {title?.fit_line}</span>
+            <!-- What the title is, for somebody who does not know it: year, runtime, how far
+                 over the budget it runs if it does, and its genres in plain words. -->
+            {#each pairFacts(title) as fact, i (i)}
+              <span class="why fact" data-testid={`tonight-pair-fact-${side}`}>{fact}</span>
+            {/each}
           </button>
         {/each}
       </div>
-      <div class="row">
+      <!-- The two level answers side by side, each half the width and allowed to wrap: stacked,
+           they cost the height the pair cards' genre line needs to keep both options and every
+           answer above an iPhone 13's bottom bar. -->
+      <div class="levels">
         {#each ANSWERS.filter((a) => a.value === 'EITHER' || a.value === 'NEITHER') as choice}
           <button
-            class="pill"
+            class="pill level"
             onclick={() => answer(choice.value)}
             disabled={tonight.busy}
             data-testid={`tonight-answer-${choice.value}`}>{choice.label}</button
@@ -603,6 +649,11 @@
              winner card was missing under decision 219 is `fit_line`'s, and the server builds
              that one. [decision 219] -->
         <p class="why">{metaLine(tonight.result.winner)}</p>
+        {#if tonight.result.winner?.label}
+          <!-- The wildcard won: this card is its one place on the reveal, so it carries the
+               honest label the wildcard block would have. -->
+          <p class="why" data-testid="tonight-winner-label">{tonight.result.winner.label}</p>
+        {/if}
         <p class="data" data-testid="tonight-approval-share">{approvalShare(tonight.result)}</p>
         {#if tonight.result.winner?.reserved}
           <!-- 54d: the reserved finalist is "labelled as such". The household is told "here's
@@ -688,8 +739,11 @@
               <p>{tonight.result.wildcard.name}</p>
               <!-- §6.4's "honestly labelled" is served, not spelled here: the words are the rule,
                    and the label IS the honesty, so the screen does not also announce that it is
-                   being honest. -->
-              <p class="why">{tonight.result.wildcard.label}</p>
+                   being honest. Its approvals are said here, once — the runners-up no longer list
+                   it a second time. -->
+              <p class="why" data-testid="tonight-wildcard-line">
+                {`${tonight.result.wildcard.label} · ${tonight.result.wildcard.approvals ?? 0} approved`}
+              </p>
             </div>
           </div>
         </div>
@@ -792,14 +846,16 @@
                 >
                   <span class="art"><RatePoster title={posterOf(title)} showName={false} /></span>
                   <span class="big">{title?.name}</span>
-                  <span class="why">{title?.year} · {title?.fit_line}</span>
+                  {#each pairFacts(title) as fact, i (i)}
+                    <span class="why fact">{fact}</span>
+                  {/each}
                 </button>
               {/each}
             </div>
-            <div class="row">
+            <div class="levels">
               {#each ANSWERS.filter((a) => a.value !== 'A' && a.value !== 'B') as choice}
                 <button
-                  class="pill"
+                  class="pill level"
                   onclick={() => sharpen(choice.value)}
                   disabled={tonight.busy}
                   data-testid={`tonight-sharpen-${choice.value}`}>{choice.label}</button
@@ -876,12 +932,21 @@
   /* The art's WIDTH is what bounds it, because the shared poster is `width: 100%` inside a 2:3
      frame: 13vh wide is at most 19.5vh tall, and the title is held to two lines, so on an iPhone
      13's 664 px the pair, the two level answers and Undo all sit above the bottom bar (measured
-     against the devstub at 390 x 664: the level answers wrap to two rows at that width). */
+     against the devstub at 390 x 664 with two-line titles, an over-budget line and genres on both
+     cards: Undo ends at 602 of the bar's 603). */
   .art { display: block; width: min(100%, 13vh); align-self: center; }
   .choice .big {
     display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical;
     overflow: hidden;
   }
+  /* The facts under a pair card's name sit tight under it, one short line each. */
+  .choice .fact { line-height: 1.35; }
+  /* Decision 154's two level answers, side by side and allowed to wrap inside their half: the
+     longer label is wider than half a phone, and a pill that wraps to two lines is still one
+     48 px target where stacking them cost a whole row. */
+  .levels { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  .level { white-space: normal; line-height: 1.25; padding-inline: 12px; }
+  .soft { margin: 0; }
   .thumb { display: block; flex: 0 0 44px; width: 44px; }
   /* Bounded like `.art`, so the winner's Play on Jellyfin stays on a phone's first screen. */
   .hero { display: block; width: min(100%, 16vh); }
@@ -913,7 +978,15 @@
   .option[aria-pressed='true'] { border-color: var(--ember-edge); background: var(--ember-wash); }
   .option-text { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
   .tick { flex: 0 0 18px; color: var(--ember-lift); font-size: 16px; }
-  .submit { width: 100%; min-height: var(--touch); margin-top: 8px; }
+  /* Held at the bottom of the scroll area while the options run on below it: four rows put
+     Submit under the fold on an iPhone 13 (the second household evening), and the one filled
+     control on the screen is the one that must always be in reach. `main` is the scroll
+     container and ends above the bottom bar, so a sticky bottom sits on the bar and not under
+     it. */
+  .submit {
+    width: 100%; min-height: var(--touch); margin-top: 8px;
+    position: sticky; bottom: 8px; z-index: 1;
+  }
   .runner { display: flex; align-items: center; gap: 10px; padding: 4px 0; }
   .runner p { margin: 0; }
   /* The pick cards and the wildcard beside them are the same object and lay out the same way:

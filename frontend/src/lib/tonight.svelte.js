@@ -23,6 +23,8 @@
  */
 
 import { ApiError, get, post } from '$lib/api.js';
+// The one place a runtime is formatted ("1h 57m", "45m/ep"), which the reveal already reads.
+import { runtimeLabel } from '$lib/rate.svelte.js';
 
 /** §6.2 step 1's controls. The slider's bounds and default are proposal 57's, because §6.2
  * gives none and a slider needs them. */
@@ -30,6 +32,80 @@ export const BUDGET_MIN = 60;
 export const BUDGET_MAX = 200;
 export const BUDGET_STEP = 5;
 export const BUDGET_DEFAULT = 130;
+
+/** §6.2 step 1: the budget is soft — "the pool admits up to budget + 40 min" — and the slider now
+ * says so where it is set. The spec's number, mirrored from `tonight/pool.py`'s
+ * `BUDGET_GRACE_MIN` the way the bounds above mirror the route's. */
+export const BUDGET_GRACE_MIN = 40;
+
+/**
+ * The line under the slider, which is what makes the soft budget legible before the evening
+ * rather than after it. The second household evening set 120 and was offered Wicked "runs 40 min
+ * over": the pool honoured §6.2 step 1 exactly, and nothing on the screen where 120 was chosen had
+ * said that a longer film can still come up. On a series night the bound is per episode
+ * (decision 219), and the line says which number it is about.
+ * @param {string} kind
+ */
+export function budgetSoftLine(kind) {
+  return kind === 'series'
+    ? `episodes up to ${BUDGET_GRACE_MIN} min longer can still come up, marked with how far over`
+    : `films up to ${BUDGET_GRACE_MIN} min longer can still come up, marked with how far over`;
+}
+
+/** Where this device remembers each member's last budget, per kind (decision 506). */
+const BUDGET_MEMORY = 'spielplan.tonight.budget';
+
+/**
+ * The budget this member last used for this kind on this device, or null.
+ *
+ * Per kind, because the number means different things on the two nights (decision 219: minutes
+ * per episode on a series night), so a film night's 120 must not open a series night at "120 min
+ * per episode". Per member, because the account chip can switch who is holding a shared phone.
+ * Browser storage and nothing more: a convenience for the person holding this phone, which may be
+ * absent (a private window, cleared site data) — then the slider opens at §6.2's default.
+ * @param {number|null|undefined} userId @param {string} kind
+ */
+export function rememberedBudget(userId, kind) {
+  if (userId == null) return null;
+  try {
+    const all = JSON.parse(localStorage.getItem(`${BUDGET_MEMORY}.${userId}`) ?? '{}');
+    const minutes = Number(all?.[kind]);
+    return Number.isFinite(minutes) && minutes >= BUDGET_MIN && minutes <= BUDGET_MAX
+      ? minutes
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Remember the budget an evening was actually opened with. @param {number|null|undefined} userId */
+export function rememberBudget(userId, kind, minutes) {
+  if (userId == null) return;
+  try {
+    const key = `${BUDGET_MEMORY}.${userId}`;
+    const all = JSON.parse(localStorage.getItem(key) ?? '{}') ?? {};
+    localStorage.setItem(key, JSON.stringify({ ...all, [kind]: minutes }));
+  } catch {
+    // Storage refused (a private window, a full quota): the evening still opens.
+  }
+}
+
+/**
+ * The controls as this member last left them: the kind as it stands and that kind's remembered
+ * budget. The second household evening set 120, and the next visit opened at 130 again.
+ * @param {number|null|undefined} userId
+ */
+export function restoreBudget(userId) {
+  const minutes = rememberedBudget(userId, tonight.controls.kind);
+  if (minutes !== null) tonight.controls.runtime_budget_min = minutes;
+}
+
+/** The kind pill. Switching kind brings that kind's own remembered budget with it, when there is
+ * one, for `rememberedBudget`'s reason. @param {string} kind @param {number|null|undefined} userId */
+export function chooseKind(kind, userId) {
+  tonight.controls.kind = kind;
+  restoreBudget(userId);
+}
 
 /** §6.2 step 1: "members and/or N guests", who share the initiator's phone. */
 export const MAX_GUESTS = 6;
@@ -71,8 +147,24 @@ export function pickLabel(name) {
   return `${name}'s pick`;
 }
 
-/** Decision 480's "not tonight" chips: at most this many per room, which the server enforces too. */
+/** Decision 480's "not tonight" chips: at most this many per member (decision 505), which the
+ * server enforces too. */
 export const MAX_VETOES = 3;
+
+/** What the lobby says under the chips (decisions 504 and 505), and it has to be true of both:
+ * each member holds their own three, and a title that may contain what anyone ruled out is left
+ * out for everyone — "may", because the pool reads the inferred tier as well as the quoted one. */
+export const VETO_CAPTION =
+  'Each of you can rule out up to three. A film that may contain any of them is left out for everyone tonight.';
+
+/**
+ * §6.2 step 4's answers carry the mood, and this is the lobby saying so (the second household
+ * evening: "there is no way to say what mood you are in"). A stored mood profile is measured at
+ * 0.000 for choosing tonight (§0), and the round's tilt already learns the evening's mood from the
+ * answers, so the remedy is to say how to use them rather than to add a question.
+ */
+export const MOOD_CAPTION =
+  "In a particular mood? In each pair, pick the one that fits it, and tap “Neither pulls me tonight” when neither does. The pairs learn your mood as you answer.";
 
 /** 54d's reserved finalist, "labelled as such": the card carrying the other pole of the
  * contested axis, so a household told "here's one of each" can see which one is the other each.
@@ -877,10 +969,16 @@ export function minutesAgo(iso) {
   return Math.max(0, Math.round((Date.now() - then) / 60000));
 }
 
-/** 54c's waiting line: "Patrick 6/6 ✓ · Jenny 9/~12 · waiting for 2". Counts only. */
+/** 54c's waiting line: "Patrick 6/6 ✓ · Jenny 9/~10 · waiting for 2". Counts only. Once a seat is
+ * past the typical round the server sends no estimate (decision 507), and the line gives the count
+ * alone: "Jenny 12/~13" moved with every tap and promised an end one pair away. */
 export function progressLine(progress) {
   const parts = progress.map((p) =>
-    p.finished ? `${p.name} ${p.answered}/${p.answered} done` : `${p.name} ${p.answered}/~${p.expected}`
+    p.finished
+      ? `${p.name} ${p.answered}/${p.answered} done`
+      : p.expected == null
+        ? `${p.name} ${p.answered} so far`
+        : `${p.name} ${p.answered}/~${p.expected}`
   );
   const waiting = progress.filter((p) => !p.finished).length;
   return waiting ? `${parts.join(' · ')} · waiting for ${waiting}` : parts.join(' · ');
@@ -904,14 +1002,45 @@ export function applyBallotCount(frame) {
   tonight.ballot = { ...tonight.ballot, submitted: frame.submitted, seated: frame.seated };
 }
 
-/** The round's header: which pair this is and what to expect, never the cap as the plan. The cap
- * joins the line only once a round is near it, because by then it is the useful number. */
+/**
+ * The round's header: which pair this is and what to expect, never the cap as the plan.
+ *
+ * AN ESTIMATE THAT STAYS TRUE (decision 507). It read "usually about 10" on every pair, so the
+ * second household evening's thirteenth pair still promised ten. Up to the typical round it says
+ * how rounds often go; past it, that this one is running long, with the cap that does end it —
+ * which is the useful number from there, and "just pick for us" is on the screen beside it.
+ */
 export function roundHeader(round) {
   if (!round) return '';
   const n = (round.answered ?? 0) + 1;
-  const parts = [`pair ${n}`, `usually about ${round.typical ?? 10}`];
-  if (round.cap && n >= round.cap - 5) parts.push(`at most ${round.cap}`);
-  return parts.join(' · ');
+  const typical = round.typical ?? 10;
+  if (n <= typical) return `pair ${n} · often about ${typical}`;
+  return [`pair ${n}`, 'a longer round than most', round.cap ? `at most ${round.cap}` : null]
+    .filter(Boolean)
+    .join(' · ');
+}
+
+/** How many characters of genres fit one line of a pair card, which is half a phone wide: two
+ * genres when they fit ("Animation, Family"), else the first alone ("Adventure, Science Fiction"
+ * wrapped the card at 390 px and pushed the answers down). */
+const PAIR_GENRE_CHARS = 22;
+
+/**
+ * What a pair card says about a title under its name, for somebody who does not know it (the
+ * second household evening: "Warriors of the Wind" and "Perfect Days" said "1984 · fits your 120
+ * min" and nothing else). The year and the runtime; "runs N min over" when it does, on its own
+ * line (§6.2 step 1's label); and the title's genres in plain words. One short line each, so both
+ * options and every answer still fit an iPhone 13's screen with the longest titles.
+ */
+export function pairFacts(title) {
+  if (!title) return [];
+  const genres = title.genres ?? [];
+  const both = genres.slice(0, 2).join(', ');
+  return [
+    [title.year, runtimeLabel(title)].filter(Boolean).join(' · '),
+    title.over_budget_min ? title.fit_line : null,
+    both.length <= PAIR_GENRE_CHARS ? both : genres[0]
+  ].filter(Boolean);
 }
 
 /** After this phone has voted: the ballot's own status, never the round's counts. */
@@ -944,15 +1073,52 @@ export function onlyYesLines(result) {
 }
 
 /**
- * Decision 480's "not tonight" chips: the whole set, replaced, so two phones tapping at once
- * cannot leave half of each. Any seated member, before Start; the server refuses the rest.
+ * This phone's seat in the room: the lobby read's own `me` where it has one, else the seat the
+ * signed-in member holds (the open and join replies carry the seats and no `me`).
+ * @param {any} lobby @param {number|null|undefined} userId
  */
-export async function setVetoes(keys) {
+export function mySeat(lobby, userId) {
+  return lobby?.me ?? (lobby?.seats ?? []).find((s) => s.user_id === userId && userId != null) ?? null;
+}
+
+/** The chips THIS member has on, by key (decision 505). @param {number|null|undefined} userId */
+export function myVetoKeys(lobby, userId) {
+  return (mySeat(lobby, userId)?.vetoes ?? []).map((v) => v.key);
+}
+
+/**
+ * The other members' chips, one line per member who has any: "Jenny: violence, horror". Each
+ * member holds their own three (decision 505), so a phone shows its own as chips and names whose
+ * the rest are — the second household evening's second member found the room's chips taken and no
+ * way to tell they were somebody else's.
+ * @param {any} lobby @param {number|null|undefined} userId
+ */
+export function othersVetoLines(lobby, userId) {
+  const me = mySeat(lobby, userId);
+  return (lobby?.seats ?? [])
+    .filter((s) => s.participant_id !== me?.participant_id && (s.vetoes ?? []).length)
+    .map((s) => `${s.name}: ${s.vetoes.map((v) => v.label).join(', ')}`);
+}
+
+/**
+ * Decision 480's "not tonight" chips: this member's whole set, replaced, so two taps on one phone
+ * cannot leave half of each — and another member's set is never touched (decision 505). Any
+ * seated member, before Start; the server refuses the rest.
+ * @param {string[]} keys @param {number|null|undefined} userId
+ */
+export async function setVetoes(keys, userId) {
   if (!tonight.lobby || tonight.busy) return;
   tonight.busy = true;
   try {
     const out = await post(`/tonight/sessions/${tonight.lobby.session_id}/vetoes`, { vetoes: keys });
-    tonight.lobby = { ...tonight.lobby, vetoes: out.vetoes };
+    const me = mySeat(tonight.lobby, userId);
+    const seats = out.seats ?? tonight.lobby.seats;
+    tonight.lobby = {
+      ...tonight.lobby,
+      vetoes: out.vetoes,
+      seats,
+      me: me ? (seats ?? []).find((s) => s.participant_id === me.participant_id) ?? me : me
+    };
     tonight.error = '';
   } catch (err) {
     fail(err);
@@ -961,11 +1127,12 @@ export async function setVetoes(keys) {
   }
 }
 
-export async function toggleVeto(key) {
-  const now = (tonight.lobby?.vetoes ?? []).map((v) => v.key);
+/** @param {string} key @param {number|null|undefined} userId */
+export async function toggleVeto(key, userId) {
+  const now = myVetoKeys(tonight.lobby, userId);
   const next = now.includes(key) ? now.filter((k) => k !== key) : [...now, key];
   if (next.length > MAX_VETOES) return;
-  await setVetoes(next);
+  await setVetoes(next, userId);
 }
 
 /** The room's join link (decision 481): the QR's missing half, and what the push carries too. */

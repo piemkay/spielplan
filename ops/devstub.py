@@ -90,6 +90,7 @@ from spielplan.rate import direct as rate_direct  # noqa: E402 - decision 487's 
 from spielplan.rate import session as rate_session  # noqa: E402
 from spielplan.sources import base as sources  # noqa: E402 - the adapters' own key registry
 from spielplan.tonight import combine as tonight_combine  # noqa: E402 - the real slate
+from spielplan.tonight import play as tonight_play  # noqa: E402 - the real waiting estimate
 from spielplan.tonight import pool as tonight_pool  # noqa: E402 - the real §6.2 step 3 pool
 from spielplan.tonight import rooms as tonight_rooms_mod  # noqa: E402 - the real room code
 from spielplan.tonight import round as tonight_round  # noqa: E402 - the real adaptive round
@@ -4415,9 +4416,15 @@ def _tonight_lobby(room: dict[str, Any]) -> dict[str, Any]:
         "include_rewatches": room["include_rewatches"],
         "started_at": room["started_at"],
         "host": room["host"],
-        "seats": [dict(s) for s in room["seats"]],
+        # Each seat with its own "not tonight" chips, as `rooms.lobby` sends them (decision 505).
+        "seats": [
+            {**s, "vetoes": _tonight_veto_payload(
+                room.get("vetoes_by", {}).get(s["participant_id"], [])
+            )}
+            for s in room["seats"]
+        ],
         # Decision 480's lobby control, from the real list so the chips the harness draws are the
-        # chips the app draws.
+        # chips the app draws: the union every seat's own adds up to.
         "vetoes": _tonight_vetoes(room),
         "veto_options": [
             {"key": k, "label": label} for k, (label, _) in tonight_pool.VETOES.items()
@@ -4425,8 +4432,13 @@ def _tonight_lobby(room: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+def _tonight_veto_payload(keys) -> list[dict[str, str]]:
+    return [{"key": k, "label": tonight_pool.VETOES[k][0]} for k in tonight_pool.VETOES if k in keys]
+
+
 def _tonight_vetoes(room: dict[str, Any]) -> list[dict[str, str]]:
-    return [{"key": k, "label": tonight_pool.VETOES[k][0]} for k in room.get("vetoes", [])]
+    union = {k for keys in room.get("vetoes_by", {}).values() for k in keys}
+    return _tonight_veto_payload(union)
 
 
 class TonightVetoBody(BaseModel):
@@ -4494,18 +4506,23 @@ def tonight_rooms(spielplan_session: str | None = Cookie(default=None)) -> dict[
 def tonight_vetoes(
     session_id: int, body: TonightVetoBody, spielplan_session: str | None = Cookie(default=None)
 ) -> dict[str, Any]:
-    """Decision 480's "not tonight" chips. The harness keeps the set on the room and refuses what
-    the app refuses; it builds no pool, so a veto here changes the lobby and nothing else."""
+    """Decision 480's "not tonight" chips, up to three per seated member (decision 505). The
+    harness keeps each seat's set on the room and refuses what the app refuses; it builds no pool,
+    so a veto here changes the lobby and nothing else."""
     user = _me(spielplan_session)
     room = _tonight_room(session_id)
-    if not any(s["user_id"] == user["id"] for s in room["seats"]):
+    seat = next((s for s in room["seats"] if s["user_id"] == user["id"]), None)
+    if seat is None:
         raise HTTPException(403, {"reason": "not_seated", "message": "not in this room"})
     if set(body.vetoes) - set(tonight_pool.VETOES) or len(set(body.vetoes)) > tonight_pool.MAX_VETOES:
         raise HTTPException(422, {"reason": "bad_veto", "message": "not on the list"})
     if room["state"] != "open":
         raise HTTPException(409, {"reason": "started", "message": "the room has started"})
-    room["vetoes"] = [k for k in tonight_pool.VETOES if k in set(body.vetoes)]
-    return {"session_id": session_id, "vetoes": _tonight_vetoes(room)}
+    room.setdefault("vetoes_by", {})[seat["participant_id"]] = [
+        k for k in tonight_pool.VETOES if k in set(body.vetoes)
+    ]
+    lobby = _tonight_lobby(room)
+    return {"session_id": session_id, "vetoes": lobby["vetoes"], "seats": lobby["seats"]}
 
 
 @app.post("/api/tonight/sessions", status_code=201)
@@ -4581,7 +4598,9 @@ def tonight_lobby_route(
         **_tonight_lobby(room),
         "progress": [
             {"participant_id": s["participant_id"], "seat": s["seat"], "name": s["name"],
-             "answered": s["answered_count"], "expected": tonight_round.CAP_PAIRS,
+             "answered": s["answered_count"],
+             # The app's own estimate rule (decisions 477 and 507), never the cap.
+             "expected": tonight_play.expected_pairs(s["answered_count"]),
              "finished": s["ended_by"] is not None, "ended_by": s["ended_by"]}
             for s in room["seats"]
         ],
@@ -4682,14 +4701,20 @@ def _tonight_state(room: dict[str, Any], seat: dict[str, Any]) -> dict[str, Any]
         c = by_id.get(title_id)
         if c is None:
             return None
-        return {"title_id": c.title_id, "name": c.name, "year": c.year,
+        return {"title_id": c.title_id, "name": c.name, "year": c.year, "kind": c.kind,
                 "runtime_min": c.runtime_min, "poster_path": c.poster_path,
-                "fit_line": c.fit_line, "over_budget_min": c.over_budget_min}
+                "fit_line": c.fit_line, "over_budget_min": c.over_budget_min,
+                # The pair card's plain description, as `play.start` freezes it: decision 473's
+                # canonical genres, Wikidata left out, two at most.
+                "genres": genre_vocab.facet(
+                    {g.lower() for g in _genres_of(c.title_id)}
+                )[:tonight_pool.CARD_GENRES]}
 
     return {
         "participant_id": seat["participant_id"],
         "answered": seat["answered_count"],
         "cap": tonight_round.CAP_PAIRS,
+        "typical": tonight_round.TYPICAL_PAIRS,
         "ended_by": seat["ended_by"],
         "stop_reason": played.stop_reason,
         "escape_available": seat["ended_by"] is None
@@ -4912,7 +4937,7 @@ def tonight_result(
             "approvals": approvals.get(title_id, 0),
             "fit_line": c.fit_line,
             "match_lines": [
-                {"name": s["name"], "line": f"pulls {s['name']} with the pool's own terms",
+                {"name": s["name"], "line": f"{s['name']} leaned toward the pool's own terms tonight",
                  "terms": [], "sign": "pull"}
                 for s in room["seats"]
             ],
@@ -4929,19 +4954,27 @@ def tonight_result(
             "play_url": None,
         }
 
+    # `tonight/result.slate`'s rule: the runners-up are the finalists that lost, closest first,
+    # and the wildcard is shown once — in its own block, or as the winner when it won.
+    rank = {t: i for i, (t, _) in enumerate(slate.ranked)}
     return {
         "session_id": session_id,
         "beat": "VOTES REVEALED TOGETHER",
-        "winner": card(winner_id, "finalist"),
+        "winner": card(winner_id, "wildcard" if winner_id == slate.wildcard else "finalist"),
         "approval_share": approvals.get(winner_id, 0) / seated if seated else 0.0,
         "participants": seated,
         "unanimous": approvals.get(winner_id, 0) == seated,
         "finalists": [card(t, "finalist") for t in slate.finalists],
-        "wildcard": None if slate.wildcard is None else card(slate.wildcard, "wildcard"),
+        "wildcard": (
+            None if slate.wildcard is None or slate.wildcard == winner_id
+            else card(slate.wildcard, "wildcard")
+        ),
         "runners_up": [
-            card(t, "runner_up") for t, _ in slate.ranked
-            if t not in slate.ballot_titles and t in by_id
-        ][:4],
+            card(t, "finalist") for t in sorted(
+                (t for t in slate.finalists if t != winner_id),
+                key=lambda t: (-approvals.get(t, 0), rank.get(t, 0)),
+            )
+        ],
     }
 
 

@@ -2219,6 +2219,9 @@ async def test_each_match_line_branch_says_the_thing_it_is_for(db, world):
     assert pulled["sign"] == "pull"
     assert carried[0] in pulled["line"], "the line names the term that earned it, by its label"
     assert "patrick" in pulled["line"], "and the person it is about"
+    # In plain words (the second household evening read "pulls Patrick with pulp + escapist" as
+    # jargon): what this person's answers leaned toward, said as that.
+    assert pulled["line"] == f"patrick leaned toward {carried[0]} tonight", pulled["line"]
 
     against = await line_for({t: -1.0 for t in carried}, below)
     assert against["sign"] == "against"
@@ -2242,6 +2245,10 @@ async def test_each_match_line_branch_says_the_thing_it_is_for(db, world):
     assert favourite["sign"] == "pull", favourite
     assert "works against them" not in favourite["line"]
     assert {t["term"] for t in favourite["terms"]} <= set(carried)
+    # Nothing tonight leaned this way, so the line claims only what the branch establishes: the
+    # title is not below this person's usual. Never "leaned toward", which would be false here.
+    assert favourite["line"].startswith("suits patrick's usual taste — "), favourite["line"]
+    assert "leaned" not in favourite["line"] and "+" not in favourite["line"]
 
 
 from spielplan.tonight import dna as tonight_dna  # noqa: E402
@@ -2440,6 +2447,7 @@ async def test_the_reveal_is_assembled_where_the_other_tonight_rules_are(db, wor
         combine.SLOT_FINALIST, combine.SLOT_WILDCARD
     }, "the pool's tail was never on a ballot, so it is not a runner-up"
     assert all(c["title_id"] != wildcard_id for c in card["runners_up"])
+    assert card["wildcard"] is None, "the wildcard won, so the winner card is its one place"
     order = [(-c["approvals"], c["rank"]) for c in card["runners_up"]]
     assert order == sorted(order), "most approved first, then the closest on rank"
     assert card["winner"]["fit_line"], "the budget fit line the reveal prints"
@@ -4675,9 +4683,13 @@ async def test_breadth_is_not_readable_before_every_ballot_is_in(db, world):
 
 
 async def test_progress_expected_is_an_estimate_not_the_cap(db, world):
-    """54c's "Jenny 9/~12": every unfinished seat read "~20", the cap the round is built to stop
-    short of. The estimate is the sweep's median until a seat passes it, and it is still a
-    function of the count alone — the statement stays blind (54c)."""
+    """54c's "Mia 4/~10": every unfinished seat read "~20", the cap the round is built to stop
+    short of. The estimate is the sweep's median until a seat reaches it, and it is still a
+    function of the count alone — the statement stays blind (54c).
+
+    AND NOTHING ONCE THE SEAT HAS REACHED IT (decision 507). It was one more than the count, so
+    the second household evening's waiting line read "Jenny 12/~13" and moved with every tap; a
+    round past the typical is the one least likely to end soon, so the count alone is honest."""
     room = await running_room(db, world, wide=True)
     first = room["seats"][0]["id"]
     fresh = await play.progress(db, room["session_id"])
@@ -4685,16 +4697,18 @@ async def test_progress_expected_is_an_estimate_not_the_cap(db, world):
     assert rnd.TYPICAL_PAIRS < rnd.CAP_PAIRS
 
     await db.execute(
-        "UPDATE session_participant SET answered_count = 14 WHERE id = $1", first
+        "UPDATE session_participant SET answered_count = 12 WHERE id = $1", first
     )
     past = await play.progress(db, room["session_id"])
-    assert next(p for p in past if p["participant_id"] == first)["expected"] == 15
-    assert play.expected_pairs(40) == rnd.CAP_PAIRS, "and never past the cap that does end it"
+    assert next(p for p in past if p["participant_id"] == first)["expected"] is None
+    assert play.expected_pairs(rnd.TYPICAL_PAIRS - 1) == rnd.TYPICAL_PAIRS
+    assert play.expected_pairs(rnd.TYPICAL_PAIRS) is None, "reached, so no invented next number"
+    assert play.expected_pairs(40) is None, "and never the cap"
 
 
 async def _veto_fixture(db):
     """`mood.violent` in the fixture's vocabulary: quote-verified on title 1, inferred only on
-    title 3 — the two tiers a veto has to tell apart (decision 480)."""
+    title 3 — one title in each tier, and a veto reads both (decisions 480 and 504)."""
     await db.execute(
         "INSERT INTO dna_term (version, term, facet) VALUES ($1, 'mood.violent', 'mood')", VOCAB
     )
@@ -4714,10 +4728,11 @@ async def _veto_fixture(db):
     )
 
 
-async def test_a_vetoed_term_removes_the_titles_that_carry_it_in_the_quote_verified_tier(db, world):
-    """Decision 480: a presence predicate over the extracted tier. Title 1 carries the term with a
-    quote behind it and leaves the pool; title 3 carries it by inference alone and stays — on the
-    first household's library the inferred tier would have taken Raiders of the Lost Ark."""
+async def test_a_vetoed_term_removes_the_titles_that_carry_it_in_either_tier(db, world):
+    """Decision 504: a presence predicate over both tiers. Title 1 carries the term with a quote
+    behind it and title 3 by inference alone, and both leave the pool — the second household
+    evening served John Wick to the member who had ruled out violence because the projected tier
+    was the only one carrying it. Nothing else leaves: a veto removes carriers, never neighbours."""
     await _veto_fixture(db)
     plain = await build(db, world, include_rewatches=True)
     vetoed = await build(
@@ -4726,29 +4741,49 @@ async def test_a_vetoed_term_removes_the_titles_that_carry_it_in_the_quote_verif
     )
     assert 1 in {c.title_id for c in plain} and 3 in {c.title_id for c in plain}
     assert 1 not in {c.title_id for c in vetoed}, "the quote-verified carrier is vetoed"
-    assert 3 in {c.title_id for c in vetoed}, "an inference alone does not take a film away"
-    assert {c.title_id for c in plain} - {c.title_id for c in vetoed} == {1}
+    assert 3 not in {c.title_id for c in vetoed}, "and so is the one carrying it by projection"
+    assert {c.title_id for c in plain} - {c.title_id for c in vetoed} == {1, 3}
 
 
 async def test_vetoes_are_any_seated_members_to_set_and_only_before_start(db, world):
     """The first household's member who wanted "nothing violent" was not the host. Any seated
-    member sets the room's vetoes while it is open; a stranger cannot; a started room has already
-    built its pool, so a late veto is refused rather than quietly ignored."""
+    member sets vetoes while the room is open; a stranger cannot; a started room has already
+    built its pool, so a late veto is refused rather than quietly ignored.
+
+    AND EACH MEMBER HOLDS THEIR OWN THREE (decision 505). On the second household evening the
+    first member to tap took the room's three, and the other found the fourth chip greyed out and
+    could add nothing. Here the host uses all three and the other member still sets one of theirs;
+    neither write touches the other's, the lobby says whose each is, and the pool excludes the
+    union."""
     await _veto_fixture(db)
     room = await open_room(db, world, include_rewatches=True, budget_min=200)
-    await rooms.join(db, session_id=room["session_id"], user_id=world["jenny"])
+    joined = await rooms.join(db, session_id=room["session_id"], user_id=world["jenny"])
     stranger = await make_user(db, "mia")
 
+    three = ["violence", "horror", "harrowing"]
+    assert await rooms.set_vetoes(
+        db, session_id=room["session_id"], user_id=world["patrick"], keys=three
+    ) == three
     kept = await rooms.set_vetoes(
-        db, session_id=room["session_id"], user_id=world["jenny"], keys=["violence"]
+        db, session_id=room["session_id"], user_id=world["jenny"], keys=["sexual_violence"]
     )
-    assert kept == ["violence"]
+    assert kept == ["sexual_violence"], "a full set on one seat leaves the next seat its own three"
     lobby = await rooms.lobby(db, room["session_id"])
-    assert lobby["vetoes"] == [{"key": "violence", "label": "violence"}]
+    union = ["violence", "sexual_violence", "horror", "harrowing"]
+    assert [v["key"] for v in lobby["vetoes"]] == union
+    by_seat = {s["user_id"]: [v["key"] for v in s["vetoes"]] for s in lobby["seats"]}
+    assert by_seat == {world["patrick"]: three, world["jenny"]: ["sexual_violence"]}
     listed = await rooms.open_rooms(db, viewer_id=world["patrick"])
-    assert next(r for r in listed if r["session_id"] == room["session_id"])["vetoes"] == [
-        {"key": "violence", "label": "violence"}
-    ], "the open-rooms row shows what the room has ruled out"
+    assert [
+        v["key"] for v in next(r for r in listed if r["session_id"] == room["session_id"])["vetoes"]
+    ] == union, "the open-rooms row shows everything the room has ruled out"
+
+    # One member lifting their own leaves the other's standing.
+    await rooms.set_vetoes(
+        db, session_id=room["session_id"], user_id=world["patrick"], keys=["violence"]
+    )
+    lobby = await rooms.lobby(db, room["session_id"])
+    assert [v["key"] for v in lobby["vetoes"]] == ["violence", "sexual_violence"]
 
     with pytest.raises(rooms.RoomError) as outsider:
         await rooms.set_vetoes(
@@ -4763,8 +4798,19 @@ async def test_vetoes_are_any_seated_members_to_set_and_only_before_start(db, wo
 
     await play.start(db, room["session_id"])
     snapshot = await play.snapshot_of(db, room["session_id"])
-    assert 1 not in snapshot.candidates, "the room's veto reached the frozen pool"
-    assert 3 in snapshot.candidates
+    assert 1 not in snapshot.candidates and 3 not in snapshot.candidates, (
+        "a veto one member set reached the frozen pool, over both tiers"
+    )
+    frozen = await db.fetchval(
+        "SELECT context -> 'pool' FROM session WHERE id = $1", room["session_id"]
+    )
+    frozen = frozen if isinstance(frozen, dict) else json.loads(frozen)
+    assert frozen["vetoes"] == ["violence", "sexual_violence"]
+    host_seat = next(s["participant_id"] for s in lobby["seats"] if s["role"] == "host")
+    assert frozen["vetoes_by"] == {
+        str(joined["participant_id"]): ["sexual_violence"],
+        str(host_seat): ["violence"],
+    }, "whose each veto was is frozen beside the union, for the evening's reader"
     with pytest.raises(rooms.RoomError) as late:
         await rooms.set_vetoes(
             db, session_id=room["session_id"], user_id=world["jenny"], keys=[]
@@ -4795,3 +4841,65 @@ async def test_a_pool_the_vetoes_empty_says_which_veto_to_lift(db, world):
         await play.start(db, room["session_id"])
     assert empty.value.reason == "empty_pool"
     assert "lift the veto on violence" in str(empty.value)
+
+
+# --- the second household evening (owner instruction of 2026-09-26) ---------------------------
+
+
+async def test_the_pair_card_names_each_titles_genres_in_plain_words(db, world):
+    """A pair card asked "Warriors of the Wind or Perfect Days?" of a member who knew neither, and
+    said only "1984 · fits your 120 min". Each candidate is frozen with up to two genres from
+    decision 473's canonical vocabulary, read across the structured sources as the catalogue's
+    facet reads them — Wikidata's free text left out, two sources' spellings of one genre counted
+    once — and the card a seat is served carries them. Plain words, never a DNA term, because the
+    card is shown before anything is decided."""
+    for title_id, genre, source in [
+        (1, "Animation", "tmdb"), (1, "anime", "trakt"), (1, "Fantasy", "tmdb"),
+        (1, "Adventure", "omdb"), (1, "coming-of-age film", "wikidata"),
+        (2, "Drama", "tmdb"), (2, "drama", "trakt"),
+    ]:
+        await db.execute(
+            "INSERT INTO title_genre (title_id, genre, source) VALUES ($1, $2, $3)",
+            title_id, genre, source,
+        )
+    assert await pool.genres_of(db, [1, 2, 3]) == {
+        1: ["Adventure", "Animation"], 2: ["Drama"],
+    }, "two at most, in the canonical order; a title with none is absent"
+
+    room = await running_room(db, world)
+    snapshot = await play.snapshot_of(db, room["session_id"])
+    assert snapshot.candidates[1]["genres"] == ["Adventure", "Animation"]
+    assert snapshot.candidates[2]["genres"] == ["Drama"]
+    assert snapshot.candidates[3]["genres"] == []
+    card = await play.state_for(db, room["seats"][0]["id"], z=Z)
+    assert card["pair"] is not None, "the round has a pair to show, or this is vacuous"
+    for side in ("a", "b"):
+        assert isinstance(card["pair"][side]["genres"], list)
+        assert "." not in "".join(card["pair"][side]["genres"]), "a vocabulary id, not a genre"
+
+
+async def test_the_reveal_lists_each_card_once(db, world):
+    """§6.2 step 7: the winner, the runners-up and one wildcard. The runners-up were every ballot
+    card but the winner, so the second household evening's reveal listed Everything Everywhere All
+    at Once twice — "0 approved" under Runners-up, and again as the Wildcard. The runners-up are
+    the finalists that lost; the wildcard is its own block with its own count. (When the wildcard
+    wins, `test_the_reveal_is_assembled_where_the_other_tonight_rules_are` holds the other half:
+    the winner card is its one place.)"""
+    room = await finished_session(db, world)
+    session_id = room["session_id"]
+    await play.settle(db, session_id, z=Z)
+    slate = await ballot.slate_of(db, session_id)
+    finalists = [r["title_id"] for r in slate if r["slot"] == combine.SLOT_FINALIST]
+    wildcard_id = next(r["title_id"] for r in slate if r["slot"] == combine.SLOT_WILDCARD)
+    for seat in room["seats"]:
+        await ballot.submit(db, participant_id=seat["id"], approved=[finalists[0]])
+    card = await result.slate(
+        db, session_id, await ballot.tally(db, session_id), await ballot.resolve(db, session_id),
+    )
+    assert card["winner"]["title_id"] == finalists[0]
+    assert card["runners_up"] and all(
+        c["slot"] == combine.SLOT_FINALIST for c in card["runners_up"]
+    ), "the runners-up are the finalists that lost"
+    assert wildcard_id not in {c["title_id"] for c in card["runners_up"]}
+    assert card["wildcard"]["title_id"] == wildcard_id
+    assert card["wildcard"]["approvals"] == 0, "and its own count travels with its own block"

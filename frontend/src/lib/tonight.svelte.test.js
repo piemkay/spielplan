@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   ANSWERS,
   BUDGET_DEFAULT,
+  BUDGET_GRACE_MIN,
   BUDGET_MAX,
   BUDGET_MIN,
   BUDGET_STEP,
@@ -10,14 +11,18 @@ import {
   JOIN_CAPTION,
   MAX_GUESTS,
   MAX_VETOES,
+  MOOD_CAPTION,
   RECONNECT_MAX_MS,
   RESERVED_LABEL,
   REVEAL_BEAT,
+  VETO_CAPTION,
   answer,
   approvalShare,
   ballotTurns,
   ballotWaitingLine,
   breadthLine,
+  budgetSoftLine,
+  chooseKind,
   connect,
   endRoom,
   escape,
@@ -29,11 +34,17 @@ import {
   loadRound,
   loadSolo,
   minutesAgo,
+  myVetoKeys,
   onlyYesLines,
+  othersVetoLines,
+  pairFacts,
   pickLabel,
   progressLine,
   reconnectDelay,
   refresh,
+  rememberBudget,
+  rememberedBudget,
+  restoreBudget,
   roomLine,
   roundHeader,
   shareLink,
@@ -97,11 +108,11 @@ describe('the waiting line (54c)', () => {
   // from `name`, `answered`, `expected` and `finished` for words no field can supply asserts
   // nothing about the renderer, only about the fixture. [M4.10 finding 33]
   // `expected` is the server's estimate since the 2026-09-25 wave (`play.expected_pairs`): the
-  // sweep's typical round until a seat passes it, one more than answered after that. It was the
+  // sweep's typical round until a seat reaches it, and none after that (decision 507). It was the
   // cap for every seat, so this fixture carried 20 and the line read "Jenny 9/~20".
   const progress = [
     { name: 'Patrick', answered: 6, expected: 10, finished: true, answer: 'NEITHER', pair: 'Heat' },
-    { name: 'Jenny', answered: 11, expected: 12, finished: false, answer: 'EITHER', pair: 'Drive' },
+    { name: 'Jenny', answered: 11, expected: null, finished: false, answer: 'EITHER', pair: 'Drive' },
     { name: 'Mia', answered: 4, expected: 10, finished: false, answer: 'A', pair: 'Sicario' }
   ];
 
@@ -110,7 +121,7 @@ describe('the waiting line (54c)', () => {
     // second half — the renderer must not draw them even when they are handed to it.
     const line = progressLine(progress);
     expect(line).toContain('Patrick 6/6 done');
-    expect(line).toContain('Jenny 11/~12');
+    expect(line).toContain('Jenny 11 so far');
     expect(line).toContain('Mia 4/~10');
     expect(line).toContain('waiting for 2');
     expect(line, "a seat's answer reached the waiting line").not.toMatch(/EITHER|NEITHER/i);
@@ -126,6 +137,14 @@ describe('the waiting line (54c)', () => {
 
   it('is empty rather than wrong with nobody seated', () => {
     expect(progressLine([])).toBe('');
+  });
+
+  it('gives the count alone once a seat is past the typical round, never an invented end', () => {
+    // Decision 507: the second household evening's waiting line read "Jenny 12/~13" — one more
+    // than she had answered, moving with every tap — over a round that ran on to the escape.
+    const long = [{ name: 'Jenny', answered: 12, expected: null, finished: false }];
+    expect(progressLine(long)).toBe('Jenny 12 so far · waiting for 1');
+    expect(progressLine(long)).not.toMatch(/~\d/);
   });
 });
 
@@ -949,14 +968,18 @@ describe('overlapping reads land in order (finding 21)', () => {
 });
 
 describe('the first household evening (owner instruction of 2026-09-25)', () => {
-  it('heads the round with what to expect, and names the cap only near it', () => {
+  it('heads the round with what to expect, and names the cap only once the round runs long', () => {
     // "pair 1 · cap 20" read as the plan for the evening; the cap is the ending the round is
-    // built to avoid, so it joins the line only when a round is close enough for it to matter.
-    expect(roundHeader({ answered: 0, cap: 20, typical: 10 })).toBe('pair 1 · usually about 10');
-    expect(roundHeader({ answered: 13, cap: 20, typical: 10 })).not.toContain('20');
-    expect(roundHeader({ answered: 14, cap: 20, typical: 10 })).toBe(
-      'pair 15 · usually about 10 · at most 20'
+    // built to avoid, so it joins the line only when it is the useful number. And the estimate
+    // stays true (decision 507): the second household evening's thirteenth pair still said
+    // "usually about 10", so past the typical round the header says this one is running long.
+    expect(roundHeader({ answered: 0, cap: 20, typical: 10 })).toBe('pair 1 · often about 10');
+    expect(roundHeader({ answered: 9, cap: 20, typical: 10 })).toBe('pair 10 · often about 10');
+    expect(roundHeader({ answered: 9, cap: 20, typical: 10 })).not.toContain('20');
+    expect(roundHeader({ answered: 12, cap: 20, typical: 10 })).toBe(
+      'pair 13 · a longer round than most · at most 20'
     );
+    expect(roundHeader({ answered: 12, cap: 20, typical: 10 })).not.toContain('about 10');
     expect(roundHeader(null)).toBe('');
   });
 
@@ -1022,27 +1045,53 @@ describe('the first household evening (owner instruction of 2026-09-25)', () => 
   });
 
   it('sets the whole veto set, and never a fourth', async () => {
-    // Decision 480: a replace rather than a toggle, so two phones tapping at once cannot leave
-    // half of each; and the store refuses a fourth before the server has to.
-    world.room = roomOf({ state: 'open', vetoes: [] });
+    // Decision 480: a replace rather than a toggle, so two taps cannot leave half of each; and
+    // the store refuses a fourth before the server has to. Since decision 505 the set is THIS
+    // member's own: the other member's full three (the second household evening's first tapper)
+    // leave this phone its own three, and the reply's seats are what the chips redraw from.
+    const other = seatOf(12, { role: 'member', user_id: 2, name: 'Jenny' });
+    const full = ['violence', 'horror', 'harrowing'].map((k) => ({ key: k, label: k }));
+    world.room = roomOf({
+      state: 'open',
+      vetoes: full,
+      seats: [seatOf(11, { vetoes: [] }), { ...other, vetoes: full }],
+      me: seatOf(11, { vetoes: [] })
+    });
     tonight.lobby = { ...world.room };
     fetchMock.mockImplementation(async (path, opts = {}) => {
       calls.push({ method: opts.method ?? 'GET', path, body: opts.body ? JSON.parse(opts.body) : null });
       const keys = JSON.parse(opts.body).vetoes;
-      return reply({ session_id: 7, vetoes: keys.map((k) => ({ key: k, label: k })) });
+      const mine = keys.map((k) => ({ key: k, label: k }));
+      return reply({
+        session_id: 7,
+        vetoes: [...full, ...mine],
+        seats: [seatOf(11, { vetoes: mine }), { ...other, vetoes: full }]
+      });
     });
-    await toggleVeto('violence');
-    expect(posted('/api/tonight/sessions/7/vetoes')).toEqual({ vetoes: ['violence'] });
-    expect(tonight.lobby.vetoes.map((v) => v.key)).toEqual(['violence']);
+    expect(myVetoKeys(tonight.lobby, 1), 'the other member used all three of theirs').toEqual([]);
+    expect(othersVetoLines(tonight.lobby, 1)).toEqual(['Jenny: violence, horror, harrowing']);
+    await toggleVeto('sexual_violence', 1);
+    expect(posted('/api/tonight/sessions/7/vetoes')).toEqual({ vetoes: ['sexual_violence'] });
+    expect(myVetoKeys(tonight.lobby, 1)).toEqual(['sexual_violence']);
+    expect(tonight.lobby.me.vetoes.map((v) => v.key)).toEqual(['sexual_violence']);
+    expect(tonight.lobby.vetoes).toHaveLength(4);
 
     tonight.lobby = {
       ...tonight.lobby,
-      vetoes: [{ key: 'a' }, { key: 'b' }, { key: 'c' }]
+      me: seatOf(11, { vetoes: [{ key: 'a' }, { key: 'b' }, { key: 'c' }] })
     };
     calls = [];
-    await toggleVeto('violence');
-    expect(calls, 'a fourth veto went to the server').toEqual([]);
+    await toggleVeto('violence', 1);
+    expect(calls, 'a fourth of my own went to the server').toEqual([]);
     expect(MAX_VETOES).toBe(3);
+  });
+
+  it("finds this phone's seat from the seats when a reply carries no me", () => {
+    // The open and join replies carry the room's seats and no `me`; the lobby read carries both.
+    const lobby = roomOf({ me: undefined, seats: [seatOf(11, { vetoes: [{ key: 'horror' }] })] });
+    expect(myVetoKeys(lobby, 1)).toEqual(['horror']);
+    expect(myVetoKeys(lobby, 99)).toEqual([]);
+    expect(othersVetoLines(null, 1)).toEqual([]);
   });
 
   it('builds the join link from the page origin, and reads one back', () => {
@@ -1077,5 +1126,101 @@ describe('the first household evening (owner instruction of 2026-09-25)', () => 
     expect(await followLink('QC-4397'), 'the room on screen is joined already').toBe(9);
     expect(calls).toEqual([]);
     expect(await followLink(null)).toBeNull();
+  });
+});
+
+describe('the second household evening (owner instruction of 2026-09-26)', () => {
+  /** A Map-backed `localStorage`, because the one under test is the only thing that knows the
+   * key; and one that refuses below, because a private window throws on every access. */
+  const storage = () => {
+    const held = new Map();
+    return {
+      getItem: (k) => (held.has(k) ? held.get(k) : null),
+      setItem: (k, v) => held.set(k, String(v))
+    };
+  };
+
+  it('says under the slider that the budget is soft, and by how much', () => {
+    // §6.2 step 1 admits up to budget + 40, and the evening that set 120 met Wicked "runs 40 min
+    // over" with nothing on the door having said so. On a series night the bound is per episode.
+    expect(BUDGET_GRACE_MIN).toBe(40);
+    expect(budgetSoftLine('movie')).toBe(
+      'films up to 40 min longer can still come up, marked with how far over'
+    );
+    expect(budgetSoftLine('series')).toContain('episodes up to 40 min longer');
+  });
+
+  it('opens the slider at the budget this member last used for this kind', () => {
+    // Decision 506: 120 set on the evening, 130 on the next visit. Per member and per kind,
+    // because a film's 120 is not an episode's 120 (decision 219).
+    vi.stubGlobal('localStorage', storage());
+    rememberBudget(1, 'movie', 120);
+    rememberBudget(1, 'series', 70);
+    rememberBudget(2, 'movie', 180);
+    expect(rememberedBudget(1, 'movie')).toBe(120);
+    expect(rememberedBudget(1, 'series')).toBe(70);
+    expect(rememberedBudget(2, 'movie'), 'another member on the same phone').toBe(180);
+    expect(rememberedBudget(null, 'movie'), 'nobody signed in').toBeNull();
+
+    tonight.controls.kind = 'movie';
+    tonight.controls.runtime_budget_min = 130;
+    restoreBudget(1);
+    expect(tonight.controls.runtime_budget_min).toBe(120);
+    chooseKind('series', 1);
+    expect(tonight.controls.runtime_budget_min, 'the kind brings its own number').toBe(70);
+    chooseKind('movie', 3);
+    expect(tonight.controls.runtime_budget_min, 'nothing remembered leaves the slider be').toBe(70);
+    tonight.controls.kind = 'movie';
+    tonight.controls.runtime_budget_min = 130;
+  });
+
+  it('opens at the default when the stored value is out of range or storage refuses', () => {
+    const store = storage();
+    store.setItem('spielplan.tonight.budget.1', JSON.stringify({ movie: 9999, series: 'x' }));
+    vi.stubGlobal('localStorage', store);
+    expect(rememberedBudget(1, 'movie')).toBeNull();
+    expect(rememberedBudget(1, 'series')).toBeNull();
+    vi.stubGlobal('localStorage', {
+      getItem: () => {
+        throw new Error('denied');
+      },
+      setItem: () => {
+        throw new Error('denied');
+      }
+    });
+    expect(rememberedBudget(1, 'movie')).toBeNull();
+    expect(() => rememberBudget(1, 'movie', 120), 'a refused write stops no evening').not.toThrow();
+  });
+
+  it('describes a pair card title for somebody who does not know it', () => {
+    // "Warriors of the Wind" and "Perfect Days" said "1984 · fits your 120 min" and nothing else.
+    expect(
+      pairFacts({ year: 1984, kind: 'movie', runtime_min: 117, genres: ['Adventure', 'Animation'] })
+    ).toEqual(['1984 · 1h 57m', 'Adventure, Animation']);
+    // Over budget: the spec's label on a line of its own, so the card does not wrap mid-phrase.
+    expect(
+      pairFacts({
+        year: 2024, kind: 'movie', runtime_min: 160, over_budget_min: 40,
+        fit_line: 'runs 40 min over', genres: ['Drama']
+      })
+    ).toEqual(['2024 · 2h 40m', 'runs 40 min over', 'Drama']);
+    // Two genres only when they fit half a phone's line; else the first.
+    expect(pairFacts({ year: 2009, genres: ['Adventure', 'Science Fiction'] })).toEqual([
+      '2009',
+      'Adventure'
+    ]);
+    expect(pairFacts({ year: 2023 }), 'no genres, no empty line').toEqual(['2023']);
+    expect(pairFacts(null)).toEqual([]);
+  });
+
+  it('tells the lobby what a veto does and how a mood is said, in plain words', () => {
+    // Decisions 504 and 505: each member's own three, and "may contain" because the pool also
+    // reads what is only inferred. The mood: the answers carry it, so the copy says how.
+    expect(VETO_CAPTION).toContain('Each of you can rule out up to three');
+    expect(VETO_CAPTION).toContain('may contain');
+    expect(MOOD_CAPTION).toContain(ANSWERS.find((a) => a.value === 'NEITHER').label);
+    for (const copy of [VETO_CAPTION, MOOD_CAPTION]) {
+      expect(copy).not.toMatch(/tier|projected|extracted|tilt|decision|§/i);
+    }
   });
 });

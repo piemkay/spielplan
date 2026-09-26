@@ -321,7 +321,7 @@ test.describe('tonight', () => {
     await expect(page.getByTestId('tonight-escape-locked')).toBeVisible();
     await expect(page.getByTestId('tonight-escape')).toHaveCount(0);
     // What to expect, never "cap 20" as the plan (the first household evening's header).
-    await expect(page.getByTestId('tonight-round-count')).toContainText('usually about');
+    await expect(page.getByTestId('tonight-round-count')).toContainText('often about');
     await expect(page.getByTestId('tonight-round-count')).not.toContainText('cap');
 
     // AND ALL FOUR ARE ON THE SCREEN AT ONCE on the phone, above the bottom bar: the pair buttons
@@ -521,6 +521,14 @@ test.describe('tonight', () => {
     const first = await options.first().getAttribute('data-testid');
     await page.getByTestId(first).click();
     await expect(ticked(page), 'the owner voted, or the blindness claim below is vacuous').toHaveCount(1);
+    // Submit is in reach with the options still running on below it: the second household
+    // evening's phone had to scroll for it after ticking. Measured the way the round's fit is,
+    // against the bottom bar where the nav is one.
+    const bar = await page.getByRole('navigation', { name: 'Surfaces' }).boundingBox();
+    const height = page.viewportSize().height;
+    const fold = bar && bar.y > height / 2 ? bar.y : height;
+    const submitBox = await page.getByTestId('tonight-submit-ballot').boundingBox();
+    expect(submitBox.y + submitBox.height, 'Submit sits below the fold').toBeLessThanOrEqual(fold + 1);
     await page.getByTestId('tonight-submit-ballot').click();
 
     // One submission is not every submission (54e). The hand-off control is waited for FIRST,
@@ -827,5 +835,28 @@ test.describe('tonight', () => {
     await page.getByTestId('tonight-end-room').click();
     await page.getByTestId('tonight-end-room-confirm').click();
     await expect(page.getByTestId('tonight-controls')).toBeVisible();
+  });
+
+  test('the slider says the budget is soft, and opens where this member last left it', async () => {
+    // §6.2 step 1's budget admits up to 40 min over, and the second household evening met Wicked
+    // "runs 40 min over" at 120 min with nothing on the door having said so; the next visit then
+    // opened the slider at 130 again. The line is on the door, and the budget an evening was
+    // opened with is the one the door opens at next time, per kind.
+    await atTheDoor({ rewatches: false });
+    await expect(page.getByTestId('tonight-budget-soft')).toContainText('up to 40 min longer');
+    await page.getByTestId('tonight-budget').fill('120');
+    await expect(page.getByTestId('tonight-budget-value')).toContainText('120 min');
+    await page.getByTestId('tonight-solo-door').click();
+    await expect(page.getByTestId('tonight-solo')).toBeVisible();
+
+    await atTheDoor({ rewatches: false });
+    await expect(page.getByTestId('tonight-budget-value')).toHaveText('120 min');
+
+    // And back to the default, through the same door, so the file leaves the phone as it found it.
+    await page.getByTestId('tonight-budget').fill('130');
+    await page.getByTestId('tonight-solo-door').click();
+    await expect(page.getByTestId('tonight-solo')).toBeVisible();
+    await atTheDoor({ rewatches: false });
+    await expect(page.getByTestId('tonight-budget-value')).toHaveText('130 min');
   });
 });

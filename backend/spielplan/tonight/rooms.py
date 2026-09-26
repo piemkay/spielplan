@@ -308,7 +308,7 @@ async def lobby(conn: asyncpg.Connection, session_id: int) -> dict[str, Any]:
         """
         SELECT s.id, s.room_code, s.state, s.kind, s.runtime_budget_min, s.include_rewatches,
                s.started_at, s.ended_at, s.host_user_id, u.name AS host_name,
-               s.context -> 'vetoes' AS vetoes
+               s.context -> 'vetoes' AS vetoes, s.context -> 'vetoes_by' AS vetoes_by
           FROM session s JOIN app_user u ON u.id = s.host_user_id
          WHERE s.id = $1
         """,
@@ -327,6 +327,7 @@ async def lobby(conn: asyncpg.Connection, session_id: int) -> dict[str, Any]:
         """,
         session_id,
     )
+    by_seat = vetoes_by_seat({"vetoes_by": row["vetoes_by"]})
     return {
         "session_id": row["id"],
         "room_code": row["room_code"],
@@ -338,8 +339,11 @@ async def lobby(conn: asyncpg.Connection, session_id: int) -> dict[str, Any]:
         "host": {"user_id": row["host_user_id"], "name": row["host_name"]},
         # §6.2 step 1's "not tonight" control (decision 480): what the room has vetoed, and the
         # fixed list it may choose from, by label. Controls of the room rather than facts about
-        # the pool, so they sit beside the budget and carry no candidate.
-        "vetoes": _vetoes_payload(vetoes_of({"vetoes": row["vetoes"]})),
+        # the pool, so they sit beside the budget and carry no candidate. `vetoes` is the union
+        # the pool will exclude; each seat below carries its own (decision 505).
+        "vetoes": _vetoes_payload(
+            vetoes_of({"vetoes": row["vetoes"], "vetoes_by": row["vetoes_by"]})
+        ),
         "veto_options": [{"key": k, "label": label} for k, (label, _) in VETOES.items()],
         "seats": [
             {
@@ -353,6 +357,9 @@ async def lobby(conn: asyncpg.Connection, session_id: int) -> dict[str, Any]:
                 "avatar": p["avatar"],
                 "answered_count": p["answered_count"],
                 "ended_by": p["ended_by"],
+                # What this member ruled out, so each phone can show its own chips and name whose
+                # the others are (decision 505).
+                "vetoes": _vetoes_payload(by_seat.get(p["id"], [])),
             }
             for p in people
         ],
@@ -371,6 +378,7 @@ async def open_rooms(conn: asyncpg.Connection, *, viewer_id: int) -> list[dict[s
         """
         SELECT s.id, s.room_code, s.state, s.kind, s.runtime_budget_min, s.include_rewatches,
                s.started_at, u.name AS host_name, s.context -> 'vetoes' AS vetoes,
+               s.context -> 'vetoes_by' AS vetoes_by,
                count(p.id) AS seated,
                bool_or(p.user_id = $1) AS viewer_seated
           FROM session s
@@ -399,25 +407,54 @@ async def open_rooms(conn: asyncpg.Connection, *, viewer_id: int) -> list[dict[s
             # happening — but its seat is not tappable. Hiding it would be a worse lie.
             "joinable": r["state"] == STATE_OPEN and not r["viewer_seated"],
             # Shown on the row so somebody deciding whether to join knows what tonight has
-            # already ruled out (decision 480).
-            "vetoes": _vetoes_payload(vetoes_of({"vetoes": r["vetoes"]})),
+            # already ruled out (decision 480): the union, whoever ruled it out (decision 505).
+            "vetoes": _vetoes_payload(
+                vetoes_of({"vetoes": r["vetoes"], "vetoes_by": r["vetoes_by"]})
+            ),
         }
         for r in rows
     ]
 
 
-def vetoes_of(context: Any) -> list[str]:
-    """The veto keys a session's `context` carries, known keys only and in `VETOES` order.
+def _decoded(value: Any, empty: Any) -> Any:
+    """A jsonb value in either shape it reaches here in — decoded by `db/pool.py`'s codec, or a
+    string where a connection has none."""
+    if isinstance(value, str):
+        value = json.loads(value)
+    return value if value else empty
 
-    Tolerant of the two shapes jsonb reaches here in — decoded by `db/pool.py`'s codec, or a
-    string where a connection has none — and of a key a later build retired, which simply stops
-    vetoing anything rather than failing the room.
+
+def vetoes_by_seat(context: Any) -> dict[int, list[str]]:
+    """Each seated member's own veto keys, by participant id (decision 505): known keys only and in
+    `VETOES` order, and a seat with none is absent rather than listed empty."""
+    ctx = _decoded(context, {})
+    out: dict[int, list[str]] = {}
+    for seat, keys in _decoded(ctx.get("vetoes_by"), {}).items():
+        known = [k for k in VETOES if k in set(keys or [])]
+        if known:
+            out[int(seat)] = known
+    return out
+
+
+def vetoes_of(context: Any) -> list[str]:
+    """The veto keys the room's pool excludes, known keys only and in `VETOES` order.
+
+    THE UNION OF EVERY SEAT'S OWN (decision 505). Decision 480 kept one set per room, replaced on
+    each change, and on the second household evening the first member to tap took all three slots:
+    Patrick found "sexual violence" greyed out and could add nothing. Each member now holds up to
+    three, and a title any of them ruled out is out for everyone, because a veto is a person saying
+    what they will not watch tonight and a room that averaged it away would not be one. The
+    room-wide `vetoes` a room opened before decision 505 wrote is still read, so an evening in
+    flight across the deploy keeps what it ruled out.
+
+    Tolerant of a key a later build retired, which simply stops vetoing anything rather than
+    failing the room.
     """
-    ctx = context if isinstance(context, dict) else json.loads(context or "{}")
-    raw = ctx.get("vetoes") or []
-    if isinstance(raw, str):
-        raw = json.loads(raw)
-    return [k for k in VETOES if k in set(raw)]
+    ctx = _decoded(context, {})
+    union = set(_decoded(ctx.get("vetoes"), []))
+    for keys in vetoes_by_seat(ctx).values():
+        union.update(keys)
+    return [k for k in VETOES if k in union]
 
 
 def _vetoes_payload(keys: Sequence[str]) -> list[dict[str, str]]:
@@ -427,7 +464,7 @@ def _vetoes_payload(keys: Sequence[str]) -> list[dict[str, str]]:
 async def set_vetoes(
     conn: asyncpg.Connection, *, session_id: int, user_id: int, keys: Sequence[str]
 ) -> list[str]:
-    """Replace a room's "not tonight" vetoes. §6.2 step 1 as decision 480 amends it.
+    """Replace THIS member's "not tonight" vetoes. §6.2 step 1 as decisions 480 and 505 amend it.
 
     ANY SEATED MEMBER, and only before Start. The first household evening's member who wanted
     "nothing violent" was not the host, so a host-only control would have left her exactly where
@@ -435,23 +472,30 @@ async def set_vetoes(
     a veto after that would be a promise the evening cannot keep. The state predicate is in the
     UPDATE for `join`'s reason: a veto racing the host's Start either lands before the claim or is
     refused, never written into a room whose pool is already built without it.
+
+    UP TO THREE EACH, keyed by the member's seat, and the pool excludes the union (`vetoes_of`).
+    One statement merges this seat's list into `vetoes_by` and leaves every other seat's alone, so
+    two phones tapping at once cannot overwrite each other: under READ COMMITTED the second UPDATE
+    waits for the first and re-evaluates its SET against the row the first committed.
     """
     unknown = sorted(set(keys) - set(VETOES))
     if unknown:
         raise RoomError("bad_veto", f"{unknown} are not on the list")
     wanted = [k for k in VETOES if k in set(keys)]
     if len(wanted) > MAX_VETOES:
-        raise RoomError("bad_veto", f"at most {MAX_VETOES} vetoes a room")
-    seated = await conn.fetchval(
-        "SELECT 1 FROM session_participant WHERE session_id = $1 AND user_id = $2",
+        raise RoomError("bad_veto", f"at most {MAX_VETOES} vetoes each")
+    seat = await conn.fetchval(
+        "SELECT id FROM session_participant WHERE session_id = $1 AND user_id = $2",
         session_id, user_id,
     )
-    if seated is None:
+    if seat is None:
         raise RoomError("not_seated", "only somebody in the room can change what it rules out")
     moved = await conn.fetchval(
-        "UPDATE session SET context = jsonb_set(context, '{vetoes}', to_jsonb($2::text[])) "
-        "WHERE id = $1 AND state = $3 AND ended_at IS NULL RETURNING id",
-        session_id, wanted, STATE_OPEN,
+        "UPDATE session SET context = jsonb_set(context, '{vetoes_by}', "
+        "  coalesce(context -> 'vetoes_by', '{}'::jsonb) "
+        "  || jsonb_build_object($2::text, to_jsonb($3::text[]))) "
+        "WHERE id = $1 AND state = $4 AND ended_at IS NULL RETURNING id",
+        session_id, str(seat), wanted, STATE_OPEN,
     )
     if moved is None:
         raise RoomError("started", "the room has started, so tonight's list is already built")
@@ -608,5 +652,6 @@ __all__ = [
     "seats_of",
     "set_state",
     "set_vetoes",
+    "vetoes_by_seat",
     "vetoes_of",
 ]

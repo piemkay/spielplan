@@ -327,6 +327,10 @@ async def start(conn: asyncpg.Connection, session_id: int) -> Snapshot:
             )
 
         ids = [c.title_id for c in candidates]
+        # The pair card's plain description of a title nobody at the table knows, frozen with the
+        # candidate it describes so every read of a card says the same thing. Genres rather than
+        # DNA: the card is shown before anything is decided and must not preview the pool's order.
+        genres = await pool_rules.genres_of(conn, ids)
         payload = {
             "candidates": {
                 str(c.title_id): {
@@ -334,6 +338,7 @@ async def start(conn: asyncpg.Connection, session_id: int) -> Snapshot:
                     "kind": c.kind, "runtime_min": c.runtime_min,
                     "poster_path": c.poster_path,
                     "over_budget_min": c.over_budget_min, "fit_line": c.fit_line,
+                    "genres": genres.get(c.title_id, []),
                 }
                 for c in candidates
             },
@@ -357,8 +362,10 @@ async def start(conn: asyncpg.Connection, session_id: int) -> Snapshot:
             "scale": pool_rules.SCALE_MARKER,
             # The vetoes this pool was built under, frozen for §14 risk 6's reader: the lobby
             # stops accepting changes at Start, and an evening's candidates are only explicable
-            # beside the filters that made them. [decision 480]
+            # beside the filters that made them. [decision 480] The union the pool excluded, and
+            # whose each one was, since each member now holds their own. [decision 505]
             "vetoes": vetoes,
+            "vetoes_by": {str(s): k for s, k in rooms.vetoes_by_seat(row["context"]).items()},
         }
         await conn.execute(
             # The dict, not a dumped string: `db/pool.py` registers a JSON codec on jsonb, so a
@@ -1076,16 +1083,23 @@ async def progress(conn: asyncpg.Connection, session_id: int) -> list[dict[str, 
     ]
 
 
-def expected_pairs(answered: int) -> int:
-    """§6.2 step 4's "Jenny 11/~12": an ESTIMATE of a seat's round, never the cap (decision 477).
+def expected_pairs(answered: int) -> int | None:
+    """§6.2 step 4's "Mia 4/~10": an ESTIMATE of a seat's round, never the cap (decision 477).
 
-    The typical round until the seat has passed it, then one more than it has answered — so the
-    line never tells somebody at pair 13 that they are due to stop at 10 — and never past the cap
-    that does end it. A function of the count alone, which is what keeps this statement blind: an
-    estimate read off the seat's own straddlers would put answer-derived data into the one payload
-    54c promises carries none.
+    The typical round until the seat reaches it, and then NOTHING (decision 507). It was one more
+    than the seat had answered, so the second household evening's waiting line read "Jenny 12/~13"
+    — a number that moved with every tap and promised the end was one pair away, when the round
+    measured past the typical is the one least likely to end soon: over 60 seeded rounds on a
+    700-title pool, 18 of the 40 still running after ten answers ran on to the cap. Past the
+    typical the count alone is the honest line ("Jenny 12 so far").
+
+    A function of the count alone, which is what keeps this statement blind: an estimate read off
+    the seat's own straddlers would put answer-derived data into the one payload 54c promises
+    carries none.
     """
-    return min(round_rules.CAP_PAIRS, max(answered + 1, round_rules.TYPICAL_PAIRS))
+    if answered >= round_rules.TYPICAL_PAIRS:
+        return None
+    return round_rules.TYPICAL_PAIRS
 
 
 async def everyone_finished(conn: asyncpg.Connection, session_id: int) -> bool:
@@ -1114,9 +1128,11 @@ async def _match_lines(
     on the screen the whole round exists to produce, so the terms come from the title's own
     `dna_tagged` rows and the participant's tilt only *orders* them.
 
-    Three branches, and §6.2 fixes two of them verbatim: the pull line, the honest negative
-    ("nothing here is their pull — *bleak* works against them"), and — for a guest with no grid
-    profile — a line rather than silence, because every participant gets one.
+    Three branches: the pull line, the honest negative §6.2 step 7 fixes verbatim ("nothing here
+    is their pull — *bleak* works against them"), and — for a guest with no grid profile — a line
+    rather than silence, because every participant gets one. Step 7 asks for the pull "in DNA
+    terms" and fixes no sentence for it; solo's "pulls you with {terms}" is step 8's, and the group
+    card says it in plainer words (`copy.leaned` / `copy.usual`).
 
     THE NEGATIVE IS FOR A TITLE BELOW THE PERSON'S USUAL, AND ONLY THEN. The branch read the tilt
     alone, so on the first household evening the winner — the other member's own top Ledger
@@ -1161,14 +1177,19 @@ async def _match_lines(
             key=lambda x: -x[1],
         )
         pulls = [x for x in scored if x[1] > 0.0][:2]
+        leaned = bool(pulls)
         if not pulls and not below_usual:
             # Theirs by stable taste: the title's own loudest carried terms, which is what solo
             # already says of a pick the Ledger put on top (`solo.PULL_WHY`).
             pulls = [(t["term"], 0.0, t["tier"]) for t in carried[:2]]
         if pulls:
+            # Each branch's own plain sentence rather than one "pulls {name} with a + b" for both,
+            # which read as jargon at the second household evening's reveal: the first is what
+            # this person's answers leaned toward, the second a title not below their usual.
+            words = [word(t) for t, _, _ in pulls]
             lines[str(seat["id"])] = {
                 "name": name,
-                "line": f"pulls {name} with " + " + ".join(word(t) for t, _, _ in pulls),
+                "line": copy_rules.leaned(name, words) if leaned else copy_rules.usual(name, words),
                 "terms": listed([(t, tier) for t, _, tier in pulls]),
                 "sign": "pull",
             }

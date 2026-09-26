@@ -177,10 +177,23 @@ async def slate(
         if row["slot"] in ON_THE_BALLOT
     ]
     winner = next((c for c in cards if c["title_id"] == outcome["chosen_title_id"]), None)
+    # ONE PLACE PER CARD. The runners-up were every ballot card but the winner, wildcard included,
+    # and the wildcard also has a block of its own below — so the second household evening's reveal
+    # listed Everything Everywhere All at Once twice, once as "0 approved" under Runners-up and once
+    # as the Wildcard. §6.2 step 7 names three things: the winner, the runners-up and one wildcard.
+    # The runners-up are the finalists that lost, and the wildcard is shown once, in its own block
+    # with its own count, unless it won, in which case the winner card is where it is.
     runners_up = sorted(
-        (c for c in cards if winner is None or c["title_id"] != winner["title_id"]),
+        (
+            c for c in cards
+            if c["slot"] == combine_rules.SLOT_FINALIST
+            and (winner is None or c["title_id"] != winner["title_id"])
+        ),
         key=lambda c: (-c["approvals"], c["rank"]),
     )
+    wildcard = next((c for c in cards if c["slot"] == combine_rules.SLOT_WILDCARD), None)
+    if wildcard is not None and winner is not None and wildcard["title_id"] == winner["title_id"]:
+        wildcard = None
     return {
         "session_id": session_id,
         "beat": BEAT,
@@ -194,9 +207,7 @@ async def slate(
         # together" permits once every ballot is in and not a moment before.
         "breadth": await breadth(conn, session_id, winner_id=outcome["chosen_title_id"]),
         "runners_up": runners_up,
-        "wildcard": next(
-            (c for c in cards if c["slot"] == combine_rules.SLOT_WILDCARD), None
-        ),
+        "wildcard": wildcard,
         "finalists": [c for c in cards if c["slot"] == combine_rules.SLOT_FINALIST],
     }
 
