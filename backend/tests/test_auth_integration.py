@@ -1,11 +1,4 @@
-"""Auth against a real database. Spec v2.1 §3.1, §3.2, §2.
-
-`test_auth_logic.py` covers the pure predicates. These are the parts that only exist once rows
-do: the forced first-login change, the one-time password's lifecycle, the sliding session, the
-admin re-prompt clock, and the PIN lockout.
-
-Skipped without TEST_DATABASE_URL; see tests/conftest.py.
-"""
+"""Auth against a real database (§3.1, §3.2, §2). Needs TEST_DATABASE_URL."""
 
 from __future__ import annotations
 
@@ -18,7 +11,7 @@ from spielplan.core import auth
 
 
 async def _member(db, name="jenny", *, otp=None) -> tuple[int, str]:
-    """Create an account the way §3.1 does: a one-time password, locked to a change."""
+    """An account the way §3.1 makes one: a one-time password, locked to a change."""
     otp = otp or auth.new_one_time_password()
     user_id = await db.fetchval(
         "INSERT INTO app_user (name, role, password_hash, must_change_password) "
@@ -29,11 +22,8 @@ async def _member(db, name="jenny", *, otp=None) -> tuple[int, str]:
     return user_id, otp
 
 
-# --- §3.1: the one-time password ------------------------------------------------------
-
-
 async def test_the_otp_is_stored_only_as_a_hash(db):
-    """It is shown once and never again. A plaintext column would make "shown once" a lie."""
+    """It is shown once and never again; a plaintext column would make "shown once" a lie."""
     user_id, otp = await _member(db)
     stored = await db.fetchval("SELECT password_hash FROM app_user WHERE id = $1", user_id)
     assert otp not in stored
@@ -68,9 +58,6 @@ async def test_names_are_unique_case_insensitively(db):
         await _member(db, "jenny")
 
 
-# --- §3.2: sessions -------------------------------------------------------------------
-
-
 async def test_a_session_round_trips_and_carries_the_preference(db):
     user_id, _ = await _member(db)
     sid = await auth.create_session(db, user_id, auth_method="password", device_label="phone")
@@ -83,12 +70,7 @@ async def test_a_session_round_trips_and_carries_the_preference(db):
 
 
 async def test_loading_a_session_slides_its_expiry(db):
-    """§3.2: "90-day sliding". A fixed window would sign the household out mid-year.
-
-    The slide is once a day, not once a request: a day-old `last_seen_at` moves the row and
-    reports it moved, and the load that follows within the same day moves nothing. That flag is
-    the cookie's cue, so a browser used daily keeps a cookie as fresh as the row it names.
-    """
+    """The slide is once a day, not once a request; the moved flag is the cookie's cue to refresh."""
     user_id, _ = await _member(db)
     sid = await auth.create_session(db, user_id, auth_method="password")
     await db.execute(
@@ -136,7 +118,6 @@ async def test_logout_removes_one_session_and_leaves_the_others(db):
 
 
 async def test_a_password_change_revokes_every_other_session(db):
-    """A change made because the old password leaked has to actually end the other sessions."""
     user_id, _ = await _member(db)
     keep = await auth.create_session(db, user_id, auth_method="password")
     for _ in range(3):
@@ -148,12 +129,8 @@ async def test_a_password_change_revokes_every_other_session(db):
     assert await db.fetchval("SELECT count(*) FROM auth_session WHERE user_id = $1", user_id) == 1
 
 
-# --- §3.2: the admin re-prompt --------------------------------------------------------
-
-
 async def test_a_password_login_stamps_the_admin_clock_and_a_pin_switch_does_not(db):
-    """§3.2: admin routes re-prompt after 24 h. A PIN is a convenience on a shared device and
-    must not silently satisfy that re-prompt."""
+    """A PIN is a convenience on a shared device and must not satisfy the 24 h admin re-prompt."""
     user_id = await db.fetchval(
         "INSERT INTO app_user (name, role) VALUES ('admin', 'admin') RETURNING id"
     )
@@ -174,9 +151,6 @@ async def test_the_admin_reprompt_fires_after_the_window(db):
         "UPDATE auth_session SET admin_verified_at = now() - interval '25 hours' WHERE id = $1", sid
     )
     assert (await auth.load_session(db, sid)).admin_reauth_required()
-
-
-# --- §3.2: the switch PIN -------------------------------------------------------------
 
 
 async def test_a_correct_pin_passes_and_clears_the_failure_count(db):
@@ -207,7 +181,7 @@ async def test_repeated_wrong_pins_lock_the_account_out(db):
     )
     assert locked_until is not None and locked_until > datetime.now(UTC)
 
-    # …and the correct PIN is refused while the lockout stands, or the lockout is theatre.
+    # ...and the correct PIN is refused while the lockout stands, or the lockout is theatre.
     ok, reason = await auth.check_pin(db, user_id, "1234")
     assert not ok
     assert "too many attempts" in reason
@@ -220,12 +194,8 @@ async def test_an_account_without_a_pin_cannot_be_switched_to(db):
     assert "no switch PIN" in reason
 
 
-# --- §3.2: the lockout is the defence, so it has to count every attempt --------------------
-
-
 async def test_concurrent_wrong_pins_each_count(db, pg_url):
-    """A read-modify-write would let ten simultaneous guesses cost one failure — and the
-    lockout, not the argon2 work factor, is what defends a 10,000-value keyspace."""
+    """A read-modify-write would let ten simultaneous guesses cost one failure."""
     import asyncio
 
     import asyncpg as _asyncpg
@@ -252,20 +222,8 @@ async def test_concurrent_wrong_pins_each_count(db, pg_url):
 
 @pytest.mark.parametrize("failures", [41, 42, 200])
 async def test_the_pin_lockout_is_bounded_however_far_the_counter_has_run(db, failures):
-    """as-01: the escalation doubles, and nothing but the cap stops it doubling out of range.
-
-    `pin_failed_count` has no ceiling — a script guessing at a 10,000-value keyspace passes 40
-    in seconds — and the exponent is computed inside `power()` before the outer `least()` ever
-    sees it, so Postgres raises `interval out of range` from the 42nd failure on: the route
-    answers 500, and neither the counter nor `pin_locked_until` is written. From that attempt
-    onwards there is no lockout at all, which is precisely the state one is for.
-
-    41 is the last count the uncapped form survives and 42 the first it does not, so the three
-    cases are the boundary, the first casualty, and a counter well past it. All three must
-    answer the same bounded refusal: `least(..., 6)` inside `power()` saturates the 1 h ceiling
-    at 2^6 minutes anyway, so capping the exponent changes no reachable lockout, only the
-    overflow.
-    """
+    """The exponent is computed inside `power()` before `least()` sees it, so from the 42nd failure
+    Postgres raised `interval out of range` and no lockout was written; 41 and 42 are the boundary."""
     user_id, _ = await _member(db)
     await db.execute(
         "UPDATE app_user SET pin_hash = $2, pin_failed_count = $3 WHERE id = $1",

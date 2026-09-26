@@ -1,18 +1,5 @@
-"""M4.6's account-security rows, at the route. Spec v2.1 §3.1, §3.2, §6.6, §2; decisions 164, 166.
-
-`test_admin_users.py` proves §6.6's lifecycle and its three floors. This file proves the rules
-that are *about* the account rather than about the roster: what a PIN session may not do, how a
-stale admin stamp is cleared, what repeated guesses cost, what an anonymous caller may see, and
-that the writes behind all of it are atomic. They live together because each one is a claim
-about an account boundary and none of them belongs to a single router — the two-roles rule is
-asserted at a route, in the schema and over the source; the PIN demotion spans auth, passkeys
-and push; the anonymous bound spans setup and the WebAuthn ceremonies.
-
-Every one of these was a defect the September 2026 pre-release review found, so each test names
-the behaviour that stood before it rather than only the rule that replaces it.
-
-Skipped without TEST_DATABASE_URL; see tests/conftest.py.
-"""
+"""Account-security rules at the route (§3.1, §3.2, decisions 164, 166): what a PIN session may not do,
+the re-prompt, the throttle, the anonymous bound, and atomic writes. Needs TEST_DATABASE_URL."""
 
 from __future__ import annotations
 
@@ -27,9 +14,7 @@ from spielplan.core import auth, webauthn
 from spielplan.core.config import settings
 from tests.fixtures.soft_authenticator import SoftAuthenticator
 
-# The dependency walk and the path-parameter filler, from the file whose subject they are
-# (`test_api_gating.py`'s module docstring: it proves the wiring). Imported rather than copied,
-# because a second walker is a second thing to keep true of the same app.
+# Imported rather than copied: a second walker is a second thing to keep true of the same app.
 from tests.test_api_gating import _routes, concrete
 
 ADMIN_PASSWORD = "an-admin-password"
@@ -47,7 +32,6 @@ async def _admin(app, name: str = "patrick"):
 
 
 async def _member(app, admin, name: str = "jenny"):
-    """A created account past §3.1's forced first-login change, on its own client."""
     made = await admin.post("/api/admin/users", json={"name": name, "role": "member"})
     assert made.status_code == 201, made.text
     otp = made.json()["one_time_password"]
@@ -63,7 +47,7 @@ async def _member(app, admin, name: str = "jenny"):
 
 
 async def _switched_in(admin, member):
-    """A session minted by §3.2's PIN switch: the handed-over-phone case, on the admin's client."""
+    """A session minted by §3.2's PIN switch: the handed-over-phone case."""
     set_pin = await member.post(
         "/api/auth/pin", json={"pin": MEMBER_PIN, "current_password": MEMBER_PASSWORD}
     )
@@ -75,9 +59,6 @@ async def _switched_in(admin, member):
     return admin, jenny
 
 
-# --- decision 166: two roles, and one place accounts are made -------------------------------
-
-
 @pytest.mark.parametrize(
     ("method", "path", "body"),
     [
@@ -87,11 +68,7 @@ async def _switched_in(admin, member):
     ids=("create", "re-role"),
 )
 async def test_a_guest_role_is_refused_at_every_route_that_writes_one(app, method, path, body):
-    """Decision 166: "There is no guest account." A guest is a Tonight session seat with
-    `user_id NULL` (§4.2), so the role never belonged on `app_user` — and `MemberInit` admitted
-    it, issued it a one-time password, and the resulting account read the household roster and
-    could PIN-switch. 422 from the schema, not a hand-written check: the route's `Literal` is
-    the same rule migration 0016's CHECK states one layer down."""
+    """Decision 166: a guest is a Tonight seat, never an account; the `Literal` mirrors 0016's CHECK."""
     admin = await _admin(app)
     made = await admin.post("/api/admin/users", json={"name": "jenny", "role": "member"})
     refused = await admin.request(method, path.format(user_id=made.json()["id"]), json=body)
@@ -99,9 +76,7 @@ async def test_a_guest_role_is_refused_at_every_route_that_writes_one(app, metho
 
 
 async def test_the_app_user_check_admits_exactly_two_roles(db):
-    """Migration 0016 narrows `0002_users.sql`'s three-value CHECK to decision 166's two. The
-    route can only be as good as the column: an importer, a fixture or a psql session that
-    wrote 'guest' would otherwise make an account no route can make."""
+    """The route is only as good as the column: a psql write of 'guest' would bypass it."""
     for role in ("admin", "member"):
         written = await db.fetchval(
             "INSERT INTO app_user (name, role) VALUES ($1, $2) RETURNING role", role, role
@@ -112,19 +87,7 @@ async def test_the_app_user_check_admits_exactly_two_roles(db):
 
 
 async def test_account_creation_exists_at_exactly_one_path_besides_first_boot(app):
-    """§6.6 is "the only place accounts are made" (decision 166), and the wizard's member step
-    is gone with decision 164 — so the claim is checkable rather than aspirational.
-
-    A walk of the app's *routes*, which is what the claim is about. This globbed `api/*.py` for
-    the literal INSERT and compared file names, and that is a weaker claim wearing the same
-    words: a second minting route added inside `admin.py` or `setup.py` — the two files already
-    on the expected list — passed silently, and so would anything under an `api/` subpackage the
-    non-recursive glob never opened. Walking `create_app()` enumerates endpoints, so a second
-    route is a second entry however it is filed.
-
-    `api/setup.py`'s INSERT is §3.1's first boot, which refuses once an admin exists and is
-    therefore not a second place to make accounts; `api/admin.py`'s is §6.6's. A third is a hole.
-    """
+    """Walks `create_app()`'s endpoints, so a second minting route is caught however it is filed."""
     minting = {
         (method, route.path)
         for route in _routes(create_app().routes)
@@ -141,16 +104,7 @@ async def test_account_creation_exists_at_exactly_one_path_besides_first_boot(ap
 
 
 async def test_no_other_mounted_route_can_be_made_to_mint_an_account(db, app):
-    """The walk above reads source; this one fires. Between them the row's claim is both halves
-    of what "exists at exactly one path" means — no other route says the words, and no other
-    route does the thing.
-
-    Every mounted route is asked, as the most privileged caller there is, with the body §6.6's
-    creation route takes. A route that mints under some other body or some other role is not
-    reached here — that is the source walk's half — but a second minting route wired the way the
-    first one is shows up as a second entry, and only `app_user` rows count, so the sessions,
-    setup steps and observations the sweep leaves behind are beside the point.
-    """
+    """The walk above reads source; this one fires every mounted route and counts `app_user` rows."""
     admin = await _admin(app)
     probes = sorted(
         (method, route.path)
@@ -169,9 +123,7 @@ async def test_no_other_mounted_route_can_be_made_to_mint_an_account(db, app):
         after = await db.fetchval("SELECT count(*) FROM app_user")
         if after != before:
             minted[(method, path)] = after - before
-        # `/api/auth/logout` ends the session it is called on, and the routes after it in the
-        # sweep would then all be probed as an anonymous caller — a sweep that reaches nothing
-        # and reports a pass. Signing back in is cheaper than excluding it by name.
+        # `/api/auth/logout` ends the session, so the sweep signs back in rather than probing anonymously.
         if (await admin.get("/api/auth/me")).status_code != 200:
             back = await admin.post(
                 "/api/auth/login", json={"name": "patrick", "password": ADMIN_PASSWORD}
@@ -183,14 +135,8 @@ async def test_no_other_mounted_route_can_be_made_to_mint_an_account(db, app):
     )
 
 
-# --- §3.2: a PIN session is a convenience, not a credential ---------------------------------
-
-
 async def test_a_pin_session_is_refused_every_route_that_mints_a_credential(app):
-    """§3.2 makes the password the account credential and the PIN "for fast user-switching on a
-    shared device". A switched-in session that could register a passkey would turn four digits
-    into a permanent credential — and on an admin account that passkey is exempt from the 24 h
-    re-prompt, so the chain ends at an unprompted admin surface. It stops at the first step."""
+    """A switched-in session that could register a passkey would turn four digits into a credential."""
     admin = await _admin(app)
     member = await _member(app, admin)
     phone, _jenny = await _switched_in(admin, member)
@@ -212,19 +158,16 @@ async def test_a_pin_session_is_refused_every_route_that_mints_a_credential(app)
         response = await phone.request(method, path, json=body)
         assert response.status_code == 403, f"{method} {path}: {response.text}"
 
-    # Reading is not minting: §3.2 hands the phone over on purpose, and what this member's own
-    # device already holds is not disclosed by listing it.
+    # Reading is not minting.
     assert (await phone.get("/api/auth/passkey/credentials")).status_code == 200
     assert (await phone.get("/api/push/state")).status_code == 200
-    # And the product surfaces are exactly what the switch is for: Rate, Rank and Tonight are
-    # the reason §3.2 hands the phone over at all.
+    # The product surfaces are exactly what the switch is for.
     for path in ("/api/rate/balance", "/api/rank/tiers", "/api/tonight/rooms"):
         assert (await phone.get(path)).status_code == 200, path
 
 
 async def test_a_pin_session_on_an_admin_account_never_reaches_the_admin_surface(db, app):
-    """The other end of the same chain. `create_session`'s CASE excludes `auth_method='pin'`
-    from the stamp, so a switch cannot produce a session §3.2's re-prompt considers fresh."""
+    """`create_session` never stamps `auth_method='pin'`, so a switch cannot look freshly re-prompted."""
     admin = await _admin(app)
     second = await admin.post("/api/admin/users", json={"name": "sam", "role": "admin"})
     otp = second.json()["one_time_password"]
@@ -250,10 +193,7 @@ async def test_a_pin_session_on_an_admin_account_never_reaches_the_admin_surface
 
 
 async def test_setting_a_pin_costs_the_password_and_clears_the_lockout(db, app):
-    """Decision 170. The PIN is derived from the account credential, so setting one costs the
-    credential — an unlocked phone left on a table was enough before. The counters clear in the
-    same UPDATE that writes the new hash: the old PIN is gone, so the failures against it are
-    not evidence about the new one."""
+    """Decision 170: setting a PIN costs the password; the old PIN's failures clear with it."""
     admin = await _admin(app)
     member = await _member(app, admin)
     jenny = (await member.get("/api/auth/me")).json()["id"]
@@ -281,18 +221,12 @@ async def test_setting_a_pin_costs_the_password_and_clears_the_lockout(db, app):
     assert (row["pin_failed_count"], row["pin_locked_until"]) == (0, None)
 
 
-# --- §3.2: the 24 h admin re-prompt is cleared in place -------------------------------------
-
-
 async def _go_stale(db) -> None:
     await db.execute("UPDATE auth_session SET admin_verified_at = now() - interval '25 hours'")
 
 
 async def test_reauth_clears_the_stamp_on_the_session_in_hand(db, app):
-    """§3.2's re-prompt with somewhere to go. `admin_verified_at` was written at INSERT and
-    nowhere else, so the only way past a stale stamp was to sign in again — a second session row
-    per cycle, the first left live for its full sliding 90 days, and the shell's only affordance
-    a link to /login. This clears the clock and mints nothing."""
+    """Re-auth clears the stamp on the session in hand and mints nothing."""
     admin = await _admin(app)
     before = await db.fetchval("SELECT count(*) FROM auth_session")
     await _go_stale(db)
@@ -316,9 +250,7 @@ async def test_a_wrong_password_does_not_clear_the_stamp(db, app):
 
 
 async def test_reauth_is_refused_to_a_member_and_to_a_pin_session(db, app):
-    """A member has nothing to re-authenticate *to* (403), and a PIN session cannot be upgraded
-    into one however good the password typed into it is — §3.2 makes the switch a convenience on
-    a device someone else is already signed in on."""
+    """A PIN session cannot be upgraded however good the typed password."""
     admin = await _admin(app)
     member = await _member(app, admin)
     denied = await member.post("/api/auth/reauth", json={"password": MEMBER_PASSWORD})
@@ -334,14 +266,9 @@ async def test_reauth_is_refused_to_a_member_and_to_a_pin_session(db, app):
     assert stamped == 0
 
 
-# --- §3.2 / §2: the login throttle, and what the login body may contain ---------------------
-
-
 async def test_repeated_wrong_passwords_lock_the_account_with_the_same_refusal(db, app):
-    """§2 puts this origin on Tailscale, where Cloudflare's rate limit is not in front of
-    anything, on a 4 vCPU box. Only the PIN path had a lockout: a password could be guessed at
-    for as long as anyone cared to. The refusal never changes wording — "this account is locked"
-    tells the guesser the name is worth guessing at."""
+    """No Cloudflare rate limit on Tailscale; the refusal
+    never says "locked", which would confirm the name."""
     admin = await _admin(app)
     await _member(app, admin)
     stranger = app()
@@ -361,8 +288,7 @@ async def test_repeated_wrong_passwords_lock_the_account_with_the_same_refusal(d
     stood = await db.fetchval("SELECT password_locked_until FROM app_user WHERE name = 'jenny'")
     assert stood is not None
 
-    # A refusal made while the lockout stands does not extend it — otherwise a guesser holds
-    # the owner out for as long as they keep guessing.
+    # A refusal during the lockout does not extend it, or a guesser holds the owner out indefinitely.
     await stranger.post("/api/auth/login", json={"name": "jenny", "password": "wrong"})
     still = await db.fetchval("SELECT password_locked_until FROM app_user WHERE name = 'jenny'")
     assert still == stood
@@ -379,17 +305,8 @@ async def test_repeated_wrong_passwords_lock_the_account_with_the_same_refusal(d
 
 
 async def test_a_password_change_forgets_the_failures_against_the_old_one(db, app):
-    """The other reset §3.2 needs. An account locked out by guesses, whose owner then changes
-    the password from an admin-issued one-time password, must not stay locked against the
-    credential that replaced the one being guessed at.
-
-    The lockout stands against this route too, which is what routing it through
-    `check_password` means: the count is the credential's, not the front door's, and a route
-    that verifies the password without honouring the count is where the guessing moves. So the
-    live window refuses the change exactly as it refuses a login, and what the change clears is
-    the count left behind when the window has lapsed — which is the state the owner actually
-    finds the account in on coming back to it.
-    """
+    """The count is the credential's: the live window
+    refuses the change; a lapsed count is cleared by it."""
     admin = await _admin(app)
     member = await _member(app, admin)
     change = {"current_password": MEMBER_PASSWORD, "new_password": "a-third-password"}
@@ -416,9 +333,7 @@ async def test_a_password_change_forgets_the_failures_against_the_old_one(db, ap
     assert (counters["password_failed_count"], counters["password_locked_until"]) == (0, None)
 
 
-# The four routes that verify `app_user.password_hash`. Each carries its own status code and
-# its own wording; what they share is the counter, and until M4.6's second review only the
-# first of them armed it.
+# The four routes that verify `password_hash`; they share the counter.
 _PASSWORD_DOORS = (
     ("/api/auth/login", lambda password: {"name": "patrick", "password": password}),
     (
@@ -434,17 +349,7 @@ _PASSWORD_DOORS = (
     "path, body", _PASSWORD_DOORS, ids=("login", "password", "reauth", "pin")
 )
 async def test_every_route_that_verifies_the_password_counts_the_failure(db, app, path, body):
-    """§3.2's lockout is a property of the credential, so it cannot live at one door.
-
-    `login` counted; `/api/auth/password`, `/api/auth/reauth` and `/api/auth/pin` verified the
-    same `app_user.password_hash` with a bare `verify_password_async` and wrote nothing. 60
-    guesses through the first of those left `password_failed_count` at 0 and the front door
-    still answering the correct password — an unthrottled, unlogged oracle for anyone holding
-    any session on the account, including the four-digit PIN switch §3.2 calls a convenience.
-
-    Parametrised one route per case, so that a single door losing its counter fails on its own
-    name rather than being carried by the other three.
-    """
+    """One route per case, so a single door losing its counter fails on its own name."""
     admin = await _admin(app)
     for attempt in range(auth.PASSWORD_ATTEMPT_LIMIT):
         refused = await admin.post(path, json=body("nowhere-near-it"))
@@ -459,8 +364,7 @@ async def test_every_route_that_verifies_the_password_counts_the_failure(db, app
     )
     assert counters["password_locked_until"] is not None
 
-    # The count is only worth writing if it arms the lockout the front door honours: this is
-    # the last step of the measured chain, where the correct password stops being accepted.
+    # The count must arm the lockout the front door honours.
     stranger = app()
     locked = await stranger.post(
         "/api/auth/login", json={"name": "patrick", "password": ADMIN_PASSWORD}
@@ -482,18 +386,13 @@ async def test_every_route_that_verifies_the_password_counts_the_failure(db, app
     ids=("long-name", "long-password", "long-label", "nul-in-name", "control-in-label"),
 )
 async def test_the_login_body_is_bounded_and_control_characters_are_refused(app, body):
-    """sec-04: a NUL byte in a name reached Postgres and answered 500 — asyncpg is right to
-    refuse text Postgres cannot store, and the place to answer for it is the edge. sec-02: an
-    unbounded body let an anonymous caller choose how much of §2's 4 vCPU box each argon2
-    attempt cost."""
+    """A NUL reached Postgres as a 500; an unbounded body let a caller choose argon2's cost."""
     anonymous = app()
     assert (await anonymous.post("/api/auth/login", json=body)).status_code == 422
 
 
 async def test_a_name_that_differs_only_by_surrounding_whitespace_still_signs_in(db, app):
-    """as-11: creation accepted ' Tom ' and the unique index is on `lower(name)`, so the account
-    existed under a name whose spaces nobody can see and nobody retypes. The bound at creation
-    stops new ones; the rows already made stay reachable only if both ends are trimmed."""
+    """The index is on `lower(name)` and old rows may carry spaces, so both ends are trimmed."""
     await _admin(app)
     await db.execute(
         "INSERT INTO app_user (name, role, password_hash, must_change_password) "
@@ -514,9 +413,7 @@ async def test_a_name_that_differs_only_by_surrounding_whitespace_still_signs_in
     ids=("arabic-indic", "fullwidth"),
 )
 async def test_a_non_ascii_digit_is_refused_as_a_pin_at_both_ends(app, pin):
-    r"""as-11: `SetPinRequest` carried `\d`, which pydantic reads as Unicode-aware, so these were
-    accepted and argon2-hashed — while `PinSwitchRequest` carried no pattern at all. §3.2's PIN
-    is four digits on a numeric keypad; both ends now say the same thing."""
+    r"""Pydantic's `\d` is Unicode-aware, so a PIN pattern must name ASCII digits."""
     admin = await _admin(app)
     member = await _member(app, admin)
     jenny = (await member.get("/api/auth/me")).json()["id"]
@@ -528,14 +425,8 @@ async def test_a_non_ascii_digit_is_refused_as_a_pin_at_both_ends(app, pin):
     assert switching.status_code == 422
 
 
-# --- §3.1 / §4.2: the writes behind an account are atomic -----------------------------------
-
-
 async def test_a_first_boot_that_fails_part_way_leaves_no_row_behind(db, app, monkeypatch):
-    """as04. The account, the wizard step and the session are three writes; unserialised and
-    uncommitted-together, a failure between them left an admin row whose password had been typed
-    once into a form that errored, while `/state` already reported `required=false`. That is a
-    first boot which can never be re-run, on the one flow a household runs exactly once."""
+    """Three writes in one transaction, or a failed first boot can never be re-run."""
 
     def boom(*_args, **_kwargs):
         raise asyncpg.PostgresError("the session insert failed")
@@ -551,15 +442,9 @@ async def test_a_first_boot_that_fails_part_way_leaves_no_row_behind(db, app, mo
 
 
 async def test_two_simultaneous_first_boots_produce_exactly_one_admin(db, app):
-    """The check and the INSERT were three autocommit statements with no lock, so two submits
-    with different names each passed the count check and each became "the only admin" —
-    decision 166's floor breached at the moment the household is created."""
+    """Without the advisory lock both submits pass the count check and both become the only admin."""
     one, two = app(), app()
-    # A warmed pool, or the loser's first connection cost is what serialises them rather than
-    # the advisory lock this test is about — and warming the two clients one after the other is
-    # itself that serialisation, which is why this test used to pass with the lock removed. The
-    # warm-up is concurrent so that both pool connections are open before either POST starts and
-    # `pg_advisory_xact_lock` is the only thing left that can order them.
+    # The warm-up is concurrent, or warming would itself serialise the two requests.
     await asyncio.gather(one.get("/api/health"), two.get("/api/health"))
 
     results = await asyncio.gather(
@@ -572,13 +457,10 @@ async def test_two_simultaneous_first_boots_produce_exactly_one_admin(db, app):
 
 
 async def test_a_duplicate_name_on_first_boot_is_a_conflict_and_rolls_back(db, app):
-    """`app_user_name_key` is the race the pre-read cannot see, and without the catch it reached
-    `app.py`'s generic handler as "database error", 500 — on the wizard's first screen."""
+    """`app_user_name_key` is the race the pre-read cannot see."""
     admin = await _admin(app)
     await admin.post("/api/admin/users", json={"name": "sam", "role": "member"})
-    # Back to a state the wizard would run in, with a member row already holding the name. The
-    # `setup_step` row the first boot wrote stays: what this asserts is that the refused attempt
-    # adds nothing, not that the table is empty.
+    # The first boot's `setup_step` row stays: the refused attempt must add nothing.
     await db.execute("DELETE FROM app_user WHERE role = 'admin'")
     steps_before = await db.fetchval("SELECT count(*) FROM setup_step")
 
@@ -591,12 +473,7 @@ async def test_a_duplicate_name_on_first_boot_is_a_conflict_and_rolls_back(db, a
 
 
 async def test_a_password_change_that_fails_part_way_changes_nothing(db, app, monkeypatch):
-    """§4.2. `POST /api/auth/password` is three writes — the hash, the lockout counters and the
-    other sessions — and it used to issue them on the autocommit connection while its admin-side
-    twin (`/api/admin/users/{id}/reset-password`) wrapped the identical three in `write_txn`.
-    Uncommitted together, a failure on the third left the password changed and every other
-    device signed in for its full sliding 90 days, which is the one thing the route promises not
-    to do; the admin half, under the same failure, rolled back clean."""
+    """Hash, counters and other sessions in one transaction, like the admin-side twin."""
 
     def boom(*_args, **_kwargs):
         raise asyncpg.PostgresError("the revoke failed")
@@ -631,15 +508,8 @@ async def test_a_password_change_that_fails_part_way_changes_nothing(db, app, mo
 async def test_a_sign_in_that_fails_part_way_leaves_the_device_holding_its_session(
     db, app, device, monkeypatch
 ):
-    """The same shape as the change above, at the three routes that replace one session with
-    another. dd24 has each of them destroy the session their own cookie names before minting
-    the new one, and on the autocommit connection that DELETE committed before the INSERT was
-    attempted: a `create_session` that failed answered 500 and signed the device out of the
-    session it arrived holding — a state it had before the request and cannot get back.
-
-    `/api/auth/switch` is the worst of the three. Decision 179 keeps it reachable precisely for
-    the handed-over phone, and there the same failure left the device with no session at all.
-    """
+    """The old session's DELETE must not commit before the
+    new INSERT; `/switch` would leave no session at all."""
 
     def boom(*_args, **_kwargs):
         raise asyncpg.PostgresError("the session insert failed")
@@ -681,9 +551,6 @@ async def test_a_sign_in_that_fails_part_way_leaves_the_device_holding_its_sessi
     assert await db.fetchval("SELECT count(*) FROM auth_session") == sessions_before
 
 
-# --- §3.2 / §4.2: the slide and the cookie move together ------------------------------------
-
-
 @pytest.mark.parametrize(
     ("method", "path", "body", "refusal"),
     [
@@ -694,17 +561,11 @@ async def test_a_sign_in_that_fails_part_way_leaves_the_device_holding_its_sessi
 async def test_a_refused_request_still_carries_the_cookie_its_slide_earned(
     db, app, method, path, body, refusal
 ):
-    """core/auth.py states §3.2's contract as "slides in the row and in the cookie together or
-    not at all", and the slide broke it on every refusal: `load_session` commits the row on an
-    autocommit connection before the route body runs, then Starlette builds its own error
-    response and discards the one the dependency wrote the Set-Cookie onto. `last_seen_at` is
-    fresh by then, so nothing that day re-issues it either — the browser's cookie ends the day
-    a day staler than the row it names, and an admin whose first request of the day meets the
-    24 h re-prompt hits this every time."""
+    """Starlette builds its own error response, dropping the Set-Cookie the slide earned."""
     admin = await _admin(app)
     member = await _member(app, admin)
     jenny = (await member.get("/api/auth/me")).json()["id"]
-    # A session a day old with only ten days left to run, so the slide is both due and visible.
+    # A day old with ten days left, so the slide is both due and visible.
     await db.execute(
         "UPDATE auth_session SET expires_at = now() + interval '10 days',"
         " last_seen_at = now() - interval '2 days' WHERE user_id = $1",
@@ -722,7 +583,7 @@ async def test_a_refused_request_still_carries_the_cookie_its_slide_earned(
     cookie = refused.headers.get("set-cookie")
     assert cookie is not None and auth.SESSION_COOKIE in cookie, "the row slid; the cookie did not"
 
-    # And the harm the invariant exists to prevent: there is no second chance later in the day.
+    # There is no second chance later in the day.
     ok = await member.get("/api/auth/me")
     assert ok.status_code == 200
     assert "set-cookie" not in ok.headers
@@ -732,27 +593,7 @@ async def test_a_refused_request_still_carries_the_cookie_its_slide_earned(
 async def test_a_refusal_for_a_dead_session_does_not_clear_the_live_one_that_replaced_it(
     db, app, monkeypatch, path
 ):
-    """A response may only end the session it was answering for.
-
-    `Set-Cookie` clears by NAME and not by value, so the clearing header `current_user` used to
-    put on its 401 did not retire the dead cookie it was answering — it retired whatever cookie
-    of that name the browser was holding when the response ARRIVED. §2 puts this app on a LAN or
-    Tailscale address, where a read is in flight for a few hundred milliseconds, and that makes
-    this ordinary rather than exotic: a read goes out under S1, the person signs out and signs
-    back in, and the 401 owed to S1 lands after S2's cookie is set and takes it. What the
-    household saw was being thrown back to the sign-in page a moment after signing in — S2's row
-    alive in `auth_session` the whole time, and decision 282's seam doing exactly what it should
-    with a 401 nothing had earned.
-
-    `/api/setup/state` is the same clear riding on a 200: `setup._optional_user` swallows the
-    refusal but keeps the response the dependency already wrote on, so a SUCCESSFUL state read
-    ended a live session. It is parametrised here rather than left to the route's own test
-    because it is the same defect and must not come back through the other door.
-
-    The gate is a clock and not a test double: it puts the in-flight window where the trace found
-    it — before the row is read, the measured 409 ms being connect plus TLS — and makes the
-    overlap exact rather than likely, so this fails every run and not one in thirty.
-    """
+    """`Set-Cookie` clears by NAME, so a late 401 for a dead session cleared the live one."""
     admin = await _admin(app)
     browser = await _member(app, admin)  # one cookie jar is one browser
     s1 = auth.open_session_cookie(browser.cookies.get(auth.SESSION_COOKIE))
@@ -796,9 +637,6 @@ async def test_a_refusal_for_a_dead_session_does_not_clear_the_live_one_that_rep
     assert after.status_code == 200, "signed in, and thrown back to the sign-in page a moment later"
 
 
-# --- §3.2 / §4.2: user verification is what stamps the admin clock --------------------------
-
-
 @pytest.fixture
 def device():
     cfg = settings()
@@ -833,10 +671,7 @@ async def _passkey_login(client, device: SoftAuthenticator, name: str, **kwargs)
 
 @pytest.mark.parametrize("uv", [True, False], ids=("verified", "presence-only"))
 async def test_only_a_user_verified_assertion_stamps_the_admin_clock(db, app, device, uv):
-    """§3.2's passkey is "Face ID / Touch ID / Android biometrics". A roaming key that was merely
-    touched is a valid sign-in and is not that, so it must not satisfy the 24 h re-prompt — the
-    stamp was written for every assertion, which made a tap on a security key the one credential
-    in the app exempt from §3.2's admin prompt."""
+    """A merely touched roaming key must not satisfy the 24 h admin re-prompt."""
     admin = await _admin(app)
     user_id = (await admin.get("/api/auth/me")).json()["id"]
     await _register_for(db, user_id, device)
@@ -853,9 +688,7 @@ async def test_only_a_user_verified_assertion_stamps_the_admin_clock(db, app, de
 
 
 async def test_an_assertion_whose_counter_has_not_advanced_is_refused(db, app, device):
-    """§4.2 stores `sign_count` for the cloned-hardware-key case. py_webauthn compares against
-    the value read a statement earlier, so two assertions in flight both landed; the conditional
-    UPDATE is the check, and a refusal must leave the stored counter where it was."""
+    """A refusal must leave the stored counter where it was."""
     admin = await _admin(app)
     user_id = (await admin.get("/api/auth/me")).json()["id"]
     await _register_for(db, user_id, device)
@@ -870,29 +703,12 @@ async def test_an_assertion_whose_counter_has_not_advanced_is_refused(db, app, d
 async def test_two_assertions_carrying_the_same_advanced_counter_leave_one_winner(
     db, app, device, monkeypatch
 ):
-    """The case the conditional UPDATE exists for, and the one nothing was reaching.
-
-    The test above measures py_webauthn, not the guard: it hands the library a stored counter
-    the assertion does not beat, and `verify_authentication_response` raises three statements
-    before the UPDATE — delete the `RETURNING 1` check and that test still passes. What the
-    UPDATE is actually for is the cloned hardware key (core/webauthn.py's comment above it):
-    two assertions in flight that both read the same pre-UPDATE `sign_count` and both carry a
-    counter that beats it, which the library passes twice because it compares against the value
-    each request read a statement earlier. Making the row the arbiter (§4.2) is what collapses
-    that to one winner.
-
-    The barrier is what makes this the race rather than a coin flip: both requests are held
-    immediately after the SELECT that reads `sign_count` and released together, so the UPDATE
-    is the only thing left that can order them. Under a timeout, because a barrier one side
-    never reaches would otherwise hang the suite instead of failing it.
-    """
+    """Both requests are held after reading `sign_count`, so the conditional UPDATE alone orders them."""
     admin = await _admin(app)
     user_id = (await admin.get("/api/auth/me")).json()["id"]
     await _register_for(db, user_id, device)
     await admin.post("/api/auth/logout")
-    # One uncontested assertion first, so the stored counter is non-zero: at zero the UPDATE
-    # deliberately accepts a tie — the synced-passkey case the test below documents — and §4.2
-    # stores the counter for the hardware key that does count.
+    # Non-zero first: at zero the UPDATE deliberately accepts a tie (synced passkeys).
     assert (await _passkey_login(admin, device, "patrick")).status_code == 200
     await admin.post("/api/auth/logout")
     assert await db.fetchval("SELECT sign_count FROM webauthn_credential") == 1
@@ -906,8 +722,7 @@ async def test_two_assertions_carrying_the_same_advanced_counter_leave_one_winne
     challenges = [
         webauthn.base64url_to_bytes(ceremony["options"]["challenge"]) for ceremony in ceremonies
     ]
-    # The key, and its clone: two valid signatures over two different challenges, both reporting
-    # counter 2. This is what a duplicated authenticator looks like on the wire.
+    # The key and its clone: two valid signatures, both reporting counter 2.
     assertions = [
         device.authenticate(challenges[0]),
         device.authenticate(challenges[1], advance=False),
@@ -944,9 +759,7 @@ async def test_two_assertions_carrying_the_same_advanced_counter_leave_one_winne
 
 
 async def test_a_synced_passkey_that_never_counts_signs_in_every_time(db, app, device):
-    """The accepted case, documented rather than tolerated: iCloud Keychain and Google Password
-    Manager report 0 forever, so every assertion of theirs ties the stored value. §3.2 targets
-    exactly those, which is why the replay guard is the single-use challenge and not this."""
+    """iCloud and Google report 0 forever; the replay guard is the single-use challenge."""
     admin = await _admin(app)
     user_id = (await admin.get("/api/auth/me")).json()["id"]
     await _register_for(db, user_id, device)
@@ -960,11 +773,7 @@ async def test_a_synced_passkey_that_never_counts_signs_in_every_time(db, app, d
         await admin.post("/api/auth/logout")
 
 
-# --- §3.2 / dd24: the cookie's window, and one cookie naming one session --------------------
-
-
 def _session_cookie(response) -> str | None:
-    """The Set-Cookie this response carries for §3.2's session, or None if it re-issued none."""
     for header in response.headers.get_list("set-cookie"):
         if header.startswith(f"{auth.SESSION_COOKIE}="):
             return header
@@ -972,18 +781,8 @@ def _session_cookie(response) -> str | None:
 
 
 async def test_the_cookie_carries_the_window_and_is_re_issued_at_most_once_a_day(db, app):
-    """§3.2's 90 days are the browser's too, and the slide costs one Set-Cookie a day.
-
-    `max_age`, not `expires`: an absolute date is computed against the server's clock and read
-    against the phone's, so a few minutes of drift expires a 90-day cookie early or keeps a dead
-    one alive, while a relative age is the same window on both sides. Nothing asserted the
-    header at all — a swap to `expires`, or a slide that re-issued on every request in a page's
-    fan-out, would both have gone out unremarked.
-
-    now() moves through the session row rather than through the clock, because `load_session`'s
-    window is `last_seen_at < now() - interval '1 day'`: ageing the row is the same experiment
-    as waiting, and it is the one a test can run in a second.
-    """
+    """`max_age`, not `expires`: an absolute date drifts
+    with the phone's clock. Time moves through the row."""
     window = f"Max-Age={settings().session_days * 24 * 3600}"
     admin = await _admin(app)
     signed_in = await admin.post(
@@ -993,10 +792,10 @@ async def test_the_cookie_carries_the_window_and_is_re_issued_at_most_once_a_day
     minted = _session_cookie(signed_in)
     assert minted is not None and window in minted, f"login minted: {minted}"
 
-    # A day has passed, so the next request slides the row — and the cookie goes with it.
+    # A day has passed, so the next request slides the row and the cookie goes with it.
     await db.execute("UPDATE auth_session SET last_seen_at = now() - interval '25 hours'")
     first = await admin.get("/api/auth/me")
-    # …and a few hours after that, still inside the same day, neither of them moves.
+    # ...and a few hours later, inside the same day, neither moves.
     await db.execute("UPDATE auth_session SET last_seen_at = now() - interval '4 hours'")
     second = await admin.get("/api/auth/me")
     assert first.status_code == second.status_code == 200
@@ -1010,14 +809,7 @@ async def test_the_cookie_carries_the_window_and_is_re_issued_at_most_once_a_day
 
 
 async def test_a_login_destroys_the_session_its_own_cookie_named_and_a_refusal_does_not(db, app):
-    """dd24: one cookie names one session row, and a device that signs in again — as a second
-    person, or after losing track of its cookie — otherwise leaves the row it stops naming live
-    for its full sliding 90 days, with nothing that can reach it and nothing that will end it.
-
-    The refusal is the other half and it is the half with teeth: destroying the named session
-    before the credential is checked would let anyone who can reach the origin sign a household
-    device out by guessing at a password.
-    """
+    """Destroying the named session before the credential check would let a guesser sign a device out."""
     admin = await _admin(app)
     held = await db.fetchval("SELECT id FROM auth_session")
 
@@ -1038,9 +830,7 @@ async def test_a_login_destroys_the_session_its_own_cookie_named_and_a_refusal_d
 
 
 async def test_a_passkey_login_destroys_the_session_its_own_cookie_named(db, app, device):
-    """dd24 again, at the other door. Step 13 shipped the same six lines in `api/auth.py` and
-    `api/passkeys.py`, so the rule holds only if both are asserted — a passkey sign-in on a
-    device that already holds a session is the ordinary case on a shared phone, not a corner."""
+    """Both doors must be asserted: they are the same six lines in two modules."""
     admin = await _admin(app)
     user_id = (await admin.get("/api/auth/me")).json()["id"]
     await _register_for(db, user_id, device)
@@ -1051,8 +841,7 @@ async def test_a_passkey_login_destroys_the_session_its_own_cookie_named(db, app
         "/api/auth/passkey/login",
         json={
             "ceremony_id": opened.json()["ceremony_id"],
-            # Signed over a challenge the server never issued: a ceremony that fails at
-            # verification, which is where a device must keep the session it arrived with.
+            # A challenge the server never issued: a ceremony that fails at verification.
             "credential": device.authenticate(b"a challenge nobody issued".ljust(32, b"-")),
         },
     )
@@ -1065,23 +854,8 @@ async def test_a_passkey_login_destroys_the_session_its_own_cookie_named(db, app
     assert await db.fetchval("SELECT count(*) FROM auth_session") == 1
 
 
-# --- §3.2 / decision 208: the fourth door, where the credential changes underneath the cookie -
-
-
 async def test_a_password_change_rotates_the_session_it_was_made_from(db, app):
-    """Decision 208. dd24's rule is that one cookie names one row and a device that re-proves
-    itself does not keep the row it was holding; the three tests above assert it at login, at the
-    passkey login and — through `_switched_in` — at the switch. `POST /api/auth/password` was the
-    fourth door and the only one not doing it, while being the one door where the credential
-    *behind* a live cookie changes: `destroy_other_sessions` ended every other device and kept
-    the caller's own row, so the session id that the leaked password opened kept authenticating
-    for its full sliding 90 days.
-
-    What the route now answers with is one `Set-Cookie` and nothing else about it moved:
-    `sessions_revoked` is still the number of OTHER devices ended (§6.6's admin-side twin reports
-    the same number from the same helper), and the label that describes the device survives the
-    rotation because the device is the one thing this request did not change.
-    """
+    """Decision 208: the session the leaked password opened must stop working."""
     admin = await _admin(app)
     member = await _member(app, admin)
     jenny = (await member.get("/api/auth/me")).json()["id"]
@@ -1124,30 +898,20 @@ async def test_a_password_change_rotates_the_session_it_was_made_from(db, app):
         f"the rotation lost the label that describes the device: {rows[0]['device_label']!r}"
     )
 
-    # The id the caller arrived with is what the old password opened, so it is what must stop
-    # working — asserted on a second jar, because the caller's own jar has moved on.
+    # Asserted on a second jar, because the caller's own jar has moved on.
     stale = app()
     stale.cookies.set(auth.SESSION_COOKIE, auth.seal_session_id(arrived))
     assert (await stale.get("/api/auth/me")).status_code == 401, (
         "the session the old password opened still authenticates after the change"
     )
-    # And the caller is not signed out by its own change: this is the request the forced
-    # first-login flow makes next, and decision 179 leaves it nowhere else to go.
+    # Decision 179 sends the forced first-login flow here next.
     back = await member.get("/api/auth/me")
     assert back.status_code == 200, back.text
     assert back.json()["name"] == "jenny"
 
 
 async def test_the_rotation_replaces_the_cookie_the_slide_earned_rather_than_adding_to_it(db, app):
-    """core/auth.py states §3.2's contract as "slides in the row and in the cookie together or
-    not at all", and a password change is exactly the request someone makes on a session older
-    than a day: `deps.current_user` re-issues the cookie for the row it slid, and then the
-    rotation deletes that row. Two `Set-Cookie` headers for one name, the first naming a session
-    that no longer exists, is the browser resolving §3.2's window by header order.
-
-    now() moves through the row rather than through the clock, for the reason
-    `test_the_cookie_carries_the_window_and_is_re_issued_at_most_once_a_day` gives above.
-    """
+    """Two `Set-Cookie`s for one name would leave the window to header order."""
     admin = await _admin(app)
     member = await _member(app, admin)
     jenny = (await member.get("/api/auth/me")).json()["id"]
@@ -1171,16 +935,7 @@ async def test_the_rotation_replaces_the_cookie_the_slide_earned_rather_than_add
 
 
 async def test_a_password_change_from_a_pin_session_is_still_a_pin_session(db, app):
-    """The rotation mints the `auth_method` the rotated session carried, not 'password'.
-
-    §3.2 makes the PIN "for fast user-switching on a shared device" and the password the account
-    credential; decision 179 keeps this route reachable from a switched-in phone, and decision
-    170 already costs a PIN the password without the reverse being true. A rotation that minted
-    'password' would hand that phone a session `create_session`'s CASE stamps `admin_verified_at`
-    on and `credentialed_user` lets register a passkey — the chain
-    `test_a_pin_session_is_refused_every_route_that_mints_a_credential` shuts at its first step,
-    re-opened by four digits and a password typed into the same phone.
-    """
+    """Minting 'password' would let a PIN session stamp the admin clock and register a passkey."""
     admin = await _admin(app)
     member = await _member(app, admin)
     phone, jenny = await _switched_in(admin, member)
@@ -1206,17 +961,7 @@ async def test_a_password_change_from_a_pin_session_is_still_a_pin_session(db, a
 async def test_a_rotation_that_fails_leaves_the_device_holding_the_session_it_arrived_with(
     db, app, monkeypatch
 ):
-    """The shape `test_a_sign_in_that_fails_part_way...` proves at the other three doors, now
-    owed here too (decision 208): on autocommit the rotation's DELETE would commit before its
-    INSERT was attempted, and a `create_session` that failed on a statement timeout or a reset
-    connection would answer 500 having signed the device out of a session it had before the
-    request and cannot get back — while the password it can no longer use the route to change
-    had already been replaced.
-
-    `test_a_password_change_that_fails_part_way_changes_nothing` above forces the failure one
-    statement earlier, at the revoke. This one forces it at the seam decision 208 added, and
-    asserts what that test cannot: that the caller's cookie still reaches the app.
-    """
+    """The rotation's DELETE must not commit before its INSERT."""
 
     def boom(*_args, **_kwargs):
         raise asyncpg.PostgresError("the rotation's session insert failed")
@@ -1249,14 +994,8 @@ async def test_a_rotation_that_fails_leaves_the_device_holding_the_session_it_ar
     )
 
 
-# --- §14.4 / sec-14: what an anonymous caller may reach -------------------------------------
-
-
 async def test_the_setup_state_an_anonymous_caller_sees_is_two_fields(app):
-    """sec-14: the full payload fingerprints the install — how many members, which bundle
-    version and when, how far the operator got — and §2 puts the origin on Tailscale, where
-    Cloudflare's rate limit does not stand in front of a prober. `required` is the same bit
-    either way, so the first-boot redirect still works before anyone can sign in."""
+    """The full payload fingerprints the install; `required` is the same bit either way."""
     anonymous = app()
     virgin = await anonymous.get("/api/setup/state")
     assert set(virgin.json()) == {"required", "note"}
@@ -1273,12 +1012,7 @@ async def test_the_setup_state_an_anonymous_caller_sees_is_two_fields(app):
 
 
 async def test_a_lapsed_session_still_gets_the_anonymous_state_and_keeps_its_cookie(db, app):
-    """The route is the one place both callers meet, so its optional dependency must not lose
-    what `current_user` does on the way past — and must not add to it either. It used to clear
-    the cookie here, which put a clear-by-name on a 200: a successful state read could end the
-    session the browser had moved to while this one was in flight. `deps.current_user` argues why
-    no refusal clears; this asserts the swallowed refusal does not smuggle one back out.
-    """
+    """A clear-by-name on a 200 could end the session the browser had just moved to."""
     admin = await _admin(app)
     held = admin.cookies.get(auth.SESSION_COOKIE)
     await db.execute("DELETE FROM auth_session")
@@ -1292,30 +1026,14 @@ async def test_a_lapsed_session_still_gets_the_anonymous_state_and_keeps_its_coo
 async def test_open_sign_ins_are_capped_and_expired_ones_swept_in_the_same_call(
     db, app, device, monkeypatch
 ):
-    """The one anonymous write in the app. 60 calls left 60 rows until the hourly worker prune,
-    which is a floor and not a ceiling — sweeping the same purpose inline makes the table's size
-    a function of the five-minute TTL instead of the schedule.
-
-    The cap is held by evicting the oldest rows, and the burst below is why. Refusing the 21st
-    caller made a global count on an anonymous route into a household-wide denial: twenty
-    unexpired rows, which the expiry sweep by definition does not touch, answered every passkey
-    sign-in 429 for the full five-minute TTL and renewably for as long as a loop cared to keep
-    them there — against §3.2's primary authentication, leaving only the password fallback the
-    login throttle locks after five wrong guesses per name.
-
-    THE CAP IS PATCHED DOWN HERE, and that is the point rather than a shortcut. What must hold
-    is the MECHANISM — the table is bounded by eviction and a household sign-in still answers
-    after a flood — and a test that bursts past the shipped 500 would spend a minute of the
-    suite proving the same thing about a number the module already argues for separately. The
-    shipped value is pinned below, so lowering it back to a reachable one still fails here.
-    """
+    """Eviction, not refusal: refusing the 21st made a flood a
+    household-wide passkey denial. The cap is patched down."""
     admin = await _admin(app)
     user_id = (await admin.get("/api/auth/me")).json()["id"]
     await _register_for(db, user_id, device)
     await admin.post("/api/auth/logout")
 
-    # Sized so a burst cannot reach it by accident: the flood must land inside the seconds
-    # between a tap and a touch to displace anything, and the table stays trivially small.
+    # Sized so a burst cannot reach it by accident.
     assert webauthn.MAX_OPEN_SIGN_INS >= 200, (
         "the cap is not a security boundary — an anonymous endpoint that allocates state needs a "
         "per-caller limit at the ingress (§2, M4.7) — so its whole job is to be unreachable by "
@@ -1345,9 +1063,7 @@ async def test_open_sign_ins_are_capped_and_expired_ones_swept_in_the_same_call(
 
 
 async def test_a_malformed_credential_is_refused_before_the_challenge_is_spent(db, app):
-    """sec-04: the body was a bare `dict`, so the ceremony consumed its single-use challenge and
-    only then failed on the missing key — a 500 with a traceback, and the honest user's retry
-    refused as expired too. The model makes it FastAPI's 422 before the route body runs."""
+    """The model makes it a 422 before the single-use challenge is spent."""
     anonymous = app()
     options = await anonymous.post("/api/auth/passkey/login/options", json={})
     ceremony_id = options.json()["ceremony_id"]

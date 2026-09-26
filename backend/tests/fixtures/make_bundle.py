@@ -1,30 +1,6 @@
-"""Build a synthetic artifact bundle shaped like the one the corpus actually exports.
-
-The corpus project is not vendored into this repo, so the importer is tested against a bundle
-this module generates. It reproduces the *shapes and the landmines*, not the volume: the two
-DNA tiers with overlapping (title,term) pairs, the frozen rating_source ids, duplicate
-tmdb_ids across a movie/series pair, NULL alias PK components, non-ASCII text, and an
-extracted tag that carries its evidence quote.
-
-**The shapes are not invented here.** Until M4.5 they were, and that is what let the whole
-import layer be verified against this repo's reading of §10 rather than against the artifact:
-the fixture declared `title.name` where the corpus ships `primary_title`, a feature column
-`credit:3` where the corpus ships `p:director:Michael Mann`, and a `corrections_v1.tsv` header
-with a `field` column that does not exist. Every structure below is now taken from
-`tests/fixtures/real_bundle_shapes.json`, which `ops/bundle_shapes.py` extracts from a real
-bundle, and `test_bundle_shapes.py` fails if the two drift apart.
-
-`make_bundle(dir)` produces a clean bundle. The `break_*` helpers produce bundles that violate
-one rule each, so the validator can be tested on the failures it exists to catch.
-
-Volume is the one exception, and it is opt-in: `make_bundle(dir, pool_titles=700)` appends
-generated owned movies drawn entirely from the authored vocabulary. Eight titles cannot seed the
-pool the Tonight selector's replay cost is visible over -- the real bundle owns 696 movies at
-§6's default room. The pair search alone is guarded without a bundle, on a synthesized belief
-board (e87deed); what only a fixture can supply is a seeded pool of that size, which is what
-M4.12's exit script measures the round over. A measurement nothing can fail is what M4.8 exists
-to end.
-"""
+"""A synthetic artifact bundle shaped like the corpus export: its landmines, not its volume. Every
+structure follows `real_bundle_shapes.json` (held by `test_bundle_shapes.py`); `break_*` helpers
+violate one rule each, and `pool_titles` opts into volume."""
 
 from __future__ import annotations
 
@@ -36,41 +12,28 @@ from typing import NamedTuple
 
 import numpy as np
 
-# §4.1 rule 4 — the frozen ids.
+# §4.1 rule 4: the frozen ids.
 RATING_SOURCE_IDS = (1, 2, 3, 4, 7, 11, 21, 23, 26, 28, 31)
 
-# The corpus's own per-field precedence (`mdc/export.py`'s SOURCE_PRIORITY), abbreviated to the
-# sources this fixture carries. It is data here, not a constant in the app: decision 162 makes
-# the app the consumer of an order the corpus owns.
+# The corpus's per-field precedence; data here, because decision 162 makes the corpus own it.
 SOURCE_PRIORITY = ("tmdb", "omdb", "trakt", "tvmaze", "wikipedia")
 
 # id, kind, primary_title, original_title, year, runtime_min, imdb_id, tmdb_id, language, country
 TITLES = [
     (1, "movie", "Heat", None, 1995, 170, "tt0113277", 949, "en", "United States of America"),
     (2, "movie", "Prisoners", None, 2013, 153, "tt1392214", 146233, "en", "United States of America"),
-    # imdb_id NULL — the 21% case §4.1 names as the reason title.id is the join key.
+    # imdb_id NULL: the 21% case §4.1 names as the reason title.id is the join key.
     (3, "movie", "Paddington 2", None, 2017, 103, None, 346648, "en", "United Kingdom"),
     (4, "movie", "Chungking Express", "重慶森林", 1994, 102, "tt0109424", 11104, "yue", "Hong Kong"),
-    # CJK primary title AND a duplicate tmdb_id with title 4 — §4.1 rule 6's legitimate
-    # duplicate, which must survive an import that adds no UNIQUE constraint.
+    # CJK primary title AND a duplicate tmdb_id with title 4: §4.1 rule 6's legitimate duplicate.
     (5, "movie", "重慶森林", "Chungking Express", 1994, 102, None, 11104, "yue", "Hong Kong"),
     (6, "series", "Severance", None, 2022, 48, "tt11280740", 95396, "en", "United States of America"),
     (7, "series", "The Bear", None, 2022, 30, "tt14452776", 136315, "en", "United States of America"),
     (8, "movie", "Tampopo", None, 1985, 114, "tt0092048", 11081, "ja", "Japan"),
 ]
 
-# title_meta is per source, and §4.1 keeps the rows because "one block = one droppable source".
-# The sources here are deliberately COMPLEMENTARY rather than ranked copies: tmdb has a tagline
-# and a plot and a poster, omdb has a poster and no tagline, wikipedia is the only source with
-# plot_short. A whole-block precedence rule blanks fields another source has — which is why the
-# corpus resolves per field, and why this fixture can tell the two rules apart.
-#
-# NO URL HERE IS ONE THE APP WOULD FETCH, on purpose. The e2e and CI bundle is built from this
-# module (`e2e/run.mjs`), and a poster on `image.tmdb.org` or `static.tvmaze.com` resolves onto
-# `title.poster_path`, which the art route (decision 483) fetches from the real internet. So tmdb's
-# are TMDB's bare file paths, and omdb's are the IMDb-hosted URLs OMDb really serves, which
-# decision 501's host rule refuses: the shape that put 157 of them on the seeded install's cards.
-# A test that needs a servable poster writes one into its own copy of the bundle.
+# Sources are complementary, not ranked copies, so per-field and whole-block precedence differ.
+# No URL here is one the app would fetch: e2e builds from this module and the art route fetches for real.
 #   (title_id, source, tagline, plot_short, plot_full, poster_url, backdrop_url)
 META = [
     (1, "tmdb", "A Los Angeles crime saga.", None,
@@ -78,7 +41,7 @@ META = [
     (1, "omdb", None, None, "A shorter synthetic plot.",
      "https://m.media-amazon.com/images/M/heat-omdb.jpg", None),
     (1, "wikipedia", None, "Heat — a one-line synthetic summary.", None, None, None),
-    # No tmdb row: the preferred source is simply absent, and the next one carries the fields.
+    # No tmdb row: the preferred source is absent, and the next one carries the fields.
     (2, "omdb", None, None, "Prisoners — a synthetic plot.",
      "https://m.media-amazon.com/images/M/prisoners.jpg", None),
     (2, "wikipedia", None, "Prisoners — a one-line synthetic summary.", None, None, None),
@@ -98,8 +61,7 @@ VIDEOS = [
     (3, "tmdb", "pad2-trailer-key", "YouTube", "Trailer"),
 ]
 
-# The vocabulary term IS `facet.term` — the corpus ships `dna:mood.bittersweet`, so the facet is
-# already inside the id and a builder that prepends it again produces `mood.mood.dread`.
+# The term IS `facet.term`, so a builder that prepends the facet produces `mood.mood.dread`.
 #   (term, facet, gloss)
 VOCAB = [
     ("mood.dread", "mood", "a low hum of dread that outlasts the final scene"),
@@ -118,29 +80,16 @@ VOCAB = [
     ("register.deadpan", "register", "funny with an entirely straight face"),
 ]
 
-# The corpus's *extraction* labels, as shipped in `dna_tag.facet` and `dna_projected.facet`.
-# The term ids and every vocabulary file carry the short facet id the term is prefixed with
-# (`mood.dread` -> `mood`); the two DNA tables carry the label the extraction pass ran under,
-# and the three below are the three the review measured on the real bundle. 29,188 of 31,540
-# `dna_tag` rows and 206,151 of 223,136 `dna_projected` rows mismatch there.
-#
-# `0004_dna.sql:73-90` and `:104-116` give neither column a foreign key to `dna_facet` — the one
-# `dna_term:38` and `dna_axis:58` both carry — which is exactly why the mismatch is silent: the
-# claim is about two tables, so it cites both, and the range that shipped covered `dna_tag`
-# alone. `importer/dna.py:295-310` and `:365-380` copy the shipped column
-# verbatim while `load_vocabulary` derives its facet from the prefix, so the join is empty and
-# every facet renders in the neutral colour with nothing raised anywhere. Three measured labels
-# plus the identical remainder IS the shape — a fourth, invented label would be the
-# fixture-invents-a-structure failure M4.5 exists to end. The repair is M4.9's.
+# The corpus's extraction labels as shipped in the DNA
+# tables; three measured, and no fourth may be invented.
 EXTRACTION_LABELS = {
     "mood": "mood_tone", "themes": "narrative_themes", "characters": "character_dynamics",
 }
 
 
 def shipped_facet(term: str) -> str:
-    """The `facet` column a bundle carries for `term` — the extraction label where one was
-    measured, the term's own prefix everywhere else. The literals below are written out row by
-    row because they are data; this is the rule the generated pool applies."""
+    """The extraction label where one was measured, else
+    the term's own prefix: the rule the pool applies."""
     prefix = term.split(".", 1)[0]
     return EXTRACTION_LABELS.get(prefix, prefix)
 
@@ -158,8 +107,7 @@ EXTRACTED = [
     (8, "register.deadpan", "register", 2, "funny with an entirely straight face"),
 ]
 
-# The projected tier deliberately re-derives three pairs that also exist above: §4.1 rule 1's
-# "14,181 (title,term) pairs exist in both and must stay distinguishable", in miniature.
+# Three pairs re-derived from above: §4.1 rule 1's overlapping (title, term) pairs, in miniature.
 #   (title_id, term, facet, n_sources, sources json)
 PROJECTED = [
     (1, "themes.obsession", "narrative_themes", 2, '["keyword:obsession", "keyword:heist"]'),
@@ -173,23 +121,13 @@ PROJECTED = [
 ]
 
 # (title_id, person_id, source, department, job, character, billing_order, role_class)
-# `role_class` is what the contract's `p:<role_class>:<name>` grammar is built from, and it is
-# a column the corpus normalises rather than a string the app re-derives from `job`.
+# `role_class` is normalised by the corpus, not re-derived by the app from `job`.
 CREDITS = [
     (1, 1, "tmdb", "Directing", "Director", None, 0, "director"),
-    # The same credit from two sources — §4.1: "dedupe at read time, never at import".
+    # The same credit from two sources: §4.1 "dedupe at read time, never at import".
     (1, 1, "omdb", "Directing", "Director", None, 0, "director"),
     (1, 4, "tmdb", "Acting", "Actor", "Vincent Hanna", 1, "cast"),
-    # The SAME (title, person, job) filed under a second department spelling. TMDB records
-    # leads under both `Acting` and `Actor`, and the real export carries 7,918 such triples
-    # across 1,216 of its 19,071 titles — 816 of them inside the twelve credits §6.0's card
-    # renders. §4.1 says "dedupe at read time, never at import", so the collision is meant to
-    # reach the read layer intact and be collapsed there; until this row the only bundle in the
-    # suite gave every credit a distinct (title, person, department, job), so the shape existed
-    # only where `test_import_integration.py` inserted one by hand. A test that proves the
-    # query while the fixture cannot produce its input is a statement about the fixture. M4.9
-    # owns the render-side repair -- shipped at `ee35d52`, which groups `credits_for` by
-    # (person, job) -- and it is not touched here.
+    # The SAME (title, person, job) under a second department spelling, as TMDB files leads.
     (1, 4, "tmdb", "Actor", "Actor", "Vincent Hanna", 1, "cast"),
     (2, 2, "tmdb", "Directing", "Director", None, 0, "director"),
     (4, 3, "tmdb", "Directing", "Director", None, 0, "director"),
@@ -200,8 +138,7 @@ CREDITS = [
 
 PEOPLE = [
     (1, "Michael Mann"), (2, "Denis Villeneuve"), (3, "Wong Kar-wai"), (4, "Al Pacino"),
-    # Credited on a film AND a series. At catalog scale the cross-kind credit is the common
-    # case, and a fixture without one cannot falsify the person-filter rule.
+    # Credited on a film AND a series, so the person-filter rule can be falsified.
     (5, "Ada Cross-Kind"), (6, "Kunihiko Murai"),
 ]
 
@@ -229,28 +166,14 @@ AXES = {
     "sensibility": ("bleak", "playful", {"sensibility.bleak": -1.0, "register.deadpan": 0.6}),
 }
 
-# §5.1's gate input, n_t. Deliberately spread: title 1 is well covered, title 8 has nothing, so
-# gate = n/(n+10) has a value near 1, a value near 0, and something in between. Title 8's own
-# Backbone row carries `COLD_BACKBONE_ROWS[8]` instead — a flagged row's crowd count is real
-# where its coordinate is not — and the 0 here is what the generated pool inherits, which is what
-# keeps one title in eight out of the basis altogether.
+# §5.1's gate input n_t, spread near 1, near 0 and between;
+# title 8's Backbone row uses `COLD_BACKBONE_ROWS`.
 ITEM_SUPPORT = {1: 4218, 2: 900, 3: 120, 4: 30, 5: 6, 6: 240, 7: 55, 8: 0}
-# Titles the Backbone has a ROW for, which §4.3 does not make the same thing as the titles it
-# carries a coordinate for. Title 8's row is the flagged one below, so it is excluded from the
-# basis exactly as an absent row would be: §5.1's cold branch stays reachable and §12's M2 exit
-# criterion is still about those titles, while the file now has the shape the corpus's file has.
+# Titles with a Backbone ROW; title 8's row is flagged, so it is out of the basis as an absent row would be.
 BACKBONE_TITLES = (1, 2, 3, 4, 5, 6, 7, 8)
 
-# The rows the export flags in `cold_mask`: title id -> the crowd count the FILE carries for it.
-# v20260828 flags 2,879 of 14,397 rows — E is written as zeros for every one of them and the
-# coordinate the corpus does have lives in `E_hat`/`b_hat` — and 1,915 of those clear
-# `scoring.backbone.WARM_SUPPORT` (90), which is the whole of cs-01: on support alone they were
-# stamped warm, excused from the Cold Tower sweep that exists to give them a coordinate, and
-# served at e(t) = 0 for ever. So the count here is deliberately ABOVE the threshold and
-# deliberately not `ITEM_SUPPORT[8]`; a fixture where the two agreed would be passed by a reader
-# that ignores the mask entirely, which is the reader this repository shipped. The row lives here
-# rather than in a second npz because the M4.13 plan's §8 says it must.
-# [M4.13 cycle 1, M413-REV-02]
+# Rows flagged in `cold_mask`: the count is deliberately
+# ABOVE WARM_SUPPORT, or a mask-ignoring reader would pass.
 COLD_BACKBONE_ROWS = {8: 900}
 
 EMBED_DIM = 64
@@ -269,41 +192,24 @@ def runtime_bucket(minutes: int | None) -> str | None:
         return "80-105"
     if minutes < 130:
         return "105-130"
-    # `< 160`, not `<= 160`: `mdc/ratings/features.py:89` puts 160 itself in `>160`, and the
-    # tower was trained on that binning. An off-by-one here moves every 160-minute film into a
-    # column it was not trained in.
+    # `< 160`, not `<= 160`: the tower was trained with 160 in `>160`.
     if minutes < 160:
         return "130-160"
     return ">160"
 
 
-# --- the pool: the one thing this fixture reproduces by volume rather than by shape -----------
-
-# The generated ids sit far below `importer.bundle.APP_ID_MIN` (1,000,000,000): decision 162
-# partitions the corpus's namespace from the household's, and a pool that reached into the
-# app's half would make `break_title_id_in_app_range` unfalsifiable.
+# Far below `APP_ID_MIN`, or `break_title_id_in_app_range` would be unfalsifiable.
 POOL_ID_BASE = 1_001
 POOL_TMDB_BASE = 900_000
 
-# The one attribute the pool spreads on purpose, and the proportion is measured rather than
-# chosen. §6's default room is 130 minutes; the real bundle yields 696 owned movies inside it
-# against 716 at 200, so 97% of the owned pool fits and only one title in thirty-six does not.
-# A pool spread evenly across the runtime buckets would hand M4.12 a third fewer titles than
-# the room really holds and understate the selector's cost by exactly that much. Everything
-# else a generated title carries is drawn from the authored rows below, which is what keeps the
-# feature contract's width and every block's grammar identical at any pool size.
+# 97% of the real owned pool fits §6's 130-minute room, so the runtimes cluster under it.
 POOL_RUNTIMES = (88, 96, 102, 108, 114, 120, 124, 128)
 POOL_LONG_RUNTIME = 165
 POOL_LONG_EVERY = 36
 
 
 class _Rows(NamedTuple):
-    """The rows one bundle is written from.
-
-    Four writers used to read the module-level lists directly, which is why a pool could not
-    exist: the eight authored titles were a global rather than an argument. `_rows(0)` returns
-    those same objects, so the default bundle is the one all 26 call sites already build.
-    """
+    """`_rows(0)` returns the module-level lists themselves, so the default bundle is unchanged."""
 
     titles: list
     genres: list
@@ -316,14 +222,7 @@ class _Rows(NamedTuple):
 
 
 def _rows(pool_titles: int) -> _Rows:
-    """The authored rows, plus `pool_titles` generated owned movies.
-
-    Every generated attribute is *drawn from* the authored rows — the same genres, keywords,
-    people, terms, years, languages and countries — so `_contract_columns` derives the identical
-    column list at any pool size. That is the property the pool has to have: a wider contract is
-    a different `input_dim`, and the tower a timing test loads would no longer be the tower the
-    rest of the suite loads.
-    """
+    """Every generated attribute is drawn from the authored rows, so the contract width never changes."""
     if pool_titles <= 0:
         return _Rows(TITLES, GENRES, KEYWORDS, CREDITS, EXTRACTED, PROJECTED,
                      ITEM_SUPPORT, BACKBONE_TITLES)
@@ -332,8 +231,7 @@ def _rows(pool_titles: int) -> _Rows:
     credits, extracted, projected = list(CREDITS), list(EXTRACTED), list(PROJECTED)
     support, backbone = dict(ITEM_SUPPORT), list(BACKBONE_TITLES)
 
-    # Derived, not restated: a second literal list would be a second vocabulary, free to drift
-    # from the authored one and widen a block without anything noticing.
+    # Derived, not restated: a second literal list would be a second vocabulary.
     years = sorted({t[4] for t in TITLES})
     origins = sorted({(t[8], t[9]) for t in TITLES})
     genre_names = sorted({g for _, _, g in GENRES})
@@ -341,9 +239,7 @@ def _rows(pool_titles: int) -> _Rows:
     roles = sorted({(pid, dept, job, role) for _, pid, _, dept, job, _, _, role in CREDITS})
     x_terms = sorted({t for _, t, _, _, _ in EXTRACTED})
     p_terms = sorted({t for _, t, _, _, _ in PROJECTED})
-    # The authored support values, in title order — so the pool inherits the warm/cold split
-    # §5.1's gate branches on rather than a flat one: one title in eight has n_t = 0 and no
-    # Backbone row, which is the cold branch §12's M2 criterion is about.
+    # The authored support values, so the pool inherits the warm/cold split.
     supports = [ITEM_SUPPORT[t[0]] for t in TITLES]
 
     for i in range(pool_titles):
@@ -358,8 +254,7 @@ def _rows(pool_titles: int) -> _Rows:
         person_id, department, job, role_class = roles[i % len(roles)]
         credits.append((title_id, person_id, "tmdb", department, job, None, 0, role_class))
         term = x_terms[i % len(x_terms)]
-        # salience cycles 1..3 because §8 stage 7's trust boundary is `salience IN (1,2,3)` and
-        # the validator counts every row outside it.
+        # Salience cycles 1..3: §8 stage 7's boundary is `salience IN (1,2,3)`.
         extracted.append((title_id, term, shipped_facet(term), 1 + i % 3,
                           "a synthetic quote, because a tag without one is unfalsifiable"))
         projected_term = p_terms[i % len(p_terms)]
@@ -374,17 +269,13 @@ def _rows(pool_titles: int) -> _Rows:
 
 
 def make_bundle(root: Path, *, version: str = "test-v1", pool_titles: int = 0) -> Path:
-    """A clean bundle. `pool_titles` appends that many generated owned movies to the authored
-    eight, and defaults to 0 because 26 call sites and two browser specs assert the small
-    counts — `test_import_integration.py:258` reads `movie_total == 6` and
-    `e2e/specs/10-home.spec.js` says "the fixture bundle owns six"."""
+    """`pool_titles` defaults to 0 because many tests and e2e specs assert the eight-title counts."""
     root.mkdir(parents=True, exist_ok=True)
     rows = _rows(pool_titles)
     _write_content(root / "content.sqlite", rows)
     _write_reviews(root / "reviews.sqlite")
     _write_artifacts(root / "artifacts", version, rows)
-    # Last, because BUNDLE.json inventories the files: the corpus writes it at the end of the
-    # export for the same reason.
+    # Last, because BUNDLE.json inventories the files, as the corpus writes it.
     _write_identity(root, version)
     return root
 
@@ -393,8 +284,7 @@ def _write_content(path: Path, rows: _Rows) -> None:
     if path.exists():
         path.unlink()
     db = sqlite3.connect(path)
-    # The DDL below is the corpus's, column for column. Types and NOT NULLs included, because
-    # a fixture that relaxes them cannot reproduce a constraint failure the real bundle would.
+    # The corpus's DDL column for column, NOT NULLs included, so real constraint failures reproduce.
     db.executescript(
         """
         CREATE TABLE title (
@@ -482,7 +372,7 @@ def _write_content(path: Path, rows: _Rows) -> None:
     db.executemany(
         "INSERT INTO title_video (title_id, source, key, site, type) VALUES (?,?,?,?,?)", VIDEOS
     )
-    # rule 6: a NULL region inside the primary key, which the importer must coalesce to ''.
+    # Rule 6: a NULL region inside the primary key, which the importer must coalesce to ''.
     db.executemany(
         "INSERT INTO title_alias (title_id, source, alias, region, language) VALUES (?,?,?,?,?)",
         [
@@ -572,17 +462,8 @@ def _write_reviews(path: Path) -> None:
     db.close()
 
 
-# --- the feature contract, built from the fixture's own rows in the corpus's grammar ----------
-
-
 def _contract_columns(rows: _Rows) -> tuple[list[tuple[str, list[str]]], dict[str, str]]:
-    """The nine content blocks, each named the way the shipped contract names them.
-
-    This is the whole point of the M4.5 rewrite: `dna:`, `g:`, `genre:`, `kw:`, `p:<role>:`,
-    `country:`, `award:`, and a `meta` block of one-hot buckets — not `<block>:<n>`, which is
-    what the fixture used to declare and which reduces to whatever bare key the builder happened
-    to emit.
-    """
+    """The nine content blocks named as the shipped contract names them, never `<block>:<n>`."""
     extracted_terms = sorted({t for _, t, _, _, _ in rows.extracted})
     projected_terms = sorted({t for _, t, _, _, _ in rows.projected})
     genres = sorted({g.lower() for _, _, g in rows.genres})
@@ -602,8 +483,7 @@ def _contract_columns(rows: _Rows) -> tuple[list[tuple[str, list[str]]], dict[st
     blocks = [
         ("dna_x", [f"dna:{t}" for t in extracted_terms]),
         ("dna_p", [f"dna:{t}" for t in projected_terms]),
-        # The genome block ships columns and no data: §4.3 zero-imputes it, and the corpus
-        # reaches it through MovieLens ids this fixture deliberately does not carry.
+        # Genome columns ship with no data: §4.3 zero-imputes the block.
         ("genome", ["g:action", "g:atmospheric", "g:cooking"]),
         ("genre", [f"genre:{g}" for g in genres]),
         ("keyword", [f"kw:{k}" for k in keywords]),
@@ -620,8 +500,8 @@ def _write_artifacts(root: Path, version: str, rows: _Rows) -> None:
     (root / "manifest.json").write_text(
         json.dumps(
             {
-                # The shipped manifest.json carries the fitted cut-points and nothing else; the
-                # bundle's identity lives in BUNDLE.json at the root (see below).
+                # The shipped manifest.json carries only the fitted
+                # cut-points; identity lives in BUNDLE.json.
                 "fitted_cuts": {str(i): [3.5, 7.5] for i in RATING_SOURCE_IDS},
             },
             indent=1,
@@ -629,13 +509,7 @@ def _write_artifacts(root: Path, version: str, rows: _Rows) -> None:
         encoding="utf-8",
     )
     (root / "equating_map.json").write_text(json.dumps({"version": 1, "maps": {}}), encoding="utf-8")
-    # §4.3's "tuned constants of the §5.2 recipe", under the corpus's own names. The fixture
-    # declared `lambda_ridge`, `lambda_bt`, `lr`, `margin_form`, `b_i_tau`, `sigma_inflation_c`
-    # and `sigma_inflation_cap` — the names `ledger/hyperparams.py` reads — and the corpus ships
-    # `anchor_ridge_lambda`, `bt_weight_lam_bt`, `learning_rate`, `margin_weight_form` and a
-    # nested `sigma_inflation` object, plus three constants this app has no field for at all.
-    # Under the old names the fixture agreed with the reader about a spelling neither shares
-    # with the artifact, so `from_mapping` could never report the real bundle's unknown keys.
+    # §4.3's tuned constants under the corpus's own names, so `from_mapping` sees the real keys.
     (root / "ledger_hyperparams.json").write_text(
         json.dumps(
             {
@@ -650,21 +524,9 @@ def _write_artifacts(root: Path, version: str, rows: _Rows) -> None:
                     "trigger_months": 12, "rate_c_per_sqrt_month": None, "cap": "prior_sigma",
                     "provisional": True, "note": "the trigger and cap are design (spec 5.2)",
                 },
-                # §6.3's two thresholds, shipped rather than defaulted. Proposal 157: "any
-                # threshold that is a bare σ constant belongs in ledger_hyperparams.json". The
-                # corpus does not ship them yet, so `test_bundle_shapes.py` carries them as a
-                # declared exception (`PROPOSAL_157_NOT_YET_SHIPPED`) rather than silently.
-                #
-                # Which makes this literal the only `straddle_z` any stack this repo can boot
-                # runs on: a bundle constant beats the default, and nothing else writes the key.
-                # It stayed at the retired 1.0 across decision 214's re-tune to 0.15 — the value
-                # at which a fitted 120-title board badges 120 of 120 and §6.3's badge singles
-                # nothing out — so `npm --prefix e2e run fresh` badged at the number the
-                # decision exists to end, while the test that grades
-                # the clause built its board from `DEFAULTS` and could not see it. Pinned to
-                # `DEFAULTS` by `test_bundle_shapes.py` rather than imported here: the fixture
-                # stands in for the corpus, and a fixture that reads the app's own constants can
-                # no longer disagree with it. [M4.12 cycle 1, M412-RND-01; decision 214]
+                # §6.3's thresholds (proposal 157), not yet shipped by the corpus and
+                # declared in `test_bundle_shapes.py`. This literal is the only
+                # `straddle_z` any stack here runs on, so it must not be a retired value.
                 "straddle_z": 0.15, "tension_credible_mass": 0.80,
             },
             indent=1,
@@ -706,14 +568,8 @@ def _write_artifacts(root: Path, version: str, rows: _Rows) -> None:
         encoding="utf-8",
     )
     _write_model_artifacts(root, content_dim, rows)
-    # The shipped entry keys: kind, pct_dislike, pct_like, pct_ok, raters, title, title_id,
-    # year. There is no `decade` — §4.3's "decade-stratified" is a property of the selection,
-    # not a column, and the importer read `item["decade"]` until M4.5, so the real list loaded
-    # with the one property it exists for NULL on every row.
-    #
-    # `TITLES`, not `rows.titles`, and deliberately: §4.3's onboarding list is "100-title
-    # decade-stratified" whatever the catalog's size, so it is the one artifact a pool must NOT
-    # grow. A 706-entry seed list would be a shape no export has ever produced.
+    # The shipped entry keys have no `decade`. `TITLES`, not `rows.titles`: the onboarding list is
+    # 100 titles whatever the catalog size, so a pool must not grow it.
     (root / "seed_list.json").write_text(
         json.dumps([
             {
@@ -725,8 +581,7 @@ def _write_artifacts(root: Path, version: str, rows: _Rows) -> None:
         encoding="utf-8",
     )
     (root / "audit.json").write_text(json.dumps({"generated_by": "tests.fixtures"}), encoding="utf-8")
-    # The shipped header: kind, title_id, value, evidence, note. There is no `field` column, and
-    # the app read one until M4.5 — a KeyError rather than a validation failure.
+    # The shipped header: kind, title_id, value, evidence, note. There is no `field` column.
     (root / "corrections_v1.tsv").write_text(
         "kind\ttitle_id\tvalue\tevidence\tnote\n"
         "composer\t8\tKunihiko Murai\thttps://example.invalid/tampopo\tcredited twice upstream\n",
@@ -740,20 +595,12 @@ def _write_artifacts(root: Path, version: str, rows: _Rows) -> None:
     _write_vocab(root / "dna_vocab" / "v1")
 
 
-# The corpus stamps the export time; a literal keeps `make_bundle` byte-reproducible, for the
-# same reason `_write_model_artifacts` draws from a seeded generator.
+# A literal keeps `make_bundle` byte-reproducible.
 CREATED_AT = "2026-08-28T16:20:19.433025+00:00"
 
 
 def _inventory(root: Path) -> tuple[dict[str, dict[str, object]], int]:
-    """`files` and `total_bytes`: every file in the tree with its size and sha256.
-
-    BUNDLE.json is not in its own inventory, and the real one is not either: the corpus writes it
-    last, over the tree it has just described, so the tree it describes does not contain it.
-    `validate._verify_bundle_files` exempts it by PATH for the same reason - and without the
-    exemption a `reinventory` over an existing bundle would list the old file and then replace
-    it, publishing the hash of a file that no longer exists.
-    """
+    """BUNDLE.json is not in its own inventory: the corpus writes it last, over the tree it describes."""
     files: dict[str, dict[str, object]] = {}
     total_bytes = 0
     for path in sorted(root.rglob("*")):
@@ -768,12 +615,7 @@ def _inventory(root: Path) -> tuple[dict[str, dict[str, object]], int]:
 
 
 def _table_counts(root: Path) -> dict[str, int]:
-    """`tables`: the corpus's own per-table row counts, which `compare_table_counts` reads back.
-
-    A models-only bundle ships neither database, and `sqlite3.connect` CREATES the file it cannot
-    find - so inventorying one would put an empty `content.sqlite` back into the very bundle that
-    was made models-only by deleting it. Decision 162 makes that the recurring shape.
-    """
+    """`sqlite3.connect` CREATES a missing file, so a models-only bundle's databases are not opened."""
     tables: dict[str, int] = {}
     for db_name in ("content.sqlite", "reviews.sqlite"):
         if not (root / db_name).is_file():
@@ -791,17 +633,7 @@ def _table_counts(root: Path) -> dict[str, int]:
 
 
 def _write_identity(root: Path, version: str) -> None:
-    """`BUNDLE.json` — the corpus's own record of what a bundle is, in the shape it writes it.
-
-    The fixture used to write three keys, two of which (`vocabulary_version`, `title_count`) no
-    bundle has ever carried, and omitted every one that a bundle does: `tables`, `files`,
-    `validations`, `source_provenance`, `filtered_tables`, `display_only_tables`,
-    `nullable_pk_columns`, `frozen_rating_source_ids`. That is the invention this milestone
-    exists to end, one file outside `artifacts/` — and it is load-bearing, because `bundle.py`
-    reads the vocabulary version from here (decision 163's refusal has nothing to compare
-    without it) and against a real bundle resolves it only through the fallback to the
-    `dna_vocab/<version>/` directory name.
-    """
+    """`BUNDLE.json` in the corpus's shape; `bundle.py` reads the vocabulary version from here."""
     files, total_bytes = _inventory(root)
     tables = _table_counts(root)
 
@@ -814,23 +646,20 @@ def _write_identity(root: Path, version: str) -> None:
                 "tables": tables,
                 "files": files,
                 "total_bytes": total_bytes,
-                # The corpus ships `imdb_ratings` and `ml_link` filtered to the bundle's titles.
-                # This fixture carries neither table, and naming a table it does not ship would
-                # be the same invention in a smaller font.
+                # The corpus filters `imdb_ratings` and `ml_link`;
+                # this fixture ships neither, so names neither.
                 "filtered_tables": [],
                 # §4.1 rule 5: platform ratings are display-only, never a Ledger input.
                 "display_only_tables": [t for t in ("platform_rating",) if t in tables],
                 "frozen_rating_source_ids": list(RATING_SOURCE_IDS),
-                # rule 6's landmine, declared where the corpus declares it: the fixture's
-                # `title_alias` carries a NULL `region` in a PK component on purpose.
+                # Rule 6's landmine: `title_alias` carries a NULL `region` in a PK component on purpose.
                 "nullable_pk_columns": {
                     "title_alias": [{"column": "region", "affinity": "TEXT"}],
                 },
                 "nullable_pk_note": "SQLite allows NULL in PK components; the Postgres importer "
                                     "coalesces TEXT-affinity components to '' (§4.1 rule 6).",
                 "watchlist_note": "built live at export time; this fixture ships no watchlist",
-                # Upstream prep artifacts the export was built from. This fixture has none, and
-                # an invented digest of a file that does not exist is worse than an empty record.
+                # No upstream prep artifacts; an invented digest would be worse than an empty record.
                 "source_provenance": {},
                 "validations": (
                     [{"check": "deny_list", "ok": True, "detail": "shipped tables clean; bad=[]"}]
@@ -849,9 +678,7 @@ def _write_identity(root: Path, version: str) -> None:
 
 
 def _write_vocab(vocab: Path) -> None:
-    """`dna_vocab/v1/` in the corpus's own file set: per-facet vocab TSVs, a combined one, the
-    alias map, and a per-TITLE adjudications ledger. The app read terms.tsv / aliases.tsv /
-    adjudications.tsv, none of which the corpus ships."""
+    """The corpus's file set: per-facet TSVs, a combined one, the alias map and per-TITLE adjudications."""
     vocab.mkdir(parents=True, exist_ok=True)
     header = ("id\tlabel\tgloss\topposite_gloss\tdf_lb\tdf_ub\thub_ub\taliases"
               "\tpositive_anchor\tnegative_anchor\tnotes\n")
@@ -877,8 +704,7 @@ def _write_vocab(vocab: Path) -> None:
         "cozy\t9\tmood\tmood.cosy\t\tspelling\n",
         encoding="utf-8",
     )
-    # Keyed per TITLE, not per term: the app's `ON CONFLICT (version, term) DO UPDATE` would
-    # have collapsed 817 per-title verdicts onto one row per term.
+    # Keyed per TITLE, not per term.
     (vocab / "adjudications_v1.tsv").write_text(
         "scope\ttitle_id\tterm\taction\ttarget\tquote\tsource\tnote\n"
         "title\t1\tmood.cosy\tdrop\t\t\ttrakt:comment\twrong film\n"
@@ -888,30 +714,15 @@ def _write_vocab(vocab: Path) -> None:
     (vocab / "s_matrix_v1.tsv").write_text(
         "facet\ta\tb\ts\nmood\tmood.dread\tmood.cosy\t-0.8\n", encoding="utf-8"
     )
-    # §6.4's axis definitions. The corpus ships no axis TSVs (proposal 140 asks for them), so
-    # the fixture ships them under the name the app reads and the gap is recorded in the plan.
-    # Beside the vocabulary files and not in an `axes/` subdirectory: the corpus exporter copies
-    # the regular files of `data/dna_vocab/v1/` and does not descend, so a fixture that wrote
-    # them into a subdirectory was reproducing a layout no real bundle can carry -- which is the
-    # half of the five-milestone gap that was this repository's rather than upstream's, and is
-    # the only thing the fixture can be wrong about here. [decision 173]
+    # The corpus ships no axis TSVs yet, so they sit beside
+    # the vocabulary files under the name the app reads.
     for facet, (left, right, weights) in AXES.items():
         body = f"{left}\t{right}\n" + "".join(f"{t}\t{w}\n" for t, w in weights.items())
         (vocab / f"{facet}.tsv").write_text(body, encoding="utf-8")
 
 
 def _identity_tokens(ids: np.ndarray, titles: list) -> np.ndarray:
-    """decision 162's identity column, row-aligned to `title_ids`.
-
-    Range partitioning stops two minters colliding; it cannot see the corpus *merging* two
-    titles, which changes what an id means without changing the id. The token names the axis it
-    is asserting on — `imdb:<imdb_id>` where the spine has one, else `tmdb:<tmdb_id>:<kind>` —
-    and titles 3 and 5 exercise the fallback, which is the 21% case §4.1 names.
-
-    The corpus does not ship this array yet; the exporter has to add it. The fixture ships it
-    because the row requires the importer to check it, and `test_bundle_shapes.py` declares the
-    gap rather than hiding it.
-    """
+    """Decision 162's identity column, row-aligned to `title_ids`; not exported by the corpus yet."""
     spine = {t[0]: t for t in titles}
     tokens = []
     for title_id in ids.tolist():
@@ -921,26 +732,14 @@ def _identity_tokens(ids: np.ndarray, titles: list) -> np.ndarray:
 
 
 def _write_model_artifacts(root: Path, content_dim: int, rows: _Rows) -> None:
-    """backbone.npz, cold_tower.pt, review_text_emb.npz, content_X.npz.
-
-    Deterministic: a seeded generator, so a fit that changes is a code change and never a
-    fixture that happened to be drawn differently.
-    """
+    """Seeded, so a changed fit is a code change and never a differently drawn fixture."""
     rng = np.random.default_rng(20260830)
 
-    # `title_ids`, plural — the name the corpus ships. The app demanded `title_id` and would
-    # have found nothing in a real bundle.
+    # `title_ids`, plural: the name the corpus ships.
     ids = np.array(rows.backbone_titles, dtype=np.int32)
     cold = np.isin(ids, np.array(sorted(COLD_BACKBONE_ROWS), dtype=np.int32))
 
-    # The drawn rows are the ones that HAVE a coordinate, and the flagged rows are spliced in as
-    # zeros — which is what the export writes for them, and the reason `cold_mask` is not a
-    # courtesy: zeros read as a coordinate to anything that takes E at face value. Sizing the
-    # draws to `~cold` rather than to `ids` is what keeps every other row of E, b_i and b_hat —
-    # and every array drawn after them, down to `content_X` — bit for bit what they were before
-    # a flagged row existed. A generator whose stream moves when a row is added makes "the fit
-    # changed" and "the fixture was drawn differently" look the same, which is the one thing the
-    # seeded generator is here to prevent.
+    # Flagged rows are spliced in as zeros; draws are sized to `~cold` so no other array's stream moves.
     kept = int((~cold).sum())
     e = np.zeros((ids.size, EMBED_DIM), dtype=np.float32)
     e[~cold] = rng.normal(scale=0.35, size=(kept, EMBED_DIM)).astype(np.float32)
@@ -949,14 +748,7 @@ def _write_model_artifacts(root: Path, content_dim: int, rows: _Rows) -> None:
     b_hat = np.zeros(ids.size, dtype=np.float32)
     b_hat[~cold] = rng.normal(scale=0.6, size=kept).astype(np.float32)
 
-    # `E_hat` is a different array from E and sits at the corpus's scale (median ||E_hat|| 27.05
-    # over every row against a median ||E|| of 0.3835 over the rows that carry a coordinate at
-    # all; x10 puts this fixture's ~2.8 near 28). It was E itself, which made the
-    # one array that holds a flagged row's real coordinate indistinguishable from the array that
-    # by construction does not hold it. Nothing in the app reads E_hat — decision 236 sends the
-    # scale question upstream — so what matters is that the two are distinct and differently
-    # scaled, not the ratio they land at. The flagged rows draw theirs from a generator of their
-    # own, for the reason above: `rng` must not be asked for anything on their account.
+    # `E_hat` is distinct from E and at the corpus's scale; flagged rows draw from their own generator.
     cold_rng = np.random.default_rng(20260911)
     e_hat = (e * 10.0).astype(np.float32)
     e_hat[cold] = cold_rng.normal(scale=3.5, size=(int(cold.sum()), EMBED_DIM)).astype(np.float32)
@@ -996,15 +788,10 @@ def _write_model_artifacts(root: Path, content_dim: int, rows: _Rows) -> None:
         term_names=np.array([f"t{i}" for i in range(32)], dtype=object),
     )
 
-    # content_X.npz is a bare scipy CSR upstream — no ids, positional only. It is written the
-    # same way here so nothing in this repo can quietly start depending on an id vector that a
-    # real bundle does not carry.
+    # content_X.npz is a bare positional CSR upstream, so no id vector is written.
     all_ids = np.array([t[0] for t in rows.titles], dtype=np.int32)
     dense = (rng.random((all_ids.size, content_dim)) < 0.15).astype(np.float32)
-    # CSR assembled with numpy rather than scipy: scipy is not a declared dependency and
-    # `test_every_third_party_import_is_a_declared_dependency` would fail on one added for a
-    # fixture. The five arrays below are exactly what `scipy.sparse.save_npz` writes, which is
-    # what the corpus ships.
+    # Assembled with numpy: scipy is not a declared dependency. These are the arrays `save_npz` writes.
     rows, cols = np.nonzero(dense)
     np.savez(
         root / "content_X.npz",
@@ -1015,25 +802,14 @@ def _write_model_artifacts(root: Path, content_dim: int, rows: _Rows) -> None:
         shape=np.array(dense.shape, dtype=np.int64),
         format=np.array(b"csr"),
     )
-    # `content_items.npz` is deliberately NOT written. The corpus ships it with fifteen arrays
-    # of per-item statistics and nothing under `backend/spielplan/` reads any of them; a
-    # two-array stand-in would be a shape this fixture invented, which is the whole failure
-    # M4.5 exists to end. When something reads it, it gets written then — faithfully.
+    # `content_items.npz` is not written: nothing reads it, and a stand-in would be an invented shape.
 
     _write_cold_tower(root, content_dim + EMBED_DIM)
 
 
 def _write_cold_tower(root: Path, input_dim: int) -> None:
-    """cold_tower.pt — saved the way the corpus's exporter saves it: a **bare state_dict**.
-
-    §4.3 calls this "the live model; the exporter must ship v2", and the app required a wrapper
-    carrying `version`, `arch` and `input_dim`. The corpus ships `torch.save(model.state_dict())`
-    and nothing else, so the architecture has to be read out of the tensor shapes — which it
-    can be, unambiguously: `trunk.0.weight` is (hidden, input_dim) and `head_e.weight` is
-    (embed_dim, hidden).
-
-    §1 is CPU-only, and this is built and saved on the CPU with no device in the state dict.
-    """
+    """A bare state_dict, as the corpus saves it: the
+    architecture is read from the tensor shapes. CPU only."""
     import torch  # noqa: PLC0415
     from torch import nn  # noqa: PLC0415
 
@@ -1042,8 +818,7 @@ def _write_cold_tower(root: Path, input_dim: int) -> None:
     class ColdTower(nn.Module):
         def __init__(self, in_dim: int, out_dim: int = EMBED_DIM) -> None:
             super().__init__()
-            # Named `trunk.0` / `trunk.3` by the Sequential index, exactly as upstream: Linear,
-            # ReLU, Dropout, Linear, ReLU.
+            # Named `trunk.0` / `trunk.3` by the Sequential index, exactly as upstream.
             self.trunk = nn.Sequential(
                 nn.Linear(in_dim, 128), nn.ReLU(), nn.Dropout(0.1), nn.Linear(128, 96), nn.ReLU()
             )
@@ -1058,33 +833,12 @@ def _write_cold_tower(root: Path, input_dim: int) -> None:
     torch.save(tower.state_dict(), root / "cold_tower.pt")
 
 
-# --- deliberately broken bundles, one rule each -----------------------------------------------
-
-
 def reinventory(root: Path) -> None:
-    """Rewrite `BUNDLE.json` over the tree as it now stands, keeping the version it names.
-
-    THE CORPUS WRITES BUNDLE.json LAST, and M4.14 made the importer read the 42 `{bytes, sha256}`
-    entries in it before a single row is written. So a fixture that edits `content.sqlite` after
-    `make_bundle` returned, or that makes a bundle models-only by deleting the two databases, has
-    produced a bundle whose own inventory no longer describes it — which is a real defect and now
-    a real refusal, just not the one those fixtures exist to provoke. A `break_*` helper that
-    breaks two things at once cannot tell a test which of them the importer caught, so each of
-    them re-inventories and goes on breaking exactly the rule it names.
-
-    The three TREE-DERIVED keys are recomputed and every other key is kept: `files`,
-    `total_bytes` and `tables` are three statements of one fact about the bytes on disk, and a
-    helper that updated one of them would be the same drift one layer down — while
-    `vocabulary_version`, `validations` and `nullable_pk_columns` are DECLARATIONS a fixture may
-    have planted on purpose, and regenerating the whole file would quietly undo them. That is
-    also why no caller is asked for the version: the bundle already knows what it is called.
-    [M4.14 step B1, finding 2.4]
-    """
+    """Rewrites `BUNDLE.json` over the tree as it now stands, so a helper breaks only the rule it names.
+    Only `files`, `total_bytes` and `tables` are recomputed; planted declarations are kept."""
     path = root / "BUNDLE.json"
     if not path.is_file():
-        # A bundle with no manifest has no inventory to refresh, and that absence is itself a
-        # shape under test: `validate` refuses it as "no usable bundle_version" rather than
-        # naming a directory "unknown". Writing one here would erase the case.
+        # No manifest is itself a shape under test; writing one here would erase the case.
         return
     payload = json.loads(path.read_text(encoding="utf-8"))
     files, total_bytes = _inventory(root)
@@ -1153,12 +907,7 @@ def break_salience(root: Path) -> None:
 
 
 def break_title_id_in_app_range(root: Path, app_min: int) -> None:
-    """decision 162 — a bundle reaching into the range Spielplan mints from.
-
-    The failure the whole id partition exists to make impossible: two minters in one namespace.
-    A bundle carrying an id at or above `app_min` claims a title the household may already have
-    acquired, and nothing downstream can tell the two apart.
-    """
+    """Decision 162: a bundle reaching into the range Spielplan mints from."""
     db = sqlite3.connect(root / "content.sqlite")
     db.execute("UPDATE title SET id = ? WHERE id = 8", (app_min + 7,))
     db.commit()
@@ -1167,20 +916,8 @@ def break_title_id_in_app_range(root: Path, app_min: int) -> None:
 
 
 def break_vocabulary_version(root: Path, version: str = "v2") -> None:
-    """decision 163 — a bundle whose vocabulary version differs from the active one.
-
-    Deferred as a migration, refused in the meantime: swapping it would leave `dna_tag` and
-    `dna_projected` at the old version while the feature builder filters on the active one, so
-    both DNA blocks empty for every title — and empty is not an error anywhere in the read path.
-
-    THE TREE MOVES WITH THE DECLARATION, because §4.3 names the vocabulary by the directory. This
-    edited the BUNDLE.json key alone, so the bundle it produced declared v2 while shipping
-    `dna_vocab/v1` - which is a different defect with its own refusal since M4.14 cycle 3, and not
-    the one this helper's own docstring describes ("a models-only bundle shipping `dna_vocab/v2`",
-    in the test that reads it). A bundle with no `dna_vocab/` at all is left exactly as it is:
-    that is decision 266's case, a bundle naming a vocabulary it ships no tree for.
-    [M4.14 cycle 3, M414-C3-VOCAB-01]
-    """
+    """Decision 163: a vocabulary version other than the
+    active one, with the `dna_vocab/` tree moved too."""
     path = root / "BUNDLE.json"
     payload = json.loads(path.read_text(encoding="utf-8"))
     payload["vocabulary_version"] = version
@@ -1200,11 +937,7 @@ def break_vocabulary_version(root: Path, version: str = "v2") -> None:
 
 
 def break_contract_block_grammar(root: Path) -> None:
-    """§4.3 — a contract whose credit columns are keyed by person id rather than by name.
-
-    This is the shape the fixture itself used to declare, and it is what made the defect
-    invisible: a builder emitting `person_id::text` agrees with it perfectly.
-    """
+    """§4.3: credit columns keyed by person id rather than by name."""
     path = root / "artifacts" / "feature_contract.json"
     payload = json.loads(path.read_text(encoding="utf-8"))
     names = payload["feature_names"]
@@ -1216,12 +949,7 @@ def break_contract_block_grammar(root: Path) -> None:
 
 
 def break_straddle_z(root: Path, value: float = 0.0) -> None:
-    """§4.3 / §6.3 — a non-positive straddle threshold.
-
-    The only §6.3 rule a *bundle* can violate. At z = 0 no posterior ever reaches a neighbour,
-    so no title is ever badged and the comparison queue draws from an empty pool: the surface
-    looks calm and is broken, which is the failure mode `from_mapping`'s refusal exists for.
-    """
+    """§6.3: at z = 0 no title is ever badged and the queue draws from an empty pool."""
     path = root / "artifacts" / "ledger_hyperparams.json"
     payload = json.loads(path.read_text(encoding="utf-8"))
     payload["straddle_z"] = value
@@ -1230,12 +958,7 @@ def break_straddle_z(root: Path, value: float = 0.0) -> None:
 
 
 def break_tension_credible_mass(root: Path, value: float = 1.0) -> None:
-    """§4.3 / §6.3 — a credible mass that is not a probability.
-
-    At 1.0 the interval is the whole line, so no assigned tier is ever outside it and the
-    tension badge silently stops existing — §6.3's "shows the tension rather than snapping
-    back" turns off with no error anywhere.
-    """
+    """§6.3: at 1.0 the credible interval is the whole line and the tension badge never shows."""
     path = root / "artifacts" / "ledger_hyperparams.json"
     payload = json.loads(path.read_text(encoding="utf-8"))
     payload["tension_credible_mass"] = value
@@ -1244,11 +967,7 @@ def break_tension_credible_mass(root: Path, value: float = 1.0) -> None:
 
 
 def break_corrections_header(root: Path) -> None:
-    """§4.3 / §8 stage 3 — a corrections ledger whose header the parser does not recognise.
-
-    The real file is `kind, title_id, value, evidence, note`; the app read a `field` column that
-    no shipped ledger has, so the ledger raised KeyError instead of failing the report.
-    """
+    """§8 stage 3: a corrections ledger whose header the parser does not recognise."""
     (root / "artifacts" / "corrections_v1.tsv").write_text(
         "title_id\tperson_name\tfield\told_value\tnew_value\tnote\n"
         "1\tMichael Mann\tjob\tWriter\tDirector\tan invented shape\n",
@@ -1258,12 +977,7 @@ def break_corrections_header(root: Path) -> None:
 
 
 def break_backbone_id_array(root: Path) -> None:
-    """§4.3 — a Backbone with no id vector at all.
-
-    §4.3 names E, E_full, b_i, mu and item_n and no mapping, so the mapping is exactly what a
-    bundle can omit while looking complete. Without it a row of E cannot be attached to a title
-    and every coordinate is plausible and wrong.
-    """
+    """§4.3: a Backbone with no id vector, so rows cannot be attached to titles."""
     path = root / "artifacts" / "backbone.npz"
     z = dict(np.load(path, allow_pickle=False))
     z.pop("title_ids", None)
@@ -1272,10 +986,7 @@ def break_backbone_id_array(root: Path) -> None:
 
 
 def break_backbone_ids_unsorted(root: Path) -> None:
-    """§4.3 — an id vector that is not strictly increasing.
-
-    Duplicate or unsorted ids make the row lookup ambiguous rather than wrong-and-detectable.
-    """
+    """§4.3: ids not strictly increasing, so the row lookup is ambiguous."""
     path = root / "artifacts" / "backbone.npz"
     z = dict(np.load(path, allow_pickle=False))
     ids = z["title_ids"]
@@ -1285,11 +996,7 @@ def break_backbone_ids_unsorted(root: Path) -> None:
 
 
 def break_cold_tower_heads(root: Path) -> None:
-    """§4.3 / §8 stage 9 — a checkpoint whose heads this app cannot find.
-
-    The corpus names them `head_e` / `head_b`. A checkpoint naming them anything else cannot be
-    reconstructed, and §5.1 needs both halves of the cold branch.
-    """
+    """§8 stage 9: heads not named `head_e` / `head_b` cannot be reconstructed."""
     import torch  # noqa: PLC0415
 
     path = root / "artifacts" / "cold_tower.pt"
@@ -1301,11 +1008,7 @@ def break_cold_tower_heads(root: Path) -> None:
 
 
 def break_unknown_table(root: Path) -> None:
-    """§10 — a bundle table nothing accounts for.
-
-    Not a denylisted `%_bak%` table: a plausible new table the exporter started shipping. §10
-    requires "counts per table", and a table nobody maps used to produce no line at all.
-    """
+    """§10: a plausible new table nothing accounts for."""
     db = sqlite3.connect(root / "content.sqlite")
     db.execute("CREATE TABLE title_sentiment (title_id INTEGER, score REAL)")
     db.commit()
@@ -1314,12 +1017,7 @@ def break_unknown_table(root: Path) -> None:
 
 
 def break_identity_missing(root: Path) -> None:
-    """decision 162 — a model bundle carrying no identity column at all.
-
-    This is the state of every bundle the corpus has exported so far, which is exactly why an
-    absent identity vector is a refusal rather than a skipped check: a check that quietly does
-    not run on the only bundles in existence is not a check.
-    """
+    """Decision 162: no identity column, the state of every bundle exported so far."""
     path = root / "artifacts" / "backbone.npz"
     with np.load(path, allow_pickle=False) as npz:
         arrays = {k: npz[k] for k in npz.files if k != "title_identity"}
@@ -1328,12 +1026,7 @@ def break_identity_missing(root: Path) -> None:
 
 
 def break_identity_mismatch(root: Path) -> None:
-    """decision 162 — a model bundle whose identity column disagrees with the title it names.
-
-    Range partitioning stops two minters colliding; it cannot see the corpus *merging* two
-    titles, which changes what an existing id means without changing the id. The identity
-    vector is the only thing that can.
-    """
+    """Decision 162: an identity column that disagrees with the title it names."""
     db = sqlite3.connect(root / "content.sqlite")
     db.execute("UPDATE title SET imdb_id = 'tt0000001' WHERE id = 1")
     db.commit()
@@ -1342,12 +1035,7 @@ def break_identity_mismatch(root: Path) -> None:
 
 
 def break_title_meta_only_source(root: Path) -> None:
-    """§4.1 — every per-source meta row dropped.
-
-    The card must render without overview, tagline, poster and trailer rather than erroring:
-    §4.1 keeps the rows because "one block = one droppable source", and dropping the last one is
-    the limit of that rule.
-    """
+    """§4.1: every per-source meta row dropped; the card must still render."""
     db = sqlite3.connect(root / "content.sqlite")
     db.execute("DELETE FROM title_meta")
     db.commit()

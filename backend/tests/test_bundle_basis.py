@@ -1,17 +1,6 @@
-"""Decision 497: the backend follows the active bundle, and §10's restart is owed only when a load
-fails. Spec v2.1 §2 ("`docker compose up` + the setup wizard is the whole install"), §3.1, §4.3,
-§10; owner instruction of 2026-09-25 after the first household user test.
-
-The first household's wizard ended on "no bundle imported", a 409 on every Rate and Rank fit and
-`loaded: none` on the Data tab, until somebody with a shell restarted two containers. These tests
-drive the three imports decision 497 names - the first one, a models-only re-import of a new
-version, and decision 253's restage - and read the answer off the surfaces that told the household
-the wrong thing: the Data tab's state, the shell's `/api/config`, `/api/health` and a Rate tap.
-
-The `app` fixture turns the five-second timer off (tests/conftest.py), so everything here is
-driven by the on-demand re-pin or by `basis.refresh` itself, except the one test whose subject is
-the timer. Skipped without TEST_DATABASE_URL; see tests/conftest.py.
-"""
+"""Decision 497: the backend follows the active bundle; a restart is owed only when a load fails.
+The `app` fixture turns the follow timer off, so all but one test re-pin on demand.
+Needs TEST_DATABASE_URL."""
 
 from __future__ import annotations
 
@@ -44,8 +33,6 @@ async def _admin(app):
 
 
 async def _tick() -> None:
-    """One pass of the real loop with the registry cut to the import, as `test_bundle_import_job`
-    drives it: the tick is production code, the rest of §5.3's table is not the subject."""
     row = next(j for j in worker.JOBS if j.name == worker.BUNDLE_IMPORT_JOB)
     jobs = worker.JOBS
     worker.JOBS = (row,)
@@ -56,8 +43,6 @@ async def _tick() -> None:
 
 
 async def _import(db, root: Path) -> None:
-    """The importer called the way the worker calls it, for the tests whose subject is the re-pin
-    rather than the route that queues it."""
     report = await bundle_import.import_bundle(
         db, bundle_import.Bundle.open(root), settings().artifacts_dir
     )
@@ -65,8 +50,7 @@ async def _import(db, root: Path) -> None:
 
 
 def _models_only(root: Path) -> Path:
-    """decision 162's re-import shape: the seed bundle minus its two content databases, with the
-    inventory re-written so BUNDLE.json still describes the tree."""
+    """Decision 162's re-import shape: the seed bundle minus its content databases, re-inventoried."""
     (root / "content.sqlite").unlink()
     (root / "reviews.sqlite").unlink()
     fx.reinventory(root)
@@ -74,13 +58,8 @@ def _models_only(root: Path) -> Path:
 
 
 async def test_a_first_import_is_served_without_a_restart(app, db, tmp_path):
-    """The household's own sequence: wizard, import, and the bundle in use - with no shell.
-
-    The import goes through the route and the worker's tick exactly as the Data tab drives it, and
-    nothing restarts: the app below is the one that booted bundle-less. Every surface that told the
-    household "no bundle" is read after the poll that reports the flip, because that poll is where
-    decision 497 re-pins.
-    """
+    """Every surface is read after the poll that reports the
+    flip, because that poll is where the re-pin runs."""
     admin = await _admin(app)
     state = admin._transport.app.state
     assert state.artifacts.is_empty, "the app under test has to boot bundle-less (section 3.1)"
@@ -111,15 +90,8 @@ async def test_a_first_import_is_served_without_a_restart(app, db, tmp_path):
 
 
 async def test_the_repin_replaces_store_backbone_and_constants_together(app, db, tmp_path):
-    """The three attributes are one basis, and a re-pin that moved only the store would be worse
-    than none: the constants left at the boot's DEFAULTS give a different `hp_digest` from the
-    worker's fits, which invalidates every cached fit in the install, and a Backbone left empty
-    scores every title from the Cold Tower alone.
-
-    Compared by identity against the loaders the boot uses (`load_for` is cached per file stamp,
-    so the same file is the same object) and by value for the constants, and the key against the
-    row, which is what the next comparison is made against.
-    """
+    """A re-pin that moved only the store would be worse than none: default constants change `hp_digest`
+    and invalidate every cached fit. `load_for` is cached per file stamp, so identity is comparable."""
     admin = await _admin(app)
     state = admin._transport.app.state
     await _import(db, fx.make_bundle(tmp_path / "import" / "test-v1", version="test-v1"))
@@ -136,10 +108,6 @@ async def test_the_repin_replaces_store_backbone_and_constants_together(app, db,
 async def test_a_models_only_reimport_of_a_new_version_is_served_without_a_restart(
     app, db, tmp_path
 ):
-    """The owner's next step on the live install, and the case the draft decision left to a
-    restart: a LOADED bundle replaced by another. Decision 162's shape - models, no content - and
-    the backend moves from the outgoing basis to the incoming one on the Data tab's read.
-    """
     admin = await _admin(app)
     state = admin._transport.app.state
     await _import(db, fx.make_bundle(tmp_path / "import" / "test-v1", version="test-v1"))
@@ -160,10 +128,7 @@ async def test_a_models_only_reimport_of_a_new_version_is_served_without_a_resta
 
 
 async def test_a_restaged_broken_install_is_served_without_a_restart(app, db, tmp_path):
-    """Decision 253's repair re-imports the ACTIVE version into its own directory, so the row's
-    version never moves - which is why the re-pin compares `activated_at` as well. A process that
-    pinned the broken store would otherwise keep serving it after the files came back.
-    """
+    """A restage keeps the version, which is why the re-pin compares `activated_at` as well."""
     admin = await _admin(app)
     state = admin._transport.app.state
     root = fx.make_bundle(tmp_path / "import" / "test-v1", version="test-v1")
@@ -184,11 +149,8 @@ async def test_a_restaged_broken_install_is_served_without_a_restart(app, db, tm
 async def test_a_restage_whose_load_fails_is_reported_as_the_restart_it_owes(
     app, db, tmp_path, monkeypatch
 ):
-    """Decision 497 point 3 names the Data tab's `restart_required` for a load that raised, and
-    point 1 names decision 253's restage among the re-pins. A restage moves `activated_at` and not
-    the version, so a flag that compared versions said nothing was owed while the header said a
-    restart was - and over the broken store the process kept serving, the page went on asking for
-    the restore the restage had just done."""
+    """A restage moves `activated_at` and not the version,
+    so a version comparison missed the owed restart."""
     admin = await _admin(app)
     state = admin._transport.app.state
     root = fx.make_bundle(tmp_path / "import" / "test-v1", version="test-v1")
@@ -222,12 +184,7 @@ async def test_a_restage_whose_load_fails_is_reported_as_the_restart_it_owes(
 async def test_a_load_that_fails_keeps_serving_and_says_a_restart_is_owed(
     app, db, tmp_path, monkeypatch, caplog
 ):
-    """The one case the restart is still for, reported where the household reads it, and retried.
-
-    While the load raises, the Data tab reports `restart_required` and the shell's `/config` says
-    so rather than "no bundle imported"; the failure is logged once for the row and not once per
-    tick; and the next ask after the cause is gone loads the bundle with no restart at all.
-    """
+    """The failure is logged once per row, not once per tick, and the next ask after the fix loads."""
     admin = await _admin(app)
     state = admin._transport.app.state
     await _import(db, fx.make_bundle(tmp_path / "import" / "test-v1", version="test-v1"))
@@ -250,8 +207,8 @@ async def test_a_load_that_fails_keeps_serving_and_says_a_restart_is_owed(
     config = (await admin.get("/api/config")).json()
     assert config["has_bundle"] is False and config["restart_required"] is True, config
 
-    # Put back by hand and not with `monkeypatch.undo()`, which would also unwind the `app`
-    # fixture's own DATA_DIR and working directory under a running app.
+    # Put back by hand: `monkeypatch.undo()` would also unwind
+    # the `app` fixture's DATA_DIR under a running app.
     monkeypatch.setattr(basis, "load", real)
     assert await basis.refresh(state) is True
     assert (await admin.get("/api/config")).json()["restart_required"] is False
@@ -259,10 +216,8 @@ async def test_a_load_that_fails_keeps_serving_and_says_a_restart_is_owed(
 
 
 async def test_the_timer_repins_without_any_request(app, db, tmp_path, monkeypatch):
-    """The other trigger: a flip nobody polls for - an import started from a phone that was then
-    put away - is loaded within `FOLLOW_SECONDS` anyway, so a member's first tap does not meet the
-    swap's 409. Armed here at a test-sized interval; the lifespan stops it on the way out.
-    """
+    """A flip nobody polls for is loaded within `FOLLOW_SECONDS`,
+    so a first tap does not meet the swap's 409."""
     admin = await _admin(app)
     state = admin._transport.app.state
     monkeypatch.setattr(basis, "FOLLOW_SECONDS", 0.05)

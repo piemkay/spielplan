@@ -1,36 +1,6 @@
-"""Backup and restore. Spec v2.1 §2 (Backups), §4.1, §4.3, §10; decision 162.
-
-Two artifacts, and they are deliberately not the same thing.
-
-§2's nightly `pg_dump` is the whole database, user state included, written to `/data/backups`
-and rotated to fourteen. Its contract is a negative one: "Dumps contain ciphertext only — back
-up the env file (`SECRETS_KEY`) alongside them, or a restored dump cannot decrypt connector
-config." §14.3 is why that sentence has teeth — a Jellyfin API key is unscoped and
-admin-equivalent, so a dump carrying one in the clear is a media-server credential lying in a
-directory the operator rsyncs off-box.
-
-The movie-data archive is the other half of decision 162. The corpus supplies content once and
-never again, so the household's copy of the movie data is the only copy: it has to come out on
-its own, without the user state, and go back into a fresh install. Two failure modes make that
-testable rather than obvious, and both are silent. The id sequences are positioned by the seed
-import, an event that by definition never runs again, so a restore that does not carry `setval`
-mints id 1 and the restored install cannot acquire a single title. And `title.origin` defaults
-to 'bundle' (`0008_placement.sql:47`), so a restore that drops the column re-labels every
-app-acquired title and §10's rebuild set stops naming them.
-
-The dump tests need a real `pg_dump`, and they name the binary when they cannot find one. They
-also carry a positive control — a known content string that MUST be in the artifact — because
-"the secret is not in this file" is satisfied for free by a file dumped from the wrong database,
-or by no file at all.
-
-Three more things are only visible from the far side of a restore, and each was found by
-reading rather than by a failing test. A restored install has no `artifact_bundle` row, so
-decision 162's "content seeds once" refusal has nothing to fire on and the install is
-re-seedable — the two-minters problem, reintroduced by the recovery path. `title.placement_bundle`
-points at a bundle that fresh install does not have, so the archive that carries it cannot be
-restored at all. And the archive's manifest is an input: an install must not execute a sequence
-name because a file asked it to.
-"""
+"""Backup and restore (§2 Backups, §10, decision 162): the nightly `pg_dump` (ciphertext only, rotation 14)
+and the movie-data archive (content without user state, restorable into a fresh install). Dump tests need a
+real `pg_dump` and carry a positive content control. Needs TEST_DATABASE_URL."""
 
 from __future__ import annotations
 
@@ -59,8 +29,7 @@ from spielplan.importer.report import ImportReport
 
 pytestmark = pytest.mark.anyio
 
-# Planted in the tables the archive must not touch. Distinct enough that a substring search over
-# a whole artifact is meaningful, and ASCII so a failure prints on a cp1252 console.
+# Planted in the tables the archive must not touch; ASCII so a failure prints on a cp1252 console.
 MARKER_SECRET = "MARKER-JELLYFIN-ADMIN-KEY-3f9c"
 MARKER_VERDICT = "MARKER-VERDICT-SOURCE"
 MARKER_USER = "MARKER-MEMBER"
@@ -71,16 +40,11 @@ MARKER_PUSH = "MARKER-PUSH-ENDPOINT"
 # The positive control: content that MUST survive into every artifact under test.
 CONTENT_MARKER = "Waechter der Naecht"
 
-# Where the app-minted range starts (0015_seed.sql, decision 162). The seed import positions the
-# sequences inside it; these tests position them by hand, because the importer is another row.
+# Where the app-minted range starts (decision 162);
+# positioned by hand here, since the importer is another row.
 APP_ID_FLOOR = 1_000_000_000
 
-# --- what the archive must leave behind -------------------------------------------------------
-#
-# Grouped by the reason, because the reason is the interesting part. Together with the archive's
-# own table list this covers the schema exhaustively, and the guard below fails when a new table
-# belongs to neither set — which is this milestone's own lesson: an unmapped *table* was
-# invisible, because the import report only tracked unmapped columns within mapped tables.
+# Grouped by reason; together with the archive's table list this covers the schema exhaustively.
 
 USER_STATE = {
     "app_user", "user_title", "verdict", "duel", "tier_edit", "ledger_state",
@@ -90,85 +54,28 @@ USER_STATE = {
     "webauthn_credential", "webauthn_challenge", "push_subscription",
 }
 SECRET_CUSTODY = {"connector_config", "data_encryption_key", "app_setting"}
-# §10: "everything expressed in the old Backbone's basis is garbage against a new one" — these
-# are recomputed by the rebuild set, so carrying them would ship a stale basis into a restore.
+# §10: recomputed by the rebuild set; carrying them would ship a stale basis.
 BUNDLE_DERIVED = {"artifact_bundle", "title_placement", "title_prior"}
-# Install bookkeeping and §8.4's work queue: app state, not movie data. `job_run` (0017_ops.sql)
-# joins them for the same reason — §6.6 System reads it to say when last night's dump succeeded on
-# *this* box, and a restore that carried another install's job history would report backups that
-# never happened here.
-#
-# `title_jellyfin_item` (0020_jellyfin_items.sql) joins them too, and it is the plainest case in
-# the set: the rows are one Jellyfin server's item ids, re-derived by every sweep and never
-# trusted stale (§7.1, §7.2), so carrying them into another install would point that household's
-# titles at items that do not exist there. The archive is the corpus; this is this box's view of
-# its own library. [M4.11]
-#
-# `flywheel_batch` (0029_flywheel.sql) is `flywheel_item`'s own batch and joins it for its
-# reason: what this box's admin chose to spend, on this box's provider keys, against this box's
-# monthly cap. It is decision 349's argument for the acquisition spine one table over - this box's
-# own decisions, meaningless on another install - so it is excluded from the movie-data archive:
-# carried elsewhere it would name batches that household never launched, over queue rows the
-# archive does not carry either. [decisions 349 and 443; M5.6]
+# Install bookkeeping and this box's own view of its library, queue and spend: not movie data.
 APP_STATE = {"schema_migration", "setup_step", "flywheel_item", "flywheel_batch", "job_run",
              "title_jellyfin_item"}
 
-# Decision 291: the MovieLens genome slice stops being imported, upholding
-# `media-graph-spec_v1.1.md:175` ("validation artifact only, never shipped or imported into the
-# app"). `0003_content.sql`'s three tables stay in the schema and are empty on every install THIS
-# BUILD seeds, so an archive entry for each would be three empty COPY streams and, on the next
-# restore, a promise that the household's genome travelled with its spine. It did not, and §4.3
-# zero-imputes the block wherever those rows are absent -- which is the measurement the decision
-# rests on, not a tolerance for the gap. On a box seeded BEFORE 291 they are not absent and
-# `placement/features.py` still reads them (decision 311); `backup/movie_data.py`'s `RETIRED`
-# carries what a restore does there. Said unconditionally here until M4.16 cycle 4.
+# Decision 291: the genome slice is no longer imported; `movie_data.RETIRED` covers pre-291 archives.
 GENOME_NOT_IMPORTED = {"ml_genome_tag", "ml_link", "ml_genome_score"}
 
-# 0024_acquisition's three tables, and they are APP_STATE's reason one milestone on rather than a
-# new one. `acquisition_task` is work THIS box has queued against ITS Jellyfin library, keyed on
-# that server's item ids; `fetch_host_state` is this box's robots cache and its own circuit
-# breaker's memory; and `raw_document` points at files under /data/raw, which the archive does not
-# carry and which a restore into another install would therefore name and not have. The archive is
-# the corpus - title, person, DNA, reviews, meta - and none of these three is corpus. Carrying them
-# would promise a household a crawl history it never ran and a raw store it does not hold.
-# [decisions 322, 340, 345; M5.1]
+# This box's queued work, robots cache and raw-store pointers, which a restore would name and not have.
 ACQUISITION_SPINE = {"acquisition_task", "raw_document", "fetch_host_state"}
 
-# 0025_jellyfin_intake's one table, and it is `title_jellyfin_item`'s case rather than a
-# new one: the rows are ONE Jellyfin server's item ids and the events that server sent about
-# them, keyed on ids that mean nothing on another install and re-derived by the next sweep
-# (§7.1, §7.2). Carrying them would hand a restored household a webhook history it never
-# received, pointing at items it does not have. The archive is the corpus; this is this box's
-# view of what its own library was told to acquire. [decision 363; M5.2]
+# One Jellyfin server's item ids and events, meaningless on another install.
 JELLYFIN_INTAKE = {"jellyfin_intake"}
 
-# 0027_dna_extraction's two tables, and they are ACQUISITION_SPINE's argument rather than a new
-# one -- with an asymmetry worth stating, because it looks like an oversight and is not: the DNA
-# this install extracts DOES travel (`dna_tag`, `dna_evidence`, `dna_projected` are in TABLES), and
-# what it REFUSED does not. `dna_reject` is a record of what one provider returned on one run of
-# this box's own configuration - it carries `provider` and a `run_id` into `job_run`, which is
-# APP_STATE and excluded - so a restore carrying it would name runs that never happened in that
-# install, which is `title_jellyfin_item`'s reason one milestone on. `dna_pack` is the index of a
-# pack in the raw store: the archive does not carry `/data/raw` and does not carry `raw_document`,
-# so its rows would point at files a restored install does not hold, and a pack sha nothing can be
-# reproduced against is worse than no row (decision 382 is about reproducibility). Neither is
-# corpus. [decisions 341, 382; M5.4]
+# Extracted DNA travels; what this box refused and its raw-store pack index do not.
 DNA_EXTRACTION = {"dna_reject", "dna_pack"}
 
-# 0028_llm_spend's one table, and it is DNA_EXTRACTION's argument rather than a new one. `llm_call`
-# is this box's spend on this box's own provider keys, and every row cites raw documents - the pack
-# the call read and the response it got back - that the archive does not carry (decision 349), so
-# a restore carrying it would point at bytes the restored install does not hold (decision 382).
-# And the meter is a SUM over these rows for this install's own month (decision 325): carrying
-# them would start another household's month partly spent and park its stage 6 over a cap it never
-# came near. Not corpus. [decisions 325, 349, 382, 430; M5.5]
+# This box's own spend, citing raw documents the archive does not carry.
 LLM_SPEND = {"llm_call"}
 
-# 0034_art_lookup's one table: what TMDB answered when this box's worker asked for a posterless
-# title's art (decision 484). A cache by construction, kept off `title` so decision 162's seed and
-# decision 372's stage-3 writes stay the only authors of the corpus - so it is not corpus either.
-# A restore without it costs one lookup per posterless title on its next view; a restore WITH it
-# would carry answers another install's key obtained. [decisions 483, 484]
+# A cache of TMDB answers this box's key obtained; a restore re-asks.
 ART_CACHE = {"art_lookup"}
 
 EXCLUDED = (USER_STATE | SECRET_CUSTODY | BUNDLE_DERIVED | APP_STATE
@@ -176,27 +83,9 @@ EXCLUDED = (USER_STATE | SECRET_CUSTODY | BUNDLE_DERIVED | APP_STATE
             | LLM_SPEND | ART_CACHE)
 
 
-# --- the postgres client binaries -------------------------------------------------------------
-
-
 @functools.lru_cache(maxsize=1)
 def _postgres_container() -> str | None:
-    """The running postgres:16 container that publishes TEST_DATABASE_URL's own port.
-
-    The app image carries `postgresql-client-16` (ops/backend.Dockerfile) so the worker can run
-    §2's dump; a development box need not, and this one does not. The database behind
-    TEST_DATABASE_URL *is* that container, and inside it 5432 names the same server the URL does —
-    so the same binary, reached through `docker exec`, dumps the same database.
-
-    Identified by published port rather than by being the only one. The rule this replaces was
-    "exactly one match or nothing", on the sound ground that guessing which of several servers to
-    dump would turn a wrong answer into a green test — and then the roadmap's parallel milestone
-    pairs put a stack per worktree on the box, three postgres:16 containers answered `docker ps`,
-    and every test in this file and in test_restore_drill.py skipped. Silently: a skip reads as a
-    pass in the summary line, so §2's backup and restore drill went unexercised in all three
-    checkouts at once. The port is not a guess. TEST_DATABASE_URL names one server, one container
-    publishes that host port, and if none does there is nothing to dump through.
-    """
+    """The running postgres:16 container that publishes TEST_DATABASE_URL's own port, found by that port."""
     url = os.environ.get("TEST_DATABASE_URL") or ""
     port = urlsplit(url).port or 5432
     try:
@@ -209,9 +98,7 @@ def _postgres_container() -> str | None:
         return None
     if done.returncode != 0:
         return None
-    # `0.0.0.0:5433->5432/tcp` and `127.0.0.1:5433->5432/tcp` both mean "this one". Match the host
-    # port immediately before the arrow, so a container whose CONTAINER port happens to be the
-    # number we want cannot answer for one that does not publish it.
+    # Match the host port before the arrow, so a container's internal port cannot answer.
     hits = [
         name for name, _, ports in (line.partition("	") for line in done.stdout.splitlines())
         if name and re.search(rf":{port}->\d+/tcp", ports)
@@ -220,19 +107,7 @@ def _postgres_container() -> str | None:
 
 
 def _inside_the_container(url: str) -> str:
-    """The same database, addressed from inside the container rather than from this host.
-
-    `_client` may resolve to `docker exec <container> pg_dump`, and that process is not on this
-    host: TEST_DATABASE_URL's published port is a mapping the container itself cannot see. It
-    worked while every checkout published 5432, because the two numbers were the same number by
-    coincidence. A worktree whose stack publishes 5433 sends `pg_dump` a DSN naming a port
-    nothing inside the container is listening on, and the dump fails with "connection refused" —
-    which reads as a broken backup rather than as a harness addressing the wrong side of a port
-    mapping.
-
-    Rewritten only for the container path: with a pg_dump on PATH the DSN is this host's and
-    correct as it stands.
-    """
+    """`docker exec` runs inside the container, which cannot see the host's published port mapping."""
     if not _postgres_container() or shutil.which("pg_dump"):
         return url
     parts = urlsplit(url)
@@ -247,9 +122,7 @@ def _client(binary: str) -> tuple[str, ...]:
         return (found,)
     container = _postgres_container()
     if container:
-        # `-e PGPASSWORD` with no value forwards the variable from this process. §14.3 is why
-        # `dump()` puts the password there rather than on the command line, and a `docker exec`
-        # stand-in that dropped it would exercise a path production does not have.
+        # `-e PGPASSWORD` forwards the variable, as `dump()` passes the password there, not on argv (§14.3).
         return ("docker", "exec", "-i", "-e", "PGPASSWORD", container, binary)
     pytest.skip(
         f"{binary} is not on PATH and no postgres:16 container publishes "
@@ -265,9 +138,6 @@ def _run(argv: list[str], **kwargs) -> subprocess.CompletedProcess:
         f"{done.stderr.decode('utf-8', 'replace')[-2000:]}"
     )
     return done
-
-
-# --- fixtures ---------------------------------------------------------------------------------
 
 
 def _sibling(pg_url: str, suffix: str) -> tuple[str, str, str]:
@@ -304,12 +174,7 @@ async def _drop(admin: str, name: str) -> None:
 
 @pytest.fixture
 def backup_env(pg_url, tmp_path, monkeypatch):
-    """The worker's view of the world: DATABASE_URL and DATA_DIR as the container sets them.
-
-    Everything but the household clock is configuration, exactly as it is in production; the
-    clock is `run()`'s one argument, and these tests hand it `datetime.now(UTC)` because a
-    household on UTC is the case where nothing about the date basis is interesting.
-    """
+    """DATABASE_URL and DATA_DIR as the container sets them; the clock is `run()`'s one argument."""
     # The worker's DATABASE_URL, addressed for whichever pg_dump `_client` resolved.
     monkeypatch.setenv("DATABASE_URL", _inside_the_container(pg_url))
     monkeypatch.setenv("DATA_DIR", str(tmp_path / "data"))
@@ -321,17 +186,8 @@ def backup_env(pg_url, tmp_path, monkeypatch):
 
 @pytest.fixture
 async def empty_install(pg_url):
-    """A second, freshly migrated database — the "empty install" the restore has to land in.
-
-    Restoring over the source database would prove nothing: the rows are already there and the
-    sequence is already positioned. Only a database that has never seen the seed can show that
-    the archive carries the positions rather than assuming them.
-
-    It carries `db/pool.py`'s json codecs because the app's connection does. Without them a
-    restore that hands a JSON *string* to a jsonb column looks correct here and stores a
-    double-encoded manifest in production — a test connection that is not shaped like the real
-    one tests a code path nobody runs.
-    """
+    """Never seeded, so only it can show the archive carries
+    sequence positions; `db/pool.py`'s json codecs included."""
     import asyncpg
 
     admin, name, url = _sibling(pg_url, "_restore")
@@ -351,12 +207,7 @@ async def empty_install(pg_url):
 
 @pytest.fixture
 async def blank_url(pg_url):
-    """An empty database with no schema at all, and no connection held open on it.
-
-    `pg_restore` of a whole-database dump wants a target it can create schemas in; a migrated
-    one already has them, and dropping them from inside a live connection is a different test's
-    accident waiting to happen.
-    """
+    """`pg_restore` of a whole-database dump wants a target with no schema at all."""
     admin, name, url = _sibling(pg_url, "_pgr")
     await _recreate(admin, name)
     try:
@@ -366,7 +217,7 @@ async def blank_url(pg_url):
 
 
 async def _seed_movie_data(conn) -> None:
-    """A small world with a row in each layer the row names: spine, DNA, reviews."""
+    """A small world with a row in each layer: spine, DNA, reviews."""
     await conn.execute(
         "INSERT INTO title (id, kind, name, year, origin) VALUES "
         "(11, 'movie', $1, 1979, 'bundle'), (12, 'series', 'Der Zweite', 1988, 'bundle')",
@@ -414,13 +265,8 @@ async def _seed_movie_data(conn) -> None:
 
 
 async def _seed_user_state(conn) -> None:
-    """One row in every table the movie-data archive must not carry.
-
-    Where a table has free text the row plants a marker, so the exclusion can be checked byte by
-    byte rather than by trusting the table list. `duel`, `tier_edit` and `ledger_state` have no
-    free text at all — every column is an id, an enum or a number — so for those the table list
-    is the only assertion available, and it is made explicitly.
-    """
+    """A marker in every free-text column; `duel`, `tier_edit`,
+    `ledger_state` have none, so the table list is asserted."""
     user_id = await conn.fetchval(
         "INSERT INTO app_user (name, role) VALUES ($1, 'member') RETURNING id", MARKER_USER
     )
@@ -474,11 +320,7 @@ async def _seed_connector_secret(conn, monkeypatch) -> bytes:
 
 
 def _archive_bytes(path: Path) -> bytes:
-    """Every byte the archive holds, decompressed, entry names included.
-
-    Searching the zip file itself would search compressed bytes, where a leaked plaintext secret
-    is invisible for the wrong reason.
-    """
+    """Decompressed: a secret leaked inside compressed bytes would be invisible for the wrong reason."""
     blob = bytearray()
     with zipfile.ZipFile(path) as zf:
         for info in zf.infolist():
@@ -487,18 +329,10 @@ def _archive_bytes(path: Path) -> bytes:
     return bytes(blob)
 
 
-# --- the movie-data archive (platform-movie-data-backup-and-restore) --------------------------
-
-
 async def test_the_archive_carries_the_content_spine_the_dna_layer_and_the_review_store(
     db, tmp_path
 ):
-    """Decision 162: content arrives once, so the household's copy is the only copy.
-
-    An archive that quietly held the spine and skipped the reviews would restore an install that
-    can never re-extract or re-embed anything — §10 ships the review bodies for exactly that —
-    and nothing downstream would say so.
-    """
+    """Decision 162: the household's copy is the only copy; the reviews are needed to re-extract."""
     await _seed_movie_data(db)
     report = await movie_data.write_archive(db, tmp_path / "movie-data.zip")
 
@@ -511,13 +345,7 @@ async def test_the_archive_carries_the_content_spine_the_dna_layer_and_the_revie
 
 
 async def test_the_archive_carries_nothing_user_specific(db, tmp_path, monkeypatch):
-    """The row's negative half, asserted twice over.
-
-    The table list is the structural claim; the byte search is the one that survives a mistake in
-    the table list — a join that dragged a verdict along would satisfy the first and fail the
-    second. The content marker is the control: without it, an empty archive passes every absence
-    check below for free.
-    """
+    """The table list and a byte search; the content marker keeps an empty archive from passing."""
     await _seed_movie_data(db)
     await _seed_user_state(db)
     ciphertext = await _seed_connector_secret(db, monkeypatch)
@@ -535,28 +363,14 @@ async def test_the_archive_carries_nothing_user_specific(db, tmp_path, monkeypat
 
 
 def test_the_genome_slice_is_left_out_of_the_archive():
-    """Decision 291, on the artifact that outlives the bundle.
-
-    Decision 162 made this archive the household's only copy of its content, so what is in it is
-    what a restore can ever have -- which is exactly why an entry here for a table nothing writes
-    is worse than no entry. The three tables were in `movie_data.TABLES` while the importer
-    filled them; with the importer declining the slice they would carry nothing, and a `manifest.json`
-    naming them would state that a genome was preserved.
-
-    Paired with the guard below rather than replacing it: that one refuses a table classified
-    neither way, and this one refuses the reclassification going back without the decision going
-    with it.
-    """
+    """Decision 291: an entry for a table nothing writes would claim a genome was preserved."""
     archived = {t.name for t in movie_data.TABLES}
     assert not archived & GENOME_NOT_IMPORTED, (
         f"the archive carries a table the importer no longer fills: "
         f"{sorted(archived & GENOME_NOT_IMPORTED)}"
     )
     assert GENOME_NOT_IMPORTED <= EXCLUDED, "left out on purpose, and the reason is written down"
-    # And the other end of the same strike. Decision 309: the three names leave `TABLES` and are
-    # picked up by `RETIRED`, because an archive written before decision 291 names them in its
-    # manifest and the restore checks that table set in both directions. Struck from one without
-    # being named in the other is the refusal this pair exists to prevent.
+    # The struck names must reappear in `RETIRED` (decision 309), or old archives are refused.
     assert {f"public.{name}" for name in GENOME_NOT_IMPORTED} <= movie_data.RETIRED, (
         "struck from TABLES and not named in RETIRED: every archive written before decision 291 "
         "names these three in its manifest, and a restore reads that manifest"
@@ -567,14 +381,7 @@ def test_the_genome_slice_is_left_out_of_the_archive():
     )
 
 
-# The archive as an older build wrote it. `TABLES` is a module global that `_layout` and
-# `write_archive`'s loop read at call time, so substituting it produces a real archive -- a real
-# manifest, real COPY members, real sequence positions -- rather than a hand-edited one, which is
-# the difference between testing the version boundary and testing `_with_edited_manifest`. The
-# three entries go back where `git show HEAD:backend/spielplan/backup/movie_data.py:106-108`
-# carries them, after `award` and before `rating_source`: `ml_genome_score` references
-# `ml_genome_tag` and a restore replays the manifest in order, so the position is part of the
-# shape being reproduced.
+# A real archive with `TABLES` as an older build had it, in its original order.
 def _pre_291_tables() -> tuple[movie_data.Table, ...]:
     retired = tuple(
         movie_data.Table("public", name)
@@ -587,25 +394,10 @@ def _pre_291_tables() -> tuple[movie_data.Table, ...]:
 async def test_a_restore_reads_an_archive_written_before_the_genome_slice_was_retired(
     db, tmp_path, empty_install, monkeypatch
 ):
-    """Decision 309. An archive outlives the build that wrote it, so narrowing `TABLES` is a
-    version boundary and not an edit.
-
-    Decision 162 makes this archive the household's copy of its content, and README's Recovery
-    block has the operator write one and keep it off-box. The gesture it exists for is the box
-    dying and the archive going back into a rebuilt one -- which is by definition a build at
-    least as new as the one that wrote it, and usually newer. Decision 291 struck three tables
-    from `TABLES`; the manifest's table set is checked in both directions and `FORMAT` stayed 1,
-    so every archive written by every shipped build up to M4.15 arrived here as "unknown
-    ['public.ml_genome_score', 'public.ml_genome_tag', 'public.ml_link'], missing []" -- a
-    refusal that reads as a corrupt or foreign file and is neither.
-
-    The second half is what keeps tolerance from being a back door: the restored install is the
-    one a post-291 archive would have produced. The slice is skipped rather than loaded, so
-    decision 291's ruling survives the recovery path instead of being reversed by it.
-    """
+    """Decision 309: archives outlive builds; pre-291 archives
+    restore, and the slice is skipped, not loaded."""
     await _seed_movie_data(db)
-    # The slice as the pre-291 importer left it: `_resolve_ml_links` joined `ml_link` to `title`,
-    # so a row here carries a real title id and the restore would have a foreign key to satisfy.
+    # The slice as the pre-291 importer left it, with a real title id.
     await db.execute("INSERT INTO ml_genome_tag (tag_id, tag) VALUES (1, 'melancholy')")
     await db.execute(
         "INSERT INTO ml_link (ml_movie_id, title_id, imdb_id, tmdb_id) "
@@ -624,8 +416,7 @@ async def test_a_restore_reads_an_archive_written_before_the_genome_slice_was_re
 
     assert await empty_install.fetchval("SELECT name FROM title WHERE id = 11") == CONTENT_MARKER
     assert await empty_install.fetchval("SELECT count(*) FROM review_store.review") == 1
-    # Named in the report rather than dropped in silence: the operator handed over an archive
-    # naming 34 tables, and is told which three of them this build no longer keeps, and why.
+    # Named in the report: the operator is told which three tables this build no longer keeps.
     assert restored.retired == tuple(sorted(movie_data.RETIRED))
     assert not set(restored.tables) & movie_data.RETIRED
     for table in sorted(GENOME_NOT_IMPORTED):
@@ -635,14 +426,7 @@ async def test_a_restore_reads_an_archive_written_before_the_genome_slice_was_re
 async def test_a_restore_still_refuses_a_table_this_build_neither_archives_nor_retired(
     db, tmp_path, empty_install
 ):
-    """The half decision 309 does not spend. `RETIRED` is a named set, not a tolerance.
-
-    The symmetric check exists because "a table this build does not archive has no business
-    being COPYed into the install from a file" -- an archive arrives on a stick, over a channel
-    nobody controls. Widening the refusal to anything the manifest happens to name would hand
-    that sentence away to buy backward compatibility, so the retired three are subtracted by
-    name and every other unknown table is refused exactly as before.
-    """
+    """`RETIRED` is a named set, not a tolerance; any other unknown table is refused."""
     await _seed_movie_data(db)
     report = await movie_data.write_archive(db, tmp_path / "movie-data.zip")
 
@@ -658,13 +442,7 @@ async def test_a_restore_still_refuses_a_table_this_build_neither_archives_nor_r
 
 
 async def test_every_table_is_either_archived_or_deliberately_left_out(db):
-    """M4.5's own lesson, applied to this artifact: an unmapped *table* is invisible.
-
-    `title_meta` (46,318 rows), `title_list_membership` and `imdb_ratings` were loaded by nothing
-    and reported by nothing, because the import report tracked unmapped columns within mapped
-    tables and had no way to say "a whole table went missing". A backup has the same hole one
-    milestone later, so a new table has to be classified rather than defaulted.
-    """
+    """An unmapped table is invisible, so every new table must be classified."""
     rows = await db.fetch(
         "SELECT table_schema, table_name FROM information_schema.tables "
         "WHERE table_type = 'BASE TABLE' "
@@ -686,7 +464,7 @@ async def test_every_table_is_either_archived_or_deliberately_left_out(db):
 async def test_a_restore_into_an_empty_install_reproduces_the_title_person_and_dna_rows(
     db, tmp_path, empty_install
 ):
-    """The row's positive half, end to end and across two databases."""
+    """The positive half, end to end and across two databases."""
     await _seed_movie_data(db)
     report = await movie_data.write_archive(db, tmp_path / "movie-data.zip")
 
@@ -710,16 +488,9 @@ async def test_a_restore_into_an_empty_install_reproduces_the_title_person_and_d
 
 
 async def test_a_restore_carries_the_sequence_positions_forward(db, tmp_path, empty_install):
-    """Decision 162's quiet catastrophe.
-
-    `title_id_seq` is positioned by the seed import — 0015_seed.sql says so out loud and refuses
-    to position it itself — and the seed import by definition never runs again. A restore that
-    does not carry `setval` leaves the sequence at its `START 1000000000`, so the first
-    acquisition after the restore re-mints an id the archive already used: a §7.2 add landing on
-    top of a film the household already owns.
-    """
+    """The seed import never runs again, so the archive must carry `setval` or ids are re-minted."""
     await _seed_movie_data(db)
-    # What the seed import leaves behind: the sequences sitting inside the app's own range.
+    # What the seed import leaves behind: the sequences inside the app's own range.
     await db.execute("SELECT setval('title_id_seq', $1, true)", APP_ID_FLOOR)
     await db.execute("SELECT setval('person_id_seq', $1, true)", APP_ID_FLOOR)
     acquired_id = await db.fetchval(
@@ -737,9 +508,7 @@ async def test_a_restore_carries_the_sequence_positions_forward(db, tmp_path, em
     restored_ids = {r["id"] for r in await empty_install.fetch("SELECT id FROM title")}
     restored_people = {r["id"] for r in await empty_install.fetch("SELECT id FROM person")}
 
-    # Twice, because a sequence that rewound by one still mints one free id before it lands on
-    # the row it already restored — and "the first acquisition works" is exactly the check that
-    # would have let that through.
+    # Twice: a sequence rewound by one still mints one free id first.
     for nth in range(2):
         minted = await empty_install.fetchval(
             "INSERT INTO title (kind, name) VALUES ('movie', $1) RETURNING id",
@@ -755,13 +524,7 @@ async def test_a_restore_carries_the_sequence_positions_forward(db, tmp_path, em
 
 
 async def test_a_restore_preserves_title_origin(db, tmp_path, empty_install):
-    """§10's rebuild set names "Cold Tower re-placement of every app-acquired title", and
-    `reconcile.py` finds them with `WHERE origin = 'acquired'`.
-
-    `origin` defaults to 'bundle', so an archive that dropped the column would restore silently,
-    correctly-looking, and with the rebuild set permanently empty — every app-acquired title
-    keeping a coordinate computed in a basis §10 calls garbage.
-    """
+    """`origin` defaults to 'bundle', so dropping it would silently empty the rebuild set."""
     await _seed_movie_data(db)
     await db.execute(
         "INSERT INTO title (id, kind, name, origin) VALUES ($1, 'movie', 'Acquired', 'acquired')",
@@ -781,9 +544,7 @@ async def test_a_restore_preserves_title_origin(db, tmp_path, empty_install):
 async def test_a_restore_refuses_an_install_that_already_holds_movie_data(
     db, tmp_path, empty_install
 ):
-    """COPY into a populated table fails halfway and leaves the install neither one thing nor the
-    other. §10's swap sequence is explicit that this kind of event is validated before it writes,
-    so the refusal names the table it found rows in."""
+    """COPY into a populated table fails halfway, so the refusal names the table first."""
     await _seed_movie_data(db)
     report = await movie_data.write_archive(db, tmp_path / "movie-data.zip")
     await empty_install.execute(
@@ -798,15 +559,8 @@ async def test_a_restore_refuses_an_install_that_already_holds_movie_data(
 async def test_a_restore_into_an_empty_install_carries_no_placement_basis(
     db, tmp_path, empty_install
 ):
-    """`title.placement_bundle REFERENCES artifact_bundle(version)` (0008_placement.sql:59) and
-    the archive carries no `artifact_bundle` row, because §10 calls a coordinate expressed in the
-    old basis garbage against a new one.
-
-    So an archive taken from any install that has ever placed a title cannot be restored at all:
-    every carried `placement_bundle` names a version the fresh install has no row for. That is
-    not a rare corner — it is every real household, and it makes the recovery path untestable by
-    the very fixture that would have caught it, because the fixture never placed anything.
-    """
+    """`placement_bundle` references a bundle row the
+    archive does not carry, so it is not carried either."""
     await _seed_movie_data(db)
     await db.execute(
         "INSERT INTO artifact_bundle (version, manifest, state, kind) "
@@ -821,8 +575,7 @@ async def test_a_restore_into_an_empty_install_carries_no_placement_basis(
     assert await empty_install.fetchval(
         "SELECT count(*) FROM title WHERE placement_bundle IS NOT NULL"
     ) == 0
-    # The bundle is not carried, but which bundle seeded this household is provenance the only
-    # surviving copy of the content should not lose.
+    # Which bundle seeded this household is provenance worth keeping.
     assert restored.seeded == "v20260828"
     assert await empty_install.fetchval(
         "SELECT jsonb_typeof(manifest) FROM artifact_bundle WHERE kind = 'seed'"
@@ -830,13 +583,7 @@ async def test_a_restore_into_an_empty_install_carries_no_placement_basis(
 
 
 async def test_a_restored_install_refuses_a_second_content_seed(db, tmp_path, empty_install):
-    """Decision 162's refusal is keyed on `artifact_bundle WHERE kind = 'seed'`, and a restore
-    that carries rows but no such row leaves the install saying it has never been seeded.
-
-    The importer then accepts a content bundle over a full spine — two minters in one id
-    namespace, which is the exact failure decision 162 exists to prevent, arriving through the
-    recovery path rather than through the importer.
-    """
+    """A restore with no seed row would let a second content seed in: two minters in one namespace."""
     await _seed_movie_data(db)
     report = await movie_data.write_archive(db, tmp_path / "movie-data.zip")
     await movie_data.restore_archive(empty_install, report.path)
@@ -853,16 +600,10 @@ async def test_a_restored_install_refuses_a_second_content_seed(db, tmp_path, em
         ),
         refusal,
     )
-    # Two rules now, and the second one is decision 256's: the restored install carries a DNA
-    # vocabulary and this Bundle declares none, which M4.14 made a refusal rather than a silent
-    # `or "v1"`. Listed rather than filtered, because an extra refusal appearing here is
-    # something a reader should be made to look at -- `seed-once` is this test's subject and the
-    # exactness is what keeps a third rule from arriving unnoticed. [M4.14 decision 256]
+    # Listed, not filtered, so a third rule arriving here is noticed.
     assert [f.rule for f in refusal.failures] == ["seed-once", "vocabulary-migration"]
 
-    # Seeded, not *active*: the archive carries rows, never the artifacts tree. An 'active' row
-    # naming a version with no files under /data/artifacts is `ArtifactStore.load_active`'s
-    # "broken install" branch, which is a worse lie than the one being fixed.
+    # Seeded, not *active*: an active row with no files is the "broken install" branch.
     assert await empty_install.fetchval(
         "SELECT state FROM artifact_bundle WHERE kind = 'seed'"
     ) != "active"
@@ -884,13 +625,7 @@ def _with_edited_manifest(source: Path, target: Path, edit) -> Path:
 async def test_a_restore_refuses_a_sequence_name_the_archive_does_not_own(
     db, tmp_path, empty_install
 ):
-    """The manifest's table set is validated in both directions and its sequence names are then
-    executed verbatim through `setval`.
-
-    An archive is a file: it arrives on a USB stick, over a channel nobody controls, or edited by
-    an operator who was told it would help. Winding `app_user_id_seq` back to 1 is not a content
-    problem, and no part of the restore would have said anything.
-    """
+    """Sequence names are executed via `setval`, so ones the archive does not own are refused."""
     await _seed_movie_data(db)
     await db.execute("INSERT INTO app_user (name, role) VALUES ($1, 'member')", MARKER_USER)
     report = await movie_data.write_archive(db, tmp_path / "movie-data.zip")
@@ -902,16 +637,12 @@ async def test_a_restore_refuses_a_sequence_name_the_archive_does_not_own(
     with pytest.raises(movie_data.RestoreRefused, match="app_user_id_seq"):
         await movie_data.restore_archive(empty_install, tampered)
 
-    # Refused before it wrote, which is the claim §10's "validate -> stage" ordering makes.
+    # Refused before it wrote.
     assert await empty_install.fetchval("SELECT count(*) FROM title") == 0
 
 
-# --- §2's nightly dump (platform-backup-rotation-and-ciphertext) -------------------------------
-
-
 def _fake_dumps(directory: Path, count: int) -> list[Path]:
-    """`count` dumps in this job's own naming, oldest first. Dated well before today, so a real
-    dump written alongside them is unambiguously the newest."""
+    """Dated well before today, so a real dump beside them is unambiguously newest."""
     directory.mkdir(parents=True, exist_ok=True)
     made = []
     for nth in range(1, count + 1):
@@ -922,8 +653,7 @@ def _fake_dumps(directory: Path, count: int) -> list[Path]:
 
 
 def test_rotation_keeps_the_newest_fourteen(tmp_path):
-    """§2: "rotation 14". Pure filesystem, so the retention rule is checked without a database
-    and without `pg_dump` — the two things that make the rest of this section skippable."""
+    """§2: "rotation 14", checked without a database or `pg_dump`."""
     directory = tmp_path / "backups"
     made = _fake_dumps(directory, 20)
 
@@ -936,8 +666,7 @@ def test_rotation_keeps_the_newest_fourteen(tmp_path):
 
 
 def test_rotation_leaves_files_it_did_not_write_alone(tmp_path):
-    """`prune` deletes, and a delete that guesses at what it owns is how the operator's own copy
-    of the dump they were about to restore disappears."""
+    """A delete that guesses at what it owns removes the operator's own copy."""
     directory = tmp_path / "backups"
     _fake_dumps(directory, 20)
     (directory / "before-the-upgrade.dump.keep").write_bytes(b"mine")
@@ -950,13 +679,7 @@ def test_rotation_leaves_files_it_did_not_write_alone(tmp_path):
 
 
 def test_rotation_removes_interrupted_dumps(tmp_path):
-    """§2's "rotation 14" counts finished dumps, and `dumps()` globs `*.dump` — so the
-    `*.dump.partial` a killed `pg_dump` leaves behind matches nothing and is never deleted.
-
-    A worker killed inside the nightly window leaks one file per attempt, forever, in the one
-    directory §2 asks the operator to copy off-box. Rotation is the only thing in this module
-    that deletes, so it is the only thing that can clean up after a kill.
-    """
+    """`*.dump.partial` from a killed `pg_dump` matches nothing else, so rotation must remove it."""
     directory = tmp_path / "backups"
     _fake_dumps(directory, 3)
     killed = [directory / f"spielplan-20250{nth}01T030000Z.dump.partial" for nth in (1, 2)]
@@ -971,13 +694,7 @@ def test_rotation_removes_interrupted_dumps(tmp_path):
 
 
 def test_the_dump_keeps_the_database_password_off_the_command_line(tmp_path, monkeypatch):
-    """§14.3: the credential this appliance holds is admin-equivalent, and `DATABASE_URL` is the
-    other one — an argv element is world-readable to anything that can run `ps` on the host.
-
-    The percent-encoded password is the case that matters: libpq decodes a URI's password, so
-    PGPASSWORD has to carry the decoded value or the dump authenticates against nothing on the
-    one night the operator's password has a `/` in it.
-    """
+    """argv is world-readable; PGPASSWORD carries the DECODED password, since libpq decodes the URI."""
     url = "postgresql://spielplan:s3cr3t%2Fp%40ss@db.local:5432/spielplan"
     seen: dict[str, object] = {}
 
@@ -987,9 +704,7 @@ def test_the_dump_keeps_the_database_password_off_the_command_line(tmp_path, mon
         kwargs["stdout"].write(b"PGDMP")
         return subprocess.CompletedProcess(argv, 0, b"", b"")
 
-    # M4.7 (dd-backup-missing-pg-dump) made `dump` refuse before it opens the partial when the
-    # named binary is not on PATH, and this developer box has no libpq client. Any real
-    # executable satisfies the resolution; `subprocess.run` never reaches it.
+    # `dump` refuses when the binary is not on PATH; any real executable satisfies that.
     monkeypatch.setattr(nightly, "PG_DUMP", (sys.executable,))
     monkeypatch.setattr(nightly.subprocess, "run", fake_run)
     nightly.dump(url, tmp_path / "spielplan-20260101T030000Z.dump")
@@ -1004,7 +719,7 @@ def test_the_dump_keeps_the_database_password_off_the_command_line(tmp_path, mon
 async def test_the_nightly_job_writes_a_dump_into_the_backups_directory_and_prunes(
     db, backup_env
 ):
-    """§2: "nightly `pg_dump` to `/data/backups`, rotation 14", as the worker actually runs it."""
+    """§2: "nightly `pg_dump` to `/data/backups`, rotation 14", as the worker runs it."""
     await _seed_movie_data(db)
     directory = settings().data_dir / "backups"
     _fake_dumps(directory, 14)
@@ -1020,13 +735,7 @@ async def test_the_nightly_job_writes_a_dump_into_the_backups_directory_and_prun
 
 
 async def test_the_dump_contains_no_plaintext_connector_secret(db, backup_env, monkeypatch):
-    """§2: "Dumps contain ciphertext only".
-
-    The search runs over the archive expanded back to SQL, not over the file: the custom format
-    compresses its data blocks, and a leaked secret hidden behind zlib would be absent for a
-    reason that has nothing to do with §2. The title name and the stored ciphertext are the two
-    controls — together they say this is a dump of this database, with this table's data in it.
-    """
+    """Searched in SQL expanded from the dump, with two controls proving it is this database's dump."""
     await _seed_movie_data(db)
     ciphertext = await _seed_connector_secret(db, monkeypatch)
 
@@ -1042,14 +751,7 @@ async def test_the_dump_contains_no_plaintext_connector_secret(db, backup_env, m
 async def test_a_dump_restored_without_secrets_key_leaves_connector_config_undecryptable(
     db, backup_env, blank_url, monkeypatch, tmp_path
 ):
-    """§2: "back up the env file (`SECRETS_KEY`) alongside them, or a restored dump cannot decrypt
-    connector config."
-
-    The restored install has the ciphertext and the wrapped DEK and no way to unwrap it: the row
-    survives, the secret does not. Undecryptable rather than usable is the whole point — a dump
-    that restored a working Jellyfin admin key would make every off-box copy of the backup an
-    admin credential for the media server (§14.3).
-    """
+    """§2: without `SECRETS_KEY` a restored dump's connector secret must stay undecryptable."""
     import asyncpg
 
     await _seed_movie_data(db)
@@ -1077,25 +779,12 @@ async def test_a_dump_restored_without_secrets_key_leaves_connector_config_undec
         await conn.close()
 
 
-# --- M4.7: the job's own correctness ----------------------------------------------------------
-#
-# Everything below is filesystem and string work, with no database and no `pg_dump`, because
-# every defect here is one an install meets on the day it needs the backup and never before.
-#
-# (platform-backup-rotation-owns-only-its-own-names, and the same-date half of
-# platform-nightly-is-a-night-not-an-uptime.)
-
-# What an operator names the copy they take before an upgrade — the compose file's restore
-# comment and README both say the dumps live here, so this file lands in this directory. The
-# name matters twice: it matches `spielplan-*.dump`, and `-` (0x2D) sorts below `0`, so under
-# the old glob it was the oldest of the set and the first thing `prune` unlinked.
+# An operator's pre-upgrade copy matches `spielplan-*.dump`, and `-` sorts below `0`.
 OPERATOR_COPY = "spielplan-2026-08-14-before-upgrade.dump"
 
 
 def _nights(directory: Path, count: int, month: str = "202608") -> list[Path]:
-    """`count` dumps in this job's own naming, dated in `month` so they sort *after* a name the
-    operator wrote by hand in the same year. `_fake_dumps` dates its dumps in 2024, which would
-    put the operator's 2026 copy at the newest end and hide the bug this reproduces."""
+    """Dated so they sort *after* the operator's hand-named copy, which exposes the bug."""
     directory.mkdir(parents=True, exist_ok=True)
     made = []
     for day in range(1, count + 1):
@@ -1107,9 +796,7 @@ def _nights(directory: Path, count: int, month: str = "202608") -> list[Path]:
 
 @pytest.fixture
 def backups(tmp_path, monkeypatch):
-    """`DATA_DIR` alone: the rest of `run()`'s inputs are config and its clock is an argument —
-    and the tests that take this never reach the database, because the job answers before it
-    would."""
+    """`DATA_DIR` alone; these tests never reach the database."""
     monkeypatch.setenv("DATA_DIR", str(tmp_path / "data"))
     settings.cache_clear()
     yield tmp_path / "data" / "backups"
@@ -1117,12 +804,7 @@ def backups(tmp_path, monkeypatch):
 
 
 def test_rotation_leaves_the_operators_own_dated_copy_alone(tmp_path):
-    """The file `prune`'s own docstring exists to protect, in the form an operator writes it.
-
-    Fourteen real nights plus one hand-saved copy is fifteen candidates under the old glob, so
-    rotation deleted exactly one — and by string order that one was the operator's, the day
-    before the upgrade they saved it for.
-    """
+    """Fourteen nights plus one hand-saved copy: the old glob deleted the operator's."""
     directory = tmp_path / "backups"
     nights = _nights(directory, 14)
     keeper = directory / OPERATOR_COPY
@@ -1140,11 +822,7 @@ def test_rotation_leaves_the_operators_own_dated_copy_alone(tmp_path):
 
 
 def test_rotation_leaves_a_partial_it_did_not_write_alone(tmp_path):
-    """The same rule on the other glob, where the consequence is worse.
-
-    Interrupted dumps are removed outright rather than counted against the fourteen, so a name
-    `interrupted()` wrongly claims is not rotated early — it is gone on the first prune.
-    """
+    """Partials are removed outright, so a wrongly claimed name is gone on the first prune."""
     directory = tmp_path / "backups"
     _nights(directory, 2)
     theirs = directory / f"{OPERATOR_COPY}{nightly.PARTIAL}"
@@ -1168,7 +846,7 @@ def test_rotation_leaves_a_partial_it_did_not_write_alone(tmp_path):
     "spielplan-backup.dump",
 ])
 def test_a_name_this_job_could_not_have_written_is_not_this_jobs(tmp_path, name):
-    """`dumps()` is what `prune` deletes from, so membership is the whole safety property."""
+    """`prune` deletes from `dumps()`, so membership is the whole safety property."""
     directory = tmp_path / "backups"
     directory.mkdir()
     (directory / name).write_bytes(b"not ours")
@@ -1180,9 +858,7 @@ def test_a_name_this_job_could_not_have_written_is_not_this_jobs(tmp_path, name)
 
 
 def test_every_name_the_job_generates_is_one_it_owns(tmp_path):
-    """The other direction, which is the one that fails silently: a matcher that drifts away
-    from `dump_name` stops rotation seeing its own files, and the directory §2 asks the operator
-    to copy off-box grows without bound instead of holding fourteen."""
+    """A matcher drifting from `dump_name` would stop rotation seeing its own files."""
     directory = tmp_path / "backups"
     directory.mkdir()
     made = []
@@ -1203,15 +879,7 @@ def test_every_name_the_job_generates_is_one_it_owns(tmp_path):
 
 
 def test_an_ipv6_database_url_keeps_the_brackets_libpq_needs():
-    """§2 calls "a Postgres outside this compose file" supported, and that is where an IP literal
-    appears. The old netloc was rebuilt from `urlsplit().hostname`, which strips the brackets, so
-    `postgresql://u:p@[::1]:5432/db` reached libpq as `postgresql://u@::1:5432/db` and was
-    rejected with `invalid integer value ":1:5432" for connection option "port"` — a working app
-    with zero backups, because asyncpg parses the bracketed original fine.
-
-    The assertion is that round trip: the port parses as an integer again, and the host is the
-    literal rather than the first fragment of one.
-    """
+    """Rebuilding from `hostname` strips IPv6 brackets, which libpq then rejects."""
     dsn, credential = nightly._connection(
         "postgresql://spielplan:s3cr3t@[fd00::2]:5432/spielplan"
     )
@@ -1225,10 +893,7 @@ def test_an_ipv6_database_url_keeps_the_brackets_libpq_needs():
 
 
 def test_the_dsn_keeps_a_percent_encoded_username():
-    """A characterisation test rather than a repair: the username survived the old rebuild too,
-    and the textual one must not lose it. A `@` in a username is what an install authenticating
-    against a managed Postgres has, and libpq decodes the field itself — decoding it here would
-    authenticate as a user that does not exist."""
+    """A characterisation test: libpq decodes the username itself."""
     dsn, credential = nightly._connection("postgresql://ops%40house:p%2Fw@db.local/spielplan")
 
     assert dsn == "postgresql://ops%40house@db.local/spielplan"
@@ -1236,9 +901,7 @@ def test_the_dsn_keeps_a_percent_encoded_username():
 
 
 def test_a_missing_pg_dump_is_this_modules_own_error_and_leaves_no_debris(tmp_path, monkeypatch):
-    """The partial used to be opened first, so a box without `postgresql-client-16` leaked a
-    0-byte file per attempt: `FileNotFoundError` came from inside the `with`, past the unlink
-    that only runs on a non-zero exit, and `run()` prunes only after `dump()` returns."""
+    """A missing client used to leak a 0-byte partial per attempt."""
     directory = tmp_path / "backups"
     directory.mkdir()
     monkeypatch.setattr(nightly, "PG_DUMP", ("pg_dump-that-is-not-installed",))
@@ -1255,8 +918,7 @@ def test_a_missing_pg_dump_is_this_modules_own_error_and_leaves_no_debris(tmp_pa
 
 
 def test_a_pg_dump_that_never_returns_is_killed_and_leaves_no_debris(tmp_path, monkeypatch):
-    """`_tick` runs due jobs one after another, so a dump blocked behind an import's lock stops
-    §7.3's one-minute poll for as long as it hangs — and with no `timeout=`, that is for ever."""
+    """Jobs run in sequence, so an unbounded dump would stop the one-minute poll for ever."""
     directory = tmp_path / "backups"
     directory.mkdir()
     seen: dict[str, object] = {}
@@ -1280,11 +942,7 @@ def test_a_pg_dump_that_never_returns_is_killed_and_leaves_no_debris(tmp_path, m
 
 
 async def test_a_second_dump_on_the_same_date_is_refused(backups, monkeypatch):
-    """§2's "rotation 14" is a promise about fourteen nights, and these file names are what keeps
-    it. With `last_run` in-process every worker start fired this job, so fourteen restarts inside
-    an hour spent all fourteen slots; `due()`'s anchoring is the other half of the fix, and this
-    is the half that holds across a restart, across a retry, and when an operator runs the job by
-    hand. It also retires `dump_name`'s same-second collision."""
+    """Named files keep "rotation 14" across restarts and manual runs."""
     backups.mkdir(parents=True)
     last_night = backups / nightly.dump_name(datetime.now(UTC).replace(hour=3, second=0))
     last_night.write_bytes(b"PGDMP-last-night")
@@ -1321,13 +979,8 @@ async def test_a_dump_from_yesterday_does_not_stop_tonights(backups, monkeypatch
     assert report.kept == 2 and report.pruned == ()
 
 
-# Two households whose local date and UTC date come apart in opposite directions. At UTC+13 every
-# local time before 13:00 falls on yesterday's UTC day; at UTC-11 every local time from 13:00
-# falls on tomorrow's. Both are real households (Kiritimati and Niue), and both make one local
-# night span two UTC dates while two local nights can share one.
-#
-# Fixed offsets rather than named zones for the reason the rest of these tests give: a Windows
-# checkout has no system tz database, and `worker._now_local`'s fallback exists for exactly that.
+# UTC+13 and UTC-11 split local and UTC dates in opposite
+# directions; fixed offsets, since Windows has no tz database.
 FAR_FROM_UTC = pytest.mark.parametrize(
     "offset", [-11, 13], ids=["utc-minus-11", "utc-plus-13"]
 )
@@ -1335,17 +988,7 @@ FAR_FROM_UTC = pytest.mark.parametrize(
 
 @FAR_FROM_UTC
 def test_last_local_nights_dump_does_not_refuse_this_ones(tmp_path, offset):
-    """`Job.anchor_hour` fires once per **local** date; this guard asked the **UTC** date.
-
-    A dump that landed in the local evening — a first boot after the anchor hour, or a retry that
-    finally succeeded — was stamped with a UTC date that the *next* local night also maps to, so
-    the next night's scheduled dump was refused as "already dumped today". `job_run.ok` stayed
-    true and `BackupReport.skipped` is not an error, so nothing anywhere reported the missing
-    night; §2's fourteen quietly became thirteen, and again on the next such evening.
-
-    `dump_name` stays UTC and must: the names are sorted as strings and rotation depends on that
-    order. What changes is which of those names counts as tonight's, not what they are called.
-    """
+    """The anchor is per LOCAL date, so the guard must ask the local date; names stay UTC for sorting."""
     tz = timezone(timedelta(hours=offset))
     last_night = datetime(2026, 9, 7, 20, 0, tzinfo=tz)
     tonight = datetime(2026, 9, 8, 6, 0, tzinfo=tz)
@@ -1364,13 +1007,7 @@ def test_last_local_nights_dump_does_not_refuse_this_ones(tmp_path, offset):
 
 @FAR_FROM_UTC
 def test_a_dump_from_earlier_in_this_local_night_is_still_this_nights(tmp_path, offset):
-    """The mirror of the same disagreement, and the one that costs a retention slot.
-
-    One local night spans two UTC dates for these households, so a retry hours after the anchor —
-    which is what `_tick` does when the first attempt failed — asked about a different UTC date
-    than the attempt that had already written a dump, and wrote a second one for the same night.
-    Two dumps for one night is two of §2's fourteen slots for thirteen nights of history.
-    """
+    """A retry later in the same local night must not write a second dump."""
     tz = timezone(timedelta(hours=offset))
     at_the_anchor = datetime(2026, 9, 8, 6, 0, tzinfo=tz)
     a_retry_that_evening = datetime(2026, 9, 8, 20, 0, tzinfo=tz)
@@ -1389,14 +1026,7 @@ def test_a_dump_from_earlier_in_this_local_night_is_still_this_nights(tmp_path, 
 
 
 def test_a_name_of_the_right_shape_but_an_impossible_date_is_never_tonights(tmp_path):
-    """`/data/backups` is a directory an operator can also put things in.
-
-    `_is_own` matches the shape of the stamp and not the calendar — it is the regex `prune`'s
-    own contract is written as — so a hand-made `spielplan-20241301T030000Z.dump` reaches this
-    question, and asking the household's date of it means parsing it. Answering with an
-    exception would take the nightly job down over a file it did not write and would not delete;
-    the answer is that nothing this job wrote can carry month 13, so it is not tonight's.
-    """
+    """`_is_own` matches shape, not calendar, so an impossible date is simply not tonight's."""
     directory = tmp_path / "backups"
     directory.mkdir()
     impossible = directory / "spielplan-20241301T030000Z.dump"
@@ -1406,26 +1036,12 @@ def test_a_name_of_the_right_shape_but_an_impossible_date_is_never_tonights(tmp_
     assert impossible in nightly.dumps(directory), "rotation's own view is unchanged"
 
 
-# --- M4.7: the archive is a snapshot, and the restore holds a lock ----------------------------
-#
-# (platform-movie-data-archive-is-a-snapshot-and-a-locked-restore)
-#
-# Every test above writes and restores with nothing else touching the database, which was a fair
-# model of production for exactly as long as nothing could call these functions: M4.5 shipped
-# `write_archive` and `restore_archive` with no caller outside this file. `spielplan-movie-data`
-# ends that, and the writer the entry point exposes them to is the worker — §7.1's Jellyfin sync
-# fires at worker start and `sync/resolve.py` inserts a title for a library item it does not know.
-# So the pause below is not a contrivance: it is the operator running the command on a live stack.
+# `spielplan-movie-data` exposes these to a live worker, so
+# the archive must be a snapshot and the restore locked.
 
 
 class _PausingConnection:
-    """`db`, with a hook that runs immediately before a named COPY.
-
-    asyncpg offers no seam inside a COPY, so the seam is the connection object: every attribute
-    delegates untouched and the two COPY methods await the hook first. The module under test
-    keeps its shape — a production seam added for a test is a test that passes because it was
-    built to.
-    """
+    """asyncpg offers no seam inside a COPY, so the connection delegates and awaits a hook first."""
 
     def __init__(self, conn, hook) -> None:
         self._conn = conn
@@ -1459,16 +1075,7 @@ def _once(table: str, body):
 async def test_a_title_minted_during_the_write_is_wholly_out_of_the_archive(
     db, pg_url, tmp_path, empty_install
 ):
-    """A COPY per archived table with no enclosing transaction is a snapshot per table.
-
-    The pause is placed after `title` and before its children because that is the gap the second
-    snapshot arrived in: `title` copied two rows, the sync minted two more with a genre and a
-    credit each, and `title_genre` and `credit` — read moments later, from a snapshot that now
-    had them — carried rows pointing at titles the archive does not hold. Nothing said so. The
-    archive verified, the manifest counted the rows it had written, and the failure surfaced at
-    the far end as a foreign-key violation on an install with nothing in it, which is the worst
-    possible place to learn that last week's archive was never whole.
-    """
+    """Paused between `title` and its children, where a per-table snapshot let orphan rows in."""
     await _seed_movie_data(db)
     await db.execute("SELECT setval('title_id_seq', $1, true)", APP_ID_FLOOR)
     other = await asyncpg.connect(pg_url)
@@ -1514,17 +1121,7 @@ async def test_a_title_minted_during_the_write_is_wholly_out_of_the_archive(
 async def test_the_recorded_sequence_position_is_never_below_an_archived_id(
     db, pg_url, tmp_path, empty_install
 ):
-    """The other half of the same gap, and the one decision 162 is actually about.
-
-    Reading `last_value` before the rows records where the sequence stood, not how far the
-    archive reaches: a title minted between the two is copied with an id above the recorded
-    position, and the restored install's `setval` winds the sequence back under a row it has just
-    loaded. The next acquisition re-mints an id the household already holds — §7.2 landing a new
-    film on top of an existing one.
-
-    So the pause is before `title` here: under the old order the sequence had already been read
-    and the rows had not.
-    """
+    """Reading `last_value` before the rows lets `setval` wind back under an archived id."""
     await _seed_movie_data(db)
     await db.execute("SELECT setval('title_id_seq', $1, true)", APP_ID_FLOOR)
     other = await asyncpg.connect(pg_url)
@@ -1572,15 +1169,7 @@ async def test_the_recorded_sequence_position_is_never_below_an_archived_id(
 async def test_the_recorded_position_is_bounded_by_rows_the_sequence_never_minted(
     db, tmp_path, empty_install
 ):
-    """The belt to the snapshot's braces: the position is bounded by `max(id)`, per table.
-
-    0015_seed.sql leaves `title_id_seq` unpositioned deliberately and says positioning is the
-    seed import's job; its MINVALUE makes a *missed* positioning loud only for a `setval` below
-    1e9, which says nothing about a row sitting exactly on START with the sequence never called.
-    An install in that state holds an id the sequence has never heard of, and copying the
-    sequence's own answer forward hands the restored install a position that mints the id it just
-    loaded. The write is the one moment where the whole namespace is visible at once.
-    """
+    """The position is bounded by `max(id)` per table, for rows the sequence never minted."""
     await _seed_movie_data(db)
     await db.execute(
         "INSERT INTO title (id, kind, name, origin) "
@@ -1601,18 +1190,8 @@ async def test_the_recorded_position_is_bounded_by_rows_the_sequence_never_minte
 async def test_the_restore_holds_the_archived_tables_against_a_concurrent_write(
     db, pg_url, tmp_path, empty_install
 ):
-    """"This install holds no movie data" is a fact with a lifetime.
-
-    Read outside the transaction and behind no lock, it was true when it was read and false by
-    the time the COPY relied on it: with the COPY paused and titles minted on a second
-    connection, the restore completed with four title rows in a table it had declared empty, the
-    absolute `setval` wound `title_id_seq` back under both of them, and the next acquisition
-    raised a duplicate key on `title_pkey`. `LOCK TABLE ... IN EXCLUSIVE MODE` is what turns the
-    refusal from an observation into a decision.
-
-    `lock_timeout` rather than a test clock: the server decides that the writer is blocked, and
-    the wait becomes an error this can assert on instead of a hang it has to time out.
-    """
+    """`LOCK TABLE ... IN EXCLUSIVE MODE` makes "holds no movie data"
+    a decision; `lock_timeout` turns the wait into an error."""
     await _seed_movie_data(db)
     await db.execute("SELECT setval('title_id_seq', $1, true)", APP_ID_FLOOR)
     report = await movie_data.write_archive(db, tmp_path / "movie-data.zip")
@@ -1658,14 +1237,7 @@ async def test_the_restore_holds_the_archived_tables_against_a_concurrent_write(
 async def test_a_hand_edited_manifest_is_a_refusal_and_not_a_keyerror(
     db, tmp_path, empty_install, edit
 ):
-    """`restore_archive`'s docstring promises it refuses "before anything is written".
-
-    Every refusal in it kept that promise except the shape: the manifest's keys were read
-    straight, so an edited file raised a bare `KeyError` naming a JSON key from inside a module
-    the operator has never read. The person editing a manifest by hand is by definition the
-    person whose install is already broken, and "this archive is not usable" and "the restore
-    crashed — is my install half-loaded?" are not the same sentence.
-    """
+    """A hand-edited manifest is a refusal, not a `KeyError`."""
     await _seed_movie_data(db)
     report = await movie_data.write_archive(db, tmp_path / "movie-data.zip")
     tampered = _with_edited_manifest(report.path, tmp_path / "tampered.zip", edit)
@@ -1678,17 +1250,7 @@ async def test_a_hand_edited_manifest_is_a_refusal_and_not_a_keyerror(
 async def test_a_restore_leaves_no_title_claiming_a_placement_it_has_no_basis_for(
     db, tmp_path, empty_install
 ):
-    """`title.placement` is the denormalised state of a coordinate in `title_placement`, and the
-    archive carries no `title_placement` row — §10 calls a coordinate expressed in the old
-    Backbone's basis garbage against a new one.
-
-    Carrying the column forward therefore restores an install whose titles say 'warm' or
-    'cold_tower' while nothing holds a coordinate at all. §12's M2 criterion is "every owned
-    title has a coordinate", counted as `is_owned AND placement = 'unplaced'` over the index
-    0008_placement.sql:64 exists for — so the restored install reports zero titles waiting to be
-    placed, and `reconcile.py` only re-examines rows it can see are stale, which a 'cold_tower'
-    row is not.
-    """
+    """No `title_placement` is carried, so `title.placement` must not claim a coordinate."""
     await _seed_movie_data(db)
     await db.execute(
         "INSERT INTO artifact_bundle (version, manifest, state, kind) "
@@ -1711,18 +1273,8 @@ async def test_a_restore_leaves_no_title_claiming_a_placement_it_has_no_basis_fo
 
 
 async def test_an_interrupted_write_leaves_the_previous_archive_where_it_was(db, tmp_path):
-    """`zipfile.ZipFile(path, "w")` truncates in place, and the COPY loop runs for minutes.
-
-    The gesture the entry point creates is `spielplan-movie-data write` over the archive that is
-    already on the stick, and decision 162 makes that archive the household's only copy of its
-    movie data. So a write that fails halfway did not merely fail: it had already destroyed the
-    file it was replacing, and what it left behind still opens — `close()` writes a central
-    directory over whatever got through — so nothing reports the loss until the day of the
-    restore, when both copies are gone.
-
-    The failure is placed at `credit` because it has to be somewhere past the first COPY: the
-    point is an interruption *inside* the loop, which is where the minutes are.
-    """
+    """`ZipFile(path, "w")` truncates in place, so the
+    write goes to a partial; failure is placed mid-loop."""
     await _seed_movie_data(db)
     archive = tmp_path / "movie-data.zip"
     await movie_data.write_archive(db, archive)
@@ -1739,8 +1291,7 @@ async def test_an_interrupted_write_leaves_the_previous_archive_where_it_was(db,
     assert archive.read_bytes() == before, "the failed write replaced last week's archive"
     assert list(tmp_path.glob("*.partial")) == [], "and left its own debris in the directory"
     with zipfile.ZipFile(archive) as survivor:
-        # Whole, not merely unchanged: a truncated archive is missing the manifest, which
-        # `write_archive` adds last, and the entries the loop never reached.
+        # Whole: the manifest is written last, so a truncated archive lacks it.
         assert movie_data.MANIFEST in survivor.namelist()
         assert len(survivor.namelist()) == len(movie_data.TABLES) + 1
 
@@ -1764,16 +1315,7 @@ def _without_member(source: Path, target: Path, member: str) -> Path:
 async def test_an_archive_missing_a_member_is_a_refusal_and_not_a_keyerror(
     db, tmp_path, empty_install, member, named
 ):
-    """The manifest describes the zip; it is not the zip, and only the description was checked.
-
-    `archive.read`/`archive.open` answer a missing member with a `KeyError`, which is neither of
-    the two exceptions the command catches — so an archive that lost an entry produced a
-    traceback out of a module the operator has never read, and for the table entry it produced
-    it from inside the transaction, with every archived table locked. The rollback keeps the
-    "before anything is written" promise; the operator does not get to know that. Both shapes
-    are what a killed writer used to leave on top of the previous archive: the manifest goes in
-    last, so it is the first thing missing.
-    """
+    """A missing member raises `KeyError`, which the command did not catch."""
     await _seed_movie_data(db)
     report = await movie_data.write_archive(db, tmp_path / "movie-data.zip")
     truncated = _without_member(report.path, tmp_path / "truncated.zip", member)
@@ -1784,30 +1326,15 @@ async def test_an_archive_missing_a_member_is_a_refusal_and_not_a_keyerror(
     assert await empty_install.fetchval("SELECT count(*) FROM title") == 0
 
 
-# --- M4.7: the operator's way in (platform-movie-data-backup-and-restore) ---------------------
-
-
 async def _run_cli(*argv: str) -> int:
-    """`spielplan-movie-data` as an operator runs it, argparse and `asyncio.run` included.
-
-    In a thread because `main` calls `asyncio.run`, which refuses to nest inside the loop pytest
-    is already running. Driving `main` is the point: M4.5's row says "an operator-triggered (CLI)
-    movie-data backup" and all ten tests it named called the two functions directly — which is
-    how the module came to have no caller at all.
-    """
+    """In a thread because `main` calls `asyncio.run`; driving `main` is the point."""
     return await asyncio.to_thread(movie_data.main, list(argv))
 
 
 async def test_the_operator_command_writes_an_archive_and_restores_it(
     db, pg_url, tmp_path, monkeypatch, capsys
 ):
-    """Both subcommands, end to end, over the pool the app itself opens.
-
-    Through `db/pool.open_pool` and not a bare connection on purpose: the restore writes
-    `artifact_bundle.manifest`, and the pool registers `json.dumps` as the jsonb encoder — the
-    `::text::jsonb` cast in the module exists for that connection and only that connection. A
-    command that opened a codec-less one would leave the cast defending against nothing.
-    """
+    """Through `db/pool.open_pool`, whose jsonb codec the module's `::text::jsonb` cast exists for."""
     await _seed_movie_data(db)
     await db.execute("SELECT setval('title_id_seq', $1, true)", APP_ID_FLOOR)
     archive = tmp_path / "movie-data.zip"
@@ -1836,7 +1363,7 @@ async def test_the_operator_command_writes_an_archive_and_restores_it(
             "INSERT INTO title (kind, name) VALUES ('movie', 'Acquired After') RETURNING id"
         ) == APP_ID_FLOOR + 1
 
-        # A second restore is decision 162's refusal, which is an exit code and not a traceback.
+        # A second restore is decision 162's refusal: an exit code, not a traceback.
         assert await _run_cli("restore", str(archive)) == 1
         assert "refusing" in capsys.readouterr().out
         assert await _run_cli("restore", str(tmp_path / "nowhere.zip")) == 1
@@ -1849,31 +1376,15 @@ async def test_the_operator_command_writes_an_archive_and_restores_it(
 async def test_the_operator_restoring_a_pre_291_archive_is_told_what_was_passed_over(
     db, pg_url, tmp_path, empty_install, monkeypatch, capsys
 ):
-    """Decision 309's other half: the field is carried, and the operator is told what it holds.
-
-    `test_a_restore_reads_an_archive_written_before_the_genome_slice_was_retired` asserts
-    `RestoreReport.retired`, and `as_dict()` has no caller anywhere in the tree -- so `_run`'s
-    printed line is the only thing that ever shows that field to anyone, and nothing executed
-    it. Delete the clause and the suite stays green while the operator restoring a pre-291
-    archive after a box death reads "restored ...: N rows into 31 tables" for an archive whose
-    manifest named 34, with no account of the other three: a record that is true and describes
-    the wrong thing, on the single recovery gesture decision 162 leaves the household.
-
-    Asserted by name and not by count, because naming them is the whole point -- "3 tables were
-    passed over" satisfies a count and still leaves the operator unable to check it against the
-    manifest in their hand. ASCII too: this line is read off a Windows console, and a decorative
-    glyph in it crashes the command that just restored the household's only copy of its content.
-    [M4.16 cycle 3, M416-C3-291-02]
-    """
+    """`_run`'s printed line is the only place `retired`
+    is shown, so it is asserted by name and in ASCII."""
     await _seed_movie_data(db)
     with monkeypatch.context() as older_build:
         older_build.setattr(movie_data, "TABLES", _pre_291_tables())
         report = await movie_data.write_archive(db, tmp_path / "movie-data.zip")
     assert "public.ml_genome_score" in report.tables, "the fixture is not a pre-291 archive"
 
-    # `empty_install`'s own database, addressed the way the command addresses it. Driving `main`
-    # is the point: `restore_archive` returns the report and is covered twice over already, and
-    # `_run` is the only thing that turns it into the sentence the row's `what` promises.
+    # `empty_install`'s own database, addressed the way the command addresses it.
     monkeypatch.setenv("DATABASE_URL", _sibling(pg_url, "_restore")[2])
     settings.cache_clear()
     try:
@@ -1891,27 +1402,7 @@ async def test_the_operator_restoring_a_pre_291_archive_is_told_what_was_passed_
 async def test_an_archive_written_on_a_pre_291_install_names_what_it_leaves_behind(
     db, pg_url, tmp_path, monkeypatch, capsys
 ):
-    """Decision 309's rule, on the leg it was not spent on -- and the common case, not the rare one.
-
-    The sibling above is an archive written by an OLDER BUILD and restored by this one. This is the
-    other order and the one every existing household meets: pre-291 DATA, archived by THIS build.
-    Any box seeded up to M4.15 still holds the slice (decision 311; `placement/features.py:295-300`
-    says so and still reads it), so `write_archive` passes over three populated tables and reports
-    "31 tables" for an install holding 34 -- true, and a description of a different install. And it
-    is the path decision 309's own mechanism cannot reach: `RestoreReport.retired` is computed from
-    the MANIFEST, so the post-291 archive this build writes carries nothing to name on the way back
-    either.
-
-    What it costs is a record, not the rows: section 2's nightly `pg_dump` is the whole database and
-    carries them (`backup/nightly.py:281`, no `--exclude`), and this build's restore would decline
-    them anyway. So the clause points at the dump the operator already has rather than implying an
-    archive that could hold them -- and the negative half below is what keeps it from becoming
-    noise on every post-291 box.
-
-    Asserted by name, ASCII, and through `_run`: `ArchiveReport.as_dict()` has no caller in the
-    tree, so the printed line is the only thing that shows the field to anyone.
-    [decisions 291, 309, 311; M4.16 cycle 4, M416-C4-GEN-08]
-    """
+    """Pre-291 data archived by THIS build: the line names the passed-over tables and points at the dump."""
     await _seed_movie_data(db)
 
     # The negative direction first, on the install THIS build seeds: nothing to name, nothing said.
@@ -1951,21 +1442,7 @@ async def test_an_archive_written_on_a_pre_291_install_names_what_it_leaves_behi
 async def test_a_destination_the_command_cannot_write_is_a_refusal_and_not_a_traceback(
     db, pg_url, tmp_path, monkeypatch, capsys
 ):
-    """The one argument the operator types is the destination, and `_run` handled none of it.
-
-    `write_archive` begins `path.parent.mkdir(parents=True, exist_ok=True)`, and `_run` caught
-    only `RestoreRefused` and `BadZipFile` — so every way of getting the destination wrong came
-    out as a traceback from a module the operator has never read, for a command whose whole
-    promise is that a failure it can foresee is a sentence. The realistic one is not exotic:
-    `/data/backups` is mounted on the worker alone (§14.3), so the same command in the backend
-    container is uid 1000 against a root-owned `/data` and raises `PermissionError`; a stick that
-    is not mounted, a read-only mount and a full disk are the same shape.
-
-    A file standing where a directory has to be is that shape, portably: ENOTDIR on Linux,
-    WinError 183 here, `OSError` in both. The archive itself is unharmed either way — the write
-    goes to `<name>.partial` and is renamed only when whole — so "refusing" is the honest word:
-    nothing was produced and nothing was replaced. [M4.7 cycle 2 finding 13]
-    """
+    """A destination the command cannot write is a `refusing:` line; the target is never replaced."""
     blocked = tmp_path / "not-a-directory"
     blocked.write_text("a file where the destination's parent has to be", encoding="utf-8")
     monkeypatch.setenv("DATABASE_URL", pg_url)
@@ -1978,22 +1455,7 @@ async def test_a_destination_the_command_cannot_write_is_a_refusal_and_not_a_tra
 
 
 async def test_a_rename_that_cannot_land_leaves_no_archive_behind(db, tmp_path):
-    """The one step of the write that sat outside the guard that cleans up after it.
-
-    `write_archive` COPYs into `<name>.partial` and renames it onto the target only when the
-    archive is whole — and the rename itself was the exception to its own `except BaseException:
-    partial.unlink()`. So the one failure that happens with the *entire* archive already written
-    was the one that left it behind: §10 sizes the review store at 312 MB with bodies, and
-    nothing in this repository ever deletes a `.partial` that is not a nightly dump
-    (`nightly.prune` matches `spielplan-<stamp>.dump` and nothing else), while README tells the
-    operator that a file ending `.partial` is cleaned up by the next successful run.
-
-    A destination that is already a directory is that failure, portably and without a fixture:
-    an operator who made `archives/` a folder to keep archives in and then typed it as the
-    argument. `os.replace` answers EISDIR on Linux and WinError 5 here, `OSError` in both, so
-    `_run` prints `refusing:` — while the archive it says was not produced sat in the directory
-    section 2 asks them to copy off-box. [cycle 3 finding 10]
-    """
+    """A failed rename must also remove the whole-archive `.partial`."""
     await _seed_movie_data(db)
     destination = tmp_path / "archives"
     destination.mkdir()
@@ -2008,12 +1470,7 @@ async def test_a_rename_that_cannot_land_leaves_no_archive_behind(db, tmp_path):
 
 
 def _with_replaced_manifest(source: Path, target: Path, blob: bytes) -> Path:
-    """The archive as a text editor left it: every entry, the manifest written back verbatim.
-
-    `_with_edited_manifest` cannot express this. It round-trips the manifest through
-    `json.loads`/`json.dumps`, so every case it can build is syntactically valid JSON by
-    construction — which is why all six of its params missed the parse itself.
-    """
+    """The archive with its manifest written back verbatim, which `_with_edited_manifest` cannot express."""
     with zipfile.ZipFile(source) as src, zipfile.ZipFile(target, "w") as dst:
         for info in src.infolist():
             dst.writestr(
@@ -2026,20 +1483,7 @@ def _with_replaced_manifest(source: Path, target: Path, blob: bytes) -> Path:
 async def test_a_manifest_that_is_not_json_is_a_refusal_and_not_a_decoder_traceback(
     db, pg_url, tmp_path, empty_install, monkeypatch, capsys
 ):
-    """The same gesture as the hand-edited manifest above, one step further in.
-
-    The manifest's keys go through a shape check, and cycle 2 made a *missing* manifest a refusal
-    rather than a `KeyError`. The parse standing in front of both did not: `json.loads` answers a
-    member that is not JSON with a `JSONDecodeError`, a `ValueError`, which is none of the three
-    exceptions `_run` catches. So the operator whose restore was
-    refused, who opened `manifest.json` to see what it said and saved it with a stray comma, got
-    a nine-frame traceback ending in `json/decoder.py` and no answer to the only question they
-    have — whether the install is now half-loaded.
-
-    A doubled comma at the first one the manifest carries, rather than a hand-written blob: what
-    is under test is a real archive whose manifest stopped parsing, and this stays true whatever
-    the manifest's contents become. [cycle 3 finding 11]
-    """
+    """A `JSONDecodeError` is a `ValueError`, which `_run` did not catch."""
     await _seed_movie_data(db)
     report = await movie_data.write_archive(db, tmp_path / "movie-data.zip")
     with zipfile.ZipFile(report.path) as archive:
@@ -2054,9 +1498,7 @@ async def test_a_manifest_that_is_not_json_is_a_refusal_and_not_a_decoder_traceb
         await movie_data.restore_archive(empty_install, tampered)
     assert await empty_install.fetchval("SELECT count(*) FROM title") == 0
 
-    # And through the entry point, which is where the refusal becomes a sentence and where the
-    # traceback was. Pointed at the seeded database rather than the empty one on purpose: this
-    # refusal is ahead of every question about what the destination already holds.
+    # Through the entry point, where the refusal becomes a sentence; ahead of any destination question.
     monkeypatch.setenv("DATABASE_URL", pg_url)
     settings.cache_clear()
     try:
@@ -2071,14 +1513,7 @@ async def test_a_manifest_that_is_not_json_is_a_refusal_and_not_a_decoder_traceb
 async def test_a_restore_into_a_schema_without_the_archived_tables_is_a_refusal(
     db, pg_url, tmp_path
 ):
-    """The other uncaught class at the same seam, and the likelier one.
-
-    `_layout` reads this install's catalog and raises `RuntimeError` when the archived tables are
-    not in it. That is the database README's Recovery block produces: a rebuilt box, the archive
-    to hand, and the backend — the only process that applies migrations — not started yet. A
-    `RuntimeError` is none of the three `_run` catches, so the answer was a traceback naming
-    every archived table where the docstring promises a refusal. [cycle 3 finding 11]
-    """
+    """A catalog without the archived tables raises `RuntimeError`, which must be a refusal."""
     await _seed_movie_data(db)
     report = await movie_data.write_archive(db, tmp_path / "movie-data.zip")
 

@@ -1,27 +1,6 @@
-"""The spend meter, the extraction plan and the cap check. Spec v2.1 §8, §6.6, §9; decisions 324, 325, 343.
-
-The spend-cap row says what is at stake in one clause: "a cap computed from the wrong number is not
-a cap". So this file pins the number from three sides. THE METER is a SUM of `llm_call.usd` over
-the household's calendar month, and the window test puts a row on each side of both edges of a
-local month whose edges are not UTC's, so a meter summing the UTC month -- or a counter kept
-beside the table -- reads a different figure. THE CHARGE is the billed output, Gemini's thoughts
-included, so a call is metered at 3,900 tokens where the visible JSON would say 1,600 (exit check
-5's arithmetic). THE CHECK runs in the order decision 325 and decision 348 give it -- no cap, no
-plan, a spent month, no pack, a month the reservation would breach -- and the reservation is TWO
-attempts of every run, so a title whose first attempt would fit and whose retry would not is
-refused before either is made.
-
-THE ZONE. §2's `TZ` is read for real, through `settings()`, and resolved by the module's own
-`local_zone`; what is replaced is `zoneinfo.ZoneInfo`, because a Windows checkout has no tz
-database (`test_worker_schedule.py::_resolvable_zone` records the same absence) and a test that
-resolved Europe/Berlin for real would skip here and run only in CI. The stand-in knows one name,
-Europe/Berlin, and answers it with a fixed UTC+1 -- which IS Berlin for every instant this file
-touches: DST ended on 25 October 2026, so the whole of November and its two edges are CET. Every
-other name is refused as the real class refuses it, which is how the fallback test reaches the
-module's real fallback.
-
-Integration tests are skipped without TEST_DATABASE_URL; see tests/conftest.py.
-"""
+"""The spend meter, the extraction plan and the cap check (§8, §9, decisions 324, 325).
+`zoneinfo.ZoneInfo` is replaced because Windows has no tz database; the stand-in's fixed UTC+1 IS
+Berlin for every instant here (DST ended 25 October 2026). Needs TEST_DATABASE_URL."""
 
 from __future__ import annotations
 
@@ -39,8 +18,7 @@ from spielplan.dna import packs, verify
 from spielplan.llm import client, contract, pricing, spend
 from spielplan.llm.pricing import ModelPrice
 
-# The instant every test asks about, and the local day prices are asked for on it: mid-November in
-# Berlin, inside the introductory Gemini price (it ends 2027-01-01).
+# Mid-November in Berlin, inside the introductory Gemini price (it ends 2027-01-01).
 NOW = datetime(2026, 11, 15, 12, 0, tzinfo=UTC)
 DAY = date(2026, 11, 15)
 # November 2026 in Europe/Berlin, as UTC instants: an hour before each UTC month starts.
@@ -64,7 +42,6 @@ def _berlin_only(name: str):
 
 @pytest.fixture(autouse=True)
 def berlin(monkeypatch):
-    """§2's `TZ` set to the compose default, resolved by the module's own code. See the docstring."""
     monkeypatch.setenv("TZ", "Europe/Berlin")
     monkeypatch.setattr(spend, "ZoneInfo", _berlin_only)
     settings.cache_clear()
@@ -74,9 +51,7 @@ def berlin(monkeypatch):
 
 @pytest.fixture
 def data_dir(tmp_path, monkeypatch):
-    """`DATA_DIR`, and so the raw store a pack is kept in, under this test's own tmp_path --
-    `test_acquire_pipeline.py`'s idiom, and for its reason: `settings()` takes no argument, so the
-    root goes in through the environment and the cache is cleared on both sides."""
+    """`settings()` takes no argument, so the root goes in through the environment."""
     monkeypatch.setenv("DATA_DIR", str(tmp_path / "data"))
     settings.cache_clear()
     yield settings().data_dir
@@ -102,8 +77,6 @@ async def _title(db, title_id: int, name: str) -> None:
 
 
 async def _packed(db, title_id: int, name: str, words: tuple[str, ...]) -> int:
-    """A title with a pack built by `dna/packs.py` from real review rows and kept in the raw
-    store, which is where stage 6 -- and so the reservation -- reads it from."""
     await _title(db, title_id, name)
     await db.executemany(
         "INSERT INTO review_store.review (title_id, source, body, is_critic) VALUES ($1, $2, $3, $4)",
@@ -115,8 +88,6 @@ async def _packed(db, title_id: int, name: str, words: tuple[str, ...]) -> int:
 
 @pytest.fixture
 async def pack_doc(db, data_dir) -> int:
-    """The active vocabulary, one packed title and one title with no pack; the pack's raw document
-    is what every metered call cites (0028: `pack_document_id` is NOT NULL)."""
     await _vocabulary(db)
     doc = await _packed(db, TITLE, "Grey Harbour", ("harbour",))
     await _title(db, NO_PACK_TITLE, "Unpacked")
@@ -125,8 +96,7 @@ async def pack_doc(db, data_dir) -> int:
 
 async def _bill(db, doc: int, usd: Decimal, at: datetime = NOW, *, attempt: int = 1,
                 tokens_out_billed: int = 0, ok: bool = True) -> int:
-    """One metered attempt at `at`. `llm_call.at` defaults to the server's clock, so the instant is
-    written afterwards: the window test needs rows on either side of an edge, not at now()."""
+    """`llm_call.at` defaults to the server's clock, so the instant is written afterwards."""
     row = await spend.record_call(
         db, provider="gemini", model="gemini-3.7-flash", title_id=TITLE, pass_index=1,
         attempt=attempt, tokens_in=0, tokens_out_billed=tokens_out_billed, usd=usd, ok=ok,
@@ -142,23 +112,14 @@ async def _llm(db, **fields) -> None:
 
 
 async def _real_tokens_in(db, title_id: int) -> int:
-    """The input a call for this title sends, counted the way the reservation says it counts."""
     voc = await contract.load_prompt_vocabulary(db, "v1")
     pack = await verify.read_pack(db, title_id, "v1")
     return (client.estimate_tokens(contract.system_prompt(voc))
             + client.estimate_tokens(contract.user_prompt(pack)))
 
 
-# --- the meter --------------------------------------------------------------------------------
-
-
 async def test_the_meter_sums_the_households_calendar_month_and_not_the_utc_one(db, pack_doc):
-    """Decision 325: [the first instant of the local month, the first instant of the next). Each
-    row's amount is a different power of ten, so the sum says exactly which rows were counted.
-
-    The row at 23:00 UTC on 31 October is November's first Berlin instant and is still October in
-    UTC; the row at 23:00 UTC on 30 November is December's first Berlin instant and is still
-    November in UTC. A meter over the UTC month would count the second and miss the first."""
+    """Each row's amount is a different power of ten, so the sum says exactly which rows were counted."""
     assert spend.period(NOW) == (NOVEMBER_STARTS, DECEMBER_STARTS)
 
     second = timedelta(seconds=1)
@@ -176,9 +137,7 @@ async def test_the_meter_sums_the_households_calendar_month_and_not_the_utc_one(
 
 
 def test_an_unresolvable_tz_bounds_the_month_on_the_process_clock_and_says_so(monkeypatch, caplog):
-    """`worker._local_zone`'s fallback (§3.1: a spelling must not stop a loop), logged on every read
-    because this module has no boot line to say it once. The bounds are still a month: aware, UTC,
-    around the instant asked about, starting at a local midnight on the first."""
+    """Logged on every read, because this module has no boot line to say it once."""
     monkeypatch.setenv("TZ", "Europe/Berln")
     settings.cache_clear()
     with caplog.at_level(logging.WARNING, logger="spielplan.llm.spend"):
@@ -192,9 +151,7 @@ def test_an_unresolvable_tz_bounds_the_month_on_the_process_clock_and_says_so(mo
 
 
 async def test_a_gemini_call_is_charged_for_the_thinking_tokens_it_was_billed_for(db, pack_doc):
-    """Exit check 5's arithmetic, through the meter: 1,600 candidate plus 2,300 thought tokens is
-    3,900 billed output, and the charge is 3,900 x the output price. §9: counting the visible JSON
-    "understates cost ~5x", and the 2,300 tokens a visible count drops are $0.008625 here."""
+    """§9: counting the visible JSON "understates cost ~5x"."""
     price = pricing.price_for("gemini", "gemini-3.7-flash", on=DAY)
     assert (price.input, price.output) == (0.75, 3.75)
     billed = 1_600 + 2_300
@@ -214,8 +171,6 @@ async def test_a_gemini_call_is_charged_for_the_thinking_tokens_it_was_billed_fo
 
 
 async def test_both_attempts_of_a_run_are_metered(db, pack_doc):
-    """Plan C3: the retry is a second full input pass, and whatever the cap rules, both attempts
-    are rows the meter sums -- the failed first one included, with the violation it failed on."""
     await _bill(db, pack_doc, Decimal("0.020000"), attempt=1, ok=False)
     await _bill(db, pack_doc, Decimal("0.021000"), attempt=2)
 
@@ -224,9 +179,8 @@ async def test_both_attempts_of_a_run_are_metered(db, pack_doc):
 
 
 async def test_the_meter_reports_the_month_and_what_is_left_of_the_cap(db, pack_doc):
-    """What M5.7's guard renders. "$4.12 of $25.00 this month" is §6.6's example, not a default:
-    with no cap nothing remains to report, and an overshoot shows in the spend, never as a
-    negative remainder."""
+    """"$4.12 of $25.00" is §6.6's example, not a default;
+    an overshoot never shows as a negative remainder."""
     await _bill(db, pack_doc, Decimal("4.12"))
     uncapped = await spend.meter(db, now=NOW)
     assert (uncapped["spent_usd"], uncapped["cap_usd"], uncapped["remaining_usd"]) == (
@@ -250,15 +204,10 @@ async def test_the_meter_reports_the_month_and_what_is_left_of_the_cap(db, pack_
     assert (over["spent_usd"], over["remaining_usd"]) == (Decimal("25.12"), Decimal("0"))
 
 
-# --- the cap and the plan ---------------------------------------------------------------------
-
-
 @pytest.mark.parametrize("spoiled", [f"{KEY_GEMINI[:6]}\n{KEY_GEMINI[6:]}", f"{KEY_GEMINI}\u200b"])
 async def test_a_key_no_header_can_carry_is_refused_by_name_and_never_quoted(db, secrets_key, spoiled):
-    """A key with a control character or a non-ASCII letter inside it cannot be sent, and an attempt
-    to send it put the whole key into `llm_call.error` through h11's bytes repr. It is a setting to
-    correct, so the plan parks naming the fault -- and never the key -- before anything is reserved
-    or sent. [M5.5 review cycle 1, KEYS-C1-01]"""
+    """h11's bytes repr put the whole key into `llm_call.error`;
+    the plan parks naming the fault, not the key."""
     await _llm(db, cap_usd=25, extraction_provider="gemini")
     await registry.save_connector(db, "gemini", api_key=spoiled)
     refusal = await spend.extraction_plan(db, now=NOW)
@@ -273,11 +222,7 @@ async def test_a_key_no_header_can_carry_is_refused_by_name_and_never_quoted(db,
 async def test_a_call_left_at_its_ceiling_is_named_apart_in_the_meter_and_the_over_cap_reason(
     db, pack_doc, secrets_key
 ):
-    """Decision 436 leaves an attempt whose answer never arrived at its write-ahead ceiling, which is
-    at least what the provider billed and may be more. The month counts it -- a cap must not assume
-    a lost call was free -- and the meter and the over-cap sentence say how much of the spend is such
-    a ceiling, so an admin can tell a month spent on answers from one spent on calls nobody heard
-    back from. [M5.5 review cycle 1, M55-SPEND-04]"""
+    """Decision 436: a lost call stays at its ceiling; the meter says how much of the spend is ceilings."""
     await _bill(db, pack_doc, Decimal("0.60"))
     lost = await spend.record_call(
         db, provider="gemini", model="gemini-3.7-flash", title_id=TITLE, pass_index=1, attempt=1,
@@ -298,9 +243,6 @@ async def test_a_call_left_at_its_ceiling_is_named_apart_in_the_meter_and_the_ov
 
 
 async def test_an_uncapped_install_is_refused_with_decision_348s_sentence_before_anything_else(db):
-    """No cap, no provider, no vocabulary, no pack: the first question is the cap, and the answer
-    is M5.1's `NO_SPEND_CAP` word for word -- the refusal the gate shipped with is the refusal an
-    unset cap still gives (decision 325: no default cap ships)."""
     assert spend.NO_CAP_REASON == pipeline.NO_SPEND_CAP
 
     refusal = await spend.cap_check(db, title_id=NO_PACK_TITLE, now=NOW)
@@ -311,8 +253,7 @@ async def test_an_uncapped_install_is_refused_with_decision_348s_sentence_before
 
 @pytest.mark.parametrize("stored", ["25", -1, True, [25], {"usd": 25}])
 async def test_a_cap_that_is_not_a_number_of_at_least_zero_is_no_cap_and_says_so(db, caplog, stored):
-    """Never zero, which would park every title claiming the month is spent, and never infinity,
-    which would bill without a limit: unset, logged, and decision 348's sentence on the board."""
+    """Never zero (every title parks) and never infinity (no limit): unset, logged, and said."""
     await _llm(db, cap_usd=stored)
     with caplog.at_level(logging.WARNING, logger="spielplan.llm.spend"):
         assert await spend.cap(db) is None
@@ -328,8 +269,6 @@ async def test_a_cap_of_zero_is_a_cap_and_a_fraction_is_kept_exactly(db):
 
 
 async def test_a_capped_install_with_no_extraction_provider_is_refused_naming_the_assignment(db):
-    """Decision 324: an absent `extraction_provider` parks naming the missing assignment, and is
-    never answered with a guessed provider."""
     await _llm(db, cap_usd=25)
 
     refusal = await spend.cap_check(db, title_id=NO_PACK_TITLE, now=NOW)
@@ -350,9 +289,8 @@ async def test_a_capped_install_with_no_extraction_provider_is_refused_naming_th
     ],
 )
 async def test_a_setting_the_plan_cannot_read_is_refused_by_name(db, settings_row, named):
-    """Until M5.7's cards ship, the `llm` row is written by hand (decision 433), and a hand-typed
-    setting is read as what it says or refused naming it -- never guessed into a provider or a
-    pass count the admin did not write."""
+    """The `llm` row may be written by hand, so a setting is
+    read as written or refused by name, never guessed."""
     await _llm(db, cap_usd=25, **settings_row)
 
     refusal = await spend.cap_check(db, title_id=NO_PACK_TITLE, now=NOW)
@@ -363,9 +301,7 @@ async def test_a_setting_the_plan_cannot_read_is_refused_by_name(db, settings_ro
 async def test_a_provider_with_no_key_or_an_unreadable_one_is_refused_by_name(
     db, secrets_key, monkeypatch
 ):
-    """No key is refused naming the provider. A key this SECRETS_KEY cannot open is refused in the
-    rail's own sentence, and not as "no key": its secrets read back empty, and telling the admin
-    to type a key that exists would send them the wrong way."""
+    """A key this SECRETS_KEY cannot open is not "no key": telling the admin to type one would mislead."""
     await _llm(db, cap_usd=25, extraction_provider="gemini")
     keyless = await spend.cap_check(db, title_id=NO_PACK_TITLE, now=NOW)
     assert (keyless.kind, keyless.detail) == (spend.PLAN, {"provider": "gemini"})
@@ -381,9 +317,6 @@ async def test_a_provider_with_no_key_or_an_unreadable_one_is_refused_by_name(
 
 
 async def test_an_unpriced_model_is_refused_naming_the_provider_and_the_model(db, secrets_key):
-    """Decision 343: a cap cannot be held against a price nobody knows, so a model neither the
-    dated table nor an override prices is refused by name -- and the admin's override is what
-    prices it."""
     await _llm(db, cap_usd=25, extraction_provider="gemini")
     await registry.save_connector(db, "gemini", api_key=KEY_GEMINI, model="gemini-9-ultra")
 
@@ -399,9 +332,7 @@ async def test_an_unpriced_model_is_refused_naming_the_provider_and_the_model(db
 
 
 async def test_the_defaults_are_one_provider_and_one_pass(db, secrets_key):
-    """Decision 324 settles both: `parallel` absent is off and `passes` absent is 1. And off means
-    `parallel_providers` is not read at all -- the anthropic entry here has no key and costs
-    nothing, because it is not called."""
+    """With `parallel` off `parallel_providers` is not read: the keyless anthropic entry costs nothing."""
     await _llm(db, cap_usd=25, extraction_provider="gemini", parallel_providers=["anthropic"])
     await registry.save_connector(db, "gemini", api_key=KEY_GEMINI)
 
@@ -414,9 +345,7 @@ async def test_the_defaults_are_one_provider_and_one_pass(db, secrets_key):
 
 
 async def test_a_dated_price_is_asked_for_on_the_households_day(db, secrets_key):
-    """Decision 343's dated price turns over on the household's midnight, as decision 325's month
-    does. Half past midnight on New Year's Day in Berlin is still 31 December in UTC, and the
-    doubled Gemini price is already the one in effect."""
+    """Half past midnight on New Year's Day in Berlin is still 31 December in UTC."""
     await _llm(db, cap_usd=25, extraction_provider="gemini")
     await registry.save_connector(db, "gemini", api_key=KEY_GEMINI)
 
@@ -438,9 +367,6 @@ async def test_a_plan_never_prints_the_keys_it_carries(db, secrets_key):
 
 async def test_at_the_cap_the_title_is_refused_without_estimating_anything(db, pack_doc, secrets_key,
                                                                           monkeypatch):
-    """Exit check 7's half that is this module's: with the month at its cap, `over spend cap`, and
-    no reservation is even computed -- here the title has no pack, which below the cap would let
-    it through to stage 6's own park, and the reservation is replaced by a refusal to be asked."""
     async def must_not_estimate(*_args, **_kwargs):
         raise AssertionError("a month at its cap has no room for any reservation to be priced")
 
@@ -460,15 +386,11 @@ async def test_at_the_cap_the_title_is_refused_without_estimating_anything(db, p
 
 
 async def test_the_retry_is_budgeted_inside_the_cap(db, pack_doc, secrets_key):
-    """Decision 325. The month has room for one attempt and not for two, so the title is refused
-    before attempt 1: a check that reserved only the first attempt would let it run, pay, fail the
-    contract and then park holding a retry it cannot make. Exactly at the cap after both attempts
-    is within it; one micro-dollar less room is not. The admin retry gives the same reason."""
+    """The month has room for one attempt and not two, so the title is refused before attempt 1."""
     await _llm(db, cap_usd=100, extraction_provider="gemini")
     await registry.save_connector(db, "gemini", api_key=KEY_GEMINI)
     plan = await spend.extraction_plan(db, now=NOW)
-    # One attempt's estimate, computed here and not read back out of the module, so a check that
-    # reserved one attempt fits the room below and is caught letting the title through.
+    # Computed here, not read from the module, so a one-attempt reservation is caught.
     one_attempt = pricing.usd(
         await _real_tokens_in(db, TITLE), pricing.MEAN_OUTPUT_TOKENS, plan.providers[0].price
     )
@@ -498,12 +420,7 @@ async def test_the_retry_is_budgeted_inside_the_cap(db, pack_doc, secrets_key):
 async def test_a_gate_asked_just_before_a_dated_price_turns_over_reserves_at_the_dearer_price(
     db, pack_doc, secrets_key
 ):
-    """Each attempt is metered at its own local day's price (`attempt_price`), and the gate reserved at
-    the gate's day's. At 23:59:59 on 31 December in Berlin the shipped default gemini-3.7-flash is
-    $0.75/$3.75 and one second later $1.50/$7.50 (decision 343's dated table), so a title the gate let
-    through on the old price billed up to twice the reservation it was admitted on -- 1.77 R past the
-    cap with one worker, measured, where decision 325 states W - R. The gate now reserves at the dearer
-    of its own day's price and the next day's. [M5.5 review cycle 2, M55-CAP-C2-03]"""
+    """The gate reserves at the dearer of its own day's price and the next day's."""
     await _llm(db, cap_usd=100, extraction_provider="gemini")
     await registry.save_connector(db, "gemini", api_key=KEY_GEMINI)
     last_second = datetime(2026, 12, 31, 22, 59, 59, tzinfo=UTC)
@@ -532,8 +449,7 @@ async def test_comfortably_under_the_cap_the_title_may_run(db, pack_doc, secrets
 
 
 async def test_a_title_with_no_stored_pack_is_left_to_stage_six_under_the_cap(db, pack_doc, secrets_key):
-    """Decision 432: no call can be made without a pack, and stage 6 parks on that itself naming
-    stage 5. The cap has nothing to reserve against and invents no figure for it."""
+    """Decision 432: stage 6 parks a packless title itself; the cap invents no figure for it."""
     await _llm(db, cap_usd=25, extraction_provider="gemini")
     await registry.save_connector(db, "gemini", api_key=KEY_GEMINI)
 
@@ -542,13 +458,8 @@ async def test_a_title_with_no_stored_pack_is_left_to_stage_six_under_the_cap(db
     assert await spend.cap_check(db, title_id=NO_PACK_TITLE, now=NOW) is None
 
 
-# --- the reservation --------------------------------------------------------------------------
-
-
 async def test_the_reservation_prices_the_real_prompt_at_two_attempts(db, pack_doc, secrets_key):
-    """The input is the prompt stage 6 would send for THIS title's stored pack -- not §8's
-    23,500-token midpoint -- and the output the measured mean, both attempts reserved. A title
-    with a longer pack reserves more."""
+    """The prompt stage 6 would send for THIS title's pack, not §8's 23,500-token midpoint."""
     await _packed(db, LONG_TITLE, "Long Harbour", ("harbour", "lighthouse", "fog", "gulls"))
     await _llm(db, cap_usd=25, extraction_provider="gemini")
     await registry.save_connector(db, "gemini", api_key=KEY_GEMINI)
@@ -570,8 +481,7 @@ async def test_the_reservation_prices_the_real_prompt_at_two_attempts(db, pack_d
 async def test_parallel_mode_with_two_providers_at_two_passes_reserves_eight_calls(
     db, pack_doc, secrets_key
 ):
-    """Two providers at two passes is four runs (decision 337: a run is a provider at a pass), and
-    each run is reserved at two attempts: eight calls, each at its own provider's price."""
+    """Decision 337: a run is a provider at a pass, and each run reserves two attempts."""
     await registry.save_connector(db, "gemini", api_key=KEY_GEMINI)
     await registry.save_connector(db, "anthropic", api_key=KEY_ANTHROPIC)
     await _llm(db, cap_usd=25, parallel=True, parallel_providers=["gemini", "anthropic"], passes=2)

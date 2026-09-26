@@ -1,8 +1,4 @@
-"""The poster cache on disk. Spec v2.1 §6.8; decision 483.
-
-No database and no network: `art/cache.py` is files and a clock, and the clock is injected so a
-180-day re-fetch is asserted rather than waited for.
-"""
+"""The poster cache on disk (§6.8). The clock is injected, so the 180-day re-fetch is asserted."""
 
 from __future__ import annotations
 
@@ -31,8 +27,7 @@ def test_a_stored_poster_is_read_back_with_its_type_and_a_strong_etag(tmp_path):
 
 
 def test_an_entry_answers_only_the_sources_it_was_fetched_from(tmp_path):
-    """The URL names a title, not a file: a title that became owned or was re-derived is a new
-    question with the same key, and a stale answer for 180 days is what the signature prevents."""
+    """The URL names a title, not a file: a re-derived title is a new question under the same key."""
     store = cache.ArtCache(tmp_path, clock=Clock())
     store.store(7, "https://image.tmdb.org/t/p/w342/a.jpg", PNG, content_type="image/png",
                 source="poster_path", ttl=60)
@@ -63,7 +58,6 @@ def test_a_negative_answer_is_remembered_and_takes_the_old_bytes_with_it(tmp_pat
 
 
 def test_damage_to_the_cache_is_a_miss_and_never_an_error(tmp_path):
-    """Droppable by construction: the worst a corrupt sidecar or a lost image can cost is a fetch."""
     store = cache.ArtCache(tmp_path, clock=Clock())
     assert store.read(7, "s") is None
     (tmp_path / "7.json").write_text("{not json", encoding="utf-8")

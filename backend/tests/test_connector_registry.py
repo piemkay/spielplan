@@ -1,21 +1,5 @@
-"""Connector config and the one time an env var may write it. Spec v2.1 §2, §6.6.
-
-"Everything connector-related … is configured **in the admin UI** and stored in
-`connector_config` — **not env vars**, because the owner explicitly wants connector setup in
-the admin view; env vars may *seed* connector config **on first boot** for automated installs."
-
-Two properties, and both are the kind that only fail on the second boot:
-
-  * seeding never overwrites — otherwise every container restart silently reverts whatever the
-    admin last saved, which is how people learn not to trust the admin UI;
-  * a secret needs SECRETS_KEY — §2 says the app refuses rather than falling back, and a
-    connector seeded without custody is worse than no connector.
-
-This closes the M0 waiver on `platform-connector-config-env-seed-only`, which recorded that
-nothing read `JELLYFIN_*` at boot at all.
-
-Skipped without TEST_DATABASE_URL; see tests/conftest.py.
-"""
+"""Connector config and the one time an env var may write it (§2, §6.6): seeding never overwrites an
+admin's edit, and a secret needs SECRETS_KEY. Needs TEST_DATABASE_URL."""
 
 from __future__ import annotations
 
@@ -37,11 +21,7 @@ async def _link_state(conn, user_id: int) -> str | None:
 
 
 async def _second_connection(pg_url):
-    """A connection of its own, because a lock is only a lock across two of them.
-
-    The json codecs are the `db` fixture's, repeated here for the same reason it sets them: the
-    connector's `config` column is jsonb and `get_connector_secrets` reads it as a dict.
-    """
+    """A lock is only a lock across two connections; the json codecs mirror the `db` fixture's."""
     conn = await asyncpg.connect(pg_url)
     for typename in ("json", "jsonb"):
         await conn.set_type_codec(
@@ -51,12 +31,7 @@ async def _second_connection(pg_url):
 
 
 async def _link(conn, app_user_id: str, token: str, *, for_update: bool) -> None:
-    """What `api/admin.link_jellyfin` does to the sealed token map: open it, add one, seal it.
-
-    The sleep is the window, widened from microseconds to a certainty. `save_jellyfin` merges
-    again internally, so without the lock on *this* read the second writer still merges onto a
-    map it read before the first one wrote (§14.3).
-    """
+    """The sleep widens the window to a certainty; `save_jellyfin` merges again internally."""
     async with conn.transaction():
         cfg = await registry.load_jellyfin(conn, for_update=for_update)
         tokens = dict(cfg.user_tokens)
@@ -66,13 +41,9 @@ async def _link(conn, app_user_id: str, token: str, *, for_update: bool) -> None
 
 
 def _settings(**overrides) -> Settings:
-    """Env values to seed *from*. Custody comes from the process-wide `settings()`, which the
-    `secrets_key` fixture provides — see `seed_from_env`'s note on why those are separate."""
+    """Custody comes from the process-wide `settings()` via the `secrets_key` fixture."""
     base = {"secrets_key": "test-secrets-key-not-a-real-one-at-all", "database_url": "postgresql://x/y"}
     return Settings(**{**base, **overrides})
-
-
-# --- what env can offer -------------------------------------------------------------------
 
 
 def test_no_env_means_no_seed():
@@ -91,17 +62,12 @@ def test_jellyfin_needs_both_a_url_and_a_key_to_be_seedable():
 
 
 def test_the_other_connectors_seed_too():
-    """§6.6 configures TMDB/OMDb/Trakt in the admin UI at M5; seeding lets an automated
-    install arrive with them already filled in."""
     seeds = registry.env_seeds(
         _settings(tmdb_api_key="t", omdb_api_key="o", trakt_client_id="c",
                   trakt_client_secret="s")
     )
     assert set(seeds) == {"tmdb", "omdb", "trakt"}
     assert seeds["trakt"] == ({"client_id": "c"}, {"client_secret": "s"})
-
-
-# --- first boot, and every boot after -----------------------------------------------------
 
 
 async def test_the_first_boot_seeds_and_records_the_wizard_step(db, secrets_key):
@@ -137,9 +103,7 @@ async def test_seeding_is_idempotent(db, secrets_key):
 async def test_a_secret_without_secrets_key_refuses_rather_than_falls_back(db, no_secrets_key):
     """§2: "The app refuses to start secret-dependent connectors without SECRETS_KEY rather
     than falling back to SESSION_SECRET"."""
-    # `no_secrets_key` is what makes this a test rather than a coin flip: the refusal is checked
-    # against the process-wide `settings()`, which reads `.env`, and this constructor's
-    # arguments never reached it. See the fixture.
+    # `no_secrets_key` makes this deterministic: the refusal reads the process-wide `settings()`.
     cfg = Settings(
         _env_file=None,
         database_url="postgresql://x/y", session_secret="not-a-secrets-key-and-not-a-real-one",
@@ -150,12 +114,8 @@ async def test_a_secret_without_secrets_key_refuses_rather_than_falls_back(db, n
     assert await db.fetchval("SELECT count(*) FROM connector_config") == 0
 
 
-# --- storage ------------------------------------------------------------------------------
-
-
 async def test_a_stored_secret_is_ciphertext_carrying_its_key_id(db, secrets_key):
-    """§2: connector secrets are AEAD-encrypted under a DEK and every ciphertext carries its
-    key_id, so rotation can find what to re-wrap."""
+    """Every ciphertext carries its key_id, so rotation can find what to re-wrap."""
     await registry.save_jellyfin(db, url="http://jf", api_key="a-real-key")
     row = await db.fetchrow(
         "SELECT config, secrets_encrypted, secrets_key_id FROM connector_config "
@@ -177,9 +137,7 @@ async def test_a_url_alone_does_not_require_secrets_key(db):
 
 
 async def test_a_partial_save_keeps_the_secrets_it_did_not_send(db, secrets_key):
-    """The form shows the key as a mask and posts it empty to mean "leave it alone". Same
-    server, so the credentials stay — see the §14.3 tests below for the case where they do not.
-    """
+    """The form posts the masked key empty to mean "leave it alone"."""
     await registry.save_jellyfin(db, url="http://jf", api_key="k", user_tokens={"1": "tok"})
     await registry.save_jellyfin(db, url="http://jf/library")
     cfg = await registry.load_jellyfin(db)
@@ -189,8 +147,7 @@ async def test_a_partial_save_keeps_the_secrets_it_did_not_send(db, secrets_key)
 
 
 async def test_tokens_are_addressed_by_app_user_id(db, secrets_key):
-    """JSON object keys are strings; round-tripping them as ints invites a silent mismatch
-    between "3" and 3, which would look exactly like a missing token."""
+    """JSON object keys are strings: "3" and 3 must not silently mismatch."""
     await registry.save_jellyfin(db, url="http://jf", api_key="k", user_tokens={"3": "tok"})
     cfg = await registry.load_jellyfin(db)
     assert cfg.token_for(3) == "tok"
@@ -198,13 +155,7 @@ async def test_tokens_are_addressed_by_app_user_id(db, secrets_key):
 
 
 async def test_the_probed_version_is_stored_beside_the_url_not_in_the_secret(db, secrets_key):
-    """§7.1's pin has to be operative. `MIN_SERVER_VERSION` and its verdict were computed by the
-    admin's test button and handed to the browser, and nothing else ever read them -- so a 10.8
-    install 404ed every Played write for the life of the install while every visible check passed.
-
-    The verdict is connector *config*, not a credential: the config half needs no SECRETS_KEY and
-    no migration, and `make_client` is what carries it to the one write.
-    """
+    """The verdict is config, not a credential: it needs no SECRETS_KEY."""
     await registry.save_jellyfin(
         db, url="http://jf", api_key="k", server_version="10.8.13", server_supported=False
     )
@@ -225,13 +176,7 @@ async def test_the_probed_version_is_stored_beside_the_url_not_in_the_secret(db,
 
 
 async def test_no_connector_credential_survives_a_repr(db, secrets_key):
-    """§14.3: the API key is admin-equivalent on the whole media server and the per-user tokens
-    are real credentials, and a default dataclass repr copies both into any traceback that happens
-    to hold the object -- this milestone's review watched a pytest failure header print one.
-
-    The static guard over every field under `connectors/` lives in `test_static_contracts.py`;
-    this is the runtime fact about the objects the app actually builds.
-    """
+    """A default dataclass repr copies credentials into any traceback that holds the object."""
     await registry.save_jellyfin(
         db, url="http://jellyfin.local:8096", api_key="ADMIN-EQUIVALENT-KEY",
         user_tokens={"1": "PER-USER-TOKEN"},
@@ -255,16 +200,8 @@ async def test_an_unconfigured_connector_builds_no_client(db):
     assert registry.make_client(registry.JellyfinConfig(url="http://jf", api_key="k")) is not None
 
 
-# --- §14.3: one lock over the read-modify-write -------------------------------------------
-
-
 async def test_a_for_update_load_locks_the_connector_row(db, pg_url, secrets_key):
-    """The lock, asserted as a lock -- and the absence of one first, so this cannot pass by
-    accident on a database that happened to be busy.
-
-    `lock_timeout` is what makes the blocked reader a failure this test can see: without it a
-    regression that drops `FOR UPDATE` would leave the suite hanging rather than red.
-    """
+    """`lock_timeout` turns a dropped `FOR UPDATE` into a red test rather than a hang."""
     await registry.save_jellyfin(db, url="http://jf", api_key="k")
     other = await _second_connection(pg_url)
     take_it = "SELECT name FROM connector_config WHERE name = 'jellyfin' FOR UPDATE"
@@ -291,15 +228,7 @@ async def test_a_for_update_load_locks_the_connector_row(db, pg_url, secrets_key
 
 
 async def test_two_links_at_once_keep_both_tokens(db, pg_url, secrets_key):
-    """§14.3's map is AEAD-sealed, so the merge cannot be done in SQL: it is opened in Python,
-    changed, and sealed again. Reproduced in this milestone's review -- both link responses said
-    `linked`, and then one account showed `has_jellyfin_token=false`. By §7.3 that account is the
-    worst of the two failures: the admin table calls it linked, and its owner's sweep stops at
-    their first owed row with nothing that can ever settle it.
-
-    Measured both ways as this landed, against the same two connections and the same widened
-    window: with `for_update=False` exactly one of the two tokens survives; with the lock, both.
-    """
+    """The sealed map merges in Python; without the lock exactly one of two tokens survives."""
     await registry.save_jellyfin(db, url="http://jf", api_key="k")
     one, two = await _second_connection(pg_url), await _second_connection(pg_url)
     try:
@@ -314,20 +243,8 @@ async def test_two_links_at_once_keep_both_tokens(db, pg_url, secrets_key):
     assert (await registry.load_jellyfin(db)).user_tokens == {"1": "tok-1", "2": "tok-2"}
 
 
-# --- §14.3: credentials do not follow the connector to a new server ------------------------
-
-
 async def test_moving_the_server_drops_the_credentials_bound_to_it(db, secrets_key):
-    """The API key is admin-equivalent on the whole media server and the per-user tokens are
-    real credentials. Both are bound to the server that issued them, so re-pointing the URL
-    must not carry them along — every later request would send them, in a header, to whatever
-    host was just typed in.
-
-    The accounts move with them. §7.3 makes the link badge the admin's only signal, and an account
-    left saying 'linked' with a token that was just dropped is the state which stopped that
-    member's sweep at their first owed row and could never settle it. The probed version goes too:
-    it is a fact about the server that answered the probe (§7.1).
-    """
+    """Credentials are bound to the server that issued them; re-pointing must not send them elsewhere."""
     linked = await db.fetchval(
         "INSERT INTO app_user (name, role, jellyfin_user_id, jellyfin_link_state) "
         "VALUES ('patrick', 'admin', 'jf-user-patrick', 'linked') RETURNING id"
@@ -353,23 +270,7 @@ async def test_moving_the_server_drops_the_credentials_bound_to_it(db, secrets_k
 async def test_moving_the_server_de_links_the_accounts_even_when_the_secret_will_not_open(
     db, secrets_key, monkeypatch
 ):
-    """The same clause in the one state where the app cannot see what it is destroying.
-
-    Under M4.7's dd03 -- a restored dump under a changed or missing SECRETS_KEY -- `load_jellyfin`
-    degrades to `JellyfinConfig(url=<stored>, secrets_unreadable=True)` with an EMPTY token map. So
-    the de-link was guarded on `moved and current.user_tokens`, which is falsy exactly there,
-    while the same save still fell through to `put_connector_secrets(secret=None,
-    retire_unreadable=True)` and wrote NULL over the ciphertext. The admin key and both per-user
-    tokens were destroyed -- correctly, per §14.3, they belonged to the old server -- and every
-    account kept reading 'linked'. Nothing self-corrects from there: `sync_all` returns
-    `skipped_no_link` on an unconfigured connector, so the sweep's own `_mark_needs_relink` is
-    never reached, and §6.6's Users roster tells the admin both members are healthy while no
-    credential exists anywhere.
-
-    The guard bought nothing in exchange, which is the other half of the argument: 'linked' is only
-    ever written where a token was stored, so with no tokens held the UPDATE matches no row.
-    [M4.11 review cycle 2: m411-rev2-jf-02; §14.3, §7.3, M4.7 dd03]
-    """
+    """Under an unreadable SECRETS_KEY the token map loads empty, yet a move must still de-link accounts."""
     from spielplan.core.config import settings
 
     linked = await db.fetchval(
@@ -398,10 +299,7 @@ async def test_moving_the_server_de_links_the_accounts_even_when_the_secret_will
 
 
 async def test_a_same_origin_edit_keeps_them(db, secrets_key):
-    """A trailing slash, or a path, is not a different server — and losing the key over one
-    would teach the admin to distrust the form. Nobody is de-linked either: a badge that turns
-    amber when the admin fixes a typo is the same lie as one that stays green when the token is
-    gone (§7.3)."""
+    """A trailing slash or a path is not a different server."""
     linked = await db.fetchval(
         "INSERT INTO app_user (name, role, jellyfin_user_id, jellyfin_link_state) "
         "VALUES ('patrick', 'admin', 'jf-user-patrick', 'linked') RETURNING id"
@@ -421,25 +319,8 @@ async def test_the_port_is_part_of_the_origin(db, secrets_key):
     assert moved.api_key == ""
 
 
-# --- §7.2: the webhook's token, and the instant the delta poll reads from -------------------
-
-
 async def test_the_webhook_token_is_minted_at_the_first_save_and_never_rotated(db, secrets_key):
-    """§7.2's `POST /events/jellyfin` is "token-authed", and decision 332 makes that token a
-    connector secret this app generates and displays exactly once.
-
-    Never rotated is the half with a cost attached: the operator has pasted the value into the
-    Jellyfin Webhook plugin's own header field, and §6.6 cannot show it to them a second time, so
-    a save that minted a fresh one would kill the intake path on the day somebody fixed a typo in
-    the URL — and nothing in the app would say so until a household noticed that nothing had been
-    acquired for a fortnight. Sealed rather than stored beside the URL, because whoever holds it
-    can file acquisition work in this household's name (§14.3).
-
-    AND MINTED BY A SAVE AN ADMIN PERFORMED, never by one nobody is watching (decision 416).
-    `put_jellyfin` is the only response in this app that ever carries the value, so a background
-    save that minted one sealed it into the database and showed it to nobody -- after which that
-    route's one-time reveal answered `null` for ever while §6.6's card said a token existed.
-    """
+    """Never rotated: the operator pasted it into the Webhook plugin and it is shown only once."""
     typed = await registry.save_jellyfin(
         db, url="http://jf", api_key="k", mint_webhook_token=True
     )
@@ -461,18 +342,7 @@ async def test_the_webhook_token_is_minted_at_the_first_save_and_never_rotated(d
 async def test_a_save_no_admin_performed_does_not_mint_the_token_no_admin_would_see(
     db, secrets_key
 ):
-    """Decision 416, and the state it is about is every install that existed before this
-    milestone: `webhook_token` is new here, so an upgraded connector loads configured and empty,
-    and the FIRST save to reach the merge is a background one -- `poll_delta`'s watermark write
-    on the worker's first tick, the sweep's version probe, §7.3's link route. Each of them
-    minted, sealed and returned the value into a caller that dropped it.
-
-    The cost is not one lost gesture. Decision 332 gives the token one appearance and there is no
-    rotation route anywhere in this app, so `POST /events/jellyfin` would answer 401 to every real
-    delivery for ever while the card reported `has_webhook_token: true`. So the mint is the admin
-    save's to ask for: a background save may not create one, and may not destroy one either.
-    [review cycle 1: m52-rev-delta-01, m52-rev1-token-01]
-    """
+    """Decision 416: a background save may neither mint nor destroy the token."""
     seeded = await registry.save_jellyfin(db, url="http://jf", api_key="k")
     assert seeded.configured and seeded.webhook_token == "", "the state an upgrade arrives in"
 
@@ -491,16 +361,7 @@ async def test_a_save_no_admin_performed_does_not_mint_the_token_no_admin_would_
 
 
 async def test_two_first_saves_at_once_are_told_the_same_token(db, pg_url, secrets_key):
-    """Decision 332 shows the token once, so a save that mints one an admin never receives has
-    spent the only appearance it gets -- and there is no rotation route anywhere in this app.
-
-    `load_jellyfin(for_update=True)` says in its own docstring that it "locks nothing when the row
-    does not exist yet", and the FIRST save is exactly the save that mints: both transactions read
-    no row, both minted, and the loser's admin was shown a value that was never stored. Measured
-    both ways as this landed, against the same two connections: without the row taken first, two
-    tokens are minted and one of them is the stored one; with it, both saves are told the same
-    value the database holds. [review cycle 1: m52-rev1-token-02]
-    """
+    """`for_update` locks nothing before the row exists, so the first save takes the row first."""
     one, two = await _second_connection(pg_url), await _second_connection(pg_url)
     try:
         first, second = await asyncio.gather(
@@ -523,20 +384,7 @@ async def test_two_first_saves_at_once_are_told_the_same_token(db, pg_url, secre
 
 
 async def test_the_webhook_token_survives_the_move_that_drops_the_credentials(db, secrets_key):
-    """The asymmetry §14.3 actually draws, which is about DIRECTION and not about the connector.
-
-    The API key and the per-user tokens are dropped on an origin change because this app would
-    otherwise send them, in a header, to whatever host was just typed in. The webhook token never
-    leaves this install — it is what a caller has to present to reach `POST /events/jellyfin` —
-    so a new Jellyfin address puts it nowhere it was not already, while dropping it would silently
-    end the intake path with nothing to show the admin and no way to re-read a value that is
-    displayed once (decision 332).
-
-    The assertion that matters is the one after the reload: the sealed blob is written whole, so a
-    move leaving no api_key and no user_tokens would otherwise fall through to the write that puts
-    NULL over the ciphertext, and the token would be gone from the disk while the object returned
-    by the same call still carried it.
-    """
+    """The webhook token never leaves this install, so a server move keeps it."""
     first = await registry.save_jellyfin(
         db, url="http://jellyfin.local:8096", api_key="k", user_tokens={"1": "tok"},
         mint_webhook_token=True,
@@ -549,20 +397,7 @@ async def test_the_webhook_token_survives_the_move_that_drops_the_credentials(db
 
 
 async def test_the_library_pick_survives_the_move_that_drops_the_credentials(db, secrets_key):
-    """The one server-bound value in this merge with no `moved` branch, pinned so that it is a
-    decision rather than an omission.
-
-    §14.3 drops what this app would SEND to whatever host was just typed in, and the version pair
-    and the watermark are facts this app DERIVED from the old server. The pick is neither: it is
-    the admin's own recorded intent and it travels nowhere. `moved` fires on http->https, on a new
-    port and on hostname->IP -- the same install at a corrected address, whose library ids are
-    GUIDs minted in its own database and still match -- so dropping it would widen the boundary
-    from the libraries the admin picked to the whole server on the commonest of the three
-    gestures, which is the harm the custody branch already refuses in those words: the household
-    billed for the library they deselected. A genuinely different install answers for none of the
-    stored ids, and its adds are recorded `library not picked` until the admin re-picks from the
-    list `GET /connectors/jellyfin/libraries` now serves. [review cycle 1: m52-rev-lib-01]
-    """
+    """The pick is the admin's intent and travels nowhere, so a move keeps it."""
     await registry.save_jellyfin(
         db, url="http://jellyfin.local:8096", api_key="k", library_ids=["jf-lib-films"]
     )
@@ -576,15 +411,7 @@ async def test_the_library_pick_survives_the_move_that_drops_the_credentials(db,
 async def test_an_install_that_has_minted_no_token_matches_nothing_a_caller_can_send(
     db, secrets_key
 ):
-    """The empty case, which is a real state and not a hypothetical: `seed_from_env` writes the
-    secret directly rather than through `save_jellyfin`, so an automated install arrives with a
-    configured connector and no token at all, and every install configured before this milestone
-    is in the same state until its next save.
-
-    A plain equality would then admit a caller that also sends nothing, which is every caller.
-    The rule lives on the config rather than in the route because `api/` decides HTTP shapes and
-    this is the §7.2 clause itself.
-    """
+    """With no token minted, a plain equality would admit every caller that sends nothing."""
     await registry.seed_from_env(db, _settings(jellyfin_url="http://jf", jellyfin_api_key="k"))
     seeded = await registry.load_jellyfin(db)
     assert seeded.configured and seeded.webhook_token == ""
@@ -595,21 +422,14 @@ async def test_an_install_that_has_minted_no_token_matches_nothing_a_caller_can_
     assert minted.webhook_token_matches(minted.webhook_token) is True
     assert minted.webhook_token_matches(minted.webhook_token + "x") is False
     assert minted.webhook_token_matches("") is False
-    # Over BYTES, and these are the inputs that made that necessary: Starlette decodes a header
-    # as latin-1, so one byte >= 0x80 arrives here as a non-ASCII `str`, and `hmac.compare_digest`
-    # raises `TypeError` on those. Nothing in `app.py` catches it, so the app's one
-    # stranger-reachable route answered an unauthenticated caller 500 with a traceback -- the one
-    # answer decision 365 forbids, from before the token check had even finished.
-    # [review cycle 1: m52-rev-events-01]
+    # Over bytes: Starlette decodes headers as latin-1, and `hmac.compare_digest` raises on non-ASCII `str`.
     assert minted.webhook_token_matches("\xff") is False
     assert minted.webhook_token_matches(minted.webhook_token + "\u00e9") is False
 
 
 async def test_the_webhook_token_does_not_survive_a_repr(db, secrets_key):
-    """`test_no_connector_credential_survives_a_repr` above is this rule for the two credentials
-    §14.3 names by name, and `test_static_contracts.py`'s static sweep matches on the field names
-    `api_key`, `token` and `user_tokens` — so the third credential this connector now holds is
-    covered by neither until it is named here."""
+    """The static sweep matches only `api_key`, `token` and
+    `user_tokens`, so this credential is named here."""
     cfg = await registry.save_jellyfin(
         db, url="http://jellyfin.local:8096", api_key="k", mint_webhook_token=True
     )
@@ -619,23 +439,7 @@ async def test_the_webhook_token_does_not_survive_a_repr(db, secrets_key):
 
 
 async def test_the_delta_poll_starts_at_this_installs_own_creation_instant(db, secrets_key):
-    """decision 366, and the whole of it is "never epoch". The poll reads every row the server
-    saved after the floor (decision 409), so an epoch floor selects the household's entire corpus
-    on the very first poll and files an acquisition task for every title it already owns.
-    `min(applied_at) FROM schema_migration` is the one instant this schema already records that
-    means "when this database came into existence".
-
-    The watermark is connector state and not a household fact, so it needs no DDL — and it lives
-    in the plaintext config half beside `library_ids`, because it is not a secret and a value
-    that vanished with a SECRETS_KEY failure would re-read the corpus on the next poll.
-
-    Decision 412 moves the floor from `min(applied_at)` to 0025's own `applied_at` -- the instant
-    this install gained §7.2's fallback. On a fresh install the two are one migration run apart;
-    on an UPGRADE, which is every install that exists, `min(applied_at)` is when 0001 ran, and a
-    first poll from there filed every title added since the install as a new add. Both are held:
-    the floor is 0025's, and it is not the install's when the install is older.
-    [review cycle 3: M52-C3-STATE-02]
-    """
+    """Never epoch: the floor is 0025's `applied_at`, and not the install's when the install is older."""
     gained = await db.fetchval(
         "SELECT applied_at FROM schema_migration WHERE version = '0025_jellyfin_intake'"
     )
@@ -664,15 +468,7 @@ async def test_the_delta_poll_starts_at_this_installs_own_creation_instant(db, s
 
 
 async def test_a_url_edit_keeps_the_watermark_and_a_move_drops_it(db, secrets_key):
-    """A watermark belongs to the clock that stamped it, which is the argument the probed version
-    already makes one field over (§7.1). Carrying one to a different server is worse than losing
-    it: a new install whose library was imported before the old watermark would have every one of
-    its adds skipped, silently and for ever, while dropping it costs one re-read -- and what
-    absorbs that re-read is decision 411, which files a re-offer of a title the bundle supplied
-    and the app already placed below every genuine add and closes it at stage 1. This docstring
-    used to credit the queue's `(kind, key)` identity, which absorbs nothing of a re-imported
-    library carrying new ids. The floor the re-read starts from is decision 412's.
-    [review cycle 3: M52-C3-STATE-02, M52-C3-STATE-06]"""
+    """A watermark belongs to the clock that stamped it; carried to another server it would skip adds."""
     polled = datetime(2026, 3, 4, tzinfo=UTC)
     await registry.save_jellyfin(
         db, url="http://jellyfin.local:8096", api_key="k", delta_watermark=polled
@@ -690,18 +486,7 @@ async def test_a_url_edit_keeps_the_watermark_and_a_move_drops_it(db, secrets_ke
 async def test_a_custody_failure_does_not_erase_the_library_pick_or_the_watermark(
     db, secrets_key, monkeypatch
 ):
-    """M4.7's dd03 state, read again one milestone later. `load_jellyfin` degrades to a config
-    carrying the stored URL when the sealed half will not open — and it used to carry the URL
-    ALONE, while `save_jellyfin` rebuilds the stored config from what it was handed. So the next
-    save of a corrected address erased every other key in the plaintext column, and correcting the
-    address is the one gesture this state invites.
-
-    That was invisible while `library_ids` had no reader. Decision 364 makes it the acquisition
-    boundary, so the erasure silently widens it from the libraries the admin picked to the whole
-    server — the household billed for the library they deselected — and decision 366's watermark
-    went with it, which re-reads the corpus. What failed is the credential column; taking the
-    connector's plaintext settings down with it is a second failure the first does not justify.
-    """
+    """A custody failure must not erase the plaintext settings on the next address save."""
     from spielplan.core.config import settings
 
     polled = datetime(2026, 3, 4, tzinfo=UTC)
@@ -724,18 +509,8 @@ async def test_a_custody_failure_does_not_erase_the_library_pick_or_the_watermar
     assert kept.delta_watermark == polled
 
 
-# --- §6.6: one generic surface, with Jellyfin as its first instance (M5.5 plan A1-A4) ---------
-
-
 def test_the_jellyfin_spec_is_load_jellyfin_and_save_jellyfin_themselves():
-    """Plan A2: the two hardened functions become the spec's callables BY IDENTITY, not through a
-    wrapper that could drift from them. M5.2's four review cycles are written into those two bodies
-    -- the mint a save has to ask for (decisions 416, 418), the origin rule of §14.3, the custody
-    degrade of M4.7 dd03 -- and a parallel generic path would be a second answer to every one.
-
-    The secret fields are held to what `JellyfinConfig` actually hides from its repr, so the list
-    the spec declares cannot name a credential the dataclass prints or miss one it seals.
-    """
+    """By identity, not a wrapper that could drift from the two hardened functions."""
     spec = registry.spec_for("jellyfin")
     assert spec.load is registry.load_jellyfin
     assert spec.save is registry.save_jellyfin
@@ -750,11 +525,7 @@ def test_the_jellyfin_spec_is_load_jellyfin_and_save_jellyfin_themselves():
 async def test_the_generic_calls_answer_for_jellyfin_exactly_as_its_own_functions_do(
     db, secrets_key
 ):
-    """`load_connector` / `save_connector` on `jellyfin` are `load_jellyfin` / `save_jellyfin`, and
-    the one argument the generic path refuses is the mint: decision 416 gives it to
-    `api/admin.put_jellyfin` alone, and a generic write that forwarded it would hand a card's body
-    field the one gesture decision 418 says only a save that asks may make.
-    """
+    """The generic path refuses the mint: only `api/admin.put_jellyfin` may ask for one."""
     saved = await registry.save_connector(db, "jellyfin", url="http://jf/", api_key="k")
     assert isinstance(saved, registry.JellyfinConfig)
     assert (saved.url, saved.api_key) == ("http://jf", "k")
@@ -770,12 +541,7 @@ async def test_the_generic_calls_answer_for_jellyfin_exactly_as_its_own_function
 async def test_a_provider_round_trips_with_its_key_sealed_and_its_model_in_plaintext(
     db, secrets_key
 ):
-    """§2: a connector's secret is AEAD-sealed under the DEK and its settings are not. A provider
-    key bills the household, so it belongs with the sealed half; the model is what the card shows.
-
-    The masked save is the form's idiom, which `save_jellyfin` argues: the key is shown as a mask
-    and posted empty, and a whole-row write would blank it every time the admin changed the model.
-    """
+    """The masked save keeps the key when only the model changes."""
     state = await registry.save_connector(
         db, "gemini", api_key="GEMINI-KEY-NOT-REAL", model="gemini-3.6-flash"
     )
@@ -799,10 +565,7 @@ async def test_a_provider_round_trips_with_its_key_sealed_and_its_model_in_plain
 async def test_a_settings_save_needs_no_secrets_key_and_a_key_save_refuses_without_one(
     db, no_secrets_key
 ):
-    """The admin picks a model before pasting a key, as they type Jellyfin's address first; and the
-    `llm` row (decisions 324, 325) holds no secret at all, so neither may demand SECRETS_KEY. A key,
-    though, is §2's refusal: without custody there is nowhere to seal it, and nothing is written.
-    """
+    """A settings save needs no SECRETS_KEY; a key save refuses without one and writes nothing."""
     chosen = await registry.save_connector(db, "openai", model="gpt-5.6-terra")
     assert chosen.config == {"model": "gpt-5.6-terra"} and chosen.secrets == {}
     assert await db.fetchval(
@@ -823,9 +586,7 @@ async def test_a_settings_save_needs_no_secrets_key_and_a_key_save_refuses_witho
 
 
 async def test_a_save_names_the_fields_a_connector_declares(db):
-    """A misspelt field is refused rather than stored: `apikey` would otherwise land in the
-    plaintext half, beside the model, and the provider would go on answering 401 to the key the
-    admin believes they saved. The refusal names what is declared, so the fix is one read."""
+    """A misspelt `apikey` would land in the plaintext half while the provider answered 401."""
     with pytest.raises(ValueError, match="api_key") as refused:
         await registry.save_connector(db, "gemini", apikey="KEY-IN-THE-WRONG-PLACE")
     assert "apikey" in str(refused.value)
@@ -840,13 +601,7 @@ async def test_a_save_names_the_fields_a_connector_declares(db):
 async def test_an_unreadable_provider_secret_degrades_and_only_a_typed_key_retires_it(
     db, secrets_key, monkeypatch, caplog
 ):
-    """M4.7 dd03 for every connector the generic path serves, argued in `load_jellyfin` and
-    `save_jellyfin`: an unreadable DEK must not take a route down, so the read degrades -- the
-    plaintext half kept, the secrets empty, the state said out loud -- and is logged at ERROR on
-    every read. A save that types no key writes the config half alone, so a ciphertext that is
-    unreadable only until the right .env returns is not erased; a save that types one is the
-    admin's repair, and retires the row nothing can open.
-    """
+    """A save that types no key writes only the config half, so an unreadable ciphertext survives."""
     from spielplan.core.config import settings
 
     await registry.save_connector(db, "anthropic", api_key="OLD-KEY-NOT-REAL", model="claude-a")
@@ -880,8 +635,7 @@ async def test_an_unreadable_provider_secret_degrades_and_only_a_typed_key_retir
 
 
 async def test_no_connector_state_prints_its_secrets(db, secrets_key):
-    """`JellyfinConfig`'s rule for every other connector: a provider key bills the household and
-    a default repr copies it into any traceback or `%r` log line holding the state (§14.3)."""
+    """A default repr copies a provider key into any traceback or `%r` log line."""
     state = await registry.save_connector(
         db, "openai", api_key="BILLABLE-KEY-NOT-REAL", model="gpt-5.6-terra"
     )
@@ -892,9 +646,7 @@ async def test_no_connector_state_prints_its_secrets(db, secrets_key):
 
 
 def test_the_llm_providers_seed_their_key_and_the_llm_settings_seed_nothing():
-    """§2 names LLM among the connectors env may seed ("Jellyfin, LLM, TMDB, OMDb, Trakt"). Each
-    provider's key and nothing else: no model override is declared (plan A3's "if the owner wants
-    them" was not asked for), and no cap is seeded because decision 325 ships none."""
+    """Each provider's key and nothing else; no cap is seeded because decision 325 ships none."""
     assert registry.env_seeds(_settings(gemini_api_key="g")) == {"gemini": ({}, {"api_key": "g"})}
     seeds = registry.env_seeds(
         _settings(gemini_api_key="g", anthropic_api_key="a", openai_api_key="o")
@@ -910,7 +662,6 @@ def test_the_llm_providers_seed_their_key_and_the_llm_settings_seed_nothing():
 async def test_the_three_providers_seed_on_first_boot_and_never_over_an_admins_edit(
     db, secrets_key
 ):
-    """The two properties the Jellyfin tests above hold, for the connector family M5 is about."""
     cfg = _settings(gemini_api_key="g-env", anthropic_api_key="a-env", openai_api_key="o-env")
     assert await registry.seed_from_env(db, cfg) == ["gemini", "anthropic", "openai"]
     for name, key in (("gemini", "g-env"), ("anthropic", "a-env"), ("openai", "o-env")):
@@ -928,10 +679,7 @@ async def test_the_three_providers_seed_on_first_boot_and_never_over_an_admins_e
 
 
 def test_every_connector_the_registry_calls_seeded_is_one_env_can_seed():
-    """`seeded` is a claim about `env_seeds`, held to it rather than restated beside it: with every
-    seed variable `Settings` declares for a registered connector set, the connectors env seeds are
-    exactly the ones the registry marks. The variables are found through the registry's own names,
-    so a connector added to either side without the other fails here."""
+    """Found through the registry's own names, so a connector added to one side only fails."""
     from spielplan.core.config import Settings
 
     prefixes = tuple(f"{name}_" for name in registry.CONNECTORS)
@@ -944,10 +692,7 @@ def test_every_connector_the_registry_calls_seeded_is_one_env_can_seed():
 
 
 async def test_the_test_dispatch_is_one_table_and_refuses_a_connector_with_no_test(monkeypatch):
-    """Plan A4: "One dispatch table, not a route per provider". The table is `ConnectorSpec.test`,
-    and a connector with none is refused by name rather than answered with a guessed probe -- which
-    the API maps to 404. Jellyfin is one of those on purpose: its card's test stores §7.1's verdict
-    as it tests, and stays `api/admin.test_jellyfin` (decision 433)."""
+    """Jellyfin has no test in the table on purpose: its test stores §7.1's verdict."""
     conn = object()
     called: list[object] = []
 
@@ -969,10 +714,7 @@ async def test_the_test_dispatch_is_one_table_and_refuses_a_connector_with_no_te
 async def test_a_provider_probe_refuses_before_any_request_when_it_holds_no_usable_key(
     db, secrets_key, monkeypatch
 ):
-    """The provider test answers the two states it can know without a request, in the sentences
-    the card shows: no key typed yet, and a key that will not open (the rail's own sentence,
-    `SECRETS_UNREADABLE_REASON`). Neither reaches `spielplan.llm`, which is only imported once
-    there is a key to send."""
+    """Neither state reaches `spielplan.llm`, which is only imported once there is a key to send."""
     from spielplan.core.config import settings
 
     assert await registry.test_connector(db, "gemini") == {
@@ -986,16 +728,8 @@ async def test_a_provider_probe_refuses_before_any_request_when_it_holds_no_usab
     }
 
 
-# --- unset: an explicit null, for declared settings only (decision 450) --------------------------
-
-
 async def test_an_unset_removes_a_declared_setting_under_the_row_lock_and_nothing_else(db, secrets_key):
-    """Decision 450's "an explicit null means unset": the spend guard's confirm returns a model to its
-    default, a price override to the table and the extraction assignment to nobody, and the partial
-    merge -- where None means KEEP -- could say none of those. `unset` names the settings to remove,
-    in the same locked read-modify-write as the fields beside it; everything it does not name, the
-    sealed key included, is carried forward untouched, and naming a setting that is not stored is
-    not an error."""
+    """In the partial merge None means KEEP, so removal is named explicitly and done under the row lock."""
     await registry.save_connector(db, "llm", extraction_provider="gemini", passes=2, cap_usd=25)
     await registry.save_connector(db, "gemini", api_key="KEY-NOT-REAL", model="gemini-3.6-flash",
                                   price_input=1, price_output=4)
@@ -1013,12 +747,7 @@ async def test_an_unset_removes_a_declared_setting_under_the_row_lock_and_nothin
 
 
 async def test_an_unset_refuses_a_secret_an_undeclared_name_a_contradiction_and_jellyfin(db, secrets_key):
-    """`unset` is for declared SETTINGS alone. A key is removed by nobody: the card's empty field keeps
-    it, and a route that could clear it would silently disconnect a provider mid-acquisition. A name
-    the connector does not declare is refused as a misspelt field is. A field both set and unset in
-    one call is two answers to one question. And Jellyfin's merge has rules of its own -- decision
-    364's library pick above all, where an absent pick and an empty one mean different things -- so
-    the generic unset does not reach it, beside the mint that already does not."""
+    """A key is removed by nobody; Jellyfin's merge has its own rules and is out of reach."""
     await registry.save_connector(db, "gemini", api_key="KEY-NOT-REAL", model="gemini-3.6-flash")
     before = await db.fetch("SELECT * FROM connector_config ORDER BY name")
 

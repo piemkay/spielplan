@@ -1,13 +1,5 @@
-"""CLAUDE.md's three layering rules, as tests instead of conventions.
-
-1. `ledger/model.py` is numpy-only by contract: §5.2's fit is a pure function of observations and
-   constants, so no DB, clock or torch import (at any depth, `TYPE_CHECKING` included).
-2. Rules live in the domain packages; `api/` decides only HTTP shapes. No domain package imports
-   `spielplan.api`, and the raw SQL in the HTTP layer may not grow past its recorded residue.
-3. §3.2's session in front of every route, and §3.1's first-login lock in front of most.
-
-Each repeal is one absent-minded line that passes the rest of the suite green. [M4.16 arch-13]
-"""
+"""CLAUDE.md's layering rules as tests: `ledger/model.py` is numpy-only, no domain package imports
+`spielplan.api`, the HTTP layer's raw SQL may not grow, and every route is behind a session."""
 
 from __future__ import annotations
 
@@ -22,8 +14,7 @@ from spielplan.app import create_app
 
 PACKAGE = Path(__file__).resolve().parents[1] / "spielplan"
 
-# The files the numpy-only contract covers. When arch-12's solver split lands, add the new module
-# here rather than widening `ALLOWED`.
+# The files the numpy-only contract covers; add a new solver module here rather than widening `ALLOWED`.
 GUARDED = ("ledger/model.py",)
 
 ALLOWED = frozenset(
@@ -39,7 +30,6 @@ ALLOWED = frozenset(
 
 
 def _package_of(relative: str) -> str:
-    """The dotted package a guarded file lives in, for resolving its relative imports."""
     return ".".join(("spielplan", *Path(relative).parent.parts))
 
 
@@ -53,7 +43,6 @@ def _absolute(node: ast.ImportFrom, package: str) -> str:
 
 
 def _imported_modules(source: str, *, package: str) -> set[str]:
-    """Every module `source` imports, by absolute name, from anywhere in the tree."""
     modules: set[str] = set()
     for node in ast.walk(ast.parse(source)):
         if isinstance(node, ast.Import):
@@ -69,12 +58,10 @@ def _permitted(module: str) -> bool:
 
 
 def _violations(source: str, *, package: str = "spielplan.ledger") -> list[str]:
-    """The imports the allow-list does not cover, sorted so a failure message is stable."""
     return sorted(m for m in _imported_modules(source, package=package) if not _permitted(m))
 
 
 def test_the_ledger_model_imports_nothing_but_numpy_and_its_own_constants():
-    """CLAUDE.md's Conventions; §5.2's fit as a pure function of observations and constants."""
     for relative in GUARDED:
         source = (PACKAGE / relative).read_text(encoding="utf-8")
         package = _package_of(relative)
@@ -92,11 +79,7 @@ def test_the_ledger_model_imports_nothing_but_numpy_and_its_own_constants():
         )
 
 
-# --- rule 2: `api/` decides only HTTP shapes ------------------------------------------
-
-
 def _sql_strings(node: ast.AST):
-    """Every string literal in `node`, an f-string counted once and its interpolations read too."""
     if isinstance(node, ast.Constant):
         if isinstance(node.value, str):
             yield node.lineno, node.value
@@ -134,9 +117,8 @@ _SQL_HEAD = re.compile(
     re.IGNORECASE,
 )
 
-# The raw SQL statement count each HTTP-layer module may hold, measured at M4.16. A ceiling: a
-# module not named here holds zero, and `app.py` is scanned because it declares `/api/health`.
-# Moving the residue out is the roadmap's DEFERRED-C.
+# The raw SQL statement count each HTTP-layer module may hold: a ceiling. A module not named here
+# holds zero, and `app.py` is scanned because it declares `/api/health`.
 ALLOWED_RESIDUE = {
     "admin.py": 17,
     "auth.py": 9,
@@ -159,7 +141,6 @@ def _is_api_module(module: str) -> bool:
 
 
 def _api_dependencies(source: str, *, package: str) -> list[str]:
-    """Every way `source` names something in `spielplan.api`, as absolute module names."""
     found: set[str] = set()
     for node in ast.walk(ast.parse(source)):
         if isinstance(node, ast.Import):
@@ -176,7 +157,6 @@ def _api_dependencies(source: str, *, package: str) -> list[str]:
 
 
 def _domain_modules() -> list[Path]:
-    """Every package file the import rule covers: `spielplan/` minus `api/` and `app.py`."""
     return [
         path
         for path in sorted(PACKAGE.rglob("*.py"))
@@ -186,7 +166,6 @@ def _domain_modules() -> list[Path]:
 
 
 def _residue() -> dict[str, int]:
-    """The raw SQL statement count of every module under `api/` at any depth, plus `app.py`."""
     root = PACKAGE / "api"
     sources = {path.relative_to(root).as_posix(): path for path in sorted(root.rglob("*.py"))}
     sources["app.py"] = PACKAGE / "app.py"
@@ -198,7 +177,6 @@ def _residue() -> dict[str, int]:
 
 
 def test_no_domain_package_imports_from_the_api_layer():
-    """CLAUDE.md Conventions: rules live in the domain packages; `api/` decides only HTTP shapes."""
     covered = {path.relative_to(PACKAGE).as_posix() for path in _domain_modules()}
     assert "push/send.py" in covered, "the scan does not reach push/send.py"
 
@@ -216,7 +194,6 @@ def test_no_domain_package_imports_from_the_api_layer():
 
 
 def test_the_api_layer_holds_no_more_raw_sql_than_it_did():
-    """CLAUDE.md Conventions; M4.16 arch-13. A query is a rule about the data."""
     measured = _residue()
     assert sum(measured.values()), "the scanner found no SQL in api/ at all - it measures itself"
 
@@ -232,15 +209,8 @@ def test_the_api_layer_holds_no_more_raw_sql_than_it_did():
     )
 
 
-# --- rule 3: every route is behind a session, or named anonymous with a reason ---------------
-#
-# `test_api_gating.py` sweeps the routes that ARE gated; this classifies every route the app
-# registers, so a route added with no `ActiveUser` at all is a finding rather than an absence. A
-# WebSocket that authenticates in its own body counts as unguarded: a hand-rolled check leaves
-# nothing in `route.dependant` for any walk to see. [decision 225; M4.16 arch-13]
-#
-# FastAPI 0.141 stops flattening `include_router`: `original_router.routes` carries both the HTTP
-# routes and the WebSocket, where `effective_candidates()` loses the Tonight channel.
+# A WebSocket that authenticates in its own body counts as unguarded: nothing is in `route.dependant`.
+# FastAPI 0.141 stops flattening `include_router`; `original_router.routes` carries the WebSocket.
 
 _GATES = ("active_user", "admin_user", "active_user_ws", "active_user_brief")
 _SESSION_ONLY = ("current_user", "current_user_ws", "current_user_brief")
@@ -257,13 +227,11 @@ ANONYMOUS = {
     ("GET", "/api/config"): "the origin and whether a bundle exists, for the shell's first paint",
     ("POST", "/api/setup/admin"): "first boot has no account to authenticate as",
     ("GET", "/api/setup/state"): "whether this box still owes a wizard, cut to that one bit",
-    # Token-authed in the handler body for the Jellyfin plugin (decision 332), so `_verdict` sees
-    # an empty dependant. [decision 367]
+    # Token-authed in the handler body for the Jellyfin plugin (decision 332), so the dependant is empty.
     ("POST", "/events/jellyfin"): "token-authed for a server plugin that cannot hold a cookie",
 }
 
-# Behind a session but deliberately NOT behind `active_user`: decision 179's ways out of §3.1's
-# first-login lock (the fourth, /logout, is anonymous above).
+# Behind a session but deliberately NOT behind `active_user`: decision 179's ways out of the lock.
 CURRENT_ONLY = {
     ("GET", "/api/auth/me"): "a locked account must be able to see whose lock it is",
     ("POST", "/api/auth/password"): "the way out of the lock",
@@ -272,7 +240,6 @@ CURRENT_ONLY = {
 
 
 def _route_leaves(routes):
-    """Every route object the app actually dispatches on, however deeply the routers nest."""
     for route in routes:
         included = getattr(route, "original_router", None)
         if included is not None:
@@ -288,12 +255,10 @@ def _route_leaves(routes):
 
 
 def _resolves(dependant, target) -> bool:
-    """Whether `target` is anywhere in this route's dependency tree."""
     return any(sub.call is target or _resolves(sub, target) for sub in dependant.dependencies)
 
 
 def _verdict(route) -> str:
-    """One of `guarded`, `session-only` or `unguarded`, from the dependant and nothing else."""
     dependant = getattr(route, "dependant", None)
     if dependant is None:
         return "unguarded"
@@ -305,7 +270,6 @@ def _verdict(route) -> str:
 
 
 def _route_verdicts(app) -> dict[tuple[str, str], str]:
-    """`(method, path) -> verdict` for every route `app` registers; a WebSocket is keyed "WS"."""
     verdicts: dict[tuple[str, str], str] = {}
     for route in _route_leaves(app.routes):
         verdict = _verdict(route)
@@ -317,12 +281,10 @@ def _route_verdicts(app) -> dict[tuple[str, str], str]:
 
 
 def _named(keys) -> str:
-    """A sorted `METHOD path` block, for a failure message someone can act on."""
     return "\n".join(f"    {method:<7} {path}" for method, path in sorted(keys))
 
 
 def test_every_route_the_app_registers_is_behind_a_session_or_named_anonymous():
-    """§3.2's session in front of every route, and §3.1's lock in front of most. [M4.16 arch-13]"""
     verdicts = _route_verdicts(create_app())
     assert verdicts, "the walk found no routes at all - it is measuring itself"
 

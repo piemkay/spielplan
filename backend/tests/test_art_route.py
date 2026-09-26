@@ -1,11 +1,4 @@
-"""`GET /api/art/{title_id}/poster` over HTTP. Spec v2.1 §6.8, §3.1, §3.2; decisions 483 and 484.
-
-The real app, its lifespan and its pool against the test database; the image host is an
-`httpx.MockTransport` swapped into `app.state.art`, and the household's Jellyfin is
-`ops/fake_jellyfin.py` behind `registry.make_client`. What these assert is what a phone receives:
-the status, the cache headers, which source the bytes came from, who is refused, and that the
-request holds no pooled connection while it waits on a host. Skipped without TEST_DATABASE_URL.
-"""
+"""`GET /api/art/{title_id}/poster` over HTTP (§6.8). Needs TEST_DATABASE_URL."""
 
 from __future__ import annotations
 
@@ -50,8 +43,7 @@ async def _admin(app) -> httpx.AsyncClient:
 
 
 async def _host(client: httpx.AsyncClient, tmp_path, host: Host) -> ArtService:
-    """The app's own service, re-opened over the mock host. The lifespan closes whichever is on
-    `app.state.art` when it exits, so the replaced one is closed here."""
+    """The lifespan closes whichever service is on `app.state.art`, so the replaced one is closed here."""
     application = client._transport.app
     await application.state.art.close()
     application.state.art = await ArtService(
@@ -78,8 +70,6 @@ async def test_a_stranger_is_refused_before_any_source_is_asked(app, db, tmp_pat
 
 
 async def test_a_locked_account_is_refused_by_the_poster_route(app, db, tmp_path):
-    """§3.1 and decision 179: the route is behind the first-login lock like every other one, and
-    a gate that let a locked account through here would be a hole the sweep could not see."""
     admin = await _admin(app)
     host = Host()
     await _host(admin, tmp_path, host)
@@ -135,8 +125,8 @@ async def test_an_owned_title_is_served_from_the_households_jellyfin(
 async def test_a_posterless_title_is_filed_for_the_worker_and_drawn_as_the_tinted_panel(
     app, db, tmp_path
 ):
-    """Decision 484: the web process files the title and asks TMDB nothing; the 404 is cacheable
-    for one `art-lookup` interval, so the card asks again after the worker has had its turn."""
+    """The 404 is cacheable for one `art-lookup` interval,
+    so the card asks again after the worker's turn."""
     admin = await _admin(app)
     host = Host()
     await _host(admin, tmp_path, host)
@@ -170,8 +160,7 @@ async def test_an_unknown_title_is_a_cacheable_404(app, tmp_path):
 
 
 async def test_no_pooled_connection_is_held_while_the_host_is_asked(app, db, tmp_path):
-    """The pool holds ten and a cold Home asks for sixty posters: a route that held its connection
-    across the upstream wait would answer every other surface 503 while a shelf filled."""
+    """The pool holds ten and a cold Home asks for sixty posters."""
     admin = await _admin(app)
     asked, release = asyncio.Event(), asyncio.Event()
 
@@ -201,10 +190,8 @@ async def test_a_title_id_that_is_not_a_number_is_refused_by_the_route(app, titl
 
 
 async def test_an_app_minted_poster_url_is_versioned_by_the_database_it_names(app, db):
-    """A 200 is kept 180 days on a URL naming the title id (decision 483), and a re-seed is a fresh
-    database that mints app ids from 1000000000 again for other titles, so the browser showed the
-    previous database's poster under a new title. `/config` hands the shell a version that changes
-    exactly when the database does (`art.js` appends it to app-minted ids); a restore keeps it."""
+    """A re-seed mints app ids from 1000000000 again, so a
+    cached poster URL must carry the database's version."""
     config = (await app().get("/api/config")).json()
     assert config["art_epoch"], config
     assert config["art_epoch"] == await url_epoch(db)

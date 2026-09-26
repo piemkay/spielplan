@@ -1,19 +1,5 @@
-"""The fold-in's jobs: the clock, the transaction, the debounce, one household.
-Spec v2.1 5.3, 5.1, 4.2, §12 M2, 3.1.
-
-`test_scoring.py` owns §5.1's arithmetic and the ranked read; this file owns what happens to that
-arithmetic when a JOB runs it, sixty seconds at a time, against a household that is still rating.
-Every defect here was invisible to both existing layers: the numpy half is correct and the route
-half never runs a tick, so a fit that stamped the wrong clock, or wrote half of itself, or rewrote
-a 14,000-row partition every minute, or fitted somebody the Ledger had skipped, passed the suite.
-
-One idiom, used throughout. Every comparison is between Postgres's own clocks, and where a test
-needs the debounce window to have elapsed it moves BOTH stamps back by the same interval
-(`_wait_out_the_pause`) rather than sleeping thirty seconds: the ORDER of the two clocks is the
-whole of what `_is_stale` reads, and shifting them together preserves it.
-
-Skipped without TEST_DATABASE_URL; see tests/conftest.py.
-"""
+"""The fold-in's jobs: the clock, the transaction, the debounce, one household (§5.3). Waits are simulated
+by moving both stamps back together: `_is_stale` reads only their ORDER. Needs TEST_DATABASE_URL."""
 
 from __future__ import annotations
 
@@ -39,21 +25,15 @@ pytestmark = pytest.mark.anyio
 
 BUNDLE = "test-v1"
 
-# Five coordinated movies, which is `MIN_LABELS_FOR_CV` exactly. The sixth observation in these
-# tests is always a RE-RATING: §4.2 makes changing your mind an INSERT that supersedes, so the label
-# count does not move and a clock is the only thing that can carry the change. That is the arm dd16
-# lives in, and a test that always rated a new title would never visit it.
+# Five coordinated movies (`MIN_LABELS_FOR_CV`); the sixth
+# observation is always a RE-RATING, so only a clock carries it.
 SITTING: tuple[tuple[int, int], ...] = ((1, 2), (2, 2), (3, 1), (4, 0), (5, 1))
 RE_RATED = 3
 
 
 @pytest.fixture
 async def world(db, tmp_path):
-    """A bundle, an owned library, and three accounts: two in the household, one deactivated.
-
-    The import runs §10's own fold-in before any account exists, so everybody here starts genuinely
-    unfitted - which matters, because "never fitted" is the one staleness the debounce may not gate.
-    """
+    """Everybody starts unfitted: "never fitted" is the one staleness the debounce may not gate."""
     (tmp_path / "data" / "artifacts").mkdir(parents=True)
     root = fx.make_bundle(tmp_path / "bundle")
     report = await bundle_import.import_bundle(
@@ -79,7 +59,6 @@ async def _rate(conn, user_id: int, pairs=SITTING) -> None:
 
 
 async def _tick(conn, world, *, only_stale: bool = True) -> foldin.FoldInReport:
-    """What `worker._fold_in_tick` runs, without the pool: `foldin.run` IS the tick's body."""
     return await foldin.run(
         conn, world["backbone"], bundle_version=BUNDLE, only_stale=only_stale, with_priors=False
     )
@@ -98,10 +77,7 @@ async def _wait_out_the_pause(conn, user_id: int) -> None:
         " WHERE user_id = $1",
         user_id, shift,
     )
-    # The third clock `_is_stale` reads: a placement newer than the fit is a trigger since the
-    # owner instruction of 2026-09-25, and the import placed this world's thin titles moments before
-    # the first fit. Shifted with the other two - and for everybody, which moves every placement
-    # further behind every fit that was not shifted - so the ORDER is still what this preserves.
+    # A placement newer than the fit is the third clock `_is_stale` reads; shifted too, so the ORDER holds.
     await conn.execute(
         "UPDATE title_placement SET created_at = created_at - ($1::int * interval '1 second')",
         shift,
@@ -109,13 +85,7 @@ async def _wait_out_the_pause(conn, user_id: int) -> None:
 
 
 async def _partition(conn, user_id: int, kind: str = "movie") -> list[tuple]:
-    """One (user, kind)'s score rows, each with the identity of the transaction that wrote it.
-
-    `xmin` is what tells a rewrite from a read. A count or a set of title_ids cannot:
-    `replace_scores` DELETEs and re-INSERTs the same titles with almost the same numbers, so every
-    assertion about "did the tick rewrite the partition" that looked only at the contents would
-    have passed whatever the tick did.
-    """
+    """`xmin` tells a rewrite from a read: `replace_scores` re-inserts the same titles."""
     rows = await conn.fetch(
         "SELECT title_id, xmin::text AS tx, computed_at FROM user_score "
         " WHERE user_id = $1 AND kind = $2 ORDER BY title_id",
@@ -132,23 +102,11 @@ async def _fit(conn, user_id: int, kind: str = "movie"):
     )
 
 
-# --- the debounce (perf-04) ---------------------------------------------------------------------
-
-
 async def test_a_label_recorded_seconds_ago_does_not_rewrite_a_partition_on_the_next_tick(
     db, world
 ):
-    """§12 M2 asks for a personal ranking "after a sitting", and the tick read that as "during".
-
-    Any label newer than the fit made the pair stale, so every sixty seconds of a sitting rewrote
-    the person's whole `user_score` partition: measured at 14k titles, 14,000 DELETEs and 14,000
-    INSERTs, 325-590 ms and 5-8 MB of WAL per stale pair per tick, 0.7-1.5 s for two raters.
-    Nobody reads that table between taps - §6.0's shelves are not on screen while Rate is - so the
-    work was pure cost.
-
-    The first fit is not gated, and the first assertion says so: "never fitted" is §6.0's
-    zero-verdict state, not a cost question.
-    """
+    """Every stale tick rewrote the whole partition: 14,000
+    DELETEs and INSERTs per pair. The first fit is not gated."""
     patrick = world["patrick"]
     await _rate(db, patrick)
     first = await _tick(db, world)
@@ -176,14 +134,7 @@ async def test_a_label_recorded_seconds_ago_does_not_rewrite_a_partition_on_the_
 async def test_the_debounce_window_lets_exactly_one_refit_through_and_it_writes_one_partition(
     db, world
 ):
-    """The other half of the sentence: held back, not dropped.
-
-    Three ticks around one re-rating - one inside the window, one after it, one after that - and
-    exactly one refit in total. "One partition" is literal: this household has four (two people,
-    two kinds) and the other three have to keep their rows, because `replace_scores` is per
-    (user, kind) and a pass that rewrote a pair nobody touched would be the same cost somewhere
-    else.
-    """
+    """`replace_scores` is per (user, kind): the other three partitions must keep their rows."""
     patrick, ana = world["patrick"], world["ana"]
     await _rate(db, patrick)
     await _rate(db, ana)
@@ -205,16 +156,8 @@ async def test_the_debounce_window_lets_exactly_one_refit_through_and_it_writes_
 
 
 async def test_the_hard_cap_forces_a_refit_for_a_member_who_never_stops_rating(db, world):
-    """A pause is not something a rating sitting can be relied on to contain.
-
-    Somebody rating steadily for an hour never pauses, and the debounce alone would hold their
-    shelves at the first fit all evening - the 24-hour failure this milestone is repairing, reached
-    from the other side. So the window has a ceiling: five minutes without a refit and the next
-    tick takes it, pause or no pause. Twelve rewrites per rater-hour at worst, against sixty.
-
-    The control is the half that fails against the unfixed code, and it is what makes the cap mean
-    anything: a tick that refits on any change satisfies the cap trivially.
-    """
+    """Five minutes without a refit and the next tick takes
+    it, pause or not; the control is what fails unfixed."""
     patrick = world["patrick"]
     await _rate(db, patrick)
     await _tick(db, world)
@@ -240,15 +183,8 @@ async def test_the_hard_cap_forces_a_refit_for_a_member_who_never_stops_rating(d
 
 
 async def test_a_refit_with_unchanged_labels_writes_no_rows(db, world):
-    """And nothing moving is still nothing to do.
-
-    The debounce's predicate is "moved AND settled", and the cheap way to write it is the wrong
-    one: a person who has not rated for an hour is `paused` and past the cap both, so a tick that
-    asked only those two questions would rewrite every partition in the household every sixty
-    seconds for ever. This is the guard on that - it held before the debounce existed and has to go
-    on holding. The nightly pass at the end is the contrast: `only_stale=False` rewrites on
-    purpose, because §10's re-import and a new placement are changes no label can report.
-    """
+    """A person idle for an hour is paused and past the
+    cap, so "moved AND settled" must still need "moved"."""
     patrick = world["patrick"]
     await _rate(db, patrick)
     await _tick(db, world)
@@ -276,23 +212,10 @@ async def test_a_refit_with_unchanged_labels_writes_no_rows(db, world):
     )
 
 
-# --- the coordinate geometry and a title placed after the fit -----------------------------------
-#     (decision 469; owner instruction of 2026-09-25 after the first household user test)
-
-
 async def test_a_fit_in_another_coordinate_geometry_is_refitted_at_once_and_the_priors_with_it(
     db, world
 ):
-    """0031. An upgraded install holds fits made against the raw coordinate and priors made by the
-    old b(t) arithmetic, and decision 469 serves neither: its v multiplies directions by a vector
-    scaled for rows a hundred times longer. `bundle_version` cannot tell - the basis is the same
-    file - so every fit carries its geometry, and the first tick after the upgrade refits the
-    stale ones without waiting out the pause (§10's reason: a vector in another space is not stale
-    but wrong) and rewrites `title_prior` before it does.
-
-    A deactivated account is the one row no pass ever refits, so it is the one that would have
-    turned that into a whole-table rewrite on every tick for ever; it has to stay quiet.
-    """
+    """`bundle_version` cannot tell geometries apart, so every fit carries its own."""
     patrick, ana, sam = world["patrick"], world["ana"], world["sam"]
     await _rate(db, patrick)
     await _rate(db, ana)
@@ -328,14 +251,8 @@ async def test_a_fit_in_another_coordinate_geometry_is_refitted_at_once_and_the_
 
 
 async def test_a_title_placed_after_the_fit_is_ranked_by_the_next_tick(db, world):
-    """§8 stage 10: an acquisition "appears in ranking/search/explore". It did not, for a day.
-
-    The fold-in wrote `user_score` for whatever had a coordinate when it last ran and `title_prior`
-    only in the nightly pass, and every ranked read joins both - so the first household's fourteen
-    acquired titles, placed within the hour, were on no shelf and in no ranked list until the night.
-    A placement newer than the fit is a trigger now, and the tick writes the prior of a title placed
-    since its prior was written; the nightly pass remains the one that rewrites everything.
-    """
+    """A placement newer than the fit triggers a refit and
+    a prior, so acquisitions rank before the night."""
     patrick, ana = world["patrick"], world["ana"]
     await _rate(db, patrick)
     await _tick(db, world)
@@ -375,22 +292,8 @@ async def test_a_title_placed_after_the_fit_is_ranked_by_the_next_tick(db, world
     assert again.refit == [] and again.priors is None
 
 
-# --- the fit that loses its work (ml08, dd16) ---------------------------------------------------
-
-
 async def test_a_fold_in_whose_score_write_fails_leaves_no_user_vector_row(db, world, monkeypatch):
-    """`write_fit` and `replace_scores` were two transactions on one connection, and the failure
-    mode was silence.
-
-    `user_vector` said "fitted, as of now"; `user_score` was empty; `_is_stale` compares the first
-    against the labels and therefore reported fresh - so every §6.0 shelf returned EMPTY and every
-    later tick declined to repair it, for up to 24 hours until the nightly pass. Nothing logged it,
-    because by then nothing had failed. Reproduced with `label_count = 3` against zero score rows.
-
-    Both directions are asserted, because a first fit and a later one fail differently: the first
-    must leave NO row, and a later one must leave the OLD row exactly as it was. Either way the
-    pair still reports stale, which is the property the shelves actually depend on.
-    """
+    """`write_fit` and `replace_scores` are one transaction, or the pair reports fresh over empty scores."""
     patrick = world["patrick"]
     await _rate(db, patrick)
 
@@ -414,9 +317,7 @@ async def test_a_fold_in_whose_score_write_fails_leaves_no_user_vector_row(db, w
     ) is True
     assert (patrick, "movie") in (await _tick(db, world)).refit
 
-    # And again, over a fit that did land. Both stamps are read after the backdating, because
-    # `_wait_out_the_pause` moves `updated_at` too and a value read before it would differ by the
-    # shift rather than by anything this test is about.
+    # Read after the backdating, since `_wait_out_the_pause` moves `updated_at` too.
     await observations.record_verdict(db, user_id=patrick, title_id=RE_RATED, value=0)
     await _wait_out_the_pause(db, patrick)
     stamp = await _fit(db, patrick)
@@ -439,18 +340,7 @@ async def test_a_fold_in_whose_score_write_fails_leaves_no_user_vector_row(db, w
 async def test_a_re_rating_committed_inside_the_fit_window_is_picked_up_by_the_next_tick(
     db, world, monkeypatch
 ):
-    """The fit's clock has to be read BEFORE its labels, or a re-rating can vanish for ever.
-
-    §4.2 makes changing your mind an INSERT and `LIVE_LABEL_SQL` takes the newest row per title, so
-    the label COUNT does not move and the clock is the only thing that can carry it. Stamped with
-    `now()` at write time, a verdict that committed after the labels were read and before the row
-    was written had `created_at` BEFORE `updated_at` - which is exactly the comparison `_is_stale`
-    makes. Not "late": never. Every later tick reported that pair fresh.
-
-    The re-rating is committed from inside `live_labels`, which is the window, and the durable
-    evidence is the ORDER of the two stamps rather than the tick that follows: a tick can be rerun,
-    a stamp cannot be unwritten.
-    """
+    """The fit's clock is read BEFORE its labels, or a re-rating committed in between is never seen."""
     patrick = world["patrick"]
     await _rate(db, patrick)
     await _tick(db, world)
@@ -485,9 +375,6 @@ async def test_a_re_rating_committed_inside_the_fit_window_is_picked_up_by_the_n
     assert (patrick, "movie") in (await _tick(db, world)).refit
 
 
-# --- one household (ml04, decision 166) ---------------------------------------------------------
-
-
 async def _both_nightly_passes(db, world) -> None:
     hp, _notes = load_hp(world["store"])
     await _tick(db, world, only_stale=False)
@@ -508,12 +395,6 @@ async def _distinct_users(db, table: str) -> set[int]:
 
 
 async def test_the_nightly_refit_and_the_fold_in_fit_the_same_accounts(db, world):
-    """§5.3's two nightly passes iterate the same people, and they did not.
-
-    `foldin.run` spelled `role IN ('admin', 'member')` and `refit.refit_all` spelled `is_active`.
-    Decision 166 closes the other half - a guest is a Tonight session seat with no account - so the
-    two predicates have exactly one way left to disagree, and it is the deactivated member below.
-    """
     for person in ("patrick", "ana", "sam"):
         await _rate(db, world[person])
     await _both_nightly_passes(db, world)
@@ -530,13 +411,6 @@ async def test_the_nightly_refit_and_the_fold_in_fit_the_same_accounts(db, world
 
 
 async def test_a_deactivated_account_is_folded_in_by_neither_pass(db, world):
-    """The one account the two predicates disagreed about, and it was the expensive direction.
-
-    A deactivated member got no Ledger from the nightly refit and a fresh `user_vector` plus a whole
-    `user_score` partition from the fold-in - on every sixty-second tick, for somebody who cannot
-    sign in. The active member beside them is the control: "skipped by both" has to mean this
-    account, not this code path.
-    """
     for person in ("ana", "sam"):
         await _rate(db, world[person])
     await _both_nightly_passes(db, world)
@@ -551,13 +425,7 @@ async def test_a_deactivated_account_is_folded_in_by_neither_pass(db, world):
 
 
 async def test_the_household_predicate_is_the_one_the_home_partner_query_spells(db, world):
-    """Three readers, one sentence: `is_active AND role IN ('admin', 'member')`.
-
-    §6.0's partner query already spelled the intersection, which is what makes it the household
-    rather than a third opinion about it. It keeps its inline clause - it is one row of a co-seen
-    ranking, not an id list - so the agreement is asserted here, behaviourally and in the source,
-    rather than assumed from two queries that happen to read alike today.
-    """
+    """§6.0's partner query spells the intersection: `is_active AND role IN ('admin', 'member')`."""
     patrick, ana = world["patrick"], world["ana"]
     assert await household_ids(db) == sorted([patrick, ana])
     partner = await shelves.partner_for(db, user_id=patrick)
@@ -581,17 +449,8 @@ async def test_the_household_predicate_is_the_one_the_home_partner_query_spells(
         )
 
 
-# --- the arithmetic the jobs rest on (dd16, ml03) -----------------------------------------------
-
-
 def test_an_empty_reference_population_standardises_nothing_rather_than_storing_nan():
-    """`np.std` over an empty array is NaN, and `if prior_sd < 1e-9` does not catch NaN.
-
-    So a kind with no coordinated titles - a fresh household, §3.1's legal empty artifact store -
-    stored NaN in `user_vector.prior_sd` and divided every score of that kind by it, while the
-    worker log carried three numpy "Degrees of freedom <= 0" warnings per user per tick. The
-    warning is turned into an error here, because that is the form the evidence arrived in.
-    """
+    """`np.std` of nothing is NaN, and `prior_sd < 1e-9` does not catch NaN."""
     with warnings.catch_warnings():
         warnings.simplefilter("error", RuntimeWarning)
         fit = foldin.fit_user([], {}, [])
@@ -605,15 +464,7 @@ def test_an_empty_reference_population_standardises_nothing_rather_than_storing_
 def _synthetic_fold_in_case(
     *, n_labelled: int = 30, n_population: int = 200, seed: int = 11
 ) -> tuple[dict[int, Coordinate], list[Coordinate], list[tuple[int, int]]]:
-    """A household-shaped fold-in case: a few labelled titles, many unlabelled ones, two scales.
-
-    The scale gap is the point and it is not invented: a Backbone row's norm runs with the crowd
-    support behind it (0.006 to 5.4 on the real basis) and the titles a person has rated are the
-    popular ones, so the labelled rows are long and the population they are standardised over is
-    short. Since decision 469 the fit reads each row's direction weighted by its gate, so the gap
-    that survives is the gate's: the labelled rows carry gate 0.9 and the population's one-rating
-    Backbone-only rows gate 0.09, a gap the fold's standardisation still has to get right.
-    """
+    """Labelled rows are long and the population short (gate 0.9 against 0.09): the scale gap is real."""
     rng = np.random.default_rng(seed)
     taste = rng.standard_normal(EMBED_DIM)
     taste /= np.linalg.norm(taste)
@@ -629,8 +480,7 @@ def _synthetic_fold_in_case(
     reference: list[Coordinate] = []
     labels: list[tuple[int, int]] = []
     for i, e in enumerate(labelled):
-        # A crowd prior that is half taste and half noise, so neither half of §5.1's blend wins
-        # outright and the chosen beta lands inside the grid rather than on its ceiling.
+        # Half taste, half noise, so beta lands inside the grid rather than on its ceiling.
         b = 0.5 * latent[i] + 0.5 * float(rng.standard_normal())
         c = Coordinate(title_id=i + 1, e=e, b=b, gate=0.9, item_n=500, e_source="backbone")
         coords[i + 1] = c
@@ -650,12 +500,7 @@ def _synthetic_fold_in_case(
 def _held_out_table(
     coords, reference, labels, *, seed: int, over: str
 ) -> dict[tuple[float, float], float]:
-    """§5.1's blend scored by held-out Spearman, with the personal half standardised `over` either
-    the reference population (what serving does) or the labelled rows (what the search did).
-
-    `fit_user`'s preprocessing is restated rather than reached into, because the claim under test
-    is an equality between two independent spellings of one piece of arithmetic.
-    """
+    """Restated rather than reached into: the claim is an equality between two independent spellings."""
     # Each row's gate-weighted direction, which is what `fit_user` reads since decision 469.
     ref_e = bb.directions(reference)
     ref_b = np.asarray([c.b for c in reference], dtype=np.float64)
@@ -693,8 +538,7 @@ def _held_out_table(
 
 
 def _select(table) -> tuple[float, float, float]:
-    """`_cross_validate`'s own tie-breaking, applied to both tables so the comparison isolates the
-    arithmetic: a tie buys no personalisation, and within noise of best the smallest beta wins."""
+    """A tie buys no personalisation, and within noise of best the smallest beta wins."""
     rho0 = table[(foldin.LAMBDA_GRID[0], 0.0)]
     best = max(table.values())
     if best - rho0 <= foldin.NOISE_FLOOR:
@@ -706,19 +550,8 @@ def _select(table) -> tuple[float, float, float]:
 
 
 def test_the_cross_validation_standardises_each_fold_the_way_serving_will():
-    """The same fold has to produce the same held-out prediction here and at serve time.
-
-    It did not. `fit_user` divides the full-data `v` by the sd of the personal half over the
-    reference population, while the search standardised its held-out predictions over the LABELLED
-    rows - 2.73x apart on this fixture, 0.04x to 5.18x apart measured over 168 real raters on the
-    real Backbone. So the beta this search reported was chosen against a personal half the app
-    never serves, and it is a printed number: §6.0's why-line and §6.7's rail both carry it.
-
-    Measured here, over decision 469's gated directions: the fold-consistent arithmetic chooses
-    beta 0.4 at rho 0.6367 and the old spelling chooses beta 0.1 at rho 0.6320, and at beta 0.4 the
-    two differ by 0.033. Not a tie under §0's 0.008 floor, and a different weight - which is why
-    this is a repair and not a rounding.
-    """
+    """The search must standardise over the reference
+    population, as serving does; the printed beta differed."""
     coords, reference, labels = _synthetic_fold_in_case()
     fit = foldin.fit_user(labels, coords, reference, seed=9)
     assert 0.0 < fit.beta < foldin.BETA_MAX, (
@@ -747,34 +580,17 @@ def test_the_cross_validation_standardises_each_fold_the_way_serving_will():
     assert old_lam in foldin.LAMBDA_GRID
 
 
-# --- the lock the two Ledger jobs share (data-05) ------------------------------------------------
-#
-# The defect this section exists for is the one shape a suite of single-connection tests cannot
-# reach: two callers in flight at the same moment. `refit_user` read its observations outside any
-# transaction and before any lock, fitted for seconds, and then wrote with `prune = True` - so a
-# verdict recorded in between was reverted to the unobserved prior (measured: `s -0.5504
-# observed=True` -> `s -0.0004 observed=False`) and dropped from `ledger_fit.title_ids`, where the
-# next tap could not find it either. `load_cache`'s `FOR UPDATE` serialised taps against each other
-# and nothing against the fit. [M4.13, data-05; plan step 24]
+# A verdict recorded while `refit_user` fitted was pruned back to the prior; the lock serialises them.
 
 NINE_TIERS = ["T1", "T2", "T3", "T4", "T5", "T6", "T7", "T8", "T9"]
 
-# The title the tap in these tests rates: `Tampopo`, the one movie the SITTING above leaves alone (6
-# and 7 are the fixture's two series), so the fit that is in flight has never seen it and "did the
-# fit prune it away" has an answer. 0022's composite (title_id, kind) FK refuses a series id here,
-# which is how the first draft of this section found out.
+# `Tampopo`, the one movie the SITTING leaves alone; 0022's (title_id, kind) FK refuses a series id.
 UNRATED = 8
 
 
 @pytest.fixture
 async def second(db, pg_url):
-    """A second connection, because an advisory lock is about two callers.
-
-    `db` is one connection, and a lock taken on it is one its own next statement already holds - so
-    nothing about serialisation can be asserted through it. The jsonb codec mirrors `db`'s for the
-    same reason the fixture sets it there: a connection that returns jsonb as text is a different
-    connection from the one the app uses.
-    """
+    """A second connection, because an advisory lock is about two callers."""
     import json as _json
 
     import asyncpg
@@ -791,22 +607,11 @@ async def second(db, pg_url):
 
 
 def _basis(conn, world):
-    """§5.1's composed source, on the connection that will read it. See `standard_embeddings`."""
     return observations.standard_embeddings(conn, world["backbone"], bundle_version=BUNDLE)
 
 
 async def _a_tap_arrives_while_a_fit_is_running(db, second, world, monkeypatch, hp):
-    """The choreography both tests below need, run once: (still_waiting, delta).
-
-    The fit is held open at the point the defect needs it held - after `load_observations` has
-    returned and before anything is written - which is the same hook `test_worker_jobs.py` uses for
-    finding 5's tier-set race. A synchronous `model.fit` has no await point, so patching the read is
-    the only way to produce the window without sleeping inside the arithmetic.
-
-    The fit runs on the second connection and the tap on `db`, which is the right way round: the tap
-    is the one whose outcome is asserted, and a task cancelled by a timeout must not be the one
-    holding the transaction the assertions read.
-    """
+    """The fit is held after `load_observations`: a synchronous `model.fit` has no await point."""
     patrick = world["patrick"]
     reading = asyncio.Event()
     release = asyncio.Event()
@@ -828,9 +633,7 @@ async def _a_tap_arrives_while_a_fit_is_running(db, second, world, monkeypatch, 
     try:
         await asyncio.wait_for(reading.wait(), timeout=20)
 
-        # The person rates one more title while the fit is in the air. The observation is committed
-        # by the route before the tap is called (`update_incrementally_reporting`'s docstring), so
-        # this is two statements and not one.
+        # The route commits the observation before the tap is called, so this is two statements.
         await observations.record_verdict(db, user_id=patrick, title_id=UNRATED, value=2)
         tap = asyncio.create_task(
             refit.update_incrementally(
@@ -850,18 +653,7 @@ async def _a_tap_arrives_while_a_fit_is_running(db, second, world, monkeypatch, 
 async def test_the_tap_waits_on_the_lock_the_fit_holds_rather_than_racing_it(
     db, world, second, monkeypatch
 ):
-    """§5.3's two rows are "<50 ms" and "seconds", and until M4.13 they shared no lock at all.
-
-    Waiting is the whole repair. The alternative designs both lose something: refusing the tap
-    throws away an observation the route has already committed, and letting it through is the race
-    itself. A tap that waits out a nightly fit costs the person a slow card once a night and keeps
-    every verdict - and on the interactive path it is the 60 s `tier-set-refit` sweep, not the
-    nightly, that it is most likely to meet.
-
-    The lock is taken BEFORE `load_cache` in the tap, which this test also pins by construction: a
-    tap holding `ledger_fit` `FOR UPDATE` while queueing behind the fit would deadlock against the
-    fit's own closing UPDATE of that row, and this would hang rather than pass.
-    """
+    """Waiting is the repair; the lock is taken before `load_cache`, or this would deadlock."""
     patrick = world["patrick"]
     hp, _notes = load_hp(world["store"])
     await _rate(db, patrick)
@@ -890,17 +682,7 @@ async def test_the_tap_waits_on_the_lock_the_fit_holds_rather_than_racing_it(
 async def test_a_verdict_recorded_during_a_refit_survives_into_the_fit_that_follows(
     db, world, second, monkeypatch
 ):
-    """The outcome half, and the measurement the finding reported.
-
-    Reproduced before the lock: the tap wrote the new verdict's row, the fit's `_write_state` then
-    ran with `prune = True` over the title set it had read seconds earlier, and the title came back
-    as `observed = False` at the unobserved prior - `s -0.5504` to `s -0.0004`. Worse than a stale
-    number: `ledger_fit.title_ids` lost the title too, so the next tap on it found no cached
-    residual and started from zero, and nothing anywhere raised.
-
-    Both halves are asserted, because they fail in different places. `ledger_state` is what §6.0's
-    shelves and §6.3's board read; `ledger_fit.title_ids` is what the NEXT tap reads.
-    """
+    """`ledger_state` is what the shelves read; `ledger_fit.title_ids` is what the NEXT tap reads."""
     patrick = world["patrick"]
     hp, _notes = load_hp(world["store"])
     await _rate(db, patrick)
@@ -933,17 +715,7 @@ async def test_a_verdict_recorded_during_a_refit_survives_into_the_fit_that_foll
 async def test_a_tier_set_change_made_during_the_sweeps_fit_is_not_cleared(
     db, world, second, monkeypatch
 ):
-    """Decision 11's control invites a second change inside the minute, and the sweep cleared it.
-
-    The fix is M4.10 finding 5's and is already shipped: `refits_owed` hands out the stamp it read,
-    `clear_refit_request` clears only `refit_requested_at <= $3`, and `refit_user` refuses to write
-    cutpoints for a tier set it did not fit against. `test_worker_jobs.py` asserts that through the
-    60 s job; this asserts it at the functions, which is where M4.13's step 24 could have broken it
-    and did not: the board lock is taken at the top of the fit's transaction, but the cutpoints row
-    is still only locked in the WRITE phase - so a settings PUT made while the fit is running lands
-    immediately instead of hanging for the seconds §5.3 gives the fit. A control that blocks is a
-    control nobody tries twice, which is exactly the behaviour decision 11 is built around.
-    """
+    """The cutpoints row is locked only in the write phase, so a settings save lands at once."""
     from spielplan.rank import tiers
 
     patrick = world["patrick"]
@@ -965,8 +737,7 @@ async def test_a_tier_set_change_made_during_the_sweeps_fit_is_not_cleared(
         loaded = await real(conn, **kwargs)
         if not landed:
             landed.append(kwargs["kind"])
-            # On `db`, i.e. a different connection: a settings save is a different request, and it
-            # must not be waiting for the fit that is reading.
+            # A different connection: a settings save is a different request and must not wait for the fit.
             await tiers.save_tier_set(db, user_id=patrick, tier_set=NINE_TIERS)
         return loaded
 
@@ -1000,7 +771,7 @@ async def test_a_tier_set_change_made_during_the_sweeps_fit_is_not_cleared(
 
 
 async def _cache_holds(conn, user_id: int, hp) -> set[int]:
-    """The title ids in the cached fit - what the NEXT tap can find a residual for."""
+    """What the NEXT tap can find a residual for."""
     cache = await refit.load_cache(conn, user_id=user_id, kind="movie", hp=hp, lock=False)
     assert cache is not None, "there is no cached fit at all"
     return {int(t) for t in cache.title_ids}

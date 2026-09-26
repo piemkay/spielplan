@@ -1,30 +1,5 @@
-"""The solver's contract, over a distribution rather than a fixture. Spec v2.1 §5.2, §6.3, §4.2.
-
-Every other test of the Ledger differentiates at one hand-picked point, or asserts a
-qualitative direction on a board of four to eight titles, or fits a single seed. None of them
-runs `fit` over the *shapes M2 actually produces* — a day-one board where everything was
-dragged to F or S, a labeller who never says "Fine", a tier set with levels nobody used.
-
-That gap is not hypothetical. It is how a fully green suite sat on top of an optimiser that
-walked outside the ordered cone on the majority of skewed boards, returned cutpoints in the
-wrong order, laundered them with a sort, and reported `converged=True` while the tier a title
-displayed in disagreed with the tier the person had just dragged it to.
-
-So this asserts what a `Fit` must *be*, not what it should look like:
-
-  1. every number in it is finite;
-  2. the cutpoints it returns are ordered — §4.2 says "ordered ascending" and §5.2 says they
-     ARE the displayed boundaries, so a crossed pair is not a display bug, it is a fit that is
-     not a likelihood;
-  3. the objective it reports is the objective of the parameters it returns;
-  4. it is the minimum: an independent optimiser started elsewhere cannot beat it.
-
-All four hold. The fourth took a monotone reparameterisation of the cutpoints —
-cuts = c0 + cumsum(exp δ), a bijection onto the cone, so the boundary an ordered logit's optimum
-usually sits on became a smooth limit rather than a wall — plus Levenberg damping, because that
-parameterisation's curvature term is negative wherever the value-space gradient pushes a gap
-shut and can hand back a direction that is not a descent direction.
-"""
+"""The solver's contract over a distribution of skewed boards, not a fixture (§5.2, §4.2): every number
+finite, cutpoints ordered, the reported objective the returned parameters', and no start beats it."""
 
 from __future__ import annotations
 
@@ -42,13 +17,8 @@ BOARDS = 120
 
 
 def board(rng: np.random.Generator) -> ObservationSet:
-    """One observation set from the space M2 and M3 actually produce.
-
-    Deliberately skewed: a Dirichlet with small concentration makes unused tier levels and
-    single-occupancy levels the common case rather than the exception, which is exactly the
-    day-one board and exactly the skewed labeller §6.1's class-balance widget exists to warn
-    about.
-    """
+    """Skewed on purpose: a small-concentration Dirichlet
+    makes unused and single-occupancy levels common."""
     n = int(rng.integers(1, 90))
     k = int(rng.integers(3, 11))
     embed = rng.random() < 0.7
@@ -108,9 +78,7 @@ def fits():
 
 
 def test_no_board_produces_a_number_that_is_not_a_number(fits):
-    """A NaN reaching `ledger_state` is worse than a crash: `s` and `sigma` are
-    `double precision NOT NULL`, Postgres accepts NaN, and NaN sorts ABOVE every real — so a
-    poisoned fit would arrive at the *top* of every §6.0 shelf."""
+    """`s` and `sigma` accept NaN in Postgres, and NaN sorts ABOVE every real: the top of every shelf."""
     bad = []
     for i, (obs, f) in enumerate(fits):
         for name, value in (
@@ -126,10 +94,7 @@ def test_no_board_produces_a_number_that_is_not_a_number(fits):
 
 
 def test_every_board_returns_ordered_cutpoints(fits):
-    """§4.2: `ledger_cutpoints.boundaries` is "ordered ascending". §5.2: those cutpoints ARE the
-    displayed tier boundaries. A crossed pair is not a cosmetic problem — the level
-    probabilities then sum to more than one and the objective has stopped being the
-    ordered-logit likelihood."""
+    """§5.2: the cutpoints ARE the displayed boundaries; crossed, the probabilities sum past one."""
     crossed = [
         f"board {i} (K={obs.n_levels}): cuts={np.round(f.cuts, 3).tolist()}"
         for i, (obs, f) in enumerate(fits)
@@ -139,9 +104,7 @@ def test_every_board_returns_ordered_cutpoints(fits):
 
 
 def test_the_reported_objective_is_the_objective_of_the_reported_parameters(fits):
-    """The sharpest single assertion available here. It cannot pass while `fit` returns a
-    sorted copy of the cutpoints next to an objective evaluated on the unsorted ones — which
-    turns a silent crossing into a red test without anyone having to reproduce a divergence."""
+    """It cannot pass while `fit` returns sorted cutpoints beside an objective of the unsorted ones."""
     for i, (obs, f) in enumerate(fits):
         recomputed = model._objective(
             obs, DEFAULTS, f.mu, f.v, f.gamma, f.cuts, f.log_nu, f.r,
@@ -153,30 +116,10 @@ def test_the_reported_objective_is_the_objective_of_the_reported_parameters(fits
 
 
 def test_no_other_starting_point_finds_a_lower_objective(fits):
-    """§5.2's objective is convex on the ordered cone, so the minimiser is unique and no start
-    can beat it. This is the check that the answer is the minimum rather than a
-    stationary-looking point the search happened to stop at.
-
-    `test_the_optimum_is_unique_from_any_start` could not do this before: it passed an
-    identical copy of the observations and `fit` took no start point, so the "two very
-    different starting points" it named were never exercised.
-
-    That comparison is one-sided -- no other start does BETTER -- and `fit` is deterministic, so
-    a `fit` that threw `z0`/`r0` away would satisfy it by returning the same number twice. The
-    start therefore has to be read back out of an answer before the comparison means anything,
-    and the zero-budget fit is where it is read: `_minimise` iterates `range(1, limit + 1)`, so
-    with both counts at zero each stage hands back the point it was given and `mu` IS `mu0`.
-    Spied against a `fit` that discards its start arguments, that reports mu = 0.0 on all forty
-    boards. The objective cannot do this job: the supplied start moves it by more than 1e-6 on
-    only 3 of the 40 and by nothing at all on 7, while the fitted s differs on 38 -- the two that
-    match are the boards with no ordinal observation, where the answer is the prior mode and the
-    start is genuinely irrelevant. Which is why this asserts the plumbing and leaves the
-    comparison below one-sided rather than inventing a tolerance for it.
-    [M4.13 cycle 2, m413-c2-cov-01]
-    """
+    """§5.2's objective is convex on the ordered cone, so no start can beat the minimiser. `fit` is
+    deterministic, so the zero-budget fit first proves the start arrives (`mu` IS `mu0`)."""
     rng = np.random.default_rng(99)
-    # A budget of nothing, which `hyperparams.load` would refuse (`steps` is a positive int) and
-    # nothing fits under: it exists to make one question answerable, "did the start arrive".
+    # A budget of nothing, which `hyperparams.load` would refuse: it only answers "did the start arrive".
     idle = dataclasses.replace(DEFAULTS, newton_max_iter=0, steps=0)
     worse, unread = [], []
     for i, (obs, f) in enumerate(fits[:40]):
@@ -204,18 +147,8 @@ def test_no_other_starting_point_finds_a_lower_objective(fits):
 
 
 def test_a_board_dragged_only_to_the_extremes_orders_the_two_piles(fits):
-    """§5.2: "drag-and-drop = data, not override; the model re-fits around it".
-
-    Twenty titles dragged to the bottom tier and twenty to the top, on day one, nothing else.
-    Before the cone was constrained this returned crossed cutpoints, sorted them, and reported
-    converged — a fit that was not a likelihood.
-
-    What it asserts is that the *latent* separates, not that the two piles land in tiers 0 and
-    6. They do not, and should not: with forty drags and nothing else, §5.2's residual prior
-    (τ) costs more to satisfy the extremes than the likelihood gains, so the MAP answer keeps
-    everyone near the middle and says so through σ. "Drag-and-drop is data" means the drags
-    move the model, not that they overrule it.
-    """
+    """The *latent* separates; the piles need not reach tiers
+    0 and 6, because τ keeps the MAP near the middle."""
     n = 40
     obs = ObservationSet(
         title_ids=np.arange(n, dtype=np.int64),
@@ -236,9 +169,7 @@ def test_a_board_dragged_only_to_the_extremes_orders_the_two_piles(fits):
 
 
 def test_a_labeller_who_never_says_fine_still_gets_ordered_thresholds(fits):
-    """§6.1's class-balance widget exists because skewed labelling is common. The verdict arm's
-    two cutpoints used to cross whenever the middle class was empty or nearly so — which is the
-    labeller the widget is warning, so the fit must survive exactly the person it is aimed at."""
+    """§6.1's class-balance widget exists because skewed labelling is common."""
     for middle in (0, 1):
         levels = [0] * 30 + [1] * middle + [2] * 30
         n = len(levels)
@@ -255,10 +186,7 @@ def test_a_labeller_who_never_says_fine_still_gets_ordered_thresholds(fits):
 
 
 def test_the_search_never_applies_a_step_it_rejected(fits):
-    """The line search used to fold "the step was rejected" and "the step was accepted" into
-    one branch and then take the step anyway, so an exhausted search returned its own
-    divergence. A fit that stops early must stop at the last point that *decreased* the
-    objective."""
+    """A fit that stops early must stop at the last point that *decreased* the objective."""
     rng = np.random.default_rng(4)
     for _ in range(15):
         obs = board(rng)
@@ -274,12 +202,7 @@ def test_the_search_never_applies_a_step_it_rejected(fits):
 
 
 def test_a_verdict_band_that_closes_is_walked_to_rather_than_overflowed():
-    """The search's log-gap step cap (`model.MAX_LOG_GAP_STEP`). At decision 509's tau one board
-    of this very population - 41 titles, 355 random duels, almost no fine verdicts - closes its
-    verdict band to 0.0013, where the log gap is nearly flat: the preconditioned step along it
-    was 3e9, `_from_raw` clipped it to e^30, every step the line search may try overflowed, and
-    the fit stopped at iteration 139 of 200, 7 above its optimum. Capped, the same direction is
-    walked at a length the exponential can take, and the fit reaches the optimum."""
+    """A closing verdict band makes the log-gap step overflow; `model.MAX_LOG_GAP_STEP` caps it."""
     rng = np.random.default_rng(20260830)
     obs = [board(rng) for _ in range(26)][25]
     budget = dataclasses.replace(DEFAULTS, steps=2000)

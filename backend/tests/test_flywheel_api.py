@@ -1,21 +1,4 @@
-"""§6.6 Data's extraction queue over HTTP: the read, the quote and Launch. Spec v2.1 §8.4, §6.6 Data;
-decisions 330, 440, 441, 442 and 443.
-
-What only the routes can get wrong, since every rule behind them is `flywheel/` and `llm/spend`'s:
-
-* THE ROW IS READABLE THE MOMENT THE WALK RETURNS. The feed's coverage row says "readable from the
-  admin queue immediately, not after a nightly job", and the admin queue is this route: a walk past
-  stage 8 through the real driver on one connection, then `GET /api/admin/flywheel` through the
-  app's own pool, with nothing between them.
-* THE QUOTE DOUBLES WITH THE PASSES (plan §7 check 4), and says it in strings, because a JSON number
-  is a binary float to the client that parses it and the reservation is exact (decision 325).
-* LAUNCH IS 200 WITH THE BATCH OR 409 WITH THE SENTENCE, the domain's own, verbatim.
-* EACH ROUTE IS AN ADMIN ROUTE: a member is 403 and a stranger 401 on every one. `test_api_gating.py`
-  sweeps them too; the paths are spelled here as literals because `test_route_inventory.py` asks
-  every route for a test that names it.
-
-Integration tests are skipped without TEST_DATABASE_URL; see tests/conftest.py.
-"""
+"""§6.6 Data's extraction queue over HTTP: the read, the quote and Launch. Needs TEST_DATABASE_URL."""
 
 from __future__ import annotations
 
@@ -36,8 +19,7 @@ QUOTE = "/api/admin/flywheel/quote"
 
 @pytest.fixture
 def only_the_driver_is_live(monkeypatch):
-    """`test_flywheel_feed.py`'s stand-down, restated for the one test here that walks: stages 2, 3,
-    4 and 6 advance without doing anything, and nothing can reach the open web."""
+    """Stages 2, 3, 4 and 6 advance without doing anything, and nothing can reach the open web."""
     monkeypatch.setattr(pipeline, "_default_fetcher", _refuse_to_crawl)
     monkeypatch.setattr(pipeline, "STAGES", tuple(
         _stands_down(stage) if stage.number in STANDS_DOWN else stage for stage in SHIPPED
@@ -50,16 +32,10 @@ async def _quote(admin, *, titles: int, providers: str, passes: int) -> dict:
     return response.json()
 
 
-# --- the row the feed writes, read through the route ---------------------------------------------
-
-
 async def test_the_thin_facet_row_is_readable_from_the_route_the_moment_the_walk_returns(
     db, app, only_the_driver_is_live
 ):
-    """Decision 440 through the surface's own read: `run_task` returns from a walk past stage 8 and
-    the very next request to `GET /api/admin/flywheel` - on another connection, out of the app's
-    pool - carries the title's row with its reason, because the observation committed inside the
-    walk. No drain, no job and no sweep between the two."""
+    """No drain, job or sweep between the walk and the read: the observation commits inside the walk."""
     admin, _member = await _bootstrap(app)
     await _vocabulary(db)
     await _title(db)
@@ -77,15 +53,10 @@ async def test_the_thin_facet_row_is_readable_from_the_route_the_moment_the_walk
     assert row["board"]["stage"] == 9 and row["est_titles"] == 1
 
 
-# --- the read -----------------------------------------------------------------------------------
-
-
 async def test_the_queue_read_carries_the_rows_the_providers_the_defaults_and_the_meter(
     db, secrets_key, app
 ):
-    """The envelope the surface draws from. `configured` is the provider card's own bit and `reason`
-    the plan's sentence for a batch of that provider alone; `defaults` is the stored plan; the meter
-    is `spend.meter` with its money in strings; the assumed input is §8 stage 6's midpoint."""
+    """Money travels as strings: a JSON number is a binary float to the client."""
     admin, _member = await _bootstrap(app)
     queued = await _install(db)
     await _cap(db, BIG_CAP)
@@ -107,8 +78,7 @@ async def test_the_queue_read_carries_the_rows_the_providers_the_defaults_and_th
 
 
 async def test_the_defaults_are_null_beside_the_stored_plans_refusal(db, secrets_key, app):
-    """An install with no extraction provider assigned has no default plan, and says why in the
-    sentence stage 6 would park under (decision 324) rather than guessing one."""
+    """No provider assigned means no default plan, and the sentence says why rather than guessing one."""
     admin, _member = await _bootstrap(app)
 
     defaults = (await admin.get("/api/admin/flywheel")).json()["defaults"]
@@ -117,13 +87,7 @@ async def test_the_defaults_are_null_beside_the_stored_plans_refusal(db, secrets
     assert defaults["reason"].startswith("no extraction provider is assigned"), defaults
 
 
-# --- the quote ----------------------------------------------------------------------------------
-
-
 async def test_the_quote_doubles_when_the_passes_go_from_one_to_two(db, secrets_key, app):
-    """Plan §7 checks 3 and 4 over the wire: five titles at one pass are five per-title estimates, two
-    passes double every figure, and a second provider adds its own - each figure a string of its
-    exact digits, and Launch enabled inside the cap."""
     admin, _member = await _bootstrap(app)
     await _install(db)
     await _cap(db, BIG_CAP)
@@ -143,7 +107,6 @@ async def test_the_quote_doubles_when_the_passes_go_from_one_to_two(db, secrets_
 
 
 async def test_the_quote_over_the_cap_is_disabled_with_the_reason_naming_the_cap(db, secrets_key, app):
-    """Plan §7 check 5 on the route the surface asks: disabled, with the sentence, not a warning."""
     admin, _member = await _bootstrap(app)
     await _install(db)
     await _cap(db, 0.01)
@@ -156,8 +119,6 @@ async def test_the_quote_over_the_cap_is_disabled_with_the_reason_naming_the_cap
 
 
 async def test_the_quote_refuses_a_count_or_a_pass_it_cannot_price(db, secrets_key, app):
-    """The three query parameters are required, and the two numbers bounded as the domain reads
-    them: no negative count of titles, no batch of zero passes."""
     admin, _member = await _bootstrap(app)
 
     assert (await admin.get(QUOTE, params={"titles": 1, "providers": "gemini"})).status_code == 422
@@ -167,13 +128,7 @@ async def test_the_quote_refuses_a_count_or_a_pass_it_cannot_price(db, secrets_k
             ).status_code == 422
 
 
-# --- Launch -------------------------------------------------------------------------------------
-
-
 async def test_launch_answers_200_with_the_batch_and_409_with_the_domains_sentence(db, secrets_key, app):
-    """A launch inside the cap is 200 with the batch in strings and the rows it made due; the same
-    launch again is 409 with the domain's sentence, the row being running now; and a batch the cap
-    cannot hold is 409 with the meter's own words and nothing written."""
     admin, _member = await _bootstrap(app)
     queued = await _install(db)
     await _cap(db, BIG_CAP)
@@ -204,9 +159,7 @@ async def test_launch_answers_200_with_the_batch_and_409_with_the_domains_senten
 
 
 async def test_a_launch_body_carries_no_figure_a_page_could_hold_the_cap_with(db, secrets_key, app):
-    """Decision 441: the server is the gate. The launch body has no field for a figure, so a page
-    that sends its own total has it dropped unread, and the launch is priced by the server - here
-    over no cap at all, so the domain's no-cap sentence is the answer and nothing is launched."""
+    """Decision 441: the server is the gate; a figure a page sends is dropped unread."""
     admin, _member = await _bootstrap(app)
     queued = await _install(db)
 
@@ -220,12 +173,7 @@ async def test_a_launch_body_carries_no_figure_a_page_could_hold_the_cap_with(db
 
 
 async def test_a_batch_naming_no_provider_asks_for_one_and_never_for_a_relaunch(db, secrets_key, app):
-    """What the surface asks while no provider is ticked - `providers=` empty, its default on an
-    install whose stored plan names none. Decision 442 refuses a batch that names no provider, and
-    the sentence is the picker's: `_batched`'s is for a launched task whose payload does not read,
-    and it told an operator who had launched nothing to launch "it" again. Decision 441's order
-    stands - with no cap the no-cap sentence answers first - and Launch refuses with the same
-    sentence inside its transaction, writing nothing."""
+    """Decision 442 refuses a batch naming no provider with the picker's sentence, not a relaunch's."""
     admin, _member = await _bootstrap(app)
     queued = await _install(db)
 
@@ -247,9 +195,6 @@ async def test_a_batch_naming_no_provider_asks_for_one_and_never_for_a_relaunch(
     assert await db.fetchval("SELECT count(*) FROM flywheel_batch") == 0
 
 
-# --- the gate -----------------------------------------------------------------------------------
-
-
 @pytest.mark.parametrize(
     ("method", "path", "body"),
     [
@@ -267,8 +212,7 @@ async def test_every_flywheel_route_refuses_a_member_and_a_stranger(app, db, met
 
 
 def test_the_router_declares_exactly_the_three_flywheel_paths():
-    """The router's three paths, from its own table, so a renamed route fails here and not only in
-    the harness comparison."""
+    """From the router's own table, so a renamed route fails here and not only in the harness comparison."""
     from spielplan.api import flywheel as flywheel_api
 
     assert {route.path for route in flywheel_api.router.routes} == {

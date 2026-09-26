@@ -1,32 +1,5 @@
-"""§6.6's System card, at the three facts decision 182 gave it and the three decision 454 adds.
-
-Spec v2.1 §6.6 (System), §2 (Backups, Configuration), §3.1, §14.3; decisions 181, 182, 454;
-docs/milestones/M4.7-plan.md §2 findings 1 and 10; docs/milestones/M5.7-plan.md Phase E.
-
-M4.7 gives `job_run` its rows and secrets custody a readable state, and before this route
-nothing read either: `last_run` was an in-process dict, every report was logged once and
-dropped, and the only signal that a month of nightly dumps had failed was one ERROR a day in a
-container log with no timestamp. `ops-11`'s finding is not that the dump can fail — it is that
-the household cannot find out.
-
-Two properties are worth more than the rest and are asserted hardest here:
-
-  * **the fingerprint is a fingerprint.** §14.3 calls a Jellyfin API key "unscoped and
-    admin-equivalent", and SECRETS_KEY is what opens the stored one. A card that answered "which
-    key is this" with the key would be a worse disclosure than the one it exists to report.
-  * **an unreadable key is reported, not raised.** The whole of dd03 is a custody problem that
-    500s the routes that would describe it. This route is the description, so of all the routes
-    in the app it is the one that must not.
-
-M5.7 adds §6.6's remaining three - queue depth, last syncs and logs - and the property decision
-454 is asserted hardest on is the log panel's: it is the one surface in the app that shows an
-operator text a connector wrote, and a URL with a key in its query string is the text a connector
-writes most readily (`push/send.py`'s filter exists for the same reason).
-
-The e2e half is `e2e/specs/18-system.spec.js`: this file proves the payload against a key it
-chose, that one proves an operator can find it. Skipped without TEST_DATABASE_URL; see
-tests/conftest.py.
-"""
+"""§6.6's System card (decisions 182, 454). The fingerprint must never be the key, an unreadable key
+is reported rather than raised, and the log panel carries no credential. Needs TEST_DATABASE_URL."""
 
 from __future__ import annotations
 
@@ -62,7 +35,7 @@ async def _admin(app):
 
 
 async def _member(app, admin):
-    """A created account past §3.1's forced first-login change, so a 403 means the role."""
+    """Past §3.1's forced first-login change, so a 403 means the role."""
     made = await admin.post("/api/admin/users", json={"name": "jenny", "role": "member"})
     assert made.status_code == 201, made.text
     otp = made.json()["one_time_password"]
@@ -79,7 +52,6 @@ async def _member(app, admin):
 
 
 async def _run(db, name: str, *, ok: bool | None, ago: timedelta, detail=None) -> None:
-    """One `job_run` row, written the way `worker._record_start`/`_record_finish` leave it."""
     started = datetime.now(UTC) - ago
     await db.execute(
         "INSERT INTO job_run (name, started_at, finished_at, ok, detail) "
@@ -99,9 +71,7 @@ async def _card(admin) -> dict:
 
 
 async def _fire(name: str) -> None:
-    """One job as `worker._tick` fires it: the row opened, the registry's own body run, and the row
-    closed ok with whatever it returned or failed with its reason -- so a `job_run` row here is one
-    the worker really writes, not one a test supposed it would."""
+    """One job as `worker._tick` fires it, so a `job_run` row here is one the worker really writes."""
     job = next(j for j in worker.JOBS if j.name == name)
     run_id = await worker._record_start(name)
     try:
@@ -114,9 +84,8 @@ async def _fire(name: str) -> None:
 
 @pytest.fixture
 async def hangs_up(monkeypatch):
-    """A Jellyfin URL that accepts a connection and closes it: every read fails at once, through the
-    real httpx and h11 path rather than a transport double. The two once-per-outage memos are reset
-    so the WARNING an outage earns is written in this test whatever an earlier one left behind."""
+    """A URL that accepts and closes: fails through real
+    httpx and h11; the once-per-outage memos are reset."""
     monkeypatch.setattr(seen_sync, "_unreachable_since", None)
     monkeypatch.setattr(playback, "_unreachable_since", None)
 
@@ -131,16 +100,8 @@ async def hangs_up(monkeypatch):
         await server.wait_closed()
 
 
-# --- the fingerprint, with no database in the way -------------------------------------
-
-
 def test_the_fingerprint_is_short_stable_and_not_the_key():
-    """§14.3: this route may prove *which* key is loaded and never what it is.
-
-    Twelve lowercase hex characters, the same twelve every time — an operator comparing this
-    install against the `.env` beside their dumps is doing a string comparison by eye, and a
-    value that changed between two reads would answer no question at all.
-    """
+    """§14.3: prove *which* key is loaded, never what it is; stable, since operators compare by eye."""
     key = "an-operators-secrets-key-not-a-real-one"
     fingerprint = sec.key_fingerprint(key)
 
@@ -148,30 +109,18 @@ def test_the_fingerprint_is_short_stable_and_not_the_key():
     assert all(c in "0123456789abcdef" for c in fingerprint)
     assert sec.key_fingerprint(key) == fingerprint
     assert key not in fingerprint
-    # Nor any window of the key: a truncated digest that happened to leak four characters of a
-    # short key would still be a leak, and this is the cheap way to say so.
+    # Nor any window of the key: a truncated digest leaking four characters would still be a leak.
     assert not any(key[i : i + 4] in fingerprint for i in range(len(key) - 3))
 
 
 def test_two_keys_have_two_fingerprints():
-    """The one thing the card claims: that this value distinguishes one `.env` from another."""
     assert sec.key_fingerprint("the-key-that-was-current-for-the-dump") != sec.key_fingerprint(
         "the-key-the-operator-regenerated-after"
     )
 
 
-# --- the six facts, over HTTP ---------------------------------------------------------
-
-
 async def test_the_card_reports_six_facts_and_no_more(secrets_key, db, app):
-    """Decision 182's three - last successful backup, custody, newest `job_run` row per job - and
-    decision 454's three: queue depth, last syncs and the web process's recent log lines.
-
-    Still an equality on the key set rather than six presence checks. Decision 182 argued it for
-    what stayed at M5; decision 454 closes §6.6's list, so the equality now says the card is
-    exactly §6.6's five items and custody, and a seventh key - a control's state, a config echo -
-    would arrive here before it arrived on any screen.
-    """
+    """An equality on the key set, so a seventh key arrives here before it arrives on any screen."""
     admin = await _admin(app)
     card = await _card(admin)
 
@@ -185,17 +134,8 @@ async def test_the_card_reports_six_facts_and_no_more(secrets_key, db, app):
     assert all(sorted(sync) == ["at", "connector", "detail", "name"] for sync in card["last_syncs"])
 
 
-# --- queue depth and last syncs (decision 454) ----------------------------------------
-
-
 async def test_queue_depth_is_reported_by_state_and_by_kind(secrets_key, db, app):
-    """§6.6's "queue depth", as M5.1's `queue.stats` counts it and with the totals beside it.
-
-    Per kind AND state is `stats`' own grouping and the board's sentence ("nine identifies waiting,
-    one extract failed"); the per-state totals are the line an operator reads first. Every state
-    the table allows is present, zero included, so "nothing failed" is a 0 the card prints rather
-    than a key it has to infer from an absence.
-    """
+    """Every allowed state is present, zero included, so "nothing failed" is a printed 0."""
     admin = await _admin(app)
     for key in ("jellyfin:a1", "jellyfin:b2", "jellyfin:c3"):
         await queue.enqueue(db, "acquire", key)
@@ -214,18 +154,9 @@ async def test_queue_depth_is_reported_by_state_and_by_kind(secrets_key, db, app
 
 
 async def test_a_last_sync_is_the_newest_successful_run_not_the_newest_run(secrets_key, db, app):
-    """Decision 454: "newest successful" is what separates `last_syncs` from `jobs`.
-
-    The install this exists for is the one whose seen-sync has been failing since Tuesday: `jobs`
-    says the last attempt failed, and this says when the connector last actually answered. A newer
-    failure and a newer run that never finished both leave the older success standing, and a job
-    that has never succeeded is named with a null rather than dropped, because "never" is the
-    answer an operator setting up Jellyfin needs to be able to read.
-    """
+    """Newest SUCCESSFUL: a job that never succeeded is a null, not dropped."""
     admin = await _admin(app)
-    # Rows the worker writes: a sweep that read the library, and later one abandoned at its budget
-    # -- a refused key is not one, because `seen.sync_all` returns a report for it rather than
-    # raising (the tests below fire the real bodies for that). [M5.7 review cycle 1, M57-JFSYS-01]
+    # A refused key is not a failed row: `seen.sync_all` returns a report for it rather than raising.
     await _run(db, "jellyfin-seen-sync", ok=True, ago=timedelta(hours=5),
                detail={"pushed": 2, "reached": True})
     await _run(db, "jellyfin-seen-sync", ok=False, ago=timedelta(hours=1),
@@ -246,15 +177,13 @@ async def test_a_last_sync_is_the_newest_successful_run_not_the_newest_run(secre
     assert syncs["jellyfin-delta-poll"]["at"] is None
     assert syncs["jellyfin-delta-poll"]["detail"] is None
     assert syncs["acquisition-drain"]["at"] is None
-    # `jobs` still reports the newest run whatever it says: the two keys are two different rows.
+    # `jobs` still reports the newest run: the two keys are two different rows.
     jobs = {job["name"]: job for job in card["jobs"]}
     assert jobs["jellyfin-seen-sync"]["ok"] is None
 
 
 def test_every_sync_job_is_a_job_the_card_already_reports():
-    """`SYNC_JOBS` is a subset of `JOB_NAMES`, which `test_worker_registry.py` pins to the worker's
-    registry. A name here that drifted from the registry would be a connector the card reports as
-    "never succeeded" for ever, which is the one reading this list exists to make trustworthy."""
+    """A name that drifted from the registry would read "never succeeded" for ever."""
     assert admin_api.SYNC_JOBS, "no sync job is named, so last_syncs asks nothing"
     assert set(admin_api.SYNC_JOBS) <= set(admin_api.JOB_NAMES)
     assert admin_api.BACKUP_JOB not in admin_api.SYNC_JOBS
@@ -267,14 +196,7 @@ async def _poll_status(admin) -> dict:
 
 
 async def test_a_sync_job_that_asked_no_server_is_no_last_sync(secrets_key, db, app):
-    """Decision 454's `last_syncs` is when each connector last ANSWERED, and the worker records
-    `ok` for a run that asked nobody: on an install with no connector set up, `seen.sync_all` and
-    `playback.poll` return a report and the intake jobs and the drain return nothing, and `_tick`
-    closes every one of those rows ok. Read as successes, a fresh install's card said every
-    connector had synced a minute ago, and the "never succeeded" it exists to be able to say could
-    not be reached. The real bodies are fired here, as the loop fires them, and each connector is
-    still "never" -- and the Jellyfin card's poll line says the poll has never run rather than "ok".
-    [M5.7 review cycle 1, M57-JFSYS-01]"""
+    """The worker records `ok` for a run that asked nobody, which is no sync."""
     admin = await _admin(app)
     for name in admin_api.SYNC_JOBS:
         await _fire(name)
@@ -289,11 +211,7 @@ async def test_a_sync_job_that_asked_no_server_is_no_last_sync(secrets_key, db, 
 async def test_a_sync_job_that_could_not_reach_its_server_is_no_last_sync(
     secrets_key, db, app, hangs_up
 ):
-    """The install `last_syncs` was added for: Jellyfin down, the week-long outage `jobs` alone
-    cannot date. The seen sync and the sessions poll catch the outage and return a report, so their
-    rows close ok (§3.3: a degraded sync, never a broken app) -- and those are not syncs. Only the
-    delta poll raises, and the card said the other three had synced a minute ago beside it.
-    [M5.7 review cycle 1, M57-JFSYS-01]"""
+    """The seen sync and sessions poll swallow an outage and close ok; those are not syncs."""
     admin = await _admin(app)
     saved = await admin.put("/api/admin/connectors/jellyfin",
                             json={"url": hangs_up, "api_key": "a-jellyfin-key-for-a-server-that-is-down"})
@@ -312,10 +230,6 @@ async def test_a_sync_job_that_could_not_reach_its_server_is_no_last_sync(
 async def test_a_sync_job_that_reached_its_server_is_a_last_sync(
     secrets_key, db, app, fake_jellyfin, monkeypatch
 ):
-    """The other half, so "never" is not simply what the card now always says: the same bodies
-    against `ops/fake_jellyfin.py` read the library, the sessions and the delta, and each of those
-    three is a last sync; the intake sweep with nothing ripe and the drain with nothing leased asked
-    no server, and stay "never". [M5.7 review cycle 1, M57-JFSYS-01]"""
     module, transport = fake_jellyfin
     admin = await _admin(app)
     await registry.save_jellyfin(db, url="http://jellyfin.test", api_key=module.API_KEY)
@@ -334,11 +248,7 @@ async def test_a_sync_job_that_reached_its_server_is_a_last_sync(
 
 
 async def test_a_fortnight_offline_does_not_turn_the_last_sync_into_never(secrets_key, db, app):
-    """`test_a_fortnight_of_failures_does_not_turn_the_last_good_dump_into_never`, for a sync. The seen
-    sync swallows an outage and closes ok, so after a fortnight of a down server its newest ok row is
-    one that reached nothing, and `job-run-prune`'s exemption of the newest ok row alone deleted the
-    sweep that last read the library: "synced 20 days ago" became "never succeeded".
-    [M5.7 review cycle 1, M57-JFSYS-01]"""
+    """The prune must keep the newest row that reached the server, not merely the newest ok row."""
     admin = await _admin(app)
     await _run(db, "jellyfin-seen-sync", ok=True, ago=timedelta(days=20),
                detail={"pushed": 1, "reached": True})
@@ -357,18 +267,8 @@ async def test_a_fortnight_offline_does_not_turn_the_last_sync_into_never(secret
     assert left == inside + 1, "the prune kept more than the window and the row that reached"
 
 
-# --- the web process's recent log lines (decision 454) --------------------------------
-
-
 def test_a_log_line_loses_every_credential_a_connector_could_have_written_into_it():
-    """The redaction, over the spellings this codebase's own connectors produce.
-
-    httpx writes a request's full URL, and TMDB and OMDb take their key in the query string
-    (decision 453); Jellyfin's key rides in `X-Emby-Token` and the MediaBrowser header's `Token=`,
-    the providers' in `Authorization: Bearer` and `x-api-key`, and §7.2's webhook token in
-    `X-Spielplan-Token`. The names around each value survive, because "the TMDB request failed"
-    is what the operator came to read; only the value goes.
-    """
+    """The names around each value survive; only the value goes."""
     lines = {
         "GET https://api.themoviedb.org/3/movie/7?api_key=TMDBKEY123&language=en": "TMDBKEY123",
         "GET https://www.omdbapi.com/?i=tt0111161&apikey=OMDBKEY456": "OMDBKEY456",
@@ -378,8 +278,7 @@ def test_a_log_line_loses_every_credential_a_connector_could_have_written_into_i
         "headers {'x-api-key': 'sk-ant-HEADER111', 'anthropic-version': '2023-06-01'}": "HEADER111",
         "delivery with X-Spielplan-Token: WEBHOOKTOKEN222 refused": "WEBHOOKTOKEN222",
         "X-Emby-Token=EMBY333 and MediaBrowser Token=\"MEDIABROWSER444\", Client=\"x\"": "333",
-        # h11 refusing a header value quotes it as a bytes repr, in either quote, and names no
-        # header -- the one spelling a padded Jellyfin key took into the ring. [M57-KEYS-C1-01]
+        # h11 quotes a refused header value as a bytes repr and names no header.
         "jellyfin is unreachable: GET /Items failed: Illegal header value b'H11KEY555 '": "H11KEY555",
         "GET /Users failed: Illegal header value b\"H11KEY666 it's\"": "H11KEY666",
     }
@@ -397,13 +296,7 @@ def test_a_log_line_loses_every_credential_a_connector_could_have_written_into_i
 
 
 def test_the_ring_hangs_off_the_spielplan_logger_and_no_other():
-    """Decision 454: the `spielplan` loggers, never the root, `httpx` or `uvicorn`.
-
-    `httpx`'s INFO line is a full request URL for every call any connector makes, and `uvicorn`'s
-    access log is every request path with its query string; both are written by code this app does
-    not own, so a redaction list maintained here could never be proved complete over them. Only
-    `app.py` installs it - the worker's lines stay in its container log, and the card says so.
-    """
+    """`httpx` and `uvicorn` write URLs and query strings this app cannot prove redacted."""
     import spielplan.app  # noqa: F401 - the install is app.py's, at import
 
     handler = logs.HANDLER
@@ -416,13 +309,7 @@ def test_the_ring_hangs_off_the_spielplan_logger_and_no_other():
 
 
 async def test_the_recent_log_lines_are_the_web_process_own_and_carry_no_key(secrets_key, db, app):
-    """The card's log panel, end to end: a line a `spielplan` logger wrote is on it, redacted, and
-    a line `httpx` wrote is not on it at all.
-
-    The whole serialised body is searched rather than the record we meant, for the reason
-    `test_the_card_never_hands_the_secrets_key_to_the_browser` gives: a field added later is
-    caught by this and by nothing else.
-    """
+    """The whole serialised body is searched, so a field added later is caught."""
     admin = await _admin(app)
     logging.getLogger("spielplan.test").warning(
         "GET https://h.test/3/movie?api_key=SECRETXYZ&x=1 marker-4471 answered 401"
@@ -450,8 +337,7 @@ async def test_the_recent_log_lines_are_the_web_process_own_and_carry_no_key(sec
 
 
 async def test_the_ring_holds_two_hundred_lines_however_many_are_written(secrets_key, db, app):
-    """Bounded at 200 and newest last: a sync loop that fails every minute cannot grow the web
-    process's memory, and the line the operator needs is the last one written."""
+    """Bounded at 200 and newest last."""
     admin = await _admin(app)
     chatty = logging.getLogger("spielplan.test.chatty")
     for n in range(10_000):
@@ -467,17 +353,7 @@ async def test_the_ring_holds_two_hundred_lines_however_many_are_written(secrets
 async def test_a_jellyfin_key_pasted_with_a_space_is_stored_trimmed_and_printed_nowhere(
     secrets_key, db, app, hangs_up
 ):
-    """Plan §7 check 9 for the media-server key, which §14.3 makes admin-equivalent.
-
-    Double-click a key in Jellyfin's API Keys table and the trailing space comes with it. Saved as
-    typed, h11 refused it as a header value and quoted the whole of it -- `Illegal header value
-    b'KEY '` -- into the error the library pick prints every time the Connectors page opens, the
-    test button's answer, and, after one Sync now, the WARNING this ring holds for every admin
-    session until the web process restarts. So the save trims it and refuses a key no header can
-    carry without quoting it, and a key stored padded before that (read here straight into the row)
-    is taken out of every message the client raises, whichever spelling the exception gave it.
-    Searched as every six-character window, for `test_the_fingerprint_is_short_stable_and_not_the_key`'s
-    reason. [M5.7 review cycle 1, M57-KEYS-C1-01]"""
+    """A double-clicked key carries a trailing space, which h11 quotes whole into every error."""
     key = "JFYNkey0p9o8i7u6y5t4r3e2w1q"
     admin = await _admin(app)
 
@@ -517,11 +393,7 @@ async def test_a_jellyfin_key_pasted_with_a_space_is_stored_trimmed_and_printed_
 
 
 def test_a_record_that_cannot_be_formatted_never_raises_into_the_caller():
-    """A logging call that raised would fail the request or job that made it, so a record whose
-    arguments do not fit its format is dropped from the ring rather than raised.
-
-    Handed to the ring's handler directly: through the logger, pytest's own capture handler on
-    the root re-raises a formatting error by design, which would test pytest rather than this."""
+    """Through the handler directly: pytest's root capture handler re-raises formatting errors by design."""
     logs.install()
     record = logging.LogRecord(
         "spielplan.test", logging.WARNING, __file__, 1, "%d is not a number", ("nope",), None
@@ -534,9 +406,7 @@ def test_a_record_that_cannot_be_formatted_never_raises_into_the_caller():
 
 
 def test_the_system_card_declares_a_read_and_nothing_else():
-    """Plan E5 and decision 454: queue depth and logs are reads, and no control on this card starts
-    a job, drains the queue or rotates a key. Asked of the app's own schema, over every path under
-    the prefix, so a `POST /api/admin/system/drain` fails here the day it is written."""
+    """Asked of the app's own schema over every path under the prefix."""
     from spielplan.app import app
 
     operations = {
@@ -549,11 +419,7 @@ def test_the_system_card_declares_a_read_and_nothing_else():
 
 
 async def test_the_card_never_hands_the_secrets_key_to_the_browser(secrets_key, db, app):
-    """The assertion is over the whole serialised response, not over the field we meant.
-
-    A field added later — a config echo, a debug dump of `Settings` — would be caught by this
-    and by nothing else, and §14.3 is why that is worth a test rather than a code review.
-    """
+    """The whole serialised response, so a later config echo or debug dump is caught."""
     admin = await _admin(app)
     got = await admin.get("/api/admin/system")
 
@@ -564,11 +430,7 @@ async def test_the_card_never_hands_the_secrets_key_to_the_browser(secrets_key, 
 
 
 async def test_the_card_reports_the_newest_run_of_each_job(secrets_key, db, app):
-    """§6.6's "job health": one line per job, and it is the latest line.
-
-    The older rows stay in the table — they are the history a later milestone's chart reads —
-    so the card's contract is a projection, not a delete.
-    """
+    """The older rows stay: the card is a projection, not a delete."""
     admin = await _admin(app)
     await _run(db, "fold-in-tick", ok=True, ago=timedelta(hours=3), detail={"users": 1})
     await _run(db, "fold-in-tick", ok=False, ago=timedelta(minutes=2), detail={"error": "boom"})
@@ -587,13 +449,7 @@ async def test_the_card_reports_the_newest_run_of_each_job(secrets_key, db, app)
 async def test_a_job_that_started_and_never_finished_is_reported_as_unfinished(
     secrets_key, db, app
 ):
-    """`worker._record_start` opens the row before the call, so this row is a real state.
-
-    A SIGKILL past the grace period, an OOM or a power cut leaves exactly this, and it is a
-    more useful fact than no row at all — but only if the payload carries it rather than
-    collapsing `ok IS NULL` into `ok = false`, which would report a crash as a job failure and
-    send the operator looking for an exception that was never raised.
-    """
+    """`ok IS NULL` is a crash, not a job failure; collapsing it sends the operator after an exception."""
     admin = await _admin(app)
     await _run(db, "nightly-backup", ok=None, ago=timedelta(minutes=5))
 
@@ -604,18 +460,10 @@ async def test_a_job_that_started_and_never_finished_is_reported_as_unfinished(
     assert job["ok"] is None
 
 
-# --- the backup fact ------------------------------------------------------------------
-
-
 async def test_the_backup_fact_is_the_newest_successful_dump_not_the_newest_attempt(
     secrets_key, db, app
 ):
-    """The two keys are two different rows on precisely the install that needs this page.
-
-    `jobs` says the last attempt failed; `backup` says when a dump last actually succeeded.
-    Collapsing them would leave the household reading "nightly-backup: failed 5 minutes ago"
-    with no way to learn that the last good dump is from Tuesday — or that there is none.
-    """
+    """`jobs` says the last attempt failed; `backup` says when a dump last succeeded."""
     admin = await _admin(app)
     await _run(db, BACKUP, ok=True, ago=timedelta(hours=10), detail={"bytes": 4096, "kept": 14})
     await _run(db, BACKUP, ok=False, ago=timedelta(minutes=5), detail={"error": "no pg_dump"})
@@ -637,9 +485,7 @@ async def test_the_backup_fact_is_the_newest_successful_dump_not_the_newest_atte
 async def test_a_dump_is_stale_once_it_is_older_than_a_night_and_a_half(
     secrets_key, db, app, hours, stale
 ):
-    """36 hours: it cannot fire on a household whose dump ran at last night's anchor hour, and
-    it does fire before a second night has been missed. The boundary is asserted from both
-    sides, because a threshold tested only where it is obviously true is a constant."""
+    """Asserted from both sides: a threshold tested only where obviously true is a constant."""
     admin = await _admin(app)
     await _run(db, BACKUP, ok=True, ago=timedelta(hours=hours), detail={"bytes": 1})
 
@@ -664,19 +510,7 @@ async def test_an_install_that_has_never_completed_a_dump_is_stale(secrets_key, 
 async def test_a_fortnight_of_failures_does_not_turn_the_last_good_dump_into_never(
     secrets_key, db, app
 ):
-    """The card and the retention, on the one install that needs both.
-
-    `job-run-prune` keeps a fortnight, which is §2's own rotation; the household whose dumps
-    started failing is the household whose last successful row ages out of it. Deleted by age
-    alone, that row's disappearance flips this card from "last successful backup: the 24th, 15
-    days ago" plus the stale warning — the true and actionable answer — to the categorical
-    "no dump has ever completed on this install", which the frontend renders as a sentence
-    (`admin/system/+page.svelte`). The operator is then told backups were never set up, on a box
-    whose `/data/backups` still holds fourteen restorable dumps, because `nightly.prune` rotates
-    only after a dump that *worked*. Told the wrong problem, they go looking for a
-    misconfiguration rather than for the disk that filled on the 24th.
-    [M4.7 cycle 2 finding 7]
-    """
+    """Pruned by age alone, the last good row vanishes and the card claims no dump ever completed."""
     admin = await _admin(app)
     await _run(db, BACKUP, ok=True, ago=timedelta(days=15), detail={"bytes": 41235968})
     for night in range(13, 0, -1):
@@ -694,14 +528,7 @@ async def test_a_fortnight_of_failures_does_not_turn_the_last_good_dump_into_nev
 
 
 async def test_a_household_whose_worker_has_not_run_yet_is_named_no_jobs(secrets_key, db, app):
-    """The empty install, which is the one an operator meets first.
-
-    The card asks for the newest row of each *registered* job rather than for the distinct names
-    in the table, which is what keeps the read proportional to the twelve jobs instead of to
-    every row the loop has ever written. That makes the join's kind load-bearing: an outer one
-    would render twelve rows of nulls on a fresh boot and call it job health. And a row left by a
-    job this build no longer has is history for a later milestone's chart, not health for now.
-    """
+    """Newest row per *registered* job, inner join: a fresh boot is no rows, not twelve rows of nulls."""
     admin = await _admin(app)
     await _run(db, "a-job-this-build-does-not-have", ok=True, ago=timedelta(minutes=1))
 
@@ -712,15 +539,7 @@ async def test_a_household_whose_worker_has_not_run_yet_is_named_no_jobs(secrets
 
 
 async def test_the_data_tab_payload_does_not_carry_this_cards_facts(secrets_key, db, app):
-    """Decision 182 chose this card; the Data tab's payload kept carrying `jobs` and `backup`.
-
-    That spread was written while owner decision 2 was still open and its option (A) — "Data tab
-    + Connectors card only" — was live. Decision 182 took option (B), and nothing on
-    `frontend/src/routes/admin/data/+page.svelte` ever read either key: it renders `bundles`,
-    `active`, `loaded`, `restart_required` and `rebuild_set`. A second copy of the 36-hour rule,
-    on a route polled on a timer, is how two screens start telling one household different things
-    about one dump — and the copy nobody reads is the one that drifts. [M4.7 ops-11; decision 182]
-    """
+    """A second copy of the 36-hour rule is how two screens start disagreeing about one dump."""
     admin = await _admin(app)
     await _run(db, BACKUP, ok=True, ago=timedelta(hours=40), detail={"bytes": 77})
 
@@ -731,19 +550,10 @@ async def test_the_data_tab_payload_does_not_carry_this_cards_facts(secrets_key,
     assert (await _card(admin))["backup"]["bytes"] == 77, "this card is where it is reported"
 
 
-# --- custody --------------------------------------------------------------------------
-
-
 async def test_a_wrong_secrets_key_is_reported_rather_than_raised(
     secrets_key, db, app, monkeypatch
 ):
-    """dd03, at the one route whose job is to describe it.
-
-    The scenario is a restore whose `.env` did not come with it: the DEK row is the one the
-    first boot minted, and the key in the environment is not the key that wrapped it. Every
-    other admin route degrades; this one has to *name* the state, because it is the screen the
-    operator is on when they find out.
-    """
+    """A restore whose `.env` did not come with it: this route must *name* the state."""
     admin = await _admin(app)
     before = await _card(admin)
     assert before["secrets"]["unreadable"] is False
@@ -755,8 +565,7 @@ async def test_a_wrong_secrets_key_is_reported_rather_than_raised(
     after = await _card(admin)
 
     assert after["secrets"]["unreadable"] is True
-    # The row did not move — that is the point. The ciphertexts still name this key_id, so an
-    # operator who finds the right `.env` has lost nothing.
+    # The row did not move: the ciphertexts still name this key_id.
     assert after["secrets"]["key_id"] == key_id
     assert after["secrets"]["fingerprint"] != before["secrets"]["fingerprint"]
 
@@ -764,15 +573,7 @@ async def test_a_wrong_secrets_key_is_reported_rather_than_raised(
 async def test_the_connectors_repair_does_not_heal_this_card_while_a_secret_is_still_sealed(
     secrets_key, db, app, monkeypatch
 ):
-    """The card answers "is anything unopenable", not "does the active DEK row unwrap".
-
-    Those were one question until M4.7 gave the Connectors card its repair. Pasting the API key
-    over an unreadable DEK retires that row and seals under a fresh one, so the *active* row
-    opens again — and a card that asked only about the active row flipped to `unreadable: false`
-    at the exact moment the household's other secrets became unreachable: the VAPID pair here,
-    and any second connector on a real install. The one surface built to report custody would
-    have reported it healed. [M4.7 ops-11, dd03; decision 182]
-    """
+    """The question is "is anything unopenable", not "does the active DEK row unwrap"."""
     admin = await _admin(app)
     saved = await admin.put(
         "/api/admin/connectors/jellyfin",
@@ -790,8 +591,6 @@ async def test_the_connectors_repair_does_not_heal_this_card_while_a_secret_is_s
         json={"url": "http://jellyfin.test", "api_key": "a-freshly-issued-jellyfin-key"},
     )
     assert repaired.status_code == 200, repaired.text
-    # The shortcut worked, for Jellyfin: that is what makes the card's answer load-bearing
-    # rather than pedantic, because this is the screen the admin is standing on.
     assert (await admin.get("/api/admin/connectors/jellyfin")).json()["secrets_unreadable"] is False
 
     card = await _card(admin)
@@ -807,11 +606,7 @@ async def test_the_connectors_repair_does_not_heal_this_card_while_a_secret_is_s
 async def test_an_install_with_no_secrets_key_reports_that_rather_than_a_fingerprint(
     no_secrets_key, db, app
 ):
-    """§3.1 makes a half-configured boot a legal state, so the card describes it as one.
-
-    Not an error and not an empty string: `configured: false` is what lets the surface say the
-    key is unset rather than render a fingerprint of nothing and imply custody exists.
-    """
+    """`configured: false`, not a fingerprint of nothing."""
     admin = await _admin(app)
 
     card = await _card(admin)
@@ -823,16 +618,7 @@ async def test_an_install_with_no_secrets_key_reports_that_rather_than_a_fingerp
     assert card["secrets"]["unreadable"] is False
 
 
-# --- who may read it ------------------------------------------------------------------
-
-
 async def test_the_card_is_refused_to_a_signed_out_caller_and_to_a_member(secrets_key, db, app):
-    """§6.6 is an admin surface, and this one names the custody state of the whole install.
-
-    `test_api_gating.py` walks the dependency graph and would catch a missing `AdminUser` here
-    as an arithmetic complaint about a route count; this says the same thing in the terms the
-    route is written in, and it is cheap.
-    """
     admin = await _admin(app)
     member = await _member(app, admin)
     anonymous = app()

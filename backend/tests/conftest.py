@@ -1,12 +1,4 @@
-"""Shared fixtures.
-
-Tests that need a real Postgres read `TEST_DATABASE_URL` and skip when it is unset, so the
-suite stays runnable on a machine with no Docker. To run them:
-
-    docker compose -f docker-compose.yml -f ops/compose.dev.yml up -d db
-    createdb spielplan_test      # or: docker compose exec db createdb -U spielplan spielplan_test
-    TEST_DATABASE_URL=postgresql://spielplan:...@127.0.0.1:5432/spielplan_test pytest
-"""
+"""Shared fixtures. Postgres tests read `TEST_DATABASE_URL` (or `.env.test`) and skip when it is unset."""
 
 from __future__ import annotations
 
@@ -18,12 +10,7 @@ import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
 
-# Where the URL came from, decided here because this is the last frame that can still tell the two
-# apart: after the loader below has run, a URL an operator exported and a URL an untracked file
-# supplied are the same string. The arming line names the source because the convenience below is
-# what silently turns `pytest backend/tests` into an integration run -- creating and dropping
-# databases, and (via test_backup.py) shelling out to `docker exec` -- against whatever host a file
-# the repository does not track happens to name. [M4.8 test-02]
+# Decided before the loader below runs: afterwards an exported URL and a file's URL are the same string.
 _URL_SOURCE = "env" if os.environ.get("TEST_DATABASE_URL") else "unset"
 
 # Load .env.test if present, so the URL does not have to be exported by hand every time.
@@ -36,28 +23,13 @@ if _env_test.is_file() and "TEST_DATABASE_URL" not in os.environ:
             _URL_SOURCE = ".env.test"
 
 
-# M4.7 (decision 181) made §2's required config a refusal in `Settings` rather than a compose-only
-# `${VAR:?}`, which means the suite now has to supply what an install supplies. Until then the
-# `or "insecure-dev-secret"` fallback in `core/auth`, `api/rank` and `api/tonight` is what let
-# 1100+ tests construct `Settings` out of a blank environment; deleting it without this makes every
-# one of them a ValidationError. Set at import rather than in a fixture on purpose: `settings()` is
-# `lru_cache`d and modules construct `Settings` during collection, before any fixture has run.
-# `setdefault`, so CI's own values (`.github/workflows/ci.yml:17-19`) and a developer's exported
-# ones still win, and the value is a plausible-length secret because the refusal has a floor.
+# Set at import, not in a fixture: `settings()` is cached and modules construct `Settings` during
+# collection. `setdefault`, so CI's and a developer's values win.
 os.environ.setdefault("SESSION_SECRET", "pytest-session-secret-not-a-real-one")
 os.environ.setdefault("PUBLIC_URL", "http://localhost:8080")
 
-# And one variable taken away, for the same reason the two above are supplied: an install does not
-# have it. `SPIELPLAN_INSECURE_DEV` is decision 181's single off-switch for every §2 refusal, and
-# README's "Developing" paragraph hands it to the developer two lines after saying a hand-run
-# backend reads `.env` from its own working directory — which is the directory pytest runs from.
-# Left alone, a flag set there or exported disarms `test_config.py`'s eight refusal tests and the
-# anonymous-schema assertion in `test_http_seam.py`, which then pass by being unable to fail.
-# Not `pop`: `Settings.model_config` is `SettingsConfigDict(env_file=".env", ...)`, so a `.env`
-# line survives being removed from `os.environ` (the `no_secrets_key` fixture below records the
-# same discovery about SECRETS_KEY). The environment is the higher-precedence source, so an
-# explicit "0" is the one spelling that closes both routes in. A test that wants the flag sets it
-# itself, with `monkeypatch.setenv`. [M4.7 spec-04; decision 181]
+# An explicit "0", not `pop`: `Settings` also reads `.env`, which the environment outranks. Left set,
+# the flag disarms every §2 refusal test.
 os.environ["SPIELPLAN_INSECURE_DEV"] = "0"
 
 
@@ -66,36 +38,12 @@ def test_database_url() -> str | None:
 
 
 def _worker_suffix() -> str:
-    """What makes this pytest process distinct from every other one on the machine.
-
-    The pid, always -- including under -n.
-
-    It read `PYTEST_XDIST_WORKER` first, and that spelling is the one form of this identifier
-    that is NOT process-unique: `gw0` is what the first worker of every `-n` run calls itself, so
-    two such runs against one cluster each force-drop the other's live database in
-    `_make_database` -- the cross-process destruction `pg_url`'s docstring records, arriving
-    through the very mechanism written to prevent it. `gw0` is also invisible to `_reap_pattern`,
-    which parses a pid back out of the name, so a terminated `-n` run leaked one database per
-    worker with nothing ever coming back for them. An xdist worker is an ordinary OS process with
-    an ordinary pid, so preferring the pid costs nothing and puts both invariants back.
-
-    The pid is enough because a session that ends normally drops its database and one that
-    does not is swept by
-    `_reap_orphaned_databases` at the start of the next one -- which is the invariant this
-    docstring used to assert on the strength of the `finally` in `pg_url` alone, a frame a
-    terminated process never reaches. [M4.8 dd29]
-    """
+    """The pid, never `PYTEST_XDIST_WORKER`: `gw0` is not
+    process-unique, and `_reap_pattern` parses a pid."""
     return f"p{os.getpid()}"
 
 
-# Postgres truncates an identifier at 63 bytes, so the name is cut to fit -- and what gets cut
-# is the base, never the suffix. Truncating `<base>_p<pid>` as one string shears the tail, and
-# the tail is the whole of what `_reap` reads: at a 56-character base a pid of 63704 is stored
-# as `_p6370`, a different and by then almost certainly dead process, so the next session drops
-# a database a live one is using. That is the cross-process destruction `pg_url`'s docstring
-# records, arriving through the tidy-up written to prevent the leak. The reserve is a constant
-# rather than this process's own suffix length because the reaper has to rebuild the same prefix
-# for names written by processes whose pids are shorter than its own. [M4.8 dd29]
+# Postgres truncates identifiers at 63 bytes; the base is cut, never the suffix `_reap` reads back.
 _NAME_LIMIT = 62
 _SUFFIX_RESERVE = 10  # "p" plus the `\d{1,9}` `_reap` parses back out
 
@@ -106,19 +54,12 @@ def _name_prefix(base: str) -> str:
 
 
 def _database_name(base: str) -> str:
-    """The database this process will own, so the arming line can name the same one `pg_url`
-    creates rather than a plausible-looking reconstruction of it."""
+    """The database `pg_url` creates, so the arming line names the same one."""
     return f"{_name_prefix(base)}_{_worker_suffix()}"[:_NAME_LIMIT]
 
 
 def arming_line(url: str | None, source: str, unarmed_reason: str | None = None) -> str:
-    """The one line every run says about its integration layer.
-
-    A pure function and not an f-string inside the hooks, because the only other way to test what
-    a run prints is to run pytest inside pytest. ASCII on purpose (CLAUDE.md): this is the first
-    line a cp1252 console sees, and a run that crashes on its own banner reports nothing at all.
-    [M4.8 test-02]
-    """
+    """A pure function, so it is testable without running pytest in pytest. ASCII for cp1252 consoles."""
     if unarmed_reason or not url:
         reason = unarmed_reason or "TEST_DATABASE_URL is unset"
         return f"integration layer: UNARMED ({reason}) -- db/app/pg_url tests skip"
@@ -132,14 +73,7 @@ def arming_line(url: str | None, source: str, unarmed_reason: str | None = None)
 
 
 def pytest_addoption(parser) -> None:
-    """`--no-db`: run with the integration layer deliberately disarmed, and say so.
-
-    Registering an option from `backend/tests/conftest.py` is legal only because that directory is
-    always on the command line -- which CLAUDE.md already mandates for a different reason ("never
-    bare `pytest` from repo root": the pytest config lives in `backend/pyproject.toml`). Someone
-    will eventually try it from the root and be told "unrecognized arguments: --no-db", which is a
-    confusing way to learn that the path argument was missing. [M4.8 test-02]
-    """
+    """Legal only because `backend/tests` is always on the command line."""
     parser.addoption(
         "--no-db",
         action="store_true",
@@ -149,8 +83,7 @@ def pytest_addoption(parser) -> None:
 
 
 def pytest_configure(config) -> None:
-    # An empty TEST_DATABASE_URL is already the unarmed state `pg_url` skips on, so `--no-db`
-    # needs no branch of its own anywhere else in this file. [M4.8 test-02]
+    # An empty TEST_DATABASE_URL is already the unarmed state `pg_url` skips on.
     if config.getoption("--no-db"):
         os.environ["TEST_DATABASE_URL"] = ""
 
@@ -165,28 +98,14 @@ def pytest_report_header(config) -> str:
 
 
 def _report_line(config, line: str) -> None:
-    """Say something to the console from inside a hook or a fixture.
-
-    Never `print`: pytest's capture is on during fixture setup and a green run discards that
-    buffer, so a `print` from `pg_url` is invisible at `-q` -- the verbosity CLAUDE.md and both
-    `ci.yml` steps use -- and at default verbosity too. The terminal reporter writes past the
-    capture and lands before the progress line; a run with no terminal plugin at all has nowhere
-    for a console line to go, and staying quiet there is not the silence this exists to end.
-    """
+    """Never `print`: capture discards it on a green run; the terminal reporter writes past the capture."""
     reporter = config.pluginmanager.get_plugin("terminalreporter")
     if reporter is not None:
         reporter.write_line(line)
 
 
 def pytest_sessionstart(session) -> None:
-    """The same line again, for the verbosity this project actually runs at.
-
-    pytest suppresses `pytest_report_header` under `-q`, which is what CLAUDE.md's own command
-    line and `ci.yml` both use -- so the header hook alone would say nothing on every run anyone
-    actually performs. Written through the terminal reporter rather than `print` so it lands
-    before the progress line instead of in captured output, and only below default verbosity so
-    the two hooks never both speak. [M4.8 test-02]
-    """
+    """pytest suppresses `pytest_report_header` under `-q`, so this speaks there and only there."""
     if session.config.option.verbose >= 0:
         return
     _report_line(session.config, _session_arming_line(session.config))
@@ -215,26 +134,8 @@ async def _drop_database(admin_url: str, name: str) -> None:
 
 
 def _pid_is_alive(pid: int) -> bool:
-    """Is a process with this pid running right now?
-
-    Never `os.kill(pid, 0)` on Windows: `os.kill` there is `TerminateProcess`, so the POSIX no-op
-    liveness probe would kill whatever it asked about -- including the concurrent pytest run this
-    whole mechanism exists to protect. `OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION)` is the
-    read-only question, and the handle has to be closed or the probe leaks one per name.
-
-    A failed `OpenProcess` is not the same answer as a missing process, and the two mean opposite
-    things to a caller that drops WITH (FORCE): ERROR_INVALID_PARAMETER (87) says the pid is gone,
-    ERROR_ACCESS_DENIED (5) says this session may not ask about a process that is very much there.
-    Reading the second as death is how a reaper becomes the cross-process destruction it exists to
-    prevent -- a pytest run under another account (decision 183's corpus runner installs as a
-    service, against the same cluster and base name `.env.test` names) or from an elevated shell
-    owns pids this one cannot open, and its live database would be taken for an orphan. So only
-    87 is death and every other failure is treated as life, which is the same call the
-    PermissionError arm below makes on POSIX and errs the same way: an orphan left behind costs
-    disk, a live one dropped costs the run. `use_last_error` because `ctypes.windll`'s shared
-    handle keeps no reliable per-call error -- the private copy is the supported read.
-    [M4.8 dd29, review cycle 2]
-    """
+    """Never `os.kill(pid, 0)` on Windows: it is `TerminateProcess`. Only ERROR_INVALID_PARAMETER (87)
+    means gone; access denied is another account's live process."""
     if os.name == "nt":
         import ctypes
 
@@ -255,14 +156,7 @@ def _pid_is_alive(pid: int) -> bool:
 
 
 def _reap_pattern(base: str) -> re.Pattern[str]:
-    """The names this convention wrote, and only those.
-
-    `\\d{1,9}` and not `\\d+`: every pid on every platform this runs on fits, and a longer run of
-    digits is by construction not a pid this convention wrote -- which puts it in the same class
-    as `_pgr` and `_ledger`, left alone. Built from `_name_prefix` and not from `base`, because
-    that is where `_database_name` stopped: for a base long enough to be cut, a pattern anchored
-    on the whole base matches nothing this suite ever created and the leak comes back silently.
-    """
+    """`\\d{1,9}`, built from `_name_prefix`: only names this convention wrote."""
     return re.compile(rf"^{re.escape(_name_prefix(base))}_p(\d{{1,9}})$")
 
 
@@ -290,37 +184,14 @@ async def _reap(admin_url: str, base: str) -> list[str]:
 
 
 def _reap_orphaned_databases(admin_url: str, base: str, report) -> list[str]:
-    """Drop every `<base>_p<pid>` whose named process is gone. Returns what it dropped.
-
-    `pg_url` drops its own database in a `finally`, which is precisely the frame a terminated
-    session does not run; by the time anyone counted, 34 of them and 4,151 MB had accumulated in
-    the same cluster as the household's own `spielplan` database, where the dump/restore tests
-    need the free space.
-
-    Liveness and not connection count: `db` closes its connection between tests, so an idle
-    database is the normal state of a *running* session, and reaping on that would reproduce the
-    cross-process destruction `pg_url`'s docstring exists to prevent. Names that are not
-    `_p<digits>` are left for a human -- `_pgr` from `test_backup.py`, an xdist `_gw0` that
-    carries no pid at all, a hand-made `_ledger`: a name without a pid is a name a person chose.
-
-    Never raises, and never silently: a tidy-up that could not run is not a suite that failed,
-    but one nobody is told about is the leak coming back with nothing to point at. `report` is
-    the caller's way of speaking -- `pg_url` hands it the terminal reporter, because this runs
-    inside session-fixture setup, where a `print` goes into a buffer a green run discards at
-    every verbosity the project uses. And there is a failure worth hearing about: the sweep
-    itself is one loop inside one `try`, so a single undroppable orphan (one owned by another
-    role, one holding a backend a non-superuser cannot terminate) abandons the rest of the
-    sweep, and a session that says nothing about that accumulates exactly what this exists to
-    prevent. [M4.8 dd29]
-    """
+    """Drops every `<base>_p<pid>` whose process is gone:
+    liveness, not connection count. Never raises, never silent."""
     import asyncio
 
     try:
         return asyncio.run(_reap(admin_url, base))
     except Exception as exc:
-        # The exception text comes from the OS and is localised on a German Windows, so it is
-        # forced into ASCII rather than trusted: CLAUDE.md's console rule, and a UnicodeEncodeError
-        # raised while reporting a failed tidy-up would fail the session this line promises not to.
+        # OS text is localised; forced to ASCII so reporting a failed tidy-up cannot raise.
         detail = str(exc).encode("ascii", "replace").decode("ascii")
         report(f"conftest: orphaned test databases not reaped ({type(exc).__name__}: {detail})")
         return []
@@ -328,18 +199,8 @@ def _reap_orphaned_databases(admin_url: str, base: str, report) -> list[str]:
 
 @pytest.fixture(scope="session")
 def pg_url(request) -> str:
-    """A database this pytest process owns outright.
-
-    `db` below drops and recreates schema `public` for every test. On one shared database that
-    makes two concurrent pytest processes destroy each other's schema mid-test — which is not a
-    hypothetical: three agents building M2 in parallel each hit it, and the failures
-    (DuplicateTable, UndefinedTable, unique violations on pg_namespace) look like product bugs
-    while having nothing to do with the code under test.
-
-    So the URL from the environment names a *template*: the real database is per process, made
-    at session start and dropped at the end. One extra CREATE DATABASE per session buys a suite
-    that can be run concurrently by anything.
-    """
+    """A database this process owns: `db` drops schema `public`
+    per test, so a shared one breaks concurrent runs."""
     import asyncio
     from urllib.parse import urlsplit, urlunsplit
 
@@ -364,11 +225,7 @@ def pg_url(request) -> str:
 
 @pytest.fixture
 async def db(pg_url):
-    """A connection to a freshly migrated, empty database.
-
-    Each test gets a clean schema: the fixtures are small and dropping the schema is faster
-    and far less surprising than trying to unwind an importer that writes fourteen tables.
-    """
+    """A connection to a freshly migrated, empty database; the schema is dropped per test."""
     import asyncpg
 
     from spielplan.db import migrate, pool
@@ -396,13 +253,7 @@ async def db(pg_url):
 
 @pytest.fixture
 async def fake_jellyfin():
-    """`ops/fake_jellyfin.py` mounted in-process.
-
-    Returns (app, transport). The transport goes into `JellyfinClient`, so the client's real
-    request building — headers, query parameters, the >= 10.9 routes — is exercised end to
-    end with no socket. §7.1's field list and §7.3's per-user write are both HTTP facts, and
-    a mock would only assert that we call ourselves.
-    """
+    """Returns (app, transport), so the client's real request building runs end to end with no socket."""
     import importlib.util
     import sys
 
@@ -412,10 +263,7 @@ async def fake_jellyfin():
         "fake_jellyfin", ROOT.parent / "ops" / "fake_jellyfin.py"
     )
     module = importlib.util.module_from_spec(spec)
-    # Registered before it is executed, which is what `import` itself does: `ops/fake_jellyfin.py`
-    # carries `from __future__ import annotations`, so Pydantic resolves its models' annotations
-    # through `sys.modules[cls.__module__]`, and a missing entry surfaces as a
-    # `class-not-fully-defined` error naming a model rather than this fixture. [M4.8 ti-09]
+    # Registered before exec: Pydantic resolves the double's annotations through `sys.modules`.
     sys.modules[spec.name] = module
     spec.loader.exec_module(module)
     module.state.reset()
@@ -423,12 +271,7 @@ async def fake_jellyfin():
 
 
 def _connector_seed_env_names() -> tuple[str, ...]:
-    """The env vars §2 lets seed connector config on first boot, derived rather than listed.
-
-    Same derivation as `test_static_contracts.py`'s `_seed_fields`, for the same reason: a seventh
-    connector variable added to `Settings` has to be neutralised here without anyone remembering
-    that a second copy of the list exists in a fixture. [M4.8 ti-app-fixture-inherits-the-dot-env]
-    """
+    """Derived from `Settings`, so a new connector variable is neutralised without a second list."""
     from spielplan.core.config import Settings
 
     return tuple(
@@ -439,50 +282,15 @@ def _connector_seed_env_names() -> tuple[str, ...]:
 
 
 def _connector_seed_variables_present() -> list[str]:
-    """Every variable in the environment that seeds a connector, in whatever case it was exported.
-
-    `Settings` matches the environment case-insensitively (pydantic-settings' `case_sensitive` is
-    False), and a POSIX environment keeps `jellyfin_url` apart from `JELLYFIN_URL`, so deleting the
-    upper-case spelling alone left a lower-case one for the lifespan's seed. Read here rather than in
-    the `app` fixture, whose body is held to mutating the process only through `monkeypatch`.
-    [M5.5 review cycle 2, M55-KEYS-C2-04]
-    """
+    """`Settings` matches case-insensitively and a POSIX environment keeps both spellings apart."""
     seeds = set(_connector_seed_env_names())
     return [variable for variable in os.environ if variable.upper() in seeds]
 
 
 @pytest.fixture
 async def app(db, pg_url, tmp_path, monkeypatch):
-    """The real FastAPI app, over ASGI, against the test database.
-
-    Routes are where §3.1's role gating and §3.2's re-prompt actually live — a unit test of the
-    `admin_user` dependency proves the dependency, not that every admin route is behind it. This
-    runs the genuine lifespan, so migrations and §2's env seeding happen the way they do at boot.
-
-    Yields a factory: each call returns a fresh client with its own cookie jar, which is how one
-    test can hold an admin session and a member session at the same time.
-
-    Both halves of the operator's environment are taken away first, and the reason is the whole
-    reason this fixture is worth writing: the genuine lifespan calls `registry.seed_from_env`
-    (`app.py`), and `Settings.model_config` reads `.env` from the working directory, which is the
-    directory pytest runs from. On a household that followed its own README -- `JELLYFIN_URL` and
-    `JELLYFIN_API_KEY` in `.env`, exactly as `.env.example` documents -- the app under test boots
-    with a real connector already configured: `test_jellyfin_link.py`'s two unconfigured-state
-    assertions go red for a reason that has nothing to do with the code, and the household's
-    encrypted credentials are written into a per-process test database. `no_secrets_key` below
-    already records this incident and fixes it with a chdir; the second site did not get the fix.
-    A test that wants a seeded connector says so, the way `test_connector_registry.py` does.
-
-    Through `monkeypatch` and not by hand, for the second half of the same reason `no_secrets_key`
-    uses it. Five statements sit between the mutations and the `yield`, and two of them raise:
-    `create_app()` opens with `_refuse_multiple_workers()` and then `settings()`, whose §2
-    validator is a refusal under decision 181 -- and the `cache_clear()` below makes that a fresh
-    construction, resolved from the directory this fixture has just moved to. A hand-rolled
-    `finally` does not run when the body raises before reaching its `try`, and the process would
-    then spend the rest of the session in a pytest tmp_path with the connector seeds gone: one
-    red test becoming a session of failures that name a temp directory. pytest unwinds
-    `monkeypatch` either way. [M4.8 ti-app-fixture-inherits-the-developers-dot-env]
-    """
+    """The real app over ASGI with the genuine lifespan. Yields a factory: each call is a client with its
+    own cookies. The operator's env and `.env` are removed via `monkeypatch`, which unwinds on any exit."""
     import contextlib
 
     import httpx
@@ -498,10 +306,7 @@ async def app(db, pg_url, tmp_path, monkeypatch):
     neutral.mkdir(exist_ok=True)
     monkeypatch.chdir(neutral)
     settings.cache_clear()
-    # Decision 497's five-second timer, off. The window tests pin `app.state.artifacts` by hand and
-    # then move the active row, and a timer re-pinning underneath them would make each one a race
-    # against the clock. The on-demand re-pin stays - `GET /api/admin/bundle/state` still loads a
-    # flip it reports - and `test_bundle_basis.py` turns the timer on where it is the subject.
+    # Decision 497's follow timer, off: the window tests pin `app.state.artifacts` by hand.
     from spielplan.models import basis
 
     monkeypatch.setattr(basis, "FOLLOW_SECONDS", None)
@@ -530,15 +335,12 @@ async def app(db, pg_url, tmp_path, monkeypatch):
 
 @pytest.fixture
 async def app_client(app):
-    """One anonymous client against the app fixture, for the common single-identity case."""
     return app()
 
 
 @pytest.fixture
 def secrets_key(monkeypatch):
-    """§2: connector secrets are AEAD-encrypted under a DEK wrapped by SECRETS_KEY, and the app
-    refuses to start secret-dependent connectors without it. Tests that store a connector
-    secret therefore need one; tests that assert the refusal deliberately do not take this."""
+    """Tests that assert the refusal deliberately do not take this."""
     from spielplan.core.config import settings
 
     monkeypatch.setenv("SECRETS_KEY", "test-secrets-key-not-a-real-one-at-all")
@@ -549,16 +351,8 @@ def secrets_key(monkeypatch):
 
 @pytest.fixture
 def no_secrets_key(monkeypatch, tmp_path):
-    """The inverse of `secrets_key`, and it needs both halves to be honest.
-
-    §2's refusal is checked against the process-wide `settings()` on purpose (custody is a
-    process fact, not an argument — see `registry.seed_from_env`), and `Settings.model_config`
-    reads `.env` from the working directory. The README tells every developer to create one
-    with a real `SECRETS_KEY` in it, so "no key" was true in CI and false on every machine that
-    followed the setup instructions: the seed succeeded and the test failed for a reason that
-    had nothing to do with the rule. Unsetting the variable is not enough on its own, hence the
-    chdir into an empty directory.
-    """
+    """`Settings` reads `.env` from the working directory,
+    so unsetting the variable is not enough: chdir too."""
     from spielplan.core.config import settings
 
     monkeypatch.delenv("SECRETS_KEY", raising=False)

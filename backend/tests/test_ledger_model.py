@@ -1,13 +1,5 @@
-"""The Personal Ledger's maths. Spec v2.1 §5.2, §5.3, §6.3, §4.3.
-
-No database: §5.3 puts budgets on this code, and a budget measured through Postgres is a
-measurement of Postgres. Every test here runs on numpy alone.
-
-The first test is the one the rest rest on. Analytic gradients and Hessians are where a
-four-arm likelihood goes quietly wrong: a sign error in one cross-term still *converges*, to a
-slightly wrong answer, and every downstream test that only checks "the ranking looks sensible"
-passes. Finite differences are the only thing that catches it.
-"""
+"""The Personal Ledger's maths (§5.2, §5.3). Numpy only. A wrong cross-term still converges, to
+a slightly wrong answer, so finite differences come first."""
 
 from __future__ import annotations
 
@@ -23,8 +15,8 @@ from spielplan.ledger.model import OUT_A, OUT_B, OUT_TIE, ObservationSet
 
 
 def synth(n=30, n_verdicts=None, n_duels=40, *, seed=3, tiers=0, embed=True):
-    """A synthetic household: a latent taste, verdicts through fixed thresholds, duels that
-    agree with the latent, and a tie band wide enough to exercise the Davidson term."""
+    """Verdicts through fixed thresholds, agreeing duels,
+    and a tie band wide enough for the Davidson term."""
     rng = np.random.default_rng(seed)
     e = rng.normal(size=(n, 64)) / 8.0 if embed else np.zeros((n, 64))
     truth = 0.3 + (e @ (rng.normal(size=64) / 8.0)) + rng.normal(scale=0.25, size=n)
@@ -57,9 +49,7 @@ def synth(n=30, n_verdicts=None, n_duels=40, *, seed=3, tiers=0, embed=True):
         duel_a=pairs[:, 0].astype(np.int64),
         duel_b=pairs[:, 1].astype(np.int64),
         duel_outcome=outcome.astype(np.int64),
-        # A realistic mix: §6.1's decisive toggle is off by default and tapped sometimes, so
-        # the margins are not all equal — which is the only condition under which normalising
-        # them can change anything at all.
+        # Unequal margins: the only condition under which normalising them can change anything.
         duel_margin=np.where(rng.random(len(pairs)) < 0.4, 1.6, 1.0),
     )
 
@@ -69,25 +59,11 @@ def spearman(a, b):
 
 
 def reach_sigma(reach: float) -> float:
-    """The σ whose ±z·σ interval reaches exactly `reach`, at whatever `straddle_z` ships.
-
-    A fixture whose point is "this interval crosses the cut above" is a claim about the REACH,
-    and the reach is z·σ — so written as a bare σ it is pinned to one value of a constant §4.3
-    says is tunable. Decision 214 retunes `straddle_z` from 1.0 to 0.15 and two straddle tests
-    below stopped reaching anything, which is a fixture breaking rather than a rule changing.
-    """
+    """The fixture's claim is the REACH (z·σ), so it is written in z, which §4.3 says is tunable."""
     return reach / DEFAULTS.straddle_z
 
 
-# --- the derivatives ------------------------------------------------------------------------
-
-
 def test_the_analytic_gradient_matches_finite_differences():
-    """Every arm, every parameter block, against a central difference.
-
-    A wrong cross-term still converges — to the wrong answer — and no ranking-shaped assertion
-    would notice. This is the test that makes the other twenty meaningful.
-    """
     _truth, obs = synth(n=14, n_duels=25, tiers=6, seed=11)
     hp = DEFAULTS
     rng = np.random.default_rng(0)
@@ -138,10 +114,7 @@ def test_the_analytic_gradient_matches_finite_differences():
 
 
 def test_the_ordinal_arrowhead_hessian_matches_finite_differences():
-    """The anchor's Hessian is arrowhead — r_i appears only in title i's own ordinal
-    observations — and that structure is what makes the solve O(n*p^2) rather than O((n+p)^3).
-    A wrong block makes Newton crawl rather than fail, which is the kind of thing nobody
-    chases down."""
+    """Arrowhead is what makes the solve O(n*p^2); a wrong block makes Newton crawl rather than fail."""
     _truth, obs = synth(n=10, n_duels=18, tiers=4, seed=5)
     hp = DEFAULTS
     rng = np.random.default_rng(1)
@@ -178,14 +151,7 @@ def test_the_ordinal_arrowhead_hessian_matches_finite_differences():
 
 
 def test_a_duel_couples_its_pair_and_leaves_the_shared_location_alone():
-    """The bug this test exists for: a duel's curvature is NOT diagonal in s. It couples its
-    pair with an off-diagonal minus h, and for a coordinate that shifts every title equally —
-    mu — the four contributions cancel exactly, because shifting everyone changes no
-    difference.
-
-    Folding h_dd into the diagonal and stopping there overstates the curvature by up to a
-    factor of two in a duel-heavy fit and hands back a sigma that is confidently wrong.
-    """
+    """A duel couples its pair, and for mu the four contributions cancel: diagonal-only overstates sigma."""
     n = 4
     obs = ObservationSet(
         title_ids=np.arange(n, dtype=np.int64), embeddings=np.zeros((n, 64)),
@@ -217,54 +183,11 @@ def test_a_duel_couples_its_pair_and_leaves_the_shared_location_alone():
     )
 
 
-# --- convexity, and what it buys ------------------------------------------------------------
-
-# [M4.13 finding 29] `test_the_optimum_is_unique_from_any_start` stood here and could not fail.
-# It called `dataclasses.replace(obs)` — the same observations, not a different start — and never
-# passed `fit()`'s `z0`/`r0`, so both calls arrived at `z0=None, r0=None`; spied, a `fit` that
-# discarded its start arguments altogether left the test green. The honest version varies the
-# start over a distribution of households and lives at
-# `test_ledger_contract.py::test_no_other_starting_point_finds_a_lower_objective`, which no
-# coverage row named until this milestone registered it.
-#
-# [M4.13 cycle 2, m413-c2-cov-01] That replacement did pass `z0`/`r0` and still did not survive the
-# same spy, because its comparison is one-sided: a start that is discarded cannot find a LOWER
-# objective. Registering it here as "the honest version" claimed a property it did not yet have,
-# so it now reads its own start back out of a zero-budget fit before comparing, and the spy that
-# condemned the test deleted here turns it red.
-
-
 def test_a_threshold_can_never_put_a_disliked_title_above_a_liked_one():
-    """Section 5.2: "monotone link => a mis-placed personal threshold widens ties but cannot
-    invert an ordering (measured inversion rate exactly 0.0000)".
-
-    Stated exactly: the *link* is monotone, so wherever a person's thresholds sit, a title they
-    called disliked can never end up above one they called liked. Two very different beliefs
-    about where the cutpoints belong, the same labels, and zero inversions across the classes.
-
-    What this does NOT claim is that the fitted s is invariant to the thresholds. It is not,
-    and it should not be — the cutpoint spacing sets the scale s is fitted on, and the ridge on
-    v and the prior on r shrink differently against different scales, so two titles inside one
-    class can swap by a hair. That is the priors trading off, not the link failing, and
-    pretending otherwise would be a test asserting the wrong invariant.
-
-    [M4.13 finding 29] Three things were wrong with how that was asserted, and each hid the
-    next. `synth`'s verdict thresholds are fixed at -0.4 and 0.4 while its latent is
-    N(0.300, 0.281), so level 0 is 0.77% of labels (46 of 6000 over 200 draws) and the fixture
-    drew none at n = 30: the labels were 15 "fine" and 15 "liked", and the disliked class this
-    claim is *about* did not exist. The `if a.size and b.size` guard made that silent rather
-    than loud, and the loop `for low in (0, 1): for high in (low + 1, 2)` visited (1, 2) twice.
-    What was left compared `s[a].max() < s[b].max()`, which a single high-class title on top
-    satisfies: an injected fit placing all 15 level-1 titles above 14 of 15 level-2 titles
-    passed it. So the labels below cover all three classes, the precondition is asserted instead
-    of skipped past, and the comparison is max against MIN — measured to hold with a margin of
-    0.42 on the loose fit and 0.41 on the tight one, which is the claim §5.2 actually makes and
-    not a tolerance that was widened until it passed.
-    """
+    """§5.2: a monotone link cannot invert an ordering across classes. Within a class the priors may swap
+    two titles by a hair, so the claim is max-of-lower against MIN-of-higher."""
     truth, base = synth(n=30, n_duels=0, seed=8)
-    # The person who uses all three buttons. Labelling by terciles of the latent keeps the labels
-    # monotone in the quantity being fitted — all the monotone-link claim needs — while giving the
-    # disliked class the members synth's fixed cutpoints essentially never produce.
+    # Terciles of the latent keep labels monotone and give the disliked class members synth never draws.
     held = truth[base.ord_index]
     level = np.searchsorted(np.quantile(held, [1 / 3, 2 / 3]), held, side="right")
     obs = dataclasses.replace(base, ord_level=level.astype(np.int64))
@@ -287,13 +210,11 @@ def test_a_threshold_can_never_put_a_disliked_title_above_a_liked_one():
                 f"class {low} reached above class {high}: max(s | {low}) = "
                 f"{fitted.s[a].max():.3f} >= min(s | {high}) = {fitted.s[b].min():.3f}"
             )
-    # …and within a class, the ordering barely moves: the priors, not the link.
+    # ...and within a class, the ordering barely moves: the priors, not the link.
     assert spearman(loose.s, tight.s) > 0.99
 
 
 def test_the_ordinal_link_is_monotone():
-    """The mechanism behind it: P(class >= k) rises with s for every k, so the class a title
-    lands in can never move down as its latent moves up."""
     cuts = np.array([-0.5, 0.7])
     s = np.linspace(-4, 4, 200)
     upper = 1.0 / (1.0 + np.exp(-(s - cuts[1])))
@@ -301,13 +222,8 @@ def test_the_ordinal_link_is_monotone():
     assert list(model.tier_of(s, cuts)) == sorted(model.tier_of(s, cuts))
 
 
-# --- the arms, each doing what §5.2 says it does ---------------------------------------------
-
-
 def test_duels_add_resolution_within_the_liked_class():
-    """§5.2: "comparisons add resolution *within* the liked class (+0.008..+0.016 at 30 duels,
-    monotone, no cost to global ranking)". Verdicts alone cannot order two titles a person
-    called the same thing; duels can."""
+    """Verdicts alone cannot order two titles a person called the same thing; duels can."""
     truth, obs = synth(n=40, n_duels=0, seed=4)
     verdicts_only = model.fit(obs, DEFAULTS)
 
@@ -321,8 +237,7 @@ def test_duels_add_resolution_within_the_liked_class():
 
 
 def test_a_tie_is_data_and_moves_the_fit():
-    """§4.2: "'about the same' is first-class data: 22% of random pairs are genuine ties".
-    A tie must not be a dropped row — the two titles are pulled together."""
+    """§4.2: 22% of random pairs are genuine ties; a tie is data, not a dropped row."""
     n = 6
     base = ObservationSet(
         title_ids=np.arange(n, dtype=np.int64),
@@ -346,8 +261,7 @@ def test_a_tie_is_data_and_moves_the_fit():
 
 
 def test_the_tie_parameter_is_fitted_not_fixed():
-    """§4.3 ships δ₀ = 0.22 as an *initialisation*, "thereafter fitted". A household that never
-    ties must be able to move ν away from the prior."""
+    """δ₀ = 0.22 is an initialisation, "thereafter fitted"."""
     _truth, obs = synth(n=20, n_duels=60, seed=6)
     decisive = dataclasses.replace(
         obs, duel_outcome=np.where(obs.duel_outcome == OUT_TIE, OUT_A, obs.duel_outcome)
@@ -357,14 +271,7 @@ def test_the_tie_parameter_is_fitted_not_fixed():
 
 
 def test_a_decisive_duel_teaches_more_than_a_hesitant_one():
-    """Section 6.1: "a decisive pick teaches more than a hesitant one" — the copy is only
-    honest if the margin weight actually enters the likelihood.
-
-    The comparison has to be *among* duels. Section 4.3 normalises weights as
-    margin/mean(margin), which keeps a user's total duel evidence invariant to how often they
-    tap the toggle — so a lone decisive duel weighs exactly what a lone hesitant one does, by
-    design. What the toggle buys is relative weight, and that is what this measures.
-    """
+    """Weights are margin/mean(margin), so only duels relative to each other can show the toggle."""
     n = 6
     base = ObservationSet(
         title_ids=np.arange(n, dtype=np.int64), embeddings=np.zeros((n, 64)),
@@ -386,8 +293,6 @@ def test_a_decisive_duel_teaches_more_than_a_hesitant_one():
 
 
 def test_turning_margin_weighting_off_flattens_the_toggle():
-    """Section 4.3 ships the flag, so switching it off has to reach the fit: every duel then
-    weighs the same however decisively it was answered."""
     n = 6
     obs = ObservationSet(
         title_ids=np.arange(n, dtype=np.int64), embeddings=np.zeros((n, 64)),
@@ -409,8 +314,6 @@ def test_turning_margin_weighting_off_flattens_the_toggle():
 
 
 def test_a_tier_edit_is_data_on_the_same_latent():
-    """§5.2: "drag-and-drop = data, not override; the model re-fits around it". The tier arm
-    shares s with the verdict arm, which is what makes the two commensurable."""
     n = 8
     base = ObservationSet(
         title_ids=np.arange(n, dtype=np.int64), embeddings=np.zeros((n, 64)),
@@ -433,17 +336,8 @@ def test_a_tier_edit_is_data_on_the_same_latent():
     assert after.s[0] > after.s[2] > after.s[1], "a drag must move the latent, not just a label"
 
 
-# --- §5.2's scar ------------------------------------------------------------------------------
-
-
 def test_the_preconditioner_survives_one_heavily_duelled_title():
-    """§5.2: "fixed-step GD measurably diverges on episodes containing one popular title — this
-    is a scar, keep the preconditioner."
-
-    One title with two hundred duels and the rest with two: the curvature spread across titles
-    is two orders of magnitude, which is exactly what one step size cannot serve. The
-    preconditioned solve must still land on a finite, ordered fit.
-    """
+    """§5.2's scar: fixed-step GD diverges when one title has two orders of magnitude more duels."""
     n = 30
     rng = np.random.default_rng(12)
     popular = 0
@@ -476,12 +370,7 @@ def test_the_preconditioner_survives_one_heavily_duelled_title():
     assert fitted.rho > 1.0, "this fixture must actually exhibit the curvature spread"
 
 
-# --- display: §5.2's 0..1 weight ---------------------------------------------------------------
-
-
 def test_the_displayed_weight_is_the_users_own_empirical_cdf():
-    """§5.2: "the empirical CDF of the user's own fitted `s` values, computed per kind (their
-    best-ranked title → ~1.0, worst → ~0.0)"."""
     s = np.array([-2.0, -0.5, 0.0, 0.7, 3.0])
     cdf = model.empirical_cdf(s, s)
     assert cdf[0] == pytest.approx(0.1)
@@ -490,8 +379,7 @@ def test_the_displayed_weight_is_the_users_own_empirical_cdf():
 
 
 def test_the_weight_is_stable_under_monotone_rescaling():
-    """Which is the property that makes it the owner's "always-preferred → 1.0" definition
-    rather than an artefact of whatever scale s happens to be fitted on."""
+    """The owner's "always-preferred -> 1.0" is independent of the scale s is fitted on."""
     s = np.array([-2.0, -0.5, 0.0, 0.7, 3.0])
     assert np.allclose(model.empirical_cdf(s, s), model.empirical_cdf(3 * s + 11, 3 * s + 11))
     warped = np.tanh(s)
@@ -499,8 +387,7 @@ def test_the_weight_is_stable_under_monotone_rescaling():
 
 
 def test_a_single_title_has_no_meaningful_weight():
-    """One observation cannot place anyone on a 0..1 scale, and inventing 0.5 would be a
-    number with no evidence behind it."""
+    """Inventing 0.5 would be a number with no evidence behind it."""
     assert np.isnan(model.empirical_cdf(np.array([1.0]), np.array([1.0]))).all()
 
 
@@ -509,35 +396,27 @@ def test_ties_share_a_weight():
     assert cdf[0] == cdf[1]
 
 
-# --- §6.3: tiers and the straddle badge ---------------------------------------------------------
-
-
 def test_the_fitted_cutpoints_are_the_displayed_boundaries():
-    """§5.2: the tier arm's cutpoints "**are** the displayed tier boundaries"."""
     cuts = np.array([-1.0, -0.4, 0.0, 0.4, 1.0, 1.6])
     s = np.array([-2.0, -0.7, 0.2, 1.2, 2.0])
     assert list(model.tier_of(s, cuts)) == [0, 1, 3, 5, 6]
 
 
 def test_the_initial_cutpoints_carry_the_measured_tier_shape():
-    """§6.3's measured distribution is the prior *mean* for the default seven-tier set, so a
-    level nobody has used sits where the crowd puts it rather than at infinity."""
+    """A level nobody has used sits where the crowd puts it rather than at infinity."""
     cuts = model.initial_cutpoints(7)
     assert cuts.size == 6
     assert list(cuts) == sorted(cuts)
     shares = np.diff(np.concatenate([[0.0], 1 / (1 + np.exp(-cuts)), [1.0]]))
     assert np.allclose(shares, model.MEASURED_TIER_SHARES, atol=1e-9)
 
-    # A household that configured some other tier set gets equal mass: there is no measurement
-    # for a set nobody has used, and inventing one would be a number with no provenance.
+    # Equal mass for any other tier set: there is no measurement for a set nobody has used.
     five = model.initial_cutpoints(5)
     five_shares = np.diff(np.concatenate([[0.0], 1 / (1 + np.exp(-five)), [1.0]]))
     assert np.allclose(five_shares, 0.2)
 
 
 def test_a_posterior_that_reaches_the_next_tier_is_flagged():
-    """§6.3's "A/S straddle": the badge exists because σ is real, not because the number looks
-    close."""
     cuts = np.array([-1.0, 0.0, 1.0])
     s = np.array([0.95, 0.20])
     sigma = np.array([reach_sigma(0.30), reach_sigma(0.02)])
@@ -547,17 +426,7 @@ def test_a_posterior_that_reaches_the_next_tier_is_flagged():
 
 
 def test_a_straddle_never_names_a_tier_that_is_not_adjacent():
-    """§6.3's badge is the *neighbouring* level the posterior also reaches.
-
-    `rank.board.straddles`' docstring already says "the **adjacent** tier the posterior also
-    reaches" and the `tonight-rank-straddle-equals-eligible` row already says "the one adjacent
-    tier that exists"; nothing asserted it. The old implementation set the reach to
-    `searchsorted(lo)` whenever that differed from the tier, so a posterior crossing two cuts
-    came back two levels down — "B/F" on a five-tier board — and `queue._boundary` then drew the
-    partner from a tier the title does not border. Decision 205 keeps the ±z·σ predicate and
-    restricts the answer to the two neighbours; decision 214 then retuned `straddle_z` to 0.15,
-    which moves how many titles reach a neighbour and nothing about which one they name.
-    """
+    """Decision 205: the badge names only an adjacent tier, however many cuts the interval crosses."""
     cuts = model.initial_cutpoints(7)
     rng = np.random.default_rng(19)
     s = rng.normal(scale=2.0, size=600)
@@ -573,13 +442,7 @@ def test_a_straddle_never_names_a_tier_that_is_not_adjacent():
 
 
 def test_restricting_the_named_tier_does_not_narrow_the_straddling_set():
-    """§6.3 makes the badge and queue eligibility one predicate (proposal 157), so narrowing
-    *which* tier is named must not change *who* is named at all — a fix that shrank the set
-    would shrink the comparison queue with it, silently.
-
-    The predicate, stated independently of the implementation: some cutpoint lies inside
-    (s − zσ, s + zσ].
-    """
+    """The badge and queue eligibility are one predicate: some cutpoint in (s - zσ, s + zσ]."""
     cuts = model.initial_cutpoints(7)
     rng = np.random.default_rng(23)
     s = rng.normal(scale=2.0, size=400)
@@ -592,14 +455,7 @@ def test_restricting_the_named_tier_does_not_narrow_the_straddling_set():
 
 
 def test_a_posterior_reaching_both_neighbours_names_the_nearer_cut():
-    """The ambiguity §6.3 leaves and decision 205 settles: when the interval crosses the cut
-    below *and* the cut above, the badge names the tier whose boundary is closer to `s`.
-
-    The old order tested the lower reach first, so a title 0.2 under its upper cut and 0.9 over
-    its lower one was badged with the lower neighbour — the tier it is least likely to be in.
-    A tie keeps the downward choice, so the answer is a function of the numbers rather than of
-    the iteration order.
-    """
+    """The nearer cut wins; a tie keeps the downward choice, so the answer is not iteration order."""
     cuts = model.initial_cutpoints(7)
     wide = np.array([reach_sigma(1.0)])   # an interval reaching one unit either way
     assert model.tier_of(np.array([0.9]), cuts)[0] == 4, "s = 0.9 sits in A on the measured set"
@@ -612,19 +468,13 @@ def test_a_posterior_reaching_both_neighbours_names_the_nearer_cut():
     assert model.straddle(np.array([midway]), wide, cuts, DEFAULTS)[0] == 3
 
 
-# --- §5.2's freshness rule -----------------------------------------------------------------------
-
-
 def test_sigma_does_not_move_inside_the_grace_period():
-    """§5.2: "after 12 months untouched"."""
     sigma = np.array([0.3, 0.3])
     prior = np.array([1.0, 1.0])
     assert np.allclose(model.inflate_sigma(sigma, prior, np.array([0.0, 11.9]), DEFAULTS), sigma)
 
 
 def test_sigma_inflates_with_the_square_root_of_neglect_and_stops_at_the_prior():
-    """"Glicko-style at rate c per √month, capped at the prior σ" — the owner's "keep ratings up
-    to date" requirement as ambient recalibration rather than a chore."""
     sigma = np.array([0.3, 0.3, 0.3])
     prior = np.array([1.0, 1.0, 1.0])
     grown = model.inflate_sigma(sigma, prior, np.array([13.0, 24.0, 100_000.0]), DEFAULTS)
@@ -634,13 +484,9 @@ def test_sigma_inflates_with_the_square_root_of_neglect_and_stops_at_the_prior()
 
 
 def test_an_already_uncertain_title_is_not_shrunk_by_the_cap():
-    """The cap is a ceiling on inflation, not a rewrite of a σ that is already larger."""
     sigma = np.array([2.0])
     out = model.inflate_sigma(sigma, np.array([1.0]), np.array([48.0]), DEFAULTS)
     assert out[0] == pytest.approx(2.0)
-
-
-# --- §4.3: every constant comes from the bundle ---------------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -655,9 +501,6 @@ def test_an_already_uncertain_title_is_not_shrunk_by_the_cap():
     ],
 )
 def test_every_shipped_constant_changes_the_fit(field, value):
-    """§4.3: "every constant comes from `ledger_hyperparams.json` … re-tunable offline in the
-    corpus project". A constant that is read and then ignored is a knob the corpus project
-    tunes into a void — so each one has to move the answer."""
     _truth, obs = synth(n=22, n_duels=45, tiers=8, seed=9)
     base = model.fit(obs, DEFAULTS)
     altered = model.fit(obs, dataclasses.replace(DEFAULTS, **{field: value}))
@@ -671,10 +514,7 @@ def test_every_shipped_constant_changes_the_fit(field, value):
 
 
 def test_the_solver_constants_reach_the_work_not_the_answer():
-    """Section 4.3 also ships `steps` and `lr`. On a convex objective with a unique minimiser a
-    *converged* fit must not depend on either — a solver whose answer moved with its step size
-    would be reporting its own arithmetic rather than the household's taste. What they change
-    is how much work the fit costs, and that is what is asserted."""
+    """On a convex objective a converged fit must not depend on `steps` or `lr`; only the work does."""
     _truth, obs = synth(n=20, n_duels=40, seed=15)
     patient = model.fit(obs, dataclasses.replace(DEFAULTS, steps=400, lr=0.5))
     hurried = model.fit(obs, dataclasses.replace(DEFAULTS, steps=6, lr=0.01))
@@ -686,16 +526,11 @@ def test_the_solver_constants_reach_the_work_not_the_answer():
 
 
 def test_the_margin_form_is_honoured():
-    """§4.3 ships the functional form, not only the flag."""
     assert "margin/mean(margin)" in Hyperparams().margin_form
 
 
-# --- §5.3's budgets --------------------------------------------------------------------------------
-
-
 def test_a_full_refit_over_a_whole_owned_library_is_seconds_not_minutes():
-    """§5.3: "Ledger full MAP refit + cutpoints + σ — nightly — seconds", over both users'
-    full owned library (839+ titles). CPU only."""
+    """§5.3: "Ledger full MAP refit ... nightly ... seconds" over 839+ owned titles, CPU only."""
     _truth, obs = synth(n=839, n_verdicts=300, n_duels=400, seed=21)
     started = time.perf_counter()
     fitted = model.fit(obs, DEFAULTS)
@@ -705,8 +540,7 @@ def test_a_full_refit_over_a_whole_owned_library_is_seconds_not_minutes():
 
 
 def test_the_fit_scales_to_a_library_nobody_has_rated():
-    """§12's M2 exit criterion is "every owned title has a coordinate". An unobserved title has
-    no residual, so its s is mu + <v, e> — and it still gets a σ, from the (mu, v) block."""
+    """An unobserved title's s is mu + <v, e>, and it still gets a σ from the (mu, v) block."""
     _truth, obs = synth(n=200, n_verdicts=12, n_duels=6, seed=17)
     fitted = model.fit(obs, DEFAULTS)
     assert fitted.s.shape == (200,)
@@ -715,8 +549,7 @@ def test_the_fit_scales_to_a_library_nobody_has_rated():
 
 
 def test_a_household_with_no_bundle_can_still_rate():
-    """§3.1: an empty artifact store is a legal state. With no Backbone there is no e_i, so v
-    cannot generalise — but the residuals still order what the person actually rated."""
+    """No Backbone means no e_i, but the residuals still order what the person rated."""
     _truth, obs = synth(n=15, n_duels=20, seed=13, embed=False)
     fitted = model.fit(obs, DEFAULTS)
     assert np.all(np.isfinite(fitted.s))
@@ -725,7 +558,6 @@ def test_a_household_with_no_bundle_can_still_rate():
 
 
 def test_an_empty_ledger_is_not_an_error():
-    """A user who has rated nothing is the common case on day one."""
     empty = ObservationSet(
         title_ids=np.zeros(0, dtype=np.int64),
         embeddings=np.zeros((0, 64)), embedded=np.zeros(0, bool),
@@ -735,16 +567,9 @@ def test_an_empty_ledger_is_not_an_error():
     assert fitted.converged
 
 
-# --- decision 508: the tier shape on the verdict arm's scale ----------------------------------
-
-
 def test_the_tier_prior_starts_on_the_verdict_prior_for_every_tier_set():
-    """Decision 508 moves where the tier cuts are pulled. On §6.3's seven and on 2, 4, 8 and 12
-    equal tiers, whose shapes have their anchored cuts at exactly 25% and 50% (two tiers: the one
-    cut, at 50%), the anchored mean at the verdict prior is `initial_cutpoints(K)`, so decision
-    11's fallbacks and §6.3's untouched board are unchanged there. On every other count the account
-    page allows, the two cuts nearest those masses start on them and the rest keep the shape's
-    own distances outside them (review finding F4)."""
+    """Decision 508: where the shape has cuts at exactly 25%
+    and 50%, the prior mean is `initial_cutpoints(K)`."""
     prior = model.verdict_cutpoints()
     for k in (2, 4, 7, 8, 12):
         assert np.allclose(model.cut_prior_mean(prior, k), model.initial_cutpoints(k)), f"K = {k}"
@@ -760,9 +585,6 @@ def test_the_tier_prior_starts_on_the_verdict_prior_for_every_tier_set():
 
 
 def test_with_no_tier_edit_the_c_b_and_b_a_boundaries_are_the_verdict_cutpoints():
-    """§5.2: the tier arm's cutpoints ARE the displayed boundaries. Decision 508: on §6.3's seven
-    and with no drag, C/B is the person's own disliked/fine cutpoint and B/A their fine/liked
-    one, so a verdict names a tier group exactly and cannot straddle two."""
     _truth, obs = synth(n=40, n_duels=30, seed=21)
     fitted = model.fit(obs, DEFAULTS)
     assert fitted.cuts[2] == pytest.approx(fitted.gamma[0], abs=1e-6)
@@ -771,9 +593,7 @@ def test_with_no_tier_edit_the_c_b_and_b_a_boundaries_are_the_verdict_cutpoints(
 
 
 def test_the_coupled_cutpoint_prior_has_the_curvature_it_claims():
-    """The anchored prior couples the two cutpoint sets, so the Hessian gains a gamma-gamma and a
-    gamma-cuts block. A wrong cross-term still converges, to the wrong optimum - so it is checked
-    against a central difference of the gradient, as the arrowhead is."""
+    """A wrong cross-term still converges, so the coupled block is checked against a central difference."""
     _truth, obs = synth(n=12, n_duels=10, tiers=5, seed=5)
     hp = DEFAULTS
     rng = np.random.default_rng(1)
@@ -795,12 +615,6 @@ def test_the_coupled_cutpoint_prior_has_the_curvature_it_claims():
 
 
 def test_on_every_tier_count_a_tier_stands_for_the_class_the_verdict_cutpoints_give_its_s():
-    """Review finding F4: the tier cuts sat on the verdict cutpoints only where the shape had a
-    cut at exactly 25% and 50%, so on five equal tiers a title at s = 0.6, which the verdict arm
-    calls liked, wore tier 2 and was guessed fine, and one at s = -1.35 was guessed fine where the
-    arm says disliked. With no tier edit, the class of the tier a title renders in is the class
-    the verdict arm's own cutpoints put its s in, on every count from 3 to 12 (decisions 508 and
-    510), and the class bands split exactly at the two anchored cuts."""
     gamma = np.array([-1.2, 0.5])
     grid = np.linspace(-4.0, 4.0, 1601)
     said = np.searchsorted(gamma, grid, side="right").tolist()
@@ -813,15 +627,12 @@ def test_on_every_tier_count_a_tier_stands_for_the_class_the_verdict_cutpoints_g
         ], f"K = {k}"
         stands_for = [model.verdict_class_of_tier(int(t), k) for t in model.tier_of(grid, cuts)]
         assert stands_for == said, f"K = {k}"
-    # Two tiers cannot hold three classes: the one cut is the fine/liked cutpoint, and the lower
-    # tier, which holds disliked and fine, stands for fine.
+    # Two tiers cannot hold three classes: the one cut is fine/liked, and the lower tier stands for fine.
     assert model.cut_prior_mean(gamma, 2).tolist() == pytest.approx([gamma[1]])
     assert [model.verdict_class_of_tier(t, 2) for t in (0, 1)] == [1, 2]
 
 
 def test_each_verdict_names_the_tiers_it_renders_in():
-    """Decision 508: disliked is F/D/C, fine is B, liked is A/A+/S on §6.3's seven, and on every
-    set the account page allows each class owns a run of tiers, in order, covering the set."""
     assert model.verdict_tiers(7).tolist() == [[0, 2], [3, 3], [4, 6]]
     assert [model.verdict_class_of_tier(t, 7) for t in range(7)] == [0, 0, 0, 1, 2, 2, 2]
     for k in range(2, 13):
@@ -832,9 +643,6 @@ def test_each_verdict_names_the_tiers_it_renders_in():
 
 
 def test_a_rated_title_is_held_inside_its_verdicts_tiers_and_reaches_toward_its_s():
-    """Round-2 finding R1: La La Land, disliked, rendered in A. The hold is the guarantee
-    decision 508 gives - the tier sits in the verdict's band - and a title the hold moved still
-    names, as its straddle, the next tier toward where the fit put it."""
     tier = np.array([4, 3, 2, 5, 1])
     straddle = np.array([-1, 4, -1, -1, -1])
     verdict = np.array([0, 2, 0, 1, -1])
@@ -844,8 +652,7 @@ def test_a_rated_title_is_held_inside_its_verdicts_tiers_and_reaches_toward_its_
 
 
 def test_the_live_verdict_is_the_last_one_and_a_drop_holds_nothing():
-    """A rewatch re-rating supersedes (§5.2 arm 4), and a `tier_edit` decides placement on its
-    own (§6.3, "unless the person moved it there")."""
+    """A rewatch re-rating supersedes (§5.2 arm 4); a `tier_edit` decides placement on its own."""
     obs = ObservationSet(
         title_ids=np.arange(4, dtype=np.int64),
         embeddings=np.zeros((4, 64)),
@@ -859,7 +666,6 @@ def test_the_live_verdict_is_the_last_one_and_a_drop_holds_nothing():
 
 
 def _household():
-    """A taste along one axis, and a verdict for each title by where it sits on it."""
     n = 24
     axis = np.zeros(64)
     axis[0] = 1.0
@@ -870,12 +676,8 @@ def _household():
 
 
 def test_the_second_households_three_complaints_do_not_happen_on_a_board_like_theirs():
-    """Round-2 findings R1-R3 on a board built the way theirs failed. A title the taste vector
-    loves and the person disliked (La La Land) renders in a disliked tier, below every title they
-    liked; the disliked title the taste vector likes least, picked over it with a hesitant tap,
-    sits above it (A Good Day to Die Hard); and two fine titles called about the same share B
-    (LOTR and The Hunger Games). The recipe before decisions 508 and 509 failed all three here:
-    La La Land in B, the pick below the title it beat, and the tie split across B and A."""
+    """Titles and verdicts shaped like the second household's
+    board, which failed all three before 508/509."""
     x, e, level = _household()
     n = x.size
     # La La Land: the second-best title on the taste axis, disliked.
@@ -912,9 +714,7 @@ def test_the_second_households_three_complaints_do_not_happen_on_a_board_like_th
 
 
 def test_an_unrated_title_is_guessed_a_class_and_not_a_grade():
-    """Decision 510 and round-2 finding R4: four liked series put all 127 unseen series in A+, so
-    Home's letters said nothing. An unrated title wears its guessed class's middle tier - C, B or
-    A on the seven - and the class is never changed by it."""
+    """Decision 510: an unrated title wears its guessed class's middle tier, never a grade."""
     assert model.guess_tier(np.arange(7), 7).tolist() == [2, 2, 2, 3, 4, 4, 4]
     for k in range(2, 13):
         for tier in range(k):

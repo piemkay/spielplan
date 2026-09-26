@@ -1,13 +1,6 @@
-"""The catalog's search order and genre facet. Spec v2.1 §6.0 M0, §4.1 rules 5 and 1;
-decisions 18, 472 and 473.
+"""The catalog's search order and genre facet (decisions 472, 473). Needs TEST_DATABASE_URL.
 
-The first household install searched "up" and found Up at 131 of 362, behind "Godzilla x Kong:
-Supernova", because a search kept the catalog's year order; and its genre control offered 434
-raw labels for films, "Action" beside "action" and Wikidata's free text among them. Every case
-below is built so the old behaviour fails it.
-
-Skipped without TEST_DATABASE_URL; see tests/conftest.py.
-"""
+Every case is built so the old year-ordered search and raw genre labels fail it."""
 
 from __future__ import annotations
 
@@ -50,9 +43,6 @@ async def _names(db, q: str, **kwargs) -> list[str]:
     return [r["name"] for r in rows]
 
 
-# --- decision 472: best match first ---------------------------------------------------------
-
-
 async def test_an_exact_title_is_the_first_search_hit(db):
     """"heat" found Heat tenth, behind newer titles that only contain the letters."""
     await _bundle(db)
@@ -67,8 +57,7 @@ async def test_an_exact_title_is_the_first_search_hit(db):
 
 
 async def test_search_tiers_run_exact_then_prefix_then_word_then_substring(db):
-    """Decision 472's six tiers, each represented once, dated so that the year order the search
-    used to keep is the exact reverse of the answer."""
+    """Dated so the year order the search used to keep is the exact reverse of the answer."""
     await _bundle(db)
     expected = [
         "Up",                   # the whole title
@@ -84,9 +73,7 @@ async def test_search_tiers_run_exact_then_prefix_then_word_then_substring(db):
 
 
 async def test_a_leading_article_does_not_bury_the_title(db):
-    """"godfather" put the 1991 "Godfather" (25 ratings) above The Godfather: the article made one
-    an exact match and the other not. Read with the article removed, both are exact and the crowd
-    decides."""
+    """Read with the article removed, "Godfather" and The Godfather are both exact and the crowd decides."""
     await _bundle(db)
     await _title(db, 20, "Godfather", 1991, item_n=25)
     await _title(db, 21, "The Godfather", 1972, item_n=180000)
@@ -113,9 +100,7 @@ async def test_the_household_owned_copy_breaks_a_tie_before_the_crowd_does(db):
 
 
 async def test_the_crowd_tie_break_is_read_within_each_kind(db):
-    """`item_n` sits on two scales - film median 265, series median 0 on the first household - and
-    a raw count put the 1988 film "The Bear" above the 2022 series with both kinds on. Read as a
-    percentile inside each kind, the series that is well known FOR A SERIES leads."""
+    """`item_n` sits on two scales (film median 265, series 0), so it is read as a percentile per kind."""
     await _bundle(db)
     await _title(db, 50, "The Bear", 1988, item_n=4617)
     await _title(db, 51, "The Bear", 2022, kind="series", item_n=47)
@@ -128,10 +113,7 @@ async def test_the_crowd_tie_break_is_read_within_each_kind(db):
 
 
 async def test_a_hit_is_looser_only_when_its_name_and_aliases_contain_the_query_inside_a_word(db):
-    """§6.0 folds a search's "hits that only contain the query inside a word" (decision 516), on a
-    name or an alias alike, and each hit now says which it is. The client read the name alone, so
-    Fast Five - found for "heist" through its alias "Fast & Furious 5: Rio Heist", a whole word -
-    was folded with the substrings (review finding R3-SPEC-03). No search, no `match`."""
+    """Fast Five matches "heist" through an alias as a whole word, so it must not fold as a substring."""
     await _bundle(db)
     await _title(db, 80, "Heist", 2001, item_n=100)
     await _title(db, 81, "Fast Five", 2011, item_n=90000, aliases=("Fast & Furious 5: Rio Heist",))
@@ -147,8 +129,7 @@ async def test_a_hit_is_looser_only_when_its_name_and_aliases_contain_the_query_
 
 
 async def test_search_order_is_total_across_pages(db):
-    """M4.9 finding 11: OFFSET paging over a partial order repeats and drops rows. Seven titles
-    that tie on every key but the id, fetched two at a time."""
+    """OFFSET paging over a partial order repeats and drops rows: these tie on every key but the id."""
     await _bundle(db)
     for i in range(7):
         await _title(db, 80 + i, "Twin Peaks", 1990, item_n=100)
@@ -170,9 +151,6 @@ async def test_no_query_keeps_the_year_order(db):
     assert [r["name"] for r in rows] == ["Supernova", "Up"]
 
 
-# --- decision 473: the canonical genre facet -----------------------------------------------
-
-
 async def _genre(db, title_id: int, genre: str, source: str) -> None:
     await db.execute(
         "INSERT INTO title_genre (title_id, genre, source) VALUES ($1, $2, $3)",
@@ -181,8 +159,7 @@ async def _genre(db, title_id: int, genre: str, source: str) -> None:
 
 
 async def test_the_genre_facet_is_the_canonical_vocabulary(db):
-    """One "Action" for tmdb's "Action" and trakt's "action"; nothing of Wikidata's free text,
-    the adult labels included; nothing a structured source spells outside the vocabulary."""
+    """One "Action" for tmdb's "Action" and trakt's "action"; nothing of Wikidata's free text."""
     await _bundle(db)
     await _title(db, 100, "Heat", 1995)
     await _title(db, 101, "Leon", 1994)
@@ -250,17 +227,8 @@ def test_every_genre_mapping_names_the_canonical_vocabulary():
     assert genres.canonical("science FICTION") == "Science Fiction"
 
 
-# --- a folded credit row filters by every person it names ---------------------------------------
-
-
 async def test_a_folded_credit_filters_the_library_by_every_person_it_names(app, db):
-    """§6.0: a credit is "tappable → filters the library to their filmography". Since the user
-    test of 2026-09-25 one credit row can stand for several person rows of one human - an imdb-only
-    and a tmdb-only John Williams, folded by `library.fold_credits` and named together in
-    `person_ids` - and a tap filtered by the lead id alone, which is half the filmography. The
-    listing, the hidden-by-kind count and the route all take the set; one id still works.
-    [C9.3, C9.4; WK's integration note]
-    """
+    """One credit row can stand for several person rows of one human; a tap filters by all of them."""
     await _bundle(db)
     for title_id, name, kind in (
         (1, "Jaws", "movie"), (2, "Schindler's List", "movie"), (3, "Heat", "movie"),
