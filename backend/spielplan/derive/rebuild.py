@@ -566,9 +566,19 @@ def _cast(result: parse.ParsedTitle) -> set[str]:
 
 
 async def derive_title(
-    conn: asyncpg.Connection, title_id: int, *, priority: Sequence[str] | None = None
+    conn: asyncpg.Connection, title_id: int, *, priority: Sequence[str] | None = None,
+    adjudicate: bool = True,
 ) -> DeriveReport:
     """Re-derive one title from the documents already in the raw store. §8 stage 3.
+
+    `adjudicate=False` IS THE METADATA WALK'S AND NOBODY ELSE'S (decision 522). That walk gives a
+    bundle title the corpus never fetched TMDB for its card, and the owner's condition on it is
+    that it never touches the extracted DNA tier. The adjudication ledger is the one write here
+    that does: it rules over `dna_tag` rows the bundle seeded, and decision 502 records that a
+    seeded title has never had it applied. Skipping it reverts nothing, which is what §8 stage 3's
+    "a derive that regenerates rows without re-applying them" is about - no derive writes a
+    `dna_tag` row - while the corrections ledger still runs last over the credits this derive does
+    regenerate.
 
     ONE TRANSACTION, which decision 375 requires and §14 risk 5 is about. Eleven tables are deleted
     and re-inserted here; a derive committing table by table would leave a title with its old
@@ -683,7 +693,7 @@ async def derive_title(
         # (decision 376). M5.4's stage 8 writes tags of its own and calls the same applier at ITS
         # ingest; that is why the function takes a connection and a title rather than this run's
         # rows, and why it is not folded into `_write` where only a derive could reach it.
-        adjudications = await ledgers.apply_adjudications(conn, title_id)
+        adjudications = await ledgers.apply_adjudications(conn, title_id) if adjudicate else {}
         written = await _write(conn, title_id, parsed, review_rows, labels, order)
         # LAST, AND THE WORD IS THE REQUIREMENT. `_write` has just regenerated this title's credits
         # from the raw store, including the music credit the ledger exists to overrule; a correction

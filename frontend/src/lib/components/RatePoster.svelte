@@ -18,7 +18,7 @@
    * surface that shows a title as a 2:3 card can hand it the payload it already holds.
    */
   import { hueOf } from '$lib/rate.svelte.js';
-  import { posterSrc, titleIdOf } from '$lib/art.js';
+  import { noteMissing, posterSrc, titleIdOf } from '$lib/art.js';
 
   /**
    * `showName` exists because §6.8's card grammar puts the title on the poster, and a surface
@@ -57,7 +57,10 @@
         loading="eager"
         decoding="async"
         draggable="false"
-        onerror={() => (failed = src)}
+        onerror={() => {
+          failed = src;
+          noteMissing(src);
+        }}
       />
     {/if}
   {/key}

@@ -123,6 +123,25 @@ describe('PosterCard', () => {
   });
 });
 
+describe('a poster that failed on one card', () => {
+  it('is not drawn as an <img> by the next card for the same title', () => {
+    app = mount(PosterCard, {
+      target,
+      props: { title: { id: 4060, name: 'Moulin Rouge', year: 1952 }, onSelect: () => {} }
+    });
+    flushSync();
+    target.querySelector('.poster img').dispatchEvent(new Event('error'));
+    flushSync();
+    unmount(app);
+
+    app = mount(RatePoster, { target, props: { title: { title_id: 4060, name: 'Moulin Rouge' } } });
+    flushSync();
+    const poster = target.querySelector('[data-testid="rate-poster"]');
+    expect(poster.querySelector('img')).toBeNull();
+    expect(poster.getAttribute('style')).toContain('linear-gradient');
+  });
+});
+
 describe('the surfaces that render a poster', () => {
   it("puts the title's poster on the title card", async () => {
     vi.mocked(get).mockResolvedValue({

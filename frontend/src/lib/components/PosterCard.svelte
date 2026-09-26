@@ -33,7 +33,7 @@
   // two taps away had no kind branch at all — so the same episode read `24m/ep` here and
   // `0h 24m` there. [M4.9 finding 37]
   import { runtimeLabel } from '$lib/rate.svelte.js';
-  import { posterSrc } from '$lib/art.js';
+  import { noteMissing, posterSrc } from '$lib/art.js';
 
   let { title, onSelect } = $props();
 
@@ -77,7 +77,10 @@
         loading="lazy"
         decoding="async"
         draggable="false"
-        onerror={() => (failed = src)}
+        onerror={() => {
+          failed = src;
+          noteMissing(src);
+        }}
       />
     {/if}
     {#if noCrowdData}

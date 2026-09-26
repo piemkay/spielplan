@@ -9,7 +9,7 @@
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { posterSrc, preloadPoster, titleIdOf } from './art.js';
+import { MISSING_FOR_MS, noteMissing, posterSrc, preloadPoster, titleIdOf } from './art.js';
 import { preloadArt } from './rate.svelte.js';
 import { session } from './session.svelte.js';
 
@@ -95,5 +95,55 @@ describe('preloading', () => {
       '/api/art/6/poster',
       '/api/art/7/poster'
     ]);
+  });
+
+  it('remembers a preload that found no image, so the card it was for draws no <img>', () => {
+    const made = [];
+    vi.stubGlobal(
+      'Image',
+      class {
+        constructor() {
+          made.push(this);
+        }
+      }
+    );
+    preloadPoster({ id: 4051 });
+    made[0].onerror();
+    expect(posterSrc({ id: 4051 })).toBeNull();
+  });
+});
+
+// A card whose poster answered 404 dropped its <img>, and the next card for the same title - on
+// the shelf, in the search grid, on the title card - drew one again, failed again and printed
+// another 404 into the console. The page remembers the answer for as long as the browser's own
+// cache would have given the same one.
+describe('a poster the route had nothing for', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('is not asked for again by any card while the 404 is still fresh', () => {
+    expect(posterSrc({ id: 4040 })).toBe('/api/art/4040/poster');
+    noteMissing('/api/art/4040/poster');
+    expect(posterSrc({ id: 4040 })).toBeNull();
+    expect(posterSrc({ title_id: 4040 })).toBeNull();
+    expect(posterSrc({ id: 4041 })).toBe('/api/art/4041/poster');
+  });
+
+  it('is asked for again once the shortest 404 max-age has passed', () => {
+    vi.useFakeTimers();
+    noteMissing('/api/art/4042/poster');
+    vi.advanceTimersByTime(MISSING_FOR_MS - 1000);
+    expect(posterSrc({ id: 4042 })).toBeNull();
+    vi.advanceTimersByTime(2000);
+    expect(posterSrc({ id: 4042 })).toBe('/api/art/4042/poster');
+  });
+
+  it("keys the memory on the URL, so another database's version of an app-minted id is asked", () => {
+    session.artEpoch = 'aaa111';
+    noteMissing(posterSrc({ id: 1000000044 }));
+    expect(posterSrc({ id: 1000000044 })).toBeNull();
+    session.artEpoch = 'bbb222';
+    expect(posterSrc({ id: 1000000044 })).toBe('/api/art/1000000044/poster?v=bbb222');
   });
 });

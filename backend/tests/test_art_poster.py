@@ -339,6 +339,21 @@ def test_both_image_hosts_are_declared_with_the_reasoning_for_their_robots_overr
     assert undocumented_overrides() == []
 
 
+def test_the_page_remembers_a_404_no_longer_than_the_shortest_one_it_is_sent():
+    """`lib/art.js` stops a card asking for a poster the route has just answered 404 for, for as
+    long as the browser's own cache would give the same answer. That holds only while the page's
+    memory is no longer than the shortest max-age a 404 carries; a longer one would hide art the
+    browser would already fetch again (decision 483's cacheable 404s)."""
+    import re
+    from pathlib import Path
+
+    art_js = Path(__file__).resolve().parents[2] / "frontend" / "src" / "lib" / "art.js"
+    minutes = re.search(r"MISSING_FOR_MS = (\d+) \* 60 \* 1000;", art_js.read_text(encoding="utf-8"))
+    assert minutes, "art.js no longer spells MISSING_FOR_MS in minutes"
+    shortest = min(poster.BROWSER_NONE, poster.BROWSER_PENDING, poster.BROWSER_TRANSIENT)
+    assert int(minutes.group(1)) * 60 == shortest
+
+
 async def test_the_jellyfin_client_reads_the_primary_image_as_bytes(fake_jellyfin):
     """§7.1's client, against the double: the resized Primary image, None for an item with none."""
     module, transport = fake_jellyfin
