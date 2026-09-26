@@ -667,7 +667,7 @@ def test_narrowing_the_prior_does_not_make_a_round_converge():
 
 
 def test_the_sweep_this_constant_was_calibrated_against_still_reads_this_way():
-    """The comment beside `BOUNDARY_Z` quotes this sweep; re-tuning moves both. Pools of 120, 300 and
+    """The sweep `BOUNDARY_Z` was calibrated against; re-tuning moves this test. Pools of 120, 300 and
     700 on the rank-standardised scale (decision 477). `TYPICAL_PAIRS` is the film night's median."""
     pools = (120, 300, 700)
     at_one = [_simulate(1.0, n_pool=n) for n in pools]
