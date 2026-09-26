@@ -242,6 +242,9 @@ test('tapping a second poster re-fetches instead of showing the first', async ({
   // only observable when the panel is already open as the second poster is tapped.
   const panel = page.getByLabel('Title detail');
   await page.getByRole('searchbox', { name: 'Search titles' }).fill('e');
+  // "e" only sits inside "Prisoners", so since decision 516 it waits behind the looser-matches
+  // control. Opening that is not a new search: both posters stay on the one grid.
+  await page.getByTestId('weak-matches-toggle').click();
   const heat = page.locator('.card-wrap', { hasText: 'Heat' }).first();
   const prisoners = page.locator('.card-wrap', { hasText: 'Prisoners' }).first();
   await expect(heat).toBeVisible();
