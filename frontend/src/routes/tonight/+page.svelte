@@ -36,7 +36,6 @@
     RESERVED_LABEL,
     REVEAL_BEAT,
     SHARE_CAPTION,
-    VETO_CAPTION,
     WRAPPED_LINE,
     answer,
     approvalShare,
@@ -78,7 +77,8 @@
     toggleApproval,
     toggleVeto,
     tonight,
-    undo
+    undo,
+    vetoCaption
   } from '$lib/tonight.svelte.js';
   // The winner card's year-and-runtime line, from the one place that formats a runtime. This
   // screen spelled `{winner?.runtime_min} min` itself, so a series printed as flat minutes where
@@ -472,7 +472,7 @@
         {#each othersVetoes as line (line)}
           <p class="data" data-testid="tonight-others-vetoes">{line}</p>
         {/each}
-        <p class="why">{VETO_CAPTION}</p>
+        <p class="why" data-testid="tonight-veto-caption">{vetoCaption(tonight.lobby.kind)}</p>
         <!-- The mood the second household evening asked for a control to say: the answers carry
              it already, so the lobby says how rather than adding a question (§0's stored-mood
              measurement; decision 480 keeps the mood round deleted). -->
@@ -498,7 +498,7 @@
     <div class="round" data-testid="tonight-round">
       <!-- What to expect, not the cap: "pair 1 · cap 20" read as the plan for the evening, when
            the cap is the ending the round is built to avoid. `roundHeader` adds it back near it. -->
-      <p class="data label" data-testid="tonight-round-count">{roundHeader(tonight.round)}</p>
+      <p class="data label roundcount" data-testid="tonight-round-count">{roundHeader(tonight.round)}</p>
       <h2>Which one tonight?</h2>
       <!-- `.choice`, never `.poster`: design.css's global `.poster` is a 2:3 frame, and a button
            wearing it was a screen-high box on an iPhone 13 — the second option and every answer
@@ -605,12 +605,14 @@
             </li>
           {/each}
         </ul>
-        <button
-          class="btn-primary submit"
-          onclick={() => submitBallot(tonight.activeSeat)}
-          disabled={tonight.busy || tonight.activeSeat === null}
-          data-testid="tonight-submit-ballot">{submitLabel(tonight.approved.length)}</button
-        >
+        <div class="submitbar" data-testid="tonight-submit-bar">
+          <button
+            class="btn-primary submit"
+            onclick={() => submitBallot(tonight.activeSeat)}
+            disabled={tonight.busy || tonight.activeSeat === null}
+            data-testid="tonight-submit-ballot">{submitLabel(tonight.approved.length)}</button
+          >
+        </div>
       {/if}
       <!-- The round's hand-off (the waiting screen's `tonight-hand-to-` control), one screen
            later and with the stakes of the whole evening. Without it the phone could carry a
@@ -874,6 +876,9 @@
   h1 { margin: 0; font-size: 21px; font-weight: 600; }
   h2 { margin: 0; font-size: 17px; font-weight: 600; }
   .label { letter-spacing: 0.14em; color: var(--ink-4); font-size: 10px; }
+  /* One line whatever the round says, for `roundHeader`'s reason: a second line put Undo and the
+     escape under the bottom bar (review finding UX-4). */
+  .roundcount { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .why { color: var(--ink-3); font-size: 12.5px; line-height: 1.55; }
   .data { font-family: var(--mono); font-size: 12px; color: var(--ink-2); }
   .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
@@ -982,11 +987,18 @@
      Submit under the fold on an iPhone 13 (the second household evening), and the one filled
      control on the screen is the one that must always be in reach. `main` is the scroll
      container and ends above the bottom bar, so a sticky bottom sits on the bar and not under
-     it. */
-  .submit {
-    width: 100%; min-height: var(--touch); margin-top: 8px;
-    position: sticky; bottom: 8px; z-index: 1;
+     it.
+     An opaque footer and not a floating button: a floating Submit 8 px up left the last option's
+     second line showing, and tappable, in the 32 px under it - a near miss approved a title whose
+     name Submit covered (review finding UX-2). The footer reaches through `main`'s end padding
+     (`--main-pad-end`, where sticky offsets stop) to the scrollport's edge, so nothing of the
+     ballot shows beneath it, and keeps the button where it stood. */
+  .submitbar {
+    position: sticky; bottom: calc(-1 * var(--main-pad-end, 0px)); z-index: 1;
+    margin-top: 8px; padding: 8px 0 calc(8px + var(--main-pad-end, 0px));
+    background: var(--card);
   }
+  .submit { width: 100%; min-height: var(--touch); }
   .runner { display: flex; align-items: center; gap: 10px; padding: 4px 0; }
   .runner p { margin: 0; }
   /* The pick cards and the wildcard beside them are the same object and lay out the same way:

@@ -123,7 +123,14 @@
     syncNote = '';
     try {
       const res = await post(`/titles/${data.title.id}/state`, { state: next });
-      data = { ...data, title: { ...data.title, seen_state: next } };
+      // §6.0: the why line "is absent for a title they have seen, rated or avoid" (decision 515),
+      // and the server gates it only when it builds the card - so a card marked seen here drops
+      // the line it opened with rather than pitch what the member has just said they saw.
+      data = {
+        ...data,
+        title: { ...data.title, seen_state: next },
+        why: next === 'seen' ? null : data.why
+      };
       // The reason wins when there is one, even on a success. Decision 210(a) produces exactly
       // that pair: marking a series not-seen is app-only — no recursive DELETE goes to the Series
       // folder — and `seen.set_state` reports it as `synced: true` with the reason
@@ -169,7 +176,10 @@
         my_verdict:
           choice === 'not_seen'
             ? data.my_verdict
-            : { value: ['disliked', 'fine', 'liked'].indexOf(choice), label: choice }
+            : { value: ['disliked', 'fine', 'liked'].indexOf(choice), label: choice },
+        // Rated now, so the why line goes, as it would on the next open (decision 515; review
+        // finding UX-3).
+        why: choice === 'not_seen' ? data.why : null
       };
       answerNote = [answeredLine(choice), revealLine(res?.reveal)].filter(Boolean).join(' ');
       onStateChange?.(data.title.id, next);

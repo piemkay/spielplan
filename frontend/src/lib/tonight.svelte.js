@@ -92,16 +92,19 @@ export function rememberBudget(userId, kind, minutes) {
 
 /**
  * The controls as this member last left them: the kind as it stands and that kind's remembered
- * budget. The second household evening set 120, and the next visit opened at 130 again.
+ * budget, else §6.2's 130 - "for that kind on that device, else 130" (decision 506). The second
+ * household evening set 120, and the next visit opened at 130 again. With nothing remembered the
+ * slider does not keep what it holds: that is the other kind's number, or another member's, and a
+ * film night's 120 read "120 min per episode" on a series night (review finding R3-SPEC-02).
  * @param {number|null|undefined} userId
  */
 export function restoreBudget(userId) {
-  const minutes = rememberedBudget(userId, tonight.controls.kind);
-  if (minutes !== null) tonight.controls.runtime_budget_min = minutes;
+  tonight.controls.runtime_budget_min =
+    rememberedBudget(userId, tonight.controls.kind) ?? BUDGET_DEFAULT;
 }
 
-/** The kind pill. Switching kind brings that kind's own remembered budget with it, when there is
- * one, for `rememberedBudget`'s reason. @param {string} kind @param {number|null|undefined} userId */
+/** The kind pill. Switching kind brings that kind's own remembered budget with it, else the
+ * default, for `rememberedBudget`'s reason. @param {string} kind @param {number|null|undefined} userId */
 export function chooseKind(kind, userId) {
   tonight.controls.kind = kind;
   restoreBudget(userId);
@@ -153,9 +156,13 @@ export const MAX_VETOES = 3;
 
 /** What the lobby says under the chips (decisions 504 and 505), and it has to be true of both:
  * each member holds their own three, and a title that may contain what anyone ruled out is left
- * out for everyone — "may", because the pool reads the inferred tier as well as the quoted one. */
-export const VETO_CAPTION =
-  'Each of you can rule out up to three. A film that may contain any of them is left out for everyone tonight.';
+ * out for everyone — "may", because the pool reads the inferred tier as well as the quoted one.
+ * By the kind the room is for: on a series night the vetoes leave out series (review finding
+ * UX-8), as the door's budget line already says episodes there. @param {string} kind */
+export function vetoCaption(kind) {
+  const title = kind === 'series' ? 'A series' : 'A film';
+  return `Each of you can rule out up to three. ${title} that may contain any of them is left out for everyone tonight.`;
+}
 
 /**
  * §6.2 step 4's answers carry the mood, and this is the lobby saying so (the second household
@@ -1009,13 +1016,18 @@ export function applyBallotCount(frame) {
  * second household evening's thirteenth pair still promised ten. Up to the typical round it says
  * how rounds often go; past it, that this one is running long, with the cap that does end it —
  * which is the useful number from there, and "just pick for us" is on the screen beside it.
+ *
+ * ONE LINE AT 390 PX. The line is 12 px mono at 0.14em, about 8.9 px a character, so 353 px of
+ * phone holds 39. "pair 11 · a longer round than most · at most 20" is 47: it wrapped, and the
+ * 16 px it added pushed Undo and "just pick for us" under the bottom bar on any pair with an
+ * over-budget card (review finding UX-4). The page also keeps the line to one.
  */
 export function roundHeader(round) {
   if (!round) return '';
   const n = (round.answered ?? 0) + 1;
   const typical = round.typical ?? 10;
   if (n <= typical) return `pair ${n} · often about ${typical}`;
-  return [`pair ${n}`, 'a longer round than most', round.cap ? `at most ${round.cap}` : null]
+  return [`pair ${n}`, 'longer than most', round.cap ? `max ${round.cap}` : null]
     .filter(Boolean)
     .join(' · ');
 }

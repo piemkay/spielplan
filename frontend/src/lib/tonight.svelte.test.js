@@ -15,7 +15,6 @@ import {
   RECONNECT_MAX_MS,
   RESERVED_LABEL,
   REVEAL_BEAT,
-  VETO_CAPTION,
   answer,
   approvalShare,
   ballotTurns,
@@ -54,7 +53,8 @@ import {
   toggleApproval,
   toggleVeto,
   tonight,
-  undo
+  undo,
+  vetoCaption
 } from './tonight.svelte.js';
 
 /**
@@ -977,10 +977,19 @@ describe('the first household evening (owner instruction of 2026-09-25)', () => 
     expect(roundHeader({ answered: 9, cap: 20, typical: 10 })).toBe('pair 10 · often about 10');
     expect(roundHeader({ answered: 9, cap: 20, typical: 10 })).not.toContain('20');
     expect(roundHeader({ answered: 12, cap: 20, typical: 10 })).toBe(
-      'pair 13 · a longer round than most · at most 20'
+      'pair 13 · longer than most · max 20'
     );
     expect(roundHeader({ answered: 12, cap: 20, typical: 10 })).not.toContain('about 10');
     expect(roundHeader(null)).toBe('');
+  });
+
+  it('keeps the header to what one line of a 390 px phone holds', () => {
+    // Review finding UX-4: 353 px of 12 px mono at 0.14em holds 39 characters, and the long
+    // round's 47 wrapped, pushing Undo and the escape under the bottom bar.
+    for (const answered of [0, 9, 10, 18, 98]) {
+      const line = roundHeader({ answered, cap: 99, typical: 10 });
+      expect(line.length, line).toBeLessThanOrEqual(36);
+    }
   });
 
   it("files the ballot's count under the ballot, which is the number the screen prints", async () => {
@@ -1168,8 +1177,21 @@ describe('the second household evening (owner instruction of 2026-09-26)', () =>
     expect(tonight.controls.runtime_budget_min).toBe(120);
     chooseKind('series', 1);
     expect(tonight.controls.runtime_budget_min, 'the kind brings its own number').toBe(70);
+    // §6.2 step 1: "for that kind on that device, else 130" (decision 506). Nothing remembered
+    // is the default, never the number the slider held - here member 1's series 70, which a
+    // film night would have opened at (review finding R3-SPEC-02).
     chooseKind('movie', 3);
-    expect(tonight.controls.runtime_budget_min, 'nothing remembered leaves the slider be').toBe(70);
+    expect(tonight.controls.runtime_budget_min, 'nothing remembered is the default').toBe(
+      BUDGET_DEFAULT
+    );
+    rememberBudget(4, 'movie', 120);
+    tonight.controls.kind = 'movie';
+    restoreBudget(4);
+    chooseKind('series', 4);
+    expect(
+      tonight.controls.runtime_budget_min,
+      "a film night's 120 does not open a series night at 120 min per episode"
+    ).toBe(BUDGET_DEFAULT);
     tonight.controls.kind = 'movie';
     tonight.controls.runtime_budget_min = 130;
   });
@@ -1216,10 +1238,13 @@ describe('the second household evening (owner instruction of 2026-09-26)', () =>
   it('tells the lobby what a veto does and how a mood is said, in plain words', () => {
     // Decisions 504 and 505: each member's own three, and "may contain" because the pool also
     // reads what is only inferred. The mood: the answers carry it, so the copy says how.
-    expect(VETO_CAPTION).toContain('Each of you can rule out up to three');
-    expect(VETO_CAPTION).toContain('may contain');
+    expect(vetoCaption('movie')).toContain('Each of you can rule out up to three');
+    expect(vetoCaption('movie')).toContain('A film that may contain');
+    // On a series night the vetoes leave out series, and the caption says so (review UX-8).
+    expect(vetoCaption('series')).toContain('A series that may contain');
+    expect(vetoCaption('series')).not.toContain('film');
     expect(MOOD_CAPTION).toContain(ANSWERS.find((a) => a.value === 'NEITHER').label);
-    for (const copy of [VETO_CAPTION, MOOD_CAPTION]) {
+    for (const copy of [vetoCaption('movie'), vetoCaption('series'), MOOD_CAPTION]) {
       expect(copy).not.toMatch(/tier|projected|extracted|tilt|decision|§/i);
     }
   });

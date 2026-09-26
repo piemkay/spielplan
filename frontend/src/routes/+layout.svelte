@@ -676,7 +676,11 @@
     flex: 1;
     min-width: 0;
     overflow: auto;
-    padding: 20px 22px 40px;
+    /* The end padding by name, because a sticky footer inside a page reaches down through it to
+       the scrollport's edge: sticky offsets are measured inside it, and Tonight's Submit left a
+       tappable strip of the ballot showing in it (review finding UX-2). */
+    --main-pad-end: 40px;
+    padding: 20px 22px var(--main-pad-end);
   }
 
   /* Phone-first: the rail becomes a bottom bar and the header keeps only identity. */
@@ -685,7 +689,8 @@
       flex-direction: column-reverse;
     }
     main {
-      padding: 14px 14px 24px;
+      --main-pad-end: 24px;
+      padding: 14px 14px var(--main-pad-end);
     }
     /* The header now carries up to four items on a phone, and four do not fit. Measured on the
        e2e `phone` project's own device (iPhone 13, 390 px): brand 95 + trigger 96 + chip

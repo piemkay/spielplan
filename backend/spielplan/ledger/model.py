@@ -339,24 +339,52 @@ def verdict_cutpoints() -> np.ndarray:
     return np.log(shares / (1.0 - shares))
 
 
+def anchored_cuts(k: int) -> tuple[int | None, int]:
+    """Decision 508: which tier cuts sit on the verdict arm's two cutpoints, as cut indices.
+
+    The cut whose shape mass is nearest 25% sits on the disliked/fine cutpoint, and the one nearest
+    50% above it on the fine/liked cutpoint. On §6.3's seven, and on 4, 8 and 12 equal tiers, they
+    sit exactly at those masses; on any other count the nearest ones are moved onto them, because a
+    class band whose edge is not the verdict cutpoint shows, and makes the reveal guess, a class
+    the verdict arm does not predict (review finding F4). A tie goes to the fine class - the lower
+    cut for 25%, the upper for 50% - as a tier whose middle lands on an anchor always did. Two
+    tiers have one cut, and it is the fine/liked one: there is no tier for fine to own.
+    """
+    if k < 3:
+        return None, 0
+    shares = np.asarray(
+        MEASURED_TIER_SHARES if k == len(MEASURED_TIER_SHARES) else (1.0 / k,) * k, dtype=float
+    )
+    mass = np.cumsum(shares)[:-1]
+    low, high = VERDICT_ANCHOR_SHARES
+    # Float sums must not decide a tie: six equal tiers put two cuts 1/12 either side of 25%.
+    near_low = np.abs(mass - low)
+    lower = int(np.flatnonzero(near_low <= near_low.min() + 1e-9)[0])
+    above = np.arange(lower + 1, k - 1)
+    near_high = np.abs(mass[above] - high)
+    upper = int(above[np.flatnonzero(near_high <= near_high.min() + 1e-9)[-1]])
+    return lower, upper
+
+
 def _anchor_map(k: int) -> tuple[np.ndarray, np.ndarray]:
     """`cut_prior_mean` as the affine map it is: (A, c) with mean = A @ gamma + c.
 
-    A cut inside the fine band is interpolated between the two verdict cutpoints on the logit
-    scale of cumulative mass; a cut outside it keeps the shape's own logistic distance from the
-    nearer one, because outside the band the verdict link's unit scale is the only scale there is.
+    The two `anchored_cuts` sit on the verdict cutpoints. A cut between them is interpolated on
+    the logit scale of cumulative mass; a cut outside them keeps the shape's own logistic distance
+    from the nearer one, because outside the band the verdict link's unit scale is the only scale
+    there is.
     """
     shape = initial_cutpoints(k)
-    low, high = verdict_cutpoints()
+    lower, upper = anchored_cuts(k)
     a = np.zeros((k - 1, 2))
     c = np.zeros(k - 1)
     for j, at in enumerate(shape):
-        if at <= low:
-            a[j, 0], c[j] = 1.0, at - low
-        elif at >= high:
-            a[j, 1], c[j] = 1.0, at - high
+        if lower is not None and j <= lower:
+            a[j, 0], c[j] = 1.0, at - shape[lower]
+        elif lower is None or j >= upper:
+            a[j, 1], c[j] = 1.0, at - shape[upper]
         else:
-            t = (at - low) / (high - low)
+            t = (at - shape[lower]) / (shape[upper] - shape[lower])
             a[j, 0], a[j, 1] = 1.0 - t, t
     return a, c
 
@@ -364,11 +392,13 @@ def _anchor_map(k: int) -> tuple[np.ndarray, np.ndarray]:
 def cut_prior_mean(gamma: np.ndarray, k: int) -> np.ndarray:
     """Decision 508: the tier arm's prior mean, anchored on the verdict arm's fitted cutpoints.
 
-    The tier cuts at the shape's 25% and 50% masses sit on gamma[0] and gamma[1], so with no tier
-    edit the displayed boundaries ARE the person's own disliked/fine and fine/liked cutpoints
-    (§5.2: the tier arm's cutpoints are the displayed boundaries). At gamma = `verdict_cutpoints()`
-    this is exactly `initial_cutpoints(k)`, for every K, so a board nobody has rated on starts
-    where it always did. Linear in gamma, so the prior stays a convex quadratic in (gamma, cuts).
+    The tier cuts at (or nearest) the shape's 25% and 50% masses sit on gamma[0] and gamma[1], so
+    with no tier edit the displayed boundaries ARE the person's own disliked/fine and fine/liked
+    cutpoints (§5.2: the tier arm's cutpoints are the displayed boundaries). At gamma =
+    `verdict_cutpoints()` this is exactly `initial_cutpoints(k)` on §6.3's seven and on 2, 4, 8
+    and 12 tiers, so those boards start where they always did; on another count the two anchored
+    cuts start on the verdict prior's masses instead. Linear in gamma, so the prior stays a convex
+    quadratic in (gamma, cuts).
     """
     a, c = _anchor_map(k)
     return a @ np.asarray(gamma, dtype=float) + c
@@ -377,28 +407,17 @@ def cut_prior_mean(gamma: np.ndarray, k: int) -> np.ndarray:
 def verdict_tiers(k: int) -> np.ndarray:
     """(3, 2): the lowest and highest tier each verdict class renders in (decision 508).
 
-    A tier belongs to the class whose band holds the middle of its prior mass: on §6.3's seven,
-    F/D/C are disliked, B is fine and A/A+/S are liked. A class that owns no tier of a very short
-    set takes the tier nearest its band, so every class can always be rendered somewhere.
+    The tiers below the cut on the disliked/fine cutpoint are disliked, those between it and the
+    cut on the fine/liked cutpoint fine, and those above liked (`anchored_cuts`): on §6.3's seven,
+    F/D/C, B and A/A+/S. The class edges are therefore the verdict cutpoints on every tier count,
+    and each tier still goes to the class whose band holds the middle of its prior mass. Two
+    tiers are the one set too short for three classes: the lower tier holds disliked and fine and
+    stands for fine (`verdict_class_of_tier`), so a two-tier board never guesses disliked.
     """
-    shares = np.asarray(
-        MEASURED_TIER_SHARES if k == len(MEASURED_TIER_SHARES) else (1.0 / k,) * k, dtype=float
-    )
-    top = np.cumsum(shares)
-    middle = top - shares / 2.0
-    low, high = VERDICT_ANCHOR_SHARES
-    # A middle that lands on an anchor goes to the band below it, and float sums must not decide
-    # that: five equal tiers put tier 3's middle at 0.5000000000000001.
-    owner = np.where(middle < low - 1e-9, 0, np.where(middle <= high + 1e-9, 1, 2))
-    out = np.zeros((3, 2), dtype=np.int64)
-    for label in range(3):
-        mine = np.flatnonzero(owner == label)
-        if mine.size:
-            out[label] = (mine[0], mine[-1])
-        else:
-            nearest = {0: 0, 1: int(np.searchsorted(top, (low + high) / 2.0)), 2: k - 1}[label]
-            out[label] = (nearest, nearest)
-    return out
+    lower, upper = anchored_cuts(k)
+    if lower is None:
+        return np.array([[0, 0], [0, 0], [1, 1]], dtype=np.int64)
+    return np.array([[0, lower], [lower + 1, upper], [upper + 1, k - 1]], dtype=np.int64)
 
 
 def verdict_class_of_tier(tier: int, k: int) -> int:
@@ -1141,6 +1160,7 @@ __all__ = [
     "VERDICT_ANCHOR_SHARES",
     "Fit",
     "ObservationSet",
+    "anchored_cuts",
     "cut_prior_mean",
     "empirical_cdf",
     "fit",

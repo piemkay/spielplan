@@ -2611,7 +2611,7 @@ async def test_the_catalogue_is_for_you_by_default_and_partitions_by_kind(world)
     (§4.1 rule 5, decision 18): every series here outscores every film, so a merged ranking would
     open on a series."""
     listing = await _titles(world.client)
-    assert listing["sort"] == "for_you"
+    assert listing["sort"] == "for_you" and listing["for_you_available"] is True
     kinds = [item["kind"] for item in listing["items"]]
     assert kinds == ["movie"] * len(MOVIES) + ["series"] * len(SERIES)
     for kind in ("movie", "series"):
@@ -2629,9 +2629,12 @@ async def test_the_catalogue_is_newest_first_until_the_members_own_ratings_rank_
     assert listing["sort"] == "newest"
     years = [item["year"] for item in listing["items"]]
     assert years == sorted(years, reverse=True)
+    # And it says so, so the grid offers no "For you" that answers newest (review finding UX-1).
+    assert listing["for_you_available"] is False
 
     await world.db.execute("UPDATE user_vector SET blend_beta = 0 WHERE user_id = $1", world.patrick)
-    assert (await _titles(world.client))["sort"] == "newest"
+    crowd = await _titles(world.client)
+    assert crowd["sort"] == "newest" and crowd["for_you_available"] is False
 
 
 async def test_newest_and_a_search_keep_their_own_orders(world):

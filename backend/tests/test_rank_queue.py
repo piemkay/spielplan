@@ -427,6 +427,40 @@ def test_the_boundary_arm_never_re_serves_a_pair_it_has_already_asked():
     assert len(served) > 100, f"the arm gave up after {len(served)} pairs"
 
 
+def test_a_title_its_verdict_holds_is_a_candidate_in_the_tier_the_board_renders():
+    """Decision 508 rule 5: the hold applies wherever a rated title's tier is computed, and the
+    queue computes one. The candidates' straddle was held while their tier was the raw `tier_of`,
+    so two liked films the fit left in B - both rendered in A, both chipped A/B - were paired as
+    "its posterior crosses this boundary", and a disliked film the fit left in A was weighed as an
+    A boundary while the board showed it in C. The queue's tier is the board's tier."""
+    settled = 1e-6
+    items = [
+        board.Item(title_id=1, name="L1", s=-0.5, sigma=settled, verdict=2),
+        board.Item(title_id=2, name="L2", s=-0.45, sigma=settled, verdict=2),
+        board.Item(title_id=3, name="F1", s=-0.3, sigma=settled, verdict=1),
+        board.Item(title_id=4, name="D1", s=0.5, sigma=settled, verdict=0),
+        board.Item(title_id=5, name="A1", s=0.6, sigma=settled, verdict=2),
+    ]
+    rendered = {
+        e.title_id: e.model_tier
+        for t in board.build(items, cuts=CUTS, tier_set=TIER_SET, hp=DEFAULTS)
+        for e in t.entries
+    }
+    candidates = queue.candidates(items, cuts=CUTS, tier_set=TIER_SET, hp=DEFAULTS)
+    by_id = {c.title_id: c for c in candidates}
+    assert {t: c.tier for t, c in by_id.items()} == rendered == {1: 4, 2: 4, 3: 3, 4: 2, 5: 4}
+    assert all(c.straddle != c.tier for c in candidates), "a straddle names another tier"
+    # B/A weighs as B/A (4) for the held liked films, and C/B (3) for the held disliked one.
+    assert [queue.boundary_height(by_id[t]) for t in (1, 4)] == [4, 3]
+
+    rng = random.Random(7)
+    for _ in range(500):
+        pair = queue._boundary(candidates, rng)
+        anchor, partner = by_id[pair.title_a], by_id[pair.title_b]
+        assert rendered[partner.title_id] == anchor.straddle, (pair, "not across the cut")
+        assert partner.title_id == 3, "the one title the board renders in B"
+
+
 def test_an_exhausted_boundary_arm_falls_through_to_exploration_and_says_so():
     """A board whose every straddler has been asked against every partner across its cut has no
     boundary pair left. The roll that picked the boundary arm then draws an exploration pair and

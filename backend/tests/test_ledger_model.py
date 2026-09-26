@@ -738,16 +738,25 @@ def test_an_empty_ledger_is_not_an_error():
 # --- decision 508: the tier shape on the verdict arm's scale ----------------------------------
 
 
-def test_the_tier_prior_is_the_old_shape_at_the_verdict_prior_for_every_tier_set():
-    """Decision 508 moves where the tier cuts are pulled, not where a board nobody has rated
-    starts: at the verdict prior the anchored mean is `initial_cutpoints(K)` for every K the
-    account page allows, so decision 11's fallbacks and §6.3's untouched board are unchanged."""
-    for k in range(2, 13):
-        assert np.allclose(
-            model.cut_prior_mean(model.verdict_cutpoints(), k), model.initial_cutpoints(k)
-        ), f"K = {k}"
+def test_the_tier_prior_starts_on_the_verdict_prior_for_every_tier_set():
+    """Decision 508 moves where the tier cuts are pulled. On §6.3's seven and on 2, 4, 8 and 12
+    equal tiers, whose shapes have their anchored cuts at exactly 25% and 50% (two tiers: the one
+    cut, at 50%), the anchored mean at the verdict prior is `initial_cutpoints(K)`, so decision
+    11's fallbacks and §6.3's untouched board are unchanged there. On every other count the account
+    page allows, the two cuts nearest those masses start on them and the rest keep the shape's
+    own distances outside them (review finding F4)."""
+    prior = model.verdict_cutpoints()
+    for k in (2, 4, 7, 8, 12):
+        assert np.allclose(model.cut_prior_mean(prior, k), model.initial_cutpoints(k)), f"K = {k}"
+    for k in (3, 5, 6, 9, 10, 11):
+        mean, shape = model.cut_prior_mean(prior, k), model.initial_cutpoints(k)
+        lower, upper = model.anchored_cuts(k)
+        assert mean[lower] == pytest.approx(prior[0]) and mean[upper] == pytest.approx(prior[1])
+        assert np.allclose(np.diff(mean[: lower + 1]), np.diff(shape[: lower + 1])), f"K = {k}"
+        assert np.allclose(np.diff(mean[upper:]), np.diff(shape[upper:])), f"K = {k}"
+        assert np.all(np.diff(mean) > 0), f"K = {k}"
     # The verdict prior is the measured shape's C/B and B/A masses, 25% and 50%.
-    assert np.allclose(model.verdict_cutpoints(), np.log([0.25 / 0.75, 1.0]))
+    assert np.allclose(prior, np.log([0.25 / 0.75, 1.0]))
 
 
 def test_with_no_tier_edit_the_c_b_and_b_a_boundaries_are_the_verdict_cutpoints():
@@ -783,6 +792,31 @@ def test_the_coupled_cutpoint_prior_has_the_curvature_it_claims():
                                  with_duels=False)[0]
         column = (plus[65:73] - minus[65:73]) / (2 * h)
         assert np.allclose(h_zz[65:73, 65 + j], column, atol=1e-5), f"column {j}"
+
+
+def test_on_every_tier_count_a_tier_stands_for_the_class_the_verdict_cutpoints_give_its_s():
+    """Review finding F4: the tier cuts sat on the verdict cutpoints only where the shape had a
+    cut at exactly 25% and 50%, so on five equal tiers a title at s = 0.6, which the verdict arm
+    calls liked, wore tier 2 and was guessed fine, and one at s = -1.35 was guessed fine where the
+    arm says disliked. With no tier edit, the class of the tier a title renders in is the class
+    the verdict arm's own cutpoints put its s in, on every count from 3 to 12 (decisions 508 and
+    510), and the class bands split exactly at the two anchored cuts."""
+    gamma = np.array([-1.2, 0.5])
+    grid = np.linspace(-4.0, 4.0, 1601)
+    said = np.searchsorted(gamma, grid, side="right").tolist()
+    for k in range(3, 13):
+        cuts = model.cut_prior_mean(gamma, k)
+        lower, upper = model.anchored_cuts(k)
+        assert (cuts[lower], cuts[upper]) == (pytest.approx(gamma[0]), pytest.approx(gamma[1]))
+        assert model.verdict_tiers(k).tolist() == [
+            [0, lower], [lower + 1, upper], [upper + 1, k - 1]
+        ], f"K = {k}"
+        stands_for = [model.verdict_class_of_tier(int(t), k) for t in model.tier_of(grid, cuts)]
+        assert stands_for == said, f"K = {k}"
+    # Two tiers cannot hold three classes: the one cut is the fine/liked cutpoint, and the lower
+    # tier, which holds disliked and fine, stands for fine.
+    assert model.cut_prior_mean(gamma, 2).tolist() == pytest.approx([gamma[1]])
+    assert [model.verdict_class_of_tier(t, 2) for t in (0, 1)] == [1, 2]
 
 
 def test_each_verdict_names_the_tiers_it_renders_in():

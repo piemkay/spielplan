@@ -54,7 +54,10 @@ async def list_titles(
     `sort` (decision 515): `for_you` orders by the member's own score, films then series, and is
     the default once their own ratings rank a selected kind; `newest` is the year order. The
     response's `sort` is the order the list is really in - `match` under a search (decision 472),
-    and `newest` when nothing of theirs ranks the selection yet, whatever was asked.
+    and `newest` when nothing of theirs ranks the selection yet, whatever was asked - and
+    `for_you_available` says whether their own order exists for this selection at all, so the
+    grid never offers a "For you" that answers `newest` (review finding UX-1). Under a search
+    each item carries `match`, 'strong' or 'weak' (`db/library.search_order_sql`).
     """
     try:
         kinds = library.normalise_kinds(kind)
@@ -95,6 +98,7 @@ async def list_titles(
     return {
         "kinds": kinds,
         "sort": effective,
+        "for_you_available": bool(personal),
         "total": total,
         # §6.0: a toggle that hides things has to say how many. Silent truncation is the
         # failure this control was introduced to fix, so the count travels with the list —

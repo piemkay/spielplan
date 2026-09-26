@@ -496,8 +496,8 @@ async def test_the_fit_is_partitioned_by_kind_and_a_cross_kind_duel_is_refused(d
 
 
 async def test_a_margin_less_duel_carries_the_hesitant_weight_from_hyperparams(db, world):
-    """§4.2: "margin optional: decisive vs hesitant". §6.1: "a persistent decisive toggle sets
-    the margin weight (~1.6 vs 1.0)".
+    """§4.2: "margin optional: decisive vs hesitant". §6.1: a "decisive switch ... sets the
+    margin weight (~1.6 vs 1.0)" (decision 520).
 
     §6.3's drag-drop neighbour duels are margin-*less*, which is not weightless: they are
     ordinary, non-decisive comparisons. The number comes from `hp`, so a corpus re-tune of

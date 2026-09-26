@@ -14124,6 +14124,14 @@ order (517); and the copy 490 and 491 quote, for the strings 519 restates (519).
 decision 471 left open, M3-open-points §2.8, is answered by 508, and proposal 153's intent is
 realised by 510.
 
+The wave's review, same date, restated two entries in place where the merged tree now holds
+otherwise, and says so in each: 508's anchoring, for a tier count whose shape has no cut at 25% or
+50% (every count but 4, 7, 8 and 12 left a class edge off the verdict cutpoint, so a tier could
+stand for a class the verdict arm did not predict), and its rule 5, which now names the comparison
+queue's candidates; and 521's term, read against the person's own seen rate for the kind rather
+than a fixed half, which sank a mostly-"not seen" member's main language against every language
+never asked about.
+
 ### 504. A 'not tonight' veto reads both DNA tiers
 
 **What the spec says.** §6.2 step 1: 'a title carrying a vetoed term in the extracted
@@ -14264,20 +14272,27 @@ masses.
    logit(0.5), replacing equal thirds.
 2. The tier arm's prior mean is anchored on the fitted verdict cutpoints:
    - the cut at the shape's 25% mass sits on the disliked/fine cutpoint, and the cut at 50% on the
-     fine/liked cutpoint;
+     fine/liked cutpoint; on a tier count whose shape has no cut at one of those masses, the
+     nearest cut does (for 50%, the nearest above the 25% one), a tie going to the fine class, and
+     two tiers' one cut is the fine/liked one;
    - cuts between them are interpolated on the logit-of-mass scale;
    - cuts outside them keep the shape's logistic distance from the nearer anchor.
    The mean is linear in the verdict cutpoints, so the prior stays convex. At the verdict prior it
-   is exactly the old shape for every K, so a board nobody has rated starts where it always did.
+   is exactly the old shape on the seven and on 2, 4, 8 and 12 tiers, so those boards start where
+   they always did; on another count the two anchored cuts start on the verdict prior's masses.
    With no tier edit, the displayed C/B and B/A boundaries are the person's own verdict cutpoints.
 3. Each tier belongs to the verdict class whose band holds the middle of its prior mass: F/D/C
-   disliked, B fine, A/A+/S liked on §6.3's seven.
+   disliked, B fine, A/A+/S liked on §6.3's seven. The class edges are the two anchored cuts, so
+   on every count from 3 to 12 a tier stands for the class the verdict cutpoints give its `s`.
+   Two tiers cannot hold three classes: the lower holds disliked and fine and stands for fine, so
+   a two-tier board's reveal never guesses disliked.
 4. A rated title with no `tier_edit` renders inside its live verdict's tiers, and `s` orders it
    within them. Where this hold binds, its straddle names the next tier toward `s`, so the chip and
    queue eligibility remain one predicate (decision 295). A dropped title is placed by the drop, as
    §6.3 already says.
 5. The hold applies wherever a rated title's tier is computed: both refit paths'
-   `ledger_state.tier`, the board, and the drop's neighbour check.
+   `ledger_state.tier`, the board, the drop's neighbour check, and the comparison queue's
+   candidates, whose tier the boundary arm pairs across and weighs by.
 6. The board's why-line states the rule in the person's own labels.
 7. `ledger_fit.geometry` gains "+verdict-scale", so a fit made before this is refused and refitted
    by the 60 s tick.
@@ -14843,10 +14858,12 @@ test (H7, the Rate side).
 **The decision.** P(seen) gains a sixth term, `unfamiliar`, with weight 2.0. It reads the person's
 own `user_title` answers per kind and original language:
 
-- It takes the share of those titles the person has seen, damped by two pseudo-answers each way.
-- It counts only below one half, scaled to -1..0.
-- So one "not seen" moves that language's titles by 0.4 logit, three move them by 0.86, and a
-  language the person knows is never raised.
+- It takes the share of those titles the person has seen, damped by two pseudo-answers each way
+  towards the person's own seen rate for the kind (the same answers, over every language).
+- It counts only below that rate, doubled, so it runs from 0 down to minus twice the rate.
+- At a rate of one half, one "not seen" moves that language's titles by 0.4 logit and three move
+  them by 0.86; the moves scale with the rate. A language the person knows is never raised, and a
+  uniformly low seen rate or a language never asked about moves nothing.
 - Titles with no original language, and other people's queues, are untouched.
 - The why-line never names the term.
 
@@ -14858,7 +14875,11 @@ own `user_title` answers per kind and original language:
 - Language is a proxy. A person who knows one anime but not the rest still sees Japanese titles sink
   until their answers say otherwise, and a Japanese live-action drama sinks with the anime.
 - Replayed read-only on the live database: Jenny's next 50 series held two Japanese titles before
-  and none after, and nothing moved for Patrick.
+  and none after, and nothing moved for Patrick. That replay read the term against a fixed half.
+  The wave's review found that a member whose answers were mostly "not seen" then sank their main
+  language against every language never asked about - H7's drift, made by this term - so the term
+  reads the person's own rate. It was not replayed again: both members' rates are above a half, so
+  a language they keep not knowing sinks further for them than the replay showed.
 - The weight is a stated prior like the other five, watched through §13's not-seen rate.
 - The Home half of H7 ("Because you liked Chernobyl" mixing in anime) is answered on Home, by
   decision 513's form rule.

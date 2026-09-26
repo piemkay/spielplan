@@ -375,22 +375,45 @@ async def test_p_seen_moves_the_queue_when_a_signal_moves(db, world):
 
 
 def test_unfamiliarity_only_lowers_and_needs_the_answers_to_keep_saying_so():
-    """The person's own answers per language and kind, shrunk towards "no opinion" by two
-    pseudo-answers each way and read only below a half (H7 of 2026-09-26)."""
-    assert queue.unfamiliarity(0, 0) == 0.0, "no answers, no opinion"
-    assert queue.unfamiliarity(0, 1) == pytest.approx(-0.2)
-    assert queue.unfamiliarity(0, 3) == pytest.approx(2 * (2 / 7 - 0.5))
-    assert queue.unfamiliarity(0, 30) < queue.unfamiliarity(0, 3) < queue.unfamiliarity(0, 1)
-    assert queue.unfamiliarity(0, 10_000) > -1.0
+    """The person's own answers per language and kind, shrunk towards their own seen rate for the
+    kind by two pseudo-answers each way and read only below it (H7 of 2026-09-26, decision 521).
+    At a rate of one half these are the numbers decision 521 was measured with."""
+    half = (20_000, 40_000)                       # the kind's answers: half of them seen
+    assert queue.unfamiliarity(0, 0, *half) == 0.0, "no answers, no opinion"
+    assert queue.unfamiliarity(0, 1, *half) == pytest.approx(-0.2)
+    assert queue.unfamiliarity(0, 3, *half) == pytest.approx(2 * (2 / 7 - 0.5))
+    assert (
+        queue.unfamiliarity(0, 30, *half)
+        < queue.unfamiliarity(0, 3, *half)
+        < queue.unfamiliarity(0, 1, *half)
+    )
+    assert queue.unfamiliarity(0, 10_000, *half) > -1.0
     for seen, answered in ((1, 2), (5, 5), (16, 21), (40, 41)):
-        assert queue.unfamiliarity(seen, answered) == 0.0, "a known language is never raised"
+        assert queue.unfamiliarity(seen, answered, *half) == 0.0, "a known language is never raised"
     # And it can only ever take P(seen) down: the weight is positive and the feature is not.
     assert queue.WEIGHTS.unfamiliar > 0
     base = queue.Features(owned=True, crowd=0.5)
     assert queue.p_seen(base) > queue.p_seen(
-        queue.Features(owned=True, crowd=0.5, unfamiliar=queue.unfamiliarity(0, 3))
+        queue.Features(owned=True, crowd=0.5, unfamiliar=queue.unfamiliarity(0, 3, *half))
     )
     assert queue.dominant(queue.Features(unfamiliar=-0.5)) is None, "it is never the named cause"
+
+
+def test_unfamiliarity_is_read_against_the_persons_own_seen_rate():
+    """Review finding F3 of the second household test's wave. Read against a fixed half, a member
+    who had seen 10 of the 40 English films Rate asked about had every English film lowered by
+    0.91 logit, and a Japanese or Korean film nobody had asked them about rose past it: H7's drift,
+    made by the term that exists to stop it. A language sinks only below the person's own rate."""
+    assert queue.unfamiliarity(10, 40, 10, 40) == 0.0, "one language at their own rate"
+    assert queue.unfamiliarity(0, 0, 10, 40) == 0.0, "an unasked language"
+    assert queue.unfamiliarity(0, 12, 0, 12) == 0.0, "all 'not seen' is the person, not a language"
+    # Two languages: 16 of 21 English series seen and 0 of 3 Japanese.
+    kind = (16, 24)
+    assert queue.unfamiliarity(16, 21, *kind) == 0.0, "the language they know is not lowered"
+    japanese = queue.unfamiliarity(0, 3, *kind)
+    assert japanese == pytest.approx(2 * (4 * 16 / 24 / 7 - 16 / 24))
+    # The same three misses say less about a person who rarely knows what they are asked.
+    assert japanese < queue.unfamiliarity(0, 3, 4, 24) < 0.0
 
 
 async def test_a_persons_not_seen_answers_lower_that_languages_titles_and_nothing_else(db, world):
@@ -399,17 +422,21 @@ async def test_a_persons_not_seen_answers_lower_that_languages_titles_and_nothin
     Jenny answered "not seen" to Attack on Titan and to Berserk, and Monster came three cards
     later; today Death Note leads her series queue on the `owned` term, because the household
     owns 39 Japanese series and nothing in §6.1's P(seen) signals was about her. Her own answers
-    are: three "not seen" on one language's series lower that language's series for her, and for
-    nobody else, and nothing she knows is raised. The why-line does not change -- the term is a
-    correction to the ordering, not a cause the card can name.
+    are: three "not seen" on one language's series, against the English series she knows, lower
+    that language's series for her, and for nobody else, and nothing she knows is raised. A member
+    whose every answer is "not seen" lowers nothing: that is their rate, not a language's (review
+    finding F3). The why-line does not change -- the term is a correction to the ordering, not a
+    cause the card can name.
     """
     patrick, mia = world["patrick"], world["mia"]
     await db.execute(
         "INSERT INTO title (id, kind, name, year, is_owned, original_language) VALUES "
         "(51, 'series', 'Anime 1', 2010, true, 'ja'), (52, 'series', 'Anime 2', 2010, true, 'ja'),"
         "(53, 'series', 'Anime 3', 2010, true, 'ja'), (54, 'series', 'Anime 4', 2010, true, 'ja'),"
-        "(55, 'series', 'Drama 1', 2010, true, 'en'), (56, 'series', 'Drama 2', 2010, true, 'en')"
+        "(55, 'series', 'Drama 1', 2010, true, 'en'), (56, 'series', 'Drama 2', 2010, true, 'en'),"
+        "(57, 'series', 'Drama 3', 2010, true, 'en'), (58, 'series', 'Drama 4', 2010, true, 'en')"
     )
+    await rate_all(db, patrick, (57, 58))
 
     async def queue_for(user):
         cards = await queue.next_sweep_cards(
@@ -428,7 +455,7 @@ async def test_a_persons_not_seen_answers_lower_that_languages_titles_and_nothin
     age = min(1.0, (datetime.now(UTC).year - 2010) / queue.AGE_SATURATION_YEARS)
     assert after[54].p_seen == pytest.approx(
         queue.p_seen(
-            queue.Features(owned=True, age=age, unfamiliar=queue.unfamiliarity(0, 3))
+            queue.Features(owned=True, age=age, unfamiliar=queue.unfamiliarity(0, 3, 2, 5))
         ),
         abs=1e-9,
     ), "SQL orders and Python explains: the two spellings of the term agree"
@@ -437,6 +464,12 @@ async def test_a_persons_not_seen_answers_lower_that_languages_titles_and_nothin
 
     theirs = await queue_for(mia)
     assert theirs[54].p_seen == pytest.approx(before[54].p_seen), "Patrick's answers are his own"
+
+    # Mia says "not seen" to the only series she is asked about: her rate, not English's.
+    await observations.record_not_seen(db, user_id=mia, title_id=55)
+    hers = await queue_for(mia)
+    assert hers[56].p_seen == pytest.approx(theirs[56].p_seen), "a uniform 'not seen' moves nothing"
+    assert hers[54].p_seen == pytest.approx(theirs[54].p_seen)
 
 
 async def test_a_title_the_app_already_holds_as_seen_leads_the_queue(db, world):

@@ -260,7 +260,8 @@ async def current(
 async def controls(
     body: ControlsBody, conn: DB, user: ActiveUser, request: Request
 ) -> dict[str, Any]:
-    """§6.1's mode and kind controls, plus the persistent decisive toggle.
+    """§6.1's mode and kind controls, plus the decisive switch for the pair on the table (decision
+    520).
 
     A fresh session opens in Mix — §6.1 makes it the default, and every entry point into the
     surface lands on the same card type as a result.

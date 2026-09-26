@@ -42,12 +42,16 @@
     gridReason,
     homeMode,
     kindChoice,
+    kindHeading,
     kindsFor,
     libraryLabel,
     loadHome,
     modelGate,
     otherKinds,
+    partitionLine,
+    partitionedByKind,
     sortOffered,
+    sortWaitingLine,
     strongEnd
   } from '$lib/home.svelte.js';
   import { publishSuppressed } from '$lib/rail.svelte.js';
@@ -85,12 +89,16 @@
   // server says it used, which is what the control shows pressed.
   let sort = $state(null);
   let sortEcho = $state(null);
+  // Whether the member's own order exists for these kinds at all (the server's
+  // `for_you_available`); null from a build that does not say.
+  let forYouAvailable = $state(null);
   // An empty grid whose other kind holds matches: `{kind, names, total}` (second household test,
   // U7 - "Broadchurch" with Films selected said "No matches").
   let elsewhere = $state(null);
   // The weak tail of a search, folded until asked for (U14).
   let showWeak = $state(false);
-  // What a kind switch had to clear, said rather than done silently (U8).
+  // What a kind switch had to clear, said rather than done silently (U8). It describes that switch
+  // only, so the next list the page asks for - a search, a filter, an order - clears it.
   let kindNote = $state('');
 
   /** @type {any} */
@@ -110,6 +118,8 @@
   const strongItems = $derived(weakItems.length ? items.slice(0, cut) : items);
   // Everything after the last strong hit is weaker, loaded or not: the list is ordered by quality.
   const weakTotal = $derived(weakItems.length ? total - cut : 0);
+  // Films then series, each in the member's order: headed per kind, and said (review finding UX-7).
+  const partitioned = $derived(partitionedByKind(kinds, sortEcho));
 
   // Decision 117 still strips `suppressed` when the toggle is off, so this publishes an absence
   // as readily as a list. The shell renders it: it has no `/api/home` response of its own and
@@ -201,6 +211,7 @@
     if (!append) {
       showWeak = false;
       elsewhere = null;
+      kindNote = '';
     }
     try {
       const res = await get(titlesQuery(kinds, { offset: append ? offset : 0 }));
@@ -211,6 +222,7 @@
       offset = (append ? offset : 0) + res.items.length;
       // Absent from a build that does not echo it, and then no order control is offered.
       sortEcho = res.sort ?? null;
+      forYouAvailable = res.for_you_available ?? null;
       if (!append && !res.items.length) findElsewhere(seq, res.hidden ?? {});
     } catch (err) {
       if (seq === requestSeq) loadError = err.message;
@@ -324,12 +336,14 @@
       dropped.push(`${decade}s`);
       decade = '';
     }
+    // The load first: a new list clears the last switch's note, and this one names what the
+    // switch it belongs to cleared.
+    load();
     if (dropped.length) {
       const noun = choice === 'series' ? 'series' : choice === 'movie' ? 'films' : 'titles';
       const them = dropped.length > 1 ? 'them' : 'it';
       kindNote = `${dropped.join(' and ')} cleared - no ${noun} match ${them}.`;
     }
-    load();
   }
 
   let debounce;
@@ -567,7 +581,7 @@
     <p class="modeline why" data-testid="home-mode" data-mode="grid" data-reason={reason}>
       {gridLine(reason)}
     </p>
-    {#if sortOffered(reason, sortEcho)}
+    {#if sortOffered(reason, sortEcho, forYouAvailable)}
       <!-- Decision 516: a filtered grid is read in the member's own order by default - "best
            sci-fi for me in my library" - with the year order one tap away. The pressed position is
            the order the server says it used, never the one this page asked for. -->
@@ -581,6 +595,13 @@
           >{c.label}</button>
         {/each}
       </div>
+    {:else if sortWaitingLine(reason, sortEcho, forYouAvailable)}
+      <p class="why sortwait" data-testid="sort-waiting">
+        {sortWaitingLine(reason, sortEcho, forYouAvailable)}
+      </p>
+    {/if}
+    {#if partitioned}
+      <p class="why partition" data-testid="grid-partition">{partitionLine(kinds, sortEcho)}</p>
     {/if}
   </div>
 
@@ -634,7 +655,10 @@
       </p>
     {/if}
     <div class="grid">
-      {#each strongItems as t (t.id)}
+      {#each strongItems as t, i (t.id)}
+        {#if partitioned && kindHeading(strongItems, i)}
+          <h2 class="kindhead" data-testid="grid-kind-{t.kind}">{kindHeading(strongItems, i)}</h2>
+        {/if}
         <PosterCard title={t} onSelect={() => (selected = t.id)} />
       {/each}
     </div>
@@ -818,6 +842,16 @@
   .sort {
     display: flex;
     gap: 6px;
+  }
+  .sortwait,
+  .partition {
+    margin: 0;
+    flex-basis: 100%;
+  }
+  .kindhead {
+    grid-column: 1 / -1;
+    margin: 8px 0 0;
+    font-size: 15px;
   }
   .weakhead {
     margin: 22px 0 10px;

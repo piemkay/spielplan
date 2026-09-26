@@ -238,6 +238,57 @@ describe('a filtered grid is read in the order the server says it used', () => {
     expect($('[data-testid="home-mode"]').dataset.reason).toBe('search');
     expect($('[aria-label="Order"]'), 'a search is best match first').toBeNull();
   });
+
+  it('offers no For you before the member has an order of their own, and says when it comes', async () => {
+    // Review finding UX-1: the server answers `newest` whatever is asked until the member's own
+    // ratings rank the kind, and "For you" was a button that reloaded the same grid.
+    backend({
+      titles: () => ({
+        items: [film(1, 'Heat')], total: 1, hidden: {}, sort: 'newest', for_you_available: false
+      })
+    });
+    await openHome();
+    $('[data-testid="filter-toggle"]').click();
+    flushSync();
+    $('[data-testid="filter-owned"]').click();
+    await tick();
+    expect($('[aria-label="Order"]')).toBeNull();
+    expect($('[data-testid="sort-waiting"]').textContent.trim()).toBe(
+      'Newest first. Your own order arrives once your ratings rank these.'
+    );
+  });
+});
+
+describe("a grid in the member's own order with both kinds", () => {
+  it('heads each kind where it starts and says films come first', async () => {
+    // Review finding UX-7: decision 515's order lists every film and then every series, and on the
+    // live install the first series card sat 753 films down with nothing saying so.
+    const series = { id: 3, kind: 'series', name: 'Severance', year: 2022 };
+    backend({
+      titles: (p) => ({
+        items: p.getAll('kind').length > 1 ? [film(1, 'Heat'), film(2, 'Up'), series] : [film(1, 'Heat')],
+        total: 3,
+        hidden: {},
+        sort: 'for_you',
+        for_you_available: true
+      })
+    });
+    await openHome();
+    $('[data-testid="filter-toggle"]').click();
+    flushSync();
+    $('[data-testid="filter-owned"]').click();
+    await tick();
+    expect($('[data-testid="grid-kind-movie"]'), 'one kind, nothing to divide').toBeNull();
+    expect($('[data-testid="grid-partition"]')).toBeNull();
+
+    $('[data-testid="kind-both"]').click();
+    await tick();
+    expect($('[data-testid="grid-partition"]').textContent.trim()).toBe('Films first, then series.');
+    const grid = [...$('.grid').children].map((el) =>
+      el.matches('h2') ? `# ${el.textContent.trim()}` : el.querySelector('.name')?.textContent
+    );
+    expect(grid).toEqual(['# Films', 'Heat', 'Up', '# Series', 'Severance']);
+  });
 });
 
 describe('an empty search names the other kind', () => {
@@ -320,6 +371,11 @@ describe('a kind switch keeps the filters the new kind has', () => {
     await tick();
     expect($('[data-testid="filter-genre"]').value).toBe('');
     expect($('[data-testid="kind-filter-note"]').textContent).toBe('Musical cleared - no series match it.');
+
+    // Review finding UX-6: it names what that switch cleared, and the next list asked for - a
+    // search, a filter, an order - is not that switch.
+    await type('heat');
+    expect($('[data-testid="kind-filter-note"]'), 'a search after the switch').toBeNull();
   });
 });
 

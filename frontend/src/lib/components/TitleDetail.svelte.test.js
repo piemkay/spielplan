@@ -803,6 +803,40 @@ describe("the card's own answer (decision 487)", () => {
     }
   });
 
+  it('stops saying why a title is suggested once the member has rated it or marked it seen', async () => {
+    // §6.0 and decision 515: the line is absent for a title the reader has seen or rated. The
+    // server leaves it out on the next open; the open card kept it under "Saved - you liked it"
+    // (review finding UX-3).
+    const why = { why: 'Because you liked Heat' };
+    const line = () => target.querySelector('[data-testid="title-why"]');
+    vi.mocked(post).mockResolvedValue({ reveal: null });
+    let app = await open({ kind: 'movie', seen_state: 'unseen' }, why);
+    try {
+      target.querySelector('[data-answer="not_seen"]').click();
+      await settle();
+      expect(line(), 'Not seen leaves an unseen title unseen').not.toBeNull();
+    } finally {
+      unmount(app);
+    }
+    app = await open({ kind: 'movie', seen_state: 'unseen' }, why);
+    try {
+      expect(line()).not.toBeNull();
+      target.querySelector('[data-answer="liked"]').click();
+      await settle();
+      expect(line(), 'rated from the card').toBeNull();
+    } finally {
+      unmount(app);
+    }
+    vi.mocked(post).mockResolvedValue({ synced: true });
+    app = await open({ kind: 'movie', seen_state: 'unseen' }, why);
+    try {
+      await tapSeen();
+      expect(line(), 'marked seen from the card').toBeNull();
+    } finally {
+      unmount(app);
+    }
+  });
+
   it('writes nothing for a tap on the answer that already stands', async () => {
     vi.mocked(post).mockResolvedValue({ reveal: null });
     const rated = await open(

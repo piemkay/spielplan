@@ -58,6 +58,7 @@ from spielplan.db import migrate, pool
 from spielplan.models import basis
 from spielplan.models.artifacts import ArtifactStore
 from spielplan.push import keys as push_keys
+from spielplan.rate import session as rate_session
 
 # The backend process configured no logging at all, so nothing this module reports was visible:
 # uvicorn's `dictConfig` leaves the root logger at WARNING with no handlers, `spielplan` inherits
@@ -113,6 +114,10 @@ _UNREACHABLE_ERRNOS = frozenset({
 # correcting the arithmetic beside it. Later milestones reasoning from it should read the 3x.
 # [M4.7 ops-02, dd-health-probes; cycle 3 finding 8]
 _HEALTH_TIMEOUT_S = 2
+
+# How long a stop waits for Rate's handed-off Jellyfin pushes before closing the pool: half of
+# Docker's default ten-second stop grace, leaving the rest for the pool's own close.
+SETTLE_GRACE_S = 5
 
 
 async def _report_secret_custody(conn: asyncpg.Connection, cfg: Settings) -> None:
@@ -263,6 +268,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await basis.stop(app.state)
         app.state.storage.close()
         await app.state.art.close()
+        # A Rate answer's handed-off Jellyfin push gets the stop's grace to land and correct the
+        # journal Undo reads (decision 207): one still waiting for a slot would otherwise meet a
+        # closing pool and be left to §7.3's fifteen-minute sweep. Bounded inside Docker's ten
+        # seconds, and nothing is cancelled when it runs out. [ops-async-push-pool-exhaustion]
+        await rate_session.settled(timeout=SETTLE_GRACE_S)
         await pool.close_pool()
 
 

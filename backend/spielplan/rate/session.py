@@ -1197,6 +1197,32 @@ Later = Callable[[Settle], None]
 
 _SETTLING: set[asyncio.Task[None]] = set()
 
+# How many handed-off settlements may hold a pooled connection at once. A push holds its connection,
+# and the title's advisory lock on it, for the whole Jellyfin round trip - up to the client's 15 s
+# per copy - and a tap is answered in about a tenth of a second, so unbounded, one phone rating
+# behind a slow or hung Jellyfin took all ten of the web pool's connections and every route
+# answered 503: the harm `sync/seen.py` names against "a pool of ten", against §3.3's "the app
+# must work when Jellyfin is down". Two leave eight for requests, and Jellyfin sees at most two
+# Played writes from here at once; the rest wait in memory, holding nothing. [review of the second
+# household test's wave, ops-async-push-pool-exhaustion]
+SETTLE_SLOTS = 2
+# A slot's connection is acquired with the bound `api/deps.py` gives a request, for its reason: a
+# saturated pool answers rather than hangs. A settlement that gets none is left owed, which §7.3's
+# seen-state sweep settles, so nothing is lost by giving up.
+SETTLE_ACQUIRE_TIMEOUT_S = 10
+
+_slots: tuple[asyncio.AbstractEventLoop, asyncio.Semaphore] | None = None
+
+
+def _settle_slots() -> asyncio.Semaphore:
+    """The one semaphore for this event loop. Made on first use and per loop, because a semaphore
+    that has once made a caller wait is bound to that loop, and each test runs on its own."""
+    global _slots
+    loop = asyncio.get_running_loop()
+    if _slots is None or _slots[0] is not loop:
+        _slots = (loop, asyncio.Semaphore(SETTLE_SLOTS))
+    return _slots[1]
+
 
 async def _push_and_mark(
     conn: asyncpg.Connection,
@@ -1301,6 +1327,8 @@ def settle_in_background(job: Settle) -> None:
     mid-flight may already have reached Jellyfin while the journal still says it did not, which
     is the Played flag decision 207 exists to keep Undo able to take back. The client's own
     15 s budget bounds it, and a push that never lands is still owed, which §7.3's sweep settles.
+    What IS bounded is how many run at once (`SETTLE_SLOTS`) and how long one waits for its
+    connection (`SETTLE_ACQUIRE_TIMEOUT_S`), both before the push starts.
     """
     task = asyncio.get_running_loop().create_task(_run_settlement(job))
     _SETTLING.add(task)
@@ -1311,8 +1339,23 @@ async def _run_settlement(job: Settle) -> None:
     # Nothing may raise out of a bare task: there is no request to carry it, and the tap it
     # belongs to has already been answered. The app-side write is durable either way.
     try:
-        async with db_pool.acquire() as conn:
-            await job(conn)
+        async with _settle_slots():
+            connections = db_pool.pool()
+            try:
+                conn = await connections.acquire(timeout=SETTLE_ACQUIRE_TIMEOUT_S)
+            except TimeoutError:
+                log.warning(
+                    "no pooled connection within %ss for a Rate answer's Jellyfin push (pool size"
+                    " %d, idle %d); the seen-state sweep still owes it",
+                    SETTLE_ACQUIRE_TIMEOUT_S,
+                    connections.get_size(),
+                    connections.get_idle_size(),
+                )
+                return
+            try:
+                await job(conn)
+            finally:
+                await connections.release(conn)
     except Exception:
         log.warning(
             "a Rate answer's Jellyfin push did not settle; the seen-state sweep still owes it",
@@ -1320,10 +1363,20 @@ async def _run_settlement(job: Settle) -> None:
         )
 
 
-async def settled() -> None:
-    """Wait for every settlement handed off so far. For tests and shutdown, never a request."""
+async def settled(timeout: float | None = None) -> None:
+    """Wait for every settlement handed off so far. For tests and shutdown, never a request.
+
+    With `timeout`, stop waiting after that long and cancel nothing: a push cut off mid-flight may
+    already have reached Jellyfin while the journal says it did not (`settle_in_background`), so
+    what is still running is left to finish or to §7.3's sweep.
+    """
+    loop = asyncio.get_running_loop()
+    deadline = None if timeout is None else loop.time() + timeout
     while _SETTLING:
-        await asyncio.gather(*list(_SETTLING), return_exceptions=True)
+        left = None if deadline is None else deadline - loop.time()
+        if left is not None and left <= 0:
+            return
+        await asyncio.wait(list(_SETTLING), timeout=left)
 
 
 # --- the journal -----------------------------------------------------------------------------
@@ -2154,12 +2207,13 @@ async def payload(
                 # mode change and keeps the counter, and `undo` restores the journal's card verbatim
                 # without restoring the mode it was drawn under, so Mix -> Sweep -> Mix -> Undo puts
                 # a sweep card under `serving: "battle"` with no marker. That is the field doing
-                # exactly what it says (the counter, in the mode now in force, calls for a battle)
-                # and it is why `rate/+page.svelte` has named the card's own type in the counter line
-                # since M2. Deriving `serving` from the card instead — the plan's other option — was
-                # weighed and refused: it would make the field a second spelling of `card.type` and
-                # leave the counter's call nowhere, and `ops/devstub.py` mirrors this definition on
-                # purpose. [M4.10 finding 21, decision 200, cycle 1 M410-D8-03]
+                # exactly what it says (the counter, in the mode now in force, calls for a battle),
+                # and no member reads it: the counter line named the card's own type from M2 and
+                # names the mode the person chose since decision 519 (`counterLine` in
+                # rate.svelte.js). Deriving `serving` from the card instead — the plan's other
+                # option — was weighed and refused: it would make the field a second spelling of
+                # `card.type` and leave the counter's call nowhere, and `ops/devstub.py` mirrors this
+                # definition on purpose. [M4.10 finding 21, decision 200, cycle 1 M410-D8-03]
                 #
                 # Decision 492's warm-up is part of the call, over the same label count
                 # `ensure_card` drew under, so a new member's counter reads sweep and not battle.

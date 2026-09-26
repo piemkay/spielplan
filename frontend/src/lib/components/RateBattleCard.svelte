@@ -1,8 +1,9 @@
 <script>
   /**
    * §6.1's battle card: "two posters are the buttons; `Tie` (feeds the Davidson tie term); a
-   * persistent **decisive toggle** … Corrections zone at the bottom (nothing tappable inside
-   * the poster cards), one row".
+   * **decisive switch** … for the pair on the table and is off again for the next pair …
+   * Corrections zone at the bottom (nothing tappable inside the poster cards), one row"
+   * (decision 520).
    *
    * Four things this card does not have, each on purpose:
    *
@@ -381,7 +382,7 @@
       display: none;
     }
     /* On an iPhone 13 the card used to stand 589 px tall: two full-width 2:3 posters, then the
-       why-line, and Tie, §6.1's "persistent decisive toggle" and Skip all below the bottom bar.
+       why-line, and Tie, §6.1's decisive switch and Skip all below the bottom bar.
        Measured at 390 x 664 the posters are now capped so the pair, the strip and the toggle
        row fit above it, and the order under the posters is the order a thumb needs them in:
        the answer strip, the toggle and Skip, then the why-line and the corrections row. The

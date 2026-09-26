@@ -1,10 +1,11 @@
 """The §6.1 sweep queue: which title to ask about next, and the one line saying why.
 
-§6.1: "**Queue:** P(seen)-ordered (Jellyfin history, popularity, household co-seen), seeded
-first run from the imported 100-title decade-stratified `seed_list`. Blocks of 15; each card
-shows its queue reason ('queued because: 72% likely you have seen it')." The reason is a plain
-sentence since the second household test and its probability waits behind Show the model (see
-`reason_for`).
+§6.1: "**Queue:** P(seen)-ordered (Jellyfin history, popularity, household co-seen, and the
+person's own answers on titles of the same kind and original language, read against their own
+seen rate for the kind, which only ever lower it; decision 521), seeded first run from the
+imported 100-title decade-stratified `seed_list` ... Blocks of 15; each card shows its queue reason
+as a plain sentence naming its strongest cause ... with no number in it" - P(seen) waits behind
+Show the model (decision 519; see `reason_for`).
 
 Three sentences, three rules, and they compose in one ORDER BY:
 
@@ -103,9 +104,10 @@ class SeenWeights:
 
 WEIGHTS = SeenWeights()
 
-# The pseudo-count `unfamiliarity` shrinks a person's own answers towards "no opinion" with: two
-# seen and two not-seen, so one "not seen" moves a language's titles by 0.4 logit rather than by
-# the whole weight, and the term only bites once the answers keep saying the same thing.
+# The pseudo-count `unfamiliarity` shrinks a person's own answers towards their own seen rate for
+# the kind with: two each way, four answers at that rate, so one "not seen" moves a language's
+# titles by 0.8 logit times that rate (0.4 at a half) rather than by the whole weight, and the term
+# only bites once the answers keep saying the same thing.
 FAMILIAR_PSEUDO = 2.0
 
 # A title is "old" for this purpose once it has been out four decades; past that the extra years
@@ -147,7 +149,7 @@ class Features:
     crowd: float = 0.0        # log1p(item_n) / log1p(CROWD_SATURATION), clipped
     owned: bool = False
     age: float = 0.0          # (this year - release year) / 40, clipped
-    unfamiliar: float = 0.0   # -1..0: `unfamiliarity` of this person's answers in its language
+    unfamiliar: float = 0.0   # -2..0: `unfamiliarity` of this person's answers in its language
 
     def vector(self) -> dict[str, float]:
         return {
@@ -160,7 +162,13 @@ class Features:
         }
 
 
-def unfamiliarity(seen: float, answered: float, pseudo: float = FAMILIAR_PSEUDO) -> float:
+def unfamiliarity(
+    seen: float,
+    answered: float,
+    kind_seen: float,
+    kind_answered: float,
+    pseudo: float = FAMILIAR_PSEUDO,
+) -> float:
     """How firmly this person's own answers say they do not know titles of one language and kind.
 
     §6.1 orders the queue by P(seen) over signals that are all about the TITLE -- its crowd, the
@@ -171,15 +179,22 @@ def unfamiliarity(seen: float, answered: float, pseudo: float = FAMILIAR_PSEUDO)
     nothing in the formula knows whose they are. Her own answers are the only signal that does,
     and they are exactly the label P(seen) predicts: a verdict means seen and `Not seen` unseen.
 
-    The share of the person's answered titles in the group that they had seen, shrunk towards a
-    half by `pseudo` answers each way, read only below a half: 0 until the answers lean towards
-    "not seen", -1 at the limit. Never above zero, because a language the person knows well is no
-    reason to ask about a title in it that nothing else says they saw -- this lowers titles the
-    person keeps not knowing and moves nothing else, so the why-line never names it.
-    [H7 of the 2026-09-26 household test]
+    The share of the person's answered titles in the group that they had seen, shrunk by
+    2 x `pseudo` answers towards the person's OWN seen share for the kind (`kind_seen` of
+    `kind_answered`, the same rows over every language), and read only below it, doubled: 0 until
+    the language's answers fall short of what the person's own rate expects, -2 x that rate at the
+    limit. It was once measured against a fixed half, and then a member whose answers were mostly
+    "not seen" sank their main language against every language never asked about - the very drift
+    the term exists to stop (review finding F3 of the second household test's wave). Against the
+    person's own rate a uniformly low seen share moves nothing, an unasked language stays at 0, and
+    at a rate of one half this is the old term exactly. Never above zero, because a language the
+    person knows well is no reason to ask about a title in it that nothing else says they saw --
+    this lowers titles the person keeps not knowing and moves nothing else, so the why-line never
+    names it. [H7 of the 2026-09-26 household test; decision 521]
     """
-    share = (seen + pseudo) / (answered + 2.0 * pseudo)
-    return min(0.0, share - 0.5) * 2.0
+    rate = kind_seen / kind_answered if kind_answered > 0 else 0.5
+    share = (seen + 2.0 * pseudo * rate) / (answered + 2.0 * pseudo)
+    return min(0.0, share - rate) * 2.0
 
 
 def contributions(features: Features, weights: SeenWeights = WEIGHTS) -> dict[str, float]:
@@ -354,6 +369,11 @@ WITH household AS (
       JOIN title t ON t.id = ut.title_id
      WHERE ut.user_id = $1 AND t.original_language IS NOT NULL
      GROUP BY t.kind, t.original_language
+), familiar_kind AS (
+    -- The same rows per kind: the person's own seen rate each language is measured against.
+    SELECT kind, sum(seen_n) / sum(answered_n) AS rate
+      FROM familiar
+     GROUP BY kind
 ), cand AS (
     SELECT t.id,
            t.kind,
@@ -378,6 +398,7 @@ WITH household AS (
            END                                                      AS age,
            COALESCE(fa.seen_n, 0.0)                                 AS lang_seen_n,
            COALESCE(fa.answered_n, 0.0)                             AS lang_answered_n,
+           COALESCE(fk.rate, 0.5)                                   AS kind_rate,
            array_position($6::int[], t.id)                          AS head_pos
       FROM title t
       LEFT JOIN user_title  ut ON ut.title_id = t.id AND ut.user_id = $1
@@ -387,6 +408,7 @@ WITH household AS (
       LEFT JOIN played      pl ON pl.title_id = t.id
       LEFT JOIN rated       rt ON rt.title_id = t.id
       LEFT JOIN familiar    fa ON fa.kind = t.kind AND fa.lang = t.original_language
+      LEFT JOIN familiar_kind fk ON fk.kind = t.kind
      WHERE t.kind = ANY($2::text[])
        AND NOT (t.id = ANY($3::int[]))
        AND rt.title_id IS NULL
@@ -395,8 +417,9 @@ WITH household AS (
     SELECT c.*,
            least(1.0, ln(1.0 + c.item_n) / ln(1.0 + $7::float8))              AS crowd,
            least(1.0, c.co_seen_n / greatest(1.0, (SELECT n FROM household))) AS co_seen,
-           least(0.0, (c.lang_seen_n + $15::float8)
-                      / (c.lang_answered_n + 2.0 * $15::float8) - 0.5) * 2.0 AS unfamiliar
+           least(0.0, (c.lang_seen_n + 2.0 * $15::float8 * c.kind_rate)
+                      / (c.lang_answered_n + 2.0 * $15::float8) - c.kind_rate) * 2.0
+                                                                          AS unfamiliar
       FROM cand c
 )
 SELECT s.*,

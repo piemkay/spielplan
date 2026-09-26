@@ -830,15 +830,16 @@ def list_titles(
     # is the default once the member's own ratings rank a selected kind - the harness's stand-in
     # for "fitted" is `_beta`'s five labels.
     user_id = _me(spielplan_session)["id"]
+    personal = any(_beta(user_id, k)[1] for k in kinds)
     if q and q.strip():
         effective = "match"
-    elif sort == "newest" or not any(_beta(user_id, k)[1] for k in kinds):
+    elif sort == "newest" or not personal:
         effective = "newest"
     else:
         effective = "for_you"
     if not STATE["imported"]:
-        return {"kinds": kinds, "sort": effective, "total": 0, "hidden": {}, "limit": limit,
-                "offset": offset, "items": []}
+        return {"kinds": kinds, "sort": effective, "for_you_available": personal, "total": 0,
+                "hidden": {}, "limit": limit, "offset": offset, "items": []}
     rows = [r for k in kinds for r in _titles(k)]
     items = []
     with _db() as db:
@@ -866,13 +867,21 @@ def list_titles(
                 ).fetchone()
                 if not c:
                     continue
-            items.append({
+            item = {
                 "id": r["id"], "kind": r["kind"], "name": r["name"], "year": r["year"],
                 "runtime_min": r["runtime_min"], "poster_path": _card(r["id"])["poster_path"],
                 "is_owned": True,
                 "placement": _placement(r["id"]),
                 "seen_state": _seen_state(r["id"]),
-            })
+            }
+            if q and q.strip():
+                # Decision 516's two groups, as `db/library.search_order_sql` sends them: a hit
+                # that only contains the query inside a word is weak. Names only - the harness
+                # searches no aliases.
+                needle, name = q.strip().lower(), r["name"].lower()
+                words = [0] + [i + 1 for i, ch in enumerate(name) if not ch.isalnum()]
+                item["match"] = "strong" if any(name.startswith(needle, i) for i in words) else "weak"
+            items.append(item)
     if seen != "any":
         items = [i for i in items if i["seen_state"] == seen]
     if effective == "for_you":
@@ -888,8 +897,9 @@ def list_titles(
             n = db.execute("SELECT count(*) FROM title WHERE kind = ?", (other,)).fetchone()[0]
             if n:
                 hidden[other] = n
-    return {"kinds": kinds, "sort": effective, "total": total, "hidden": hidden, "limit": limit,
-            "offset": offset, "items": items[offset : offset + limit]}
+    return {"kinds": kinds, "sort": effective, "for_you_available": personal, "total": total,
+            "hidden": hidden, "limit": limit, "offset": offset,
+            "items": items[offset : offset + limit]}
 
 
 @app.get("/api/titles/{title_id}")
@@ -2986,8 +2996,9 @@ def rate_current(
 def rate_controls(
     body: ControlsBody, spielplan_session: str | None = Cookie(default=None)
 ) -> dict[str, Any]:
-    """§6.1's mode and kind controls, plus the persistent decisive toggle. A fresh session
-    opens in Mix, so every entry point lands on the same card type."""
+    """§6.1's mode and kind controls, plus the decisive switch for the pair on the table
+    (decision 520). A fresh session opens in Mix, so every entry point lands on the same card
+    type."""
     user = _me(spielplan_session)
     try:
         kinds = normalise_kinds(body.kinds) if body.kinds is not None else None

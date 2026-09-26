@@ -60,7 +60,7 @@ def test_the_tie_prior_converts_to_davidsons_nu():
 
 
 def test_the_decisive_toggle_carries_the_numbers_the_copy_promises():
-    """§6.1: "a persistent decisive toggle sets the margin weight (~1.6 vs 1.0)"."""
+    """§6.1: a "decisive switch ... sets the margin weight (~1.6 vs 1.0)" (decision 520)."""
     assert DEFAULTS.margin_for(decisive=True) == 1.6
     assert DEFAULTS.margin_for(decisive=False) == 1.0
 

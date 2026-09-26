@@ -127,6 +127,25 @@ async def test_the_crowd_tie_break_is_read_within_each_kind(db):
     assert [r["id"] for r in rows] == [51, 50]
 
 
+async def test_a_hit_is_looser_only_when_its_name_and_aliases_contain_the_query_inside_a_word(db):
+    """§6.0 folds a search's "hits that only contain the query inside a word" (decision 516), on a
+    name or an alias alike, and each hit now says which it is. The client read the name alone, so
+    Fast Five - found for "heist" through its alias "Fast & Furious 5: Rio Heist", a whole word -
+    was folded with the substrings (review finding R3-SPEC-03). No search, no `match`."""
+    await _bundle(db)
+    await _title(db, 80, "Heist", 2001, item_n=100)
+    await _title(db, 81, "Fast Five", 2011, item_n=90000, aliases=("Fast & Furious 5: Rio Heist",))
+    await _title(db, 82, "Sheisty Business", 2005, item_n=100)
+    await _title(db, 83, "Nothing Alike", 2004, item_n=100, aliases=("Die Sheister",))
+    rows, _ = await library.list_titles(db, kinds=["movie"], q="heist")
+    assert {r["id"]: r["match"] for r in rows} == {
+        80: "strong", 81: "strong", 82: "weak", 83: "weak"
+    }
+    assert [r["id"] for r in rows][:2] == [80, 81], "and the order still puts them first"
+    listed, _ = await library.list_titles(db, kinds=["movie"])
+    assert all("match" not in r for r in listed)
+
+
 async def test_search_order_is_total_across_pages(db):
     """M4.9 finding 11: OFFSET paging over a partial order repeats and drops rows. Seven titles
     that tie on every key but the id, fetched two at a time."""

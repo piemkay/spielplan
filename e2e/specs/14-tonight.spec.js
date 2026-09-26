@@ -529,6 +529,21 @@ test.describe('tonight', () => {
     const fold = bar && bar.y > height / 2 ? bar.y : height;
     const submitBox = await page.getByTestId('tonight-submit-ballot').boundingBox();
     expect(submitBox.y + submitBox.height, 'Submit sits below the fold').toBeLessThanOrEqual(fold + 1);
+    // And nothing of the ballot shows between Submit and the fold, where a near miss on Submit
+    // approved a title whose name it covered (review finding UX-2): every point there is the
+    // footer's, never an option's.
+    const under = await page.evaluate(
+      ({ x, top, bottom }) => {
+        const hits = [];
+        for (let y = top; y < bottom; y += 4) {
+          const hit = document.elementFromPoint(x, y)?.closest('[data-testid^="tonight-approve-"]');
+          if (hit) hits.push(hit.dataset.testid);
+        }
+        return hits;
+      },
+      { x: submitBox.x + submitBox.width / 2, top: submitBox.y + submitBox.height + 1, bottom: fold }
+    );
+    expect(under, 'an option is tappable under Submit').toEqual([]);
     await page.getByTestId('tonight-submit-ballot').click();
 
     // One submission is not every submission (54e). The hand-off control is waited for FIRST,

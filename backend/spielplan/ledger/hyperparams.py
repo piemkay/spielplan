@@ -123,7 +123,8 @@ class Hyperparams:
     # --- not shipped; fixed here, once, with the reason --------------------------------
     # §5.2: "after 12 months untouched, a title's σ inflates". The grace period is the spec's.
     sigma_inflation_grace_months: float = 12.0
-    # §6.1: "a persistent decisive toggle sets the margin weight (~1.6 vs 1.0)".
+    # §6.1: a "decisive switch ... sets the margin weight (~1.6 vs 1.0) for the pair on the
+    # table" (decision 520).
     margin_decisive: float = 1.6
     margin_hesitant: float = 1.0
     # μ is otherwise unidentified against a free cutpoint set; this pins the location without

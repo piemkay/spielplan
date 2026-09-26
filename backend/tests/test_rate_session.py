@@ -2590,6 +2590,101 @@ async def test_the_rate_routes_hand_the_push_off_and_answer_without_waiting_for_
     assert {w["played"] for w in module.state.write_log} == {True, False}
 
 
+async def test_handed_off_pushes_behind_a_hung_jellyfin_leave_the_pool_to_the_requests(db, pg_url):
+    """Each handed-off push holds a pooled connection, and the title's advisory lock on it, for its
+    whole Jellyfin round trip - up to the client's 15 s per copy - while its tap was answered in a
+    tenth of a second. Unbounded, a phone rating once a second behind a hung Jellyfin held all ten
+    of the web pool's connections within ten taps, and every route's bounded acquire answered 503:
+    §3.3's "the app must work when Jellyfin is down", lost to the fix that stopped waiting for it. At most
+    `SETTLE_SLOTS` hold a connection at once; the rest wait in memory, holding nothing, and every
+    one still runs. [review of the second household test's wave]"""
+    from spielplan.db import pool as db_pool
+
+    await db_pool.open_pool(pg_url)                  # the web pool's own ten
+    live = db_pool.pool()
+    running, most, done = 0, 0, []
+
+    async def hung_push(conn: asyncpg.Connection) -> None:
+        nonlocal running, most
+        running += 1
+        most = max(most, running)
+        await conn.fetchval("SELECT 1")
+        await asyncio.sleep(0.2)                     # Jellyfin, not answering
+        running -= 1
+        done.append(1)
+
+    for _ in range(10):
+        session.settle_in_background(hung_push)
+    await asyncio.sleep(0.05)
+    assert live.get_size() - live.get_idle_size() <= session.SETTLE_SLOTS
+    request = await live.acquire(timeout=0.5)        # a phone's next request is served at once
+    await live.release(request)
+    await session.settled()
+    assert most == session.SETTLE_SLOTS and len(done) == 10
+
+
+async def test_a_handed_off_push_that_gets_no_connection_is_left_owed_and_raises_nothing(
+    db, pg_url, monkeypatch, caplog
+):
+    """The slot's acquire is bounded as a request's is (`api/deps.py`), so a saturated pool is
+    answered rather than waited on for ever; the settlement is logged and left to §7.3's sweep,
+    which owes it anyway, and nothing raises out of the bare task."""
+    from spielplan.db import pool as db_pool
+
+    monkeypatch.setattr(session, "SETTLE_ACQUIRE_TIMEOUT_S", 0.2)
+    await db_pool.open_pool(pg_url, min_size=1, max_size=1)
+    live = db_pool.pool()
+    ran = []
+
+    async def push(conn: asyncpg.Connection) -> None:
+        ran.append(1)
+
+    held = await live.acquire()
+    try:
+        session.settle_in_background(push)
+        await session.settled()
+    finally:
+        await live.release(held)
+    assert ran == []
+    assert "the seen-state sweep still owes it" in caplog.text
+
+
+async def test_a_stop_lets_the_handed_off_pushes_land_before_the_pool_closes(
+    db, pg_url, tmp_path, monkeypatch
+):
+    """The lifespan closed the pool without waiting for Rate's handed-off pushes, so one still
+    waiting for its slot met "pool is closing" and waited for the fifteen-minute sweep, with the
+    journal Undo reads (decision 207) not yet corrected. A stop now waits, bounded, for all of
+    them. [review of the second household test's wave]"""
+    from spielplan.core.config import settings
+    from spielplan.models import basis
+
+    monkeypatch.setenv("DATABASE_URL", pg_url)
+    monkeypatch.setenv("DATA_DIR", str(tmp_path))
+    neutral = tmp_path / "no-dot-env"                # no developer .env seeds a connector here
+    neutral.mkdir()
+    monkeypatch.chdir(neutral)
+    monkeypatch.setattr(basis, "FOLLOW_SECONDS", None)
+    settings.cache_clear()
+    ran = []
+
+    async def push(conn: asyncpg.Connection) -> None:
+        await asyncio.sleep(0.2)
+        await conn.fetchval("SELECT 1")
+        ran.append(1)
+
+    from spielplan.app import create_app
+
+    application = create_app()
+    try:
+        async with application.router.lifespan_context(application):
+            for _ in range(session.SETTLE_SLOTS + 2):   # two of them still waiting for a slot
+                session.settle_in_background(push)
+    finally:
+        settings.cache_clear()
+    assert len(ran) == session.SETTLE_SLOTS + 2
+
+
 async def test_the_journal_records_the_push_that_happened_and_not_the_one_intended(
     db, linked_sweep
 ):

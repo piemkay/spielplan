@@ -173,15 +173,27 @@ test('a filtered grid names the order it is in, with the other one tap away', as
   // Filtering used to turn the shelves into a catalogue by year (second household test, H5).
   // The server reads a filtered grid "for you" when the member has a fitted score for the kind
   // and by year otherwise, and says which (`sort`); the control shows that and switches it.
+  // Where the member has no order of their own yet the server answers newest whatever is asked,
+  // and says so (`for_you_available`): the grid then names the year order and offers no "For
+  // you" that does nothing (review finding UX-1). Which of the two this member is, the server
+  // decides; the page must say the same.
+  const probe = await (
+    await page.request.get('/api/titles?kind=movie&owned_only=true&limit=1')
+  ).json();
   await page.getByTestId('filter-toggle').click();
   await page.getByTestId('filter-owned').click();
   const order = page.getByRole('group', { name: 'Order' });
-  await expect(order).toBeVisible();
-  await expect(order.getByRole('button', { pressed: true })).toHaveCount(1);
-  const newest = page.getByTestId('sort-newest');
-  await newest.click();
-  await expect(newest).toHaveAttribute('aria-pressed', 'true');
-  await expect(page.getByTestId('sort-for_you')).toHaveAttribute('aria-pressed', 'false');
+  if (probe.for_you_available) {
+    await expect(order).toBeVisible();
+    await expect(order.getByRole('button', { pressed: true })).toHaveCount(1);
+    const newest = page.getByTestId('sort-newest');
+    await newest.click();
+    await expect(newest).toHaveAttribute('aria-pressed', 'true');
+    await expect(page.getByTestId('sort-for_you')).toHaveAttribute('aria-pressed', 'false');
+  } else {
+    await expect(page.getByTestId('sort-waiting')).toHaveText(/^Newest first\./);
+    await expect(order).toHaveCount(0);
+  }
   // A search is best match first and offers no other order.
   await page.getByLabel('Search titles').fill('heat');
   await expect(page.getByTestId('home-mode')).toHaveAttribute('data-reason', 'search');

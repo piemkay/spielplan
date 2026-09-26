@@ -639,6 +639,7 @@ async def test_the_harness_answers_the_catalogue_sort_and_the_card_why_the_app_a
 
         first = (await client.get("/api/titles", params={"kind": "movie"})).json()
         assert first["sort"] == "newest", first["sort"]
+        assert first["for_you_available"] is False
         refused = await client.get("/api/titles", params={"kind": "movie", "sort": "popular"})
         assert refused.status_code == 422
 
@@ -659,10 +660,13 @@ async def test_the_harness_answers_the_catalogue_sort_and_the_card_why_the_app_a
             "/api/titles", params=[("kind", "movie"), ("kind", "series"), ("limit", 200)]
         )).json()
         assert ranked["sort"] == "for_you", ranked["sort"]
+        assert ranked["for_you_available"] is True
         kinds = [item["kind"] for item in ranked["items"]]
         assert kinds == sorted(kinds, key=("movie", "series").index), "a ranking mixed the kinds"
         searched = (await client.get("/api/titles", params={"kind": "movie", "q": "a"})).json()
         assert searched["sort"] == "match"
+        assert {item["match"] for item in searched["items"]} <= {"strong", "weak"}
+        assert all("match" not in item for item in ranked["items"])
 
         # Every other film is liked here, so which one the harness names is the fixture's; the
         # sentence's shape is what the card is built against.

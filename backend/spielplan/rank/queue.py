@@ -48,7 +48,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from spielplan.ledger.hyperparams import Hyperparams
-from spielplan.rank.board import Item, straddles
+from spielplan.rank.board import Item, _placed, straddles
 
 # The values that reach `duel.selection` (0005's CHECK) and §6.7's log line. `uniform_holdout`
 # is spelled the way the column spells it — `observations.HELD_OUT` is the same string, and a
@@ -139,19 +139,25 @@ def candidates(
     hp: Hyperparams,
     comparisons: dict[int, int] | None = None,
 ) -> list[Candidate]:
-    """Decorate the board's items with what the selector needs."""
-    from spielplan.ledger import model
+    """Decorate the board's items with what the selector needs.
 
+    The tier and the straddle are the board's one placement (`board._placed`), because decision
+    508 applies its hold "wherever a rated title's tier is computed": `_boundary` pairs across the
+    cut a straddle names by reading `tier`, and `boundary_height` weighs the anchor by it, so a raw
+    `tier_of` beside a held straddle paired two titles the board renders in one tier. A dropped
+    title is not held, so its tier stays the model's, which is what tension is measured against.
+    """
     counts = comparisons or {}
     cuts = np.asarray(cuts, dtype=float)
     out = []
     for item in items:
+        tier, straddle = _placed(item, cuts, hp)
         out.append(
             Candidate(
                 item=item,
                 comparisons=int(counts.get(item.title_id, 0)),
-                straddle=straddles(item, cuts=cuts, hp=hp),
-                tier=int(model.tier_of(np.array([item.s]), cuts)[0]),
+                straddle=straddle,
+                tier=tier,
             )
         )
     return out

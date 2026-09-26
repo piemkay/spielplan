@@ -121,15 +121,54 @@ export function gridLine(reason) {
  * "For you" is the member's own score, "Newest" the year. A search is always best match first
  * (decision 472), so the control is offered for a filtered or a person's grid only, and only when
  * the server says which order it used - a build that does not echo `sort` gets no control rather
- * than one that claims an order it cannot vouch for.
+ * than one that claims an order it cannot vouch for. Nor is it offered where the server says the
+ * member's own order does not exist yet (`for_you_available` false): the server answers `newest`
+ * whatever is asked there, and "For you" was a button that did nothing (review finding UX-1).
  */
 export const SORT_CHOICES = [
   { id: 'for_you', label: 'For you' },
   { id: 'newest', label: 'Newest' }
 ];
 
-export function sortOffered(reason, echoed) {
-  return (reason === 'filter' || reason === 'person') && SORT_CHOICES.some((c) => c.id === echoed);
+export function sortOffered(reason, echoed, available) {
+  return (
+    (reason === 'filter' || reason === 'person') &&
+    available !== false &&
+    SORT_CHOICES.some((c) => c.id === echoed)
+  );
+}
+
+/**
+ * What stands where the order control would be when the member's own order does not exist yet:
+ * the order the grid is in, and when the other one arrives. Empty wherever the control shows or
+ * no control belongs.
+ */
+export function sortWaitingLine(reason, echoed, available) {
+  if (reason !== 'filter' && reason !== 'person') return '';
+  if (available !== false || echoed !== 'newest') return '';
+  return 'Newest first. Your own order arrives once your ratings rank these.';
+}
+
+/**
+ * Decision 515's own order ranks one kind at a time - every film, then every series - so with
+ * both kinds in the grid the series can sit hundreds of cards down with nothing saying so (review
+ * finding UX-7). True where the grid is that partitioned list; a search and the year order
+ * interleave the kinds, and there is nothing to divide.
+ */
+export function partitionedByKind(kinds = [], echoed) {
+  return echoed === 'for_you' && kinds.includes('movie') && kinds.includes('series');
+}
+
+/** The line that says so, beside the order control. */
+export function partitionLine(kinds, echoed) {
+  return partitionedByKind(kinds, echoed) ? 'Films first, then series.' : '';
+}
+
+/** The heading a partitioned grid shows before the first card of each kind, or ''. */
+export function kindHeading(items = [], index = 0) {
+  const kind = items[index]?.kind;
+  if (!kind || (index > 0 && items[index - 1]?.kind === kind)) return '';
+  return kind === 'series' ? 'Series' : 'Films';
 }
 
 /** The kinds a switch position leaves out: where a search that found nothing may have matches. */
@@ -159,9 +198,10 @@ export function elsewhereLine(kind, names = [], total = 0) {
  * what they typed - or only contain the letters somewhere? "Up" matched 361 films, "Up" and "Up in
  * the Air" among them and "Superman" and "Cupid" too (U14 of the second household test).
  *
- * The server's own reading wins where it sends one (`match: 'strong' | 'weak'`, decision 472's
- * six qualities cut after "a word start anywhere"); without it, a word of the name starting with
- * the query is strong. A hit through an alias reads weak here, which the server's field corrects.
+ * The server's own reading wins, and `GET /api/titles` sends one on every search hit (`match:
+ * 'strong' | 'weak'`, decision 472's six qualities cut after "a word start anywhere", over the
+ * name and every alias). The name reading below is the fallback for a build that sends none, and
+ * there a hit through an alias alone reads weak.
  */
 export function matchStrength(item, q) {
   if (item?.match === 'strong' || item?.match === 'weak') return item.match;

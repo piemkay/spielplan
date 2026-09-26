@@ -98,6 +98,9 @@ _ARTICLE = "'^ (the|a|an) '"
 # phrase as whole words anywhere; 4 a word anywhere begins with it; 5 anywhere inside a word
 # ("theatre" for "heat"); 6 not in this text at all - the predicate matched the other one.
 SEARCH_TIERS = 7
+# Decision 516's line between a search's matches and its looser ones: from here on, a hit only
+# contains the query inside a word.
+WEAK_TIER = 5
 
 
 def _tier_sql(n: str, nq: str) -> str:
@@ -117,8 +120,9 @@ def _text_tier_sql(n: str, nq: str) -> str:
     return f"LEAST({_tier_sql(n, nq)}, {_tier_sql(stripped, nq)})"
 
 
-def search_order_sql(q_param: str) -> tuple[str, str]:
-    """(joins, ORDER BY keys) that rank a searched listing best match first. Decision 472.
+def search_order_sql(q_param: str) -> tuple[str, str, str]:
+    """(joins, ORDER BY keys, match select) that rank a searched listing best match first.
+    Decision 472.
 
     A title's match is its name's tier doubled, or its best alias's tier doubled plus one - so a
     name beats an alias of the same quality and an alias beats a worse name. Inside a match:
@@ -132,6 +136,13 @@ def search_order_sql(q_param: str) -> tuple[str, str]:
 
     `t.id` stays the last key: §6.0 pages this list by OFFSET and a partial order duplicates and
     drops rows between pages (M4.9 finding 11).
+
+    The third part selects `match`, the same first key read as §6.0's two groups (decision 516):
+    'weak' for a hit that only contains the query inside a word, on its name and on every alias
+    alike (tier 5, or 6 where the literal predicate matched across punctuation the normalisation
+    reads as a break), 'strong' for the rest. The client folds the weak hits; it read the name
+    alone before, so an alias hit at a word start - Fast Five through "Fast & Furious 5: Rio
+    Heist" for "heist" - was folded with the substrings (review finding R3-SPEC-03).
     """
     joins = f"""
           CROSS JOIN (SELECT {_norm_sql(f'{q_param}::text')} AS n) sq
@@ -147,12 +158,16 @@ def search_order_sql(q_param: str) -> tuple[str, str]:
                 FROM title_prior pp JOIN title pt ON pt.id = pp.title_id
                WHERE pt.kind = ANY($1)
           ) spop ON spop.title_id = t.id"""
-    order = (
+    quality = (
         f"LEAST({_text_tier_sql('sn.n', 'sq.n')} * 2,"
-        f" COALESCE(salias.tier, {SEARCH_TIERS - 1}) * 2 + 1),"
+        f" COALESCE(salias.tier, {SEARCH_TIERS - 1}) * 2 + 1)"
+    )
+    order = (
+        f"{quality},"
         " t.is_owned DESC, COALESCE(spop.pct, 0) DESC, t.year DESC NULLS LAST, lower(t.name), t.id"
     )
-    return joins, order
+    match = f"CASE WHEN {quality} < {WEAK_TIER} * 2 THEN 'strong' ELSE 'weak' END AS match"
+    return joins, order, match
 
 
 def normalise_kinds(kinds: Sequence[str] | None) -> list[Kind]:
@@ -461,9 +476,10 @@ async def list_titles(
     # year order, which is decision 18's kind-independent order unchanged - or, asked for the
     # member's own order, is ranked by it one kind at a time (decision 515). `$1` is the kinds in
     # `KINDS` order (`_filters`), so films lead.
-    search_joins, order = "", "t.year DESC NULLS LAST, lower(t.name), t.id"
+    search_joins, order, match = "", "t.year DESC NULLS LAST, lower(t.name), t.id", ""
     if q and q.strip():
-        search_joins, order = search_order_sql(arg(q))
+        search_joins, order, match = search_order_sql(arg(q))
+        match = f", {match}"
     elif sort == "for_you" and user_id is not None and bundle_version is not None:
         search_joins = (
             f"\n          LEFT JOIN user_score fy ON fy.title_id = t.id AND fy.user_id = {arg(user_id)}"
@@ -478,7 +494,7 @@ async def list_titles(
     rows = await conn.fetch(
         f"""
         SELECT t.id, t.kind, t.name, t.year, t.runtime_min, t.poster_path, t.is_owned,
-               t.placement, tp.item_n, tp.e_source, {seen_select}
+               t.placement, tp.item_n, tp.e_source, {seen_select}{match}
           FROM title t
           -- §8 stage 10's cold badge is about CROWD DATA, and `title.placement` stopped meaning
           -- that when warm was redefined from §5.1's gate: a title with a Backbone row and low

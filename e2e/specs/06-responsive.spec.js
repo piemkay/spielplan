@@ -323,7 +323,7 @@ test('on a phone every Rate control is on screen, and a battle keeps Tie and its
   isMobile
 }) => {
   // §6 preamble: "phone-first (48 px targets, one-handed)", and §6.1's "persistent Undo" and
-  // "persistent decisive toggle". The household test found the control row scrolling sideways
+  // decisive switch (decision 520). The household test found the control row scrolling sideways
   // under a hidden scrollbar -- the Series toggle and Undo off the right edge -- and the battle
   // card's Tie, toggle and Skip below the fold. [C5.6 of the 2026-09-25 household test]
   test.skip(!isMobile, 'the wrap and the fold are the phone layout');

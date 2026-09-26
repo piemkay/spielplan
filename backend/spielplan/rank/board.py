@@ -149,8 +149,10 @@ def _placed(item: Item, cuts: np.ndarray, hp: Hyperparams) -> tuple[int, int | N
 
     Decision 508's hold is applied HERE, once, so the chip and the queue's eligibility stay the one
     predicate §6.3 makes them: a title held inside its verdict's band reaches toward `s`, and that
-    is what both the badge and `queue.eligible` read. A dropped title is not held - the drop
-    decides where it renders, and its model tier is what tension is measured against.
+    is what both the badge and `queue.eligible` read - and `queue.candidates` takes its tier from
+    here too, so the boundary arm pairs across the cut the board renders. A dropped title is not
+    held - the drop decides where it renders, and its model tier is what tension is measured
+    against.
     """
     s = np.array([item.s])
     tier = model.tier_of(s, cuts)

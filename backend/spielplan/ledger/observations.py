@@ -880,11 +880,12 @@ async def record_duel(
 ) -> Write:
     """§5.2 arm 2. Writes the RAW margin, not a weight.
 
-    §6.1: "a persistent decisive toggle sets the margin weight (~1.6 vs 1.0)". Pass `decisive`
-    with `hp` and the two numbers stay in `ledger_hyperparams.json` where §4.3 puts them; pass
-    `margin=None` with neither and the row is margin-less, which is what §6.3's drag-drop
-    neighbour duels are. `model` normalises whatever is stored — the functional form is §4.3's
-    `margin_form`, so it is applied where that constant is read and not here.
+    §6.1: a "decisive switch ... sets the margin weight (~1.6 vs 1.0) for the pair on the table"
+    (decision 520). Pass `decisive` with `hp` and the two numbers stay in
+    `ledger_hyperparams.json` where §4.3 puts them; pass `margin=None` with neither and the row is
+    margin-less, which is what §6.3's drag-drop neighbour duels are. `model` normalises whatever
+    is stored — the functional form is §4.3's `margin_form`, so it is applied where that constant
+    is read and not here.
     """
     if outcome not in OUTCOMES:
         raise ValueError(f"outcome must be one of {sorted(OUTCOMES)}, not {outcome!r}")

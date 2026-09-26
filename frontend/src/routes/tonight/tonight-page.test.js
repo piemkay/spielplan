@@ -608,9 +608,7 @@ describe('the first household evening, on the screen (owner instruction of 2026-
       [...target.querySelectorAll(`[data-testid="tonight-pair-fact-${side}"]`)].map((n) => n.textContent);
     expect(facts('A')).toEqual(['1984 · 1h 57m', 'Adventure, Animation']);
     expect(facts('B')).toEqual(['2024 · 2h 40m', 'runs 40 min over', 'Drama, Fantasy']);
-    expect(byTestId('tonight-round-count').textContent).toBe(
-      'pair 13 · a longer round than most · at most 20'
-    );
+    expect(byTestId('tonight-round-count').textContent).toBe('pair 13 · longer than most · max 20');
   });
 
   it('says under the slider that the budget is soft', () => {

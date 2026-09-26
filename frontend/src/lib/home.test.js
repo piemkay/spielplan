@@ -14,16 +14,19 @@ import {
   gridReason,
   homeMode,
   kindChoice,
+  kindHeading,
   kindRegions,
   kindsFor,
   kindsOnShelf,
   libraryLabel,
   matchStrength,
   otherKinds,
+  partitionLine,
   plural,
   sectionShips,
   shelfRows,
   sortOffered,
+  sortWaitingLine,
   strongEnd,
   toPosterTitle,
   whyNumbersLine
@@ -443,6 +446,34 @@ describe('the Filters control and the grid line', () => {
     expect(sortOffered('search', 'for_you'), 'a search is best match first').toBe(false);
     expect(sortOffered('filter', undefined), 'no echo, no claim').toBe(false);
     expect(sortOffered('filter', 'year'), 'an order this control cannot name').toBe(false);
+  });
+
+  it('offers no For you where the server says the member has no order of their own yet', () => {
+    // Review finding UX-1: the server answers `newest` whatever is asked there.
+    expect(sortOffered('filter', 'newest', false)).toBe(false);
+    expect(sortOffered('filter', 'newest', true)).toBe(true);
+    expect(sortOffered('filter', 'newest', null), 'a build that does not say').toBe(true);
+    expect(sortWaitingLine('filter', 'newest', false)).toBe(
+      'Newest first. Your own order arrives once your ratings rank these.'
+    );
+    expect(sortWaitingLine('person', 'newest', false)).not.toBe('');
+    expect(sortWaitingLine('search', 'match', false), 'a search has no order to wait for').toBe('');
+    expect(sortWaitingLine('filter', 'newest', true)).toBe('');
+    expect(sortWaitingLine('filter', 'newest', null)).toBe('');
+  });
+
+  it("heads a grid in the member's order at each kind, and only that grid", () => {
+    // Review finding UX-7: decision 515's order is every film, then every series.
+    const items = [
+      { id: 1, kind: 'movie' },
+      { id: 2, kind: 'movie' },
+      { id: 3, kind: 'series' }
+    ];
+    expect(items.map((_, i) => kindHeading(items, i))).toEqual(['Films', '', 'Series']);
+    expect(partitionLine(['movie', 'series'], 'for_you')).toBe('Films first, then series.');
+    expect(partitionLine(['movie', 'series'], 'newest'), 'the year order interleaves').toBe('');
+    expect(partitionLine(['movie', 'series'], 'match'), 'so does a search').toBe('');
+    expect(partitionLine(['series'], 'for_you'), 'one kind, nothing to divide').toBe('');
   });
 });
 
