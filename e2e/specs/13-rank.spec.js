@@ -570,8 +570,14 @@ test.describe('rank', () => {
     ]) {
       await expect(page.locator('label', { has: page.getByTestId(id) })).toContainText(caption);
     }
+    // Armed before the fill, as `read` is before the typing: WebKit's fill took 1.4 s on the
+    // phone project, longer than the 220 ms pause and the read, so a waiter armed after it
+    // missed the answer it was waiting for and ran the test out.
+    const cleared = page.waitForResponse(
+      (res) => res.url().includes('/api/rank?') && !res.url().includes('q=')
+    );
     await page.getByTestId('rank-filter').fill('');
-    await page.waitForResponse((res) => res.url().includes('/api/rank?'));
+    await cleared;
   });
 
   test('every control on the board meets the 48 px touch floor', async ({}, testInfo) => {
