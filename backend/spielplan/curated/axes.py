@@ -1,33 +1,7 @@
 """§6.6's third editor: the per-facet axes §6.4 describes, as household rows in `dna_axis`.
 
-Spec v2.1 §6.4 ("Axis definitions are a shipped, authored artifact: one TSV per vocabulary-v1 facet
-(left pole, right pole, term -> weight in [-1, 1]) ... Editable in the §6.6 ledger editor"), §6.6
-Data, §6.2 step 5; decisions 173, 264, 326, 342, 423 and 445.
-
-AN EDITOR OVER AN EMPTY SET, AND IT SAYS SO (decision 342). §6.4: "No such file has been authored
-yet and the corpus bundle ships none" (decision 173). The editor ships anyway because §6.6 names
-three editors and three artifacts, and because the axis is not only the Map's: `tonight/dna.
-axes_for` reads `dna_axis_weight` live on every evening, so an axis saved here turns on §6.2 step
-5's split surfacing now, and §6.4's Map reads the same rows when it arrives at M6. With no axis,
-`combine.contested_facet` has nothing to contest on - which is the state `importer/dna.load_axes`
-warns about on every import of a bundle that carries none.
-
-VALIDATED AS THE LOADER VALIDATES, so nothing saved here is a file the loader would refuse. The
-rules are `load_axes`' own: the facet is one `dna_facet` declares at the version (the FK it checks
-before writing), both poles are named (its two-pole header rule), every weight is a number (it skips
-the row otherwise) inside [-1, 1] (it fails the report otherwise, and the column's CHECK agrees), and
-there is at least one weight row - decision 264, because zero rows is indistinguishable from an
-export that did not finish writing. A duplicated term is refused too: the loader would keep the last
-of two rows silently, and a household that typed both meant one of them. Like the loader, this does
-not ask whether a term belongs to the vocabulary: the fixture's own `sensibility` axis weighs a
-`register` term, and §6.4 leaves what an axis weighs to its author.
-
-HOUSEHOLD ROWS, AND A BUNDLE AXIS IS READ-ONLY (decision 445). `dna_axis` is keyed on (version,
-facet), so unlike the two ledgers there is no room for a household row beside a bundle row: a
-household axis over a shipped facet could only be written by overwriting the bundle's, which the
-next import would then reload over the household's work. So a facet the bundle ships is refused,
-and a facet the household authored is left in place by `load_axes` with a warning (decisions 342
-and 423: the household's curated row takes effect).
+Validated as `importer/dna.load_axes` validates (decision 264: at least one weight). A facet the
+bundle ships is read-only (decision 445); `tonight/dna.axes_for` reads saved axes live.
 """
 
 from __future__ import annotations
@@ -49,8 +23,7 @@ READ_ONLY = (
     "This facet's axis came with the bundle and is read-only here: the next import would restore it."
 )
 
-# The facets the vocabulary declares, in its own order - the set an axis may be written for, and
-# what the editor lists so the facets with no axis are visible as such.
+# The facets the vocabulary declares, so facets with no axis are visible as such.
 _DECLARED = "SELECT facet FROM dna_facet WHERE version = $1 ORDER BY ord, facet"
 
 _AXES = """
@@ -65,9 +38,7 @@ _AXIS = "SELECT facet, left_pole, right_pole, origin FROM dna_axis WHERE version
 _AXIS_FOR_WITHDRAWAL = _AXIS + " FOR UPDATE"
 _AXIS_TERMS = "SELECT term, weight FROM dna_axis_weight WHERE version = $1 AND facet = $2 ORDER BY term"
 
-# The conflict arm writes only over a household row. A bundle row makes the statement return
-# nothing, which is the refusal - decided by the same statement that writes, so an import landing
-# the facet between a read and this write cannot have its row overwritten under its own label.
+# The conflict arm writes only over a household row; a bundle row returns nothing, the refusal.
 _UPSERT = """
     INSERT INTO dna_axis (version, facet, left_pole, right_pole, origin)
     VALUES ($1, $2, $3, $4, 'household')
@@ -79,8 +50,7 @@ _UPSERT = """
 _CLEAR = "DELETE FROM dna_axis_weight WHERE version = $1 AND facet = $2"
 _ADD = "INSERT INTO dna_axis_weight (version, facet, term, weight) VALUES ($1, $2, $3, $4)"
 
-# The stored float4 as Postgres prints it, which is its shortest exact form: 0.3 is written `0.3`,
-# not the `0.30000001192092896` the driver's float8 would print, and reads back as the same float4.
+# `weight::text`: the float4's shortest exact form, not the driver's float8 spelling.
 _EXPORT_TERMS = (
     "SELECT term, weight::text AS weight FROM dna_axis_weight WHERE version = $1 AND facet = $2"
     " ORDER BY term"
@@ -142,11 +112,7 @@ async def _axis(conn: asyncpg.Connection, version: str, facet: str) -> dict[str,
 
 
 async def rows(conn: asyncpg.Connection) -> dict[str, Any]:
-    """Every axis at the active vocabulary with its origin and its terms, and the declared facets.
-
-    The declared facets travel with the axes so the editor can show which facets have no axis at
-    all, which on every shipped bundle is all of them (decision 173).
-    """
+    """Every axis at the active vocabulary with its origin and terms, and the declared facets."""
     version = await dna_terms.active_version(conn)
     if version is None:
         return {"version": None, "facets": [], "axes": []}
@@ -171,10 +137,7 @@ async def author(
 ) -> dict[str, Any]:
     """Write one household axis - its poles and the whole of its terms - or refuse with the rule.
 
-    The facet's terms are replaced rather than merged, which is decision 261's rule for the loader
-    applied to the editor: the axis the household saves is the whole axis, and a term it removed
-    must stop turning it. One transaction, so a refusal or a failure leaves the previous axis
-    standing whole.
+    Terms are replaced, not merged (decision 261), in one transaction.
     """
     facet = (facet or "").strip()
     left, right = _text(left_pole), _text(right_pole)
@@ -194,8 +157,7 @@ async def author(
 
 
 async def withdraw(conn: asyncpg.Connection, facet: str) -> dict[str, Any]:
-    """Delete the household's axis for a facet; its terms go with it (`dna_axis_weight`'s FK
-    cascades). The facet then has no axis until the household writes one or a bundle ships one."""
+    """Delete the household's axis for a facet; its terms cascade with it."""
     facet = (facet or "").strip()
     async with conn.transaction():
         version = await dna_terms.active_version(conn)
@@ -212,14 +174,7 @@ async def withdraw(conn: asyncpg.Connection, facet: str) -> dict[str, Any]:
 
 
 async def export(conn: asyncpg.Connection, facet: str) -> tuple[str, str]:
-    """The household's axis as `<facet>.tsv`, exactly the file §6.4 names and `load_axes` reads.
-
-    §6.4: "named for the facet it turns: `<facet>.tsv` ... with the two pole names alone on the
-    header line and one `term -> weight` row per line after it". Written through the csv module,
-    because `load_axes` reads with `csv.reader`, so a pole or a term holding a tab or a quote is
-    quoted here and read back as one cell. Household only (decision 445): a bundle axis is the
-    bundle's file already.
-    """
+    """The household's axis as `<facet>.tsv`, exactly the file §6.4 names and `load_axes` reads."""
     facet = (facet or "").strip()
     version = await dna_terms.active_version(conn)
     if version is None:

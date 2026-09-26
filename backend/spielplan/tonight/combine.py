@@ -1,50 +1,7 @@
-"""§6.2 step 5's combine: three finalists, a wildcard, and the split that reserves a slot.
+"""§6.2 step 5's combine: three finalists, a wildcard, and the split that reserves a slot (54d).
 
-Spec v2.1 §6.2 step 5 (rewritten, 54d), §6.4 (the explore policy and the axis artifact), §0
-rows 3 and 4, §6.5.
-
-    "Per-participant tonight scores are averaged across participants — plain averaging,
-     unchanged … The round produces **three finalists and a wildcard**: the top three by group
-     score, plus one exploratory pick honestly labelled … A hard split — divergent answers on
-     the leading candidates, or Ledger divergence **D ≥ 0.40** (~14.5% of nights; below that,
-     decide silently) — is **surfaced with the alternative in hand**, never silently averaged.
-     The contested axis is **zeroed, not averaged**, and because zeroing only removes an
-     influence it cannot by itself produce an alternative: **the third finalist slot is reserved
-     for the highest-scoring title on the opposite pole of the contested axis**."
-
-ZEROING IS NOT AN ALTERNATIVE, WHICH IS THE WHOLE POINT OF 54d. Removing a facet's influence
-from the ranking cannot put a title on the other pole into the result — the prototype printed
-"here's one of each" over a plain top-3 that could land wholly on one side. So the reservation
-is a construction step, and it **replaces** the third-ranked title rather than being appended
-beside it: a fourth finalist would be a different promise from the one §6.2 makes.
-
-D's FORMULA IS RECOVERED, NOT CHOSEN. §6.2 gives the threshold (0.20 then, 0.40 since decision
-478) and the frequency (~14.5% of nights) and never defines D. Proposal 63 says to recover the
-formula from `DNA_MODEL` §5.3 — which is not vendored in this repo, so its own escalation clause
-fires and the owner settled it on 2026-08-29: **mean − min of the seated members' §5.1 scores,
-per candidate**, guests without
-a grid profile excluded. That is the prototype's `spread()`, the only formula any artifact here
-carries. The risk is stated rather than hidden: mean-minus-min and |Δ| differ by exactly 2× for
-a couple, so a threshold calibrated on one and shipped against the other fires at half or double
-the intended rate. Filed as a v2.2 spec defect; the formula lives in one function so a
-correction is one edit.
-
-PER CANDIDATE, NOT PER NIGHT. Proposal 63 again: "the ~14.5% figure is the share of nights in
-which the **winning** candidate crosses the threshold". So D is computed per candidate and the
-session's split test reads the leading one.
-
-THE THRESHOLD IS READ ON THE SCALE IT WAS CALIBRATED ON, AND THAT IS NOW A FACT RATHER THAN A HOPE.
-Decision 217 recorded that 0.20 was never calibrated: `member_ledger` carried raw §5.1 scores, on
-a premise that they ship at sd 0.50 over the owned pool, and deferred the correction to "one
-evening of real answers". The first household evening was that evening, and it refuted the
-premise — owned-pool sd 1.081 and 0.572 for its two members, with D = 5.07 on a title both rank
-first. So `member_ledger` is now each member's rank-standardised score over the frozen pool
-(decision 477, sd 1.0), and the threshold was re-read on that household's own Ledgers: over
-simulated nights (random 40-100% sub-pools of its 719 films, mood noise sd 0.2 / 0.4 / 0.8) the
-leader crosses 0.40 on 16.7% / 13.0% / 14.6% of nights, which is §6.2's ~14.5%. One household is
-one household: Gaussian households with tastes uncorrelated at the top cross it far more often, so
-the figure is re-read when there are more evenings to read it on. `divergent_answers` is left as
-decision 217 found it and does not trigger the person split below. [decisions 217, 478]
+D is mean - min of the seated members' rank-standardised Ledger scores for the leading candidate
+(owner decision 2026-08-29; threshold recalibrated by decision 478).
 """
 
 from __future__ import annotations
@@ -56,24 +13,16 @@ from typing import Any
 
 from spielplan.tonight import copy as copy_rules
 
-# §6.2 step 5's threshold, inclusive. "~14.5% of nights; below that, decide silently" — the
-# silence is half the rule, and the half an implementation drops. 0.40 on the rank-standardised
-# scale, recalibrated on the first household evening's Ledgers (module docstring; decision 478).
+# §6.2 step 5's threshold, inclusive; below it decide silently (rank-standardised, decision 478).
 D_THRESHOLD = 0.40
 
 # 54d: "three finalists and a wildcard".
 FINALISTS = 3
 
-# §6.4's explore policy: "~1 exploratory slot in 6, ranked by prior + proximity; cost ≈ −1 pp
-# top-hit rate, honestly labelled". One slot beside three finalists is that ratio at this scale.
+# §6.4's explore policy: "~1 exploratory slot in 6 ... honestly labelled".
 WILDCARD_LABEL = "a step outside your usual"
 
-# How far down the ranking the wildcard may be drawn from: the best twentieth of the pool, and
-# never fewer than twelve candidates so a small pool still has somewhere to step to. This is the
-# reading of §6.4's "ranked by prior + proximity" — the prior bounds the draw, the distance picks
-# within it — and it has no measurement behind it, which is why it lives in one place and why the
-# owner took it as a decision rather than it arriving as a tuned number. Without it the first
-# household evening's wildcard was the most distant title of 719, ranked 105th. [decision 482]
+# The wildcard is drawn from the best twentieth of the ranking, at least twelve (decision 482).
 WILDCARD_SHARE = 0.05
 WILDCARD_FLOOR = 12
 
@@ -94,17 +43,9 @@ class Slate:
     conflict: dict[str, Any] | None = None
     d: float = 0.0
     rows: list[dict[str, Any]] = field(default_factory=list)
-    # 54d: the third slot is reserved for the opposite-pole title "**labelled as such**". Which
-    # finalist that is was computable and nowhere stated, so the household read "here's one of
-    # each" over three cards with nothing saying which one is the other side of the split — the
-    # whole content of the clause. The counterweight and not every constructed slot: under
-    # decision 221 slot 2 can be placed by construction too, and labelling two of three cards
-    # tells the person nothing about which is which. None on a night with no reservation, which is
-    # every night on the shipped bundle (decision 173 ships no axes). [decision 220]
+    # 54d's opposite-pole title "labelled as such" (decision 220); None with no reservation.
     reserved: int | None = None
-    # The person split's reservations, {title_id: participant_id}: the finalists placed as a
-    # seat's own pick because none of that seat's own top three was on the slate. Never folded
-    # into `reserved`, which is the axis counterweight and carries a different label. [decision 479]
+    # The person split's reservations, {title_id: participant_id} (decision 479).
     reserved_for: dict[int, int] = field(default_factory=dict)
 
     @property
@@ -118,12 +59,7 @@ class Slate:
 
 
 def group_scores(per_participant: Mapping[int, Mapping[int, float]]) -> dict[int, float]:
-    """§6.2 step 5: "averaged across participants — plain averaging, unchanged".
-
-    `per_participant` is {participant_id: {title_id: tonight score}}. Unweighted, for the same
-    measured reason `pool.group_score` is: no aggregation rule dominates it and dominance rules
-    cost −0.012 (§0 row 3).
-    """
+    """§6.2 step 5: "averaged across participants — plain averaging, unchanged" (§0 row 3)."""
     totals: dict[int, float] = {}
     counts: dict[int, int] = {}
     for scores in per_participant.values():
@@ -142,11 +78,9 @@ def ranked(scores: Mapping[int, float]) -> list[tuple[int, float]]:
 
 
 def divergence(member_scores: Sequence[float]) -> float:
-    """Ledger divergence for one candidate: **mean − min**.
+    """Ledger divergence for one candidate: **mean − min** (owner decision, 2026-08-29).
 
-    Owner decision, 2026-08-29 — see the module docstring for why this is a recovery rather
-    than a preference, and for the factor-of-two risk it carries. Fewer than two members is
-    0.0: one person cannot disagree with themselves, and §6.2's D is about a household.
+    For a couple this is |Δ|/2; the threshold is calibrated on this formula.
     """
     values = [float(v) for v in member_scores]
     if len(values) < 2:
@@ -155,12 +89,7 @@ def divergence(member_scores: Sequence[float]) -> float:
 
 
 def divergent_answers(orderings: Sequence[Mapping[int, float]], leading: Sequence[int]) -> bool:
-    """§6.2 step 5's other trigger: "divergent answers on the leading candidates".
-
-    True when two participants order the same pair of leading candidates in opposite
-    directions — the smallest concrete reading of "divergent", and the one that cannot fire on
-    a household that merely disagrees about how much.
-    """
+    """§6.2 step 5's other trigger: two participants order a pair of leading candidates oppositely."""
     for i, a in enumerate(leading):
         for b in leading[i + 1 :]:
             signs = {
@@ -177,11 +106,9 @@ def divergent_answers(orderings: Sequence[Mapping[int, float]], leading: Sequenc
 
 
 def axis_position(dna: Mapping[str, float], weights: Mapping[str, float]) -> float:
-    """Where one title sits on one authored axis (§6.4's `dna_axis_weight` TSVs).
+    """Where one title sits on one authored axis (§6.4), normalised by the weight it engaged.
 
-    A weighted sum over the terms the title carries, normalised by the weight it engaged so a
-    title with two matching terms is not automatically more extreme than one with a single
-    strong one. Weights are used as weights and never as a filter (§4.1 rule 2).
+    Weights are used as weights and never as a filter (§4.1 rule 2).
     """
     engaged = sum(abs(weights[t]) * abs(dna[t]) for t in set(dna) & set(weights))
     if engaged <= 0.0:
@@ -193,13 +120,7 @@ def axis_position(dna: Mapping[str, float], weights: Mapping[str, float]) -> flo
 def axis_positions(
     dna: Mapping[int, Mapping[str, float]], axes: Mapping[str, Mapping[str, float]]
 ) -> dict[int, dict[str, float]]:
-    """Every candidate's position on every authored axis.
-
-    54c's tie-break is "the pair spanning the widest **DNA axis**", which is a statement about
-    §6.4's authored axes and not about raw term overlap: two films sharing no terms at all can
-    sit at the same point on the mood axis, and asking about them teaches nothing about the
-    tilt. So the round is handed positions, not vectors.
-    """
+    """Every candidate's position on every authored axis: 54c's tie-break is about axes, not terms."""
     return {
         title_id: {facet: axis_position(vec, weights) for facet, weights in axes.items()}
         for title_id, vec in dna.items()
@@ -209,12 +130,7 @@ def axis_positions(
 def contested_facet(
     tilts: Sequence[Mapping[str, float]], axes: Mapping[str, Mapping[str, float]]
 ) -> str | None:
-    """Which axis the participants pull against each other on, if any.
-
-    The facet on which two participants' pool-centred tilts point in opposite directions with
-    the largest combined magnitude. Reads §6.4's shipped, authored axis artifact rather than
-    inventing a facet set — "Deterministic — no nightly rebuild, no Procrustes anchoring".
-    """
+    """The authored axis two participants' pool-centred tilts pull against each other on most."""
     if len(tilts) < 2:
         return None
     best: tuple[float, str] | None = None
@@ -234,18 +150,8 @@ def contested_facet(
 def zeroed(scores: Mapping[int, float], *, facet: str, dna, axes) -> dict[int, float]:
     """"The contested axis is **zeroed, not averaged**."
 
-    Remove the axis's influence on the ranking — which is a statement about *variance*, not a
-    subtraction. `axis_position` returns a normalised value in [−1, 1]; a group score is on
-    §5.1's scale, where the whole pool may span 0.1. Subtracting one from the other does not
-    zero the axis: it multiplies its influence, with the sign flipped, and the two "free"
-    finalist slots end up decided by the contested axis's own pole convention — the opposite of
-    what 54d asks for. The review found this by measuring the two scales.
-
-    So the influence is removed by regression: fit the group score on the axis position across
-    the pool and keep the residual. On a pool where the axis explains nothing the scores are
-    unchanged; on one where it explains everything they collapse to their mean, and the ranking
-    is then decided by whatever else the household's answers said. Zeroing still cannot by
-    itself produce an alternative — which is exactly why the reservation below exists.
+    By regression on axis position, keeping the residual: subtracting a [-1, 1] position from a
+    group score would multiply the axis's influence, not remove it.
     """
     weights = axes.get(facet, {})
     positions = {t: axis_position(dna.get(t, {}), weights) for t in scores}
@@ -269,18 +175,9 @@ def zeroed(scores: Mapping[int, float], *, facet: str, dna, axes) -> dict[int, f
 def wildcard_from(
     order: Sequence[tuple[int, float]], chosen: Sequence[int], dna: Mapping[int, Mapping[str, float]]
 ) -> int | None:
-    """§6.4's exploratory slot: "regions of DNA space near the user's liked regions but
-    unvisited … honestly labelled".
+    """§6.4's exploratory slot: the candidate furthest in DNA from the finalists.
 
-    The candidate outside the finalists that is furthest, in DNA terms, from what the finalists
-    already are. Distance rather than rank, because a wildcard drawn by rank is the fourth-best
-    film and not a step outside anything.
-
-    AND ONLY FROM NEAR THE TOP OF THE RANKING. §6.4 ranks the explore slot "by prior +
-    proximity", and this read only the half after the plus: the farthest title in the whole pool,
-    whatever it scored — the first household evening's wildcard sat at rank 105 of 719. The draw
-    is now bounded to the best `WILDCARD_SHARE` of the ranking (at least `WILDCARD_FLOOR`), and
-    distance decides within that.
+    Only from the best `WILDCARD_SHARE` of the ranking: §6.4 ranks it "by prior + proximity".
     """
     reach = max(WILDCARD_FLOOR, math.ceil(len(order) * WILDCARD_SHARE))
     rest = [t for t, _ in order[:reach] if t not in set(chosen)]
@@ -298,29 +195,16 @@ def wildcard_from(
         terms = set(vec) | set(centre)
         return sum((vec.get(x, 0.0) - centre.get(x, 0.0)) ** 2 for x in terms)
 
-    # Ties by score order, so a pool with no DNA at all still returns the best runner-up rather
-    # than an arbitrary row.
+    # Ties by score order, so a pool with no DNA returns the best runner-up.
     return max(rest, key=lambda t: (distance(t), -rest.index(t)))
 
 
 def one_for_each(
     order: Sequence[tuple[int, float]], per_participant: Mapping[int, Mapping[int, float]]
 ) -> tuple[list[int], dict[int, int], bool]:
-    """Decision 479's person split: three finalists on which each seat has one of its own.
+    """Decision 479's person split: three finalists on which each seat has one of its own top three.
 
-    "One of their own" is one of the seat's own top three tonight scores — the size of the
-    shortlist its own round resolved (§6.2 step 4's rank-3/4 cut), so the sentence the household
-    is shown means what the round measured. The group leader always stays in slot 1. Seats are then
-    visited in the order the leader serves them least (lowest tonight score on it first, the side
-    D's "min" is about), and each seat none of whose top three is on the slate yet gets one: a
-    finalist from the plain top three that is theirs if there is one, otherwise a slot RESERVED for
-    their own highest-scoring title not already placed. Remaining slots take the group ranking.
-    Still exactly three (decision 221's rule), with the reserved picks read last, as 54d's third
-    slot is.
-
-    Returns (finalists, {title: seat it is reserved for}, whether every seat has one of its own) —
-    the last because a room of four or more can outnumber the two slots after the leader, and the
-    headline must not claim "one for each of you" over a slate where that is false.
+    Returns (finalists, {title: seat it is reserved for}, whether every seat got one).
     """
     own = {
         p: [t for t, _ in ranked(scores)] for p, scores in per_participant.items()
@@ -370,11 +254,8 @@ def combine(
 ) -> Slate:
     """§6.2 step 5, end to end.
 
-    `member_ledger` is {title_id: [each seated member's Ledger score, rank-standardised over the
-    pool]} — D's input, and deliberately not the tonight scores: D is *Ledger* divergence, a fact
-    about the household's stable taste, which is what DNA_MODEL §5.3 measured. A D computed from
-    tonight scores would move with the round's own answers and stop being the quantity
-    `D_THRESHOLD` was calibrated on (decisions 477, 478).
+    `member_ledger` is {title_id: [each member's rank-standardised Ledger score]}: D's input, not
+    the tonight scores, which move with the round's answers (decisions 477, 478).
     """
     axes = axes or {}
     dna = dna or {}
@@ -392,28 +273,17 @@ def combine(
     conflict = None
     finalists = list(leading)
     reserved: int | None = None
-    # The ranking the slate is drawn from, which is `order` on every night the split does not
-    # survive. A surfaced split replaces it with the zeroed one below, and everything the slate is
-    # built out of then comes from that single ranking rather than from two.
+    # The ranking the slate is drawn from; a surfaced split replaces it with the zeroed one.
     slate_order = order
 
     if split and contested:
-        # Zeroed, not averaged — and then the alternative, because zeroing alone cannot produce
-        # one. The third slot is REPLACED: a fourth finalist is a different promise.
+        # Zeroed, then the alternative: the third slot is REPLACED, never a fourth finalist.
         adjusted = zeroed(scores, facet=contested, dna=dna, axes=axes)
         adjusted_order = ranked(adjusted)
         free = [t for t, _ in adjusted_order[:FINALISTS - 1]]
         weights = axes.get(contested, {})
         poles = {t: axis_position(dna.get(t, {}), weights) for t, _ in adjusted_order}
-        # THE REFERENCE POLE IS NOT THE LEADER'S, BECAUSE A LEADER NEED NOT HAVE ONE. This was
-        # `poles.get(finalists[0], 0.0)`, and 40.6% of the real corpus carries no DNA at all: when
-        # the zeroed leader is one of them its pole is 0.0, every product below is 0.0, `opposite`
-        # comes out empty, the spanning test fails too, and the else branch dropped `contested`
-        # and shipped the zeroed ranking under no copy at all — 31.8% of splits that HAD a
-        # counterweight, silenced by a property of one title. So the reference pole is the first
-        # free finalist that actually carries one, and if none of them does, any pole the pool
-        # carries: the question "is there anything on the other side" is about the library, and
-        # only the pool can answer it. [finding 21]
+        # The reference pole comes from a free finalist, else the pool: a leader may carry no DNA.
         ref = next((poles[t] for t in free if poles.get(t, 0.0) != 0.0), 0.0)
         if ref == 0.0:
             ref = next((p for p in poles.values() if p != 0.0), 0.0)
@@ -423,14 +293,7 @@ def combine(
             if t not in finalists and poles.get(t, 0.0) * ref < 0.0
         ]
         if opposite and not any(poles.get(t, 0.0) * ref > 0.0 for t in free):
-            # NEITHER FREE SLOT IS ON THE REFERENCE POLE, SO SLOT TWO IS RESERVED TOO. `ref` is
-            # taken from the free finalists first, so this branch is reachable only when none of
-            # them carries a term on the contested axis and `ref` came from the pool — 219 of
-            # 1,971 random pools. Reserving slot 3 alone would then leave [neutral, neutral, one
-            # pole] under §6.2's verbatim "here's one of each", which `copy.SPLIT_LINE` keeps out
-            # of the model's reach precisely so it cannot be reworded. Dropping `contested` is
-            # finding 21 again; rewording is forbidden; so the slate is made true instead, by
-            # running the same mechanism twice. Still exactly three. [decision 221]
+            # Neither free slot is on the reference pole: reserve slot two as well (decision 221).
             on_ref = [t for t, _ in adjusted_order if poles.get(t, 0.0) * ref > 0.0]
             reserved = opposite[0]
             finalists = [free[0], on_ref[0], reserved]
@@ -438,67 +301,32 @@ def combine(
             reserved = opposite[0]
             finalists.append(reserved)
         elif any(poles.get(t, 0.0) * ref < 0.0 for t in finalists):
-            # The two free slots already span the axis, so "one of each" is true without a
-            # reservation and the third goes to the next best. The split is still SURFACED —
-            # dropping the copy here would be the review's finding in reverse: a slate that has
-            # one of each and does not say why.
-            #
-            # The default is the whole of finding 22: on a pool of exactly two candidates `free`
-            # has consumed both, the generator is empty, and an unhandled StopIteration fired
-            # inside `play.finish` — which runs inside the answer handler, on the last answer of
-            # an evening. It was unreachable only because such a round could never end, so
-            # decision 215's small-pool fix would have turned a silent hang into a 500 without
-            # this line. Two spanning finalists and no third candidate is a complete slate over
-            # that pool, not an error.
+            # The free slots already span the axis: still surfaced, and the third is the next best.
+            # A two-candidate pool has no third, which is a complete slate.
             third = next((t for t, _ in adjusted_order if t not in finalists), None)
             if third is not None:
                 finalists.append(third)
         else:
-            # Nothing anywhere on the other pole is a fact about the library, not a reason to
-            # promise one. §0: "a surfaced split must never ship bare." The sentence is true now
-            # that `ref` comes from the pool: `opposite` is empty and no free finalist is on the
-            # far side either, so the far side is empty — before this the branch was also reached
-            # without ever looking past the leader.
-            #
-            # And the silenced slate is `order`'s, not the zeroed one's: nothing is surfaced here,
-            # so the three cards must be the three the `group_score` on their own rows ranks
-            # highest. Shipping `adjusted_order[:3]` put a rank-5 title (0.30) on the slate with a
-            # rank-3 title (0.85) beneath it as a runner-up, under no copy explaining why.
+            # Nothing on the other pole: decide silently (§0), and on `order`, since nothing is
+            # surfaced.
             finalists = [t for t, _ in order[:FINALISTS]]
             contested = None
         if contested:
             slate_order = adjusted_order
             conflict = copy_rules.conflict(contested, d=d, phrasing=phrasing)
 
-    # AN AXIS-LESS SPLIT IS SURFACED BY PERSON (decision 479). Everything above needs §6.4's axis
-    # artifact, and the corpus bundle ships none (decision 173), so on release data a split evening
-    # was decided silently however far apart the household was — the first real evening measured
-    # D = 5.07 on raw scores and showed nothing. With no axis loaded the alternative in hand is a
-    # PERSON's: `one_for_each` puts one of every seat's own top three on the slate, reserving a slot
-    # where the plain ranking did not. D alone triggers it, on the standardised scale decision 478
-    # recalibrated; `divergent_answers` is left to the facet branch, because decision 217 measured
-    # it firing on 84-97% of evenings and a surfaced split that fires nightly is background noise.
+    # No axis artifact loaded (decision 173): a split by D alone is surfaced by person
+    # (decision 479); `divergent_answers` fires too often to trigger it.
     reserved_for: dict[int, int] = {}
     by_person = not axes and len(per_participant) >= 2 and d >= D_THRESHOLD
     if by_person:
         finalists, reserved_for, each = one_for_each(order, per_participant)
         conflict = copy_rules.person_conflict(d=d, phrasing=phrasing, one_for_each=each)
 
-    # ONE RANKING, NOT TWO. The wildcard used to be drawn from `order` while a surfaced split's
-    # finalists came from `adjusted_order`, so §6.4's "a step outside your usual" was decided by a
-    # ranking the slate was not built from — and on a tie, or a pool whose tail carries no DNA, the
-    # label landed on the best candidate the reservation had just displaced. [finding 23]
+    # The wildcard comes from the same ranking the slate was built from.
     wildcard = wildcard_from(slate_order, finalists, dna)
-    # THE PERSISTED RANK IS THE SLATE'S READING ORDER WHEN THE TWO DISAGREE. `ballot.slate_of` and
-    # `result.slate` both ORDER BY rank, and on a surfaced split the finalists are no longer a
-    # prefix of `order`: stamping the group-score rank listed the wildcard above two of the three
-    # finalists on the ballot. Only the split path is reordered, because only there do the two
-    # orders differ in a way the reader can see — on every other night the finalists ARE the top
-    # three by group score, the wildcard sits below them, and the rank is also the "how close they
-    # came" that §6.2 step 7's runners-up are sorted by. `group_score` stays the plain average on
-    # every row either way, and the sequence stays a permutation of the pool, which is what
-    # `session_result_rank`'s UNIQUE (session_id, rank) requires of 1..n. [finding 23] The person
-    # split reorders for the same reason: a reserved pick is read last among the finalists.
+    # A surfaced split persists the slate's reading order as rank, since its finalists are no
+    # longer a prefix of `order`; `group_score` stays the plain average.
     if contested or by_person:
         placed = {*finalists, wildcard}
         sequence = [

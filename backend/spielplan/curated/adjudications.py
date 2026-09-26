@@ -1,35 +1,7 @@
-"""§6.6's DNA-verdict editor: household rows in `dna_adjudication`, true the moment they are saved.
+"""§6.6's DNA-verdict editor: household rows in `dna_adjudication`, applied in the same transaction.
 
-Spec v2.1 §6.6 Data, §8 stage 3 ("ends by applying BOTH curated ledgers"), §8 stage 7 ("Failures
-drop, never repaired"), §14.5; decisions 326, 376, 389, 423 and 445.
-
-A HOUSEHOLD VERDICT IS A ROW IN THE BUNDLE'S OWN TABLE, NOT A SECOND LEDGER. `importer/dna.
-load_adjudications` fills `dna_adjudication` from `adjudications_<version>.tsv` with `origin =
-'bundle'` and DELETEs only those rows on a models-only re-import (decision 326), so a row written
-here with `origin = 'household'` survives every re-import by construction. `derive/ledgers.
-apply_adjudications` reads both origins and sorts the household's first, which in a first-effective
-applier is what makes the household's verdict the one that takes effect (decision 423). A title the
-bundle already rules on gets a second, household row beside the bundle's, never an edit of it:
-decision 445 makes a bundle row read-only in the app, because an edited bundle row is restored by
-the next import and the household's fix would last until it forgot it had made one.
-
-APPLIED AT ONCE, IN THE SAME TRANSACTION (decision 445). Stage 3 applies the ledger at every derive,
-but a bundle title is never derived - it arrived whole - so a verdict that waited for the next derive
-would be saved and never true for most of the library. A title verdict is applied to its title; a
-global one to every title carrying the term at the active version, which is `derive/ledgers`'
-blanket sweep run over the titles it can reach. The applier is called, never re-implemented: it
-owns the three-phase order and the per-title-beats-blanket rule (`mdc/dna/adjudication.py:22-28`),
-and a second copy of either is the drift §14.5's scar is made of.
-
-WITHDRAWN, IT RESTORES NOTHING. §8 stage 7 drops and never repairs, and a DROP deleted the tag and
-its evidence rows: there is no copy to put back, and inventing one would be a tag with no quote in
-the title's pack (§4.1 rule 1). What withdrawal does is stop the verdict applying, so the next
-extraction or derive of the term is no longer ruled on. Re-deriving the title is what restores a
-dropped reading, and that is a board retry from stage 3 (decision 444), not an editor's write.
-
-THE CORPUS'S SPELLING. `ACTIONS` is the three strings the shipped `adjudications_v1.tsv` carries and
-what `derive/ledgers._VERDICTS` folds onto its actions under decision 389, so the export lands in the
-corpus's ledger unchanged and needs no translation back.
+Beside the bundle's rows, never over them (decisions 326, 445); `derive/ledgers` applies the
+household's first (decision 423). Withdrawing restores nothing a DROP removed (§8 stage 7).
 """
 
 from __future__ import annotations
@@ -47,9 +19,7 @@ from spielplan.importer.dna import ADJUDICATION_COLUMNS
 
 ACTIONS = ("DROP", "REPOINT", "DROP_EVIDENCE")
 
-# `title` rules on one title and is applied first; `global` is the blanket half the applier sweeps
-# over what the title rows did not name (`derive/ledgers._BLANKET_RULES`). The corpus also writes
-# `scope = 'term'`, which the applier reads as blanket too; the editor writes this table's own two.
+# `title` rules on one title; `global` is the blanket half (`derive/ledgers._BLANKET_RULES`).
 SCOPES = ("title", "global")
 
 NO_VOCABULARY = (
@@ -66,14 +36,12 @@ _SELECT = """
            a.source, a.note, a.origin, a.decided_at
       FROM dna_adjudication a LEFT JOIN title t ON t.id = a.title_id
 """
-# Household first because it is the row that takes effect (decision 423), then by term so a title
-# verdict and the blanket rule it shadows sit together.
+# Household first: the row that takes effect (decision 423).
 _ROWS = _SELECT + " WHERE a.version = $1 ORDER BY a.origin DESC, a.term, a.title_id NULLS FIRST, a.id"
 _ROW = _SELECT + " WHERE a.id = $1"
 _ROW_FOR_WITHDRAWAL = _SELECT + " WHERE a.id = $1 FOR UPDATE OF a"
 
-# `origin` as a literal rather than the column's DEFAULT (which is 'bundle'): which rows an import
-# may take is the one question a reader of this statement has.
+# `origin` as a literal, not the column's DEFAULT ('bundle').
 _INSERT = """
     INSERT INTO dna_adjudication (version, scope, title_id, term, verdict, target, quote, source,
                                   note, origin)
@@ -81,12 +49,10 @@ _INSERT = """
     RETURNING id
 """
 
-# The titles a blanket verdict can reach today. The applier is per title (decision 375), so the
-# global case is the same call once per title rather than a wider statement.
+# The titles a blanket verdict can reach; the applier is per title (decision 375).
 _CARRIERS = "SELECT DISTINCT title_id FROM dna_tag WHERE version = $1 AND term = $2 ORDER BY title_id"
 
-# Selected under the TSV's own column names, in authoring order, so that each row is written as
-# the importer reads it and `load_adjudications` inserts them back in the order they were typed.
+# Under the TSV's own column names, in authoring order, so the importer reads them back in order.
 _EXPORT = """
     SELECT scope, title_id, term, verdict AS action, target, quote, source, note
       FROM dna_adjudication
@@ -103,12 +69,7 @@ def _text(value: object) -> str | None:
 
 
 async def rows(conn: asyncpg.Connection) -> list[dict[str, Any]]:
-    """Every verdict at the active vocabulary, bundle and household, with the title it names.
-
-    The bundle's rows are listed because §6.6 has each editor show "its rows, its provenance and
-    the derive that will re-apply it", and a household verdict beside a bundle one only reads as
-    taking effect when both are on the screen.
-    """
+    """Every verdict at the active vocabulary, bundle and household, with the title it names."""
     version = await dna_terms.active_version(conn)
     if version is None:
         return []
@@ -129,20 +90,8 @@ async def author(
 ) -> dict[str, Any]:
     """Write one household verdict and apply it, or refuse with the rule it broke.
 
-    Each refusal is a row the applier would store and then ignore or miscount, refused here where
-    the admin can read why rather than saved as a fix that is never true:
-
-      * a REPOINT onto a term `dna_term` does not carry is `_repoint`'s `repoint_target_unknown`,
-        which moves nothing - the one place the ledger could invent a term;
-      * a DROP_EVIDENCE with no quote drops every quote the term has on the title, which is the
-        corpus's behaviour for such a row and never what a household typing one meant;
-      * a DROP_EVIDENCE with no title is passed over by the blanket sweep ("a quote is a fact about
-        one title's pack, and a blanket rule naming one cannot mean anything");
-      * a title this install does not hold would rule over nothing, and a global verdict naming a
-        title would be read as blanket anyway (`_BLANKET_RULES`).
-
-    Returns the stored row and the applier's counts - summed over the titles, with `titles`, for a
-    global verdict - so the editor can say what the save did.
+    Refused here are the rows the applier would store and then ignore or miscount. Returns the row
+    and the applier's counts (summed, with `titles`, for a global verdict).
     """
     scope = (scope or "").strip().lower()
     term = (term or "").strip()
@@ -200,12 +149,7 @@ async def author(
 
 
 async def withdraw(conn: asyncpg.Connection, row_id: int) -> dict[str, Any]:
-    """Delete one household verdict. Nothing it dropped comes back (see the module docstring).
-
-    A bundle row is refused rather than deleted: the next models-only import would re-insert it, so
-    the withdrawal would be a fix that lasts until the household forgets it made one. A missing id
-    is a LookupError, which is a different answer from a refusal.
-    """
+    """Delete one household verdict; nothing it dropped comes back. A bundle row is refused."""
     async with conn.transaction():
         row = await conn.fetchrow(_ROW_FOR_WITHDRAWAL, row_id)
         if row is None:
@@ -219,11 +163,7 @@ async def withdraw(conn: asyncpg.Connection, row_id: int) -> dict[str, Any]:
 async def export(conn: asyncpg.Connection) -> tuple[str, str]:
     """The household's verdicts as `adjudications_<version>.tsv`, in the importer's own columns.
 
-    Decision 445: "Export is household rows only, in the importer's column set". The header is
-    `importer/dna.ADJUDICATION_COLUMNS` itself, imported and never retyped, and the rows go through
-    the csv module with a TAB delimiter, because `validate._read_tsv` reads with `csv.DictReader`: a
-    note holding a tab, a newline or a quote character is quoted here and read back whole there,
-    where a TAB-join would split it into columns the loader then mis-assigns.
+    Through the csv module: the importer reads with `csv.DictReader`, so tabs and quotes survive.
     """
     version = await dna_terms.active_version(conn)
     if version is None:

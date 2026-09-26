@@ -1,32 +1,7 @@
-"""§6.6's test buttons for the three keyed sources. Spec v2.1 §6.6, §8 stage 2, §9; decisions 340,
-433, 434, 453.
+"""§6.6's test buttons for the three keyed sources (decision 453): TMDB, OMDb and Trakt.
 
-§6.6: "TMDB / OMDb / Trakt keys with test buttons". Decision 433 left the three to M5.7's source
-cards and decision 453 says what each asks: the cheapest request its host answers that fails on a
-bad key -- TMDB's configuration read, one OMDb lookup of a fixed IMDb id, Trakt's trending list at
-one item -- through `acquire.fetch.Fetcher` under the host policies `acquire/hosts.py` already
-declares, with nothing written to the raw store. Each answers `{ok, status, error}`, and
-`registry.CONNECTORS` registers them as the three `ConnectorSpec.test` entries, so plan A4's one
-dispatch serves the source cards as it serves the provider cards.
-
-HERE AND NOT IN `sources/`, because that package is §8 stage 2's adapters and its guards say what an
-adapter is: `test_sources_adapters.py` holds that no module there constructs a fetcher or imports
-`acquire.fetch` but `_views` (the one door, where a response is co-keyed into the raw store) and two
-that name its `Response` type, and `sources/base.load_all` imports every public module in the
-package as an adapter. A probe is none of that -- it is a question about a key, stores nothing a
-title's board could show, and has to catch `fetch.FetchError` to answer at all -- so it is a
-connector concern beside `registry`, reading its keys through `sources/credentials`, which decision
-434 keeps as the three sources' one reader.
-
-A KEY IN A QUERY STRING IS A KEY IN A LOG LINE, which is the half of decision 453 this module exists
-for. TMDB v3 and OMDb accept a key only as a query parameter, and httpx writes every request url
-into an INFO line of its own -- so a naive test press copies a working key into the web process's
-log, the exposure `push/send.py` already guards its own urls against. The filter below masks the
-value of any `api_key` or `apikey` parameter in httpx's lines, installed when this module loads,
-which `registry._probe_source` makes happen before the first probe's request. And a host that
-echoes the request in its refusal would put the key into the card's error text, so every error
-this module returns has the key taken out first, in every spelling a message can give it
-(`llm/client._redacted`'s rule, named change 8).
+The cheapest request that fails on a bad key, through `acquire.fetch`, storing nothing. Keys in
+query strings are masked in httpx's log lines and taken out of every error this returns.
 """
 
 from __future__ import annotations
@@ -45,19 +20,16 @@ from spielplan.sources import credentials
 if TYPE_CHECKING:
     import asyncpg
 
-# Decision 453's three questions. OMDb's is one lookup of a title that has been on the site for as
-# long as the site has existed, so a good key cannot be told "not found" by it.
+# Decision 453's three questions; OMDb's asks about a title that has always been on the site.
 TMDB_URL = "https://api.themoviedb.org/3/configuration"
 OMDB_URL = "https://www.omdbapi.com/"
 OMDB_PROBE_ID = "tt0111161"
 TRAKT_URL = "https://api.trakt.tv/movies/trending"
 
-# The refusals a bad key earns, handed back as answers so the card can quote the host's own words;
-# anything else the fetcher raises is answered from the `FetchError`.
+# A bad key's refusals, answered in the host's own words.
 _ANSWER_STATUS = (400, 401, 403, 404)
 
-# `llm/client._SHOWN`'s cut, applied after the key is taken out of the whole text (named change 8:
-# cut first, and a key straddling the cut survives as its prefix).
+# Cut after the key is taken out, or a key straddling the cut survives as its prefix.
 _SHOWN = 300
 
 # The value of a query-string key, in any url a line or a message carries.
@@ -66,10 +38,7 @@ _MASK = "[redacted]"
 
 
 class _MaskQueryKeysInHttpxLogs(logging.Filter):
-    """httpx logs one INFO line per request with the full url in it, and there is no per-client
-    switch for that line (`push/send.py`'s own argument). The line is kept -- it is the trace an
-    operator reads when a source stops answering -- with the key's value masked, for every caller:
-    no query parameter named `api_key` or `apikey` is anything but a credential."""
+    """Mask `api_key`/`apikey` values in httpx's per-request INFO lines, keeping the lines."""
 
     def filter(self, record: logging.LogRecord) -> bool:
         try:
@@ -88,9 +57,7 @@ Opener = Callable[["asyncpg.Connection"], AbstractAsyncContextManager[fetch.Fetc
 
 
 def _shown(text: str, key: str) -> str:
-    """A host's words as the card shows them: the key out of the whole text in every spelling --
-    as typed, trimmed, a str or bytes repr, percent-encoded inside a url -- any query-string key
-    masked, and only then cut to `_SHOWN`."""
+    """A host's words for the card: the key out in every spelling, query keys masked, then cut."""
     spellings = {key, key.strip(), repr(key)[1:-1],
                  repr(key.encode("utf-8", "backslashreplace"))[2:-1], quote(key, safe="")}
     for spelling in sorted((s for s in spellings if s), key=len, reverse=True):
@@ -103,9 +70,7 @@ def _answer(ok: bool, status: int | None, error: str | None) -> dict[str, Any]:
 
 
 async def _without_a_key(conn: asyncpg.Connection, name: str, missing: str) -> dict[str, Any]:
-    """The answer a sealed key's absence earns, with no request: "no key yet", or -- when a key
-    exists and this SECRETS_KEY cannot open it -- the rail's own sentence, because "type one" would
-    send the admin to replace a key that only needs its env file back (M4.7 dd03)."""
+    """No request: "no key yet", or the rail's sentence when this SECRETS_KEY cannot open one (dd03)."""
     state = await registry.load_connector(conn, name)
     return _answer(False, None, registry.SECRETS_UNREADABLE_REASON if state.secrets_unreadable
                    else missing)
@@ -128,9 +93,7 @@ async def _ask(
     params: dict[str, str],
     refused: Callable[[fetch.Response], str | None],
 ) -> dict[str, Any]:
-    """One GET through the shared fetcher, judged by `refused`: None is a good key, a string is the
-    host's refusal. Nothing is stored -- the response is read and dropped -- because a probe is not
-    a document of any title (decision 453)."""
+    """One GET through the shared fetcher, judged by `refused` (None is a good key); nothing stored."""
     try:
         async with open_fetcher(conn) as fetcher:
             resp = await fetcher.get(url, headers=headers, params=params,
@@ -144,8 +107,7 @@ async def _ask(
 
 
 def _tmdb_refused(resp: fetch.Response) -> str | None:
-    """TMDB answers a bad v3 key 401 with its own `status_message`; a good one with the image
-    configuration, whose `images` block is what separates it from a portal page served as a 200."""
+    """TMDB: a bad v3 key is a 401 with `status_message`; a good one returns an `images` block."""
     body = _json(resp)
     if resp.status == 200 and isinstance(body, dict) and "images" in body:
         return None
@@ -155,8 +117,7 @@ def _tmdb_refused(resp: fetch.Response) -> str | None:
 
 
 def _omdb_refused(resp: fetch.Response) -> str | None:
-    """OMDb says `"Response": "True"` for a lookup it served, and `"False"` with an `Error` for one it
-    refused -- as a 401 for a bad key on some paths and as a 200 on others, so the body decides."""
+    """OMDb: `"Response": "True"` when served; a refusal is a 401 or a 200, so the body decides."""
     body = _json(resp)
     if resp.status == 200 and isinstance(body, dict) and body.get("Response") == "True":
         return None
@@ -184,8 +145,7 @@ async def tmdb(conn: asyncpg.Connection, *, open_fetcher: Opener) -> dict[str, A
 
 
 async def omdb(conn: asyncpg.Connection, *, open_fetcher: Opener) -> dict[str, Any]:
-    """OMDb's card: one lookup of `OMDB_PROBE_ID`, which spends one request of the key's daily
-    quota -- the price decision 453 records, and the card says so."""
+    """OMDb's card: one lookup of `OMDB_PROBE_ID`, which spends one request of the daily quota."""
     key = await credentials.omdb_key(conn)
     if key is None:
         return await _without_a_key(conn, credentials.OMDB, "no OMDb API key is configured")
@@ -194,10 +154,7 @@ async def omdb(conn: asyncpg.Connection, *, open_fetcher: Opener) -> dict[str, A
 
 
 async def trakt(conn: asyncpg.Connection, *, open_fetcher: Opener) -> dict[str, Any]:
-    """Trakt's card: the trending list at one item, with `credentials.trakt_headers`' three headers.
-
-    The client id is plaintext config (`registry.env_seeds`' split), so an unreadable DEK does not
-    stop this button, as it does not stop the adapters: the probe asks what stage 2 would send."""
+    """Trakt's card: trending at one item; the client id is plaintext, so a sealed DEK does not stop it."""
     headers = await credentials.trakt_headers(conn)
     if headers is None:
         return _answer(False, None, "no Trakt client id is configured")

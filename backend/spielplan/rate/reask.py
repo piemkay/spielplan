@@ -1,41 +1,6 @@
 """§13 stream (b): the silent re-ask stream, and the flip rate it exists to measure.
 
-§13: "a separate silent **re-ask stream** — ~10% of comparisons/verdicts re-asked after >=3
-days; ~200 re-asks measure the flip rate sigma that sets the tier budget (DNA_MODEL §4.2
-build-order #1) and settles the corpus's zero-test-retest-data unknown."
-
-Decision-doc proposal 50 spells out the UI half: "~10% of queue slots are silent re-asks of
-verdicts and duels >=3 days old — indistinguishable from a normal card by design, never
-labelled in the UI, and excluded from the class-balance widget."
-
-Three properties have to hold at once, and each is enforced somewhere different:
-
-  (a) **Invisible on the wire.** The re-ask reference never leaves the server. This module
-      returns it on `VerdictReask` / `DuelReask`; the card the client gets is built by
-      `queue.QueueCard` / `battle.BattlePair`, whose `public()` is an allow-list that has no
-      `reask_of` and no `source`. The reason line is the *same sentence* a genuinely pending
-      card carries, produced by the same branch of the same function, so there is no phrasing
-      to compare either.
-  (b) **Distinguishable in the row.** `verdict.is_reask` / `verdict.reask_of` and the same pair
-      on `duel`. `flip_rate` below is why that matters: a stored field nobody can compute from
-      is not an instrument, it is a comment in a column.
-  (c) **Counted once.** `ledger.observations.load_observations` filters `NOT is_reask` out of
-      the fit, and `rate.balance` and `rate.battle` read the person's current label through
-      `rate.LIVE_LABEL`, which does the same. A stream that exists to settle the test-retest
-      unknown cannot also move the model it measures.
-
-WHICH ROWS ARE ELIGIBLE, AND WHY EACH CLAUSE IS THERE
-  * `NOT is_reask` — a re-ask of a re-ask measures the wrong interval and chains the flip
-    definition to a row that was itself an instrument reading.
-  * the newest non-re-ask row for that (user, title) — an answer the person has since replaced
-    is not the judgement whose stability is in question.
-  * `created_at <= now - 3 days` — §13's own floor.
-  * no re-ask of this row inside the cooldown — otherwise a small library re-asks the same
-    verdict every sitting, and sigma measures one title's mood rather than the household's
-    consistency.
-  * still marked seen — so the card's why-line is the true one for a pending card AND for this
-    one. A re-ask whose title is no longer marked seen would need a different sentence, and a
-    different sentence is a marker.
+Invisible on the wire (no `reask_of` in `public()`), marked in the row, and excluded from the fit.
 """
 
 from __future__ import annotations
@@ -53,20 +18,11 @@ from spielplan.rate import LIVE_LABEL
 
 log = logging.getLogger("spielplan.rate.reask")
 
-# ---------------------------------------------------------------------------------------------
-# TUNED NUMBERS. §13 fixes all four; they belong in `spielplan/ledger/hyperparams.py`, which is
-# "the only module in the package allowed to contain a tuning number" and is the file the corpus
-# project re-tunes through `ledger_hyperparams.json`. That module is wave-1 frozen for this
-# milestone, so they live here in one block under the same contract. Reported as a gap.
-# ---------------------------------------------------------------------------------------------
-
 # §13: "~10% of comparisons/verdicts re-asked".
 REASK_RATE = 0.10
 # §13: "after >=3 days".
 REASK_MIN_AGE = timedelta(days=3)
-# Not in §13. A row re-asked once is not re-asked again for a season: without it a household
-# with forty rated titles re-asks the same handful every sitting and sigma stops being a
-# household-level reading. Chosen once, here, with that reason.
+# Not in §13: without it a small library re-asks the same handful every sitting.
 REASK_COOLDOWN = timedelta(days=90)
 # §13: "~200 re-asks measure the flip rate sigma".
 FLIP_RATE_TARGET_N = 200
@@ -79,9 +35,7 @@ def draws(rng: random.Random, *, rate: float = REASK_RATE) -> bool:
 
 @dataclass(frozen=True)
 class VerdictReask:
-    """A verdict worth posing again. `verdict_id` is what the eventual write puts in
-    `verdict.reask_of`; `value` is the earlier answer, kept so a caller can compute the flip
-    without a second query."""
+    """A verdict worth posing again; `verdict_id` becomes the new row's `reask_of`."""
 
     verdict_id: int
     title_id: int
@@ -91,12 +45,7 @@ class VerdictReask:
 
 @dataclass(frozen=True)
 class DuelReask:
-    """A duel worth posing again, with `(title_a, title_b)` in the ORDER IT WAS ASKED.
-
-    Preserving the order is what makes a flip literally `outcome <> original.outcome` with no
-    normalisation, and whatever left/right position bias exists is then constant across both
-    asks and cancels out of the rate.
-    """
+    """A duel worth posing again, in the order it was asked, so a flip is `outcome <> original`."""
 
     duel_id: int
     title_a: int
@@ -158,10 +107,7 @@ SELECT d.id, d.title_a, d.title_b, d.outcome, d.created_at, la.value AS verdict_
 def _sample(rows: list[Any], *, limit: int, rng: random.Random | None) -> list[Any]:
     """Uniform over the eligible rows, deterministic given `rng`.
 
-    The sampling happens here rather than as `ORDER BY random() LIMIT n` because a test that
-    cannot hold the draw still cannot prove the rate, and because §13's stream has to be a
-    uniform sample of the person's answers: ordering by age instead would confound test-retest
-    noise with genuine drift, which is the one confusion this instrument exists to avoid.
+    Not age-ordered: that would confound test-retest noise with genuine drift.
     """
     if limit <= 0 or not rows:
         return []
@@ -186,11 +132,7 @@ async def verdict_candidates(
 ) -> list[VerdictReask]:
     """Up to `limit` verdicts eligible to be posed again, in a uniformly random order.
 
-    Both age cutoffs are evaluated by Postgres, against the same `now()` that stamped
-    `created_at`. Computing "three days ago" in Python instead compares two clocks: this
-    machine's Postgres runs ~220 ms ahead of the application process, which is enough to make a
-    row backdated to exactly the boundary fall on the wrong side of it. `now` overrides the
-    clock for both cutoffs at once, which is how a test reaches past the cooldown.
+    Both age cutoffs use Postgres's clock, the one that stamped `created_at`; `now` overrides both.
     """
     if limit <= 0 or not kinds:
         return []
@@ -226,8 +168,7 @@ async def duel_candidates(
     min_age: timedelta = REASK_MIN_AGE,
     cooldown: timedelta = REASK_COOLDOWN,
 ) -> list[DuelReask]:
-    """Up to `limit` duels eligible to be posed again, in a uniformly random order. Both age
-    cutoffs are evaluated by Postgres — see `verdict_candidates` for why that matters."""
+    """Up to `limit` duels eligible to be posed again; cutoffs as in `verdict_candidates`."""
     if limit <= 0 or not kinds:
         return []
     rows = await conn.fetch(
@@ -271,12 +212,7 @@ class ArmFlips:
 
 @dataclass(frozen=True)
 class FlipRate:
-    """§13's sigma: how often the same question, posed again, gets a different answer.
-
-    Reported per arm as well as pooled, because a 3-class verdict and a 3-outcome duel are
-    different questions and a pooled rate over an unbalanced mix of the two is a number about
-    the sampler rather than about the household.
-    """
+    """§13's sigma, per arm and pooled: a verdict and a duel are different questions."""
 
     verdicts: ArmFlips
     duels: ArmFlips
@@ -319,9 +255,7 @@ async def flip_rate(
 ) -> FlipRate:
     """Compute sigma over every stored re-ask. `user_id=None` pools the household.
 
-    The join is `reask.reask_of -> original.id`, so a re-ask whose original was undone (and
-    therefore deleted — `observations.undo` is the one path allowed to delete a verdict) drops
-    out of both the numerator and the denominator rather than counting as a non-flip.
+    A re-ask whose original was undone drops out of both numerator and denominator.
     """
     kind_list = list(kinds) if kinds else None
     verdicts = await conn.fetchrow(

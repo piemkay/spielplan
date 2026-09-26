@@ -1,64 +1,7 @@
 """The §6.1 sweep queue: which title to ask about next, and the one line saying why.
 
-§6.1: "**Queue:** P(seen)-ordered (Jellyfin history, popularity, household co-seen, and the
-person's own answers on titles of the same kind and original language, read against their own
-seen rate for the kind, which only ever lower it; decision 521), seeded first run from the
-imported 100-title decade-stratified `seed_list` ... Blocks of 15; each card shows its queue reason
-as a plain sentence naming its strongest cause ... with no number in it" - P(seen) waits behind
-Show the model (decision 519; see `reason_for`).
-
-Three sentences, three rules, and they compose in one ORDER BY:
-
-  1. **Recorded-seen first.** A title the app already holds as `seen` with no verdict is
-     exactly the population of §6.0's pending-verdicts banner. It is not an estimate, so
-     `p_seen` is 1.0 for it by definition rather than by a large weight, and "seen first" and
-     "highest P(seen) first" are then the same instruction rather than two that can diverge.
-  2. **Then the seed list, most likely seen first (decision 490).** A fresh household has no
-     seen rows and no verdicts, so their first queue *is* `seed_list` — the spec's "seeded first
-     run" falls out of the ordering instead of needing a mode flag. Seed precedence ends by
-     CONSUMPTION: once every seed title carries an answer the branch is empty and P(seen) governs
-     for good. All 100 stay; what changed is the order INSIDE the list. It was the file's own
-     position order, which on v20260925 put 56 pre-2010 titles first and asked a household about
-     divisive films it had mostly not seen: 33% not-seen in the first block. Ordered by P(seen)
-     — popularity, the library, age, and the household — the same two members' own answers put
-     that first block at 1 not-seen in 28. "Decade-stratified" is a property of the list the
-     corpus chose, and every title in it is still served before anything outside it.
-  3. **Then descending P(seen).**
-
-A title the person PINNED — §6.0's pending-verdicts banner, the title card's "Rate it" or Rate's
-own search — leads everything, is served even over an earlier "not seen" (a verdict writes seen,
-and the person has just said they know it), and names the pin as its reason.
-
-WHAT P(SEEN) IS, AND WHAT IT IS NOT
-It is a six-feature logistic over signals this app already holds, and it exists to *order a
-queue*. It never enters `score_u(t)` and it is not a model feature: §4.1 rule 3 keeps the
-display schema away from the feature builder, and nothing here reads it. `title_prior.item_n`
-is the sanctioned popularity quantity — §4.3 ships it as "the per-title support counts" — so
-the popularity term is a crowd *support count*, never a crowd *score*.
-
-That sentence used to rest on §4.3's parenthetical instead ("the §5.1 gate input"), and for one
-milestone it was false here. The gloss holds only while every row carries a coordinate: M4.13
-excluded `cold_mask` rows from the basis, so a title the crowd rated 260,131 times has n_t = 0
-because there is nothing for the gate to weight — and `serve.materialise_priors` wrote that 0
-into this column for 2,879 rows of v20260828, 375 of the owned ones shipping `item_n >= 90`.
-At weight 2.0 through `log1p(n)/log1p(1e5)` that is the whole of the crowd term, so the sweep
-ordered the most-watched films in the catalogue as if nobody had ever seen them. The column now
-carries `Backbone.crowd_support`, which is the file's own count for every row, and
-`title_prior.gate` carries the gate. [M4.13 cycle 2, M413-C2-DIM5-01]
-
-The weights are a stated prior, not a fit. There is no labelled data to fit them on until the
-surface runs; the surface then generates exactly that label, because a verdict means seen and
-`Not seen` means unseen. §13 names the instrument that falsifies them — "not-seen rate in the
-rating queue (>50% = queue bug)" — and `not_seen_rate` below computes it. Fitting is a later
-milestone's move; inventing a fit now would be inventing the data.
-
-WHY THE FORMULA IS WRITTEN TWICE
-Postgres orders and Python explains. The SQL evaluates the logistic so `ORDER BY ... LIMIT` can
-work over the whole catalog without shipping it to the client; Python evaluates the same
-logistic on the returned row so the reason line can name the *dominant* term. They are two
-spellings of one formula, and the moment they disagree the returned cards stop being sorted by
-the number they report — which is what
-`test_once_the_seed_list_is_answered_the_queue_is_ordered_by_descending_p_seen` checks.
+Order: pinned, recorded-seen, seed list (decision 490), then P(seen), a stated-prior logistic
+that only orders the queue. The SQL and `p_seen` spell one formula; keep them in step.
 """
 
 from __future__ import annotations
@@ -76,46 +19,28 @@ from spielplan.rate import reask as reask_stream
 
 log = logging.getLogger("spielplan.rate.queue")
 
-# ---------------------------------------------------------------------------------------------
-# TUNED NUMBERS. These belong in `spielplan/ledger/hyperparams.py` — that module is "the only
-# module in the package allowed to contain a tuning number", and re-tuning is supposed to reach
-# the app through `ledger_hyperparams.json`. It is wave-1 frozen for this milestone, so they sit
-# here, in one block, under the same contract: change them here and nowhere else. Reported as a
-# gap.
-# ---------------------------------------------------------------------------------------------
-
 
 @dataclass(frozen=True)
 class SeenWeights:
-    """Log-odds weights for P(seen). Every one of them is named in a reason line, so the
-    weighting is auditable from the UI and not only from this file."""
+    """Log-odds weights for P(seen): a stated prior, not a fit."""
 
-    intercept: float = -2.2   # nothing known at all -> 0.10: the base rate for "have you seen
-                              # this arbitrary catalog title"
+    intercept: float = -2.2   # nothing known at all -> 0.10
     playback: float = 2.5     # §7.3's >=90% playback poll fired and nobody answered the prompt
     co_seen: float = 1.2      # §6.1's "household co-seen"
     crowd: float = 2.0        # §6.1's "popularity", as title_prior.item_n
     owned: float = 0.8        # it is in the Jellyfin library (§7.2 keeps is_owned re-derived)
     age: float = 0.6          # more years on the shelf, more chances to have seen it
-    unfamiliar: float = 2.0   # this person keeps answering "not seen" to titles of its language
-                              # and kind (see `unfamiliarity`); the feature is <= 0, so this
-                              # only ever lowers P(seen)
+    unfamiliar: float = 2.0   # the feature is <= 0, so this only ever lowers P(seen)
 
 
 WEIGHTS = SeenWeights()
 
-# The pseudo-count `unfamiliarity` shrinks a person's own answers towards their own seen rate for
-# the kind with: two each way, four answers at that rate, so one "not seen" moves a language's
-# titles by 0.8 logit times that rate (0.4 at a half) rather than by the whole weight, and the term
-# only bites once the answers keep saying the same thing.
+# Pseudo-count shrinking a person's own answers towards their own seen rate for the kind.
 FAMILIAR_PSEUDO = 2.0
 
-# A title is "old" for this purpose once it has been out four decades; past that the extra years
-# stop carrying information about whether this household saw it.
+# Years past which a title's age stops carrying information.
 AGE_SATURATION_YEARS = 40.0
-# The item_n at which the popularity term saturates. The transform is log1p(n)/log1p(SAT)
-# clipped to 1: n=10 -> 0.21, n=1e3 -> 0.60, n=1e4 -> 0.80. Rank-preserving, so it cannot
-# reorder the catalog relative to a percentile version of itself; only the spacing differs.
+# log1p(n)/log1p(SAT) clipped to 1: n=10 -> 0.21, n=1e3 -> 0.60, n=1e4 -> 0.80.
 CROWD_SATURATION = 100_000.0
 
 # §13: "not-seen rate in the rating queue (>50% = queue bug)".
@@ -129,10 +54,7 @@ SOURCES: tuple[str, ...] = ("pinned", "seed", "p_seen", "pending_verdict", "reas
 
 FEATURE_NAMES: tuple[str, ...] = ("playback", "co_seen", "crowd", "owned", "age", "unfamiliar")
 
-# The popularity term at which a title is "well-known" in member copy: about a thousand crowd
-# ratings (log1p(1000) / log1p(CROWD_SATURATION) = 0.60). On the v20260926b catalogue that is the
-# top 35% of films and the top 8% of series, and every seed film clears it. A title below it is
-# never called well-known, whatever list it is on -- the list the corpus ships is not the claim.
+# log1p(1000)/log1p(CROWD_SATURATION) = 0.60: below it member copy never says "well-known".
 WELL_KNOWN_CROWD = 0.6
 
 
@@ -171,26 +93,9 @@ def unfamiliarity(
 ) -> float:
     """How firmly this person's own answers say they do not know titles of one language and kind.
 
-    §6.1 orders the queue by P(seen) over signals that are all about the TITLE -- its crowd, the
-    library, its age, the household -- and none about what this person has already told the
-    queue. So the second household test watched it drift: Jenny answered "not seen" to Attack on
-    Titan and to Berserk, Monster came three cards later on its crowd count, and Death Note now
-    leads her series queue on the `owned` term -- the household owns 39 Japanese series, and
-    nothing in the formula knows whose they are. Her own answers are the only signal that does,
-    and they are exactly the label P(seen) predicts: a verdict means seen and `Not seen` unseen.
-
-    The share of the person's answered titles in the group that they had seen, shrunk by
-    2 x `pseudo` answers towards the person's OWN seen share for the kind (`kind_seen` of
-    `kind_answered`, the same rows over every language), and read only below it, doubled: 0 until
-    the language's answers fall short of what the person's own rate expects, -2 x that rate at the
-    limit. It was once measured against a fixed half, and then a member whose answers were mostly
-    "not seen" sank their main language against every language never asked about - the very drift
-    the term exists to stop (review finding F3 of the second household test's wave). Against the
-    person's own rate a uniformly low seen share moves nothing, an unasked language stays at 0, and
-    at a rate of one half this is the old term exactly. Never above zero, because a language the
-    person knows well is no reason to ask about a title in it that nothing else says they saw --
-    this lowers titles the person keeps not knowing and moves nothing else, so the why-line never
-    names it. [H7 of the 2026-09-26 household test; decision 521]
+    The group's seen share, shrunk by 2 x `pseudo` answers towards the person's own seen rate for
+    the kind, read only below that rate and doubled: 0 at or above it, -2 x rate at the limit.
+    Never positive, so the why-line never names it (decision 521).
     """
     rate = kind_seen / kind_answered if kind_answered > 0 else 0.5
     share = (seen + 2.0 * pseudo * rate) / (answered + 2.0 * pseudo)
@@ -198,20 +103,13 @@ def unfamiliarity(
 
 
 def contributions(features: Features, weights: SeenWeights = WEIGHTS) -> dict[str, float]:
-    """Each term's signed contribution to the log-odds. The intercept is deliberately absent:
-    it is the same for every title, so it explains nothing about *this* one."""
+    """Each term's signed log-odds contribution; the intercept is the same for every title."""
     v = features.vector()
     return {name: getattr(weights, name) * v[name] for name in FEATURE_NAMES}
 
 
 def p_seen(features: Features, weights: SeenWeights = WEIGHTS) -> float:
-    """P(this person has seen this title).
-
-    `seen` short-circuits to 1.0 rather than entering the logistic with a large weight. The app
-    is not estimating there — §7.3 already adopted the state, or the person set it — and a
-    number below 1 would leave a recorded fact competing with an accumulation of circumstantial
-    evidence, which is how a title nobody watched ends up ahead of one that was.
-    """
+    """P(this person has seen this title); a recorded `seen` is 1.0, not a large weight."""
     if features.seen:
         return P_SEEN_RECORDED
     z = weights.intercept + sum(contributions(features, weights).values())
@@ -219,18 +117,13 @@ def p_seen(features: Features, weights: SeenWeights = WEIGHTS) -> float:
 
 
 def dominant(features: Features, weights: SeenWeights = WEIGHTS) -> str | None:
-    """The term that put this title where it is. None when nothing at all is known about it —
-    then the why-line carries the probability and stops, rather than naming a cause worth 0."""
+    """The term that put this title where it is, or None when no term is positive."""
     scored = contributions(features, weights)
     best = max(scored, key=lambda name: (scored[name], name))
     return best if scored[best] > 0.0 else None
 
 
-# §6.8: "every shelf, recommendation, question and conflict carries a one-line why". Phrased in
-# the person's vocabulary and not the model's — the card is asking them to remember something.
-# Whole sentences since the second household test: "queued because: 86% likely you have seen it"
-# was the queue's working printed for a member, and the probability is a model number, which
-# decision 486 keeps behind Show the model (the card's `model.p_seen`). [A3 of 2026-09-26]
+# §6.8's one-line why, in the person's vocabulary; no model number on the card (decision 486).
 PHRASES = {
     "playback": "You played it to the end.",
     "co_seen": "Someone else in the house has seen it.",
@@ -239,19 +132,13 @@ PHRASES = {
     "age": "It has been out {years}.",
 }
 
-# The line when no term is strong enough to name -- nothing known at all, or a crowd too small to
-# call the title well-known.
+# When no term can be named truthfully.
 UNSURE_REASON = "One you might have seen."
 
-# The one sentence a recorded-seen card carries. It is deliberately the *whole* truth about that
-# card and no more: "you have this marked seen". §13's re-ask targets are also marked seen, so
-# they get this same sentence from this same branch and the wire cannot tell the two apart. The
-# tempting longer form — "...and have not rated it" — is what would give the stream away, and it
-# would be false on exactly the cards it gave away.
+# §13's re-ask targets get this same sentence from the same branch, so the wire cannot tell them
+# apart; "...and have not rated it" would give the stream away.
 SEEN_REASON = "You have this marked as seen."
 
-# The person asked for this one — Rate's search or the title card's "Rate it" — so the pin IS the
-# reason, and a probability beside it would explain a placement the queue did not make.
 PINNED_REASON = "You picked this one."
 
 
@@ -264,17 +151,9 @@ def reason_for(
     years_out: int | None = None,
     weights: SeenWeights = WEIGHTS,
 ) -> str:
-    """§6.8's mandatory one-line why, in the copy register the spec calls "quiet reasons".
+    """§6.8's mandatory one-line why, in the member register and with no number in it.
 
-    A seed card printed "seed list position 0 of 100": 0-based, a file's index, and a statement
-    about the corpus's list rather than about the person. Decision 490 then made it "a starter
-    title from the 1970s · 86% likely you have seen it", which the second household test still
-    read as jargon: "starter title" is the corpus's name for its list and the percentage is the
-    queue's model. So a seed card says what the title is -- "A well-known film from the 1970s"
-    -- and says "well-known" only where the crowd term bears it out (`WELL_KNOWN_CROWD`); a seed
-    below that line says the one thing true of every list title, that everyone is asked it
-    first. No card carries a number: P(seen) travels beside the reason, behind Show the model.
-    [§6.1, §6.8, decision 486; A3 of the 2026-09-26 household test]
+    A seed card says "well-known" only where the crowd term bears it out (`WELL_KNOWN_CROWD`).
     """
     if source in ("pending_verdict", "reask"):
         return SEEN_REASON
@@ -289,8 +168,7 @@ def reason_for(
         return f"A {noun}{when} we ask everyone about first."
     cause = dominant(features, weights)
     if cause == "crowd" and not known:
-        # The crowd term leads but is too small to call the title well-known: name the strongest
-        # term that can be said truthfully instead.
+        # Too small to call well-known: name the strongest term that is true instead.
         scored = contributions(features, weights)
         rest = [name for name in scored if name != "crowd" and scored[name] > 0.0]
         cause = max(rest, key=lambda name: (scored[name], name)) if rest else None
@@ -314,33 +192,16 @@ class QueueCard:
     def public(self) -> dict[str, Any]:
         """The allow-list projection that may reach the client.
 
-        §13 stream (b) requires the served payload to carry "no marker distinguishing a re-ask
-        from a first observation", and `source` gives it away exactly as loudly as `reask_of`
-        does — so neither is in here. An allow-list and not a copy-and-delete: a field added to
-        this dataclass later has to be added to this dict on purpose before it can leak.
+        No `source` and no `reask_of`: either would mark a §13 re-ask on the wire.
         """
         return {"title_id": self.title_id, "reason": self.reason, "p_seen": self.p_seen}
 
 
 # --- the candidate query ----------------------------------------------------------------------
 
-# Two exclusions, each a rule rather than a nicety:
-#   * a title the person has ever given a real verdict on does not come back. The predicate is
-#     `NOT is_reask` and not `superseded_by IS NULL`, because a re-ask supersedes the row it
-#     re-asks (`record_verdict` does this deliberately) — a predicate on that column would hand
-#     every re-asked title straight back to the fresh queue.
-#   * a title the person has explicitly answered "not seen" does not come back either. An
-#     *adopted* unseen is an absent row, never an 'unseen' row (see `sync/seen.py`'s table), so
-#     this only ever removes an answer somebody actually gave. A PINNED title is the exception:
-#     the person has just searched for it or tapped "Rate it" on it, which is a newer answer than
-#     the "not seen" — and one household member's mark-seen-then-wait detour never reached the
-#     film at all. The pin lifts this exclusion and nothing else; a rated title stays out.
-#
-# The person's history arrives as three small CTEs joined to `title`, rather than as correlated
-# sub-selects evaluated per row. Ordering by a computed score means the whole partition is
-# scored and sorted whatever the LIMIT is, so the per-row cost is the cost: on a 30,000-title
-# catalog the sub-select spelling took 267 ms for a block of 15 and this one takes 43 ms. Each
-# CTE is bounded by what one household has done, not by the catalog.
+# A rated title never returns (`NOT is_reask`: a re-ask supersedes the row it re-asks); a "not
+# seen" answer returns only when pinned. History arrives as CTEs rather than per-row sub-selects,
+# because the whole partition is scored whatever the LIMIT.
 _CANDIDATES = """
 WITH household AS (
     SELECT count(*)::float8 AS n
@@ -467,15 +328,7 @@ def _card(row: asyncpg.Record, *, weights: SeenWeights) -> QueueCard:
         source = "p_seen"
     years_out = None
     if row["year"] is not None:
-        # From the year, NOT from `age` — which is the clipped feature and therefore pegged at
-        # 1.0 for everything released before `now() - AGE_SATURATION_YEARS`. Multiplying it back
-        # out printed "it has been out 40 years" for 6,806 of the corpus's 19,071 titles, on
-        # exactly the cards where the age term is the dominant one and so the one the line names
-        # (unowned, no playback, nobody else in the house, no crowd support). §6.8 makes the
-        # why-line normative copy, and a sentence that is wrong by eleven years for a 1975 film
-        # is not a quiet reason, it is a false one. The feature stays clipped: saturation is the
-        # model's claim that the 41st year carries no more information, and this changes only
-        # what the card says. [M4.10 finding 19]
+        # From the year, not from `age`, which is clipped at AGE_SATURATION_YEARS.
         years_out = max(0, int(row["this_year"]) - int(row["year"]))
     return QueueCard(
         title_id=int(row["id"]),
@@ -487,9 +340,6 @@ def _card(row: asyncpg.Record, *, weights: SeenWeights) -> QueueCard:
             years_out=years_out,
             weights=weights,
         ),
-        # A seed card carried None here while the list was served in file order, because the
-        # queue had not used a probability to place it. Decision 490 orders the list by P(seen),
-        # so the number is now the one that placed the card, as on every other card.
         p_seen=float(row["p_seen"]),
         source=source,
         reask_of=None,
@@ -510,16 +360,9 @@ async def next_sweep_cards(
 ) -> list[QueueCard]:
     """The next `limit` sweep cards, best first. An empty list means the queue is drained.
 
-    `head` is the §7.3 banner CTA's pins: "You've watched X and Y recently — rate them?" puts
-    those title ids at the front, in the order given, and they stay ordinary candidates — a
-    pinned title that has since been rated is simply not there. Rate's own search and the title
-    card's "Rate it" pin the same way; a pin also lifts an earlier "not seen" (see `_CANDIDATES`),
-    and `exclude` still wins over it — the session decides what a pin may re-open.
-
-    `rng`, `reask_rate` and `weights` are test seams, not part of the interface this module
-    publishes: the declared call — `next_sweep_cards(conn, user_id=..., kinds=..., limit=...,
-    exclude=..., head=...)` — behaves exactly as specified without them. §13 stream (b) needs a
-    coin flip per slot, and a coin nobody can hold still cannot be tested.
+    `head` pins titles to the front in order (§6.0's banner, search, "Rate it"); a pin lifts an
+    earlier "not seen", and `exclude` still wins over it. `rng`, `reask_rate` and `weights` are
+    test seams.
     """
     if not kinds:
         raise ValueError("select at least one kind: 'movie', 'series', or both")
@@ -548,8 +391,7 @@ async def next_sweep_cards(
     )
     fresh = [_card(row, weights=weights) for row in fresh_rows]
 
-    # §13 stream (b): "~10% of comparisons/verdicts re-asked after >= 3 days". The draw is per
-    # slot, so the rate is a property of the queue rather than of how long a sitting ran.
+    # §13 stream (b): the draw is per slot, so the rate is a property of the queue.
     reasks: list[reask_stream.VerdictReask] = []
     if reask_rate > 0.0:
         reasks = await reask_stream.verdict_candidates(
@@ -571,17 +413,7 @@ def _interleave(
 ) -> list[QueueCard]:
     """Spend about `rate` of the slots on re-asks, and fall through when either pool runs dry.
 
-    Falling through matters in both directions: a household with nothing old enough to re-ask
-    still gets a full queue, and a household that has rated everything still gets asked
-    something — a queue made only of re-asks is what §13's stream looks like at the end of the
-    catalog.
-
-    `head` is the exception, and it has to be. §6.0's pending-verdicts banner names up to three
-    titles and its CTA "opens the §6.1 queue with those titles at the head of the queue". The
-    pin is applied upstream as an ORDER BY, so without this the coin comes up re-ask on ~10% of
-    taps and spends the pinned slot on a different title — the banner names three films and
-    serves a fourth, which is the exact failure that requirement exists to prevent. A pinned
-    card is never traded for a re-ask; §13 has every other slot.
+    A pinned card is never traded for a re-ask: §6.0's banner must serve the titles it names.
     """
     fresh_q = list(fresh)
     reask_q = list(reasks)
@@ -599,8 +431,7 @@ def _interleave(
                 continue
             card = QueueCard(
                 title_id=candidate.title_id,
-                # The same branch, the same sentence and the same probability as a genuinely
-                # pending card. A re-ask target carries a verdict, and a verdict implies seen.
+                # Same sentence and probability as a pending card: a re-ask is indistinguishable.
                 reason=SEEN_REASON,
                 p_seen=P_SEEN_RECORDED,
                 source="reask",
@@ -651,10 +482,7 @@ async def not_seen_rate(
 ) -> NotSeenRate:
     """How often the queue guessed wrong, over the last `window` answers it got.
 
-    Read from the `rate_observation` journal rather than from `user_title`, because
-    `user_title` holds one row per (user, title) and a later "seen" erases the "not seen" that
-    is the whole measurement. The journal is append-only and an undone row is tombstoned, so
-    `undone_at IS NULL` counts what the person actually left standing.
+    From the append-only journal: in `user_title` a later "seen" erases the "not seen" measured.
     """
     row = await conn.fetchrow(
         """

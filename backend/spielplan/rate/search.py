@@ -1,23 +1,6 @@
-"""Rate's "a title you know" search. Spec v2.1 §6.1, §6.0.
+"""Rate's "a title you know" search: a chosen hit is pinned as the head of the §6.1 queue.
 
-§6.1 is the only place a verdict is given, and until this the only way to rate a film the person
-already knew was §6.0's Mark seen, then wait for the queue to come round to it behind the card
-already on the table. The household test found exactly that: one member marked Dunkirk seen and
-never reached it, another used Mark seen as a "queue this" gesture and wrote a seen state for
-three titles she then answered "not seen". So Rate carries a search, and choosing a hit pins
-that title as the head of the §6.1 queue -- §6.0's banner mechanism, which the title card's
-"Rate it" link uses too -- so the verdict is still given on §6.1's card, under its card token,
-its block counter, its Undo and its after-the-tap reveal. [owner instruction of 2026-09-25 after
-the first household user test]
-
-Ranked for a person looking for a film they remember rather than browsing: an exact name first,
-then a name that starts with what was typed, then the rest; inside each, a title in the library
-first and then the most widely rated. The catalogue grid orders by year, which would bury Heat
-(1995) under every newer title with "heat" in its name.
-
-A hit the person already rated says so and is not offered: the queue serves no rated title (a
-re-rating on purpose is not something this surface asks), and a pin that silently did nothing
-is the failure this search exists to end.
+Ranked for recall: exact name, then prefix, then the rest; owned, then most rated, within each.
 """
 
 from __future__ import annotations
@@ -56,10 +39,7 @@ async def find(
 ) -> list[dict[str, Any]]:
     """The titles a remembered name most likely means, each saying whether it is rated.
 
-    Both kinds, deliberately: §4.1 rule 5 partitions what a surface RANKS, and this ranks nothing
-    the model believes -- it finds a name. A hit outside the session's kinds is pinned all the
-    same, and `session.ensure_card` widens the session to its kind so the counter keeps naming
-    the partition it serves (proposal 46).
+    Both kinds: this ranks nothing the model believes, so §4.1 rule 5 does not apply.
     """
     needle = (q or "").strip().lower()
     if not needle:
@@ -74,8 +54,7 @@ async def find(
             "runtime_min": r["runtime_min"],
             "poster_path": r["poster_path"],
             "is_owned": r["is_owned"],
-            # The person's own live label, by name: it is their answer, not the model's belief,
-            # so it is not an anchor (§6.1) -- and it is why this hit is not offered.
+            # Their own answer, not an anchor (§6.1); a rated hit is not offered.
             "rated": None if r["rated"] is None else VERDICT_LABELS[int(r["rated"])],
         }
         for r in rows

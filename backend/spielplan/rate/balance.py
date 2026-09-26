@@ -1,34 +1,4 @@
-"""§6.1's class-balance widget, and the one sentence it exists to be able to say.
-
-§6.1: "Running **class-balance widget** with its warning copy ('Heavy on "liked". Spreading
-across all three classes matters about five times more than anything else you can do here.' —
-the measured 5x lever)." Decision 491 restates that copy in plain words with a tail that says how
-to spread without changing an answer, and arms it at fifteen labels rather than one.
-
-§5.2 supplies both the lever and the threshold: "spreading verdicts across all three classes
-matters ~5x more than anything the corpus side can tune (a 60%-'liked' labeller gives up ~0.07
-rho) -> the rating UI shows a running class balance."
-
-So the widget is not decoration. It is the only place in the app where the largest single lever
-on a person's model is legible to the person pulling it, and the number that fires it — 60% —
-is a measurement, not a taste.
-
-WHAT COUNTS AS A LABEL
-One per title: the person's current answer, read through `rate.LIVE_LABEL`. Two exclusions come
-with it and both are load-bearing:
-
-  * **Re-asks are not counted.** §13 stream (b) poses a question the person has already
-    answered, to measure whether the answer holds. Counting it would let the instrument push the
-    distribution it is reporting on, and would make a household's balance depend on which rows
-    the re-ask scheduler happened to sample.
-  * **A superseded verdict is not counted.** A re-rating replaces a label rather than adding
-    one — "the running three-class verdict distribution over the user's labels" is a
-    distribution over titles, not over taps.
-
-`LIVE_LABEL` reads the newest non-re-ask row per title rather than the row with a NULL
-`superseded_by`, because `record_verdict` stamps `superseded_by` for a re-ask too. Both rules
-therefore come from one query, and there is no second place for them to drift.
-"""
+"""§6.1's class-balance widget over a person's live labels (re-asks and superseded rows excluded)."""
 
 from __future__ import annotations
 
@@ -43,36 +13,19 @@ from spielplan.rate import LIVE_LABEL, VERDICT_LABELS
 
 log = logging.getLogger("spielplan.rate.balance")
 
-# ---------------------------------------------------------------------------------------------
-# TUNED NUMBER. §5.2 fixes 60% ("a 60%-'liked' labeller gives up ~0.07 rho"). It belongs in
-# `spielplan/ledger/hyperparams.py` with the rest of §5.2's constants; that module is wave-1
-# frozen for this milestone, so it lives here. Reported as a gap.
-# ---------------------------------------------------------------------------------------------
+# §5.2: "a 60%-'liked' labeller gives up ~0.07 rho".
 WARN_SHARE = 0.60
 
-# Decision 491: the warning arms once the person holds fifteen live labels -- one §6.1 block,
-# restated rather than imported because `session` imports this module. It was 1, and one label
-# is 100% of a distribution: on the v20260925 install both members were told "Heavy on ..." by
-# their first verdict and the warning switched on and off six and ten times in one sitting. A
-# perfectly balanced labeller trips a 60% rule by chance 100% of the time at one label, 77.8% at
-# three, 13.6% at five, 5.9% at ten and 2.6% at fifteen. The widget's counts still show from the
-# first label; only the sentence waits.
+# Decision 491: one label is 100% of a distribution, so the sentence waits for fifteen.
 WARN_MIN_VERDICTS = 15
 
-# §6.1's measured sentence, restated in plain words by decision 491. It stays a constant and not
-# an f-string: "about five times more" is §5.2's 5x lever and must not drift into "much more"
-# the first time someone edits the surrounding paragraph.
+# §5.2's measured 5x lever; keep the wording exact.
 WARN_COPY = (
     "Spreading your ratings across all three answers matters about five times more than "
     "anything else you can do here."
 )
 
-# Decision 491: what to DO about it, per heavy class, and never "change your answer". The old
-# sentence said what mattered and not how, so it read as a request to relabel -- and the two
-# warnings the household test actually saw were 'disliked' and 'fine', which a tail written for a
-# heavy 'liked' labeller would have answered wrongly. Each tail widens what gets rated (or, for
-# 'fine', asks for the decisive answer where one is true); none asks for a different answer to
-# the same film.
+# Decision 491: each tail widens what gets rated; none asks for a different answer.
 WARN_TAIL = (
     "Rate some titles you enjoyed as well",
     "When a title was better or worse than fine, say so",
@@ -108,15 +61,12 @@ class ClassBalance:
             "warn": self.warn,
             "copy": self.copy,
             "threshold": WARN_SHARE,
-            # Decision 491: the widget says when the check begins rather than going quiet.
             "arms_at": WARN_MIN_VERDICTS,
         }
 
     @classmethod
     def of(cls, counts: Sequence[int]) -> ClassBalance:
-        """Build the widget from three counts. Pure, so the 60% rule is testable without a
-        database and the boundary case — exactly 60%, which does not warn — has somewhere to
-        be asserted."""
+        """Pure, so the 60% boundary (which does not warn) is testable without a database."""
         n0, n1, n2 = (int(c) for c in counts)
         if min(n0, n1, n2) < 0:
             raise ValueError(f"class counts cannot be negative: {(n0, n1, n2)!r}")
@@ -125,9 +75,7 @@ class ClassBalance:
             return cls(counts=(0, 0, 0), shares=(0.0, 0.0, 0.0), warn=False, copy=None)
         shares = (n0 / total, n1 / total, n2 / total)
         top = max(range(3), key=lambda i: ((n0, n1, n2)[i], -i))
-        # "exceeds 60%" — strictly. A person sitting exactly on the measured threshold has not
-        # yet given anything up, and a warning fired at equality would be a warning about the
-        # inequality sign rather than about their labelling.
+        # Strictly: exactly 60% does not warn.
         warn = total >= WARN_MIN_VERDICTS and shares[top] > WARN_SHARE
         copy = (
             f"Heavy on '{VERDICT_LABELS[top]}'. {WARN_COPY} {WARN_TAIL[top]} - {WARN_HONEST}"
