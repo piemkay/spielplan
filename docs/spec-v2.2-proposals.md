@@ -14961,6 +14961,23 @@ own `user_title` answers per kind and original language:
 
 ---
 
+## Decisions taken (owner, 2026-09-26, the slimming pass)
+
+### 525. The exit scripts, the coverage map and the release ledger are retired
+
+**What the record says.** §12 names `ops/m*_exit_criterion.py` scripts as how several milestones are
+measured, the testing contract lived in `backend/tests/spec_coverage.toml` with its gate, and
+`docs/RELEASE.md` recorded runs and verdicts; decisions 296, 297, 321 and 498 built on them.
+
+**Why it changes.** On 2026-09-26 the owner found the ~354k-line tree absurd for a household app and
+approved a slimming pass. The scripts, the map and the ledger were process scaffolding: they tested
+no behaviour a user meets, and every change had to be mirrored into them.
+
+**The decision.** They are deleted, with the devstub harness and the static tests that pinned wording,
+paths or counts. The invariant guards stay (CPU-only torch, one backend process, one plain-HTTP port,
+the /data mounts, frozen rating_source ids, the member register, api/ layering, route gating). §12's
+criteria stand and are measured by the regular test suites and the household's own evenings.
+
 ## §6.2 — Tonight, rewritten (owner decision, 2026-08-29)
 
 Proposal 54 asked which slot carries the alternative on a split axis. The owner answered by
