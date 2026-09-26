@@ -36,12 +36,14 @@ from __future__ import annotations
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime
+from statistics import NormalDist
 from time import perf_counter
 from typing import Any
 
 import asyncpg
 
 from spielplan.db import library
+from spielplan.home import taste
 from spielplan.home import why as why_mod
 from spielplan.home.why import WhyTerm
 
@@ -125,6 +127,9 @@ DEFAULT_BETA = 0.2
 
 # §4.2's default tier set, used when `ledger_cutpoints` has no row for this (user, kind) yet.
 DEFAULT_TIER_SET: tuple[str, ...] = ("F", "D", "C", "B", "A", "A+", "S")
+
+# The standard normal the sweet spot reads each member's rank through (decision 477's scale).
+_NORMAL = NormalDist()
 
 # §6.0's shelf order, verbatim from the table. Fixed, because the table is normative.
 SHELF_IDS: tuple[str, ...] = (
@@ -237,6 +242,14 @@ class Ctx:
     # show. A builder leaves them out and fills from its own next candidates; `build_shelves`
     # hands each builder its own copy, so no builder can widen another's.
     claimed: frozenset[int] = frozenset()
+    # Decision 512: the owned titles of this kind the shelf's audience avoids - this member, or
+    # either member for the shared shelf. Kept apart from `claimed` so a suppressed reason can say
+    # which one emptied a shelf.
+    avoided: frozenset[int] = frozenset()
+
+    @property
+    def excluded(self) -> frozenset[int]:
+        return self.claimed | self.avoided
 
 
 # --- the greeting -------------------------------------------------------------------------------
@@ -553,7 +566,7 @@ async def _finish(
     if len(section.items) < SECTION_FLOOR:
         # Named when the claim is what emptied it (decision 475), so "3 shelves above took the
         # titles" reads differently from "this household owns nothing like that".
-        after = " once the shelves before it took theirs" if ctx.claimed else ""
+        after = _thinned_by(ctx)
         return None, Suppressed(
             shelf_id,
             section.kind,
@@ -588,6 +601,17 @@ async def _finish(
         card["on_board"] = int(card["title_id"]) in board
         card["board_tier"] = board.get(int(card["title_id"]))
     return section, None
+
+
+def _thinned_by(ctx: Ctx) -> str:
+    """The clause a suppressed reason adds when the claim (decision 475) or the member's avoid set
+    (decision 512) is what left a shelf short."""
+    parts = []
+    if ctx.claimed:
+        parts.append("once the shelves before it took theirs")
+    if ctx.avoided:
+        parts.append("leaving out titles like ones you disliked")
+    return (" " + " and ".join(parts)) if parts else ""
 
 
 async def _board_letters(
@@ -640,11 +664,14 @@ async def because_anchor(
 ) -> tuple[Section | None, Suppressed | None]:
     """§6.0 row 1 — "Because you put *{anchor}* in {tier}" / "shares {term} + {term} with it".
 
-    LIKENESS, THEN THE PAIR (decision 475). The shelf holds the unseen owned titles sharing the
-    most of the anchor's terms, and names a pair every one of them carries. It used to choose the
-    pair covering the most titles and show that intersection by score, which named the anchor's
-    most generic pair and let the score's extremes decide the rest. The why-line is still true
-    of every card by construction (proposal 24): the pair is read off the cards, not assumed.
+    LIKENESS, THEN THE PAIR (decision 475, as decision 513 weighs it). The shelf holds the
+    unseen owned titles most like the anchor - its terms weighed by how rare they are in the
+    household's library, and in the anchor's own form, animated or live-action - and names a pair
+    every one of them carries. It used to choose the pair covering the most titles and show that
+    intersection by score, which named the anchor's most generic pair and let the score's
+    extremes decide the rest; and then to count shared terms, which let the generic ones decide
+    the cards. The why-line is still true of every card by construction (proposal 24): the pair
+    is read off the cards, not assumed. Titles the member avoids never enter (decision 512).
 
     THE HEADLINE SAYS WHAT THE PERSON DID (decision 476). "you put X in S" only where a
     `tier_edit` exists - a person who has tiered nothing was being told they had put Mission:
@@ -757,37 +784,34 @@ async def because_anchor(
         )
     index = shown(anchor)
 
-    pool = await why_mod.terms_for(conn, int(anchor["id"]), version=ctx.version)
-    shared = await why_mod.anchor_neighbours(
+    # Decision 513: the anchor's nearest titles by specificity-weighted likeness, in its own form,
+    # and the pair among its terms that names them best. The neighbourhood is two per card slot,
+    # so the pair is chosen to describe the nearest titles rather than to define a wider set.
+    terms = await why_mod.terms_for(conn, int(anchor["id"]), version=ctx.version, limit=None)
+    neighbours, specificity = await why_mod.anchor_neighbours(
         conn,
         user_id=ctx.user_id,
         kind=kind,
         version=ctx.version,
+        bundle_version=ctx.bundle_version,
         anchor_id=int(anchor["id"]),
-        pool=pool,
-        exclude=sorted(ctx.claimed),
+        exclude=sorted(ctx.excluded),
+        limit=why_mod.NEIGHBOURHOOD_PER_CARD * SHELF_CAP,
     )
-    # Score order first, then a STABLE sort on the shared count, so titles equally like the
-    # anchor keep the order the person's own scores put them in.
-    scored = await conn.fetch(
-        CARD_SELECT + CARD_FROM + """
-         WHERE t.kind = $2 AND t.id = ANY($4)
-         ORDER BY us.score DESC NULLS LAST, t.year DESC NULLS LAST, t.id
-        """,
-        ctx.user_id, kind, ctx.bundle_version, list(shared),
-    )
-    scored = sorted(scored, key=lambda r: -len(shared[int(r["title_id"])]))
-    chosen = why_mod.shared_pair(
-        [int(r["title_id"]) for r in scored], shared, pool, cap=SHELF_CAP, floor=SECTION_FLOOR
+    chosen = why_mod.likest_pair(
+        neighbours, specificity, terms, cap=SHELF_CAP, floor=SECTION_FLOOR
     )
     if chosen is None:
-        after = " once the shelves before it took theirs" if ctx.claimed else ""
         return None, Suppressed(
             sid, kind,
-            f"no pair of {anchor['name']}'s terms is shared by {SECTION_FLOOR} unseen owned "
-            f"titles{after}",
+            f"no pair of {anchor['name']}'s terms is shared by {SECTION_FLOOR} of its nearest "
+            f"unseen owned titles{_thinned_by(ctx)}",
         )
     members, t1, t2 = chosen
+    scored = await conn.fetch(
+        CARD_SELECT + CARD_FROM + " WHERE t.kind = $2 AND t.id = ANY($4)",
+        ctx.user_id, kind, ctx.bundle_version, members,
+    )
     by_id = {int(r["title_id"]): r for r in scored}
     rows = [by_id[i] for i in members]
 
@@ -831,6 +855,8 @@ async def top_of_ledger(
     if not ctx.bundle_version:
         return None, Suppressed(sid, kind, "no active artifact bundle — no scores to rank")
 
+    # The claim does not thin this shelf (decision 475); what the member avoids does (decision
+    # 512): "the ones we think you'll enjoy most" is not true of a pattern they disliked four times.
     ranked = await serve.ranked_section(
         conn,
         user_id=ctx.user_id,
@@ -839,6 +865,7 @@ async def top_of_ledger(
         seen="any",
         owned_only=True,
         limit=SHELF_CAP,
+        exclude=sorted(ctx.avoided),
     )
     # The number the why-line prints is the number the ordering used: `serve` reports the stored
     # `blend_beta`, or 0.0 for a profile the nightly fold-in has never fitted.
@@ -900,6 +927,9 @@ async def never_watched_term(
     which is what makes the title checkable. The neighbouring liked term is **anchor_side**: it
     describes the user's region, not the cards, which are unvisited by definition. §6.4's rule
     that "every connection is *nameable*" is satisfied because the edge is that term, printed.
+
+    "which you like" is the member's own verdicts, from another facet than the candidate's
+    (decision 514), and the titles the member avoids are neither counted nor shown (decision 512).
     """
     sid = "never_watched_term"
     if not ctx.version:
@@ -912,20 +942,21 @@ async def never_watched_term(
         version=ctx.version,
         min_seen=FRONTIER_MIN_SEEN,
         carrier_floor=SECTION_FLOOR,
-        exclude=sorted(ctx.claimed),
+        exclude=sorted(ctx.excluded),
     )
     if found is None:
         return None, Suppressed(
             sid, kind,
             f"no zero-coverage term carries {SECTION_FLOOR} unseen owned titles next to a term "
-            f"you rate high, or fewer than {FRONTIER_MIN_SEEN} seen titles of this kind to call "
-            f"any region unvisited",
+            f"from another facet that you liked on {why_mod.LIKED_TERM_MIN} titles and on most "
+            f"you rated, or fewer than {FRONTIER_MIN_SEEN} seen titles of this kind to call any "
+            f"region unvisited{_thinned_by(ctx)}",
         )
     candidate, neighbour, cos, aff = found
 
     ids = await why_mod.carriers(
         conn, terms=[candidate.term], kind=kind, version=ctx.version, user_id=ctx.user_id,
-        exclude=sorted(ctx.claimed),
+        exclude=sorted(ctx.excluded),
     )
     beta, _fitted = await beta_of(conn, user_id=ctx.user_id, kind=kind)
     tier_set = await tier_set_of(conn, user_id=ctx.user_id, kind=kind)
@@ -997,10 +1028,21 @@ async def shared_sweet_spot(
     """§6.0 row 4 — "You and {other} would both enjoy these" / "neither of you has seen them — a
     good pick for a night in together" (the shared sweet spot, ranked as Tonight's pool is).
 
-    Ordered by the PLAIN AVERAGE of the two scores, which is the same rule §6.2 step 3 ranks the
-    Tonight pool by ("the plain average of member Ledger scores (measured: nothing dominates
-    averaging; dominance rules cost −0.012)"). That is what makes "ranked as Tonight's pool is"
-    a shared arithmetic rather than a claim.
+    Ordered by the PLAIN AVERAGE of the two members' scores RANK-STANDARDISED over the owned
+    library of the kind - the normal quantile of each member's own rank - which is how §6.2 step 3
+    reads the Tonight pool's order since decision 477 ("the average is taken over each member's
+    scores rank-standardised over the frozen pool"). That is what makes "ranked as Tonight's pool
+    is" a shared arithmetic rather than a claim. It averaged the raw scores until the second
+    household test, and the two members' raw scores sit on two scales (owned films: mean 0.39
+    and 0.16, spread 0.83 and 0.93), so one member's units could outvote the other's. Plain
+    averaging stands (§6.2: dominance rules cost −0.012).
+
+    WHAT EITHER MEMBER AVOIDS IS OUT (decision 512): `ctx.avoided` is the union of the two
+    members' avoid sets here, because "you would both enjoy these" is false of a title one of
+    them has turned down the pattern of four times. That, and not the scale, is what the test
+    found: one member read Past Lives, Hamnet and The Worst Person in the World as "both" after
+    disliking every romance he had rated, and the other read Chainsaw Man after disliking every
+    violent film she had.
 
     THE 0..1 WEIGHT. §5.2 defines it as "the empirical CDF of the user's own fitted `s` values,
     computed per kind", and `ledger_state.cdf` carries it — but only for titles the person has
@@ -1023,11 +1065,16 @@ async def shared_sweet_spot(
 
     tier_set = await tier_set_of(conn, user_id=ctx.user_id, kind=kind)
     beta, _fitted = await beta_of(conn, user_id=ctx.user_id, kind=kind)
+    # `pos`/`n` are each member's rank over the owned library of the kind, ties broken by id as
+    # `tonight/pool.rank_normal` breaks them, so the quantile below is that function's.
     rows = await conn.fetch(
         """
         WITH ranked AS (
             SELECT us.user_id, us.title_id, us.score,
-                   percent_rank() OVER (PARTITION BY us.user_id ORDER BY us.score) AS cdf
+                   percent_rank() OVER (PARTITION BY us.user_id ORDER BY us.score) AS cdf,
+                   row_number() OVER (PARTITION BY us.user_id ORDER BY us.score, us.title_id)
+                       AS pos,
+                   count(*) OVER (PARTITION BY us.user_id) AS n
               FROM user_score us
               JOIN title o ON o.id = us.title_id AND o.is_owned
              WHERE us.user_id = ANY($4) AND us.kind = $2 AND us.bundle_version = $3
@@ -1037,7 +1084,8 @@ async def shared_sweet_spot(
                false AS seen,
                a.score, NULL::real AS cf, tp.b, tp.gate, tp.item_n, tp.e_source,
                ls.s, ls.sigma, ls.cdf, ls.tier,
-               a.cdf AS mine_cdf, b.cdf AS theirs_cdf, (a.score + b.score) / 2.0 AS pair_score
+               a.cdf AS mine_cdf, b.cdf AS theirs_cdf,
+               a.pos AS mine_pos, a.n AS mine_n, b.pos AS theirs_pos, b.n AS theirs_n
           FROM ranked a
           JOIN ranked b ON b.title_id = a.title_id AND b.user_id = $5
           JOIN title t ON t.id = a.title_id
@@ -1048,24 +1096,37 @@ async def shared_sweet_spot(
                             AND s.user_id = $1 AND s.state = 'seen')
            AND NOT EXISTS (SELECT 1 FROM user_title s WHERE s.title_id = t.id
                             AND s.user_id = $5 AND s.state = 'seen')
-           AND NOT (t.id = ANY($8))
-         ORDER BY (a.score + b.score) / 2.0 DESC, t.id
-         LIMIT $7
+           AND NOT (t.id = ANY($7))
         """,
         ctx.user_id, kind, ctx.bundle_version,
-        [ctx.user_id, partner["user_id"]], partner["user_id"], SWEET_SPOT_MIN_CDF, SHELF_CAP,
-        sorted(ctx.claimed),
+        [ctx.user_id, partner["user_id"]], partner["user_id"], SWEET_SPOT_MIN_CDF,
+        sorted(ctx.excluded),
     )
+
+    def standardised(pos: int, n: int) -> float:
+        return _NORMAL.inv_cdf((pos - 0.5) / n)
+
+    paired = sorted(
+        (
+            (
+                (standardised(r["mine_pos"], r["mine_n"])
+                 + standardised(r["theirs_pos"], r["theirs_n"])) / 2.0,
+                r,
+            )
+            for r in rows
+        ),
+        key=lambda pr: (-pr[0], int(pr[1]["title_id"])),
+    )[:SHELF_CAP]
     items = [
         _card(
             row, i + 1, tier_set=tier_set, terms=[], beta=beta,
             extra={
                 "mine_cdf": _float(row["mine_cdf"]),
                 "theirs_cdf": _float(row["theirs_cdf"]),
-                "pair_score": _float(row["pair_score"]),
+                "pair_score": pair_score,
             },
         )
-        for i, row in enumerate(rows)
+        for i, (pair_score, row) in enumerate(paired)
     ]
     section = Section(
         kind=kind,
@@ -1105,7 +1166,7 @@ async def school_night(
          ORDER BY us.score DESC NULLS LAST, t.runtime_min, t.id
          LIMIT $5
         """,
-        ctx.user_id, kind, ctx.bundle_version, limit_min, SHELF_CAP, sorted(ctx.claimed),
+        ctx.user_id, kind, ctx.bundle_version, limit_min, SHELF_CAP, sorted(ctx.excluded),
     )
     section = Section(
         kind=kind,
@@ -1207,6 +1268,7 @@ async def build_shelves(
     ctx: Ctx,
     zero_verdicts: bool = False,
     partner: dict[str, Any] | None = None,
+    avoided: taste.Avoided | None = None,
 ) -> tuple[list[Shelf], list[Suppressed]]:
     """§6.0's six shelves, in the table's order, each as one section per selected kind.
 
@@ -1215,9 +1277,27 @@ async def build_shelves(
     the catalog grid plus a route into the §6.1 seed-list queue." `new_in_library` is ordered by
     recency, not by a ledger nobody has yet, so it survives — that is a reading of the phrase,
     stated rather than assumed.
+
+    Decision 512: every ranking shelf leaves out what its audience avoids - this member's avoid
+    set, or for the shared shelf the union of both members' - and "New in the library", which
+    reports an arrival rather than ranking one, leaves out nothing.
     """
     if partner is None:
         partner = await partner_for(conn, user_id=ctx.user_id)
+    if avoided is None:
+        avoided = await taste.avoided_for(conn, user_id=ctx.user_id, version=ctx.version)
+    theirs = (
+        await taste.avoided_for(conn, user_id=partner["user_id"], version=ctx.version)
+        if partner is not None else None
+    )
+    mine_out: dict[str, frozenset[int]] = {}
+    both_out: dict[str, frozenset[int]] = {}
+    for kind in ctx.kinds:
+        mine_out[kind] = await taste.avoided_titles(conn, [avoided], kind=kind, version=ctx.version)
+        both_out[kind] = (
+            await taste.avoided_titles(conn, [avoided, theirs], kind=kind, version=ctx.version)
+            if theirs is not None else mine_out[kind]
+        )
     built: dict[tuple[str, str], Section] = {}
     notes: dict[tuple[str, str], Suppressed] = {}
     claimed: dict[str, set[int]] = {kind: set() for kind in ctx.kinds}
@@ -1237,7 +1317,11 @@ async def build_shelves(
                 )
                 continue
             scoped = (
-                replace(ctx, claimed=frozenset(claimed[kind]))
+                replace(
+                    ctx,
+                    claimed=frozenset(claimed[kind]),
+                    avoided=both_out[kind] if shelf_id == "shared_sweet_spot" else mine_out[kind],
+                )
                 if shelf_id in CLAIMING_SHELVES else ctx
             )
             # perf-10: measured, not restructured. Every builder is timed at the one place they
@@ -1362,6 +1446,7 @@ async def build_home(
         "catalog": None,
         "degraded": _degraded(bundle_version, verdicts),
         "suppressed": [],
+        "avoiding": None,
         # NO EMBEDDED RAIL, for the reason `api/tonight.py` gives one file away: one drawer, not
         # one per route. This payload carried `rail.recent(user_id=...)` because the drawer was
         # mounted on Home and decision 117's gate was asked of the response
@@ -1401,12 +1486,18 @@ async def build_home(
         }
         return payload
 
+    avoided = await taste.avoided_for(conn, user_id=user.id, version=ctx.version)
     shelves, dropped = await build_shelves(
         conn,
         ctx=ctx,
         zero_verdicts=(verdicts == 0 and bundle_version is not None),
         partner=partner,
+        avoided=avoided,
     )
+    # Decision 512, said where the member can read it: what their shelves leave out, by the
+    # vocabulary's names and the canonical genres, and the film length past which they stop.
+    # Plain facts about their own ratings, so ungated; null when nothing is left out.
+    payload["avoiding"] = avoided.as_dict() if avoided else None
     payload["shelves"] = [s.as_dict() for s in shelves]
     payload["sections"] = sections_by_kind(shelves, chosen)
     payload["shelves_total"] = len(shelves)

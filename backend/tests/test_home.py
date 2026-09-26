@@ -2046,7 +2046,12 @@ async def test_a_title_appears_on_at_most_one_shelf_per_kind(world):
 async def test_your_top_picks_claims_first_and_keeps_its_whole_list(world):
     """Its why-line promises "the ones we think you'll enjoy most", so no shelf may thin it: the
     shelf that loses a title to it is the one below. Shelf 1's best member is raised into the top
-    twelve here - "Your top picks" shows it and shelf 1 fills from its next member."""
+    twelve here - "Your top picks" shows it and shelf 1 fills from its next candidates.
+
+    Which next candidates is decision 513's: with 1001 gone, the three members left hold less
+    specificity-weighted likeness than the three decoys, whose `period` is carried by four owned
+    films against `morally-grey`'s five, so the shelf names the decoys' pair. It named the three
+    members when likeness was a count of shared terms (decision 475)."""
     await world.db.execute(
         "UPDATE user_score SET score = 5.0 WHERE title_id = 1001 AND user_id = $1", world.patrick
     )
@@ -2055,7 +2060,9 @@ async def test_your_top_picks_claims_first_and_keeps_its_whole_list(world):
     assert [c["title_id"] for c in top["items"]][0] == 1001
     assert len(top["items"]) == shelves.SHELF_CAP
     first = world.section(payload, "because_anchor", "movie")
-    assert [c["title_id"] for c in first["items"]] == [1002, 1003, 1004]
+    assert 1001 not in {c["title_id"] for c in first["items"]}
+    assert [c["title_id"] for c in first["items"]] == ids(1000, DECOYS)
+    assert first["why"] == "shares obsession + period with it", first["why"]
 
 
 async def test_the_floor_applies_after_the_claim_and_says_so(world):
@@ -2347,3 +2354,320 @@ async def test_home_counts_the_library_the_shelves_draw_on(world):
     )
     payload = await world.home(kinds=("movie",))
     assert payload["library"] == {"movie": len(MOVIES), "series": len(SERIES)}
+
+
+# --- decision 512: what a member has disliked stays off their shelves --------------------------
+#
+# Patrick's live verdicts are "liked" on the anchor and on offsets 12-20 of each kind, and "fine"
+# on 21 (the superseded row `seed` writes is the newest non-re-ask one). Jenny has none. A pattern
+# is made here by tagging four of his rated SERIES with one term and turning those verdicts into
+# "disliked" - series, because the evidence reads both kinds and his films then keep the ten
+# liked verdicts the runtime ceiling needs. The term is a `mood`: the avoid set reads the mood,
+# themes and sensibility facets only.
+
+GORE = ("gore", "mood", "gory")
+GORE_CARRIERS = (1117, 1118, 1119, 1120)
+
+
+async def _term(db, term: str, facet: str, label: str | None = None) -> None:
+    await db.execute(
+        "INSERT INTO dna_term (version, term, facet, label) VALUES ($1, $2, $3, $4)",
+        VOCAB, term, facet, label,
+    )
+
+
+async def _verdict(db, user_id: int, title_id: int, value: int) -> None:
+    """One live verdict, replacing any earlier one - `seed` wrote exactly one per title."""
+    await db.execute("DELETE FROM verdict WHERE user_id = $1 AND title_id = $2", user_id, title_id)
+    await db.execute(
+        "INSERT INTO verdict (user_id, title_id, value) VALUES ($1, $2, $3)",
+        user_id, title_id, value,
+    )
+
+
+def _claiming_ids(payload, kind) -> set[int]:
+    return {c["title_id"] for _, s in _claiming_sections(payload, kind) for c in s["items"]}
+
+
+async def test_a_pattern_the_member_disliked_four_times_leaves_every_ranking_shelf(world):
+    """Decision 512. A member who has disliked four titles carrying one term, and liked none, is
+    shown no film carrying it on any shelf that ranks for them: not shelf 1 (1001), not the
+    frontier (1008), not the sweet spot (1005), not "Under 110 minutes" (1024). "New in the
+    library" reports an arrival and keeps 1008. The payload names what is left out by label,
+    beside the runtime ceiling his ten liked films of 120 minutes set."""
+    term, facet, label = GORE
+    await _term(world.db, term, facet, label)
+    for title_id in GORE_CARRIERS:
+        await _tag(world.db, title_id, term, facet, 2)
+        await _verdict(world.db, world.patrick, title_id, 0)
+    for title_id in (1001, 1005, 1008, 1024):
+        await _tag(world.db, title_id, term, facet, 2)
+
+    payload = await world.home(kinds=("movie",))
+    assert payload["avoiding"] == {"labels": ["gory"], "runtime_max": 180}, payload["avoiding"]
+    shown = _claiming_ids(payload, "movie")
+    assert not shown & {1001, 1005, 1008, 1024}, shown
+    first = world.section(payload, "because_anchor", "movie")
+    # Three members left and three decoys, one of them avoided: the members' pair is the only
+    # one still carried by three.
+    assert [c["title_id"] for c in first["items"]] == [1002, 1003, 1004]
+    frontier = world.section(payload, "never_watched_term", "movie")
+    assert sorted(c["title_id"] for c in frontier["items"]) == [1009, 1010, 1011]
+    fresh = world.section(payload, "new_in_library", "movie")
+    assert 1008 in {c["title_id"] for c in fresh["items"]}, "an arrival is reported, not ranked"
+    assert world.section(payload, "shared_sweet_spot", "movie") is None, (
+        "the two decoys left are under the floor of three"
+    )
+
+
+async def test_a_pattern_the_member_also_liked_is_not_avoided(world):
+    """Decision 512: never avoided if any liked title carries it - four dislikes beside one like
+    is a taste with an exception, not a pattern to hide."""
+    term, facet, label = GORE
+    await _term(world.db, term, facet, label)
+    for title_id in (*GORE_CARRIERS, 1116):
+        await _tag(world.db, title_id, term, facet, 2)
+    for title_id in GORE_CARRIERS:
+        await _verdict(world.db, world.patrick, title_id, 0)
+    await _tag(world.db, 1001, term, facet, 2)
+
+    payload = await world.home(kinds=("movie",))
+    assert payload["avoiding"]["labels"] == [], payload["avoiding"]
+    first = world.section(payload, "because_anchor", "movie")
+    # 1001 is back, last: the extra term it now carries makes it a little less like the anchor.
+    assert [c["title_id"] for c in first["items"]] == [1002, 1003, 1004, 1001]
+
+
+async def test_the_shared_shelf_leaves_out_what_either_member_avoids(world):
+    """Decision 512: "you would both enjoy these" is false of a title one of them has turned down
+    the pattern of four times. Jenny avoids gore; Patrick liked the same four films, so his own
+    shelves still carry them and only the shared one leaves 1005 out."""
+    term, facet, label = GORE
+    await _term(world.db, term, facet, label)
+    for title_id in (1012, 1013, 1014, 1015):
+        await _tag(world.db, title_id, term, facet, 2)
+        await _verdict(world.db, world.jenny, title_id, 0)
+    await _tag(world.db, 1005, term, facet, 2)
+
+    payload = await world.home(kinds=("movie",))
+    assert payload["avoiding"]["labels"] == [], "Patrick liked all four; the pattern is Jenny's"
+    sweet = world.section(payload, "shared_sweet_spot", "movie")
+    assert sweet is None or 1005 not in {c["title_id"] for c in sweet["items"]}
+    top = world.section(payload, "top_of_ledger", "movie")
+    assert 1012 in {c["title_id"] for c in top["items"]}, "his own shelf keeps what he liked"
+
+
+async def test_a_film_far_longer_than_anything_the_member_liked_leaves_the_shelves(world):
+    """Decision 512's runtime ceiling: once a member has liked ten films, a film running more than
+    half an hour past the longest of them - and past three hours - is left out. Patrick's ten
+    liked films run 120 minutes, so the ceiling is three hours: 1021 at 250 minutes leaves "Your
+    top picks", 1022 at exactly 180 stays, and a liked film's own length moves the ceiling."""
+    await world.db.execute("UPDATE title SET runtime_min = 250 WHERE id = 1021")
+    await world.db.execute("UPDATE title SET runtime_min = 180 WHERE id = 1022")
+    payload = await world.home(kinds=("movie",))
+    assert payload["avoiding"] == {"labels": [], "runtime_max": 180}, payload["avoiding"]
+    top = {c["title_id"] for c in world.section(payload, "top_of_ledger", "movie")["items"]}
+    assert 1021 not in top and 1022 in top, top
+
+    await world.db.execute("UPDATE title SET runtime_min = 230 WHERE id = 1012")
+    payload = await world.home(kinds=("movie",))
+    assert payload["avoiding"]["runtime_max"] == 260
+    top = {c["title_id"] for c in world.section(payload, "top_of_ledger", "movie")["items"]}
+    assert 1021 in top, top
+
+
+# --- decision 513: shelf 1's likeness is specificity-weighted and keeps the anchor's form -------
+
+
+async def test_shelf_one_weighs_a_shared_term_by_how_rare_it_is(world):
+    """Decision 513. Every candidate here shares exactly two of the anchor's terms, so a count
+    cannot tell them apart and the widest pair wins: seventeen films carry `common` + `obsession`.
+    Weighted by rarity in the owned library, the three films carrying `rare-a` + `rare-b` (four
+    carriers each, the anchor's included) are the anchor's nearest, and the shelf names them."""
+    for term, label in (("common", "common thread"), ("rare-a", "rare one"),
+                        ("rare-b", "rare two")):
+        await _term(world.db, term, "themes", label)
+    for term in ("common", "rare-a", "rare-b"):
+        await _tag(world.db, 1000, term, "themes", 2)
+    for title_id in (1030, 1031, 1032):
+        for term in ("rare-a", "rare-b"):
+            await _tag(world.db, title_id, term, "themes", 2)
+    for title_id in range(1033, 1050):
+        await _tag(world.db, title_id, "common", "themes", 2)
+        await _tag(world.db, title_id, "obsession", "themes", 2)
+
+    section = world.section(await world.home(kinds=("movie",)), "because_anchor", "movie")
+    assert [c["title_id"] for c in section["items"]] == [1030, 1031, 1032], section["items"]
+    assert section["why"] == "shares rare one + rare two with it", section["why"]
+
+
+async def _animated(db, *title_ids: int) -> None:
+    for title_id in title_ids:
+        await db.execute(
+            "INSERT INTO title_genre (title_id, genre, source) VALUES ($1, 'Animation', 'tmdb')",
+            title_id,
+        )
+
+
+async def test_shelf_one_keeps_to_the_anchors_form(world):
+    """Decision 513: a live-action anchor draws live-action titles and an animated one animated
+    titles ("Because you liked Chernobyl" drew Attack on Titan). Read through decision 473's
+    canonical Animation, so trakt's "anime" would answer too."""
+    await _animated(world.db, *ids(1000, MEMBERS))
+    live = world.section(await world.home(kinds=("movie",)), "because_anchor", "movie")
+    assert [c["title_id"] for c in live["items"]] == ids(1000, DECOYS), (
+        "the four animated members are not a live-action anchor's nearest"
+    )
+
+    await _animated(world.db, 1000)
+    drawn = world.section(await world.home(kinds=("movie",)), "because_anchor", "movie")
+    assert [c["title_id"] for c in drawn["items"]] == ids(1000, MEMBERS)
+
+
+# --- decision 514: the frontier's "which you like" is the member's own word ---------------------
+
+
+async def test_which_you_like_rests_on_three_liked_titles_not_on_the_ledger(world):
+    """Decision 514. `cosy` sits on three rated films whose Ledger CDF is 0.90, which is all the
+    old reading asked; turn one of the three verdicts into "fine" and only two liked titles
+    carry it, so "close to cosy, which you like" is no longer a sentence the person said. The
+    film frontier is absent and says why; the series one, untouched, still ships."""
+    await _verdict(world.db, world.patrick, 1014, 1)
+    await world.client.post("/api/auth/preferences", json={"show_model": True})
+    payload = await world.home()
+    assert world.section(payload, "never_watched_term", "movie") is None
+    reason = next(
+        s["reason"] for s in payload["suppressed"]
+        if s["shelf"] == "never_watched_term" and s["kind"] == "movie"
+    )
+    assert "liked on 3 titles" in reason, reason
+    assert world.section(payload, "never_watched_term", "series") is not None
+
+
+async def test_the_frontier_names_a_neighbour_from_another_facet(world):
+    """Decision 514: inside one facet a near term is the same thing under a narrower or broader
+    name, and "never watched World War I, close to turn of the 20th century, which you like"
+    reads as the contradiction it is. Filed under neon's own facet, cosy is no neighbour."""
+    await world.db.execute(
+        "UPDATE dna_tag SET facet = 'visual' WHERE term = 'cosy' AND title_id < 1100"
+    )
+    payload = await world.home()
+    assert world.section(payload, "never_watched_term", "movie") is None
+    series = world.section(payload, "never_watched_term", "series")
+    assert series["why"] == "close to cosy, which you like"
+
+
+# --- the sweet spot on one scale (§6.2 step 3, decision 477) ------------------------------------
+
+
+async def test_the_sweet_spot_ranks_the_two_members_on_one_scale(world):
+    """§6.0 row 4's "ranked as Tonight's pool is" is §6.2 step 3's plain average of each member's
+    scores rank-standardised over the library (decision 477). Jenny's scores are shrunk to a
+    hundredth, and she prefers 1007 to the others by a wide rank margin: averaged raw, Patrick's
+    units decide ([1005, 1006, 1007]); on one scale her preference counts as much as his."""
+    await world.db.execute(
+        "UPDATE user_score SET score = score * 0.01 WHERE user_id = $1", world.jenny
+    )
+    for title_id, score in ((1005, 0.0043), (1006, 0.0044), (1007, 0.0061)):
+        await world.db.execute(
+            "UPDATE user_score SET score = $3 WHERE user_id = $1 AND title_id = $2",
+            world.jenny, title_id, score,
+        )
+    sweet = world.section(await world.home(kinds=("movie",)), "shared_sweet_spot", "movie")
+    assert [c["title_id"] for c in sweet["items"]] == [1007, 1005, 1006]
+
+
+# --- decision 515: the catalogue for you, and the card's why ----------------------------------
+
+
+async def _titles(client, **params):
+    query = [("kind", k) for k in params.pop("kinds", ("movie", "series"))]
+    query += [(k, v) for k, v in params.items()]
+    response = await client.get("/api/titles", params=query + [("limit", 200)])
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+async def test_the_catalogue_is_for_you_by_default_and_partitions_by_kind(world):
+    """Decision 515. Patrick's fold-in is fitted to his own ratings for both kinds, so the grid
+    orders by his score by default - and because that is a ranking, films first and then series
+    (§4.1 rule 5, decision 18): every series here outscores every film, so a merged ranking would
+    open on a series."""
+    listing = await _titles(world.client)
+    assert listing["sort"] == "for_you"
+    kinds = [item["kind"] for item in listing["items"]]
+    assert kinds == ["movie"] * len(MOVIES) + ["series"] * len(SERIES)
+    for kind in ("movie", "series"):
+        run = [item["id"] for item in listing["items"] if item["kind"] == kind]
+        assert run == sorted(run, key=lambda t: -score_of(t)), kind
+
+
+async def test_the_catalogue_is_newest_first_until_the_members_own_ratings_rank_it(world):
+    """Decision 515: "for you" is the default only for a profile fitted to the member's own
+    ratings. Jenny has none, so she gets the year order even when she asks, and the response says
+    which order it is really in. A fit whose personal half has no weight (β 0) is the crowd's
+    order - "what most people rate highest" - and is not "for you" either."""
+    jenny = await world.sign_in_jenny()
+    listing = await _titles(jenny, sort="for_you")
+    assert listing["sort"] == "newest"
+    years = [item["year"] for item in listing["items"]]
+    assert years == sorted(years, reverse=True)
+
+    await world.db.execute("UPDATE user_vector SET blend_beta = 0 WHERE user_id = $1", world.patrick)
+    assert (await _titles(world.client))["sort"] == "newest"
+
+
+async def test_newest_and_a_search_keep_their_own_orders(world):
+    """Asked for, the year order stands; under a search the order is best match first (decision
+    472) whichever sort was asked, and `sort` says `match`."""
+    newest = await _titles(world.client, sort="newest")
+    assert newest["sort"] == "newest"
+    years = [item["year"] for item in newest["items"]]
+    assert years == sorted(years, reverse=True)
+    searched = await _titles(world.client, q="Home Film 1001", sort="for_you")
+    assert searched["sort"] == "match"
+    assert searched["items"][0]["id"] == 1001
+    refused = await world.client.get(
+        "/api/titles", params=[("kind", "movie"), ("sort", "popular")]
+    )
+    assert refused.status_code == 422
+
+
+async def _why(client, title_id: int):
+    response = await client.get(f"/api/titles/{title_id}")
+    assert response.status_code == 200, response.text
+    return response.json()["why"]
+
+
+async def test_the_title_card_says_which_liked_title_it_is_like(world):
+    """Decision 515: one member-register sentence, true of this title for this reader. 1001 shares
+    the anchor's two quoted terms, and the anchor is a film Patrick liked; the rarer and more
+    prominent of the two is named first. Jenny has liked nothing and ranked nothing: None."""
+    assert await _why(world.client, 1001) == (
+        "Because you liked Home Film 1000 — they share morally-grey + obsession"
+    )
+    jenny = await world.sign_in_jenny()
+    assert await _why(jenny, 1001) is None
+
+
+async def test_the_title_card_says_nothing_of_a_title_seen_or_avoided(world):
+    """Nothing is suggested about a title the member has seen, and the card does not argue for a
+    title their shelves leave out (decision 512)."""
+    assert await _why(world.client, 1012) is None
+    term, facet, label = GORE
+    await _term(world.db, term, facet, label)
+    for title_id in GORE_CARRIERS:
+        await _tag(world.db, title_id, term, facet, 2)
+        await _verdict(world.db, world.patrick, title_id, 0)
+    await _tag(world.db, 1001, term, facet, 2)
+    assert await _why(world.client, 1001) is None
+
+
+async def test_the_title_card_names_a_top_pick_that_nothing_liked_explains(world):
+    """With no liked title alike enough, a title the member's own ratings put in the top tenth of
+    the owned films reads as Your top picks does; 1030 carries no terms at all."""
+    assert await _why(world.client, 1030) is None
+    await world.db.execute(
+        "UPDATE user_score SET score = 5.0 WHERE user_id = $1 AND title_id = 1030", world.patrick
+    )
+    assert await _why(world.client, 1030) == "One of the ones we think you'll enjoy most"

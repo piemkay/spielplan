@@ -11811,7 +11811,7 @@ id = "library-rate-home-shelves-claim-their-titles"
 spec = "§6.0 M2 (the shelf table); decision 475"
 milestone = "M5"
 kind = "integration"
-what = "Home's shelves are built in a claim order - \"Your top picks\" first, keeping its whole list, then the table's order - and rendered in the table's order; no title appears on two claiming shelves of one kind (\"New in the library\" is exempt and never thinned); a shelf left under the floor of three by the claim is absent and its reason says so. Shelf 1 shows the unseen owned titles sharing the most of the anchor's terms and names a pair every card carries; the anchor is the seen, rated title with the highest tier the board shows, then the live verdict, before the Ledger's s. The sweet spot's 0.70 floor is read against the owned library. Decision 475."
+what = "Home's shelves are built in a claim order - \"Your top picks\" first, keeping its whole list, then the table's order - and rendered in the table's order; no title appears on two claiming shelves of one kind (\"New in the library\" is exempt and never thinned); a shelf left under the floor of three by the claim is absent and its reason says so. Shelf 1 shows the unseen owned titles most like the anchor (their shared terms weighed by rarity since the second household test) and names a pair every card carries; the anchor is the seen, rated title with the highest tier the board shows, then the live verdict, before the Ledger's s. The sweet spot's 0.70 floor is read against the owned library. Decision 475."
 why = "§6.0 neither forbids nor requires repeats, and \"Top of your ledger\"'s why-line promises the person's highest, so claim priority is kept apart from display order; the widest-pair rule named an anchor's most generic terms and let the score's extremes pick the cards."
 tests = [
     "backend/tests/test_home.py::test_a_title_appears_on_at_most_one_shelf_per_kind",
@@ -12410,4 +12410,92 @@ tests = [
     "frontend/src/routes/rank/rank-page.test.js::filters by title as the person types, without waiting for Enter (round-2 R5)",
     "frontend/src/routes/rank/rank-page.test.js::names every picker above it, and the runtime box no longer clips its name (R5)",
     "e2e/specs/13-rank.spec.js::the title box filters as it is typed in, and every picker says what it picks",
+]
+
+# --- Home's recommendations after the second household user test (owner instruction of 2026-09-26) ---
+#
+# Stream S3's rows. Each `spec` cites the sections alone and names its decision (512-515) in
+# `what`/`why`, because `_unresolvable_decision_citations` reddens a shipped row whose `spec` cites a
+# decision docs/spec-v2.2-proposals.md does not yet carry; the integration step appends each
+# decision to its row's `spec` when it records them.
+
+# Decision 512. Chainsaw Man among the top picks of the member who had disliked every violent
+# film she rated; Past Lives and The Handmaiden for the member who had disliked every romance; a
+# four-hour cut of Kill Bill as a top pick.
+[[requirement]]
+id = "library-rate-home-shelves-leave-out-what-a-member-disliked"
+spec = "§6.0 M2 (the shelf table) + §4.1 rules 1 and 2 + §6.2 step 3"
+milestone = "M5"
+kind = "integration"
+what = "Every ranking shelf leaves out, for the member it ranks for, any title carrying a mood, themes or sensibility term (either tier, presence only) or a canonical genre that at least four of their disliked titles carry, none of their liked ones and no more of their fine ones than disliked - read from both kinds' live verdicts - and any film running more than half an hour past the longest film they have liked, never under three hours, once they have liked ten films; the shared shelf leaves out what either member avoids; New in the library leaves out nothing; the payload names what is left out by label and the ceiling in minutes. Decision 512."
+why = "The second household test found each member's shelves showing the pattern they had turned down four times over, and the joint shelf showing one member's disliked genre to the other; the ordering stays the model's, and the shelves stop contradicting what the person said."
+tests = [
+    "backend/tests/test_home.py::test_a_pattern_the_member_disliked_four_times_leaves_every_ranking_shelf",
+    "backend/tests/test_home.py::test_a_pattern_the_member_also_liked_is_not_avoided",
+    "backend/tests/test_home.py::test_the_shared_shelf_leaves_out_what_either_member_avoids",
+    "backend/tests/test_home.py::test_a_film_far_longer_than_anything_the_member_liked_leaves_the_shelves",
+]
+
+# The sweet spot averaged the two members' raw scores, which sit on two scales; §6.0 row 4 says it
+# is ranked as Tonight's pool is, and §6.2 step 3 reads that pool rank-standardised (decision 477).
+[[requirement]]
+id = "library-rate-sweet-spot-ranks-both-members-on-one-scale"
+spec = "§6.0 M2 (the shelf table, row 4) + §6.2 step 3 (the plain average, rank-standardised)"
+milestone = "M5"
+kind = "integration"
+what = "The shared shelf orders its titles by the plain average of each member's score rank-standardised over the owned library of the kind - the normal quantile of their own rank - so a member whose raw scores are a hundredth of the other's still counts as much; the 0.70 floor per member stands."
+why = "Decision 477 puts Tonight's order on one scale; the shelf that says it is ranked as Tonight's pool is kept averaging raw scores, where one member's units could outvote the other's."
+tests = [
+    "backend/tests/test_home.py::test_the_sweet_spot_ranks_the_two_members_on_one_scale",
+    "backend/tests/test_home.py::test_the_sweet_spot_is_unseen_by_both_and_high_for_both",
+]
+
+# Decision 513. "Because you liked The Grand Budapest Hotel - shares mentor & protege + frenetic"
+# over GoodFellas and Dune: Part Two; "Because you liked Chernobyl" over Attack on Titan.
+[[requirement]]
+id = "library-rate-shelf-one-likeness-weighs-rarity-and-keeps-the-form"
+spec = "§6.0 M2 (the shelf table, row 1) + §4.1 rules 1 and 2"
+milestone = "M5"
+kind = "integration"
+what = "Shelf 1's cards are the unseen owned titles most like the anchor by the cosine of their term sets weighted by rarity in the owned library of the kind (both tiers, presence only), in the anchor's own form - animated or live-action by the canonical Animation genre - and its pair is the one whose carriers among the twenty-four nearest hold the most likeness, weighed by the two terms' rarity; every card carries both named terms. Decision 513, amending decision 475."
+why = "Counting shared terms let the generic ones decide both the cards and the pair, and an anchor's shared moods drew animated series onto a live-action drama's shelf."
+tests = [
+    "backend/tests/test_home.py::test_shelf_one_weighs_a_shared_term_by_how_rare_it_is",
+    "backend/tests/test_home.py::test_shelf_one_keeps_to_the_anchors_form",
+    "backend/tests/test_home.py::test_your_top_picks_claims_first_and_keeps_its_whole_list",
+    "backend/tests/test_home.py::test_a_card_carrying_only_one_of_the_two_named_terms_is_not_on_the_shelf",
+]
+
+# Decision 514. "You've never watched anything World War II - close to wartime backdrop, which you
+# like", resting on one projected tag on The Grand Budapest Hotel.
+[[requirement]]
+id = "library-rate-frontier-which-you-like-is-the-members-own-word"
+spec = "§6.0 M2 (the shelf table, row 3) + §6.4 (explore recommendations)"
+milestone = "M5"
+kind = "integration"
+what = "The frontier's neighbour is a term at least three of the member's liked titles of the kind carry and more than half of their rated titles carrying it are liked - their live verdicts, not the Ledger's CDF - from another facet than the unvisited term, whose carriers exclude the titles the member avoids. Decision 514."
+why = "The average CDF over whatever carried a term had no support floor, so one liked film's terms became 'which you like'; and a neighbour from the candidate's own facet named the same thing twice."
+tests = [
+    "backend/tests/test_home.py::test_which_you_like_rests_on_three_liked_titles_not_on_the_ledger",
+    "backend/tests/test_home.py::test_the_frontier_names_a_neighbour_from_another_facet",
+    "backend/tests/test_home.py::test_the_frontier_shelf_names_a_term_no_seen_title_carries",
+]
+
+# Decision 515. A genre filter or "in my library" turned Home into a list sorted by year, and the
+# title card never said why a title was suggested.
+[[requirement]]
+id = "library-catalogue-sorts-for-you-and-the-card-says-why"
+spec = "§6.0 M0 (the catalog; the title detail card) + §4.1 rule 5 + §6.8 (quiet reasons)"
+milestone = "M5"
+kind = "integration"
+what = "GET /api/titles takes sort=for_you|newest and answers the order it is really in: for_you - by the member's own score, films then series, never one interleaved ranking - is the default once a fold-in fitted to their own ratings, with weight on its personal half, ranks a selected kind, newest otherwise and whenever asked, and match under a search; an unknown sort is a 422. GET /api/titles/{id} carries why: 'Because you liked {X} — they share {a} + {b}' for a title alike enough to a liked title of its kind and form, 'One of the ones we think you'll enjoy most' for one in the top tenth of the member's own ranking of the owned library, and None for a title seen, rated, avoided or neither. The dev harness answers both keys. Decision 515."
+why = "Both members lost their personal order the moment they filtered, and opened title after title from a shelf with no sentence on the card saying why it was there."
+tests = [
+    "backend/tests/test_home.py::test_the_catalogue_is_for_you_by_default_and_partitions_by_kind",
+    "backend/tests/test_home.py::test_the_catalogue_is_newest_first_until_the_members_own_ratings_rank_it",
+    "backend/tests/test_home.py::test_newest_and_a_search_keep_their_own_orders",
+    "backend/tests/test_home.py::test_the_title_card_says_which_liked_title_it_is_like",
+    "backend/tests/test_home.py::test_the_title_card_says_nothing_of_a_title_seen_or_avoided",
+    "backend/tests/test_home.py::test_the_title_card_names_a_top_pick_that_nothing_liked_explains",
+    "backend/tests/test_devstub_contract.py::test_the_harness_answers_the_catalogue_sort_and_the_card_why_the_app_answers",
 ]

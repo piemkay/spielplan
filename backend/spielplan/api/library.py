@@ -18,8 +18,8 @@ from spielplan.api import auth as auth_api
 from spielplan.api.deps import DB, ActiveUser
 from spielplan.core.config import settings
 from spielplan.db import dna_terms, genres, library
-from spielplan.home import rail
-from spielplan.models import basis
+from spielplan.home import rail, suggest
+from spielplan.models import artifacts, basis
 from spielplan.rate import direct
 from spielplan.scoring import serve
 
@@ -39,6 +39,7 @@ async def list_titles(
     seen: Literal["any", "seen", "unseen"] = "any",
     person_id: list[int] | None = Query(None),
     owned_only: bool = False,
+    sort: Literal["for_you", "newest"] | None = None,
     limit: int = Query(60, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ) -> dict[str, Any]:
@@ -49,6 +50,11 @@ async def list_titles(
 
     `person_id` repeats the same way: a credit row can stand for several person rows of one
     human (`db/library.fold_credits`), and a tap on it filters by the whole set.
+
+    `sort` (decision 515): `for_you` orders by the member's own score, films then series, and is
+    the default once their own ratings rank a selected kind; `newest` is the year order. The
+    response's `sort` is the order the list is really in - `match` under a search (decision 472),
+    and `newest` when nothing of theirs ranks the selection yet, whatever was asked.
     """
     try:
         kinds = library.normalise_kinds(kind)
@@ -57,6 +63,17 @@ async def list_titles(
         genre = genres.canonical(genre) if genre else None
     except ValueError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+
+    bundle = await artifacts.active_bundle_version(conn)
+    personal = await serve.personal_kinds(
+        conn, user_id=user.id, kinds=kinds, bundle_version=bundle
+    )
+    if q and q.strip():
+        effective = "match"
+    elif sort == "newest" or not personal:
+        effective = "newest"
+    else:
+        effective = "for_you"
 
     rows, total = await library.list_titles(
         conn,
@@ -70,9 +87,12 @@ async def list_titles(
         owned_only=owned_only,
         limit=limit,
         offset=offset,
+        sort="for_you" if effective == "for_you" else "newest",
+        bundle_version=bundle,
     )
     return {
         "kinds": kinds,
+        "sort": effective,
         "total": total,
         # §6.0: a toggle that hides things has to say how many. Silent truncation is the
         # failure this control was introduced to fix, so the count travels with the list —
@@ -156,6 +176,12 @@ async def title_detail(title_id: int, conn: DB, user: ActiveUser, request: Reque
         },
         # Decision 487: the person's own answer, so the card can show which one is standing.
         "my_verdict": await direct.live_verdict(conn, user_id=user.id, title_id=title_id),
+        # Decision 515: one plain sentence on why this title is suggested to this member, or
+        # None where nothing is being suggested (seen, rated, avoided, or simply not a pick).
+        "why": await suggest.why_suggested(
+            conn, user_id=user.id, title_id=title_id,
+            bundle_version=await artifacts.active_bundle_version(conn),
+        ),
         "actions": {
             "play_on_jellyfin": jf_url,
             # Which of the two causes it is when Play is unavailable; None when it is not.

@@ -169,7 +169,8 @@ async def home_shelves(
     slim = {
         key: payload[key]
         for key in ("kinds", "shelves", "sections", "shelves_total", "verdict_count",
-                    "degraded", "partner", "bundle", "vocabulary", "suppressed", "library")
+                    "degraded", "partner", "bundle", "vocabulary", "suppressed", "library",
+                    "avoiding")
         if key in payload
     }
     return rail.redact(slim, show_model=rail.visible_to(user))
