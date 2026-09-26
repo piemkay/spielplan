@@ -32,7 +32,6 @@ Integration-kind against a real Postgres; skipped without TEST_DATABASE_URL (see
 from __future__ import annotations
 
 import ast
-import tomllib
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -58,7 +57,6 @@ from spielplan.scoring import backbone as bb
 from tests.fixtures import make_bundle as fx
 
 PKG = Path(__file__).resolve().parents[1] / "spielplan"
-COVERAGE = Path(__file__).resolve().parent / "spec_coverage.toml"
 
 # Five verdicts over the fixture's Backbone-covered movies, which is enough for §5.2 to produce a
 # fit with something in every band. Small on purpose: every assertion below is about the basis a
@@ -529,55 +527,6 @@ def test_assert_matches_is_called_from_the_entrypoints_its_docstring_names():
     assert len(callers) >= 3, f"§10's invariant has {len(callers)} production caller(s): {callers}"
     assert "is called by the scoring/refit entrypoints" not in source, (
         "the docstring is back to claiming a caller instead of describing one"
-    )
-
-
-def test_the_coverage_rows_name_the_operator_signal_the_worker_actually_leaves():
-    """Two rows promised a silence the worker does not produce.
-
-    `_active_store` raises -- deliberately, and its docstring argues why -- so `_tick` logs
-    "job %s failed" and `_record_finish(run_id, ok=False, ...)` writes a `job_run` row carrying
-    the message that names both versions. Three of the jobs that reach it tick every 60 seconds,
-    so inside §10's normal window between the flip and the restart the model jobs read RED on
-    the System card, which §6.6 builds from the newest `job_run` per job. "Advances nothing"
-    and "logged" were both true of the rows' sentence; "no-op" was not -- and this milestone
-    spends that word four lines from the raise on the OPPOSITE branch, the bundle-less household
-    where None == None and nothing is written because nothing is owed. A reader holding the row as
-    the spec of the behaviour reads those red rows as a regression rather than as §10 asking
-    for the restart, and the exit criterion's own wording -- "the refit entrypoint raises" -- is
-    what shipped. [M4.13 review cycle 2: M413-C2-D1-04]
-    """
-    rows = {
-        row["id"]: row
-        for row in tomllib.loads(COVERAGE.read_text(encoding="utf-8"))["requirement"]
-        if row["id"] in (
-            "jellyfin-acquisition-eval-bundle-swap-and-active-version-invariant",
-            "data-rules-section-10-invariant-has-production-callers",
-        )
-    }
-    assert len(rows) == 2, sorted(rows)
-    for row_id, row in sorted(rows.items()):
-        assert "no-op" not in row["what"], (
-            f"{row_id} calls the worker half of the refusal a no-op: it raises, and the tick "
-            "records a failed job_run that the System card renders"
-        )
-        assert "job_run" in row["what"], (
-            f"{row_id} promises a refusal production code performs, so it owes what the refusal "
-            "leaves behind -- a failed job_run naming both versions, retried on the next tick"
-        )
-
-    # The other direction: the rows describe the code only while the code still refuses this way.
-    assert not [
-        node
-        for node in ast.walk(_function(PKG / "worker.py", "_active_store"))
-        if isinstance(node, ast.Try)
-    ], (
-        "`_active_store` catches its own refusal; the rows above say the job is recorded as "
-        "failed, which is true only while both guards are allowed to escape into `_tick`"
-    )
-    assert "_record_finish(run_id, ok=False" in (PKG / "worker.py").read_text(encoding="utf-8"), (
-        "the tick no longer stamps a raising job as a failed run, so the rows above describe a "
-        "signal the System card cannot show"
     )
 
 

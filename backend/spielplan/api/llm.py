@@ -109,7 +109,7 @@ router = APIRouter(prefix="/api/admin", tags=["admin", "llm"])
 UNKNOWN = "unknown"
 
 # Decision 338: sync only at M5. Reported rather than omitted, so M5.7's batch/sync toggle ships
-# disabled and says why instead of enabled and inert. `ops/devstub.py` imports it, not a copy.
+# disabled and says why instead of enabled and inert.
 BATCH_UNAVAILABLE = (
     "batch endpoints are not used at M5: every call is synchronous, because a batch answers in"
     " hours and the acquisition board has no state for a title waiting on one (decision 338)"

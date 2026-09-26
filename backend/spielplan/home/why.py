@@ -41,7 +41,7 @@ from spielplan.ledger.observations import LIVE_LABEL_SQL
 
 # `terms_for`'s default: a title's eight best-named terms. It was shelf 1's candidate pool (28
 # pairs) until decision 513 had shelf 1 read every term of its anchor (`limit=None`); the default
-# now serves the callers that want a title's best-named few (ops/m49_exit_criterion.py).
+# now serves the callers that want a title's best-named few.
 ANCHOR_TERM_POOL = 8
 
 # How many terms a why-line may name from the intersection all its cards carry. Copy, not a

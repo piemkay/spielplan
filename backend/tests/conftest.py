@@ -51,15 +51,13 @@ os.environ.setdefault("PUBLIC_URL", "http://localhost:8080")
 # have it. `SPIELPLAN_INSECURE_DEV` is decision 181's single off-switch for every §2 refusal, and
 # README's "Developing" paragraph hands it to the developer two lines after saying a hand-run
 # backend reads `.env` from its own working directory — which is the directory pytest runs from.
-# Left alone, a flag set there or exported disarms `test_config.py`'s eight refusal tests, the
-# anonymous-schema assertion in `test_http_seam.py` four files away, and this suite's own leak
-# detector in `test_devstub_contract.py`, all of which then pass by being unable to fail.
+# Left alone, a flag set there or exported disarms `test_config.py`'s eight refusal tests and the
+# anonymous-schema assertion in `test_http_seam.py`, which then pass by being unable to fail.
 # Not `pop`: `Settings.model_config` is `SettingsConfigDict(env_file=".env", ...)`, so a `.env`
 # line survives being removed from `os.environ` (the `no_secrets_key` fixture below records the
 # same discovery about SECRETS_KEY). The environment is the higher-precedence source, so an
-# explicit "0" is the one spelling that closes both routes in — and it is the spelling
-# `ops/devstub.py:44` already documents for a developer who wants the refusals back. A test that
-# wants the flag sets it itself, with `monkeypatch.setenv`. [M4.7 spec-04; decision 181]
+# explicit "0" is the one spelling that closes both routes in. A test that wants the flag sets it
+# itself, with `monkeypatch.setenv`. [M4.7 spec-04; decision 181]
 os.environ["SPIELPLAN_INSECURE_DEV"] = "0"
 
 
@@ -414,8 +412,7 @@ async def fake_jellyfin():
         "fake_jellyfin", ROOT.parent / "ops" / "fake_jellyfin.py"
     )
     module = importlib.util.module_from_spec(spec)
-    # Registered before it is executed, which is what `import` itself does and what
-    # `test_devstub_contract.py:31-38` spends seven lines explaining: `ops/fake_jellyfin.py`
+    # Registered before it is executed, which is what `import` itself does: `ops/fake_jellyfin.py`
     # carries `from __future__ import annotations`, so Pydantic resolves its models' annotations
     # through `sys.modules[cls.__module__]`, and a missing entry surfaces as a
     # `class-not-fully-defined` error naming a model rather than this fixture. [M4.8 ti-09]

@@ -109,9 +109,8 @@ async def test_the_schema_and_both_renderers_are_404_to_an_anonymous_caller():
 def test_the_schema_still_builds_in_process_for_the_gating_sweeps():
     """The reason this fix is free: `openapi()` does not need the route.
 
-    `test_api_gating.py` walks the running app for every admin path and `test_devstub_contract.py`
-    compares the harness against `app.openapi()["paths"]`. Both read the method; only the HTTP
-    exposure is gone.
+    `test_api_gating.py` walks the running app for every admin path. It reads the method; only
+    the HTTP exposure is gone.
     """
     paths = create_app().openapi()["paths"]
     assert "/api/admin/users" in paths and "/api/health" in paths

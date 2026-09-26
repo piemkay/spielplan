@@ -15,8 +15,7 @@
  *
  * MOUNTED RATHER THAN IN PLAYWRIGHT because the condition is a property of the payload: a shelf
  * with a cold card on it and a shelf without one are two responses, and the e2e stack has
- * whichever the imported bundle happens to produce. Decision 274 leaves this layer unregistered
- * in `spec_coverage.toml` — `npm --prefix e2e run fresh` does not run vitest.
+ * whichever the imported bundle happens to produce.
  */
 
 import { flushSync, mount, unmount } from 'svelte';

@@ -46,9 +46,8 @@ class Settings(BaseSettings):
     static_dir: Path | None = Field(default=None, alias="SPIELPLAN_STATIC_DIR")
     role: str = Field(default="backend", alias="SPIELPLAN_ROLE")
 
-    # The one way past the refusals below, for the two processes that legitimately have no
-    # operator: `ops/devstub.py` (a harness with no database, no cookies worth signing and no
-    # passkeys) and README's host-run "Developing" flow. It is a field rather than a bare
+    # The one way past the refusals below, for the process that legitimately has no operator:
+    # README's host-run "Developing" flow. It is a field rather than a bare
     # `os.environ` read so that it is declared where the rest of the required config is, and it
     # announces itself at WARNING every time it is honoured — an install that reaches this line by
     # accident says so in the log rather than signing cookies with nothing.

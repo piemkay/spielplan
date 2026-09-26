@@ -129,10 +129,10 @@ def test_every_problem_is_reported_at_once():
 
 
 def test_the_dev_flag_lifts_the_refusals_and_says_so_loudly(monkeypatch, caplog):
-    """`ops/devstub.py` and README's host-run "Developing" flow have no operator and nothing
-    worth protecting, so there is an escape hatch — but it announces itself, because an install
-    that reaches this line by accident must say so in the log rather than sign cookies with
-    nothing. The WARNING is the reason this is a flag and not a quiet special case."""
+    """README's host-run "Developing" flow has no operator and nothing worth protecting, so
+    there is an escape hatch — but it announces itself, because an install that reaches this
+    line by accident must say so in the log rather than sign cookies with nothing. The WARNING is
+    the reason this is a flag and not a quiet special case."""
     monkeypatch.setenv("SPIELPLAN_INSECURE_DEV", "1")
     with caplog.at_level(logging.WARNING, logger="spielplan"):
         cfg = Settings(public_url="", session_secret="", secrets_key=None)

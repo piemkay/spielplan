@@ -189,8 +189,7 @@ def assess(
     refused: str | None,
     meter: Mapping[str, Any],
 ) -> dict[str, Any]:
-    """The quote, from what has already been read. Pure, so `ops/devstub.py` quotes its fixture with
-    this module's arithmetic and sentences rather than a copy of either.
+    """The quote, from what has already been read.
 
     `prices` is one per provider, or None when the plan was refused and `refused` is its sentence;
     `meter` is `spend.meter`'s reading. Decimals are kept: `api/` decides how money is spelled.

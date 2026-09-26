@@ -202,15 +202,13 @@ def test_the_route_and_the_registry_name_one_job_and_one_set_of_phases():
     )
     assert row.owner is None, "a live job carrying an owner is counted twice by the boot census"
 
-    # THE FOURTH PHASE, which was held by nothing. `PHASE_QUEUED`, `PHASE_RUNNING` and
-    # `PHASE_ACTIVE` are each pinned to their literal by a test in this file or in
-    # `test_devstub_contract.py`; `PHASE_FAILED` appears twice in the whole tree - its definition
-    # and `PHASE_ACTIVE if ok else PHASE_FAILED` - and its only reader anywhere is the map below,
-    # in a language no Python test reads. Rename it and the suite stays green while every refused
-    # and every reaped import writes a phase the Data tab has never heard of, which `phaseOfJob`
-    # then answers `UNKNOWN` for: the screen tells the operator it does not know what happened
-    # about an import whose report is on the same screen. The reader is what is read, for the
-    # reason `test_static_contracts.py` reads `home.svelte.js`'s FACETS.
+    # THE FOURTH PHASE, which was held by nothing. `PHASE_FAILED` appears twice in the whole
+    # tree - its definition and `PHASE_ACTIVE if ok else PHASE_FAILED` - and its only reader
+    # anywhere is the map below, in a language no Python test reads. Rename it and the suite stays
+    # green while every refused and every reaped import writes a phase the Data tab has never heard
+    # of, which `phaseOfJob` then answers `UNKNOWN` for: the screen tells the operator it does not
+    # know what happened about an import whose report is on the same screen. The reader is what is
+    # read, for the reason `test_static_contracts.py` reads `home.svelte.js`'s FACETS.
     # [M4.14 cycle 3, m414-c3-waveE-phase-failed-is-unpinned]
     assert _phase_keys_of_the_screen() == {
         worker.PHASE_QUEUED, worker.PHASE_RUNNING, worker.PHASE_ACTIVE, worker.PHASE_FAILED,

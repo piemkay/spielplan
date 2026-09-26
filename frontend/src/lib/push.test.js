@@ -11,9 +11,7 @@
  * returned a bare `null` when there was nothing local to delete, which the caller turned into an
  * empty device list.
  *
- * ASSERTED HERE AND NOT ONLY IN PLAYWRIGHT, deliberately, and the split is a layer choice rather
- * than a limit of the map (`test_spec_coverage.py::_vitest_ids` registers vitest ids since M4.9).
- * These four are pure functions of what `pushManager` returns, and a test double can hand them a
+ * ASSERTED HERE AND NOT ONLY IN PLAYWRIGHT, deliberately. These four are pure functions of what `pushManager` returns, and a test double can hand them a
  * subscription minted under a retired VAPID key — which is a state no test browser can be put into,
  * because there is no push service behind one. The story this file cannot tell is the one the
  * coverage row `push-a-second-device-registers-independently` names: only a real second browser

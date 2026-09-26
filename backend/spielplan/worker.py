@@ -1471,16 +1471,15 @@ JOBS: tuple[Job, ...] = (
     #
     # 600 s IS THE STOP GRACE, AND IT IS NOT A MARGIN CHOSEN OVER A MEASUREMENT. This line read
     # "2.4x the 127 s measured on the real bundle", and 127 s is M4.5's measurement of the work
-    # INSIDE THE REQUEST, which M4.14 superseded with its own: `ops/m414_exit_criterion.py`
-    # recorded the job at 213 s from the press in all three runs (`docs/TESTING.md`), of which
-    # ~205 s is inside the `asyncio.wait_for` below once the 5 s disconnect, the child worker's
-    # start and the poll granularity are taken off. At 300 s the real margin was about 1.4x on an
-    # NVMe box with a warm page cache, and a box a third slower could not finish an import at
-    # all: `_tick` cancels, the arm below drops the staged tree, `_reap_abandoned_import` closes
-    # the row, and the retry reproduces it exactly.
+    # INSIDE THE REQUEST, which M4.14 superseded with its own: its exit script recorded the job at
+    # 213 s from the press in all three runs, of which ~205 s is inside the `asyncio.wait_for` below
+    # once the 5 s disconnect, the child worker's start and the poll granularity are taken off. At
+    # 300 s the real margin was about 1.4x on an NVMe box with a warm page cache, and a box a third
+    # slower could not finish an import at all: `_tick` cancels, the arm below drops the staged
+    # tree, `_reap_abandoned_import` closes the row, and the retry reproduces it exactly.
     #
     # Which is the box this release leg will be run on, whenever it first runs.
-    # `.github/workflows/release.yml`'s leg 4 imports the real bundle through this job, and its
+    # `.github/workflows/release.yml`'s leg 3 imports the real bundle through this job, and its
     # runner is the household's own workstation reached through a `[self-hosted,
     # spielplan-corpus]` runner registered inside WSL or a Linux VM (`docs/TESTING.md`, "Running
     # it"). NOBODY HAS TIMED IT: no such runner has ever been registered, so the budget is sized

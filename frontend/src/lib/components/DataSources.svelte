@@ -48,10 +48,7 @@
    * sent. For TVmaze the corpus column is the show's own marketing site rather than the TVmaze
    * page, so a link there would credit the wrong work under a CC BY-SA notice — unbuildable
    * rather than unbuilt. What this block owes is the credit and the licence, and both are here.
-   * The missing half is not argued away in this comment: it is ruled on in decision 320,
-   * re-measured in decision 425 on the day the identifier landed, and published as a debt in
-   * `docs/RELEASE.md` section 4.7 — so a reader who wants the link has somewhere to find out why
-   * it is still absent and what has changed since it was first refused.
+   * The missing half is ruled on in decision 320 and re-measured in decision 425.
    * [decision 320; decision 425]
    */
 
@@ -59,8 +56,7 @@
    * Decision 298's named slot. The TMDB logo is a trademark file the owner drops in from TMDB's
    * own brand page: no agent in this repository may fabricate or download one, and a hand-drawn
    * approximation would be a worse licence problem than a missing logo. So the block renders the
-   * slot when `frontend/static/tmdb-logo.svg` is in the tree and nothing at all when it is not,
-   * and `docs/RELEASE.md` carries the absence as an owed asset.
+   * slot when `frontend/static/tmdb-logo.svg` is in the tree and nothing at all when it is not.
    *
    * Resolved by a build-time glob rather than by an `<img>` with an `onerror`, because the
    * fallback shape asks the browser for a file that is not there on every visit to /account and

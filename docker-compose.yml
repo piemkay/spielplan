@@ -182,7 +182,7 @@ services:
     # and `backend/tests/test_box_claims.py` asserts the two equal in both directions, so moving
     # either alone is a red build. M4.14 measured the real-bundle import job at 213 s on the dev
     # NVMe workstation with a warm page cache, which left a 1.4x margin;
-    # `.github/workflows/release.yml`'s leg 4 is WRITTEN to run that same import on a runner
+    # `.github/workflows/release.yml`'s leg 3 is WRITTEN to run that same import on a runner
     # registered inside WSL or a Linux VM on the household's own box, and that runner has never
     # been registered, so its speed under containerised I/O has never been measured. 1.4x over an
     # unmeasured virtualisation cost is a release leg failing on the hardware rather than on the

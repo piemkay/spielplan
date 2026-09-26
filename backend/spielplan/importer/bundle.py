@@ -733,8 +733,8 @@ def validate(
     bundle — which carries no spine of its own. `active_coverage` is decision 248's other half:
     the ids the ACTIVE backbone covers, so that coverage going BACKWARDS is refused where an id
     the install never seeded is only counted. Both come from `validate_for_install`; this
-    signature stays synchronous because the pre-flight tools (`ops/devstub.py`, the fixture
-    tests) validate a bundle with no install behind them.
+    signature stays synchronous because the fixture tests validate a bundle with no install
+    behind them.
     """
     report = ImportReport(bundle_version=bundle.version)
     refuse_on_path(bundle, report)
@@ -947,8 +947,8 @@ async def refuse_on_install_state(
     thirty-table content validation buries the one line the operator can act on.
 
     `artifacts_root` is `settings().artifacts_dir`, supplied by the two callers that stage into
-    it. Optional, because `ops/devstub.py` and the fixture pre-flight validate bundles with no
-    install behind them at all and a refusal about a directory there is no directory for would be
+    it. Optional, because the fixture pre-flight validates bundles with no install behind them
+    at all and a refusal about a directory there is no directory for would be
     an invention. With it, two more install facts become reachable from `/validate` rather than
     only from the import: whether this version is already the active one, and whether the bundle
     is sitting inside the tree the import is about to delete and re-create.
@@ -1198,7 +1198,7 @@ async def validate_for_install(
     # that reach this function are `async def`, so FastAPI's threadpool does not apply and that
     # window was spent on the API process's single loop - `app._HEALTH_TIMEOUT_S` is 2, so
     # `/api/health` answered 503 once inside `POST /import`'s validation window in every recorded
-    # run of `ops/m414_exit_criterion.py`, and its check 9 was the one red check of thirteen.
+    # run of M4.14's exit script, and its check 9 was the one red check of thirteen.
     #
     # A THREAD and not decision 252's one-shot child process: the cost that ruling was written
     # against is a blocked loop, and hashlib, sqlite3 and torch all release the GIL for the work

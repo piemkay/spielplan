@@ -195,10 +195,9 @@ class ImportReport:
         ASCII only, deliberately. CLAUDE.md's rule is load-bearing for this string in particular:
         it is the message of every `assert report.ok, report.render()` in the suite and the text
         an ops script prints, and a Windows cp1252/cp850 console raises UnicodeEncodeError on a
-        decorative glyph — the header's middle dot and the note line's check mark are why
-        `ops/m45_exit_criterion.py` works around this report by never printing it. The structured
-        findings carry a glyph map of their own in `BundleImport.svelte`, where a browser renders
-        it and it costs nothing, so no legibility is lost spending `-` and `+` here.
+        decorative glyph such as the header's middle dot or the note line's check mark. The
+        structured findings carry a glyph map of their own in `BundleImport.svelte`, where a browser
+        renders it and it costs nothing, so no legibility is lost spending `-` and `+` here.
         [M4.14 finding 2.24]
 
         THE FRAME WAS NOT THE ONLY SURFACE. That repair took the glyphs out of the header and the

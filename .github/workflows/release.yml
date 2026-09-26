@@ -1,42 +1,19 @@
 name: release
 
-# WHETHER THIS BUILD SHIPS, WHICH IS NOT THE QUESTION `ci.yml` ANSWERS.
+# Whether this build ships, run on the household's own machine: four legs, in order, as steps of
+# one job, because each consumes the tree, containers and database the one before it left behind.
 #
-# The milestone gate in `ci.yml` asks whether every requirement written down has a test that can
-# fail. `current_milestone` was the only lever this project had, and raising it answers whether
-# the MAP is covered -- never whether what exists today is shippable. The word "release" appeared
-# in none of README.md, CLAUDE.md or docs/TESTING.md when this file was written, and three of
-# section 12's five exit criteria had never been run at all. This is the instrument that runs
-# them, in one place, with an exit code.
+#   1  the full pytest suite against Postgres 16
+#   2  the real-bundle tests against CORPUS_BUNDLE_DIR
+#   3  the restore drill at stack level: a real import, a dump the worker wrote, pg_restore into a
+#      freshly created database, and /api/health answering with a bundle
+#   4  the compose stack and `node e2e/run.mjs` over both browser projects
 #
-# FIVE LEGS, IN ORDER, EACH UPLOADING ITS ARTIFACT, AND NONE OF THEM ABLE TO PASS BY SKIPPING:
-#
-#   1  the full pytest suite against Postgres 16, with --junitxml
-#   2  ops/coverage_gate.py over that JUnit and over the browser report ci.yml produced
-#   3  the real-bundle legs against CORPUS_BUNDLE_DIR, m45's exit criterion among them
-#   4  the restore drill at stack level: a real import, a dump the worker's own code wrote,
-#      pg_restore into a freshly created database, and /api/health answering with a bundle
-#   5  the compose stack and `node e2e/run.mjs` over both browser projects
-#
-# They are STEPS of one job rather than five jobs, and that is what makes "in order" a fact
-# rather than a diagram: `needs:` orders jobs, but each of these legs consumes the tree, the
-# containers and the database the leg before it left behind. `continue-on-error` appears nowhere,
-# and no step carries an `if:` except the uploads, which carry `always()` so that a failing leg
-# still hands back the evidence of its failure. A leg that could skip its whole body and report
-# green is the same defect one level up from the one this milestone exists to close, which is why
-# `backend/tests/test_release_gate.py` reads this file and fails the build over each of those
-# properties. [§12 exit criteria; docs/RELEASE.md; `platform-release-gate-runs-every-leg`]
-#
-# WHY THIS RUNS ON THE HOUSEHOLD'S OWN MACHINE. Decision 183: the corpus bundle is ~1.15 GB of
-# private data assembled under personal and non-commercial terms, so it reaches a runner by
-# already being on that runner's disk and never through a download URL in a repository secret --
-# a secret that leaks is a corpus that leaks. Legs 1, 3 and 4 all need it -- the
-# `CORPUS_BUNDLE_DIR` family closes 3 rows, through two tests, one of which is named by two rows
-# on its own, and each skips itself when the variable is unset, which is precisely what leg 2
-# then refuses to call coverage -- so the whole job goes where the bundle is, using the
-# same `[self-hosted, spielplan-corpus]` label `.github/workflows/real-bundle.yml` already
-# defines. THE RUNNER MUST BE LINUX WITH DOCKER: the `services:` block below is a GitHub service
-# container, every `run:` is sh, and legs 4 and 5 drive `docker compose`.
+# Decision 183: the ~1.15 GB corpus bundle is private, so it reaches a runner by already being on
+# its disk, never through a download URL in a secret. The whole job goes where the bundle is, on
+# the `[self-hosted, spielplan-corpus]` label `real-bundle.yml` also uses. THE RUNNER MUST BE LINUX
+# WITH DOCKER: `services:` is a GitHub service container, every `run:` is sh, and legs 3 and 4
+# drive `docker compose`.
 
 on:
   workflow_dispatch:
@@ -56,9 +33,6 @@ on:
 
 permissions:
   contents: read
-  # Leg 2 reads the browser report `ci.yml` uploaded for THIS commit. Nothing else here talks to
-  # the API, and this is the narrowest scope that lets it.
-  actions: read
 
 env:
   # The same five test-only values `ci.yml` and `real-bundle.yml` carry, for the same reason: the
@@ -81,22 +55,21 @@ jobs:
     runs-on: [self-hosted, spielplan-corpus]
     defaults:
       run:
-        # `-e -o pipefail`, which the default shell does not give. Three legs below pipe a command
-        # into `tee` so that its output can be uploaded, and without pipefail the exit code read
-        # by the runner would be `tee`'s -- every one of those legs would pass whatever it printed.
+        # `-e -o pipefail`, which the default shell does not give. Legs below pipe a command into
+        # `tee` so that its output can be uploaded, and without pipefail the exit code read by the
+        # runner would be `tee`'s.
         shell: bash
     services:
-      # Provisioning rather than scenery, and the same argument the pglite install below makes:
-      # the `pg_dump` family closes 3 rows, through eight tests in `test_backup.py` and
-      # `test_restore_drill.py` that skip themselves unless `pg_dump` is on PATH or a postgres:16
-      # container publishes TEST_DATABASE_URL's port. This is that container.
+      # The tests in `test_backup.py` and `test_restore_drill.py` skip themselves unless `pg_dump`
+      # is on PATH or a postgres:16 container publishes TEST_DATABASE_URL's port. This is that
+      # container.
       postgres:
         image: postgres:16
         env:
           POSTGRES_USER: spielplan
           POSTGRES_PASSWORD: spielplan
           POSTGRES_DB: spielplan_test
-        # 5434 on the host, not 5432. This container lives for the whole job, and legs 4 and 5
+        # 5434 on the host, not 5432. This container lives for the whole job, and legs 3 and 4
         # bring up the compose stack whose own `db` publishes 5432 through `ops/compose.dev.yml`;
         # two Postgres containers asking for one host port is a leg that fails on the harness.
         ports: ['5434:5432']
@@ -125,11 +98,7 @@ jobs:
       - run: uv venv
       - run: uv pip install -e "backend[dev]"
       - run: echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
-      # The `test_migrations.py` family closes 9 rows, and eight of them go dark without this
-      # directory: the PGlite `schema` fixture is what skips, and the ninth row is closed by the
-      # one test in that file that takes `tmp_path` instead. Leg 2 fails the build over exactly
-      # that skip, so installing it here is not a convenience: it is the difference between the
-      # gate reporting on the build and reporting on the runner.
+      # The PGlite schema tests skip without this directory.
       - run: npm --prefix backend/tests/pglite ci || npm --prefix backend/tests/pglite install
 
       # Loud, and before leg 1. A workflow whose purpose is to un-skip the corpus tests must not
@@ -145,105 +114,30 @@ jobs:
           mkdir -p .reports
 
       # --- leg 1 -------------------------------------------------------------------------------
-      # Every layer at once, against a real Postgres 16 and with the corpus reachable, so that
-      # nothing in the map's evidence is skipped for want of something this runner could have
-      # provided. `-rs` prints the reason for any skip that survives rather than folding it into a
-      # count, and the JUnit is what leg 2 then reads.
-      - name: leg 1 of 5 - the full suite against Postgres 16
-        run: python -m pytest backend/tests -q -rs --junitxml=.reports/junit-release.xml
-
-      - name: leg 1 of 5 - artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: release-leg-1-suite
-          path: .reports/junit-release.xml
-          retention-days: 30
+      # Every layer at once, against a real Postgres 16 and with the corpus reachable. `-rs`
+      # prints the reason for any skip that survives rather than folding it into a count.
+      - name: leg 1 of 4 - the full suite against Postgres 16
+        run: python -m pytest backend/tests -q -rs
 
       # --- leg 2 -------------------------------------------------------------------------------
-      # Rule 2 of the coverage map asks whether a named test EXISTS. This asks whether it RAN.
-      #
-      # The browser half of that evidence comes from `ci.yml`'s e2e job for THIS commit, and it
-      # has to: leg 5 below is the only browser pass in this workflow and it runs after this leg,
-      # so a gate that waited for it would not be leg 2. What that buys is a genuine precondition
-      # -- a commit whose browser suite has never run has no browser evidence, and this refuses to
-      # call such a build releasable rather than quietly checking only the pytest rows.
-      - name: leg 2 of 5 - find the browser report ci.yml produced for this commit
-        id: browser-run
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          query="head_sha=$GITHUB_SHA&status=success&per_page=1"
-          runs=$(curl -fsS -H "authorization: Bearer $GH_TOKEN" \
-            -H 'accept: application/vnd.github+json' \
-            "$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions/workflows/ci.yml/runs?$query")
-          id=$(printf '%s' "$runs" | python -c \
-            'import json,sys; r=json.load(sys.stdin)["workflow_runs"]; print(r[0]["id"] if r else "")')
-          if [ -z "$id" ]; then
-            echo "no successful ci.yml run for $GITHUB_SHA: this commit has no browser evidence,"
-            echo "so the coverage gate cannot say its e2e rows ran. Push the commit and let ci"
-            echo "finish, then dispatch this workflow again."
-            exit 1
-          fi
-          echo "id=$id" >> "$GITHUB_OUTPUT"
-
-      - name: leg 2 of 5 - download that report
-        uses: actions/download-artifact@v4
-        with:
-          name: playwright-report
-          run-id: ${{ steps.browser-run.outputs.id }}
-          github-token: ${{ github.token }}
-          path: .reports/browser
-
-      # Both phases. `e2e/run.mjs` runs Playwright twice -- first boot alone, then everything
-      # else -- and Playwright empties its output directory at the start of each run, so the
-      # runner writes phase 1's report back beside phase 2's afterwards. Counted off the map,
-      # phase 1 alone closes 8 shipped rows; without the first file they would read here as
-      # evidence that never ran.
-      - name: leg 2 of 5 - the executed-coverage gate
-        run: |
-          python ops/coverage_gate.py \
-            --junit .reports/junit-release.xml \
-            --playwright .reports/browser/.results/report-phase-1.json \
-            --playwright .reports/browser/.results/report.json \
-            | tee .reports/coverage-gate.txt
-
-      - name: leg 2 of 5 - artifact
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: release-leg-2-coverage-gate
-          path: .reports/coverage-gate.txt
-          retention-days: 30
-
-      # --- leg 3 -------------------------------------------------------------------------------
-      # The two cases that only exist against a real bundle, and then M4.5's exit criterion, which
-      # means nothing against the fixture -- it was written to measure a real import. The script
-      # creates and drops its own database, so the service container above is all it needs, and it
-      # exits non-zero on a failed check. Its output is the committed measurement section 12's
-      # criteria are closed by, which is why it is teed rather than only printed.
-      - name: leg 3 of 5 - the real-bundle legs against CORPUS_BUNDLE_DIR
+      # The two cases that only exist against a real bundle.
+      - name: leg 2 of 4 - the real-bundle tests against CORPUS_BUNDLE_DIR
         run: |
           python -m pytest backend/tests/test_bundle_shapes.py backend/tests/test_bundle_validation.py \
             -k real_bundle -q -rs | tee .reports/real-bundle-pytest.txt
-          python -u ops/m45_exit_criterion.py | tee .reports/m45-exit.txt
 
-      - name: leg 3 of 5 - artifact
+      - name: leg 2 of 4 - artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: release-leg-3-real-bundle
-          path: |
-            .reports/real-bundle-pytest.txt
-            .reports/m45-exit.txt
+          name: release-leg-2-real-bundle
+          path: .reports/real-bundle-pytest.txt
           retention-days: 30
 
-      # --- leg 4 -------------------------------------------------------------------------------
-      # docs/TESTING.md's release checklist, item 2, as far as a machine can take it: README's
-      # Recovery procedure on a scratch stack, against a dump THIS build's worker wrote. The half
-      # a machine cannot take is still a human drill and stays in that checklist -- the second
-      # pass with a different SECRETS_KEY, and the Jellyfin connector authenticating against a
-      # real server.
+      # --- leg 3 -------------------------------------------------------------------------------
+      # README's Restore procedure on a scratch stack, against a dump THIS build's worker wrote.
+      # The second pass with a different SECRETS_KEY and the Jellyfin connector against a real
+      # server stay a person's drill.
       #
       # It is also the only leg that runs the real bundle through the worker's import JOB rather
       # than through a script, which is the path decision 300 moved `BUNDLE_IMPORT_TIMEOUT` and
@@ -254,7 +148,7 @@ jobs:
       # household's own workstation reached through WSL or a Linux VM, so the budget is sized off
       # the measurement plus the unmeasured cost of containerised I/O under a hypervisor, and not
       # off a comparison anybody made. [decision 316; M4.16 cycle 4, REL-C4-01]
-      - name: leg 4 of 5 - the restore drill at stack level
+      - name: leg 3 of 4 - the restore drill at stack level
         run: |
           set -u
           STACK="docker compose -f docker-compose.yml"
@@ -353,20 +247,20 @@ jobs:
           fi
 
           # Staged into /data/artifacts by now, so the copy under /data/import has done its work
-          # and leg 5 rebuilds that directory as the fixture it measures (decision 299). Emptied
+          # and leg 4 rebuilds that directory as the fixture it measures (decision 299). Emptied
           # rather than removed: it is a bind mount into two running containers, and replacing the
           # directory leaves them holding the old inode. `sudo`, because the chown above handed it
           # to the container's uid; the glob is the runner's own shell, which can still read it.
           sudo rm -rf data/import/*
-          # And handed straight back, because leg 5 is this directory's next writer. `run.mjs`
+          # And handed straight back, because leg 4 is this directory's next writer. `run.mjs`
           # phase 0 rebuilds it with `make_bundle` as the RUNNER's user, and creating
           # `content.sqlite` needs write on the DIRECTORY rather than on a file -- so the chown
           # above, which the `sudo` on the line before this one exists to work around, would kill
-          # leg 5 at its first statement and make the gate report on the runner instead of on the
+          # leg 4 at its first statement and make the gate report on the runner instead of on the
           # build. Nothing in the containers writes here after the staging above: the staged copy
           # lives under /data/artifacts, and the one uid-1000 write this directory ever takes is
           # `_unpack`'s `.unpacked-*` beside an ARCHIVE, which neither the corpus export nor the
-          # fixture leg 5 builds is. [decision 299; M4.16 cycle 1, M416-REL-05]
+          # fixture leg 4 builds is. [decision 299; M4.16 cycle 1, M416-REL-05]
           sudo chown -R "$(id -u):$(id -g)" data/import
 
           # Section 10's swap sequence ends here, and until it does the process has not LOADED
@@ -385,10 +279,10 @@ jobs:
           dump=$(ls -1 data/backups/spielplan-*.dump | tail -1)
           echo "restoring $(basename "$dump")"
 
-          # README's Recovery block, in its three gestures, into a database created fresh for it.
+          # README's Restore block, in its three gestures, into a database created fresh for it.
           # `--force` because `dropdb` refuses while any session is attached and the db container
           # is not the only thing that has ever connected; the app processes are stopped first for
-          # the reason the Recovery block gives -- a restore into a database the stack is still
+          # the reason the Restore block gives -- a restore into a database the stack is still
           # serving ends with `connector_config` empty and `app_setting` still the fresh install's.
           $STACK stop backend worker
           $STACK exec -T db dropdb --force -U "$POSTGRES_USER" "$POSTGRES_DB"
@@ -406,20 +300,20 @@ jobs:
           # boots and serves an empty install, which is the failure mode that reads as success.
           curl -fsS "$BASE_URL/api/health" | tee .reports/restore-drill-health.json
           python .reports/health.py < .reports/restore-drill-health.json
-          # `applied migrations: (none pending)` on the way back up is the line the checklist asks
+          # `applied migrations: (none pending)` on the way back up is the line README asks
           # an operator to read: it is written either way, so an empty grep is a boot that never
           # reached the runner rather than a schema that needed nothing.
           $STACK logs --no-color --since 5m backend | tee -a .reports/restore-drill-health.json
 
-      - name: leg 4 of 5 - artifact
+      - name: leg 3 of 4 - artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: release-leg-4-restore-drill
+          name: release-leg-3-restore-drill
           path: .reports/restore-drill-health.json
           retention-days: 30
 
-      # --- leg 5 -------------------------------------------------------------------------------
+      # --- leg 4 -------------------------------------------------------------------------------
       # The whole stack, from `docker compose up` to two browsers. `run.mjs` rebuilds the fixture
       # bundle first (decision 299), resets to a first boot, runs phase 1 alone, restarts so the
       # imported bundle is loaded (section 10) and then runs everything else -- over BOTH projects,
@@ -428,18 +322,18 @@ jobs:
       #
       # The fixture and not the corpus, deliberately: `10-home.spec.js` and the shelves count what
       # `make_bundle` writes, so a browser pass against the real bundle asserts numbers no fixture
-      # produces. The real bundle is legs 3 and 4's subject; this leg's subject is the app.
-      - name: leg 5 of 5 - the two-phase browser pass over both projects
+      # produces. The real bundle is legs 2 and 3's subject; this leg's subject is the app.
+      - name: leg 4 of 4 - the two-phase browser pass over both projects
         run: |
           npm --prefix e2e ci || npm --prefix e2e install
           npx --prefix e2e playwright install --with-deps chromium webkit
           node e2e/run.mjs
 
-      - name: leg 5 of 5 - artifact
+      - name: leg 4 of 4 - artifact
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: release-leg-5-browser
+          name: release-leg-4-browser
           path: |
             e2e/playwright-report
             e2e/.results

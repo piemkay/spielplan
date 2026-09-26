@@ -284,11 +284,11 @@ def create_app() -> FastAPI:
     # auth, on a stack whose whole exposure story is "one plain-HTTP port behind the operator's
     # Traefik". That is the reconnaissance step for every other finding and it costs nothing to
     # close, because `create_app().openapi()` builds the schema without the route: the gating sweep
-    # in `test_api_gating.py` and the harness comparison in `test_devstub_contract.py` read the
-    # method, not the URL. `redoc_url` goes with it — a second renderer of the same document is the
-    # same disclosure — and FastAPI registers neither renderer once `openapi_url` is None, so all
-    # three are stated rather than left to that implication. Step 2's dev flag is the way back, for
-    # the developer reading the schema on their own machine. [M4.7 sec-12; decision 181]
+    # in `test_api_gating.py` reads the method, not the URL. `redoc_url` goes with it — a second
+    # renderer of the same document is the same disclosure — and FastAPI registers neither renderer
+    # once `openapi_url` is None, so all three are stated rather than left to that implication.
+    # Step 2's dev flag is the way back, for the developer reading the schema on their own machine.
+    # [M4.7 sec-12; decision 181]
     dev = cfg.insecure_dev
     app = FastAPI(
         title="Spielplan",

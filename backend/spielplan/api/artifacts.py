@@ -40,8 +40,8 @@ router = APIRouter(prefix="/api/admin/bundle", tags=["admin", "bundle"])
 #
 # IT IS NOT THE ONLY PLACE THE WORDS APPEAR, AND SAYING SO IS THE POINT. This comment claimed to be
 # the one place and was wrong about the one screen it is about: `BundleImport.svelte` hard-codes
-# the sentence instead of rendering the `note` this module already sends it, and `ops/devstub.py`
-# carries a harness copy. So an edit here moves the 409 and the response and neither of those. The
+# the sentence instead of rendering the `note` this module already sends it. So an edit here moves
+# the 409 and the response and not that copy. The
 # importer's swap note used to be a fourth, DIFFERENT phrasing rendered as a finding on that same
 # screen - two descriptions of one state, on one page - and it no longer states the clause at all.
 # The remaining duplicate is the client's, which is the client's to remove.
@@ -217,7 +217,7 @@ async def _open(target: Path) -> bundle_import.Bundle:
     the 1.04 GB corpus archive that is 0.61 s of `tarfile.extractall` with the loop stopped for all
     of it: one 10 ms heartbeat sample across the call and a worst gap of 0.620 s, against 55
     samples and 0.012 s for the same call in a thread. It is paid on the FIRST press of Validate or
-    Import and on no other, which is why no recorded run of `ops/m414_exit_criterion.py` contains
+    Import and on no other, which is why no recorded run of M4.14's exit script contains
     it - that script tars the corpus and opens it before `create_app()`, so every request it
     measures takes `_unpack`'s reuse path and the press an operator actually makes was never
     measured. Driven through the app it was 5.88-6.27 s for `POST /import` against check 8's 5 s
@@ -418,13 +418,12 @@ async def import_bundle(body: BundleRef, conn: DB, _: AdminUser) -> dict[str, An
 
     THAT ~4 s IS NO LONGER ON THIS LOOP, and until decision 287 it was the one measure of the
     exit criterion this milestone did not meet: `app._HEALTH_TIMEOUT_S` is 2, so `/api/health`
-    answered 503 once inside this route's validation window - `ops/m414_exit_criterion.py`'s
-    check 9, red in every run recorded before 287, and never during the import itself.
-    `validate_for_install` now runs the synchronous `validate` in a worker thread, which moves
-    the whole window rather than the ~1.2 s of Cold Tower construction decision 252's one-shot
-    child would have moved. The route is unchanged from the operator's side: it still blocks on
-    that await, so the decision is still made here before anything is enqueued.
-    [decisions 252 and 287]
+    answered 503 once inside this route's validation window - M4.14's exit check 9, red in every run
+    recorded before 287, and never during the import itself. `validate_for_install` now runs the
+    synchronous `validate` in a worker thread, which moves the whole window rather than the ~1.2 s
+    of Cold Tower construction decision 252's one-shot child would have moved. The route is
+    unchanged from the operator's side: it still blocks on that await, so the decision is still made
+    here before anything is enqueued. [decisions 252 and 287]
 
     It was the one measure that instrument SAW, which is a different sentence and is why `_open`
     above is now awaited too: on the first press against an archive the line below also extracts

@@ -937,8 +937,8 @@
   /* The art's WIDTH is what bounds it, because the shared poster is `width: 100%` inside a 2:3
      frame: 13vh wide is at most 19.5vh tall, and the title is held to two lines, so on an iPhone
      13's 664 px the pair, the two level answers and Undo all sit above the bottom bar (measured
-     against the devstub at 390 x 664 with two-line titles, an over-budget line and genres on both
-     cards: Undo ends at 602 of the bar's 603). */
+     on the fixture bundle at 390 x 664 with two-line titles, an over-budget line and genres on
+     both cards: Undo ends at 602 of the bar's 603). */
   .art { display: block; width: min(100%, 13vh); align-self: center; }
   .choice .big {
     display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical;

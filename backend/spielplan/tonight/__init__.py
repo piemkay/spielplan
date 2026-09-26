@@ -2,9 +2,8 @@
 
 Spec v2.1 §6.2 as rewritten by the owner on 2026-08-29 (v2.2 §54a-54g) and decision 154. The
 rewrite is an owner decision, not a proposal: it sits in the same table as decisions 11, 18, 35
-and 117, all four of which this codebase already ships, and the coverage map's M4 rows are
-written against it. Where this package says "§6.2 step N", N is the rewritten numbering — the
-ballot is step 6, the result card step 7, solo step 8.
+and 117, all four of which this codebase already ships. Where this package says "§6.2 step N",
+N is the rewritten numbering — the ballot is step 6, the result card step 7, solo step 8.
 
 The split follows the rule the `rank` and `ledger` packages already use: a module is pure
 unless it has to touch Postgres, because a rule you can only observe through a socket is a rule

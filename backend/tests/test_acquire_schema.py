@@ -364,7 +364,6 @@ def test_this_package_cites_a_test_by_name_and_a_column_comment_by_its_own_line(
     assert verbatim == [138], f"0005_ledger.sql moved the comment this package quotes: {verbatim}"
 
     quoting = package + [
-        root / "backend/tests/spec_coverage.toml",
         root / "backend/tests/test_acquire_pipeline.py",
         root / "backend/tests/test_acquisition_board.py",
     ]

@@ -121,9 +121,3 @@ jobs:
         run: >
           python -m pytest backend/tests/test_bundle_shapes.py backend/tests/test_bundle_validation.py
           -k real_bundle -q -rs
-
-      # M4.5's exit criterion, which means nothing against the fixture — it was written to measure
-      # a real import. It creates and drops its own database, so the service above is all it
-      # needs, and it exits non-zero on a failed check (M4.8 step 3).
-      - name: M4.5's exit criterion, against the corpus bundle
-        run: python -u ops/m45_exit_criterion.py

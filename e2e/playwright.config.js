@@ -4,11 +4,8 @@ import { baseUrl } from './env.mjs';
 /**
  * End-to-end tests against the real stack.
  *
- * `BASE_URL` points at whatever is serving the app:
- *   - `docker compose up` — the real backend serving the built PWA on :8080 (the default, and
- *     the only configuration that proves the thing we ship)
- *   - `npm --prefix frontend run dev` + `python ops/devstub.py` on :5173 — faster for iterating
- *     on the UI, but it does not exercise Postgres, so it cannot prove an import
+ * `BASE_URL` points at whatever is serving the app: by default the real backend serving the
+ * built PWA on :8080, or the Vite dev server on :5173 in front of that same backend.
  *
  * The suite runs in TWO PHASES, and `node e2e/run.mjs` is what implements them: phase 1 runs
  * `specs/01-first-boot.spec.js` alone against an empty database, the services restart so the
@@ -42,15 +39,8 @@ export default defineConfig({
   retries: process.env.CI ? 1 : 0,
   timeout: 60_000,
   expect: { timeout: 10_000 },
-  // The `json` reporter is CI-only, and it is not a second copy of the HTML one: `ops/coverage_
-  // gate.py` reads it to answer whether the tests the coverage map NAMES actually ran. Rule 2 of
-  // the map asks only whether a named test exists, so an e2e row could be closed by a spec that
-  // skipped itself for the whole run — which is a green report over evidence nobody produced.
-  // Written beside the trace and video output it belongs with; `run.mjs` keeps phase 1's copy,
-  // because Playwright empties this directory at the start of phase 2.
   reporter: process.env.CI
-    ? [['github'], ['html', { open: 'never' }], ['json', { outputFile: '.results/report.json' }],
-       ['list']]
+    ? [['github'], ['html', { open: 'never' }], ['list']]
     : [['list'], ['html', { open: 'never' }]],
 
   use: {

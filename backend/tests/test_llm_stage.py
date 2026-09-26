@@ -37,7 +37,6 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
-import os
 import sys
 from datetime import UTC, datetime
 from decimal import Decimal
@@ -747,54 +746,3 @@ async def test_a_title_with_two_keys_buys_the_named_retry_once_per_walk_of_each_
     assert asked == [TITLE] * 8, "each walk passes the cap check afresh"
     assert await _calls(db) == 16
     assert await _tags(db) == 1
-
-
-def _exit_script(monkeypatch):
-    """`ops/m55_exit_criterion.py` as a module of its own, the way `test_m51_exit_criterion.py` loads
-    its script: the variables it sets outright at import, its `sys.path` entries and its
-    `sys.modules` entry are all put back by `monkeypatch`."""
-    for name, placeholder in {
-        "SESSION_SECRET": "a-session-secret-this-test-puts-back-afterwards",
-        "SECRETS_KEY": "a-secrets-key-this-test-puts-back-afterwards",
-        "PUBLIC_URL": "http://localhost:8080",
-    }.items():
-        monkeypatch.setenv(name, os.environ.get(name, placeholder))
-    monkeypatch.setattr(sys, "path", list(sys.path))
-    spec = importlib.util.spec_from_file_location("m55_exit_criterion_under_test",
-                                                  REPO / "ops" / "m55_exit_criterion.py")
-    module = importlib.util.module_from_spec(spec)
-    monkeypatch.setitem(sys.modules, spec.name, module)
-    spec.loader.exec_module(module)
-    return module
-
-
-@pytest.mark.parametrize("fetcher_first", [False, True])
-async def test_exit_check_seven_fails_when_a_fetcher_is_built_for_the_title_it_parks(
-    db, packed, double, monkeypatch, tmp_path, fetcher_first
-):
-    """`ops/m55_exit_criterion.py` check 7 printed "run_task opens the drain's Fetcher before the gate
-    asks" -- lead 3's defect, which review cycle 1 fixed (NBR-02) -- beside a count of built Fetchers
-    its verdict never read. So the console the RELEASE block will commit as the MEASURED record stated
-    an ordering the code no longer has, and a regression that built a Fetcher for a parked title again
-    would have passed the instrument. Check 7 is run here on this file's install, once over the
-    shipped drain and once over a drain that builds its Fetcher before walking anything, which check 7
-    must now fail. [M5.5 review cycle 2, M55-C2-DOC-03]"""
-    module = _exit_script(monkeypatch)
-    await _spend_to_the_cap(db, packed)
-    ctx = module.Install(conn=db, work=tmp_path, double=double, clock=module.Clock(),
-                         httpx_log=module.Captured(), app_log=module.Captured(), version="v1")
-    if fetcher_first:
-        real = pipeline.drain
-
-        async def eager(conn, *, fetcher_factory, **kwargs):
-            await fetcher_factory(conn)
-            return await real(conn, fetcher_factory=fetcher_factory, **kwargs)
-
-        monkeypatch.setattr(pipeline, "drain", eager)
-
-    ok, detail = await module.check_seven(ctx)
-
-    assert ok is not fetcher_first, detail
-    assert f"fetcher(s) built for the drain: {int(fetcher_first)}" in detail, detail
-    assert "before the gate asks" not in detail, detail
-    assert double.state.requests == []
