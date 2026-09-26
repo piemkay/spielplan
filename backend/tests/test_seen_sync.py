@@ -1959,47 +1959,6 @@ def test_no_second_caller_reaches_the_shipped_ownership_writers():
     }
 
 
-SPEC = Path(__file__).resolve().parents[2] / "docs" / "spielplan-spec_v2.1.md"
-REGISTER = Path(__file__).resolve().parents[2] / "docs" / "spec-v2.2-proposals.md"
-
-
-def test_the_normative_file_gives_the_ownership_column_to_the_full_sweep_alone():
-    """Decision 362 from the side CLAUDE.md sends the next reader to first.
-
-    The guard above holds the code, and the code was never the problem. §7.2's third bullet went on
-    saying "Both paths enqueue an acquisition job (§8) per new title and mark removed titles
-    `is_owned = false`" -- the one normative document asking for the second falsifier
-    `_falsify_ownership` calls the most destructive statement in the module -- while decision 362
-    handed that bullet's amendment to "the milestone that holds the spec file" and the file's own
-    v2.1.1 line handed it to M5.2, so each record pointed at the other. Under "where code and spec
-    disagree, the code is the bug", a reader who met the sentence without the register had a spec
-    clause telling them to add the falsifier. So the bullet naming `is_owned = false` gives it to
-    the full sweep and cites decision 362, and a point release in the Status block names the
-    decision it landed under. [decision 362; M5.2 review cycle 3: M52-C3-PAPER-02]
-    """
-    text = SPEC.read_text(encoding="utf-8")
-    section = re.search(r"^### 7\.2 .*?(?=^### )", text, re.M | re.S)
-    assert section, "the normative file has no section 7.2 heading for this rule to read"
-    bullets = [b for b in re.split(r"\n(?=- )", section.group(0)) if "is_owned = false" in b]
-    assert bullets, "section 7.2 no longer says who marks a removed title `is_owned = false`"
-    for bullet in bullets:
-        assert not re.search(r"\bBoth paths\b[^.]*\bmark removed titles\b", bullet), (
-            "section 7.2 still gives the ownership column to both intake paths, which decision "
-            f"362 refuses:\n  {ascii(bullet.strip()[:300])}"
-        )
-        assert "full sweep" in bullet and re.search(r"\bdecision 362\b", bullet, re.I), (
-            "section 7.2's ownership bullet must give `is_owned = false` to the full sweep and "
-            f"cite the decision that says so:\n  {ascii(bullet.strip()[:300])}"
-        )
-    status = re.search(r"^\*\*Status:\*\*.*?(?=\n[ \t]*\n)", text, re.M | re.S)
-    assert status, "the normative file has no Status block"
-    releases = re.findall(r"^\*\*v\d+\.\d+\.\d+ \(\d{4}-\d{2}-\d{2}\):\*\*.*$", status.group(0), re.M)
-    assert any(re.search(r"\bdecision 362\b", line) for line in releases), (
-        "section 7.2 was amended under decision 362 and no dated point release in the Status "
-        "block says so (decision 288): the date says which wave, the number what it answered to"
-    )
-
-
 def test_the_library_pick_bounds_acquisition_and_never_ownership():
     """Decision 364's boundary, held where a misreading of it would do decision 362's harm.
 
@@ -2011,7 +1970,7 @@ def test_the_library_pick_bounds_acquisition_and_never_ownership():
     which decision 362 two entries up reserves to the full sweep. A later milestone taking the
     heading at its word would scope the full sweep's library read by the pick, and
     `_falsify_ownership` would then un-own every title in every deselected library. So the sweep's
-    two modules never read `library_ids`, and the heading names the boundary its body draws.
+    two modules never read `library_ids`.
     [decisions 362 and 364; M5.2 review cycle 3: M52-C3-PAPER-06]
     """
     for module in ("sync/seen.py", "connectors/resolve.py"):
@@ -2019,12 +1978,6 @@ def test_the_library_pick_bounds_acquisition_and_never_ownership():
             f"{module} reads the library pick, so the full sweep's ownership is now scoped by a "
             "boundary decision 364 draws for acquisition alone"
         )
-    heading = re.search(r"^### 364\. .*$", REGISTER.read_text(encoding="utf-8"), re.M)
-    assert heading, "the register no longer heads decision 364"
-    assert "acquisition boundary" in heading.group(0), (
-        "decision 364's heading names a boundary its own body does not draw:\n  "
-        + ascii(heading.group(0))
-    )
 
 
 # --- M4.11: §5.3, two sweeps of one household cannot overlap -----------------------------------

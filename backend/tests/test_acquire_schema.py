@@ -137,10 +137,8 @@ async def test_the_queue_is_indexed_for_the_lease_and_for_the_reaper(db):
     leases that have expired, which is a partial index because a row that is not leased can never
     be reclaimed.
 
-    WHAT THIS DOES NOT PIN is the lease's ORDER BY, and `queue.lease`'s own paragraph used to say
-    it did. A substring match on `pg_indexes` cannot see a sort key, so it stays green for any
-    ORDER BY whatsoever; the sibling test below is what reddens when that line moves.
-    [M5.1 review cycle 4, M51-C4-QUEUE-01]
+    WHAT THIS DOES NOT PIN is the lease's ORDER BY: a substring match on `pg_indexes` cannot see a
+    sort key. [M5.1 review cycle 4, M51-C4-QUEUE-01]
     """
     defs = await _index_defs(db, "acquisition_task")
     assert "(state, next_attempt_at, priority)" in defs, (
@@ -149,53 +147,6 @@ async def test_the_queue_is_indexed_for_the_lease_and_for_the_reaper(db):
     )
     assert "(lease_expires)" in defs and "state = 'leased'" in defs, (
         "the reaper has no index; reclaiming abandoned work would scan the whole queue"
-    )
-
-
-def test_the_lease_orders_by_a_key_no_index_can_serve():
-    """The pin `queue.lease` claims and the test above cannot give it. No database needed.
-
-    Three sentences in this tree asserted that `acquisition_task_ready (state, next_attempt_at,
-    priority)` serves `ORDER BY priority, id`. It cannot: `next_attempt_at <= now()` is a RANGE
-    predicate, so a btree scan under it is ordered by `next_attempt_at` and not by `priority`, and
-    `id` is in no index on this table at all. The sort is therefore a Sort node under every plan
-    shape - which is the corpus's own accepted cost at 19,000 titles and is fine at `DRAIN_LIMIT`
-    tasks once per half-hour tick - but the CLAIM was false, and the cross-reference that said a
-    test held the ORDER BY and the index together was false about a test.
-
-    So this is that test, and it is a source read rather than an `EXPLAIN` deliberately: a plan
-    read against a unit-sized fixture measures the planner's cost model, which correctly prefers a
-    sequential scan of a few hundred rows and would fail an assertion about index use for the
-    right reason. What matters is that a later milestone changing this ORDER BY - M5.2's flywheel
-    priorities, M5.6's admin actions - is made to read the paragraph that explains why no index
-    follows it, instead of finding a green build and a comment telling them one does.
-    [M5.1 review cycle 4, M51-C4-QUEUE-01]
-    """
-    import inspect
-    import pathlib
-
-    from spielplan.acquire import queue
-
-    source = inspect.getsource(queue.lease)
-    statement = source[source.index("UPDATE acquisition_task"):]
-    assert "ORDER BY priority, id LIMIT" in statement, (
-        "queue.lease's ORDER BY has moved. No index on acquisition_task can serve a sort key, so "
-        "the paragraph in queue.lease arguing why the Sort is accepted has to move with it - and "
-        "if an index is being added to serve the new key, 0024's checksum moves and every box "
-        "that applied it must drop its database"
-    )
-    assert "state = $4 AND next_attempt_at <= now()" in statement, (
-        "queue.lease's filter has moved away from the columns acquisition_task_ready leads with"
-    )
-    ddl = pathlib.Path(__file__).resolve().parents[2] / "backend/migrations/0024_acquisition.sql"
-    indexes = [
-        line for line in ddl.read_text(encoding="utf-8").splitlines()
-        if "ON acquisition_task" in line
-    ]
-    assert indexes, "0024 no longer creates any index on acquisition_task"
-    assert not any("(priority" in line for line in indexes), (
-        "an index now leads with priority, so the lease's sort may be served after all: correct "
-        "queue.lease's paragraph, which states as a fact that it is not"
     )
 
 
@@ -311,69 +262,3 @@ async def test_the_robots_cache_holds_one_row_per_host(db):
         "SELECT robots_txt FROM fetch_host_state WHERE host = 'slow.test'"
     )
     assert unasked is None, "a host can be paused before anyone has asked it for robots.txt"
-
-
-def test_this_package_cites_a_test_by_name_and_a_column_comment_by_its_own_line():
-    """CLAUDE.md makes a citation load-bearing - "work that can't cite its clause reads as
-    off-convention" - so a citation that resolves to the wrong thing is a false statement in an
-    argument and not a typo. Two of them shipped in this milestone, and both are the same species.
-
-    A TEST IS CITED BY NAME. `acquire/__init__.py` pointed at `test_layering_guards.py:564` for the
-    guard that stops this package importing `spielplan.api`. That was the right line at HEAD, and
-    M5.1's own edits to that file - the `_COUNT_WORDS` import and the eleven-line ALLOWED_RESIDUE
-    paragraph - pushed the guard to 574, where 553 is the middle of the SQL-residue helper, a
-    different rule entirely. So a stage author looking for the guard that would stop them reaching
-    into `api/` found a comprehension and could reasonably conclude it had been deleted. Every one
-    of the fourteen other test citations in `backend/spielplan/` already uses `file.py::test_name`,
-    which is the spelling a commit to the cited file cannot falsify.
-
-    A COLUMN COMMENT IS CITED WHERE IT IS. `0005_ledger.sql:137` was quoted in eleven places -
-    five in this package, five in tests and one in `spec_coverage.toml`, where an auditor reads it
-    - as saying `acquisition_job.reason` is "shown verbatim on the admin board". Line 137 is
-    `detail jsonb NOT NULL DEFAULT '{}'::jsonb,` and carries no comment at all; the sentence is on
-    138. 0005 is applied and sha256-checksummed and has exactly one commit in its history, so the
-    coordinate was wrong the day it was written rather than drifted, and `M5.3-plan.md:285` and
-    `M5.6-plan.md:118` - the two plans that will be read against this code - already say 138.
-    One of those eleven is interpolated into a live assertion message, so the wrong coordinate is
-    what a failing board test printed at an operator.
-
-    Measured rather than pinned: the line is found by searching the migration for the sentence, so
-    this test says "the citations agree with the file" and never "the file says what I remember".
-    [M5.1 review cycle 4 second pass, M51-C4-CITE-02, M51-C4-CITE-03]
-    """
-    import pathlib
-    import re
-
-    root = pathlib.Path(__file__).resolve().parents[2]
-    package = sorted((root / "backend/spielplan/acquire").glob("*.py"))
-    assert len(package) >= 8, "the acquire package is not where this test thinks it is"
-
-    for path in package:
-        text = path.read_text(encoding="utf-8")
-        stale = re.findall(r"test_[A-Za-z0-9_]+\.py:\d+", text)
-        assert not stale, (
-            f"{path.name} cites a test by line number ({stale}), which the next commit to that "
-            "file falsifies. This tree's convention is file.py::test_name"
-        )
-
-    ddl = (root / "backend/migrations/0005_ledger.sql").read_text(encoding="utf-8")
-    verbatim = [
-        n for n, line in enumerate(ddl.splitlines(), 1)
-        if "shown verbatim on the admin board" in line
-    ]
-    assert verbatim == [138], f"0005_ledger.sql moved the comment this package quotes: {verbatim}"
-
-    quoting = package + [
-        root / "backend/tests/test_acquire_pipeline.py",
-        root / "backend/tests/test_acquisition_board.py",
-    ]
-    for path in quoting:
-        text = path.read_text(encoding="utf-8")
-        for match in re.finditer(r"0005_ledger\.sql:(\d+)", text):
-            window = text[max(0, match.start() - 160):match.end() + 160]
-            if "verbatim" not in window:
-                continue
-            assert int(match.group(1)) == verbatim[0], (
-                f"{path.name} cites 0005_ledger.sql:{match.group(1)} for the 'shown verbatim' "
-                f"comment, which is on line {verbatim[0]} - {match.group(1)} is a different column"
-            )

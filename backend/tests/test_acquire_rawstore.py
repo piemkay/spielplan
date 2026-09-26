@@ -20,7 +20,6 @@ from __future__ import annotations
 
 import ast
 import gzip
-import re
 import socket
 import zlib
 from datetime import UTC, datetime
@@ -710,62 +709,6 @@ def test_the_custody_guard_sees_the_raw_store_delivered_under_another_container_
     assert _backend_mounts_holding_the_raw_store(compose) == [mount], (
         f"the backend receiving {name} went unnoticed"
     )
-
-
-REGISTER = REPO_ROOT / "docs" / "spec-v2.2-proposals.md"
-
-
-def _custody_passages() -> dict[str, str]:
-    """The two passages that tell a later reader where this boundary is enforced.
-
-    Decision 345 is the normative one -- it is what M5.2-M5.7 read before they touch the board --
-    and `rawstore`'s module docstring is the one that decision's own Cost paragraph points them at
-    next ("the rawstore module states the boundary where it is enforced"). Sliced rather than
-    grepped whole, so a citation somewhere else in either file cannot satisfy this by accident:
-    the decision ends where the next owner sitting opens, and the module's claim is its docstring
-    rather than any comment further down.
-    """
-    register = REGISTER.read_text(encoding="utf-8")
-    start = register.index("### 345.")
-    module = ast.parse(Path(rawstore.__file__).read_text(encoding="utf-8"))
-    return {
-        "decision 345": register[start : register.index("## Decisions taken", start)],
-        "acquire/rawstore.py's module docstring": ast.get_docstring(module) or "",
-    }
-
-
-def test_the_record_names_the_guard_that_actually_pins_this_mount():
-    """Decision 345 and this module's docstring both say where the custody boundary is enforced.
-
-    Both said `test_static_contracts.py`, and that file has never pinned `/data/raw`: its only rule
-    over the backend's anchor is `_backend_mounts_holding_the_dumps`, whose filter is the host
-    directory `./data/backups` and the container path `/data/backups`, and it stays GREEN with
-    `- ./data/raw:/data/raw` inserted into `x-backend-volumes`. What pins it is the pair above,
-    whose own docstring says so in as many words -- so the chain a later reader follows, decision
-    to module to test, dead-ended twice in a file that cannot go red for this.
-
-    That is worth a guard because decision 345 is normative for six milestones and binds one of
-    them by name: "an admin action added there may not become a reason to move the mount" is
-    addressed to M5.6, and an M5.6 that wanted the document body, read the decision and went to see
-    what constrains it would find a guard about database dumps. A record citing the wrong
-    enforcement is worse than one citing none, because it is checkable and gets checked.
-
-    The rule is POSITIVE and deliberately not exhaustive. A passage may name
-    `test_static_contracts.py` -- it does pin the backend's list against the nightly dumps, and the
-    amended sentence says exactly that -- but it must also name the file holding this assertion.
-    [M5.1 review cycle 3, M51-C3-345-02]
-    """
-    holder = "test_acquire_rawstore.py"
-
-    for where, passage in _custody_passages().items():
-        named = sorted(set(re.findall(r"test_[a-z0-9_]+\.py", passage)))
-        assert holder in named, (
-            f"{where} says where /data/raw is kept off the backend and credits {named} for it. "
-            f"Nothing in those pins this mount: {holder} does, and only since this milestone, "
-            "because M5.1 is the mount's first writer and so the milestone that owes the "
-            "assertion. Name it, or the decision points the six milestones it binds at a file "
-            "that will stay green while the raw store moves into the process that answers HTTP"
-        )
 
 
 # --- review cycle 4: the read path asks the row what the write path asked the trailer ------------

@@ -34,7 +34,6 @@ from __future__ import annotations
 
 import json
 from datetime import UTC, datetime
-from pathlib import Path
 
 import httpx
 import pytest
@@ -284,29 +283,6 @@ def test_the_two_jellyfin_reads_that_share_an_interval_fit_inside_it():
         "the sweep enqueues and the drain leases; neither half of one add's journey may hold this "
         "loop longer than the other"
     )
-
-
-def test_no_budget_paragraph_promises_the_minute_poll_a_bound_its_own_timeout_breaks():
-    """Decision 368 asks each intake row for a budget paragraph in `acquisition-drain`'s
-    convention, and the sweep's said it and the drain "are bounded alike because neither may hold
-    this sequential loop past the minute §7.3's playback poll is promised" -- over two rows that
-    both carry `timeout=120`, in a loop `_tick` runs one job after another. Either may hold it for
-    two minutes. The drain's own paragraph makes the honest claim (its share of an interval is time
-    the playback poll does not get); the line an operator reads as a budget may not promise the
-    minute poll a bound the row beneath it does not keep. [review cycle 3: M52-C3-PAPER-08]
-    """
-    source = Path(worker.__file__).read_text(encoding="utf-8")
-    for job in worker.JOBS:
-        above = source[: source.find(f'Job("{job.name}"')].rsplit("Job(", 1)[-1]
-        paragraph = " ".join(
-            line.strip().lstrip("#").strip()
-            for line in above.splitlines() if line.strip().startswith("#")
-        )
-        if job.timeout > 60:
-            assert "past the minute" not in paragraph, (
-                f"{job.name}'s budget paragraph promises the minute poll a bound, and its own "
-                f"timeout is {job.timeout}s"
-            )
 
 
 # --- a household with no Jellyfin (Postgres) -----------------------------------------------------

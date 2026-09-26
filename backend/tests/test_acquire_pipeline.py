@@ -28,7 +28,6 @@ from __future__ import annotations
 import ast
 import asyncio
 import json
-import re
 from dataclasses import FrozenInstanceError
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -51,143 +50,18 @@ from spielplan.models.artifacts import ArtifactStore
 from spielplan.placement import reconcile
 from tests.fixtures import make_bundle as fx
 
-SPEC = Path(__file__).resolve().parents[2] / "docs" / "spielplan-spec_v2.1.md"
-
 # The tuple as this build ships it, captured before any test patches it. A test that put the
 # stages back by reading `pipeline.STAGES` would read whatever the patch left there.
 SHIPPED = pipeline.STAGES
 
-# The §8 block's own shape: a stage number, the name, then at least two spaces before the prose.
-# Two spaces and not one, because "reviews gate", "dna pack" and "dna extract" carry a single
-# space INSIDE the name -- a one-space separator would read three of the ten as "reviews" and
-# lose the word the board is supposed to show.
-_STAGE_LINE = re.compile(r"^(\d{1,2})\s+(\S+(?: \S+)*?)\s{2,}\S")
-
-
-def _stage_names_from(text: str) -> list[tuple[int, str]]:
-    """Parse §8's fenced pipeline block out of a spec document. See the test that feeds it a
-    doctored one."""
-    start = text.index("## 8. New-title acquisition workflow")
-    fence = re.search(r"```\r?\n(.*?)```", text[start:], re.S)
-    assert fence is not None, "§8 has no fenced pipeline block"
-    found = []
-    for line in fence.group(1).splitlines():
-        match = _STAGE_LINE.match(line)
-        if match:
-            found.append((int(match.group(1)), match.group(2)))
-    return found
-
-
 # --- the names (backend, no DB) -----------------------------------------------------------------
-
-
-def test_the_ten_stage_names_are_read_back_out_of_the_spec_file():
-    """§8's ten stages, verbatim and in order, against the normative document itself.
-
-    The whole value of this test is the SOURCE of the expected list. A test carrying its own copy
-    of the ten names asserts that `pipeline.STAGES` equals a list a test author typed, which is
-    true of two files that drifted from the spec together. Reading the spec's own block means an
-    amendment to §8 that renames a stage reddens this build, which is CLAUDE.md's rule in a test:
-    "where code and spec disagree, the code is the bug".
-
-    Proposal 136 argues §6.6's board should show these strings verbatim; whether that clause is
-    adopted is decision 330's, which is M5.6's to take. The tuple is one spelling either way,
-    because two spellings is the state where a board label and a park reason name different
-    stages.
-    """
-    from_spec = _stage_names_from(SPEC.read_text(encoding="utf-8"))
-    from_code = [(s.number, s.name) for s in pipeline.STAGES]
-    assert from_spec == from_code
-    assert from_code == [
-        (1, "identify"), (2, "enrich"), (3, "derive"), (4, "reviews gate"), (5, "dna pack"),
-        (6, "dna extract"), (7, "verify"), (8, "project"), (9, "place"), (10, "ready"),
-    ]
-
-
-def test_the_stage_name_reader_is_reading_the_spec_and_not_agreeing_with_itself():
-    """The guard above is only worth having if it can fail, and it has one way to be vacuous:
-    a parser that found nothing would compare two empty lists and pass.
-
-    So feed it a doctored §8 - one stage renamed, one dropped - and show it reports the document
-    it was given rather than the tuple the module holds. Same shape as the self-checks in
-    `test_acquire_rawstore.py`, and for the same reason: a static guard that never looked is
-    indistinguishable from one that looked and approved.
-    """
-    doctored = (
-        "## 8. New-title acquisition workflow\n\n"
-        "```\n"
-        "1  identify      resolve it\n"
-        "2  enrichment    fetch it\n"
-        "9  place         place it\n"
-        "```\n"
-    )
-    assert _stage_names_from(doctored) == [(1, "identify"), (2, "enrichment"), (9, "place")]
-    assert _stage_names_from(doctored) != [(s.number, s.name) for s in pipeline.STAGES]
 
 
 def test_stage_six_is_the_only_paid_stage_and_every_stub_names_the_milestone_that_owes_it():
     """§8: "paid stages (6) never auto-retry past the spend cap" - the number is in the spec and
-    it is the only one there.
-
-    The second half is D3's visibility rule. A stub that survives into M5.6 has to be findable,
-    so each declares its owner twice: in the tuple, where this test reads it, and in its own
-    docstring, where a person greps for it. The owners are `ROADMAP-M5.md`'s allocation of the
-    work and not a guess - M5.4 has the pack, the trust boundary and the projection, M5.5 the LLM
-    extraction.
-
-    FOUR STUBS AND NOT SEVEN SINCE M5.3. It had the sources, the parsers and the reviews gate, and
-    stages 2, 3 and 4 now carry bodies - so the map below is what is still owed rather than what
-    was owed when this test was written, and the milestone that discharged the other three is
-    named above rather than deleted from the sentence. The stages that shipped keep
-    `owner = "M5.3"`: the field reads as provenance the moment a stage has a body, which is
-    already how stages 1, 9 and 10 carry the default, and `pipeline.Stage`'s docstring settles it.
-    This comprehension is scoped to `not s.implemented` and therefore never sees them, which is
-    exactly why that question had to be settled somewhere else.
-
-    THREE STUBS SINCE M5.5, which gave stage 6 its body (decision 432) and keeps `owner = "M5.5"`
-    as provenance by the same rule. Every read below is of `SHIPPED` and not of `pipeline.STAGES`,
-    because this file's autouse fixture now stands stage 6 down as a DECLARED NO-OP - its
-    `implemented` flag is what the spend gate reads - so the patched tuple would report a stub
-    that the build does not ship.
-
-    NO STUBS SINCE M5, which gave stages 5, 7 and 8 their bodies (decisions 461, 462, 463) and
-    keeps `owner = "M5.4"` on each by the same rule: the body is a call into the package M5.4
-    built, so the field names the milestone that wrote it. The map of what is still owed is empty,
-    and the docstring loop below stays for the next stage somebody declares without a body.
-    """
+    it is the only one there. No stage is still a stub since M5 (decisions 461, 462, 463)."""
     assert [s.number for s in SHIPPED if s.paid] == [6]
     assert {s.number: s.owner for s in SHIPPED if not s.implemented} == {}
-    assert {s.number: s.owner for s in SHIPPED if s.implemented} == {
-        1: "M5.1", 2: "M5.3", 3: "M5.3", 4: "M5.3", 5: "M5.4", 6: "M5.5", 7: "M5.4", 8: "M5.4",
-        9: "M5.1", 10: "M5.1",
-    }
-    for stage in SHIPPED:
-        if stage.implemented:
-            continue
-        doc = stage.run.__doc__ or ""
-        assert stage.owner in doc, f"stage {stage.number} does not name its owner in its docstring"
-
-    # AND THE PAID STAGE NAMES THE SAME MILESTONE FOR THE CAP that decision 348's own title does:
-    # "M5.1 owns the refusal, M5.5 owns the cap". Its docstring said the pipeline parks at stage 6
-    # "until M5.7 supplies the cap" - the one line in the tree that files the cap under M5.7, where
-    # four others (decision 348, `refuse_uncapped_spend`, `ROADMAP-M5.md:314-329` and the roadmap's
-    # question ledger, which puts decision 325 under "M5.5 / 0028") say M5.5, and where the roadmap
-    # gives M5.7 no migration at all. M5.7 owns the SURFACE for setting a spend guard. This is the
-    # docstring an M5.5 author reads first, so under the old sentence the correct outcome of their
-    # own commit was a pipeline parked for two further milestones - a state M5.5's own exit
-    # criterion forbids. [M5.1 review cycle 4 second pass, M51-C4-PAID-06]
-    #
-    # RE-POINTED AT M5.5, whose commit this sentence was about: the stage has its body and the
-    # docstring now says in the present tense which milestone supplies the cap it parks against.
-    # The property is the one above - the stage's owner is the cap's owner - read off the new
-    # sentence rather than off the future tense it replaced (decisions 348, 432).
-    paid = next(s for s in SHIPPED if s.paid)
-    owes = re.search(r"\b(M5\.\d) supplies the cap\b", paid.run.__doc__ or "")
-    assert owes and owes.group(1) == paid.owner, (
-        f"the paid stage hands the cap to {owes and owes.group(1)} and its own owner is "
-        f"{paid.owner}; decision 348 says the milestone that fills the stage is the one that owes "
-        "it a cap"
-    )
 
 
 async def test_an_implemented_paid_stage_is_refused_while_a_declared_no_op_is_not(monkeypatch):

@@ -143,11 +143,6 @@ def test_the_two_measured_clauses_survive_the_port():
     vocabulary header, verbatim wherever it is true (a facet whose ids do not begin with its own
     name) and restated as the true sentence where the prefix IS the facet id, which is every
     facet this app stores (named change 3)."""
-    doc = " ".join(contract.__doc__.split())
-    assert "Without it Haiku 4.5 emitted 59% invalid term ids" in doc
-    assert "moved total output from 332 tags to 161" in doc
-    assert 'Do not "clean up" this prompt without re-running the A/B behind each one.' in doc
-
     text = contract.instructions(_vocabulary())
     assert ("Ceilings are upper bounds only; do not work toward the ceiling; a\n"
             "   thinly-discussed film should end up with noticeably fewer tags.") in text

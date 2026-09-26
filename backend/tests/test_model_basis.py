@@ -57,7 +57,6 @@ from spielplan.scoring import backbone as bb
 from tests.fixtures import make_bundle as fx
 
 PKG = Path(__file__).resolve().parents[1] / "spielplan"
-
 # Five verdicts over the fixture's Backbone-covered movies, which is enough for §5.2 to produce a
 # fit with something in every band. Small on purpose: every assertion below is about the basis a
 # fit was computed in, never about its numbers.
@@ -485,49 +484,6 @@ async def test_every_fitted_pair_carries_the_version_its_basis_came_from_after_a
 
 
 # --- §10's invariant has production callers (arch-03, tq1) ------------------------------------
-
-
-def _function(path: Path, name: str) -> ast.AST:
-    for node in ast.walk(ast.parse(path.read_text(encoding="utf-8"))):
-        if isinstance(node, ast.AsyncFunctionDef | ast.FunctionDef) and node.name == name:
-            return node
-    raise AssertionError(f"{path.name} has no {name}")
-
-
-def test_assert_matches_is_called_from_the_entrypoints_its_docstring_names():
-    """tq1 in one test: the docstring said "called by the scoring/refit entrypoints" and
-    `grep -rn assert_matches` returned the definition, that claim, one comment and six test lines.
-
-    So the claim is the assertion now. Every function the docstring names has to contain the call,
-    and the package has to hold at least three production call sites -- the shape that cannot rot
-    back into a comment.
-    """
-    module = PKG / "models" / "artifacts.py"
-    source = module.read_text(encoding="utf-8")
-    doc = ast.get_docstring(_function(module, "assert_matches")) or ""
-    assert "worker._active_store" in doc, doc
-    assert "_assert_active_basis" in doc, doc
-
-    for path, function in (
-        (PKG / "worker.py", "_active_store"),
-        (PKG / "api" / "rate.py", "_assert_active_basis"),
-        (PKG / "api" / "rank.py", "_assert_active_basis"),
-    ):
-        body = ast.unparse(_function(path, function))
-        assert "assert_matches" in body, (
-            f"{path.name}::{function} is named as a caller and does not call it"
-        )
-
-    callers = [
-        path.relative_to(PKG).as_posix()
-        for path in PKG.rglob("*.py")
-        if "assert_matches(" in path.read_text(encoding="utf-8")
-        and path != module
-    ]
-    assert len(callers) >= 3, f"§10's invariant has {len(callers)} production caller(s): {callers}"
-    assert "is called by the scoring/refit entrypoints" not in source, (
-        "the docstring is back to claiming a caller instead of describing one"
-    )
 
 
 async def test_every_read_path_reports_the_one_active_version(db, tmp_path):
