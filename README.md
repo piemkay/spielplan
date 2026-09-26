@@ -2,26 +2,13 @@
 
 A household media graph: your Jellyfin library, a taste model that learns from three-class
 verdicts and comparisons, and a Tonight session that resolves what to watch without an argument.
-
-Standalone by design — backend, database, front end, no cloud, CPU only. Home Assistant is a
-later, additive integration and nothing in the core flows depends on it.
+Standalone by design — backend, database, front end, no cloud, CPU only.
 
 **The spec is the authority.** [`docs/spielplan-spec_v2.1.md`](docs/spielplan-spec_v2.1.md) is
-normative; where this code and the spec disagree, the spec wins and the code is a bug. Every
-non-obvious decision in the source cites the section that mandates it.
-
-- [`docs/spielplan-spec_v2.1.md`](docs/spielplan-spec_v2.1.md) — current spec
-- [`docs/spec-v2.2-proposals.md`](docs/spec-v2.2-proposals.md) — the decision record, amended
-  in place and never forked into a v2.2 (decision 288). Two registers: proposals 1-161 are dated
-  reasoning from the UI-prototype review, citable as provenance and nothing more, and entries from
-  **162 onward are the numbered owner decisions**, each normative from the day it is taken until
-  the amendment it mandates lands in the spec file. The file carries no count of itself any more
-  (decision 460): `grep -c '^### '` is the count. Its first sitting, on 2026-08-29, is seven answers
-  indexed there rather than numbered, one of which is **§6.2 — Tonight, rewritten**,
-  replacing the fixed ten-vote round with an adaptive one. The numbering is neither contiguous nor
-  confined to that file, and the file's own header says where the gaps went
-- [`docs/media-graph-spec_v1.1.md`](docs/media-graph-spec_v1.1.md) — superseded, vendored because
-  v2.1 cites its surviving interaction designs by section
+normative; where this code and the spec disagree, the spec wins and the code is a bug.
+[`docs/spec-v2.2-proposals.md`](docs/spec-v2.2-proposals.md) is the decision record (entries 162
+onward are numbered owner decisions). [`docs/TESTING.md`](docs/TESTING.md) says how to run the
+tests.
 
 ## Shape
 
@@ -32,23 +19,10 @@ docker compose
   worker    same codebase, queue consumer — sync, acquisition, extraction, nightly refits
 ```
 
-Spec §1 draws a fourth `frontend` service; the PWA is a *static* build and §1 explicitly permits
-it to be "served by backend", so it is compiled in a node stage of `ops/backend.Dockerfile` and
-served by the backend. One fewer process on a 4-vCPU box, nothing lost.
-
-**The backend runs as exactly one process.** Do not add `--workers 2`, `WEB_CONCURRENCY`, or a
-gunicorn wrapper, and do not run two replicas of the service: Tonight's lobby, §6.7's transparency
-rail and the push in-flight set are in-process state, so a second worker splits one household into
-two lobbies and two rails — half the phones in a session the other half cannot see. The app
-refuses to start if it detects either setting, and a test pins the shipped `CMD`. A busy evening
-is answered with more CPU on the box, not more app processes. The `worker` service is a separate
-process on purpose and is not affected; its own known consequence is that a nightly refit narrates
-itself to nobody, because the rail buffer it would write to lives in the backend
-(`backend/spielplan/home/rail.py`).
-
-The app itself speaks plain HTTP on one internal port. TLS is the operator's existing
-Traefik + Cloudflare. `PUBLIC_URL` is required config, not decoration: WebAuthn binds passkeys to
-that origin, and changing it later invalidates every registered credential.
+**The backend runs as exactly one process.** Do not add `--workers 2`, `WEB_CONCURRENCY`, a
+gunicorn wrapper or a second replica: Tonight's lobby, the transparency rail and the push in-flight
+set are in-process state. The app refuses to start if it detects either setting. The app speaks
+plain HTTP on one port; TLS is the operator's reverse proxy.
 
 ## Running it
 
@@ -59,46 +33,80 @@ sudo chown -R 1000:1000 data/raw data/artifacts data/cache data/import data/back
 docker compose up
 ```
 
-The `chown` is not decoration: the app containers run as uid 1000 rather than root (§14.3), and
-those five directories are host bind mounts they write. `data/pg` is deliberately absent — it
-belongs to the `db` service's own user. [What lives under `data/`](#what-lives-under-data) says
-what each one holds.
+The app containers run as uid 1000 (§14.3) and those five directories are host bind mounts they
+write. `data/pg` belongs to the `db` service's own user and is left alone.
 
-It has one consequence worth knowing before the wizard's third step rather than during it: the
-bundle is imported from `data/import` and there is no upload route, so it has to be on that host
-directory first — and the directory now belongs to uid 1000, which the operator is not. Creating
-an entry in it therefore takes a `sudo`, and the file has to be readable by the uid that opens it:
+The bundle comes from the corpus project and carries the trained models (§10); nothing here trains
+one. Content seeds once (decision 162), later imports bring models and a migration report, and a
+bundle with a different DNA vocabulary version is refused (decision 163). It is imported from
+`data/import`; there is no upload route, and that directory belongs to uid 1000, so:
 
 ```bash
 sudo install -o 1000 -g 1000 -m 644 spielplan-bundle.tar.zst data/import/
 ```
 
-An unpacked bundle directory works just as well as the archive, and the path field may be left
-empty either way: it defaults to `/data/import`, and a `/data/import` holding no `BUNDLE.json`
-and exactly one `.tar`/`.tar.zst` opens that archive and says so in the report. Two archives in
-there is a refusal naming the count rather than a guess — which is the one thing to know before
-leaving last month's bundle beside this month's.
+An unpacked bundle directory works as well. With no `BUNDLE.json` in `/data/import` and exactly one
+`.tar`/`.tar.zst`, that archive is opened; two archives is a refusal.
 
-Then open `PUBLIC_URL` and walk the first-boot wizard: create admin → connectors → import the
-bundle. It ends there (decision 164): everyone else is added from **Admin > Users**, and each
-member's phone is walked through PWA install and push on its own first run.
+Then open `PUBLIC_URL` and walk the first-boot wizard: create admin, connectors, import the bundle.
+Everyone else is added from **Admin > Users**. A bundle-less app is a legal state (§3.1): every
+artifact-dependent surface says "no bundle imported".
 
-**A bundle-less app is a legal state** (§3.1). Boot with no artifact bundle and the app runs:
-the wizard and admin routes work, and every artifact-dependent surface renders an explicit
-"no bundle imported" state instead of erroring. The bundle step is skippable.
+## Configuration
 
-Back up `.env` alongside the nightly `pg_dump`s. Dumps contain ciphertext only — a restored dump
-cannot decrypt connector config without `SECRETS_KEY`.
+`.env` is read by `docker-compose.yml`; `.env.example` documents every variable.
+
+| variable | |
+|---|---|
+| `PUBLIC_URL` | required. WebAuthn binds passkeys to this origin; changing it invalidates them all |
+| `SESSION_SECRET` | required, at least 32 characters. Rotating it only ends sessions |
+| `SECRETS_KEY` | required, at least 32 characters. Wraps the key that encrypts connector secrets |
+| `POSTGRES_USER`, `POSTGRES_PASSWORD`, `POSTGRES_DB` | the database; `DATABASE_URL` is built from them |
+| `BIND_ADDR`, `PORT` | where the backend is published (default `127.0.0.1:8080`) |
+| `TZ` | household time zone; the nightly dump runs at 06:00 in it |
+| `JELLYFIN_*`, `TMDB_*`, `OMDB_*`, `TRAKT_*`, `*_API_KEY` | optional connector seeds (§2) |
+
+Connector seeds are written only for connectors that have no row yet; after that the database wins
+and **Admin > Connectors** edits them. Rotating `SECRETS_KEY` is `spielplan-secrets rewrap`, and
+`.env.example` gives the exact order. Back up `.env` alongside the dumps: they carry ciphertext only.
 
 ## Recovery
 
-The three things that go wrong on a household box — a restore, an upgrade, and a backup that was
-never happening — and the movie data that has no second copy anywhere. Every command below can be
-checked against this repository: the service names, the mounts and the paths are
-`docker-compose.yml`'s, and `spielplan-secrets` and `spielplan-movie-data` are two of the three
-console scripts `backend/pyproject.toml` declares and the image installs.
+### Backup
 
-### Restore a dump
+The worker writes one `pg_dump` a night at 06:00 household time into `data/backups` and keeps
+fourteen (§2). Names are `spielplan-<UTC timestamp>.dump`. Check them:
+
+```bash
+ls -l data/backups
+docker compose exec db pg_restore --list /backups/spielplan-20260906T060000Z.dump | head
+```
+
+A file ending `.partial` is an interrupted dump, not a backup. **Admin > System** shows the last
+successful dump and the newest run of every job, and warns when nothing has succeeded for 36 hours.
+
+Nothing scheduled copies the `data/` directories anywhere, and the dump is the database only:
+**copy `data/artifacts` yourself** if you would rather not re-import a gigabyte after a disk loss.
+
+This install is the only copy of its movie data (decision 162). Write a restorable archive of the
+content spine, the naming layer and the review bodies, with no user state in it:
+
+```bash
+docker compose exec worker spielplan-movie-data write /data/backups/movie-data.zip
+```
+
+Restoring it refuses an install that already holds movie data and locks every archived table:
+
+```bash
+docker compose stop backend worker
+docker compose run --rm worker spielplan-movie-data restore /data/backups/movie-data.zip
+docker compose start backend worker
+```
+
+The archive carries the review bodies under their terms: it is this household's second copy, never
+a hand-off to another one (see [Data terms](#data-terms)).
+
+### Restore
 
 ```bash
 docker compose stop backend worker
@@ -107,32 +115,16 @@ docker compose exec db pg_restore --clean --if-exists --no-owner \
 docker compose start backend worker
 ```
 
-`-U` and `-d` are `POSTGRES_USER` and `POSTGRES_DB` from `.env`. `/backups` inside the `db`
-container is `./data/backups` on the host, so there is nothing to copy first.
+`-U` and `-d` are `POSTGRES_USER` and `POSTGRES_DB`; `/backups` in the `db` container is
+`./data/backups` on the host. `--clean --if-exists` and stopping the app first are load-bearing:
+without them `connector_config` comes back empty and `app_setting` keeps the fresh install's push
+keypair, while logins still work and the result looks healthy.
 
-`--clean --if-exists` is the load-bearing part, and stopping the app first is what makes it safe.
-A restore happens on a box that is already running, and `docker compose up` completes §3.1's first
-boot before anyone can restore anything — so the target holds rows the dump also holds. Restored
-without those flags it exits 1 with several hundred ignored errors and the result *looks* healthy:
-`title` and `app_user` come back and logins work, while `connector_config` ends with zero rows (its
-COPY fails on the foreign key to `data_encryption_key`) and `app_setting` keeps the fresh install's
-push keypair (its COPY fails on the primary key), so every restored subscription is bound to a key
-the server no longer holds. `--no-owner` covers a dump taken on a box with a different role name.
-The same three commands restore onto a new box whose database nothing has ever touched; that case
-simply never needed the two flags that make this one safe.
-
-**And a dump restores only into the image that wrote it.** `--clean` drops what the *archive*
-holds, so a table a later release added is not in the archive, is not dropped, and is still there
-when the app comes back up and the migration runner reaches the file that creates it. Restoring a
-dump taken before `0017_ops.sql` into a stack running it leaves the backend crash-looping on
-`asyncpg.exceptions.DuplicateTableError: relation "job_run" already exists` — a table name, with
-nothing in it to connect the failure to the dump. The other direction refuses in words: a dump from
-a *newer* release brings `schema_migration` rows this build has no file for, and the runner stops
-with "schema_migration records 1 migration(s) with no file in …".
-
-An older dump therefore needs a database with nothing newer in it, and the way to be sure of that
-is to throw the old one away — which a restore is doing anyway. Drop and recreate it while the app
-is stopped, restore into that, and let the current image apply the missing migrations on its way up:
+**And a dump restores only into the image that wrote it.** `--clean` drops what the archive holds,
+so a table a later release added survives and the migration runner dies on it
+(`DuplicateTableError: relation "job_run" already exists`). A dump from a newer release is refused
+("schema_migration records 1 migration(s) with no file in …"). An older dump goes into a fresh
+database, and the current image applies the missing migrations on its way up:
 
 ```bash
 docker compose stop backend worker
@@ -144,93 +136,41 @@ docker compose ps backend
 docker compose logs --since 2m backend | grep 'applied migrations'
 ```
 
-The last two lines are the confirmation, and they are two because either one alone can be read
-wrong. `docker compose ps` says whether the container is `Up` or `Restarting`: `docker compose
-start` exits 0 for a backend that then crash-loops on the restored schema, which is exactly what
-skipping the DROP above produces. And `--since` bounds the grep to this boot — `start` reuses the
-existing container, whose log still holds every earlier boot, so an unbounded grep will happily
-hand back the line from the `up -d --build` that preceded the restore and call it the answer.
+`ps` must say `Up`, not `Restarting`. The grep must print one line: the migrations applied, or
+`applied migrations: (none pending)`. No line means the boot never reached the migration runner.
+Going back to the older image instead does not work: it refuses a database carrying a migration it
+has no file for.
 
-What it should print is one line naming every migration written since that dump, or `applied
-migrations: (none pending)` when the dump came from this build. The backend logs one of the two on
-every boot, so no line at all is never the good news: it means the boot did not reach the migration
-runner.
+**Restored under a different `SECRETS_KEY`**, the app boots, member writes still return 200 with a
+reason naming the key, and **Admin > System** reports the custody failure. Give up the unreadable
+ciphertext and re-enter the credentials:
 
-Going back to the older release instead does **not** work, and it is worth knowing why before it is
-tried under
-pressure: that image refuses to start against a database carrying a migration it has no file for
-(the orphan refusal above), and restoring first does not help either — the newer release's tables
-are still standing, and the second upgrade dies on them exactly as it did the first time.
+```bash
+docker compose up -d          # only if you just edited .env
+docker compose exec backend spielplan-secrets reset
+```
 
-Two things a dump does not contain:
+`reset` retires the key rows it cannot open and prints each ciphertext it cleared. If
+`app_setting/push.vapid` is among them, run `docker compose restart backend worker`; every phone
+must subscribe to push again. Re-enter the Jellyfin API key on **Admin > Connectors**.
 
-- **`.env`.** It has to be the file that was current when the dump was taken: `SECRETS_KEY` wraps
-  the data-encryption key, and the dump carries only ciphertext (§2). A restore under a different
-  key is survivable rather than fatal, deliberately — the app boots, every member's seen-state,
-  verdict, not-seen and finish-prompt write still returns 200 with a reason naming `SECRETS_KEY`,
-  and **Admin > System** and **Admin > Connectors** both report the custody failure. The way out is
-  to give up the unreadable ciphertext and re-enter the credential:
+**Lost `data/artifacts`**: the backend logs `artifact_bundle <version> is active but
+/data/artifacts/<version> does not exist` and the model jobs refuse to run. Put the files back:
 
-  ```bash
-  docker compose up -d          # only if you just edited .env — see below
-  docker compose exec backend spielplan-secrets reset
-  ```
+```bash
+sudo cp -a /mnt/backup/artifacts/<version> data/artifacts/
+sudo chown -R 1000:1000 data/artifacts/<version>
+docker compose restart backend worker
+```
 
-  `exec` runs with the environment the container was *created* with, so a `SECRETS_KEY` edited in
-  `.env` reaches it only after compose recreates the container — and `reset` refuses outright
-  unless the key is set, because without one to try it cannot tell an unreadable row from a
-  readable one. It then retires the key rows it cannot open, clears the ciphertexts that named
-  them, and prints each cleared row by name. `app_setting/push.vapid` in that list means the web-push
-  keypair was removed rather than emptied, so the next boot mints a fresh one: run
-  `docker compose restart backend worker`, after which push works again and every phone must
-  subscribe once more. Re-enter the Jellyfin API key on **Admin > Connectors**. Rotating a key you
-  still *hold* is the other subcommand and loses nothing; `.env.example` has it.
-
-- **`/data/artifacts`.** The bundle is ~1 GB of files and §2's dump is the database only. The
-  database still names a version as active, so a box that lost the directory boots with
-  `artifact_bundle <version> is active but /data/artifacts/<version> does not exist` in
-  `docker compose logs backend`, **Admin > Data** says the directory is missing, and the model
-  jobs refuse rather than refitting against a zero basis. That state has two ways out and both
-  are the operator's:
-
-  ```bash
-  # either: put the files back from wherever they were copied, then restart
-  sudo cp -a /mnt/backup/artifacts/<version> data/artifacts/
-  sudo chown -R 1000:1000 data/artifacts/<version>
-  docker compose restart backend worker
-  ```
-
-  …or re-import that same bundle version from **Admin > Data**, which now **restages** it: a
-  re-import of the ACTIVE version copies its files back and re-runs §10's rebuild set instead of
-  being refused by decision 162's seed-once rule, which is the repair this state previously had
-  none of. It loads no content — the row stays active throughout, and nothing is re-seeded.
-
-  **Copying `/data/artifacts` is a step §2's backup procedure has to include, because nothing
-  else does it.** The five `data/` directories are host bind mounts (`docker-compose.yml`), and
-  nothing scheduled copies any of them anywhere: the nightly job writes a `pg_dump` into
-  `data/backups` and that is the whole of what is automatic. So "database restored, files
-  missing" is a realistic recovery state rather than a hypothetical one: the nightly dump runs, the
-  restore works, and the box comes back with an active version whose gigabyte is gone. §2 calls
-  the bundle and the raw store "already immutable files" as the reason for dumping Postgres
-  alone; the staged bundle is neither immutable nor backed up — a re-import of the same version
-  overwrites it — so read that clause as "re-importable", and copy the directory anyway if the
-  household would rather not re-import a gigabyte over a domestic connection.
-
-  **And the row that names it is never deleted.** An `artifact_bundle` row is provenance: every
-  placement, prior, score and fit is stamped with the version it was computed in (§10), so the
-  row is what makes those stamps readable. `0023_import_state.sql` holds that as a rule rather
-  than a convention — a `DELETE` is refused unless the row is still `staged` or `failed` *and
-  nothing still cites it*, with an error naming the version and the state (decision 249). No
-  import this app runs leaves such a row behind, because the importer writes `validated` inside
-  the transaction that flips and a failed import rolls its row back, so in practice nothing here
-  is deletable at all. Superseded versions accumulate, and
-  that is correct; their *directories* under `/data/artifacts` are what an operator may remove
-  once nothing is on them, and the active one never is.
+…or re-import the same version from **Admin > Data**, which restages its files without loading any
+content. `artifact_bundle` rows are provenance and never deleted; superseded versions' directories
+under `data/artifacts` may be removed, the active one never.
 
 ### Upgrade
 
 ```bash
-# once, on an install that predates M4.7 — the paragraph after next says why
+# once, on an install that predates M4.7 (the app then started running as uid 1000)
 sudo chown -R 1000:1000 data/raw data/artifacts data/cache data/import data/backups
 
 git pull
@@ -239,57 +179,16 @@ docker compose ps
 docker compose logs --since 2m backend | grep 'applied migrations'
 ```
 
-`--build` is not optional. Both app services declare `build:` with no `image:` tag, so a plain
-`docker compose up` after a `git pull` starts the image already on the box: new code absent, new
-migrations unapplied, and nothing said about either.
+`--build` is not optional: both app services build locally, and a plain `up` starts the old image.
+`ps` must show both app services healthy; the grep reads as under Restore.
 
-The `chown` is the one step an upgrade needs that a fresh install gets by following "Running it".
-Both app processes ran as root until M4.7, so it made no difference whether the five bind mounts
-were owned by root — Docker's, when it creates a missing mount source — or by whoever ran the
-`mkdir`. Neither is uid 1000, which is what the image runs as from this release on (§14.3), and an
-upgrade changes the image and not the directories. Every write into them then fails, and the HTTP
-surface says nothing: the backend still answers `/api/health`, so `docker compose ps backend`
-reports a healthy container over a worker that cannot write the nightly dump into `/data/backups`,
-an importer that cannot stage a bundle under `/data/artifacts`, and a
-`/data/cache/worker.heartbeat` that is never created. That last one is why the confirmation above
-is `docker compose ps` and not `docker compose ps backend`: the heartbeat's age is what the
-worker's healthcheck reads, so a worker with no heartbeat file reports `unhealthy` for ever rather
-than for a night, and the one WARNING it logs about the failed write is written once per outage
-rather than once per tick.
+Two boot refusals an old install can meet, both a crash-looping backend with no migration line:
 
-The grep is the confirmation, and the backend writes one line either way: the versions it applied,
-or `applied migrations: (none pending)`. So a *missing* line is not "no migration ran" — it is a
-boot that never reached the runner, which is what a config refusal, a mistyped service name and a
-container still starting all look like from here, and `docker compose ps` is what tells those from
-a healthy one. After a pull that added a file to `backend/migrations/`, the line names it.
-`--since` is not decoration either: compose leaves a container it did not have to recreate exactly
-where it was, and the log it kept still carries the previous boot's line.
-
-That line only became visible at M4.7: under uvicorn's own logging configuration the root logger
-sits at WARNING with no handlers, and every INFO record this app wrote went nowhere at all.
-
-Two refusals belong to *this* upgrade in particular, and both present as that missing line with a
-crash-looping backend under it. Neither is what `spielplan-secrets reset` — the custody command
-the Restore block above names — is for: the first kills that command with the same error it kills
-the app with, and on the second it reports that custody is intact and exits 0, correctly.
-
-- **`SECRETS_KEY must be at least 32 characters`.** Nothing before M4.7 checked the length, so a
-  hand-typed short value ran perfectly well for as long as it existed; it is refused at
-  construction now, because it wraps a Jellyfin key §14.3 calls admin-equivalent. The way out is a
-  rotation, and it is the one case that runs in the opposite order from the usual one — the new
-  value goes into `.env` *before* the command, because `spielplan-secrets` builds the same
-  `Settings` this refusal comes from before it opens a connection, and would otherwise die on the
-  value it is being run to replace. `.env.example`'s `SECRETS_KEY` block carries that recipe.
-
-- **`could not create unique index "data_encryption_key_one_active"`.** `0017_ops.sql` makes §2's
-  "the one DEK row" a fact of the schema, and an install that lost the first-boot race before that
-  index existed carries two un-retired rows, so the statement cannot build and takes its migration
-  and the boot with it. `spielplan-secrets reset` answers "Custody is intact" here and is right
-  to: both rows open under this `SECRETS_KEY`, and it destroys only what it cannot open. The
-  repair is to retire one, which loses nothing — `load_dek` finds a retired row by id, so every
-  ciphertext naming it still opens, and the only thing the choice decides is where *new* seals go.
-  The app already takes the newest un-retired row, so retiring the older one keeps the arrangement
-  the install was running before it stopped:
+- **`SECRETS_KEY must be at least 32 characters`.** Rotate to a longer key with the new value in
+  `.env` first; `.env.example`'s `SECRETS_KEY` block has the exact order.
+- **`could not create unique index "data_encryption_key_one_active"`.** Two un-retired key rows from
+  an old first-boot race. Retire the older one; nothing is lost, since a retired row still opens
+  every ciphertext naming it:
 
   ```bash
   docker compose exec db psql -U spielplan -d spielplan -c \
@@ -298,132 +197,38 @@ the app with, and on the second it reports that custody is intact and exits 0, c
       "UPDATE data_encryption_key SET retired_at = now() WHERE key_id = '<the older key_id>';"
   ```
 
-  `exec db` and not `exec backend`: the backend is the container that is restarting, and
-  `docker compose exec` needs one that is up. Both app services carry `restart: unless-stopped`,
-  so the next attempt after the `UPDATE` is the one that applies the migration; the two
-  confirmation lines above are how to read it. If those rows are *also* unreadable — a restored
-  dump whose `.env` was not restored — then `reset` is the repair after all, because it retires
-  what it cannot open and that frees the index too. Reach it with `run --rm`, for the same reason
-  as `exec db`: a fresh container rather than the restarting one.
+  The backend restarts by itself and applies the migration. If those rows are also unreadable (a
+  dump restored without its `.env`), run `reset` in a fresh container instead:
 
   ```bash
   docker compose run --rm backend spielplan-secrets reset
   ```
 
-The backend loads an imported bundle by itself within seconds, and the worker on its next job
-(decision 497). A restart is owed only when the Data tab, the wizard or the header says the
-backend could not load it (its log says why); then:
+The backend loads an imported bundle by itself (decision 497). Restart only when the Data tab, the
+wizard or the header says it could not load it:
 
 ```bash
 docker compose restart backend worker
 ```
 
-### Verify a backup
-
-```bash
-ls -l data/backups
-docker compose exec db pg_restore --list /backups/spielplan-20260906T060000Z.dump | head
-```
-
-The worker writes one dump a night at 06:00 household time (`TZ`) and keeps fourteen (§2). Names
-are `spielplan-<UTC timestamp>.dump`: UTC because the name is the whole record and rotation orders
-by it, so the newest name is the newest dump whatever the host clock has been through. Three things
-to know when reading that listing:
-
-- A file ending `.partial` is **not** a backup — it is a `pg_dump` that was interrupted, kept out
-  of the fourteen by that suffix and deleted by the next successful run.
-- A file of the right name can still be a truncated one. `pg_restore --list` prints the archive's
-  table of contents and fails on a dump that is not readable, which is the cheapest real check.
-- **Admin > System** is the same facts without a shell: the last successful dump with its size and
-  age, a warning when nothing has succeeded for 36 hours, and the newest run of every job with its
-  outcome. It reads `job_run`, a row the worker opens before a job runs and closes when it ends.
-
-### The movie data
-
-Decision 162 makes this install the only copy of its movie data: the corpus seeds it once, every
-later title is acquired here, and Spielplan owns the ids. `spielplan.backup.movie_data` writes a
-restorable archive of the content spine, the naming layer and the review bodies, with no user state
-in it:
-
-```bash
-docker compose exec worker spielplan-movie-data write /data/backups/movie-data.zip
-```
-
-The worker and not the backend: `/data/backups` is mounted on the worker alone, because the process
-that serves §6's anonymous SPA fallback has no reason to hold every night's dump (§14.3).
-
-That archive carries the review bodies, so it carries their terms with them: it is this
-household's second copy and never a hand-off to another one. [Data terms](#data-terms) says what
-is in it and under what conditions (decision 292).
-
-The restore refuses an install that already holds movie data, and it locks every archived table for
-its duration, so it is a stop-the-stack event:
-
-```bash
-docker compose stop backend worker
-docker compose run --rm worker spielplan-movie-data restore /data/backups/movie-data.zip
-docker compose start backend worker
-```
-
-`run --rm` rather than `exec`, because `exec` needs a running container and the worker is the
-process being kept out of the way.
-
-**One thing the corpus does not yet supply is axes, and that disables a surface rather than
-degrading it.** The export's `artifacts/dna_vocab/v1/` ships the eleven facet vocabularies and no
-authored axis definition, so `dna_axis_weight` is empty on a real install: §6.4's Map is not
-built yet (§12 M6; until it ships it is absent from navigation and from the title card, decision
-488) and will have nothing to plot when it is, and Tonight's **facet** split (§6.2 step 5) is
-**off** — `contested_facet` iterates zero axes, so a split is surfaced by person instead and never
-names a facet (decision 479). The app says so where an operator looks: the import report names
-both surfaces, and §6.6's Data card lists them under the axis count. Axes can be authored in the
-app's §6.6 axis editor (decision 342) or shipped by the corpus (proposal 140); M4.12 repaired the
-combine's split branch anyway, so the day they arrive is not also the day four defects in that
-branch surface on real pools (decision 173). The suite's split tests hand-seed their axes and say
-so, which makes them statements about the rule rather than about what a household sees tonight —
-`docs/TESTING.md` carries the full version.
-
 ### What lives under `data/`
 
-- `data/pg` — Postgres's own directory. Nothing else writes it.
-- `data/backups` — the nightly dumps, worker only.
+- `data/pg` — Postgres's own directory.
+- `data/backups` — the nightly dumps and the movie-data archive. Mounted on `db` and the worker.
 - `data/artifacts/<version>` — the staged bundle every scoring surface reads. Not in any dump.
-- `data/import` — where a bundle goes to be imported. It takes a bundle DIRECTORY or a
-  `.tar`/`.tar.zst`, and validating an *archive* extracts it to
-  `data/import/.unpacked-<filename>/` — the whole filename, suffix included — a full second
-  copy including `content.sqlite` and `reviews.sqlite`, 790 MB of a 1042 MB bundle. A committed
-  import deletes that tree; a failed one keeps it, because the retry needs it, and a bundle
-  validated but never imported keeps it too. That last one is yours to delete — with `sudo`, and
-  so is putting the bundle there in the first place. The chown below hands this directory to uid
-  1000, and creating or removing an entry in a directory needs write on the directory: the
-  operator can still list it and read what is in it, and can do neither of the two things this
-  bullet is about without borrowing root.
+- `data/import` — where a bundle goes to be imported. Validating an archive extracts it to
+  `data/import/.unpacked-<filename>/`; a committed import deletes that tree, a failed or unrun one
+  keeps it, and removing it is yours:
 
   ```bash
-  sudo install -o 1000 -g 1000 -m 644 spielplan-bundle.tar.zst data/import/
   sudo rm -rf data/import/.unpacked-spielplan-bundle.tar.zst
   ```
 
-- `data/cache` — the model cache, and `worker.heartbeat`, whose age is what the worker's
-  healthcheck reads. `docker compose ps` reports the worker unhealthy when the loop stops going
-  round; nothing restarts it on that, by design.
+- `data/cache` — the model cache and `worker.heartbeat`, whose age the worker's healthcheck reads.
+- `data/raw` — the acquisition raw store (§8). Worker only.
 
-(A sixth, `data/raw`, is mounted on the worker and nothing writes it yet — §2's raw store has no
-producer before M5.)
-
-Every one of them is a bind mount, so the host owns it and the container writes as the uid it runs
-as — **1000**, the unprivileged `spielplan` account `ops/backend.Dockerfile` creates (§14.3: the
-process serving §6's anonymous SPA fallback should not be root). Docker creates a missing mount
-source owned by root, and a directory you made yourself is owned by you, so on a first
-`docker compose up` either way round the container cannot write it:
-
-```bash
-mkdir -p data/raw data/artifacts data/cache data/import data/backups
-sudo chown -R 1000:1000 data/raw data/artifacts data/cache data/import data/backups
-```
-
-Not `data/pg` — that one belongs to the `db` service's own user, which the `postgres:16` image
-sets up itself. Skip this and the symptom is a worker that cannot write a dump and an importer that
-cannot stage a bundle, both with a permission error in `docker compose logs`.
+All but `data/pg` are owned by uid 1000. Skip the `chown` and the worker cannot write a dump nor the
+importer stage a bundle, each with a permission error in `docker compose logs`.
 
 ## Developing
 
@@ -433,257 +238,36 @@ docker compose -f docker-compose.yml -f ops/compose.dev.yml up -d db
 
 # backend
 cd backend && uv venv .venv && uv pip install --python .venv -e ".[dev]"
-.venv/Scripts/python -m pytest          # POSIX: .venv/bin/python
 
-# front end, proxying /api to a backend on :8080
+# front end on :5173, proxying /api to the backend on 127.0.0.1:8080 (API_ORIGIN overrides)
 npm --prefix frontend run dev
 ```
 
-A backend started by hand reads `.env` from its own working directory
-(`Settings(env_file=".env")`), and §2's config is required rather than defaulted: an empty
-`PUBLIC_URL`, one carrying no scheme, a `SESSION_SECRET` under 32 characters, or a `SECRETS_KEY`
-that is *present* and under 32 refuses the boot by name — absent stays legal, because §3.1 makes a
-half-configured boot one, and what a short value means is that somebody typed it.
-Set `SPIELPLAN_INSECURE_DEV=1` to turn those refusals off for a host process nobody else
-can reach — it says so at WARNING on every boot, and `docker-compose.yml` deliberately does not
-forward it, so it cannot be switched on in the shipped stack by editing `.env`. `ops/devstub.py`
-sets it for itself; the test suite sets its own env.
-
-### Tests
-
-Six layers, from pure logic to a browser driving the shipped stack:
-
-```bash
-python -m pytest backend/tests -q        # logic, static guards, schema (needs nothing)
-npm --prefix frontend test               # client helpers
-node e2e/run.mjs                         # the whole stack, desktop and phone
-```
-
-The integration layer needs a real Postgres and **skips without `TEST_DATABASE_URL`**
-(auto-loaded from `.env.test`); the e2e layer needs the compose stack. A pytest run says which of
-the two it is on its own first line, rather than leaving a silence to be interpreted —
-`integration layer: ARMED against 127.0.0.1:5432/spielplan_test_p1234 (source: .env.test)` or
-`integration layer: UNARMED (TEST_DATABASE_URL is unset) -- db/app/pg_url tests skip`. It is
-printed from `pytest_sessionstart` and not only from the report header, because `-q` — the
-verbosity this project actually runs at — suppresses the header, so the hook that was supposed
-to say it said nothing on every run anyone performs. `--no-db` disarms the layer on purpose and
-reports itself in the same words. `backend/tests/spec_coverage.toml` is the contract that says
-which requirement each milestone owes a test, and `test_spec_coverage.py` fails the build when a
-shipped milestone has an uncovered one.
-
-**[`docs/TESTING.md`](docs/TESTING.md)** is the whole picture, including the mechanical routine
-for opening a milestone: raise `current_milestone`, run the suite, and the failure *is* the
-test plan.
-
-### Without Docker at all
-
-```bash
-python ops/devstub.py &                 # fixture-backed API on :8080
-npm --prefix frontend run dev
-```
-
-`ops/devstub.py` is a harness, not the app: it answers the same paths from the test fixture
-bundle, in memory. It calls the *real* validator, so the import report you see is the real one,
-and a contract test keeps its route set aligned. If a shape there ever disagrees with
-`backend/spielplan/api/`, the real app is right.
-
-## Where the model comes from
-
-Nothing here trains a collaborative model. The 64-d item space, the content encoder, the DNA
-vocabulary and the tuned hyperparameters are built and measured in the corpus project and arrive
-as a versioned artifact bundle (§10). This app imports it, validates it against every schema
-landmine, and fits per-user state on CPU.
-
-Re-importing a bundle is a planned admin event with a **migration report** — counts per
-table, validation failures, vocabulary version — and never a silent sync. As §10 read until
-M4.16 it called this a diff report; no diff report was ever written, and §10 now names the one
-the importer produces. What re-imports is models: content seeds once (decision 162), so the re-import that
-arrives carries a retrained backbone and not a second copy of the spine. A bundle whose DNA
-vocabulary version differs from the active one is **refused by name** rather than activated
-(decision 163) — that migration is real work with a plan of its own, and swapping it in would
-strand both DNA tiers at the old version, which is a silent catastrophe rather than an error.
-What a model re-import does recompute is everything expressed in the old basis, because all of it
-is garbage against a new one: user fold-in vectors, blend weights, a full ledger refit, and the
-placement of every locally acquired title.
+The front end needs a real backend on :8080: the compose stack, or uvicorn run by hand
+(`python -m uvicorn spielplan.app:app --port 8080` from `backend/`, with `DATABASE_URL` pointing at
+the published database). A hand-run backend reads `.env` from its working directory and refuses a
+missing or short `PUBLIC_URL`/`SESSION_SECRET`/`SECRETS_KEY` by name; `SPIELPLAN_INSECURE_DEV=1`
+lifts those refusals for a process nobody else can reach, and `docker-compose.yml` never forwards it.
 
 ## Data terms
 
-The bundle is **private household data**, and that is the line nothing in this repository used to
-draw. It is assembled under personal and non-commercial terms; private household use is permitted
-by every source in it, and **publishing it, shipping it as a release asset, or handing the
-`/data/backups` movie-data archive to another household is not** (§10, decision 292).
-`LICENSE` is MIT over this repository's code and covers nothing in the bundle.
+The bundle is **private household data**, assembled under personal and non-commercial terms.
+Private household use is permitted by every source in it; **publishing it, shipping it as a release
+asset, or handing the `/data/backups` movie-data archive to another household is not** (§10,
+decision 292). `LICENSE` is MIT over this repository's code and covers nothing in the bundle.
 
 | what the bundle carries | the terms it travels under |
 |---|---|
-| MovieLens genome and link tables, verbatim (GroupLens) | no redistribution without separate permission |
-| 29,362 scraped IMDb reviews and the IMDb-derived tables | personal, non-commercial; no republishing into a database |
-| 92,449 Metacritic and 43,532 Trakt review bodies | their `rating_source` rows read "not redistributed" |
-| 4,199 whole critic articles from four blogs | whole articles, not excerpts |
-| 4,440 MPST synopses | research dataset |
+| MovieLens genome and link tables (GroupLens) | no redistribution without separate permission |
+| scraped IMDb reviews and IMDb-derived tables | personal, non-commercial; no republishing into a database |
+| Metacritic and Trakt review bodies | their `rating_source` rows read "not redistributed" |
+| whole critic articles from four blogs | whole articles, not excerpts |
+| MPST synopses | research dataset |
 | OMDb plot and metadata text | CC BY-NC |
-| TMDB overviews and poster URLs (9,866 of 11,012) | non-commercial; "not endorsed, certified, or otherwise approved by TMDB" |
-| 8,409 Wikipedia plots and 27 overviews | CC BY-SA, credit required |
-| 1,619 TVmaze `title_meta` rows | CC BY-SA, credit required |
+| TMDB overviews and poster URLs | non-commercial; "not endorsed, certified, or otherwise approved by TMDB" |
+| Wikipedia plots and overviews, TVmaze `title_meta` rows | CC BY-SA, credit required |
 
-The MovieLens row is in the table because the bundle still carries those tables; the importer no
-longer loads them (decision 291), so nothing but the archive file itself holds them here. The
-table is also a summary rather than the authority: the per-dataset terms travel **with the data**,
-in `rating_source`'s `url`, `license`, `version` and `notes`, which the importer keeps
-(`0018_read_layer.sql`) — so an operator reads the terms off their own install rather than off
-this file. The notices those terms require are rendered for every signed-in member on /account's
-**Data sources** block in §6.8's quiet data voice: one notice on one surface, never a source
-name on a poster card (decisions 293 and 298).
-
-One gap, stated rather than left to be discovered: `reviews.sqlite`'s largest slice by row count
-is 295,578 Rotten Tomatoes bodies, and it is not in the table because no record in this repository
-states terms for it. That is a hole in the record, not a permission.
-
-Nothing tracked here is a bundle artefact and nothing tracked here may become one. `/data/` is
-excluded by `.gitignore` and kept out of the build context by `.dockerignore`, and the coverage
-map's `platform-the-private-bundle-is-never-tracked-or-shipped` holds the rest: `git ls-files`
-contains no `*.sqlite`, no `*.npz` and no `BUNDLE.json`. The
-movie-data archive under `data/backups` copies the review bodies, so it inherits every restriction
-above — it is this household's second copy, not a way to hand the data on.
-
-## Build order
-
-`M0` compose, schema, wizard, auth, bundle importer, Library · `M1` Jellyfin + seen-state sync +
-passkeys · `M2` Rate + the Personal Ledger + Home shelves — **the gate**, and the first real test
-of whether any of the corpus measurements transfer to two actual people · `M3` Rank · `M4`
-Tonight · `M4.6` user management (§6.6 Users) · `M5` acquisition + LLM layer · `M6` Map + Taste ·
-`M7` HA hooks.
-
-Full table with exit criteria: spec §12.
-
-### Status
-
-**M0** is in place and verified end to end against Postgres 16 in Docker: `docker compose up`
-brings up db + backend + worker, the first-boot wizard creates the admin, the importer runs the
-§10 swap sequence as far as code can take it (validate → stage → load → transactional flip), and
-the Library and title detail card render the imported titles. §12's exit criterion —
-"bundle imports clean; Library list and title card render imported titles" — was met **against
-the fixture** here and **against the real bundle at M4.5**, and the distance between those two is
-the whole of the M4.5 paragraph below. The release verdict for this row and every other §12 row
-is in [`docs/RELEASE.md`](docs/RELEASE.md), which also carries the criteria nobody has run. Since
-decision 497 the backend loads a flipped bundle itself; the restart above under Recovery is owed
-only when that load fails, and the Data tab says so.
-
-**M1** is in place: the Jellyfin connector (≥ 10.9 routes, the corpus field set), optional
-one-to-one user linking with per-user access tokens, two-way seen-state sync, the ≥ 90%
-playback watcher and its in-app finish prompt, and WebAuthn passkeys. §12's exit criterion —
-"seen states flow both ways" — is asserted in a browser against a Jellyfin that answers
-(`ops/fake_jellyfin.py`) and that **refuses the admin API key on the Played write**, so §7.3's
-per-user-token rule is something a test can break rather than a comment. Passkeys are exercised
-as real ceremonies: a software authenticator in the backend tests, Chromium's virtual
-authenticator in the browser.
-
-**M2** is in place, and it is the gate: §5.2's Personal Ledger (all four arms in one
-likelihood, refit nightly and incrementally), §5.1's scoring stack, §5.3's placement
-reconciliation, §6.1's Rate surface, §6.0's Home shelves, §6.7's transparency rail behind
-decision 117's per-user toggle, and §12's member PWA-install/push onboarding. §12's second exit
-criterion — "every owned title has a coordinate" — is one query, and the partial index exists
-for it. The first — "50–100 verdicts each produce visibly personal rankings" — is a claim about
-a real household with a real bundle, so what ships here is the machinery and the test that the
-loop closes: a sitting of verdicts moves the ranking every shelf is built from, within the
-sitting rather than overnight.
-
-One caveat worth stating rather than discovering: the Ledger's numbers have never met a real
-corpus Backbone — every measurement in this repo is against a synthetic fixture, which is
-exactly the caveat §12 says M2 exists to settle. M2's second caveat has since been answered:
-the push **sender** was M4's and shipped there, so §2's VAPID keypair is generated at first
-boot and §7.3's prompt is carried as a real web push, with the in-app banner still the
-guaranteed fallback.
-
-**M3** is in place: §6.3's Rank board — the seven tiers, drag-and-drop between them, the
-filters, the straddle badge, and the comparison queue that feeds §5.2's pairwise arm. §12's
-exit criterion — "stable tier lists both users endorse" — is, like M2's first, a claim about
-a household rather than something a test can settle; what ships is the board and the assertion
-that the order it draws is the Ledger's. Everything the milestone left open is collected at close,
-in [`docs/milestones/M3-open-points.md`](docs/milestones/M3-open-points.md) — owner decisions,
-spec defects, defects found and deliberately not fixed, and the debt that looks like coverage.
-
-**M4** is in place: §6.2's Tonight — the lobby and the open-rooms list, push-carried joins,
-the round of this-or-that pairs, the guest hand-off on the initiator's phone, the group combine
-with its split surfacing, the blind reveal, the result card, and solo mode. Two things
-have moved under it since: the round is **adaptive in length** rather than a fixed ten votes
-(a median of about ten pairs on a household's film pool since decision 477, capped at twenty), and
-nothing about a session renders on a TV — the phone is the only surface and the `/tv` route is
-deleted rather than deferred (decision 165, carried out by M4.12). §12's exit criterion — "a real Friday night resolved
-by the app" — is another household claim; M4.12 is what rebuilt the flow against the real pool
-rather than the fixture's. Open points:
-[`docs/milestones/M4-open-points.md`](docs/milestones/M4-open-points.md).
-
-**M4.5** is not in §12. It exists because the sentence that used to stand here — "the corpus
-bundle does not exist in this repo" — was false, and the importer had been written accordingly:
-against a schema nobody had opened, and verified against a fixture that reproduced every measured
-landmine and invented every structure around them. A bundle built by `mdc export-bundle` on
-2026-08-28 could not be imported at all, and all nine Cold Tower feature blocks missed every
-column they declared, silently, because the fixture's contract named them the way the builder
-keyed them.
-
-The bundle is still not vendored — it is ~1.15 GB — but it is now the authority. The fixture
-reproduces the landmines at eight-title scale **in the corpus's own schema**, and
-`tests/fixtures/real_bundle_shapes.json` is a committed, data-free manifest of a real bundle's
-shapes that the fixture is held to on every run; point `CORPUS_BUNDLE_DIR` at a real bundle and
-the same manifest is checked against it, so a corpus-side format change fails this repo's suite
-instead of surfacing as a mystery at import time. A column reaches the manifest as `p:<s>:<s>`,
-never as anyone's name.
-
-M4.8 added the two corpus shapes that eight titles were still missing, because a manifest of shapes
-does not make the fixture *carry* them: the same credit filed under two department spellings (7,918
-such triples across 1,216 real titles), and a `dna_tag.facet` that is the extraction label rather
-than the term's own prefix (29,188 of 31,540 rows). Both were live defects and both are now
-closed: the credit collision by `ee35d52`, which grouped `credits_for` by (person, job) and keyed
-the card on the same pair, and the facet by M4.9 below. Neither was reachable *through the
-importer* until the fixture carried it —
-the credit shape existed only where `test_import_integration.py` inserts one by hand, which proves
-the query and says nothing about the bundle it has to survive. It also added an opt-in
-`make_bundle(dir, pool_titles=N)`, generated entirely from the authored vocabulary so the feature
-contract does not widen by a single column: eight titles still beat eleven thousand for the traps,
-and they cannot measure what a selector costs over the real bundle's 696 owned movies.
-
-Two owner decisions (2026-09-01/02) changed what this project is to that one. **162:** the corpus
-supplies trained models; movie data is seeded **once**; every later title is acquired by this app
-(§7.2, §8); Spielplan owns all ids, minted from a range disjoint from the corpus's, because the
-corpus's own `sqlite_sequence` reads 21442 and "mint above the imported maximum" would have
-started this app at exactly the id the corpus mints next. **163:** a DNA vocabulary change is a
-data migration, not an import, and is refused until that migration exists.
-
-**M4.9** has a §12 row of its own, and it is a row this table already had — M0's "bundle imports
-clean; Library list and title card render imported titles" was closed against the fixture, and the
-fixture does not carry the shapes the export actually ships. M4.9 is the repair, end to end: one
-facet vocabulary from the loader through migration `0018_read_layer.sql`'s backfill, the SQL
-predicate, the chip and §6.8's palette; a title card that renders past its credits on the 1,216
-titles whose keyed each used to throw, and says how many of them it is hiding; a catalogue whose
-pagination is a total order and whose search treats `%` and `_` as text; two authenticated routes
-that partition by kind; a Home whose shelf-1 anchor is a title its owner actually rated and whose
-"no crowd data yet" badge reads `e_source` rather than the placement stamp; §6.7's rail mounted
-once in the shell so it opens from every surface; and `title_company`, `title_video`,
-`rating_source` and the ML link no longer dropped or misreported by the loader. Owner decisions
-**187–193** record the seven calls it needed — including that a projected DNA term is bounded by a
-saturating weight rather than clamped (188), that posters do not ship here (190), and that
-`title_company` loads keyed per source (193).
-
-Its exit criterion is `ops/m49_exit_criterion.py`: twelve measures against the real bundle, which
-it **refuses to run without** — every one of them is zero on eight fixture titles. It has been
-written and not yet run; `docs/TESTING.md` carries the command and says why no count is published
-here until a real run prints one.
-
-### Before the release: M4.6 – M4.16
-
-A full pre-release review of `m45` (2026-09-03/04) produced 439 findings, of which 389 are grouped
-into eleven milestones that all land before M5, and 50 are deferred with reasons.
-**[`docs/milestones/ROADMAP-to-M5.md`](docs/milestones/ROADMAP-to-M5.md) is the entry point** — it
-carries the milestone table, the pre-allocated migration ledger, the twelve decisions taken on
-2026-09-04 (**167–178**), the deferred buckets and the sequencing. Each milestone has its own plan
-beside it, written to be handed to one implementation agent.
-
-Three further owner decisions (2026-09-03) changed scope and are already amended into the spec.
-**164:** accounts are created and managed in §6.6 Users, not the first-boot wizard. **165:** nothing
-about a Tonight session renders on the TV — the phone is the only surface, results included; the
-`/tv` route is deleted rather than deferred — carried out by **M4.12**, which removed the
-route, its e2e spec, its coverage row and the five v2.1 sentences that funded it. **166:** a guest is a Tonight session seat with no
-account and no profile, the account table keeps **two roles**, at least one active admin always
-exists, and the app gains real user management including password reset (that last part is
-**M4.6**, a milestone §12 did not have).
+The per-dataset terms travel with the data in `rating_source` (`url`, `license`, `version`,
+`notes`), and the notices they require are on /account's **Data sources** block. `reviews.sqlite`
+also carries Rotten Tomatoes bodies for which no record here states terms; that is a hole in the
+record, not a permission. `/data/` is excluded by `.gitignore` and `.dockerignore`.

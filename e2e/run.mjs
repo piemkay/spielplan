@@ -44,7 +44,7 @@ const passthrough = process.argv.slice(2);
 // that knows only one refuses on the machine it matters most on. `backend/.venv` is the one
 // README's "Running it" and CLAUDE.md's command line name, and it is what a developer's box and
 // this worktree have. The checkout-root `.venv` is what every `uv venv` in `.github/workflows`
-// creates -- ci.yml's four jobs, release.yml's leg 5 and real-bundle.yml -- and none of them ever
+// creates -- ci.yml's four jobs, release.yml's leg 4 and real-bundle.yml -- and none of them ever
 // creates `backend/.venv` at all, so the first draft of this block exited 1 at its first statement
 // on every runner in the project, taking ci.yml's e2e job and the release gate's last leg with it.
 // Naming both is still decision 299's rule rather than a softening of it: these are the two

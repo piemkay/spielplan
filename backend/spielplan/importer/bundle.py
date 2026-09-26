@@ -1198,7 +1198,7 @@ async def validate_for_install(
     # that reach this function are `async def`, so FastAPI's threadpool does not apply and that
     # window was spent on the API process's single loop - `app._HEALTH_TIMEOUT_S` is 2, so
     # `/api/health` answered 503 once inside `POST /import`'s validation window in every recorded
-    # run of `ops/m414_exit_criterion.py`, and its check 9 was the one red check of thirteen.
+    # run of M4.14's exit script, and its check 9 was the one red check of thirteen.
     #
     # A THREAD and not decision 252's one-shot child process: the cost that ruling was written
     # against is a blocked loop, and hashlib, sqlite3 and torch all release the GIL for the work

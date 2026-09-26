@@ -1206,7 +1206,7 @@ async def enrich(ctx: StageContext) -> Outcome:
     `available_kinds` and never runs, which §3.1 makes a legal install rather than a broken one,
     while a TMDB that was asked and did not answer is the one failure §8 stage 2 cannot shrug off.
     Read the other way round this stage would park every task on every install that has not yet
-    typed a key into §6.6's TMDB card, including the installs `ops/m51_exit_criterion.py` measures.
+    typed a key into §6.6's TMDB card.
     The unconfigured title is not lost: it reaches stage 4 with no plot and no reviews and parks
     THERE, with the counts in its reason, which is the honest sentence for it.
 

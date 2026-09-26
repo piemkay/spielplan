@@ -81,9 +81,9 @@ IMDb's per-category rows, and under decision 162 content seeds once. `0026` give
 `origin` column and both deletes below name `origin = 'derived'`, so this module can take back only
 rows it can rebuild - and, because the corpus crawled the same sources, it does not write a row the
 bundle already holds a second time beside it (`_replace`, `_reviews`). THE CREDIT HALF IS
-DELIBERATELY NOT TREATED THIS WAY and `ops/m53_exit_criterion.py` argues it at the line: a
-re-fetched TMDB cast is the same cast under the same label, so a title whose credits this stage
-re-derives has lost nothing it cannot ask for again. [M5.3 review cycle 2, m53-c2-d375-01]
+DELIBERATELY NOT TREATED THIS WAY: a re-fetched TMDB cast is the same cast under the same label, so
+a title whose credits this stage re-derives has lost nothing it cannot ask for again.
+[M5.3 review cycle 2, m53-c2-d375-01]
 
 `award` IS STILL THE ONE DERIVED TABLE THIS SCHEMA GIVES NO SOURCE COLUMN, which is a different
 sentence from the one above and a different column. The corpus ships `award.source` and
