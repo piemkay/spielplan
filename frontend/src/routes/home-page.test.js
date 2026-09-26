@@ -213,6 +213,11 @@ describe('a filtered grid is read in the order the server says it used', () => {
     await tick();
     expect(seen.some((u) => u.includes('/api/titles') && u.includes('sort=newest'))).toBe(true);
     expect($('[data-testid="sort-newest"]').getAttribute('aria-pressed')).toBe('true');
+    // A search is best match first whatever the filtered grid was put in.
+    await type('heat');
+    const last = seen.filter((u) => u.includes('/api/titles')).at(-1);
+    expect(last).toContain('q=heat');
+    expect(last).not.toContain('sort=');
   });
 
   it('offers no order control where the server names none, or on a search', async () => {

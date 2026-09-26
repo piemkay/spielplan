@@ -187,7 +187,8 @@
       seen: seen === 'any' ? undefined : seen,
       person_id: personIds ?? undefined,
       owned_only: owned || undefined,
-      sort: sort ?? undefined,
+      // A search is best match first (decision 472) whatever order a filtered grid was put in.
+      sort: q.trim() ? undefined : (sort ?? undefined),
       limit,
       offset: from
     })}`;
@@ -264,12 +265,12 @@
   // what this catches: the film genres would otherwise settle above the series grid.
   let facetSeq = 0;
 
+  /** The facets it applied; null when the read failed, undefined when a newer read superseded it. */
   async function loadFacets() {
     const seq = ++facetSeq;
-    const found =
-      (await get(`/facets${qs({ kind: kinds })}`).catch(() => null)) ?? { genres: [], decades: [] };
-    if (seq !== facetSeq) return null;   // a newer request has already answered
-    facets = found;
+    const found = await get(`/facets${qs({ kind: kinds })}`).catch(() => null);
+    if (seq !== facetSeq) return undefined;   // a newer request has already answered
+    facets = found ?? { genres: [], decades: [] };
     return found;
   }
 
@@ -312,13 +313,14 @@
     // every switch, which lost "Drama" on the way from Films to Series (second household test,
     // U8): now a filter the new kinds carry stays, and one they do not is cleared and named.
     const found = await loadFacets();
-    if (!found) return;                  // a newer tap is on its way and will load
+    if (found === undefined) return;     // a newer tap is on its way and will load
     const dropped = [];
-    if (genre && !found.genres.includes(genre)) {
+    // A failed read says nothing about the new kind's vocabulary, so it clears nothing.
+    if (found && genre && !found.genres.includes(genre)) {
       dropped.push(genre);
       genre = '';
     }
-    if (decade && !found.decades.map(String).includes(String(decade))) {
+    if (found && decade && !found.decades.map(String).includes(String(decade))) {
       dropped.push(`${decade}s`);
       decade = '';
     }
