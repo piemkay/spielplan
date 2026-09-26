@@ -22,22 +22,36 @@
    * beside the toggle that governs it, because mounted here it was reachable from this surface
    * alone [M4.9 finding 25]. All this file still owes it is proposal 28's suppressed list, which
    * no other payload carries.
+   *
+   * PHONE FIRST (decision 516). On a phone the first screen of Home was seven filter controls and
+   * the shelves began below the fold (second household test, U1). The kind switch and the search
+   * box stay in view; genre, decade, seen state and "in my library" sit behind one Filters control
+   * that says how many are set, and every set filter still shows as a removable chip. A filtered
+   * grid is ordered for the member by default, with Newest one tap away (the server's `sort`).
    */
   import { onMount } from 'svelte';
   import { get, qs } from '$lib/api.js';
   import { session } from '$lib/session.svelte.js';
   import {
     KIND_CHOICES,
+    SORT_CHOICES,
+    activeFilterCount,
     countLabel,
+    elsewhereLine,
+    gridLine,
     gridReason,
     homeMode,
     kindChoice,
     kindsFor,
     libraryLabel,
     loadHome,
-    modelGate
+    modelGate,
+    otherKinds,
+    sortOffered,
+    strongEnd
   } from '$lib/home.svelte.js';
   import { publishSuppressed } from '$lib/rail.svelte.js';
+  import { displayNames } from '$lib/titleCard.js';
   import FinishPrompt from '$lib/components/FinishPrompt.svelte';
   import PendingVerdicts from '$lib/components/PendingVerdicts.svelte';
   import PosterCard, { isColdPlaced } from '$lib/components/PosterCard.svelte';
@@ -65,6 +79,19 @@
   let hidden = $state({});
   let selected = $state(null);
   let loadError = $state('');
+  // Decision 516's one Filters control, shut by default so the shelves are the first screen.
+  let filtersOpen = $state(false);
+  // The order the member picked, or null for the server's default; `sortEcho` is the order the
+  // server says it used, which is what the control shows pressed.
+  let sort = $state(null);
+  let sortEcho = $state(null);
+  // An empty grid whose other kind holds matches: `{kind, names, total}` (second household test,
+  // U7 - "Broadchurch" with Films selected said "No matches").
+  let elsewhere = $state(null);
+  // The weak tail of a search, folded until asked for (U14).
+  let showWeak = $state(false);
+  // What a kind switch had to clear, said rather than done silently (U8).
+  let kindNote = $state('');
 
   /** @type {any} */
   let home = $state(null);
@@ -75,6 +102,14 @@
 
   const mode = $derived(homeMode({ q, personId: personIds, genre, decade, seen, owned }));
   const reason = $derived(gridReason({ q, personId: personIds, genre, decade, seen, owned }));
+  const nFilters = $derived(activeFilterCount({ genre, decade, seen, owned }));
+  // Decision 472 lists the best match first; the hits that only contain the letters somewhere
+  // are the tail, and it is folded rather than dropped (U14 of the second household test).
+  const cut = $derived(reason === 'search' ? strongEnd(items, q) : 0);
+  const weakItems = $derived(cut ? items.slice(cut) : []);
+  const strongItems = $derived(weakItems.length ? items.slice(0, cut) : items);
+  // Everything after the last strong hit is weaker, loaded or not: the list is ordered by quality.
+  const weakTotal = $derived(weakItems.length ? total - cut : 0);
 
   // Decision 117 still strips `suppressed` when the toggle is off, so this publishes an absence
   // as readily as a list. The shell renders it: it has no `/api/home` response of its own and
@@ -142,34 +177,66 @@
   // response lands after a fast later one and the grid shows the wrong filter's results.
   let requestSeq = 0;
 
+  /** The grid's query for these kinds: every filter, and the order the member picked if any. */
+  function titlesQuery(forKinds, { limit = LIMIT, offset: from = 0 } = {}) {
+    return `/titles${qs({
+      kind: forKinds,
+      q,
+      genre,
+      decade: decade || undefined,
+      seen: seen === 'any' ? undefined : seen,
+      person_id: personIds ?? undefined,
+      owned_only: owned || undefined,
+      // A search is best match first (decision 472) whatever order a filtered grid was put in.
+      sort: q.trim() ? undefined : (sort ?? undefined),
+      limit,
+      offset: from
+    })}`;
+  }
+
   async function load({ append = false } = {}) {
     const seq = ++requestSeq;
     loading = true;
     loadError = '';
+    if (!append) {
+      showWeak = false;
+      elsewhere = null;
+    }
     try {
-      const res = await get(
-        `/titles${qs({
-          kind: kinds,
-          q,
-          genre,
-          decade: decade || undefined,
-          seen: seen === 'any' ? undefined : seen,
-          person_id: personIds ?? undefined,
-          owned_only: owned || undefined,
-          limit: LIMIT,
-          offset: append ? offset : 0
-        })}`
-      );
+      const res = await get(titlesQuery(kinds, { offset: append ? offset : 0 }));
       if (seq !== requestSeq) return;      // a newer request has already answered
       items = append ? [...items, ...res.items] : res.items;
       total = res.total;
       hidden = res.hidden ?? {};
       offset = (append ? offset : 0) + res.items.length;
+      // Absent from a build that does not echo it, and then no order control is offered.
+      sortEcho = res.sort ?? null;
+      if (!append && !res.items.length) findElsewhere(seq, res.hidden ?? {});
     } catch (err) {
       if (seq === requestSeq) loadError = err.message;
     } finally {
       if (seq === requestSeq) loading = false;
     }
+  }
+
+  /**
+   * An empty grid asks the kind it was not showing. `hidden` already says how many match there
+   * under the same filters; this names the first two, so the empty state can say "Found in Series:
+   * Broadchurch" and offer the switch instead of "Nothing matches" (U7 of the second household
+   * test). Tied to the grid's own sequence number, so a later filter never inherits the answer.
+   */
+  async function findElsewhere(seq, counts) {
+    const kind = otherKinds(kinds).find((k) => (counts[k] ?? 0) > 0);
+    if (!kind) return;
+    const res = await get(titlesQuery([kind], { limit: 2 })).catch(() => null);
+    if (seq !== requestSeq || !res?.items?.length) return;
+    elsewhere = { kind, names: res.items.map((t) => displayNames(t).primary), total: res.total };
+  }
+
+  function chooseSort(id) {
+    if (sortEcho === id) return;
+    sort = id;
+    load();
   }
 
   let homeSeq = 0;
@@ -198,12 +265,13 @@
   // what this catches: the film genres would otherwise settle above the series grid.
   let facetSeq = 0;
 
+  /** The facets it applied; null when the read failed, undefined when a newer read superseded it. */
   async function loadFacets() {
     const seq = ++facetSeq;
-    const found =
-      (await get(`/facets${qs({ kind: kinds })}`).catch(() => null)) ?? { genres: [], decades: [] };
-    if (seq !== facetSeq) return;        // a newer request has already answered
-    facets = found;
+    const found = await get(`/facets${qs({ kind: kinds })}`).catch(() => null);
+    if (seq !== facetSeq) return undefined;   // a newer request has already answered
+    facets = found ?? { genres: [], decades: [] };
+    return found;
   }
 
   onMount(async () => {
@@ -230,7 +298,7 @@
     loadShelves();
   });
 
-  function chooseKinds(choice) {
+  async function chooseKinds(choice) {
     // Every position selects at least one kind, so "neither" - the unpartitioned query §4.1
     // rule 5 exists to prevent - has no tap that reaches it (decisions 18 and 474).
     if (kindChoice(kinds) === choice) return;
@@ -238,13 +306,30 @@
     // Proposal 32: "switching it closes any open title card, because the card's tier and
     // ledger weight are per-kind quantities."
     selected = null;
-    // The facet vocabulary is scoped to the selection, so a genre that only exists in the
-    // kind you just switched off would otherwise stay selected and silently return nothing.
-    genre = '';
-    decade = '';
-    loadFacets();
-    load();
+    kindNote = '';
     loadShelves();
+    // The facet vocabulary is scoped to the selection, so a genre that only exists in the kind
+    // just switched off would stay selected and silently return nothing. It used to be cleared on
+    // every switch, which lost "Drama" on the way from Films to Series (second household test,
+    // U8): now a filter the new kinds carry stays, and one they do not is cleared and named.
+    const found = await loadFacets();
+    if (found === undefined) return;     // a newer tap is on its way and will load
+    const dropped = [];
+    // A failed read says nothing about the new kind's vocabulary, so it clears nothing.
+    if (found && genre && !found.genres.includes(genre)) {
+      dropped.push(genre);
+      genre = '';
+    }
+    if (found && decade && !found.decades.map(String).includes(String(decade))) {
+      dropped.push(`${decade}s`);
+      decade = '';
+    }
+    if (dropped.length) {
+      const noun = choice === 'series' ? 'series' : choice === 'movie' ? 'films' : 'titles';
+      const them = dropped.length > 1 ? 'them' : 'it';
+      kindNote = `${dropped.join(' and ')} cleared - no ${noun} match ${them}.`;
+    }
+    load();
   }
 
   let debounce;
@@ -291,6 +376,7 @@
     if (which === 'genre') genre = '';
     if (which === 'decade') decade = '';
     if (which === 'seen') seen = 'any';
+    if (which === 'owned') owned = false;
     load();
   }
 
@@ -337,64 +423,95 @@
       {/each}
     </div>
 
-    <input
-      type="search"
-      data-testid="home-search"
-      bind:value={q}
-      oninput={onQuery}
-      placeholder="search title, alias"
-      aria-label="Search titles"
-    />
+    <div class="searchrow">
+      <input
+        type="search"
+        data-testid="home-search"
+        bind:value={q}
+        oninput={onQuery}
+        placeholder="search title, alias"
+        aria-label="Search titles"
+      />
+      <!-- Decision 516: the four catalog filters behind one control, so a phone opens on the
+           shelves. It says how many are set, and each set one is also a chip below. -->
+      <button
+        class="pill filtertoggle"
+        aria-expanded={filtersOpen}
+        aria-controls="home-filters"
+        data-testid="filter-toggle"
+        onclick={() => (filtersOpen = !filtersOpen)}
+      >{nFilters ? `Filters · ${nFilters}` : 'Filters'}</button>
+    </div>
   </div>
 
-  <div class="filters">
-    <select
-      class="genre"
-      bind:value={genre}
-      onchange={() => load()}
-      aria-label="Genre"
-      data-testid="filter-genre"
-    >
-      <option value="">every genre</option>
-      {#each facets.genres as g (g)}<option value={g}>{g}</option>{/each}
-    </select>
-    <select bind:value={decade} onchange={() => load()} aria-label="Decade" data-testid="filter-decade">
-      <option value="">every decade</option>
-      {#each facets.decades as d (d)}<option value={d}>{d}s</option>{/each}
-    </select>
-    <select bind:value={seen} onchange={() => load()} aria-label="Seen state" data-testid="filter-seen">
-      <option value="any">seen or not</option>
-      <option value="seen">seen</option>
-      <option value="unseen">unseen</option>
-    </select>
-    <!-- The catalog is all of the bundle, and the household owns a few hundred of its thousands:
-         this is the one-tap way to the ones Play works on. Off by default, so §6.0 M0's catalog
-         stays the catalog. -->
-    <button
-      class="pill"
-      aria-pressed={owned}
-      onclick={toggleOwned}
-      data-testid="filter-owned"
-    >in my library</button>
-    {#if personIds}
-      <!-- Proposal 30: the chip IS the clear control, and it is the only way back out of a
-           filmography — so it is always visible and always removable. -->
-      <button class="pill on" onclick={clearPerson} data-testid="person-chip">{personName} ✕</button>
-    {/if}
-    {#if genre}
-      <button class="pill on" onclick={() => clearFilter('genre')} data-testid="genre-chip">{genre} ✕</button>
-    {/if}
-    {#if decade}
-      <button class="pill on" onclick={() => clearFilter('decade')} data-testid="decade-chip">{decade}s ✕</button>
-    {/if}
-    {#if seen !== 'any'}
-      <button class="pill on" onclick={() => clearFilter('seen')} data-testid="seen-chip">{seen} ✕</button>
-    {/if}
-  </div>
+  {#if filtersOpen}
+    <div class="filterpanel" id="home-filters" data-testid="filter-panel">
+      <select
+        class="genre"
+        bind:value={genre}
+        onchange={() => load()}
+        aria-label="Genre"
+        data-testid="filter-genre"
+      >
+        <option value="">every genre</option>
+        {#each facets.genres as g (g)}<option value={g}>{g}</option>{/each}
+      </select>
+      <select bind:value={decade} onchange={() => load()} aria-label="Decade" data-testid="filter-decade">
+        <option value="">every decade</option>
+        {#each facets.decades as d (d)}<option value={d}>{d}s</option>{/each}
+      </select>
+      <select bind:value={seen} onchange={() => load()} aria-label="Seen state" data-testid="filter-seen">
+        <option value="any">seen or not</option>
+        <option value="seen">seen</option>
+        <option value="unseen">unseen</option>
+      </select>
+      <!-- The catalog is all of the bundle, and the household owns a few hundred of its thousands:
+           this is the one-tap way to the ones Play works on. Off by default, so §6.0 M0's catalog
+           stays the catalog. -->
+      <button
+        class="pill"
+        aria-pressed={owned}
+        onclick={toggleOwned}
+        data-testid="filter-owned"
+      >in my library</button>
+    </div>
+  {/if}
+
+  {#if personIds || (nFilters && !filtersOpen)}
+    <div class="filters">
+      {#if personIds}
+        <!-- Proposal 30: the chip IS the clear control, and it is the only way back out of a
+             filmography — so it is always visible and always removable. -->
+        <button class="pill on" onclick={clearPerson} data-testid="person-chip">{personName} ✕</button>
+      {/if}
+      <!-- Every set filter stays in view as its own clear control while the panel is shut: a
+           narrowed grid never hides why it is narrow (proposal 152's chips, decision 516). With
+           the panel open its own controls say the same, and the chips would say it twice. -->
+      {#if !filtersOpen}
+        {#if genre}
+          <button class="pill on" onclick={() => clearFilter('genre')} data-testid="genre-chip">{genre} ✕</button>
+        {/if}
+        {#if decade}
+          <button class="pill on" onclick={() => clearFilter('decade')} data-testid="decade-chip">{decade}s ✕</button>
+        {/if}
+        {#if seen !== 'any'}
+          <button class="pill on" onclick={() => clearFilter('seen')} data-testid="seen-chip">{seen} ✕</button>
+        {/if}
+        {#if owned}
+          <button class="pill on" onclick={() => clearFilter('owned')} data-testid="owned-filter-chip"
+            >in my library ✕</button
+          >
+        {/if}
+      {/if}
+    </div>
+  {/if}
 
   <div class="data count" data-testid="count-line">
     {count}{bundleNote}
   </div>
+  {#if kindNote}
+    <p class="why kindnote" role="status" data-testid="kind-filter-note">{kindNote}</p>
+  {/if}
 </div>
 
 {#if home?.degraded && home.degraded.state !== 'no_bundle'}
@@ -446,8 +563,25 @@
 {/snippet}
 
 {#if mode === 'grid'}
-  <div class="modeline data" data-testid="home-mode" data-mode="grid" data-reason={reason}>
-    {`${reason === 'person' ? 'filmography' : reason === 'search' ? 'search · best match first' : 'filtered'} · clear it to get your shelves back`}
+  <div class="gridhead">
+    <p class="modeline why" data-testid="home-mode" data-mode="grid" data-reason={reason}>
+      {gridLine(reason)}
+    </p>
+    {#if sortOffered(reason, sortEcho)}
+      <!-- Decision 516: a filtered grid is read in the member's own order by default - "best
+           sci-fi for me in my library" - with the year order one tap away. The pressed position is
+           the order the server says it used, never the one this page asked for. -->
+      <div class="sort" role="group" aria-label="Order">
+        {#each SORT_CHOICES as c (c.id)}
+          <button
+            class="pill"
+            data-testid="sort-{c.id}"
+            aria-pressed={sortEcho === c.id}
+            onclick={() => chooseSort(c.id)}
+          >{c.label}</button>
+        {/each}
+      </div>
+    {/if}
   </div>
 
   {#if loadError}
@@ -456,6 +590,17 @@
     <div class="empty card">
       {#if !session.hasBundle}
         {@render noBundle()}
+      {:else if elsewhere}
+        <!-- The other kind holds matches: say where, and offer the switch (U7). -->
+        <h2>Not in {kindChoice(kinds) === 'series' ? 'series' : 'films'}</h2>
+        <p class="why" data-testid="found-elsewhere">
+          {elsewhereLine(elsewhere.kind, elsewhere.names, elsewhere.total)}
+        </p>
+        <button
+          class="btn-primary"
+          data-testid="found-elsewhere-switch"
+          onclick={() => chooseKinds(elsewhere.kind)}
+        >{elsewhere.kind === 'series' ? 'Show series' : 'Show films'}</button>
       {:else}
         <h2>No matches</h2>
         <!-- [M4.9 finding 19] This said "try a DNA term — cosy, dread, slow-burn — or check the
@@ -466,10 +611,13 @@
              was sending people to two dead ends, so it now names the dimensions §6.0's M0
              catalog really has, in §6.8's quiet register. Making `q` search DNA terms instead is
              not the fix — §6.4 is where compositional search is specified, and M6 owns it. -->
-        <p class="why">Nothing in the library matches.</p>
+        <!-- "Nothing in the library matches" was false twice over: the grid lists the whole
+             catalog unless "in my library" is on, and it said so about a series the Films
+             position was hiding (second household test, U7). -->
+        <p class="why">{owned ? 'Nothing in your library matches.' : 'Nothing matches.'}</p>
         <p class="data" data-testid="no-matches-help">
-          search reads the title and its aliases · the kind switch, genre, decade, seen state
-          and "in my library" narrow it further · clear a chip to widen it
+          search reads the title and its aliases · the kind switch and Filters (genre, decade,
+          seen state, "in my library") narrow it further · clear a chip to widen it
         </p>
       {/if}
     </div>
@@ -486,11 +634,30 @@
       </p>
     {/if}
     <div class="grid">
-      {#each items as t (t.id)}
+      {#each strongItems as t (t.id)}
         <PosterCard title={t} onSelect={() => (selected = t.id)} />
       {/each}
     </div>
-    {#if offset < total}
+    {#if weakItems.length}
+      <!-- U14 of the second household test: "Up" listed 361 films, "Superman" and "Cupid" among
+           them. The hits that only contain the letters somewhere come after every closer match
+           (decision 472) and wait behind one button rather than filling the screen. -->
+      {#if showWeak}
+        <p class="why weakhead" data-testid="weak-matches-head">Looser matches</p>
+        <div class="grid" data-testid="weak-matches">
+          {#each weakItems as t (t.id)}
+            <PosterCard title={t} onSelect={() => (selected = t.id)} />
+          {/each}
+        </div>
+      {:else}
+        <div class="more">
+          <button class="btn-ghost" data-testid="weak-matches-toggle" onclick={() => (showWeak = true)}>
+            {`Show ${weakTotal.toLocaleString()} looser ${weakTotal === 1 ? 'match' : 'matches'}`}
+          </button>
+        </div>
+      {/if}
+    {/if}
+    {#if offset < total && (showWeak || !weakItems.length)}
       <div class="more">
         <button class="btn-ghost" onclick={() => load({ append: true })} disabled={loading}>
           {loading ? 'Loading…' : `Show more · ${(total - offset).toLocaleString()} left`}
@@ -550,15 +717,38 @@
     display: flex;
     gap: 6px;
   }
-  .controls input {
+  /* The search box and the Filters control share a row, which wraps under the kind switch on a
+     phone: two rows of controls above the shelves instead of five (decision 516). */
+  .searchrow {
+    display: flex;
+    gap: 8px;
+    flex: 1 1 260px;
+    min-width: 0;
+    max-width: 520px;
+  }
+  .searchrow input {
     flex: 1;
-    min-width: 200px;
-    max-width: 420px;
+    min-width: 0;
+  }
+  .filtertoggle {
+    flex: none;
+  }
+  .filterpanel {
+    display: flex;
+    gap: 8px;
+    flex-wrap: wrap;
+    padding: 10px;
+    border: 1px solid var(--line);
+    border-radius: var(--r-md);
+    background: var(--card);
   }
   .filters {
     display: flex;
     gap: 8px;
     flex-wrap: wrap;
+  }
+  .kindnote {
+    margin: -6px 0 0;
   }
   select {
     padding: 7px 10px;
@@ -587,31 +777,50 @@
      genre about 380 px against the iPhone 13's ~358: the control overflowed and the whole page
      scrolled sideways. Decision 473's vocabulary removed the long labels; this keeps any future
      long option inside the row, which is the phone-first rule the e2e sweep checks. */
-  .filters select {
+  .filterpanel select {
     max-width: 100%;
     min-width: 0;
     text-overflow: ellipsis;
   }
-  .filters select.genre {
+  .filterpanel select.genre {
     flex: 1 1 12rem;
   }
+  /* In flow, not `position: absolute`. `main` is the scroller but not a containing block, so an
+     absolutely placed marker escaped it and sat at its static position below the fold - 800 px
+     down on a 664 px phone once the banner and the first-week card were on screen - which made
+     the DOCUMENT scroll as well: a second vertical scrollbar, a blank band under the tab bar, and
+     with a classic scrollbar the few pixels of sideways scroll the household saw (second household
+     test, U11). A 1 px box with a -1 px margin takes no room in flow and cannot escape. */
   .sr-only {
-    position: absolute;
     width: 1px;
     height: 1px;
     margin: -1px;
     padding: 0;
     overflow: hidden;
-    clip: rect(0 0 0 0);
+    clip-path: inset(50%);
     white-space: nowrap;
     border: 0;
   }
   .count {
     letter-spacing: 0.04em;
   }
-  .modeline {
+  .gridhead {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px 12px;
+    flex-wrap: wrap;
     margin-bottom: 14px;
-    letter-spacing: 0.04em;
+  }
+  .modeline {
+    margin: 0;
+  }
+  .sort {
+    display: flex;
+    gap: 6px;
+  }
+  .weakhead {
+    margin: 22px 0 10px;
   }
   .degraded {
     margin-bottom: 18px;

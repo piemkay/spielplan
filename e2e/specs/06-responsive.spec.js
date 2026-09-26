@@ -247,11 +247,50 @@ test('the page never scrolls sideways', async ({ page }) => {
   expect(overflow).toBeLessThanOrEqual(1);
 });
 
+test('the document never scrolls under the shell', async ({ page }) => {
+  // `main` is the scroller. Home's absolutely placed mode marker escaped it - `main` is not a
+  // containing block - and sat at its static position below the fold, so the DOCUMENT scrolled
+  // too: a second scrollbar, a blank band under the tab bar, and with a classic scrollbar the few
+  // pixels of sideways scroll the second household test photographed (U11; decision 516).
+  await expect(page.getByTestId('home-mode')).toHaveCount(1);
+  const overflow = await page.evaluate(() => ({
+    down: document.documentElement.scrollHeight - document.documentElement.clientHeight,
+    across: document.documentElement.scrollWidth - document.documentElement.clientWidth
+  }));
+  expect(overflow.down, 'the document scrolls under the shell').toBeLessThanOrEqual(1);
+  expect(overflow.across, 'the document scrolls sideways').toBeLessThanOrEqual(1);
+});
+
+test('a phone opens Home on the shelves, with the filters behind one control', async ({
+  page,
+  isMobile
+}) => {
+  // The first screen of Home was seven filter controls and the shelves began below the fold
+  // (second household test, U1; decision 516). The kind switch and the search stay; genre,
+  // decade, seen state and "in my library" wait behind Filters.
+  test.skip(!isMobile, 'the fold is a phone measurement');
+  await expect(page.getByRole('group', { name: 'Kind' })).toBeVisible();
+  await expect(page.getByTestId('home-search')).toBeVisible();
+  for (const id of ['filter-genre', 'filter-decade', 'filter-seen', 'filter-owned']) {
+    await expect(page.getByTestId(id), `${id} is on the first screen`).toHaveCount(0);
+  }
+  const toggle = page.getByTestId('filter-toggle');
+  await expect(toggle).toHaveAttribute('aria-expanded', 'false');
+  // The count line sits under two rows of controls with room for the shelves under it on the
+  // first screen: the bottom bar is 61 px, and a shelf's heading and the top of its row need more.
+  const count = await page.getByTestId('count-line').boundingBox();
+  expect(count.y + count.height).toBeLessThan(page.viewportSize().height - 160);
+  await toggle.click();
+  await expect(page.getByTestId('filter-genre')).toBeVisible();
+});
+
 test('a long genre option does not widen the page', async ({ page }) => {
   // The first household's Wikidata labels ran to 37 characters, and a native select is as wide
   // as its longest option: at the phone's 16 px monospace the Genre control overflowed and Home
   // scrolled sideways. Decision 473's vocabulary removed those labels; this puts one back to
   // prove the row holds any option, the fixture's short names being why the sweep above passed.
+  // The control is in the Filters panel since decision 516.
+  await page.getByTestId('filter-toggle').click();
   const genre = page.getByTestId('filter-genre');
   await expect(genre).toBeVisible();
   await genre.evaluate((el) => {

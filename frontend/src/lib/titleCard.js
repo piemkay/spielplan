@@ -1,5 +1,6 @@
 /**
- * The title card's wording, as pure functions. Spec v2.1 §6.0, §6.8, §7.3; decisions 486, 487.
+ * The title card's wording, as pure functions. Spec v2.1 §6.0, §6.8, §7.3; decisions 486, 487, 516,
+ * 517.
  *
  * Out of `TitleDetail.svelte` because every one of these is a sentence a member reads, and the
  * 2026-09-25 user test is the record of what happens when those sentences are the operator's:
@@ -152,13 +153,157 @@ export function revealLine(reveal) {
   return reveal.agreed ? "We'd have guessed the same." : `We'd have guessed ${reveal.predicted_label}.`;
 }
 
-/** Decision 487's four answers: §6.1's `Liked / Fine / Disliked`, in its order, then Not seen. */
+/**
+ * Decision 487's four answers, worst to best and then Not seen - the order Rate's sweep card draws
+ * its verdicts in (proposal 52: "worst → best, matching the stored ordinal"). The card used to
+ * read `Liked / Fine / Disliked`, §6.1's list order, so the same three buttons ran in opposite
+ * directions two taps apart (U9 of the second household test; decision 517).
+ */
 export const ANSWERS = [
-  { answer: 'liked', label: 'Liked' },
-  { answer: 'fine', label: 'Fine' },
   { answer: 'disliked', label: 'Disliked' },
+  { answer: 'fine', label: 'Fine' },
+  { answer: 'liked', label: 'Liked' },
   { answer: 'not_seen', label: 'Not seen' }
 ];
+
+/**
+ * How many credit rows the card shows before "More about this film": the director and the first
+ * of the billed cast (`credits_for` orders directing first, then billing). The rest, the platform
+ * scores and both DNA tiers fold behind the disclosure - moved, never dropped (decision 517).
+ */
+export const CREDIT_TOP = 5;
+
+/**
+ * The viewer's first language, as the browser reports it: `de` for a `de-DE` phone. Read here
+ * rather than in markup so the card and the poster ask the same question.
+ */
+export function viewerLanguage() {
+  const nav = typeof navigator === 'undefined' ? null : navigator;
+  const tag = nav?.languages?.[0] ?? nav?.language ?? '';
+  return String(tag).slice(0, 2).toLowerCase();
+}
+
+/**
+ * Which name leads for this viewer, and which rides beside it.
+ *
+ * A German viewer knows "Wunderschön" and not "Wonderfully Beautiful", its English release title;
+ * `title.name` is the corpus's English name everywhere. Where the title's original language is the
+ * viewer's own, the original title leads and the English one follows; everywhere else `name` leads
+ * as it always has, with the original beside it where it differs (U13 of the second household
+ * test; decision 516). A payload without `original_language` keeps `name` in front - the original
+ * title alone cannot say which language it is in.
+ *
+ * @param {{name?: string, original_name?: string | null, original_language?: string | null}} title
+ * @param {string} [language]
+ */
+export function displayNames(title, language = viewerLanguage()) {
+  const name = String(title?.name ?? '');
+  const original = String(title?.original_name ?? '').trim();
+  const differs = Boolean(original) && original.toLowerCase() !== name.toLowerCase();
+  if (differs && language && title?.original_language === language) {
+    return { primary: original, secondary: name };
+  }
+  return { primary: name, secondary: differs ? original : '' };
+}
+
+/**
+ * One tag's evidence with each quote once. Two extraction runs stored Collateral's Metacritic
+ * "master poet of nocturnal Los Angeles" twice under one tag, and the card printed it twice
+ * (894 such pairs on the household install). The stored rows are untouched; this is the read.
+ *
+ * @param {{quote?: string, source?: string}[] | null | undefined} evidence
+ */
+export function dedupeEvidence(evidence) {
+  const seen = new Set();
+  return (evidence ?? []).filter((e) => {
+    const key = String(e?.quote ?? '').replace(/\s+/g, ' ').trim().toLowerCase();
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+
+/**
+ * The quoted tier, one block per term. §6.6's parallel extraction writes one term once per
+ * provider, and a member read two identical "tense" blocks; the providers are the operator's
+ * provenance and stay on the rows (`rows`) for Show the model. §4.1 rule 1 is about the tiers,
+ * which stay two lists: this merges rows of ONE tier only.
+ *
+ * @param {any[] | null | undefined} extracted
+ */
+export function extractedByTerm(extracted) {
+  const byTerm = new Map();
+  for (const tag of extracted ?? []) {
+    const key = `${tag.facet}:${tag.term}`;
+    const block = byTerm.get(key);
+    if (block) {
+      block.rows.push(tag);
+      block.evidence = dedupeEvidence([...block.evidence, ...(tag.evidence ?? [])]);
+    } else {
+      byTerm.set(key, { ...tag, key, rows: [tag], evidence: dedupeEvidence(tag.evidence) });
+    }
+  }
+  return [...byTerm.values()];
+}
+
+// Pacing is the one facet of the vocabulary that is a single scale, so it is the one place a
+// contradiction can be named without inventing content: the vocabulary ships no antonyms. Terms
+// that sit on neither end (taut, sprawling, talky, steady escalation, ticking-clock urgency) are
+// on no pole and contradict nothing.
+const PACE_POLE = {
+  'pacing.slow_burn': 'slow',
+  'pacing.slow_paced': 'slow',
+  'pacing.meditative': 'slow',
+  'pacing.meandering': 'slow',
+  'pacing.unhurried': 'slow',
+  'pacing.deliberate': 'slow',
+  'pacing.frenetic': 'fast',
+  'pacing.fast_paced': 'fast',
+  'pacing.high_octane': 'fast',
+  'pacing.kinetic': 'fast',
+  'pacing.relentless': 'fast',
+  'pacing.rapid_fire_delivery': 'fast',
+  'pacing.propulsive': 'fast',
+  'pacing.breezy': 'fast'
+};
+
+/**
+ * The title's pace as its own evidence has it: the quoted tier's pole when the quotes hold one,
+ * otherwise the pole the inferred tier weighs more. Null when neither says, or the quotes say both.
+ */
+function paceOf(extracted, projected) {
+  const quoted = new Set(extracted.map((t) => PACE_POLE[t.term]).filter(Boolean));
+  if (quoted.size === 1) return [...quoted][0];
+  if (quoted.size > 1) return null;
+  const weight = { slow: 0, fast: 0 };
+  for (const p of projected) if (PACE_POLE[p.term]) weight[PACE_POLE[p.term]] += Number(p.weight) || 0;
+  if (weight.slow === weight.fast) return null;
+  return weight.slow > weight.fast ? 'slow' : 'fast';
+}
+
+/**
+ * The inferred tier as the card shows it: a term the quotes already carry is shown once, quoted;
+ * what one source alone suggests, or what contradicts the title's own pace, is `weak` and folds
+ * behind a disclosure of its own; the rest is `strong`. Presentation only - §4.1 rule 2 makes a
+ * weight a weight and never a filter, so every chip stays in the payload and on the card, one tap
+ * away (U3 and U4 of the second household test; decision 517).
+ *
+ * @param {any[] | null | undefined} projected
+ * @param {any[] | null | undefined} extracted
+ */
+export function projectedForCard(projected, extracted) {
+  const quoted = new Set((extracted ?? []).map((t) => t.term));
+  const shown = (projected ?? []).filter((p) => !quoted.has(p.term));
+  const pace = paceOf(extracted ?? [], shown);
+  const strong = [];
+  const weak = [];
+  for (const p of shown) {
+    const pole = PACE_POLE[p.term];
+    const lone = p.weight != null && Math.round(p.weight) <= 1;
+    (lone || (pace && pole && pole !== pace) ? weak : strong).push(p);
+  }
+  return { strong, weak };
+}
 
 /**
  * What the card says after an answer landed.

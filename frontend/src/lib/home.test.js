@@ -1,12 +1,16 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  activeFilterCount,
+  bannerCountLine,
   bannerHref,
   bannerLabel,
   bannerText,
   countLabel,
+  elsewhereLine,
   eventTime,
   facetColour,
+  gridLine,
   gridReason,
   homeMode,
   kindChoice,
@@ -14,9 +18,13 @@ import {
   kindsFor,
   kindsOnShelf,
   libraryLabel,
+  matchStrength,
+  otherKinds,
   plural,
   sectionShips,
   shelfRows,
+  sortOffered,
+  strongEnd,
   toPosterTitle,
   whyNumbersLine
 } from './home.svelte.js';
@@ -405,5 +413,99 @@ describe('two kind regions under Both (decision 474)', () => {
       []
     );
     expect(kindRegions(null)).toEqual([]);
+  });
+});
+
+// --- the second household test (decision 516) -------------------------------------------------
+
+/** Section signs, decision/proposal numbers and milestone labels: decision 486 clause 2. */
+const REFERENCE = /§\s?\d|decision \d|proposal \d|\bM[0-7](\.\d+)?\b/i;
+
+describe('the Filters control and the grid line', () => {
+  it('counts the four catalog filters that are set, and not the person', () => {
+    expect(activeFilterCount({})).toBe(0);
+    expect(activeFilterCount({ genre: 'Drama', seen: 'unseen', owned: true })).toBe(3);
+    expect(activeFilterCount({ seen: 'any', decade: '' })).toBe(0);
+  });
+
+  it('says in words what the grid is and how to get the shelves back', () => {
+    for (const reason of ['search', 'person', 'filter']) {
+      const line = gridLine(reason);
+      expect(line).toMatch(/shelves back\.$/);
+      expect(line).not.toMatch(REFERENCE);
+      expect(line).not.toContain('·');
+    }
+  });
+
+  it('offers the order control for a filtered or a person grid the server named an order for', () => {
+    expect(sortOffered('filter', 'for_you')).toBe(true);
+    expect(sortOffered('person', 'newest')).toBe(true);
+    expect(sortOffered('search', 'for_you'), 'a search is best match first').toBe(false);
+    expect(sortOffered('filter', undefined), 'no echo, no claim').toBe(false);
+    expect(sortOffered('filter', 'year'), 'an order this control cannot name').toBe(false);
+  });
+});
+
+describe('an empty search and the other kind', () => {
+  it('asks only the kinds the switch leaves out', () => {
+    expect(otherKinds(['movie'])).toEqual(['series']);
+    expect(otherKinds(['series'])).toEqual(['movie']);
+    expect(otherKinds(['movie', 'series'])).toEqual([]);
+  });
+
+  it('names at most two and counts the rest', () => {
+    expect(elsewhereLine('series', ['Broadchurch'], 1)).toBe('Found in Series: Broadchurch');
+    expect(elsewhereLine('movie', ['Heat', 'Heatwave'], 5)).toBe(
+      'Found in Films: Heat, Heatwave and 3 more'
+    );
+    expect(elsewhereLine('series', [], 0)).toBe('');
+  });
+});
+
+describe('the looser matches of a search', () => {
+  it('calls a name, or a word in it, that starts with the query strong', () => {
+    for (const name of ['Up', 'Up in the Air', "What's Up, Doc?", 'Cheech and Chong’s Up in Smoke']) {
+      expect(matchStrength({ name }, 'up'), name).toBe('strong');
+    }
+    for (const name of ['Superman', 'Cupid', 'Hiccups']) {
+      expect(matchStrength({ name }, 'up'), name).toBe('weak');
+    }
+    expect(matchStrength({ name: 'Up in the Air' }, 'up in')).toBe('strong');
+  });
+
+  it("takes the server's reading where it sends one", () => {
+    expect(matchStrength({ name: '重慶森林', match: 'strong' }, 'chungking')).toBe('strong');
+    expect(matchStrength({ name: 'Up', match: 'weak' }, 'up')).toBe('weak');
+  });
+
+  it('cuts after the last strong hit, and nowhere when nothing is strong', () => {
+    const items = [{ name: 'Up' }, { name: 'Superman' }, { name: 'Up in Smoke' }, { name: 'Cupid' }];
+    expect(strongEnd(items, 'up'), 'a weak hit ranked among strong ones stays with them').toBe(3);
+    expect(strongEnd([{ name: 'Superman' }, { name: 'Cupid' }], 'up')).toBe(0);
+    expect(strongEnd([], 'up')).toBe(0);
+  });
+});
+
+describe("the banner's count, in words", () => {
+  it('says how many are waiting and nothing about how the sentence was built', () => {
+    expect(bannerCountLine({ count: 16, named: [{}, {}] })).toBe(
+      '16 titles you watched are waiting for your rating.'
+    );
+    expect(bannerCountLine({ count: 1, named: [{}] })).toBe(
+      '1 title you watched is waiting for your rating.'
+    );
+    expect(bannerCountLine(null)).toBe('');
+    expect(bannerCountLine({ count: 16 })).not.toMatch(/verdict|named/);
+  });
+});
+
+describe('a shelf card carries the names a German viewer needs', () => {
+  it('passes the original title and its language to the poster', () => {
+    const card = toPosterTitle({
+      title_id: 1, kind: 'movie', name: 'Wonderfully Beautiful', original_name: 'Wunderschön',
+      original_language: 'de', seen: false
+    });
+    expect(card.original_name).toBe('Wunderschön');
+    expect(card.original_language).toBe('de');
   });
 });

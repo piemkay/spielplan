@@ -2345,6 +2345,23 @@ async def test_no_shelf_sentence_carries_a_model_word_with_the_switch_off(world)
         assert not _MODEL_WORDS.search(degraded[key]), degraded[key]
 
 
+async def test_every_shelf_card_carries_its_original_title_and_language(world):
+    """Decision 516: a German viewer's card leads with the original title where it is German, so
+    every shelf card - whichever builder's statement produced it - carries both fields, null where
+    the corpus recorded none."""
+    await world.db.execute(
+        "UPDATE title SET original_name = 'Wunderschön', original_language = 'de' WHERE id = ANY($1)",
+        list(MOVIES),
+    )
+    payload = await world.home()
+    cards = [c for shelf in payload["shelves"] for s in shelf["sections"] for c in s["items"]]
+    assert cards, "no shelf cards at all - the fixture is not exercising the surface"
+    for card in cards:
+        assert "original_name" in card and "original_language" in card, card["title_id"]
+        expected = ("Wunderschön", "de") if card["title_id"] in MOVIES else (None, None)
+        assert (card["original_name"], card["original_language"]) == expected, card["title_id"]
+
+
 async def test_home_counts_the_library_the_shelves_draw_on(world):
     """Home's count line stated the whole catalog - "13,330 films · 5,747 series hidden" - above
     shelves holding only owned titles. The payload names what the shelves draw on."""

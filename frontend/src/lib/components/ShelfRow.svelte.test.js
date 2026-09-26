@@ -127,6 +127,20 @@ describe('the cold-placement note', () => {
     unmount(app);
   });
 
+  it('is not said a second time on the shelf whose why-line already says it', () => {
+    // "New in the library"'s why-line is §8 stage 10's sentence, and the row printed it twice
+    // (second household test, U10). The chips stay on the cards.
+    const cold = [card({ title_id: 1, e_source: 'cold_tower', item_n: 0 })];
+    const app = mount(ShelfRow, {
+      target,
+      props: { section: section(cold), shelfId: 'new_in_library', onSelect: () => {} }
+    });
+    flushSync();
+    expect(target.querySelectorAll(COLD_NOTE)).toHaveLength(0);
+    expect(target.querySelector('.badge').textContent).toBe('new');
+    unmount(app);
+  });
+
   it('reads the same fields the badge does, so the row and the card cannot disagree', () => {
     // `e_source` decides where the payload has it. A title with 55 crowd ratings and a Backbone
     // row is still stamped `placement: 'cold_tower'` — 15% of its coordinate comes from there —
@@ -207,6 +221,22 @@ describe('what a row says about itself', () => {
     );
     expect(moved.dataset.guess).toBe('false');
     expect(target.textContent).not.toContain('as on your Rank board');
+    unmount(app);
+  });
+
+  it('draws the rank and the tier under the art, never over it', () => {
+    // Pinned 30 px down the poster they covered Kiki's and Schindler's List's lettering (second
+    // household test, U5).
+    const app = render([card({ title_id: 1, tier: 'A', rank: 1 })]);
+    const rank = target.querySelector('[data-testid="shelf-rank"]');
+    const tier = target.querySelector('[data-testid="shelf-tier"]');
+    for (const badge of [rank, tier]) {
+      expect(badge.closest('.poster'), 'a badge is on the art').toBeNull();
+      expect(badge.closest('.chrome'), 'a badge left the row under the art').not.toBeNull();
+    }
+    const cardWrap = target.querySelector('.card-wrap');
+    const order = [...cardWrap.children].map((el) => el.className.split(' ')[0]);
+    expect(order).toEqual(['poster', 'chrome', 'meta']);
     unmount(app);
   });
 

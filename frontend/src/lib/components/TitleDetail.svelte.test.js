@@ -315,9 +315,14 @@ describe('the DNA card and the credits after the 2026-09-25 user test', () => {
       expect(target.querySelector('.quote').textContent).toBe(
         '“…not this serious, gritty crime epic…”'
       );
+      // Both chips are on the card; the one-source guess is fainter and folded beside the other
+      // (decision 517), so they are read by label rather than by position.
       const chips = [...target.querySelectorAll('.chip')];
       expect(chips).toHaveLength(2);
-      expect(chips.map((c) => c.classList.contains('faint'))).toEqual([true, false]);
+      const faint = Object.fromEntries(
+        chips.map((c) => [c.dataset.weight, c.classList.contains('faint')])
+      );
+      expect(faint).toEqual({ 1: true, 4: false });
     } finally {
       unmount(app);
     }
@@ -507,17 +512,229 @@ describe('the DNA card in the member register', () => {
     }
   });
 
-  it('shows how many sources suggest each inferred term, quieter at one, and hides none', async () => {
+  it('keeps every inferred term, folds the one-source guess, and leaves the count to Show the model', async () => {
+    // The second household test read "psychedelic 1" and "Tokyo 1" as noise, and fifty chips as a
+    // wall (decision 517). The count is how many sources suggested a term, which is Show the
+    // model's; the one-source guess is folded behind its own disclosure, never dropped.
     const app = await open({}, { dna });
     try {
       const chips = [...target.querySelectorAll('.chips .chip')];
       expect(chips, '§4.1 rule 2: a weight is never a filter').toHaveLength(2);
-      const [weak, strong] = chips;
+      const strong = target.querySelector('.chips .chip:not(.faint)');
+      expect(strong.querySelector('.chiplabel').textContent.trim()).toBe('Los Angeles');
+      expect(strong.closest('[data-testid="title-weak-chips"]')).toBeNull();
+      const fold = target.querySelector('[data-testid="title-weak-chips"]');
+      expect(fold.tagName).toBe('DETAILS');
+      expect(fold.open).toBe(false);
+      expect(fold.querySelector('summary').textContent.trim()).toBe('1 less certain');
+      const weak = fold.querySelector('.chip');
       expect(weak.querySelector('.chiplabel').textContent.trim()).toBe('teen lead');
       expect(weak.classList.contains('faint')).toBe(true);
-      expect(weak.querySelector('.n').textContent).toBe('1');
-      expect(strong.classList.contains('faint')).toBe(false);
-      expect(strong.querySelector('.n').textContent).toBe('4');
+      expect(target.querySelectorAll('.chip .n'), 'a count reached a member').toHaveLength(0);
+    } finally {
+      unmount(app);
+    }
+  });
+});
+
+// --- the second household test: the card leads with why, and folds the rest (decisions 516, 517)
+
+describe('the card leads with what a member opens it for', () => {
+  const credits = Array.from({ length: 8 }, (_, i) => ({
+    person_id: i + 1,
+    name: `Person ${i + 1}`,
+    job: i ? 'Actor' : 'Director',
+    role_class: i ? 'cast' : 'director',
+    sources: ['tmdb']
+  }));
+
+  it('says why the title is suggested, and nothing when the payload gives no reason', async () => {
+    let app = await open({ kind: 'movie' }, { why: 'Because you liked Heat' });
+    const why = target.querySelector('[data-testid="title-why"]');
+    expect(why.textContent.trim()).toBe('Because you liked Heat');
+    // It comes before the answers, Play and the synopsis.
+    const rate = target.querySelector('[data-testid="title-rate"]');
+    expect(why.compareDocumentPosition(rate) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    unmount(app);
+    for (const absent of [{}, { why: null }, { why: '  ' }]) {
+      app = await open({ kind: 'movie' }, absent);
+      expect(target.querySelector('[data-testid="title-why"]')).toBeNull();
+      unmount(app);
+    }
+  });
+
+  it('puts the answers and Play above the synopsis', async () => {
+    const app = await open({ kind: 'movie', overview: 'A thief and a cop.' });
+    try {
+      const overview = target.querySelector('.overview');
+      for (const sel of ['[data-testid="title-rate"]', '.actions']) {
+        const el = target.querySelector(sel);
+        expect(el.compareDocumentPosition(overview) & Node.DOCUMENT_POSITION_FOLLOWING, sel).toBeTruthy();
+      }
+    } finally {
+      unmount(app);
+    }
+  });
+
+  it('shows the first few names and folds the rest, the scores and both tiers behind one disclosure', async () => {
+    const app = await open(
+      { kind: 'movie' },
+      {
+        credits,
+        platform_ratings: {
+          items: [{ platform: 'imdb', metric: 'user_score', score: 7.8, scale: 10 }],
+          note: 'For reference only'
+        },
+        dna: {
+          extracted: [
+            {
+              term: 'mood.tense',
+              facet: 'mood',
+              provider: '',
+              evidence: [{ quote: 'Tense.', source: 'imdb:1' }]
+            }
+          ],
+          projected: [{ term: 'place.los_angeles', facet: 'place', weight: 4 }]
+        }
+      }
+    );
+    try {
+      const more = target.querySelector('[data-testid="title-more"]');
+      expect(more.tagName).toBe('DETAILS');
+      expect(more.open, 'the fold is open by default').toBe(false);
+      expect(more.querySelector('summary').textContent.trim()).toBe('More about this film');
+      const people = [...target.querySelectorAll('.people .person')];
+      expect(people).toHaveLength(8);
+      const outside = people
+        .filter((p) => !more.contains(p))
+        .map((p) => p.querySelector('.pname').textContent);
+      expect(outside).toEqual(['Person 1', 'Person 2', 'Person 3', 'Person 4', 'Person 5']);
+      for (const sel of ['.scores', '.tag', '.chip', '[data-testid="credit-count"]']) {
+        expect(more.contains(target.querySelector(sel)), `${sel} is not behind the fold`).toBe(true);
+      }
+      expect(target.querySelector('[data-testid="credit-count"]').textContent).toBe('8 of 8');
+    } finally {
+      unmount(app);
+    }
+  });
+
+  it('names a series fold as a series', async () => {
+    const app = await open({ kind: 'series' });
+    try {
+      expect(target.querySelector('[data-testid="title-more"] summary').textContent.trim()).toBe(
+        'More about this series'
+      );
+    } finally {
+      unmount(app);
+    }
+  });
+
+  it('reads the answers worst to best, as Rate does', async () => {
+    const app = await open({ kind: 'movie' });
+    try {
+      const order = [...target.querySelectorAll('[data-answer]')].map((b) => b.dataset.answer);
+      expect(order).toEqual(['disliked', 'fine', 'liked', 'not_seen']);
+    } finally {
+      unmount(app);
+    }
+  });
+});
+
+describe('the DNA card says each thing once', () => {
+  it('prints one block per quoted term with each quote once, and never repeats it as a guess', async () => {
+    // Collateral's Metacritic "Los Angeles" quote was stored twice by two extraction runs, and
+    // Heat's "loneliness" was a quote and an inferred chip at once (second household test, U4).
+    const quote = { quote: 'the cinematic master poet of nocturnal Los Angeles', source: 'metacritic:1' };
+    const la = { term: 'place.los_angeles', facet: 'place', label: 'Los Angeles' };
+    const app = await open(
+      {},
+      {
+        dna: {
+          extracted: [
+            { ...la, provider: '', evidence: [quote, { ...quote }] },
+            { ...la, provider: 'terra', evidence: [quote, { quote: 'the nighttime LA', source: 'imdb:2' }] }
+          ],
+          projected: [
+            { term: 'place.los_angeles', facet: 'place', label: 'Los Angeles', weight: 3 },
+            { term: 'themes.loneliness', facet: 'themes', label: 'loneliness', weight: 2 }
+          ]
+        }
+      }
+    );
+    try {
+      const tags = [...target.querySelectorAll('.tag')];
+      expect(tags).toHaveLength(1);
+      expect([...tags[0].querySelectorAll('.quote')].map((q) => q.textContent)).toEqual([
+        '“…the cinematic master poet of nocturnal Los Angeles…”',
+        '“…the nighttime LA…”'
+      ]);
+      const chips = [...target.querySelectorAll('.chip .chiplabel')].map((c) => c.textContent.trim());
+      expect(chips).toEqual(['loneliness']);
+    } finally {
+      unmount(app);
+    }
+  });
+
+  it("folds a guess that contradicts the title's own quoted pace", async () => {
+    const app = await open(
+      {},
+      {
+        dna: {
+          extracted: [
+            { term: 'pacing.frenetic', facet: 'pacing', label: 'frenetic', provider: '', evidence: [] }
+          ],
+          projected: [
+            { term: 'pacing.slow_burn', facet: 'pacing', label: 'slow burn', weight: 3 },
+            { term: 'mood.tense', facet: 'mood', label: 'tense', weight: 3 }
+          ]
+        }
+      }
+    );
+    try {
+      const fold = target.querySelector('[data-testid="title-weak-chips"]');
+      expect([...fold.querySelectorAll('.chiplabel')].map((c) => c.textContent.trim())).toEqual([
+        'slow burn'
+      ]);
+      const open = [...target.querySelectorAll('.chips .chip')].filter((c) => !fold.contains(c));
+      expect(open.map((c) => c.querySelector('.chiplabel').textContent.trim())).toEqual(['tense']);
+    } finally {
+      unmount(app);
+    }
+  });
+});
+
+describe('the name a German viewer knows (decision 516)', () => {
+  const langs = Object.getOwnPropertyDescriptor(Navigator.prototype, 'languages');
+  afterEach(() => {
+    if (langs) Object.defineProperty(Navigator.prototype, 'languages', langs);
+  });
+  const speak = (tags) =>
+    Object.defineProperty(Navigator.prototype, 'languages', { configurable: true, get: () => tags });
+
+  it('leads with the German original on a German phone and keeps the English beside it', async () => {
+    speak(['de-DE', 'de']);
+    const title = { name: 'Wonderfully Beautiful', original_name: 'Wunderschön', original_language: 'de' };
+    const app = await open(title);
+    try {
+      expect(target.querySelector('h2').textContent).toBe('Wunderschön');
+      expect(target.querySelector('[data-testid="title-alt-name"]').textContent).toBe(
+        'Wonderfully Beautiful'
+      );
+    } finally {
+      unmount(app);
+    }
+  });
+
+  it('keeps the English name in front everywhere else', async () => {
+    speak(['en-US']);
+    const app = await open({
+      name: 'Wonderfully Beautiful',
+      original_name: 'Wunderschön',
+      original_language: 'de'
+    });
+    try {
+      expect(target.querySelector('h2').textContent).toBe('Wonderfully Beautiful');
+      expect(target.querySelector('[data-testid="title-alt-name"]').textContent).toBe('Wunderschön');
     } finally {
       unmount(app);
     }

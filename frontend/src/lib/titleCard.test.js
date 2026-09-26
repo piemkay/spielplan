@@ -8,10 +8,15 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  ANSWERS,
   answeredLine,
   creditJobs,
   creditKey,
+  dedupeEvidence,
+  displayNames,
+  extractedByTerm,
   playWhy,
+  projectedForCard,
   quoteText,
   revealLine,
   sourceLabel,
@@ -165,5 +170,104 @@ describe('revealLine and answeredLine', () => {
     expect(answeredLine('fine')).toBe('Saved - you thought it was fine.');
     expect(answeredLine('disliked')).toBe('Saved - you disliked it.');
     expect(answeredLine('not_seen')).toBe('Saved - marked not seen.');
+  });
+});
+
+// --- the second household test (decisions 516 and 517) ------------------------------------------
+
+describe('ANSWERS', () => {
+  it("run worst to best, as Rate's sweep card does, then Not seen", () => {
+    expect(ANSWERS.map((a) => a.answer)).toEqual(['disliked', 'fine', 'liked', 'not_seen']);
+  });
+});
+
+describe('displayNames', () => {
+  const wunder = { name: 'Wonderfully Beautiful', original_name: 'Wunderschön', original_language: 'de' };
+
+  it('leads with the original where it is in the viewer language', () => {
+    expect(displayNames(wunder, 'de')).toEqual({
+      primary: 'Wunderschön',
+      secondary: 'Wonderfully Beautiful'
+    });
+  });
+
+  it('keeps the name in front for any other viewer, with the original beside it', () => {
+    expect(displayNames(wunder, 'en')).toEqual({
+      primary: 'Wonderfully Beautiful',
+      secondary: 'Wunderschön'
+    });
+  });
+
+  it('cannot tell a language from an original title alone, and says nothing twice', () => {
+    expect(displayNames({ name: 'Wonderfully Beautiful', original_name: 'Wunderschön' }, 'de')).toEqual({
+      primary: 'Wonderfully Beautiful',
+      secondary: 'Wunderschön'
+    });
+    expect(displayNames({ name: 'Heat', original_name: 'Heat', original_language: 'en' }, 'en')).toEqual({
+      primary: 'Heat',
+      secondary: ''
+    });
+    expect(displayNames({ name: 'Up', original_name: null }, 'de')).toEqual({
+      primary: 'Up',
+      secondary: ''
+    });
+  });
+});
+
+describe('dedupeEvidence and extractedByTerm', () => {
+  const q = (quote, source = 'metacritic:1') => ({ quote, source });
+
+  it('keeps each quote once, whitespace and case aside', () => {
+    expect(dedupeEvidence([q('Tense.'), q(' tense. '), q('Taut.')])).toEqual([q('Tense.'), q('Taut.')]);
+    expect(dedupeEvidence(null)).toEqual([]);
+  });
+
+  it('draws one block per term and keeps every provider row on it', () => {
+    const blocks = extractedByTerm([
+      { term: 'mood.tense', facet: 'mood', provider: 'a', salience: 2, evidence: [q('Tense.')] },
+      {
+        term: 'mood.tense', facet: 'mood', provider: 'b', salience: 3,
+        evidence: [q('Tense.'), q('Taut.')]
+      },
+      { term: 'mood.cool', facet: 'mood', provider: 'a', evidence: [] }
+    ]);
+    expect(blocks.map((b) => b.term)).toEqual(['mood.tense', 'mood.cool']);
+    expect(blocks[0].rows.map((r) => r.salience)).toEqual([2, 3]);
+    expect(blocks[0].evidence).toEqual([q('Tense.'), q('Taut.')]);
+  });
+});
+
+describe('projectedForCard', () => {
+  const p = (term, weight) => ({ term, facet: term.split('.')[0], weight });
+
+  it('shows a quoted term once, quoted, and folds the one-source guess without dropping it', () => {
+    const { strong, weak } = projectedForCard(
+      [p('themes.loneliness', 1), p('place.los_angeles', 4), p('mood.tense', 3)],
+      [{ term: 'mood.tense' }]
+    );
+    expect(strong.map((c) => c.term)).toEqual(['place.los_angeles']);
+    expect(weak.map((c) => c.term)).toEqual(['themes.loneliness']);
+  });
+
+  it('folds a pace the quotes contradict, and reads the pace from the guesses when nothing is quoted', () => {
+    const quoted = projectedForCard([p('pacing.slow_burn', 3), p('pacing.propulsive', 3)], [
+      { term: 'pacing.frenetic' }
+    ]);
+    expect(quoted.weak.map((c) => c.term)).toEqual(['pacing.slow_burn']);
+    const guessed = projectedForCard([p('pacing.slow_burn', 2), p('pacing.propulsive', 5)], []);
+    expect(guessed.weak.map((c) => c.term)).toEqual(['pacing.slow_burn']);
+    // A tie, or quotes on both ends, names no pace and folds nothing for it.
+    expect(projectedForCard([p('pacing.slow_burn', 2), p('pacing.kinetic', 2)], []).weak).toEqual([]);
+    expect(
+      projectedForCard(
+        [p('pacing.slow_burn', 2)],
+        [{ term: 'pacing.kinetic' }, { term: 'pacing.meditative' }]
+      ).weak
+    ).toEqual([]);
+  });
+
+  it('leaves a term off both ends of the pace scale alone', () => {
+    const { strong } = projectedForCard([p('pacing.taut', 3)], [{ term: 'pacing.meditative' }]);
+    expect(strong.map((c) => c.term)).toEqual(['pacing.taut']);
   });
 });

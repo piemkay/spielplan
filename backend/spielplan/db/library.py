@@ -556,6 +556,27 @@ async def get_title(
     return dict(row) if row else None
 
 
+async def carry_original_names(
+    conn: asyncpg.Connection, cards: Sequence[dict[str, Any]], *, key: str = "id"
+) -> None:
+    """Put each card's original title and its language on it, in place, in one read.
+
+    A German viewer knows "Wunderschön" and not "Wonderfully Beautiful", the English release title
+    `title.name` holds; the client leads with the original where it is the viewer's own language
+    (decision 516). One statement for a whole page of cards, rather than two more columns in each
+    of the statements that build them - the catalog's and every shelf's.
+    """
+    ids = sorted({int(card[key]) for card in cards})
+    if not ids:
+        return
+    rows = await conn.fetch(
+        "SELECT id, original_name, original_language FROM title WHERE id = ANY($1::int[])", ids
+    )
+    names = {r["id"]: (r["original_name"], r["original_language"]) for r in rows}
+    for card in cards:
+        card["original_name"], card["original_language"] = names.get(int(card[key]), (None, None))
+
+
 _CREDIT_ROWS = """
     SELECT c.person_id, p.name, p.imdb_id, p.tmdb_id, c.source, c.department, c.job,
            c.character, c.billing_order, c.role_class

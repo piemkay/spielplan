@@ -89,6 +89,102 @@ export function homeMode(state) {
   return gridReason(state) ? 'grid' : 'shelves';
 }
 
+/**
+ * How many of the four catalog filters are set - the number the one "Filters" control wears while
+ * its panel is shut, so a narrowed grid never hides why it is narrow (decision 516). The person
+ * filter is not one of them: its chip is always on screen.
+ */
+export function activeFilterCount({ genre = '', decade = '', seen = 'any', owned = false } = {}) {
+  return [Boolean(genre), Boolean(decade), Boolean(seen && seen !== 'any'), Boolean(owned)].filter(
+    Boolean
+  ).length;
+}
+
+/**
+ * The line over the grid: what it is, and how to get the shelves back, in words. It was
+ * `filtered · clear it to get your shelves back` in the data voice.
+ *
+ * @param {string | null} reason `gridReason`'s answer: 'search', 'person' or 'filter'
+ */
+export function gridLine(reason) {
+  if (reason === 'search') {
+    return 'Search results, best match first. Clear the search to get your shelves back.';
+  }
+  if (reason === 'person') {
+    return 'Everything they worked on. Remove their name to get your shelves back.';
+  }
+  return 'Filtered. Remove the filters to get your shelves back.';
+}
+
+/**
+ * The order the catalog grid can be read in (decision 516's control over the server's `sort`):
+ * "For you" is the member's own score, "Newest" the year. A search is always best match first
+ * (decision 472), so the control is offered for a filtered or a person's grid only, and only when
+ * the server says which order it used - a build that does not echo `sort` gets no control rather
+ * than one that claims an order it cannot vouch for.
+ */
+export const SORT_CHOICES = [
+  { id: 'for_you', label: 'For you' },
+  { id: 'newest', label: 'Newest' }
+];
+
+export function sortOffered(reason, echoed) {
+  return (reason === 'filter' || reason === 'person') && SORT_CHOICES.some((c) => c.id === echoed);
+}
+
+/** The kinds a switch position leaves out: where a search that found nothing may have matches. */
+export function otherKinds(kinds = []) {
+  return ['movie', 'series'].filter((k) => !kinds.includes(k));
+}
+
+/**
+ * "Found in Series: Broadchurch" - what an empty search says when the other kind holds matches,
+ * instead of "Nothing matches" about a series the Films position was hiding (U7 of the second
+ * household test). Names at most two and counts the rest, as §6.0's banner does.
+ *
+ * @param {string} kind
+ * @param {string[]} names
+ * @param {number} total
+ */
+export function elsewhereLine(kind, names = [], total = 0) {
+  const label = kind === 'series' ? 'Series' : 'Films';
+  const shown = names.slice(0, 2);
+  if (!shown.length) return '';
+  const rest = Math.max(0, total - shown.length);
+  return `Found in ${label}: ${shown.join(', ')}${rest ? ` and ${rest.toLocaleString()} more` : ''}`;
+}
+
+/**
+ * Does this search hit match the way a person means it - the name, or a word in it, starting with
+ * what they typed - or only contain the letters somewhere? "Up" matched 361 films, "Up" and "Up in
+ * the Air" among them and "Superman" and "Cupid" too (U14 of the second household test).
+ *
+ * The server's own reading wins where it sends one (`match: 'strong' | 'weak'`, decision 472's
+ * six qualities cut after "a word start anywhere"); without it, a word of the name starting with
+ * the query is strong. A hit through an alias reads weak here, which the server's field corrects.
+ */
+export function matchStrength(item, q) {
+  if (item?.match === 'strong' || item?.match === 'weak') return item.match;
+  const needle = String(q ?? '').trim().toLowerCase();
+  if (!needle) return 'strong';
+  const name = String(item?.name ?? '').toLowerCase();
+  const at = [...name.matchAll(/[\p{L}\p{N}]+/gu)].some((m) => name.startsWith(needle, m.index));
+  return at || name.startsWith(needle) ? 'strong' : 'weak';
+}
+
+/**
+ * Where the weak tail of a best-match-first list starts: after the last strong hit, so an alias
+ * hit the server ranked above a name hit is never cut off from the matches it sits among. Zero
+ * when nothing is strong - a list of only weak hits is shown as it is, with nothing to set apart.
+ */
+export function strongEnd(items = [], q = '') {
+  let end = 0;
+  items.forEach((item, i) => {
+    if (matchStrength(item, q) === 'strong') end = i + 1;
+  });
+  return end;
+}
+
 // --- the count line ----------------------------------------------------------------------------
 
 const KIND_NOUN = { movie: 'film', series: 'series' };
@@ -276,6 +372,9 @@ export function toPosterTitle(item) {
     id: item.title_id,
     kind: item.kind,
     name: item.name,
+    // Decision 516: the card leads with the original title where it is the viewer's language.
+    original_name: item.original_name,
+    original_language: item.original_language,
     year: item.year,
     runtime_min: item.runtime_min,
     poster_path: item.poster_path,
@@ -314,6 +413,19 @@ export function bannerText(banner, { compact = false } = {}) {
   const copy = banner?.copy;
   if (!copy) return '';
   return (compact ? copy.compact : copy.wide) ?? '';
+}
+
+/**
+ * The banner's second line, in words. It read "16 seen, no verdict · 2 named" - the model's word
+ * for a rating and a count of how the sentence above it was built (U6 of the second household
+ * test). What it has to say is how many are waiting in all, since the sentence names at most two.
+ */
+export function bannerCountLine(banner) {
+  const n = Number(banner?.count) || 0;
+  if (!n) return '';
+  return n === 1
+    ? '1 title you watched is waiting for your rating.'
+    : `${n.toLocaleString()} titles you watched are waiting for your rating.`;
 }
 
 export function bannerLabel(banner, { compact = false } = {}) {

@@ -59,6 +59,10 @@
    * [§6.8; M4.15 finding 10, decision 278]
    */
   const anyColdPlaced = $derived(section.items.some((item) => isColdPlaced(toPosterTitle(item))));
+  // "New in the library" IS that sentence: its §6.0 why-line is §8 stage 10's reason, and the row
+  // printed it twice, once as the why-line and once as this note (second household test, U10).
+  // Every other row still says it once when a card on it wears the chip (decision 278).
+  const coldNote = $derived(anyColdPlaced && shelfId !== 'new_in_library');
 
   /** @type {HTMLElement | undefined} */
   let row = $state();
@@ -141,7 +145,7 @@
     {#if numbers}
       <p class="note data" data-model-note data-testid="shelf-numbers">{numbers}</p>
     {/if}
-    {#if anyColdPlaced}
+    {#if coldNote}
       <p class="why" data-testid="shelf-cold-note">
         Cards marked "new" have no outside ratings yet — we placed them by what they're about.
       </p>
@@ -184,27 +188,31 @@
     <div class="row" bind:this={row} onscroll={measure} data-nobar data-testid="shelf-items">
       {#each section.items as item (item.title_id)}
         <div class="cell" data-testid="shelf-card" data-title={item.title_id}>
-          <PosterCard title={toPosterTitle(item)} onSelect={() => onSelect?.(item.title_id)} />
-          <!-- Proposal 29: rank, seen and the settled tier are chrome and stay ungated. The
-               top corners belong to M0's own badges (new / seen), so rank and tier take the
-               bottom two — same three overlays, no collision. §6.3's straddle and tension
-               badges deliberately do not appear: Home shows the settled tier only. -->
-          <span class="rank data" data-testid="shelf-rank">{item.rank}</span>
-          {#if item.tier}
-            <!-- Dashed when it is a guess (decision 187 badges the fitted tier, which exists for
-                 unrated titles too), solid when the title is on the person's Rank board; the name
-                 says which for anyone who cannot see the difference, and `ShelfList` says it once
-                 in words. -->
-            <span
-              class="tierbadge data"
-              class:guess={!item.on_board}
-              data-testid="shelf-tier"
-              data-guess={!item.on_board}
-              role="img"
-              aria-label={tierName(item)}
-              title={tierName(item)}
-            >{item.tier}</span>
-          {/if}
+          <!-- Proposal 29: rank, seen and the settled tier are chrome and stay ungated. The top
+               corners of the art belong to M0's own badges (new / seen); rank and tier sit in a
+               row under the art, rank at the left and tier at the right, because pinned over the
+               poster they covered its title lettering (second household test, U5). §6.3's
+               straddle and tension badges deliberately do not appear: Home shows the settled tier
+               only. -->
+          {#snippet chrome()}
+            <span class="rank data" data-testid="shelf-rank">{item.rank}</span>
+            {#if item.tier}
+              <!-- Dashed when it is a guess (decision 187 badges the fitted tier, which exists for
+                   unrated titles too), solid when the title is on the person's Rank board; the
+                   name says which for anyone who cannot see the difference, and `ShelfList` says
+                   it once in words. -->
+              <span
+                class="tierbadge data"
+                class:guess={!item.on_board}
+                data-testid="shelf-tier"
+                data-guess={!item.on_board}
+                role="img"
+                aria-label={tierName(item)}
+                title={tierName(item)}
+              >{item.tier}</span>
+            {/if}
+          {/snippet}
+          <PosterCard title={toPosterTitle(item)} onSelect={() => onSelect?.(item.title_id)} {chrome} />
           <!-- Present only when decision 117's toggle is on; the server strips the block. -->
           <ModelNote model={item.model} compact />
         </div>
@@ -303,31 +311,22 @@
     scroll-snap-align: start;
     min-width: 0;
   }
+  /* In the row under the art (`PosterCard`'s `chrome`), in flow: it was absolutely placed 30 px
+     down the poster and covered the title lettering (second household test, U5). */
   .rank,
   .tierbadge {
-    /* Offset from the TOP, not the bottom: the card's meta block is one or two lines tall
-       depending on the title, so a bottom offset drifts off the poster on half the row. 30px
-       clears M0's own `new` / `seen` badges, which sit at 7px. */
-    position: absolute;
-    top: 30px;
-    padding: 2px 6px;
+    padding: 1px 6px;
     border-radius: var(--r-pill);
-    background: rgba(13, 13, 15, 0.72);
+    background: var(--card);
     border: 1px solid var(--line);
     font-size: 9px;
     color: var(--ink-3);
     pointer-events: none;
   }
-  .rank {
-    left: 6px;
-  }
   .tierbadge {
-    right: 6px;
     color: var(--ink-2);
   }
-  /* The fill stays: a badge drawn over a poster is opaque, or the artwork decides its contrast
-     (design.css `--status`), and a transparent guess vanished on every light poster once real art
-     shipped (decision 483). The guess is told by its dashed edge and dimmer letter instead. */
+  /* The guess is told by its dashed edge and dimmer letter, off the art as on it (decision 483). */
   .tierbadge.guess {
     border-style: dashed;
     border-color: var(--line-2);

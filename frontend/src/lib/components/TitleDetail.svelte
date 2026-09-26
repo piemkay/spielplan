@@ -14,9 +14,16 @@
    * Since the 2026-09-25 user test it speaks the member register (decision 486): the model line
    * and every weight arrive only while the viewer's Show the model is on, because the server
    * leaves them out otherwise; terms are named by their label; and every sentence under an action
-   * is a plain one. It also answers the title itself - Liked / Fine / Disliked / Not seen, through
-   * §6.1's own session (decision 487) - and Show on map waits, absent, for §6.4's Map
-   * (decision 488).
+   * is a plain one. It also answers the title itself - Disliked / Fine / Liked / Not seen, through
+   * §6.1's own session (decision 487), in Rate's order (decision 517) - and Show on map waits,
+   * absent, for §6.4's Map (decision 488).
+   *
+   * Since the second household test it leads with what a member opens it for (decision 517): the
+   * poster and the name, one plain line saying why the title is suggested to them (`why`, the
+   * server's sentence), their answer and Play, the synopsis and the first few names. Everything
+   * else §6.0 lists - the rest of the credits, the platform scores and both DNA tiers - is still on
+   * the card, behind one "More about this film", because a member read twelve cast rows, nine
+   * scores and fifty tags before reaching the end of it.
    */
   import { get, post } from '$lib/api.js';
   // The palette and the runtime label are shared, not copied. This file held a second FACETS set
@@ -30,10 +37,14 @@
   import { termLabel } from '$lib/terms.js';
   import {
     ANSWERS,
+    CREDIT_TOP,
     answeredLine,
     creditJobs,
     creditKey,
+    displayNames,
+    extractedByTerm,
     playWhy,
+    projectedForCard,
     quoteText,
     revealLine,
     sourceLabel,
@@ -179,6 +190,22 @@
   const shownCredits = $derived(
     showAllCredits ? (data?.credits ?? []) : (data?.credits ?? []).slice(0, CREDIT_FOLD)
   );
+  // The first few lead the card (the director, then the billed cast: `credits_for`'s order); the
+  // rest of the same list continues inside "More about this film" (decision 517). One list read
+  // in two places, so the count line still counts every row shown.
+  const topCredits = $derived(shownCredits.slice(0, CREDIT_TOP));
+  const moreCredits = $derived(shownCredits.slice(CREDIT_TOP));
+  // Decision 516: the original title leads where it is in the viewer's own language.
+  const names = $derived(displayNames(data?.title));
+  // The server's one sentence on why THIS member is shown this title, or nothing: a card opened
+  // from search has no reason to give, and an absent key is a build that does not send one yet.
+  const why = $derived(typeof data?.why === 'string' ? data.why.trim() : '');
+  // §4.1 rule 1: two tiers, two lists. Each is shaped for reading - one block per quoted term with
+  // each quote once, an inferred term the quotes carry shown once (quoted), and the one-source or
+  // contradicting guesses folded - and nothing leaves the payload (decision 517).
+  const quoted = $derived(extractedByTerm(data?.dna?.extracted));
+  const inferred = $derived(projectedForCard(data?.dna?.projected, data?.dna?.extracted));
+  const kindNoun = $derived(data?.title?.kind === 'series' ? 'series' : 'film');
   // Joined in JS — Svelte collapses whitespace around {#if} blocks in markup. The kind by the
   // word the Rate card uses for it, not the enum (decision 486): `movie` is a column value.
   const subline = $derived(
@@ -188,6 +215,59 @@
       : ''
   );
 </script>
+
+<!-- One credit row, drawn above the fold and inside it. Keyed by person AND role class, delimited
+     (`creditKey`), by its callers: `credits_for` collapses to one row per (person, role class),
+     because one person reached the card twice when two sources spelled one job two ways - Heat's
+     composer as "Original Music Composer" and "Composer" (user test 2026-09-25). The job is the
+     key's fallback for a payload without the class. The delimiter is what stops person 700 +
+     `1Actor` colliding with person 7001 + `Actor`; the undelimited key threw on 1,216 real titles
+     where one person held one job under two department spellings, and with no +error.svelte the
+     whole card died mid-render. Keyed, not unkeyed, because the key is what keeps `onPerson`
+     attached to the right person. [C9.3 of the 2026-09-25 user test]
+
+     The job line names further jobs only where they are different credits (Writer · Novel), never
+     a second spelling; the source count is provenance for the operator and rides on Show the model
+     (decision 486). -->
+{#snippet creditRow(c)}
+  <button class="person" onclick={() => onPerson(c)}>
+    <span class="dot">{c.name.charAt(0)}</span>
+    <span class="pname">{c.name}</span>
+    <span class="data"
+      >{[creditJobs(c), showModel && c.sources?.length > 1 ? `${c.sources.length} sources` : null]
+        .filter(Boolean)
+        .join(' · ')}</span
+    >
+  </button>
+{/snippet}
+
+<!-- One inferred chip. Same label rule as the extracted tier, and keyed by facet and term by its
+     callers: `dna_projected` is UNIQUE (title_id, version, term), so no second provider can put one
+     term on this list twice. [M4.9 review cycle 1]
+
+     The weight is how many sources suggested the term. A one-source chip is drawn fainter, as it
+     was (C9.5 of the 2026-09-25 user test), and the number itself is Show the model's since the
+     second household test: a member read "psychedelic 1" and "Tokyo 1" as noise (decision 517).
+     The gloss stays the chip's explain line. -->
+{#snippet chip(p)}
+  {@const n = p.weight == null ? null : Math.round(p.weight)}
+  <span
+    class="chip"
+    class:faint={n != null && n <= 1}
+    style:color={facetColour(p.facet)}
+    style:border-color={facetColour(p.facet)}
+    title={[p.gloss, showModel && n != null ? `suggested by ${n} source${n === 1 ? '' : 's'}` : null]
+      .filter(Boolean)
+      .join(' - ') || undefined}
+    data-weight={n}
+  >
+    <span class="chiplabel">{termLabel(p)}</span>
+    {#if showModel && n != null}
+      <span class="n" aria-label={`${n} source${n === 1 ? '' : 's'}`}>{n}</span>
+    {/if}
+    {#if showModel}<span class="rawid">{p.term}</span>{/if}
+  </span>
+{/snippet}
 
 <!-- Proposal 131's outside tap and Escape, through the one action. On a phone this panel is the
      whole screen (`width: min(420px, 100%)` and full-bleed under 720 px), and until now the only
@@ -210,50 +290,18 @@
     <div class="head">
       <div class="thumb"><RatePoster title={t} showName={false} /></div>
       <div class="head-text">
-        <h2>{t.name}</h2>
-        <div class="data sub">{subline}</div>
-        {#if t.original_name && t.original_name !== t.name}
-          <div class="data">{t.original_name}</div>
+        <h2>{names.primary}</h2>
+        {#if names.secondary}
+          <div class="alt" data-testid="title-alt-name">{names.secondary}</div>
         {/if}
+        <div class="data sub">{subline}</div>
       </div>
     </div>
 
-    {#if t.overview}<p class="overview">{t.overview}</p>{/if}
-
-    {#if t.trailer_key}
-      <!-- §6.0 lists the trailer key as M0 content on the card, and the content is the trailer:
-           the key is the link's address, not its text. It was printed as the label, and a member
-           read `TRAILER F-eMt3SrfFU` (user test 2026-09-25). -->
-      <a
-        class="trailer"
-        href={`https://www.youtube.com/watch?v=${t.trailer_key}`}
-        target="_blank"
-        rel="noreferrer"
-        aria-label="Watch the trailer on YouTube"
-      >
-        Watch the trailer
-      </a>
-    {/if}
-
-    {#if data.model_line}
-      <!-- §6.0: the model line, in the data voice, never bare: `b(t) 0.52 · β 0.8 · gate 0.93`.
-           Rendered from the server's own `text`, not recomposed here, so the card and §6.7's rail
-           print the same number to the same precision.
-
-           Present only while the viewer's Show the model is on: decision 486 amends decision 117,
-           which had left this line ungated, and the server now omits the key with the switch off
-           rather than this card hiding what it was sent. -->
-      <div class="modelline" data-testid="title-model-line">
-        {#if data.model_line.available}
-          <span class="data-lg">{data.model_line.text}</span>
-          {#if data.model_line.second_line}
-            <span class="data support">{data.model_line.second_line}</span>
-          {/if}
-          <span class="data source">{data.model_line.e_source} · bundle {data.model_line.bundle}</span>
-        {:else}
-          <span class="data-lg">model line unavailable — {data.model_line.reason}</span>
-        {/if}
-      </div>
+    {#if why}
+      <!-- §6.8's quiet reason for a recommendation, first because it is the question the card is
+           opened with: "why this one?" (decision 517). -->
+      <p class="whyline" data-testid="title-why">{why}</p>
     {/if}
 
     <!-- Decision 487: §6.1's four sweep answers, on the card of a title the person already knows.
@@ -332,183 +380,204 @@
       </div>
     {/if}
 
-    {#if data.credits.length}
-      <section>
-        <!-- §6.0 applies a count-line discipline to the kind toggle — "with one active the count
-             line says how many the other holds" — and this surface ignored it: twelve of a
-             median twenty-four credits rendered with nothing saying so, and 89.7% of corpus
-             titles carry more than twelve, so a writer, composer or cinematographer was simply
-             absent. The line is the data voice, the collapsed twelve stay the default, and the
-             disclosure reveals the rest of a list the client already holds — no route change and
-             no LIMIT in `credits_for`, because the payload was never the problem.
+    {#if t.overview}<p class="overview">{t.overview}</p>{/if}
 
-             Both counts carry their separators, as `countLabel`'s do: the corpus runs to 1,535
-             credits on one title against a median of 24, and `1535` in a data-voice line is the
-             same number the catalogue two screens away writes `1,535`.
-             [M4.9 finding 7 / cs-23; review cycle 1] -->
-        <div class="data heading">
-          CAST &amp; CREW
-          <span class="count" data-testid="credit-count"
-            >{shownCredits.length.toLocaleString()} of {data.credits.length.toLocaleString()}</span
-          >
-        </div>
-        <div class="people">
-          <!-- Keyed by person AND role class, delimited (`creditKey`): `credits_for` collapses to
-               one row per (person, role class), because one person reached the card twice when
-               two sources spelled one job two ways - Heat's composer as "Original Music Composer"
-               and "Composer" (user test 2026-09-25). The job is the key's fallback for a payload
-               without the class. The delimiter is what stops person 700 + `1Actor` colliding
-               with person 7001 + `Actor`; the undelimited key threw on 1,216 real titles where one
-               person held one job under two department spellings, and with no +error.svelte the
-               whole card died mid-render. Keyed, not unkeyed, because the key is what keeps
-               `onPerson` attached to the right person. [C9.3 of the 2026-09-25 user test]
+    {#if t.trailer_key}
+      <!-- §6.0 lists the trailer key as M0 content on the card, and the content is the trailer:
+           the key is the link's address, not its text. It was printed as the label, and a member
+           read `TRAILER F-eMt3SrfFU` (user test 2026-09-25). -->
+      <a
+        class="trailer"
+        href={`https://www.youtube.com/watch?v=${t.trailer_key}`}
+        target="_blank"
+        rel="noreferrer"
+        aria-label="Watch the trailer on YouTube"
+      >
+        Watch the trailer
+      </a>
+    {/if}
 
-               The job line names further jobs only where they are different credits (Writer ·
-               Novel), never a second spelling; the source count is provenance for the operator
-               and rides on Show the model (decision 486). -->
-          {#each shownCredits as c (creditKey(c))}
-            <button class="person" onclick={() => onPerson(c)}>
-              <span class="dot">{c.name.charAt(0)}</span>
-              <span class="pname">{c.name}</span>
-              <span class="data"
-                >{[
-                  creditJobs(c),
-                  showModel && c.sources?.length > 1 ? `${c.sources.length} sources` : null
-                ]
-                  .filter(Boolean)
-                  .join(' · ')}</span
-              >
-            </button>
-          {/each}
-        </div>
-        {#if data.credits.length > CREDIT_FOLD}
-          <!-- `btn-ghost` rather than a local size: design.css grows every interactive primitive
-               to var(--touch) = 48px under `pointer: coarse`, which is §6's phone-first rule
-               stated once instead of re-picked here.
+    {#if data.model_line}
+      <!-- §6.0: the model line, in the data voice, never bare: `b(t) 0.52 · β 0.8 · gate 0.93`.
+           Rendered from the server's own `text`, not recomposed here, so the card and §6.7's rail
+           print the same number to the same precision.
 
-               Both labels are the constant rather than a word for it. `Show twelve` was a second
-               spelling of `CREDIT_FOLD` in English, which is the one spelling an edit to the
-               constant cannot reach: raise the fold and the button keeps saying twelve while the
-               count line above it says otherwise. [M4.9 review cycle 1] -->
-          <button
-            class="btn-ghost disclose"
-            data-testid="credits-disclosure"
-            aria-expanded={showAllCredits}
-            onclick={() => (showAllCredits = !showAllCredits)}
-          >
-            {showAllCredits
-              ? `Show ${CREDIT_FOLD}`
-              : `Show all ${data.credits.length.toLocaleString()}`}
-          </button>
+           Present only while the viewer's Show the model is on: decision 486 amends decision 117,
+           which had left this line ungated, and the server now omits the key with the switch off
+           rather than this card hiding what it was sent. -->
+      <div class="modelline" data-testid="title-model-line">
+        {#if data.model_line.available}
+          <span class="data-lg">{data.model_line.text}</span>
+          {#if data.model_line.second_line}
+            <span class="data support">{data.model_line.second_line}</span>
+          {/if}
+          <span class="data source">{data.model_line.e_source} · bundle {data.model_line.bundle}</span>
+        {:else}
+          <span class="data-lg">model line unavailable — {data.model_line.reason}</span>
         {/if}
-      </section>
+      </div>
     {/if}
 
-    {#if data.platform_ratings.items.length}
+    {#if topCredits.length}
+      <!-- The first few names, before the fold: the director, then the billed cast. The rest of
+           the same list continues inside "More about this film" under the count line, so the two
+           lists are one list read in two places (decision 517). -->
       <section>
-        <div class="data heading">PLATFORM SCORES</div>
-        <div class="scores">
-          <!-- Keyed by platform AND metric: since 0015 the row is per (platform, metric), and
-               metacritic ships a critic score and a user score on different scales — one key
-               per platform silently dropped the second and made Svelte's keyed each throw. -->
-          {#each data.platform_ratings.items as p (p.platform + ':' + p.metric)}
-            <div class="score">
-              <!-- §6.0: the caption travels with the number. 89 is not a score until the line
-                   also says out of 100, and this block mixes 10-point and 100-point scales. -->
-              <span class="value">{round1(p.score)}<span class="of">/{round1(p.scale)}</span></span>
-              <span class="data">{p.platform} · {metricLabel(p.metric)}</span>
-            </div>
-          {/each}
+        <div class="data heading">CAST &amp; CREW</div>
+        <div class="people">
+          {#each topCredits as c (creditKey(c))}{@render creditRow(c)}{/each}
         </div>
-        <!-- §4.1 rule 3, printed where it is relevant rather than buried in a doc. -->
-        <p class="why">{data.platform_ratings.note}</p>
       </section>
     {/if}
 
-    <!-- §4.1 rule 1: the two tiers are visibly distinct, and never interleaved. The distinction
-         is the rule; the words were the operator's ("DNA — EXTRACTED quote-verified"), and the
-         headings now say what each tier is to someone choosing a film (decision 486). -->
-    <section>
-      <div class="data heading">WHAT IT'S LIKE <span class="qv">each one quoted</span></div>
-      {#if data.dna.extracted.length}
-        <!-- Keyed on facet, term AND PROVIDER, delimited. The crash is the platform-scores
-             block's above: `dna_tag` is unique on (title_id, version, term, provider), so §6.6's
-             parallel extraction mode writes one term twice and Svelte's keyed each raises
-             `each_key_duplicate` in the production build too. The provider is the component that
-             does that work — since 0018 section 1 the facet IS `split_part(term, '.', 1)`, so
-             facet and term together separate exactly what the term separated alone, which is
-             nothing at all for the one pair of rows this key exists to keep apart. NOT
-             de-duplicated here — §4.1 rule 1 and §6.6 both want both rows visible; the key is
-             what makes two rows two rows. [M4.9 finding 8; review cycle 1]
+    <!-- Decision 517: everything else §6.0 lists stays on the card, behind one disclosure a member
+         can open - the rest of the credits, the platform scores and both DNA tiers. A native
+         `<details>`, because the content is in the document either way (the suite and a screen
+         reader find it) and the browser owns the open state, the keyboard and the tap. -->
+    <details class="more" data-testid="title-more">
+      <summary data-testid="title-more-toggle">More about this {kindNoun}</summary>
 
-             The term by its LABEL (decision 486 clause 4): `era.wwii` is the key and "World War
-             II" is the term. Printing the facet on top of the id read
-             `narrative_themes.themes.love_romance` [M4.9 finding 3]; printing the id alone read
-             `register.plays_it_straight` to a member (user test 2026-09-25). The facet is spent
-             on the colour, which is the identity §6.8 asks for, and the id itself appears only
-             beside the label while Show the model is on. -->
-        {#each data.dna.extracted as tag (tag.facet + ':' + tag.term + ':' + tag.provider)}
-          <div class="tag" style:border-left-color={facetColour(tag.facet)}>
-            <div class="tagline">
-              <span class="term" style:color={facetColour(tag.facet)} title={tag.gloss ?? undefined}
-                >{termLabel(tag)}</span
-              >
-              {#if showModel}
-                <span class="data">{[tag.term, tag.salience != null ? `sal ${tag.salience}` : null]
-                    .filter(Boolean)
-                    .join(' · ')}</span>
-              {/if}
-            </div>
-            {#each tag.evidence as e}
-              <!-- A span cut mid-sentence is marked as a fragment; the stored quote is what §4.1
-                   rule 1 verified and it is untouched. `lib/quote.js` says why. [C9.6 of the
-                   2026-09-25 user test] -->
-              <div class="quote">“{quoteText(e.quote)}”</div>
-              <div class="data src">{showModel ? e.source : sourceLabel(e.source)}</div>
+      {#if moreCredits.length}
+        <section>
+          <!-- §6.0 applies a count-line discipline to the kind toggle — "with one active the count
+               line says how many the other holds" — and this surface ignored it: twelve of a
+               median twenty-four credits rendered with nothing saying so, and 89.7% of corpus
+               titles carry more than twelve, so a writer, composer or cinematographer was simply
+               absent. The line is the data voice, the collapsed twelve stay the default, and the
+               disclosure reveals the rest of a list the client already holds — no route change and
+               no LIMIT in `credits_for`, because the payload was never the problem. The count is
+               of every row shown, the few above the fold included.
+
+               Both counts carry their separators, as `countLabel`'s do: the corpus runs to 1,535
+               credits on one title against a median of 24, and `1535` in a data-voice line is the
+               same number the catalogue two screens away writes `1,535`.
+               [M4.9 finding 7 / cs-23; review cycle 1] -->
+          <div class="data heading">
+            MORE CAST &amp; CREW
+            <span class="count" data-testid="credit-count"
+              >{shownCredits.length.toLocaleString()} of {data.credits.length.toLocaleString()}</span
+            >
+          </div>
+          <div class="people">
+            {#each moreCredits as c (creditKey(c))}{@render creditRow(c)}{/each}
+          </div>
+          {#if data.credits.length > CREDIT_FOLD}
+            <!-- `btn-ghost` rather than a local size: design.css grows every interactive primitive
+                 to var(--touch) = 48px under `pointer: coarse`, which is §6's phone-first rule
+                 stated once instead of re-picked here.
+
+                 Both labels are the constant rather than a word for it. `Show twelve` was a second
+                 spelling of `CREDIT_FOLD` in English, which is the one spelling an edit to the
+                 constant cannot reach: raise the fold and the button keeps saying twelve while the
+                 count line above it says otherwise. [M4.9 review cycle 1] -->
+            <button
+              class="btn-ghost disclose"
+              data-testid="credits-disclosure"
+              aria-expanded={showAllCredits}
+              onclick={() => (showAllCredits = !showAllCredits)}
+            >
+              {showAllCredits
+                ? `Show ${CREDIT_FOLD}`
+                : `Show all ${data.credits.length.toLocaleString()}`}
+            </button>
+          {/if}
+        </section>
+      {/if}
+
+      {#if data.platform_ratings.items.length}
+        <section>
+          <div class="data heading">PLATFORM SCORES</div>
+          <div class="scores">
+            <!-- Keyed by platform AND metric: since 0015 the row is per (platform, metric), and
+                 metacritic ships a critic score and a user score on different scales — one key
+                 per platform silently dropped the second and made Svelte's keyed each throw. -->
+            {#each data.platform_ratings.items as p (p.platform + ':' + p.metric)}
+              <div class="score">
+                <!-- §6.0: the caption travels with the number. 89 is not a score until the line
+                     also says out of 100, and this block mixes 10-point and 100-point scales. -->
+                <span class="value">{round1(p.score)}<span class="of">/{round1(p.scale)}</span></span>
+                <span class="data">{p.platform} · {metricLabel(p.metric)}</span>
+              </div>
             {/each}
           </div>
-        {/each}
-      {:else}
-        <p class="why">No quoted tags for this title yet.</p>
+          <!-- §4.1 rule 3, printed where it is relevant rather than buried in a doc. -->
+          <p class="why">{data.platform_ratings.note}</p>
+        </section>
       {/if}
-    </section>
 
-    <section>
-      <div class="data heading">PROBABLY ALSO <span class="inferred">inferred, not quoted</span></div>
-      {#if data.dna.projected.length}
-        <div class="chips">
-          <!-- Same label rule as the extracted tier above, and one key component fewer:
-               `dna_projected` is UNIQUE (title_id, version, term), so no second provider can put
-               one term on this list twice and the term is a key here on its own merits.
-               [M4.9 review cycle 1]
+      <!-- §4.1 rule 1: the two tiers are visibly distinct, and never interleaved. The distinction
+           is the rule; the words were the operator's ("DNA — EXTRACTED quote-verified"), and the
+           headings now say what each tier is to someone choosing a film (decision 486). -->
+      <section>
+        <div class="data heading">WHAT IT'S LIKE <span class="qv">each one quoted</span></div>
+        {#if quoted.length}
+          <!-- One block per term (`extractedByTerm`). §6.6's parallel extraction writes one term
+               once per provider, and the card drew each row as its own block - a member read two
+               "tense" blocks carrying one quote twice; the rows stay on the block for Show the
+               model, which names each row's salience. Keyed on facet and term, delimited, which is
+               now unique by construction. [M4.9 finding 8; decision 517]
 
-               Each chip carries its weight, which is how many sources suggested it, and a
-               one-source chip is drawn fainter: Heat's lone "teenage girl" tag made
-               "teen protagonist" look as settled as a four-source "Los Angeles" (user test
-               2026-09-25, C9.5). Emphasis only, never a filter - §4.1 rule 2: weights are never
-               filters, so no chip is dropped however weak. -->
-          {#each data.dna.projected as p (p.facet + ':' + p.term)}
-            {@const n = p.weight == null ? null : Math.round(p.weight)}
-            <span
-              class="chip"
-              class:faint={n != null && n <= 1}
-              style:color={facetColour(p.facet)}
-              style:border-color={facetColour(p.facet)}
-              title={[p.gloss, n != null ? `suggested by ${n} source${n === 1 ? '' : 's'}` : null]
-                .filter(Boolean)
-                .join(' - ')}
-              data-weight={n}
-            >
-              <span class="chiplabel">{termLabel(p)}</span>
-              {#if n != null}<span class="n" aria-label={`${n} source${n === 1 ? '' : 's'}`}>{n}</span>{/if}
-              {#if showModel}<span class="rawid">{p.term}</span>{/if}
-            </span>
+               The term by its LABEL (decision 486 clause 4): `era.wwii` is the key and "World War
+               II" is the term. Printing the facet on top of the id read
+               `narrative_themes.themes.love_romance` [M4.9 finding 3]; printing the id alone read
+               `register.plays_it_straight` to a member (user test 2026-09-25). The facet is spent
+               on the colour, which is the identity §6.8 asks for, and the id itself appears only
+               beside the label while Show the model is on. -->
+          {#each quoted as tag (tag.key)}
+            <div class="tag" style:border-left-color={facetColour(tag.facet)}>
+              <div class="tagline">
+                <span class="term" style:color={facetColour(tag.facet)} title={tag.gloss ?? undefined}
+                  >{termLabel(tag)}</span
+                >
+                {#if showModel}
+                  <span class="data">{[
+                    tag.term,
+                    ...tag.rows.map((r) => (r.salience != null ? `sal ${r.salience}` : null))
+                  ]
+                    .filter(Boolean)
+                    .join(' · ')}</span>
+                {/if}
+              </div>
+              {#each tag.evidence as e}
+                <!-- A span cut mid-sentence is marked as a fragment; the stored quote is what §4.1
+                     rule 1 verified and it is untouched. `lib/quote.js` says why. [C9.6 of the
+                     2026-09-25 user test] Each quote once: two extraction runs stored one twice. -->
+                <div class="quote">“{quoteText(e.quote)}”</div>
+                <div class="data src">{showModel ? e.source : sourceLabel(e.source)}</div>
+              {/each}
+            </div>
           {/each}
-        </div>
-      {:else}
-        <p class="why">Nothing inferred for this title yet.</p>
-      {/if}
-    </section>
+        {:else}
+          <p class="why">No quoted tags for this title yet.</p>
+        {/if}
+      </section>
+
+      <section>
+        <div class="data heading">PROBABLY ALSO <span class="inferred">inferred, not quoted</span></div>
+        {#if inferred.strong.length}
+          <div class="chips">
+            {#each inferred.strong as p (p.facet + ':' + p.term)}{@render chip(p)}{/each}
+          </div>
+        {/if}
+        {#if inferred.weak.length}
+          <!-- What one source alone suggests, or what contradicts the title's own pace, is folded
+               and not dropped: §4.1 rule 2 makes a weight a weight and never a filter. Collateral
+               read "comforting", "slow burn" and "frenetic" beside a quoted "taut" (second
+               household test, U3; decision 517). -->
+          <details class="weak" data-testid="title-weak-chips">
+            <summary>{inferred.weak.length} less certain</summary>
+            <div class="chips">
+              {#each inferred.weak as p (p.facet + ':' + p.term)}{@render chip(p)}{/each}
+            </div>
+          </details>
+        {/if}
+        {#if !data.dna.projected.length}
+          <p class="why">Nothing inferred for this title yet.</p>
+        {:else if !inferred.strong.length && !inferred.weak.length}
+          <p class="why">Everything inferred is already quoted above.</p>
+        {/if}
+      </section>
+    </details>
   {/if}
 </aside>
 
@@ -605,6 +674,81 @@
     flex: 1;
     min-width: 0;
   }
+  /* The other name of the title: the English one under a German original, or the original under
+     an English name (decision 516). A name, so the display face, one step quieter than the h2. */
+  .alt {
+    font-size: 13px;
+    color: var(--ink-3);
+    margin: 0 var(--touch) 4px 0;
+  }
+  /* The card's one "why this one" line leads, in the quiet-reason register but a step up from a
+     footnote, because it is the first thing the card says (decision 517). */
+  .whyline {
+    margin: 12px 0 10px;
+    font-size: 14px;
+    line-height: 1.45;
+    color: var(--ink-2);
+  }
+  /* "More about this film": one full-width row a thumb can hit, with the fold's state drawn. */
+  .more {
+    border-top: 1px solid var(--line);
+    margin-top: 6px;
+  }
+  .more > summary {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 12px 2px;
+    font-size: 13.5px;
+    color: var(--ink-2);
+    cursor: pointer;
+    list-style: none;
+  }
+  .more > summary::-webkit-details-marker,
+  .weak > summary::-webkit-details-marker {
+    display: none;
+  }
+  .more > summary::after {
+    content: '▾';
+    color: var(--ink-4);
+  }
+  .more[open] > summary::after {
+    content: '▴';
+  }
+  .more[open] > summary {
+    margin-bottom: 8px;
+  }
+  .weak {
+    margin-top: 8px;
+  }
+  .weak > summary {
+    display: inline-flex;
+    align-items: center;
+    font-family: var(--mono);
+    font-size: 11px;
+    color: var(--ink-3);
+    cursor: pointer;
+    list-style: none;
+    padding: 4px 0;
+  }
+  .weak[open] > summary {
+    margin-bottom: 6px;
+  }
+  .weak > summary::after {
+    content: '▾';
+    margin-left: 6px;
+  }
+  .weak[open] > summary::after {
+    content: '▴';
+  }
+  /* A `<summary>` is in none of design.css's coarse selectors, so both folds take §6 preamble's
+     48 px floor here, where the controls are. */
+  @media (pointer: coarse) {
+    .more > summary,
+    .weak > summary {
+      min-height: var(--touch);
+    }
+  }
   /* Decision 487's answers: `.pill` is §6.8's selection grammar, so the standing verdict wears
      the one accent and the others do not. Wraps rather than scrolls on a narrow phone. */
   .answers {
@@ -629,6 +773,8 @@
     padding: 6px 10px;
     border: 1px solid var(--line-2);
     border-radius: var(--r-sm);
+    /* The credits follow it directly since the answers moved up (decision 517). */
+    margin-bottom: 18px;
   }
   .modelline {
     display: flex;

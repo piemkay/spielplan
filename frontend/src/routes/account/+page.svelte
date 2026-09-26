@@ -14,6 +14,11 @@
    * §14.4 is surfaced rather than documented: a credential registered against a different
    * PUBLIC_URL is listed and marked dead, because "my passkey stopped working" deserves an
    * answer on the screen instead of in the logs.
+   *
+   * In plain words since the second household test (decision 518): a member read "switch PIN",
+   * "Tier set", "This browser has no WebAuthn support" and a page of licence notices. Every
+   * control and every fact is still here; the Rank letters' editor and the data sources' notices
+   * wait behind a disclosure each.
    */
   import { onMount } from 'svelte';
   import { page } from '$app/stores';
@@ -41,8 +46,8 @@
   // hears — the gate is the server's, and this is only its explanation.
   const pinSession = $derived(session.user?.auth_method === 'pin');
   const PIN_SESSION =
-    'This profile was switched into with a PIN. Switch back with your password or a passkey ' +
-    'to manage credentials.';
+    'You switched to this profile with a PIN. Sign in with your password or a passkey to change ' +
+    'how you sign in.';
 
   // §3.1's "prompted afterwards": set once by the forced first-login password change, and
   // gone as soon as a passkey exists. A permanent version of this would be a nag on an
@@ -154,8 +159,8 @@
   <header>
     <h1>Account</h1>
     <p class="why">
-      Passkeys are primary. A password stays available as a fallback, and a PIN switches
-      profiles on a device someone is already signed in on.
+      Sign in with a passkey - Face ID, a fingerprint or your phone's screen lock - or with your
+      password. A PIN lets you switch to your profile on a phone that is already signed in.
     </p>
   </header>
 
@@ -178,11 +183,11 @@
     <section class="card">
       <h2>Passkeys</h2>
       {#if !canPasskey}
-        <p class="why">This browser has no WebAuthn support — password sign-in still works.</p>
+        <p class="why">This browser can't use passkeys - you can still sign in with your password.</p>
       {/if}
 
       {#if credentials.length === 0}
-        <p class="why" data-empty="passkeys">No passkey registered on this account yet.</p>
+        <p class="why" data-empty="passkeys">You haven't added a passkey yet.</p>
       {:else}
         <ul class="list">
           {#each credentials as c (c.id)}
@@ -239,22 +244,24 @@
   <section class="card">
     <h2>Password</h2>
     <p class="why">
-      The fallback that always works, on any device, with no authenticator to hand. Ten
-      characters or more; changing it signs every other device out.
+      Works on any device, even without a passkey. At least ten characters; changing it signs you
+      out everywhere else.
     </p>
     <div class="row">
       <a class="btn-ghost" href="/account/password">Change password</a>
     </div>
   </section>
 
-  <section class="card">
-    <h2>Switch PIN</h2>
+  <!-- §3.2's PIN, named by what it does (decision 518): "Switch PIN" named the mechanism. -->
+  <section class="card" data-testid="pin-card">
+    <h2>PIN for switching profiles</h2>
     {#if pinSession}
       <p class="why" data-pin-session>{PIN_SESSION}</p>
     {:else}
       <p class="why">
-        Four digits, for handing the TV remote over. It is not a way in — the device has to be
-        signed in already, and your password sets it.
+        Four digits that let you switch to your profile on a phone or tablet someone is already
+        signed in on - handy when you pass the phone around. It can't be used to sign in from
+        scratch, and setting it takes your password.
         {#if session.user?.has_pin}<strong> A PIN is set.</strong>{/if}
       </p>
       <div class="row">
@@ -283,23 +290,28 @@
     {/if}
   </section>
 
+  <!-- Decision 11's tier set, by what it is to a member: the letters of their Rank board. The
+       letters are on the card; the free-text editor, which re-sorts the board when the number of
+       letters changes, waits behind a disclosure (decision 518). -->
   <section class="card" data-testid="tier-set">
-    <h2>Tier set</h2>
-    <p class="why">
-      The letters your Rank board uses, worst first. {tiers.warning}
-    </p>
-    <div class="row">
-      <input
-        type="text"
-        bind:value={tierDraft}
-        aria-label="Tier set"
-        data-testid="tier-set-input"
-      />
-      <button class="btn-primary" onclick={saveTierSet} disabled={busy || !tierDraft.trim()}>
-        Save tier set
-      </button>
-    </div>
-    <p class="data" data-testid="tier-set-current">{(tiers.tier_set ?? []).join(' · ')}</p>
+    <h2>Rank letters</h2>
+    <p class="why">The letters your Rank board sorts titles into, worst first.</p>
+    <p class="data letters" data-testid="tier-set-current">{(tiers.tier_set ?? []).join(' · ')}</p>
+    <details class="fold" data-testid="tier-set-edit">
+      <summary>Change the letters</summary>
+      <p class="why">Type them worst first, with spaces between. {tiers.warning}</p>
+      <div class="row">
+        <input
+          type="text"
+          bind:value={tierDraft}
+          aria-label="Rank letters"
+          data-testid="tier-set-input"
+        />
+        <button class="btn-primary" onclick={saveTierSet} disabled={busy || !tierDraft.trim()}>
+          Save letters
+        </button>
+      </div>
+    </details>
   </section>
 
   <section class="card">
@@ -322,7 +334,10 @@
     {/if}
   </section>
 
-  <!-- Decision 293. The licence conditions behind the posters and overviews are conditions of
+  <!-- Decision 518: what a member does not need to act on - the data sources' notices - for the
+       curious, one tap away and never removed.
+
+       Decision 293. The licence conditions behind the posters and overviews are conditions of
        DISPLAY, so they bind every member who sees them rather than the admin who imported them,
        and §6.6's Data card is admin-only. This page is the one surface the account chip routes
        to for everybody, admin and member alike — it is not a tab, and `api/auth.py`'s `SURFACES`
@@ -332,8 +347,13 @@
        material — nothing here is a control, and the four things above are all things a person
        came here to do. Its own component for the same reason `Onboarding` is: the block owns a
        licence text that has to be exact, and a page this long is where an exact string goes to
-       be edited by accident. -->
-  <DataSources />
+       be edited by accident. Folded, not removed: the notices are in the product and reachable by
+       every member, which is what decision 293 asks; they were a screen of licence text a member
+       had to scroll past on the page they came to for a PIN. -->
+  <details class="fold technical" data-testid="account-technical">
+    <summary>Where the film information comes from</summary>
+    <DataSources />
+  </details>
 </div>
 
 <style>
@@ -392,6 +412,38 @@
   .row input {
     flex: 1;
     min-width: 160px;
+  }
+  .letters {
+    margin: 0;
+    font-size: 13px;
+    color: var(--ink-2);
+  }
+  /* The two disclosures (decision 518): a summary is in none of design.css's coarse selectors,
+     so it takes §6 preamble's 48 px floor here. */
+  .fold > summary {
+    display: flex;
+    align-items: center;
+    cursor: pointer;
+    font-size: 13px;
+    color: var(--ink-3);
+    padding: 6px 0;
+  }
+  .fold[open] > summary {
+    margin-bottom: 10px;
+  }
+  /* A flex summary drops the engine's own marker, so the fold draws its state itself. */
+  .fold > summary::after {
+    content: '▾';
+    margin-left: 8px;
+    color: var(--ink-4);
+  }
+  .fold[open] > summary::after {
+    content: '▴';
+  }
+  @media (pointer: coarse) {
+    .fold > summary {
+      min-height: var(--touch);
+    }
   }
   .welcome {
     padding: 12px 15px;

@@ -394,6 +394,24 @@ test('a tier letter on a shelf card is explained once, in words', async ({ page 
   }
 });
 
+test('the shelves say they are the library, and a card keeps its art clear', async ({ page }) => {
+  // Second household test (U2, U5, U10; decision 516): nothing said the shelves come from the
+  // library while search cards said "in library"; the rank and tier badges sat on the posters'
+  // title lettering; and "New in the library" printed its reason twice.
+  await expect(page.getByTestId('shelves')).toBeVisible();
+  await expect(page.getByTestId('shelves-from-library')).toHaveText(
+    /^Everything on these shelves is in your library\./
+  );
+  const rank = page.getByTestId('shelf-rank').first();
+  await expect(rank).toBeVisible();
+  const onArt = await rank.evaluate((el) => Boolean(el.closest('.poster')));
+  expect(onArt, 'a badge sits on the art').toBe(false);
+  const fresh = page.locator('[data-testid="shelf"][data-shelf="new_in_library"]');
+  for (const row of await fresh.all()) {
+    await expect(row.getByTestId('shelf-cold-note')).toHaveCount(0);
+  }
+});
+
 // --- §6.7 / decision 117's toggle ---------------------------------------------------------
 
 test('with the toggle off the rail and every inline number are absent, not merely hidden', async ({

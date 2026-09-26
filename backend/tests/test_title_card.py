@@ -135,6 +135,27 @@ async def test_the_card_names_every_term_by_its_shipped_label(card):
     assert projected["weight"] == 1
 
 
+async def test_the_card_and_the_catalog_carry_the_original_title_and_its_language(db, card):
+    """Decision 516: a German viewer knows "Wunderschön" and not its English release title, and
+    the client can lead with the original only where the payload says which language it is in -
+    on the title card and on every catalog card, the grid the search box and the filters open."""
+    await db.execute(
+        "INSERT INTO title (id, kind, name, original_name, original_language, year, is_owned) "
+        "VALUES (5, 'movie', 'Wonderfully Beautiful', 'Wunderschön', 'de', 2022, true)"
+    )
+    title = (await card.get("/api/titles/5")).json()["title"]
+    assert (title["original_name"], title["original_language"]) == ("Wunderschön", "de")
+
+    listed = (await card.get("/api/titles", params={"kind": "movie", "q": "wonderfully"})).json()
+    (hit,) = listed["items"]
+    assert (hit["name"], hit["original_name"], hit["original_language"]) == (
+        "Wonderfully Beautiful", "Wunderschön", "de"
+    )
+    # A title with no recorded original says so with nulls, never a missing key.
+    heat = (await card.get("/api/titles", params={"kind": "movie", "q": "heat"})).json()["items"][0]
+    assert heat["original_name"] is None and heat["original_language"] is None
+
+
 async def test_the_platform_caption_is_plain_and_the_flag_still_travels(card):
     """§4.1 rule 3 rests on `display_only`, which stays; the caption says the same thing to a
     member instead of "popularity conduit ... model features"."""

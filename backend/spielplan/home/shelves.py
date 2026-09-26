@@ -1498,6 +1498,11 @@ async def build_home(
     # vocabulary's names and the canonical genres, and the film length past which they stop.
     # Plain facts about their own ratings, so ungated; null when nothing is left out.
     payload["avoiding"] = avoided.as_dict() if avoided else None
+    # Decision 516: every card carries its original title and language, so a German viewer's card
+    # leads with "Wunderschön". One read for every card on every shelf, after the builders.
+    await library.carry_original_names(
+        conn, [card for shelf in shelves for s in shelf.sections for card in s.items], key="title_id"
+    )
     payload["shelves"] = [s.as_dict() for s in shelves]
     payload["sections"] = sections_by_kind(shelves, chosen)
     payload["shelves_total"] = len(shelves)
