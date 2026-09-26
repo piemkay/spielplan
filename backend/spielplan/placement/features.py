@@ -1,31 +1,7 @@
-"""The placement feature vector, built from the contract and the database. Spec v2.1 §8 stage 9.
+"""The placement feature vector (§8 stage 9): layout from the contract, values from the database.
 
-§8 stage 9: "feature vector per the feature contract → Cold Tower → ê(t), b̂(t); genome block
-zero-imputed (unavailable for new titles by construction)."
-§5.3: "any owned title lacking a coordinate gets a feature vector built from **DB data** per the
-feature contract (absent blocks dropped — the tower's dropout training anticipates this; genome
-zero-imputed)."
-
-Those two sentences fix both halves of this module:
-
-  * the **column layout** comes from `contract.py` and from nowhere else — no offset is written
-    down here, and `build_vector` never mentions a block by name except `review_text`, whose
-    source is a different file (§4.3);
-  * the **values** come from the content spine and from nowhere else. Nine queries, one per
-    block, each a plain read. §4.1's rules are structural here rather than remembered:
-
-      rule 1 — `dna_tag` and `dna_projected` are two functions and two statements. There is no
-               code path in this module that reads them from one query.
-      rule 2 — salience, confidence, `n_sources` and the projected tier's per-term strength
-               appear in no predicate here: they are weights, never filters. They are not in
-               the cells either — the corpus's exporter wrote both DNA tiers as presence, and
-               §4.3 makes its column set the exhaustive definition of the tower's input.
-      rule 3 — nothing here names the display-only schema. Aggregate platform scores are a
-               popularity conduit and are banned as model features.
-
-`build_vector` is pure — no database, no torch, no clock beyond its own stopwatch — because
-§5.3 puts a per-title budget on placement and a budget measured through Postgres measures
-Postgres.
+Each block's query mirrors the corpus exporter, since the tower was trained on its output.
+`build_vector` is pure so §5.3's per-title budget is measurable without Postgres.
 """
 
 from __future__ import annotations
@@ -40,31 +16,8 @@ import numpy as np
 
 from spielplan.placement.contract import TEXT_BLOCK, Block, ContractError, FeatureContract
 
-# Blocks whose ABSENCE no amount of §8 stage 2 enrichment could fill, so a title short of one is
-# not thin. `is_thin`'s docstring already made this argument for the genome — "unavailable for new
-# titles by construction", so "parking a job for it would be a job that can never finish" — and
-# the argument is not about the genome. It is about what §8 stage 2 *is*: a re-fetch of the content
-# spine. Two more blocks are outside its reach for reasons of their own:
-#
-#   `award`  — the block's source is one COUNT over `award`, so a title nobody nominated drops it.
-#              No fetch makes an awards body give a 1983 film a prize. Measured over the 130 titles
-#              the sweep places on the real bundle: award absent for 40 of them, against §5.3's
-#              statement of the whole backlog as "5 of 19".
-#   review_text — its source is not the database at all. §4.3 puts it in `review_text_emb.npz`
-#              inside the bundle (`text_embeddings` below), so stage 2, which writes DB rows,
-#              cannot reach it from either direction; and a row the corpus itself marks
-#              `covered = False` is a property of the EXPORT, changed only by the next one.
-#
-# Named here and not beside `contract.ZERO_IMPUTED`, which records the *contract's* own
-# preprocessing map (§4.3's "genome zero-imputation"). Enrichability is a property of §8's
-# pipeline, not of the file, and merging the two would make a bundle that stopped declaring the
-# imputation silently re-park 983 columns' worth of absence.
-#
-# What this must NOT reach: a block that produced rows and landed none of the columns the contract
-# declares. §4.3 makes `feature_contract.json` "the **exhaustive** definition of the tower's
-# input", so keys outside it are a grammar disagreement between the builder and the export — and a
-# re-fetch whose keys the contract names is exactly the remedy. `blocks_empty` is untouched below.
-# [M4.13, cs-21; plan step 31; the M4.5 row data-rules-a-feature-block-that-never-hits-is-not-present]
+# Blocks no §8 stage 2 re-fetch can fill (no genome for new titles, an award nobody gave, review text
+# from the bundle), so their absence does not make a title thin.
 UNENRICHABLE_BLOCKS: tuple[str, ...] = ("genome", "award", TEXT_BLOCK)
 
 # block name -> feature key -> value, for one title.
@@ -74,7 +27,7 @@ BlockSource = Callable[[Any, Sequence[int], str], Awaitable[dict[int, dict[str, 
 
 @dataclass(frozen=True)
 class BuiltVector:
-    """One title's tower input, and the bookkeeping §5.3's badge and §8.4's flywheel read."""
+    """One title's tower input, plus the block bookkeeping §5.3's badge and §8.4's flywheel read."""
 
     title_id: int
     vec: np.ndarray                       # float32, contract.input_dim
@@ -88,25 +41,7 @@ class BuiltVector:
 
     @property
     def is_thin(self) -> bool:
-        """§5.3: "thin ones (2 lack keywords, 3 lack any DNA row) are still placed, badged, and
-        parked as acquisition jobs for M5 enrichment."
-
-        Thin = at least one block dropped, or one that hit none of its declared columns. The
-        second half is not a second rule: §4.3 makes the contract "the **exhaustive** definition
-        of the tower's input", so a block whose keys are all outside it feeds the tower exactly
-        the zeros a dropped block does. A title whose keywords are real but name nothing the
-        exported vocabulary carries is as thin as one with no keywords at all, and §8 stage 2's
-        re-fetch is the same remedy for both.
-
-        A zero-imputed genome does **not** make a title thin: §8 stage 9 says the genome is
-        "unavailable for new titles by construction", so no amount of §8 stage-2 enrichment
-        would fill it and parking a job for it would be a job that can never finish. That
-        sentence is the rule, and `UNENRICHABLE_BLOCKS` is the set it applies to — the award
-        nobody gave and the review-text row the export marks uncovered are in it for reasons
-        argued where the tuple is declared. The DROPPED list is filtered and `blocks_empty` is
-        not, because the two halves of this docstring pull in opposite directions and both are
-        right. [M4.13, cs-21; plan step 31]
-        """
+        """§5.3's thin title: an enrichable block dropped, or any block that hit no declared column."""
         missing = [b for b in self.blocks_dropped if b not in UNENRICHABLE_BLOCKS]
         return bool(missing or self.blocks_empty)
 
@@ -117,13 +52,10 @@ def build_vector(
     rows: Mapping[str, Mapping[str, float]],
     text_emb: np.ndarray | None,
 ) -> BuiltVector:
-    """Assemble one title's vector. Pure: everything it knows arrives in its arguments.
+    """Assemble one title's vector. Pure.
 
-    The load-bearing subtlety, stated here so nobody invents a mask channel: a dropped block and
-    a zero-imputed block produce *identical bytes*. The tower's block-dropout training saw
-    exactly all-zero blocks, so all-zero **is** "dropped". The difference is bookkeeping — and
-    the badge, and the flywheel — and no path in this function fills a block with a mean, a
-    prior or a global average.
+    Dropped and zero-imputed blocks are identical zeros (the tower trained on block dropout); only
+    the bookkeeping differs. Nothing is ever filled with a mean or prior.
     """
     started = time.perf_counter()
     vec = np.zeros(contract.input_dim, dtype=np.float32)
@@ -136,7 +68,6 @@ def build_vector(
     for block in contract.blocks:
         pairs = rows.get(block.name)
         if not pairs:
-            # Absent. Zeros either way; which of the two facts it is, is recorded.
             (imputed if block.impute == "zero" else dropped).append(block.name)
             continue
         hits = 0
@@ -150,16 +81,10 @@ def build_vector(
             vec[column] = 1.0 if block.encoding == "multi_hot" else float(value)
         if misses:
             unmapped[block.name] = misses
-        # §4.3 makes the contract the exhaustive definition of the tower's input, so "present"
-        # can only mean "hit a column that definition declares". A block that produced rows and
-        # landed none of them writes the same zeros a dropped block writes, and marking it
-        # present asserts the tower was fed something it was not — which is how a credit block
-        # keyed `person_id::text` against `p:<role>:<name>` columns stayed invisible.
+        # Present only if it hit a declared column; otherwise the tower got zeros.
         (present if hits else empty).append(block.name)
         _normalise(vec, block)
 
-    # §4.3: "then the review-text block = columns 0..63 of the 256-d SVD embedding
-    # (singular-value order) multiplied by a frozen scalar `text_scale`".
     if text_emb is None:
         dropped.append(TEXT_BLOCK)
     else:
@@ -204,32 +129,14 @@ def _normalise(vec: np.ndarray, block: Block) -> None:
 
 
 def text_embeddings(store: Any, title_ids: Sequence[int]) -> dict[int, np.ndarray]:
-    """The rows of `review_text_emb.npz` for these titles.
-
-    §4.3 ships the full 256 columns and the contract says how many of them the tower sees, so
-    the truncation is a decision this app makes *from the contract* rather than a shape it is
-    handed. A title with no row is a title whose review-text block drops — the common case for
-    a §8-acquired title before its reviews accrue (§8 stage 4).
-
-    A row whose `covered` flag is False is no row either. The shipped contract records the rule
-    itself — `preprocessing.missing_review_text: "zeros when covered=False"` — and the bundle
-    sets it False on 6,010 of 14,397 rows, whose `emb` is float noise around 1e-16 rather than
-    text. Returning them made the tenth block *present* for 42% of titles while the tower got
-    64 zeros: §5.3's badge stayed off, `is_thin` stayed False, and §8 stage 2 never parked the
-    acquisition job that is the only thing which can fill it.
-    """
+    """The rows of `review_text_emb.npz` for these titles. A `covered = False` row is no row."""
     if getattr(store, "is_empty", True) or not store.present.get("review_text_emb.npz"):
         return {}
     npz = store.npz("review_text_emb.npz")
-    # `title_ids`, plural: the name the corpus's exporter writes. Reading `title_id` raised a
-    # KeyError on every bundle it has ever produced, so no block below this line was reachable
-    # (row data-rules-model-artifacts-load-from-the-shipped-bundle).
+    # `title_ids`, plural: the exporter's name.
     ids = np.asarray(npz["title_ids"]).astype(np.int64)
     emb = npz["emb"]
-    # A bundle that ships no `covered` array has told this app nothing about coverage, and
-    # inventing it from the embedding's magnitude would be a threshold nothing states. Every
-    # bundle the corpus has produced carries it, and `validate.py` refuses one that does not —
-    # so this branch is the read of a store that was never validated, not of an import.
+    # Only an unvalidated store lacks `covered`; then every row counts.
     covered = npz["covered"] if "covered" in npz.files else None
     wanted = {int(t) for t in title_ids}
     return {
@@ -240,24 +147,11 @@ def text_embeddings(store: Any, title_ids: Sequence[int]) -> dict[int, np.ndarra
 
 
 # --- the nine block sources ------------------------------------------------------------------
-#
-# One statement per block per chunk. Every one of them returns {title_id: {feature key: value}},
-# and a block whose query returns no row for a title yields no entry for that title — which is
-# precisely how `build_vector` learns the block is absent. There is no "empty dict" middle
-# state, because that is the defaulting §5.3 forbids.
+# Each returns {title_id: {feature key: value}}; no entry for a title means the block is absent.
 
 
 async def _dna_x(conn: Any, ids: Sequence[int], vocab_version: str) -> dict[int, dict[str, float]]:
-    """The extracted tier (§4.1 rule 1), as presence.
-
-    The cell is 1.0 and not salience: the corpus built this block's 433 columns with
-    `build("dna_x", "SELECT title_id, 'dna:'||term FROM dna_tag")` and no `weighted=True`
-    (`scripts/build_content.py`), so the checkpoint has never seen a 2 or a 3 here — see
-    `contract.DEFAULT_ENCODING`. §4.1 rule 2 is still honoured: salience appears in no predicate.
-
-    DISTINCT rather than a GROUP BY: §6.6's parallel mode writes one row per provider, and the
-    corpus's `dna_tag` is PRIMARY KEY (title_id, term) — one row per term, whatever read it.
-    """
+    """The extracted tier (§4.1 rule 1), as presence; DISTINCT across §6.6's per-provider rows."""
     rows = await conn.fetch(
         """
         SELECT DISTINCT title_id, 'dna:' || term AS key, 1.0::float8 AS value
@@ -270,11 +164,7 @@ async def _dna_x(conn: Any, ids: Sequence[int], vocab_version: str) -> dict[int,
 
 
 async def _dna_p(conn: Any, ids: Sequence[int], vocab_version: str) -> dict[int, dict[str, float]]:
-    """The projected tier — a separate table, a separate statement, never a union (rule 1).
-
-    Presence again, for the same reason and from the same builder line: the projected weight is
-    a weight the corpus's exporter did not carry into the tower's input.
-    """
+    """The projected tier — a separate table, a separate statement, never a union (rule 1)."""
     rows = await conn.fetch(
         """
         SELECT DISTINCT title_id, 'dna:' || term AS key, 1.0::float8 AS value
@@ -286,35 +176,13 @@ async def _dna_p(conn: Any, ids: Sequence[int], vocab_version: str) -> dict[int,
     return _group(rows)
 
 
-# The corpus's own genome cut, verbatim: `build("genome", "... WHERE g.relevance >= 0.5",
-# weighted=True)` in `scripts/build_content.py`. It is not a filter on a *weight* in §4.1 rule
-# 2's sense — it is the definition of which rows the 983 columns were counted from, and the
-# shipped `content_X.npz` proves it: the genome block's minimum nonzero is exactly 0.5. Reading
-# every row instead feeds 587,502 of the bundle's 888,023 scores into columns the tower was
-# trained to see as zero.
-#
-# THE CUT IS STILL LOAD-BEARING AFTER DECISION 291, which is why this constant did not go with the
-# import. Decision 291 stopped LOADING the slice; it emptied no table. An install seeded by any
-# shipped build up to M4.15 still holds its 888,023 rows -- no migration drops them and decision
-# 162 seeds content once -- so on that box this cut is what keeps the block to the columns
-# `content_X.npz` was counted from. Reading it wider there would be the 587,502-row error against
-# a live tower input rather than against a dead one. [decisions 291, 304 and 311]
+# The corpus exporter's own genome cut: which rows the tower's columns were built from. Older
+# installs still hold genome rows (decision 311).
 _GENOME_MIN_RELEVANCE = 0.5
 
 
 async def _genome(conn: Any, ids: Sequence[int], _vocab: str) -> dict[int, dict[str, float]]:
-    """MovieLens genome relevance, through the link slice. Absent for every §8-acquired title
-    by construction — which is exactly why §4.3 zero-imputes this block and no other.
-
-    KEPT DELIBERATELY AFTER DECISION 291, and §4.1/§4.3 were narrowed to say so rather than this
-    reader being deleted to fit them (decision 311). Decision 291 stopped the IMPORT; nothing
-    stops the READ, and nothing empties the three tables an earlier build filled. On a pre-291
-    install this returns real relevance values, `build_vector` puts `genome` in `blocks_present`,
-    and the Cold Tower is handed the input it was fitted over for precisely the cold-masked titles
-    §5.3's sweep asks it to place (decision 304's re-measurement: 1,055 of them). Deleting this as
-    dead code on the strength of a universal would change those titles' placement inputs silently,
-    which is why the universal is the thing that went.
-    """
+    """MovieLens genome relevance. Not dead code: pre-291 installs still hold it (decision 311)."""
     rows = await conn.fetch(
         """
         SELECT l.title_id, 'g:' || g.tag AS key, s.relevance::float8 AS value
@@ -329,15 +197,7 @@ async def _genome(conn: Any, ids: Sequence[int], _vocab: str) -> dict[int, dict[
 
 
 async def _genre(conn: Any, ids: Sequence[int], _vocab: str) -> dict[int, dict[str, float]]:
-    """The cell is a COUNT of the source rows that said it, not a presence bit.
-
-    Measured in the shipped `content_X.npz` — the corpus's own tower input — the four
-    source-multiplied blocks carry values above 1.0 in a large minority of their nonzeros:
-    genre 37.7% (max 6), keyword 21.4% (max 7), credit 64.7% (max 5), country 66.2% (max 3).
-    The exporter's `build(...)` sums duplicate (title, feature) pairs and every one of these
-    tables carries a `source` column, so a genre four sources agreed on is a 4.0. `SELECT
-    DISTINCT ... 1.0` fed the checkpoint a presence bit where it was trained on a count.
-    """
+    """The cell is a COUNT of the source rows that said it, as the exporter summed them."""
     rows = await conn.fetch(
         "SELECT title_id, 'genre:' || lower(genre) AS key, count(*)::float8 AS value"
         " FROM title_genre WHERE title_id = ANY($1::int[])"
@@ -348,10 +208,7 @@ async def _genre(conn: Any, ids: Sequence[int], _vocab: str) -> dict[int, dict[s
 
 
 async def _keyword(conn: Any, ids: Sequence[int], _vocab: str) -> dict[int, dict[str, float]]:
-    """`lower(trim(...))` because that is the expression the 3,884 columns were named from —
-    `build("keyword", "SELECT title_id, 'kw:'||lower(trim(keyword)) FROM title_keyword")` in
-    `scripts/build_content.py`. 15,096 of the shipped bundle's 764,732 keyword rows are not
-    already lower-cased, and each of those missed its column outright."""
+    """`lower(trim(...))`: the expression the exporter named the columns from."""
     rows = await conn.fetch(
         "SELECT title_id, 'kw:' || lower(trim(keyword)) AS key, count(*)::float8 AS value"
         " FROM title_keyword WHERE title_id = ANY($1::int[])"
@@ -362,26 +219,10 @@ async def _keyword(conn: Any, ids: Sequence[int], _vocab: str) -> dict[int, dict
 
 
 async def _credit(conn: Any, ids: Sequence[int], _vocab: str) -> dict[int, dict[str, float]]:
-    """§4.1: "credit (dedupe at read time, never at import)" — hence DISTINCT here and no
-    unique constraint there.
+    """Keyed `p:<role_class>:<name>` (the contract is name-keyed); dedupe at read time (§4.1).
 
-    The key is `p:<role_class>:<name>`, which is what the shipped contract declares. It used to
-    be `person_id::text`, on the reasoning that an id survives a name correction — true, and
-    beside the point: the tower was trained on a name-keyed vocabulary, so an id-keyed builder
-    misses all 244 columns and the block contributes nothing while reporting itself present.
-    `corrections_v1.tsv` is applied at derive time (§8 stage 3), which is what actually keeps
-    the name right.
-
-    `role_class` is the corpus's own normalisation (director|writer|dp|composer|cast|…), not a
-    re-derivation from `job` strings: re-deriving it here would drift from the vocabulary the
-    contract was built against, one job title at a time.
-
-    The role predicate is the corpus's, verbatim (`scripts/build_content.py`): the four
-    above-the-line crafts, plus cast only down to third billing. It is not an optimisation — it
-    is which rows the 244 columns exist for. Every one of the shipped bundle's 281,655 credit
-    rows carries a `role_class`, so "any non-NULL role_class" lit 52,421 rows the corpus left
-    dark: an editor, a production designer and a tenth-billed actor all entering columns whose
-    training distribution has them at zero."""
+    The role predicate is the exporter's, verbatim: which rows the columns were built from.
+    """
     rows = await conn.fetch(
         "SELECT c.title_id, 'p:' || c.role_class || ':' || p.name AS key,"
         " count(*)::float8 AS value"
@@ -396,15 +237,7 @@ async def _credit(conn: Any, ids: Sequence[int], _vocab: str) -> dict[int, dict[
 
 
 async def _country(conn: Any, ids: Sequence[int], _vocab: str) -> dict[int, dict[str, float]]:
-    """The cell is a COUNT of the source rows that said it, not a presence bit.
-
-    Measured in the shipped `content_X.npz` — the corpus's own tower input — the four
-    source-multiplied blocks carry values above 1.0 in a large minority of their nonzeros:
-    genre 37.7% (max 6), keyword 21.4% (max 7), credit 64.7% (max 5), country 66.2% (max 3).
-    The exporter's `build(...)` sums duplicate (title, feature) pairs and every one of these
-    tables carries a `source` column, so a genre four sources agreed on is a 4.0. `SELECT
-    DISTINCT ... 1.0` fed the checkpoint a presence bit where it was trained on a count.
-    """
+    """The cell is a COUNT of the source rows that said it, as the exporter summed them."""
     rows = await conn.fetch(
         "SELECT title_id, 'country:' || country AS key, count(*)::float8 AS value"
         " FROM title_country WHERE title_id = ANY($1::int[])"
@@ -415,9 +248,7 @@ async def _country(conn: Any, ids: Sequence[int], _vocab: str) -> dict[int, dict
 
 
 async def _award(conn: Any, ids: Sequence[int], _vocab: str) -> dict[int, dict[str, float]]:
-    """§4.3 gives this block exactly two columns, so it is two counts and not a vocabulary.
-    `won IS NOT TRUE` rather than `NOT won`: the column is nullable and an award with an
-    unknown outcome is a nomination on the record."""
+    """Two counts. `won IS NOT TRUE`: an unknown outcome is still a nomination."""
     rows = await conn.fetch(
         """
         SELECT title_id,
@@ -470,10 +301,7 @@ _COUNT_KEYS = (
 )
 
 
-# The corpus's own binning (`mdc/ratings/features.py:89`), boundaries included: `< 80`,
-# `< 105`, `< 130`, `< 160`, else `>160`. Copied rather than re-derived because the tower was
-# trained on these columns -- a runtime of exactly 160 belongs in `>160`, and an off-by-one
-# moves every three-hour film into a column it was never trained in.
+# The corpus's runtime bins, boundaries included: exactly 160 belongs in `>160`.
 _RUNTIME_EDGES = ((80, "<80"), (105, "80-105"), (130, "105-130"), (160, "130-160"))
 
 
@@ -488,21 +316,9 @@ def _runtime_bucket(minutes: Any) -> str | None:
 
 
 async def _meta(conn: Any, ids: Sequence[int], vocab_version: str) -> dict[int, dict[str, float]]:
-    """The one block produced by code rather than read from a vocabulary.
+    """The one block produced by code (grammar in `contract.META_PRODUCTIONS`); every title has it.
 
-    §4.3 fixes its width (57 columns in the corpus contract) and nothing else, so the columns
-    come from the closed grammar in `contract.META_PRODUCTIONS` and a declared name outside it
-    is reported rather than silently left at zero. Every title row produces this block, so a
-    title with no keywords, no DNA and no reviews still has one block present and is placeable.
-
-    One `lang:` column per title, from `title.original_language`. That is the corpus's own
-    production — `for tid, kind, year, runtime, lang in q("SELECT id, kind, year, runtime_min,
-    original_language FROM title") … if lang: meta.append((tid, f"lang:{lang}"))`
-    (`scripts/build_content.py`) — and it is a different fact from `title_language`, which is a
-    multi-source list of the languages *spoken* in a title and averages 2.98 distinct entries
-    per title across the shipped bundle. Reading it here set two extra language columns on a
-    typical film, in a block whose training distribution has exactly one. The code is verbatim
-    to the corpus down to the absent `lower()`: the corpus wrote whatever the column held.
+    `lang:` is `title.original_language` as the exporter wrote it, not the `title_language` list.
     """
     rows = await conn.fetch(_META_SQL, list(ids), vocab_version)
 
@@ -537,8 +353,7 @@ async def _meta(conn: Any, ids: Sequence[int], vocab_version: str) -> dict[int, 
 
 
 def _finish_meta(contract: FeatureContract, values: dict[str, float]) -> dict[str, float]:
-    """Apply the three continuous productions, whose constants live in the contract (§4.3:
-    "records all placement-time preprocessing") and fall back to documented defaults."""
+    """Apply the three continuous productions, with the contract's constants or the defaults."""
     year = values.pop("_year", math.nan)
     runtime = values.pop("_runtime", math.nan)
     counts = {k[3:]: values.pop(k) for k in list(values) if k.startswith("_n_")}
@@ -581,11 +396,7 @@ async def fetch_blocks(
     *,
     vocab_version: str,
 ) -> dict[int, TitleRows]:
-    """Read every block the contract declares, for a chunk of titles.
-
-    Only declared blocks are queried: a contract that omits `genome` is a tower that was not
-    trained on it, and reading it anyway would be work whose result has nowhere to go.
-    """
+    """Read every block the contract declares, for a chunk of titles."""
     rows: dict[int, TitleRows] = {int(t): {} for t in title_ids}
     for block in contract.blocks:
         source = BLOCK_SOURCES.get(block.name)

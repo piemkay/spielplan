@@ -1,27 +1,7 @@
-"""`feature_contract.json`, parsed. Spec v2.1 §4.3, §8 stage 9.
+"""`feature_contract.json`, parsed (§4.3, §8 stage 9: vectors are built "from this file and nothing else").
 
-§4.3: "`feature_contract.json` — the **exhaustive** definition of the tower's input: the nine
-content blocks in order with sizes (dna_x 433, dna_p 556, genome 983, genre 179, keyword 3,884,
-credit 244, country 97, award 2, meta 57 = 6,435 columns), per-column `feature_names`, then the
-review-text block = columns 0..63 of the 256-d SVD embedding (singular-value order) multiplied
-by a frozen scalar `text_scale` … The contract *references* the review-text SVD components …
-and records all placement-time preprocessing: genome zero-imputation, text truncation +
-scaling. §8 stage 9 builds vectors from this file and nothing else."
-
-"and nothing else" is the whole design of this module. The corpus widths quoted above appear in
-that sentence and in this docstring — and nowhere in the code. Every offset is a cumulative sum
-of the sizes the loaded file declares, so a contract whose keyword block shrinks by one column
-moves every later column by one and there is no constant table to disagree with it.
-
-Two asymmetries §4.3 states and this module keeps apart, because they are identical bytes in
-the vector and different facts about the title:
-
-  * **genome is zero-imputed** — "genome block zero-imputed (unavailable for new titles by
-    construction)" (§8 stage 9). The block is *there* and it is zeros.
-  * **absent blocks are dropped** — "absent blocks dropped — the tower's dropout training
-    anticipates this" (§5.3). Nothing is filled with a mean, a prior or a global average, ever;
-    a dropped block is zeros too, and it is recorded as dropped so §5.3's badge and the §8.4
-    flywheel can tell the two apart.
+Every width and offset comes from the loaded file; no size table lives in code. Genome is
+zero-imputed and absent blocks are dropped (zeros too, but recorded as dropped).
 """
 
 from __future__ import annotations
@@ -36,50 +16,26 @@ from typing import Any
 
 
 class ContractError(ValueError):
-    """The file cannot define a tower input.
-
-    Loud rather than defaulted: §8 stage 9 builds from this file *and nothing else*, so a
-    missing width or a missing `text_scale` has no safe fallback — inventing one produces a
-    plausible vector, a plausible coordinate, and silently worse placements forever.
-    """
+    """The file cannot define a tower input. Never defaulted: a guess yields plausible, wrong placements."""
 
 
-# §4.3's nine, in §4.3's order. These are names, not sizes: they key the per-block producers in
-# `features.py`. A contract that declares a different set is honoured as written and the
-# difference is reported (`unproducible_blocks` / `undeclared_blocks`) — the corpus export is
-# the authority on its own column set, exactly as §4.1's shape note says of the content spine.
+# §4.3's nine, in order: names, not sizes. A contract declaring another set is honoured and noted.
 BLOCK_NAMES: tuple[str, ...] = (
     "dna_x", "dna_p", "genome", "genre", "keyword", "credit", "country", "award", "meta",
 )
 
-# The tenth block is not a content block: §4.3 appends it after the nine, out of a different
-# file, under a scale frozen at export time.
 TEXT_BLOCK = "review_text"
 
 ENCODINGS = ("multi_hot", "weighted", "scalar")
 NORMALISERS = ("none", "l2", "sum1", "max1")
 
-# §4.3 fixes the column *names* per block but not how a cell is filled, so the choice is made
-# once, here, per block, and a contract may override it per block. `multi_hot` writes 1.0 for a
-# key that is present; `weighted` and `scalar` write the value the database gave.
+# How a cell is filled, per block (a contract may override). These match the corpus exporter.
 DEFAULT_ENCODING: dict[str, str] = {
-    # Both DNA tiers are PRESENCE, not strength. §4.3 makes the corpus's export the exhaustive
-    # definition of the tower's input, and the exporter (`scripts/build_content.py`) builds both
-    # tiers with `build("dna_x", ...)` / `build("dna_p", ...)` and no `weighted=True`, so every
-    # cell it wrote is 1.0; its `dna_tag` / `dna_projected` are keyed PRIMARY KEY (title_id,
-    # term), so nothing sums past it either. Measured in the shipped `content_X.npz`: 29,749 +
-    # 216,212 nonzeros, min 1.0 and max 1.0 in both blocks. §4.1 rule 2 keeps salience and the
-    # projected weight out of the *predicate*; it does not put them in the cell, and writing
-    # them here fed the checkpoint a 1..3 scale it was never trained on.
+    # Both DNA tiers are presence (every exported cell is 1.0), not salience.
     "dna_x": "multi_hot",
     "dna_p": "multi_hot",
     "genome": "weighted",     # MovieLens relevance, in [0.5, 1] after the corpus's own cut
-    # These four are COUNTS, not presence. Measured in the shipped `content_X.npz`, the share of
-    # nonzeros above 1.0 is genre 37.7% (max 6), keyword 21.4% (max 7), credit 64.7% (max 5),
-    # country 66.2% (max 3): the exporter sums duplicate (title, feature) pairs and all four
-    # tables carry a `source`, so a genre four sources agreed on is a 4.0. Encoding them
-    # multi_hot fed the checkpoint a distribution it was never trained on in 4,404 of 6,435
-    # columns — the keys hit and the values were still wrong.
+    # These four are COUNTS: the exporter sums duplicate (title, feature) pairs across sources.
     "genre": "weighted",
     "keyword": "weighted",
     "credit": "weighted",
@@ -88,24 +44,17 @@ DEFAULT_ENCODING: dict[str, str] = {
     "meta": "scalar",         # flags and normalised scalars, produced by the grammar below
 }
 
-# §4.3 says nothing about per-block normalisation, so the app does none and says so: a norm the
-# corpus applied at training time and the app does not is exactly the silent encoder drift that
-# no unit test can see. A contract that declares one is honoured.
+# §4.3 names no per-block normalisation; a contract that declares one is honoured.
 DEFAULT_NORMALISE = "none"
 
-# §4.3: "records all placement-time preprocessing: genome zero-imputation". Only this block.
 ZERO_IMPUTED = ("genome",)
 
-# The meta block is the one block whose columns are produced by code rather than read from a
-# table, so its column names must come from a closed grammar or the app cannot fill them. A
-# declared name outside the grammar is a column that would silently stay zero for every title,
-# which is a defaulted block by another route — reported by `unproducible_meta_names`.
+# Meta columns are produced by code, so their names come from a closed grammar; a name outside it
+# stays zero and is reported by `unproducible_meta_names`.
 META_PRODUCTIONS: tuple[str, ...] = (
     r"kind:(movie|series)",
     r"decade:\d{3}0",
-    # The corpus's runtime bins, verbatim -- `mdc/ratings/features.py:89`. Declared here as a
-    # closed alternation rather than a pattern so a bin the app cannot produce is reported
-    # rather than silently left at zero.
+    # The corpus's runtime bins, verbatim.
     r"runtime:(<80|80-105|105-130|130-160|>160)",
     r"lang:[a-z]{2,3}",
     r"has:(overview|tagline|trailer|poster|imdb_id|genome|award|review|keyword|credit)",
@@ -115,16 +64,12 @@ META_PRODUCTIONS: tuple[str, ...] = (
 )
 _META_GRAMMAR = re.compile("^(?:" + "|".join(META_PRODUCTIONS) + ")$")
 
-# The three continuous meta productions need constants that must match training-time
-# preprocessing. §4.3 puts placement-time preprocessing in the contract, so the block's
-# `transform` map overrides these; these are what the app uses when the exporter ships none,
-# and `FeatureContract.transforms_defaulted` records that it had to.
+# Used only when the contract ships no `transform` for these; `transforms_defaulted` records it.
 META_TRANSFORM_DEFAULTS: dict[str, dict[str, float]] = {
-    # 1900..2025 mapped into [0, 1]; film history, not an arbitrary window.
+    # 1900..2025 mapped into [0, 1].
     "year_norm": {"offset": 1900.0, "scale": 125.0},
-    # 400 minutes is past every plausible runtime, so the clip is a guard and not a squash.
     "runtime_norm": {"offset": 0.0, "scale": 400.0},
-    # log1p(count)/5: log1p(148) ≈ 5, and 148 credits is a big cast.
+    # log1p(count)/5: log1p(148) ≈ 5.
     "count_log": {"offset": 0.0, "scale": 5.0},
 }
 
@@ -228,10 +173,7 @@ class FeatureContract:
         notes: list[str] = []
         declared = _declared_blocks(raw, blocks_raw)
 
-        # §4.3 records placement-time preprocessing in the contract, and the corpus writes it as
-        # prose rather than as an enum. The guard is on the substance — zero-imputation for
-        # genome, dropped-not-defaulted for absent blocks — because those are the two rules the
-        # app implements and cannot silently diverge from.
+        # The corpus writes preprocessing as prose; check the two rules the app implements.
         pre = raw.get("preprocessing") or {}
         imputation = str(pre.get("genome", ""))
         if "zero-imput" not in imputation:
@@ -281,17 +223,14 @@ class FeatureContract:
             offset += size
 
         content_width = offset
-        # §4.3's tenth block, out of a different file. The corpus writes it as `text_block`, and
-        # puts `text_scale` INSIDE it — reading the top level found nothing and every real
-        # contract was refused for shipping no scale.
+        # §4.3's tenth block. `text_scale` lives INSIDE `text_block`, not at the top level.
         text = raw.get("text_block") or {}
         if not text:
             raise ContractError(
                 "contract declares no `text_block`; §4.3 appends the review-text columns after "
                 "the nine content blocks and the app cannot guess their width or their scale"
             )
-        # `columns` is a closed range like "0..63". It and `dim` are two statements of the same
-        # fact, so disagreement between them is a contract error rather than a preference.
+        # `columns` ("0..63") and `dim` state one fact twice and must agree.
         span = _column_span(text.get("columns"))
         text_used = int(text.get("dim", span or 0)) or span
         if span and text_used != span:
@@ -299,8 +238,6 @@ class FeatureContract:
                 f"text_block says dim={text_used} and columns={text.get('columns')!r}, which "
                 f"spans {span}; §4.3's truncation is one fact and the file states it twice"
             )
-        # §4.3: "columns 0..63 of the 256-d SVD embedding". The full width lives with the
-        # embedding, not here, so it is recorded rather than re-derived.
         text_dims = int(text.get("svd_dims", 256))
         if not 0 < text_used <= text_dims:
             raise ContractError(
@@ -341,8 +278,7 @@ class FeatureContract:
 
     @classmethod
     def load_path(cls, path: Path) -> FeatureContract:
-        """Load from disk, carrying the file's sha256 — §8 stage 9's input has an identity, and
-        a placement built under a different contract is stale by construction."""
+        """Load from disk, carrying the file's sha256: a placement under another contract is stale."""
         blob = path.read_bytes()
         try:
             raw = json.loads(blob.decode("utf-8"))
@@ -352,8 +288,7 @@ class FeatureContract:
 
     @classmethod
     def from_store(cls, store: Any) -> FeatureContract:
-        """Load the active bundle's contract. Raises ContractError when the bundle ships none —
-        §3.1 makes an empty store legal, so callers ask and report rather than assume."""
+        """Load the active bundle's contract. Raises ContractError when the bundle ships none."""
         if getattr(store, "is_empty", True):
             raise ContractError("no artifact bundle is loaded, so there is no feature contract")
         if not store.present.get("feature_contract.json"):
@@ -380,11 +315,7 @@ def _declared_blocks(
 ) -> list[tuple[str, dict[str, Any]]]:
     """`content_blocks` reduced to (name, spec) pairs **in declared order**.
 
-    The corpus ships one flat `feature_names` list of every column in the whole contract, and
-    `content_blocks` as `[{name, size}, ...]`. The names belong to the blocks by POSITION: the
-    first `size` names are the first block's, and so on. Order is therefore load-bearing twice
-    over -- §4.3's "nine content blocks *in order*" fixes the offsets, and the same order slices
-    the names -- so a size that does not add up is a contract error rather than a short block.
+    The flat `feature_names` list belongs to the blocks by position, so the sizes must add up.
     """
     if not isinstance(blocks_raw, list):
         raise ContractError(
@@ -442,12 +373,7 @@ def _declared_blocks(
 
 
 def unproducible_meta_names(contract: FeatureContract) -> list[str]:
-    """Declared meta columns no production in the grammar can fill.
-
-    Not an exception: the corpus export is the authority on its own column names, and a name
-    this app cannot produce costs one always-zero column rather than a wrong vector. It is
-    reported so the gap is named instead of being invisible.
-    """
+    """Declared meta columns no production in the grammar can fill (reported, not refused)."""
     if not contract.has("meta"):
         return []
     return [n for n in contract.block("meta").names if not _META_GRAMMAR.match(n)]

@@ -1,25 +1,6 @@
-"""The Cold Tower's forward pass. Spec v2.1 §1, §4.3, §8 stage 9, §5.1.
+"""The Cold Tower's forward pass (§8 stage 9): CPU only (§2), and a width mismatch raises.
 
-§4.3: "`cold_tower.pt` — from `data/prep/cold_tower2.pt` (the live model; the earlier
-`cold_tower` run is superseded — the exporter must ship v2)."
-§8 stage 9: "feature vector per the feature contract → Cold Tower → ê(t), b̂(t)".
-§1: "A content encoder (**Cold Tower**, torch CPU) places titles *without* ratings into that
-space from their DNA + metadata — validated: it recovers 67% of the oracle's personal signal on
-unrated titles."
-
-Two rules shape this module.
-
-**CPU, everywhere, with no escape hatch.** §2: "No GPU anywhere. Torch CPU wheels only. The
-image must build and run on a GPU-less VM." Everything below loads with `map_location="cpu"`,
-there is no device argument to pass, and the thread count is pinned to the §2 reference box.
-
-**A width mismatch is loud.** The checkpoint records the input width it was trained at and the
-contract states the width the app builds. If they disagree, the honest outcomes are a crash or
-thirteen thousand plausible-looking wrong coordinates — so this module raises, naming both
-widths and both hashes, rather than broadcasting into nonsense.
-
-torch is imported inside the functions: a bundle-less boot (§3.1) and every request-path import
-would otherwise pay for a 200 MB library that only the worker uses.
+torch is imported inside the functions so a bundle-less boot and the request path never load it.
 """
 
 from __future__ import annotations
@@ -37,19 +18,14 @@ from spielplan.placement.contract import FeatureContract
 
 log = logging.getLogger("spielplan.placement.tower")
 
-# §4.3: "the exporter must ship v2". v1 checkpoints exist in the corpus project and are a
-# different, superseded model; loading one silently would place the whole library against it.
+# §4.3: "the exporter must ship v2".
 SUPPORTED_VERSIONS = (2,)
 ARCHITECTURES = ("cold_tower_v2",)
 
-# §5.1's e(t) and every consumer of it are 64-d: §5.2's "64-d user vector", §4.2's
-# `user_vector.vec`, and `title_placement.dim CHECK (dim = 64)`.
 EMBED_DIM = 64
 
 
-# The tensor names the corpus's exporter writes. `torch.save(model.state_dict())` carries no
-# metadata, so these names ARE the architecture contract — the app looked for `embed`/`prior`
-# and no shipped checkpoint has them.
+# The exporter's tensor names. A bare `state_dict` carries no metadata, so these ARE the contract.
 TRUNK_FIRST = "trunk.0.weight"
 EMBED_HEAD = "head_e"
 PRIOR_HEAD = "head_b"
@@ -67,21 +43,11 @@ class Tower:
     version: int
     sha256: str
     module: Any = field(repr=False)
-    # WHAT WAS ASSUMED RATHER THAN CHECKED. §4.3 says "the exporter must ship v2" and `_load`
-    # below enforced that against values it had just substituted itself, so the check could not
-    # fail on the format the corpus actually ships. The assumption is real and it is also
-    # reasonable - the tensor names ARE the architecture contract for a bare `state_dict` - but an
-    # assumption presented as an enforced constraint is the one thing it must not be. Carried on
-    # the Tower so `load_tower`'s log line and the import report can both say it, because §10
-    # makes the import report the place an operator reads a bundle's claims. [M4.13 step 36, cs-54]
+    # What was assumed rather than checked (a bare state_dict's version), for the import report.
     notes: tuple[str, ...] = ()
 
     def place(self, x: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
-        """(N, input_dim) float32 in; (N, 64) float32 coordinates and (N,) float64 priors out.
-
-        §5.1 wants both halves of the cold branch: ê(t), the coordinate that goes into
-        ⟨v_u, e(t)⟩, and b̂(t), "the shrunk item prior … from the Cold Tower for cold titles".
-        """
+        """(N, input_dim) float32 in; ê (N, 64) float32 and b̂ (N,) float64 out."""
         import torch
 
         x = np.ascontiguousarray(x, dtype=np.float32)
@@ -90,7 +56,6 @@ class Tower:
                 f"cold tower expects (N, {self.input_dim}) and was handed {x.shape}"
             )
         if self.module.training:
-            # A module left in training mode places the same title differently on every sweep.
             raise TowerError("cold tower is in training mode; §8 stage 9 is inference only")
         with torch.inference_mode():
             embedding, prior = self.module(torch.from_numpy(x))
@@ -105,28 +70,11 @@ class Tower:
 
 
 def tower_threads() -> int:
-    """§2's reference box is 4 vCPU, and the box also runs Postgres, the API and the worker.
-    Letting torch claim every core makes the nightly sweep starve the request path.
-
-    Which is what the body did: `min(4, cpu_count())` is *every* core on the box the docstring
-    above describes, so the sentence argued for a cap the return statement did not apply. Half,
-    capped at two, leaves the request path two cores while the sweep runs — and the sweep runs on
-    the loop thread inside a sequential tick (`worker._tick`), so the cores it does not take are
-    the only ones §7.3's minute poll and a phone's request have. Two rather than "half, uncapped"
-    because §2 fixes the reference box at four and a larger box is not a licence to take more:
-    the work is a nightly sweep with a "seconds" budget, not a throughput job.
-
-    Moving the model jobs off the loop thread is the fuller fix and is deliberately not this
-    milestone's — it collides with making the tick concurrent, and the duration logging
-    `worker._tick` now emits is what gets the real-corpus numbers measured first.
-    [M4.7 ops-14; decision 181]
-    """
+    """Half the cores, at most two: the sweep runs on the loop thread and must not starve requests."""
     return max(1, min(2, (os.cpu_count() or 1) // 2))
 
 
-# Per (path, mtime, contract) — §5.3's "<1 s/title" is steady-state work, and module load is
-# not per-title work. The cache is keyed by the contract hash too, so a re-import against a
-# contract with a different column set cannot reuse a tower verified against the old one.
+# Keyed by the contract hash too, so a tower verified against another contract is never reused.
 _CACHE: dict[tuple[str, int, str], Tower] = {}
 
 
@@ -159,10 +107,7 @@ def _load(path: Path, contract: FeatureContract) -> Tower:
 
     torch.set_num_threads(tower_threads())
     sha = hashlib.sha256(path.read_bytes()).hexdigest()
-    # §1 forbids CUDA anywhere; map_location pins every tensor to the CPU regardless of the
-    # device the corpus project saved from. `weights_only` refuses to unpickle anything but
-    # tensors and plain data — the bundle is the operator's own artifact, but a model file that
-    # can execute code on load is not a property worth having.
+    # CPU regardless of where it was saved (§1); `weights_only` so loading cannot execute code.
     checkpoint = torch.load(path, map_location="cpu", weights_only=True)
     if not isinstance(checkpoint, dict) or not checkpoint:
         raise TowerError(
@@ -170,15 +115,8 @@ def _load(path: Path, contract: FeatureContract) -> Tower:
             f"{type(checkpoint).__name__}); §8 stage 9 has nothing to place with"
         )
 
-    # The corpus ships `torch.save(model.state_dict())` — a bare mapping of tensor names to
-    # tensors, with no wrapper carrying `version`, `arch` or `input_dim`. This app required the
-    # wrapper, so the real bundle's tower could not be constructed at all, which is the stage
-    # §12's M5 exit criterion runs through.
-    #
-    # The architecture is read out of the tensor shapes instead, which is unambiguous:
-    # `trunk.0.weight` is (hidden, input_dim) and `head_e.weight` is (embed_dim, hidden). A
-    # wrapped checkpoint is still honoured, and its declared dims are cross-checked against the
-    # shapes rather than trusted — two statements of one fact, so disagreement is an error.
+    # The corpus ships a bare state_dict, so the dims come from the tensor shapes; a wrapped
+    # checkpoint's declared dims must agree with them.
     wrapped = "state_dict" in checkpoint
     state = dict(checkpoint["state_dict"] if wrapped else checkpoint)
     if not all(hasattr(v, "shape") for v in state.values()):
@@ -197,18 +135,7 @@ def _load(path: Path, contract: FeatureContract) -> Tower:
             f"are shaped for {shape_input}/{shape_embed}; the file states one fact twice"
         )
 
-    # DECLARED, OR ASSUMED AND SAID SO. A bare `state_dict` carries no `version` and no `arch`,
-    # and the two lines below used to substitute this app's own 2 and 'cold_tower_v2' and then
-    # check those substituted values against this app's own allow-lists - so on every bundle the
-    # corpus has ever produced, §4.3's "the exporter must ship v2" was enforced against the
-    # defaults rather than against the file, while the error strings presented it as enforcing the
-    # spec. It is NOT tightened into a refusal: that would refuse every shipped bundle, and the
-    # one guard that does bite on this format - the input-width cross-check against the feature
-    # contract below - is the one that matters, because a width mismatch places the whole library
-    # at plausible wrong coordinates. So the assumption is recorded and travels to the import
-    # report, and the exporter is asked for a checkpoint identity (the tower's sha256 inside
-    # `feature_contract.json`, which already names `model_file` and `model_source`).
-    # [M4.13 step 36, cs-54]
+    # A bare state_dict has no version or arch: assumed, and said so in the notes, not refused.
     notes: list[str] = []
     if not wrapped:
         notes.append(
@@ -252,12 +179,7 @@ def _load(path: Path, contract: FeatureContract) -> Tower:
 
 
 def _dims_from_state(state: dict, name: str) -> tuple[int, int]:
-    """(input_dim, embed_dim), read out of the weight shapes.
-
-    The corpus ships a bare state_dict, so the architecture has to come from the tensors. Both
-    reads are refused loudly rather than defaulted: a guessed width produces a plausible vector,
-    a plausible coordinate, and silently wrong placements forever (§8 stage 9).
-    """
+    """(input_dim, embed_dim), read out of the weight shapes. Never guessed."""
     first = state.get(TRUNK_FIRST)
     head = state.get(f"{EMBED_HEAD}.weight")
     if first is None or head is None:
@@ -269,19 +191,9 @@ def _dims_from_state(state: dict, name: str) -> tuple[int, int]:
 
 
 def _cold_tower_v2(state: dict[str, Any], input_dim: int, embed_dim: int) -> Any:
-    """Rebuild the `cold_tower_v2` module around the checkpoint's own weights.
+    """Rebuild the `cold_tower_v2` module (a ReLU trunk and heads ê, b̂) around the checkpoint's weights.
 
-    The checkpoint ships a `state_dict`, not a scripted module, so the topology has to live
-    somewhere; it lives here, once, keyed by the `arch` tag the exporter writes, with every
-    width read from the weights rather than assumed. A ReLU trunk feeding two heads — ê(t) and
-    b̂(t) — is what §8 stage 9 and §5.1 between them describe, and it is what the exporter
-    saves.
-
-    Dropout is deliberately absent. §5.3's "absent blocks dropped — the tower's dropout training
-    anticipates this" is a statement about *training*; at inference the module is in eval mode
-    where dropout is the identity, so reconstructing it would add a number this app does not
-    have (the checkpoint records no rate) to compute exactly nothing. `place()` asserts the
-    module is not in training mode, which is the property that actually matters.
+    No dropout layers: at inference in eval mode dropout is the identity.
     """
     import torch
     from torch import nn
@@ -291,8 +203,6 @@ def _cold_tower_v2(state: dict[str, Any], input_dim: int, embed_dim: int) -> Any
     )
     if not trunk_indices:
         raise TowerError("checkpoint has no `trunk.*.weight` layers")
-    # `head_e` / `head_b` are the corpus's own names for the two heads — ê(t) and b̂(t). The
-    # app looked for `embed` / `prior`, which no shipped checkpoint has.
     for head in (EMBED_HEAD, PRIOR_HEAD):
         if f"{head}.weight" not in state:
             raise TowerError(

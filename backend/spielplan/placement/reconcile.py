@@ -1,36 +1,7 @@
-"""Placement reconciliation and §10's rebuild set. Spec v2.1 §5.3, §8 stages 9–10, §10, §12.
+"""Placement reconciliation (§5.3) and §10's rebuild set.
 
-§5.3, the job this module is: "**Placement reconciliation**: any owned title lacking a
-coordinate gets a feature vector built from DB data per the feature contract (absent blocks
-dropped — the tower's dropout training anticipates this; genome zero-imputed) and runs §8 stages
-9–10 only. 19 such titles arrive with the initial bundle; thin ones (2 lack keywords, 3 lack any
-DNA row) are still placed, badged, and parked as acquisition jobs for M5 enrichment." Trigger:
-"bundle import + nightly sweep". Budget: "seconds".
-
-§12's M2 exit criterion is one query against what this module writes:
-
-    SELECT count(*) FROM title WHERE is_owned AND placement = 'unplaced'   -- must be 0
-
-**Where a coordinate lives, and why warm titles have no row.** A warm title's coordinate *is*
-the row `backbone.npz` already ships (§4.3: "E, E_full, b_i, μ, plus the per-title support
-counts `item_n`"). Copying those rows into Postgres would make a bundle re-import recompute five
-things where §10 says four, so `title_placement` holds only what this app computed and
-`title.placement` records which of the two a title has.
-
-**Warm needs a threshold and the spec gives none.** It is defined once, in
-`scoring.backbone.WARM_SUPPORT`, from the gate §5.1 does define: warm is where the blend has
-stopped changing the answer (gate ≥ 0.9, i.e. `item_n ≥ 90` at k = 10). It lives beside the gate
-rather than here because it is a *scoring* branch — this module only reads it to decide who is
-excused from the sweep.
-
-Read instead as "warm iff the Backbone covers the title at all", §5.1's middle line
-`e(t) = gate·E[t] + (1-gate)·ê(t)` becomes unreachable: a covered title would be stamped warm and
-never placed, so there would be no ê to blend, and every coordinate would come out of exactly one
-of the two branches. That is the shape this module had first, and it made `item_n` — which §4.3
-calls "the §5.1 gate input" — feed nothing at all on e(t).
-
-This is *not* §8 stage 10's cold **badge** threshold, which is a display decision owned by another
-lens; the two must not collapse into one constant.
+Warm titles have no `title_placement` row: their coordinate is the shipped Backbone row. A covered
+title below `WARM_SUPPORT` is swept so §5.1's blend has an ê to use.
 """
 
 from __future__ import annotations
@@ -50,14 +21,11 @@ from spielplan.scoring.backbone import WARM_SUPPORT, cold_row_mask
 
 log = logging.getLogger("spielplan.placement")
 
-# One forward pass per chunk. 512 keeps the staged matrix small (512 × 6,499 float32 ≈ 13 MB on
-# the corpus contract) while making the per-title module and query overhead vanish.
+# Titles per forward pass: ~13 MB of float32 on the corpus contract.
 CHUNK = 512
 
 SCOPES = ("owned_missing", "app_acquired", "reimport", "all_missing")
 
-# §5.3's own words, used verbatim in the parked job's reason so the admin board reads as the
-# spec does.
 PARK_STAGE = 2          # §8 stage 2 enrich — the fetch every later block is derived from
 PARK_STATUS = "parked"
 
@@ -74,9 +42,7 @@ class PlacementReport:
     build_ms_p50: int = 0
     place_ms_p50: int = 0
     elapsed_ms: int = 0
-    # Blocks that produced database rows for at least one title in this run and hit a declared
-    # column for none of them. Per title that is a fact about the title; across the whole run it
-    # is a fact about the *key grammar*, and §8 stage 2 enrichment cannot touch a grammar.
+    # Blocks that produced rows but never hit a declared column in the whole run: a key-grammar bug.
     blocks_never_hit: list[str] = field(default_factory=list)
     notes: list[str] = field(default_factory=list)
 
@@ -96,23 +62,8 @@ class PlacementReport:
 def warm_title_ids(store: Any) -> list[int]:
     """The titles whose coordinate §5.1 takes from the Backbone outright.
 
-    Not the same as "the titles the Backbone covers". §5.1's second line,
-    `e(t) = gate·E[t] + (1-gate)·ê(t)`, needs a Cold Tower coordinate for a title that HAS a
-    Backbone row but little support behind it — and if every covered title is stamped warm,
-    that title never gets one and the line never fires. `scoring.backbone.WARM_SUPPORT` carries
-    the threshold and the reasoning; here it decides who is excused from the sweep.
-
-    Support is not the only test. A row the export flags in `cold_mask` carries no coordinate at
-    all — E is written as zeros — and 1,915 of those ship with `item_n >= WARM_SUPPORT`, so on
-    support alone they were stamped warm, never given a `title_placement` row, and served at
-    `e(t) = 0` for ever. `scoring.backbone.cold_row_mask` is the one definition of that, so the
-    loader and this function cannot drift into two.
-
-    §4.3 lists `backbone.npz` as "E, E_full, b_i, μ, plus the per-title support counts `item_n`"
-    and names no title-id array — but E is a matrix of rows with no stated correspondence to
-    `title.id`, so it is unusable as specified. The bundle in hand ships `title_ids`, plural;
-    without it this function cannot tell which row is which title and says so rather than
-    guessing at row order, which would place the whole library against the wrong coordinates.
+    Support >= `WARM_SUPPORT` and not cold-masked. Needs the exporter's `title_ids`; row order is
+    never guessed.
     """
     if getattr(store, "is_empty", True) or not store.present.get("backbone.npz"):
         return []
@@ -131,18 +82,7 @@ def warm_title_ids(store: Any) -> list[int]:
 
 
 async def classify_warm(conn: Any, store: Any, *, bundle_version: str) -> tuple[int, int]:
-    """Stamp `placement = 'warm'` on the titles §5.1 reads straight off the Backbone.
-
-    A covered title with support below `WARM_SUPPORT` is deliberately NOT stamped, so the sweep
-    picks it up and gives it a Cold Tower coordinate to be blended with — that is the whole of
-    §5.1's middle line. Nor is a title whose Backbone row is a zero placeholder: it has no warm
-    half to blend, so what the sweep gives it is the whole of its coordinate.
-
-    The second half is not symmetry for its own sake: Backbone coverage can *shrink* under a new
-    bundle, and a title left at 'warm' from the previous basis is a title claiming a coordinate
-    that no longer exists (§10: "everything expressed in the old Backbone's basis is garbage
-    against a new one").
-    """
+    """Stamp `placement = 'warm'` on `warm_title_ids`, and demote the rest (coverage can shrink, §10)."""
     ids = warm_title_ids(store)
     warm = await conn.fetchval(
         "SELECT count(*) FROM title WHERE id = ANY($1::int[])", ids
@@ -173,15 +113,7 @@ def _affected(status: str) -> int:
 # --- who needs placing ------------------------------------------------------------------------
 
 
-# Two questions, and they have to be the same question. This one used to ask only "has this title
-# a `title_placement` row for the active bundle?" while `placement_counts` below — and §12's M2
-# exit criterion, which is one query over `title.placement` — asks "is it still 'unplaced'?". A
-# title in the gap between them is stranded: every nightly sweep skips it because the row exists,
-# every count keeps it because the stamp does not, and `serve.coordinates` ranks it happily without
-# §8 stage 10's badge. An interrupted chunk is exactly how a title got there (see `place_titles`).
-# Re-placing one is idempotent — `_UPSERT` is `ON CONFLICT DO UPDATE` — so the cost of the wider
-# predicate is one forward pass for a title the previous sweep did not finish.
-# [M4.13, ml05; plan step 30]
+# Still 'unplaced' OR no row for this bundle: §12's count reads the stamp, so a row alone is not done.
 _MISSING_SQL = """
 SELECT t.id
   FROM title t
@@ -195,15 +127,7 @@ SELECT t.id
  ORDER BY t.id
 """
 
-# Decision 470: the sweep places what the household OWNS, what §6.1's first run ASKS it to rate
-# and what any member HAS rated. §5.3 wrote "any owned title", and on the first real household 21
-# of the corpus's 100 seed-list titles were unowned rows with no coordinate - the corpus's
-# evaluation holdout, every fifth title by rating count, Lady Bird and Ocean's Twelve among them -
-# so about ten of each member's sixty verdicts never reached the fold-in or the Ledger. A verdict
-# is an observation both fits count on, and a title with none of the three is still left alone:
-# `all_missing` (every title lacking a coordinate, 11,123 on that install) stays the admin's
-# widening rather than a nightly one. The superseded and the live verdict both count, because
-# §5.2's fit reads both.
+# Decision 470: owned, on the seed list, or rated by anyone (superseded verdicts count too).
 _SWEPT = (
     "(t.is_owned"
     " OR EXISTS (SELECT 1 FROM seed_list s WHERE s.title_id = t.id)"
@@ -212,13 +136,7 @@ _SWEPT = (
 
 
 async def titles_needing_placement(conn: Any, *, bundle_version: str, scope: str) -> list[int]:
-    """The scope's work list.
-
-    §5.3 scopes the sweep to *owned* titles, and decision 470 adds the seed list and every rated
-    title (`_SWEPT`); `all_missing` is the admin-triggered widening to everything — an unowned
-    bundle title with no Backbone row genuinely has no coordinate, which is exactly what §5.3
-    says and is fine while the ranking surfaces rank the owned library.
-    """
+    """The scope's work list. `all_missing` is the admin's widening to every uncoordinated title."""
     if scope not in SCOPES:
         raise ValueError(f"unknown placement scope {scope!r} (known: {list(SCOPES)})")
     if scope == "app_acquired":
@@ -231,9 +149,7 @@ async def titles_needing_placement(conn: Any, *, bundle_version: str, scope: str
     rows = await conn.fetch(_MISSING_SQL.format(owned=owned), bundle_version)
     ids = [int(r["id"]) for r in rows]
     if scope == "reimport":
-        # §10: "Cold Tower re-placement of **every** app-acquired title" — unconditionally,
-        # because their vectors are expressed in the previous bundle's basis whether or not a
-        # row exists for this one.
+        # §10: re-place every app-acquired title unconditionally.
         acquired = await conn.fetch("SELECT id FROM title WHERE origin = 'acquired'")
         ids = sorted({*ids, *(int(r["id"]) for r in acquired)})
     return ids
@@ -242,10 +158,6 @@ async def titles_needing_placement(conn: Any, *, bundle_version: str, scope: str
 # --- placing ----------------------------------------------------------------------------------
 
 
-# `blocks_empty` and `blocks_unmapped` (0015_seed) are written here for the reason the columns
-# exist: the builder already counted the keys the contract does not declare, and this statement
-# used to throw the count away — so a block that filled every column it had and a block that hit
-# none of them produced identical rows, and §5.3's badge had nothing to read.
 _UPSERT = """
 INSERT INTO title_placement (
     title_id, bundle_version, e_hat, b_hat, contract_sha256, tower_sha256, input_dim,
@@ -283,17 +195,10 @@ async def place_titles(
     """§8 stages 9 and 10 for a list of titles, in chunks of one forward pass each."""
     builds: list[int] = []
     places: list[int] = []
-    # The two halves of the import-time contract check, accumulated across chunks: a block that
-    # landed a declared column for *some* title, and a block that produced rows for some title
-    # and landed nothing. A block in the second set and not the first is one the builder and the
-    # contract disagree about at the level of the key grammar.
+    # A block in `hit_nowhere` and never in `hit_somewhere` is a key-grammar disagreement.
     hit_somewhere: set[str] = set()
     hit_nowhere: set[str] = set()
-    # The titles whose only gaps are blocks no §8 stage 2 enrichment can fill, and which block(s)
-    # those were. §5.3's promise is that a thin title is "placed, badged, and parked"; step 31
-    # narrows what thin means, so `parked_thin` drops — and a count that drops with no sentence
-    # beside it is indistinguishable from a library that improved. The operator reading §6.6's job
-    # detail is the only person who can tell those apart. [M4.13, cs-21; plan step 31]
+    # Titles not parked because their only gaps are unenrichable, reported so the count is explained.
     excused_blocks: set[str] = set()
     excused_titles = 0
     for start in range(0, len(title_ids), CHUNK):
@@ -333,20 +238,9 @@ async def place_titles(
         if not rows:
             continue          # every title in the chunk failed; nothing to badge
         placed_ids = [r[0] for r in rows]
-        # One transaction per chunk, and not one per sweep. A worker killed between the upsert and
-        # the badge left `title_placement` rows whose titles stayed 'unplaced' — a coordinate with
-        # no placement, which the work list then skipped for ever and §12's count kept holding.
-        # asyncpg nests this as a SAVEPOINT when the importer is already in a transaction, so the
-        # import path is unchanged; on the nightly path it is a real transaction. Per chunk because
-        # all-or-nothing over the sweep would be the worse promise: a corpus-scale run is 28 chunks
-        # of 512, and one bad title must not cost the night's work. The report's counters move
-        # after the commit, so a rolled-back chunk is not counted as placed.
-        # [M4.13, ml05; plan step 30]
+        # One transaction per chunk, so the upsert and the badge land together.
         async with conn.transaction():
             await conn.executemany(_UPSERT, rows)
-            # §8 stage 10: "appears in ranking/search/explore with a 'new — model placement, no
-            # crowd data' badge until ratings accrue." `placement = 'cold_tower'` is that badge's
-            # one input; `placement_bundle` is the basis it was computed in.
             await conn.execute(
                 "UPDATE title SET placement = 'cold_tower', placement_bundle = $2, "
                 "placement_at = now() WHERE id = ANY($1::int[])",
@@ -359,11 +253,7 @@ async def place_titles(
     report.build_ms_p50 = _p50(builds)
     report.place_ms_p50 = _p50(places)
 
-    # §5.3 makes bundle import a placement trigger, so this sweep is where a contract the
-    # builder cannot key against gets named. It is reported rather than raised because §10 gives
-    # the operator a report, and because the placements themselves are still the best available:
-    # the tower's dropout training saw missing blocks, and refusing to place would leave §12's
-    # M2 exit criterion unsatisfiable over a naming disagreement.
+    # Reported, not raised: the placements are still the best available.
     if excused_titles:
         report.notes.append(
             f"{excused_titles} title(s) placed and badged but not parked: their only gaps are "
@@ -382,19 +272,12 @@ async def place_titles(
 
 
 async def _park_thin(conn: Any, thin: Sequence[features.BuiltVector], n_blocks: int) -> int:
-    """§5.3: "thin ones … are still placed, badged, and parked as acquisition jobs for M5
-    enrichment."
+    """§5.3: park an acquisition job at §8 stage 2 for each thin title (already placed and badged).
 
-    The title is ready — placed, badged, visible. It is the *job* that is parked, at §8 stage 2
-    (enrich), the fetch every later block is derived from: §8's pipeline is sequential, so
-    re-entering at 2 regenerates 3..8. `ON CONFLICT DO NOTHING` because a title already moving
-    through the pipeline must not be dragged back to stage 2 by a nightly sweep.
+    `ON CONFLICT DO NOTHING`: a title already in the pipeline is not dragged back.
     """
     parked = 0
     for b in thin:
-        # Two ways to be short of a block, and the board has to be able to tell them apart: one
-        # the title has no rows for, one whose rows named nothing the contract declares. Both
-        # feed the tower zeros; only the first reads as "missing" to an operator.
         why = []
         if b.blocks_dropped:
             why.append("missing " + ", ".join(b.blocks_dropped))
@@ -453,10 +336,7 @@ async def reconcile(
     if stray:
         report.notes.append(f"meta columns outside the grammar, always zero: {stray[:8]}")
 
-    # Who is warm has to be settled before "lacking a coordinate" means anything, and Backbone
-    # coverage is a property of the bundle rather than of the trigger — so every scope that can
-    # place a title classifies first. `app_acquired` is the exception: §10 re-places those
-    # unconditionally and their warmth is not the question.
+    # Warmth decides who lacks a coordinate; `app_acquired` is re-placed regardless (§10).
     if scope != "app_acquired":
         report.warm, report.demoted = await classify_warm(
             conn, store, bundle_version=version
@@ -465,8 +345,7 @@ async def reconcile(
     ids = await titles_needing_placement(conn, bundle_version=version, scope=scope)
     report.considered = len(ids)
     if ids:
-        # torch costs ~200 MB and a second of import time; a sweep with nothing to place — the
-        # steady state, once §12's exit criterion holds — must not pay for it.
+        # Lazily: torch costs ~200 MB and a second, and the steady state places nothing.
         tower = load_tower(store, contract)
         vocab = vocab_version or await _vocab_version(conn, store)
         await place_titles(
@@ -506,18 +385,7 @@ async def placement_counts(conn: Any, *, bundle_version: str) -> dict[str, int]:
     return {**{k: int(v) for k, v in dict(row).items()}, "placement_rows": int(placements)}
 
 
-# --- §10's rebuild set --------------------------------------------------------------------------
-#
-# §10: "Re-import therefore recomputes: user fold-in vectors (closed-form, ms), per-label-count
-# blend weights, a full Ledger MAP refit, Cold Tower re-placement of every app-acquired title
-# (feature vectors rebuilt from the staged bundle's feature contract, whose column set may
-# change). (The v1 Map is a deterministic axis scatter and needs no rebuild — a future UMAP lens
-# would recompute here.)"
-#
-# Four things, named, in that order. Owning the list in one place is what makes "exactly four
-# and nothing else" a test rather than a promise. The first three belong to other lenses and
-# arrive as callables, so this module cannot drift from them and they cannot drift from the
-# count.
+# --- §10's rebuild set: exactly four steps; the first three are injected ----------------------
 
 
 @dataclass(frozen=True)
@@ -538,9 +406,7 @@ REBUILD_STEP_IDS: tuple[str, ...] = (
     "user-foldin", "blend-weights", "ledger-map-refit", "cold-tower-replacement",
 )
 
-# §10's parenthesis, as a guard: "The v1 Map is a deterministic axis scatter and needs no
-# rebuild." A step named for one is a bug, and the deterministic axis scatter (§6.4) is the
-# reason — `dna_axis` / `dna_axis_weight` are authored TSVs, not fitted state.
+# §10: the Map is a deterministic axis scatter and needs no rebuild step.
 FORBIDDEN_STEP_WORDS: tuple[str, ...] = ("umap", "procrustes", "axis", "explore", "map rebuild")
 
 
@@ -555,12 +421,7 @@ def rebuild_plan(
     blend_weights: Callable[[Any, Any, str], Awaitable[dict[str, Any]]] | None = None,
     ledger_refit: Callable[[Any, Any, str], Awaitable[dict[str, Any]]] | None = None,
 ) -> tuple[RebuildStep, ...]:
-    """§10's four steps, in §10's order.
-
-    The first three are injected: they are the scoring and Ledger lenses' work, and this module
-    calling into them directly would make the rebuild set depend on the order the lenses land
-    rather than on the spec sentence.
-    """
+    """§10's four steps, in §10's order. The first three are injected."""
     return (
         RebuildStep(REBUILD_STEP_IDS[0], REBUILD_SET[0], fold_in or _noop),
         RebuildStep(REBUILD_STEP_IDS[1], REBUILD_SET[1], blend_weights or _noop),
@@ -570,26 +431,13 @@ def rebuild_plan(
 
 
 async def _replace_placements(conn: Any, store: Any, version: str) -> dict[str, Any]:
-    """Step 4, and this lens's own.
-
-    §5.3 names bundle import as a reconciliation trigger, so the sweep is folded *into* this
-    step rather than added as a fifth — which is what keeps "exactly four things" literally
-    true. Scope `reimport` re-places every app-acquired title unconditionally and every owned
-    title the new Backbone does not cover.
-    """
+    """Step 4. The import-time sweep (§5.3) is folded in here rather than added as a fifth step."""
     report = await reconcile(conn, store, bundle_version=version, scope="reimport")
     return report.as_dict()
 
 
 async def assert_staged(conn: Any, store: Any, version: str) -> None:
-    """§10's invariant has exactly one sanctioned exception, and this is it.
-
-    "Invariant: no process may score or refit with a loaded bundle version different from the
-    active row" — but the swap sequence is "validate → stage → **recompute the rebuild set
-    against the staged bundle** → transactionally flip". So the rebuild reads a non-active
-    store, and it does it through a *positive* check (the row exists and is validated) rather
-    than by skipping `assert_matches`.
-    """
+    """§10's one sanctioned exception to "score only the active bundle": the staged rebuild."""
     if getattr(store, "version", None) != version:
         raise RuntimeError(
             f"rebuild was handed a store on {getattr(store, 'version', None)!r} but was asked "
@@ -614,29 +462,12 @@ async def run_rebuild(
     blend_weights: Callable[[Any, Any, str], Awaitable[dict[str, Any]]] | None = None,
     ledger_refit: Callable[[Any, Any, str], Awaitable[dict[str, Any]]] | None = None,
 ) -> list[dict[str, Any]]:
-    """Run §10's rebuild set against the staged bundle, and report what each step did.
-
-    Nothing here touches `verdict`, `duel` or `tier_edit`: §10 — "Ledger *observations* always
-    survive re-import (they reference `title.id` and vocabulary-independent facts)". Nothing
-    here touches `dna_axis` or `dna_axis_weight` either, for the reason §10 gives in the same
-    breath.
-    """
+    """Run §10's rebuild set against the staged bundle. Observations are never touched."""
     await assert_staged(conn, store, version)
 
     plan = rebuild_plan(fold_in=fold_in, blend_weights=blend_weights, ledger_refit=ledger_refit)
 
-    # §10 LISTS the four steps in the order it lists them; it does not claim that is an execution
-    # order, and it is not one. Steps 1-3 all read the coordinates step 4 writes: §5.1's e(t)
-    # needs ê for a cold or low-support title, and §5.2's fit takes the same coordinates as its
-    # embeddings. Run in listed order against a freshly staged bundle, the fold-in materialises
-    # `title_prior` and every `user_score` row before a single title has been placed in the new
-    # basis — so the newly-activated bundle serves a library with its cold titles missing and its
-    # low-support ones shrunk toward μ instead of toward b̂, until the next nightly sweep.
-    #
-    # This is the same mistake the nightly jobs made (`worker.Job.stage`), in the one path §10
-    # actually mandates. The REPORT stays in §10's order, so the import screen reads as the spec
-    # does; only the execution is reordered, and the reordering is named here rather than implied
-    # by how the tuple happens to be written.
+    # Placement runs first: steps 1-3 read the coordinates it writes. The report keeps §10's order.
     order = {"cold-tower-replacement": 0}
     outcomes: dict[str, dict[str, Any]] = {}
     for step in sorted(plan, key=lambda s: order.get(s.id, 1)):

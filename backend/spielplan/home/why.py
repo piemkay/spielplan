@@ -1,29 +1,7 @@
-"""The why-line machinery: DNA terms chosen first, membership derived from them.
+"""The why-line machinery: DNA terms chosen FIRST, membership derived from them (proposal 24).
 
-Spec v2.1 §6.0 (M2 Home), §6.8 ("quiet reasons"), §4.1 rules 1 and 2, §6.4.
-
-§6.0: "then shelves, each with a **mandatory one-line why in vocabulary terms** — a shelf that
-cannot say why it exists doesn't ship". Proposal 24 sharpens it into the rule this module
-exists to make structural: "The why-line must name terms **every** item on the shelf carries —
-the prototype names the anchor's first two terms while admitting members on any two shared
-terms, so a card can be shown under a reason it does not satisfy."
-
-THE INVERSION. The prototype picks a list and then labels it. Everything here picks the TERMS
-first and derives the list from them, so "shares obsession + morally-grey with it" is true of
-every card by construction rather than by inspection. `common_terms` then re-derives, from the
-cards that were actually returned, the terms all of them carry — the same function serves as
-the shelf builders' verifier (`unsupported`), so a shelf whose why drifts from its membership
-fails inside the request rather than in review.
-
-§4.1 RULE 1. Both DNA tiers are read through the sanctioned `dna_tagged` view and nowhere else,
-so the `tier` discriminator travels into the payload: a why-line that names a projected term
-says so. A term present in both tiers is named once, as extracted (bool_or), because the
-payload must never upgrade a projected term into a quote-verified one.
-
-§4.1 RULE 2. salience, confidence and n_sources appear in ORDER BY and in the SELECT list and
-in no predicate anywhere below. They decide WHICH TERM GETS NAMED. They never decide which
-title is admitted — that is what makes a 0.5 cut (which would delete 44% of the extracted tier)
-unrepresentable here rather than merely discouraged.
+Both tiers are read only through `dna_tagged`; a term in both is named once, as extracted. Weights
+order which term is NAMED and never filter which title is admitted (§4.1 rule 2).
 """
 
 from __future__ import annotations
@@ -39,13 +17,10 @@ from spielplan.db import dna_terms
 from spielplan.db import genres as genre_vocab
 from spielplan.ledger.observations import LIVE_LABEL_SQL
 
-# `terms_for`'s default: a title's eight best-named terms. It was shelf 1's candidate pool (28
-# pairs) until decision 513 had shelf 1 read every term of its anchor (`limit=None`); the default
-# now serves the callers that want a title's best-named few.
+# `terms_for`'s default: a title's eight best-named terms.
 ANCHOR_TERM_POOL = 8
 
-# How many terms a why-line may name from the intersection all its cards carry. Copy, not a
-# tuned number: a one-line why that names five terms is not a one-line why.
+# Copy, not a tuned number: a one-line why names at most two terms.
 NAMED_TERM_CAP = 2
 
 # Decision 514: "which you like" needs this many liked titles of the kind behind it.
@@ -54,17 +29,7 @@ LIKED_TERM_MIN = 3
 # Decision 513: shelf 1 names its pair from the anchor's nearest titles, this many per card slot.
 NEIGHBOURHOOD_PER_CARD = 2
 
-# §4.1 rule 2 made arithmetic. The extracted tier outranks the projected tier for *naming*
-# because §4.1 calls the first quote-verified and the second inferred; both tiers stay fully
-# admissible.
-#
-# The expression itself lives in `db/dna_terms.py` because `tonight/dna.py` held a verbatim copy
-# of it and the two drifted together off the shipped data: the comment here used to promise
-# "extracted 0.73..1.00, projected 0.00..0.30" while the projected branch ran to 2.40, because
-# the column the `dna_tagged` view calls `confidence` holds `n_sources` for that tier. It is now
-# 0.733..1.00 against 0.10..0.267 and the two bands cannot cross. Reading it from one module is
-# what makes that a fact about the app rather than about this file. [M4.9 finding 20, decision
-# 188]
+# Naming rank only: the extracted tier's band sits wholly above the projected tier's (§4.1 rule 2).
 TERM_RANK = dna_terms.TERM_WEIGHT
 
 # The label rides beside the term in every read that builds a `WhyTerm`, joined on the term's own
@@ -76,21 +41,17 @@ ROLES = ("member", "anchor_side")
 
 @dataclass(frozen=True)
 class WhyTerm:
-    """One DNA term a why-line names, with the two things that make it checkable.
+    """One DNA term a why-line names.
 
-    `tier` is §4.1 rule 1's discriminator. `role` is the honesty flag: a **member** term is
-    carried by every card on the shelf and is the shelf's admission predicate; an
-    **anchor_side** term describes the user's own liked region (§6.4's "unvisited region of DNA
-    space next to what you like") and is deliberately NOT on the cards, which are unvisited by
-    definition. Collapsing the two is how a shelf ends up saying the wrong why.
+    A `member` term is on every card; an `anchor_side` term describes the user's liked region
+    and is deliberately NOT on the cards.
     """
 
     term: str
     facet: str
     tier: str
     role: str = "member"
-    # The vocabulary's own name for the term (`dna_term.label`), read beside it so a why-line is
-    # written in words and never in ids: "World War II", not `era.wwii` (§6.8, decision 486).
+    # `dna_term.label`, so a why-line says "World War II", not `era.wwii` (decision 486).
     label: str | None = None
 
     @property
@@ -107,31 +68,14 @@ class WhyTerm:
 
 
 async def vocabulary_version(conn: asyncpg.Connection) -> str | None:
-    """The vocabulary the shelves name terms from, or None when M0 imported none.
-
-    §4.3 ships `dna_vocab/v1/`; a household that has imported two bundles has two versions and
-    the shelves must not mix them, because a term's facet and gloss are version-scoped.
-
-    That sentence is the whole reason this function existed here first, and M4.9 found that the
-    title card, the catalog/Rank DNA predicate and §6.4's wander neighbours had never applied
-    it. Rather than teach three more modules to resolve the version, the resolution moved down
-    to `db/dna_terms.py` — where the catalog's synchronous WHERE builder can also reach it as a
-    scalar subquery — and this stays as the name the shelves call it by. One statement, one
-    answer; two would be the second notion of "active vocabulary" this comment warns about.
-    [M4.9 finding 10]
-    """
+    """The vocabulary the shelves name terms from, or None. Versions must never mix."""
     return await dna_terms.active_version(conn)
 
 
 async def terms_for(
     conn: asyncpg.Connection, title_id: int, *, version: str, limit: int | None = ANCHOR_TERM_POOL
 ) -> list[WhyTerm]:
-    """One title's terms, best-named first. Rule 2: the ranking is an ORDER BY, never a filter.
-
-    Both tiers are returned; a term carried in both is returned once and tiered `extracted`,
-    so the pool cannot silently promote an inferred tag. `limit=None` returns every term, which
-    is what shelf 1 names its pair from (decision 513).
-    """
+    """One title's terms, best-named first (an ORDER BY, never a filter). `limit=None`: all."""
     rows = await conn.fetch(
         f"""
         SELECT d.term,
@@ -158,8 +102,7 @@ async def terms_for(
 async def rank_of(
     conn: asyncpg.Connection, terms: Sequence[str], *, version: str
 ) -> dict[str, float]:
-    """The naming rank of each term over the whole catalog — the tie-break when two candidate
-    pairs cover the same number of titles."""
+    """The naming rank of each term over the whole catalog: `best_pair`'s tie-break."""
     if not terms:
         return {}
     rows = await conn.fetch(
@@ -185,15 +128,9 @@ async def best_pair(
     pool: Sequence[WhyTerm],
     floor: int,
 ) -> tuple[WhyTerm, WhyTerm, int] | None:
-    """The two anchor terms that TOGETHER cover the most unseen owned titles of this kind.
+    """The two anchor terms that TOGETHER cover the most unseen owned titles, or None below `floor`.
 
-    Proposal 24's rule, executed in the only order that makes it true: the pair is chosen for
-    the size of its intersection, and the shelf is then that intersection. Returns None when no
-    pair reaches `floor` — the shelf is then absent rather than shown under a why it cannot
-    support.
-
-    Ties break on the pair's naming rank, then lexicographically, so the same library always
-    produces the same shelf.
+    Ties break on naming rank, then lexicographically, so one library gives one shelf.
     """
     if len(pool) < 2:
         return None
@@ -247,12 +184,7 @@ async def carriers(
     exclude: Sequence[int] = (),
     unseen_only: bool = True,
 ) -> list[int]:
-    """Every owned title of this kind carrying ALL of `terms`. The shelf's membership, exactly.
-
-    `HAVING count(DISTINCT d.term) = cardinality($2)` is the whole of proposal 24: a title
-    carrying one of the two named terms is not on the shelf, because the why-line says "shares
-    {t1} + {t2}" and not "shares one of".
-    """
+    """Every owned title of this kind carrying ALL of `terms`: the shelf's membership (proposal 24)."""
     if not terms:
         return []
     rows = await conn.fetch(
@@ -283,15 +215,7 @@ async def common_terms(
     version: str,
     limit: int = NAMED_TERM_CAP,
 ) -> list[WhyTerm]:
-    """The terms carried by EVERY one of these titles, best-named first.
-
-    Two jobs, one query, deliberately. It is the *verifier* — a why-line's member terms must be
-    a subset of this set, which is what `unsupported()` below checks — and it is the *source*
-    for the shelves whose predicate is not itself a DNA term (§6.0's "Top of your ledger",
-    "Under 110 minutes", "New in the library"). Those shelves may still carry a vocabulary
-    clause, and because it is computed by intersection over the cards that were actually
-    returned, the clause cannot be false.
-    """
+    """The terms carried by EVERY one of these titles, best-named first, so the clause cannot be false."""
     ids = sorted({int(t) for t in title_ids})
     if not ids:
         return []
@@ -328,10 +252,7 @@ async def unsupported(
 ) -> list[str]:
     """Member terms the why-line names that some card does not carry. Must always be empty.
 
-    §6.0: "a shelf that cannot say why it exists doesn't ship"; proposal 24: "nor does one that
-    says the wrong why". The shelf builders derive membership from the terms, so this is a
-    second, independent read of the same claim — cheap, and it turns a construction bug into a
-    suppressed shelf instead of a lie on the user's screen.
+    An independent re-check: a builder bug becomes a suppressed shelf, not a wrong why.
     """
     named = [t.term for t in why_terms if t.role == "member"]
     if not named or not title_ids:
@@ -359,12 +280,7 @@ async def carried_by(
     terms: Sequence[str],
     version: str,
 ) -> dict[int, list[str]]:
-    """Which of the named terms each card actually carries — the receipt printed on the card.
-
-    §6.8: model numbers and reasons appear "next to their name, never bare". A card that shows
-    a term it does not carry would be exactly the bug proposal 24 names, so the card's chips
-    come from the database rather than from the shelf's claim.
-    """
+    """Which of the named terms each card actually carries, read from the database (§6.8)."""
     ids = [int(t) for t in title_ids]
     if not ids or not terms:
         return {i: [] for i in ids}
@@ -394,31 +310,11 @@ async def frontier_term(
     liked_pool: int = 24,
     exclude: Sequence[int] = (),
 ) -> tuple[WhyTerm, WhyTerm, float, float] | None:
-    """§6.4's explore frontier as a shelf: an unvisited term that sits next to a liked one.
+    """§6.4's explore frontier: (candidate, neighbour, cosine, affinity), or None.
 
-    Returns (candidate, neighbour, cosine, affinity) or None.
-
-    "the *adjacent possible* — regions of DNA space near the user's liked regions but
-    unvisited". Four literal readings, and each is what makes the shelf's two lines true:
-
-    * **unvisited** is zero coverage, not low coverage. The title says "You've never watched
-      anything {term}", so one seen carrier disqualifies the term outright.
-    * **near** is co-occurrence in this household's own owned catalog — cos(c, L) =
-      |carriers of both| / sqrt(|c| · |L|) — so the edge is a nameable DNA term (§6.4: "Every
-      connection is *nameable* — edges are DNA terms, never opaque similarity") rather than a
-      distance in an embedding nobody can read.
-    * **which you like** is what the person said (decision 514): at least `LIKED_TERM_MIN` of
-      their liked titles of the kind carry the term, and more than half of the rated titles
-      carrying it are liked. It read the Ledger's CDF averaged over whatever carried the term,
-      with no support behind it, so one projected tag on one liked film made "wartime backdrop"
-      a term Jenny liked - and the shelf then told her she had never watched World War II.
-    * **close to, not the same as**: the neighbour comes from another facet. Inside one facet a
-      near term is a narrower or broader name for the same thing, and "never watched World War
-      I, close to turn of the 20th century, which you like" reads as the contradiction it is.
-
-    `exclude` is decision 475's claim and decision 512's avoid set: titles a shelf built earlier
-    already shows, and titles the member avoids, do not count toward a candidate's carriers, so a
-    term they would empty below the floor is never chosen over one that still fills the shelf.
+    Unvisited is zero seen carriers; near is co-occurrence cosine in the owned catalog; liked is
+    the person's own verdicts (decision 514); the neighbour is from another facet. `exclude`d titles
+    do not count as carriers.
     """
     seen_n = await conn.fetchval(
         """
@@ -539,8 +435,7 @@ async def frontier_term(
             continue    # the same thing under a narrower or broader name (decision 514)
         cos = float(row["shared"]) / ((float(row["cand_n"]) * float(row["neighbour_n"])) ** 0.5)
         aff = float(liked_by_term[row["neighbour"]]["aff"])
-        # Ties: the larger candidate pool first (a bigger unvisited region is a better shelf),
-        # then the terms ascending, so the same library always names the same pair.
+        # Ties: the larger candidate pool first, then the terms ascending.
         scored.append((-(cos * aff), -int(cand_by_term[row["cand"]]["n"]), row["cand"],
                        row["neighbour"], row, cos, aff))
     if not scored:
@@ -567,10 +462,10 @@ def phrase(terms: Sequence[WhyTerm]) -> str:
 
 
 def specificity_ctes(kind: str, version: str) -> str:
-    """The CTEs that weigh a term by its rarity in the household's owned titles of one kind:
-    `owned`, `tagged` (their distinct terms, either tier) and `spec` (term -> ln(N / carriers)).
-    Shared by shelf 1 and the title card's why-line (decision 515), which must agree about what
-    makes two titles alike. `kind` and `version` are the caller's placeholders."""
+    """CTEs `owned`, `tagged` and `spec` (term -> ln(N / carriers) over the owned titles of a kind).
+
+    Shared by shelf 1 and the title card (decision 515). `kind`/`version` are SQL placeholders.
+    """
     return f"""
         owned AS (
             SELECT t.id FROM title t WHERE t.kind = {kind} AND t.is_owned
@@ -606,26 +501,10 @@ async def anchor_neighbours(
     exclude: Sequence[int] = (),
     limit: int,
 ) -> tuple[list[Neighbour], dict[str, float]]:
-    """The `limit` unseen owned titles of this kind most like the anchor, most alike first, and
-    the specificity of every anchor term they share.
+    """The `limit` unseen owned titles most like the anchor, and the specificity of shared terms.
 
-    LIKENESS IS SPECIFICITY-WEIGHTED (decision 513). Each term counts by how rare it is in the
-    household's owned titles of the kind - ln(N / carriers), the library's own inverse document
-    frequency - and two titles are as alike as the cosine of those weighted term sets. Counting
-    shared terms, as decision 475 did, let the generic ones decide: "mentor & protege", on 295 of
-    753 owned films, joined The Grand Budapest Hotel to GoodFellas and Dune: Part Two, and
-    "melancholic + romantic" joined Pride & Prejudice to The Last Samurai and Captain America.
-    Weighted, Budapest's nearest owned films are The Phoenician Scheme and Amsterdam. The cosine's
-    norm is the candidate's whole term set, so a title with a long DNA row is not alike merely
-    for carrying more terms. No weight column is read anywhere here (§4.1 rule 2), and both tiers
-    count alike, as presence.
-
-    THE ANCHOR'S FORM (decision 513). An animated anchor draws animated titles and a live-action
-    anchor live-action ones - decision 473's canonical Animation, read across every structured
-    source - because "Because you liked Chernobyl" drew Attack on Titan and Berserk on shared
-    moods, and a cartoon is a different evening from a drama whatever mood they share.
-
-    Ties keep the order the person's own scores put them in, then the id.
+    Likeness is the cosine of idf-weighted term sets (decision 513); animated anchors draw animated
+    titles only, and vice versa. Ties go to the person's own scores, then the id.
     """
     animation = genre_vocab.raw_labels("Animation")
     rows = await conn.fetch(
@@ -694,16 +573,9 @@ def likest_pair(
     cap: int,
     floor: int,
 ) -> tuple[list[int], WhyTerm, WhyTerm] | None:
-    """The pair of anchor terms shelf 1 names, and its cards in likeness order - or None when
-    no pair is carried by `floor` of the neighbours.
+    """The pair of anchor terms shelf 1 names, and its cards, or None below `floor`.
 
-    Each pair's shelf is the first `cap` neighbours carrying both its terms. The pair that wins
-    is the one whose shelf holds the most likeness, weighed by how specific the two terms are
-    (decision 513): the anchor's nearest titles all carry some generic pair ("tense + gripping"
-    joined Heat to all twelve of its neighbours), and naming it says nothing about why they are
-    here, while "gritty + cops & detectives" does and is carried by nearly as many. Ties go to
-    the terms in id order, so one library always gives one shelf. Proposal 24 survives: every
-    card carries both named terms by construction.
+    The winner maximises summed likeness times the pair's mean specificity (decision 513).
     """
     by_term = {t.term: t for t in terms}
     carried = sorted({t for n in neighbours for t in n.shared if t in by_term})

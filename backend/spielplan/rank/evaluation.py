@@ -1,32 +1,6 @@
-"""§13 stream (a) — the one read path allowed to judge the tier model.
+"""§13 stream (a): the one read path allowed to judge the tier model (the fit excludes these rows).
 
-Spec v2.1 §13, §6.3; decision 54b, proposal 146.
-
-§13: "the 10% uniform-random comparison stream is the *only* data used to evaluate the tier
-model — adaptively-selected pairs inflate reliability (measured effect; the guard is
-non-negotiable)."
-
-The guard has two halves and they live in different files. The **exclusion** half is in
-`ledger.observations.load_observations`, which never lets a `uniform_holdout` row into the fit.
-This is the **admission** half: the only function in the app that reads those rows, and the
-only one that reads *nothing else*. Keeping it alone in a module is deliberate — the query
-below is the thing a reviewer has to check, and it is easier to check that one file says
-`selection = 'uniform_holdout'` and nothing else says it than to audit every query that
-mentions `duel`.
-
-WHY AGREEMENT AND NOT SPEARMAN. §13's added rows name "per-user held-out Spearman" for the
-*ranking*, which `scoring.foldin` already computes over verdicts. A comparison stream measures
-something narrower and more direct: given a pair the model has never been fitted on, does the
-model's ordering agree with the person's answer? That is the tier model's own accuracy, on the
-only sample that can honestly report it.
-
-TIES ARE COUNTED, NOT SCORED — ON BOTH SIDES. §4.2: "about the same" is first-class data, 22%
-of random pairs. A tie is not a wrong answer and not a right one; scoring it either way needs a
-threshold on |Δs| that nothing has measured, and inventing one inside the instrument that
-exists to keep tuning honest is the last place for an unmeasured constant. That argument
-applies to the *model's* tie as well as the person's: `s_a == s_b` is the model declining to
-order the pair, and folding it into a prediction of "B" is the same unmeasured threshold,
-placed at zero and only in one direction. Both are reported and excluded from the rate.
+Agreement on held-out pairs, not Spearman. Ties, the person's or the model's, are counted, not scored.
 """
 
 from __future__ import annotations
@@ -53,8 +27,7 @@ class Agreement:
 
     @property
     def rate(self) -> float | None:
-        """None rather than 0.0 when there is nothing to report. A held-out sample of zero is
-        "not measured yet", and a 0.0 next to it would read as "measured, and terrible"."""
+        """None rather than 0.0 when nothing was measured."""
         return self.agreed / self.decisive if self.decisive else None
 
     def as_dict(self) -> dict[str, object]:
@@ -76,9 +49,7 @@ async def held_out_agreement(
 ) -> Agreement:
     """How often the model's ordering agrees with a comparison it was never fitted on.
 
-    The `WHERE d.selection = $3` is the whole point of the function. Widening it to "all
-    comparisons" would raise the number and destroy its meaning, which is exactly the
-    inflation §13 measured and forbade.
+    Only `uniform_holdout` rows: adaptive pairs inflate the number (§13).
     """
     rows = await conn.fetch(
         """
