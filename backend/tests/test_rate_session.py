@@ -477,8 +477,8 @@ async def test_an_undo_across_a_mode_change_leaves_the_counter_naming_its_own_ca
     what is on the table" — and `payload`'s comment briefly claimed the opposite, that the two could
     disagree only on a marked substitution. This test is the claim's falsifier: it fails either if
     the marker is made to cover a flip it cannot see or if `serving` is quietly redefined as a second
-    spelling of `card.type`, which would leave the counter's call nowhere and drift from
-    `ops/devstub.py`'s mirror of the same definition. [M4.10 finding 21, cycle 1 M410-D8-03]
+    spelling of `card.type`, which would leave the counter's call nowhere.
+    [M4.10 finding 21, cycle 1 M410-D8-03]
     """
     user = warm["user"]
     s = await open_session(db, user)
@@ -1650,11 +1650,9 @@ async def test_the_verdict_rail_line_names_the_person_the_title_and_the_refit_ms
     What shipped instead was `ledger/observations.py`'s audit sentence forwarded unchanged,
     `verdict(title 3) = liked -> ordered-logit arm`: a bare integer, which §6.8 rules out
     because nothing on the client can resolve it into the film it names. `rail.verdict_line`
-    had rendered §6.7's format since M2 and was called from `test_home.py` and from
-    `ops/devstub.py:1782`, which has narrated the person, the film and the ms since M2 — the
-    harness modelled the line the app it stands in for never sent. The event's own `title_id`
-    field was null at every producer, and the incremental refit's milliseconds were computed
-    in the same handler and thrown away.
+    had rendered §6.7's format since M2 and was called only from `test_home.py`. The event's own
+    `title_id` field was null at every producer, and the incremental refit's milliseconds were
+    computed in the same handler and thrown away.
 
     Driven through the route rather than through `record_verdict`, because the four facts meet
     in three different places: the person is the request's session user, the film and the label

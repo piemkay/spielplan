@@ -40,8 +40,8 @@ router = APIRouter(prefix="/api/admin/bundle", tags=["admin", "bundle"])
 #
 # IT IS NOT THE ONLY PLACE THE WORDS APPEAR, AND SAYING SO IS THE POINT. This comment claimed to be
 # the one place and was wrong about the one screen it is about: `BundleImport.svelte` hard-codes
-# the sentence instead of rendering the `note` this module already sends it, and `ops/devstub.py`
-# carries a harness copy. So an edit here moves the 409 and the response and neither of those. The
+# the sentence instead of rendering the `note` this module already sends it. So an edit here moves
+# the 409 and the response and not that copy. The
 # importer's swap note used to be a fourth, DIFFERENT phrasing rendered as a finding on that same
 # screen - two descriptions of one state, on one page - and it no longer states the clause at all.
 # The remaining duplicate is the client's, which is the client's to remove.

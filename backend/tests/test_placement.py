@@ -561,7 +561,7 @@ async def test_a_zeroed_backbone_row_is_demoted_and_swept_rather_than_left_warm(
 
 
 async def test_the_shared_fixtures_flagged_row_is_swept_and_served_from_the_tower(db, placed):
-    """cs-01 composed, on the one bundle the importer, the devstub and the e2e stack all build.
+    """cs-01 composed, on the one bundle the importer and the e2e stack both build.
 
     The two tests above hand `Backbone.open` and `classify_warm` an npz written in `tmp_path`, so
     they prove the loader reads `cold_mask` and the sweep acts on it -- and nothing about the two

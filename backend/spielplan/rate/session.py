@@ -2212,8 +2212,8 @@ async def payload(
                 # names the mode the person chose since decision 519 (`counterLine` in
                 # rate.svelte.js). Deriving `serving` from the card instead — the plan's other
                 # option — was weighed and refused: it would make the field a second spelling of
-                # `card.type` and leave the counter's call nowhere, and `ops/devstub.py` mirrors this
-                # definition on purpose. [M4.10 finding 21, decision 200, cycle 1 M410-D8-03]
+                # `card.type` and leave the counter's call nowhere.
+                # [M4.10 finding 21, decision 200, cycle 1 M410-D8-03]
                 #
                 # Decision 492's warm-up is part of the call, over the same label count
                 # `ensure_card` drew under, so a new member's counter reads sweep and not battle.

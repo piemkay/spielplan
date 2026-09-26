@@ -1952,11 +1952,12 @@ def test_the_harness_names_no_spec_file_that_does_not_exist():
     """A deleted surface takes its spec with it, and the prose that funds the spec too.
 
     Decision 165 retires the TV client, so its route and `e2e/specs/16-tonight-tv` went together.
-    What no gate could see is the config's own reasoning: the phone project's `testMatch` is shaped the way it is for two stated
-    reasons, and one of them was "16-tonight-tv is a television". That comment is the document a
-    maintainer reads when deciding whether a new Tonight spec belongs on the phone, and it cited a
-    file that does not exist -- which is how the next reader concludes the matrix was pruned for a
-    reason it no longer has, or goes looking for a spec that was deleted on purpose.
+    What no gate could see is the config's own reasoning: the phone project's `testMatch` is
+    shaped the way it is for two stated reasons, and one of them was "16-tonight-tv is a
+    television". That comment is the document a maintainer reads when deciding whether a new Tonight
+    spec belongs on the phone, and it cited a file that does not exist -- which is how the next
+    reader concludes the matrix was pruned for a reason it no longer has, or goes looking for a spec
+    that was deleted on purpose.
 
     The allowance below is held to the same rule for the same reason: a set of files that "carried
     the same shorthand before this milestone and still do" cannot name one that is gone. It is

@@ -606,8 +606,7 @@ _CREDIT_ROWS = """
 
 
 def fold_credits(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
-    """One title's credit rows folded to the rows §6.0's card lists. Pure, so `ops/devstub.py`
-    folds its fixture by this function rather than by a copy of it.
+    """One title's credit rows folded to the rows §6.0's card lists.
 
     ONE ROW PER (person, §3.1 class), and the job string is no longer the key. Two sources spell
     one credit two ways - TMDB's 'Original Music Composer' is Wikidata's 'Composer', its 'Writer'

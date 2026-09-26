@@ -659,8 +659,8 @@ def _write_artifacts(root: Path, version: str, rows: _Rows) -> None:
                 # runs on: a bundle constant beats the default, and nothing else writes the key.
                 # It stayed at the retired 1.0 across decision 214's re-tune to 0.15 — the value
                 # at which a fitted 120-title board badges 120 of 120 and §6.3's badge singles
-                # nothing out — so `npm --prefix e2e run fresh` and `ops/devstub.py` both badged
-                # at the number the decision exists to end, while the test that grades
+                # nothing out — so `npm --prefix e2e run fresh` badged at the number the
+                # decision exists to end, while the test that grades
                 # the clause built its board from `DEFAULTS` and could not see it. Pinned to
                 # `DEFAULTS` by `test_bundle_shapes.py` rather than imported here: the fixture
                 # stands in for the corpus, and a fixture that reads the app's own constants can

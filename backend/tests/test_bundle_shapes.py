@@ -387,7 +387,7 @@ def test_the_declared_exception_carries_the_thresholds_the_app_actually_ships(bu
     `app.py`'s lifespan caches `hyperparams.load(store)` and `api/rank.py` badges with
     `hp.straddle_z`, so a bundle constant beats the default everywhere — and because the corpus
     does not ship these two keys (the guard above), the fixture's literal is the only source
-    there is for `npm --prefix e2e run fresh` and for `ops/devstub.py`. Decision 214
+    there is for `npm --prefix e2e run fresh`. Decision 214
     retuned `straddle_z` from 1.0 to 0.15 for exactly the reason `ledger/hyperparams.py` records
     — at 1.0 a fitted 120-title board badges 120 of 120 and §6.3's badge stops singling anything
     out — and the fixture kept 1.0, so the retune was inert on every stack the household can

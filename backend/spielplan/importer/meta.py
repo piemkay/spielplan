@@ -116,7 +116,7 @@ def card_fields(
     """One title's card, per field, from its per-source rows: `best()` over what is eligible.
 
     `shared` is this title's `(source, field)` pairs out of `shared_plot_texts`. Pure, so the
-    import, §8 stage 3 and `ops/devstub.py` resolve a card by one function rather than three.
+    import and §8 stage 3 resolve a card by one function rather than two.
     """
     def eligible(field: str, keep) -> dict[str, Mapping[str, Any]]:
         return {s: row for s, row in by_source.items() if keep(s, (row or {}).get(field))}

@@ -4,11 +4,8 @@ import { baseUrl } from './env.mjs';
 /**
  * End-to-end tests against the real stack.
  *
- * `BASE_URL` points at whatever is serving the app:
- *   - `docker compose up` — the real backend serving the built PWA on :8080 (the default, and
- *     the only configuration that proves the thing we ship)
- *   - `npm --prefix frontend run dev` + `python ops/devstub.py` on :5173 — faster for iterating
- *     on the UI, but it does not exercise Postgres, so it cannot prove an import
+ * `BASE_URL` points at whatever is serving the app: by default the real backend serving the
+ * built PWA on :8080, or the Vite dev server on :5173 in front of that same backend.
  *
  * The suite runs in TWO PHASES, and `node e2e/run.mjs` is what implements them: phase 1 runs
  * `specs/01-first-boot.spec.js` alone against an empty database, the services restart so the

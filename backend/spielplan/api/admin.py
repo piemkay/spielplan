@@ -982,9 +982,7 @@ async def job_health(conn) -> dict[str, object]:
     }
 
 
-# What the missing axis artifact costs, one sentence per surface. A constant rather than a
-# literal inside the payload because `ops/devstub.py` serves the same card and a harness that
-# paraphrased this would be teaching the page a claim the backend does not make.
+# What the missing axis artifact costs, one sentence per surface.
 #
 # Both sentences were overtaken in the user-test wave and are restated as what the tree holds:
 # the Map renders no state at all, because it is not built and decision 488 keeps it out of

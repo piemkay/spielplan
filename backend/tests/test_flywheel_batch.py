@@ -12,8 +12,7 @@ Gemini row doubles on 2027-01-01, decision 343), so a test that read them would 
 on a calendar day; these are `ModelPrice`s built by hand, and the expected per-title figure is
 worked out in this file from them rather than asked of the function under test.
 
-No database, no clock: `batch.totals` and `batch.assess` are the pure halves of the quote, and
-`ops/devstub.py` quotes its fixture through the same two.
+No database, no clock: `batch.totals` and `batch.assess` are the pure halves of the quote.
 """
 
 from __future__ import annotations

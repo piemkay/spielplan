@@ -26,7 +26,6 @@ data/
 # not needed to build or run
 docs/
 README.md
-ops/devstub.py
 e2e/
 .github/
 # .github/workflows/release.yml tees its logs here, then builds the image from this workspace.

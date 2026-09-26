@@ -733,8 +733,8 @@ def validate(
     bundle — which carries no spine of its own. `active_coverage` is decision 248's other half:
     the ids the ACTIVE backbone covers, so that coverage going BACKWARDS is refused where an id
     the install never seeded is only counted. Both come from `validate_for_install`; this
-    signature stays synchronous because the pre-flight tools (`ops/devstub.py`, the fixture
-    tests) validate a bundle with no install behind them.
+    signature stays synchronous because the fixture tests validate a bundle with no install
+    behind them.
     """
     report = ImportReport(bundle_version=bundle.version)
     refuse_on_path(bundle, report)
@@ -947,8 +947,8 @@ async def refuse_on_install_state(
     thirty-table content validation buries the one line the operator can act on.
 
     `artifacts_root` is `settings().artifacts_dir`, supplied by the two callers that stage into
-    it. Optional, because `ops/devstub.py` and the fixture pre-flight validate bundles with no
-    install behind them at all and a refusal about a directory there is no directory for would be
+    it. Optional, because the fixture pre-flight validates bundles with no install behind them
+    at all and a refusal about a directory there is no directory for would be
     an invention. With it, two more install facts become reachable from `/validate` rather than
     only from the import: whether this version is already the active one, and whether the bundle
     is sitting inside the tree the import is about to delete and re-create.
