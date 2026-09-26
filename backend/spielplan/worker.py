@@ -810,6 +810,17 @@ async def _acquisition_drain() -> dict[str, object] | None:
         return detail
 
 
+async def _metadata_backfill() -> dict[str, object] | None:
+    """Decision 522: §8 stages 2 (TMDB's two kinds) and 3 for a bundle title the corpus never
+    fetched TMDB for, in the worker for decision 484's reason - one bucket for
+    `api.themoviedb.org`, and this loop is sequential. `acquire/backfill.py` says what is asked,
+    in what order and what is written; None when there was no key or nothing owed."""
+    from spielplan.acquire import backfill
+
+    async with pool.acquire() as conn:
+        return await backfill.walk(conn, run_id=_JOB_RUN.get())
+
+
 async def _art_lookup() -> dict[str, object] | None:
     """Decision 484: TMDB asked for the poster of each title that has none, here and not in the
     web process, because §1 puts acquisition in the worker and decision 340 gives
@@ -1344,6 +1355,14 @@ JOBS: tuple[Job, ...] = (
     Job("acquisition-drain", "M5.1", "queue",
         "~9 s/title of paced crawl x 8 a tick + <1 s/title placed",
         _acquisition_drain, every=1800, timeout=420),
+    # Decision 522's metadata walk, between the drain and the lookup and absent from §5.3's table
+    # for the drain's reason: it is acquisition, which §8 writes down. Before the lookup in the
+    # tick, so a title it gives a poster is one the lookup no longer files. 100 titles at two TMDB
+    # requests each is about eleven seconds of pacing at the declared 18 rps, plus a derive each;
+    # 300 s is the lookup's budget, a sixth of the interval, and a title the budget cuts off is
+    # handed back refunded. [decisions 340, 373, 484, 522]
+    Job("metadata-backfill", "M5", "queue", "~11 s of paced TMDB + a derive/title x 100 a tick",
+        _metadata_backfill, every=1800, timeout=300),
     # Decision 484's poster lookup, beside the drain whose host it shares and absent from §5.3's
     # table for the drain's reason: it is acquisition, which §8 writes down. The drain's interval
     # and not a shorter one: `test_worker_schedule.py` sizes its minutely and quarter-hourly sets on

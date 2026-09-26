@@ -12302,3 +12302,46 @@ tests = [
     "backend/tests/test_static_contracts.py::test_the_member_register_guard_reads_backend_copy_and_not_its_sql_or_logs",
     "backend/tests/test_static_contracts.py::test_the_member_register_walk_follows_imports_and_stops_at_the_operator_routes",
 ]
+
+# The second household test's data finding D1 (owner instruction of 2026-09-26): 9,162 of the
+# seeded install's bundle titles carry no TMDB block, so Moulin Rouge (1952) and The Grudge opened
+# as a name, a year and a tinted panel. Section 8's own stages 2 (TMDB's two kinds) and 3 give them
+# their card, in the worker, with nothing paid, nothing placed and the extracted tier untouched.
+[[requirement]]
+id = "jellyfin-acquisition-bundle-titles-without-tmdb-get-their-card-from-stages-two-and-three"
+spec = "§8 (stage 2's tmdb:resolve -> tmdb:detail, stage 3's derive, the politeness clause); §6.0 (the title card's metadata); §6.8"
+milestone = "M5"
+kind = "integration"
+what = "The worker's metadata-backfill job (every 1800 s, before art-lookup) files bundle titles with no tmdb title_meta block and an id TMDB answers by - owned, then seen or rated by a member, then the seed list, then placed (warm first), then the rest - under its own queue kind the drain never leases, and walks up to 100 a run through one polite fetcher: tmdb:resolve and tmdb:detail through section 8 stage 2's adapters, then section 8 stage 3's derive without the adjudication ledger. The overview, tagline and poster arrive through the card's resolution, a field is replaced only by TMDB's own value and year and runtime are never overwritten, the extracted DNA tier is byte-identical, an identity the walk filled that another title of the same kind already carries is set back to NULL, TMDB holding no record is asked again after 30 days, a refused key stops the run with nothing recorded, a title a pipeline walk holds is handed back with no attempt spent, and no key walks nothing."
+why = "The corpus fetched TMDB's record for about half its titles and decision 411 exits a placed bundle title at stage 1, so a warm title Rate serves could show no text and no poster for the life of the install (owner instruction of 2026-09-26 after the second household user test)."
+tests = [
+    "backend/tests/test_acquire_backfill.py::test_a_skeleton_bundle_title_gets_tmdb_s_text_and_poster_through_stage_three",
+    "backend/tests/test_acquire_backfill.py::test_a_field_the_title_holds_is_replaced_only_by_tmdb_s_own_value",
+    "backend/tests/test_acquire_backfill.py::test_the_walk_leaves_the_extracted_dna_tier_alone",
+    "backend/tests/test_acquire_backfill.py::test_owned_then_seen_or_rated_then_the_seed_list_then_placed_then_the_rest",
+    "backend/tests/test_acquire_backfill.py::test_the_drain_never_leases_the_walk_s_work",
+    "backend/tests/test_acquire_backfill.py::test_tmdb_holding_no_record_is_asked_again_after_thirty_days",
+    "backend/tests/test_acquire_backfill.py::test_a_refused_key_stops_the_walk_and_records_nothing_against_the_titles",
+    "backend/tests/test_acquire_backfill.py::test_no_key_no_walk",
+    "backend/tests/test_acquire_backfill.py::test_an_id_another_title_already_carries_is_given_back",
+    "backend/tests/test_acquire_backfill.py::test_a_title_a_pipeline_walk_holds_is_handed_back_untouched",
+    "backend/tests/test_acquire_backfill.py::test_the_worker_fires_the_walk_from_its_own_registry",
+]
+
+# D2 of the same test: search results outside the library drew blank posters with 404s in the
+# console, one per card per render. The 404 stays decision 483's; the page stops asking again.
+[[requirement]]
+id = "library-rate-a-poster-that-answered-nothing-is-not-asked-again-by-the-next-card"
+spec = "§6.8 (\"A title with no servable image renders the tinted 2:3 panel - a designed state, not an error.\")"
+milestone = "M5"
+kind = "backend"
+what = "When a card's poster answers 404, or a Rate preload finds none, the page remembers that URL for ten minutes - the shortest max-age the route puts on a 404, held equal to it by a test - and every later card for that title (either payload key) draws the tinted panel with no <img>; the memory is keyed on the URL, so an app-minted id's next database version is asked, and it lapses so the title is asked again."
+why = "The art route's 404s are cacheable, but each new card still drew an <img> that failed again and printed a 404 into the console: the live access log showed one posterless title asked six times in fifteen minutes during the second household test (owner instruction of 2026-09-26)."
+tests = [
+    "frontend/src/lib/art.test.js::is not asked for again by any card while the 404 is still fresh",
+    "frontend/src/lib/art.test.js::is asked for again once the shortest 404 max-age has passed",
+    "frontend/src/lib/art.test.js::keys the memory on the URL, so another database's version of an app-minted id is asked",
+    "frontend/src/lib/art.test.js::remembers a preload that found no image, so the card it was for draws no <img>",
+    "frontend/src/lib/components/posters.svelte.test.js::is not drawn as an <img> by the next card for the same title",
+    "backend/tests/test_art_poster.py::test_the_page_remembers_a_404_no_longer_than_the_shortest_one_it_is_sent",
+]

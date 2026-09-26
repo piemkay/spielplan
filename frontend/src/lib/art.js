@@ -27,6 +27,33 @@ import { session } from '$lib/session.svelte.js';
 /** `derive/ids.APP_ID_MIN`: the first id this app mints; below it, the corpus's own ids. */
 const APP_ID_MIN = 1_000_000_000;
 
+/**
+ * How long this page remembers that a poster URL answered with nothing: the shortest max-age the
+ * route puts on a 404 (`art/poster.BROWSER_TRANSIENT`, ten minutes; a pending lookup gets half an
+ * hour and "none anywhere" a day). Inside it the browser's own cache would answer the same URL
+ * with the same 404, so remembering it here changes nothing a member sees - it only stops every
+ * later card for that title (the shelf, the search grid, the title card, a re-render) from
+ * drawing an `<img>` that fails again and prints another 404 into the console. Decision 483
+ * already drops the image on error; this carries the drop from one card to the page. An `<img>`
+ * cannot tell a 404 from a load that never reached the route, so a phone that was offline for a
+ * moment shows that title's tinted panel - the designed state - for the same ten minutes.
+ */
+export const MISSING_FOR_MS = 10 * 60 * 1000;
+const missing = new Map();
+
+/** Remember that `src` answered with no image, so no card asks for it again for a while. */
+export function noteMissing(src) {
+  if (src) missing.set(src, Date.now() + MISSING_FOR_MS);
+}
+
+function knownMissing(src) {
+  const until = missing.get(src);
+  if (until === undefined) return false;
+  if (until > Date.now()) return true;
+  missing.delete(src);
+  return false;
+}
+
 /** The title's id from whichever key its payload uses, or null when it names none. */
 export function titleIdOf(title) {
   const raw = title?.title_id ?? title?.id;
@@ -35,12 +62,19 @@ export function titleIdOf(title) {
   return Number.isInteger(id) && id > 0 ? id : null;
 }
 
-/** The same-origin poster URL for a title, or null when there is no title to ask about. */
+/**
+ * The same-origin poster URL for a title, or null when there is no title to ask about - or when
+ * this page has just been told that URL holds no image (`noteMissing`), so the card draws its
+ * tinted panel without an `<img>` that would fail again.
+ */
 export function posterSrc(title) {
   const id = titleIdOf(title);
   if (id === null) return null;
   const epoch = id >= APP_ID_MIN ? session.artEpoch : null;
-  return epoch ? `/api/art/${id}/poster?v=${encodeURIComponent(epoch)}` : `/api/art/${id}/poster`;
+  const src = epoch
+    ? `/api/art/${id}/poster?v=${encodeURIComponent(epoch)}`
+    : `/api/art/${id}/poster`;
+  return knownMissing(src) ? null : src;
 }
 
 /**
@@ -53,6 +87,7 @@ export function preloadPoster(title) {
   if (!src || typeof Image === 'undefined') return null;
   const image = new Image();
   image.decoding = 'async';
+  image.onerror = () => noteMissing(src);
   image.src = src;
   return image;
 }

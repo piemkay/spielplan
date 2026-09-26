@@ -851,6 +851,9 @@ JOB_NAMES: tuple[str, ...] = (
     # title"; this tuple answers "is the thing that walks them running at all", and the second
     # question is the one an operator asks first. [M5.1; decisions 321 and 336]
     "acquisition-drain",
+    # Decision 522's metadata walk: a walk that has stopped leaves a bundle title's card without
+    # the text and poster TMDB would give it, which looks exactly like a title nobody wrote about.
+    "metadata-backfill",
     # Decision 484's poster lookup, the drain's neighbour in the registry and on this card: a
     # lookup that has stopped leaves every posterless card tinted, which from Home looks exactly
     # like a title that has no art anywhere.
