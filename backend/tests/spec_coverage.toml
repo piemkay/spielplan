@@ -1313,7 +1313,7 @@ tests = [
 
 [[requirement]]
 id = "library-rate-queue-seed-and-reason"
-spec = "§6.1 (Queue) + §6.8; decision 490"
+spec = "§6.1 (Queue) + §6.8; decisions 490, 519 and 521"
 milestone = "M2"
 kind = "integration"
 what = "A user's first queue is the imported 100-title decade-stratified seed_list, every title of it ahead of any title outside it, ordered among themselves by descending P(seen) — popularity, the library, age and the household (decision 490); subsequent queues are ordered by descending P(seen); and every served card carries a queue reason naming its dominant cause in a plain sentence with no probability in it, a seed card naming its decade and never a list position."
@@ -1331,7 +1331,7 @@ tests = [
 
 [[requirement]]
 id = "library-rate-duel-write"
-spec = "§6.1 (Tie, decisive toggle) + §4.2 duel + §5.2"
+spec = "§6.1 (Tie, decisive toggle) + §4.2 duel + §5.2; decision 520"
 milestone = "M2"
 kind = "integration"
 what = "One battle answer writes exactly one duel row with context 'profile_battle' and outcome A, B or TIE; with the decisive switch on for the pair answered the stored margin weight is ~1.6, with it off ~1.0, and the next pair starts with it off; a Tie is a stored outcome feeding the Davidson tie term, never a skip or a dropped row."
@@ -11877,7 +11877,7 @@ tests = [
 # own answer) or 488 (unbuilt surfaces absent from navigation) - when the wave recorded them.
 [[requirement]]
 id = "library-rate-title-card-speaks-the-member-register"
-spec = "§6.0 (the title detail card); §6.7 (the per-user toggle); §6.8 (quiet reasons); decision 486"
+spec = "§6.0 (the title detail card); §6.7 (the per-user toggle); §6.8 (quiet reasons); decisions 486 and 517"
 milestone = "M5"
 kind = "integration"
 what = "With the viewer's Show the model off, the title card's payload carries no model line and no extracted-tag weight (salience, confidence, n_sources); with it on, both come back. Every DNA term travels with its vocabulary label and gloss, the platform caption keeps `display_only` and speaks plainly, and the card renders the kind in words, the trailer as a labelled link, evidence sources by name, a quote cut mid-sentence with an ellipsis at the cut, each projected term quieter at one source and never dropped (the count of sources behind it is Show the model's since the second household test), one credit row per person and role with only the jobs that are different credits, and the seen toggle's note in plain words under the actions."
@@ -12005,7 +12005,7 @@ tests = [
 # battle card's Tie, decisive toggle and Skip sat below the bottom bar.
 [[requirement]]
 id = "library-rate-phone-controls-are-on-screen"
-spec = "§6 preamble (phone-first, 48 px targets) + §6.1 (persistent Undo, persistent decisive toggle)"
+spec = "§6 preamble (phone-first, 48 px targets) + §6.1 (persistent Undo, decisive switch)"
 milestone = "M5"
 kind = "e2e"
 what = "On the phone project, every Rate mode, kind, find and Undo control and the sweep card's verdicts are in the viewport with no sideways scroll on the control row, and on a battle card Tie, the decisive toggle and Skip are in the viewport."
@@ -12021,7 +12021,7 @@ tests = [
 # until the two decisions are recorded.
 [[requirement]]
 id = "library-rate-member-copy-is-plain-language"
-spec = "§6.8 (quiet reasons) + §6.1 (pair-selection and learning-curve copy); decisions 486 and 491"
+spec = "§6.8 (quiet reasons) + §6.1 (pair-selection and learning-curve copy); decisions 486, 491 and 519"
 milestone = "M5"
 kind = "integration"
 what = "The battle why-line names the shared answer and no section; the reveal carries no model number with Show the model off; the seed card names its decade and never a list position, its P(seen) travelling beside the line behind Show the model rather than in it; the rail, the balance widget, the undo chip and the drained state speak in ratings and plain words."
@@ -12116,7 +12116,7 @@ tests = [
 
 [[requirement]]
 id = "tonight-rank-copy-in-the-member-register"
-spec = "§6.8 (\"a one-line why\") + §6.3 + decision 11 + decision 209; decision 486"
+spec = "§6.8 (\"a one-line why\") + §6.3 + decision 11 + decision 209; decisions 486 and 508"
 milestone = "M5"
 kind = "integration"
 what = "Every sentence the Rank surface shows a member is true and plain: the board's why-line counts what the person has rated and compared (held-out answers included) and says what the letters mean in the person's own labels - liked from A up, fine in B, disliked from C down on the default set - never 'learned cutpoints, refit nightly', and keeps decision 209's 'still being fitted' in its window; the tension chip says 'your other answers still point to C', not 'the ledger'; the tier-set warning keeps decision 11's two facts without 'cutpoints' or 'refit'; the footnote says how to use the board and claims no write; the title filter claims only titles and the tag filter says 'tag'; the DNA tiers read 'quoted' and 'inferred'; and none of it names a model noun or a spec reference."
@@ -12177,7 +12177,7 @@ tests = [
 
 [[requirement]]
 id = "tonight-not-tonight-vetoes"
-spec = "§6.2 step 1 (session controls) + §4.1 rules 1 and 2 + §6.4 (presence predicates); decision 480"
+spec = "§6.2 step 1 (session controls) + §4.1 rules 1 and 2 + §6.4 (presence predicates); decisions 480, 504 and 505"
 milestone = "M5"
 kind = "integration"
 what = "Before Start each seated member may set up to three 'not tonight' vetoes of their own from a fixed list mapped to vocabulary terms, and one member's set never touches another's; a stranger is refused, a key off the list or a fourth of one's own is a 422, and a room that has started refuses a change; the pool is then built without every title carrying a term any member vetoed, in either the quote-verified or the projected tier — a presence predicate that names both tiers and compares no salience, confidence or weight; the union and whose each veto was are frozen with the pool; the lobby shows each member's own chips and names the others', the open-rooms row shows the union, and a pool the vetoes empty is refused naming them."
@@ -12259,7 +12259,7 @@ tests = [
 
 [[requirement]]
 id = "tonight-waiting-says-an-estimate-and-the-ballot-count-is-live"
-spec = "§6.2 step 4 (\"Jenny 11/~12\"; \"the ~ figure is an estimate — the typical round until that seat passes it — and never the cap\") + §6.2 step 6 (the blind ballot); decision 477"
+spec = "§6.2 step 4 (\"Jenny 11/~12\"; \"the ~ figure is an estimate — the typical round until that seat passes it — and never the cap\") + §6.2 step 6 (the blind ballot); decisions 477 and 507"
 milestone = "M5"
 kind = "integration"
 what = "A seat still answering is told to expect the typical round from the same sweep the boundary is calibrated on, never the cap, and the estimate is a function of its own count alone; a ballot submit that does not complete the reveal pushes the ballot's submitted count — two integers, no title, no approval — which the other devices file under the ballot, and a phone that has voted shows that its vote is in and how many are still out, never the round's counts."
@@ -12313,7 +12313,7 @@ tests = [
 # their card, in the worker, with nothing paid, nothing placed and the extracted tier untouched.
 [[requirement]]
 id = "jellyfin-acquisition-bundle-titles-without-tmdb-get-their-card-from-stages-two-and-three"
-spec = "§8 (stage 2's tmdb:resolve -> tmdb:detail, stage 3's derive, the politeness clause); §6.0 (the title card's metadata); §6.8"
+spec = "§8 (stage 2's tmdb:resolve -> tmdb:detail, stage 3's derive, the politeness clause); §6.0 (the title card's metadata); §6.8; decision 522"
 milestone = "M5"
 kind = "integration"
 what = "The worker's metadata-backfill job (every 1800 s, before art-lookup) files bundle titles with no tmdb title_meta block and an id TMDB answers by - owned, then seen or rated by a member, then the seed list, then placed (warm first), then the rest - under its own queue kind the drain never leases, and walks up to 100 a run through one polite fetcher: tmdb:resolve and tmdb:detail through section 8 stage 2's adapters, then section 8 stage 3's derive without the adjudication ledger. The overview, tagline and poster arrive through the card's resolution, a field is replaced only by TMDB's own value and year and runtime are never overwritten, the extracted DNA tier is byte-identical, an identity the walk filled that another title of the same kind already carries is set back to NULL, TMDB holding no record is asked again after 30 days, a refused key stops the run with nothing recorded, a title a pipeline walk holds is handed back with no attempt spent, and no key walks nothing."
@@ -12356,7 +12356,7 @@ tests = [
 # decisions are recorded.
 [[requirement]]
 id = "data-rules-the-tier-shape-sits-on-the-verdict-scale"
-spec = "§5.2 (\"3-class verdicts | ordered logit, free per-user cutpoints\"; the tier arm's cutpoints \"**are** the displayed tier boundaries\") + §6.3 (\"learned cutpoints, not percentile cuts\"; initialised from the measured quantile shape, \"then learned\")"
+spec = "§5.2 (\"3-class verdicts | ordered logit, free per-user cutpoints\"; the tier arm's cutpoints \"**are** the displayed tier boundaries\") + §6.3 (\"learned cutpoints, not percentile cuts\"; initialised from the measured quantile shape, \"then learned\"); decisions 508 and 509"
 milestone = "M5"
 kind = "integration"
 what = "The tier arm's prior mean is realised on the verdict arm's scale: the measured shape's C/B and B/A cuts sit on the person's own disliked/fine and fine/liked cutpoints, the other cuts keep the shape's logistic distance from the nearer one, and at the verdict prior it is exactly the old shape for every tier set from 2 to 12 levels; so with no tier edit disliked renders in F/D/C, fine in B and liked in A/A+/S, a rated title is held inside its verdict's tiers wherever the fit leaves its s (its chip then naming the next tier toward s, one predicate with queue eligibility), a dropped title is not held, the stored tier and the drop's neighbour check read the same hold, and a fit stamped before the change is refused and handed to the 60 s tick."
@@ -12377,7 +12377,7 @@ tests = [
 
 [[requirement]]
 id = "data-rules-a-pick-moves-the-winner-up"
-spec = "§5.2 (\"Per-title residuals `b_i^u` capture direct effects\"; the Davidson duel arm) + §4.3 (\"b_i prior τ (or its CV grid)\") + §6.3 (\"The model refits (incremental immediately, exact nightly)\")"
+spec = "§5.2 (\"Per-title residuals `b_i^u` capture direct effects\"; the Davidson duel arm) + §4.3 (\"b_i prior τ (or its CV grid)\") + §6.3 (\"The model refits (incremental immediately, exact nightly)\"); decision 509"
 milestone = "M5"
 kind = "integration"
 what = "The residual prior's scale is 2.0, so the person's own answers outweigh the taste vector on their own titles: one hesitant pick in the comparison queue lifts the winner above the title it beat on the incremental path a sitting is shown, two films called about the same and rated alike share a tier, and a board whose verdict band closes on the way to its optimum is walked to it rather than stalled by an overflowing step."
@@ -12390,7 +12390,7 @@ tests = [
 
 [[requirement]]
 id = "rate-the-reveal-reads-the-letter-home-shows"
-spec = "§6.1 (\"Prediction reveal strictly *after* the tap\"; \"we'd have guessed {class}\") + §5.2 (free per-user verdict cutpoints) + §6.0 (the shelf card's tier badge)"
+spec = "§6.1 (\"Prediction reveal strictly *after* the tap\"; \"we'd have guessed {class}\") + §5.2 (free per-user verdict cutpoints) + §6.0 (the shelf card's tier badge); decision 510"
 milestone = "M5"
 kind = "integration"
 what = "The reveal's guessed class is the verdict class the title's tier letter stands for, read off the stored row where there is one and off the cached fit's cuts where there is not, so the title card's guess and the letter on Home can never name different classes; and a title nobody has rated wears its guessed class's middle tier (C, B or A on the default set) rather than a grade inside it, which only the person's own answers can give."
@@ -12427,7 +12427,7 @@ tests = [
 # four-hour cut of Kill Bill as a top pick.
 [[requirement]]
 id = "library-rate-home-shelves-leave-out-what-a-member-disliked"
-spec = "§6.0 M2 (the shelf table) + §4.1 rules 1 and 2 + §6.2 step 3"
+spec = "§6.0 M2 (the shelf table) + §4.1 rules 1 and 2 + §6.2 step 3; decision 512"
 milestone = "M5"
 kind = "integration"
 what = "Every ranking shelf leaves out, for the member it ranks for, any title carrying a mood, themes or sensibility term (either tier, presence only) or a canonical genre that at least four of their disliked titles carry, none of their liked ones and no more of their fine ones than disliked - read from both kinds' live verdicts - and any film running more than half an hour past the longest film they have liked, never under three hours, once they have liked ten films; the shared shelf leaves out what either member avoids; New in the library leaves out nothing; the payload names what is left out by label and the ceiling in minutes. Decision 512."
@@ -12443,7 +12443,7 @@ tests = [
 # is ranked as Tonight's pool is, and §6.2 step 3 reads that pool rank-standardised (decision 477).
 [[requirement]]
 id = "library-rate-sweet-spot-ranks-both-members-on-one-scale"
-spec = "§6.0 M2 (the shelf table, row 4) + §6.2 step 3 (the plain average, rank-standardised)"
+spec = "§6.0 M2 (the shelf table, row 4) + §6.2 step 3 (the plain average, rank-standardised); decisions 477 and 512"
 milestone = "M5"
 kind = "integration"
 what = "The shared shelf orders its titles by the plain average of each member's score rank-standardised over the owned library of the kind - the normal quantile of their own rank - so a member whose raw scores are a hundredth of the other's still counts as much; the 0.70 floor per member stands."
@@ -12457,7 +12457,7 @@ tests = [
 # over GoodFellas and Dune: Part Two; "Because you liked Chernobyl" over Attack on Titan.
 [[requirement]]
 id = "library-rate-shelf-one-likeness-weighs-rarity-and-keeps-the-form"
-spec = "§6.0 M2 (the shelf table, row 1) + §4.1 rules 1 and 2"
+spec = "§6.0 M2 (the shelf table, row 1) + §4.1 rules 1 and 2; decisions 475 and 513"
 milestone = "M5"
 kind = "integration"
 what = "Shelf 1's cards are the unseen owned titles most like the anchor by the cosine of their term sets weighted by rarity in the owned library of the kind (both tiers, presence only), in the anchor's own form - animated or live-action by the canonical Animation genre - and its pair is the one whose carriers among the twenty-four nearest hold the most likeness, weighed by the two terms' rarity; every card carries both named terms. Decision 513, amending decision 475."
@@ -12473,7 +12473,7 @@ tests = [
 # like", resting on one projected tag on The Grand Budapest Hotel.
 [[requirement]]
 id = "library-rate-frontier-which-you-like-is-the-members-own-word"
-spec = "§6.0 M2 (the shelf table, row 3) + §6.4 (explore recommendations)"
+spec = "§6.0 M2 (the shelf table, row 3) + §6.4 (explore recommendations); decision 514"
 milestone = "M5"
 kind = "integration"
 what = "The frontier's neighbour is a term at least three of the member's liked titles of the kind carry and more than half of their rated titles carrying it are liked - their live verdicts, not the Ledger's CDF - from another facet than the unvisited term, whose carriers exclude the titles the member avoids. Decision 514."
@@ -12488,7 +12488,7 @@ tests = [
 # title card never said why a title was suggested.
 [[requirement]]
 id = "library-catalogue-sorts-for-you-and-the-card-says-why"
-spec = "§6.0 M0 (the catalog; the title detail card) + §4.1 rule 5 + §6.8 (quiet reasons)"
+spec = "§6.0 M0 (the catalog; the title detail card) + §4.1 rule 5 + §6.8 (quiet reasons); decision 515"
 milestone = "M5"
 kind = "integration"
 what = "GET /api/titles takes sort=for_you|newest and answers the order it is really in: for_you - by the member's own score, films then series, never one interleaved ranking - is the default once a fold-in fitted to their own ratings, with weight on its personal half, ranks a selected kind, newest otherwise and whenever asked, and match under a search; an unknown sort is a 422. GET /api/titles/{id} carries why: 'Because you liked {X} — they share {a} + {b}' for a title alike enough to a liked title of its kind and form, 'One of the ones we think you'll enjoy most' for one in the top tenth of the member's own ranking of the owned library, and None for a title seen, rated, avoided or neither. The dev harness answers both keys. Decision 515."
@@ -12509,7 +12509,7 @@ tests = [
 # person does not know (H7). `spec` cites sections alone until decisions 519-521 are recorded.
 [[requirement]]
 id = "library-rate-questions-and-reasons-speak-plainly"
-spec = "§6.1 (Modes; Battle; Queue) + §6.8 (quiet reasons; member register)"
+spec = "§6.1 (Modes; Battle; Queue) + §6.8 (quiet reasons; member register); decision 519"
 milestone = "M5"
 kind = "integration"
 what = "The three modes are named Mixed, Singles and Pairs, and the header's counter names the mode chosen rather than the card type served; the pair card asks \"Which did you enjoy more?\" over a why-line naming the answer the person gave both titles; a sweep card's reason is a plain sentence naming its strongest cause with no probability in it, a seed title called well-known only where its crowd support reaches about a thousand ratings, and its P(seen) travels under the card's gated `model` key, beside the line and only for a viewer with Show the model on, never on a recorded-seen card or a re-ask; the pair-selection and decisive copy say the same claims in words."
@@ -12527,7 +12527,7 @@ tests = [
 
 [[requirement]]
 id = "library-rate-decisive-switch-belongs-to-its-pair"
-spec = "§6.1 (Battle: the decisive toggle, ~1.6 vs 1.0) + §5.2"
+spec = "§6.1 (Battle: the decisive toggle, ~1.6 vs 1.0) + §5.2; decision 520"
 milestone = "M5"
 kind = "integration"
 what = "The decisive switch weighs the answer to the pair on the table and is off for the next pair, whether that pair follows an answer, a skip, a correction, a mode or kind change or an Undo; while its pair stays on the table it survives a reload and a control that names no switch."
@@ -12567,7 +12567,7 @@ tests = [
 
 [[requirement]]
 id = "library-rate-queue-learns-which-titles-a-person-does-not-know"
-spec = "§6.1 (Queue: \"P(seen)-ordered\") + §13 (not-seen rate in the rating queue)"
+spec = "§6.1 (Queue: \"P(seen)-ordered\") + §13 (not-seen rate in the rating queue); decision 521"
 milestone = "M5"
 kind = "integration"
 what = "P(seen) carries a sixth term from the person's own answers per kind and original language, shrunk by two pseudo-answers each way and read only below a half, so answers that keep saying \"not seen\" to one language's titles lower that language's titles for that person alone, nothing is ever raised, the why-line never names it, and the SQL that orders and the Python that explains compute the same number."
@@ -12582,7 +12582,7 @@ tests = [
 # record takes it.
 [[requirement]]
 id = "tonight-the-soft-budget-is-said-and-remembered"
-spec = "§6.2 step 1 (\"a runtime budget slider (soft — the pool admits up to budget + 40 min; over-budget results are labelled 'runs N min over'\")"
+spec = "§6.2 step 1 (\"a runtime budget slider (soft — the pool admits up to budget + 40 min; over-budget results are labelled 'runs N min over'\"); decision 506"
 milestone = "M5"
 kind = "e2e"
 what = "The soft budget is honoured exactly as §6.2 step 1 defines it, and the door says so where it is set: a line under the slider states that titles up to 40 min longer can still come up and are marked with how far over, per episode on a series night. The slider opens at the budget this member last opened an evening with for that kind on this device, else the default; an out-of-range or unreadable stored value, or storage that refuses, falls back to the default and stops no evening."
@@ -12598,7 +12598,7 @@ tests = [
 
 [[requirement]]
 id = "tonight-the-round-estimate-stays-true"
-spec = "§6.2 step 4 (\"the ~ figure is an estimate — the typical round until that seat passes it — and never the cap\")"
+spec = "§6.2 step 4 (\"the ~ figure is an estimate — the typical round until that seat passes it — and never the cap\"); decision 507"
 milestone = "M5"
 kind = "integration"
 what = "Up to the typical round a seat's header says how rounds often go and the waiting line gives the typical round as its estimate; once a seat has reached it the server sends no estimate, the waiting line gives the count alone ('Jenny 12 so far'), and the seat's own header says the round is running long and names the cap that ends it, never the typical round it has passed."
@@ -12679,7 +12679,7 @@ tests = [
 # "; decision N" to each spec field then, as the round-1 rows above did.
 [[requirement]]
 id = "library-rate-home-opens-on-the-shelves-with-filters-behind-one-control"
-spec = "§6 preamble (\"phone-first (48 px targets, one-handed)\") + §6.0 (filter/search on title/alias/genre/decade/seen-state; the kind control)"
+spec = "§6 preamble (\"phone-first (48 px targets, one-handed)\") + §6.0 (filter/search on title/alias/genre/decade/seen-state; the kind control); decision 516"
 milestone = "M5"
 kind = "e2e"
 what = "On a phone Home's first screen is the greeting, the pending banner, the kind switch, the search box and one Filters control ahead of the shelves: genre, decade, seen state and \"in my library\" open in a panel from it, the control counts the filters set, every set filter stays a removable chip while the panel is shut, and neither the document nor the page scrolls under the shell - the shelves' mode marker is in flow, where `main`, the scroller, holds it."
@@ -12695,7 +12695,7 @@ tests = [
 
 [[requirement]]
 id = "library-rate-home-grid-names-the-order-it-is-read-in"
-spec = "§6.0 (the catalog grid; a search lists best match first)"
+spec = "§6.0 (the catalog grid; a search lists best match first); decisions 515 and 516"
 milestone = "M5"
 kind = "e2e"
 what = "A filtered grid or a filmography offers For you and Newest with the order the server echoes as `sort` pressed and asks for the other on a tap; a search - best match first - offers no order control, and neither does a grid the server names no order for."
@@ -12709,7 +12709,7 @@ tests = [
 
 [[requirement]]
 id = "library-rate-home-search-says-where-its-matches-are"
-spec = "§6.0 (filter/search on title/alias; a search lists best match first; the kind control)"
+spec = "§6.0 (filter/search on title/alias; a search lists best match first; the kind control); decision 516"
 milestone = "M5"
 kind = "e2e"
 what = "An empty search whose other kind holds matches says \"Found in Series: {names}\" (two named, the rest counted) and offers the switch, instead of \"No matches\"; the empty state no longer calls the catalog \"the library\"; a search's hits that only contain the query inside a word wait behind one \"Show N looser matches\" control after every closer hit, never dropped; and a kind switch keeps a genre and decade the new kind carries and says which one it cleared."
@@ -12725,7 +12725,7 @@ tests = [
 
 [[requirement]]
 id = "library-rate-home-shelves-say-they-are-the-library-and-keep-the-art-clear"
-spec = "§6.0 M2 (the shelves; the pending-verdicts banner) + §6.8 (quiet reasons; poster-forward 2:3 cards)"
+spec = "§6.0 M2 (the shelves; the pending-verdicts banner) + §6.8 (quiet reasons; poster-forward 2:3 cards); decision 516"
 milestone = "M5"
 kind = "e2e"
 what = "Home says once that every shelf title is in the household's library; a shelf card's rank and tier sit in a row under its art, never over it; \"New in the library\", whose why-line is the no-crowd-data reason, does not repeat it as a note while every other row still says it once; and the pending banner counts what waits in words (\"16 titles you watched are waiting for your rating\")."
@@ -12740,7 +12740,7 @@ tests = [
 
 [[requirement]]
 id = "library-rate-cards-lead-with-the-viewers-original-title"
-spec = "§6.0 (the title detail card's metadata; the catalog) + §6.8 (poster-forward cards)"
+spec = "§6.0 (the title detail card's metadata; the catalog) + §6.8 (poster-forward cards); decision 516"
 milestone = "M5"
 kind = "integration"
 what = "The title card, every catalog card and every shelf card carry the title's original name and original language, null where the corpus recorded none; a viewer whose browser language is the original's reads the original title first with the English one beside it, and every other viewer reads the name as before, with the original beside it on the title card."
@@ -12755,7 +12755,7 @@ tests = [
 
 [[requirement]]
 id = "library-rate-title-card-leads-with-why-and-folds-the-rest"
-spec = "§6.0 (the title detail card) + §6.1 (Liked / Fine / Disliked, Not seen) + §6.8 (quiet reasons) + §4.1 rule 2 (weights, never filters)"
+spec = "§6.0 (the title detail card) + §6.1 (Liked / Fine / Disliked, Not seen) + §6.8 (quiet reasons) + §4.1 rule 2 (weights, never filters); decision 517"
 milestone = "M5"
 kind = "e2e"
 what = "The title card leads with the poster, the name, the server's one-line why when it sends one, the answers in Rate's worst-to-best order (Disliked, Fine, Liked, then Not seen), Play and the synopsis, then the first five credits; the rest of the credits, the platform scores and both DNA tiers are on the card behind one closed \"More about this film\" (or series); an inferred chip's source count is Show the model's, and a one-source or pace-contradicting guess is folded behind \"N less certain\", never dropped."
@@ -12772,7 +12772,7 @@ tests = [
 
 [[requirement]]
 id = "library-rate-title-card-says-each-thing-once"
-spec = "§4.1 rule 1 (the tiers never merged, and distinguishable) + §6.0 (the DNA card)"
+spec = "§4.1 rule 1 (the tiers never merged, and distinguishable) + §6.0 (the DNA card); decision 517"
 milestone = "M5"
 kind = "e2e"
 what = "The payload keeps both DNA tiers apart with a term in both carried in each; the card draws one block per quoted term with each quote once, and an inferred term the quotes already carry is not drawn again as a chip."
@@ -12786,7 +12786,7 @@ tests = [
 
 [[requirement]]
 id = "platform-account-surfaces-speak-plainly"
-spec = "§3.2 (the account chip; passkeys; the PIN) + §6.8 (member register)"
+spec = "§3.2 (the account chip; passkeys; the PIN) + §6.8 (member register); decision 518"
 milestone = "M5"
 kind = "e2e"
 what = "The account chip's second line says the role and the sign-in inventory in words (\"Member · signs in with a passkey · PIN set for quick switching\"); the account page names the PIN by what it does, the tier set as the Rank letters with its editor folded, says passkeys and never WebAuthn, and keeps the data sources' notices on the page one tap away under \"Where the film information comes from\"."
