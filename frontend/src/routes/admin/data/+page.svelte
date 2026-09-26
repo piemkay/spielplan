@@ -1,13 +1,5 @@
 <script>
-  /**
-   * Admin → Data. Spec v2.1 §6.6: "artifact-bundle import wizard (validate → report →
-   * hot-swap; §10), acquisition pipeline monitor, extraction queue, review of DNA rejects".
-   * §3.1 scopes this page to M0 — it is the same importer the first-boot wizard runs.
-   * Below the importer, in §6.6's order and each in its own component: the acquisition board,
-   * the extraction flywheel's queue and Launch, the review of DNA rejects and low-evidence tags,
-   * and the three ledger editors (M5.6; decisions 330, 441-446). Each fetches its own reads
-   * outside the bundle block, so one that fails says so in its own card and never blanks this page.
-   */
+  // Each card below the importer fetches its own reads, so one that fails never blanks this page.
   import { onMount } from 'svelte';
   import { get } from '$lib/api.js';
   import { bootstrap } from '$lib/session.svelte.js';
@@ -20,15 +12,10 @@
 
   let bundleState = $state(null);
   let error = $state('');
-  // Two read-only lists §6.6 owes an operator and this page could not previously show: the
-  // per-dataset licence terms the loader dropped at the boundary until M4.9, and §6.4's axis
-  // artifact, which nobody has authored. Both are facts about the imported corpus, which is
-  // what this card is for. Fetched separately from `/admin/bundle/state` so a failure to read
-  // either one cannot take the import wizard down with it.
+  // Fetched apart from `/admin/bundle/state` so a failure here cannot take the import wizard down.
   let sources = $state(null);
 
-  // Joined in JS: Svelte collapses the whitespace around {#if} blocks, which ate the
-  // separators and rendered "test-v1· vocabulary v1".
+  // Joined in JS: Svelte collapses the whitespace around {#if} blocks, eating the separators.
   const activeLine = $derived(
     bundleState?.active
       ? [
@@ -41,11 +28,7 @@
       : ''
   );
 
-  // `rating_source.url` arrives from the bundle, which is operator-supplied data rather than
-  // this app's own string. §14's posture is that a bundle is trusted to be loaded, not trusted
-  // to be rendered as an href: a `javascript:` value would run in the admin's session on the one
-  // page an admin is certain to visit. The name still prints — the row is the point — it just
-  // stops being a link.
+  // A bundle is trusted to load, not to render as an href: a `javascript:` URL would run here.
   const linkable = (url) => typeof url === 'string' && /^https?:\/\//i.test(url);
 
   async function refresh() {
@@ -57,9 +40,7 @@
     try {
       sources = await get('/admin/data/sources');
     } catch {
-      // Deliberately silent: the wizard above is this page's job and the two lists below are
-      // reference material. A licence list that failed to load must not read as an import that
-      // failed.
+      // Silent: a licence list that failed to load must not read as a failed import.
       sources = null;
     }
   }
@@ -78,11 +59,7 @@
     <div class="bundle-active card">
       <div class="data-lg">{activeLine}</div>
       {#if bundleState.restart_required}
-        <!-- Decision 497: the backend loads a flipped bundle by itself, and the read that fetched
-             this page is one of the moments it does - so reaching this banner means the load
-             FAILED, not that a swap is waiting for the gesture every import used to end in. It
-             says so, and still gives the command, which is the same string README's Recovery
-             section gives so the two cannot drift. [M4.7 ops-09, ds10; decision 497] -->
+        <!-- The backend loads a flipped bundle by itself, so reaching this means that load failed. -->
         <div class="warn data">
           loaded in this process: {bundleState.loaded?.version ?? 'none'} — the backend could not
           load {bundleState.active} by itself (its log says why); once that is fixed,
@@ -90,24 +67,7 @@
         </div>
       {/if}
       {#if bundleState.broken}
-        <!-- The third state `restart_required` cannot express, and the one an operator has to
-             act on fastest: the active row names a bundle whose directory is not there. The
-             backend carries that row's version so every fit is stamped honestly, which also
-             makes `active != loaded` false - so without this line the page reads "a bundle is
-             active, none is loaded, no restart needed", and the only other report of it is one
-             ERROR line at boot. §6.6 makes this page the operator's data. [M4.13, data-03]
-
-             The two banners can no longer render together, and that is settled on the server
-             rather than guarded a second time here: `restart_required` is now `active != loaded
-             AND NOT broken` (decision 258). A condition on this page as well would be two
-             definitions of one rule, which is the shape D3 exists to remove - so what this line
-             owes instead is the ACTION, in both its forms. §2 keeps /data/artifacts on a host
-             bind mount outside the nightly pg_dump - §2 calls the bundle "already immutable
-             files" and dumps Postgres alone - so "database restored, files missing" is a
-             realistic recovery state, and the copy back is a manual one no procedure performs.
-             The second half is new with this milestone: re-importing the ACTIVE version was
-             refused by seed-once and restages its files now, which is the repair this state had
-             none of. [M4.14 step D3, decision 258] -->
+        <!-- The server's `restart_required` excludes `broken`, so the two banners never render together. -->
         <div class="warn data">
           bundle directory missing: {bundleState.missing_path} — the model jobs refuse rather than
           refitting in a zero basis. Restore /data/artifacts from backup and restart backend and
@@ -126,12 +86,6 @@
     </p>
   {/if}
 
-  <!-- `/admin/bundle/state` grew the running job's phase and its stored report in this milestone
-       (decision 253), and §6.6 makes this page the one place an operator reads them: an import
-       started here outlives the request that queued it, so a reload lands on a page the server is
-       still telling `running`. Handed down whole rather than inspected here -- which rows are
-       worth adopting is the import machine's rule, and it is stated once, where the phase names
-       are. [M4.14 review cycle 1, waveE-06] -->
   <BundleImport
     importJob={bundleState.import_job}
     onImported={async () => {
@@ -163,9 +117,6 @@
     <ul>
       {#each bundleState.rebuild_set as r}<li class="why">{r}</li>{/each}
     </ul>
-    <!-- §10 after decisions 162/163: the importer writes ONE report and the section now denies
-         the second one this line used to name, so what an operator reads here is the name of the
-         thing they can actually open. [§10; M4.16 cycle 4, M416-C4D2-SPEC-01] -->
     <p class="why">
       Everything expressed in the old Backbone’s basis is garbage against a new one, so a
       re-import is a planned event with a migration report — never a silent sync.
@@ -173,9 +124,6 @@
   </section>
 
   {#if sources}
-    <!-- §4.1 rule 4's eleven frozen ids, with the terms each dataset ships. The licence column
-         is the one an operator has to read before sharing an archive, so it is a column and not
-         a tooltip. -->
     <section class="terms">
       <div class="data heading">SOURCES AND TERMS</div>
       <table>
@@ -191,12 +139,7 @@
                 {#if linkable(s.url)}<a href={s.url} rel="noreferrer">{s.name}</a>{:else}{s.name}{/if}
               </td>
               <td class="why">{s.license ?? 'not stated'}</td>
-              <!-- `||` and not `??`: four of the eleven frozen ids state no version with the
-                   EMPTY STRING rather than with a NULL (v20260828: tmdb-users,
-                   metacritic-users, metacritic-critics, trakt-comments), and the mapping
-                   deliberately stores what the bundle said. `??` let those through as a blank
-                   cell, which reads as a column the importer dropped rather than as a dataset
-                   that publishes no version. [M4.9 review cycle 1: M49-MIG-04] -->
+              <!-- `||`, not `??`: some datasets state no version as the empty string. -->
               <td class="data">{s.version || '—'}</td>
             </tr>
             {#if s.notes}
@@ -208,21 +151,13 @@
     </section>
 
     {#if !sources.axes.loaded}
-      <!-- Decision 191: the missing artifact becomes a task an operator can see, rather than a
-           warning inside an import report nobody re-reads. (191 also left the loader alone;
-           decision 173 has since moved it off the `axes/` subdirectory a bundle cannot carry,
-           which is why the paths below no longer name one.) -->
       <section class="axes">
         <div class="data heading">OUTSTANDING: AUTHOR THE AXIS ARTIFACT</div>
         <p class="why">
           §6.4 gives each vocabulary facet an authored axis — left pole, right pole, term
           weights — and the bundle ships none. Without them:
         </p>
-        <!-- The sentences are the backend's, like the paths below: what the missing artifact
-             costs is a claim about the importer, and a page that wrote it down itself is how
-             this card came to name only the Map while §6.2 step 5 was off too. Decision 173
-             ships the release without axes, so this is the surface that has to say so.
-             [M4.12 finding 25] -->
+        <!-- The sentences are the backend's: what the missing artifact costs is the importer's claim. -->
         <ul>
           {#each sources.axes.disables as line}<li class="why">{line}</li>{/each}
         </ul>
@@ -239,9 +174,6 @@
   <p class="data">loading…</p>
 {/if}
 
-<!-- §6.6 Data's other four, in the section's own order, and deliberately outside the bundle block
-     above: each is a read of its own, so a board that fails to load says so in its card while the
-     importer still works, and none of them waits on `/admin/bundle/state`. [M5.6 plan E1] -->
 <section aria-label="Acquisition board">
   <AcquisitionBoard />
 </section>
@@ -254,7 +186,6 @@
   <DnaRejects />
 </section>
 
-<!-- Three mounts of one component and three artifacts, never one merged editor (decision 445). -->
 <section aria-label="Ledger editors">
   <h2>Ledger editors</h2>
   <LedgerEditor ledger="adjudications" />
@@ -274,7 +205,6 @@
     font-weight: 600;
   }
   .bundle-active {
-    /* A one-line status band above the import controls, not a card the eye rests in. */
     padding: var(--card-pad-tight);
     margin-bottom: 14px;
   }
@@ -306,8 +236,7 @@
     padding-top: 14px;
     border-top: 1px solid var(--line);
   }
-  /* 48px minimum touch target: the source name is the only tappable thing added here, and on
-     the phone form factor a table cell's own padding does not reach it. */
+  /* A table cell's padding does not make the source link a 48px target. */
   .terms a {
     display: inline-flex;
     align-items: center;

@@ -1,12 +1,3 @@
-/**
- * Where a poster is asked for. Spec v2.1 §6.8; decisions 483 and 484.
- *
- * The helper every 2:3 card reads its `<img src>` from, and the preload Rate runs during its
- * reveal hold. What is pinned is the three things a card can get wrong without anything looking
- * broken: a third-party URL, the wrong key (`/api/art/undefined/poster` on every Tonight card),
- * and the wrong title (the finish prompt's `id` is its own row, not the film's).
- */
-
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { MISSING_FOR_MS, noteMissing, posterSrc, preloadPoster, titleIdOf } from './art.js';
@@ -44,8 +35,7 @@ describe('posterSrc', () => {
     expect(titleIdOf({ title_id: '42' })).toBe(42);
   });
 
-  // A re-seed mints app ids from 1000000000 again for other titles, and the browser keeps a 200
-  // for 180 days without asking: the URL has to change with the database or the old art stays.
+  // A re-seed reuses app ids and the browser keeps a 200 for 180 days, so the URL carries the epoch.
   it("versions an app-minted title's URL by the database, and leaves a corpus id bare", () => {
     session.artEpoch = 'a1b2c3';
     expect(posterSrc({ id: 1000000003 })).toBe('/api/art/1000000003/poster?v=a1b2c3');
@@ -113,10 +103,6 @@ describe('preloading', () => {
   });
 });
 
-// A card whose poster answered 404 dropped its <img>, and the next card for the same title - on
-// the shelf, in the search grid, on the title card - drew one again, failed again and printed
-// another 404 into the console. The page remembers the answer for as long as the browser's own
-// cache would have given the same one.
 describe('a poster the route had nothing for', () => {
   afterEach(() => {
     vi.useRealTimers();

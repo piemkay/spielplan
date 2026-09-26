@@ -1,12 +1,4 @@
-/**
- * A vocabulary term by its name, never by its id. Spec v2.1 §6.8 ("a one-line why in vocabulary
- * terms"); decision 486.
- *
- * `era.wwii` is the key and "World War II" is the term. A payload that carries a term carries its
- * `label` from `dna_term.label`, and this renders that label; for a payload that carries only the
- * id it falls back the way the backend's `label_of` in `db/dna_terms.py` does - the id's leaf,
- * underscores as spaces - so no surface ever prints `pacing.relentless`.
- */
+// A term by its label, never its id; the fallback mirrors `label_of` in `db/dna_terms.py`.
 
 /**
  * @param {string | {term?: string, label?: string | null} | null | undefined} t

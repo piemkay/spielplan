@@ -32,11 +32,6 @@ import {
   whyNumbersLine
 } from './home.svelte.js';
 
-/**
- * The falsifiers, not the happy paths. Each block below breaks one sentence of §6.0 and
- * checks the module refuses it.
- */
-
 describe('the two-mode state machine (§6.0)', () => {
   it('shows shelves when nothing is filtering', () => {
     expect(homeMode({})).toBe('shelves');
@@ -62,7 +57,6 @@ describe('the two-mode state machine (§6.0)', () => {
   });
 
   it('returns to the shelves once the query and the chip are both gone', () => {
-    // The half of §6.0's sentence nothing else in the spec supplies: how a user gets back out.
     expect(homeMode({ q: '', personId: null })).toBe('shelves');
   });
 
@@ -105,7 +99,6 @@ describe('the count line (decision 18)', () => {
   });
 
   it('counts the household library over the shelves, not the whole catalog', () => {
-    // The first household read "13,330 films · 5,747 series hidden" above owned-only shelves.
     const library = { movie: 612, series: 262 };
     expect(libraryLabel({ library, kinds: ['movie'] })).toBe(
       '612 films in your library · 262 series hidden'
@@ -176,13 +169,7 @@ describe('the kind partition (§4.1 rule 5, decision 18)', () => {
   });
 
   it('never merges the two arrays, on a payload that hands both sections one array', () => {
-    // The falsifier for an interleaved ranking, rebuilt. The last assertion used to be
-    // `rows[0].section.items).not.toBe(rows[1].section.items)` against two *distinct* fixture
-    // arrays, which no implementation could ever fail: the objects differ in the fixture, before
-    // `shelfRows` is called. The case that discriminates is the one where the payload hands both
-    // sections the same array — a merging `shelfRows` concatenates or pushes, and the length is
-    // then the tell; one that flattened the shelf would return a single row instead of two.
-    // [§4.1 rule 5, decision 18; M4.10 finding 33]
+    // Both sections share one array: a merging `shelfRows` would grow it or return one row.
     const shared = [{ title_id: 1 }, { title_id: 2 }];
     const rows = shelfRows({
       shelves: [
@@ -202,7 +189,6 @@ describe('the kind partition (§4.1 rule 5, decision 18)', () => {
     expect(rows.map((r) => r.section.items.length), 'the rows grew').toEqual([2, 2]);
     expect(shared, "the payload's own array was mutated").toHaveLength(2);
 
-    // And the ordinary payload, where each section brings its own: still exactly its own items.
     const split = shelfRows(payload);
     expect(split.map((r) => r.section.items.map((i) => i.title_id))).toEqual([[1], [2]]);
   });
@@ -226,10 +212,6 @@ describe('the pending-verdicts banner (proposals 21 and 150)', () => {
     cta: {
       label_wide: 'Rate now',
       label_compact: 'Rate',
-      // The link the server actually emits. `mode=sweep` led this query until decision 203
-      // removed a parameter `GET /api/rate` never declared and this page never read, and a
-      // fixture is where a stale spelling survives longest: the parser only reads `head`, so
-      // nothing here would have failed.
       route: '/rate?head=1123&head=1023'
     }
   };
@@ -305,10 +287,7 @@ describe('the shelf card (proposal 29)', () => {
   });
 
   it('carries the two fields the no-crowd-data badge is decided on', () => {
-    // §8 stage 10's badge is off `e_source`/`item_n`, not off `placement` — PosterCard's own
-    // comment says so. The server moved both out of the decision-117 `model` block for exactly
-    // this reason; a rename that drops them here puts the card straight back on the fallback,
-    // where 111 of the 130 badges Home drew were false. [M4.9 finding 18]
+    // The badge reads `e_source`/`item_n`, which live outside the gated `model` block.
     const warm = toPosterTitle({ title_id: 7, placement: 'cold_tower', item_n: 480, e_source: 'backbone' });
     expect(warm.e_source).toBe('backbone');
     expect(warm.item_n).toBe(480);
@@ -329,10 +308,7 @@ describe('the data voice (§6.8)', () => {
   });
 
   it('spells the fifth facet the way the shipped vocabulary does', () => {
-    // The shipped file is `vocab_characters_v1.tsv` and every shipped term prefix is
-    // `characters`, so the singular named a twelfth facet no row can carry and left the real one
-    // at the neutral. The negative half is the point: seven sites agreed on `character` and the
-    // static guard pinned it, so the palette was consistent and wrong. [M4.9 finding 4]
+    // The shipped vocabulary's prefix is plural: `characters`.
     expect(facetColour('characters')).toBe('var(--facet-characters)');
     expect(facetColour('character')).toBe('var(--ink-4)');
   });
@@ -419,9 +395,6 @@ describe('two kind regions under Both (decision 474)', () => {
   });
 });
 
-// --- the second household test (decision 516) -------------------------------------------------
-
-/** Section signs, decision/proposal numbers and milestone labels: decision 486 clause 2. */
 const REFERENCE = /§\s?\d|decision \d|proposal \d|\bM[0-7](\.\d+)?\b/i;
 
 describe('the Filters control and the grid line', () => {
@@ -449,7 +422,7 @@ describe('the Filters control and the grid line', () => {
   });
 
   it('offers no For you where the server says the member has no order of their own yet', () => {
-    // Review finding UX-1: the server answers `newest` whatever is asked there.
+    // The server answers `newest` whatever is asked there.
     expect(sortOffered('filter', 'newest', false)).toBe(false);
     expect(sortOffered('filter', 'newest', true)).toBe(true);
     expect(sortOffered('filter', 'newest', null), 'a build that does not say').toBe(true);
@@ -463,7 +436,7 @@ describe('the Filters control and the grid line', () => {
   });
 
   it("heads a grid in the member's order at each kind, and only that grid", () => {
-    // Review finding UX-7: decision 515's order is every film, then every series.
+    // The member's order is every film, then every series.
     const items = [
       { id: 1, kind: 'movie' },
       { id: 2, kind: 'movie' },

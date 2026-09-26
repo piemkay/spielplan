@@ -1,9 +1,5 @@
 /**
  * @vitest-environment jsdom
- *
- * §6.1's class-balance widget in the member register: decision 491's floor and copy, decision
- * 486's plain words. The sentence itself is the server's (`rate/balance.py`) and is rendered as
- * sent; what this pins is the frame around it.
  */
 
 import { flushSync, mount, unmount } from 'svelte';

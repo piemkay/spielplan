@@ -1,24 +1,3 @@
-/**
- * What this browser knows about its own subscription. Spec v2.1 §6 preamble, §4.2, §3.1;
- * M4.11 finding 21.
- *
- * Four faults in one screen, and all four came from asking the wrong party a browser-local
- * question. `GET /api/push/state` returns the member's devices — `api/push.py`'s own docstring
- * says "this member's devices. Never the household's" — and the account screen read that list as
- * "this device", so the second phone any member picked up was told it was already registered,
- * shown the first phone's row, and offered only the off switch. Underneath, nothing ever compared
- * the subscription the browser held against the key the server signs with, and the off switch
- * returned a bare `null` when there was nothing local to delete, which the caller turned into an
- * empty device list.
- *
- * ASSERTED HERE AND NOT ONLY IN PLAYWRIGHT, deliberately. These four are pure functions of what `pushManager` returns, and a test double can hand them a
- * subscription minted under a retired VAPID key — which is a state no test browser can be put into,
- * because there is no push service behind one. The story this file cannot tell is the one the
- * coverage row `push-a-second-device-registers-independently` names: only a real second browser
- * context, holding no subscription of its own while the account already has a device row, proves
- * the screen reads "off" and offers the enable control. That is `e2e/specs/12-onboarding.spec.js`.
- */
-
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('$lib/api.js', () => ({ api: vi.fn(), get: vi.fn(), post: vi.fn() }));
@@ -33,12 +12,10 @@ const RETIRED = 'BFJlc3RvcmVk';
 const HELD = 'https://push.example.test/device/held';
 const FRESH = 'https://push.example.test/device/fresh';
 
-/** A `PushSubscription` as far as this module reads one. */
 function subscriptionDouble(endpoint, keyText) {
   return {
     endpoint,
-    // `options.applicationServerKey` is an ArrayBuffer on a real subscription, which is the
-    // shape the mismatch check has to survive — not a Uint8Array, and not base64 text.
+    // A real subscription's `applicationServerKey` is an ArrayBuffer, not bytes or text.
     options: keyText ? { applicationServerKey: toBuffer(keyText) } : {},
     toJSON: () => ({ endpoint, keys: { p256dh: 'p', auth: 'a' } }),
     unsubscribe: vi.fn(async () => true)
@@ -50,12 +27,7 @@ function toBuffer(base64url) {
   return Uint8Array.from(raw, (c) => c.charCodeAt(0)).buffer;
 }
 
-/**
- * The browser around the module: just enough of it that `pushSupported()` is true.
- *
- * `window.navigator` is present because `deviceLabel()` reaches for iOS Safari's `standalone`
- * flag, and a bare `{}` window makes that a TypeError rather than a label.
- */
+// `window.navigator` exists because `deviceLabel()` reads iOS Safari's `standalone`.
 function inBrowser({ subscription = null, permission = 'granted' } = {}) {
   const minted = [];
   const subscribe = vi.fn(async (options) => {
@@ -95,8 +67,7 @@ afterEach(() => {
 
 describe('localEndpoint', () => {
   it('is null on a browser holding no subscription of its own', async () => {
-    // The whole of the second-device fault: this is the state the member's new phone is in while
-    // `/api/push/state` lists the old one, and it has to be distinguishable from "on".
+    // A new phone holds no subscription while `/api/push/state` lists the old one.
     inBrowser();
     expect(await localEndpoint()).toBe(null);
   });
@@ -114,8 +85,7 @@ describe('localEndpoint', () => {
 
 describe('keyMatches', () => {
   it('treats a key the browser does not report as a match, not a mismatch', () => {
-    // Older WebKit has no `options`, and unsubscribing a working phone over a field the browser
-    // never implemented would be a fault worse than the one this check exists for.
+    // Older WebKit has no `options`, and unsubscribing a working phone over it would be worse.
     expect(keyMatches(subscriptionDouble(HELD, null), KEY)).toBe(true);
     expect(keyMatches(subscriptionDouble(HELD, KEY), null)).toBe(true);
   });
@@ -141,8 +111,7 @@ describe('enablePush', () => {
   });
 
   it('keeps a subscription that already matches, and re-posts it', async () => {
-    // The negative control. A check that unsubscribed on every open would rotate a working
-    // phone's endpoint on every account-page visit.
+    // Unsubscribing on every open would rotate a working phone's endpoint on each visit.
     const live = subscriptionDouble(HELD, KEY);
     const { minted } = inBrowser({ subscription: live });
 
@@ -167,8 +136,7 @@ describe('enablePush', () => {
 
 describe('syncSubscription', () => {
   it('does not re-post a subscription bound to a retired key', async () => {
-    // The re-post is what hid the fault: the row came back fresh on every open, so the screen
-    // said "on" for a device the push service would refuse to deliver to.
+    // Re-posting a stale subscription made the screen say "on" for an undeliverable device.
     inBrowser({ subscription: subscriptionDouble(HELD, RETIRED) });
     expect(await syncSubscription({ vapidKey: KEY })).toEqual({
       stale: true,
@@ -193,8 +161,7 @@ describe('syncSubscription', () => {
 
 describe('disablePush', () => {
   it('says plainly that there was nothing local to delete', async () => {
-    // A bare `null` here became `devices = []` in the caller: the screen claimed notifications
-    // were off while the member's other phone stayed subscribed.
+    // A bare `null` here became `devices = []` in the caller.
     inBrowser();
     expect(await disablePush()).toEqual({ removed: false, subscriptions: null });
     expect(api).not.toHaveBeenCalled();
@@ -211,8 +178,7 @@ describe('disablePush', () => {
       body: { endpoint: HELD }
     });
     expect(live.unsubscribe).toHaveBeenCalledTimes(1);
-    // The server's answer is the member's REMAINING devices, which is what keeps another
-    // device's row on screen after this one goes off.
+    // The answer is the member's remaining devices.
     expect(result).toEqual({ removed: true, subscriptions: [{ id: 2 }] });
   });
 });

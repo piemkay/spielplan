@@ -1,11 +1,5 @@
 /**
  * @vitest-environment jsdom
- *
- * The two statuses a catalog card carries about the title itself: "new" (§8 stage 10) and "in
- * library". Spec v2.1 §6.0, §6.8; owner instruction of 2026-09-25 after the first household test.
- *
- * Mounted rather than in Playwright because both are properties of the payload, and the e2e
- * bundle has whichever mix it happens to ship. Unregistered by decision 274.
  */
 
 import { flushSync, mount, unmount } from 'svelte';
@@ -45,8 +39,6 @@ function render(t) {
 
 describe('the "new" badge', () => {
   it('is never worn by a title the crowd has rated, whatever placed it', () => {
-    // Raiders of the Lost Ark: a cold-masked holdout row, served from the Cold Tower, with
-    // 192,061 crowd ratings behind it. It wore "new" on the first household.
     expect(isColdPlaced(title({ e_source: 'cold_tower', placement: 'cold_tower', item_n: 192061 })))
       .toBe(false);
     expect(isColdPlaced(title({ e_source: 'cold_tower', item_n: 0 }))).toBe(true);
@@ -70,10 +62,7 @@ describe('the "in library" chip', () => {
   });
 
   it('is absent from an unowned card and from a card that does not say', () => {
-    // (Unchanged by the second household test: the shelves say once, above them, that they are
-    // the household's library - `ShelfList`'s `shelves-from-library` line.)
-    // A shelf card never says: every shelf is owned-only, and a chip on each of its cards would
-    // carry no information (`toPosterTitle` does not pass `is_owned`).
+    // A shelf card never passes `is_owned`: every shelf is owned-only.
     for (const t of [title({ is_owned: false }), title()]) {
       const app = render(t);
       expect(target.querySelector('[data-testid="owned-chip"]')).toBeNull();

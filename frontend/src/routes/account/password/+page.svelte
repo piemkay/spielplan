@@ -1,10 +1,5 @@
 <script>
-  /**
-   * The forced first-login password change. Spec v2.1 §3.1:
-   *   "a one-time password is issued, the account is locked to a password change at first
-   *    login, and passkey registration is prompted afterwards."
-   * The lock is enforced server-side (`deps.active_user`); this page is the only way through it.
-   */
+  // The first-login lock is enforced server-side (`deps.active_user`); this page is the way through.
   import '$lib/design.css';
   import { goto } from '$app/navigation';
   import { post } from '$lib/api.js';
@@ -17,9 +12,7 @@
   let error = $state('');
   let busy = $state(false);
 
-  // as-14: this page is now reached voluntarily as well, from the account page's Password
-  // card, and the copy said "one-time password" to everybody. The first-login lock is the
-  // only state in which the field the server calls `current_password` holds one.
+  // Also reached voluntarily; only under the first-login lock is the current password a one-time one.
   const forced = $derived(session.user?.must_change_password !== false);
   const tooShort = $derived(next.length > 0 && next.length < 10);
   const mismatch = $derived(confirm.length > 0 && next !== confirm);
@@ -30,13 +23,9 @@
     busy = true;
     try {
       await post('/auth/password', { current_password: current, new_password: next });
-      // The lock is now clear, so this is the first moment `/auth/me` will answer with the
-      // navigation payload the shell renders from. Re-read rather than patching the flag.
+      // The lock is clear only now, so re-read `/auth/me` for the nav rather than patching the flag.
       const user = await refreshUser();
-      // §3.1: "a one-time password is issued, the account is locked to a password change at
-      // first login, and **passkey registration is prompted afterwards**." This is afterwards.
-      // Once, on the way through — not a standing nag on an account page someone may never
-      // want a passkey on.
+      // §3.1 prompts for a passkey after the change: once, here, never as a standing nag.
       const owed = supported() && !user?.passkeys;
       await goto(owed ? '/account?welcome=1' : '/');
     } catch (err) {
@@ -92,17 +81,11 @@
     min-height: 100vh;
     display: grid;
     place-items: center;
-    /* dd27-standalone-header-under-status-bar, and the same rule /login takes, because §3.1
-       hands straight from one to the other: both are bare routes with no shell header, so on
-       the installed app the status bar is drawn over their top 47-59 px. `env()` is 0 on
-       every engine without a notch, so `max()` leaves desktop and the Safari tab untouched.
-       `min-height: 100vh` is deliberate here too — nothing is fixed to the bottom of it. */
+    /* The same status-bar inset as /login: no shell header carries it here. */
     padding: max(24px, env(safe-area-inset-top)) 24px 24px;
   }
   form {
     width: min(400px, 100%);
-    /* The same focal form as /login at min(400px, 100%), and §3.1 hands straight from
-       one to the other at first sign-in — seen back to back, so they take one box. */
     padding: var(--card-pad-roomy);
     display: flex;
     flex-direction: column;

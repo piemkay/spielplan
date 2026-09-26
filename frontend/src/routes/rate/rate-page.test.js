@@ -1,36 +1,11 @@
 /**
  * @vitest-environment jsdom
- *
- * What the Rate surface SAYS, on the two payloads whose copy this milestone moved. Spec v2.1
- * §6.1, §6.8; proposals 37 and 46; M4.10 findings 20 and 21, cycle 1 M410-D8-01 and M410-D8-07.
- *
- * Both defects were in the markup and in nothing else. `GET /api/rate` already reported WHY there
- * was no card (`drained.cause`, one of queue / pool / both) and already marked a card the counter
- * did not call for (`substituted_for`), and the store assigned both verbatim — so every assertion
- * that stopped at `rate.drained` or at `card.substituted_for` passed while the screen said
- * something untrue. §6.8 makes a line the app states about its own state a matter of honesty, and
- * the only layer that can be held to it is the rendered one.
- *
- * NAMED `rate-page.test.js` and not `+page.svelte.test.js`, which is the name the convention in
- * `src/lib` would give it: SvelteKit reserves the `+` prefix inside `src/routes` and `vite build`
- * fails outright on any other `+`-named file ("Files prefixed with + are reserved"), so the
- * obvious name costs the production build.
- *
- * MOUNTED RATHER THAN IN PLAYWRIGHT. Both states need a payload a seeded stack does not hand out
- * on demand: the pool cause needs an account with a standing session, zero verdicts and Battle
- * selected, and the substituted card needs the §6.0 banner's head redraw to land on a battle slot.
- * Reaching either through the suite means writing observations to get there, which is how
- * `11-rate.spec.js` — stateful, filename-ordered, one worker — stops being able to assert anything
- * about a fresh account. Mounted, the payload is the fixture and the render is exact.
  */
 
 import { flushSync, mount, unmount } from 'svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-// The page reads `$page.url` synchronously at init — "`onMount` runs ahead of the effect below,
-// so a deep link arriving as `/rate?head=41&head=57` would otherwise open its first card with no
-// head at all" — so the store has to answer on subscribe. That one read is the whole of this
-// module's surface here, and these cases carry no `?head=`.
+// The page reads `$page.url` synchronously at init, so the store answers on subscribe.
 vi.mock('$app/stores', () => {
   const url = new URL('http://localhost/rate');
   return {
@@ -76,7 +51,7 @@ const envelope = (over = {}) => ({
   ...over
 });
 
-/** `rate/session.DRAINED_CAUSES`, verbatim — the server's sentence, which the page only renders. */
+/** `rate/session.DRAINED_CAUSES`, verbatim. */
 const CAUSES = {
   queue: {
     cause: 'queue',
@@ -120,8 +95,7 @@ let app;
 beforeEach(() => {
   fetchMock = vi.fn();
   vi.stubGlobal('fetch', fetchMock);
-  // Module-level store, shared by every case in the file — the same reset `rank.svelte.test.js`
-  // takes, for the same reason: without it a case asserts the previous case's envelope.
+  // The store is module state shared by every case, so reset it.
   rate.booted = false;
   rate.loading = true;
   rate.busy = false;
@@ -150,13 +124,12 @@ function respond(payload, status = 200) {
   });
 }
 
-/** A macrotask, not a counted number of microtask turns — `api.js` is three hops deep. */
+// A macrotask, not counted microtasks: `api.js` is three hops deep.
 async function settle() {
   await new Promise((resolve) => setTimeout(resolve, 0));
   flushSync();
 }
 
-/** Mount the page the way the router does, and let its `onMount(load)` land. */
 async function open(payload) {
   respond(payload);
   app = mount(RatePage, { target });
@@ -165,15 +138,12 @@ async function open(payload) {
 
 describe("§6.1's empty state, by cause (finding 20, M410-D8-01)", () => {
   it('does not tell a person with no pairs that there is nothing left to queue', async () => {
-    // The first-week path: Battle selected, zero verdicts, so no class holds two titles and no
-    // pair can be drawn. `ensure_card` substitutes a sweep only when the mode is not `battle`,
-    // so this is the one state where the surface has a cause and no card at all.
+    // Battle selected with zero verdicts: the one state with a cause and no card at all.
     await open(envelope({ drained: CAUSES.pool }));
 
     const block = target.querySelector(DRAINED);
     expect(block).toBeTruthy();
     expect(block.textContent).toContain('no new pair to compare yet');
-    // The heading and the CTA are the milestone's own contradiction: the sweep queue is full.
     expect(block.querySelector('h2').textContent).not.toMatch(/left to queue/i);
     expect(block.textContent).not.toMatch(/Sharpen my ranking/);
   });
@@ -184,9 +154,7 @@ describe("§6.1's empty state, by cause (finding 20, M410-D8-01)", () => {
     const block = target.querySelector(DRAINED);
     expect(block.querySelector('a[href="/rank"]')).toBeNull();
 
-    // The CTA has to be the action the server's own sentence names ("Rate a few in Sweep"), and
-    // on this surface that is a mode change rather than a link: proposal 36 makes the mode sticky
-    // from an explicit change, which is exactly what this is.
+    // The CTA is a mode change, not a link: the server's sentence names Sweep.
     respond(envelope({ session: { mode: 'sweep' }, card: substitutedSweep }));
     block.querySelector('[data-testid="rate-drained-cta"]').click();
     await settle();
@@ -197,9 +165,6 @@ describe("§6.1's empty state, by cause (finding 20, M410-D8-01)", () => {
   });
 
   it("keeps proposal 37's end state for the queue that really is spent", async () => {
-    // Proposal 37 was written for this cause and for no other: the queue drained, the ratings
-    // already given still sharpenable, §6.3 the place that does it -- named by the control a
-    // person taps there, never by its section number (decision 486).
     await open(envelope({ session: { mode: 'sweep' }, drained: CAUSES.queue }));
 
     const block = target.querySelector(DRAINED);
@@ -220,11 +185,6 @@ describe("§6.1's empty state, by cause (finding 20, M410-D8-01)", () => {
 
 describe('the substitution line (finding 21, M410-D8-07; C4.5 of the household test)', () => {
   it('prints nothing about the slot over a sweep card that stands in for a battle', async () => {
-    // `substituted_for` stays on the wire, and the sweep card no longer reads it out: "a battle
-    // was due in this slot" told a member about the block machine rather than about the film, and
-    // on a searched-for title it answered the pick with an apology (decision 486). The counter
-    // names the mode the person chose -- the card says what it is by its own shape (A2 of the
-    // 2026-09-26 household test).
     await open(envelope({ card: substitutedSweep }));
 
     expect(target.querySelector('[data-testid="rate-sweep-card"]')).toBeTruthy();
@@ -274,7 +234,6 @@ describe('"a title you know" (C5.2 of the household test)', () => {
     respond(hits);
     input.value = 'heat';
     input.dispatchEvent(new Event('input', { bubbles: true }));
-    // The query waits a beat after the last keystroke, then lands.
     await new Promise((resolve) => setTimeout(resolve, 300));
     await settle();
 

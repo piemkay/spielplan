@@ -1,17 +1,4 @@
 <script>
-  /**
-   * §6.1's block counter — "blocks of 15" — with proposal 46's partition and the mode the
-   * person chose: `7 / 15 this block · film · Mixed` (A2 of the 2026-09-26 household test).
-   *
-   * Decision 35 is the reason this is a component and not a string in the header: "the depth
-   * matches the counter the user is already reading (\"7 / 15 this block\")". The number here
-   * and the number Undo obeys are the same number because both come out of the same response —
-   * `session.block.counter` and `undo.available` — so there is nothing for the client to
-   * recompute and therefore nothing for it to get wrong.
-   *
-   * The fifteen ticks are the same claim drawn rather than spelt: the person can see how far
-   * back Undo reaches without being told.
-   */
   import { counterLine } from '$lib/rate.svelte.js';
 
   let { block, kinds, mode } = $props();
@@ -41,12 +28,7 @@
     display: flex;
     gap: 3px;
   }
-  /* How far through the block, in three volumes of one neutral: the remainder is the line the
-     UI is already drawn with, the part behind you is ink at reading weight, and the slot you are
-     on is full ink. Progress is a fact about the sitting and never a selection, so §6.8's one
-     accent does not pay for it — the ramp's brightness carries what the hue used to, and the
-     fifteen ticks stop competing with whichever pair is actually being chosen between.
-     [§6.8; decision 276] */
+  /* A neutral ramp, not the accent: progress is never a selection (§6.8). */
   .tick {
     height: 3px;
     flex: 1;

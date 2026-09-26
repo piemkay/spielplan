@@ -1,34 +1,6 @@
 <script>
-  /**
-   * Home. Spec v2.1 §6.0 — M0's catalog and M2's shelves are the same surface in two modes.
-   *
-   * §6.0 M2: "the default surface becomes personalized shelves over the catalog. A greeting; a
-   * pending-verdicts banner … then shelves, each with a mandatory one-line why in vocabulary
-   * terms — a shelf that cannot say why it exists doesn't ship."
-   *
-   * §6.0, the only state machine between the two modes: "Search or an active person-filter
-   * switches Home into the catalog grid; clearing it returns the shelves." Both halves matter
-   * — the way *out* of the grid is the half nothing else in the spec supplies, which is why the
-   * person chip is itself the clear control and why every catalog filter renders as a removable
-   * chip beside it (proposals 30 and 152).
-   *
-   * TWO ROUTES, ON PURPOSE. The shelves half comes from `/api/home` (greeting, banner, shelves,
-   * the degraded state, and — only when §6.7's toggle is on — the model annotations and
-   * proposal 28's suppressed list); the grid half stays on `/api/titles`, which is the one route
-   * carrying M0's five filter dimensions. Asking `/api/home` for the grid would silently drop
-   * genre, decade and seen-state.
-   *
-   * §6.7's rail is NOT mounted here any more. It is one drawer in `routes/+layout.svelte`,
-   * beside the toggle that governs it, because mounted here it was reachable from this surface
-   * alone [M4.9 finding 25]. All this file still owes it is proposal 28's suppressed list, which
-   * no other payload carries.
-   *
-   * PHONE FIRST (decision 516). On a phone the first screen of Home was seven filter controls and
-   * the shelves began below the fold (second household test, U1). The kind switch and the search
-   * box stay in view; genre, decade, seen state and "in my library" sit behind one Filters control
-   * that says how many are set, and every set filter still shows as a removable chip. A filtered
-   * grid is ordered for the member by default, with Newest one tap away (the server's `sort`).
-   */
+  // Two modes (§6.0): shelves from `/api/home`, and the catalog grid from `/api/titles`, the only
+  // route with every filter. Search or a person filter switches to the grid; clearing returns.
   import { onMount } from 'svelte';
   import { get, qs } from '$lib/api.js';
   import { session } from '$lib/session.svelte.js';
@@ -62,14 +34,12 @@
   import ShelfList from '$lib/components/ShelfList.svelte';
   import TitleDetail from '$lib/components/TitleDetail.svelte';
 
-  // Decision 474: one switch - Films, Series or Both - never neither (decision 18). A person filter
-  // does not collide with it: on Both, a filmography is complete.
+  // One switch: Films, Series or Both, never neither (decisions 18, 474).
   let kinds = $state(['movie']);
   let q = $state('');
   let genre = $state('');
   let decade = $state('');
   let seen = $state('any');
-  // The catalog lists all of it; this narrows it to what the household can press Play on.
   let owned = $state(false);
   // The person filter is a SET of person ids: see `filterToPerson`.
   let personIds = $state(null);
@@ -83,22 +53,16 @@
   let hidden = $state({});
   let selected = $state(null);
   let loadError = $state('');
-  // Decision 516's one Filters control, shut by default so the shelves are the first screen.
   let filtersOpen = $state(false);
-  // The order the member picked, or null for the server's default; `sortEcho` is the order the
-  // server says it used, which is what the control shows pressed.
+  // `sortEcho` is the order the server says it used, which the control shows pressed.
   let sort = $state(null);
   let sortEcho = $state(null);
-  // Whether the member's own order exists for these kinds at all (the server's
-  // `for_you_available`); null from a build that does not say.
+  // The server's `for_you_available`; null from a build that does not say.
   let forYouAvailable = $state(null);
-  // An empty grid whose other kind holds matches: `{kind, names, total}` (second household test,
-  // U7 - "Broadchurch" with Films selected said "No matches").
+  // An empty grid whose other kind holds matches: `{kind, names, total}`.
   let elsewhere = $state(null);
-  // The weak tail of a search, folded until asked for (U14).
   let showWeak = $state(false);
-  // What a kind switch had to clear, said rather than done silently (U8). It describes that switch
-  // only, so the next list the page asks for - a search, a filter, an order - clears it.
+  // Describes one kind switch only, so the next list the page asks for clears it.
   let kindNote = $state('');
 
   /** @type {any} */
@@ -111,21 +75,15 @@
   const mode = $derived(homeMode({ q, personId: personIds, genre, decade, seen, owned }));
   const reason = $derived(gridReason({ q, personId: personIds, genre, decade, seen, owned }));
   const nFilters = $derived(activeFilterCount({ genre, decade, seen, owned }));
-  // Decision 472 lists the best match first; the hits that only contain the letters somewhere
-  // are the tail, and it is folded rather than dropped (U14 of the second household test).
+  // The weak tail of a search is folded, not dropped.
   const cut = $derived(reason === 'search' ? strongEnd(items, q) : 0);
   const weakItems = $derived(cut ? items.slice(cut) : []);
   const strongItems = $derived(weakItems.length ? items.slice(0, cut) : items);
   // Everything after the last strong hit is weaker, loaded or not: the list is ordered by quality.
   const weakTotal = $derived(weakItems.length ? total - cut : 0);
-  // Films then series, each in the member's order: headed per kind, and said (review finding UX-7).
   const partitioned = $derived(partitionedByKind(kinds, sortEcho));
 
-  // Decision 117 still strips `suppressed` when the toggle is off, so this publishes an absence
-  // as readily as a list. The shell renders it: it has no `/api/home` response of its own and
-  // must not acquire one for a drawer. The teardown is the load-bearing half — proposal 28's
-  // rows say which (shelf, kind) sections did not ship, and left in the drawer on Rate that is
-  // a claim about a surface nobody is looking at.
+  // The shell renders Home's suppressed list; clear it on teardown, or it outlives this surface.
   $effect(() => {
     publishSuppressed(home?.suppressed);
     return () => publishSuppressed([]);
@@ -139,10 +97,7 @@
       owned ? 'in your library' : null
     ].filter(Boolean)
   );
-  // Two lines for two screens. The grid counts the catalog it is listing; the shelves count the
-  // household's own library, which is all they draw on. The shelves used to carry the catalog's
-  // line - "13,330 films · 5,747 series hidden" over shelves of owned titles - which counted
-  // something the screen was not showing. Nothing is said before `/api/home` has answered.
+  // The grid counts the catalog it lists; the shelves count the household's own library.
   const count = $derived(
     mode === 'grid'
       ? countLabel({ total, hidden, kinds, filters: activeFilters })
@@ -151,15 +106,11 @@
         : ''
   );
 
-  // The shell's own test for an admin (the account menu offers the Admin view), so Home and the
-  // header cannot disagree about who reads the operator's words.
+  // The shell's own admin test, so Home and the header agree on who reads the operator's words.
   const canAdmin = $derived(
     (session.user?.nav?.account ?? []).some((entry) => entry.key === 'admin')
   );
-  // §3.1 names the bundle-less state "no bundle imported", and that name is the operator's: only
-  // an admin reads it, and a member reads the same fact as "no movie data yet" (decision 486
-  // clause 6). Neither is true while a restart is owed - a bundle IS imported and this server has
-  // not loaded it (decision 497) - and then each reads what the header's pill says.
+  // "no bundle imported" is the operator's name for the state (§3.1); a member reads plain words.
   const bundleNote = $derived(
     session.hasBundle
       ? ''
@@ -168,8 +119,7 @@
         : canAdmin ? ' · no bundle imported' : ' · no movie data yet'
   );
 
-  // §2's TZ and proposal 22's four bands are the server's answer; the local one is only a
-  // placeholder for the frame before `/api/home` lands.
+  // The greeting is the server's (the install's TZ); the local band only fills the first frame.
   const greeting = $derived(
     home?.greeting?.text ??
       `${fallbackBand()}${session.user ? `, ${session.user.name}` : ''}`
@@ -183,11 +133,9 @@
     return 'Good evening';
   }
 
-  // Filter changes fire overlapping requests; without a sequence number a slow earlier
-  // response lands after a fast later one and the grid shows the wrong filter's results.
+  // Overlapping filter requests: a sequence number keeps a slow earlier answer from landing last.
   let requestSeq = 0;
 
-  /** The grid's query for these kinds: every filter, and the order the member picked if any. */
   function titlesQuery(forKinds, { limit = LIMIT, offset: from = 0 } = {}) {
     return `/titles${qs({
       kind: forKinds,
@@ -231,12 +179,7 @@
     }
   }
 
-  /**
-   * An empty grid asks the kind it was not showing. `hidden` already says how many match there
-   * under the same filters; this names the first two, so the empty state can say "Found in Series:
-   * Broadchurch" and offer the switch instead of "Nothing matches" (U7 of the second household
-   * test). Tied to the grid's own sequence number, so a later filter never inherits the answer.
-   */
+  // An empty grid names matches in the kind it was not showing, tied to the grid's own seq.
   async function findElsewhere(seq, counts) {
     const kind = otherKinds(kinds).find((k) => (counts[k] ?? 0) > 0);
     if (!kind) return;
@@ -253,8 +196,7 @@
 
   let homeSeq = 0;
 
-  /** The shelves half. Depends on the kind selection and on nothing else — which is why
-   *  typing into search does not refetch it, and why coming back out of the grid is instant. */
+  // Depends on the kind selection only, so search does not refetch it.
   async function loadShelves() {
     const seq = ++homeSeq;
     homeLoading = true;
@@ -270,11 +212,7 @@
     }
   }
 
-  // The vocabulary read needs the same guard for the same reason, and its own counter rather
-  // than `requestSeq`: the search box and the four filters fire `load()` alone, and a shared
-  // number would let one of those bumps discard a facets response that is still the newest —
-  // leaving both selects blank until the next kind tap. Two kind taps inside one round trip are
-  // what this catches: the film genres would otherwise settle above the series grid.
+  // Its own counter: `load()` bumps `requestSeq` alone, which must not discard the newest facets read.
   let facetSeq = 0;
 
   /** The facets it applied; null when the read failed, undefined when a newer read superseded it. */
@@ -290,18 +228,8 @@
     await Promise.all([load(), loadFacets(), loadShelves()]);
   });
 
-  // §6.7's toggle lives in the account dropdown, three components away. When it flips, the
-  // shelves have to be re-read: the annotations are not hidden client-side, they are absent
-  // from the payload, so the only way to show them is to ask again.
-  //
-  // Watching `modelGate.epoch` rather than `session.user.show_model` is load-bearing.
-  // `setShowModel` sets the local user optimistically and awaits the POST afterwards, so
-  // refetching on the local flip races the write and returns the pre-toggle payload — the
-  // toggle moves and the annotations never arrive. The chip bumps the epoch once the server has
-  // it. (Closing an open drawer on the same flip is the shell's job now — it holds the drawer.)
-  //
-  // `lastEpoch` is deliberately NOT `$state`: it is the effect's own memory, and a reactive
-  // one would be read and written in the same effect, which re-runs it forever.
+  // A Show the model flip re-reads the shelves once the server has the preference (the epoch, not
+  // the optimistic flag). `lastEpoch` is not `$state`, or the effect would loop.
   let lastEpoch = modelGate.epoch;
   $effect(() => {
     const epoch = modelGate.epoch;
@@ -311,19 +239,13 @@
   });
 
   async function chooseKinds(choice) {
-    // Every position selects at least one kind, so "neither" - the unpartitioned query §4.1
-    // rule 5 exists to prevent - has no tap that reaches it (decisions 18 and 474).
     if (kindChoice(kinds) === choice) return;
     kinds = kindsFor(choice);
-    // Proposal 32: "switching it closes any open title card, because the card's tier and
-    // ledger weight are per-kind quantities."
+    // The open card's tier and weight are per-kind, so switching closes it (proposal 32).
     selected = null;
     kindNote = '';
     loadShelves();
-    // The facet vocabulary is scoped to the selection, so a genre that only exists in the kind
-    // just switched off would stay selected and silently return nothing. It used to be cleared on
-    // every switch, which lost "Drama" on the way from Films to Series (second household test,
-    // U8): now a filter the new kinds carry stays, and one they do not is cleared and named.
+    // A filter the new kinds carry stays; one they lack is cleared and named.
     const found = await loadFacets();
     if (found === undefined) return;     // a newer tap is on its way and will load
     const dropped = [];
@@ -336,8 +258,7 @@
       dropped.push(`${decade}s`);
       decade = '';
     }
-    // The load first: a new list clears the last switch's note, and this one names what the
-    // switch it belongs to cleared.
+    // Load first: a new list clears the old note, then this switch names what it cleared.
     load();
     if (dropped.length) {
       const noun = choice === 'series' ? 'series' : choice === 'movie' ? 'films' : 'titles';
@@ -348,21 +269,14 @@
 
   let debounce;
   function onQuery() {
-    // §6.0: search switches Home into the grid AND closes the open detail card. Done on the
-    // keystroke rather than after the debounce, so the shelves do not sit under a query that
-    // has already been typed.
+    // Close the card on the keystroke, not after the debounce.
     selected = null;
     clearTimeout(debounce);
     debounce = setTimeout(() => load(), 220);
   }
 
   function filterToPerson(person) {
-    // Proposal 30: "Tapping a credit navigates to Home, closes the title card, and clears the
-    // search box; the person chip is itself the clear control. Matching is by `person.id`."
-    // A credit row can stand for several person rows of one human - two sources minted them, and
-    // `db/library.fold_credits` folds them into the row and names them all in `person_ids` - so
-    // the filmography is the whole set's; the lead id alone was half of it. [C9.3, C9.4 of the
-    // 2026-09-25 user test]
+    // A credit row may fold several person rows of one human (`person_ids`), so filter by the set.
     personIds = person.person_ids?.length ? person.person_ids : [person.person_id ?? person.id];
     personName = person.name;
     selected = null;
@@ -370,13 +284,11 @@
     load();
   }
 
-  // The grid holds `seen_state` per card, so a toggle on the open panel has to reach it — and
-  // when the seen filter is active the card has just stopped matching, so it leaves.
+  // With the seen filter active, a toggled card stops matching and leaves.
   function onSeenChange(titleId, state) {
     items = items.map((t) => (t.id === titleId ? { ...t, seen_state: state } : t));
     if (seen !== 'any' && seen !== state) load();
-    // A verdict-less title that just became `seen` belongs in §6.0's banner, and one that
-    // stopped being seen leaves it. The banner is the server's population, so re-read it.
+    // The banner is the server's population, so re-read it.
     loadShelves();
   }
 
@@ -400,17 +312,7 @@
   }
 </script>
 
-<!-- §7.3: the queued finish prompt, above everything, because it is about the thing that
-     just happened in the living room. Proposal 150 keeps it separate from the banner below:
-     one title, armed by playback, and its first tap is what writes `seen`.
-
-     `onAnswered` is decision 212. The prompt's write is the same write the title card makes, and
-     that one has re-read the shelves since M2 for a reason stated twenty lines up: a verdict-less
-     title that just became `seen` belongs in §6.0's banner, and one that stopped being seen leaves
-     it. Mounted with no props, this card emptied its own queue and left the banner below it stale —
-     including the banner it had just added a title to. `loadShelves()` and not `onSeenChange`
-     deliberately: the grid is only on screen under a search or a filter (§6.0's mode machine), and
-     the banner is the population this answer actually moved. -->
+<!-- Its answer moves the banner's population, so it re-reads the shelves (decision 212). -->
 <FinishPrompt onAnswered={loadShelves} />
 
 <div class="head">
@@ -418,15 +320,11 @@
     <h1 data-testid="home-greeting" data-band={home?.greeting?.band ?? ""}>{greeting}</h1>
   </div>
 
-  <!-- §6.0's pending-verdicts banner. Server copy, server link. -->
   <PendingVerdicts banner={home?.banner} />
 
   <div class="controls">
     <div class="kinds" role="group" aria-label="Kind">
-      <!-- One switch, three positions (decision 474): Series switches to series rather than
-           adding them under the films. On the shelves this is §4.1 rule 5's partition, and Both
-           is two kind regions; on the catalog grid, which merely lists in a kind-independent
-           order, it is only a filter — decision 18 permits the grid to interleave. -->
+      <!-- On the shelves the switch partitions (§4.1 rule 5); on the grid it is only a filter. -->
       {#each KIND_CHOICES as choice (choice.id)}
         <button
           class="pill"
@@ -446,8 +344,6 @@
         placeholder="search title, alias"
         aria-label="Search titles"
       />
-      <!-- Decision 516: the four catalog filters behind one control, so a phone opens on the
-           shelves. It says how many are set, and each set one is also a chip below. -->
       <button
         class="pill filtertoggle"
         aria-expanded={filtersOpen}
@@ -479,9 +375,6 @@
         <option value="seen">seen</option>
         <option value="unseen">unseen</option>
       </select>
-      <!-- The catalog is all of the bundle, and the household owns a few hundred of its thousands:
-           this is the one-tap way to the ones Play works on. Off by default, so §6.0 M0's catalog
-           stays the catalog. -->
       <button
         class="pill"
         aria-pressed={owned}
@@ -494,13 +387,10 @@
   {#if personIds || (nFilters && !filtersOpen)}
     <div class="filters">
       {#if personIds}
-        <!-- Proposal 30: the chip IS the clear control, and it is the only way back out of a
-             filmography — so it is always visible and always removable. -->
+        <!-- The chip is the only way out of a filmography, so it is always visible. -->
         <button class="pill on" onclick={clearPerson} data-testid="person-chip">{personName} ✕</button>
       {/if}
-      <!-- Every set filter stays in view as its own clear control while the panel is shut: a
-           narrowed grid never hides why it is narrow (proposal 152's chips, decision 516). With
-           the panel open its own controls say the same, and the chips would say it twice. -->
+      <!-- A narrowed grid never hides why it is narrow; the open panel already says it. -->
       {#if !filtersOpen}
         {#if genre}
           <button class="pill on" onclick={() => clearFilter('genre')} data-testid="genre-chip">{genre} ✕</button>
@@ -529,14 +419,7 @@
 </div>
 
 {#if home?.degraded && home.degraded.state !== 'no_bundle'}
-  <!-- Proposal 20's two first-week states. Neither is an error, and neither is optional.
-
-       `no_bundle` is deliberately NOT rendered here. §3.1's no-bundle state already has a
-       panel further down — M0's, with the copy the first-boot spec asserts — and it carries the
-       same "Import a bundle" CTA to the same route. Rendering both put two identical links on
-       one screen: not merely untidy, but a page that says the same thing twice and a locator
-       that cannot resolve. The server still sends the state, and `zero_verdicts` (which has no
-       older panel) is what this one is for. -->
+  <!-- `no_bundle` is rendered further down, by the panel the first-boot spec asserts. -->
   <div class="card degraded" data-testid="home-degraded" data-state={home.degraded.state}>
     <h2>{home.degraded.headline}</h2>
     <p class="why">{home.degraded.why}</p>
@@ -546,11 +429,7 @@
   </div>
 {/if}
 
-<!-- §3.1's bundle-less state, said rather than crashed on, in the two places Home can meet it.
-     Only an admin reads §3.1's name for it and gets the door to §6.6 Data; a member is told the
-     same fact in the member register and offered no door they would meet a 403 behind (decision
-     486 clause 6), as the header already does. While a restart is owed a bundle IS imported and
-     "No artifact bundle has been imported" would be false (decision 497). -->
+<!-- Only an admin gets §3.1's name for the state and a door; a member gets plain words and none. -->
 {#snippet noBundle()}
   <h2>Nothing to show yet</h2>
   {#if session.restartRequired}
@@ -582,9 +461,7 @@
       {gridLine(reason)}
     </p>
     {#if sortOffered(reason, sortEcho, forYouAvailable)}
-      <!-- Decision 516: a filtered grid is read in the member's own order by default - "best
-           sci-fi for me in my library" - with the year order one tap away. The pressed position is
-           the order the server says it used, never the one this page asked for. -->
+      <!-- The pressed position is the order the server says it used, never the one asked for. -->
       <div class="sort" role="group" aria-label="Order">
         {#each SORT_CHOICES as c (c.id)}
           <button
@@ -612,7 +489,6 @@
       {#if !session.hasBundle}
         {@render noBundle()}
       {:else if elsewhere}
-        <!-- The other kind holds matches: say where, and offer the switch (U7). -->
         <h2>Not in {kindChoice(kinds) === 'series' ? 'series' : 'films'}</h2>
         <p class="why" data-testid="found-elsewhere">
           {elsewhereLine(elsewhere.kind, elsewhere.names, elsewhere.total)}
@@ -624,17 +500,8 @@
         >{elsewhere.kind === 'series' ? 'Show series' : 'Show films'}</button>
       {:else}
         <h2>No matches</h2>
-        <!-- [M4.9 finding 19] This said "try a DNA term — cosy, dread, slow-burn — or check the
-             Map's compositional search", proposal 23's copy, adopted from the prototype ahead of
-             the routes it describes. `list_titles` has no `dna` parameter at all and its search
-             predicate is `lower(t.name) LIKE` or the same over `title_alias`; the Map is §6.4
-             and renders M6's placeholder. The one screen whose job is to rescue a failed search
-             was sending people to two dead ends, so it now names the dimensions §6.0's M0
-             catalog really has, in §6.8's quiet register. Making `q` search DNA terms instead is
-             not the fix — §6.4 is where compositional search is specified, and M6 owns it. -->
-        <!-- "Nothing in the library matches" was false twice over: the grid lists the whole
-             catalog unless "in my library" is on, and it said so about a series the Films
-             position was hiding (second household test, U7). -->
+        <!-- Names the dimensions the catalog search really has. -->
+        <!-- The grid lists the whole catalog unless "in my library" is on. -->
         <p class="why">{owned ? 'Nothing in your library matches.' : 'Nothing matches.'}</p>
         <p class="data" data-testid="no-matches-help">
           search reads the title and its aliases · the kind switch and Filters (genre, decade,
@@ -644,12 +511,7 @@
     </div>
   {:else}
     {#if items.some(isColdPlaced)}
-      <!-- §8 stage 10's chip explains itself through a `title=` attribute, which is a hover and
-           does not exist on the form factor §6's preamble makes primary. Decision 278 carried the
-           sentence once per shelf row for that reason — and this grid is the other surface the
-           same card renders on, reached by the search box, a filter chip or a tapped credit, with
-           no shelf header in it. Carried here on the same terms: once for the screen, not once
-           per poster. [§6.8; decision 278; review cycle 2: M415-C2-COMP-06] -->
+      <!-- The badge's why, said once for the grid: a title= tooltip does not exist on touch. -->
       <p class="why" data-testid="catalog-cold-note">
         Cards marked "new" have no outside ratings yet — we placed them by what they're about.
       </p>
@@ -663,9 +525,7 @@
       {/each}
     </div>
     {#if weakItems.length}
-      <!-- U14 of the second household test: "Up" listed 361 films, "Superman" and "Cupid" among
-           them. The hits that only contain the letters somewhere come after every closer match
-           (decision 472) and wait behind one button rather than filling the screen. -->
+      <!-- Hits that only contain the letters wait behind one button. -->
       {#if showWeak}
         <p class="why weakhead" data-testid="weak-matches-head">Looser matches</p>
         <div class="grid" data-testid="weak-matches">
@@ -694,8 +554,7 @@
     {@render noBundle()}
   </div>
 {:else}
-  <!-- The mode marker stays for the tests that read `data-mode`, and says nothing a member has to
-       read: "6 shelves · each one says why it exists" described the design, not the evening. -->
+  <!-- The marker stays for the tests that read `data-mode`. -->
   <div class="sr-only" data-testid="home-mode" data-mode="shelves">your shelves</div>
   {#if homeError}
     <div class="empty card"><p>{homeError}</p></div>
@@ -741,8 +600,6 @@
     display: flex;
     gap: 6px;
   }
-  /* The search box and the Filters control share a row, which wraps under the kind switch on a
-     phone: two rows of controls above the shelves instead of five (decision 516). */
   .searchrow {
     display: flex;
     gap: 8px;
@@ -783,24 +640,13 @@
     font-size: 11px;
     color: var(--ink-3);
   }
-  /* 16 px is iOS Safari's focus-zoom threshold, not a taste: below it the page magnifies on
-     focus and never magnifies back, so these three filters would leave a member reading Home
-     with the tab bar off-screen. `design.css`'s coarse block already says 16 px for `select`,
-     but a bare element selector is (0,0,1) and this scoped one is (0,1,1) — specificity, not
-     intent, decides which rule reaches the control, so the global one never arrives here.
-     §6's preamble makes the phone the primary form factor, which makes the coarse size the real
-     size; the 11 px above stays, because a mouse has no such threshold. Placed straight after
-     the rule it overrides, since the two selectors tie and source order then settles it.
-     [M4.15 finding 3] */
+  /* 16px: iOS Safari zooms on focus below it, and this scoped rule outranks design.css's 16px. */
   @media (pointer: coarse) {
     select {
       font-size: 16px;
     }
   }
-  /* A native select is as wide as its longest option, and 16 px monospace makes a 37-character
-     genre about 380 px against the iPhone 13's ~358: the control overflowed and the whole page
-     scrolled sideways. Decision 473's vocabulary removed the long labels; this keeps any future
-     long option inside the row, which is the phone-first rule the e2e sweep checks. */
+  /* A native select is as wide as its longest option, which can outgrow a phone. */
   .filterpanel select {
     max-width: 100%;
     min-width: 0;
@@ -809,12 +655,7 @@
   .filterpanel select.genre {
     flex: 1 1 12rem;
   }
-  /* In flow, not `position: absolute`. `main` is the scroller but not a containing block, so an
-     absolutely placed marker escaped it and sat at its static position below the fold - 800 px
-     down on a 664 px phone once the banner and the first-week card were on screen - which made
-     the DOCUMENT scroll as well: a second vertical scrollbar, a blank band under the tab bar, and
-     with a classic scrollbar the few pixels of sideways scroll the household saw (second household
-     test, U11). A 1 px box with a -1 px margin takes no room in flow and cannot escape. */
+  /* In flow, not absolute: `main` is not a containing block, so an absolute marker scrolled the page. */
   .sr-only {
     width: 1px;
     height: 1px;
@@ -881,8 +722,6 @@
     padding: 22px 0;
   }
   .empty {
-    /* A centred message with one CTA, not a row in a stack — and it shares this slot
-       with ShelfList's own empty state, so the two are one box or they are a bug. */
     padding: var(--card-pad-roomy);
     text-align: center;
     display: flex;

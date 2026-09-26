@@ -2,8 +2,6 @@ import { describe, expect, it } from 'vitest';
 
 import { quoteText } from './quote.js';
 
-/** §4.1 rule 1 and §6.0: a quote cut from something longer says so, and says nothing else. */
-
 describe('quoteText (evidence quotes as fragments)', () => {
   it('marks a span that starts mid-sentence and stops short of its end', () => {
     expect(quoteText("not this serious, gritty crime epic that's being attempted here")).toBe(
@@ -30,8 +28,7 @@ describe('quoteText (evidence quotes as fragments)', () => {
     expect(quoteText(stored).replaceAll('…', '')).toBe(stored);
     expect(quoteText('')).toBe('');
     expect(quoteText(null)).toBe('');
-    // A span that opens on a digit, or on a quotation mark before a capital, is not a lower-case
-    // start.
+    // A digit start is not a lower-case start.
     expect(quoteText('1959, and a hearing.')).toBe('1959, and a hearing.');
   });
 });

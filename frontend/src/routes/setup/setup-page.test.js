@@ -1,15 +1,7 @@
 /**
  * @vitest-environment jsdom
  *
- * The wizard's bundle step when a restart is owed. Spec v2.1 §3.1, §10; decision 497.
- *
- * The first household's wizard ended on the importer's "Restart backend and worker" with no
- * command in it, over a header saying "no bundle imported". The backend now loads an imported
- * bundle by itself, so the step says so; the one state left that owes a restart - a bundle the
- * backend could not load - is named on this step with the command, for an operator who comes back
- * to it later rather than watching an import finish here.
- *
- * Named `setup-page.test.js` because SvelteKit reserves the `+` prefix inside `src/routes`.
+ * Not `+page.test.js`: SvelteKit reserves the `+` prefix inside `src/routes`.
  */
 
 import { flushSync, mount, unmount } from 'svelte';
@@ -26,8 +18,7 @@ let target;
 beforeEach(() => {
   target = document.createElement('div');
   document.body.appendChild(target);
-  // An admin exists, so the page skips its own bootstrap and opens past step one; nobody is
-  // signed in on this device, so the importer asks the admin-only state route nothing.
+  // An admin exists and nobody is signed in, so the page opens past step one.
   Object.assign(session, { user: null, setup: { required: false, note: 'ready' } });
 });
 

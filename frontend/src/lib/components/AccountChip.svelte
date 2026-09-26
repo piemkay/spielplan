@@ -1,10 +1,4 @@
 <script>
-  /**
-   * Account chip. Spec v2.1 §3.2:
-   *   "the account chip switches between member profiles, gated by the per-user PIN
-   *    (the chip reads 'member · passkey + PIN'). Logout clears the session cookie only —
-   *    passkeys remain registered."
-   */
   import { authMethodLine, refreshUser, roleWord, session, setShowModel } from '$lib/session.svelte.js';
   import { get, post } from '$lib/api.js';
   import { modelGateSettled } from '$lib/home.svelte.js';
@@ -20,9 +14,6 @@
   let error = $state('');
 
   const initial = $derived((session.user?.name ?? '?').charAt(0).toUpperCase());
-  // fe-13: this was the constant 'passkey + PIN' for everyone, so a new member with neither
-  // read their own chip as a claim about credentials they did not have. §3.2's own example
-  // string is an inventory; `authMethodLine` reads the inventory `/auth/me` already carries.
   const method = $derived(authMethodLine(session.user));
   const others = $derived(switchable.filter((u) => u.id !== session.user?.id));
 
@@ -30,20 +21,13 @@
     open = !open;
     error = '';
     switching = null;
-    // Re-read on every open, not only when the list is empty: a PIN set on the other person's
-    // phone makes them switchable here, and the guard that skipped the refetch meant the only
-    // way to see it was a page reload (fe-13).
+    // Re-read on every open: a PIN set on another phone makes that profile switchable.
     if (open) {
       switchable = (await get('/auth/switchable').catch(() => [])) ?? [];
     }
   }
 
-  /**
-   * The one way out, for proposal 131's outside tap and Escape and for the entries' own taps.
-   *
-   * It does not reset `switching` or `error`: `toggle()` already clears both on the way back in,
-   * and clearing them here would discard a half-typed PIN on a stray tap rather than on a reopen.
-   */
+  // Leaves `switching` and `error` alone, so a stray outside tap keeps a half-typed PIN.
   function closeMenu() {
     open = false;
   }
@@ -51,9 +35,7 @@
   async function toggleModel() {
     try {
       await setShowModel(!session.user?.show_model);
-      // AFTER the await, not before. Decision 117's gate is applied by the server, so a
-      // surface that re-reads its payload on the optimistic local flip races this write and
-      // gets the pre-toggle answer back — the switch moves and the rail never appears.
+      // After the await: the server applies the gate, so an earlier re-read gets the pre-toggle payload.
       modelGateSettled();
     } catch (err) {
       error = err.message;
@@ -64,8 +46,7 @@
     error = '';
     try {
       await post('/auth/switch', { user_id: switching.id, pin });
-      // The switch response is identity only; the new profile's navigation is a different
-      // answer (§6.6 is admin-role only), so re-read rather than patching the old object.
+      // The switch response is identity only; re-read for the new profile's nav.
       await refreshUser();
       open = false;
       pin = '';
@@ -79,12 +60,7 @@
   }
 </script>
 
-<!-- Proposal 131: "Every popover, menu and sheet dismisses on outside click and on Escape." The
-     action goes on `.wrap` rather than on `.menu`, because the chip button is inside `.wrap`: an
-     outside-handler scoped to the menu would fire on the chip's own pointerdown, close, and then
-     let the click reopen it — a menu that cannot be tapped shut, which is the same defect from the
-     other side. It is applied unconditionally because `.wrap` is unconditional; closing a menu
-     that is already closed is the no-op it looks like. [proposals 127, 131] -->
+<!-- On .wrap, not .menu: a menu-scoped handler would fire on the chip's own pointerdown. -->
 <div class="wrap" use:dismiss={closeMenu}>
   <button class="chip" onclick={toggle} aria-expanded={open} data-testid="account-chip">
     <span class="avatar">{initial}</span>
@@ -96,7 +72,6 @@
     <div class="menu">
       <div class="head">
         <div class="name">{session.user?.name}</div>
-        <!-- §3.2's inventory in words (decision 518): "member · password" read as a code. -->
         <div class="why line" data-testid="account-line">{roleWord(session.user?.role)} · {method}</div>
       </div>
 
@@ -117,27 +92,13 @@
           </div>
         </div>
       {:else}
-        <!-- §6.6 is admin-role only. The entries come from the server's nav payload, so a
-             member's browser never receives the admin links at all — hidden, not disabled. -->
+        <!-- Entries come from the server's nav payload: a member's browser never receives admin links. -->
         <div class="group">
           {#each session.user?.nav?.account ?? [] as entry (entry.key)}
             <a href={entry.href} data-nav={entry.key} onclick={closeMenu}>{entry.label}</a>
           {/each}
         </div>
 
-        <!-- §6.7, owner decision 2026-08-29: one global per-user "show the model" toggle,
-             default off, here rather than on a settings page — it is a debugging instrument
-             reached often and briefly, and this dropdown is on every screen. It governs the
-             transparency rail, the inline numeric annotations and, since decision 486 amended
-             decision 117, the title card's model line too. The hint says so in the member
-             register: it read "the §6.7 event rail and every inline number — the title card's
-             b(t) · β · gate line is not gated", to a member.
-
-             "On every screen" is now true of the thing it governs as well: `+layout.svelte`
-             mounts the one `ModelRail` and its trigger in this same header, so the switch and
-             the drawer it opens are reachable from the same set of surfaces [M4.9 finding 25].
-             This component still writes only the preference — it does not open the drawer, and
-             turning the switch off closes it from the shell rather than from here. -->
         <div class="group bordered">
           <button
             class="pref"
@@ -174,19 +135,12 @@
             {/each}
           </div>
         {:else}
-          <!-- The state every household starts in had no branch at all, so the section simply
-               was not there and §3.2's switch looked unimplemented. A profile becomes
-               switchable by setting a PIN, and that is on the account page (fe-13). -->
           <div class="group bordered">
             <div class="data heading">SWITCH PROFILE</div>
-            <!-- In words (decision 518): "Nobody else has a switch PIN yet" named the mechanism
-                 and not what it does. -->
             <div class="why hint">
               No one else can be switched to yet. Each person sets a four-digit PIN on their
               account page, and then appears here.
-              <!-- The menu's other navigating link, and it closes for the same reason the entries
-                   above do: the shell is persistent, so a link that does not dismiss carries the
-                   dropdown onto /account with it. -->
+              <!-- Closes the menu: the shell persists, so an open menu would follow onto /account. -->
               <a href="/account" onclick={closeMenu}>Set your PIN on the account page.</a>
             </div>
           </div>
@@ -217,13 +171,7 @@
     font-size: 12.5px;
     cursor: pointer;
   }
-  /* §6.8 spends the one accent "on selection and primary actions" — nothing else. Whose session
-     this is is neither: an ember disc on the chip put the accent on every authed surface at once,
-     permanently, next to the one thing that was actually selected. `--identity` is the role token
-     `design.css` mints for it, and the initial comes with it: `--ember-ink` is a near-black meant
-     for an ember fill, and on `.avatar.sm` — whose background is `u.colour ?? var(--card-raised)`
-     and whose `colour` column no code path has ever written — it was near-black on near-black.
-     [§6.8; decision 276] */
+  /* Identity is not a selection, so no accent (§6.8). */
   .avatar {
     width: 22px;
     height: 22px;
@@ -368,15 +316,7 @@
     padding: 0 10px 8px;
   }
 
-  /* §6 preamble: "phone-first (48 px targets, one-handed)". `design.css`'s coarse block raises
-     `.pill, .btn-primary, .btn-ghost, button, select, [role='button']` and a bare `<a>` is in
-     none of those — deliberately, because widening it to `a[href]` would grow every inline prose
-     link in the app. So the rule lands where the anchors are. These entries are the only
-     phone path to /account and /admin at all (`api/auth.py`'s SURFACES carries neither), and at
-     `padding: 9px 10px` they measured about 34 px, sitting four pixels above a `Log out` button
-     that the global rule had already taken to 48. This is what `NavRail.svelte` does for its own
-     links; what it is not is a restyle of the entries as pills, which would spend the selection
-     grammar §6.8 reserves on a list of destinations. */
+  /* design.css's coarse floor skips a bare <a>, and these are the phone's only path to /account. */
   @media (pointer: coarse) {
     .group a {
       min-height: var(--touch);

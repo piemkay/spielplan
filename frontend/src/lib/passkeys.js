@@ -1,14 +1,4 @@
-/**
- * WebAuthn in the browser. Spec v2.1 §3.2 — passkeys are primary.
- *
- * The server speaks the JSON encoding py_webauthn emits (every binary field base64url); the
- * `navigator.credentials` API speaks ArrayBuffers. This module is that translation and
- * nothing else — no policy, no error copy, so the two ends of a ceremony cannot disagree
- * about the wire format in two different files.
- *
- * base64url, not base64: the alphabet differs in two characters and the padding is absent.
- * Getting that wrong produces a credential id the server looks up and never finds.
- */
+// Translates py_webauthn's base64url JSON to and from navigator.credentials' ArrayBuffers.
 
 import { post } from '$lib/api.js';
 
@@ -49,20 +39,9 @@ function requestOptions(options) {
   };
 }
 
-/**
- * Register a passkey for the signed-in user. §3.2: multiple per user (phone + desktop), so
- * the label is what tells them apart on the account page a year later.
- */
 export async function registerPasskey(label) {
   const { ceremony_id, options } = await post('/auth/passkey/register/options', {});
-  // One cast per ceremony, not one per field. `navigator.credentials.create()` is typed as
-  // returning lib.dom's `Credential`, which carries `id` and `type` and none of WebAuthn's
-  // `rawId`, `response` or `getClientExtensionResults`: the twelve errors
-  // `npm --prefix frontend run check` reported in this file were twelve views of that one
-  // absent type, and twelve casts would have been twelve places to keep in step. The idiom is
-  // `push.js:106`'s, for the same reason it gives — the platform is ahead of lib.dom. Casting
-  // the ceremony's result and not each read also keeps the block below reading as what it is:
-  // the wire format this module exists to translate (§3.2). [M4.15 finding 26]
+  // One cast per ceremony: lib.dom types the result as a bare `Credential`.
   const credential = /** @type {any} */ (
     await navigator.credentials.create({ publicKey: creationOptions(options) })
   );
@@ -84,16 +63,11 @@ export async function registerPasskey(label) {
   });
 }
 
-/**
- * Sign in with a passkey. `name` is optional: with a discoverable credential the phone offers
- * the account itself, which is the whole "Face ID and you are in" experience.
- */
+// `name` is optional: with a discoverable credential the phone offers the account itself.
 export async function signInWithPasskey(name) {
   const { ceremony_id, options } = await post('/auth/passkey/login/options', {
     name: name || null
   });
-  // The assertion's cast, for `registerPasskey`'s reason: `PublicKeyCredential`'s fields are
-  // not on lib.dom's `Credential`, and one cast at the ceremony covers every read below.
   const assertion = /** @type {any} */ (
     await navigator.credentials.get({ publicKey: requestOptions(options) })
   );

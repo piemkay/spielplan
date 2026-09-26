@@ -1,28 +1,6 @@
 <script>
-  /**
-   * One of §6.6 Data's three ledger editors, mounted once per ledger. Spec v2.1 §6.6 Data, §8
-   * stages 3 and 7, §6.4; decisions 173, 326, 342 and 445.
-   *
-   * THREE MOUNTS, THREE ARTIFACTS, NO MERGED SCREEN. Proposal 105 (provenance for §6.6 Data under
-   * decision 445): "three separate editors with separate semantics". The page mounts this once for
-   * the DNA verdicts, once for the credit facts and once for the per-facet axes, and each mount
-   * reads, writes, withdraws and exports through its own ledger's routes only - `ledger` picks the
-   * entry in `$lib/ledgerEditors.svelte.js` and there is no path from one mount's form to another's.
-   *
-   * EACH SHOWS ITS ROWS, THEIR PROVENANCE AND WHAT RE-APPLIES THEM (proposal 105's own clause). The
-   * rows carry `origin`: a bundle row is read-only here, because the next import would restore it,
-   * and a household row takes effect beside it (decision 423) and survives every re-derive and
-   * re-import (decision 326). `applies` is the server's sentence about where the ledger is read,
-   * and for the axes it is also the editor's standing notice - no axis file has been authored and the
-   * bundle ships none (decision 173), and a saved axis turns on Tonight's split now and the Map at M6
-   * (decision 342) - printed as the server words it, so the two cannot come to say different things.
-   * Withdraw is offered on household rows alone, and Export downloads the household's rows as the
-   * importer's own file, so a fix made here can travel back into the corpus unchanged.
-   *
-   * AN AXIS IS CHANGED FROM ITS OWN ROW, NEVER BY ADDING OVER IT. A save writes the facet's whole
-   * axis, so Add offers only a facet with none, and Edit opens a household axis with every term it
-   * has, under a Save that says it replaces. [M5.6 review cycle 1, m56-curated-02]
-   */
+  // One mount per ledger, each through its own routes only (decision 445). Bundle rows are
+  // read-only: the next import would restore them.
   import { onMount, tick, untrack } from 'svelte';
   import { api, get, post } from '$lib/api.js';
   import {
@@ -54,17 +32,13 @@
   let refusal = $state('');
   let saved = $state('');
   let busy = $state(false);
-  // The household row a Withdraw is waiting on a second tap for. A withdrawn row is the household's
-  // own fix gone, and a withdrawn verdict restores nothing it dropped (decision 445), so one stray
-  // tap on a phone must not be enough.
+  // A second tap confirms Withdraw: a withdrawn verdict restores nothing it dropped.
   let confirming = $state(null);
   // The facet whose household axis the open form is editing, or null while it adds.
   let replacing = $state(null);
   let root = $state(null);
-  // The hand-off this mount has already answered. It starts at the count the mount found, because
-  // `verdictDraft` is module state and outlives the page: a verdict form the operator dismissed must
-  // not reopen, and scroll the page to itself, every time /admin/data is visited again in the
-  // session. [M5.6 review cycle 1, M56-DATA-06]
+  // Starts at the count found on mount: `verdictDraft` is module state that outlives the page,
+  // and a dismissed form must not reopen on the next visit.
   let handled = verdictDraft.seq;
 
   const rows = $derived(rowsOf(ledger, envelope));
@@ -127,8 +101,7 @@
     await refresh();
   }
 
-  // The reject review's "Write a ledger row" (decision 445): the verdict editor opens with the
-  // review row's term and title and is scrolled to, so the tap lands on the form it opened.
+  // The reject review's "Write a ledger row": open prefilled and scroll to the form.
   $effect(() => {
     const seq = verdictDraft.seq;
     if (ledger !== 'adjudications' || seq <= handled) return;
@@ -334,9 +307,7 @@
     gap: 8px;
     align-items: center;
   }
-  /* A download, not an accent: underlined in the quiet ink, for `DataSources.svelte`'s reason -
-     §6.8 spends the ember on selection and primary actions, and a file an operator may save is
-     neither (decision 276). */
+  /* A download, not an accent (§6.8). */
   .export {
     display: inline-flex;
     align-items: center;
@@ -372,8 +343,7 @@
   }
 
   @media (pointer: coarse) {
-    /* §6 preamble's 48 px floor, both axes: an export is a bare `<a>`, which design.css's coarse
-       block does not reach on either, and it sits beside 48 px buttons a thumb is already aimed at. */
+    /* A bare <a>: design.css's coarse floor reaches neither axis. */
     .export {
       min-height: var(--touch);
       min-width: var(--touch);

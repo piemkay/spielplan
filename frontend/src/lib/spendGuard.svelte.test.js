@@ -16,17 +16,7 @@ import {
   usd
 } from './spendGuard.svelte.js';
 
-/**
- * The spend guard's sequencing, counted in requests. Spec v2.1 §6.6; decisions 450, 452; plan §7
- * checks 1-3.
- *
- * §6.6's "per-title cost estimate before enabling" is a claim about ORDER, and order is exactly
- * what a screenshot cannot show: a card that saved optimistically and then printed the figure
- * looks identical to one that asked first. So each rule here is asserted as the requests the
- * module made, against a mocked wire -- the server holds the same order on its side
- * (`test_spend_guard.py`), and this is the half that decides whether a Confirm under the thumb can
- * reach `PUT /admin/llm` without a figure on screen for exactly the change it stores.
- */
+// Order is the claim (estimate before enabling), so each rule is asserted as the requests made.
 
 /** `POST /admin/llm/preview`'s answer, as `api/llm._preview_body` spells it. */
 const preview = (perTitle = '0.032175', over = {}) => ({
@@ -63,7 +53,6 @@ const preview = (perTitle = '0.032175', over = {}) => ({
   ...over
 });
 
-/** A promise the test settles by hand, for a preview still on the wire. */
 function deferred() {
   let resolve = /** @type {(value: any) => void} */ (() => {});
   const promise = new Promise((r) => (resolve = r));
@@ -75,8 +64,7 @@ beforeEach(() => {
   vi.mocked(get).mockReset();
   vi.mocked(post).mockReset();
   vi.mocked(get).mockResolvedValue({});
-  // Module state is one object for the run, which is the point of it; each case starts from no
-  // proposal rather than from its predecessor's.
+  // Module state persists across cases; start each from no proposal.
   cancel();
   spend.llm = null;
 });

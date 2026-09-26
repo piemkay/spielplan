@@ -1,29 +1,9 @@
 <script>
-  /**
-   * §6.1's class-balance widget — "Running class-balance widget with its warning copy … the
-   * measured 5× lever" — and §5.2's number behind it: "a 60%-'liked' labeller gives up ~0.07 ρ".
-   *
-   * Two rules govern this component.
-   *
-   *   1. **The copy is the server's, verbatim.** `class_balance.copy` is a measured claim, and
-   *      "about five times more" is §5.2's lever written down. Paraphrasing it — or rebuilding
-   *      the sentence here from `heaviest` and a template — changes a measurement into a
-   *      slogan, so this renders the string it was given and never composes one.
-   *   2. **The thresholds are the server's too.** The 60% line and decision 491's fifteen-rating
-   *      floor both live in `rate/balance.py`; this renders `arms_at` rather than a literal, so a
-   *      re-measured number has exactly one home. The "warn > 60% of your running distribution"
-   *      caption went with decision 486: it was the model's working, printed for a member.
-   *
-   * Proposal 43 ("phone-first means the rail is not optional") asks for the widget to collapse
-   * to a three-segment bar on phones. It does — but only the per-class counts fold away. The
-   * warning itself stays visible at every width: it is the single largest lever a labeller has,
-   * and hiding it behind a tap on the form factor most of the labelling happens on would drop
-   * exactly the thing §5.2 asked the UI to say.
-   */
+  // The warning copy and thresholds are the server's (`rate/balance.py`), rendered verbatim: the
+  // copy is a measured claim. On phones only the counts fold; the warning never does.
   import { ratingsLabel, sharePct } from '$lib/rate.svelte.js';
 
-  // `kinds`: the counts are over the session's kinds (decisions 491 and 492), so the total names
-  // the kind when only one is selected -- "9 ratings" under Series alone read as fifty lost (A5).
+  // Counts cover the session's kinds, so the total names the kind when only one is selected.
   let { balance, kinds = [] } = $props();
 
   let open = $state(false);
@@ -32,9 +12,8 @@
   const counts = $derived(balance?.counts ?? [0, 0, 0]);
   const shares = $derived(balance?.shares ?? [0, 0, 0]);
   const total = $derived(balance?.total ?? 0);
-  // Decision 491: the check waits for one block of ratings, and says so instead of going quiet.
   const armsAt = $derived(balance?.arms_at ?? 0);
-  // Presentation only: worst → best, left to right, matching the stored ordinal (proposal 52).
+  // Worst to best, left to right, matching the stored ordinal.
   const TONE = ['low', 'mid', 'high'];
 </script>
 
@@ -45,8 +24,6 @@
     aria-expanded={open}
     onclick={() => (open = !open)}
   >
-    <!-- Not "YOUR MIX" any more: Mixed is a mode's name now (decision 519), and this is the
-         spread of the answers the warning below talks about. -->
     <span class="eyebrow">YOUR SPREAD</span>
     <span class="data" data-testid="rate-balance-total">{ratingsLabel(total, kinds)}</span>
   </button>
@@ -73,7 +50,6 @@
   </ul>
 
   {#if balance?.warn && balance?.copy}
-    <!-- Rendered exactly as sent. The sentence is a measurement, not a message. -->
     <p class="warn why" role="status" data-testid="rate-balance-warning">{balance.copy}</p>
   {:else if armsAt && total < armsAt}
     <p class="why arming" data-testid="rate-balance-arming">
@@ -103,7 +79,6 @@
     cursor: pointer;
     text-align: left;
   }
-  /* §6.8 / proposal 130: uppercase mono eyebrow. */
   .eyebrow {
     font-family: var(--mono);
     font-size: 9.5px;
@@ -125,10 +100,7 @@
   .mid {
     background: rgba(236, 233, 228, 0.42);
   }
-  /* The ramp's loud end is a measurement of the household's own labelling, not a selection and
-     not an action, so it reads as the third volume of one neutral (0.22 / 0.42 / this) rather
-     than as the one accent §6.8 reserves. An ember segment here meant the surface's single
-     highlight moved with the distribution. [§6.8; decision 276] */
+  /* The loud end is a neutral, not the accent: the distribution is never a selection (§6.8). */
   .high {
     background: var(--status);
   }
@@ -156,12 +128,7 @@
     border-radius: var(--r-pill);
     flex: none;
   }
-  /* A frame, and nothing else. The element is `<p class="warn why">`, so the register — face,
-     size, colour, leading — is `.why`'s and is decided in design.css; what belongs here is the
-     tinted box that marks the sentence as the one §5.2 measured. It used to re-declare all four,
-     which is how §6.8's prose register came to wear the data face on the surface that argues
-     hardest for being read: this copy is, by this component's own docstring, the single largest
-     lever a labeller has. [§6.8; decision 275] */
+  /* A frame only: the prose register is `.why`'s, from design.css. */
   .arming {
     margin: 2px 0 0;
   }
@@ -173,8 +140,6 @@
     border-radius: var(--r-sm);
   }
 
-  /* Proposal 43: on phones the widget is the bar; the counts fold behind the header tap.
-     The warning is never folded. */
   @media (max-width: 720px) {
     .counts {
       display: none;

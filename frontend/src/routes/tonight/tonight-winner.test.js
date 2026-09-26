@@ -1,12 +1,5 @@
 /**
  * @vitest-environment jsdom
- *
- * The winner card's poster. Spec v2.1 §6.8, §6.2 step 7; decision 483.
- *
- * Its own file rather than a case in `tonight-page.test.js`, because the claim is one element on
- * the reveal and needs none of that file's lobby or ballot machinery - only the page mounted on a
- * result. The payload is keyed `title_id` (`tonight/result.py`), which is the key a helper reading
- * only `id` turned into `/api/art/undefined/poster`.
  */
 
 import { flushSync, mount, unmount } from 'svelte';

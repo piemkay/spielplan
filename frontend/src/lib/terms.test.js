@@ -2,11 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { termLabel } from './terms.js';
 
-/**
- * Dotted ids with labels that differ from their leaf, because the backend's fixture vocabulary
- * is dotless and an id printed raw there already reads as plain words. Spec v2.1 §6.8; decision
- * 486.
- */
+// Dotted ids on purpose: the backend's fixture vocabulary is dotless.
 
 describe('termLabel (§6.8 vocabulary terms)', () => {
   it('renders the label the payload carries', () => {

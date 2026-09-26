@@ -1,26 +1,8 @@
 <script>
-  /**
-   * §6.7's transparency rail, for the writes this surface makes.
-   *
-   *   "A per-user toggle (default off) reveals an ephemeral log (last ~15 events, never
-   *    persisted) narrating every model write in one human-readable line."
-   *
-   * Two things follow from that sentence and are enforced here rather than assumed.
-   *
-   *   * **Gated.** The caller renders this only when the person's `show_model` preference is
-   *     on. Everything in it — the incremental refit's milliseconds, the title's new `cdf` and
-   *     tier — is model-derived, and §6.1's anchoring rule is why it can be shown at all: all
-   *     of it describes a write that has already happened, on a card that is already answered.
-   *   * **Ephemeral.** The lines come from the last response and are replaced by the next one.
-   *     Nothing accumulates in local storage; the log is a view of the current write, which is
-   *     what makes it "never persisted" on the client too.
-   */
+  // The caller renders this only with show_model on; lines are the last response's, never stored.
   let { log = [], ledger = null } = $props();
 
-  /**
-   * Built in JS rather than in markup: Svelte collapses the whitespace around an `{#each}`,
-   * which printed "tier 4· title 1012" with the separator glued to the number.
-   */
+  // Built in JS: Svelte collapses the whitespace around an `{#each}`, gluing separators to numbers.
   const ledgerLine = $derived.by(() => {
     if (!ledger) return '';
     if (!ledger.applied) return `ledger update refused · ${ledger.reason}`;

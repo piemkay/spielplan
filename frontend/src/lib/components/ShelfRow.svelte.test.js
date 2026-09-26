@@ -1,21 +1,5 @@
 /**
  * @vitest-environment jsdom
- *
- * The shelf's own one-line why for §8 stage 10's badge. Spec v2.1 §6.8, §6.0; M4.15 finding 10,
- * decision 278.
- *
- * The "new" chip on a poster explained itself through `title="placed by the Cold Tower — no crowd
- * data yet"`, and a `title=` is a hover tooltip: it does not exist on the form factor §6's
- * preamble makes primary. So on a phone — where §6.0 says a shelf that cannot say why it exists
- * does not ship — the one thing on the row that IS a model statement said nothing at all.
- *
- * The sentence is the shelf's rather than the card's, which is the whole content of these cases:
- * one line for a row of twelve, present when a cold card is on the row and absent when none is.
- * Twelve copies of it would be the noise the quiet-reason register exists to avoid.
- *
- * MOUNTED RATHER THAN IN PLAYWRIGHT because the condition is a property of the payload: a shelf
- * with a cold card on it and a shelf without one are two responses, and the e2e stack has
- * whichever the imported bundle happens to produce.
  */
 
 import { flushSync, mount, unmount } from 'svelte';
@@ -27,8 +11,7 @@ import ShelfRow from './ShelfRow.svelte';
 
 const COLD_NOTE = '[data-testid="shelf-cold-note"]';
 
-/** One shelf card in the shape `GET /api/home` sends. Warm by default: a title with a Backbone
- *  row and 480 crowd ratings is the ordinary case, and the badge is the exception. */
+/** One shelf card in `GET /api/home`'s shape; warm by default, since the badge is the exception. */
 const card = (overrides = {}) => ({
   title_id: 1,
   kind: 'movie',
@@ -68,9 +51,7 @@ afterEach(() => {
 });
 
 function render(items) {
-  // `onSelect` is passed because it is declared without a default and is therefore a REQUIRED
-  // prop: `npm --prefix frontend run check` is a CI job step from this milestone on (decision
-  // 273), and a test that omits it costs the frontend gate an error of its own.
+  // `onSelect` is a required prop, and omitting it fails `npm run check`.
   const app = mount(ShelfRow, {
     target,
     props: {
@@ -97,11 +78,8 @@ describe('the cold-placement note', () => {
     ]);
     const notes = target.querySelectorAll(COLD_NOTE);
     expect(notes).toHaveLength(1);
-    // Decision 486's register: the fact, without the model's nouns.
     expect(notes[0].textContent).toContain('no outside ratings yet');
     expect(notes[0].textContent).not.toContain('Cold Tower');
-    // The register, not the data voice: §6.8 gives the mono face to model numbers and ids, and
-    // this is a sentence about them. The class is what carries that, so it is asserted here.
     expect(notes[0].className).toContain('why');
     unmount(app);
   });
@@ -117,9 +95,7 @@ describe('the cold-placement note', () => {
   });
 
   it('is absent when the Cold Tower placed a title the crowd has rated', () => {
-    // The bundle's evaluation holdout serves crowd-rated rows from the Cold Tower: Raiders of
-    // the Lost Ark wore "new" over 192,061 ratings on the first household (§8 stage 10 names
-    // the badge by the absence of crowd data).
+    // The evaluation holdout serves crowd-rated rows from the Cold Tower.
     const app = render([card({ e_source: 'cold_tower', placement: 'cold_tower', item_n: 192061 })]);
     expect(target.querySelectorAll(COLD_NOTE)).toHaveLength(0);
     expect(target.querySelector('.badge')).toBeNull();
@@ -127,8 +103,6 @@ describe('the cold-placement note', () => {
   });
 
   it('is not said a second time on the shelf whose why-line already says it', () => {
-    // "New in the library"'s why-line is §8 stage 10's sentence, and the row printed it twice
-    // (second household test, U10). The chips stay on the cards.
     const cold = [card({ title_id: 1, e_source: 'cold_tower', item_n: 0 })];
     const app = mount(ShelfRow, {
       target,
@@ -141,9 +115,7 @@ describe('the cold-placement note', () => {
   });
 
   it('reads the same fields the badge does, so the row and the card cannot disagree', () => {
-    // `e_source` decides where the payload has it. A title with 55 crowd ratings and a Backbone
-    // row is still stamped `placement: 'cold_tower'` — 15% of its coordinate comes from there —
-    // and neither the chip nor this line may claim it has no crowd data. [M4.9 finding 18]
+    // `e_source` decides where present: a crowd-rated title can still be stamped `cold_tower`.
     const app = render([card({ placement: 'cold_tower', item_n: 55, e_source: 'backbone' })]);
     expect(target.querySelectorAll(COLD_NOTE)).toHaveLength(0);
     unmount(app);
@@ -204,9 +176,7 @@ describe('what a row says about itself', () => {
     unmount(app);
   });
 
-  // Decision 476's "as on your Rank board" is a quotation of Rank, so it is said only where Rank
-  // shows this letter (decision 486 clause 7). A title marked watched and never rated is on no
-  // board; a title moved on Rank shows the person's tier there, not the fit's.
+  // "as on your Rank board" is said only where Rank shows this letter (decision 486).
   it('never quotes the Rank board for a title that is not on it, or at another letter there', () => {
     const app = render([
       card({ title_id: 1, tier: 'S', seen: true, on_board: false, board_tier: null }),
@@ -224,8 +194,6 @@ describe('what a row says about itself', () => {
   });
 
   it('draws the rank and the tier under the art, never over it', () => {
-    // Pinned 30 px down the poster they covered Kiki's and Schindler's List's lettering (second
-    // household test, U5).
     const app = render([card({ title_id: 1, tier: 'A', rank: 1 })]);
     const rank = target.querySelector('[data-testid="shelf-rank"]');
     const tier = target.querySelector('[data-testid="shelf-tier"]');

@@ -1,20 +1,6 @@
 <script>
-  /**
-   * One of §6.6's "TMDB / OMDb / Trakt keys with test buttons". Spec v2.1 §6.6, §8 stage 2,
-   * §14.3; decisions 334, 452, 453; plan C1-C2, proposal 137.
-   *
-   * The same write-only idiom as the provider cards: the route answers booleans, the field is
-   * never filled from the server, an empty field keeps the stored value, and the field is emptied
-   * after every save. Trakt's client id is plaintext config on the server, but it is the value
-   * every Trakt request carries, so it is written and reported the same way (decision 452).
-   *
-   * WHICH STAGE-2 SOURCES NEED A KEY IS SAID ON THE CARD (proposal 137, plan C2), so an acquisition
-   * failure points at the right card: `required` is decision 334's rule -- TMDB is the one source
-   * whose missing key parks a title at stage 2 -- and `used_by` is which stage-2 kinds read it.
-   *
-   * The test goes through the shared polite fetcher and stores nothing (decision 453). OMDb's free
-   * tier is a daily request quota, so its button says the press spends one of them.
-   */
+  // Write-only, like the provider cards: the route answers booleans and a field is never filled
+  // from the server.
   import { SOURCE_LABELS, saveKey, spend, testConnector } from '$lib/spendGuard.svelte.js';
 
   let { source } = $props();
@@ -25,12 +11,10 @@
   const stored = $derived(
     trakt ? Boolean(source.has_client_id && source.has_client_secret) : Boolean(source.has_api_key)
   );
-  // Trakt's probe is the public trending read, which carries the client id and not the secret
-  // (decision 453), so the id alone is enough to test.
+  // Trakt's probe carries only the client id (decision 453), so the id alone is enough to test.
   const testable = $derived(trakt ? Boolean(source.has_client_id) : Boolean(source.has_api_key));
 
-  // Every credential field any source carries; the card renders its own and `saveKey` sends only
-  // fields that hold text, so the others are never on the wire.
+  // `saveKey` sends only the fields that hold text, so another source's fields never go out.
   let form = $state({ api_key: '', client_id: '', client_secret: '' });
   let saved = $state(null);
   let result = $state(null);

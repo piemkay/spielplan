@@ -1,24 +1,11 @@
 /**
  * @vitest-environment jsdom
- *
- * The one dismissal, exercised as the action rather than through the three surfaces that use it.
- * Spec v2.1 §6 preamble; proposals 127 and 131.
- *
- * HERE, AND NOT ONLY IN PLAYWRIGHT. `19-phone-shell.spec.js` asserts the household's version of
- * this — the account menu, the title panel and the model rail each close by an outside tap and by
- * Escape — and that is the claim the coverage row carries. What a browser cannot show cheaply is
- * the half that makes the rule safe to apply three times: that the listeners are on `document`,
- * that both of them come off again on destroy, and that the callback is handed the event so a
- * node whose opener lives outside it can tell an opener tap from every other outside tap. A leak
- * of the first kind is invisible until the fourth surface adopts the action, and by then it is
- * one stale handler per overlay that has ever been opened.
  */
 
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { dismiss } from './dismiss.js';
 
-/** A node the action can guard, with one child, mounted where a real overlay would be. */
 function guarded() {
   const node = document.createElement('div');
   const inner = document.createElement('button');
@@ -29,13 +16,7 @@ function guarded() {
   return { node, inner, outside };
 }
 
-/**
- * A pointerdown as an engine sends it: on a real target and bubbling, because the action reads
- * `composedPath()` and an event dispatched on `document` itself has a path of one.
- *
- * `Event` rather than `PointerEvent` — jsdom ships no `PointerEvent` constructor, and the action
- * touches nothing on the interface beyond `type`, `target` and `composedPath`.
- */
+// On a real target and bubbling: the action reads `composedPath()`. jsdom has no PointerEvent.
 const tap = (/** @type {Element} */ target) =>
   target.dispatchEvent(new Event('pointerdown', { bubbles: true, cancelable: true }));
 
@@ -60,8 +41,6 @@ describe('the dismiss action', () => {
   });
 
   it('does not close when the pointer lands inside it', () => {
-    // The half that makes `.wrap` rather than `.menu` the right node in `AccountChip`: the chip
-    // button is inside the guarded node, so its own tap must reach `toggle()` untouched.
     const { node, inner } = guarded();
     const close = vi.fn();
     const handle = dismiss(node, close);
@@ -88,13 +67,7 @@ describe('the dismiss action', () => {
   });
 
   it('dismisses every mounted overlay on one Escape, which is the rule and not an accident', () => {
-    // Two guarded nodes exist together on exactly one reachable path: with §6.7's "show the
-    // model" on, a title panel opened from Home and then `m` - `+layout.svelte`'s shortcut is on
-    // the window and skips only INPUT/TEXTAREA/SELECT/contentEditable - opens the rail over the
-    // panel. Neither instance knows it is the topmost, so both answer. Held here because nothing
-    // else in the suite mounts two: `ModelRail.svelte.test.js` and `TitleDetail.svelte.test.js`
-    // each mount one, and `19-phone-shell` closes each overlay before opening the next, so a
-    // stack added later would land with the whole suite green. [review cycle 3: M415-C3-COMP-04]
+    // Two overlays coexist on one path (a title panel, then `m` opens the rail over it); both answer.
     const first = guarded();
     const second = guarded();
     const closeFirst = vi.fn();
@@ -106,8 +79,7 @@ describe('the dismiss action', () => {
       expect(closeFirst, 'the overlay underneath did not answer').toHaveBeenCalledTimes(1);
       expect(closeSecond, 'the overlay on top did not answer').toHaveBeenCalledTimes(1);
 
-      // The pointerdown half of the same shape, and here the answer is not symmetrical: a tap
-      // inside the top overlay IS outside the one underneath, so dismissing that one is correct.
+      // A tap inside the top overlay is outside the one underneath, so that one closes.
       closeFirst.mockClear();
       closeSecond.mockClear();
       tap(second.inner);
@@ -120,8 +92,7 @@ describe('the dismiss action', () => {
   });
 
   it('leaves every other key alone', () => {
-    // Proposal 118 gives the model rail an `m` shortcut on the shell's own keydown handler, so a
-    // dismissal that fired on any key would fight the toggle that opened it.
+    // The shell's `m` shortcut opens the rail, so an any-key dismissal would fight it.
     const { node } = guarded();
     const close = vi.fn();
     const handle = dismiss(node, close);
@@ -134,9 +105,7 @@ describe('the dismiss action', () => {
   });
 
   it('hands the event to the callback, so an opener tap is distinguishable', () => {
-    // `ModelRail`'s trigger is in the shell header and outside the rail, and it toggles: without
-    // the event the rail would close on its pointerdown and reopen on the click that follows,
-    // which is a button that no longer closes.
+    // ModelRail's trigger sits outside the rail and toggles; without the event it would reopen.
     const { node, outside } = guarded();
     const close = vi.fn();
     const handle = dismiss(node, close);
@@ -168,9 +137,7 @@ describe('the dismiss action', () => {
   });
 
   it('removes both listeners on destroy', () => {
-    // Both, and by behaviour rather than by spying on `removeEventListener`: the capture flag has
-    // to match the one each was added with, and a spy that only counts calls would pass with the
-    // flag wrong and the handler still live on `document`.
+    // By behaviour, not a `removeEventListener` spy: the capture flag has to match.
     const { node, outside } = guarded();
     const close = vi.fn();
     dismiss(node, close).destroy();

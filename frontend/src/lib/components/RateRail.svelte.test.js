@@ -1,8 +1,5 @@
 /**
  * @vitest-environment jsdom
- *
- * §6.1's side rail in the member register (decisions 486 and 491): no section numbers, counts in
- * ratings, and the margin weights -- the model's own numbers -- only while Show the model is on.
  */
 
 import { flushSync, mount, unmount } from 'svelte';

@@ -1,18 +1,5 @@
 /**
  * @vitest-environment jsdom
- *
- * The Data tab's half of M4.14: the import that outlives its own request, and the button that
- * stopped re-arming. Spec v2.1 §10 (swap sequence), §6.6 (Data tab), §5.3 (the import is a job),
- * §3.1 (bundle-less is legal); decisions 253, 254, 257 and 258; findings 2.1, 2.3, 2.17, 2.22.
- *
- * MOUNTED AND UNIT-TESTED RATHER THAN LEFT TO PLAYWRIGHT, for the reason decision 226 admits a
- * vitest id beside a Playwright one. Every state this file asserts is a state the browser suite
- * cannot reach twice: the destructive button's rule has six phases, three of which exist only
- * while a 127 s import is in flight in the worker; the poll's deadline is eleven minutes long;
- * and a broken install is a database row whose files someone deleted, which `e2e/run.mjs` would
- * have to produce and then repair for every spec that follows it in a filename-ordered,
- * single-worker suite. The ids here are named BESIDE the `test_bundle_import_job.py` and
- * `01-first-boot.spec.js` ids on the same rows, never instead of them.
  */
 
 import { flushSync, mount, unmount } from 'svelte';
@@ -131,19 +118,14 @@ const press = async (label) => {
 const importButton = () =>
   [...target.querySelectorAll('button')].find((b) => b.textContent.includes('Import and activate'));
 
-// Named by its idle label, which is also the only state it can be pressed in: `run()` swaps it
-// to 'Working...' while a request of this screen's own is in flight.
+// Named by its idle label, the only state it can be pressed in.
 const validateButton = () =>
   [...target.querySelectorAll('button')].find((b) => b.textContent.includes('Validate bundle'));
 
 const box = () => target.querySelector('.box');
 const lit = () => target.querySelectorAll('.step.on').length;
 
-// ---------------------------------------------------------------- the button's one rule
-
 describe('the import button', () => {
-  // Six phases, one per case, because the old predicate was wrong in three of them and a
-  // template is not a place a rule can be asserted. [M4.14 finding 2.3]
   it('stays dark on an idle screen, where nothing has been validated', () => {
     expect(importDisabled({ phase: IDLE, report: null })).toBe(true);
   });
@@ -156,9 +138,7 @@ describe('the import button', () => {
   });
 
   it('stays dark while the import is running in the worker', () => {
-    // The state M4.14 created and fe-lc-11's published predicate could not see: the 202 landed,
-    // the operator is looking at an ok report, and a second press would race the first import
-    // for section 10's staging tree.
+    // A second press would race the first import for the staging tree.
     expect(importDisabled({ phase: RUNNING, report: report() })).toBe(true);
   });
 
@@ -168,8 +148,7 @@ describe('the import button', () => {
 
   it('stays dark after a failed import', () => {
     expect(importDisabled({ phase: FAILED, report: report({ ok: false }) })).toBe(true);
-    // The shape the defect was measured in: a transport failure leaves `report` null, and
-    // `null && !null.ok` is falsy, so the old rule forbade nothing here.
+    // A transport failure leaves `report` null, which the old rule let through.
     expect(importDisabled({ phase: FAILED, report: null })).toBe(true);
   });
 
@@ -182,8 +161,6 @@ describe('the import button', () => {
     expect(importDisabled({ busy: true, phase: VALIDATED, report: report() })).toBe(true);
   });
 });
-
-// ---------------------------------------------------------------- the poll
 
 describe('the poll', () => {
   const reader = (...payloads) => {
@@ -221,8 +198,7 @@ describe('the poll', () => {
   });
 
   it('does not let one failed read decide an import it cannot see', async () => {
-    // Converting a lost GET into "it failed" is finding 2.1's own defect one layer up: the
-    // operator told an import failed while it completed and flipped.
+    // A lost read is not a failed import.
     const read = reader(
       new Error('Failed to fetch'),
       bundleState({ import_job: job({ phase: 'active', ok: true, report: report() }) })
@@ -233,9 +209,7 @@ describe('the poll', () => {
   });
 
   it("gives up at its own deadline, because the api client sets none", async () => {
-    // `api.js` passes no timeout to `fetch` and M4.14 does not touch it, so without this the
-    // page spins for as long as the tab is open. The clock is injected; a test that waited
-    // eleven real minutes to prove a deadline is a test nobody runs.
+    // `api.js` sets no timeout, so the poll owns its deadline; the clock is injected.
     let clock = 0;
     const read = reader(bundleState({ import_job: job({ phase: 'running' }) }));
     const outcome = await pollImportJob(read, 7, {
@@ -248,8 +222,7 @@ describe('the poll', () => {
     });
     expect(outcome.phase).toBe(UNKNOWN);
     expect(read).toHaveBeenCalledTimes(6);
-    // The row it gives up on is still THIS import's row: `UNKNOWN` is "this page cannot say",
-    // not "there was nothing to see", and the operator's own job is what the panel may show.
+    // The row it gives up on is still this import's own.
     expect(outcome.job.job_id).toBe(7);
   });
 
@@ -265,22 +238,12 @@ describe('the poll', () => {
       }
     });
     expect(outcome.phase).toBe(UNKNOWN);
-    // The other half of the same rule, and the half a phase assertion cannot carry: the foreign
-    // row is not handed back either. `BundleImport` renders `outcome.job.report` as this
-    // screen's verdict with no id test of its own, so a row that matched nothing here is
-    // somebody else's migration report printed under this page's "outcome unknown" banner --
-    // which is the thing the comment beside the `job_id` test says must not happen.
-    // [M4.14 review cycle 1, waveE-03]
+    // Nor is the foreign row handed back: the caller would render its report as this screen's.
     expect(outcome.job).toBe(null);
   });
 
   it('answers for the row it was given, with no off-switch on the way it is chosen', async () => {
-    // The guard above had two disjuncts that turned itself off when the id was absent, reachable
-    // by no caller and exercised by no test -- and the one future caller they invited is the
-    // lost-202 recovery, "poll without an id and adopt whatever is running", which is precisely
-    // somebody else's stored report printed under this screen's banner. A guard with a documented
-    // off-switch that nothing tests is a guard one edit from being off.
-    // [M4.14 cycle 4, m414-c4-dim202-06]
+    // No id is no match: the guard has no off-switch.
     let clock = 0;
     const read = reader(bundleState({ import_job: job({ phase: 'active', ok: true }) }));
     const outcome = await pollImportJob(read, undefined, {
@@ -296,15 +259,11 @@ describe('the poll', () => {
   });
 
   it('stops for good when the screen that asked for it is gone', async () => {
-    // Svelte destroying a component does not stop an async function it started, so without this
-    // the poll kept reading for the rest of its eleven minutes and then wrote a phase and fired
-    // `onImported` into a screen nobody is looking at. `null` is the absence of an outcome: a
-    // caller that was told to stop has nothing to render. [M4.14 cycle 4, m414-c4-dim202-02]
+    // Destroying a component does not stop its async poll; `null` is the absence of an outcome.
     let clock = 0;
     let gone = false;
     const read = reader(bundleState({ import_job: job({ phase: 'running' }) }));
-    // The deadline is injected as well as the screen's departure, so that a poll which ignored
-    // the departure ends at its own deadline and fails this case rather than spinning it.
+    // The deadline is injected too, so a poll that ignored the departure fails this case.
     const outcome = await pollImportJob(read, 7, {
       intervalMs: 1_000,
       deadlineMs: 5_000,
@@ -316,8 +275,7 @@ describe('the poll', () => {
       abandoned: () => gone
     });
     expect(outcome).toBe(null);
-    // One read, and then the sleep that ends it: the loop does not spend another request on a
-    // screen that has been destroyed.
+    // One read, then the sleep that ends it.
     expect(read).toHaveBeenCalledTimes(1);
   });
 
@@ -332,8 +290,7 @@ describe('the poll', () => {
 
 describe('a refused import and a lost one', () => {
   it('tells an answer the server gave apart from a request that never arrived', () => {
-    // 422 (the report says no), 409 (already running), 400 (the path) are answers: nothing was
-    // enqueued. A 502, a 504 and a fetch that threw are not.
+    // A 4xx means nothing was enqueued; a 5xx or a thrown fetch might have queued a job.
     expect(phaseForImportError(apiError('report says no', 422))).toBe(FAILED);
     expect(phaseForImportError(apiError('already running', 409))).toBe(FAILED);
     expect(phaseForImportError(apiError('bad path', 400))).toBe(FAILED);
@@ -347,8 +304,7 @@ describe('a refused import and a lost one', () => {
     expect(stepsLit(IMPORTED)).toBe(4);
     expect(stepsLit(FAILED)).toBe(2);
     expect(stepsLit(UNKNOWN)).toBe(2);
-    // A refusal with no report at all -- a path outside DATA_DIR, a file that is not an archive
-    // -- must not light the step named "report".
+    // A refusal with no report must not light the step named "report".
     expect(stepsLit(FAILED, false)).toBe(1);
     expect(stepsLit(IDLE)).toBe(0);
   });
@@ -368,16 +324,13 @@ describe("a failing finding's detail", () => {
   });
 
   it('excerpts a long list the way the stored report does, total and all', () => {
-    // `importer/report._detail_value`: five items and the total, so the two records of one
-    // import cannot describe it differently and the count survives the truncation.
+    // `importer/report._detail_value`: five items and the total.
     expect(detailLine([1, 2, 3, 4, 5, 6, 7])).toBe('1, 2, 3, 4, 5, ... (7 total)');
     expect(detailLine(42)).toBe('42');
     expect(detailLine('x'.repeat(120)).endsWith('...')).toBe(true);
     expect(detailLine('x'.repeat(120)).length).toBe(96);
   });
 });
-
-// ---------------------------------------------------------------- the component
 
 describe("the Data tab's import control", () => {
   const open = async () => {
@@ -387,9 +340,7 @@ describe("the Data tab's import control", () => {
   };
 
   it('renders the report the worker stored rather than the one the request returned', async () => {
-    // The 202 carries the VALIDATION report -- nothing has been imported when it is written --
-    // and section 10's migration report is the one the worker produces. Decision 253 stores it
-    // on the `job_run` row, which is why this screen polls for it. [M4.14 step E4, finding 2.1]
+    // The 202 carries the validation report; the migration report is the one the worker stored.
     const stored = report({
       findings: [finding('note', 'stage', 'artifacts staged to /data/artifacts/test-v1')]
     });
@@ -403,8 +354,7 @@ describe("the Data tab's import control", () => {
       await press('Validate bundle');
       await press('Import and activate');
       expect(box().getAttribute('data-phase')).toBe(IMPORTED);
-      // The options carry the per-read deadline the poll gained in cycle 4 (dim202-03); what
-      // this line is about is the endpoint the report came from.
+      // The options carry the per-read deadline; this line is about the endpoint.
       expect(vi.mocked(get)).toHaveBeenCalledWith('/admin/bundle/state', expect.anything());
       expect(target.querySelector('.finding .msg').textContent).toContain(
         'artifacts staged to /data/artifacts/test-v1'
@@ -416,8 +366,7 @@ describe("the Data tab's import control", () => {
   });
 
   it('holds the destructive button down while the import is still running', async () => {
-    // Initialised rather than bare `let release;` so `svelte-check` can see it is callable; the
-    // poll's first read is immediate, so this promise is what holds the component in `running`.
+    // Initialised so svelte-check sees it is callable; this promise holds the component in running.
     let release = (/** @type {any} */ state) => state;
     vi.mocked(post).mockResolvedValueOnce({ report: report(), text: '' });
     vi.mocked(post).mockResolvedValueOnce(accepted());
@@ -440,11 +389,7 @@ describe("the Data tab's import control", () => {
   });
 
   it('does not re-arm the destructive button when the import request dies in transit', async () => {
-    // The reproduction: `catch` sets `report = err.detail?.report ?? null`, and the old rule
-    // read `report && !report.ok`, so a 502, a proxy cut or a browser that gave up on a fetch
-    // `api.js` never bounded left the one destructive control on this screen live -- at the one
-    // moment nobody knows whether a `job_run` row was inserted on the way out.
-    // [M4.14 findings 2.1 and 2.3]
+    // A transport failure used to leave the destructive control live.
     vi.mocked(post).mockResolvedValueOnce({ report: report(), text: '' });
     vi.mocked(post).mockRejectedValueOnce(apiError('Bad Gateway', 502));
     const app = await open();
@@ -456,8 +401,7 @@ describe("the Data tab's import control", () => {
       expect(box().getAttribute('data-phase')).toBe(UNKNOWN);
       expect(target.querySelector('[data-unknown]').textContent).toContain(UNKNOWN_OUTCOME);
       expect(target.querySelector('.err:not([data-unknown])').textContent).toContain('Bad Gateway');
-      // The validation report stays: it is what the operator pressed Import on, and the strip
-      // stops where this page stopped watching.
+      // The validation report stays, and the strip stops where this page stopped watching.
       expect(target.querySelector('.verdict').textContent).toBe('valid');
       expect(lit(), 'no swap was watched, so the strip does not claim one').toBe(2);
     } finally {
@@ -466,9 +410,7 @@ describe("the Data tab's import control", () => {
   });
 
   it('says why a refusal refused, even with a report still on screen', async () => {
-    // The old error line was `{#if error && !report}`, so a 409 arriving after a successful
-    // validate -- which is exactly decision 253's "another bundle import is already running" --
-    // printed nothing at all.
+    // A 409 after a validate used to print nothing while a report was on screen.
     vi.mocked(post).mockResolvedValueOnce({ report: report(), text: '' });
     vi.mocked(post).mockRejectedValueOnce(
       apiError('another bundle import is already running on this install', 409, 'a string detail')
@@ -512,8 +454,6 @@ describe("the Data tab's import control", () => {
   });
 
   it('asks for a bundle directory or an archive, which is what the importer now takes', async () => {
-    // Decision 257: a directory holding exactly one `.tar` / `.tar.zst` is opened as that
-    // archive, which is how the corpus bundle arrives on the box.
     const app = await open();
     try {
       expect(target.querySelector('label').textContent).toContain('.TAR/.TAR.ZST');
@@ -522,7 +462,6 @@ describe("the Data tab's import control", () => {
     }
   });
 
-  /** Validate, import, and let the one poll read `state` as the terminal payload. */
   const importTo = async (state) => {
     vi.mocked(post).mockResolvedValueOnce({ report: report(), text: '' });
     vi.mocked(post).mockResolvedValueOnce(accepted());
@@ -534,9 +473,7 @@ describe("the Data tab's import control", () => {
   };
 
   it('says the imported bundle is live when the backend has loaded it, and names no restart', async () => {
-    // Decision 497. This screen told every operator to restart backend and worker after every
-    // import, with no command in the sentence, and the first household's wizard ended on it.
-    // The backend now loads the flip on the read that reports it, which is the payload below.
+    // The backend loads the flip on the read that reports it (decision 497).
     const app = await importTo(
       bundleState({
         active: 'test-v1',
@@ -597,8 +534,6 @@ describe('what an import leaves served', () => {
   });
 });
 
-// ---------------------------------------------------------------- the page's two banners
-
 describe('the Data tab', () => {
   const pageState = (over = {}) => bundleState({ active: 'test-v1', bundles: [], ...over });
 
@@ -615,10 +550,7 @@ describe('the Data tab', () => {
   const warnings = () => [...target.querySelectorAll('.warn')].map((w) => w.textContent);
 
   it('renders the restore instruction rather than the restart one when the directory is gone', async () => {
-    // Decision 258: `restart_required` is now `active != loaded AND NOT broken`, so the two
-    // banners are two instructions that can never render together -- a restart reloads the same
-    // empty store for an install whose files are gone, which is what dd01 measured. The restore
-    // line owes section 2's action and, now that D2 exists, the repair the state had none of.
+    // `restart_required` excludes `broken`, so the two banners never render together (decision 258).
     const app = await openPage(
       pageState({ broken: true, missing_path: '/data/artifacts/test-v1', restart_required: false })
     );
@@ -636,8 +568,6 @@ describe('the Data tab', () => {
   });
 
   it('renders the restart instruction alone once the files are there and the row has moved', async () => {
-    // The boundary of the same change: a swap that has not been loaded yet is the state the
-    // restart banner is for, and it must still say so.
     const app = await openPage(
       pageState({ restart_required: true, loaded: { version: 'test-v0' }, broken: false })
     );
@@ -652,12 +582,7 @@ describe('the Data tab', () => {
   });
 
   it('adopts an import that was already running when this page loaded', async () => {
-    // M4.14 made the import outlive the request that queued it, so `/admin/bundle/state` can
-    // answer `running` on a page load that pressed nothing: an operator who reloaded during the
-    // 127 s load, or who opened the Data tab on a second device. Nothing on the page read
-    // `import_job` -- the payload was grown in this milestone for exactly this screen -- so that
-    // operator got an idle wizard and an armable Validate, on the one page section 6.6 makes
-    // their instrument. [M4.14 review cycle 1, waveE-06]
+    // A reload mid-import, or a second device, finds the import already running.
     const stored = report({ findings: [finding('note', 'stage', 'artifacts staged to /data')] });
     /** @type {(value: any) => void} */
     let release = (value) => value;
@@ -669,8 +594,7 @@ describe('the Data tab', () => {
     vi.mocked(get).mockImplementation(async (path) => {
       if (path === '/admin/bundle/state') return reads[Math.min(i++, reads.length - 1)];
       if (path === '/admin/data/sources') throw new Error('no sources in this fixture');
-      // `/config`, `/setup/state`, `/auth/me`: the adopted import lands, which calls
-      // `onImported`, which bootstraps the shell exactly as this tab's own import would.
+      // The boot reads: the adopted import lands and `onImported` bootstraps the shell.
       return {};
     });
     const app = mount(DataPage, { target, props: {} });
@@ -689,15 +613,7 @@ describe('the Data tab', () => {
   });
 
   it('holds the validate button down for an import it adopted rather than pressed', async () => {
-    // The other half of the adoption path. `watch()` sets `phase = RUNNING` and never touches
-    // `busy`, so the sibling button -- `disabled={busy}` and nothing else -- stayed live for the
-    // whole of an import this tab was only watching. A press was not harmless:
-    // `/admin/bundle/validate` takes no lock and the import is one uncommitted transaction, so it
-    // answers ok, `run('validate')` writes VALIDATED over the running phase, and "Import and
-    // activate" arms in the state E4 calls terminal-until-polled -- the strip dropping from three
-    // lit steps to two while the worker is mid-swap, and a 409 refusal printed over an import that
-    // is succeeding. A watch in flight is this screen's one writer of `phase`.
-    // [M4.14 cycle 2, m414-c2-waveE-03]
+    // An adopted watch sets the phase without `busy`, so Validate must be dark too.
     /** @type {(value: any) => void} */
     let release = (value) => value;
     const reads = [
@@ -731,18 +647,14 @@ describe('the Data tab', () => {
   });
 
   it('does not adopt an import that already finished, on every later visit', async () => {
-    // The boundary, and why the rule is a phase test and not a null test: the newest `job_run`
-    // row outlives the import forever, so a page that adopted any row at all would re-poll,
-    // re-fire `onImported` and re-bootstrap the shell on every visit to the Data tab for the
-    // life of the install. [M4.14 review cycle 1, waveE-06]
+    // The newest row outlives the import, so adopting any row would re-poll on every visit.
     const app = await openPage(
       pageState({ import_job: job({ phase: 'active', ok: true, report: report() }) })
     );
     try {
       expect(box().getAttribute('data-phase')).toBe(IDLE);
       expect(target.querySelector('.report'), 'and no stored report is resurrected').toBe(null);
-      // Counted on the page's own two routes: M5.6's four cards below the importer each read
-      // their own, and a poll is a second read of the state route, which is what this holds.
+      // Counted on the page's own two routes; the cards below read their own.
       const bundleReads = vi
         .mocked(get)
         .mock.calls.filter(([path]) => path === '/admin/bundle/state' || path === '/admin/data/sources');
@@ -753,12 +665,7 @@ describe('the Data tab', () => {
   });
 
   it('leaves no poll behind when the operator walks away mid-import', async () => {
-    // The Data tab is one tab of five and a 127 s import is long enough to leave: the operator
-    // clicks Connectors and comes back. SvelteKit destroys this page and builds it again, and an
-    // async poll survives both -- so the reads doubled per visit, and every live poll fired
-    // `onImported` independently when the row flipped, which on this page re-bootstraps the
-    // shared session store over whatever screen they are now looking at.
-    // [M4.14 cycle 4, m414-c4-dim202-02]
+    // The page is destroyed and rebuilt on a tab switch, and an async poll survives both.
     const onImported = vi.fn();
     /** @type {(value: any) => void} */
     let release = (value) => value;
@@ -773,8 +680,7 @@ describe('the Data tab', () => {
     expect(vi.mocked(get)).toHaveBeenCalledTimes(1);
 
     unmount(app);
-    // The read that was in flight when the screen went away, answering with the terminal phase:
-    // the one moment the abandoned poll used to write a phase and call back.
+    // The in-flight read answers terminal after the screen is gone.
     release(bundleState({ import_job: job({ phase: 'active', ok: true, report: report() }) }));
     await settle();
     expect(onImported, 'a destroyed screen does not re-bootstrap the shell').not.toHaveBeenCalled();
@@ -782,10 +688,7 @@ describe('the Data tab', () => {
   });
 
   it('bounds each read of the state route, which the api client does not', async () => {
-    // `api.js` passes `opts.signal` to `fetch` and sets no timeout; the poll's own deadline is
-    // tested between reads, so a request that never settles suspends it for as long as the tab
-    // is open. The signal is the whole assertion: an aborted read throws, which the poll already
-    // records as an error and carries on from. [M4.14 cycle 4, m414-c4-dim202-03]
+    // The poll's deadline is tested between reads, so each read needs its own.
     vi.mocked(get).mockImplementation(() => new Promise(() => {}));
     const app = mount(BundleImport, { target, props: { importJob: job({ phase: 'running' }) } });
     await settle();
@@ -796,8 +699,7 @@ describe('the Data tab', () => {
         AbortSignal
       );
       expect(options.signal.aborted).toBe(false);
-      // Inside the poll's own budget and outside one interval: a read may not outlive the poll
-      // that owns it, and must not be cut off while the next tick is already due.
+      // Longer than one interval, shorter than the whole poll.
       expect(POLL_READ_TIMEOUT_MS).toBeGreaterThan(POLL_INTERVAL_MS);
       expect(POLL_READ_TIMEOUT_MS).toBeLessThan(POLL_DEADLINE_MS);
     } finally {
@@ -806,15 +708,8 @@ describe('the Data tab', () => {
   });
 });
 
-// ---------------------------------------------------------------- section 3.1's wizard
-
 describe("the first-boot wizard's importer", () => {
-  // §3.1 mounts this component as `<BundleImport onImported={...} />` -- no row handed down,
-  // because the wizard reads `/setup/state` and never `/admin/bundle/state`. First boot is the
-  // one place the measured 127 s import actually happens, so it is the one surface that has to
-  // survive §2's 100 s proxy cut and an F5, and it was the one that could not: step 3 reopened
-  // idle with Validate armed over a worker mid-swap, and the press that followed painted a 409
-  // over an import that was succeeding. [M4.14 cycle 4, m414-c4-dim202-01]
+  // The wizard hands no row down, and first boot is where the long import happens.
   afterEach(() => {
     session.user = null;
   });
@@ -846,9 +741,7 @@ describe("the first-boot wizard's importer", () => {
   });
 
   it('asks an admin route nothing when nobody is signed in', async () => {
-    // Step 0 of the wizard is reachable signed out and its progress dots reach step 3, so a
-    // passer-by mounts this component. `/admin/bundle/state` is `AdminUser`-gated: a read this
-    // visitor did not ask for buys a 401 on the one screen §3.1 gives them, and nothing to adopt.
+    // The wizard is reachable signed out, and `/admin/bundle/state` is admin-gated.
     const app = mount(BundleImport, { target, props: {} });
     await settle();
     try {
@@ -860,10 +753,7 @@ describe("the first-boot wizard's importer", () => {
   });
 
   it('starts no poll when the step is left while its own read is in flight', async () => {
-    // The read this screen does for itself is a round trip, and Finish, Back or a reload can
-    // land inside it: `onDestroy` has already had its one chance to stop a poll by the time the
-    // answer arrives, so the decision to start one has to be taken again after the await.
-    // [M4.14 cycle 4, m414-c4-dim202-01 and -02]
+    // `onDestroy` has run by the time the read answers, so the decision is taken again after the await.
     session.user = { id: 1, name: 'admin', role: 'admin', must_change_password: false };
     /** @type {(value: any) => void} */
     let release = (value) => value;
@@ -877,8 +767,7 @@ describe("the first-boot wizard's importer", () => {
   });
 
   it('stays idle, and silent, when the state route refuses the read', async () => {
-    // A read nobody asked for cannot become an error banner about itself: there is no import to
-    // adopt either way, and the screen's idle state is the truth it already had.
+    // A read nobody asked for cannot become an error banner about itself.
     session.user = { id: 1, name: 'admin', role: 'admin', must_change_password: false };
     vi.mocked(get).mockRejectedValue(Object.assign(new Error('Unauthorized'), { status: 401 }));
     const app = mount(BundleImport, { target, props: {} });

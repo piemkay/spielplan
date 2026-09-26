@@ -1,28 +1,6 @@
-/**
- * The Rate surface's client. Spec v2.1 §6.1, §6.7, §6.8, §13; decision-doc proposals 34–53,
- * 153 and decision 35.
- *
- * Everything this surface knows about the wire lives here, and three of the rules it encodes
- * are load-bearing enough to state out loud:
- *
- *   * **The card is the server's.** A write names `card_token`, never a title, so a double
- *     tap, a back button or a second device arrives as a 409 with a reason rather than as a
- *     second row. We refuse to invent a token and we never answer a card we are only
- *     *showing* — see `commit()`.
- *   * **No model belief before the tap.** §6.1 (Cosley 2003) is enforced by the server's
- *     allow-list, and this module does not undo it: nothing here caches a score, a tier or a
- *     prediction between cards, and `reveal` is only ever the thing the verdict response
- *     handed back. Synthesising one client-side would defeat the whole point of withholding it.
- *   * **The counter is the Undo depth.** Decision 35: "the depth matches the counter the user
- *     is already reading". `session.block.counter` and `undo.available` come from the same
- *     response, so the number on screen and the number Undo obeys cannot drift apart.
- *
- * The one piece of timing that is ours rather than the server's is the reveal hold: proposal
- * 42 attaches the reveal to *the card just rated* for ~1.2 s. The response to a verdict already
- * carries the next card ("next card preloaded", §6 preamble), so we hold the answered card and
- * its counter on screen and swap in the preloaded one when the hold ends — no request happens
- * at the swap, which is what keeps the <2 s budget while the reveal still has somewhere to live.
- */
+// Writes name the server's `card_token`, never a title, and nothing here caches a model belief
+// between cards (§6.1). The reveal hold is the one timing that is ours: the verdict response
+// already carries the next card, so the swap costs no request.
 
 import { ApiError, get, post, qs } from '$lib/api.js';
 import { preloadPoster } from '$lib/art.js';
@@ -30,18 +8,9 @@ import { preloadPoster } from '$lib/art.js';
 /** Proposal 42: "~1.2 s or until the next card". */
 export const HOLD_MS = 1200;
 
-/** §4.1 rule 5's partition, in the words the surface uses. */
 export const KIND_LABELS = { movie: 'film', series: 'series' };
 
-/**
- * §6.1's three modes as [key, name, what it does]; Mix is the default and every entry point
- * lands on it (proposal 36). Decision 492: Mix serves single titles until 15 ratings stand, so
- * its line says when the pairs begin rather than promising them from the second card.
- *
- * The keys are the wire's and the tests'; the names are what a member reads. "mix / sweep /
- * battle" read as jargon on the second household test, so each mode is named by what it asks
- * (decision 519; A3 and policy (h) of 2026-09-26).
- */
+// [key, name, what it does]: the keys are the wire's and the tests', the names a member's.
 export const MODES = [
   ['mix', 'Mixed', 'single titles and pairs in turn - the pairs start at 15 ratings'],
   ['sweep', 'Singles', 'one title at a time - say how you liked it'],
@@ -53,54 +22,24 @@ export function modeName(mode) {
   return MODES.find(([key]) => key === mode)?.[1] ?? '';
 }
 
-/** The pair card's question (A1 of the 2026-09-26 household test: it asked none). */
 export const PAIR_QUESTION = 'Which did you enjoy more?';
 
-/**
- * Proposal 47: the decisive switch "carries that copy on itself as a one-line why". §5.2 fixes
- * the weights. Decision 519 says it plainly, and decision 520 makes the switch the pair's own,
- * so the line says it resets -- a switch that stayed on was the second household test's A6.
- */
+// The switch belongs to the pair, so its line says it resets (decision 520).
 export const DECISIVE_LABEL = 'clear favourite';
 export const DECISIVE_COPY =
   'Turn this on when one is clearly better - that answer counts for more. It resets for the next pair.';
 
-/**
- * Proposal 53: "Random pairs." turns a defence into a statement. §6.1 supplies the rest.
- *
- * The rest changed in 54a. The sentence used to end "the clever ones only pay off in the tier
- * queue", which §6.2's round made false one surface over: `tonight/round.py` selects pairs
- * adaptively on purpose, because identifying the best few titles inside a pool of tens is
- * best-arm identification and not the global-ranking problem §0 row 6 measured the null on. §6.8
- * makes every claim the app states about its own model a matter of honesty, and a person who
- * reads this card and then watches Tonight pick has been told something untrue. So the sentence
- * now names the distinction rather than one of its two sides — the behaviour is unchanged, which
- * is the whole point: 54a amends the explanation, not the rule. [§6.1, §6.8, 54a; finding 22]
- *
- * Decision 491 restates it for members: the same claim and the same distinction, with the two
- * places named by what a person taps rather than by section number (decision 486). Decision 519
- * restates it once more, because "smarter picking only pays off when the question is which of a
- * few" still read as jargon on the second household test: the same claim, in words.
- */
 export const PAIR_SELECTION_COPY =
   'Pairs are picked at random from titles you rated the same way. For learning your taste, ' +
   'random works as well as anything cleverer. Choosing pairs cleverly only helps when the ' +
   "question is which of a few is best - that is what Sharpen my ranking on Rank and Tonight's " +
   'round do.';
 
-/**
- * §6.1's learning curve. Proposal 49: the copy is the caption, the position is the point.
- * Decision 491: counted in ratings, the word the rest of the surface uses, not "labels".
- */
 export const LEARNING_CURVE_COPY =
   'Your suggestions get about three times more personal between 5 and 100 ratings. Aim for ' +
   '50-100 in your first sitting or two.';
 
-/**
- * Decision 35's chip names the observation it will take back. The server sends the journal's
- * own `kind_of`, and `not_seen` on a button is a column name; `data-undo-kind` keeps the raw
- * value for the tests and the words are for the person (decision 486).
- */
+// Words for the chip; `data-undo-kind` keeps the journal's raw kind.
 export const UNDO_KIND_LABELS = {
   verdict: 'rating',
   not_seen: 'not seen',
@@ -116,13 +55,7 @@ export function undoKindLabel(kind) {
   return UNDO_KIND_LABELS[kind] ?? kind.replace(/_/g, ' ');
 }
 
-/**
- * One rating, two ratings — the count the balance widget and the rail both print.
- *
- * The count is over the session's kinds, because each kind is its own model (§4.1 rule 5) and
- * decisions 491 and 492 read the number that way. So with one kind selected it names the kind:
- * on the second household test "9 ratings" under Series alone read as fifty ratings lost (A5).
- */
+// Counts are per kind (each kind is its own model), so a single-kind count names the kind.
 export function ratingsLabel(n, kinds = []) {
   const count = Number(n) || 0;
   const noun = count === 1 ? 'rating' : 'ratings';
@@ -130,19 +63,16 @@ export function ratingsLabel(n, kinds = []) {
   return only ? `${count} ${only} ${noun}` : `${count} ${noun}`;
 }
 
-/** §12's M2 exit criterion, which proposal 49 makes legible to the person doing the labelling. */
+/** The upper end of §12's M2 exit criterion. */
 export const LEARNING_TARGET = 100;
 
 export const rate = $state({
-  // Only true until the first envelope lands. A later refresh must not flip it: blanking the
-  // surface mid-session would throw away the card the person is looking at.
+  // True only until the first envelope lands: a later refresh must not blank the card on screen.
   loading: true,
   booted: false,
   busy: false,
   /**
-   * Which answer is in flight (`verdict-2`, `duel-A`, `skip`...), so the control that was tapped
-   * can say so while the rest wait. A4 of the second household test: every button greyed out at
-   * once after a tap and nothing said which answer had been taken.
+   * Which answer is in flight (`verdict-2`, `duel-A`, `skip`...), so the tapped control says so.
    * @type {string | null}
    */
   pending: null,
@@ -169,11 +99,7 @@ export const rate = $state({
   log: []
 });
 
-/**
- * Rate's "a title you know" search: the hits from `GET /api/rate/search`, each saying whether
- * the person already rated it. Choosing one pins it with `head`, the banner's own mechanism, so
- * the verdict is still given on §6.1's card (C5.2 of the 2026-09-25 household test).
- */
+// Choosing a hit pins it with `head`, so the verdict is still given on §6.1's card.
 export const finder = $state({
   q: '',
   /** @type {any[]} */
@@ -187,7 +113,7 @@ export const finder = $state({
 /** Below this many characters a search matches half the catalogue and helps nobody. */
 export const FIND_MIN_CHARS = 2;
 
-/** §6.0's pending-verdicts banner pins titles to the front with repeated `?head=` parameters. */
+// The banner's pins, sent as repeated `?head=` parameters.
 let head = [];
 let pendingCard = null;
 let holdTimer = null;
@@ -196,32 +122,20 @@ let findSeq = 0;
 
 /** @param {(string|number)[]} ids */
 export function setHead(ids) {
-  // `Number(null)` is 0 and 0 is finite, so "is it a number" is not the test — "is it a title
-  // id" is. A stray 0 in the list is a 422 from the route, which reads as the banner being
-  // broken rather than as one bad segment in a URL.
+  // Title ids only: `Number(null)` is a finite 0, and a stray 0 is a 422.
   head = (ids ?? []).map(Number).filter((n) => Number.isInteger(n) && n > 0);
   return head;
 }
 
-/** The pins still owed, for tests and for the page's own reasoning. */
 export function pendingHead() {
   return [...head];
 }
 
-/**
- * A pin has done its job once its card is on the table, so it leaves `head`.
- *
- * Every write re-sends `head`, and the server now serves a pin even over this sitting's skip or
- * an earlier "not seen" (a person who searched for a film has asked for it again). Kept after its
- * card was answered, a pin would therefore hand the same card straight back after a skip. The
- * banner's other named titles stay pinned in their order, which is §6.0's promise.
- */
+// The server serves a pin even over a skip, so an answered pin must leave or its card returns.
 function consumePin(card) {
   const id = card?.type === 'sweep' ? card.title?.id : null;
   if (id != null && head.includes(id)) head = head.filter((t) => t !== id);
 }
-
-// --- pure helpers, all of them rendered somewhere and all of them testable ------------------
 
 /** @param {string[]} kinds */
 export function kindLabel(kinds) {
@@ -230,16 +144,7 @@ export function kindLabel(kinds) {
   return names.join(' + ');
 }
 
-/**
- * §6.1's counter, with proposal 46's partition and the mode the person chose:
- * "7 / 15 this block · film · Mixed". Decision 35 makes this the number Undo is measured in,
- * so it is built from the server's own `counter` string rather than recomputed here.
- *
- * It named the card type being served ("· sweep", "· battle") until the second household test,
- * where both members read that as the mode and saw it disagree with the pill they had pressed
- * (A2). The card says what it is by its own shape, and now asks its question; the header says
- * what was chosen.
- */
+// Built from the server's own `counter` (Undo's depth, decision 35), naming the chosen mode.
 export function counterLine(block, kinds, mode) {
   if (!block) return '';
   const parts = [`${block.counter} this block`];
@@ -250,16 +155,7 @@ export function counterLine(block, kinds, mode) {
   return parts.join(' · ');
 }
 
-/**
- * Runtime in the shape the rest of the app uses — and there is only one shape, because this is
- * the only copy. `PosterCard` and `TitleDetail` import it rather than open-coding it; the title
- * card's copy had never grown the series branch, so a 24-minute episode read `2017 · 0h 24m ·
- * series` two taps after the poster that said `24m/ep`.
- *
- * The zero-hour branch is the same argument at the other end: `0h 45m` is the data voice
- * claiming an hour that is not there, and 240 of the 13,324 corpus movies run under one.
- * [§6.0 metadata, §6.8 data voice, proposal 27; M4.9 finding 37]
- */
+// The one runtime label: series per episode, and no zero hour.
 export function runtimeLabel(title) {
   if (!title?.runtime_min) return null;
   if (title.kind === 'series') return `${title.runtime_min}m/ep`;
@@ -268,11 +164,7 @@ export function runtimeLabel(title) {
   return h ? `${h}h ${m}m` : `${m}m`;
 }
 
-/**
- * Proposal 40's meta line, in the data voice. Genre is not on the wire for this card, so the
- * line is year and runtime; it is built in JS rather than in markup because Svelte collapses
- * the whitespace around an `{#if}` and turns "1995 · 2h 50m" into "1995· 2h 50m".
- */
+// Built in JS: Svelte collapses the whitespace around an {#if}, gluing the separator.
 export function metaLine(title) {
   return [title?.year ?? '—', runtimeLabel(title)].filter(Boolean).join(' · ');
 }
@@ -292,11 +184,6 @@ export function sharePct(share) {
   return Math.round((Number(share) || 0) * 100);
 }
 
-/**
- * Decision 35: at the block boundary the chip "disables visibly, not silently". The server
- * sends the reason; this is the sentence for it, and there is no third branch — an Undo that
- * is available needs no explanation.
- */
 export function undoMessage(undo) {
   if (!undo || undo.available) return '';
   if (undo.reason === 'block_boundary') {
@@ -305,29 +192,19 @@ export function undoMessage(undo) {
   return 'nothing to undo in this block';
 }
 
-/**
- * Proposal 153: before the first fit the reveal is *suppressed*, not banded — "a guess drawn
- * from someone else's thresholds is not a prediction about this user". The server says so;
- * we render its reason rather than a class.
- */
+// Before the first fit the reveal is suppressed with the server's reason, never banded (proposal 153).
 export function revealLine(reveal) {
   if (!reveal) return null;
   if (reveal.available) return { available: true, text: reveal.text, agreed: !!reveal.agreed };
   return { available: false, text: reveal.reason ?? 'no prediction yet', agreed: false };
 }
 
-/** Milliseconds the card was on screen before the tap (proposal 51, §4.2's `latency_ms`). */
+/** Milliseconds the card was on screen before the tap: §4.2's `latency_ms`. */
 export function latency() {
   return shownAt ? Math.max(0, Date.now() - shownAt) : null;
 }
 
-// --- the envelope --------------------------------------------------------------------------
-
-/**
- * The held-back card's posters, asked for while the reveal holds (decision 483). The response
- * already carries the next card so the swap costs no request; without this its art would still
- * cost one, after the swap, inside §6's "<2 s per sweep card, <1.5 s per battle".
- */
+// Warm the next card's art during the reveal hold, inside §6's per-card budget.
 export function preloadArt(card) {
   return [card?.title, card?.left, card?.right].filter(Boolean).map(preloadPoster);
 }
@@ -433,13 +310,9 @@ const controls = (body) => post('/rate/session', { ...body, head });
 /** Proposal 36: mode is sticky per user only after an explicit change. This is that change. */
 export const setMode = (mode) => send(() => controls({ mode }));
 
-/** Proposal 46: the Rate surface carries the film/series partition itself. */
 export const setKinds = (kinds) => send(() => controls({ kinds }));
 
-/**
- * §6.1's decisive switch. The backend stores it for the pair on the table and turns it off with
- * that pair (decision 520), so the envelope that brings the next pair brings it off.
- */
+// The backend turns the switch off with the pair on the table (decision 520).
 export const setDecisive = (decisive) => send(() => controls({ decisive }), { pending: 'decisive' });
 
 export const restart = () => send(() => controls({ restart: true }));
@@ -470,19 +343,13 @@ export function skip() {
 }
 
 /**
+ * `token` names the card the long press started on: the write fires 500ms later, and `load()`
+ * may have swapped the card by then. A mismatch writes nothing; absent means the card on the table.
+ *
  * @param {'A'|'B'|'TIE'} outcome
  * @param {{decisive?: boolean, token?: string}} [opts] proposal 51's long-press: one answer may
  *   override the persistent toggle without moving it, and `token` is the card the gesture started
  *   on.
- *
- * `token` exists because the long press is a *delayed* write. It is armed on `pointerdown` and
- * fires 500 ms later, and everything that calls `load()` in that window — the `?head=` effect,
- * the model-gate effect, an Undo — replaces the card underneath it; reading `rate.card` at fire
- * time then posts the gesture against a pair nobody pressed. §5.2 weighs a decisive duel ~1.6
- * against ~1.0, §4.2 keeps it forever, and nothing in the Ledger tells it apart from one the
- * person made, so the only safe answer is none: the caller names the card it pressed and a
- * mismatch writes nothing. An absent `token` means "the card on the table" — the strip buttons
- * and the keyboard path have no pointerdown to capture one. [§6.1, §5.2, §4.2; finding 28]
  */
 export function duel(outcome, opts = {}) {
   const token = rate.card?.token;
@@ -502,11 +369,7 @@ export function correct(side) {
   });
 }
 
-/**
- * Decision 35. Pops the last observation of any kind and restores the exact card that produced
- * it — including, deliberately, one taken during a reveal hold, which is why this clears the
- * hold instead of committing it.
- */
+// Restores the exact card, even one taken during a reveal hold, so the hold is cleared, not committed.
 export function undo() {
   clearTimeout(holdTimer);
   rate.holding = false;
@@ -516,7 +379,7 @@ export function undo() {
   return send(() => post('/rate/undo', {}));
 }
 
-/** Tests and route teardown; a stray hold timer would fire into a destroyed component. */
+/** A stray hold timer would fire into a destroyed component. */
 export function reset() {
   clearTimeout(holdTimer);
   holdTimer = null;
@@ -528,8 +391,6 @@ export function reset() {
   clearFinder();
 }
 
-// --- "a title you know" ---------------------------------------------------------------------
-
 export function clearFinder() {
   findSeq++;
   finder.q = '';
@@ -539,10 +400,7 @@ export function clearFinder() {
   finder.searched = '';
 }
 
-/**
- * Look a remembered title up. Each keystroke's request carries a sequence number, so a slow
- * answer to "he" can never overwrite the list for "heat".
- */
+// A sequence number per keystroke, so a slow "he" never overwrites "heat".
 export async function findTitles(q) {
   finder.q = q ?? '';
   const query = finder.q.trim();
@@ -569,11 +427,7 @@ export async function findTitles(q) {
   return finder.items;
 }
 
-/**
- * Put a chosen hit on the table: pin it and re-read, exactly as the banner's link does. A title
- * the person already rated is never offered, and a pin the server could not serve says so rather
- * than leaving the old card up as if the tap had worked.
- */
+// A pin the server could not serve says so rather than leaving the old card up.
 export async function rateTitle(item) {
   if (!item || item.rated || rate.busy) return false;
   setHead([item.id]);
@@ -582,8 +436,7 @@ export async function rateTitle(item) {
   await load({ quiet: true });
   const served = rate.card?.type === 'sweep' && rate.card?.title?.id === item.id;
   if (!served) {
-    // Not left pinned: every later tap would carry it, and a pick that surfaced three cards on
-    // would be a card nobody asked for at that moment.
+    // Not left pinned, or a later tap would surface a card nobody asked for then.
     setHead([]);
     rate.notice = `${item.name} can't be rated right now.`;
   }

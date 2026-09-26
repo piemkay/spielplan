@@ -1,30 +1,6 @@
 <script>
-  /**
-   * §6.6 Data's extraction queue with its approve/spend controls. Spec v2.1 §8.4, §6.6 Data;
-   * decisions 330, 441, 442 and 443.
-   *
-   * THE BATCH TOTAL IS THE CONTROL (plan C2). One tap can select every row, so the figure beside
-   * Launch is the batch's reservation of both attempts at the providers and passes chosen for this
-   * batch, against what the month has left - and it is the server's figure, asked again on every
-   * change to the selection, the providers or the passes. The per-title estimate is shown beside
-   * it as reassurance, never as the thing Launch is held against.
-   *
-   * LAUNCH IS DARK WITH ITS REASON, NEVER A WARNING AFTER THE FACT (plan C3). The reason is the
-   * quote's own sentence, printed as text beside the button so a phone - which has no hover to
-   * show a tooltip - reads it too, and it stays on screen when the queue is empty, because "no
-   * spend cap is configured" is worth knowing before the first row arrives. The launch route prices
-   * the batch again inside its transaction whatever this card shows (decision 441).
-   *
-   * A ROW'S REASON IS SHOWN AS WRITTEN (§6.6 Data: "each labelled with its reason"); its writer in
-   * `flywheel/` composed it for this screen. A running row also shows its title's board status and
-   * reason, because the row closes only at the title's next stage-8 observation (decision 440) and
-   * the board is where a batch that stalled says why.
-   *
-   * AND ITS AGE, READ OFF ITS OWN `created_at` (§8.4 as v2.1.3 amends it: "a 'queued just now'
-   * marker read off the row's own creation time"). The clock it is read against ticks while the page
-   * is open, so a row that said "just now" when it arrived does not go on saying it an hour later.
-   * [M5.6 review cycle 1, M56-DATA-01]
-   */
+  // Launch is held against the batch reservation the server re-quotes on every change, and the
+  // launch route prices the batch again whatever this card shows (decision 441).
   import { onDestroy, onMount } from 'svelte';
   import { get, post } from '$lib/api.js';
   import {
@@ -44,11 +20,9 @@
     toggle
   } from '$lib/flywheel.svelte.js';
 
-  // How long a burst of taps settles before the quote is asked: long enough that ticking five rows
-  // asks once, short enough that the figure follows the finger.
+  // Ticking five rows asks once, and the figure still follows the finger.
   const QUOTE_DEBOUNCE_MS = 200;
-  // How often the queued marker's clock moves: its finest unit is a minute, so half of one keeps
-  // "just now" from outliving the minute it means by more than that.
+  // Half the marker's finest unit (a minute), so "just now" never long outlives its minute.
   const CLOCK_MS = 30_000;
 
   let envelope = $state(null);
@@ -86,8 +60,7 @@
       }
       envelope = fresh;
       now = Date.now();
-      // A row that closed or launched since it was ticked leaves the selection, so the total never
-      // counts a row the queue no longer shows.
+      // A row that closed or launched since it was ticked leaves the selection.
       const live = new Set((fresh.items ?? []).map((item) => item.id));
       selected = new Set([...selected].filter((id) => live.has(id)));
       error = '';
@@ -109,8 +82,7 @@
     }
   }
 
-  // Every change to the selection, the providers or the passes asks again, and the request carries
-  // a snapshot of the three so its answer can be matched against what is on screen when it lands.
+  // The request carries a snapshot, so a late answer is matched against what is on screen.
   $effect(() => {
     if (!envelope) return;
     const requested = {
@@ -303,9 +275,7 @@
     gap: 10px;
     align-items: flex-start;
   }
-  /* A selected row is marked by its box's tick and a brighter edge in ink, not by the ember: the
-     only accent on this card is Launch, the one primary action, so the eye is not asked to tell a
-     selection from the button it arms by colour alone (§6.8; decision 276). */
+  /* Selection in ink, not the accent: the only accent here is Launch (§6.8). */
   .item.picked {
     border-color: var(--ink-3);
   }
@@ -331,8 +301,6 @@
   .name {
     font-weight: 600;
   }
-  /* Whole and wrapped, for the board's reason: a queue row's reason is the sentence the operator
-     decides to spend on, and the launch refusal is the sentence that says why they cannot. */
   .reason {
     margin: 0;
     white-space: pre-wrap;
@@ -402,9 +370,7 @@
   }
 
   @media (pointer: coarse) {
-    /* §6 preamble's 48 px floor, on both axes. A checkbox is the control that ships at 16 px, and
-       design.css's coarse block reaches neither a label nor a checkbox, so the label - which is
-       what a thumb actually lands on - carries the whole target itself. */
+    /* design.css's coarse floor reaches neither a label nor a checkbox; the label is the target. */
     .pick {
       min-height: var(--touch);
       min-width: var(--touch);
@@ -413,9 +379,7 @@
       min-height: var(--touch);
       min-width: var(--touch);
     }
-    /* The pass picker is a `select`, which design.css raises on height and never on width, and one
-       digit leaves it about 41 px wide by content - on the control that doubles the reservation
-       when it goes from 1 to 2. [M5.6 review cycle 1, M56-DATA-04] */
+    /* design.css raises a select's height only, and one digit leaves it about 41px wide. */
     .passes select {
       min-width: var(--touch);
     }

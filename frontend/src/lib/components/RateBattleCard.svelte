@@ -1,32 +1,6 @@
 <script>
-  /**
-   * §6.1's battle card: "two posters are the buttons; `Tie` (feeds the Davidson tie term); a
-   * **decisive switch** … for the pair on the table and is off again for the next pair …
-   * Corrections zone at the bottom (nothing tappable inside the poster cards), one row"
-   * (decision 520).
-   *
-   * Four things this card does not have, each on purpose:
-   *
-   *   * **No tier, score, σ or rank.** Proposal 34 extends §6.1's anchoring rule to battles —
-   *     "as drawn in the prototype, every duel is anchored on exactly the quantity it exists to
-   *     correct". Year and runtime only.
-   *   * **Nothing tappable inside the poster.** The poster *is* the target; a nested control
-   *     would make the biggest tap area on the card ambiguous.
-   *   * **No hidden Tie.** Proposal 48 keeps the mirrored `left | tie | right` strip below the
-   *     posters: on a phone it is the only thumb-reachable target, and it is where Tie lives.
-   *   * **No skipped ties.** `Tie` is an outcome that writes a duel row (22% of random pairs
-   *     are genuine ties), never a dropped question.
-   *
-   * The decisive switch lives on the server and belongs to the pair on the table: it weighs
-   * the answer to this pair and is off again for the next (decision 520 — on the second
-   * household test a switch that stayed on weighed a pick nobody had marked as clear). It
-   * carries its own one-line why (proposal 47) rather than leaving the justification two cards
-   * down the rail. Long-press on a poster is §6.1's single gesture accelerator (proposal 51):
-   * one decisive answer, without moving the switch.
-   *
-   * And the card asks its question. It showed two posters over `left | tie | right` and asked
-   * nothing, which both members of the second household test stopped at (A1).
-   */
+  // No model number before the answer (§6.1's anchoring rule), nothing tappable inside a poster,
+  // and Tie is an outcome that writes a duel row. The decisive switch belongs to the pair on the table.
   import { onDestroy } from 'svelte';
   import RateCorrections from '$lib/components/RateCorrections.svelte';
   import RatePoster from '$lib/components/RatePoster.svelte';
@@ -51,20 +25,8 @@
   let timer = null;
   let fired = false;
 
-  /**
-   * The press names the card it started on.
-   *
-   * A long press is a write that happens 500 ms after the finger lands, and the only thing that
-   * can change in that window is which pair is on the table: the `?head=` effect, the model-gate
-   * effect and Undo all call `load()`, and `rate.svelte.js` read `rate.card.token` at fire time.
-   * The timer closed over the outcome alone, so the gesture landed on whatever card had arrived —
-   * reproduced as a decisive duel posted against the pair that replaced the pressed one. It is
-   * the strongest observation the app has (§5.2 weighs decisive ~1.6 against ~1.0), §4.2 keeps it
-   * forever, and nothing in the Ledger tells it apart from one the person made. So the token is
-   * captured here, the timer drops itself when the card has moved on, and `duel()` refuses the
-   * write as well, because the card can still change between this check and the POST.
-   * [§6.1, §5.2, §4.2; M4.10 finding 28]
-   */
+  // The press names the card it started on: `load()` can swap the card within the 500ms, and a
+  // decisive duel on the wrong pair is the heaviest observation there is. `duel()` checks again.
   function press(outcome) {
     fired = false;
     clearTimeout(timer);
@@ -82,10 +44,7 @@
     timer = null;
   }
 
-  // A timer still armed when this card goes away — a navigation, a mode switch, a sweep card
-  // taking the slot — used to fire into a component nobody is looking at and write a duel. The
-  // token check above would now refuse most of those; unarming it refuses all of them, and it is
-  // the same teardown `rate/+page.svelte` and `rank/+page.svelte` already do with `reset`.
+  // Unarm on teardown, so a pending press cannot write into a card nobody sees.
   onDestroy(release);
 
   function tap(outcome) {
@@ -144,18 +103,15 @@
     </button>
   </div>
 
-  <!-- §6.8's one-line why, on the question as well as on the shelf. -->
   <p class="why" data-testid="rate-battle-reason">{card?.reason ?? ''}</p>
 
-  <!-- A battle only ever stands in for a sweep when there is nothing new to rate (§6.1's drained
-       state), so this line can name its cause, in the member's words (decision 486). -->
+  <!-- A battle stands in for a sweep only when nothing new is left to rate (§6.1's drained state). -->
   {#if card?.substituted_for}
     <p class="data" data-testid="rate-substituted">
       Nothing new to rate right now - comparing titles you've already rated.
     </p>
   {/if}
 
-  <!-- Proposal 48: the mirrored strip, one-handed, and the home of Tie. -->
   <div class="strip" role="group" aria-label={PAIR_QUESTION}>
     <button
       class="cell"
@@ -255,7 +211,6 @@
     opacity: 0.5;
     cursor: default;
   }
-  /* The answer in flight stays lit while the rest wait (A4 of the 2026-09-26 household test). */
   .side.picked:disabled {
     opacity: 1;
   }
@@ -381,13 +336,7 @@
     .vs {
       display: none;
     }
-    /* On an iPhone 13 the card used to stand 589 px tall: two full-width 2:3 posters, then the
-       why-line, and Tie, §6.1's decisive switch and Skip all below the bottom bar.
-       Measured at 390 x 664 the posters are now capped so the pair, the strip and the toggle
-       row fit above it, and the order under the posters is the order a thumb needs them in:
-       the answer strip, the toggle and Skip, then the why-line and the corrections row. The
-       posters are still the buttons (§6.1), and the name sits on each (§6.8's card grammar).
-       [§6 preamble; C5.6 of the 2026-09-25 household test] */
+    /* Phone: posters capped so the pair, the strip and the toggle row fit above the bottom bar. */
     .pair {
       grid-template-columns: 1fr 1fr;
       width: 100%;
@@ -421,11 +370,7 @@
     }
   }
 
-  /* The same rule and the same four characters as `RateSweepCard`'s, for the same reason: a
-     `button` clears design.css's coarse block on the axis that block sets and goes unmeasured on
-     the one it does not, and `skip` with `padding: 6px 0` is 25 px wide. `.knobs` wraps, so on a
-     phone this is often the only control on its row and there is nothing beside it to widen it.
-     [§6 preamble; proposal 38; review cycle 3: M415-C3-CSS-01] */
+  /* design.css's coarse floor sets height only, and `skip` would be 25px wide. */
   @media (pointer: coarse) {
     .text {
       min-width: var(--touch);

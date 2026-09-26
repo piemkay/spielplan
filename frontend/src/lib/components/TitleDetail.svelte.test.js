@@ -1,28 +1,5 @@
 /**
  * @vitest-environment jsdom
- *
- * What the seen control says about a write that was deliberately never sent. Spec v2.1 §7.3, §6.8;
- * decision 210(a); M4.11.
- *
- * Jellyfin stores no Played flag on a Series — `Folder.FillUserDataDtoValues` computes the folder's
- * from its episodes — so the only way to un-mark one is a recursive DELETE across every episode,
- * which would destroy watch history the app never recorded and cannot put back. Decision 210(a)
- * settles it: `kind='series'` with `seen=False` writes the app side, stamps `jf_synced_at` so the
- * sweep does not re-owe the row, sends nothing, and returns the pair `(True, 'series unseen is
- * app-only')`. "And the surface says so" is the other half of that decision, and this card was
- * printing the opposite: it read `synced` alone, so a reason that arrived WITH a success rendered as
- * "synced to Jellyfin" — a sentence about a request that was never made.
- *
- * MOUNTED because both assertions are about one line of copy against one payload, which is cheaper
- * and more exact than reaching a series title through a stateful browser suite; `08-jellyfin.spec.js`
- * keeps the movie path end to end, where the same line must still read "synced to Jellyfin".
- *
- * M4.15 adds two more claims about this card, both of them §6 preamble's: that §6.0's second action
- * explains itself on a screen with no hover, and that the panel — which IS the screen on a phone —
- * can be dismissed by something other than the one control in its corner. The browser half of the
- * second is `19-phone-shell.spec.js`'s and is what the coverage row names; what is asserted here is
- * the wiring, because a `use:` action that is imported and never applied looks identical to one that
- * works until somebody taps outside. [proposals 127, 131; §6.8]
  */
 
 import { flushSync, mount, unmount } from 'svelte';
@@ -51,8 +28,7 @@ const payload = (over = {}) => ({
     trailer_key: null,
     ...over
   },
-  // No `model_line`: the server leaves it out while Show the model is off (decision 486), and
-  // that is the default every case below starts from.
+  // No `model_line`: the server omits it while Show the model is off, the default here.
   credits: [],
   platform_ratings: { items: [], note: 'display-only' },
   dna: { extracted: [], projected: [] },
@@ -78,10 +54,7 @@ async function settle() {
   flushSync();
 }
 
-/**
- * Mount the card over one payload. `over` patches the title; `extra` patches the rest of the body
- * (`actions`, say) and, under `props`, the props the shell passes in.
- */
+// `over` patches the title; `extra` patches the body and, under `props`, the component's props.
 async function open(over = {}, extra = {}) {
   const { props: extraProps = {}, ...body } = extra;
   vi.mocked(get).mockResolvedValue({ ...payload(over), ...body });
@@ -99,7 +72,7 @@ async function open(over = {}, extra = {}) {
   return app;
 }
 
-/** A pointerdown as an engine sends it. jsdom ships no `PointerEvent`; the action reads none of it. */
+// jsdom ships no PointerEvent, and the action reads none of it.
 const tap = (/** @type {Element} */ el) =>
   el.dispatchEvent(new Event('pointerdown', { bubbles: true, cancelable: true }));
 
@@ -124,8 +97,6 @@ describe("decision 210(a)'s why-line", () => {
   });
 
   it('is absent on a film, and absent on a series that is not seen yet', async () => {
-    // The negative control, twice over: the line is about the un-marking direction of a series, and
-    // §6.8's register is a quiet line where the consequence is — not a standing disclaimer.
     let app = await open({ kind: 'movie' });
     expect(target.querySelector(NOTE)).toBeNull();
     unmount(app);
@@ -149,7 +120,6 @@ describe('the sync note', () => {
     try {
       await tapSeen();
       const note = target.querySelector(SYNCNOTE).textContent;
-      // The reason, in the member register (decision 486) rather than the rail's words.
       expect(note).toContain('Jellyfin keeps its own episode history');
       expect(note).not.toContain('up to date');
     } finally {
@@ -158,8 +128,6 @@ describe('the sync note', () => {
   });
 
   it('still says so when the push really did land', async () => {
-    // The negative control `08-jellyfin.spec.js` asserts on the movie path: a successful push with
-    // nothing to explain must say Jellyfin was told.
     vi.mocked(post).mockResolvedValue({ state: 'seen', synced: true, reason: null });
     const app = await open({ kind: 'movie', seen_state: 'unseen' });
     try {
@@ -171,8 +139,6 @@ describe('the sync note', () => {
   });
 
   it('sits under the actions and outside the credits, in the display face', async () => {
-    // It sat after the series note in the mono data voice at -4 px and read as part of CAST &
-    // CREW (user test 2026-09-25).
     vi.mocked(post).mockResolvedValue({ state: 'seen', synced: false, reason: 'not on Jellyfin' });
     const app = await open(
       { kind: 'movie', seen_state: 'unseen' },
@@ -193,9 +159,6 @@ describe('the sync note', () => {
 
 describe("§6.0's second action, on a screen with no hover", () => {
   it('says why Play on Jellyfin is disabled, in the quiet-reason register', async () => {
-    // The reason used to live in `title="link a Jellyfin server in Admin (M1)"`, and a `title`
-    // attribute is a hover tooltip: on §6 preamble's primary form factor it does not exist, so
-    // §6.0's second action was a dead button with no explanation reachable anywhere on the device.
     const app = await open({}, { actions: { play_on_jellyfin: null, play_reason: 'no_server' } });
     try {
       const why = target.querySelector(JELLYFIN_WHY);
@@ -204,7 +167,6 @@ describe("§6.0's second action, on a screen with no hover", () => {
       expect(why.textContent, 'a milestone label in member copy (decision 486)').not.toMatch(
         /\bM\d\b/
       );
-      // §6.8's register, not a new one: `.why` is the class design.css sets in the display face.
       expect(why.classList.contains('why')).toBe(true);
       expect(why.tagName).toBe('P');
 
@@ -220,8 +182,6 @@ describe("§6.0's second action, on a screen with no hover", () => {
   });
 
   it('drops the line once a server is linked', async () => {
-    // The negative control. §6.8's register is a line where the consequence is, not a standing
-    // disclaimer under an action that works.
     const app = await open(
       {},
       { actions: { play_on_jellyfin: 'http://jf.lan/web/#/details?id=1', play_reason: null } }
@@ -248,9 +208,6 @@ describe('the panel dismisses', () => {
   });
 
   it('stays open when the pointer lands inside it', async () => {
-    // Every control on this card is inside the panel — the seen toggle, the credits, both
-    // actions — so a dismissal that fired on them would make the card unusable rather than
-    // dismissible.
     const onClose = vi.fn();
     const app = await open({}, { props: { onClose } });
     try {
@@ -276,8 +233,7 @@ describe('the panel dismisses', () => {
   });
 
   it('stops listening once it is gone', async () => {
-    // The panel is mounted behind `{#if selected}` and unmounted on every close, so a listener
-    // left on `document` is one per title the household has ever opened.
+    // Mounted per selection, so a leaked listener is one per title ever opened.
     const onClose = vi.fn();
     const app = await open({}, { props: { onClose } });
     unmount(app);
@@ -289,8 +245,7 @@ describe('the panel dismisses', () => {
 
 describe('the DNA card and the credits after the 2026-09-25 user test', () => {
   it('marks a quote cut mid-sentence and draws a one-source projection fainter, dropping none', async () => {
-    // C9.6 and C9.5. §4.1 rule 2 makes a projected weight a weight and never a filter, so the
-    // single-source chip is on the card, only drawn fainter than the four-source one.
+    // A projected weight is never a filter (§4.1 rule 2): the one-source chip stays, fainter.
     const app = await open(
       {},
       {
@@ -315,8 +270,7 @@ describe('the DNA card and the credits after the 2026-09-25 user test', () => {
       expect(target.querySelector('.quote').textContent).toBe(
         '“…not this serious, gritty crime epic…”'
       );
-      // Both chips are on the card; the one-source guess is fainter and folded beside the other
-      // (decision 517), so they are read by label rather than by position.
+      // Read by label, not position: the one-source guess is folded beside the other.
       const chips = [...target.querySelectorAll('.chip')];
       expect(chips).toHaveLength(2);
       const faint = Object.fromEntries(
@@ -329,7 +283,7 @@ describe('the DNA card and the credits after the 2026-09-25 user test', () => {
   });
 
   it('keys the credit list by person and class, so one person in two classes is two rows', async () => {
-    // C9.3: `credits_for` folds per (person, role class) and the card's key follows it.
+    // `credits_for` folds per (person, role class), and the card's key follows it.
     const credit = (over) => ({ name: 'Michael Mann', department: 'Directing', sources: ['tmdb'], ...over });
     const app = await open(
       {},
@@ -348,13 +302,8 @@ describe('the DNA card and the credits after the 2026-09-25 user test', () => {
   });
 });
 
-// --- the 2026-09-25 user test: the member register (decision 486), the card's own answer
-// (decision 487) and an unbuilt Map (decision 488) ------------------------------------------
-
 describe('Play says which of its two reasons it is', () => {
   it('names a title outside the library as that, not as a missing server', async () => {
-    // Live: every unowned title read "Play needs a linked Jellyfin server - an admin links one in
-    // Admin (M1)" on an install whose server was linked.
     const app = await open(
       { kind: 'movie' },
       { actions: { play_on_jellyfin: null, play_reason: 'not_in_library' } }
@@ -397,8 +346,6 @@ describe("the model line is Show the model's", () => {
 
 describe('the header', () => {
   it('draws the poster primitive for this title, inert and nameless', async () => {
-    // Decision 483's same-origin art arrives through RatePoster; the card passes the title with
-    // its `id`, which is what the art route is keyed on.
     const app = await open();
     try {
       const poster = target.querySelector('[data-testid="rate-poster"]');
@@ -422,7 +369,6 @@ describe('the header', () => {
   });
 
   it('links the trailer by what it is and never prints its key', async () => {
-    // It printed `TRAILER F-eMt3SrfFU` (user test 2026-09-25).
     const app = await open({ trailer_key: 'F-eMt3SrfFU' });
     try {
       const link = target.querySelector('a.trailer');
@@ -499,7 +445,6 @@ describe('the DNA card in the member register', () => {
   });
 
   it('marks a quote cut from a longer sentence at the end it was cut', async () => {
-    // Heat's mood.gritty quote read as a negation because nothing said it was a fragment.
     const app = await open({}, { dna });
     try {
       const quotes = [...target.querySelectorAll('.quote')].map((q) => q.textContent);
@@ -513,9 +458,7 @@ describe('the DNA card in the member register', () => {
   });
 
   it('keeps every inferred term, folds the one-source guess, and leaves the count to Show the model', async () => {
-    // The second household test read "psychedelic 1" and "Tokyo 1" as noise, and fifty chips as a
-    // wall (decision 517). The count is how many sources suggested a term, which is Show the
-    // model's; the one-source guess is folded behind its own disclosure, never dropped.
+    // The source count is Show the model's; the one-source guess is folded, never dropped.
     const app = await open({}, { dna });
     try {
       const chips = [...target.querySelectorAll('.chips .chip')];
@@ -536,8 +479,6 @@ describe('the DNA card in the member register', () => {
     }
   });
 });
-
-// --- the second household test: the card leads with why, and folds the rest (decisions 516, 517)
 
 describe('the card leads with what a member opens it for', () => {
   const credits = Array.from({ length: 8 }, (_, i) => ({
@@ -642,8 +583,6 @@ describe('the card leads with what a member opens it for', () => {
 
 describe('the DNA card says each thing once', () => {
   it('prints one block per quoted term with each quote once, and never repeats it as a guess', async () => {
-    // Collateral's Metacritic "Los Angeles" quote was stored twice by two extraction runs, and
-    // Heat's "loneliness" was a quote and an inferred chip at once (second household test, U4).
     const quote = { quote: 'the cinematic master poet of nocturnal Los Angeles', source: 'metacritic:1' };
     const la = { term: 'place.los_angeles', facet: 'place', label: 'Los Angeles' };
     const app = await open(
@@ -743,8 +682,6 @@ describe('the name a German viewer knows (decision 516)', () => {
 
 describe('credits', () => {
   it('print one row per person and role, with only the jobs that are different credits', async () => {
-    // Heat: Goldenthal as "Original Music Composer" and "Composer", Mann as "Writer" and
-    // "Screenplay" (user test 2026-09-25). A Novel credit is a different credit and stays.
     const credits = [
       {
         person_id: 1, name: 'Elliot Goldenthal', job: 'Original Music Composer',
@@ -804,9 +741,7 @@ describe("the card's own answer (decision 487)", () => {
   });
 
   it('stops saying why a title is suggested once the member has rated it or marked it seen', async () => {
-    // §6.0 and decision 515: the line is absent for a title the reader has seen or rated. The
-    // server leaves it out on the next open; the open card kept it under "Saved - you liked it"
-    // (review finding UX-3).
+    // The server omits the line on the next open; the open card must drop it too.
     const why = { why: 'Because you liked Heat' };
     const line = () => target.querySelector('[data-testid="title-why"]');
     vi.mocked(post).mockResolvedValue({ reveal: null });
@@ -882,8 +817,7 @@ describe("the card's own answer (decision 487)", () => {
       await settle();
       expect(vi.mocked(post)).toHaveBeenCalledWith('/rate/title/6', { answer: 'not_seen' });
       expect(target.querySelector('button.seen').textContent.trim()).toBe('Mark seen');
-      // Nothing is pressed on an unseen title: the verdict survives the flip (§4.2) but it is
-      // not what the person just said.
+      // The verdict survives the flip (§4.2) but is not what the person just said.
       expect(target.querySelector('[aria-pressed="true"][data-answer]')).toBeNull();
     } finally {
       unmount(app);

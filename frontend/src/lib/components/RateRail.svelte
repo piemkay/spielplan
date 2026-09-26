@@ -1,24 +1,6 @@
 <script>
-  /**
-   * §6.1's side rail: the measured expectations that make this surface honest about what it is
-   * asking for and why.
-   *
-   * Proposal 43 is the reason it is a component rather than a desktop-only column: "on phones
-   * nothing in the rail is dropped … the measured-expectation cards (learning curve, pair
-   * selection, resolution) move behind one `why these pairs?` sheet." Same content, one
-   * disclosure — not a second, thinner product. The disclosure is a plain button rather than
-   * `<details>` so that the wide layout can pin the content open with a media query alone;
-   * a `<details>` closed on a phone stays closed when the window grows, and the summary that
-   * would reopen it is the thing the wide layout hides.
-   *
-   * Proposal 49 is why the learning curve carries a number: "plotted against the user's own
-   * lifetime label count — the copy is the caption, the position is the point. This is the one
-   * place §12's M2 exit criterion (50–100 verdicts each) is legible to the user."
-   *
-   * Decision 486's register: the eyebrows name what the card is about for a person ("why these
-   * pairs"), counts are "ratings", and the margin weights are the model's own numbers, so they
-   * render only while the viewer's Show the model is on.
-   */
+  // A button, not <details>: the wide layout pins the cards open with a media query alone, and a
+  // <details> closed on a phone would stay closed when the window grows.
   import {
     DECISIVE_COPY,
     LEARNING_CURVE_COPY,
@@ -59,8 +41,6 @@
     {#if mode !== 'sweep'}
       <section class="card" data-testid="rate-pair-selection">
         <span class="eyebrow">WHY THESE PAIRS</span>
-        <!-- Proposal 53's point survives decision 519's plainer words: it opens by saying what
-             the pairs are, a statement rather than a defence. -->
         <p class="why">{PAIR_SELECTION_COPY}</p>
       </section>
 
@@ -106,9 +86,6 @@
     display: flex;
     flex-direction: column;
     gap: 7px;
-    /* Three panels stacked in proposal 43's rail column beside the queue. The rail is
-       dense by construction; a content-card box would make these the roomiest thing in
-       the narrowest column. */
     padding: var(--card-pad-tight);
     background: var(--card);
     border: 1px solid var(--line);
@@ -123,11 +100,7 @@
   .why {
     margin: 0;
   }
-  /* Proposal 49's learning curve, drawn in the progress ramp rather than the accent: where you
-     are against §12's M2 exit criterion is a fact about the session, not a thing the person has
-     selected, and §6.8 spends the ember on selection and primary actions only. Same two tokens
-     as the block counter's ticks, because it is the same claim at a different resolution.
-     [§6.8; decision 276] */
+  /* The progress ramp, not the accent: progress is never a selection (§6.8). */
   .curve {
     position: relative;
     height: 6px;
@@ -149,7 +122,6 @@
     background: var(--ink-4);
   }
 
-  /* The wide layout pins the rail open; the disclosure only does work on compact. */
   @media (min-width: 981px) {
     .disclosure {
       display: none;

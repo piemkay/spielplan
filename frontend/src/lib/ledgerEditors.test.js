@@ -1,13 +1,5 @@
 /**
  * @vitest-environment jsdom
- *
- * §6.6 Data's three ledger editors: each ledger's own routes and form rules, and the hand-off from
- * the reject review. Spec v2.1 §6.6 Data, §8 stages 3 and 7, §6.4; decisions 173, 342 and 445.
- *
- * Named BESIDE `test_curated_editors.py` and `test_curated_api.py`, never instead of them
- * (decision 226): the server is the authority on every rule, and what this file holds is that the
- * three editors cannot reach one another's routes and that a form the server would refuse for a
- * missing field is caught before it is sent.
  */
 
 import { flushSync, mount, unmount } from 'svelte';
@@ -156,9 +148,7 @@ describe('the axis form', () => {
     expect(validate('axes', { ...ok, right_pole: '' }).ok).toBe(false);
   });
 
-  // m56-curated-02: an axis opened for editing is the whole stored axis in the form's own lines, the
-  // stored float4 printed as the shortest number that is the same float4 - so a save that changes
-  // nothing writes back exactly what was there.
+  // A float4 weight prints as the shortest number that is the same float4.
   it('reads a stored axis back into the form as the lines it would save', () => {
     expect(weightText(0.10000000149011612)).toBe('0.1');
     expect(weightText(-0.800000011920929)).toBe('-0.8');
@@ -274,9 +264,6 @@ describe('the mounted editors', () => {
     }
   });
 
-  // m56-curated-01: a `composer` correction replaces every music credit the title carries, and
-  // withdrawing it restores none - on a bundle title, which has no raw store, for good. The editor
-  // says so before the save and again at the second tap of Withdraw, and not for `composer_add`.
   it('warns before a composer correction is saved and again before one is withdrawn', async () => {
     vi.mocked(get).mockResolvedValue({
       rows: [
@@ -347,9 +334,6 @@ describe('the mounted editors', () => {
     }
   });
 
-  // m56-curated-03: DROP_EVIDENCE matches its quote as a case-insensitive substring and drops a tag
-  // left with no quote, and a REPOINT merges into a tag already there - neither is undone by
-  // withdrawing the verdict (decision 445), so each says so before the save, as DROP does.
   it('warns before a DROP_EVIDENCE and a REPOINT as it does before a DROP', async () => {
     vi.mocked(get).mockResolvedValue({ rows: [], applies: '' });
     const app = mount(LedgerEditor, { target, props: { ledger: 'adjudications' } });
@@ -379,9 +363,7 @@ describe('the mounted editors', () => {
     }
   });
 
-  // M56-DATA-06: the hand-off is module state and outlives the page, so a verdict editor mounted
-  // again - the operator back on /admin/data from another admin tab - must not reopen, and scroll
-  // to, a form they already dismissed. A new tap on the review still opens it.
+  // The hand-off is module state and outlives the page.
   it('does not reopen a dismissed hand-off when the editor mounts again, but opens a new one', async () => {
     vi.mocked(get).mockResolvedValue({ rows: [], applies: '' });
     const scrolled = vi.fn();
@@ -415,9 +397,7 @@ describe('the mounted editors', () => {
     }
   });
 
-  // m56-curated-02: a save replaces the facet's whole axis (decision 261's rule, carried to the
-  // editor), so Add offers only a facet with no axis, and a household axis is changed from its own
-  // row, prefilled with every term it has - the save then writes what is on screen and nothing less.
+  // A save replaces the facet's whole axis, so Add offers only a facet without one.
   it('adds an axis only where there is none and edits a household axis prefilled whole', async () => {
     vi.mocked(get).mockResolvedValue({
       version: 'v1',

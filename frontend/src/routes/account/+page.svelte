@@ -1,25 +1,5 @@
 <script>
-  /**
-   * Account. Spec v2.1 §3.2, §3.3, §14.4.
-   *
-   * Four things live here because all four are per-person and per-device:
-   *   - passkeys, which are primary auth and are registered *from the profile page* (§3.2);
-   *   - first-run onboarding — home-screen install and push permission (§6 preamble) — which
-   *     is §3.1's fifth setup step and the only surface that can complete it. It sits first
-   *     while it is still owed — except on the `?welcome=1` hand-off itself, where the passkey
-   *     card is rendered above it and the markup below argues why;
-   *   - the switch PIN, which is a shared-device convenience, not a login;
-   *   - the Jellyfin link, which is optional and drives seen-sync only (§3.3).
-   *
-   * §14.4 is surfaced rather than documented: a credential registered against a different
-   * PUBLIC_URL is listed and marked dead, because "my passkey stopped working" deserves an
-   * answer on the screen instead of in the logs.
-   *
-   * In plain words since the second household test (decision 518): a member read "switch PIN",
-   * "Tier set", "This browser has no WebAuthn support" and a page of licence notices. Every
-   * control and every fact is still here; the Rank letters' editor and the data sources' notices
-   * wait behind a disclosure each.
-   */
+  // A credential registered under another PUBLIC_URL is listed and marked dead (§14.4), not hidden.
   import { onMount } from 'svelte';
   import { page } from '$app/stores';
   import { get, post, api } from '$lib/api.js';
@@ -29,7 +9,6 @@
   import Onboarding from '$lib/components/Onboarding.svelte';
 
   let credentials = $state([]);
-  /** Decision 11: the tier set is a per-user preference, so it lives here and not in Admin. */
   let tiers = $state({ tier_set: [], min: 2, max: 12, warning: '' });
   let tierDraft = $state('');
   let label = $state('');
@@ -40,27 +19,19 @@
   let note = $state('');
 
   const canPasskey = $derived(supported());
-  // sec-01: a session minted by `POST /api/auth/switch` carries `auth_method === 'pin'` and
-  // the server refuses every credential-minting route from it (`credentialed_user`). Hiding
-  // the forms is so the refusal is not the first thing the person holding a handed-over phone
-  // hears — the gate is the server's, and this is only its explanation.
+  // A PIN-switched session cannot mint credentials (the server refuses); hiding the forms only
+  // explains that before the refusal does.
   const pinSession = $derived(session.user?.auth_method === 'pin');
   const PIN_SESSION =
     'You switched to this profile with a PIN. Sign in with your password or a passkey to change ' +
     'how you sign in.';
 
-  // §3.1's "prompted afterwards": set once by the forced first-login password change, and
-  // gone as soon as a passkey exists. A permanent version of this would be a nag on an
-  // account that may never want one — §3.2 keeps the password fallback always available.
+  // Only on the one-time `?welcome=1` hand-off and until a passkey exists: never a standing nag.
   const welcome = $derived(
     $page.url.searchParams.get('welcome') === '1' && credentials.length === 0 && canPasskey
   );
 
-  /**
-   * §3.2's PIN is four digits and the server's pattern is `^[0-9]+$`. The DOM node is written
-   * back as well as the state: a one-way `value={pin}` only re-renders when `pin` changes, so
-   * a rejected character stays visible in a box whose state no longer contains it.
-   */
+  // The DOM node is written back too: a one-way `value` only re-renders when `pin` changes.
   function onPinInput(event) {
     pin = event.currentTarget.value.replace(/\D/g, '');
     event.currentTarget.value = pin;
@@ -74,12 +45,6 @@
     tierDraft = (tiers.tier_set ?? []).join(' ');
   }
 
-  /**
-   * Decision 11: "on save, their cutpoints are re-initialised to the equal-mass quantiles of that
-   * user's fitted `s` distribution for the new K … and a Ledger refit is queued for that user
-   * alone". The warning is not decoration — it names what the save discards, which is the
-   * one thing this control does that cannot be undone by saving the old set back.
-   */
   async function saveTierSet() {
     error = '';
     note = '';
@@ -89,10 +54,7 @@
       const result = await api('/rank/tiers', { method: 'PUT', body });
       tiers = { ...tiers, tier_set: result.tier_set };
       tierDraft = result.tier_set.join(' ');
-      // Decision 11's substance, in the member register (decision 486): a new number of tiers
-      // throws the learned boundaries away and fits them again, and the moves are kept. "Shortly"
-      // and no clock time - decision 209's word for the same wait, which is served by the
-      // tier-set refit every minute, so "overnight" would be false.
+      // "Shortly", not a clock time: the tier-set refit runs every minute.
       note = result.k_changed
         ? `Tiers saved. Your board is being re-sorted into the new tiers and updates shortly; your ${result.tier_edits_kept} hand move${result.tier_edits_kept === 1 ? ' is' : 's are'} kept.`
         : 'Tiers renamed. Nothing else changed.';
@@ -142,8 +104,7 @@
     error = '';
     note = '';
     try {
-      // Decision 170: §3.2 makes the password the account credential and the PIN a
-      // convenience derived from it, so setting the PIN costs the password.
+      // Setting the PIN costs the password: the PIN is a convenience derived from it (decision 170).
       await post('/auth/pin', { pin, current_password: pinPassword });
       pin = '';
       pinPassword = '';
@@ -220,27 +181,14 @@
     </section>
   {/snippet}
 
-  <!-- Which of these two cards comes first, and why it is not always the same one.
-       §3.1's forced password change lands a new member here as `?welcome=1`, and the first
-       thing the install step then tells them is to leave for the home-screen icon — where
-       §3.2's HttpOnly cookie, held in that app's own jar, makes them sign in a second time.
-       Offering the passkey *after* the instruction to leave is offering it too late, so on
-       that one visit the order inverts. `welcome` is already precisely that visit — the
-       `?welcome=1` hand-off, no credential registered yet, WebAuthn present — and every other
-       visit keeps §3.1's own order, with the fifth setup step first while it is still owed.
-       [fe-14-ios-install-journey-second-login-and-copy] -->
+  <!-- On the welcome visit the passkey comes first: the next step sends the member to the
+       home-screen app, which has its own cookie jar and asks for a second sign-in. -->
   {#if welcome}{@render passkeys()}{/if}
 
-  <!-- §6 preamble / §3.1's fifth step. Its own component because it owns four asynchronous
-       browser facts (permission, subscription, install prompt, standalone) that have nothing
-       to do with the rest of this page. -->
   <Onboarding />
 
   {#if !welcome}{@render passkeys()}{/if}
 
-  <!-- as-14: the forced first-login change was the only way anybody ever reached
-       /account/password, so an unlocked member had no way to change their password at all
-       while §3.2 keeps it the always-available fallback. -->
   <section class="card">
     <h2>Password</h2>
     <p class="why">
@@ -252,7 +200,6 @@
     </div>
   </section>
 
-  <!-- §3.2's PIN, named by what it does (decision 518): "Switch PIN" named the mechanism. -->
   <section class="card" data-testid="pin-card">
     <h2>PIN for switching profiles</h2>
     {#if pinSession}
@@ -271,10 +218,7 @@
           placeholder="your password"
           bind:value={pinPassword}
         />
-        <!-- §3.2 says four digits and the server's pattern is `^[0-9]+$`; `inputmode` is a
-             keyboard hint, not a constraint, so the box used to send letters and read back a
-             bare 422 (feroutes-pin-box). Stripping in the binding is what makes the field
-             unable to hold what the server will refuse. -->
+        <!-- `inputmode` is only a hint; `onPinInput` strips what the server's `^[0-9]+$` would refuse. -->
         <input
           type="password"
           inputmode="numeric"
@@ -290,9 +234,6 @@
     {/if}
   </section>
 
-  <!-- Decision 11's tier set, by what it is to a member: the letters of their Rank board. The
-       letters are on the card; the free-text editor, which re-sorts the board when the number of
-       letters changes, waits behind a disclosure (decision 518). -->
   <section class="card" data-testid="tier-set">
     <h2>Rank letters</h2>
     <p class="why">The letters your Rank board sorts titles into, worst first.</p>
@@ -334,22 +275,7 @@
     {/if}
   </section>
 
-  <!-- Decision 518: what a member does not need to act on - the data sources' notices - for the
-       curious, one tap away and never removed.
-
-       Decision 293. The licence conditions behind the posters and overviews are conditions of
-       DISPLAY, so they bind every member who sees them rather than the admin who imported them,
-       and §6.6's Data card is admin-only. This page is the one surface the account chip routes
-       to for everybody, admin and member alike — it is not a tab, and `api/auth.py`'s `SURFACES`
-       carries neither /account nor /admin (decision 318) — which is what makes §6.8's register
-       argument work: one notice on one surface, not a source name on every card. Last on the
-       page because it is reference
-       material — nothing here is a control, and the four things above are all things a person
-       came here to do. Its own component for the same reason `Onboarding` is: the block owns a
-       licence text that has to be exact, and a page this long is where an exact string goes to
-       be edited by accident. Folded, not removed: the notices are in the product and reachable by
-       every member, which is what decision 293 asks; they were a screen of licence text a member
-       had to scroll past on the page they came to for a PIN. -->
+  <!-- Licence notices bind every viewer, so they sit on the one page every member reaches (decision 293). -->
   <details class="fold technical" data-testid="account-technical">
     <summary>Where the film information comes from</summary>
     <DataSources />
@@ -418,8 +344,7 @@
     font-size: 13px;
     color: var(--ink-2);
   }
-  /* The two disclosures (decision 518): a summary is in none of design.css's coarse selectors,
-     so it takes §6 preamble's 48 px floor here. */
+  /* A summary is in none of design.css's coarse selectors, so it takes the 48px floor here. */
   .fold > summary {
     display: flex;
     align-items: center;

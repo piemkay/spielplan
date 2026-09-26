@@ -1,14 +1,5 @@
 /**
  * @vitest-environment jsdom
- *
- * The poster on every 2:3 card. Spec v2.1 §6.8 ("Poster-forward 2:3 cards"), §6.1; decision 483.
- *
- * Mounted, because each claim is about the element a phone receives: an `<img>` whose src is this
- * app's own poster route for THIS title, drawn over the tinted panel, removed when the route has
- * nothing (so the panel is what stays, never a broken image), and inert to the finger so §6.1's
- * long press on a battle poster is not taken by the image callout. The two cards own the image;
- * every other surface renders one of them, and the title card and the finish prompt are asserted
- * here as two of those surfaces.
  */
 
 import { flushSync, mount, unmount } from 'svelte';
@@ -79,8 +70,7 @@ describe('RatePoster', () => {
     expect(target.querySelector('img').getAttribute('src')).toBe('/api/art/2/poster');
   });
 
-  // A browser keeps an <img>'s old picture on screen until the new src has loaded, so a reused
-  // element put the next battle's names over the last pair's art for the whole fetch.
+  // A reused <img> keeps showing the old picture until the new src has loaded.
   it("draws a fresh image for the next title, so the last title's art never sits under its name", () => {
     const props = $state({ title: { id: 3, name: 'Paddington 2' } });
     app = mount(RatePoster, { target, props });
