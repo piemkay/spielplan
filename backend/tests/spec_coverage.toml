@@ -1316,7 +1316,7 @@ id = "library-rate-queue-seed-and-reason"
 spec = "§6.1 (Queue) + §6.8; decision 490"
 milestone = "M2"
 kind = "integration"
-what = "A user's first queue is the imported 100-title decade-stratified seed_list, every title of it ahead of any title outside it, ordered among themselves by descending P(seen) — popularity, the library, age and the household (decision 490); subsequent queues are ordered by descending P(seen); and every served card carries a queue reason naming its dominant cause (\"queued because: 72% likely you have seen it\"), a seed card naming its decade and its P(seen) and never a list position."
+what = "A user's first queue is the imported 100-title decade-stratified seed_list, every title of it ahead of any title outside it, ordered among themselves by descending P(seen) — popularity, the library, age and the household (decision 490); subsequent queues are ordered by descending P(seen); and every served card carries a queue reason naming its dominant cause in a plain sentence with no probability in it, a seed card naming its decade and never a list position."
 why = "The queue's job is to put titles the user has actually seen in front of them (§13 flags >50% not-seen as a queue bug), and §6.8 requires every question to carry its one-line why."
 tests = [
     "backend/tests/test_rate_queue.py::test_a_fresh_households_first_queue_is_the_seed_list_most_likely_seen_first",
@@ -1334,11 +1334,11 @@ id = "library-rate-duel-write"
 spec = "§6.1 (Tie, decisive toggle) + §4.2 duel + §5.2"
 milestone = "M2"
 kind = "integration"
-what = "One battle answer writes exactly one duel row with context 'profile_battle' and outcome A, B or TIE; with the decisive toggle on the stored margin weight is ~1.6, with it off ~1.0; a Tie is a stored outcome feeding the Davidson tie term, never a skip or a dropped row."
+what = "One battle answer writes exactly one duel row with context 'profile_battle' and outcome A, B or TIE; with the decisive switch on for the pair answered the stored margin weight is ~1.6, with it off ~1.0, and the next pair starts with it off; a Tie is a stored outcome feeding the Davidson tie term, never a skip or a dropped row."
 why = "22% of random pairs are genuine ties, so \"about the same\" is first-class data; margin weighting was selected by tuning — a decisive pick teaches more than a hesitant one."
 tests = [
     "backend/tests/test_rate_session.py::test_one_battle_answer_writes_exactly_one_duel_row",
-    "backend/tests/test_rate_session.py::test_the_decisive_toggle_is_persistent_and_sets_the_stored_margin",
+    "backend/tests/test_rate_session.py::test_the_decisive_switch_weights_one_pair_and_resets_for_the_next",
     "backend/tests/test_rate_session.py::test_one_answer_may_override_the_toggle_without_moving_it",
 ]
 
@@ -12024,10 +12024,10 @@ id = "library-rate-member-copy-is-plain-language"
 spec = "§6.8 (quiet reasons) + §6.1 (pair-selection and learning-curve copy); decisions 486 and 491"
 milestone = "M5"
 kind = "integration"
-what = "The battle why-line names the shared answer and the random draw and no section; the reveal carries no model number with Show the model off; the seed card names a starter decade and its P(seen); the rail, the balance widget, the undo chip and the drained state speak in ratings and plain words."
+what = "The battle why-line names the shared answer and no section; the reveal carries no model number with Show the model off; the seed card names its decade and never a list position, its P(seen) travelling beside the line behind Show the model rather than in it; the rail, the balance widget, the undo chip and the drained state speak in ratings and plain words."
 why = "Both household members met section numbers and model nouns on Rate with Show the model off, and neither would open the app again."
 tests = [
-    "backend/tests/test_rate_queue.py::test_the_battle_why_line_names_the_shared_answer_and_the_random_draw_and_no_section",
+    "backend/tests/test_rate_queue.py::test_the_battle_why_line_names_the_shared_answer_and_no_section",
     "backend/tests/test_rate_session.py::test_the_reveal_carries_its_number_only_behind_show_the_model",
     "backend/tests/test_rate_queue.py::test_a_fresh_households_first_queue_is_the_seed_list_most_likely_seen_first",
     "frontend/src/lib/rate.svelte.test.js::carries no section number, milestone or model noun in the copy it ships",
@@ -12301,4 +12301,78 @@ tests = [
     "backend/tests/test_static_contracts.py::test_the_member_register_guard_leaves_path_data_comments_and_styles_alone",
     "backend/tests/test_static_contracts.py::test_the_member_register_guard_reads_backend_copy_and_not_its_sql_or_logs",
     "backend/tests/test_static_contracts.py::test_the_member_register_walk_follows_imports_and_stops_at_the_operator_routes",
+]
+
+# The second household test (2026-09-26) on Rate, five rows: the questions and reasons in plain
+# words (A1-A3 and policy (h)), the decisive switch as the pair's own (A6), a tap that never waits
+# on Jellyfin (A4), the spread's count naming its kind (A5), and the queue learning which titles a
+# person does not know (H7). `spec` cites sections alone until decisions 519-521 are recorded.
+[[requirement]]
+id = "library-rate-questions-and-reasons-speak-plainly"
+spec = "§6.1 (Modes; Battle; Queue) + §6.8 (quiet reasons; member register)"
+milestone = "M5"
+kind = "integration"
+what = "The three modes are named Mixed, Singles and Pairs, and the header's counter names the mode chosen rather than the card type served; the pair card asks \"Which did you enjoy more?\" over a why-line naming the answer the person gave both titles; a sweep card's reason is a plain sentence naming its strongest cause with no probability in it, a seed title called well-known only where its crowd support reaches about a thousand ratings, and its P(seen) travels under the card's gated `model` key, beside the line and only for a viewer with Show the model on, never on a recorded-seen card or a re-ask; the pair-selection and decisive copy say the same claims in words."
+why = "Both members of the second household test read \"mix / sweep / battle\", \"queued because: a starter title from the 1970s · 86% likely you have seen it\" and \"a decisive pick teaches more than a hesitant one\" as jargon, met a pair card that asked nothing, and saw \"· battle\" in the header under a pressed Mix pill."
+tests = [
+    "backend/tests/test_rate_queue.py::test_every_card_carries_the_one_line_why_that_names_its_dominant_cause",
+    "backend/tests/test_rate_queue.py::test_a_fresh_households_first_queue_is_the_seed_list_most_likely_seen_first",
+    "backend/tests/test_rate_queue.py::test_the_battle_why_line_names_the_shared_answer_and_no_section",
+    "backend/tests/test_rate_session.py::test_the_sweep_cards_p_seen_travels_only_behind_show_the_model",
+    "frontend/src/lib/rate.svelte.test.js::names the modes by what they ask, and the pair card asks its question",
+    "frontend/src/lib/rate.svelte.test.js::builds §6.1 counter with proposal 46 partition and the mode that was chosen",
+    "frontend/src/routes/rate/rate-page.test.js::names the modes plainly and puts the chosen one in the header (A2, A3, policy h)",
+    "frontend/src/routes/rate/rate-page.test.js::asks the pair question and says the clear-favourite switch is for this pair (A1, A6)",
+]
+
+[[requirement]]
+id = "library-rate-decisive-switch-belongs-to-its-pair"
+spec = "§6.1 (Battle: the decisive toggle, ~1.6 vs 1.0) + §5.2"
+milestone = "M5"
+kind = "integration"
+what = "The decisive switch weighs the answer to the pair on the table and is off for the next pair, whether that pair follows an answer, a skip, a correction, a mode or kind change or an Undo; while its pair stays on the table it survives a reload and a control that names no switch."
+why = "On the second household test the persistent switch wrote Patrick's next pick at the decisive weight too (duels 5 and 7 on the live install, 1.6 each) although he had marked only one pick as clear."
+tests = [
+    "backend/tests/test_rate_session.py::test_the_decisive_switch_weights_one_pair_and_resets_for_the_next",
+    "backend/tests/test_rate_session.py::test_the_decisive_switch_leaves_with_its_pair_on_a_skip_an_undo_and_a_mode_change",
+    "e2e/specs/11-rate.spec.js::the clear-favourite switch holds for its pair across a reload, and is off for the next",
+]
+
+[[requirement]]
+id = "library-rate-a-tap-never-waits-on-jellyfin"
+spec = "§6 preamble (\"<2 s per sweep card, <1.5 s per battle\") + §7.3 (app is authoritative for explicit user actions)"
+milestone = "M5"
+kind = "integration"
+what = "A Rate route's verdict, not-seen, correction or title-card answer returns with the next card before §7.3's Played push has been made; the push then runs on a pooled connection of its own and settles exactly the bookkeeping the synchronous shape did (the Played write, `jf_synced_at`, the journal's `prior_state.pushed`), and §6.7's rail says in the response that the push follows and, once it ends, how it ended; the tapped answer is marked in flight on the card while the rest wait."
+why = "Measured read-only on the live install: a film verdict spent 64 ms of its 98 ms route in POST /UserPlayedItems and a series verdict (Lost) 3,269 ms of 3,317, because Jellyfin marks every episode played, while the verdict buttons sat greyed with nothing saying which answer had been taken."
+tests = [
+    "backend/tests/test_rate_session.py::test_a_handed_off_push_answers_the_tap_first_and_settles_the_same_bookkeeping",
+    "backend/tests/test_rate_session.py::test_the_rate_routes_hand_the_push_off_and_answer_without_waiting_for_it",
+    "frontend/src/lib/rate.svelte.test.js::says which answer is in flight until the server has taken it",
+    "frontend/src/routes/rate/rate-page.test.js::lights the answer in flight while the rest of the card waits (A4)",
+]
+
+[[requirement]]
+id = "library-rate-the-spread-names-the-kind-it-counts"
+spec = "§6.1 (class-balance widget; learning-curve rail) + §4.1 rule 5"
+milestone = "M5"
+kind = "e2e"
+what = "The class-balance widget's total and the learning-curve count name the kind they count when the session holds one kind (\"9 series ratings\"), and say plain ratings over both."
+why = "On the second household test the widget read \"9 ratings\" under Series alone, and a member with fifty ratings took them for lost; the count is per kind on purpose, since each kind is its own model."
+tests = [
+    "e2e/specs/11-rate.spec.js::the kind toggles are either or both, and the empty selection is refused, not sent",
+    "frontend/src/lib/rate.svelte.test.js::names the kind it counts when only one kind is selected",
+    "frontend/src/routes/rate/rate-page.test.js::names the kind the spread counts when only one is selected (A5)",
+]
+
+[[requirement]]
+id = "library-rate-queue-learns-which-titles-a-person-does-not-know"
+spec = "§6.1 (Queue: \"P(seen)-ordered\") + §13 (not-seen rate in the rating queue)"
+milestone = "M5"
+kind = "integration"
+what = "P(seen) carries a sixth term from the person's own answers per kind and original language, shrunk by two pseudo-answers each way and read only below a half, so answers that keep saying \"not seen\" to one language's titles lower that language's titles for that person alone, nothing is ever raised, the why-line never names it, and the SQL that orders and the Python that explains compute the same number."
+why = "On the second household test Jenny's series queue drifted into anime: after \"not seen\" on Attack on Titan and Berserk, Monster followed, and Death Note now leads it on the library term alone, because the household owns 39 Japanese series and no P(seen) signal was about her."
+tests = [
+    "backend/tests/test_rate_queue.py::test_unfamiliarity_only_lowers_and_needs_the_answers_to_keep_saying_so",
+    "backend/tests/test_rate_queue.py::test_a_persons_not_seen_answers_lower_that_languages_titles_and_nothing_else",
 ]

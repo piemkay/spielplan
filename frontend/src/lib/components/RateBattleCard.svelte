@@ -16,20 +16,26 @@
    *   * **No skipped ties.** `Tie` is an outcome that writes a duel row (22% of random pairs
    *     are genuine ties), never a dropped question.
    *
-   * The decisive toggle is persistent and lives on the server, so it survives this card, this
-   * session and this device — and it carries its own one-line why (proposal 47) rather than
-   * leaving the justification two cards down the rail. Long-press on a poster is §6.1's single
-   * gesture accelerator (proposal 51): one decisive answer, without moving the toggle.
+   * The decisive switch lives on the server and belongs to the pair on the table: it weighs
+   * the answer to this pair and is off again for the next (decision 520 — on the second
+   * household test a switch that stayed on weighed a pick nobody had marked as clear). It
+   * carries its own one-line why (proposal 47) rather than leaving the justification two cards
+   * down the rail. Long-press on a poster is §6.1's single gesture accelerator (proposal 51):
+   * one decisive answer, without moving the switch.
+   *
+   * And the card asks its question. It showed two posters over `left | tie | right` and asked
+   * nothing, which both members of the second household test stopped at (A1).
    */
   import { onDestroy } from 'svelte';
   import RateCorrections from '$lib/components/RateCorrections.svelte';
   import RatePoster from '$lib/components/RatePoster.svelte';
-  import { DECISIVE_COPY, metaLine } from '$lib/rate.svelte.js';
+  import { DECISIVE_COPY, DECISIVE_LABEL, PAIR_QUESTION, metaLine } from '$lib/rate.svelte.js';
 
   let {
     card,
     decisive = false,
     busy = false,
+    pending = null,
     onDuel,
     onCorrect,
     onSkip,
@@ -93,11 +99,15 @@
 </script>
 
 <article class="battle" data-testid="rate-battle-card" data-card-token={card?.token}>
+  <h2 class="question" data-testid="rate-battle-question">{PAIR_QUESTION}</h2>
+
   <div class="pair">
     <button
       class="side"
+      class:picked={pending === `duel-${left.outcome ?? 'A'}`}
       data-testid="rate-battle-left"
       aria-label="Pick {left.name ?? 'the left title'}"
+      aria-busy={pending === `duel-${left.outcome ?? 'A'}`}
       data-outcome={left.outcome ?? 'A'}
       data-title-id={left.id}
       disabled={busy}
@@ -115,8 +125,10 @@
 
     <button
       class="side"
+      class:picked={pending === `duel-${right.outcome ?? 'B'}`}
       data-testid="rate-battle-right"
       aria-label="Pick {right.name ?? 'the right title'}"
+      aria-busy={pending === `duel-${right.outcome ?? 'B'}`}
       data-outcome={right.outcome ?? 'B'}
       data-title-id={right.id}
       disabled={busy}
@@ -143,21 +155,25 @@
   {/if}
 
   <!-- Proposal 48: the mirrored strip, one-handed, and the home of Tie. -->
-  <div class="strip" role="group" aria-label="Which one">
+  <div class="strip" role="group" aria-label={PAIR_QUESTION}>
     <button
       class="cell"
+      class:picked={pending === `duel-${left.outcome ?? 'A'}`}
       data-testid="rate-strip-left"
       disabled={busy}
       onclick={() => onDuel(left.outcome ?? 'A')}
     >left</button>
     <button
       class="cell tie"
+      class:picked={pending === 'duel-TIE'}
       data-testid="rate-strip-tie"
+      aria-busy={pending === 'duel-TIE'}
       disabled={busy}
       onclick={() => onDuel('TIE')}
     >tie</button>
     <button
       class="cell"
+      class:picked={pending === `duel-${right.outcome ?? 'B'}`}
       data-testid="rate-strip-right"
       disabled={busy}
       onclick={() => onDuel(right.outcome ?? 'B')}
@@ -174,7 +190,7 @@
       onclick={() => onDecisive(!decisive)}
     >
       <span class="track" class:on={decisive}><span class="knob"></span></span>
-      <span class="label data">decisive</span>
+      <span class="label data">{DECISIVE_LABEL}</span>
     </button>
     <span class="why decisive-why" data-testid="rate-decisive-why">{DECISIVE_COPY}</span>
     <button class="text" data-testid="rate-battle-skip" disabled={busy} onclick={onSkip}>
@@ -200,6 +216,12 @@
     border: 1px solid var(--line);
     border-radius: var(--r-lg);
     animation: fadeIn 0.15s ease;
+  }
+  .question {
+    margin: 0;
+    font-size: 17px;
+    font-weight: 600;
+    line-height: 1.25;
   }
   .pair {
     display: grid;
@@ -231,6 +253,13 @@
   .side:disabled {
     opacity: 0.5;
     cursor: default;
+  }
+  /* The answer in flight stays lit while the rest wait (A4 of the 2026-09-26 household test). */
+  .side.picked:disabled {
+    opacity: 1;
+  }
+  .side.picked :global(.poster) {
+    border-color: var(--ember);
   }
   .vs {
     letter-spacing: 0.12em;
@@ -267,6 +296,12 @@
   .cell:disabled {
     opacity: 0.45;
     cursor: default;
+  }
+  .cell.picked:disabled {
+    opacity: 1;
+    border-color: var(--ember);
+    background: var(--ember-wash);
+    color: var(--ink);
   }
   .knobs {
     display: flex;
@@ -338,6 +373,9 @@
     }
     .pair {
       gap: 8px;
+    }
+    .question {
+      font-size: 15px;
     }
     .vs {
       display: none;

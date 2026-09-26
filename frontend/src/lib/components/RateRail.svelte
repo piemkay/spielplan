@@ -27,7 +27,7 @@
     ratingsLabel
   } from '$lib/rate.svelte.js';
 
-  let { balance, mode, showModel = false } = $props();
+  let { balance, mode, kinds = [], showModel = false } = $props();
 
   let open = $state(false);
 
@@ -51,7 +51,7 @@
         <span class="mark" style:left="50%"></span>
       </div>
       <div class="data-lg" data-testid="rate-label-count">
-        {ratingsLabel(labelled)} · 50-100 gets you started
+        {ratingsLabel(labelled, kinds)} · 50-100 gets you started
       </div>
       <p class="why">{LEARNING_CURVE_COPY}</p>
     </section>
@@ -59,13 +59,14 @@
     {#if mode !== 'sweep'}
       <section class="card" data-testid="rate-pair-selection">
         <span class="eyebrow">WHY THESE PAIRS</span>
-        <!-- Proposal 53: the "Random pairs." lead-in turns a defence into a statement. -->
+        <!-- Proposal 53's point survives decision 519's plainer words: it opens by saying what
+             the pairs are, a statement rather than a defence. -->
         <p class="why">{PAIR_SELECTION_COPY}</p>
       </section>
 
       <section class="card" data-testid="rate-resolution">
-        <span class="eyebrow">DECISIVE PICKS</span>
-        <p class="why">{DECISIVE_COPY}.</p>
+        <span class="eyebrow">CLEAR FAVOURITES</span>
+        <p class="why">{DECISIVE_COPY}</p>
         {#if showModel}
           <div class="data" data-testid="rate-margin-weights">decisive 1.6 · hesitant 1.0</div>
         {/if}

@@ -222,14 +222,15 @@ describe('the substitution line (finding 21, M410-D8-07; C4.5 of the household t
   it('prints nothing about the slot over a sweep card that stands in for a battle', async () => {
     // `substituted_for` stays on the wire, and the sweep card no longer reads it out: "a battle
     // was due in this slot" told a member about the block machine rather than about the film, and
-    // on a searched-for title it answered the pick with an apology. The counter names the card's
-    // own type, which is the one fact the person needs (decision 486).
+    // on a searched-for title it answered the pick with an apology (decision 486). The counter
+    // names the mode the person chose -- the card says what it is by its own shape (A2 of the
+    // 2026-09-26 household test).
     await open(envelope({ card: substitutedSweep }));
 
     expect(target.querySelector('[data-testid="rate-sweep-card"]')).toBeTruthy();
     expect(target.querySelector(SUBSTITUTED)).toBeNull();
     expect(target.textContent).not.toMatch(/was due in this slot/);
-    expect(target.querySelector('[data-testid="rate-counter"]').textContent).toMatch(/· sweep$/);
+    expect(target.querySelector('[data-testid="rate-counter"]').textContent).toMatch(/· Pairs$/);
   });
 
   it('says in plain words why a battle stands in for a sweep', async () => {
@@ -305,6 +306,115 @@ describe('"a title you know" (C5.2 of the household test)', () => {
     await settle();
     expect(target.querySelector('[data-testid="rate-notice"]').textContent).toBe(
       "Heat can't be rated right now."
+    );
+  });
+});
+
+describe('the second household test on Rate (2026-09-26)', () => {
+  const pairCard = {
+    type: 'battle',
+    token: 'tok-3',
+    kind: 'movie',
+    left: { id: 1, name: 'Heat', year: 1995, runtime_min: 170, outcome: 'A' },
+    right: { id: 2, name: 'Drive', year: 2011, runtime_min: 100, outcome: 'B' },
+    reason: 'You rated both of these liked.',
+    substituted_for: null,
+    outcomes: ['A', 'B', 'TIE'],
+    corrections: { label: 'not seen', sides: ['left', 'both', 'right'] },
+    controls: ['duel', 'correction', 'skip']
+  };
+  const mixed = (over = {}) =>
+    envelope({
+      session: {
+        id: 7,
+        mode: 'mix',
+        kinds: ['movie', 'series'],
+        decisive: false,
+        block: { index: 0, slot: 4, size: 15, counter: '4 / 15', serving: 'battle' }
+      },
+      ...over
+    });
+
+  it('names the modes plainly and puts the chosen one in the header (A2, A3, policy h)', async () => {
+    await open(mixed({ card: pairCard }));
+
+    const pills = [...target.querySelectorAll('[data-testid^="rate-mode-"]')].filter(
+      (el) => el.tagName === 'BUTTON'
+    );
+    expect(pills.map((el) => el.textContent.trim())).toEqual(['Mixed', 'Singles', 'Pairs']);
+    expect(target.querySelector('[data-testid="rate-mode-mix"]').getAttribute('aria-pressed')).toBe(
+      'true'
+    );
+    // The card on the table is a pair, and the header still says what was chosen.
+    expect(target.querySelector('[data-testid="rate-counter"]').textContent).toBe(
+      '4 / 15 this block · film + series · Mixed'
+    );
+    expect(target.querySelector('[data-testid="rate-mode-note"]').textContent).toMatch(/^Mixed: /);
+    expect(target.textContent).not.toMatch(/\b(sweep|battle)\b/i);
+  });
+
+  it('asks the pair question and says the clear-favourite switch is for this pair (A1, A6)', async () => {
+    await open(mixed({ card: pairCard }));
+
+    expect(target.querySelector('[data-testid="rate-battle-question"]').textContent).toBe(
+      'Which did you enjoy more?'
+    );
+    expect(target.querySelector('[data-testid="rate-decisive"]').textContent).toContain(
+      'clear favourite'
+    );
+    expect(target.querySelector('[data-testid="rate-decisive-why"]').textContent).toMatch(
+      /resets for the next pair/
+    );
+    expect(target.querySelector('[data-testid="rate-battle-reason"]').textContent).toBe(
+      'You rated both of these liked.'
+    );
+  });
+
+  it('lights the answer in flight while the rest of the card waits (A4)', async () => {
+    await open(mixed({ card: { ...substitutedSweep, substituted_for: null } }));
+
+    /** @type {(response: any) => void} */
+    let answer = () => {};
+    fetchMock.mockReturnValueOnce(new Promise((resolve) => (answer = resolve)));
+    target.querySelector('[data-testid="rate-verdict-2"]').click();
+    flushSync();
+
+    const liked = target.querySelector('[data-testid="rate-verdict-2"]');
+    expect(liked.classList.contains('picked')).toBe(true);
+    expect(liked.getAttribute('aria-busy')).toBe('true');
+    expect(target.querySelector('[data-testid="rate-verdict-0"]').classList.contains('picked')).toBe(
+      false
+    );
+
+    answer({
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
+      text: async () => JSON.stringify(mixed({ card: pairCard, reveal: null }))
+    });
+    await settle();
+    expect(target.querySelector('.picked')).toBeNull();
+  });
+
+  it('names the kind the spread counts when only one is selected (A5)', async () => {
+    await open(
+      envelope({
+        session: {
+          id: 7,
+          mode: 'sweep',
+          kinds: ['series'],
+          decisive: false,
+          block: { index: 0, slot: 2, size: 15, counter: '2 / 15', serving: 'sweep' }
+        },
+        card: { ...substitutedSweep, substituted_for: null },
+        class_balance: { ...envelope().class_balance, counts: [2, 3, 4], total: 9 }
+      })
+    );
+    expect(target.querySelector('[data-testid="rate-balance-total"]').textContent).toBe(
+      '9 series ratings'
+    );
+    expect(target.querySelector('[data-testid="rate-label-count"]').textContent).toContain(
+      '9 series ratings'
     );
   });
 });

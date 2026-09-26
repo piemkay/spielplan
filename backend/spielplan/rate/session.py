@@ -25,12 +25,14 @@ take it back.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
+import functools
 import logging
 import math
 import random
 import uuid
-from collections.abc import Sequence
+from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -39,6 +41,7 @@ import numpy as np
 
 from spielplan.connectors.jellyfin import JellyfinClient
 from spielplan.connectors.registry import SECRETS_UNREADABLE_REASON, JellyfinConfig
+from spielplan.db import pool as db_pool
 from spielplan.db.library import normalise_kinds
 from spielplan.home import rail
 from spielplan.ledger import model, observations, refit
@@ -88,19 +91,23 @@ BATTLE_SELECTION = "random"
 # as well as of titles -- `battle.draw` serves no pair the person has already compared, and
 # decision 493 keeps the disliked band out of a first sitting -- so they say what is true in all
 # three cases, and "band" goes with the model's vocabulary (decision 486).
+#
+# The modes are named by what they ask since the second household test ("mix / sweep / battle"
+# read as jargon: now Mixed, Singles and Pairs), so the sentences say "pairs" and "one by one" in
+# plain words rather than the old names. [A3, 2026-09-26]
 DRAINED_CAUSES: dict[str, dict[str, str]] = {
     "queue": {
         "cause": "queue",
         "text": (
-            "You've rated everything we can queue right now. Battles sharpen what you've "
+            "You've rated everything we can queue right now. Pairs sharpen what you've "
             "already said."
         ),
     },
     "pool": {
         "cause": "pool",
         "text": (
-            "A battle compares two titles you rated the same way, and there is no new pair to "
-            "compare yet. Rate a few more in Sweep and the pairs start arriving."
+            "A pair is two titles you rated the same way, and there is no new pair to "
+            "compare yet. Rate a few more one by one and the pairs start arriving."
         ),
     },
     "both": {
@@ -368,17 +375,20 @@ async def set_controls(
     kinds: Sequence[str] | None = None,
     decisive: bool | None = None,
 ) -> RateSession:
-    """§6.1's three controls: the mode, the kind toggles, and the persistent decisive toggle.
+    """§6.1's three controls: the mode, the kind toggles, and the decisive switch.
 
     Changing the mode or the kinds drops the card on the table — a battle pair is meaningless
     once Sweep is selected, and a film pair is meaningless once Films is switched off — so the
-    next `ensure_card` draws fresh. The decisive toggle does not: it changes the *weight* of
-    the next answer, not the question.
+    next `ensure_card` draws fresh. The decisive switch does not: it changes the *weight* of
+    the answer to the pair on the table, not the question. It belongs to that pair, so a redraw
+    turns it off with the card it was set for (see `_append`).
     """
     if mode is not None and mode not in MODES:
         raise ValueError(f"mode must be one of {MODES}, not {mode!r}")
     wanted = normalise_kinds(kinds) if kinds is not None else s.kinds
     redraw = (mode is not None and mode != s.mode) or wanted != s.kinds
+    if decisive is None:
+        decisive = False if redraw else s.decisive
     row = await conn.fetchrow(
         f"""
         UPDATE rate_session
@@ -391,7 +401,7 @@ async def set_controls(
         s.id,
         mode or s.mode,
         wanted,
-        s.decisive if decisive is None else decisive,
+        decisive,
         redraw,
     )
     return _session(row)
@@ -832,13 +842,12 @@ async def public_card(
     token = str(s.card_token)
     if card["type"] == "sweep":
         titles = await _title_cards(conn, [card["title_id"]])
-        return {
+        public = {
             "type": "sweep",
             "token": token,
             "kind": card["kind"],
             "title": titles.get(card["title_id"]),
             "reason": card["reason"],
-            "p_seen": card.get("p_seen"),
             # `source` stays server-side with `reask_of`: "reask" would mark the re-ask exactly
             # as loudly as the reference itself, and §13 wants the slot indistinguishable.
             "substituted_for": card.get("substituted_for"),
@@ -846,6 +855,14 @@ async def public_card(
             "verdict_labels": [[i, label] for i, label in enumerate(VERDICT_LABELS)],
             "controls": ["verdict", "not_seen", "skip"],
         }
+        # P(seen) is the queue's model, and the why-line no longer prints it (decision 486; A3 of
+        # the 2026-09-26 household test). It travels under `model`, which `rail.redact` strips
+        # for a viewer with Show the model off, and only where the queue placed the card by it:
+        # a recorded-seen card and a §13 re-ask both carry 1.0 and neither carries this, so the
+        # key cannot tell the two apart.
+        if card.get("source") in ("seed", "p_seen") and card.get("p_seen") is not None:
+            public["model"] = {"p_seen": round(float(card["p_seen"]), 2)}
+        return public
     titles = await _title_cards(conn, [card["title_a"], card["title_b"]])
     # Named `left`/`right` rather than `a`/`b` because §6.1's corrections row names the sides
     # exactly that way ("not seen: [left] [both] [right]"), and one vocabulary for the two
@@ -1165,6 +1182,142 @@ async def _mark_pushed(
         )
 
 
+# One tap's §7.3 settlement as a job over a connection, and the hook a caller passes to have it
+# run after the response instead of inside it.
+Settle = Callable[[asyncpg.Connection], Awaitable[Any]]
+Later = Callable[[Settle], None]
+
+_SETTLING: set[asyncio.Task[None]] = set()
+
+
+async def _push_and_mark(
+    conn: asyncpg.Connection,
+    jf: Jellyfin | None,
+    *,
+    user_id: int,
+    session_id: int,
+    seq: int,
+    writes: Sequence[observations.Write],
+    title_ids: Sequence[int],
+) -> dict[int, tuple[bool, str | None]]:
+    """Push each touched title's committed state, then correct the journal's `pushed` flags."""
+    results: dict[int, tuple[bool, str | None]] = {}
+    for title_id in title_ids:
+        results[title_id] = await _push_state(conn, jf, user_id=user_id, title_id=title_id)
+    pushed = {title_id: ok for title_id, (ok, _reason) in results.items()}
+    await _mark_pushed(
+        conn,
+        jf,
+        user_id=user_id,
+        session_id=session_id,
+        seq=seq,
+        entries=[e for w in writes for e in _state_entries(w, pushed)],
+    )
+    return results
+
+
+async def _push_and_narrate(
+    conn: asyncpg.Connection,
+    jf: Jellyfin | None,
+    *,
+    state: str,
+    event_kind: str,
+    user_id: int,
+    session_id: int,
+    seq: int,
+    writes: Sequence[observations.Write],
+    title_ids: Sequence[int],
+) -> None:
+    """A handed-off push, and §6.7's line for how it ended, recorded when it ends."""
+    results = await _push_and_mark(
+        conn, jf, user_id=user_id, session_id=session_id, seq=seq, writes=writes,
+        title_ids=title_ids,
+    )
+    for title_id in title_ids:
+        rail.record(kind=event_kind, line=_sync_line(state, *results[title_id]), user_id=user_id)
+
+
+async def _settle_push(
+    conn: asyncpg.Connection,
+    jf: Jellyfin | None,
+    later: Later | None,
+    *,
+    state: str,
+    event_kind: str,
+    user_id: int,
+    session_id: int,
+    seq: int,
+    writes: Sequence[observations.Write],
+    title_ids: Sequence[int],
+) -> list[str]:
+    """§7.3's push for one tap, now or after the response; returns §6.7's line per title.
+
+    It used to be awaited here, after the commit, on every tap -- and Jellyfin answers a Played
+    write on a SERIES by marking every episode played. On the second household test Jenny's
+    "liked" on Lost took 3,317 ms from the transaction to the response, 3,269 of them in
+    `POST /UserPlayedItems` for the series; every film verdict spent 64 ms of its 98 there. The
+    verdict buttons sat greyed for the whole of it, against §6's "<2 s per sweep card". Nothing
+    in the response depends on Jellyfin's answer, so a route passes `later` and the push runs on
+    a connection of its own once the person has their next card. `_mark_pushed` corrects the
+    journal when it ends, exactly as it did in the synchronous shape -- decision 207's
+    undo-mid-push compensation already covered a push that finishes after the tap's transaction
+    -- and §6.7's rail gets two true lines instead of one: that the push follows, in the
+    response, and how it ended, recorded by the job when it does.
+
+    Inline when there is no client to send with: `_push_state` then answers without a query, so
+    its reason reaches the rail in the same response. [§6 preamble, §7.3; A4 of the 2026-09-26
+    household test]
+    """
+    writes, title_ids = tuple(writes), tuple(title_ids)
+    if later is not None and jf is not None and jf.client is not None:
+        later(
+            functools.partial(
+                _push_and_narrate, jf=jf, state=state, event_kind=event_kind, user_id=user_id,
+                session_id=session_id, seq=seq, writes=writes, title_ids=title_ids,
+            )
+        )
+        return [_follows_line(state) for _ in title_ids]
+    results = await _push_and_mark(
+        conn, jf, user_id=user_id, session_id=session_id, seq=seq, writes=writes,
+        title_ids=title_ids,
+    )
+    return [_sync_line(state, *results[title_id]) for title_id in title_ids]
+
+
+def settle_in_background(job: Settle) -> None:
+    """Run one tap's §7.3 settlement after the response, on a pooled connection of its own.
+
+    ITS OWN CONNECTION, NEVER THE REQUEST'S: `deps.db` releases the request's connection when the
+    response is produced, and this outlives it by design -- `api/tonight.py::_invite` states the
+    same rule for the same reason. It is not bounded by a timeout of its own: a push cancelled
+    mid-flight may already have reached Jellyfin while the journal still says it did not, which
+    is the Played flag decision 207 exists to keep Undo able to take back. The client's own
+    15 s budget bounds it, and a push that never lands is still owed, which §7.3's sweep settles.
+    """
+    task = asyncio.get_running_loop().create_task(_run_settlement(job))
+    _SETTLING.add(task)
+    task.add_done_callback(_SETTLING.discard)
+
+
+async def _run_settlement(job: Settle) -> None:
+    # Nothing may raise out of a bare task: there is no request to carry it, and the tap it
+    # belongs to has already been answered. The app-side write is durable either way.
+    try:
+        async with db_pool.acquire() as conn:
+            await job(conn)
+    except Exception:
+        log.warning(
+            "a Rate answer's Jellyfin push did not settle; the seen-state sweep still owes it",
+            exc_info=True,
+        )
+
+
+async def settled() -> None:
+    """Wait for every settlement handed off so far. For tests and shutdown, never a request."""
+    while _SETTLING:
+        await asyncio.gather(*list(_SETTLING), return_exceptions=True)
+
+
 # --- the journal -----------------------------------------------------------------------------
 
 
@@ -1246,10 +1399,17 @@ async def _append(
             # client has no rule for. `tonight/rooms.py:102-108` maps its own natural key the
             # same way. [M4.10 finding 2]
             raise StaleCard("stale_card") from exc
+        # `decisive = false`: the switch is set for one pair and the card it was set for has just
+        # been answered. §6.1 called it persistent, and on the second household test that is what
+        # made it wrong -- Patrick turned it on for one clear pick and his next pair was written at
+        # the decisive weight too (duels 5 and 7 on the live install, 1.6 each), an answer he never
+        # marked as clear. A per-pair switch can only under-weight a pick the person did not
+        # bother to mark; a sticky one over-weights every pick after the one they did.
+        # [decision 520; A6 of the 2026-09-26 household test]
         row = await conn.fetchrow(
             f"""
             UPDATE rate_session
-               SET seq = $2, block_index = $3, slot = $4,
+               SET seq = $2, block_index = $3, slot = $4, decisive = false,
                    current_card = NULL, card_token = NULL, last_seen_at = now()
              WHERE id = $1
             RETURNING {_SESSION_COLUMNS}
@@ -1357,6 +1517,7 @@ async def record_verdict(
     latency_ms: int | None = None,
     rng: Any = None,
     head: Sequence[int] = (),
+    later: Later | None = None,
 ) -> Outcome:
     """§6.1's `Liked / Fine / Disliked`, and "Verdict implies `seen`".
 
@@ -1364,6 +1525,9 @@ async def record_verdict(
     the two are one fact and `refit.load_cache` has to be able to check it. See
     `refit.update_incrementally`: the route pins both at boot and the tap can outlive the flip.
     [M4.13 cycle 1, finding 15]
+
+    `later` takes §7.3's push off the response (`_settle_push`); without it the push is awaited
+    here, which is what every caller that is not a route wants.
     """
     card = _take_card(s, card_token, want="sweep")
     if value not in (0, 1, 2):
@@ -1410,14 +1574,9 @@ async def record_verdict(
     # written `user_title` with `jf_synced_at = NULL` inside the transaction above, which is
     # precisely §7.3's "owed" — so what the transaction keeps is the person's action and what it
     # loses is a foreign server's 15 s budget. [M4.10 finding 11]
-    pushed, reason = await _push_state(conn, jf, user_id=s.user_id, title_id=title_id)
-    await _mark_pushed(
-        conn,
-        jf,
-        user_id=s.user_id,
-        session_id=s.id,
-        seq=s.seq,
-        entries=_state_entries(write, {title_id: pushed}),
+    sync_lines = await _settle_push(
+        conn, jf, later, state="seen", event_kind="verdict", user_id=s.user_id,
+        session_id=s.id, seq=s.seq, writes=(write,), title_ids=(title_id,),
     )
 
     ledger = await refit.update_incrementally_reporting(
@@ -1446,7 +1605,7 @@ async def record_verdict(
     return Outcome(
         session=s,
         reveal=reveal_for(prediction, value),
-        log=(line, _sync_line("seen", pushed, reason)),
+        log=(line, *sync_lines),
         ledger=ledger,
     )
 
@@ -1459,6 +1618,11 @@ def _sync_line(state: str, pushed: bool, reason: str | None) -> str:
     return f"user_title.state = {state} -> not pushed ({reason or 'no connector'})"
 
 
+def _follows_line(state: str) -> str:
+    """The line for a push handed to `later`: it has not happened yet, so it says it follows."""
+    return f"user_title.state = {state} -> Jellyfin push follows"
+
+
 async def record_not_seen(
     conn: asyncpg.Connection,
     s: RateSession,
@@ -1468,10 +1632,11 @@ async def record_not_seen(
     latency_ms: int | None = None,
     rng: Any = None,
     head: Sequence[int] = (),
+    later: Later | None = None,
 ) -> Outcome:
     """§6.1's `Not seen`, and the owner decision of 2026-08-29: there is no third state. A
     title you cannot remember is plain `unseen`, and §4.2's append-only history survives the
-    flip — this writes no observation row and deletes none."""
+    flip — this writes no observation row and deletes none. `later` as `record_verdict`'s."""
     card = _take_card(s, card_token, want="sweep")
     title_id = card["title_id"]
     async with conn.transaction():
@@ -1488,17 +1653,12 @@ async def record_not_seen(
             prior_state=_state_entries(write, {}),
             latency_ms=latency_ms,
         )
-    pushed, reason = await _push_state(conn, jf, user_id=s.user_id, title_id=title_id)
-    await _mark_pushed(
-        conn,
-        jf,
-        user_id=s.user_id,
-        session_id=s.id,
-        seq=s.seq,
-        entries=_state_entries(write, {title_id: pushed}),
+    sync_lines = await _settle_push(
+        conn, jf, later, state="unseen", event_kind="not_seen", user_id=s.user_id,
+        session_id=s.id, seq=s.seq, writes=(write,), title_ids=(title_id,),
     )
     s = await ensure_card(conn, s, rng=rng, head=head)
-    return Outcome(session=s, log=(write.log, _sync_line("unseen", pushed, reason)))
+    return Outcome(session=s, log=(write.log, *sync_lines))
 
 
 async def record_skip(
@@ -1552,10 +1712,11 @@ async def record_duel(
     data: 22% of random pairs are genuine ties" — and dropping it would starve the Davidson
     tie term the arm is built around.
 
-    The margin comes from the session's persistent decisive toggle (§6.1: "~1.6 vs 1.0"), read
-    through `hp.margin_for` so the two numbers stay in `ledger_hyperparams.json` where §4.3
-    puts them. A per-request `decisive` overrides for one answer without moving the toggle,
-    which is where the long-press accelerator lands.
+    The margin comes from the session's decisive switch (§6.1: "~1.6 vs 1.0"), which holds for
+    the pair on the table and resets with it (decision 520), read through `hp.margin_for` so the
+    two numbers stay in `ledger_hyperparams.json` where §4.3 puts them. A per-request `decisive`
+    overrides for one answer without moving the switch, which is where the long-press
+    accelerator lands.
     """
     card = _take_card(s, card_token, want="battle")
     if outcome not in OUTCOMES:
@@ -1608,6 +1769,7 @@ async def record_correction(
     side: Side,
     jf: Jellyfin | None = None,
     rng: Any = None,
+    later: Later | None = None,
 ) -> Outcome:
     """§6.1's corrections zone: "`not seen: [left] [both] [right]` -> sets that side `unseen`,
     swaps it out of the pair (`both` swaps the whole pair), **writes no duel row**, syncs per
@@ -1652,18 +1814,11 @@ async def record_correction(
 
     # Both pushes after the commit, for finding 11's reason — and `both` makes the cost of the
     # old shape plainest: two 15 s-budget sockets awaited in series inside one transaction.
-    pushes: dict[int, bool] = {}
-    for title_id in corrected:
-        pushed, reason = await _push_state(conn, jf, user_id=s.user_id, title_id=title_id)
-        pushes[title_id] = pushed
-        lines.append(_sync_line("unseen", pushed, reason))
-    await _mark_pushed(
-        conn,
-        jf,
-        user_id=s.user_id,
-        session_id=s.id,
-        seq=s.seq,
-        entries=[e for w in writes for e in _state_entries(w, pushes)],
+    lines.extend(
+        await _settle_push(
+            conn, jf, later, state="unseen", event_kind="not_seen", user_id=s.user_id,
+            session_id=s.id, seq=s.seq, writes=writes, title_ids=corrected,
+        )
     )
 
     lines.append(
@@ -1884,11 +2039,13 @@ async def undo(
         await conn.execute(
             "UPDATE rate_observation SET undone_at = now() WHERE id = $1", row["id"]
         )
+        # The restored pair is asked afresh, so the decisive switch starts off for it as it does
+        # for every pair (decision 520): the popped answer's weight left with the answer.
         restored = await conn.fetchrow(
             f"""
             UPDATE rate_session
                SET block_index = $2, slot = $3, current_card = $4::jsonb, card_token = $5,
-                   last_seen_at = now()
+                   decisive = false, last_seen_at = now()
              WHERE id = $1
             RETURNING {_SESSION_COLUMNS}
             """,
@@ -2058,6 +2215,8 @@ __all__ = [
     "record_skip",
     "record_verdict",
     "set_controls",
+    "settle_in_background",
+    "settled",
     "undo",
     "undo_availability",
 ]

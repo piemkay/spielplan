@@ -7474,6 +7474,10 @@ ACCENT_ALLOWLIST = {
         "the same verdict reached by keyboard",
     "lib/components/RateBattleCard.svelte: .track.on":
         "the decisive switch, on",
+    "lib/components/RateBattleCard.svelte: .side.picked :global(.poster)":
+        "the poster just picked, lit while its answer is in flight (A4 of 2026-09-26)",
+    "lib/components/RateBattleCard.svelte: .cell.picked:disabled":
+        "the strip answer just picked, lit while it is in flight",
     "lib/components/RateCorrections.svelte: .side:hover:not(:disabled)":
         "the side of a correction pair about to be chosen",
     "lib/components/RateCorrections.svelte: .side:focus-visible":
@@ -7482,6 +7486,8 @@ ACCENT_ALLOWLIST = {
         "the sweep verdict about to be given",
     "lib/components/RateSweepCard.svelte: .verdict:focus-visible":
         "the same verdict reached by keyboard",
+    "lib/components/RateSweepCard.svelte: .verdict.picked:disabled":
+        "the verdict just given, lit while it is in flight (A4 of 2026-09-26)",
     "lib/components/RateUndo.svelte: .chip:hover:not(:disabled)":
         "the undo about to be taken -- a primary action, and the only one on that strip",
     "lib/components/RateUndo.svelte: .chip:focus-visible":

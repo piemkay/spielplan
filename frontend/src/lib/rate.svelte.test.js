@@ -1,11 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
+  DECISIVE_COPY,
+  DECISIVE_LABEL,
   HOLD_MS,
   LEARNING_CURVE_COPY,
   MODES,
+  PAIR_QUESTION,
   PAIR_SELECTION_COPY,
   UNDO_KIND_LABELS,
+  modeName,
   commit,
   counterLine,
   findTitles,
@@ -99,13 +103,18 @@ describe('pure helpers', () => {
     expect(kindLabel([])).toBe('');
   });
 
-  it('builds §6.1 counter with proposal 46 partition and the card type', () => {
+  it('builds §6.1 counter with proposal 46 partition and the mode that was chosen', () => {
     // Decision 35: this is the number Undo's depth is measured in, so it is the server's own
-    // `counter` string with context appended, never a recomputation.
+    // `counter` string with context appended, never a recomputation. It names the chosen mode,
+    // not the card type served: "· battle" under a pressed Mixed pill read as the header
+    // disagreeing with the person (A2 of the 2026-09-26 household test).
     expect(
-      counterLine({ counter: '7 / 15', serving: 'sweep' }, ['movie'])
-    ).toBe('7 / 15 this block · film · sweep');
-    expect(counterLine(null, ['movie'])).toBe('');
+      counterLine({ counter: '7 / 15', serving: 'battle' }, ['movie'], 'mix')
+    ).toBe('7 / 15 this block · film · Mixed');
+    expect(counterLine({ counter: '2 / 15', serving: 'sweep' }, ['series'], 'battle')).toBe(
+      '2 / 15 this block · series · Pairs'
+    );
+    expect(counterLine(null, ['movie'], 'mix')).toBe('');
   });
 
   it('formats runtime per kind and joins the meta line without stray spacing', () => {
@@ -238,6 +247,30 @@ describe('the envelope', () => {
     expect(rate.reveal).toBe(null);
   });
 
+  it('says which answer is in flight until the server has taken it', async () => {
+    // A4 of the 2026-09-26 household test: every button greyed out after a tap with nothing
+    // saying which answer had been taken. The store names the one in flight for the card to
+    // light, and clears it with the busy state however the request ends.
+    /** @type {(response: any) => void} */
+    let answer = () => {};
+    fetchMock.mockReturnValue(new Promise((resolve) => (answer = resolve)));
+    const tapped = verdict(2);
+    expect(rate.busy).toBe(true);
+    expect(rate.pending).toBe('verdict-2');
+    answer(ok(envelope({ reveal: { available: false, reason: 'no guess yet' } })));
+    await tapped;
+    expect(rate.pending).toBe(null);
+    commit();
+
+    fetchMock.mockReturnValue(new Promise((resolve) => (answer = resolve)));
+    const picked = duel('TIE');
+    expect(rate.pending).toBe('duel-TIE');
+    answer(conflict({ reason: 'stale_card', message: 'that card has already been answered' }));
+    fetchMock.mockResolvedValue(ok(envelope()));
+    await picked;
+    expect(rate.pending).toBe(null);
+  });
+
   it('will not answer a card it is only showing', async () => {
     fetchMock.mockResolvedValue(
       ok(envelope({ reveal: { available: false, reason: 'no fit yet' } }))
@@ -357,16 +390,46 @@ describe('the member register (decisions 486 and 491)', () => {
     expect(ratingsLabel(15)).toBe('15 ratings');
   });
 
+  it('names the kind it counts when only one kind is selected', () => {
+    // A5 of the 2026-09-26 household test: with Films switched off the widget read "9 ratings"
+    // and a member with fifty took them for lost. The count is per kind on purpose (each kind
+    // is its own model), so the label says which.
+    expect(ratingsLabel(9, ['series'])).toBe('9 series ratings');
+    expect(ratingsLabel(1, ['movie'])).toBe('1 film rating');
+    expect(ratingsLabel(58, ['movie', 'series'])).toBe('58 ratings');
+  });
+
   it('carries no section number, milestone or model noun in the copy it ships', () => {
-    const shipped = [PAIR_SELECTION_COPY, LEARNING_CURVE_COPY, ...MODES.map(([, why]) => why)];
+    const shipped = [
+      PAIR_SELECTION_COPY,
+      LEARNING_CURVE_COPY,
+      DECISIVE_COPY,
+      DECISIVE_LABEL,
+      PAIR_QUESTION,
+      ...MODES.flatMap(([, name, why]) => [name, why])
+    ];
     for (const line of shipped) {
       expect(line).not.toMatch(/§|decision \d|proposal \d|\bM[0-7]\b/);
-      expect(line).not.toMatch(/\blabels?\b|\bcdf\b|\bledger\b/);
+      expect(line).not.toMatch(/\blabels?\b|\bcdf\b|\bledger\b|\bmargin\b/);
     }
     expect(PAIR_SELECTION_COPY).toContain('Sharpen my ranking');
     expect(LEARNING_CURVE_COPY).toContain('ratings');
     // Decision 492: Mix's line says when the pairs start rather than promising them at once.
-    expect(MODES.find(([key]) => key === 'mix')[1]).toContain('pairs from 15 ratings on');
+    expect(MODES.find(([key]) => key === 'mix')[2]).toContain('the pairs start at 15 ratings');
+  });
+
+  it('names the modes by what they ask, and the pair card asks its question', () => {
+    // A3 and policy (h) of the 2026-09-26 household test: "mix / sweep / battle" read as jargon,
+    // and A1: the pair card never asked anything. The keys stay the wire's (decision 519).
+    expect(MODES.map(([key]) => key)).toEqual(['mix', 'sweep', 'battle']);
+    expect(MODES.map(([key]) => modeName(key))).toEqual(['Mixed', 'Singles', 'Pairs']);
+    for (const [, name, why] of MODES) {
+      expect(`${name} ${why}`).not.toMatch(/\b(sweep|battle)\b/i);
+    }
+    expect(PAIR_QUESTION).toBe('Which did you enjoy more?');
+    // A6 and decision 520: the switch is the pair's, and its line says it resets.
+    expect(DECISIVE_COPY).toMatch(/resets for the next pair/);
+    expect(DECISIVE_COPY).not.toMatch(/decisive|hesitant|teaches/);
   });
 });
 

@@ -2,7 +2,9 @@
 
 §6.1: "**Queue:** P(seen)-ordered (Jellyfin history, popularity, household co-seen), seeded
 first run from the imported 100-title decade-stratified `seed_list`. Blocks of 15; each card
-shows its queue reason ('queued because: 72% likely you have seen it')."
+shows its queue reason ('queued because: 72% likely you have seen it')." The reason is a plain
+sentence since the second household test and its probability waits behind Show the model (see
+`reason_for`).
 
 Three sentences, three rules, and they compose in one ORDER BY:
 
@@ -27,7 +29,7 @@ own search — leads everything, is served even over an earlier "not seen" (a ve
 and the person has just said they know it), and names the pin as its reason.
 
 WHAT P(SEEN) IS, AND WHAT IT IS NOT
-It is a five-feature logistic over signals this app already holds, and it exists to *order a
+It is a six-feature logistic over signals this app already holds, and it exists to *order a
 queue*. It never enters `score_u(t)` and it is not a model feature: §4.1 rule 3 keeps the
 display schema away from the feature builder, and nothing here reads it. `title_prior.item_n`
 is the sanctioned popularity quantity — §4.3 ships it as "the per-title support counts" — so
@@ -94,9 +96,17 @@ class SeenWeights:
     crowd: float = 2.0        # §6.1's "popularity", as title_prior.item_n
     owned: float = 0.8        # it is in the Jellyfin library (§7.2 keeps is_owned re-derived)
     age: float = 0.6          # more years on the shelf, more chances to have seen it
+    unfamiliar: float = 2.0   # this person keeps answering "not seen" to titles of its language
+                              # and kind (see `unfamiliarity`); the feature is <= 0, so this
+                              # only ever lowers P(seen)
 
 
 WEIGHTS = SeenWeights()
+
+# The pseudo-count `unfamiliarity` shrinks a person's own answers towards "no opinion" with: two
+# seen and two not-seen, so one "not seen" moves a language's titles by 0.4 logit rather than by
+# the whole weight, and the term only bites once the answers keep saying the same thing.
+FAMILIAR_PSEUDO = 2.0
 
 # A title is "old" for this purpose once it has been out four decades; past that the extra years
 # stop carrying information about whether this household saw it.
@@ -115,7 +125,13 @@ P_SEEN_RECORDED = 1.0
 
 SOURCES: tuple[str, ...] = ("pinned", "seed", "p_seen", "pending_verdict", "reask")
 
-FEATURE_NAMES: tuple[str, ...] = ("playback", "co_seen", "crowd", "owned", "age")
+FEATURE_NAMES: tuple[str, ...] = ("playback", "co_seen", "crowd", "owned", "age", "unfamiliar")
+
+# The popularity term at which a title is "well-known" in member copy: about a thousand crowd
+# ratings (log1p(1000) / log1p(CROWD_SATURATION) = 0.60). On the v20260926b catalogue that is the
+# top 35% of films and the top 8% of series, and every seed film clears it. A title below it is
+# never called well-known, whatever list it is on -- the list the corpus ships is not the claim.
+WELL_KNOWN_CROWD = 0.6
 
 
 # --- the estimate -----------------------------------------------------------------------------
@@ -123,7 +139,7 @@ FEATURE_NAMES: tuple[str, ...] = ("playback", "co_seen", "crowd", "owned", "age"
 
 @dataclass(frozen=True)
 class Features:
-    """The five circumstantial signals, plus the one recorded fact that overrides them."""
+    """The six circumstantial signals, plus the one recorded fact that overrides them."""
 
     seen: bool = False        # user_title.state = 'seen' — a record, not a signal
     playback: bool = False
@@ -131,6 +147,7 @@ class Features:
     crowd: float = 0.0        # log1p(item_n) / log1p(CROWD_SATURATION), clipped
     owned: bool = False
     age: float = 0.0          # (this year - release year) / 40, clipped
+    unfamiliar: float = 0.0   # -1..0: `unfamiliarity` of this person's answers in its language
 
     def vector(self) -> dict[str, float]:
         return {
@@ -139,7 +156,30 @@ class Features:
             "crowd": float(self.crowd),
             "owned": float(self.owned),
             "age": float(self.age),
+            "unfamiliar": float(self.unfamiliar),
         }
+
+
+def unfamiliarity(seen: float, answered: float, pseudo: float = FAMILIAR_PSEUDO) -> float:
+    """How firmly this person's own answers say they do not know titles of one language and kind.
+
+    §6.1 orders the queue by P(seen) over signals that are all about the TITLE -- its crowd, the
+    library, its age, the household -- and none about what this person has already told the
+    queue. So the second household test watched it drift: Jenny answered "not seen" to Attack on
+    Titan and to Berserk, Monster came three cards later on its crowd count, and Death Note now
+    leads her series queue on the `owned` term -- the household owns 39 Japanese series, and
+    nothing in the formula knows whose they are. Her own answers are the only signal that does,
+    and they are exactly the label P(seen) predicts: a verdict means seen and `Not seen` unseen.
+
+    The share of the person's answered titles in the group that they had seen, shrunk towards a
+    half by `pseudo` answers each way, read only below a half: 0 until the answers lean towards
+    "not seen", -1 at the limit. Never above zero, because a language the person knows well is no
+    reason to ask about a title in it that nothing else says they saw -- this lowers titles the
+    person keeps not knowing and moves nothing else, so the why-line never names it.
+    [H7 of the 2026-09-26 household test]
+    """
+    share = (seen + pseudo) / (answered + 2.0 * pseudo)
+    return min(0.0, share - 0.5) * 2.0
 
 
 def contributions(features: Features, weights: SeenWeights = WEIGHTS) -> dict[str, float]:
@@ -173,30 +213,38 @@ def dominant(features: Features, weights: SeenWeights = WEIGHTS) -> str | None:
 
 # §6.8: "every shelf, recommendation, question and conflict carries a one-line why". Phrased in
 # the person's vocabulary and not the model's — the card is asking them to remember something.
+# Whole sentences since the second household test: "queued because: 86% likely you have seen it"
+# was the queue's working printed for a member, and the probability is a model number, which
+# decision 486 keeps behind Show the model (the card's `model.p_seen`). [A3 of 2026-09-26]
 PHRASES = {
-    "playback": "you played it through",
-    "co_seen": "someone else in the house has seen it",
-    "crowd": "widely rated",
-    "owned": "it is in your library",
-    "age": "it has been out {years} years",
+    "playback": "You played it to the end.",
+    "co_seen": "Someone else in the house has seen it.",
+    "crowd": "A well-known {noun}.",
+    "owned": "It's in your library.",
+    "age": "It has been out {years}.",
 }
+
+# The line when no term is strong enough to name -- nothing known at all, or a crowd too small to
+# call the title well-known.
+UNSURE_REASON = "One you might have seen."
 
 # The one sentence a recorded-seen card carries. It is deliberately the *whole* truth about that
 # card and no more: "you have this marked seen". §13's re-ask targets are also marked seen, so
 # they get this same sentence from this same branch and the wire cannot tell the two apart. The
 # tempting longer form — "...and have not rated it" — is what would give the stream away, and it
 # would be false on exactly the cards it gave away.
-SEEN_REASON = "queued because: you have this marked seen"
+SEEN_REASON = "You have this marked as seen."
 
 # The person asked for this one — Rate's search or the title card's "Rate it" — so the pin IS the
 # reason, and a probability beside it would explain a placement the queue did not make.
-PINNED_REASON = "queued because: you picked it"
+PINNED_REASON = "You picked this one."
 
 
 def reason_for(
     features: Features,
     *,
     source: str,
+    kind: str = "movie",
     seed_decade: int | None = None,
     years_out: int | None = None,
     weights: SeenWeights = WEIGHTS,
@@ -204,22 +252,37 @@ def reason_for(
     """§6.8's mandatory one-line why, in the copy register the spec calls "quiet reasons".
 
     A seed card printed "seed list position 0 of 100": 0-based, a file's index, and a statement
-    about the corpus's list rather than about the person. Decision 490 orders the list by P(seen),
-    so the card now says what the list is for and the same probability every other card quotes.
+    about the corpus's list rather than about the person. Decision 490 then made it "a starter
+    title from the 1970s · 86% likely you have seen it", which the second household test still
+    read as jargon: "starter title" is the corpus's name for its list and the percentage is the
+    queue's model. So a seed card says what the title is -- "A well-known film from the 1970s"
+    -- and says "well-known" only where the crowd term bears it out (`WELL_KNOWN_CROWD`); a seed
+    below that line says the one thing true of every list title, that everyone is asked it
+    first. No card carries a number: P(seen) travels beside the reason, behind Show the model.
+    [§6.1, §6.8, decision 486; A3 of the 2026-09-26 household test]
     """
     if source in ("pending_verdict", "reask"):
         return SEEN_REASON
     if source == "pinned":
         return PINNED_REASON
-    pct = round(p_seen(features, weights) * 100)
+    noun = "series" if kind == "series" else "film"
+    known = features.crowd >= WELL_KNOWN_CROWD
     if source == "seed":
-        starter = f"a starter title from the {seed_decade}s" if seed_decade else "a starter title"
-        return f"queued because: {starter} · {pct}% likely you have seen it"
+        when = f" from the {seed_decade}s" if seed_decade else ""
+        if known:
+            return f"A well-known {noun}{when}."
+        return f"A {noun}{when} we ask everyone about first."
     cause = dominant(features, weights)
+    if cause == "crowd" and not known:
+        # The crowd term leads but is too small to call the title well-known: name the strongest
+        # term that can be said truthfully instead.
+        scored = contributions(features, weights)
+        rest = [name for name in scored if name != "crowd" and scored[name] > 0.0]
+        cause = max(rest, key=lambda name: (scored[name], name)) if rest else None
     if cause is None:
-        return f"queued because: {pct}% likely you have seen it"
-    phrase = PHRASES[cause].format(years=years_out if years_out is not None else 0)
-    return f"queued because: {pct}% likely you have seen it · {phrase}"
+        return UNSURE_REASON
+    years = years_out if years_out is not None else 0
+    return PHRASES[cause].format(years="1 year" if years == 1 else f"{years} years", noun=noun)
 
 
 # --- the card ---------------------------------------------------------------------------------
@@ -228,7 +291,7 @@ def reason_for(
 @dataclass(frozen=True)
 class QueueCard:
     title_id: int
-    reason: str            # §6.8 one-line why, e.g. "72% likely you have seen it"
+    reason: str            # §6.8 one-line why, e.g. "It's in your library."
     p_seen: float | None
     source: str            # seed | p_seen | pending_verdict | reask
     reask_of: int | None   # verdict.id being silently re-asked; None otherwise
@@ -281,6 +344,16 @@ WITH household AS (
      WHERE user_id = $1 AND finished AND title_id IS NOT NULL
 ), rated AS (
     SELECT DISTINCT title_id FROM verdict WHERE user_id = $1 AND NOT is_reask
+), familiar AS (
+    -- This person's own answers per kind and original language: `unfamiliarity`'s two counts.
+    -- An 'unseen' row is an answer somebody gave (an adopted unseen is an absent row).
+    SELECT t.kind, t.original_language AS lang,
+           count(*) FILTER (WHERE ut.state = 'seen')::float8 AS seen_n,
+           count(*)::float8                                   AS answered_n
+      FROM user_title ut
+      JOIN title t ON t.id = ut.title_id
+     WHERE ut.user_id = $1 AND t.original_language IS NOT NULL
+     GROUP BY t.kind, t.original_language
 ), cand AS (
     SELECT t.id,
            t.kind,
@@ -303,6 +376,8 @@ WITH household AS (
                 ELSE least(1.0, greatest(0.0,
                      (EXTRACT(year FROM now())::float8 - t.year::float8) / $5::float8))
            END                                                      AS age,
+           COALESCE(fa.seen_n, 0.0)                                 AS lang_seen_n,
+           COALESCE(fa.answered_n, 0.0)                             AS lang_answered_n,
            array_position($6::int[], t.id)                          AS head_pos
       FROM title t
       LEFT JOIN user_title  ut ON ut.title_id = t.id AND ut.user_id = $1
@@ -311,6 +386,7 @@ WITH household AS (
       LEFT JOIN co_seen     cs ON cs.title_id = t.id
       LEFT JOIN played      pl ON pl.title_id = t.id
       LEFT JOIN rated       rt ON rt.title_id = t.id
+      LEFT JOIN familiar    fa ON fa.kind = t.kind AND fa.lang = t.original_language
      WHERE t.kind = ANY($2::text[])
        AND NOT (t.id = ANY($3::int[]))
        AND rt.title_id IS NULL
@@ -318,7 +394,9 @@ WITH household AS (
 ), scored AS (
     SELECT c.*,
            least(1.0, ln(1.0 + c.item_n) / ln(1.0 + $7::float8))              AS crowd,
-           least(1.0, c.co_seen_n / greatest(1.0, (SELECT n FROM household))) AS co_seen
+           least(1.0, c.co_seen_n / greatest(1.0, (SELECT n FROM household))) AS co_seen,
+           least(0.0, (c.lang_seen_n + $15::float8)
+                      / (c.lang_answered_n + 2.0 * $15::float8) - 0.5) * 2.0 AS unfamiliar
       FROM cand c
 )
 SELECT s.*,
@@ -328,7 +406,8 @@ SELECT s.*,
                                      + $10::float8 * s.co_seen
                                      + $11::float8 * s.crowd
                                      + $12::float8 * (s.owned)::int
-                                     + $13::float8 * s.age ))) END AS p_seen
+                                     + $13::float8 * s.age
+                                     + $14::float8 * s.unfamiliar ))) END AS p_seen
   FROM scored s
  ORDER BY s.head_pos ASC NULLS LAST,
           NOT s.seen,
@@ -349,6 +428,7 @@ def _features(row: asyncpg.Record) -> Features:
         crowd=float(row["crowd"]),
         owned=bool(row["owned"]),
         age=float(row["age"]),
+        unfamiliar=float(row["unfamiliar"]),
     )
 
 
@@ -379,6 +459,7 @@ def _card(row: asyncpg.Record, *, weights: SeenWeights) -> QueueCard:
         reason=reason_for(
             features,
             source=source,
+            kind=str(row["kind"]),
             seed_decade=row["seed_decade"],
             years_out=years_out,
             weights=weights,
@@ -439,6 +520,8 @@ async def next_sweep_cards(
         weights.crowd,
         weights.owned,
         weights.age,
+        weights.unfamiliar,
+        FAMILIAR_PSEUDO,
     )
     fresh = [_card(row, weights=weights) for row in fresh_rows]
 
@@ -583,4 +666,5 @@ __all__ = [
     "not_seen_rate",
     "p_seen",
     "reason_for",
+    "unfamiliarity",
 ]
