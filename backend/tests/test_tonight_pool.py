@@ -287,17 +287,43 @@ def test_a_veto_names_vocabulary_terms_and_nothing_else():
     assert pool.MAX_VETOES == 3
 
 
-def test_a_veto_reads_the_quote_verified_tier_and_never_a_weight():
-    """§4.1 rules 1 and 2 on the new predicate (decision 480): it names the tier, so the
+def test_a_veto_reads_both_tiers_by_name_and_never_a_weight():
+    """§4.1 rules 1 and 2 on the predicate (decisions 480 and 504): it names the tiers, so the
     discriminator is kept, and it compares no salience, confidence or weight — a threshold on a
-    weight is the cut §4.1 rule 2 forbids. The extracted tier because the projected one would
-    have removed Raiders of the Lost Ark and Eternal Sunshine of the Spotless Mind on inference
-    alone on the first household's library."""
+    weight is the cut §4.1 rule 2 forbids. Both tiers, because the quote-verified one alone served
+    John Wick, Transformers: Revenge of the Fallen and In Bruges to the member of the second
+    household evening who had ruled out violence: each carries the term by projection alone."""
     import inspect
     import re
 
-    assert pool.VETO_TIER == "extracted"
+    assert pool.VETO_TIERS == ("extracted", "projected")
     source = inspect.getsource(pool.build)
     predicate = source[source.index("FROM dna_tagged d"):source.index("list(vetoed_terms)")]
-    assert "d.tier = $7" in predicate
+    assert "d.tier = ANY($7::text[])" in predicate
     assert not re.search(r"salience|confidence|weight", predicate), predicate
+    assert "list(VETO_TIERS)" in source, "the tiers are named where the statement is bound"
+
+
+def test_the_pool_excludes_the_union_of_every_members_own_vetoes():
+    """Decision 505: each seated member holds up to three, and a title any of them ruled out is out.
+    On the second household evening the first member to tap took the room's three and the other
+    could add none. A room opened before the decision wrote one room-wide set, which still counts,
+    so an evening in flight across the deploy keeps what it ruled out; a retired key vetoes
+    nothing, and both jsonb shapes read the same."""
+    import json
+
+    from spielplan.tonight import rooms
+
+    context = {
+        "vetoes_by": {"11": ["violence", "horror", "harrowing"], "12": ["sexual_violence"]},
+    }
+    assert rooms.vetoes_by_seat(context) == {
+        11: ["violence", "horror", "harrowing"], 12: ["sexual_violence"],
+    }
+    assert rooms.vetoes_of(context) == ["violence", "sexual_violence", "horror", "harrowing"]
+    assert rooms.vetoes_of(json.dumps(context)) == rooms.vetoes_of(context)
+
+    legacy = {"vetoes": ["horror"], "vetoes_by": {"12": ["violence", "retired-chip"]}}
+    assert rooms.vetoes_of(legacy) == ["violence", "horror"]
+    assert rooms.vetoes_by_seat({"vetoes_by": {"13": ["retired-chip"]}}) == {}
+    assert rooms.vetoes_of({}) == [] and rooms.vetoes_of(None) == []

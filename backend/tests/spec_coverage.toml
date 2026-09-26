@@ -12179,17 +12179,20 @@ id = "tonight-not-tonight-vetoes"
 spec = "§6.2 step 1 (session controls) + §4.1 rules 1 and 2 + §6.4 (presence predicates); decision 480"
 milestone = "M5"
 kind = "integration"
-what = "Before Start any seated member may set up to three 'not tonight' vetoes from a fixed list mapped to vocabulary terms; a stranger is refused, a key off the list or a fourth veto is a 422, and a room that has started refuses a change; the pool is then built without every title carrying a vetoed term in the quote-verified tier — a presence predicate that names the tier and compares no salience, confidence or weight — while a title carrying it only by projection stays; the lobby and the open-rooms row show the vetoes, and a pool the vetoes empty is refused naming them."
-why = "The first household evening served a member who wanted nothing violent a pair with American History X in it, and she had no way to say so; the projected tier would have removed Raiders of the Lost Ark and Eternal Sunshine of the Spotless Mind by inference alone."
+what = "Before Start each seated member may set up to three 'not tonight' vetoes of their own from a fixed list mapped to vocabulary terms, and one member's set never touches another's; a stranger is refused, a key off the list or a fourth of one's own is a 422, and a room that has started refuses a change; the pool is then built without every title carrying a term any member vetoed, in either the quote-verified or the projected tier — a presence predicate that names both tiers and compares no salience, confidence or weight; the union and whose each veto was are frozen with the pool; the lobby shows each member's own chips and names the others', the open-rooms row shows the union, and a pool the vetoes empty is refused naming them."
+why = "The first household evening served a member who wanted nothing violent a pair with American History X in it, and she had no way to say so. The second served her John Wick, Transformers: Revenge of the Fallen and In Bruges after she had ruled violence out, each carrying the term by projection alone, and her three taps used up the room's three, so the other member could add none."
 tests = [
     "backend/tests/test_tonight_pool.py::test_a_veto_names_vocabulary_terms_and_nothing_else",
-    "backend/tests/test_tonight_pool.py::test_a_veto_reads_the_quote_verified_tier_and_never_a_weight",
-    "backend/tests/test_tonight_integration.py::test_a_vetoed_term_removes_the_titles_that_carry_it_in_the_quote_verified_tier",
+    "backend/tests/test_tonight_pool.py::test_a_veto_reads_both_tiers_by_name_and_never_a_weight",
+    "backend/tests/test_tonight_pool.py::test_the_pool_excludes_the_union_of_every_members_own_vetoes",
+    "backend/tests/test_tonight_integration.py::test_a_vetoed_term_removes_the_titles_that_carry_it_in_either_tier",
     "backend/tests/test_tonight_integration.py::test_vetoes_are_any_seated_members_to_set_and_only_before_start",
     "backend/tests/test_tonight_integration.py::test_a_pool_the_vetoes_empty_says_which_veto_to_lift",
-    "backend/tests/test_tonight_routes.py::test_any_seated_member_sets_the_rooms_vetoes_over_http",
+    "backend/tests/test_tonight_routes.py::test_each_seated_member_sets_their_own_vetoes_over_http",
     "frontend/src/lib/tonight.svelte.test.js::sets the whole veto set, and never a fourth",
+    "frontend/src/lib/tonight.svelte.test.js::finds this phone's seat from the seats when a reply carries no me",
     "frontend/src/routes/tonight/tonight-page.test.js::offers the lobby its share link and the not-tonight chips",
+    "e2e/specs/15-tonight-group.spec.js::each member rules out their own three, and one member's three leave the other theirs",
 ]
 
 [[requirement]]
@@ -12250,7 +12253,7 @@ tests = [
     "backend/tests/test_tonight_integration.py::test_each_match_line_branch_says_the_thing_it_is_for",
     "backend/tests/test_tonight_integration.py::test_a_refusal_names_the_member_the_pool_cannot_rank",
     "backend/tests/test_tonight_routes.py::test_the_reveal_route_asks_the_callers_own_toggle_before_it_shows_d",
-    "frontend/src/lib/tonight.svelte.test.js::heads the round with what to expect, and names the cap only near it",
+    "frontend/src/lib/tonight.svelte.test.js::heads the round with what to expect, and names the cap only once the round runs long",
 ]
 
 [[requirement]]
@@ -12301,4 +12304,100 @@ tests = [
     "backend/tests/test_static_contracts.py::test_the_member_register_guard_leaves_path_data_comments_and_styles_alone",
     "backend/tests/test_static_contracts.py::test_the_member_register_guard_reads_backend_copy_and_not_its_sql_or_logs",
     "backend/tests/test_static_contracts.py::test_the_member_register_walk_follows_imports_and_stops_at_the_operator_routes",
+]
+
+# The second household user test (2026-09-26), Tonight's findings. Filed at M5 like the first
+# wave's rows; each cites its sections only, and the decision each rests on is appended when the
+# record takes it.
+[[requirement]]
+id = "tonight-the-soft-budget-is-said-and-remembered"
+spec = "§6.2 step 1 (\"a runtime budget slider (soft — the pool admits up to budget + 40 min; over-budget results are labelled 'runs N min over'\")"
+milestone = "M5"
+kind = "e2e"
+what = "The soft budget is honoured exactly as §6.2 step 1 defines it, and the door says so where it is set: a line under the slider states that titles up to 40 min longer can still come up and are marked with how far over, per episode on a series night. The slider opens at the budget this member last opened an evening with for that kind on this device, else the default; an out-of-range or unreadable stored value, or storage that refuses, falls back to the default and stops no evening."
+why = "The second household evening set 120 min and was offered Wicked (runs 40 min over) and Transformers: Revenge of the Fallen (runs 29 min over) — exactly the soft bound, which nothing on the screen where 120 was set had said — and the next visit opened the slider at 130 again."
+tests = [
+    "backend/tests/test_tonight_pool.py::test_the_budget_is_soft_by_exactly_forty_minutes",
+    "e2e/specs/14-tonight.spec.js::the slider says the budget is soft, and opens where this member last left it",
+    "frontend/src/lib/tonight.svelte.test.js::says under the slider that the budget is soft, and by how much",
+    "frontend/src/lib/tonight.svelte.test.js::opens the slider at the budget this member last used for this kind",
+    "frontend/src/lib/tonight.svelte.test.js::opens at the default when the stored value is out of range or storage refuses",
+    "frontend/src/routes/tonight/tonight-page.test.js::says under the slider that the budget is soft",
+]
+
+[[requirement]]
+id = "tonight-the-round-estimate-stays-true"
+spec = "§6.2 step 4 (\"the ~ figure is an estimate — the typical round until that seat passes it — and never the cap\")"
+milestone = "M5"
+kind = "integration"
+what = "Up to the typical round a seat's header says how rounds often go and the waiting line gives the typical round as its estimate; once a seat has reached it the server sends no estimate, the waiting line gives the count alone ('Jenny 12 so far'), and the seat's own header says the round is running long and names the cap that ends it, never the typical round it has passed."
+why = "The second household evening's round ran 13 pairs under a header that said 'usually about 10' on every pair, and the other phone read 'Jenny 12/~13', a number one pair ahead of the count that moved with every tap; over 60 seeded rounds on a 700-title pool, 18 of the 40 still running after ten answers ran on to the cap."
+tests = [
+    "backend/tests/test_tonight_integration.py::test_progress_expected_is_an_estimate_not_the_cap",
+    "frontend/src/lib/tonight.svelte.test.js::gives the count alone once a seat is past the typical round, never an invented end",
+    "frontend/src/lib/tonight.svelte.test.js::heads the round with what to expect, and names the cap only once the round runs long",
+    "frontend/src/routes/tonight/tonight-page.test.js::describes each title on a pair card for somebody who does not know it",
+]
+
+[[requirement]]
+id = "tonight-a-pair-card-describes-its-title"
+spec = "§6.2 step 4 (\"Which one tonight?\") + §6.2 step 1 (\"over-budget results are labelled 'runs N min over'\") + §6.2 step 3 (the pool is never shown) + §6 preamble (phone-first)"
+milestone = "M5"
+kind = "integration"
+what = "Each candidate is frozen with up to two genres from the canonical genre vocabulary, read across the structured sources with Wikidata's free text left out, and a pair card shows under the title its year and runtime, 'runs N min over' on a line of its own when it does, and its genres in plain words (one when two would wrap half a phone's line) — never a DNA term; the solo sharpen pair carries the same fields; and on an iPhone 13 both options and both level answers stay above the bottom bar."
+why = "The second household evening asked 'Warriors of the Wind or Perfect Days?' of a member who knew neither, and each card said only '1984 · fits your 120 min'."
+tests = [
+    "backend/tests/test_tonight_integration.py::test_the_pair_card_names_each_titles_genres_in_plain_words",
+    "frontend/src/lib/tonight.svelte.test.js::describes a pair card title for somebody who does not know it",
+    "frontend/src/routes/tonight/tonight-page.test.js::describes each title on a pair card for somebody who does not know it",
+    "e2e/specs/14-tonight.spec.js::the round offers all four answers and locks the escape until pair 6",
+]
+
+[[requirement]]
+id = "tonight-the-reveal-lists-each-card-once"
+spec = "§6.2 step 7 (\"winner card ... plus runners-up and one wildcard\")"
+milestone = "M5"
+kind = "integration"
+what = "The reveal's runners-up are the finalists that lost, closest first; the wildcard is shown once, in its own block with its own approval count, or — when it won — only as the winner card, which then carries its honest label."
+why = "The second household evening's reveal listed Everything Everywhere All at Once twice: under Runners-up as '0 approved', and again as the Wildcard."
+tests = [
+    "backend/tests/test_tonight_integration.py::test_the_reveal_lists_each_card_once",
+    "backend/tests/test_tonight_integration.py::test_the_reveal_is_assembled_where_the_other_tonight_rules_are",
+    "frontend/src/routes/tonight/tonight-page.test.js::lists the wildcard once, with its own count, and on the winner card when it won",
+]
+
+[[requirement]]
+id = "tonight-the-ballot-submit-is-in-reach"
+spec = "§6.2 step 6 (the blind approval ballot) + §6 preamble (\"phone-first (48 px targets, one-handed)\")"
+milestone = "M5"
+kind = "e2e"
+what = "With the ballot's options running on below the fold on a phone, Submit stays in reach above the bottom bar once an option is ticked."
+why = "On the second household evening Submit sat below the fold after Patrick ticked his approvals."
+tests = [
+    "e2e/specs/14-tonight.spec.js::the guest hand-off clears the screen and offers nothing early",
+]
+
+[[requirement]]
+id = "tonight-match-lines-in-plain-words"
+spec = "§6.2 step 7 (\"per-person match lines in DNA terms including the honest negative\") + §6.8 (member register)"
+milestone = "M5"
+kind = "integration"
+what = "A pull line on the reveal says in plain words only what its branch establishes: '{name} leaned toward {a} and {b} tonight' where this person's answers leaned toward terms the title carries, and 'suits {name}'s usual taste — {a} and {b}' where the title is not below their usual and nothing tonight leaned its way; no '+' notation, no 'pulls ... with', and nothing that over-claims a feeling."
+why = "The second household evening's reveal read 'pulls Patrick with pulp + escapist', which the member read as jargon."
+tests = [
+    "backend/tests/test_tonight_combine.py::test_the_pull_lines_say_what_their_branch_establishes_in_plain_words",
+    "backend/tests/test_tonight_integration.py::test_each_match_line_branch_says_the_thing_it_is_for",
+]
+
+[[requirement]]
+id = "tonight-a-mood-is-said-through-the-answers"
+spec = "§6.2 preamble (\"The answers both decide the evening and carry the mood signal\") + §0 (the stored mood profile measured at 0.000)"
+milestone = "M5"
+kind = "e2e"
+what = "The lobby says how to say a mood with the round's own answers — pick the one that fits it in each pair, and 'Neither pulls me tonight' when neither does — and adds no mood question or stored mood; the veto caption beside it says, in plain words, that each member rules out up to three and that a film that may contain any of them is left out for everyone."
+why = "On the second household evening Patrick wanted 'something tense' and found no way to say it; a mood question was measured worth nothing and deleted, while the round's answers already carry the evening's mood."
+tests = [
+    "e2e/specs/15-tonight-group.spec.js::each member rules out their own three, and one member's three leave the other theirs",
+    "frontend/src/lib/tonight.svelte.test.js::tells the lobby what a veto does and how a mood is said, in plain words",
+    "frontend/src/routes/tonight/tonight-page.test.js::offers the lobby its share link and the not-tonight chips",
 ]

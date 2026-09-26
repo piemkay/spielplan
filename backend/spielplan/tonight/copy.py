@@ -54,6 +54,14 @@ _MODEL_SENTENCE = " The axis is zeroed, not averaged."
 # The honest negative §6.2 step 7 quotes verbatim, for a participant no term pulls toward.
 NO_PULL_LINE = "nothing here is their pull — {term} works against them"
 
+# §6.2 step 7's pull lines, in plain words. "pulls Patrick with pulp + escapist" read as jargon on
+# the second household evening: "pulls ... with" is the round's own verb and "+" is notation. Each
+# sentence says only what its branch in `play._match_lines` establishes: the first that this
+# person's own answers tonight leaned toward terms the title carries, the second that the title
+# sits at or above the middle of this person's own order tonight, i.e. not below their usual.
+LEANED_LINE = "{name} leaned toward {terms} tonight"
+USUAL_LINE = "suits {name}'s usual taste — {terms}"
+
 # A guest with no grid profile gets a line rather than being silently omitted (§6.2 step 7:
 # every participant gets a match line).
 NO_PROFILE_LINE = "{name} — no profile yet"
@@ -158,20 +166,36 @@ def no_profile(name: str) -> str:
     return NO_PROFILE_LINE.format(name=name)
 
 
+def _joined(words: list[str]) -> str:
+    return " and ".join(words) if len(words) < 3 else ", ".join(words[:-1]) + " and " + words[-1]
+
+
+def leaned(name: str, words: list[str]) -> str:
+    return LEANED_LINE.format(name=name, terms=_joined(words))
+
+
+def usual(name: str, words: list[str]) -> str:
+    return USUAL_LINE.format(name=name, terms=_joined(words))
+
+
 __all__ = [
     "D_LINE",
     "D_LINE_PLAIN",
+    "LEANED_LINE",
     "NO_PROFILE_LINE",
     "NO_PULL_LINE",
     "PERSON_SPLIT_LINE",
     "PERSON_SPLIT_SHORT",
     "SPLIT_LINE",
+    "USUAL_LINE",
     "bounded",
     "conflict",
     "for_member",
+    "leaned",
     "no_profile",
     "no_pull",
     "overclaims",
     "person_conflict",
     "split_line",
+    "usual",
 ]

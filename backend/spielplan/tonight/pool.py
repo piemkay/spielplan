@@ -44,6 +44,8 @@ from typing import Any
 
 import asyncpg
 
+from spielplan.db import genres as genre_vocab
+
 # ONE SCALE FOR EVERY MEMBER, FROZEN WITH THE POOL (decision 477). §5.1 standardises a score's cf
 # half over the whole reference population, which the owned pool is not drawn from: on the first
 # household evening one member's owned-pool scores ran to 13.28 (owned cf sd 3.16 against 0.45
@@ -61,10 +63,11 @@ SCALE_SD = 1.0
 
 _NORMAL = NormalDist()
 
-# §6.2 step 1's "not tonight" control (decision 480): up to three of these per room, each a
-# presence predicate over vocabulary-v1 terms. Authored here rather than in the bundle because
-# the list is a household control and not a model artifact; a term the active vocabulary does
-# not carry matches nothing, so a re-import can only make a veto remove less, never break it.
+# §6.2 step 1's "not tonight" control (decision 480): up to three of these per seated member
+# (decision 505), each a presence predicate over vocabulary-v1 terms. Authored here rather than in
+# the bundle because the list is a household control and not a model artifact; a term the active
+# vocabulary does not carry matches nothing, so a re-import can only make a veto remove less,
+# never break it.
 VETOES: dict[str, tuple[str, tuple[str, ...]]] = {
     "violence": ("violence", ("mood.violent", "themes.violence", "mood.gory")),
     "sexual_violence": ("sexual violence", ("themes.sexual_violence",)),
@@ -77,14 +80,18 @@ VETOES: dict[str, tuple[str, tuple[str, ...]]] = {
 }
 MAX_VETOES = 3
 
-# The tier a veto reads, and the one this module names in its predicate (§4.1 rule 1 keeps the
-# discriminator). Measured on the first household's 760 owned films: both tiers would remove 295
-# under "violence" (Raiders of the Lost Ark and Aliens by projection alone) and 297 under
-# "harrowing" (Eternal Sunshine of the Spotless Mind by projection alone); the quote-verified tier
-# removes 99 and 154. A projection is an inference from keyword sources, and a veto that takes a
-# household's favourite off the evening on an inference is the over-exclusion §4.1 rule 2 exists
-# to stop arriving by another door. [decision 480]
-VETO_TIER = "extracted"
+# The tiers a veto reads, both of them and each by name, so the predicate still carries §4.1 rule
+# 1's discriminator and still compares no weight (rule 2). Decision 480 read the quote-verified
+# tier alone, and the second household evening (WX-7467, "violence", "horror" and "harrowing"
+# ruled out) is what that cost: John Wick, Transformers: Revenge of the Fallen and In Bruges were
+# all served to the member who had ruled out violence, because each carries mood.violent or
+# themes.violence by projection and by nothing else. A person saying "nothing violent" wants
+# recall over precision (decision 504). That evening's pool, rebuilt on the live install without
+# its vetoes, is 669 owned films at 120 min: the extracted tier keeps 463 of them under those
+# three vetoes and both tiers keep 281, and among the titles the evening actually showed, Raiders
+# of the Lost Ark, Wolf Children and Rear Window also leave by projection alone. That is the price,
+# and `play.start` still names the vetoes when they empty a pool.
+VETO_TIERS: tuple[str, ...] = ("extracted", "projected")
 
 
 def veto_terms(keys: Iterable[str]) -> list[str]:
@@ -328,10 +335,10 @@ async def build(
     not returned as a stale number, it is not returned at all.
 
     And a fifth, when the room asked for it: **not tonight** — a title carrying a vetoed term in
-    the quote-verified tier is not a candidate (decision 480). A presence predicate on `term` and
-    `tier` through the sanctioned view, like §6.4's `NOT has(...)`, and never a salience or
-    confidence threshold (§4.1 rule 2). No vocabulary version means no DNA to read, so nothing is
-    vetoed rather than everything.
+    either tier, quote-verified or projected, is not a candidate (decisions 480 and 504). A
+    presence predicate on `term` and `tier` through the sanctioned view, like §6.4's `NOT
+    has(...)`, and never a salience or confidence threshold (§4.1 rule 2). No vocabulary version
+    means no DNA to read, so nothing is vetoed rather than everything.
     """
     member_user_ids = [s.user_id for s in seats if s.is_member and s.user_id is not None]
     by_user = {s.user_id: s.participant_id for s in seats if s.user_id is not None}
@@ -363,13 +370,13 @@ async def build(
                 cardinality($5::text[]) = 0 OR $6::text IS NULL
                 OR NOT EXISTS (
                     SELECT 1 FROM dna_tagged d
-                     WHERE d.title_id = t.id AND d.version = $6 AND d.tier = $7
+                     WHERE d.title_id = t.id AND d.version = $6 AND d.tier = ANY($7::text[])
                        AND d.term = ANY($5::text[])
                 )
            )
         """,
         member_user_ids, kind, bundle_version, include_rewatches,
-        list(vetoed_terms), dna_version, VETO_TIER,
+        list(vetoed_terms), dna_version, list(VETO_TIERS),
     )
 
     grouped: dict[int, dict[str, Any]] = {}
@@ -406,8 +413,32 @@ async def build(
     return order(with_budget(candidates, budget_min=budget_min))
 
 
+# How many genres a pair card names beside the year and the runtime. The second household evening
+# asked "Warriors of the Wind or Perfect Days?" of a member who knew neither, and the card said only
+# "1984 · fits your 120 min". Two, in decision 473's canonical order, because a pair card is half a
+# phone wide and a third genre wraps it past the fold §6 preamble's phone-first layout holds.
+CARD_GENRES = 2
+
+
+async def genres_of(conn: asyncpg.Connection, title_ids: Sequence[int]) -> dict[int, list[str]]:
+    """Each title's genres as a card names them: decision 473's one canonical vocabulary, read
+    across the structured sources with Wikidata's free text left out, as the catalogue's facet
+    reads them. Plain words a member already knows, and never a DNA term — the pair card is shown
+    before anything is decided, so it describes the title and says nothing about the pool."""
+    rows = await conn.fetch(
+        "SELECT title_id, lower(genre) AS genre FROM title_genre "
+        "WHERE title_id = ANY($1::int[]) AND source <> ALL($2::text[])",
+        list(title_ids), list(genre_vocab.EXCLUDED_SOURCES),
+    )
+    raw: dict[int, set[str]] = {}
+    for r in rows:
+        raw.setdefault(r["title_id"], set()).add(r["genre"])
+    return {t: genre_vocab.facet(labels)[:CARD_GENRES] for t, labels in raw.items()}
+
+
 __all__ = [
     "BUDGET_GRACE_MIN",
+    "CARD_GENRES",
     "DEFAULT_BUDGET_MIN",
     "KIND_SERIES",
     "MAX_VETOES",
@@ -415,12 +446,13 @@ __all__ = [
     "SCALE_MARKER",
     "SCALE_SD",
     "VETOES",
-    "VETO_TIER",
+    "VETO_TIERS",
     "Candidate",
     "Seat",
     "admits",
     "build",
     "fit_line",
+    "genres_of",
     "group_score",
     "order",
     "over_budget_by",

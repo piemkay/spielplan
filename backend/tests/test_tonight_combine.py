@@ -782,3 +782,20 @@ def test_a_member_reads_the_plain_sentence_and_never_the_number():
     )
     assert phrased["explanation"] == "Jenny may want something lighter."
     assert copy_rules.for_member(None) is None
+
+
+def test_the_pull_lines_say_what_their_branch_establishes_in_plain_words():
+    """The second household evening's reveal read "pulls Patrick with pulp + escapist" as jargon:
+    "pulls ... with" is the round's own verb and "+" is notation. Each pull branch has its own
+    sentence now, and each claims only what the branch establishes — the person's answers leaned
+    toward those terms tonight, or the title is not below their usual. Neither over-claims a
+    feeling (DNA_MODEL §5.3's bound on this surface)."""
+    leaned = copy_rules.leaned("Patrick", ["pulp", "escapist"])
+    assert leaned == "Patrick leaned toward pulp and escapist tonight"
+    usual = copy_rules.usual("Jenny", ["escapist", "charismatic lead"])
+    assert usual == "suits Jenny's usual taste — escapist and charismatic lead"
+    assert copy_rules.leaned("Mia", ["dark"]) == "Mia leaned toward dark tonight"
+    assert copy_rules.usual("Mia", ["a", "b", "c"]).endswith("a, b and c")
+    for line in (leaned, usual):
+        assert "+" not in line and "pulls" not in line
+        assert not copy_rules.overclaims(line)
