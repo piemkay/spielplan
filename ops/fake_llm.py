@@ -1,84 +1,6 @@
-"""A fake of the three LLM providers M5.5 speaks to. Test infrastructure -- never shipped in the app image.
-
-Spec v2.1 §9, §8 stage 6; M5.5-plan.md phase F (F1, F2) and the first of its §9 risks; decisions 431,
-432 and 435.
-
-§9 puts the guarantee in one sentence -- "the schema is a cost-saving device, not the guarantee - the
-guarantee is the validator" -- and it can only be tested against an answer that satisfies the request
-schema and is still wrong. The plan's F2 adds that "identical across three adapters" is untested
-unless one server speaks all three envelopes. Neither can be checked with a mock inside the process
-that makes the call: a mock hands back what its author believed a provider sends, and M5.2's last
-review cycle measured the price of that belief -- its Jellyfin double agreed with the code where the
-real server did not, and every real webhook add was dropped. So this is a real HTTP app, in the spirit
-of `ops/fake_jellyfin.py` refusing the admin key on the Played write, that answers the way each
-provider's PUBLISHED reference says it answers and refuses what that reference says it refuses.
-
-ONE WAY IN. The backend tests mount it through `httpx.ASGITransport`
-inside a real `acquire.fetch.Fetcher`, so the adapters keep their production urls and every request
-still passes the fetcher's host policy, pacing and breaker. There is no compose service and no port
-(decision 435): no provider key is ever needed to run it, and nothing outside a test can reach it.
-The Host header each request carries is how this app knows which provider it is being, which is
-how the real three are told apart too -- `/v1/models` is two different resources on two hosts, and a
-chat completion posted to Anthropic's host is a 404 there, not an answer.
-
-WHERE EACH SHAPE IS READ FROM, and each envelope carries only fields these pages document:
-
-  * Anthropic -- the Messages API reference (https://docs.anthropic.com/en/api/messages), forced tool
-    use (https://docs.anthropic.com/en/docs/agents-and-tools/tool-use/implement-tool-use), the error
-    shapes (https://docs.anthropic.com/en/api/errors) and the models list
-    (https://docs.anthropic.com/en/api/models-list); refusals and what they bill
-    (https://platform.claude.com/docs/en/build-with-claude/refusals-and-fallback).
-  * OpenAI -- the chat completion object (https://platform.openai.com/docs/api-reference/chat/object),
-    Structured Outputs' supported schemas and refusals
-    (https://platform.openai.com/docs/guides/structured-outputs), reasoning tokens
-    (https://platform.openai.com/docs/guides/reasoning), error codes
-    (https://platform.openai.com/docs/guides/error-codes) and the models list
-    (https://platform.openai.com/docs/api-reference/models/list).
-  * Gemini -- generateContent and its response, usage and prompt feedback
-    (https://ai.google.dev/api/generate-content), the Schema object `responseSchema` is parsed as
-    (https://ai.google.dev/api/caching#Schema), thinking (https://ai.google.dev/gemini-api/docs/thinking),
-    the error table (https://ai.google.dev/gemini-api/docs/troubleshooting) and the models list
-    (https://ai.google.dev/api/models#method:-models.list).
-
-Where the corpus measured a provider against the real server and a reference is silent, the corpus is
-the evidence and is cited at the line: `mdc/llm/client.py` was exercised against all three, and its
-comments are what a real 400 taught it.
-
-WHAT IT REFUSES, and each refusal is a thing the real server does, never a thing this app happens to
-avoid. A double stricter than its server is M5.2's failure turned round -- it fails a request the
-provider would have answered, and the code is bent to please the double -- so where the evidence is
-thin the double answers rather than refuses. Gemini's documented `?key=` is the sharpest case: the real
-API takes the key in the query string, so this does too, and §9's header-only rule is held by reading
-what the app SENT (`/_test/state`'s `key_in_url`) rather than by a refusal no server makes.
-
-THE ONE PLACE THIS PARTS FROM ITS BRIEF: `minimum`, `maximum`, `minItems`, `maxItems`, `pattern` and
-`format` are ANSWERED under OpenAI's strict mode, not refused. `mdc/llm/client.py:10-13` records that
-strict mode rejected them, and it did in 2024; the Structured Outputs guide has since listed all six
-as "Supported properties" (quoted in prism-php/prism#533, 2025-08-01), and the refusals reported
-since name other keywords. What strict mode still refuses is refused here, in the real server's words:
-"'minLength' is not permitted" (coder/mux#1220, 2025-12-18) and "'uniqueItems' is not permitted"
-(mastra-ai/mastra#23321, 2026-09-08) are the two reported refused since the guide changed, beside its
-structural rules -- every object `additionalProperties: false`, every property `required`
-(openai/openai-python#2740 quotes the first) and an object at the root -- and the composition keywords
-the guide itself lists as not yet supported (`OPENAI_NOT_PERMITTED`). So the app's stripping of the
-six is harmless and no longer necessary; a double that refused them would be the stricter-than-server
-shape the paragraph above rules out, and would have said nothing about the code.
-
-THE CONTENT IS BUILT FROM THE REQUEST, never from the app's code. The term ids are parsed out of the
-system prompt's vocabulary block (one id per line under `## facet` headings, which is what a model
-reads), every quote is cut verbatim out of the pack the user message carries, and every source is one
-of that pack's `[source:n]` markers. Nothing here imports `spielplan`: the double stays importable
-without the backend's settings (`ops/fake_jellyfin.py`'s constraint), and an answer built from the
-app's own vocabulary loader would be the app agreeing with itself.
-
-THE DEFAULT ANSWER IS WRONG ON PURPOSE. The plan's first §9 risk: "A schema-conforming response
-containing a fabricated term is the normal case this milestone exists to handle ... the refusing double
-must produce one by default rather than on request." So a first attempt is schema-valid and carries
-exactly ONE tag whose term the vocabulary does not carry, beside real tags that verify. A request
-whose user message carries the corpus's retry opening (`RETRY_MARKER`) is a retry: in the default
-`comply` posture the answer drops exactly the tags the retry names, the way a model that read the
-violation would; in `stubborn` it repeats the violation, which is the case decision 431 fails
-permanently.
+"""A fake of the three LLM providers (§9), mounted by tests through `httpx.ASGITransport`; never shipped.
+It answers and refuses as each provider's published reference says, never stricter. Its default
+answer is schema-valid with one fabricated term, so the validator is what gets tested.
 """
 
 from __future__ import annotations
@@ -104,27 +26,15 @@ HOSTS = {
     "gemini": "generativelanguage.googleapis.com",
 }
 
-# One key per provider, env-overridable for the same reason `FAKE_JELLYFIN_API_KEY` is. None of them is
-# a real credential, and the exit script never reads a real one from the environment (decision 435).
+# None of these is a real credential (decision 435).
 KEYS = {
     "anthropic": os.environ.get("FAKE_LLM_ANTHROPIC_KEY", "sk-ant-fake-double-anthropic-key"),
     "openai": os.environ.get("FAKE_LLM_OPENAI_KEY", "sk-fake-double-openai-key"),
     "gemini": os.environ.get("FAKE_LLM_GEMINI_KEY", "fake-double-gemini-key"),
 }
 
-# The models each provider serves here: the corpus's DEFAULT_MODELS (`mdc/config.py:169-173`), the two
-# models its reasoning-token measurement names (`:181-185`), and Gemini 2.5 Flash, which the corpus met
-# "still [appearing] in ListModels but `generateContent` answers 404 'no longer available to new users'"
-# (`:152-154`). A model outside this list is a 404 on every provider, as on the real three.
-#
-# Anthropic's list also carries the four current models an admin can pick on §6.6 whose behaviour
-# stage 6 depends on, because a double that 404ed them hid both. Claude Opus 5, whose safety
-# classifiers can answer `refusal` and which accepts a forced tool; and Claude Opus 5.5, Claude Fable
-# 5.1 and Claude Mythos 5.1, which "don't support forced tool use" and answer it with a 400 on every
-# request (https://platform.claude.com/docs/en/api/errors, "Forced tool use not supported") -- so the
-# test button read `model_listed` False here while the real list says True, and a paid call through
-# the real provider failed a title for good where this double said the model did not exist.
-# [M5.5 review cycle 1, M55-DBL-04]
+# A model outside this list is a 404, as on the real providers. Gemini 2.5 Flash is listed but
+# retired: `generateContent` answers 404 "no longer available to new users".
 MODELS: dict[str, tuple[str, ...]] = {
     "anthropic": ("claude-sonnet-5", "claude-opus-5", "claude-opus-5-5", "claude-fable-5-1",
                   "claude-mythos-5-1"),
@@ -133,78 +43,29 @@ MODELS: dict[str, tuple[str, ...]] = {
 }
 RETIRED: dict[str, frozenset[str]] = {"gemini": frozenset({"gemini-2.5-flash"})}
 
-# The Anthropic models above that refuse `tool_choice` "tool" or "any", in the errors page's words:
-# "tool_choice: type "tool" and "any" are not supported for this model." (see `MODELS`).
+# Anthropic's errors page: these answer a forced `tool_choice` with a 400.
 FORCED_TOOL_REFUSED = frozenset({"claude-opus-5-5", "claude-fable-5-1", "claude-mythos-5-1"})
-# The ones served here that "include safety classifiers that can decline a request" -- the page names
-# Claude Fable 5.1, Claude Fable 5, Claude Opus 5.5 and Claude Opus 5
-# (https://platform.claude.com/docs/en/build-with-claude/refusals-and-fallback). Sonnet 5 is not among
-# them, so the `refusal` envelope set on Sonnet 5 is answered as that model answers: normally.
+# The ones with safety classifiers that can return `refusal`; on any other model it answers normally.
 CLASSIFIED = frozenset({"claude-opus-5", "claude-opus-5-5", "claude-fable-5-1"})
 
-# The corpus's retry opening, `mdc/aspects/prompt.py:674`, sent after the original user prompt under the
-# same system prompt (`mdc/sources/llm.py:86-88`). Held here rather than imported, for the reason the
-# module docstring gives; `test_fake_llm.py` asserts the app still sends these words.
+# The corpus's retry opening. Not imported from the app; `test_fake_llm.py` holds the two equal.
 RETRY_MARKER = "Your previous answer was rejected:"
 
 CONTENTS = ("fabricate", "unquotable", "salience", "clean")
 POSTURES = ("comply", "stubborn")
-# Each provider's documented ways for an answer to go wrong, and only those: OpenAI's `message.refusal`
-# is OpenAI's, a prose answer to a forced tool call is Anthropic's, a prompt blocked before generation is
-# Gemini's `promptFeedback.blockReason`, and every one of the three documents a cut-off at the cap.
-#
-# Anthropic's `refusal` is the stop reason its safety classifiers return "as a normal HTTP 200
-# response, not an error" (https://platform.claude.com/docs/en/build-with-claude/handling-stop-reasons),
-# in the shape the refusals page publishes -- `content` empty, `stop_details` naming the category, and
-# `usage` reported -- and it is NOT billed: "You are not billed for a refusal that arrives before any
-# output. `content` is empty, and token counts appear in `usage` but are not charged"
-# (https://platform.claude.com/docs/en/build-with-claude/refusals-and-fallback). This entry used to be
-# answered with a thinking block and billed output, a refusal the provider charges for, which made the
-# meter's settle to reported usage look right where the provider bills nothing; it is now answered only
-# on a model in `CLASSIFIED`, and the log records it as billed nothing. [M5.5 review cycle 1,
-# M55-DBL-08]
-#
-# And Gemini's `safety` is a candidate that ends at `finishReason` SAFETY with no parts -- the one
-# refusal Gemini reports AFTER generation, beside `blocked`'s refusal before it
-# (https://ai.google.dev/api/generate-content, `FinishReason`). Both were missing, and a meter tested
-# only against the envelopes it already read correctly says nothing about the ones it read as free.
-# [M5.5 review cycle 1, M55-METER-01]
+# Each provider's documented ways for an answer to go wrong, and only those. Anthropic's `refusal`
+# is a 200 with empty content whose usage is reported and NOT billed; Gemini's `safety` ends a
+# candidate after generation, `blocked` refuses the prompt before it.
 ENVELOPES: dict[str, tuple[str, ...]] = {
     "anthropic": ("normal", "max_tokens", "prose", "refusal"),
     "openai": ("normal", "refusal", "max_tokens"),
     "gemini": ("normal", "max_tokens", "blocked", "safety"),
 }
 
-# The server errors each provider documents for a request it failed to serve, which the double answers
-# INSTEAD of an answer when a scenario names one: Anthropic's "500 - `api_error`" and "529 -
-# `overloaded_error`" (https://platform.claude.com/docs/en/api/errors), OpenAI's "503 - Model
-# temporarily overloaded" and "500 - The server had an error while processing your request"
-# (https://developers.openai.com/api/docs/guides/error-codes), and Gemini's 500, 503 UNAVAILABLE and
-# 504 (https://ai.google.dev/gemini-api/docs/api-errors). The log bills each of them nothing, and only
-# Google publishes that: "If your request fails with a 400 or 500 error, you won't be charged for the
-# tokens used" (https://ai.google.dev/gemini-api/docs/billing). Anthropic's and OpenAI's error pages
-# say nothing either way about what a 5xx bills -- the one billing sentence on each is about a billing
-# or quota refusal -- so for those two the zero here is decision 436's choice, which the meter's
-# settle rule makes too, and not a provider's statement; the same silence is why a 504, 520 or 524
-# keeps its ceiling there. A test whose SUM matches this log on a 5xx therefore shows the meter
-# follows that choice, and nothing more. This comment said each page stated it, and quoted OpenAI's
-# heading wrong. They exist so a test can count what reached the wire: the fetcher used to re-send a
-# paid POST on every one of them, and a double that never failed could not show it. `fault_when`
-# "retry" fails only a request carrying the retry opening, which is the shape of a provider that
-# answered attempt 1 and then had a bad afternoon. [M5.5 review cycle 1, M55-BUDGET-01, M55-BUDGET-05;
-# review cycle 2, DBL-C2-04]
-#
-# Gemini's 429 is the one fault here that is not a server failing: it is a quota refused. The
-# rate-limits page says "the API returns a `429 RESOURCE_EXHAUSTED` error" and "Requests per day (RPD)
-# quotas reset at midnight Pacific time" (https://ai.google.dev/gemini-api/docs/rate-limits), and the
-# body is generateContent's google.rpc.Status -- an integer `code` and a `status` string, not the
-# Interactions API's string `code` -- with the `QuotaFailure` detail Google's error model defines for
-# exactly this: "if a daily limit was exceeded for the calling project, a service could respond with a
-# QuotaFailure detail" (https://github.com/googleapis/googleapis/blob/master/google/rpc/
-# error_details.proto). The `quotaId` below is the per-day id Gemini has been reported to send
-# (UKGovernmentBEIS/inspect_ai#5526); no Google page publishes the id list, which is why the adapter
-# reads only its "PerDay". The fetcher re-sends a 429 under its own pacing, so every send is answered
-# with it. [M5.5 review cycle 2, DBL-C2-03]
+# The server errors each provider documents, answered instead of an answer when a scenario names
+# one, and billed nothing (only Google says so; for the other two it is decision 436's choice).
+# `fault_when` "retry" fails only a retry. Gemini's 429 is a daily quota refused, with the
+# `QuotaFailure` detail whose `quotaId` the adapter reads for "PerDay".
 FAULTS: dict[str, tuple[int, ...]] = {
     "anthropic": (500, 529),
     "openai": (500, 503),
@@ -212,32 +73,14 @@ FAULTS: dict[str, tuple[int, ...]] = {
 }
 GEMINI_DAILY_QUOTA_ID = "GenerateRequestsPerDayPerProjectPerModel-FreeTier"
 
-# The account-level price settings each provider applies to a request that does not name its own, and
-# reports on the envelope. OpenAI: a request with no `service_tier` is "auto", which "will be processed
-# with the service tier configured in the Project settings", and the response carries "the
-# `service_tier` value based on the processing mode actually used to serve the request" (the Chat
-# Completions reference, https://developers.openai.com/api/reference/resources/chat) -- Fast mode
-# reported as "priority" "whether the request specifies `priority` or `fast`"
-# (https://developers.openai.com/api/docs/guides/fast-mode). Anthropic: `default_inference_geo` "Sets
-# the fallback geo when `inference_geo` is omitted from a request", and "The response `usage` object
-# includes an `inference_geo` field indicating where inference ran"
-# (https://platform.claude.com/docs/en/manage-claude/data-residency). The double left both fields out,
-# so a meter that priced every call at the standard row agreed with it where each provider bills more.
-# [M5.5 review cycle 2, M55-C2-METER-01, DBL-C2-01]
+# Account-level price settings applied to a request that names none, and reported on the envelope:
+# OpenAI's project `service_tier` ("fast" is reported as "priority"), Anthropic's `inference_geo`.
 PROJECT_TIERS = ("default", "flex", "priority")
 GEOS = ("global", "us")
 _SERVED_TIER = {"default": "default", "flex": "flex", "priority": "priority", "fast": "priority"}
 
-# What Anthropic bills as input beyond the prompt text, so a ceiling that counted the text alone could
-# be seen falling short. "Claude 4.7 and later models ... use a newer tokenizer ... This tokenizer
-# produces approximately 30% more tokens for the same text", against the same page's "1 token is
-# approximately 4 characters"; tool use is "priced based on ... The total number of input tokens sent to
-# the model (including in the `tools` parameter)", and "the API also automatically includes a special
-# system prompt for the model that enables tool use" -- `(auto/none, any/tool)` below, from that page's
-# table (https://platform.claude.com/docs/en/about-claude/pricing). Every Anthropic model served here is
-# 4.7 or later. The double counted `(len(system) + len(user)) // 4`, below any estimate the app makes,
-# so no assertion that a ceiling is at least the bill could fail against it.
-# [M5.5 review cycle 2, M55-CAP-C2-01, M55-C2-METER-03]
+# Anthropic's pricing page: the 4.7+ tokenizer makes ~30% more tokens than 4 chars/token, and tool
+# use adds a system prompt per model, as (auto/none, any/tool) token counts.
 ANTHROPIC_TOKENIZER = 1.3
 ANTHROPIC_TOOL_PROMPT: dict[str, tuple[int, int]] = {
     "claude-sonnet-5": (354, 474),
@@ -245,30 +88,21 @@ ANTHROPIC_TOOL_PROMPT: dict[str, tuple[int, int]] = {
 }
 FAULT_WHEN = ("always", "retry")
 
-# The OpenAI models served here that bill a prompt-cache write: "For GPT-5.6 and later, cache writes
-# cost 1.25x the standard, uncached input-token rate" and "Prompt caching is enabled by default"
-# (https://developers.openai.com/api/docs/guides/prompt-caching), with the implicit breakpoint at the
-# end of the latest user message unless `prompt_cache_options.mode` is "explicit" (the Chat
-# Completions reference, https://developers.openai.com/api/reference/resources/chat) and a minimum of
-# "1,024 tokens for GPT-5.6 and later". gpt-5-mini is older and carries "No additional cache-write
-# charge", so the double keeps no cache for it. [M5.5 review cycle 1, M55-DBL-02]
+# OpenAI models that bill a prompt-cache write (GPT-5.6 and later, on by default, 1,024-token minimum).
 CACHE_WRITES = frozenset({"gpt-5.6-terra"})
 CACHE_MIN_TOKENS = 1024
-# The OpenAI models served here whose model page lists `none` among its reasoning efforts, the one
-# setting under which a temperature is taken (see `_openai_answer`). [M5.5 review cycle 2, DBL-C2-07]
+# Models whose reasoning effort can be `none`, the one setting under which a temperature is taken.
 REASONING_NONE = frozenset({"gpt-5.6-terra"})
 
-# How many real tags an answer carries beside its violation, and how long a quote is: rule 2's "10-15
-# words is ideal", at its floor.
+# Rule 2's "10-15 words is ideal", at its floor.
 REAL_TAGS = 3
 QUOTE_WORDS = 10
 
 
 @dataclass
 class Scenario:
-    """How one provider answers. The usage defaults are the corpus's measurement of gemini-3.6-flash on
-    this prompt -- "~1.6k output plus ~2.3k thoughts" (`mdc/config.py:181-185`) -- which is exit check 5,
-    and `prompt_tokens` None means an estimate from the request's own length."""
+    """How one provider answers. Usage defaults are the corpus's gemini-3.6-flash measurement;
+    `prompt_tokens` None estimates from the request's length."""
 
     content: str = "fabricate"
     posture: str = "comply"
@@ -279,21 +113,15 @@ class Scenario:
     thought_tokens: int = 2300
     fault: int | None = None
     fault_when: str = "always"
-    # The OpenAI project's service tier and the Anthropic workspace's default geo: what serves a request
-    # that names neither (see `PROJECT_TIERS`).
     project_tier: str = "default"
     geo: str = "global"
 
 
 class State:
-    """Everything mutable, in one object so `/_test/reset` is a single call."""
-
     def __init__(self) -> None:
         self.scenarios: dict[str, Scenario] = {p: Scenario() for p in PROVIDERS}
         self.requests: list[dict[str, Any]] = []
-        # The prompts OpenAI's implicit breakpoint has written, keyed on the whole request text: a
-        # lookup only matches at a message's end, so only an identical prompt reads what an earlier
-        # one wrote (the prompt-caching guide's "A shared prefix is not always a cached prefix").
+        # Keyed on the whole request text: only an identical prompt reads an implicit cache write.
         self.cached: set[str] = set()
 
     def reset(self) -> None:
@@ -308,14 +136,8 @@ router = APIRouter()
 
 
 def _scrub(text: str) -> tuple[str, bool]:
-    """The text with every one of the double's keys taken out, and whether one was in it.
-
-    §9's header-only rule is a claim about the URL the app SENT, so the log keeps the full url with its
-    query -- and a key the app put there would otherwise land in this log, which a failing test prints.
-    The value is replaced and the fact kept, so a test can assert on the fact without the log ever
-    holding the secret. Read decoded, because `%2D` is still a hyphen to a server; a url that carried a
-    key is therefore logged decoded.
-    """
+    """The text with the double's keys redacted, and whether one was in it (§9's header-only rule).
+    Read decoded, because `%2D` is still a hyphen to a server."""
     decoded = unquote(text)
     found = any(key and key in decoded for key in KEYS.values())
     if found:
@@ -345,11 +167,9 @@ def _provider_of(request: Request) -> str | None:
 
 # --- reading the request the way a model reads it ---------------------------------------------------
 
-# A term line under a `## facet` heading: the id first, then (optionally) the gloss after whitespace.
 _TERM_LINE = re.compile(r"^([A-Za-z0-9_]+\.[A-Za-z0-9_\-]+)(?=\s|$)")
 _FACET_LINE = re.compile(r"^## facet ([A-Za-z0-9_\-]+)")
-# A pack section marker, `[imdb:3]` -- and not the `[type]` or `[note]` header lines, which carry no
-# index and quote nothing.
+# A pack section marker, `[imdb:3]`; not the index-less `[type]` or `[note]` header lines.
 _MARKER = re.compile(r"^\[([A-Za-z0-9_\-]+:\d+)\]\s*$")
 _WORD = re.compile(r"\S+")
 
@@ -367,7 +187,6 @@ class _Request:
 
 
 def _texts(content: Any) -> list[str]:
-    """A message's text, whether its provider sent a string or a list of text blocks or parts."""
     if isinstance(content, str):
         return [content]
     if isinstance(content, list):
@@ -377,11 +196,7 @@ def _texts(content: Any) -> list[str]:
 
 
 def _read(system: str, user: str) -> _Request:
-    """The vocabulary a model was shown and the pack it was asked about, and the retry if there is one.
-
-    The retry text is cut off before the pack is read, because the corpus's loop appends it to the
-    same user message (`mdc/sources/llm.py:86-88`) and a quote cut out of the violation list would be a
-    quote of the app's own words rather than of any source."""
+    """The retry text is cut off before the pack is read: it is appended to the same user message."""
     pack, marker, tail = user.partition(RETRY_MARKER)
     req = _Request(system=system, user=user, pack=pack, retry=(marker + tail) if marker else None)
     in_vocabulary, facet = False, ""
@@ -404,9 +219,7 @@ def _read(system: str, user: str) -> _Request:
 
 
 def _span(text: str, skip: int, count: int = QUOTE_WORDS) -> str:
-    """`count` words of `text` from word `skip`, cut out of the text itself so the quote is verbatim --
-    punctuation, markup and spacing exactly as the source published them (rule 2: "character for
-    character")."""
+    """`count` words from word `skip`, cut from the text itself so the quote is verbatim (rule 2)."""
     words = list(_WORD.finditer(text))
     if not words:
         return ""
@@ -416,11 +229,8 @@ def _span(text: str, skip: int, count: int = QUOTE_WORDS) -> str:
 
 
 def _invented_term(req: _Request) -> str:
-    """A term id no line of the vocabulary carries, under a facet heading it does carry.
-
-    No TAIL of any vocabulary term either, so M5.4's prefix repair -- which rewrites a head it does not
-    know onto the one term with that body -- has nothing to rescue it with: the verdict on it is
-    `unknown_term`, the rule the two-attempt row names first."""
+    """A term id under a real facet whose tail no vocabulary term has, so the prefix repair cannot
+    rescue it: the verdict is `unknown_term`."""
     facets = [facet for facet, _term in req.vocabulary]
     head = facets[0] if facets else "themes"
     tails = {term.partition(".")[2] for _facet, term in req.vocabulary}
@@ -429,15 +239,8 @@ def _invented_term(req: _Request) -> str:
 
 
 def _tags(req: _Request, content: str) -> list[dict[str, Any]]:
-    """The answer to one request: real tags that verify, and at most one that breaks one rule.
-
-    Real tags take the first term of each of the first facets, a quote from a different pack section
-    each, and a salience in {1,2,3}. The violation is always an EXTRA tag, so every content scenario
-    breaks exactly the one rule it names and a retry that drops it leaves a clean answer: `fabricate`
-    names an invented term; `unquotable` embellishes a quote past anything the pack says; `salience`
-    states a level of 4. The last two ride on a term no real tag uses, so no duplicate is added. With
-    no vocabulary in the prompt there is no real term to ride on, and every term is invented.
-    """
+    """Real tags that verify, plus at most one EXTRA tag breaking the one rule `content` names, so a
+    retry that drops it leaves a clean answer."""
     facets = list(dict.fromkeys(facet for facet, _term in req.vocabulary))
     first = {facet: next(t for f, t in req.vocabulary if f == facet) for facet in facets}
     sections = req.sections or [("", req.pack)]
@@ -455,7 +258,6 @@ def _tags(req: _Request, content: str) -> list[dict[str, Any]]:
     if content == "fabricate" or spare is None:
         tags.append({"term": _invented_term(req), "salience": 2, "source": source, "quote": quote})
     elif content == "unquotable":
-        # An embellished quote, which is what a model half-remembering a review writes.
         invented = f"{quote} and then the double wrote the rest"
         while invented in req.pack:
             invented += " again"
@@ -466,12 +268,11 @@ def _tags(req: _Request, content: str) -> list[dict[str, Any]]:
 
 
 def _named(term: str, retry: str) -> bool:
-    """Whether the retry names this term as a whole id -- `mood.tense` and not inside `mood.tense_x`."""
+    """A whole id: `mood.tense` and not inside `mood.tense_x`."""
     return re.search(rf"(?<![A-Za-z0-9_.]){re.escape(term)}(?![A-Za-z0-9_.\-])", retry) is not None
 
 
 def _answer(req: _Request, sc: Scenario) -> list[dict[str, Any]]:
-    """The tags this provider sends: the scenario's, less what a complying retry was told to drop."""
     tags = _tags(req, sc.content)
     if req.retry is not None and sc.posture == "comply":
         tags = [tag for tag in tags if not _named(tag["term"], req.retry)]
@@ -480,21 +281,14 @@ def _answer(req: _Request, sc: Scenario) -> list[dict[str, Any]]:
 
 def _note(req: _Request, model: str, envelope: str, tags: list[dict[str, Any]],
           usage: dict[str, Any] | None = None, service_tier: str | None = None) -> Note:
-    """What the log keeps about an answer: the model asked for, the retry text the app sent -- the part
-    exit check 2 reads, the violated rule and the offending value as the provider RECEIVED them -- the
-    envelope, the terms answered (none when the envelope carried no answer), and the usage block the
-    envelope reported, which is what the provider bills: a test reads the household's bill off this log
-    and holds the meter to it, rather than off what the meter wrote (decision 436). None where the
-    provider charges nothing for what it reported, which is Anthropic's refusal (see `ENVELOPES`).
-    `service_tier` is the OpenAI tier the answer was served and billed at, which the envelope reports
-    beside its usage rather than inside it (see `PROJECT_TIERS`)."""
+    """What the log keeps about an answer. `usage` is what the provider bills (None where it bills
+    nothing), so a test holds the meter to this log (decision 436)."""
     return {"model": model, "retry": req.retry, "envelope": envelope,
             "terms": [tag["term"] for tag in tags] if envelope in ("normal", "unforced") else [],
             "usage": usage, "service_tier": service_tier}
 
 
 def _faulted(req: _Request, sc: Scenario, provider: str) -> JSONResponse | None:
-    """The server error a scenario names, in its provider's documented shape, or None. See `FAULTS`."""
     if sc.fault is None or (sc.fault_when == "retry" and req.retry is None):
         return None
     if provider == "anthropic":
@@ -502,7 +296,7 @@ def _faulted(req: _Request, sc: Scenario, provider: str) -> JSONResponse | None:
             return _anthropic_error(529, "overloaded_error", "Overloaded")
         return _anthropic_error(sc.fault, "api_error", "Internal server error")
     if provider == "openai":
-        # The page publishes the 503's type and code and neither for the 500 (see `FAULTS`).
+        # The page publishes the 503's type and code and neither for the 500.
         if sc.fault == 503:
             return _openai_error(503, "The requested model is temporarily overloaded.",
                                  kind="service_unavailable_error", code="server_is_overloaded")
@@ -529,9 +323,6 @@ def _prompt_tokens(req: _Request, sc: Scenario) -> int:
 
 def _anthropic_prompt_tokens(req: _Request, sc: Scenario, model: str, tools: list[dict[str, Any]],
                              forced: bool) -> int:
-    """Anthropic's `input_tokens` for this request: the prompt and the `tools` block at the newer
-    tokenizer's rate, plus the tool-use system prompt for the model and the tool choice (see
-    `ANTHROPIC_TOKENIZER`). A scenario's `prompt_tokens` still wins."""
     if sc.prompt_tokens is not None:
         return sc.prompt_tokens
     chars = len(req.system) + len(req.user) + (len(json.dumps(tools)) if tools else 0)
@@ -550,8 +341,7 @@ async def _body(request: Request) -> Any:
 
 
 def _anthropic_error(status: int, kind: str, message: str) -> JSONResponse:
-    """https://docs.anthropic.com/en/api/errors: `type` "error", an `error` object naming its type and
-    message, and the request id."""
+    """https://docs.anthropic.com/en/api/errors"""
     return JSONResponse({"type": "error", "error": {"type": kind, "message": message},
                          "request_id": f"req_{uuid.uuid4().hex[:24]}"}, status_code=status)
 
@@ -586,16 +376,8 @@ async def _anthropic_answer(request: Request) -> tuple[JSONResponse, Note]:
             return _anthropic_error(400, "invalid_request_error", f"{required}: Field required"), {}
     if body["model"] not in MODELS["anthropic"]:
         return _anthropic_error(404, "not_found_error", f"model: {body['model']}"), {}
-    # `mdc/llm/client.py:166-170`, measured against the real server: "It is deprecated on the current
-    # Sonnet/Opus models and sending it is a hard 400 that no retry can fix." The Messages reference
-    # (https://platform.claude.com/docs/en/api/messages/create) draws the line exactly, for every model
-    # served here, each released after Claude Opus 4.6: of `temperature`, "A value of 1.0 will be
-    # accepted for backwards compatibility, all other values will be rejected with a 400 error"; of
-    # `top_p`, "A value >= 0.99 will be accepted"; of `top_k`, "any value will be rejected". So the
-    # default is answered and only the rest refused -- this used to refuse `temperature` whatever it
-    # said, 1.0 included, which is the stricter-than-server shape the module docstring rules out, and
-    # to answer any `top_p` or `top_k`. The wording is the double's; the page publishes none.
-    # [M5.5 review cycle 1, M55-DBL-09]
+    # The Messages reference, for every model served here: temperature only 1.0, top_p only >= 0.99,
+    # top_k never. The wording is the double's; the page publishes none.
     if "temperature" in body and body["temperature"] != 1:
         return _anthropic_error(400, "invalid_request_error",
                                 "temperature: is not supported for this model"), {}
@@ -619,20 +401,13 @@ async def _anthropic_answer(request: Request) -> tuple[JSONResponse, Note]:
         forced = choice["name"]
     elif choice.get("type") == "any" and names:
         forced = names[0]
-    # Manual extended thinking is gone from every model served here, whatever `tool_choice` says: "Claude
-    # 4.7 and later models have removed extended thinking. Sending `thinking: {"type": "enabled"}` to any
-    # of these models returns a 400", in the words below (the errors page, "Extended thinking not
-    # supported"). This used to refuse `enabled` only beside a forced tool, in a sentence of the
-    # double's own that the extended-thinking page gives the models before 4.7, and to answer it beside
-    # `auto`. [M5.5 review cycle 1, M55-DBL-09]
+    # 4.7 and later removed manual extended thinking: a 400 whatever `tool_choice` says.
     thinking = body.get("thinking")
     if isinstance(thinking, dict) and thinking.get("type") == "enabled":
         return _anthropic_error(
             400, "invalid_request_error",
             '"thinking.type.enabled" is not supported for this model. Use "thinking.type.adaptive" and'
             ' "output_config.effort" to control thinking behavior.'), {}
-    # The mechanism the Anthropic adapter IS, refused by three current models on every request (the
-    # errors page, "Forced tool use not supported"), and answered by `auto` and `none`. See `MODELS`.
     if choice.get("type") in ("tool", "any") and body["model"] in FORCED_TOOL_REFUSED:
         return _anthropic_error(400, "invalid_request_error",
                                 'tool_choice: type "tool" and "any" are not supported for this model.'), {}
@@ -648,16 +423,8 @@ async def _anthropic_answer(request: Request) -> tuple[JSONResponse, Note]:
     envelope = sc.envelope if forced else "unforced"
     if envelope == "refusal" and body["model"] not in CLASSIFIED:
         envelope = "normal"
-    # THE MODEL THINKS BY DEFAULT, and the thinking is billed inside `output_tokens`. The thinking page
-    # (https://platform.claude.com/docs/en/build-with-claude/thinking): "On Claude Opus 5.5, Claude Opus
-    # 5, Claude Sonnet 5 ... thinking is already on and needs no configuration", `display` defaults to
-    # "omitted" so the block arrives "with an empty `thinking` field" and its `signature`, and "Adaptive
-    # thinking, including on models where thinking is on by default, supports forced tool use". The
-    # steering page (https://platform.claude.com/docs/en/build-with-claude/thinking-steering-and-cost):
-    # "`output_tokens` remains the inclusive, authoritative total used for billing", itemised under
-    # `output_tokens_details.thinking_tokens`. This double used to ignore `thoughts` for Anthropic, so
-    # no test could see an adapter that summed the two, or one that read `content[0]` and found the
-    # thinking block there. [M5.5 review cycle 1, M55-METER-06, M55-DBL-03]
+    # Thinking is on by default: an empty `thinking` block comes first in `content`, and its tokens
+    # are INSIDE `output_tokens`, itemised under `output_tokens_details.thinking_tokens`.
     thought = sc.thought_tokens if sc.thoughts else 0
     thinking = ([{"type": "thinking", "thinking": "", "signature": f"Eo{uuid.uuid4().hex}"}]
                 if thought else [])
@@ -667,15 +434,8 @@ async def _anthropic_answer(request: Request) -> tuple[JSONResponse, Note]:
             {"type": "tool_use", "id": f"toolu_{uuid.uuid4().hex[:24]}", "name": forced,
              "input": {"tags": tags}}]
     elif envelope == "max_tokens":
-        # The cap reached mid-argument and billed in full, thinking included. Under forced tool use the
-        # truncated answer is the tool call itself, cut short: the stop-reasons page says "the truncated
-        # response contains an incomplete tool use block" and checks `stop_reason == "max_tokens"`
-        # beside `content[-1].type == "tool_use"`, and the define-tools page says the model "will not
-        # emit a natural language response or explanation before tool_use" when a tool is forced. So
-        # the cut-off is a `tool_use` block holding the first tag only -- well-formed, and not the whole
-        # answer. This double used to send a text block here, a shape the provider never sends under a
-        # forced tool, and the adapter's missing `stop_reason` check passed against it.
-        # [M5.5 review cycle 1, M55-DBL-01]
+        # Billed in full. Under a forced tool the truncated answer is an incomplete `tool_use`
+        # block, never text: here the first tag only.
         stop, out = "max_tokens", int(body["max_tokens"])
         content = thinking + [{"type": "tool_use", "id": f"toolu_{uuid.uuid4().hex[:24]}",
                                "name": forced, "input": {"tags": tags[:1]}}]
@@ -685,26 +445,20 @@ async def _anthropic_answer(request: Request) -> tuple[JSONResponse, Note]:
                                                        "than call the tool: it is a tense, patient "
                                                        "piece of work."}]
     elif envelope == "refusal":
-        # The safety classifiers' stop before any output, as the refusals page prints it: no content,
-        # `output_tokens` 0, the prompt counted and not charged. See `ENVELOPES`.
+        # Before any output: no content, `output_tokens` 0, the prompt counted and not charged.
         stop, out = "refusal", 0
         content = []
     else:
-        # No tool was forced, so the model answered in text -- with the JSON the prompt asked for, which
-        # is still not a `tool_use` block.
+        # No tool was forced, so the JSON comes as text, not as a `tool_use` block.
         stop = "end_turn"
         content = thinking + [{"type": "text", "text": json.dumps({"tags": tags})}]
-    # Where inference ran: the request's own `inference_geo`, else the workspace default (see
-    # `PROJECT_TIERS`), which is what US-only inference is billed on.
     geo = body.get("inference_geo") if body.get("inference_geo") in GEOS else sc.geo
     usage: dict[str, Any] = {
         "input_tokens": _anthropic_prompt_tokens(req, sc, body["model"], tools, forced is not None),
         "output_tokens": out, "inference_geo": geo}
     if thought and out:
         usage["output_tokens_details"] = {"thinking_tokens": min(thought, out)}
-    # `stop_details` is "Structured information about a refusal" -- `type`, `category`, `explanation` --
-    # and "`null` for all stop reasons other than `refusal`" (the Messages reference and the
-    # stop-reasons page), so every answer carries it.
+    # `stop_details` is null for every stop reason but `refusal`, and always present.
     details = ({"type": "refusal", "category": "general_harms",
                 "explanation": "This request was declined because it conflicts with Anthropic's Usage"
                                " Policy."} if stop == "refusal" else None)
@@ -720,8 +474,7 @@ async def _anthropic_answer(request: Request) -> tuple[JSONResponse, Note]:
 
 def _openai_error(status: int, message: str, *, kind: str = "invalid_request_error",
                   param: str | None = None, code: str | None = None) -> JSONResponse:
-    """https://platform.openai.com/docs/guides/error-codes: one `error` object with message, type, param
-    and code."""
+    """https://platform.openai.com/docs/guides/error-codes"""
     return JSONResponse({"error": {"message": message, "type": kind, "param": param, "code": code}},
                         status_code=status)
 
@@ -732,8 +485,7 @@ def _openai_auth(request: Request) -> JSONResponse | None:
         return _openai_error(401, "You didn't provide an API key. You need to provide your API key in "
                                   "an Authorization header using Bearer auth (i.e. Authorization: "
                                   "Bearer YOUR_KEY).")
-    # The real message quotes a masked form of the refused key; this one quotes none of it, because a
-    # fragment of a key in a test's output is a fragment in a CI log.
+    # The real message quotes a masked key; this quotes none, so no fragment reaches a CI log.
     if auth != f"Bearer {KEYS['openai']}":
         return _openai_error(401, "Incorrect API key provided. You can find your API key at "
                                   "https://platform.openai.com/account/api-keys.",
@@ -741,27 +493,9 @@ def _openai_auth(request: Request) -> JSONResponse | None:
     return None
 
 
-# Structured Outputs' supported-schemas section as it stands: the keywords strict mode still refuses.
-# See the module docstring for why `minimum`, `maximum`, `minItems`, `maxItems`, `pattern` and `format`
-# are not among them.
-#
-# The composition keywords are the guide's own list: "Some type-specific keywords are not yet
-# supported -- Composition: `allOf`, `not`, `dependentRequired`, `dependentSchemas`, `if`, `then`,
-# `else`", and "If you turn on Structured Outputs by supplying `strict: true` and call the API with an
-# unsupported JSON Schema, you will receive an error"
-# (https://developers.openai.com/api/docs/guides/structured-outputs). The double answered all seven and
-# walked `allOf` as a valid branch, so an adapter change sending one would have passed here and met a
-# 400 from OpenAI -- M5.2's failure. `anyOf` is the one composition the page supports.
-#
-# `minLength`, `maxLength` and `patternProperties` rest on thinner ground, and it is stated rather than
-# hidden. The page's "Supported properties" name only `pattern` and `format` for a string and no
-# object keyword beyond the structural ones, while its "not yet supported" list names these three only
-# "For fine-tuned models" -- the page disagrees with itself. The real server's words settle
-# `minLength`: "'minLength' is not permitted" (coder/mux#1220, 2025-12-18). `maxLength` is stripped
-# beside it in that same fix with no refusal quoted, and `patternProperties` has no report either way;
-# both are refused on the supported-list reading, because the adapter strips all three anyway
-# (`openai._STRICT_UNSUPPORTED`), so a refusal here costs the app nothing, where a double that answered
-# them and was wrong would hide a 400 on every request. [M5.5 review cycle 2, DBL-C2-07]
+# The keywords OpenAI's strict mode still refuses. `minimum`, `maximum`, `minItems`, `maxItems`,
+# `pattern` and `format` are supported now; `anyOf` is the one composition keyword it takes.
+# `maxLength` and `patternProperties` are refused on thin evidence: the adapter strips them anyway.
 OPENAI_NOT_PERMITTED = frozenset({
     "minLength", "maxLength",
     "patternProperties", "unevaluatedProperties", "propertyNames", "minProperties", "maxProperties",
@@ -771,7 +505,7 @@ OPENAI_NOT_PERMITTED = frozenset({
 
 
 def _strict_refusal(schema: Any, name: str) -> str | None:
-    """The first rule a strict schema breaks, in the words the real server uses, or None."""
+    """The first rule a strict schema breaks, in the real server's words, or None."""
     if not isinstance(schema, dict) or schema.get("type") != "object":
         got = schema.get("type") if isinstance(schema, dict) else type(schema).__name__
         return (f"Invalid schema for response_format '{name}': schema must be a JSON Schema of "
@@ -831,13 +565,7 @@ async def _openai_answer(request: Request) -> tuple[JSONResponse, Note]:
     if body["model"] not in MODELS["openai"]:
         return _openai_error(404, f"The model `{body['model']}` does not exist or you do not have "
                                   "access to it.", code="model_not_found"), {}
-    # Every model served here reasons -- its usage block says so -- and the reasoning models refuse the
-    # deprecated `max_tokens` outright (`mdc/llm/client.py:221-222`) and any temperature but the default
-    # while they reason: "When reasoning effort is not `none`, remove `temperature`"
-    # (https://developers.openai.com/api/docs/guides/latest-model). A model whose effort "supports: none,
-    # low, medium (default)" (https://developers.openai.com/api/docs/models/gpt-5.6-terra) answers one
-    # sent with `reasoning_effort` "none", where the double refused it on every model; gpt-5-mini lists
-    # no `none` and still refuses. [M5.5 review cycle 2, DBL-C2-07]
+    # Reasoning models refuse `max_tokens`, and any non-default temperature unless effort is `none`.
     if "max_tokens" in body:
         return _openai_error(400, "Unsupported parameter: 'max_tokens' is not supported with this "
                                   "model. Use 'max_completion_tokens' instead.",
@@ -871,8 +599,7 @@ async def _openai_answer(request: Request) -> tuple[JSONResponse, Note]:
     if faulted := _faulted(req, sc, "openai"):
         return faulted, _note(req, body["model"], f"fault {sc.fault}", [])
     tags = _answer(req, sc)
-    # `completion_tokens` INCLUDES the reasoning and `reasoning_tokens` itemises it (the reasoning
-    # guide), so the bill is the visible answer plus the thinking, and exit check 6 reads it as it comes.
+    # `completion_tokens` INCLUDES the reasoning; `reasoning_tokens` itemises it.
     reasoning = sc.thought_tokens if sc.thoughts else 0
     completion = sc.output_tokens + reasoning
     finish, content, refusal_text = "stop", json.dumps({"tags": tags}), None
@@ -887,7 +614,6 @@ async def _openai_answer(request: Request) -> tuple[JSONResponse, Note]:
              "total_tokens": prompt + completion,
              "prompt_tokens_details": _openai_cache(body, req, prompt),
              "completion_tokens_details": {"reasoning_tokens": reasoning}}
-    # The tier the request named, else the project's (see `PROJECT_TIERS`), as the response reports it.
     tier = _SERVED_TIER.get(body.get("service_tier"), sc.project_tier)
     return JSONResponse({
         "id": f"chatcmpl-{uuid.uuid4().hex[:29]}", "object": "chat.completion",
@@ -900,11 +626,8 @@ async def _openai_answer(request: Request) -> tuple[JSONResponse, Note]:
 
 
 def _openai_cache(body: dict[str, Any], req: _Request, prompt: int) -> dict[str, int]:
-    """`usage.prompt_tokens_details` as the Chat Completions reference documents it: `cached_tokens`,
-    "Cached tokens present in the prompt", and `cache_write_tokens`, "The unadjusted number of prompt
-    tokens written to cache" -- both inside `prompt_tokens`, not beside it. On a model in
-    `CACHE_WRITES`, with implicit mode left on and a prompt past the minimum, the first sight of a
-    prompt writes all of it and an identical later one reads all of it; anything else neither."""
+    """`cached_tokens` and `cache_write_tokens`, both INSIDE `prompt_tokens`. The first sight of a
+    prompt writes all of it and an identical later one reads all of it."""
     options = body.get("prompt_cache_options")
     explicit = isinstance(options, dict) and options.get("mode") == "explicit"
     if body["model"] not in CACHE_WRITES or explicit or prompt < CACHE_MIN_TOKENS:
@@ -921,9 +644,7 @@ def _openai_cache(body: dict[str, Any], req: _Request, prompt: int) -> dict[str,
 
 def _gemini_error(status: int, grpc: str, message: str, reason: str | None = None,
                   details: list[dict[str, Any]] | None = None) -> JSONResponse:
-    """https://ai.google.dev/gemini-api/docs/troubleshooting: Google's `error` object -- the HTTP code,
-    the message and the canonical status name, with the `ErrorInfo` detail where the server sends
-    one, or the details a fault names (see `FAULTS`)."""
+    """https://ai.google.dev/gemini-api/docs/troubleshooting"""
     error: dict[str, Any] = {"code": status, "message": message, "status": grpc}
     if reason:
         error["details"] = [{"@type": "type.googleapis.com/google.rpc.ErrorInfo", "reason": reason,
@@ -935,10 +656,7 @@ def _gemini_error(status: int, grpc: str, message: str, reason: str | None = Non
 
 
 def _gemini_auth(request: Request) -> JSONResponse | None:
-    """The key from `x-goog-api-key` or from `?key=`, both of which the real API accepts.
-
-    Refusing the query form would be stricter than Google, and the app's rule against it would then be
-    held by a refusal that does not exist in production. The log records which way it came."""
+    """`x-goog-api-key` or `?key=`, both of which the real API accepts; the log records which."""
     key = request.headers.get("x-goog-api-key") or request.query_params.get("key")
     if not key:
         return _gemini_error(403, "PERMISSION_DENIED",
@@ -951,11 +669,8 @@ def _gemini_auth(request: Request) -> JSONResponse | None:
     return None
 
 
-# The fields of the Schema object `responseSchema` is parsed into. The request is parsed as a protocol
-# buffer and a name the message has no field for is refused -- which is WHY `additionalProperties` is a
-# 400 (`mdc/llm/client.py:14-16`: responseSchema "rejects `additionalProperties`"), and why `uniqueItems`
-# or `$ref` would be too. Protocol-buffer JSON takes each field under its proto name as well as its
-# camelCase one, so both spellings are answered.
+# `responseSchema` is parsed as a protocol buffer: any other name (`additionalProperties`) is a 400,
+# and each field is taken in both its camelCase and snake_case spelling.
 GEMINI_SCHEMA_FIELDS = frozenset({
     "type", "format", "title", "description", "nullable", "enum", "maxItems", "minItems",
     "properties", "required", "minProperties", "maxProperties", "minLength", "maxLength", "pattern",
@@ -1029,8 +744,8 @@ async def _gemini_answer(request: Request, model: str) -> tuple[JSONResponse, No
         return faulted, _note(req, model, f"fault {sc.fault}", [])
     tags = _answer(req, sc)
     prompt = _prompt_tokens(req, sc)
-    # `thoughtsTokenCount` is reported apart from `candidatesTokenCount` and billed as output (the
-    # thinking page), and a response from a model that did not think carries no such key at all.
+    # `thoughtsTokenCount` is apart from `candidatesTokenCount`, billed as output, and absent when
+    # the model did not think.
     usage: dict[str, int] = {"promptTokenCount": prompt, "candidatesTokenCount": sc.output_tokens}
     if sc.thoughts:
         usage["thoughtsTokenCount"] = sc.thought_tokens
@@ -1066,7 +781,7 @@ async def _gemini_answer(request: Request, model: str) -> tuple[JSONResponse, No
 
 @router.get("/v1/models")
 async def models_list(request: Request) -> JSONResponse:
-    """Anthropic's and OpenAI's lists share a path and nothing else, so the Host header decides."""
+    """Anthropic's and OpenAI's lists share a path, so the Host header decides."""
     provider = _provider_of(request)
     if provider == "anthropic":
         resp = _anthropic_auth(request) or _anthropic_models(request)
@@ -1083,7 +798,7 @@ async def models_list(request: Request) -> JSONResponse:
 
 
 def _anthropic_models(request: Request) -> JSONResponse:
-    """https://docs.anthropic.com/en/api/models-list: paginated, `limit` from 1 to 1000."""
+    """https://docs.anthropic.com/en/api/models-list"""
     try:
         limit = int(request.query_params.get("limit", "20"))
     except ValueError:
@@ -1102,8 +817,7 @@ def _anthropic_models(request: Request) -> JSONResponse:
 
 @router.get("/v1beta/models")
 async def gemini_models(request: Request) -> JSONResponse:
-    """https://ai.google.dev/api/models#method:-models.list: `pageSize` up to 1000, a larger value
-    coerced to 1000, and `nextPageToken` only while the list continues."""
+    """https://ai.google.dev/api/models#method:-models.list"""
     if _provider_of(request) != "gemini":
         return _not_here(request)
     resp = _gemini_auth(request)
@@ -1126,7 +840,6 @@ async def gemini_models(request: Request) -> JSONResponse:
 
 
 def _not_here(request: Request) -> JSONResponse:
-    """A provider path asked of a host that does not serve it: a 404 on the real internet too."""
     _record(request, _provider_of(request), 404, key_header=False)
     return JSONResponse({"error": {"message": f"no such route on {request.url.hostname}"}},
                         status_code=404)
@@ -1136,9 +849,6 @@ def _not_here(request: Request) -> JSONResponse:
 
 
 class ScenarioControl(BaseModel):
-    """A change to how one provider answers -- or all three, when `provider` is omitted. A field left out
-    keeps its value; `prompt_tokens` sent as null goes back to the estimate."""
-
     provider: str | None = None
     content: str | None = None
     posture: str | None = None
@@ -1165,8 +875,7 @@ async def set_scenario(body: ScenarioControl) -> JSONResponse:
     if body.posture is not None and body.posture not in POSTURES:
         return JSONResponse({"detail": f"posture must be one of {list(POSTURES)}"}, status_code=422)
     targets = PROVIDERS if body.provider is None else (body.provider,)
-    # An envelope a provider does not document is refused rather than approximated: a Gemini "refusal"
-    # would be a shape this double invented, and a test passing against it would prove nothing.
+    # An envelope a provider does not document is refused rather than invented.
     for provider in targets:
         if body.envelope is not None and body.envelope not in ENVELOPES[provider]:
             return JSONResponse({"detail": f"{provider} documents no {body.envelope!r} envelope; it has "

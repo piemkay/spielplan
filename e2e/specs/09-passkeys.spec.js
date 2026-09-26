@@ -3,20 +3,9 @@ import { expect, test } from '@playwright/test';
 import { ADMIN, openAccountMenu, signedIn } from '../helpers.js';
 
 /**
- * Passkeys in a real browser. Spec v2.1 §3.2 — "Primary: WebAuthn passkeys".
- *
- * Chromium's virtual authenticator (CDP `WebAuthn` domain) stands in for Face ID: the ceremony,
- * the CBOR, the signature and the origin check are all genuine, and only the biometric is
- * simulated. `backend/tests/test_webauthn.py` covers the refusals — wrong origin, wrong rp_id,
- * replayed counter — against a software authenticator; what only a browser can show is the
- * round trip: register on the account page, sign out, and get back in with no password typed.
- *
- * Desktop only. The virtual authenticator is a Chromium devtools feature and the phone project
- * runs WebKit, where the button correctly reports that the browser cannot help.
- *
- * The origin matters: WebAuthn binds a credential to it (§2, §14.4), so this must run against
- * PUBLIC_URL's origin and not merely an address that reaches the same server. See
- * playwright.config.js.
+ * §3.2 passkeys, round trip in a real browser. Chromium's virtual authenticator (CDP) simulates
+ * only the biometric; `test_webauthn.py` covers the refusals. Chromium only. Must run against
+ * PUBLIC_URL's origin, to which WebAuthn binds the credential.
  */
 test.describe.configure({ mode: 'serial' });
 
@@ -65,16 +54,14 @@ test.describe('passkeys', () => {
   });
 
   test('the credential is bound to this origin', async () => {
-    // §14 risk 4 / §14.4: the rp_id is shown, because "my passkey stopped working" after a
-    // PUBLIC_URL change deserves an answer on the screen rather than in the logs.
+    // §14.4: the rp_id is shown, so a PUBLIC_URL change explains itself on the screen.
     await page.goto('/account');
     const rpId = new URL(page.url()).hostname;
     await expect(page.locator('.list li').first()).toContainText(rpId);
   });
 
   test('a second passkey can be registered for the same account', async () => {
-    // §3.2: "multiple passkeys per user (phone + desktop)". A second authenticator is needed —
-    // the first is in `excludeCredentials`, which is exactly what stops a shadow row.
+    // §3.2: "multiple passkeys per user". A second authenticator: the first is excluded.
     ({ authenticatorId: secondAuthenticator } = await cdp.send(
       'WebAuthn.addVirtualAuthenticator',
       {
@@ -136,9 +123,7 @@ test.describe('passkeys', () => {
     await expect(page.locator('.list li')).toHaveCount(1);
     await expect(page.getByText('e2e-key')).toHaveCount(0);
 
-    // The browser still holds the credential the server just forgot, and a discoverable
-    // sign-in may offer it — which would fail, correctly, and make this test about the wrong
-    // thing. Removing the authenticator models what actually happened: that device is gone.
+    // The device is gone, so its authenticator goes too; else sign-in might offer the forgotten key.
     await cdp.send('WebAuthn.removeVirtualAuthenticator', {
       authenticatorId: secondAuthenticator
     });
@@ -152,8 +137,7 @@ test.describe('passkeys', () => {
   });
 
   test('the password fallback is never hidden behind the passkey button', async () => {
-    // §3.2: password login is "always available". Someone whose phone will not cooperate must
-    // not have to discover that the way in still exists.
+    // §3.2: password login is "always available".
     const menu = await openAccountMenu(page);
     await menu.getByRole('button', { name: 'Log out' }).click();
     await expect(page.getByRole('button', { name: 'Sign in with a passkey' })).toBeVisible();
@@ -166,8 +150,7 @@ test.describe('passkeys', () => {
     browser
   }) => {
     // §3.1: "a one-time password is issued, the account is locked to a password change at
-    // first login, and passkey registration is prompted afterwards." The whole sequence, in
-    // one go, from the account the admin just created.
+    // first login, and passkey registration is prompted afterwards."
     const name = `e2e-member-${Date.now()}`;
     const created = await page.request.post('/api/admin/users', {
       data: { name, role: 'member' }

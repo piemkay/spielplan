@@ -1,26 +1,6 @@
-"""A fake Jellyfin server. Test infrastructure — never shipped in the app image.
-
-§7.3 promises that seen state flows *both ways* and that the Played write uses the linked
-user's own token rather than the admin key. Neither claim can be checked against a mock inside
-the process that makes it: a mock asserts that we called what we think we call. This is a real
-HTTP server that behaves the way Jellyfin >= 10.9 behaves on the handful of routes §7.1 names,
-including the part that matters most — **it refuses the admin API key on `/UserPlayedItems`**.
-That refusal is what turns "we use per-user tokens" from a comment into a test.
-
-Two ways in:
-
-  * Playwright drives it over HTTP as a compose service (`ops/compose.e2e.yml`), so the browser
-    test can flip a flag in "Jellyfin" and watch it arrive in the app.
-  * The backend integration tests mount it through `httpx.ASGITransport`, so the same server
-    answers with no socket and no port.
-
-The `/_test/*` routes are the control surface and have no Jellyfin counterpart. One of them fires
-OUTWARD: §7.2's primary intake is a **push** from the Webhook plugin, so the double has to be able
-to originate an `ItemAdded` and not only answer a read. It delivers over the same two ways in --
-an ordinary POST on the compose network, and the app's own `ASGITransport` when a test has mounted
-one into `WEBHOOK_TRANSPORT` -- and the payload's shape lives here for the reason the rest of this
-file does. A test that authors its own `ItemAdded` has turned the double back into a mock, and can
-then prove the handler tolerates a field the plugin never sends.
+"""A fake Jellyfin (>= 10.9) for tests, never shipped. It refuses the admin key on the Played write
+(§7.3) so the per-user-token path can fail. `/_test/*` is the control surface, including pushing
+the Webhook plugin's `ItemAdded`; payload shapes live here so no test can author its own.
 """
 
 from __future__ import annotations
@@ -44,11 +24,8 @@ TICKS_PER_MINUTE = 60 * 10_000_000
 API_KEY = os.environ.get("FAKE_JELLYFIN_API_KEY", "fake-admin-key")
 SERVER_VERSION = os.environ.get("FAKE_JELLYFIN_VERSION", "10.10.3")
 
-# Jellyfin spells an instant with seven fractional digits and a trailing `Z`, which
-# `datetime.fromisoformat` accepts in neither half, so every client of §7.2's delta read has to
-# normalise before it can compare. The fake normalises the same way rather than comparing the
-# strings, because a lexicographic compare agrees with a real one only while both sides spell the
-# precision identically -- and the app's watermark, written by Postgres, will not.
+# Jellyfin writes seven fractional digits and a `Z`, which `fromisoformat` rejects; compared as
+# instants, never as strings, because the app's Postgres-written watermark spells them differently.
 _ISO = re.compile(
     r"^(?P<secs>\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2})"
     r"(?:\.(?P<frac>\d+))?(?P<zone>Z|[+-]\d{2}:?\d{2})?$"
@@ -56,7 +33,7 @@ _ISO = re.compile(
 
 
 def _instant(text: str) -> datetime:
-    """Parse one of those, and 400 on anything else -- a real server does not guess at a filter."""
+    """400 on anything unparseable: a real server does not guess at a filter."""
     match = _ISO.match(text.strip())
     if match is None:
         raise HTTPException(400, f"unparseable date: {text!r}")
@@ -68,7 +45,6 @@ def _instant(text: str) -> datetime:
 
 
 def _stamp(when: datetime) -> str:
-    """And spell one back out the way the server does, so a client cannot depend on our format."""
     return when.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%S.0000000Z")
 
 
@@ -76,32 +52,12 @@ def _minutes_after(stamp: str, minutes: int) -> str:
     return _stamp(_instant(stamp) + timedelta(minutes=minutes))
 
 
-# Mirrors backend/tests/fixtures/make_bundle.py so every item resolves to a fixture title —
-# except the last two, which are deliberately awkward:
-#   * "Tampopo" carries NO ProviderIds, so it exercises the name/year fallback;
-#   * "Christmas 2019" resolves to nothing at all and must not create a title (§4.2: title.id
-#     is carried over verbatim from the corpus, so this connector never mints one).
+# Mirrors backend/tests/fixtures/make_bundle.py, except the last two: "Tampopo" has no ProviderIds
+# (name/year fallback) and "Christmas 2019" resolves to no title and must not create one (§4.2).
 #
-# `DateCreated` is NOT when the item entered this library, and this file used to say it was.
-# Jellyfin stamps it from the FILE: `UseFileCreationTimeForDateAdded` defaults to true
-# (MediaBrowser.Model/Configuration/MetadataConfiguration.cs) and `ResolverHelper.SetDateCreated`
-# then writes `info.CreationTimeUtc`, which .NET on Linux reads as the older of mtime and ctime --
-# and an NFO's `<dateadded>` overrides it. What does mark the item's arrival is `DateLastSaved`,
-# set to `DateTime.UtcNow` when the scan first saves it (`LibraryManager.RunMetadataSavers`), and
-# that is the column `MinDateLastSaved` filters on. The double spelled the two as one instant, so a
-# client re-filtering the server's answer on `DateCreated > since` agreed with it and with nothing
-# a real server does: a film copied in with its mtime kept came back from the server and was thrown
-# away. So each item carries both, the scan's save minutes after the file for most of them, and two
-# whose file is years older than their arrival -- Tampopo, copied from an old drive with its times
-# preserved, and the household's own Christmas footage, stamped by the camera that shot it.
-# [M5.2 review cycle 4: M52-C4-REST-02, M52-C4-TTA-02; decision 409]
-#
-# `DateLastSaved` is never SERVED: `BaseItemDto` has no such property on any release from 10.9 to
-# 12.1 (`ItemFields.DateLastSaved` exists and fills nothing), so `_NEVER_SERVED` strips it from
-# every projection whatever `Fields` asks for. `DateCreated` is an `ItemFields` entry, served only
-# when `Fields` asks -- see DEFAULT_FIELDS. The seven arrivals are still spread across five years,
-# because a delta test over a corpus saved all at once passes against a fake that ignores the
-# filter.
+# `DateCreated` is stamped from the FILE; arrival is `DateLastSaved`, which `MinDateLastSaved`
+# filters on and the server never serves. Tampopo and Christmas have files years older than their
+# arrival, and arrivals span years so a fake that ignored the filter would fail (decision 409).
 ITEMS: list[dict[str, Any]] = [
     {"Id": "jf-1", "Name": "Heat", "Type": "Movie", "ProductionYear": 1995,
      "RunTimeTicks": 170 * TICKS_PER_MINUTE, "DateCreated": "2019-03-14T21:05:00.0000000Z",
@@ -133,22 +89,9 @@ ITEMS: list[dict[str, Any]] = [
      "ProviderIds": {}},
 ]
 
-# Jellyfin never plays a Series: a session on one plays an **Episode**, with its own `Id`, a
-# `SeriesId` for the folder and the season/episode numbers its clients render. The fake used to
-# hand back the Series id itself and emit no `Type` at all, which let the app resolve a session it
-# could never resolve against a real server -- the exact shape `dd05-fake-and-e2e` records, and
-# why §7.3's prompt never armed for the Series partition in the field. Two episodes per series, so
-# that "the last known episode" (decision 210(c)) is a choice rather than a tautology, and the
-# series' own runtime, because `/_test/session` sets a fraction of it and the e2e's 0.96 has to
-# stay past §7.3's 0.9.
-#
-# Twelve of them for "The Bear", because §7.2's debounce clause is arithmetic over a burst --
-# "library scans add seasons in bursts; series acquire per-show, not per-episode" -- and a season
-# a test cannot fill has nothing to collapse. The twelve go on jf-7 and NOT on jf-6 because
-# `test_jellyfin_client.py:322,345-346` pin Severance's index list at `[1, 2]` and its last episode
-# at `jf-6-e2`: decision 210(c)'s "last known episode" is asserted against those literals, and a
-# double that moved them would be editing the assertion it exists to feed. `_now_playing` still
-# takes `episodes[-1]`, so The Bear's last known episode is simply e12 now.
+# A session on a Series plays an Episode. At least two per series so "the last known episode"
+# (decision 210(c)) is a choice; twelve on The Bear so §7.2's debounce has a burst to collapse.
+# Severance stays at two: `test_jellyfin_client.py` pins its episodes.
 EPISODE_COUNT: dict[str, int] = {"jf-6": 2, "jf-7": 12}
 
 EPISODES: dict[str, list[dict[str, Any]]] = {
@@ -162,20 +105,10 @@ EPISODES: dict[str, list[dict[str, Any]]] = {
             "ParentIndexNumber": 1,
             "IndexNumber": n,
             "RunTimeTicks": int(series["RunTimeTicks"]),
-            # A scan stamps a season minutes apart, not years: the burst these twelve stand for is
-            # one import, and a delta read that saw them scattered would be reading a library no
-            # scan produces.
+            # A scan stamps a season minutes apart: the burst is one import.
             "DateCreated": _minutes_after(str(series["DateCreated"]), n),
             "DateLastSaved": _minutes_after(str(series["DateLastSaved"]), n),
-            # The episode's OWN ids. Jellyfin's TMDb provider sets them on every episode it
-            # identifies -- `item.TrySetProviderId(MetadataProvider.Tvdb, externalIds?.TvdbId);`
-            # and its Imdb twin (MediaBrowser.Providers/Plugins/Tmdb/TV/TmdbEpisodeProvider.cs,
-            # v10.10.7) -- and the Webhook plugin sends them as `Provider_*` for an episode exactly
-            # as for a film. This double gave episodes none, and three docstrings and an assertion
-            # called that the plugin's shape. Well-formed and in no bundle, so a path that ever
-            # keys an episode on its own identity finds one, as it would on a real server, rather
-            # than parking at stage 1 for want of any (decision 323) and looking harmless.
-            # [M5.2 review cycle 4: M52-C4-TTA-04]
+            # The episode's own ids, as Jellyfin's TMDb provider sets them; in no bundle.
             "ProviderIds": {
                 "Tvdb": f"8{str(series['Id']).removeprefix('jf-')}{n:05d}",
                 "Imdb": f"tt8{str(series['Id']).removeprefix('jf-')}{n:05d}",
@@ -187,22 +120,13 @@ EPISODES: dict[str, list[dict[str, Any]]] = {
     if series["Type"] == "Series"
 }
 
-# Flat views of the same rows. An episode is a library item like any other -- `/Items` may be asked
-# for one (§7.2's webhook is the only direction an episode id enters the app) and a library holds
-# it through its series, because that is where the tree puts it.
 ALL_EPISODES: list[dict[str, Any]] = [row for rows in EPISODES.values() for row in rows]
 EPISODE_SERIES: dict[str, str] = {
     str(row["Id"]): series_id for series_id, rows in EPISODES.items() for row in rows
 }
 
-# Jellyfin's libraries. §7.2's trigger is scoped to the ones the admin picked and
-# `JellyfinConfig.library_ids` has never had a reader (decision 364); membership is a fact the
-# SERVER holds, answerable only by asking it, never by a field in the operator's webhook template.
-# So it lives here as a mapping and is served through `/Items`'s `ParentId`, which is the parameter
-# a real client would scope with. Three rather than the two the plan asks for, so that "the library
-# the admin did not pick" is a *choice* and not the only alternative: "Christmas 2019" is the
-# household's own footage, resolves to no title at all (§4.2), and is exactly the library nobody
-# wants an acquisition job billed for.
+# Library membership is a fact the server holds (decision 364). Three libraries, so "the one the
+# admin did not pick" is a choice; the home videos are the one nobody wants acquired.
 LIBRARIES: list[dict[str, Any]] = [
     {"Id": "jf-lib-films", "Name": "Films", "CollectionType": "movies",
      "Type": "CollectionFolder"},
@@ -220,19 +144,13 @@ LIBRARY_MEMBERS: dict[str, tuple[str, ...]] = {
 
 
 def _library_of(item_id: str) -> str | None:
-    """Which library holds this item -- an episode through its series, the way the tree does."""
+    """An episode belongs to its series' library."""
     key = EPISODE_SERIES.get(item_id, item_id)
     return next((lib for lib, members in LIBRARY_MEMBERS.items() if key in members), None)
 
 
-# Where each library's files are on the server's disk -- `VirtualFolderInfo.Locations`, which
-# `/Library/VirtualFolders` answers with -- and so where every item's `Path` begins. On a real server
-# that is the whole of what membership IS: a library scans its locations, and `LibraryController.
-# TranslateParentItem` maps a top-level folder to the library whose `PhysicalLocations` contain its
-# path. The home library's location shares a prefix with the films' on purpose, because two
-# libraries named `/media/films` and `/media/films-home` are an ordinary layout and a client testing
-# `startswith` without a separator would file the household's footage under Films.
-# [M5.2 review cycle 4: M52-C4-IDS-01, M52-C4-WH-01; decision 408]
+# `VirtualFolderInfo.Locations`, where every item's `Path` begins (decision 408). films-home shares
+# a prefix with films on purpose: a `startswith` without a separator files it under Films.
 LIBRARY_LOCATIONS: dict[str, tuple[str, ...]] = {
     "jf-lib-films": ("/media/films",),
     "jf-lib-shows": ("/media/shows",),
@@ -241,10 +159,7 @@ LIBRARY_LOCATIONS: dict[str, tuple[str, ...]] = {
 
 
 def _path_of(item: dict[str, Any]) -> str | None:
-    """The item's `Path` as the server's scan would have found it: under the location of the library
-    that holds it, a film in its own folder, a series as its folder, an episode inside its season.
-    An item no library holds has no path to derive, which on a real server cannot happen to a file
-    it scanned; one that carries its own `Path` keeps it."""
+    """The item's `Path` as the scan would have found it under its library's location."""
     if item.get("Path"):
         return str(item["Path"])
     library = _library_of(str(item["Id"]))
@@ -263,16 +178,8 @@ def _path_of(item: dict[str, Any]) -> str | None:
     return f"{locations[0]}/{name}/{name}.mkv"
 
 
-# Jellyfin's ids are GUIDs, and the server and its Webhook plugin spell one GUID two ways. Every
-# REST answer writes `Id` as 32 lowercase hex digits (`JsonGuidConverter` formats with "N"), while
-# the plugin assigns the raw `Guid` into its template's data and Handlebars renders it through
-# `ToString()`, which is the dashed "D" form -- jellyfin-plugin-webhook#204 is an operator finding
-# exactly that. The server's own binder parses either spelling in `ids` and `ParentId`. The seven
-# fixture ids above are not GUIDs at all, so a double that compared strings could never refuse a
-# client that compared strings too: every real `ItemAdded` then matched nothing and was filed as
-# gone from the server, while this suite and the exit criterion stayed green on `jf-7`. So the
-# double learns both spellings for any id that IS a GUID, and leaves a fixture id that is not one
-# exactly as it was. [M5.2 review cycle 3: M52-C3-EVENTS-01]
+# REST writes a GUID as 32 hex digits ("N"); the Webhook plugin renders it dashed ("D",
+# jellyfin-plugin-webhook#204). The server's binder takes either. Non-GUID fixture ids stay as-is.
 _GUID = re.compile(
     r"[0-9a-f]{32}|(?P<brace>\{)?[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}(?(brace)\})",
     re.IGNORECASE | re.ASCII,
@@ -280,13 +187,11 @@ _GUID = re.compile(
 
 
 def _guid_key(value: str) -> str:
-    """One GUID's identity whatever its spelling, which is what the server's binder compares."""
     text = str(value).strip()
     return uuid.UUID(text).hex if _GUID.fullmatch(text) else text
 
 
 def _plugin_guid(value: str) -> str:
-    """An id as the Webhook plugin renders it: a GUID dashed, anything else untouched."""
     text = str(value)
     return str(uuid.UUID(text)) if _GUID.fullmatch(text) else text
 
@@ -300,16 +205,11 @@ PASSWORD = os.environ.get("FAKE_JELLYFIN_PASSWORD", "jf-password")
 
 
 class State:
-    """Everything mutable, in one object so `/\\_test/reset` is a single assignment."""
-
     def __init__(self) -> None:
         self.played: dict[str, set[str]] = {u["Id"]: set() for u in USERS}
         self.tokens: dict[str, str] = {}          # token -> jellyfin user id
         self.sessions: list[dict[str, Any]] = []
         self.write_log: list[dict[str, Any]] = []
-        # What the Webhook plugin has pushed, for `write_log`'s reason in the other direction: a
-        # delivery is a fact about requests, and "the app enqueued one job" is only half an
-        # assertion until the other half says how many events it was told about.
         self.webhook_log: list[dict[str, Any]] = []
 
     def reset(self) -> None:
@@ -320,23 +220,14 @@ state = State()
 router = APIRouter()
 
 
-# A request's token, found where the server looks for it and nowhere else. Jellyfin reads `Token=`
-# out of the `MediaBrowser` Authorization header first, on every release from 10.9 to 12.1, and the
-# `X-Emby-Token` header only after that and only while `EnableLegacyAuthorization` is on
-# (Jellyfin.Server.Implementations/Security/AuthorizationContext.cs). 10.11 added that switch
-# defaulting on; 12.0 made it default off and ships a migration that turns it off on upgraded
-# installs (`20260531160000_DisableLegacyAuthorization`). The double read `X-Emby-Token` alone, so a
-# client sending the key nowhere else passed every test here and was anonymous -- a 401 on every
-# authenticated read -- against the current release. So the legacy header is honoured exactly while
-# the version this double reports is below 12, and a test that reports 12.1 sees what a household
-# on `jellyfin/jellyfin:latest` sees. [M5.2 review cycle 4: M52-C4-AUTH-01, M52-C4-TTA-03]
+# Jellyfin reads `Token=` from the `MediaBrowser` Authorization header first; the legacy
+# `X-Emby-Token` headers only while `EnableLegacyAuthorization` is on, which is off from 12.0.
 def _legacy_authorization() -> bool:
     numbers = [int(part) for part in re.findall(r"\d+", SERVER_VERSION)[:2]]
     return tuple(numbers) < (12, 0)
 
 
-# `AuthorizationContext.GetParts`: comma-separated `key=value` pairs after the scheme, a quoted value
-# kept whole, the quotes trimmed and the value URL-decoded. Keys are case-sensitive there too.
+# `AuthorizationContext.GetParts`: quoted values kept whole then URL-decoded; keys case-sensitive.
 _PAIR = re.compile(r'\s*([^=,\s]+)=("[^"]*"|[^,]*)')
 
 
@@ -373,8 +264,7 @@ def _item(item_id: str) -> dict[str, Any]:
 
 @router.get("/System/Info/Public")
 async def info() -> dict[str, Any]:
-    """Unauthenticated, exactly as Jellyfin serves it — which is what lets the admin's test
-    button tell a wrong URL apart from a wrong key."""
+    """Unauthenticated, as Jellyfin serves it: tells a wrong URL apart from a wrong key."""
     return {"ServerName": "Fake Jellyfin", "Version": SERVER_VERSION, "Id": "fake-server"}
 
 
@@ -386,29 +276,14 @@ async def users(request: Request) -> list[dict[str, Any]]:
 
 @router.get("/Library/MediaFolders")
 async def media_folders(request: Request) -> dict[str, Any]:
-    """The libraries §6.6's pick picks from, behind the admin key exactly as `/Users` and `/Items`.
-
-    Jellyfin's envelope and not a bare list: `{"Items": [...], "TotalRecordCount": n}`. The shape is
-    half the point -- `/Users` above IS a bare list, on this server and on the real one, so a client
-    that reads the two the same way is wrong about one of them and finds out here rather than in
-    front of the admin. The other half is the key, for the reason `/Items` gives below: a real server
-    authenticates this read, and a fake more permissive than the server it stands in for is precisely
-    how `dd05-fake-and-e2e` happened.
-    """
+    """An `{"Items", "TotalRecordCount"}` envelope, where `/Users` is a bare list, as on a real server."""
     _require_api_key(_token(request))
     return {"Items": LIBRARIES, "TotalRecordCount": len(LIBRARIES)}
 
 
 @router.get("/Library/VirtualFolders")
 async def virtual_folders(request: Request) -> list[dict[str, Any]]:
-    """Each library with the paths it scans -- `VirtualFolderInfo`, as a BARE list.
-
-    `ItemId` is the library's id in the server's "N" spelling (`libraryFolder.Id.ToString("N")` in
-    `LibraryManager.GetVirtualFolderInfo`), the same id `/Library/MediaFolders` answers as `Id`, and
-    `Locations` is what makes it the membership read: the server exposes no other fact that names
-    the library an item is in to a caller holding only the API key. Behind the key as the server
-    has it (`FirstTimeSetupOrElevated`). [M5.2 review cycle 4: M52-C4-IDS-01; decision 408]
-    """
+    """`VirtualFolderInfo` as a bare list; `Locations` is the only membership fact the key can read."""
     _require_api_key(_token(request))
     return [
         {"Name": lib["Name"], "Locations": list(LIBRARY_LOCATIONS.get(str(lib["Id"]), ())),
@@ -419,26 +294,16 @@ async def virtual_folders(request: Request) -> list[dict[str, Any]]:
     ]
 
 
-# Jellyfin returns a small default projection and only adds the rest when `Fields` asks. A fake
-# that ignores `Fields` lets a client "prove" it requests ProviderIds while never requiring it —
-# the assertion becomes the implementation compared to itself. So the projection is real here.
-# An episode's series identity joins them rather than waiting for `Fields`, because `SeriesId`,
-# `SeriesName`, `ParentIndexNumber` and `IndexNumber` are core `BaseItemDto` properties and not
-# `ItemFields` entries: a real server sends them on every episode row unasked, and
-# `/Shows/{id}/Episodes` below has always done so. `DateCreated` is the opposite case -- a genuine
-# `ItemFields` entry -- so it stays out and appears only when a client asks, which is the whole
-# reason `connectors/jellyfin.FIELDS` is falsifiable rather than decorative.
+# Jellyfin's default projection; the rest only when `Fields` asks, so a client must ask. Episode
+# series fields are core `BaseItemDto` properties, sent unasked.
 DEFAULT_FIELDS = {
     "Id", "Name", "Type", "ProductionYear", "RunTimeTicks",
     "SeriesId", "SeriesName", "ParentIndexNumber", "IndexNumber",
 }
-# What the double keeps about an item and a real server never puts on the wire (see ITEMS).
 _NEVER_SERVED = {"DateLastSaved"}
 
 
 def _projected(item: dict[str, Any], fields: set[str]) -> dict[str, Any]:
-    """One row as the server serialises it for this `Fields`: the default projection, what was
-    asked for, and `Path` -- an `ItemFields` entry -- derived from where the item lives."""
     row = {
         k: v for k, v in item.items()
         if (k in DEFAULT_FIELDS or k in fields) and k not in _NEVER_SERVED
@@ -447,8 +312,6 @@ def _projected(item: dict[str, Any], fields: set[str]) -> dict[str, Any]:
         row["Path"] = path
     return row
 ITEM_TYPES_ASKED: list[str] = []
-# Recorded for the same reason as ITEM_TYPES_ASKED: a cache is only cached if the second call
-# does not arrive, and that is a fact about requests, not about a dict.
 EPISODES_ASKED: list[str] = []
 
 
@@ -467,66 +330,29 @@ async def items(
     request: Request,
 ) -> dict[str, Any]:
     _require_api_key(_token(request))
-    # The parameter is optional and its absence is not a wildcard: §7.2 re-derives ownership from
-    # the library the *admin key* can see, because item visibility is per-user and the union of two
-    # people's views is not "the household's library". A real server answers a keyless read with no
-    # `UserData` at all, so this one must too -- a fake more permissive than the server it stands in
-    # for is precisely how `dd05-fake-and-e2e` happened. An unknown id that IS given still 404s.
+    # A keyless read gets no `UserData`, as from a real server.
     if userId is not None and userId not in state.played:
         raise HTTPException(404, "no such user")
 
-    # Without Recursive the real server returns the library folders, not the films inside them.
-    # A client that forgets it gets an empty result rather than a silently-correct one.
+    # Without Recursive a real server returns the library folders, not the films.
     if Recursive.lower() != "true":
         return {"Items": [], "TotalRecordCount": 0, "StartIndex": StartIndex}
 
     wanted_types = {t.strip().lower() for t in IncludeItemTypes.split(",") if t.strip()}
-    # Recorded so a test can assert the client narrowed the query rather than asking for
-    # everything and filtering afterwards.
     globals()["ITEM_TYPES_ASKED"] = sorted(wanted_types)
     fields = {f.strip() for f in Fields.split(",") if f.strip()}
-    # Episodes are in the pool for one reason: `ITEM_TYPES = "Movie,Series"` excludes them, and an
-    # exclusion the double cannot violate is an assumption rather than a test
-    # (`test_items_are_narrowed_to_movies_and_series`). A read that NAMES its types and does not
-    # name Episode still gets none, which is every read the app makes -- `connectors/jellyfin.py`
-    # sends `IncludeItemTypes` on all of them -- so the seven rows the sweep walks are the seven it
-    # always walked. An unfiltered read now returns the episodes as well, because a real server
-    # recursing a library returns what is in it, and no shipped caller makes one.
+    # Episodes are in the pool so the app's `IncludeItemTypes` exclusion is testable.
     matching = [
         item for item in (*ITEMS, *ALL_EPISODES)
         if not wanted_types or str(item["Type"]).lower() in wanted_types
     ]
-    # `ids` looks an item up by id and `ParentId` scopes a walk to a library, both compared as GUIDs
-    # whatever their spelling, because that is what the server's binder does -- and the two do NOT
-    # combine, which the paragraph on `ParentId` below says.
-    #
-    # A `ParentId` naming no folder of this server is a 400, and it used to be an empty page this
-    # file called "the honest answer and not an error". It is not the server's answer: on 10.9 and
-    # 10.10 `LibraryManager.GetParentItem` throws `ArgumentException("Invalid parent id")` and the
-    # exception middleware maps that to 400. The empty page was the double being MORE permissive
-    # than Jellyfin, which is `dd05-fake-and-e2e`'s shape again -- against it a deleted library in
-    # the pick recorded adds as unwanted, while against a real server the same pick 400ed every
-    # delta walk, and nothing in this suite could see either.
-    # [M5.2 review cycle 3: M52-C3-LIB-02, M52-C3-SWEEP-04]
-    #
-    # THE ONE PERMISSIVENESS LEFT IS FORCED BY THE FIXTURE. A real server DROPS a piece of `ids`
-    # that does not parse as a GUID (`CommaDelimitedCollectionModelBinder` logs the FormatException
-    # at debug and leaves the value out), and an `ids` emptied that way filters nothing at all. The
-    # seven ids above are not GUIDs, so this double has to keep matching them by string; what
-    # makes that harmless is the `Limit` the client's membership read now sends, which bounds the
-    # read a real server turns such an id into. [M5.2 review cycle 3: M52-C3-EVENTS-04]
+    # One permissiveness, forced by the fixture: a real server drops a non-GUID piece of `ids`
+    # (and an emptied `ids` filters nothing); this matches the fixture ids by string.
     wanted_ids = {_guid_key(i) for i in ids.split(",") if i.strip()}
     if wanted_ids:
         matching = [item for item in matching if _guid_key(str(item["Id"])) in wanted_ids]
-    # A `ParentId` is RESOLVED on every read and APPLIED only on a read that names no `ids`, which
-    # is the server's behaviour and not a shortcut. `ItemsController.GetItems` resolves the folder
-    # (`GetParentItem`, the 400 above) and then sets `query.Parent = null` -- which empties
-    # `ParentId` -- before `folder.GetItems(query)`; `Folder.GetItems` sends any query with
-    # `ItemIds` straight to `LibraryManager.GetItemsResult`, whose only library scoping needs a
-    # non-empty `ParentId`. Read at v10.9.11, v10.10.7, v10.11.0 and v12.1, identically. The double
-    # applied it to both, so a membership read spelled `ids=<key>&ParentId=<lib>` agreed with it
-    # and a deselected library's add came back under the first picked library from every real
-    # server. [M5.2 review cycle 4: M52-C4-IDS-01, M52-C4-WH-01; decision 408]
+    # As the server does: an unknown `ParentId` is a 400, and it scopes only a read with no `ids`
+    # (`ItemsController.GetItems` drops it when `ids` is given; decision 408).
     if ParentId is not None:
         folder = _guid_key(ParentId)
         if folder not in {_guid_key(str(lib["Id"])) for lib in LIBRARIES}:
@@ -536,12 +362,7 @@ async def items(
                 item for item in matching
                 if _guid_key(str(_library_of(str(item["Id"])) or "")) == folder
             ]
-    # §7.2's delta path. Jellyfin has no `MinDateCreated`; `MinDateLastSaved` filters on
-    # `DateLastSaved`, the instant the server last saved the row, and it is INCLUSIVE and excludes a
-    # row that was never saved: `DateLastSaved not null and DateLastSaved>=@...` in 10.10's SQLite
-    # repository, `e.DateLastSaved != null && e.DateLastSaved >= ...` in 10.11's. This answered it
-    # from `DateCreated`, strictly -- the double's own premise, shared with the client, that the
-    # two were one instant. [M5.2 review cycle 4: M52-C4-REST-02, M52-C4-TTA-02; decision 409]
+    # §7.2's delta: inclusive, and a never-saved row is excluded, as in the server's repository.
     if MinDateLastSaved is not None:
         floor = _instant(MinDateLastSaved)
         matching = [
@@ -568,11 +389,7 @@ async def show_episodes(
     *,
     request: Request,
 ) -> dict[str, Any]:
-    """Decision 210(c)'s read: which episode is the series' last known one.
-
-    Narrow on purpose -- the same item store, the same 404s, and `UserData` only when a user id is
-    given, exactly as `/Items` above.
-    """
+    """Decision 210(c)'s read: which episode is the series' last known one."""
     _require_api_key(_token(request))
     if series_id not in EPISODES:
         raise HTTPException(404, "no such series")
@@ -590,16 +407,13 @@ async def show_episodes(
     return {"Items": rows, "TotalRecordCount": len(rows)}
 
 
-# Decision 483's first poster source. The two awkward items have no Primary image, as a home
-# video and an unidentified film have none on a real server, so a test can watch the art route
-# fall through to the next source on a 404 rather than only ever taking the first.
+# Decision 483's first poster source. These two 404, so the art route's fall-through is testable.
 NO_PRIMARY_IMAGE = {"jf-8", "jf-x"}
 IMAGES_ASKED: list[str] = []
 
 
 def _png(width: int, height: int, rgb: tuple[int, int, int]) -> bytes:
-    """A real PNG of one flat colour: the smallest thing a browser decodes to a nonzero
-    `naturalWidth`, which is what the e2e asserts about a poster, built with no image library."""
+    """A real flat-colour PNG, which a browser decodes to a nonzero `naturalWidth`."""
     def chunk(kind: bytes, data: bytes) -> bytes:
         body = kind + data
         return struct.pack(">I", len(data)) + body + struct.pack(">I", zlib.crc32(body))
@@ -615,8 +429,7 @@ def _png(width: int, height: int, rgb: tuple[int, int, int]) -> bytes:
 
 @router.get("/Items/{item_id}/Images/Primary")
 async def primary_image(item_id: str) -> Response:
-    """Anonymous, as Jellyfin serves item images: its own web client loads them with a bare
-    `<img>`. `maxWidth` and `quality` are accepted and ignored - the double's art is 2 by 3."""
+    """Anonymous, as Jellyfin serves item images. `maxWidth` and `quality` are ignored."""
     IMAGES_ASKED.append(item_id)
     known = {str(item["Id"]) for item in ITEMS} | set(EPISODE_SERIES)
     if item_id not in known or item_id in NO_PRIMARY_IMAGE:
@@ -649,13 +462,8 @@ async def set_played(
     request: Request,
     userId: str = Query(...),  # noqa: N803
 ) -> dict[str, Any]:
-    """The one write, and the one place this fake is stricter than a mock would be.
-
-    A real Jellyfin admin key *would* be accepted here — it is admin-equivalent and has no
-    read-only variant (§14.3). This fake refuses it on purpose, because the app's own restraint
-    is the only thing enforcing §7.3's least-privilege path and a test that cannot fail when
-    that restraint is removed is not testing it.
-    """
+    """A real server accepts the admin key here. This one refuses it on purpose, so a test fails
+    when the app's own §7.3 restraint is removed."""
     token = _token(request)
     if token == API_KEY:
         raise HTTPException(403, "this fake refuses the admin key on Played writes (§7.3)")
@@ -702,7 +510,6 @@ async def reset() -> dict[str, bool]:
 
 @control.post("/played")
 async def force_played(body: PlayedControl) -> dict[str, Any]:
-    """Simulate someone marking a title watched *in Jellyfin* — the other direction."""
     if body.played:
         state.played.setdefault(body.user_id, set()).add(body.item_id)
     else:
@@ -711,14 +518,7 @@ async def force_played(body: PlayedControl) -> dict[str, Any]:
 
 
 def _now_playing(item: dict[str, Any]) -> dict[str, Any]:
-    """The `NowPlayingItem` a real server would send for this library item.
-
-    Every row carries `Type`, because the app decides what a session *is* from it (§7.3), and a
-    Series row becomes its **last** known episode: decision 210(c) makes a series finish only when
-    the finished episode is the last one the server knows about, and this control surface exists so
-    a test can arm that prompt. `/_test/session`'s request body stays a bare (user, item, fraction)
-    so `e2e/helpers.js` needs no edit for any of it.
-    """
+    """A Series plays its last known episode, so a test can arm decision 210(c)'s prompt."""
     if str(item["Type"]) != "Series":
         return {
             "Id": str(item["Id"]),
@@ -783,22 +583,12 @@ async def dump() -> dict[str, Any]:
 
 # --- the Webhook plugin, which pushes rather than answers (§7.2) -------------------------
 
-# The plugin is a separate thing from the server's API: it POSTs an operator-authored template to a
-# URL the operator typed, carrying whatever headers the operator added. None of it is server state,
-# which is why `/_test/reset` leaves it alone -- a reset restores the LIBRARY, not the operator's
-# wiring -- and why the emitter refuses rather than guesses when it has none.
+# The operator's wiring, not server state: `/_test/reset` leaves it alone.
 WEBHOOK_URL = os.environ.get("FAKE_JELLYFIN_WEBHOOK_URL", "")
 WEBHOOK_TOKEN = os.environ.get("FAKE_JELLYFIN_WEBHOOK_TOKEN", "")
-# §7.2 says "token-authed" and fixes nothing else. The plugin's Generic destination carries a secret
-# exactly one way -- "Add Request Header" -- so that is the way this sends it, under the prefix
-# `api/deps.py:288` already spells. Env-overridable because the handler owns that contract and
-# publishes it (decision 365's `ops/jellyfin-webhook-template.json`); this file only has to be able
-# to get it wrong on purpose.
+# The Generic destination carries a secret only as an added request header.
 WEBHOOK_TOKEN_HEADER = os.environ.get("FAKE_JELLYFIN_WEBHOOK_TOKEN_HEADER", "X-Spielplan-Token")
-# Set by `backend/tests/conftest.py`'s fixture to an `httpx.ASGITransport` over the real app, so the
-# SAME emitter that POSTs across the compose network delivers in-process with no socket. The
-# alternative -- letting the test build the payload and post it itself -- is the one thing a double
-# must not allow, because a test cannot be wrong about a shape it authored.
+# Set by `backend/tests/conftest.py` to an ASGITransport over the real app.
 WEBHOOK_TRANSPORT: Any = None
 
 
@@ -808,40 +598,20 @@ class WebhookControl(BaseModel):
 
 
 class ItemAddedControl(BaseModel):
-    """What to emit. Every field past the first exists so the emitter can be wrong on purpose."""
+    """Every field past the first exists so the emitter can be wrong on purpose."""
 
     item_id: str
     episodes: int = 0
     token: str | None = None
     omit: tuple[str, ...] = ()
     notification_type: str = "ItemAdded"
-    # The operator who hardcoded a literal where `ops/jellyfin-webhook-template.json` renders
-    # `{{ItemType}}`, or who ticked an item type this app does not acquire. It is a lever rather
-    # than a body a test writes, because the rest of the payload still has to be the plugin's:
-    # what makes this delivery interesting is that every other field is right.
     item_type: str | None = None
     url: str | None = None
 
 
 def _item_added(item: dict[str, Any], notification_type: str) -> dict[str, Any]:
-    """One event as the Webhook plugin's template renders it.
-
-    Decision 365 ships the operator's copy of this as `ops/jellyfin-webhook-template.json` and calls
-    that file the contract; the two have to say the same thing, and this is the half a test can run
-    against. It lives here rather than in a test for the reason the rest of this file exists: the
-    plugin flattens provider ids into `Provider_<lowercase>` keys and sends an episode's series
-    identity beside the episode's own, and a test that wrote that out by hand would prove the
-    handler tolerates a shape nobody sends. An Episode carries `Provider_*` of its own as well:
-    `DataObjectHelpers.AddBaseItemData` flattens `item.ProviderIds` after its type switch, so for
-    every item (plugin v17, unchanged at v18 and v22). Those ids name the EPISODE, which is why
-    decision 369 still keys the event on `SeriesId` -- this docstring once said an episode carried
-    none, and a test asserted it against this double. [M5.2 review cycle 4: M52-C4-TTA-04]
-    `Timestamp` and `UtcTimestamp` are the same instant here because this server has no other zone.
-
-    `ItemId` and `SeriesId` go out the way the plugin renders them -- a GUID dashed, where `/Items`
-    answers the same GUID undashed -- because that difference is the plugin's and a double that
-    spelled them alike hid it from every test (`_plugin_guid`).
-    """
+    """One event as the Webhook plugin renders it; must agree with
+    `ops/jellyfin-webhook-template.json` (decision 365). An episode's `Provider_*` name the episode."""
     now = _stamp(datetime.now(UTC))
     payload: dict[str, Any] = {
         "ServerId": "fake-server",
@@ -869,13 +639,7 @@ def _item_added(item: dict[str, Any], notification_type: str) -> dict[str, Any]:
 
 @control.post("/webhook")
 async def configure_webhook(body: WebhookControl) -> dict[str, Any]:
-    """Where to push, for a stack whose compose file does not say.
-
-    `ops/compose.e2e.yml` hands this service exactly two environment variables, neither of them a
-    webhook target, so over a socket there is otherwise nowhere to put one. A run wires it here and
-    the compose file keeps saying what it says. The token is never echoed back: this answers whether
-    one is SET, which is the only part of it a caller has any business reading.
-    """
+    """Where to push. The token is never echoed back, only whether one is set."""
     global WEBHOOK_URL, WEBHOOK_TOKEN
     if body.url is not None:
         WEBHOOK_URL = body.url
@@ -891,25 +655,9 @@ async def configure_webhook(body: WebhookControl) -> dict[str, Any]:
 
 @control.post("/item-added")
 async def emit_item_added(body: ItemAddedControl) -> dict[str, Any]:
-    """Fire §7.2's webhook at the app the way the plugin does -- and refuse to fake what it cannot.
-
-    A refuser, in the four directions this milestone needs one:
-
-      * an unknown item id 404s rather than inventing a library entry, so a burst can only be
-        emitted for a series this server actually holds;
-      * `episodes = n` against a series with fewer than n of them 409s, because a debounce test that
-        quietly emitted eight events for "a burst of twelve" would pass for the wrong reason;
-      * `omit` naming a field this template never carries 409s -- tolerating a field the plugin does
-        not send is not tolerance of anything, and decision 365's two required fields are only worth
-        asserting against the shape an operator can really produce;
-      * with no target configured it 409s instead of reporting ok on a delivery that never left.
-
-    `token` is the deliberate wrongness the 401 case needs: absent, it sends the configured one;
-    `""` sends no header at all, which is the operator who never added one; anything else sends
-    that, which is the operator who typed it wrong. `item_type` is the same kind of lever for the
-    one field an operator can get wrong without getting anything else wrong. The statuses come
-    back unjudged, because what the app answered is the assertion's business and not the
-    double's.
+    """Fire §7.2's webhook the way the plugin does, refusing what it cannot fake: unknown items,
+    bursts larger than the series, omitting a field the template never sends, and no target.
+    `token`: absent sends the configured one, `""` sends no header, anything else is sent as typed.
     """
     item = _item(body.item_id)
     if body.episodes:
@@ -938,11 +686,7 @@ async def emit_item_added(body: ItemAddedControl) -> dict[str, Any]:
         raise HTTPException(409, "no webhook target configured; POST /_test/webhook first")
     token = WEBHOOK_TOKEN if body.token is None else body.token
     headers = {WEBHOOK_TOKEN_HEADER: token} if token else {}
-    # The Generic destination's `new StringContent(body, Encoding.UTF8, contentType)`, whose type
-    # is `text/plain` unless the operator adds a Content-Type header (`GenericClient.SendAsync`,
-    # plugin v17 and v18). httpx's `json=` labelled every delivery with the JSON type instead, so
-    # a handler that came to insist on it would have passed here and refused every real plugin.
-    # [M5.2 review cycle 4: M52-C4-WH-02]
+    # The plugin's Generic destination sends text/plain unless the operator adds a Content-Type.
     headers["Content-Type"] = "text/plain; charset=utf-8"
     statuses = []
     async with httpx.AsyncClient(transport=WEBHOOK_TRANSPORT, timeout=10.0) as sender:

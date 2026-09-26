@@ -10,23 +10,9 @@ import {
 } from '../helpers.js';
 
 /**
- * Admin > Users, end to end. Spec v2.1 §6.6, §3.1, §3.2, §14 risk 4; decisions 164, 166, 170.
- *
- * This file is M4.6's exit criterion, and it is a browser test rather than a `curl` transcript
- * on purpose: §6.6 says the surface *enforces* the floors, and "the route answers 409" is not
- * the same claim as "the household can see why the button is grey". The one-time password is
- * the sharpest case — §6.6's third floor is that it is shown exactly once, which is a statement
- * about a screen and a reload, not about a response body.
- *
- * Before this milestone the only account-minting UI was the wizard's fourth step, which the
- * shell redirected away from the moment an admin existed: a household could not add its third
- * member at all, and the Users tab was a dead `<span>` labelled M5.
- *
- * ONE PAGE FOR THE FILE, plus contexts for the people who are not the admin. Playwright hands
- * each test a fresh context, which would throw away the member these tests create in turn — the
- * same reason `15-tonight-group.spec.js` keeps its own pages. Desktop only, and for the same
- * reason that file is: the member's second browser and the handed-over phone are two more
- * contexts, and the phone project exists for the one-device gestures §6's preamble is about.
+ * Admin > Users, end to end (§6.6, §3.1, §3.2; decisions 164, 166, 170). In a browser because
+ * §6.6's surface *enforces* the floors, and a one-time password shown exactly once is a claim
+ * about a screen and a reload. One admin page for the file, plus contexts for the others.
  */
 test.describe.configure({ mode: 'serial' });
 
@@ -79,8 +65,7 @@ test.describe('users, roles and the account surface', () => {
 
     await expect(admin.getByTestId('users-roster')).toBeVisible();
     await expect(admin.getByTestId('user-row')).not.toHaveCount(0);
-    // §14 risk 4 is repeated here because revocation is felt here, and it prints the value:
-    // an admin can only check the origin against the address on the phone in their hand.
+    // §14 risk 4, with the value printed, so an admin can check it against the phone in hand.
     await expect(admin.getByTestId('users-public-url')).toContainText(new URL(admin.url()).origin);
 
     for (const facts of await admin.locator('[data-user-facts]').allInnerTexts()) {
@@ -100,8 +85,7 @@ test.describe('users, roles and the account surface', () => {
     third.otp = (await card.locator('code').innerText()).trim();
     expect(third.otp.length).toBeGreaterThan(8);
 
-    // §6.6's third floor. A reload is the cheapest way to ask for it a second time, and the
-    // roster carries no password field for it to come back in.
+    // §6.6's third floor: shown once. A reload asks a second time.
     await admin.reload();
     await expect(admin.getByTestId('user-otp')).toHaveCount(0);
     await expect(admin.locator('body')).not.toContainText(third.otp);
@@ -125,25 +109,20 @@ test.describe('users, roles and the account surface', () => {
     await memberPage.locator('input[type=password]').fill(third.otp);
     await memberPage.getByRole('button', { name: 'Sign in', exact: true }).click();
 
-    // §3.1: "the account is locked to a password change at first login", and the lock is the
-    // auth layer's — the shell has nowhere else to send them.
+    // §3.1: "the account is locked to a password change at first login".
     await expect(memberPage.getByRole('heading', { name: 'Choose a password' })).toBeVisible();
-    // `exact`: step 18 put an explanatory paragraph on this page that names the one-time
-    // password in a sentence, so the bare substring matches the prose as well as the label.
+    // `exact`: the page's prose names the one-time password too.
     await expect(memberPage.getByText('ONE-TIME PASSWORD', { exact: true })).toBeVisible();
     const fields = memberPage.locator('input[type=password]');
     await fields.nth(0).fill(third.otp);
     await fields.nth(1).fill(third.password);
     await fields.nth(2).fill(third.password);
     await memberPage.getByRole('button', { name: 'Set password' }).click();
-    // Not `home-greeting`: §3.1 says "passkey registration is prompted afterwards", so a
-    // browser that supports WebAuthn lands on /account instead. What the lock clearing means
-    // is that this page is no longer where the shell puts them.
+    // Not `home-greeting`: a WebAuthn browser lands on /account (§3.1's passkey prompt).
     await expect(memberPage).not.toHaveURL(/\/account\/password/);
     const me = await (await memberPage.request.get('/api/auth/me')).json();
     expect(me.must_change_password).toBe(false);
 
-    // The one-time password is spent, not merely superseded.
     const reused = await request.post('/api/auth/login', {
       data: { name: third.name, password: third.otp },
       failOnStatusCode: false
@@ -169,14 +148,13 @@ test.describe('users, roles and the account surface', () => {
     });
     expect(stale.status(), 'the password the member chose is gone').toBe(401);
 
-    // §3.1: the reissue re-arms the same lock the first issue armed.
     const signedInAgain = await request.post('/api/auth/login', {
       data: { name: third.name, password: reissued }
     });
     expect(signedInAgain.ok()).toBeTruthy();
     expect((await (await request.get('/api/auth/me')).json()).must_change_password).toBe(true);
 
-    // §6.6: a reset that left the other devices signed in would reset nothing an attacker holds.
+    // §6.6: a reset ends the other devices' sessions too.
     const orphaned = await memberPage.request.get('/api/auth/me');
     expect(orphaned.status()).toBe(401);
     third.otp = reissued;
@@ -216,46 +194,31 @@ test.describe('users, roles and the account surface', () => {
     browser,
     baseURL
   }) => {
-    // Decision 166. The role is a `Literal` on the one route that makes accounts, so this is
-    // the schema's refusal rather than a hand-written check; migration 0016's CHECK says the
-    // same thing one layer down, which `test_account_security.py` asserts against the column.
+    // Decision 166: two roles, refused by the route's schema.
     const guest = await admin.request.post('/api/admin/users', {
       data: { name: 'ghost', role: 'guest' },
       failOnStatusCode: false
     });
     expect(guest.status()).toBe(422);
 
-    // Decision 164: the wizard's member step is gone, route and all. 404 rather than the 405 a
-    // deleted-but-path-shaped route answers with: the SPA catch-all `create_app` mounts in the
-    // container declines the /api namespace at match time, so a route that is gone reads as
-    // gone here exactly as it does under pytest, where no catch-all exists (app.py `SpaFallback`).
+    // Decision 164: the wizard's member step is gone, route and all.
     const wizardRoute = await admin.request.post('/api/setup/members', {
       data: { name: 'ghost', role: 'member' },
       failOnStatusCode: false
     });
     expect(wizardRoute.status()).toBe(404);
 
-    // …and the wizard itself now runs create admin -> connectors -> bundle, and stops. It is
-    // also still reachable, which it was not: the shell used to bounce an admin to Home the
-    // instant the admin row existed, making its last two steps unreachable in the built app.
+    // …and the wizard is create admin -> connectors -> bundle, still reachable by the admin.
     await admin.goto('/setup');
-    // The steps are reached by their test id, and the progress ROLE is asserted to hold none of
-    // them. ARIA makes a progressbar's children presentational, so while the container carried
-    // both, the only controls that reach a step were announced as decoration on the first screen
-    // a household ever meets — and §3.1's sequence is walkable, which is the claim those controls
-    // exist to make. Decision 280 moved the role onto a childless sibling; this reads the same
-    // structure from the other side. [§3.1; M4.15 finding 6, decision 280]
+    // ARIA makes a progressbar's children presentational, so the step buttons are outside it
+    // (decision 280).
     const steps = admin.getByTestId('setup-step');
     await expect(steps).toHaveCount(3);
     await expect(admin.getByRole('progressbar')).toHaveCount(1);
     await expect(admin.getByRole('progressbar').getByRole('button')).toHaveCount(0);
-    // A revisiting admin lands on step two, because `onMount` skips the step whose work is done.
     await expect(admin.getByRole('heading', { name: 'Connectors' })).toBeVisible();
 
-    // §14 risk 4's warning and the origin it warns about live on step one, next to each other
-    // (plan step 19), so that is where this asks for them. The dots are the wizard's own
-    // navigation and the admin step is one click back: an operator who wants to check which
-    // origin their passkeys are bound to can reach it, which is the claim being made.
+    // §14 risk 4's warning and its origin sit together on step one, one click back.
     await steps.first().click();
     await expect(admin.getByRole('heading', { name: 'Create the admin account' })).toBeVisible();
     await expect(admin.getByTestId('setup-public-url')).toContainText(
@@ -264,19 +227,9 @@ test.describe('users, roles and the account surface', () => {
     await expect(admin.getByText(/Member accounts/i)).toHaveCount(0);
     await expect(admin.getByText(/Add to Home Screen/i)).toHaveCount(0);
 
-    // ...and it is the ADMIN's revisitable page, not a stranger's. sec-14 cut `has_admin` out
-    // of the anonymous /setup/state payload while the wizard and the shell were both still
-    // deciding from it, and `undefined` is falsy: an installed household app answered a
-    // passer-by at PUBLIC_URL/setup with the enabled "Create the admin account" form (fe-46).
-    // `required` is the bit a stranger IS given and §3.1 defines it as exactly "no admin
-    // exists", so it is what both layers now read: the shell sends this visitor to /login and
-    // the wizard has nothing to mint on the way.
+    // ...and not a stranger's: both layers read `required`, the bit a stranger is given.
     const stranger = await fresh(browser, baseURL);
-    // Whether the form ever EXISTED, not whether it is gone once the dust settles. The bounce is
-    // a client-side navigation and the wizard renders a frame before it lands, so the redirect
-    // alone leaves the visitor a mintable form to look at — asserting after the fact cannot see
-    // it. This observer is installed before hydration and answers for every frame in between,
-    // which is why the page reads `required` as well as the shell redirecting on it.
+    // Whether the form EVER existed, in any frame before the client-side redirect lands.
     await stranger.addInitScript(() => {
       window.__mintable = false;
       const look = () => {
@@ -320,17 +273,13 @@ test.describe('users, roles and the account surface', () => {
     const still = roster.find((u) => u.id === me);
     expect([still.role, still.is_active]).toEqual(['admin', true]);
 
-    // §6.6 enforces the floors on the surface too: a control that only fails once pressed
-    // teaches that the rule is a server mood rather than the household's shape.
+    // §6.6 enforces the floors on the surface too.
     await admin.reload();
     await openRow(ADMIN.name);
     for (const action of ['demote', 'delete', 'disable', 'reset-password', 'reset-pin']) {
       await expect(admin.locator(`[data-floor="${action}"]`)).toBeVisible();
     }
-    // Each of the three the floor names, by the control the household would press. The demote
-    // control is the role `<select>` and not a button, so a sweep over buttons alone reports
-    // two of the three and passes while the one §6.6 states first goes unchecked — which is
-    // what happened: `Disable` and the select were asserted disabled at no layer at all.
+    // Demote is the role `<select>`, not a button, so it is asserted by name.
     await expect(admin.getByLabel(`Role for ${ADMIN.name}`, { exact: true })).toBeDisabled();
     await expect(admin.getByRole('button', { name: 'Disable', exact: true })).toBeDisabled();
     await expect(admin.getByRole('button', { name: 'Delete', exact: true })).toBeDisabled();
@@ -340,9 +289,8 @@ test.describe('users, roles and the account surface', () => {
   // --- 8 ------------------------------------------------------------------------------------
 
   test('a PIN switch session cannot mint a credential', async ({ browser, baseURL }) => {
-    // §3.2's PIN is "for fast user-switching on a shared device". The chain this closes is:
-    // switch in with four digits, register a passkey, sign in with it — and a passkey session
-    // is user-verified, so on an admin account it walks past the 24 h re-prompt.
+    // §3.2's PIN is "for fast user-switching on a shared device". Closes the chain: switch in,
+    // register a passkey, sign in with it past the admin's 24 h re-prompt.
     const owner = await fresh(browser, baseURL);
     await login(owner);
     const member = await createMember(owner, 'pin-switch');
@@ -354,8 +302,7 @@ test.describe('users, roles and the account surface', () => {
     expect(pinSet.ok(), 'decision 170: setting a PIN costs the password').toBeTruthy();
     const memberId = (await (await memberDevice.request.get('/api/auth/me')).json()).id;
 
-    // The phone is handed over. A separate context, so the file's own admin page keeps its
-    // session — signing in elsewhere replaces only the session the incoming cookie named.
+    // A separate context, so the file's admin page keeps its session.
     const handover = await fresh(browser, baseURL);
     await login(handover);
     const switched = await handover.request.post('/api/auth/switch', {
@@ -364,7 +311,7 @@ test.describe('users, roles and the account surface', () => {
     expect(switched.ok()).toBeTruthy();
 
     const garbage = { id: 'x', rawId: 'x', type: 'public-key', response: {} };
-    /** §3.2's credential routes, each given the strongest body the session could send. */
+    // §3.2's credential routes, each given the strongest body the session could send.
     const minting = (password) => [
       ['POST', '/api/auth/passkey/register/options', {}],
       ['POST', '/api/auth/passkey/register', { ceremony_id: 'x', credential: garbage }],
@@ -388,17 +335,11 @@ test.describe('users, roles and the account surface', () => {
     }
     await refusedEverything(handover, member.password, 'switched into the member');
 
-    // The admin surface is shut for this session too, but for being a member's rather than for
-    // being a PIN's: `deps.admin_user` checks the role before it checks the re-prompt, so a
-    // switch into a member never reaches the 401 — the switch below is the one that does, and
-    // it is also the one the chain was aiming at.
+    // Refused for the role before the re-prompt is checked; the admin switch below reaches it.
     const byRole = await handover.request.get('/api/admin/users', { failOnStatusCode: false });
     expect(byRole.status(), 'a member session is refused for being a member').toBe(403);
 
-    // Four digits again, into the ADMIN account. §3.2 lets any account set a PIN, so the
-    // shared device can switch into the one that matters — and `create_session`'s CASE keeps
-    // the admin stamp off a PIN session, so the surface answers §3.2's 24 h re-prompt instead
-    // of opening. The passkey that would have walked past that re-prompt is refused above.
+    // Into the ADMIN account: a PIN session carries no admin stamp, so §3.2's re-prompt answers.
     const adminPin = '9137';
     const pinned = await admin.request.post('/api/auth/pin', {
       data: { pin: adminPin, current_password: ADMIN.password }
@@ -411,7 +352,6 @@ test.describe('users, roles and the account surface', () => {
     expect(escalated.ok(), 'the shared device switches into the admin profile').toBeTruthy();
 
     await refusedEverything(memberDevice, ADMIN.password, 'switched into the admin');
-    // The header the shell reads to know it is a re-prompt rather than a sign-out.
     const shut = await memberDevice.request.get('/api/admin/users', { failOnStatusCode: false });
     expect(shut.status()).toBe(401);
     expect(shut.headers()['x-spielplan-reauth']).toBe('admin');
@@ -425,11 +365,7 @@ test.describe('users, roles and the account surface', () => {
     browserName
   }) => {
     test.skip(browserName !== 'chromium', 'the virtual authenticator is a Chromium feature');
-    // §6.6: "passkey list with per-credential revoke". The credential has to be a real one,
-    // because the gap this closes is exactly the gap between the two halves: the roster
-    // carried a count, the revoke route took an id, and nothing in the app turned one into
-    // the other — so the admin's only remedy for a lost phone was a password reset, which
-    // §3.2 says leaves every passkey registered.
+    // §6.6: "passkey list with per-credential revoke", on a real credential.
     const member = await createMember(admin, 'passkey-revoke');
     const device = await fresh(browser, baseURL);
     const cdp = await device.context().newCDPSession(device);
@@ -457,12 +393,10 @@ test.describe('users, roles and the account surface', () => {
     await expect(credential).toContainText('lost-phone');
     await credential.getByRole('button', { name: 'Revoke' }).click();
 
-    // The count on the row head comes from the roster, re-read after the write, so this is the
-    // server agreeing rather than the list crossing itself out.
+    // The count comes from the roster, re-read: the server agreeing.
     await expect(row.locator('[data-user-facts]')).toContainText('0 passkeys');
     await expect(row.locator('[data-empty="passkeys"]')).toBeVisible();
 
-    // …and it was that account's credential, not a row the admin happened to be looking at.
     await device.goto('/account');
     await expect(device.locator('[data-empty="passkeys"]')).toBeVisible();
   });
@@ -470,11 +404,7 @@ test.describe('users, roles and the account surface', () => {
   // --- 10 -----------------------------------------------------------------------------------
 
   test('the row editor links, re-links and unlinks Jellyfin', async () => {
-    // §6.6 puts "Jellyfin re-link / unlink" in the row editor and plan step 17 wires the two
-    // routes that already existed; the screen used to point at the Connectors tab instead,
-    // which made the admin find the same person twice to act on what this row just told them.
-    // 08-jellyfin.spec.js configured the connector and unlinked its account again, so both
-    // fake users are free.
+    // §6.6: "Jellyfin re-link / unlink" in the row editor. 08-jellyfin left both fake users free.
     const member = await createMember(admin, 'jellyfin-link');
     await admin.goto('/admin/users');
     const row = await openRow(member.name);
@@ -482,8 +412,7 @@ test.describe('users, roles and the account surface', () => {
     await jellyfin.getByRole('combobox').selectOption({ label: 'patrick' });
     await jellyfin.getByRole('button', { name: 'Link', exact: true }).click();
 
-    // §7.3: a link with no sign-in attributes playback and feeds the P(seen) prior but cannot
-    // write Played state, which is the "needs sign-in" the roster line reports.
+    // §7.3: without a sign-in the link cannot write Played state.
     await expect(row.locator('[data-user-facts]')).toContainText('Jellyfin needs sign-in');
 
     await jellyfin.getByPlaceholder('jellyfin username').fill('patrick');
@@ -492,7 +421,7 @@ test.describe('users, roles and the account surface', () => {
     await expect(row.locator('[data-user-facts]')).toContainText('Jellyfin linked');
     await expect(jellyfin.locator('[data-jellyfin="token"]')).toBeVisible();
 
-    // §3.3: the map is optional, so the editor that makes it has to be able to unmake it.
+    // §3.3: the link is optional.
     await jellyfin.getByRole('button', { name: 'Unlink' }).click();
     await expect(row.locator('[data-user-facts]')).toContainText('Jellyfin unlinked');
   });

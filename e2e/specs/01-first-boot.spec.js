@@ -3,26 +3,11 @@ import { expect, test } from '@playwright/test';
 import { ADMIN, createAdminThroughWizard, health, setupState } from '../helpers.js';
 
 /**
- * §3.1 — first boot is a defined sequence, and a bundle-less app is a legal state.
- * §10 — the swap sequence: validate → stage → load → transactionally flip, and the backend loads
- *       the flipped bundle itself (decision 497), so the restart is owed only when that fails.
- * §12 — the M0 exit criterion: "bundle imports clean".
- *
- * This file needs a database with no admin. `node e2e/reset.mjs` does that, and
- * `node e2e/run.mjs` runs the whole suite from a cold start. Without a reset the file skips
- * rather than pretending to have passed.
- *
- * One page for the whole file, on purpose: this is a *sequence*, and Playwright's default of a
- * fresh browser context per test would throw away the session the wizard just established —
- * which is not a thing that happens to a real operator.
+ * §3.1 first boot, §10 the swap sequence, §12 "bundle imports clean". Needs a database with no
+ * admin (`node e2e/reset.mjs`), else it skips. One page for the whole file: it is a sequence.
  */
-// Serial, and never retried. Every step here has a side effect that persists — once "creating
-// the admin" has run, the admin exists — so a retry does not re-run the sequence, it meets an app
-// that is already past first boot and can only take the `beforeAll` skip below. Playwright scores
-// a [failed, then skipped] test as `flaky` and exits 0 for it, and `run.mjs` reads that 0 as
-// phase 1 having imported a bundle: §12's M0 exit criterion ("bundle imports clean") would then
-// be reported green by a run in which the import failed. `retries: 0` here rather than in the
-// config, because 14/15/16 lean on the retry the config grants CI (decision 185).
+// Never retried: a retry meets an app past first boot and skips, which Playwright scores as flaky
+// and exits 0 for, so a failed import would pass (decision 185).
 test.describe.configure({ mode: 'serial', retries: 0 });
 
 test.describe('first boot @first-boot', () => {
@@ -32,8 +17,7 @@ test.describe('first boot @first-boot', () => {
   test.beforeAll(async ({ browser, baseURL }) => {
     page = await browser.newPage({ baseURL });
     const state = await setupState(page.request);
-    // `required`, not `has_admin`: this page holds no session yet, and an anonymous
-    // /api/setup/state carries only that bit and the note (sec-14).
+    // `required`: an anonymous /api/setup/state carries only that bit and the note (sec-14).
     test.skip(!state.required, 'needs a fresh database — run node e2e/reset.mjs');
   });
 
@@ -42,8 +26,6 @@ test.describe('first boot @first-boot', () => {
   });
 
   test('a bundle-less app boots, serves the wizard, and says so', async () => {
-    // §3.1: "the app boots with /data/artifacts and artifact_bundle empty, serving the setup
-    // wizard and admin routes" — the absence of a bundle is reported, not an error.
     const before = await health(page.request);
     expect(before.ok, 'the app must be healthy with no bundle').toBe(true);
     expect(before.bundle).toBeNull();
@@ -54,21 +36,14 @@ test.describe('first boot @first-boot', () => {
   });
 
   test('the first step warns that PUBLIC_URL is load-bearing for passkeys', async () => {
-    // §14.4: changing PUBLIC_URL invalidates every registered credential. The wizard has to
-    // say so before anyone registers one.
     await page.goto('/setup');
-    // \s+ rather than a literal space: the paragraph wraps in the source, so the rendered text
-    // node carries a newline mid-sentence.
+    // \s+: the paragraph wraps in the source, so the text node carries a newline.
     await expect(
       page.getByText(/Passkeys are bound to the public origin\.\s+Changing PUBLIC_URL/)
     ).toBeVisible();
     await expect(page.getByText(/invalidates every\s+registered credential/)).toBeVisible();
 
-    // The warning is prose and can only be prose; the VALUE is a fact, and matching prose was
-    // all this test did — cs-33's defect was a page that warned about `PUBLIC_URL` while
-    // printing the literal token, so the operator could not tell which origin they were about
-    // to bind every credential to without reading the server's environment. Compare the
-    // rendered origin against what the server says PUBLIC_URL is, not against a sentence.
+    // The rendered origin must be the server's actual PUBLIC_URL, not the literal token.
     const config = await page.request.get('/api/config');
     expect(config.ok()).toBeTruthy();
     const publicUrl = (await config.json()).public_url;
@@ -82,11 +57,7 @@ test.describe('first boot @first-boot', () => {
   });
 
   test('the wizard asks for no push permission and runs no install walkthrough', async () => {
-    // §6's preamble puts the gesture-bound push prompt and the Add-to-Home-Screen guidance on
-    // each MEMBER's own device, and §12 schedules that onboarding in M2; decision 164 then took
-    // the step out of the wizard rather than building it here. So this is a negative claim
-    // about the operator's screen, and a negative claim needs its own test — the warning test
-    // above would pass just as happily with a permission prompt fired underneath it.
+    // Push and install onboarding belong on each member's own device (decision 164).
     await page.addInitScript(() => {
       window.__pushAsks = 0;
       if (window.Notification) {
@@ -98,8 +69,7 @@ test.describe('first boot @first-boot', () => {
     });
     await page.goto('/setup');
 
-    // Every step, reached through the progress dots rather than by assuming which one the
-    // wizard opens on: §3.1's sequence is three steps and the clause is about all of them.
+    // Every step, reached through the progress dots.
     for (const title of ['Create the admin account', 'Connectors', 'Import the bundle']) {
       await page.getByRole('button', { name: new RegExp(`^${title}`) }).click();
       await expect(page.getByRole('heading', { name: title })).toBeVisible();
@@ -110,8 +80,7 @@ test.describe('first boot @first-boot', () => {
   });
 
   test('an admin cannot be created twice', async ({ playwright, baseURL }) => {
-    // Otherwise this is a privilege-escalation endpoint reachable by anyone who can see the
-    // setup page. Asked anonymously, because that is who would ask.
+    // Asked anonymously, because that is who would try the escalation.
     const anonymous = await playwright.request.newContext({ baseURL });
     const res = await anonymous.post('/api/setup/admin', {
       data: { name: 'second-admin', password: 'another-long-password' },
@@ -126,9 +95,7 @@ test.describe('first boot @first-boot', () => {
     await expect(page.getByRole('heading', { name: 'Nothing to show yet' })).toBeVisible();
     await expect(page.getByText(/That is a legal state/)).toBeVisible();
     await expect(page.getByRole('link', { name: 'Import a bundle' })).toBeVisible();
-    // Two places say it, and both are deliberate: the header chip is the standing reminder,
-    // the count line is the answer to "why is this list empty". Assert each explicitly rather
-    // than letting a bare text match hit both and trip strict mode.
+    // Both places say it; each is asserted apart so a bare text match does not trip strict mode.
     await expect(page.getByRole('link', { name: 'no bundle imported' })).toBeVisible();
     await expect(page.locator('.count')).toContainText('no bundle imported');
   });
@@ -138,7 +105,6 @@ test.describe('first boot @first-boot', () => {
     await page.getByRole('button', { name: 'Validate bundle' }).click();
     await expect(page.locator('.verdict')).toHaveText('valid');
 
-    // Each of these is a rule the corpus paid for. The report is where they become visible.
     for (const rule of [
       'rule7-denylist',
       'rule5-kind',
@@ -163,19 +129,8 @@ test.describe('first boot @first-boot', () => {
   });
 
   test('import runs the swap sequence and serves the bundle without a restart', async () => {
-    // The import is no longer this request's to wait for. §5.3 files it as a job with a
-    // "minutes" budget and M4.14 moved it there: `POST /api/admin/bundle/import` answers 202
-    // the moment validation passes, and the load, the rebuild set and the flip run in the
-    // worker, which is also where the report this screen ends up showing is stored
-    // (decision 253). So the assertion that used to follow the click — a finding the load
-    // writes — now follows a PHASE, and the click proves nothing on its own.
-    //
-    // The budget is the worker's and not this suite's, which is why this test carries numbers
-    // its neighbours do not: the loop wakes every TICK_SECONDS (20 s) to claim a queued row and
-    // the fixture bundle then imports in seconds, against a config default of 60 s per test and
-    // 10 s per assertion. Raised here rather than in `playwright.config.js` because one test in
-    // the suite waits on the tick, and a suite-wide timeout is the thing that stops naming what
-    // it is waiting for. [M4.14 step E6, findings 2.1 and 2.3]
+    // The import is a worker job (decision 253): the request answers 202 and the load runs on
+    // the next 20 s tick, so this one test waits longer than the config default.
     test.setTimeout(180_000);
 
     await page.goto('/admin/data');
@@ -183,37 +138,27 @@ test.describe('first boot @first-boot', () => {
     await expect(page.locator('.verdict')).toHaveText('valid');
     await page.getByRole('button', { name: 'Import and activate' }).click();
 
-    // The window the synchronous import had no name for. `data-phase` is the component's own
-    // machine ($lib/bundleImport.svelte.js) and `running` is observable however fast the worker
-    // is: the `job_run` row is created BY this request, so the page's first poll cannot find it
-    // already terminal, and the earliest a terminal phase reaches the screen is the second read
-    // one POLL_INTERVAL_MS later.
+    // `running` is always observable: the request creates the `job_run` row, so the first poll
+    // cannot find it terminal.
     const box = page.locator('[data-phase]');
     await expect(box).toHaveAttribute('data-phase', 'running', { timeout: 30_000 });
-    // And the destructive button is dark for the whole of it, which is the state a second press
-    // would have raced §10's staging tree through — the one window `importDisabled` gained and
-    // the one Playwright can actually click in. [M4.14 finding 2.3]
+    // A second press would race §10's staging tree.
     await expect(page.getByRole('button', { name: 'Import and activate' })).toBeDisabled();
 
-    // One tick of the worker loop plus the import itself. What is rendered after this is the
-    // report the WORKER stored on its `job_run` row, not the validation the 202 carried: the
-    // three findings below are all written by the load, which no longer happens in a request.
+    // The findings below are the worker's load report, not the 202's validation.
     await expect(box).toHaveAttribute('data-phase', 'imported', { timeout: 120_000 });
 
     await expect(page.locator('.finding', { hasText: 'artifacts staged to' })).toBeVisible();
     await expect(page.locator('.finding', { hasText: 'vocabulary v1' })).toBeVisible();
     await expect(page.locator('.finding', { hasText: 'authored axis definition' })).toBeVisible();
 
-    // Decision 497: the read that reported the flip is the read the backend re-pinned on, so the
-    // screen says the bundle is live and names no command - the first household's wizard ended on
-    // "Restart backend and worker" over a header saying "no bundle imported", and a shell.
+    // Decision 497: the backend loads the flipped bundle itself, so no restart is asked for.
     await expect(page.locator('[data-served="live"]')).toContainText('test-v1 is live');
     await expect(page.locator('[data-served="restart"]')).toHaveCount(0);
 
     await page.reload();
     await expect(page.locator('.bundle-active')).toContainText('active: test-v1');
     await expect(page.locator('.bundle-active .warn')).toHaveCount(0);
-    // The header's claim moves with it, on the same process that booted bundle-less.
     await expect(page.getByRole('link', { name: 'no bundle imported' })).toHaveCount(0);
     expect((await health(page.request)).bundle).toBe('test-v1');
   });

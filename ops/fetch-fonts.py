@@ -1,45 +1,6 @@
-"""Regenerate the self-hosted webfont subsets under `frontend/static/fonts/`.
+"""Regenerate the self-hosted webfont subsets and `fonts.css` under `frontend/static/fonts/`.
 
-`fonts.css:4` has told its reader to "Regenerate with ops/fetch-fonts.py" since M0, and no such
-script has ever existed -- so the one file in the app that claims to be machine-generated has
-only ever been hand-edited, and the hand-edit was visible in it: every `@font-face` block carried
-a blank line where the `/* latin */` comment it had been pasted from used to be. This is that
-script. [M4.15 finding 12]
-
-**Self-hosting is the constraint, not a preference.** §6's preamble makes Spielplan an installable
-PWA a household opens over the LAN and over Tailscale, and `app.html:13-15` says the same thing
-over its own `<link>`: "the app has to render on the LAN and over Tailscale with no route to the
-internet, and a blocking stylesheet from a third-party host would make the shell wait on something
-it may not be able to reach." That is the whole reason this is a script and not a `<link>` to
-fonts.googleapis.com, and it has one consequence worth stating plainly: a weight that cannot be
-fetched at *runtime* cannot be declared at *build time*. Every face this writes is backed by a
-file in the repository, and `test_every_declared_font_face_ships_its_own_file` holds it there.
-
-**Both families are variable fonts, and that is why several weights share one file.** Google's
-css2 endpoint answers a modern browser with one woff2 per (family, subset) carrying a `wght` axis
--- Space Grotesk 300-700, JetBrains Mono 400-800 -- and emits a separate `@font-face` per weight
-asked for, all pointing at it. Those heavier faces are real instances of the axis, not a
-synthesised smear of the regular. M4.15's finding 12 read `-400-` in the file names and concluded
-the opposite, and both repairs it proposed would have made the app worse: deleting the faces hands
-bold back to the browser's synthesiser, and copying one file under three names makes
-`service-worker.js`'s all-or-nothing `addAll` push the same bytes to the phone three times before
-the shell will open offline. So the convention `<family>-<weight>-<subset>.woff2` records the
-*base* weight of the faces a file serves, not the only weight it can render. If Google ever goes
-back to static per-weight files the URLs stop coinciding, and this writes one file per weight with
-its own weight in its name, with no edit here.
-
-It is a one-shot maintenance script and deliberately not wired into anything -- no npm script, no
-Dockerfile step, no CI job. The build must never reach for the network, which is the same rule the
-app itself is held to. What keeps the output honest between runs is the pair of guards in
-`backend/tests/test_static_contracts.py`: one re-renders the stylesheet from `render_css()` below
-and fails on any difference, the other checks every `src` against the files on disk.
-
-Usage:
-
-    python ops/fetch-fonts.py
-
-Rewrites `frontend/static/fonts/*.woff2` and `frontend/static/fonts/fonts.css`. Both are
-committed. [M4.15 step 8, decision 268]
+    python ops/fetch-fonts.py    # one-shot and wired into nothing: the build stays offline
 """
 
 from __future__ import annotations
@@ -56,24 +17,16 @@ REPO = Path(__file__).resolve().parents[1]
 FONTS = REPO / "frontend" / "static" / "fonts"
 STYLESHEET = FONTS / "fonts.css"
 
-# Google's css2 endpoint answers by User-Agent: an agent it does not read as woff2-capable is sent
-# ttf, and one it does not read as variable-capable is sent static per-weight files. The primary
-# form factor is an iPhone 13 on WebKit, which is both, so ask as a current desktop browser --
-# urllib's own UA collects the 2013 fallback, which is not what the phone would ever load.
+# css2 answers by User-Agent; urllib's own UA gets ttf and static per-weight files.
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
     "(KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 )
 
-# latin and latin-ext only. §6.8's two faces carry English copy, film titles and model ids; the
-# greek, cyrillic and vietnamese subsets Google also offers would be dead weight in a shell cache
-# `service-worker.js` fills all-or-nothing before the app will open offline.
+# Other subsets would be dead weight in the all-or-nothing service-worker precache.
 SUBSETS = ("latin-ext", "latin")
 
-# The subset ranges Google publishes, held as constants so `render_css()` is a pure function of
-# this module and the files on disk -- which is what lets a test re-render the stylesheet with no
-# network. `fetch_faces()` asserts the live answer still matches, so a change on Google's side
-# fails loudly here instead of quietly narrowing what the app can render.
+# Constants so a test can re-render the stylesheet offline; `fetch_faces()` checks them live.
 UNICODE_RANGES = {
     "latin-ext": (
         "U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, "
@@ -90,18 +43,12 @@ UNICODE_RANGES = {
 
 @dataclass(frozen=True)
 class Family:
-    """A face §6.8 names, the file-name slug it takes, and the weights the app spends."""
-
     name: str
     slug: str
     weights: tuple[int, ...]
 
 
-# §6.8 gives the app two faces: Space Grotesk for display and body, JetBrains Mono for "every
-# model number, ID and data annotation". The weights are the ones the components actually ask
-# for. `design.css` and the component style blocks spend 500, 600 and 700; 600 is not declared
-# because CSS font matching searches *upward* for a target above 500, so every `font-weight: 600`
-# site resolves to the 700 face rather than falling back to the regular.
+# §6.8's two faces. 600 is not declared: font matching searches upward above 500, so it gets 700.
 FAMILIES = (
     Family("Space Grotesk", "space-grotesk", (400, 500, 700)),
     Family("JetBrains Mono", "jetbrains-mono", (400, 500)),
@@ -140,8 +87,7 @@ FACE = """
 }}
 """
 
-# WOFF2 spec, Table 1: the tags a table directory entry can name by its 5-bit index, in order.
-# Index 63 means the four-byte tag follows inline instead.
+# WOFF2 spec, Table 1: tags by 5-bit index. Index 63 means the tag follows inline.
 WOFF2_KNOWN_TAGS = (
     "cmap", "head", "hhea", "hmtx", "maxp", "name", "OS/2", "post", "cvt ", "fpgm",
     "glyf", "loca", "prep", "CFF ", "VORG", "EBDT", "EBLC", "gasp", "hdmx", "kern",
@@ -154,14 +100,7 @@ WOFF2_KNOWN_TAGS = (
 
 
 def woff2_tables(data: bytes) -> list[str]:
-    """The table tags a woff2 declares, read from its directory without decompressing it.
-
-    woff2 brotli-compresses the table *data*; the directory naming the tables is in the clear.
-    That is enough for the only question the stylesheet raises, and it means neither this script
-    nor the guard that imports it needs a brotli decompressor the repo does not depend on: a file
-    carrying `fvar` is a variable font, so the extra weights declared against it are instances of
-    its axis rather than faces the browser would have to fake.
-    """
+    """The table tags a woff2 declares, read from its uncompressed directory (no brotli needed)."""
     if data[:4] != b"wOF2":
         raise ValueError("not a woff2 file")
     count = int.from_bytes(data[12:14], "big")
@@ -188,9 +127,7 @@ def woff2_tables(data: bytes) -> list[str]:
         else:
             tag = WOFF2_KNOWN_TAGS[index]
         base128()  # origLength
-        # `glyf` and `loca` are the two tables woff2 can restructure, and for them transform
-        # version 0 *is* the transform; every other table is transformed only at a non-zero
-        # version. Either way a transformed entry carries a second length to step over.
+        # For glyf/loca, version 0 IS the transform; a transformed entry has a second length.
         version = (flags >> 6) & 0x3
         transformed = version == 0 if tag in ("glyf", "loca") else version != 0
         if transformed:
@@ -200,13 +137,8 @@ def woff2_tables(data: bytes) -> list[str]:
 
 
 def file_for(family: Family, weight: int, subset: str, fonts_dir: Path = FONTS) -> str:
-    """The file a face is served by, decided from the repository rather than from a flag.
-
-    A static family ships one file per weight and the name carries that weight. A variable family
-    ships one file per subset, named for the base weight of the faces it serves, and the heavier
-    faces instance its `wght` axis. Which world this is is a fact about the files on disk -- an
-    `fvar` table -- so the stylesheet can be re-rendered offline and a guard needs no network.
-    """
+    """A static family has a file per weight; a variable one (`fvar`) serves every weight from
+    the file named for its base weight."""
     own = f"{family.slug}-{weight}-{subset}.woff2"
     if (fonts_dir / own).is_file():
         return own
@@ -220,7 +152,6 @@ def file_for(family: Family, weight: int, subset: str, fonts_dir: Path = FONTS) 
 
 
 def render_css(families: tuple[Family, ...] = FAMILIES, fonts_dir: Path = FONTS) -> str:
-    """The whole stylesheet, as a pure function of the families above and the files on disk."""
     blocks = [HEADER]
     for family in families:
         for weight in family.weights:
@@ -254,14 +185,7 @@ _BLOCK = re.compile(r"/\*\s*([a-z0-9-]+)\s*\*/\s*@font-face\s*\{(.*?)\}", re.S)
 
 
 def fetch_faces(family: Family) -> dict[tuple[int, str], str]:
-    """The woff2 URL Google serves for each (weight, subset) of a family.
-
-    The request is itself the check that the declared weights are real. css2 answers a weight
-    outside the family's `wght` axis with HTTP 400, so asking for all of them at once is how a
-    face that could never render is caught here rather than in a browser nobody is watching --
-    which matters because the axis bound lives inside the brotli stream, where the offline guard
-    cannot reach it.
-    """
+    """The woff2 URL per (weight, subset). css2 answers a weight outside the axis with HTTP 400."""
     weights = ";".join(str(w) for w in family.weights)
     query = f"family={urllib.parse.quote_plus(family.name)}:wght@{weights}&display=swap"
     try:
@@ -297,9 +221,8 @@ def main() -> int:
     downloads: dict[str, bytes] = {}
     for family in FAMILIES:
         faces = fetch_faces(family)
-        # One name per distinct URL, carrying the base weight of the faces that share it. Sorted
-        # by weight so `setdefault` keeps the lowest, which is the name app.html preloads and
-        # service-worker.js precaches.
+        # One name per distinct URL; sorted so `setdefault` keeps the lowest weight, the name
+        # app.html preloads.
         names: dict[str, str] = {}
         for weight, subset in sorted(faces, key=lambda key: (key[1], key[0])):
             names.setdefault(faces[(weight, subset)], f"{family.slug}-{weight}-{subset}.woff2")
@@ -316,9 +239,7 @@ def main() -> int:
         kind = "variable" if "fvar" in woff2_tables(data) else "static"
         print(f"  wrote {name} ({len(data)} bytes, {kind})")
 
-    # A generator that only ever appends leaves the last run's files behind, and
-    # service-worker.js precaches this directory whole with an all-or-nothing addAll -- so a
-    # subset no face declares any more is bytes every phone downloads before the shell opens.
+    # The service worker precaches this whole directory, so a stale file costs every phone.
     for path in sorted(FONTS.glob("*.woff2")):
         if path.name not in downloads:
             path.unlink()
