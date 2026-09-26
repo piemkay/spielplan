@@ -1,24 +1,6 @@
 <script>
-  /**
-   * §6.6 Data's acquisition board. Spec v2.1 §6.6 Data, §8; decisions 336, 345, 424, 444.
-   *
-   * One card, one component, in `BundleImport.svelte`'s pattern: it fetches its own envelope, so a
-   * board that cannot load says so here and never takes the bundle wizard above it down.
-   *
-   * THE REASON IS THE PRODUCT. `0005_ledger.sql` comments `acquisition_job.reason` "shown verbatim
-   * on the admin board", and the stage that parked a job wrote that sentence for the operator: it
-   * is printed whole, wrapped rather than cut, and a refusal from an action is printed the same way
-   * beside the job it refused. If a reason reads badly, the fix is in its writer (plan section 9).
-   *
-   * PARKED IS NOT BROKEN (decision 336). The placement sweep has parked thin-but-placed titles at
-   * stage 2 since M4.13 - the title is ready, the job waits for enrichment - so parked, failed and
-   * abandoned are three tones and three sentences, and each job offers only the actions its state
-   * admits, as the server lists them in `actions`.
-   *
-   * A JOB SHOWS ITS DOCUMENTS, NEVER THE BYTES (decision 345). The disclosure lists the
-   * `raw_document` metadata the detail route returns, with the URL as text and not as a link: the
-   * bytes are on the worker's volume alone, and a link would be a door the backend cannot open.
-   */
+  // Reasons print whole: one that reads badly is fixed in its writer. Document URLs are text, not
+  // links: the bytes live on the worker's volume, which the backend cannot serve.
   import { onMount } from 'svelte';
   import { api, get } from '$lib/api.js';
   import {
@@ -37,8 +19,7 @@
 
   let board = $state(null);
   let error = $state('');
-  // Per job, keyed by title id, because each row acts on its own and a refusal belongs beside the
-  // job it refused rather than in one line at the top of a list of two hundred.
+  // Per job, keyed by title id, so a refusal shows beside the job it refused.
   let refusals = $state({});
   let busy = $state({});
   let fromStage = $state({});
@@ -295,9 +276,7 @@
     grid-template-columns: repeat(10, 1fr);
     gap: 3px;
   }
-  /* The progress ramp, never the accent: how far a job got is a fact about the pipeline and not a
-     choice anybody made (§6.8; decision 276). Behind it at reading weight, where it stands in full
-     ink, the rest the line the UI is drawn with. */
+  /* The progress ramp, not the accent: progress is never a selection (§6.8). */
   .seg {
     height: 6px;
     border-radius: 2px;
@@ -309,9 +288,6 @@
   .seg.current {
     background: var(--progress-now);
   }
-  /* Decision 336's three outcomes, told apart by edge and by sentence and never by the ember:
-     waiting is the bone status tone, broken is the error copy's quoted accent, stopped is the
-     quietest ink, and a job moving or finished is drawn on the progress ramp. */
   .job.waiting {
     border-left-color: var(--status);
     border-left-style: dashed;
@@ -341,8 +317,6 @@
   .job.stopped .state {
     color: var(--ink-5);
   }
-  /* Whole and wrapped: a reason is a sentence the operator acts on, so it may run to as many lines
-     as it has, and a long unbroken token (a URL, a hash) breaks rather than widening the phone. */
   .reason,
   .refusal {
     margin: 0;
@@ -390,9 +364,7 @@
   }
 
   @media (pointer: coarse) {
-    /* §6 preamble's 48 px floor on the narrow axis too: design.css's coarse block raises a
-       `select`'s height and never its width, and a stage picker is the control a thumb reaches
-       for on the phone the board is read on. */
+    /* design.css's coarse block raises a select's height, never its width. */
     .from select {
       min-width: var(--touch);
     }

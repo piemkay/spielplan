@@ -1,15 +1,5 @@
 /**
  * @vitest-environment jsdom
- *
- * §6.6's System card with all five of its things. Spec v2.1 §6.6, §2; decisions 182, 454.
- *
- * Decision 182 shipped three facts and `18-system.spec.js` held the card to exactly three, so the
- * absence of the rest could not drift into a claim. Decision 454 adds queue depth, last syncs and
- * the web process's recent log lines, and keeps the card read-only: the log level filter is its one
- * control and it asks the server nothing. Both halves are asserted here against the payload
- * `api/admin.system_card` answers, because "issues no request" is a count, not a screenshot.
- *
- * Named `system-page.test.js` because SvelteKit reserves the `+` prefix inside `src/routes`.
  */
 
 import { flushSync, mount, unmount } from 'svelte';
@@ -22,7 +12,7 @@ import SystemPage from './+page.svelte';
 
 const FACTS = ['backup', 'jobs', 'last_syncs', 'logs', 'queue', 'secrets'];
 
-/** `GET /api/admin/system`, the six keys decision 454 settles. */
+/** `GET /api/admin/system`'s payload. */
 const card = () => ({
   backup: { at: null, bytes: null, stale: true, stale_after_hours: 36 },
   jobs: [
@@ -116,7 +106,6 @@ describe("the System card's six facts (decision 454)", () => {
       expect(never.textContent).toContain('never succeeded');
       const synced = target.querySelector('[data-last-sync="jellyfin-seen-sync"]');
       expect(synced.textContent).toMatch(/ago/);
-      // The scope is stated, so the panel does not imply the worker's log.
       expect(target.querySelector('[data-testid="system-logs"]').textContent).toContain(
         'container log'
       );
@@ -160,9 +149,7 @@ describe("the System card's six facts (decision 454)", () => {
   });
 
   it("lifts the worker's storage check into a fact of its own, with the chown when it fails", async () => {
-    // C10.2. The row is a job like any other on the server - no seventh key joins the card - and
-    // a fact here, because on the install that needs it every other red row is this one wearing
-    // its own path. The worker's sentence is shown without the exception class `_tick` prefixes.
+    // Shown without the exception class the worker's `_tick` prefixes.
     const failing = card();
     failing.jobs.push({
       name: 'storage-check',

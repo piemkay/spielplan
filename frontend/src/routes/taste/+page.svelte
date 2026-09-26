@@ -1,8 +1,4 @@
 <script>
-  /**
-   * §12's Taste placeholder, in the member register for the reason `map/+page.svelte` gives
-   * (decisions 486, 488): it names no milestone, and its points are plain words.
-   */
   import Milestone from '$lib/components/Milestone.svelte';
 
   const points = [

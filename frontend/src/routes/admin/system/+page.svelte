@@ -1,36 +1,13 @@
 <script>
-  /**
-   * Admin → System. Spec v2.1 §6.6, §2 (Backups, Configuration), §14.3; decisions 182, 454.
-   *
-   * §6.6 names five things for this card — "job health, queue depth, last syncs, backup
-   * status, logs". Decision 182 shipped three at M4.7, because that milestone gave `job_run` and
-   * secrets custody a readable state and would otherwise have shipped them with no reader; decision
-   * 454 adds the rest: the acquisition queue by state, each connector job's last SUCCESSFUL run --
-   * which `jobs` cannot say on the install whose sync has failed since Tuesday -- and this web
-   * process's own recent log lines. The worker's lines stay in its container log and its failures
-   * in `jobs`, and the logs section says so rather than implying a log the page does not have.
-   *
-   * READ-ONLY, deliberately, and still so with six facts (plan E5). Rotation and repair are
-   * `spielplan-secrets`, the dump is the worker's, and draining the queue is an acquisition action
-   * that belongs on the board if anywhere; §2 makes rotation "an explicit admin action" by an
-   * operator. The log level filter is the one control, and it narrows what was already read and
-   * asks the server nothing.
-   *
-   * The key itself never appears. §14.3: a Jellyfin API key is unscoped and admin-equivalent,
-   * and SECRETS_KEY is what opens the stored one — so the fingerprint below is a truncated
-   * digest (`core/secrets.key_fingerprint`), enough to compare this install against the `.env`
-   * beside the dumps and no use for anything else.
-   */
+  // Read-only: the log level filter is the one control, and it asks the server nothing. The key
+  // itself never appears, only its truncated fingerprint (§14.3).
   import { onMount } from 'svelte';
   import { get } from '$lib/api.js';
   import AdminTabs from '$lib/components/AdminTabs.svelte';
 
-  // `card`, not `state`: `let state = $state(...)` is what makes `npm run check` report
-  // "Block-scoped variable '$state' used before its declaration" on the sibling Data tab, and a
-  // new surface should not add a line to a list somebody has to keep reading past.
+  // `card`, not `state`: `let state = $state(...)` trips a svelte-check error.
   let card = $state(null);
   let error = $state('');
-  // The log panel's level, applied here to what the one read returned (decision 454).
   let level = $state('all');
 
   onMount(async () => {
@@ -43,12 +20,7 @@
 
   const stamp = (iso) => (iso ? new Date(iso).toLocaleString() : null);
 
-  /**
-   * How long ago, in the coarsest unit that is still true.
-   *
-   * The age is the fact, not the timestamp: §2 promises one dump a night, so "19 hours ago"
-   * answers the question and "2026-09-06 03:04:12" makes the reader do the subtraction.
-   */
+  // The age is the fact: §2 promises one dump a night.
   function ago(iso) {
     if (!iso) return '';
     const minutes = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60000));
@@ -62,19 +34,10 @@
   const megabytes = (bytes) =>
     typeof bytes === 'number' ? `${(bytes / 1_000_000).toFixed(1)} MB` : null;
 
-  /**
-   * A job's outcome in one word. `finished_at === null` is its own answer and not a missing
-   * one: the worker opens the row before the job runs, so a job killed mid-flight — a SIGKILL
-   * past the grace period, an OOM, a power cut — leaves exactly this, which is a more useful
-   * fact than no row.
-   */
+  // `finished_at === null` means started and never reported (a kill, an OOM), not unknown.
   const outcome = (job) => (job.finished_at === null ? 'unfinished' : job.ok ? 'ok' : 'failed');
 
-  /**
-   * The row's own `detail`, which is whatever the job's report produced — the failure text on
-   * a failure, the report's numbers otherwise. Flattened to its scalar entries: a report that
-   * grows a nested field must not be able to make this page render `[object Object]`.
-   */
+  // Scalar entries only, so a nested field can never render as [object Object].
   function detail(job) {
     const d = job.detail;
     if (!d || typeof d !== 'object') return '';
@@ -86,8 +49,7 @@
       .join(' · ');
   }
 
-  // `acquire/queue`'s five states, in the order a title walks them; the route always sends all
-  // five, zeros included, so "nothing failed" is a 0 on the card rather than an absence.
+  // The route always sends all five, zeros included.
   const STATES = ['pending', 'leased', 'done', 'failed', 'skipped'];
 
   /** `by_kind` regrouped per kind, for "identify: pending 3 · failed 1" -- an operator's sentence. */
@@ -100,16 +62,8 @@
     return [...grouped].map(([kind, parts]) => ({ kind, line: parts.join(' · ') }));
   }
 
-  /**
-   * The worker's probe of the five `/data` mounts, lifted out of the jobs list (C10.2).
-   *
-   * A job row like any other on the server - `api/admin.JOB_NAMES` names it, so no new key joins
-   * the card - and a fact of its own here, because on the install that needs it every other red
-   * row on this page is this one wearing its own path: the first household's dump failed on
-   * `/data/backups`, its import on `/data/artifacts`, and neither said "chown". The failure text is
-   * the worker's own sentence, which names the directories and the command; the exception's class
-   * name `_tick` prefixes it with is not the operator's to read.
-   */
+  // The worker's storage probe, lifted out of the jobs list: it explains the failures below it.
+  // The exception class name `_tick` prefixes is stripped from its sentence.
   const STORAGE_JOB = 'storage-check';
   const storageRow = $derived((card?.jobs ?? []).find((job) => job.name === STORAGE_JOB) ?? null);
   const storageFailure = (job) =>
@@ -144,9 +98,7 @@
 {:else if !card}
   <p class="data">loading…</p>
 {:else}
-  <!-- Fact 1. §2: "nightly pg_dump to /data/backups, rotation 14". The newest *successful*
-       dump, not the newest attempt — on the install that needs this page they are different
-       rows, and the newest attempt is the one that says nothing. -->
+  <!-- The newest successful dump, not the newest attempt. -->
   <section class="card fact" data-testid="system-backup">
     <h2>Last successful backup</h2>
     {#if card.backup.at}
@@ -159,9 +111,6 @@
       <div class="data-lg">no dump has ever completed on this install</div>
     {/if}
     {#if card.backup.stale}
-      <!-- A household that has never completed a dump is stale by the same rule, and that is
-           the point: "no backup yet" and "no backup since Tuesday" are one problem to the
-           person who needs one. -->
       <p class="warn" data-testid="system-backup-stale">
         No successful dump in the last {card.backup.stale_after_hours} hours. Check the
         nightly-backup row below, then <code class="data-lg">ls -l data/backups</code> — a
@@ -170,9 +119,7 @@
     {/if}
   </section>
 
-  <!-- Fact 2. §14.3 makes the stored connector credential admin-equivalent, so this says
-       WHICH key is loaded and never what it is. The pair is the answer: the key_id names the
-       row every ciphertext points at, the fingerprint names the env that has to open it. -->
+  <!-- Which key is loaded, never what it is: the stored credential is admin-equivalent (§14.3). -->
   <section class="card fact" data-testid="system-secrets">
     <h2>Secrets custody</h2>
     {#if card.secrets.configured}
@@ -188,11 +135,7 @@
       </p>
     {/if}
     {#if card.secrets.unreadable}
-      <!-- "every stored secret", not "the data-encryption key": the route answers whether any
-           sealed row is unopenable, which stops being the same question the moment the
-           Connectors card's repair retires the unreadable key and mints a fresh one. After that
-           the active key_id above is readable while the web-push pair and any second connector
-           are not, and this line is the only place that still says so. [M4.7 ops-11, dd03] -->
+      <!-- "every stored secret": after a key reset the active key reads while older sealed rows do not. -->
       <p class="warn" data-testid="system-secrets-unreadable">
         SECRETS_KEY does not open every stored secret: at least one is sealed under a key this
         install no longer holds. Connector credentials stay sealed and member writes still
@@ -203,8 +146,6 @@
     {/if}
   </section>
 
-  <!-- The `storage-check` row, read as the fact it is (C10.2). Above the jobs list, because a
-       mount the app cannot write explains the failures below it rather than sitting among them. -->
   <section class="card fact" data-testid="system-storage">
     <h2>Storage</h2>
     {#if !storageRow}
@@ -224,9 +165,6 @@
     {/if}
   </section>
 
-  <!-- Fact 3. The newest job_run row per job. Before M4.7 there was no table: `last_run` was
-       an in-process dict and every report was logged once and dropped, so the nightly backup
-       could fail for a month with no signal a household would ever meet. -->
   <section class="fact" data-testid="system-jobs">
     <h2>Jobs</h2>
     {#if card.jobs.length === 0}
@@ -253,9 +191,6 @@
     {/if}
   </section>
 
-  <!-- Fact 4, decision 454. `acquire.queue.stats` per state and per kind: "nine identifies
-       waiting, one extract failed" is a sentence an operator can act on, one pending count is
-       not. A read, and nothing beside it drains or retries -- that is the board's (plan E5). -->
   {#if card.queue}
     <section class="fact" data-testid="system-queue">
       <h2>Acquisition queue</h2>
@@ -274,10 +209,7 @@
     </section>
   {/if}
 
-  <!-- Fact 5, decision 454. The newest SUCCESSFUL run of each job that talks to a connector,
-       which the jobs list above cannot say: its row is the newest attempt, and on the install
-       whose sync has failed since Tuesday that row is the failure. "never succeeded" is an
-       answer, and a job left off the list would read as one that does not exist. -->
+  <!-- The newest successful run, which the jobs list's newest attempt cannot say. -->
   {#if card.last_syncs}
     <section class="fact" data-testid="system-last_syncs">
       <h2>Last successful syncs</h2>
@@ -294,9 +226,6 @@
     </section>
   {/if}
 
-  <!-- Fact 6, decision 454. What this web process has logged since it started, redacted of
-       credentials on the server before it was ever kept (`core/logs.py`), newest first. The
-       filter narrows the lines this one read returned and asks the server nothing. -->
   {#if card.logs}
     <section class="fact" data-testid="system-logs">
       <h2>Recent log lines</h2>

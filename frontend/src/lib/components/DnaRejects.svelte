@@ -1,20 +1,6 @@
 <script>
-  /**
-   * §6.6 Data's review of DNA rejects and low-evidence tags. Spec v2.1 §6.6 Data, §4.1 rule 2,
-   * §8 stage 7; decisions 341, 345 and 446.
-   *
-   * TWO ORDERINGS AND NO FILTER. The rejects arrive newest first and a title's extracted tags
-   * weakest first, both from `dna/review`, and both are drawn in the order they came with every row
-   * present - a tag nobody measured included, where the server put it. There is no threshold, no
-   * toggle and no control of any kind on confidence, salience or n_sources: §4.1 rule 2 makes them
-   * weights and never filters, and a "hide low confidence" switch here would be the cut §4.1
-   * measures at 44% of the extracted tier, made in the browser instead of in SQL. The weights are
-   * shown in the data voice beside the term, which is what a reviewer needs to read them.
-   *
-   * THE ONE ACTION WRITES A LEDGER ROW. §8 stage 7: "Failures drop, never repaired" - nothing here
-   * accepts a tag back. "Write a ledger row" opens the verdict editor below with the term and the
-   * title filled in, and the operator chooses what the verdict does.
-   */
+  // Server order with no row hidden and no confidence filter: these are weights, never filters
+  // (§4.1 rule 2). Nothing here accepts a tag back; a fix is a ledger row.
   import { onMount } from 'svelte';
   import { get } from '$lib/api.js';
   import {

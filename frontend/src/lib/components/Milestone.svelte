@@ -1,14 +1,5 @@
 <script>
-  /**
-   * An honest placeholder for a surface the build order has not reached yet (spec §12).
-   * It says what the surface will do, so the app never pretends a feature exists.
-   *
-   * It no longer names the milestone that owes the surface. A milestone label is the build's
-   * vocabulary, and the member register never renders one (decision 486 clause 2): two members
-   * read "Not built yet - this surface arrives with M6" over predicate syntax in the 2026-09-25
-   * user test. Nothing in navigation leads here any more (decision 488); the route answers by
-   * URL, and `05-milestones.spec.js` still fails by design on the day the surface ships.
-   */
+  /** Placeholder for an unbuilt surface (spec §12); it never names a milestone (decision 486). */
   let { surface, summary, points = [] } = $props();
 </script>
 

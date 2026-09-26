@@ -1,8 +1,5 @@
 /**
  * @vitest-environment jsdom
- *
- * Decision 35's chip in the member register (decision 486): "undo rating", not "undo verdict" or
- * "undo not_seen". The journal's own kind stays on `data-undo-kind`, which the browser specs read.
  */
 
 import { flushSync, mount, unmount } from 'svelte';

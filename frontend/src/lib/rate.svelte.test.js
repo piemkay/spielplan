@@ -104,10 +104,7 @@ describe('pure helpers', () => {
   });
 
   it('builds §6.1 counter with proposal 46 partition and the mode that was chosen', () => {
-    // Decision 35: this is the number Undo's depth is measured in, so it is the server's own
-    // `counter` string with context appended, never a recomputation. It names the chosen mode,
-    // not the card type served: "· battle" under a pressed Mixed pill read as the header
-    // disagreeing with the person (A2 of the 2026-09-26 household test).
+    // The server's own counter with context appended, never recomputed: Undo's depth is counted in it.
     expect(
       counterLine({ counter: '7 / 15', serving: 'battle' }, ['movie'], 'mix')
     ).toBe('7 / 15 this block · film · Mixed');
@@ -126,10 +123,6 @@ describe('pure helpers', () => {
   });
 
   it('says 45m rather than 0h 45m, on every surface that asks', () => {
-    // The real falsifier behind `test_one_runtime_label_serves_every_surface`: the pytest guard
-    // can pin which module the label lives in, but only this can say what it prints. 240 of the
-    // 13,324 corpus movies and 7 of the 839 owned run under an hour, and a leading zero hour is
-    // the data voice claiming a precision the sentence does not have (§6.8, proposal 27).
     expect(runtimeLabel({ kind: 'movie', runtime_min: 45 })).toBe('45m');
     expect(runtimeLabel({ kind: 'movie', runtime_min: 59 })).toBe('59m');
     // The hour boundary is where an `h ? ...` branch goes wrong in the other direction.
@@ -142,11 +135,7 @@ describe('pure helpers', () => {
   });
 
   it('gives the same title the same hue every render', () => {
-    // Pinned to the value rather than compared with itself: `hueOf('Heat') === hueOf('Heat')` is
-    // true of every pure function and of several impure ones, so it could not fail. The claim
-    // worth keeping is that the hue is stable *across renders and releases* — the same film is
-    // the same colour on Home, on the card and after a deploy — and only a literal says that.
-    // [M4.10 finding 33]
+    // Pinned to a literal: the hue must be stable across releases, not only equal to itself.
     expect(hueOf('Heat')).toBe(179);
     expect(hueOf('Prisoners')).toBe(54);
     expect(hueOf('Heat')).not.toBe(hueOf('Prisoners'));
@@ -187,9 +176,7 @@ describe('pure helpers', () => {
 });
 
 describe('the envelope', () => {
-  // Held separately from `globalThis.fetch` so the mock keeps its vitest shape: assigning it to
-  // the global narrows it to the DOM `fetch` signature, and every `mockResolvedValue` below
-  // then reads as an error to the type checker.
+  // Kept off `globalThis.fetch`'s DOM type so the mock keeps its vitest shape for the type checker.
   /** @type {any} */
   let fetchMock;
 
@@ -217,8 +204,7 @@ describe('the envelope', () => {
   });
 
   it('holds the answered card and its counter while the reveal shows, then swaps in the preloaded one', async () => {
-    // Proposal 42: the reveal is attached to the card just rated, for ~1.2 s. The next card is
-    // already in this response, so the swap costs no request.
+    // The next card is already in this response, so the swap costs no request.
     fetchMock.mockResolvedValue(
       ok(
         envelope({
@@ -248,9 +234,6 @@ describe('the envelope', () => {
   });
 
   it('says which answer is in flight until the server has taken it', async () => {
-    // A4 of the 2026-09-26 household test: every button greyed out after a tap with nothing
-    // saying which answer had been taken. The store names the one in flight for the card to
-    // light, and clears it with the busy state however the request ends.
     /** @type {(response: any) => void} */
     let answer = () => {};
     fetchMock.mockReturnValue(new Promise((resolve) => (answer = resolve)));
@@ -311,12 +294,7 @@ describe('the envelope', () => {
   });
 
   it('answers the card the gesture started on, or no card at all', async () => {
-    // Finding 28, at the layer that can see it. Proposal 51's long-press is a *delayed* write,
-    // and the only thing that can change in those 500 ms is which card is on the table: the
-    // `?head=` effect, the model-gate effect and an Undo all call `load()`. The card then swaps
-    // and the write lands on a pair nobody pressed. A decisive duel is the strongest observation
-    // the app has (§5.2 weighs it ~1.6 against ~1.0), §4.2 keeps it forever, and nothing in the
-    // Ledger distinguishes it from one the person actually made.
+    // A long press is a delayed write, and `load()` can swap the card within those 500ms.
     fetchMock.mockResolvedValue(ok(envelope()));
     await duel('A', { decisive: true, token: 't1' });
     const sent = JSON.parse(fetchMock.mock.calls[0][1].body);
@@ -335,8 +313,7 @@ describe('the envelope', () => {
   });
 
   it('still answers the live card when the caller names no token', async () => {
-    // The strip buttons and the keyboard path have no pointerdown to capture one, so an absent
-    // token means "the card on the table" and must not become a refusal.
+    // The strip buttons and the keyboard capture no token; absent means the card on the table.
     fetchMock.mockResolvedValue(ok(envelope()));
     await duel('TIE');
     expect(JSON.parse(fetchMock.mock.calls[0][1].body).card_token).toBe('t1');
@@ -357,9 +334,7 @@ describe('the envelope', () => {
   });
 
   it('drops a pin once its card is on the table, so a skip does not bring it straight back', async () => {
-    // C5.2: the server serves a pin even over this sitting's skip or an earlier "not seen", so a
-    // pin still carried after its card was answered would hand the same card back. The banner's
-    // other named titles stay pinned, in their order (§6.0).
+    // The server serves a pin even over a skip, so an answered pin would come straight back.
     setHead([1, 9]);
     fetchMock.mockResolvedValue(ok(envelope()));
     await load({ quiet: true });
@@ -391,9 +366,7 @@ describe('the member register (decisions 486 and 491)', () => {
   });
 
   it('names the kind it counts when only one kind is selected', () => {
-    // A5 of the 2026-09-26 household test: with Films switched off the widget read "9 ratings"
-    // and a member with fifty took them for lost. The count is per kind on purpose (each kind
-    // is its own model), so the label says which.
+    // The count is per kind on purpose: each kind is its own model.
     expect(ratingsLabel(9, ['series'])).toBe('9 series ratings');
     expect(ratingsLabel(1, ['movie'])).toBe('1 film rating');
     expect(ratingsLabel(58, ['movie', 'series'])).toBe('58 ratings');
@@ -414,20 +387,17 @@ describe('the member register (decisions 486 and 491)', () => {
     }
     expect(PAIR_SELECTION_COPY).toContain('Sharpen my ranking');
     expect(LEARNING_CURVE_COPY).toContain('ratings');
-    // Decision 492: Mix's line says when the pairs start rather than promising them at once.
     expect(MODES.find(([key]) => key === 'mix')[2]).toContain('the pairs start at 15 ratings');
   });
 
   it('names the modes by what they ask, and the pair card asks its question', () => {
-    // A3 and policy (h) of the 2026-09-26 household test: "mix / sweep / battle" read as jargon,
-    // and A1: the pair card never asked anything. The keys stay the wire's (decision 519).
+    // The keys stay the wire's (decision 519).
     expect(MODES.map(([key]) => key)).toEqual(['mix', 'sweep', 'battle']);
     expect(MODES.map(([key]) => modeName(key))).toEqual(['Mixed', 'Singles', 'Pairs']);
     for (const [, name, why] of MODES) {
       expect(`${name} ${why}`).not.toMatch(/\b(sweep|battle)\b/i);
     }
     expect(PAIR_QUESTION).toBe('Which did you enjoy more?');
-    // A6 and decision 520: the switch is the pair's, and its line says it resets.
     expect(DECISIVE_COPY).toMatch(/resets for the next pair/);
     expect(DECISIVE_COPY).not.toMatch(/decisive|hesitant|teaches/);
   });

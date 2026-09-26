@@ -1,20 +1,5 @@
 /**
  * @vitest-environment jsdom
- *
- * What the Tonight surface DOES with the two controls this milestone adds, and the one thing it
- * must stop doing when it is navigated away from. Spec v2.1 §6.2 (rewritten: 54e), §6 preamble;
- * M4.12 findings 13 and 19.
- *
- * NAMED `tonight-page.test.js` and not `+page.svelte.test.js`, which is the name the convention
- * in `src/lib` would give it: SvelteKit reserves the `+` prefix inside `src/routes` and
- * `vite build` fails outright on any other `+`-named file. Same reason as `rate-page.test.js`.
- *
- * MOUNTED RATHER THAN IN THE STORE, for two claims that are only true of the rendered page.
- * Finding 19 is a lifecycle order — `onDestroy` runs before the continuation of an `onMount` that
- * is still awaiting — and no store test can produce it, because the bug is that the component
- * outlives its own bootstrap. Finding 13's hand-off is asserted at the store layer as well
- * (`tonight.svelte.test.js`), and the half that only exists here is that the control is DRAWN,
- * host-only, inside 54e's ballot: the store can be right while the screen offers nothing.
  */
 
 import { flushSync, mount, unmount } from 'svelte';
@@ -24,9 +9,7 @@ import TonightPage from './+page.svelte';
 import { session } from '$lib/session.svelte.js';
 import { leave, tonight } from '$lib/tonight.svelte.js';
 
-/** Decision 481's link is taken off the address bar once followed, through the router's own
- * `replaceState`; recorded rather than stubbed away, because "the link was consumed" is the
- * observable half of that clause. */
+// Recorded rather than stubbed: "the link was consumed" is the observable half of decision 481.
 const navigation = vi.hoisted(() => ({ replaced: [] }));
 vi.mock('$app/navigation', () => ({
   replaceState: vi.fn((url) => {
@@ -34,8 +17,7 @@ vi.mock('$app/navigation', () => ({
   })
 }));
 
-/** Every socket the page opened. The page is the only caller of `connect` here, so a non-empty
- * list after an unmount is precisely the leak. */
+// The page is the only caller of `connect`, so a socket after an unmount is the leak.
 const sockets = [];
 class FakeSocket {
   constructor(url) {
@@ -101,11 +83,7 @@ afterEach(() => {
 
 describe('leaving the surface while it is still booting (finding 19)', () => {
   it('opens no channel for a page that has already been destroyed', async () => {
-    // `onMount` is async: a navigation away can land between its await and its call to `watch`.
-    // `onDestroy` goes first, while `disconnect` is still the no-op default, and the
-    // continuation then opens a socket into a closure nobody will ever call — a live channel
-    // still mutating `tonight.rooms` / `lobby` / `step` from a page that no longer exists, one
-    // per fast navigation, for the life of the tab.
+    // A navigation away can land between `onMount`'s await and its `watch`; `onDestroy` runs first.
     /** @type {any} */
     let release;
     tonight.booted = false;
@@ -115,17 +93,14 @@ describe('leaving the surface while it is still booting (finding 19)', () => {
 
     app = mount(TonightPage, { target });
     flushSync();
-    // The bootstrap is genuinely in flight, or the assertion at the end is vacuous: a page that
-    // never started reading opens no socket for reasons that have nothing to do with the guard.
+    // The bootstrap must be in flight, or the final assertion is vacuous.
     expect(fetchMock, 'the bootstrap never started, so nothing below is tested').toHaveBeenCalled();
     expect(sockets, 'the bootstrap has not resolved, so nothing is watched yet').toHaveLength(0);
 
     unmount(app);
     app = null;
     release();
-    // A real macrotask rather than a counted number of microtask turns: the continuation runs
-    // through `fetch`, `res.text()`, `loadRooms` and `bootstrap` before it reaches `watch`, and a
-    // test that stopped counting one turn early would assert the leak had not happened YET.
+    // A macrotask, not counted microtasks: stopping one turn early would only assert "not yet".
     await new Promise((resolve) => setTimeout(resolve, 10));
 
     expect(tonight.booted, 'the continuation never ran, so the guard was never reached').toBe(true);
@@ -155,10 +130,6 @@ describe("54e's ballot on the initiator's phone (finding 13)", () => {
   const byTestId = (id) => target.querySelector(`[data-testid="${id}"]`);
 
   it("draws the guest's turn inside the ballot, where the phone actually changes hands", () => {
-    // The round had this control and the ballot did not, so a phone could carry a guest through
-    // twenty pairs and then had no screen that could cast their vote — while
-    // `ballot.submitted_count` counted them and the reveal waited. A room opened with any guest
-    // could not finish.
     inTheBallot();
     app = mount(TonightPage, { target });
     flushSync();
@@ -171,9 +142,7 @@ describe("54e's ballot on the initiator's phone (finding 13)", () => {
   });
 
   it("opens the guest's ballot blind, on the seat the phone is now holding", () => {
-    // 54e's blindness across the hand-off and not only across the room: the incoming guest would
-    // otherwise open on ticks somebody else made, and one tap on Submit would cast them as
-    // theirs.
+    // Blind across the hand-off: the guest must not open on someone else's ticks.
     inTheBallot();
     tonight.approved = [1];
     app = mount(TonightPage, { target });
@@ -189,19 +158,8 @@ describe("54e's ballot on the initiator's phone (finding 13)", () => {
   });
 
   it("writes the ballot to the seat this phone is holding, not to the seat that owns it", async () => {
-    // The other half of finding 13, and the half nothing below the browser could see: Submit was
-    // bound to `tonight.lobby.me.participant_id`, so a guest's tap re-wrote the phone owner's
-    // ballot, `submitted_count` stopped one short, and 54e's reveal waited on a vote no screen
-    // could cast. Restoring that one expression at the click handler left the ENTIRE frontend
-    // suite green -- the two tests above assert the controls are DRAWN, and the store's four call
-    // `submitBallot` with an explicit argument, which is the binding's other side. So the seat
-    // the write NAMES is asserted here, at the only layer besides Playwright that has both a
-    // rendered hand-off and a request to read it off. §6.2 step 2 seats the guest on this phone;
-    // which seat the POST addresses is the whole of the clause.
-    // [finding 13; M4.12 review cycle 2: M412-FE-6]
+    // The seat the POST names is the whole claim, and only the URL carries it.
     inTheBallot();
-    /** Every POST the page made, by path: the seat the write names is in the URL and nowhere
-     * else, which is why this is read off the request rather than off the store. */
     const posted = [];
     fetchMock.mockImplementation(async (path, opts = {}) => {
       if ((opts.method ?? 'GET') !== 'POST') return reply({ rooms: [] });
@@ -211,8 +169,7 @@ describe("54e's ballot on the initiator's phone (finding 13)", () => {
     app = mount(TonightPage, { target });
     flushSync();
 
-    // The whole gesture, because the binding is only wrong once `activeSeat` and `me` disagree:
-    // the phone changes hands, the guest ticks a card, and the guest taps Submit.
+    // The binding is only wrong once `activeSeat` and `me` disagree, so walk the whole gesture.
     byTestId('tonight-ballot-to-12').click();
     flushSync();
     byTestId('tonight-approve-1').click();
@@ -227,8 +184,7 @@ describe("54e's ballot on the initiator's phone (finding 13)", () => {
   });
 
   it('offers no hand-off to a member who is not hosting the room', () => {
-    // The guest seats belong to whoever opened the room; a second member's device offering
-    // "pass to Guest 1" would offer a vote that phone is not holding.
+    // Guest seats belong to the host's phone; another member's device holds no guest vote.
     inTheBallot();
     const jenny = { participant_id: 13, seat: 3, role: 'member', user_id: 2, name: 'Jenny' };
     tonight.lobby = { ...tonight.lobby, seats: [hostSeat, guestSeat, jenny], me: jenny };
@@ -243,8 +199,7 @@ describe("54e's ballot on the initiator's phone (finding 13)", () => {
 });
 
 describe('the clock behind the answer latency, across a navigation away (finding 41)', () => {
-  /** One room, mid-round, answered by a router rather than by a queue: the claim is that the
-   * remount re-reads the SAME card, and a queue cannot tell two reads apart. */
+  /** Answered by a router, not a queue: the remount re-reads the same card. */
   const round = {
     participant_id: 11,
     answered: 0,
@@ -270,8 +225,7 @@ describe('the clock behind the answer latency, across a navigation away (finding
     me: hostSeat
   };
 
-  /** Every POST the page made. `latency_ms` is the CLIENT's number — the backend writes whatever
-   * arrives — so the request is where the instrument can be read at all. */
+  /** `latency_ms` is the client's number, so the request is where it can be read. */
   let posted;
 
   function inTheRound() {
@@ -286,24 +240,14 @@ describe('the clock behind the answer latency, across a navigation away (finding
     });
   }
 
-  /** A real macrotask, for the reason the finding-19 case spends one: the bootstrap runs through
-   * `fetch`, `res.text()`, `loadRooms`, `refresh` and `loadRound` before a pair is on the screen,
-   * and a counted number of microtask turns would assert against a page still arriving. Only the
-   * clock is faked here, so the wait itself still ends — and `Date.now()` does not move across
-   * it, which is what makes the measurement below an exact number rather than a range.
-   */
+  /** A macrotask; only Date is faked, so the wait ends and `Date.now()` does not move across it. */
   const settle = async () => {
     await new Promise((resolve) => setTimeout(resolve, 10));
     flushSync();
   };
 
   it('charges the answer the read after the remount, not the time the page was gone', async () => {
-    // §6.2 step 4 keeps the phone in the person's hand for twenty pairs, and the nav rail is on
-    // screen throughout: /tonight is not in the layout's `bare` list, so Rank and Home are one
-    // tap from a live pair. A tap out and back destroys the page while the module keeps its
-    // state, and the re-read that brings the pair back carries the same sealed card token — so
-    // the clock armed before the tap was still running, and the next answer carried the whole
-    // absence into an append-only §4.2 column that §14 risk 6 wants to re-tune the round from.
+    // A tap out and back re-reads the same sealed card; the clock must not charge the absence.
     vi.useFakeTimers({ toFake: ['Date'] });
     inTheRound();
     tonight.booted = false;
@@ -346,10 +290,7 @@ describe('the clock behind the answer latency, across a navigation away (finding
 });
 
 describe("54f's Reshuffle, pressed inside the sharpen round (M412-SOLO-01)", () => {
-  /** The three picks are the screen Reshuffle walks; only `pair` differs between the two
-   * payloads, because the flag this milestone added is what decides whether the server selects a
-   * pair at all (`sharpen: false` skips the selection, and a skipped selection is `pair: null`
-   * with `stop_reason` null — indistinguishable on the wire from a converged round). */
+  /** Only `pair` differs: Reshuffle's `sharpen: false` gets `pair: null`, which looks converged. */
   const picks = [
     { title_id: 1, name: 'Heat', why: 'slow burn', fit_line: 'fits your 130 min' },
     { title_id: 2, name: 'Drive', why: 'neon', fit_line: 'fits your 130 min' },
@@ -376,10 +317,7 @@ describe("54f's Reshuffle, pressed inside the sharpen round (M412-SOLO-01)", () 
   const byTestId = (id) => target.querySelector(`[data-testid="${id}"]`);
 
   it('comes back to the picks rather than reporting a round that is out of questions', async () => {
-    // Reshuffle is a browse gesture and posts `sharpen: false`, so the server sends no pair back
-    // — it was not asked for one. The screen read that as the round having converged: it printed
-    // "nothing left to ask" over a round with pairs still in it and hid the only control that
-    // could ask for one, leaving Back as the only way out — and Back clears the answers.
+    // Reshuffle asks for no pair, so no pair back is not a converged round.
     tonight.solo = solo({ pair });
     tonight.step = 'solo';
     fetchMock.mockImplementation(async (path, opts = {}) => {
@@ -415,15 +353,7 @@ describe("the budget the household is setting, on a series night (decision 219)"
   const byTestId = (id) => target.querySelector(`[data-testid="${id}"]`);
 
   it('says the number it is setting is per episode once the kind is series', () => {
-    // Decision 219 qualified every label that states a number on a series session -- the
-    // candidate's fit line on both branches, and the open-rooms row -- and left out the one
-    // control that SETS the number, which sits one row under the Series pill. The decision's own
-    // argument is that "a bare 'fits your 60 min' reads as a promise about the evening", and the
-    // measurement behind it is that the shipped series pool is 121 of 121 owned titles at 60,
-    // 130 and 200 alike: the qualified labels report the number afterwards, so this readout is
-    // where the misreading starts. Asserted here because it is a rendering fact -- the store
-    // holds `controls.kind` and `controls.runtime_budget_min` and neither knows they are drawn
-    // in the same row. [decision 219; §6.2 step 1 as amended by 54h; M4.12 review cycle 2: M412-FE-5]
+    // The control that sets the number sits under the Series pill, so it must say "per episode".
     app = mount(TonightPage, { target });
     flushSync();
 
@@ -436,9 +366,7 @@ describe("the budget the household is setting, on a series night (decision 219)"
       'min per episode'
     );
 
-    // And back, because the qualifier is the kind's and not the slider's -- a readout that kept
-    // it would say "per episode" over a film night, which is the same defect pointing the other
-    // way.
+    // And back: the qualifier belongs to the kind, not the slider.
     byTestId('tonight-kind-movie').click();
     flushSync();
     expect(readout()).not.toContain('per episode');
@@ -462,9 +390,7 @@ describe('the first household evening, on the screen (owner instruction of 2026-
   };
 
   it('draws the pair as two shared posters, never as buttons wearing the global 2:3 frame', () => {
-    // `class="poster"` on the pair buttons inherited design.css's `.poster { aspect-ratio: 2/3 }`,
-    // so on an iPhone 13 the first option filled the screen and the second option and every answer
-    // sat below the fold. The frame belongs to the shared poster INSIDE the button now.
+    // A button with class "poster" would take design.css's 2:3 frame and fill the phone.
     tonight.lobby = room;
     tonight.round = {
       participant_id: 11, answered: 0, cap: 20, typical: 10, ended_by: null, stop_reason: null,
@@ -557,8 +483,7 @@ describe('the first household evening, on the screen (owner instruction of 2026-
   });
 
   it('offers the lobby its share link and the not-tonight chips', () => {
-    // The chips are this phone's own since decision 505, and the other member's are named under
-    // them: the second household evening's second member found the room's three taken, greyed.
+    // The chips are this phone's own (decision 505); the other member's are named beneath.
     const violence = [{ key: 'violence', label: 'violence' }];
     const theirs = ['horror', 'harrowing', 'sexual_violence'].map((k) => ({ key: k, label: k }));
     const other = { ...hostSeat, participant_id: 13, user_id: 2, name: 'Jenny', vetoes: theirs };
@@ -588,7 +513,6 @@ describe('the first household evening, on the screen (owner instruction of 2026-
   });
 
   it('describes each title on a pair card for somebody who does not know it', () => {
-    // The second household evening: "Warriors of the Wind" said "1984 · fits your 120 min".
     tonight.lobby = room;
     tonight.round = {
       participant_id: 11, answered: 12, cap: 20, typical: 10, ended_by: null, stop_reason: null,
@@ -620,8 +544,6 @@ describe('the first household evening, on the screen (owner instruction of 2026-
   });
 
   it('lists the wildcard once, with its own count, and on the winner card when it won', () => {
-    // The second household evening listed Everything Everywhere All at Once under Runners-up as
-    // "0 approved" and again as the Wildcard.
     const base = {
       beat: 'VOTES REVEALED TOGETHER', approval_share: 1, participants: 2, breadth: [],
       finalists: []

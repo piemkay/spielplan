@@ -1,10 +1,3 @@
-/**
- * The title card's sentences, one rule at a time. Spec v2.1 §6.0, §6.8, §7.3; decisions 486, 487.
- *
- * Each case pins a string a member read in the 2026-09-25 user test, or the rule that replaced it.
- * `TitleDetail.svelte.test.js` mounts the card over payloads; this file holds the rules' edges.
- */
-
 import { describe, expect, it } from 'vitest';
 
 import {
@@ -23,7 +16,6 @@ import {
   syncNote
 } from './titleCard.js';
 
-/** Section signs, decision/proposal numbers and milestone labels: decision 486 clause 2. */
 const REFERENCE = /§\s?\d|decision \d|proposal \d|\bM[0-7](\.\d+)?\b/i;
 
 describe('syncNote', () => {
@@ -172,8 +164,6 @@ describe('revealLine and answeredLine', () => {
     expect(answeredLine('not_seen')).toBe('Saved - marked not seen.');
   });
 });
-
-// --- the second household test (decisions 516 and 517) ------------------------------------------
 
 describe('ANSWERS', () => {
   it("run worst to best, as Rate's sweep card does, then Not seen", () => {

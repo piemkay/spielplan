@@ -1,26 +1,5 @@
 /**
  * @vitest-environment jsdom
- *
- * What §6.6's Jellyfin card says after a sweep. Spec v2.1 §6.6, §7.1, §7.3; M4.11 findings 3 and 16.
- *
- * Two sentences on this card were untrue in the same direction — both of them made a dead
- * app -> Jellyfin path read as a quiet household.
- *
- *   - The sweep line printed `pushed 0 · adopted 0 · unchanged 87` while every Played write in the
- *     sweep was being refused. There was no counter for a failed push at all, so the one number that
- *     would have said so did not exist; `owed_no_token`, `unowned` and the unmatched-item count were
- *     added by the same milestone and had nowhere to render either.
- *   - The version line said "below the pinned 10.9 — reads may miss fields", which names the wrong
- *     half. By §7.1 and the client's own pin the 10.9-only route is the per-user Played WRITE: reads
- *     degrade, the write does not exist. An admin reading that line had no way to know that nothing
- *     this app marked could reach Jellyfin.
- *
- * MOUNTED RATHER THAN IN PLAYWRIGHT, and named `connectors-page.test.js` because SvelteKit reserves
- * the `+` prefix inside `src/routes` (`rate-page.test.js` carries the same note). A card that reports
- * a failure can only be asserted against a sweep that failed, and the e2e stack's fake Jellyfin
- * accepts the per-user token — reaching the all-writes-refused state from outside means breaking the
- * connector for every spec after it in a filename-ordered suite. The payload is the fixture here, so
- * each state is exact.
  */
 
 import { flushSync, mount, unmount } from 'svelte';
@@ -34,8 +13,7 @@ vi.mock('$lib/api.js', () => ({
   ApiError: class extends Error {}
 }));
 vi.mock('$lib/jellyfin.js', () => ({ jellyfinDirectory: vi.fn() }));
-// The page reads `session.publicUrl` for the webhook path, and the first-boot wizard below reads
-// `session.setup` to decide which step it is on; `goto` is the wizard's Finish.
+// The page reads `session.publicUrl` for the webhook path; the wizard reads `session.setup`.
 vi.mock('$lib/session.svelte.js', () => ({
   session: { setup: { required: false, steps: [] }, publicUrl: 'http://localhost:8080', user: null },
   bootstrap: vi.fn(),
@@ -231,7 +209,6 @@ describe('the sweep line', () => {
       const failure = target.querySelector(FAILURE);
       expect(failure).not.toBeNull();
       expect(failure.textContent).toContain('4 Played write(s) failed');
-      // The sweep's own first distinct reason, not a generic sentence: §6.8's register again.
       expect(failure.textContent).toContain('GET /Users/jf-1/Items -> 404');
     } finally {
       unmount(app);
@@ -239,9 +216,7 @@ describe('the sweep line', () => {
   });
 
   it('names the other three debts the sweep can now count', async () => {
-    // `resolve.unmatched` is a COUNT and `unmatched_names` is the list — `SyncReport.as_dict`'s own
-    // shape, because this fixture had it as an array and the card read `.length` off it: both sides
-    // agreed on a payload `api/admin.py` never sends, so the clause rendered here and nowhere else.
+    // `resolve.unmatched` is a count and `unmatched_names` the list, as `SyncReport.as_dict` sends.
     vi.mocked(post).mockResolvedValue(
       report({
         owed_no_token: 2,
@@ -252,13 +227,12 @@ describe('the sweep line', () => {
     const app = await open();
     try {
       await press('Sync now');
-      // Whitespace-collapsed: the sentence is wrapped across source lines to stay inside the
-      // 108-column rule, so the DOM carries the newlines the markup does.
+      // Whitespace-collapsed: the sentence is wrapped across source lines.
       const line = target.querySelector(SYNC).textContent.replace(/\s+/g, ' ');
       expect(line).toContain('2 owed write(s) with no stored sign-in');
       expect(line).toContain('3 title(s) no longer in the library');
       expect(line).toContain('2 library item(s) matched no title');
-      // Still a completed sweep: nothing failed, so the health attribute must not cry wolf.
+      // Nothing failed, so the health attribute must not cry wolf.
       expect(target.querySelector(SYNC).getAttribute('data-sync-health')).toBe('ok');
       expect(target.querySelector(FAILURE)).toBeNull();
     } finally {
@@ -267,12 +241,7 @@ describe('the sweep line', () => {
   });
 
   it('refuses to call a sweep that never read the library healthy', async () => {
-    // §3.3 makes an unreachable Jellyfin a degraded sync, so `seen.sync_all` returns the report as
-    // it stands — every counter zero, `push_failed` included, and the per-user loop never entered,
-    // which is why `users` is empty while `skipped_no_link` is false. Through the old rule that
-    // printed as `ok`: the same line a quiet healthy household gets, for a sweep in which NEITHER
-    // direction of §7.3 ran. It is the state `08-jellyfin.spec.js`'s adopt direction failed under,
-    // and the attribute is what turns that into a diagnosis. [M4.11 finding 3]
+    // An unreachable Jellyfin returns an all-zero report with `users` empty and nothing skipped.
     vi.mocked(post).mockResolvedValue(report({ unchanged: 0, users: [], completed: [] }));
     const app = await open();
     try {
@@ -285,11 +254,7 @@ describe('the sweep line', () => {
   });
 
   it('refuses to call a sweep that lost a member healthy either', async () => {
-    // The same fault through the other door, which the rule above could not see: the library read
-    // is keyless and each member's is not, so a Jellyfin account that was deleted or renamed 404s
-    // that member's `/Items` while the household read keeps working. `sync_all` swallows it per
-    // member, so `users` is full, `completed` is short and every counter is zero — and the old
-    // rule, keyed on an empty `users`, printed that in green. [review cycle 1: seen-02]
+    // A deleted member account 404s that member's read while the library read still works.
     vi.mocked(post).mockResolvedValue(
       report({ unchanged: 0, completed: ['jenny'], failed_users: ['patrick'] })
     );
@@ -308,9 +273,7 @@ describe('the sweep line', () => {
   });
 
   it('calls a household with nothing configured neither healthy nor unreachable', async () => {
-    // The negative control, and the reason `skipped_no_link` is in the rule: §3.1 makes a
-    // half-configured install legal, so "no connector, or no linked account" is a sweep that
-    // correctly did nothing and must not be reported as an outage.
+    // A half-configured install is legal (§3.1): a sweep that correctly did nothing is not an outage.
     vi.mocked(post).mockResolvedValue(
       report({ unchanged: 0, users: [], completed: [], skipped_no_link: true })
     );
@@ -325,8 +288,7 @@ describe('the sweep line', () => {
   });
 
   it('says a sweep was already running rather than printing its empty counters', async () => {
-    // §5.3 fires this job every fifteen minutes and this button is the other caller; the advisory
-    // lock answers with an all-zero report, which printed as a sweep that found nothing to do.
+    // The advisory lock answers a concurrent sweep with an all-zero report.
     vi.mocked(post).mockResolvedValue(
       report({ unchanged: 0, users: [], completed: [], already_running: true })
     );
@@ -361,8 +323,7 @@ describe("§7.1's pin", () => {
   });
 
   it('says nothing at all until something has probed', async () => {
-    // The negative control: `null` is "nobody has probed", which is the state of a fresh install
-    // and must not render as a refusal.
+    // `null` is "nobody has probed", a fresh install's state, not a refusal.
     vi.mocked(jellyfinDirectory).mockResolvedValue({
       cfg: cfg({ server_version: '', server_supported: null }),
       users: []
@@ -397,8 +358,6 @@ describe("§7.1's pin", () => {
   });
 });
 
-// --- M5.7: the card's two missing halves, and the cards beside it (decisions 364, 410, 418, 455) --
-
 const JELLYFIN = '[data-testid="connector-jellyfin"]';
 
 /** A button whose whole name is `label`, inside `scope`: several cards now carry a Save. */
@@ -410,7 +369,6 @@ function button(label, scope = JELLYFIN) {
   return found;
 }
 
-/** The library pick's checkbox for one library, by its label text. */
 function library(name) {
   const label = [...target.querySelectorAll('[data-library-pick] label')].find((l) =>
     l.textContent.includes(name)
@@ -419,7 +377,6 @@ function library(name) {
   return label.querySelector('input[type="checkbox"]');
 }
 
-/** Every body the page has PUT to the Jellyfin connector, in order. */
 const jellyfinPuts = () =>
   vi
     .mocked(api)
@@ -437,8 +394,7 @@ describe("the Jellyfin card's library pick (decisions 364, 410, 455)", () => {
     vi.mocked(api).mockResolvedValue({});
     const app = await open();
     try {
-      // A pick the admin has changed and not saved: exactly the state a Save sent on every press
-      // would carry into the stored boundary.
+      // A changed, unsaved pick: the plain Save must not carry it into the stored boundary.
       library('Series').click();
       await settle();
       button('Save').click();
@@ -471,8 +427,7 @@ describe("the Jellyfin card's library pick (decisions 364, 410, 455)", () => {
   });
 
   it('a library list that failed disables the pick and never sends []', async () => {
-    // Decision 364 reads `[]` as "the whole server", so a pick built from a list that did not
-    // arrive would widen the acquisition boundary to everything in one press.
+    // Decision 364 reads `[]` as the whole server, so a pick from a failed list would widen it.
     wire({
       '/admin/connectors/jellyfin/libraries': () =>
         libraries({ ok: false, error: 'Jellyfin answered 401', libraries: [] })
@@ -653,11 +608,7 @@ describe("the Jellyfin card's webhook (decisions 418, 455)", () => {
     }
   });
 
-  // `save_jellyfin` mints only for a connector that is configured, and a Generate offered on any
-  // other -- a fresh install, a URL saved without its key, a key this SECRETS_KEY cannot open --
-  // was answered 200 with `webhook_token: null`, which the card read as "a token already existed"
-  // where none did, and then hid the press for the rest of the visit, a Save included.
-  // [M5.7 review cycle 1, M57-JFSYS-02]
+  // `save_jellyfin` mints only for a configured connector; elsewhere it answers `webhook_token: null`.
   it('offers no Generate until the connector is configured, the only state it mints in', async () => {
     const unconfigured = [
       { url: '', has_api_key: false, configured: false },
@@ -704,8 +655,7 @@ describe("the Jellyfin card's webhook (decisions 418, 455)", () => {
   });
 
   it('never says a token already existed unless the server says one does', async () => {
-    // The key cleared between the read and the press: the server mints nothing and says so by
-    // answering `null` beside a connector that is no longer configured.
+    // The key was cleared between the read and the press, so nothing is minted.
     vi.mocked(jellyfinDirectory).mockResolvedValue({
       cfg: cfg({ has_webhook_token: false, trigger: trigger() }),
       users: []
@@ -739,8 +689,7 @@ describe("the Jellyfin card's webhook (decisions 418, 455)", () => {
       unmount(app);
     }
 
-    // Another tab minted first: `null` beside a token the server now holds is the one case the
-    // sentence is true of.
+    // Another tab minted first: the one case "already existed" is true of.
     vi.mocked(jellyfinDirectory).mockResolvedValue({
       cfg: cfg({ has_webhook_token: false, trigger: trigger() }),
       users: []
@@ -784,8 +733,6 @@ describe('the sweep line names what it could not identify (D4)', () => {
 
 describe("the first-boot wizard's connector rows (plan C3; user test 2026-09-25)", () => {
   it('all three link to this page, and none carries a milestone tag', async () => {
-    // Plan C3 linked the two M5 rows and left Jellyfin as plain text reading
-    // "configure in Admin · M1", although its card has been here since M1.
     const app = mount(SetupPage, { target });
     await settle();
     try {

@@ -1,21 +1,5 @@
 <script>
-  /**
-   * §6.7's model log — the transparency rail. Spec v2.1 §6.7, §6.8; decisions 117 and 118.
-   *
-   * §6.7: "A per-user toggle (default off) reveals an ephemeral log (last ~15 events, never
-   * persisted) narrating every model write in one human-readable line … It is 'drag-and-drop
-   * is data, not override' made visible, and the primary M2 debugging instrument."
-   *
-   * Proposal 118: "The rail is a right-hand drawer on wide layouts and a bottom sheet on
-   * compact ones, opened from the profile toggle and from a keyboard shortcut. Entries carry
-   * an event kind … used for colour-coding and filtering. It holds the last **15** events — a
-   * pinned depth, not 'about fifteen'."
-   *
-   * THE GATE IS THE SERVER'S. Decision 117 turns the toggle off by removing `events` from
-   * `/api/model-log` entirely — not by sending an empty list. This component therefore renders
-   * nothing at all without an `events` array, and there is no client-side branch that could
-   * reconstruct one.
-   */
+  // The gate is the server's: with the toggle off `/api/model-log` omits `events`, so nothing renders.
   import { eventTime, loadModelLog } from '$lib/home.svelte.js';
   import { dismiss } from '$lib/dismiss.js';
 
@@ -25,16 +9,9 @@
   let error = $state('');
   let filter = $state('');
 
-  // Refetch every time the drawer opens: the log is ephemeral by definition, and a rail that
-  // shows what the model did ten minutes ago while claiming to be live is worse than closed.
+  // Refetch on every open: the log is ephemeral.
   $effect(() => {
-    // Dropped on the way DOWN as well as on the way up. Without it the second open renders the
-    // FIRST open's events under a header reading "never persisted" until the refetch lands -- and
-    // the `{:else if !log}` branch below, which exists to say the drawer is reading, was
-    // unreachable after the first open. Clearing it only on the way up leaves the same render one
-    // frame long: `{#if open}` paints before this effect runs, so the drawer would still show the
-    // previous open's events, briefly, under that header. §6.7's log is ephemeral, and a drawer
-    // that holds one across a close is keeping it. [M4.9 finding 27]
+    // Cleared on close too: `{#if open}` paints before this effect runs, so a stale log would flash.
     log = null;
     if (!open) return;
     let cancelled = false;
@@ -55,16 +32,7 @@
   const kinds = $derived(log?.kinds ?? []);
   const shown = $derived(filter ? events.filter((e) => e.kind === filter) : events);
 
-  /**
-   * The shell's trigger, which is the one outside tap this drawer must NOT dismiss on.
-   *
-   * `rail.svelte.js` documents `toggleRail` as one rule for the button and proposal 118's `m`
-   * shortcut — "Flip the drawer" — and the button lives in `+layout.svelte`'s header, outside
-   * this node. A plain outside-tap dismissal closes on its pointerdown and the click that follows
-   * flips it straight back open, so the control that opens the drawer would stop being able to
-   * close it. The keystroke needs no such guard: `m` is not Escape, and Escape pressed while the
-   * trigger happens to hold focus is still a dismissal.
-   */
+  // The shell's trigger toggles from outside this node, so its pointerdown must not dismiss.
   const OPENER = '[data-testid="model-rail-open"]';
 
   /** @param {Event} event */
@@ -76,9 +44,6 @@
 </script>
 
 {#if open}
-  <!-- Proposal 131: "Every popover, menu and sheet dismisses on outside click and on Escape."
-       Proposal 118 makes this a sheet on compact layouts, which is the shape that most needs it:
-       62 vh of the screen whose only exit was the control in its corner. [proposals 127, 131] -->
   <aside
     class="rail"
     data-model-log
@@ -89,8 +54,6 @@
     <header>
       <div>
         <div class="title">Model log</div>
-        <!-- The drawer is Show the model's own register, so its numbers and nouns stay; a spec
-             reference never renders on a member surface, switch on or off (decision 486). -->
         <div class="data">last 15 events · never saved</div>
       </div>
       <button class="close" onclick={onClose} aria-label="Close the model log" data-testid="model-rail-close">✕</button>
@@ -99,8 +62,7 @@
     {#if error}
       <p class="data err" role="alert">{error}</p>
     {:else if log && !log.show_model}
-      <!-- Reachable only for a moment: the control that opens this lives behind the same
-           preference. Saying it plainly beats an empty drawer. -->
+      <!-- Reachable only for a moment: the opener sits behind the same preference. -->
       <p class="why" data-testid="model-rail-off">{log.hint}</p>
     {:else if !log}
       <p class="data">reading the journal…</p>
@@ -129,8 +91,6 @@
                 <span>{eventTime(e.at)}</span>
                 <span class="scope">{e.scope}</span>
               </div>
-              <!-- §6.7: "one human-readable line". Mono, because every one of them is a model
-                   number, an id or a data annotation (§6.8). -->
               <div class="line">{e.text}</div>
             </li>
           {/each}
@@ -143,16 +103,13 @@
       {/if}
 
       {#if suppressed?.length}
-        <!-- Gated with the rest of decision 117's annotations. §6.0: a shelf that cannot
-             justify itself is ABSENT, so without this list the absence is indistinguishable
-             from a bug. -->
+        <!-- A shelf that cannot justify itself is absent (§6.0); this list tells that apart from a bug. -->
         <section class="suppressed">
           <div class="data heading">SHELVES THAT DID NOT SHIP</div>
           <ul>
             {#each suppressed as s, i (s.shelf + ':' + s.kind + ':' + i)}
               <li class="why" data-testid="model-rail-suppressed" data-shelf={s.shelf}>
-                <!-- Joined in JS: Svelte collapses the whitespace around an {#if}, which turned
-                     "because_anchor · series" into "because_anchor· series". -->
+                <!-- Joined in JS: Svelte collapses the whitespace around an {#if}, gluing the separator. -->
                 <span class="sid">{[s.shelf, s.kind].filter(Boolean).join(' · ')}</span>
                 {`— ${s.reason}`}
               </li>
@@ -165,11 +122,7 @@
 {/if}
 
 <style>
-  /* The same inset the header reserves, for the same reason: `app.html` asks for
-     `viewport-fit=cover` and a black-translucent status bar, so the installed web view begins
-     above the header and a drawer anchored at a bare 54 px opens behind the clock. The compact
-     override below is a bottom sheet (`top: auto`) and needs none of this. [§6 preamble;
-     decision 279] */
+  /* Clear the installed app's status bar (viewport-fit=cover); the compact sheet needs none. */
   .rail {
     position: fixed;
     top: calc(54px + env(safe-area-inset-top));
@@ -194,8 +147,6 @@
     font-size: 14.5px;
     font-weight: 600;
   }
-  /* 48 px on both axes, not only the one `design.css`'s coarse block reaches. It raises
-     `min-height` and never `min-width`, so this exit measured 48 by 32 on a phone. [§6 preamble] */
   .close {
     background: none;
     border: none;
@@ -225,19 +176,7 @@
     border-color: var(--ember);
     color: var(--ember-lift);
   }
-  /* Both axes, on the pointer the rule is about, for both of this component's controls.
-     `design.css`'s coarse block raises `min-height` on `button` and never `min-width`, and it
-     gives `padding-inline` to three primitives a `.chip` is none of — so the exit came out 48 by
-     32 and the kind filters 48 by 36: the same defect, eight lines apart, and only the exit was
-     repaired. The filters are three and four characters of a 10 px mono face in a wrapping row
-     with a 6 px gap, on the surface §6.7 calls the primary M2 debugging instrument, and a
-     mis-tap changes which events it is showing.
-     COARSE, not unconditional: the rule these complete lives behind `pointer: coarse`, so
-     declaring the width outside it made both controls 48 wide and 32 tall on a mouse — the same
-     lopsidedness rotated, and in `TitleDetail` it put the box over the end of the heading. A
-     mouse has no 48 px floor; §6's preamble writes it for fingers. Still scoped here rather than
-     added to design.css's coarse list, which decision-level would inflate every narrow control
-     in the app. [§6 preamble; M4.15 review cycle 1] */
+  /* design.css's coarse floor sets min-height only; the width is for fingers, not for a mouse. */
   @media (pointer: coarse) {
     .close,
     .chip {
@@ -259,8 +198,7 @@
     background: var(--card);
     padding: 8px 10px;
   }
-  /* Proposal 118: the event kind is used for colour-coding. Bound to the facet palette rather
-     than to new colours — §6.8 ships eleven and one accent, and no more. */
+  /* Kind colours borrow the facet palette: §6.8 ships eleven colours and one accent, no more. */
   .events li[data-kind='verdict'] { border-left-color: var(--facet-mood); }
   .events li[data-kind='duel'] { border-left-color: var(--facet-pacing); }
   .events li[data-kind='tier_edit'] { border-left-color: var(--facet-structure); }
@@ -320,7 +258,6 @@
     color: var(--ink-3);
   }
 
-  /* Proposal 118: a bottom sheet on compact layouts. */
   @media (max-width: 720px) {
     .rail {
       top: auto;

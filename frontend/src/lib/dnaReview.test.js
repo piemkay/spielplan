@@ -1,13 +1,5 @@
 /**
  * @vitest-environment jsdom
- *
- * §6.6 Data's review of DNA rejects and low-evidence tags: the server's order, every row, no cut.
- * Spec v2.1 §6.6 Data, §4.1 rule 2, §8 stage 7; decisions 341 and 446.
- *
- * Named BESIDE `test_dna_review.py`, `test_data_surface_guards.py` and `20-admin-data.spec.js` on
- * the review's coverage row, never instead of them (decision 226). The fixtures tempt a cut on
- * purpose - a NULL confidence and a 0.01 beside the rest - because a review that hid either would
- * look exactly as tidy as one that did not.
  */
 
 import { flushSync, mount, unmount } from 'svelte';
@@ -143,7 +135,6 @@ describe('the mounted review', () => {
       );
       expect(drawn).toEqual(TAGS.map((t) => t.term));
 
-      // One input on the whole card, the title id; no slider, no select, no toggle.
       expect([...target.querySelectorAll('input')]).toHaveLength(1);
       const controls = 'select, input[type="range"], input[type="checkbox"]';
       expect(target.querySelectorAll(controls)).toHaveLength(0);

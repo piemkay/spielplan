@@ -35,16 +35,6 @@ import {
   typed
 } from './rank.svelte.js';
 
-/**
- * §6.3's client rules, at the layer that can actually break them.
- *
- * Three of these are not cosmetic. Cancelling a lift must write *nothing* — proposal 74 calls a
- * modeless lift with no exit the classic tap-to-move failure, and a Cancel that quietly
- * committed would be worse than none. The queue's arm must never be named by the client, or
- * §13's guard becomes advisory. And the board must come from the server, because the client
- * shape of "snapping back" is optimistic re-sorting.
- */
-
 const board = (over = {}) => ({
   kind: 'movie',
   tier_set: ['F', 'D', 'C', 'B', 'A', 'A+', 'S'],
@@ -118,8 +108,7 @@ beforeEach(() => {
   rank.roundAnswered = 0;
   rank.roundDone = false;
   rank.placed = [];
-  // The M3 review found these two sharing state across tests: `draft` is module-level and
-  // nothing reset it, so the drop test's query string depended on which filter test ran last.
+  // `draft` is module state, so reset it or a test depends on the last one's filters.
   draft.q = '';
   draft.genre = '';
   draft.decade = '';
@@ -152,8 +141,7 @@ describe('the board comes from the server', () => {
   });
 
   it('reads decision 117 as an absence, not an empty object', async () => {
-    // `rail.redact` DELETES the gated keys; a client that defaulted `model` to `{}` would
-    // render an annotation block with no numbers in it and claim the toggle was on.
+    // The server deletes the gated keys; defaulting `model` to {} would claim the toggle was on.
     respond(board());
     await load('movie');
     expect(rank.model).toBeNull();
@@ -189,8 +177,7 @@ describe('the phone lift (proposals 74, 75)', () => {
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toContain('/api/rank/drop');
     expect(url).toContain('kind=movie');
-    // §6.3 gives a drop *into* a tier a bare `tier_edit`; the two margin-less duels belong to a
-    // drop *between two titles*, which a tap cannot be. [M4.10 finding 17]
+    // A drop into a tier is a bare `tier_edit`; the two duels belong to a drop between two titles.
     expect(JSON.parse(init.body)).toEqual({ title_id: 1, tier: 4, above: null, below: null });
     expect(rank.lifted).toBeNull();
   });
@@ -203,12 +190,7 @@ describe('the phone lift (proposals 74, 75)', () => {
 
 describe('the neighbours a drop lands between', () => {
   it('names nobody for a drop into a tier, however full that tier is', () => {
-    // This is finding 17's falsifier. The old body named the tier's current last entry, and
-    // `rank/drop.py` then wrote `duel(title_a=<last>, title_b=<dropped>, outcome='A')` — a
-    // comparison the person never made, in the same direction every time, on every promotion
-    // into a non-empty tier. §6.3 gives a drop into a tier a bare `tier_edit`, and §4.2 is
-    // append-only, so each invented duel was permanent. On phones tap-to-tier is the only way
-    // to move a title, so "every drop" and "every move" were the same set. [M4.10 finding 17]
+    // Naming the tier's last entry would write a duel the person never made, on every move.
     expect(neighboursIn(4, { title_id: 1 })).toEqual({ above: null, below: null });
   });
 
@@ -217,8 +199,7 @@ describe('the neighbours a drop lands between', () => {
   });
 
   it('never names the title being dropped', () => {
-    // The self-filter is still load-bearing on the poster path: without it a drop onto the
-    // poster below its own row would name the dragged title as its own new neighbour.
+    // The self-filter still matters on the poster path.
     expect(neighboursIn(4, { title_id: 2 }, 3)).toEqual({ above: null, below: 3 });
     expect(neighboursIn(4, { title_id: 3 })).toEqual({ above: null, below: null });
   });
@@ -264,12 +245,7 @@ describe('the comparison queue', () => {
   });
 
   it('takes the refused pair off the table and re-reads, so the loser is not stuck', async () => {
-    // The seal is a count of this user's `tier_queue` duels, `duel` is append-only under §4.2, and
-    // the winner's row moved that count — so the refusal is PERMANENT for this token, not
-    // transient. Leaving the two posters up meant every further tap on them 409'd again and the
-    // only way out was Done plus a reopen, which nothing on the surface says. `rate.svelte.js`
-    // answers the same seam by re-reading the table; this is that, for the pair.
-    // [§6.3, §4.2; cycle 1 m410-rev-03]
+    // A refused seal is permanent for this token, so re-read rather than leave the pair up.
     rank.pair = { title_a: 1, title_b: 2, arm: 'boundary', token: 'old', reason: 'x' };
     respond({ detail: { reason: 'stale_pair', message: 'that pair is no longer on the table' } }, 409);
     respond({ kind: 'movie', pair: { title_a: 3, title_b: 4, token: 'fresh', reason: 'y' } });
@@ -277,12 +253,10 @@ describe('the comparison queue', () => {
 
     expect(rank.pair?.token).toBe('fresh');
     expect(fetchMock.mock.calls[1][0]).toContain('/api/rank/queue?');
-    // The notice stays: the re-read explains nothing by itself, and a pair that silently changed
-    // under the finger is §6.8's register saying nothing about a refused answer.
+    // The notice stays: a pair that silently changed would say nothing about the refusal.
     expect(rank.notice).toBe('that pair is no longer on the table');
 
-    // And the next tap is answerable, which is the whole of the defect: it used to re-post the
-    // token the route had already refused.
+    // And the next tap is answerable, with the fresh token.
     respond({ kind: 'movie', pair: null, reason: 'done' });
     respond(board());
     await answer('B');
@@ -332,27 +306,18 @@ describe("proposal 80's states", () => {
     expect(emptyState()).toBeNull();
   });
 
-  /**
-   * Decision 209. Between a member's first verdict and the 60 s sweep that fits it there is no
-   * `ledger_state` row, so §6.3's board answers `rated_total: 0` — the same payload a member who
-   * has never rated anything gets. Two states, one reading: the person who has just rated ten
-   * films is told they are at zero, which is §6.8's register saying something untrue about the
-   * one thing they just did. The server's `fitting` is what separates them.
-   */
+  // Before the first fit the board also says `rated_total: 0`; `fitting` tells the two apart.
   it('says the fit is owed rather than that nobody has started', () => {
     apply(board({ rated: 0, rated_total: 0, tiers: [], fitting: true }));
     const state = emptyState();
     expect(state.kind).toBe('fitting');
     expect(state.text).toContain('still being fitted');
-    // "shortly", and no number: the sweep runs every 60 s and a queue ahead of you is allowed,
-    // so a duration in this copy would be a promise the app cannot keep.
+    // "shortly", no duration: the sweep runs every 60s, but a queue may be ahead.
     expect(state.text).toContain('shortly');
     expect(state.text).not.toContain("you're at 0");
   });
 
   it('still tells a member who has rated nothing that they have rated nothing', () => {
-    // The other half of decision 209: no fit is owed, so the count is the whole truth and
-    // proposal 80's handoff is unchanged.
     apply(board({ rated: 0, rated_total: 0, tiers: [], fitting: false }));
     const state = emptyState();
     expect(state.kind).toBe('unrated');
@@ -441,9 +406,7 @@ describe('a drop', () => {
 
 describe('the neighbours a drop lands between (§6.3)', () => {
   it('names both when the drop lands on a poster', () => {
-    // §6.3's "dropping it *between* two titles emits that edit plus two margin-less duels".
-    // The M3 review found this case unreachable: both input paths appended to the end, so the
-    // second duel — and the ordinal claim it carries — could not be made from the app at all.
+    // §6.3: a drop between two titles emits the edit plus two margin-less duels.
     expect(neighboursIn(4, { title_id: 1 }, 3)).toEqual({ above: 2, below: 3 });
   });
 
@@ -461,9 +424,7 @@ describe('the neighbours a drop lands between (§6.3)', () => {
   });
 
   it('names neither when the position is not in that tier any more', () => {
-    // A stale board — two tabs, or one read before a nightly refit — names a poster the tier no
-    // longer holds. That is not a place between two titles, and guessing the end of the tier
-    // there is the same fabrication by another route. [M4.10 findings 17, 18]
+    // A stale board names a poster the tier no longer holds; guessing the end would fabricate.
     expect(neighboursIn(4, { title_id: 1 }, 999)).toEqual({ above: null, below: null });
   });
 });
@@ -484,8 +445,7 @@ describe('the empty state waits for the board', () => {
 
 describe('overlapping requests', () => {
   it('drops a slow earlier response in favour of the newer one', async () => {
-    // The bug `routes/+page.svelte` already carries a guard and a comment for: tap Series, tap
-    // Films, and the Series board lands second under a Films tab.
+    // Tap Series then Films: the Series board must not land second under a Films tab.
     let releaseFirst = () => {};
     fetchMock.mockReturnValueOnce(
       new Promise((r) => {
@@ -544,8 +504,7 @@ describe('reset', () => {
 
 describe('the queue answer keeps its §6.7 line', () => {
   it('survives the board re-read that follows it', async () => {
-    // `apply()` blanks `log` because the board GET carries none; the line the answer produced
-    // is the only §6.7 narration of a tier-queue duel this page shows.
+    // `apply()` blanks `log`, and the answer's line is the only narration of this duel.
     rank.pair = { title_a: 1, title_b: 2, arm: 'boundary', token: 'sealed', reason: 'x' };
     respond({ kind: 'movie', pair: null, reason: 'done', log: ['duel(Heat vs Drive) = A'] });
     respond(board());
@@ -578,10 +537,7 @@ describe('a drop', () => {
 
 describe('the queue answer', () => {
   it('refuses to start a second one while the first is in flight', async () => {
-    // Finding 1's client half, and only that half. Two taps on the same sealed pair both passed
-    // the old `if (!rank.pair) return;`, both reached `/api/rank/queue/answer`, and each wrote a
-    // `duel` row the person answered once — §4.2 is append-only, so the second one stays. The
-    // advisory lock in the route is the fix; this stops a double tap being the easy way there.
+    // A double tap on one sealed pair must not write two duels (§4.2 is append-only).
     rank.pair = { title_a: 1, title_b: 2, token: 'sealed', reason: 'x' };
     let release = () => {};
     fetchMock.mockReturnValueOnce(
@@ -606,10 +562,7 @@ describe('the queue answer', () => {
 
 describe('a kind switch (§4.1 rule 5)', () => {
   it('clears the kind-scoped filters and leaves the rest of the draft alone', async () => {
-    // Finding 27: the genre and decade vocabularies are scoped to the kind, so a value from the
-    // kind you just left stays in the request, renders blank in a `<select>` that no longer
-    // offers it, and comes back as an empty board. `q`, `dna`, `runtime_max` and `seen` are not
-    // kind-scoped, and a kind switch is not a reason to throw away what the person typed.
+    // Genre and decade vocabularies are kind-scoped; the rest of the draft is not.
     draft.q = 'heat';
     draft.genre = 'Thriller';
     draft.decade = '1990';
@@ -636,11 +589,7 @@ describe('a kind switch (§4.1 rule 5)', () => {
   });
 
   it('keeps the newer kind vocabulary when an earlier facets read answers last', async () => {
-    // Finding 21. `load()` has carried a sequence number since M3 and `loadFacets` did not, so
-    // two kind taps inside one round trip left whichever request the network happened to finish
-    // second — the film genres over a series board, offering a filter that returns nothing and
-    // hiding the one that would work. The vocabulary is the half a member reads before they can
-    // ask anything, so it is the half where a stale answer costs the most.
+    // `loadFacets` carries a sequence number, so the later kind's vocabulary wins.
     let releaseFilm = () => {};
     fetchMock.mockReturnValueOnce(
       new Promise((r) => {
@@ -670,8 +619,6 @@ describe('a kind switch (§4.1 rule 5)', () => {
 });
 
 describe('sharpenWhy', () => {
-  // Decision 209's window, one surface further in than `emptyState`. The branch this covers used
-  // to tell a member who had rated ten titles that the queue draws from titles they have rated.
   it('names the owed fit rather than the ratings, while the first fit is owed', () => {
     apply({ tiers: [], rated: 0, rated_total: 0, queue_eligible: 0, fitting: true });
     expect(sharpenWhy().kind).toBe('fitting');
@@ -696,8 +643,6 @@ const pairN = (i) => ({ title_a: 1, title_b: 2, token: `t${i}`, reason: 'x', nam
 
 describe('a sitting is a round of fifteen (decision 495)', () => {
   it('counts every accepted answer, ends the round at fifteen and holds the next pair', async () => {
-    // Both first-household sessions stopped at ten and eleven answers under the same fixed line,
-    // with nothing on the sheet saying how far they had come or where it ended.
     respond({ kind: 'movie', pair: pairN(0) });
     await openQueue();
     expect(rank.queueOpen).toBe(true);
@@ -753,8 +698,7 @@ describe('a sitting is a round of fifteen (decision 495)', () => {
   });
 
   it('opening the queue again while it is open is not a new round', async () => {
-    // Every chip on the board opens the queue (§6.3, decision 295), so a second tap must not
-    // quietly reset the count the person is reading.
+    // Every chip opens the queue, so a second tap must not reset the count.
     rank.queueOpen = true;
     rank.pair = pairN(3);
     rank.roundAnswered = 5;
@@ -775,7 +719,6 @@ describe('a sitting is a round of fifteen (decision 495)', () => {
 
 describe('after an answer the sheet names where both titles sit', () => {
   it('keeps the placement the answer route returned', async () => {
-    // The sheet covers the board it sharpens; this line is where the person sees an answer land.
     rank.queueOpen = true;
     rank.pair = pairN(1);
     const placed = [

@@ -1,19 +1,5 @@
 /**
  * @vitest-environment jsdom
- *
- * Home's bundle-less state, in the two registers decision 486 gives it. Spec v2.1 §3.1, §6.8;
- * decisions 486 (clause 6) and 497.
- *
- * §3.1 names the state "no bundle imported" and that name is the operator's. The header already
- * spoke to each reader in their own words; Home's count line and its empty card still told a
- * member about a bundle and offered them the admin's door, and told everyone "No artifact bundle
- * has been imported" while a bundle was imported and waiting for a restart.
- *
- * MOUNTED RATHER THAN IN PLAYWRIGHT: the e2e stack reaches the bundle-less state once, as the
- * first admin (`01-first-boot`), and never as a member or with a restart owed.
- *
- * Named `home-page.test.js`, not `+page.svelte.test.js`, for `rank-page.test.js`'s reason:
- * SvelteKit reserves the `+` prefix inside `src/routes`.
  */
 
 import { flushSync, mount, unmount } from 'svelte';
@@ -100,12 +86,6 @@ describe('Home with no movie data', () => {
   });
 });
 
-// --- the second household test: Home is phone-first (decision 516) ------------------------------
-
-/**
- * A scriptable backend: `titles(params)` answers `/api/titles`, `facets(kinds)` answers
- * `/api/facets`, and every request's URL is kept for the assertions.
- */
 function backend({
   titles = (/** @type {URLSearchParams} */ _params) => ({ items: [], total: 0, hidden: {} }),
   facets = (/** @type {string[]} */ _kinds) => ({ genres: [], decades: [] })
@@ -240,8 +220,6 @@ describe('a filtered grid is read in the order the server says it used', () => {
   });
 
   it('offers no For you before the member has an order of their own, and says when it comes', async () => {
-    // Review finding UX-1: the server answers `newest` whatever is asked until the member's own
-    // ratings rank the kind, and "For you" was a button that reloaded the same grid.
     backend({
       titles: () => ({
         items: [film(1, 'Heat')], total: 1, hidden: {}, sort: 'newest', for_you_available: false
@@ -261,8 +239,6 @@ describe('a filtered grid is read in the order the server says it used', () => {
 
 describe("a grid in the member's own order with both kinds", () => {
   it('heads each kind where it starts and says films come first', async () => {
-    // Review finding UX-7: decision 515's order lists every film and then every series, and on the
-    // live install the first series card sat 753 films down with nothing saying so.
     const series = { id: 3, kind: 'series', name: 'Severance', year: 2022 };
     backend({
       titles: (p) => ({
@@ -372,8 +348,7 @@ describe('a kind switch keeps the filters the new kind has', () => {
     expect($('[data-testid="filter-genre"]').value).toBe('');
     expect($('[data-testid="kind-filter-note"]').textContent).toBe('Musical cleared - no series match it.');
 
-    // Review finding UX-6: it names what that switch cleared, and the next list asked for - a
-    // search, a filter, an order - is not that switch.
+    // The note belongs to the kind switch; the next list asked for clears it.
     await type('heat');
     expect($('[data-testid="kind-filter-note"]'), 'a search after the switch').toBeNull();
   });
@@ -381,12 +356,10 @@ describe('a kind switch keeps the filters the new kind has', () => {
 
 describe('the document never scrolls under the shell', () => {
   it('keeps the shelves marker in flow, where the scroller holds it', async () => {
-    // Absolutely placed, it escaped `main` (not a containing block) and made the whole document
-    // scroll on a phone - the second vertical bar and the sideways scroll of U11.
+    // Absolutely placed, it escaped `main` and made the whole document scroll on a phone.
     backend();
     await openHome();
-    // jsdom applies no component styles, so the rule is read where it is written; the browser
-    // half is `06-responsive.spec.js`'s "the document never scrolls under the shell".
+    // jsdom applies no component styles, so the rule is read from the source.
     const marker = $('[data-testid="home-mode"]');
     expect(marker.classList.contains('sr-only')).toBe(true);
     const rule = PAGE_SOURCE.match(/\.sr-only\s*\{([^}]*)\}/)[1];

@@ -1,23 +1,5 @@
 /**
  * @vitest-environment jsdom
- *
- * What the Rank surface DOES under a finger, on the payloads the first household's defects lived
- * in. Spec v2.1 §6.3, §6.8; decisions 295, 486, 494-496; owner instruction of 2026-09-25 after
- * the first household user test.
- *
- * Every defect here was in the markup: the tile was one button whose only handler lifted the
- * title, the chip that §6.3 makes the queue's entry point was a span inside it, the queue showed
- * two names in grey boxes, and the sheet carried one fixed line and no count. The store tests in
- * `rank.svelte.test.js` pin what each function does; only a mounted page can show which control a
- * tap reaches.
- *
- * NAMED `rank-page.test.js`, not `+page.svelte.test.js`, for `rate-page.test.js`'s reason:
- * SvelteKit reserves the `+` prefix inside `src/routes` and `vite build` refuses any other
- * `+`-named file.
- *
- * MOUNTED RATHER THAN IN PLAYWRIGHT for the chip: a straddle chip exists only when the fit puts
- * a posterior across a cut, which a seeded e2e board does not do on demand. The e2e spec carries
- * the gestures a seeded board does support (open, Move, the round count).
  */
 
 import { flushSync, mount, unmount } from 'svelte';
@@ -90,11 +72,7 @@ let queueReplies;
 let target;
 let app;
 
-/**
- * Answers by URL rather than by call order: the page reads the facets and the board at once on
- * mount, and the title card fetches on its own, so an order-based mock would be asserting the
- * scheduler.
- */
+// Answers by URL, not call order: the page and the title card fetch concurrently.
 function route(url, init) {
   const method = init?.method ?? 'GET';
   const body = init?.body ? JSON.parse(init.body) : null;
@@ -132,8 +110,7 @@ beforeEach(() => {
   queueReplies = [];
   fetchMock = vi.fn(route);
   vi.stubGlobal('fetch', fetchMock);
-  // The sheet measures itself (`bind:clientHeight`) to reserve room under the board, and jsdom
-  // has no ResizeObserver; the measurement is layout, which is Playwright's to check.
+  // jsdom has no ResizeObserver; the sheet's measurement is layout, left to Playwright.
   vi.stubGlobal(
     'ResizeObserver',
     class {

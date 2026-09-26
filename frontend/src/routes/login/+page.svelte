@@ -1,13 +1,5 @@
 <script>
-  /**
-   * Sign in. Spec v2.1 §3.2: "Primary: WebAuthn passkeys … Fallbacks: password login (argon2)
-   * always available". Both are on this page, passkey first, and the password form is never
-   * hidden behind a toggle — a household member whose phone will not cooperate must not have
-   * to discover that the way in still exists.
-   *
-   * §3.1: an account created with a one-time password is locked to a password change at first
-   * login, so a successful sign-in can legitimately land somewhere other than Home.
-   */
+  // Passkey first, but the password form is never hidden behind a toggle (spec §3.2).
   import '$lib/design.css';
   import { goto } from '$app/navigation';
   import { post } from '$lib/api.js';
@@ -23,8 +15,7 @@
 
   async function land(user) {
     setUser(user);
-    // The sign-in response carries identity only. The shell renders its navigation from
-    // `/auth/me`, so read it before leaving this page or the rail arrives empty.
+    // The sign-in response carries identity only; the shell's nav comes from `/auth/me`.
     if (!user.must_change_password) await refreshUser();
     await goto(user.must_change_password ? '/account/password' : '/');
   }
@@ -95,21 +86,11 @@
     min-height: 100vh;
     display: grid;
     place-items: center;
-    /* dd27-standalone-header-under-status-bar. §6's preamble makes the installed PWA the
-       primary form factor, and app.html asks for it literally: `viewport-fit=cover` plus
-       `apple-mobile-web-app-status-bar-style=black-translucent` start the web view at the
-       physical top edge with the status bar drawn over it — 47 px on an iPhone 13, 59 px from
-       the 14 Pro on. There is no header here to carry the inset, so it lands on the page box.
-       `max()` and not an added `env()`: 24 px already clears everything without a notch, and
-       `env()` is 0 there, so no other engine moves a pixel. `min-height: 100vh` stays — this
-       page scrolls, carries no fixed bottom bar, and the dynamic viewport belongs to the shell
-       rather than to a card centred in an empty grid. */
+    /* The installed PWA draws the status bar over the page top (viewport-fit=cover). */
     padding: max(24px, env(safe-area-inset-top)) 24px 24px;
   }
   form {
     width: min(380px, 100%);
-    /* This card IS the screen: centred in an empty grid at min(380px, 100%) with
-       nothing stacked beside it. */
     padding: var(--card-pad-roomy);
     display: flex;
     flex-direction: column;
@@ -141,10 +122,7 @@
     font-size: 10.5px;
     letter-spacing: 0.12em;
   }
-  /* 11 px on a finger, for the reason `design.css`'s coarse block states and cannot enforce from
-     there: this scoped rule is (0,2,0) and the shared `.data` floor is (0,1,0), so the divider on
-     the first screen §3.1 hands every new member stayed at 10.5. Last, because the two tie on
-     specificity and order is what is left to decide it. [§6 preamble; decision 275] */
+  /* This scoped rule outranks design.css's coarse `.data` floor, so restate it here, last. */
   @media (pointer: coarse) {
     .or {
       font-size: 11px;

@@ -1,29 +1,6 @@
 <script>
-  /**
-   * §6.6's per-task assignment, parallel mode and pass count, and the estimate every change to them
-   * shows before it is stored. Spec v2.1 §6.6, §8 stage 6, §9; decisions 324, 337, 338, 339, 343,
-   * 450, 451.
-   *
-   * ONE ASSIGNMENT, BECAUSE M5 HAS ONE TASK (decision 339). §6.6 sketches three task slots and two
-   * of them have no caller before M6, so this card offers the extraction provider alone: a setting
-   * for a task nothing calls is a promise the surface cannot keep.
-   *
-   * NOTHING HERE DEFAULTS ON THE CLIENT. The toggle, the providers and the pass count start from
-   * the `llm` row as the server read it, and an absent `passes` shows the count the server's own
-   * plan uses (decision 324: off, one pass, stated once in `llm/spend`). A page that supplied its
-   * own default would be a second place that decision lives.
-   *
-   * EVERY CHANGE IS A PROPOSAL, AND THE PANEL BELOW IS THE ONLY WAY TO STORE ONE (decision 450).
-   * The panel is where the provider cards' model and price edits land too, because they move the
-   * same figure. It shows the three numbers plan §7 check 1 names -- the per-title estimate with
-   * the price it rests on, the projected month and what is left of the cap -- and Confirm carries
-   * the figure it shows. Plan §9 is why they are not drawn alike: the per-title figure is small
-   * enough to be waved through, and the month against the cap is the number that protects, so the
-   * month carries the weight and its warning carries the alarm.
-   *
-   * Batch mode is rendered and never enabled (decision 338): the server says it is unavailable and
-   * why, and a toggle shipped enabled and inert is the promise decision 338 refuses to make.
-   */
+  // Nothing defaults on the client: every value starts from the server's `llm` row, and a change
+  // is stored only through the estimate panel's Confirm (decision 450).
   import {
     PROVIDER_LABELS,
     amend,
@@ -75,11 +52,7 @@
   const tokens = (n) => (typeof n === 'number' ? n.toLocaleString('en') : '?');
   const same = (a, b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
 
-  /**
-   * One field amended into the page's proposal, or taken back out of it when it is back to what is
-   * stored: a proposal that stores the value already there previews the same figure and asks for a
-   * confirm that changes nothing.
-   */
+  // A field set back to its stored value leaves the proposal, so an unchanged plan asks no confirm.
   function edit(field, value, stored) {
     propose(amend(spend.proposal, { [field]: same(value, stored) ? undefined : value }));
   }
@@ -88,13 +61,11 @@
     const next = new Set(chosen);
     if (on) next.add(name);
     else next.delete(name);
-    // The server's own order, and null rather than [] for none: the route refuses an empty list,
-    // and null is "clear parallel_providers" (decision 450).
+    // Server order, and null rather than []: the route refuses an empty list.
     const ordered = providers.map((p) => p.name).filter((n) => next.has(n));
     edit('parallel_providers', ordered.length ? ordered : null, settings.parallel_providers);
   }
 
-  /** Why the figure is "unknown", in the plan's own words, or the provider nobody priced. */
   function unknownReason(estimate) {
     if (estimate.reason) return estimate.reason;
     const unpriced = (estimate.providers ?? []).filter((_, i) => estimate.basis?.[i] === 'unknown');
@@ -111,7 +82,7 @@
   {@const projected = preview.projected ?? {}}
   {@const unknown = estimate.per_title_usd === 'unknown'}
   <div class="figures" data-plan={plan}>
-    <!-- The reassuring number, drawn in the quiet voice (plan §9). -->
+    <!-- The small per-title figure stays quiet; the month against the cap carries the weight. -->
     <div class="per-title" data-per-title={estimate.per_title_usd}>
       <span class="data">PER TITLE</span>
       <span class="data-lg">{unknown ? 'unknown' : usd(estimate.per_title_usd)}</span>
@@ -136,8 +107,6 @@
       {tokens(estimate.output_tokens_assumed)} billed out per call, thinking tokens included (§9)
     </div>
 
-    <!-- The protecting number, drawn with the weight (plan §9): what a month at this install's
-         own rate costs, against what is left of this month's cap (decision 451). -->
     <div
       class="month"
       data-projected={projected.monthly_usd === null || projected.monthly_usd === undefined
@@ -212,8 +181,6 @@
       />
       <span>Parallel mode</span>
     </label>
-    <!-- §6.6's consensus numbers as the toggle's caption, labelled with the population they were
-         measured over, and decision 337's note that the merge counts runs. -->
     <p class="why">
       Runs extraction on each selected provider and merges by the measured consensus rule: the
       union, with per-tag agreement as confidence. Union recalls 93% against 67% for intersection,

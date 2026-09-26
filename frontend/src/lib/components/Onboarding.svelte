@@ -1,28 +1,6 @@
 <script>
-  /**
-   * Member first-run onboarding. Spec v2.1 §6 preamble, §3.1 (the fifth setup step), §12 (M2).
-   *
-   * §6's preamble, which is the whole reason this is a screen and not a button:
-   *
-   *   "on iPhone, Web Push works only for a PWA added to the home screen (iOS 16.4+), and the
-   *    permission request must run inside a user gesture; iOS has no programmatic install
-   *    prompt, so member first-run onboarding *guides* Share → Add to Home Screen, detects
-   *    standalone mode, and nags until push is granted."
-   *
-   * So this is a guided act with two halves, and the first half has two different mechanisms
-   * depending on where it runs: a real Install button where the browser fires
-   * `beforeinstallprompt`, and instructions where it never will. It detects which, and never
-   * shows a button it cannot honour.
-   *
-   * Both halves are optional and BOTH endings complete §3.1's fifth step: "completed" and
-   * "declined" are the same thing to a wizard, and an onboarding step that only completes on
-   * yes is a step that blocks forever for anyone who says no.
-   *
-   * It lives on the account page because §3.2 already put the other per-device act — passkey
-   * registration — there, and the forced first-login password change lands a new member on
-   * that page (`/account?welcome=1`). What stops after completion is the *nag*: the controls
-   * stay, because "turn notifications on later" has to be possible.
-   */
+  // iOS has no install prompt and pushes only to the home-screen app, so this guides rather than
+  // asks (§6 preamble). Yes and no both complete §3.1's fifth step.
   import { onMount } from 'svelte';
   import {
     completeOnboarding,
@@ -40,28 +18,21 @@
     watchInstallPrompt
   } from '$lib/push.js';
 
-  // Settled until the server says otherwise: a nag that flashes for one frame on every visit
-  // to the account page is worse than one that arrives a beat late.
+  // Settled until the server says otherwise, so the nag never flashes on every visit.
   let complete = $state(true);
   let vapidKey = $state(null);
   let devices = $state([]);
   let prompt = $state(null);
   let standalone = $state(false);
-  // Optimistic until the Permissions API answers: "off, and here is the button" is the state
-  // nearly everyone is in, and it is the one that costs nothing if it turns out to be wrong.
+  // Optimistic until the Permissions API answers.
   let perm = $state('default');
   let busy = $state('');
   let error = $state('');
   let installOutcome = $state('');
-  // This browser's own subscription, and the handle the server gave it. `devices` answers a
-  // different question — `api/push.py`: "this member's devices. Never the household's" — and
-  // deriving "on for this device" from that list is what told every member's SECOND phone it was
-  // already registered, listed the first phone as if it were itself, and hid the enable button in
-  // an unreachable `else`. Only the browser knows what the browser holds. [M4.11 finding 21]
+  // This browser's own subscription: `devices` is the member's whole list, not this device.
   let localSub = $state(null);
   let localDevice = $state(null);
-  // One line about this device's push state that is neither an error nor the state itself: a
-  // subscription bound to a retired VAPID key, or an off switch that found nothing to switch off.
+  // A line about this device's push state that is neither an error nor the state itself.
   let pushNote = $state('');
   let noteKind = $state('');
 
@@ -75,19 +46,9 @@
           ? 'denied'
           : 'off'
   );
-  // Deliberately NOT `perm === 'granted'`: granted-with-no-row is exactly the state a device is in
-  // after the 90-day prune (§4.2), and a screen that read permission as registration would show
-  // the off switch for a device the sender can no longer reach.
+  // Not `perm === 'granted'`: a granted device whose row was pruned is not registered.
 
-  /**
-   * Which row in the list is the phone in the member's hand, where that is knowable.
-   *
-   * The server identifies a device by `sha256(endpoint)[:12]` and hands that handle back with every
-   * subscribe, which is the only way this screen can learn it: §2 puts the app behind "one plain
-   * HTTP port", and `crypto.subtle` does not exist outside a secure context, so the browser cannot
-   * hash its own endpoint. Unknown stays unknown — a row is never called somebody else's device on
-   * a guess.
-   */
+  // The server's device handle is the only way to mark this row: no `crypto.subtle` over plain HTTP.
   const scopeOf = (device) =>
     localDevice ? (device.device === localDevice ? 'this' : 'other') : 'unknown';
   const devicesWhy = $derived(
@@ -120,15 +81,11 @@
       error = err.message || String(err);
       return;
     }
-    // The browser may already hold a subscription this server has never been told about —
-    // after a reinstall, or a service-worker update that rotated the endpoint. Re-posting is
-    // an upsert on the endpoint, so it cannot fan out into duplicate rows.
+    // Re-post any subscription the server was never told about; it upserts on the endpoint.
     try {
       const synced = await syncSubscription({ vapidKey });
       if (synced?.stale) {
-        // The key this subscription was minted against is not the key this server signs with, so
-        // it is a device the push service will refuse to deliver to — off, with a reason, and the
-        // member's own tap is what replaces it (`enablePush` unsubscribes first).
+        // Minted under a key the server no longer signs with, so the push service will refuse it.
         localSub = null;
         localDevice = null;
         noteKind = 'stale';
@@ -140,12 +97,11 @@
         localDevice = synced.device ?? null;
       }
     } catch {
-      // A device that cannot re-register is not an error worth a red box on the account page;
-      // the button below is still there and still says what state it is in.
+      // Not worth a red box: the button below still says what state it is in.
     }
   }
 
-  /** §3.1's fifth step. Called on yes and on no alike — see the header. */
+  /** Called on yes and on no alike. */
   async function finish() {
     if (complete) return;
     try {
@@ -171,11 +127,7 @@
     }
   }
 
-  /**
-   * Straight from the click, with no await before `Notification.requestPermission()` — §6's
-   * preamble requires the request to run inside the user gesture, and an `await` first is how
-   * a gesture is lost.
-   */
+  // No await before `requestPermission()`: it must run inside the user gesture (§6 preamble).
   async function enable() {
     busy = 'push';
     error = '';
@@ -185,9 +137,7 @@
       const result = await enablePush({ vapidKey });
       perm = result.permission === 'unsupported' ? perm : result.permission;
       if (result.subscriptions) devices = result.subscriptions;
-      // From the act itself, not from a re-read: the endpoint is what makes this device "on" and
-      // the handle is what marks its row. A second device that only re-read `/api/push/state`
-      // would still be looking at the first one's row.
+      // From the act itself, not a re-read: the list cannot say which row is this device.
       if (result.endpoint) {
         localSub = result.endpoint;
         localDevice = result.device ?? null;
@@ -195,8 +145,7 @@
       // Granted or denied, the member has answered the question.
       await finish();
     } catch (err) {
-      // A refusal is an answer and lands above; this is a genuine failure — most often a
-      // browser that will not mint a subscription without an application server key.
+      // A refusal lands above; this is a real failure, usually a missing application server key.
       error = err.message || String(err);
       perm = await permissionState();
     } finally {
@@ -214,19 +163,10 @@
       if (result.removed) {
         localSub = null;
         localDevice = null;
-        // The DELETE answers with the member's REMAINING devices, so the other phone's row stays
-        // on screen. `?? []` used to run for every answer, including the one where nothing was
-        // deleted, and blanked a list of devices that were all still subscribed.
+        // The DELETE answers with the member's remaining devices.
         if (result.subscriptions) devices = result.subscriptions;
       } else {
-        // The same two fields, because `removed: false` is an answer about this browser and not
-        // just an absence of one: both of `disablePush`'s early returns mean the browser holds no
-        // `PushSubscription`, which is the single fact `localSub` models. Annotating without
-        // clearing left `pushState` on 'on', so the card said "Notifications are on for this
-        // device" directly above "there was nothing to turn off here", kept offering the off
-        // switch, and kept the enable control — the only gesture §6's preamble lets ask for
-        // permission — in the unreachable arm. That is finding 21's own defect, in the branch
-        // written to repair it. [M4.11 finding 21; §4.2]
+        // `removed: false` means this browser holds no subscription, so clear it too.
         localSub = null;
         localDevice = null;
         noteKind = 'nothing-local';
@@ -273,31 +213,7 @@
         work on an iPhone.
       </p>
     {:else if where === 'ios-safari'}
-      <!-- §6 preamble: "iOS has no programmatic install prompt". There is no button to offer
-           here — this list is the entire mechanism, not a consolation prize for one.
-
-           The third step used to read "then come back here for notifications", which is the
-           one thing the member cannot do. The session is an HttpOnly SameSite=Lax cookie
-           (`api/auth.py`'s `set_cookie`) and the home-screen app has its own cookie jar, so
-           the icon opens on a 401, §3.2 makes that the server's answer, and the shell lands
-           the member on /login — a second sign-in nobody had mentioned, with the passkey that
-           would shorten it offered *after* the instruction to leave.
-
-           NO DIRECTION WORD. This component does not know where its host puts it: `/account`
-           renders the Passkeys card ABOVE `<Onboarding />` on the `?welcome=1` visit and below
-           it on every other, and that inversion is the repair finding 22 asked for — so "below"
-           was wrong on the one visit the whole change was made for, and a sentence that names
-           a direction is a sentence a host can falsify by moving a card. "On this page" is true
-           either way.
-
-           AND NEITHER OF THE TWO FACTS UNDER THIS COPY IS SIGNED. That the icon opens with its
-           own cookie jar follows from §3.2's HttpOnly SameSite=Lax cookie, and whether a passkey
-           registered in this tab answers inside the home-screen app does not follow from
-           anything — it is a device fact no engine in this suite can observe. Both are owed in
-           `docs/TESTING.md` as unsigned device checks (decision 281), which is the mechanism
-           this milestone built for exactly this shape of claim; until they are signed the copy
-           states the first and only points at the card for the second.
-           [fe-14-ios-install-journey-second-login-and-copy; M4.15 review cycle 1] -->
+      <!-- No direction word: the host moves the Passkeys card above or below this one. -->
       <ol class="steps" data-testid="onboarding-ios-steps">
         <li>Tap the Share button in Safari's toolbar (the square with the arrow).</li>
         <li>Scroll down and choose <strong>Add to Home Screen</strong>.</li>
@@ -341,13 +257,7 @@
   <div class="step">
     <div class="label data">2 · notifications</div>
     {#if pushState === 'unsupported'}
-      <!-- "This browser has no Web Push support" is true in an iOS Safari tab and names the
-           wrong cause, which is the half of fe-14 that lives in step 2. §6's preamble states
-           the actual rule — "on iPhone, Web Push works only for a PWA added to the home screen
-           (iOS 16.4+)" — so the tab is not a browser that cannot do this; it is the wrong place
-           to ask from, and step 1 above is the way out. Branched on `ios-safari` alone:
-           `ios-other` already has its own sentence in step 1 (no iOS browser but Safari can
-           install), and on a desktop browser with no push the original line is the true one. -->
+      <!-- In a Safari tab the cause is the tab, not the browser: iOS pushes only to the home-screen app. -->
       {#if where === 'ios-safari'}
         <p class="why" data-testid="onboarding-push-state">
           On an iPhone notifications come from the home-screen app rather than from a Safari
@@ -393,8 +303,7 @@
         {busy === 'push' ? 'Waiting for the browser…' : 'Turn on notifications'}
       </button>
       {#if !vapidKey}
-        <!-- The sending half ships with the M4 push stack and owns the key pair. Saying so is
-             better than a button that fails with a DOMException nobody can act on. -->
+        <!-- Saying so beats a button that fails with a DOMException nobody can act on. -->
         <p class="why" data-testid="onboarding-push-unconfigured">
           This server has no push key configured yet, so your browser may refuse to register.
           The in-app prompts work regardless.
@@ -406,11 +315,7 @@
       <p class="why" data-testid="onboarding-push-note" data-note={noteKind}>{pushNote}</p>
     {/if}
 
-    <!-- Outside the state branches, on purpose. §6's preamble makes notifications per-device and
-         §4.2 keys the table on the member, so this list belongs to the ACCOUNT and is as worth
-         showing to a device that is off as to one that is on: inside the `on` branch it was
-         invisible to exactly the device that needed it — the member's second phone, which read
-         the list as itself and was offered nothing but an off switch. [M4.11 finding 21] -->
+    <!-- Outside the state branches: the list is the account's, and a second phone needs it most. -->
     {#if devices.length}
       <ul class="list" data-testid="onboarding-devices">
         {#each devices as device (device.id)}

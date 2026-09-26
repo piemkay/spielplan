@@ -1,25 +1,12 @@
 <script>
-  /**
-   * §6 preamble: "undo everywhere". §6.1: "+ persistent Undo". Decision 35 fixes its depth and,
-   * just as importantly, its failure mode:
-   *
-   *   "Undo reaches back to the start of the current block of 15 and no further — the journal
-   *    is bounded by the block, the depth matches the counter the user is already reading
-   *    ('7 / 15 this block'), and the chip disables visibly, not silently, at the boundary."
-   *
-   * So this chip is never hidden and never a button that quietly does nothing. When the server
-   * says `available: false` it also says why, and the reason is on screen next to the disabled
-   * control rather than discovered by tapping it. The kind of the observation waiting to be
-   * popped rides along too — "undo rating" is a promise the person can check before making it.
-   */
+  // Never hidden: at the block boundary it disables with the server's reason beside it (decision 35).
   import { undoKindLabel, undoMessage } from '$lib/rate.svelte.js';
 
   let { undo, busy = false, onUndo } = $props();
 
   const available = $derived(!!undo?.available);
   const reason = $derived(undoMessage(undo));
-  // Decision 486: the chip names the tap in words ("undo rating"), never the journal's column
-  // value; `data-undo-kind` keeps the raw kind for the tests that read it.
+  // Words, never the journal's column value; `data-undo-kind` keeps the raw kind for tests.
   const kindWords = $derived(available ? undoKindLabel(undo?.kind) : '');
 </script>
 
@@ -85,10 +72,7 @@
       min-height: var(--touch);
     }
   }
-  /* On a phone the chip joins the row of controls it sits in and its reason takes one line of
-     its own under that row, rather than both claiming a 48 px row together: the chip still
-     disables visibly with its reason in view (decision 35), and the card keeps the height.
-     [C5.6 of the 2026-09-25 household test] */
+  /* Phone: the chip joins the parent row and the reason wraps onto its own line. */
   @media (max-width: 720px) {
     .wrap {
       display: contents;

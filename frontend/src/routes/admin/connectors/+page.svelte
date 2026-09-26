@@ -1,28 +1,6 @@
 <script>
-  /**
-   * Admin → Connectors. Spec v2.1 §6.6, §3.3, §7, §9; decisions 339, 364, 410, 418, 450-455.
-   *
-   * §6.6's Connectors card in full and in its own order: Jellyfin ("URL, API key, library pick,
-   * user-mapping table, test button, sync now, webhook status"), the three LLM providers with the
-   * spend guard and the one task assignment M5 has a caller for (decision 339), and "TMDB / OMDb
-   * / Trakt keys with test buttons".
-   *
-   * No stored credential is ever displayed. §14.3: "Jellyfin API keys are unscoped and
-   * admin-equivalent — no read-only variant exists", and a provider key bills the household, so
-   * every key field posts empty to mean "keep the stored one" and the page can only tell you
-   * *whether* there is a key.
-   *
-   * The spend settings are never saved from a control. Each change is previewed, and only a
-   * Confirm carrying the figure it was shown stores it (decision 450) -- the order lives in
-   * `spendGuard.svelte.js`, which the cards below share.
-   *
-   * The Jellyfin card's two M5 halves each have a way to do damage in silence, and each is built
-   * against it (decision 455). The library pick is its own write, sent only when it changed and
-   * never from a list that failed to load, because decision 364 reads `[]` as the whole server.
-   * The webhook status is the facts of what arrived and what the poll did, not a mode flag. And
-   * the token is minted only by a press that asks for it, shown once and kept in this component's
-   * state alone (decision 418).
-   */
+  // No stored credential is ever displayed: an empty key field means "keep the stored one" (§14.3).
+  // Spend settings are stored only by a Confirm carrying the previewed figure (decision 450).
   import { onMount } from 'svelte';
   import { get, post, api } from '$lib/api.js';
   import { jellyfinDirectory } from '$lib/jellyfin.js';
@@ -36,10 +14,7 @@
 
   let cfg = $state(null);
   let url = $state('');
-  // Typed and not yet saved. `refresh` is async and the page's first one is still in flight when a
-  // person starts typing; its late answer used to write the server's empty URL over what they had
-  // typed, so Save stored the key with no URL and the card stayed unconfigured -- the unsaved
-  // library pick's rule (`pickChanged` below), applied to the one text field refresh also sets.
+  // Set once typed, so refresh's late first answer cannot overwrite the URL being typed.
   let urlTyped = $state(false);
   let apiKey = $state('');
   let probe = $state(null);
@@ -49,34 +24,25 @@
   let error = $state('');
   let busy = $state('');
 
-  // Per app-user link form: the Jellyfin user to map to, plus §7.3's optional one-time
-  // password entry that buys the least-privilege write path.
+  // Per app-user link form: the Jellyfin user plus the optional one-time sign-in (§7.3).
   let form = $state({});
 
-  // §6.6's library pick (decision 364). `libraries` is the server's list envelope, or null while
-  // unasked; `picked` is the selection on screen, which is sent only by its own button and only
-  // when it differs from what is stored -- the plain Save never carries it.
+  // The pick is sent only by its own button, and only when it differs from what is stored.
   let libraries = $state(null);
   let picked = $state([]);
   let librarySeq = 0;
 
-  // The one-time reveal (decisions 332, 418): the value the minting PUT answered, held here and
-  // nowhere else -- not in storage, not in the URL -- so leaving the page is losing it.
+  // The one-time token reveal, held only here: leaving the page loses it (decision 418).
   let minted = $state(null);
-  // A press the server answered with no token while none is held: nothing was minted, and saying
-  // so is the whole of it -- the press stays offered, because nothing was spent.
+  // Answered with no token while none is held: nothing was minted, so the press stays offered.
   let unminted = $state(false);
-  // `save_jellyfin`'s own mint condition, read off the card rather than guessed at: it mints only
-  // for a connector that is configured, which a key this SECRETS_KEY cannot open is not. A press
-  // offered anywhere else is answered 200 with `webhook_token: null`. [M5.7 review cycle 1,
-  // M57-JFSYS-02]
+  // `save_jellyfin` mints only for a configured connector whose key this SECRETS_KEY opens.
   const mintable = $derived(Boolean(cfg?.configured) && !cfg?.secrets_unreadable);
 
   const sorted = (ids) => JSON.stringify([...(ids ?? [])].sort());
   const sameIds = (a, b) => sorted(a) === sorted(b);
   const pickChanged = $derived(Boolean(cfg) && !sameIds(picked, cfg.library_ids));
-  // A picked id the server no longer lists is a fault in the pick, not a boundary (decision 410):
-  // only a list that loaded can say which ids those are.
+  // A picked id the server no longer lists is a fault (decision 410); only a loaded list can say.
   const stale = $derived(
     libraries?.ok
       ? (cfg?.library_ids ?? []).filter((id) => !libraries.libraries.some((lib) => lib.id === id))
@@ -87,7 +53,6 @@
       ? libraries.libraries
       : (cfg?.library_ids ?? []).map((id) => ({ id, name: id }))
   );
-  // Where the plugin posts: `PUBLIC_URL` as the wizard shows it, the origin §2 serves.
   const webhookUrl = $derived(
     `${(session.publicUrl || '<PUBLIC_URL>').replace(/\/+$/, '')}/events/jellyfin`
   );
@@ -114,11 +79,7 @@
     }
   }
 
-  /**
-   * The list to pick from. Not awaited by `refresh`: it reaches the media server on a forty-five
-   * second budget, and the mapping table must not wait on it. A read that threw is the same answer
-   * as one that said `ok: false` -- no list -- and the pick is disabled rather than built from it.
-   */
+  // Not awaited: it has a 45s budget and the mapping table must not wait. A throw means no list.
   async function loadLibraries(configured) {
     const mine = ++librarySeq;
     if (!configured) {
@@ -143,12 +104,7 @@
     picked = order.filter((each) => next.has(each));
   }
 
-  /**
-   * `library_ids` alone, through the same PUT: absent `url` and `api_key` keep what is stored. An
-   * empty selection is sent as `[]` on purpose -- deselecting the last library is the one gesture
-   * that widens the boundary back to the whole server (decision 364) -- but never from a list that
-   * failed, where `[]` would be the shape of a choice nobody made.
-   */
+  // `[]` widens the boundary to the whole server (decision 364), so never send it from a failed list.
   async function savePick() {
     if (!libraries?.ok || !pickChanged) return;
     error = '';
@@ -158,8 +114,7 @@
         method: 'PUT',
         body: { library_ids: [...picked] }
       });
-      // The pick as stored -- the route keeps a GUID in the server's spelling (decision 410) -- so
-      // the button reads "nothing changed" against the value that is actually there.
+      // The pick as stored: the route keeps the server's GUID spelling (decision 410).
       picked = [...(answer?.library_ids ?? picked)];
       await refresh();
     } catch (err) {
@@ -169,18 +124,7 @@
     }
   }
 
-  /**
-   * Decision 418's explicit ask, offered only while no token exists and the connector is one the
-   * server mints for. `save_jellyfin` mints only when none is held and never rotates, so a second
-   * press could only ever be told "one exists".
-   *
-   * A `null` answer is two different facts, and only the server's next read tells them apart: a
-   * token another tab minted first, which cannot be shown again, or no token at all, because the
-   * connector stopped being configured between the read and the press. Reading every `null` as the
-   * first told a fresh install its token was lost for good -- decision 332 allows no rotation, so an
-   * admin who believed it never set up the plugin and §7.2's trigger never ran. [M5.7 review cycle
-   * 1, M57-JFSYS-02]
-   */
+  // A `null` answer is either a token another tab minted or no token at all; the next read decides.
   async function mintToken() {
     error = '';
     unminted = false;
@@ -251,10 +195,7 @@
     }
   }
 
-  /**
-   * Complete an existing mapping with that Jellyfin user's own sign-in (§7.3's least-privilege
-   * write path). Same route as Link — the mapping is unchanged, only the token is new.
-   */
+  // Completes an existing mapping with the user's own sign-in; same route as Link.
   async function storeSignIn(user) {
     form = {
       ...form,
@@ -296,7 +237,6 @@
 
   const stamp = (iso) => (iso ? new Date(iso).toLocaleString() : null);
 
-  /** The System card's rule, for the same reason: the age answers the question (`admin/system`). */
   function ago(iso) {
     if (!iso) return '';
     const minutes = Math.max(0, Math.round((Date.now() - new Date(iso).getTime()) / 60000));
@@ -333,21 +273,8 @@
   </p>
 
   {#if cfg?.secrets_unreadable}
-    <!--
-      Not the same message as "not configured": the connector row is there and its credentials
-      are real, they are sealed under a SECRETS_KEY this install no longer holds — a restored
-      dump without its env file, or a regenerated key (M4.7 dd03). Members keep working (§3.3),
-      so the only person who can act on this is the admin standing in front of this card, and
-      the action is Save, which re-seals under a fresh key.
-
-      The last sentence is the cost of that shortcut, and it is here because this card is the
-      only place the shortcut is offered. Saving retires the DEK it cannot open
-      (`connectors/registry.save_jellyfin`), which is what lets a fresh one be minted — and
-      every *other* secret sealed under the retired key stays unreadable until the original
-      .env comes back. An admin who reads only "paste the key again" repairs Jellyfin and quietly
-      leaves the web-push pair and any other connector behind, with the System card the only
-      surface that still says so.
-    -->
+    <!-- Saving re-seals under a fresh key but retires the old one, so every other secret sealed
+         under it stays unreadable: the copy says so. -->
     <p class="alert" role="alert" data-secrets="unreadable">
       The stored credentials cannot be decrypted with this install's <code>SECRETS_KEY</code>.
       Restoring the <code>.env</code> that was current when the backup was taken recovers
@@ -388,10 +315,7 @@
     </button>
   </div>
 
-  <!-- §7.1's pin, as this install last measured it — without pressing Test. Save and Test both
-       store the probed version and its verdict beside the URL now, so a 10.8 server says so every
-       day rather than only in the minute after a probe. `null` is "nobody has probed yet" and must
-       not read as a refusal: that is the state a fresh install is in. [M4.11 finding 16] -->
+  <!-- Stored at every Save and Test; null means nobody has probed yet, not a refusal. -->
   {#if cfg?.server_version || cfg?.server_supported === false}
     <div
       class="data probe"
@@ -411,15 +335,8 @@
     <div class="data probe" data-probe={probe.ok ? 'ok' : 'fail'}>
       {#if probe.ok}
         {probe.server_name} · {probe.version} · {probe.user_count} users
-        <!-- It was "reads may miss fields", which names the wrong half: by §7.1 and the client's
-             own pin the 10.9-only route is the per-user Played WRITE. Reads degrade; the write does
-             not exist, and an admin who read this line had no way to know the app -> Jellyfin
-             direction was dead. [M4.11 finding 16] -->
-        <!-- `=== false`, not `!supported`: `null` is "this server did not report a version",
-             which `played_write_refusal` does not refuse on and this line must not accuse. A
-             200 with no parseable version — a forward-auth portal, a hardening rule on
-             /System/Info/Public — read as "below the pin" and named no version to check it
-             against. [review cycle 1: m411-rev-jf-04] -->
+        <!-- The pin is on the per-user Played write; reads merely degrade (§7.1). -->
+        <!-- `=== false`: `null` means no version was reported, which is not below the pin. -->
         {#if probe.supported === false}· below the pinned 10.9 — the per-user Played write (POST
           /UserPlayedItems) does not exist here, so seen states cannot reach Jellyfin{/if}
       {:else}
@@ -429,33 +346,13 @@
   {/if}
 
   {#if syncResult?.already_running}
-    <!-- §5.3 fires the sweep every fifteen minutes and this button is the other caller; the
-         advisory lock answers "a sweep is already running" rather than sweeping the same people
-         against two different snapshots. Pressing again once it finishes sweeps for real. -->
+    <!-- The advisory lock answers a concurrent sweep instead of running it. -->
     <div class="data probe" data-sync="already-running">
       a sweep is already running — this press did nothing. Try again in a moment.
     </div>
   {:else if syncResult}
-    <!-- `ok` is a claim about a sweep that RAN, and one state made it a claim about a sweep that
-         did not. §3.3 makes an unreachable Jellyfin a degraded sync rather than a broken app, so
-         `seen.sync_all` returns the report as it stands when `client.all_items(None)` raises — and
-         every counter in it is zero, including `push_failed`. Printed through the rule below that
-         is indistinguishable from the quiet healthy household, which is M4.11 finding 3's own
-         sentence one layer up: that finding separated "owed nothing" from "lost every write" and
-         left "never read the library" reading as the first. Measured: against a media server whose
-         `/Items` refused the sweep's read, this card printed "pushed 0 · adopted 0 · unchanged 0"
-         with `data-sync-health="ok"` while NEITHER direction of §7.3 had run.
-         `users` is the signal because `sync_all` appends to it per linked member inside the loop
-         the failed read returns before — and `skipped_no_link` is what separates it from the
-         household that has no connector or no link at all, which is a legal §3.1 state and not a
-         failure. [§7.3, §3.3, §6.6; M4.11 finding 3]
-
-         `failed_users` is the same fault arriving by the other door, which the rule above missed:
-         the library read is keyless and each member's is not, so a Jellyfin account that was
-         deleted or renamed 404s that member's `/Items` for ever while the household read keeps
-         succeeding. `sync_all` swallows it per member, so `users` is full, every counter is zero
-         and this card printed "pushed 0 · adopted 0 · unchanged 0" in green for a sweep that
-         reconciled nobody. [review cycle 1: seen-02] -->
+    <!-- An unreachable Jellyfin yields an all-zero report: an empty `users` (unless skipped_no_link)
+         or any `failed_users` means nothing was reconciled, not a quiet household. -->
     <div
       class="data probe"
       data-sync="done"
@@ -488,15 +385,10 @@
       {#if syncResult.owed_unreachable}· {syncResult.owed_unreachable} owed write(s) for titles
         no longer in the library{/if}
       {#if syncResult.unowned}· {syncResult.unowned} title(s) no longer in the library{/if}
-      <!-- A count, not a list. `SyncReport.as_dict` sends `resolve.unmatched` as `len(...)` and the
-           names separately as `unmatched_names`, so `.length` on it was `undefined` and this clause
-           could never render — §7.2's refused matches, which M5's acquisition pipeline consumes,
-           had no surface at all. The vitest beside this file asserted it against a fabricated array,
-           which is the assertion becoming the implementation compared to itself. [§7.2, §6.6] -->
+      <!-- `resolve.unmatched` is a count; the names come separately as `unmatched_names`. -->
       {#if syncResult.resolve?.unmatched}· {syncResult.resolve.unmatched} library
         item(s) matched no title{/if}
-      <!-- D4: the names beside the count, which `SyncReport.as_dict` caps at twenty. The operator's
-           only view of what the household holds that the resolver could not identify (§7.2). -->
+      <!-- `SyncReport.as_dict` caps the names at twenty. -->
       {#if syncResult.resolve?.unmatched_names?.length}
         <div class="unmatched" data-unmatched-names>
           {syncResult.resolve.unmatched > syncResult.resolve.unmatched_names.length
@@ -505,10 +397,7 @@
         </div>
       {/if}
       {#if syncResult.push_failed}
-        <!-- A failure, not a count in a row of counts. This card printed
-             "pushed 0 · adopted 0 · unchanged 87" while every Played write in the sweep was being
-             refused, which reads as a quiet household rather than as a dead direction — the whole
-             of M4.11 finding 3. The reason is the sweep's own first distinct one. -->
+        <!-- A failure, not one count among others: zero pushed can hide every write refused. -->
         <div class="alert" role="alert" data-sync-failure={syncResult.push_failed}>
           {syncResult.push_failed} Played write(s) failed — nothing reached Jellyfin for them.
           {syncResult.push_errors?.[0] ?? 'no reason was reported'}
@@ -518,8 +407,7 @@
   {/if}
 
   {#if cfg?.configured}
-    <!-- §6.6's library pick (decisions 364, 410, 455). Checkboxes are outside design.css's coarse
-         block, so each sits in a label that is the 48 px target. -->
+    <!-- Checkboxes are outside design.css's coarse block, so each label is the 48px target. -->
     <div
       class="pick"
       data-library-pick={libraries === null ? 'loading' : libraries.ok ? 'ready' : 'unavailable'}
@@ -583,11 +471,8 @@
     </div>
   {/if}
 
-  <!-- §6.6's "webhook status" as the facts of both paths (decision 455, proposal 106): §7.2 runs
-       the webhook and the delta poll at once by design, so there is no mode to report, only what
-       each last did. The last ItemAdded is not the last delivery: a plugin pointed at the playback
-       templates delivers every evening and has never told this app about an add. Read with `?.`,
-       because a card served without `trigger` (an older backend, 18-system's fixture) is legal. -->
+  <!-- Facts of both paths, not a mode: the last ItemAdded is not the last delivery. An older
+       backend sends no `trigger`. -->
   {#if cfg?.trigger}
     {@const webhook = cfg.trigger.webhook ?? {}}
     {@const poll = cfg.trigger.delta_poll ?? {}}
@@ -610,8 +495,7 @@
     </div>
   {/if}
 
-  <!-- §7.2's token (decisions 332, 418, 455): minted only by the press below, shown once, never
-       rotated. The header and the path are shown beside it because the plugin needs all three. -->
+  <!-- Minted only by the press below, shown once, never rotated (decision 418). -->
   {#if minted}
     <div class="token" data-webhook-token-state="revealed">
       {#if minted.token}
@@ -629,10 +513,7 @@
       </div>
     </div>
   {:else if cfg?.has_webhook_token === false}
-    <!-- The press is offered only where the server would mint (M57-JFSYS-02). The card lays the
-         URL and the key out above the token, so on first setup this block is reached before they
-         are saved, and it says what it is waiting for rather than offering a press that mints
-         nothing. -->
+    <!-- Offered only where the server would mint; otherwise say what it is waiting for. -->
     <div class="token" data-webhook-token-state={mintable ? 'none' : 'unconfigured'}>
       {#if unminted}
         <p class="alert" role="alert" data-webhook-unminted>
@@ -725,9 +606,7 @@
           </td>
           <td class="actions">
             {#if u.jellyfin_user_id}
-              <!-- A linked row with no stored token is §7.3's needs_relink state, and the
-                   credential inputs beside it are useless without something that posts them.
-                   The mapping is already chosen, so this only completes it. -->
+              <!-- A linked row with no stored token needs a button to post the sign-in beside it. -->
               {#if !u.has_jellyfin_token}
                 <button
                   class="btn-primary"
@@ -769,8 +648,6 @@
   <SourceConnectorCard {source} />
 {/each}
 {#if spend.sources?.keyless?.length}
-  <!-- Proposal 137's point (plan C2): which of stage 2's sources need a card at all, so a failure
-       from one that needs none is not chased on this page. -->
   <p class="why" data-keyless>
     {spend.sources.keyless.map((name) => KEYLESS_LABELS[name] ?? name).join(', ')} need no key: a
     stage-2 failure from one of them is not fixed on this page.

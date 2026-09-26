@@ -1,25 +1,9 @@
 <script>
-  /**
-   * The nav rail. Surface names are normative (spec §6): Home / Rate / Tonight / Rank / Map /
-   * Taste. The prototype called Map "Explore" and hid Taste in the account menu; the spec's
-   * names win. Which of them the rail offers is decision 488's: a surface whose milestone has
-   * not shipped is absent, because Map and Taste were two of six tabs on the phone and both
-   * opened a placeholder (user test 2026-09-25). A surface appears here, in §6's order, on the
-   * day `api/auth.py` flips its `built` flag.
-   *
-   * No milestone is rendered here or anywhere a member looks (decision 486): the markup renders
-   * `s.label` and `title={s.label}` and nothing else.
-   * [ds08-nav-rail-milestone-claim-is-false-and-the-value-is-duplicated]
-   *
-   * The list comes from `/auth/me` rather than from here. §6.6 is admin-role only, and a
-   * client-side `{#if role === 'admin'}` hides a link from someone reading the screen while
-   * showing it to anyone reading the response. Navigation is a server decision, and so is
-   * whether a surface has shipped.
-   */
+  // The list comes from `/auth/me`: which surfaces a user sees is a server decision, never a
+  // client-side role check.
   import { page } from '$app/stores';
   import { session } from '$lib/session.svelte.js';
 
-  // Presentation only, keyed by the server's surface key.
   const ICONS = {
     home: 'M3 8.5 10 3l7 5.5V17H3z M8 17v-5h4v5',
     rate: 'M3 4h9v12H3z M14.5 6.5 17 8v8.5',
@@ -111,20 +95,7 @@
     }
   }
 
-  /* And the floor on the pointer it is written for. §6 preamble says "48 px targets" without a
-     width in it, and `design.css`'s own coarse block says why that is the query — "a finger is a
-     finger on a tablet". The block above is the LAYOUT reflow and it is keyed on width correctly:
-     at 720 px the rail becomes the bottom bar. The floor was keyed on it too, which made these
-     six links the one control in the shell that is 40 px on a coarse pointer wider than 720 —
-     every iPad in either orientation, and an iPhone 13 turned sideways at 844. `design.css`
-     cannot reach them: its list is `.pill, .btn-primary, .btn-ghost, button, select,
-     [role='button']` and a bare `<a>` is deliberately outside it, because widening it to
-     `a[href]` would grow every inline prose link in the app. So the rule lands here, the shape
-     `AccountChip.svelte`'s `.group a` and `+layout.svelte`'s `a.nobundle` both already use.
-
-     Height only: in the side rail these links are the column's full 136 px, so height is the
-     only short axis, and the bottom bar above sets both because there the column is 48 wide.
-     [§6 preamble; review cycle 2: M415-C2-CSS-01] */
+  /* design.css's coarse floor skips a bare <a>, and a finger wider than 720px is still a finger. */
   @media (pointer: coarse) {
     a {
       min-height: var(--touch);

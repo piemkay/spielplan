@@ -57,14 +57,6 @@ import {
   vetoCaption
 } from './tonight.svelte.js';
 
-/**
- * The Tonight client's pure helpers. Spec v2.1 §6.2 (rewritten), §6.8.
- *
- * Three of these render a spec sentence, so the test is what keeps the sentence from drifting:
- * §6.2 step 2's open-rooms row, 54c's waiting line, and §6.8's data voice on the approval share.
- * The fourth — the four answers — is decision 154's whole content.
- */
-
 describe('the open-rooms row (§6.2 step 2)', () => {
   const room = {
     room_code: 'MX-2210',
@@ -103,13 +95,7 @@ describe('the open-rooms row (§6.2 step 2)', () => {
 });
 
 describe('the waiting line (54c)', () => {
-  // The rows carry an answer and the pair it was about, which the live payload does not: 54c
-  // keeps both off the wire. They are here so the claim below can fail — grepping a line built
-  // from `name`, `answered`, `expected` and `finished` for words no field can supply asserts
-  // nothing about the renderer, only about the fixture. [M4.10 finding 33]
-  // `expected` is the server's estimate since the 2026-09-25 wave (`play.expected_pairs`): the
-  // sweep's typical round until a seat reaches it, and none after that (decision 507). It was the
-  // cap for every seat, so this fixture carried 20 and the line read "Jenny 9/~20".
+  // The rows carry an answer and a pair on purpose, so the claim below can fail.
   const progress = [
     { name: 'Patrick', answered: 6, expected: 10, finished: true, answer: 'NEITHER', pair: 'Heat' },
     { name: 'Jenny', answered: 11, expected: null, finished: false, answer: 'EITHER', pair: 'Drive' },
@@ -117,8 +103,7 @@ describe('the waiting line (54c)', () => {
   ];
 
   it('shows counts and names, and nothing that could be an answer', () => {
-    // 54c: "progress and never their answers". The payload cannot carry them; this is the
-    // second half — the renderer must not draw them even when they are handed to it.
+    // The renderer must not draw answers even when they are handed to it (54c).
     const line = progressLine(progress);
     expect(line).toContain('Patrick 6/6 done');
     expect(line).toContain('Jenny 11 so far');
@@ -140,8 +125,7 @@ describe('the waiting line (54c)', () => {
   });
 
   it('gives the count alone once a seat is past the typical round, never an invented end', () => {
-    // Decision 507: the second household evening's waiting line read "Jenny 12/~13" — one more
-    // than she had answered, moving with every tap — over a round that ran on to the escape.
+    // Past the typical round the server sends no estimate, so no invented end (decision 507).
     const long = [{ name: 'Jenny', answered: 12, expected: null, finished: false }];
     expect(progressLine(long)).toBe('Jenny 12 so far · waiting for 1');
     expect(progressLine(long)).not.toMatch(/~\d/);
@@ -150,8 +134,6 @@ describe('the waiting line (54c)', () => {
 
 describe('the approval share (§6.8, §13)', () => {
   it('is a count next to its name, never a bare number', () => {
-    // §6.8: model numbers appear in the data voice next to their name, never bare. §13 makes
-    // this the headline metric for the whole feature.
     expect(approvalShare({ approval_share: 0.75, participants: 4 })).toBe('3 of 4 approved');
     expect(approvalShare({ approval_share: 1, participants: 2 })).toBe('2 of 2 approved');
     expect(approvalShare({ approval_share: 0, participants: 3 })).toBe('0 of 3 approved');
@@ -165,8 +147,7 @@ describe('the approval share (§6.8, §13)', () => {
 describe('the constants the spec fixes', () => {
   it('offers exactly decision 154\'s four answers', () => {
     expect(ANSWERS.map((a) => a.value)).toEqual(['A', 'B', 'EITHER', 'NEITHER']);
-    // The two level answers are opposite signals, so their copy has to be opposite too — the
-    // prototype's "Neither pulls me tonight" is §6.2's own string.
+    // Opposite signals, so opposite copy; "Neither pulls me tonight" is §6.2's own string.
     expect(ANSWERS.find((a) => a.value === 'EITHER').label).toBe('Either is fine');
     expect(ANSWERS.find((a) => a.value === 'NEITHER').label).toBe('Neither pulls me tonight');
   });
@@ -183,19 +164,14 @@ describe('the constants the spec fixes', () => {
   it('keeps the two strings the spec fixes verbatim', () => {
     expect(REVEAL_BEAT).toBe('VOTES REVEALED TOGETHER');
     expect(ESCAPE_LABEL).toBe('just pick for us');
-    // The join caption is the household's copy and not the spec's, so it is held to decision
-    // 486's register rather than to a verbatim string: "Push is best effort" was engineering
-    // vocabulary on a member's screen.
+    // The join caption is household copy, held to the member register rather than verbatim.
     expect(JOIN_CAPTION).not.toMatch(/push|best effort/i);
   });
 });
 
 describe('stepping back out to the door (§6.2 step 2)', () => {
   it('drops the room, not the seat', () => {
-    // The restore that keeps a reload from stranding a participant gives a household with one
-    // live room no other door — every visit lands back inside it. `leave` is the way out, and it
-    // is a client-side step: nothing here calls the API, because the seat, the answers and the
-    // ballot stay on the server for `resume` to come back to.
+    // A client-side step: the seat, the answers and the ballot stay on the server for `resume`.
     Object.assign(tonight, {
       step: 'ballot',
       lobby: { session_id: 7 },
@@ -214,18 +190,14 @@ describe('stepping back out to the door (§6.2 step 2)', () => {
   });
 
   it('clears the lobby, because a frame would otherwise drag the device back in', () => {
-    // Every channel frame ends in `refresh`, and `refresh` recomputes the step from the server
-    // for whoever still holds a lobby. Leaving only the step behind left a device that stepped
-    // out being pulled back by the next frame anybody else's device caused — which is how the
-    // e2e found it: the back control worked, and then undid itself.
+    // Every frame ends in `refresh`, which would pull back any device still holding a lobby.
     Object.assign(tonight, { step: 'ballot', lobby: { session_id: 7 } });
     leave();
     expect(tonight.lobby).toBeNull();
   });
 
   it("keeps the controls, because they are the door's and not the room's", () => {
-    // §6.2 step 1 puts the three controls before the fork. Coming back to a door that had
-    // forgotten the budget you set would make stepping out cost something.
+    // The controls sit before the fork (§6.2 step 1), so stepping out keeps them.
     tonight.controls.runtime_budget_min = 95;
     tonight.controls.include_rewatches = true;
     leave();
@@ -234,20 +206,10 @@ describe('stepping back out to the door (§6.2 step 2)', () => {
   });
 });
 
-// --- the room this device is in ---------------------------------------------------------------
-
-/**
- * One mutable room, answered by a router rather than by a queue of responses.
- *
- * A queue cannot tell two reads apart, and every claim below is about WHICH seat was read: the
- * defect these cover is a device re-reading the wrong participant, and a fixture that answers the
- * same body to `/seats/11/round` and `/seats/12/round` would pass against it.
- */
+// A router, not a queue: every claim below is about which seat was read.
 let world;
 let calls;
-/** Held loosely on purpose: assigning a vitest mock to the global narrows it to the DOM `fetch`
- * signature, and every fixture below then reads as an error to the type checker. The same note
- * `rate.svelte.test.js` carries. */
+// Held loosely so the mock keeps its vitest type for the checker.
 /** @type {any} */
 let fetchMock;
 
@@ -331,9 +293,7 @@ function router() {
   });
 }
 
-/** Every socket `connect` has opened, in order. Declared at module scope because the Svelte
- * plugin's `perf_avoid_nested_class` check reads test files too, and a warning on every run is
- * how a real one stops being read. */
+// At module scope: svelte's `perf_avoid_nested_class` check reads test files too.
 const sockets = [];
 class FakeSocket {
   constructor(url) {
@@ -343,7 +303,6 @@ class FakeSocket {
   close() {}
 }
 
-/** The paths of every request of one shape, in order: the instrument for "which seat was read". */
 const read = (re) => calls.filter((c) => re.test(c.path)).map((c) => c.path);
 const posted = (path) => calls.find((c) => c.method === 'POST' && c.path === path)?.body ?? null;
 
@@ -372,10 +331,7 @@ afterEach(() => {
 
 describe('the seat this device is playing (§6.2 step 2; findings 13, 14, 15)', () => {
   it("keeps a guest's round on screen when a household frame re-reads the room", async () => {
-    // §6.2 step 2 puts guests on the initiator's phone, and every re-read named `seen.me` — the
-    // phone's OWNER. A re-read happens on every rooms.changed frame, every lobby and reveal frame
-    // and after every socket reconnect, so a second room opening anywhere in the household
-    // replaced the guest's pair with the host's mid-turn. [finding 14]
+    // A re-read used to name the phone's owner, replacing a guest's pair mid-turn.
     tonight.lobby = { session_id: 7 };
     await loadRound(12);
     calls.length = 0;
@@ -390,10 +346,7 @@ describe('the seat this device is playing (§6.2 step 2; findings 13, 14, 15)', 
   });
 
   it("falls back to this device's own seat when nothing is on screen", async () => {
-    // The other half of the rule, and the one that makes the restore work: a reload, a `leave`
-    // and a device that has never loaded a round all arrive here with no active seat, and the
-    // seat they should read is their own. Passes against the old code by construction — it read
-    // `me` unconditionally — and is here because the repair must not lose it.
+    // With no active seat, a device reads its own.
     tonight.lobby = { session_id: 7 };
 
     await refresh();
@@ -402,9 +355,7 @@ describe('the seat this device is playing (§6.2 step 2; findings 13, 14, 15)', 
   });
 
   it('hands the phone back to its owner once the seat it was playing has ended', async () => {
-    // The hand-off is over when the turn is: the next guest is passed the phone from a screen
-    // only the owner's seat draws, so a device that stayed on an ended guest seat for ever would
-    // trade one stuck surface for another.
+    // Once the guest's seat has ended, the phone goes back to its owner.
     tonight.lobby = { session_id: 7 };
     await loadRound(12);
     world.room = roomOf({ seats: [seatOf(11), seatOf(12, { ended_by: 'cap' })] });
@@ -417,9 +368,6 @@ describe('the seat this device is playing (§6.2 step 2; findings 13, 14, 15)', 
   });
 
   it('lands a reload into an open room in its lobby and not at the door', async () => {
-    // `bootstrap` finds the room, sets the lobby and calls this; with no branch for `open` the
-    // step stayed 'door', so the device held a lobby while drawing the two doors — the exact
-    // state the restore exists to prevent. [finding 15]
     tonight.lobby = { session_id: 7 };
     world.room = roomOf({ state: 'open' });
 
@@ -429,9 +377,7 @@ describe('the seat this device is playing (§6.2 step 2; findings 13, 14, 15)', 
   });
 
   it("leaves the escaped seat on screen rather than the phone owner's round", async () => {
-    // 54c's "just pick for us" ends the round of whoever tapped it. The write ends the seat, and
-    // an ended seat is exactly the case whose fallback hands the phone back — right from the next
-    // frame, wrong for this one. It was deterministic, not a race. [finding 14]
+    // The escape ends the tapping seat, but that seat stays on screen for this frame.
     tonight.lobby = { session_id: 7 };
     await loadRound(12);
     tonight.round = { ...tonight.round, escape_available: true };
@@ -446,8 +392,7 @@ describe('the seat this device is playing (§6.2 step 2; findings 13, 14, 15)', 
   });
 
   it('forgets the seat and the ballots it cast when the device steps out', async () => {
-    // Both are about ONE room. Carrying either into the next evening hands it a participant id
-    // from the last one, and `submittedSeats` would silently hide a real seat's hand-off.
+    // Both belong to one room; carried into the next they would hide a real seat.
     tonight.lobby = { session_id: 7 };
     await loadRound(12);
     tonight.submittedSeats = [11];
@@ -467,9 +412,7 @@ describe("54e's ballot, on a phone that seats a guest (finding 13)", () => {
   };
 
   it('does not finish the ballot on a phone that still holds a guest vote', async () => {
-    // `ballot.submitted_count` counts every seated participant, guests included, and the reveal
-    // waits for all of them — so a room opened with any guest could never reach it while Submit
-    // was bound to the viewer's own seat. The phone is not done when its owner has voted.
+    // The reveal waits for guests too, so the phone is not done when its owner has voted.
     await inTheBallot();
     expect(tonight.step).toBe('ballot');
     expect(tonight.activeSeat).toBe(11);
@@ -486,8 +429,7 @@ describe("54e's ballot, on a phone that seats a guest (finding 13)", () => {
   });
 
   it("clears the previous person's ticks when the phone changes hands", async () => {
-    // 54e's blindness broken by the control that exists to carry it: the incoming guest would
-    // open on ticks somebody else made, and one tap on Submit would cast them as theirs.
+    // The incoming guest must not open on someone else's ticks (54e).
     await inTheBallot();
     toggleApproval(1);
 
@@ -511,10 +453,7 @@ describe("54e's ballot, on a phone that seats a guest (finding 13)", () => {
   });
 
   it("keeps the ballot open when the guest voted first and the phone's owner has not", async () => {
-    // 54c's escape can leave a guest as the active seat at the moment the room settles, so the
-    // guest's vote is not always the second one. A rule that asked only "does a guest still owe
-    // a vote" would send this phone to the waiting screen with its OWNER's vote outstanding, and
-    // the reveal would wait on a ballot no screen was offering.
+    // A guest may vote first; the phone's owner still owes one.
     await inTheBallot();
     handBallot(12);
 
@@ -525,9 +464,7 @@ describe("54e's ballot, on a phone that seats a guest (finding 13)", () => {
   });
 
   it("does not offer another member the guest's ballot", async () => {
-    // The guest seats belong to whoever opened the room. A second member's device offering
-    // "pass to Guest 1" would offer a vote that phone is not holding, and the guest would be
-    // voted for twice by two people who each thought it was theirs to cast.
+    // Guest seats belong to the host's phone.
     tonight.lobby = { session_id: 7 };
     world.room = roomOf({
       state: 'ballot',
@@ -542,10 +479,7 @@ describe("54e's ballot, on a phone that seats a guest (finding 13)", () => {
 
 describe("the answer's latency is a measurement (§4.2; §14 risk 6; finding 41)", () => {
   it('records how long the pair was on screen rather than zero', async () => {
-    // The elapsed time was read inside the object literal one statement after the clock was
-    // started, so every Tonight row ever written holds 0. The rows are append-only, so the
-    // evenings already played cannot be re-measured, and §14 risk 6 wants the instrument in
-    // place before anyone re-tunes the round.
+    // The rows are append-only, so the latency must be measured, not 0.
     vi.useFakeTimers();
     tonight.lobby = { session_id: 7 };
     await loadRound(11);
@@ -554,13 +488,7 @@ describe("the answer's latency is a measurement (§4.2; §14 risk 6; finding 41)
     await answer('A');
     expect(posted('/api/tonight/seats/11/answer').latency_ms).toBeGreaterThanOrEqual(250);
 
-    // Re-armed by the answer itself: most pairs of a twenty-pair round arrive on that path and
-    // never pass through `loadRound` at all. Bounded from ABOVE as well, because a lower bound
-    // alone is satisfied by a clock armed once at the door and never re-armed after -- the very
-    // shape this describe block's next test is about. Measured: with the re-arm in `answer`
-    // deleted, this pair reports 650 ms rather than 400 and every assertion in this test passed
-    // anyway, so the row's "measured from when the pair reached the screen" rested on the
-    // Playwright case alone. [M4.12 review cycle 2]
+    // Re-armed by the answer itself, and bounded above so a never-re-armed clock fails.
     calls.length = 0;
     vi.advanceTimersByTime(400);
     await answer('B');
@@ -570,11 +498,7 @@ describe("the answer's latency is a measurement (§4.2; §14 risk 6; finding 41)
       500
     );
 
-    // And by an undo, which re-opens the seq and re-issues the same card: the time spent on it
-    // after the undo is the latency of the answer about to be given. The wait BEFORE the undo is
-    // what makes that claim falsifiable -- it is time spent on a pair the person then took back,
-    // so it must not be charged to the answer that replaces it. Without it the undo landed in the
-    // same instant as the answer before it, and deleting `undo`'s re-arm changed no number here.
+    // And by an undo: time spent on the pair taken back is not charged to its replacement.
     vi.advanceTimersByTime(900);
     await undo();
     calls.length = 0;
@@ -588,11 +512,7 @@ describe("the answer's latency is a measurement (§4.2; §14 risk 6; finding 41)
   });
 
   it('is not restarted by a household frame that re-reads the pair already on screen', async () => {
-    // Every channel frame ends in `refresh`, and `refresh` ends in `loadRound` — so a clock
-    // armed on each re-read measured the time since the last thing ANYBODY did, which on a
-    // two-device evening is the other person's tap. `start` alone sends the host's own device
-    // two frames, so it was the first pair of every round: on the M4.12 gate a card held for
-    // 400 ms was written as 176. [finding 41]
+    // A frame re-reading the same card must not restart the clock.
     vi.useFakeTimers();
     tonight.lobby = { session_id: 7 };
     await loadRound(11);
@@ -607,9 +527,7 @@ describe("the answer's latency is a measurement (§4.2; §14 risk 6; finding 41)
   });
 
   it('is restarted by a card that is new, which the hand-off puts on the phone', async () => {
-    // The other direction, so the rule above cannot be satisfied by a clock that never re-arms:
-    // §6.2 step 2's guest turn draws a different seat's pair on the same device, and the time
-    // the previous person spent is not this one's. The token is what tells them apart.
+    // A new card (a guest's) restarts it; the token tells them apart.
     vi.useFakeTimers();
     tonight.lobby = { session_id: 7 };
     await loadRound(11);
@@ -626,9 +544,7 @@ describe("the answer's latency is a measurement (§4.2; §14 risk 6; finding 41)
   });
 
   it('sends nothing at all rather than zero before a pair has been shown', async () => {
-    // §4.2's column is nullable, and "not measured" is not "answered instantly". A constant 0 is
-    // worse than a null, because it reads as a measurement. Reachable because `leave` — which
-    // `beforeEach` runs — stops the clock: a device at the door has no pair on screen.
+    // Nullable, and "not measured" is not "answered instantly".
     tonight.round = roundOf(11);
 
     await answer('A');
@@ -639,28 +555,23 @@ describe("the answer's latency is a measurement (§4.2; §14 risk 6; finding 41)
 
 describe('the reconnect (§6 preamble; finding 18)', () => {
   it('grows the wait between attempts and caps it near thirty seconds', () => {
-    // A fixed 1.5 s retry with no cap opened 40 sockets and fired 117 HTTP reads in 60 simulated
-    // seconds — and §10's swap sequence ends in exactly the backend restart that hammers.
+    // Backoff capped near 30s: a fixed short retry hammers a restarting backend.
     const mid = () => 0.5;
     expect([0, 1, 2, 3, 4, 5, 6, 20].map((n) => reconnectDelay(n, mid))).toEqual([
       1000, 2000, 4000, 8000, 16000, 30000, 30000, 30000
     ]);
-    // The jitter is narrower than the doubling on purpose: the waits still grow strictly, so
-    // "backoff" stays a claim something can check.
+    // Jitter narrower than the doubling, so the waits still grow strictly.
     expect(reconnectDelay(1, () => 0)).toBeGreaterThan(reconnectDelay(0, () => 1));
     expect(reconnectDelay(0, () => 0)).toBeLessThan(reconnectDelay(0, () => 1));
     expect(reconnectDelay(9, () => 1)).toBeLessThanOrEqual(RECONNECT_MAX_MS * 1.2);
   });
 
   it('re-reads once per connection that opens, and starts over after one does', async () => {
-    // Two halves, and the old four lines got both wrong: the wait was fixed, and the re-read
-    // fired from the TIMER rather than from a socket that opened — so every failed attempt
-    // charged the server two reads that could not have been told anything new.
+    // The re-read fires from a socket that opened, not from the timer.
     vi.useFakeTimers();
     vi.spyOn(Math, 'random').mockReturnValue(0.5);
     sockets.length = 0;
-    // `stubGlobal` rather than a bare assignment: node has a real `WebSocket` and no `location`
-    // at all, and both are restored by `unstubAllGlobals` in `afterEach` above.
+    // Node has a real `WebSocket` and no `location`; both are restored in `afterEach`.
     vi.stubGlobal('WebSocket', FakeSocket);
     vi.stubGlobal('location', { protocol: 'http:', host: 'host' });
 
@@ -696,13 +607,7 @@ describe('the reconnect (§6 preamble; finding 18)', () => {
   });
 
   it("takes back its own complaint and leaves everybody else's standing", async () => {
-    // The re-read above is a BACKGROUND read — the socket fires it the moment it opens, and every
-    // `rooms.changed` frame fires it again — so it lands while the person is reading a sentence
-    // about something else entirely. Clearing the error slot on success wiped those: a refused
-    // guests box said "guests: Input should be a valid integer" and lost it forty milliseconds
-    // later to a handshake that had just finished. Only the phone met it, because WebKit opens
-    // the channel after the tap where Chromium opens it before — but nothing about the defect is
-    // WebKit's, and on a settled device it is any other member opening a room. [§6.8; finding 18]
+    // A background read must not clear a refusal it had nothing to do with.
     tonight.error = 'guests: Input should be a valid integer';
     await loadRooms();
     expect(
@@ -710,8 +615,7 @@ describe('the reconnect (§6 preamble; finding 18)', () => {
       'a read that worked took away a refusal it had nothing to do with'
     ).toBe('guests: Input should be a valid integer');
 
-    // And the half the clear is actually for: an open-rooms read that FAILED leaves a sentence,
-    // and the read that recovers has to take that one back or the door complains for ever.
+    // But the read that recovers must take back its own complaint.
     tonight.error = '';
     fetchMock.mockImplementationOnce(async () => {
       throw new TypeError('Load failed');
@@ -725,10 +629,7 @@ describe('the reconnect (§6 preamble; finding 18)', () => {
 
 describe('the copy and the controls this milestone moved', () => {
   it('names only the join channels that still exist', () => {
-    // Decision 165 retires the TV client. A caption advertising a route that no longer answers
-    // sends the household to a screen that will 404. [finding 43]
-    // And since decision 481 the link is one of them; the in-app channel is named as the
-    // household sees it (the open-rooms list) rather than as the WebSocket's "banner".
+    // The TV client is retired (decision 165); the link is a channel since decision 481.
     expect(JOIN_CAPTION).toContain('can go missing');
     expect(JOIN_CAPTION).not.toMatch(/TV/i);
     expect(JOIN_CAPTION).toContain('room code');
@@ -737,9 +638,7 @@ describe('the copy and the controls this milestone moved', () => {
   });
 
   it('says which minutes a series room is counting', () => {
-    // 54h / decision 219: on a series night the budget bounds minutes PER EPISODE, and this row
-    // is the one place §6.2 step 2 prints it. Unqualified it read as the length of the thing
-    // being chosen.
+    // On a series night the budget bounds minutes per episode.
     const room = {
       room_code: 'MX-2210',
       host: 'Mia',
@@ -754,10 +653,7 @@ describe('the copy and the controls this milestone moved', () => {
   });
 
   it('asks the solo round for a pair only when the person asks to sharpen', async () => {
-    // 54f: the door lands "directly on three picks and a wildcard", and the pair search is what
-    // "sharpen this" asks for and what nothing else does. The field has been on the request model
-    // since the round was made optional and this module never sent it, so the door and every
-    // Reshuffle paid for a round nobody had asked for.
+    // Only "sharpen this" asks for a pair; the door and Reshuffle do not.
     await loadSolo();
     expect(posted('/api/tonight/solo').sharpen).toBe(false);
 
@@ -771,11 +667,7 @@ describe('the copy and the controls this milestone moved', () => {
   });
 
   it('does not advance the walk when the reshuffle it asked for was refused', async () => {
-    // The counter is raised before the POST and nothing ever put it back, so one failed press --
-    // a dropped connection, a 500, the route's own bound -- moved the walk by a step the person
-    // never saw, and every later press asked for the one after that. 54f's Reshuffle "walks
-    // further down the ranking": what it has walked is what came back.
-    // [M4.12 review cycle 1: M412-SOLO-06]
+    // What the walk has walked is what came back, so a refused press does not advance it.
     const offsets = [];
     let refuse = true;
     fetchMock.mockImplementation(async (path, opts = {}) => {
@@ -800,11 +692,7 @@ describe('the copy and the controls this milestone moved', () => {
   });
 
   it('never asks for a walk further down the ranking than the route will serve', async () => {
-    // `SoloBody.offset` is bounded `le=64` (`api/tonight.py`), and the client had no idea: press
-    // 65 was a 422 error banner, and because the number that caused it had already been stored so
-    // was every press after it -- the control was dead until Back, which drops the evening's
-    // sharpen answers with it. A request that can only be refused is not a gesture.
-    // [M4.12 review cycle 1: M412-SOLO-06]
+    // `SoloBody.offset` is bounded `le=64`; a request that can only be refused is not a gesture.
     const offsets = [];
     fetchMock.mockImplementation(async (path, opts = {}) => {
       const body = JSON.parse(opts.body ?? '{}');
@@ -824,9 +712,7 @@ describe('the copy and the controls this milestone moved', () => {
   });
 
   it('leaves a room the host has ended rather than sitting in it', async () => {
-    // Decision 169's other half. `abandoned` is terminal: the room leaves §6.2 step 2's list and
-    // releases its code, so a device still holding its lobby is holding a screen that answers
-    // nothing and a Start that 404s.
+    // `abandoned` is terminal: the code is released and Start would 404.
     tonight.lobby = { session_id: 7 };
     tonight.step = 'lobby';
     world.room = roomOf({ state: 'abandoned' });
@@ -839,10 +725,7 @@ describe('the copy and the controls this milestone moved', () => {
   });
 
   it('ends the room through the host-only route and lands at the door', async () => {
-    // The one control a room that has stopped progressing needs: `STATE_ABANDONED` has a single
-    // writer in the backend and no worker job touches `session`, so a `voting` room that loses a
-    // seat is otherwise live for ever. The rows stay — §14 risk 6 reads exactly the evenings a
-    // household cut short.
+    // A stalled `voting` room is otherwise live for ever: nothing else writes `abandoned`.
     tonight.lobby = { session_id: 7 };
     tonight.step = 'waiting';
 
@@ -854,12 +737,6 @@ describe('the copy and the controls this milestone moved', () => {
   });
 });
 
-/**
- * Finding 21. `refresh` is the busiest read in the app — §6.2 step 2 makes every channel frame a
- * nudge to re-read, and `answer`, `escape` and `start` end in one too — so several are in flight
- * at once on any evening with more than one device in it. Until this milestone none of them
- * carried the sequence number `rank.svelte.js` and Home have had since M3.
- */
 describe('overlapping reads land in order (finding 21)', () => {
   /** A fetch whose first session read is held open, so the test decides which answer lands last. */
   function heldSessionRead(stale, fresh) {
@@ -893,10 +770,7 @@ describe('overlapping reads land in order (finding 21)', () => {
   }
 
   it('does not put a device back into the round once the ballot has opened', async () => {
-    // The failure this exists for: two frames arrive close together, the `voting` read answers
-    // after the `ballot` one, and the device that has been handed 54e's ballot is dragged back
-    // to a pair. It then never submits, and `ballot.submitted_count` never reaches `seated` —
-    // so 54e's reveal is blocked for EVERY seat in the room by one device's stale read.
+    // A stale `voting` read landing last would drag a device back from the ballot and block the reveal.
     tonight.lobby = roomOf({ state: 'voting' });
     const release = heldSessionRead(
       () => reply(roomOf({ state: 'voting' })),
@@ -915,11 +789,7 @@ describe('overlapping reads land in order (finding 21)', () => {
   });
 
   it('still leaves a room the host ended when the read that overtook it failed', async () => {
-    // Why the sequence check sits AFTER the abandoned branch and not before it. Decision 169's
-    // door is terminal — the server does not un-abandon a session — and the newer read is not
-    // guaranteed to arrive at all: here it 500s. A guard placed above the branch would discard
-    // the only answer that saw the end of the evening, and the device would sit in a lobby whose
-    // Start 404s with no way out but a reload.
+    // The check sits after the abandoned branch: the end of the evening is never stale.
     tonight.lobby = roomOf();
     tonight.step = 'lobby';
     const release = heldSessionRead(
@@ -939,10 +809,7 @@ describe('overlapping reads land in order (finding 21)', () => {
   });
 
   it('keeps the newer pair on screen when an earlier round read answers last', async () => {
-    // `loadRound` is the tail of `refresh` AND the retry `answer` makes on a 409, so two are in
-    // flight whenever a frame lands mid-answer. The older one landing last puts a spent
-    // `card_token` on screen; §4.2's seal is single-use, so the next tap posts a card the route
-    // refuses and the person reads a 409 for a pair they are looking at.
+    // An older round read landing last would put a spent `card_token` on screen.
     let release = () => {};
     let seen = 0;
     fetchMock.mockImplementation((path) => {
@@ -969,10 +836,7 @@ describe('overlapping reads land in order (finding 21)', () => {
 
 describe('the first household evening (owner instruction of 2026-09-25)', () => {
   it('heads the round with what to expect, and names the cap only once the round runs long', () => {
-    // "pair 1 · cap 20" read as the plan for the evening; the cap is the ending the round is
-    // built to avoid, so it joins the line only when it is the useful number. And the estimate
-    // stays true (decision 507): the second household evening's thirteenth pair still said
-    // "usually about 10", so past the typical round the header says this one is running long.
+    // The cap joins the header only once the round runs long (decision 507).
     expect(roundHeader({ answered: 0, cap: 20, typical: 10 })).toBe('pair 1 · often about 10');
     expect(roundHeader({ answered: 9, cap: 20, typical: 10 })).toBe('pair 10 · often about 10');
     expect(roundHeader({ answered: 9, cap: 20, typical: 10 })).not.toContain('20');
@@ -984,8 +848,7 @@ describe('the first household evening (owner instruction of 2026-09-25)', () => 
   });
 
   it('keeps the header to what one line of a 390 px phone holds', () => {
-    // Review finding UX-4: 353 px of 12 px mono at 0.14em holds 39 characters, and the long
-    // round's 47 wrapped, pushing Undo and the escape under the bottom bar.
+    // 36 characters of 12px mono at 0.14em fit a 390px phone.
     for (const answered of [0, 9, 10, 18, 98]) {
       const line = roundHeader({ answered, cap: 99, typical: 10 });
       expect(line.length, line).toBeLessThanOrEqual(36);
@@ -993,8 +856,7 @@ describe('the first household evening (owner instruction of 2026-09-25)', () => 
   });
 
   it("files the ballot's count under the ballot, which is the number the screen prints", async () => {
-    // The other phone read "0 of 2 submitted" for as long as it stayed on the ballot: the only
-    // frame a submit pushed was the round's progress, which lands in `tonight.progress`.
+    // A submit's frame carries the ballot count; the slate stays.
     vi.stubGlobal('WebSocket', FakeSocket);
     vi.stubGlobal('location', { protocol: 'http:', host: 'host' });
     sockets.length = 0;
@@ -1027,7 +889,6 @@ describe('the first household evening (owner instruction of 2026-09-25)', () => 
   });
 
   it("says how broad each person's yes was, and whose only yes won", () => {
-    // "Unanimous." stood over one member's four yeses and the other's one — the winner.
     const result = {
       breadth: [
         { participant_id: 1, name: 'Patrick', approved: 4, of: 4, only_yes: false },
@@ -1054,10 +915,7 @@ describe('the first household evening (owner instruction of 2026-09-25)', () => 
   });
 
   it('sets the whole veto set, and never a fourth', async () => {
-    // Decision 480: a replace rather than a toggle, so two taps cannot leave half of each; and
-    // the store refuses a fourth before the server has to. Since decision 505 the set is THIS
-    // member's own: the other member's full three (the second household evening's first tapper)
-    // leave this phone its own three, and the reply's seats are what the chips redraw from.
+    // A replace, not a toggle; each member's own three (decision 505).
     const other = seatOf(12, { role: 'member', user_id: 2, name: 'Jenny' });
     const full = ['violence', 'horror', 'harrowing'].map((k) => ({ key: k, label: k }));
     world.room = roomOf({
@@ -1104,7 +962,6 @@ describe('the first household evening (owner instruction of 2026-09-25)', () => 
   });
 
   it('builds the join link from the page origin, and reads one back', () => {
-    // Decision 481: the QR's missing half, and what the push invitation carries.
     expect(shareLink('QC-4397', 'https://spielplan.home')).toBe(
       'https://spielplan.home/tonight?room=QC-4397'
     );
@@ -1139,8 +996,7 @@ describe('the first household evening (owner instruction of 2026-09-25)', () => 
 });
 
 describe('the second household evening (owner instruction of 2026-09-26)', () => {
-  /** A Map-backed `localStorage`, because the one under test is the only thing that knows the
-   * key; and one that refuses below, because a private window throws on every access. */
+  // Map-backed; one below refuses, as a private window does.
   const storage = () => {
     const held = new Map();
     return {
@@ -1150,8 +1006,7 @@ describe('the second household evening (owner instruction of 2026-09-26)', () =>
   };
 
   it('says under the slider that the budget is soft, and by how much', () => {
-    // §6.2 step 1 admits up to budget + 40, and the evening that set 120 met Wicked "runs 40 min
-    // over" with nothing on the door having said so. On a series night the bound is per episode.
+    // §6.2 step 1 admits up to budget + 40; the door says so.
     expect(BUDGET_GRACE_MIN).toBe(40);
     expect(budgetSoftLine('movie')).toBe(
       'films up to 40 min longer can still come up, marked with how far over'
@@ -1160,8 +1015,7 @@ describe('the second household evening (owner instruction of 2026-09-26)', () =>
   });
 
   it('opens the slider at the budget this member last used for this kind', () => {
-    // Decision 506: 120 set on the evening, 130 on the next visit. Per member and per kind,
-    // because a film's 120 is not an episode's 120 (decision 219).
+    // Per member and per kind: a film's 120 is not an episode's (decision 506).
     vi.stubGlobal('localStorage', storage());
     rememberBudget(1, 'movie', 120);
     rememberBudget(1, 'series', 70);
@@ -1177,9 +1031,7 @@ describe('the second household evening (owner instruction of 2026-09-26)', () =>
     expect(tonight.controls.runtime_budget_min).toBe(120);
     chooseKind('series', 1);
     expect(tonight.controls.runtime_budget_min, 'the kind brings its own number').toBe(70);
-    // §6.2 step 1: "for that kind on that device, else 130" (decision 506). Nothing remembered
-    // is the default, never the number the slider held - here member 1's series 70, which a
-    // film night would have opened at (review finding R3-SPEC-02).
+    // Nothing remembered means the default, never the number the slider held.
     chooseKind('movie', 3);
     expect(tonight.controls.runtime_budget_min, 'nothing remembered is the default').toBe(
       BUDGET_DEFAULT
@@ -1215,7 +1067,6 @@ describe('the second household evening (owner instruction of 2026-09-26)', () =>
   });
 
   it('describes a pair card title for somebody who does not know it', () => {
-    // "Warriors of the Wind" and "Perfect Days" said "1984 · fits your 120 min" and nothing else.
     expect(
       pairFacts({ year: 1984, kind: 'movie', runtime_min: 117, genres: ['Adventure', 'Animation'] })
     ).toEqual(['1984 · 1h 57m', 'Adventure, Animation']);
@@ -1236,8 +1087,7 @@ describe('the second household evening (owner instruction of 2026-09-26)', () =>
   });
 
   it('tells the lobby what a veto does and how a mood is said, in plain words', () => {
-    // Decisions 504 and 505: each member's own three, and "may contain" because the pool also
-    // reads what is only inferred. The mood: the answers carry it, so the copy says how.
+    // Each member's own three, and "may contain" because the pool reads inferred terms too.
     expect(vetoCaption('movie')).toContain('Each of you can rule out up to three');
     expect(vetoCaption('movie')).toContain('A film that may contain');
     // On a series night the vetoes leave out series, and the caption says so (review UX-8).

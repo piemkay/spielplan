@@ -1,13 +1,5 @@
 /**
  * @vitest-environment jsdom
- *
- * §6.6's provider cards, extraction settings, spend meter and source cards, mounted. Spec v2.1
- * §6.6, §9, §14.3; decisions 324, 325, 338, 339, 343, 436, 450, 452, 453; plan B, C.
- *
- * Mounted rather than in Playwright for the reason `connectors-page.test.js` gives: the e2e stack
- * has no provider or metadata host to answer a Test button, and the states worth asserting -- an
- * unpriced model, a blocked plan, a meter at its cap -- are payloads, so the payload is the fixture
- * and each state is exact. What the server does with the same requests is `test_spend_guard.py`'s.
  */
 
 import { flushSync, mount, unmount } from 'svelte';
@@ -147,7 +139,6 @@ function button(label) {
   return found;
 }
 
-/** The input under the label whose text contains `text`. */
 function field(text) {
   const label = [...target.querySelectorAll('label')].find((l) => l.textContent.includes(text));
   expect(label, `no field labelled ${text}`).toBeDefined();
@@ -240,11 +231,7 @@ describe('a provider card (plan B1-B3)', () => {
     expect(target.querySelector('[data-unconfigured]').textContent).toContain('no price is known');
   });
 
-  // The server sends `has_api_key: false` for a key it holds and cannot open (`registry._load_state`
-  // drops the secrets it cannot decrypt), so a card that read only that bit said "no key is stored"
-  // directly above the alert saying a stored key will not open. This test named the rule and
-  // asserted only the alert, so it passed against the sentence its name ruled out.
-  // [M5.7 review cycle 1, M57-KEYS-C1-03]
+  // The server sends `has_api_key: false` for a stored key it cannot decrypt.
   it('says a key that will not open is a restore or a retype, never that no key is stored', async () => {
     await show(LlmProviderCard, {
       card: provider('gemini', { has_api_key: false, configured: false, secrets_unreadable: true })
@@ -478,11 +465,7 @@ describe('the spend meter (decisions 325, 343, 436, 452)', () => {
     expect(alert).toContain('admin retry that would breach it is refused with the same reason');
   });
 
-  // `spend.cap_check` parks a title once the month plus its reservation -- `ATTEMPTS` x runs x the
-  // per-attempt figure -- would pass the cap, which it does while `remaining_usd` is still above
-  // zero; and because the gate stops spend short of the cap, that band and not spent >= cap is how
-  // a capped month normally ends. The card waited for spent >= cap and read "$0.02 left" with no
-  // alert while every title parked. [M5.7 review cycle 1, M57-THESIS-02]
+  // The gate parks a title once the month plus its reservation would pass the cap, short of the cap.
   it('says over spend cap once what is left cannot hold one more title', async () => {
     // The stored plan's figure is $0.032175 a title and pass, so one title reserves $0.06435.
     spend.llm = llm({ meter: meter({ spent_usd: '24.98', remaining_usd: '0.02' }) });

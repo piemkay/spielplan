@@ -1,70 +1,30 @@
-/**
- * The Rank surface's client. Spec v2.1 §6.3, §6.7, §6.8; proposals 71–83, 157.
- *
- * Three rules this module encodes, each of which is a way the surface could quietly stop
- * obeying §6.3:
- *
- *   * **The tier a title renders in comes from the server.** §6.3 forbids snapping back, and
- *     the way a client breaks that is by re-sorting optimistically and then reconciling — the
- *     title lands where you dropped it, the response arrives, and it slides somewhere else.
- *     So a drop shows a pending state and the board is replaced wholesale by the response.
- *   * **The lift is cancellable, and cancelling writes nothing.** Proposal 74: "a modeless
- *     lift with an undiscoverable exit is the classic tap-to-move failure". `putDown()` is not
- *     a request; it is the absence of one.
- *   * **The queue's pair is opaque.** §13's guard needs the held-out tenth to be identifiable
- *     end to end, so the arm lives inside a server-sealed token and this module never reads,
- *     reconstructs or sends one. `answer()` posts the token back and nothing else.
- */
+// The board always comes from the server and is replaced whole (§6.3 forbids snapping back); a
+// cancelled lift writes nothing; the queue's pair is a sealed token this module never opens (§13).
 
 import { ApiError, get, post, qs } from '$lib/api.js';
 
-/** §4.1 rule 5's partition, in the words the surface uses. */
 export const KIND_LABELS = { movie: 'Films', series: 'Series' };
 
-/**
- * Proposal 75's standing footnote, in decision 496's gestures and the member register.
- *
- * It used to promise "each move writes a tier_edit plus a duel against each new neighbour", which
- * was model vocabulary on a member surface and false on the phone: since M4.10 finding 17 a tap
- * into a tier names no neighbour and writes the edit alone. It also said "poster" about a text
- * chip. What it says now is how to use the board, which is true on every path; what a move
- * writes is the rail's to say, behind Show the model (decision 486).
- */
+// How to use the board, true on every path; what a move writes is the rail's to say.
 export const TAP_FOOTNOTE =
   'tap a title to open it · tap Move to pick it up, then tap a tier to drop it';
 
-/** §6.3's control, by the name §6.3 gives it. */
 export const SHARPEN_LABEL = 'sharpen my ranking';
 
-/**
- * Decision 495: a sitting is a round of fifteen. §6.1's "blocks of 15" is the precedent, and
- * the Rate counter the same people read ("7 / 15 this block") is the form. It is counted HERE,
- * from taps, on purpose: a count the server derived from the arm would stand still on a held-out
- * answer and tell the person which one §13 set aside (M4.10 finding 16), and a sitting is not a
- * ledger fact - a reload starting a fresh round is the honest reading of a reload.
- */
+// Counted here from taps: a server count would stand still on a held-out answer and reveal it (§13).
 export const ROUND_SIZE = 15;
 
-/** Decision 495's end of a round, true on every arm because it claims nothing about the model. */
 export const ROUND_END_TEXT =
   `That's ${ROUND_SIZE} comparisons for this round. You can stop here — or keep going for another ${ROUND_SIZE}.`;
 
-/**
- * §4.1 rule 1: the two DNA tiers must stay distinguishable in the answer a person reads, and
- * `extracted` / `projected` are the schema's words for them. The member register names what
- * each one is (decision 486): a tag quoted from a source, or one inferred from similar titles.
- */
+// The two DNA tiers stay distinguishable (§4.1 rule 1), named by what each is to a member.
 export const DNA_TIER_LABELS = { extracted: 'quoted', projected: 'inferred' };
 
 export function dnaTierText(tiers) {
   return (tiers ?? []).map((t) => DNA_TIER_LABELS[t] ?? t).join(' + ');
 }
 
-/**
- * Proposal 80's second state. §6.3's queue estimate — "~10–20 comparisons place a new title" —
- * is the nearest measured number to "enough to tier", and §6.1's own target is 50–100 verdicts
- * in the first sitting or two; 30 is the spec's own handoff figure in proposal 80's copy.
- */
+// Proposal 80's handoff figure for a board worth trusting.
 export const TIER_THRESHOLD = 30;
 
 /** §6.3's genre and decade vocabularies, scoped to the kind on screen (as Home scopes them). */
@@ -103,7 +63,6 @@ export const rank = $state({
   pair: null,
   queueReason: '',
   queueOpen: false,
-  /** Decision 495: answers given in this round, and whether the round has ended. */
   roundAnswered: 0,
   roundDone: false,
   /** @type {any[]} where the last answered pair's two titles sit now, from the answer route */
@@ -143,8 +102,7 @@ export function apply(payload) {
   rank.why = payload.why ?? '';
   rank.filters = payload.filters ?? {};
   rank.dnaTiers = payload.dna_tiers ?? null;
-  // Absent when decision 117's toggle is off — `rail.redact` deletes the key rather than
-  // emptying it, so `?? null` is reading an absence and not a value.
+  // The server deletes the gated key rather than emptying it, so this reads an absence.
   rank.model = payload.model ?? null;
   rank.log = payload.log ?? [];
   rank.booted = true;
@@ -160,24 +118,10 @@ function fail(err) {
   rank.error = err instanceof Error ? err.message : String(err);
 }
 
-/**
- * Filter and kind changes fire overlapping requests; without a sequence number a slow earlier
- * response lands after a fast later one and the board shows the wrong kind under the other
- * tab. `routes/+page.svelte` carries the same guard with the same comment — this surface has
- * three triggers (the tabs, four filter `onchange`s, and the trailing read after a queue
- * answer), so it needs it more, not less.
- */
+// Overlapping requests: a slow earlier answer must not land after a newer one.
 let requestSeq = 0;
 
-/**
- * The vocabulary read needs the same guard for the same reason, and a counter of its own rather
- * than a share of `requestSeq`: a filter change fires `load()` alone, and a shared number would
- * let that bump discard a facets response that is still the newest one — leaving both selects
- * empty until the next kind tap. Home keeps `requestSeq` and `homeSeq` apart for the same
- * reason. The failure this catches is two kind taps inside one round trip: the function blanks
- * the vocabulary and then assigns whatever comes back, so the film genres end up above a series
- * board, offering a filter that returns nothing. [finding 21]
- */
+// Its own counter: `load()` alone must not discard the newest facets answer.
 let facetSeq = 0;
 
 export async function loadFacets(kind = rank.kind) {
@@ -207,13 +151,7 @@ export async function load(kind = rank.kind) {
   }
 }
 
-/**
- * The title and minutes boxes filter as the person types, after the pause Home's search waits
- * (`routes/+page.svelte`, 220 ms). They used to wait for `change`, which a phone fires only on
- * Enter or blur, so the second household typed "Taxi" and watched the board stand still - Home's
- * box is live, and one app with two meanings for a search box reads as a broken one (round-2
- * finding R5). `load` keeps its sequence guard, so a slow earlier answer still lands nowhere.
- */
+// Live, as Home's search is: a phone fires `change` only on Enter or blur.
 export const TYPING_PAUSE_MS = 220;
 let typingTimer;
 
@@ -222,20 +160,7 @@ export function typed() {
   typingTimer = setTimeout(() => load(rank.kind), TYPING_PAUSE_MS);
 }
 
-/**
- * §4.1 rule 5's switch, as one event rather than two.
- *
- * The genre and decade vocabularies are scoped to the kind (`loadFacets` asks for one kind), so a
- * value carried over from the kind you just left stays in the query, renders blank in a `<select>`
- * that no longer offers it, and the board comes back empty with a filter the person cannot see.
- * Home's `toggleKind` (`routes/+page.svelte`) clears exactly these two for exactly this reason.
- * `q`, `dna`, `runtime_max` and `seen` are not kind-scoped, and a kind switch is no reason to
- * throw away what somebody typed.
- *
- * It lives here rather than in the page because a kind change and a filter change are different
- * events and only one of them resets anything — `load()` must stay the filter change, which is
- * why this is not folded into it — and because this is the layer a test can reach. [finding 27]
- */
+// Genre and decade are kind-scoped, so they clear on a kind switch; nothing else the person typed does.
 export async function chooseKind(kind) {
   draft.genre = '';
   draft.decade = '';
@@ -243,12 +168,7 @@ export async function chooseKind(kind) {
   await load(kind);
 }
 
-/**
- * Drop everything this module holds. The house convention (`rate.svelte.js`) and the reason
- * Rank needs it more: a lift is a *pending write naming a bare title id*, so a lift carried
- * across a sign-out into the next person's session would post a `tier_edit` into their
- * append-only ledger. `+layout.svelte`'s logout calls this; so does the page on destroy.
- */
+// A lift is a pending write naming a bare title id, so it must not survive a sign-out.
 export function reset() {
   rank.lifted = null;
   rank.opened = null;
@@ -266,10 +186,7 @@ export function reset() {
   requestSeq += 1;                        // and no in-flight response may land after this
 }
 
-/**
- * §6.3's drop, from either input path. `above` and `below` are the titles it landed between —
- * absent at the ends of a tier, which is one duel rather than a refusal.
- */
+// `above`/`below` are the titles it landed between; absent at a tier's ends.
 export async function drop({ title_id, tier, above = null, below = null }) {
   if (rank.busy) return;                  // two drops in flight would race their two boards
   rank.busy = true;
@@ -285,10 +202,6 @@ export async function drop({ title_id, tier, above = null, below = null }) {
   }
 }
 
-/**
- * Decision 496's Move control. Proposal 74: the lift is a mode, so it needs a visible way out,
- * and tapping Move again on the lifted title is one.
- */
 export function lift(entry) {
   rank.lifted = rank.lifted?.title_id === entry.title_id ? null : entry;
 }
@@ -298,12 +211,7 @@ export function putDown() {
   rank.lifted = null;
 }
 
-/**
- * Decision 496: a tap on a title opens its card. The first household tapped a title expecting
- * the card and found themselves moving it, and Rank had no road to the card at all; the move
- * became its own control. Opening puts a lifted title down first, without writing, so a tap on
- * a tier behind the card can never drop a title the person has stopped thinking about.
- */
+// Opening puts a lifted title down first, so a tap behind the card cannot drop it.
 export function openTitle(entry) {
   rank.lifted = null;
   rank.opened = entry.title_id;
@@ -313,13 +221,7 @@ export function closeTitle() {
   rank.opened = null;
 }
 
-/**
- * What a tap on a title means, which depends on the mode. With nothing lifted it opens the card.
- * With a title lifted the rows are armed, and the banner says "tap a tier to drop it": the title
- * the tap landed on is in a tier, so it drops the lifted one into that tier — naming no
- * neighbour, exactly as a tap on the letter does (§6.3's same `tier_edit` semantics; M4.10
- * finding 17). A tap on the lifted title itself puts it down and writes nothing (proposal 74).
- */
+// With a title lifted, a tap on another title drops it into that tier, naming no neighbour.
 export function tapTile(entry, tierIndex) {
   if (!rank.lifted) {
     openTitle(entry);
@@ -332,31 +234,15 @@ export function tapTile(entry, tierIndex) {
   return dropLifted(tierIndex);
 }
 
-/** Where a tap on a tier row lands: the lifted title, into that tier, between its neighbours. */
 export function dropLifted(tierIndex) {
   if (!rank.lifted) return Promise.resolve();
   const title = rank.lifted;
   return drop({ title_id: title.title_id, tier: tierIndex, ...neighboursIn(tierIndex, title) });
 }
 
-/**
- * The two titles a drop lands between, in the tier it lands in.
- *
- * `beforeTitleId` is the poster the drop landed *on*, which is §6.3's "between two titles": the
- * new title goes above it and below whatever was above it. Absent — a tap, or a drop on the row
- * rather than on a poster — the gesture is §6.3's other case, "dropping a title into a tier
- * emits a `tier_edit`", and it names no neighbour at all.
- *
- * It used to name the tier's current last entry there, and `rank/drop.py` then wrote
- * `duel(title_a=<last>, title_b=<dropped>, outcome='A')` — a comparison the person never made,
- * in the same direction every time, on every promotion into a non-empty tier. §6.3 makes
- * tap-to-tier the whole of the phone's input path, so on the primary form factor that was every
- * move; §4.2 is append-only, so every one of them was permanent; and §5.2 weighs it like a duel
- * somebody answered. A position this tier does not hold is the same fabrication by another route
- * — a stale board from a second tab or a read that predates a refit — so it names nobody either.
- * The route still accepts one neighbour, because a pointer drop onto the last poster of a tier is
- * a genuine end-of-tier insert and honestly names exactly one. [§6.3, §4.2, §5.2; finding 17]
- */
+// A drop on a poster lands above it and names both neighbours; a tap or a drop on the row names
+// none, since a named neighbour writes a duel nobody answered (§4.2 keeps it). A stale position
+// names nobody either.
 export function neighboursIn(tierIndex, title, beforeTitleId = null) {
   const tier = rank.tiers.find((t) => t.index === tierIndex);
   const entries = (tier?.entries ?? []).filter((e) => e.title_id !== title.title_id);
@@ -371,12 +257,7 @@ export function neighboursIn(tierIndex, title, beforeTitleId = null) {
   };
 }
 
-/**
- * §6.3 (decision 295): the badge is the queue's entry point, so the header control and every
- * chip on the board call this — which is why a second call while the sheet is up is nothing
- * rather than a new round. A lifted title is put down, writing nothing: the sheet is its own
- * mode, and a lift left armed behind it would be a pending write nobody is looking at.
- */
+// Every chip opens the queue, so a second call while it is open is not a new round.
 export async function openQueue() {
   if (rank.queueOpen) return;
   rank.lifted = null;
@@ -397,15 +278,10 @@ function startRound() {
   rank.placed = [];
 }
 
-/**
- * Decision 495's Keep going: another round of fifteen over the pair the last answer already
- * brought, so no request is made and nothing is skipped.
- */
 export function keepGoing() {
   startRound();
 }
 
-/** Decision 495's count, as the sheet shows it: the pair you are on, of fifteen. */
 export function roundLine() {
   const slot = rank.roundDone ? ROUND_SIZE : Math.min(rank.roundAnswered + 1, ROUND_SIZE);
   return `${slot} of ${ROUND_SIZE} this round`;
@@ -424,18 +300,9 @@ export async function nextPair() {
   }
 }
 
-/**
- * One comparison. The token carries the pair *and the arm the server drew it under* — this
- * module never names an arm, because a client that could would decide which §13 stream a
- * comparison belonged to.
- */
+// The token carries the pair and its sealed arm; this module never names an arm (§13).
 export async function answer(outcome, decisive = false) {
-  // `rank.busy` is the guard `drop()` above and `rate.svelte.js`'s `send()` both take, and it is
-  // explicitly NOT the fix for the double answer: two tabs, two devices, or a tap that outruns
-  // this module still reach the route together, and only the advisory lock the route takes inside
-  // its transaction can make the loser the 409 `fail()` renders as a notice rather than a second
-  // `duel` row that §4.2 keeps forever. What this line buys is that a double tap on one surface
-  // stops being the easy way to get there. [§6.3, §4.2; finding 1]
+  // Not the fix for a double answer (the route's lock is); this only stops a double tap here.
   if (!rank.pair || rank.busy) return;
   rank.busy = true;
   rank.notice = '';
@@ -447,34 +314,18 @@ export async function answer(outcome, decisive = false) {
     });
     rank.pair = payload.pair ?? null;
     rank.queueReason = payload.reason ?? '';
-    // Decision 495: every accepted answer is one step of the round, whichever arm drew it — the
-    // arm is sealed and this module never knows it, which is what keeps the count honest (§13).
+    // Every accepted answer counts, whichever sealed arm drew it.
     rank.roundAnswered += 1;
     if (rank.roundAnswered >= ROUND_SIZE) rank.roundDone = true;
-    // Where the two titles sit now, off the refreshed board: the sheet covers the board it is
-    // sharpening, so this is the only place the person sees their answer land.
     rank.placed = payload.placed ?? [];
     const line = payload.log ?? [];
-    // §6.3: "The model refits (incremental immediately)". The board behind the queue has moved,
-    // so it is re-read rather than left showing the ranking from before the answer — and the
-    // line is restored afterwards, because the board GET carries no `log` and `apply()` would
-    // otherwise blank the one §6.7 line this write produced.
+    // Re-read the refitted board, then restore the log line that `apply()` blanks.
     await load(rank.kind);
     rank.log = line;
   } catch (err) {
     fail(err);
     if (err instanceof ApiError && err.status === 409) {
-      // The refusal is permanent for this token, not transient. The seal the route checks is a
-      // count of this user's `tier_queue` duels and `duel` is append-only (§4.2), so once the
-      // winner's row has landed the count never returns to the sealed value — every further tap on
-      // these two posters is refused the same way. Rendered as a notice and nothing else, the
-      // losing device sat on a dead pair with no control that said so: `closeQueue` and a reopen
-      // were the only way out. So the pair comes off the table and the queue is re-read, which is
-      // what `rate.svelte.js`'s stale branch does at the same seam ("the card moved on without us.
-      // Say so and re-read the table rather than guessing"). Here rather than in `fail()` because
-      // `drop()` shares that helper and carries no seal — decision 202 leaves it without a 409 —
-      // so clearing the pair there would be a recovery from a refusal that cannot happen.
-      // [§6.3, §4.2; cycle 1 m410-rev-03]
+      // A refused seal is permanent for this token, so drop the pair and re-read the queue.
       rank.pair = null;
       await nextPair();
     }
@@ -483,12 +334,7 @@ export async function answer(outcome, decisive = false) {
   }
 }
 
-/**
- * Proposal 80's "no match" state has to name *what* matched nothing, values and all: "the
- * filter matched nothing — say so, with the active filters listed". A message naming only the
- * fields ("nothing matches dna") tells the person which control to look at and not what it
- * currently says, which on a surface with six of them is most of the answer missing.
- */
+// Name the active filters with their values, not just the fields.
 const FILTER_LABELS = {
   q: 'search',
   genre: 'genre',
@@ -509,14 +355,7 @@ export function activeFilterText() {
   return parts.join(', ') || 'these filters';
 }
 
-/** Why Sharpen is disabled, decided here rather than in the template so it can be tested.
- *
- * Decision 35's rule, generalised by the template this replaces: a control that disables has to
- * say why, or the person reads a dead button as a broken one. It said "the queue draws from titles
- * you have rated" for every `ratedTotal < 2`, which during decision 209's window is said to
- * somebody who has rated ten — the same sentence for both states, which is the reading
- * `emptyState` above was changed to stop making. The cause is the owed fit, so name it.
- */
+// A disabled control says why; during the first fit the cause is the owed fit, not the count.
 export function sharpenWhy() {
   if (!rank.booted) return null;
   if (rank.ratedTotal === 0 && rank.fitting) {
@@ -526,8 +365,6 @@ export function sharpenWhy() {
     return { kind: 'thin', text: 'Nothing to compare yet - the queue draws from titles you have rated.' };
   }
   if (rank.queueEligible === 0) {
-    // "straddles a boundary" is the model's phrasing; the member register says what it means
-    // (decision 486) — no title is a close call between two tiers.
     return {
       kind: 'exploring',
       text: `${rank.ratedTotal} rated - no title is a close call between two tiers right now, so the pairs explore your board instead.`
@@ -538,15 +375,9 @@ export function sharpenWhy() {
 
 /** Proposal 80's two states and decision 209's, decided from one payload so two cannot render. */
 export function emptyState() {
-  // Nothing is claimed before the board has been read. "You're at 0" is a statement about the
-  // person's ledger, and asserting it while the request is still in flight — or after it
-  // failed, with the error banner right above — is §6.8's register saying something untrue.
+  // Nothing is claimed before the board has been read, or after it failed.
   if (rank.loading || !rank.booted || rank.error) return null;
-  // Decision 209, and before the two counting states because it is the reason the count is 0.
-  // §6.3's board reads the fit, §5.3 puts the first fit on the 60 s sweep rather than in the
-  // request, and in between "you're at 0" is the ledger statement above made about somebody who
-  // has just rated ten films. `fitting` is the server's stamp, so the claim here is only that a
-  // fit is owed — no duration, because the sweep's period is not a promise this copy can keep.
+  // Before the counting states: an owed fit is why the count reads 0, and no duration is promised.
   if (rank.ratedTotal === 0 && rank.fitting) {
     return {
       kind: 'fitting',
@@ -554,10 +385,7 @@ export function emptyState() {
       cta: 'Rate some titles'
     };
   }
-  // True as well as plain (decision 486): the board shows its tiers from the first rated title,
-  // so "tiers appear once you've rated about 30" sat directly above a board that already had
-  // them, which the first household read as the page contradicting itself. What 30 buys is a
-  // board worth trusting; that is what the thin state now says.
+  // The board shows tiers from the first rated title; what 30 buys is a board worth trusting.
   if (rank.ratedTotal === 0) {
     return {
       kind: 'unrated',
@@ -592,11 +420,7 @@ export function clearFilters() {
   return load(rank.kind);
 }
 
-/**
- * §6.3's badge, as one line. The straddle chip and the tension chip compete for the same corner
- * and proposal 71 gives tension precedence; the server has already decided which one exists, so
- * this only picks the string.
- */
+// Tension takes precedence over the straddle badge (proposal 71).
 export function chipFor(entry) {
   if (entry.tension) return { kind: 'tension', text: entry.tension };
   if (entry.straddle_badge) return { kind: 'straddle', text: entry.straddle_badge };

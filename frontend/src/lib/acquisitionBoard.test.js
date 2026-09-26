@@ -1,13 +1,7 @@
 /**
  * @vitest-environment jsdom
  *
- * §6.6 Data's acquisition board: segments, statuses and actions read off the server's envelope.
- * Spec v2.1 §6.6 Data, §8; decisions 336, 345, 424 and 444.
- *
- * Named BESIDE `test_acquire_actions.py` and `20-admin-data.spec.js` on the board's coverage row,
- * never instead of them (decision 226). The legend here is invented on purpose: the board must pass
- * the server's stage names through untouched, and a fixture that used §8's own names could not
- * tell a pass-through from a second copy of the list.
+ * The legend is invented on purpose: §8's own names could not tell a pass-through from a copy.
  */
 
 import { flushSync, mount, unmount } from 'svelte';

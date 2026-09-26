@@ -1,32 +1,6 @@
 <script>
-  /**
-   * One of §6.6's three LLM provider cards: "per-provider key + model pick", a test button, and a
-   * caption naming its structured-output mode. Spec v2.1 §6.6, §9, §14.3; decisions 338, 343, 450,
-   * 452; plan B1-B3.
-   *
-   * THE KEY IS WRITE-ONLY, IN THE JELLYFIN CARD'S IDIOM. A provider key bills the household, which
-   * is §14.3's argument for the media-server key made about money, so the route answers
-   * `has_api_key` and nothing else and this field is never filled from anything the server sent:
-   * the placeholder says whether a key is stored, the field posts only what was typed (empty
-   * keeps the stored key, decision 452), and it is emptied after every save, landed or refused.
-   *
-   * THE MODEL AND THE PRICE GO THROUGH THE FIGURE, NOT THROUGH THE KEY ROUTE (decisions 450, 452).
-   * Both move the per-title estimate, so an edit here is amended into the page's one proposal and
-   * previewed under Extraction; the key route refuses them for exactly that reason. The model pick
-   * offers the price table's names as suggestions only -- an override prices a model the table
-   * never heard of (decision 343) -- and an empty field returns the model to the provider default.
-   * Typing drops the figure on screen at once (`invalidate`): the Confirm under the thumb must not
-   * store an edit whose field has not been left yet.
-   *
-   * UN-CONFIGURED IS A STATE OF ITS OWN (plan B3, proposal 108's dashed card). `configured` is the
-   * server's one bit -- a key this SECRETS_KEY opens and a price in effect -- and a card without it
-   * says which half is missing, rather than looking like a card that works. A key that exists and
-   * will not open is "restore the env file or type it again", never "set one up".
-   *
-   * The caption is the adapter's own word for its mode (`responseSchema`, forced tool-use, strict
-   * schema); Gemini's reads "responseSchema" rather than §6.6's "batch" because batch does not
-   * ship at M5 and that is the mode the shipped adapter uses (decision 338).
-   */
+  // The key is write-only: the route answers `has_api_key` only. Model and price go through the
+  // page's one spend proposal, never the key route, because both move the estimate (decision 450).
   import {
     PROVIDER_LABELS,
     amend,
@@ -85,17 +59,13 @@
 
   function pickModel(value) {
     const typed = value.trim();
-    // Empty is null, which the route reads as "back to the provider default" (decision 450); the
-    // stored model typed again is no change at all.
+    // Empty is null, "back to the provider default"; the stored model typed again is no change.
     const next = typed === '' ? null : typed;
     const fields = { model: next === (card.model ?? null) ? undefined : next };
     propose(amend(spend.proposal, { providers: { [card.name]: fields } }));
   }
 
-  /**
-   * The override is a pair or nothing (decision 343 ignores half of one, and the route refuses it),
-   * so a half-typed pair is held with the figure dropped until the other half arrives.
-   */
+  // The override is a pair or nothing (the route refuses half of one), so hold a half-typed pair.
   function pickPrice(pair) {
     const inText = pair.elements.namedItem('price_input').value.trim();
     const outText = pair.elements.namedItem('price_output').value.trim();
@@ -128,10 +98,7 @@
   <h2>{title}</h2>
   <div class="data" data-structured-output>structured output · {card.structured_output}</div>
 
-  <!-- `has_api_key` is false for a key the server holds and cannot open (`registry._load_state`
-       drops what will not decrypt), so it is asked after `secrets_unreadable`: "no key is stored"
-       above an alert that a stored key will not open was the card saying both at once, and the
-       false one is "set one up" (M4.7 dd03). [M5.7 review cycle 1, M57-KEYS-C1-03] -->
+  <!-- `has_api_key` is false for a stored key that will not decrypt: ask `secrets_unreadable` first. -->
   {#if !card.configured}
     <p class="why" data-unconfigured>
       Not configured: {card.secrets_unreadable
@@ -177,8 +144,7 @@
   </div>
   {#if saved && !saved.ok && saved.error}<p class="err" role="alert">{saved.error}</p>{/if}
   {#if result}
-    <!-- The provider's free models-list read (`llm/client.probe`): it bills nothing, and a model
-         it lists is not a model that answers -- the 2.5 family is still listed and 404s. -->
+    <!-- The probe reads the free models list: it bills nothing, and a listed model may still 404. -->
     <div class="data probe" data-test-result={result.ok ? 'ok' : 'fail'}>
       {#if result.ok}
         the key works{result.status ? ` (HTTP ${result.status})` : ''}
@@ -271,8 +237,6 @@
     flex-direction: column;
     gap: 10px;
   }
-  /* Plan B3: an un-configured provider is visibly so, in the existing tokens -- a dashed rule and
-     no card fill, so it reads as a slot rather than as a card that works. */
   .provider[data-configured='false'] {
     border-style: dashed;
     border-color: var(--line-2);

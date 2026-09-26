@@ -1,13 +1,5 @@
 /**
  * @vitest-environment jsdom
- *
- * §6.6 Data's extraction queue: the selection, the quote it asks for and the rule that arms Launch.
- * Spec v2.1 §8.4, §6.6 Data; decisions 441, 442 and 443.
- *
- * Named BESIDE `test_flywheel_batch.py`, `test_flywheel_launch.py` and `20-admin-data.spec.js` on
- * the launch's coverage row, never instead of them (decision 226). What only this layer can hold is
- * the out-of-order case: a quote asked for one selection landing after the operator has moved on to
- * another, which the browser suite cannot produce on demand and which must never arm the button.
  */
 
 import { flushSync, mount, unmount } from 'svelte';
@@ -72,10 +64,6 @@ describe('the selection', () => {
   });
 });
 
-// M56-DATA-01: section 8.4 as v2.1.3 amends it puts each failure in the queue "with its reason and a
-// 'queued just now' marker read off the row's own creation time" (decision 330, proposal 135's
-// adjustment). The route carried `created_at` and the card dropped it, so a row written the moment a
-// walk finished stage 8 looked like one queued weeks before.
 describe('the queued marker', () => {
   const now = Date.parse('2026-09-24T12:00:00Z');
 
@@ -94,9 +82,6 @@ describe('the queued marker', () => {
   });
 });
 
-// M56-DATA-02: the cap the selection is held against, stated from the reading in hand. A quote for
-// the selection on screen is one; the queue's own `meter` is the other, and "no cap" is said only by
-// a reading whose cap is null - never by the absence of a reading.
 describe('the room left this month', () => {
   it('states the cap from the quote, else from the queue read, and no cap only when none is set', () => {
     const quoted = { cap_usd: '5.00', remaining_usd: '1.25' };
@@ -322,7 +307,6 @@ describe('the mounted queue', () => {
     }
   });
 
-  // M56-DATA-01: the marker is on the card, per row, read off each row's own `created_at`.
   it('marks a row queued just now and an older row with its age, off each rows own time', async () => {
     const fresh = new Date().toISOString();
     const older = new Date(Date.now() - 5 * 60_000 - 5_000).toISOString();
@@ -346,9 +330,6 @@ describe('the mounted queue', () => {
     }
   });
 
-  // M56-DATA-02: with no quote for the selection in hand - the debounce and round trip after every
-  // tap, or for good while the quote route fails - the card read "no cap of no cap" over a cap of
-  // five dollars. The queue's own read carries the meter, and that is what it states then.
   it('states the cap from the queue read while no quote for the selection is in hand', async () => {
     const meter = { cap_usd: '5.00', remaining_usd: '3.75', spent_usd: '1.25', unsettled_usd: '0' };
     vi.mocked(get).mockImplementation(async (path) => {

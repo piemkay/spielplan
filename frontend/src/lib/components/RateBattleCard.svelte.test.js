@@ -1,22 +1,5 @@
 /**
  * @vitest-environment jsdom
- *
- * The long press, against a card that moves under it. Spec v2.1 §6.1, §5.2, §4.2; proposal 51;
- * M4.10 finding 28.
- *
- * §6.1 keeps the long press as "an optional accelerator only", and proposal 51 defines it as
- * "equivalent to toggle-on plus tap". Both sentences assume the tap and the write are the same
- * event. They are not: the write happens 500 ms after the finger lands, and `load()` replaces the
- * card inside that window on three routine triggers — the `?head=` effect, the model-gate effect
- * and Undo. The timer closed over the outcome alone and `rate.svelte.js` read the live token at
- * fire time, so the gesture answered whichever pair had arrived.
- *
- * HERE RATHER THAN IN PLAYWRIGHT. The window is 500 ms wide and the swap has to land inside it
- * with the finger still down; a browser test would have to race a real timer while holding a
- * pointer, which is how a suite gets a flake instead of a proof. Mounted, the timer is vitest's
- * and the swap is a prop assignment, so the frame is exact and the assertion cannot flake.
- * `rate.svelte.test.js` keeps the other half — that `duel()` refuses a pressed token the table has
- * moved past, which is the same defect arriving after this check has already passed.
  */
 
 import { flushSync, mount, unmount } from 'svelte';
@@ -37,7 +20,6 @@ const pair = (token, names = ['Heat', 'Drive']) => ({
   substituted_for: null
 });
 
-/** Every `onDuel` the card made, in order — the writes, as the page would have posted them. */
 let duels = [];
 let target;
 
@@ -53,7 +35,6 @@ afterEach(() => {
   target.remove();
 });
 
-/** Mount one card with reactive props, the way `rate/+page.svelte` mounts it. */
 function open(token = 't1') {
   const props = $state({
     card: pair(token),
@@ -69,7 +50,7 @@ function open(token = 't1') {
   return { props, app };
 }
 
-/** `pointerdown` as a MouseEvent: jsdom has no PointerEvent, and the listener is by name. */
+// jsdom has no PointerEvent, and the listener is by name.
 function pressLeft() {
   const el = target.querySelector(LEFT);
   expect(el, 'the left poster is not on screen at all').not.toBeNull();
@@ -93,8 +74,6 @@ describe("proposal 51's long press", () => {
     try {
       pressLeft();
       // The swap, mid-press: an Undo, the banner's `?head=` effect, or the model-gate effect.
-      // §4.2 is append-only and §5.2 weighs this row ~1.6 against ~1.0, so a duel written here
-      // is both the heaviest observation in the Ledger and one the person never made.
       props.card = pair('t2', ['Sicario', 'Prisoners']);
       flushSync();
       vi.advanceTimersByTime(500);
@@ -105,8 +84,6 @@ describe("proposal 51's long press", () => {
   });
 
   it('unarms the timer when the card goes away under it', () => {
-    // No `onDestroy` at all before this: a mode switch or a navigation left the timer armed and
-    // it fired into a component nobody was looking at.
     const { app } = open('t1');
     pressLeft();
     unmount(app);
@@ -115,8 +92,7 @@ describe("proposal 51's long press", () => {
   });
 
   it('still answers an ordinary tap, and only once', () => {
-    // The accelerator must not become less reachable, and the click that follows a fired press
-    // must not answer twice — proposal 51's "equivalent to toggle-on plus tap", not both.
+    // The click that follows a fired press must not answer twice.
     const { app } = open('t1');
     try {
       const el = target.querySelector(LEFT);

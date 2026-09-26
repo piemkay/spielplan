@@ -1,27 +1,5 @@
 /**
  * @vitest-environment jsdom
- *
- * What the shell does when it cannot tell where a person belongs. Spec v2.1 §3.1, §6 preamble;
- * M4.15 decision 286.
- *
- * `guard()` routes from two reads and both of them can fail. `bootstrap()` swallows a failed
- * `/setup/state` into null and `landingRoute()` reads `setup.required` to tell §3.1's first admin
- * from a signed-out member — so with that read missing and `/auth/me` having ANSWERED 401, /setup
- * and /login are both live readings of the same state and nothing in the store separates them.
- * Refusing to route there is right. Refusing and then rendering the AUTHED SHELL was not: the
- * header, an account chip reading "signed out", no nav links, and the surface underneath printing
- * `api/deps.py`'s sentence, with Log out the only way forward and no timer armed, because
- * `session.offline` is false — the appliance answered.
- *
- * MOUNTED RATHER THAN IN PLAYWRIGHT, and for the reason `account-page.test.js` gives: the state
- * needs one read to fail while the next succeeds, inside one boot. No spec in `e2e/` drives a
- * failed `/setup/state` at all, and putting a server into that shape for one assertion would cost
- * the suite a fixture it has no other use for. Unregistered by decision 274 — the gate does not
- * run vitest — so the rule's standing check is the static guard beside it; this is where the
- * branch arithmetic is falsifiable in a second.
- *
- * Named `shell-layout.test.js` and not `+layout.svelte.test.js`: SvelteKit reserves the `+`
- * prefix inside `src/routes` and `vite build` fails outright on any other `+`-named file.
  */
 
 import { createRawSnippet, flushSync, mount, unmount } from 'svelte';
@@ -45,8 +23,7 @@ vi.mock('$app/stores', () => ({
 }));
 
 vi.mock('$app/navigation', () => ({
-  // `goto` is the whole observable output of `guard()`, so it is recorded rather than stubbed
-  // away: "nothing routed" and "routed to /login" are the two answers this file is about.
+  // `goto` is `guard()`'s whole observable output, so it is recorded, not stubbed away.
   goto: vi.fn(async (to) => {
     nav.gone.push(to);
   }),
@@ -146,8 +123,7 @@ describe('the shell when it cannot tell where a person belongs', () => {
     try {
       expect(target.querySelector('[data-testid="landing-unknown"]')).not.toBeNull();
 
-      // Decision 283's timer, armed for this state by decision 286: no event is owed when a LAN
-      // box comes back with the interface up the whole time, so the shell asks again itself.
+      // No event is owed when a LAN box comes back with the interface up, so the shell asks again itself.
       wire({ '/config': CONFIG, '/setup/state': READY, '/auth/me': REFUSED });
       await vi.advanceTimersByTimeAsync(5_000);
       for (let i = 0; i < 30; i++) await Promise.resolve();
@@ -160,8 +136,7 @@ describe('the shell when it cannot tell where a person belongs', () => {
   });
 
   it('keeps sending §3.1s first admin to the wizard, not to a form for an account nobody has', async () => {
-    // The half decision 286 must not undo. On a first boot every authenticated route answers 401
-    // honestly, and the wizard is owed — so the answer here is /setup, never /login.
+    // On a first boot every authenticated route answers 401 honestly, and the wizard is owed.
     nav.url = new URL('http://localhost/');
     wire({
       '/config': { ...CONFIG, has_bundle: false },
@@ -171,8 +146,7 @@ describe('the shell when it cannot tell where a person belongs', () => {
 
     const app = await open();
     try {
-      // De-duplicated: `guard()` runs from `onMount` and again from the `$effect` that watches
-      // the pathname, which is the shipped shape and not this test's business. WHERE it routes is.
+      // De-duplicated: `guard()` runs from `onMount` and again from the pathname effect.
       expect([...new Set(nav.gone)]).toEqual(['/setup']);
       expect(target.querySelector('[data-testid="landing-unknown"]')).toBeNull();
     } finally {
@@ -187,11 +161,7 @@ describe('the shell when it cannot tell where a person belongs', () => {
     required,
     where
   ) => {
-    // The first household's backend log: every signed-out load of / fired Home's reads - /home,
-    // /titles, /facets, /prompts/finish - and logged four 401s before `guard()` routed away,
-    // because the authed shell rendered the surface for nobody in the meantime. Decision 282's
-    // seam made the 401s harmless; this is the half that stops them leaving at all.
-    // [owner instruction of 2026-09-25; decisions 282 and 286]
+    // Signed-out loads of / used to fire Home's reads and log four 401s before `guard()` routed away.
     nav.url = new URL('http://localhost/');
     wire({
       '/config': CONFIG,
@@ -210,7 +180,6 @@ describe('the shell when it cannot tell where a person belongs', () => {
   });
 
   it('still sends a lapsed member to the sign-in page when both reads answer', async () => {
-    // The ordinary case, unchanged: with `/setup/state` in hand there is no ambiguity to state.
     wire({ '/config': CONFIG, '/setup/state': READY, '/auth/me': REFUSED });
 
     const app = await open();
@@ -223,12 +192,7 @@ describe('the shell when it cannot tell where a person belongs', () => {
   });
 
   it('sends a lapsed member to /login when this device already knows the wizard is done', async () => {
-    // The second-boot shape, and the one decision 286's card must not claim. This document read
-    // `/setup/state` once; the hourly prune then took the cookie while the first pair of reads
-    // blipped - `api.js`'s deadline is up to ten seconds wide and `/auth/me` goes out only after
-    // they settle, which is the window decision 286's own text names. `bootstrap()` wrote the
-    // swallowed null over the answer in hand, so the destination was knowable and the shell said
-    // it was not. [review cycle 2: M415-C2-SESS-01]
+    // The device read `/setup/state` earlier; a swallowed null must not overwrite the answer in hand.
     session.setup = { required: false, note: 'ready' };
     wire({ '/config': SILENT, '/setup/state': SILENT, '/auth/me': REFUSED });
 
@@ -242,11 +206,7 @@ describe('the shell when it cannot tell where a person belongs', () => {
   });
 
   it('does not tell a cold boot that it is still signed in', async () => {
-    // `manifest.webmanifest` starts the installed icon at `/`, which is not `bare`, so this is
-    // the branch a cold launch with the appliance unreachable lands in - and module `$state` does
-    // not survive a document load, so `session.user` is null every time. Said unconditionally,
-    // the card told somebody who had just tapped Log out the opposite of what the tap did.
-    // [decision 271; review cycle 2: M415-C2-SHELL-01]
+    // A cold launch lands here with `session.user` null, so the card must not claim a session.
     wire({ '/config': SILENT, '/setup/state': SILENT, '/auth/me': SILENT });
 
     const app = await open();
@@ -262,9 +222,7 @@ describe('the shell when it cannot tell where a person belongs', () => {
   });
 
   it('keeps the sentence where the shell really is holding a session', async () => {
-    // The warm half, unchanged: a live tab whose `/auth/me` stops answering mid-session. A failed
-    // read is not a sign-out, so the name is still in the chip and the sentence is a rendering of
-    // something this device read.
+    // A failed read is not a sign-out, so the name is still in the chip.
     session.user = { ...ME, nav: { surfaces: [], account: [] } };
     wire({ '/config': CONFIG, '/setup/state': READY, '/auth/me': SILENT });
 
@@ -279,11 +237,7 @@ describe('the shell when it cannot tell where a person belongs', () => {
   });
 
   it('does not open a second boot when the interface flaps during the first', async () => {
-    // `online` is registered before the boot starts, so the initial boot was a fourth way in that
-    // `reconnect()`'s single-flight guard could not see. Two `bootstrap()`s then wrote into one
-    // `session` object: the second painted a working shell and the first one's stale `/auth/me`
-    // rejected into `session.offline` on top of it, putting the unreachable card over a shell on
-    // a network that was back. [decision 283; review cycle 2: M415-C2-SHELL-02]
+    // `online` is registered before the boot starts, so the first boot must count as in flight.
     const asked = [];
     fetchMock.mockImplementation((url) => new Promise(() => asked.push(String(url))));
 
@@ -300,8 +254,7 @@ describe('the shell when it cannot tell where a person belongs', () => {
   });
 
   it('leaves a signed-in member alone when only the wizard read fails', async () => {
-    // `landingRoute()` needs `setup.required` only while nobody is signed in, so a failed
-    // `/setup/state` is not this person's problem and must not put a card in front of them.
+    // `landingRoute()` needs `setup.required` only while nobody is signed in.
     wire({ '/config': CONFIG, '/setup/state': SILENT, '/auth/me': ME });
 
     const app = await open();
@@ -314,13 +267,7 @@ describe('the shell when it cannot tell where a person belongs', () => {
   });
 
   it('does not say the library is empty from a read that never answered', async () => {
-    // The same rule as the card above, on the one line of the shell that STATES a fact about the
-    // household rather than rendering one. `/config` fails while `/auth/me` answers, so
-    // `hasBundle` is null and `offline` is false: the shell renders, and `=== false` is all that
-    // stands between a household whose library is full and a header telling it the library is
-    // empty. No spec in `e2e/` can tell the two spellings apart - the offline branch draws no
-    // header at all, and a genuinely bundle-less boot renders the badge under either.
-    // [decision 271; review cycle 2: M415-C2-COV-01]
+    // `hasBundle` is null here; only `=== false` keeps the header from calling a full library empty.
     wire({ '/config': SILENT, '/setup/state': READY, '/auth/me': ME });
 
     const app = await open();
@@ -329,8 +276,6 @@ describe('the shell when it cannot tell where a person belongs', () => {
       expect(session.offline).toBe(false);
       const header = target.querySelector('header');
       expect(header).not.toBeNull();
-      // `ME` is a member, who reads the state in the member register (decision 486); an admin
-      // reads §3.1's own "no bundle imported", behind the same `=== false`.
       expect(header.textContent).not.toContain('no movie data yet');
 
       // And it is absent because the read failed, not because this build never draws it.
@@ -344,10 +289,7 @@ describe('the shell when it cannot tell where a person belongs', () => {
   });
 
   it('says a restart is owed rather than that nothing was imported', async () => {
-    // Decision 497's one remaining restart: a bundle IS imported and the backend could not load
-    // it by itself. "no bundle imported" is what the first household's header said over exactly
-    // this, and it was false. A member is told in plain words and given no door; an admin gets
-    // the link to the Data tab, whose banner carries the command.
+    // A bundle is imported but could not load: a member gets plain words, an admin the Data tab link.
     const stuck = { ...CONFIG, has_bundle: false, restart_required: true };
     wire({ '/config': stuck, '/setup/state': READY, '/auth/me': ME });
     const member = await open();

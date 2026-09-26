@@ -4,14 +4,7 @@ import { _internals } from './passkeys.js';
 
 const { toBytes, toB64url, creationOptions, requestOptions } = _internals;
 
-/**
- * base64url, not base64. Spec v2.1 §3.2.
- *
- * The two alphabets differ in exactly two characters and base64url has no padding, so the wrong
- * one produces a credential id that looks fine, travels fine, and is never found by the server's
- * lookup. That failure mode is why these are unit tests and not left to the browser: the whole
- * ceremony works and sign-in simply says "that passkey is not registered here".
- */
+// The wrong alphabet yields a credential id the server's lookup silently never finds.
 describe('base64url', () => {
   it('round-trips arbitrary bytes', () => {
     const bytes = new Uint8Array(256).map((_, i) => i);
@@ -26,8 +19,7 @@ describe('base64url', () => {
   });
 
   it('decodes an unpadded value the server sent', () => {
-    // py_webauthn strips padding; atob refuses a string whose length is not a multiple of 4,
-    // so the decoder has to restore it.
+    // py_webauthn strips padding, and atob refuses a length that is not a multiple of 4.
     expect([...toBytes('AQID')]).toEqual([1, 2, 3]);
     expect([...toBytes('AQI')]).toEqual([1, 2]);
     expect([...toBytes('AQ')]).toEqual([1]);
@@ -57,14 +49,14 @@ describe('ceremony options', () => {
     expect(built.challenge).toBeInstanceOf(Uint8Array);
     expect(built.user.id).toBeInstanceOf(Uint8Array);
     expect(built.excludeCredentials[0].id).toBeInstanceOf(Uint8Array);
-    // Not decoded, and not dropped: the authenticator needs them verbatim.
+    // Not decoded and not dropped: the authenticator needs them verbatim.
     expect(built.rp).toEqual({ id: 'localhost', name: 'Spielplan' });
     expect(built.timeout).toBe(60000);
     expect(built.user.name).toBe('jenny');
   });
 
   it('survives a ceremony with no credentials to exclude', () => {
-    // The first passkey on an account: py_webauthn omits the key entirely.
+    // py_webauthn omits the key entirely for an account's first passkey.
     const built = creationOptions({ challenge: 'AQID', user: { id: 'AQI' } });
     expect(built.excludeCredentials).toEqual([]);
   });
@@ -81,7 +73,6 @@ describe('ceremony options', () => {
   });
 
   it('survives a discoverable-credential ceremony with no allow list', () => {
-    // §3.2's "the phone offers the account itself" path — an unnamed sign-in sends none.
     expect(requestOptions({ challenge: 'AQID' }).allowCredentials).toEqual([]);
   });
 });

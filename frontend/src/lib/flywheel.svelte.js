@@ -1,33 +1,7 @@
-/**
- * §6.6 Data's extraction queue: the selection, the quote it asks for, and the one rule that arms
- * Launch. Spec v2.1 §8.4, §6.6 Data; decisions 330, 441, 442 and 443.
- *
- * THE SERVER IS THE GATE, AND THIS MODULE ONLY DECIDES WHEN TO ASK IT. §8.4's "sees the cost
- * estimate, launches" is decision 441's reservation - the per-title estimate at the batch's own
- * providers and passes, times the titles, times both attempts - and every figure of it is
- * `flywheel/batch.quote`'s, arriving as decimal strings. No money is added, multiplied or compared
- * here: a JSON number is a binary float, the meter is exact on purpose (decision 325), and a total
- * computed in two places is two totals. The launch route prices the batch again inside its own
- * transaction whatever this page shows, so what this module owes is narrower and still load-bearing:
- * never let a quote for some OTHER selection arm the button.
- *
- * WHY A STALE QUOTE IS THE DEFECT TO DESIGN AGAINST. The quote is asked on every change and answers
- * out of order whenever the network does. A quote for two titles at one pass, landing after the
- * operator has ticked a hundred rows at two passes, says `launchable: true` about a batch that is
- * not the one on screen. `quoteKey` names the selection a quote was asked for and `launchState`
- * arms Launch only when that name is the current one; the server would refuse the bigger batch, but
- * a button that looks pressable over a figure that is not the batch's is plan C3's "warning after
- * the fact" in its other form.
- *
- * PURE FUNCTIONS, for `bundleImport.svelte.js`'s reason: the component keeps its runes and this
- * module keeps the rules.
- */
+// The server is the gate: every figure is `flywheel/batch.quote`'s decimal string, never computed
+// here. What this module owes is that a quote for another selection never arms Launch (`quoteKey`).
 
-/**
- * The queue's three feeds as the rows label them (decision 328 struck the fourth). The two whose
- * producer is M6's are shown and selectable, and a launch naming one is refused by the server
- * naming M6 (decision 443), so the label says so before anybody presses.
- */
+// The two feeds M6 produces are selectable, but the server refuses to launch them (decision 443).
 const KINDS = {
   thin_facet: 'thin facet',
   empty_predicate: 'empty predicate - produced from M6',
@@ -39,11 +13,7 @@ export function kindLabel(kind) {
   return KINDS[kind] ?? String(kind);
 }
 
-/**
- * The pass counts the batch picker offers. `llm/spend` refuses nothing at or above 1 and prices any
- * count, so these are the counts an operator plausibly runs rather than a limit; the stored plan's
- * own count is added when it is outside them, so the default is always a choice on the list.
- */
+// Plausible counts, not a limit; the stored plan's own count is added when it is outside them.
 export const PASS_CHOICES = [1, 2, 3, 4, 5];
 
 /** @param {number | null | undefined} stored */
@@ -55,8 +25,7 @@ export function passChoices(stored) {
 }
 
 /**
- * A new selection with `id` toggled. A new Set rather than a mutation, so the component's `$state`
- * sees an assignment and every derivation over it re-runs.
+ * A new Set, not a mutation, so the component's `$state` sees an assignment.
  *
  * @param {Set<number>} selected
  * @param {number} id
@@ -69,11 +38,7 @@ export function toggle(selected, id) {
 }
 
 /**
- * The titles a selection counts: the sum of the selected rows' `est_titles`.
- *
- * A row written without the figure counts one, which is `flywheel/batch._count`'s reading - a
- * thin-facet row is one title and 0029's CHECK makes it name that title - so the quote on screen
- * counts what the launch will count rather than a free zero.
+ * A row with no `est_titles` counts one, as `flywheel/batch._count` does.
  *
  * @param {{id: number, est_titles?: number | null}[]} items
  * @param {Set<number>} selected
@@ -88,9 +53,7 @@ export function titlesOf(items, selected) {
 }
 
 /**
- * The plan a new page starts from: the stored plan's providers and passes (decision 324), or no
- * provider and one pass when the stored plan cannot be made - in which case `defaults.reason` is
- * the sentence saying why, and the quote will say it again.
+ * The stored plan (decision 324), or no provider and one pass when it cannot be made.
  *
  * @param {{defaults?: {providers?: string[] | null, passes?: number | null, reason?: string | null}}}
  *   envelope
@@ -104,8 +67,7 @@ export function defaultPlan(envelope) {
 }
 
 /**
- * The providers ticked, in the envelope's order, so one selection has one spelling whichever order
- * the boxes were ticked in.
+ * In the envelope's order, so one selection has one spelling.
  *
  * @param {{name: string}[]} providers the envelope's provider list
  * @param {string[]} chosen
@@ -114,30 +76,18 @@ export function orderedProviders(providers, chosen) {
   return providers.map((p) => p.name).filter((name) => chosen.includes(name));
 }
 
-/**
- * The name of one selection: what a quote was asked for, compared with what is on screen now.
- *
- * @param {{titles: number, providers: string[], passes: number}} params
- */
+/** @param {{titles: number, providers: string[], passes: number}} params */
 export function quoteKey(params) {
   return `${params.titles}|${params.providers.join(',')}|${params.passes}`;
 }
 
-/**
- * `GET /api/admin/flywheel/quote` for one selection, under `/api`.
- *
- * Spelled by hand rather than through `qs()`, which drops an empty value: with no provider ticked
- * the route still has to be asked, because its answer - the no-cap sentence, or the plan's refusal
- * for a batch naming nothing - is the reason Launch is dark, and `providers` is required there.
- */
+// By hand, not through `qs()`, which drops an empty value: `providers` is required even when empty.
 export function quotePath(params) {
   const providers = encodeURIComponent(params.providers.join(','));
   return `/admin/flywheel/quote?titles=${params.titles}&providers=${providers}&passes=${params.passes}`;
 }
 
 /**
- * Keep a quote only when it answers the selection on screen now; otherwise null.
- *
  * @param {{titles: number, providers: string[], passes: number}} current
  * @param {{titles: number, providers: string[], passes: number}} requested
  * @param {object} body the route's answer
@@ -147,15 +97,10 @@ export function acceptQuote(current, requested, body) {
   return { key: quoteKey(requested), body };
 }
 
-/** What Launch says while the quote for this selection has not yet come back. */
 export const PENDING = 'working out the total for this selection';
 
 /**
- * Whether Launch may press, and the sentence beside it when it may not.
- *
- * Dark unless the quote in hand answers the selection on screen AND the server said launchable;
- * the reason is the server's own sentence whenever it gave one (no cap, the plan's refusal, an
- * unknown price, nothing selected, the reservation over the room left), shown whole.
+ * Dark unless the quote in hand answers the selection on screen and the server said launchable.
  *
  * @param {{key: string, body: {launchable?: boolean, reason?: string | null}} | null} quoted
  * @param {string} currentKey quoteKey of the selection on screen
@@ -171,8 +116,7 @@ export function launchState(quoted, currentKey, busy) {
 }
 
 /**
- * The launch body: exactly the selected ids, the providers and the passes - and nothing a page
- * could price with (decision 441; `api/flywheel.Launch`).
+ * Nothing a page could price with (decision 441).
  *
  * @param {Set<number>} selected
  * @param {{providers: string[], passes: number, titles?: number}} plan
@@ -185,18 +129,14 @@ export function launchBody(selected, plan) {
   };
 }
 
-/** A decimal string from the server as dollars, or the word for its absence; never arithmetic. */
+/** Never arithmetic: the server's decimal strings are exact. */
 export function dollars(amount, absent = 'unknown') {
   return amount == null ? absent : `$${amount}`;
 }
 
 /**
- * The room the month leaves, from whichever meter reading is in hand: the quote for the selection on
- * screen, else the queue read's own `meter` - the same `spend.meter` reading, taken when the page
- * loaded. "no cap" is said only by a reading whose cap IS null, never by the absence of a reading:
- * between a tap and its quote, and for good while the quote route fails, the card otherwise told a
- * household with a cap that it had none, on the one control that spends. [M5.6 review cycle 1,
- * M56-DATA-02; decisions 330 and 441]
+ * From the quote, else the queue read's `meter`; "no cap" only from a reading whose cap is null,
+ * never from the absence of a reading.
  *
  * @param {{cap_usd?: string | null, remaining_usd?: string | null} | null} quoted
  * @param {{cap_usd?: string | null, remaining_usd?: string | null} | null} meter
@@ -209,13 +149,8 @@ export function roomLeft(quoted, meter) {
 }
 
 /**
- * §8.4 as v2.1.3 amends it: a failure is in the queue "with its reason and a 'queued just now'
- * marker read off the row's own creation time" (decision 330, proposal 135's adjustment). Under a
- * minute it is exactly that; after it, the age in the coarsest unit that is still true, rounded
- * down so a row is never said to be older than it is. A row the server stamped a few seconds
- * ahead of this device's clock is just now too, not "in the future". Null for a row with no
- * readable time, so the card draws nothing rather than "NaN min ago". [M5.6 review cycle 1,
- * M56-DATA-01]
+ * Rounded down, so a row never reads older than it is; a server clock slightly ahead is still
+ * "just now", and an unreadable time draws nothing.
  *
  * @param {string | null | undefined} createdAt the row's `created_at`, as the route spells it
  * @param {number} now milliseconds since the epoch

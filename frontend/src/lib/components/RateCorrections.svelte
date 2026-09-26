@@ -1,20 +1,4 @@
 <script>
-  /**
-   * §6.1's corrections zone, quoted whole because the spec is already complete and correct
-   * here and the prototype is not (proposal 44):
-   *
-   *   "Corrections zone at the bottom (nothing tappable inside the poster cards), one row:
-   *    `not seen: [left] [both] [right]` → sets that side `unseen`, swaps it out of the pair
-   *    (`both` swaps the whole pair), writes no duel row, syncs per §7.3, covered by the
-   *    persistent Undo."
-   *
-   * One row. Three controls. The prototype swapped the whole pair whichever side you tapped
-   * and wrote no state row at all; the side travels to the server here, and the server decides
-   * what gets redrawn.
-   *
-   * It does not advance the block counter — a correction is not an observation about taste,
-   * it is a correction of the pool the observations are drawn from.
-   */
   let { sides = ['left', 'both', 'right'], label = 'not seen', busy = false, onCorrect } =
     $props();
 </script>
