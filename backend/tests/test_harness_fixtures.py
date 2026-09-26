@@ -18,9 +18,7 @@ about something that mattered:
 The arming-line and name-building tests are pure, four more are static reads of `conftest.py`'s
 own source and one calls a hook with a config of its own, because the alternative -- asserting
 what a run prints, or what a fixture leaves behind after raising -- means running pytest inside
-pytest. One guard does exactly that and says why: what `docs/TESTING.md` claims `-q` prints is a
-claim about pytest rather than about this suite, so it is measured against two throwaway tests in
-a directory of their own. The rest are integration tests and skip with the layer they are about.
+pytest. The rest are integration tests and skip with the layer they are about.
 """
 
 from __future__ import annotations
