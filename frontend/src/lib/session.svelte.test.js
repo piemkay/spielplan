@@ -55,10 +55,8 @@ describe('authMethodLine', () => {
  * the session cookie untouched the whole time. §3.1 asks for an explicit state instead of an
  * error, and these say which state each read produces: an answer, a refusal, or nothing.
  *
- * Unregistered in `spec_coverage.toml` by decision 274 — `npm --prefix e2e run fresh`, the suite
- * a milestone closes on, does not run vitest, so a row discharged by a vitest id would be a row
- * nothing in the gate executes. The rules themselves are asserted at the e2e and static layers;
- * this is where the branch arithmetic is falsifiable in a second.
+ * The rules themselves are asserted at the e2e and static layers; this is where the branch
+ * arithmetic is falsifiable in a second.
  */
 describe('bootstrap', () => {
   const fetchMock = vi.fn();

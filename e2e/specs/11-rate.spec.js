@@ -6,9 +6,8 @@ import { signedIn } from '../helpers.js';
  * §6.1's Rate surface, driven in a browser.
  *
  * Every rule this file touches already has integration coverage in
- * `backend/tests/test_rate_session.py` and `test_rate_queue.py`, and none of the eleven Rate
- * rows in `spec_coverage.toml` is closed here. What an integration test structurally cannot
- * reach is the thing this file exists for: that the *surface* obeys them — that the counter on
+ * `backend/tests/test_rate_session.py` and `test_rate_queue.py`. What an integration test
+ * structurally cannot reach is the thing this file exists for: that the *surface* obeys them — that the counter on
  * screen is the one the server advanced, that the chip which says "undo" is disabled rather
  * than inert, that the card in front of a person carries no prediction, and that the empty
  * kind selection is refused by the control rather than sent to a 422.

@@ -15,7 +15,7 @@
  * decision 226 forbids a row resting on a vitest id alone. What this layer adds is the words: a
  * licence notice is a string that has to be exact, and a test that reads it out of the mounted
  * component fails on a typo in the one place where a paraphrase is a licence breach rather than a
- * copy edit. Naming these ids in `spec_coverage.toml` is what stops them being deleted quietly.
+ * copy edit.
  */
 
 import { mount, unmount } from 'svelte';

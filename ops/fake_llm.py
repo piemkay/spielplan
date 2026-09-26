@@ -13,7 +13,7 @@ real server did not, and every real webhook add was dropped. So this is a real H
 of `ops/fake_jellyfin.py` refusing the admin key on the Played write, that answers the way each
 provider's PUBLISHED reference says it answers and refuses what that reference says it refuses.
 
-ONE WAY IN. The backend tests and `ops/m55_exit_criterion.py` mount it through `httpx.ASGITransport`
+ONE WAY IN. The backend tests mount it through `httpx.ASGITransport`
 inside a real `acquire.fetch.Fetcher`, so the adapters keep their production urls and every request
 still passes the fetcher's host policy, pacing and breaker. There is no compose service and no port
 (decision 435): no provider key is ever needed to run it, and nothing outside a test can reach it.

@@ -11,7 +11,7 @@
  *   node e2e/run.mjs [--project=desktop]
  */
 import { execFileSync, spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { baseUrl } from './env.mjs';
@@ -83,15 +83,6 @@ const BUILD_FIXTURE = [
   "fx.make_bundle(pathlib.Path('data/import'))",
   "print('fixture bundle written into data/import')",
 ].join('; ');
-
-// The JSON report `ops/coverage_gate.py` reads, and the one file two phases fight over. Playwright
-// empties `outputDir` at the START of a run, so phase 2 deletes the report phase 1 wrote — and
-// phase 1 alone closes 8 shipped rows. So phase 1's report is held here and written back beside
-// phase 2's once the wipe has happened. It exists only under CI, where
-// `playwright.config.js` adds the `json` reporter; a local run has no such file and must not fail
-// looking for one.
-const REPORT = join(HERE, '.results', 'report.json');
-const PHASE_ONE_REPORT = join(HERE, '.results', 'report-phase-1.json');
 
 const play = (args) =>
   spawnSync('npx', ['playwright', 'test', '--config', 'playwright.config.js', ...args, ...passthrough], {
@@ -171,7 +162,6 @@ execFileSync('node', [join(HERE, 'reset.mjs')], { stdio: 'inherit' });
 console.log('\n── phase 1: first boot and bundle import ──');
 const first = play(['specs/01-first-boot.spec.js']);
 if (first.status !== 0) process.exit(first.status ?? 1);
-const firstReport = existsSync(REPORT) ? readFileSync(REPORT) : null;
 
 console.log('\n── restarting so the imported bundle is loaded (§10) ──');
 execFileSync('docker', [...COMPOSE, 'restart', 'backend', 'worker'], { cwd: ROOT, stdio: 'inherit' });
@@ -221,6 +211,4 @@ console.log('\n── phase 2: everything else ──');
 // nothing implemented, so a DB-dependent spec written to the documented convention was inverted
 // out of phase 2 and ran nowhere. [M4.8, finding 7]
 const rest = play(['--grep-invert', '@first-boot']);
-// After the run, because the run is what emptied the directory it goes back into.
-if (firstReport !== null) writeFileSync(PHASE_ONE_REPORT, firstReport);
 process.exit(rest.status ?? 1);

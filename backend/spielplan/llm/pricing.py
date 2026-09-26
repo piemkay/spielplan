@@ -4,9 +4,8 @@
 are a price multiplied by a token count. The count is the adapters' -- `LLMResult.tokens_out` is
 BILLED output, reasoning included (§9: "counting visible JSON understates cost ~5x"). The price is
 this module's, and it is the half that goes stale: a provider moves its price on its own schedule, a
-model released after this table was typed has none, and the spend-cap row in `spec_coverage.toml`
-says what follows from pricing a call wrongly -- "a cap computed from the wrong number is not a
-cap". So the one rule this module exists to keep is decision 343's: when the table does not know,
+model released after this table was typed has none, and a cap computed from the wrong number is
+not a cap. So the one rule this module exists to keep is decision 343's: when the table does not know,
 it answers None, every caller renders that as "unknown" rather than a figure, and stage 6's gate
 parks naming the unpriced model, because a cap cannot be enforced against a price nobody knows.
 

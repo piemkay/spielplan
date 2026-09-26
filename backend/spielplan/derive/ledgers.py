@@ -13,8 +13,7 @@ ledgers answer different questions about different tables at different moments: 
 rules over `dna_tag` rows that already exist when the derive starts, and a correction rules over
 `credit` rows THIS derive has just regenerated. A single pass at the end would still leave the
 corrected credit in place afterwards and would pass any test that asks only "is the correction
-present" -- which is exactly why `spec_coverage.toml`'s gate row spends its last clause on "the two
-ledgers are applied at their own points rather than merged into one pass". The order is what the
+present". The order is what the
 scar is about: `mdc/corrections.py`'s own header records that its rule was learned "the expensive
 way" one layer over, and merging the two calls is the shape that re-learns it.
 

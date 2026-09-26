@@ -923,7 +923,7 @@ test('the data sources are attributed once, on /account, and on no card', async 
   // fetch a trademark file - so the block renders a named slot that is empty in this tree. An
   // assertion that the image is present would be a claim outrunning its evidence, which is the
   // defect this milestone exists to close; an assertion that it is ABSENT would go red on the day
-  // the debt is paid, which is the wrong thing for a test to punish. `docs/RELEASE.md` holds it.
+  // the debt is paid, which is the wrong thing for a test to punish.
 
   // And the half the register owns, which nothing else in the suite holds: the notice is inside
   // the product and the names are not on the tiles. The poster cards are measured

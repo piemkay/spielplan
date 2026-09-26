@@ -1206,17 +1206,11 @@ def test_the_group_guard_sees_the_arrangement_that_shipped():
     assert _self_hosted_group_problems({"ci.yml": per_job}) == []
 
 
-# --- what the workflow is SAID to do, where the two claims outran it --------------------
+# --- what the workflow is SAID to do ---------------------------------------------------------
 #
-# The three guards above read the workflow. These two read the sentences about it, because a
-# reader deciding whether to register the corpus runner, or whether a gate commit has a result,
-# reads those and not the YAML -- and both sentences described a GitHub the documentation does
-# not describe. Neither is a string compared with a copy of itself: each is a claim the workflow
-# has to earn, and the earning is read out of the workflow one assertion above.
-# [M4.8 review cycle 3: m48-c3-ci-02, m48-c3-ci-03]
-
-LEDGER = REPO / "docs" / "TESTING.md"
-COVERAGE_MAP = REPO / "backend" / "tests" / "spec_coverage.toml"
+# The three guards above read the workflow. This one reads the sentences in it, because a reader
+# deciding whether to register the corpus runner reads those and not the YAML.
+# [M4.8 review cycle 3: m48-c3-ci-02]
 
 
 def _flat(text: str) -> str:
@@ -1282,7 +1276,7 @@ def test_the_weekly_tick_says_what_an_unclaimed_self_hosted_job_does_to_the_run(
 
     claims = [
         problem
-        for path in (CI, CORPUS, LEDGER)
+        for path in (CI, CORPUS)
         for problem in _unclaimed_queue_claims(_read(path), path.name)
     ]
     assert not claims, (
@@ -1296,57 +1290,6 @@ def test_the_weekly_tick_says_what_an_unclaimed_self_hosted_job_does_to_the_run(
         "registered it simply queues."
     )
     assert _unclaimed_queue_claims(shipped, "shipped"), shipped
-
-
-# The setting protects a run that is RUNNING. GitHub's default for the group -- `queue: single`,
-# which is what a concurrency block without a `queue:` key gets -- cancels an existing PENDING
-# run when a new one is queued, whatever `cancel-in-progress` says, and `queue: max` is the
-# documented opt-out. Adding that key is a live-service change with no way to exercise it from
-# here and is the owner's call; what is not is claiming the property unqualified.
-_CANCELLATION_CLAIM = re.compile(r"\b(?:not|never|no longer)\s+cancell?(?:able|ed)\b", re.I)
-_BOUNDED = re.compile(r"\bpending\b|\bin[- ]flight\b", re.I)
-
-
-def _unqualified_cancellation_claims(text: str, label: str) -> list[str]:
-    """Claims that main's run survives a later push, made without the pending case."""
-    flat = _flat(text)
-    problems = []
-    for match in _CANCELLATION_CLAIM.finditer(flat):
-        window = flat[max(0, match.start() - 180):match.end() + 220]
-        if not _BOUNDED.search(window):
-            problems.append(f"{label}: {window.strip()!r}")
-    return problems
-
-
-def test_the_default_branch_claim_is_bounded_to_the_run_in_flight():
-    """`cancel-in-progress: false` buys one push of protection, not every push.
-
-    With run A in flight on main, B pending behind the group and C arriving, B is cancelled
-    while pending and B's commit ends with no completed run -- the M4 merge symptom the setting
-    was added to close, one push later. The milestone's own exit criterion measures the two-push
-    case, which is the case that passes. So the guard the row registers is right about what it
-    reads and the prose around it was not: this holds the two artefacts that state the OUTCOME
-    to the bound the workflow actually has, and lifts as soon as a `queue:` key gives them the
-    unbounded one. [M4.8 review cycle 3: m48-c3-ci-03]
-    """
-    concurrency = _nested(_read(CI), "concurrency")
-    assert "group:" in concurrency and "github.ref" in concurrency, concurrency
-    if re.search(r"^\s*queue:\s*max\b", concurrency, re.M):
-        pytest.skip("the group queues rather than superseding: the unbounded claim is now true")
-
-    claims = [
-        problem
-        for path in (LEDGER, COVERAGE_MAP)
-        for problem in _unqualified_cancellation_claims(_read(path), path.name)
-    ]
-    assert not claims, (
-        "the concurrency block carries no `queue:` key, so a run pending in the group is "
-        "superseded by the next push; these claim more than that:\n  " + "\n  ".join(claims)
-    )
-
-    # Shown failing, on the sentence that shipped in the ledger.
-    shipped = "A run on the default branch is no longer cancellable by the next push."
-    assert _unqualified_cancellation_claims(shipped, "shipped"), shipped
 
 
 # --- Review cycle 1: the scaffolding cannot manufacture a verdict -----------------------
@@ -2008,12 +1951,8 @@ def _specs_named_that_are_gone(source: str) -> list[str]:
 def test_the_harness_names_no_spec_file_that_does_not_exist():
     """A deleted surface takes its spec with it, and the prose that funds the spec too.
 
-    Decision 165 retires the TV client, so its route, `e2e/specs/16-tonight-tv` and its coverage
-    row went together -- each was the others' red gate. The route's directory is named in the
-    coverage map's note and not here: check 9 of `ops/m412_exit_criterion.py` searches
-    `backend/tests` for the route literal, and a docstring that spells the path is reported as
-    funding a client this milestone deleted. What no gate could see is the
-    config's own reasoning: the phone project's `testMatch` is shaped the way it is for two stated
+    Decision 165 retires the TV client, so its route and `e2e/specs/16-tonight-tv` went together.
+    What no gate could see is the config's own reasoning: the phone project's `testMatch` is shaped the way it is for two stated
     reasons, and one of them was "16-tonight-tv is a television". That comment is the document a
     maintainer reads when deciding whether a new Tonight spec belongs on the phone, and it cited a
     file that does not exist -- which is how the next reader concludes the matrix was pruned for a

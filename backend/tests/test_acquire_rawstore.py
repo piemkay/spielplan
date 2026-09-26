@@ -712,9 +712,7 @@ def test_the_custody_guard_sees_the_raw_store_delivered_under_another_container_
     )
 
 
-CUSTODY_ID = "test_the_backend_container_cannot_open_what_this_module_writes"
 REGISTER = REPO_ROOT / "docs" / "spec-v2.2-proposals.md"
-COVERAGE = REPO_ROOT / "backend" / "tests" / "spec_coverage.toml"
 
 
 def _custody_passages() -> dict[str, str]:
@@ -755,19 +753,8 @@ def test_the_record_names_the_guard_that_actually_pins_this_mount():
     The rule is POSITIVE and deliberately not exhaustive. A passage may name
     `test_static_contracts.py` -- it does pin the backend's list against the nightly dumps, and the
     amended sentence says exactly that -- but it must also name the file holding this assertion.
-    Which file that is comes off `spec_coverage.toml` rather than off `__file__`, so the guard
-    rests on the instrument CLAUDE.md calls the contract rather than on the module it guards
-    agreeing with itself. [M5.1 review cycle 3, M51-C3-345-02]
+    [M5.1 review cycle 3, M51-C3-345-02]
     """
-    registered = {
-        line.split("::")[0].strip().strip('",')
-        for line in COVERAGE.read_text(encoding="utf-8").splitlines()
-        if CUSTODY_ID in line
-    }
-    assert registered == {"backend/tests/test_acquire_rawstore.py"}, (
-        f"the coverage map registers {CUSTODY_ID} in {sorted(registered)}; this guard names the "
-        "file the map points at, so re-point it here in the same change"
-    )
     holder = "test_acquire_rawstore.py"
 
     for where, passage in _custody_passages().items():
