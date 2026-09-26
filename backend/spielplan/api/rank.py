@@ -388,6 +388,7 @@ async def _payload(
             compared=compared,
             placed_by_you=placed_by_you,
             fitting=fitting,
+            tier_set=cuts.tier_set,
         ),
     }
     if show_model:

@@ -33,7 +33,7 @@ import pytest
 
 from spielplan.db import library
 from spielplan.home import rail
-from spielplan.ledger import observations, refit
+from spielplan.ledger import model, observations, refit
 from spielplan.ledger.hyperparams import DEFAULTS
 from spielplan.rank import drop, evaluation, queue, read, tiers
 
@@ -1405,9 +1405,20 @@ async def test_the_board_reads_the_displayed_sigma_and_the_badge_follows_it(db, 
         "UPDATE ledger_state SET sigma_eff = 1e-6 WHERE user_id = $1 AND kind = 'movie'",
         board_of,
     )
-    settled, _cuts, rows = await read.load(db, user_id=board_of, kind="movie", hp=DEFAULTS)
+    settled, cuts, rows = await read.load(db, user_id=board_of, kind="movie", hp=DEFAULTS)
     assert rows and all(i.sigma == pytest.approx(1e-6) for i in rows)
-    assert not [e for t in settled for e in t.entries if e.straddle is not None]
+    # Decision 508's hold is not a reading of sigma: a title its verdict holds outside the tier
+    # its `s` falls in names that tier whatever sigma says, because `s` itself is there.
+    held = {
+        e.title_id
+        for t in settled
+        for e in t.entries
+        if e.assigned_tier is None
+        and int(model.tier_of(np.array([e.s]), cuts.boundaries)[0]) != e.model_tier
+    }
+    assert not [
+        e for t in settled for e in t.entries if e.straddle is not None and e.title_id not in held
+    ]
 
     target = rows[0].title_id
     await db.execute(
@@ -1417,7 +1428,7 @@ async def test_the_board_reads_the_displayed_sigma_and_the_badge_follows_it(db, 
     )
     widened, _cuts, after = await read.load(db, user_id=board_of, kind="movie", hp=DEFAULTS)
     assert {i.title_id: i.sigma for i in after}[target] == pytest.approx(5.0)
-    badged = {e.title_id for t in widened for e in t.entries if e.straddle is not None}
+    badged = {e.title_id for t in widened for e in t.entries if e.straddle is not None} - held
     assert badged == {target}, "the badge is computed from the displayed sigma, not the fitted one"
 
 

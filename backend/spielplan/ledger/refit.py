@@ -80,6 +80,14 @@ log = logging.getLogger("spielplan.ledger.refit")
 # months untouched" and "rate c per √month" both need months, and `hp` owns the 12 and the c.
 DAYS_PER_MONTH = 365.2425 / 12.0
 
+# What `ledger_fit.geometry` records for a Ledger fit: the coordinate's reading (0031, decision 471)
+# AND the scale its tiers are read on. Decision 508 moved the second without touching the first -
+# the tier cuts now follow the verdict cutpoints - so a fit made before it holds cuts on the old
+# scale that no digest can see, and the incremental path would go on placing taps against them
+# until the nightly. A stamp of its own sends every such board to the 60 s tick through the branch
+# 0031 already built, instead of leaving an upgraded board on the old tiers for up to a day.
+LEDGER_GEOMETRY = f"{COORDINATE_GEOMETRY}+verdict-scale"
+
 
 # `Delta.fit_source` when no fit ran at all: the observation is durable, the board has not
 # moved, and a sweep owes it a fit. Named rather than spelled "nightly", because "nightly" is a
@@ -405,7 +413,7 @@ async def load_cache(
             bundle_version,
         )
         return None
-    if row["geometry"] != COORDINATE_GEOMETRY:
+    if row["geometry"] != LEDGER_GEOMETRY:
         # The fourth precondition, and it is §10's in another form: the same bundle read another
         # way (0031, decision 471). A v fitted to raw coordinates, applied by a tap to the
         # directions `standard_embeddings` now returns, would solve a residual against a vector
@@ -415,7 +423,7 @@ async def load_cache(
             user_id,
             kind,
             row["geometry"],
-            COORDINATE_GEOMETRY,
+            LEDGER_GEOMETRY,
         )
         return None
     mu, v, gamma, cuts, log_nu = _unpack_theta(_unnpy(row["theta"]))
@@ -554,7 +562,7 @@ async def refreshes_owed(
         "SELECT user_id, kind, n_observed, cdf_reference, geometry <> $1 AS regeometry "
         "  FROM ledger_fit "
         " WHERE fit_source = 'incremental' OR geometry <> $1 ORDER BY user_id, kind",
-        COORDINATE_GEOMETRY,
+        LEDGER_GEOMETRY,
     )
     owed: list[tuple[int, str, int]] = []
     for row in rows:
@@ -768,6 +776,13 @@ async def _refit_user(
     cdf = model.empirical_cdf(fit.s, s)
     tier = model.tier_of(s, fit.cuts)
     straddle = model.straddle(s, sigma_eff, fit.cuts, hp)
+    # Decision 508: a rated title's stored tier is held inside the band its live verdict names,
+    # so every reader of `ledger_state.tier` (Home's letters, the reveal, the library) quotes the
+    # tier Rank renders. Unrated titles have nothing to hold to; they are padded with -1.
+    held = np.concatenate([model.live_verdicts(obs), np.full(len(extra), -1, dtype=np.int64)])
+    tier, straddle = model.hold_to_verdict(tier, straddle, held, fit.cuts.size + 1)
+    # Decision 510: an unrated title's letter is its guessed class, not a grade inside it.
+    tier[obs.n :] = model.guess_tier(tier[obs.n :], fit.cuts.size + 1)
 
     finite = np.isfinite(s) & np.isfinite(sigma) & np.isfinite(sigma_eff)
     report.rejected_nonfinite = int((~finite).sum())
@@ -1051,7 +1066,7 @@ async def _write_fit(
         float(fit.objective),
         float(fit.grad_inf),
         bool(fit.converged),
-        COORDINATE_GEOMETRY,
+        LEDGER_GEOMETRY,
     )
 
 
@@ -1529,6 +1544,14 @@ async def _update_incrementally(
     cdf = model.empirical_cdf(cache.cdf_reference, s)
     tier = model.tier_of(s, cache.cuts)
     straddle = model.straddle(s, sigma_eff, cache.cuts, hp)
+    # Decision 508's hold, on the same rows the nightly holds: `local` loads the touched titles'
+    # verdicts in id order and their tier edits, which is all `live_verdicts` reads.
+    tier, straddle = model.hold_to_verdict(
+        tier, straddle, model.live_verdicts(local)[block], cache.n_levels
+    )
+    # A title whose last observation an undo took away is unrated again, and wears a guess
+    # (decision 510), as the nightly writes it.
+    tier = np.where(observed, tier, model.guess_tier(tier, cache.n_levels))
 
     async with conn.transaction():
         await _write_state(

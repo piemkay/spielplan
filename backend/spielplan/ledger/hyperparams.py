@@ -107,7 +107,16 @@ class Hyperparams:
     margin_weighting: bool = True      # "margin-weighting flag"
     margin_form: str = "margin/mean(margin)"   # "+ functional form"
     tie_prior_delta0: float = 0.22     # "tie-prior initialisation δ₀ = 0.22 (thereafter fitted)"
-    b_i_tau: float = 1.0               # "b_i prior τ (or its CV grid)"
+    # "b_i prior τ (or its CV grid)". The bundle ships none, so this is the app's number, and 1.0
+    # had no measurement behind it. Decision 509: 2.0. At 1.0 one verdict could move a title about a
+    # logit from where the taste vector put it, so a disliked film the vector liked sat in A, and a
+    # hesitant pick (λ_bt 0.3) could not lift A Good Day to Die Hard over the two films it beat.
+    # Replayed through the incremental path, the two household sittings honoured 10 of 13 and 11
+    # of 15 answers as shipped, 12 and 11 with decision 508's tier scale alone, and all 28 with this
+    # tau as well. The cost is the unrated-title order over corpus raters, -0.006/-0.007/-0.010 at
+    # 30/60/100 labels, bought against +0.008/+0.019/+0.033 on the order of the titles the person
+    # rated. [owner instruction of 2026-09-26 after the second household user test]
+    b_i_tau: float = 2.0
     sigma_inflation_c: float = 0.05    # "σ-inflation rate constant"
     sigma_inflation_cap: float | Literal["prior"] = "prior"   # "and cap"
 

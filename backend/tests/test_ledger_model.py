@@ -733,3 +733,156 @@ def test_an_empty_ledger_is_not_an_error():
     fitted = model.fit(empty, DEFAULTS)
     assert fitted.s.shape == (0,)
     assert fitted.converged
+
+
+# --- decision 508: the tier shape on the verdict arm's scale ----------------------------------
+
+
+def test_the_tier_prior_is_the_old_shape_at_the_verdict_prior_for_every_tier_set():
+    """Decision 508 moves where the tier cuts are pulled, not where a board nobody has rated
+    starts: at the verdict prior the anchored mean is `initial_cutpoints(K)` for every K the
+    account page allows, so decision 11's fallbacks and §6.3's untouched board are unchanged."""
+    for k in range(2, 13):
+        assert np.allclose(
+            model.cut_prior_mean(model.verdict_cutpoints(), k), model.initial_cutpoints(k)
+        ), f"K = {k}"
+    # The verdict prior is the measured shape's C/B and B/A masses, 25% and 50%.
+    assert np.allclose(model.verdict_cutpoints(), np.log([0.25 / 0.75, 1.0]))
+
+
+def test_with_no_tier_edit_the_c_b_and_b_a_boundaries_are_the_verdict_cutpoints():
+    """§5.2: the tier arm's cutpoints ARE the displayed boundaries. Decision 508: on §6.3's seven
+    and with no drag, C/B is the person's own disliked/fine cutpoint and B/A their fine/liked
+    one, so a verdict names a tier group exactly and cannot straddle two."""
+    _truth, obs = synth(n=40, n_duels=30, seed=21)
+    fitted = model.fit(obs, DEFAULTS)
+    assert fitted.cuts[2] == pytest.approx(fitted.gamma[0], abs=1e-6)
+    assert fitted.cuts[3] == pytest.approx(fitted.gamma[1], abs=1e-6)
+    assert np.allclose(fitted.cuts, model.cut_prior_mean(fitted.gamma, 7), atol=1e-6)
+
+
+def test_the_coupled_cutpoint_prior_has_the_curvature_it_claims():
+    """The anchored prior couples the two cutpoint sets, so the Hessian gains a gamma-gamma and a
+    gamma-cuts block. A wrong cross-term still converges, to the wrong optimum - so it is checked
+    against a central difference of the gradient, as the arrowhead is."""
+    _truth, obs = synth(n=12, n_duels=10, tiers=5, seed=5)
+    hp = DEFAULTS
+    rng = np.random.default_rng(1)
+    mu, v = 0.1, rng.normal(size=64) / 10.0
+    gamma = np.array([-1.2, 0.3])
+    cuts = model.cut_prior_mean(gamma, obs.n_levels) + rng.normal(scale=0.05, size=6)
+    log_nu, r = -0.2, rng.normal(size=obs.n) / 10.0
+    _g, _gr, h_zz, *_ = model._grad_hess(obs, hp, mu, v, gamma, cuts, log_nu, r, with_duels=False)
+    h = 1e-6
+    for j in range(8):
+        step = np.zeros(8)
+        step[j] = h
+        plus = model._grad_hess(obs, hp, mu, v, gamma + step[:2], cuts + step[2:], log_nu, r,
+                                with_duels=False)[0]
+        minus = model._grad_hess(obs, hp, mu, v, gamma - step[:2], cuts - step[2:], log_nu, r,
+                                 with_duels=False)[0]
+        column = (plus[65:73] - minus[65:73]) / (2 * h)
+        assert np.allclose(h_zz[65:73, 65 + j], column, atol=1e-5), f"column {j}"
+
+
+def test_each_verdict_names_the_tiers_it_renders_in():
+    """Decision 508: disliked is F/D/C, fine is B, liked is A/A+/S on §6.3's seven, and on every
+    set the account page allows each class owns a run of tiers, in order, covering the set."""
+    assert model.verdict_tiers(7).tolist() == [[0, 2], [3, 3], [4, 6]]
+    assert [model.verdict_class_of_tier(t, 7) for t in range(7)] == [0, 0, 0, 1, 2, 2, 2]
+    for k in range(2, 13):
+        bands = model.verdict_tiers(k)
+        assert bands[0, 0] == 0 and bands[2, 1] == k - 1, f"K = {k}"
+        assert np.all(bands[:, 0] <= bands[:, 1]), f"K = {k}"
+        assert bands[0, 1] <= bands[1, 0] and bands[1, 1] <= bands[2, 0], f"K = {k}"
+
+
+def test_a_rated_title_is_held_inside_its_verdicts_tiers_and_reaches_toward_its_s():
+    """Round-2 finding R1: La La Land, disliked, rendered in A. The hold is the guarantee
+    decision 508 gives - the tier sits in the verdict's band - and a title the hold moved still
+    names, as its straddle, the next tier toward where the fit put it."""
+    tier = np.array([4, 3, 2, 5, 1])
+    straddle = np.array([-1, 4, -1, -1, -1])
+    verdict = np.array([0, 2, 0, 1, -1])
+    held, reach = model.hold_to_verdict(tier, straddle, verdict, 7)
+    assert held.tolist() == [2, 4, 2, 3, 1]
+    assert reach.tolist() == [3, 3, -1, 4, -1]
+
+
+def test_the_live_verdict_is_the_last_one_and_a_drop_holds_nothing():
+    """A rewatch re-rating supersedes (§5.2 arm 4), and a `tier_edit` decides placement on its
+    own (§6.3, "unless the person moved it there")."""
+    obs = ObservationSet(
+        title_ids=np.arange(4, dtype=np.int64),
+        embeddings=np.zeros((4, 64)),
+        embedded=np.zeros(4, dtype=bool),
+        ord_index=np.array([0, 1, 0, 2, 2], dtype=np.int64),
+        ord_level=np.array([2, 1, 0, 2, 6], dtype=np.int64),
+        ord_arm=np.array([0, 0, 0, 0, 1], dtype=np.int64),
+        ord_weight=np.ones(5),
+    )
+    assert model.live_verdicts(obs).tolist() == [0, 1, -1, -1]
+
+
+def _household():
+    """A taste along one axis, and a verdict for each title by where it sits on it."""
+    n = 24
+    axis = np.zeros(64)
+    axis[0] = 1.0
+    x = np.linspace(-1.0, 1.0, n)
+    e = np.outer(x, axis)
+    level = np.searchsorted(np.array([-0.35, 0.3]), x, side="right")
+    return x, e, level
+
+
+def test_the_second_households_three_complaints_do_not_happen_on_a_board_like_theirs():
+    """Round-2 findings R1-R3 on a board built the way theirs failed. A title the taste vector
+    loves and the person disliked (La La Land) renders in a disliked tier, below every title they
+    liked; the disliked title the taste vector likes least, picked over it with a hesitant tap,
+    sits above it (A Good Day to Die Hard); and two fine titles called about the same share B
+    (LOTR and The Hunger Games). The recipe before decisions 508 and 509 failed all three here:
+    La La Land in B, the pick below the title it beat, and the tie split across B and A."""
+    x, e, level = _household()
+    n = x.size
+    # La La Land: the second-best title on the taste axis, disliked.
+    e = np.vstack([e, np.eye(64)[0] * 0.9])
+    level = np.concatenate([level, [0]])
+    liked = np.flatnonzero(level == 2)
+    fine = np.flatnonzero(level == 1)
+    disliked = np.flatnonzero(level[:n] == 0)
+    winner, loser = int(disliked[0]), n                      # picked over La La Land
+    tie_a, tie_b = int(fine[0]), int(fine[-1])
+    obs = ObservationSet(
+        title_ids=np.arange(n + 1, dtype=np.int64),
+        embeddings=e,
+        embedded=np.ones(n + 1, dtype=bool),
+        ord_index=np.arange(n + 1, dtype=np.int64),
+        ord_level=level.astype(np.int64),
+        ord_arm=np.zeros(n + 1, dtype=np.int64),
+        ord_weight=np.ones(n + 1),
+        duel_a=np.array([winner, tie_a], dtype=np.int64),
+        duel_b=np.array([loser, tie_b], dtype=np.int64),
+        duel_outcome=np.array([OUT_A, OUT_TIE], dtype=np.int64),
+        duel_margin=np.array([1.0, 1.0]),
+    )
+    fitted = model.fit(obs, DEFAULTS)
+    tiers, _reach = model.hold_to_verdict(
+        model.tier_of(fitted.s, fitted.cuts), np.full(n + 1, -1), model.live_verdicts(obs), 7
+    )
+    la_la_land = n
+    assert tiers[la_la_land] <= 2, "a disliked title rendered above the disliked tiers"
+    assert fitted.s[la_la_land] < fitted.s[liked].min(), "a disliked title above a liked one"
+    assert fitted.s[winner] > fitted.s[loser], "the pick did not move the winner up"
+    assert tiers[tie_a] == tiers[tie_b] == 3, "about the same, and two tiers apart"
+    assert set(tiers[liked].tolist()) <= {4, 5, 6} and set(tiers[fine].tolist()) == {3}
+
+
+def test_an_unrated_title_is_guessed_a_class_and_not_a_grade():
+    """Decision 510 and round-2 finding R4: four liked series put all 127 unseen series in A+, so
+    Home's letters said nothing. An unrated title wears its guessed class's middle tier - C, B or
+    A on the seven - and the class is never changed by it."""
+    assert model.guess_tier(np.arange(7), 7).tolist() == [2, 2, 2, 3, 4, 4, 4]
+    for k in range(2, 13):
+        for tier in range(k):
+            guessed = int(model.guess_tier(np.array([tier]), k)[0])
+            assert model.verdict_class_of_tier(guessed, k) == model.verdict_class_of_tier(tier, k)

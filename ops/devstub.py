@@ -2819,10 +2819,12 @@ def _rate_payload(
 def _prediction(user_id: int, title_id: int, kind: str) -> dict[str, Any]:
     """What the model would have guessed — READ BEFORE THE WRITE, served after it.
 
-    The banding is `rate.session.predicted_class`'s, unchanged: the person's own three-class
-    habit says where the cuts on their own axis fall, so a labeller who calls 20% of what they
-    watch disliked has their disliked band at the bottom 20% of their ranking.
+    The class is `rate.session.predicted_class`'s: the one the title's tier letter stands for
+    (decision 510), read here off the harness's own cuts and the same `s` its board uses.
     """
+    import numpy as np
+    from spielplan.ledger import model as ledger_model
+
     counts = _label_counts(user_id, [kind])
     total = sum(counts)
     if total == 0:
@@ -2830,8 +2832,9 @@ def _prediction(user_id: int, title_id: int, kind: str) -> dict[str, Any]:
     cdf = _cdfs(user_id, kind).get(title_id)
     if cdf is None:
         return {"available": False, "reason": rate_session.NO_GUESS_YET}
-    low, high = counts[0] / total, (counts[0] + counts[1]) / total
-    guess = 0 if cdf < low else (1 if cdf < high else 2)
+    cuts = np.asarray(_rank_cuts(user_id, kind), dtype=float)
+    tier = int(ledger_model.tier_of(np.array([cdf * 4.0 - 2.0]), cuts)[0])
+    guess = ledger_model.verdict_class_of_tier(tier, cuts.size + 1)
     return {
         "available": True, "predicted": guess, "predicted_label": VERDICT_LABELS[guess],
         "cdf": cdf, "s": round((cdf - 0.5) * 4.0, 4), "label_count": total,
@@ -3973,6 +3976,8 @@ def _rank_items(user_id: int, kind: str) -> list[Any]:
                 s=float(scores.get(title["id"], 0.0)) * 4.0 - 2.0,
                 sigma=sigma,
                 assigned_tier=edits.get(title["id"]),
+                # Decision 508: the verdict holds the tier, as `rank/read.items` carries it.
+                verdict=verdicts.get(title["id"]),
             )
         )
     return out
@@ -4046,6 +4051,7 @@ def _rank_board_payload(
             compared=sum(STATE["rank_comparisons"].get((user["id"], kind), {}).values()) // 2,
             placed_by_you=sum(1 for r in rows if r.assigned_tier is not None),
             fitting=False,
+            tier_set=tier_set,
         ),
         "model": {
             "cutpoints": [float(b) for b in cuts],

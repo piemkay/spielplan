@@ -63,6 +63,18 @@ EMBED_DIM = 64
 # than merely as a starting point — so a level nobody has used sits where the crowd puts it.
 MEASURED_TIER_SHARES: tuple[float, ...] = (0.03, 0.07, 0.15, 0.25, 0.25, 0.17, 0.08)
 
+# DECISION 508: THE TIER SHAPE IS REALISED ON THE VERDICT ARM'S SCALE. The measured shape puts 25%
+# of a board below C/B and 50% below B/A, and those two points are where the verdict arm's two
+# cutpoints sit: disliked is F/D/C, fine is B, liked is A/A+/S. M3-open-points §2.8 recorded that
+# `initial_cutpoints` realised the shape on a standard logistic scale nobody's `s` spreads on, and
+# the second household test showed what that costs: the B/A cut at 0 split "fine" in two, every
+# disliked film Jenny rated sat in B, La La Land (disliked) sat in A, and C, D and F stayed empty
+# (round-2 findings R1 and R3). Both members' own splits sit on these two masses (27/29/44 and
+# 20/26/54), so the verdict prior moves from equal thirds to them as well, and the two arms then
+# say the same thing about one latent. [owner instruction of 2026-09-26 after the second household
+# user test]
+VERDICT_ANCHOR_SHARES: tuple[float, float] = (0.25, 0.50)
+
 # Outcome codes for the duel arm.
 OUT_A, OUT_B, OUT_TIE = 0, 1, 2
 
@@ -321,6 +333,140 @@ def initial_cutpoints(k: int) -> np.ndarray:
     return np.log(cumulative / (1.0 - cumulative))
 
 
+def verdict_cutpoints() -> np.ndarray:
+    """The verdict arm's prior cutpoints: the shape's C/B and B/A masses (decision 508)."""
+    shares = np.asarray(VERDICT_ANCHOR_SHARES, dtype=float)
+    return np.log(shares / (1.0 - shares))
+
+
+def _anchor_map(k: int) -> tuple[np.ndarray, np.ndarray]:
+    """`cut_prior_mean` as the affine map it is: (A, c) with mean = A @ gamma + c.
+
+    A cut inside the fine band is interpolated between the two verdict cutpoints on the logit
+    scale of cumulative mass; a cut outside it keeps the shape's own logistic distance from the
+    nearer one, because outside the band the verdict link's unit scale is the only scale there is.
+    """
+    shape = initial_cutpoints(k)
+    low, high = verdict_cutpoints()
+    a = np.zeros((k - 1, 2))
+    c = np.zeros(k - 1)
+    for j, at in enumerate(shape):
+        if at <= low:
+            a[j, 0], c[j] = 1.0, at - low
+        elif at >= high:
+            a[j, 1], c[j] = 1.0, at - high
+        else:
+            t = (at - low) / (high - low)
+            a[j, 0], a[j, 1] = 1.0 - t, t
+    return a, c
+
+
+def cut_prior_mean(gamma: np.ndarray, k: int) -> np.ndarray:
+    """Decision 508: the tier arm's prior mean, anchored on the verdict arm's fitted cutpoints.
+
+    The tier cuts at the shape's 25% and 50% masses sit on gamma[0] and gamma[1], so with no tier
+    edit the displayed boundaries ARE the person's own disliked/fine and fine/liked cutpoints
+    (§5.2: the tier arm's cutpoints are the displayed boundaries). At gamma = `verdict_cutpoints()`
+    this is exactly `initial_cutpoints(k)`, for every K, so a board nobody has rated on starts
+    where it always did. Linear in gamma, so the prior stays a convex quadratic in (gamma, cuts).
+    """
+    a, c = _anchor_map(k)
+    return a @ np.asarray(gamma, dtype=float) + c
+
+
+def verdict_tiers(k: int) -> np.ndarray:
+    """(3, 2): the lowest and highest tier each verdict class renders in (decision 508).
+
+    A tier belongs to the class whose band holds the middle of its prior mass: on §6.3's seven,
+    F/D/C are disliked, B is fine and A/A+/S are liked. A class that owns no tier of a very short
+    set takes the tier nearest its band, so every class can always be rendered somewhere.
+    """
+    shares = np.asarray(
+        MEASURED_TIER_SHARES if k == len(MEASURED_TIER_SHARES) else (1.0 / k,) * k, dtype=float
+    )
+    top = np.cumsum(shares)
+    middle = top - shares / 2.0
+    low, high = VERDICT_ANCHOR_SHARES
+    # A middle that lands on an anchor goes to the band below it, and float sums must not decide
+    # that: five equal tiers put tier 3's middle at 0.5000000000000001.
+    owner = np.where(middle < low - 1e-9, 0, np.where(middle <= high + 1e-9, 1, 2))
+    out = np.zeros((3, 2), dtype=np.int64)
+    for label in range(3):
+        mine = np.flatnonzero(owner == label)
+        if mine.size:
+            out[label] = (mine[0], mine[-1])
+        else:
+            nearest = {0: 0, 1: int(np.searchsorted(top, (low + high) / 2.0)), 2: k - 1}[label]
+            out[label] = (nearest, nearest)
+    return out
+
+
+def verdict_class_of_tier(tier: int, k: int) -> int:
+    """The verdict a tier stands for: the class whose band owns it (decision 508)."""
+    bands = verdict_tiers(k)
+    for label in (1, 0, 2):
+        if bands[label, 0] <= tier <= bands[label, 1]:
+            return label
+    return 0 if tier < bands[1, 0] else 2
+
+
+def guess_tier(tier: np.ndarray, k: int) -> np.ndarray:
+    """Decision 510: the letter a title nobody has rated wears is its guessed class's tier nearest
+    the middle - C, B or A on §6.3's seven.
+
+    How far past the edge of a band a title sits is said by the person's own answers - a pick, a
+    drag, a verdict against the taste vector - and an unrated title has none, so its grade would
+    be the fit's location alone. On four liked series that put every one of 127 unseen series in
+    A+, and a letter every card wears says nothing (round-2 finding R4). The class stays the
+    fit's; only the grade inside it waits for the person.
+    """
+    bands = verdict_tiers(k)
+    return np.clip(np.asarray(tier, dtype=np.int64), bands[0, 1], bands[2, 0])
+
+
+def live_verdicts(obs: ObservationSet) -> np.ndarray:
+    """Per title of `obs`, the verdict its tier is held to (decision 508), or -1.
+
+    The verdict rows arrive in id order from both loaders, so the last one written for a title is
+    its live verdict (a rewatch re-rating supersedes, §5.2's arm 4). A title with a `tier_edit` is
+    -1: the drop decides where it renders (§6.3), and "unless the person moved it there" is the
+    one exception the rule has.
+    """
+    out = np.full(obs.n, -1, dtype=np.int64)
+    rows = obs.ord_arm == 0
+    for index, level in zip(obs.ord_index[rows], obs.ord_level[rows], strict=True):
+        out[int(index)] = int(level)
+    out[np.unique(obs.ord_index[obs.ord_arm == 1])] = -1
+    return out
+
+
+def hold_to_verdict(
+    tier: np.ndarray, straddle_to: np.ndarray, verdict: np.ndarray, k: int
+) -> tuple[np.ndarray, np.ndarray]:
+    """Decision 508: a rated title renders inside the tiers its live verdict names.
+
+    The fit reads a verdict as evidence, not as a fact, and a single ordinal observation against a
+    confident taste vector can leave `s` just across the band's edge — Jenny's two disliked series
+    sat in B on sixteen labels. The person said what they said, so the tier is held to the band and
+    `s` still orders the title inside it: a disliked title the model would have put in B renders
+    at the top of C. Where the hold binds, the straddle names the next tier toward `s`, which the
+    posterior plainly reaches. `verdict` is -1 where there is none to hold to — no verdict, or a
+    `tier_edit`, which decides placement on its own (§6.3, "stays in the assigned tier").
+    """
+    tier = np.asarray(tier, dtype=np.int64).copy()
+    straddle_to = np.asarray(straddle_to, dtype=np.int64).copy()
+    bands = verdict_tiers(k)
+    for i, label in enumerate(np.asarray(verdict, dtype=np.int64)):
+        if label < 0:
+            continue
+        low, high = bands[int(label)]
+        held = min(max(int(tier[i]), int(low)), int(high))
+        if held != int(tier[i]):
+            straddle_to[i] = held + (1 if tier[i] > held else -1)
+            tier[i] = held
+    return tier, straddle_to
+
+
 @dataclass
 class _Layout:
     n: int
@@ -362,13 +508,14 @@ def _objective(
         nll, *_ = _duel_terms(d, obs.duel_outcome, log_nu)
         total += hp.lambda_bt * float(np.sum(_duel_weights(obs, hp) * nll))
 
-    cuts_init = initial_cutpoints(obs.n_levels)
+    # Decision 508: the tier cuts are pulled toward the verdict-anchored shape, not a fixed one.
+    cuts_init = cut_prior_mean(gamma, obs.n_levels)
     total += 0.5 * hp.lambda_ridge * float(v @ v)
     total += 0.5 * float(r @ r) / hp.b_i_tau**2
     total += 0.5 * mu**2 / hp.mu_prior_tau**2
     total += 0.5 * hp.cutpoint_prior_precision * float(np.sum((cuts - cuts_init) ** 2))
     total += 0.5 * hp.tie_prior_precision * (log_nu - np.log(hp.nu0())) ** 2
-    total += 0.5 * hp.cutpoint_prior_precision * float(np.sum((gamma - initial_cutpoints(3)) ** 2))
+    total += 0.5 * hp.cutpoint_prior_precision * float(np.sum((gamma - verdict_cutpoints()) ** 2))
     return total
 
 
@@ -435,16 +582,25 @@ def _grad_hess(
         g_extra[col_psi] += float(np.sum(w * g_psi))
         coupling = (obs.duel_a, obs.duel_b, w * h_dd, w * h_dpsi, float(np.sum(w * h_psipsi)))
 
-    # priors
-    cuts_init = initial_cutpoints(obs.n_levels)
-    gamma_init = initial_cutpoints(3)
-    g_extra[: lay.n_gamma] += hp.cutpoint_prior_precision * (gamma - gamma_init)
-    g_extra[lay.n_gamma : lay.n_gamma + lay.n_cuts] += hp.cutpoint_prior_precision * (
+    # priors. Decision 508 makes the tier cuts' prior mean A @ gamma + c, so the quadratic couples
+    # the two cutpoint sets: d/dgamma gains -p A^T (cuts - mean), and the Hessian gains p A^T A on
+    # the gamma block and -p A across. Checked against finite differences in test_ledger_model.
+    anchor, _offset = _anchor_map(obs.n_levels)
+    cuts_init = cut_prior_mean(gamma, obs.n_levels)
+    gamma_init = verdict_cutpoints()
+    precision = hp.cutpoint_prior_precision
+    g_extra[: lay.n_gamma] += precision * (gamma - gamma_init) - precision * anchor.T @ (
         cuts - cuts_init
     )
+    g_extra[lay.n_gamma : lay.n_gamma + lay.n_cuts] += precision * (cuts - cuts_init)
     g_extra[-1] += hp.tie_prior_precision * (log_nu - np.log(hp.nu0()))
     for j in range(lay.n_gamma + lay.n_cuts):
-        d_extra[j, j] += hp.cutpoint_prior_precision
+        d_extra[j, j] += precision
+    on_gamma = slice(0, lay.n_gamma)
+    on_cuts = slice(lay.n_gamma, lay.n_gamma + lay.n_cuts)
+    d_extra[on_gamma, on_gamma] += precision * anchor.T @ anchor
+    d_extra[on_gamma, on_cuts] -= precision * anchor.T
+    d_extra[on_cuts, on_gamma] -= precision * anchor
     d_extra[-1, -1] += hp.tie_prior_precision
 
     anchor_curv = h_ss + 1.0 / hp.b_i_tau**2
@@ -600,6 +756,18 @@ def _to_raw_space(z, lay: _Layout, g_values, h_zz, h_zr):
 # point. Still the ridge Hessian; still not the true curvature; just not stale.
 PRECONDITIONER_REFRESH = 5
 
+# The longest step one iteration may take along a log-gap coordinate: a gap may grow or shrink by
+# e^8 (about 3000x) per iteration. A numerical guard of the search, not a model constant - it
+# moves no optimum, only how a collapsing gap is walked to (see `_minimise`).
+MAX_LOG_GAP_STEP = 8.0
+
+
+def _log_gap_positions(lay: _Layout) -> np.ndarray:
+    """Where the monotone parameterisation keeps its log gaps: gamma's one, then the cuts'."""
+    start = 1 + EMBED_DIM
+    cut_gaps = np.arange(start + lay.n_gamma + 1, start + lay.n_gamma + lay.n_cuts)
+    return np.concatenate([[start + 1], cut_gaps]).astype(np.int64)
+
 
 def _minimise(obs, hp, *, with_duels, z0, r0, precondition_from=None, max_iter=None,
               step0=1.0, refresh_preconditioner=False):
@@ -661,6 +829,18 @@ def _minimise(obs, hp, *, with_duels, z0, r0, precondition_from=None, max_iter=N
             dz, dr = g_z.copy(), g_r.copy()
             slope = float(g_z @ dz + g_r @ dr)
 
+        # A gap that is closing is nearly flat in its log coordinate - its curvature there carries
+        # the gap itself as a factor - so the preconditioned step along it can be astronomically
+        # long and still point downhill. At decision 509's tau a random duel-heavy board met one:
+        # a verdict band 0.0013 wide asked for a log-gap step of 3e9, `_from_raw` clipped it to
+        # e^30, and every step the line search is allowed to try (down to `lr_min`) overflowed the
+        # objective, so the fit stopped 7 above its optimum. The direction is scaled, not changed:
+        # the same descent direction, a length the exponential can take.
+        reach = float(np.max(np.abs(dz[_log_gap_positions(lay)]), initial=0.0))
+        if reach > MAX_LOG_GAP_STEP:
+            shrink = MAX_LOG_GAP_STEP / reach
+            dz, dr, slope = dz * shrink, dr * shrink, slope * shrink
+
         f0 = _objective(obs, hp, mu, v, gamma, cuts, log_nu, r, with_duels=with_duels)
         # Carry the accepted step across iterations, trying twice the last one first. The
         # anchor preconditioner's mismatch with the true curvature is roughly constant along
@@ -707,8 +887,8 @@ def fit(
     can actually supply a different start.
     """
     lay = _Layout(obs.n, obs.n_levels)
-    z = _pack_raw(0.0, np.zeros(EMBED_DIM), initial_cutpoints(3),
-                  initial_cutpoints(obs.n_levels), float(np.log(hp.nu0())))
+    z = _pack_raw(0.0, np.zeros(EMBED_DIM), verdict_cutpoints(),
+                  cut_prior_mean(verdict_cutpoints(), obs.n_levels), float(np.log(hp.nu0())))
     if z0 is not None:
         # A caller supplies a start in VALUE space — that is the space the model is written in
         # and the only one a test can reason about.
@@ -958,12 +1138,20 @@ __all__ = [
     "OUT_A",
     "OUT_B",
     "OUT_TIE",
+    "VERDICT_ANCHOR_SHARES",
     "Fit",
     "ObservationSet",
+    "cut_prior_mean",
     "empirical_cdf",
     "fit",
+    "guess_tier",
+    "hold_to_verdict",
     "inflate_sigma",
     "initial_cutpoints",
+    "live_verdicts",
     "straddle",
     "tier_of",
+    "verdict_class_of_tier",
+    "verdict_cutpoints",
+    "verdict_tiers",
 ]

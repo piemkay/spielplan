@@ -53,7 +53,8 @@
     rank,
     reset,
     roundLine,
-    tapTile
+    tapTile,
+    typed
   } from '$lib/rank.svelte.js';
 
   const showModel = $derived(!!session.user?.show_model);
@@ -150,41 +151,63 @@
          box that cannot find one, the lie Home's box shed in M4.9 (finding 19). The tag box is
          the second one, and it takes a tag by the name the title card shows for it (its label),
          or by its id, bare or facet-qualified - `db/library._dna_term_matches`. [decision 486] -->
+    <!-- The title box is live, as Home's is (`typed`, round-2 finding R5); the tag box keeps
+         `change`, because it matches a whole tag and every keystroke before the last would
+         empty the board. -->
     <input
       type="search"
       placeholder="filter by title"
+      aria-label="filter by title"
       bind:value={draft.q}
-      onchange={() => load(rank.kind)}
+      oninput={typed}
       data-testid="rank-filter"
     />
     <input
       type="text"
       placeholder="tag, e.g. cosy"
+      aria-label="tag"
       bind:value={draft.dna}
       onchange={() => load(rank.kind)}
       data-testid="rank-dna"
     />
-    <select bind:value={draft.genre} onchange={() => load(rank.kind)} data-testid="rank-genre">
-      <option value="">every genre</option>
-      {#each facets.genres as g (g)}<option value={g}>{g}</option>{/each}
-    </select>
-    <select bind:value={draft.decade} onchange={() => load(rank.kind)} data-testid="rank-decade">
-      <option value="">every decade</option>
-      {#each facets.decades as d (d)}<option value={d}>{d}s</option>{/each}
-    </select>
-    <input
-      type="number"
-      min="1"
-      placeholder="max minutes"
-      bind:value={draft.runtime_max}
-      onchange={() => load(rank.kind)}
-      data-testid="rank-runtime"
-    />
-    <select bind:value={draft.seen} onchange={() => load(rank.kind)} data-testid="rank-seen">
-      <option value="any">seen or not</option>
-      <option value="seen">seen</option>
-      <option value="unseen">not seen</option>
-    </select>
+    <!-- Each picker says what it picks. Their first options read as names only until something
+         is chosen - "1990s" alone does not say it is a decade - so the second household called
+         them unlabelled (R5). The runtime box's placeholder was its only label and it clipped to
+         "max minute"; a caption carries the name now and the placeholder only the default. -->
+    <label class="field">
+      <span class="caption">genre</span>
+      <select bind:value={draft.genre} onchange={() => load(rank.kind)} data-testid="rank-genre">
+        <option value="">every genre</option>
+        {#each facets.genres as g (g)}<option value={g}>{g}</option>{/each}
+      </select>
+    </label>
+    <label class="field">
+      <span class="caption">decade</span>
+      <select bind:value={draft.decade} onchange={() => load(rank.kind)} data-testid="rank-decade">
+        <option value="">every decade</option>
+        {#each facets.decades as d (d)}<option value={d}>{d}s</option>{/each}
+      </select>
+    </label>
+    <label class="field">
+      <span class="caption">max minutes</span>
+      <input
+        type="number"
+        min="1"
+        inputmode="numeric"
+        placeholder="any"
+        bind:value={draft.runtime_max}
+        oninput={typed}
+        data-testid="rank-runtime"
+      />
+    </label>
+    <label class="field">
+      <span class="caption">seen</span>
+      <select bind:value={draft.seen} onchange={() => load(rank.kind)} data-testid="rank-seen">
+        <option value="any">seen or not</option>
+        <option value="seen">seen</option>
+        <option value="unseen">not seen</option>
+      </select>
+    </label>
     <button
       class="pill sharpen"
       onclick={openQueue}
@@ -469,7 +492,22 @@
   .controls {
     display: flex;
     flex-wrap: wrap;
+    /* The captioned pickers are taller than a bare control; the rest line up with their boxes,
+       not with their captions. */
+    align-items: flex-end;
     gap: 6px;
+  }
+  /* Round-2 finding R5: each picker wears its name above it, in the column it sits in. */
+  .field {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    min-width: 0;
+  }
+  .caption {
+    padding-left: 12px;
+    color: var(--ink-3);
+    font-size: 11px;
   }
   .controls input[type='number'] {
     max-width: 128px;

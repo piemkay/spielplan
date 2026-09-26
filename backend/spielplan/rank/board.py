@@ -77,6 +77,9 @@ class Item:
     s: float
     sigma: float
     assigned_tier: int | None = None
+    # The person's live verdict on the title, which holds its model tier inside the verdict's
+    # band (decision 508). None where there is none; a drop decides placement on its own.
+    verdict: int | None = None
 
 
 @dataclass(frozen=True)
@@ -138,10 +141,25 @@ def straddles(item: Item, *, cuts: np.ndarray, hp: Hyperparams) -> int | None:
     `model.straddle` never returns the title's own tier, which is proposal 76's "S never
     renders S/S" falling out of the arithmetic rather than being clamped afterwards.
     """
-    reached = model.straddle(
-        np.array([item.s]), np.array([item.sigma]), np.asarray(cuts, dtype=float), hp
-    )[0]
-    return None if int(reached) < 0 else int(reached)
+    return _placed(item, np.asarray(cuts, dtype=float), hp)[1]
+
+
+def _placed(item: Item, cuts: np.ndarray, hp: Hyperparams) -> tuple[int, int | None]:
+    """The model's tier for the title and the adjacent tier its posterior reaches.
+
+    Decision 508's hold is applied HERE, once, so the chip and the queue's eligibility stay the one
+    predicate §6.3 makes them: a title held inside its verdict's band reaches toward `s`, and that
+    is what both the badge and `queue.eligible` read. A dropped title is not held - the drop
+    decides where it renders, and its model tier is what tension is measured against.
+    """
+    s = np.array([item.s])
+    tier = model.tier_of(s, cuts)
+    reached = model.straddle(s, np.array([item.sigma]), cuts, hp)
+    if item.assigned_tier is None and item.verdict is not None:
+        tier, reached = model.hold_to_verdict(
+            tier, reached, np.array([int(item.verdict)]), cuts.size + 1
+        )
+    return int(tier[0]), (None if int(reached[0]) < 0 else int(reached[0]))
 
 
 def _band(tier: int, cuts: np.ndarray) -> tuple[float, float]:
@@ -180,7 +198,14 @@ def tension_of(
     )
 
 
-def why_line(*, rated: int, compared: int, placed_by_you: int, fitting: bool) -> str:
+def why_line(
+    *,
+    rated: int,
+    compared: int,
+    placed_by_you: int,
+    fitting: bool,
+    tier_set: Sequence[str],
+) -> str:
     """§6.8's one-line why for the board, in the member register (decision 486).
 
     It used to read "{n} rated · learned cutpoints, refit nightly", which was proposal 81's
@@ -188,7 +213,13 @@ def why_line(*, rated: int, compared: int, placed_by_you: int, fitting: bool) ->
     cutpoints learn from `tier_edit` alone (§5.2's tier arm), so they were exactly the prior
     shape, and the board had been moving on every answer rather than nightly (§6.3, "incremental
     immediately"). So it says what is true of this board, in plain words: how much the person has
-    told it, and whether the tier lines are still the typical split §6.3 starts from.
+    told it, and what the letters mean.
+
+    What they mean is decision 508's rule, and the line states it because it is the one thing a
+    person needs to read the board: "liked from A up, fine in B, disliked from C down" on §6.3's
+    seven, spelled from the person's own labels on any other set. The "typical split" it named
+    before was the prior §2.8 of the M3 open points had flagged, and it was what put fine films in
+    A and disliked ones in B.
 
     `compared` counts every question answered, the held-out tenth included, so the number moves
     after every answer and never singles one out (§13, M4.10 finding 16). Decision 209's copy is
@@ -198,9 +229,28 @@ def why_line(*, rated: int, compared: int, placed_by_you: int, fitting: bool) ->
     if fitting and rated == 0:
         return "tiers are still being fitted"
     counts = f"{rated} rated · {compared} compared"
-    if placed_by_you == 0:
-        return f"{counts} · tiers follow a typical split until you place a title yourself"
-    return f"{counts} · {placed_by_you} placed by you"
+    if placed_by_you:
+        counts = f"{counts} · {placed_by_you} placed by you"
+    return f"{counts} · {_band_words(tier_set)}"
+
+
+def _band_words(tier_set: Sequence[str]) -> str:
+    """Decision 508's rule in the person's own letters, best-first like the board."""
+    labels = list(tier_set)
+    bands = model.verdict_tiers(len(labels))
+    (d_low, d_high), (f_low, f_high), (l_low, l_high) = (tuple(int(x) for x in b) for b in bands)
+    liked = f"liked in {labels[l_low]}" if l_low == l_high else f"liked from {labels[l_low]} up"
+    fine = (
+        f"fine in {labels[f_low]}"
+        if f_low == f_high
+        else f"fine in {labels[f_low]} to {labels[f_high]}"
+    )
+    disliked = (
+        f"disliked in {labels[d_high]}"
+        if d_low == d_high
+        else f"disliked from {labels[d_high]} down"
+    )
+    return f"{liked}, {fine}, {disliked}"
 
 
 def _badge(label: str, above: str | None, below: str | None) -> str:
@@ -267,7 +317,7 @@ def build(
                 ),
             )
         )
-        model_tier = int(model.tier_of(np.array([item.s]), cuts)[0])
+        model_tier = _placed(item, cuts, hp)[0]
         model_tiers[item.title_id] = model_tier
         tensions[item.title_id] = tension_of(
             item, model_tier=model_tier, cuts=cuts, tier_set=labels, hp=hp

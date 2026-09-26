@@ -208,6 +208,21 @@ export async function load(kind = rank.kind) {
 }
 
 /**
+ * The title and minutes boxes filter as the person types, after the pause Home's search waits
+ * (`routes/+page.svelte`, 220 ms). They used to wait for `change`, which a phone fires only on
+ * Enter or blur, so the second household typed "Taxi" and watched the board stand still - Home's
+ * box is live, and one app with two meanings for a search box reads as a broken one (round-2
+ * finding R5). `load` keeps its sequence guard, so a slow earlier answer still lands nowhere.
+ */
+export const TYPING_PAUSE_MS = 220;
+let typingTimer;
+
+export function typed() {
+  clearTimeout(typingTimer);
+  typingTimer = setTimeout(() => load(rank.kind), TYPING_PAUSE_MS);
+}
+
+/**
  * §4.1 rule 5's switch, as one event rather than two.
  *
  * The genre and decade vocabularies are scoped to the kind (`loadFacets` asks for one kind), so a
@@ -247,6 +262,7 @@ export function reset() {
   rank.notice = '';
   rank.booted = false;
   rank.loading = true;
+  clearTimeout(typingTimer);              // nor a read the last keystroke had scheduled
   requestSeq += 1;                        // and no in-flight response may land after this
 }
 
