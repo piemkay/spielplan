@@ -842,6 +842,14 @@ test.describe('tonight', () => {
     // "runs 40 min over" at 120 min with nothing on the door having said so; the next visit then
     // opened the slider at 130 again. The line is on the door, and the budget an evening was
     // opened with is the one the door opens at next time, per kind.
+    //
+    // Measured at 47.7 s and 46.9 s on the phone project in the two runs that merged it, and at
+    // the config's 60 s in the round-3 verification run, where the trace shows every step passed
+    // and the page already read "130 min" while the last assertion was in flight. It is the
+    // twelfth test on the file's shared page, three doors and two solo evenings of WebKit
+    // actionability round trips at the multi-second click the test above records, so it takes
+    // the same budget for the same reason. [decision 506]
+    test.setTimeout(300_000);
     await atTheDoor({ rewatches: false });
     await expect(page.getByTestId('tonight-budget-soft')).toContainText('up to 40 min longer');
     await page.getByTestId('tonight-budget').fill('120');
