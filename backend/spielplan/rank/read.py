@@ -1,26 +1,7 @@
-"""The database side of §6.3's board. Spec v2.1 §6.3, §4.1 rules 1/2/5, §4.2, §5.2, §13.
+"""The database side of §6.3's board: the queries that feed the pure `board` and `queue`.
 
-`board` and `queue` are pure; this is the query that feeds them. Four things come out of the
-database and each is a rule rather than a convenience:
-
-  **"every rated title"** (§6.3) is `ledger_state.observed` — exactly "this person has an
-  observation of some arm on this title". An owned title nobody has rated has a coordinate
-  (§12's M2 exit criterion) and does not belong on a tier list.
-
-  **The assigned tier** is the person's most recent `tier_edit`, and it is read here rather
-  than derived, because §6.3's "stays in the assigned tier" is a statement about the last thing
-  they did and not about the fit.
-
-  **Comparison counts exclude the held-out stream.** §13: the uniform-random 10% feeds neither
-  the selection rule nor any quality figure, and `queue._exploration` picks by exactly this
-  number — so counting held-out rows here would make the selector a reader of the evaluation
-  stream, quietly, in a way no test of `queue` could see.
-
-  **The filters are §6.3's six**, and two of them are traps. A DNA predicate goes through the
-  `dna_tagged` view (0004), the only sanctioned union, because §4.1 rule 1 forbids answering it
-  from anything that has lost the `tier` discriminator; and it never puts a threshold on
-  `salience`, `confidence` or `n_sources`, because rule 2 forbids that and a 0.5 cut deletes
-  44% of the extracted tier.
+"Every rated title" is `ledger_state.observed`; the assigned tier is the latest `tier_edit`. Selector
+inputs exclude §13's held-out stream.
 """
 
 from __future__ import annotations
@@ -45,26 +26,14 @@ log = logging.getLogger("spielplan.rank.read")
 class Cutpoints:
     boundaries: np.ndarray
     tier_set: tuple[str, ...]
-    # Whether a full MAP fit is owed for this (user, kind) — `refit_requested_at` is set. It
-    # travels with the boundaries because it says how much of what they describe has landed yet,
-    # and because this row is already being read: a second query for one boolean would put a
-    # round trip on every board read. Decision 209.
+    # `refit_requested_at` is set (decision 209); read with the boundaries to save a round trip.
     refit_owed: bool = False
 
 
 async def cutpoints_of(
     conn: asyncpg.Connection, *, user_id: int, kind: str
 ) -> Cutpoints:
-    """The fitted boundaries, or §6.3's prior shape when nobody has been fitted yet.
-
-    §5.2: the tier arm's cutpoints *are* the displayed boundaries, so there is no second set
-    and no percentile fallback — the fallback when there is no row at all is the same prior the
-    model would start from, which is not the same thing as cutting the current population.
-
-    No row at all is `refit_owed=False`, and not because nothing could be owed: a refit is asked
-    for by *writing* this row (`refit._queue_full_refit` INSERTs precisely so the first tap of
-    all has somewhere to stamp), so an absent row is a (user, kind) nobody has asked a fit for.
-    """
+    """The fitted boundaries, or §6.3's prior shape when there is no row (and no refit asked for)."""
     row = await conn.fetchrow(
         "SELECT boundaries, tier_set, refit_requested_at FROM ledger_cutpoints "
         "WHERE user_id = $1 AND kind = $2",
@@ -92,11 +61,7 @@ async def items(
     kind: str,
     filters: RankFilters | None = None,
 ) -> list[board.Item]:
-    """§6.3's "every rated title", filtered.
-
-    `sigma_eff` rather than `sigma`: §5.2's freshness rule inflates the *displayed* σ after
-    twelve untouched months, and the badges are a claim about how sure the model is now.
-    """
+    """§6.3's "every rated title", filtered, with the displayed (freshness-inflated) σ."""
     where, args = rank_filters(kind=kind, user_id=user_id, filters=filters)
     user = f"${len(args) + 1}"
     rows = await conn.fetch(
@@ -136,12 +101,8 @@ async def items(
         user_id,
         kind,
     )
-    # Decision 11 and §4.2: the stored index is never rewritten, so it is RE-READ here against the
-    # set this person has now. One helper, the same one the fit and the board call, because the
-    # bucket, the badge and the fit disagreeing about which tier a drop names was the defect —
-    # three clamps in three files, one of them silent. `tier_set_k` is NULL when nobody has been
-    # fitted yet, which is the same state `cutpoints_of` answers with §6.3's prior shape, so the
-    # fallback is the same length. [M4.13, dd06]
+    # Decision 11: the stored index is re-read against today's set. NULL `tier_set_k` means the
+    # default set, as in `cutpoints_of`.
     return [
         board.Item(
             title_id=int(r["title_id"]),
@@ -166,13 +127,7 @@ async def items(
 async def comparison_counts(
     conn: asyncpg.Connection, *, user_id: int, kind: str
 ) -> dict[int, int]:
-    """How many comparisons each title carries, **excluding §13's held-out stream**.
-
-    `queue._exploration` picks the least-compared title, so this number is a selector input.
-    §13 says the held-out 10% feeds neither the selection rule nor any quality figure, and the
-    only place that can be enforced is the query that produces the input — a selector cannot
-    decline to read a number it was handed.
-    """
+    """How many comparisons each title carries, **excluding §13's held-out stream** (a selector input)."""
     rows = await conn.fetch(
         """
         SELECT side.title_id, count(*) AS n
@@ -196,23 +151,9 @@ async def comparison_counts(
 async def asked_pairs(
     conn: asyncpg.Connection, *, user_id: int, kind: str
 ) -> set[frozenset[int]]:
-    """The unordered pairs this person has already judged, **excluding §13's held-out stream**.
+    """The unordered pairs this person has already judged in any context, **held-out excluded**.
 
-    Neither adaptive arm re-serves one (the boundary arm since decision 494). Without it the
-    exploration arm re-served the same handful
-    forever (finding 12: one pair took 78 of 109 exploration draws in a 500-answer simulation),
-    and each repeat is an independent Davidson row — ten repeats shrink that pair's posterior by
-    the root of ten on the strength of one judgement, which is §13's reliability inflation
-    reached through the selector rather than through the evaluation stream.
-
-    Every context, not only `tier_queue`: a pair the person settled in a §6.1 battle or by
-    dropping one title next to the other is a pair they have answered, and exploring it again
-    explores nothing. The held-out exclusion is the same one `comparison_counts` makes and for
-    the same reason — this is a selector input, and §13 says the uniform 10% feeds neither the
-    selection rule nor any quality figure.
-
-    Both sides are joined to `title` because §4.1 rule 5 partitions by kind and §10's re-import
-    can reclassify one side of an old row (`load_observations` joins both for the same reason).
+    Neither adaptive arm re-serves one. Both sides are joined: a re-import can reclassify one side.
     """
     rows = await conn.fetch(
         """
@@ -231,13 +172,9 @@ async def asked_pairs(
 async def recent_titles(
     conn: asyncpg.Connection, *, user_id: int, kind: str, window: int = queue.RECENT_WINDOW
 ) -> set[int]:
-    """The titles of this person's last `window` answered queue pairs, **held-out ones excluded**.
+    """The titles of this person's last `window` answered queue pairs, **held-out excluded**.
 
-    Decision 494's no-repeat window: the adaptive arms hold these back while another title can
-    take their place. The held-out exclusion is `asked_pairs`' and for its reason - this is a
-    selector input, and §13 keeps the uniform tenth out of the selection rule. `tier_queue` alone,
-    because the window is about the sitting in front of the person: a title from last week's Rate
-    battle coming up here is not a title coming straight back.
+    Decision 494's no-repeat window; `tier_queue` only, since it is about the current sitting.
     """
     rows = await conn.fetch(
         """
@@ -257,13 +194,10 @@ async def recent_titles(
 
 
 async def compared_count(conn: asyncpg.Connection, *, user_id: int, kind: str) -> int:
-    """How many comparisons this person has answered for this kind, for the board's why-line.
+    """Comparisons answered for this kind, for the board's why-line.
 
-    Every question they were asked - §6.1's battles and this queue - and the held-out tenth
-    INCLUDED, which is the opposite of the two selector reads above and for the same guard: a
-    count a person watches that stands still after one answer in ten tells them which answer
-    §13 set aside (M4.10 finding 16). `tier_insert` is left out because it is a drop's
-    by-product, two rows for one gesture, and the person asked nothing.
+    Held-out INCLUDED, or the count would stand still on exactly those answers (§13).
+    `tier_insert` duels are a drop's by-product and are left out.
     """
     return int(
         await conn.fetchval(
@@ -284,15 +218,8 @@ async def answered_comparisons(
 ) -> int:
     """How many comparison-queue answers this person has given for this kind.
 
-    It is what makes a sealed pair single-use without a table: the count is sealed with the
-    pair and re-read when the answer arrives, so a replayed seal names a count that has moved
-    on. §6.1 reaches the same property through `rate_session.card_token`, which it can because
-    a rating session already has a row; a queue pair has none, and inventing one to hold a
-    nonce would be a table for a number the observations already imply.
-
-    `context = 'tier_queue'` and nothing else: a drag-drop writes `tier_insert` duels, and if
-    those moved the counter, picking a title up mid-queue would silently discard the pair in
-    front of the person.
+    Sealed with each pair, so a replayed seal names a count that has moved on. `tier_queue` only:
+    a drop mid-queue must not invalidate the pair on screen.
     """
     return int(
         await conn.fetchval(
@@ -316,12 +243,7 @@ async def load(
     hp: Hyperparams,
     filters: RankFilters | None = None,
 ) -> tuple[tuple[board.Tier, ...], Cutpoints, list[board.Item]]:
-    """The board, its boundaries and the items behind it, in one place.
-
-    The items travel back with the tiers because the comparison queue draws from the *same*
-    population §6.3 badges — that identity is the point of proposal 157, and handing the queue
-    a differently-filtered list is the shape the bug would take.
-    """
+    """The board, its boundaries and the items behind it (the queue draws from the same items)."""
     cuts = await cutpoints_of(conn, user_id=user_id, kind=kind)
     rows = await items(conn, user_id=user_id, kind=kind, filters=filters)
     tiers = board.build(rows, cuts=cuts.boundaries, tier_set=cuts.tier_set, hp=hp)
@@ -336,14 +258,9 @@ async def placements(
     hp: Hyperparams,
     title_ids: Sequence[int],
 ) -> list[dict[str, Any]]:
-    """Where these titles sit on the whole board now, as the board's own public rows.
+    """Where these titles sit on the whole UNFILTERED board now, as the board's own public rows.
 
-    What a queue answer reports back (§6.3 "incremental immediately"): the sheet covers the board
-    it is sharpening, so the person saw the filters and a pair and never the board move. Read off
-    the UNFILTERED board, because the answer is about the whole ranking and the filters are only a
-    way of looking at it. The same shape on every arm - placement, never "moved" - because a
-    held-out answer is never refitted (§13) and a line that could say "unchanged" would name it.
-    `Entry.public()` carries no `s` and no σ, so nothing here needs decision 117's gate.
+    Placement, never "moved": a held-out answer is never refitted, and "unchanged" would name it.
     """
     tiers, _cuts, _rows = await load(conn, user_id=user_id, kind=kind, hp=hp)
     by_id = {entry.title_id: entry for tier in tiers for entry in tier.entries}
@@ -358,12 +275,7 @@ async def candidates(
     hp: Hyperparams,
     rows: Sequence[board.Item] | None = None,
 ) -> list[queue.Candidate]:
-    """The queue's pool: the whole rated board, unfiltered.
-
-    Unfiltered on purpose. §6.3's filters are a way of *looking* at the board; the queue
-    sharpens the ranking, and a queue that only ever compared the titles matching whatever the
-    person last typed would sharpen one corner of it.
-    """
+    """The queue's pool: the whole rated board, unfiltered (filters only change the view)."""
     cuts = await cutpoints_of(conn, user_id=user_id, kind=kind)
     pool = list(rows) if rows is not None else await items(conn, user_id=user_id, kind=kind)
     return queue.candidates(

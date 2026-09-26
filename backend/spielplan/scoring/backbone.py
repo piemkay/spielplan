@@ -1,53 +1,7 @@
-"""The frozen Backbone basis, and the one coordinate §5.1 scores against. Spec v2.1 §5.1, §4.3.
+"""The frozen Backbone basis (`backbone.npz`, §4.3) and the per-title coordinate §5.1 scores against.
 
-§4.3 ships `backbone.npz` — "E, E_full, b_i, μ, plus the per-title support counts `item_n`
-(the §5.1 gate input)". §5.1 turns those arrays into two numbers per title:
-
-    score_u(t) = b(t) + μ_u + w_cf·⟨v_u, e(t)⟩     e(t) = E[t]                       if rated (warm)
-                                                   e(t) = gate·E[t] + (1-gate)·ê(t)  else
-                 b(t) = shrunk item prior; b̂(t) from the Cold Tower for cold titles
-                 gate = n_t / (n_t + k)            evidence gating, k ≈ 10
-
-THE BRANCH THAT ISN'T ONE. The two lines above are the two limits of a single expression, so
-this module writes the expression and never the branch:
-
-    e(t) = gate·E[t] + (1-gate)·ê(t)      with ê := E[t]   when the Cold Tower has not placed it
-    b(t) = gate·b_i[t] + (1-gate)·b̂(t)    with b̂ := b_i[t] when the Cold Tower has not placed it
-
-"e(t) = E[t] if rated (warm)" is the gate → 1 limit; a title with no Backbone row has n_t = 0,
-so gate is exactly 0 and both terms collapse onto the Cold Tower's. Written as one expression
-there is nothing for three call sites to disagree about, and `e_source` reports which limit a
-particular title actually landed in.
-
-"rated (warm)" is read as CROWD support, not "this viewer rated it": n_t is a crowd count, so
-the gate is a crowd quantity, and §6.0 prints it as one number on a shared title card rather
-than a different number per viewer.
-
-"b(t) = shrunk item prior" IS A CLAIM ABOUT THE FILE, and the file already keeps it. The corpus
-fits `b_i = sum(z) / (25 + n)` - a pseudo-count of 25 toward zero, the `item_prior_shrink` its
-exporter writes into `ledger_hyperparams.json` - so the shipped b_i is the shrunk prior, centred
-on zero (median -0.006 on v20260925). This module used to read the sentence as an instruction and
-pulled a title with no placement toward μ with the gate. μ is the crowd's rating INTERCEPT (0.680
-on v20260925), not the mean of b_i, so that "shrinkage" added (1-gate)·μ to every thin title:
-+0.23 at n = 5, which is +3.2 sd of the prior, and every item_n-5 title outranked the classics.
-So the gate blends b_i with b̂ where the Cold Tower gave one, exactly as it blends E with ê, and
-is a no-op where it did not; a second shrink of an already-shrunk prior was a tie on held-out
-Spearman (0.4725 against 0.4711 over 132 corpus raters at 60 labels) and has no clause behind it.
-[owner instruction of 2026-09-25 after the first household user test, C1.1]
-
-THE ID MAPPING IS NOT IN THE SPEC. §4.3 lists E, E_full, b_i, μ and item_n and names no
-alignment between a row of E and a row of `title`. Without one no row can be joined to anything,
-and §4.1 forbids `imdb_id` as the join key (NULL on 21% of titles). This loader therefore
-requires a `title_ids` array — int32, strictly increasing, aligned row-for-row — which is the
-name the corpus's exporter ships (`backbone.npz` carries E, E_full, E_hat, b_hat, b_i,
-cold_mask, item_n, mu and `title_ids`). It read `title_id`, singular, until M4.5: against a real
-bundle that name is absent, so the loader raised on a file that was in fact complete. If the
-exporter ever instead means "rows are in dense title.id order", that is a different contract and
-this loader must be told, not left to guess: a silently wrong index produces plausible numbers
-for the wrong films.
-
-A title with no Backbone row is normal, not exceptional (§8 stage 10: a newly acquired title has
-no crowd data at all), so every lookup here returns None rather than raising.
+§5.1's warm/cold branch is written as one blend, `gate·warm + (1-gate)·cold`, whose limits are the
+two cases. Rows align to `title` through the exporter's `title_ids` array, which §4.3 does not name.
 """
 
 from __future__ import annotations
@@ -69,41 +23,13 @@ if TYPE_CHECKING:  # pragma: no cover - typing only
 
 log = logging.getLogger("spielplan.scoring.backbone")
 
-# §1: "one frozen 64-d collaborative item space". The width is a property of the basis, so a
-# file that disagrees is a fault rather than a thing to accommodate.
 EMBED_DIM = 64
 
-# §5.1: "gate = n_t / (n_t + k)  evidence gating, k ≈ 10". The one number the section names,
-# and the only shrinkage constant it defines.
-#
-# READ from `ledger_hyperparams.py`'s field rather than written here, because §5.2's "every
-# constant comes from `ledger_hyperparams.json`" is a rule about where the number LIVES, and this
-# one lived in three places: here, and twice as a literal `gate_k: 10` in §6.0's why-numbers
-# (`home/shelves.py`), where it was the same quantity under a second spelling. One field, three
-# readers, so the gate and the two printed numbers cannot drift apart. [M4.13 step 34d, dd14]
-#
-# It is NOT yet a path from the bundle to the gate, and this comment used to imply one ("a
-# corpus-side re-tune reaches all of them or none"). `DEFAULTS` is the dataclass's own default
-# instance, so this binds 10.0 in every process whatever `ledger_hyperparams.json` says, and
-# `gate()` below is called as `gate(n_t)` with `k` defaulted. `hyperparams.py`'s
-# `_PARSED_NOT_THREADED` names the gap and makes a bundle that re-tunes `gate_k` say so in its
-# import report. [M4.13 cycle 2, M413-C2-DIM-HP-01]
+# One field shared with §6.0's why-numbers. `DEFAULTS` binds the dataclass default, not the bundle's
+# value; `hyperparams._PARSED_NOT_THREADED` reports the gap.
 EVIDENCE_K = DEFAULTS.gate_k
 
-# Where "rated (warm)" starts. §5.1 writes the branch — `e(t) = E[t] if rated (warm)`, else
-# `gate·E[t] + (1-gate)·ê(t)` — and never says which titles are warm, which is the one thing
-# the branch needs. Read as "has a Backbone row at all" the middle line is dead: every title
-# would take E outright or have no E to blend, and `item_n`, which §4.3 calls "the §5.1 gate
-# input", would feed nothing on e(t).
-#
-# So warm is defined here from the gate itself: warm is where the blend has stopped changing
-# the answer. At gate 0.9 the Cold Tower contributes a tenth of a coordinate whose own error is
-# larger than that, so blending below it is what the gate is for and blending above it is
-# arithmetic nobody can measure. n_t = k·g/(1−g) = 90 at k = 10.
-#
-# NOT a measured constant — the corpus project tuned k, not this. It is a threshold the spec
-# omits, chosen so that the branch it creates is a no-op at the boundary; if the exporter ever
-# ships one, this becomes a read.
+# §5.1 never says which titles are "warm"; warm is where the gate stops changing the answer.
 WARM_GATE = DEFAULTS.warm_gate
 WARM_SUPPORT = EVIDENCE_K * WARM_GATE / (1.0 - WARM_GATE)   # 90, still derived from the two
 
@@ -112,110 +38,24 @@ ESource = Literal["backbone", "blended", "cold_tower", "none"]
 BACKBONE_FILE = "backbone.npz"
 _REQUIRED = ("title_ids", "E", "b_i", "item_n", "mu")
 
-# A ROW OF E THAT IS NOT A COORDINATE. §4.3 lists the arrays this file ships and does not say
-# that some of E's rows are placeholders — but the export does exactly that: on v20260828
-# `cold_mask` is true on 2,879 of 14,397 rows, E is written as zeros for every one of them
-# (max ||E|| = 9.4e-14) and their real coordinate is kept in `E_hat`/`b_hat`, two arrays §4.3
-# never names. Read as a coordinate, a zero row is worse than an absent one: ⟨v_u, e(t)⟩ is
-# exactly 0 for every user for ever, `item_n` is often large so the gate rounds to 1.0 and
-# `e_source` says 'backbone', and §12's M2 criterion — which counts a title as coordinated
-# whenever e_source is not 'none' — passes it. 1,915 of these clear `item_n >= WARM_SUPPORT`, so
-# `placement.warm_title_ids` also excused them from the sweep that exists to place them. 1,915 and
-# not the 1,918 with item_n >= 90: WARM_SUPPORT is computed rather than written and comes out one
-# ulp above 90, so the three rows at exactly 90 fall on §5.1's BLEND side — the property
-# `test_scoring.py`'s `edge` assertion pins, here and in `warm_title_ids`, which compares the same
-# way. [M4.13 cycle 1, M413-REV-04]
-#
-# So a flagged row is treated as ABSENT, which is §5.1's gate → 0 limit and already written:
-# "a title with no Backbone row has n_t = 0, so gate is exactly 0 and both terms collapse onto
-# the Cold Tower's". Nothing substitutes the bundle's own `E_hat` into `E` — its scale is three
-# orders off the Backbone's (median ||E_hat|| 27.05 over every row against a median ||E|| of
-# 0.3835 over the rows that have a coordinate at all), which is a separate finding about the
-# blend and not this one.
-#
-# WHAT THIS COSTS, SAID OUT LOUD. Excluding the row makes `support()` report 0 and `coordinate()`
-# report gate 0 with `e_source = 'cold_tower'` for a title the crowd may have rated two hundred
-# thousand times. Internally that is coherent — the gate weights a coordinate, and there is no
-# coordinate to weight — and §8 stage 10's badge used to read `e_source == 'cold_tower'` alone as
-# "no crowd data yet", so after the sweep stamped them these titles wore it: 182 of the reference
-# library's 839 owned titles. Decision 238 handed the repair to whichever milestone owned §8 stage
-# 10's badge input; a title served at e(t) = 0 and called warm was the worse of the two, and it was
-# invisible.
-#
-# DECISION 475 IS THAT REPAIR, and it is not the `title.placement` check this paragraph once named
-# (these rows have no index row, so their `e_source` is genuinely 'cold_tower' and widening
-# `placement` moves nothing for them). The badge now admits only a title with no crowd rating -
-# `item_n` null or 0 - whatever `e_source` says: `PosterCard.svelte`'s `isColdPlaced` asks the
-# count first, "New in the library" filters on it, and
-# `test_static_contracts.py::test_the_cold_badge_expression_reads_e_source_not_placement` freezes
-# the expression. So a crowd-rated title with no coordinate keeps `e_source = 'cold_tower'` here,
-# which is true of its coordinate, and no longer reads to a member as a title nobody has rated.
-# [M4.13 cycle 2, M413-C2-DIM5-06; decision 475]
-#
-# THE MASK TAKES THE COORDINATE AND NOT THE PRIOR. `cold_mask` is the corpus's evaluation holdout -
-# every fifth title by rating count, 20% of the rows (exp_cold_tower2.py) - so a flagged row's
-# b_i is a real fitted bias over the same crowd support as any other row's (median item_n 299 on
-# v20260925, the warm rows' own median). Reading the row as absent threw that away too, and a film
-# the crowd rated 192,061 times was ranked on the Cold Tower's guess b̂ instead of its own crowd
-# prior. `raw_prior` therefore reads every row the file ships, and `coordinate` blends that b_i
-# with b̂ at the gate of the row's crowd support; e(t) still comes from the Cold Tower alone,
-# because E really is zero there. [owner instruction of 2026-09-25 after the first household
-# user test, C1.2]
+# The export writes E as zeros for `cold_mask` rows. Such a row is treated as absent (gate 0) for
+# the coordinate, but its b_i is a real crowd prior and is still read (see `raw_prior`).
 COLD_MASK_ARRAY = "cold_mask"
 
-# The fallback when no mask ships. Measured on v20260828: the largest flagged row's norm is
-# 9.4e-14 and the smallest unflagged one's is 6.3e-5 — nine orders apart, so any epsilon inside
-# that gap separates them and no real coordinate is anywhere near it.
+# Fallback when no mask ships: flagged rows have norm ~1e-13, real ones >= ~6e-5.
 COLD_ROW_NORM = 1e-9
 
 
 class BackboneError(RuntimeError):
-    """The basis is present but unusable. §3.1 makes an *absent* bundle legal; a corrupt one is
-    not the same thing, and the caller decides whether to degrade or refuse."""
+    """The basis is present but unusable (an absent bundle is legal, §3.1)."""
 
 
 @contextmanager
 def _reading(what: str) -> Iterator[None]:
-    """Every read of `backbone.npz` fails as `BackboneError` and as nothing else.
+    """Every read of `backbone.npz` fails as `BackboneError`, which `app.py` degrades on.
 
-    `app.py:256-260` catches `BackboneError` alone, logs it, and substitutes `Backbone.empty()`,
-    with a comment that says why: a basis that will not load must degrade rather than stop "a
-    boot the admin needs in order to fix the bundle". That guard was unreachable for the most
-    likely corruption there is. `np.load` raises `zipfile.BadZipFile` for a truncated or
-    half-copied archive (measured: a file cut at 50%, at 97% and at 2% all raise it) and
-    `ValueError` for a file that is not an npz at all, neither of which is a `RuntimeError` — so
-    an interrupted `docker cp` into `/data/artifacts` took the lifespan down and left the
-    operator with no Data tab to re-import from.
-
-    `EOFError` is the SAME failure at depth zero, and it is the first state every one of those
-    copies passes through: `docker cp`, `scp` and a restore all create the destination and
-    truncate it before they write a byte, so "half-copied" starts at nothing copied. It is not
-    caught by the four above and it is not a `RuntimeError` either. `np.load` raises it from its
-    own empty-magic check (`if not magic`) and ONLY at exactly zero bytes — one byte upward is
-    already `BadZipFile` — which is why the truncation ladder that measured 2%, 50% and 97% never
-    met it, and why `ArtifactStore.open` is no help: `present` is built with `.exists()`, and a
-    zero-byte file exists. [M4.13 cycle 1, M413-R1-HP-02]
-
-    `zlib.error` is the same failure at the one depth the four above still could not name, and it
-    is the depth the SHIPPED file sits at: every member of the corpus's `backbone.npz` is
-    DEFLATE-compressed (`compress_type 8` on all nine arrays of v20260828), so damage IN PLACE --
-    a bad sector, a flaky SMB copy, a resumed transfer that leaves the file the right length --
-    fails inside the decompressor before the CRC that would have made it a `BadZipFile` is ever
-    computed. `zlib.error` subclasses `Exception` directly: not `OSError`, not `ValueError`, not
-    `RuntimeError`. Measured by damaging the compressed payload at evenly spaced offsets, about
-    one site in twenty escaped as 'invalid block type' / 'invalid literal/lengths set' / 'invalid
-    distance too far back' while the rest landed as `BadZipFile: Bad CRC-32`, which was caught --
-    so the guard covered the truncation ladder completely and the corpus's own compression mode
-    only mostly. The registered test's corrupt-member case built its archive with
-    `zipfile.ZipFile(path, "w")`, i.e. ZIP_STORED, which is the one mode the corpus does not ship
-    and the one mode in which this cannot happen. [M4.13 cycle 2, M413-C2-DIM-BB-02]
-
-    A context manager rather than one `try` around the whole loader because `NpzFile` re-reads
-    the member on every subscript (see `Backbone`'s own docstring): the open, the `E_full`
-    comparison and the cold-mask read are three separate reads of the file, any one of which can
-    be the truncated member, and each says which it was. The shape and alignment checks inside
-    raise `BackboneError` already, which this deliberately does not catch or re-wrap.
-    [M4.13 step 32, finding 24]
+    `np.load` raises EOFError at zero bytes, BadZipFile on truncation, and zlib.error on in-place
+    damage to a DEFLATE member; none of those is a RuntimeError.
     """
     try:
         yield
@@ -228,12 +68,7 @@ def _reading(what: str) -> Iterator[None]:
 def cold_row_mask(source: Any, n: int, e: np.ndarray | None = None) -> np.ndarray:
     """`bool[n]`: which rows of `backbone.npz` carry no coordinate at all.
 
-    `source` is the opened `backbone.npz` — an `NpzFile`, which is what both callers hold and
-    the only thing whose `.files` this consults. `e` lets a caller that already has E pass it in
-    rather than have the 3.7 MB member re-parsed: `NpzFile` re-reads on every subscript.
-
-    The shipped mask is the authority; the norm is the fallback for a bundle that predates it,
-    and a bundle with neither has no cold rows to find.
+    Pass `e` if you already hold E: `NpzFile` re-parses a member on every subscript.
     """
     files = set(getattr(source, "files", ()) or ())
     if COLD_MASK_ARRAY in files:
@@ -255,10 +90,7 @@ def cold_row_mask(source: Any, n: int, e: np.ndarray | None = None) -> np.ndarra
 class Backbone:
     """`backbone.npz`, read once and indexed by title_id.
 
-    Read once is load-bearing: `NpzFile` ignores the `mmap_mode` `ArtifactStore.npz()` passes
-    and re-reads the member on every subscript, so `store.npz("backbone.npz")["E"]` inside a
-    loop re-parses the file per title. `open()` binds each array to a local and never touches
-    the NpzFile again. At corpus scale the resident cost is 12k × 64 × 4 ≈ 3 MB.
+    Read once because `NpzFile` ignores `mmap_mode` and re-reads the member on every subscript.
     """
 
     version: str | None = None
@@ -268,13 +100,8 @@ class Backbone:
     item_n: np.ndarray | None = None
     mu: float = 0.0
     row_of: dict[int, int] = field(default_factory=dict)
-    # §4.3's "per-title support counts", for EVERY row the file ships — cold-masked rows
-    # included, which is what separates it from `row_of`. See `crowd_support` below: the two
-    # indexes answer two different questions and this milestone is where they stopped being the
-    # same answer. [M4.13 cycle 2, M413-C2-DIM5-01]
+    # Unlike `row_of`, these two include cold-masked rows.
     support_of: dict[int, int] = field(default_factory=dict)
-    # b_i for every row the file ships, cold-masked ones included, for the same reason: the mask
-    # takes the coordinate and not the crowd prior (see the block over `COLD_MASK_ARRAY`).
     prior_of: dict[int, float] = field(default_factory=dict)
     e_full_shape: tuple[int, ...] | None = None
     notes: tuple[str, ...] = ()
@@ -289,8 +116,6 @@ class Backbone:
 
     @classmethod
     def empty(cls) -> Backbone:
-        """A first-class value, the analogue of `ArtifactStore.empty()` — a bundle-less
-        household still ranks (by the Cold Tower alone, or not at all), it does not crash."""
         return cls()
 
     @classmethod
@@ -340,9 +165,7 @@ class Backbone:
 
         notes: list[str] = []
         if e_full_shape is not None:
-            # §4.3 names both E and E_full and never defines the difference. Every serving path
-            # here uses E; E_full is recorded as provenance. If the prefix reading fails on a
-            # real bundle we find out here rather than through a ranked list.
+            # §4.3 never defines E_full against E; serving uses E, E_full is provenance.
             with _reading("comparing E_full against E"):
                 e_full = np.asarray(z["E_full"])
             if e_full.ndim != 2 or e_full.shape[0] != n or e_full.shape[1] < EMBED_DIM:
@@ -353,9 +176,6 @@ class Backbone:
                     "is used for scoring and E_full is unread provenance"
                 )
 
-        # The flagged rows are excluded from the index rather than from the arrays: `row()`
-        # returning None is the one statement every reader here already handles (§8 stage 10),
-        # and it is what makes `coordinate()` take the pure Cold Tower limit for them.
         with _reading(f"reading {COLD_MASK_ARRAY}"):
             cold = cold_row_mask(z, n, e=e)
         n_cold = int(cold.sum())
@@ -383,36 +203,18 @@ class Backbone:
             log.warning("backbone %s: %s", store.version, note)
         return backbone
 
-    # --- lookups. A missing row is normal (§8 stage 10), so None, never an exception. ------
+    # A missing row is normal (§8 stage 10), so lookups return None, never raise.
 
     def row(self, title_id: int) -> int | None:
         return self.row_of.get(int(title_id))
 
     def support(self, title_id: int) -> int:
-        """§5.1's n_t. Zero for a title the crowd never rated — which is what makes its gate 0."""
+        """§5.1's n_t: 0 for a title with no coordinate row, which makes its gate 0."""
         row = self.row(title_id)
         return 0 if row is None else int(self.item_n[row])
 
     def crowd_support(self, title_id: int) -> int:
-        """§4.3's "per-title support counts": how often the crowd rated this title, as shipped.
-
-        THE TWO WERE ONE NUMBER UNTIL THIS MILESTONE, which is why this method has to exist and
-        say so. §4.3 ships `item_n` and glosses it "(the §5.1 gate input)", so every reader was
-        entitled to treat the crowd's rating count and the gate's n_t as the same quantity, and
-        `support()` above served both. Excluding cold-masked rows from `row_of` (cs-01) split
-        them for 2,879 rows of v20260828: a title the crowd has rated 260,131 times has no
-        coordinate for the gate to weight, so its n_t is 0 — and its crowd support is still
-        260,131.
-
-        `support()` stays the gate's input -- the same `n_t` `coordinate()` computes inline, under
-        the name the spec uses, which is why it survives with no production caller of its own.
-        This is the other half, for the readers that want popularity rather than evidence: §6.1's
-        P(seen) term in `rate/queue.py`, which weights `log1p(item_n)/log1p(1e5)` at 2.0 in the
-        logit, and §8 stage 10's badge payload. Both read it out of `title_prior.item_n`, which
-        `serve.materialise_priors` writes from here; `title_prior.gate` is the column that
-        carries the gate's own answer, and it is 0 for these rows, so the row still says what
-        happened. [M4.13 cycle 2, M413-C2-DIM5-01]
-        """
+        """`item_n` as shipped, cold-masked rows included: popularity, not the gate's n_t."""
         return int(self.support_of.get(int(title_id), 0))
 
     def embedding(self, title_id: int) -> np.ndarray | None:
@@ -420,8 +222,7 @@ class Backbone:
         return None if row is None else self.E[row]
 
     def raw_prior(self, title_id: int) -> float | None:
-        """`b_i[t]` as shipped - the corpus's shrunk crowd bias - for every row, cold-masked ones
-        included. `b(t)` is what §5.1 ranks on; see `coordinate`."""
+        """`b_i[t]` as shipped (already shrunk by the corpus), cold-masked rows included."""
         row = self.row(title_id)
         if row is not None:
             return float(self.b_i[row])
@@ -441,13 +242,7 @@ _CACHE: dict[tuple[str | None, str, int, int], Backbone] = {}
 
 
 def _file_stamp(store: ArtifactStore) -> tuple[int, int]:
-    """What the filesystem says `backbone.npz` is, or (-1, -1) when the store resolves no file.
-
-    One sentinel key for the three stores with no basis to read — §3.1's bundle-less install,
-    data-03's broken one, and a bundle that ships no `backbone.npz` — because `Backbone.open`
-    answers all three with `empty()`. A store that does resolve a file gets a different key by
-    construction, so the empty entry can never be handed to a caller that has a basis.
-    """
+    """(size, mtime_ns) of the resolved `backbone.npz`, or (-1, -1) when there is none."""
     try:
         stat = store.path(BACKBONE_FILE).stat()
     except (RuntimeError, OSError):
@@ -456,28 +251,9 @@ def _file_stamp(store: ArtifactStore) -> tuple[int, int]:
 
 
 def load_for(store: ArtifactStore) -> Backbone:
-    """The Backbone for a loaded store, read at most once per (version, root, size, mtime).
+    """The Backbone for a loaded store, cached per (version, root, size, mtime).
 
-    A VERSION'S DIRECTORY IS NOT WRITTEN ONCE. This cache was keyed on (version, root) alone,
-    under a sentence claiming a bundle directory is immutable for the life of its version — and
-    that sentence is what made ml10 invisible. `importer/bundle.py` stages a version by
-    `shutil.rmtree(staged)` and then `shutil.copytree(...)`, so every import of a version
-    rewrites that version's directory: a retry after a failed import does, and M4.14's restage
-    of a broken install does by definition, because the version it restages is the ACTIVE one.
-    §10 promises a swap sequence and a flip; it never promised that `<version>` names one set of
-    bytes for ever. Under the old key the second import served the first one's arrays for the
-    life of the process and said nothing anywhere: E[0, 0] 2.0 on disk, 1.0 out of `load_for`,
-    the same object both times.
-
-    So the key carries the file's own identity as well — size and st_mtime_ns of the
-    `backbone.npz` the store resolves — which is the shape `placement/tower.py` keys the Cold
-    Tower on one directory over, and two model caches keyed alike is one rule rather than two.
-    Preferred over having `import_bundle` call `forget_cached()`: that states the same fact a
-    second time, in the process that happens to write, and §5.3 files the import as a job, so
-    after M4.14 the process that rewrites the directory is the worker and the process serving
-    §5.1 is the backend — a call in the writer cannot reach the reader. A directory rewritten
-    with identical bytes and timestamps is the same basis, and is meant to go on hitting.
-    [M4.14, ml10]
+    The file stamp is in the key because a re-import rewrites the same version's directory.
     """
     key = (store.version, str(store.root), *_file_stamp(store))
     if key not in _CACHE:
@@ -496,11 +272,7 @@ def forget_cached() -> None:
 
 
 def gate(item_n: int, k: float = EVIDENCE_K) -> float:
-    """§5.1: `gate = n_t / (n_t + k)`, k ≈ 10.
-
-    n_t = 0 gives exactly 0.0, which is what makes "no Backbone row" and "pure Cold Tower" the
-    same statement rather than two.
-    """
+    """§5.1: `gate = n_t / (n_t + k)`; n_t = 0 gives exactly 0.0 (pure Cold Tower)."""
     n = max(0, int(item_n))
     return n / (n + k)
 
@@ -515,11 +287,7 @@ class Coordinate:
     gate: float              # §5.1's gate, printed on the §6.0 model line
     item_n: int              # n_t, the gate's input — 0 for a row this basis treats as absent
     e_source: ESource        # which limit of the blend this title landed in
-    # §4.3's shipped support count, which is `item_n` for every row that has a coordinate and
-    # the file's own figure for the cold-masked ones that do not. See `Backbone.crowd_support`.
-    # Defaulted so the fixtures that build a Coordinate by hand keep the pre-split identity.
-    # [M4.13 cycle 2, M413-C2-DIM5-01]
-    crowd_n: int = 0
+    crowd_n: int = 0         # `Backbone.crowd_support`; defaulted for hand-built fixtures
 
 
 def coordinate(
@@ -529,16 +297,12 @@ def coordinate(
 ) -> Coordinate | None:
     """One title's (e, b), or None when it has neither a Backbone row nor a Cold Tower placement.
 
-    `placement` is the Cold Tower's (ê, b̂) for this title in this bundle's basis — §5.3's
-    "placement reconciliation", read from `title_placement`. None returned is §12's M2 exit
-    criterion failing for this title: it is excluded from every ranked list and named in the
-    reconciliation report rather than ranked on a number nobody can defend.
+    `placement` is the Cold Tower's (ê, b̂) from `title_placement`.
     """
     row = backbone.row(title_id)
     n_t = 0 if row is None else int(backbone.item_n[row])
     g = gate(n_t)
-    # The prior's gate is the crowd support behind b_i. That is n_t itself for every row with a
-    # coordinate, and the file's own count for a cold-masked one, whose b_i survives the mask.
+    # A cold-masked row keeps its b_i, so the prior is gated by its crowd support.
     g_b = g if row is not None else gate(backbone.crowd_support(title_id))
 
     e_row = None if row is None else backbone.E[row].astype(np.float64)
@@ -549,9 +313,7 @@ def coordinate(
     if e_row is None and e_hat is None:
         return None
 
-    # The one expression. `warm` is what the gate weights, `cold` what (1-gate) weights; when
-    # one half is absent the other stands in, which is exactly the limit §5.1 writes out - for b
-    # as for e, so a title the Cold Tower has not placed keeps its (already shrunk) b_i.
+    # When one half is absent the other stands in, which is the limit §5.1 writes out.
     e_warm = e_row if e_row is not None else e_hat
     e_cold = e_hat if e_hat is not None else e_row
     b_warm = b_row if b_row is not None else b_hat
@@ -564,8 +326,7 @@ def coordinate(
     else:
         source = "blended"
 
-    # `e_warm is e_cold` only when there is nothing to blend: return the row untouched rather
-    # than g·E + (1-g)·E, which is E to within float error and not E.
+    # Return the row untouched rather than g·E + (1-g)·E, which is E only to within float error.
     e = e_warm if e_cold is e_warm else g * e_warm + (1.0 - g) * e_cold
     b = b_warm if b_cold is b_warm else g_b * b_warm + (1.0 - g_b) * b_cold
 
@@ -581,45 +342,15 @@ def coordinate(
 
 
 # --- what the personal half reads -----------------------------------------------------------
-# DECISIONS 469 AND 471. §5.1's personal half is ⟨v_u, e(t)⟩ and §5.2's Ledger fits s = μ +
-# ⟨v, e⟩ + r, and on the shipped basis neither can be read off the raw coordinate. E is an SVD of
-# zero-imputed residuals, E = V·S (exp_cold_tower2.py), so a row's norm grows with the crowd
-# support behind it - median 0.008 below 20 ratings, 6.94 above 10,000 - and the Cold Tower's ê
-# sits on a third scale (median ||ê|| 27-32). Standardised over the reference population, the raw
-# inner product was 0.01 sd on a typical warm title, 2-13 sd on a popular one and up to 44 sd on a
-# tower placement, so both fits ranked by popularity and provenance: Raiders at 13.28 on a member's
-# scale whose p99 was 1.97, Zootopia at s 21.8 with σ 36 on one verdict.
-#
-# So both read the coordinate's DIRECTION, weighted by the evidence behind it. Normalising a row
-# throws away its norm, and the norm was carrying two things: popularity, which is the defect, and
-# the Backbone's own shrinkage of a thin row, which is not. The gate puts the second back in §5.1's
-# own measure: a coordinate that is the Backbone's alone is weighted by its gate n/(n+k), bounded
-# at 1 and reaching 0.9 at WARM_SUPPORT, so a five-rating row's noisy direction speaks at a third
-# of full voice. A coordinate the Cold Tower contributed to is weighted 1 - its (1-gate) share is
-# the tower's full answer, as §5.1's third line takes ê outright. A zero row contributes zero.
-#
-# Measured over corpus raters through this app's own fit_user (reviews.sqlite user reviews, which
-# may sit inside the Backbone's training data, so the absolute numbers are optimistic and the
-# comparison like-for-like): held-out Spearman at 30/60/100 labels 0.4903/0.5012/0.5224 against
-# 0.4597/0.4711/0.4789 for the raw coordinate; the Ledger's unobserved-title order 0.3948/0.4149/
-# 0.4762 against 0.3405/0.3678/0.4006. The plain unit direction ties both (within 0.002); the gate
-# is kept because it halves the personal spread of rows below 20 ratings (sd 0.85 to 0.48) at no
-# measured cost. Under a production Backbone with no evaluation holdout, simulated by mapping
-# E_full into E's basis, the same reading leads the raw one by +0.027/+0.017/+0.024.
-#
-# `coordinate` above is untouched and still returns the unscaled blend, which is what
-# `title_placement.e_hat`, §6.0's model line and `blend_ratios` below report: decision 236's
-# contract question about E's scale stays open for the file, and this is how the app reads it
-# meanwhile. [owner instruction of 2026-09-25 after the first household user test]
+# E's row norm grows with crowd support and ê sits on another scale, so the raw inner product ranks
+# by popularity. The fits read the direction instead, weighted by the gate for a Backbone-only row
+# and by 1 otherwise (decisions 469, 471). `coordinate` stays unscaled.
 
-# Stamped on every `user_vector` and `ledger_fit` row this reading writes (0031). A stored fit
-# with any other stamp was fitted in another space and is refitted, not served.
+# Stamped on every `user_vector` and `ledger_fit` row; a fit with any other stamp is refitted.
 COORDINATE_GEOMETRY = "gated-direction"
 
 
 def direction(c: Coordinate) -> np.ndarray:
-    """The coordinate §5.1's fold-in and §5.2's Ledger read (decisions 469, 471): e(t)'s unit
-    direction, weighted by its gate when it is the Backbone's alone and by 1 otherwise."""
     return directions([c])[0]
 
 
@@ -637,52 +368,13 @@ def directions(coords: Sequence[Coordinate]) -> np.ndarray:
 
 
 # --- what the gate is actually weighting ----------------------------------------------------
-# A MEASUREMENT, AND DELIBERATELY NOT A REPAIR. §5.1's middle line reads
-# `e(t) = gate·E[t] + (1-gate)·ê(t)`, which only means "a blend" while the two halves are
-# comparable quantities. On v20260828, over the 3,860 rows with a real Backbone row below
-# WARM_SUPPORT — exactly the set the middle line exists for, and exactly the set `blend_ratios`
-# below measures — median ||E|| is 0.0152 against median ||E_hat|| 20.47, and the weighted ratio
-# ((1-g)·||ê||)/(g·||E||) runs p10 82.5, median 525.8, p90 5,498.9. The cold half therefore
-# decides the personal term of every thin title, at every gate the spec's own k produces.
-#
-# EVERY POPULATION IN THAT SENTENCE IS NAMED, because the version it replaces got two of them
-# wrong in the same breath and neither was visible. It read "3,846 rows ... below WARM_SUPPORT",
-# which is the count at a literal cut of 90 — `WARM_SUPPORT` is computed and lands one ulp above
-# it, so the 14 non-cold rows at exactly 90 are measured and the quantiles were a percent off the
-# helper's own. And it read "median ||E|| over warm rows is 0.184", which was taken over
-# `item_n >= 90` INCLUDING the 1,918 cold-masked rows whose E is all zeros — the rows this file
-# spends forty lines arguing must be read as ABSENT. Over rows that actually carry a coordinate
-# the warm median is 0.3835, not 0.184: a factor of two, not a percent. The cold-mask block above
-# gets the same ulp right for its own 1,915-against-1,918; this got it wrong 350 lines later.
-# [M4.13 cycle 2, M413-C2-DIM5-03]
-#
-# Nothing here rescales anything, and that is decision 236 rather than caution. §4.1 says the
-# artifact is carried over verbatim, so whether E is meant to be unit-scale item factors or
-# support-weighted is the CORPUS's contract — and the two candidate answers (normalise ê to E's
-# median row norm; normalise both to unit norm) are different models of what e(t) means, not two
-# spellings of one. The question goes upstream as a proposal; the app lands the measurement so
-# that the answer arrives with a number behind it, and `coordinate`'s single blend expression
-# above is left exactly as §5.1 writes it. `placement/reconcile.py`'s write is untouched for the
-# same reason and a second one: `title_placement.e_hat` is read by the Ledger's fit and by §6.7's
-# rail as well, so a scale applied at the write would move three readers at once.
-# [M4.13 step 13, cs-02 / dd15, decision 236]
-#
-# The question now has half an answer from the corpus's own code: E = V·S from an SVD of
-# zero-imputed residuals is support-weighted by construction. Decisions 469 and 471 act on that
-# half where the app READS the coordinate (`direction` above, the "support-weighted" branch
-# decision 236 named) and leave the file, this blend and the stored ê exactly as shipped.
+# A measurement, deliberately not a repair: on the shipped basis ||ê|| dwarfs ||E|| for thin rows.
+# Whether E is meant to be unit-scale is the corpus's contract (decision 236).
 
 
 @dataclass(frozen=True)
 class BlendReport:
-    """The distribution of ((1-g)·||ê||)/(g·||E||), and what it could not measure.
-
-    The three skip counts are not bookkeeping: each names a different reason a title has no
-    ratio, and a report that folded them into one number could not tell "the blend is balanced"
-    from "there was nothing to blend". A row at or above WARM_SUPPORT is §5.1's FIRST line (E
-    outright, gate >= 0.9), a title with no row is its THIRD (gate exactly 0, both terms the
-    Cold Tower's), and a degenerate pair has a zero on one side of the division.
-    """
+    """The distribution of ((1-g)·||ê||)/(g·||E||), with a separate count per reason for no ratio."""
 
     n_offered: int                  # titles the caller handed over
     n_measured: int                 # the rows §5.1's middle line applies to
@@ -692,8 +384,7 @@ class BlendReport:
     ratios: np.ndarray = field(default_factory=lambda: np.zeros(0))
 
     def quantile(self, q: float) -> float | None:
-        """None rather than nan when nothing was measured: a percentile of an empty set is not a
-        small number, and an exit criterion that prints it must say so."""
+        """None rather than nan when nothing was measured."""
         if self.ratios.size == 0:
             return None
         return float(np.quantile(self.ratios, q))
@@ -726,14 +417,9 @@ class BlendReport:
 def blend_ratios(
     backbone: Backbone, placements: Mapping[int, tuple[np.ndarray, float]]
 ) -> BlendReport:
-    """How far apart the two halves of §5.1's blend are, per title, over the rows it applies to.
+    """How far apart the two halves of §5.1's blend are, per title. Reported, never acted on.
 
-    `placements` is `serve.placements()`'s shape — title_id -> (ê, b̂) — so the caller that
-    already holds the basis and the Cold Tower's output can ask the question without a second
-    read. Titles with no placement cannot be measured at all and are simply not offered.
-
-    Reported and never acted on. See the block comment above: the rescaling is decision 236's
-    upstream contract question, and `coordinate` is not to learn the answer here.
+    `placements` is `serve.placements()`'s shape: title_id -> (ê, b̂).
     """
     ratios: list[float] = []
     n_warm = n_no_row = n_degenerate = 0
@@ -763,9 +449,7 @@ def blend_ratios(
     )
 
 
-# --- the bytea convention -------------------------------------------------------------------
-# 0008's `title_placement.e_hat` is "64 × float32 LE, the same convention as user_vector.vec".
-# One pair of functions, so the two tables cannot drift into two conventions.
+# --- the bytea convention: 64 x float32 LE, shared by title_placement.e_hat and user_vector.vec --
 
 
 def pack_vec(v: np.ndarray) -> bytes:

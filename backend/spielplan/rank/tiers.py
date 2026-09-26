@@ -1,42 +1,6 @@
-"""The per-user tier set, and what changing it costs. Spec v2.1 §6.3, §4.2, §5.2; decision 11.
-
-Decision 11, in full: "The tier set is a **per-user preference**. `ledger_cutpoints` already
-carries it … what needs stating is the re-initialisation rule. Changing K invalidates that
-user's `boundaries`: on save, their cutpoints are re-initialised to the **equal-mass quantiles**
-of that user's fitted `s` distribution for the new K (§6.3's measured quantile shape … is
-authored for K = 7 and is not defined for any other K), and a Ledger refit is queued for that
-user alone — tier *edits* are observations and survive the change, tier *boundaries* do not.
-One user changing their tier set never touches another's."
-
-FOUR THINGS, AND EACH ONE IS A SENTENCE OF THAT PARAGRAPH
-
-  1. Equal-mass quantiles of *their own* fitted `s`, not the measured F3/D7/C15/B25/A25/A+17/S8
-     shape: that shape is authored for K = 7 and means nothing at any other K. At K = 7 the
-     prior the *model* uses is still the measured one, anchored on the person's verdict
-     cutpoints since decision 508 (`model.cut_prior_mean`) —
-     this is a re-initialisation of an existing board, which is a different question, and a
-     board that already has an `s` distribution should be cut where that distribution is.
-  2. A refit queued for that user alone. Recorded rather than run: §5.3 budgets a full MAP
-     refit at "seconds", which is not a thing to do inside a settings save. The re-init itself
-     is arithmetic over rows that already exist, so the board is correct when the save returns.
-  3. `tier_edit` rows are not touched. They are observations; §4.2 keeps every observation
-     table append-only and this is not the exception.
-  4. Scoped to one user. `ledger_cutpoints` is keyed `(user_id, kind)`, so this is a property
-     of the WHERE clause and the test that proves it needs a second person in the database.
-
-WHAT DECISION 11 DOES NOT SAY, AND THE CHOICES MADE HERE
-
-  * **A relabel is not a change in K.** "Changing K invalidates that user's boundaries" is the
-    reason the re-init exists, so renaming F to E at the same size keeps the learned boundaries
-    and queues nothing. Discarding a fitted board because somebody preferred a different letter
-    would be the rule doing more than it says.
-  * **Both kinds get the same set.** Decision 11's own note: "the schema permits a different
-    tier set for films and series. That is finer granularity than the decision requires: the
-    settings control sets one set per user and writes it to both kind rows."
-  * **The bounds.** Two at the minimum, because a one-level set has no boundaries and orders
-    nothing. Twelve at the maximum, because every level needs observations before its cutpoint
-    is anything but its prior, and past a dozen a tier list is a ranked list wearing letters.
-    Neither number is in the spec; both are refusals rather than clamps, so a caller learns.
+"""The per-user tier set (decision 11): a change in K re-cuts that user's boundaries at equal-mass
+quantiles of their own `s` and queues a refit; a relabel at the same K keeps them. Both kinds share
+one set, and `tier_edit` rows always survive.
 """
 
 from __future__ import annotations
@@ -55,18 +19,13 @@ log = logging.getLogger("spielplan.rank.tiers")
 
 MIN_TIERS = 2
 MAX_TIERS = 12
-# A tier label is a letter or a word - F, S, "loved". The bound exists because the label is
-# interpolated into 6.7's rail line, which `rail.record` refuses past 400 characters *after*
-# a drop's transaction has committed: a long enough label turned every drop into that tier
-# into a 500 with the observation already durable, and each retry wrote another. Refused
-# here, with the other refusals, rather than clamped - a silently shortened label is not the
-# one they chose.
+# The label goes into §6.7's rail line, which `rail.record` refuses past 400 characters after a
+# drop has committed; refuse long labels here instead.
 MAX_LABEL = 24
 
 
 class TierSetRefused(ValueError):
-    """A tier set this app will not store. Refused rather than repaired: a silently corrected
-    tier set is one the person did not choose."""
+    """A tier set this app will not store. Refused, never silently corrected."""
 
 
 @dataclass
@@ -76,9 +35,7 @@ class TierSetReport:
     previous: tuple[str, ...] = ()
     k_changed: bool = False
     refit_queued: bool = False
-    # Per kind: how the new boundaries were produced. "quantile" when the person had a fitted
-    # distribution to cut, "prior" when they had nothing to cut yet — a distinction worth
-    # keeping, because the second is not a worse version of the first, it is a different claim.
+    # Per kind: "kept", "quantile" (their fitted s was cut) or "prior" (nothing to cut yet).
     initialised: dict[str, str] = field(default_factory=dict)
     tier_edits_kept: int = 0
 
@@ -102,31 +59,14 @@ def validate(tier_set: Sequence[str]) -> tuple[str, ...]:
 
 
 def equal_mass_quantiles(s: np.ndarray, k: int) -> np.ndarray:
-    """Decision 11's re-initialisation: the K-1 cuts that put equal mass in each level.
-
-    `np.quantile` with the default linear interpolation, and the result is *not* forced apart:
-    a person whose whole board sits on one value gets coincident cutpoints, which is the
-    ordered logit's honest answer and a state `model.feasible` explicitly admits (the cone is
-    closed). Nudging them apart here would invent a spread the data does not have.
-    """
+    """Decision 11's re-initialisation: the K-1 equal-mass cuts. Coincident cuts are allowed."""
     if s.size < 2:
         raise ValueError("equal-mass quantiles need at least two values")
     return np.quantile(np.asarray(s, dtype=float), np.arange(1, k) / k)
 
 
 async def tier_set_of(conn: asyncpg.Connection, *, user_id: int, kind: str) -> tuple[str, ...]:
-    """The person's set for one kind, or §4.2's default.
-
-    `kind` is required, and it used to be absent: the row was read with `ORDER BY kind LIMIT 1`
-    on the reasoning that "the movie row is the one asked because `save` writes both and they
-    cannot disagree". Finding 5 is the sentence that falsified the second half — a fit that
-    reverted one kind's `tier_set` left the two rows disagreeing, and every caller that wanted
-    the series set then got the films one, accepting a drop into a tier the series board does not
-    have. The write side enforces the invariant now (`refit.refit_user` keeps its own cutpoints
-    only while the set it fitted against is still on the row), and the read side no longer rests
-    on it: `ledger/observations.py`'s `tier_set_of` and `home/shelves.py`'s both already take a
-    required `kind`, and this was the outlier.
-    """
+    """The person's set for one kind, or §4.2's default."""
     row = await conn.fetchval(
         "SELECT tier_set FROM ledger_cutpoints WHERE user_id = $1 AND kind = $2", user_id, kind
     )
@@ -134,9 +74,7 @@ async def tier_set_of(conn: asyncpg.Connection, *, user_id: int, kind: str) -> t
 
 
 async def _fitted_s(conn: asyncpg.Connection, *, user_id: int, kind: str) -> np.ndarray:
-    """The distribution decision 11 cuts. `observed` is exactly "the person has an observation
-    on this title", which is the board — quantiles over the whole owned library would be
-    quantiles of the model's opinion rather than of theirs."""
+    """The distribution decision 11 cuts: the rated board's `s`, not the whole library's."""
     rows = await conn.fetch(
         "SELECT s FROM ledger_state WHERE user_id = $1 AND kind = $2 AND observed",
         user_id,
@@ -148,15 +86,9 @@ async def _fitted_s(conn: asyncpg.Connection, *, user_id: int, kind: str) -> np.
 async def save_tier_set(
     conn: asyncpg.Connection, *, user_id: int, tier_set: Sequence[str]
 ) -> TierSetReport:
-    """Decision 11's save, in one transaction.
-
-    Returns what changed, because the control has to warn "this discards your learned
-    cutpoints and queues a refit" and a warning that cannot say whether it applies is noise.
-    """
+    """Decision 11's save, in one transaction. Returns what changed, for the control's warning."""
     labels = validate(tier_set)
-    # Decision 11: "the settings control sets one set per user and writes it to both kind rows",
-    # so one row answers "what did they have before" — and KINDS[0] is named rather than implied,
-    # because that is the invariant this function maintains rather than one it may assume.
+    # Both kind rows hold one set (decision 11), so either answers "what did they have before".
     previous = await tier_set_of(conn, user_id=user_id, kind=KINDS[0])
     report = TierSetReport(user_id=user_id, tier_set=labels, previous=previous)
     report.k_changed = len(labels) != len(previous)
@@ -175,8 +107,7 @@ async def save_tier_set(
                 and len(existing["boundaries"]) == len(labels) - 1
             )
             if keep:
-                # A relabel at the same K. §4.2's CHECK still holds, the boundaries still mean
-                # what they meant, and nothing is invalidated.
+                # A relabel at the same K invalidates nothing.
                 boundaries = [float(b) for b in existing["boundaries"]]
                 report.initialised[kind] = "kept"
             else:
@@ -185,10 +116,7 @@ async def save_tier_set(
                     boundaries = [float(b) for b in equal_mass_quantiles(s, len(labels))]
                     report.initialised[kind] = "quantile"
                 else:
-                    # Nothing fitted yet, so there is no distribution to cut. §6.3's measured
-                    # shape is the prior at K = 7 and equal mass elsewhere — which is exactly
-                    # `model.initial_cutpoints`, and reaching for it here keeps one definition
-                    # of "where a level starts before anybody has used it".
+                    # Nothing fitted yet: the model's own prior.
                     from spielplan.ledger import model
 
                     boundaries = [float(b) for b in model.initial_cutpoints(len(labels))]
@@ -214,9 +142,7 @@ async def save_tier_set(
                 report.k_changed,
             )
 
-        # Decision 11: "tier edits are observations and survive the change". Counted rather
-        # than assumed — the count is what the report says out loud, and the absence of a
-        # DELETE in this function is what makes it true.
+        # Decision 11: tier edits survive the change.
         report.tier_edits_kept = int(
             await conn.fetchval("SELECT count(*) FROM tier_edit WHERE user_id = $1", user_id)
         )
@@ -233,13 +159,9 @@ async def save_tier_set(
 
 
 async def refits_owed(conn: asyncpg.Connection) -> list[tuple[int, str, datetime]]:
-    """The worker's sweep: `(user_id, kind, refit_requested_at)`, oldest first so a queue never
-    starves its own head.
+    """The worker's sweep: `(user_id, kind, refit_requested_at)`, oldest first.
 
-    The stamp travels because `clear_refit_request` needs it. Decision 11's control invites a
-    second change within the minute — "how many tiers do I want?" is answered by trying one —
-    and a clear with no predicate discards a request made *during* the fit it is clearing. The
-    person's second choice then waits for the nightly job with nothing on screen saying so.
+    The stamp travels so `clear_refit_request` keeps a request made during the fit.
     """
     rows = await conn.fetch(
         "SELECT user_id, kind, refit_requested_at FROM ledger_cutpoints "
@@ -251,13 +173,7 @@ async def refits_owed(conn: asyncpg.Connection) -> list[tuple[int, str, datetime
 async def clear_refit_request(
     conn: asyncpg.Connection, *, user_id: int, kind: str, requested_at: datetime
 ) -> None:
-    """Clear the request the sweep actually serviced, and only that one.
-
-    `requested_at` is the stamp `refits_owed` handed out, so a newer request survives: the
-    predicate is "nothing has been asked since I started". Required rather than defaulted —
-    a sweep that forgets which request it fitted is the bug (finding 5), and a default would let
-    it be forgotten again by omission.
-    """
+    """Clear the request the sweep serviced (stamp from `refits_owed`); a newer one survives."""
     await conn.execute(
         "UPDATE ledger_cutpoints SET refit_requested_at = NULL "
         "WHERE user_id = $1 AND kind = $2 AND refit_requested_at <= $3",

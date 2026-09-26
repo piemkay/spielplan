@@ -1,27 +1,7 @@
-"""The materialised §5.1 serving stack and the ranked read. Spec v2.1 §5.1, §4.1 rule 5, §6.0, §10.
+"""The materialised §5.1 serving stack (`title_prior`, `user_score`) and the ranked read.
 
-Everything the ranked surfaces sort on is computed once, by the nightly job, into two tables:
-
-  `title_prior`  the crowd half — b(t), b_i, item_n, gate, e_source. User-independent.
-  `user_score`   the per-user half — score_u(t) and its ⟨v_u, e(t)⟩ component, `kind` in the row.
-
-So the number the §6.0 title card prints and the number the ranked list sorts on are the same
-arithmetic rather than two implementations of it.
-
-§4.1 RULE 5, STRUCTURALLY. "Every ranking surface partitions by kind (measured: the
-unpartitioned crowd top-10 is 8/10 TV series)." Owner decision 18 makes kind two independent
-toggles — either or both, never neither. This module therefore contains exactly one ranked
-statement, it binds `us.kind = $2` as a **scalar**, and `ranked_sections()` calls it once per
-selected kind and concatenates the SECTIONS. There is no statement here that binds kind as a
-set, so there is no merged ordering anywhere to accidentally return: `ranked_sections` hands
-back a list of kind-headed sections and never a list of titles. A person filter is a predicate
-inside each section's WHERE and never touches the kind loop — decision 18's "a filmography is
-complete across two sections", not "a filter suspends the partition".
-
-§10, THREE DEEP. "Everything expressed in the old Backbone's basis is garbage against a new
-one." `bundle_version` is on the prior row, on the score row, and bound in every read here. A
-row from a superseded basis is not returned as a stale number; it is not returned at all, and
-the section's `total` says so.
+§4.1 rule 5: the one ranked statement binds `kind` as a scalar, so there is no merged ordering.
+Every read binds `bundle_version` (§10): a row from a superseded basis is not returned at all.
 """
 
 from __future__ import annotations
@@ -35,29 +15,21 @@ import numpy as np
 
 from spielplan.db import genres as genre_vocab
 
-# `_like_needle` is imported across the module boundary on purpose, underscore and all: it is
-# private to the catalog's WHERE builder, and the ranked section's `q` predicate is a copy of
-# that builder's. Two copies is how the LIKE metacharacters stayed unescaped in both (§6.0's
-# search and its count line read one predicate, and this file holds the other). The name keeps
-# its underscore so nothing else adopts it as a utility. [M4.9 finding 12]
+# `_like_needle` is private to the catalog's WHERE builder; the `q` predicate below mirrors it.
 from spielplan.db.library import KINDS, Kind, SeenFilter, _like_needle, normalise_kinds
 from spielplan.scoring.backbone import Backbone, Coordinate, coordinate, unpack_vec
 
 log = logging.getLogger("spielplan.scoring.serve")
 
-# §6.0 names the surfaces "film/series"; the two ranked sections are headed with the plural the
-# library controls already use, so the toggle and the heading say the same word.
 HEADINGS: dict[str, str] = {"movie": "Films", "series": "Series"}
 
 
 @dataclass
 class PriorReport:
-    """What one `materialise_priors` pass wrote, in the terms §12's exit criterion is stated in."""
+    """What one `materialise_priors` pass wrote."""
 
     written: int = 0
     by_source: dict[str, int] = field(default_factory=dict)
-    # §12 (M2): "every owned title has a coordinate (warm Backbone row or Cold Tower placement)".
-    # Named, not counted: a report that says "3" cannot be acted on.
     uncoordinated_owned: list[int] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, Any]:
@@ -72,11 +44,7 @@ class PriorReport:
 
 
 async def placements(conn, *, bundle_version: str) -> dict[int, tuple[np.ndarray, float]]:
-    """The Cold Tower's (ê, b̂) per title, in this basis. §5.3 placement reconciliation writes it.
-
-    Bound to `bundle_version` because a coordinate computed in the old basis is garbage against
-    a new one (§10) — the rows survive a rollback precisely because they are not overwritten.
-    """
+    """The Cold Tower's (ê, b̂) per title, in this basis (§10)."""
     rows = await conn.fetch(
         "SELECT title_id, e_hat, b_hat FROM title_placement WHERE bundle_version = $1",
         bundle_version,
@@ -87,10 +55,7 @@ async def placements(conn, *, bundle_version: str) -> dict[int, tuple[np.ndarray
 async def coordinates(
     conn, backbone: Backbone, *, bundle_version: str, kind: Kind | None = None
 ) -> dict[int, Coordinate]:
-    """Every title of `kind` that has a coordinate at all, keyed by title_id.
-
-    Titles without one are simply absent — `uncoordinated_owned` is where they are named.
-    """
+    """Every title of `kind` that has a coordinate at all, keyed by title_id."""
     placed = await placements(conn, bundle_version=bundle_version)
     if kind is None:
         rows = await conn.fetch("SELECT id FROM title ORDER BY id")
@@ -109,13 +74,9 @@ async def coordinates(
 async def materialise_priors(
     conn, backbone: Backbone, *, bundle_version: str, title_ids: Sequence[int] | None = None
 ) -> PriorReport:
-    """Write `title_prior` for every title - or for `title_ids` alone, which is how the fold-in
-    tick gives a freshly placed title its row without rewriting 19,000. The crowd half of §5.1,
-    computed once.
+    """Write `title_prior` for every title, or for `title_ids` alone.
 
-    An uncoordinated title keeps a row with `b` NULL and `e_source = 'none'` rather than being
-    omitted: the row is what lets the reconciliation report name the offenders instead of
-    reporting a difference between two counts.
+    An uncoordinated title keeps a row with `b` NULL and `e_source = 'none'`, so it can be named.
     """
     placed = await placements(conn, bundle_version=bundle_version)
     if title_ids is None:
@@ -176,9 +137,7 @@ async def materialise_priors(
 
 
 async def priors_owed(conn, *, bundle_version: str) -> list[int]:
-    """Titles placed in this basis whose `title_prior` row is missing, from another basis, or
-    older than the placement - the rows a ranked read would drop or misreport until the nightly
-    pass rewrote them."""
+    """Titles placed in this basis whose `title_prior` row is missing, stale or from another basis."""
     rows = await conn.fetch(
         """
         SELECT p.title_id
@@ -195,8 +154,7 @@ async def priors_owed(conn, *, bundle_version: str) -> list[int]:
 
 
 async def uncoordinated_owned(conn, *, kind: Kind, bundle_version: str) -> list[int]:
-    """§12's M2 exit criterion as a list a test can read: owned titles of this kind with no
-    coordinate. Must be empty."""
+    """§12's M2 exit criterion: owned titles of this kind with no coordinate. Must be empty."""
     rows = await conn.fetch(
         """
         SELECT tp.title_id FROM title_prior tp JOIN title t ON t.id = tp.title_id
@@ -215,19 +173,10 @@ async def replace_scores(
     conn, *, user_id: int, kind: Kind, bundle_version: str,
     rows: Sequence[tuple[int, float, float]],
 ) -> int:
-    """Rewrite one (user, kind)'s `user_score` rows. `kind` is written into every row.
+    """Rewrite one (user, kind)'s `user_score` rows.
 
-    A refit replaces rather than updates: a title that lost its coordinate must lose its score,
-    and an UPDATE would leave it ranked on a number from a basis that no longer exists. Measured,
-    the shape is also the cheapest of the three at corpus scale — `ON CONFLICT DO UPDATE` cost
-    14,000 non-HOT updates, 11.2 MB of WAL and 459 ms against 7.7 MB and 264 ms here, because
-    `0009_scoring.sql:40` indexes `score` and HOT is therefore impossible. What the cost is bounded
-    by is `foldin._is_stale`'s debounce, not the statement. [M4.13, perf-04]
-
-    The transaction stays even though `foldin.refit_user` now holds one around this call and
-    `write_fit`: asyncpg nests it as a savepoint, so both readings are true — the DELETE and the
-    INSERT are never separately visible, and the pair is atomic with the fit's own stamp for the
-    caller that needs that. [M4.13, ml08; plan step 20]
+    Replace, not update: a title that lost its coordinate must lose its score. `score` is
+    indexed, so an upsert cannot be HOT and costs more.
     """
     async with conn.transaction():
         await conn.execute("DELETE FROM user_score WHERE user_id = $1 AND kind = $2", user_id, kind)
@@ -245,11 +194,7 @@ async def replace_scores(
 
 
 async def fit_row(conn, *, user_id: int, kind: Kind) -> dict[str, Any] | None:
-    """The stored fold-in for one (user, kind), or None when the user has never been fitted.
-
-    "Fitted to zero labels" and "never fitted" are different states and the section copy says so
-    (§6.0's zero-verdict fallback), which is why the zero-label case still writes a row.
-    """
+    """The stored fold-in for one (user, kind), or None when the user has never been fitted."""
     row = await conn.fetchrow(
         """
         SELECT vec, blend_beta, label_count, mu, prior_mean, prior_sd, cf_sd,
@@ -264,11 +209,10 @@ async def fit_row(conn, *, user_id: int, kind: Kind) -> dict[str, Any] | None:
 async def personal_kinds(
     conn, *, user_id: int, kinds: Sequence[str], bundle_version: str | None
 ) -> list[str]:
-    """The kinds of `kinds` this member's own ratings rank: a fold-in fitted to their labels, in
-    the active basis, whose personal half carries weight. What the catalogue's "for you" order
-    needs before it is the default (decision 515): a profile at β 0 is the crowd's order - "what
-    most people rate highest" in `ranked_section`'s own `personalised` - and calling that "for
-    you" would be the decorative claim §6.0 forbids."""
+    """The kinds of `kinds` this member's own ratings rank (β > 0 in the active basis).
+
+    At β 0 the order is the crowd's, which may not be called "for you" (decision 515).
+    """
     if bundle_version is None:
         return []
     rows = await conn.fetch(
@@ -297,11 +241,7 @@ def _filters(
     owned_only: bool,
     user_id: int,
 ) -> str:
-    """The predicates shared by a section and by the count of what a *deselected* kind hides.
-
-    Deliberately identical for both: a "2 series hidden" line computed with different filters
-    from the section it describes is a lie that nobody would notice.
-    """
+    """The predicates shared by a section and by the count of what a *deselected* kind hides."""
     where: list[str] = []
 
     def arg(value: Any) -> str:
@@ -325,16 +265,13 @@ def _filters(
     if decade is not None:
         where.append(f"t.year >= {arg(decade)} AND t.year < {arg(decade + 10)}")
     if person_id is not None:
-        # §6.0: "credits, each person tappable → filters the library to their filmography".
-        # A predicate on titles. It cannot reach the kind loop, which is decision 18's rule.
         where.append(
             f"EXISTS (SELECT 1 FROM credit c WHERE c.title_id = t.id AND c.person_id = {arg(person_id)})"
         )
     if owned_only:
         where.append("t.is_owned")
     if seen != "any":
-        # An absent user_title row is the default, not an assertion (§7.3), so `unseen` must
-        # include it rather than matching only explicit rows.
+        # No user_title row means unseen (§7.3).
         uid = arg(user_id)
         predicate = (
             f"SELECT 1 FROM user_title s WHERE s.title_id = t.id "
@@ -363,12 +300,8 @@ async def ranked_section(
 ) -> dict[str, Any]:
     """ONE kind's ranked section. `kind` is bound as a scalar — there is no set-valued variant.
 
-    Ordering is `score DESC, title.id ASC`. The tie-break is not cosmetic: paging over equal
-    scores is otherwise nondeterministic across pages, and a household's cold catalogue has
-    plenty of equal scores.
-
-    `exclude` is Home's (decision 512: the titles a member avoids leave "Your top picks"); empty
-    by default, so Rank's read is untouched.
+    The `title.id` tie-break keeps paging deterministic over equal scores. `exclude` is Home's
+    (decision 512).
     """
     if kind not in KINDS:
         raise ValueError(f"unknown kind {kind!r}")
@@ -381,8 +314,7 @@ async def ranked_section(
     if exclude:
         args.append([int(t) for t in exclude])
         clause += f" AND NOT (t.id = ANY(${len(args)}::int[]))"
-    # The prior joins on the score's OWN bundle_version, not on the bound one: a score and the
-    # prior it was computed against must come from one basis or the card and the sort disagree.
+    # Join the prior on the score's own bundle_version, so both come from one basis.
     joins = """
           FROM user_score us
           JOIN title t ON t.id = us.title_id
@@ -417,8 +349,6 @@ async def ranked_section(
         "kind": kind,
         "heading": HEADINGS[kind],
         "total": int(total or 0),
-        # §6.0's zero-verdict fallback needs to know the difference between "ranked by the crowd
-        # prior alone" and "ranked by this person", without a second query.
         "personalised": beta > 0.0,
         "beta": beta,
         "label_count": labels,
@@ -436,16 +366,7 @@ async def ranked_sections(
     bundle_version: str,
     **filters: Any,
 ) -> list[dict[str, Any]]:
-    """One section per selected kind, in canonical order. Never one merged ordering.
-
-    §4.1 rule 5 + decision 18. `normalise_kinds` refuses the empty selection (neither toggle is
-    not a state), and the return type is a list of SECTIONS — there is no top-level ordering
-    for a caller to render, because there is none to render.
-
-    `limit`/`offset` apply PER SECTION, which is what makes a merged-then-split implementation
-    detectable by shape rather than by reading the code: with both kinds on and limit=5, this
-    returns up to 5 films AND up to 5 series, never 5 rows in total.
-    """
+    """One section per selected kind, in canonical order. `limit`/`offset` apply per section."""
     return [
         await ranked_section(
             conn, user_id=user_id, kind=kind, bundle_version=bundle_version, **filters
@@ -457,12 +378,7 @@ async def ranked_sections(
 async def hidden_by_kind(
     conn, *, user_id: int, kinds: Sequence[str], bundle_version: str, **filters: Any
 ) -> dict[str, int]:
-    """How many ranked rows each *unselected* kind holds, under the same filters.
-
-    §6.0's count line has to be able to say "2 series hidden": a toggle that hides things
-    without saying how many is the silent truncation the control exists to fix. Computed with
-    the section's own predicates, so the number describes what the toggle would reveal.
-    """
+    """How many ranked rows each *unselected* kind holds, under the section's own filters."""
     chosen = set(normalise_kinds(kinds))
     hidden: dict[str, int] = {}
     for kind in KINDS:
@@ -493,38 +409,19 @@ async def hidden_by_kind(
 
 
 def _format_line(b: float, beta: float, gate_value: float) -> str:
-    """§6.0: "the model line in the data voice (`b(t) 0.52 · β 0.8 · gate 0.93`)".
-
-    Two decimals everywhere, including β where the spec's own example prints one: one formatter
-    with one precision is how the card and the rail stop drifting apart. The number printed is
-    the number the ranking uses — no display rescaling, which is the whole of the transparency
-    promise.
-    """
+    """§6.0's model line. The printed numbers are the ones the ranking uses, unrescaled."""
     return f"b(t) {b:.2f} · β {beta:.2f} · gate {gate_value:.2f}"
 
 
 def _format_support(sigma: float | None, item_n: int) -> str:
-    # σ renders as an em dash before the Ledger has ever fitted this title, never as 0.00 —
-    # which would read as certainty about a title nobody has rated.
-    #
-    # `item_n` here is the CROWD's count, which for a cold-masked row is not the n_t that produced
-    # the `gate` on the line above: this card can now read "gate 0.00" beside "support n=260131",
-    # and that pair is true. It is also the open ask the cold-mask block in `scoring/backbone.py`
-    # records — how §8 stage 10 should describe a title the crowd rated and the corpus did not
-    # place — and surfacing the contradiction is the point: the alternative was printing n=0 for a
-    # film a quarter of a million people have rated. [M4.13 cycle 2, M413-C2-DIM5-01 / DIM5-06]
+    # An unfitted σ is a dash, never 0.00. `item_n` is the crowd's count, so a cold-masked row
+    # can truthfully read "gate 0.00" beside a large n.
     shown = f"±{sigma:.2f}" if sigma is not None else "—"
     return f"σ {shown} · support n={item_n}"
 
 
 async def model_line(conn, *, user_id: int, title_id: int, bundle_version: str) -> dict[str, Any]:
-    """The §6.0 title-card model line, with the real b(t), β and gate.
-
-    Behind the show-the-model preference since decision 486, which amended decision 117's
-    exemption for it: β is read from this viewer's fit and σ from this viewer's ledger row, so it
-    is an annotation about this viewer and not crowd-level provenance. The gate is the route's
-    (`api/library.py` builds the key only while the switch is on); this renders it either way.
-    """
+    """The §6.0 title-card model line. The show-the-model gate is `api/library.py`'s (decision 486)."""
     row = await conn.fetchrow(
         """
         SELECT t.kind, tp.b, tp.gate, tp.item_n, tp.e_source, tp.bundle_version, ls.sigma
@@ -538,8 +435,6 @@ async def model_line(conn, *, user_id: int, title_id: int, bundle_version: str) 
     if row is None:
         return {"available": False, "reason": "no such title"}
     if row["bundle_version"] is None or row["bundle_version"] != bundle_version:
-        # Either nothing has been materialised yet, or what was materialised belongs to a basis
-        # that is no longer active. Both are "we cannot say", and neither is a number.
         return {
             "available": False,
             "reason": "no prior computed for the active bundle",

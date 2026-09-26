@@ -1,32 +1,7 @@
-"""What a member has told the app they do not enjoy, read from their own verdicts.
+"""What a member's own verdicts say they do not enjoy (decision 512), which ranking shelves leave out.
 
-Spec v2.1 §6.0 (the shelf table), §4.1 rules 1 and 2, §6.2 step 3; decision 512.
-
-The second household test found the ranking shelves showing a member what they had already said
-they dislike: Chainsaw Man among the top picks of the member who had disliked every violent film
-she rated, The Handmaiden and Past Lives for the member who had disliked every romance he rated,
-and a four-hour cut of Kill Bill for two people whose longest liked film ran three. The ordering is the
-model's, and the model is fine to be wrong about a title; what the shelves may not do is ignore a
-pattern the person stated four times over. So a shelf that ranks for a member leaves out:
-
-* a DNA term of the mood, themes or sensibility facets - what a title is about and how it feels,
-  the three facets Tonight's authored vetoes are drawn from (decision 480) - in either tier,
-  carried by at least `AVOID_MIN_DISLIKED` of their disliked titles, by none of their liked ones,
-  and by no more titles they found fine than they disliked. How a title is shot, scored or paced
-  rides along with what it is about: with every facet read, the member who disliked every
-  violent film also avoided "fan-service calibrated" and "synth score", and lost Wicked;
-* a canonical genre (decision 473's vocabulary) read the same way;
-* a film running more than `RUNTIME_MARGIN_MIN` past the longest film they have liked, once they
-  have liked `RUNTIME_MIN_LIKED` films - a history too short to say what "long" means to them
-  says nothing - and never a film of `RUNTIME_FLOOR_MIN` or less: the rule is for the extreme
-  cut, and a member whose liked films all ran two hours has not said anything about 2h40.
-
-EITHER TIER, as decision 480's vetoes now read (owner instruction of 2026-09-26): a person who
-has turned down nine violent films wants recall, and a projected tag that is wrong about one title
-costs that title a shelf, not a verdict. PRESENCE, never a weight: `salience`, `confidence` and
-`n_sources` appear nowhere below (§4.1 rule 2). BOTH KINDS feed the evidence, because what
-"violent" means does not change with the kind; the titles it removes are read per kind, and no
-ranking crosses kinds here (§4.1 rule 5).
+Mood/themes/sensibility terms and canonical genres disliked often and never liked (presence, either
+tier, both kinds), plus films far longer than the longest they liked.
 """
 
 from __future__ import annotations
@@ -40,18 +15,13 @@ from spielplan.db import dna_terms
 from spielplan.db import genres as genre_vocab
 from spielplan.ledger.observations import LIVE_LABEL_SQL
 
-# Four and not three: a member who dislikes a quarter of what they rate meets a three-for-three
-# streak by chance on 1 term in 70 (0.24^3), and has rated three or more titles on several hundred
-# terms; four is where the household test's two real patterns - violence and romance - were
-# already unmistakable.
+# Four, not three: three-for-three happens by chance on about 1 term in 70.
 AVOID_MIN_DISLIKED = 4
 
-# The facets a term may be avoided from (see the module docstring).
+# What a title is about and how it feels; the other facets over-generalise.
 AVOID_FACETS: tuple[str, ...] = ("mood", "themes", "sensibility")
 
-# The runtime ceiling's three numbers: the history it needs, the slack it allows, and the length
-# it never cuts below. On the household: Patrick's longest liked film runs 178 minutes and Jenny's
-# 194, so the ceilings are 208 and 224, and the four-hour Kill Bill cut is out for both.
+# The runtime ceiling: liked films needed, minutes of slack, and the floor it never cuts below.
 RUNTIME_MIN_LIKED = 10
 RUNTIME_MARGIN_MIN = 30
 RUNTIME_FLOOR_MIN = 180
@@ -82,8 +52,7 @@ def _avoids(disliked: int, fine: int, liked: int) -> bool:
 
 
 async def avoided_for(conn: asyncpg.Connection, *, user_id: int, version: str | None) -> Avoided:
-    """The member's avoid set from their live verdicts (`LIVE_LABEL_SQL`: a re-ask is §13's
-    instrument and not the person's answer)."""
+    """The member's avoid set from their live verdicts (re-asks excluded)."""
     terms: dict[str, str] = {}
     if version is not None:
         rows = await conn.fetch(
@@ -162,10 +131,7 @@ async def avoided_titles(
     version: str | None,
     title_ids: Sequence[int] | None = None,
 ) -> frozenset[int]:
-    """The owned titles of `kind` any of these members avoids - one member's, or the union a
-    shared shelf leaves out. A film over the shortest of their runtime ceilings is out, because
-    it is out for that member. With `title_ids`, those titles instead, owned or not: the title
-    card asks it of the one title it shows."""
+    """The owned titles of `kind` any of these members avoids (or, with `title_ids`, those titles)."""
     terms = sorted(set().union(*(a.terms for a in avoids))) if avoids else []
     genres = sorted(set().union(*(a.genres for a in avoids))) if avoids else []
     ceilings = [a.runtime_max for a in avoids if a.runtime_max is not None]

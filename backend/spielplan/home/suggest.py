@@ -1,24 +1,7 @@
-"""The title card's one line on why a title is suggested to the person reading it.
+"""The title card's one line on why a title is suggested (decision 515), or None.
 
-Spec v2.1 §6.0 (the title card; the shelf table), §6.8 ("quiet reasons"); decisions 486, 512,
-513 and 515.
-
-Both members opened title after title from a shelf and found no sentence on the card saying why it
-was there (second household test, H6). §6.8 asks every recommendation for a one-line why, and the
-card is where a recommendation is read closely. So `why` is one sentence in the member register,
-or None - never a sentence that is not true of this title for this person:
-
-1. None for a title they have seen or rated: nothing is being suggested.
-2. None for a title they avoid (decision 512): the shelves leave it out, so the card does not
-   argue for it.
-3. "Because you liked {X} — they share {a} + {b}" when one of their own liked titles of the kind,
-   in the same form (animated or live-action), is alike enough to have put this title on X's
-   shelf: the likeness shelf 1 ranks by (decision 513), and the two most specific terms both
-   carry.
-4. "One of the ones we think you'll enjoy most" when their own ratings rank it in the top
-   `TOP_SHARE` of the household's owned titles of the kind - the Your top picks sentence, and
-   only where their personal half carries weight, because the crowd's order is not "for you".
-5. None otherwise.
+None if seen, rated or avoided; else "Because you liked {X} — they share {a} + {b}"; else "One of
+the ones we think you'll enjoy most" when their own fit ranks it in the top `TOP_SHARE`.
 """
 
 from __future__ import annotations
@@ -32,14 +15,9 @@ from spielplan.home import why as why_mod
 from spielplan.ledger.observations import LIVE_LABEL_SQL
 from spielplan.scoring import serve
 
-# The likeness a liked title must reach before the card names it: about the edge of the
-# neighbourhood shelf 1 names its pair from. Measured on the second household test's library, the
-# twenty-fourth nearest owned film to each member's liked films sat at a median of 0.22 and 0.25;
-# the 127 owned series are sparser, and there 0.2 admits only the nearest few (the nearest series
-# to a liked one sat at a median of 0.31 and 0.24).
+# About the edge of the neighbourhood shelf 1 names its pair from.
 LIKENESS_FLOOR = 0.2
 
-# "One of the ones we think you'll enjoy most": the top tenth of the owned titles of the kind.
 TOP_SHARE = 0.1
 
 
@@ -89,13 +67,7 @@ async def _likest_liked(
     conn: asyncpg.Connection, *, user_id: int, title_id: int, kind: str, version: str
 ) -> tuple[str, list[str]] | None:
     """The member's liked title of this kind and form most like this one, if it clears the floor,
-    with the two terms that best say why - named by the vocabulary's labels.
-
-    Which two is a naming question, so §4.1 rule 2's naming rank may answer it: a shared term is
-    named by its specificity times the lesser of its two naming ranks, so it is both rare in the
-    library and prominent on both titles. By specificity alone Collateral was like Heat for
-    "alienation + verbal sparring" - an inferred tag on Heat - rather than for its heist and its
-    Los Angeles. The likeness itself reads no weight."""
+    with the two terms that best say why (specificity x the lesser naming rank; naming only)."""
     rows = await conn.fetch(
         f"""
         WITH {why_mod.specificity_ctes("$3", "$4")},
@@ -165,15 +137,12 @@ async def _likest_liked(
 async def _in_top_share(
     conn: asyncpg.Connection, *, user_id: int, title_id: int, kind: str, bundle_version: str
 ) -> bool:
-    """Whether the member's own fitted ranking puts this title in the top `TOP_SHARE` of the
-    household's owned titles of the kind. A profile whose personal half carries no weight is the
-    crowd's order and has no "you" (`serve.personal_kinds`)."""
+    """Whether the member's own fitted ranking (β > 0) puts this title in the top `TOP_SHARE`."""
     if kind not in await serve.personal_kinds(
         conn, user_id=user_id, kinds=[kind], bundle_version=bundle_version
     ):
         return False
-    # No row at all when this title has no score in the active basis, so "unknown" is None and
-    # never a share of zero.
+    # None, never 0, when the title has no score in the active basis.
     share = await conn.fetchval(
         """
         WITH owned AS (

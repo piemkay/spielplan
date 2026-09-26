@@ -1,58 +1,8 @@
-"""The 64-d user fold-in and the per-label-count blend weight. Spec v2.1 §5.1, §5.3, §10, §12.
+"""The 64-d user fold-in and the per-label-count blend weight (§5.1, §5.3).
 
-§5.3's row: "Fold-in user vectors, blend weights per label count — nightly — seconds."
-§5.1's arithmetic:
+    score_u(t) = μ_u + (1−β_u)·z(b(t)) + β_u·⟨v_u, d(t)⟩     β is the PERSONAL weight (decision 167)
 
-    score_u(t) = b(t) + μ_u + w_cf·⟨v_u, e(t)⟩,  blended with the crowd prior at β
-                 (also exactly where per-user top-10s stop being the global chart:
-                 12 → 263 distinct titles)
-
-READ AS. The two sentences are one expression. `w_cf` **is** β, the crowd prior carries (1−β),
-and both halves are standardised over the same population so β is a genuine convex weight:
-
-    score_u(t) = μ_u + (1−β_u)·(b(t) − prior_mean)/prior_sd + β_u·⟨v_u, d(t)⟩
-
-with `v_u` scaled at fit time so ⟨v_u, d⟩ has unit sd over that population, and d(t) the
-coordinate's gate-weighted DIRECTION rather than e(t) itself (decision 469; `backbone.direction`
-says why and what was measured). The fit, the cross-validation and both scorers read d through
-that one helper, so the β chosen is the β served on the scale it is served on (decision 235).
-
-WHICH HALF β WEIGHS IS SETTLED, AND IT IS THIS ONE. Decision 167: **β is the weight on the
-PERSONAL half**, and it stays there. The 0.8 §5.1 quotes is the CORPUS's number in the corpus's
-coordinates — its table is headed `blend beta (1.0 = crowd only)` — so the corpus optimum of 0.8
-crowd is **β = 0.2 here**, and whenever that number is cited it must be converted:
-**β_app = 1 − β_corpus**. This is not a ranking bug and never was: `_cross_validate` searches the
-full grid and picks per (user, kind) by held-out Spearman using the IDENTICAL orientation as
-serving, so the fit absorbs the naming entirely. Re-measured through this app's own `fit_user`
-over 150 real raters from the corpus's reviews.sqlite, the population held-out curve peaks at
-β_app 0.20 (+0.4324, against +0.4082 at 0.80) and the median fitted β_app is exactly 0.20 — the
-corpus's optimum, reproduced in the complementary coordinate by a different pipeline. §5.1's
-sentence gains that conversion in M4.16's spec pass (decision 177); nothing here flips.
-
-BLEND, NEVER ROUTE. §5.1: "a learned router was measured to capture 2–3% of the oracle gap and
-lose to the flat blend." β is ONE scalar per (user, kind), refit per label count — never a
-per-title decision. There is no router class in this package, and no per-title branch that
-could grow into one.
-
-NO POPULARITY TERM. §4.1 rule 3 bans aggregate platform scores as model features (measured:
-−0.010 Spearman for nothing). Nothing here reads the display schema.
-
-WHAT HAPPENS WITH ZERO LABELS, PLAINLY. β_u = 0, v_u = 0, μ_u = 0, so score_u(t) is the
-z-scored crowd prior and identical for every unfitted member of that kind. The ranked lists
-still answer — honestly, and labelled `personalised: false` with `label_count: 0`. A
-`user_vector` row IS still written, because "fitted to zero labels" and "never fitted" are
-different states and §6.0's zero-verdict fallback has to tell them apart.
-
-THE CEILING IS A CONSTRAINT, NOT A CONVENTION — AND NOT THE OPTIMUM EITHER. The β grid searches
-up to 1.0 and the result is clamped to 0.8; `0009_scoring.sql` enforces the same ceiling with a
-CHECK. 0.8 is NOT "§5.1's measured optimum" — that is 0.2 here (decision 167) — it is a floor of
-one fifth on the crowd prior: the household never sees a ranking that is more than 80% its own
-labels. The corpus-faithful reading would put the ceiling at 0.2 instead, and that was measured
-and is worse: clamping there costs 22 of 150 real raters more than §0's noise floor while
-helping 30, a net +0.0070 for the shipped ceiling and inside §0's 0.008 tie band. The 19 fits
-that reach 0.8 earn it (+0.065 held-out ρ over β 0.2, 12 of the 19 beyond the noise floor). A fit
-that wanted more is recorded (`beta_clamped`) and logged, because a silent clamp is a
-measurement nobody ever sees.
+§5.1's corpus optimum of 0.8 is crowd weight, i.e. β = 0.2 here. One scalar β per (user, kind), no router.
 """
 
 from __future__ import annotations
@@ -82,82 +32,37 @@ from spielplan.scoring.backbone import (
 
 log = logging.getLogger("spielplan.scoring.foldin")
 
-# EVERY CONSTANT IN THIS BLOCK IS A `Hyperparams` FIELD NOW, and the values are unchanged. §5.2
-# says "every constant comes from `ledger_hyperparams.json`" and `ledger/hyperparams.py` states
-# the rule it enforces: "this is the only module in the package allowed to contain a tuning
-# number". Six of them sat here as literals, so the corpus project could not re-tune the fold-in
-# at all - the grids below are cross-validated per user, but WHICH grid, the noise floor they are
-# read against and the label counts that decide whether to search at all were this file's private
-# opinion. They are defaults there now; the names and the comments stay here, because the reason
-# a number is what it is belongs next to the code that spends it. [M4.13 step 34d, dd14]
-#
-# What that bought is ONE home and a range check, not yet a delivery path: every name below binds
-# `DEFAULTS.<field>` at import, no function in this module takes an `hp`, and §10's restart
-# re-evaluates the same dataclass defaults. A bundle that re-tunes `blend_beta_max` or either grid
-# is parsed, validated, digested and then not used here; `hyperparams._PARSED_NOT_THREADED` says
-# so in the import report rather than leaving the knob looking applied.
-# [M4.13 cycle 2, M413-C2-DIM-HP-01]
-#
-# The floor on the crowd prior, not the optimum: β is the personal weight (decision 167), so
-# clamping it at 0.8 is the statement that the crowd keeps at least a fifth of every blend.
-# §5.1's own optimum, converted into these coordinates, is 0.2 — see the header.
+# These bind the dataclass defaults, not the bundle's values (`hyperparams._PARSED_NOT_THREADED`).
+# BETA_MAX is a floor of one fifth on the crowd prior, not §5.1's optimum.
 BETA_MAX = DEFAULTS.blend_beta_max
 BETA_GRID: tuple[float, ...] = DEFAULTS.blend_beta_grid
 
-# §5.1's ceiling is storable as itself. It was not always: 0009's CHECK compared a `real`
-# column against the numeric literal 0.8, which Postgres resolves through float8 where
-# float4(0.8) is 0.800000011920929 — so `SELECT 0.8::real <= 0.8` was FALSE and a fit clamped
-# to the ceiling failed its INSERT inside a nightly job. The migration now casts the literal,
-# and the write below stores β unmodified. (0009's own comment still calls 0.8 the measured
-# optimum; it is applied and sha256-checksummed, so decision 167 rules that correction into the
-# amended §5.1 and a comment on the next migration that touches `user_vector` — never an edit.)
-
-# Not shipped. §4.3's `ledger_hyperparams.json` carries the LEDGER's anchor λ (3.0), which is a
-# different quantity in a different objective, so borrowing it would be a coincidence dressed as
-# a constant. This grid is cross-validated per user instead; if the corpus tuner ever prints a
-# fold-in λ, this loop becomes a read.
+# Cross-validated per user: the Ledger's shipped λ is a different quantity.
 LAMBDA_GRID: tuple[float, ...] = DEFAULTS.foldin_lambda_grid
 
-# §0: "pipeline variance 0.003–0.008 Spearman; anything smaller is a tie." A tie must not buy
-# personalisation, so an improvement inside the noise floor leaves β at 0.
+# §0: an improvement inside pipeline variance is a tie, and a tie must not buy personalisation.
 NOISE_FLOOR = DEFAULTS.rho_noise_floor
 
-# §0/§6.1: "personal signal roughly triples from 5 to 100 labels" — below five, a fitted β is
-# noise wearing a number.
 MIN_LABELS_FOR_CV = DEFAULTS.min_labels_for_cv
 LOO_BELOW = DEFAULTS.loo_below_labels   # leave-one-out under this many, 5 folds at or above
 
-# THE DEBOUNCE, IN SECONDS. §5.3 gives the fold-in a nightly cadence and §12's M2 exit criterion
-# asks for visibly personal rankings "after a sitting" — so the tick's job is to answer once the
-# sitting is over, not to repaint the partition while it is still going on. Measured at 14k
-# titles, the old trigger (any label newer than the fit) rewrote all 14,000 rows on every 60 s
-# tick for as long as someone kept rating: 5-8 MB of WAL a minute for a table nobody was reading
-# between taps. `PAUSE_SECONDS` is what "after" means here, and `HARD_CAP_SECONDS` is the promise
-# to the person who never stops: at worst one rewrite every five minutes, so <= 12 per rater-hour
-# rather than 60, and still inside the sitting.
-#
-# Frequency is the only lever there is. The write SHAPE was measured and is already the best of
-# the three: `ON CONFLICT DO UPDATE` produced 14,000 non-HOT updates, 11.2 MB of WAL and 459 ms
-# against DELETE+INSERT's 7.7 MB and 264 ms (`0009_scoring.sql:40` indexes `score`, so HOT is
-# impossible), and an epsilon filter is moot because 13,965 of 14,000 scores move after one more
-# verdict. [M4.13, perf-04; plan step 22]
+# Seconds. The tick rewrites the whole user_score partition, so it waits for a pause in the sitting,
+# but at most HARD_CAP_SECONDS.
 PAUSE_SECONDS = 30
 HARD_CAP_SECONDS = 300
 
-# How far `refit_user` backdates its own clock: the window in which a write that began before the
-# fit read its inputs can commit after it (see the clock's comment there). `_is_stale` adds it back
-# when it asks whether a PLACEMENT began after the fit, which is a question about the read itself.
+# Seconds `refit_user` backdates its clock: a write that began before the fit's read may commit
+# after it.
 CLOCK_MARGIN_SECONDS = 2
 
-# §4.2: verdict value 0 disliked / 1 ok / 2 liked. The regression target is the raw verdict, not
-# the Ledger's fitted `s`: anchoring on `s` would make the nightly pass order-dependent and, at
-# first fit, circular. Revisit at M3 against §13's held-out stream rather than by assertion.
+# §4.2: verdict 0 disliked / 1 ok / 2 liked. The target is the raw verdict, not the Ledger's `s`,
+# which would make the nightly pass order-dependent.
 VERDICT_TO_Y: dict[int, float] = {0: -1.0, 1: 0.0, 2: 1.0}
 
 
 @dataclass(frozen=True, eq=False)
 class Fit:
-    """One (user, kind) fold-in. Everything `score()` needs, and everything §6.7 would narrate."""
+    """One (user, kind) fold-in."""
 
     v: np.ndarray            # (64,) float64, already divided by cf_sd
     mu: float
@@ -167,9 +72,7 @@ class Fit:
     cf_sd: float             # the PRE-normalisation sd of ⟨v, e⟩; 0 means "no signal"
     prior_mean: float
     prior_sd: float
-    # Every live verdict this person has given for this kind — the number §6.0's copy and §5.3's
-    # staleness check both mean by "label count". `used` is how many of them the fit could see.
-    label_count: int
+    label_count: int         # every live verdict for this kind; `used` is how many the fit saw
     used: int = 0
     dropped: int = 0         # labels on titles with no coordinate, counted rather than ignored
     beta_clamped: bool = False
@@ -192,14 +95,7 @@ class FoldInReport:
     clamped: list[tuple[int, str]] = field(default_factory=list)
     priors: serve.PriorReport | None = None
     ms: float = 0.0
-    # One number was hiding two costs that differ by three orders of magnitude, and the job
-    # registry inherited the confusion: the fit is a closed-form 64-d ridge solve, 6-7 ms for 100
-    # labels, while `serve.replace_scores` rewrites the whole (user, kind) partition — 14,000
-    # DELETEs and 14,000 INSERTs, 325-590 ms and 5-8 MB of WAL per stale pair measured at corpus
-    # scale, 0.7-1.5 s for two raters in one tick. A tick reporting one `ms` cannot be read
-    # against a budget, and `worker.JOBS` called the whole job "ms" because of it. Split here and
-    # named there. [M4.13, perf-04-foldin-tick-rewrites-the-whole-user-score-partition-every-minute;
-    # plan step 22]
+    # Split because the ridge solve is milliseconds and the partition rewrite is hundreds of them.
     numpy_ms: float = 0.0
     db_ms: float = 0.0
 
@@ -220,11 +116,7 @@ class FoldInReport:
 
 
 def fold_in(x: np.ndarray, y: np.ndarray, lam: float) -> np.ndarray:
-    """Ridge normal equations: (XᵀX + λI)⁻¹ Xᵀy. §10 calls the fold-in "closed-form, ms".
-
-    float64 throughout. A float32 solve at λ = 1 with correlated columns loses digits, and two
-    people reading the same refit report must see the same number.
-    """
+    """Ridge normal equations: (XᵀX + λI)⁻¹ Xᵀy, in float64 so a refit report reproduces."""
     xd = np.asarray(x, dtype=np.float64)
     gram = xd.T @ xd + float(lam) * np.eye(EMBED_DIM)
     return np.linalg.solve(gram, xd.T @ np.asarray(y, dtype=np.float64))
@@ -247,8 +139,7 @@ def _ranks(a: np.ndarray) -> np.ndarray:
 
 
 def spearman(a: np.ndarray, b: np.ndarray) -> float:
-    """§13's yardstick is "per-user held-out Spearman", so the selection criterion is the same
-    statistic the milestone is judged by. A constant vector correlates with nothing: 0.0."""
+    """A constant vector correlates with nothing: 0.0."""
     ra, rb = _ranks(a), _ranks(b)
     if ra.size < 2 or ra.std() < 1e-12 or rb.std() < 1e-12:
         return 0.0
@@ -282,28 +173,17 @@ def fit_user(
 ) -> Fit:
     """§5.1's fold-in and blend weight for one (user, kind).
 
-    `reference` is the population both halves are standardised over — the titles that are ever
-    ranked for this kind. Standardising over a FIXED population rather than over the current
-    candidate set is what keeps the number on the title card independent of the filter the user
-    happens to have typed.
+    Both halves are standardised over `reference`, a fixed population, so a score does not
+    depend on the filter the user has typed.
     """
     ref_e, ref_b = _reference_arrays(reference)
     prior_mean = float(ref_b.mean()) if ref_b.size else 0.0
-    # The same guard the mean one line up already carries, and it is not symmetry for its own
-    # sake: `np.std` over an empty array is NaN, and the `< 1e-9` test below does NOT catch that
-    # — NaN < 1e-9 is False — so the NaN was stored in `user_vector.prior_sd` and divided into
-    # every score of the kind. A kind with no coordinated titles is an ordinary state here, not a
-    # corrupt one (a fresh household, a bundle-less one, §3.1's empty artifact store), and it
-    # announced itself as three numpy "Degrees of freedom <= 0" warnings per user per tick in the
-    # worker log. An empty population standardises nothing: the scale is 1 and the crowd half is
-    # the raw prior. [M4.13, dd16-empty-reference-writes-nan-prior-sd; plan step 19]
+    # np.std of an empty array is NaN, which the `< 1e-9` test below does not catch.
     prior_sd = float(ref_b.std()) if ref_b.size else 1.0
     if prior_sd < 1e-9:                      # one title, or a flat crowd: the prior orders nothing
         prior_sd = 1.0
 
-    # Sorted by title_id, so the fit is a function of the label SET and not of the order the
-    # rows happened to arrive in: the cross-validation folds are assigned by position, and an
-    # order-dependent held-out ρ would make a refit report irreproducible for no reason.
+    # Sorted so the positional CV folds depend on the label set, not on row order.
     ordered = sorted(labels, key=lambda pair: int(pair[0]))
     labelled = [(coords[t], VERDICT_TO_Y[int(v)]) for t, v in ordered if t in coords]
     rows = [
@@ -327,8 +207,6 @@ def fit_user(
 
     lam, beta, cv_rho, folds = LAMBDA_GRID[-1], 0.0, 0.0, 0
     if n >= MIN_LABELS_FOR_CV:
-        # `ref_e` travels into the search because the search has to standardise the way serving
-        # does; see `_cross_validate`. [M4.13, plan step 18]
         lam, beta, cv_rho, folds = _cross_validate(x, y, y_raw, z_prior, ref_e, seed=seed)
 
     beta_clamped = beta > BETA_MAX
@@ -337,9 +215,7 @@ def fit_user(
     v = fold_in(x, y, lam)
     cf_sd = float((ref_e @ v).std()) if ref_e.size else 0.0
     if cf_sd < 1e-9:
-        # ⟨v, e⟩ is constant over everything that can be ranked, so the personal half orders
-        # nothing. Saying so with β = 0 is honest; dividing by it would be a zero-divide dressed
-        # up as personalisation.
+        # The personal half orders nothing over the reference; say so with β = 0.
         return Fit(
             v=np.zeros(EMBED_DIM), mu=mu, beta=0.0, lam=lam, cv_rho=cv_rho, cf_sd=0.0,
             prior_mean=prior_mean, prior_sd=prior_sd, label_count=len(labels), used=n,
@@ -359,23 +235,8 @@ def _cross_validate(
 ) -> tuple[float, float, float, int]:
     """Choose (λ, β) by held-out Spearman against the user's own labels.
 
-    β = 0 does not depend on λ — the prior-only blend never touches the fold-in — so all five
-    λ rows must agree there. They are asserted to, because disagreement is a fold bug and a
-    fold bug otherwise shows up as a slightly-too-good β.
-
-    STANDARDISED OVER THE REFERENCE, FOLD BY FOLD, BECAUSE SERVING IS. `fit_user` divides the
-    full-data `v` by the sd of ⟨v, e⟩ over the whole reference population (`cf_sd`), so the β
-    chosen here is the β in effect only if this search's personal half sits on that same scale.
-    It did not: the held-out predictions were standardised over the LABELLED rows, and a labelled
-    row's norm runs with its crowd support (0.006 to 5.4 on the real basis), so the served
-    personal half had a spread of 0.04x to 5.18x what this table assumed. Two things were wrong
-    with that and the smaller one is the loud one: the β printed on §6.0's why-line and §6.7's
-    rail was not the weight doing the blending. The larger one is that a grid scored on the wrong
-    scale selects a different point on itself — measured on `test_foldin_jobs.py`'s own case, the
-    labelled-row spelling picks β 0.5 where the serving scale picks 0.4, which is outside §0's
-    0.008 tie band. So each fold's own `v_f` takes the serve-time divisor and nothing is
-    re-standardised afterwards. [M4.13, dd14-per-user-cv-beta-loses-to-crowd-at-small-n and
-    ml03-foldin-beta-chosen-on-one-scale-served-on-another; plan step 18]
+    Each fold's personal half is divided by its sd over the reference, as serving does, so the
+    β chosen is the β served.
     """
     n = x.shape[0]
     fold = _fold_assignment(n, seed)
@@ -390,9 +251,7 @@ def _cross_validate(
             if held.all():
                 continue
             v_f = fold_in(x[~held], y[~held], lam)
-            # `fit_user`'s own expression for `cf_sd`, including its answer when the reference
-            # orders nothing: a fold that cannot be put on the serving scale contributes zeros
-            # rather than a NaN, which also keeps β = 0's row identical across λ below.
+            # Zeros rather than NaN when the reference orders nothing, as in `fit_user`.
             sd_f = float((ref_e @ v_f).std()) if ref_e.size else 0.0
             if sd_f >= 1e-9:
                 z_cf[held] = x[held] @ v_f / sd_f
@@ -406,11 +265,9 @@ def _cross_validate(
     best = table[best_key]
 
     if best - rho0 <= NOISE_FLOOR:
-        # Inside the measured pipeline variance. A tie is a tie.
         return LAMBDA_GRID[-1], 0.0, rho0, n_folds
 
-    # Among everything within the noise floor of the best, prefer the smallest β (the prior),
-    # then the smallest λ at that β. "Within noise of best" is not "best".
+    # Within noise of the best, prefer the smallest β, then the smallest λ at that β.
     within = [k for k, rho in table.items() if best - rho <= NOISE_FLOOR]
     beta = min(k[1] for k in within)
     lam = min(k[0] for k in within if k[1] == beta)
@@ -425,7 +282,7 @@ def score(fit: Fit, c: Coordinate) -> tuple[float, float]:
 
 
 def score_many(fit: Fit, coords: Sequence[Coordinate]) -> list[tuple[int, float, float]]:
-    """(title_id, score, cf) for a whole reference population — one matvec, ~50 µs at 839 rows."""
+    """(title_id, score, cf) for a whole reference population in one matvec."""
     if not coords:
         return []
     e = directions(coords)
@@ -439,13 +296,7 @@ def score_many(fit: Fit, coords: Sequence[Coordinate]) -> list[tuple[int, float,
 
 
 async def live_labels(conn, *, user_id: int, kind: Kind) -> list[tuple[int, int]]:
-    """The user's live verdicts on titles of this kind.
-
-    `superseded_by IS NULL` because §4.2 makes a re-rating supersede rather than mutate, and
-    `NOT is_reask` because §13's re-ask stream is a silent instrument measuring flip rate — it
-    is not a second opinion to be averaged in. DISTINCT ON keeps one row per title even if two
-    live rows ever coexist, so the fit is a function of the data and not of the row order.
-    """
+    """The user's live verdicts on titles of this kind."""
     rows = await conn.fetch(
         """
         WITH label AS ({LIVE_LABEL})
@@ -461,13 +312,10 @@ async def live_labels(conn, *, user_id: int, kind: Kind) -> list[tuple[int, int]
 async def write_fit(
     conn, *, user_id: int, kind: Kind, bundle_version: str, fit: Fit, updated_at: datetime
 ) -> None:
-    """One `user_vector` row per (user, kind). Written even for a zero-label fit.
+    """One `user_vector` row per (user, kind), written even for a zero-label fit.
 
-    `updated_at` is the caller's, not `now()`, and the parameter is required because there is
-    exactly one honest value for it: the moment the labels this fit saw were read. Stamped with
-    `now()` here, the column meant "when the write landed", and `_is_stale` reads it as "the
-    labels this fit saw" — two different instants with the whole fit in between. See `refit_user`.
-    [M4.13, dd16-rerating-in-refit-window-never-becomes-stale; plan step 21]
+    `updated_at` must be the instant the labels were read, not `now()`: `_is_stale` compares it
+    against label times.
     """
     await conn.execute(
         """
@@ -493,48 +341,17 @@ async def refit_user(
     conn, backbone: Backbone, *, user_id: int, kind: Kind, bundle_version: str,
     report: FoldInReport | None = None,
 ) -> Fit:
-    """Refit one (user, kind) and rewrite its `user_score` rows. §5.3, §10's rebuild set.
-
-    `report`, when given, collects the two halves of what this pass costs — see `FoldInReport`.
-    Optional because only `run` reports a tick; a caller that just wants the fit is not made to
-    carry a timing object to get one.
-    """
+    """Refit one (user, kind) and rewrite its `user_score` rows. §5.3, §10's rebuild set."""
     entered = time.perf_counter()
-    # THE FIT'S CLOCK, READ BEFORE THE COORDINATES as well as the labels, since `_is_stale` also
-    # reads it as "the placements this fit saw" (a title placed after it is not in the partition).
-    # A placement whose transaction began after this instant is one the coordinate read below
-    # cannot have seen; one that began before it and committed after the read is the only kind
-    # missed, and the read follows at once.
+    # Read before the coordinates and the labels, so nothing this fit saw is newer than its stamp.
+    # clock_timestamp(), not now(): on §10's rebuild path this runs inside a long transaction.
     fitted_at = await conn.fetchval(
         "SELECT clock_timestamp() - ($1::int * interval '1 second')", CLOCK_MARGIN_SECONDS
     )
     coords = await serve.coordinates(conn, backbone, bundle_version=bundle_version, kind=kind)
     reference = list(coords.values())
-    # THE FIT'S CLOCK, READ BEFORE THE LABELS. `user_vector.updated_at` is read by `_is_stale` as
-    # "the labels this fit saw", so it has to be an instant no label this fit saw can be newer
-    # than. Stamped at write time instead, a re-rating that committed after the read and before
-    # the write was invisible for ever: §4.2 makes changing your mind an INSERT and `LIVE_LABEL_SQL`
-    # takes the newest row per title, so the label COUNT does not move — and the new verdict's
-    # `created_at` sat before the fit's `updated_at`, which is exactly the comparison that decides
-    # staleness. Every later tick then reported that person fresh, indefinitely.
-    #
-    # `clock_timestamp()`, not `now()`: `now()` is the transaction's start, and this function runs
-    # inside the importer's transaction on §10's rebuild path, where that is minutes early. The
-    # two seconds cover a verdict whose transaction began before this read and committed after it
-    # — a window `read committed` makes real and cheap to over-cover, since a false positive costs
-    # one bounded refit on the next tick and a false negative costs the fit for ever. Deliberately
-    # not a serializable transaction around the whole refit: §5.3's "seconds" pass must not take a
-    # conflict-abort risk on the tap path's writes. [M4.13, dd16; plan step 21]
     labels = await live_labels(conn, user_id=user_id, kind=kind)
-    # Seeded from the identity of the fit, so a refit of the same (user, kind, basis) draws the
-    # same folds and the §6.7 log line means the same thing twice.
-    #
-    # NOT `hash()`. `str.__hash__` is salted per interpreter — PYTHONHASHSEED is random by
-    # default — so the seed changed on every worker restart, and with it the 5-fold shuffle, the
-    # selected ridge λ and the written vector. Two consecutive nightly runs with no new ratings
-    # reordered Home overnight, and the `cv_rho` in the refit report was not reproducible. A
-    # digest is stable across processes and across machines, which is what "the same fit draws
-    # the same folds" has to mean.
+    # Not `hash()`: str hashing is salted per process, which reshuffled the folds on every restart.
     seed = int.from_bytes(
         hashlib.sha256(f"{user_id}|{kind}|{bundle_version}".encode()).digest()[:4], "big"
     )
@@ -556,13 +373,7 @@ async def refit_user(
             user_id, kind, fit.dropped,
         )
 
-    # ONE TRANSACTION, because the two writes are one fact. `write_fit` alone said "this person is
-    # fitted, as of `fitted_at`" and `replace_scores` alone is what every §6.0 shelf reads: when
-    # the second failed and the first had committed, `user_vector.updated_at` was newer than every
-    # label, so `_is_stale` reported fresh and the ranked sections returned EMPTY until the nightly
-    # pass — up to 24 hours, with no error anywhere. Reproduced with `label_count = 3` against zero
-    # `user_score` rows. `replace_scores` keeps its own `conn.transaction()`, which asyncpg nests as
-    # a savepoint inside this one. [M4.13, ml08-foldin-partial-write-masks-staleness; plan step 20]
+    # One transaction: a committed fit with no scores reads as fresh and serves empty shelves.
     async with conn.transaction():
         await write_fit(
             conn, user_id=user_id, kind=kind, bundle_version=bundle_version, fit=fit,
@@ -572,9 +383,6 @@ async def refit_user(
             conn, user_id=user_id, kind=kind, bundle_version=bundle_version, rows=rows,
         )
     if report is not None:
-        # Everything in this function that is not the two numpy calls above is Postgres: the
-        # coordinate read, the clock, the labels, the fit's own row and the partition rewrite.
-        # The two log calls between them are microseconds.
         report.numpy_ms += numpy_ms
         report.db_ms += (time.perf_counter() - entered) * 1000.0 - numpy_ms
     return fit
@@ -588,34 +396,18 @@ async def run(
     only_stale: bool = True,
     with_priors: bool = False,
 ) -> FoldInReport:
-    """§5.3's nightly pass, and the cheap tick that keeps M2's exit criterion honest.
+    """§5.3's nightly pass (`only_stale=False, with_priors=True`) and the cheap tick.
 
-    §5.3 says the fold-in is nightly. M2's exit criterion is about what a person sees after a
-    sitting of 50–100 verdicts, and a strictly nightly job cannot answer the same evening — so
-    the nightly pass runs everything (`only_stale=False`, `with_priors=True`) and a short tick
-    runs `only_stale=True`, refitting only what moved *and has settled* — see `_is_stale`, which
-    holds the rewrite back until the person has paused, because "after a sitting" is what §12 M2
-    asks for and a repaint per minute during one is work nobody reads. Running a millisecond job
-    more often is a superset of the spec's cadence, not a change to it.
-
-    Ordering inside the nightly pass matters: priors first, refits second. A prior materialised
-    before the night's placements would leave freshly placed titles at `e_source = 'none'` and
-    therefore out of every ranked list for a day.
+    The tick answers "after a sitting" (§12 M2) the same evening. Priors come before refits, or
+    freshly placed titles miss every ranked list for a day.
     """
     started = time.perf_counter()
     report = FoldInReport()
     if with_priors:
         report.priors = await serve.materialise_priors(conn, backbone, bundle_version=bundle_version)
     else:
-        # The tick owes the crowd half in two cases, both cheap to ask. A household fitted under
-        # another reading of the coordinate (0031) is an install that has just been upgraded, and
-        # the release that changed the reading changed b(t) with it (C1.1, C1.2), so the whole
-        # table is rewritten once, before the refits below read it. And a title placed since its
-        # prior was written - §8 stage 9 for an acquisition, the sweep for a rated title
-        # (decision 470) - is written alone: stage 10 calls it ready to appear "in ranking", and
-        # every ranked read joins `title_prior`, so a title with no row there is not shown at all
-        # until the nightly pass. The 14 titles the first household acquired were exactly that.
-        # [owner instruction of 2026-09-25 after the first household user test]
+        # The tick rewrites all priors after a geometry change, and otherwise only the priors of
+        # newly placed titles, which no ranked read shows until they have a `title_prior` row.
         if await _fitted_under_another_geometry(conn):
             report.priors = await serve.materialise_priors(
                 conn, backbone, bundle_version=bundle_version
@@ -627,11 +419,6 @@ async def run(
                     conn, backbone, bundle_version=bundle_version, title_ids=owed
                 )
 
-    # §5.3's other nightly pass fits the same people, through the same helper. This query read
-    # `role IN ('admin', 'member')` while `refit.refit_all` read `is_active`, so a deactivated
-    # account was skipped by the Ledger and re-folded and re-scored here on every 60 s tick —
-    # paying the whole partition rewrite for nobody, and producing `user_score` rows for a person
-    # who cannot sign in. [M4.13, ml04-foldin-and-ledger-disagree-about-the-household; step 23]
     for user_id in await household_ids(conn):
         for kind in KINDS:
             if only_stale and not await _is_stale(
@@ -654,8 +441,7 @@ async def run(
 async def _fitted_under_another_geometry(conn) -> bool:
     """Whether any household member's stored fold-in predates this reading of the coordinate.
 
-    Scoped to the household `run` refits, because a deactivated account's row is never refitted
-    and would otherwise re-trigger the whole-table prior rewrite on every tick for ever.
+    Household only: a deactivated account is never refitted and would re-trigger every tick.
     """
     return bool(
         await conn.fetchval(
@@ -667,37 +453,10 @@ async def _fitted_under_another_geometry(conn) -> bool:
 
 
 async def _is_stale(conn, *, user_id: int, kind: Kind, bundle_version: str) -> bool:
-    """Never fitted, fitted against another basis (§10), or a label moved since the last fit.
+    """Never fitted, another basis or geometry, a newer placement, or a label moved since the fit.
 
-    A label COUNT alone is not the trigger, and that was a real gap: re-rating is the second
-    half of a rating sitting — §4.2 exists so that changing your mind about a title is an
-    INSERT — and it leaves the count exactly where it was. A person who reversed every verdict
-    they had ever given would have been skipped by every tick, indefinitely, because the number
-    of titles they had labelled had not changed.
-
-    So the trigger is the count OR a label newer than the fit. Both clocks here are Postgres's
-    (`user_vector.updated_at` and `verdict.created_at` are both `now()`), so this is not the
-    cross-clock comparison §7.3's sweep got wrong.
-
-    A *placement* newer than the fit is a trigger too, and a fit stamped with another coordinate
-    geometry is one: see the comment over those two checks below for why neither is debounced.
-
-    AND THE TRIGGER IS DEBOUNCED, because §12's sentence is "after a sitting". Something having
-    moved is necessary and no longer sufficient: the person must have put the phone down for
-    `PAUSE_SECONDS`, or the fit must have gone `HARD_CAP_SECONDS` without being redone. Without
-    that, every tick inside a sitting rewrote all 14,000 rows of the partition — see the
-    constants for the measurement. Two things the debounce deliberately does not delay: a fit in
-    another basis and a person never fitted at all, both of which return above, because §10's
-    invariant and §6.0's zero-verdict fallback are correctness and this is only cost.
-
-    Every clock here is Postgres's own — `now()` inside these two queries, `verdict.created_at`
-    from `now()`, `user_vector.updated_at` from `refit_user`'s `clock_timestamp()` read — so this
-    is not the cross-clock comparison §7.3's sweep got wrong. `now()` is the transaction's start,
-    which is the statement's own clock for the tick (it holds no transaction) and would be stale
-    for a caller that wrapped this in one — in that direction only, i.e. declining a refit rather
-    than repeating one, which is the safe way for a cost guard to be wrong. The FIT's clock is
-    `clock_timestamp()` for the opposite reason: being early there loses work.
-    [M4.13, perf-04; plan step 22]
+    "Moved" is the count OR a label newer than the fit, since a re-rating leaves the count alone.
+    Label moves are debounced by PAUSE_SECONDS / HARD_CAP_SECONDS; the other triggers are not.
     """
     row = await conn.fetchrow(
         "SELECT label_count, bundle_version, geometry, updated_at, "
@@ -707,14 +466,6 @@ async def _is_stale(conn, *, user_id: int, kind: Kind, bundle_version: str) -> b
     )
     if row is None or row["bundle_version"] != bundle_version:
         return True
-    # Two more states the debounce may not gate, for §10's reason: a fit in another reading of the
-    # coordinate (0031, decision 469) is a vector in another space, and a title placed after the
-    # fit is a title the partition does not rank at all. The second used to be left to the
-    # nightly pass on purpose ("a title that gained a coordinate today moves nobody's labels"),
-    # which held while placements were nightly too. They are not any more - §8 stage 9 places an
-    # acquisition when it arrives and stage 10 promises it "in ranking" - so waiting for the night
-    # hid every new title for up to a day. A placement is rare, so the cost is one partition
-    # rewrite per member per acquisition batch. [owner instruction of 2026-09-25]
     if row["geometry"] != COORDINATE_GEOMETRY:
         return True
     placed_since = await conn.fetchval(
@@ -740,7 +491,5 @@ async def _is_stale(conn, *, user_id: int, kind: Kind, bundle_version: str) -> b
     )
     if not moved:
         return False
-    # `newest is None` is the count arm with every label gone (decision 174's Undo hard-DELETEs):
-    # there is nothing to wait for, so the board is rewritten at once. `paused` is NULL in exactly
-    # that case, which is why it is not asked to carry it.
+    # `newest is None`: every label was undone, so there is nothing to wait for (`paused` is NULL).
     return newest is None or bool(live["paused"]) or bool(row["past_cap"])

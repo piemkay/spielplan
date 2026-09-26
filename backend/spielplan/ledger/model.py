@@ -1,52 +1,7 @@
-"""The Personal Ledger's maths. Spec v2.1 §5.2, §5.3, §6.3.
+"""The Personal Ledger's maths (§5.2): s_i = mu + <v, e_i> + r_i, four arms on one latent. numpy only.
 
-numpy only — no database, no clock, no torch. §5.3 puts budgets on this code ("Ledger
-incremental update <50 ms", "full MAP refit … seconds"), and a budget you can only measure
-through a database is a budget you are measuring something else with.
-
-PARAMETERISATION (per user, per kind)
-
-    s_i = mu + <v, e_i> + r_i          i indexes the user's *observed* titles of that kind
-
-`mu` is the user's location, `v` is §5.2's "generalisation via the 64-d user vector", and `r`
-is "per-title residuals b_i^u capture direct effects". An *un*observed title has no r, so its
-coordinate is s = mu + <v, e> — which is how §12's M2 exit criterion ("every owned title has a
-coordinate") is met at zero extra parameters.
-
-    theta = (mu, v[64], gamma[2], cuts[K-1], psi)      dense
-    r[n]                                               diagonal
-
-`gamma` are the verdict arm's two cutpoints and `cuts` the tier arm's K-1 — free per user,
-which §5.2 requires, and which is why §4.3 does not ship them.
-
-THE FOUR ARMS, ONE LIKELIHOOD
-
-    verdicts   ordered logit over 3 levels with cutpoints `gamma`
-    tier edits ordered logit over K levels with cutpoints `cuts`, on the SAME latent — which is
-               what makes "drag-and-drop is data, not override" true rather than asserted
-    rewatch    no new term: a re-rating is another ordinal row, superseded and live both in
-    duels      Davidson Bradley-Terry with a fitted tie parameter nu = exp(psi), margin-weighted
-
-F is jointly convex: the ordered-logit NLL is convex in (s, cutpoints) because the logistic
-density is log-concave (Pratt 1981, Burridge 1981); each Davidson term is a log-sum-exp minus a
-linear term; s and d are linear in the parameters; every prior is strictly convex. So the
-minimiser is unique and **any divergence is a step-size failure, never a landscape failure** —
-which is exactly what §5.2's scar is about.
-
-THE SOLVE — §5.2's Appendix C fusion
-
-  Stage A, the ridge anchor: minimise the ordinal arms plus the priors by damped Newton. Its
-  Hessian is an *arrowhead* — r_i appears only in observations of title i, so H_rr is diagonal —
-  and the Schur complement solves it in O(n·p^2 + p^3) with p ≈ 74. Exactly, in single-digit
-  iterations.
-
-  Stage B, the BT perturbation, **preconditioned with the ridge Hessian**. §5.2: "fixed-step GD
-  measurably diverges on episodes containing one popular title — this is a scar, keep the
-  preconditioner". The reason is curvature spread: a title with 200 duels has a duel-arm
-  curvature two orders of magnitude above one with two, and a single step size cannot serve
-  both — it either crawls for the sparse titles or overshoots the dense one and oscillates.
-  Preconditioning by the anchor Hessian divides each coordinate by its own curvature, so one
-  step size is right everywhere. The anchor's arrowhead factors are reused, not rebuilt.
+F is jointly convex, so any divergence is a step-size failure. Stage A solves the ordinal arms by
+arrowhead Newton; stage B adds the duels, preconditioned by stage A's Hessian (§5.2's scar).
 """
 
 from __future__ import annotations
@@ -59,20 +14,11 @@ from spielplan.ledger.hyperparams import Hyperparams
 
 EMBED_DIM = 64
 
-# §6.3's measured tier shape, used as the *prior mean* for the K = 7 default tier set rather
-# than merely as a starting point — so a level nobody has used sits where the crowd puts it.
+# §6.3's measured tier shape: the prior mean for the K = 7 default tier set.
 MEASURED_TIER_SHARES: tuple[float, ...] = (0.03, 0.07, 0.15, 0.25, 0.25, 0.17, 0.08)
 
-# DECISION 508: THE TIER SHAPE IS REALISED ON THE VERDICT ARM'S SCALE. The measured shape puts 25%
-# of a board below C/B and 50% below B/A, and those two points are where the verdict arm's two
-# cutpoints sit: disliked is F/D/C, fine is B, liked is A/A+/S. M3-open-points §2.8 recorded that
-# `initial_cutpoints` realised the shape on a standard logistic scale nobody's `s` spreads on, and
-# the second household test showed what that costs: the B/A cut at 0 split "fine" in two, every
-# disliked film Jenny rated sat in B, La La Land (disliked) sat in A, and C, D and F stayed empty
-# (round-2 findings R1 and R3). Both members' own splits sit on these two masses (27/29/44 and
-# 20/26/54), so the verdict prior moves from equal thirds to them as well, and the two arms then
-# say the same thing about one latent. [owner instruction of 2026-09-26 after the second household
-# user test]
+# Decision 508: the verdict arm's two cutpoints sit at the shape's C/B and B/A masses, so the tier
+# and verdict arms describe one latent (disliked F/D/C, fine B, liked A/A+/S).
 VERDICT_ANCHOR_SHARES: tuple[float, float] = (0.25, 0.50)
 
 # Outcome codes for the duel arm.
@@ -94,12 +40,7 @@ def _log_sigmoid(x: np.ndarray) -> np.ndarray:
 
 @dataclass
 class ObservationSet:
-    """Everything the fit sees for one (user, kind).
-
-    `embeddings` is the Backbone row (warm) or the Cold Tower placement (cold) per observed
-    title; `embedded` is False where neither exists, which §3.1 makes a legal state — those
-    titles still get an r_i, they just do not inform v.
-    """
+    """Everything the fit sees for one (user, kind). An unembedded title still gets an r_i."""
 
     title_ids: np.ndarray                       # int64[n], ascending
     embeddings: np.ndarray                      # float64[n, 64]
@@ -113,8 +54,7 @@ class ObservationSet:
     duel_a: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=np.int64))
     duel_b: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=np.int64))
     duel_outcome: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=np.int64))
-    # The RAW margin (§6.1: ~1.6 decisive, ~1.0 hesitant), not a weight. Normalising it is
-    # §4.3's `margin_form`, so it happens where that constant is read.
+    # The RAW margin, not a weight; `_duel_weights` applies §4.3's `margin_form`.
     duel_margin: np.ndarray = field(default_factory=lambda: np.zeros(0))
     n_levels: int = 7                           # K, the size of the user's tier set
 
@@ -156,19 +96,9 @@ class Fit:
 
 
 def feasible(gamma: np.ndarray, cuts: np.ndarray) -> bool:
-    """§4.2: `ledger_cutpoints.boundaries` is "ordered ascending", and §5.2 makes the tier arm's
-    cutpoints the displayed boundaries. Outside the ordered cone there is no likelihood to
-    minimise, so the cone is where the search stays.
+    """Whether both cutpoint sets are ascending. The cone is CLOSED: an unused level has zero width.
 
-    The cone is CLOSED: two cutpoints may coincide. That is not a degenerate case to be fenced
-    off, it is the ordered logit's honest answer when a level carries no observations — the
-    interval for that level has zero width because nobody has ever put anything in it. Forcing a
-    strict gap instead makes the search stall against a boundary the optimum sits on, which on a
-    board dragged entirely to F and S left every title in the middle tier.
-
-    A level that IS observed still needs positive probability, and `_ordinal_terms` charges
-    +inf when it does not — so an impossible observation is refused where it happens, rather
-    than by a blanket constraint that also forbids the possible.
+    An observed level with zero probability is refused by `_ordinal_terms` (+inf), not here.
     """
     return bool(
         (gamma.size < 2 or np.all(np.diff(gamma) >= 0))
@@ -177,18 +107,7 @@ def feasible(gamma: np.ndarray, cuts: np.ndarray) -> bool:
 
 
 def _max_feasible_step(gamma, cuts, d_gamma, d_cuts, lay) -> float:
-    """The largest step along -d that keeps every cutpoint gap positive.
-
-    Rejecting infeasible trial points is not enough on its own: near the boundary the Newton
-    direction points out of the cone, every trial is rejected, the step halves to nothing and
-    the fit stalls at a feasible but badly suboptimal point — which is how a board dragged
-    entirely to F and S came back with all forty titles in the middle tier even after the
-    crossing itself was fixed.
-
-    So the step is clipped to the boundary first (the standard interior-point ratio test) and
-    Armijo searches inside that. The iterates then slide along the constraint instead of
-    walking into it.
-    """
+    """The largest step along -d that keeps every cutpoint gap positive (interior-point ratio test)."""
     _ = lay
     limit = np.inf
     for values, direction in ((gamma, d_gamma), (cuts, d_cuts)):
@@ -203,14 +122,7 @@ def _max_feasible_step(gamma, cuts, d_gamma, d_cuts, lay) -> float:
 
 
 def _duel_weights(obs: ObservationSet, hp: Hyperparams) -> np.ndarray:
-    """§4.3 ships "margin-weighting flag + functional form (weights normalised as
-    margin/mean(margin))", so the form is applied here rather than baked into whatever wrote
-    the row.
-
-    The mean-normalisation is load-bearing: it keeps a user's total duel evidence invariant to
-    how often they tap the decisive toggle, so λ_bt means the same thing for someone who always
-    taps it and someone who never does.
-    """
+    """§4.3's margin/mean(margin): total duel evidence is invariant to how often "decisive" is tapped."""
     raw = obs.duel_margin
     if raw.size == 0:
         return raw
@@ -227,10 +139,7 @@ def _duel_weights(obs: ObservationSet, hp: Hyperparams) -> np.ndarray:
 def _ordinal_terms(s: np.ndarray, level: np.ndarray, cuts: np.ndarray):
     """Per-observation value and (a, b) derivatives of −log P(level | s, cuts).
 
-    With sentinels c_{-1} = −inf and c_{L-1} = +inf, P(y) = σ(c_y − s) − σ(c_{y−1} − s), so the
-    NLL depends on the parameters only through a = c_y − s and b = c_{y−1} − s, both linear.
-    Working in (a, b) keeps the boundary levels from needing their own code path: the missing
-    cutpoint simply contributes a zero derivative.
+    P(y) = σ(a) − σ(b) with a = c_y − s, b = c_{y−1} − s; a missing edge cutpoint contributes zero.
     """
     levels = cuts.size + 1
     upper = level < levels - 1
@@ -243,16 +152,8 @@ def _ordinal_terms(s: np.ndarray, level: np.ndarray, cuts: np.ndarray):
     phi_a = np.where(upper, sa * (1.0 - sa), 0.0)
     phi_b = np.where(lower, sb * (1.0 - sb), 0.0)
 
-    # log P, in the stable form for each of the three shapes.
-    #
-    # A crossed pair of cutpoints has no probability: P(level) = sigma(a) - sigma(b) is <= 0
-    # for a <= b, so the NLL is +inf and the point is outside the ordered cone. Clamping the
-    # gap instead — which is what this used to do — replaces an infinite barrier with about
-    # 27.6 per observation, and the minimiser then walks straight out of the cone: cutpoints
-    # come back crossed, `sigma` goes NaN, and the tier a title displays in stops matching the
-    # tier the person dragged it to. So it is a branch, not a clamp. Note that
-    # log(-expm1(-gap)) is NaN rather than +inf at gap <= 0, which is why this cannot be left
-    # to the arithmetic.
+    # A crossed pair (gap <= 0) must be +inf, a branch and not a clamp: a finite penalty lets the
+    # minimiser leave the cone, and log(-expm1(-gap)) is NaN there, not +inf.
     with np.errstate(over="ignore", invalid="ignore", divide="ignore"):
         interior = upper & lower
         log_p = np.empty_like(s, dtype=float)
@@ -280,10 +181,7 @@ def _ordinal_terms(s: np.ndarray, level: np.ndarray, cuts: np.ndarray):
     dphi_b = phi_b * (1.0 - 2.0 * sb)
     f_aa = -dphi_a / p + (phi_a / p) ** 2
     f_bb = dphi_b / p + (phi_b / p) ** 2
-    # Divide first, then multiply — the same shape as f_aa and f_bb above. Written as
-    # `-(phi_a * phi_b) / p**2` this is the only expression in the module that squares a
-    # probability which can legitimately be tiny, and it overflows to NaN where its neighbours
-    # do not, poisoning the whole arrowhead diagonal from one row.
+    # Divide first: `-(phi_a * phi_b) / p**2` overflows to NaN for a tiny p.
     f_ab = -(phi_a / p) * (phi_b / p)
     return -log_p, f_a, f_b, f_aa, f_ab, f_bb
 
@@ -292,12 +190,7 @@ def _ordinal_terms(s: np.ndarray, level: np.ndarray, cuts: np.ndarray):
 
 
 def _duel_terms(d: np.ndarray, outcome: np.ndarray, log_nu: float):
-    """Davidson (1970) with ties, in the scale-free parameterisation.
-
-    P(A) = e^{d/2}/Z, P(B) = e^{-d/2}/Z, P(TIE) = nu/Z with Z = e^{d/2} + e^{-d/2} + nu. This
-    is pi_i/(pi_i + pi_j + nu*sqrt(pi_i pi_j)) with pi = e^s, divided through by
-    e^{(s_a+s_b)/2}; nu -> 0 recovers plain Bradley-Terry.
-    """
+    """Davidson (1970) with ties: P(A) = e^{d/2}/Z, P(B) = e^{-d/2}/Z, P(TIE) = nu/Z."""
     half = 0.5 * d
     logits = np.stack([half, -half, np.full_like(d, log_nu)], axis=1)
     m = logits.max(axis=1)
@@ -322,12 +215,7 @@ def _duel_terms(d: np.ndarray, outcome: np.ndarray, log_nu: float):
 
 
 def initial_cutpoints(k: int) -> np.ndarray:
-    """Cutpoints whose implied level shares match §6.3's measured tier distribution.
-
-    For the default K = 7 that is the measured shape; for any other tier set the household
-    configured, equal mass — there is no measurement for a set nobody has used, and inventing
-    one would be a number with no provenance.
-    """
+    """Cutpoints whose level shares match §6.3's measured shape at K = 7, else equal mass."""
     shares = MEASURED_TIER_SHARES if k == len(MEASURED_TIER_SHARES) else (1.0 / k,) * k
     cumulative = np.cumsum(np.asarray(shares, dtype=float))[:-1]
     return np.log(cumulative / (1.0 - cumulative))
@@ -340,15 +228,9 @@ def verdict_cutpoints() -> np.ndarray:
 
 
 def anchored_cuts(k: int) -> tuple[int | None, int]:
-    """Decision 508: which tier cuts sit on the verdict arm's two cutpoints, as cut indices.
+    """Decision 508: the cut indices nearest the 25% and 50% masses (ties go to the fine class).
 
-    The cut whose shape mass is nearest 25% sits on the disliked/fine cutpoint, and the one nearest
-    50% above it on the fine/liked cutpoint. On §6.3's seven, and on 4, 8 and 12 equal tiers, they
-    sit exactly at those masses; on any other count the nearest ones are moved onto them, because a
-    class band whose edge is not the verdict cutpoint shows, and makes the reveal guess, a class
-    the verdict arm does not predict (review finding F4). A tie goes to the fine class - the lower
-    cut for 25%, the upper for 50% - as a tier whose middle lands on an anchor always did. Two
-    tiers have one cut, and it is the fine/liked one: there is no tier for fine to own.
+    Two tiers have one cut, the fine/liked one.
     """
     if k < 3:
         return None, 0
@@ -367,12 +249,10 @@ def anchored_cuts(k: int) -> tuple[int | None, int]:
 
 
 def _anchor_map(k: int) -> tuple[np.ndarray, np.ndarray]:
-    """`cut_prior_mean` as the affine map it is: (A, c) with mean = A @ gamma + c.
+    """`cut_prior_mean` as an affine map (A, c): mean = A @ gamma + c.
 
-    The two `anchored_cuts` sit on the verdict cutpoints. A cut between them is interpolated on
-    the logit scale of cumulative mass; a cut outside them keeps the shape's own logistic distance
-    from the nearer one, because outside the band the verdict link's unit scale is the only scale
-    there is.
+    Cuts between the anchors interpolate on the logit of cumulative mass; outside them they keep
+    the shape's logistic distance from the nearer anchor.
     """
     shape = initial_cutpoints(k)
     lower, upper = anchored_cuts(k)
@@ -392,13 +272,7 @@ def _anchor_map(k: int) -> tuple[np.ndarray, np.ndarray]:
 def cut_prior_mean(gamma: np.ndarray, k: int) -> np.ndarray:
     """Decision 508: the tier arm's prior mean, anchored on the verdict arm's fitted cutpoints.
 
-    The tier cuts at (or nearest) the shape's 25% and 50% masses sit on gamma[0] and gamma[1], so
-    with no tier edit the displayed boundaries ARE the person's own disliked/fine and fine/liked
-    cutpoints (§5.2: the tier arm's cutpoints are the displayed boundaries). At gamma =
-    `verdict_cutpoints()` this is exactly `initial_cutpoints(k)` on §6.3's seven and on 2, 4, 8
-    and 12 tiers, so those boards start where they always did; on another count the two anchored
-    cuts start on the verdict prior's masses instead. Linear in gamma, so the prior stays a convex
-    quadratic in (gamma, cuts).
+    Linear in gamma, so the prior stays a convex quadratic in (gamma, cuts).
     """
     a, c = _anchor_map(k)
     return a @ np.asarray(gamma, dtype=float) + c
@@ -407,12 +281,7 @@ def cut_prior_mean(gamma: np.ndarray, k: int) -> np.ndarray:
 def verdict_tiers(k: int) -> np.ndarray:
     """(3, 2): the lowest and highest tier each verdict class renders in (decision 508).
 
-    The tiers below the cut on the disliked/fine cutpoint are disliked, those between it and the
-    cut on the fine/liked cutpoint fine, and those above liked (`anchored_cuts`): on §6.3's seven,
-    F/D/C, B and A/A+/S. The class edges are therefore the verdict cutpoints on every tier count,
-    and each tier still goes to the class whose band holds the middle of its prior mass. Two
-    tiers are the one set too short for three classes: the lower tier holds disliked and fine and
-    stands for fine (`verdict_class_of_tier`), so a two-tier board never guesses disliked.
+    On two tiers the lower one holds both disliked and fine.
     """
     lower, upper = anchored_cuts(k)
     if lower is None:
@@ -430,15 +299,7 @@ def verdict_class_of_tier(tier: int, k: int) -> int:
 
 
 def guess_tier(tier: np.ndarray, k: int) -> np.ndarray:
-    """Decision 510: the letter a title nobody has rated wears is its guessed class's tier nearest
-    the middle - C, B or A on §6.3's seven.
-
-    How far past the edge of a band a title sits is said by the person's own answers - a pick, a
-    drag, a verdict against the taste vector - and an unrated title has none, so its grade would
-    be the fit's location alone. On four liked series that put every one of 127 unseen series in
-    A+, and a letter every card wears says nothing (round-2 finding R4). The class stays the
-    fit's; only the grade inside it waits for the person.
-    """
+    """Decision 510: an unrated title wears its guessed class's tier nearest the middle (C, B or A)."""
     bands = verdict_tiers(k)
     return np.clip(np.asarray(tier, dtype=np.int64), bands[0, 1], bands[2, 0])
 
@@ -446,10 +307,7 @@ def guess_tier(tier: np.ndarray, k: int) -> np.ndarray:
 def live_verdicts(obs: ObservationSet) -> np.ndarray:
     """Per title of `obs`, the verdict its tier is held to (decision 508), or -1.
 
-    The verdict rows arrive in id order from both loaders, so the last one written for a title is
-    its live verdict (a rewatch re-rating supersedes, §5.2's arm 4). A title with a `tier_edit` is
-    -1: the drop decides where it renders (§6.3), and "unless the person moved it there" is the
-    one exception the rule has.
+    Rows arrive in id order, so the last verdict per title is live. A `tier_edit` title is -1.
     """
     out = np.full(obs.n, -1, dtype=np.int64)
     rows = obs.ord_arm == 0
@@ -464,13 +322,7 @@ def hold_to_verdict(
 ) -> tuple[np.ndarray, np.ndarray]:
     """Decision 508: a rated title renders inside the tiers its live verdict names.
 
-    The fit reads a verdict as evidence, not as a fact, and a single ordinal observation against a
-    confident taste vector can leave `s` just across the band's edge — Jenny's two disliked series
-    sat in B on sixteen labels. The person said what they said, so the tier is held to the band and
-    `s` still orders the title inside it: a disliked title the model would have put in B renders
-    at the top of C. Where the hold binds, the straddle names the next tier toward `s`, which the
-    posterior plainly reaches. `verdict` is -1 where there is none to hold to — no verdict, or a
-    `tier_edit`, which decides placement on its own (§6.3, "stays in the assigned tier").
+    Where the hold binds, the straddle names the next tier toward `s`. `verdict` -1 is not held.
     """
     tier = np.asarray(tier, dtype=np.int64).copy()
     straddle_to = np.asarray(straddle_to, dtype=np.int64).copy()
@@ -527,7 +379,6 @@ def _objective(
         nll, *_ = _duel_terms(d, obs.duel_outcome, log_nu)
         total += hp.lambda_bt * float(np.sum(_duel_weights(obs, hp) * nll))
 
-    # Decision 508: the tier cuts are pulled toward the verdict-anchored shape, not a fixed one.
     cuts_init = cut_prior_mean(gamma, obs.n_levels)
     total += 0.5 * hp.lambda_ridge * float(v @ v)
     total += 0.5 * float(r @ r) / hp.b_i_tau**2
@@ -579,14 +430,8 @@ def _grad_hess(
         np.add.at(c_cross, (idx[upper], col_u[upper]), (w * (-(f_aa + f_ab)))[upper])
         np.add.at(c_cross, (idx[lower], col_l[lower]), (w * (-(f_ab + f_bb)))[lower])
 
-    # The duel arm's curvature is NOT diagonal in s: a duel couples its two titles with an
-    # off-diagonal -w·h_dd, and for the shared coordinates those cancel exactly — shifting
-    # every title equally changes no difference, so a duel contributes nothing to the
-    # curvature of mu. Folding h_dd into the diagonal and stopping there overstates H by up to
-    # a factor of two in a duel-heavy fit, and silently corrupts sigma. So the coupling is
-    # returned separately: the arrowhead blocks below stay the ORDINAL Hessian (genuinely
-    # diagonal in r, which is what makes the anchor solve exact and fast), and the duel term
-    # is assembled where it is actually needed.
+    # A duel couples its two titles off-diagonally, so its curvature is returned separately and
+    # the arrowhead blocks below stay the ordinal Hessian (diagonal in r).
     duel_curv = np.zeros(obs.n)
     coupling = None
     if with_duels and obs.duel_a.size:
@@ -601,9 +446,7 @@ def _grad_hess(
         g_extra[col_psi] += float(np.sum(w * g_psi))
         coupling = (obs.duel_a, obs.duel_b, w * h_dd, w * h_dpsi, float(np.sum(w * h_psipsi)))
 
-    # priors. Decision 508 makes the tier cuts' prior mean A @ gamma + c, so the quadratic couples
-    # the two cutpoint sets: d/dgamma gains -p A^T (cuts - mean), and the Hessian gains p A^T A on
-    # the gamma block and -p A across. Checked against finite differences in test_ledger_model.
+    # priors. The cuts' prior mean is A @ gamma + c (decision 508), which couples the two sets.
     anchor, _offset = _anchor_map(obs.n_levels)
     cuts_init = cut_prior_mean(gamma, obs.n_levels)
     gamma_init = verdict_cutpoints()
@@ -646,20 +489,8 @@ def _grad_hess(
 
 
 # --- the monotone parameterisation ---------------------------------------------------------
-#
-# The cutpoints of an ordered logit must ascend, and the optimum frequently sits ON that
-# constraint — two cutpoints coincide whenever a tier level carries no observations, which on a
-# day-one board is most of them. A line search that merely clips to the boundary reaches it and
-# then cannot travel along it, so the fit stalls somewhere feasible and suboptimal.
-#
-# So the search runs in
-#
-#     cuts_j = c0 + sum_{i<=j} exp(delta_i)
-#
-# whose gaps are positive by construction. It is a smooth bijection onto the open cone, so it
-# cannot introduce a local minimum the original problem does not have; what it gives up is
-# convexity *of the parameterisation*, which no line search needs. A coincident pair is now the
-# limit delta -> -inf, which the optimiser approaches smoothly instead of colliding with.
+# The search runs in cuts_j = c0 + sum_{i<=j} exp(delta_i), a bijection onto the open cone, so an
+# optimum on the constraint (an unused level) is approached as delta -> -inf instead of hit.
 
 
 def _to_raw(values: np.ndarray) -> np.ndarray:
@@ -701,13 +532,11 @@ def _raw_curvature(raw: np.ndarray, grad_values: np.ndarray) -> np.ndarray:
 
 
 def _schur_solve(h_zz, h_zr, h_rr, g_z, g_r):
-    """One arrowhead solve. H_rr is diagonal because r_i appears only in title i's own
-    observations, which is what makes this O(n·p^2 + p^3) rather than O((n+p)^3)."""
+    """One arrowhead solve via the Schur complement: O(n·p^2 + p^3), since H_rr is diagonal."""
     inv_rr = 1.0 / h_rr
     schur = h_zz - (h_zr * inv_rr[None, :]) @ h_zr.T
     rhs = g_z - (h_zr * inv_rr[None, :]) @ g_r
-    # A tiny jitter keeps Cholesky from failing on a problem that is convex but, with no
-    # observations at all, only positive *semi*-definite.
+    # With no observations the problem is only positive semi-definite.
     schur = schur + 1e-10 * np.eye(schur.shape[0])
     dz = np.linalg.solve(schur, rhs)
     dr = inv_rr * (g_r - h_zr.T @ dz)
@@ -768,16 +597,11 @@ def _to_raw_space(z, lay: _Layout, g_values, h_zz, h_zr):
     return g_raw, h_raw, transform.T @ h_zr
 
 
-# §5.2 mandates preconditioning by the ridge Hessian. It does not mandate evaluating it once
-# and never again — and at 839 titles a preconditioner frozen at the anchor leaves the fit
-# short of the optimum inside the bundle's step budget. Re-deriving it costs one O(n·p²) pass
-# (a few milliseconds at household scale), so it is refreshed periodically at the current
-# point. Still the ridge Hessian; still not the true curvature; just not stale.
+# Iterations between re-deriving the ridge-Hessian preconditioner at the current point; a frozen
+# one falls short of the optimum within the step budget.
 PRECONDITIONER_REFRESH = 5
 
-# The longest step one iteration may take along a log-gap coordinate: a gap may grow or shrink by
-# e^8 (about 3000x) per iteration. A numerical guard of the search, not a model constant - it
-# moves no optimum, only how a collapsing gap is walked to (see `_minimise`).
+# A search guard, not a model constant: a gap may change by at most e^8 per iteration.
 MAX_LOG_GAP_STEP = 8.0
 
 
@@ -820,20 +644,11 @@ def _minimise(obs, hp, *, with_duels, z0, r0, precondition_from=None, max_iter=N
         if precondition_from is None:
             solve_zz, solve_zr, solve_rr = h_zz, h_zr, h_rr
         else:
-            # Stage B: step with the *anchor's* curvature, not the current one. This is the
-            # scar §5.2 names — the duel arm's curvature spread is what a fixed step cannot
-            # serve, and dividing by the anchor's curvature makes one step size right for a
-            # title with two duels and one with two hundred alike.
+            # Stage B: step with the anchor's curvature (§5.2's scar).
             solve_zz, solve_zr, solve_rr = precondition_from
 
-        # Levenberg damping until the step actually points downhill.
-        #
-        # The objective is convex in the VALUES, but the monotone parameterisation is not: its
-        # curvature term is `sum_j g_v[j] * exp(delta_i)`, which is negative wherever the
-        # value-space gradient pushes a gap shut. That cannot create a local minimum — the map
-        # is a bijection onto the cone — but it can hand back a direction that is not a descent
-        # direction, and a line search given one backtracks to nothing and stops. Two iterations
-        # into a board with an unobserved tier level, that is exactly what happened.
+        # Levenberg damping until the step points downhill: the parameterisation's curvature term
+        # can be negative where a gap is closing.
         damping = 0.0
         for _attempt in range(24):
             trial_zz = solve_zz + damping * np.eye(solve_zz.shape[0])
@@ -848,23 +663,15 @@ def _minimise(obs, hp, *, with_duels, z0, r0, precondition_from=None, max_iter=N
             dz, dr = g_z.copy(), g_r.copy()
             slope = float(g_z @ dz + g_r @ dr)
 
-        # A gap that is closing is nearly flat in its log coordinate - its curvature there carries
-        # the gap itself as a factor - so the preconditioned step along it can be astronomically
-        # long and still point downhill. At decision 509's tau a random duel-heavy board met one:
-        # a verdict band 0.0013 wide asked for a log-gap step of 3e9, `_from_raw` clipped it to
-        # e^30, and every step the line search is allowed to try (down to `lr_min`) overflowed the
-        # objective, so the fit stopped 7 above its optimum. The direction is scaled, not changed:
-        # the same descent direction, a length the exponential can take.
+        # A closing gap is nearly flat in its log coordinate, so the step along it can be huge
+        # enough to overflow every trial. Scale the direction, don't change it.
         reach = float(np.max(np.abs(dz[_log_gap_positions(lay)]), initial=0.0))
         if reach > MAX_LOG_GAP_STEP:
             shrink = MAX_LOG_GAP_STEP / reach
             dz, dr, slope = dz * shrink, dr * shrink, slope * shrink
 
         f0 = _objective(obs, hp, mu, v, gamma, cuts, log_nu, r, with_duels=with_duels)
-        # Carry the accepted step across iterations, trying twice the last one first. The
-        # anchor preconditioner's mismatch with the true curvature is roughly constant along
-        # the path, so restarting the search at step0 every iteration re-pays the same
-        # halvings hundreds of times over.
+        # Try twice the last accepted step first rather than re-paying the halvings from step0.
         eta = min(1.0, max(step0, eta * 2.0))
         accepted = False
         while eta >= hp.lr_min:
@@ -877,9 +684,7 @@ def _minimise(obs, hp, *, with_duels, z0, r0, precondition_from=None, max_iter=N
             eta *= 0.5
             backtracks += 1
         if not accepted:
-            # The search exhausted itself. Keep the last point that DID decrease the
-            # objective — applying the step that was just rejected is how a converged-looking
-            # fit ends up reporting its own divergence.
+            # Keep the last point that decreased the objective; never apply the rejected step.
             break
         z, r = z - eta * dz, r - eta * dr
 
@@ -901,16 +706,12 @@ def fit(
 ) -> Fit:
     """The full MAP fit: ridge anchor, then the preconditioned BT perturbation.
 
-    `z0`/`r0` exist so a caller can start somewhere else. The objective is convex on the ordered
-    cone, so every start must reach the same optimum — which is only a checkable claim if a test
-    can actually supply a different start.
+    `z0` (in value space) and `r0` let a test check that every start reaches the same optimum.
     """
     lay = _Layout(obs.n, obs.n_levels)
     z = _pack_raw(0.0, np.zeros(EMBED_DIM), verdict_cutpoints(),
                   cut_prior_mean(verdict_cutpoints(), obs.n_levels), float(np.log(hp.nu0())))
     if z0 is not None:
-        # A caller supplies a start in VALUE space — that is the space the model is written in
-        # and the only one a test can reason about.
         z0 = np.asarray(z0, dtype=float)
         mu0, v0, gamma0, cuts0, nu0 = _unpack(z0, lay)
         z = _pack_raw(mu0, v0, gamma0, cuts0, nu0)
@@ -932,13 +733,8 @@ def fit(
         with np.errstate(divide="ignore", invalid="ignore"):
             ratio = np.where(anchor_diag > 0, duel_diag / anchor_diag, 0.0)
         rho = float(np.max(ratio, initial=0.0))
-        # §4.3's `lr` is the first trial step; Armijo grows it (x2 per iteration, capped at a
-        # unit step, since the anchor-preconditioned direction is approximately Newton) and
-        # shortens it when the objective disagrees. `rho` — the largest ratio of duel curvature
-        # to anchor curvature over the titles — is what a *fixed-step* method would have had to
-        # divide by. It is reported rather than applied: it measures the mismatch the
-        # preconditioner absorbs, and watching it is how a later reader sees the scar §5.2
-        # describes without having to reproduce the divergence.
+        # §4.3's `lr` is the first trial step. `rho` (max duel/anchor curvature) is reported, not
+        # applied: it measures the mismatch the preconditioner absorbs.
         step0 = float(hp.lr)
         z, r, blocks_b, _g_b, it_b, bt_b, anchor_curv, duel_curv = _minimise(
             obs, hp, with_duels=True, z0=z, r0=r,
@@ -956,15 +752,7 @@ def fit(
     g_v, g_r, oh_zz, oh_zr, oh_rr, _ac, _dc, coupling = _grad_hess(
         obs, hp, mu, v, gamma, cuts, log_nu, r, with_duels=obs.duel_a.size > 0
     )
-    # Measured in the coordinates the search actually optimises, not in value space.
-    #
-    # The two differ exactly where it matters. An ordered logit's optimum frequently has two
-    # cutpoints coincident — every tier level nobody has used — and that is a *constrained*
-    # optimum, so the value-space gradient is non-zero there by construction (it is the KKT
-    # multiplier of an active constraint pushing the gap shut). Reporting it would call a fit
-    # that has landed exactly on the optimum "not converged", which is how a correct solve gets
-    # chased for an afternoon. The monotone parameterisation is unconstrained, so its gradient
-    # is zero at the optimum and nowhere else.
+    # Measured in raw coordinates: at a constrained optimum the value-space gradient is nonzero.
     g_z, _h_raw, _hzr_raw = _to_raw_space(
         _pack_raw(mu, v, gamma, cuts, log_nu), lay, g_v, oh_zz, oh_zr
     )
@@ -972,9 +760,7 @@ def fit(
 
     n_obs = obs.ord_index.size + obs.duel_a.size
     sigma, sigma_prior, z_cov = _laplace(obs, hp, oh_zz, oh_zr, oh_rr, coupling)
-    # NOT np.sort. Sorting would return a permutation of parameters that were never jointly
-    # fitted, next to an `objective` computed on the unsorted ones — a fit that looks ordered
-    # and is not the fit it reports. The cone constraint above is what makes them ordered.
+    # Not np.sort: the cone keeps them ordered, and sorting would report parameters never fitted.
     return Fit(
         mu=mu, v=v, gamma=gamma, cuts=cuts, log_nu=log_nu, r=r, s=s,
         sigma=sigma, sigma_prior=sigma_prior, z_cov=z_cov,
@@ -983,10 +769,7 @@ def fit(
                              with_duels=obs.duel_a.size > 0),
         grad_inf=float(grad_inf), iterations=(it_a, it_b), backtracks=bt_a + bt_b,
         rho=rho,
-        # Relative to the problem's size, not absolute: ||grad||_inf grows with the number of
-        # observations, so an absolute threshold would call a 50-verdict fit converged and an
-        # identically-good 800-verdict one diverged. `n_obs` is the scale the gradient is
-        # measured against.
+        # Relative, since ||grad||_inf grows with the number of observations.
         converged=bool(
             grad_inf <= 1e-3 * max(1.0, n_obs)
             and np.all(np.isfinite(s))
@@ -996,18 +779,9 @@ def fit(
 
 
 def _laplace(obs: ObservationSet, hp: Hyperparams, h_zz, h_zr, h_rr, coupling):
-    """σ per title, from the diagonal of the Laplace covariance (§5.2's "Laplace diagonal").
+    """σ per title, from the diagonal of the Laplace covariance (§5.2).
 
-    Assembled densely, and deliberately. The ordinal arms alone give an arrowhead Hessian whose
-    r block is diagonal — which is what makes the anchor solve exact and fast — but the duel arm
-    couples the two titles of every pair, so the true Hessian is arrowhead PLUS a sparse
-    symmetric coupling. Pretending otherwise inflates the curvature by up to a factor of two in
-    a duel-heavy fit and hands back a σ that is confidently wrong. At household scale the dense
-    assembly is a (p+n)² matrix with n ≤ ~839, which is one nightly inversion, so correctness
-    costs nothing worth having.
-
-    The (mu, v) block is returned too: it is what gives an *unobserved* title a σ, since its s
-    is mu + ⟨v, e⟩ with no residual at all.
+    Dense, because the duel coupling is off the arrowhead. The (mu, v) block gives unobserved titles a σ.
     """
     p = h_zz.shape[0]
     n = obs.n
@@ -1021,9 +795,7 @@ def _laplace(obs: ObservationSet, hp: Hyperparams, h_zz, h_zr, h_rr, coupling):
         a, b, h_dd, h_dpsi, h_psipsi = coupling
         jac = np.concatenate([np.ones((n, 1)), obs.embeddings], axis=1)      # n x 65
         col_psi = p - 1
-        # d in s-space: +1 on a, -1 on b. The Hessian contribution of one duel is
-        # h_dd · (ea - eb)(ea - eb)^T over the s coordinates, which every parameter that
-        # moves s inherits through the chain rule.
+        # One duel adds h_dd · (ea - eb)(ea - eb)^T over s, inherited through the chain rule.
         np.add.at(full, (p + a, p + a), h_dd)
         np.add.at(full, (p + b, p + b), h_dd)
         np.add.at(full, (p + a, p + b), -h_dd)
@@ -1056,8 +828,7 @@ def _laplace(obs: ObservationSet, hp: Hyperparams, h_zz, h_zr, h_rr, coupling):
     var = np.einsum("ij,jk,ik->i", load, cov, load)
     sigma = np.sqrt(np.maximum(var, 1e-12))
 
-    # The prior σ is what a title with no observations of its own would carry: the (mu, v)
-    # uncertainty plus the residual prior. §5.2's freshness rule caps inflation there.
+    # A title with no observations of its own; §5.2's freshness rule caps inflation here.
     z_cov = cov[:65, :65]
     prior_var = np.einsum("ij,jk,ik->i", jac, z_cov, jac) + hp.b_i_tau**2
     return sigma, np.sqrt(np.maximum(prior_var, 1e-12)), z_cov
@@ -1067,13 +838,7 @@ def _laplace(obs: ObservationSet, hp: Hyperparams, h_zz, h_zr, h_rr, coupling):
 
 
 def empirical_cdf(reference: np.ndarray, values: np.ndarray) -> np.ndarray:
-    """§5.2's displayed 0..1 weight: "the empirical CDF of the user's own fitted `s` values,
-    computed per kind (their best-ranked title → ~1.0, worst → ~0.0)".
-
-    Mid-rank, so ties share a value and the mapping is stable under any monotone rescaling of
-    s — which is the property that makes it the owner's "always-preferred → 1.0" definition
-    rather than an artefact of the scale s happens to be fitted on.
-    """
+    """§5.2's displayed 0..1 weight: the mid-rank empirical CDF of the user's own `s` per kind."""
     if reference.size < 2:
         return np.full(values.shape, np.nan)
     ordered = np.sort(reference)
@@ -1088,32 +853,9 @@ def tier_of(s: np.ndarray, cuts: np.ndarray) -> np.ndarray:
 
 
 def straddle(s: np.ndarray, sigma: np.ndarray, cuts: np.ndarray, hp: Hyperparams) -> np.ndarray:
-    """§6.3's "A/S straddle" badge: the adjacent tier the posterior also reaches, or −1.
+    """§6.3's "A/S straddle" badge: the ADJACENT tier the ±z·σ interval also reaches, or −1.
 
-    ADJACENT IS THE WHOLE CONTENT OF THE WORD, and it used to be a comment rather than a
-    property. The previous version set the answer to `searchsorted(lo)` whenever that differed
-    from the tier, which is "how many cutpoints the low end of the interval clears" — on a wide
-    posterior that is two or three levels, so a title in A was badged with F, and
-    `queue._boundary` (which consumes exactly this number) then drew the partner from a tier the
-    title does not border and called the pair the one that settles its boundary. A badge naming
-    a level the posterior neither occupies nor neighbours is a claim about nothing.
-    `rank.board.straddles` has said "the **adjacent** tier" since it was written.
-
-    So the candidates are the two neighbours and nothing else, and when the interval reaches
-    both, the one whose CUT is nearer to `s` wins: that is the boundary the next comparison can
-    actually move, and the tier the title is likelier to belong to. A tie keeps the downward
-    choice the old `below`-first order had, so the answer stays a function of the numbers rather
-    than of the iteration order. Decision 205 is the constraint that shaped this: the predicate
-    stays ±z·σ, and the retune 205 deferred has since happened — decision 214 sets `straddle_z`
-    to 0.15 as a badge constant tuned against a fitted board's σ-to-tier-width ratio, and gives
-    §6.2's round its own BOUNDARY_Z instead of this one. Nothing here changes with it: the shape
-    of the answer is the same at any positive multiple, only how many titles reach one.
-
-    The *set* is unchanged, deliberately. §6.3 makes one predicate do two jobs ("shows "A/S"
-    **and** becomes queue-eligible", proposal 157), so narrowing which tier is named must not
-    narrow who is named; "the interval crosses a cut" and "it crosses the cut below or the cut
-    above" are the same statement, because the nearest cut on either side of `s` is its own
-    tier's boundary.
+    When it reaches both neighbours, the nearer cut wins; a tie goes down.
     """
     ordered = np.sort(cuts)
     tier = tier_of(s, ordered)
@@ -1121,10 +863,7 @@ def straddle(s: np.ndarray, sigma: np.ndarray, cuts: np.ndarray, hp: Hyperparams
     for i in range(s.size):
         here = int(tier[i])
         lo, hi = s[i] - hp.straddle_z * sigma[i], s[i] + hp.straddle_z * sigma[i]
-        # `tier_of` is `searchsorted(..., side="right")`, so tier `here` is the band
-        # [ordered[here-1], ordered[here]): its lower cut is ordered[here-1] and its upper
-        # ordered[here], each existing only when the index does — which is proposal 76's "S
-        # never renders S/S" falling out of the arithmetic at both ends.
+        # Tier `here` is [ordered[here-1], ordered[here]); the end tiers have one neighbour.
         down = float(ordered[here - 1]) if here > 0 else None
         up = float(ordered[here]) if here < ordered.size else None
         reaches_down = down is not None and lo < down
@@ -1141,8 +880,7 @@ def straddle(s: np.ndarray, sigma: np.ndarray, cuts: np.ndarray, hp: Hyperparams
 def inflate_sigma(
     sigma: np.ndarray, sigma_prior: np.ndarray, months_untouched: np.ndarray, hp: Hyperparams
 ) -> np.ndarray:
-    """§5.2: "after 12 months untouched, a title's σ inflates Glicko-style at rate c per √month,
-    capped at the prior σ" — "ambient recalibration rather than chores"."""
+    """§5.2: after the grace period σ inflates Glicko-style at rate c per √month, capped at the prior σ."""
     over = np.maximum(months_untouched - hp.sigma_inflation_grace_months, 0.0)
     grown = np.sqrt(sigma**2 + (hp.sigma_inflation_c**2) * over)
     cap = sigma_prior if hp.sigma_inflation_cap == "prior" else np.full_like(
