@@ -815,15 +815,29 @@ def list_titles(
     decade: int | None = None,
     seen: str = "any",
     person_id: list[int] | None = Query(None),
+    sort: str | None = None,
     limit: int = 60,
     offset: int = 0,
+    spielplan_session: str | None = Cookie(default=None),
 ) -> dict[str, Any]:
     kinds = [k for k in ("movie", "series") if k in kind]
     if not kinds:
         raise HTTPException(422, "select at least one kind: 'movie', 'series', or both")
+    if sort not in (None, "for_you", "newest"):
+        raise HTTPException(422, "sort is 'for_you' or 'newest'")
+    # Decision 515, as `api/library.py` decides it: a search is best match first, and "for you"
+    # is the default once the member's own ratings rank a selected kind - the harness's stand-in
+    # for "fitted" is `_beta`'s five labels.
+    user_id = _me(spielplan_session)["id"]
+    if q and q.strip():
+        effective = "match"
+    elif sort == "newest" or not any(_beta(user_id, k)[1] for k in kinds):
+        effective = "newest"
+    else:
+        effective = "for_you"
     if not STATE["imported"]:
-        return {"kinds": kinds, "total": 0, "hidden": {}, "limit": limit, "offset": offset,
-                "items": []}
+        return {"kinds": kinds, "sort": effective, "total": 0, "hidden": {}, "limit": limit,
+                "offset": offset, "items": []}
     rows = [r for k in kinds for r in _titles(k)]
     items = []
     with _db() as db:
@@ -860,6 +874,10 @@ def list_titles(
             })
     if seen != "any":
         items = [i for i in items if i["seen_state"] == seen]
+    if effective == "for_you":
+        # Films, then series, each by the member's score: a ranking partitions by kind.
+        items.sort(key=lambda i: (kinds.index(i["kind"]), -_scores(user_id, i["kind"])[i["id"]],
+                                  i["id"]))
     total = len(items)
     hidden = {}
     with _db() as db:
@@ -869,8 +887,8 @@ def list_titles(
             n = db.execute("SELECT count(*) FROM title WHERE kind = ?", (other,)).fetchone()[0]
             if n:
                 hidden[other] = n
-    return {"kinds": kinds, "total": total, "hidden": hidden, "limit": limit, "offset": offset,
-            "items": items[offset : offset + limit]}
+    return {"kinds": kinds, "sort": effective, "total": total, "hidden": hidden, "limit": limit,
+            "offset": offset, "items": items[offset : offset + limit]}
 
 
 @app.get("/api/titles/{title_id}")
@@ -971,6 +989,7 @@ def title_detail(
             {"value": v, "label": VERDICT_LABELS[v]}
             if (v := _verdicts(user["id"]).get(title_id)) is not None else None
         ),
+        "why": _why(user["id"], title_id),
         # The harness links no Jellyfin server, so Play is always the no-server reason here, and
         # Show on map follows the same `built` flag `api/library.py` reads (decision 488).
         "actions": {
@@ -981,6 +1000,31 @@ def title_detail(
         **({"model_line": {"available": False, "reason": "dev harness — no artifact bundle loaded"}}
            if _show_model(user) else {}),
     }
+
+
+def _why(user_id: int, title_id: int) -> str | None:
+    """`home/suggest.why_suggested`'s shape (decision 515): None for a title the member has seen
+    or rated, else "Because you liked {X} — they share {a} + {b}" for a liked title of the kind
+    sharing its terms, else None. The harness has no specificity arithmetic, so the liked title
+    sharing the most terms stands in for the likest, and one shared term is enough where the app
+    asks two: no two of the fixture's six films share more than one, and a harness that never
+    said the sentence would teach the card it never arrives. The sentence's shape is the
+    contract."""
+    title = _title(title_id)
+    if title is None or _seen_state(title_id) == "seen" or title_id in _verdicts(user_id):
+        return None
+    mine = {t.term for t in _terms_for(title_id)}
+    best: tuple[str, list[WhyTerm]] | None = None
+    for liked_id, value in sorted(_verdicts(user_id).items()):
+        other = _title(liked_id)
+        if value != 2 or other is None or other["kind"] != title["kind"]:
+            continue
+        shared = [t for t in _terms_for(liked_id) if t.term in mine]
+        if shared and (best is None or len(shared) > len(best[1])):
+            best = (other["name"], shared)
+    if best is None:
+        return None
+    return f"Because you liked {best[0]} — they share {' + '.join(t.name for t in best[1][:2])}"
 
 
 @app.get("/api/facets")
@@ -3828,6 +3872,9 @@ def _build_home(user, kinds, *, q=None, person_id=None, limit=60, offset=0) -> d
         # the same thing about the learning curve.
         "degraded": shelves._degraded(bundle_version, verdicts),
         "suppressed": [],
+        # Decision 512's key, in its shape; the harness has no avoid arithmetic, so it leaves
+        # nothing out and says so with the app's null.
+        "avoiding": None,
         # No `rail`: `home/shelves.build_home` stopped carrying one when the drawer's mount
         # moved into the layout and `/api/model-log` became its only source. The harness mirrors
         # the app (M49-HOME-04); `_rail_recent` still serves `/api/model-log` below.
@@ -3873,7 +3920,8 @@ def home_shelves(
     slim = {
         key: payload[key]
         for key in ("kinds", "shelves", "sections", "shelves_total", "verdict_count",
-                    "degraded", "partner", "bundle", "vocabulary", "suppressed", "library")
+                    "degraded", "partner", "bundle", "vocabulary", "suppressed", "library",
+                    "avoiding")
         if key in payload
     }
     return rail.redact(slim, show_model=_show_model(user))

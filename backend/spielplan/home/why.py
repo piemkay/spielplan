@@ -36,6 +36,8 @@ from typing import Any
 import asyncpg
 
 from spielplan.db import dna_terms
+from spielplan.db import genres as genre_vocab
+from spielplan.ledger.observations import LIVE_LABEL_SQL
 
 # §6.0 shelf 1's candidate pool. C(8,2) = 28 pairs is the whole search, which is why the pair
 # choice can be exact rather than greedy.
@@ -44,6 +46,12 @@ ANCHOR_TERM_POOL = 8
 # How many terms a why-line may name from the intersection all its cards carry. Copy, not a
 # tuned number: a one-line why that names five terms is not a one-line why.
 NAMED_TERM_CAP = 2
+
+# Decision 514: "which you like" needs this many liked titles of the kind behind it.
+LIKED_TERM_MIN = 3
+
+# Decision 513: shelf 1 names its pair from the anchor's nearest titles, this many per card slot.
+NEIGHBOURHOOD_PER_CARD = 2
 
 # §4.1 rule 2 made arithmetic. The extracted tier outranks the projected tier for *naming*
 # because §4.1 calls the first quote-verified and the second inferred; both tiers stay fully
@@ -115,12 +123,13 @@ async def vocabulary_version(conn: asyncpg.Connection) -> str | None:
 
 
 async def terms_for(
-    conn: asyncpg.Connection, title_id: int, *, version: str, limit: int = ANCHOR_TERM_POOL
+    conn: asyncpg.Connection, title_id: int, *, version: str, limit: int | None = ANCHOR_TERM_POOL
 ) -> list[WhyTerm]:
     """One title's terms, best-named first. Rule 2: the ranking is an ORDER BY, never a filter.
 
     Both tiers are returned; a term carried in both is returned once and tiered `extracted`,
-    so the pool cannot silently promote an inferred tag.
+    so the pool cannot silently promote an inferred tag. `limit=None` returns every term, which
+    is what shelf 1 names its pair from (decision 513).
     """
     rows = await conn.fetch(
         f"""
@@ -381,7 +390,7 @@ async def frontier_term(
     version: str,
     min_seen: int,
     carrier_floor: int,
-    liked_pool: int = 12,
+    liked_pool: int = 24,
     exclude: Sequence[int] = (),
 ) -> tuple[WhyTerm, WhyTerm, float, float] | None:
     """§6.4's explore frontier as a shelf: an unvisited term that sits next to a liked one.
@@ -389,7 +398,7 @@ async def frontier_term(
     Returns (candidate, neighbour, cosine, affinity) or None.
 
     "the *adjacent possible* — regions of DNA space near the user's liked regions but
-    unvisited". Three literal readings, and each is what makes the shelf title true:
+    unvisited". Four literal readings, and each is what makes the shelf's two lines true:
 
     * **unvisited** is zero coverage, not low coverage. The title says "You've never watched
       anything {term}", so one seen carrier disqualifies the term outright.
@@ -397,12 +406,18 @@ async def frontier_term(
       |carriers of both| / sqrt(|c| · |L|) — so the edge is a nameable DNA term (§6.4: "Every
       connection is *nameable* — edges are DNA terms, never opaque similarity") rather than a
       distance in an embedding nobody can read.
-    * **liked** is the user's own posterior CDF, per §5.2's "empirical CDF of the user's own
-      fitted `s` values, computed per kind", centred at 0.5 so an indifferent term scores 0.
+    * **which you like** is what the person said (decision 514): at least `LIKED_TERM_MIN` of
+      their liked titles of the kind carry the term, and more than half of the rated titles
+      carrying it are liked. It read the Ledger's CDF averaged over whatever carried the term,
+      with no support behind it, so one projected tag on one liked film made "wartime backdrop"
+      a term Jenny liked - and the shelf then told her she had never watched World War II.
+    * **close to, not the same as**: the neighbour comes from another facet. Inside one facet a
+      near term is a narrower or broader name for the same thing, and "never watched World War
+      I, close to turn of the 20th century, which you like" reads as the contradiction it is.
 
-    `exclude` is decision 475's claim: titles a shelf built earlier already shows do not count
-    toward a candidate's carriers, so a term the claim would empty below the floor is never
-    chosen over one that still fills the shelf.
+    `exclude` is decision 475's claim and decision 512's avoid set: titles a shelf built earlier
+    already shows, and titles the member avoids, do not count toward a candidate's carriers, so a
+    term they would empty below the floor is never chosen over one that still fills the shelf.
     """
     seen_n = await conn.fetchval(
         """
@@ -453,29 +468,40 @@ async def frontier_term(
     if not candidates:
         return None
 
+    # The affinity is the net share of liked over rated carriers, shrunk by two pseudo-ratings so
+    # three for three does not outrank nine of ten; the HAVING is the sentence's own claim.
     liked = await conn.fetch(
         f"""
+        WITH lv AS ({LIVE_LABEL_SQL}),
+        rated AS (
+            SELECT lv.title_id, lv.value
+              FROM lv
+              JOIN title t ON t.id = lv.title_id AND t.kind = $2
+              JOIN user_title ut ON ut.title_id = lv.title_id AND ut.user_id = $1
+                                AND ut.state = 'seen'
+        )
         SELECT d.term,
                min(d.facet) AS facet,
                CASE WHEN bool_or(d.tier = 'extracted') THEN 'extracted' ELSE 'projected' END AS tier,
-               avg(ls.cdf) - 0.5 AS aff,
+               (count(DISTINCT r.title_id) FILTER (WHERE r.value = 2)
+                - count(DISTINCT r.title_id) FILTER (WHERE r.value = 0))::float8
+                 / (count(DISTINCT r.title_id) + 2) AS aff,
                max(dl.label) AS label
-          FROM dna_tagged d
+          FROM rated r
+          JOIN dna_tagged d ON d.title_id = r.title_id AND d.version = $3
           {LABEL_JOIN}
-          JOIN ledger_state ls ON ls.title_id = d.title_id AND ls.user_id = $1
-          JOIN user_title ut ON ut.title_id = d.title_id AND ut.user_id = $1 AND ut.state = 'seen'
-          JOIN title t ON t.id = d.title_id AND t.kind = $2
-         WHERE d.version = $3 AND ls.cdf IS NOT NULL
          GROUP BY d.term
-         ORDER BY avg(ls.cdf) - 0.5 DESC, d.term
+        HAVING count(DISTINCT r.title_id) FILTER (WHERE r.value = 2) >= $5
+           AND 2 * count(DISTINCT r.title_id) FILTER (WHERE r.value = 2) > count(DISTINCT r.title_id)
+         ORDER BY aff DESC, d.term
          LIMIT $4
         """,
         user_id,
         kind,
         version,
         liked_pool,
+        LIKED_TERM_MIN,
     )
-    liked = [r for r in liked if float(r["aff"]) > 0.0]
     if not liked:
         return None
 
@@ -508,13 +534,18 @@ async def frontier_term(
     liked_by_term = {r["term"]: r for r in liked}
     scored = []
     for row in pairs:
+        if cand_by_term[row["cand"]]["facet"] == liked_by_term[row["neighbour"]]["facet"]:
+            continue    # the same thing under a narrower or broader name (decision 514)
         cos = float(row["shared"]) / ((float(row["cand_n"]) * float(row["neighbour_n"])) ** 0.5)
         aff = float(liked_by_term[row["neighbour"]]["aff"])
         # Ties: the larger candidate pool first (a bigger unvisited region is a better shelf),
-        # then term ascending, so the same library always names the same term.
-        scored.append((-(cos * aff), -int(cand_by_term[row["cand"]]["n"]), row["cand"], row, cos, aff))
-    scored.sort(key=lambda s: s[:3])
-    _neg, _n, _term, row, cos, aff = scored[0]
+        # then the terms ascending, so the same library always names the same pair.
+        scored.append((-(cos * aff), -int(cand_by_term[row["cand"]]["n"]), row["cand"],
+                       row["neighbour"], row, cos, aff))
+    if not scored:
+        return None
+    scored.sort(key=lambda s: s[:4])
+    _neg, _n, _term, _near, row, cos, aff = scored[0]
     c, ln = cand_by_term[row["cand"]], liked_by_term[row["neighbour"]]
     return (
         WhyTerm(term=c["term"], facet=c["facet"], tier=c["tier"], role="member",
@@ -531,7 +562,36 @@ def phrase(terms: Sequence[WhyTerm]) -> str:
     return " + ".join(t.name for t in terms)
 
 
-# --- shelf 1's membership: likeness to the anchor (decision 475) ------------------------------
+# --- shelf 1's membership: likeness to the anchor (decisions 475 and 513) ---------------------
+
+
+def specificity_ctes(kind: str, version: str) -> str:
+    """The CTEs that weigh a term by its rarity in the household's owned titles of one kind:
+    `owned`, `tagged` (their distinct terms, either tier) and `spec` (term -> ln(N / carriers)).
+    Shared by shelf 1 and the title card's why-line (decision 515), which must agree about what
+    makes two titles alike. `kind` and `version` are the caller's placeholders."""
+    return f"""
+        owned AS (
+            SELECT t.id FROM title t WHERE t.kind = {kind} AND t.is_owned
+        ),
+        tagged AS (
+            SELECT DISTINCT d.title_id, d.term
+              FROM dna_tagged d JOIN owned o ON o.id = d.title_id
+             WHERE d.version = {version}
+        ),
+        spec AS (
+            SELECT term, ln((SELECT greatest(count(*), 1) FROM owned)::float8 / count(*)) AS idf
+              FROM tagged GROUP BY term
+        )"""
+
+
+@dataclass(frozen=True)
+class Neighbour:
+    """One unseen owned title near the anchor, and which of the anchor's terms it carries."""
+
+    title_id: int
+    likeness: float
+    shared: frozenset[str]
 
 
 async def anchor_neighbours(
@@ -540,76 +600,122 @@ async def anchor_neighbours(
     user_id: int,
     kind: str,
     version: str,
+    bundle_version: str | None,
     anchor_id: int,
-    pool: Sequence[WhyTerm],
     exclude: Sequence[int] = (),
-    min_shared: int = 2,
-) -> dict[int, frozenset[str]]:
-    """Every unseen owned title of this kind sharing at least `min_shared` of the anchor's pool
-    terms, with the terms it shares.
+    limit: int,
+) -> tuple[list[Neighbour], dict[str, float]]:
+    """The `limit` unseen owned titles of this kind most like the anchor, most alike first, and
+    the specificity of every anchor term they share.
 
-    The widest-pair rule this replaced chose the two anchor terms covering the most titles, which
-    is the anchor's most generic pair: Zootopia's shelf became "thought-provoking + social
-    commentary" and led with American History X. How many of the anchor's terms a title shares is
-    what "like it" means; the pair named is then one the chosen titles actually carry
-    (`shared_pair`). §4.1 rule 2 still holds - no weight column appears in a predicate.
+    LIKENESS IS SPECIFICITY-WEIGHTED (decision 513). Each term counts by how rare it is in the
+    household's owned titles of the kind - ln(N / carriers), the library's own inverse document
+    frequency - and two titles are as alike as the cosine of those weighted term sets. Counting
+    shared terms, as decision 475 did, let the generic ones decide: "mentor & protege", on 295 of
+    753 owned films, joined The Grand Budapest Hotel to GoodFellas and Dune: Part Two, and
+    "melancholic + romantic" joined Pride & Prejudice to The Last Samurai and Captain America.
+    Weighted, Budapest's nearest owned films are The Phoenician Scheme and Amsterdam. The cosine's
+    norm is the candidate's whole term set, so a title with a long DNA row is not alike merely
+    for carrying more terms. No weight column is read anywhere here (§4.1 rule 2), and both tiers
+    count alike, as presence.
+
+    THE ANCHOR'S FORM (decision 513). An animated anchor draws animated titles and a live-action
+    anchor live-action ones - decision 473's canonical Animation, read across every structured
+    source - because "Because you liked Chernobyl" drew Attack on Titan and Berserk on shared
+    moods, and a cartoon is a different evening from a drama whatever mood they share.
+
+    Ties keep the order the person's own scores put them in, then the id.
     """
-    terms = [t.term for t in pool]
-    if len(terms) < min_shared:
-        return {}
+    animation = genre_vocab.raw_labels("Animation")
     rows = await conn.fetch(
-        """
-        SELECT d.title_id, array_agg(DISTINCT d.term) AS terms
-          FROM dna_tagged d
-          JOIN title t ON t.id = d.title_id
-          LEFT JOIN user_title ut ON ut.title_id = t.id AND ut.user_id = $1
-         WHERE d.version = $3 AND d.term = ANY($4) AND t.kind = $2 AND t.is_owned
-           AND t.id <> $5 AND NOT (t.id = ANY($6))
+        f"""
+        WITH {specificity_ctes("$2", "$3")},
+        norm AS (
+            SELECT g.title_id, sqrt(sum(s.idf * s.idf)) AS n
+              FROM tagged g JOIN spec s USING (term) GROUP BY g.title_id
+        ),
+        anchor AS (
+            SELECT DISTINCT d.term FROM dna_tagged d WHERE d.title_id = $4 AND d.version = $3
+        ),
+        anchor_norm AS (
+            SELECT sqrt(sum(s.idf * s.idf)) AS n FROM anchor a JOIN spec s USING (term)
+        ),
+        animated AS (
+            SELECT DISTINCT g.title_id FROM title_genre g
+             WHERE (g.title_id IN (SELECT id FROM owned) OR g.title_id = $4)
+               AND g.source <> ALL($7::text[]) AND lower(g.genre) = ANY($6::text[])
+        )
+        SELECT g.title_id,
+               sum(s.idf * s.idf) / nullif(nm.n * (SELECT n FROM anchor_norm), 0) AS likeness,
+               array_agg(g.term ORDER BY g.term) AS shared,
+               array_agg(s.idf ORDER BY g.term) AS shared_idf
+          FROM tagged g
+          JOIN anchor a USING (term)
+          JOIN spec s USING (term)
+          JOIN norm nm ON nm.title_id = g.title_id
+          LEFT JOIN user_title ut ON ut.title_id = g.title_id AND ut.user_id = $1
+          LEFT JOIN user_score us ON us.title_id = g.title_id AND us.user_id = $1
+                                 AND us.bundle_version = $9
+         WHERE g.title_id <> $4 AND NOT (g.title_id = ANY($5::int[]))
            AND COALESCE(ut.state, 'unseen') = 'unseen'
-         GROUP BY d.title_id
-        HAVING count(DISTINCT d.term) >= $7
+           AND (g.title_id IN (SELECT title_id FROM animated))
+             = ($4 IN (SELECT title_id FROM animated))
+         GROUP BY g.title_id, nm.n
+        HAVING count(*) >= 2
+         ORDER BY likeness DESC NULLS LAST, max(us.score) DESC NULLS LAST, g.title_id
+         LIMIT $8
         """,
         user_id,
         kind,
         version,
-        terms,
         anchor_id,
         list(exclude),
-        min_shared,
+        animation,
+        list(genre_vocab.EXCLUDED_SOURCES),
+        limit,
+        bundle_version,
     )
-    return {int(r["title_id"]): frozenset(r["terms"]) for r in rows}
+    specificity: dict[str, float] = {}
+    neighbours = []
+    for r in rows:
+        specificity.update(zip(r["shared"], (float(w) for w in r["shared_idf"]), strict=True))
+        neighbours.append(
+            Neighbour(int(r["title_id"]), float(r["likeness"] or 0.0), frozenset(r["shared"]))
+        )
+    return neighbours, specificity
 
 
-def shared_pair(
-    ordered: Sequence[int],
-    shared: dict[int, frozenset[str]],
-    pool: Sequence[WhyTerm],
+def likest_pair(
+    neighbours: Sequence[Neighbour],
+    specificity: dict[str, float],
+    terms: Sequence[WhyTerm],
     *,
     cap: int,
     floor: int,
 ) -> tuple[list[int], WhyTerm, WhyTerm] | None:
     """The pair of anchor terms shelf 1 names, and its cards in likeness order - or None when
-    no pair is carried by `floor` of the candidates.
+    no pair is carried by `floor` of the neighbours.
 
-    `ordered` is the candidates most like the anchor first. Each pair's shelf is the first `cap`
-    of them carrying both its terms, and the pair whose shelf shares the most anchor terms in
-    total wins: a full shelf of close titles beats both a few very close ones and a crowd of
-    loosely related ones, which is where the widest-pair rule used to land. Ties go to the pair
-    the pool names best (§4.1 rule 2's ranking), then to the ids, so one library always gives one
-    shelf. Proposal 24 survives the change: every card carries both named terms by construction.
+    Each pair's shelf is the first `cap` neighbours carrying both its terms. The pair that wins
+    is the one whose shelf holds the most likeness, weighed by how specific the two terms are
+    (decision 513): the anchor's nearest titles all carry some generic pair ("tense + gripping"
+    joined Heat to all twelve of its neighbours), and naming it says nothing about why they are
+    here, while "gritty + cops & detectives" does and is carried by nearly as many. Ties go to
+    the terms in id order, so one library always gives one shelf. Proposal 24 survives: every
+    card carries both named terms by construction.
     """
-    rank = {t.term: i for i, t in enumerate(pool)}
-    by_term = {t.term: t for t in pool}
-    best: tuple[tuple[int, int, str, str], list[int]] | None = None
-    # Spelled in id order, as `best_pair` spells them, so one pair is one tuple and one why-line.
-    for first, second in combinations(sorted(rank), 2):
-        cards = [i for i in ordered if first in shared[i] and second in shared[i]][:cap]
+    by_term = {t.term: t for t in terms}
+    carried = sorted({t for n in neighbours for t in n.shared if t in by_term})
+    best: tuple[tuple[float, str, str], list[int]] | None = None
+    for first, second in combinations(carried, 2):
+        cards = [n for n in neighbours if first in n.shared and second in n.shared][:cap]
         if len(cards) < floor:
             continue
-        key = (-sum(len(shared[i]) for i in cards), rank[first] + rank[second], first, second)
+        rarity = (specificity.get(first, 0.0) + specificity.get(second, 0.0)) / 2.0
+        key = (-sum(n.likeness for n in cards) * rarity, first, second)
         if best is None or key < best[0]:
-            best = (key, cards)
+            best = (key, [n.title_id for n in cards])
     if best is None:
         return None
-    (_, _, first, second), cards = best
+    (_, first, second), cards = best
     return cards, by_term[first], by_term[second]

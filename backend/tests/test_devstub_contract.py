@@ -625,6 +625,55 @@ async def test_the_harness_serves_the_banner_population_and_link_the_app_serves(
         )
 
 
+async def test_the_harness_answers_the_catalogue_sort_and_the_card_why_the_app_answers(fresh):
+    """Decision 515's two keys, in the harness the front end is built against. The catalogue
+    echoes the order it is really in - `newest` until the member's own ratings rank a kind,
+    `for_you` after, films before series, `match` under a search - and refuses an order it does
+    not have; the title card carries `why`, None for a title already rated and the app's
+    "Because you liked" sentence for one alike to a liked title."""
+    fresh.STATE["imported"] = True
+    films = [t for t in fresh._catalog() if t["kind"] == "movie"]
+    async with _client(fresh) as client:
+        await _admin(client)
+        user_id = next(iter(fresh.STATE["users"].values()))["id"]
+
+        first = (await client.get("/api/titles", params={"kind": "movie"})).json()
+        assert first["sort"] == "newest", first["sort"]
+        refused = await client.get("/api/titles", params={"kind": "movie", "sort": "popular"})
+        assert refused.status_code == 422
+
+        # Five liked films make the harness's profile "fitted" (`_beta`), and one of them shares a
+        # term with another film: the card names it.
+        liked = next(
+            (a, b) for a in films for b in films
+            if a["id"] != b["id"]
+            and {t.term for t in fresh._terms_for(a["id"])}
+            & {t.term for t in fresh._terms_for(b["id"])}
+        )
+        verdicts = fresh.STATE["verdicts"].setdefault(user_id, {})
+        others = [t["id"] for t in films if t["id"] not in (liked[0]["id"], liked[1]["id"])]
+        for title_id in [liked[0]["id"], *others[:4]]:
+            verdicts[title_id] = 2
+
+        ranked = (await client.get(
+            "/api/titles", params=[("kind", "movie"), ("kind", "series"), ("limit", 200)]
+        )).json()
+        assert ranked["sort"] == "for_you", ranked["sort"]
+        kinds = [item["kind"] for item in ranked["items"]]
+        assert kinds == sorted(kinds, key=("movie", "series").index), "a ranking mixed the kinds"
+        searched = (await client.get("/api/titles", params={"kind": "movie", "q": "a"})).json()
+        assert searched["sort"] == "match"
+
+        # Every other film is liked here, so which one the harness names is the fixture's; the
+        # sentence's shape is what the card is built against.
+        card = (await client.get(f"/api/titles/{liked[1]['id']}")).json()
+        named = card["why"].removeprefix("Because you liked ").split(" — they share ")[0]
+        assert card["why"].startswith("Because you liked ") and " — they share " in card["why"]
+        assert named in {t["name"] for t in films if t["id"] != liked[1]["id"]}, card["why"]
+        rated = (await client.get(f"/api/titles/{liked[0]['id']}")).json()
+        assert rated["why"] is None
+
+
 # --- M4.14: the import became a job, and the harness answered for a request -----------------
 #
 # Three shapes moved at once when §5.3's "minutes" budget finally put the import in the worker

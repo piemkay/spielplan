@@ -36,6 +36,8 @@ from spielplan.importer import meta
 Kind = Literal["movie", "series"]
 KINDS: tuple[Kind, ...] = ("movie", "series")
 SeenFilter = Literal["any", "seen", "unseen"]
+# Decision 515: the catalogue's two orders. A search has its own (decision 472) whichever is set.
+Sort = Literal["for_you", "newest"]
 
 # Postgres's LIKE takes backslash as its escape character unless ESCAPE says otherwise, so the
 # three characters a needle has to lose their meaning are the backslash itself and the two
@@ -429,8 +431,16 @@ async def list_titles(
     owned_only: bool = False,
     limit: int = 60,
     offset: int = 0,
+    sort: Sort = "newest",
+    bundle_version: str | None = None,
 ) -> tuple[list[dict[str, Any]], int]:
-    """Return (rows, total). `kinds` is mandatory and non-empty — see rule 5 above."""
+    """Return (rows, total). `kinds` is mandatory and non-empty — see rule 5 above.
+
+    `sort="for_you"` orders by the member's own score in `bundle_version` (decision 515), and
+    because that is a RANKING it partitions by kind: every film, then every series, each by the
+    score, never one interleaved ranking (§4.1 rule 5, decision 18). A title with no score row
+    closes its kind's run in year order. The filters and the count are untouched.
+    """
     clause, args = _filters(
         kinds=kinds, user_id=user_id, q=q, genre=genre, decade=decade, seen=seen,
         person_id=person_id, owned_only=owned_only,
@@ -448,10 +458,21 @@ async def list_titles(
         seen_join = f"LEFT JOIN user_title ut ON ut.title_id = t.id AND ut.user_id = {arg(user_id)}"
 
     # A search is ordered by how well it matched (decision 472); a listing without one keeps the
-    # year order, which is decision 18's kind-independent order unchanged.
+    # year order, which is decision 18's kind-independent order unchanged - or, asked for the
+    # member's own order, is ranked by it one kind at a time (decision 515). `$1` is the kinds in
+    # `KINDS` order (`_filters`), so films lead.
     search_joins, order = "", "t.year DESC NULLS LAST, lower(t.name), t.id"
     if q and q.strip():
         search_joins, order = search_order_sql(arg(q))
+    elif sort == "for_you" and user_id is not None and bundle_version is not None:
+        search_joins = (
+            f"\n          LEFT JOIN user_score fy ON fy.title_id = t.id AND fy.user_id = {arg(user_id)}"
+            f" AND fy.bundle_version = {arg(bundle_version)}"
+        )
+        order = (
+            "array_position($1::text[], t.kind), fy.score DESC NULLS LAST, t.year DESC NULLS LAST,"
+            " lower(t.name), t.id"
+        )
 
     lim, off = arg(limit), arg(offset)
     rows = await conn.fetch(

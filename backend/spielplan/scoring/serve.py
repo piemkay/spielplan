@@ -261,6 +261,28 @@ async def fit_row(conn, *, user_id: int, kind: Kind) -> dict[str, Any] | None:
     return dict(row) if row else None
 
 
+async def personal_kinds(
+    conn, *, user_id: int, kinds: Sequence[str], bundle_version: str | None
+) -> list[str]:
+    """The kinds of `kinds` this member's own ratings rank: a fold-in fitted to their labels, in
+    the active basis, whose personal half carries weight. What the catalogue's "for you" order
+    needs before it is the default (decision 515): a profile at β 0 is the crowd's order - "what
+    most people rate highest" in `ranked_section`'s own `personalised` - and calling that "for
+    you" would be the decorative claim §6.0 forbids."""
+    if bundle_version is None:
+        return []
+    rows = await conn.fetch(
+        """
+        SELECT kind FROM user_vector
+         WHERE user_id = $1 AND purpose = 'foldin' AND kind = ANY($2::text[])
+           AND label_count > 0 AND blend_beta > 0 AND bundle_version = $3
+        """,
+        user_id, list(kinds), bundle_version,
+    )
+    found = {r["kind"] for r in rows}
+    return [k for k in KINDS if k in found]
+
+
 # --- the ranked read ---------------------------------------------------------------------------
 
 
@@ -337,12 +359,16 @@ async def ranked_section(
     owned_only: bool = True,
     limit: int = 24,
     offset: int = 0,
+    exclude: Sequence[int] = (),
 ) -> dict[str, Any]:
     """ONE kind's ranked section. `kind` is bound as a scalar — there is no set-valued variant.
 
     Ordering is `score DESC, title.id ASC`. The tie-break is not cosmetic: paging over equal
     scores is otherwise nondeterministic across pages, and a household's cold catalogue has
     plenty of equal scores.
+
+    `exclude` is Home's (decision 512: the titles a member avoids leave "Your top picks"); empty
+    by default, so Rank's read is untouched.
     """
     if kind not in KINDS:
         raise ValueError(f"unknown kind {kind!r}")
@@ -352,6 +378,9 @@ async def ranked_section(
         args, q=q, genre=genre, decade=decade, person_id=person_id, seen=seen,
         owned_only=owned_only, user_id=user_id,
     )
+    if exclude:
+        args.append([int(t) for t in exclude])
+        clause += f" AND NOT (t.id = ANY(${len(args)}::int[]))"
     # The prior joins on the score's OWN bundle_version, not on the bound one: a score and the
     # prior it was computed against must come from one basis or the card and the sort disagree.
     joins = """
