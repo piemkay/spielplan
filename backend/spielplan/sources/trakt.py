@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from spielplan.sources import _ids, _views, credentials
-from spielplan.sources.base import SourceResult, handler
+from spielplan.sources.base import SourceResult
 
 if TYPE_CHECKING:
     from spielplan.acquire.stages import StageContext
@@ -32,8 +32,6 @@ def _no_credential(kind: str) -> SourceResult:
                         note="no Trakt client id configured")
 
 
-@handler("trakt:summary", source=SOURCE, requires=credentials.TRAKT, priority=40,
-         phase="enrich", description="Trakt summary, stats and rating distribution")
 async def summary(ctx: StageContext) -> SourceResult:
     """Three requests: the title, its rating distribution, and its watch statistics.
 
@@ -81,9 +79,6 @@ async def summary(ctx: StageContext) -> SourceResult:
     )
 
 
-@handler("trakt:comments", source=SOURCE, requires=credentials.TRAKT, priority=45,
-         phase="enrich",
-         description="User comments, rating-stratified (likes/lowest/highest)")
 async def comments(ctx: StageContext) -> SourceResult:
     """The rating-labelled review text, taken from three ends of the distribution.
 

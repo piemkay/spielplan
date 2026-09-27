@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 
 from spielplan.acquire import fetch
 from spielplan.sources import _ids, _views, credentials
-from spielplan.sources.base import SourceResult, handler
+from spielplan.sources.base import SourceResult
 
 if TYPE_CHECKING:
     from spielplan.acquire.stages import StageContext
@@ -38,8 +38,6 @@ def _refusal(response: fetch.Response) -> str:
     return f"OMDb: {error}"
 
 
-@handler("omdb:detail", source=SOURCE, requires=credentials.OMDB, priority=30,
-         phase="enrich", description="RT + Metacritic + IMDb scores, awards, plot")
 async def detail(ctx: StageContext) -> SourceResult:
     kind = "omdb:detail"
     row = await _ids.title_row(ctx.conn, ctx.title_id)

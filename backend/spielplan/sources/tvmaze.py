@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from spielplan.sources import _ids, _views
-from spielplan.sources.base import SourceResult, handler
+from spielplan.sources.base import SourceResult
 
 if TYPE_CHECKING:
     from spielplan.acquire.stages import StageContext
@@ -20,8 +20,6 @@ API = "https://api.tvmaze.com"
 EMBEDS = ["cast", "crew", "seasons"]
 
 
-@handler("tvmaze:show", source=SOURCE, priority=55, phase="enrich",
-         description="TV series details, cast and crew")
 async def show(ctx: StageContext) -> SourceResult:
     kind = "tvmaze:show"
     row = await _ids.title_row(ctx.conn, ctx.title_id)

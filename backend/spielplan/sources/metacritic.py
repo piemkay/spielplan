@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, Any
 import asyncpg
 
 from spielplan.sources import _ids, _views
-from spielplan.sources.base import SourceResult, handler
+from spielplan.sources.base import SourceResult
 
 if TYPE_CHECKING:
     from spielplan.acquire.stages import StageContext
@@ -109,8 +109,6 @@ async def resolve_path(ctx: StageContext, row: Any) -> _Resolved:
     )
 
 
-@handler("metacritic:page", source=SOURCE, priority=77, phase="enrich",
-         description="Metacritic title page (metascore + user score)")
 async def page(ctx: StageContext) -> SourceResult:
     """The title page: the metascore, the user score, and the proof that the slug is this film's."""
     kind = "metacritic:page"
@@ -140,8 +138,6 @@ async def page(ctx: StageContext) -> SourceResult:
                         note=f"path={resolved.path}")
 
 
-@handler("metacritic:reviews", source=SOURCE, priority=86, phase="enrich",
-         description="Scored critic excerpts + user reviews")
 async def reviews(ctx: StageContext) -> SourceResult:
     """Two views, both server-rendered. The rows §8 stage 4's gate counts come out of these.
 

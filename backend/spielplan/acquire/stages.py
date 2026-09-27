@@ -26,8 +26,8 @@ from spielplan.llm import extract
 from spielplan.models import artifacts
 from spielplan.models.artifacts import ArtifactStore
 from spielplan.placement import reconcile
-from spielplan.sources import base as sources
 from spielplan.sources import credentials
+from spielplan.sources.base import Handler
 
 log = logging.getLogger("spielplan.acquire.pipeline")
 
@@ -129,9 +129,6 @@ _MINT_LOCK = 8002
 
 # The stub marker, one spelling.
 NOT_IMPLEMENTED = "not implemented at M5.1 - owned by {}"
-
-# §8's name for stage 2, and the `phase` every adapter registers under.
-ENRICH_PHASE = "enrich"
 
 # Decision 334's one required source; `derive/rebuild.REQUIRED_DOCUMENTS` is its stored-bytes twin.
 REQUIRED_KIND = "tmdb:detail"
@@ -556,35 +553,65 @@ async def _capabilities(conn: asyncpg.Connection) -> dict[str, bool]:
     }
 
 
+def enrich_sources() -> tuple[tuple[str, str, Handler, str | None], ...]:
+    """§8 stage 2's `(kind, source, adapter, required connector)`, in asking order.
+
+    `wikidata:resolve` runs before the two scrapers, which need its slugs.
+    """
+    # Imported here: the adapters import `acquire.fetch`, and this module imports no transport.
+    from spielplan.sources import (
+        metacritic,
+        omdb,
+        rottentomatoes,
+        tmdb,
+        trakt,
+        tvmaze,
+        wikidata,
+        wikipedia,
+    )
+
+    return (
+        ("tmdb:resolve", "tmdb", tmdb.resolve, credentials.TMDB),
+        ("tmdb:detail", "tmdb", tmdb.detail, credentials.TMDB),
+        ("wikidata:resolve", "wikidata", wikidata.resolve, None),
+        ("omdb:detail", "omdb", omdb.detail, credentials.OMDB),
+        ("trakt:summary", "trakt", trakt.summary, credentials.TRAKT),
+        ("trakt:comments", "trakt", trakt.comments, credentials.TRAKT),
+        ("wikipedia:article", "wikipedia", wikipedia.article, None),
+        ("tvmaze:show", "tvmaze", tvmaze.show, None),
+        ("rt:page", "rottentomatoes", rottentomatoes.page, None),
+        ("metacritic:page", "metacritic", metacritic.page, None),
+        ("metacritic:reviews", "metacritic", metacritic.reviews, None),
+    )
+
+
 async def enrich(ctx: StageContext) -> Outcome:
     """§8 stage 2: "tmdb:resolve -> tmdb:detail ... wikidata:resolve ... rt:page,
     metacritic:page->reviews" (`spec:365-368`), each through the one polite fetcher.
 
-    Order is the registry's `default_priority`. Only a failure of the required source that actually
-    ran parks (decision 334), with a deadline; every other failure, a raise or a paused host
-    included, is that source's note (decision 422).
+    Only a failure of the required source that actually ran parks (decision 334), with a deadline;
+    every other failure, a raise or a paused host included, is that source's note (decision 422).
     """
     if ctx.title_id is None:
         return fail("stage 2 reached with no title id; stage 1 did not establish one")
     if ctx.fetcher is None:
         return fail(NO_FETCHER)
 
-    # Loaded here, not at import: the adapters import `acquire.fetch`, which would close a cycle.
-    sources.load_all()
     capabilities = await _capabilities(ctx.conn)
-    # Stage 2 is not a paid stage, so no paid kind may run inside it.
-    wanted = sources.available_kinds(capabilities, ENRICH_PHASE, include_paid=False)
-
+    wanted: list[str] = []
     answered: list[str] = []
     notes: dict[str, str] = {}
     # Kinds that returned without a request (`SourceResult.ran`). An adapter that raised is in neither
     # set and so counts as having run.
     unasked: set[str] = set()
     documents = 0
-    for kind in wanted:
-        spec = sources.REGISTRY[kind]
+    for kind, _source, adapter, requires in enrich_sources():
+        if requires and not capabilities[requires]:
+            notes[kind] = f"{requires} is not configured, so this source was not asked"
+            continue
+        wanted.append(kind)
         try:
-            result = await spec.fn(ctx)
+            result = await adapter(ctx)
         except Exception as exc:                                         # noqa: BLE001
             log.warning("acquisition source %s raised for title %s", kind, ctx.title_id,
                         exc_info=True)
@@ -600,13 +627,6 @@ async def enrich(ctx: StageContext) -> Outcome:
                 notes[kind] = result.note
         else:
             notes[kind] = result.note or "no answer"
-
-    # Unrunnable kinds are reported by name, based on `requires` alone.
-    for kind, spec in sorted(sources.REGISTRY.items()):
-        if spec.phase != ENRICH_PHASE or kind in wanted:
-            continue
-        if spec.requires and not capabilities.get(spec.requires, False):
-            notes[kind] = f"{spec.requires} is not configured, so this source was not asked"
 
     detail: dict[str, Any] = {"answered": answered, "documents": documents}
     if notes:

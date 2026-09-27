@@ -114,7 +114,7 @@ def belongs_to_title(content: bytes, *, year: int | None, people: set[str],
                      mode: str, people_decide: bool = True) -> bool:
     """Is this scraped page really about the title we asked for? The one predicate, borrowed.
 
-    Import deferred so `base.load_all()` does not drag in stage 3's parsers.
+    Import deferred so importing an adapter does not drag in stage 3's parsers.
     """
     from spielplan.derive.parse import page_belongs_to_title
 

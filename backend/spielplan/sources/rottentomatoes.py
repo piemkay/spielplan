@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
 from spielplan.sources import _ids, _views
-from spielplan.sources.base import SourceResult, handler
+from spielplan.sources.base import SourceResult
 
 if TYPE_CHECKING:
     from spielplan.acquire.stages import StageContext
@@ -33,8 +33,6 @@ def candidate_paths(row: Any) -> list[str]:
     return out
 
 
-@handler("rt:page", source=SOURCE, priority=76, phase="enrich",
-         description="Rotten Tomatoes scorecard (critic % + audience %)")
 async def page(ctx: StageContext) -> SourceResult:
     """One request per candidate, at seven-tenths of a request a second."""
     kind = "rt:page"

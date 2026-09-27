@@ -9,7 +9,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from spielplan.sources import _ids, _views, credentials
-from spielplan.sources.base import SourceResult, handler, json_get
+from spielplan.sources.base import SourceResult, json_get
 
 if TYPE_CHECKING:
     from spielplan.acquire.stages import StageContext
@@ -78,8 +78,6 @@ async def _find(ctx: StageContext, row: Any, auth: tuple[dict[str, str], dict[st
     return int(tmdb_id), f"tmdb_id={tmdb_id}", captured
 
 
-@handler("tmdb:resolve", source=SOURCE, requires=credentials.TMDB, priority=10,
-         phase="enrich", description="Resolve IMDb id -> TMDB id")
 async def resolve(ctx: StageContext) -> SourceResult:
     """§8 stage 2's first kind, and the cheapest: one request that makes the next one possible."""
     kind = "tmdb:resolve"
@@ -104,8 +102,6 @@ async def resolve(ctx: StageContext) -> SourceResult:
                         doc_id=captured.doc_id, note=note)
 
 
-@handler("tmdb:detail", source=SOURCE, requires=credentials.TMDB, priority=20,
-         phase="enrich", description="Full title record + credits + keywords")
 async def detail(ctx: StageContext) -> SourceResult:
     """The one document §8 stage 3 cannot do without, which is why decision 334 requires it.
 

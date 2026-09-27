@@ -175,49 +175,17 @@ async def keyed(db, secrets_key):
     return db
 
 
-def test_stage_two_registers_the_eight_sources_section_eight_names_and_no_ninth():
-    """Letterboxd is not crawled (decision 374), but `wikidata:resolve` fills its slug anyway."""
-    base.load_all()
-    assert {spec.source for spec in base.REGISTRY.values()} == {
-        "tmdb", "wikidata", "omdb", "trakt", "wikipedia", "tvmaze",
-        "rottentomatoes", "metacritic",
-    }
-    assert "letterboxd" not in base.REGISTRY
-    assert not any(spec.source == "letterboxd" for spec in base.REGISTRY.values())
-
-
-def test_the_kinds_run_in_the_order_section_eight_lists_them():
-    """Three priorities differ from the corpus's (a wholesale crawl's); each is argued in its module."""
-    base.load_all()
-    assert base.available_kinds({"tmdb": True, "omdb": True, "trakt": True}) == [
+def test_stage_two_asks_the_eight_sources_section_eight_names_in_its_order():
+    """Letterboxd is not crawled (decision 374); `wikidata:resolve` precedes the scrapers it feeds."""
+    order = stages.enrich_sources()
+    assert [kind for kind, *_ in order] == [
         "tmdb:resolve", "tmdb:detail", "wikidata:resolve", "omdb:detail",
         "trakt:summary", "trakt:comments", "wikipedia:article", "tvmaze:show",
         "rt:page", "metacritic:page", "metacritic:reviews",
     ]
-
-
-def test_wikidata_resolves_before_either_scraped_source():
-    """Asserted on the numbers too: a tie would put `metacritic:page` first on the alphabet."""
-    base.load_all()
-    order = base.available_kinds({})
-    assert order.index("wikidata:resolve") < order.index("rt:page")
-    assert order.index("wikidata:resolve") < order.index("metacritic:page")
-    assert base.REGISTRY["wikidata:resolve"].default_priority < min(
-        base.REGISTRY["rt:page"].default_priority,
-        base.REGISTRY["metacritic:page"].default_priority,
-    )
-
-
-def test_an_install_with_no_keys_still_runs_the_five_keyless_sources():
-    """`available_kinds` filters on `requires`, so an unconfigured install still crawls the keyless five."""
-    base.load_all()
-    assert base.available_kinds({}) == [
-        "wikidata:resolve", "wikipedia:article", "tvmaze:show",
-        "rt:page", "metacritic:page", "metacritic:reviews",
-    ]
-    assert {base.REGISTRY[k].requires for k in ("tmdb:resolve", "tmdb:detail")} == {"tmdb"}
-    assert base.REGISTRY["omdb:detail"].requires == "omdb"
-    assert base.REGISTRY["trakt:summary"].requires == "trakt"
+    assert {source for _kind, source, *_ in order} == {
+        "tmdb", "wikidata", "omdb", "trakt", "wikipedia", "tvmaze", "rottentomatoes", "metacritic",
+    }
 
 
 def _row(**columns) -> dict:

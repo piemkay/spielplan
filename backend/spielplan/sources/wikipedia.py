@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 
 from spielplan.acquire import fetch
 from spielplan.sources import _ids, _views
-from spielplan.sources.base import SourceResult, handler
+from spielplan.sources.base import SourceResult
 
 if TYPE_CHECKING:
     from spielplan.acquire.stages import StageContext
@@ -124,8 +124,6 @@ def _missing(response: fetch.Response) -> str:
     return ""
 
 
-@handler("wikipedia:article", source=SOURCE, priority=50, phase="enrich",
-         description="Full article plain text (plot, reception, production)")
 async def article(ctx: StageContext) -> SourceResult:
     """One or two requests: the search, if the title does not already carry an article, and the
     extract.
