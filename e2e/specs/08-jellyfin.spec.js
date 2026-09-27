@@ -164,8 +164,8 @@ test.describe('jellyfin', () => {
     await expect(prompt).toBeVisible();
     const titleId = await prompt.getAttribute('data-finish-prompt');
     // Read BEFORE the tap, from the route: the refresh below is only a fact if it was absent.
-    const before = await (await page.request.get('/api/home/pending-verdicts')).json();
-    expect(before.named.map((entry) => entry.name)).not.toContain('Severance');
+    const { banner } = await (await page.request.get('/api/home?kind=series')).json();
+    expect((banner?.named ?? []).map((entry) => entry.name)).not.toContain('Severance');
 
     await prompt.getByRole('button', { name: 'Yes — mark it seen' }).click();
     await expect(prompt).toHaveCount(0);

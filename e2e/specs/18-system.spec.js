@@ -324,7 +324,6 @@ test.describe('the System card', () => {
           has_api_key: false,
           configured: false,
           library_ids: [],
-          linked_users: 0,
           secrets_unreadable: true
         }
       })

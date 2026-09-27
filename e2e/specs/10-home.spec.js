@@ -271,7 +271,9 @@ test('Series switches to series, and Both shows the two kinds as two regions', a
   await page.getByTestId('kind-both').click();
   await expect(page.getByTestId('kind-both')).toHaveAttribute('aria-pressed', 'true');
   const home = await homePayload(page.request);
-  const kinds = home.sections.filter((r) => r.shelves.length).map((r) => r.kind);
+  const kinds = home.kinds.filter((kind) =>
+    home.shelves.some((shelf) => shelf.sections.some((s) => s.kind === kind))
+  );
   const regions = page.getByTestId('kind-region');
   await expect(regions).toHaveCount(kinds.length);
   for (let i = 0; i < kinds.length; i++) {
