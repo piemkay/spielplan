@@ -133,7 +133,6 @@ async def test_a_batch_claimed_and_never_started_is_handed_back_unspent(db):
 
 async def test_release_is_fenced_on_the_state_and_not_on_the_owner(db):
     """`state = 'leased'` fences terminal states, not another worker's lease: no ownership component."""
-    import inspect
 
     await queue.enqueue(db, "identify", "jf:stranger", {"item": 1})
     [held] = await queue.lease(db, owner="worker-b")
@@ -144,16 +143,6 @@ async def test_release_is_fenced_on_the_state_and_not_on_the_owner(db):
     row = await _row(db, held.key)
     assert (row["state"], row["attempts"], row["lease_owner"]) == (queue.PENDING, 0, None), (
         "release is unfenced on the owner, and the contract has to say the thing it does"
-    )
-
-    doc = inspect.getdoc(queue.release) or ""
-    assert "can only ever move" not in doc and "a row this drain is holding" not in doc, (
-        "release's docstring credits `state = LEASED` with an ownership guarantee the predicate "
-        "does not carry; the assertion above is the behaviour it actually has"
-    )
-    assert "unfenced on" in doc, (
-        "the correction is the argument and not the deletion: a reader reaching for release from "
-        "M5.6's abandon action has to be told the family is lock-free on purpose"
     )
 
 

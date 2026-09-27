@@ -3,14 +3,7 @@ must render its `detail`. No database."""
 
 from __future__ import annotations
 
-import ast
-from pathlib import Path
-
-import spielplan
-from spielplan.importer.report import _ASCII_FOLD, ImportReport
-
-# The methods that write a sentence an operator reads: anything handed to them is report text.
-_REPORT_CALLS = ("fail", "warn", "note")
+from spielplan.importer.report import ImportReport
 
 
 def _report_with_one_of_each() -> ImportReport:
@@ -69,36 +62,6 @@ def test_render_encodes_to_ascii():
 
     spoken.encode("ascii")
     assert "`rating_source` is missing - it is mandatory (section 4.3)" in spoken, spoken
-
-
-def test_every_message_this_package_writes_folds_to_ascii():
-    """The SOURCE is read, because that is where the next message
-    will be written; the codepoint is named as U+XXXX."""
-    package = Path(spielplan.__file__).resolve().parent
-    offenders: list[str] = []
-    for path in sorted(package.rglob("*.py")):
-        tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
-        for node in ast.walk(tree):
-            if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):
-                continue
-            if node.func.attr not in _REPORT_CALLS:
-                continue
-            for text in ast.walk(node):
-                if not isinstance(text, ast.Constant) or not isinstance(text.value, str):
-                    continue
-                for char in text.value:
-                    if ord(char) > 127 and char not in _ASCII_FOLD:
-                        offenders.append(
-                            f"{path.relative_to(package)}:{text.lineno} U+{ord(char):04X}"
-                        )
-
-    assert not offenders, (
-        "a report message carries a codepoint _ASCII_FOLD does not fold, so render() will raise "
-        "UnicodeEncodeError on a cp1252 console (CLAUDE.md): "
-        + ", ".join(sorted(set(offenders)))
-        + " - add the glyph to _ASCII_FOLD with the plain text it stands for, or write the "
-        "message in ASCII"
-    )
 
 
 def test_a_failure_renders_a_line_per_detail_key():

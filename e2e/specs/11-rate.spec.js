@@ -189,8 +189,6 @@ test.describe('rate', () => {
   test.beforeAll(async ({ browser, baseURL }) => {
     page = await browser.newPage({ baseURL });
     await signedIn(page);
-    const config = await (await page.request.get('/api/config')).json();
-    test.skip(!config.has_bundle, 'needs an imported bundle — run 01-first-boot first');
     await signInAsMember(page, await createMember(page));
   });
 

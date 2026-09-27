@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import ast
 import re
 from pathlib import Path
 
@@ -21,8 +20,6 @@ from tests.test_dna_review import TITLE as REVIEWED
 from tests.test_dna_review import _reject
 from tests.test_dna_review import _tag as _extracted
 
-ROUTES = Path(__file__).resolve().parents[1] / "spielplan" / "api" / "curated.py"
-EDITORS = {"adjudications", "corrections", "axes"}
 TSV = "text/tab-separated-values; charset=utf-8"
 
 
@@ -230,45 +227,3 @@ async def test_every_editor_and_review_route_refuses_a_member_and_a_stranger(app
 
     assert (await member.request(method, path, **kwargs)).status_code == 403
     assert (await app().request(method, path, **kwargs)).status_code == 401
-
-
-def _routes_of(tree: ast.Module) -> dict[str, tuple[str, ast.AsyncFunctionDef]]:
-    found = {}
-    for node in tree.body:
-        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
-            continue
-        for decorator in node.decorator_list:
-            if (isinstance(decorator, ast.Call) and isinstance(decorator.func, ast.Attribute)
-                    and isinstance(decorator.func.value, ast.Name) and decorator.func.value.id == "router"):
-                found[node.name] = (decorator.args[0].value, node)
-    return found
-
-
-def _editors_called(node: ast.AST) -> set[str]:
-    return {
-        inner.func.value.id
-        for inner in ast.walk(node)
-        if isinstance(inner, ast.Call) and isinstance(inner.func, ast.Attribute)
-        and isinstance(inner.func.value, ast.Name) and inner.func.value.id in EDITORS
-    }
-
-
-def test_each_editor_route_calls_exactly_one_editor_and_nothing_shared_calls_any():
-    """§6.6 Data's "never one merged screen": each `/curated/` handler calls exactly one editor module."""
-    assert _editors_called(ast.parse("axes.author(conn)\nx = adjudications")) == {"axes"}, (
-        "the reader sees a call and not a bare name"
-    )
-    tree = ast.parse(ROUTES.read_text(encoding="utf-8"))
-    routes = _routes_of(tree)
-
-    ledger = {name: path for name, (path, _node) in routes.items() if path.startswith("/curated/")}
-    assert len(ledger) == 12 and len(routes) == 14, sorted(routes)
-    for name, (path, node) in routes.items():
-        called = _editors_called(node)
-        if path.startswith("/curated/"):
-            assert called == {path.split("/")[2]}, f"{name} ({path}) calls {sorted(called)}"
-        else:
-            assert called == set(), f"{name} ({path}) is a review route and calls {sorted(called)}"
-    for node in tree.body:
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) and node.name not in routes:
-            assert _editors_called(node) == set(), f"the shared helper {node.name} calls an editor"

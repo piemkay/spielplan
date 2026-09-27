@@ -649,7 +649,6 @@ JOBS: tuple[Job, ...] = (
 )
 
 # Jobs that fit against the active bundle and so must not run across §10's flip.
-# `test_worker_schedule.py` derives the same set from each `run` and fails on drift.
 MODEL_JOBS = frozenset({
     "ledger-map-refit",
     "ledger-refresh",
@@ -657,8 +656,7 @@ MODEL_JOBS = frozenset({
     "fold-in-tick",
     "tier-set-refit",
     "placement-reconciliation",
-    # Stage 9 writes `title_placement`. The derivation cannot see that path (`pipeline.STAGES` is
-    # data), so the batch-level `_active_store` in `_acquisition_drain` is what keeps this honest.
+    # Stage 9 writes `title_placement`.
     "acquisition-drain",
 })
 

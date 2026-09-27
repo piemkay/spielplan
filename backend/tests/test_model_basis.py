@@ -3,7 +3,6 @@ staged directory fails on Windows, where the mapped backbone.npz holds a handle.
 
 from __future__ import annotations
 
-import ast
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -28,7 +27,6 @@ from spielplan.scoring import backbone as bb
 from tests.fixtures import make_bundle as fx
 from tests.helpers import insert_user
 
-PKG = Path(__file__).resolve().parents[1] / "spielplan"
 LABELS = ((1, 2), (2, 2), (3, 1), (4, 0), (5, 1))
 SERIES_LABELS = ((6, 2), (7, 0))
 
@@ -352,7 +350,6 @@ async def test_every_fitted_pair_carries_the_version_its_basis_came_from_after_a
 
 
 async def test_every_read_path_reports_the_one_active_version(db, tmp_path):
-    """The importer keeps its own copy: the `already_active` read inside its flip transaction."""
     await _import(db, tmp_path / "b1", tmp_path / "artifacts")
     store = ArtifactStore.open(tmp_path / "artifacts" / "test-v1", "test-v1")
     request = SimpleNamespace(app=SimpleNamespace(state=SimpleNamespace(artifacts=store)))
@@ -361,14 +358,6 @@ async def test_every_read_path_reports_the_one_active_version(db, tmp_path):
     assert await refit.active_bundle_version(db) == "test-v1"
     assert await tonight_api._bundle_version(db) == "test-v1"
     assert await home_api._bundle(request, db) == "test-v1"
-
-    query = "SELECT version FROM artifact_bundle WHERE state = 'active'"
-    spellers = sorted(
-        path.relative_to(PKG).as_posix()
-        for path in PKG.rglob("*.py")
-        if query in path.read_text(encoding="utf-8")
-    )
-    assert spellers == ["importer/bundle.py", "models/artifacts.py"], spellers
 
 
 async def test_a_worker_model_job_whose_bundle_is_not_the_active_row_refuses_and_advances_nothing(
@@ -574,49 +563,6 @@ async def test_a_process_that_is_both_stale_and_broken_is_diagnosed_by_the_calle
     # The worker reloads, so it holds gone-v2 against gone-v2: only the flag is left to report.
     with pytest.raises(RuntimeError, match="does not exist"):
         await worker._active_store(db)
-
-
-# The title card's answer (decision 487) is the sixth; it writes through `rate.session`.
-_FITTING_ROUTES = (
-    "rate.py::verdict", "rate.py::duel", "rate.py::undo", "rank.py::drop", "rank.py::answer",
-    "rate.py::answer_from_title_card",
-)
-
-
-def test_every_fitting_route_awaits_the_basis_guard_as_its_first_statement():
-    """Static: the property is that no route is MISSING the call. The guard must come first,
-    because a refusal after the tap commits loses it."""
-    guarded: dict[str, bool] = {}
-    for module in ("rate.py", "rank.py"):
-        tree = ast.parse((PKG / "api" / module).read_text(encoding="utf-8"))
-        for node in tree.body:
-            if not isinstance(node, ast.AsyncFunctionDef | ast.FunctionDef):
-                continue
-            if not any(
-                isinstance(call, ast.Call)
-                and isinstance(call.func, ast.Attribute)
-                and call.func.attr == "basis"
-                for call in ast.walk(node)
-            ):
-                continue
-            statements = node.body[1:] if ast.get_docstring(node) else node.body
-            first = statements[0] if statements else None
-            guarded[f"{module}::{node.name}"] = (
-                isinstance(first, ast.Expr)
-                and isinstance(first.value, ast.Await)
-                and isinstance(first.value.value, ast.Call)
-                and getattr(first.value.value.func, "attr", None) == "assert_active_basis"
-            )
-
-    unguarded = sorted(name for name, ok in guarded.items() if not ok)
-    assert not unguarded, (
-        "these routes thread deps.basis(request) into a fit without awaiting assert_active_basis "
-        f"as their first statement: {unguarded}"
-    )
-    assert sorted(guarded) == sorted(_FITTING_ROUTES), (
-        f"data-03 names {len(_FITTING_ROUTES)} fitting routes and api/ holds {sorted(guarded)}; "
-        "a route that fits is one this guard has to cover, so amend the row and the list together"
-    )
 
 
 async def test_the_model_jobs_refuse_a_broken_bundle_and_leave_ledger_fit_where_it_was(

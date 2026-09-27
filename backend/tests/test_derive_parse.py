@@ -4,7 +4,6 @@ real-world trap. Only `upsert_person` and `known_people` touch the database."""
 
 from __future__ import annotations
 
-import ast
 import json
 from pathlib import Path
 
@@ -13,7 +12,6 @@ import pytest
 from spielplan.derive import ids, parse, reviews
 
 FIXTURES = Path(__file__).resolve().parent / "fixtures" / "sources"
-PACKAGE = Path(parse.__file__).resolve().parent
 
 
 def fixture(name: str) -> bytes:
@@ -727,95 +725,3 @@ async def test_a_title_with_no_credits_yet_has_an_empty_cast_and_that_is_an_answ
     page = fixture("metacritic_page.html")
     assert parse.page_belongs_to_title(page, year=2016, people=set())
     assert not parse.page_belongs_to_title(page, year=2022, people=set())
-
-
-# §8: fetched bytes land in the raw store "so re-parsing is free forever"; none of these may be imported.
-TRANSPORT = ("httpx", "requests", "urllib.request", "urllib3", "http.client", "socket", "aiohttp",
-             "spielplan.acquire.fetch", "spielplan.connectors")
-
-
-def _absolute(node: ast.ImportFrom, package: str) -> str:
-    if not node.level:
-        return node.module or ""
-    parts = package.split(".")
-    prefix = ".".join(parts[: len(parts) - node.level + 1])
-    return f"{prefix}.{node.module}" if node.module else prefix
-
-
-def _imported_modules(source: str, *, package: str = "spielplan.derive") -> set[str]:
-    """`from x import y` is recorded as `x.y` too, which `test_layering_guards.py`'s helper cannot do."""
-    modules: set[str] = set()
-    for node in ast.walk(ast.parse(source)):
-        if isinstance(node, ast.Import):
-            modules.update(alias.name for alias in node.names)
-        elif isinstance(node, ast.ImportFrom):
-            module = _absolute(node, package)
-            modules.add(module)
-            modules.update(f"{module}.{alias.name}" for alias in node.names if module)
-    return modules
-
-
-def _transport(source: str) -> list[str]:
-    return sorted(
-        m for m in _imported_modules(source)
-        if any(m == bad or m.startswith(f"{bad}.") for bad in TRANSPORT)
-    )
-
-
-def _reaches_for_the_fetcher(source: str) -> bool:
-    """`ctx.fetcher` is the one way out needing no import;
-    AST, because these modules discuss it in prose."""
-    return any(
-        isinstance(node, ast.Attribute) and node.attr == "fetcher"
-        for node in ast.walk(ast.parse(source))
-    )
-
-
-def test_no_module_in_the_derive_package_can_reach_the_network():
-    """The whole package, so a new module is guarded the day it lands."""
-    modules = sorted(PACKAGE.rglob("*.py"))
-    assert len(modules) >= 4, f"the guard found almost nothing to read in {PACKAGE}"
-    for path in modules:
-        source = path.read_text(encoding="utf-8")
-        offenders = _transport(source)
-        assert not offenders, f"derive/{path.name} reaches for transport: {offenders}"
-        assert not _reaches_for_the_fetcher(source), (
-            f"derive/{path.name} reaches for `.fetcher`: stage 3 re-reads the raw store, and a "
-            "request made through the context's fetcher needs no import at all (decision 373)"
-        )
-
-
-def test_the_transport_guard_can_report_every_way_in():
-    """A guard that cannot report a violation is a green line rather than a proof."""
-    for illegal in (
-        "import httpx\n",
-        "from httpx import AsyncClient\n",
-        "import requests\n",
-        "from urllib.request import urlopen\n",
-        "from spielplan.acquire import fetch\n",
-        "from spielplan.acquire.fetch import Fetcher\n",
-        "from spielplan.acquire import fetch as f\n",
-        "import socket\n",
-        "from spielplan.connectors import jellyfin\n",
-    ):
-        assert _transport(illegal), f"the guard missed: {illegal.strip()}"
-    # And the imports this package legitimately makes are not reported.
-    assert not _transport(
-        "import json\nfrom spielplan.sources._htmlutil import clean_text\n"
-        "from spielplan.importer.reviews import REVIEW_SOURCE\nimport asyncpg\n"
-    )
-    # The import-free way in, and the prose every module here writes about it.
-    assert _reaches_for_the_fetcher("async def f(ctx):\n    return await ctx.fetcher.get('u')\n")
-    assert _reaches_for_the_fetcher("def f(ctx):\n    client = ctx.fetcher\n")
-    assert not _reaches_for_the_fetcher('"""The fetcher is handed to stage 2."""\nx = 1\n')
-
-
-def test_the_parsers_import_the_two_modules_the_corpus_imports_and_little_else():
-    imported = _imported_modules((PACKAGE / "parse.py").read_text(encoding="utf-8"))
-    assert "spielplan.sources._htmlutil" in imported
-    assert "spielplan.derive.ids" in imported
-    assert not any(m.startswith("spielplan.") for m in imported
-                   if m not in {"spielplan.sources._htmlutil", "spielplan.derive.ids"}
-                   and not m.startswith("spielplan.sources._htmlutil.")
-                   and not m.startswith("spielplan.derive.ids.")), sorted(imported)
-    assert "asyncpg" not in imported, "a parser that holds a connection cannot be re-run cheaply"

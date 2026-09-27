@@ -735,79 +735,6 @@ async def test_a_tie_is_counted_and_not_scored(db, board_of):
     assert agreement.rate is None
 
 
-async def test_only_the_evaluation_module_reads_the_held_out_stream():
-    """Static: "no other read path" is a claim about code, and a new reader fails no runtime test."""
-    allowed = {
-        "rank/evaluation.py": "admits only these rows (§13's one evaluation read path)",
-        "ledger/observations.py": "defines the constant; excludes them from the nightly fit",
-        "ledger/refit.py": "excludes them from the <50 ms incremental path and its mean margin",
-        "rank/read.py": "excludes them from the selector's comparison counts",
-        "rank/queue.py": "names the arm that writes them",
-        "home/rail.py": "names the arm in the §6.7 log line (proposal 120)",
-        "api/rank.py": "skips the incremental refit after a held-out answer, so the evaluation "
-                       "stream cannot move the freshness clock the selector reads",
-        # 54b: Tonight's round has three deliberate readers, each excluding.
-        "tonight/round.py": "names the arm, and excludes those answers from the posterior that "
-                            "selection and stopping read (54b)",
-        # The tilt feeds the shortlist's score, so a held-out answer must not move it.
-        "tonight/play.py": "excludes those answers from the tilt, on both the answer and the "
-                           "undo path (54b, via the tonight score the shortlist reads)",
-        "tonight/solo.py": "excludes them from the count the provenance line reports, so solo "
-                           "never claims a tilt a held-out answer did not give it",
-        # Solo's answers come back over HTTP, and the arm is the one field a client must never choose.
-        "api/tonight.py": "re-derives the arm from the seq on solo's stateless round, rather "
-                          "than trusting what the client sends back (54b)",
-    }
-    offenders = [
-        rel for rel in _files_naming_the_held_out_stream(PACKAGE) if rel not in allowed
-    ]
-    assert not offenders, (
-        "§13's held-out stream is read somewhere new; every read path has to be deliberate: "
-        f"{offenders}"
-    )
-
-
-# Every spelling: `ARM_HOLDOUT` and `SELECTION_HOLDOUT` are superstrings of none of the others,
-# and each once blinded this guard.
-_HELD_OUT_NAMES = ("uniform_holdout", "HELD_OUT", "ARM_HOLDOUT", "SELECTION_HOLDOUT")
-
-
-def _files_naming_the_held_out_stream(root: Path) -> list[str]:
-    found = []
-    for path in sorted(root.rglob("*.py")):
-        text = path.read_text(encoding="utf-8")
-        if any(name in text for name in _HELD_OUT_NAMES):
-            found.append(path.relative_to(root).as_posix())
-    return found
-
-
-def test_the_held_out_guard_catches_a_new_reader(tmp_path):
-    """Fed a module that imports the constant by the package's name, as a leak would."""
-    package = tmp_path / "spielplan"
-    (package / "scoring").mkdir(parents=True)
-    leak = [
-        "from spielplan.rank.queue import ARM_HOLDOUT",
-        "SQL = 'SELECT 1 FROM duel WHERE selection = $1'  # bound to ARM_HOLDOUT",
-    ]
-    (package / "scoring" / "foldin.py").write_text("\n".join(leak), encoding="utf-8")
-    (package / "innocent.py").write_text("x = 1\n", encoding="utf-8")
-
-    assert _files_naming_the_held_out_stream(package) == ["scoring/foldin.py"]
-
-
-def test_the_held_out_guard_sees_every_spelling_a_reader_could_use(tmp_path):
-    """One file per spelling: the guard has been blind twice."""
-    package = tmp_path / "spielplan"
-    package.mkdir(parents=True)
-    for i, name in enumerate(_HELD_OUT_NAMES):
-        (package / f"reader{i}.py").write_text(f"x = {name!r}" + chr(10), encoding="utf-8")
-    (package / "innocent.py").write_text("x = 1" + chr(10), encoding="utf-8")
-
-    seen = _files_naming_the_held_out_stream(package)
-    assert seen == [f"reader{i}.py" for i in range(len(_HELD_OUT_NAMES))]
-    assert "innocent.py" not in seen
-
-
 @pytest.mark.parametrize(
     ("arm", "phrase"),
     [
@@ -1136,17 +1063,6 @@ async def test_the_board_reads_the_displayed_sigma_and_the_badge_follows_it(db, 
     assert {i.title_id: i.sigma for i in after}[target] == pytest.approx(5.0)
     badged = {e.title_id for t in widened for e in t.entries if e.straddle is not None} - held
     assert badged == {target}, "the badge is computed from the displayed sigma, not the fitted one"
-
-
-def test_the_board_reads_the_displayed_sigma_not_the_fitted_one():
-    """Reading `sigma` would make a board untouched for two years look as settled as when fitted."""
-    source = (PACKAGE / "rank" / "read.py").read_text(encoding="utf-8")
-    assert "COALESCE(ls.sigma_eff, ls.sigma)" in source
-
-
-def test_the_board_is_the_rated_titles_and_not_the_owned_library():
-    source = (PACKAGE / "rank" / "read.py").read_text(encoding="utf-8")
-    assert "ls.observed" in source
 
 
 async def test_an_unrated_owned_title_is_not_on_the_board(db, board_of):

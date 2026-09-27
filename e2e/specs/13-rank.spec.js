@@ -128,8 +128,6 @@ test.describe('rank', () => {
   test.beforeAll(async ({ browser, baseURL }, testInfo) => {
     page = await browser.newPage({ baseURL });
     await signedIn(page);
-    const config = await (await page.request.get('/api/config')).json();
-    test.skip(!config.has_bundle, 'needs an imported bundle — run 01-first-boot first');
     const member = await createMember(page, `rank-e2e-${testInfo.project.name}`, { reuse: true });
     await signInAsMember(page, member);
     await rateSome(page);

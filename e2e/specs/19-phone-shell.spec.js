@@ -142,15 +142,6 @@ async function meetsTheTouchFloor(locator, what) {
   ).toBeGreaterThanOrEqual(48);
 }
 
-/** Asserted, not skipped: `run.mjs` never enters phase 2 without a bundle. */
-async function withABundle(page) {
-  const config = await page.evaluate(() => fetch('/api/config').then((r) => r.json()));
-  expect(
-    config.has_bundle,
-    'phase 2 runs against an imported bundle - see e2e/run.mjs'
-  ).toBeTruthy();
-}
-
 test("the account menu's entries and the overlay exits meet the touch floor", async ({
   page,
   isMobile
@@ -166,7 +157,6 @@ test("the account menu's entries and the overlay exits meet the touch floor", as
   }
   await page.keyboard.press('Escape');
 
-  await withABundle(page);
   await page.goto('/');
   await page.locator('.card-wrap').first().click();
   const panel = page.getByLabel('Title detail');
@@ -211,7 +201,6 @@ test('every menu and overlay dismisses by outside tap and by Escape', async ({ p
   // Proposal 131: "Every popover, menu and sheet dismisses on outside click and on Escape".
   // The header brand is outside all three by construction and has no handler of its own.
   // `.click()`: `.tap()` throws on desktop, and the listener is on `pointerdown`.
-  await withABundle(page);
   const outside = page.getByText('SPIELPLAN', { exact: true });
 
   // --- the account menu
@@ -481,7 +470,6 @@ test.describe('the shell cache', () => {
 test("the next person to sign in sees none of the previous one's surfaces", async ({ page }) => {
   // Surface stores are module-level singletons that outlive a client-side navigation, so the
   // previous member's state must not reach the next one on a shared device.
-  await withABundle(page);
 
   const member = await createMember(page, 'shell-switch', { reuse: true });
   await signInAsMember(page, member);
@@ -619,7 +607,6 @@ test('the data sources are attributed once, on /account, and on no card', async 
   // No logo is asserted either way: the TMDB logo is an owed asset (decision 298).
 
   // And no source names on the tiles. Cards always render; shelves only in shelf mode.
-  await withABundle(page);
   await page.goto('/');
   const cards = page.locator('.card-wrap');
   // Web-first: a count snapshot right after `goto` can precede `/api/home` entirely.

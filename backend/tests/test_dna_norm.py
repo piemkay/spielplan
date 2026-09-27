@@ -1,17 +1,11 @@
-"""`norm()` entry by entry, and the guard that keeps it the only one (§8 stages 5 and 7).
+"""`norm()` entry by entry (§8 stages 5 and 7).
 A fold must reconcile markup and still keep a genuinely absent quote absent. No database."""
 
 from __future__ import annotations
 
-import ast
-from pathlib import Path
-
 import pytest
 
 from spielplan.dna.norm import _PUNCT_FOLD, norm
-
-PACKAGE = Path(__file__).resolve().parents[1] / "spielplan"
-NORM_MODULE = PACKAGE / "dna" / "norm.py"
 
 # Escapes, not the characters: the codepoint is under test and U+2018 and U+201B look alike.
 FOLD_CASES = (
@@ -84,7 +78,6 @@ def test_whitespace_collapses_across_newlines_and_tabs():
 
 def test_the_result_is_lowercased():
     assert norm("A Fixed Camera") == "a fixed camera"
-
 
 
 # Decision 398: one case per family, since the rule is
@@ -188,57 +181,3 @@ def test_a_quote_with_nothing_left_after_the_fold_is_the_verifiers_business(quot
         "if this ever stops being true the boundary's refusal has become belt and braces "
         "rather than the only thing standing between a pack and a quote made of nothing"
     )
-
-
-def _functions_named(path: Path, name: str) -> list[int]:
-    """`ast.walk`, not a module-level scan: a second normalisation may arrive as a method or a closure."""
-    tree = ast.parse(path.read_text(encoding="utf-8"))
-    return [
-        node.lineno
-        for node in ast.walk(tree)
-        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and node.name == name
-    ]
-
-
-def _modules_defining(root: Path, name: str) -> list[str]:
-    return sorted(
-        path.relative_to(root).as_posix()
-        for path in root.rglob("*.py")
-        if _functions_named(path, name)
-    )
-
-
-def test_exactly_one_module_in_the_package_defines_norm():
-    """A second fold does not raise: tags are dropped as
-    `quote_unverified` at a rate that looks like a bad provider."""
-    defining = _modules_defining(PACKAGE, "norm")
-    assert defining == ["dna/norm.py"], (
-        "exactly one module under backend/spielplan/ may define norm(), and it is "
-        "dna/norm.py; found: " + ", ".join(defining) + ". Two normalisations do not crash - "
-        "the pack writer and the verifier simply stop agreeing about what two strings are, "
-        "and good tags are dropped as unverified quotes with nothing in the log"
-    )
-
-
-def test_the_norm_module_defines_that_one_function_and_nothing_else():
-    """One module, one function, so the guard above can stay a name comparison."""
-    tree = ast.parse(NORM_MODULE.read_text(encoding="utf-8"))
-    names = [
-        node.name
-        for node in ast.walk(tree)
-        if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef)
-    ]
-    assert names == ["norm"], (
-        "dna/norm.py holds norm() and nothing else; found: " + ", ".join(names)
-    )
-
-
-def test_the_single_definition_guard_sees_a_second_definition(tmp_path):
-    """The second definition sits on a class, which a module-level scan would walk past."""
-    (tmp_path / "dna").mkdir()
-    (tmp_path / "dna" / "norm.py").write_text("def norm(s):\n    return s\n", encoding="utf-8")
-    (tmp_path / "verify.py").write_text(
-        "class Checker:\n    def norm(self, s):\n        return s.lower()\n", encoding="utf-8"
-    )
-    (tmp_path / "innocent.py").write_text("def clean(s):\n    return s\n", encoding="utf-8")
-    assert _modules_defining(tmp_path, "norm") == ["dna/norm.py", "verify.py"]

@@ -10,7 +10,7 @@ import { ADMIN, createAdminThroughWizard, health, setupState } from '../helpers.
 // and exits 0 for, so a failed import would pass (decision 185).
 test.describe.configure({ mode: 'serial', retries: 0 });
 
-test.describe('first boot @first-boot', () => {
+test.describe('first boot', () => {
   /** @type {import('@playwright/test').Page} */
   let page;
 

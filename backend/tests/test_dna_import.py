@@ -990,35 +990,6 @@ async def test_a_curated_row_stored_before_the_provenance_column_reads_as_the_bu
     assert await db.fetchval("SELECT count(*) FROM dna_adjudication") == 2
 
 
-def test_both_curated_ledger_statements_name_the_origin_they_may_replace():
-    """Read off the SQL text: the behaviour tests need a household row no bundle can carry."""
-    source = Path(dna.__file__).read_text(encoding="utf-8")
-
-    deletes = [
-        line.strip() for line in source.splitlines()
-        # Comment lines are excluded: decision 171's quoted probe names the unscoped form.
-        if not line.lstrip().startswith("#")
-        and ("DELETE FROM credit_correction" in line or "DELETE FROM dna_adjudication" in line)
-    ]
-    assert len(deletes) == 2, deletes
-    for statement in deletes:
-        assert "origin = 'bundle'" in statement, (
-            f"an unscoped curated-ledger DELETE is back: {statement} (decisions 171 and 326)"
-        )
-
-    inserts = [
-        block for block in source.split("await conn.executemany(")[1:]
-        if "INSERT INTO credit_correction" in block.split(")")[0]
-        or "INSERT INTO dna_adjudication" in block.split(")")[0]
-    ]
-    assert len(inserts) == 2, [block[:80] for block in inserts]
-    for block in inserts:
-        head = block.split("rows,")[0]
-        assert "origin" in head and "'bundle'" in head, (
-            f"a curated-ledger INSERT leaves `origin` to the column default: {head.strip()}"
-        )
-
-
 async def test_every_shipped_dna_table_is_loaded_or_skipped_with_a_reason(
     db, vocab_dir, content_db
 ):

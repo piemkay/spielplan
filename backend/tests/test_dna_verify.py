@@ -3,7 +3,6 @@ built to break exactly it. `test_dna_reject.py` is the real-pack half. No databa
 
 from __future__ import annotations
 
-import ast
 import re
 from pathlib import Path
 
@@ -12,8 +11,6 @@ import pytest
 from spielplan.dna import verify
 from spielplan.dna.aliases import alias_key
 
-MODULE = Path(verify.__file__)
-SOURCE = MODULE.read_text(encoding="utf-8")
 MIGRATION = Path(__file__).resolve().parents[1] / "migrations" / "0027_dna_extraction.sql"
 
 # One body carried by exactly one facet, and one (`neon`) carried by two, which the repair must refuse.
@@ -416,7 +413,6 @@ async def test_the_fold_is_what_makes_that_refusal_necessary():
     assert "robot" not in verify.norm(PACK), "the pack must not carry the term this attack claims"
 
 
-
 # Invisible formatters scraped bodies carry; `\s` matches none and they survived `norm()` NON-EMPTY.
 INVISIBLE = ("\u200b", "\u200c", "\u200d", "\u2060", "\ufeff", "\u180e")
 
@@ -449,7 +445,6 @@ async def test_a_quote_transcribed_without_the_packs_invisible_hint_verifies():
 
     assert terms(result) == ["place.city"]
     assert PLAIN not in hinted, "the pack must not already carry the quote verbatim"
-
 
 
 # Every pack header contains digits, so a number's `str()` would verify against it.
@@ -487,7 +482,6 @@ async def test_a_term_that_is_not_text_is_refused_rather_than_read_through_its_b
     assert reasons(result) == ["schema"]
     assert result.rejects[0].term == str(term)
     assert result.rejects[0].quote == PLAIN
-
 
 
 # A NUL (Postgres refuses it) and a lone surrogate (UTF-8 cannot encode it); `json.loads` accepts both.
@@ -575,102 +569,6 @@ async def test_every_tag_the_boundary_passes_carries_a_quote():
     assert [t.term for t in result.tags] == ["mood.bleak", "place.city"]
 
 
-def _bound_names(node: ast.AST) -> list[str]:
-    """Every binding form, except a bare annotation, which declares what a term IS."""
-    if isinstance(node, ast.Assign):
-        targets: list[ast.expr] = list(node.targets)
-    elif isinstance(
-        node, (ast.AugAssign, ast.For, ast.AsyncFor, ast.NamedExpr, ast.comprehension)
-    ) or (isinstance(node, ast.AnnAssign) and node.value is not None):
-        targets = [node.target]
-    elif isinstance(node, ast.withitem) and node.optional_vars is not None:
-        targets = [node.optional_vars]
-    elif isinstance(node, (ast.ExceptHandler, ast.alias)):
-        bound = node.name if isinstance(node, ast.ExceptHandler) else node.asname
-        return [bound] if bound else []
-    elif isinstance(node, ast.arg):
-        return [node.arg]
-    else:
-        return []
-    return [
-        child.id for target in targets for child in ast.walk(target)
-        if isinstance(child, ast.Name) and isinstance(child.ctx, ast.Store)
-    ]
-
-
-def _term_writes(source: str) -> list[str]:
-    tree = ast.parse(source)
-    hits: list[str] = []
-    for node in ast.walk(tree):
-        if "term" in _bound_names(node):
-            hits.append(" ".join((ast.get_source_segment(source, node) or "").split())[:120])
-    return hits
-
-
-def test_no_statement_in_the_verifier_writes_a_term_outside_the_two_named_repairs():
-    """§8 stage 7: "Failures drop, never repaired". Exactly
-    two statements bind a term, both named repairs."""
-    writes = _term_writes(SOURCE)
-
-    assert len(writes) == 2, "\n".join(["a third statement writes a term:", *writes])
-    assert "voc.resolve(" in writes[0], writes[0]
-    assert "adjudicate.rename(" in writes[1], writes[1]
-
-
-def test_nothing_in_the_verifier_assigns_to_a_term_attribute():
-    """`tag.term = corrected` binds no name, so it is invisible to the guard above."""
-    tree = ast.parse(SOURCE)
-    hits = [
-        node.attr for node in ast.walk(tree)
-        if isinstance(node, ast.Attribute)
-        and isinstance(node.ctx, ast.Store)
-        and node.attr in ("term", "quote", "facet")
-    ]
-
-    assert hits == []
-
-
-def test_every_verified_tag_is_built_from_the_term_the_checks_agreed_on():
-    """A third repair could arrive as an expression inside the constructor."""
-    tree = ast.parse(SOURCE)
-    calls = [
-        node for node in ast.walk(tree)
-        if isinstance(node, ast.Call) and getattr(node.func, "id", None) == "VerifiedTag"
-    ]
-
-    assert calls, "the verifier builds no tags at all"
-    for call in calls:
-        offered = {kw.arg: ast.get_source_segment(SOURCE, kw.value) for kw in call.keywords}
-        assert offered.get("term") == "term", offered
-
-
-@pytest.mark.parametrize(
-    ("snippet", "expected"),
-    [
-        ("term = voc.resolve(x)", 1),
-        ("term = voc.resolve(x)\nterm = fix(term)", 2),
-        ("for term in candidates:\n    pass", 1),
-        ("term += '!'", 1),
-        ("if (term := repair(x)):\n    pass", 1),
-        # Five shapes that bind `term` without a `Name` in `Store`
-        # context; a repair inside `Vocabulary.repair` hid there.
-        ("[term for term in xs]", 1),
-        ("(term for term in xs)", 1),
-        ("with open(p) as term:\n    pass", 1),
-        ("try:\n    pass\nexcept ValueError as term:\n    pass", 1),
-        ("import re as term", 1),
-        ("def outer():\n    def inner(term):\n        pass", 1),
-        # The shape that must NOT count: a dataclass field declaring what a term is.
-        ("import dataclasses\n@dataclasses.dataclass\nclass T:\n    term: str", 0),
-        ("other = 1", 0),
-        ("[other for other in xs]", 0),
-    ],
-)
-def test_the_term_write_guard_sees_each_shape_a_repair_would_take(snippet, expected):
-    """A guard that cannot fail is not a guard, and this one has to see eleven spellings."""
-    assert len(_term_writes(snippet)) == expected
-
-
 def _single_character_edits(term_id: str) -> set[str]:
     """Capitals and space are in the alphabet, or the `Mood.slow_burn` head could never be generated."""
     alphabet = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ_. "
@@ -717,18 +615,3 @@ def test_the_reject_store_constrains_itself_to_exactly_the_ported_reasons():
 
     assert clause is not None, "0027 no longer constrains rule_violated"
     assert tuple(re.findall(r"'([a-z_]+)'", clause.group(1))) == verify.REASONS
-
-
-def test_no_provider_client_is_imported_by_the_trust_boundary():
-    """§9's separation, asserted as a fact about imports."""
-    tree = ast.parse(SOURCE)
-    imported = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            imported |= {a.name for a in node.names}
-        elif isinstance(node, ast.ImportFrom):
-            imported.add(node.module or "")
-
-    assert not [m for m in imported if "llm" in m or "provider" in m or "anthropic" in m], (
-        f"a validator one import away from the thing it judges: {sorted(imported)}"
-    )

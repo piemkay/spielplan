@@ -305,3 +305,13 @@ test('three separate editors each export their own artifact', async ({ page }) =
     await page.unroute(AXES);
   }
 });
+
+test('the re-import rebuild set is stated where the re-import happens', async ({ page }) => {
+  // §10: "everything expressed in the old Backbone's basis is garbage against a new one."
+  await signedIn(page);
+  await page.goto('/admin/data');
+  await expect(page.getByText('RECOMPUTED ON EVERY RE-IMPORT')).toBeVisible();
+  for (const item of ['fold-in vectors', 'blend weights', 'Ledger MAP refit', 'Cold Tower']) {
+    await expect(page.getByText(new RegExp(item))).toBeVisible();
+  }
+});

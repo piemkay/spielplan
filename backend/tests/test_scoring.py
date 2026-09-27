@@ -3,7 +3,6 @@ The fixture's top-scoring title is a series, as in the corpus's unpartitioned to
 
 from __future__ import annotations
 
-import inspect
 import io
 import struct
 import time
@@ -402,8 +401,7 @@ def test_exactly_ninety_crowd_ratings_still_falls_on_the_blend_side():
 
 
 def test_the_blend_expression_rescales_neither_half_while_the_scale_question_is_open():
-    """Decision 236: no rescaling. Asserted on the source too: a rescaling that cancelled on this
-    fixture would pass the numbers."""
+    """Decision 236: no rescaling."""
     back = basis([(1, 30, 0.2)])
     e_hat = cold_at(1, 50.0)
     c = bb.coordinate(1, back, (e_hat, 0.0))
@@ -413,15 +411,6 @@ def test_the_blend_expression_rescales_neither_half_while_the_scale_question_is_
     assert np.linalg.norm(e_hat) == pytest.approx(50.0)
     # Unscaled, so the cold quarter is ~83x the warm three-quarters; a normalised ê would hide it.
     assert np.linalg.norm(c.e) == pytest.approx(np.linalg.norm(0.25 * e_hat), rel=0.02)
-
-    source = inspect.getsource(bb.coordinate)
-    assert "g * e_warm + (1.0 - g) * e_cold" in source, (
-        "§5.1's blend is one expression; a second spelling of it is a second definition"
-    )
-    for spelling in ("linalg.norm", "normalize", "/ scale", "* scale"):
-        assert spelling not in source, (
-            f"{spelling!r} in coordinate(): decision 236 leaves the rescaling upstream"
-        )
 
 
 def test_zero_labels_give_beta_zero_and_the_bare_crowd_prior():

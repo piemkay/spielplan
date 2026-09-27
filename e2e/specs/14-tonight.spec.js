@@ -36,8 +36,6 @@ test.describe('tonight', () => {
     test.setTimeout(360_000);
     page = await browser.newPage({ baseURL });
     await signedIn(page);
-    const config = await (await page.request.get('/api/config')).json();
-    test.skip(!config.has_bundle, 'needs an imported bundle — run 01-first-boot first');
     const member = await createMember(page, `tonight-${testInfo.project.name}`, { reuse: true });
     memberName = member.name;
     await signInAsMember(page, member);

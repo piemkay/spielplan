@@ -3,7 +3,6 @@
 | layer | command | needs |
 |---|---|---|
 | backend logic and static guards | `python -m pytest backend/tests -q` | nothing |
-| schema (PGlite) | same command | `backend/tests/pglite/node_modules` |
 | integration | same command | Postgres 16 and `TEST_DATABASE_URL` |
 | frontend units | `npm --prefix frontend test` | nothing |
 | frontend types | `npm --prefix frontend run check` | nothing |
@@ -18,11 +17,9 @@ Run pytest with the path argument: its config (`asyncio_mode=auto`) lives in
 python -m pytest backend/tests -q
 ```
 
-With nothing else set up this runs the logic tests and the static guards. Two layers skip
+With nothing else set up this runs the logic tests and the static guards. One layer skips
 silently:
 
-- **Schema.** The migrations applied to a real Postgres engine compiled to wasm. Install once:
-  `npm --prefix backend/tests/pglite ci`.
 - **Integration.** Everything behind the `db`, `app` or `pg_url` fixtures. Give it a database:
 
   ```bash
@@ -57,7 +54,7 @@ CORPUS_BUNDLE_DIR=/path/to/bundle python -m pytest backend/tests/test_bundle_sha
 
 ## Restore drill
 
-`test_restore_drill.py` and `test_upgrade_drill.py` drive `pg_restore` against a real Postgres. A
+`test_restore_drill.py` drives `pg_restore` against a real Postgres. A
 drill on a real stack follows README's Restore section with a dump this build's worker wrote,
 because a dump restores only into the image that wrote it. `.github/workflows/release.yml` runs
 that drill at stack level on the self-hosted corpus runner.
@@ -83,7 +80,7 @@ See [`e2e/README.md`](../e2e/README.md). The runner's two phases are load-bearin
 
 ## CI
 
-`.github/workflows/ci.yml` runs on every push: ruff, the backend suite without and with Postgres,
+`.github/workflows/ci.yml` runs on every push: ruff, the backend suite against Postgres (`-n 4`),
 the frontend tests, check and build, and the e2e suite against the compose stack.
 `real-bundle.yml` and `release.yml` run on a self-hosted runner labelled `spielplan-corpus` that
 holds the corpus bundle (decision 183); until one is registered they queue and are cancelled.

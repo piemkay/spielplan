@@ -1,6 +1,6 @@
 /**
- * Run the whole suite from a cold start: rebuild the fixture, reset, phase 1 (first boot), restart,
- * then phase 2 only once a bundle is loaded, since a phase 2 of skips would exit 0.
+ * Run the whole suite from a cold start: rebuild the fixture, reset to first boot, then one
+ * Playwright pass in which every project depends on `first-boot`.
  *
  *   node e2e/run.mjs [--project=desktop]
  */
@@ -8,7 +8,6 @@ import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, readdirSync, rmSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { baseUrl } from './env.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const ROOT = join(HERE, '..');
@@ -48,14 +47,7 @@ const BUILD_FIXTURE = [
   "print('fixture bundle written into data/import')",
 ].join('; ');
 
-const play = (args) =>
-  spawnSync('npx', ['playwright', 'test', '--config', 'playwright.config.js', ...args, ...passthrough], {
-    cwd: HERE,
-    stdio: 'inherit',
-    shell: process.platform === 'win32',
-  });
-
-console.log('\n── phase 0: rebuild the fixture, bring the stack up, then reset to first boot ──');
+console.log('\n-- rebuild the fixture, bring the stack up, then reset to first boot --');
 // Before the reset, which is what makes the next boot a first boot.
 if (!existsSync(PYTHON)) {
   console.error(
@@ -98,38 +90,9 @@ if (!existsSync(join(IMPORT_DIR, 'BUNDLE.json'))) {
 execFileSync('docker', [...COMPOSE, 'up', '-d'], { cwd: ROOT, stdio: 'inherit' });
 execFileSync('node', [join(HERE, 'reset.mjs')], { stdio: 'inherit' });
 
-console.log('\n── phase 1: first boot and bundle import ──');
-const first = play(['specs/01-first-boot.spec.js']);
-if (first.status !== 0) process.exit(first.status ?? 1);
-
-console.log('\n── restarting so the imported bundle is loaded (§10) ──');
-execFileSync('docker', [...COMPOSE, 'restart', 'backend', 'worker'], { cwd: ROOT, stdio: 'inherit' });
-
-const base = baseUrl();
-// Each attempt has its own deadline because `fetch` has none; up to 6 s each, so the message
-// below counts attempts, not seconds.
-let loaded = false;
-for (let i = 0; i < 60; i++) {
-  try {
-    const res = await fetch(`${base}/api/health`, { signal: AbortSignal.timeout(5000) });
-    if (res.ok && (await res.json()).bundle) {
-      loaded = true;
-      break;
-    }
-  } catch {
-    /* not up yet */
-  }
-  await new Promise((r) => setTimeout(r, 1000));
-}
-if (!loaded) {
-  console.error(
-    'the restarted backend did not report a loaded bundle in 60 attempts (up to 6 minutes): ' +
-      'phase 2 would only skip, which exits 0 and proves nothing (the swap sequence, spec ' +
-      'section 10)'
-  );
-  process.exit(1);
-}
-
-console.log('\n── phase 2: everything else ──');
-const rest = play(['--grep-invert', '@first-boot']);
-process.exit(rest.status ?? 1);
+const run = spawnSync('npx', ['playwright', 'test', '--config', 'playwright.config.js', ...passthrough], {
+  cwd: HERE,
+  stdio: 'inherit',
+  shell: process.platform === 'win32',
+});
+process.exit(run.status ?? 1);

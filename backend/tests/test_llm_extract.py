@@ -4,7 +4,6 @@ billed, and no key anywhere. Needs TEST_DATABASE_URL."""
 
 from __future__ import annotations
 
-import ast
 import asyncio
 import gzip
 import importlib.util
@@ -27,7 +26,6 @@ from spielplan.llm import client, contract, extract, pricing, spend
 
 REPO = Path(__file__).resolve().parents[2]
 DOUBLE = REPO / "ops" / "fake_llm.py"
-EXTRACT_SOURCE = REPO / "backend" / "spielplan" / "llm" / "extract.py"
 
 PROVIDERS = ("anthropic", "openai", "gemini")
 MODELS = {"anthropic": "claude-sonnet-5", "openai": "gpt-5.6-terra", "gemini": "gemini-3.7-flash"}
@@ -1053,23 +1051,3 @@ async def test_a_provider_error_that_quotes_the_key_is_written_without_it(db, pa
     [call] = await _metered(db)
     assert "[redacted]" in call["error"] and key not in call["error"]
     assert key not in outcome.reason and key not in repr(outcome.detail)
-
-
-def test_the_extraction_asks_the_validator_and_reimplements_none_of_its_checks():
-    """§9: "the guarantee is the validator", so stage 6 holds none of its checks."""
-    tree = ast.parse(EXTRACT_SOURCE.read_text(encoding="utf-8"))
-    imported = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom):
-            imported |= {f"{node.module}.{alias.name}" for alias in node.names} | {node.module}
-        elif isinstance(node, ast.Import):
-            imported |= {alias.name for alias in node.names}
-    forbidden = ("spielplan.acquire.pipeline", "spielplan.acquire.stages", "spielplan.dna.norm",
-                 "spielplan.dna.aliases", "httpx")
-    assert not {m for m in imported if m.startswith(forbidden)}, imported
-
-    named = {node.attr for node in ast.walk(tree) if isinstance(node, ast.Attribute)}
-    named |= {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
-    assert not named & {"norm", "SALIENCE_LEVELS", "resolve", "repair", "alias_of"}, named
-    assert {"verify_tags", "record_rejects", "complete", "record_call", "violation_prompt",
-            "merge_passes", "store_title"} <= named

@@ -22,10 +22,6 @@ test.describe('tonight together', () => {
       contexts.push(context);
       const page = await context.newPage();
       await signedIn(page);
-      if (label === 'host') {
-        const config = await (await page.request.get('/api/config')).json();
-        test.skip(!config.has_bundle, 'needs an imported bundle — run 01-first-boot first');
-      }
       await signInAsMember(page, await createMember(page, `tonight-${label}`, { reuse: true }));
       await seedFilmLedger(page);
       await waitForPool(page);

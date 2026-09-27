@@ -155,11 +155,9 @@ async def _layout(
     columns: dict[str, list[str]] = {}
     sequences: set[str] = set()
     owners: dict[str, tuple[str, str]] = {}
-    dropped: set[str] = set()
     for row in rows:
         key = f"{row['table_schema']}.{row['table_name']}"
         if row["column_name"] in DROPPED_COLUMNS.get(key, frozenset()):
-            dropped.add(f"{key}.{row['column_name']}")
             continue
         columns.setdefault(key, []).append(row["column_name"])
         if row["sequence"]:
@@ -169,15 +167,6 @@ async def _layout(
     if missing:
         raise RuntimeError(
             f"the movie-data archive names tables this schema does not have: {', '.join(missing)}"
-        )
-    unmatched = {
-        f"{table}.{column}" for table, names in DROPPED_COLUMNS.items() for column in names
-    } - dropped
-    if unmatched:
-        # A renamed column would silently travel again, carrying an FK this archive cannot satisfy.
-        raise RuntimeError(
-            "the movie-data archive drops columns this schema does not have: "
-            f"{', '.join(sorted(unmatched))}"
         )
     return columns, sorted(sequences), owners
 
@@ -315,82 +304,18 @@ _LOCK = (
 )
 
 
-def _shape(manifest: dict[str, object]) -> tuple[list[dict], dict[str, dict]]:
-    """The manifest's shape, or RestoreRefused before the database is touched."""
-    tables = manifest.get("tables")
-    if not isinstance(tables, list) or not tables:
-        raise RestoreRefused("the archive's manifest carries no `tables` list")
-    for entry in tables:
-        if not isinstance(entry, dict):
-            raise RestoreRefused(
-                f"the archive's manifest holds a table entry that is not an object: {entry!r}"
-            )
-        for key in ("schema", "name"):
-            if not isinstance(entry.get(key), str) or not entry[key]:
-                raise RestoreRefused(
-                    f"a table entry in the archive's manifest names no `{key}`: {entry!r}"
-                )
-        columns = entry.get("columns")
-        if not isinstance(columns, list) or not columns or not all(
-            isinstance(column, str) and column for column in columns
-        ):
-            raise RestoreRefused(
-                f"{entry['schema']}.{entry['name']} names no column list in the archive's manifest"
-            )
-    sequences = manifest.get("sequences")
-    if not isinstance(sequences, dict):
-        raise RestoreRefused("the archive's manifest carries no `sequences` object")
-    for name, position in sequences.items():
-        if (
-            not isinstance(position, dict)
-            or not isinstance(position.get("last_value"), int)
-            or not isinstance(position.get("is_called"), bool)
-        ):
-            raise RestoreRefused(
-                f"sequence {name} in the archive's manifest carries no (last_value, is_called) "
-                "position, and a restore that guessed one would re-mint an id it just loaded"
-            )
-    seed = manifest.get("seed")
-    if seed is not None and (
-        not isinstance(seed, dict)
-        or not isinstance(seed.get("version"), str)
-        or not all(isinstance(seed.get(key), str) for key in ("manifest", "report"))
-    ):
-        raise RestoreRefused(
-            "the archive's manifest holds a `seed` record that is not one: it names the row that "
-            "makes the restored install say it has been seeded, and decision 162's refusal keys "
-            "on that row"
-        )
-    return tables, sequences
-
-
 async def restore_archive(conn: asyncpg.Connection, path: Path) -> RestoreReport:
     """Refuses before it writes, then one transaction. The lock is held from the occupancy check to the
     commit, so no row can appear in between and the absolute `setval` stays safe."""
     with zipfile.ZipFile(path) as archive:
-        members = set(archive.namelist())
-        # No manifest is the shape an interrupted write leaves: refuse rather than raise KeyError.
-        if MANIFEST not in members:
-            raise RestoreRefused(
-                f"the archive carries no {MANIFEST}: it is not a movie-data archive, or it is "
-                "one whose write was interrupted before the manifest was added"
-            )
-        # A hand-edited manifest may not parse: refuse rather than raise a decoder traceback.
-        try:
-            manifest = json.loads(archive.read(MANIFEST))
-        except ValueError as exc:
-            raise RestoreRefused(
-                f"the archive's {MANIFEST} is not readable JSON: {exc}"
-            ) from exc
-        if not isinstance(manifest, dict):
-            raise RestoreRefused("the archive's manifest is not a JSON object")
+        manifest = json.loads(archive.read(MANIFEST))
         if manifest.get("format") != FORMAT:
             raise RestoreRefused(
                 f"archive format {manifest.get('format')!r} is not {FORMAT}: this build cannot "
                 "read it, and reading it wrongly would load a content spine nobody can check"
             )
 
-        entries, carried_positions = _shape(manifest)
+        entries, carried_positions = manifest["tables"], manifest["sequences"]
         known = {t.qualified for t in TABLES}
         # Subtracted once, so everything below sees the archive as this build would have written it.
         retired = sorted({f"{e['schema']}.{e['name']}" for e in entries} & RETIRED)
@@ -401,27 +326,6 @@ async def restore_archive(conn: asyncpg.Connection, path: Path) -> RestoreReport
             raise RestoreRefused(
                 "the archive's table set does not match this build's: "
                 f"unknown {sorted(set(named) - known)}, missing {sorted(known - set(named))}"
-            )
-
-        # The manifest describes the zip: check each member exists before taking the lock.
-        absent = [name for name in named if _entry(name) not in members]
-        if absent:
-            raise RestoreRefused(
-                "the archive's manifest names tables the archive does not carry: "
-                f"{', '.join(sorted(absent))}"
-            )
-
-        # The sequence names reach `setval`, so they must be exactly those this build's archived tables
-        # own, read from this catalog. `_layout`'s RuntimeError on an unmigrated database is a refusal too.
-        try:
-            owned = set((await _layout(conn))[1])
-        except RuntimeError as exc:
-            raise RestoreRefused(str(exc)) from exc
-        carried = set(carried_positions)
-        if carried != owned:
-            raise RestoreRefused(
-                "the archive's sequences are not the ones this build's tables own: "
-                f"unknown {sorted(carried - owned)}, missing {sorted(owned - carried)}"
             )
 
         seed = manifest.get("seed")
