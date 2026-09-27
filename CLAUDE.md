@@ -22,8 +22,7 @@ npm --prefix e2e run fresh          # canonical full e2e (= node e2e/run.mjs)
 ```
 
 - Integration tests need Postgres and **skip silently** without `TEST_DATABASE_URL`
-  (auto-loaded from `.env.test`); the PGlite schema tests skip without
-  `backend/tests/pglite/node_modules`. A green no-DB run has NOT run those layers; CI will.
+  (auto-loaded from `.env.test`). A green no-DB run has NOT run that layer; CI will.
   DB up: `docker compose -f ops/compose.test.yml up -d` (port 5442; see docs/TESTING.md).
 - Frontend dev runs against the real backend: the compose stack or a hand-run uvicorn on :8080.
 - `ruff format` is not enforced; don't reformat wholesale. Line length is 108.
@@ -56,7 +55,7 @@ npm --prefix e2e run fresh          # canonical full e2e (= node e2e/run.mjs)
 - WebAuthn binds passkeys to the **origin**: e2e runs against `http://localhost:8080`
   (= `PUBLIC_URL`), never `127.0.0.1:8080`; same server, different origin, passkeys fail.
 - E2E specs are stateful, filename-ordered, one worker. Number new files into the sequence;
-  don't parallelize. `run.mjs`'s two phases and the restart between them are load-bearing: plain
-  `playwright test` against a used stack skips the first-boot and bundle specs and fake-passes.
+  don't parallelize. `run.mjs` resets to a first boot, then runs one Playwright pass whose projects
+  depend on `first-boot`; plain `playwright test` against a used stack skips that spec.
   `e2e/reset.mjs` is destructive (drops the DB, wipes `data/artifacts`). The `phone` project
   (iPhone 13, WebKit) is the primary form factor.
