@@ -8,7 +8,7 @@ import asyncpg
 import pytest
 
 from spielplan.db import migrate
-from tests.test_backup import _drop, _recreate, _sibling
+from tests.helpers import create_database, drop_database, sibling
 from tests.test_upgrade_drill import _complete, _stage
 
 
@@ -338,8 +338,8 @@ async def test_a_placed_title_with_no_placement_bundle_is_refused_by_the_check(p
     # Not `UNDER_TEST` (0022): that drill stages the migrations below it.
     under_test = "0023_import_state"
     earlier = [version for version, _ in migrate.discover() if version < under_test]
-    admin, name, url = _sibling(pg_url, "_basis")
-    await _recreate(admin, name)
+    admin, name, url = sibling(pg_url, "_basis")
+    await create_database(admin, name)
     conn = await asyncpg.connect(url)
     try:
         directory = _stage(tmp_path, earlier[-1])
@@ -396,7 +396,7 @@ async def test_a_placed_title_with_no_placement_bundle_is_refused_by_the_check(p
             await conn.execute("UPDATE title SET placement = 'unplaced' WHERE id = 22")
     finally:
         await conn.close()
-        await _drop(admin, name)
+        await drop_database(admin, name)
 
 
 async def test_a_connector_secret_cannot_be_stored_without_naming_its_key(db):
@@ -1052,8 +1052,8 @@ async def test_the_tier_edit_k_column_is_backfilled_from_the_users_own_tier_set(
     """A database of its own, so the backfill runs over existing rows. K comes through the title's
     kind: 12 on a film, 7 (the default) on a series or with no cutpoints row."""
     earlier = [version for version, _ in migrate.discover() if version < UNDER_TEST]
-    admin, name, url = _sibling(pg_url, "_nlevels")
-    await _recreate(admin, name)
+    admin, name, url = sibling(pg_url, "_nlevels")
+    await create_database(admin, name)
     conn = await asyncpg.connect(url)
     try:
         directory = _stage(tmp_path, earlier[-1])
@@ -1096,4 +1096,4 @@ async def test_the_tier_edit_k_column_is_backfilled_from_the_users_own_tier_set(
         assert levels[(jenny, 11)] == 7, "she has no cutpoints at all"
     finally:
         await conn.close()
-        await _drop(admin, name)
+        await drop_database(admin, name)

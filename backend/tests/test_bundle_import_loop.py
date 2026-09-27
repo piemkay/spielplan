@@ -13,23 +13,13 @@ from pathlib import Path
 
 from spielplan.importer import bundle as bundle_import
 from tests.fixtures import make_bundle as fx
-
-ADMIN_PASSWORD = "an-admin-password"
+from tests.helpers import admin_client
 
 # `tarfile.extractall` costs ~0.6 ms per MB, so 192 MiB is ~120 ms: unmistakable beside a 5 ms
 # heartbeat. The assertions calibrate against the extraction actually paid, not a constant.
 PAD_BYTES = 192 << 20
 HEARTBEAT_S = 0.005
 HEALTH_EVERY_S = 0.05
-
-
-async def _admin(app):
-    client = app()
-    created = await client.post(
-        "/api/setup/admin", json={"name": "patrick", "password": ADMIN_PASSWORD}
-    )
-    assert created.status_code == 201, created.text
-    return client
 
 
 async def _heartbeat(stop: asyncio.Event, gaps: list[float]) -> None:
@@ -77,7 +67,7 @@ async def _press(admin, watcher, path: Path) -> tuple[float, float, list[int]]:
 async def test_the_first_press_on_an_archive_leaves_the_loop_free_for_api_health(app, tmp_path):
     """A warm-up press pays the process's one-time costs; the extraction is then timed alone in a thread.
     The loop gap is the assertion with teeth: `/api/health` turns 503 only after 2 s."""
-    admin = await _admin(app)
+    admin = await admin_client(app)
     watcher = app()
     root = fx.make_bundle(tmp_path / "import" / "test-v1", version="test-v1")
     pad = root / "pad.bin"

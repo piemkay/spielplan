@@ -6,6 +6,7 @@ from __future__ import annotations
 import pytest
 
 from spielplan.tonight import pool
+from tests.helpers import insert_user
 
 BUNDLE = "test-v1"
 
@@ -77,13 +78,6 @@ async def seed_dna(db):
         )
 
 
-
-async def make_user(db, name, role="member"):
-    return await db.fetchval(
-        "INSERT INTO app_user (name, role) VALUES ($1, $2) RETURNING id", name, role
-    )
-
-
 @pytest.fixture
 async def world(db):
     """Two members, because "every participant" is trivial with one.
@@ -110,8 +104,8 @@ async def world(db):
         [100, 110, 151, 200, 95, 105, 45, 100],
         [True] * 7 + [False],
     )
-    patrick = await make_user(db, "patrick", "admin")
-    jenny = await make_user(db, "jenny")
+    patrick = await insert_user(db, "patrick", "admin")
+    jenny = await insert_user(db, "jenny")
 
     # Title 2 is the max-min winner and title 4 the mean winner, so ordering tests test the rule.
     scores = {
@@ -2022,7 +2016,7 @@ async def test_a_seat_that_can_never_be_asked_ends_itself(db, world):
     `ended_by` stays `converged`: 0013's CHECK admits three values (decision 215)."""
     room = await running_room(db, world)
     session_id = room["session_id"]
-    late = await make_user(db, "mia")
+    late = await insert_user(db, "mia")
     orphan = await db.fetchval(
         "INSERT INTO session_participant (session_id, user_id, role, seat) "
         "VALUES ($1, $2, 'member', 9) RETURNING id",
@@ -2085,7 +2079,7 @@ async def test_a_pool_too_small_for_a_round_reaches_the_ballot(
 async def test_a_refusal_names_the_member_the_pool_cannot_rank(db, world):
     """An unscored member empties the pool; the refusal names them, not the budget."""
     room = await open_room(db, world, budget_min=200, include_rewatches=True)
-    unscored = await make_user(db, "mia")
+    unscored = await insert_user(db, "mia")
     await rooms.join(db, session_id=room["session_id"], user_id=unscored)
 
     with pytest.raises(play.RoundError) as refused:
@@ -3018,7 +3012,7 @@ async def test_a_combine_landing_after_the_host_ended_the_room_does_not_revive_i
 
 
 # Through the routes with the arm as it ships: the seal is measured where tokens are minted. Ids
-# restart per test (`conftest.db` recreates the schema), so the arm is deterministic here.
+# restart per test (`conftest.db` is a fresh clone), so the arm is deterministic here.
 
 import itertools  # noqa: E402
 
@@ -3561,7 +3555,7 @@ async def test_vetoes_are_any_seated_members_to_set_and_only_before_start(db, wo
     await _veto_fixture(db)
     room = await open_room(db, world, include_rewatches=True, budget_min=200)
     joined = await rooms.join(db, session_id=room["session_id"], user_id=world["jenny"])
-    stranger = await make_user(db, "mia")
+    stranger = await insert_user(db, "mia")
 
     three = ["violence", "horror", "harrowing"]
     assert await rooms.set_vetoes(

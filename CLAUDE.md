@@ -24,8 +24,7 @@ npm --prefix e2e run fresh          # canonical full e2e (= node e2e/run.mjs)
 - Integration tests need Postgres and **skip silently** without `TEST_DATABASE_URL`
   (auto-loaded from `.env.test`); the PGlite schema tests skip without
   `backend/tests/pglite/node_modules`. A green no-DB run has NOT run those layers; CI will.
-  DB up: `docker compose -f docker-compose.yml -f ops/compose.dev.yml up -d db`
-  (overlays are never auto-loaded; pass each `-f`).
+  DB up: `docker compose -f ops/compose.test.yml up -d` (port 5442; see docs/TESTING.md).
 - Frontend dev runs against the real backend: the compose stack or a hand-run uvicorn on :8080.
 - `ruff format` is not enforced; don't reformat wholesale. Line length is 108.
 

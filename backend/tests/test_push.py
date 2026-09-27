@@ -5,9 +5,7 @@ import logging
 import pytest
 
 from spielplan.api import push
-
-ADMIN_PASSWORD = "an-admin-password"
-MEMBER_PASSWORD = "a-real-member-password"
+from tests import helpers
 
 # Shaped like `PushSubscription.toJSON()`, which the client posts unchanged.
 PHONE = {
@@ -24,23 +22,8 @@ LAPTOP = {
 
 @pytest.fixture
 async def household(app, db):
-    """The member's forced password change is done here: §3.1 locks the account until it is."""
-    admin = app()
-    created = await admin.post(
-        "/api/setup/admin", json={"name": "patrick", "password": ADMIN_PASSWORD}
-    )
-    assert created.status_code == 201
+    admin, member = await helpers.household(app)
     admin_id = (await admin.get("/api/auth/me")).json()["id"]
-
-    made = await admin.post("/api/admin/users", json={"name": "jenny", "role": "member"})
-    otp = made.json()["one_time_password"]
-
-    member = app()
-    await member.post("/api/auth/login", json={"name": "jenny", "password": otp})
-    await member.post(
-        "/api/auth/password",
-        json={"current_password": otp, "new_password": MEMBER_PASSWORD},
-    )
     member_id = (await member.get("/api/auth/me")).json()["id"]
     return admin, admin_id, member, member_id
 

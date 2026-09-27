@@ -15,7 +15,7 @@ from spielplan.importer import dna
 from spielplan.importer import validate as validator
 from spielplan.importer.report import ImportReport
 from tests.fixtures import make_bundle as fx
-from tests.test_acquisition_board import _bootstrap
+from tests.helpers import household
 from tests.test_curated_editors import AWKWARD, UNSHIPPED_FACET, _install, _saved
 from tests.test_dna_review import TITLE as REVIEWED
 from tests.test_dna_review import _reject
@@ -43,7 +43,7 @@ def _attachment(response) -> str:
 async def test_the_verdict_editor_lists_writes_exports_and_withdraws_over_http(
     db, app, bundle_dir, tmp_path
 ):
-    admin, _member = await _bootstrap(app)
+    admin, _member = await household(app)
     await _install(db, bundle_dir)
 
     written = await admin.post("/api/admin/curated/adjudications", json={
@@ -85,7 +85,7 @@ async def test_the_verdict_editor_lists_writes_exports_and_withdraws_over_http(
 async def test_a_verdict_the_applier_could_not_apply_is_a_409_with_the_editors_sentence(
     db, app, bundle_dir
 ):
-    admin, _member = await _bootstrap(app)
+    admin, _member = await household(app)
     await _install(db, bundle_dir)
 
     refused = await admin.post("/api/admin/curated/adjudications", json={
@@ -99,7 +99,7 @@ async def test_a_verdict_the_applier_could_not_apply_is_a_409_with_the_editors_s
 async def test_the_correction_editor_lists_writes_exports_and_withdraws_over_http(
     db, app, bundle_dir, tmp_path
 ):
-    admin, _member = await _bootstrap(app)
+    admin, _member = await household(app)
     await _install(db, bundle_dir)
 
     written = await admin.post("/api/admin/curated/corrections", json={
@@ -138,7 +138,7 @@ async def test_the_correction_editor_lists_writes_exports_and_withdraws_over_htt
 
 
 async def test_the_axis_editor_lists_writes_exports_and_withdraws_over_http(db, app, bundle_dir, tmp_path):
-    admin, _member = await _bootstrap(app)
+    admin, _member = await household(app)
     await _install(db, bundle_dir)
 
     listed = (await admin.get("/api/admin/curated/axes")).json()
@@ -181,7 +181,7 @@ async def test_the_axis_editor_lists_writes_exports_and_withdraws_over_http(db, 
 
 
 async def test_the_review_hands_on_both_orderings_and_filters_nothing(db, app, bundle_dir):
-    admin, _member = await _bootstrap(app)
+    admin, _member = await household(app)
     await _install(db, bundle_dir)
     for n in (2, 3, 1):
         await _reject(db, n)
@@ -225,7 +225,7 @@ async def test_the_review_hands_on_both_orderings_and_filters_nothing(db, app, b
     ],
 )
 async def test_every_editor_and_review_route_refuses_a_member_and_a_stranger(app, db, method, path, body):
-    _admin, member = await _bootstrap(app)
+    _admin, member = await household(app)
     kwargs = {} if body is None else {"json": body}
 
     assert (await member.request(method, path, **kwargs)).status_code == 403

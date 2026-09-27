@@ -8,28 +8,9 @@ import json
 import pytest
 
 from spielplan.api import auth as auth_api
+from tests.helpers import household
 
 VOCAB = "v1"
-ADMIN_PASSWORD = "an-admin-password"
-MEMBER_PASSWORD = "a-member-password"
-
-
-async def _member(app):
-    """An admin to create the household, and a signed-in member past §3.1's password lock."""
-    admin = app()
-    created = await admin.post("/api/setup/admin", json={"name": "patrick", "password": ADMIN_PASSWORD})
-    assert created.status_code == 201, created.text
-    made = await admin.post("/api/admin/users", json={"name": "jenny", "role": "member"})
-    assert made.status_code == 201, made.text
-    otp = made.json()["one_time_password"]
-    member = app()
-    signed_in = await member.post("/api/auth/login", json={"name": "jenny", "password": otp})
-    assert signed_in.status_code == 200, signed_in.text
-    changed = await member.post(
-        "/api/auth/password", json={"current_password": otp, "new_password": MEMBER_PASSWORD}
-    )
-    assert changed.status_code == 200, changed.text
-    return member
 
 
 @pytest.fixture
@@ -73,7 +54,8 @@ async def card(db, app):
         "VALUES (1, $1, 'mood.gritty', 'mood', 1, 'movielens_tags')",
         VOCAB,
     )
-    return await _member(app)
+    _admin, member = await household(app)
+    return member
 
 
 async def test_a_card_read_with_the_switch_off_carries_no_model_number(card):

@@ -15,8 +15,8 @@ from spielplan.connectors import registry
 from spielplan.connectors.jellyfin import JellyfinClient
 from spielplan.core.config import settings
 from spielplan.llm import client, pricing, spend
+from tests.helpers import admin_client
 
-ADMIN_PASSWORD = "an-admin-password"
 OTHER_SECRETS_KEY = "a-different-secrets-key-not-a-real-one"
 
 # Distinctive enough that finding one in a response body can only be a leak.
@@ -32,15 +32,6 @@ EVERY_KEY = (KEY_GEMINI, KEY_ANTHROPIC, KEY_OPENAI, KEY_TMDB, KEY_OMDB, TRAKT_ID
 PREVIEW = "/api/admin/llm/preview"
 CONFIRM = "/api/admin/llm"
 CAP = "/api/admin/llm/cap"
-
-
-async def _admin(app) -> httpx.AsyncClient:
-    client_ = app()
-    created = await client_.post(
-        "/api/setup/admin", json={"name": "patrick", "password": ADMIN_PASSWORD}
-    )
-    assert created.status_code == 201, created.text
-    return client_
 
 
 async def _rows(db) -> list[dict]:
@@ -100,7 +91,7 @@ async def _task(db, key: str, *, kind: str = pipeline.TASK_KIND, priority: int =
 )
 async def test_a_preview_of_any_change_writes_nothing(secrets_key, db, app, change):
     """The stored configuration is byte-identical afterwards: every row, both halves, every timestamp."""
-    admin = await _admin(app)
+    admin = await admin_client(app)
     await _keyed(db)
     await registry.save_connector(db, "gemini", price_input=0.5, price_output=2.5)
     before = await _rows(db)
@@ -117,7 +108,7 @@ async def test_a_confirm_without_the_figure_is_422_and_with_the_wrong_one_is_409
     secrets_key, db, app
 ):
     """Decision 450: the figure is part of the write."""
-    admin = await _admin(app)
+    admin = await admin_client(app)
     await _keyed(db)
     before = await _rows(db)
 
@@ -136,7 +127,7 @@ async def test_a_confirm_without_the_figure_is_422_and_with_the_wrong_one_is_409
 
 async def test_a_confirmed_change_is_stored_exactly_and_bills_nothing(secrets_key, db, app):
     """Nothing reaches a provider, so no `llm_call` row and no spend; only the named fields move."""
-    admin = await _admin(app)
+    admin = await admin_client(app)
     await _keyed(db)
     meter_before = await spend.meter(db)
     calls_before = await db.fetchval("SELECT count(*) FROM llm_call")
@@ -161,7 +152,7 @@ async def test_a_figure_gone_stale_between_preview_and_confirm_is_refused_with_t
     secrets_key, db, app
 ):
     """A price edited in another tab between preview and confirm."""
-    admin = await _admin(app)
+    admin = await admin_client(app)
     await _keyed(db)
     shown = (await _preview(admin, {"passes": 2}))["estimate"]["per_title_usd"]
 
@@ -195,7 +186,7 @@ async def test_a_provider_without_a_usable_key_is_blocked_and_its_confirm_refuse
 ):
     """The figure for a keyless provider is "unknown", and a key typed later would make it unseen
     spend, so the confirm is refused even with the figure. The block never names a key."""
-    admin = await _admin(app)
+    admin = await admin_client(app)
     await registry.save_connector(db, "gemini", api_key=KEY_GEMINI)
     # Whitespace inside: no header can carry it (`client.header_key`).
     await registry.save_connector(db, "anthropic", api_key="sk-ant two words")
@@ -214,7 +205,7 @@ async def test_a_provider_without_a_usable_key_is_blocked_and_its_confirm_refuse
 
 async def test_an_unreadable_key_is_blocked_too(secrets_key, db, app, monkeypatch):
     """An unreadable key comes back by itself when the right SECRETS_KEY returns (M4.7 dd03)."""
-    admin = await _admin(app)
+    admin = await admin_client(app)
     await registry.save_connector(db, "anthropic", api_key=KEY_ANTHROPIC)
     await registry.save_connector(db, "llm", cap_usd=25)
     monkeypatch.setenv("SECRETS_KEY", OTHER_SECRETS_KEY)
@@ -231,7 +222,7 @@ async def test_an_unreadable_key_is_blocked_too(secrets_key, db, app, monkeypatc
 
 async def test_the_figure_scales_with_the_passes_and_the_providers(secrets_key, db, app):
     """Decision 324 keeps parallel off by default because two providers at two passes is 4x."""
-    admin = await _admin(app)
+    admin = await admin_client(app)
     await _keyed(db)
     alike = {"price_input": 1, "price_output": 5}
     priced = {"providers": {"gemini": alike, "anthropic": alike}}
@@ -252,7 +243,7 @@ async def test_a_fresh_install_previews_decision_324s_default_of_one_provider_at
     secrets_key, db, app
 ):
     """Absent stays the default, so decision 324's default lives in `llm/spend` once."""
-    admin = await _admin(app)
+    admin = await admin_client(app)
     await registry.save_connector(db, "gemini", api_key=KEY_GEMINI)
     assert (await registry.load_connector(db, "llm")).config == {}
 
@@ -272,7 +263,7 @@ async def test_the_projection_counts_what_this_install_filed_in_the_last_thirty_
     secrets_key, db, app
 ):
     """Decision 451: trailing thirty days of `acquire` tasks, excluding re-offers (decision 411)."""
-    admin = await _admin(app)
+    admin = await admin_client(app)
     await _keyed(db)
 
     empty = (await _preview(admin, {}))["projected"]
@@ -305,7 +296,7 @@ async def test_the_projection_counts_what_this_install_filed_in_the_last_thirty_
 async def test_the_cap_takes_effect_at_once_and_at_the_cap_the_park_names_it(secrets_key, db, app):
     """Decision 452: the cap is the guard itself, so it needs no preview. At the cap stage 6 parks
     under `over spend cap` (decision 325)."""
-    admin = await _admin(app)
+    admin = await admin_client(app)
     await _keyed(db)
 
     written = await admin.put(CAP, json={"cap_usd": 1})
@@ -350,7 +341,7 @@ async def test_the_cap_route_refuses_what_is_not_a_finite_number_of_at_least_zer
 ):
     """Each would read as "no cap" or, for infinity, never bind. Python's JSON reader accepts `NaN`
     and `Infinity`, so they are sent as bytes."""
-    admin = await _admin(app)
+    admin = await admin_client(app)
     await registry.save_connector(db, "llm", cap_usd=25)
     before = await _rows(db)
 
@@ -361,7 +352,7 @@ async def test_the_cap_route_refuses_what_is_not_a_finite_number_of_at_least_zer
 
 async def test_a_cap_of_zero_is_stored_as_a_cap(secrets_key, db, app):
     """Zero is a real cap (decision 325), not a falsy unset."""
-    admin = await _admin(app)
+    admin = await admin_client(app)
     stored = await admin.put(CAP, json={"cap_usd": 0})
     assert stored.status_code == 200, stored.text
     assert (await registry.load_connector(db, "llm")).config == {"cap_usd": 0}
@@ -374,7 +365,7 @@ async def test_an_empty_key_field_keeps_the_stored_key_and_no_answer_carries_one
 ):
     """Every body and log line is searched for every stored key and client id."""
     caplog.set_level(logging.DEBUG)
-    admin = await _admin(app)
+    admin = await admin_client(app)
     await registry.save_connector(db, "llm", extraction_provider="gemini", cap_usd=25)
 
     saved = await admin.put("/api/admin/connectors/gemini", json={"api_key": KEY_GEMINI})
@@ -441,7 +432,7 @@ async def test_the_key_route_refuses_estimate_fields_and_the_llm_row_and_leaves_
 ):
     """A model or price override here would change the estimate outside decision 450's figure.
     `PUT /connectors/jellyfin` is still `api/admin.put_jellyfin`, mounted first."""
-    admin = await _admin(app)
+    admin = await admin_client(app)
     for body in ({"model": "gemini-3.6-flash"}, {"price_input": 1, "price_output": 2},
                  {"api_key": KEY_GEMINI, "model": "gemini-3.6-flash"}):
         refused = await admin.put("/api/admin/connectors/gemini", json=body)
@@ -474,7 +465,7 @@ async def test_whitespace_around_a_key_is_no_part_of_it_and_whitespace_alone_kee
 ):
     """Whitespace around a key is trimmed and whitespace alone keeps the stored key: a trailing space
     was sent as `api_key=KEY+` and refused. A character no request can carry is a 422."""
-    admin = await _admin(app)
+    admin = await admin_client(app)
     stored = {
         ("gemini", "api_key"): KEY_GEMINI, ("anthropic", "api_key"): KEY_ANTHROPIC,
         ("openai", "api_key"): KEY_OPENAI, ("tmdb", "api_key"): KEY_TMDB,
@@ -505,7 +496,7 @@ async def test_whitespace_around_a_key_is_no_part_of_it_and_whitespace_alone_kee
 
 async def test_an_explicit_null_returns_each_setting_to_its_default(secrets_key, db, app):
     """An absent field keeps, an explicit null unsets. Half a price pair is refused (decision 343)."""
-    admin = await _admin(app)
+    admin = await admin_client(app)
     await _keyed(db)
     await registry.save_connector(db, "gemini", model="gemini-3.6-flash", price_input=1, price_output=4)
 
@@ -546,7 +537,7 @@ def _spelled(basis: pricing.PriceBasis) -> dict:
 
 async def test_every_estimate_names_its_model_and_its_price_basis(secrets_key, db, app):
     """The figure names its model and price basis; the expected basis is priced on the install's day."""
-    admin = await _admin(app)
+    admin = await admin_client(app)
     await _keyed(db)
     today = datetime.now(UTC).astimezone(spend.local_zone()).date()
 
@@ -573,7 +564,7 @@ async def test_an_unknown_model_estimates_to_unknown_and_prints_no_figure_for_it
     secrets_key, db, app
 ):
     """Stage 6 then parks naming the model rather than billing at a guess (decision 343)."""
-    admin = await _admin(app)
+    admin = await admin_client(app)
     await _keyed(db)
     await _task(db, "jf:one")
     change = {"providers": {"gemini": {"model": "gemini-9-ultra"}}}

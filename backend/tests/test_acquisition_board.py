@@ -7,9 +7,7 @@ from __future__ import annotations
 import pytest
 
 from spielplan.acquire import board, queue, rawstore
-
-ADMIN_PASSWORD = "an-admin-password"
-MEMBER_PASSWORD = "a-member-password"
+from tests.helpers import household
 
 # §4.1's partition: the app's own ids start at 1e9. Written directly: this file is about the BOARD.
 ACQUIRED = 1_000_000_701
@@ -17,28 +15,6 @@ OTHER = 1_000_000_702
 
 # Everything a well-meaning renderer would tidy away; any of it missing breaks the verbatim promise.
 REASON = 'stage 4: waiting for reviews to accrue  - "fewer than 20 ratings", retry in 30 days.'
-
-
-async def _bootstrap(app):
-    admin = app()
-    created = await admin.post(
-        "/api/setup/admin", json={"name": "patrick", "password": ADMIN_PASSWORD}
-    )
-    assert created.status_code == 201
-
-    made = await admin.post("/api/admin/users", json={"name": "jenny", "role": "member"})
-    assert made.status_code == 201
-    otp = made.json()["one_time_password"]
-
-    member = app()
-    signed_in = await member.post("/api/auth/login", json={"name": "jenny", "password": otp})
-    assert signed_in.status_code == 200
-    # §3.1 locks a new account to a password change; clear it so a later 403 is about role.
-    changed = await member.post(
-        "/api/auth/password", json={"current_password": otp, "new_password": MEMBER_PASSWORD}
-    )
-    assert changed.status_code == 200
-    return admin, member
 
 
 async def _title(conn, title_id: int, name: str) -> None:
@@ -70,7 +46,7 @@ async def _task(conn, title_id: int, key: str, **columns) -> None:
 async def test_the_board_lists_a_parked_job_with_its_reason_verbatim(app, db):
     await _title(db, ACQUIRED, "A Bigger Splash")
     await _job(db, ACQUIRED, stage=4, status="parked", reason=REASON)
-    admin, _member = await _bootstrap(app)
+    admin, _member = await household(app)
 
     answer = await admin.get("/api/admin/acquisition")
     assert answer.status_code == 200, answer.text
@@ -90,7 +66,7 @@ async def test_the_board_is_an_envelope_and_not_a_bare_list(app, db):
     """A top-level JSON array is the one shape that cannot grow without a second route."""
     await _title(db, ACQUIRED, "A Bigger Splash")
     await _job(db, ACQUIRED, stage=10, status="ready", reason=None)
-    admin, _member = await _bootstrap(app)
+    admin, _member = await household(app)
 
     payload = (await admin.get("/api/admin/acquisition")).json()
     assert isinstance(payload, dict) and isinstance(payload["jobs"], list)
@@ -103,7 +79,7 @@ async def test_the_board_is_an_envelope_and_not_a_bare_list(app, db):
 async def test_the_per_title_route_returns_its_stages(app, db):
     await _title(db, ACQUIRED, "A Bigger Splash")
     await _job(db, ACQUIRED, stage=5, status="parked", reason=REASON)
-    admin, _member = await _bootstrap(app)
+    admin, _member = await household(app)
 
     answer = await admin.get(f"/api/admin/acquisition/{ACQUIRED}")
     assert answer.status_code == 200, answer.text
@@ -119,7 +95,7 @@ async def test_the_per_title_route_returns_its_stages(app, db):
 async def test_a_title_the_pipeline_has_never_touched_is_404(app, db):
     """404, not an empty envelope, which would present two different states as one."""
     await _title(db, ACQUIRED, "A Bigger Splash")
-    admin, _member = await _bootstrap(app)
+    admin, _member = await household(app)
 
     missing = await admin.get(f"/api/admin/acquisition/{ACQUIRED}")
     assert missing.status_code == 404, missing.text
@@ -144,7 +120,7 @@ async def test_the_board_shows_the_raw_document_row_and_never_the_bytes(app, db)
         "the fixture wrote no file, so the leak this test is about could not have happened and "
         "the assertions below would pass against an empty store"
     )
-    admin, _member = await _bootstrap(app)
+    admin, _member = await household(app)
 
     answer = await admin.get(f"/api/admin/acquisition/{ACQUIRED}")
     assert answer.status_code == 200, answer.text
@@ -175,7 +151,7 @@ async def test_a_failed_fetch_is_on_the_board_because_that_is_why_a_title_is_thi
         content=b"", entity_key="jellyfin:abc123", http_status=503, ok=False,
         error="503 after 4 attempts", content_type="text/html",
     )
-    admin, _member = await _bootstrap(app)
+    admin, _member = await household(app)
 
     (document,) = (await admin.get(f"/api/admin/acquisition/{ACQUIRED}")).json()["documents"]
     assert document["ok"] is False and document["error"] == "503 after 4 attempts"
@@ -207,7 +183,7 @@ async def test_a_document_filed_under_another_titles_task_is_not_this_titles(app
         db, source="tmdb", kind="movie", url="https://example.invalid/invented",
         content=b'{"id": 4}', entity_key=f"tmdb:{ACQUIRED}",
     )
-    admin, _member = await _bootstrap(app)
+    admin, _member = await household(app)
 
     urls = [
         row["url"]
@@ -226,7 +202,7 @@ async def test_a_document_filed_under_another_titles_task_is_not_this_titles(app
 async def test_both_acquisition_routes_refuse_a_member_and_a_stranger(app, db, path):
     await _title(db, ACQUIRED, "A Bigger Splash")
     await _job(db, ACQUIRED, stage=1, status="queued", reason=None)
-    _admin, member = await _bootstrap(app)
+    _admin, member = await household(app)
 
     assert (await member.get(path)).status_code == 403
     assert (await app().get(path)).status_code == 401
@@ -239,7 +215,7 @@ async def test_queue_depth_is_a_domain_function_the_system_card_reads(app, db):
     )
     assert await queue.stats(db) == [{"kind": "acquire", "state": "pending", "count": 1}]
 
-    admin, _member = await _bootstrap(app)
+    admin, _member = await household(app)
     card = (await admin.get("/api/admin/system")).json()
     assert card["queue"]["by_kind"] == await queue.stats(db)
 

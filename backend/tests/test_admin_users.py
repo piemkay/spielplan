@@ -12,9 +12,7 @@ from spielplan.api import admin as admin_api
 from spielplan.core import auth, webauthn
 from spielplan.core.config import settings
 from tests.fixtures.soft_authenticator import SoftAuthenticator
-
-ADMIN_PASSWORD = "an-admin-password"
-MEMBER_PASSWORD = "a-member-password"
+from tests.helpers import MEMBER_PASSWORD, admin_client
 
 ROW_EDITOR_ROUTES = [
     ("PATCH", "/api/admin/users/{user_id}", {"name": "nobody"}),
@@ -24,15 +22,6 @@ ROW_EDITOR_ROUTES = [
     ("POST", "/api/admin/users/{user_id}/active", {"is_active": False}),
     ("DELETE", "/api/admin/users/{user_id}", None),
 ]
-
-
-async def _admin(app, name: str = "patrick"):
-    client = app()
-    created = await client.post(
-        "/api/setup/admin", json={"name": name, "password": ADMIN_PASSWORD}
-    )
-    assert created.status_code == 201, created.text
-    return client
 
 
 async def _create(admin, name: str, role: str = "member") -> dict:
@@ -84,7 +73,7 @@ async def _passkey_login(client, device: SoftAuthenticator, name: str = "jenny")
 
 
 async def test_creating_an_account_issues_a_one_time_password_and_locks_it(app):
-    admin = await _admin(app)
+    admin = await admin_client(app)
     created = await _create(admin, "jenny")
     assert created["role"] == "member"
 
@@ -100,7 +89,7 @@ async def test_creating_an_account_issues_a_one_time_password_and_locks_it(app):
 
 async def test_the_one_time_password_is_shown_once_and_read_back_nowhere(app):
     """The OTP is stored as an argon2 hash and no route reports it."""
-    admin = await _admin(app)
+    admin = await admin_client(app)
     otp = (await _create(admin, "jenny"))["one_time_password"]
 
     for path in ("/api/admin/users", "/api/auth/me", "/api/setup/state"):
@@ -110,7 +99,7 @@ async def test_the_one_time_password_is_shown_once_and_read_back_nowhere(app):
 
 async def test_the_create_route_accepts_no_admin_chosen_password(app):
     """§3.1: an admin "never sees, sets or types a member's password", so the field does not exist."""
-    admin = await _admin(app)
+    admin = await admin_client(app)
     made = await admin.post(
         "/api/admin/users",
         json={"name": "jenny", "role": "member", "password": "chosen-by-the-admin"},
@@ -131,7 +120,7 @@ async def test_the_create_route_accepts_no_admin_chosen_password(app):
 
 async def test_a_duplicate_name_is_refused_rather_than_answered_as_a_server_error(app):
     """`app_user_name_key` is on lower(name), so the second 'Jenny' collides: a 409, not a 500."""
-    admin = await _admin(app)
+    admin = await admin_client(app)
     await _create(admin, "jenny")
     again = await admin.post("/api/admin/users", json={"name": "JENNY", "role": "member"})
     assert again.status_code == 409
@@ -140,7 +129,7 @@ async def test_a_duplicate_name_is_refused_rather_than_answered_as_a_server_erro
 
 async def test_a_guest_role_is_refused_by_the_route_that_makes_accounts(app):
     """Decision 166: a guest is a Tonight seat with `user_id NULL`, never an account."""
-    admin = await _admin(app)
+    admin = await admin_client(app)
     made = await admin.post("/api/admin/users", json={"name": "gast", "role": "guest"})
     assert made.status_code == 422
     jenny = await _create(admin, "jenny")
@@ -149,7 +138,7 @@ async def test_a_guest_role_is_refused_by_the_route_that_makes_accounts(app):
 
 
 async def test_a_rename_and_a_re_role_persist_to_the_roster(app):
-    admin = await _admin(app)
+    admin = await admin_client(app)
     jenny = await _create(admin, "jenny")
 
     renamed = await admin.patch(f"/api/admin/users/{jenny['id']}", json={"name": "jennifer"})
@@ -163,14 +152,14 @@ async def test_a_rename_and_a_re_role_persist_to_the_roster(app):
 
 async def test_an_empty_row_edit_is_refused(app):
     """A PATCH naming neither field is a form that submitted nothing, not a rename to NULL."""
-    admin = await _admin(app)
+    admin = await admin_client(app)
     jenny = await _create(admin, "jenny")
     assert (await admin.patch(f"/api/admin/users/{jenny['id']}", json={})).status_code == 400
 
 
 async def test_a_password_reset_reissues_re_arms_the_lock_and_ends_the_sessions(db, app):
     """The sessions go because the credential that opened them is being replaced."""
-    admin = await _admin(app)
+    admin = await admin_client(app)
     member, created = await _member(app, admin)
 
     reset = await admin.post(f"/api/admin/users/{created['id']}/reset-password")
@@ -198,7 +187,7 @@ async def test_a_password_reset_reissues_re_arms_the_lock_and_ends_the_sessions(
 async def test_a_password_reset_clears_a_standing_lockout(db, app):
     """§3.2's lockout counts guesses, not the credential;
     surviving the reset it would refuse the new OTP."""
-    admin = await _admin(app)
+    admin = await admin_client(app)
     created = await _create(admin, "jenny")
     await db.execute(
         "UPDATE app_user SET password_failed_count = 5, "
@@ -222,7 +211,7 @@ async def test_a_password_reset_clears_a_standing_lockout(db, app):
 
 async def test_a_pin_reset_clears_the_pin_and_the_lockout_that_locked_it(db, app):
     """The counters go with the hash, or the account refuses the PIN it is about to be given."""
-    admin = await _admin(app)
+    admin = await admin_client(app)
     member, created = await _member(app, admin)
     assert (
         await member.post(
@@ -252,7 +241,7 @@ async def test_a_pin_reset_clears_the_pin_and_the_lockout_that_locked_it(db, app
 
 async def test_an_admin_reads_the_credential_ids_the_revoke_route_needs(db, app):
     """An id the list returns is an id the revoke takes; the projection carries no public key."""
-    admin = await _admin(app)
+    admin = await admin_client(app)
     _member_client, created = await _member(app, admin)
     phone = await _register_passkey(db, created["id"], _device(), label="phone")
     await _register_passkey(db, created["id"], _device(), label="desktop")
@@ -277,7 +266,7 @@ async def test_an_admin_reads_the_credential_ids_the_revoke_route_needs(db, app)
 async def test_the_credential_list_is_scoped_to_the_account_it_names(db, app):
     """The list is the input to the revoke, so it has to be scoped the same way the revoke is:
     an id read off one roster row must not appear on another's."""
-    admin = await _admin(app)
+    admin = await admin_client(app)
     _member_client, jenny = await _member(app, admin)
     tom = await _create(admin, "tom")
     await _register_passkey(db, jenny["id"], _device())
@@ -288,7 +277,7 @@ async def test_the_credential_list_is_scoped_to_the_account_it_names(db, app):
 
 async def test_an_admin_revokes_one_passkey_on_another_account(db, app):
     """One credential, not the account's set: a lost phone is one row."""
-    admin = await _admin(app)
+    admin = await admin_client(app)
     _member_client, created = await _member(app, admin)
     phone = await _register_passkey(db, created["id"], _device(), label="phone")
     await _register_passkey(db, created["id"], _device(), label="desktop")
@@ -302,7 +291,7 @@ async def test_an_admin_revokes_one_passkey_on_another_account(db, app):
 
 async def test_revoking_a_passkey_that_belongs_to_another_account_is_a_404(db, app):
     """The route matches on (user_id, credential_id)."""
-    admin = await _admin(app)
+    admin = await admin_client(app)
     _member_client, jenny = await _member(app, admin)
     tom = await _create(admin, "tom")
     hers = await _register_passkey(db, jenny["id"], _device())
@@ -313,7 +302,7 @@ async def test_revoking_a_passkey_that_belongs_to_another_account_is_a_404(db, a
 
 
 async def test_disabling_an_account_ends_its_sessions_and_refuses_the_cookie_and_a_login(db, app):
-    admin = await _admin(app)
+    admin = await admin_client(app)
     member, created = await _member(app, admin)
 
     disabled = await admin.post(
@@ -344,7 +333,7 @@ async def test_disabling_an_account_ends_its_sessions_and_refuses_the_cookie_and
 
 async def test_a_disabled_account_cannot_answer_a_passkey_assertion(db, app):
     """The passkey is still registered (§3.2 keeps it across a logout); the account is refused."""
-    admin = await _admin(app)
+    admin = await admin_client(app)
     _member_client, created = await _member(app, admin)
     device = _device()
     await _register_passkey(db, created["id"], device)
@@ -358,7 +347,7 @@ async def test_a_disabled_account_cannot_answer_a_passkey_assertion(db, app):
 
 
 async def test_deleting_an_account_removes_the_row(db, app):
-    admin = await _admin(app)
+    admin = await admin_client(app)
     created = await _create(admin, "jenny")
 
     removed = await admin.delete(f"/api/admin/users/{created['id']}")
@@ -373,7 +362,7 @@ async def test_every_row_editor_route_answers_404_for_an_account_that_is_not_the
     app, method, path, body
 ):
     """A roster can be one delete out of date; each route says so rather than reporting success."""
-    admin = await _admin(app)
+    admin = await admin_client(app)
     response = await admin.request(method, path.format(user_id=999999), json=body)
     assert response.status_code == 404
 
@@ -383,7 +372,7 @@ async def test_every_row_editor_route_answers_404_for_an_account_that_is_not_the
 
 
 async def test_the_last_active_admin_cannot_be_demoted(app, db):
-    admin = await _admin(app)
+    admin = await admin_client(app)
     me = (await admin.get("/api/auth/me")).json()["id"]
     refused = await admin.patch(f"/api/admin/users/{me}", json={"role": "member"})
     assert refused.status_code == 409
@@ -392,7 +381,7 @@ async def test_the_last_active_admin_cannot_be_demoted(app, db):
 
 
 async def test_the_last_active_admin_cannot_be_disabled(app, db):
-    admin = await _admin(app)
+    admin = await admin_client(app)
     me = (await admin.get("/api/auth/me")).json()["id"]
     refused = await admin.post(f"/api/admin/users/{me}/active", json={"is_active": False})
     assert refused.status_code == 409
@@ -401,7 +390,7 @@ async def test_the_last_active_admin_cannot_be_disabled(app, db):
 
 
 async def test_the_last_active_admin_cannot_be_deleted(app, db):
-    admin = await _admin(app)
+    admin = await admin_client(app)
     me = (await admin.get("/api/auth/me")).json()["id"]
     refused = await admin.delete(f"/api/admin/users/{me}")
     assert refused.status_code == 409
@@ -411,7 +400,7 @@ async def test_the_last_active_admin_cannot_be_deleted(app, db):
 
 async def test_a_disabled_admin_does_not_hold_the_floor(app):
     """A disabled admin cannot sign in, so it must not hold the floor."""
-    admin = await _admin(app)
+    admin = await admin_client(app)
     _other, jenny = await _member(app, admin, name="jenny")
     me = (await admin.get("/api/auth/me")).json()["id"]
     await admin.patch(f"/api/admin/users/{jenny['id']}", json={"role": "admin"})
@@ -423,7 +412,7 @@ async def test_a_disabled_admin_does_not_hold_the_floor(app):
 
 
 async def test_with_two_active_admins_each_of_the_three_succeeds(app, db):
-    admin = await _admin(app)
+    admin = await admin_client(app)
     _other, jenny = await _member(app, admin, name="jenny")
     await admin.patch(f"/api/admin/users/{jenny['id']}", json={"role": "admin"})
 
@@ -443,7 +432,7 @@ async def test_with_two_active_admins_each_of_the_three_succeeds(app, db):
 
 async def test_an_admin_cannot_reset_or_disable_their_own_account_from_this_tab(app, db):
     """Refused even with a second admin standing, so it is the self rule answering and not the floor."""
-    admin = await _admin(app)
+    admin = await admin_client(app)
     _other, jenny = await _member(app, admin, name="jenny")
     await admin.patch(f"/api/admin/users/{jenny['id']}", json={"role": "admin"})
     me = (await admin.get("/api/auth/me")).json()["id"]
@@ -466,7 +455,7 @@ async def test_two_admins_removing_each_other_at_once_cannot_empty_the_floor(app
     """The floor is a read then a write, so only `_ROSTER_LOCK` holds it under interleaving. Both
     requests are held after the read, so the lock and not the scheduler decides."""
     active_admins = "SELECT count(*) FROM app_user WHERE role = 'admin' AND is_active"
-    admin = await _admin(app)
+    admin = await admin_client(app)
     patrick = (await admin.get("/api/auth/me")).json()["id"]
     jenny_client, jenny = await _member(app, admin, name="jenny")
     promoted = await admin.patch(f"/api/admin/users/{jenny['id']}", json={"role": "admin"})

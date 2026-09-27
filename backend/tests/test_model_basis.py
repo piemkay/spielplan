@@ -26,6 +26,7 @@ from spielplan.models.artifacts import ArtifactStore
 from spielplan.rank import tiers
 from spielplan.scoring import backbone as bb
 from tests.fixtures import make_bundle as fx
+from tests.helpers import insert_user
 
 PKG = Path(__file__).resolve().parents[1] / "spielplan"
 LABELS = ((1, 2), (2, 2), (3, 1), (4, 0), (5, 1))
@@ -46,12 +47,6 @@ def _as_fitted(blob: bytes) -> np.ndarray:
     """The placement's unit direction, as the fit reads a tower-only title (decision 471)."""
     vector = _as_vector(blob)
     return vector / np.linalg.norm(vector)
-
-
-async def _user(db, name: str = "Patrick", role: str = "admin") -> int:
-    return await db.fetchval(
-        "INSERT INTO app_user (name, role) VALUES ($1, $2) RETURNING id", name, role
-    )
 
 
 async def _import(db, root: Path, artifacts_root: Path, *, version: str = "test-v1",
@@ -116,7 +111,7 @@ async def worker_env(db, pg_url, tmp_path, monkeypatch):
 async def installed(db, tmp_path):
     """Returns `(store, user_id)`."""
     await _import(db, tmp_path / "b1", tmp_path / "artifacts")
-    user_id = await _user(db)
+    user_id = await insert_user(db, "Patrick", "admin")
     await db.execute("UPDATE title SET is_owned = true")
     for title_id, value in LABELS:
         await observations.record_verdict(db, user_id=user_id, title_id=title_id, value=value)
@@ -175,7 +170,7 @@ async def test_a_source_with_no_version_threaded_falls_back_to_the_active_row_as
 
     # Superseded, not deleted: a row that was ever a basis is never deleted (decision 249).
     await db.execute("UPDATE artifact_bundle SET state = 'superseded'")
-    user_id = await _user(db, name="Ana", role="member")
+    user_id = await insert_user(db, "Ana")
     for title_id, value in LABELS:
         await observations.record_verdict(db, user_id=user_id, title_id=title_id, value=value)
     report = await refit.refit_user(db, user_id=user_id, kind="movie", hp=DEFAULTS)
@@ -194,7 +189,7 @@ async def test_the_rebuild_fits_against_the_staged_bundle_and_stamps_the_staged_
     """The version is threaded at two seams, coordinates read and stamp written; a fit can carry
     the staged stamp over the outgoing coordinates, so both are asserted."""
     await _import(db, tmp_path / "b1", tmp_path / "artifacts")
-    user_id = await _user(db)
+    user_id = await insert_user(db, "Patrick", "admin")
     await db.execute("UPDATE title SET is_owned = true")
     for title_id, value in LABELS:
         await observations.record_verdict(db, user_id=user_id, title_id=title_id, value=value)
@@ -252,7 +247,7 @@ async def test_the_cache_accepts_the_staged_fit_after_the_flip_and_the_first_tap
     db, tmp_path
 ):
     await _import(db, tmp_path / "b1", tmp_path / "artifacts")
-    user_id = await _user(db)
+    user_id = await insert_user(db, "Patrick", "admin")
     await db.execute("UPDATE title SET is_owned = true")
     for title_id, value in LABELS:
         await observations.record_verdict(db, user_id=user_id, title_id=title_id, value=value)
@@ -284,7 +279,7 @@ async def test_a_tap_holding_the_outgoing_basis_queues_rather_than_updating_the_
     """The tap waited on the import's advisory lock, so it sees the staged stamp and new active row
     while this process still holds the outgoing Backbone. It must queue, not write."""
     await _import(db, tmp_path / "b1", tmp_path / "artifacts")
-    user_id = await _user(db)
+    user_id = await insert_user(db, "Patrick", "admin")
     await db.execute("UPDATE title SET is_owned = true")
     for title_id, value in LABELS:
         await observations.record_verdict(db, user_id=user_id, title_id=title_id, value=value)
@@ -337,8 +332,8 @@ async def test_every_fitted_pair_carries_the_version_its_basis_came_from_after_a
     db, tmp_path
 ):
     await _import(db, tmp_path / "b1", tmp_path / "artifacts")
-    patrick = await _user(db)
-    ana = await _user(db, name="Ana", role="member")
+    patrick = await insert_user(db, "Patrick", "admin")
+    ana = await insert_user(db, "Ana")
     await db.execute("UPDATE title SET is_owned = true")
     for user_id in (patrick, ana):
         for title_id, value in LABELS + SERIES_LABELS:
@@ -477,7 +472,7 @@ async def test_a_bundle_less_install_passes_the_invariant_rather_than_refusing(d
     )
     await deps.assert_active_basis(request, db)
 
-    await _user(db)
+    await insert_user(db, "Patrick", "admin")
     for name in ("ledger-map-refit", "fold-in-user-vectors", "placement-reconciliation",
                  "tier-set-refit"):
         await _job(name).run()
@@ -710,7 +705,7 @@ async def test_a_refit_over_an_empty_observation_set_empties_the_board_it_cannot
     """The tier set survives (decision 11); boundaries return to the prior. The tier edits are
     what make the fitted boundaries differ from the prior at all."""
     await _import(db, tmp_path / "b1", tmp_path / "artifacts")
-    user_id = await _user(db)
+    user_id = await insert_user(db, "Patrick", "admin")
     await db.execute("UPDATE title SET is_owned = true")
     for title_id, value in LABELS:
         await observations.record_verdict(db, user_id=user_id, title_id=title_id, value=value)
@@ -752,7 +747,7 @@ async def test_a_refit_over_an_empty_observation_set_empties_the_board_it_cannot
 async def test_the_cache_refuses_a_fit_whose_k_no_longer_matches_the_tier_set(db, tmp_path):
     """Between a tier-set PUT and the refit sweep, a cached fit at the old K clamped drops wrongly."""
     await _import(db, tmp_path / "b1", tmp_path / "artifacts")
-    user_id = await _user(db)
+    user_id = await insert_user(db, "Patrick", "admin")
     await db.execute("UPDATE title SET is_owned = true")
     for title_id, value in LABELS:
         await observations.record_verdict(db, user_id=user_id, title_id=title_id, value=value)

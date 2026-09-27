@@ -26,6 +26,7 @@ from spielplan.core.config import settings
 from spielplan.db import migrate
 from spielplan.importer.bundle import Bundle, refuse_on_install_state
 from spielplan.importer.report import ImportReport
+from tests.helpers import create_database, drop_database, sibling
 
 pytestmark = pytest.mark.anyio
 
@@ -141,38 +142,6 @@ def _run(argv: list[str], **kwargs) -> subprocess.CompletedProcess:
     return done
 
 
-def _sibling(pg_url: str, suffix: str) -> tuple[str, str, str]:
-    """(admin url, database name, url) for a database next to the test one."""
-    parts = urlsplit(pg_url)
-    name = (parts.path.lstrip("/") + suffix)[:62]
-    return (
-        urlunsplit(parts._replace(path="/postgres")),
-        name,
-        urlunsplit(parts._replace(path=f"/{name}")),
-    )
-
-
-async def _recreate(admin: str, name: str) -> None:
-    import asyncpg
-
-    conn = await asyncpg.connect(admin)
-    try:
-        await conn.execute(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)')
-        await conn.execute(f'CREATE DATABASE "{name}"')
-    finally:
-        await conn.close()
-
-
-async def _drop(admin: str, name: str) -> None:
-    import asyncpg
-
-    conn = await asyncpg.connect(admin)
-    try:
-        await conn.execute(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)')
-    finally:
-        await conn.close()
-
-
 @pytest.fixture
 def backup_env(pg_url, tmp_path, monkeypatch):
     """DATABASE_URL and DATA_DIR as the container sets them; the clock is `run()`'s one argument."""
@@ -191,8 +160,8 @@ async def empty_install(pg_url):
     sequence positions; `db/pool.py`'s json codecs included."""
     import asyncpg
 
-    admin, name, url = _sibling(pg_url, "_restore")
-    await _recreate(admin, name)
+    admin, name, url = sibling(pg_url, "_restore")
+    await create_database(admin, name)
     conn = await asyncpg.connect(url)
     try:
         await migrate.apply_all(conn)
@@ -203,18 +172,18 @@ async def empty_install(pg_url):
         yield conn
     finally:
         await conn.close()
-        await _drop(admin, name)
+        await drop_database(admin, name)
 
 
 @pytest.fixture
 async def blank_url(pg_url):
     """`pg_restore` of a whole-database dump wants a target with no schema at all."""
-    admin, name, url = _sibling(pg_url, "_pgr")
-    await _recreate(admin, name)
+    admin, name, url = sibling(pg_url, "_pgr")
+    await create_database(admin, name)
     try:
         yield url
     finally:
-        await _drop(admin, name)
+        await drop_database(admin, name)
 
 
 async def _seed_movie_data(conn) -> None:
@@ -1136,7 +1105,7 @@ async def test_the_restore_holds_the_archived_tables_against_a_concurrent_write(
     await db.execute("SELECT setval('title_id_seq', $1, true)", APP_ID_FLOOR)
     report = await movie_data.write_archive(db, tmp_path / "movie-data.zip")
 
-    other = await asyncpg.connect(_sibling(pg_url, "_restore")[2])
+    other = await asyncpg.connect(sibling(pg_url, "_restore")[2])
 
     async def mint() -> None:
         await other.execute("SET lock_timeout = '750ms'")
@@ -1279,8 +1248,8 @@ async def test_the_operator_command_writes_an_archive_and_restores_it(
     await db.execute("SELECT setval('title_id_seq', $1, true)", APP_ID_FLOOR)
     archive = tmp_path / "movie-data.zip"
 
-    admin, name, url = _sibling(pg_url, "_cli")
-    await _recreate(admin, name)
+    admin, name, url = sibling(pg_url, "_cli")
+    await create_database(admin, name)
     conn = await asyncpg.connect(url)
     try:
         await migrate.apply_all(conn)
@@ -1309,7 +1278,7 @@ async def test_the_operator_command_writes_an_archive_and_restores_it(
         assert await _run_cli("restore", str(tmp_path / "nowhere.zip")) == 1
     finally:
         await conn.close()
-        await _drop(admin, name)
+        await drop_database(admin, name)
         settings.cache_clear()
 
 
@@ -1325,7 +1294,7 @@ async def test_the_operator_restoring_a_pre_291_archive_is_told_what_was_passed_
     assert "public.ml_genome_score" in report.tables, "the fixture is not a pre-291 archive"
 
     # `empty_install`'s own database, addressed the way the command addresses it.
-    monkeypatch.setenv("DATABASE_URL", _sibling(pg_url, "_restore")[2])
+    monkeypatch.setenv("DATABASE_URL", sibling(pg_url, "_restore")[2])
     settings.cache_clear()
     try:
         assert await _run_cli("restore", str(report.path)) == 0
@@ -1457,12 +1426,12 @@ async def test_a_restore_into_a_schema_without_the_archived_tables_is_a_refusal(
     await _seed_movie_data(db)
     report = await movie_data.write_archive(db, tmp_path / "movie-data.zip")
 
-    admin, name, url = _sibling(pg_url, "_bare")
-    await _recreate(admin, name)
+    admin, name, url = sibling(pg_url, "_bare")
+    await create_database(admin, name)
     unmigrated = await asyncpg.connect(url)
     try:
         with pytest.raises(movie_data.RestoreRefused, match="tables this schema does not have"):
             await movie_data.restore_archive(unmigrated, report.path)
     finally:
         await unmigrated.close()
-        await _drop(admin, name)
+        await drop_database(admin, name)

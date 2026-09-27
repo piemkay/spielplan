@@ -2,16 +2,13 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
-import re
 from pathlib import Path
 
 import pytest
 
 ROOT = Path(__file__).resolve().parents[1]
-
-# Decided before the loader below runs: afterwards an exported URL and a file's URL are the same string.
-_URL_SOURCE = "env" if os.environ.get("TEST_DATABASE_URL") else "unset"
 
 # Load .env.test if present, so the URL does not have to be exported by hand every time.
 _env_test = ROOT.parent / ".env.test"
@@ -20,7 +17,6 @@ if _env_test.is_file() and "TEST_DATABASE_URL" not in os.environ:
         key, _, value = line.partition("=")
         if key.strip() == "TEST_DATABASE_URL":
             os.environ["TEST_DATABASE_URL"] = value.strip()
-            _URL_SOURCE = ".env.test"
 
 
 # Set at import, not in a fixture: `settings()` is cached and modules construct `Settings` during
@@ -33,218 +29,61 @@ os.environ.setdefault("PUBLIC_URL", "http://localhost:8080")
 os.environ["SPIELPLAN_INSECURE_DEV"] = "0"
 
 
-def test_database_url() -> str | None:
-    return os.environ.get("TEST_DATABASE_URL")
-
-
-def _worker_suffix() -> str:
-    """The pid, never `PYTEST_XDIST_WORKER`: `gw0` is not
-    process-unique, and `_reap_pattern` parses a pid."""
-    return f"p{os.getpid()}"
-
-
-# Postgres truncates identifiers at 63 bytes; the base is cut, never the suffix `_reap` reads back.
-_NAME_LIMIT = 62
-_SUFFIX_RESERVE = 10  # "p" plus the `\d{1,9}` `_reap` parses back out
-
-
-def _name_prefix(base: str) -> str:
-    """As much of `base` as fits once room is left for the longest suffix this convention writes."""
-    return base[: _NAME_LIMIT - _SUFFIX_RESERVE - 1]
-
-
-def _database_name(base: str) -> str:
-    """The database `pg_url` creates, so the arming line names the same one."""
-    return f"{_name_prefix(base)}_{_worker_suffix()}"[:_NAME_LIMIT]
-
-
-def arming_line(url: str | None, source: str, unarmed_reason: str | None = None) -> str:
-    """A pure function, so it is testable without running pytest in pytest. ASCII for cp1252 consoles."""
-    if unarmed_reason or not url:
-        reason = unarmed_reason or "TEST_DATABASE_URL is unset"
-        return f"integration layer: UNARMED ({reason}) -- db/app/pg_url tests skip"
-
-    from urllib.parse import urlsplit
-
-    parts = urlsplit(url)
-    where = f"{parts.hostname or '?'}:{parts.port or 5432}"
-    base = parts.path.lstrip("/") or "postgres"
-    return f"integration layer: ARMED against {where}/{_database_name(base)} (source: {source})"
-
-
-def pytest_addoption(parser) -> None:
-    """Legal only because `backend/tests` is always on the command line."""
-    parser.addoption(
-        "--no-db",
-        action="store_true",
-        default=False,
-        help="disarm the integration layer: db/app/pg_url tests skip instead of making a database",
-    )
-
-
-def pytest_configure(config) -> None:
-    # An empty TEST_DATABASE_URL is already the unarmed state `pg_url` skips on.
-    if config.getoption("--no-db"):
-        os.environ["TEST_DATABASE_URL"] = ""
-
-
-def _session_arming_line(config) -> str:
-    reason = "--no-db" if config.getoption("--no-db", default=False) else None
-    return arming_line(os.environ.get("TEST_DATABASE_URL"), _URL_SOURCE, reason)
-
-
-def pytest_report_header(config) -> str:
-    return _session_arming_line(config)
-
-
-def _report_line(config, line: str) -> None:
-    """Never `print`: capture discards it on a green run; the terminal reporter writes past the capture."""
-    reporter = config.pluginmanager.get_plugin("terminalreporter")
-    if reporter is not None:
-        reporter.write_line(line)
-
-
-def pytest_sessionstart(session) -> None:
-    """pytest suppresses `pytest_report_header` under `-q`, so this speaks there and only there."""
-    if session.config.option.verbose >= 0:
-        return
-    _report_line(session.config, _session_arming_line(session.config))
-
-
-async def _make_database(admin_url: str, name: str) -> None:
-    import asyncpg
-
-    conn = await asyncpg.connect(admin_url)
-    try:
-        # WITH (FORCE) so a previous run that died holding a connection cannot wedge this one.
-        await conn.execute(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)')
-        await conn.execute(f'CREATE DATABASE "{name}"')
-    finally:
-        await conn.close()
-
-
-async def _drop_database(admin_url: str, name: str) -> None:
-    import asyncpg
-
-    conn = await asyncpg.connect(admin_url)
-    try:
-        await conn.execute(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)')
-    finally:
-        await conn.close()
-
-
-def _pid_is_alive(pid: int) -> bool:
-    """Never `os.kill(pid, 0)` on Windows: it is `TerminateProcess`. Only ERROR_INVALID_PARAMETER (87)
-    means gone; access denied is another account's live process."""
-    if os.name == "nt":
-        import ctypes
-
-        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-        handle = kernel32.OpenProcess(0x1000, False, pid)
-        if not handle:
-            return ctypes.get_last_error() != 87
-        kernel32.CloseHandle(handle)
-        return True
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        # Someone else's process, which is still a process.
-        return True
-    return True
-
-
-def _reap_pattern(base: str) -> re.Pattern[str]:
-    """`\\d{1,9}`, built from `_name_prefix`: only names this convention wrote."""
-    return re.compile(rf"^{re.escape(_name_prefix(base))}_p(\d{{1,9}})$")
-
-
-async def _reap(admin_url: str, base: str) -> list[str]:
-    import asyncpg
-
-    prefix = _name_prefix(base)
-    pattern = _reap_pattern(base)
-    conn = await asyncpg.connect(admin_url)
-    dropped: list[str] = []
-    try:
-        rows = await conn.fetch(
-            "SELECT datname FROM pg_database WHERE datname LIKE $1", f"{prefix}%"
-        )
-        for record in rows:
-            name = record["datname"]
-            match = pattern.match(name)
-            if match is None or _pid_is_alive(int(match.group(1))):
-                continue
-            await conn.execute(f'DROP DATABASE IF EXISTS "{name}" WITH (FORCE)')
-            dropped.append(name)
-    finally:
-        await conn.close()
-    return dropped
-
-
-def _reap_orphaned_databases(admin_url: str, base: str, report) -> list[str]:
-    """Drops every `<base>_p<pid>` whose process is gone:
-    liveness, not connection count. Never raises, never silent."""
-    import asyncio
-
-    try:
-        return asyncio.run(_reap(admin_url, base))
-    except Exception as exc:
-        # OS text is localised; forced to ASCII so reporting a failed tidy-up cannot raise.
-        detail = str(exc).encode("ascii", "replace").decode("ascii")
-        report(f"conftest: orphaned test databases not reaped ({type(exc).__name__}: {detail})")
-        return []
-
-
 @pytest.fixture(scope="session")
-def pg_url(request) -> str:
-    """A database this process owns: `db` drops schema `public`
-    per test, so a shared one breaks concurrent runs."""
+def pg_url() -> str:
+    """This checkout's and xdist worker's database, so the next run reclaims what a killed one left.
+    `db` clones it per test from a template migrated once per session."""
     import asyncio
     from urllib.parse import urlsplit, urlunsplit
 
-    url = test_database_url()
+    import asyncpg
+
+    from spielplan.db import migrate
+    from tests.helpers import create_database, drop_database, sibling
+
+    url = os.environ.get("TEST_DATABASE_URL")
     if not url:
         pytest.skip("TEST_DATABASE_URL is unset (see tests/conftest.py)")
 
     parts = urlsplit(url)
-    base = parts.path.lstrip("/") or "postgres"
-    name = _database_name(base)
-    admin = urlunsplit(parts._replace(path="/postgres"))
-    mine = urlunsplit(parts._replace(path=f"/{name}"))
+    checkout = hashlib.sha1(str(ROOT).encode()).hexdigest()[:6]
+    worker = os.environ.get("PYTEST_XDIST_WORKER", "main")
+    mine = urlunsplit(parts._replace(path=f"/{parts.path.lstrip('/') or 'postgres'}_{checkout}_{worker}"))
+    admin, template, template_url = sibling(mine, "_tpl")
 
-    # Before taking a database, give back the ones no live process still owns. [M4.8 dd29]
-    _reap_orphaned_databases(admin, base, lambda line: _report_line(request.config, line))
-    asyncio.run(_make_database(admin, name))
+    async def migrate_template() -> None:
+        await create_database(admin, template)
+        conn = await asyncpg.connect(template_url)
+        try:
+            await migrate.apply_all(conn)
+        finally:
+            await conn.close()
+
+    asyncio.run(migrate_template())
     try:
         yield mine
     finally:
-        asyncio.run(_drop_database(admin, name))
+        asyncio.run(drop_database(admin, urlsplit(mine).path.lstrip("/")))
+        asyncio.run(drop_database(admin, template))
 
 
 @pytest.fixture
 async def db(pg_url):
-    """A connection to a freshly migrated, empty database; the schema is dropped per test."""
+    """A connection to a fresh clone of the migrated template."""
+    import json
+    from urllib.parse import urlsplit
+
     import asyncpg
 
-    from spielplan.db import migrate, pool
+    from spielplan.db import pool
+    from tests.helpers import create_database, sibling
 
+    admin, template, _ = sibling(pg_url, "_tpl")
+    await create_database(admin, urlsplit(pg_url).path.lstrip("/"), template=template)
     conn = await asyncpg.connect(pg_url)
     for typename in ("json", "jsonb"):
-        import json as _json
-
-        await conn.set_type_codec(
-            typename, encoder=_json.dumps, decoder=_json.loads, schema="pg_catalog"
-        )
+        await conn.set_type_codec(typename, encoder=json.dumps, decoder=json.loads, schema="pg_catalog")
     try:
-        await conn.execute(
-            "DROP SCHEMA IF EXISTS public CASCADE;"
-            "DROP SCHEMA IF EXISTS display CASCADE;"
-            "DROP SCHEMA IF EXISTS review_store CASCADE;"
-            "CREATE SCHEMA public;"
-        )
-        await migrate.apply_all(conn)
         yield conn
     finally:
         await conn.close()
@@ -331,11 +170,6 @@ async def app(db, pg_url, tmp_path, monkeypatch):
             with contextlib.suppress(Exception):
                 await client.aclose()
         settings.cache_clear()
-
-
-@pytest.fixture
-async def app_client(app):
-    return app()
 
 
 @pytest.fixture

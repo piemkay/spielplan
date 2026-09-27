@@ -16,14 +16,12 @@ services:
       - synchronous_commit=off
       - -c
       - full_page_writes=off
-      # The fixture's DROP SCHEMA ... CASCADE takes a lock per object; 16 xdist workers resetting
-      # at once ran out of shared memory at the default 64.
+      # Lock headroom for 16 xdist workers migrating at once; the default 64 ran out of shared memory.
       - -c
       - max_locks_per_transaction=256
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-spielplan}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-spielplan}
-      # Never `spielplan`: the fixture opens every test with DROP SCHEMA.
       POSTGRES_DB: spielplan_test
     volumes:
       # A named volume, never ./data: the host bind mount is several times slower.

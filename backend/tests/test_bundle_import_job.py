@@ -19,8 +19,7 @@ from spielplan.core.config import settings
 from spielplan.importer import bundle as bundle_import
 from spielplan.models.artifacts import ArtifactStore
 from tests.fixtures import make_bundle as fx
-
-ADMIN_PASSWORD = "an-admin-password"
+from tests.helpers import ADMIN_PASSWORD, admin_client, tick_one
 
 
 @pytest.fixture
@@ -158,29 +157,6 @@ def bundle_at(tmp_path):
     return make
 
 
-async def _admin(app):
-    client = app()
-    created = await client.post(
-        "/api/setup/admin", json={"name": "patrick", "password": ADMIN_PASSWORD}
-    )
-    assert created.status_code == 201, created.text
-    return client
-
-
-async def _tick() -> None:
-    """The tick is production code; the registry is cut to this row so other jobs cannot fail the test."""
-    row = next(j for j in worker.JOBS if j.name == worker.BUNDLE_IMPORT_JOB)
-    jobs = worker.JOBS
-    worker.JOBS = (row,)
-    try:
-        # `last_run` makes `due` return nothing, so what happens is the admin action's trigger.
-        await worker._tick(
-            time.monotonic(), datetime.now(UTC), {row.name: time.monotonic()}, {}
-        )
-    finally:
-        worker.JOBS = jobs
-
-
 async def _job_row(db, version: str | None = None):
     return await db.fetchrow(
         "SELECT id, name, ok, finished_at, detail FROM job_run "
@@ -194,7 +170,7 @@ async def _job_row(db, version: str | None = None):
 async def test_the_import_route_returns_202_and_the_version_to_poll(app, db, bundle_at):
     """The import was a 127 s await on the event loop; now
     202, and NOTHING is written until the worker runs."""
-    admin = await _admin(app)
+    admin = await admin_client(app)
     root = bundle_at()
 
     answer = await admin.post("/api/admin/bundle/import", json={"path": str(root)})
@@ -222,7 +198,7 @@ async def test_the_import_route_returns_202_and_the_version_to_poll(app, db, bun
 
 async def test_the_load_and_the_flip_run_in_the_worker_tick(app, db, bundle_at):
     """`due` can only ask a clock, so the import happening proves `_with_queued_import` asked."""
-    admin = await _admin(app)
+    admin = await admin_client(app)
     root = bundle_at()
     answer = await admin.post("/api/admin/bundle/import", json={"path": str(root)})
     assert answer.status_code == 202, answer.text
@@ -231,7 +207,7 @@ async def test_the_load_and_the_flip_run_in_the_worker_tick(app, db, bundle_at):
     assert worker.BUNDLE_IMPORT_JOB not in {
         job.name for job in worker.due(now, {worker.BUNDLE_IMPORT_JOB: now})
     }, "this test proves the admin action fires the job, so the clock must not"
-    await _tick()
+    await tick_one(worker.BUNDLE_IMPORT_JOB, due=False)
 
     row = await db.fetchrow("SELECT version, state, report FROM artifact_bundle")
     assert row is not None, "the worker tick did not import the queued bundle"
@@ -254,7 +230,7 @@ async def test_the_state_route_reports_the_phase_until_the_bundle_is_active(
 ):
     """The import is paused inside its transaction so the
     `running` phase is read from another connection."""
-    admin = await _admin(app)
+    admin = await admin_client(app)
     root = bundle_at()
 
     inside = asyncio.Event()
@@ -276,7 +252,7 @@ async def test_the_state_route_reports_the_phase_until_the_bundle_is_active(
     assert queued["import_job"]["bundle_version"] == "test-v1"
     assert queued["active"] is None and queued["restart_required"] is False
 
-    tick = asyncio.create_task(_tick())
+    tick = asyncio.create_task(tick_one(worker.BUNDLE_IMPORT_JOB, due=False))
     try:
         await asyncio.wait_for(inside.wait(), 20)
         running = (await admin.get("/api/admin/bundle/state")).json()
@@ -301,14 +277,14 @@ async def test_the_state_route_reports_the_phase_until_the_bundle_is_active(
 async def test_a_client_that_disconnects_does_not_change_the_outcome(app, db, bundle_at):
     """The proxy cuts at 100 s and the work takes minutes,
     so a disconnected client is the expected shape."""
-    admin = await _admin(app)
+    admin = await admin_client(app)
     root = bundle_at()
     answer = await admin.post("/api/admin/bundle/import", json={"path": str(root)})
     assert answer.status_code == 202, answer.text
     assert await db.fetchval("SELECT count(*) FROM artifact_bundle") == 0
 
     await admin.aclose()
-    await _tick()
+    await tick_one(worker.BUNDLE_IMPORT_JOB, due=False)
 
     assert await db.fetchval("SELECT state FROM artifact_bundle WHERE version = 'test-v1'") == (
         "active"
@@ -329,7 +305,7 @@ async def test_a_second_import_while_one_is_queued_is_refused_rather_than_queued
     app, db, bundle_at
 ):
     """A running import holds `IMPORT_LOCK`; a queued row holds none, so both are asked, under the lock."""
-    admin = await _admin(app)
+    admin = await admin_client(app)
     root = bundle_at()
     first = await admin.post("/api/admin/bundle/import", json={"path": str(root)})
     assert first.status_code == 202, first.text
@@ -382,10 +358,10 @@ async def test_the_reaper_reports_the_flip_it_can_see_rather_than_asserting_noth
 ):
     """A crash after COMMIT leaves the bundle active; the
     reaper reads `artifact_bundle` and says what it saw."""
-    admin = await _admin(app)
+    admin = await admin_client(app)
     accepted = await admin.post("/api/admin/bundle/import", json={"path": str(bundle_at())})
     assert accepted.status_code == 202, accepted.text
-    await _tick()
+    await tick_one(worker.BUNDLE_IMPORT_JOB, due=False)
     assert await db.fetchval("SELECT state FROM artifact_bundle WHERE version = 'test-v1'") == (
         "active"
     )
@@ -417,7 +393,7 @@ async def test_a_crash_after_the_flip_is_reported_as_the_flip_and_not_as_a_faile
 ):
     """A connection lost after COMMIT raises out of an import
     that happened; one derivation serves both writers."""
-    admin = await _admin(app)
+    admin = await admin_client(app)
     accepted = await admin.post("/api/admin/bundle/import", json={"path": str(bundle_at())})
     assert accepted.status_code == 202, accepted.text
     real_import = bundle_import.import_bundle
@@ -467,7 +443,7 @@ async def test_an_abandoned_claim_is_reaped_on_a_tick_and_not_only_by_the_hourly
             job.name for job in worker.due(now, {worker.BUNDLE_IMPORT_JOB: now - age})
         }, f"the fallback fired at {age:g}s, so this test would prove nothing"
 
-    await _tick()
+    await tick_one(worker.BUNDLE_IMPORT_JOB, due=False)
 
     row = await db.fetchrow("SELECT ok, finished_at, detail FROM job_run WHERE id = $1", killed)
     assert row["finished_at"] is not None, (
@@ -564,7 +540,7 @@ async def test_a_second_import_in_the_window_between_the_claim_and_the_lock_is_r
 ):
     """Between the claim and `IMPORT_LOCK` neither question
     is true, so a young `running` claim refuses too."""
-    admin = await _admin(app)
+    admin = await admin_client(app)
     root = bundle_at()
     await _queue(db, "test-v1", phase=worker.PHASE_QUEUED, age_s=1)
     claimed = await worker._claim_bundle_import(db)
@@ -650,7 +626,7 @@ async def test_the_jobs_that_cite_a_legal_no_bundle_state_never_meet_a_broken_on
 async def test_a_missing_artifacts_directory_is_reported_and_restart_required_is_not(app, db):
     """Broken and stale at once: a restart reloads the same
     empty store, so restore is the only instruction."""
-    admin = await _admin(app)
+    admin = await admin_client(app)
     await db.execute(
         "INSERT INTO artifact_bundle (version, manifest, state, kind) "
         "VALUES ('v-gone', '{}'::jsonb, 'active', 'seed')"

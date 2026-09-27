@@ -9,7 +9,7 @@ import pytest
 
 from spielplan.backup import movie_data
 from spielplan.db import migrate
-from tests.test_backup import _drop, _recreate, _sibling
+from tests.helpers import create_database, drop_database, sibling
 from tests.test_upgrade_drill import _complete, _stage
 
 MIGRATION = "0026_acquisition_sources"
@@ -26,8 +26,8 @@ def _last_before_the_migration() -> str:
 @pytest.fixture
 async def before_the_migration(pg_url, tmp_path):
     """A database of its own, not `db`'s: the schema is deliberately not this build's."""
-    admin, name, url = _sibling(pg_url, "_pre0026")
-    await _recreate(admin, name)
+    admin, name, url = sibling(pg_url, "_pre0026")
+    await create_database(admin, name)
     conn = await asyncpg.connect(url)
     try:
         directory = _stage(tmp_path, _last_before_the_migration())
@@ -36,7 +36,7 @@ async def before_the_migration(pg_url, tmp_path):
         yield conn, directory
     finally:
         await conn.close()
-        await _drop(admin, name)
+        await drop_database(admin, name)
 
 
 async def test_the_two_keys_stage_two_fetches_by_are_on_the_title_and_are_text(db):

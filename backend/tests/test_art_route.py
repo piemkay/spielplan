@@ -11,8 +11,8 @@ from spielplan.art.poster import ArtService, url_epoch
 from spielplan.connectors import registry
 from spielplan.connectors.jellyfin import JellyfinClient
 from spielplan.db import pool
+from tests.helpers import admin_client
 
-PASSWORD = "an-admin-password"
 JPEG = b"\xff\xd8\xff\xe0" + b"\x00" * 200
 W500 = "https://image.tmdb.org/t/p/w500/heat.jpg"
 W342 = "https://image.tmdb.org/t/p/w342/heat.jpg"
@@ -35,13 +35,6 @@ class Host:
         return httpx.Response(200, content=JPEG, headers={"content-type": "image/jpeg"})
 
 
-async def _admin(app) -> httpx.AsyncClient:
-    client = app()
-    made = await client.post("/api/setup/admin", json={"name": "patrick", "password": PASSWORD})
-    assert made.status_code == 201
-    return client
-
-
 async def _host(client: httpx.AsyncClient, tmp_path, host: Host) -> ArtService:
     """The lifespan closes whichever service is on `app.state.art`, so the replaced one is closed here."""
     application = client._transport.app
@@ -60,7 +53,7 @@ async def _title(db, title_id: int, **columns) -> None:
 
 
 async def test_a_stranger_is_refused_before_any_source_is_asked(app, db, tmp_path):
-    admin = await _admin(app)
+    admin = await admin_client(app)
     host = Host()
     await _host(admin, tmp_path, host)
     await _title(db, 1, poster_path=W500)
@@ -70,7 +63,7 @@ async def test_a_stranger_is_refused_before_any_source_is_asked(app, db, tmp_pat
 
 
 async def test_a_locked_account_is_refused_by_the_poster_route(app, db, tmp_path):
-    admin = await _admin(app)
+    admin = await admin_client(app)
     host = Host()
     await _host(admin, tmp_path, host)
     await _title(db, 1, poster_path=W500)
@@ -85,7 +78,7 @@ async def test_a_locked_account_is_refused_by_the_poster_route(app, db, tmp_path
 
 
 async def test_a_tmdb_poster_is_served_private_for_180_days_and_never_immutable(app, db, tmp_path):
-    admin = await _admin(app)
+    admin = await admin_client(app)
     host = Host()
     await _host(admin, tmp_path, host)
     await _title(db, 1, poster_path=W500)
@@ -107,7 +100,7 @@ async def test_an_owned_title_is_served_from_the_households_jellyfin(
     app, db, tmp_path, secrets_key, fake_jellyfin, monkeypatch
 ):
     module, transport = fake_jellyfin
-    admin = await _admin(app)
+    admin = await admin_client(app)
     host = Host()
     await _host(admin, tmp_path, host)
     await registry.save_jellyfin(db, url=JELLYFIN_URL, api_key=module.API_KEY)
@@ -127,7 +120,7 @@ async def test_a_posterless_title_is_filed_for_the_worker_and_drawn_as_the_tinte
 ):
     """The 404 is cacheable for one `art-lookup` interval,
     so the card asks again after the worker's turn."""
-    admin = await _admin(app)
+    admin = await admin_client(app)
     host = Host()
     await _host(admin, tmp_path, host)
     await _title(db, 1, imdb_id="tt0368447",
@@ -152,7 +145,7 @@ async def test_a_posterless_title_is_filed_for_the_worker_and_drawn_as_the_tinte
 
 
 async def test_an_unknown_title_is_a_cacheable_404(app, tmp_path):
-    admin = await _admin(app)
+    admin = await admin_client(app)
     await _host(admin, tmp_path, Host())
     answer = await admin.get(poster_url(999999))
     assert answer.status_code == 404
@@ -161,7 +154,7 @@ async def test_an_unknown_title_is_a_cacheable_404(app, tmp_path):
 
 async def test_no_pooled_connection_is_held_while_the_host_is_asked(app, db, tmp_path):
     """The pool holds ten and a cold Home asks for sixty posters."""
-    admin = await _admin(app)
+    admin = await admin_client(app)
     asked, release = asyncio.Event(), asyncio.Event()
 
     async def stall(request):
@@ -185,7 +178,7 @@ async def test_no_pooled_connection_is_held_while_the_host_is_asked(app, db, tmp
 
 @pytest.mark.parametrize("title_id", ["x", "1.5"])
 async def test_a_title_id_that_is_not_a_number_is_refused_by_the_route(app, title_id):
-    admin = await _admin(app)
+    admin = await admin_client(app)
     assert (await admin.get(f"/api/art/{title_id}/poster")).status_code == 422
 
 

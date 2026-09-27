@@ -25,6 +25,7 @@ from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 from spielplan.core import logs, secrets
 from spielplan.push import keys, send
 from spielplan.push.send import device_handle
+from tests.helpers import insert_user
 
 PAYLOAD = {"kind": "session-invite", "room": "GOLD-42"}
 
@@ -60,12 +61,6 @@ class FakePushService(httpx.AsyncBaseTransport):
         raise AssertionError("no request was made to that device")
 
 
-async def _member(db, name: str) -> int:
-    return await db.fetchval(
-        "INSERT INTO app_user (name, role) VALUES ($1, 'member') RETURNING id", name
-    )
-
-
 async def _device(db, user_id: int, endpoint: str) -> Device:
     private = ec.generate_private_key(ec.SECP256R1())
     p256dh = keys.b64(
@@ -97,8 +92,8 @@ class Household:
 @pytest.fixture
 async def household(db, secrets_key) -> Household:
     await keys.ensure_keypair(db)
-    jenny = await _member(db, "jenny")
-    patrick = await _member(db, "patrick")
+    jenny = await insert_user(db, "jenny")
+    patrick = await insert_user(db, "patrick")
     return Household(
         jenny=jenny,
         patrick=patrick,
@@ -392,7 +387,7 @@ async def test_only_that_members_devices_are_sent_to_or_pruned(household, db):
 
 
 async def test_a_member_with_no_device_is_a_silent_no_op(household, db):
-    lonely = await _member(db, "a-member-who-declined")
+    lonely = await insert_user(db, "a-member-who-declined")
     assert await send.send_to_user(db, lonely, PAYLOAD, transport=FakePushService()) == []
 
 

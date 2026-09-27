@@ -6,19 +6,15 @@ from __future__ import annotations
 import os
 import sys
 import tempfile
-import time
-from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
-from spielplan import worker
 from spielplan.api import admin as admin_api
 from spielplan.core import storage
 from spielplan.core.config import settings
 from tests.fixtures import make_bundle as fx
-
-ADMIN_PASSWORD = "an-admin-password"
+from tests.helpers import admin_client, tick_one
 
 # Captured before any patch, so nested patches wrap the real function.
 _REAL_MKSTEMP = tempfile.mkstemp
@@ -97,26 +93,6 @@ def test_a_real_read_only_directory_is_reported(tmp_path):
         locked.chmod(0o755)
 
 
-async def _admin(app):
-    client = app()
-    created = await client.post(
-        "/api/setup/admin", json={"name": "patrick", "password": ADMIN_PASSWORD}
-    )
-    assert created.status_code == 201, created.text
-    return client
-
-
-async def _run_storage_check() -> None:
-    """One tick of the real loop with the registry cut to this job, due now."""
-    row = next(j for j in worker.JOBS if j.name == admin_api.STORAGE_JOB)
-    jobs = worker.JOBS
-    worker.JOBS = (row,)
-    try:
-        await worker._tick(time.monotonic(), datetime.now(UTC), {}, {})
-    finally:
-        worker.JOBS = jobs
-
-
 async def _newest(db):
     return await db.fetchrow(
         "SELECT ok, detail FROM job_run WHERE name = $1 ORDER BY started_at DESC, id DESC LIMIT 1",
@@ -128,18 +104,18 @@ async def test_the_storage_check_job_fails_with_the_chown_and_passes_after_it(
     app, db, tmp_path, monkeypatch
 ):
     """Green on the next run after the chown, with nothing restarted."""
-    admin = await _admin(app)
+    admin = await admin_client(app)
     for name in storage.MOUNTS:
         (tmp_path / name).mkdir(exist_ok=True)
     _refuse_mkstemp_in(monkeypatch, tmp_path / "backups")
 
-    await _run_storage_check()
+    await tick_one(admin_api.STORAGE_JOB, due=True)
     failed = await _newest(db)
     assert failed["ok"] is False
     assert "sudo chown -R 1000:1000 data/backups" in failed["detail"]["error"], failed["detail"]
 
     _refuse_mkstemp_in(monkeypatch)  # the chown
-    await _run_storage_check()
+    await tick_one(admin_api.STORAGE_JOB, due=True)
     passed = await _newest(db)
     assert passed["ok"] is True, passed["detail"]
 
@@ -151,7 +127,7 @@ async def test_validate_refuses_an_unwritable_artifacts_root_before_anything_is_
     app, db, tmp_path, monkeypatch
 ):
     """Every refusal an import can raise must be reachable at validate, before queueing."""
-    admin = await _admin(app)
+    admin = await admin_client(app)
     root = fx.make_bundle(tmp_path / "import" / "test-v1", version="test-v1")
     artifacts = settings().artifacts_dir
     artifacts.mkdir(parents=True, exist_ok=True)

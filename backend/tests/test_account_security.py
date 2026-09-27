@@ -13,37 +13,16 @@ from spielplan.app import create_app
 from spielplan.core import auth, webauthn
 from spielplan.core.config import settings
 from tests.fixtures.soft_authenticator import SoftAuthenticator
+from tests.helpers import (
+    ADMIN_PASSWORD,
+    MEMBER_PASSWORD,
+    admin_client,
+    concrete,
+    member_client,
+    route_table,
+)
 
-# Imported rather than copied: a second walker is a second thing to keep true of the same app.
-from tests.test_api_gating import _routes, concrete
-
-ADMIN_PASSWORD = "an-admin-password"
-MEMBER_PASSWORD = "a-member-password"
 MEMBER_PIN = "4821"
-
-
-async def _admin(app, name: str = "patrick"):
-    client = app()
-    created = await client.post(
-        "/api/setup/admin", json={"name": name, "password": ADMIN_PASSWORD}
-    )
-    assert created.status_code == 201, created.text
-    return client
-
-
-async def _member(app, admin, name: str = "jenny"):
-    made = await admin.post("/api/admin/users", json={"name": name, "role": "member"})
-    assert made.status_code == 201, made.text
-    otp = made.json()["one_time_password"]
-    client = app()
-    assert (
-        await client.post("/api/auth/login", json={"name": name, "password": otp})
-    ).status_code == 200
-    changed = await client.post(
-        "/api/auth/password", json={"current_password": otp, "new_password": MEMBER_PASSWORD}
-    )
-    assert changed.status_code == 200, changed.text
-    return client
 
 
 async def _switched_in(admin, member):
@@ -69,7 +48,7 @@ async def _switched_in(admin, member):
 )
 async def test_a_guest_role_is_refused_at_every_route_that_writes_one(app, method, path, body):
     """Decision 166: a guest is a Tonight seat, never an account; the `Literal` mirrors 0016's CHECK."""
-    admin = await _admin(app)
+    admin = await admin_client(app)
     made = await admin.post("/api/admin/users", json={"name": "jenny", "role": "member"})
     refused = await admin.request(method, path.format(user_id=made.json()["id"]), json=body)
     assert refused.status_code == 422, refused.text
@@ -89,29 +68,22 @@ async def test_the_app_user_check_admits_exactly_two_roles(db):
 async def test_account_creation_exists_at_exactly_one_path_besides_first_boot(app):
     """Walks `create_app()`'s endpoints, so a second minting route is caught however it is filed."""
     minting = {
-        (method, route.path)
-        for route in _routes(create_app().routes)
+        key
+        for key, route in route_table(create_app()).items()
         if "INSERT INTO app_user" in inspect.getsource(route.endpoint)
-        for method in (route.methods or ())
-        if method in ("GET", "POST", "PUT", "DELETE", "PATCH")
     }
     assert minting == {("POST", "/api/admin/users"), ("POST", "/api/setup/admin")}, (
         f"a route outside §6.6 and §3.1's first boot inserts into app_user: {sorted(minting)}"
     )
-    admin = await _admin(app)
+    admin = await admin_client(app)
     gone = await admin.post("/api/setup/members", json={"name": "jenny", "role": "member"})
     assert gone.status_code == 404, "the wizard's member step is decision 164's to delete"
 
 
 async def test_no_other_mounted_route_can_be_made_to_mint_an_account(db, app):
     """The walk above reads source; this one fires every mounted route and counts `app_user` rows."""
-    admin = await _admin(app)
-    probes = sorted(
-        (method, route.path)
-        for route in _routes(create_app().routes)
-        for method in (route.methods or ())
-        if method in ("GET", "POST", "PUT", "DELETE", "PATCH")
-    )
+    admin = await admin_client(app)
+    probes = sorted(key for key in route_table(create_app()) if key[0] != "WS")
     assert len(probes) > 50, f"the walk found {len(probes)} routes — it is sweeping a short list"
 
     minted: dict[tuple[str, str], int] = {}
@@ -137,8 +109,8 @@ async def test_no_other_mounted_route_can_be_made_to_mint_an_account(db, app):
 
 async def test_a_pin_session_is_refused_every_route_that_mints_a_credential(app):
     """A switched-in session that could register a passkey would turn four digits into a credential."""
-    admin = await _admin(app)
-    member = await _member(app, admin)
+    admin = await admin_client(app)
+    member = await member_client(app, admin)
     phone, _jenny = await _switched_in(admin, member)
 
     garbage = {"id": "x", "rawId": "x", "type": "public-key", "response": {}}
@@ -168,7 +140,7 @@ async def test_a_pin_session_is_refused_every_route_that_mints_a_credential(app)
 
 async def test_a_pin_session_on_an_admin_account_never_reaches_the_admin_surface(db, app):
     """`create_session` never stamps `auth_method='pin'`, so a switch cannot look freshly re-prompted."""
-    admin = await _admin(app)
+    admin = await admin_client(app)
     second = await admin.post("/api/admin/users", json={"name": "sam", "role": "admin"})
     otp = second.json()["one_time_password"]
     sam = app()
@@ -194,8 +166,8 @@ async def test_a_pin_session_on_an_admin_account_never_reaches_the_admin_surface
 
 async def test_setting_a_pin_costs_the_password_and_clears_the_lockout(db, app):
     """Decision 170: setting a PIN costs the password; the old PIN's failures clear with it."""
-    admin = await _admin(app)
-    member = await _member(app, admin)
+    admin = await admin_client(app)
+    member = await member_client(app, admin)
     jenny = (await member.get("/api/auth/me")).json()["id"]
 
     assert (await member.post("/api/auth/pin", json={"pin": MEMBER_PIN})).status_code == 422
@@ -227,7 +199,7 @@ async def _go_stale(db) -> None:
 
 async def test_reauth_clears_the_stamp_on_the_session_in_hand(db, app):
     """Re-auth clears the stamp on the session in hand and mints nothing."""
-    admin = await _admin(app)
+    admin = await admin_client(app)
     before = await db.fetchval("SELECT count(*) FROM auth_session")
     await _go_stale(db)
     assert (await admin.get("/api/admin/users")).status_code == 401
@@ -242,7 +214,7 @@ async def test_reauth_clears_the_stamp_on_the_session_in_hand(db, app):
 
 
 async def test_a_wrong_password_does_not_clear_the_stamp(db, app):
-    admin = await _admin(app)
+    admin = await admin_client(app)
     await _go_stale(db)
     refused = await admin.post("/api/auth/reauth", json={"password": "not-the-password"})
     assert refused.status_code == 401
@@ -251,8 +223,8 @@ async def test_a_wrong_password_does_not_clear_the_stamp(db, app):
 
 async def test_reauth_is_refused_to_a_member_and_to_a_pin_session(db, app):
     """A PIN session cannot be upgraded however good the typed password."""
-    admin = await _admin(app)
-    member = await _member(app, admin)
+    admin = await admin_client(app)
+    member = await member_client(app, admin)
     denied = await member.post("/api/auth/reauth", json={"password": MEMBER_PASSWORD})
     assert denied.status_code == 403
 
@@ -269,8 +241,8 @@ async def test_reauth_is_refused_to_a_member_and_to_a_pin_session(db, app):
 async def test_repeated_wrong_passwords_lock_the_account_with_the_same_refusal(db, app):
     """No Cloudflare rate limit on Tailscale; the refusal
     never says "locked", which would confirm the name."""
-    admin = await _admin(app)
-    await _member(app, admin)
+    admin = await admin_client(app)
+    await member_client(app, admin)
     stranger = app()
 
     for _ in range(auth.PASSWORD_ATTEMPT_LIMIT):
@@ -307,8 +279,8 @@ async def test_repeated_wrong_passwords_lock_the_account_with_the_same_refusal(d
 async def test_a_password_change_forgets_the_failures_against_the_old_one(db, app):
     """The count is the credential's: the live window
     refuses the change; a lapsed count is cleared by it."""
-    admin = await _admin(app)
-    member = await _member(app, admin)
+    admin = await admin_client(app)
+    member = await member_client(app, admin)
     change = {"current_password": MEMBER_PASSWORD, "new_password": "a-third-password"}
     await db.execute(
         "UPDATE app_user SET password_failed_count = 5, "
@@ -350,7 +322,7 @@ _PASSWORD_DOORS = (
 )
 async def test_every_route_that_verifies_the_password_counts_the_failure(db, app, path, body):
     """One route per case, so a single door losing its counter fails on its own name."""
-    admin = await _admin(app)
+    admin = await admin_client(app)
     for attempt in range(auth.PASSWORD_ATTEMPT_LIMIT):
         refused = await admin.post(path, json=body("nowhere-near-it"))
         assert refused.status_code == 401, f"attempt {attempt} at {path}: {refused.text}"
@@ -393,7 +365,7 @@ async def test_the_login_body_is_bounded_and_control_characters_are_refused(app,
 
 async def test_a_name_that_differs_only_by_surrounding_whitespace_still_signs_in(db, app):
     """The index is on `lower(name)` and old rows may carry spaces, so both ends are trimmed."""
-    await _admin(app)
+    await admin_client(app)
     await db.execute(
         "INSERT INTO app_user (name, role, password_hash, must_change_password) "
         "VALUES (' Tom ', 'member', $1, false)",
@@ -414,8 +386,8 @@ async def test_a_name_that_differs_only_by_surrounding_whitespace_still_signs_in
 )
 async def test_a_non_ascii_digit_is_refused_as_a_pin_at_both_ends(app, pin):
     r"""Pydantic's `\d` is Unicode-aware, so a PIN pattern must name ASCII digits."""
-    admin = await _admin(app)
-    member = await _member(app, admin)
+    admin = await admin_client(app)
+    member = await member_client(app, admin)
     jenny = (await member.get("/api/auth/me")).json()["id"]
     setting = await member.post(
         "/api/auth/pin", json={"pin": pin, "current_password": MEMBER_PASSWORD}
@@ -458,7 +430,7 @@ async def test_two_simultaneous_first_boots_produce_exactly_one_admin(db, app):
 
 async def test_a_duplicate_name_on_first_boot_is_a_conflict_and_rolls_back(db, app):
     """`app_user_name_key` is the race the pre-read cannot see."""
-    admin = await _admin(app)
+    admin = await admin_client(app)
     await admin.post("/api/admin/users", json={"name": "sam", "role": "member"})
     # The first boot's `setup_step` row stays: the refused attempt must add nothing.
     await db.execute("DELETE FROM app_user WHERE role = 'admin'")
@@ -478,8 +450,8 @@ async def test_a_password_change_that_fails_part_way_changes_nothing(db, app, mo
     def boom(*_args, **_kwargs):
         raise asyncpg.PostgresError("the revoke failed")
 
-    admin = await _admin(app)
-    member = await _member(app, admin)
+    admin = await admin_client(app)
+    member = await member_client(app, admin)
     jenny = (await member.get("/api/auth/me")).json()["id"]
     other_device = app()
     signed_in = await other_device.post(
@@ -514,8 +486,8 @@ async def test_a_sign_in_that_fails_part_way_leaves_the_device_holding_its_sessi
     def boom(*_args, **_kwargs):
         raise asyncpg.PostgresError("the session insert failed")
 
-    admin = await _admin(app)
-    member = await _member(app, admin)
+    admin = await admin_client(app)
+    member = await member_client(app, admin)
     jenny = (await member.get("/api/auth/me")).json()["id"]
     set_pin = await member.post(
         "/api/auth/pin", json={"pin": MEMBER_PIN, "current_password": MEMBER_PASSWORD}
@@ -562,8 +534,8 @@ async def test_a_refused_request_still_carries_the_cookie_its_slide_earned(
     db, app, method, path, body, refusal
 ):
     """Starlette builds its own error response, dropping the Set-Cookie the slide earned."""
-    admin = await _admin(app)
-    member = await _member(app, admin)
+    admin = await admin_client(app)
+    member = await member_client(app, admin)
     jenny = (await member.get("/api/auth/me")).json()["id"]
     # A day old with ten days left, so the slide is both due and visible.
     await db.execute(
@@ -594,8 +566,8 @@ async def test_a_refusal_for_a_dead_session_does_not_clear_the_live_one_that_rep
     db, app, monkeypatch, path
 ):
     """`Set-Cookie` clears by NAME, so a late 401 for a dead session cleared the live one."""
-    admin = await _admin(app)
-    browser = await _member(app, admin)  # one cookie jar is one browser
+    admin = await admin_client(app)
+    browser = await member_client(app, admin)  # one cookie jar is one browser
     s1 = auth.open_session_cookie(browser.cookies.get(auth.SESSION_COOKIE))
 
     arrived, gate = asyncio.Event(), asyncio.Event()
@@ -672,7 +644,7 @@ async def _passkey_login(client, device: SoftAuthenticator, name: str, **kwargs)
 @pytest.mark.parametrize("uv", [True, False], ids=("verified", "presence-only"))
 async def test_only_a_user_verified_assertion_stamps_the_admin_clock(db, app, device, uv):
     """A merely touched roaming key must not satisfy the 24 h admin re-prompt."""
-    admin = await _admin(app)
+    admin = await admin_client(app)
     user_id = (await admin.get("/api/auth/me")).json()["id"]
     await _register_for(db, user_id, device)
     await admin.post("/api/auth/logout")
@@ -689,7 +661,7 @@ async def test_only_a_user_verified_assertion_stamps_the_admin_clock(db, app, de
 
 async def test_an_assertion_whose_counter_has_not_advanced_is_refused(db, app, device):
     """A refusal must leave the stored counter where it was."""
-    admin = await _admin(app)
+    admin = await admin_client(app)
     user_id = (await admin.get("/api/auth/me")).json()["id"]
     await _register_for(db, user_id, device)
     await admin.post("/api/auth/logout")
@@ -704,7 +676,7 @@ async def test_two_assertions_carrying_the_same_advanced_counter_leave_one_winne
     db, app, device, monkeypatch
 ):
     """Both requests are held after reading `sign_count`, so the conditional UPDATE alone orders them."""
-    admin = await _admin(app)
+    admin = await admin_client(app)
     user_id = (await admin.get("/api/auth/me")).json()["id"]
     await _register_for(db, user_id, device)
     await admin.post("/api/auth/logout")
@@ -760,7 +732,7 @@ async def test_two_assertions_carrying_the_same_advanced_counter_leave_one_winne
 
 async def test_a_synced_passkey_that_never_counts_signs_in_every_time(db, app, device):
     """iCloud and Google report 0 forever; the replay guard is the single-use challenge."""
-    admin = await _admin(app)
+    admin = await admin_client(app)
     user_id = (await admin.get("/api/auth/me")).json()["id"]
     await _register_for(db, user_id, device)
     device.sign_count = 0
@@ -784,7 +756,7 @@ async def test_the_cookie_carries_the_window_and_is_re_issued_at_most_once_a_day
     """`max_age`, not `expires`: an absolute date drifts
     with the phone's clock. Time moves through the row."""
     window = f"Max-Age={settings().session_days * 24 * 3600}"
-    admin = await _admin(app)
+    admin = await admin_client(app)
     signed_in = await admin.post(
         "/api/auth/login", json={"name": "patrick", "password": ADMIN_PASSWORD}
     )
@@ -810,7 +782,7 @@ async def test_the_cookie_carries_the_window_and_is_re_issued_at_most_once_a_day
 
 async def test_a_login_destroys_the_session_its_own_cookie_named_and_a_refusal_does_not(db, app):
     """Destroying the named session before the credential check would let a guesser sign a device out."""
-    admin = await _admin(app)
+    admin = await admin_client(app)
     held = await db.fetchval("SELECT id FROM auth_session")
 
     refused = await admin.post(
@@ -831,7 +803,7 @@ async def test_a_login_destroys_the_session_its_own_cookie_named_and_a_refusal_d
 
 async def test_a_passkey_login_destroys_the_session_its_own_cookie_named(db, app, device):
     """Both doors must be asserted: they are the same six lines in two modules."""
-    admin = await _admin(app)
+    admin = await admin_client(app)
     user_id = (await admin.get("/api/auth/me")).json()["id"]
     await _register_for(db, user_id, device)
     held = await db.fetchval("SELECT id FROM auth_session")
@@ -856,8 +828,8 @@ async def test_a_passkey_login_destroys_the_session_its_own_cookie_named(db, app
 
 async def test_a_password_change_rotates_the_session_it_was_made_from(db, app):
     """Decision 208: the session the leaked password opened must stop working."""
-    admin = await _admin(app)
-    member = await _member(app, admin)
+    admin = await admin_client(app)
+    member = await member_client(app, admin)
     jenny = (await member.get("/api/auth/me")).json()["id"]
     other_device = app()
     elsewhere = await other_device.post(
@@ -912,8 +884,8 @@ async def test_a_password_change_rotates_the_session_it_was_made_from(db, app):
 
 async def test_the_rotation_replaces_the_cookie_the_slide_earned_rather_than_adding_to_it(db, app):
     """Two `Set-Cookie`s for one name would leave the window to header order."""
-    admin = await _admin(app)
-    member = await _member(app, admin)
+    admin = await admin_client(app)
+    member = await member_client(app, admin)
     jenny = (await member.get("/api/auth/me")).json()["id"]
     # Aged after that read, because the read would otherwise slide the row it is about.
     await db.execute("UPDATE auth_session SET last_seen_at = now() - interval '25 hours'")
@@ -936,8 +908,8 @@ async def test_the_rotation_replaces_the_cookie_the_slide_earned_rather_than_add
 
 async def test_a_password_change_from_a_pin_session_is_still_a_pin_session(db, app):
     """Minting 'password' would let a PIN session stamp the admin clock and register a passkey."""
-    admin = await _admin(app)
-    member = await _member(app, admin)
+    admin = await admin_client(app)
+    member = await member_client(app, admin)
     phone, jenny = await _switched_in(admin, member)
 
     changed = await phone.post(
@@ -966,8 +938,8 @@ async def test_a_rotation_that_fails_leaves_the_device_holding_the_session_it_ar
     def boom(*_args, **_kwargs):
         raise asyncpg.PostgresError("the rotation's session insert failed")
 
-    admin = await _admin(app)
-    member = await _member(app, admin)
+    admin = await admin_client(app)
+    member = await member_client(app, admin)
     jenny = (await member.get("/api/auth/me")).json()["id"]
     other_device = app()
     assert (
@@ -1001,7 +973,7 @@ async def test_the_setup_state_an_anonymous_caller_sees_is_two_fields(app):
     assert set(virgin.json()) == {"required", "note"}
     assert virgin.json()["required"] is True
 
-    admin = await _admin(app)
+    admin = await admin_client(app)
     after = await anonymous.get("/api/setup/state")
     assert set(after.json()) == {"required", "note"}
     assert after.json()["required"] is False
@@ -1013,7 +985,7 @@ async def test_the_setup_state_an_anonymous_caller_sees_is_two_fields(app):
 
 async def test_a_lapsed_session_still_gets_the_anonymous_state_and_keeps_its_cookie(db, app):
     """A clear-by-name on a 200 could end the session the browser had just moved to."""
-    admin = await _admin(app)
+    admin = await admin_client(app)
     held = admin.cookies.get(auth.SESSION_COOKIE)
     await db.execute("DELETE FROM auth_session")
     lapsed = await admin.get("/api/setup/state")
@@ -1028,7 +1000,7 @@ async def test_open_sign_ins_are_capped_and_expired_ones_swept_in_the_same_call(
 ):
     """Eviction, not refusal: refusing the 21st made a flood a
     household-wide passkey denial. The cap is patched down."""
-    admin = await _admin(app)
+    admin = await admin_client(app)
     user_id = (await admin.get("/api/auth/me")).json()["id"]
     await _register_for(db, user_id, device)
     await admin.post("/api/auth/logout")
