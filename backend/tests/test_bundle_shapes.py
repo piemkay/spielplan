@@ -171,26 +171,6 @@ def test_the_shipped_checkpoint_embeds_at_the_dimension_every_consumer_assumes(s
     )
 
 
-def test_the_shipped_cold_eval_carries_the_arms_the_app_reads(shipped, built):
-    """The fixture ships no `cold_eval.json`, so only the shipped file's keys are pinned."""
-    ours = shipped["json"]["artifacts/cold_eval.json"]
-    assert {"cold", "ceiling"} <= set(ours["keys"]), (
-        f"ColdEval reads the cold and ceiling arms and the shipped file has {sorted(ours['keys'])}"
-    )
-    for arm in ("cold", "ceiling", "hybrid"):
-        assert "spearman" in ours[f"{arm}.keys"], f"{arm} carries no spearman"
-    assert "cold:tunedblend_vs_prior" in ours["keys"]
-    assert set(ours["cold:tunedblend_vs_prior.keys"]) == {"ci95", "delta"}, (
-        "the interval ColdEval reports beside the two figures"
-    )
-    assert ours["n_test.type"] == "int"
-    assert "artifacts/cold_eval.json" not in built["json"], (
-        "the fixture now writes cold_eval.json - compare it to the shipped shape here, and say so "
-        "loudly: since decision 299 e2e/run.mjs rebuilds data/import from this fixture on every "
-        "browser run, so a file added here reaches every import the browser suite measures"
-    )
-
-
 def test_the_cold_tower_report_line_says_the_version_was_assumed(bundle_root):
     """The checkpoint carries no version, so the report states the version was assumed, not enforced."""
     report = bundle_import.validate(bundle_import.Bundle.open(bundle_root))
@@ -528,8 +508,6 @@ def test_the_manifest_covers_the_artifacts_the_app_reads(shipped):
         "artifacts/corrections_v1.tsv",
         "artifacts/ledger_hyperparams.json",
         "artifacts/seed_list.json",
-        # The only reference value in the bundle for a number the app computes itself.
-        "artifacts/cold_eval.json",
     ):
         assert required in files, f"{required} is absent from the manifest"
 

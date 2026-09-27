@@ -42,95 +42,6 @@ BUNDLE_FILES: dict[str, bool] = {
 VOCAB_FILES = ("vocab_v1_all.tsv", "alias_map_v1.tsv", "s_matrix_v1.tsv", "adjudications_v1.tsv")
 
 
-@dataclass(frozen=True)
-class ColdEval:
-    """`cold_eval.json`: the corpus's held-out cold Spearman and its ceiling, the yardstick for
-    `user_vector.cv_rho` (§0 row 1, §14 risk 1)."""
-
-    cold: float
-    ceiling: float
-    hybrid: float | None = None
-    # Carried, not interpreted: the corpus's own CI is a different noise statement from §0's floor.
-    delta: float | None = None
-    ci95: tuple[float, float] | None = None
-    n_test: int | None = None
-
-    @classmethod
-    def from_mapping(cls, raw: Any) -> ColdEval | None:
-        """Parse, or None. Never raises: a malformed yardstick must not take a boot or a shelf with it."""
-        if not isinstance(raw, dict):
-            return None
-        cold, ceiling = _spearman(raw.get("cold")), _spearman(raw.get("ceiling"))
-        if cold is None or ceiling is None:
-            return None
-        tuned = raw.get("cold:tunedblend_vs_prior")
-        tuned = tuned if isinstance(tuned, dict) else {}
-        ci = tuned.get("ci95")
-        pair: tuple[float, float] | None = None
-        if isinstance(ci, list | tuple) and len(ci) == 2 and all(_number(v) for v in ci):
-            pair = (float(ci[0]), float(ci[1]))
-        n_test = raw.get("n_test")
-        return cls(
-            cold=cold,
-            ceiling=ceiling,
-            hybrid=_spearman(raw.get("hybrid")),
-            delta=float(tuned["delta"]) if _number(tuned.get("delta")) else None,
-            ci95=pair,
-            n_test=int(n_test) if isinstance(n_test, int) and not isinstance(n_test, bool) else None,
-        )
-
-    def as_dict(self) -> dict[str, Any]:
-        return {
-            "cold": self.cold, "ceiling": self.ceiling, "hybrid": self.hybrid,
-            "delta": self.delta, "ci95": list(self.ci95) if self.ci95 else None,
-            "n_test": self.n_test,
-        }
-
-    def read_against(self, cv_rho: float | None, *, floor: float) -> dict[str, Any]:
-        """`floor` is §0's pipeline variance, passed in so no caller can compare against no floor at all."""
-        if cv_rho is None:
-            return {**self.as_dict(), "cv_rho": None, "noise_floor": floor,
-                    "vs_cold": None, "vs_ceiling": None, "reads": "not fitted"}
-        rho = float(cv_rho)
-        gap = rho - self.cold
-        return {
-            **self.as_dict(),
-            "cv_rho": rho,
-            "noise_floor": floor,
-            "vs_cold": gap,
-            "vs_ceiling": rho - self.ceiling,
-            "reads": "tie" if abs(gap) <= floor else ("above cold" if gap > 0 else "below cold"),
-        }
-
-    def line(self, *, floor: float) -> str:
-        """ASCII only, like every other message this process prints."""
-        interval = f", 95% CI [{self.ci95[0]:.4f}, {self.ci95[1]:.4f}]" if self.ci95 else ""
-        n = f", n_test {self.n_test}" if self.n_test is not None else ""
-        return (
-            f"cold {self.cold:.5f} vs ceiling {self.ceiling:.5f}{interval}{n}; "
-            f"a difference within {floor} is a tie"
-        )
-
-
-def _number(value: Any) -> bool:
-    return isinstance(value, int | float) and not isinstance(value, bool)
-
-
-def _spearman(arm: Any) -> float | None:
-    """The file nests each arm as `{"spearman": ..., "alpha": ...}`."""
-    if isinstance(arm, dict) and _number(arm.get("spearman")):
-        return float(arm["spearman"])
-    return None
-
-
-def cold_eval_of(store: Any) -> ColdEval | None:
-    """None for a missing, empty, broken or pre-`cold_eval.json` store: none of them is an error."""
-    if store is None or getattr(store, "is_empty", True):
-        return None
-    reader = getattr(store, "cold_eval", None)
-    return reader() if callable(reader) else None
-
-
 @dataclass
 class ArtifactStore:
     version: str | None = None
@@ -226,26 +137,6 @@ class ArtifactStore:
             self._cache[name] = json.loads(self.path(name).read_text(encoding="utf-8"))
         return self._cache[name]
 
-    def cold_eval(self) -> ColdEval | None:
-        """Parsed once per store, failures included. `ValueError` also covers `UnicodeDecodeError`: this
-        runs on the unauthenticated `/api/config`, where an escape would 500 the shell."""
-        key = "cold_eval.parsed"
-        if key not in self._cache:
-            parsed: ColdEval | None = None
-            if self.present.get("cold_eval.json"):
-                try:
-                    parsed = ColdEval.from_mapping(self.json("cold_eval.json"))
-                except (OSError, ValueError, RuntimeError):
-                    parsed = None
-                if parsed is None:
-                    log.warning(
-                        "bundle %s ships cold_eval.json but it carries no cold and ceiling "
-                        "Spearman; fold-in rho has no reference value in this install",
-                        self.version,
-                    )
-            self._cache[key] = parsed
-        return self._cache[key]
-
     def npz(self, name: str) -> Any:
         """numpy is imported lazily so a bundle-less boot without the scientific stack still starts."""
         if name not in self._cache:
@@ -268,7 +159,6 @@ class ArtifactStore:
             "missing_required": self.missing_required(),
             # BUNDLE.json's per-table row counts; `artifacts/manifest.json` never carried a title count.
             "titles": self.identity.get("tables", {}).get("title"),
-            "cold_eval": cold_eval.as_dict() if (cold_eval := self.cold_eval()) else None,
         }
 
 

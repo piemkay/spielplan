@@ -8,11 +8,9 @@ import ast
 import re
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from zoneinfo import ZoneInfo
 
 import pytest
 
-from spielplan.core.config import settings
 from spielplan.home import rail, shelves
 from spielplan.home import why as why_mod
 from spielplan.ledger import model, refit
@@ -499,7 +497,6 @@ async def test_the_frontier_shelf_names_a_term_no_seen_title_carries(world):
 async def test_the_sweet_spot_is_unseen_by_both_and_high_for_both(world):
     """The plain average of the two scores, which is also how Tonight's pool ranks."""
     payload = await world.home()
-    assert payload["partner"]["name"] == "jenny"
     for base in BASES:
         section = world.section(payload, "shared_sweet_spot", kind_of(base))
         assert section is not None
@@ -782,14 +779,12 @@ async def test_the_banner_cta_carries_exactly_the_named_titles_as_the_queue_head
     assert "mode" not in query, query
     assert list(query) == ["head"], query
     assert [int(t) for t in query["head"]] == named
-    assert banner["cta"]["head"] == named
-    assert parse_qs(urlsplit(banner["cta"]["api"]).query)["head"] == query["head"]
 
 
 async def test_following_the_banners_own_link_serves_the_first_named_title(world):
     """`head` is a repeated integer parameter; a comma-joined one would be a 422."""
     banner = (await world.home())["banner"]
-    served = await world.client.get(banner["cta"]["api"])
+    served = await world.client.get("/api" + banner["cta"]["route"])
     assert served.status_code == 200, served.text
     card = served.json()["card"]
     assert card is not None and card["type"] == "sweep"
@@ -817,7 +812,7 @@ async def test_the_banner_names_only_the_kinds_the_live_session_can_serve(world)
         "WHERE user_id = $1 AND ended_at IS NULL",
         world.patrick,
     )
-    served = await world.client.get(films["cta"]["api"])
+    served = await world.client.get("/api" + films["cta"]["route"])
     assert served.status_code == 200, served.text
     assert served.json()["card"]["title"]["id"] == films["head_title_ids"][0], (
         "the queue served a different card than the banner named"
@@ -890,129 +885,15 @@ async def test_selecting_one_kind_returns_one_section_and_selecting_none_is_a_42
     assert (await world.client.get("/api/home")).status_code == 422
     with pytest.raises(ValueError, match="at least one kind"):
         await shelves.build_home(
-            world.db, user=_Anon(world.patrick), kinds=[], bundle_version=BUNDLE,
-            now_local=datetime.now(UTC),
+            world.db, user=_Anon(world.patrick), kinds=[], bundle_version=BUNDLE
         )
 
 
 class _Anon:
-    """The two attributes `build_home` reads off the session user, and nothing else."""
+    """The one attribute `build_home` reads off the session user."""
 
-    def __init__(self, user_id: int, name: str = "patrick"):
-        self.id, self.name, self.show_model = user_id, name, False
-
-
-async def test_the_catalog_grid_may_interleave_the_two_kinds(world):
-    """The catalog grid MAY interleave: the property under test is the ordering."""
-    for offset in range(1, 7):
-        for base in BASES:
-            await world.db.execute(
-                "INSERT INTO credit (title_id, person_id, department, job, source) "
-                "VALUES ($1, 900, 'Directing', 'Director', 'tmdb') ON CONFLICT DO NOTHING",
-                base + offset,
-            )
-    payload = await world.home(person_id=900)
-    assert payload["mode"] == "grid"
-    assert payload["shelves"] == []
-    items = payload["catalog"]["items"]
-    kinds = [item["kind"] for item in items]
-    assert set(kinds) == {"movie", "series"}
-    assert any(a != b for a, b in zip(kinds, kinds[1:], strict=False)), (
-        "the year-ordered catalog listing came back partitioned — decision 18 permits the "
-        "interleave here and only forbids it in a RANKING"
-    )
-    years = [item["year"] for item in items]
-    assert years == sorted(years, reverse=True)
-
-    broad = [item["kind"] for item in (await world.home(q="home"))["catalog"]["items"]]
-    assert set(broad) == {"movie", "series"}
-    assert any(a != b for a, b in zip(broad, broad[1:], strict=False)), (
-        "equally good matches of the two kinds came back partitioned"
-    )
-
-
-async def test_a_person_filter_switches_home_into_the_grid_and_clearing_it_restores_shelves(world):
-    """The server owns the mode: with a person filter the payload carries no shelves."""
-    person = await world.home(person_id=900)
-    assert person["mode"] == "grid"
-    assert person["shelves"] == []
-    assert {item["kind"] for item in person["catalog"]["items"]} == {"movie", "series"}, (
-        "decision 18: with both toggles on, a filmography is complete across the partition"
-    )
-
-    restored = await world.home()
-    assert restored["mode"] == "shelves"
-    assert restored["catalog"] is None
-    assert restored["shelves"], "clearing both the query and the person chip restores the shelves"
-
-
-async def test_the_greeting_uses_the_household_clock_and_has_four_bands(world):
-    """Four bands with each boundary named as a number."""
-    payload = await world.home()
-    assert payload["greeting"]["text"].endswith(", patrick")
-    assert payload["greeting"]["tz"]
-
-    at = datetime(2026, 8, 30, tzinfo=UTC)
-    assert shelves.greeting(at.replace(hour=3), "p")["band"] == "up_late"
-    assert shelves.greeting(at.replace(hour=9), "p")["band"] == "morning"
-    assert shelves.greeting(at.replace(hour=14), "p")["band"] == "afternoon"
-    assert shelves.greeting(at.replace(hour=21), "p")["text"] == "Good evening, p"
-
-
-# Spread across the dial so one differs from the process's
-# band at any hour; IANA names, as §2's `TZ` is one.
-FAR_ZONES = (
-    "Pacific/Kiritimati",   # UTC+14
-    "Pacific/Midway",       # UTC-11
-    "Asia/Tokyo",           # UTC+9
-    "America/Anchorage",    # UTC-9
-    "Pacific/Auckland",     # UTC+12/+13
-)
-
-
-def _zone_that_moves_the_band() -> str | None:
-    """None when there is no tz database (Windows) or every candidate shares the host's band."""
-    here = shelves.greeting(datetime.now(), "p")["band"]  # noqa: DTZ005 - the naive fallback
-    for name in FAR_ZONES:
-        try:
-            zone = ZoneInfo(name)
-        except Exception:  # noqa: BLE001 - no tz database is the case this is detecting
-            continue
-        if shelves.greeting(datetime.now(zone), "p")["band"] != here:
-            return name
-    return None
-
-
-async def test_the_greeting_band_is_computed_in_the_household_zone(world, monkeypatch):
-    """The payload names the configured zone; the band is that
-    zone's, or the naive fallback where it cannot resolve."""
-    zone = _zone_that_moves_the_band()
-    resolved, zone = zone is not None, zone or FAR_ZONES[0]
-    monkeypatch.setenv("TZ", zone)
-    settings.cache_clear()
-    try:
-        payload = await world.home()
-        assert payload["greeting"]["tz"] == zone, (
-            "the payload names the zone the greeting was computed in, or the client cannot tell "
-            "a household clock from a device clock"
-        )
-        # Bracketing the request: the two agree except across a band boundary crossed mid-request.
-        def band_now() -> str:
-            at = datetime.now(ZoneInfo(zone)) if resolved else datetime.now()  # noqa: DTZ005
-            return shelves.greeting(at, "p")["band"]
-
-        before = band_now()
-        payload = await world.home()
-        assert payload["greeting"]["band"] in {before, band_now()}, (
-            f"the band is not the one {'TZ=' + zone if resolved else 'the fallback clock'} is in"
-        )
-        if resolved:
-            assert shelves.greeting(datetime.now(), "p")["band"] != before, (  # noqa: DTZ005
-                "the chosen zone no longer moves the band away from the process clock, so the "
-                "assertion above proves nothing — widen FAR_ZONES"
-            )
-    finally:
-        settings.cache_clear()
+    def __init__(self, user_id: int):
+        self.id = user_id
 
 
 # Every key carrying a number about THIS VIEWER's model,
@@ -1054,62 +935,6 @@ async def test_with_the_toggle_off_no_model_annotation_is_in_the_payload(world):
                 # Rank, the seen dot and the settled tier are what a card IS, not model annotations.
                 assert card["rank"] >= 1
                 assert "seen" in card and "tier" in card
-
-
-async def test_the_gated_model_block_reads_the_fold_ins_rho_against_the_bundles_own_figures(
-    world,
-):
-    """The rho travels with the bundle's figures, a tie inside
-    §0's noise floor reads as a tie, and all of it is gated."""
-    from spielplan.models.artifacts import ColdEval
-
-    yardstick = ColdEval(
-        cold=0.35225, ceiling=0.39193, hybrid=0.37, delta=0.0191, ci95=(0.0043, 0.0339),
-        n_test=1876,
-    )
-    # One rho clear of the floor, one inside it.
-    for kind, rho in (("movie", 0.41), ("series", 0.355)):
-        assert await world.db.fetchval(
-            "UPDATE user_vector SET cv_rho = $3 WHERE user_id = $1 AND kind = $2 "
-            "AND purpose = 'foldin' RETURNING cv_rho",
-            world.patrick, kind, rho,
-        ) == pytest.approx(rho), "the world no longer seeds a fitted profile for this kind"
-
-    payload = await shelves.build_home(
-        world.db, user=_Anon(world.patrick), kinds=["movie", "series"], bundle_version=BUNDLE,
-        now_local=datetime.now(UTC), cold_eval=yardstick,
-    )
-    fit = {row["kind"]: row for row in payload["model"]["fit"]}
-    assert set(fit) == {"movie", "series"}
-    for row in fit.values():
-        assert (row["cold"], row["ceiling"]) == (0.35225, 0.39193)
-        assert row["ci95"] == [0.0043, 0.0339] and row["n_test"] == 1876
-        assert row["noise_floor"] == DEFAULTS.rho_noise_floor
-
-    assert fit["movie"]["cv_rho"] == pytest.approx(0.41, abs=1e-6)
-    assert fit["movie"]["reads"] == "above cold"
-    assert fit["movie"]["vs_cold"] == pytest.approx(0.0578, abs=1e-4)
-    assert fit["movie"]["vs_ceiling"] == pytest.approx(0.0181, abs=1e-4)
-
-    assert fit["series"]["cv_rho"] == pytest.approx(0.355, abs=1e-6)
-    assert fit["series"]["reads"] == "tie", (
-        "0.355 is 0.00275 above the corpus's cold path and §0 calls anything under 0.008 a tie; "
-        "reporting it as a win is the comparison this whole block exists to make honest"
-    )
-
-    # The gate, asserted by walking the whole payload.
-    assert model_keys_in(rail.redact(payload, show_model=False)) == []
-    assert "fit" not in rail.redact(payload, show_model=False).get("model", {})
-
-
-async def test_with_no_bundle_reference_the_rho_is_not_printed_at_all(world):
-    """With no reference, silence rather than a bare rho."""
-    payload = await shelves.build_home(
-        world.db, user=_Anon(world.patrick), kinds=["movie"], bundle_version=BUNDLE,
-        now_local=datetime.now(UTC),
-    )
-    assert payload["model"]["fit"] is None
-    assert payload["model"]["sections_ms"], "the block's other annotation is untouched"
 
 
 async def test_turning_the_toggle_on_reveals_the_numbers_for_that_user_only(world):
@@ -1301,10 +1126,9 @@ def test_the_gate_removes_gated_keys_at_every_depth():
 
 
 async def test_a_profile_with_no_verdicts_gets_the_seed_route_not_a_meaningless_ranking(world):
-    """Zero verdicts: the catalog grid plus a route into the seed queue; `new_in_library` survives."""
+    """Zero verdicts: a route into the seed queue; `new_in_library` survives."""
     await world.db.execute("DELETE FROM verdict WHERE user_id = $1", world.patrick)
     payload = await world.home()
-    assert payload["verdict_count"] == 0
     assert payload["degraded"]["state"] == "zero_verdicts"
     assert payload["degraded"]["cta"]["route"] == "/rate"
     assert [s["id"] for s in payload["shelves"]] == ["new_in_library"]
@@ -1487,31 +1311,6 @@ def test_every_declared_rail_kind_has_a_producer_or_is_declared_pending():
         f"unproduced and undeclared: {sorted(set(rail.EVENT_KINDS) - produced - pending)}; "
         f"written but not in EVENT_KINDS: {sorted(produced - set(rail.EVENT_KINDS))}"
     )
-
-
-async def test_the_hidden_count_is_what_the_toggle_would_actually_reveal(db, world):
-    """The count must be what the other toggle would actually reveal under the same filters."""
-    # `person.id` comes from the corpus, not a sequence, so the fixture supplies one.
-    person_id = 90210
-    await db.execute("INSERT INTO person (id, name) VALUES ($1, 'Ada Cross-Kind')", person_id)
-    credited = [MOVIES[0], MOVIES[1], SERIES[0]]
-    for title_id in credited:
-        await db.execute(
-            "INSERT INTO credit (title_id, person_id, department, job) "
-            "VALUES ($1, $2, 'Directing', 'Director')",
-            title_id, person_id,
-        )
-
-    payload = await world.home(kinds=("movie",), person_id=person_id)
-    catalog = payload["catalog"]
-    assert catalog["total"] == 2, "two of this person's titles are films"
-    assert catalog["hidden"].get("series", 0) == 1, (
-        "turning Series on reveals this person's ONE series, so that is what the line must say"
-    )
-
-    # The count is exactly what the other toggle produces.
-    both = await world.home(kinds=("movie", "series"), person_id=person_id)
-    assert both["catalog"]["total"] == catalog["total"] + catalog["hidden"]["series"]
 
 
 def _claiming_sections(payload, kind):

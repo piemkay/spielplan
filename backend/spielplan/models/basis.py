@@ -50,17 +50,6 @@ def _open(store: ArtifactStore) -> tuple[backbone.Backbone, hyperparams.Hyperpar
         hp, notes = hyperparams.load(store)
         for note in notes:
             log.info("hyperparameters: %s", note)
-        # The corpus yardstick for `cv_rho`, logged once per pin beside the constants it is read with.
-        yardstick = store.cold_eval()
-        if yardstick is not None:
-            log.info("fold-in rho reads against cold_eval.json: %s",
-                     yardstick.line(floor=hp.rho_noise_floor))
-        elif not store.is_empty:
-            log.info(
-                "bundle %s ships no cold_eval.json - a fitted cv_rho has no reference value "
-                "in this install (spec section 0 row 1, section 14 risk 1)",
-                store.version,
-            )
     except (ValueError, OSError):
         log.exception(
             "ledger_hyperparams.json is unusable - the Rate and Rank surfaces will answer "
