@@ -39,8 +39,6 @@ _SNAPSHOT: dict[str, str] = {
                    " ORDER BY genre, source",
     "title_keyword": "SELECT keyword, source FROM title_keyword WHERE title_id = $1"
                      " ORDER BY keyword, source",
-    "title_language": "SELECT language, role, source FROM title_language WHERE title_id = $1"
-                      " ORDER BY language, role, source",
     "title_country": "SELECT country, source FROM title_country WHERE title_id = $1"
                      " ORDER BY country, source",
     "title_company": "SELECT company, role, source FROM title_company WHERE title_id = $1"
@@ -247,7 +245,7 @@ async def test_a_source_whose_document_is_gone_keeps_the_rows_it_wrote(db, raw_r
     omdb = {
         table: [row for row in rows if "omdb" in row]
         for table, rows in (await _snapshot(db, ARRIVAL)).items()
-        if table in ("title_meta", "title_genre", "title_country", "title_language", "credit")
+        if table in ("title_meta", "title_genre", "title_country", "credit")
     }
     assert all(omdb.values()), f"OMDb wrote nothing to one of these tables: {omdb}"
     awards = [tuple(r) for r in await db.fetch(_SNAPSHOT["award"], ARRIVAL)]
@@ -549,8 +547,8 @@ async def test_the_row_counts_on_the_board_are_the_rows_the_database_actually_ho
 
     # `person` is outside the comparison: `DeriveReport.people` counts humans, not rows.
     claimed = {table: count for table, count in report.rows.items() if table in counted}
-    assert set(claimed) >= {"display.platform_rating", "title_language", "title_country"}, (
-        f"the fixture does not exercise the three tables that collide: {sorted(claimed)}"
+    assert set(claimed) >= {"display.platform_rating", "title_country"}, (
+        f"the fixture does not exercise the two tables that collide: {sorted(claimed)}"
     )
     assert claimed == {table: counted[table] for table in claimed}, (
         f"the board's counts are not the database's: board {claimed}, database {counted}"

@@ -113,9 +113,8 @@ def test_every_tmdb_row_carries_the_seven_other_tables_with_their_own_source(tmd
     assert {r["source"] for table in tmdb.rows.values() for r in table} == {"tmdb"}
 
 
-def test_tmdb_emits_the_primary_language_twice_and_the_derives_key_is_what_dedupes_it(tmdb):
-    """TMDB names the primary language and country twice; the derive's key dedupes, the parser does not."""
-    assert values(tmdb, "title_language", "language", "is_primary").count(("en", 1)) == 2
+def test_tmdb_emits_the_primary_country_twice_and_the_derives_key_is_what_dedupes_it(tmdb):
+    """TMDB names the primary country twice; the derive's key dedupes, the parser does not."""
     assert values(tmdb, "title_country", "country").count(("US",)) == 2
 
 
@@ -176,21 +175,6 @@ def test_omdbs_awards_sentence_becomes_a_headline_row_and_two_tallies(omdb):
 )
 def test_the_awards_sentence_is_read_up_to_whichever_comes_first(blurb, expected):
     assert parse.parse_omdb_awards(blurb) == expected
-
-
-@pytest.mark.parametrize(
-    ("raw", "expected"),
-    [
-        # IMDb inverts a qualified language name; splitting on the comma would make "Old" a language.
-        ("English, Norse, Old", ["English", "Old Norse"]),
-        ("Greek, Ancient (to 1453)", ["Ancient Greek"]),
-        # OMDb's literal for a silent film: a statement about the absence of language.
-        ("None", []),
-        ("English, Mandarin, Russian", ["English", "Mandarin", "Russian"]),
-    ],
-)
-def test_a_qualified_language_name_is_one_language_and_not_two(raw, expected):
-    assert parse._omdb_languages(raw) == expected
 
 
 def test_the_trakt_summary_is_thin_and_says_so_in_the_rows_it_does_not_emit():

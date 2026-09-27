@@ -51,11 +51,6 @@ def _award_won(value: object) -> bool | None:
     return str(value).strip().lower() == "won"
 
 
-def _primary_role(value: object) -> str:
-    """`is_primary` (0/1) becomes the role this app keys a language row by."""
-    return "primary" if value else ""
-
-
 def _scale_label(value: object) -> str | None:
     """`scale_hi` becomes the app's one-line scale label; the upper bound tells 0-10 from 0-100."""
     if value is None:
@@ -110,15 +105,6 @@ MAPPINGS: tuple[TableMap, ...] = (
         key=("title_id", "keyword", "source"),
         columns={"title_id": "title_id", "keyword": "keyword", "source": "source"},
         coalesce_empty=("source",),
-    ),
-    TableMap(
-        target="title_language", source="title_language",
-        key=("title_id", "source", "language", "role"),
-        # `role` (is it the main language) and `source` (who said so) are both key columns (0015).
-        columns={"title_id": "title_id", "source": "source", "language": "language",
-                 "role": "is_primary"},
-        coalesce_empty=("source", "role"),   # rule 6
-        transforms={"role": _primary_role},
     ),
     TableMap(
         target="title_country", source="title_country",
@@ -177,12 +163,6 @@ MAPPINGS: tuple[TableMap, ...] = (
         transforms={"scale": _scale_label},
         required=True,
     ),
-    TableMap(
-        target="rating_title_map", source="rating_title_map",
-        key=("source_id", "source_key"),
-        # The corpus's name for the key it maps from is `external_id`.
-        columns={"source_id": "source_id", "source_key": "external_id", "title_id": "title_id"},
-    ),
     # rule 3 — the display-only schema. Nothing else in this tuple targets it.
     TableMap(
         target="display.platform_rating", source="platform_rating",
@@ -191,27 +171,6 @@ MAPPINGS: tuple[TableMap, ...] = (
         columns={"title_id": "title_id", "platform": "source", "metric": "metric",
                  "score": "value", "scale": "scale", "votes": "votes"},
         coalesce_empty=("platform", "metric"),   # rule 6
-    ),
-    # The corpus's `seed_list` is a 238-row list registry, not §4.3's onboarding list, which loads
-    # from `seed_list.json`.
-    TableMap(
-        target="title_list", source="seed_list",
-        key=("id",),
-        columns={"id": "id", "slug": "slug", "name": "name", "source": "source",
-                 "kind": "kind", "category": "category", "weight": "weight",
-                 "item_count": "item_count", "notes": "notes"},
-        coalesce_empty=("name", "source"),
-    ),
-    TableMap(
-        target="title_list_membership", source="title_list_membership",
-        key=("list_id", "title_id"),
-        columns={"list_id": "list_id", "title_id": "title_id", "rank": "rank"},
-    ),
-    # No `source` or `added_at` upstream: column defaults.
-    TableMap(
-        target="watchlist", source="watchlist",
-        key=("title_id",),
-        columns={"title_id": "title_id"},
     ),
 )
 
@@ -240,6 +199,13 @@ SKIPPED_TABLES: dict[str, str] = {
     "dna_exclusion": "the corpus's own extraction exclusions, applied before export",
     "dna_projection_run": "provenance of the corpus's wholesale projection runs",
     "sqlite_sequence": "SQLite bookkeeping, not data",
+    "title_language": "every language a source names; the tower's `lang:` reads "
+                      "title.original_language and nothing reads the list",
+    "rating_title_map": "external rating ids per title; nothing in this app reads them",
+    # Not §4.3's onboarding list, which loads from `seed_list.json`.
+    "seed_list": "the corpus's list registry; nothing in this app reads it",
+    "title_list_membership": "the list registry's members; nothing in this app reads them",
+    "watchlist": "the corpus's own watchlist; nothing in this app reads it",
 }
 
 

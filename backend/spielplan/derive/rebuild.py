@@ -57,7 +57,6 @@ SCOPE_COLUMN: Mapping[str, str | None] = {
     "title_alias": "kind",
     "title_genre": "source",
     "title_keyword": "source",
-    "title_language": "source",
     "title_country": "source",
     "title_company": "source",
     "title_video": "source",
@@ -69,9 +68,9 @@ SCOPE_COLUMN: Mapping[str, str | None] = {
 # `derive/parse.TABLES` names the table it emits for; one of them lives in another schema.
 TARGET_OF: Mapping[str, str] = {"platform_rating": "display.platform_rating"}
 
-# Natural-key tables where two agreeing sources collide (TMDB repeats languages and countries).
-IGNORE_DUPLICATES = frozenset({"title_alias", "title_genre", "title_keyword", "title_language",
-                               "title_country", "title_company", "title_video"})
+# Natural-key tables where two agreeing sources collide (TMDB repeats countries).
+IGNORE_DUPLICATES = frozenset({"title_alias", "title_genre", "title_keyword", "title_country",
+                               "title_company", "title_video"})
 
 # `display.platform_rating` is last-write-wins; documents are read in a deterministic order.
 _RATING_CONFLICT = (

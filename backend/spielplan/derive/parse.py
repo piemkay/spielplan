@@ -16,10 +16,10 @@ from typing import Any
 from spielplan.derive.ids import CAST_BILLING_LIMIT, classify_role, keep_credit, loose_name
 from spielplan.sources._htmlutil import clean_text, ld_json, next_data, unescape, walk
 
-# The eleven derived tables; a typo in an emit is a KeyError here.
+# The ten derived tables; a typo in an emit is a KeyError here.
 TABLES: tuple[str, ...] = (
-    "title_meta", "title_genre", "title_keyword", "title_language", "title_country",
-    "title_company", "title_alias", "title_video", "credit", "award", "platform_rating",
+    "title_meta", "title_genre", "title_keyword", "title_country", "title_company",
+    "title_alias", "title_video", "credit", "award", "platform_rating",
 )
 
 # The corpus keyword weight and `person.gender` are not emitted: this schema has no such columns.
@@ -167,14 +167,6 @@ def parse_tmdb_detail(data: Any) -> ParsedTitle:
     for country in data.get("origin_country") or []:
         rows.emit("title_country", country=country)
 
-    primary = data.get("original_language")
-    for language in data.get("spoken_languages") or []:
-        code = language.get("iso_639_1")
-        if code:
-            rows.emit("title_language", language=code, is_primary=1 if code == primary else 0)
-    if primary:
-        rows.emit("title_language", language=primary, is_primary=1)
-
     keywords = data.get("keywords") or {}
     for keyword in keywords.get("keywords") or keywords.get("results") or []:
         if keyword.get("name"):
@@ -265,27 +257,6 @@ def _omdb_val(value: Any) -> Any:
     if value in _OMDB_NA:
         return None
     return unescape(value) if isinstance(value, str) else value
-
-
-# IMDb writes qualified languages inverted: "Norse, Old" is Old Norse, not two languages.
-_LANG_QUALIFIERS = {"old", "ancient", "middle", "modern", "classical"}
-
-
-def _omdb_languages(raw: str | None) -> list[str]:
-    out: list[str] = []
-    for part in (raw or "").split(","):
-        part = part.strip()
-        if not part:
-            continue
-        # OMDb's literal for a silent film: not a language.
-        if part.lower() == "none":
-            continue
-        head = re.sub(r"\s*\([^)]*\)", "", part).strip()
-        if head.lower() in _LANG_QUALIFIERS and out:
-            out[-1] = f"{head} {out[-1]}"
-            continue
-        out.append(part)
-    return out
 
 
 # The headline award name runs to a full stop, the start of the tally, or the end.
@@ -384,8 +355,6 @@ def parse_omdb(data: Any) -> ParsedTitle:
         country = country.strip()
         if country:
             rows.emit("title_country", country=country)
-    for index, language in enumerate(_omdb_languages(_omdb_val(data.get("Language")))):
-        rows.emit("title_language", language=language, is_primary=1 if index == 0 else 0)
 
     for field_name, department, job, role in (("Director", "Directing", "Director", "director"),
                                               ("Writer", "Writing", "Writer", "writer")):
@@ -449,8 +418,6 @@ def parse_trakt_summary(data: Any) -> ParsedTitle:
         rows.emit("title_genre", genre=genre, position=position)
     if data.get("country"):
         rows.emit("title_country", country=str(data["country"]).upper())
-    if data.get("language"):
-        rows.emit("title_language", language=data["language"], is_primary=1)
     if data.get("network"):
         rows.emit("title_company", company=data["network"], role="network", country=None)
     if data.get("rating") is not None:

@@ -422,14 +422,8 @@ _FOREIGN_KEYS: tuple[tuple[str, str, str, str], ...] = (
     ("title_alias", "title_id", "title", "id"),
     ("title_genre", "title_id", "title", "id"),
     ("title_keyword", "title_id", "title", "id"),
-    ("title_language", "title_id", "title", "id"),
     ("title_country", "title_id", "title", "id"),
     ("title_company", "title_id", "title", "id"),
-    ("title_list_membership", "title_id", "title", "id"),
-    ("title_list_membership", "list_id", "seed_list", "id"),
-    ("rating_title_map", "title_id", "title", "id"),
-    ("rating_title_map", "source_id", "rating_source", "id"),
-    ("watchlist", "title_id", "title", "id"),
 )
 
 # Bundle columns that are NOT NULL in Postgres with no rule 6 coalesce. Only tables this app loads.
@@ -438,8 +432,6 @@ _NOT_NULL_COLUMNS: tuple[tuple[str, str], ...] = (
     ("title_video", "key"),                 # 0018: PRIMARY KEY (title_id, source, key)
     ("dna_tag", "facet"),                   # 0004: facet text NOT NULL (bespoke loader)
     ("dna_projected", "facet"),             # 0004: facet text NOT NULL (bespoke loader)
-    ("rating_title_map", "external_id"),    # 0003: PRIMARY KEY (source_id, source_key)
-    ("title_list_membership", "list_id"),   # 0015: PRIMARY KEY (list_id, title_id)
 )
 
 
@@ -457,27 +449,6 @@ def _duplicate_groups(db: sqlite3.Connection, tmap: Any) -> tuple[int, list[tupl
     if not groups:
         return 0, []
     return groups, [tuple(r) for r in db.execute(f"{grouped} LIMIT 3")]
-
-
-def _duplicate_groups_through_the_loader(
-    db: sqlite3.Connection, tmap: Any
-) -> tuple[int, list[tuple]]:
-    """The same count for a key column the mapping TRANSFORMS, read through the loader's reader.
-
-    `title_language.role` collapses 0 and NULL to '', so only what COPY sees can be counted.
-    """
-    from spielplan.importer import load
-
-    index = [tmap.pg_columns.index(column) for column in tmap.key]
-    seen: set[tuple] = set()
-    duplicated: set[tuple] = set()
-    for row in load._rows(db, tmap):
-        key = tuple(row[i] for i in index)
-        if key in seen:
-            duplicated.add(key)
-        else:
-            seen.add(key)
-    return len(duplicated), sorted(duplicated, key=str)[:3]
 
 
 def _validate_integrity(
@@ -534,10 +505,7 @@ def _validate_integrity(
         sources = [tmap.columns[column] for column in tmap.key]
         if not _guard(schema, report, "integrity-duplicate", tmap.source, *sources):
             continue
-        if any(column in tmap.transforms for column in tmap.key):
-            groups, first = _duplicate_groups_through_the_loader(db, tmap)
-        else:
-            groups, first = _duplicate_groups(db, tmap)
+        groups, first = _duplicate_groups(db, tmap)
         if groups:
             report.fail(
                 "integrity-duplicate",

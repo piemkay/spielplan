@@ -1027,32 +1027,31 @@ def test_a_null_in_a_mapped_not_null_column_is_a_failure(clean):
 
 
 def test_a_duplicate_group_under_the_apps_key_is_a_failure(clean):
-    """`_primary_role` collapses 0 and NULL, so rows distinct in the file collide under the app's key."""
+    """Rule 6 coalesces NULL to '', so rows distinct in the file collide under the app's key."""
     db = sqlite3.connect(clean / "content.sqlite")
     db.executescript(
         """
-        CREATE TABLE title_language_export AS SELECT * FROM title_language;
-        DROP TABLE title_language;
-        ALTER TABLE title_language_export RENAME TO title_language;
-        INSERT INTO title_language (title_id, source, language, is_primary)
-             VALUES (1, 'tmdb', 'en', 0), (1, 'tmdb', 'en', NULL);
+        CREATE TABLE title_country_export AS SELECT * FROM title_country;
+        DROP TABLE title_country;
+        ALTER TABLE title_country_export RENAME TO title_country;
+        INSERT INTO title_country (title_id, source, country) VALUES (1, '', 'XX'), (1, NULL, 'XX');
         """
     )
     db.commit()
     raw = db.execute(
-        "SELECT count(*) FROM (SELECT title_id, source, language, is_primary FROM title_language"
-        " GROUP BY title_id, source, language, is_primary HAVING count(*) > 1)"
+        "SELECT count(*) FROM (SELECT title_id, source, country FROM title_country"
+        " GROUP BY title_id, source, country HAVING count(*) > 1)"
     ).fetchone()[0]
     db.close()
-    assert raw == 0, "the rows differ in SQLite; only the transform makes them one key"
+    assert raw == 0, "the rows differ in SQLite; only the coalesce makes them one key"
 
     report = _validate(clean)
 
     assert not report.ok
     duplicate = next(f for f in report.failures if f.rule == "integrity-duplicate")
-    assert "title_language" in duplicate.message
+    assert "title_country" in duplicate.message
     assert duplicate.detail["groups"] == 1
-    assert duplicate.detail["key"] == ["title_id", "source", "language", "role"]
+    assert duplicate.detail["key"] == ["title_id", "source", "country"]
 
 
 def test_a_declared_nullable_pk_component_whose_affinity_is_not_text_fails(clean):
