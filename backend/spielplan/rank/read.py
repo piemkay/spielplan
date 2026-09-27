@@ -191,26 +191,6 @@ async def recent_titles(
     return {int(r[side]) for r in rows for side in ("title_a", "title_b")}
 
 
-async def compared_count(conn: asyncpg.Connection, *, user_id: int, kind: str) -> int:
-    """Comparisons answered for this kind, for the board's why-line.
-
-    Held-out INCLUDED, or the count would stand still on exactly those answers (§13).
-    `tier_insert` duels are a drop's by-product and are left out.
-    """
-    return int(
-        await conn.fetchval(
-            """
-            SELECT count(*) FROM duel d
-            JOIN title t ON t.id = d.title_a AND t.kind = $2
-            WHERE d.user_id = $1 AND d.context IN ('profile_battle', 'tier_queue')
-            """,
-            user_id,
-            kind,
-        )
-        or 0
-    )
-
-
 async def answered_comparisons(
     conn: asyncpg.Connection, *, user_id: int, kind: str
 ) -> int:
@@ -312,7 +292,6 @@ __all__ = [
     "answered_comparisons",
     "asked_pairs",
     "candidates",
-    "compared_count",
     "comparison_counts",
     "cutpoints_of",
     "items",

@@ -25,7 +25,7 @@ const REFERENCE = /§\s?\d|decision \d|proposal \d|\bM[0-7](\.\d+)?\b/i;
 describe('syncNote', () => {
   it('says Jellyfin was told only when it was', () => {
     expect(syncNote({ synced: true, reason: null })).toBe('Saved, and Jellyfin is up to date.');
-    expect(syncNote({ synced: false, reason: null })).toBe('Saved here - Jellyfin was not told.');
+    expect(syncNote({ synced: false, reason: null })).toBe('Saved here — Jellyfin was not told.');
   });
 
   it("lets decision 210(a)'s reason win over a success", () => {

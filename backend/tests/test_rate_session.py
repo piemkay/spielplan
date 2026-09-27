@@ -1259,7 +1259,7 @@ async def test_the_route_reports_undo_as_unavailable_rather_than_no_opping(db, r
     await client.get("/api/rate")
     refused = await client.post("/api/rate/undo")
     assert refused.status_code == 409
-    assert refused.json()["detail"]["reason"] == "empty"
+    assert refused.json()["detail"] == {"reason": "empty", "message": "Nothing to undo yet"}
 
 
 async def test_the_route_rejects_an_empty_kind_selection(rate_client):

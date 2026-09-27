@@ -9,7 +9,7 @@
   import ActionSheet from '$lib/components/ActionSheet.svelte';
   import Sheet from '$lib/components/Sheet.svelte';
   import SourceConnectorCard from '$lib/components/SourceConnectorCard.svelte';
-  import AdminIcon from '../AdminIcon.svelte';
+  import Icon from '$lib/components/Icon.svelte';
 
   let cfg = $state(null);
   let url = $state('');
@@ -399,7 +399,7 @@
 {/snippet}
 
 {#snippet chevron()}
-  <span class="chev"><AdminIcon name="chevron-right" size={16} /></span>
+  <span class="chev"><Icon name="chevron-right" size={16} /></span>
 {/snippet}
 
 {#snippet badge(b)}
@@ -773,7 +773,7 @@
                 </p>
                 <code class="code secret" data-webhook-token>{minted.token}</code>
                 <button class="btn-secondary" onclick={copyToken}>
-                  <AdminIcon name="copy" size={18} />Copy
+                  <Icon name="copy" size={18} />Copy
                 </button>
               {:else}
                 <p class="why">A token already existed, so none was made, and it can't be shown again.</p>

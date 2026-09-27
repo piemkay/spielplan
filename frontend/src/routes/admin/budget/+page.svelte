@@ -7,7 +7,7 @@
   import LlmProviderCard from '$lib/components/LlmProviderCard.svelte';
   import Sheet from '$lib/components/Sheet.svelte';
   import SpendMeter from '$lib/components/SpendMeter.svelte';
-  import AdminIcon from '../AdminIcon.svelte';
+  import Icon from '$lib/components/Icon.svelte';
 
   let open = $state('');
 
@@ -54,7 +54,7 @@
             {:else}
               <span class="value">{s.word}</span>
             {/if}
-            <span class="chev"><AdminIcon name="chevron-right" size={16} /></span>
+            <span class="chev"><Icon name="chevron-right" size={16} /></span>
           </button>
         {/each}
       </div>

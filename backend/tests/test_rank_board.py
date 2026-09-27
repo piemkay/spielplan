@@ -373,25 +373,6 @@ def test_a_tension_badge_names_both_tiers():
     assert "ledger" not in entry.tension
 
 
-def test_the_why_line_speaks_the_member_register_and_keeps_decision_209s_window():
-    """The cutpoints learn from `tier_edit` alone, so "learned cutpoints, refit nightly" was false.
-    Decision 209's window keeps its own words; decision 508 adds what the letters mean."""
-    assert board.why_line(
-        rated=0, compared=0, placed_by_you=0, fitting=True, tier_set=TIER_SET
-    ) == "tiers are still being fitted"
-    fresh = board.why_line(rated=59, compared=12, placed_by_you=0, fitting=False, tier_set=TIER_SET)
-    assert fresh == (
-        "59 rated · 12 compared · liked from A up, fine in B, disliked from C down"
-    )
-    moved = board.why_line(rated=59, compared=12, placed_by_you=3, fitting=True, tier_set=TIER_SET)
-    assert moved == (
-        "59 rated · 12 compared · 3 placed by you · liked from A up, fine in B, disliked from C down"
-    ), "a refit owed over a board that already reads keeps its counts (decision 11's window)"
-    for line in (fresh, moved):
-        for noun in ("cutpoint", "refit", "learned", "ledger", "nightly", "overnight"):
-            assert noun not in line, line
-
-
 def test_the_board_never_moves_a_title_out_of_the_tier_it_was_dropped_in():
     cuts = model.initial_cutpoints(7)
     for assigned_tier in range(len(TIER_SET)):
@@ -478,13 +459,3 @@ def test_a_rated_title_renders_inside_the_tiers_its_verdict_names():
     assert placed["Saw"][0] == "A+" and placed["Saw"][1].model_tier == 4, "a drop is not held"
     eligible = [i.title_id for i in rows if board.straddles(i, cuts=cuts, hp=DEFAULTS) is not None]
     assert 1 in eligible, "the held title's chip and its queue eligibility are one predicate"
-
-
-def test_the_why_line_names_the_verdict_tiers_in_the_persons_own_letters():
-    assert board.why_line(
-        rated=3, compared=0, placed_by_you=0, fitting=False, tier_set=("meh", "ok", "great")
-    ) == "3 rated · 0 compared · liked in great, fine in ok, disliked in meh"
-    five = ("1", "2", "3", "4", "5")
-    assert board.why_line(rated=3, compared=0, placed_by_you=0, fitting=False, tier_set=five) == (
-        "3 rated · 0 compared · liked from 4 up, fine in 2 to 3, disliked in 1"
-    )

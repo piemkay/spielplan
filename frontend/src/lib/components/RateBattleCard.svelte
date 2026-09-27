@@ -111,22 +111,22 @@
       onclick={() => onDuel('TIE')}
     >About the same</button>
 
-    <button
-      class="favourite"
-      role="switch"
-      aria-checked={decisive}
-      aria-labelledby="rate-decisive-label"
-      aria-describedby="rate-decisive-why"
-      data-testid="rate-decisive"
-      disabled={busy}
-      onclick={() => onDecisive(!decisive)}
-    >
+    <label class="favourite">
       <span class="words">
         <span class="label" id="rate-decisive-label">{DECISIVE_LABEL}</span>
         <span class="footnote" id="rate-decisive-why" data-testid="rate-decisive-why">{DECISIVE_COPY}</span>
       </span>
-      <span class="track" class:on={decisive}><span class="knob"></span></span>
-    </button>
+      <button
+        class="switch"
+        role="switch"
+        aria-checked={decisive}
+        aria-labelledby="rate-decisive-label"
+        aria-describedby="rate-decisive-why"
+        data-testid="rate-decisive"
+        disabled={busy}
+        onclick={() => onDecisive(!decisive)}><span class="knob"></span></button
+      >
+    </label>
   </div>
 
   <RateCorrections
@@ -234,14 +234,6 @@
     display: flex;
     align-items: center;
     gap: 12px;
-    padding: 0;
-    border: none;
-    background: none;
-    color: var(--text);
-    text-align: left;
-  }
-  .favourite:disabled {
-    cursor: default;
   }
   .words {
     flex: 1;
@@ -252,27 +244,6 @@
   .label {
     font-size: var(--fs-body);
     line-height: 22px;
-  }
-  .track {
-    width: 51px;
-    height: 31px;
-    flex: none;
-    display: flex;
-    padding: 2px;
-    border-radius: var(--r-pill);
-    background: var(--progress-track);
-    transition: background 0.18s var(--ease);
-  }
-  .track.on {
-    justify-content: flex-end;
-    background: var(--accent);
-  }
-  .knob {
-    width: 27px;
-    height: 27px;
-    border-radius: var(--r-pill);
-    background: var(--text);
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
   }
 
   /* A short phone screen: tighter, so the pair and its answers stay in view. */

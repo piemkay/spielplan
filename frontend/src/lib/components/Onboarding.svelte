@@ -17,7 +17,7 @@
     syncSubscription,
     watchInstallPrompt
   } from '$lib/push.js';
-  import RowIcon from './RowIcon.svelte';
+  import Icon from './Icon.svelte';
 
   // Settled until the server says otherwise, so the nag never flashes on every visit.
   let complete = $state(true);
@@ -193,7 +193,7 @@
   <ul class="list-group">
     <li>
       <div class="list-row">
-        <RowIcon name="home-screen" tone="green" />
+        <Icon name="home-screen" tone="green" />
         <span>Add to Home Screen</span>
         <span class="value">{installed ? 'Installed' : 'Not yet'}</span>
       </div>
@@ -246,7 +246,7 @@
 
     <li>
       <div class="list-row">
-        <RowIcon name="bell" tone="red" />
+        <Icon name="bell" tone="red" />
         <span>Notifications</span>
         <span class="value">{PUSH_WORD[pushState]}</span>
       </div>

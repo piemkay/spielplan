@@ -7,7 +7,7 @@
   import { registerPasskey, supported } from '$lib/passkeys.js';
   import DataSources from '$lib/components/DataSources.svelte';
   import Onboarding from '$lib/components/Onboarding.svelte';
-  import RowIcon from '$lib/components/RowIcon.svelte';
+  import Icon from '$lib/components/Icon.svelte';
 
   let credentials = $state([]);
   let tiers = $state({ tier_set: [], min: 2, max: 12, warning: '' });
@@ -158,7 +158,7 @@
     <div class="list-group">
       {#each credentials as c (c.id)}
         <div class="list-row" class:dead={!c.usable} data-testid="passkey">
-          <RowIcon name="key" tone="blue" />
+          <Icon name="key" tone="blue" />
           <span class="text">
             <span>{c.label ?? 'Unnamed passkey'}</span>
             <span class="sub">
@@ -181,7 +181,7 @@
         </div>
       {:else}
         <div class="list-row" data-empty="passkeys">
-          <RowIcon name="key" tone="blue" />
+          <Icon name="key" tone="blue" />
           <span class="text">Passkeys</span>
           <span class="value">None yet</span>
         </div>
@@ -205,7 +205,7 @@
       {/if}
 
       <a class="list-row" href="/account/password">
-        <RowIcon name="lock" />
+        <Icon name="lock" tone="graphite" />
         <span class="text">Password</span>
         <span class="value">Change</span>
         {@render chevron()}
@@ -213,14 +213,14 @@
 
       {#if pinSession}
         <div class="list-row" data-testid="pin-card">
-          <RowIcon name="key" tone="amber" />
+          <Icon name="key" tone="amber" />
           <span class="text">PIN for switching profiles</span>
           <span class="value">{session.user?.has_pin ? 'Set' : 'Not set'}</span>
         </div>
       {:else}
         <details data-testid="pin-card">
           <summary class="list-row">
-            <RowIcon name="key" tone="amber" />
+            <Icon name="key" tone="amber" />
             <span class="text">PIN for switching profiles</span>
             <span class="value">{session.user?.has_pin ? 'Set' : 'Not set'}</span>
             {@render chevron()}
@@ -293,7 +293,7 @@
     <h2 class="list-header">Preferences</h2>
     <details class="list-group" data-testid="tier-set-edit">
       <summary class="list-row">
-        <RowIcon name="rank" tone="teal" />
+        <Icon name="rank" tone="teal" />
         <span class="text">Rank letters</span>
         <span class="value" data-testid="tier-set-current">{bestFirst(tiers.tier_set)}</span>
         {@render chevron()}
@@ -325,7 +325,7 @@
     <div class="list-group">
       {#if jellyfin?.linked}
         <div class="list-row" data-jellyfin="linked">
-          <RowIcon name="film" tone="ember" />
+          <Icon name="film" tone="ember" />
           <span class="text">Linked</span>
           {#if jellyfin.state === 'needs_relink'}
             <span class="badge warn">Needs linking again</span>
@@ -348,7 +348,7 @@
         </div>
       {:else}
         <div class="list-row" data-jellyfin="unlinked">
-          <RowIcon name="film" />
+          <Icon name="film" tone="graphite" />
           <span class="text">Not linked</span>
         </div>
       {/if}
@@ -368,7 +368,7 @@
   <!-- Licence notices bind every viewer, so they sit on the one page every member reaches (decision 293). -->
   <details class="sources" data-testid="account-technical">
     <summary class="list-row">
-      <RowIcon name="info" />
+      <Icon name="info" tone="graphite" />
       <span class="text">Where the film information comes from</span>
       {@render chevron()}
     </summary>

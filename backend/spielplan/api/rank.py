@@ -23,7 +23,6 @@ from spielplan.db import genres, library
 from spielplan.home import rail
 from spielplan.ledger import observations, refit
 from spielplan.ledger.hyperparams import Hyperparams
-from spielplan.rank import board as board_rules
 from spielplan.rank import drop as drop_rules
 from spielplan.rank import evaluation, queue, read, tiers
 
@@ -151,7 +150,6 @@ async def _payload(
     unfiltered = rows if not filters.active() else await read.items(
         conn, user_id=user.id, kind=kind
     )
-    eligible = queue.eligible(unfiltered, cuts=cuts.boundaries, hp=hp)
     matched = (
         await library.dna_tiers_for(conn, title_ids=[r.title_id for r in rows], dna=filters.dna)
         if filters.dna
@@ -161,8 +159,6 @@ async def _payload(
     # Decision 209: before the sweep's first fit, "0 rated" would read as "not started"; the owed
     # stamp says fitting instead.
     fitting = cuts.refit_owed
-    compared = await read.compared_count(conn, user_id=user.id, kind=kind)
-    placed_by_you = sum(1 for r in unfiltered if r.assigned_tier is not None)
     payload: dict[str, Any] = {
         "kind": kind,
         "tier_set": list(cuts.tier_set),
@@ -170,18 +166,9 @@ async def _payload(
         "rated": len(rows),
         "rated_total": len(unfiltered),
         "fitting": fitting,
-        "queue_eligible": len(eligible),
         "filters": filters.active(),
         # §4.1 rule 1: which tier matched each DNA survivor; absent without a predicate.
         "dna_tiers": {str(k): v for k, v in matched.items()} or None,
-        # §6.8's why-line, in the member register (`board.why_line`, decision 486).
-        "why": board_rules.why_line(
-            rated=len(unfiltered),
-            compared=compared,
-            placed_by_you=placed_by_you,
-            fitting=fitting,
-            tier_set=cuts.tier_set,
-        ),
     }
     if show_model:
         # Built only when visible: the held-out agreement is a query not worth running to discard.

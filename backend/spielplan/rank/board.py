@@ -128,45 +128,6 @@ def tension_of(
     )
 
 
-def why_line(
-    *,
-    rated: int,
-    compared: int,
-    placed_by_you: int,
-    fitting: bool,
-    tier_set: Sequence[str],
-) -> str:
-    """§6.8's one-line why for the board (decision 486): the counts, then what the letters mean.
-
-    `compared` includes the held-out tenth, so no single answer is singled out (§13).
-    """
-    if fitting and rated == 0:
-        return "tiers are still being fitted"
-    counts = f"{rated} rated · {compared} compared"
-    if placed_by_you:
-        counts = f"{counts} · {placed_by_you} placed by you"
-    return f"{counts} · {_band_words(tier_set)}"
-
-
-def _band_words(tier_set: Sequence[str]) -> str:
-    """Decision 508's rule in the person's own letters, best-first like the board."""
-    labels = list(tier_set)
-    bands = model.verdict_tiers(len(labels))
-    (d_low, d_high), (f_low, f_high), (l_low, l_high) = (tuple(int(x) for x in b) for b in bands)
-    liked = f"liked in {labels[l_low]}" if l_low == l_high else f"liked from {labels[l_low]} up"
-    fine = (
-        f"fine in {labels[f_low]}"
-        if f_low == f_high
-        else f"fine in {labels[f_low]} to {labels[f_high]}"
-    )
-    disliked = (
-        f"disliked in {labels[d_high]}"
-        if d_low == d_high
-        else f"disliked from {labels[d_high]} down"
-    )
-    return f"{liked}, {fine}, {disliked}"
-
-
 def _badge(label: str, above: str | None, below: str | None) -> str:
     """§6.3's "tier + neighbourhood"; the ends of a tier get their own phrasing."""
     if above and below:
@@ -261,4 +222,4 @@ def build(
     return tuple(reversed(tiers))
 
 
-__all__ = ["VERDICT_WORDS", "Entry", "Item", "Tier", "build", "straddles", "tension_of", "why_line"]
+__all__ = ["VERDICT_WORDS", "Entry", "Item", "Tier", "build", "straddles", "tension_of"]

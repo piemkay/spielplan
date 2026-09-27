@@ -385,16 +385,17 @@
         <option value="unseen">Not seen</option>
       </select>
     </div>
-    <button
-      class="list-row"
-      role="switch"
-      aria-checked={owned}
-      onclick={toggleOwned}
-      data-testid="filter-owned"
-    >
-      <span>In my library</span>
-      <span class="switch" aria-hidden="true"><span></span></span>
-    </button>
+    <div class="list-row">
+      <span id="owned-label">In my library</span>
+      <button
+        class="switch"
+        role="switch"
+        aria-checked={owned}
+        aria-labelledby="owned-label"
+        onclick={toggleOwned}
+        data-testid="filter-owned"
+      ><span class="knob"></span></button>
+    </div>
   </div>
 {/if}
 
@@ -634,29 +635,6 @@
     min-height: 0;
     opacity: 0;
     cursor: pointer;
-  }
-  .switch {
-    margin-left: auto;
-    flex: none;
-    width: 51px;
-    height: 31px;
-    padding: 2px;
-    border-radius: var(--r-pill);
-    background: rgba(245, 240, 232, 0.16);
-    display: flex;
-    justify-content: flex-start;
-    transition: background 0.2s var(--ease);
-  }
-  .switch > span {
-    width: 27px;
-    height: 27px;
-    border-radius: var(--r-pill);
-    background: var(--text);
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
-  }
-  [aria-checked='true'] > .switch {
-    background: var(--accent);
-    justify-content: flex-end;
   }
 
   .chips {

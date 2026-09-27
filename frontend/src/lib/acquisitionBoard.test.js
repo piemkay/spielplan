@@ -352,7 +352,11 @@ describe('the mounted board', () => {
         body: undefined
       });
       expect(sheet().querySelector('[data-testid="board-refusal"]').textContent).toBe(sentence);
-      expect(vi.mocked(get)).toHaveBeenCalledTimes(2);
+      expect(vi.mocked(get).mock.calls.map(([path]) => path), 'the board, then the sidebar count').toEqual([
+        '/admin/acquisition',
+        '/admin/acquisition',
+        '/admin/system'
+      ]);
     } finally {
       unmount(app);
     }

@@ -8,32 +8,32 @@
  */
 export function syncNote(res) {
   const reason = String(res?.reason ?? '');
-  if (!reason) return res?.synced ? 'Saved, and Jellyfin is up to date.' : 'Saved here - Jellyfin was not told.';
+  if (!reason) return res?.synced ? 'Saved, and Jellyfin is up to date.' : 'Saved here — Jellyfin was not told.';
   if (reason.includes('series unseen is app-only')) {
-    return 'Saved here only - Jellyfin keeps its own episode history.';
+    return 'Saved here only — Jellyfin keeps its own episode history.';
   }
   if (reason.includes('not on Jellyfin')) {
-    return "Saved here - this title isn't in your Jellyfin library.";
+    return "Saved here — this title isn't in your Jellyfin library.";
   }
   if (reason.includes('re-link required')) {
-    return 'Saved here - Jellyfin was not told. Ask an admin to link your account again.';
+    return 'Saved here — Jellyfin was not told. Ask an admin to link your account again.';
   }
   if (reason.includes('not linked to a Jellyfin user')) {
-    return "Saved here - your account isn't linked to Jellyfin.";
+    return "Saved here — your account isn't linked to Jellyfin.";
   }
-  if (reason.includes('Jellyfin not configured')) return "Saved here - Jellyfin isn't connected.";
+  if (reason.includes('Jellyfin not configured')) return "Saved here — Jellyfin isn't connected.";
   if (reason.includes('secrets unreadable')) {
-    return "Saved here - Jellyfin's saved sign-in can't be read. Tell whoever runs Spielplan.";
+    return "Saved here — Jellyfin's saved sign-in can't be read. Tell whoever runs Spielplan.";
   }
   if (reason.includes('nothing owed')) return 'Saved.';
   // What is left leaves the row owed, which the sweep settles.
-  return 'Saved here - Jellyfin was not updated this time; it catches up on its next sync.';
+  return 'Saved here — Jellyfin was not updated this time; it catches up on its next sync.';
 }
 
 /** @param {string | null | undefined} reason */
 export function playWhy(reason) {
   if (reason === 'not_in_library') return 'Not in your Jellyfin library.';
-  if (reason === 'no_server') return "Jellyfin isn't connected yet - ask whoever runs Spielplan.";
+  if (reason === 'no_server') return "Jellyfin isn't connected yet — ask whoever runs Spielplan.";
   return '';
 }
 

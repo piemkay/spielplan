@@ -160,7 +160,7 @@ function type(input, value) {
   flushSync();
 }
 
-/** A checkbox pressed the way a finger presses it: `click` flips it and fires `change`. */
+/** A switch pressed the way a finger presses it. */
 function toggle(input) {
   input.click();
   flushSync();
@@ -313,7 +313,7 @@ describe('the extraction settings and their estimate (decisions 339, 450)', () =
       estimate: estimate({ passes: 2 })
     });
     await show(ExtractionSettings);
-    expect(control('Parallel mode').checked).toBe(true);
+    expect(control('Parallel mode').getAttribute('aria-checked')).toBe('true');
     expect(control('Run Gemini in parallel').checked).toBe(true);
     expect(control('Run Anthropic in parallel').checked).toBe(false);
     // An absent `passes` shows the count the server's own plan uses (decision 324 lives there).
@@ -425,7 +425,7 @@ describe('the extraction settings and their estimate (decisions 339, 450)', () =
     await show(ExtractionSettings);
     toggle(control('Parallel mode'));
     await settle();
-    expect(control('Parallel mode').checked).toBe(true);
+    expect(control('Parallel mode').getAttribute('aria-checked')).toBe('true');
     vi.mocked(post).mockClear();
     vi.mocked(get).mockClear();
     button('Cancel').click();
@@ -434,7 +434,7 @@ describe('the extraction settings and their estimate (decisions 339, 450)', () =
     expect(get).not.toHaveBeenCalled();
     expect(api).not.toHaveBeenCalled();
     expect(target.querySelector('[data-testid="spend-estimate"]')).toBeNull();
-    expect(control('Parallel mode').checked).toBe(false);
+    expect(control('Parallel mode').getAttribute('aria-checked')).toBe('false');
   });
 });
 

@@ -145,7 +145,9 @@ describe('the pair card (decisions 520 and 527)', () => {
       const toggle = target.querySelector('[data-testid="rate-decisive"]');
       expect(toggle.getAttribute('role')).toBe('switch');
       expect(toggle.getAttribute('aria-checked')).toBe('false');
-      expect(toggle.textContent).toContain('Clear favourite');
+      expect(document.getElementById(toggle.getAttribute('aria-labelledby')).textContent).toBe(
+        'Clear favourite'
+      );
       expect(target.querySelector('[data-testid="rate-decisive-why"]').textContent).toBe(
         'Turn this on when one is clearly better - that answer counts for more. It resets for ' +
           'the next pair.'

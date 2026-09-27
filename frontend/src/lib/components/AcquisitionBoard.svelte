@@ -30,6 +30,7 @@
     stepName,
     summaryOf
   } from '$lib/acquisitionBoard.svelte.js';
+  import { refresh as refreshCounts } from '../../routes/admin/overview.svelte.js';
 
   let board = $state(null);
   let error = $state('');
@@ -87,7 +88,7 @@
     } finally {
       busy = false;
     }
-    await refresh();
+    await Promise.all([refresh(), refreshCounts(['system'])]);
   }
 
   async function toggleDocuments() {

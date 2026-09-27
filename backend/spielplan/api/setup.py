@@ -19,7 +19,7 @@ router = APIRouter(prefix="/api/setup", tags=["setup"])
 STEPS = ("admin", "connectors", "bundle", "onboarding")
 
 # The wizard ribbon, as data: the one thing besides `required` the anonymous login page needs.
-NOTE = "first boot · a bundle-less app is a legal state"
+NOTE = "Everything after the admin account can be done later in Admin."
 
 # Trimmed before storing: login resolves on `lower(name)` (§3.1).
 AccountName = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=64)]

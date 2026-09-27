@@ -260,7 +260,7 @@ async def _target(conn: asyncpg.Connection, user_id: int) -> asyncpg.Record:
     return row
 
 
-async def _refuse_if_last_active_admin(conn: asyncpg.Connection, row, verb: str) -> None:
+async def _refuse_if_last_active_admin(conn: asyncpg.Connection, row) -> None:
     """§6.6's admin floor (decision 166). A security rule: with zero admins `POST /api/setup/admin`
     lets anyone mint one."""
     if row["role"] != "admin" or not row["is_active"]:
@@ -271,18 +271,14 @@ async def _refuse_if_last_active_admin(conn: asyncpg.Connection, row, verb: str)
     )
     if not others:
         raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            f"the last active admin cannot be {verb}: there is always one active admin, so make "
-            "another account an admin first",
+            status.HTTP_409_CONFLICT, "The last active admin can't be demoted, disabled or deleted."
         )
 
 
-def _refuse_self(admin: auth.SessionUser, user_id: int, what: str) -> None:
+def _refuse_self(admin: auth.SessionUser, user_id: int, sentence: str) -> None:
     """§6.6: an admin cannot reset or disable their own account from this tab."""
     if admin.id == user_id:
-        raise HTTPException(
-            status.HTTP_409_CONFLICT, f"an admin cannot {what} here"
-        )
+        raise HTTPException(status.HTTP_409_CONFLICT, sentence)
 
 
 @router.post("/users", status_code=status.HTTP_201_CREATED)
@@ -324,7 +320,7 @@ async def edit_user(user_id: int, body: EditUser, _: AdminUser, conn: DB) -> dic
         async with write_txn(conn, lock=_ROSTER_LOCK):
             row = await _target(conn, user_id)
             if body.role is not None and body.role != row["role"]:
-                await _refuse_if_last_active_admin(conn, row, "demoted")
+                await _refuse_if_last_active_admin(conn, row)
             updated = await conn.fetchrow(
                 """
                 UPDATE app_user SET name = coalesce($2, name), role = coalesce($3, role)
@@ -344,7 +340,7 @@ async def edit_user(user_id: int, body: EditUser, _: AdminUser, conn: DB) -> dic
 @router.post("/users/{user_id}/reset-password")
 async def reset_password(user_id: int, admin: AdminUser, conn: DB) -> dict[str, object]:
     """Reissues the one-time password and re-arms the first-login change; every session goes too."""
-    _refuse_self(admin, user_id, "reset their own password")
+    _refuse_self(admin, user_id, "Change your own sign-in on your account page.")
     otp = auth.new_one_time_password()
     password_hash = await auth.hash_password_async(otp)
     async with write_txn(conn):
@@ -369,7 +365,7 @@ async def reset_password(user_id: int, admin: AdminUser, conn: DB) -> dict[str, 
 @router.post("/users/{user_id}/reset-pin")
 async def reset_pin(user_id: int, admin: AdminUser, conn: DB) -> dict[str, object]:
     """The counters clear with the hash, or the new PIN would be locked out (§3.2)."""
-    _refuse_self(admin, user_id, "reset their own PIN")
+    _refuse_self(admin, user_id, "Change your own sign-in on your account page.")
     async with write_txn(conn):
         await _target(conn, user_id)
         await conn.execute(
@@ -410,8 +406,8 @@ async def set_active(
         revoked = 0
         if not body.is_active:
             # The floor first: an admin disabling themselves needs to hear the household would have none.
-            await _refuse_if_last_active_admin(conn, row, "disabled")
-            _refuse_self(admin, user_id, "disable their own account")
+            await _refuse_if_last_active_admin(conn, row)
+            _refuse_self(admin, user_id, "You can't disable your own account.")
         await conn.execute(
             "UPDATE app_user SET is_active = $2 WHERE id = $1", user_id, body.is_active
         )
@@ -431,7 +427,7 @@ async def delete_user(user_id: int, _: AdminUser, conn: DB) -> dict[str, bool]:
     (`session.host_user_id` cascades)."""
     async with write_txn(conn, lock=_ROSTER_LOCK):
         row = await _target(conn, user_id)
-        await _refuse_if_last_active_admin(conn, row, "deleted")
+        await _refuse_if_last_active_admin(conn, row)
         await conn.execute("DELETE FROM app_user WHERE id = $1", user_id)
     return {"ok": True}
 
@@ -495,7 +491,7 @@ async def link_jellyfin(
         # Outside the block: the violation rolls back badge and token together.
         raise HTTPException(
             status.HTTP_409_CONFLICT,
-            "that Jellyfin user is already linked to another account; each links to one account only",
+            "That Jellyfin user is already linked to someone else.",
         ) from exc
 
     return {

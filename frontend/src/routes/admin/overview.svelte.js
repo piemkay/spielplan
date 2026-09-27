@@ -1,6 +1,7 @@
 // What Overview, the admin sidebar and System read (decision 527): one read per endpoint in flight,
 // and plain sentences computed from the facts those reads already return.
 import { get } from '$lib/api.js';
+import { runOutDays } from '$lib/spendGuard.svelte.js';
 
 export const facts = $state({
   system: null,
@@ -141,11 +142,8 @@ function budgetCard(llm, now) {
       body: `New titles wait until ${until}, unless you raise the limit.`
     };
   }
-  const monthly = decimal(llm.projected?.monthly_usd);
-  const span = llm.projected?.window_days ?? 30;
-  if (remaining === null || !monthly) return null;
-  const daysLeft = remaining / (monthly / span);
-  if (daysLeft >= (Date.parse(meter.period_end) - now) / DAY) return null;
+  const daysLeft = runOutDays(llm, now);
+  if (daysLeft === null) return null;
   const days = Math.round(daysLeft);
   return {
     ...card,
@@ -154,7 +152,7 @@ function budgetCard(llm, now) {
         ? 'The AI budget runs out today'
         : `The AI budget runs out in about ${count(days, 'day')}`,
     body:
-      `At this pace new titles cost about ${money(monthly)} a month. ` +
+      `At this pace new titles cost about ${money(llm.projected.monthly_usd)} a month. ` +
       `Once ${money(meter.cap_usd)} is spent, they wait until ${until}.`
   };
 }

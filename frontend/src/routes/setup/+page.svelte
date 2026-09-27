@@ -98,7 +98,9 @@
         aria-valuemin="1"
         aria-valuemax={STEPS.length}
       ></span>
-      <p class="footnote">{session.setup?.note ?? 'first boot · a bundle-less app is a legal state'}</p>
+      <p class="footnote">
+        {session.setup?.note ?? 'Everything after the admin account can be done later in Admin.'}
+      </p>
     </div>
 
     <h1 class="large-title">{STEPS[step].title}</h1>
@@ -150,13 +152,13 @@
         in on first boot, for automated installs.
       </p>
       <div class="list-group">
-        <a class="list-row" href="/admin/connectors">
+        <a class="list-row" href="/admin/services">
           <span>Jellyfin</span><span class="value">In Admin</span>{@render chevron()}
         </a>
-        <a class="list-row" href="/admin/connectors">
+        <a class="list-row" href="/admin/budget">
           <span>AI providers</span><span class="value">In Admin</span>{@render chevron()}
         </a>
-        <a class="list-row" href="/admin/connectors">
+        <a class="list-row" href="/admin/services">
           <span>TMDB, OMDb and Trakt</span><span class="value">In Admin</span>{@render chevron()}
         </a>
       </div>

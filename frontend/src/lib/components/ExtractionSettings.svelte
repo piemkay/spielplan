@@ -190,15 +190,14 @@
       </label>
       <label class="list-row">
         <span class="grow">Parallel mode</span>
-        <input
-          type="checkbox"
-          role="switch"
+        <button
           class="switch"
+          role="switch"
+          aria-checked={parallel}
           aria-label="Parallel mode"
-          checked={parallel}
           disabled={spend.busy === 'confirm'}
-          onchange={(e) => edit('parallel', e.currentTarget.checked, settings.parallel === true)}
-        />
+          onclick={() => edit('parallel', !parallel, settings.parallel === true)}
+        ><span class="knob"></span></button>
       </label>
       {#if parallel}
         {#each providers as p (p.name)}
@@ -315,27 +314,6 @@
     color: var(--text-3);
     text-align: right;
     text-align-last: right;
-  }
-  .switch {
-    appearance: none;
-    -webkit-appearance: none;
-    flex: none;
-    width: 51px;
-    height: 31px;
-    margin: 0;
-    border-radius: var(--r-pill);
-    background:
-      radial-gradient(circle at 15.5px 50%, var(--text) 0 12.5px, transparent 13.5px),
-      var(--progress-track);
-    cursor: pointer;
-  }
-  .switch:checked {
-    background:
-      radial-gradient(circle at 35.5px 50%, var(--text) 0 12.5px, transparent 13.5px),
-      var(--accent);
-  }
-  .switch:disabled {
-    opacity: 0.45;
   }
   .list-footer + .list-footer {
     padding-top: 8px;

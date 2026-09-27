@@ -344,7 +344,8 @@ describe('the second household test on Rate (2026-09-26)', () => {
     expect(target.querySelector('[data-testid="rate-battle-question"]').textContent).toBe(
       'Which did you enjoy more?'
     );
-    expect(target.querySelector('[data-testid="rate-decisive"]').textContent).toContain(
+    const decisive = target.querySelector('[data-testid="rate-decisive"]');
+    expect(document.getElementById(decisive.getAttribute('aria-labelledby')).textContent).toBe(
       'Clear favourite'
     );
     expect(target.querySelector('[data-testid="rate-decisive-why"]').textContent).toMatch(

@@ -7,7 +7,7 @@
   import RatePoster from '$lib/components/RatePoster.svelte';
   import Sheet from '$lib/components/Sheet.svelte';
   import Avatar from '$lib/components/Avatar.svelte';
-  import Icon from '$lib/components/tonight/Icon.svelte';
+  import Icon from '$lib/components/Icon.svelte';
   import { session } from '$lib/session.svelte.js';
   import {
     ANSWERS,
@@ -920,14 +920,15 @@
 
       <section class="group">
         <label class="setting setting-line">
-          <span>Include rewatches</span>
-          <input
-            type="checkbox"
-            role="switch"
+          <span id="tonight-rewatches-label">Include rewatches</span>
+          <button
             class="switch"
-            bind:checked={tonight.controls.include_rewatches}
-            data-testid="tonight-rewatches"
-          />
+            role="switch"
+            aria-checked={tonight.controls.include_rewatches}
+            aria-labelledby="tonight-rewatches-label"
+            onclick={() => (tonight.controls.include_rewatches = !tonight.controls.include_rewatches)}
+            data-testid="tonight-rewatches"><span class="knob"></span></button
+          >
         </label>
         <p class="list-footer">Off skips what everyone here has seen.</p>
       </section>
@@ -1612,37 +1613,6 @@
     border-radius: var(--r-pill);
     background: var(--text);
     box-shadow: var(--shadow-menu);
-  }
-  .switch {
-    -webkit-appearance: none;
-    appearance: none;
-    position: relative;
-    flex: none;
-    width: 51px;
-    height: 31px;
-    margin: 0;
-    border-radius: var(--r-pill);
-    background: rgba(245, 240, 232, 0.16);
-    cursor: pointer;
-    transition: background 0.2s var(--ease);
-  }
-  .switch::before {
-    content: '';
-    position: absolute;
-    top: 2px;
-    left: 2px;
-    width: 27px;
-    height: 27px;
-    border-radius: var(--r-pill);
-    background: var(--text);
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
-    transition: transform 0.2s var(--ease);
-  }
-  .switch:checked {
-    background: var(--accent);
-  }
-  .switch:checked::before {
-    transform: translateX(20px);
   }
   .stepper {
     flex: none;

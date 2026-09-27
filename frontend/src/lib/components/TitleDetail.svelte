@@ -26,6 +26,7 @@
     sourceLabel,
     syncNote as syncNoteFor
   } from '$lib/titleCard.js';
+  import AnswerTiles from '$lib/components/AnswerTiles.svelte';
   import RatePoster from '$lib/components/RatePoster.svelte';
   import Sheet from '$lib/components/Sheet.svelte';
 
@@ -38,7 +39,7 @@
   let syncNote = $state('');
   let saving = $state(false);
   let answerNote = $state('');
-  let answering = $state(false);
+  let answering = $state(null);
   // The server already omits the numbers when off; this gates only labels beside data always sent.
   const showModel = $derived(!!session.user?.show_model);
   const CREDIT_FOLD = 12;
@@ -117,7 +118,7 @@
         ? data.title.seen_state !== 'seen'
         : data.title.seen_state === 'seen' && data.my_verdict?.label === choice;
     if (standing) return;
-    answering = true;
+    answering = choice;
     answerNote = '';
     try {
       const res = await post(`/rate/title/${data.title.id}`, { answer: choice });
@@ -138,7 +139,7 @@
     } catch (err) {
       answerNote = `Could not save that — ${err.message}`;
     } finally {
-      answering = false;
+      answering = null;
     }
   }
 
@@ -170,15 +171,7 @@
 
 {#snippet icon(name, size = 20)}
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width={name === 'close' ? 2.25 : 1.75} stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-    {#if name === 'liked'}
-      <path d="M7 10.5V20H4.5a1 1 0 0 1-1-1v-7.5a1 1 0 0 1 1-1z" /><path d="M7 10.5 10.8 3.6a1.9 1.9 0 0 1 3.5 1.3L13.4 9h5.2a2 2 0 0 1 2 2.4l-1.4 7A2 2 0 0 1 17.2 20H7" />
-    {:else if name === 'disliked'}
-      <g transform="rotate(180 12 12)"><path d="M7 10.5V20H4.5a1 1 0 0 1-1-1v-7.5a1 1 0 0 1 1-1z" /><path d="M7 10.5 10.8 3.6a1.9 1.9 0 0 1 3.5 1.3L13.4 9h5.2a2 2 0 0 1 2 2.4l-1.4 7A2 2 0 0 1 17.2 20H7" /></g>
-    {:else if name === 'fine'}
-      <circle cx="12" cy="12" r="8.5" /><path d="M8.5 14.5h7" /><path d="M9.2 9.8h.01M14.8 9.8h.01" />
-    {:else if name === 'not_seen'}
-      <path d="M3.5 3.5l17 17" /><path d="M10.6 5.1A9.6 9.6 0 0 1 12 5c5 0 8.5 4.5 9.5 7a13 13 0 0 1-2.7 3.9" /><path d="M6.6 6.6C4.6 7.9 3.2 9.9 2.5 12c1 2.5 4.5 7 9.5 7 1.7 0 3.2-.5 4.6-1.2" /><path d="M9.9 9.9a3 3 0 0 0 4.2 4.2" />
-    {:else if name === 'play'}
+    {#if name === 'play'}
       <path d="M8 5.5v13l10.5-6.5z" fill="currentColor" stroke="none" />
     {:else if name === 'trailer'}
       <circle cx="12" cy="12" r="8.5" /><path d="M10 8.8v6.4l5-3.2z" fill="currentColor" stroke="none" />
@@ -282,19 +275,15 @@
 
             <div class="answerblock">
               <h3 class="list-header">Your answer</h3>
-              <div class="tiles" role="group" aria-label="Your answer" data-testid="title-rate">
-                {#each ANSWERS as a (a.answer)}
-                  <button
-                    class="tile"
-                    aria-pressed={pressed(a)}
-                    aria-busy={answering}
-                    data-answer={a.answer}
-                    onclick={() => answer(a.answer)}
-                  >
-                    {@render icon(a.answer)}<span>{a.label}</span>
-                  </button>
-                {/each}
-              </div>
+              <AnswerTiles
+                answers={ANSWERS}
+                label="Your answer"
+                testid="title-rate"
+                compact
+                pending={answering}
+                {pressed}
+                onAnswer={(a) => answer(a.answer)}
+              />
               {#if answerNote}
                 <p class="footnote" role="status" data-testid="title-rate-note">{answerNote}</p>
               {:else if !data.my_verdict}
@@ -589,40 +578,6 @@
   }
   .answerblock .list-header {
     padding: 0;
-  }
-  /* Four equal tiles, worst to best, and Not seen a step apart (decision 527). */
-  .tiles {
-    display: grid;
-    grid-template-columns: repeat(3, minmax(0, 1fr)) 0 minmax(0, 1fr);
-    gap: 8px;
-  }
-  .tile[data-answer='not_seen'] {
-    grid-column: 5;
-  }
-  .tile {
-    min-height: 60px;
-    border: none;
-    border-radius: var(--r-md);
-    background: var(--surface-1);
-    color: var(--text);
-    padding: 0;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 4px;
-    font-size: var(--fs-footnote);
-    line-height: 18px;
-    font-weight: 600;
-    transition: background 0.12s var(--ease);
-  }
-  .tile:hover {
-    background: var(--surface-2);
-  }
-  .tile[aria-pressed='true'],
-  .tile[aria-pressed='true']:hover {
-    background: var(--text);
-    color: var(--bg);
   }
   .actions {
     display: grid;
