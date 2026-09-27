@@ -1,9 +1,12 @@
 <script>
+  // You (§3.2, decision 527): the avatar on every root opens this sheet. Who is signed in and how,
+  // switching profile, the account and admin entries, Show the model, and Log out.
   import { authMethodLine, refreshUser, roleWord, session, setShowModel } from '$lib/session.svelte.js';
   import { get, post } from '$lib/api.js';
   import { modelGateSettled } from '$lib/home.svelte.js';
-  import { dismiss } from '$lib/dismiss.js';
+  import { toggleRail } from '$lib/rail.svelte.js';
   import { goto } from '$app/navigation';
+  import Sheet from './Sheet.svelte';
 
   let { onLogout } = $props();
 
@@ -16,20 +19,14 @@
   const initial = $derived((session.user?.name ?? '?').charAt(0).toUpperCase());
   const method = $derived(authMethodLine(session.user));
   const others = $derived(switchable.filter((u) => u.id !== session.user?.id));
+  const showModel = $derived(!!session.user?.show_model);
 
-  async function toggle() {
-    open = !open;
+  async function show() {
+    open = true;
     error = '';
     switching = null;
     // Re-read on every open: a PIN set on another phone makes that profile switchable.
-    if (open) {
-      switchable = (await get('/auth/switchable').catch(() => [])) ?? [];
-    }
-  }
-
-  // Leaves `switching` and `error` alone, so a stray outside tap keeps a half-typed PIN.
-  function closeMenu() {
-    open = false;
+    switchable = (await get('/auth/switchable').catch(() => [])) ?? [];
   }
 
   async function toggleModel() {
@@ -60,266 +57,253 @@
   }
 </script>
 
-<!-- On .wrap, not .menu: a menu-scoped handler would fire on the chip's own pointerdown. -->
-<div class="wrap" use:dismiss={closeMenu}>
-  <button class="chip" onclick={toggle} aria-expanded={open} data-testid="account-chip">
-    <span class="avatar">{initial}</span>
-    <span>{session.user?.name ?? 'signed out'}</span>
-    <span class="data">▾</span>
-  </button>
+<button
+  class="avatar-btn hit"
+  onclick={show}
+  aria-haspopup="dialog"
+  aria-expanded={open}
+  aria-label="You — {session.user?.name ?? 'signed out'}"
+  data-testid="account-chip"
+>
+  <span class="avatar">{initial}</span>
+</button>
 
-  {#if open}
-    <div class="menu">
+<Sheet {open} onClose={() => (open = false)} label="You" width={480}>
+  {#snippet header(close)}
+    <div class="bar">
+      <button class="btn-plain done" onclick={close}>Done</button>
+    </div>
+  {/snippet}
+  {#snippet children(close)}
+    <div class="you">
       <div class="head">
-        <div class="name">{session.user?.name}</div>
-        <div class="why line" data-testid="account-line">{roleWord(session.user?.role)} · {method}</div>
+        <span class="avatar big">{initial}</span>
+        <h2 class="title-1">{session.user?.name}</h2>
+        <p class="line" data-testid="account-line">{roleWord(session.user?.role)} · {method}</p>
       </div>
 
+      {#if error}<p class="err" role="alert">{error}</p>{/if}
+
       {#if switching}
-        <div class="pinbox">
-          <div class="data">PIN for {switching.name}</div>
-          <input
-            type="password"
-            inputmode="numeric"
-            bind:value={pin}
-            placeholder="••••"
-            onkeydown={(e) => e.key === 'Enter' && submitPin()}
-          />
-          {#if error}<div class="err data">{error}</div>{/if}
-          <div class="row">
-            <button class="btn-primary" onclick={submitPin}>Switch</button>
-            <button class="btn-ghost" onclick={() => (switching = null)}>Cancel</button>
+        <section class="group">
+          <h3 class="list-header">PIN for {switching.name}</h3>
+          <div class="pinbox">
+            <input
+              type="password"
+              inputmode="numeric"
+              autocomplete="off"
+              aria-label="PIN for {switching.name}"
+              bind:value={pin}
+              placeholder="Four digits"
+              onkeydown={(e) => e.key === 'Enter' && submitPin()}
+            />
+            <div class="row">
+              <button class="btn-primary" onclick={submitPin}>Switch</button>
+              <button class="btn-secondary" onclick={() => (switching = null)}>Cancel</button>
+            </div>
           </div>
-        </div>
+        </section>
       {:else}
-        <!-- Entries come from the server's nav payload: a member's browser never receives admin links. -->
-        <div class="group">
-          {#each session.user?.nav?.account ?? [] as entry (entry.key)}
-            <a href={entry.href} data-nav={entry.key} onclick={closeMenu}>{entry.label}</a>
-          {/each}
-        </div>
-
-        <div class="group bordered">
-          <button
-            class="pref"
-            role="switch"
-            aria-checked={!!session.user?.show_model}
-            onclick={toggleModel}
-            data-testid="show-model-toggle"
-            data-on={!!session.user?.show_model}
-          >
-            <span class="track" class:on={session.user?.show_model}><span class="knob"></span></span>
-            <span class="preflabel">Show the model</span>
-          </button>
-          <div class="why hint" data-testid="show-model-hint">
-            Shows the numbers behind your suggestions, and a log of what changed them.
-          </div>
-        </div>
-
-        {#if others.length}
-          <div class="group bordered">
-            <div class="data heading">SWITCH PROFILE</div>
+        <section class="group">
+          <h3 class="list-header">Switch profile</h3>
+          <div class="list-group">
             {#each others as u (u.id)}
               <button
-                class="switch"
+                class="list-row"
                 onclick={() => {
                   switching = u;
                   pin = '';
                 }}
               >
-                <span class="avatar sm" style:background={u.colour ?? 'var(--card-raised)'}>
-                  {u.name.charAt(0).toUpperCase()}
-                </span>
-                {u.name}
+                <span class="avatar sm" style:background={u.colour ?? null}>{u.name.charAt(0).toUpperCase()}</span>
+                <span>{u.name}</span>
               </button>
+            {:else}
+              <div class="list-row muted">No one else yet</div>
             {/each}
           </div>
-        {:else}
-          <div class="group bordered">
-            <div class="data heading">SWITCH PROFILE</div>
-            <div class="why hint">
-              No one else can be switched to yet. Each person sets a four-digit PIN on their
-              account page, and then appears here.
-              <!-- Closes the menu: the shell persists, so an open menu would follow onto /account. -->
-              <a href="/account" onclick={closeMenu}>Set your PIN on the account page.</a>
-            </div>
+          {#if !others.length}
+            <p class="list-footer">
+              People appear here once they set a PIN on
+              <a href="/account" onclick={() => close()}>their account page</a>.
+            </p>
+          {/if}
+        </section>
+
+        <!-- Entries come from the server's nav payload: a member's browser never receives admin links. -->
+        <section class="group">
+          <div class="list-group">
+            {#each session.user?.nav?.account ?? [] as entry (entry.key)}
+              <a class="list-row" href={entry.href} data-nav={entry.key}>
+                <span>{entry.label}</span>
+                <svg class="chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9.5 5.5 6.5 6.5-6.5 6.5" /></svg>
+              </a>
+            {/each}
           </div>
-        {/if}
+        </section>
+
+        <section class="group">
+          <div class="list-group">
+            <div class="list-row">
+              <span id="show-model-label">Show the numbers</span>
+              <button
+                class="switch hit"
+                role="switch"
+                aria-checked={showModel}
+                aria-labelledby="show-model-label"
+                onclick={toggleModel}
+                data-testid="show-model-toggle"
+                data-on={showModel}
+              ><span class="knob"></span></button>
+            </div>
+            {#if showModel}
+              <button
+                class="list-row"
+                onclick={() => {
+                  close();
+                  toggleRail(true);
+                }}
+                data-testid="model-rail-open"
+              >
+                <span>Model log</span>
+              </button>
+            {/if}
+          </div>
+          <p class="list-footer" data-testid="show-model-hint">
+            Shows the numbers behind your suggestions, and a log of what changed them.
+          </p>
+        </section>
       {/if}
 
-      <div class="group bordered">
-        <button class="danger" onclick={onLogout}>Log out</button>
-      </div>
+      <section class="group">
+        <div class="list-group">
+          <button class="list-row logout" onclick={onLogout}>Log out</button>
+        </div>
+      </section>
     </div>
-  {/if}
-</div>
+  {/snippet}
+</Sheet>
 
 <style>
-  .wrap {
-    position: relative;
-    flex: none;
-  }
-  .chip {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-    padding: 5px 11px 5px 5px;
-    border-radius: var(--r-pill);
-    border: 1px solid var(--line-2);
-    background: transparent;
-    color: var(--ink-2);
-    font-size: 12.5px;
-    cursor: pointer;
-  }
-  /* Identity is not a selection, so no accent (§6.8). */
-  .avatar {
-    width: 22px;
-    height: 22px;
-    border-radius: 50%;
+  .avatar-btn {
     display: grid;
     place-items: center;
-    background: var(--identity);
-    color: var(--ink);
-    font-size: 11px;
-    font-weight: 700;
+    width: 44px;
+    height: 44px;
+    min-height: 44px;
+    margin-right: -6px;
+    padding: 0;
+    border: none;
+    background: none;
   }
-  .avatar.sm {
-    width: 20px;
-    height: 20px;
-    font-size: 10px;
-  }
-  .menu {
-    position: absolute;
-    top: 40px;
-    right: 0;
-    width: 248px;
-    border-radius: var(--r-md);
-    border: 1px solid var(--line-3);
-    background: var(--card-raised);
-    box-shadow: 0 16px 40px rgba(0, 0, 0, 0.6);
-    overflow: hidden;
-    z-index: 40;
-    animation: fadeIn 0.12s ease;
-  }
-  .head {
-    padding: 12px 14px;
-    border-bottom: 1px solid var(--line);
-  }
-  .name {
-    font-size: 13px;
+  .avatar {
+    display: grid;
+    place-items: center;
+    width: 32px;
+    height: 32px;
+    border-radius: var(--r-pill);
+    background: #3d6fb6;
+    color: #fff;
+    font-size: var(--fs-footnote);
     font-weight: 600;
   }
+  .avatar.big {
+    width: 72px;
+    height: 72px;
+    font-size: var(--fs-title);
+  }
+  .avatar.sm {
+    width: 30px;
+    height: 30px;
+  }
+  .bar {
+    display: flex;
+    justify-content: flex-end;
+    margin: -4px -8px 0;
+  }
+  .done {
+    font-weight: 600;
+  }
+  .you {
+    display: flex;
+    flex-direction: column;
+    gap: 28px;
+  }
+  .head {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+    text-align: center;
+  }
+  .head .title-1 {
+    margin-top: 6px;
+  }
   .line {
-    margin-top: 2px;
-    font-size: 12px;
-    line-height: 1.4;
+    margin: 0;
+    font-size: var(--fs-subhead);
+    color: var(--text-2);
   }
   .group {
-    padding: 6px;
     display: flex;
     flex-direction: column;
+    gap: 6px;
   }
-  .bordered {
-    border-top: 1px solid var(--line);
+  .muted {
+    color: var(--text-3);
   }
-  .heading {
-    letter-spacing: 0.12em;
-    padding: 6px 10px 4px;
+  .chev {
+    margin-left: auto;
+    color: rgba(245, 240, 232, 0.35);
   }
-  .group a,
-  .switch,
-  .danger {
-    padding: 9px 10px;
-    border-radius: var(--r-sm);
-    font-size: 12.5px;
-    color: var(--ink-2);
-    text-align: left;
-    background: none;
-    border: none;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    gap: 9px;
+  .list-row[href] {
+    color: var(--text);
   }
-  .group a:hover,
-  .switch:hover {
-    background: rgba(255, 255, 255, 0.06);
-  }
-  .danger {
-    color: var(--ember-lift);
-  }
-  .danger:hover {
-    background: var(--ember-wash);
+  .logout {
+    justify-content: center;
+    color: var(--negative);
   }
   .pinbox {
-    padding: 12px 14px;
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 12px;
   }
   .row {
     display: flex;
     gap: 8px;
   }
   .err {
-    color: var(--ember-lift);
+    margin: 0;
+    color: var(--negative);
+    font-size: var(--fs-subhead);
+    text-align: center;
   }
-  .pref {
-    display: flex;
-    align-items: center;
-    gap: 10px;
-    width: 100%;
-    padding: 8px 10px;
-    border: none;
-    border-radius: var(--r-sm);
-    background: none;
-    color: var(--ink-2);
-    font-size: 12.5px;
-    cursor: pointer;
-    text-align: left;
-  }
-  .pref:hover {
-    background: rgba(255, 255, 255, 0.06);
-  }
-  .track {
-    flex: none;
-    width: 30px;
-    height: 17px;
-    border-radius: 999px;
-    background: var(--line-2);
-    border: 1px solid var(--line-2);
+  .switch {
     position: relative;
-    transition: background 0.12s ease;
+    flex: none;
+    margin-left: auto;
+    width: 51px;
+    height: 31px;
+    min-height: 31px;
+    padding: 2px;
+    border: none;
+    border-radius: var(--r-pill);
+    background: rgba(245, 240, 232, 0.16);
+    transition: background 0.2s var(--ease);
   }
-  .track.on {
-    background: var(--ember);
-    border-color: var(--ember);
+  .switch[aria-checked='true'] {
+    background: var(--accent);
   }
   .knob {
-    position: absolute;
-    top: 1px;
-    left: 1px;
-    width: 13px;
-    height: 13px;
-    border-radius: 50%;
-    background: var(--ink);
-    transition: transform 0.12s ease;
+    display: block;
+    width: 27px;
+    height: 27px;
+    border-radius: var(--r-pill);
+    background: var(--text);
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+    transition: transform 0.2s var(--ease);
   }
-  .track.on .knob {
-    transform: translateX(13px);
-    background: var(--ember-ink);
-  }
-  .preflabel {
-    flex: 1;
-  }
-  .hint {
-    padding: 0 10px 8px;
-  }
-
-  /* design.css's coarse floor skips a bare <a>, and these are the phone's only path to /account. */
-  @media (pointer: coarse) {
-    .group a {
-      min-height: var(--touch);
-    }
+  .switch[aria-checked='true'] .knob {
+    transform: translateX(20px);
   }
 </style>

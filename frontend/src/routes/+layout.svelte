@@ -1,6 +1,6 @@
 <script>
-  // The shell owns what every surface shares: the model rail, the account chip, and the box itself
-  // (height, top inset, what a failed boot or a lost session shows).
+  // The shell owns what every surface shares: the tab bar, You, the model rail, the toast, and what
+  // a failed boot or a lost session shows. The document scrolls (decision 527).
   import '$lib/design.css';
   import { onMount } from 'svelte';
   import { page, updated } from '$app/stores';
@@ -12,6 +12,7 @@
   import AccountChip from '$lib/components/AccountChip.svelte';
   import ModelRail from '$lib/components/ModelRail.svelte';
   import NavRail from '$lib/components/NavRail.svelte';
+  import Toast from '$lib/components/Toast.svelte';
 
   let { children } = $props();
 
@@ -38,6 +39,25 @@
   );
 
   const showModel = $derived(!!session.user?.show_model);
+
+  // Admin brings its own navigation (§6.6); the member tab bar stays with the member surfaces.
+  const adminRoute = $derived($page.url.pathname.startsWith('/admin'));
+
+  const TITLES = [
+    ['/rate', 'Rate'],
+    ['/tonight', 'Tonight'],
+    ['/rank', 'Rank'],
+    ['/account', 'You'],
+    ['/admin', 'Admin'],
+    ['/map', 'Map'],
+    ['/taste', 'Taste'],
+    ['/login', 'Sign in'],
+    ['/setup', 'Setup']
+  ];
+  const docTitle = $derived.by(() => {
+    const hit = TITLES.find(([prefix]) => $page.url.pathname.startsWith(prefix));
+    return hit ? `${hit[1]} · Spielplan` : 'Spielplan';
+  });
 
   // Turning the preference off closes an open drawer; the rule is in `rail.svelte.js`.
   $effect(() => {
@@ -192,6 +212,7 @@
 </script>
 
 <svelte:window onkeydown={onRailKey} />
+<svelte:head><title>{docTitle}</title></svelte:head>
 
 <!-- A snippet: /setup is bare yet an admin surface, so the banner renders outside the shell too. -->
 {#snippet reauthBanner()}
@@ -225,7 +246,7 @@
 {/snippet}
 
 {#if session.loading && !session.booted}
-  <div class="boot"><span class="data">connecting…</span></div>
+  <div class="boot"><span class="footnote">Connecting…</span></div>
 {:else if bare}
   {#if needsReauth}{@render reauthBanner()}{/if}
   {@render children()}
@@ -265,44 +286,32 @@
   </div>
 {:else if !session.user}
   <!-- Children never mount for nobody, so a signed-out load fires no authenticated reads. -->
-  <div class="boot"><span class="data">connecting…</span></div>
+  <div class="boot"><span class="footnote">Connecting…</span></div>
 {:else}
-  <div class="shell">
-    <header>
-      <span class="brand">SPIELPLAN</span>
-      <div class="spacer"></div>
-      {#if session.restartRequired}
-        <!-- Imported but not loaded (decision 497): the admin gets the Data tab, a member plain words. -->
-        {#if canAdmin}
-          <a class="nobundle data" href="/admin/data">bundle imported · restart needed</a>
-        {:else}
-          <span class="nobundle data">waiting for a restart</span>
-        {/if}
-      {/if}
-      {#if session.hasBundle === false}
-        <!-- `=== false`: null means `/config` did not answer, and this badge states a fact. -->
-        {#if !session.restartRequired}
+  <div class="shell" class:admin={adminRoute}>
+    {#if !adminRoute}<NavRail />{/if}
+    <div class="page">
+      <header class="topbar">
+        {#if session.restartRequired}
+          <!-- Imported but not loaded (decision 497): the admin gets Movie data, a member plain words. -->
           {#if canAdmin}
-            <a class="nobundle data" href="/admin/data">no bundle imported</a>
+            <a class="badge warn" href="/admin/data">Restart needed to load the new movie data</a>
           {:else}
-            <span class="nobundle data">no movie data yet</span>
+            <span class="badge warn">Waiting for a restart</span>
           {/if}
         {/if}
-      {/if}
-      {#if showModel}
-        <button
-          class="btn-ghost railbtn"
-          onclick={() => toggleRail(showModel)}
-          data-testid="model-rail-open"
-        >
-          Model log
-          <span class="data railkey">m</span>
-        </button>
-      {/if}
-      <AccountChip onLogout={logout} />
-    </header>
-    <div class="body">
-      <NavRail />
+        {#if session.hasBundle === false}
+          <!-- `=== false`: null means `/config` did not answer, and this badge states a fact. -->
+          {#if !session.restartRequired}
+            {#if canAdmin}
+              <a class="badge warn" href="/admin/data">No movie data yet — import it</a>
+            {:else}
+              <span class="badge warn">No movie data yet</span>
+            {/if}
+          {/if}
+        {/if}
+        <AccountChip onLogout={logout} />
+      </header>
       <main>
         {#if needsReauth}{@render reauthBanner()}{/if}
         {@render children()}
@@ -311,6 +320,7 @@
   </div>
   <!-- Outside `.shell`: fixed-position chrome, and `bare` routes have no chip to open it. -->
   <ModelRail open={modelRail.open} onClose={closeRail} suppressed={modelRail.suppressed} />
+  <Toast />
 {/if}
 
 <style>
@@ -324,10 +334,8 @@
     background: var(--ground);
   }
   .shell {
-    display: flex;
-    flex-direction: column;
-    height: 100vh;
-    height: 100dvh;
+    min-height: 100vh;
+    min-height: 100dvh;
   }
   .unreachable {
     width: min(420px, 100%);
@@ -339,31 +347,29 @@
   }
   .unreachable h1 {
     margin: 0;
-    font-size: 18px;
-    font-weight: 600;
+    font-family: var(--serif);
+    font-weight: 400;
+    font-size: var(--fs-title);
+    line-height: 34px;
   }
-  /* The installed app draws the status bar over the top edge (viewport-fit=cover), so the header
-     carries the inset; the phone override below restates it. */
-  header {
+  /* The installed app draws the status bar over the top edge (viewport-fit=cover): the top row
+     carries the inset, and both rows respect a landscape notch. */
+  .topbar {
     display: flex;
     align-items: center;
-    gap: 16px;
-    padding: 0 20px;
-    padding-top: env(safe-area-inset-top);
-    height: calc(54px + env(safe-area-inset-top));
-    flex: none;
-    border-bottom: 1px solid var(--line);
-    background: var(--ground-raised);
-    position: relative;
-    z-index: 60;
+    justify-content: flex-end;
+    gap: 8px;
+    min-height: calc(44px + env(safe-area-inset-top));
+    padding: env(safe-area-inset-top) max(var(--gutter), env(safe-area-inset-right)) 0
+      max(var(--gutter), env(safe-area-inset-left));
   }
-  .brand {
-    font-weight: 700;
-    font-size: 14px;
-    letter-spacing: 0.13em;
+  .topbar .badge {
+    margin-right: auto;
   }
-  .spacer {
-    flex: 1;
+  main {
+    --main-pad-end: calc(var(--tabbar) + env(safe-area-inset-bottom) + 32px);
+    padding: 0 max(var(--gutter), env(safe-area-inset-right)) var(--main-pad-end)
+      max(var(--gutter), env(safe-area-inset-left));
   }
   .reauth {
     display: flex;
@@ -372,11 +378,10 @@
     gap: 10px 14px;
     flex-wrap: wrap;
     margin-bottom: 16px;
-    padding: 12px 15px;
-    border: 1px solid var(--ember-edge);
-    background: var(--ember-wash);
+    padding: 12px 16px;
+    background: var(--warning-tint);
     border-radius: var(--r-md);
-    font-size: 13px;
+    font-size: var(--fs-subhead);
   }
   .reauthform {
     display: flex;
@@ -385,63 +390,28 @@
   }
   .reautherr {
     flex-basis: 100%;
-    color: var(--ember-lift);
-    font-size: 12.5px;
-  }
-  .railbtn {
-    display: inline-flex;
-    align-items: center;
-    gap: 8px;
-    flex: none;
-  }
-  .nobundle {
-    border: 1px solid var(--ember-edge);
-    background: var(--ember-wash);
-    color: var(--ember-lift);
-    padding: 5px 11px;
-    border-radius: var(--r-pill);
-  }
-  /* A badge-shaped link, not prose, so it takes the coarse floor design.css leaves a bare <a> without. */
-  @media (pointer: coarse) {
-    a.nobundle {
-      display: inline-flex;
-      align-items: center;
-      min-height: var(--touch);
-    }
-  }
-  .body {
-    flex: 1;
-    min-height: 0;
-    display: flex;
-  }
-  main {
-    flex: 1;
-    min-width: 0;
-    overflow: auto;
-    /* Named, because a sticky footer inside a page reaches down through this padding. */
-    --main-pad-end: 40px;
-    padding: 20px 22px var(--main-pad-end);
+    color: var(--negative);
+    font-size: var(--fs-subhead);
   }
 
-  /* Phone-first: the rail becomes a bottom bar and the header keeps only identity. */
-  @media (max-width: 720px) {
-    .body {
-      flex-direction: column-reverse;
+  .admin main {
+    --main-pad-end: calc(env(safe-area-inset-bottom) + 32px);
+  }
+
+  @media (min-width: 721px) {
+    .shell {
+      display: flex;
+    }
+    .page {
+      flex: 1;
+      min-width: 0;
+    }
+    .topbar {
+      padding: 16px 40px 0;
     }
     main {
-      --main-pad-end: 24px;
-      padding: 14px 14px var(--main-pad-end);
-    }
-    /* Four header items do not fit 390px: wrap rather than scroll sideways, and drop the key hint. */
-    /* The inset again: `height: auto` would otherwise discard the base rule's calc on phones. */
-    header {
-      gap: 10px;
-      flex-wrap: wrap;
-      height: auto;
-      min-height: calc(54px + env(safe-area-inset-top));
-    }
-    .railkey {
-      display: none;
+      --main-pad-end: 56px;
+      padding: 0 40px var(--main-pad-end);
     }
   }
 </style>

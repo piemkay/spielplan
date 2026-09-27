@@ -413,7 +413,7 @@
   /* Below the header, which includes the installed app's status-bar inset. */
   .panel {
     position: fixed;
-    top: calc(54px + env(safe-area-inset-top));
+    top: env(safe-area-inset-top);
     right: 0;
     bottom: 0;
     width: min(420px, 100%);
@@ -421,7 +421,7 @@
     background: var(--ground-raised);
     border-left: 1px solid var(--line);
     padding: 20px 20px 40px;
-    z-index: 50;
+    z-index: 60;
     animation: fadeIn 0.14s ease;
   }
   /* design.css's coarse floor raises height only; add the width for fingers, not for a mouse. */
@@ -730,7 +730,7 @@
   @media (max-width: 720px) {
     .panel {
       /* Restate the inset: this override wins on phones, the device it is for. */
-      top: calc(54px + env(safe-area-inset-top));
+      top: env(safe-area-inset-top);
       width: 100%;
       border-left: none;
     }

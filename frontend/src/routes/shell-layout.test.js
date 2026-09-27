@@ -275,12 +275,12 @@ describe('the shell when it cannot tell where a person belongs', () => {
       expect(session.offline).toBe(false);
       const header = target.querySelector('header');
       expect(header).not.toBeNull();
-      expect(header.textContent).not.toContain('no movie data yet');
+      expect(header.textContent).not.toMatch(/no movie data yet/i);
 
       // And it is absent because the read failed, not because this build never draws it.
       session.hasBundle = false;
       flushSync();
-      expect(target.querySelector('header').textContent).toContain('no movie data yet');
+      expect(target.querySelector('header').textContent).toMatch(/no movie data yet/i);
       expect(target.querySelector('header').textContent).not.toContain('bundle');
     } finally {
       unmount(app);
@@ -288,15 +288,15 @@ describe('the shell when it cannot tell where a person belongs', () => {
   });
 
   it('says a restart is owed rather than that nothing was imported', async () => {
-    // A bundle is imported but could not load: a member gets plain words, an admin the Data tab link.
+    // A bundle is imported but could not load: a member gets plain words, an admin a link to Movie data.
     const stuck = { ...CONFIG, has_bundle: false, restart_required: true };
     wire({ '/config': stuck, '/setup/state': READY, '/auth/me': ME });
     const member = await open();
     try {
       const header = target.querySelector('header');
-      expect(header.textContent).toContain('waiting for a restart');
+      expect(header.textContent).toMatch(/waiting for a restart/i);
       expect(header.textContent).not.toContain('no bundle imported');
-      expect(header.querySelector('a.nobundle')).toBeNull();
+      expect(header.querySelector('a.badge')).toBeNull();
     } finally {
       unmount(member);
     }
@@ -305,9 +305,9 @@ describe('the shell when it cannot tell where a person belongs', () => {
     wire({ '/config': stuck, '/setup/state': READY, '/auth/me': ADMIN });
     const admin = await open();
     try {
-      const link = target.querySelector('header a.nobundle');
+      const link = target.querySelector('header a.badge');
       expect(link.getAttribute('href')).toBe('/admin/data');
-      expect(link.textContent).toContain('restart needed');
+      expect(link.textContent).toMatch(/restart needed/i);
     } finally {
       unmount(admin);
     }

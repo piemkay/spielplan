@@ -49,8 +49,8 @@ An unpacked bundle directory works as well. With no `BUNDLE.json` in `/data/impo
 `.tar`/`.tar.zst`, that archive is opened; two archives is a refusal.
 
 Then open `PUBLIC_URL` and walk the first-boot wizard: create admin, connectors, import the bundle.
-Everyone else is added from **Admin > Users**. A bundle-less app is a legal state (§3.1): every
-artifact-dependent surface says "no bundle imported".
+Everyone else is added from **Admin > People**. A bundle-less app is a legal state (§3.1): every
+artifact-dependent surface says "no movie data yet".
 
 ## Configuration
 
