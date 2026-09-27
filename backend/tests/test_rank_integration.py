@@ -12,6 +12,7 @@ from spielplan.home import rail
 from spielplan.ledger import model, observations, refit
 from spielplan.ledger.hyperparams import DEFAULTS
 from spielplan.rank import drop, evaluation, queue, read, tiers
+from tests.helpers import insert_user
 
 PACKAGE = Path(__file__).resolve().parents[1] / "spielplan"
 
@@ -27,12 +28,6 @@ def fixture_embeddings(title_ids):
     if not ids:
         return np.zeros((0, 64)), np.zeros(0, dtype=bool)
     return np.stack([_embedding(t) for t in ids]), np.ones(len(ids), dtype=bool)
-
-
-async def make_user(db, name, role="member"):
-    return await db.fetchval(
-        "INSERT INTO app_user (name, role) VALUES ($1, $2) RETURNING id", name, role
-    )
 
 
 @pytest.fixture
@@ -52,8 +47,8 @@ async def world(db):
         [90 + (i * 13) % 80 for i in range(1, 13)],
     )
     return {
-        "patrick": await make_user(db, "patrick", "admin"),
-        "jenny": await make_user(db, "jenny"),
+        "patrick": await insert_user(db, "patrick", "admin"),
+        "jenny": await insert_user(db, "jenny"),
     }
 
 

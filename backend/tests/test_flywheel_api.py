@@ -9,8 +9,8 @@ import pytest
 from spielplan.acquire import pipeline
 from spielplan.flywheel import batch, store
 from spielplan.llm import client, pricing, spend
+from tests.helpers import household
 from tests.test_acquire_pipeline import SHIPPED, STANDS_DOWN, _refuse_to_crawl, _stands_down
-from tests.test_acquisition_board import _bootstrap
 from tests.test_flywheel_feed import TITLE, _tag, _title, _vocabulary, _walk
 from tests.test_flywheel_launch import BIG_CAP, A, B, _cap, _install
 
@@ -36,7 +36,7 @@ async def test_the_thin_facet_row_is_readable_from_the_route_the_moment_the_walk
     db, app, only_the_driver_is_live
 ):
     """No drain, job or sweep between the walk and the read: the observation commits inside the walk."""
-    admin, _member = await _bootstrap(app)
+    admin, _member = await household(app)
     await _vocabulary(db)
     await _title(db)
     await _tag(db, "mood.bleak")
@@ -57,7 +57,7 @@ async def test_the_queue_read_carries_the_rows_the_providers_the_defaults_and_th
     db, secrets_key, app
 ):
     """Money travels as strings: a JSON number is a binary float to the client."""
-    admin, _member = await _bootstrap(app)
+    admin, _member = await household(app)
     queued = await _install(db)
     await _cap(db, BIG_CAP)
 
@@ -79,7 +79,7 @@ async def test_the_queue_read_carries_the_rows_the_providers_the_defaults_and_th
 
 async def test_the_defaults_are_null_beside_the_stored_plans_refusal(db, secrets_key, app):
     """No provider assigned means no default plan, and the sentence says why rather than guessing one."""
-    admin, _member = await _bootstrap(app)
+    admin, _member = await household(app)
 
     defaults = (await admin.get("/api/admin/flywheel")).json()["defaults"]
 
@@ -88,7 +88,7 @@ async def test_the_defaults_are_null_beside_the_stored_plans_refusal(db, secrets
 
 
 async def test_the_quote_doubles_when_the_passes_go_from_one_to_two(db, secrets_key, app):
-    admin, _member = await _bootstrap(app)
+    admin, _member = await household(app)
     await _install(db)
     await _cap(db, BIG_CAP)
 
@@ -107,7 +107,7 @@ async def test_the_quote_doubles_when_the_passes_go_from_one_to_two(db, secrets_
 
 
 async def test_the_quote_over_the_cap_is_disabled_with_the_reason_naming_the_cap(db, secrets_key, app):
-    admin, _member = await _bootstrap(app)
+    admin, _member = await household(app)
     await _install(db)
     await _cap(db, 0.01)
 
@@ -119,7 +119,7 @@ async def test_the_quote_over_the_cap_is_disabled_with_the_reason_naming_the_cap
 
 
 async def test_the_quote_refuses_a_count_or_a_pass_it_cannot_price(db, secrets_key, app):
-    admin, _member = await _bootstrap(app)
+    admin, _member = await household(app)
 
     assert (await admin.get(QUOTE, params={"titles": 1, "providers": "gemini"})).status_code == 422
     assert (await admin.get(QUOTE, params={"titles": -1, "providers": "gemini", "passes": 1})
@@ -129,7 +129,7 @@ async def test_the_quote_refuses_a_count_or_a_pass_it_cannot_price(db, secrets_k
 
 
 async def test_launch_answers_200_with_the_batch_and_409_with_the_domains_sentence(db, secrets_key, app):
-    admin, _member = await _bootstrap(app)
+    admin, _member = await household(app)
     queued = await _install(db)
     await _cap(db, BIG_CAP)
     body = {"item_ids": [queued[A]], "providers": ["gemini"], "passes": 1}
@@ -160,7 +160,7 @@ async def test_launch_answers_200_with_the_batch_and_409_with_the_domains_senten
 
 async def test_a_launch_body_carries_no_figure_a_page_could_hold_the_cap_with(db, secrets_key, app):
     """Decision 441: the server is the gate; a figure a page sends is dropped unread."""
-    admin, _member = await _bootstrap(app)
+    admin, _member = await household(app)
     queued = await _install(db)
 
     refused = await admin.post("/api/admin/flywheel/launch", json={
@@ -174,7 +174,7 @@ async def test_a_launch_body_carries_no_figure_a_page_could_hold_the_cap_with(db
 
 async def test_a_batch_naming_no_provider_asks_for_one_and_never_for_a_relaunch(db, secrets_key, app):
     """Decision 442 refuses a batch naming no provider with the picker's sentence, not a relaunch's."""
-    admin, _member = await _bootstrap(app)
+    admin, _member = await household(app)
     queued = await _install(db)
 
     uncapped = await _quote(admin, titles=2, providers="", passes=1)
@@ -204,7 +204,7 @@ async def test_a_batch_naming_no_provider_asks_for_one_and_never_for_a_relaunch(
     ],
 )
 async def test_every_flywheel_route_refuses_a_member_and_a_stranger(app, db, method, path, body):
-    _admin, member = await _bootstrap(app)
+    _admin, member = await household(app)
     kwargs = {} if body is None else {"json": body}
 
     assert (await member.request(method, path, **kwargs)).status_code == 403

@@ -8,8 +8,8 @@ from datetime import UTC, datetime, timedelta
 from spielplan.acquire import intake
 from spielplan.api import admin as admin_api
 from spielplan.connectors.registry import save_jellyfin
+from tests.helpers import admin_client
 
-ADMIN_PASSWORD = "an-admin-password"
 JELLYFIN_URL = "http://jellyfin.test"
 POLL = "jellyfin-delta-poll"
 
@@ -41,15 +41,6 @@ async def _run(db, *, ok: bool | None, ago: timedelta, detail=None) -> tuple[dat
         POLL, started, None if ok is None else finished, ok, detail,
     )
     return started, finished
-
-
-async def _admin(app):
-    client = app()
-    created = await client.post(
-        "/api/setup/admin", json={"name": "patrick", "password": ADMIN_PASSWORD}
-    )
-    assert created.status_code == 201, created.text
-    return client
 
 
 def _close(stamp: str | datetime | None, expected: datetime) -> bool:
@@ -143,7 +134,7 @@ async def test_a_poll_still_running_is_neither_ok_nor_failed(db):
 
 async def test_an_unconfigured_install_answers_the_trigger_with_nulls_and_zeros(secrets_key, db, app):
     """A half-configured boot is legal (§3.1), so this is an answer, never a 500."""
-    admin = await _admin(app)
+    admin = await admin_client(app)
 
     got = await admin.get("/api/admin/connectors/jellyfin")
 
@@ -159,7 +150,7 @@ async def test_an_unconfigured_install_answers_the_trigger_with_nulls_and_zeros(
 
 async def test_the_connector_card_carries_the_trigger_and_never_its_credentials(secrets_key, db, app):
     """Neither the key nor the webhook token appears in the body (§14.3, decision 332)."""
-    admin = await _admin(app)
+    admin = await admin_client(app)
     saved = await admin.put(
         "/api/admin/connectors/jellyfin",
         json={"url": JELLYFIN_URL, "api_key": "JF-ADMIN-KEY-UNSCOPED-7731",

@@ -15,7 +15,7 @@ from spielplan.core import secrets as sec
 from spielplan.core import secrets_cli
 from spielplan.core.config import settings
 from spielplan.db import migrate
-from tests.test_backup import _drop, _recreate, _sibling
+from tests.helpers import create_database, drop_database, sibling
 
 # The last migration before 0015's backfill. Naming the first half keeps every later migration in
 # "the rest" automatically.
@@ -212,8 +212,8 @@ async def _seed_dek(conn: asyncpg.Connection, key_id: str, secrets_key: str) -> 
 @pytest.fixture
 async def upgrading(pg_url, tmp_path):
     """A database of its own: the schema is deliberately not this build's."""
-    admin, name, url = _sibling(pg_url, "_upgrade")
-    await _recreate(admin, name)
+    admin, name, url = sibling(pg_url, "_upgrade")
+    await create_database(admin, name)
     conn = await asyncpg.connect(url)
     try:
         directory = _stage(tmp_path, LAST_BEFORE)
@@ -223,21 +223,21 @@ async def upgrading(pg_url, tmp_path):
         yield conn, url, directory
     finally:
         await conn.close()
-        await _drop(admin, name)
+        await drop_database(admin, name)
 
 
 @pytest.fixture
 async def fresh(pg_url):
     """A brand-new install on this build, for the schema the upgrade has to arrive at."""
-    admin, name, url = _sibling(pg_url, "_fresh")
-    await _recreate(admin, name)
+    admin, name, url = sibling(pg_url, "_fresh")
+    await create_database(admin, name)
     conn = await asyncpg.connect(url)
     try:
         await migrate.apply_all(conn)
         yield conn
     finally:
         await conn.close()
-        await _drop(admin, name)
+        await drop_database(admin, name)
 
 
 async def test_the_newest_migrations_apply_over_populated_tables_and_land_this_builds_schema(
@@ -350,8 +350,8 @@ async def test_a_renamed_applied_migration_is_named_rather_than_dying_on_its_own
 
 async def test_two_concurrent_applies_both_complete_and_leave_one_row_per_migration(pg_url):
     """The advisory lock is session-level across the whole run, so one caller does every migration."""
-    admin, name, url = _sibling(pg_url, "_concurrent")
-    await _recreate(admin, name)
+    admin, name, url = sibling(pg_url, "_concurrent")
+    await create_database(admin, name)
     first = await asyncpg.connect(url)
     second = await asyncpg.connect(url)
     try:
@@ -371,7 +371,7 @@ async def test_two_concurrent_applies_both_complete_and_leave_one_row_per_migrat
     finally:
         await first.close()
         await second.close()
-        await _drop(admin, name)
+        await drop_database(admin, name)
 
 
 async def test_a_dump_from_an_older_release_leaves_ddl_the_next_boot_cannot_apply(fresh, tmp_path):
@@ -409,8 +409,8 @@ async def _run_cli(*argv: str) -> int:
 @pytest.fixture
 async def raced(pg_url, tmp_path, monkeypatch):
     """Only constructible before 0017, whose index then makes it unreachable."""
-    admin, name, url = _sibling(pg_url, "_raced")
-    await _recreate(admin, name)
+    admin, name, url = sibling(pg_url, "_raced")
+    await create_database(admin, name)
     conn = await asyncpg.connect(url)
     directory = _stage(tmp_path, "0016_users")
     await migrate.apply_all(conn, directory)
@@ -421,7 +421,7 @@ async def raced(pg_url, tmp_path, monkeypatch):
         yield conn, directory
     finally:
         await conn.close()
-        await _drop(admin, name)
+        await drop_database(admin, name)
         settings.cache_clear()
 
 

@@ -8,7 +8,6 @@ import asyncio
 import logging
 import shutil
 import time
-from datetime import UTC, datetime
 from pathlib import Path
 
 from spielplan import worker
@@ -19,27 +18,7 @@ from spielplan.models import basis
 from spielplan.models.artifacts import active_bundle_key
 from spielplan.scoring import backbone
 from tests.fixtures import make_bundle as fx
-
-ADMIN_PASSWORD = "an-admin-password"
-
-
-async def _admin(app):
-    client = app()
-    created = await client.post(
-        "/api/setup/admin", json={"name": "patrick", "password": ADMIN_PASSWORD}
-    )
-    assert created.status_code == 201, created.text
-    return client
-
-
-async def _tick() -> None:
-    row = next(j for j in worker.JOBS if j.name == worker.BUNDLE_IMPORT_JOB)
-    jobs = worker.JOBS
-    worker.JOBS = (row,)
-    try:
-        await worker._tick(time.monotonic(), datetime.now(UTC), {row.name: time.monotonic()}, {})
-    finally:
-        worker.JOBS = jobs
+from tests.helpers import admin_client, tick_one
 
 
 async def _import(db, root: Path) -> None:
@@ -60,14 +39,14 @@ def _models_only(root: Path) -> Path:
 async def test_a_first_import_is_served_without_a_restart(app, db, tmp_path):
     """Every surface is read after the poll that reports the
     flip, because that poll is where the re-pin runs."""
-    admin = await _admin(app)
+    admin = await admin_client(app)
     state = admin._transport.app.state
     assert state.artifacts.is_empty, "the app under test has to boot bundle-less (section 3.1)"
     root = fx.make_bundle(tmp_path / "import" / "test-v1", version="test-v1")
 
     answer = await admin.post("/api/admin/bundle/import", json={"path": str(root)})
     assert answer.status_code == 202, answer.text
-    await _tick()
+    await tick_one(worker.BUNDLE_IMPORT_JOB, due=False)
 
     done = (await admin.get("/api/admin/bundle/state")).json()
     assert done["import_job"]["phase"] == "active", done["import_job"]
@@ -92,7 +71,7 @@ async def test_a_first_import_is_served_without_a_restart(app, db, tmp_path):
 async def test_the_repin_replaces_store_backbone_and_constants_together(app, db, tmp_path):
     """A re-pin that moved only the store would be worse than none: default constants change `hp_digest`
     and invalidate every cached fit. `load_for` is cached per file stamp, so identity is comparable."""
-    admin = await _admin(app)
+    admin = await admin_client(app)
     state = admin._transport.app.state
     await _import(db, fx.make_bundle(tmp_path / "import" / "test-v1", version="test-v1"))
 
@@ -108,7 +87,7 @@ async def test_the_repin_replaces_store_backbone_and_constants_together(app, db,
 async def test_a_models_only_reimport_of_a_new_version_is_served_without_a_restart(
     app, db, tmp_path
 ):
-    admin = await _admin(app)
+    admin = await admin_client(app)
     state = admin._transport.app.state
     await _import(db, fx.make_bundle(tmp_path / "import" / "test-v1", version="test-v1"))
     await basis.refresh(state)
@@ -129,7 +108,7 @@ async def test_a_models_only_reimport_of_a_new_version_is_served_without_a_resta
 
 async def test_a_restaged_broken_install_is_served_without_a_restart(app, db, tmp_path):
     """A restage keeps the version, which is why the re-pin compares `activated_at` as well."""
-    admin = await _admin(app)
+    admin = await admin_client(app)
     state = admin._transport.app.state
     root = fx.make_bundle(tmp_path / "import" / "test-v1", version="test-v1")
     await _import(db, root)
@@ -151,7 +130,7 @@ async def test_a_restage_whose_load_fails_is_reported_as_the_restart_it_owes(
 ):
     """A restage moves `activated_at` and not the version,
     so a version comparison missed the owed restart."""
-    admin = await _admin(app)
+    admin = await admin_client(app)
     state = admin._transport.app.state
     root = fx.make_bundle(tmp_path / "import" / "test-v1", version="test-v1")
     await _import(db, root)
@@ -185,7 +164,7 @@ async def test_a_load_that_fails_keeps_serving_and_says_a_restart_is_owed(
     app, db, tmp_path, monkeypatch, caplog
 ):
     """The failure is logged once per row, not once per tick, and the next ask after the fix loads."""
-    admin = await _admin(app)
+    admin = await admin_client(app)
     state = admin._transport.app.state
     await _import(db, fx.make_bundle(tmp_path / "import" / "test-v1", version="test-v1"))
 
@@ -218,7 +197,7 @@ async def test_a_load_that_fails_keeps_serving_and_says_a_restart_is_owed(
 async def test_the_timer_repins_without_any_request(app, db, tmp_path, monkeypatch):
     """A flip nobody polls for is loaded within `FOLLOW_SECONDS`,
     so a first tap does not meet the swap's 409."""
-    admin = await _admin(app)
+    admin = await admin_client(app)
     state = admin._transport.app.state
     monkeypatch.setattr(basis, "FOLLOW_SECONDS", 0.05)
     basis.start(state, settings().artifacts_dir)

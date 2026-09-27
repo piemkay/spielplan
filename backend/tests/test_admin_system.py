@@ -19,36 +19,9 @@ from spielplan.core import secrets as sec
 from spielplan.core.config import settings
 from spielplan.sync import playback
 from spielplan.sync import seen as seen_sync
+from tests.helpers import admin_client, member_client
 
-ADMIN_PASSWORD = "an-admin-password"
-MEMBER_PASSWORD = "a-member-password"
 BACKUP = admin_api.BACKUP_JOB
-
-
-async def _admin(app):
-    client = app()
-    created = await client.post(
-        "/api/setup/admin", json={"name": "patrick", "password": ADMIN_PASSWORD}
-    )
-    assert created.status_code == 201, created.text
-    return client
-
-
-async def _member(app, admin):
-    """Past §3.1's forced first-login change, so a 403 means the role."""
-    made = await admin.post("/api/admin/users", json={"name": "jenny", "role": "member"})
-    assert made.status_code == 201, made.text
-    otp = made.json()["one_time_password"]
-    client = app()
-    assert (
-        await client.post("/api/auth/login", json={"name": "jenny", "password": otp})
-    ).status_code == 200
-    changed = await client.post(
-        "/api/auth/password",
-        json={"current_password": otp, "new_password": MEMBER_PASSWORD},
-    )
-    assert changed.status_code == 200, changed.text
-    return client
 
 
 async def _run(db, name: str, *, ok: bool | None, ago: timedelta, detail=None) -> None:
@@ -121,7 +94,7 @@ def test_two_keys_have_two_fingerprints():
 
 async def test_the_card_reports_six_facts_and_no_more(secrets_key, db, app):
     """An equality on the key set, so a seventh key arrives here before it arrives on any screen."""
-    admin = await _admin(app)
+    admin = await admin_client(app)
     card = await _card(admin)
 
     assert sorted(card) == ["backup", "jobs", "last_syncs", "logs", "queue", "secrets"]
@@ -136,7 +109,7 @@ async def test_the_card_reports_six_facts_and_no_more(secrets_key, db, app):
 
 async def test_queue_depth_is_reported_by_state_and_by_kind(secrets_key, db, app):
     """Every allowed state is present, zero included, so "nothing failed" is a printed 0."""
-    admin = await _admin(app)
+    admin = await admin_client(app)
     for key in ("jellyfin:a1", "jellyfin:b2", "jellyfin:c3"):
         await queue.enqueue(db, "acquire", key)
     await queue.enqueue(db, "enrich", "t:1000000001")
@@ -155,7 +128,7 @@ async def test_queue_depth_is_reported_by_state_and_by_kind(secrets_key, db, app
 
 async def test_a_last_sync_is_the_newest_successful_run_not_the_newest_run(secrets_key, db, app):
     """Newest SUCCESSFUL: a job that never succeeded is a null, not dropped."""
-    admin = await _admin(app)
+    admin = await admin_client(app)
     # A refused key is not a failed row: `seen.sync_all` returns a report for it rather than raising.
     await _run(db, "jellyfin-seen-sync", ok=True, ago=timedelta(hours=5),
                detail={"pushed": 2, "reached": True})
@@ -197,7 +170,7 @@ async def _poll_status(admin) -> dict:
 
 async def test_a_sync_job_that_asked_no_server_is_no_last_sync(secrets_key, db, app):
     """The worker records `ok` for a run that asked nobody, which is no sync."""
-    admin = await _admin(app)
+    admin = await admin_client(app)
     for name in admin_api.SYNC_JOBS:
         await _fire(name)
     assert await db.fetchval("SELECT count(*) FROM job_run WHERE ok") == len(admin_api.SYNC_JOBS)
@@ -212,7 +185,7 @@ async def test_a_sync_job_that_could_not_reach_its_server_is_no_last_sync(
     secrets_key, db, app, hangs_up
 ):
     """The seen sync and sessions poll swallow an outage and close ok; those are not syncs."""
-    admin = await _admin(app)
+    admin = await admin_client(app)
     saved = await admin.put("/api/admin/connectors/jellyfin",
                             json={"url": hangs_up, "api_key": "a-jellyfin-key-for-a-server-that-is-down"})
     assert saved.status_code == 200, saved.text
@@ -231,7 +204,7 @@ async def test_a_sync_job_that_reached_its_server_is_a_last_sync(
     secrets_key, db, app, fake_jellyfin, monkeypatch
 ):
     module, transport = fake_jellyfin
-    admin = await _admin(app)
+    admin = await admin_client(app)
     await registry.save_jellyfin(db, url="http://jellyfin.test", api_key=module.API_KEY)
     monkeypatch.setattr(
         registry, "make_client",
@@ -249,7 +222,7 @@ async def test_a_sync_job_that_reached_its_server_is_a_last_sync(
 
 async def test_a_fortnight_offline_does_not_turn_the_last_sync_into_never(secrets_key, db, app):
     """The prune must keep the newest row that reached the server, not merely the newest ok row."""
-    admin = await _admin(app)
+    admin = await admin_client(app)
     await _run(db, "jellyfin-seen-sync", ok=True, ago=timedelta(days=20),
                detail={"pushed": 1, "reached": True})
     for day in range(19, 0, -1):
@@ -310,7 +283,7 @@ def test_the_ring_hangs_off_the_spielplan_logger_and_no_other():
 
 async def test_the_recent_log_lines_are_the_web_process_own_and_carry_no_key(secrets_key, db, app):
     """The whole serialised body is searched, so a field added later is caught."""
-    admin = await _admin(app)
+    admin = await admin_client(app)
     logging.getLogger("spielplan.test").warning(
         "GET https://h.test/3/movie?api_key=SECRETXYZ&x=1 marker-4471 answered 401"
     )
@@ -338,7 +311,7 @@ async def test_the_recent_log_lines_are_the_web_process_own_and_carry_no_key(sec
 
 async def test_the_ring_holds_two_hundred_lines_however_many_are_written(secrets_key, db, app):
     """Bounded at 200 and newest last."""
-    admin = await _admin(app)
+    admin = await admin_client(app)
     chatty = logging.getLogger("spielplan.test.chatty")
     for n in range(10_000):
         chatty.warning("line %d of a loop that logs too much", n)
@@ -355,7 +328,7 @@ async def test_a_jellyfin_key_pasted_with_a_space_is_stored_trimmed_and_printed_
 ):
     """A double-clicked key carries a trailing space, which h11 quotes whole into every error."""
     key = "JFYNkey0p9o8i7u6y5t4r3e2w1q"
-    admin = await _admin(app)
+    admin = await admin_client(app)
 
     def carries(text: str) -> bool:
         return any(key[i : i + 6] in text for i in range(len(key) - 5))
@@ -420,7 +393,7 @@ def test_the_system_card_declares_a_read_and_nothing_else():
 
 async def test_the_card_never_hands_the_secrets_key_to_the_browser(secrets_key, db, app):
     """The whole serialised response, so a later config echo or debug dump is caught."""
-    admin = await _admin(app)
+    admin = await admin_client(app)
     got = await admin.get("/api/admin/system")
 
     assert got.status_code == 200
@@ -431,7 +404,7 @@ async def test_the_card_never_hands_the_secrets_key_to_the_browser(secrets_key, 
 
 async def test_the_card_reports_the_newest_run_of_each_job(secrets_key, db, app):
     """The older rows stay: the card is a projection, not a delete."""
-    admin = await _admin(app)
+    admin = await admin_client(app)
     await _run(db, "fold-in-tick", ok=True, ago=timedelta(hours=3), detail={"users": 1})
     await _run(db, "fold-in-tick", ok=False, ago=timedelta(minutes=2), detail={"error": "boom"})
     await _run(db, "session-prune", ok=True, ago=timedelta(minutes=30), detail=None)
@@ -450,7 +423,7 @@ async def test_a_job_that_started_and_never_finished_is_reported_as_unfinished(
     secrets_key, db, app
 ):
     """`ok IS NULL` is a crash, not a job failure; collapsing it sends the operator after an exception."""
-    admin = await _admin(app)
+    admin = await admin_client(app)
     await _run(db, "nightly-backup", ok=None, ago=timedelta(minutes=5))
 
     job = (await _card(admin))["jobs"][0]
@@ -464,7 +437,7 @@ async def test_the_backup_fact_is_the_newest_successful_dump_not_the_newest_atte
     secrets_key, db, app
 ):
     """`jobs` says the last attempt failed; `backup` says when a dump last succeeded."""
-    admin = await _admin(app)
+    admin = await admin_client(app)
     await _run(db, BACKUP, ok=True, ago=timedelta(hours=10), detail={"bytes": 4096, "kept": 14})
     await _run(db, BACKUP, ok=False, ago=timedelta(minutes=5), detail={"error": "no pg_dump"})
 
@@ -486,7 +459,7 @@ async def test_a_dump_is_stale_once_it_is_older_than_a_night_and_a_half(
     secrets_key, db, app, hours, stale
 ):
     """Asserted from both sides: a threshold tested only where obviously true is a constant."""
-    admin = await _admin(app)
+    admin = await admin_client(app)
     await _run(db, BACKUP, ok=True, ago=timedelta(hours=hours), detail={"bytes": 1})
 
     card = await _card(admin)
@@ -497,7 +470,7 @@ async def test_a_dump_is_stale_once_it_is_older_than_a_night_and_a_half(
 
 async def test_an_install_that_has_never_completed_a_dump_is_stale(secrets_key, db, app):
     """"No backup yet" and "no backup since Tuesday" are one problem to whoever needs one."""
-    admin = await _admin(app)
+    admin = await admin_client(app)
     await _run(db, BACKUP, ok=False, ago=timedelta(minutes=1), detail={"error": "no pg_dump"})
 
     card = await _card(admin)
@@ -511,7 +484,7 @@ async def test_a_fortnight_of_failures_does_not_turn_the_last_good_dump_into_nev
     secrets_key, db, app
 ):
     """Pruned by age alone, the last good row vanishes and the card claims no dump ever completed."""
-    admin = await _admin(app)
+    admin = await admin_client(app)
     await _run(db, BACKUP, ok=True, ago=timedelta(days=15), detail={"bytes": 41235968})
     for night in range(13, 0, -1):
         await _run(db, BACKUP, ok=False, ago=timedelta(days=night), detail={"error": "no space"})
@@ -529,7 +502,7 @@ async def test_a_fortnight_of_failures_does_not_turn_the_last_good_dump_into_nev
 
 async def test_a_household_whose_worker_has_not_run_yet_is_named_no_jobs(secrets_key, db, app):
     """Newest row per *registered* job, inner join: a fresh boot is no rows, not twelve rows of nulls."""
-    admin = await _admin(app)
+    admin = await admin_client(app)
     await _run(db, "a-job-this-build-does-not-have", ok=True, ago=timedelta(minutes=1))
 
     card = await _card(admin)
@@ -540,7 +513,7 @@ async def test_a_household_whose_worker_has_not_run_yet_is_named_no_jobs(secrets
 
 async def test_the_data_tab_payload_does_not_carry_this_cards_facts(secrets_key, db, app):
     """A second copy of the 36-hour rule is how two screens start disagreeing about one dump."""
-    admin = await _admin(app)
+    admin = await admin_client(app)
     await _run(db, BACKUP, ok=True, ago=timedelta(hours=40), detail={"bytes": 77})
 
     state = await admin.get("/api/admin/bundle/state")
@@ -554,7 +527,7 @@ async def test_a_wrong_secrets_key_is_reported_rather_than_raised(
     secrets_key, db, app, monkeypatch
 ):
     """A restore whose `.env` did not come with it: this route must *name* the state."""
-    admin = await _admin(app)
+    admin = await admin_client(app)
     before = await _card(admin)
     assert before["secrets"]["unreadable"] is False
     key_id = before["secrets"]["key_id"]
@@ -574,7 +547,7 @@ async def test_the_connectors_repair_does_not_heal_this_card_while_a_secret_is_s
     secrets_key, db, app, monkeypatch
 ):
     """The question is "is anything unopenable", not "does the active DEK row unwrap"."""
-    admin = await _admin(app)
+    admin = await admin_client(app)
     saved = await admin.put(
         "/api/admin/connectors/jellyfin",
         json={"url": "http://jellyfin.test", "api_key": "JF-ADMIN-KEY-UNSCOPED"},
@@ -607,7 +580,7 @@ async def test_an_install_with_no_secrets_key_reports_that_rather_than_a_fingerp
     no_secrets_key, db, app
 ):
     """`configured: false`, not a fingerprint of nothing."""
-    admin = await _admin(app)
+    admin = await admin_client(app)
 
     card = await _card(admin)
 
@@ -619,8 +592,8 @@ async def test_an_install_with_no_secrets_key_reports_that_rather_than_a_fingerp
 
 
 async def test_the_card_is_refused_to_a_signed_out_caller_and_to_a_member(secrets_key, db, app):
-    admin = await _admin(app)
-    member = await _member(app, admin)
+    admin = await admin_client(app)
+    member = await member_client(app, admin)
     anonymous = app()
 
     assert (await anonymous.get("/api/admin/system")).status_code == 401

@@ -16,6 +16,7 @@ from spielplan.core.config import settings
 from spielplan.importer import bundle as bundle_import
 from spielplan.llm import spend
 from tests.fixtures import make_bundle as fx
+from tests.helpers import household
 from tests.test_acquire_pipeline import (
     MOVIE,
     TRAKT_HOST,
@@ -26,7 +27,6 @@ from tests.test_acquire_pipeline import (
     _factory,
     _json_route,
 )
-from tests.test_acquisition_board import _bootstrap
 
 # §4.1's partition: the app's own ids start at 1e9. Written directly: the subject is the actions.
 PARKED = 1_000_000_801
@@ -453,7 +453,7 @@ async def test_the_board_names_the_ten_stages_and_the_actions_each_job_admits(ap
     for title_id, state in states.items():
         await _title(db, title_id, f"title {title_id}")
         await _job(db, title_id, stage=4, status=state, reason=f"{state} for this test")
-    admin, _member = await _bootstrap(app)
+    admin, _member = await household(app)
 
     payload = (await admin.get("/api/admin/acquisition")).json()
 
@@ -471,7 +471,7 @@ async def test_the_three_actions_answer_with_the_job_or_refuse_with_the_sentence
     await _title(db, PARKED)
     await _job(db, PARKED, stage=4, status=pipeline.PARKED, reason="waiting on reviews")
     await _title(db, OTHER)
-    admin, _member = await _bootstrap(app)
+    admin, _member = await household(app)
 
     retried = await admin.post(f"/api/admin/acquisition/{FAILED}/retry")
     assert retried.status_code == 200, retried.text
@@ -505,7 +505,7 @@ async def test_the_three_actions_answer_with_the_job_or_refuse_with_the_sentence
 async def test_the_three_actions_refuse_a_member_and_a_stranger(app, db, path, body):
     await _title(db, PARKED)
     await _job(db, PARKED, stage=4, status=pipeline.PARKED, reason="waiting")
-    _admin, member = await _bootstrap(app)
+    _admin, member = await household(app)
     before = await _snapshot(db)
 
     assert (await member.post(path, json=body)).status_code == 403

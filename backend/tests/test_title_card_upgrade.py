@@ -12,7 +12,7 @@ import pytest
 from spielplan.db import migrate
 from spielplan.derive import ids
 from spielplan.importer import meta
-from tests.test_backup import _drop, _recreate, _sibling
+from tests.helpers import create_database, drop_database, sibling
 from tests.test_upgrade_drill import _complete, _stage
 
 MIGRATION = "0037_title_card_and_alias_kind"
@@ -57,8 +57,8 @@ def _last_before_the_migration() -> str:
 
 @pytest.fixture
 async def before_the_migration(pg_url, tmp_path):
-    admin, name, url = _sibling(pg_url, "_pre0037")
-    await _recreate(admin, name)
+    admin, name, url = sibling(pg_url, "_pre0037")
+    await create_database(admin, name)
     conn = await asyncpg.connect(url)
     await conn.set_type_codec("jsonb", encoder=json.dumps, decoder=json.loads, schema="pg_catalog")
     try:
@@ -68,7 +68,7 @@ async def before_the_migration(pg_url, tmp_path):
         yield conn, directory
     finally:
         await conn.close()
-        await _drop(admin, name)
+        await drop_database(admin, name)
 
 
 async def _seed(conn: asyncpg.Connection) -> None:

@@ -17,10 +17,7 @@ from spielplan.api import deps
 from spielplan.app import create_app
 from spielplan.core import auth
 from spielplan.core.config import settings
-
-ADMIN_PASSWORD = "an-admin-password"
-MEMBER_PASSWORD = "a-member-password"
-
+from tests.helpers import ADMIN_PASSWORD, MEMBER_PASSWORD, household
 
 # The count the walk finds today, as an equality: a dropped router or a swapped gate fails here, and an
 # added admin route fails until the number is re-stated.
@@ -76,29 +73,6 @@ def admin_paths() -> list[tuple[str, str]]:
 def concrete(path: str) -> str:
     """Every `{...}`, or an unlisted parameter would be probed as the literal `{event_id}`."""
     return re.sub(r"\{[^}]+\}", "999999", path)
-
-
-async def _bootstrap(app):
-    admin = app()
-    created = await admin.post(
-        "/api/setup/admin", json={"name": "patrick", "password": ADMIN_PASSWORD}
-    )
-    assert created.status_code == 201
-
-    made = await admin.post("/api/admin/users", json={"name": "jenny", "role": "member"})
-    assert made.status_code == 201
-    otp = made.json()["one_time_password"]
-
-    member = app()
-    signed_in = await member.post("/api/auth/login", json={"name": "jenny", "password": otp})
-    assert signed_in.status_code == 200
-    # §3.1: the account is locked to a password change; clear it so later 403s are about role.
-    changed = await member.post(
-        "/api/auth/password",
-        json={"current_password": otp, "new_password": MEMBER_PASSWORD},
-    )
-    assert changed.status_code == 200
-    return admin, member
 
 
 def test_a_route_without_conn_still_holds_a_pooled_connection_for_its_session():
@@ -225,7 +199,7 @@ async def test_the_spa_fallback_does_not_answer_for_the_api_namespace(tmp_path):
 
 @pytest.mark.parametrize(("method", "path"), admin_paths(), ids=lambda v: str(v))
 async def test_every_admin_route_refuses_a_member(app, method, path):
-    _admin, member = await _bootstrap(app)
+    _admin, member = await household(app)
     response = await member.request(method, concrete(path), json={})
     assert response.status_code == 403, f"{method} {path} let a member through"
 
@@ -239,7 +213,7 @@ async def test_every_admin_route_refuses_a_signed_out_caller(app, method, path):
 
 async def test_a_member_receives_no_admin_entry_in_its_navigation(app):
     """"Hidden, not merely disabled": a client-side check still ships the link in the response."""
-    _admin, member = await _bootstrap(app)
+    _admin, member = await household(app)
     payload = (await member.get("/api/auth/me")).json()
     keys = {entry["key"] for entry in payload["nav"]["account"]}
     # "My Taste" left with decision 488: it led to the same unbuilt placeholder as the tab.
@@ -248,7 +222,7 @@ async def test_a_member_receives_no_admin_entry_in_its_navigation(app):
 
 
 async def test_an_admin_receives_the_admin_entries(app):
-    admin, _member = await _bootstrap(app)
+    admin, _member = await household(app)
     payload = (await admin.get("/api/auth/me")).json()
     keys = {entry["key"] for entry in payload["nav"]["account"]}
     assert {"admin", "setup"} <= keys
@@ -256,7 +230,7 @@ async def test_an_admin_receives_the_admin_entries(app):
 
 async def test_both_roles_see_every_shipped_surface(app):
     """Decision 488: an unshipped surface is in neither role's navigation."""
-    admin, member = await _bootstrap(app)
+    admin, member = await household(app)
     for client in (admin, member):
         payload = (await client.get("/api/auth/me")).json()
         assert [s["key"] for s in payload["nav"]["surfaces"]] == [
@@ -272,7 +246,7 @@ async def test_a_surface_enters_navigation_in_its_place_when_it_ships(app, monke
 
     shipped = tuple({**s, "built": True} if s["key"] == "map" else s for s in auth_api.SURFACES)
     monkeypatch.setattr(auth_api, "SURFACES", shipped)
-    _admin, member = await _bootstrap(app)
+    _admin, member = await household(app)
     payload = (await member.get("/api/auth/me")).json()
     assert [s["key"] for s in payload["nav"]["surfaces"]] == [
         "home", "rate", "tonight", "rank", "map"
@@ -282,7 +256,7 @@ async def test_a_surface_enters_navigation_in_its_place_when_it_ships(app, monke
 
 async def test_a_stale_admin_session_is_re_prompted(db, app):
     """§3.2: "admin routes re-prompt after 24 h"."""
-    admin, _member = await _bootstrap(app)
+    admin, _member = await household(app)
     assert (await admin.get("/api/admin/users")).status_code == 200
 
     await db.execute(
@@ -299,14 +273,14 @@ async def test_a_stale_admin_session_is_re_prompted(db, app):
 
 async def test_the_me_payload_reports_the_re_prompt(app, db):
     """The shell has to know before it renders the admin link, not after a 401."""
-    admin, _member = await _bootstrap(app)
+    admin, _member = await household(app)
     await db.execute("UPDATE auth_session SET admin_verified_at = now() - interval '25 hours'")
     assert (await admin.get("/api/auth/me")).json()["admin_reauth_required"] is True
 
 
 async def test_a_wrong_pin_leaves_the_session_identity_unchanged(db, app):
     """§3.2: the account chip "switches between member profiles, gated by the per-user PIN"."""
-    admin, member = await _bootstrap(app)
+    admin, member = await household(app)
     await member.post(
         "/api/auth/pin", json={"pin": "4821", "current_password": MEMBER_PASSWORD}
     )
@@ -318,7 +292,7 @@ async def test_a_wrong_pin_leaves_the_session_identity_unchanged(db, app):
 
 
 async def test_a_correct_pin_switches_the_session(app):
-    admin, member = await _bootstrap(app)
+    admin, member = await household(app)
     await member.post(
         "/api/auth/pin", json={"pin": "4821", "current_password": MEMBER_PASSWORD}
     )
@@ -335,7 +309,7 @@ async def test_a_correct_pin_switches_the_session(app):
 
 async def test_switching_to_an_account_with_no_pin_is_refused(app):
     """The chip only offers profiles that set one; otherwise it is a door with no lock."""
-    admin, member = await _bootstrap(app)
+    admin, member = await household(app)
     jenny = (await member.get("/api/auth/me")).json()["id"]
     refused = await admin.post("/api/auth/switch", json={"user_id": jenny, "pin": "4821"})
     assert refused.status_code == 401
@@ -343,7 +317,7 @@ async def test_switching_to_an_account_with_no_pin_is_refused(app):
 
 
 async def test_the_switch_list_only_names_profiles_with_a_pin(app):
-    admin, member = await _bootstrap(app)
+    admin, member = await household(app)
     assert (await admin.get("/api/auth/switchable")).json() == []
     await member.post(
         "/api/auth/pin", json={"pin": "4821", "current_password": MEMBER_PASSWORD}
@@ -353,7 +327,7 @@ async def test_the_switch_list_only_names_profiles_with_a_pin(app):
 
 async def test_the_switch_route_refuses_an_anonymous_caller(app):
     """A 4-digit PIN accepted from anyone would be 10,000 guesses against an ungated route."""
-    _admin, member = await _bootstrap(app)
+    _admin, member = await household(app)
     await member.post(
         "/api/auth/pin", json={"pin": "4821", "current_password": MEMBER_PASSWORD}
     )
@@ -365,7 +339,7 @@ async def test_the_switch_route_refuses_an_anonymous_caller(app):
 
 
 async def test_a_locked_out_account_refuses_even_the_right_pin(db, app):
-    admin, member = await _bootstrap(app)
+    admin, member = await household(app)
     await member.post(
         "/api/auth/pin", json={"pin": "4821", "current_password": MEMBER_PASSWORD}
     )
@@ -527,7 +501,7 @@ async def _websocket(client, path: str) -> list[dict]:
 
 async def test_the_tonight_channel_refuses_a_locked_account(app):
     """The close code 1008 is asserted, and an unlocked member must still be served."""
-    admin, member = await _bootstrap(app)
+    admin, member = await household(app)
     otp = (
         await admin.post("/api/admin/users", json={"name": "kim", "role": "member"})
     ).json()["one_time_password"]
@@ -561,7 +535,7 @@ async def test_a_wrong_name_and_a_wrong_password_cost_the_same(app, monkeypatch)
     """Counted, not clocked: both paths must do the same argon2 work and the
     same round trips. The patch is on the sync primitive `to_thread`
     resolves; the one-row write residual is asserted as the number it is."""
-    admin, _member = await _bootstrap(app)
+    admin, _member = await household(app)
 
     calls: list[str] = []
     real = auth.verify_password

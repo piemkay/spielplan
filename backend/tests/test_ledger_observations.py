@@ -21,6 +21,7 @@ from spielplan.models.artifacts import ArtifactStore
 from spielplan.scoring import backbone as bb
 from spielplan.scoring import serve
 from tests.fixtures import make_bundle as fx
+from tests.helpers import insert_user
 
 PACKAGE = Path(__file__).resolve().parents[1] / "spielplan"
 
@@ -55,19 +56,13 @@ async def make_titles(db, specs):
     )
 
 
-async def make_user(db, name, role="member"):
-    return await db.fetchval(
-        "INSERT INTO app_user (name, role) VALUES ($1, $2) RETURNING id", name, role
-    )
-
-
 @pytest.fixture
 async def world(db):
     await make_titles(
         db,
         [(i, "movie" if i <= 6 else "series", f"Title {i}") for i in range(1, 9)],
     )
-    return {"user": await make_user(db, "patrick", "admin")}
+    return {"user": await insert_user(db, "patrick", "admin")}
 
 
 BUNDLE = "test-v1"
@@ -123,7 +118,7 @@ async def served(db, store):
             title_id, BUNDLE, bb.pack_vec(cold_vector(title_id)), b_hat,
         )
     backbone = bb.Backbone.open(store)
-    user = await make_user(db, "patrick", "admin")
+    user = await insert_user(db, "patrick", "admin")
     return {"user": user, "backbone": backbone, "store": store}
 
 
@@ -304,7 +299,7 @@ async def test_undo_unstamps_the_row_it_superseded_and_stops_at_the_block_bounda
 async def test_undo_refuses_another_persons_observation(db, world):
     """The journal is per person. A row id is not an authorisation."""
     user = world["user"]
-    other = await make_user(db, "jenny")
+    other = await insert_user(db, "jenny")
     write = await observations.record_verdict(db, user_id=user, title_id=1, value=2)
     with pytest.raises(UndoRefused):
         await observations.undo(db, user_id=other, write=write)
@@ -782,7 +777,7 @@ async def test_a_non_finite_fit_never_reaches_a_shelf(db, world, monkeypatch):
 async def test_refit_all_covers_every_active_person_and_both_kinds(db, world):
     """§4.1 rule 5 makes the nightly row two fits per person."""
     user = world["user"]
-    other = await make_user(db, "jenny")
+    other = await insert_user(db, "jenny")
     await _rate(db, user, verdicts=[(1, 2), (2, 0), (3, 1)])
     await _rate(db, other, verdicts=[(7, 2), (8, 0)])
 
@@ -1105,7 +1100,7 @@ async def _big_world(
     }
     ids = []
     for index, name in enumerate(users):
-        user = await make_user(db, name, "admin" if index == 0 else "member")
+        user = await insert_user(db, name, "admin" if index == 0 else "member")
         ids.append(user)
         rng = np.random.default_rng(20 + index)
         taste = _embedding(7 + index)

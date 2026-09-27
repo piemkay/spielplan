@@ -9,7 +9,7 @@ import asyncpg
 import pytest
 
 from spielplan.db import migrate
-from tests.test_backup import _drop, _recreate, _sibling
+from tests.helpers import create_database, drop_database, sibling
 from tests.test_upgrade_drill import _complete, _stage
 
 MIGRATION = "0029_flywheel"
@@ -242,8 +242,8 @@ def _last_before_the_migration() -> str:
 @pytest.fixture
 async def before_the_migration(pg_url, tmp_path):
     """A database of its own, not `db`'s: the schema is deliberately not this build's."""
-    admin, name, url = _sibling(pg_url, "_pre0029")
-    await _recreate(admin, name)
+    admin, name, url = sibling(pg_url, "_pre0029")
+    await create_database(admin, name)
     conn = await asyncpg.connect(url)
     try:
         directory = _stage(tmp_path, _last_before_the_migration())
@@ -252,7 +252,7 @@ async def before_the_migration(pg_url, tmp_path):
         yield conn, directory
     finally:
         await conn.close()
-        await _drop(admin, name)
+        await drop_database(admin, name)
 
 
 async def test_an_install_upgraded_to_0029_keeps_its_board_and_reads_its_axis_as_the_bundles(

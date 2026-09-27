@@ -20,6 +20,7 @@ from spielplan.home import rail
 from spielplan.ledger import observations, refit
 from spielplan.ledger.hyperparams import DEFAULTS
 from spielplan.rate import session
+from tests.helpers import insert_user
 
 HP = DEFAULTS
 
@@ -52,12 +53,6 @@ async def make_titles(db, specs) -> None:
     )
 
 
-async def make_user(db, name="patrick", role="admin") -> int:
-    return await db.fetchval(
-        "INSERT INTO app_user (name, role) VALUES ($1, $2) RETURNING id", name, role
-    )
-
-
 async def label(db, user_id: int, title_id: int, value: int = 2) -> None:
     """Written directly: going through the surface would consume slots and cards."""
     await db.execute(
@@ -78,7 +73,7 @@ async def label(db, user_id: int, title_id: int, value: int = 2) -> None:
 async def world(db):
     """Twenty films, because the block test spends fifteen."""
     await make_titles(db, [(i, "movie", f"Title {i}") for i in range(1, 21)])
-    return {"user": await make_user(db)}
+    return {"user": await insert_user(db, "patrick", "admin")}
 
 
 @pytest.fixture
@@ -304,7 +299,7 @@ async def test_every_card_that_stands_in_for_another_type_carries_its_marker(db,
 
     # 1. The thin-pool substitution: disliked ratings pass decision 492's warm-up, and decision
     #    493 keeps them out of a first sitting's pairs.
-    lonely = await make_user(db, "lonely", "member")
+    lonely = await insert_user(db, "lonely", "member")
     await rated_elsewhere(db, lonely, range(21, 36), 0)
     thin = await open_session(db, lonely)
     thin = (await session.record_verdict(db, thin, card_token=token(thin), value=2, hp=HP)).session
@@ -328,7 +323,7 @@ async def test_every_card_that_stands_in_for_another_type_carries_its_marker(db,
 
     # 3. `_redraw_pair`'s fallback: a correction that leaves the survivor's band with nobody in
     #    it, which is the same substitution by a different door.
-    solitary = await make_user(db, "solitary", "member")
+    solitary = await insert_user(db, "solitary", "member")
     await label(db, solitary, 1, 1)
     await label(db, solitary, 2, 1)
     lone = await session.open_or_resume(db, user_id=solitary, kinds=["movie"])

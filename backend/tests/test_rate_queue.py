@@ -10,18 +10,13 @@ import pytest
 from spielplan.ledger import observations
 from spielplan.ledger.hyperparams import DEFAULTS
 from spielplan.rate import balance, battle, queue, reask
+from tests.helpers import insert_user
 
 # Distinct, far-apart crowd counts so P(seen) order and id order never coincide.
 ITEM_N = {1: 180_000, 2: 42_000, 3: 9_000, 4: 3_000, 5: 300, 6: 12_000, 7: 25_000, 8: 900}
 YEARS = {1: 1995, 2: 2010, 3: 1982, 4: 1994, 5: 2021, 6: 2016, 7: 1999, 8: 1975}
 # Neither id order nor popularity order, so seed order is a third list.
 SEED = [(8, 1970), (4, 1990), (1, 1990), (2, 2010), (6, 2010)]
-
-
-async def make_user(db, name, role="member"):
-    return await db.fetchval(
-        "INSERT INTO app_user (name, role) VALUES ($1, $2) RETURNING id", name, role
-    )
 
 
 async def make_world(db, *, with_priors=True, seed=True):
@@ -56,8 +51,8 @@ async def make_world(db, *, with_priors=True, seed=True):
             [(i, t, d) for i, (t, d) in enumerate(SEED)],
         )
     return {
-        "patrick": await make_user(db, "patrick", "admin"),
-        "mia": await make_user(db, "mia", "member"),
+        "patrick": await insert_user(db, "patrick", "admin"),
+        "mia": await insert_user(db, "mia", "member"),
     }
 
 
@@ -981,7 +976,7 @@ async def test_a_block_of_cards_is_drawn_well_inside_the_two_second_budget(db, c
         """,
         n,
     )
-    patrick = await make_user(db, "patrick", "admin")
+    patrick = await insert_user(db, "patrick", "admin")
 
     timings = []
     for _ in range(20):

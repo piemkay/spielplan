@@ -21,7 +21,8 @@ from spielplan.core import secrets as sec
 from spielplan.core import secrets_cli
 from spielplan.core.config import settings
 from spielplan.db import migrate
-from tests.test_backup import _client, _drop, _inside_the_container, _recreate, _sibling
+from tests.helpers import create_database, drop_database, sibling
+from tests.test_backup import _client, _inside_the_container
 
 ADMIN_PASSWORD = "an-admin-password"
 MEMBER_PASSWORD = "a-member-password"
@@ -90,12 +91,12 @@ async def _sign_in(make, name: str, password: str) -> httpx.AsyncClient:
 @pytest.fixture
 async def target(pg_url):
     """A second database: restoring over the source proves nothing."""
-    admin, name, url = _sibling(pg_url, "_drill")
-    await _recreate(admin, name)
+    admin, name, url = sibling(pg_url, "_drill")
+    await create_database(admin, name)
     try:
         yield url
     finally:
-        await _drop(admin, name)
+        await drop_database(admin, name)
 
 
 @pytest.fixture

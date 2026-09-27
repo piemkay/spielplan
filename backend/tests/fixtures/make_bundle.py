@@ -183,21 +183,6 @@ REVIEW_SVD_DIMS = 256
 RUNTIME_BUCKETS = ("<80", "80-105", "105-130", "130-160", ">160")
 
 
-def runtime_bucket(minutes: int | None) -> str | None:
-    if minutes is None:
-        return None
-    if minutes < 80:
-        return "<80"
-    if minutes < 105:
-        return "80-105"
-    if minutes < 130:
-        return "105-130"
-    # `< 160`, not `<= 160`: the tower was trained with 160 in `>160`.
-    if minutes < 160:
-        return "130-160"
-    return ">160"
-
-
 # Far below `APP_ID_MIN`, or `break_title_id_in_app_range` would be unfalsifiable.
 POOL_ID_BASE = 1_001
 POOL_TMDB_BASE = 900_000
@@ -857,15 +842,6 @@ def break_rating_source_ids(root: Path) -> None:
     reinventory(root)
 
 
-def break_kind(root: Path) -> None:
-    """rule 5 — a null kind."""
-    db = sqlite3.connect(root / "content.sqlite")
-    db.execute("UPDATE title SET kind = NULL WHERE id = 3")
-    db.commit()
-    db.close()
-    reinventory(root)
-
-
 def break_evidence(root: Path) -> None:
     """rule 1 — an extracted tag without its quote."""
     db = sqlite3.connect(root / "content.sqlite")
@@ -957,15 +933,6 @@ def break_straddle_z(root: Path, value: float = 0.0) -> None:
     reinventory(root)
 
 
-def break_tension_credible_mass(root: Path, value: float = 1.0) -> None:
-    """§6.3: at 1.0 the credible interval is the whole line and the tension badge never shows."""
-    path = root / "artifacts" / "ledger_hyperparams.json"
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    payload["tension_credible_mass"] = value
-    path.write_text(json.dumps(payload, indent=1), encoding="utf-8")
-    reinventory(root)
-
-
 def break_corrections_header(root: Path) -> None:
     """§8 stage 3: a corrections ledger whose header the parser does not recognise."""
     (root / "artifacts" / "corrections_v1.tsv").write_text(
@@ -1007,15 +974,6 @@ def break_cold_tower_heads(root: Path) -> None:
     reinventory(root)
 
 
-def break_unknown_table(root: Path) -> None:
-    """§10: a plausible new table nothing accounts for."""
-    db = sqlite3.connect(root / "content.sqlite")
-    db.execute("CREATE TABLE title_sentiment (title_id INTEGER, score REAL)")
-    db.commit()
-    db.close()
-    reinventory(root)
-
-
 def break_identity_missing(root: Path) -> None:
     """Decision 162: no identity column, the state of every bundle exported so far."""
     path = root / "artifacts" / "backbone.npz"
@@ -1029,15 +987,6 @@ def break_identity_mismatch(root: Path) -> None:
     """Decision 162: an identity column that disagrees with the title it names."""
     db = sqlite3.connect(root / "content.sqlite")
     db.execute("UPDATE title SET imdb_id = 'tt0000001' WHERE id = 1")
-    db.commit()
-    db.close()
-    reinventory(root)
-
-
-def break_title_meta_only_source(root: Path) -> None:
-    """§4.1: every per-source meta row dropped; the card must still render."""
-    db = sqlite3.connect(root / "content.sqlite")
-    db.execute("DELETE FROM title_meta")
     db.commit()
     db.close()
     reinventory(root)

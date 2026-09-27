@@ -21,11 +21,11 @@ from spielplan.connectors import registry
 from spielplan.connectors.jellyfin import JellyfinClient
 from spielplan.core.config import Settings, settings
 from spielplan.llm import anthropic, client, gemini, openai, pricing, spend
+from tests.helpers import admin_client
 
 REPO = Path(__file__).resolve().parents[2]
 DOUBLE = REPO / "ops" / "fake_llm.py"
 
-ADMIN_PASSWORD = "an-admin-password"
 OTHER_SECRETS_KEY = "a-different-secrets-key-not-a-real-one"
 
 ADAPTERS = {"anthropic": anthropic, "openai": openai, "gemini": gemini}
@@ -78,15 +78,6 @@ def wired(double, monkeypatch):
     return double
 
 
-async def _admin(app) -> httpx.AsyncClient:
-    client_ = app()
-    created = await client_.post(
-        "/api/setup/admin", json={"name": "patrick", "password": ADMIN_PASSWORD}
-    )
-    assert created.status_code == 201, created.text
-    return client_
-
-
 async def _read(admin) -> dict:
     response = await admin.get("/api/admin/llm")
     assert response.status_code == 200, response.text
@@ -118,7 +109,7 @@ async def test_a_fresh_install_reads_every_provider_unconfigured_no_cap_and_batc
     """Absent settings are null: what stage 6 makes of an
     absent row is its reason, not a default guessed here."""
     before = datetime.now(UTC)
-    body = await _read(await _admin(app))
+    body = await _read(await admin_client(app))
     after = datetime.now(UTC)
 
     # `projected`, `models` and `price_basis` were added
@@ -156,7 +147,7 @@ async def test_a_fresh_install_reads_every_provider_unconfigured_no_cap_and_batc
 async def test_a_configured_install_reads_back_its_settings_its_prices_and_the_estimate(
     secrets_key, db, app
 ):
-    admin = await _admin(app)
+    admin = await admin_client(app)
     await registry.save_connector(db, "gemini", api_key="gemini-key-not-real")
     await registry.save_connector(db, "anthropic", api_key="anthropic-key-not-real",
                                   model="claude-sonnet-5", price_input=2, price_output=12.5)
@@ -194,7 +185,7 @@ async def test_a_configured_install_reads_back_its_settings_its_prices_and_the_e
 
 async def test_no_stored_provider_key_is_ever_in_the_read(secrets_key, db, app):
     """Searched for in the raw body, so a key tucked into any field is caught."""
-    admin = await _admin(app)
+    admin = await admin_client(app)
     keys = {name: f"sk-{name}-a-provider-key-that-must-not-leave-{name}" for name in client.PROVIDERS}
     for name, key in keys.items():
         await registry.save_connector(db, name, api_key=key)
@@ -209,7 +200,7 @@ async def test_no_stored_provider_key_is_ever_in_the_read(secrets_key, db, app):
 
 async def test_the_meter_read_includes_a_gemini_calls_billed_thinking_tokens(secrets_key, db, app):
     """1,600 candidate + 2,300 thought tokens bill as 3,900 output: $0.029625, not $0.021000."""
-    admin = await _admin(app)
+    admin = await admin_client(app)
     doc = await _pack_document(db)
     price = pricing.price_for("gemini", "gemini-3.7-flash", on=date(2026, 11, 15))
     charge = pricing.usd(20_000, 1_600 + 2_300, price)
@@ -229,7 +220,7 @@ async def test_the_meter_read_includes_a_gemini_calls_billed_thinking_tokens(sec
 
 async def test_an_unknown_models_price_and_the_estimate_over_it_read_unknown(secrets_key, db, app):
     """It is not `configured`, because a cap cannot be held against a price nobody knows."""
-    admin = await _admin(app)
+    admin = await admin_client(app)
     await registry.save_connector(db, "gemini", api_key="gemini-key-not-real", model="gemini-9-ultra")
     await registry.save_connector(db, "llm", extraction_provider="gemini", cap_usd=10)
 
@@ -247,7 +238,7 @@ async def test_an_unknown_models_price_and_the_estimate_over_it_read_unknown(sec
 async def test_the_card_calls_a_provider_configured_exactly_when_the_gate_would_call_it(
     secrets_key, db, app
 ):
-    admin = await _admin(app)
+    admin = await admin_client(app)
     await registry.save_connector(db, "anthropic", api_key="anthropic-key-not-real")
     await registry.save_connector(db, "openai", api_key="openai-key-not-real", model="gpt-9-nova")
 
@@ -265,7 +256,7 @@ async def test_an_unreadable_provider_key_degrades_the_read_rather_than_failing_
     secrets_key, db, app, monkeypatch
 ):
     """A restored dump under a changed SECRETS_KEY: the card says "re-enter the key", not 500."""
-    admin = await _admin(app)
+    admin = await admin_client(app)
     await registry.save_connector(db, "anthropic", api_key="anthropic-key-not-real",
                                   model="claude-sonnet-5")
     await registry.save_connector(db, "llm", extraction_provider="anthropic", cap_usd=10)
@@ -287,7 +278,7 @@ async def test_the_test_button_reaches_the_provider_with_the_key_in_its_header_a
 ):
     """The double's recorded request is the evidence: the key in the documented header, never in the url."""
     caplog.set_level(logging.INFO, logger="httpx")
-    admin = await _admin(app)
+    admin = await admin_client(app)
     key = wired.KEYS[provider]
     await registry.save_connector(db, provider, api_key=key, model=pricing.DEFAULT_MODELS[provider])
 
@@ -318,7 +309,7 @@ async def test_the_test_button_reaches_the_provider_with_the_key_in_its_header_a
 async def test_an_unknown_connector_and_one_with_no_test_are_404_with_the_registrys_reason(
     secrets_key, db, app
 ):
-    admin = await _admin(app)
+    admin = await admin_client(app)
     unknown = await admin.post("/api/admin/connectors/nope/test")
     assert unknown.status_code == 404
     assert unknown.json()["detail"].startswith("no connector named 'nope'"), unknown.text
@@ -335,7 +326,7 @@ async def test_a_fault_inside_a_probe_is_a_server_error_and_never_a_404(
         raise KeyError("models")
 
     monkeypatch.setitem(registry.TESTS, "tmdb", broken)
-    admin = await _admin(app)
+    admin = await admin_client(app)
     with pytest.raises(KeyError, match="models"):
         await admin.post("/api/admin/connectors/tmdb/test")
 
@@ -350,7 +341,7 @@ async def test_the_jellyfin_test_button_is_still_its_own_route_which_keeps_the_v
         registry, "make_client",
         lambda cfg: JellyfinClient(cfg.url, cfg.api_key, transport=transport) if cfg.configured else None,
     )
-    admin = await _admin(app)
+    admin = await admin_client(app)
     saved = await admin.put("/api/admin/connectors/jellyfin",
                             json={"url": "http://jellyfin.test", "api_key": module.API_KEY})
     assert saved.status_code == 200, saved.text

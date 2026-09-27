@@ -334,11 +334,6 @@ async def app(db, pg_url, tmp_path, monkeypatch):
 
 
 @pytest.fixture
-async def app_client(app):
-    return app()
-
-
-@pytest.fixture
 def secrets_key(monkeypatch):
     """Tests that assert the refusal deliberately do not take this."""
     from spielplan.core.config import settings
