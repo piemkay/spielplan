@@ -162,7 +162,7 @@ async def test_a_pin_session_is_refused_every_route_that_mints_a_credential(app)
     assert (await phone.get("/api/auth/passkey/credentials")).status_code == 200
     assert (await phone.get("/api/push/state")).status_code == 200
     # The product surfaces are exactly what the switch is for.
-    for path in ("/api/rate/balance", "/api/rank/tiers", "/api/tonight/rooms"):
+    for path in ("/api/rate", "/api/rank/tiers", "/api/tonight/rooms"):
         assert (await phone.get(path)).status_code == 200, path
 
 

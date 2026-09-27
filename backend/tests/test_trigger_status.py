@@ -177,7 +177,7 @@ async def test_the_connector_card_carries_the_trigger_and_never_its_credentials(
 
     assert got.status_code == 200, got.text
     body = got.json()
-    assert {"url", "has_api_key", "configured", "library_ids", "linked_users",
+    assert {"url", "has_api_key", "configured", "library_ids",
             "secrets_unreadable", "has_webhook_token", "server_version",
             "server_supported"} < set(body)
     assert body["has_webhook_token"] is True

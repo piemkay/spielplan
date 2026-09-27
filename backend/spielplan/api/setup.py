@@ -1,5 +1,5 @@
-"""First-boot wizard (§3.1): admin, optional connector seed, then the same bundle importer §6.6 uses.
-Accounts are made at §6.6's Users card (decision 164).
+"""First-boot wizard (§3.1): admin, then the same bundle importer §6.6 uses. Connectors are set, and
+their step recorded, at §6.6's Connectors card; accounts at its Users card (decision 164).
 """
 
 from __future__ import annotations
@@ -10,10 +10,8 @@ import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import BaseModel, Field, StringConstraints
 
-from spielplan.api.deps import DB, ActiveUser, AdminUser, current_user, set_session_cookie, write_txn
-from spielplan.core import auth, secrets
-from spielplan.core.config import settings
-from spielplan.llm import client, spend
+from spielplan.api.deps import DB, ActiveUser, current_user, set_session_cookie, write_txn
+from spielplan.core import auth
 
 router = APIRouter(prefix="/api/setup", tags=["setup"])
 
@@ -30,22 +28,6 @@ class AdminInit(BaseModel):
     name: AccountName
     password: str = Field(min_length=10)
 
-
-class ConnectorSeed(BaseModel):
-    name: str
-    config: dict = Field(default_factory=dict)
-    secrets: dict | None = None
-
-
-# The rows §6.6's spend guard owns. This route stays mounted after first boot and would store a
-# billable config with no figure shown (decision 450).
-_SPEND_GUARDED = frozenset((spend.SETTINGS, *client.PROVIDERS))
-_SPEND_GUARDED_REFUSAL = (
-    " is not seeded here: the extraction plan, the models and the price overrides are written by"
-    " PUT /api/admin/llm with the estimate the preview showed (decision 450), the cap by"
-    " PUT /api/admin/llm/cap (decision 452), and a provider's key by"
-    " PUT /api/admin/connectors/<provider>"
-)
 
 
 async def _optional_user(
@@ -116,23 +98,6 @@ async def create_admin(body: AdminInit, response: Response, conn: DB) -> dict[st
     set_session_cookie(response, sid)
     return {"id": user_id, "name": body.name, "role": "admin"}
 
-
-@router.post("/connectors")
-async def seed_connector(body: ConnectorSeed, _: AdminUser, conn: DB) -> dict[str, object]:
-    """§2: an env or wizard seed. Refuses the spend-guarded rows with 409, naming the three routes that
-    do write them."""
-    if body.name in _SPEND_GUARDED:
-        raise HTTPException(status.HTTP_409_CONFLICT, f"{body.name}{_SPEND_GUARDED_REFUSAL}")
-    if body.secrets:
-        settings().require_secrets_key()
-    # `retire_unreadable`: an admin typing a credential is the repair, as on the Connectors card.
-    await secrets.put_connector_secrets(
-        conn, body.name, body.config, body.secrets, retire_unreadable=True
-    )
-    await conn.execute(
-        "INSERT INTO setup_step (step) VALUES ('connectors') ON CONFLICT (step) DO NOTHING"
-    )
-    return {"ok": True, "name": body.name, "has_secrets": bool(body.secrets)}
 
 
 @router.post("/onboarding/complete")

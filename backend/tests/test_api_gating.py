@@ -24,7 +24,7 @@ MEMBER_PASSWORD = "a-member-password"
 
 # The count the walk finds today, as an equality: a dropped router or a swapped gate fails here, and an
 # added admin route fails until the number is re-stated.
-ADMIN_ROUTE_COUNT = 53
+ADMIN_ROUTE_COUNT = 52
 
 METHODS = ("GET", "POST", "PUT", "DELETE", "PATCH")
 
@@ -69,7 +69,7 @@ def paths_behind_any(targets) -> set[tuple[str, str]]:
 
 
 def admin_paths() -> list[tuple[str, str]]:
-    """Not the path prefix: `/api/setup/connectors` is admin-gated outside it."""
+    """By the gate, not the path prefix."""
     return sorted(paths_behind(deps.admin_user))
 
 

@@ -34,13 +34,6 @@ SELECT j.title_id, j.stage, j.status, j.reason, j.retry_after, j.updated_at, j.d
  WHERE j.title_id = $1
 """
 
-_TASKS = """
-SELECT id, kind, key, state, attempts, max_attempts, next_attempt_at,
-       last_error, result_note, paid, created_at, updated_at
-  FROM acquisition_task
- WHERE payload ->> 'title_id' = $1::text
- ORDER BY id
-"""
 
 _DOCUMENTS = """
 SELECT d.id, d.source, d.kind, d.entity_key, d.url, d.http_status, d.content_sha256,
@@ -90,30 +83,6 @@ async def job(conn: asyncpg.Connection, title_id: int) -> dict[str, Any] | None:
         detail = json.loads(detail) if detail else {}
     return {**_job_row(row), "detail": detail or {}}
 
-
-async def tasks_for_title(conn: asyncpg.Connection, title_id: int) -> list[dict[str, Any]]:
-    """The queue rows behind one title: what is scheduled, how often it has been tried, why.
-
-    The lease columns are omitted: they name a process, not a fact about the title.
-    """
-    rows = await conn.fetch(_TASKS, str(title_id))
-    return [
-        {
-            "id": row["id"],
-            "kind": row["kind"],
-            "key": row["key"],
-            "state": row["state"],
-            "attempts": row["attempts"],
-            "max_attempts": row["max_attempts"],
-            "next_attempt_at": row["next_attempt_at"],
-            "last_error": row["last_error"],
-            "result_note": row["result_note"],
-            "paid": row["paid"],
-            "created_at": row["created_at"],
-            "updated_at": row["updated_at"],
-        }
-        for row in rows
-    ]
 
 
 async def documents_for_title(

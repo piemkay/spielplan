@@ -2357,23 +2357,19 @@ async def test_two_long_names_on_the_rail_do_not_lose_the_verdict(db, rate_clien
     assert await db.fetchval("SELECT count(*) FROM verdict WHERE user_id = $1", user_id) == 1
 
 
-async def test_the_balance_route_serves_the_widgets_own_poll(db, rate_client):
-    """Exactly the envelope's `class_balance` block: two copies of one number could disagree."""
+async def test_the_envelope_carries_the_widgets_class_balance(db, rate_client):
     client, user_id = rate_client
     await make_titles(db, [(i, "movie", f"Title {i}") for i in range(1, 9)])
     for title_id in (1, 2, 3, 4, 5):
         await label(db, user_id, title_id, 2)
     await label(db, user_id, 6, 0)
 
-    answered = await client.get("/api/rate/balance")
+    answered = await client.get("/api/rate")
     assert answered.status_code == 200
-    balance = answered.json()
+    balance = answered.json()["class_balance"]
     assert balance["counts"] == [1, 0, 5]
     assert balance["warn"] is False, "5 of 6 liked is past the 60% line, under decision 491's 15"
     assert balance["arms_at"] == 15
-    assert balance == (await client.get("/api/rate")).json()["class_balance"], (
-        "the widget's poll and the envelope must not be able to disagree"
-    )
 
 
 async def test_mix_serves_single_titles_until_a_block_of_ratings_stands(db, world):

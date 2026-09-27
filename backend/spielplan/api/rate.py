@@ -271,13 +271,6 @@ async def undo(conn: DB, user: ActiveUser, request: Request) -> dict[str, Any]:
     )
 
 
-@router.get("/balance")
-async def class_balance(conn: DB, user: ActiveUser) -> dict[str, Any]:
-    """Not partitioned by kind: it describes the labeller, not a ranking (§4.1 rule 5)."""
-    s = await _resume(conn, user.id)
-    return (await session.payload(conn, s, user=user))["class_balance"]
-
-
 class TitleAnswerBody(BaseModel):
     answer: Literal["disliked", "fine", "liked", "not_seen"]
 

@@ -49,7 +49,6 @@ async def job_detail(title_id: int, _: AdminUser, conn: DB) -> dict[str, Any]:
         )
     return {
         "job": found,
-        "tasks": await board.tasks_for_title(conn, title_id),
         "documents": await board.documents_for_title(conn, title_id),
     }
 

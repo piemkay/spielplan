@@ -55,7 +55,7 @@ async def test_the_connector_starts_unconfigured_and_says_so(admin):
     # "Nothing configured" and "credentials will not decrypt" are different states; an unprobed server
     # is `server_supported: null`, never a refusal; the webhook token itself appears in one response only.
     assert body == {"url": "", "has_api_key": False, "configured": False,
-                    "library_ids": [], "linked_users": 0, "secrets_unreadable": False,
+                    "library_ids": [], "secrets_unreadable": False,
                     "has_webhook_token": False,
                     "server_version": "", "server_supported": None,
                     "trigger": {
@@ -375,7 +375,6 @@ async def test_linking_with_credentials_stores_that_users_own_token(admin):
     after = await _users(client)
     assert after["patrick"]["jellyfin_link_state"] == "linked"
     assert after["patrick"]["has_jellyfin_token"] is True
-    assert (await client.get("/api/admin/connectors/jellyfin")).json()["linked_users"] == 1
 
 
 async def test_credentials_for_a_different_jellyfin_user_are_refused(admin):
@@ -573,8 +572,6 @@ async def test_two_members_linked_at_the_same_time_both_keep_their_token(admin, 
     } == {"patrick": ("linked", True), "jenny": ("linked", True)}, (
         "an account reads 'linked' with no token: one of the two merges was lost (§14.3)"
     )
-    # The card counts the token map, not the badge; the two must agree.
-    assert (await client.get("/api/admin/connectors/jellyfin")).json()["linked_users"] == 2
 
 
 async def test_linking_an_account_while_it_is_being_unlinked_does_not_deadlock(admin, monkeypatch):

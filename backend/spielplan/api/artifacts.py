@@ -145,7 +145,6 @@ async def bundle_state(conn: DB, _: AdminUser, request: Request) -> dict[str, An
         # has failed, where the restart is the one instruction.
         "broken": store.broken and not failed,
         "missing_path": str(store.root) if store.broken and not failed else None,
-        "import_dir": str(settings().import_dir),
         "rebuild_set": list(bundle_import.REBUILD_SET),
         # The import the Data tab waits on, or the last one; see `_running_import`.
         "import_job": await _running_import(conn),

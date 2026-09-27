@@ -136,7 +136,6 @@ async def get_jellyfin(_: AdminUser, conn: DB) -> dict[str, object]:
         "has_api_key": bool(cfg.api_key),
         "configured": cfg.configured,
         "library_ids": cfg.library_ids,
-        "linked_users": len(cfg.user_tokens),
         "secrets_unreadable": cfg.secrets_unreadable,
         # Whether a webhook token exists, never the token (§14.3; decision 332).
         "has_webhook_token": bool(cfg.webhook_token),

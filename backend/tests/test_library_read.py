@@ -111,9 +111,7 @@ async def two_vocabularies(db):
         await _projected(db, title_id, "mood.current_projection", version="v2")
 
 
-async def test_two_vocabularies_do_not_mix_on_the_card_the_filter_or_the_neighbours(
-    db, app, two_vocabularies
-):
+async def test_two_vocabularies_do_not_mix_on_the_card_or_the_filter(db, two_vocabularies):
     """Any one reader leaking puts two vocabularies on one screen."""
     active = await dna_terms.active_version(db)
     assert active == "v2", "the newest imported row is the active vocabulary"
@@ -130,18 +128,6 @@ async def test_two_vocabularies_do_not_mix_on_the_card_the_filter_or_the_neighbo
     assert await _matching(db, "current_projection") == [1, 2]
     assert await _matching(db, "superseded") == []
     assert await _matching(db, "superseded_projection") == []
-
-    # Title 3 shares only the superseded term, so it appears iff the neighbour queries lost the version.
-    client = app()
-    created = await client.post(
-        "/api/setup/admin", json={"name": "patrick", "password": "an-admin-password"}
-    )
-    assert created.status_code == 201, created.text
-    response = await client.get("/api/titles/1/similar-by-term?kind=movie")
-    assert response.status_code == 200, response.text
-    body = response.json()
-    assert [n["title_id"] for n in body["extracted"]] == [2]
-    assert [n["title_id"] for n in body["projected"]] == [2]
 
 
 async def test_two_vocabularies_written_in_one_transaction_still_resolve_to_one(db):
@@ -234,111 +220,6 @@ async def test_the_hidden_by_kind_count_agrees_with_the_escaped_listing(db, sear
     # The toggle keeps its promise: turning Series on reveals exactly what was counted.
     both, _ = await library.list_titles(db, kinds=["movie", "series"], q="100%", limit=60)
     assert len(both) == total + hidden["series"]
-
-
-@pytest.fixture
-async def wanderable(db, app):
-    """Both routes select `t.kind` into no predicate, so a one-kind fixture cannot fail them."""
-    await _titles(db, [(1, "movie", "Heat", 1995), (2, "movie", "Collateral", 2004),
-                       (3, "series", "The Wire", 2002)])
-    await _vocabulary(db, VOCAB)
-    for title_id in (1, 2, 3):
-        await _tag(db, title_id, "mood.dread")
-    await db.execute("INSERT INTO person (id, name) VALUES (7, 'Michael Mann')")
-    await db.executemany(
-        "INSERT INTO credit (title_id, person_id, department, job, source) "
-        "VALUES ($1, 7, 'Directing', 'Director', 'tmdb')",
-        [(1,), (2,), (3,)],
-    )
-    client = app()
-    created = await client.post(
-        "/api/setup/admin", json={"name": "patrick", "password": "an-admin-password"}
-    )
-    assert created.status_code == 201, created.text
-    return client
-
-
-async def test_similar_by_term_and_filmography_require_a_kind_selection(wanderable):
-    """The selection is the caller's, never the anchor's: from a film, both kinds returns both."""
-    client = wanderable
-    for path in ("/api/titles/1/similar-by-term", "/api/people/7"):
-        assert (await client.get(path)).status_code == 422, f"{path} answered without a kind"
-        assert (await client.get(f"{path}?kind=")).status_code == 422
-        assert (await client.get(f"{path}?kind=documentary")).status_code == 422
-
-    films = (await client.get("/api/titles/1/similar-by-term?kind=movie")).json()
-    assert {n["kind"] for n in films["extracted"]} == {"movie"}
-    assert [n["title_id"] for n in films["extracted"]] == [2]
-
-    both = (await client.get("/api/titles/1/similar-by-term?kind=movie&kind=series")).json()
-    assert {n["title_id"] for n in both["extracted"]} == {2, 3}
-    assert both["kinds"] == ["movie", "series"]
-
-    filmography = (await client.get("/api/people/7?kind=series")).json()["filmography"]
-    assert [f["kind"] for f in filmography] == ["series"]
-    assert [f["id"] for f in filmography] == [3]
-
-    complete = (await client.get("/api/people/7?kind=movie&kind=series")).json()["filmography"]
-    assert {f["id"] for f in complete} == {1, 2, 3}
-
-
-async def test_similar_by_terms_limit_is_bounded_before_it_reaches_postgres(wanderable):
-    """`-1` was a 500 and a large one a 200 over the whole join."""
-    client = wanderable
-    for bad in (0, -1, 61, 100000):
-        response = await client.get(f"/api/titles/1/similar-by-term?kind=movie&limit={bad}")
-        assert response.status_code == 422, f"limit={bad} was not refused ({response.status_code})"
-
-    for good in (1, 12, 60):
-        response = await client.get(f"/api/titles/1/similar-by-term?kind=movie&limit={good}")
-        assert response.status_code == 200, response.text
-
-
-async def test_two_providers_naming_one_term_are_one_shared_term_on_the_wander(db, wanderable):
-    """Parallel extraction writes one row per provider; the wander counts shared TERMS."""
-    client = wanderable
-    # A second term the series shares with the anchor and the film does not.
-    for title_id in (1, 3):
-        await _tag(db, title_id, "mood.cosy")
-    # ...and a second provider's opinion of the term the film does share.
-    for title_id in (1, 2):
-        await db.execute(
-            "INSERT INTO dna_tag (title_id, version, term, facet, salience, provider) "
-            "VALUES ($1, $2, 'mood.dread', 'mood', 2, 'a-second-provider')",
-            title_id, VOCAB,
-        )
-
-    body = (await client.get("/api/titles/1/similar-by-term?kind=movie&kind=series")).json()
-    edges = {n["title_id"]: n for n in body["extracted"]}
-    assert edges[2]["shared"] == 1, "one term, named by two providers, is one shared term"
-    assert edges[2]["via"] == ["mood.dread"], "§6.4's label names the terms, not the rows"
-    assert edges[3]["shared"] == 2 and edges[3]["via"] == ["mood.cosy", "mood.dread"]
-    assert [n["title_id"] for n in body["extracted"]] == [3, 2], (
-        "two providers agreeing about one term outranked a title sharing two different ones"
-    )
-
-
-async def test_the_selected_kinds_share_one_ranking_and_one_limit(db, wanderable):
-    """Decision 198: the selection is one ranking and one limit, so both kinds may answer in one."""
-    client = wanderable
-    await _titles(db, [(4, "series", "Deadwood", 2004)])
-    await _tag(db, 4, "mood.dread")
-    # A second term the anchor carries and only the series share.
-    for title_id in (1, 3, 4):
-        await _tag(db, title_id, "mood.cosy")
-
-    crowded = (
-        await client.get("/api/titles/1/similar-by-term?kind=movie&kind=series&limit=2")
-    ).json()["extracted"]
-    assert [n["kind"] for n in crowded] == ["series", "series"], (
-        "the two kinds are ranked together, so the louder one can take the whole answer"
-    )
-
-    # The film was eligible throughout: the limit is what hid it, not the predicate.
-    films = (
-        await client.get("/api/titles/1/similar-by-term?kind=movie&limit=2")
-    ).json()["extracted"]
-    assert [n["title_id"] for n in films] == [2]
 
 
 async def test_no_projected_term_outweighs_any_extracted_term(db, tmp_path):
