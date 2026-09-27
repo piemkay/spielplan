@@ -306,14 +306,13 @@ def test_the_candidates_are_jellyfin_then_the_stored_path_then_the_lookup():
 def test_both_image_hosts_are_declared_with_the_reasoning_for_their_robots_override():
     """A fetcher living as long as the web process must not let one unanswered robots.txt
     refuse every poster from a host until restart (decision 485)."""
-    from spielplan.acquire.hosts import HOST_POLICIES, undocumented_overrides
+    from spielplan.acquire.hosts import HOST_POLICIES
     from spielplan.art.hosts import SERVABLE_HOSTS
 
     for host in SERVABLE_HOSTS:
         policy = HOST_POLICIES[host]
         assert policy.respect_robots is False and policy.note, host
     assert HOST_POLICIES["static.tvmaze.com"].rps == 2.0, "api.tvmaze.com's own rate"
-    assert undocumented_overrides() == []
 
 
 def test_the_page_remembers_a_404_no_longer_than_the_shortest_one_it_is_sent():

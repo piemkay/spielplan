@@ -115,13 +115,10 @@ def iso_date(value: str | None) -> str | None:
 
 
 def parse_tmdb(payload: Any) -> list[ParsedReview]:
-    """TMDB's long-form user reviews, which arrive either alone or appended to a detail call."""
+    """TMDB's long-form user reviews, appended to a detail call."""
     results: Any = []
     if isinstance(payload, Mapping):
-        if "results" in payload:
-            results = payload.get("results") or []
-        elif "reviews" in payload:
-            results = (payload.get("reviews") or {}).get("results") or []
+        results = (payload.get("reviews") or {}).get("results") or []
     out = []
     for review in results:
         body = clean_text(review.get("content"))

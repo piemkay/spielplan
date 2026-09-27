@@ -122,7 +122,7 @@ def _fetcher(site: _Site, clock: _Clock, conn=None) -> fetch.Fetcher:
 
 def _task(key: str) -> queue.Task:
     return queue.Task(id=1, kind="acquire", key=key, payload={}, attempts=1,
-                      max_attempts=5, priority=50, paid=False)
+                      max_attempts=5, priority=50)
 
 
 def _ctx(conn, fetcher: fetch.Fetcher, title_id: int, *, key: str = "") -> stages.StageContext:
@@ -670,7 +670,6 @@ async def test_trakt_sends_its_three_headers_and_reads_both_of_its_own_ids(db, r
     site = _Site({
         ("api.trakt.tv", f"/movies/{IMDB}"): _route(_fixture("trakt_summary.json")),
         ("api.trakt.tv", f"/movies/{IMDB}/ratings"): _route(_fixture("trakt_ratings.json")),
-        ("api.trakt.tv", f"/movies/{IMDB}/stats"): _route(_fixture("trakt_stats.json")),
     })
     clock = _Clock()
     async with _fetcher(site, clock, db) as fetcher:
@@ -685,7 +684,7 @@ async def test_trakt_sends_its_three_headers_and_reads_both_of_its_own_ids(db, r
     row = await db.fetchrow("SELECT trakt_id, trakt_slug FROM title WHERE id = $1", HEAT)
     assert (row["trakt_id"], row["trakt_slug"]) == (806, "heat-1995")
     # Separate answers, stored under their own `kind` as the corpus does.
-    assert {d["kind"] for d in await _documents(db, HEAT)} == {"summary", "ratings", "stats"}
+    assert {d["kind"] for d in await _documents(db, HEAT)} == {"summary", "ratings"}
 
 
 async def test_trakt_comments_keeps_the_three_sorts_apart_in_the_store(db, raw_root, keyed):
@@ -974,7 +973,7 @@ async def test_omdb_saying_no_inside_a_200_is_stored_as_a_document_that_is_not_g
     stored = (await _documents(db, HEAT))[0]
     assert stored["ok"] is False and stored["http_status"] == 200
     assert stored["byte_size"] > 0, "the bytes are the record of what OMDb said"
-    assert await rawstore.latest(db, "omdb", "detail", f"title:{HEAT}") is None
+    assert not any(document["ok"] for document in await _documents(db, HEAT))
 
 
 async def test_a_spent_omdb_key_reads_differently_from_a_title_omdb_has_never_held(db, raw_root, keyed):

@@ -27,7 +27,6 @@ from spielplan.sources._ids import set_ids
 REVIEW_DOCUMENTS: Mapping[tuple[str, str], str] = {
     ("tmdb", "movie_detail"): "tmdb",
     ("tmdb", "tv_detail"): "tmdb",
-    ("tmdb", "reviews"): "tmdb",
     ("trakt", "comments"): "trakt",
     ("metacritic", "reviews"): "metacritic",
     ("wikipedia", "article"): "wikipedia",
@@ -44,7 +43,7 @@ SCRAPED_EVIDENCE = "page"
 
 # Sources that emit `award` rows; `award` has no source column, so its delete is guarded by this.
 # A source added to the parser but not here would lose its awards (tested).
-AWARD_SOURCES = frozenset({"omdb", "wikidata"})
+AWARD_SOURCES = frozenset({"omdb"})
 
 # Decision 334's one required source, as the two kinds it arrives under.
 REQUIRED_DOCUMENTS = frozenset({"tmdb:movie_detail", "tmdb:tv_detail"})

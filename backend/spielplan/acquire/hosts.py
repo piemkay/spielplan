@@ -1,7 +1,7 @@
 """Per-host crawl policy, as data (§8's politeness clause, decision 340).
 
 Every measured rate is the corpus's, from real crawls. A robots override must carry its reasoning
-in `note` (`undocumented_overrides` enforces it). No global robots switch and no editor.
+in `note`. No global robots switch and no editor.
 """
 
 from __future__ import annotations
@@ -47,8 +47,8 @@ _LLM_TERMS = (
 )
 
 
-# Tuned per host by the corpus, against real crawls. API hosts get real throughput; HTML hosts stay
-# slow, and the two §8 stage 2 scrapes slower still.
+# Tuned per host by the corpus, against real crawls. API hosts get real throughput; the two §8 stage 2
+# scrapes stay slow.
 HOST_POLICIES: dict[str, HostPolicy] = {
     # --- APIs: §8 stage 2's resolve and detail sources ---
     "api.themoviedb.org": HostPolicy(rps=18.0, burst=20, max_concurrency=12,
@@ -75,21 +75,6 @@ HOST_POLICIES: dict[str, HostPolicy] = {
         note="the sanctioned SPARQL endpoint, and half a request a second is what pays for it: "
              "the service is free, shared and expensive to query, so the override buys the "
              "access and the rate is the manners"),
-    # Wikimedia disallows /w/ for crawlers, but the action API is the sanctioned programmatic route.
-    "www.wikidata.org": HostPolicy(
-        rps=1.0, burst=2, max_concurrency=1, respect_robots=False,
-        note="robots.txt disallows /w/ to keep crawlers off the script endpoints; the batched "
-             "action API (wbgetentities, 50 entities a request) is the sanctioned route to the "
-             "same claims, and honouring the blanket rule lost the awards, box-office and "
-             "country data entirely in the corpus"),
-    "datasets.imdbws.com": HostPolicy(
-        rps=1.0, burst=1, max_concurrency=1, respect_robots=False,
-        note="a published bulk dataset download - a handful of files fetched whole, not a crawl "
-             "of a site"),
-    "files.grouplens.org": HostPolicy(
-        rps=1.0, burst=1, max_concurrency=1, respect_robots=False,
-        note="a published bulk dataset download - a handful of files fetched whole, not a crawl "
-             "of a site"),
     # --- LLM APIs: §8 stage 6's three providers ---
     # Set below any tier's limit; the 429 rule does the rest. Long cooldown for 429 storms.
     "api.anthropic.com": HostPolicy(rps=2.0, burst=4, max_concurrency=4, respect_robots=False,
@@ -99,21 +84,11 @@ HOST_POLICIES: dict[str, HostPolicy] = {
     "generativelanguage.googleapis.com": HostPolicy(
         rps=1.5, burst=3, max_concurrency=3, respect_robots=False, breaker_cooldown_s=120,
         note=_LLM_TERMS),
-    # --- HTML connectors: deliberately slow ---
-    "letterboxd.com": HostPolicy(rps=0.8, burst=1, max_concurrency=1, breaker_cooldown_s=600),
     # The two hosts §8 stage 2 scrapes: the rate the corpus crawled them at without being blocked.
     "www.rottentomatoes.com": HostPolicy(rps=0.7, burst=1, max_concurrency=1,
                                          breaker_cooldown_s=900),
     "www.metacritic.com": HostPolicy(rps=0.7, burst=1, max_concurrency=1,
                                      breaker_cooldown_s=900),
-    "www.theyshootpictures.com": HostPolicy(rps=0.5, burst=1, max_concurrency=1),
-    # Independent blogs are small sites run by individuals; the WordPress API returns 100 posts
-    # per request, so a slow rate is still fast in practice.
-    "alternateending.com": HostPolicy(rps=0.5, burst=1, max_concurrency=1),
-    "letsgotothemovies.com": HostPolicy(rps=0.5, burst=1, max_concurrency=1),
-    "thefilm.blog": HostPolicy(rps=0.5, burst=1, max_concurrency=1),
-    # ~28k pages fetched one at a time from a small German site: keep it slow.
-    "www.film-rezensionen.de": HostPolicy(rps=0.5, burst=1, max_concurrency=1),
 }
 
 
@@ -186,31 +161,3 @@ def policy_for(host: str, *, jellyfin_host: str = "") -> HostPolicy:
     ):
         return JELLYFIN_POLICY
     return HOST_POLICIES.get(host, HostPolicy(rps=DEFAULT_RPS))
-
-
-def declared_policies() -> list[dict[str, object]]:
-    """The table as §6.6 will show it: one row per declared host, sorted, with its reasoning.
-
-    The default and the Jellyfin exemption are not declarations and are not listed.
-    """
-    return [
-        {
-            "host": host,
-            "rps": policy.rps,
-            "burst": policy.burst,
-            "max_concurrency": policy.max_concurrency,
-            "breaker_threshold": policy.breaker_threshold,
-            "breaker_cooldown_s": policy.breaker_cooldown_s,
-            "respect_robots": policy.respect_robots,
-            "note": policy.note,
-        }
-        for host, policy in sorted(HOST_POLICIES.items())
-    ]
-
-
-def undocumented_overrides() -> list[str]:
-    """Hosts whose robots.txt is overridden with no reasoning recorded. Decision 340."""
-    return sorted(
-        host for host, policy in HOST_POLICIES.items()
-        if not policy.respect_robots and not policy.note.strip()
-    )

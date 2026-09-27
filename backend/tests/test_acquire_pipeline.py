@@ -868,32 +868,6 @@ def test_the_stage_machine_and_the_derive_do_not_reach_for_the_fetcher():
         )
 
 
-async def test_every_stage_declared_a_no_op_returns_its_stub_marker():
-    """`Stage.implemented` is hand-written and the spend gate reads nothing else, so a no-op must
-    return its stub marker; a body that raises reports the same sentence, naming the stage."""
-    ctx = stages.StageContext(conn=None, task=None)
-    # `SHIPPED`, not `pipeline.STAGES`: the autouse fixture stands stage 6 down as a no-op.
-    stubs = [s for s in SHIPPED if not s.implemented]
-    stale = (
-        "is declared `implemented=False` and no longer returns the stub marker - it has a body, "
-        "and the flag the spend gate reads is stale"
-    )
-    for stage in stubs:
-        try:
-            outcome = await stage.run(ctx)
-        except Exception as exc:                                         # noqa: BLE001
-            raise AssertionError(
-                f"stage {stage.number} ({stage.name}) {stale}: it raised "
-                f"{type(exc).__name__}: {exc} on an empty context, which a stub cannot do"
-            ) from exc
-        assert outcome.verb == stages.ADVANCE
-        assert outcome.detail == {"stub": stages.NOT_IMPLEMENTED.format(stage.owner)}, (
-            f"stage {stage.number} ({stage.name}) {stale}"
-        )
-    # After the loop, so a stale `implemented=False` reddens with the sentence naming the stage.
-    assert stubs == [], "no stage is a declared no-op since M5 (decisions 461, 462, 463)"
-
-
 async def test_a_malformed_provider_id_parks_at_stage_one_and_mints_nothing(db, data_dir):
     """Decision 323 mints only on a provider id: `Tmdb: "0"`, an imdb id under `Tmdb` and
     whitespace are not ids. A skip, not a deferral: the id will be as malformed tomorrow."""
@@ -1739,25 +1713,6 @@ async def test_a_title_deleted_while_a_stage_advances_parks_rather_than_raising(
     assert row["attempts"] == 1, "the claim counted one attempt and the park spent no more"
 
 
-async def test_the_stub_marker_check_names_the_stage_when_a_body_raises(monkeypatch):
-    """A body behind a stale `implemented=False` that touches
-    the context still gets the sentence naming the stage."""
-    async def bodied(ctx):
-        return await ctx.conn.fetchval("SELECT 1")
-
-    patched = tuple(
-        pipeline.Stage(s.number, s.name, bodied, s.paid, False, s.owner)
-        if s.number == 7 else s
-        for s in SHIPPED
-    )
-    monkeypatch.setitem(globals(), "SHIPPED", patched)
-    with pytest.raises(AssertionError) as caught:
-        await test_every_stage_declared_a_no_op_returns_its_stub_marker()
-    message = str(caught.value)
-    assert "stage 7 (verify)" in message, message
-    assert "the flag the spend gate reads is stale" in message, message
-
-
 async def test_a_name_and_year_the_spine_cannot_tell_apart_parks_rather_than_minting(db):
     """The name-and-year arm answers None for "none" and for "several", so at two colliders
     the walk parks rather than minting a third row; at one collider it resolves."""
@@ -2152,7 +2107,7 @@ async def test_every_stage_two_response_is_in_the_raw_store_before_stage_three_r
         f"stage 3 began with {seen['stored']} raw_document rows for "
         f"{len(seen['requests'])} requests: {seen['requests']}"
     )
-    # Failure rows are stored too, readable off the board; `rawstore.latest` filters on `ok`.
+    # Failure rows are stored too, readable off the board.
     documents = await _documents(db, report.tasks[0].title_id)
     assert any(d["ok"] for d in documents) and any(not d["ok"] for d in documents), documents
     assert {d["source"] for d in documents} >= {"tmdb", "trakt", "metacritic"}, documents

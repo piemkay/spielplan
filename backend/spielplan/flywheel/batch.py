@@ -55,7 +55,7 @@ _CENT = Decimal("0.01")
 
 # Locked so an observation cannot close a row between the check and the mark.
 _SELECTED = """
-SELECT f.id, f.kind, f.status, f.title_id, f.est_titles, t.name, t.year
+SELECT f.id, f.status, f.title_id, t.name, t.year
   FROM flywheel_item f
   LEFT JOIN title t ON t.id = f.title_id
  WHERE f.id = ANY($1::bigint[])
@@ -196,11 +196,6 @@ async def quote(
                   prices=[planned.price for planned in plan.providers], refused=None, meter=meter)
 
 
-def _count(row: asyncpg.Record) -> int:
-    # A thin-facet row is one title; never a free zero in the total.
-    return 1 if row["est_titles"] is None else int(row["est_titles"])
-
-
 def _label(row: asyncpg.Record) -> str:
     if row["name"] is None:
         return f"title {row['title_id']}"
@@ -216,13 +211,6 @@ def _admit(ids: list[int], rows: list[asyncpg.Record]) -> None:
             f"row(s) {', '.join(missing)} are not in the extraction queue, so nothing was launched."
             " Reload the queue and select again (decision 443)"
         )
-    for row in rows:
-        if row["kind"] != store.THIN_FACET:
-            raise LaunchRefused(
-                f"row {row['id']} comes from the {row['kind']} feed, whose producer is M6's search and"
-                " explore frontier (spec section 6.4): no M5 stage can act on a query or a frontier,"
-                " so a launch naming one is refused and nothing was launched (decision 443)"
-            )
     for row in rows:
         if row["status"] != "queued":
             raise LaunchRefused(
@@ -248,7 +236,7 @@ async def launch(
     async with conn.transaction():
         rows = await conn.fetch(_SELECTED, ids)
         _admit(ids, rows)
-        titles = sum(_count(row) for row in rows)
+        titles = len(rows)
         quoted = await quote(conn, titles=titles, providers=chosen, passes=passes, now=now)
         if not quoted["launchable"]:
             raise LaunchRefused(quoted["reason"])
@@ -257,7 +245,7 @@ async def launch(
         )
         marked = await conn.fetch(_MARK, ids, batch["id"], store.THIN_FACET)
         if len(marked) != len(ids):
-            # Unreachable while `_SELECTED` locks the rows; kept as the "exactly the selected rows" check.
+            # Rows are locked, so only a kind other than thin_facet (M6's feeds) lands here.
             raise LaunchRefused(
                 "the selection changed while it was being launched, so nothing was launched. Reload"
                 " the queue and select again (decision 443)"

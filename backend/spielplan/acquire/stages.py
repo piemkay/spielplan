@@ -127,9 +127,6 @@ FILM_IN_FLIGHT = (
 # Declared here because `pipeline` imports this module.
 _MINT_LOCK = 8002
 
-# The stub marker, one spelling.
-NOT_IMPLEMENTED = "not implemented at M5.1 - owned by {}"
-
 # Decision 334's one required source; `derive/rebuild.REQUIRED_DOCUMENTS` is its stored-bytes twin.
 REQUIRED_KIND = "tmdb:detail"
 

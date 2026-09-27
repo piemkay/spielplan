@@ -422,92 +422,6 @@ def parse_omdb(data: Any) -> ParsedTitle:
     return rows.done()
 
 
-# Jellyfin  (owned-library presentation signals)
-
-
-def parse_jellyfin_item(item: Any) -> ParsedTitle:
-    """The household's own copy: codecs, channels, subtitle languages, the file."""
-    item = _payload(item)
-    if item is None:
-        return ParsedTitle(source="jellyfin")
-    rows = _Rows("jellyfin")
-    ticks = item.get("RunTimeTicks")
-    runtime = int(ticks / 600_000_000) if ticks else None
-
-    streams = item.get("MediaStreams") or []
-    video = next((s for s in streams if s.get("Type") == "Video"), {})
-    audios = [s for s in streams if s.get("Type") == "Audio"]
-    subtitles = [s for s in streams if s.get("Type") == "Subtitle"]
-    best_audio = max(audios, key=lambda s: s.get("Channels") or 0, default={})
-    media = (item.get("MediaSources") or [{}])[0]
-
-    presentation = {
-        "width": video.get("Width"), "height": video.get("Height"),
-        "video_codec": video.get("Codec"), "video_range": video.get("VideoRange"),
-        "video_range_type": video.get("VideoRangeType"),
-        "video_dovi": video.get("VideoDoViTitle"),
-        "bit_depth": video.get("BitDepth"),
-        "audio_codec": best_audio.get("Codec"),
-        "audio_channels": best_audio.get("Channels"),
-        "audio_profile": best_audio.get("Profile"),
-        "audio_layout": best_audio.get("ChannelLayout"),
-        "audio_tracks": [{"codec": a.get("Codec"), "ch": a.get("Channels"),
-                          "lang": a.get("Language"), "title": a.get("Title")} for a in audios],
-        "subtitle_languages": sorted({s["Language"] for s in subtitles if s.get("Language")}),
-        "container": media.get("Container"),
-        "bitrate": media.get("Bitrate"),
-        "size_bytes": media.get("Size"),
-        "path": item.get("Path"),
-        "user_data": item.get("UserData"),
-    }
-
-    rows.emit(
-        "title_meta",
-        year=item.get("ProductionYear"), runtime_min=runtime,
-        tagline=(item.get("Taglines") or [None])[0], plot_short=None,
-        plot_full=clean_text(item.get("Overview")) or None, status=item.get("Status"),
-        original_language=None, budget=None, revenue=None, poster_url=None, backdrop_url=None,
-        homepage=None, content_rating=item.get("OfficialRating"),
-        episode_count=item.get("RecursiveItemCount"), season_count=item.get("ChildCount"),
-        first_air_date=item.get("PremiereDate"), last_air_date=item.get("EndDate"),
-        in_production=None, extra=json.dumps(presentation, ensure_ascii=False),
-    )
-
-    for position, genre in enumerate(item.get("Genres") or []):
-        rows.emit("title_genre", genre=genre, position=position)
-    for country in item.get("ProductionLocations") or []:
-        rows.emit("title_country", country=country)
-    for studio in item.get("Studios") or []:
-        if studio.get("Name"):
-            rows.emit("title_company", company=studio["Name"], role="production", country=None)
-    if item.get("CommunityRating") is not None:
-        rows.emit("platform_rating", metric="community", value=item["CommunityRating"],
-                  scale=10.0, votes=None)
-    if item.get("CriticRating") is not None:
-        rows.emit("platform_rating", metric="critic_score", value=item["CriticRating"],
-                  scale=100.0, votes=None)
-
-    for index, person in enumerate(item.get("People") or []):
-        kind = (person.get("Type") or "").lower()
-        if kind == "actor":
-            role, order = "cast", index
-        else:
-            role, order = classify_role(None, person.get("Type")), None
-        if not keep_credit(role, order):
-            continue
-        providers = {k.lower(): v for k, v in (person.get("ProviderIds") or {}).items()}
-        # Jellyfin's `Role` is the job for crew, so only actors get it as a character.
-        rows.emit(
-            "credit",
-            person={"name": person.get("Name") or "?", "imdb_id": providers.get("imdb")},
-            department=person.get("Type"), job=person.get("Type"),
-            character=person.get("Role") if kind == "actor" else None,
-            billing_order=order, episode_count=None, role_class=role,
-        )
-
-    return rows.done()
-
-
 # Trakt / TVmaze
 
 
@@ -607,7 +521,7 @@ def parse_tvmaze(data: Any) -> ParsedTitle:
     return rows.done()
 
 
-# Wikipedia / Wikidata
+# Wikipedia
 
 # Shared by `parse_wikipedia` and `parse_wikipedia_reception`, which must agree on section starts
 # or the reception prose is stored twice.
@@ -694,175 +608,7 @@ def parse_wikipedia(data: Any) -> ParsedTitle:
     return rows.done()
 
 
-def parse_mpst(data: Any) -> ParsedTitle:
-    """MPST synopsis and tags.
-
-    The synopsis is the longest plot text and spoils the ending, so `SOURCE_PRIORITY` puts mpst last.
-    Tags are a closed 71-term crowd vocabulary: a precision check, never negatives.
-    """
-    data = _payload(data)
-    if data is None:
-        return ParsedTitle(source="mpst")
-    rows = _Rows("mpst")
-    synopsis = clean_text(data.get("plot_synopsis") or "")
-    tags = [t for t in (data.get("tags") or []) if t]
-
-    if synopsis or tags:
-        rows.emit(
-            "title_meta",
-            year=None, runtime_min=None, tagline=None, plot_short=None,
-            plot_full=synopsis or None, status=None, original_language=None, budget=None,
-            revenue=None, poster_url=None, backdrop_url=None, homepage=None, content_rating=None,
-            episode_count=None, season_count=None, first_air_date=None, last_air_date=None,
-            in_production=None,
-            extra=json.dumps({"tags": tags, "synopsis_source": data.get("synopsis_source"),
-                              "mpst_split": data.get("split")}, ensure_ascii=False),
-        )
-    for tag in tags:
-        rows.emit("title_keyword", keyword=tag)
-    return rows.done()
-
-
-# Wikidata models duos and teams as entities; stored as people they sit beside their members.
-_COLLECTIVE = re.compile(r"(\s(and|&)\s|/|\b(brothers|sisters|bros|brothers\.|team)\b)", re.I)
-
-
-def is_collective(name: str | None) -> bool:
-    """Is this label a duo/collective rather than one human?"""
-    n = (name or "").strip()
-    if not n:
-        return False
-    if _COLLECTIVE.search(n):
-        return True
-    # "Zucker, Abrahams and Zucker" style. Hyphenated pair pen-names are deliberately not caught:
-    # real names hyphenate too.
-    return n.count(",") >= 2
-
-
-WD_PEOPLE = {"P57": ("Directing", "Director", "director"),
-             "P58": ("Writing", "Screenplay", "writer"),
-             "P344": ("Camera", "Director of Photography", "dp"),
-             "P86": ("Sound", "Composer", "composer"),
-             "P1040": ("Editing", "Editor", "editor"),
-             "P2554": ("Art", "Production Designer", "prod_designer")}
-
-
-def _wd_value(statement: Mapping[str, Any]) -> Any:
-    return ((statement.get("mainsnak") or {}).get("datavalue") or {}).get("value")
-
-
-def parse_wikidata_entity(entity: Any, labels: Mapping[str, str] | None = None) -> ParsedTitle:
-    """A `wbgetentities` entity plus the label lookup its Q-ids resolve through.
-
-    Nothing fetches this document (decision 374); the bundle ships its rows. An absent label emits no
-    credit rather than one named "Q193570".
-    """
-    entity = _payload(entity)
-    if entity is None:
-        return ParsedTitle(source="wikidata")
-    labels = labels or {}
-    rows = _Rows("wikidata")
-    claims = entity.get("claims") or {}
-
-    def qids(prop: str, *, credits: bool = False) -> list[str]:
-        """Q-ids from a property's statements.
-
-        With `credits=True`, skips DEPRECATED ranks and qualifiers scoping the claim elsewhere (142
-        deprecated statements put wrong directors on films).
-        """
-        out = []
-        for statement in claims.get(prop, []):
-            if credits:
-                if statement.get("rank") == "deprecated":
-                    continue
-                qualifiers = statement.get("qualifiers") or {}
-                # P3831 object has role (dubbing director), P582 end time
-                if "P3831" in qualifiers or "P582" in qualifiers:
-                    continue
-            value = _wd_value(statement)
-            if isinstance(value, Mapping) and value.get("id"):
-                out.append(value["id"])
-        return out
-
-    def qids_with_year(prop: str) -> list[tuple[str, int | None]]:
-        """Q-ids plus the statement's "point in time" qualifier (P585), which dates an award."""
-        out: list[tuple[str, int | None]] = []
-        for statement in claims.get(prop, []):
-            value = _wd_value(statement)
-            if not (isinstance(value, Mapping) and value.get("id")):
-                continue
-            year = None
-            for qualifier in (statement.get("qualifiers") or {}).get("P585") or []:
-                time = ((qualifier.get("datavalue") or {}).get("value") or {}).get("time")
-                if isinstance(time, str) and re.match(r"[+-]\d{4}", time):
-                    year = int(time[1:5])
-                    break
-            out.append((value["id"], year))
-        return out
-
-    def quantities(prop: str) -> list[float]:
-        out = []
-        for statement in claims.get(prop, []):
-            value = _wd_value(statement)
-            if isinstance(value, Mapping) and value.get("amount"):
-                with contextlib.suppress(ValueError):
-                    out.append(float(str(value["amount"]).lstrip("+")))
-        return out
-
-    for prop, (department, job, role) in WD_PEOPLE.items():
-        for qid in qids(prop, credits=True):
-            name = labels.get(qid)
-            if not name or is_collective(name):
-                continue
-            rows.emit("credit", person={"name": name}, department=department, job=job,
-                      character=None, billing_order=None, episode_count=None, role_class=role)
-
-    for qid in qids("P495"):
-        if labels.get(qid):
-            rows.emit("title_country", country=labels[qid])
-    for qid in qids("P364"):
-        if labels.get(qid):
-            rows.emit("title_language", language=labels[qid], is_primary=1)
-    for qid in qids("P136"):
-        if labels.get(qid):
-            rows.emit("title_genre", genre=labels[qid], position=None)
-    for prop in ("P921", "P840", "P915"):
-        for qid in qids(prop):
-            if labels.get(qid):
-                rows.emit("title_keyword", keyword=labels[qid])
-    for qid in qids("P272"):
-        if labels.get(qid):
-            rows.emit("title_company", company=labels[qid], role="production", country=None)
-    for qid in qids("P449"):
-        if labels.get(qid):
-            rows.emit("title_company", company=labels[qid], role="network", country=None)
-
-    for prop, result in (("P166", "won"), ("P1411", "nominated")):
-        for qid, year in qids_with_year(prop):
-            if labels.get(qid):
-                rows.emit("award", award=labels[qid], category="award", year=year, result=result,
-                          person=None, count=1)
-
-    budget = quantities("P2130")
-    box_office = quantities("P2142")
-    if budget or box_office:
-        description = ((entity.get("descriptions") or {}).get("en") or {}).get("value")
-        rows.emit(
-            "title_meta",
-            year=None, runtime_min=None, tagline=None, plot_short=None, plot_full=None,
-            status=None, original_language=None,
-            budget=int(max(budget)) if budget else None,
-            revenue=int(max(box_office)) if box_office else None,
-            poster_url=None, backdrop_url=None, homepage=None, content_rating=None,
-            episode_count=None, season_count=None, first_air_date=None, last_air_date=None,
-            in_production=None,
-            extra=json.dumps({"qid": entity.get("id"), "description": description},
-                             ensure_ascii=False),
-        )
-    return rows.done()
-
-
-# Score-only pages (Letterboxd / RT / Metacritic)
+# Score-only pages (RT / Metacritic)
 
 
 def _as_int(value: Any) -> int | None:
@@ -872,28 +618,6 @@ def _as_int(value: Any) -> int | None:
         return int(re.sub(r"[^\d]", "", str(value)) or 0) or None
     except ValueError:
         return None
-
-
-def parse_letterboxd_page(content: bytes) -> ParsedTitle:
-    """Letterboxd's film page: an aggregate rating out of 5, and its genres.
-
-    Nothing fetches this page (decision 374); the bundle ships its rows.
-    """
-    rows = _Rows("letterboxd")
-    for blob in ld_json(content):
-        for item in (blob if isinstance(blob, list) else [blob]):
-            if not isinstance(item, Mapping):
-                continue
-            aggregate = item.get("aggregateRating") or {}
-            if aggregate.get("ratingValue") is not None:
-                rows.emit("platform_rating", metric="user_score",
-                          value=float(aggregate["ratingValue"]),
-                          scale=float(aggregate.get("bestRating") or 5),
-                          votes=_as_int(aggregate.get("ratingCount")))
-            for genre in item.get("genre") or []:
-                if isinstance(genre, str):
-                    rows.emit("title_genre", genre=genre, position=None)
-    return rows.done()
 
 
 _RT_SCORECARD = re.compile(rb"<media-scorecard\b.*?</media-scorecard>", re.I | re.S)
@@ -1090,24 +814,21 @@ def page_belongs_to_title(content: bytes, *, year: int | None, people: set[str],
 
 # dispatch
 
-# `(source, kind prefix)` -> (parser, wants JSON, row source). The row source can differ from the
-# store source (`mpst_bulk` -> `mpst`) and must be known even when a parse yields nothing.
+# `(source, kind prefix)` -> (parser, row source). The row source must be known even when a parse
+# yields nothing.
 _JSON_PARSERS: dict[tuple[str, str], tuple[Any, str]] = {
     ("tmdb", "movie_detail"): (parse_tmdb_detail, "tmdb"),
     ("tmdb", "tv_detail"): (parse_tmdb_detail, "tmdb"),
     ("omdb", "detail"): (parse_omdb, "omdb"),
-    ("jellyfin", "items"): (parse_jellyfin_item, "jellyfin"),
     ("trakt", "summary"): (parse_trakt_summary, "trakt"),
     ("trakt", "ratings"): (parse_trakt_ratings, "trakt"),
     ("tvmaze", "show"): (parse_tvmaze, "tvmaze"),
     ("wikipedia", "article"): (parse_wikipedia, "wikipedia"),
-    ("mpst_bulk", "meta"): (parse_mpst, "mpst"),
 }
 
 _BYTE_PARSERS: dict[tuple[str, str], tuple[Any, str]] = {
     ("rottentomatoes", "page"): (parse_rt_page, "rottentomatoes"),
     ("metacritic", "page"): (parse_metacritic_page, "metacritic"),
-    ("letterboxd", "film"): (parse_letterboxd_page, "letterboxd"),
 }
 
 

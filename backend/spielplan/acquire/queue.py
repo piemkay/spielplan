@@ -10,7 +10,7 @@ import json
 import logging
 import os
 import socket
-from collections.abc import Iterable, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Any
@@ -50,7 +50,7 @@ def worker_id() -> str:
 
 @dataclass
 class Task:
-    """One leased unit of work, as the drain sees it; `paid` lets a stage assert its batch."""
+    """One leased unit of work, as the drain sees it."""
 
     id: int
     kind: str
@@ -59,7 +59,6 @@ class Task:
     attempts: int
     max_attempts: int
     priority: int
-    paid: bool
 
     @classmethod
     def from_row(cls, row: asyncpg.Record) -> Task:
@@ -70,7 +69,7 @@ class Task:
         return cls(
             id=row["id"], kind=row["kind"], key=row["key"], payload=payload or {},
             attempts=row["attempts"], max_attempts=row["max_attempts"],
-            priority=row["priority"], paid=row["paid"],
+            priority=row["priority"],
         )
 
 
@@ -82,7 +81,6 @@ async def enqueue(
     *,
     priority: int = 100,
     max_attempts: int = 4,
-    paid: bool = False,
 ) -> bool:
     """Add one task. True when a row was created, False when this (kind, key) was already here.
 
@@ -90,36 +88,12 @@ async def enqueue(
     encoder would double-encode a dict.
     """
     created = await conn.fetchval(
-        "INSERT INTO acquisition_task (kind, key, payload, priority, max_attempts, paid) "
-        "VALUES ($1, $2, $3::text::jsonb, $4, $5, $6) "
+        "INSERT INTO acquisition_task (kind, key, payload, priority, max_attempts) "
+        "VALUES ($1, $2, $3::text::jsonb, $4, $5) "
         "ON CONFLICT (kind, key) DO NOTHING RETURNING id",
-        kind, key, json.dumps(payload or {}), priority, max_attempts, paid,
+        kind, key, json.dumps(payload or {}), priority, max_attempts,
     )
     return created is not None
-
-
-async def enqueue_many(
-    conn: asyncpg.Connection,
-    kind: str,
-    items: Iterable[tuple[str, dict[str, Any] | None]],
-    *,
-    priority: int = 100,
-    max_attempts: int = 4,
-    paid: bool = False,
-) -> int:
-    """Add a batch of one kind in one `unnest` statement. Returns how many rows were created."""
-    batch = [(key, json.dumps(payload or {})) for key, payload in items]
-    if not batch:
-        return 0
-    created = await conn.fetch(
-        "INSERT INTO acquisition_task (kind, key, payload, priority, max_attempts, paid) "
-        "SELECT $1, item.key, item.payload::jsonb, $4, $5, $6 "
-        "  FROM unnest($2::text[], $3::text[]) AS item(key, payload) "
-        "ON CONFLICT (kind, key) DO NOTHING RETURNING id",
-        kind, [key for key, _ in batch], [payload for _, payload in batch],
-        priority, max_attempts, paid,
-    )
-    return len(created)
 
 
 async def lease(
@@ -128,7 +102,6 @@ async def lease(
     *,
     limit: int = 1,
     owner: str | None = None,
-    paid: bool = False,
 ) -> list[Task]:
     """Claim up to `limit` ready tasks, atomically, and return them.
 
@@ -145,11 +118,11 @@ async def lease(
         "       updated_at = now()"
         " WHERE id IN ("
         "       SELECT id FROM acquisition_task"
-        "        WHERE state = $4 AND next_attempt_at <= now() AND paid = $5::bool"
-        "          AND ($6::text[] IS NULL OR kind = ANY($6::text[]))"
-        "        ORDER BY priority, id LIMIT $7 FOR UPDATE SKIP LOCKED"
-        " ) RETURNING id, kind, key, payload, attempts, max_attempts, priority, paid",
-        LEASED, owner or worker_id(), LEASE_SECONDS, PENDING, paid,
+        "        WHERE state = $4 AND next_attempt_at <= now()"
+        "          AND ($5::text[] IS NULL OR kind = ANY($5::text[]))"
+        "        ORDER BY priority, id LIMIT $6 FOR UPDATE SKIP LOCKED"
+        " ) RETURNING id, kind, key, payload, attempts, max_attempts, priority",
+        LEASED, owner or worker_id(), LEASE_SECONDS, PENDING,
         list(kinds) if kinds else None, limit,
     )
     # `UPDATE ... RETURNING` has no order, and the drain refunds positionally, so sort here.
@@ -296,19 +269,14 @@ async def stats(conn: asyncpg.Connection) -> list[dict[str, Any]]:
     return [{"kind": r["kind"], "state": r["state"], "count": int(r["n"])} for r in rows]
 
 
-async def pending_count(
-    conn: asyncpg.Connection, kinds: Sequence[str] | None = None, *, paid: bool = False
-) -> int:
-    """How much work could be leased right now -- the drain's question, not the board's.
-
-    Due tasks only, and `paid` defaults like `lease`'s, so it answers "is there work I will take".
-    """
+async def pending_count(conn: asyncpg.Connection, kinds: Sequence[str] | None = None) -> int:
+    """How much due work could be leased right now -- the drain's question, not the board's."""
     return int(
         await conn.fetchval(
             "SELECT count(*) FROM acquisition_task"
-            " WHERE state = $1 AND next_attempt_at <= now() AND paid = $3::bool"
+            " WHERE state = $1 AND next_attempt_at <= now()"
             "   AND ($2::text[] IS NULL OR kind = ANY($2::text[]))",
-            PENDING, list(kinds) if kinds else None, paid,
+            PENDING, list(kinds) if kinds else None,
         )
     )
 

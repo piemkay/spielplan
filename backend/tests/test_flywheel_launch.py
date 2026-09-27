@@ -281,18 +281,19 @@ async def test_an_id_the_queue_does_not_hold_refuses_the_whole_launch(db, queued
     assert await _snapshot(db) == before
 
 
-async def test_a_row_whose_producer_is_m6s_refuses_the_whole_launch_naming_m6(db, queued):
-    """No M5 stage can act on a query, so rows M6 produces refuse the launch naming M6."""
+async def test_a_row_whose_producer_is_m6s_refuses_the_whole_launch(db, queued):
+    """No M5 stage can act on a query, so a row from M6's feeds refuses the launch."""
     await _cap(db, BIG_CAP)
-    m6 = await store.enqueue(db, kind=store.EMPTY_PREDICATE, detail={"terms": ["themes.robots"]},
-                             reason="no owned title carries robots")
+    m6 = await db.fetchval(
+        "INSERT INTO flywheel_item (kind, detail, reason)"
+        " VALUES ('empty_predicate', '{}'::jsonb, 'no owned title carries robots') RETURNING id"
+    )
     before = await _snapshot(db)
 
     with pytest.raises(batch.LaunchRefused) as refused:
         await batch.launch(db, item_ids=[queued[A], m6], **PLAN)
 
-    assert refused.value.reason.startswith(f"row {m6} comes from the empty_predicate feed, whose"
-                                           " producer is M6's"), refused.value.reason
+    assert refused.value.reason.startswith("the selection changed"), refused.value.reason
     assert await _snapshot(db) == before
 
 

@@ -50,17 +50,15 @@ describe('the selection', () => {
     expect([...toggle(one, 11)]).toEqual([]);
   });
 
-  it('counts the selected rows titles, a row with no figure as the one title it names', () => {
+  it('counts one title a selected row', () => {
     expect(titlesOf(items, new Set())).toBe(0);
     expect(titlesOf(items, new Set([11]))).toBe(1);
-    expect(titlesOf(items, new Set([11, 12]))).toBe(2);
-    expect(titlesOf(items, new Set([11, 12, 13]))).toBe(9);
+    expect(titlesOf(items, new Set([11, 12, 13]))).toBe(3);
   });
 
-  it('labels the two feeds whose producer is M6 as such', () => {
+  it('labels the thin-facet feed and shows any other kind as stored', () => {
     expect(kindLabel('thin_facet')).toBe('thin facet');
-    expect(kindLabel('empty_predicate')).toMatch(/M6/);
-    expect(kindLabel('uncovered_frontier')).toMatch(/M6/);
+    expect(kindLabel('empty_predicate')).toBe('empty_predicate');
   });
 });
 

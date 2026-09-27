@@ -41,16 +41,6 @@ async def test_enqueueing_the_same_kind_and_key_twice_creates_one_task(db):
     assert await db.fetchval("SELECT count(*) FROM acquisition_task") == 2
 
 
-async def test_enqueue_many_reports_only_the_rows_it_created(db):
-    """An empty batch issues no statement: `unnest` of two empty arrays still costs a round trip."""
-    assert await queue.enqueue_many(db, "identify", [("jf:1", None), ("jf:2", {"item": "2"})]) == 2
-    assert await queue.enqueue_many(db, "identify", [("jf:2", {"item": "no"}), ("jf:3", None)]) == 1
-    assert await queue.enqueue_many(db, "identify", []) == 0
-
-    assert await db.fetchval("SELECT count(*) FROM acquisition_task") == 3
-    assert (await _row(db, "jf:2"))["payload"] == {"item": "2"}
-
-
 async def test_the_lease_takes_the_due_task_with_the_lowest_priority_number(db):
     """Ignoring priority starves stage 1; ignoring `next_attempt_at` leases a 30-day deferral next tick."""
     await queue.enqueue(db, "identify", "ordinary", priority=100)
@@ -187,32 +177,6 @@ async def test_two_leasers_racing_for_one_task_produce_one_completion(db, pg_url
     assert await db.fetchval("SELECT attempts FROM acquisition_task") == 1
 
 
-async def test_a_generic_drain_never_leases_a_paid_task(db):
-    """Equality, not "include paid": the paid drain leases paid work and nothing else."""
-    await queue.enqueue(db, "dna-extract", "t:1000000001", paid=True)
-    await queue.enqueue(db, "identify", "jf:free")
-
-    leased = await queue.lease(db, limit=5)
-    assert [task.kind for task in leased] == ["identify"]
-    assert leased[0].paid is False
-    assert await queue.lease(db, limit=5) == []
-
-    [billed] = await queue.lease(db, limit=5, paid=True)
-    assert billed.kind == "dna-extract"
-    assert billed.paid is True
-
-    # `pending_count` asks the lease's question, so a paid task does not make free work look pending.
-    await queue.enqueue(db, "identify", "jf:free-2")
-    assert await queue.pending_count(db) == 1, "the free task the generic drain would take"
-    assert await queue.pending_count(db, paid=True) == 0, "the paid one is leased, not pending"
-    await queue.enqueue(db, "dna-extract", "t:1000000002", paid=True)
-    assert await queue.pending_count(db) == 1, (
-        "a paid task is not work a caller that leases free work would take"
-    )
-    assert await queue.pending_count(db, paid=True) == 1
-    assert await queue.pending_count(db, ["dna-extract"]) == 0
-
-
 async def test_a_deferred_task_is_not_leased_before_its_time(db):
     """A deferral refunds its attempt and writes `result_note`, not `last_error`: waiting is not failing."""
     await queue.enqueue(db, "reviews-gate", "t:1000000001")
@@ -306,7 +270,8 @@ async def test_a_skipped_task_keeps_its_note_and_releases_its_lease(db):
 
 async def test_the_queue_can_be_counted_without_claiming_anything(db):
     """`pending_count` counts what could be leased RIGHT NOW: a deferred task is pending and not work."""
-    await queue.enqueue_many(db, "identify", [("jf:1", None), ("jf:2", None)])
+    await queue.enqueue(db, "identify", "jf:1")
+    await queue.enqueue(db, "identify", "jf:2")
     await queue.enqueue(db, "enrich", "t:1000000001")
     [task] = await queue.lease(db, kinds=["enrich"])
     await queue.complete(db, task.id)

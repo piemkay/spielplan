@@ -28,10 +28,8 @@ from spielplan.acquire.fetch import (
 from spielplan.acquire.hosts import (
     DEFAULT_RPS,
     HOST_POLICIES,
-    declared_policies,
     normalise_host,
     policy_for,
-    undocumented_overrides,
 )
 
 # Hosts whose declared policy turns robots off, so a pacing count carries no robots.txt request.
@@ -96,10 +94,9 @@ def test_the_two_html_connectors_stage_two_names_are_kept_deliberately_slow():
 
 def test_every_robots_override_records_the_reasoning_that_licenses_it():
     """An override needs its reasoning beside it; the second assertion stops the first passing vacuously."""
-    assert undocumented_overrides() == []
     overridden = [h for h, p in HOST_POLICIES.items() if not p.respect_robots]
+    assert [h for h in overridden if not HOST_POLICIES[h].note.strip()] == []
     assert len(overridden) >= 5, "the table has overrides; a guard over none of them guards nothing"
-    assert "/w/" in HOST_POLICIES["www.wikidata.org"].note
 
 
 def test_the_households_own_jellyfin_is_not_a_third_party():
@@ -134,7 +131,7 @@ def test_the_households_own_jellyfin_is_not_a_third_party():
     assert policy_for("jelly.lan:8096", jellyfin_host="jelly.lan:80").rps == DEFAULT_RPS
 
     # A declared row outranks the configured Jellyfin host, or a typo there crawls a stage-2 host at 8 rps.
-    for declared in ("www.rottentomatoes.com", "www.metacritic.com", "www.film-rezensionen.de"):
+    for declared in ("www.rottentomatoes.com", "www.metacritic.com"):
         hijacked = policy_for(declared, jellyfin_host=f"https://{declared}")
         assert hijacked.rps == HOST_POLICIES[declared].rps, (
             f"a Jellyfin url typed as {declared!r} replaced a rate somebody measured"
@@ -167,23 +164,11 @@ def test_the_three_paid_provider_hosts_are_declared_with_the_corpus_numbers_and_
         assert "politeness is not the constraint" in policy.note, host
         assert "rate limit" in policy.note, host
         assert policy_for(host) is policy
-    assert undocumented_overrides() == []
     for marker in ("anthropic", "openai", "googleapis", "generativelanguage"):
         assert len([h for h in HOST_POLICIES if marker in h]) == 1, (
             f"one {marker} host is declared; a second spelling of a provider is a second bucket "
             "and a second breaker for one rate limit"
         )
-
-
-def test_the_board_can_read_every_policy_including_its_reasoning():
-    """§8: policies are data "so §6.6 can show them"; sorted, so two reads agree."""
-    rows = declared_policies()
-    assert len(rows) == len(HOST_POLICIES)
-    assert [r["host"] for r in rows] == sorted(HOST_POLICIES)
-    assert set(rows[0]) == {
-        "host", "rps", "burst", "max_concurrency", "breaker_threshold",
-        "breaker_cooldown_s", "respect_robots", "note",
-    }
 
 
 async def test_a_host_is_paced_at_its_declared_rate_once_its_burst_is_spent():
@@ -1088,7 +1073,7 @@ async def test_the_report_says_what_the_drain_did_after_the_context_has_closed(d
 
 async def test_the_report_carries_the_rate_actually_in_use_and_not_only_the_declared_one():
     """The report shows the rate in use after `Crawl-delay`, not only the declared ceiling."""
-    host = "www.film-rezensionen.de"
+    host = "www.metacritic.com"
 
     def publisher(request: httpx.Request) -> httpx.Response:
         if request.url.path == "/robots.txt":
@@ -1099,9 +1084,9 @@ async def test_the_report_carries_the_rate_actually_in_use_and_not_only_the_decl
         await f.get(f"https://{host}/kritik/x")
         row = {r["host"]: r for r in f.host_report()}[host]
 
-    assert row["rps"] == HOST_POLICIES[host].rps == 0.5, "the declared ceiling is still published"
+    assert row["rps"] == HOST_POLICIES[host].rps == 0.7, "the declared ceiling is still published"
     assert row["effective_rps"] == pytest.approx(1 / 30), (
-        "the board would tell an operator this host is crawled fifteen times faster than it is"
+        "the board would tell an operator this host is crawled twenty times faster than it is"
     )
 
 

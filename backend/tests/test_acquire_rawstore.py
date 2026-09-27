@@ -183,68 +183,6 @@ async def test_the_re_parse_path_issues_no_request(db, raw_root, monkeypatch):
     )
 
 
-async def test_latest_reads_the_last_document_that_worked(db, raw_root):
-    """A failed fetch written after a good one must not become what the derive parses."""
-    key = "tmdb:329865"
-    good = await rawstore.store(
-        db, source="tmdb", kind="detail", url="u1", content=b'{"ok": 1}', entity_key=key,
-    )
-    bad = await rawstore.store(
-        db, source="tmdb", kind="detail", url="u2", content=b"upstream 500", entity_key=key,
-        http_status=500, ok=False, error="500 from tmdb",
-    )
-    await db.execute(
-        "UPDATE raw_document SET fetched_at = fetched_at + interval '1 minute' WHERE id = $1", bad
-    )
-
-    row = await rawstore.latest(db, "tmdb", "detail", key)
-    assert row["id"] == good
-    assert await rawstore.latest(db, "tmdb", "detail", "tmdb:nothing-here") is None
-
-
-async def test_latest_for_url_carries_the_validators_a_conditional_request_needs(db, raw_root):
-    """No `ok` filter here, unlike `latest`: "what happened at this url last" includes 304s and 404s."""
-    url = "https://www.omdbapi.com/?i=tt2543164"
-    await rawstore.store(db, source="omdb", kind="detail", url=url, content=b"{}", etag='W/"1"')
-    newest = await rawstore.store(
-        db, source="omdb", kind="detail", url=url, content=b"", http_status=304, ok=False,
-        etag='W/"2"', last_modified="Wed, 17 Sep 2026 00:00:00 GMT",
-    )
-    await db.execute(
-        "UPDATE raw_document SET fetched_at = fetched_at + interval '1 minute' WHERE id = $1",
-        newest,
-    )
-
-    row = await rawstore.latest_for_url(db, url)
-    assert row["id"] == newest
-    assert row["etag"] == 'W/"2"'
-    assert row["last_modified"] == "Wed, 17 Sep 2026 00:00:00 GMT"
-
-
-async def test_two_documents_written_in_one_transaction_are_still_ordered(db, raw_root):
-    """`now()` is transaction time, so two rows in one transaction tie; `id DESC` breaks it."""
-    url = "https://api.themoviedb.org/3/movie/603"
-    key = "tmdb:603"
-    async with db.transaction():
-        first = await rawstore.store(
-            db, source="tmdb", kind="detail", url=url, content=b'{"n": 1}', entity_key=key,
-            etag='"OLD"',
-        )
-        second = await rawstore.store(
-            db, source="tmdb", kind="detail", url=url, content=b'{"n": 2}', entity_key=key,
-            etag='"NEW"',
-        )
-
-    stamps = [r["fetched_at"] for r in await db.fetch(
-        "SELECT fetched_at FROM raw_document WHERE url = $1 ORDER BY id", url
-    )]
-    assert stamps[0] == stamps[1], "the fixture is only interesting while the timestamps tie"
-
-    assert (await rawstore.latest_for_url(db, url))["id"] == second
-    assert (await rawstore.latest(db, "tmdb", "detail", key))["id"] == second
-    assert first != second
-
-
 async def test_a_zero_length_file_under_a_good_digest_is_rewritten(db, raw_root):
     """No `fsync`: a power cut can leave an empty or short
     file under a good digest; gzip's ISIZE catches both."""
@@ -301,12 +239,9 @@ async def test_a_304_cannot_be_stored_as_a_good_document(db, raw_root):
         http_status=304, ok=False, etag='"v1"',
     )
     assert noted is not None
-    newest = await rawstore.latest(db, "tmdb", "detail", "tmdb:329865")
-    assert newest["byte_size"] == len(b'{"title": "Arrival"}'), (
-        "a 304 became the newest good document, and every later derive read b'' as the page"
-    )
-    assert (await rawstore.latest_for_url(db, url))["http_status"] == 304, (
-        "the fetch history still shows what happened at this url last"
+    rows = await db.fetch("SELECT ok, http_status FROM raw_document WHERE url = $1 ORDER BY id", url)
+    assert [(row["ok"], row["http_status"]) for row in rows] == [(True, 200), (False, 304)], (
+        "a 304 became a good document, and every later derive read b'' as the page"
     )
 
 

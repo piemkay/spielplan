@@ -200,29 +200,3 @@ async def read_text(conn: asyncpg.Connection, doc_id: int) -> str:
 
 async def read_json(conn: asyncpg.Connection, doc_id: int) -> Any:
     return json.loads(await read_text(conn, doc_id))
-
-
-async def latest(
-    conn: asyncpg.Connection, source: str, kind: str, entity_key: str
-) -> asyncpg.Record | None:
-    """The newest successful document for one entity -- what a per-title derive reads.
-
-    `ok` only; `, id DESC` breaks `now()` ties.
-    """
-    return await conn.fetchrow(
-        """SELECT * FROM raw_document
-            WHERE source = $1 AND kind = $2 AND entity_key = $3 AND ok
-            ORDER BY fetched_at DESC, id DESC LIMIT 1""",
-        source, kind, entity_key,
-    )
-
-
-async def latest_for_url(conn: asyncpg.Connection, url: str) -> asyncpg.Record | None:
-    """The last thing this app saw at this url, whatever it was. Fetch history, not a validator.
-
-    No `ok` filter. Not the conditional re-fetch's read: that is `fetch._validators`, which filters on
-    `ok`. `, id DESC` because rows written in one transaction share `now()`.
-    """
-    return await conn.fetchrow(
-        "SELECT * FROM raw_document WHERE url = $1 ORDER BY fetched_at DESC, id DESC LIMIT 1", url
-    )
