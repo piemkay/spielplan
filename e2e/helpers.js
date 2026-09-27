@@ -59,10 +59,12 @@ export async function signedIn(page, admin = ADMIN) {
 }
 
 /** By test id: `.chip` is a shared pill class and is ambiguous off Home. */
+/** You (decision 527): the avatar opens a sheet holding what the account menu held. */
 export async function openAccountMenu(page) {
   await page.getByTestId('account-chip').click();
-  await expect(page.locator('.menu')).toBeVisible();
-  return page.locator('.menu');
+  const sheet = page.getByRole('dialog', { name: 'You' });
+  await expect(sheet).toBeVisible();
+  return sheet;
 }
 
 /** Home's kind switch (decision 474): Films, Series or Both, one position pressed. */

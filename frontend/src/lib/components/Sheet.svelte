@@ -22,6 +22,8 @@
   let dragY = $state(0);
   let dragFrom = null;
   let opener = null;
+  // The pushed entry reaches `$page.state` a tick after the push; only an entry seen can be popped.
+  let entered = false;
 
   const stack = $derived($page.state?.sheets ?? []);
 
@@ -36,7 +38,8 @@
 
   // Back took our entry away: close without touching history again.
   $effect(() => {
-    if (pushed && !stack.includes(key)) settle();
+    if (stack.includes(key)) entered = true;
+    else if (pushed && entered) settle();
   });
 
   // Closed from outside while our entry is still on top: drop it.
@@ -46,6 +49,7 @@
 
   function settle() {
     pushed = false;
+    entered = false;
     dragY = 0;
     document.documentElement.style.overflow = '';
     if (opener instanceof HTMLElement) opener.focus({ preventScroll: true });

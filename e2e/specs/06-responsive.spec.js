@@ -18,7 +18,7 @@ test('the navigation adapts: a rail on desktop, a bottom bar on a phone', async 
   page,
   isMobile,
 }) => {
-  const nav = page.getByRole('navigation', { name: 'Surfaces' });
+  const nav = page.getByRole('navigation', { name: 'Main' });
   await expect(nav).toBeVisible();
 
   const navBox = await nav.boundingBox();
@@ -37,22 +37,47 @@ test('touch targets meet the 48 px rule on a phone', async ({ page, isMobile }) 
   test.skip(!isMobile, 'the rule is about fingers');
 
   // `design.css`'s `--touch: 48px`.
-  const nav = page.getByRole('navigation', { name: 'Surfaces' });
+  const nav = page.getByRole('navigation', { name: 'Main' });
   for (const link of await nav.getByRole('link').all()) {
     const box = await link.boundingBox();
     expect(box.height, 'nav targets are at least --touch (48px) tall').toBeGreaterThanOrEqual(48);
     expect(box.width, 'nav targets are at least --touch (48px) wide').toBeGreaterThanOrEqual(48);
   }
 
-  // Both dimensions: `design.css`'s coarse block raises `min-height` and never `min-width`.
+  // The segmented control draws 36 px and extends its hit area (decision 527): measure where a
+  // finger lands, not the box that is drawn.
   for (const control of await page.getByRole('group', { name: 'Kind' }).getByRole('button').all()) {
-    const box = await control.boundingBox();
+    const hit = await hitArea(control);
     const name = (await control.textContent())?.trim();
-    const floor = `the ${name} kind toggle is at least --touch (48px)`;
-    expect(box.height, `${floor} tall`).toBeGreaterThanOrEqual(48);
-    expect(box.width, `${floor} wide`).toBeGreaterThanOrEqual(48);
+    const floor = `the ${name} kind toggle takes a tap across at least --touch (48px)`;
+    expect(hit.height, `${floor} of height`).toBeGreaterThanOrEqual(48);
+    expect(hit.width, `${floor} of width`).toBeGreaterThanOrEqual(48);
   }
 });
+
+/** How far from its centre a tap still lands on the control, vertically and horizontally. */
+async function hitArea(locator) {
+  return locator.evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    const cx = r.left + r.width / 2;
+    const cy = r.top + r.height / 2;
+    const lands = (x, y) => {
+      const at = document.elementFromPoint(x, y);
+      return !!at && (at === el || el.contains(at));
+    };
+    const span = (step) => {
+      let lo = 0;
+      let hi = 0;
+      while (lo < 60 && step(-(lo + 1))) lo += 1;
+      while (hi < 60 && step(hi + 1)) hi += 1;
+      return lo + hi + 1;
+    };
+    return {
+      height: span((d) => lands(cx, cy + d)),
+      width: span((d) => lands(cx + d, cy))
+    };
+  });
+}
 
 test('the bottom bar sits inside the visible viewport, not the large one', async ({
   page,
@@ -63,7 +88,7 @@ test('the bottom bar sits inside the visible viewport, not the large one', async
   // On iOS Safari `100vh` is the large viewport, under the toolbar. Playwright has no toolbar, so
   // `100vh` and `100dvh` agree here: this holds only the geometry, at rest and scrolled
   // (the device fact is a manual check in docs/TESTING.md, decision 281).
-  const nav = page.getByRole('navigation', { name: 'Surfaces' });
+  const nav = page.getByRole('navigation', { name: 'Main' });
   await expect(nav).toBeVisible();
 
   const measure = async (when) => {
@@ -87,74 +112,45 @@ test('the bottom bar sits inside the visible viewport, not the large one', async
   await measure('with the surface scrolled to the end');
 });
 
-test('the header grows by the status-bar inset when one is reported', async ({
+test('the top row grows by the status-bar inset when one is reported', async ({
   page,
   browserName
 }) => {
   test.skip(browserName !== 'chromium', 'Emulation.* is CDP, and WebKit has no CDP');
 
-  // Decision 279: the header reserves `env(safe-area-inset-top)` in its padding and its height.
+  // Decision 279: the top row reserves `env(safe-area-inset-top)` in its padding and its height.
   // Chromium's `Emulation.setSafeAreaInsetsOverride` injects the inset: the arithmetic is
   // measured here, not the device fact (decisions 281, 284).
-  const header = page.locator('.shell > header');
+  const header = page.locator('header.topbar');
   await expect(header).toBeVisible();
 
-  const before = await header.boundingBox();
   const padding = () => header.evaluate((el) => getComputedStyle(el).paddingTop);
+  const INSET = 47; // iPhone 13, portrait. 59 from the 14 Pro on.
+  const BOTTOM = 34; // iPhone 13, portrait: the home indicator.
+  await page.setViewportSize({ width: 390, height: 844 });
+  const before = await header.boundingBox();
   expect(await padding(), 'no engine here reports an inset until one is asked for').toBe('0px');
 
-  const INSET = 47; // iPhone 13, portrait. 59 from the 14 Pro on.
   const cdp = await page.context().newCDPSession(page);
-  await cdp.send('Emulation.setSafeAreaInsetsOverride', { insets: { top: INSET } });
+  await cdp.send('Emulation.setSafeAreaInsetsOverride', {
+    insets: { top: INSET, bottom: BOTTOM }
+  });
   await expect
-    .poll(padding, { message: 'the header does not pad itself by env(safe-area-inset-top)' })
+    .poll(padding, { message: 'the top row does not pad itself by env(safe-area-inset-top)' })
     .toBe(`${INSET}px`);
 
   const after = await header.boundingBox();
   expect(
     Math.round(after.height - before.height),
-    'the header pads by the inset but does not GROW by it, so the row below it moves up under ' +
-      'the status bar'
+    'the top row pads by the inset but does not GROW by it, so the page moves up under the status bar'
   ).toBe(INSET);
 
-  const brand = await page.locator('.shell > header .brand').boundingBox();
-  expect(
-    brand.y,
-    'the header reserved the inset and drew its content inside it anyway'
-  ).toBeGreaterThanOrEqual(INSET);
+  const avatar = await page.getByTestId('account-chip').boundingBox();
+  expect(avatar.y, 'the top row reserved the inset and drew You inside it anyway').toBeGreaterThanOrEqual(
+    INSET
+  );
 
-  // And at phone width: the phone header's `height: auto` discards the base rule's `calc()`, so
-  // the inset is repeated there on min-height.
-  await page.setViewportSize({ width: 390, height: 844 });
-  // Re-sent: whether `setViewportSize` clears a safe-area override is not a Playwright contract.
-  // With the bottom inset, which `NavRail.svelte`'s `env(safe-area-inset-bottom)` reserves.
-  const BOTTOM = 34; // iPhone 13, portrait: the home indicator.
-  await cdp.send('Emulation.setSafeAreaInsetsOverride', {
-    insets: { top: INSET, bottom: BOTTOM }
-  });
-  await expect
-    .poll(() => header.evaluate((el) => getComputedStyle(el).minHeight), {
-      message:
-        'the phone header does not repeat the inset on min-height: `height: auto` discards the ' +
-        'base rule calc(), so the whole 54 px row sits under the status bar (decision 279)'
-    })
-    .toBe(`${54 + INSET}px`);
-  expect(
-    await padding(),
-    'the phone block dropped the padding the base rule reserves'
-  ).toBe(`${INSET}px`);
-  const wrapped = await header.boundingBox();
-  expect(
-    Math.round(wrapped.height),
-    'the phone header is shorter than 54 px plus the inset it pads by'
-  ).toBeGreaterThanOrEqual(54 + INSET);
-  const phoneBrand = await page.locator('.shell > header .brand').boundingBox();
-  expect(
-    phoneBrand.y,
-    'the phone header reserved the inset and drew the wordmark inside it anyway'
-  ).toBeGreaterThanOrEqual(INSET);
-
-  const bar = page.getByRole('navigation', { name: 'Surfaces' });
+  const bar = page.getByRole('navigation', { name: 'Main' });
   await expect
     .poll(() => bar.evaluate((el) => getComputedStyle(el).paddingBottom), {
       message:
@@ -177,15 +173,15 @@ test('the page never scrolls sideways', async ({ page }) => {
   expect(overflow).toBeLessThanOrEqual(1);
 });
 
-test('the document never scrolls under the shell', async ({ page }) => {
-  // `main` is the scroller; an absolutely placed marker once escaped it (decision 516).
+test('the document is what scrolls, never an inner box', async ({ page }) => {
+  // Decision 527: tap-to-top, the toolbar's collapse and rubber-banding all act on the document.
   await expect(page.getByTestId('home-mode')).toHaveCount(1);
-  const overflow = await page.evaluate(() => ({
-    down: document.documentElement.scrollHeight - document.documentElement.clientHeight,
+  const scroll = await page.evaluate(() => ({
+    main: getComputedStyle(document.querySelector('main')).overflowY,
     across: document.documentElement.scrollWidth - document.documentElement.clientWidth
   }));
-  expect(overflow.down, 'the document scrolls under the shell').toBeLessThanOrEqual(1);
-  expect(overflow.across, 'the document scrolls sideways').toBeLessThanOrEqual(1);
+  expect(scroll.main, 'main is a scroll box again').toBe('visible');
+  expect(scroll.across, 'the document scrolls sideways').toBeLessThanOrEqual(1);
 });
 
 test('a phone opens Home on the shelves, with the filters behind one control', async ({
@@ -296,7 +292,7 @@ test('the app is installable: a manifest, an icon, and a theme colour', async ({
 
   const icon = await page.request.get(manifest.icons[0].src);
   expect(icon.ok(), 'the manifest must not point at a missing icon').toBeTruthy();
-  await expect(page.locator('meta[name=theme-color]')).toHaveAttribute('content', '#0d0d0f');
+  await expect(page.locator('meta[name=theme-color]')).toHaveAttribute('content', '#0c0b0a');
 
   // `app.html`'s metas, which no static guard reads. The CDP test above injects past the
   // viewport-fit gate, so only this sees it removed.
