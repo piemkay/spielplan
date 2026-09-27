@@ -112,7 +112,7 @@ jobs:
       # Both engines: the `phone` project is an iPhone 13, which Playwright runs on WebKit —
       # §6's phone-first layout is the primary one, not a resize of the desktop.
       - run: npx --prefix e2e playwright install --with-deps chromium webkit
-      - name: playwright (first boot, restart, then everything)
+      - name: playwright
         run: node e2e/run.mjs
 
       - name: stack logs on failure

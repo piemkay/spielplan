@@ -154,8 +154,6 @@ async function secondAccount(page, browser, baseURL) {
 
 test.beforeEach(async ({ page }) => {
   await signedIn(page);
-  const config = await (await page.request.get('/api/config')).json();
-  test.skip(!config.has_bundle, 'needs an imported bundle — run 01-first-boot first');
   // A persisted preference: the starting state is set, not assumed.
   await page.request.post('/api/auth/preferences', { data: { show_model: false } });
   await seedLedger(page.request);

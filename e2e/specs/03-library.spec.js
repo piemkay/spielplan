@@ -9,8 +9,6 @@ const countLine = (page) => page.getByTestId('count-line');
 
 test.beforeEach(async ({ page }) => {
   await signedIn(page);
-  const config = await (await page.request.get('/api/config')).json();
-  test.skip(!config.has_bundle, 'needs an imported bundle — run 01-first-boot first');
   await page.goto('/');
 });
 

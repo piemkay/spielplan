@@ -229,8 +229,6 @@ test('a long genre option does not widen the page', async ({ page }) => {
 
 test('the title detail panel is full-width on a phone', async ({ page, isMobile }) => {
   test.skip(!isMobile, 'desktop shows it as a side panel');
-  const config = await page.evaluate(() => fetch('/api/config').then((r) => r.json()));
-  test.skip(!config.has_bundle, 'needs an imported bundle');
 
   await page.locator('.card-wrap').first().click();
   const panel = page.getByLabel('Title detail');
@@ -246,8 +244,6 @@ test('on a phone every Rate control is on screen, and a battle keeps Tie and its
   // §6.1's "persistent Undo" and the decisive switch (decision 520) must be on the screen, not
   // past a hidden scrollbar or below the fold.
   test.skip(!isMobile, 'the wrap and the fold are the phone layout');
-  const config = await page.evaluate(() => fetch('/api/config').then((r) => r.json()));
-  test.skip(!config.has_bundle, 'needs an imported bundle');
 
   // Three films liked so a pair exists. Not the admin: 19-phone-shell reads the admin's queue.
   await signInAsMember(page, await createMember(page, 'rate-phone'));
