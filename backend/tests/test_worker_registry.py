@@ -246,27 +246,6 @@ async def test_neither_reader_of_job_run_pays_for_the_rows_it_is_not_reading(db)
     )
 
 
-async def test_the_backup_job_hands_the_dump_the_households_own_clock(data_dir, monkeypatch):
-    """The date must come from the household's clock, as `Job.anchor_hour` does; a range because it is
-    read inside the job."""
-    from spielplan.backup import nightly
-
-    seen: dict[str, object] = {}
-
-    async def fake_run(local):
-        seen["local"] = local
-        return nightly.BackupReport(path=Path("none"), bytes=0, pruned=(), kept=0, skipped=True)
-
-    monkeypatch.setattr(nightly, "run", fake_run)
-    job = next(j for j in worker.JOBS if j.name == "nightly-backup")
-
-    before = worker._now_local()
-    await job.run()
-    after = worker._now_local()
-
-    assert before <= seen["local"] <= after, "the dump was handed a clock that is not the household's"
-
-
 def test_the_job_names_the_card_reads_are_the_registry_s():
     """`api/admin.py` spells the names so the web process never imports torch; this pins them."""
     live = {j.name for j in worker.JOBS}

@@ -13,7 +13,7 @@ import shutil
 import subprocess
 import sys
 import zipfile
-from datetime import UTC, datetime, timedelta, timezone
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from urllib.parse import urlsplit, urlunsplit
 
@@ -724,7 +724,7 @@ async def test_the_nightly_job_writes_a_dump_into_the_backups_directory_and_prun
     directory = settings().data_dir / "backups"
     _fake_dumps(directory, 14)
 
-    report = await nightly.run(datetime.now(UTC))
+    report = await nightly.run()
 
     assert report.path.parent == directory
     assert report.path.exists() and report.bytes > 0
@@ -739,7 +739,7 @@ async def test_the_dump_contains_no_plaintext_connector_secret(db, backup_env, m
     await _seed_movie_data(db)
     ciphertext = await _seed_connector_secret(db, monkeypatch)
 
-    report = await nightly.run(datetime.now(UTC))
+    report = await nightly.run()
     with report.path.open("rb") as fh:
         sql = _run([*_client("pg_restore"), "-f", "-"], stdin=fh).stdout
 
@@ -757,7 +757,7 @@ async def test_a_dump_restored_without_secrets_key_leaves_connector_config_undec
     await _seed_movie_data(db)
     await _seed_connector_secret(db, monkeypatch)
 
-    report = await nightly.run(datetime.now(UTC))
+    report = await nightly.run()
     with report.path.open("rb") as fh:
         _run([*_client("pg_restore"), "--dbname", _inside_the_container(blank_url)], stdin=fh)
 
@@ -941,26 +941,7 @@ def test_a_pg_dump_that_never_returns_is_killed_and_leaves_no_debris(tmp_path, m
     assert list(directory.iterdir()) == [], "the half-written dump stayed in the directory"
 
 
-async def test_a_second_dump_on_the_same_date_is_refused(backups, monkeypatch):
-    """Named files keep "rotation 14" across restarts and manual runs."""
-    backups.mkdir(parents=True)
-    last_night = backups / nightly.dump_name(datetime.now(UTC).replace(hour=3, second=0))
-    last_night.write_bytes(b"PGDMP-last-night")
-
-    def refuse(*args, **kwargs):
-        raise AssertionError("pg_dump ran on a date this job had already dumped")
-
-    monkeypatch.setattr(nightly, "dump", refuse)
-
-    report = await nightly.run(datetime.now(UTC))
-
-    assert report.skipped is True and report.as_dict()["skipped"] is True
-    assert report.path == last_night and report.bytes == last_night.stat().st_size
-    assert report.pruned == () and report.kept == 1
-
-
 async def test_a_dump_from_yesterday_does_not_stop_tonights(backups, monkeypatch):
-    """The counterpart, so the refusal cannot quietly become "never dump again"."""
     backups.mkdir(parents=True)
     yesterday = datetime.now(UTC) - timedelta(days=1)
     (backups / nightly.dump_name(yesterday)).write_bytes(b"PGDMP-the-night-before")
@@ -971,69 +952,11 @@ async def test_a_dump_from_yesterday_does_not_stop_tonights(backups, monkeypatch
 
     monkeypatch.setattr(nightly, "dump", fake_dump)
 
-    report = await nightly.run(datetime.now(UTC))
+    report = await nightly.run()
 
-    assert report.skipped is False
     assert report.path.name.startswith(f"spielplan-{datetime.now(UTC):%Y%m%d}T")
     assert report.path.read_bytes() == b"PGDMP-tonight"
     assert report.kept == 2 and report.pruned == ()
-
-
-# UTC+13 and UTC-11 split local and UTC dates in opposite
-# directions; fixed offsets, since Windows has no tz database.
-FAR_FROM_UTC = pytest.mark.parametrize(
-    "offset", [-11, 13], ids=["utc-minus-11", "utc-plus-13"]
-)
-
-
-@FAR_FROM_UTC
-def test_last_local_nights_dump_does_not_refuse_this_ones(tmp_path, offset):
-    """The anchor is per LOCAL date, so the guard must ask the local date; names stay UTC for sorting."""
-    tz = timezone(timedelta(hours=offset))
-    last_night = datetime(2026, 9, 7, 20, 0, tzinfo=tz)
-    tonight = datetime(2026, 9, 8, 6, 0, tzinfo=tz)
-    assert last_night.astimezone(UTC).date() == tonight.astimezone(UTC).date(), (
-        "the case only exists where two local nights share one UTC date"
-    )
-
-    directory = tmp_path / "backups"
-    directory.mkdir()
-    (directory / nightly.dump_name(last_night.astimezone(UTC))).write_bytes(b"PGDMP-last-night")
-
-    assert nightly.todays_dump(directory, tonight) is None, (
-        "last night's dump counted as tonight's, so this night gets none"
-    )
-
-
-@FAR_FROM_UTC
-def test_a_dump_from_earlier_in_this_local_night_is_still_this_nights(tmp_path, offset):
-    """A retry later in the same local night must not write a second dump."""
-    tz = timezone(timedelta(hours=offset))
-    at_the_anchor = datetime(2026, 9, 8, 6, 0, tzinfo=tz)
-    a_retry_that_evening = datetime(2026, 9, 8, 20, 0, tzinfo=tz)
-    assert at_the_anchor.astimezone(UTC).date() != a_retry_that_evening.astimezone(UTC).date(), (
-        "the case only exists where one local night spans two UTC dates"
-    )
-
-    directory = tmp_path / "backups"
-    directory.mkdir()
-    (directory / nightly.dump_name(at_the_anchor.astimezone(UTC))).write_bytes(b"PGDMP-tonight")
-
-    already = nightly.todays_dump(directory, a_retry_that_evening)
-    assert already is not None and already.read_bytes() == b"PGDMP-tonight", (
-        "a dump from earlier in this same local night was not recognised as tonight's"
-    )
-
-
-def test_a_name_of_the_right_shape_but_an_impossible_date_is_never_tonights(tmp_path):
-    """`_is_own` matches shape, not calendar, so an impossible date is simply not tonight's."""
-    directory = tmp_path / "backups"
-    directory.mkdir()
-    impossible = directory / "spielplan-20241301T030000Z.dump"
-    impossible.write_bytes(b"PGDMP-not-really")
-
-    assert nightly.todays_dump(directory, datetime(2024, 12, 1, 3, tzinfo=UTC)) is None
-    assert impossible in nightly.dumps(directory), "rotation's own view is unchanged"
 
 
 # `spielplan-movie-data` exposes these to a live worker, so

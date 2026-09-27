@@ -355,8 +355,7 @@ async def _nightly_backup() -> dict[str, object] | None:
     """§2's nightly dump, rotation 14. Registered here rather than left to a host cron."""
     from spielplan.backup import nightly
 
-    # The household's date, the one `anchor_hour` judged due, so `nightly.run`'s guard agrees.
-    report = await nightly.run(_now_local())
+    report = await nightly.run()
     log.info("backup: %s", report.as_dict())
     return report.as_dict()
 
