@@ -14978,6 +14978,67 @@ paths or counts. The invariant guards stay (CPU-only torch, one backend process,
 the /data mounts, frozen rating_source ids, the member register, api/ layering, route gating). §12's
 criteria stand and are measured by the regular test suites and the household's own evenings.
 
+## Decisions taken (owner, 2026-09-27, simplification batch A)
+
+### 526. Clauses that only held the shape of code are retired with that code
+
+**What the record says.** Several decisions fix a mechanism rather than a behaviour: an httpx log
+filter (453), a `paid` lease filter (322, 348), declared host policies and a Wikidata override
+(340), M6 feed writers (344), placeholder rail kinds (189, 263), run-less worker rows (387, 463),
+serving constants as bundle keys (235 step 34, 242 items 3-5), a blend-ratio measurement (236), a
+self-hosted real-bundle job (183) and a restart between e2e phases (497).
+
+**Why it changes.** On 2026-09-27 the owner approved batch A of the simplification plan: changes no
+member or operator meets. Each clause below kept code that nothing read or that never ran.
+
+**The decision.** These are retired with their code:
+- 453's mechanism: httpx and httpcore are held at WARNING in both processes and both filters are
+  gone. The goal stands, more strongly; raising httpx to INFO would expose query keys and push
+  endpoints again.
+- 322 and 348's paid lease filter, `Task.paid` and the board's `paid` key; `acquisition_task.paid`
+  (0024) stays, always false. 348's stub marker (`stages.NOT_IMPLEMENTED`) goes; `Stage.implemented`
+  stays.
+- 340's `www.wikidata.org` override row and the `declared_policies` hook. The policies stay data in
+  `HOST_POLICIES`, and an override still carries its reasoning.
+- 344's empty-predicate and uncovered-frontier writers and their vocabulary check; M6 writes them
+  with their producer. 443's M6-naming refusal: such a row is refused with the generic "the
+  selection changed" sentence.
+- 389's unknown-verdict counter (unknown verdicts still change no tag); 396 is moot, as every
+  refusal carries the caller's title.
+- 236's `blend_ratios` and its test (503 answered its question), and the write-only
+  `ledger_state.straddle`, dropped by migration 0038.
+- 235 step 34 and 242 items 3-5: `gate_k`, `warm_gate`, `blend_beta_max`, the β and λ grids, the
+  noise floor and the two CV thresholds are module constants. The margin flag and form are
+  recognised but fixed: only true and margin/mean(margin).
+- §4.3's "exhaustive": the contract's `encoding`, `normalise` and `transform` keys are ignored, and
+  `cold_tower.pt` must be a bare v2 state_dict.
+- 189's and 263's placeholder clauses: the rail keeps one deque per user and the six kinds the web
+  process writes; `AWAITING_PRODUCER`, the household scope and the unproduced renderers go.
+- 463's dna-projection Job and 387's run-less row: a Job is name, run, every, anchor and timeout,
+  and `worker.JOBS` no longer mirrors §5.3, whose table stays the record.
+- §6.2 step 5's phrasing rule stays; its guard returns with the conflict-phrasing task. §13's
+  in-code instruments (`reask.flip_rate`, `queue.not_seen_rate`,
+  `GET /tonight/sessions/{id}/evaluation`) go; the metrics are read by hand, and 521's not-seen
+  watch is the SQL beside `SeenWeights` in `rate/queue.py`.
+- 183, and with it the leg-3 timing in 300 and 316: `real-bundle.yml` and `release.yml` go. On each
+  export, run `CORPUS_BUNDLE_DIR=... pytest -k real_bundle` by hand; the stack drill is README's
+  Restore section.
+- 497's cost clause: e2e is one Playwright pass with a first-boot project; 185's `retries: 0`
+  stands.
+- 525 is extended: static guards over app source are retired too. The kept list (525's invariant
+  guards, the /data compose-mount guards and the four security guards) is complete. The guards
+  citing 189, 237, 432, 340/373, 362, 329, 214 and §13's held-out readers are gone; the behaviour
+  they fix is unchanged.
+
+Moot rather than violated: 450's clause on `POST /api/setup/connectors`, a route now gone.
+Descriptive wording now stale and left as dated: 238 and 469 (`placement_counts`, `blend_ratios`),
+242 item 7 (the cold_eval yardstick), 474 (regions are built client-side from `shelves`), 332 and
+367 (`ANONYMOUS` is a dict of route to reason, and the webhook is named in `TOKEN_AUTHED`), 485 (the
+gate pair is followed by `test_route_inventory.py` and `test_api_gating.py`) and 433
+(`ADMIN_ROUTE_COUNT` gives way to the /api/admin namespace rule); as provenance, proposals 150 (the
+banner's route is checked by the server alone) and 22 (the greeting reads the device clock). §4.3,
+§5.2, §6.7, §8 and §12's M5.7 row are amended in place (v2.1.8).
+
 ## §6.2 — Tonight, rewritten (owner decision, 2026-08-29)
 
 Proposal 54 asked which slot carries the alternative on a split axis. The owner answered by
