@@ -59,7 +59,7 @@ REVIEWS = [
              "that rewards anyone willing to stay with its long and silent scenes."),
 ]
 
-# Each content scenario, the rule `verify_payload` refuses it under, and the term its refusal names.
+# Each content scenario, the rule `verify_tags` refuses it under, and the term its refusal names.
 VIOLATIONS = {
     "fabricate": ("unknown_term", INVENTED),
     "unquotable": ("quote_unverified", SPARE),
@@ -930,7 +930,7 @@ async def test_two_passes_of_one_provider_are_two_runs_of_one_row_each(db, packe
 
 
 async def test_a_curated_drop_survives_a_fresh_extraction(db, packed, double):
-    """`verify_payload` passes a live term, so the ledger is applied inside the write's transaction."""
+    """`verify_tags` passes a live term, so the ledger is applied inside the write's transaction."""
     await db.execute(
         "INSERT INTO dna_adjudication (version, scope, title_id, term, verdict, origin)"
         " VALUES ('v1', 'title', $1, 'mood.bleak', 'drop', 'household')", TITLE)
@@ -1066,7 +1066,6 @@ def test_the_extraction_asks_the_validator_and_reimplements_none_of_its_checks()
 
     named = {node.attr for node in ast.walk(tree) if isinstance(node, ast.Attribute)}
     named |= {node.id for node in ast.walk(tree) if isinstance(node, ast.Name)}
-    assert not named & {"norm", "SALIENCE_LEVELS", "TERM_KEYS", "QUOTE_KEYS", "SOURCE_KEYS",
-                        "SALIENCE_KEYS", "resolve", "repair", "alias_of"}, named
-    assert {"verify_payload", "record_rejects", "complete", "record_call", "violation_prompt",
-            "as_verifier_payload", "merge_passes", "store_title"} <= named
+    assert not named & {"norm", "SALIENCE_LEVELS", "resolve", "repair", "alias_of"}, named
+    assert {"verify_tags", "record_rejects", "complete", "record_call", "violation_prompt",
+            "merge_passes", "store_title"} <= named

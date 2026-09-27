@@ -2745,7 +2745,7 @@ async def test_stage_seven_advances_with_the_rejects_stage_six_filed_and_asks_no
         asked.append("asked")
         raise AssertionError("stage 7 asked for a verdict stage 6 already reached (decision 462)")
 
-    monkeypatch.setattr(verify, "verify_payload", second_verdict)
+    monkeypatch.setattr(verify, "verify_tags", second_verdict)
     monkeypatch.setattr(extract, "extract_title", second_verdict)
     before = await _dna_rows(db)
     await pipeline.write_board(db, title_id, stage=7, status=pipeline.RUNNING)

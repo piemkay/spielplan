@@ -1,5 +1,5 @@
 """`ops/fake_llm.py`, the refusing double: its envelopes and refusals are the providers' own, and its
-content comes from the request, judged by `verify_payload`. No database."""
+content comes from the request, judged by `verify_tags`. No database."""
 
 from __future__ import annotations
 
@@ -17,8 +17,9 @@ import pytest
 
 from spielplan.acquire import fetch
 from spielplan.dna import packs
-from spielplan.dna.verify import Rejection, Vocabulary, verify_payload
+from spielplan.dna.verify import Rejection, Vocabulary, verify_tags
 from spielplan.llm import client, contract, gemini, openai
+from tests.test_dna_verify import _NoVerdicts
 
 REPO = Path(__file__).resolve().parents[2]
 DOUBLE = REPO / "ops" / "fake_llm.py"
@@ -100,8 +101,8 @@ async def _complete(double, provider, *, user=USER, key=None, model=None):
 
 
 async def _judge(payload, pack=PACK):
-    return await verify_payload(contract.as_verifier_payload(7, payload), pass_id="p", voc=VOC,
-                                packs={7: pack}, allowed=[7])
+    tags = payload.get("tags") if isinstance(payload, dict) else None
+    return await verify_tags(7, tags, pack=pack, voc=VOC, ledger=_NoVerdicts())
 
 
 async def _direct(double, method, url, **kwargs) -> httpx.Response:
@@ -206,7 +207,7 @@ async def test_the_three_adapters_read_identical_tags_and_verdicts_from_the_doub
         judged = await _judge(result.payload)
         seen[provider] = (
             result.payload,
-            [(t.term, t.salience, t.quote) for t in judged.tags[7]],
+            [(t.term, t.salience, t.quote) for t in judged.tags],
             [(r.reason, r.term) for r in judged.rejects],
         )
     assert seen["anthropic"] == seen["openai"] == seen["gemini"], seen
@@ -228,7 +229,7 @@ async def test_the_default_first_answer_carries_exactly_one_term_the_vocabulary_
     assert VOC.resolve(invented[0]) is None
     judged = await _judge(result.payload)
     assert [(r.reason, r.term) for r in judged.rejects] == [("unknown_term", invented[0])]
-    assert len(judged.tags[7]) == len(tags) - 1 == 3
+    assert len(judged.tags) == len(tags) - 1 == 3
 
 
 @pytest.mark.parametrize(("content", "reason", "fragment"),
@@ -238,12 +239,12 @@ async def test_each_content_scenario_breaks_exactly_the_rule_it_names(double, co
     result = await _complete(double, "anthropic")
     judged = await _judge(result.payload)
     if reason is None:
-        assert judged.rejects == [] and len(judged.tags[7]) == 3
+        assert judged.rejects == [] and len(judged.tags) == 3
         return
     [reject] = judged.rejects
     assert reject.reason == reason
     assert fragment in contract.violation_prompt(judged.rejects, version="v1")
-    assert len(judged.tags[7]) == 3
+    assert len(judged.tags) == 3
 
 
 @pytest.mark.parametrize("content", ["fabricate", "unquotable", "salience", "clean"])
@@ -276,7 +277,7 @@ async def test_a_retry_in_comply_drops_the_named_tag_and_in_stubborn_repeats_it(
 
     complied = await _judge((await _complete(double, provider, user=retry)).payload)
     assert complied.rejects == []
-    assert complied.tags[7] == first.tags[7]
+    assert complied.tags == first.tags
 
     await _scenario(double, provider=provider, posture="stubborn")
     stubborn = await _judge((await _complete(double, provider, user=retry)).payload)
@@ -291,7 +292,7 @@ async def test_a_retry_in_comply_drops_the_named_tag_and_in_stubborn_repeats_it(
 def test_the_retry_opening_the_double_recognises_is_the_one_the_app_sends(double):
     """The double holds the corpus's retry opening rather
     than importing the app's; this pins that they agree."""
-    refused = Rejection(7, "p", "mood.mecha", "unknown_term", "not in vocabulary")
+    refused = Rejection(7, "mood.mecha", "unknown_term", "not in vocabulary")
     retry = contract.violation_prompt([refused], version="v1")
     assert double.RETRY_MARKER == contract.RETRY_MARKER
     assert retry.startswith(double.RETRY_MARKER)

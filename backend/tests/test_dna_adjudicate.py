@@ -167,32 +167,15 @@ async def test_an_unknown_per_title_verdict_does_not_shadow_the_blanket_rule(led
     assert await adjudicate.is_retired(ledger, "themes.tragedy", 14, version=V1) is True
 
 
-async def test_unknown_verdicts_counts_the_spellings_nobody_taught_this_reader(ledger):
-    """Keyed on the stored spelling, because the number exists to send a reader to the rows."""
-    await _verdict(ledger, "a.one", "DROP")
-    await _verdict(ledger, "a.two", "rename", target="a.three")
-    await _verdict(ledger, "a.four", "DROP_EVIDENCE")
-    await _verdict(ledger, "a.five", "keep")
-    await _verdict(ledger, "a.six", "retire")
-    await _verdict(ledger, "a.seven", "retire")
-    await _verdict(ledger, "a.eight", "Alias")
-    await _verdict(ledger, "a.nine", "drop", version=V2)
-
-    assert await adjudicate.unknown_verdicts(ledger, version=V1) == {"retire": 2, "Alias": 1}
-    assert await adjudicate.unknown_verdicts(ledger, version=V2) == {}
-
-
 async def test_an_empty_ledger_answers_rather_than_raising(ledger):
     assert await adjudicate.rename(ledger, "mood.cosy", 1, version=V1) is None
     assert await adjudicate.is_retired(ledger, "mood.cosy", 1, version=V1) is False
-    assert await adjudicate.unknown_verdicts(ledger, version=V1) == {}
 
 
 async def test_no_active_vocabulary_is_the_pre_import_state_and_not_an_error(db):
     """None means "no ledger to consult", never a read across every version."""
     assert await adjudicate.rename(db, "mood.cosy", 1, version=None) is None
     assert await adjudicate.is_retired(db, "mood.cosy", 1, version=None) is False
-    assert await adjudicate.unknown_verdicts(db, version=None) == {}
 
 
 async def test_a_re_point_that_names_no_target_is_not_a_re_point(ledger):

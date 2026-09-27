@@ -1,7 +1,7 @@
 """The curation ledger the trust boundary consults (§8 stage 3, §14.5).
 
 Read per call, never cached: imports replace `dna_adjudication` wholesale. Verdicts are read across
-both projects' spellings, case-folded; unknown verdicts are counted, never guessed (decision 389).
+both projects' spellings, case-folded; an unknown verdict changes no tag (decision 389).
 """
 
 from __future__ import annotations
@@ -16,14 +16,8 @@ RETIRE_VERDICTS = frozenset({"drop"})
 # Only meaningful per title, to except a title from a blanket rule.
 KEEP_VERDICTS = frozenset({"keep"})
 
-# Evidence-level: one quote was false, not the term; not acted on here (decision 389).
-EVIDENCE_VERDICTS = frozenset({"drop_evidence"})
-
 # The first of these on a title ends the search, so a per-title row beats the blanket rule.
 TERM_VERDICTS = REPOINT_VERDICTS | RETIRE_VERDICTS | KEEP_VERDICTS
-
-# Anything else is reported by `unknown_verdicts` and changes no tag.
-KNOWN_VERDICTS = TERM_VERDICTS | EVIDENCE_VERDICTS
 
 # Per-title rows first (`title_id IS NULL` sorts false first), then file order by `id`.
 _LEDGER_FOR_TERM = """
@@ -99,21 +93,4 @@ async def is_retired(
     )
 
 
-async def unknown_verdicts(conn: asyncpg.Connection, *, version: str | None) -> dict[str, int]:
-    """The verdict spellings this reader has not been taught, with the row count of each.
-
-    Keyed on the stored spelling so the count leads a reader to the rows.
-    """
-    if not version:
-        return {}
-    rows = await conn.fetch(
-        "SELECT verdict, count(*) AS n FROM dna_adjudication WHERE version = $1 GROUP BY verdict",
-        version,
-    )
-    return {
-        row["verdict"]: int(row["n"])
-        for row in rows if _verdict_key(row["verdict"]) not in KNOWN_VERDICTS
-    }
-
-
-__all__ = ["is_retired", "rename", "unknown_verdicts"]
+__all__ = ["is_retired", "rename"]

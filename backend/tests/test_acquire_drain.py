@@ -377,7 +377,7 @@ async def test_the_ticks_run_is_the_run_stage_six_files_under_and_stage_seven_re
 
     async def refuses_one_tag(ctx):
         await verify.record_rejects(
-            ctx.conn, [verify.Rejection(ctx.title_id, "pass-0", "themes.invented", "unknown_term")],
+            ctx.conn, [verify.Rejection(ctx.title_id, "themes.invented", "unknown_term")],
             run_id=ctx.run_id, provider="stand-in",
         )
         return stages.advance({"stood_in": "stage 6 filed one refusal under the walk's run"})

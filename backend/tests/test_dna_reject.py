@@ -133,17 +133,17 @@ async def seed(conn) -> None:
     )
 
 
-async def install(conn) -> tuple[verify.Vocabulary, dict[int, str | None]]:
+async def install(conn) -> tuple[verify.Vocabulary, str | None]:
     """Read back out of `dna_pack` and the raw store: that round trip is what decision 382 exists for."""
     await seed(conn)
     text, info = await packs.build_pack(conn, TITLE)
     await packs.store_pack(conn, TITLE, V1, text, info)
     voc = await verify.load_vocabulary(conn)
-    return voc, await verify.read_packs(conn, [TITLE], V1)
+    return voc, await verify.read_pack(conn, TITLE, V1)
 
 
-def payload(*tags: dict[str, object]) -> dict[str, object]:
-    return {"titles": {str(TITLE): list(tags)}}
+def payload(*tags: dict[str, object]) -> list[dict[str, object]]:
+    return list(tags)
 
 
 async def verdicts(conn, rejects, **kw) -> list[dict]:
@@ -169,7 +169,7 @@ async def test_every_seeded_review_clears_the_pack_floor(db):
 async def test_the_pack_is_read_back_out_of_custody_and_carries_its_markup(db, raw_root):
     """The pack in custody still carries its sources' `**`, `[spoiler]` and straight apostrophe."""
     _voc, pack_text = await install(db)
-    text = pack_text[TITLE]
+    text = pack_text
 
     assert "**slow burn**" in text
     assert "[spoiler]" in text
@@ -214,12 +214,12 @@ async def test_every_fabricated_tag_in_a_schema_valid_payload_is_caught(db, raw_
         + [{"term": "mood.bleak", "quote": quote} for quote in FABRICATED_QUOTES]
     )
 
-    result = await verify.verify_payload(
-        payload(*tags), pass_id="pilot", voc=voc, packs=pack_text, ledger=db,
+    result = await verify.verify_tags(
+        TITLE, payload(*tags), pack=pack_text, voc=voc, ledger=db,
     )
 
     assert result.n_seen == 28
-    kept = {t.term for t in result.tags[TITLE]}
+    kept = {t.term for t in result.tags}
     assert kept == {term_id for term_id, _ in GENUINE}, (
         "the positive control failed, so the catch rate below would be measuring a verifier that "
         "refuses everything"
@@ -237,8 +237,8 @@ async def test_not_one_refused_tag_reaches_the_extracted_tier(db, raw_root):
     voc, pack_text = await install(db)
     tags = [{"term": term_id, "quote": GENUINE[0][1]} for term_id in FABRICATED_TERMS]
 
-    result = await verify.verify_payload(
-        payload(*tags), pass_id="pilot", voc=voc, packs=pack_text, ledger=db,
+    result = await verify.verify_tags(
+        TITLE, payload(*tags), pack=pack_text, voc=voc, ledger=db,
     )
     rows = await verdicts(db, result.rejects, provider="anthropic:sonnet")
 
@@ -249,13 +249,13 @@ async def test_not_one_refused_tag_reaches_the_extracted_tier(db, raw_root):
 async def test_every_refusal_is_written_down_with_the_rule_it_broke(db, raw_root):
     """Decision 400: the stated level is recorded on every row that knows one."""
     voc, pack_text = await install(db)
-    result = await verify.verify_payload(
-        payload(
+    result = await verify.verify_tags(
+        TITLE, payload(
             {"term": "themes.time_travel", "quote": GENUINE[0][1], "salience": 3},
             {"term": "mood.bleak", "quote": "a sentence nobody wrote", "salience": 1},
             {"term": "place.city", "quote": GENUINE[2][1], "salience": 9},
         ),
-        pass_id="pilot", voc=voc, packs=pack_text, ledger=db,
+        pack=pack_text, voc=voc, ledger=db,
     )
     rows = await verdicts(db, result.rejects, run_id=42, provider="anthropic:sonnet")
 
@@ -272,7 +272,7 @@ async def test_every_refusal_is_written_down_with_the_rule_it_broke(db, raw_root
 async def test_the_reject_store_refuses_a_rule_nobody_declared(db, raw_root):
     """REASONS is closed and `0027` holds it closed, so a filter on the rule name stays meaningful."""
     await install(db)
-    invented = verify.Rejection(TITLE, "pilot", "mood.bleak", "looked_wrong")
+    invented = verify.Rejection(TITLE, "mood.bleak", "looked_wrong")
 
     with pytest.raises(asyncpg.exceptions.CheckViolationError):
         await verify.record_rejects(db, [invented])
@@ -285,60 +285,20 @@ async def test_recording_nothing_writes_nothing(db, raw_root):
     assert await db.fetchval("SELECT count(*) FROM dna_reject") == 0
 
 
-async def test_a_refusal_naming_a_title_this_install_does_not_hold_is_written_with_no_title(
-    db, raw_root
-):
-    """`dna_reject.title_id` is nullable, so an `unknown_title` refusal can be written at all."""
-    voc, pack_text = await install(db)
-    result = await verify.verify_payload(
-        {"titles": {"4242": [{"term": "mood.bleak", "quote": GENUINE[0][1]}]}},
-        pass_id="pilot", voc=voc, packs=pack_text, ledger=db, allowed=[TITLE],
-    )
-    rows = await verdicts(db, result.rejects)
-
-    assert await db.fetchval("SELECT count(*) FROM title WHERE id = 4242") == 0
-    assert [row["rule_violated"] for row in rows] == ["unknown_title"]
-    assert rows[0]["title_id"] is None
-
-
-async def test_one_unwritable_title_id_does_not_discard_the_rest_of_the_passs_refusals(
-    db, raw_root
-):
-    """`executemany` is atomic in asyncpg: one bad title id discarded the whole pass's refusals."""
-    voc, pack_text = await install(db)
-    result = await verify.verify_payload(
-        {"titles": {
-            str(TITLE): [
-                {"term": "themes.time_travel", "quote": GENUINE[0][1]},
-                {"term": "mood.bleak", "quote": "a sentence nobody wrote"},
-            ],
-            "4242": [{"term": "mood.bleak", "quote": GENUINE[0][1]}],
-        }},
-        pass_id="pilot", voc=voc, packs=pack_text, ledger=db, allowed=[TITLE],
-    )
-    rows = await verdicts(db, result.rejects, provider="anthropic:sonnet")
-
-    assert [row["rule_violated"] for row in rows] == [
-        "unknown_term", "quote_unverified", "unknown_title",
-    ]
-    assert [row["title_id"] for row in rows] == [TITLE, TITLE, None]
-
-
-
 async def test_a_term_postgres_cannot_store_never_reaches_the_curation_ledger(db, raw_root):
-    """A NUL in a term reached `dna_adjudication`'s query and raised out of `verify_payload` itself."""
+    """A NUL in a term reached `dna_adjudication`'s query and raised out of `verify_tags` itself."""
     voc, pack_text = await install(db)
-    result = await verify.verify_payload(
-        payload(
+    result = await verify.verify_tags(
+        TITLE, payload(
             {"term": "mood.bl\x00eak", "quote": GENUINE[0][1], "salience": 3},
             {"term": "themes.time_travel", "quote": GENUINE[0][1], "salience": 2},
             {"term": "pacing.slow_burn", "quote": GENUINE[0][1]},
         ),
-        pass_id="pilot", voc=voc, packs=pack_text, ledger=db,
+        pack=pack_text, voc=voc, ledger=db,
     )
     rows = await verdicts(db, result.rejects, provider="anthropic:sonnet")
 
-    assert [t.term for t in result.tags[TITLE]] == ["pacing.slow_burn"]
+    assert [t.term for t in result.tags] == ["pacing.slow_burn"]
     assert [row["rule_violated"] for row in rows] == ["schema", "unknown_term"]
     assert [row["term"] for row in rows] == [None, "themes.time_travel"]
     assert [row["quote"] for row in rows] == [GENUINE[0][1], GENUINE[0][1]], (
@@ -353,13 +313,13 @@ async def test_one_unwritable_string_does_not_discard_the_rest_of_the_passs_refu
     """The write guards itself: `Rejection` is public and M5.5 builds its own."""
     await install(db)
     refusals = [
-        verify.Rejection(TITLE, "pilot", "themes.time_travel", "unknown_term",
+        verify.Rejection(TITLE, "themes.time_travel", "unknown_term",
                          quote="a slow burn that never raises its fists"),
-        verify.Rejection(TITLE, "pilot", "mood.bl\x00eak", "unknown_term",
+        verify.Rejection(TITLE, "mood.bl\x00eak", "unknown_term",
                          quote="neon on dry asphalt"),
-        verify.Rejection(TITLE, "pilot", "place.city", "quote_unverified",
+        verify.Rejection(TITLE, "place.city", "quote_unverified",
                          quote="neon on dry\ud800asphalt"),
-        verify.Rejection(TITLE, "pilot", "visual.neon", "duplicate",
+        verify.Rejection(TITLE, "visual.neon", "duplicate",
                          quote="Neon on wet asphalt"),
     ]
     rows = await verdicts(db, refusals, provider="anthropic:sonnet")
@@ -381,13 +341,13 @@ async def test_a_level_the_column_cannot_hold_does_not_discard_the_rest_either(d
     """`isinstance(True, int)` is true, so a boolean passed the width test and wrote a 1."""
     await install(db)
     refusals = [
-        verify.Rejection(TITLE, "pilot", "mood.bleak", "schema", salience=3,
+        verify.Rejection(TITLE, "mood.bleak", "schema", salience=3,
                          quote="a bleak picture that respects you"),
-        verify.Rejection(TITLE, "pilot", "place.city", "schema", salience=32768,
+        verify.Rejection(TITLE, "place.city", "schema", salience=32768,
                          quote="the city is the third lead"),
-        verify.Rejection(TITLE, "pilot", "visual.neon", "schema", salience=True,
+        verify.Rejection(TITLE, "visual.neon", "schema", salience=True,
                          quote="Neon on wet asphalt"),
-        verify.Rejection(TITLE, "pilot", "themes.heist", "schema", salience=0,
+        verify.Rejection(TITLE, "themes.heist", "schema", salience=0,
                          quote="The heist goes wrong in the last reel"),
     ]
     rows = await verdicts(db, refusals)
@@ -405,20 +365,20 @@ async def test_a_quote_transcribed_across_the_packs_markup_verifies(db, raw_root
     voc, pack_text = await install(db)
     term_id, quote = GENUINE[index]
 
-    result = await verify.verify_payload(
-        payload({"term": term_id, "quote": quote}),
-        pass_id="pilot", voc=voc, packs=pack_text, ledger=db,
+    result = await verify.verify_tags(
+        TITLE, payload({"term": term_id, "quote": quote}),
+        pack=pack_text, voc=voc, ledger=db,
     )
 
-    assert [t.term for t in result.tags[TITLE]] == [term_id]
-    assert result.tags[TITLE][0].quote == quote
-    assert norm(quote) in norm(pack_text[TITLE])
+    assert [t.term for t in result.tags] == [term_id]
+    assert result.tags[0].quote == quote
+    assert norm(quote) in norm(pack_text)
 
 
 async def test_the_fold_is_what_carries_three_of_those_four_quotes(db, raw_root):
     """If all four were literal substrings, the test above would pass with no fold at all."""
     _voc, pack_text = await install(db)
-    literal = [quote for _term, quote in GENUINE if quote in pack_text[TITLE]]
+    literal = [quote for _term, quote in GENUINE if quote in pack_text]
 
     assert literal == ["Neon on wet asphalt"]
 
@@ -432,14 +392,14 @@ async def test_a_term_the_ledger_renames_passes_under_its_new_name(db, raw_root)
         V1,
     )
 
-    result = await verify.verify_payload(
-        payload({"term": "themes.caper", "quote": GENUINE[3][1]}),
-        pass_id="pilot", voc=voc, packs=pack_text, ledger=db,
+    result = await verify.verify_tags(
+        TITLE, payload({"term": "themes.caper", "quote": GENUINE[3][1]}),
+        pack=pack_text, voc=voc, ledger=db,
     )
 
-    assert [t.term for t in result.tags[TITLE]] == ["themes.heist"]
-    assert result.tags[TITLE][0].facet == "themes"
-    assert result.tags[TITLE][0].repaired is True
+    assert [t.term for t in result.tags] == ["themes.heist"]
+    assert result.tags[0].facet == "themes"
+    assert result.tags[0].repaired is True
 
 
 async def test_a_term_the_ledger_retires_is_recorded_as_adjudicated_and_not_as_garbage(
@@ -453,16 +413,16 @@ async def test_a_term_the_ledger_retires_is_recorded_as_adjudicated_and_not_as_g
         V1,
     )
 
-    result = await verify.verify_payload(
-        payload(
+    result = await verify.verify_tags(
+        TITLE, payload(
             {"term": "themes.androids", "quote": GENUINE[0][1]},
             {"term": "themes.time_travel", "quote": GENUINE[0][1]},
         ),
-        pass_id="pilot", voc=voc, packs=pack_text, ledger=db,
+        pack=pack_text, voc=voc, ledger=db,
     )
     rows = await verdicts(db, result.rejects)
 
-    assert result.tags[TITLE] == []
+    assert result.tags == []
     assert [row["rule_violated"] for row in rows] == ["adjudicated", "unknown_term"]
     assert rows[0]["term"] == "themes.androids", (
         "the term recorded is the one the payload offered; a rejection that renamed it would be "
@@ -479,12 +439,12 @@ async def test_a_rename_onto_a_term_the_vocabulary_does_not_carry_is_still_unkno
         V1,
     )
 
-    result = await verify.verify_payload(
-        payload({"term": "themes.caper", "quote": GENUINE[3][1]}),
-        pass_id="pilot", voc=voc, packs=pack_text, ledger=db,
+    result = await verify.verify_tags(
+        TITLE, payload({"term": "themes.caper", "quote": GENUINE[3][1]}),
+        pack=pack_text, voc=voc, ledger=db,
     )
 
-    assert result.tags[TITLE] == []
+    assert result.tags == []
     assert [r.reason for r in result.rejects] == ["unknown_term"]
 
 
@@ -499,15 +459,15 @@ async def test_a_padded_term_reaches_the_ledger_as_the_vocabulary_reads_it(db, r
         V1,
     )
 
-    result = await verify.verify_payload(
-        payload(
+    result = await verify.verify_tags(
+        TITLE, payload(
             {"term": padding.format("themes.caper"), "quote": GENUINE[3][1]},
             {"term": padding.format("themes.androids"), "quote": GENUINE[0][1]},
         ),
-        pass_id="pilot", voc=voc, packs=pack_text, ledger=db,
+        pack=pack_text, voc=voc, ledger=db,
     )
 
-    assert [t.term for t in result.tags[TITLE]] == ["themes.heist"]
+    assert [t.term for t in result.tags] == ["themes.heist"]
     assert [r.reason for r in result.rejects] == ["adjudicated"]
 
 
@@ -522,12 +482,12 @@ async def test_the_ledger_is_only_consulted_for_a_term_the_vocabulary_does_not_c
         V1,
     )
 
-    result = await verify.verify_payload(
-        payload({"term": "mood.bleak", "quote": GENUINE[0][1]}),
-        pass_id="pilot", voc=voc, packs=pack_text, ledger=db,
+    result = await verify.verify_tags(
+        TITLE, payload({"term": "mood.bleak", "quote": GENUINE[0][1]}),
+        pack=pack_text, voc=voc, ledger=db,
     )
 
-    assert [t.term for t in result.tags[TITLE]] == ["mood.bleak"]
+    assert [t.term for t in result.tags] == ["mood.bleak"]
 
 
 async def test_a_drop_verdict_on_a_live_term_is_recorded_and_not_acted_on(db, raw_root):
@@ -540,12 +500,12 @@ async def test_a_drop_verdict_on_a_live_term_is_recorded_and_not_acted_on(db, ra
     )
 
     assert await adjudicate.is_retired(db, "mood.bleak", TITLE, version=V1) is True
-    result = await verify.verify_payload(
-        payload({"term": "mood.bleak", "quote": GENUINE[0][1]}),
-        pass_id="pilot", voc=voc, packs=pack_text, ledger=db,
+    result = await verify.verify_tags(
+        TITLE, payload({"term": "mood.bleak", "quote": GENUINE[0][1]}),
+        pack=pack_text, voc=voc, ledger=db,
     )
 
-    assert [t.term for t in result.tags[TITLE]] == ["mood.bleak"], (
+    assert [t.term for t in result.tags] == ["mood.bleak"], (
         "the boundary passes a term the ledger retires, because the ledger is only consulted for "
         "a term the vocabulary does not carry; decision 163 makes removing it a migration"
     )
@@ -554,26 +514,26 @@ async def test_a_drop_verdict_on_a_live_term_is_recorded_and_not_acted_on(db, ra
 async def test_a_tag_that_carries_no_quote_is_refused_and_written_down(db, raw_root):
     """§4.1 rule 1: a tag without its quote is unfalsifiable."""
     voc, pack_text = await install(db)
-    result = await verify.verify_payload(
-        payload({"term": "mood.bleak", "quote": ""}, {"term": "place.city"}),
-        pass_id="pilot", voc=voc, packs=pack_text, ledger=db,
+    result = await verify.verify_tags(
+        TITLE, payload({"term": "mood.bleak", "quote": ""}, {"term": "place.city"}),
+        pack=pack_text, voc=voc, ledger=db,
     )
     rows = await verdicts(db, result.rejects)
 
-    assert result.tags[TITLE] == []
+    assert result.tags == []
     assert [row["rule_violated"] for row in rows] == ["schema", "schema"]
     assert await db.fetchval("SELECT count(*) FROM dna_evidence") == 0
 
 
 async def test_every_tag_that_passes_carries_the_quote_it_passed_on(db, raw_root):
     voc, pack_text = await install(db)
-    result = await verify.verify_payload(
-        payload(*[{"term": t, "quote": q} for t, q in GENUINE]),
-        pass_id="pilot", voc=voc, packs=pack_text, ledger=db,
+    result = await verify.verify_tags(
+        TITLE, payload(*[{"term": t, "quote": q} for t, q in GENUINE]),
+        pack=pack_text, voc=voc, ledger=db,
     )
 
-    assert len(result.tags[TITLE]) == len(GENUINE)
-    assert all(norm(tag.quote) for tag in result.tags[TITLE]), (
+    assert len(result.tags) == len(GENUINE)
+    assert all(norm(tag.quote) for tag in result.tags), (
         "`norm()` and not `strip()`: the fold is the only reading of a quote this boundary has, "
         "and `**` survives a strip while carrying no evidence at all"
     )
@@ -593,12 +553,12 @@ async def test_a_quote_with_nothing_behind_the_markup_is_caught_against_a_real_p
     voc, pack_text = await install(db)
     tags = [{"term": "themes.heist", "quote": quote} for quote in FOLDS_TO_NOTHING]
 
-    result = await verify.verify_payload(
-        payload(*tags), pass_id="pilot", voc=voc, packs=pack_text, ledger=db,
+    result = await verify.verify_tags(
+        TITLE, payload(*tags), pack=pack_text, voc=voc, ledger=db,
     )
     rows = await verdicts(db, result.rejects)
 
-    assert result.tags[TITLE] == []
+    assert result.tags == []
     assert result.n_seen == len(FOLDS_TO_NOTHING)
     assert [row["rule_violated"] for row in rows] == ["schema"] * len(FOLDS_TO_NOTHING)
     assert [row["quote"] for row in rows] == list(FOLDS_TO_NOTHING), (
@@ -624,12 +584,12 @@ LOW_EVIDENCE_REVIEW = """
 
 async def test_the_reject_review_orders_by_recency_and_filters_only_on_the_title(db, raw_root):
     voc, pack_text = await install(db)
-    result = await verify.verify_payload(
-        payload(
+    result = await verify.verify_tags(
+        TITLE, payload(
             {"term": "themes.time_travel", "quote": GENUINE[0][1]},
             {"term": "mood.bleak", "quote": "a sentence nobody wrote"},
         ),
-        pass_id="pilot", voc=voc, packs=pack_text, ledger=db,
+        pack=pack_text, voc=voc, ledger=db,
     )
     await verify.record_rejects(db, result.rejects)
     rows = await db.fetch(REJECT_REVIEW, TITLE)
@@ -700,9 +660,9 @@ async def test_an_alias_row_the_vocabulary_does_not_carry_never_repairs_anything
     assert await db.fetchval("SELECT count(*) FROM dna_term WHERE term = 'themes.long_con'") == 0
     assert reloaded.alias_of("long con") is None
 
-    result = await verify.verify_payload(
-        payload({"term": "long con", "quote": GENUINE[3][1]}),
-        pass_id="pilot", voc=reloaded, packs=pack_text, ledger=db,
+    result = await verify.verify_tags(
+        TITLE, payload({"term": "long con", "quote": GENUINE[3][1]}),
+        pack=pack_text, voc=reloaded, ledger=db,
     )
 
     assert [r.reason for r in result.rejects] == ["unknown_term"]
