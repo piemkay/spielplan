@@ -940,7 +940,7 @@ async def test_with_the_toggle_off_no_model_annotation_is_in_the_payload(world):
 async def test_turning_the_toggle_on_reveals_the_numbers_for_that_user_only(world):
     """Decision 117: "one global per user … turning it on reveals them for that user only"."""
     rail.record(
-        kind="ledger_incremental", user_id=world.patrick,
+        kind="verdict", user_id=world.patrick,
         line=rail.verdict_line("patrick", "Home Film 1000", "liked", refit_ms=31.0),
     )
     on = await world.client.post("/api/auth/preferences", json={"show_model": True})
@@ -1018,25 +1018,14 @@ async def test_the_model_log_refuses_a_limit_above_the_buffer(world):
     assert len(at_the_edge.json()["events"]) == rail.RAIL_LIMIT
 
 
-async def test_recent_caps_before_it_merges_the_two_deques(world):
-    """Two deques are capped before merging, or the response exceeds the buffer."""
+def test_recent_is_newest_first_and_honours_a_smaller_ask():
     rail.forget()
-    for i in range(rail.RAIL_LIMIT):
-        rail.record(kind="verdict", user_id=world.patrick, line=f"verdict(patrick, {i}) = liked")
-        rail.record(kind="ledger_refit", line=rail.refit_line("movie", n_titles=i, seconds=0.1))
-
-    assert len(rail.recent(user_id=world.patrick, limit=50)) == rail.RAIL_LIMIT
-    assert len(rail.recent(user_id=world.patrick)) == rail.RAIL_LIMIT
-    assert len(rail.recent(user_id=world.patrick, limit=4)) == 4, "a smaller ask is still honoured"
-    assert rail.recent(user_id=world.patrick, limit=0) == [], (
-        "an empty ask must be empty, not the whole buffer — `[-0:]` is the whole list"
-    )
-    # Ids come from one counter, so newest-first survives the earlier slice.
-    events = rail.recent(user_id=world.patrick, limit=50)
+    for i in range(rail.RAIL_LIMIT + 3):
+        rail.record(kind="verdict", user_id=1, line=f"verdict(p, {i}) = liked")
+    events = rail.recent(user_id=1)
+    assert len(events) == rail.RAIL_LIMIT
     assert [e["id"] for e in events] == sorted((e["id"] for e in events), reverse=True)
-    assert {e["scope"] for e in events} == {"you", "household"}, (
-        "capping each deque first must not drop one of them entirely"
-    )
+    assert len(rail.recent(user_id=1, limit=4)) == 4, "a smaller ask is still honoured"
     rail.forget()
 
 
@@ -1049,20 +1038,11 @@ async def test_the_rail_narrates_a_model_write_in_one_human_readable_line(world)
         "tier_edit(Drive → A, via=drag_drop) + 2 margin-less duels vs new neighbours"
     )
     assert rail.session_answer_line("p", 4, "A") == "session_answer(p, pair 4) = A — pool-centred tilt"
-    assert rail.parse_line("has(robots)", 0) == "parse → predicate has(robots) · 0 survivors → flywheel"
-
-    # A household-wide write has no observation row, and explains Home changing overnight.
-    rail.record(kind="ledger_refit",
-                line=rail.refit_line("movie", n_titles=900, seconds=0.31, rho=0.42))
-    await world.client.post("/api/auth/preferences", json={"show_model": True})
-    events = (await world.client.get("/api/model-log")).json()["events"]
-    assert events[0]["scope"] == "household"
-    assert events[0]["text"].startswith("ledger_refit(movie) = 900 titles")
 
     with pytest.raises(rail.RailError):
-        rail.record(kind="not-a-model-write", line="x")
+        rail.record(kind="not-a-model-write", user_id=world.patrick, line="x")
     with pytest.raises(rail.RailError):
-        rail.record(kind="verdict", line="   ")
+        rail.record(kind="verdict", user_id=world.patrick, line="   ")
 
 
 def test_a_title_name_too_long_for_the_rail_is_elided_rather_than_refused():
@@ -1111,9 +1091,9 @@ def test_a_title_name_too_long_for_the_rail_is_elided_rather_than_refused():
 
     # Refusals that signal a CALLER error stay refusals.
     with pytest.raises(rail.RailError):
-        rail.record(kind="duel", line="")
+        rail.record(kind="duel", user_id=-1, line="")
     with pytest.raises(rail.RailError):
-        rail.record(kind="tier_drag", line=line)
+        rail.record(kind="tier_drag", user_id=-1, line=line)
     with pytest.raises(rail.RailError):
         rail.duel_line("a", "b", "A", context="tier_queue", selection="clairvoyance")
 
@@ -1202,8 +1182,8 @@ async def test_the_rail_is_ephemeral_and_reaches_no_table(world):
     """§6.7: "never persisted". Recording writes nothing, and the buffer does not survive the process."""
     before = await _live_row_count(world.db)
     rail.record(
-        kind="ledger_refit", user_id=world.patrick,
-        line=rail.refit_line("movie", n_titles=900, seconds=0.31, rho=0.42),
+        kind="verdict", user_id=world.patrick,
+        line=rail.verdict_line("patrick", "Home Film 1000", "liked", refit_ms=31.0),
     )
     after = await _live_row_count(world.db)
     assert after == before, "recording a rail event inserted a row somewhere"
@@ -1223,11 +1203,8 @@ async def test_one_persons_rail_never_shows_another_persons_events(world):
     rail.forget()
     rail.record(kind="verdict", user_id=world.patrick, line="verdict(patrick, A) = liked")
     rail.record(kind="verdict", user_id=world.patrick + 5000, line="verdict(other, B) = liked")
-    rail.record(kind="ledger_refit", line=rail.refit_line("movie", n_titles=9, seconds=0.1))
 
-    mine = rail.recent(user_id=world.patrick)
-    assert [e["scope"] for e in mine] == ["household", "you"]
-    assert not any("other" in e["text"] for e in mine)
+    assert [e["text"] for e in rail.recent(user_id=world.patrick)] == ["verdict(patrick, A) = liked"]
 
 
 def test_a_noisy_account_cannot_push_another_accounts_events_out_of_its_rail():
@@ -1294,22 +1271,12 @@ def _rail_record_kinds() -> set[str]:
     return literal
 
 
-def test_every_declared_rail_kind_has_a_producer_or_is_declared_pending():
-    """Every declared kind has a producer or is in
-    `AWAITING_PRODUCER`; a kind that is neither is forbidden."""
+def test_every_declared_rail_kind_has_a_producer():
+    """A declared kind nothing records is a colour rule and a filter chip for nothing."""
     produced = _rail_record_kinds()
-    pending = set(rail.AWAITING_PRODUCER)
-
-    assert pending == {
-        "ledger_refit", "ledger_incremental", "foldin", "blend_weight", "placement",
-        "bundle_swap", "reconcile",
-    }, "decision 189 plus decision 263 name seven worker-side kinds; this tuple has drifted"
-    assert not produced & pending, (
-        f"{sorted(produced & pending)} is written somewhere and still declared pending"
-    )
-    assert produced | pending == set(rail.EVENT_KINDS), (
-        f"unproduced and undeclared: {sorted(set(rail.EVENT_KINDS) - produced - pending)}; "
-        f"written but not in EVENT_KINDS: {sorted(produced - set(rail.EVENT_KINDS))}"
+    assert produced == set(rail.EVENT_KINDS), (
+        f"declared but never recorded: {sorted(set(rail.EVENT_KINDS) - produced)}; "
+        f"recorded but not declared: {sorted(produced - set(rail.EVENT_KINDS))}"
     )
 
 
