@@ -149,9 +149,9 @@ def _columns(schema: dict, table: str, table_schema: str = "public") -> dict[str
 
 
 def test_the_ledger_output_columns_the_rank_board_reads_exist(schema):
-    """`tier`/`straddle` (0005) and `kind`/`sigma_eff` (0010) arrive by ALTER, unseen by `relations`."""
+    """`tier` (0005) and `kind`/`sigma_eff` (0010) arrive by ALTER, unseen by `relations`."""
     columns = _columns(schema, "ledger_state")
-    for name in ("kind", "s", "sigma", "sigma_eff", "cdf", "tier", "straddle", "observed"):
+    for name in ("kind", "s", "sigma", "sigma_eff", "cdf", "tier", "observed"):
         assert name in columns, f"ledger_state.{name} is missing"
 
 

@@ -239,10 +239,10 @@ async def test_a_sitting_of_verdicts_moves_the_ranking_the_shelves_are_built_fro
     )
 
     # And the read the shelves make sees it.
-    section = await serve.ranked_section(
-        db, user_id=patrick, kind="movie", bundle_version="test-v1"
+    top = await serve.top_scored(
+        db, user_id=patrick, kind="movie", bundle_version="test-v1", limit=24
     )
-    assert [item["id"] for item in section["items"]] == [r["title_id"] for r in after]
+    assert [item["id"] for item in top["items"]] == [r["title_id"] for r in after]
     assert order_before != [r["title_id"] for r in after], (
         "the reversed sitting left the shelf in the same order"
     )

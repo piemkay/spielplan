@@ -100,8 +100,6 @@ class RefitReport:
     converged: bool = False
     grad_inf: float = 0.0
     objective: float = 0.0
-    # Max duel/anchor curvature ratio: what a fixed-step method would have had to divide by.
-    rho: float = 0.0
     iterations: tuple[int, int] = (0, 0)
     backtracks: int = 0
     seconds: float = 0.0
@@ -124,7 +122,6 @@ class RefitReport:
             "fitted": self.fitted,
             "converged": self.converged,
             "grad_inf": self.grad_inf,
-            "rho": self.rho,
             "seconds": round(self.seconds, 3),
             "cutpoints": self.cutpoints,
             "hyperparams_source": self.hyperparams_source,
@@ -143,7 +140,6 @@ class Row:
     sigma_eff: float
     cdf: float | None
     tier: int | None
-    straddle: int | None
     observed: bool
 
 
@@ -432,7 +428,6 @@ async def _refit_user(
                 sigma_eff=np.zeros(0),
                 cdf=np.zeros(0),
                 tier=np.zeros(0, dtype=np.int64),
-                straddle=np.zeros(0, dtype=np.int64),
                 observed=np.zeros(0, dtype=bool),
                 stamps=[],
                 fit_source="nightly",
@@ -470,7 +465,6 @@ async def _refit_user(
     report.converged = fit.converged
     report.grad_inf = fit.grad_inf
     report.objective = fit.objective
-    report.rho = fit.rho
     report.iterations = fit.iterations
     report.backtracks = fit.backtracks
     report.cutpoints = [float(c) for c in fit.cuts]
@@ -502,10 +496,9 @@ async def _refit_user(
     # The CDF reference is the OBSERVED block, so library growth moves no displayed number.
     cdf = model.empirical_cdf(fit.s, s)
     tier = model.tier_of(s, fit.cuts)
-    straddle = model.straddle(s, sigma_eff, fit.cuts, hp)
     # Decision 508's hold; unrated titles are padded with -1.
     held = np.concatenate([model.live_verdicts(obs), np.full(len(extra), -1, dtype=np.int64)])
-    tier, straddle = model.hold_to_verdict(tier, straddle, held, fit.cuts.size + 1)
+    tier, _ = model.hold_to_verdict(tier, np.full_like(tier, -1), held, fit.cuts.size + 1)
     tier[obs.n :] = model.guess_tier(tier[obs.n :], fit.cuts.size + 1)
 
     finite = np.isfinite(s) & np.isfinite(sigma) & np.isfinite(sigma_eff)
@@ -546,7 +539,6 @@ async def _refit_user(
             sigma_eff=sigma_eff[finite],
             cdf=cdf[finite],
             tier=tier[finite],
-            straddle=straddle[finite],
             observed=observed[finite],
             stamps=[st for st, keep in zip(stamps, finite, strict=True) if keep],
             fit_source="nightly",
@@ -637,7 +629,6 @@ async def _write_state(
     sigma_eff: np.ndarray,
     cdf: np.ndarray,
     tier: np.ndarray,
-    straddle: np.ndarray,
     observed: np.ndarray,
     stamps: Sequence[datetime | None],
     fit_source: str,
@@ -656,19 +647,18 @@ async def _write_state(
     await conn.execute(
         """
         INSERT INTO ledger_state
-            (user_id, title_id, kind, s, sigma, sigma_prior, sigma_eff, cdf, tier, straddle,
+            (user_id, title_id, kind, s, sigma, sigma_prior, sigma_eff, cdf, tier,
              observed, last_observed_at, fit_source, updated_at)
         SELECT $1, x.title_id, $2, x.s, x.sigma, x.sigma_prior, x.sigma_eff, x.cdf, x.tier,
-               x.straddle, x.observed, x.last_observed_at, $3, now()
+               x.observed, x.last_observed_at, $3, now()
         FROM unnest($4::int[], $5::float8[], $6::float8[], $7::float8[], $8::float8[],
-                    $9::float8[], $10::smallint[], $11::smallint[], $12::boolean[],
-                    $13::timestamptz[])
-             AS x(title_id, s, sigma, sigma_prior, sigma_eff, cdf, tier, straddle, observed,
+                    $9::float8[], $10::smallint[], $11::boolean[], $12::timestamptz[])
+             AS x(title_id, s, sigma, sigma_prior, sigma_eff, cdf, tier, observed,
                   last_observed_at)
         ON CONFLICT (user_id, title_id) DO UPDATE
           SET kind = EXCLUDED.kind, s = EXCLUDED.s, sigma = EXCLUDED.sigma,
               sigma_prior = EXCLUDED.sigma_prior, sigma_eff = EXCLUDED.sigma_eff,
-              cdf = EXCLUDED.cdf, tier = EXCLUDED.tier, straddle = EXCLUDED.straddle,
+              cdf = EXCLUDED.cdf, tier = EXCLUDED.tier,
               observed = EXCLUDED.observed, last_observed_at = EXCLUDED.last_observed_at,
               fit_source = EXCLUDED.fit_source, updated_at = now()
         """,
@@ -682,8 +672,6 @@ async def _write_state(
         [float(x) for x in sigma_eff],
         cdf_out,
         [int(x) for x in tier],
-        # −1 ("reaches no neighbour") is stored as NULL.
-        [None if int(x) < 0 else int(x) for x in straddle],
         [bool(x) for x in observed],
         list(stamps),
     )
@@ -1104,10 +1092,9 @@ async def _update_incrementally(
     # Against the cached reference: the same definition, one night stale.
     cdf = model.empirical_cdf(cache.cdf_reference, s)
     tier = model.tier_of(s, cache.cuts)
-    straddle = model.straddle(s, sigma_eff, cache.cuts, hp)
     # Decision 508's hold, as the nightly applies it.
-    tier, straddle = model.hold_to_verdict(
-        tier, straddle, model.live_verdicts(local)[block], cache.n_levels
+    tier, _ = model.hold_to_verdict(
+        tier, np.full_like(tier, -1), model.live_verdicts(local)[block], cache.n_levels
     )
     # A title whose last observation was undone is unrated again (decision 510).
     tier = np.where(observed, tier, model.guess_tier(tier, cache.n_levels))
@@ -1124,7 +1111,6 @@ async def _update_incrementally(
             sigma_eff=sigma_eff,
             cdf=cdf,
             tier=tier,
-            straddle=straddle,
             observed=observed,
             stamps=stamps,
             fit_source="incremental",
@@ -1158,7 +1144,6 @@ async def _update_incrementally(
             sigma_eff=float(sigma_eff[i]),
             cdf=None if not np.isfinite(cdf[i]) else float(cdf[i]),
             tier=int(tier[i]),
-            straddle=None if int(straddle[i]) < 0 else int(straddle[i]),
             observed=bool(observed[i]),
         )
         for i, t in enumerate(targets)
@@ -1228,63 +1213,6 @@ def _merge_cache(
         cache.n_observed += 1
 
 
-async def _read_rows(
-    conn: asyncpg.Connection, *, user_id: int, title_ids: Sequence[int]
-) -> tuple[Row, ...]:
-    found = await conn.fetch(
-        """
-        SELECT title_id, s, sigma, sigma_eff, cdf, tier, straddle, observed
-        FROM ledger_state WHERE user_id = $1 AND title_id = ANY($2::int[])
-        """,
-        user_id,
-        [int(t) for t in title_ids],
-    )
-    by_id = {
-        int(r["title_id"]): Row(
-            title_id=int(r["title_id"]),
-            s=float(r["s"]),
-            sigma=float(r["sigma"]),
-            sigma_eff=float(r["sigma_eff"]) if r["sigma_eff"] is not None else float(r["sigma"]),
-            cdf=float(r["cdf"]) if r["cdf"] is not None else None,
-            tier=int(r["tier"]) if r["tier"] is not None else None,
-            straddle=int(r["straddle"]) if r["straddle"] is not None else None,
-            observed=bool(r["observed"]),
-        )
-        for r in found
-    }
-    return tuple(by_id[int(t)] for t in title_ids if int(t) in by_id)
-
-
-async def read_board(
-    conn: asyncpg.Connection, *, user_id: int, kind: str, limit: int = 100, offset: int = 0
-) -> list[Row]:
-    """§4.1 rule 5's ranked read, straight off `ledger_state_rank (user_id, kind, s DESC)`."""
-    rows = await conn.fetch(
-        """
-        SELECT title_id, s, sigma, sigma_eff, cdf, tier, straddle, observed
-        FROM ledger_state WHERE user_id = $1 AND kind = $2
-        ORDER BY s DESC, title_id LIMIT $3 OFFSET $4
-        """,
-        user_id,
-        kind,
-        limit,
-        offset,
-    )
-    return [
-        Row(
-            title_id=int(r["title_id"]),
-            s=float(r["s"]),
-            sigma=float(r["sigma"]),
-            sigma_eff=float(r["sigma_eff"]) if r["sigma_eff"] is not None else float(r["sigma"]),
-            cdf=float(r["cdf"]) if r["cdf"] is not None else None,
-            tier=int(r["tier"]) if r["tier"] is not None else None,
-            straddle=int(r["straddle"]) if r["straddle"] is not None else None,
-            observed=bool(r["observed"]),
-        )
-        for r in rows
-    ]
-
-
 __all__ = [
     "BASIS_UNSTATED",
     "DAYS_PER_MONTH",
@@ -1297,7 +1225,6 @@ __all__ = [
     "Row",
     "active_bundle_version",
     "load_cache",
-    "read_board",
     "refit_all",
     "refit_user",
     "update_incrementally",

@@ -274,13 +274,6 @@ def _cross_validate(
     return lam, beta, table[(lam, beta)], n_folds
 
 
-def score(fit: Fit, c: Coordinate) -> tuple[float, float]:
-    """(score_u(t), ⟨v_u, d(t)⟩). Both halves are returned so §6.7 can show them separately."""
-    cf = float(fit.v @ directions([c])[0])
-    z_prior = (c.b - fit.prior_mean) / fit.prior_sd
-    return fit.mu + (1.0 - fit.beta) * z_prior + fit.beta * cf, cf
-
-
 def score_many(fit: Fit, coords: Sequence[Coordinate]) -> list[tuple[int, float, float]]:
     """(title_id, score, cf) for a whole reference population in one matvec."""
     if not coords:

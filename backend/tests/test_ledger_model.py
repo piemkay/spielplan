@@ -367,7 +367,6 @@ def test_the_preconditioner_survives_one_heavily_duelled_title():
     assert fitted.s[popular] == pytest.approx(np.max(fitted.s), rel=0.2), (
         "the title that won two hundred duels should be at the top"
     )
-    assert fitted.rho > 1.0, "this fixture must actually exhibit the curvature spread"
 
 
 def test_the_displayed_weight_is_the_users_own_empirical_cdf():

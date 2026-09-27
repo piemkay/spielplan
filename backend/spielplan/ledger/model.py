@@ -84,7 +84,6 @@ class Fit:
     grad_inf: float
     iterations: tuple[int, int]
     backtracks: int
-    rho: float
     converged: bool
 
     @property
@@ -104,21 +103,6 @@ def feasible(gamma: np.ndarray, cuts: np.ndarray) -> bool:
         (gamma.size < 2 or np.all(np.diff(gamma) >= 0))
         and (cuts.size < 2 or np.all(np.diff(cuts) >= 0))
     )
-
-
-def _max_feasible_step(gamma, cuts, d_gamma, d_cuts, lay) -> float:
-    """The largest step along -d that keeps every cutpoint gap positive (interior-point ratio test)."""
-    _ = lay
-    limit = np.inf
-    for values, direction in ((gamma, d_gamma), (cuts, d_cuts)):
-        if values.size < 2:
-            continue
-        gaps = np.diff(values)
-        closing = np.diff(direction)           # the step is x - eta*d, so a positive
-        moving = closing > 0                   # difference closes the gap
-        if np.any(moving):
-            limit = min(limit, float(np.min(gaps[moving] / closing[moving])))
-    return limit
 
 
 def _duel_weights(obs: ObservationSet, hp: Hyperparams) -> np.ndarray:
@@ -722,23 +706,12 @@ def fit(
         obs, hp, with_duels=False, z0=z, r0=r
     )
 
-    # Stage B — add the duel arm, stepping with stage A's curvature.
-    rho = 0.0
+    # Stage B — add the duel arm, stepping with stage A's curvature; §4.3's `lr` is the first step.
     it_b = bt_b = 0
     if obs.duel_a.size:
-        mu, v, gamma, cuts, log_nu = _unpack_raw(z, lay)
-        _gz, _gr, _hzz, _hzr, _hrr, anchor_diag, duel_diag, _cpl = _grad_hess(
-            obs, hp, mu, v, gamma, cuts, log_nu, r, with_duels=True
-        )
-        with np.errstate(divide="ignore", invalid="ignore"):
-            ratio = np.where(anchor_diag > 0, duel_diag / anchor_diag, 0.0)
-        rho = float(np.max(ratio, initial=0.0))
-        # §4.3's `lr` is the first trial step. `rho` (max duel/anchor curvature) is reported, not
-        # applied: it measures the mismatch the preconditioner absorbs.
-        step0 = float(hp.lr)
         z, r, blocks_b, _g_b, it_b, bt_b, anchor_curv, duel_curv = _minimise(
             obs, hp, with_duels=True, z0=z, r0=r,
-            precondition_from=blocks_a, max_iter=hp.steps, step0=step0,
+            precondition_from=blocks_a, max_iter=hp.steps, step0=float(hp.lr),
             refresh_preconditioner=True,
         )
         blocks = blocks_b
@@ -768,7 +741,6 @@ def fit(
         objective=_objective(obs, hp, mu, v, gamma, cuts, log_nu, r,
                              with_duels=obs.duel_a.size > 0),
         grad_inf=float(grad_inf), iterations=(it_a, it_b), backtracks=bt_a + bt_b,
-        rho=rho,
         # Relative, since ||grad||_inf grows with the number of observations.
         converged=bool(
             grad_inf <= 1e-3 * max(1.0, n_obs)

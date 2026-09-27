@@ -24,7 +24,7 @@ from spielplan.ledger.observations import LIVE_LABEL_SQL, rescale_level
 from spielplan.models.artifacts import ColdEval
 from spielplan.scoring import serve
 
-KIND_HEADINGS: dict[str, str] = dict(serve.HEADINGS)
+KIND_HEADINGS: dict[str, str] = {"movie": "Films", "series": "Series"}
 
 # Proposal 22, evaluated server-side against the household's `TZ`, not the phone's clock.
 GREETING_BANDS: tuple[tuple[int, str, str], ...] = (
@@ -581,7 +581,7 @@ async def because_anchor(
 async def top_of_ledger(
     conn: asyncpg.Connection, *, ctx: Ctx, kind: str
 ) -> tuple[Section | None, Suppressed | None]:
-    """§6.0 row 2 — "Top of your ledger", from `scoring.serve.ranked_section`, the one ranked statement.
+    """§6.0 row 2 — "Top of your ledger", from `scoring.serve.top_scored`, the one ranked statement.
 
     The one shelf that includes seen titles, and says so (proposal 25).
     """
@@ -590,13 +590,11 @@ async def top_of_ledger(
         return None, Suppressed(sid, kind, "no active artifact bundle — no scores to rank")
 
     # Not thinned by the claim (decision 475), but by what the member avoids (decision 512).
-    ranked = await serve.ranked_section(
+    ranked = await serve.top_scored(
         conn,
         user_id=ctx.user_id,
         kind=kind,
         bundle_version=ctx.bundle_version,
-        seen="any",
-        owned_only=True,
         limit=SHELF_CAP,
         exclude=sorted(ctx.avoided),
     )
@@ -630,7 +628,7 @@ async def top_of_ledger(
 
 
 def _as_card_rows(items: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
-    """`serve.ranked_section` returns `id` and `seen_state`; `_card` reads `title_id` and `seen`."""
+    """`serve.top_scored` returns `id` and `seen_state`; `_card` reads `title_id` and `seen`."""
     return [
         dict(item, title_id=item["id"], seen=item["seen_state"] == "seen", placement_at=None)
         for item in items

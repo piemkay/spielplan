@@ -283,10 +283,8 @@ async def test_a_title_placed_after_the_fit_is_ranked_by_the_next_tick(db, world
         assert await db.fetchval(
             "SELECT count(*) FROM user_score WHERE user_id = $1 AND title_id = $2", person, acquired
         ) == 1
-    section = await serve.ranked_section(
-        db, user_id=patrick, kind="movie", bundle_version=BUNDLE, limit=50
-    )
-    assert acquired in [item["id"] for item in section["items"]]
+    top = await serve.top_scored(db, user_id=patrick, kind="movie", bundle_version=BUNDLE, limit=50)
+    assert acquired in [item["id"] for item in top["items"]]
 
     again = await _tick(db, world)
     assert again.refit == [] and again.priors is None

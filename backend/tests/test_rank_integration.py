@@ -698,8 +698,11 @@ async def test_the_held_out_stream_never_reaches_the_fit(db, board_of):
 
 async def test_the_evaluation_read_path_admits_only_held_out_rows(db, board_of):
     """The adaptive pairs agree with the model, so a leak shows as a higher rate, not an error."""
-    ranked = await refit.read_board(db, user_id=board_of, kind="movie")
-    order = [r.title_id for r in ranked]
+    order = [r["title_id"] for r in await db.fetch(
+        "SELECT title_id FROM ledger_state WHERE user_id = $1 AND kind = 'movie'"
+        " ORDER BY s DESC, title_id",
+        board_of,
+    )]
     best, worst = order[0], order[-1]
 
     # Ten adaptive pairs the model gets right, and two held-out pairs it gets wrong.
