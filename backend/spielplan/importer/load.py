@@ -10,7 +10,6 @@ import sqlite3
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from pathlib import Path
 
 import asyncpg
 
@@ -377,20 +376,15 @@ def _account_for_shipped_tables(db: sqlite3.Connection, report: ImportReport) ->
 
 
 async def load_content(
-    conn: asyncpg.Connection,
-    db: sqlite3.Connection,
-    report: ImportReport,
-    *,
-    bundle_root: Path | None = None,
+    conn: asyncpg.Connection, db: sqlite3.Connection, report: ImportReport
 ) -> ImportReport:
     """Load the bundle's content tables into Postgres inside the caller's transaction.
 
-    Idempotent: a re-import must succeed. `bundle_root` carries the per-field source order.
+    Idempotent: a re-import must succeed.
     """
     present = {r[0] for r in db.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
     if not _account_for_shipped_tables(db, report):
         return report
-    priority = meta.source_priority(bundle_root, report)
 
     usable: list[TableMap] = []
     for tmap in MAPPINGS:
@@ -440,7 +434,7 @@ async def load_content(
 
     # After the derived tables, because the trailer key is read from `title_video`.
     await meta.load_title_meta(conn, db, report)
-    await meta.resolve_title_fields(conn, priority, report)
+    await meta.resolve_title_fields(conn, meta.SOURCE_PRIORITY, report)
 
     # rule: is_owned is re-derived from Jellyfin, never trusted stale (§7.2).
     await conn.execute("UPDATE title SET owned_checked_at = NULL")

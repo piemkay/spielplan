@@ -135,18 +135,6 @@ def _read_tsv(
 _UNLISTED_EXEMPT = "BUNDLE.json"
 
 
-def _bundle_manifest(root: Path) -> dict[str, Any] | None:
-    """`BUNDLE.json` read without a report line; `_read_bundle_identity` owns its failure."""
-    path = root / _UNLISTED_EXEMPT
-    if not path.is_file():
-        return None
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError):
-        return None
-    return payload if isinstance(payload, dict) else None
-
-
 def _sha256(path: Path) -> str:
     """The file's digest, read in chunks: a bundle must not have to fit in memory to be checked."""
     digest = hashlib.sha256()
@@ -156,15 +144,12 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def _verify_bundle_files(root: Path, report: ImportReport) -> None:
-    """Every file BUNDLE.json lists, stat'd and hashed, before a single row is written.
+def _verify_bundle_files(root: Path, payload: dict[str, Any], report: ImportReport) -> None:
+    """Every file BUNDLE.json (`payload`) lists, stat'd and hashed, before a single row is written.
 
     Called first by `bundle.validate()`: every later rule assumes intact bytes, and a corrupted seed
     is unrepeatable. ~1-2 s for 1 GB. Editing a file after `make_bundle()` breaks the inventory.
     """
-    payload = _bundle_manifest(root)
-    if payload is None:
-        return
     listed = payload.get("files")
     if not isinstance(listed, dict) or not listed:
         report.fail(
@@ -331,14 +316,12 @@ def _quick_check(path: Path, report: ImportReport) -> None:
         )
 
 
-def compare_table_counts(root: Path, report: ImportReport) -> None:
-    """BUNDLE.json's own per-table counts against the ones this import measured.
+def compare_table_counts(payload: dict[str, Any], report: ImportReport) -> None:
+    """BUNDLE.json's (`payload`) own per-table counts against the ones this import measured.
 
-    Called by `validate()` and again after the load, with the same answer; the report dedups. The
-    `loaded:<target>` counts are a different fact and are not compared.
+    The `loaded:<target>` counts are a different fact and are not compared.
     """
-    payload = _bundle_manifest(root)
-    declared = payload.get("tables") if payload else None
+    declared = payload.get("tables")
     if not isinstance(declared, dict) or not report.table_counts:
         return
     # A count that is not an int is a report line; enumerated so the rest are still named.
@@ -805,9 +788,6 @@ def validate_artifacts(
     """
     from spielplan.models.artifacts import BUNDLE_FILES
 
-    # First, so every later failure names this bundle.
-    _read_bundle_identity(root.parent, report)
-
     manifest_path = root / "manifest.json"
     if not manifest_path.is_file():
         report.fail("artifacts", "artifacts/manifest.json is missing")
@@ -891,35 +871,12 @@ def validate_artifacts(
     _validate_seed_list(root, report, spine)
     _validate_model_artifacts(root, report, contract, spine, active_coverage)
 
-    # One derivation of the version, in `importer/vocab.py`.
-    from spielplan.importer import vocab
-
-    vocab_dir = root / "dna_vocab"
-    # The tree is always read; a declaration decides the answer, never whether to ask.
-    declared = report.vocabulary_version
-    try:
-        derived = vocab.version_of(root)
-    except vocab.VocabularyError as exc:
-        report.fail("vocabulary", str(exc), versions=list(exc.versions))
-        derived = None
-    if declared and derived and declared != derived:
-        # Declaration and tree disagree: name both (decisions 163, 256).
-        report.fail(
-            "vocabulary",
-            f"BUNDLE.json declares DNA vocabulary {declared!r} and this bundle ships "
-            f"dna_vocab/{derived}/ - section 4.3 names the vocabulary by the directory, so this "
-            "bundle gives two answers and decision 163's comparison cannot be made against "
-            "either; export it with the key and the tree naming one version",
-            declared=declared, derived=derived,
-        )
-    report.vocabulary_version = declared or derived
-
     # DNA rows with no vocabulary to reference would fail the FK mid-load, so fail here. Tiers are
-    # counted apart, never summed (§4.1 rule 1).
+    # counted apart, never summed (§4.1 rule 1). The version is `Bundle.open`'s, read once.
     tagged_rows = report.table_counts.get("dna_tag") or 0
     projected_rows = report.table_counts.get("dna_projected") or 0
     resolved = report.vocabulary_version
-    version_dir = vocab_dir / resolved if resolved else None
+    version_dir = root / "dna_vocab" / resolved if resolved else None
     if version_dir is not None and version_dir.is_dir():
         # The corpus ships `vocab_<version>_all.tsv` plus one TSV per facet.
         if not sorted(version_dir.glob("vocab_*.tsv")):
@@ -1007,50 +964,6 @@ def _read_json(path: Path, report: ImportReport, rule: str) -> dict[str, Any] | 
         report.fail(rule, f"{path.name} is a {type(payload).__name__}, not an object")
         return None
     return payload
-
-
-def _read_bundle_identity(bundle_root: Path, report: ImportReport) -> None:
-    """The bundle's own name for itself, from `BUNDLE.json` at the bundle root.
-
-    The vocabulary falls back to the `dna_vocab/<version>/` directory.
-    """
-    path = bundle_root / "BUNDLE.json"
-    if not path.is_file():
-        report.fail(
-            "bundle-identity",
-            "BUNDLE.json is missing from the bundle root — it records `bundle_version`, which "
-            "names the artifact directory and stamps every placement, prior and score (§10)",
-        )
-        return
-    payload = _read_json(path, report, "bundle-identity")
-    if payload is None:
-        return
-
-    version = payload.get("bundle_version")
-    if not version:
-        report.fail(
-            "bundle-identity",
-            "BUNDLE.json records no `bundle_version`; an import stamped 'unknown' cannot be "
-            "told apart from the next one (§10's migration report), and the artifact directory it "
-            "names would be shared by every bundle",
-        )
-    else:
-        # The same token rule the import refuses on.
-        safe = safe_version(version)
-        if safe == "unknown":
-            report.fail(
-                "bundle-identity",
-                f"BUNDLE.json's `bundle_version` {str(version)!r} is not a usable name for the "
-                "artifact directory it becomes: it must be a plain [A-Za-z0-9._-] token, because "
-                "it is both a path segment under /data/artifacts and an rmtree target",
-                bundle_version=str(version),
-            )
-        report.bundle_version = safe
-    vocabulary = payload.get("vocabulary_version")
-    if isinstance(vocabulary, str) and vocabulary:
-        # Only a string counts as a declared vocabulary, as in `bundle._vocabulary_version`.
-        report.vocabulary_version = vocabulary
-    _validate_nullable_pk_columns(payload, report)
 
 
 def _validate_nullable_pk_columns(payload: dict[str, Any], report: ImportReport) -> None:

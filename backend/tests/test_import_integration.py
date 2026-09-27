@@ -532,7 +532,7 @@ async def test_an_unmapped_bundle_column_is_reported_not_dropped_silently(db, bu
     con.close()
     fx.reinventory(bundle.root)
 
-    report = await _import(db, bundle, tmp_path / "artifacts")
+    report = await _import(db, bundle_import.Bundle.open(bundle.root), tmp_path / "artifacts")
     assert "some_new_corpus_column" in report.unmapped_columns.get("title", [])
 
 
