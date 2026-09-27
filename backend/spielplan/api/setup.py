@@ -29,7 +29,6 @@ class AdminInit(BaseModel):
     password: str = Field(min_length=10)
 
 
-
 async def _optional_user(
     request: Request, response: Response, conn: DB
 ) -> auth.SessionUser | None:
@@ -97,7 +96,6 @@ async def create_admin(body: AdminInit, response: Response, conn: DB) -> dict[st
         ) from exc
     set_session_cookie(response, sid)
     return {"id": user_id, "name": body.name, "role": "admin"}
-
 
 
 @router.post("/onboarding/complete")

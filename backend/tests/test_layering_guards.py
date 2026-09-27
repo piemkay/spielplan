@@ -122,11 +122,10 @@ _SQL_HEAD = re.compile(
 ALLOWED_RESIDUE = {
     "admin.py": 17,
     "auth.py": 9,
-    "setup.py": 9,
+    "setup.py": 8,
     "artifacts.py": 6,
     "push.py": 5,
-    "library.py": 4,
-    "tonight.py": 4,
+    "tonight.py": 3,
     "state.py": 2,
     "app.py": 1,
     "deps.py": 1,

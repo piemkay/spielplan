@@ -491,9 +491,6 @@ class Write:
     # §6.7's model-log line.
     log: str = ""
 
-    def prior_state_json(self) -> list[dict[str, Any]]:
-        return [p.as_dict() for p in self.prior_state]
-
 
 async def _capture_prior(
     conn: asyncpg.Connection, *, user_id: int, title_id: int

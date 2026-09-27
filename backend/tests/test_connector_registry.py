@@ -508,7 +508,6 @@ async def test_a_custody_failure_does_not_erase_the_library_pick_or_the_watermar
     assert kept.delta_watermark == polled
 
 
-
 async def test_a_provider_round_trips_with_its_key_sealed_and_its_model_in_plaintext(
     db, secrets_key
 ):

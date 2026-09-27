@@ -45,13 +45,6 @@ class ClassBalance:
     def total(self) -> int:
         return sum(self.counts)
 
-    @property
-    def heaviest(self) -> int | None:
-        """The class the warning is about, or None when there is nothing to warn about."""
-        if self.total == 0:
-            return None
-        return max(range(3), key=lambda i: (self.counts[i], -i))
-
     def as_dict(self) -> dict[str, Any]:
         return {
             "counts": list(self.counts),

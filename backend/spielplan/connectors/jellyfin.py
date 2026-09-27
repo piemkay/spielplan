@@ -295,7 +295,6 @@ class JellyfinClient:
         probe: a wrong URL and a wrong key fail differently and the admin can tell which."""
         return await self._request("GET", "/System/Info/Public", token=None) or {}
 
-
     async def probe_version(self) -> tuple[str, bool | None]:
         """The server's version and §7.1's verdict, in one unauthenticated call.
 
@@ -589,10 +588,6 @@ class JellyfinClient:
                 pin=".".join(str(p) for p in MIN_SERVER_VERSION),
             )
         return None
-
-    def deep_link(self, jellyfin_id: str) -> str:
-        """§7.1: 'Play on Jellyfin' — deep-link to the server's own web player."""
-        return f"{self.base_url.rstrip('/')}/web/#/details?id={jellyfin_id}"
 
     async def primary_image(
         self, item_id: str, *, max_width: int = 342

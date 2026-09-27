@@ -58,17 +58,6 @@ export async function signedIn(page, admin = ADMIN) {
   }
 }
 
-export async function importBundle(page) {
-  await page.goto('/admin/data');
-  await expect(page.getByRole('heading', { name: 'Artifact bundle' })).toBeVisible();
-
-  await page.getByRole('button', { name: 'Validate bundle' }).click();
-  await expect(page.locator('.verdict')).toHaveText('valid');
-
-  await page.getByRole('button', { name: 'Import and activate' }).click();
-  await expect(page.locator('.finding', { hasText: 'artifacts staged to' })).toBeVisible();
-}
-
 /** By test id: `.chip` is a shared pill class and is ambiguous off Home. */
 export async function openAccountMenu(page) {
   await page.getByTestId('account-chip').click();

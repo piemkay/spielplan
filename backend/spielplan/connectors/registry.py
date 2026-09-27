@@ -171,6 +171,17 @@ def make_client(cfg: JellyfinConfig):
     )
 
 
+async def play_link(conn: asyncpg.Connection) -> Callable[[str], str] | None:
+    """§7.1's "Play on Jellyfin", a deep link into the server's own web player; None with no server.
+    The URL is plaintext config, so no secret is opened for it."""
+    base = await conn.fetchval(
+        "SELECT config->>'url' FROM connector_config WHERE name = $1", JELLYFIN
+    )
+    if not base:
+        return None
+    return lambda jellyfin_id: f"{base.rstrip('/')}/web/#/details?id={jellyfin_id}"
+
+
 async def load_jellyfin(conn: asyncpg.Connection, *, for_update: bool = False) -> JellyfinConfig:
     """The stored connector, or a truthfully degraded one when its secrets will not open.
 
@@ -515,6 +526,7 @@ __all__ = [
     "env_seeds",
     "make_client",
     "load_connector",
+    "play_link",
     "load_jellyfin",
     "save_connector",
     "save_jellyfin",

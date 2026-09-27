@@ -84,7 +84,6 @@ async def job(conn: asyncpg.Connection, title_id: int) -> dict[str, Any] | None:
     return {**_job_row(row), "detail": detail or {}}
 
 
-
 async def documents_for_title(
     conn: asyncpg.Connection, title_id: int, *, limit: int = DOCUMENT_LIMIT
 ) -> list[dict[str, Any]]:

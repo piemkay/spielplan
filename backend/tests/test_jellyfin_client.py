@@ -417,12 +417,6 @@ async def test_an_unreachable_server_raises_jellyfin_error_not_httpx(client):
     assert not exc.value.is_auth_failure
 
 
-def test_the_deep_link_is_the_web_player_route(client):
-    """§7.1: "deep-link to the server's web player ({jf_url}/web/#/details?id={jellyfin_id})"."""
-    _module, jf = client
-    assert jf.deep_link("abc") == "http://jellyfin.test/web/#/details?id=abc"
-
-
 async def test_items_are_requested_recursively(client):
     """Without `Recursive=true` a real Jellyfin returns library folders; the fake answers empty."""
     _module, jf = client

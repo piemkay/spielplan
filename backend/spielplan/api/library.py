@@ -10,6 +10,7 @@ from fastapi import APIRouter, HTTPException, Query, Request, status
 
 from spielplan.api import auth as auth_api
 from spielplan.api.deps import DB, ActiveUser
+from spielplan.connectors import registry
 from spielplan.core.config import settings
 from spielplan.db import dna_terms, genres, library
 from spielplan.home import rail, suggest
@@ -109,18 +110,15 @@ async def title_detail(title_id: int, conn: DB, user: ActiveUser, request: Reque
     )
 
     # Read unconditionally: "no server" and "not in your library" are different sentences.
-    jf_base = await conn.fetchval(
-        "SELECT config->>'url' FROM connector_config WHERE name = 'jellyfin'"
-    )
+    link = await registry.play_link(conn)
     jf_url = None
     play_reason = None
-    if not jf_base:
+    if link is None:
         play_reason = "no_server"
     elif not title.get("jellyfin_id"):
         play_reason = "not_in_library"
     else:
-        # §7.1: deep-link to the server's web player.
-        jf_url = f"{jf_base.rstrip('/')}/web/#/details?id={title['jellyfin_id']}"
+        jf_url = link(title["jellyfin_id"])
 
     body: dict[str, Any] = {
         "title": {

@@ -16,6 +16,7 @@ from itsdangerous import BadSignature, URLSafeSerializer
 from pydantic import BaseModel, Field
 
 from spielplan.api.deps import DB, ActiveUser, ActiveUserWS
+from spielplan.connectors import registry
 from spielplan.core import auth
 from spielplan.core.config import settings
 from spielplan.db import pool as db_pool
@@ -522,17 +523,10 @@ async def result(session_id: int, user: ActiveUser, conn: DB) -> dict[str, objec
     except (ballot_rules.BallotError, play.RoundError) as exc:
         raise _room_error(exc) from exc
 
-    jf = await conn.fetchval("SELECT config FROM connector_config WHERE name = 'jellyfin'")
-    base = (jf or {}).get("url", "") if isinstance(jf, dict) else ""
-
-    def play_url(jellyfin_id: str) -> str:
-        """§7.1's deep link."""
-        return f"{base.rstrip('/')}/web/#/details?id={jellyfin_id}"
-
     return await result_rules.slate(
         conn, session_id, counted, outcome,
         # None without a connector (§6.0): absent rather than guessed.
-        play_url=play_url if base else None,
+        play_url=await registry.play_link(conn),
         # Decision 117's gate, asked where the payload is built (decision 486).
         show_model=rail.visible_to(user),
     )
