@@ -529,7 +529,7 @@ async def test_a_member_whose_own_reads_fail_is_named_rather_than_swallowed(
     db, world, caplog, monkeypatch
 ):
     """Member reads fail independently of the keyless library read, so a failing member is named in
-    `failed_users`. Loud once, then DEBUG, and not via `_note_unreachable`'s server-wide memo."""
+    `failed_users`. Loud once, then DEBUG, and not via the server-wide `_outage` memo."""
     monkeypatch.setattr(seen, "_failed_users_logged", frozenset())
     await _store_connector(db, world, tokens={str(world["patrick"]): world["token"]})
     await db.execute(
@@ -1529,9 +1529,9 @@ async def test_a_blocked_version_probe_is_not_an_unreachable_jellyfin(
     db, world, fake_jellyfin, caplog, monkeypatch
 ):
     """A blocked probe is not an unreachable server; the library read is the authority. A real outage
-    is still one WARNING and one INFO. `_unreachable_since` is process-global, hence the patch."""
+    is still one WARNING and one INFO. `_outage` is process-global, hence the patch."""
     module, transport = fake_jellyfin
-    monkeypatch.setattr(seen, "_unreachable_since", None)
+    monkeypatch.setattr(seen._outage, "since", None)
     await _store_connector(db, world, tokens={str(world["patrick"]): world["token"]})
     blocked = JellyfinClient(
         "http://jellyfin.test", module.API_KEY, transport=_ProbeBlocked(transport)

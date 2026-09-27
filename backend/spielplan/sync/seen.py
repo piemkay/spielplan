@@ -8,7 +8,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import time
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from typing import Any
@@ -16,7 +15,7 @@ from typing import Any
 import asyncpg
 
 from spielplan.connectors import resolve
-from spielplan.connectors.jellyfin import JellyfinClient, JellyfinError, played_of
+from spielplan.connectors.jellyfin import JellyfinClient, JellyfinError, Outage, played_of
 from spielplan.connectors.registry import (
     SECRETS_UNREADABLE_REASON,
     JellyfinConfig,
@@ -46,9 +45,8 @@ _PUSH_LOCK_TRIES = 20
 _PUSH_LOCK_WAIT_S = 0.1
 PUSH_BUSY_REASON = "another write for this title is in flight"
 
-# When Jellyfin became unreachable, so an outage logs once (§3.3). Monotonic: the sweep boundary
-# must stay the database's `now()`, never this process's clock.
-_unreachable_since: float | None = None
+# An outage logs once (§3.3). The sweep boundary stays the database's `now()`, never this clock.
+_outage = Outage(log)
 
 # Members whose own `/Items` read failed last sweep, logged on change; independent of the outage memo.
 _failed_users_logged: frozenset[str] = frozenset()
@@ -137,27 +135,6 @@ async def linked_users(conn: asyncpg.Connection, cfg: JellyfinConfig) -> list[Li
         )
         for r in rows
     ]
-
-
-def _note_unreachable(exc: JellyfinError) -> None:
-    """Log an unreachable Jellyfin once, not once a sweep, for as long as it stays down."""
-    global _unreachable_since
-
-    if _unreachable_since is None:
-        _unreachable_since = time.monotonic()
-        log.warning("jellyfin is unreachable: %s", exc)
-    else:
-        log.debug("jellyfin is still unreachable: %s", exc)
-
-
-def _note_reachable() -> None:
-    """The other half: one INFO line when it comes back, carrying how long it was gone."""
-    global _unreachable_since
-
-    if _unreachable_since is not None:
-        minutes = (time.monotonic() - _unreachable_since) / 60
-        log.info("jellyfin reachable again after %d minute(s)", int(minutes))
-        _unreachable_since = None
 
 
 async def _mark_needs_relink(conn: asyncpg.Connection, app_user_id: int) -> None:
@@ -657,7 +634,7 @@ async def sync_all(
         try:
             raw, supported = await client.probe_version()
         except JellyfinError as exc:
-            # Not `_note_unreachable`: the library read below is the reachability authority (ops-15).
+            # Not `_outage`: the library read below is the reachability authority (ops-15).
             log.debug("could not probe the Jellyfin version: %s", exc)
         else:
             if (raw, supported) != (cfg.server_version, cfg.server_supported):
@@ -668,10 +645,10 @@ async def sync_all(
             library = await client.all_items(None)
         except JellyfinError as exc:
             # §3.3: a degraded sync, never a broken app; nothing below is decidable without the library.
-            _note_unreachable(exc)
+            _outage.down(exc)
             return report
         report.reached = True
-        _note_reachable()
+        _outage.up()
         resolved = await resolve.upsert_items(conn, library)
         # Once per sweep: resolution is user-independent.
         report.resolve = resolved.as_dict()

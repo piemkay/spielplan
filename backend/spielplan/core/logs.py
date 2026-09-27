@@ -9,6 +9,7 @@ import logging
 import re
 from datetime import UTC, datetime
 from typing import Any
+from urllib.parse import quote
 
 CAPACITY = 200
 
@@ -38,6 +39,18 @@ def redact(text: str) -> str:
     for pattern in _REDACTIONS:
         text = pattern.sub(rf"\1{_MASK}", text)
     return text if len(text) <= MESSAGE_LIMIT else text[:MESSAGE_LIMIT] + "..."
+
+
+def scrub(text: str, secret: str | None) -> str:
+    """`text` with `secret` taken out in every spelling an exception gives it (str and bytes repr,
+    URL-quoted, stripped), longest first so no spelling is left half replaced (§14.3)."""
+    if not secret:
+        return text
+    spellings = {secret, secret.strip(), quote(secret, safe=""), repr(secret)[1:-1],
+                 repr(secret.encode("utf-8", "backslashreplace"))[2:-1]}
+    for spelling in sorted((s for s in spellings if s), key=len, reverse=True):
+        text = text.replace(spelling, _MASK)
+    return text
 
 
 class RecentLines(logging.Handler):
@@ -70,7 +83,8 @@ HANDLER = RecentLines()
 
 
 def configure() -> None:
-    """Root logging for both processes. httpx logs every request URL at INFO, query keys included."""
+    """Root logging for both processes. httpx logs every request URL at INFO, query keys and push
+    endpoints included, so it stays at WARNING."""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)-7s %(name)s %(message)s")
     for name in ("httpx", "httpcore"):
         logging.getLogger(name).setLevel(logging.WARNING)

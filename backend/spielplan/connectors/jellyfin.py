@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import re
+import time
 import uuid
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -16,6 +17,8 @@ from typing import Any
 from urllib.parse import quote
 
 import httpx
+
+from spielplan.core.logs import scrub
 
 log = logging.getLogger("spielplan.jellyfin")
 
@@ -108,18 +111,26 @@ class JellyfinError(RuntimeError):
         return self.status in (401, 403)
 
 
-def _scrubbed(text: str, token: str | None) -> str:
-    """`text` with the token a request carried taken out, in every spelling an exception gives it.
+class Outage:
+    """An unreachable Jellyfin logged once, not once a sweep, and its end once with how long it
+    lasted. Monotonic: only the duration is asked."""
 
-    Longest first, so a spelling inside another is never left half replaced (§14.3).
-    """
-    if not token:
-        return text
-    spellings = {token, token.strip(), quote(token, safe=""), repr(token)[1:-1],
-                 repr(token.encode("utf-8", "backslashreplace"))[2:-1]}
-    for spelling in sorted((s for s in spellings if s), key=len, reverse=True):
-        text = text.replace(spelling, "[redacted]")
-    return text
+    def __init__(self, log: logging.Logger) -> None:
+        self.log = log
+        self.since: float | None = None
+
+    def down(self, exc: JellyfinError) -> None:
+        if self.since is None:
+            self.since = time.monotonic()
+            self.log.warning("jellyfin is unreachable: %s", exc)
+        else:
+            self.log.debug("jellyfin is still unreachable: %s", exc)
+
+    def up(self) -> None:
+        if self.since is not None:
+            minutes = (time.monotonic() - self.since) / 60
+            self.log.info("jellyfin reachable again after %d minute(s)", int(minutes))
+            self.since = None
 
 
 def _item_rows(payload: dict, what: str) -> list[dict]:
@@ -256,7 +267,7 @@ class JellyfinClient:
         except (httpx.HTTPError, httpx.InvalidURL) as exc:
             # §3.3: callers catch JellyfinError only (`InvalidURL` is not an `HTTPError`). Token
             # scrubbed, and `from None` so a chained message cannot leak it.
-            raise JellyfinError(f"{method} {path} failed: {_scrubbed(str(exc), token)}") from None
+            raise JellyfinError(f"{method} {path} failed: {scrub(str(exc), token)}") from None
 
         if 300 <= response.status_code < 400:
             # A redirect (forward-auth portal, http->https) is a failed read; the Location names the fix.
@@ -669,7 +680,7 @@ class JellyfinClient:
                     self._url(path), params={"maxWidth": max_width, "quality": 85}, headers=headers
                 )
         except (httpx.HTTPError, httpx.InvalidURL) as exc:
-            raise JellyfinError(f"GET {path} failed: {_scrubbed(str(exc), self.api_key)}") from None
+            raise JellyfinError(f"GET {path} failed: {scrub(str(exc), self.api_key)}") from None
         if response.status_code == 404:
             return None
         # A redirect is refused like `_request` refuses one: httpx follows none, and a proxy's
@@ -693,6 +704,7 @@ __all__ = [
     "JellyfinError",
     "JellyfinUser",
     "NowPlaying",
+    "Outage",
     "canonical_id",
     "parse_version",
     "played_of",

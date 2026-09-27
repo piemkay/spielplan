@@ -246,7 +246,7 @@ async def test_an_unreachable_jellyfin_does_not_break_the_poll(db, world):
 
 async def test_an_outage_is_logged_once_and_so_is_its_end(db, world, caplog, monkeypatch):
     """The poll runs every minute, so an outage logs once and its recovery once, with the duration."""
-    monkeypatch.setattr(playback, "_unreachable_since", None)
+    monkeypatch.setattr(playback._outage, "since", None)
     await save_jellyfin(db, url="http://jellyfin.test", api_key=world["module"].API_KEY)
     down = JellyfinClient("http://127.0.0.1:1", "k", timeout=0.2)
 

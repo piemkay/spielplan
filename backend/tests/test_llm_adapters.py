@@ -13,6 +13,7 @@ import httpx
 import pytest
 
 from spielplan.acquire import fetch
+from spielplan.core.logs import scrub
 from spielplan.dna.verify import Vocabulary, verify_payload
 from spielplan.llm import anthropic, client, contract, gemini, openai
 
@@ -696,7 +697,7 @@ def test_every_spelling_of_the_key_an_exception_can_carry_is_redacted():
     """h11 quotes a bytes repr, a traceback a str repr, and a pasted key may carry a newline."""
     key = f"{KEY}\n"
     for text in (f"Illegal header value b'{KEY}\\n'", f"key={key!r}", f"key={KEY} ok", f"{key} ok"):
-        assert KEY not in client._redacted(text, key), text
+        assert KEY not in scrub(text, key), text
 
 
 async def test_an_overloaded_anthropic_counts_toward_its_hosts_breaker():

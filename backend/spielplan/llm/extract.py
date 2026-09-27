@@ -13,6 +13,7 @@ from decimal import Decimal
 from typing import TYPE_CHECKING, Any
 
 from spielplan.acquire import rawstore
+from spielplan.core.logs import scrub
 from spielplan.db.dna_terms import active_version
 from spielplan.derive import ledgers
 from spielplan.dna import packs, verify
@@ -212,7 +213,7 @@ async def _run(
                 await asyncio.shield(spend.settle_call(conn, call, error=_CANCELLED))
             raise
         except client.LLMError as exc:
-            said = _redacted(str(exc), planned.key)
+            said = scrub(str(exc), planned.key)
             run.usd += await _settle_failure(conn, asked, planned, pass_index, attempt, call, exc,
                                              said, price)
             run.detail = {**where, "attempt": attempt, "http_status": exc.status}
@@ -398,11 +399,6 @@ def _counted(rejects: list[verify.Rejection]) -> dict[str, int]:
     for reject in rejects:
         counts[reject.reason] = counts.get(reject.reason, 0) + 1
     return {reason: n for reason, n in counts.items() if n}
-
-
-def _redacted(text: str, key: str) -> str:
-    """The key taken out of a provider's words before they are written, in every spelling."""
-    return client._redacted(text, key)
 
 
 __all__ = [

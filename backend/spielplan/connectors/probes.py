@@ -1,20 +1,19 @@
 """§6.6's test buttons for the three keyed sources (decision 453): TMDB, OMDb and Trakt.
 
-The cheapest request that fails on a bad key, through `acquire.fetch`, storing nothing. Keys in
-query strings are masked in httpx's log lines and taken out of every error this returns.
+The cheapest request that fails on a bad key, through `acquire.fetch`, storing nothing. The key is
+taken out of every error this returns.
 """
 
 from __future__ import annotations
 
-import logging
 import re
 from collections.abc import Awaitable, Callable
 from contextlib import AbstractAsyncContextManager
 from typing import TYPE_CHECKING, Any
-from urllib.parse import quote
 
 from spielplan.acquire import fetch
 from spielplan.connectors import registry
+from spielplan.core.logs import scrub
 from spielplan.sources import credentials
 
 if TYPE_CHECKING:
@@ -32,37 +31,15 @@ _ANSWER_STATUS = (400, 401, 403, 404)
 # Cut after the key is taken out, or a key straddling the cut survives as its prefix.
 _SHOWN = 300
 
-# The value of a query-string key, in any url a line or a message carries.
+# The value of a query-string key, in any url a message carries.
 _QUERY_KEY = re.compile(r"([?&](?:api_key|apikey)=)[^&#\s\"'<>]*", re.IGNORECASE)
-_MASK = "[redacted]"
-
-
-class _MaskQueryKeysInHttpxLogs(logging.Filter):
-    """Mask `api_key`/`apikey` values in httpx's per-request INFO lines, keeping the lines."""
-
-    def filter(self, record: logging.LogRecord) -> bool:
-        try:
-            message = record.getMessage()
-        except Exception:  # noqa: BLE001 - a filter that raised would fail the request it logged
-            return True
-        masked = _QUERY_KEY.sub(rf"\1{_MASK}", message)
-        if masked != message:
-            record.msg, record.args = masked, ()
-        return True
-
-
-logging.getLogger("httpx").addFilter(_MaskQueryKeysInHttpxLogs())
 
 Opener = Callable[["asyncpg.Connection"], AbstractAsyncContextManager[fetch.Fetcher]]
 
 
 def _shown(text: str, key: str) -> str:
     """A host's words for the card: the key out in every spelling, query keys masked, then cut."""
-    spellings = {key, key.strip(), repr(key)[1:-1],
-                 repr(key.encode("utf-8", "backslashreplace"))[2:-1], quote(key, safe="")}
-    for spelling in sorted((s for s in spellings if s), key=len, reverse=True):
-        text = text.replace(spelling, _MASK)
-    return _QUERY_KEY.sub(rf"\1{_MASK}", text)[:_SHOWN]
+    return _QUERY_KEY.sub(r"\1[redacted]", scrub(text, key))[:_SHOWN]
 
 
 def _answer(ok: bool, status: int | None, error: str | None) -> dict[str, Any]:

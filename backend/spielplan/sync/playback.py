@@ -7,45 +7,22 @@ Both taps write (decision 211). A series resolves to the show and asks only on i
 from __future__ import annotations
 
 import logging
-import time
 from dataclasses import dataclass, field
 from typing import Any
 
 import asyncpg
 
 from spielplan.connectors import resolve
-from spielplan.connectors.jellyfin import JellyfinClient, JellyfinError, NowPlaying
+from spielplan.connectors.jellyfin import JellyfinClient, JellyfinError, NowPlaying, Outage
 
 log = logging.getLogger("spielplan.sync.playback")
 
 OPEN_STATES = ("armed", "shown")
 
-# When Jellyfin became unreachable, or None; monotonic, since only the duration is asked.
-_unreachable_since: float | None = None
+_outage = Outage(log)
 
 # §7.3: ">= 90% playback ... arms a per-user prompt"; the spec's number, not a setting.
 FINISH_THRESHOLD = 0.9
-
-
-def _note_unreachable(exc: JellyfinError) -> None:
-    """Log an unreachable Jellyfin once, not once a minute, for as long as it stays down."""
-    global _unreachable_since
-
-    if _unreachable_since is None:
-        _unreachable_since = time.monotonic()
-        log.warning("jellyfin is unreachable: %s", exc)
-    else:
-        log.debug("jellyfin is still unreachable: %s", exc)
-
-
-def _note_reachable() -> None:
-    """The other half: one INFO line when it comes back, carrying how long it was gone."""
-    global _unreachable_since
-
-    if _unreachable_since is not None:
-        minutes = (time.monotonic() - _unreachable_since) / 60
-        log.info("jellyfin reachable again after %d minute(s)", int(minutes))
-        _unreachable_since = None
 
 
 @dataclass
@@ -237,10 +214,10 @@ async def poll(conn: asyncpg.Connection, client: JellyfinClient | None = None) -
     try:
         sessions = await client.sessions()
     except JellyfinError as exc:
-        _note_unreachable(exc)
+        _outage.down(exc)
         return report
     report.reached = True
-    _note_reachable()
+    _outage.up()
     await observe(conn, sessions, report, client=client)
     return report
 

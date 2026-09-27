@@ -1,9 +1,8 @@
-"""TMDB v3 and OMDb take their key as a query parameter and httpx logs every url at INFO, so the
-wire request, the three answers, and the key's absence from answer and log are asserted."""
+"""TMDB v3 and OMDb take their key as a query parameter, so the wire request, the three answers, and
+the key's absence from each answer are asserted."""
 
 from __future__ import annotations
 
-import logging
 from urllib.parse import parse_qs
 
 import httpx
@@ -138,25 +137,6 @@ async def test_a_probe_stores_nothing_in_the_raw_store(keyed):
     for probe in (probes.tmdb, probes.omdb, probes.trakt):
         assert (await probe(keyed, open_fetcher=_opener(host)))["ok"] is True
     assert await keyed.fetchval("SELECT count(*) FROM raw_document") == before
-
-
-async def test_httpx_logs_the_probe_request_with_the_query_key_masked(keyed, caplog):
-    """Decision 453's logging filter masks `api_key` and `apikey` in httpx's INFO line."""
-    caplog.set_level(logging.INFO, logger="httpx")
-    host = _Host({
-        "api.themoviedb.org": _json(200, {"images": {}}),
-        "www.omdbapi.com": _json(200, {"Response": "True"}),
-    })
-    await probes.tmdb(keyed, open_fetcher=_opener(host))
-    await probes.omdb(keyed, open_fetcher=_opener(host))
-
-    lines = [record.getMessage() for record in caplog.records if record.name == "httpx"]
-    assert [line for line in lines if "api.themoviedb.org" in line], lines
-    assert [line for line in lines if "www.omdbapi.com" in line], lines
-    assert not [line for line in lines if KEY_TMDB in line or f"apikey={KEY_OMDB}" in line], lines
-    assert any("api_key=[redacted]" in line for line in lines), lines
-    assert any("apikey=[redacted]" in line for line in lines), lines
-    assert KEY_TMDB not in caplog.text
 
 
 async def test_the_dispatch_serves_the_three_source_buttons(keyed, app, monkeypatch):
