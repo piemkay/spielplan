@@ -17,15 +17,13 @@ from zoneinfo import ZoneInfo
 
 import asyncpg
 
-from spielplan.core import storage
+from spielplan.core import logs, storage
 from spielplan.core.config import Settings, settings
 from spielplan.db import migrate, pool
 from spielplan.models import artifacts
 from spielplan.models.artifacts import ArtifactStore
 
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s %(levelname)-7s %(name)s %(message)s"
-)
+logs.configure()
 log = logging.getLogger("spielplan.worker")
 
 

@@ -57,10 +57,7 @@ from spielplan.push import keys as push_keys
 from spielplan.rate import session as rate_session
 
 # Without this, INFO lines are dropped: uvicorn leaves the root logger at WARNING with no handler.
-# The same call `worker.py` makes; ASCII only.
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s %(levelname)-7s %(name)s %(message)s"
-)
+logs.configure()
 # The System card's log ring (§6.6). The worker's lines stay in its container log.
 logs.install()
 log = logging.getLogger("spielplan")

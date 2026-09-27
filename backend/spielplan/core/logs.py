@@ -69,6 +69,13 @@ class RecentLines(logging.Handler):
 HANDLER = RecentLines()
 
 
+def configure() -> None:
+    """Root logging for both processes. httpx logs every request URL at INFO, query keys included."""
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)-7s %(name)s %(message)s")
+    for name in ("httpx", "httpcore"):
+        logging.getLogger(name).setLevel(logging.WARNING)
+
+
 def install() -> None:
     logger = logging.getLogger("spielplan")
     if HANDLER not in logger.handlers:

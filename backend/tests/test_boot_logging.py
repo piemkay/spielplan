@@ -67,6 +67,30 @@ def test_an_error_record_carries_the_same_shape_rather_than_the_bare_message():
     ), f"no formatted ERROR record on stderr:\n{done.stderr}"
 
 
+_HTTPX_PROBE = """
+import logging
+import spielplan.{module}
+logging.getLogger("httpx").info("HTTP Request: GET https://api.themoviedb.org/3/x?api_key=LEAKME")
+logging.getLogger("spielplan").info("still logging")
+"""
+
+
+def test_neither_process_logs_httpx_request_urls():
+    """httpx puts query keys in its INFO line; the worker once leaked the TMDB key that way."""
+    env = dict(os.environ)
+    env["PYTHONPATH"] = os.pathsep.join([str(BACKEND), env.get("PYTHONPATH", "")]).rstrip(os.pathsep)
+    env.setdefault("SESSION_SECRET", "pytest-session-secret-not-a-real-one")
+    env.setdefault("PUBLIC_URL", "http://localhost:8080")
+    for module in ("app", "worker"):
+        done = subprocess.run(
+            [sys.executable, "-c", _HTTPX_PROBE.format(module=module)],
+            capture_output=True, text=True, env=env, cwd=str(BACKEND), timeout=300,
+        )
+        assert done.returncode == 0, f"{module} probe failed:\n{done.stderr}"
+        assert "still logging" in done.stderr
+        assert "LEAKME" not in done.stderr, f"{module} logged an httpx request URL"
+
+
 async def _boot(pg_url: str, tmp_path: Path) -> None:
     previous = {key: os.environ.get(key) for key in ("DATABASE_URL", "DATA_DIR")}
     os.environ["DATABASE_URL"] = pg_url
