@@ -18,8 +18,6 @@ frontend/.vite/
 e2e/.results/
 e2e/playwright-report/
 coverage/
-# logs `.github/workflows/release.yml` tees for upload
-.reports/
 
 # runtime data (docker volumes are host-mounted here in dev)
 /data/

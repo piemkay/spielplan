@@ -28,5 +28,3 @@ docs/
 README.md
 e2e/
 .github/
-# .github/workflows/release.yml tees its logs here, then builds the image from this workspace.
-.reports/

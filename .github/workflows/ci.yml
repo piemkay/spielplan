@@ -16,12 +16,7 @@ on:
   schedule:
     # A free weekly regression check on main. Nothing in this repository changes between
     # Mondays, but the runner images, the action versions and PyPI all do, and one tick a week
-    # is how that arrives as a red run rather than as a red milestone. The corpus check this
-    # cron was first written for (decision 183) answers its own copy of it in
-    # `.github/workflows/real-bundle.yml`: a self-hosted job nobody has registered a runner for
-    # queues for 24 hours, and the group below — which the whole run holds until its last job
-    # ends — is where main's next push would spend that day pending.
-    # [M4.8 review cycle 4, m48-c4-ci-01]
+    # is how that arrives as a red run rather than as a red milestone.
     - cron: '17 5 * * 1'
 
 concurrency:
