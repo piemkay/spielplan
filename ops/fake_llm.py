@@ -48,7 +48,7 @@ FORCED_TOOL_REFUSED = frozenset({"claude-opus-5-5", "claude-fable-5-1", "claude-
 # The ones with safety classifiers that can return `refusal`; on any other model it answers normally.
 CLASSIFIED = frozenset({"claude-opus-5", "claude-opus-5-5", "claude-fable-5-1"})
 
-# The corpus's retry opening. Not imported from the app; `test_fake_llm.py` holds the two equal.
+# The corpus's retry opening. Not imported from the app; `test_llm_extract.py` holds the two equal.
 RETRY_MARKER = "Your previous answer was rejected:"
 
 CONTENTS = ("fabricate", "unquotable", "salience", "clean")

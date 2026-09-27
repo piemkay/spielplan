@@ -78,6 +78,10 @@ def double():
     return module
 
 
+def test_the_double_recognises_the_retry_opening_the_app_sends(double):
+    assert double.RETRY_MARKER == contract.RETRY_MARKER
+
+
 @pytest.fixture
 def data_dir(tmp_path, monkeypatch):
     monkeypatch.setenv("DATA_DIR", str(tmp_path / "data"))
