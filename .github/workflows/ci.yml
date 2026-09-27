@@ -38,62 +38,22 @@ env:
   POSTGRES_DB: spielplan
 
 jobs:
-  lint:
+  backend:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
-      # A venv, not `--system`. The runner's own interpreter is externally managed (PEP 668) so
-      # uv refuses to install into it, and it is not writable by the runner's user anyway — the
-      # two failures arrived in that order. Putting the venv's bin on PATH keeps every command
-      # below unchanged.
+      # A venv, not `--system`: the runner's own interpreter is externally managed (PEP 668).
       - run: uv venv
-      - run: uv pip install -r backend/pyproject.toml --extra dev
+      - run: uv pip install -e "backend[dev]"
       - run: echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
       - run: ruff check .
-      - run: ruff format --check . || true   # formatting is not enforced yet; the check is informational
-
-  backend:
-    # Everything that needs no database, plus the schema check against a real Postgres engine
-    # compiled to wasm — so DDL errors surface even on a runner with no service container.
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
-      - uses: actions/setup-node@v4
-        with: { node-version: 22 }
-      - run: uv venv
-      - run: uv pip install -e "backend[dev]"
-      - run: echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
-      - run: npm --prefix backend/tests/pglite ci || npm --prefix backend/tests/pglite install
-      - name: pytest (no database)
-        run: python -m pytest backend/tests -q
-
-  integration:
-    # The tests that only exist against a real server: COPY resolves its encoders from the
-    # destination column types, so type mismatches cannot be caught anywhere else.
-    runs-on: ubuntu-latest
-    services:
-      postgres:
-        image: postgres:16
-        env:
-          POSTGRES_USER: spielplan
-          POSTGRES_PASSWORD: spielplan
-          POSTGRES_DB: spielplan_test
-        ports: ['5432:5432']
-        options: >-
-          --health-cmd "pg_isready -U spielplan -d spielplan_test"
-          --health-interval 5s --health-timeout 5s --health-retries 20
-    steps:
-      - uses: actions/checkout@v4
-      - uses: astral-sh/setup-uv@v5
-      - run: uv venv
-      - run: uv pip install -e "backend[dev]"
-      - run: echo "$PWD/.venv/bin" >> "$GITHUB_PATH"
+      # The tuned test database developers run: a stock postgres:16 runs out of locks under -n 4.
+      - run: docker compose -f ops/compose.test.yml up -d --wait
       - name: pytest (real Postgres 16)
         env:
-          TEST_DATABASE_URL: postgresql://spielplan:spielplan@127.0.0.1:5432/spielplan_test
-        run: python -m pytest backend/tests -q
+          TEST_DATABASE_URL: postgresql://spielplan:spielplan@127.0.0.1:5442/spielplan_test
+        run: python -m pytest backend/tests -q -n 4
 
   frontend:
     runs-on: ubuntu-latest
@@ -104,14 +64,6 @@ jobs:
       - run: npm --prefix frontend ci
       - run: npm --prefix frontend test
       - run: npm --prefix frontend run build
-      # svelte-check, appended last, because it is the only static signal this frontend has
-      # and it spent the project's life as a documented command no job ran: 25 errors on one
-      # day and 27 on another, on trees every gate called green. Its exit code is NOT
-      # discarded the way `ruff format --check`'s is in the lint job -- that step is
-      # informational on purpose and this one is not, which is the whole difference between a
-      # gate and a report. It lands red by decision 273: M4.15 cleared 27 of the 28 errors
-      # and left `src/routes/admin/data/+page.svelte`'s one to M4.14, which owns that file in
-      # the same wave. [M4.15 finding 26]
       - run: npm --prefix frontend run check
 
   e2e:
@@ -123,17 +75,7 @@ jobs:
       - uses: actions/setup-node@v4
         with: { node-version: 22 }
 
-      # The same three lines the lint, backend and integration jobs carry, and for the same
-      # reason. The bundle-fixture step below used to open with a bare `python -m pip install -e
-      # "backend[dev]"` against the runner image's /usr interpreter — the externally managed
-      # (PEP 668) one uv refused at the M3 merge, which is why those three jobs have a venv. It
-      # worked only because the ubuntu-24.04 image writes /etc/pip.conf with
-      # `break-system-packages = true`, a pip-only setting uv never reads: the one job that proves
-      # what actually ships was a runner-image change away from failing at its first step. It also
-      # resolved torch from PyPI — about 2.8 GB of CUDA wheels to build a four-title fixture,
-      # where §1 requires the CPU build and the pyproject's CPU index delivers 187 MiB. The venv
-      # goes on PATH here, before the fixture step, so that step's `python` is this one.
-      # [M4.8 finding 11]
+      # run.mjs builds the fixture bundle with this venv (decision 299).
       - uses: astral-sh/setup-uv@v5
       - run: uv venv
       - run: uv pip install -e "backend[dev]"
@@ -159,58 +101,12 @@ jobs:
           TZ=Europe/Berlin
           EOF
 
-      # No `pool_titles`: the browser suite counts what this writes (10-home.spec.js:99,258 and
-      # test_import_integration.py assert the small numbers), so the scale mode M4.8 gave
-      # make_bundle stays off here on purpose. [M4.8 step 6c]
-      - name: build a bundle fixture into the import directory
-        run: |
-          python - <<'PY'
-          import pathlib, sys
-          sys.path.insert(0, 'backend')
-          from tests.fixtures import make_bundle as fx
-          fx.make_bundle(pathlib.Path('data/import'))
-          print('fixture bundle written')
-          PY
-
-      # ops/backend.Dockerfile runs its processes as uid 1000 (§14.3), and every ./data path is a
-      # host bind mount: the step above created data/import as this runner's user, and Docker
-      # creates the four that do not exist yet as root. Without this the worker cannot write a
-      # dump and the importer cannot stage the bundle the whole e2e suite is about. README's
-      # "Running it" carries the same two lines for a household box. Not data/pg — that belongs
-      # to the postgres image's own user.
-      #
-      # It runs before the stack because Docker creates a missing mount source as root, and it is
-      # spent once: `e2e/reset.mjs` empties `data/artifacts` rather than removing it, precisely so
-      # that this step still holds after the reset it runs in the middle of. [M4.7 sec-08]
-      #
-      # And data/import comes straight back, since decision 299: `node e2e/run.mjs` below rebuilds
-      # that directory with `make_bundle` as THIS runner's user, and creating `content.sqlite` or
-      # an entry under `artifacts/` needs write on the DIRECTORY rather than on a file. Handing it
-      # to uid 1000 and stopping there killed the e2e job at run.mjs's first statement on every
-      # hosted runner, whose user is 1001. The container only ever reads it: a directory bundle is
-      # opened in place, and the one uid-1000 write this directory takes is `_unpack`'s
-      # `.unpacked-*` beside an ARCHIVE, which the fixture never is. The `chown -R` above stays as
-      # it is, because what it protects against is Docker creating a missing mount source as root.
-      # [M4.16 cycle 1, M416-REL-05]
+      # The container runs as uid 1000 (§14.3), and Docker creates a missing bind-mount source as
+      # root. data/import stays this runner's: run.mjs rebuilds it as this user.
       - name: give the container's uid the bind mounts it writes
         run: |
           mkdir -p data/raw data/artifacts data/cache data/import data/backups
-          sudo chown -R 1000:1000 data/raw data/artifacts data/cache data/import data/backups
-          sudo chown -R "$(id -u):$(id -g)" data/import
-
-      # ops/compose.e2e.yml adds the fake Jellyfin §7.3's two-way sync is tested against.
-      - run: >
-          docker compose -f docker-compose.yml -f ops/compose.dev.yml -f ops/compose.e2e.yml
-          up -d --build
-      - name: wait for the backend and the fake Jellyfin
-        run: |
-          for i in $(seq 1 90); do
-            curl -fsS http://127.0.0.1:8096/System/Info/Public > /dev/null || { sleep 2; continue; }
-            curl -fsS http://localhost:8080/api/health && exit 0
-            sleep 2
-          done
-          docker compose logs --no-color
-          exit 1
+          sudo chown -R 1000:1000 data/raw data/artifacts data/cache data/backups
 
       - run: npm --prefix e2e ci || npm --prefix e2e install
       # Both engines: the `phone` project is an iPhone 13, which Playwright runs on WebKit —
