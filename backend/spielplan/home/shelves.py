@@ -1,4 +1,4 @@
-"""§6.0's Home: the greeting, the pending-verdicts banner, and the six shelves.
+"""§6.0's Home: the pending-verdicts banner and the six shelves.
 
 A shelf has no items, only one `section` per kind, so an interleaved ranking is unrepresentable
 (§4.1 rule 5, decision 18). A shelf that names terms selects its cards BY them (`why.py`).
@@ -8,9 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
-from datetime import datetime
 from statistics import NormalDist
-from time import perf_counter
 from typing import Any
 
 import asyncpg
@@ -19,20 +17,17 @@ from spielplan.db import library
 from spielplan.home import taste
 from spielplan.home import why as why_mod
 from spielplan.home.why import WhyTerm
-from spielplan.ledger.hyperparams import DEFAULTS
-from spielplan.ledger.observations import LIVE_LABEL_SQL, rescale_level
-from spielplan.models.artifacts import ColdEval
-from spielplan.scoring import serve
-
-KIND_HEADINGS: dict[str, str] = dict(serve.HEADINGS)
-
-# Proposal 22, evaluated server-side against the household's `TZ`, not the phone's clock.
-GREETING_BANDS: tuple[tuple[int, str, str], ...] = (
-    (5, "up_late", "Up late"),
-    (12, "morning", "Good morning"),
-    (18, "afternoon", "Good afternoon"),
-    (24, "evening", "Good evening"),
+from spielplan.ledger.observations import (
+    DEFAULT_TIER_SET,
+    LIVE_LABEL_SQL,
+    latest_tier_edit_sql,
+    rescale_level,
+    tier_set_of,
 )
+from spielplan.scoring import serve
+from spielplan.scoring.backbone import EVIDENCE_K
+
+KIND_HEADINGS: dict[str, str] = {"movie": "Films", "series": "Series"}
 
 SHELF_CAP = 12
 SECTION_FLOOR = 3
@@ -55,9 +50,6 @@ SWEET_SPOT_MIN_CDF = 0.70
 # §5.1's optimum in this app's coordinates: β is the PERSONAL weight, so the corpus's 0.8 crowd is
 # 0.2 here (decision 167). Printed as `beta_optimum`; a fitted β is what the ordering uses.
 DEFAULT_BETA = 0.2
-
-# §4.2's default tier set, used when `ledger_cutpoints` has no row for this (user, kind) yet.
-DEFAULT_TIER_SET: tuple[str, ...] = ("F", "D", "C", "B", "A", "A+", "S")
 
 # The standard normal the sweet spot reads each member's rank through (decision 477's scale).
 _NORMAL = NormalDist()
@@ -83,8 +75,6 @@ class Suppressed:
     shelf: str
     kind: str | None
     reason: str
-    # How long the builder that decided this took. NOT in `as_dict`: see `Section.ms`.
-    ms: float = 0.0
 
     def as_dict(self) -> dict[str, Any]:
         return {"shelf": self.shelf, "kind": self.kind, "reason": self.reason}
@@ -104,10 +94,6 @@ class Section:
     caption: str | None = None
     anchor: dict[str, Any] | None = None
     items: list[dict[str, Any]] = field(default_factory=list)
-    see_all: dict[str, Any] | None = None
-    # Builder time in ms. NOT in `as_dict`: it would travel ungated; `build_home` puts the
-    # roll-up in the gated `model` block.
-    ms: float = 0.0
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -121,7 +107,6 @@ class Section:
             "caption": self.caption,
             "anchor": self.anchor,
             "items": self.items,
-            "see_all": self.see_all,
         }
 
 
@@ -153,20 +138,20 @@ class Ctx:
     claimed: frozenset[int] = frozenset()
     # Decision 512: titles the shelf's audience avoids; apart from `claimed` for the suppressed reason.
     avoided: frozenset[int] = frozenset()
+    # Per kind; absent means no `ledger_cutpoints` row and no fold-in yet.
+    tier_sets: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    betas: dict[str, float] = field(default_factory=dict)
 
     @property
     def excluded(self) -> frozenset[int]:
         return self.claimed | self.avoided
 
+    def tier_set(self, kind: str) -> tuple[str, ...]:
+        return self.tier_sets.get(kind, DEFAULT_TIER_SET)
 
-# --- the greeting -------------------------------------------------------------------------------
-
-
-def greeting(now_local: datetime, name: str, *, tz: str = "") -> dict[str, str]:
-    """Proposal 22's four bands, evaluated against §2's `TZ` rather than the device clock."""
-    hour = now_local.hour
-    band, prefix = next((b, p) for cutoff, b, p in GREETING_BANDS if hour < cutoff)
-    return {"band": band, "text": f"{prefix}, {name}", "tz": tz}
+    def beta(self, kind: str) -> float:
+        """The weight the scores were ACTUALLY computed with; 0.0 when never fitted."""
+        return self.betas.get(kind, 0.0)
 
 
 # --- the pending-verdicts banner ------------------------------------------------------------
@@ -234,10 +219,6 @@ async def pending_verdicts(
             "label_compact": "Rate",
             # The server builds the link, so it cannot drift from the copy (proposal 150).
             "route": f"/rate?{query}",
-            "api": f"/api/rate?{query}",
-            # For `POST /api/rate/session`; not part of the links (decision 203).
-            "mode": "sweep",
-            "head": head,
         },
     }
 
@@ -264,43 +245,6 @@ CARD_FROM = """
 """
 
 
-async def tier_set_of(conn: asyncpg.Connection, *, user_id: int, kind: str) -> tuple[str, ...]:
-    """§4.2 / decision 11: the tier set is per user and per kind."""
-    row = await conn.fetchval(
-        "SELECT tier_set FROM ledger_cutpoints WHERE user_id = $1 AND kind = $2", user_id, kind
-    )
-    return tuple(row) if row else DEFAULT_TIER_SET
-
-
-async def beta_of(conn: asyncpg.Connection, *, user_id: int, kind: str) -> tuple[float, bool]:
-    """(β, fitted?): the weight the scores were ACTUALLY computed with; 0.0 when never fitted."""
-    fit = await serve.fit_row(conn, user_id=user_id, kind=kind)
-    if fit and fit["blend_beta"] is not None:
-        return float(fit["blend_beta"]), True
-    return 0.0, False
-
-
-async def fit_yardstick(
-    conn: asyncpg.Connection, *, user_id: int, kinds: Sequence[str], cold_eval: ColdEval | None
-) -> list[dict[str, Any]] | None:
-    """Each kind's fitted `cv_rho`, read against the bundle's own `cold_eval.json`.
-
-    None when the bundle ships no reference: a bare rho means nothing. Goes in the gated `model` block.
-    """
-    if cold_eval is None:
-        return None
-    rows: list[dict[str, Any]] = []
-    for kind in kinds:
-        fit = await serve.fit_row(conn, user_id=user_id, kind=kind)
-        rho = None if fit is None else _float(fit["cv_rho"])
-        rows.append({
-            "kind": kind,
-            "label_count": None if fit is None else fit["label_count"],
-            **cold_eval.read_against(rho, floor=DEFAULTS.rho_noise_floor),
-        })
-    return rows
-
-
 def _float(value: Any) -> float | None:
     return None if value is None else float(value)
 
@@ -310,7 +254,6 @@ def _card(
     rank: int,
     *,
     tier_set: Sequence[str],
-    terms: Sequence[str],
     beta: float,
     extra: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
@@ -334,8 +277,6 @@ def _card(
         "seen": bool(row["seen"]),
         "rank": rank,
         "tier": tier,
-        # Which of the NAMED terms this card actually carries, read back from `dna_tagged` (§6.8).
-        "terms": list(terms),
         "model": {
             "score": _float(row["score"]),
             "cf": _float(row["cf"]),
@@ -351,27 +292,6 @@ def _card(
     if extra:
         card["model"].update(extra)
     return card
-
-
-async def _cards(
-    conn: asyncpg.Connection,
-    rows: Sequence[asyncpg.Record],
-    *,
-    ctx: Ctx,
-    named_terms: Sequence[WhyTerm],
-    beta: float,
-    tier_set: Sequence[str],
-) -> list[dict[str, Any]]:
-    terms = [t.term for t in named_terms if t.role == "member"]
-    carried: dict[int, list[str]] = {}
-    if ctx.version and terms:
-        carried = await why_mod.carried_by(
-            conn, title_ids=[int(r["title_id"]) for r in rows], terms=terms, version=ctx.version
-        )
-    return [
-        _card(row, i + 1, tier_set=tier_set, terms=carried.get(int(row["title_id"]), []), beta=beta)
-        for i, row in enumerate(rows)
-    ]
 
 
 async def _finish(
@@ -391,23 +311,15 @@ async def _finish(
             "no why-line — a shelf that cannot say why it exists does not ship",
         )
     if ctx.version:
-        ids = [c["title_id"] for c in section.items]
-        broken = await why_mod.unsupported(
-            conn, why_terms=section.why_terms, title_ids=ids, version=ctx.version
-        )
-        if broken:
-            return None, Suppressed(
-                shelf_id,
-                section.kind,
-                f"why-line named {', '.join(broken)}, which not every card carries",
-            )
         # Intersected over the cards actually returned, so it cannot be false (§6.8).
-        section.shared_terms = await why_mod.common_terms(conn, title_ids=ids, version=ctx.version)
+        section.shared_terms = await why_mod.common_terms(
+            conn, title_ids=[c["title_id"] for c in section.items], version=ctx.version
+        )
     board = await _board_letters(
         conn,
         user_id=ctx.user_id,
         title_ids=[int(c["title_id"]) for c in section.items],
-        tier_set=await tier_set_of(conn, user_id=ctx.user_id, kind=section.kind),
+        tier_set=ctx.tier_set(section.kind),
     )
     for card in section.items:
         card["on_board"] = int(card["title_id"]) in board
@@ -433,15 +345,10 @@ async def _board_letters(
     if not title_ids:
         return {}
     rows = await conn.fetch(
-        """
-        SELECT ls.title_id, ls.tier, te.tier AS assigned, te.n_levels AS assigned_k
+        f"""
+        SELECT ls.title_id, ls.tier AS model_tier, te.tier AS assigned, te.n_levels AS assigned_k
           FROM ledger_state ls
-          LEFT JOIN (
-              SELECT DISTINCT ON (title_id) title_id, tier, n_levels
-                FROM tier_edit
-               WHERE user_id = $1 AND title_id = ANY($2)
-               ORDER BY title_id, created_at DESC, id DESC
-          ) te ON te.title_id = ls.title_id
+          LEFT JOIN ({latest_tier_edit_sql()}) te ON te.title_id = ls.title_id
          WHERE ls.user_id = $1 AND ls.title_id = ANY($2) AND ls.observed
         """,
         user_id,
@@ -449,15 +356,17 @@ async def _board_letters(
     )
     letters: dict[int, str | None] = {}
     for r in rows:
-        if r["assigned"] is not None:
-            level: int | None = rescale_level(
-                int(r["assigned"]), k_from=r["assigned_k"], k_to=len(tier_set)
-            )
-        else:
-            level = None if r["tier"] is None else int(r["tier"])
+        level = _board_level(r, len(tier_set))
         in_set = level is not None and 0 <= level < len(tier_set)
         letters[int(r["title_id"])] = tier_set[level] if in_set else None
     return letters
+
+
+def _board_level(row: asyncpg.Record, k: int) -> int | None:
+    """The tier Rank renders: the latest drop rescaled to today's set (decision 11), else the model's."""
+    if row["assigned"] is not None:
+        return rescale_level(int(row["assigned"]), k_from=row["assigned_k"], k_to=k)
+    return None if row["model_tier"] is None else int(row["model_tier"])
 
 
 # --- shelf 1: because_anchor ------------------------------------------------------------------
@@ -477,7 +386,7 @@ async def because_anchor(
 
     # Both seen AND rated: neither implies the other. The anchor is the highest tier the board
     # shows (ordered after `rescale_level`, so in Python), then the live verdict, then `s`.
-    tier_set = await tier_set_of(conn, user_id=ctx.user_id, kind=kind)
+    tier_set = ctx.tier_set(kind)
     candidates = await conn.fetch(
         f"""
         SELECT t.id, t.name, ls.tier AS model_tier, ls.s,
@@ -485,12 +394,7 @@ async def because_anchor(
           FROM ledger_state ls
           JOIN title t ON t.id = ls.title_id
           JOIN user_title ut ON ut.user_id = ls.user_id AND ut.title_id = t.id AND ut.state = 'seen'
-          LEFT JOIN (
-              SELECT DISTINCT ON (title_id) title_id, tier, n_levels
-                FROM tier_edit
-               WHERE user_id = $1
-               ORDER BY title_id, created_at DESC, id DESC
-          ) te ON te.title_id = ls.title_id
+          LEFT JOIN ({latest_tier_edit_sql()}) te ON te.title_id = ls.title_id
           LEFT JOIN ({LIVE_LABEL_SQL}) lv ON lv.title_id = ls.title_id
          WHERE ls.user_id = $1 AND t.kind = $2 AND ls.tier IS NOT NULL AND ls.observed
         """,
@@ -503,16 +407,10 @@ async def because_anchor(
             "no title of this kind is both seen and rated with a fitted tier yet",
         )
 
-    def shown(row: asyncpg.Record) -> int:
-        # The tier Rank renders: the latest drop, rescaled to today's set (decision 11).
-        if row["assigned"] is None:
-            return int(row["model_tier"])
-        return rescale_level(int(row["assigned"]), k_from=row["assigned_k"], k_to=len(tier_set))
-
     anchor = min(
         candidates,
         key=lambda r: (
-            -shown(r),
+            -_board_level(r, len(tier_set)),
             -(r["verdict"] if r["verdict"] is not None else -1),
             -float(r["s"]),
             int(r["id"]),
@@ -524,7 +422,7 @@ async def because_anchor(
         return None, Suppressed(
             sid, kind, f"anchor tier index {model_index} is outside the tier set"
         )
-    index = shown(anchor)
+    index = _board_level(anchor, len(tier_set))
 
     # Decision 513: the anchor's nearest titles, then the pair of its terms that names them best.
     terms = await why_mod.terms_for(conn, int(anchor["id"]), version=ctx.version, limit=None)
@@ -555,7 +453,7 @@ async def because_anchor(
     by_id = {int(r["title_id"]): r for r in scored}
     rows = [by_id[i] for i in members]
 
-    beta, _fitted = await beta_of(conn, user_id=ctx.user_id, kind=kind)
+    beta = ctx.beta(kind)
     tier = tier_set[index]
     if anchor["assigned"] is not None:
         title = f"Because you put {anchor['name']} in {tier}"
@@ -570,7 +468,7 @@ async def because_anchor(
         why=f"shares {why_mod.phrase([t1, t2])} with it",
         why_terms=[t1.with_role("member"), t2.with_role("member")],
         anchor={"title_id": int(anchor["id"]), "name": anchor["name"], "tier": tier},
-        items=await _cards(conn, rows, ctx=ctx, named_terms=[t1, t2], beta=beta, tier_set=tier_set),
+        items=[_card(row, i + 1, tier_set=tier_set, beta=beta) for i, row in enumerate(rows)],
     )
     return await _finish(conn, section, shelf_id=sid, ctx=ctx)
 
@@ -581,7 +479,7 @@ async def because_anchor(
 async def top_of_ledger(
     conn: asyncpg.Connection, *, ctx: Ctx, kind: str
 ) -> tuple[Section | None, Suppressed | None]:
-    """§6.0 row 2 — "Top of your ledger", from `scoring.serve.ranked_section`, the one ranked statement.
+    """§6.0 row 2 — "Top of your ledger", from `scoring.serve.top_scored`, the one ranked statement.
 
     The one shelf that includes seen titles, and says so (proposal 25).
     """
@@ -590,22 +488,20 @@ async def top_of_ledger(
         return None, Suppressed(sid, kind, "no active artifact bundle — no scores to rank")
 
     # Not thinned by the claim (decision 475), but by what the member avoids (decision 512).
-    ranked = await serve.ranked_section(
+    ranked = await serve.top_scored(
         conn,
         user_id=ctx.user_id,
         kind=kind,
         bundle_version=ctx.bundle_version,
-        seen="any",
-        owned_only=True,
         limit=SHELF_CAP,
         exclude=sorted(ctx.avoided),
     )
     # The β the ordering used: stored `blend_beta`, or 0.0 when never fitted.
     beta = float(ranked["beta"])
     personalised = bool(ranked["personalised"])
-    tier_set = await tier_set_of(conn, user_id=ctx.user_id, kind=kind)
+    tier_set = ctx.tier_set(kind)
     items = [
-        _card(row, i + 1, tier_set=tier_set, terms=[], beta=beta)
+        _card(row, i + 1, tier_set=tier_set, beta=beta)
         for i, row in enumerate(_as_card_rows(ranked["items"]))
     ]
     why = (
@@ -621,8 +517,7 @@ async def top_of_ledger(
         why=why,
         why_numbers={"beta": beta, "beta_fitted": bool(ranked["fitted"]),
                      "beta_optimum": DEFAULT_BETA, "label_count": ranked["label_count"],
-                     # The same field `scoring.backbone.EVIDENCE_K` reads.
-                     "gate_k": DEFAULTS.gate_k},
+                     "gate_k": EVIDENCE_K},
         caption=None,
         items=items,
     )
@@ -630,7 +525,7 @@ async def top_of_ledger(
 
 
 def _as_card_rows(items: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
-    """`serve.ranked_section` returns `id` and `seen_state`; `_card` reads `title_id` and `seen`."""
+    """`serve.top_scored` returns `id` and `seen_state`; `_card` reads `title_id` and `seen`."""
     return [
         dict(item, title_id=item["id"], seen=item["seen_state"] == "seen", placement_at=None)
         for item in items
@@ -674,8 +569,7 @@ async def never_watched_term(
         conn, terms=[candidate.term], kind=kind, version=ctx.version, user_id=ctx.user_id,
         exclude=sorted(ctx.excluded),
     )
-    beta, _fitted = await beta_of(conn, user_id=ctx.user_id, kind=kind)
-    tier_set = await tier_set_of(conn, user_id=ctx.user_id, kind=kind)
+    beta, tier_set = ctx.beta(kind), ctx.tier_set(kind)
     rows = await conn.fetch(
         CARD_SELECT + CARD_FROM + """
          WHERE t.kind = $2 AND t.id = ANY($4)
@@ -694,9 +588,7 @@ async def never_watched_term(
                      "min_seen": FRONTIER_MIN_SEEN},
         # §6.4's "honestly labelled" exploratory slot, in words.
         caption="a step outside what you usually watch, on purpose",
-        items=await _cards(
-            conn, rows, ctx=ctx, named_terms=[candidate], beta=beta, tier_set=tier_set
-        ),
+        items=[_card(row, i + 1, tier_set=tier_set, beta=beta) for i, row in enumerate(rows)],
     )
     return await _finish(conn, section, shelf_id=sid, ctx=ctx)
 
@@ -745,8 +637,7 @@ async def shared_sweet_spot(
     if not ctx.bundle_version:
         return None, Suppressed(sid, kind, "no active artifact bundle — no scores to intersect")
 
-    tier_set = await tier_set_of(conn, user_id=ctx.user_id, kind=kind)
-    beta, _fitted = await beta_of(conn, user_id=ctx.user_id, kind=kind)
+    beta, tier_set = ctx.beta(kind), ctx.tier_set(kind)
     # `pos`/`n` are each member's rank over the owned library of the kind, ties broken by id as
     # `tonight/pool.rank_normal` breaks them, so the quantile below is that function's.
     rows = await conn.fetch(
@@ -801,7 +692,7 @@ async def shared_sweet_spot(
     )[:SHELF_CAP]
     items = [
         _card(
-            row, i + 1, tier_set=tier_set, terms=[], beta=beta,
+            row, i + 1, tier_set=tier_set, beta=beta,
             extra={
                 "mine_cdf": _float(row["mine_cdf"]),
                 "theirs_cdf": _float(row["theirs_cdf"]),
@@ -832,8 +723,7 @@ async def school_night(
     """§6.0 row 5 — "Under 110 minutes". A NULL runtime is excluded; the bound is strict."""
     sid = "school_night"
     limit_min = SCHOOL_NIGHT_MAX_MIN[kind]
-    tier_set = await tier_set_of(conn, user_id=ctx.user_id, kind=kind)
-    beta, _fitted = await beta_of(conn, user_id=ctx.user_id, kind=kind)
+    beta, tier_set = ctx.beta(kind), ctx.tier_set(kind)
     rows = await conn.fetch(
         CARD_SELECT + CARD_FROM + """
          WHERE t.kind = $2 AND t.is_owned AND t.runtime_min IS NOT NULL AND t.runtime_min < $4
@@ -852,7 +742,7 @@ async def school_night(
         caption=(
             "series runtime is minutes per episode" if kind == "series" else None
         ),
-        items=await _cards(conn, rows, ctx=ctx, named_terms=[], beta=beta, tier_set=tier_set),
+        items=[_card(row, i + 1, tier_set=tier_set, beta=beta) for i, row in enumerate(rows)],
     )
     return await _finish(conn, section, shelf_id=sid, ctx=ctx)
 
@@ -868,8 +758,7 @@ async def new_in_library(
     Requires no crowd rating at all (`item_n` 0): cold-masked rows are crowd-rated. Not claimed.
     """
     sid = "new_in_library"
-    tier_set = await tier_set_of(conn, user_id=ctx.user_id, kind=kind)
-    beta, _fitted = await beta_of(conn, user_id=ctx.user_id, kind=kind)
+    beta, tier_set = ctx.beta(kind), ctx.tier_set(kind)
     rows = await conn.fetch(
         CARD_SELECT + CARD_FROM + """
          WHERE t.kind = $2 AND t.is_owned AND t.placement = 'cold_tower'
@@ -886,8 +775,8 @@ async def new_in_library(
         heading=KIND_HEADINGS[kind],
         title="New in the library",
         why="no outside ratings yet, so we placed them by what they're about",
-        why_numbers={"gate_k": DEFAULTS.gate_k},     # see `top_of_ledger` - one field, one k
-        items=await _cards(conn, rows, ctx=ctx, named_terms=[], beta=beta, tier_set=tier_set),
+        why_numbers={"gate_k": EVIDENCE_K},
+        items=[_card(row, i + 1, tier_set=tier_set, beta=beta) for i, row in enumerate(rows)],
     )
     return await _finish(conn, section, shelf_id=sid, ctx=ctx)
 
@@ -919,18 +808,14 @@ async def build_shelves(
     conn: asyncpg.Connection,
     *,
     ctx: Ctx,
-    zero_verdicts: bool = False,
-    partner: dict[str, Any] | None = None,
-    avoided: taste.Avoided | None = None,
+    zero_verdicts: bool,
+    avoided: taste.Avoided | None,
 ) -> tuple[list[Shelf], list[Suppressed]]:
     """§6.0's six shelves, in the table's order, each as one section per selected kind.
 
     With zero verdicts every score-ordered shelf is suppressed (proposal 20).
     """
-    if partner is None:
-        partner = await partner_for(conn, user_id=ctx.user_id)
-    if avoided is None:
-        avoided = await taste.avoided_for(conn, user_id=ctx.user_id, version=ctx.version)
+    partner = await partner_for(conn, user_id=ctx.user_id)
     theirs = (
         await taste.avoided_for(conn, user_id=partner["user_id"], version=ctx.version)
         if partner is not None else None
@@ -965,7 +850,6 @@ async def build_shelves(
                 )
                 if shelf_id in CLAIMING_SHELVES else ctx
             )
-            started = perf_counter()
             if shelf_id == "because_anchor":
                 section, note = await because_anchor(conn, ctx=scoped, kind=kind)
             elif shelf_id == "top_of_ledger":
@@ -980,14 +864,12 @@ async def build_shelves(
                 section, note = await school_night(conn, ctx=scoped, kind=kind)
             else:
                 section, note = await new_in_library(conn, ctx=scoped, kind=kind)
-            elapsed = (perf_counter() - started) * 1000.0
             if section is not None:
-                section.ms = elapsed
                 built[shelf_id, kind] = section
                 if shelf_id in CLAIMING_SHELVES:
                     claimed[kind].update(int(c["title_id"]) for c in section.items)
             elif note is not None:
-                notes[shelf_id, kind] = replace(note, ms=elapsed)
+                notes[shelf_id, kind] = note
 
     shelves: list[Shelf] = []
     dropped: list[Suppressed] = []
@@ -1004,133 +886,48 @@ async def build_shelves(
     return shelves, dropped
 
 
-def sections_by_kind(shelves: Sequence[Shelf], kinds: Sequence[str]) -> list[dict[str, Any]]:
-    """The same shelves, grouped the other way: one kind-headed region holding its own shelves."""
-    return [
-        {
-            "kind": kind,
-            "heading": KIND_HEADINGS[kind],
-            "shelves": [
-                dict(shelf.as_dict(), sections=[s.as_dict() for s in shelf.sections if s.kind == kind])
-                for shelf in shelves
-                if any(s.kind == kind for s in shelf.sections)
-            ],
-        }
-        for kind in kinds
-    ]
-
-
 async def build_home(
-    conn: asyncpg.Connection,
-    *,
-    user: Any,
-    kinds: Sequence[str],
-    bundle_version: str | None,
-    now_local: datetime,
-    tz: str = "",
-    q: str | None = None,
-    person_id: int | None = None,
-    limit: int = 60,
-    offset: int = 0,
-    cold_eval: ColdEval | None = None,
+    conn: asyncpg.Connection, *, user: Any, kinds: Sequence[str], bundle_version: str | None
 ) -> dict[str, Any]:
-    """The whole §6.0 Home payload, ungated. `rail.redact` applies decision 117 afterwards.
-
-    The server picks the mode: search or a person filter switches Home to the catalog grid (§6.0).
-    """
+    """The whole §6.0 Home payload, ungated. `rail.redact` applies decision 117 afterwards."""
     chosen = library.normalise_kinds(kinds)
     ctx = Ctx(
         user_id=user.id,
         bundle_version=bundle_version,
         version=await why_mod.vocabulary_version(conn),
         kinds=tuple(chosen),
+        tier_sets={k: await tier_set_of(conn, user_id=user.id, kind=k) for k in chosen},
+        betas={k: await _beta(conn, user_id=user.id, kind=k) for k in chosen},
     )
     verdicts = await live_verdict_count(conn, user_id=user.id)
-    mode = "grid" if (q and q.strip()) or person_id is not None else "shelves"
-    partner = await partner_for(conn, user_id=user.id)
-
-    payload: dict[str, Any] = {
-        "mode": mode,
-        "kinds": chosen,
-        "greeting": greeting(now_local, user.name, tz=tz),
-        "banner": await pending_verdicts(conn, user_id=user.id),
-        "verdict_count": verdicts,
-        "bundle": bundle_version,
-        "vocabulary": ctx.version,
-        "partner": partner,
-        # OWNED titles per kind: what the shelves draw on.
-        "library": await library.count_by_kind(conn, owned_only=True),
-        "shelves": [],
-        "sections": [],
-        "shelves_total": 0,
-        "catalog": None,
-        "degraded": _degraded(bundle_version, verdicts),
-        "suppressed": [],
-        "avoiding": None,
-        # No embedded rail: the drawer fetches `/api/model-log` itself.
-    }
-
-    if mode == "grid":
-        # A list, not a ranking, so it may interleave kinds (decision 18).
-        rows, total = await library.list_titles(
-            conn, kinds=chosen, user_id=user.id, q=q, person_id=person_id,
-            limit=limit, offset=offset,
-        )
-        payload["catalog"] = {
-            "total": total,
-            # The listing's own filters.
-            "hidden": await library.count_by_kind(
-                conn, exclude=chosen, user_id=user.id, q=q, person_id=person_id
-            ),
-            "limit": limit,
-            "offset": offset,
-            "q": q,
-            "person_id": person_id,
-            "items": rows,
-        }
-        return payload
-
     avoided = await taste.avoided_for(conn, user_id=user.id, version=ctx.version)
     shelves, dropped = await build_shelves(
         conn,
         ctx=ctx,
         zero_verdicts=(verdicts == 0 and bundle_version is not None),
-        partner=partner,
         avoided=avoided,
     )
-    # Decision 512's avoid set, ungated: facts about their own ratings.
-    payload["avoiding"] = avoided.as_dict() if avoided else None
     # Decision 516: original title and language, one read for every card.
     await library.carry_original_names(
         conn, [card for shelf in shelves for s in shelf.sections for card in s.items], key="title_id"
     )
-    payload["shelves"] = [s.as_dict() for s in shelves]
-    payload["sections"] = sections_by_kind(shelves, chosen)
-    payload["shelves_total"] = len(shelves)
-    payload["suppressed"] = [s.as_dict() for s in dropped]
-    # Inside `model`, so decision 117's gate removes it.
-    payload["model"] = {
-        "sections_ms": timings_of(shelves, dropped),
-        "fit": await fit_yardstick(
-            conn, user_id=user.id, kinds=chosen, cold_eval=cold_eval
-        ),
+    return {
+        "kinds": chosen,
+        "banner": await pending_verdicts(conn, user_id=user.id),
+        # OWNED titles per kind: what the shelves draw on.
+        "library": await library.count_by_kind(conn, owned_only=True),
+        "shelves": [s.as_dict() for s in shelves],
+        "shelves_total": len(shelves),
+        "degraded": _degraded(bundle_version, verdicts),
+        "suppressed": [s.as_dict() for s in dropped],
+        # Decision 512's avoid set, ungated: facts about their own ratings.
+        "avoiding": avoided.as_dict() if avoided else None,
     }
-    return payload
 
 
-def timings_of(
-    shelves: Sequence[Shelf], dropped: Sequence[Suppressed]
-) -> list[dict[str, Any]]:
-    """Every builder that ran this request, suppressed ones included, slowest first."""
-    rows = [
-        {"shelf": shelf.id, "kind": section.kind, "shipped": True, "ms": round(section.ms, 1)}
-        for shelf in shelves
-        for section in shelf.sections
-    ] + [
-        {"shelf": s.shelf, "kind": s.kind, "shipped": False, "ms": round(s.ms, 1)}
-        for s in dropped
-    ]
-    return sorted(rows, key=lambda r: r["ms"], reverse=True)
+async def _beta(conn: asyncpg.Connection, *, user_id: int, kind: str) -> float:
+    fit = await serve.fit_row(conn, user_id=user_id, kind=kind)
+    return float(fit["blend_beta"]) if fit and fit["blend_beta"] is not None else 0.0
 
 
 def _degraded(bundle_version: str | None, verdicts: int) -> dict[str, Any] | None:

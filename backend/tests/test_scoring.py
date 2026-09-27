@@ -67,15 +67,6 @@ async def world(db, backbone):
     for title_id, b_hat in COLD_PLACEMENTS.items():
         await place(db, title_id, b_hat)
 
-    # One person credited across the partition is what decision 18's rule is about.
-    await db.execute("INSERT INTO person (id, name) VALUES (100, 'Ada Cross-Kind')")
-    for title_id in (2, 6):
-        await db.execute(
-            "INSERT INTO credit (title_id, person_id, department, job, source) "
-            "VALUES ($1, 100, 'Directing', 'Director', 'tmdb')",
-            title_id,
-        )
-
     patrick = await db.fetchval(
         "INSERT INTO app_user (name, role) VALUES ('patrick', 'admin') RETURNING id"
     )
@@ -108,8 +99,7 @@ async def place(conn, title_id: int, b_hat: float, *, bundle: str = BUNDLE) -> N
 
 
 def basis(rows: Sequence[tuple[int, int, float]], *, mu: float = 0.1) -> bb.Backbone:
-    """Built in memory so both halves have KNOWN norms. `row_of` includes a zero-norm row on
-    purpose: `blend_ratios` must report a pair it cannot divide rather than raise."""
+    """Built in memory so both halves have KNOWN norms."""
     e = np.zeros((len(rows), 64))
     for i, (title_id, _n, norm) in enumerate(rows):
         direction = np.random.default_rng(777 + title_id).standard_normal(64)
@@ -126,7 +116,7 @@ def basis(rows: Sequence[tuple[int, int, float]], *, mu: float = 0.1) -> bb.Back
 
 
 def cold_at(title_id: int, norm: float) -> np.ndarray:
-    """Known norm, so the report's ratio can be written by hand."""
+    """Known norm, so the blend can be written by hand."""
     return cold_vector(title_id) * norm
 
 
@@ -163,9 +153,9 @@ def test_the_gate_is_the_crowd_support_curve_and_a_missing_row_is_exactly_zero()
 
 def test_the_backbone_loads_the_shipped_bundle_and_indexes_it_by_title_id(backbone):
     """§4.3 names no row alignment, so the loader requires the shipped `title_id` array. Title 8
-    is a cold-masked row: `n_rows` counts eight while the index answers for seven."""
+    is a cold-masked row: the file has eight rows while the index answers for seven."""
     assert not backbone.is_empty
-    assert backbone.n_rows == 8
+    assert backbone.title_ids.size == 8
     assert backbone.mu == pytest.approx(0.12, abs=1e-6)
     for title_id in (1, 2, 3, 4, 5, 6, 7):
         assert backbone.row(title_id) is not None
@@ -206,7 +196,7 @@ def test_a_backbone_whose_arrays_disagree_is_a_fault_and_not_a_silent_index(tmp_
         "mu": np.float32(0.1),
     }
     assert len(bb.Backbone.open(write(**good)).row_of) == 4
-    assert bb.Backbone.open(write(**good)).n_rows == 4
+    assert bb.Backbone.open(write(**good)).title_ids.size == 4
 
     with pytest.raises(bb.BackboneError, match="aligned"):
         bb.Backbone.open(write(**{**good, "b_i": np.zeros(3, dtype=np.float32)}))
@@ -405,63 +395,10 @@ def test_a_title_at_item_n_thirty_weights_its_two_halves_three_to_one(backbone):
     assert c.b == pytest.approx(0.75 * backbone.raw_prior(4) + 0.25 * b_hat)
 
 
-def test_the_blend_report_names_the_ratio_of_the_two_weighted_halves_on_known_arrays():
-    """||E|| = 0.2 and ||ê|| = 50 everywhere, so each ratio is a closed form. No assertion on the
-    scale: rescaling is the corpus's question (decision 236)."""
-    warm_norm, cold_norm = 0.2, 50.0
-    supports = (6, 30, 55)
-    back = basis([(t, n, warm_norm) for t, n in zip((1, 2, 3), supports, strict=True)])
-    placements = {t: (cold_at(t, cold_norm), 0.0) for t in (1, 2, 3)}
-
-    report = bb.blend_ratios(back, placements)
-    assert (report.n_offered, report.n_measured) == (3, 3)
-    assert (report.n_warm, report.n_no_row, report.n_degenerate) == (0, 0, 0)
-
-    expected = sorted(
-        ((1.0 - bb.gate(n)) * cold_norm) / (bb.gate(n) * warm_norm) for n in supports
-    )
-    assert sorted(report.ratios) == pytest.approx(expected)
-    assert report.median == pytest.approx(((1 - 0.75) * cold_norm) / (0.75 * warm_norm))
-    assert report.median == pytest.approx(83.3333, abs=1e-3)
-    assert report.p10 <= report.median <= report.p90
-
-    # The cold half outweighs the warm by two orders of magnitude at every gate the spec's k gives.
-    assert min(report.ratios) > 10.0
-    assert report.as_dict()["measured"] == 3
-
-
-def test_the_blend_report_counts_only_the_rows_the_middle_line_of_the_blend_applies_to():
-    """Only §5.1's middle line has two halves; folding in the others would print the same number
-    for "balanced" and "nothing to blend"."""
-    back = basis([
-        (1, 89, 0.2),     # below the threshold: the middle line, and the only measured row
-        (2, 91, 0.2),     # above it: warm, §5.1's first line
-        (3, 4218, 0.2),   # far above it: warm
-        (4, 0, 0.2),      # a coordinate with no crowd rating at all: g = 0, no ratio exists
-        (5, 30, 0.0),     # a zeroed row (cs-01) left in the index: nothing to divide by
-    ])
-    placements = {t: (cold_at(t, 50.0), 0.0) for t in (1, 2, 3, 4, 5, 99)}
-
-    report = bb.blend_ratios(back, placements)
-    assert report.n_offered == 6
-    assert report.n_measured == 1
-    assert report.n_warm == 2
-    assert report.n_no_row == 1, "title 99 has no row, so there is no warm half to compare"
-    assert report.n_degenerate == 2
-    assert report.ratios.size == 1
-    assert report.ratios[0] == pytest.approx(
-        ((1 - bb.gate(89)) * 50.0) / (bb.gate(89) * 0.2)
-    )
-
-    # Nothing measured is None, not 0.0: a percentile of an empty set is not a small number.
-    empty = bb.blend_ratios(back, {2: (cold_at(2, 50.0), 0.0)})
-    assert empty.n_measured == 0 and empty.median is None and empty.p90 is None
-
-    # WARM_SUPPORT is computed (k*g/(1-g)), so it is 90 + 1 ulp: exactly 90 falls on the blend
-    # side, here and in `placement.warm_title_ids` alike.
+def test_exactly_ninety_crowd_ratings_still_falls_on_the_blend_side():
+    """WARM_SUPPORT is computed (k*g/(1-g)), so it is 90 + 1 ulp, here and in
+    `placement.warm_title_ids` alike."""
     assert bb.WARM_SUPPORT > 90 and bb.WARM_SUPPORT - 90.0 < 1e-9
-    edge = bb.blend_ratios(basis([(7, 90, 0.2)]), {7: (cold_at(7, 50.0), 0.0)})
-    assert (edge.n_measured, edge.n_warm) == (1, 0)
 
 
 def test_the_blend_expression_rescales_neither_half_while_the_scale_question_is_open():
@@ -483,8 +420,7 @@ def test_the_blend_expression_rescales_neither_half_while_the_scale_question_is_
     )
     for spelling in ("linalg.norm", "normalize", "/ scale", "* scale"):
         assert spelling not in source, (
-            f"{spelling!r} in coordinate(): decision 236 leaves the rescaling upstream, and the "
-            "measurement in blend_ratios() is what the answer is owed"
+            f"{spelling!r} in coordinate(): decision 236 leaves the rescaling upstream"
         )
 
 
@@ -497,14 +433,11 @@ def test_zero_labels_give_beta_zero_and_the_bare_crowd_prior():
     assert fit.mu == 0.0
     assert fit.label_count == 0
     assert np.array_equal(fit.v, np.zeros(64))
-    for c in reference:
-        s, cf = foldin.score(fit, c)
+    for c, (_t, s, cf) in zip(reference, foldin.score_many(fit, reference), strict=True):
         assert cf == 0.0
         assert s == pytest.approx((c.b - fit.prior_mean) / fit.prior_sd)
     other = foldin.fit_user([], coords, reference)
-    assert [foldin.score(fit, c)[0] for c in reference] == [
-        foldin.score(other, c)[0] for c in reference
-    ]
+    assert foldin.score_many(fit, reference) == foldin.score_many(other, reference)
 
 
 def test_fewer_than_five_labels_do_not_buy_a_blend_weight():
@@ -524,9 +457,9 @@ def test_the_personal_half_wins_when_it_actually_predicts():
     assert fit.cv_rho > 0.0
     assert fit.cf_sd > 0.0
 
-    ranked = sorted(reference, key=lambda c: -foldin.score(fit, c)[0])
+    ranked = sorted(foldin.score_many(fit, reference), key=lambda row: -row[1])
     crowd = sorted(reference, key=lambda c: -c.b)
-    assert [c.title_id for c in ranked[:10]] != [c.title_id for c in crowd[:10]]
+    assert [t for t, _s, _cf in ranked[:10]] != [c.title_id for c in crowd[:10]]
 
 
 def test_a_within_noise_floor_improvement_does_not_move_beta():
@@ -554,8 +487,8 @@ def test_mu_shifts_every_score_and_reorders_nothing():
     shifted = foldin.Fit(**{**{f: getattr(fit, f) for f in fit.__dataclass_fields__},
                             "mu": fit.mu + 1.75})
 
-    base = np.array([foldin.score(fit, c)[0] for c in reference])
-    moved = np.array([foldin.score(shifted, c)[0] for c in reference])
+    base = np.array([s for _t, s, _cf in foldin.score_many(fit, reference)])
+    moved = np.array([s for _t, s, _cf in foldin.score_many(shifted, reference)])
     assert np.allclose(moved - base, 1.75)
     assert list(np.argsort(-base)) == list(np.argsort(-moved))
 
@@ -591,18 +524,6 @@ def test_a_full_fold_in_refit_stays_inside_its_budget():
 
     assert len(rows) == 839
     assert elapsed < 1.0, f"fold-in + scoring took {elapsed * 1000:.0f} ms"
-
-
-def test_score_many_agrees_with_score_one_at_a_time():
-    """The list sorts on the vectorised path and the card prints the scalar one."""
-    coords, reference, labels = synth(200, 30, seed=61)
-    fit = foldin.fit_user(labels, coords, reference, seed=7)
-    many = foldin.score_many(fit, reference)
-    for c, (title_id, s, cf) in zip(reference, many, strict=True):
-        one_s, one_cf = foldin.score(fit, c)
-        assert title_id == c.title_id
-        assert s == pytest.approx(one_s)
-        assert cf == pytest.approx(one_cf)
 
 
 def _rescaled(coords: dict[int, bb.Coordinate], factors: np.ndarray) -> dict[int, bb.Coordinate]:
@@ -718,15 +639,13 @@ async def test_priors_name_every_e_source_the_spec_defines(db, world):
 
 async def test_every_owned_title_has_a_coordinate_or_the_report_names_it(db, world, backbone):
     """A title with neither row nor placement keeps b NULL, is unranked, and is NAMED."""
-    for kind in ("movie", "series"):
-        assert await serve.uncoordinated_owned(db, kind=kind, bundle_version=BUNDLE) == []
+    assert world["report"].priors.uncoordinated_owned == []
 
     await db.execute(
         "INSERT INTO title (id, kind, name, is_owned) VALUES (99, 'movie', 'Unplaced', true)"
     )
     report = await serve.materialise_priors(db, backbone, bundle_version=BUNDLE)
     assert report.uncoordinated_owned == [99]
-    assert await serve.uncoordinated_owned(db, kind="movie", bundle_version=BUNDLE) == [99]
     assert await db.fetchval("SELECT b FROM title_prior WHERE title_id = 99") is None
 
     await place(db, 99, 0.5)
@@ -744,147 +663,57 @@ async def test_an_uncoordinated_title_is_absent_from_the_ranked_list_rather_than
     )
     await foldin.run(db, backbone, bundle_version=BUNDLE, only_stale=False, with_priors=True)
 
-    section = await serve.ranked_section(
+    top = await serve.top_scored(
         db, user_id=world["patrick"], kind="movie", bundle_version=BUNDLE, limit=50
     )
-    assert 99 not in [item["id"] for item in section["items"]]
-    assert section["uncoordinated"] == [99]
+    assert 99 not in [item["id"] for item in top["items"]]
 
 
-async def test_the_ranked_list_returns_two_kind_headed_sections_and_never_one_merged_ordering(
-    db, world
-):
-    """The library's top title is a series, so the films section must lead with the top FILM."""
-    sections = await serve.ranked_sections(
-        db, user_id=world["patrick"], kinds=["series", "movie"], bundle_version=BUNDLE, limit=50
-    )
-
-    # Sections in canonical order; there is no top-level ordering to render.
-    assert [s["kind"] for s in sections] == ["movie", "series"]
-    assert [s["heading"] for s in sections] == ["Films", "Series"]
-
-    by_kind = {s["kind"]: s for s in sections}
-    assert {i["id"] for i in by_kind["movie"]["items"]} == set(MOVIES)
-    assert {i["id"] for i in by_kind["series"]["items"]} == set(SERIES)
-    for section in sections:
-        assert all(item["kind"] == section["kind"] for item in section["items"])
+async def test_each_kind_is_ranked_on_its_own_and_never_in_one_merged_ordering(db, world):
+    """The library's top title is a series, so the films list must lead with the top FILM, and a
+    limit of 3 is the top three FILMS, not the films among the top three."""
+    top = {
+        kind: await serve.top_scored(
+            db, user_id=world["patrick"], kind=kind, bundle_version=BUNDLE, limit=50
+        )
+        for kind in ("movie", "series")
+    }
+    assert {i["id"] for i in top["movie"]["items"]} == set(MOVIES)
+    assert {i["id"] for i in top["series"]["items"]} == set(SERIES)
+    for kind, section in top.items():
+        assert all(item["kind"] == kind for item in section["items"])
         scores = [item["score"] for item in section["items"]]
-        assert scores == sorted(scores, reverse=True), "each section is ordered within itself"
-
-    # Asserted, not assumed: the library's top-scoring title IS a series.
-    everything = await db.fetch(
-        "SELECT title_id, kind, score FROM user_score WHERE user_id = $1 ORDER BY score DESC",
-        world["patrick"],
-    )
-    assert everything[0]["kind"] == "series"
-    assert by_kind["movie"]["items"][0]["kind"] == "movie"
-
-
-async def test_a_limit_applies_per_section_and_not_across_a_merge(db, world):
-    """Detectable by SHAPE: limit=3 returns 3 films AND 2 series, the top three FILMS."""
-    sections = await serve.ranked_sections(
-        db, user_id=world["patrick"], kinds=["movie", "series"], bundle_version=BUNDLE, limit=3
-    )
-    films = [i["id"] for i in sections[0]["items"]]
-    series = [i["id"] for i in sections[1]["items"]]
-
-    assert len(films) == 3 and len(series) == 2
-    assert sections[0]["total"] == len(MOVIES) and sections[1]["total"] == len(SERIES)
+        assert scores == sorted(scores, reverse=True), "each kind is ordered within itself"
 
     rows = await db.fetch(
         "SELECT title_id, kind FROM user_score WHERE user_id = $1 ORDER BY score DESC, title_id",
         world["patrick"],
     )
-    merged_top3 = [r["title_id"] for r in rows[:3]]
+    # Asserted, not assumed: the library's top-scoring title IS a series.
+    assert rows[0]["kind"] == "series"
+    films = await serve.top_scored(
+        db, user_id=world["patrick"], kind="movie", bundle_version=BUNDLE, limit=3
+    )
+    films = [i["id"] for i in films["items"]]
     assert films == [r["title_id"] for r in rows if r["kind"] == "movie"][:3]
-    # The two implementations genuinely disagree on this fixture, so the assertion above bites.
-    assert films != [t for t in merged_top3 if t in MOVIES]
+    assert films != [r["title_id"] for r in rows[:3] if r["title_id"] in MOVIES]
 
 
-async def test_a_section_is_identical_with_and_without_the_other_kind_selected(db, world):
-    """Selecting Series must not touch a row or position in Films."""
-    both = await serve.ranked_sections(
-        db, user_id=world["patrick"], kinds=["movie", "series"], bundle_version=BUNDLE, limit=4
-    )
-    alone = await serve.ranked_sections(
-        db, user_id=world["patrick"], kinds=["movie"], bundle_version=BUNDLE, limit=4
-    )
-    assert len(alone) == 1
-    assert both[0] == alone[0]
-
-
-async def test_neither_kind_is_refused_rather_than_defaulted(db, world):
-    """An empty selection would mean "everything", the unpartitioned query rule 5 forbids."""
-    for empty in ([], None, ["nonsense"]):
-        with pytest.raises(ValueError, match="at least one kind"):
-            await serve.ranked_sections(
-                db, user_id=world["patrick"], kinds=empty, bundle_version=BUNDLE
-            )
-    with pytest.raises(ValueError, match="unknown kind"):
-        await serve.ranked_section(
-            db, user_id=world["patrick"], kind="anime", bundle_version=BUNDLE
-        )
-
-
-async def test_a_person_filter_does_not_suspend_the_partition(db, world):
-    """With Films only, the hidden series is counted: hiding without a count is silent truncation."""
-    sections = await serve.ranked_sections(
-        db, user_id=world["patrick"], kinds=["movie", "series"], bundle_version=BUNDLE,
-        person_id=100, limit=50,
-    )
-    assert [s["kind"] for s in sections] == ["movie", "series"]
-    assert [[i["id"] for i in s["items"]] for s in sections] == [[2], [6]]
-
-    films_only = await serve.ranked_sections(
-        db, user_id=world["patrick"], kinds=["movie"], bundle_version=BUNDLE,
-        person_id=100, limit=50,
-    )
-    assert [[i["id"] for i in s["items"]] for s in films_only] == [[2]]
-    hidden = await serve.hidden_by_kind(
-        db, user_id=world["patrick"], kinds=["movie"], bundle_version=BUNDLE, person_id=100
-    )
-    assert hidden == {"series": 1}
-
-
-async def test_the_section_filters_narrow_the_ranking_without_reordering_it(db, world):
-    """Filters are predicates on the section, never on the standardisation population."""
-    await db.execute(
-        "INSERT INTO user_title (user_id, title_id, state) VALUES ($1, 1, 'seen')",
-        world["patrick"],
-    )
+async def test_only_owned_titles_reach_the_top_shelf(db, world):
     await db.execute("UPDATE title SET is_owned = false WHERE id = 4")
-    args = {"user_id": world["patrick"], "kind": "movie", "bundle_version": BUNDLE, "limit": 50}
-
-    everything = await serve.ranked_section(db, owned_only=False, **args)
-    order = [i["id"] for i in everything["items"]]
-    assert set(order) == set(MOVIES)
-
-    owned = await serve.ranked_section(db, **args)
-    assert 4 not in [i["id"] for i in owned["items"]]
-
-    seen = await serve.ranked_section(db, seen="seen", owned_only=False, **args)
-    assert [i["id"] for i in seen["items"]] == [1]
-    unseen = await serve.ranked_section(db, seen="unseen", owned_only=False, **args)
-    # An absent user_title row counts as unseen (§7.3), so the order is the full one minus title 1.
-    assert [i["id"] for i in unseen["items"]] == [t for t in order if t != 1]
-
-    by_name = await serve.ranked_section(db, q="heat", owned_only=False, **args)
-    assert [i["id"] for i in by_name["items"]] == [1]
-    # §4.1 rule 8: never "clean" non-ASCII; the CJK title is searchable as itself.
-    cjk = await serve.ranked_section(db, q="重慶", owned_only=False, **args)
-    assert [i["id"] for i in cjk["items"]] == [5]
-
-    nineties = await serve.ranked_section(db, decade=1990, owned_only=False, **args)
-    assert {i["id"] for i in nineties["items"]} == {1, 4, 5}
+    top = await serve.top_scored(
+        db, user_id=world["patrick"], kind="movie", bundle_version=BUNDLE, limit=50
+    )
+    assert {i["id"] for i in top["items"]} == set(MOVIES) - {4}
 
 
 async def test_a_read_bound_to_another_basis_returns_nothing_rather_than_old_numbers(db, world):
-    """A dropped guard fails silently, so the assertion is ABSENCE: empty, with a zero total."""
-    sections = await serve.ranked_sections(
-        db, user_id=world["patrick"], kinds=["movie", "series"], bundle_version="test-v2", limit=50
-    )
-    assert [s["total"] for s in sections] == [0, 0]
-    assert [s["items"] for s in sections] == [[], []]
+    """A dropped guard fails silently, so the assertion is ABSENCE."""
+    for kind in ("movie", "series"):
+        top = await serve.top_scored(
+            db, user_id=world["patrick"], kind=kind, bundle_version="test-v2", limit=50
+        )
+        assert top["items"] == []
 
 
 async def test_a_zero_label_member_is_still_fitted_and_still_ranked(db, world):
@@ -895,13 +724,13 @@ async def test_a_zero_label_member_is_still_fitted_and_still_ranked(db, world):
     assert row["blend_beta"] == 0.0
     assert row["bundle_version"] == BUNDLE
 
-    section = await serve.ranked_section(
+    top = await serve.top_scored(
         db, user_id=world["jenny"], kind="movie", bundle_version=BUNDLE, limit=50
     )
-    assert section["fitted"] is True
-    assert section["personalised"] is False
-    assert section["label_count"] == 0
-    assert len(section["items"]) == len(MOVIES)
+    assert top["fitted"] is True
+    assert top["personalised"] is False
+    assert top["label_count"] == 0
+    assert len(top["items"]) == len(MOVIES)
 
 
 async def test_a_clamped_blend_weight_is_storable_and_anything_above_it_is_not(db, world):

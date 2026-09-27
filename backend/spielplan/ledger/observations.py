@@ -62,28 +62,6 @@ def zero_embeddings(title_ids: Sequence[int]) -> tuple[np.ndarray, np.ndarray]:
     return np.zeros((n, EMBED_DIM)), np.zeros(n, dtype=bool)
 
 
-def placement_embeddings(
-    conn: asyncpg.Connection, *, bundle_version: str | None = None
-) -> EmbeddingSource:
-    """The Cold Tower half of §5.1's e(t), from `title_placement`. Warm titles are not embedded."""
-
-    async def rows(title_ids: Sequence[int]) -> tuple[np.ndarray, np.ndarray]:
-        ids = [int(t) for t in title_ids]
-        matrix = np.zeros((len(ids), EMBED_DIM))
-        embedded = np.zeros(len(ids), dtype=bool)
-        if not ids:
-            return matrix, embedded
-        placed = await _placement_pairs(conn, ids, bundle_version=bundle_version)
-        for i, title_id in enumerate(ids):
-            pair = placed.get(title_id)
-            if pair is not None:
-                matrix[i] = pair[0]
-                embedded[i] = True
-        return matrix, embedded
-
-    return rows
-
-
 async def _placement_pairs(
     conn: asyncpg.Connection, title_ids: Sequence[int], *, bundle_version: str | None
 ) -> dict[int, tuple[np.ndarray, float]]:
@@ -111,25 +89,17 @@ async def _placement_pairs(
     }
 
 
-def chain(*sources: EmbeddingSource) -> EmbeddingSource:
-    """The first source that has a row for a title wins; otherwise e = 0 and `embedded = False`."""
+def latest_tier_edit_sql(user: str = "$1") -> str:
+    """The person's latest drop per title (`title_id, tier, n_levels`); `user` is their placeholder.
 
-    async def rows(title_ids: Sequence[int]) -> tuple[np.ndarray, np.ndarray]:
-        ids = list(title_ids)
-        matrix = np.zeros((len(ids), EMBED_DIM))
-        embedded = np.zeros(len(ids), dtype=bool)
-        for source in sources:
-            missing = ~embedded
-            if not missing.any():
-                break
-            wanted = [tid for tid, gap in zip(ids, missing, strict=True) if gap]
-            part, present = await resolve_embeddings(source, wanted)
-            where = np.flatnonzero(missing)[present]
-            matrix[where] = part[present]
-            embedded[where] = True
-        return matrix, embedded
-
-    return rows
+    One pass over their own `tier_edit` rows: a correlated subquery would re-run per board row.
+    """
+    return f"""
+    SELECT DISTINCT ON (title_id) title_id, tier, n_levels
+      FROM tier_edit
+     WHERE user_id = {user}
+     ORDER BY title_id, created_at DESC, id DESC
+"""
 
 
 # The person's CURRENT label on each title, `$1` = user id. Newest non-re-ask row, NOT
@@ -140,23 +110,6 @@ LIVE_LABEL_SQL = """
      WHERE v.user_id = $1 AND NOT v.is_reask
      ORDER BY v.title_id, v.created_at DESC, v.id DESC
 """
-
-
-def backbone_embeddings(backbone: Any) -> EmbeddingSource:
-    """§5.1: a warm title's coordinate is its Backbone row, read from the loaded npz."""
-
-    def rows(title_ids: Sequence[int]) -> tuple[np.ndarray, np.ndarray]:
-        ids = list(title_ids)
-        matrix = np.zeros((len(ids), 64))
-        present = np.zeros(len(ids), dtype=bool)
-        for i, title_id in enumerate(ids):
-            vector = backbone.embedding(int(title_id))
-            if vector is not None:
-                matrix[i] = vector
-                present[i] = True
-        return matrix, present
-
-    return rows
 
 
 def standard_embeddings(
@@ -236,7 +189,6 @@ class Observations:
     n_duels: int = 0
     n_held_out: int = 0
     n_reask: int = 0
-    mean_margin: float = 1.0
 
     @property
     def title_ids(self) -> np.ndarray:
@@ -439,7 +391,6 @@ async def load_observations(
         n_duels=len(duels),
         n_held_out=int(excluded["held_out"] or 0),
         n_reask=int(excluded["reask"] or 0) + int(reask_verdicts or 0),
-        mean_margin=float(np.mean(duel_margin)) if duel_margin else hp.margin_hesitant,
     )
 
 
@@ -875,10 +826,9 @@ __all__ = [
     "Undo",
     "UndoRefused",
     "Write",
-    "chain",
     "kind_of",
+    "latest_tier_edit_sql",
     "load_observations",
-    "placement_embeddings",
     "record_duel",
     "record_not_seen",
     "record_tier_edit",

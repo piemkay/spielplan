@@ -198,30 +198,55 @@ async def _active_store(conn) -> ArtifactStore | None:
     return None if store.is_empty else store
 
 
-async def _ledger_map_refit() -> dict[str, object] | None:
-    """§5.2's full-history MAP refit, nightly; ~0.3 s per (user, kind) at M2 scale."""
-    from spielplan.ledger import observations, refit
+async def _fit_inputs(conn) -> tuple[dict[str, object], list[str]]:
+    """The active basis as `refit`'s keyword arguments, and the notes §4.3's constants loaded with.
+    Bundle-less, the version is None: the honest stamp for a zero basis, which belongs to no bundle."""
+    from spielplan.ledger import observations
     from spielplan.ledger.hyperparams import load as load_hp
     from spielplan.scoring import backbone as bb
 
+    store = await _active_store(conn)
+    hp, notes = load_hp(store)
+    embeddings = (
+        observations.standard_embeddings(conn, bb.load_for(store), bundle_version=store.version)
+        if store
+        else None
+    )
+    inputs = {"hp": hp, "embeddings": embeddings, "bundle_version": store.version if store else None}
+    return inputs, notes
+
+
+async def _refit_owed(conn, owed, *, what: str, each) -> dict[str, object]:
+    """Refit each owed `(user_id, kind, stamp)`; `each` then sees the stamp and the report. A failure
+    is reported and the loop goes on, except a lost connection, which fails every item alike: raise
+    so `_tick` records it."""
+    from spielplan.ledger import refit
+
+    inputs, _notes = await _fit_inputs(conn)
+    done: list[dict[str, object]] = []
+    for user_id, kind, stamp in owed:
+        try:
+            report = (await refit.refit_user(conn, user_id=user_id, kind=kind, **inputs)).as_dict()
+        except (asyncpg.PostgresConnectionError, asyncpg.InterfaceError):
+            raise
+        except Exception as exc:
+            log.exception("%s failed for user %s/%s", what, user_id, kind)
+            report = refit.RefitReport(user_id=user_id, kind=kind, error=str(exc)).as_dict()
+        await each(user_id, kind, stamp, report)
+        done.append(report)
+    log.info("%s: %s", what, done)
+    return {"refits": done}
+
+
+async def _ledger_map_refit() -> dict[str, object] | None:
+    """§5.2's full-history MAP refit, nightly; ~0.3 s per (user, kind) at M2 scale."""
+    from spielplan.ledger import refit
+
     async with pool.acquire() as conn:
-        store = await _active_store(conn)
-        hp, notes = load_hp(store or ArtifactStore.empty())
+        inputs, notes = await _fit_inputs(conn)
         for note in notes:
             log.info("ledger hyperparameters: %s", note)
-        # §5.1's basis via `standard_embeddings`. `store.version` None on a bundle-less install is the
-        # honest stamp: a zero basis belongs to no bundle.
-        embeddings = (
-            observations.standard_embeddings(
-                conn, bb.load_for(store), bundle_version=store.version
-            )
-            if store
-            else None
-        )
-        reports = await refit.refit_all(
-            conn, hp, embeddings=embeddings,
-            bundle_version=store.version if store else None,
-        )
+        reports = await refit.refit_all(conn, **inputs)
         for r in reports:
             log.info("ledger refit: %s", r.as_dict())
         return {"refits": [r.as_dict() for r in reports]}
@@ -231,44 +256,16 @@ async def _ledger_refresh_tick() -> dict[str, object] | None:
     """§5.2's full refit, asked for inside a sitting: the incremental path moves only touched titles, so
     unrated ones kept the first fit's order. Debounced by work (`refit.refreshes_owed`). A refusing
     board is retried every minute; bounding that needs a column."""
-    from spielplan.ledger import observations, refit
-    from spielplan.ledger.hyperparams import load as load_hp
-    from spielplan.scoring import backbone as bb
+    from spielplan.ledger import refit
+
+    async def note(_user_id, _kind, grown, report) -> None:
+        report["grown"] = grown
 
     async with pool.acquire() as conn:
         owed = await refit.refreshes_owed(conn)
         if not owed:
             return None
-        store = await _active_store(conn)
-        hp, _notes = load_hp(store or ArtifactStore.empty())
-        # The bundle that built the coordinates stamps the fit; None when bundle-less.
-        embeddings = (
-            observations.standard_embeddings(
-                conn, bb.load_for(store), bundle_version=store.version
-            )
-            if store
-            else None
-        )
-        bundle_version = store.version if store else None
-        done: list[dict[str, object]] = []
-        for user_id, kind, grown in owed:
-            try:
-                report = await refit.refit_user(
-                    conn, user_id=user_id, kind=kind, hp=hp, embeddings=embeddings,
-                    bundle_version=bundle_version,
-                )
-            except (asyncpg.PostgresConnectionError, asyncpg.InterfaceError):
-                # A lost connection fails every item alike: raise so `_tick` records the failure.
-                raise
-            except Exception as exc:
-                log.exception("ledger refresh failed for user %s/%s", user_id, kind)
-                done.append(
-                    refit.RefitReport(user_id=user_id, kind=kind, error=str(exc)).as_dict()
-                )
-            else:
-                done.append({**report.as_dict(), "grown": grown})
-        log.info("ledger refresh: %s", done)
-        return {"refits": done}
+        return await _refit_owed(conn, owed, what="ledger refresh", each=note)
 
 
 async def _fold_in_user_vectors() -> dict[str, object] | None:
@@ -313,49 +310,19 @@ async def _tier_set_refits() -> dict[str, object] | None:
     """Decision 11's tier-set refit, within a minute. Per item, and cleared per item even on failure:
     a fit failing on its own data would fail again, and the nightly pass covers it. The clear's
     stamp spares a newer request."""
-    from spielplan.ledger import observations, refit
-    from spielplan.ledger.hyperparams import load as load_hp
     from spielplan.rank import tiers
-    from spielplan.scoring import backbone as bb
 
     async with pool.acquire() as conn:
         owed = await tiers.refits_owed(conn)
         if not owed:
             return None
-        store = await _active_store(conn)
-        hp, _notes = load_hp(store or ArtifactStore.empty())
-        # The bundle that built the coordinates stamps the fit; None when bundle-less.
-        embeddings = (
-            observations.standard_embeddings(
-                conn, bb.load_for(store), bundle_version=store.version
-            )
-            if store
-            else None
-        )
-        bundle_version = store.version if store else None
-        done: list[dict[str, object]] = []
-        for user_id, kind, requested_at in owed:
-            try:
-                report = await refit.refit_user(
-                    conn, user_id=user_id, kind=kind, hp=hp, embeddings=embeddings,
-                    bundle_version=bundle_version,
-                )
-            except (asyncpg.PostgresConnectionError, asyncpg.InterfaceError):
-                # A lost connection fails every remaining row alike: raise rather than clear them all and
-                # report success.
-                raise
-            except Exception as exc:
-                log.exception("tier-set refit failed for user %s/%s", user_id, kind)
-                done.append(
-                    refit.RefitReport(user_id=user_id, kind=kind, error=str(exc)).as_dict()
-                )
-            else:
-                log.info("tier-set refit: %s", report.as_dict())
-                done.append(report.as_dict())
+
+        async def clear(user_id, kind, requested_at, _report) -> None:
             await tiers.clear_refit_request(
                 conn, user_id=user_id, kind=kind, requested_at=requested_at
             )
-        return {"refits": done}
+
+        return await _refit_owed(conn, owed, what="tier-set refit", each=clear)
 
 
 async def _nightly_backup() -> dict[str, object] | None:

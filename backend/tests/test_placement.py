@@ -563,10 +563,6 @@ async def test_the_cold_tower_coordinate_is_written_unscaled(db, placed):
     assert not any(abs(n - 1.0) < 1e-6 for n in norms.values()), (
         f"a stored e_hat has unit norm: something normalised it on the way in ({norms})"
     )
-    bb_backbone = backbone.load_for(store)
-    report = backbone.blend_ratios(bb_backbone, {t: stored[t] for t in ids})
-    print(f"\nblend ratio over the swept rows: {report.as_dict()}")
-    assert report.n_measured >= 1, "no thin row was placed, so the blend has nothing to weigh"
 
 
 async def test_a_thin_title_is_placed_badged_and_parked_and_a_complete_one_is_not(db, placed):

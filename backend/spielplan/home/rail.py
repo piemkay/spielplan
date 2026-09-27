@@ -1,7 +1,7 @@
 """§6.7's transparency rail (an in-process ring buffer, never persisted) and decision 117's gate.
 
 The gate is a DELETION: `redact()` removes gated keys from the payload, so hidden numbers never reach
-the wire. Events recorded in the worker process reach no web request's rail.
+the wire. It narrates the web process's writes: the worker's reach no web request's rail.
 """
 
 from __future__ import annotations
@@ -17,33 +17,7 @@ from typing import Any
 RAIL_LIMIT = 15
 
 # A closed set, so a typo in a caller is a loud error rather than a line nobody can filter on.
-EVENT_KINDS: tuple[str, ...] = (
-    "verdict",
-    "duel",
-    "tier_edit",
-    "session_answer",
-    "not_seen",
-    "undo",
-    "ledger_refit",
-    "ledger_incremental",
-    "foldin",
-    "blend_weight",
-    "placement",
-    "reconcile",
-    "bundle_swap",
-)
-
-# Declared kinds with no `rail.record` call site: all are worker-side writes, which cannot reach a
-# web process's buffer (decision 189).
-AWAITING_PRODUCER: tuple[str, ...] = (
-    "ledger_refit",
-    "ledger_incremental",
-    "foldin",
-    "blend_weight",
-    "placement",
-    "reconcile",
-    "bundle_swap",
-)
+EVENT_KINDS: tuple[str, ...] = ("verdict", "duel", "tier_edit", "session_answer", "not_seen", "undo")
 
 # Decision 117's inventory, the only thing `redact` knows about. `reveal` is deliberately absent:
 # it is the product; `rate/session.viewer_reveal` strips its numbers (decisions 486, 491).
@@ -87,28 +61,21 @@ def redact(payload: Any, *, show_model: bool) -> Any:
 # --- the journal -------------------------------------------------------------------------------
 
 
-# One bounded deque per user plus one for the household. Locked because `recent` reads two and merges.
+# One bounded deque per user, so a busy member cannot evict another's rail.
 _LOCK = threading.Lock()
-_BUFFERS: dict[int | None, deque[dict[str, Any]]] = {}
+_BUFFERS: dict[int, deque[dict[str, Any]]] = {}
 _SEQ = itertools.count(1)
-
-HOUSEHOLD = None
 
 
 def record(
     *,
     kind: str,
     line: str,
-    user_id: int | None = None,
+    user_id: int,
     title_id: int | None = None,
     detail: dict[str, Any] | None = None,
-    bundle_version: str | None = None,
-    at: datetime | None = None,
 ) -> int:
-    """Append one narrated model write, rendered by the caller at write time. Returns its sequence.
-
-    `user_id` None is a household event.
-    """
+    """Append one narrated model write, rendered by the caller at write time. Returns its sequence."""
     if kind not in EVENT_KINDS:
         raise RailError(f"unknown model-event kind {kind!r}; one of {EVENT_KINDS}")
     text = line.strip()
@@ -123,28 +90,21 @@ def record(
         buf.append(
             {
                 "id": seq,
-                "at": at or datetime.now(UTC),
+                "at": datetime.now(UTC),
                 "kind": kind,
                 "text": text,
                 "title_id": title_id,
                 "detail": detail or {},
-                "bundle": bundle_version,
-                "scope": "household" if user_id is None else "you",
             }
         )
     return seq
 
 
 def recent(*, user_id: int, limit: int = RAIL_LIMIT) -> list[dict[str, Any]]:
-    """This person's and the household's last events, newest first, never more than RAIL_LIMIT."""
-    keep = min(max(int(limit), 0), RAIL_LIMIT)
-    if keep == 0:
-        return []
+    """This person's last events, newest first; the deque holds at most RAIL_LIMIT."""
     with _LOCK:
-        mine = list(_BUFFERS.get(user_id, ()))[-keep:]
-        ours = list(_BUFFERS.get(HOUSEHOLD, ()))[-keep:]
-    merged = sorted(mine + ours, key=lambda e: e["id"], reverse=True)
-    return [dict(e) for e in merged[:keep]]
+        events = list(_BUFFERS.get(user_id, ()))
+    return [dict(e) for e in reversed(events)][:limit]
 
 
 def forget(*, user_id: int | None = None) -> int:
@@ -208,25 +168,6 @@ def duel_line(a: str, b: str, outcome: str, *, context: str, selection: str) -> 
 def session_answer_line(participant: str, pair: int, answer: str) -> str:
     """`session_answer(p, pair 4) = A — pool-centred tilt` (§6.7, §6.2 step 4's centring lever)."""
     return f"session_answer({participant}, pair {pair}) = {answer} — pool-centred tilt"
-
-
-def parse_line(predicate: str, survivors: int) -> str:
-    """`parse → predicate has(robots) · 0 survivors → flywheel` (§6.7, §6.4, §8.4)."""
-    tail = " → flywheel" if survivors == 0 else ""
-    return f"parse → predicate {predicate} · {survivors} survivors{tail}"
-
-
-def refit_line(kind: str, *, n_titles: int, seconds: float, rho: float | None = None) -> str:
-    """The nightly MAP refit — a model write with no observation row of its own (0012)."""
-    line = f"ledger_refit({kind}) = {n_titles} titles, {seconds:.2f} s"
-    if rho is not None:
-        line += f", ρ {rho:.3f}"
-    return line
-
-
-def placement_line(title_name: str, *, b_hat: float, gate: float) -> str:
-    """§8 stage 10: a Cold Tower placement, in the data voice §6.8 requires."""
-    return f"placement({title_name}) = cold_tower · b̂ {b_hat:.2f} · gate {gate:.2f}"
 
 
 def kinds_present(events: Iterable[dict[str, Any]]) -> list[str]:

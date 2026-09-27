@@ -13,7 +13,7 @@ from datetime import datetime
 import asyncpg
 import numpy as np
 
-from spielplan.ledger.observations import DEFAULT_TIER_SET, KINDS
+from spielplan.ledger.observations import KINDS, tier_set_of
 
 log = logging.getLogger("spielplan.rank.tiers")
 
@@ -63,14 +63,6 @@ def equal_mass_quantiles(s: np.ndarray, k: int) -> np.ndarray:
     if s.size < 2:
         raise ValueError("equal-mass quantiles need at least two values")
     return np.quantile(np.asarray(s, dtype=float), np.arange(1, k) / k)
-
-
-async def tier_set_of(conn: asyncpg.Connection, *, user_id: int, kind: str) -> tuple[str, ...]:
-    """The person's set for one kind, or §4.2's default."""
-    row = await conn.fetchval(
-        "SELECT tier_set FROM ledger_cutpoints WHERE user_id = $1 AND kind = $2", user_id, kind
-    )
-    return tuple(row) if row else DEFAULT_TIER_SET
 
 
 async def _fitted_s(conn: asyncpg.Connection, *, user_id: int, kind: str) -> np.ndarray:

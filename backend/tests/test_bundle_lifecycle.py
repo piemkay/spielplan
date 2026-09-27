@@ -23,7 +23,6 @@ from spielplan.importer import bundle as bundle_import
 from spielplan.importer.bundle import APP_ID_MIN
 from spielplan.importer.report import ImportReport
 from spielplan.placement import reconcile
-from spielplan.scoring import serve
 from tests.fixtures import make_bundle as fx
 
 # `content.sqlite`'s `sqlite_sequence` reads 21442, so this is the id the corpus mints next.
@@ -395,8 +394,6 @@ async def test_the_right_order_leaves_every_owned_title_with_a_coordinate(
     assert owned == len(fx.TITLES) > 0
     after_restore = await reconcile.placement_counts(db, bundle_version="test-v1")
     assert after_restore["owned_unplaced"] == 0
-    assert await serve.uncoordinated_owned(db, kind="movie", bundle_version="test-v1") == []
-    assert await serve.uncoordinated_owned(db, kind="series", bundle_version="test-v1") == []
 
     swap = await import_bundle_at(db, build("test-v2", models_only=True), artifacts_root)
     assert swap.ok, swap.render()
@@ -404,8 +401,6 @@ async def test_the_right_order_leaves_every_owned_title_with_a_coordinate(
     after_load = await reconcile.placement_counts(db, bundle_version="test-v2")
     assert after_load["owned"] == owned
     assert after_load["owned_unplaced"] == 0
-    assert await serve.uncoordinated_owned(db, kind="movie", bundle_version="test-v2") == []
-    assert await serve.uncoordinated_owned(db, kind="series", bundle_version="test-v2") == []
     # The same number, over the same library.
     assert (after_load["owned_warm"], after_load["owned_cold"]) == (
         after_restore["owned_warm"], after_restore["owned_cold"]

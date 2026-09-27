@@ -9,6 +9,7 @@ import time
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -502,27 +503,15 @@ async def test_the_fitted_coordinate_equals_the_served_coordinate_for_every_titl
         assert not np.allclose(matrix[ids.index(title_id)], raw / np.linalg.norm(raw))
     assert {c.e_source for c in coords.values()} == {"backbone", "blended", "cold_tower"}
 
-    # The single-source forms stay for the bundle-less install; they are just not the standard source.
-    chained, _ = await observations.resolve_embeddings(
-        observations.chain(
-            observations.backbone_embeddings(backbone),
-            observations.placement_embeddings(db, bundle_version=BUNDLE),
-        ),
-        [4],
+
+async def _board(db, user_id: int, kind: str) -> list[SimpleNamespace]:
+    """`ledger_state` in rank order."""
+    rows = await db.fetch(
+        "SELECT title_id, s, sigma, cdf, tier, observed FROM ledger_state"
+        " WHERE user_id = $1 AND kind = $2 ORDER BY s DESC, title_id",
+        user_id, kind,
     )
-    assert np.array_equal(chained[0], backbone.embedding(4).astype(np.float64))
-    assert not np.allclose(chained[0], coords[4].e), (
-        "the precedence chain and §5.1's blend give the same answer on this fixture, so nothing "
-        "here could have detected dd02"
-    )
-    alone, mask = await observations.resolve_embeddings(
-        observations.placement_embeddings(db, bundle_version=BUNDLE), [1, 8]
-    )
-    assert mask.tolist() == [False, True], (
-        "the placement source on its own still reports a warm title as having no coordinate, "
-        "which is honest rather than wrong and is what `chain` existed to fix"
-    )
-    assert np.array_equal(alone[1], placed_vector(8))
+    return [SimpleNamespace(**dict(r)) for r in rows]
 
 
 async def _set_tier_set(db, user_id: int, labels: Sequence[str], *, kind: str = "movie") -> None:
@@ -653,7 +642,7 @@ async def test_the_nightly_refit_writes_the_board_the_cutpoints_and_the_cache(db
     assert report.fitted and report.converged, report.as_dict()
     assert (report.n_verdicts, report.n_duels, report.n_tier_edits) == (6, 4, 2)
 
-    board = await refit.read_board(db, user_id=user, kind="movie")
+    board = await _board(db, user, "movie")
     assert sorted(r.title_id for r in board) == [1, 2, 3, 4, 5, 6]
     assert {r.observed for r in board} == {True}
     assert all(np.isfinite(r.s) and r.sigma > 0 for r in board)
@@ -691,7 +680,7 @@ async def test_every_owned_title_gets_a_coordinate_even_unrated(db, world):
         db, user_id=user, kind="movie", hp=DEFAULTS, embeddings=fixture_embeddings
     )
 
-    rows = {r.title_id: r for r in await refit.read_board(db, user_id=user, kind="movie")}
+    rows = {r.title_id: r for r in await _board(db, user, "movie")}
     assert set(rows) == {1, 2, 3, 4, 5, 6}, "an owned film has no coordinate"
     assert [rows[t].observed for t in (1, 2, 3)] == [True, True, True]
     assert [rows[t].observed for t in (4, 5, 6)] == [False, False, False]
@@ -713,8 +702,8 @@ async def test_the_displayed_weight_is_the_cdf_of_the_persons_own_s_per_kind(db,
             db, user_id=user, kind=kind, hp=DEFAULTS, embeddings=fixture_embeddings
         )
 
-    films = [r for r in await refit.read_board(db, user_id=user, kind="movie") if r.observed]
-    series = [r for r in await refit.read_board(db, user_id=user, kind="series") if r.observed]
+    films = [r for r in await _board(db, user, "movie") if r.observed]
+    series = [r for r in await _board(db, user, "series") if r.observed]
     assert films[0].cdf == pytest.approx(1.0 - 1.0 / (2 * len(films))), "best film is not ~1.0"
     assert films[-1].cdf == pytest.approx(1.0 / (2 * len(films))), "worst film is not ~0.0"
     assert series[0].cdf == pytest.approx(0.75), (
@@ -758,7 +747,7 @@ async def test_a_non_finite_fit_never_reaches_a_shelf(db, world, monkeypatch):
     await refit.refit_user(
         db, user_id=user, kind="movie", hp=DEFAULTS, embeddings=fixture_embeddings
     )
-    good = {r.title_id: r.s for r in await refit.read_board(db, user_id=user, kind="movie")}
+    good = {r.title_id: r.s for r in await _board(db, user, "movie")}
 
     real_fit = model.fit
 
@@ -773,7 +762,7 @@ async def test_a_non_finite_fit_never_reaches_a_shelf(db, world, monkeypatch):
         db, user_id=user, kind="movie", hp=DEFAULTS, embeddings=fixture_embeddings
     )
     assert report.rejected_nonfinite == 1
-    board = await refit.read_board(db, user_id=user, kind="movie")
+    board = await _board(db, user, "movie")
     assert all(np.isfinite(r.s) for r in board), "a NaN reached ledger_state"
     assert 1 not in {r.title_id for r in board if r.observed}
 
@@ -786,7 +775,7 @@ async def test_a_non_finite_fit_never_reaches_a_shelf(db, world, monkeypatch):
         await refit.refit_user(
             db, user_id=user, kind="movie", hp=DEFAULTS, embeddings=fixture_embeddings
         )
-    kept = {r.title_id: r.s for r in await refit.read_board(db, user_id=user, kind="movie")}
+    kept = {r.title_id: r.s for r in await _board(db, user, "movie")}
     assert kept[2] == pytest.approx(good[2]), "a refused fit still overwrote the board"
 
 
@@ -859,21 +848,23 @@ async def test_the_incremental_path_serves_an_undo_with_the_same_call(db, world)
     await refit.refit_user(
         db, user_id=user, kind="movie", hp=DEFAULTS, embeddings=fixture_embeddings
     )
-    before = (await refit._read_rows(db, user_id=user, title_ids=[1]))[0]
+    before = await db.fetchrow(
+        "SELECT s, sigma FROM ledger_state WHERE user_id = $1 AND title_id = 1", user
+    )
 
     write = await observations.record_verdict(db, user_id=user, title_id=1, value=2)
     after = (await refit.update_incrementally(
         db, user_id=user, kind="movie", title_ids=[1], hp=DEFAULTS, embeddings=fixture_embeddings
     )).rows[0]
-    assert after.s > before.s, "a 'liked' did not raise the title's score"
-    assert after.sigma <= before.sigma + 1e-12, "an observation made the model less certain"
+    assert after.s > before["s"], "a 'liked' did not raise the title's score"
+    assert after.sigma <= before["sigma"] + 1e-12, "an observation made the model less certain"
 
     await observations.undo(db, user_id=user, write=write)
     restored = (await refit.update_incrementally(
         db, user_id=user, kind="movie", title_ids=[1], hp=DEFAULTS, embeddings=fixture_embeddings
     )).rows[0]
-    assert restored.s == pytest.approx(before.s, abs=1e-6), "undo did not put the score back"
-    assert restored.sigma == pytest.approx(before.sigma, rel=1e-6)
+    assert restored.s == pytest.approx(before["s"], abs=1e-6), "undo did not put the score back"
+    assert restored.sigma == pytest.approx(before["sigma"], rel=1e-6)
 
 
 async def test_an_undo_leaves_the_freshness_clock_where_the_observation_put_it(db, world):
@@ -1146,7 +1137,7 @@ async def test_a_full_map_refit_of_both_users_over_the_owned_library_lands_insid
 
     for user in users:
         for kind in ("movie", "series"):
-            rows = await refit.read_board(db, user_id=user, kind=kind, limit=BUDGET_TITLES)
+            rows = await _board(db, user, kind)
             owned = await db.fetchval(
                 "SELECT count(*) FROM title WHERE is_owned AND kind = $1", kind
             )

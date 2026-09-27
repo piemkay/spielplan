@@ -9,14 +9,12 @@ from __future__ import annotations
 import logging
 import zipfile
 import zlib
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
-
-from spielplan.ledger.hyperparams import DEFAULTS
 
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from spielplan.models.artifacts import ArtifactStore
@@ -25,12 +23,11 @@ log = logging.getLogger("spielplan.scoring.backbone")
 
 EMBED_DIM = 64
 
-# One field shared with §6.0's why-numbers. `DEFAULTS` binds the dataclass default, not the bundle's
-# value; `hyperparams._PARSED_NOT_THREADED` reports the gap.
-EVIDENCE_K = DEFAULTS.gate_k
+# §5.1: "gate = n_t / (n_t + k)", k ~ 10; also printed in §6.0's why-numbers.
+EVIDENCE_K = 10.0
 
 # §5.1 never says which titles are "warm"; warm is where the gate stops changing the answer.
-WARM_GATE = DEFAULTS.warm_gate
+WARM_GATE = 0.9
 WARM_SUPPORT = EVIDENCE_K * WARM_GATE / (1.0 - WARM_GATE)   # 90, still derived from the two
 
 ESource = Literal["backbone", "blended", "cold_tower", "none"]
@@ -103,16 +100,11 @@ class Backbone:
     # Unlike `row_of`, these two include cold-masked rows.
     support_of: dict[int, int] = field(default_factory=dict)
     prior_of: dict[int, float] = field(default_factory=dict)
-    e_full_shape: tuple[int, ...] | None = None
     notes: tuple[str, ...] = ()
 
     @property
     def is_empty(self) -> bool:
         return self.E is None
-
-    @property
-    def n_rows(self) -> int:
-        return 0 if self.title_ids is None else int(self.title_ids.size)
 
     @classmethod
     def empty(cls) -> Backbone:
@@ -137,7 +129,6 @@ class Backbone:
             b_i = np.asarray(z["b_i"]).astype(np.float32, copy=False).reshape(-1)
             item_n = np.asarray(z["item_n"]).astype(np.int64, copy=False).reshape(-1)
             mu_arr = np.asarray(z["mu"])
-            e_full_shape = tuple(np.asarray(z["E_full"]).shape) if "E_full" in z.files else None
 
         if e.ndim != 2 or e.shape[1] != EMBED_DIM:
             raise BackboneError(
@@ -164,18 +155,6 @@ class Backbone:
             )
 
         notes: list[str] = []
-        if e_full_shape is not None:
-            # §4.3 never defines E_full against E; serving uses E, E_full is provenance.
-            with _reading("comparing E_full against E"):
-                e_full = np.asarray(z["E_full"])
-            if e_full.ndim != 2 or e_full.shape[0] != n or e_full.shape[1] < EMBED_DIM:
-                notes.append(f"E_full has shape {e_full_shape}; ignored, E is used for scoring")
-            elif not np.allclose(e_full[:, :EMBED_DIM], e, atol=1e-5):
-                notes.append(
-                    "E_full[:, :64] does not equal E; §4.3 never defines the difference, so E "
-                    "is used for scoring and E_full is unread provenance"
-                )
-
         with _reading(f"reading {COLD_MASK_ARRAY}"):
             cold = cold_row_mask(z, n, e=e)
         n_cold = int(cold.sum())
@@ -196,7 +175,6 @@ class Backbone:
             row_of={int(t): i for i, t in enumerate(title_ids) if not cold[i]},
             support_of={int(t): int(item_n[i]) for i, t in enumerate(title_ids)},
             prior_of={int(t): float(b_i[i]) for i, t in enumerate(title_ids)},
-            e_full_shape=e_full_shape,
             notes=tuple(notes),
         )
         for note in notes:
@@ -227,15 +205,6 @@ class Backbone:
         if row is not None:
             return float(self.b_i[row])
         return self.prior_of.get(int(title_id))
-
-    def summary(self) -> dict[str, Any]:
-        return {
-            "version": self.version,
-            "rows": self.n_rows,
-            "mu": self.mu,
-            "e_full_shape": list(self.e_full_shape) if self.e_full_shape else None,
-            "notes": list(self.notes),
-        }
 
 
 _CACHE: dict[tuple[str | None, str, int, int], Backbone] = {}
@@ -365,88 +334,6 @@ def directions(coords: Sequence[Coordinate]) -> np.ndarray:
     norm = np.linalg.norm(e, axis=1)
     scale = np.divide(weight, norm, out=np.zeros_like(norm), where=norm > 0.0)
     return e * scale[:, None]
-
-
-# --- what the gate is actually weighting ----------------------------------------------------
-# A measurement, deliberately not a repair: on the shipped basis ||ê|| dwarfs ||E|| for thin rows.
-# Whether E is meant to be unit-scale is the corpus's contract (decision 236).
-
-
-@dataclass(frozen=True)
-class BlendReport:
-    """The distribution of ((1-g)·||ê||)/(g·||E||), with a separate count per reason for no ratio."""
-
-    n_offered: int                  # titles the caller handed over
-    n_measured: int                 # the rows §5.1's middle line applies to
-    n_warm: int                     # had a row at or above WARM_SUPPORT
-    n_no_row: int                   # no Backbone row at all (or a cold-masked one)
-    n_degenerate: int               # g == 0 or ||E|| == 0: no ratio exists
-    ratios: np.ndarray = field(default_factory=lambda: np.zeros(0))
-
-    def quantile(self, q: float) -> float | None:
-        """None rather than nan when nothing was measured."""
-        if self.ratios.size == 0:
-            return None
-        return float(np.quantile(self.ratios, q))
-
-    @property
-    def p10(self) -> float | None:
-        return self.quantile(0.10)
-
-    @property
-    def median(self) -> float | None:
-        return self.quantile(0.50)
-
-    @property
-    def p90(self) -> float | None:
-        return self.quantile(0.90)
-
-    def as_dict(self) -> dict[str, Any]:
-        return {
-            "offered": self.n_offered,
-            "measured": self.n_measured,
-            "warm": self.n_warm,
-            "no_row": self.n_no_row,
-            "degenerate": self.n_degenerate,
-            "p10": self.p10,
-            "median": self.median,
-            "p90": self.p90,
-        }
-
-
-def blend_ratios(
-    backbone: Backbone, placements: Mapping[int, tuple[np.ndarray, float]]
-) -> BlendReport:
-    """How far apart the two halves of §5.1's blend are, per title. Reported, never acted on.
-
-    `placements` is `serve.placements()`'s shape: title_id -> (ê, b̂).
-    """
-    ratios: list[float] = []
-    n_warm = n_no_row = n_degenerate = 0
-    for title_id in sorted(placements):
-        e_hat = np.asarray(placements[title_id][0], dtype=np.float64)
-        row = backbone.row(int(title_id))
-        if row is None:
-            n_no_row += 1
-            continue
-        n_t = int(backbone.item_n[row])
-        if n_t >= WARM_SUPPORT:
-            n_warm += 1
-            continue
-        g = gate(n_t)
-        warm_norm = float(np.linalg.norm(np.asarray(backbone.E[row], dtype=np.float64)))
-        if g <= 0.0 or warm_norm <= 0.0:
-            n_degenerate += 1
-            continue
-        ratios.append(((1.0 - g) * float(np.linalg.norm(e_hat))) / (g * warm_norm))
-    return BlendReport(
-        n_offered=len(placements),
-        n_measured=len(ratios),
-        n_warm=n_warm,
-        n_no_row=n_no_row,
-        n_degenerate=n_degenerate,
-        ratios=np.asarray(ratios, dtype=np.float64),
-    )
 
 
 # --- the bytea convention: 64 x float32 LE, shared by title_placement.e_hat and user_vector.vec --
