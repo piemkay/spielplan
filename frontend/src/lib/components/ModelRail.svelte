@@ -85,11 +85,10 @@
       {#if shown.length}
         <ol class="events">
           {#each shown as e (e.id)}
-            <li data-testid="model-rail-event" data-kind={e.kind} data-scope={e.scope}>
+            <li data-testid="model-rail-event" data-kind={e.kind}>
               <div class="meta data">
                 <span class="kind" data-kind={e.kind}>{e.kind}</span>
                 <span>{eventTime(e.at)}</span>
-                <span class="scope">{e.scope}</span>
               </div>
               <div class="line">{e.text}</div>
             </li>
@@ -204,13 +203,6 @@
   .events li[data-kind='tier_edit'] { border-left-color: var(--facet-structure); }
   .events li[data-kind='not_seen'] { border-left-color: var(--facet-register); }
   .events li[data-kind='undo'] { border-left-color: var(--facet-place); }
-  .events li[data-kind='ledger_refit'],
-  .events li[data-kind='ledger_incremental'] { border-left-color: var(--facet-themes); }
-  .events li[data-kind='foldin'],
-  .events li[data-kind='blend_weight'] { border-left-color: var(--facet-characters); }
-  .events li[data-kind='placement'],
-  .events li[data-kind='reconcile'] { border-left-color: var(--facet-visual); }
-  .events li[data-kind='bundle_swap'] { border-left-color: var(--facet-era); }
 
   .meta {
     display: flex;
@@ -222,10 +214,6 @@
     letter-spacing: 0.08em;
     text-transform: uppercase;
     color: var(--ink-3);
-  }
-  .scope {
-    margin-left: auto;
-    opacity: 0.7;
   }
   .line {
     font-family: var(--mono);
