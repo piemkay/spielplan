@@ -32,7 +32,6 @@ STATE_VOTING = "voting"
 STATE_BALLOT = "ballot"
 STATE_RESOLVED = "resolved"
 STATE_ABANDONED = "abandoned"
-LIVE_STATES = (STATE_OPEN, STATE_VOTING, STATE_BALLOT)
 
 ROLE_HOST = "host"
 ROLE_MEMBER = "member"
@@ -444,7 +443,6 @@ __all__ = [
     "CODE_DIGITS",
     "CODE_LENGTH",
     "CODE_LETTERS",
-    "LIVE_STATES",
     "MAX_GUESTS",
     "ROLE_GUEST",
     "ROLE_HOST",

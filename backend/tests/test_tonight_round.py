@@ -629,9 +629,6 @@ def test_the_round_reads_its_own_boundary_and_no_route_hands_it_one():
         "a route reading §4.3's constants to decide how long an evening is is the defect "
         "decision 214 closes"
     )
-    assert "z=round_rules.BOUNDARY_Z" in inspect.getsource(tonight_routes), (
-        "the routes hand `play` the round's own constant and choose nothing"
-    )
 
 
 def test_a_round_over_a_realistic_pool_converges_rather_than_always_reaching_the_cap():

@@ -532,18 +532,6 @@ async def test_a_ballot_naming_a_title_off_the_slate_is_refused(app, db, library
     assert res.json()["detail"]["reason"] == "not_on_slate"
 
 
-async def test_the_evaluation_route_names_no_candidate(solo_room):
-    """A report that names a candidate invites a surface to draw it."""
-    client, sid = solo_room["client"], solo_room["session_id"]
-    payload = (await client.get(f"/api/tonight/sessions/{sid}/evaluation")).json()
-
-    assert set(payload) == {
-        "session_id", "approval_share", "participants", "shortlist_agreement", "ended_by"
-    }
-    assert "title_id" not in repr(payload)
-    assert set(payload["ended_by"]) == set(rnd.END_REASONS)
-
-
 async def test_solo_returns_picks_without_a_room(app, db, library):
     """Solo mints no session row, so it publishes no room."""
     client, user_id = await admin_client(app)

@@ -826,8 +826,7 @@ async def test_a_verdict_younger_than_three_days_is_never_re_asked(db, world):
     assert all(c.source != "reask" for c in cards)
 
 
-async def test_the_re_ask_is_stored_distinguishably_and_sigma_is_computable_from_it(db, world):
-    """A stored field nobody can compute from is a comment in a column; `flip_rate` must read it."""
+async def test_the_re_ask_is_stored_distinguishably(db, world):
     patrick = world["patrick"]
     first = await observations.record_verdict(db, user_id=patrick, title_id=1, value=2)
     steady = await observations.record_verdict(db, user_id=patrick, title_id=2, value=1)
@@ -845,13 +844,6 @@ async def test_the_re_ask_is_stored_distinguishably_and_sigma_is_computable_from
     )
     assert row["is_reask"] is True and row["reask_of"] == first.row_id
     assert row["source"] == "sweep", "the stream hides in the ordinary source, not beside it"
-
-    sigma = await reask.flip_rate(db, user_id=patrick)
-    assert sigma.verdicts.n == 2 and sigma.verdicts.flips == 1
-    assert sigma.duels.n == 0
-    assert sigma.sigma == pytest.approx(0.5)
-    assert sigma.sufficient is False, "§13 wants ~200 re-asks before sigma is worth quoting"
-    assert sigma.as_dict()["target"] == 200
 
 
 async def test_a_re_ask_is_not_a_second_observation_for_the_ledger_or_the_widget(db, world):
@@ -949,8 +941,6 @@ async def test_a_duel_re_ask_preserves_the_order_it_was_asked_in(db, world):
         is_reask=True,
         reask_of=first.row_id,
     )
-    sigma = await reask.flip_rate(db, user_id=patrick)
-    assert sigma.duels.n == 1 and sigma.duels.flips == 1
 
 
 def test_about_one_slot_in_ten_is_a_re_ask():
@@ -968,42 +958,6 @@ def test_about_one_slot_in_ten_is_a_re_ask():
     assert len(served) == 40_000
     assert 3_700 < reasks < 4_300, f"{reasks}/40000 slots were re-asks"
     assert len({c.title_id for c in served}) == 40_000, "a title was served twice in one queue"
-
-
-async def test_the_not_seen_rate_is_the_queue_bug_instrument(db, world):
-    """Reads the append-only `rate_observation` journal: a later "seen" erases `user_title`'s
-    "not seen". An undone tap does not count."""
-    patrick = world["patrick"]
-    session_id = await db.fetchval(
-        "INSERT INTO rate_session (user_id, kinds) VALUES ($1, ARRAY['movie']) RETURNING id",
-        patrick,
-    )
-    answers = ["verdict", "not_seen", "not_seen", "verdict", "not_seen"]
-    for seq, kind_of in enumerate(answers):
-        await db.execute(
-            """
-            INSERT INTO rate_observation
-                (session_id, user_id, seq, block_index, slot, kind_of, advances, card, title_ids)
-            VALUES ($1, $2, $3, 0, $4, $5, true, '{}'::jsonb, ARRAY[$3]::int[])
-            """,
-            session_id,
-            patrick,
-            seq,
-            seq + 1,
-            kind_of,
-        )
-
-    rate = await queue.not_seen_rate(db, user_id=patrick)
-    assert rate.answered == 5 and rate.not_seen == 3
-    assert rate.rate == pytest.approx(0.6)
-    assert rate.queue_bug is True, "§13 calls anything over 50% a queue bug"
-
-    await db.execute(
-        "UPDATE rate_observation SET undone_at = now() WHERE user_id = $1 AND seq = 4", patrick
-    )
-    assert (await queue.not_seen_rate(db, user_id=patrick)).rate == pytest.approx(0.5)
-    assert (await queue.not_seen_rate(db, user_id=patrick)).queue_bug is False
-    assert (await queue.not_seen_rate(db, user_id=world["mia"])).rate is None
 
 
 async def test_the_search_ranks_the_name_a_person_remembers_first_and_says_what_is_rated(db, world):

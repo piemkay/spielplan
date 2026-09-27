@@ -312,7 +312,7 @@ async def _turn_is_open(conn: asyncpg.Connection, row: asyncpg.Record) -> None:
 
 
 async def _round_of(
-    snapshot: Snapshot, row: asyncpg.Record, answers: list[round_rules.Answered], *, z: float,
+    snapshot: Snapshot, row: asyncpg.Record, answers: list[round_rules.Answered]
 ) -> round_rules.Round:
     """One seat's whole round, replayed off the event loop (the search is CPU-bound).
 
@@ -328,7 +328,7 @@ async def _round_of(
 
     def played() -> round_rules.Round:
         return round_rules.replay(
-            prior, answers, z=z, has_profile=is_member,
+            prior, answers, has_profile=is_member,
             axes=combine_rules.axis_positions(snapshot.dna, snapshot.axes),
             # The seat, never the seed: 54b's arm has a second caller with no pool (decision 223).
             holdout_key=str(row["id"]),
@@ -372,8 +372,6 @@ def _card(
             "b": candidates.get(pair.title_b),
         },
         "_pair": pair,
-        "_round": played,
-        "_snapshot": snapshot,
         # Private: whether this call ended the seat, so the round read (the only handler that
         # neither settles nor pushes a frame) can announce it (decision 215).
         "_ended_now": ended_now,
@@ -387,14 +385,13 @@ async def _next_card(
     answered: int,
     answers: list[round_rules.Answered],
     snapshot: Snapshot,
-    z: float,
 ) -> dict[str, Any]:
     """The card a write hands straight back: one snapshot read and one replay for the whole tap.
 
     Runs after the commit, so the ending is conditional on the answer count (`when_answered`): on
     a refusal the card reports the row with no pair and the client re-reads.
     """
-    played = await _round_of(snapshot, row, answers, z=z)
+    played = await _round_of(snapshot, row, answers)
     ended_by, stop_reason = row["ended_by"], played.stop_reason
     ended_now = False
     if stop_reason is not None and ended_by is None:
@@ -410,14 +407,12 @@ async def _next_card(
     )
 
 
-async def state_for(
-    conn: asyncpg.Connection, participant_id: int, *, z: float
-) -> dict[str, Any]:
+async def state_for(conn: asyncpg.Connection, participant_id: int) -> dict[str, Any]:
     """What one participant's device renders, read fresh (the reload); `_card`'s shape."""
     row = await _participant(conn, participant_id)
     snapshot = await snapshot_of(conn, row["session_id"])
     answers = await _answers(conn, participant_id)
-    played = await _round_of(snapshot, row, answers, z=z)
+    played = await _round_of(snapshot, row, answers)
 
     answered, ended_by = row["answered_count"], row["ended_by"]
     stop_reason = played.stop_reason
@@ -450,7 +445,6 @@ async def record_answer(
     answer: str,
     seq: int,
     latency_ms: int | None,
-    z: float,
 ) -> dict[str, Any]:
     """Write one answer, move the tilt, and hand back the next card.
 
@@ -495,7 +489,7 @@ async def record_answer(
         await _set_answered(conn, participant_id, count=row["answered_count"] + 1, tilt=tilt)
         answers = await _answers(conn, participant_id)
     card = await _next_card(
-        conn, row, answered=row["answered_count"] + 1, answers=answers, snapshot=snapshot, z=z,
+        conn, row, answered=row["answered_count"] + 1, answers=answers, snapshot=snapshot,
     )
     # The seq WRITTEN, which after an undo differs from the one the card carried.
     return {**card, "seq": written_seq, "tilt": tilt}
@@ -543,7 +537,7 @@ async def _end(
     return ended is not None
 
 
-async def retract(conn: asyncpg.Connection, participant_id: int, *, z: float) -> dict[str, Any]:
+async def retract(conn: asyncpg.Connection, participant_id: int) -> dict[str, Any]:
     """§6 preamble's "undo everywhere", reaching the round: your latest live answer, while playing.
 
     A tombstone, not a DELETE (§14 risk 6); the tilt is rebuilt from the surviving rows. Under the
@@ -578,7 +572,7 @@ async def retract(conn: asyncpg.Connection, participant_id: int, *, z: float) ->
             )
         await _set_answered(conn, participant_id, count=len(answers), tilt=tilt)
     card = await _next_card(
-        conn, row, answered=len(answers), answers=answers, snapshot=snapshot, z=z,
+        conn, row, answered=len(answers), answers=answers, snapshot=snapshot,
     )
     return {**card, "retracted_seq": last["seq"]}
 
@@ -720,9 +714,7 @@ async def _match_lines(
 
 
 
-async def finish(
-    conn: asyncpg.Connection, session_id: int, *, z: float, phrasing: str | None = None
-) -> combine_rules.Slate | None:
+async def finish(conn: asyncpg.Connection, session_id: int) -> combine_rules.Slate | None:
     """§6.2 step 5, against the stored rows, persisted to `session_result` (§14 risk 6).
 
     None, and nothing written, when the household ended the evening while this ran.
@@ -747,7 +739,7 @@ async def finish(
         answers = await _answers(conn, seat["id"])
         # Off the loop (see `_round_of`), one seat at a time: threads on four vCPUs finish no sooner.
         played = await asyncio.to_thread(
-            round_rules.replay, prior, answers, z=z, has_profile=is_member,
+            round_rules.replay, prior, answers, has_profile=is_member,
             # The seat, as `_round_of` keys it (decision 223).
             holdout_key=str(seat["id"]),
             # No pair: only `played.beliefs` is read, and the pair search is the expensive part.
@@ -768,7 +760,6 @@ async def finish(
         tilts=tilts,
         axes=snapshot.axes,
         dna=snapshot.dna,
-        phrasing=phrasing,
     )
     # Match lines for the ballot's titles only (§6.2 step 7), not the pool's tail.
     on_the_slate = set(slate.ballot_titles)
@@ -809,7 +800,7 @@ async def finish(
     return slate
 
 
-async def settle(conn: asyncpg.Connection, session_id: int, *, z: float) -> bool:
+async def settle(conn: asyncpg.Connection, session_id: int) -> bool:
     """Move a room whose every seat has ended on to the ballot. True if THIS call moved it.
 
     Every read calls it (session, ballot, result), so a failed combine does not strand the room;
@@ -822,7 +813,7 @@ async def settle(conn: asyncpg.Connection, session_id: int, *, z: float) -> bool
     if state != rooms.STATE_VOTING:
         return False
     # `finish` re-checks under the row lock, so the return stays true of THIS call.
-    return await finish(conn, session_id, z=z) is not None
+    return await finish(conn, session_id) is not None
 
 
 __all__ = [

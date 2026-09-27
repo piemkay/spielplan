@@ -1,12 +1,10 @@
-"""Tonight's strings, and the hard rule on conflict copy (§6.2 step 5, §6.5).
+"""Tonight's strings (§6.2 step 5, §6.5).
 
 D supports "one of you is likely to land below your usual" (AUC 0.610), never "someone will hate
-this"; `bounded()` enforces that on the way out rather than asking a prompt for it.
+this".
 """
 
 from __future__ import annotations
-
-import re
 
 # Spec-fixed copy, quoted rather than paraphrased: a paraphrase is where over-claim creeps in.
 SPLIT_LINE = "You're split on {facet} — here's one of each. The axis is zeroed, not averaged."
@@ -35,55 +33,29 @@ USUAL_LINE = "suits {name}'s usual taste — {terms}"
 # §6.2 step 7: every participant gets a match line, a guest without a profile too.
 NO_PROFILE_LINE = "{name} — no profile yet"
 
-# Phrasings that predict a feeling rather than a relative outcome: the claim, not politeness.
-_OVERCLAIM = re.compile(
-    r"\b("
-    r"hate[sd]?|hating|loathe[sd]?|despise[sd]?|detest[sd]?|"
-    r"dislike[sd]?|disliking|"
-    r"can'?t stand|won'?t (?:like|enjoy|want|stand)|will not (?:like|enjoy)|"
-    r"ruin(?:s|ed)?|miserable|resent[sd]?|"
-    r"awful|terrible|unbearable"
-    r")\b",
-    re.IGNORECASE,
-)
-
-
-def overclaims(phrase: str) -> bool:
-    """Does this sentence assert more than D's measured power? Applied to explanations, never titles."""
-    return bool(_OVERCLAIM.search(phrase or ""))
-
-
-def bounded(phrase: str | None, *, d: float) -> str:
-    """The line a participant sees: an empty or over-claiming phrase is replaced, never edited."""
-    if phrase and not overclaims(phrase):
-        return phrase
-    return D_LINE.format(d=d)
-
 
 def split_line(facet: str) -> str:
     return SPLIT_LINE.format(facet=facet)
 
 
-def conflict(facet: str, *, d: float, phrasing: str | None = None) -> dict[str, object]:
-    """Everything a surfaced split says: `headline` is fixed by §6.2; only `explanation` is a model's."""
+def conflict(facet: str, *, d: float) -> dict[str, object]:
+    """Everything a surfaced split says, all of it fixed by §6.2."""
     return {
         "facet": facet,
         "d": round(float(d), 4),
         "headline": split_line(facet),
-        "explanation": bounded(phrasing, d=d),
+        "explanation": D_LINE.format(d=d),
     }
 
 
-def person_conflict(
-    *, d: float, phrasing: str | None = None, one_for_each: bool
-) -> dict[str, object]:
+def person_conflict(*, d: float, one_for_each: bool) -> dict[str, object]:
     """Decision 479's surfaced split, in `conflict`'s shape; `by` names which split this is."""
     return {
         "facet": None,
         "by": "person",
         "d": round(float(d), 4),
         "headline": PERSON_SPLIT_LINE if one_for_each else PERSON_SPLIT_SHORT,
-        "explanation": bounded(phrasing, d=d),
+        "explanation": D_LINE.format(d=d),
     }
 
 
@@ -92,10 +64,7 @@ def for_member(conflict: dict[str, object] | None) -> dict[str, object] | None:
     if not conflict:
         return conflict
     plain = {k: v for k, v in conflict.items() if k != "d"}
-    explanation = str(plain.get("explanation") or "")
-    if re.fullmatch(r"D -?\d+\.\d+ — one of you is likely to land below your usual tonight\.",
-                    explanation):
-        plain["explanation"] = D_LINE_PLAIN
+    plain["explanation"] = D_LINE_PLAIN
     headline = str(plain.get("headline") or "")
     plain["headline"] = headline.replace(_MODEL_SENTENCE, "")
     return plain
@@ -133,13 +102,11 @@ __all__ = [
     "PERSON_SPLIT_SHORT",
     "SPLIT_LINE",
     "USUAL_LINE",
-    "bounded",
     "conflict",
     "for_member",
     "leaned",
     "no_profile",
     "no_pull",
-    "overclaims",
     "person_conflict",
     "split_line",
     "usual",

@@ -35,6 +35,11 @@ class SeenWeights:
 
 WEIGHTS = SeenWeights()
 
+# Decision 521 watches these weights through §13's not-seen rate (">50% = queue bug"), read by hand:
+#   SELECT count(*) FILTER (WHERE kind_of = 'not_seen')::float8 / count(*) FROM (
+#       SELECT kind_of FROM rate_observation WHERE user_id = $1 AND undone_at IS NULL
+#          AND kind_of IN ('verdict', 'not_seen') ORDER BY id DESC LIMIT 200) recent;
+
 # Pseudo-count shrinking a person's own answers towards their own seen rate for the kind.
 FAMILIAR_PSEUDO = 2.0
 
@@ -42,10 +47,6 @@ FAMILIAR_PSEUDO = 2.0
 AGE_SATURATION_YEARS = 40.0
 # log1p(n)/log1p(SAT) clipped to 1: n=10 -> 0.21, n=1e3 -> 0.60, n=1e4 -> 0.80.
 CROWD_SATURATION = 100_000.0
-
-# §13: "not-seen rate in the rating queue (>50% = queue bug)".
-NOT_SEEN_BUG_THRESHOLD = 0.50
-NOT_SEEN_WINDOW = 200
 
 # A recorded state is not an estimate.
 P_SEEN_RECORDED = 1.0
@@ -446,75 +447,17 @@ def _interleave(
     return out
 
 
-# --- §13's instrument -------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class NotSeenRate:
-    """§13: "not-seen rate in the rating queue (>50% = queue bug)"."""
-
-    answered: int
-    not_seen: int
-    window: int
-
-    @property
-    def rate(self) -> float | None:
-        return None if self.answered == 0 else self.not_seen / self.answered
-
-    @property
-    def queue_bug(self) -> bool:
-        rate = self.rate
-        return rate is not None and rate > NOT_SEEN_BUG_THRESHOLD
-
-    def as_dict(self) -> dict[str, Any]:
-        return {
-            "answered": self.answered,
-            "not_seen": self.not_seen,
-            "window": self.window,
-            "rate": self.rate,
-            "queue_bug": self.queue_bug,
-            "threshold": NOT_SEEN_BUG_THRESHOLD,
-        }
-
-
-async def not_seen_rate(
-    conn: asyncpg.Connection, *, user_id: int | None = None, window: int = NOT_SEEN_WINDOW
-) -> NotSeenRate:
-    """How often the queue guessed wrong, over the last `window` answers it got.
-
-    From the append-only journal: in `user_title` a later "seen" erases the "not seen" measured.
-    """
-    row = await conn.fetchrow(
-        """
-        SELECT count(*) AS answered,
-               count(*) FILTER (WHERE kind_of = 'not_seen') AS not_seen
-          FROM (SELECT kind_of
-                  FROM rate_observation
-                 WHERE ($1::bigint IS NULL OR user_id = $1)
-                   AND undone_at IS NULL
-                   AND kind_of IN ('verdict', 'not_seen')
-                 ORDER BY id DESC
-                 LIMIT $2) recent
-        """,
-        user_id,
-        window,
-    )
-    return NotSeenRate(answered=int(row["answered"]), not_seen=int(row["not_seen"]), window=window)
-
-
 __all__ = [
     "AGE_SATURATION_YEARS",
     "CROWD_SATURATION",
     "SOURCES",
     "WEIGHTS",
     "Features",
-    "NotSeenRate",
     "QueueCard",
     "SeenWeights",
     "contributions",
     "dominant",
     "next_sweep_cards",
-    "not_seen_rate",
     "p_seen",
     "reason_for",
     "unfamiliarity",

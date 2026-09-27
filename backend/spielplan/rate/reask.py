@@ -1,4 +1,4 @@
-"""§13 stream (b): the silent re-ask stream, and the flip rate it exists to measure.
+"""§13 stream (b): the silent re-ask stream.
 
 Invisible on the wire (no `reask_of` in `public()`), marked in the row, and excluded from the fit.
 """
@@ -24,8 +24,6 @@ REASK_RATE = 0.10
 REASK_MIN_AGE = timedelta(days=3)
 # Not in §13: without it a small library re-asks the same handful every sitting.
 REASK_COOLDOWN = timedelta(days=90)
-# §13: "~200 re-asks measure the flip rate sigma".
-FLIP_RATE_TARGET_N = 200
 
 
 def draws(rng: random.Random, *, rate: float = REASK_RATE) -> bool:
@@ -193,114 +191,13 @@ async def duel_candidates(
     ]
 
 
-# --- the instrument ---------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class ArmFlips:
-    arm: str
-    n: int
-    flips: int
-
-    @property
-    def rate(self) -> float | None:
-        return None if self.n == 0 else self.flips / self.n
-
-    def as_dict(self) -> dict[str, Any]:
-        return {"arm": self.arm, "n": self.n, "flips": self.flips, "rate": self.rate}
-
-
-@dataclass(frozen=True)
-class FlipRate:
-    """§13's sigma, per arm and pooled: a verdict and a duel are different questions."""
-
-    verdicts: ArmFlips
-    duels: ArmFlips
-    target: int = FLIP_RATE_TARGET_N
-
-    @property
-    def n(self) -> int:
-        return self.verdicts.n + self.duels.n
-
-    @property
-    def flips(self) -> int:
-        return self.verdicts.flips + self.duels.flips
-
-    @property
-    def sigma(self) -> float | None:
-        return None if self.n == 0 else self.flips / self.n
-
-    @property
-    def sufficient(self) -> bool:
-        """§13 wants ~200 re-asks before sigma is worth quoting."""
-        return self.n >= self.target
-
-    def as_dict(self) -> dict[str, Any]:
-        return {
-            "n": self.n,
-            "flips": self.flips,
-            "sigma": self.sigma,
-            "target": self.target,
-            "sufficient": self.sufficient,
-            "verdicts": self.verdicts.as_dict(),
-            "duels": self.duels.as_dict(),
-        }
-
-
-async def flip_rate(
-    conn: asyncpg.Connection,
-    *,
-    user_id: int | None = None,
-    kinds: Sequence[str] | None = None,
-) -> FlipRate:
-    """Compute sigma over every stored re-ask. `user_id=None` pools the household.
-
-    A re-ask whose original was undone drops out of both numerator and denominator.
-    """
-    kind_list = list(kinds) if kinds else None
-    verdicts = await conn.fetchrow(
-        """
-        SELECT count(*) AS n, count(*) FILTER (WHERE r.value <> v.value) AS flips
-          FROM verdict r
-          JOIN verdict v ON v.id = r.reask_of
-          JOIN title t ON t.id = r.title_id
-         WHERE r.is_reask
-           AND ($1::bigint IS NULL OR r.user_id = $1)
-           AND ($2::text[] IS NULL OR t.kind = ANY($2::text[]))
-        """,
-        user_id,
-        kind_list,
-    )
-    duels = await conn.fetchrow(
-        """
-        SELECT count(*) AS n, count(*) FILTER (WHERE r.outcome <> d.outcome) AS flips
-          FROM duel r
-          JOIN duel d ON d.id = r.reask_of
-          JOIN title t ON t.id = r.title_a
-         WHERE r.is_reask
-           AND ($1::bigint IS NULL OR r.user_id = $1)
-           AND ($2::text[] IS NULL OR t.kind = ANY($2::text[]))
-        """,
-        user_id,
-        kind_list,
-    )
-    return FlipRate(
-        verdicts=ArmFlips("verdict", int(verdicts["n"]), int(verdicts["flips"])),
-        duels=ArmFlips("duel", int(duels["n"]), int(duels["flips"])),
-    )
-
-
 __all__ = [
-    "FLIP_RATE_TARGET_N",
     "REASK_COOLDOWN",
     "REASK_MIN_AGE",
     "REASK_RATE",
-    "ArmFlips",
     "DuelReask",
-    "FlipRate",
     "VerdictReask",
     "draws",
     "duel_candidates",
-    "flip_rate",
     "verdict_candidates",
 ]

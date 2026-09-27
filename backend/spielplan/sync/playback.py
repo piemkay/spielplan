@@ -56,7 +56,6 @@ async def arm(
     title_id: int,
     session_id: str,
     progress: float,
-    source: str = "jellyfin",
 ) -> bool:
     """Record a finished playback and arm its prompt. True if this call armed it.
 
@@ -73,15 +72,15 @@ async def arm(
     row = await conn.fetchrow(
         """
         INSERT INTO playback_event (source, title_id, user_id, finished, progress, jf_session_id)
-        SELECT $1::text, $2::integer, $3::bigint, true, $4::real, $5::text
+        SELECT 'jellyfin', $1::integer, $2::bigint, true, $3::real, $4::text
          WHERE NOT EXISTS (SELECT 1 FROM playback_event
-                            WHERE user_id = $3 AND title_id = $2 AND jf_session_id = $5
+                            WHERE user_id = $2 AND title_id = $1 AND jf_session_id = $4
                               AND prompt_state = 'dismissed')
         ON CONFLICT (user_id, title_id) WHERE finished AND prompt_state IN ('armed', 'shown')
         DO NOTHING
         RETURNING id
         """,
-        source, title_id, user_id, progress, session_id,
+        title_id, user_id, progress, session_id,
     )
     return row is not None
 

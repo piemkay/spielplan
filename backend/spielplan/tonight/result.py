@@ -98,12 +98,11 @@ async def slate(
     controls = await conn.fetchrow(
         "SELECT kind, runtime_budget_min FROM session WHERE id = $1", session_id
     )
-    budget = (controls["runtime_budget_min"] if controls else None) or pool_rules.DEFAULT_BUDGET_MIN
     cards = [
         card(
             row,
-            kind=controls["kind"] if controls else None,
-            budget_min=budget,
+            kind=controls["kind"],
+            budget_min=controls["runtime_budget_min"],
             approvals=approvals.get(row["title_id"], 0),
             play_url=play_url,
             show_model=show_model,
