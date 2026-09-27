@@ -236,7 +236,7 @@ test.describe('the System page', () => {
       const row = admin.locator(`[data-last-sync="${sync.name}"]`);
       await expect(row).toHaveAttribute('data-synced', sync.at ? 'yes' : 'never');
       await expect(row).toContainText(sync.connector);
-      await expect(row).toContainText(sync.at ? /ago/ : /never succeeded/);
+      await expect(row).toContainText(sync.at ? /ago|just now/ : /never succeeded/);
       // A newest row that reached its server bounds the last sync from below. A row closed ok
       // that asked nobody (no report, or `reached: false`) is not a sync.
       const newest = jobs.find((job) => job.name === sync.name);

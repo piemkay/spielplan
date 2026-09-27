@@ -374,13 +374,17 @@ test('turning the toggle on reveals the rail, the inline numbers and what did no
   await page.getByTestId('kind-both').click();
   await expect(page.getByTestId('kind-both')).toHaveAttribute('aria-pressed', 'true');
 
+  // The model log opens from You (decision 527).
+  await page.getByTestId('account-chip').click();
   await expect(page.getByTestId('model-rail-open')).toBeVisible();
+  await page.keyboard.press('Escape');
 
   const notes = page.locator('[data-model-note]');
   expect(await notes.count(), 'no inline annotation with the toggle on').toBeGreaterThan(0);
   // §6.8: "model numbers appear in the data voice next to their name … never bare."
   await expect(notes.first()).toHaveText(/[a-zβ]\S*\s+-?\d/i);
 
+  await page.getByTestId('account-chip').click();
   await page.getByTestId('model-rail-open').click();
   const rail = page.getByTestId('model-rail');
   await expect(rail).toBeVisible();
@@ -448,7 +452,9 @@ test('the toggle is off by default, and one user turning it on leaves the other 
     await page.goto('/');
     // The same gate: the rail button comes from `/api/auth/me`, the notes from `/api/home`.
     await expect(page.getByTestId('shelves')).toBeVisible();
+    await page.getByTestId('account-chip').click();
     await expect(page.getByTestId('model-rail-open')).toBeVisible();
+    await page.keyboard.press('Escape');
     expect(await page.locator('[data-model-note]').count()).toBeGreaterThan(0);
 
     // …and the second account's Home is unchanged, on the screen and in the payload.

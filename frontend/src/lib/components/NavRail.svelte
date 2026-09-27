@@ -113,6 +113,7 @@
     }
     nav {
       position: static;
+      flex: 1;
       display: flex;
       flex-direction: column;
       gap: 2px;

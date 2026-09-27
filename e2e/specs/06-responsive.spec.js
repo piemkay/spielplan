@@ -266,9 +266,9 @@ test('on a phone every Rate control is on screen, and a battle keeps Tie and its
   ]) {
     await expect(page.getByTestId(id), `${id} is on the screen`).toBeInViewport();
   }
+  // The row is the shell's top row on Rate (decision 527).
   const sideways = await page
-    .getByTestId('rate-surface')
-    .locator('header.bar')
+    .locator('header.topbar .bar')
     .evaluate((row) => row.scrollWidth - row.clientWidth);
   expect(sideways, 'the header row does not scroll sideways').toBeLessThanOrEqual(0);
 

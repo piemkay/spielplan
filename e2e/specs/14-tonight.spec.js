@@ -216,7 +216,9 @@ test.describe('tonight', () => {
   });
 
   test('the round offers all four answers and locks the escape until pair 6', async () => {
-    // Decision 154's four answers; 54c's escape is not drawn before it is available.
+    // Decision 154's four answers; 54c's escape is not drawn before it is available. Playing the
+    // round out to its end outruns 60 s on WebKit.
+    test.setTimeout(120_000);
     await atTheDoor();
     await page.getByTestId('tonight-open').click();
     await expect(page.getByTestId('tonight-lobby')).toBeVisible();
