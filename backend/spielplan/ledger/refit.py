@@ -744,7 +744,7 @@ async def _write_fit(
 async def _load_local(
     conn: asyncpg.Connection, *, user_id: int, kind: str, title_ids: Sequence[int], hp: Hyperparams
 ) -> tuple[list[Any], list[Any], list[Any], float]:
-    """Only the rows that touch these titles, plus the GLOBAL mean margin `margin_form` divides by."""
+    """Only the rows that touch these titles, plus the GLOBAL mean margin the weighting divides by."""
     ids = list(title_ids)
     verdicts = await conn.fetch(
         """
@@ -798,7 +798,7 @@ async def _load_local(
 
 def _local_hp(hp: Hyperparams, local_margins: np.ndarray, mean_margin: float) -> Hyperparams:
     """Scale λ_bt by mean_local/mean_global so `model`'s own weighting reproduces the nightly one."""
-    if not hp.margin_weighting or hp.margin_form == "none" or local_margins.size == 0:
+    if local_margins.size == 0:
         return hp
     usable = local_margins[np.isfinite(local_margins) & (local_margins > 0)]
     if usable.size == 0 or mean_margin <= 0:

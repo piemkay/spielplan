@@ -18,7 +18,6 @@ from typing import Any
 import numpy as np
 
 from spielplan.db.library import KINDS, Kind, household_ids
-from spielplan.ledger.hyperparams import DEFAULTS
 from spielplan.ledger.observations import LIVE_LABEL_SQL
 from spielplan.scoring import serve
 from spielplan.scoring.backbone import (
@@ -32,19 +31,19 @@ from spielplan.scoring.backbone import (
 
 log = logging.getLogger("spielplan.scoring.foldin")
 
-# These bind the dataclass defaults, not the bundle's values (`hyperparams._PARSED_NOT_THREADED`).
-# BETA_MAX is a floor of one fifth on the crowd prior, not §5.1's optimum.
-BETA_MAX = DEFAULTS.blend_beta_max
-BETA_GRID: tuple[float, ...] = DEFAULTS.blend_beta_grid
+# A floor of one fifth on the crowd prior, not §5.1's optimum; 0009_scoring.sql CHECKs it.
+BETA_MAX = 0.8
+BETA_GRID: tuple[float, ...] = (0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0)
 
 # Cross-validated per user: the Ledger's shipped λ is a different quantity.
-LAMBDA_GRID: tuple[float, ...] = DEFAULTS.foldin_lambda_grid
+LAMBDA_GRID: tuple[float, ...] = (1.0, 3.0, 10.0, 30.0, 100.0)
 
-# §0: an improvement inside pipeline variance is a tie, and a tie must not buy personalisation.
-NOISE_FLOOR = DEFAULTS.rho_noise_floor
+# §0: an improvement inside pipeline variance (0.003-0.008) is a tie, and a tie must not buy
+# personalisation.
+NOISE_FLOOR = 0.008
 
-MIN_LABELS_FOR_CV = DEFAULTS.min_labels_for_cv
-LOO_BELOW = DEFAULTS.loo_below_labels   # leave-one-out under this many, 5 folds at or above
+MIN_LABELS_FOR_CV = 5   # §0/§6.1's learning curve starts at five labels
+LOO_BELOW = 25          # leave-one-out under this many, 5 folds at or above
 
 # Seconds. The tick rewrites the whole user_score partition, so it waits for a pause in the sitting,
 # but at most HARD_CAP_SECONDS.

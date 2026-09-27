@@ -16,8 +16,6 @@ from typing import TYPE_CHECKING, Any, Literal
 
 import numpy as np
 
-from spielplan.ledger.hyperparams import DEFAULTS
-
 if TYPE_CHECKING:  # pragma: no cover - typing only
     from spielplan.models.artifacts import ArtifactStore
 
@@ -25,12 +23,11 @@ log = logging.getLogger("spielplan.scoring.backbone")
 
 EMBED_DIM = 64
 
-# One field shared with §6.0's why-numbers. `DEFAULTS` binds the dataclass default, not the bundle's
-# value; `hyperparams._PARSED_NOT_THREADED` reports the gap.
-EVIDENCE_K = DEFAULTS.gate_k
+# §5.1: "gate = n_t / (n_t + k)", k ~ 10; also printed in §6.0's why-numbers.
+EVIDENCE_K = 10.0
 
 # §5.1 never says which titles are "warm"; warm is where the gate stops changing the answer.
-WARM_GATE = DEFAULTS.warm_gate
+WARM_GATE = 0.9
 WARM_SUPPORT = EVIDENCE_K * WARM_GATE / (1.0 - WARM_GATE)   # 90, still derived from the two
 
 ESource = Literal["backbone", "blended", "cold_tower", "none"]

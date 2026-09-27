@@ -17,9 +17,9 @@ from spielplan.db import library
 from spielplan.home import taste
 from spielplan.home import why as why_mod
 from spielplan.home.why import WhyTerm
-from spielplan.ledger.hyperparams import DEFAULTS
 from spielplan.ledger.observations import LIVE_LABEL_SQL, rescale_level
 from spielplan.scoring import serve
+from spielplan.scoring.backbone import EVIDENCE_K
 
 KIND_HEADINGS: dict[str, str] = {"movie": "Films", "series": "Series"}
 
@@ -534,8 +534,7 @@ async def top_of_ledger(
         why=why,
         why_numbers={"beta": beta, "beta_fitted": bool(ranked["fitted"]),
                      "beta_optimum": DEFAULT_BETA, "label_count": ranked["label_count"],
-                     # The same field `scoring.backbone.EVIDENCE_K` reads.
-                     "gate_k": DEFAULTS.gate_k},
+                     "gate_k": EVIDENCE_K},
         caption=None,
         items=items,
     )
@@ -797,7 +796,7 @@ async def new_in_library(
         heading=KIND_HEADINGS[kind],
         title="New in the library",
         why="no outside ratings yet, so we placed them by what they're about",
-        why_numbers={"gate_k": DEFAULTS.gate_k},     # see `top_of_ledger` - one field, one k
+        why_numbers={"gate_k": EVIDENCE_K},
         items=[_card(row, i + 1, tier_set=tier_set, beta=beta) for i, row in enumerate(rows)],
     )
     return await _finish(conn, section, shelf_id=sid, ctx=ctx)

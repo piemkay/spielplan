@@ -12,7 +12,11 @@ import re
 from dataclasses import asdict, dataclass, replace
 from typing import Any, Literal
 
-MARGIN_FORMS: tuple[str, ...] = ("margin/mean(margin)", "none")
+# §4.3 ships the margin flag and its form. The fit always weights by margin/mean(margin), so a bundle
+# asking for anything else is refused rather than silently served the one form there is.
+MARGIN_FORMS: tuple[str, ...] = (
+    "margin/mean(margin)", "w = margin / mean(margin); 1.0 when disabled",
+)
 
 # §4.3: per-user cutpoints and sensitivities are fitted in-app; shipped ones are ignored and noted.
 # Whole-word anchored, or it would swallow `cutpoint_prior_precision`.
@@ -26,15 +30,12 @@ CORPUS_NAMES: dict[str, str] = {
     "anchor_ridge_lambda": "lambda_ridge",
     "bt_weight_lam_bt": "lambda_bt",
     "learning_rate": "lr",
-    "margin_weight_form": "margin_form",
     "sigma_inflation.trigger_months": "sigma_inflation_grace_months",
     "sigma_inflation.rate_c_per_sqrt_month": "sigma_inflation_c",
     "sigma_inflation.cap": "sigma_inflation_cap",
 }
 
-# Exact matches only, so a genuinely different margin form still hits the `MARGIN_FORMS` refusal.
 CORPUS_VALUES: dict[str, dict[Any, Any]] = {
-    "margin_form": {"w = margin / mean(margin); 1.0 when disabled": "margin/mean(margin)"},
     "sigma_inflation_cap": {"prior_sigma": "prior"},
 }
 
@@ -57,8 +58,6 @@ class Hyperparams:
     lambda_bt: float = 1.0             # "BT weight λ_bt"
     steps: int = 200                   # "step count"
     lr: float = 0.1                    # "learning rate"
-    margin_weighting: bool = True      # "margin-weighting flag"
-    margin_form: str = "margin/mean(margin)"   # "+ functional form"
     tie_prior_delta0: float = 0.22     # "tie-prior initialisation δ₀ = 0.22 (thereafter fitted)"
     # "b_i prior τ". Not shipped; decision 509: at 1.0 a verdict could not outweigh the taste vector.
     b_i_tau: float = 2.0
@@ -81,18 +80,6 @@ class Hyperparams:
     newton_tol: float = 1e-9
     newton_max_iter: int = 50
     lr_min: float = 1e-6
-
-    # --- the serving stack's constants -------------------------------------------------
-    # Their readers bind `DEFAULTS.<field>` at import, so a bundle value is parsed but not served;
-    # see `_PARSED_NOT_THREADED`. Grids are tuples because the dataclass is frozen and hashed.
-    gate_k: float = 10.0               # §5.1: "gate = n_t / (n_t + k)", k ~ 10
-    warm_gate: float = 0.9             # where "rated (warm)" starts; n_t = k*g/(1-g) = 90
-    blend_beta_max: float = 0.8        # §5.1's ceiling, i.e. a floor of a fifth on the crowd
-    blend_beta_grid: tuple[float, ...] = (0.0, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0)
-    foldin_lambda_grid: tuple[float, ...] = (1.0, 3.0, 10.0, 30.0, 100.0)
-    rho_noise_floor: float = 0.008     # §0: "pipeline variance 0.003-0.008; smaller is a tie"
-    min_labels_for_cv: int = 5         # §0/§6.1's learning curve starts at five labels
-    loo_below_labels: int = 25         # leave-one-out under this many, 5 folds at or above
 
     source: Literal["bundle", "default"] = "default"
 
@@ -128,35 +115,16 @@ _POSITIVE = (
     "lambda_ridge", "lambda_bt", "b_i_tau", "mu_prior_tau", "lr",
     "cutpoint_prior_precision", "tie_prior_precision", "sigma_inflation_grace_months",
     "sigma_inflation_c", "margin_decisive", "margin_hesitant", "straddle_z",
-    "gate_k", "blend_beta_max", "rho_noise_floor",
     # `lr_min` at 0 makes `model.py`'s step-halving loop non-terminating.
     "newton_tol", "lr_min",
 )
-_BOOLEAN = ("margin_weighting",)
-# Parsed, range-checked and digested, but their readers bind `DEFAULTS` at import. A bundle that
-# ships one is told so in a note rather than left thinking it applied.
-_PARSED_NOT_THREADED: dict[str, str] = {
-    "gate_k": "scoring.backbone.EVIDENCE_K",
-    "warm_gate": "scoring.backbone.WARM_GATE",
-    "blend_beta_max": "scoring.foldin.BETA_MAX",
-    "blend_beta_grid": "scoring.foldin.BETA_GRID",
-    "foldin_lambda_grid": "scoring.foldin.LAMBDA_GRID",
-    "rho_noise_floor": "scoring.foldin.NOISE_FLOOR",
-    "min_labels_for_cv": "scoring.foldin.MIN_LABELS_FOR_CV",
-    "loo_below_labels": "scoring.foldin.LOO_BELOW",
-}
-_POSITIVE_INT = ("steps", "newton_max_iter", "min_labels_for_cv", "loo_below_labels")
-_GRIDS = ("blend_beta_grid", "foldin_lambda_grid")
+_POSITIVE_INT = ("steps", "newton_max_iter")
 
 
 def _numeric(value: Any) -> Any:
-    """`digest()`'s normaliser: every number as a float, every sequence elementwise. Not bools."""
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, int | float):
+    """`digest()`'s normaliser: every number as a float. Not bools."""
+    if isinstance(value, int | float) and not isinstance(value, bool):
         return float(value)
-    if isinstance(value, list | tuple):
-        return [_numeric(v) for v in value]
     return value
 
 
@@ -168,16 +136,6 @@ def _positive_number(value: Any) -> bool:
 def _positive_int(value: Any) -> bool:
     """The same refusal for the counts. `True` is an `int` whose value is 1."""
     return isinstance(value, int) and not isinstance(value, bool) and value > 0
-
-
-def _grid(key: str, value: Any) -> tuple[float, ...]:
-    """A cross-validation grid, as a tuple of floats (the dataclass is frozen and hashed)."""
-    if not isinstance(value, list | tuple) or not value:
-        raise ValueError(f"{key} must be a non-empty list of numbers, got {value!r}")
-    for item in value:
-        if not (isinstance(item, int | float) and not isinstance(item, bool) and item >= 0):
-            raise ValueError(f"{key} must hold non-negative numbers, got {item!r}")
-    return tuple(float(v) for v in value)
 
 
 def _flatten(raw: dict[str, Any]) -> dict[str, Any]:
@@ -224,6 +182,14 @@ def from_mapping(raw: dict[str, Any], *, source: str = "bundle") -> tuple[Hyperp
         if key in NOT_IMPLEMENTED:
             notes.append(f"{key!r} is tuned by the corpus and has no term in this app's fit")
             continue
+        if key == "margin_weighting":
+            if value is not None and value is not True:
+                raise ValueError(f"margin_weighting must be true (spec section 4.3), got {value!r}")
+            continue
+        if key in ("margin_form", "margin_weight_form"):
+            if value is not None and value not in MARGIN_FORMS:
+                raise ValueError(f"{key} must be margin/mean(margin), got {value!r}")
+            continue
         field = CORPUS_NAMES.get(key, key)
         if field not in known:
             notes.append(f"unknown hyperparameter {key!r} — not applied")
@@ -243,37 +209,17 @@ def from_mapping(raw: dict[str, Any], *, source: str = "bundle") -> tuple[Hyperp
     for key in _POSITIVE:
         if key in fields and not _positive_number(fields[key]):
             raise ValueError(f"{key} must be a positive number, got {fields[key]!r}")
-    for key in _BOOLEAN:
-        # The string "false" is truthy and would leave margin weighting silently on.
-        if key in fields and not isinstance(fields[key], bool):
-            raise ValueError(f"{key} must be a boolean, got {fields[key]!r}")
     for key in _POSITIVE_INT:
         if key in fields and not _positive_int(fields[key]):
             raise ValueError(f"{key} must be a positive integer, got {fields[key]!r}")
-    for key in _GRIDS:
-        if key in fields:
-            fields[key] = _grid(key, fields[key])
     if "tie_prior_delta0" in fields and not 0.0 < fields["tie_prior_delta0"] < 1.0:
         raise ValueError("tie_prior_delta0 is a probability and must lie in (0, 1)")
     if "tension_credible_mass" in fields and not 0.0 < fields["tension_credible_mass"] < 1.0:
         # At 1.0 the interval is the whole line and the badge is silently disabled.
         raise ValueError("tension_credible_mass is a probability and must lie in (0, 1)")
-    if "margin_form" in fields and fields["margin_form"] not in MARGIN_FORMS:
-        raise ValueError(
-            f"margin_form must be one of {MARGIN_FORMS}, got {fields['margin_form']!r}"
-        )
     cap = fields.get("sigma_inflation_cap")
     if cap is not None and cap != "prior" and not _positive_number(cap):
         raise ValueError("sigma_inflation_cap must be 'prior' or a positive number")
-    if "warm_gate" in fields and not 0.0 < fields["warm_gate"] < 1.0:
-        # `WARM_SUPPORT` is k*g/(1-g): 1.0 divides by zero and above it every title is warm.
-        raise ValueError("warm_gate is a probability and must lie in (0, 1)")
-    if "blend_beta_max" in fields and not 0.0 < fields["blend_beta_max"] <= DEFAULTS.blend_beta_max:
-        # 0009_scoring.sql CHECKs blend_beta <= 0.8; a higher ceiling would fail the nightly INSERT.
-        raise ValueError(
-            f"blend_beta_max must lie in (0, {DEFAULTS.blend_beta_max}] - 0009_scoring.sql "
-            "constrains user_vector.blend_beta to that ceiling and migrations are immutable"
-        )
 
     if provisional or unmeasured_rate:
         # After the checks, because 0.0 is what `_POSITIVE` refuses.
@@ -283,15 +229,6 @@ def from_mapping(raw: dict[str, Any], *, source: str = "bundle") -> tuple[Hyperp
             "(sigma_inflation.rate_c_per_sqrt_month null or provisional), so sigma_inflation_c "
             "is 0.0 and no title's sigma grows with neglect until the corpus measures one "
             "(spec section 5.2)"
-        )
-
-    unthreaded = sorted(set(fields) & set(_PARSED_NOT_THREADED))
-    if unthreaded and source == "bundle":
-        notes.extend(
-            f"{key!r} is parsed and range-checked but NOT YET APPLIED: "
-            f"{_PARSED_NOT_THREADED[key]} binds the default {getattr(DEFAULTS, key)!r} at import "
-            "and no loaded Hyperparams reaches it (spec section 5.2)"
-            for key in unthreaded
         )
 
     missing = sorted(known - set(fields))

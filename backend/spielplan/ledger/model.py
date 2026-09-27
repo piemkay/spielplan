@@ -54,7 +54,7 @@ class ObservationSet:
     duel_a: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=np.int64))
     duel_b: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=np.int64))
     duel_outcome: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=np.int64))
-    # The RAW margin, not a weight; `_duel_weights` applies §4.3's `margin_form`.
+    # The RAW margin, not a weight; `_duel_weights` applies §4.3's margin/mean(margin).
     duel_margin: np.ndarray = field(default_factory=lambda: np.zeros(0))
     n_levels: int = 7                           # K, the size of the user's tier set
 
@@ -110,8 +110,6 @@ def _duel_weights(obs: ObservationSet, hp: Hyperparams) -> np.ndarray:
     raw = obs.duel_margin
     if raw.size == 0:
         return raw
-    if not hp.margin_weighting or hp.margin_form == "none":
-        return np.ones(raw.size)
     usable = np.isfinite(raw) & (raw > 0)
     if not np.any(usable):
         return np.ones(raw.size)

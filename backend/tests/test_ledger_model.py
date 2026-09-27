@@ -10,7 +10,7 @@ import numpy as np
 import pytest
 
 from spielplan.ledger import model
-from spielplan.ledger.hyperparams import DEFAULTS, Hyperparams
+from spielplan.ledger.hyperparams import DEFAULTS
 from spielplan.ledger.model import OUT_A, OUT_B, OUT_TIE, ObservationSet
 
 
@@ -292,27 +292,6 @@ def test_a_decisive_duel_teaches_more_than_a_hesitant_one():
     assert (decisive.s[0] - decisive.s[1]) > (hesitant.s[0] - hesitant.s[1])
 
 
-def test_turning_margin_weighting_off_flattens_the_toggle():
-    n = 6
-    obs = ObservationSet(
-        title_ids=np.arange(n, dtype=np.int64), embeddings=np.zeros((n, 64)),
-        embedded=np.zeros(n, bool),
-        ord_index=np.arange(n, dtype=np.int64),
-        ord_level=np.ones(n, dtype=np.int64),
-        ord_arm=np.zeros(n, dtype=np.int64), ord_weight=np.ones(n),
-        duel_a=np.array([0, 2, 2], dtype=np.int64),
-        duel_b=np.array([1, 3, 3], dtype=np.int64),
-        duel_outcome=np.array([OUT_A, OUT_A, OUT_A], dtype=np.int64),
-        duel_margin=np.array([1.6, 1.0, 1.0]),
-    )
-    weighted = model.fit(obs, DEFAULTS)
-    flat = model.fit(obs, dataclasses.replace(DEFAULTS, margin_weighting=False))
-    assert (weighted.s[0] - weighted.s[1]) > (flat.s[0] - flat.s[1])
-
-    by_form = model.fit(obs, dataclasses.replace(DEFAULTS, margin_form="none"))
-    assert np.allclose(by_form.s, flat.s, atol=1e-9), "the form is honoured, not just the flag"
-
-
 def test_a_tier_edit_is_data_on_the_same_latent():
     n = 8
     base = ObservationSet(
@@ -522,10 +501,6 @@ def test_the_solver_constants_reach_the_work_not_the_answer():
     assert hurried.grad_inf > patient.grad_inf, "a hurried fit is measurably less converged"
     assert not hurried.converged, "and it says so rather than claiming otherwise"
     assert patient.converged
-
-
-def test_the_margin_form_is_honoured():
-    assert "margin/mean(margin)" in Hyperparams().margin_form
 
 
 def test_a_full_refit_over_a_whole_owned_library_is_seconds_not_minutes():

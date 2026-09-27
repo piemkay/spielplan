@@ -7,7 +7,6 @@ import contextlib
 import dataclasses
 import json
 import shutil
-from pathlib import Path
 
 import httpx
 import pytest
@@ -89,18 +88,6 @@ def test_an_unknown_constant_is_reported_rather_than_dropped():
         ({"tie_prior_delta0": 1.0}, "probability"),
         ({"margin_form": "margin^2"}, "margin_form"),
         ({"sigma_inflation_cap": -3}, "sigma_inflation_cap"),
-        # `warm_gate` is a probability (WARM_SUPPORT = k*g/(1-g));
-        # `blend_beta_max` is capped by 0009's CHECK at 0.8.
-        ({"gate_k": 0}, "positive number"),
-        ({"warm_gate": 1.0}, "probability"),
-        ({"warm_gate": 0}, "probability"),
-        ({"blend_beta_max": 0.9}, "ceiling"),
-        ({"min_labels_for_cv": 0}, "positive integer"),
-        ({"loo_below_labels": 2.5}, "positive integer"),
-        ({"blend_beta_grid": 0.5}, "non-empty list"),
-        ({"foldin_lambda_grid": []}, "non-empty list"),
-        ({"blend_beta_grid": [0.1, "half"]}, "non-negative numbers"),
-        ({"foldin_lambda_grid": [1.0, -3.0]}, "non-negative numbers"),
         # A tolerance <= 0 declares every Newton solve converged, and `lr_min` 0 never ends the halving.
         ({"newton_tol": -5.0}, "positive number"),
         ({"newton_tol": 0}, "positive number"),
@@ -123,8 +110,7 @@ def test_the_digest_changes_with_any_constant_that_changes_a_fit():
     """`hp_digest` is a precondition: a fit cached under other constants is wrong, not stale."""
     base = DEFAULTS.digest()
     for field, value in (
-        ("lambda_ridge", 4.0), ("lambda_bt", 2.0), ("steps", 5), ("lr", 0.2),
-        ("margin_weighting", False), ("margin_form", "none"), ("tie_prior_delta0", 0.3),
+        ("lambda_ridge", 4.0), ("lambda_bt", 2.0), ("steps", 5), ("lr", 0.2), ("tie_prior_delta0", 0.3),
         ("b_i_tau", 0.5), ("sigma_inflation_c", 0.1), ("sigma_inflation_cap", 3.0),
     ):
         import dataclasses
@@ -216,16 +202,24 @@ def test_the_corpus_spellings_reach_the_fields_they_tune(tmp_path):
     assert hp.lambda_bt == 0.3             # bt_weight_lam_bt — the default is 1.0
     assert hp.lr == 0.5                    # learning_rate — the default is 0.1
     assert hp.steps == 30                  # same name in both, and the default is 200
-    assert hp.margin_form == "margin/mean(margin)"          # margin_weight_form, as prose
     assert hp.sigma_inflation_cap == "prior"                # sigma_inflation.cap, "prior_sigma"
     assert hp.sigma_inflation_grace_months == 12            # sigma_inflation.trigger_months
 
 
-def test_the_prose_form_maps_only_to_itself():
-    """Mapping the prose form by prefix would read any later form as this one."""
-    assert from_mapping({"margin_weight_form": "none"})[0].margin_form == "none"
-    with pytest.raises(ValueError, match="margin_form"):
-        from_mapping({"margin_weight_form": "w = sqrt(margin); 1.0 when disabled"})
+def test_the_one_margin_form_the_fit_applies_is_accepted_and_any_other_refused():
+    """§4.3 ships the flag and the form; the fit only knows margin/mean(margin), so another value
+    must fail the bundle rather than be served the one form there is."""
+    prose = "w = margin / mean(margin); 1.0 when disabled"
+    shipped = {"margin_weighting": True, "margin_weight_form": prose}
+    assert from_mapping(shipped)[0] == from_mapping({})[0]
+    for refused in (
+        {"margin_weighting": False},
+        {"margin_weighting": 1},
+        {"margin_weight_form": "none"},
+        {"margin_weight_form": "w = sqrt(margin); 1.0 when disabled"},
+    ):
+        with pytest.raises(ValueError, match="margin"):
+            from_mapping(refused)
 
 
 def test_a_constant_the_corpus_tuned_and_this_app_cannot_use_is_named(tmp_path):
@@ -247,7 +241,9 @@ def test_no_shipped_key_disappears_without_a_word(tmp_path):
         for leaf in leaves:
             field = CORPUS_NAMES.get(leaf, leaf)
             landed = field in hp.__dataclass_fields__ and field != "source"
-            assert landed or any(leaf in n for n in notes), leaf
+            # The margin flag and form are checked against the one form the fit applies.
+            checked = leaf in ("margin_weighting", "margin_weight_form")
+            assert landed or checked or any(leaf in n for n in notes), leaf
 
 
 def test_an_unmeasured_constant_falls_back_instead_of_refusing_the_bundle():
@@ -317,18 +313,13 @@ def test_from_mapping_refuses_a_boolean_where_a_number_is_required():
         ({"anchor_ridge_lambda": True}, "positive number"),
         ({"steps": True}, "positive integer"),
         ({"newton_max_iter": True}, "positive integer"),
-        ({"min_labels_for_cv": True}, "positive integer"),
-        ({"gate_k": True}, "positive number"),
-        ({"blend_beta_grid": [0.0, True]}, "non-negative numbers"),
-        ({"margin_weight_form": True}, "margin_form"),
+        ({"margin_weight_form": True}, "margin_weight_form"),
         ({"newton_tol": True}, "positive number"),
         ({"lr_min": True}, "positive number"),
         ({"sigma_inflation_cap": True}, "sigma_inflation_cap"),
     ):
         with pytest.raises(ValueError, match=message):
             from_mapping(payload)
-    # The one place a boolean IS the type.
-    assert from_mapping({"margin_weighting": False})[0].margin_weighting is False
 
 
 def test_the_digest_is_the_same_for_twelve_and_twelve_point_zero():
@@ -337,86 +328,11 @@ def test_the_digest_is_the_same_for_twelve_and_twelve_point_zero():
         ("steps", (12, 12.0)),
         ("newton_max_iter", (50, 50.0)),
         ("sigma_inflation_grace_months", (12, 12.0)),
-        ("min_labels_for_cv", (5, 5.0)),
     ):
         digests = {dataclasses.replace(DEFAULTS, **{field: v}).digest() for v in spellings}
         assert len(digests) == 1, f"{field}: int and float spellings produced {digests}"
-    # A list and a tuple of the same grid are the same constants too.
-    as_list = dataclasses.replace(DEFAULTS, blend_beta_grid=list(DEFAULTS.blend_beta_grid))
-    assert as_list.digest() == DEFAULTS.digest()
     # And the digest still MOVES for a real change, or the above are satisfied by a constant function.
     assert dataclasses.replace(DEFAULTS, steps=13).digest() != DEFAULTS.digest()
-
-
-def test_the_foldin_grid_the_gate_k_and_the_warm_threshold_are_bundle_constants():
-    """Eight constants lived in `scoring/`, where a corpus-side re-tune could not reach them."""
-    from spielplan.scoring import backbone as bb
-    from spielplan.scoring import foldin
-
-    assert (DEFAULTS.gate_k, DEFAULTS.warm_gate) == (10.0, 0.9)
-    assert DEFAULTS.blend_beta_max == 0.8
-    assert DEFAULTS.blend_beta_grid == tuple(i / 10 for i in range(11))
-    assert DEFAULTS.foldin_lambda_grid == (1.0, 3.0, 10.0, 30.0, 100.0)
-    assert (DEFAULTS.rho_noise_floor, DEFAULTS.min_labels_for_cv, DEFAULTS.loo_below_labels) == (
-        0.008, 5, 25
-    )
-
-    # The modules read the field rather than carrying a copy of its value.
-    assert (DEFAULTS.gate_k, DEFAULTS.warm_gate) == (bb.EVIDENCE_K, bb.WARM_GATE)
-    assert DEFAULTS.gate_k * DEFAULTS.warm_gate / (1.0 - DEFAULTS.warm_gate) == bb.WARM_SUPPORT
-    # 90 plus one ulp, because it is computed and not written.
-    assert bb.WARM_SUPPORT > 90.0 and bb.WARM_SUPPORT - 90.0 < 1e-9
-    assert DEFAULTS.blend_beta_max == foldin.BETA_MAX
-    assert DEFAULTS.blend_beta_grid == foldin.BETA_GRID
-    assert DEFAULTS.foldin_lambda_grid == foldin.LAMBDA_GRID
-    assert DEFAULTS.rho_noise_floor == foldin.NOISE_FLOOR
-    assert DEFAULTS.min_labels_for_cv == foldin.MIN_LABELS_FOR_CV
-    assert DEFAULTS.loo_below_labels == foldin.LOO_BELOW
-
-    # Parsed and range-checked, but NOT yet served: the module says so once per re-tuned constant.
-    tuned, notes = from_mapping({"gate_k": 12.0, "blend_beta_grid": [0.0, 0.25, 0.5]})
-    assert tuned.gate_k == 12.0 and tuned.blend_beta_grid == (0.0, 0.25, 0.5)
-    assert not [n for n in notes if "unknown hyperparameter" in n], notes
-    assert bb.EVIDENCE_K == DEFAULTS.gate_k == 10.0, (
-        "the serving constant is an import-time binding of the DEFAULT, not of the loaded bundle"
-    )
-    assert bb.gate(30) == pytest.approx(0.75), "and the gate is computed with that same 10.0"
-    named = [n for n in notes if "NOT YET APPLIED" in n]
-    assert sorted(n.split("'")[1] for n in named) == ["blend_beta_grid", "gate_k"], named
-    assert all("scoring." in n for n in named), (
-        "the note has to name the reader that is still on the default, or it is not actionable"
-    )
-    assert all(n.isascii() for n in named), "an import report is read on a cp1252 console"
-    # Every one of the eight, so threading one later means one list to edit.
-    _, every = from_mapping({k: getattr(DEFAULTS, k) for k in hp_module._PARSED_NOT_THREADED})
-    assert len([n for n in every if "NOT YET APPLIED" in n]) == 8, every
-    # A constant that DOES reach its reader must not be labelled.
-    _, ledger_side = from_mapping({"anchor_ridge_lambda": 2.5})
-    assert not [n for n in ledger_side if "NOT YET APPLIED" in n], ledger_side
-    # Each of the eight changes a fit, so each belongs in the digest.
-    for field, value in (
-        ("gate_k", 12.0), ("warm_gate", 0.8), ("blend_beta_max", 0.5),
-        ("blend_beta_grid", (0.0, 0.5)), ("foldin_lambda_grid", (2.0,)),
-        ("rho_noise_floor", 0.004), ("min_labels_for_cv", 8), ("loo_below_labels", 40),
-    ):
-        assert dataclasses.replace(DEFAULTS, **{field: value}).digest() != DEFAULTS.digest(), field
-
-
-def test_the_model_line_reads_the_gate_k_the_scoring_stack_reads():
-    """The why-line printed the literal 10; a re-tuned k would have left it naming the old number."""
-    from spielplan.home import shelves
-    from spielplan.scoring import backbone as bb
-
-    source = Path(shelves.__file__).read_text(encoding="utf-8")
-    assert '"gate_k": 10' not in source, "the literal is back; §6.0's k has two spellings again"
-    assert source.count('"gate_k": DEFAULTS.gate_k') == 2, (
-        "both why-number dicts - `top_of_ledger` and `new_in_library` - read the field"
-    )
-    assert DEFAULTS.gate_k == bb.EVIDENCE_K
-    # The printed gate is computed from that same k.
-    assert bb.gate(DEFAULTS.gate_k) == pytest.approx(0.5), (
-        "gate(k) = 0.5 by construction; if this moves, `gate_k` is not the gate's k"
-    )
 
 
 # §10 makes a bundle swap a restart, so the constants are read once, into `app.state`.
