@@ -1,4 +1,4 @@
-"""Placement reconciliation (§5.3) and §10's rebuild set.
+"""Placement reconciliation (§5.3).
 
 Warm titles have no `title_placement` row: their coordinate is the shipped Backbone row. A covered
 title below `WARM_SUPPORT` is swept so §5.1's blend has an ê to use.
@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import logging
 import time
-from collections.abc import Awaitable, Callable, Sequence
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -385,57 +385,6 @@ async def placement_counts(conn: Any, *, bundle_version: str) -> dict[str, int]:
     return {**{k: int(v) for k, v in dict(row).items()}, "placement_rows": int(placements)}
 
 
-# --- §10's rebuild set: exactly four steps; the first three are injected ----------------------
-
-
-@dataclass(frozen=True)
-class RebuildStep:
-    id: str
-    title: str
-    run: Callable[[Any, Any, str], Awaitable[dict[str, Any]]]
-
-
-REBUILD_SET: tuple[str, ...] = (
-    "user fold-in vectors (closed-form, ms)",
-    "per-label-count blend weights",
-    "full Personal Ledger MAP refit",
-    "Cold Tower re-placement of every app-acquired title",
-)
-
-REBUILD_STEP_IDS: tuple[str, ...] = (
-    "user-foldin", "blend-weights", "ledger-map-refit", "cold-tower-replacement",
-)
-
-# §10: the Map is a deterministic axis scatter and needs no rebuild step.
-FORBIDDEN_STEP_WORDS: tuple[str, ...] = ("umap", "procrustes", "axis", "explore", "map rebuild")
-
-
-async def _noop(_conn: Any, _store: Any, _version: str) -> dict[str, Any]:
-    """A rebuild step whose lens is not wired in yet. It reports rather than pretends."""
-    return {"skipped": "not wired"}
-
-
-def rebuild_plan(
-    *,
-    fold_in: Callable[[Any, Any, str], Awaitable[dict[str, Any]]] | None = None,
-    blend_weights: Callable[[Any, Any, str], Awaitable[dict[str, Any]]] | None = None,
-    ledger_refit: Callable[[Any, Any, str], Awaitable[dict[str, Any]]] | None = None,
-) -> tuple[RebuildStep, ...]:
-    """§10's four steps, in §10's order. The first three are injected."""
-    return (
-        RebuildStep(REBUILD_STEP_IDS[0], REBUILD_SET[0], fold_in or _noop),
-        RebuildStep(REBUILD_STEP_IDS[1], REBUILD_SET[1], blend_weights or _noop),
-        RebuildStep(REBUILD_STEP_IDS[2], REBUILD_SET[2], ledger_refit or _noop),
-        RebuildStep(REBUILD_STEP_IDS[3], REBUILD_SET[3], _replace_placements),
-    )
-
-
-async def _replace_placements(conn: Any, store: Any, version: str) -> dict[str, Any]:
-    """Step 4. The import-time sweep (§5.3) is folded in here rather than added as a fifth step."""
-    report = await reconcile(conn, store, bundle_version=version, scope="reimport")
-    return report.as_dict()
-
-
 async def assert_staged(conn: Any, store: Any, version: str) -> None:
     """§10's one sanctioned exception to "score only the active bundle": the staged rebuild."""
     if getattr(store, "version", None) != version:
@@ -451,34 +400,3 @@ async def assert_staged(conn: Any, store: Any, version: str) -> None:
             f"bundle {version!r} is {state!r}; §10 recomputes the rebuild set against a "
             "*staged* bundle, which is one that validated"
         )
-
-
-async def run_rebuild(
-    conn: Any,
-    store: Any,
-    version: str,
-    *,
-    fold_in: Callable[[Any, Any, str], Awaitable[dict[str, Any]]] | None = None,
-    blend_weights: Callable[[Any, Any, str], Awaitable[dict[str, Any]]] | None = None,
-    ledger_refit: Callable[[Any, Any, str], Awaitable[dict[str, Any]]] | None = None,
-) -> list[dict[str, Any]]:
-    """Run §10's rebuild set against the staged bundle. Observations are never touched."""
-    await assert_staged(conn, store, version)
-
-    plan = rebuild_plan(fold_in=fold_in, blend_weights=blend_weights, ledger_refit=ledger_refit)
-
-    # Placement runs first: steps 1-3 read the coordinates it writes. The report keeps §10's order.
-    order = {"cold-tower-replacement": 0}
-    outcomes: dict[str, dict[str, Any]] = {}
-    for step in sorted(plan, key=lambda s: order.get(s.id, 1)):
-        began = time.perf_counter()
-        outcome = await step.run(conn, store, version)
-        outcomes[step.id] = {
-            "id": step.id,
-            "title": step.title,
-            "elapsed_ms": int(round((time.perf_counter() - began) * 1000)),
-            **(outcome or {}),
-        }
-    results = [outcomes[step.id] for step in plan]
-    log.info("rebuild set for %s: %s", version, [r["id"] for r in results])
-    return results

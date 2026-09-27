@@ -14,7 +14,7 @@ import shutil
 import sqlite3
 import tarfile
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -37,8 +37,13 @@ from spielplan.placement import reconcile as placement
 # returned, so the staging cleanup outcome is logged instead.
 log = logging.getLogger("spielplan.importer")
 
-# §10's rebuild set, defined once in `placement`.
-REBUILD_SET = placement.REBUILD_SET
+# §10's rebuild set, as the Data tab lists it.
+REBUILD_SET: tuple[str, ...] = (
+    "user fold-in vectors (closed-form, ms)",
+    "per-label-count blend weights",
+    "full Personal Ledger MAP refit",
+    "Cold Tower re-placement of every app-acquired title",
+)
 
 # Decision 162's mint floor, below 2^31 because id columns are `integer` and `ledger_fit.title_ids`
 # is int32. Also in `0015_seed.sql`.
@@ -48,58 +53,30 @@ APP_ID_MIN = 1_000_000_000
 _ID_BEARING_NPZ = ("backbone.npz", "review_text_emb.npz")
 
 
-# `placement.rebuild_plan` takes the rebuild steps injected; each is `async (conn, store, version) ->
-# dict`.
-
-
-async def _rebuild_fold_in(conn: Any, store: Any, version: str) -> dict[str, Any]:
-    """§10 steps 1 and 2 in one pass: one cross-validated fit produces both."""
-    from spielplan.scoring import backbone as bb
-    from spielplan.scoring import foldin
-
-    report = await foldin.run(
-        conn, bb.load_for(store), bundle_version=version, only_stale=False, with_priors=True
-    )
-    return report.as_dict()
-
-
-async def _rebuild_blend_weights(conn: Any, _store: Any, version: str) -> dict[str, Any]:
-    """§10 step 2. Reports the β the step-1 fit produced, per user and kind."""
-    rows = await conn.fetch(
-        "SELECT user_id, kind, blend_beta, label_count FROM user_vector "
-        " WHERE bundle_version = $1 ORDER BY user_id, kind",
-        version,
-    )
-    return {
-        "weights": [
-            {"user_id": r["user_id"], "kind": r["kind"],
-             "beta": float(r["blend_beta"] or 0.0), "labels": r["label_count"]}
-            for r in rows
-        ]
-    }
-
-
-async def _rebuild_ledger_refit(conn: Any, store: Any, version: str) -> dict[str, Any]:
-    """§10 step 3: "a **full** Personal Ledger MAP refit", against the STAGED `version`.
-
-    Without the explicit version the refit read the outgoing bundle's placements and stamped its version.
-    """
+async def rebuild(conn: Any, store: Any, version: str, report: ImportReport) -> None:
+    """§10's rebuild set against the staged bundle. Placement runs first: the fits read its coordinates."""
     from spielplan.ledger import observations, refit
     from spielplan.ledger.hyperparams import load as load_hp
     from spielplan.scoring import backbone as bb
+    from spielplan.scoring import foldin
+
+    await placement.assert_staged(conn, store, version)
+    placed = await placement.reconcile(conn, store, bundle_version=version, scope="reimport")
+    report.note("rebuild", f"{REBUILD_SET[3]}: {placed.as_dict()}")
+
+    basis = bb.load_for(store)
+    # One cross-validated fit produces both the vectors and the blend weights.
+    folded = await foldin.run(conn, basis, bundle_version=version, only_stale=False, with_priors=True)
+    report.note("rebuild", f"{REBUILD_SET[0]}; {REBUILD_SET[1]}: {folded.as_dict()}")
 
     hp, _notes = load_hp(store)
-    # Against the staged bundle's Backbone: the whole point is moving every fitted number to the new
-    # basis. `run_rebuild` has already asserted `store.version == version`.
-    reports = await refit.refit_all(
+    fits = await refit.refit_all(
         conn,
         hp,
-        embeddings=observations.standard_embeddings(
-            conn, bb.load_for(store), bundle_version=version
-        ),
+        embeddings=observations.standard_embeddings(conn, basis, bundle_version=version),
         bundle_version=version,
     )
-    return {"fits": [r.as_dict() for r in reports]}
+    report.note("rebuild", f"{REBUILD_SET[2]}: {[f.as_dict() for f in fits]}")
 
 
 @dataclass
@@ -113,6 +90,8 @@ class Bundle:
     # Findings `open` produced before a report existed, as `(severity, message)`; `validate` replays
     # them first. A refusal must be read, not raised (decision 257).
     open_findings: tuple[tuple[str, str], ...] = ()
+    # BUNDLE.json, read once: the corpus's own record of what this bundle is.
+    identity: dict[str, Any] = field(default_factory=dict)
 
     @property
     def kind(self) -> str:
@@ -129,7 +108,7 @@ class Bundle:
         root = path if path.is_dir() else _unpack(path, findings)
         if root.is_dir() and not (root / "BUNDLE.json").is_file():
             root = _archive_within(root, findings) or root
-        identity = _identity(root)
+        identity = _identity(root, findings)
         content = root / "content.sqlite"
         reviews = root / "reviews.sqlite"
         return cls(
@@ -140,22 +119,24 @@ class Bundle:
             artifacts_dir=root / "artifacts",
             vocabulary_version=_vocabulary_version(identity, root / "artifacts", findings),
             open_findings=tuple(findings),
+            identity=identity,
         )
 
 
-def _identity(root: Path) -> dict[str, Any]:
-    """`BUNDLE.json` at the bundle root: the corpus's own record of what this bundle is.
-
-    Missing or unparseable is not raised here; it becomes the report's "no usable bundle_version".
-    """
+def _identity(root: Path, findings: list[tuple[str, str]]) -> dict[str, Any]:
+    """`BUNDLE.json` at the bundle root, or {}; `refuse_on_path` refuses a missing one."""
     path = root / "BUNDLE.json"
     if not path.is_file():
         return {}
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    except (OSError, ValueError) as exc:
+        findings.append(("fail", f"BUNDLE.json is not readable JSON: {exc}"))
         return {}
-    return payload if isinstance(payload, dict) else {}
+    if not isinstance(payload, dict):
+        findings.append(("fail", f"BUNDLE.json is a {type(payload).__name__}, not an object"))
+        return {}
+    return payload
 
 
 def _vocabulary_version(
@@ -431,8 +412,8 @@ def _report_app_range(report: ImportReport, source: str, offending: Iterable[Any
 def refuse_on_path(bundle: Bundle, report: ImportReport) -> None:
     """What is true of the PATH the operator named, before anything is said about the bundle.
 
-    Replays `Bundle.open`'s findings and refuses a path missing `BUNDLE.json` or `artifacts/`.
-    Both validate callers ask this first, so the path is judged before the install.
+    Replays `Bundle.open`'s findings and refuses a path missing `artifacts/`, `BUNDLE.json` or its
+    `bundle_version`. Both validate callers ask this first, so the path is judged before the install.
     """
     # Replayed first so "the archive inside was opened" heads the report.
     for severity, message in bundle.open_findings:
@@ -455,6 +436,27 @@ def refuse_on_path(bundle: Bundle, report: ImportReport) -> None:
             "them things every bundle carries, so this is a partial copy rather than a bundle. "
             "Re-copy or re-extract it and import it again",
         )
+    elif not (bundle.root / "BUNDLE.json").is_file():
+        report.fail(
+            "bundle-identity",
+            "BUNDLE.json is missing from the bundle root — it records `bundle_version`, which "
+            "names the artifact directory and stamps every placement, prior and score (§10)",
+        )
+    elif not (declared := bundle.identity.get("bundle_version")):
+        report.fail(
+            "bundle-identity",
+            "BUNDLE.json records no `bundle_version`; an import stamped 'unknown' cannot be "
+            "told apart from the next one (§10's migration report), and the artifact directory it "
+            "names would be shared by every bundle",
+        )
+    elif bundle.version == "unknown":
+        report.fail(
+            "bundle-identity",
+            f"BUNDLE.json's `bundle_version` {str(declared)!r} is not a usable name for the "
+            "artifact directory it becomes: it must be a plain [A-Za-z0-9._-] token, because "
+            "it is both a path segment under /data/artifacts and an rmtree target",
+            bundle_version=str(declared),
+        )
 
 
 def validate(
@@ -466,13 +468,15 @@ def validate(
     `spine` and `active_coverage` come from `validate_for_install`; synchronous so fixture tests can
     validate a bundle with no install behind them.
     """
-    report = ImportReport(bundle_version=bundle.version)
+    report = ImportReport(
+        bundle_version=bundle.version, vocabulary_version=bundle.vocabulary_version
+    )
     refuse_on_path(bundle, report)
     if not report.ok:
         return report
 
     # The shipped hashes, first: every later rule assumes the bytes are intact.
-    validator._verify_bundle_files(bundle.root, report)
+    validator._verify_bundle_files(bundle.root, bundle.identity, report)
 
     # Decision 162's boundary stops the report: nothing else about ids can be believed past it.
     validate_id_partition(bundle, report)
@@ -511,9 +515,9 @@ def validate(
         finally:
             rdb.close()
 
-    # Asked here too so the refusal is reachable before anything is staged; the in-transaction call
-    # is the backstop.
-    validator.compare_table_counts(bundle.root, report)
+    # Asked here so the refusal is reachable before anything is staged.
+    validator.compare_table_counts(bundle.identity, report)
+    validator._validate_nullable_pk_columns(bundle.identity, report)
 
     validator.validate_artifacts(
         bundle.artifacts_dir, report, spine=spine, active_coverage=active_coverage
@@ -523,9 +527,6 @@ def validate(
     corrections = bundle.artifacts_dir / "corrections_v1.tsv"
     if corrections.is_file():
         dna_loader.parse_corrections(corrections, report)
-
-    # Restores `Bundle.open`'s answer when `validate_artifacts` returned early.
-    report.vocabulary_version = bundle.vocabulary_version or report.vocabulary_version
     return report
 
 
@@ -554,11 +555,8 @@ def _note_series_runtime(db: sqlite3.Connection, report: ImportReport) -> None:
     )
 
 
-def _refuse_self_staging(bundle: Bundle, artifacts_root: Path, report: ImportReport) -> bool:
-    """Refuse a bundle that lives inside the tree its own import is about to delete, or vice versa.
-
-    A predicate so the destructive `rmtree` can ask it directly, as well as `validate_for_install`.
-    """
+def _refuse_self_staging(bundle: Bundle, artifacts_root: Path, report: ImportReport) -> None:
+    """Refuse a bundle that lives inside the tree its own import is about to delete, or vice versa."""
     root = bundle.root.resolve()
     staged = (artifacts_root / bundle.version).resolve()
     if root == staged or root.is_relative_to(staged) or staged.is_relative_to(root):
@@ -569,8 +567,6 @@ def _refuse_self_staging(bundle: Bundle, artifacts_root: Path, report: ImportRep
             "directory and import it from there",
             bundle=str(root), staged=str(staged),
         )
-        return True
-    return False
 
 
 def _needs_restage(artifacts_root: Path, version: str) -> bool:
@@ -599,7 +595,6 @@ async def refuse_on_install_state(
     restaging = (
         already == "active"
         and artifacts_root is not None
-        and bundle.version != "unknown"
         and _needs_restage(artifacts_root, bundle.version)
     )
     if restaging:
@@ -610,10 +605,9 @@ async def refuse_on_install_state(
             "re-import",
         )
     elif already == "active":
-        # Checked at validation so the operator sees it before committing; `import_bundle` checks again.
         report.fail("bundle", f"bundle {bundle.version} is already the active bundle")
 
-    if artifacts_root is not None and bundle.version != "unknown":
+    if artifacts_root is not None:
         _refuse_self_staging(bundle, artifacts_root, report)
 
     # The staging directory must be writable, asked at the decision point (C10.2).
@@ -780,21 +774,19 @@ async def _drop_orphan_staging(
     conn: asyncpg.Connection, bundle: Bundle, staged: Path, report: ImportReport,
     *, wrote: bool = False,
 ) -> None:
-    """After a failed import: remove the staged tree if no `artifact_bundle` row names it.
-
-    Rows keep their files (decision 249), unless `wrote` says this import emptied and half-refilled it.
+    """After a failed import, the staged tree stays only if a row names it and this import's copy
+    did not begin replacing it (`wrote`): rows keep their files (decision 249), half a copy does not.
     """
-    named = await conn.fetchval(
-        "SELECT version FROM artifact_bundle WHERE version = $1", bundle.version
-    )
     if not staged.exists():
-        # Nothing was ever created: say so rather than claiming files remain.
         report.note(
             "rollback",
             "the import did not complete and no rows were written, and nothing was staged at "
             f"{staged}.",
         )
         return
+    named = await conn.fetchval(
+        "SELECT version FROM artifact_bundle WHERE version = $1", bundle.version
+    )
     if named is not None and not wrote:
         report.note(
             "rollback",
@@ -803,25 +795,12 @@ async def _drop_orphan_staging(
         )
         return
     shutil.rmtree(staged, ignore_errors=True)
-    if staged.exists():
-        # `ignore_errors` hides failures, so report what is actually still there.
-        report.note(
-            "rollback",
-            "the import did not complete and no rows were written, and the artifacts it had "
-            f"begun staging at {staged} could not be removed - delete that directory by hand "
-            "before importing this version again.",
-        )
-        return
+    # `ignore_errors` hides failures, so report what is actually still there.
     report.note(
         "rollback",
-        "the import did not complete and no rows were written, and the artifacts staged at "
-        f"{staged} were removed: " + (
-            "they are half of a copy this import wrote, and half a bundle is neither one this "
-            "install can serve nor one a restore can roll back to."
-            if named is not None else
-            "no artifact_bundle row names that version, so nothing else would ever have found "
-            "them."
-        ),
+        f"the import did not complete and no rows were written, and the artifacts staged at {staged} "
+        + ("could not be removed - delete that directory by hand before importing this version again."
+           if staged.exists() else "were removed."),
     )
 
 
@@ -849,32 +828,16 @@ async def import_bundle(
         if not report.ok:
             return report
 
-        # Stage the artifacts BEFORE touching the DB (§10 swap sequence step 2).
-        if bundle.version == "unknown":
-            report.fail(
-                "bundle",
-                "BUNDLE.json at the bundle root has no usable `bundle_version` — it names the "
-                "artifact directory, so it must be a plain [A-Za-z0-9._-] token",
-            )
-            return report
-        staged = (artifacts_root / bundle.version).resolve()
-        if not staged.is_relative_to(artifacts_root.resolve()):
-            report.fail("bundle", f"bundle version {bundle.version!r} escapes the artifacts root")
-            return report
-        if _refuse_self_staging(bundle, artifacts_root, report):
-            # A7 again, beside the `rmtree` it protects.
-            return report
+        # Stage the artifacts BEFORE touching the DB (§10 swap sequence step 2). Not resolved, so
+        # `rmtree` refuses a symlink there rather than following it out of the root.
+        staged = artifacts_root / bundle.version
 
         # `kind` is read so a restage keeps it: the seed row's kind is the only record content was seeded.
         existing = await conn.fetchrow(
             "SELECT state, kind FROM artifact_bundle WHERE version = $1", bundle.version
         )
-        already = existing["state"] if existing is not None else None
         # Decision 253's restage: an active row with no directory.
-        restaging = already == "active"
-        if restaging and not _needs_restage(artifacts_root, bundle.version):
-            report.fail("bundle", f"bundle {bundle.version} is already the active bundle")
-            return report
+        restaging = existing is not None and existing["state"] == "active"
 
         # The destructive filesystem steps get their own guard. `emptied` and `existed` tell
         # `_drop_orphan_staging` whose tree is on disk after a failed copy.
@@ -927,28 +890,12 @@ async def import_bundle(
                 # Decision 162: a models-only re-import loads no content.
                 if db is not None:
                     db.text_factory = str
-                    # The loader needs the root: `BUNDLE.json` carries the source priority.
-                    await content_loader.load_content(conn, db, report, bundle_root=bundle.root)
+                    await content_loader.load_content(conn, db, report)
                     if not report.ok:
                         # `load_content` returns (not raises) on shape refusals; roll back before later
                         # loaders hit FKs.
                         raise _Rollback(report)
 
-                    # Counted apart, never summed (§4.1 rule 1).
-                    tagged_rows = report.table_counts.get("dna_tag") or 0
-                    projected_rows = report.table_counts.get("dna_projected") or 0
-                    if vocabulary is None and (tagged_rows or projected_rows):
-                        # Decision 256: no code path invents a vocabulary version. Backstop for the
-                        # validator's refusal.
-                        report.fail(
-                            "vocabulary",
-                            f"this bundle ships {tagged_rows:,} dna_tag and {projected_rows:,} "
-                            "dna_projected row(s) and names no vocabulary version: §4.3 names it "
-                            "by the `dna_vocab/<version>/` directory and BUNDLE.json may declare "
-                            "it, and this import will not invent one",
-                            dna_tag=tagged_rows, dna_projected=projected_rows,
-                        )
-                        raise _Rollback(report)
                     if vocabulary is not None:
                         vocab_dir = bundle.artifacts_dir / "dna_vocab" / vocabulary
                         if vocab_dir.is_dir():
@@ -1024,9 +971,6 @@ async def import_bundle(
                             # `load_axes` reads `dna_facet` itself on a models-only bundle (decision 173).
                             await dna_loader.load_axes(conn, vocab_dir, vocabulary, report)
 
-                # Inside the transaction, so a count mismatch rolls the load back.
-                validator.compare_table_counts(bundle.root, report)
-
                 if not report.ok:
                     raise _Rollback(report)
 
@@ -1044,7 +988,7 @@ async def import_bundle(
                           kind = EXCLUDED.kind, vocabulary_version = EXCLUDED.vocabulary_version
                     """,
                     bundle.version,
-                    _manifest_of(bundle),
+                    bundle.identity,
                     report.as_dict(),
                     # The stored kind on a restage, never the bundle's: `kind` is the record of seeding
                     # (decision 162).
@@ -1054,14 +998,9 @@ async def import_bundle(
                 )
                 if activate:
                     # Before the flip, so a failed rebuild takes the import down with it.
-                    steps = await placement.run_rebuild(
-                        conn, ArtifactStore.open(staged, bundle.version), bundle.version,
-                        fold_in=_rebuild_fold_in,
-                        blend_weights=_rebuild_blend_weights,
-                        ledger_refit=_rebuild_ledger_refit,
+                    await rebuild(
+                        conn, ArtifactStore.open(staged, bundle.version), bundle.version, report
                     )
-                    for step in steps:
-                        report.note("rebuild", f"{step['title']}: {step.get('result', step)}")
 
                     # §10: transactionally flip. The partial unique index guarantees one active row.
                     already_active = await conn.fetchval(
@@ -1146,11 +1085,6 @@ def _clean_unpacked(bundle: Bundle, report: ImportReport) -> None:
         )
     else:
         report.note("cleanup", f"removed the unpacked bundle tree at {unpacked}")
-
-
-def _manifest_of(bundle: Bundle) -> dict:
-    """What `artifact_bundle.manifest` records: BUNDLE.json, the bundle's own identity record."""
-    return _identity(bundle.root)
 
 
 class _Rollback(Exception):

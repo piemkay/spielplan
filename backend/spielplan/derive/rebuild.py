@@ -261,7 +261,7 @@ async def derive_title(
         # A missing title is not a title with nothing derived.
         raise LookupError(f"title {title_id} does not exist: there is nothing to derive")
 
-    order = list(priority) if priority is not None else meta.source_priority(None)
+    order = list(priority if priority is not None else meta.SOURCE_PRIORITY)
     parseable = parse.parsed_sources()
 
     read: list[_Document] = []

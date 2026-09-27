@@ -14,7 +14,7 @@ from typing import Any
 
 import numpy as np
 
-from spielplan.placement.contract import TEXT_BLOCK, Block, ContractError, FeatureContract
+from spielplan.placement.contract import META_TRANSFORMS, TEXT_BLOCK, ContractError, FeatureContract
 
 # Blocks no §8 stage 2 re-fetch can fill (no genome for new titles, an award nobody gave, review text
 # from the bundle), so their absence does not make a title thin.
@@ -78,12 +78,11 @@ def build_vector(
                 misses += 1        # a key this contract does not declare — counted, never grown
                 continue
             hits += 1
-            vec[column] = 1.0 if block.encoding == "multi_hot" else float(value)
+            vec[column] = float(value)
         if misses:
             unmapped[block.name] = misses
         # Present only if it hit a declared column; otherwise the tower got zeros.
         (present if hits else empty).append(block.name)
-        _normalise(vec, block)
 
     if text_emb is None:
         dropped.append(TEXT_BLOCK)
@@ -109,20 +108,6 @@ def build_vector(
         nnz=int(np.count_nonzero(vec)),
         build_ms=int(round((time.perf_counter() - started) * 1000)),
     )
-
-
-def _normalise(vec: np.ndarray, block: Block) -> None:
-    if block.normalise == "none":
-        return
-    span = vec[block.offset:block.stop]
-    if block.normalise == "l2":
-        scale = float(np.linalg.norm(span))
-    elif block.normalise == "sum1":
-        scale = float(np.abs(span).sum())
-    else:                                   # max1
-        scale = float(np.abs(span).max(initial=0.0))
-    if scale > 0.0:
-        span /= scale
 
 
 # --- the review-text block's own file --------------------------------------------------------
@@ -352,19 +337,19 @@ async def _meta(conn: Any, ids: Sequence[int], vocab_version: str) -> dict[int, 
     return out
 
 
-def _finish_meta(contract: FeatureContract, values: dict[str, float]) -> dict[str, float]:
-    """Apply the three continuous productions, with the contract's constants or the defaults."""
+def _finish_meta(values: dict[str, float]) -> dict[str, float]:
+    """Apply the three continuous productions."""
     year = values.pop("_year", math.nan)
     runtime = values.pop("_runtime", math.nan)
     counts = {k[3:]: values.pop(k) for k in list(values) if k.startswith("_n_")}
 
     if not math.isnan(year):
-        t = contract.meta_transform("year_norm")
+        t = META_TRANSFORMS["year_norm"]
         values["year_norm"] = _clip01((year - t["offset"]) / t["scale"])
     if not math.isnan(runtime):
-        t = contract.meta_transform("runtime_norm")
+        t = META_TRANSFORMS["runtime_norm"]
         values["runtime_norm"] = _clip01((runtime - t["offset"]) / t["scale"])
-    t = contract.meta_transform("count_log")
+    t = META_TRANSFORMS["count_log"]
     for key, count in counts.items():
         if count:
             values[f"n_{key}_log"] = _clip01((math.log1p(count) - t["offset"]) / t["scale"])
@@ -406,9 +391,7 @@ async def fetch_blocks(
         for title_id, values in produced.items():
             if title_id not in rows:
                 continue
-            rows[title_id][block.name] = (
-                _finish_meta(contract, values) if block.name == "meta" else values
-            )
+            rows[title_id][block.name] = _finish_meta(values) if block.name == "meta" else values
     return rows
 
 

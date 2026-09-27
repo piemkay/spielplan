@@ -11,6 +11,7 @@ import numpy as np
 import pytest
 
 from spielplan.importer import bundle as bundle_import
+from spielplan.importer.report import ImportReport
 from spielplan.models.artifacts import ArtifactStore
 from spielplan.placement import features, reconcile, tower
 from spielplan.placement.contract import ContractError, FeatureContract, unproducible_meta_names
@@ -861,20 +862,6 @@ async def test_the_sweep_names_a_block_whose_declared_columns_its_keys_never_hit
 # Values, not just columns: the authority is the corpus exporter, `scripts/build_content.py`.
 
 
-def test_both_dna_tiers_enter_the_vector_as_presence_not_as_strength():
-    """The corpus built both DNA blocks without `weighted=True`: every cell is 1.0."""
-    contract = FeatureContract.load(_contract_doc())
-    built = features.build_vector(
-        contract,
-        1,
-        {"dna_x": {"dna:mood.dread": 3.0}, "dna_p": {"dna:mood.cosy": 0.25}},
-        None,
-    )
-    assert built.vec[contract.block("dna_x").column("dna:mood.dread")] == 1.0
-    assert built.vec[contract.block("dna_p").column("dna:mood.cosy")] == 1.0
-    assert set(built.blocks_present) == {"dna_x", "dna_p"}
-
-
 def test_an_uncovered_review_text_row_is_not_a_present_block(bundle_root):
     """An uncovered row (`covered=False`, emb near 1e-16) is not a row: the block drops. It is not
     thin for that, since no re-fetch can write the bundle's npz."""
@@ -1042,33 +1029,10 @@ async def _seed_observations(db) -> None:
     )
 
 
-async def test_a_reimport_runs_exactly_the_four_rebuild_steps_and_no_map_rebuild(db, reimported):
-    """Four steps in §10's order; the axis scatter is authored TSVs and must not be rebuilt."""
-    calls: list[str] = []
-
-    def recorder(name):
-        async def run(_conn, _store, version):
-            calls.append(name)
-            return {"version": version}
-        return run
-
+async def test_a_reimport_rebuild_re_places_titles_and_leaves_the_map_alone(db, reimported):
+    """The axis scatter is authored TSVs and must not be rebuilt."""
     axes_before = await db.fetch("SELECT * FROM dna_axis_weight ORDER BY facet, term")
-    results = await reconcile.run_rebuild(
-        db, reimported, "test-v2",
-        fold_in=recorder("user-foldin"),
-        blend_weights=recorder("blend-weights"),
-        ledger_refit=recorder("ledger-map-refit"),
-    )
-
-    assert [r["id"] for r in results] == [
-        "user-foldin", "blend-weights", "ledger-map-refit", "cold-tower-replacement"
-    ]
-    assert calls == ["user-foldin", "blend-weights", "ledger-map-refit"]
-    assert len(results) == 4, "§10 names four things; a fifth is a bug, not an improvement"
-    for result in results:
-        text = f"{result['id']} {result['title']}".lower()
-        for forbidden in reconcile.FORBIDDEN_STEP_WORDS:
-            assert forbidden not in text, f"the rebuild set names a map rebuild: {text!r}"
+    await bundle_import.rebuild(db, reimported, "test-v2", ImportReport())
 
     axes_after = await db.fetch("SELECT * FROM dna_axis_weight ORDER BY facet, term")
     assert [tuple(r) for r in axes_before] == [tuple(r) for r in axes_after]
@@ -1083,7 +1047,7 @@ async def test_a_reimport_runs_exactly_the_four_rebuild_steps_and_no_map_rebuild
 
 async def test_a_reimport_rebuilds_vectors_from_the_staged_contract(db, reimported):
     """Title 8's rows did not change, but its `Comedy` column did, so its coordinate must."""
-    await reconcile.run_rebuild(db, reimported, "test-v2")
+    await reconcile.reconcile(db, reimported, bundle_version="test-v2", scope="reimport")
     rows = await db.fetch(
         "SELECT bundle_version, e_hat, contract_sha256 FROM title_placement"
         " WHERE title_id = 8 ORDER BY bundle_version"
@@ -1101,7 +1065,7 @@ async def test_verdicts_duels_and_tier_edits_survive_a_reimport_unchanged(db, re
         table: [tuple(r) for r in await db.fetch(f"SELECT * FROM {table} ORDER BY id")]
         for table in ("verdict", "duel", "tier_edit")
     }
-    await reconcile.run_rebuild(db, reimported, "test-v2")
+    await bundle_import.rebuild(db, reimported, "test-v2", ImportReport())
     after = {
         table: [tuple(r) for r in await db.fetch(f"SELECT * FROM {table} ORDER BY id")]
         for table in ("verdict", "duel", "tier_edit")
@@ -1115,7 +1079,7 @@ async def test_the_rebuild_refuses_a_bundle_that_was_never_staged(db, placed, tm
     store, _ = placed
     fake = ArtifactStore.open(store.root, "never-imported")
     with pytest.raises(RuntimeError, match="staged"):
-        await reconcile.run_rebuild(db, fake, "never-imported")
+        await bundle_import.rebuild(db, fake, "never-imported", ImportReport())
 
 
 class _KilledBeforeTheBadge:

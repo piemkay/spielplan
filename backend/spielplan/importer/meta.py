@@ -6,10 +6,8 @@ Rows stay per source; the card resolves per field over the corpus's order. Never
 
 from __future__ import annotations
 
-import json
 import sqlite3
 from collections.abc import Collection, Iterator, Mapping, Sequence
-from pathlib import Path
 from typing import Any
 
 import asyncpg
@@ -100,46 +98,6 @@ def refused_images(by_source: Mapping[str, Mapping[str, Any]]) -> int:
         for pg in _IMAGE_FIELDS
         if (v := (row or {}).get(_CARD_FIELDS[pg])) not in (None, "", 0) and not servable(v)
     )
-
-
-def source_priority(bundle_root: Path | None, report: ImportReport | None = None) -> list[str]:
-    """The per-field precedence this bundle was assembled under.
-
-    `BUNDLE.json.source_priority` when shipped, else `SOURCE_PRIORITY`. A derive passes no root and so
-    always resolves by the constant; the import warns when the two differ.
-    """
-    shipped: object = None
-    manifest = (bundle_root / "BUNDLE.json") if bundle_root else None
-    if manifest is not None and manifest.is_file():
-        shipped = json.loads(manifest.read_text(encoding="utf-8")).get("source_priority")
-
-    if isinstance(shipped, list) and shipped and all(isinstance(s, str) for s in shipped):
-        if report is not None:
-            report.note(
-                "source-priority",
-                f"per-field source order read from the bundle: {', '.join(shipped)}",
-                priority=list(shipped), origin="bundle",
-            )
-            if list(shipped) != list(SOURCE_PRIORITY):
-                # Warn, not fail: the import is correct, but acquired titles will resolve by the other
-                # order.
-                report.warn(
-                    "source-priority",
-                    "the bundle's order is not the app's own, and section 8 stage 3 resolves an "
-                    f"acquired title's card by the app's ({', '.join(SOURCE_PRIORITY)}): titles "
-                    "this import wrote and titles acquired later resolve by different orders",
-                    priority=list(shipped), app_priority=list(SOURCE_PRIORITY),
-                )
-        return list(shipped)
-
-    if report is not None:
-        report.note(
-            "source-priority",
-            "bundle ships no `source_priority` — resolving the title card by the corpus's own "
-            f"order ({', '.join(SOURCE_PRIORITY)})",
-            priority=list(SOURCE_PRIORITY), origin="default",
-        )
-    return list(SOURCE_PRIORITY)
 
 
 def best(by_source: Mapping[str, Mapping[str, Any]], field: str, priority: Sequence[str]) -> Any:

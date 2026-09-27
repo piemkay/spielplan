@@ -432,7 +432,7 @@ def test_a_tower_whose_width_disagrees_with_its_contract_is_refused_at_import(cl
 
 
 def test_a_cold_tower_that_is_not_v2_is_refused(clean):
-    """A bare state_dict is taken as v2; a wrapper that *claims* v1 is refused."""
+    """Only a bare state_dict is taken as v2; a wrapper, whatever version it claims, is refused."""
     import torch
 
     path = _artifacts(clean) / "cold_tower.pt"
@@ -687,16 +687,6 @@ def test_a_declaration_that_contradicts_the_shipped_tree_is_refused_rather_than_
     assert len(named) == 1, report.render()
     assert "'v1'" in named[0].message and "dna_vocab/v2/" in named[0].message
 
-    # The second reader is asked directly: `validate()` stops at the first.
-    direct = ImportReport(bundle_version="test-v1")
-    validator.validate_artifacts(clean / "artifacts", direct)
-    assert not direct.ok, direct.render()
-    two = [f for f in direct.failures if f.rule == "vocabulary" and "two answers" in f.message]
-    assert len(two) == 1, direct.render()
-    assert two[0].detail == {"declared": "v1", "derived": "v2"}
-    # `declared or derived` still decides the ANSWER, so nothing else in the report moves.
-    assert direct.vocabulary_version == "v1"
-
 
 def test_the_id_boundary_reads_the_adjudications_ledger_the_version_names(clean):
     """Decision 247 guard 3: the boundary check must read the file the version names."""
@@ -766,7 +756,7 @@ def _write_manifest(root, payload: dict) -> None:
 
 def _integrity(root) -> ImportReport:
     report = ImportReport()
-    validator._verify_bundle_files(root, report)
+    validator._verify_bundle_files(root, _manifest(root), report)
     return report
 
 

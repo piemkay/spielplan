@@ -60,13 +60,6 @@ def servable_heat(root: Path) -> None:
                f"'{HEAT_BACKDROP}' WHERE title_id = 1 AND source = 'tmdb'")
 
 
-def set_bundle_key(root: Path, key: str, value: object) -> None:
-    path = root / "BUNDLE.json"
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    payload[key] = value
-    path.write_text(json.dumps(payload, indent=1), encoding="utf-8")
-
-
 async def load_content(db, root: Path) -> ImportReport:
     report = ImportReport(bundle_version="test-v1")
     content = sqlite3.connect(f"file:{root / 'content.sqlite'}?mode=ro", uri=True)
@@ -74,7 +67,7 @@ async def load_content(db, root: Path) -> ImportReport:
     try:
         # `_upsert_titles` stages through a TEMP TABLE ... ON COMMIT DROP, which needs a transaction.
         async with db.transaction():
-            await load.load_content(db, content, report, bundle_root=root)
+            await load.load_content(db, content, report)
     finally:
         content.close()
     return report
@@ -186,29 +179,6 @@ async def test_a_bundle_with_no_meta_table_still_imports(db, root):
     assert await db.fetchval("SELECT count(*) FROM title") == len(fx.TITLES)
     assert await db.fetchval("SELECT count(*) FROM title WHERE overview IS NOT NULL") == 0
     assert any(f.rule == "title-meta" and f.severity == "warn" for f in report.findings)
-
-
-async def test_the_source_order_travels_with_the_bundle(db, root):
-    """The order is read from the bundle (decision 162). The poster no longer moves: decision 501's
-    host rule makes omdb's IMDb-hosted poster ineligible whatever the order."""
-    servable_heat(root)
-    set_bundle_key(root, "source_priority", ["omdb", "tmdb", "wikipedia", "trakt", "tvmaze"])
-    await load_content(db, root)
-
-    title = await library.get_title(db, 1)
-    assert title["overview"] == "A shorter synthetic plot."
-    assert title["poster_path"] == HEAT_POSTER
-    assert title["tagline"] == "A Los Angeles crime saga."
-
-
-async def test_a_bundle_shipping_no_order_gets_the_corpus_order_and_a_report_line(db, root):
-    """A silent default is not fine: the operator must see which order resolved the catalog."""
-    report = await load_content(db, root)
-    notes = [f for f in report.findings if f.rule == "source-priority"]
-    assert notes, report.render()
-    assert notes[0].detail["priority"] == list(meta.SOURCE_PRIORITY)
-    title = await library.get_title(db, 1)
-    assert title["overview"] == fx.META[0][4]
 
 
 # Decisions 499 and 501: an MPST retelling, a shared synopsis and an IMDb-hosted poster are
@@ -375,34 +345,6 @@ async def test_an_empty_title_id_list_resolves_nothing_rather_than_everything(db
     await meta.resolve_title_fields(db, list(meta.SOURCE_PRIORITY), title_ids=[])
 
     assert await _card(db, 1) == BLANK
-
-
-def test_the_source_order_is_readable_without_an_import_report(root):
-    """`derive_title` passes `bundle_root=None` (the bundle is deleted by its import), so a derive
-    resolves by the constant; the next test's warning covers a bundle shipping its own order."""
-    assert meta.source_priority(None) == list(meta.SOURCE_PRIORITY)
-
-    set_bundle_key(root, "source_priority", ["omdb", "tmdb", "wikipedia"])
-    assert meta.source_priority(root) == ["omdb", "tmdb", "wikipedia"]
-
-
-def test_a_bundle_whose_order_is_not_the_apps_is_warned_about_at_the_one_moment_it_can_be(root):
-    """Two resolution orders on one install would be silent, so the import warns. `warn`, not
-    `fail`: the corpus's cards are right."""
-    report = ImportReport()
-    assert meta.source_priority(root, report) == list(meta.SOURCE_PRIORITY)
-    assert not [f for f in report.findings if f.severity == "warn"], (
-        "a bundle shipping no order of its own resolves by the app's and has nothing to warn about"
-    )
-
-    set_bundle_key(root, "source_priority", ["omdb", "tmdb", "wikipedia"])
-    report = ImportReport()
-    meta.source_priority(root, report)
-
-    warned = [f for f in report.findings if f.rule == "source-priority" and f.severity == "warn"]
-    assert len(warned) == 1, [f.as_dict() for f in report.findings]
-    assert report.ok, "a divergent order is a fork to record and never a reason to refuse a bundle"
-    assert "resolves an acquired title's card by the app's" in warned[0].message
 
 
 async def test_every_shipped_table_is_loaded_with_a_count_or_skipped_with_a_reason(db, root):
