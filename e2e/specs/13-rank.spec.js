@@ -126,6 +126,8 @@ test.describe('rank', () => {
   let page;
 
   test.beforeAll(async ({ browser, baseURL }, testInfo) => {
+    // Waits on the worker's minute tick, longer than the config's 60 s.
+    test.setTimeout(180_000);
     page = await browser.newPage({ baseURL });
     await signedIn(page);
     const member = await createMember(page, `rank-e2e-${testInfo.project.name}`, { reuse: true });
