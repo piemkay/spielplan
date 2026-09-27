@@ -18,16 +18,12 @@ import httpx
 from spielplan.acquire import pipeline, queue, stages
 from spielplan.acquire.fetch import Fetcher
 from spielplan.derive import rebuild
-from spielplan.sources import base as sources
-from spielplan.sources import credentials
+from spielplan.sources import credentials, tmdb
 
 log = logging.getLogger("spielplan.acquire.backfill")
 
 # Not `pipeline.TASK_KIND`, so the drain and board actions never touch it; same key as the pipeline.
 KIND = "backfill"
-
-# The two kinds §8 stage 2 names first, in the registry's order (resolve 10, detail 20).
-KINDS = ("tmdb:resolve", "tmdb:detail")
 
 # At 18 rps two requests a title is ~11 s of pacing, inside the job's 300 s budget.
 BATCH = 100
@@ -102,7 +98,6 @@ async def walk(
     if not leased:
         return {"filed": filed} if filed else None
 
-    sources.load_all()
     counts = {DERIVED: 0, NONE: 0, UNASKABLE: 0, FAILED: 0, YIELDED: 0}
     stopped = None
     async with Fetcher(conn=conn, transport=transport) as fetcher:
@@ -169,8 +164,8 @@ async def _walk_one(
             conn=conn, task=task, title_id=title_id, run_id=run_id, fetcher=fetcher
         )
         results = []
-        for kind in KINDS:
-            result = await sources.REGISTRY[kind].fn(ctx)
+        for adapter in (tmdb.resolve, tmdb.detail):
+            result = await adapter(ctx)
             results.append(result)
             stop = await _refused(conn, fetcher, result)
             if stop:
@@ -261,4 +256,4 @@ async def _give_back_shared_ids(
     return given
 
 
-__all__ = ["BATCH", "KIND", "KINDS", "file_candidates", "key_for", "walk"]
+__all__ = ["BATCH", "KIND", "file_candidates", "key_for", "walk"]

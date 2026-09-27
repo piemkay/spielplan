@@ -193,7 +193,6 @@ async def _run(
 ) -> _Run:
     """One run's two-attempt loop. `billed_before` decides whether a breaker pause parks or fails."""
     run = _Run()
-    pass_id = consensus.pass_id_for(planned.provider, pass_index)
     where = {"provider": planned.provider, "model": planned.model, "pass_index": pass_index}
     message = asked.user
     for attempt in ATTEMPTS:
@@ -270,15 +269,14 @@ async def _run(
         document = await _store(conn, asked, planned, pass_index, attempt, result)
         await spend.settle_call(conn, call, error=None, response_document_id=document)
 
-        verdict = await verify.verify_payload(
-            contract.as_verifier_payload(asked.title_id, result.payload), pass_id=pass_id,
-            voc=asked.voc, packs={asked.title_id: asked.pack}, ledger=conn,
-            allowed=[asked.title_id],
+        tags = result.payload.get("tags") if isinstance(result.payload, dict) else None
+        verdict = await verify.verify_tags(
+            asked.title_id, tags, pack=asked.pack, voc=asked.voc, ledger=conn
         )
         await verify.record_rejects(conn, verdict.rejects, run_id=asked.run_id,
                                     provider=planned.provider)
         if not verdict.rejects:
-            run.tags = verdict.tags.get(asked.title_id, [])
+            run.tags = verdict.tags
             return run
         if attempt == ATTEMPTS[0]:
             named = contract.violation_prompt(verdict.rejects, version=asked.voc.version)

@@ -27,7 +27,6 @@ from spielplan.sources._ids import set_ids
 REVIEW_DOCUMENTS: Mapping[tuple[str, str], str] = {
     ("tmdb", "movie_detail"): "tmdb",
     ("tmdb", "tv_detail"): "tmdb",
-    ("tmdb", "reviews"): "tmdb",
     ("trakt", "comments"): "trakt",
     ("metacritic", "reviews"): "metacritic",
     ("wikipedia", "article"): "wikipedia",
@@ -44,7 +43,7 @@ SCRAPED_EVIDENCE = "page"
 
 # Sources that emit `award` rows; `award` has no source column, so its delete is guarded by this.
 # A source added to the parser but not here would lose its awards (tested).
-AWARD_SOURCES = frozenset({"omdb", "wikidata"})
+AWARD_SOURCES = frozenset({"omdb"})
 
 # Decision 334's one required source, as the two kinds it arrives under.
 REQUIRED_DOCUMENTS = frozenset({"tmdb:movie_detail", "tmdb:tv_detail"})
@@ -58,7 +57,6 @@ SCOPE_COLUMN: Mapping[str, str | None] = {
     "title_alias": "kind",
     "title_genre": "source",
     "title_keyword": "source",
-    "title_language": "source",
     "title_country": "source",
     "title_company": "source",
     "title_video": "source",
@@ -70,9 +68,9 @@ SCOPE_COLUMN: Mapping[str, str | None] = {
 # `derive/parse.TABLES` names the table it emits for; one of them lives in another schema.
 TARGET_OF: Mapping[str, str] = {"platform_rating": "display.platform_rating"}
 
-# Natural-key tables where two agreeing sources collide (TMDB repeats languages and countries).
-IGNORE_DUPLICATES = frozenset({"title_alias", "title_genre", "title_keyword", "title_language",
-                               "title_country", "title_company", "title_video"})
+# Natural-key tables where two agreeing sources collide (TMDB repeats countries).
+IGNORE_DUPLICATES = frozenset({"title_alias", "title_genre", "title_keyword", "title_country",
+                               "title_company", "title_video"})
 
 # `display.platform_rating` is last-write-wins; documents are read in a deterministic order.
 _RATING_CONFLICT = (
@@ -139,11 +137,6 @@ class DeriveReport:
     # One count per ledger: an operator must see which ran.
     adjudications: Mapping[str, int] = field(default_factory=dict)
     corrections: Mapping[str, int] = field(default_factory=dict)
-
-    @property
-    def required_missing(self) -> bool:
-        """No `tmdb:detail` document (decision 334). A fact, not a verdict: the derive continues."""
-        return not (REQUIRED_DOCUMENTS & set(self.documents))
 
 
 def _values(tmap: TableMap, row: Mapping[str, Any], title_id: int) -> tuple:

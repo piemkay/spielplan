@@ -8,7 +8,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 from spielplan.sources import _ids, _views, credentials
-from spielplan.sources.base import SourceResult, handler
+from spielplan.sources.base import SourceResult
 
 if TYPE_CHECKING:
     from spielplan.acquire.stages import StageContext
@@ -32,13 +32,8 @@ def _no_credential(kind: str) -> SourceResult:
                         note="no Trakt client id configured")
 
 
-@handler("trakt:summary", source=SOURCE, requires=credentials.TRAKT, priority=40,
-         phase="enrich", description="Trakt summary, stats and rating distribution")
 async def summary(ctx: StageContext) -> SourceResult:
-    """Three requests: the title, its rating distribution, and its watch statistics.
-
-    Companions are fetched even when one fails.
-    """
+    """Two requests: the title and its rating distribution."""
     kind = "trakt:summary"
     row = await _ids.title_row(ctx.conn, ctx.title_id)
     if row is None:
@@ -67,23 +62,17 @@ async def summary(ctx: StageContext) -> SourceResult:
     filled = await _ids.set_ids(ctx.conn, row["id"], trakt_id=ids.get("trakt"),
                                trakt_slug=ids.get("slug"))
 
-    notes = []
-    for companion in ("ratings", "stats"):
-        extra = await _views.capture(
-            ctx, source=SOURCE, kind=companion, url=f"{API}/{base}/{imdb_id}/{companion}",
-            headers=headers, request_meta={"imdb_id": imdb_id}, name=companion,
-        )
-        if not extra.ok:
-            notes.append(f"{companion}: {extra.error}")
+    ratings = await _views.capture(
+        ctx, source=SOURCE, kind="ratings", url=f"{API}/{base}/{imdb_id}/ratings",
+        headers=headers, request_meta={"imdb_id": imdb_id}, name="ratings",
+    )
+    notes = [] if ratings.ok else [f"ratings: {ratings.error}"]
     return SourceResult(
         source=SOURCE, kind=kind, ok=True, doc_id=captured.doc_id,
         note="; ".join([f"offered {', '.join(filled)}" if filled else "no new ids", *notes]),
     )
 
 
-@handler("trakt:comments", source=SOURCE, requires=credentials.TRAKT, priority=45,
-         phase="enrich",
-         description="User comments, rating-stratified (likes/lowest/highest)")
 async def comments(ctx: StageContext) -> SourceResult:
     """The rating-labelled review text, taken from three ends of the distribution.
 

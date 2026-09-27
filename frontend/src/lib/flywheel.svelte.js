@@ -1,12 +1,7 @@
 // The server is the gate: every figure is `flywheel/batch.quote`'s decimal string, never computed
 // here. What this module owes is that a quote for another selection never arms Launch (`quoteKey`).
 
-// The two feeds M6 produces are selectable, but the server refuses to launch them (decision 443).
-const KINDS = {
-  thin_facet: 'thin facet',
-  empty_predicate: 'empty predicate - produced from M6',
-  uncovered_frontier: 'uncovered frontier - produced from M6'
-};
+const KINDS = { thin_facet: 'thin facet' };
 
 /** @param {string} kind */
 export function kindLabel(kind) {
@@ -38,18 +33,13 @@ export function toggle(selected, id) {
 }
 
 /**
- * A row with no `est_titles` counts one, as `flywheel/batch._count` does.
+ * One title a selected row, as `flywheel/batch.launch` counts.
  *
- * @param {{id: number, est_titles?: number | null}[]} items
+ * @param {{id: number}[]} items
  * @param {Set<number>} selected
  */
 export function titlesOf(items, selected) {
-  let titles = 0;
-  for (const item of items) {
-    if (!selected.has(item.id)) continue;
-    titles += item.est_titles == null ? 1 : Number(item.est_titles);
-  }
-  return titles;
+  return items.filter((item) => selected.has(item.id)).length;
 }
 
 /**

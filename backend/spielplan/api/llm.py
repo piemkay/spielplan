@@ -31,7 +31,6 @@ from spielplan.api.deps import DB, AdminUser, write_txn
 from spielplan.connectors import registry
 from spielplan.llm import anthropic, client, gemini, openai, pricing, spend
 from spielplan.llm.pricing import ModelPrice
-from spielplan.sources import base as sources
 
 if TYPE_CHECKING:
     import asyncpg
@@ -426,16 +425,14 @@ async def llm_cap(request: Request, _: AdminUser, conn: DB) -> dict[str, Any]:
 
 @router.get("/connectors")
 async def connectors(_: AdminUser, conn: DB) -> dict[str, Any]:
-    """`required` is decision 334's rule and `used_by` comes from the adapters' registry; `keyless` is
+    """`required` is decision 334's rule and `used_by` comes from stage 2's source list; `keyless` is
     the rest of stage 2's sources, in asking order."""
-    sources.load_all()
-    order = sources.available_kinds({name: True for name in _SOURCES})
-    keyless = list(dict.fromkeys(
-        sources.REGISTRY[kind].source for kind in order if sources.REGISTRY[kind].requires is None))
+    order = stages.enrich_sources()
+    keyless = list(dict.fromkeys(source for _kind, source, _fn, requires in order if requires is None))
     return {
         "sources": [
             _source_card(name, await registry.load_connector(conn, name),
-                         used_by=[kind for kind in order if sources.REGISTRY[kind].requires == name])
+                         used_by=[kind for kind, _source, _fn, requires in order if requires == name])
             for name in _SOURCES
         ],
         "keyless": keyless,

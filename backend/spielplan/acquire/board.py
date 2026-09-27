@@ -36,7 +36,7 @@ SELECT j.title_id, j.stage, j.status, j.reason, j.retry_after, j.updated_at, j.d
 
 _TASKS = """
 SELECT id, kind, key, state, attempts, max_attempts, next_attempt_at,
-       last_error, result_note, paid, created_at, updated_at
+       last_error, result_note, created_at, updated_at
   FROM acquisition_task
  WHERE payload ->> 'title_id' = $1::text
  ORDER BY id
@@ -108,7 +108,6 @@ async def tasks_for_title(conn: asyncpg.Connection, title_id: int) -> list[dict[
             "next_attempt_at": row["next_attempt_at"],
             "last_error": row["last_error"],
             "result_note": row["result_note"],
-            "paid": row["paid"],
             "created_at": row["created_at"],
             "updated_at": row["updated_at"],
         }

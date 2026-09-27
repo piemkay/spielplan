@@ -183,7 +183,7 @@ async def test_the_board_shows_the_raw_document_row_and_never_the_bytes(app, db)
 
 
 async def test_a_failed_fetch_is_on_the_board_because_that_is_why_a_title_is_thin(app, db):
-    """Unlike `rawstore.latest`, failures count: they answer "why is this title thin"."""
+    """Failures count: they answer "why is this title thin"."""
     await _title(db, ACQUIRED, "A Bigger Splash")
     await _job(db, ACQUIRED, stage=2, status="parked", reason=REASON)
     await _task(db, ACQUIRED, "jellyfin:abc123")

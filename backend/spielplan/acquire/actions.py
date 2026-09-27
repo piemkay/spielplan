@@ -70,7 +70,7 @@ _JOB = "SELECT stage, status, reason FROM acquisition_job WHERE title_id = $1 FO
 
 # The tasks a revive may bring back, as `queue.Task` rows so their plan is read by the one reader.
 _TASKS = (
-    "SELECT id, kind, key, payload, attempts, max_attempts, priority, paid, state"
+    "SELECT id, kind, key, payload, attempts, max_attempts, priority, state"
     "  FROM acquisition_task WHERE kind = $1 AND payload ->> 'title_id' = $2 ORDER BY id"
 )
 

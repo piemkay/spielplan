@@ -560,19 +560,13 @@ REGISTRY = (
 )
 
 
-async def test_the_registry_lands_in_title_list_and_not_in_the_onboarding_list(db, root):
+async def test_the_registry_is_skipped_and_never_lands_in_the_onboarding_list(db, root):
     """The registry is 238 rows; the onboarding list is §4.3's 100 decade-stratified ids."""
     edit(root, *REGISTRY)
     report = await load_content(db, root)
     assert report.ok, report.render()
 
-    assert report.table_counts["loaded:title_list"] == 2
-    assert report.table_counts["loaded:title_list_membership"] == 2
-    rows = await db.fetch("SELECT id, slug, name, source FROM title_list ORDER BY id")
-    assert [(r["id"], r["slug"]) for r in rows] == [(11, "imdb-top-250"), (12, "sight-and-sound-2022")]
-    # Rule 6: the registry's NULLable text lands as '' in a NOT NULL column.
-    assert (rows[1]["name"], rows[1]["source"]) == ("", "")
-
+    assert {"seed_list", "title_list_membership"} <= set(report.skipped_tables)
     assert await db.fetchval("SELECT count(*) FROM seed_list") == 0
 
 
@@ -586,7 +580,6 @@ async def test_the_onboarding_list_is_populated_only_from_seed_list_json(db, roo
 
     assert await db.fetchval("SELECT count(*) FROM seed_list") == len(fx.TITLES)
     assert await db.fetchval("SELECT title_id FROM seed_list WHERE position = 0") == fx.TITLES[0][0]
-    assert await db.fetchval("SELECT count(*) FROM title_list") == 2
 
 
 def _shipped(root: Path) -> list[str]:

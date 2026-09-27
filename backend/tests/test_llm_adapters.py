@@ -13,8 +13,9 @@ import httpx
 import pytest
 
 from spielplan.acquire import fetch
-from spielplan.dna.verify import Vocabulary, verify_payload
+from spielplan.dna.verify import Vocabulary, verify_tags
 from spielplan.llm import anthropic, client, contract, gemini, openai
+from tests.test_dna_verify import _NoVerdicts
 
 LLM_PACKAGE = Path(__file__).resolve().parents[1] / "spielplan" / "llm"
 
@@ -833,10 +834,10 @@ async def test_one_schema_valid_answer_reaches_the_same_verdict_through_all_thre
     for provider in client.PROVIDERS:
         result = await _complete(provider, OK[provider](payload))
         assert result.payload == payload, provider
-        judged = await verify_payload(contract.as_verifier_payload(7, result.payload),
-                                      pass_id=provider, voc=voc, packs={7: pack}, allowed=[7])
+        judged = await verify_tags(7, result.payload["tags"], pack=pack, voc=voc,
+                                   ledger=_NoVerdicts())
         verdicts[provider] = (
-            [(t.term, t.salience, t.quote) for t in judged.tags[7]],
+            [(t.term, t.salience, t.quote) for t in judged.tags],
             [(r.reason, r.term) for r in judged.rejects],
             contract.violation_prompt(judged.rejects, version="v1"),
         )

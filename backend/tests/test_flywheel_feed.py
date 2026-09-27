@@ -1,10 +1,7 @@
-"""§8.4's thin-facet feed through the real driver, and the two writers M6 will call.
+"""§8.4's thin-facet feed through the real driver.
 Stages 2 to 7 stand down; each walk is read the moment `run_task` returns. Needs TEST_DATABASE_URL."""
 
 from __future__ import annotations
-
-import ast
-from pathlib import Path
 
 import pytest
 
@@ -13,12 +10,9 @@ from spielplan.core.config import settings
 from spielplan.flywheel import store
 from tests.test_acquire_pipeline import SHIPPED, STANDS_DOWN, _refuse_to_crawl, _stands_down
 
-PACKAGE = Path(__file__).resolve().parents[1] / "spielplan"
-
 TITLE = 7
 # §4.1's minting rule: `origin = 'acquired'` and an id at or above 1e9.
 ACQUIRED = 1_000_000_007
-M6_WRITERS = ("enqueue_empty_predicate", "enqueue_uncovered_frontier")
 
 
 @pytest.fixture(autouse=True)
@@ -291,62 +285,3 @@ async def test_the_thin_facet_row_lands_after_stage_eights_projection(db, data_d
 
     assert walk.stages_run[:1] == ["project"], walk.as_dict()
     assert sorted(row["title_id"] for row in await store.queue(db)) == [TITLE, ACQUIRED]
-
-
-async def test_an_empty_predicate_is_queued_with_its_reason_as_the_spec_writes_it(db):
-    await _vocabulary(db)
-
-    written = await store.enqueue_empty_predicate(
-        db, query="Gladiator but with robots", predicate="has(robots) AND has(gladiatorial)",
-        terms=["themes.robots", "themes.gladiatorial"],
-    )
-
-    (row,) = await store.queue(db)
-    assert row["id"] == written and row["kind"] == store.EMPTY_PREDICATE
-    assert row["reason"] == "no owned title carries robots + gladiatorial"
-    assert row["detail"]["query"] == "Gladiator but with robots"
-    assert (row["title_id"], row["title"], row["board"]) == (None, None, None)
-
-
-@pytest.mark.parametrize("writer", M6_WRITERS)
-async def test_a_naming_failure_the_vocabulary_cannot_name_is_not_enqueued(db, writer):
-    """Decision 344: no batch can add a term, so a failure naming one v1 lacks is no row."""
-    enqueue = getattr(store, writer)
-    context = {"query": "mecha gladiators", "predicate": "has(mecha)"} if writer == M6_WRITERS[0] else {
-        "region": "north-east of Pacific Rim"
-    }
-
-    assert await enqueue(db, terms=["themes.robots"], **context) is None, "no vocabulary is active"
-    await _vocabulary(db)
-    assert await enqueue(db, terms=["themes.robots", "themes.mecha"], **context) is None
-    assert await enqueue(db, terms=[], **context) is None
-    assert await db.fetchval("SELECT count(*) FROM flywheel_item") == 0
-
-    assert await enqueue(db, terms=["themes.robots"], **context) is not None, (
-        "the refusal above is about the term, not a writer that writes nothing at all"
-    )
-
-
-def _callers(source: str, names: tuple[str, ...]) -> list[int]:
-    """The lines of every CALL to one of `names`, however it is reached - never a definition."""
-    found = []
-    for node in ast.walk(ast.parse(source)):
-        if isinstance(node, ast.Call):
-            func = node.func
-            name = func.attr if isinstance(func, ast.Attribute) else getattr(func, "id", None)
-            if name in names:
-                found.append(node.lineno)
-    return found
-
-
-def test_no_app_code_calls_either_writer_whose_producer_is_m6():
-    assert _callers("store.enqueue_empty_predicate(conn)\nx = 1", M6_WRITERS) == [1], (
-        "the scanner sees a call"
-    )
-    assert all(callable(getattr(store, name)) for name in M6_WRITERS)
-    calling = {
-        path.relative_to(PACKAGE).as_posix(): lines
-        for path in sorted(PACKAGE.rglob("*.py"))
-        if (lines := _callers(path.read_text(encoding="utf-8"), M6_WRITERS))
-    }
-    assert calling == {}, f"M5 code calls a writer whose producer is M6's: {calling}"

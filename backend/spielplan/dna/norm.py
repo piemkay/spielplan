@@ -29,7 +29,7 @@ def norm(s: Any) -> str:
 
     Every verification path must use this exact function. Fold at comparison time, never strip at
     build time: packs keep what sources published. Characters that print nothing are dropped first
-    (decision 398); a quote that folds to "" is refused by `verify_payload` (decision 392).
+    (decision 398); a quote that folds to "" is refused by `verify_tags` (decision 392).
     """
     s = "".join(c for c in str(s) if c.isprintable() or c.isspace())
     s = _MARKUP_RE.sub("", s)

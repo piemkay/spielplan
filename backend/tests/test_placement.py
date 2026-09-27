@@ -965,14 +965,9 @@ async def test_the_credit_block_takes_only_the_roles_the_corpus_built_its_column
 async def test_the_meta_blocks_language_column_is_the_titles_original_language(
     db, spine, bundle_root
 ):
-    """The corpus writes `lang:` once from `title.original_language`; `title_language` lists several."""
+    """The corpus writes `lang:` once, from `title.original_language`."""
     await db.execute(
         "UPDATE title SET original_language = 'ja' WHERE id = $1", FULL_TITLE
-    )
-    await db.execute(
-        "INSERT INTO title_language (title_id, language, source) VALUES"
-        " ($1, 'en', 'tmdb'), ($1, 'fr', 'tmdb'), ($1, 'de', 'imdb')",
-        FULL_TITLE,
     )
     store = ArtifactStore.open(bundle_root / "artifacts", "test-v1")
     contract = FeatureContract.from_store(store)

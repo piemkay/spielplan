@@ -63,14 +63,15 @@ def tag(term: str = "mood.bleak", quote: str = PLAIN, **extra: object) -> dict[s
     return row
 
 
-async def run(*tags: object, packs: dict[int, str | None] | None = None, **kw: object):
-    return await verify.verify_payload(
-        {"titles": {str(TITLE): list(tags)}},
-        pass_id="p1",
-        voc=VOC,
-        packs={TITLE: PACK} if packs is None else packs,
-        **kw,
-    )
+class _NoVerdicts:
+    """A curation ledger with no rows: the one query the boundary asks of it answers nothing."""
+
+    async def fetch(self, *_args):
+        return []
+
+
+async def run(*tags: object, pack: str = PACK, voc: verify.Vocabulary = VOC):
+    return await verify.verify_tags(TITLE, list(tags), pack=pack, voc=voc, ledger=_NoVerdicts())
 
 
 def reasons(result) -> list[str]:
@@ -78,14 +79,14 @@ def reasons(result) -> list[str]:
 
 
 def terms(result) -> list[str]:
-    return [t.term for t in result.tags[TITLE]]
+    return [t.term for t in result.tags]
 
 
 async def test_a_fabricated_term_is_absent_from_the_output_and_recorded():
     """Schema-valid in every other way: well-formed JSON says nothing about the term."""
     result = await run(tag(term="themes.timetravel"))
 
-    assert result.tags[TITLE] == []
+    assert result.tags == []
     assert reasons(result) == ["unknown_term"]
     assert result.rejects[0].term == "themes.timetravel"
     assert result.rejects[0].quote == PLAIN, (
@@ -97,15 +98,15 @@ async def test_a_term_the_vocabulary_carries_passes_untouched():
     result = await run(tag(term="place.city"))
 
     assert terms(result) == ["place.city"]
-    assert result.tags[TITLE][0].facet == "place"
-    assert result.tags[TITLE][0].repaired is False
+    assert result.tags[0].facet == "place"
+    assert result.tags[0].repaired is False
 
 
 async def test_the_facet_comes_from_the_vocabulary_and_not_from_the_payload():
     """Filed under the payload's facet, 29,188 of 31,540 `dna_tag` rows named an undeclared facet."""
     result = await run(tag(term="sound.neon", facet="visual"))
 
-    assert result.tags[TITLE][0].facet == "sound"
+    assert result.tags[0].facet == "sound"
 
 
 @pytest.mark.parametrize(
@@ -127,7 +128,7 @@ async def test_the_prefix_repair_recalls_a_term_the_extractor_meant(offered, exp
     result = await run(tag(term=offered))
 
     assert terms(result) == [expected]
-    assert result.tags[TITLE][0].repaired is True
+    assert result.tags[0].repaired is True
 
 
 @pytest.mark.parametrize(
@@ -155,7 +156,7 @@ async def test_the_prefix_repair_recalls_a_term_the_extractor_meant(offered, exp
 async def test_the_prefix_repair_refuses_rather_than_guessing(offered, reason):
     result = await run(tag(term=offered))
 
-    assert result.tags[TITLE] == []
+    assert result.tags == []
     assert reasons(result) == [reason]
 
 
@@ -182,7 +183,7 @@ async def test_an_authored_alias_row_repairs_a_bare_phrase():
     result = await run(tag(term="Slow-Burn"))
 
     assert terms(result) == ["pacing.slow_burn"]
-    assert result.tags[TITLE][0].repaired is True
+    assert result.tags[0].repaired is True
 
 
 async def test_an_authored_alias_beats_the_derived_prefix_repair():
@@ -194,19 +195,11 @@ async def test_an_authored_alias_beats_the_derived_prefix_repair():
     assert terms(result) == ["mood.bleak"]
 
 
-async def test_the_ledger_is_not_invented_when_there_is_none_to_read():
-    """`ledger=None` drops under the label that claims less and never keeps a tag."""
-    result = await run(tag(term="themes.timetravel"), ledger=None)
-
-    assert reasons(result) == ["unknown_term"]
-    assert result.rejects[0].detail == "not in vocabulary"
-
-
 async def test_a_quote_that_is_not_in_the_pack_is_refused():
     """Exit check 2, and the check §8 credits with the pilot's 100% catch rate on its own."""
     result = await run(tag(quote=FABRICATED))
 
-    assert result.tags[TITLE] == []
+    assert result.tags == []
     assert reasons(result) == ["quote_unverified"]
     assert result.rejects[0].quote == FABRICATED
     assert result.rejects[0].facet == "mood", (
@@ -219,21 +212,10 @@ async def test_a_quote_transcribed_across_markup_and_a_smart_apostrophe_passes()
     result = await run(tag(quote=TRANSCRIBED))
 
     assert terms(result) == ["mood.bleak"]
-    assert result.tags[TITLE][0].quote == TRANSCRIBED, (
+    assert result.tags[0].quote == TRANSCRIBED, (
         "the quote stored is the one the extractor produced; the fold is a comparison and not a "
         "rewrite of the evidence"
     )
-
-
-async def test_the_pack_this_title_has_is_the_pack_its_quotes_are_checked_against():
-    """A quote from another title's pack is what an extractor confusing two rows produces."""
-    other = "# Other (2001)\n[trakt:1]\nA wholly unrelated sentence about a different film.\n"
-    result = await verify.verify_payload(
-        {"titles": {str(TITLE): [tag(quote="a wholly unrelated sentence")]}},
-        pass_id="p1", voc=VOC, packs={TITLE: PACK, 99: other},
-    )
-
-    assert reasons(result) == ["quote_unverified"]
 
 
 async def test_an_authored_alias_pointing_outside_the_vocabulary_drops_the_tag():
@@ -241,12 +223,9 @@ async def test_an_authored_alias_pointing_outside_the_vocabulary_drops_the_tag()
     voc = verify.Vocabulary.build(
         "v1", TERMS, FACETS, {alias_key("asimov"): ("themes", "themes.asimov_robots")},
     )
-    result = await verify.verify_payload(
-        {"titles": {str(TITLE): [tag(term="asimov")]}},
-        pass_id="p1", voc=voc, packs={TITLE: PACK},
-    )
+    result = await run(tag(term="asimov"), voc=voc)
 
-    assert result.tags[TITLE] == []
+    assert result.tags == []
     assert reasons(result) == ["unknown_term"]
 
 
@@ -255,45 +234,9 @@ async def test_an_authored_alias_pointing_nowhere_does_not_suppress_the_prefix_r
     voc = verify.Vocabulary.build(
         "v1", TERMS, FACETS, {alias_key("odd.bleak"): ("mood", "mood.gone")},
     )
-    result = await verify.verify_payload(
-        {"titles": {str(TITLE): [tag(term="odd.bleak")]}},
-        pass_id="p1", voc=voc, packs={TITLE: PACK},
-    )
+    result = await run(tag(term="odd.bleak"), voc=voc)
 
-    assert [t.term for t in result.tags[TITLE]] == ["mood.bleak"]
-
-
-async def test_a_title_with_no_pack_is_refused_rather_than_passed():
-    """A quote that cannot be checked looks exactly like an invented one; `no_pack` is its own reason."""
-    result = await run(tag(), packs={TITLE: None})
-
-    assert result.tags == {}
-    assert reasons(result) == ["no_pack"]
-    assert result.n_seen == 0, "a tag under a title with no pack is never even looked at"
-
-
-async def test_a_title_the_payload_invented_is_refused_as_unknown_title():
-    result = await run(tag(), allowed=[1, 2, 3])
-
-    assert result.tags == {}
-    assert reasons(result) == ["unknown_title"]
-
-
-async def test_omitting_the_unit_costs_the_label_and_never_the_refusal():
-    """Without `allowed` a foreign title id reads as
-    `no_pack`, the less informative label; nothing is kept."""
-    invented = {"titles": {"4242": [tag()]}}
-
-    named = await verify.verify_payload(
-        invented, pass_id="p1", voc=VOC, packs={TITLE: PACK}, allowed=[TITLE],
-    )
-    unnamed = await verify.verify_payload(
-        invented, pass_id="p1", voc=VOC, packs={TITLE: PACK},
-    )
-
-    assert reasons(named) == ["unknown_title"]
-    assert reasons(unnamed) == ["no_pack"]
-    assert named.tags == unnamed.tags == {}
+    assert [t.term for t in result.tags] == ["mood.bleak"]
 
 
 @pytest.mark.parametrize("stated", [0, 4, -1, 99])
@@ -301,7 +244,7 @@ async def test_a_stated_level_outside_the_declared_domain_is_refused_and_recorde
     """Decision 386: the corpus's clamp promotes 0 to 1, which is a repair; the boundary refuses instead."""
     result = await run(tag(salience=stated))
 
-    assert result.tags[TITLE] == []
+    assert result.tags == []
     assert reasons(result) == ["schema"]
     assert result.rejects[0].salience == stated, (
         "the value that broke the domain is what a reviewer needs to see"
@@ -315,7 +258,7 @@ async def test_a_clamp_would_have_kept_the_tag_this_test_drops():
 
     result = await run(tag(salience=0), tag(term="place.city", salience=4))
 
-    assert result.tags[TITLE] == []
+    assert result.tags == []
     assert reasons(result) == ["schema", "schema"]
 
 
@@ -324,7 +267,7 @@ async def test_a_stated_level_inside_the_domain_is_read_as_its_integer(stated):
     """"2" and 2.0 are spellings of a level the domain holds."""
     result = await run(tag(salience=stated))
 
-    assert result.tags[TITLE][0].salience == int(float(stated))
+    assert result.tags[0].salience == int(float(stated))
 
 
 @pytest.mark.parametrize("stated", [3.9, 2.9, 1.0001, 1.9999, 3.4, "3.9"])
@@ -332,7 +275,7 @@ async def test_a_non_integral_level_is_refused_rather_than_truncated(stated):
     """`int(float(x))` truncated 3.9 into the domain; a non-integral level is refused."""
     result = await run(tag(salience=stated))
 
-    assert result.tags[TITLE] == []
+    assert result.tags == []
     assert reasons(result) == ["schema"]
     assert "outside the declared domain" in result.rejects[0].detail
     assert str(float(stated)) in result.rejects[0].detail, (
@@ -345,7 +288,7 @@ async def test_an_integral_spelling_of_three_is_still_read_as_three():
     """The control: an integral spelling is still read."""
     result = await run(tag(salience="3e0"), tag(term="place.city", salience=" 2 "))
 
-    assert [t.salience for t in result.tags[TITLE]] == [3, 2]
+    assert [t.salience for t in result.tags] == [3, 2]
 
 
 @pytest.mark.parametrize("stated", [0.5, -0.5])
@@ -366,7 +309,7 @@ async def test_a_boolean_states_no_level_and_is_refused(stated):
     """`float(True)` is 1.0; a boolean is refused, not defaulted."""
     result = await run(tag(salience=stated))
 
-    assert result.tags[TITLE] == []
+    assert result.tags == []
     assert reasons(result) == ["schema"]
     assert "not a number" in result.rejects[0].detail
 
@@ -375,7 +318,7 @@ async def test_a_tag_that_states_no_level_takes_the_middle_of_the_scale():
     """An unfilled field makes no claim, so it takes the middle; a filled 0 is refused above."""
     result = await run(tag())
 
-    assert result.tags[TITLE][0].salience == verify.DEFAULT_SALIENCE == 2
+    assert result.tags[0].salience == verify.DEFAULT_SALIENCE == 2
 
 
 @pytest.mark.parametrize(
@@ -392,7 +335,7 @@ async def test_a_level_that_is_not_a_number_is_refused_rather_than_defaulted(sta
     """The corpus swallows this to 2, inventing a claim the extractor never made."""
     result = await run(tag(salience=stated))
 
-    assert result.tags[TITLE] == []
+    assert result.tags == []
     assert reasons(result) == ["schema"]
     assert "not a number" in result.rejects[0].detail
 
@@ -408,88 +351,9 @@ async def test_a_level_too_wide_for_the_reject_column_is_dropped_rather_than_cla
     assert verify._storable(32768) is None
 
 
-@pytest.mark.parametrize("key", verify.TERM_KEYS)
-async def test_every_spelling_of_the_term_field_is_read(key):
-    """Over the module's own tuple, so shortening the tuple shortens this test."""
-    result = await run({key: "place.city", "quote": PLAIN})
-
-    assert terms(result) == ["place.city"]
-
-
-@pytest.mark.parametrize("key", verify.QUOTE_KEYS)
-async def test_every_spelling_of_the_quote_field_is_read(key):
-    result = await run({"term": "place.city", key: PLAIN})
-
-    assert terms(result) == ["place.city"]
-
-
-@pytest.mark.parametrize("key", verify.SALIENCE_KEYS)
-async def test_every_spelling_of_the_salience_field_is_read(key):
-    result = await run({"term": "place.city", "quote": PLAIN, key: 3})
-
-    assert result.tags[TITLE][0].salience == 3
-
-
-@pytest.mark.parametrize("key", verify.SOURCE_KEYS)
-async def test_every_spelling_of_the_source_field_is_read(key):
-    result = await run({"term": "place.city", "quote": PLAIN, key: "trakt:1"})
-
-    assert result.tags[TITLE][0].source == "trakt:1"
-
-
-async def test_the_run_that_emitted_id_and_no_source_keeps_all_its_tags():
-    """One run emitted `"id"` for `"term"` and a strict consumer logged all 161 tags as "bad term"."""
-    result = await run(
-        {"id": "mood.bleak", "quote": PLAIN},
-        {"id": "place.city", "quote": PLAIN},
-        {"id": "pacing.slow_burn", "quote": TRANSCRIBED},
-    )
-
-    assert sorted(terms(result)) == ["mood.bleak", "pacing.slow_burn", "place.city"]
-    assert result.rejects == []
-    assert [t.source for t in result.tags[TITLE]] == ["", "", ""]
-
-
-def test_every_key_alias_list_is_unambiguous():
-    """A key on two lists would make one field's spelling silently answer for another's."""
-    lists = (verify.TERM_KEYS, verify.QUOTE_KEYS, verify.SOURCE_KEYS, verify.SALIENCE_KEYS)
-    seen: set[str] = set()
-    for keys in lists:
-        assert len(set(keys)) == len(keys)
-        assert not (set(keys) & seen), f"{sorted(set(keys) & seen)} is read as two fields"
-        seen |= set(keys)
-
-
-async def test_a_titles_value_that_is_not_an_object_is_one_schema_rejection():
-    result = await verify.verify_payload(
-        {"titles": [{"term": "mood.bleak"}]}, pass_id="p1", voc=VOC, packs={},
-    )
-
-    assert result.tags == {}
-    assert reasons(result) == ["schema"]
-    assert result.rejects[0].title_id is None
-
-
-async def test_a_payload_with_no_titles_object_at_all_is_one_schema_rejection():
-    result = await verify.verify_payload({}, pass_id="p1", voc=VOC, packs={})
-
-    assert reasons(result) == ["schema"]
-
-
-async def test_a_non_numeric_title_key_is_refused_and_named():
-    result = await verify.verify_payload(
-        {"titles": {"heat": [tag()]}}, pass_id="p1", voc=VOC, packs={TITLE: PACK},
-    )
-
-    assert result.tags == {}
-    assert reasons(result) == ["schema"]
-    assert "'heat'" in result.rejects[0].detail
-
-
-async def test_a_titles_entry_that_is_not_a_list_is_refused():
-    result = await verify.verify_payload(
-        {"titles": {str(TITLE): {"term": "mood.bleak"}}},
-        pass_id="p1", voc=VOC, packs={TITLE: PACK},
+async def test_tags_that_are_not_a_list_are_one_schema_rejection():
+    result = await verify.verify_tags(
+        TITLE, {"term": "mood.bleak"}, pack=PACK, voc=VOC, ledger=_NoVerdicts()
     )
 
     assert reasons(result) == ["schema"]
@@ -537,7 +401,7 @@ async def test_a_quote_that_folds_to_nothing_is_a_missing_quote(quote):
     """"" is a substring of every pack, so these passed rule 2 vacuously."""
     result = await run(tag(term="themes.robots", quote=quote))
 
-    assert result.tags[TITLE] == []
+    assert result.tags == []
     assert reasons(result) == ["schema"]
     assert result.rejects[0].quote == quote, (
         "the reviewer has to see what was offered as evidence, or the row says only that "
@@ -560,10 +424,9 @@ INVISIBLE = ("\u200b", "\u200c", "\u200d", "\u2060", "\ufeff", "\u180e")
 @pytest.mark.parametrize("invisible", INVISIBLE, ids=[f"U+{ord(c):04X}" for c in INVISIBLE])
 async def test_a_quote_that_renders_as_nothing_is_a_missing_quote(invisible):
     """Decision 398: one invisible character in pack and quote passed both halves of rule 1."""
-    result = await run(tag(term="themes.robots", quote=invisible),
-                       packs={TITLE: PACK + invisible})
+    result = await run(tag(term="themes.robots", quote=invisible), pack=PACK + invisible)
 
-    assert result.tags[TITLE] == []
+    assert result.tags == []
     assert reasons(result) == ["schema"]
     assert result.rejects[0].quote == invisible, (
         "the reviewer has to see what was offered as evidence, even when what was offered "
@@ -582,7 +445,7 @@ def test_the_fold_reads_an_invisible_character_as_nothing_and_the_pack_still_car
 async def test_a_quote_transcribed_without_the_packs_invisible_hint_verifies():
     """The admitting half: an invisible hint inside a pack word must not drop a genuine quote."""
     hinted = PACK.replace("the city", "the ci\u200bty")
-    result = await run(tag(term="place.city", quote=PLAIN), packs={TITLE: hinted})
+    result = await run(tag(term="place.city", quote=PLAIN), pack=hinted)
 
     assert terms(result) == ["place.city"]
     assert PLAIN not in hinted, "the pack must not already carry the quote verbatim"
@@ -598,7 +461,7 @@ async def test_a_quote_that_is_not_text_is_a_missing_quote(quote):
     """Decision 399: a quote that is not text is refused; this is not a minimum length."""
     result = await run(tag(quote=quote))
 
-    assert result.tags[TITLE] == []
+    assert result.tags == []
     assert reasons(result) == ["schema"]
     assert result.rejects[0].quote == str(quote)
 
@@ -620,7 +483,7 @@ async def test_a_term_that_is_not_text_is_refused_rather_than_read_through_its_b
     """A value that is not text is refused under `schema`, never repaired via its `str()`."""
     result = await run(tag(term=term))
 
-    assert result.tags[TITLE] == []
+    assert result.tags == []
     assert reasons(result) == ["schema"]
     assert result.rejects[0].term == str(term)
     assert result.rejects[0].quote == PLAIN
@@ -682,124 +545,23 @@ async def test_n_seen_counts_every_tag_the_boundary_looked_at():
     assert result.n_kept == 1
 
 
-@pytest.mark.parametrize("second", ["07", " 7 ", "+7", 7])
-async def test_two_payload_keys_naming_one_title_lose_no_tag(second):
-    """`int()` reads all these keys as 7; the second must accumulate, not replace the first's tags."""
-    result = await verify.verify_payload(
-        {"titles": {"7": [tag(term="place.city"), tag(term="mood.bleak")],
-                    second: [tag(term="visual.neon")]}},
-        pass_id="p1", voc=VOC, packs={TITLE: PACK},
-    )
-
-    assert sorted(terms(result)) == ["mood.bleak", "place.city", "visual.neon"]
-    assert reasons(result) == []
-    assert result.n_seen == 3
-
-
-async def test_a_term_repeated_under_a_second_spelling_of_one_title_key_is_recorded():
-    """Accumulating keeps the duplicate rule working across the two keys."""
-    result = await verify.verify_payload(
-        {"titles": {"7": [tag(term="place.city")], "07": [tag(term="place.city")]}},
-        pass_id="p1", voc=VOC, packs={TITLE: PACK},
-    )
-
-    assert terms(result) == ["place.city"]
-    assert reasons(result) == ["duplicate"]
-
-
-# `verify_payload`'s own reading of a title key, shared with the classifier below.
-def _folds_to(key: object) -> int | None:
-    try:
-        return int(key)
-    except (TypeError, ValueError):
-        return None
-
-
-# Chosen for the arms they reach, including the title-level arms the identity excludes.
+# Chosen for the arms they reach.
 ACCOUNTED = (
-    {"titles": {"7": [tag(), tag(term="nope.nope"), tag(quote=FABRICATED), "junk"]}},
-    {"titles": {"7": [tag(term="place.city")], "07": [tag(term="place.city")]}},
-    {"titles": {"07": [tag(term="place.city")], "7": [tag(term="mood.bleak")]}},
-    {"titles": {"7": [tag()], "07": "junk"}},
-    {"titles": {"7": [tag(quote="**"), tag(salience="inf"), tag(term="x", salience=9)]}},
-    {"titles": {"7": [{"term": "mood.bleak"}, {"quote": PLAIN}, tag(salience=0)]}},
-    {"titles": {"7": [tag(quote=1995), tag(term=NUL), tag(quote="\u200b")]}},
-    {"titles": {"7": [], "nope": [tag()]}},
-    {"titles": {"7": [tag()], "8": [tag(), tag(term="place.city")]}},
+    [tag(), tag(term="nope.nope"), tag(quote=FABRICATED), "junk"],
+    [tag(term="place.city"), tag(term="place.city")],
+    [tag(quote="**"), tag(salience="inf"), tag(term="x", salience=9)],
+    [{"term": "mood.bleak"}, {"quote": PLAIN}, tag(salience=0)],
+    [tag(quote=1995), tag(term=NUL), tag(quote="\u200b")],
+    [],
 )
 
 
-@pytest.mark.parametrize("payload", ACCOUNTED)
-async def test_the_accounting_identity_holds_over_every_tag_the_boundary_looked_at(payload):
-    """Every examined tag is kept or recorded; title-level refusals
-    are excluded because their tags are never examined."""
-    result = await verify.verify_payload(
-        payload, pass_id="p1", voc=VOC, packs={TITLE: PACK, 8: None},
-    )
-    # A list-typed and a str-typed key for one title: the one title-level refusal that coexists with a list.
-    examined = set(result.tags)
-    shape_collisions = sum(1 for key, tags in payload["titles"].items()
-                           if not isinstance(tags, list) and _folds_to(key) in examined)
-    tag_level = [r for r in result.rejects if r.title_id in examined]
+@pytest.mark.parametrize("tags", ACCOUNTED)
+async def test_the_accounting_identity_holds_over_every_tag_the_boundary_looked_at(tags):
+    """Every examined tag is kept or recorded."""
+    result = await run(*tags)
 
-    assert result.n_seen == result.n_kept + len(tag_level) - shape_collisions
-
-
-async def test_a_payload_that_names_itself_keeps_its_own_pass_id():
-    """Ported: "a file that names itself keeps its identity through a rename"."""
-    result = await verify.verify_payload(
-        {"pass": "sonnet-b", "titles": {str(TITLE): [tag(), tag(term="themes.timetravel")]}},
-        pass_id="p1", voc=VOC, packs={TITLE: PACK},
-    )
-
-    assert result.pass_id == "sonnet-b"
-    assert [r.pass_id for r in result.rejects] == ["sonnet-b"], (
-        "the rejection has to name the pass it came out of, or a reject review cannot tell two "
-        "providers' refusals apart in section 6.6's parallel mode"
-    )
-
-
-@pytest.mark.parametrize("quote", ["", *FOLDS_TO_NOTHING])
-def test_a_verified_tag_cannot_be_constructed_without_its_quote(quote):
-    """The only place M5.4 owns is the type it hands forward;
-    `str.strip()` and `norm()` now ask one question."""
-    with pytest.raises(ValueError, match="unfalsifiable"):
-        verify.VerifiedTag(
-            term="mood.bleak", facet="mood", salience=2, source="", quote=quote,
-        )
-
-
-
-@pytest.mark.parametrize("quote", NOT_TEXT, ids=[type(q).__name__ for q in NOT_TEXT])
-def test_a_verified_tag_cannot_be_constructed_from_a_quote_that_is_not_text(quote):
-    """`norm()` stringifies, so `VerifiedTag(quote=1995)` built and carried an `int`."""
-    with pytest.raises(ValueError, match="unfalsifiable"):
-        verify.VerifiedTag(
-            term="mood.bleak", facet="mood", salience=2, source="", quote=quote,
-        )
-
-
-@pytest.mark.parametrize(
-    "quote",
-    [NUL, SURROGATE, "a slow\x00 burn of a film", "a slow\ud800 burn of a film"],
-    ids=["nul", "surrogate", "nul-inside-a-sentence", "surrogate-inside-a-sentence"],
-)
-def test_a_verified_tag_cannot_carry_a_quote_postgres_cannot_store(quote):
-    """`norm()` drops NUL and lone surrogates, but the raw string would break the writer's batch."""
-    assert verify.norm(quote), "the fold must read these as text, or this test proves nothing"
-    with pytest.raises(ValueError, match="cannot store"):
-        verify.VerifiedTag(
-            term="mood.bleak", facet="mood", salience=2, source="", quote=quote,
-        )
-
-
-def test_a_verified_tag_that_carries_its_quote_is_built_without_complaint():
-    built = verify.VerifiedTag(
-        term="mood.bleak", facet="mood", salience=2, source="trakt:1", quote=PLAIN,
-    )
-
-    assert built.quote == PLAIN
-    assert built.repaired is False
+    assert result.n_seen == result.n_kept + len(result.rejects)
 
 
 async def test_every_tag_the_boundary_passes_carries_a_quote():
@@ -809,8 +571,8 @@ async def test_every_tag_the_boundary_passes_carries_a_quote():
         *(tag(term="themes.robots", quote=q) for q in (*FOLDS_TO_NOTHING, *INVISIBLE)),
     )
 
-    assert all(verify.norm(t.quote) for t in result.tags[TITLE])
-    assert [t.term for t in result.tags[TITLE]] == ["mood.bleak", "place.city"]
+    assert all(verify.norm(t.quote) for t in result.tags)
+    assert [t.term for t in result.tags] == ["mood.bleak", "place.city"]
 
 
 def _bound_names(node: ast.AST) -> list[str]:
@@ -852,22 +614,7 @@ def test_no_statement_in_the_verifier_writes_a_term_outside_the_two_named_repair
 
     assert len(writes) == 2, "\n".join(["a third statement writes a term:", *writes])
     assert "voc.resolve(" in writes[0], writes[0]
-    assert "_renamed(" in writes[1], writes[1]
-
-
-def test_the_only_thing_the_rename_wrapper_calls_is_the_curation_ledger():
-    """`_renamed` is the second write's whole body, so a hidden rewrite there would pass the guard above."""
-    tree = ast.parse(SOURCE)
-    wrapper = next(
-        node for node in ast.walk(tree)
-        if isinstance(node, ast.AsyncFunctionDef) and node.name == "_renamed"
-    )
-    called = {
-        ast.get_source_segment(SOURCE, node.func)
-        for node in ast.walk(wrapper) if isinstance(node, ast.Call)
-    }
-
-    assert called == {"adjudicate.rename"}
+    assert "adjudicate.rename(" in writes[1], writes[1]
 
 
 def test_nothing_in_the_verifier_assigns_to_a_term_attribute():
@@ -970,11 +717,6 @@ def test_the_reject_store_constrains_itself_to_exactly_the_ported_reasons():
 
     assert clause is not None, "0027 no longer constrains rule_violated"
     assert tuple(re.findall(r"'([a-z_]+)'", clause.group(1))) == verify.REASONS
-
-
-def test_the_pipeline_marker_is_ported_with_its_reason():
-    """An older pipeline's output is stale evidence, not merely older."""
-    assert verify.PIPELINE == "library/v1"
 
 
 def test_no_provider_client_is_imported_by_the_trust_boundary():

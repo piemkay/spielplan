@@ -106,7 +106,6 @@ async def _seed_representative_rows(conn: asyncpg.Connection) -> None:
         "INSERT INTO credit (title_id, person_id, department, job, ord) "
         "VALUES (11, 5, 'Directing', 'Director', 3)"
     )
-    await conn.execute("INSERT INTO title_language (title_id, language) VALUES (11, 'de')")
     await conn.execute("INSERT INTO title_country (title_id, country) VALUES (11, 'DE')")
     await conn.execute(
         "INSERT INTO display.platform_rating (title_id, platform, score) VALUES (11, 'imdb', 7.4)"
@@ -289,7 +288,7 @@ async def test_the_backfill_runs_over_the_rows_that_were_already_there(upgrading
     # A rename that dropped the value would still match a fresh schema.
     assert await conn.fetchval("SELECT billing_order FROM credit WHERE title_id = 11") == 3
     # NOT NULL with a default, added over rows that predate it.
-    assert await conn.fetchval("SELECT source FROM title_language WHERE title_id = 11") == ""
+    assert await conn.fetchval("SELECT source FROM title_country WHERE title_id = 11") == ""
     assert await conn.fetchval(
         "SELECT metric FROM display.platform_rating WHERE title_id = 11"
     ) == "user_score"

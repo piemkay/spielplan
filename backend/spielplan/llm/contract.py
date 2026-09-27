@@ -22,9 +22,7 @@ if TYPE_CHECKING:
 
 log = logging.getLogger("spielplan.llm.contract")
 
-PROMPT_VERSION = "dna-v1"
-
-# Salience bounds are a request only: OpenAI's strict copy strips them, `verify_payload` enforces.
+# Salience bounds are a request only: OpenAI's strict copy strips them, `verify_tags` enforces.
 EXTRACTION_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {
@@ -104,7 +102,7 @@ RETRY_MARKER = "Your previous answer was rejected:"
 # Past this many, the rest are counted, not listed: a retry is paid input.
 MAX_NAMED = 20
 
-# Width of a shown value, matching `verify_payload`'s quote width.
+# Width of a shown value, matching `verify_tags`'s quote width.
 _SHOWN = 80
 _LINE = 240
 
@@ -217,18 +215,8 @@ def prompt_sha(voc: PromptVocabulary) -> str:
     return hashlib.sha256(system_prompt(voc).encode("utf-8")).hexdigest()[:16]
 
 
-def as_verifier_payload(title_id: int, payload: Any) -> dict[str, Any]:
-    """One title's answer in `verify_payload`'s shape, `{"titles": {"<id>": tags}}`.
-
-    Anything malformed passes through unrepaired for the validator to refuse; the title key is the
-    caller's.
-    """
-    tags = payload["tags"] if isinstance(payload, dict) and "tags" in payload else payload
-    return {"titles": {str(title_id): tags}}
-
-
 def violation_prompt(rejects: Sequence[Rejection], *, version: str) -> str:
-    """The retry message: every rule `verify_payload` said was broken, and by what.
+    """The retry message: every rule `verify_tags` said was broken, and by what.
 
     Deduplicated, bounded at `MAX_NAMED`; values are untrusted, so shown via `repr` and cut. Refuses
     to build a retry with nothing to name.

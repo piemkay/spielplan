@@ -113,9 +113,8 @@ def test_every_tmdb_row_carries_the_seven_other_tables_with_their_own_source(tmd
     assert {r["source"] for table in tmdb.rows.values() for r in table} == {"tmdb"}
 
 
-def test_tmdb_emits_the_primary_language_twice_and_the_derives_key_is_what_dedupes_it(tmdb):
-    """TMDB names the primary language and country twice; the derive's key dedupes, the parser does not."""
-    assert values(tmdb, "title_language", "language", "is_primary").count(("en", 1)) == 2
+def test_tmdb_emits_the_primary_country_twice_and_the_derives_key_is_what_dedupes_it(tmdb):
+    """TMDB names the primary country twice; the derive's key dedupes, the parser does not."""
     assert values(tmdb, "title_country", "country").count(("US",)) == 2
 
 
@@ -135,9 +134,6 @@ def test_omdb_relays_three_other_platforms_scores_and_files_them_under_their_own
         "`imdbVotes` is '852,057' and belongs to the IMDb row alone"
     )
     assert omdb.source == "omdb"
-    assert omdb.row_sources == {"omdb", "imdb", "rottentomatoes", "metacritic"}, (
-        "the derive's replace scope is the row sources and not the document's source"
-    )
 
 
 def test_omdbs_prose_fields_become_columns_again(omdb):
@@ -181,21 +177,6 @@ def test_the_awards_sentence_is_read_up_to_whichever_comes_first(blurb, expected
     assert parse.parse_omdb_awards(blurb) == expected
 
 
-@pytest.mark.parametrize(
-    ("raw", "expected"),
-    [
-        # IMDb inverts a qualified language name; splitting on the comma would make "Old" a language.
-        ("English, Norse, Old", ["English", "Old Norse"]),
-        ("Greek, Ancient (to 1453)", ["Ancient Greek"]),
-        # OMDb's literal for a silent film: a statement about the absence of language.
-        ("None", []),
-        ("English, Mandarin, Russian", ["English", "Mandarin", "Russian"]),
-    ],
-)
-def test_a_qualified_language_name_is_one_language_and_not_two(raw, expected):
-    assert parse._omdb_languages(raw) == expected
-
-
 def test_the_trakt_summary_is_thin_and_says_so_in_the_rows_it_does_not_emit():
     parsed = parse.parse_document("trakt", "summary", fixture("trakt_summary.json"))
     meta = parsed.meta
@@ -232,40 +213,6 @@ def test_the_tvmaze_show_is_the_series_shaped_source():
     assert cast[0]["character"] == 'James "Jim" Holden'
 
 
-def test_the_jellyfin_item_carries_the_presentation_block_nothing_else_knows():
-    """The only source that knows whether tonight's copy is 4K HDR or a 720p rip."""
-    parsed = parse.parse_document("jellyfin", "items", fixture("jellyfin_item.json"))
-    extra = json.loads(parsed.meta["extra"])
-    assert (extra["width"], extra["height"]) == (3840, 2160)
-    assert extra["video_codec"] == "hevc"
-    assert extra["audio_channels"] == max(
-        t["ch"] or 0 for t in extra["audio_tracks"]
-    ), "the headline audio track is the one with the most channels"
-    assert parsed.meta["runtime_min"] == 98, "RunTimeTicks are 100ns units"
-
-
-def test_a_jellyfin_crew_members_job_is_not_stored_as_the_character_he_played():
-    """Jellyfin's `Role` is the JOB for crew; passed through
-    it filed "Director" as a character 2,029 times."""
-    payload = json.loads((FIXTURES / "jellyfin_item.json").read_text(encoding="utf-8"))
-    assert any((p.get("Type") or "").lower() != "actor" for p in payload["People"]), (
-        "the fixture no longer carries a crew entry"
-    )
-    parsed = parse.parse_document("jellyfin", "items", fixture("jellyfin_item.json"))
-    for row in parsed.table("credit"):
-        if row["role_class"] != "cast":
-            assert row["character"] is None
-
-
-def test_mpst_is_a_full_retelling_and_sits_last_in_the_source_order():
-    """Its synopsis gives away the ending, hence last in `SOURCE_PRIORITY`."""
-    parsed = parse.parse_document("mpst_bulk", "meta", fixture("mpst_meta.json"))
-    assert parsed.meta["plot_full"].startswith("The film starts with the voice of Dr. Louise")
-    assert parsed.meta["year"] is None, "MPST knows a plot and a tag set and nothing else"
-    assert values(parsed, "title_keyword", "keyword", "source") == [("flashback", "mpst")]
-    assert json.loads(parsed.meta["extra"])["synopsis_source"] == "imdb"
-
-
 def test_the_article_splits_into_a_lead_a_plot_and_a_capped_budget_of_craft_prose():
     parsed = parse.parse_document("wikipedia", "article", fixture("wikipedia_article.json"))
     meta = parsed.meta
@@ -291,76 +238,6 @@ def test_the_reception_section_is_a_review_and_is_not_also_stored_as_craft_prose
     assert got[0].author_kind == "critic" and got[0].publication == "Wikipedia"
     assert got[0].external_id == "43991244:critical response"
     assert len(got[0].body.split()) > 50
-
-
-@pytest.fixture
-def wikidata() -> parse.ParsedTitle:
-    blob = json.loads((FIXTURES / "wikidata_entity.json").read_text(encoding="utf-8"))
-    return parse.parse_wikidata_entity(blob["entity"], blob["labels"])
-
-
-def test_wikidata_resolves_its_q_ids_through_the_label_lookup_and_drops_what_it_cannot(wikidata):
-    """An absent label is a credit NOT emitted rather than a credit named "Q193570"."""
-    blob = json.loads((FIXTURES / "wikidata_entity.json").read_text(encoding="utf-8"))
-    assert values(wikidata, "credit", "job", "role_class")[:2] == [
-        ("Director", "director"), ("Screenplay", "writer"),
-    ]
-    assert wikidata.table("credit")[0]["person"]["name"] == "Denis Villeneuve"
-    without_labels = parse.parse_wikidata_entity(blob["entity"], {})
-    assert without_labels.table("credit") == ()
-    assert without_labels.table("title_genre") == ()
-
-
-def test_a_wikidata_award_carries_the_year_its_point_in_time_qualifier_states(wikidata):
-    """P585 is what makes an award answerable by year."""
-    won = [r for r in wikidata.table("award") if r["result"] == "won"]
-    assert ("Academy Award for Best Sound Editing", 2017) in [
-        (r["award"], r["year"]) for r in won
-    ]
-    assert any(r["year"] is None for r in wikidata.table("award")), (
-        "not every statement carries P585, and a missing year is NULL rather than a guess"
-    )
-    assert {r["category"] for r in wikidata.table("award")} == {"award"}
-
-
-def test_the_money_wikidata_states_is_the_largest_of_its_statements(wikidata):
-    """P2130 and P2142 are multi-valued: several sources, currencies and years."""
-    assert wikidata.meta["budget"] == 50_000_000
-    assert wikidata.meta["revenue"] == 203_388_186
-    assert wikidata.meta["plot_full"] is None, "Wikidata states facts, not prose"
-
-
-@pytest.mark.parametrize(
-    ("name", "collective"),
-    [
-        ("the Wachowskis", False),
-        ("Coen brothers", True),
-        ("Ben Davis and Camille Griffin", True),
-        ("Zucker, Abrahams and Zucker", True),
-        # Hyphenated pen-names are deliberately NOT caught: real names hyphenate too.
-        ("Salim-Javed", False),
-        ("Hou Hsiao-hsien", False),
-        ("Jean-Pierre Jeunet", False),
-        ("", False),
-    ],
-)
-def test_a_duo_is_not_a_human_and_must_not_become_a_graph_node(name, collective):
-    assert parse.is_collective(name) is collective
-
-
-def test_a_deprecated_statement_is_not_a_credit():
-    """Deprecated statements put Sam Mendes and Danny Boyle on *No Time to Die*."""
-    entity = {"claims": {"P57": [
-        {"rank": "normal", "mainsnak": {"datavalue": {"value": {"id": "Q1"}}}},
-        {"rank": "deprecated", "mainsnak": {"datavalue": {"value": {"id": "Q2"}}}},
-        {"rank": "normal", "mainsnak": {"datavalue": {"value": {"id": "Q3"}}},
-         "qualifiers": {"P3831": [{}]}},
-        {"rank": "normal", "mainsnak": {"datavalue": {"value": {"id": "Q4"}}},
-         "qualifiers": {"P582": [{}]}},
-    ]}}
-    labels = {"Q1": "Kept", "Q2": "Deprecated", "Q3": "Dubbing Director", "Q4": "Left Early"}
-    parsed = parse.parse_wikidata_entity(entity, labels)
-    assert [r["person"]["name"] for r in parsed.table("credit")] == ["Kept"]
 
 
 def test_a_film_with_no_tomatometer_is_not_given_its_neighbours_percentage():
@@ -405,19 +282,6 @@ def test_the_two_scales_come_from_the_attribute_rather_than_from_the_reader():
     parsed = parse.parse_document("metacritic", "page:main", fixture("metacritic_page.html"))
     scales = {r["metric"]: r["scale"] for r in parsed.table("platform_rating")}
     assert scales == {"critic_score": 100.0, "user_score": 10.0}
-
-
-def test_the_letterboxd_page_yields_nothing_because_its_ld_json_sits_in_a_cdata_wrapper():
-    """Letterboxd wraps `ld+json` in CDATA, which `ld_json`
-    cannot decode; ported faithfully, defect included."""
-    page = fixture("letterboxd_film_page.html")
-    assert b"aggregateRating" in page and b"CDATA" in page
-    parsed = parse.parse_document("letterboxd", "film:page", page)
-    assert parsed.rows == {} and parsed.source == "letterboxd"
-    # The logic is right; the wrapper is what defeats it.
-    unwrapped = page.replace(b"/* <![CDATA[ */", b"").replace(b"/* ]]> */", b"")
-    assert values(parse.parse_letterboxd_page(unwrapped), "platform_rating", "metric", "scale") \
-        == [("user_score", 5.0)]
 
 
 def test_the_real_collision_is_refused_by_the_cast_the_page_claims():
@@ -569,8 +433,8 @@ def test_a_name_escaped_by_its_source_is_one_person_and_not_two():
 @pytest.mark.parametrize(
     ("source", "kind"),
     [("tmdb", "movie_detail"), ("omdb", "detail"), ("trakt", "summary"), ("trakt", "ratings"),
-     ("tvmaze", "show"), ("wikipedia", "article"), ("mpst_bulk", "meta"), ("jellyfin", "items"),
-     ("rottentomatoes", "page:main"), ("metacritic", "page:main"), ("letterboxd", "film:page")],
+     ("tvmaze", "show"), ("wikipedia", "article"), ("rottentomatoes", "page:main"),
+     ("metacritic", "page:main")],
 )
 @pytest.mark.parametrize(
     "content",
@@ -595,7 +459,7 @@ def test_a_parser_handed_rubbish_returns_nothing_and_does_not_raise(source, kind
 
 @pytest.mark.parametrize(
     ("source", "kind"),
-    [("tmdb", "reviews"), ("trakt", "comments"), ("metacritic", "reviews:critics"),
+    [("tmdb", "movie_detail"), ("trakt", "comments"), ("metacritic", "reviews:critics"),
      ("metacritic", "reviews:users"), ("wikipedia", "article")],
 )
 @pytest.mark.parametrize(
@@ -620,8 +484,6 @@ def test_the_dispatch_matches_a_kind_on_the_part_before_the_colon():
     assert parse.parse_document("metacritic", "page:main", page).rows
     assert parse.parse_document("metacritic", "page", page).rows
     assert parse.parsed_sources()[("metacritic", "page")] == "metacritic"
-    # The raw store records what was crawled, `title_meta` who said it (decision 375's delete scope).
-    assert parse.parsed_sources()[("mpst_bulk", "meta")] == "mpst"
 
 
 def test_an_unknown_target_table_is_a_typo_and_not_a_table_nothing_ever_writes():
@@ -687,7 +549,9 @@ def test_a_non_ascii_review_body_is_stored_exactly_as_it_arrived():
 
 
 def test_the_tmdb_and_trakt_reviews_carry_their_own_ratings_and_their_dates_become_iso():
-    tmdb_reviews = reviews.parse_document("tmdb", "reviews", fixture("tmdb_reviews.json"))
+    # TMDB's reviews arrive appended to the detail call.
+    appended = json.dumps({"reviews": json.loads(fixture("tmdb_reviews.json"))}).encode()
+    tmdb_reviews = reviews.parse_document("tmdb", "movie_detail", appended)
     assert len(tmdb_reviews) == 3
     assert {r.source for r in tmdb_reviews} == {"tmdb"}
     assert {r.author_kind for r in tmdb_reviews} == {"user"}

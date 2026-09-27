@@ -49,7 +49,6 @@ TABLES: tuple[Table, ...] = (
     Table("public", "title_alias"),
     Table("public", "title_genre"),
     Table("public", "title_keyword"),
-    Table("public", "title_language"),
     Table("public", "title_country"),
     Table("public", "title_company"),
     Table("public", "title_video"),
@@ -59,11 +58,7 @@ TABLES: tuple[Table, ...] = (
 
     # §4.1 rule 4 freezes its ids, and the calibration artifacts key on them.
     Table("public", "rating_source"),
-    Table("public", "rating_title_map"),
     Table("public", "seed_list"),
-    Table("public", "watchlist"),
-    Table("public", "title_list"),
-    Table("public", "title_list_membership"),
     Table("public", "dna_vocabulary"),
     Table("public", "dna_facet"),
     Table("public", "dna_term"),
@@ -82,10 +77,12 @@ TABLES: tuple[Table, ...] = (
 )
 
 # Tables older archives carry and a restore skips (decision 309). Named, so any other unknown
-# table is still refused; skipped, not loaded, because decision 291 stopped importing them.
-RETIRED: frozenset[str] = frozenset(
-    {"public.ml_genome_tag", "public.ml_link", "public.ml_genome_score"}
-)
+# table is still refused; skipped, not loaded, because this build stopped importing them.
+RETIRED: frozenset[str] = frozenset({
+    "public.ml_genome_tag", "public.ml_link", "public.ml_genome_score",
+    "public.title_language", "public.rating_title_map", "public.watchlist", "public.title_list",
+    "public.title_list_membership",
+})
 
 # The placement stamp and state stay behind: they name a bundle and a coordinate this archive
 # does not carry (§10), so a restore leaves every title honestly unplaced.
@@ -265,7 +262,8 @@ async def write_archive(conn: asyncpg.Connection, path: Path) -> ArchiveReport:
                 # In the same snapshot, so the printed counts are one reading of one install.
                 for qualified in sorted(RETIRED):
                     schema, _, table = qualified.partition(".")
-                    if await conn.fetchval(
+                    # 0039 dropped five of them; the genome slice is still held (decision 311).
+                    if await conn.fetchval("SELECT to_regclass($1)", qualified) and await conn.fetchval(
                         f'SELECT EXISTS (SELECT 1 FROM "{schema}"."{table}")'
                     ):
                         retired.append(qualified)

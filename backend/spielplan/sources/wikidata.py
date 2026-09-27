@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 from urllib.parse import unquote
 
 from spielplan.sources import _ids, _views
-from spielplan.sources.base import SourceResult, handler
+from spielplan.sources.base import SourceResult
 
 if TYPE_CHECKING:
     from spielplan.acquire.stages import StageContext
@@ -51,13 +51,8 @@ def _article_title(url: str) -> str:
     return unquote(url.rsplit("/", 1)[-1]).replace("_", " ")
 
 
-@handler("wikidata:resolve", source=SOURCE, priority=25, phase="enrich",
-         description="SPARQL: Q-id + RT/Metacritic/Letterboxd slugs + article title")
 async def resolve(ctx: StageContext) -> SourceResult:
-    """One title, one query, five identifiers.
-
-    Priority 25 keeps it after TMDB and before `rt:page` (76) and `metacritic:page` (77).
-    """
+    """One title, one query, five identifiers."""
     kind = "wikidata:resolve"
     row = await _ids.title_row(ctx.conn, ctx.title_id)
     if row is None:

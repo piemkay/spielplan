@@ -181,25 +181,6 @@ async def test_one_tick_leases_its_bound_and_completes_what_it_leased(worker_env
     assert await queue.pending_count(db, [pipeline.TASK_KIND]) == 0
 
 
-async def test_a_paid_task_is_left_for_a_caller_that_knows_a_cap_has_been_checked(
-    worker_env, bundled, db
-):
-    """`attempts` is the teeth: "never taken" and "taken and returned" are both `pending`."""
-    assert await queue.enqueue(
-        db, pipeline.TASK_KIND, "imdb:tt6299999", {"item": _item(99)}, paid=True
-    ) is True
-    assert await pipeline.enqueue_item(db, _item(1)) is True
-
-    detail = await _job().run()
-    assert detail is not None
-    assert detail["leased"] == 1, detail
-    assert [task["key"] for task in detail["tasks"]] == ["jellyfin:jf-drain-1"]
-
-    paid = await _task_row(db, "imdb:tt6299999")
-    assert paid["state"] == queue.PENDING
-    assert paid["attempts"] == 0, "the paid task was leased and put back, which is a bill"
-
-
 async def test_a_task_whose_worker_died_is_reclaimed_on_the_next_tick_and_finished_once(
     worker_env, bundled, db
 ):
@@ -276,11 +257,6 @@ async def test_a_tick_with_an_empty_queue_is_a_cheap_no_op(worker_env, bundled, 
     assert opened == [], "the basis was opened for a tick with nothing to drain"
     assert await _acquired(db) == 0
     assert [tuple(row) for row in await db.fetch(inbox)] == before
-
-    # A pending PAID task is not work this tick takes, so it must not open the basis.
-    assert await queue.enqueue(db, pipeline.TASK_KIND, "tmdb:paid-1", paid=True) is True
-    assert await _job().run() is None
-    assert opened == [], "a paid task this drain cannot lease made the tick ask for the basis"
 
     # ...and the guard is not simply never calling it: one task makes the same tick ask.
     assert await pipeline.enqueue_item(db, _item(1)) is True
@@ -401,7 +377,7 @@ async def test_the_ticks_run_is_the_run_stage_six_files_under_and_stage_seven_re
 
     async def refuses_one_tag(ctx):
         await verify.record_rejects(
-            ctx.conn, [verify.Rejection(ctx.title_id, "pass-0", "themes.invented", "unknown_term")],
+            ctx.conn, [verify.Rejection(ctx.title_id, "themes.invented", "unknown_term")],
             run_id=ctx.run_id, provider="stand-in",
         )
         return stages.advance({"stood_in": "stage 6 filed one refusal under the walk's run"})

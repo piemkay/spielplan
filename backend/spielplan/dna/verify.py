@@ -7,7 +7,7 @@ via `norm()`, salience in {1,2,3}. Failures drop, never repaired; imports no pro
 from __future__ import annotations
 
 import math
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -20,18 +20,8 @@ from spielplan.dna.aliases import alias_key, load_alias_map
 from spielplan.dna.norm import norm
 from spielplan.dna.packs import sha as pack_sha
 
-# Key aliases seen in the wild.  Extending this list is cheaper than losing a
-# whole batch to a field name, but every alias must be unambiguous.
-TERM_KEYS = ("term", "id", "term_id", "tag")
-QUOTE_KEYS = ("quote", "evidence", "span", "text")
-SOURCE_KEYS = ("source", "src", "marker")
-SALIENCE_KEYS = ("salience", "weight", "level")
-
 REASONS = ("schema", "unknown_term", "adjudicated", "quote_unverified", "unknown_title",
            "no_pack", "duplicate")
-
-# Recorded per title so tags from an older extraction configuration read as stale evidence.
-PIPELINE = "library/v1"
 
 # Refused, not clamped (decision 386): a clamp is a repair. Out-of-domain values fall under `schema`.
 SALIENCE_LEVELS = (1, 2, 3)
@@ -42,9 +32,6 @@ DEFAULT_SALIENCE = 2
 # `dna_reject.salience` is a smallint; a wider value is dropped so one bad number cannot fail the batch.
 _SMALLINT = 32767
 
-# Widest id the `bigint` probe in `_titles_this_install_holds` can bind.
-_INT8 = 2 ** 63 - 1
-
 
 @dataclass
 class Rejection:
@@ -53,8 +40,7 @@ class Rejection:
     `detail` reaches no column; `rule_violated` is the closed set the install keeps.
     """
 
-    title_id: int | None
-    pass_id: str
+    title_id: int
     term: str | None
     reason: str
     detail: str = ""
@@ -65,11 +51,7 @@ class Rejection:
 
 @dataclass
 class VerifiedTag:
-    """One tag that passed all three checks, with the evidence it passed on.
-
-    Refuses to exist without a quote (§4.1 rule 1): the quote must be a `str`, non-empty under `norm()`
-    (decisions 392, 399), and storable in Postgres (decision 397).
-    """
+    """One tag that passed all three checks, with the evidence it passed on."""
 
     term: str
     facet: str
@@ -78,50 +60,24 @@ class VerifiedTag:
     quote: str
     repaired: bool = False
 
-    def __post_init__(self) -> None:
-        if not isinstance(self.quote, str):
-            raise ValueError(
-                f"a verified tag must carry the quote it was verified against; {self.term!r} "
-                f"arrived with {type(self.quote).__name__} and not text, so it is not a span of "
-                "any pack, and section 4.1 rule 1 makes a tag without its quote "
-                "unfalsifiable"
-            )
-        if not norm(self.quote):
-            raise ValueError(
-                f"a verified tag must carry the quote it was verified against; {self.term!r} "
-                f"arrived with {str(self.quote)[:40]!r}, which folds to nothing under norm(), "
-                "and section 4.1 rule 1 makes a tag without its quote unfalsifiable"
-            )
-        if _storable_text(self.quote) is None:
-            raise ValueError(
-                f"a verified tag must carry a quote its evidence row can hold; {self.term!r} "
-                "arrived with one carrying a NUL or an unpaired surrogate, which Postgres "
-                "cannot store (decision 397)"
-            )
-
 
 @dataclass
 class PassResult:
-    """One extraction pass over one unit of titles, after verification.
+    """One extraction pass over one title, after verification. `n_seen` counts the tags examined."""
 
-    `n_seen` counts the tags examined, not the payload's; title-level refusals do not add to it.
-    """
-
-    pass_id: str
-    tags: dict[int, list[VerifiedTag]] = field(default_factory=dict)
+    tags: list[VerifiedTag] = field(default_factory=list)
     rejects: list[Rejection] = field(default_factory=list)
     n_seen: int = 0
 
     @property
     def n_kept(self) -> int:
-        return sum(len(v) for v in self.tags.values())
+        return len(self.tags)
 
 
-def _first(d: Mapping[str, Any], keys: Sequence[str]) -> Any:
-    for k in keys:
-        if k in d and d[k] not in (None, ""):
-            return d[k]
-    return None
+def _stated(tag: Mapping[str, Any], key: str) -> Any:
+    """What the tag states for `key`; an empty string states nothing."""
+    value = tag.get(key)
+    return None if value == "" else value
 
 
 # the vocabulary, as the boundary needs to see it
@@ -262,203 +218,134 @@ async def read_pack(conn: asyncpg.Connection, title_id: int, version: str) -> st
     return text
 
 
-async def read_packs(
-    conn: asyncpg.Connection, title_ids: Iterable[int], version: str
-) -> dict[int, str | None]:
-    """The packs for a payload's titles, deduplicated, in the order they were asked for."""
-    return {
-        int(title_id): await read_pack(conn, int(title_id), version)
-        for title_id in dict.fromkeys(int(t) for t in title_ids)
-    }
-
-
 # verification
 
 
-async def verify_payload(
-    payload: Mapping[str, Any],
-    *,
-    pass_id: str,
-    voc: Vocabulary,
-    packs: Mapping[int, str | None],
-    ledger: asyncpg.Connection | None = None,
-    allowed: Iterable[int] | None = None,
+async def verify_tags(
+    title_id: int, tags: Any, *, pack: str, voc: Vocabulary, ledger: asyncpg.Connection
 ) -> PassResult:
-    """Check one extractor output object against the vocabulary and the packs.
+    """Check one title's extracted tags against the vocabulary and that title's pack.
 
-    `payload` is `{"titles": {"<id>": [tag, ...]}}`. `packs` holds unfolded text; folding happens here.
-    `ledger=None` and a missing `allowed` still drop the same tags, only under less informative rules.
-    The ledger is asked only about terms the vocabulary lacks.
+    `tags` is the provider's untrusted list; `pack` is unfolded text, folded here. The ledger is asked
+    only about terms the vocabulary lacks.
     """
-    res = PassResult(pass_id=str(payload.get("pass") or pass_id))
-    allow = {int(a) for a in allowed} if allowed is not None else None
-
-    titles = payload.get("titles")
-    if not isinstance(titles, dict):
-        res.rejects.append(Rejection(None, res.pass_id, None, "schema",
-                                     "no 'titles' object in payload"))
+    res = PassResult()
+    if not isinstance(tags, list):
+        res.rejects.append(Rejection(title_id, None, "schema", f"tags are {type(tags).__name__}"))
         return res
 
-    # `norm()` over a pack is not free, and a title's tags repeat it.
-    pack_cache: dict[int, str | None] = {}
-    seen_terms: dict[int, set[str]] = {}
-    for raw_tid, tags in titles.items():
+    folded_pack = norm(pack)
+    seen: set[str] = set()
+    for tg in tags:
+        res.n_seen += 1
+        if not isinstance(tg, dict):
+            res.rejects.append(Rejection(title_id, None, "schema", f"tag is {type(tg).__name__}"))
+            continue
+        raw_term = _stated(tg, "term")
+        quote = _stated(tg, "quote")
+        # Read before the other arms so every rejection records the stated level (decision 400).
+        # `OverflowError` too: `int(inf)` raises it, and a raise would lose the whole pass (decision
+        # 392).
+        stated = _stated(tg, "salience")
         try:
-            tid = int(raw_tid)
-        except (TypeError, ValueError):
-            res.rejects.append(Rejection(None, res.pass_id, None, "schema",
-                                         f"non-numeric title key {raw_tid!r}"))
+            level: int | float | None = DEFAULT_SALIENCE if stated is None else _level(stated)
+        except (TypeError, ValueError, OverflowError):
+            level = None
+        if raw_term is None or quote is None:
+            res.rejects.append(Rejection(
+                title_id, str(raw_term) if raw_term else None,
+                "schema",
+                f"missing {'term' if raw_term is None else 'quote'}; "
+                f"keys were {sorted(tg)}",
+                salience=_storable(level),
+                quote=str(quote) if quote is not None else None))
             continue
-        if allow is not None and tid not in allow:
-            res.rejects.append(Rejection(tid, res.pass_id, None, "unknown_title",
-                                         "title not in this unit"))
+        # Decision 399: a non-string quote is a missing quote, refused under `schema`.
+        if not isinstance(quote, str):
+            res.rejects.append(Rejection(
+                title_id, str(raw_term), "schema",
+                f"quote {str(quote)[:40]!r} is {type(quote).__name__} and not text",
+                salience=_storable(level), quote=str(quote)))
             continue
-        if tid not in pack_cache:
-            text = packs.get(tid)
-            pack_cache[tid] = norm(text) if text is not None else None
-        pack = pack_cache[tid]
-        if pack is None:
-            res.rejects.append(Rejection(tid, res.pass_id, None, "no_pack",
-                                         "no pack for this title"))
+        # Same for the term: `str()` of a list would otherwise alias-repair into a real term.
+        if not isinstance(raw_term, str):
+            res.rejects.append(Rejection(
+                title_id, str(raw_term), "schema",
+                f"term {str(raw_term)[:40]!r} is {type(raw_term).__name__} and not text",
+                salience=_storable(level), quote=quote))
             continue
-        if not isinstance(tags, list):
-            res.rejects.append(Rejection(tid, res.pass_id, None, "schema",
-                                         f"tags for {tid} are {type(tags).__name__}"))
+        # Decision 397: a NUL or lone surrogate would raise from the ledger query and lose the pass.
+        term_text = _storable_text(raw_term)
+        quote_text = _storable_text(quote)
+        if term_text is None or quote_text is None:
+            res.rejects.append(Rejection(
+                title_id, term_text, "schema",
+                f"the {'term' if term_text is None else 'quote'} carries text Postgres "
+                "cannot store: a NUL or an unpaired surrogate",
+                salience=_storable(level), quote=quote_text))
+            continue
+        # Decision 392: a quote that folds to "" matches every pack, so it is refused as missing.
+        folded = norm(quote)
+        if not folded:
+            res.rejects.append(Rejection(
+                title_id, raw_term, "schema",
+                f"quote {quote[:40]!r} folds to nothing under norm()",
+                salience=_storable(level), quote=quote))
             continue
 
-        # Keyed on the int title id: "7" and "07" must share one list, or verified tags vanish unrecorded.
-        kept = res.tags.setdefault(tid, [])
-        seen = seen_terms.setdefault(tid, set())
-        for tg in tags:
-            res.n_seen += 1
-            if not isinstance(tg, dict):
-                res.rejects.append(Rejection(tid, res.pass_id, None, "schema",
-                                             f"tag is {type(tg).__name__}"))
-                continue
-            raw_term = _first(tg, TERM_KEYS)
-            quote = _first(tg, QUOTE_KEYS)
-            # Read before the other arms so every rejection records the stated level (decision 400).
-            # `OverflowError` too: `int(inf)` raises it, and a raise would lose the whole pass (decision
-            # 392).
-            stated = _first(tg, SALIENCE_KEYS)
-            try:
-                level: int | float | None = DEFAULT_SALIENCE if stated is None else _level(stated)
-            except (TypeError, ValueError, OverflowError):
-                level = None
-            if raw_term is None or quote is None:
+        # Stripped once, so the vocabulary and the ledger read the same spelling.
+        offered = raw_term.strip()
+        term = voc.resolve(offered)
+        if term is None:
+            # A re-pointed id is a renamed term, not an unknown one; repairing it lets result files
+            # outlive a merge.
+            term = await adjudicate.rename(ledger, offered, title_id, version=voc.version)
+            if term is None or term not in voc:
+                # A dropped term is a curated retirement, not extractor garbage.
+                retired = await adjudicate.is_retired(ledger, offered, title_id, version=voc.version)
                 res.rejects.append(Rejection(
-                    tid, res.pass_id, str(raw_term) if raw_term else None,
-                    "schema",
-                    f"missing {'term' if raw_term is None else 'quote'}; "
-                    f"keys were {sorted(tg)}",
-                    salience=_storable(level),
-                    quote=str(quote) if quote is not None else None))
-                continue
-            # Decision 399: a non-string quote is a missing quote, refused under `schema`.
-            if not isinstance(quote, str):
-                res.rejects.append(Rejection(
-                    tid, res.pass_id, str(raw_term), "schema",
-                    f"quote {str(quote)[:40]!r} is {type(quote).__name__} and not text",
-                    salience=_storable(level), quote=str(quote)))
-                continue
-            # Same for the term: `str()` of a list would otherwise alias-repair into a real term.
-            if not isinstance(raw_term, str):
-                res.rejects.append(Rejection(
-                    tid, res.pass_id, str(raw_term), "schema",
-                    f"term {str(raw_term)[:40]!r} is {type(raw_term).__name__} and not text",
+                    title_id, raw_term,
+                    "adjudicated" if retired else "unknown_term",
+                    "retired by the curation ledger" if retired
+                    else "not in vocabulary",
                     salience=_storable(level), quote=quote))
                 continue
-            # Decision 397: a NUL or lone surrogate would raise from the ledger query and lose the pass.
-            term_text = _storable_text(str(raw_term))
-            quote_text = _storable_text(quote)
-            if term_text is None or quote_text is None:
-                res.rejects.append(Rejection(
-                    tid, res.pass_id, term_text, "schema",
-                    f"the {'term' if term_text is None else 'quote'} carries text Postgres "
-                    "cannot store: a NUL or an unpaired surrogate",
-                    salience=_storable(level), quote=quote_text))
-                continue
-            # Decision 392: a quote that folds to "" matches every pack, so it is refused as missing.
-            folded = norm(quote)
-            if not folded:
-                res.rejects.append(Rejection(
-                    tid, res.pass_id, str(raw_term), "schema",
-                    f"quote {str(quote)[:40]!r} folds to nothing under norm()",
-                    salience=_storable(level), quote=str(quote)))
-                continue
+        facet = voc.terms[term]
+        if folded not in folded_pack:
+            res.rejects.append(Rejection(
+                title_id, term, "quote_unverified",
+                f"{quote[:80]!r} is not in this title's pack",
+                facet=facet, salience=_storable(level), quote=quote))
+            continue
+        if term in seen:
+            res.rejects.append(Rejection(title_id, term, "duplicate",
+                                         "term emitted twice for this title",
+                                         facet=facet, salience=_storable(level), quote=quote))
+            continue
 
-            # Stripped once, so the vocabulary and the ledger read the same spelling.
-            offered = str(raw_term).strip()
-            term = voc.resolve(offered)
-            if term is None:
-                # A re-pointed id is a renamed term, not an unknown one; repairing it lets result files
-                # outlive a merge.
-                term = await _renamed(ledger, offered, tid, voc.version)
-                if term is None or term not in voc:
-                    # A dropped term is a curated retirement, not extractor garbage.
-                    retired = await _is_retired(ledger, offered, tid, voc.version)
-                    res.rejects.append(Rejection(
-                        tid, res.pass_id, str(raw_term),
-                        "adjudicated" if retired else "unknown_term",
-                        "retired by the curation ledger" if retired
-                        else "not in vocabulary",
-                        salience=_storable(level), quote=str(quote)))
-                    continue
-            facet = voc.terms[term]
-            if folded not in pack:
-                res.rejects.append(Rejection(
-                    tid, res.pass_id, term, "quote_unverified",
-                    f"{str(quote)[:80]!r} is not in this title's pack",
-                    facet=facet, salience=_storable(level), quote=str(quote)))
-                continue
-            if term in seen:
-                res.rejects.append(Rejection(tid, res.pass_id, term, "duplicate",
-                                             "term emitted twice for this title",
-                                             facet=facet, salience=_storable(level),
-                                             quote=str(quote)))
-                continue
+        # Reported here, after the term and quote were judged, so rule precedence is unchanged.
+        if level is None:
+            res.rejects.append(Rejection(
+                title_id, term, "schema",
+                f"stated level {str(stated)[:40]!r} is not a number",
+                facet=facet, quote=quote))
+            continue
+        # Decision 386. Bound to `level`, not `salience`, because `test_landmine_guards.py` flags any
+        # comparison on the word `salience`; this is a domain check on one value and selects no rows.
+        if level not in SALIENCE_LEVELS:
+            res.rejects.append(Rejection(
+                title_id, term, "schema",
+                f"stated level {level} is outside the declared domain {SALIENCE_LEVELS}",
+                facet=facet, salience=_storable(level), quote=quote))
+            continue
 
-            # Reported here, after the term and quote were judged, so rule precedence is unchanged.
-            if level is None:
-                res.rejects.append(Rejection(
-                    tid, res.pass_id, term, "schema",
-                    f"stated level {str(stated)[:40]!r} is not a number",
-                    facet=facet, quote=str(quote)))
-                continue
-            # Decision 386. Bound to `level`, not `salience`, because `test_landmine_guards.py` flags any
-            # comparison on the word `salience`; this is a domain check on one value and selects no rows.
-            if level not in SALIENCE_LEVELS:
-                res.rejects.append(Rejection(
-                    tid, res.pass_id, term, "schema",
-                    f"stated level {level} is outside the declared domain {SALIENCE_LEVELS}",
-                    facet=facet, salience=_storable(level), quote=str(quote)))
-                continue
-
-            seen.add(term)
-            kept.append(VerifiedTag(
-                term=term, facet=facet,
-                salience=level,
-                source=str(_first(tg, SOURCE_KEYS) or ""),
-                quote=str(quote), repaired=(term != str(raw_term).strip())))
+        seen.add(term)
+        res.tags.append(VerifiedTag(
+            term=term, facet=facet,
+            salience=level,
+            source=str(_stated(tg, "source") or ""),
+            quote=quote, repaired=(term != raw_term.strip())))
     return res
-
-
-async def _renamed(
-    ledger: asyncpg.Connection | None, term_id: str, title_id: int, version: str
-) -> str | None:
-    """`dna/adjudicate.py`'s `rename` where there is a ledger to read, None where there is not."""
-    if ledger is None:
-        return None
-    return await adjudicate.rename(ledger, term_id, title_id, version=version)
-
-
-async def _is_retired(
-    ledger: asyncpg.Connection | None, term_id: str, title_id: int, version: str
-) -> bool:
-    """`dna/adjudicate.py`'s `is_retired` where there is a ledger, False where there is not."""
-    if ledger is None:
-        return False
-    return await adjudicate.is_retired(ledger, term_id, title_id, version=version)
 
 
 def _level(stated: Any) -> int | float:
@@ -517,53 +404,30 @@ async def record_rejects(
 ) -> int:
     """Write a pass's refusals to `dna_reject`. Returns how many rows landed. Decision 341.
 
-    Titles this install does not hold are written NULL, and every untrusted value is guarded at the
-    bind, because `executemany` is atomic and one bad value would discard the pass's refusals.
+    Every untrusted value is guarded at the bind, because `executemany` is atomic and one bad value
+    would discard the pass's refusals.
     """
-    refused = list(rejects)
-    if not refused:
-        return 0
-    held = await _titles_this_install_holds(conn, refused)
     rows = [
-        (r.title_id if r.title_id in held else None,
-         run_id, _storable_text(r.term), r.facet, _storable(r.salience),
+        (r.title_id, run_id, _storable_text(r.term), r.facet, _storable(r.salience),
          _storable_text(r.quote), r.reason, provider)
-        for r in refused
+        for r in rejects
     ]
+    if not rows:
+        return 0
     await conn.executemany(_RECORD_REJECT, rows)
     return len(rows)
 
 
-async def _titles_this_install_holds(
-    conn: asyncpg.Connection, rejects: Sequence[Rejection]
-) -> frozenset[int]:
-    """Which of a pass's refused title ids `title` actually carries a row for; one query per call."""
-    named = {
-        r.title_id for r in rejects
-        if r.title_id is not None and -_INT8 - 1 <= r.title_id <= _INT8
-    }
-    if not named:
-        return frozenset()
-    rows = await conn.fetch("SELECT id FROM title WHERE id = ANY($1::bigint[])", sorted(named))
-    return frozenset(row["id"] for row in rows)
-
-
 __all__ = [
     "DEFAULT_SALIENCE",
-    "PIPELINE",
-    "QUOTE_KEYS",
     "REASONS",
-    "SALIENCE_KEYS",
     "SALIENCE_LEVELS",
-    "SOURCE_KEYS",
-    "TERM_KEYS",
     "PassResult",
     "Rejection",
     "VerifiedTag",
     "Vocabulary",
     "load_vocabulary",
     "read_pack",
-    "read_packs",
     "record_rejects",
-    "verify_payload",
+    "verify_tags",
 ]

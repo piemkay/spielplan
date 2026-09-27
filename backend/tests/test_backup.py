@@ -62,6 +62,7 @@ APP_STATE = {"schema_migration", "setup_step", "flywheel_item", "flywheel_batch"
 
 # Decision 291: the genome slice is no longer imported; `movie_data.RETIRED` covers pre-291 archives.
 GENOME_NOT_IMPORTED = {"ml_genome_tag", "ml_link", "ml_genome_score"}
+GENOME_RETIRED = tuple(sorted(f"public.{name}" for name in GENOME_NOT_IMPORTED))
 
 # This box's queued work, robots cache and raw-store pointers, which a restore would name and not have.
 ACQUISITION_SPINE = {"acquisition_task", "raw_document", "fetch_host_state"}
@@ -417,7 +418,7 @@ async def test_a_restore_reads_an_archive_written_before_the_genome_slice_was_re
     assert await empty_install.fetchval("SELECT name FROM title WHERE id = 11") == CONTENT_MARKER
     assert await empty_install.fetchval("SELECT count(*) FROM review_store.review") == 1
     # Named in the report: the operator is told which three tables this build no longer keeps.
-    assert restored.retired == tuple(sorted(movie_data.RETIRED))
+    assert restored.retired == GENOME_RETIRED
     assert not set(restored.tables) & movie_data.RETIRED
     for table in sorted(GENOME_NOT_IMPORTED):
         assert await empty_install.fetchval(f"SELECT count(*) FROM {table}") == 0, table
@@ -439,6 +440,22 @@ async def test_a_restore_still_refuses_a_table_this_build_neither_archives_nor_r
     with pytest.raises(movie_data.RestoreRefused, match="app_user"):
         await movie_data.restore_archive(empty_install, tampered)
     assert await empty_install.fetchval("SELECT count(*) FROM title") == 0
+
+
+async def test_a_restore_passes_over_a_table_migration_0039_dropped(db, tmp_path, empty_install):
+    """Decision 309: an archive written before 0039 still names the five tables it dropped."""
+    await _seed_movie_data(db)
+    report = await movie_data.write_archive(db, tmp_path / "movie-data.zip")
+
+    def plant(manifest):
+        manifest["tables"].append(
+            {"schema": "public", "name": "watchlist", "columns": ["title_id"], "rows": 0}
+        )
+
+    older = _with_edited_manifest(report.path, tmp_path / "pre-0039.zip", plant)
+    restored = await movie_data.restore_archive(empty_install, older)
+    assert restored.retired == ("public.watchlist",)
+    assert await empty_install.fetchval("SELECT name FROM title WHERE id = 11") == CONTENT_MARKER
 
 
 async def test_every_table_is_either_archived_or_deliberately_left_out(db):
@@ -1393,7 +1410,7 @@ async def test_the_operator_restoring_a_pre_291_archive_is_told_what_was_passed_
         settings.cache_clear()
 
     printed = capsys.readouterr().out
-    unnamed = sorted(name for name in movie_data.RETIRED if name not in printed)
+    unnamed = sorted(name for name in GENOME_RETIRED if name not in printed)
     assert not unnamed, f"the restore line does not name {unnamed}: {printed!r}"
     assert "decision 291" in printed, printed
     assert printed.isascii(), f"a restore line a cp1252 console cannot print: {printed!r}"
@@ -1421,8 +1438,8 @@ async def test_an_archive_written_on_a_pre_291_install_names_what_it_leaves_behi
     )
 
     report = await movie_data.write_archive(db, tmp_path / "pre-291-data.zip")
-    assert report.retired == tuple(sorted(movie_data.RETIRED))
-    assert report.as_dict()["retired"] == sorted(movie_data.RETIRED)
+    assert report.retired == GENOME_RETIRED
+    assert report.as_dict()["retired"] == list(GENOME_RETIRED)
     assert not set(report.tables) & movie_data.RETIRED, "the slice must still not be archived"
 
     monkeypatch.setenv("DATABASE_URL", pg_url)
@@ -1433,7 +1450,7 @@ async def test_an_archive_written_on_a_pre_291_install_names_what_it_leaves_behi
         settings.cache_clear()
 
     printed = capsys.readouterr().out
-    unnamed = sorted(name for name in movie_data.RETIRED if name not in printed)
+    unnamed = sorted(name for name in GENOME_RETIRED if name not in printed)
     assert not unnamed, f"the write line does not name {unnamed}: {printed!r}"
     assert "decision 291" in printed, printed
     assert printed.isascii(), f"a write line a cp1252 console cannot print: {printed!r}"

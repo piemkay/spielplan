@@ -86,13 +86,11 @@ def test_load_order_puts_parents_before_children():
     order = [m.target for m in load.MAPPINGS]
     assert order.index("title") == 0
     assert order.index("person") < order.index("credit")
-    assert order.index("rating_source") < order.index("rating_title_map")
 
 
-def test_the_three_per_source_tables_carry_the_corpus_key(content):
+def test_the_per_source_tables_carry_the_corpus_key(content):
     """Without `source` in the key, the shipped bundle's
     duplicate groups collide and the whole seed rolls back."""
-    assert _map("title_language").columns["source"] == "source"
     assert _map("title_country").columns["source"] == "source"
     platform = _map("display.platform_rating")
     assert platform.columns["platform"] == "source"
@@ -175,32 +173,14 @@ def test_title_company_is_mapped_rather_than_skipped():
     assert "country" not in tmap.columns.values()
 
 
-def test_language_role_and_source_are_two_different_facts(content):
-    """0015's key is (title_id, source, language, role); folding one into the other loses a fact."""
-    tmap = _map("title_language")
-    assert tmap.columns["role"] == "is_primary"
-    assert tmap.columns["source"] == "source"
-    idx = {c: i for i, c in enumerate(tmap.pg_columns)}
-    rows = list(load._rows(content, tmap))
-    assert rows
-    for row in rows:
-        assert row[idx["role"]] in ("primary", "")
-        assert row[idx["source"]] == "tmdb"
-
-
 # These need a server: the defect is a *unique violation*, which only the destination key can raise.
 
 
 def _add_duplicate_per_source_rows(root: Path) -> dict[str, int]:
     """The committed fixture ships one source per title, so it cannot fail the way the real bundle does."""
     db = sqlite3.connect(root / "content.sqlite")
-    language = db.execute("SELECT language FROM title_language WHERE title_id = 1").fetchone()[0]
     country = db.execute("SELECT country FROM title_country WHERE title_id = 1").fetchone()[0]
     with db:
-        db.executemany(
-            "INSERT INTO title_language (title_id, source, language, is_primary) VALUES (?,?,?,?)",
-            [(1, "omdb", language, 1), (1, "wikidata", language, 0), (1, "trakt", language, 1)],
-        )
         db.executemany(
             "INSERT INTO title_country (title_id, source, country) VALUES (?,?,?)",
             [(1, "omdb", country), (1, "wikidata", country)],
@@ -214,7 +194,7 @@ def _add_duplicate_per_source_rows(root: Path) -> dict[str, int]:
         )
     counts = {
         table: db.execute(f"SELECT count(*) FROM {table}").fetchone()[0]
-        for table in ("title_language", "title_country", "platform_rating")
+        for table in ("title_country", "platform_rating")
     }
     db.close()
     # BUNDLE.json is read before the first row, so rows added after `make_bundle` need a re-inventory.
@@ -230,7 +210,6 @@ async def test_every_per_source_row_survives_the_import(db, tmp_path):
     report = await bundle_import.import_bundle(db, bundle, tmp_path / "artifacts")
     assert report.ok, report.render()
 
-    assert await db.fetchval("SELECT count(*) FROM title_language") == shipped["title_language"]
     assert await db.fetchval("SELECT count(*) FROM title_country") == shipped["title_country"]
     assert (
         await db.fetchval("SELECT count(*) FROM display.platform_rating")
@@ -238,12 +217,6 @@ async def test_every_per_source_row_survives_the_import(db, tmp_path):
     )
 
     # ...and the surviving rows are distinguishable by the component that was being dropped.
-    langs = await db.fetch(
-        "SELECT source, role FROM title_language WHERE title_id = 1 ORDER BY source"
-    )
-    assert [(r["source"], r["role"]) for r in langs] == [
-        ("omdb", "primary"), ("tmdb", "primary"), ("trakt", "primary"), ("wikidata", ""),
-    ]
     countries = await db.fetch(
         "SELECT source FROM title_country WHERE title_id = 1 ORDER BY source"
     )
