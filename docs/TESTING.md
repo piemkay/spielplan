@@ -26,20 +26,14 @@ silently:
 - **Integration.** Everything behind the `db`, `app` or `pg_url` fixtures. Give it a database:
 
   ```bash
-  docker compose -f docker-compose.yml -f ops/compose.dev.yml up -d db
-  docker compose exec db createdb -U spielplan spielplan_test
-  echo 'TEST_DATABASE_URL=postgresql://spielplan:<pw>@127.0.0.1:5432/spielplan_test' > .env.test
+  docker compose -f ops/compose.test.yml up -d
+  echo 'TEST_DATABASE_URL=postgresql://spielplan:spielplan@127.0.0.1:5442/spielplan_test' > .env.test
   ```
 
-  `conftest.py` loads `.env.test`, creates a database per test process and drops it afterwards.
-  Every run's first line says whether the layer is armed:
-
-  ```
-  integration layer: ARMED against 127.0.0.1:5432/spielplan_test_p37812 (source: .env.test)
-  integration layer: UNARMED (TEST_DATABASE_URL is unset) -- db/app/pg_url tests skip
-  ```
-
-  `--no-db` disarms it on a machine that has `.env.test`. A green UNARMED run has not run the
+  `conftest.py` loads `.env.test`, migrates a template database once per run and clones it for
+  each test. The names are per checkout and xdist worker, so a run reclaims what a killed one
+  left, and two runs in one checkout at once collide. `docker compose -f ops/compose.test.yml
+  down -v` drops them all. `-rs` names the skips: a green run without the URL has not run the
   integration layer; CI does.
 
 Two test doubles refuse rather than mock. `ops/fake_jellyfin.py` answers the Jellyfin routes §7.1

@@ -3012,7 +3012,7 @@ async def test_a_combine_landing_after_the_host_ended_the_room_does_not_revive_i
 
 
 # Through the routes with the arm as it ships: the seal is measured where tokens are minted. Ids
-# restart per test (`conftest.db` recreates the schema), so the arm is deterministic here.
+# restart per test (`conftest.db` is a fresh clone), so the arm is deterministic here.
 
 import itertools  # noqa: E402
 
