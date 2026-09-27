@@ -1,7 +1,7 @@
 """Connector configuration: stored in `connector_config`, seeded from env on first boot only (§2).
 
-Seeding never overwrites a row and refuses a secret without SECRETS_KEY. Every §6.6 card is one
-`ConnectorSpec` in `CONNECTORS`; Jellyfin's row has its own load/save.
+Seeding never overwrites a row and refuses a secret without SECRETS_KEY. Every §6.6 card but
+Jellyfin's is one row of `FIELDS`; Jellyfin's has its own load/save.
 """
 
 from __future__ import annotations
@@ -169,6 +169,17 @@ def make_client(cfg: JellyfinConfig):
         cfg.url, cfg.api_key,
         server_version=cfg.server_version, server_supported=cfg.server_supported,
     )
+
+
+async def play_link(conn: asyncpg.Connection) -> Callable[[str], str] | None:
+    """§7.1's "Play on Jellyfin", a deep link into the server's own web player; None with no server.
+    The URL is plaintext config, so no secret is opened for it."""
+    base = await conn.fetchval(
+        "SELECT config->>'url' FROM connector_config WHERE name = $1", JELLYFIN
+    )
+    if not base:
+        return None
+    return lambda jellyfin_id: f"{base.rstrip('/')}/web/#/details?id={jellyfin_id}"
 
 
 async def load_jellyfin(conn: asyncpg.Connection, *, for_update: bool = False) -> JellyfinConfig:
@@ -343,10 +354,7 @@ async def delta_since(conn: asyncpg.Connection, cfg: JellyfinConfig) -> datetime
     return gained or datetime.now(UTC)
 
 
-# --- §6.6's connectors, as one table (M5.5 plan A1, A2, A4) ----------------------------------
-#
-# Jellyfin's row points at `load_jellyfin`/`save_jellyfin` (plan A2): its merge rules (origin,
-# watermark, library pick, mint) are not the generic merge's.
+# --- §6.6's other connectors; Jellyfin's merge (origin, watermark, library pick, mint) is its own ---
 
 
 @dataclass(frozen=True)
@@ -361,20 +369,31 @@ class ConnectorState:
     secrets_unreadable: bool = False
 
 
-@dataclass(frozen=True)
-class ConnectorSpec:
-    """One of §6.6's connectors: how it is read, written and tested, and what it stores.
+# Model and decision 343's price override (USD per 1M tokens); the key travels in a header (§9).
+_PROVIDER_FIELDS = ("model", "price_input", "price_output")
 
-    `test` is None where this build has none (decision 433); `seeded` mirrors `env_seeds`.
-    """
+# Each connector's (settings, secrets), as stored.
+FIELDS: dict[str, tuple[tuple[str, ...], tuple[str, ...]]] = {
+    # The keyed sources (decisions 434, 453); Trakt's client id is config, not a secret.
+    "tmdb": ((), ("api_key",)),
+    "omdb": ((), ("api_key",)),
+    "trakt": (("client_id",), ("client_secret",)),
+    "gemini": (_PROVIDER_FIELDS, ("api_key",)),
+    "anthropic": (_PROVIDER_FIELDS, ("api_key",)),
+    "openai": (_PROVIDER_FIELDS, ("api_key",)),
+    # §6.6's shared LLM settings (decisions 324, 325); nothing secret.
+    "llm": (("cap_usd", "extraction_provider", "parallel", "parallel_providers", "passes"), ()),
+}
 
-    name: str
-    load: Callable[..., Awaitable[Any]]
-    save: Callable[..., Awaitable[Any]]
-    config_fields: tuple[str, ...]
-    secret_fields: tuple[str, ...]
-    test: Callable[[asyncpg.Connection], Awaitable[dict[str, Any]]] | None
-    seeded: bool
+
+def fields_of(name: str) -> tuple[tuple[str, ...], tuple[str, ...]]:
+    """`FIELDS[name]`, or a refusal that names every connector there is."""
+    try:
+        return FIELDS[name]
+    except KeyError:
+        raise LookupError(
+            f"no connector named {name!r}; the registered ones are {', '.join(sorted(FIELDS))}"
+        ) from None
 
 
 async def _load_state(
@@ -403,24 +422,24 @@ async def _save_state(
     None (or "" for a secret) keeps what is stored; undeclared names are refused before any write.
     `unset` removes declared settings only (decision 450); a secret cannot be unset (decision 452).
     """
-    spec = CONNECTORS[name]
-    declared = spec.config_fields + spec.secret_fields
+    config_fields, secret_fields = fields_of(name)
+    declared = config_fields + secret_fields
     unknown = sorted(set(fields) - set(declared))
     if unknown:
         raise ValueError(
             f"connector {name} has no field {', '.join(unknown)}; "
             f"it declares {', '.join(declared) or 'none'}"
         )
-    refused = sorted(set(unset) - set(spec.config_fields))
+    refused = sorted(set(unset) - set(config_fields))
     if refused:
         raise ValueError(
             f"connector {name} cannot unset {', '.join(refused)}; only its settings are unset "
-            f"({', '.join(spec.config_fields) or 'none'}), and a secret is kept by an empty field"
+            f"({', '.join(config_fields) or 'none'}), and a secret is kept by an empty field"
         )
     both = sorted(key for key in unset if fields.get(key) is not None)
     if both:
         raise ValueError(f"connector {name} was asked to set and unset {', '.join(both)} at once")
-    typed = {key: fields[key] for key in spec.secret_fields if fields.get(key) not in (None, "")}
+    typed = {key: fields[key] for key in secret_fields if fields.get(key) not in (None, "")}
     if typed:
         # §2's refusal, before anything is written.
         settings().require_secrets_key()
@@ -431,7 +450,7 @@ async def _save_state(
         )
         current = await _load_state(name, conn, for_update=True)
         config = dict(current.config)
-        config.update({key: fields[key] for key in spec.config_fields if fields.get(key) is not None})
+        config.update({key: fields[key] for key in config_fields if fields.get(key) is not None})
         for key in unset:
             config.pop(key, None)
         if not typed:
@@ -466,125 +485,52 @@ async def _probe_source(name: str, conn: asyncpg.Connection) -> dict[str, Any]:
     return await probes.PROBES[name](conn, open_fetcher=client.open_fetcher)
 
 
-def _stored(
-    name: str,
-    *,
-    config_fields: tuple[str, ...] = (),
-    secret_fields: tuple[str, ...] = (),
-    test: Callable[[asyncpg.Connection], Awaitable[dict[str, Any]]] | None = None,
-    seeded: bool,
-) -> ConnectorSpec:
-    """A connector the generic read and merge serve, bound to its own row by name."""
-    return ConnectorSpec(
-        name=name, load=partial(_load_state, name), save=partial(_save_state, name),
-        config_fields=config_fields, secret_fields=secret_fields, test=test, seeded=seeded,
-    )
-
-
-# Model and decision 343's price override (USD per 1M tokens); the key travels in a header (§9).
-_PROVIDER_FIELDS = ("model", "price_input", "price_output")
-
-CONNECTORS: dict[str, ConnectorSpec] = {
-    spec.name: spec
-    for spec in (
-        # No test: `api/admin.test_jellyfin` stores §7.1's verdict as it tests (decision 433).
-        ConnectorSpec(
-            name=JELLYFIN, load=load_jellyfin, save=save_jellyfin,
-            config_fields=(
-                "url", "library_ids", "server_version", "server_supported", "delta_watermark",
-            ),
-            secret_fields=("api_key", "user_tokens", "webhook_token"),
-            test=None, seeded=True,
-        ),
-        # The keyed sources (decisions 434, 453); Trakt's client id is config, not a secret.
-        _stored("tmdb", secret_fields=("api_key",), test=partial(_probe_source, "tmdb"),
-                seeded=True),
-        _stored("omdb", secret_fields=("api_key",), test=partial(_probe_source, "omdb"),
-                seeded=True),
-        _stored("trakt", config_fields=("client_id",), secret_fields=("client_secret",),
-                test=partial(_probe_source, "trakt"), seeded=True),
-        _stored("gemini", config_fields=_PROVIDER_FIELDS, secret_fields=("api_key",),
-                test=partial(_probe_provider, "gemini"), seeded=True),
-        _stored("anthropic", config_fields=_PROVIDER_FIELDS, secret_fields=("api_key",),
-                test=partial(_probe_provider, "anthropic"), seeded=True),
-        _stored("openai", config_fields=_PROVIDER_FIELDS, secret_fields=("api_key",),
-                test=partial(_probe_provider, "openai"), seeded=True),
-        # §6.6's shared LLM settings (decisions 324, 325); nothing secret and nothing seeded.
-        _stored(
-            "llm",
-            config_fields=(
-                "cap_usd", "extraction_provider", "parallel", "parallel_providers", "passes",
-            ),
-            seeded=False,
-        ),
-    )
+# Each card's test button (decision 433); Jellyfin's is `api/admin.test_jellyfin`, which stores
+# §7.1's verdict as it tests.
+TESTS: dict[str, Callable[[asyncpg.Connection], Awaitable[dict[str, Any]]]] = {
+    **{name: partial(_probe_source, name) for name in ("tmdb", "omdb", "trakt")},
+    **{name: partial(_probe_provider, name) for name in ("gemini", "anthropic", "openai")},
 }
-
-
-def spec_for(name: str) -> ConnectorSpec:
-    """The registered connector called `name`, or a refusal that names every one there is."""
-    try:
-        return CONNECTORS[name]
-    except KeyError:
-        raise LookupError(
-            f"no connector named {name!r}; the registered ones are {', '.join(sorted(CONNECTORS))}"
-        ) from None
 
 
 async def load_connector(
     conn: asyncpg.Connection, name: str, *, for_update: bool = False
-) -> JellyfinConfig | ConnectorState:
-    """Any connector's stored state (Jellyfin's through `load_jellyfin`)."""
-    return await spec_for(name).load(conn, for_update=for_update)
+) -> ConnectorState:
+    fields_of(name)
+    return await _load_state(name, conn, for_update=for_update)
 
 
 async def save_connector(
     conn: asyncpg.Connection, name: str, *, unset: Iterable[str] = (), **fields: Any
-) -> JellyfinConfig | ConnectorState:
-    """Any connector's partial merge (Jellyfin's through `save_jellyfin`).
-
-    Refuses `mint_webhook_token` (decision 416) and any `unset` for Jellyfin (decision 364).
-    """
-    spec = spec_for(name)
-    if spec.name == JELLYFIN and "mint_webhook_token" in fields:
-        raise ValueError(
-            "the jellyfin webhook token is minted only by the admin's own save "
-            "(api/admin.put_jellyfin, decision 416), never through save_connector"
-        )
-    removed = tuple(unset)
-    if not removed:
-        return await spec.save(conn, **fields)
-    if spec.name == JELLYFIN:
-        raise ValueError(
-            "the jellyfin connector unsets nothing through save_connector: its merge is"
-            " save_jellyfin's, and decision 364's library pick is not a setting to remove"
-        )
-    return await spec.save(conn, unset=removed, **fields)
+) -> ConnectorState:
+    return await _save_state(name, conn, unset=tuple(unset), **fields)
 
 
 async def test_connector(conn: asyncpg.Connection, name: str) -> dict[str, Any]:
     """The one dispatch behind every card's test button; no test is refused by name (404, decision 433)."""
-    spec = spec_for(name)
-    if spec.test is None:
+    test = TESTS.get(name)
+    if test is None:
+        fields_of(name)
         raise LookupError(f"connector {name} has no test in this build")
-    return await spec.test(conn)
+    return await test(conn)
 
 
 __all__ = [
-    "CONNECTORS",
+    "FIELDS",
     "JELLYFIN",
     "SECRETS_UNREADABLE_REASON",
-    "ConnectorSpec",
+    "TESTS",
     "ConnectorState",
     "JellyfinConfig",
     "delta_since",
     "env_seeds",
     "make_client",
     "load_connector",
+    "play_link",
     "load_jellyfin",
     "save_connector",
     "save_jellyfin",
+    "fields_of",
     "seed_from_env",
-    "spec_for",
     "test_connector",
 ]

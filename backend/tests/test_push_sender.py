@@ -22,7 +22,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from cryptography.hazmat.primitives.kdf.hkdf import HKDF
 from cryptography.hazmat.primitives.serialization import Encoding, PublicFormat
 
-from spielplan.core import secrets
+from spielplan.core import logs, secrets
 from spielplan.push import keys, send
 from spielplan.push.send import device_handle
 
@@ -425,7 +425,9 @@ async def test_a_household_with_no_keypair_sends_nothing_and_raises_nothing(hous
 async def test_the_endpoint_and_the_auth_key_never_reach_a_log_line_or_a_result(
     household, db, caplog
 ):
-    """httpx puts the URL in its exception messages, so failures log the exception's type only."""
+    """httpx puts the URL in its exception messages, so failures log the exception's type only; its
+    own request lines are silenced by the logging both processes configure."""
+    logs.configure()
     service = FakePushService()
     service.answers[household.phone.endpoint] = 410
     service.answers[household.laptop.endpoint] = 500

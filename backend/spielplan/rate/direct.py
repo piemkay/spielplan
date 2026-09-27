@@ -54,8 +54,10 @@ async def _put_on_table(
         "reask_of": None,
     }
     async with conn.transaction():
-        await conn.execute("SELECT 1 FROM rate_session WHERE id = $1 FOR UPDATE", s.id)
-        return await session.stash_card(conn, s, card)
+        token = await conn.fetchval(
+            "SELECT card_token FROM rate_session WHERE id = $1 FOR UPDATE", s.id
+        )
+        return await session.stash(conn, s, card, expected=token)
 
 
 async def answer(

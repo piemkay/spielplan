@@ -71,27 +71,19 @@ def _accumulate(tilt: Mapping[str, float], delta: Mapping[str, float]) -> dict[s
 
 
 def observe(
-    tilt: Mapping[str, float], *, chosen: Vector, rejected: Vector, f: Frame | None = None,
-    frame: Frame | None = None,
+    tilt: Mapping[str, float], *, chosen: Vector, rejected: Vector, frame: Frame
 ) -> dict[str, float]:
-    """§6.2 step 4's separating answer: chosen minus rejected in the pool's frame (`frame` or `f`)."""
-    ref = frame if frame is not None else f
-    if ref is None:
-        raise TypeError("observe() needs the session's pool frame")
-    a, b = centred(chosen, ref), centred(rejected, ref)
+    """§6.2 step 4's separating answer: chosen minus rejected in the pool's frame."""
+    a, b = centred(chosen, frame), centred(rejected, frame)
     delta = {t: a.get(t, 0.0) - b.get(t, 0.0) for t in set(a) | set(b)}
     return _accumulate(tilt, delta)
 
 
 def observe_level(
-    tilt: Mapping[str, float], *, first: Vector, second: Vector, toward: bool,
-    f: Frame | None = None, frame: Frame | None = None,
+    tilt: Mapping[str, float], *, first: Vector, second: Vector, toward: bool, frame: Frame
 ) -> dict[str, float]:
     """Decision 154's level answers: `either` adds both centred vectors, `neither` subtracts them."""
-    ref = frame if frame is not None else f
-    if ref is None:
-        raise TypeError("observe_level() needs the session's pool frame")
-    a, b = centred(first, ref), centred(second, ref)
+    a, b = centred(first, frame), centred(second, frame)
     sign = 1.0 if toward else -1.0
     delta = {t: sign * (a.get(t, 0.0) + b.get(t, 0.0)) for t in set(a) | set(b)}
     return _accumulate(tilt, delta)
@@ -146,11 +138,6 @@ def adjustment(tilt: Mapping[str, float], vec: Vector, f: Frame) -> float:
     return total / max(len(f.mean), 1)
 
 
-def moved_facets(tilt: Mapping[str, float], *, top: int = 3) -> list[tuple[str, float]]:
-    """The terms the round moved most, strongest first; ordering only (§4.1 rule 2)."""
-    return sorted(tilt.items(), key=lambda kv: -abs(kv[1]))[:top]
-
-
 __all__ = [
     "Frame",
     "MIN_SPREAD",
@@ -159,7 +146,6 @@ __all__ = [
     "applies",
     "centred",
     "frame",
-    "moved_facets",
     "observe",
     "observe_level",
 ]

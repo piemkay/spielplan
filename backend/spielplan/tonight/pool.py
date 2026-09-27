@@ -52,9 +52,6 @@ def veto_labels(keys: Iterable[str]) -> list[str]:
 # §6.2 step 1: "the pool admits up to budget + 40 min"; the spec's number, not a tunable.
 BUDGET_GRACE_MIN = 40
 
-# §6.2 step 1's slider default, for a label whose session row cannot be read.
-DEFAULT_BUDGET_MIN = 130
-
 # 54h: a series' `runtime_min` is per episode, and every label with a number says so (decision 219).
 KIND_SERIES = "series"
 PER_EPISODE = " per episode"
@@ -294,7 +291,6 @@ async def genres_of(conn: asyncpg.Connection, title_ids: Sequence[int]) -> dict[
 __all__ = [
     "BUDGET_GRACE_MIN",
     "CARD_GENRES",
-    "DEFAULT_BUDGET_MIN",
     "KIND_SERIES",
     "MAX_VETOES",
     "PER_EPISODE",

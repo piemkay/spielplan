@@ -86,8 +86,8 @@ async def _fire(name: str) -> None:
 async def hangs_up(monkeypatch):
     """A URL that accepts and closes: fails through real
     httpx and h11; the once-per-outage memos are reset."""
-    monkeypatch.setattr(seen_sync, "_unreachable_since", None)
-    monkeypatch.setattr(playback, "_unreachable_since", None)
+    monkeypatch.setattr(seen_sync._outage, "since", None)
+    monkeypatch.setattr(playback._outage, "since", None)
 
     async def close(reader, writer) -> None:
         writer.close()

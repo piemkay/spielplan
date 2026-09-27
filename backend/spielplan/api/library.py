@@ -10,6 +10,7 @@ from fastapi import APIRouter, HTTPException, Query, Request, status
 
 from spielplan.api import auth as auth_api
 from spielplan.api.deps import DB, ActiveUser
+from spielplan.connectors import registry
 from spielplan.core.config import settings
 from spielplan.db import dna_terms, genres, library
 from spielplan.home import rail, suggest
@@ -109,18 +110,15 @@ async def title_detail(title_id: int, conn: DB, user: ActiveUser, request: Reque
     )
 
     # Read unconditionally: "no server" and "not in your library" are different sentences.
-    jf_base = await conn.fetchval(
-        "SELECT config->>'url' FROM connector_config WHERE name = 'jellyfin'"
-    )
+    link = await registry.play_link(conn)
     jf_url = None
     play_reason = None
-    if not jf_base:
+    if link is None:
         play_reason = "no_server"
     elif not title.get("jellyfin_id"):
         play_reason = "not_in_library"
     else:
-        # §7.1: deep-link to the server's web player.
-        jf_url = f"{jf_base.rstrip('/')}/web/#/details?id={title['jellyfin_id']}"
+        jf_url = link(title["jellyfin_id"])
 
     body: dict[str, Any] = {
         "title": {
@@ -135,7 +133,6 @@ async def title_detail(title_id: int, conn: DB, user: ActiveUser, request: Reque
         "credits": await library.credits_for(conn, title_id),
         # §4.1 rule 3: labelled at the boundary; the note is the same fact for members (decision 486).
         "platform_ratings": {
-            "display_only": True,
             "note": "For reference only - these scores never affect your suggestions.",
             "items": await library.platform_ratings(conn, title_id),
         },
@@ -186,75 +183,6 @@ def _extracted(
     return shaped
 
 
-@router.get("/titles/{title_id}/similar-by-term")
-async def similar_by_term(
-    title_id: int,
-    conn: DB,
-    _: ActiveUser,
-    kind: list[Literal["movie", "series"]] = Query(
-        ..., description="§4.1 rule 5: one or both, never neither. Repeat the parameter for both."
-    ),
-    limit: int = Query(12, ge=1, le=60),
-) -> dict[str, Any]:
-    """§6.4 wander: neighbours by shared DNA term, one list per tier (rule 1). `kind` is the caller's
-    selection, not the anchor's (§4.1 rule 5)."""
-    try:
-        kinds = library.normalise_kinds(kind)
-    except ValueError as exc:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
-
-    # Resolved once: two reads could straddle an import.
-    version = await dna_terms.active_version(conn)
-
-    async def neighbours(table: str) -> list[dict[str, Any]]:
-        if version is None:
-            return []
-        return [
-            dict(r)
-            for r in await conn.fetch(
-                f"""
-                -- DISTINCT on both sides, because §6.6's parallel extraction mode writes one
-                -- `dna_tag` row PER PROVIDER for one term (0004_dna.sql:83 keys it
-                -- (title_id, version, term, provider), which section 2 of 0018 is what arms).
-                -- Un-deduplicated, two providers agreeing on one term multiply the join four
-                -- ways: `shared` counts 4 where one term is shared, and §6.4's edge label reads
-                -- that term four times. Rule 1 keeps both rows in the table; this is a read, and
-                -- what the reader asks is how many terms two titles share. `placement/features
-                -- ._dna_x` already writes the same DISTINCT for the same reason.
-                --
-                -- `dna_projected` cannot carry the duplicate at all (0004_dna.sql:113 keys it
-                -- (title_id, version, term), no provider column), so on that instantiation the
-                -- DISTINCT is a constraint-guaranteed no-op kept for one statement, not two.
-                -- [M4.9 review cycle 1: M49-REV1-03]
-                WITH mine AS (
-                    SELECT DISTINCT term FROM {table} WHERE title_id = $1 AND version = $3
-                )
-                SELECT o.title_id, t.name, t.year, t.kind,
-                       array_agg(DISTINCT o.term ORDER BY o.term) AS via,
-                       count(DISTINCT o.term) AS shared
-                  FROM {table} o
-                  JOIN mine m ON m.term = o.term
-                  JOIN title t ON t.id = o.title_id
-                 WHERE o.title_id <> $1 AND o.version = $3 AND t.kind = ANY($2)
-                 GROUP BY o.title_id, t.name, t.year, t.kind
-                 ORDER BY count(DISTINCT o.term) DESC, t.name
-                 LIMIT $4
-                """,
-                title_id,
-                kinds,
-                version,
-                limit,
-            )
-        ]
-
-    # One statement per tier (§4.1 rule 1); a shared subquery is where the tiers would meet.
-    return {
-        "kinds": kinds,
-        "extracted": await neighbours("dna_tag"),
-        "projected": await neighbours("dna_projected"),
-    }
-
-
 @router.get("/facets")
 async def facets(
     conn: DB,
@@ -270,40 +198,6 @@ async def facets(
         "genres": await library.genres(conn, kinds),
         "decades": await library.decades(conn, kinds),
     }
-
-
-@router.get("/people/{person_id}")
-async def person_detail(
-    person_id: int,
-    conn: DB,
-    _: ActiveUser,
-    kind: list[Literal["movie", "series"]] = Query(
-        ..., description="§4.1 rule 5: one or both, never neither. Repeat the parameter for both."
-    ),
-) -> dict[str, Any]:
-    """§6.0's filmography filter, partitioned by the selected kinds like the listing (decision 18);
-    `t.id` makes the order total."""
-    try:
-        kinds = library.normalise_kinds(kind)
-    except ValueError as exc:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
-
-    person = await conn.fetchrow("SELECT id, name, profile_path FROM person WHERE id = $1", person_id)
-    if person is None:
-        raise HTTPException(status.HTTP_404_NOT_FOUND, "no such person")
-    rows = await conn.fetch(
-        """
-        SELECT DISTINCT t.id, t.kind, t.name, t.year, t.poster_path,
-               array_agg(DISTINCT c.job) AS jobs
-          FROM credit c JOIN title t ON t.id = c.title_id
-         WHERE c.person_id = $1 AND t.kind = ANY($2)
-         GROUP BY t.id, t.kind, t.name, t.year, t.poster_path
-         ORDER BY t.year DESC NULLS LAST, t.id
-        """,
-        person_id,
-        kinds,
-    )
-    return {"person": dict(person), "kinds": kinds, "filmography": [dict(r) for r in rows]}
 
 
 @router.get("/config")

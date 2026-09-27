@@ -5,7 +5,6 @@
 from __future__ import annotations
 
 import logging
-import unicodedata
 from datetime import UTC, datetime, timedelta
 from typing import Annotated, Literal
 
@@ -14,7 +13,7 @@ from fastapi import APIRouter, HTTPException, status
 from pydantic import AfterValidator, BaseModel, Field, StringConstraints
 
 from spielplan.acquire import intake, queue
-from spielplan.api.deps import DB, AdminUser, write_txn
+from spielplan.api.deps import DB, AdminUser, printable, write_txn
 from spielplan.connectors import registry
 from spielplan.connectors.jellyfin import JellyfinClient, JellyfinError, canonical_id
 from spielplan.connectors.registry import JellyfinConfig, load_jellyfin, save_jellyfin
@@ -27,13 +26,6 @@ from spielplan.sync import playback, seen
 log = logging.getLogger("spielplan.api.admin")
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
-
-
-def _no_control_characters(value: str) -> str:
-    """Control characters are never typeable, and a NUL reaches Postgres as a 500: refuse at the edge."""
-    if any(unicodedata.category(ch) == "Cc" for ch in value):
-        raise ValueError("must not contain control characters")
-    return value
 
 
 # Decision 364 makes the pick the acquisition boundary, so it is validated at the edge: whitespace
@@ -54,7 +46,7 @@ def _each_library_once(ids: list[str]) -> list[str]:
 LibraryId = Annotated[
     str,
     StringConstraints(strip_whitespace=True, min_length=1, max_length=64),
-    AfterValidator(_no_control_characters),
+    AfterValidator(printable),
     AfterValidator(_a_folder_jellyfin_could_name),
 ]
 
@@ -84,7 +76,7 @@ class LinkRequest(BaseModel):
 AccountName = Annotated[
     str,
     StringConstraints(strip_whitespace=True, min_length=1, max_length=64),
-    AfterValidator(_no_control_characters),
+    AfterValidator(printable),
 ]
 
 # Decision 166: two roles; a Literal makes `role='guest'` a 422.
@@ -144,7 +136,6 @@ async def get_jellyfin(_: AdminUser, conn: DB) -> dict[str, object]:
         "has_api_key": bool(cfg.api_key),
         "configured": cfg.configured,
         "library_ids": cfg.library_ids,
-        "linked_users": len(cfg.user_tokens),
         "secrets_unreadable": cfg.secrets_unreadable,
         # Whether a webhook token exists, never the token (§14.3; decision 332).
         "has_webhook_token": bool(cfg.webhook_token),

@@ -24,7 +24,7 @@ MEMBER_PASSWORD = "a-member-password"
 
 # The count the walk finds today, as an equality: a dropped router or a swapped gate fails here, and an
 # added admin route fails until the number is re-stated.
-ADMIN_ROUTE_COUNT = 53
+ADMIN_ROUTE_COUNT = 52
 
 METHODS = ("GET", "POST", "PUT", "DELETE", "PATCH")
 
@@ -59,8 +59,8 @@ def paths_behind(target) -> set[tuple[str, str]]:
     }
 
 
-# Two loader pairs since decision 483: the poster route's `current_user_brief` would otherwise be invisible.
-SESSION_LOADERS = (deps.current_user, deps.current_user_brief)
+# Two gates since decision 483: the poster route's `active_user_brief` would otherwise be invisible.
+SESSION_LOADERS = (deps.current_user, deps.active_user_brief)
 FIRST_LOGIN_GATES = (deps.active_user, deps.active_user_brief)
 
 
@@ -69,7 +69,7 @@ def paths_behind_any(targets) -> set[tuple[str, str]]:
 
 
 def admin_paths() -> list[tuple[str, str]]:
-    """Not the path prefix: `/api/setup/connectors` is admin-gated outside it."""
+    """By the gate, not the path prefix."""
     return sorted(paths_behind(deps.admin_user))
 
 
@@ -121,7 +121,6 @@ def test_the_poster_route_is_gated_and_holds_no_pooled_connection_for_its_reques
     assert ("GET", "/api/art/{title_id}/poster") in brief, sorted(brief)
     held = brief & paths_behind(deps.db)
     assert not held, f"these hold a pooled connection for the whole request: {sorted(held)}"
-    assert brief <= paths_behind(deps.current_user_brief)
 
 
 def test_the_app_actually_has_admin_routes_to_gate():

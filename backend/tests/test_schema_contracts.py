@@ -658,7 +658,6 @@ async def test_the_reserved_finalist_is_the_one_the_stored_slate_labels(db):
     """Through `play.finish` and `result.slate`: rule, INSERT and reveal each used to drop the field."""
     from spielplan.tonight import play
     from spielplan.tonight import result as result_rules
-    from spielplan.tonight import round as round_rules
 
     titles = {1: {"slow": 1.0}, 2: {"slow": 1.0}, 3: {"slow": 1.0}, 4: {"slow": 1.0},
               5: {"fast": 1.0}}
@@ -669,7 +668,7 @@ async def test_the_reserved_finalist_is_the_one_the_stored_slate_labels(db):
                 5: (0.30, 0.30)},
         tilts=({"slow": 1.0}, {"fast": 1.0}),
     )
-    slate = await play.finish(db, sid, z=round_rules.BOUNDARY_Z)
+    slate = await play.finish(db, sid)
 
     assert slate.contested == "pace", "the fixture only says anything while the split surfaces"
     assert slate.reserved is not None and slate.reserved in slate.finalists

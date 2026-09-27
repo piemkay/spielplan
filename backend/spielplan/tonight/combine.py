@@ -250,7 +250,6 @@ def combine(
     tilts: Sequence[Mapping[str, float]] = (),
     axes: Mapping[str, Mapping[str, float]] | None = None,
     dna: Mapping[int, Mapping[str, float]] | None = None,
-    phrasing: str | None = None,
 ) -> Slate:
     """§6.2 step 5, end to end.
 
@@ -313,7 +312,7 @@ def combine(
             contested = None
         if contested:
             slate_order = adjusted_order
-            conflict = copy_rules.conflict(contested, d=d, phrasing=phrasing)
+            conflict = copy_rules.conflict(contested, d=d)
 
     # No axis artifact loaded (decision 173): a split by D alone is surfaced by person
     # (decision 479); `divergent_answers` fires too often to trigger it.
@@ -321,7 +320,7 @@ def combine(
     by_person = not axes and len(per_participant) >= 2 and d >= D_THRESHOLD
     if by_person:
         finalists, reserved_for, each = one_for_each(order, per_participant)
-        conflict = copy_rules.person_conflict(d=d, phrasing=phrasing, one_for_each=each)
+        conflict = copy_rules.person_conflict(d=d, one_for_each=each)
 
     # The wildcard comes from the same ranking the slate was built from.
     wildcard = wildcard_from(slate_order, finalists, dna)

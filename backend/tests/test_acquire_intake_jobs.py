@@ -108,7 +108,6 @@ def test_the_two_intake_rows_are_registered_at_section_7_2s_own_cadences():
 
     assert poll.run is worker._jellyfin_delta_poll
     assert sweep.run is worker._jellyfin_intake_sweep
-    assert (poll.milestone, sweep.milestone) == ("M5.2", "M5.2")
 
     assert poll.every == 900, "section 7.2 says a 15-minute delta poll, and that is 900 seconds"
     assert sweep.every == 300, (

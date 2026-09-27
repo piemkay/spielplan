@@ -503,38 +503,6 @@ async def test_whitespace_around_a_key_is_no_part_of_it_and_whitespace_alone_kee
             assert await held(name, field) == f"{key}-two"
 
 
-async def test_the_setup_route_writes_no_spend_setting_and_no_provider(secrets_key, db, app):
-    """`POST /api/setup/connectors` stores any config whole and stays mounted, so spend settings and
-    providers are 409 there; a source's key still seeds through it."""
-    admin = await _admin(app)
-    await _keyed(db)
-    before = await _rows(db)
-
-    for name, config, secrets_ in (
-        ("llm", {"extraction_provider": "gemini", "parallel": True,
-                 "parallel_providers": ["gemini", "anthropic"], "passes": 3, "cap_usd": 25}, None),
-        ("llm", {"extraction_provider": "openai", "cap_usd": 25}, None),
-        ("anthropic", {"model": "claude-opus-5", "price_input": 0, "price_output": 0},
-         {"api_key": KEY_ANTHROPIC}),
-        ("gemini", {"price_input": 0, "price_output": 0}, None),
-        ("openai", {}, {"api_key": KEY_OPENAI}),
-    ):
-        refused = await admin.post(
-            "/api/setup/connectors", json={"name": name, "config": config, "secrets": secrets_}
-        )
-        assert refused.status_code == 409, (name, refused.text)
-        detail = refused.json()["detail"]
-        for route in ("PUT /api/admin/llm ", "PUT /api/admin/llm/cap", "PUT /api/admin/connectors/"):
-            assert route in detail, (route, detail)
-        assert KEY_ANTHROPIC not in refused.text and KEY_OPENAI not in refused.text
-    assert await _rows(db) == before, "the setup route wrote past the figure"
-    assert await spend.cap_check(db, title_id=7) is None
-
-    seeded = await admin.post("/api/setup/connectors",
-                              json={"name": "tmdb", "secrets": {"api_key": KEY_TMDB}})
-    assert seeded.status_code == 200, seeded.text
-
-
 async def test_an_explicit_null_returns_each_setting_to_its_default(secrets_key, db, app):
     """An absent field keeps, an explicit null unsets. Half a price pair is refused (decision 343)."""
     admin = await _admin(app)

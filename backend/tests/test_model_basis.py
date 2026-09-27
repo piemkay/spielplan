@@ -12,9 +12,8 @@ import pytest
 
 from spielplan import worker
 from spielplan.api import artifacts as artifacts_api
+from spielplan.api import deps
 from spielplan.api import home as home_api
-from spielplan.api import rank as rank_api
-from spielplan.api import rate as rate_api
 from spielplan.api import tonight as tonight_api
 from spielplan.core.config import settings
 from spielplan.db import pool
@@ -454,13 +453,13 @@ async def test_a_scoring_request_on_a_stale_bundle_answers_409_with_the_restart_
     )
     assert verdict.status_code == 409, verdict.text
     assert verdict.json()["detail"] == {
-        "reason": "bundle_swapped", "message": artifacts_api.RESTART_REQUIRED
+        "reason": "bundle_swapped", "message": deps.RESTART_REQUIRED
     }, verdict.json()
 
     drop = await client.post("/api/rank/drop?kind=movie", json={"title_id": 1, "tier": 3})
     assert drop.status_code == 409, drop.text
     assert drop.json()["detail"] == {
-        "reason": "bundle_swapped", "message": artifacts_api.RESTART_REQUIRED
+        "reason": "bundle_swapped", "message": deps.RESTART_REQUIRED
     }, drop.json()
     assert await db.fetchval("SELECT count(*) FROM tier_edit") == 0, (
         "the refusal has to land before the write, never after it (M4.10 finding 8)"
@@ -476,8 +475,7 @@ async def test_a_bundle_less_install_passes_the_invariant_rather_than_refusing(d
     request = SimpleNamespace(
         app=SimpleNamespace(state=SimpleNamespace(artifacts=ArtifactStore.empty()))
     )
-    await rate_api._assert_active_basis(request, db)
-    await rank_api._assert_active_basis(request, db)
+    await deps.assert_active_basis(request, db)
 
     await _user(db)
     for name in ("ledger-map-refit", "fold-in-user-vectors", "placement-reconciliation",
@@ -508,11 +506,11 @@ async def test_a_broken_store_carries_the_active_version_and_still_refuses_on_it
 
 def test_the_two_refusals_rate_and_rank_render_speak_the_member_register():
     """Rate and Rank show a 409's `message` verbatim to the member (decision 486)."""
-    for message in (artifacts_api.RESTART_REQUIRED, artifacts_api.RESTORE_REQUIRED):
+    for message in (deps.RESTART_REQUIRED, deps.RESTORE_REQUIRED):
         for noun in ("bundle", "basis", "refit", "process", "/data", "ledger", "fold-in"):
             assert noun not in message.lower(), f"{noun!r} reaches a member in {message!r}"
-    assert "restore" in artifacts_api.RESTORE_REQUIRED
-    assert "restart" in artifacts_api.RESTART_REQUIRED
+    assert "restore" in deps.RESTORE_REQUIRED
+    assert "restart" in deps.RESTART_REQUIRED
 
 
 async def test_a_fitting_request_on_a_broken_bundle_answers_409_and_writes_nothing(
@@ -536,13 +534,13 @@ async def test_a_fitting_request_on_a_broken_bundle_answers_409_and_writes_nothi
     )
     assert verdict.status_code == 409, verdict.text
     assert verdict.json()["detail"] == {
-        "reason": "bundle_broken", "message": artifacts_api.RESTORE_REQUIRED
+        "reason": "bundle_broken", "message": deps.RESTORE_REQUIRED
     }, verdict.json()
 
     drop = await client.post("/api/rank/drop?kind=movie", json={"title_id": 1, "tier": 3})
     assert drop.status_code == 409, drop.text
     assert drop.json()["detail"] == {
-        "reason": "bundle_broken", "message": artifacts_api.RESTORE_REQUIRED
+        "reason": "bundle_broken", "message": deps.RESTORE_REQUIRED
     }, drop.json()
     assert await db.fetchval("SELECT count(*) FROM tier_edit") == 0, (
         "the refusal has to land before the write, never after it (M4.10 finding 8)"
@@ -572,7 +570,7 @@ async def test_a_process_that_is_both_stale_and_broken_is_diagnosed_by_the_calle
     )
     assert verdict.status_code == 409, verdict.text
     assert verdict.json()["detail"] == {
-        "reason": "bundle_swapped", "message": artifacts_api.RESTART_REQUIRED
+        "reason": "bundle_swapped", "message": deps.RESTART_REQUIRED
     }, "the request path holds a pinned store, so the restart is the action that fixes it"
 
     drop = await client.post("/api/rank/drop?kind=movie", json={"title_id": 1, "tier": 3})
@@ -601,8 +599,8 @@ def test_every_fitting_route_awaits_the_basis_guard_as_its_first_statement():
                 continue
             if not any(
                 isinstance(call, ast.Call)
-                and isinstance(call.func, ast.Name)
-                and call.func.id == "_basis"
+                and isinstance(call.func, ast.Attribute)
+                and call.func.attr == "basis"
                 for call in ast.walk(node)
             ):
                 continue
@@ -612,12 +610,12 @@ def test_every_fitting_route_awaits_the_basis_guard_as_its_first_statement():
                 isinstance(first, ast.Expr)
                 and isinstance(first.value, ast.Await)
                 and isinstance(first.value.value, ast.Call)
-                and getattr(first.value.value.func, "id", None) == "_assert_active_basis"
+                and getattr(first.value.value.func, "attr", None) == "assert_active_basis"
             )
 
     unguarded = sorted(name for name, ok in guarded.items() if not ok)
     assert not unguarded, (
-        "these routes thread _basis(request) into a fit without awaiting _assert_active_basis "
+        "these routes thread deps.basis(request) into a fit without awaiting assert_active_basis "
         f"as their first statement: {unguarded}"
     )
     assert sorted(guarded) == sorted(_FITTING_ROUTES), (

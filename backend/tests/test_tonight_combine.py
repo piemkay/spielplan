@@ -237,54 +237,15 @@ def test_the_contested_facet_needs_two_people_pulling_opposite_ways():
 def test_the_sanctioned_line_says_only_what_d_supports():
     line = copy_rules.D_LINE.format(d=0.24)
     assert "below your usual" in line
-    assert not copy_rules.overclaims(line)
-
-
-@pytest.mark.parametrize(
-    "phrase",
-    [
-        "Jenny will hate this.",
-        "Patrick is going to dislike the pacing.",
-        "One of you can't stand bleak films.",
-        "This would ruin the evening for Mia.",
-        "She won't like it.",
-        "He'll find it unbearable.",
-    ],
-)
-def test_a_phrasing_that_predicts_a_feeling_never_reaches_the_participant(phrase):
-    """AUC 0.610 supports "likely to land below your usual", never "will hate". Replaced, not edited."""
-    assert copy_rules.overclaims(phrase)
-    assert copy_rules.bounded(phrase, d=0.24) == copy_rules.D_LINE.format(d=0.24)
-
-
-@pytest.mark.parametrize(
-    "phrase",
-    [
-        "You're split on pacing — one of you usually lands lower on a slow build.",
-        "Tonight leans heavier than Jenny's usual evening.",
-        "This sits below Patrick's typical Friday.",
-    ],
-)
-def test_a_phrasing_that_stays_within_the_measurement_is_passed_through(phrase):
-    """The bound is on the claim, not the tone."""
-    assert not copy_rules.overclaims(phrase)
-    assert copy_rules.bounded(phrase, d=0.24) == phrase
-
-
-def test_an_absent_phrasing_falls_back_to_the_sanctioned_string():
-    """Until the LLM connector exists, or when a call fails, §6.2's sentence is the fallback."""
-    assert copy_rules.bounded(None, d=0.31) == copy_rules.D_LINE.format(d=0.31)
-    assert copy_rules.bounded("", d=0.31) == copy_rules.D_LINE.format(d=0.31)
 
 
 def test_the_headline_is_the_specs_own_sentence_and_never_a_models():
-    """Only the explanation is generated; the headline is the spec's verbatim."""
+    """The headline and the explanation are the spec's verbatim."""
     block = C.combine(
         per_participant=scores(p1={1: 0.90, 2: 0.85, 3: 0.80, 4: 0.30, 5: 0.20},
                                p2={1: 0.90, 2: 0.85, 3: 0.80, 4: 0.30, 5: 0.20}),
         member_ledger={1: [1.3, 0.1], **{t: [0.5, 0.5] for t in (2, 3, 4, 5)}},
         tilts=[{"dread": 1.0}, {"cosy": 1.0}], dna=DNA, axes=AXES,
-        phrasing="They will hate it.",
     ).conflict
 
     assert block["headline"] == (
@@ -502,7 +463,7 @@ def test_an_axisless_split_is_surfaced_by_person_not_silenced():
     assert slate.conflict is not None, "surfaced, never silently averaged"
     assert slate.conflict["headline"] == copy_rules.PERSON_SPLIT_LINE
     assert slate.conflict["by"] == "person" and slate.conflict["facet"] is None
-    assert not copy_rules.overclaims(slate.conflict["explanation"]), "AUC 0.610's bound holds"
+    assert slate.conflict["explanation"] == copy_rules.D_LINE.format(d=slate.conflict["d"])
     row = next(r for r in slate.rows if r["title_id"] == 7)
     assert (row["slot"], row["reserved_for"], row["rank"]) == (C.SLOT_FINALIST, 20, 3), (
         "the pick is the third finalist and is read last, as 54d's third slot is"
@@ -591,8 +552,7 @@ def test_the_wildcard_is_drawn_from_near_the_top_of_the_ranking_not_its_tail():
 
 
 def test_a_member_reads_the_plain_sentence_and_never_the_number():
-    """Decision 486: D and "the axis is zeroed" are model vocabulary; `for_member` strips them.
-    A phrasing that passed `bounded` is left alone."""
+    """Decision 486: D and "the axis is zeroed" are model vocabulary; `for_member` strips them."""
     person = copy_rules.for_member(copy_rules.person_conflict(d=0.61, one_for_each=True))
     assert "d" not in person
     assert person["explanation"] == copy_rules.D_LINE_PLAIN
@@ -601,12 +561,6 @@ def test_a_member_reads_the_plain_sentence_and_never_the_number():
     axis = copy_rules.for_member(copy_rules.conflict("pace", d=0.61))
     assert axis["headline"] == "You're split on pace — here's one of each."
     assert "zeroed" not in repr(axis) and "d" not in axis
-
-    phrased = copy_rules.for_member(
-        copy_rules.person_conflict(d=0.61, phrasing="Jenny may want something lighter.",
-                                   one_for_each=True)
-    )
-    assert phrased["explanation"] == "Jenny may want something lighter."
     assert copy_rules.for_member(None) is None
 
 
@@ -620,4 +574,3 @@ def test_the_pull_lines_say_what_their_branch_establishes_in_plain_words():
     assert copy_rules.usual("Mia", ["a", "b", "c"]).endswith("a, b and c")
     for line in (leaned, usual):
         assert "+" not in line and "pulls" not in line
-        assert not copy_rules.overclaims(line)

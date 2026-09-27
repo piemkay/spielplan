@@ -28,7 +28,7 @@ from spielplan.home import rail
 from spielplan.ledger import model, observations, refit
 from spielplan.ledger.hyperparams import Hyperparams
 from spielplan.ledger.observations import VERDICT_LABELS, EmbeddingSource, PriorState
-from spielplan.rate import LIVE_LABEL, balance, battle, queue
+from spielplan.rate import balance, battle, queue
 from spielplan.sync import seen
 
 log = logging.getLogger("spielplan.rate.session")
@@ -450,14 +450,15 @@ async def ensure_card(
         if replacement is None:
             return s
         # The banner's redraw is a sweep whatever the counter called for: mark it.
-        return await _stash_if_unchanged(
-            conn, s, _mark_substitution(replacement, instead_of=wanted)
+        return await stash(
+            conn, s, _mark_substitution(replacement, instead_of=wanted), expected=s.card_token
         )
 
     if head:
         pinned = await _draw_pinned(conn, s, served=served, head=head)
         if pinned is not None:
-            return await _stash_if_empty(conn, s, _mark_substitution(pinned, instead_of=wanted))
+            marked = _mark_substitution(pinned, instead_of=wanted)
+            return await stash(conn, s, marked, expected=None)
 
     skipped = await _skipped_title_ids(conn, s.id)
     card: dict[str, Any] | None = None
@@ -476,7 +477,7 @@ async def ensure_card(
                 await _draw_battle(conn, s, exclude=skipped, rng=rng, labels=labels),
                 instead_of=wanted,
             )
-    return await _stash_if_empty(conn, s, card)
+    return await stash(conn, s, card, expected=None)
 
 
 def _mark_substitution(
@@ -491,80 +492,34 @@ def _mark_substitution(
     return card
 
 
-async def stash_card(
-    conn: asyncpg.Connection, s: RateSession, card: dict[str, Any] | None
+async def stash(
+    conn: asyncpg.Connection,
+    s: RateSession,
+    card: dict[str, Any] | None,
+    *,
+    expected: uuid.UUID | None,
 ) -> RateSession:
-    """Write the card and a fresh token in one statement, replacing whatever is there.
-
-    Unconditional, so only callers holding the session row lock may use it (`record_correction`,
-    `rate/direct.py`); everything else goes through `_stash_if_empty` or `_stash_if_unchanged`.
-    """
+    """Write the card under a fresh token if the stored token is still `expected` (None: an empty
+    table), decision and write in one statement, so two GETs or two devices end up under one token.
+    A replacement that missed stashes into a table since emptied; otherwise the card another
+    request stashed first is served."""
     row = await conn.fetchrow(
         f"""
         UPDATE rate_session
            SET current_card = $2::jsonb, card_token = $3, last_seen_at = now()
-         WHERE id = $1
+         WHERE id = $1 AND card_token IS NOT DISTINCT FROM $4
         RETURNING {_SESSION_COLUMNS}
         """,
         s.id,
         card,
         uuid.uuid4() if card is not None else None,
+        expected,
     )
+    if row is None and expected is not None:
+        return await stash(conn, s, card, expected=None)
+    if row is None:
+        row = await conn.fetchrow(f"SELECT {_SESSION_COLUMNS} FROM rate_session WHERE id = $1", s.id)
     return _session(row)
-
-
-async def _stash_if_unchanged(
-    conn: asyncpg.Connection, s: RateSession, card: dict[str, Any] | None
-) -> RateSession:
-    """Replace the card this request read, or serve the card another request put there instead.
-
-    The `card_token = $4` predicate keeps two devices following one banner CTA from clobbering
-    each other's token; on a miss, `_stash_if_empty` serves whichever card now stands.
-    """
-    row = await conn.fetchrow(
-        f"""
-        UPDATE rate_session
-           SET current_card = $2::jsonb, card_token = $3, last_seen_at = now()
-         WHERE id = $1 AND card_token = $4
-        RETURNING {_SESSION_COLUMNS}
-        """,
-        s.id,
-        card,
-        uuid.uuid4() if card is not None else None,
-        s.card_token,
-    )
-    if row is not None:
-        return _session(row)
-    return await _stash_if_empty(conn, s, card)
-
-
-async def _stash_if_empty(
-    conn: asyncpg.Connection, s: RateSession, card: dict[str, Any] | None
-) -> RateSession:
-    """Stash a freshly drawn card, or serve the one another request stashed first.
-
-    `card_token IS NULL` makes the decision and the write one statement, so two concurrent GETs
-    end up under one token.
-    """
-    row = await conn.fetchrow(
-        f"""
-        UPDATE rate_session
-           SET current_card = $2::jsonb, card_token = $3, last_seen_at = now()
-         WHERE id = $1 AND card_token IS NULL
-        RETURNING {_SESSION_COLUMNS}
-        """,
-        s.id,
-        card,
-        uuid.uuid4() if card is not None else None,
-    )
-    if row is not None:
-        return _session(row)
-    current = await conn.fetchrow(
-        f"SELECT {_SESSION_COLUMNS} FROM rate_session WHERE id = $1", s.id
-    )
-    if current is None:  # pragma: no cover — the session was read one statement ago.
-        raise RuntimeError(f"rate session {s.id} vanished under ensure_card")
-    return _session(current)
 
 
 # `overview_is_mpst`: the overview IS the title's MPST synopsis, a full retelling.
@@ -726,20 +681,7 @@ async def predicted_class(
         predicted_s, predicted_cdf = float(row["s"]), float(row["cdf"])
         predicted_tier = int(row["tier"])
         levels = int(row["k"] or len(observations.DEFAULT_TIER_SET))
-    counts = [0, 0, 0]
-    for label in await conn.fetch(
-        """
-        WITH label AS ({LIVE_LABEL})
-        SELECT l.value, count(*) AS n
-          FROM label l JOIN title t ON t.id = l.title_id
-         WHERE t.kind = $2
-         GROUP BY l.value
-        """.replace("{LIVE_LABEL}", LIVE_LABEL),
-        user_id,
-        kind,
-    ):
-        counts[label["value"]] = label["n"]
-    total = sum(counts)
+    total = (await balance.class_balance(conn, user_id=user_id, kinds=[kind])).total
     if total == 0:
         return {"available": False, "reason": NO_GUESS_YET}
 
@@ -1434,7 +1376,7 @@ async def record_correction(
             prior_state=[e for w in writes for e in _state_entries(w, {})],
         )
         replacement = await _redraw_pair(conn, s, card, corrected=corrected, rng=rng)
-        s = await stash_card(conn, s, replacement)
+        s = await stash(conn, s, replacement, expected=s.card_token)
 
     lines.extend(
         await _settle_push(

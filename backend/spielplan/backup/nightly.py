@@ -7,7 +7,6 @@ from __future__ import annotations
 
 import asyncio
 import os
-import re
 import shutil
 import subprocess
 from dataclasses import dataclass
@@ -38,8 +37,6 @@ class BackupReport:
     bytes: int
     pruned: tuple[str, ...]
     kept: int
-    # Tonight's dump already existed and this call wrote nothing (see `run`).
-    skipped: bool = False
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -47,7 +44,6 @@ class BackupReport:
             "bytes": self.bytes,
             "kept": self.kept,
             "pruned": list(self.pruned),
-            "skipped": self.skipped,
         }
 
 
@@ -63,58 +59,17 @@ def dump_name(now: datetime) -> str:
 
 
 # Rotation deletes, so "ours" is exactly `dump_name`'s shape: `spielplan-*.dump` would also match
-# an operator's `spielplan-before-upgrade.dump`, which sorts oldest and would go first.
-_OWN_NAME = re.compile(
-    rf"{re.escape(PREFIX)}(?P<stamp>\d{{8}}T\d{{6}}Z){re.escape(SUFFIX)}"
-    rf"(?:{re.escape(PARTIAL)})?"
-)
-_STAMP_FORMAT = "%Y%m%dT%H%M%SZ"
-
-
-def _is_own(name: str) -> bool:
-    return _OWN_NAME.fullmatch(name) is not None
-
-
-def _written_at(name: str) -> datetime | None:
-    """None for a shape-valid but impossible date (an operator's file); the nightly job must not raise."""
-    match = _OWN_NAME.fullmatch(name)
-    if match is None:  # pragma: no cover - `dumps()` filters by `_is_own` first
-        return None
-    try:
-        return datetime.strptime(match.group("stamp"), _STAMP_FORMAT).replace(tzinfo=UTC)
-    except ValueError:
-        return None
+# an operator's `spielplan-2026-08-14-before-upgrade.dump`, which sorts oldest and would go first.
+_OURS = f"{PREFIX}????????T??????Z{SUFFIX}"
 
 
 def dumps(directory: Path) -> list[Path]:
-    if not directory.is_dir():
-        return []
-    return sorted(
-        p for p in directory.glob(f"{PREFIX}*{SUFFIX}") if p.is_file() and _is_own(p.name)
-    )
+    return sorted(p for p in directory.glob(_OURS) if p.is_file())
 
 
 def interrupted(directory: Path) -> list[Path]:
     """Partials a SIGKILL or power cut left behind; `dumps()`'s glob never matches them."""
-    if not directory.is_dir():
-        return []
-    return sorted(
-        p for p in directory.glob(f"{PREFIX}*{SUFFIX}{PARTIAL}") if p.is_file() and _is_own(p.name)
-    )
-
-
-def todays_dump(directory: Path, local: datetime) -> Path | None:
-    """Compares household-local dates, as `worker.Job.anchor_hour` does. Names stay UTC for sorting, so
-    each name's instant is converted to `local.tzinfo` (None: the system zone)."""
-    return next(
-        (
-            p
-            for p in dumps(directory)
-            if (at := _written_at(p.name)) is not None
-            and at.astimezone(local.tzinfo).date() == local.date()
-        ),
-        None,
-    )
+    return sorted(p for p in directory.glob(_OURS + PARTIAL) if p.is_file())
 
 
 def prune(directory: Path, keep: int = KEEP) -> list[str]:
@@ -171,19 +126,11 @@ def dump(database_url: str, path: Path) -> int:
     return path.stat().st_size
 
 
-async def run(local: datetime) -> BackupReport:
-    """`local` is the household's wall clock, the date `todays_dump` is judged on. A dump already there
-    for this night makes the call a no-op: rotation 14 promises fourteen nights, not fourteen starts."""
+async def run() -> BackupReport:
+    """Once a night by the worker's anchored schedule, which a restart does not re-fire."""
     cfg = settings()
     directory = backups_dir()
     directory.mkdir(parents=True, exist_ok=True)
-
-    already = todays_dump(directory, local)
-    if already is not None:
-        return BackupReport(
-            path=already, bytes=already.stat().st_size, pruned=(),
-            kept=len(dumps(directory)), skipped=True,
-        )
 
     path = directory / dump_name(datetime.now(UTC))
     size = await asyncio.to_thread(dump, cfg.database_url, path)
@@ -195,5 +142,5 @@ async def run(local: datetime) -> BackupReport:
 
 __all__ = [
     "DUMP_TIMEOUT_SECONDS", "KEEP", "BackupReport", "backups_dir", "dump", "dump_name", "dumps",
-    "interrupted", "prune", "run", "todays_dump",
+    "interrupted", "prune", "run",
 ]

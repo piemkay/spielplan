@@ -1,17 +1,15 @@
 """The §6.1 sweep queue: which title to ask about next, and the one line saying why.
 
 Order: pinned, recorded-seen, seed list (decision 490), then P(seen), a stated-prior logistic
-that only orders the queue. The SQL and `p_seen` spell one formula; keep them in step.
+that only orders the queue. `_CANDIDATES` is its one spelling; Python reads only the terms back.
 """
 
 from __future__ import annotations
 
 import logging
-import math
 import random
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any
 
 import asyncpg
 
@@ -35,6 +33,11 @@ class SeenWeights:
 
 WEIGHTS = SeenWeights()
 
+# Decision 521 watches these weights through §13's not-seen rate (">50% = queue bug"), read by hand:
+#   SELECT count(*) FILTER (WHERE kind_of = 'not_seen')::float8 / count(*) FROM (
+#       SELECT kind_of FROM rate_observation WHERE user_id = $1 AND undone_at IS NULL
+#          AND kind_of IN ('verdict', 'not_seen') ORDER BY id DESC LIMIT 200) recent;
+
 # Pseudo-count shrinking a person's own answers towards their own seen rate for the kind.
 FAMILIAR_PSEUDO = 2.0
 
@@ -43,14 +46,8 @@ AGE_SATURATION_YEARS = 40.0
 # log1p(n)/log1p(SAT) clipped to 1: n=10 -> 0.21, n=1e3 -> 0.60, n=1e4 -> 0.80.
 CROWD_SATURATION = 100_000.0
 
-# §13: "not-seen rate in the rating queue (>50% = queue bug)".
-NOT_SEEN_BUG_THRESHOLD = 0.50
-NOT_SEEN_WINDOW = 200
-
 # A recorded state is not an estimate.
 P_SEEN_RECORDED = 1.0
-
-SOURCES: tuple[str, ...] = ("pinned", "seed", "p_seen", "pending_verdict", "reask")
 
 FEATURE_NAMES: tuple[str, ...] = ("playback", "co_seen", "crowd", "owned", "age", "unfamiliar")
 
@@ -71,7 +68,7 @@ class Features:
     crowd: float = 0.0        # log1p(item_n) / log1p(CROWD_SATURATION), clipped
     owned: bool = False
     age: float = 0.0          # (this year - release year) / 40, clipped
-    unfamiliar: float = 0.0   # -2..0: `unfamiliarity` of this person's answers in its language
+    unfamiliar: float = 0.0   # -2..0: how firmly this person's answers say they miss its language
 
     def vector(self) -> dict[str, float]:
         return {
@@ -84,36 +81,10 @@ class Features:
         }
 
 
-def unfamiliarity(
-    seen: float,
-    answered: float,
-    kind_seen: float,
-    kind_answered: float,
-    pseudo: float = FAMILIAR_PSEUDO,
-) -> float:
-    """How firmly this person's own answers say they do not know titles of one language and kind.
-
-    The group's seen share, shrunk by 2 x `pseudo` answers towards the person's own seen rate for
-    the kind, read only below that rate and doubled: 0 at or above it, -2 x rate at the limit.
-    Never positive, so the why-line never names it (decision 521).
-    """
-    rate = kind_seen / kind_answered if kind_answered > 0 else 0.5
-    share = (seen + 2.0 * pseudo * rate) / (answered + 2.0 * pseudo)
-    return min(0.0, share - rate) * 2.0
-
-
 def contributions(features: Features, weights: SeenWeights = WEIGHTS) -> dict[str, float]:
     """Each term's signed log-odds contribution; the intercept is the same for every title."""
     v = features.vector()
     return {name: getattr(weights, name) * v[name] for name in FEATURE_NAMES}
-
-
-def p_seen(features: Features, weights: SeenWeights = WEIGHTS) -> float:
-    """P(this person has seen this title); a recorded `seen` is 1.0, not a large weight."""
-    if features.seen:
-        return P_SEEN_RECORDED
-    z = weights.intercept + sum(contributions(features, weights).values())
-    return 1.0 / (1.0 + math.exp(-z))
 
 
 def dominant(features: Features, weights: SeenWeights = WEIGHTS) -> str | None:
@@ -188,13 +159,6 @@ class QueueCard:
     p_seen: float | None
     source: str            # seed | p_seen | pending_verdict | reask
     reask_of: int | None   # verdict.id being silently re-asked; None otherwise
-
-    def public(self) -> dict[str, Any]:
-        """The allow-list projection that may reach the client.
-
-        No `source` and no `reask_of`: either would mark a §13 re-ask on the wire.
-        """
-        return {"title_id": self.title_id, "reason": self.reason, "p_seen": self.p_seen}
 
 
 # --- the candidate query ----------------------------------------------------------------------
@@ -446,76 +410,15 @@ def _interleave(
     return out
 
 
-# --- §13's instrument -------------------------------------------------------------------------
-
-
-@dataclass(frozen=True)
-class NotSeenRate:
-    """§13: "not-seen rate in the rating queue (>50% = queue bug)"."""
-
-    answered: int
-    not_seen: int
-    window: int
-
-    @property
-    def rate(self) -> float | None:
-        return None if self.answered == 0 else self.not_seen / self.answered
-
-    @property
-    def queue_bug(self) -> bool:
-        rate = self.rate
-        return rate is not None and rate > NOT_SEEN_BUG_THRESHOLD
-
-    def as_dict(self) -> dict[str, Any]:
-        return {
-            "answered": self.answered,
-            "not_seen": self.not_seen,
-            "window": self.window,
-            "rate": self.rate,
-            "queue_bug": self.queue_bug,
-            "threshold": NOT_SEEN_BUG_THRESHOLD,
-        }
-
-
-async def not_seen_rate(
-    conn: asyncpg.Connection, *, user_id: int | None = None, window: int = NOT_SEEN_WINDOW
-) -> NotSeenRate:
-    """How often the queue guessed wrong, over the last `window` answers it got.
-
-    From the append-only journal: in `user_title` a later "seen" erases the "not seen" measured.
-    """
-    row = await conn.fetchrow(
-        """
-        SELECT count(*) AS answered,
-               count(*) FILTER (WHERE kind_of = 'not_seen') AS not_seen
-          FROM (SELECT kind_of
-                  FROM rate_observation
-                 WHERE ($1::bigint IS NULL OR user_id = $1)
-                   AND undone_at IS NULL
-                   AND kind_of IN ('verdict', 'not_seen')
-                 ORDER BY id DESC
-                 LIMIT $2) recent
-        """,
-        user_id,
-        window,
-    )
-    return NotSeenRate(answered=int(row["answered"]), not_seen=int(row["not_seen"]), window=window)
-
-
 __all__ = [
     "AGE_SATURATION_YEARS",
     "CROWD_SATURATION",
-    "SOURCES",
     "WEIGHTS",
     "Features",
-    "NotSeenRate",
     "QueueCard",
     "SeenWeights",
     "contributions",
     "dominant",
     "next_sweep_cards",
-    "not_seen_rate",
-    "p_seen",
     "reason_for",
-    "unfamiliarity",
 ]

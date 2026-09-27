@@ -9,7 +9,6 @@ import logging
 import random
 from collections.abc import Collection, Sequence
 from dataclasses import dataclass
-from typing import Any
 
 import asyncpg
 
@@ -23,9 +22,6 @@ log = logging.getLogger("spielplan.rate.battle")
 EARLY_LABELS = 50
 DISLIKED = 0
 
-# Uniform attempts before enumerating the unanswered remainder of a mostly-compared pool.
-_REJECTION_TRIES = 64
-
 
 @dataclass(frozen=True)
 class BattlePair:
@@ -35,15 +31,6 @@ class BattlePair:
     reason: str
     reask_of: int | None   # duel.id being silently re-asked; None otherwise
 
-    def public(self) -> dict[str, Any]:
-        """The allow-list projection that may reach the client: `reask_of` stays server-side."""
-        return {
-            "title_a": self.title_a,
-            "title_b": self.title_b,
-            "verdict_class": self.verdict_class,
-            "reason": self.reason,
-        }
-
 
 @dataclass(frozen=True)
 class PoolMember:
@@ -52,74 +39,29 @@ class PoolMember:
     verdict_class: int
 
 
-Stratum = tuple[str, int]
-
-
-def strata(pool: Sequence[PoolMember]) -> dict[Stratum, list[int]]:
-    """The pool keyed by (kind, verdict class): a pair crossing either is not representable."""
-    out: dict[Stratum, list[int]] = {}
-    for member in pool:
-        out.setdefault((member.kind, member.verdict_class), []).append(member.title_id)
-    for members in out.values():
-        members.sort()
-    return out
-
-
-def eligible_pairs(pool: Sequence[PoolMember]) -> list[tuple[int, int]]:
-    """Every unordered pair `draw` can produce, sorted."""
-    pairs: list[tuple[int, int]] = []
-    for members in strata(pool).values():
-        for i, a in enumerate(members):
-            for b in members[i + 1 :]:
-                pairs.append((a, b))
-    return sorted(pairs)
-
-
-def _stratum(keys: Sequence[Stratum], weights: Sequence[int], threshold: float) -> Stratum:
-    running = 0
-    for key, weight in zip(keys, weights, strict=True):
-        running += weight
-        if threshold < running:
-            return key
-    return keys[-1]
-
-
 def draw(
     pool: Sequence[PoolMember],
     *,
     rng: random.Random,
     answered: Collection[frozenset[int]] = frozenset(),
 ) -> tuple[int, int, str, int] | None:
-    """One uniform draw over `eligible_pairs(pool)` minus `answered`, as (a, b, kind, class).
-
-    None when no stratum holds two members or every pair is answered. Strata are weighted by pair
-    count `n*(n-1)/2`, so the draw is uniform over the union of pairs rather than over strata.
-    Rejection keeps it uniform over the unanswered remainder; `rng.sample` also randomises A/B.
-    """
-    live = {key: members for key, members in strata(pool).items() if len(members) >= 2}
-    if not live:
-        return None
-    keys = sorted(live)
-    weights = [len(live[key]) * (len(live[key]) - 1) // 2 for key in keys]
-    total = sum(weights)
-    for _ in range(_REJECTION_TRIES if answered else 1):
-        chosen = _stratum(keys, weights, rng.random() * total)
-        a, b = rng.sample(live[chosen], 2)
-        if frozenset((a, b)) not in answered:
-            return a, b, chosen[0], chosen[1]
-    remaining = [
-        (a, b, key)
-        for key in keys
-        for i, a in enumerate(live[key])
-        for b in live[key][i + 1 :]
+    """One uniform draw over the unanswered pairs inside one (kind, verdict class) band, as
+    (a, b, kind, class) with A and B randomised; None when there is none. A household's bands are
+    small enough to enumerate."""
+    bands: dict[tuple[str, int], list[int]] = {}
+    for member in sorted(pool, key=lambda m: m.title_id):
+        bands.setdefault((member.kind, member.verdict_class), []).append(member.title_id)
+    pairs = [
+        (a, b, *band)
+        for band, members in sorted(bands.items())
+        for i, a in enumerate(members)
+        for b in members[i + 1 :]
         if frozenset((a, b)) not in answered
     ]
-    if not remaining:
+    if not pairs:
         return None
-    a, b, key = rng.choice(remaining)
-    if rng.random() < 0.5:
-        a, b = b, a
-    return a, b, key[0], key[1]
+    a, b, kind, verdict_class = rng.choice(pairs)
+    return (b, a, kind, verdict_class) if rng.random() < 0.5 else (a, b, kind, verdict_class)
 
 
 def reason_for(verdict_class: int) -> str:
@@ -236,9 +178,7 @@ __all__ = [
     "answered_pairs",
     "battle_pool",
     "draw",
-    "eligible_pairs",
     "next_battle_pair",
     "open_bands",
     "reason_for",
-    "strata",
 ]

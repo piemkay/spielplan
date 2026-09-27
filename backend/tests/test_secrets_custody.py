@@ -217,21 +217,6 @@ async def test_the_first_connector_save_under_an_unreadable_dek_is_not_a_500(
     )
 
 
-async def test_the_setup_wizards_connector_route_seals_under_a_fresh_dek_too(
-    no_connector_yet, db, monkeypatch
-):
-    """`POST /api/setup/connectors` is a second front door onto the same state."""
-    _use_key(monkeypatch, OTHER_KEY)
-
-    posted = await no_connector_yet.post(
-        "/api/setup/connectors", json={"name": "tmdb", "secrets": {"api_key": "a-tmdb-key"}}
-    )
-    assert posted.status_code == 200, posted.text
-
-    _config, secret = await sec.get_connector_secrets(db, "tmdb")
-    assert secret["api_key"] == "a-tmdb-key"
-
-
 async def test_a_seeded_connector_does_not_take_the_boot_down_under_an_unreadable_dek(
     secrets_key, db, pg_url, tmp_path, monkeypatch, caplog
 ):

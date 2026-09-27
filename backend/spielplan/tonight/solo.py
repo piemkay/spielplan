@@ -72,8 +72,6 @@ async def picks(
     answers: Sequence[round_rules.Answered] = (),
     offset: int = 0,
     sharpen: bool = False,
-    # The round's own boundary, not §6.3's (decision 214).
-    z: float = round_rules.BOUNDARY_Z,
     rng: random.Random | None = None,
 ) -> dict[str, Any]:
     """Three picks, a wildcard, and the next pair if the person is sharpening.
@@ -108,7 +106,7 @@ async def picks(
     prior = pool_rules.rank_normal({c.title_id: c.group_score for c in candidates})
 
     played = round_rules.replay(
-        prior, list(answers), z=z, has_profile=True,
+        prior, list(answers), has_profile=True,
         axes=combine_rules.axis_positions(vectors, await dna_reads.axes_for(conn, version=version or "")),
         rng=rng or random.Random(0), holdout_key=holdout_key, select=sharpen,
     )
@@ -192,15 +190,6 @@ async def picks(
     }
 
 
-def moved_facets(tilt: Mapping[str, float]) -> list[dict[str, Any]]:
-    """The terms the sharpen round moved, for a "leaning in / leaning away" chip; no threshold."""
-    return [
-        {"term": term, "direction": "leaning in" if value > 0 else "leaning away"}
-        for term, value in tilt_rules.moved_facets(tilt)
-        if value != 0.0
-    ]
-
-
 __all__ = [
     "NAMED_TERMS",
     "PICKS",
@@ -209,7 +198,6 @@ __all__ = [
     "PROVENANCE_TILTED",
     "PULL_WHY",
     "STRETCH_WHY",
-    "moved_facets",
     "picks",
     "provenance",
     "why_line",

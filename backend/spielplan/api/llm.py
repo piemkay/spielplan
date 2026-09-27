@@ -5,7 +5,6 @@ the preview showed still matches, else 409 with a fresh preview. No body is quot
 from __future__ import annotations
 
 import math
-import unicodedata
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import TYPE_CHECKING, Annotated, Any, Literal
@@ -27,7 +26,7 @@ from pydantic import (
 )
 
 from spielplan.acquire import intake, pipeline, queue, stages
-from spielplan.api.deps import DB, AdminUser, write_txn
+from spielplan.api.deps import DB, AdminUser, printable, write_txn
 from spielplan.connectors import registry
 from spielplan.llm import anthropic, client, gemini, openai, pricing, spend
 from spielplan.llm.pricing import ModelPrice
@@ -56,24 +55,14 @@ _CHANGEABLE = ("extraction_provider", "parallel", "parallel_providers", "passes"
 # Decision 450: one lock around recompute and write, so two confirms cannot cross.
 _SPEND_SETTINGS_LOCK = "llm-spend-settings"
 
-# The only fields `PUT /connectors/{name}` writes (decision 452): no estimate input can arrive here.
-_CREDENTIALS = {
-    "anthropic": ("api_key",),
-    "openai": ("api_key",),
-    "gemini": ("api_key",),
-    "tmdb": ("api_key",),
-    "omdb": ("api_key",),
-    "trakt": ("client_id", "client_secret"),
-}
-
 _SOURCES = ("tmdb", "omdb", "trakt")
 
-
-def _no_control_characters(value: str) -> str:
-    """A control character arrives only from a paste or a crafted body; refuse it at the edge (422)."""
-    if any(unicodedata.category(ch) == "Cc" for ch in value):
-        raise ValueError("must not contain control characters")
-    return value
+# The only fields `PUT /connectors/{name}` writes (decision 452): a source's every field and a
+# provider's key, so no estimate input can arrive here.
+_CREDENTIALS = {
+    **{name: sum(registry.FIELDS[name], ()) for name in _SOURCES},
+    **{name: registry.FIELDS[name][1] for name in client.PROVIDERS},
+}
 
 
 def _each_once(names: list[str]) -> list[str]:
@@ -101,7 +90,7 @@ ProviderName = Literal[client.PROVIDERS]
 Money = Annotated[StrictInt | StrictFloat, Field(ge=0), AfterValidator(_finite)]
 ModelName = Annotated[
     str, Strict(), StringConstraints(strip_whitespace=True, min_length=1, max_length=128),
-    AfterValidator(_no_control_characters),
+    AfterValidator(printable),
 ]
 # Trimmed first: whitespace is no part of a key, and a key of spaces must mean keep.
 Credential = Annotated[
@@ -450,7 +439,7 @@ async def connector_credentials(name: str, request: Request, _: AdminUser, conn:
             " (decision 450), and the cap by PUT /api/admin/llm/cap (decision 452)",
         )
     try:
-        registry.spec_for(name)
+        registry.fields_of(name)
     except LookupError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from None
     carried = _CREDENTIALS.get(name)

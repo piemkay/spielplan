@@ -52,17 +52,6 @@ def device_handle(endpoint: str) -> str:
     return hashlib.sha256(endpoint.encode("utf-8")).hexdigest()[:12]
 
 
-class _KeepEndpointsOutOfHttpxLogs(logging.Filter):
-    """httpx logs every request URL, and a push endpoint is a credential: drop the in-flight ones."""
-
-    def filter(self, record: logging.LogRecord) -> bool:
-        return not (_IN_FLIGHT and any(e in record.getMessage() for e in _IN_FLIGHT))
-
-
-_IN_FLIGHT: set[str] = set()
-logging.getLogger("httpx").addFilter(_KeepEndpointsOutOfHttpxLogs())
-
-
 @dataclass(frozen=True)
 class SendResult:
     """`device` is `device_handle`'s hash, never the endpoint."""
@@ -144,21 +133,16 @@ async def _deliver(
 ) -> SendResult:
     handle = device_handle(row["endpoint"])
     try:
-        _IN_FLIGHT.add(row["endpoint"])          # see `_KeepEndpointsOutOfHttpxLogs`
-        try:
-            response = await client.post(
-                row["endpoint"],
-                content=_encrypt(payload, row["p256dh"], row["auth"]),
-                headers={
-                    "Authorization":
-                        _authorization(vapid, row["endpoint"], subject, int(time.time())),
-                    "Content-Encoding": "aes128gcm",
-                    "Content-Type": "application/octet-stream",
-                    "TTL": str(_TTL),
-                },
-            )
-        finally:
-            _IN_FLIGHT.discard(row["endpoint"])
+        response = await client.post(
+            row["endpoint"],
+            content=_encrypt(payload, row["p256dh"], row["auth"]),
+            headers={
+                "Authorization": _authorization(vapid, row["endpoint"], subject, int(time.time())),
+                "Content-Encoding": "aes128gcm",
+                "Content-Type": "application/octet-stream",
+                "TTL": str(_TTL),
+            },
+        )
     except Exception as exc:
         # The type only: httpx messages can carry the endpoint URL.
         log.warning("web-push to device %s failed (%s)", handle, type(exc).__name__)

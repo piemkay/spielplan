@@ -129,10 +129,9 @@ async def test_the_card_and_the_catalog_carry_the_original_title_and_its_languag
     assert heat["original_name"] is None and heat["original_language"] is None
 
 
-async def test_the_platform_caption_is_plain_and_the_flag_still_travels(card):
-    """§4.1 rule 3 rests on `display_only`, which stays."""
+async def test_the_platform_caption_is_plain(card):
+    """§4.1 rule 3's label, in the member register."""
     ratings = (await card.get("/api/titles/1")).json()["platform_ratings"]
-    assert ratings["display_only"] is True
     assert "never affect your suggestions" in ratings["note"]
     assert "model" not in ratings["note"] and "conduit" not in ratings["note"]
 

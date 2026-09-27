@@ -751,11 +751,9 @@ async def test_only_the_evaluation_module_reads_the_held_out_stream():
         "home/rail.py": "names the arm in the §6.7 log line (proposal 120)",
         "api/rank.py": "skips the incremental refit after a held-out answer, so the evaluation "
                        "stream cannot move the freshness clock the selector reads",
-        # 54b: Tonight's round has four deliberate readers, one admitting and three excluding.
+        # 54b: Tonight's round has three deliberate readers, each excluding.
         "tonight/round.py": "names the arm, and excludes those answers from the posterior that "
                             "selection and stopping read (54b)",
-        "tonight/evaluation.py": "admits only those rows (54b's one evaluation read path for "
-                                 "the round)",
         # The tilt feeds the shortlist's score, so a held-out answer must not move it.
         "tonight/play.py": "excludes those answers from the tilt, on both the answer and the "
                            "undo path (54b, via the tonight score the shortlist reads)",

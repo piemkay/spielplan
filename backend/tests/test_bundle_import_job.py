@@ -128,11 +128,10 @@ def test_the_route_and_the_registry_name_one_job_and_one_set_of_phases():
     assert artifacts_api.IMPORT_CLAIM_BUDGET_S == worker.BUNDLE_IMPORT_TIMEOUT
 
     row = next((j for j in worker.JOBS if j.name == worker.BUNDLE_IMPORT_JOB), None)
-    assert row is not None and row.run is not None, (
+    assert row is not None, (
         "the route enqueues under a name this loop does not run: section 5.3's ninth row is "
         "the job"
     )
-    assert row.owner is None, "a live job carrying an owner is counted twice by the boot census"
 
     # `PHASE_FAILED`'s only reader is the frontend map, so the map is read to keep the phases in step.
     assert _phase_keys_of_the_screen() == {
@@ -479,16 +478,16 @@ async def test_an_abandoned_claim_is_reaped_on_a_tick_and_not_only_by_the_hourly
 
 
 async def test_the_import_leads_the_tick_even_when_the_clock_produced_it(app, db, bundle_at):
-    """`due` sorts stably by stage, so once the fallback elapses the sweep would lead; the import must."""
+    """`due` keeps registry order, so once the fallback elapses the sweep would lead; the import must."""
     await _queue(db, "test-v1", phase=worker.PHASE_QUEUED, age_s=1)
     # A box switched on after its night window, which is the tick a restart produces.
     ready = worker.due(
         time.monotonic(), {}, local=datetime(2026, 1, 1, 23, 0, tzinfo=UTC), last_date={}
     )
-    stage_zero = [j.name for j in ready if j.stage == 0]
-    assert stage_zero.index("placement-reconciliation") < stage_zero.index(
-        worker.BUNDLE_IMPORT_JOB
-    ), "registry order no longer puts the sweep first, so this test asserts nothing"
+    names = [j.name for j in ready]
+    assert names.index("placement-reconciliation") < names.index(worker.BUNDLE_IMPORT_JOB), (
+        "registry order no longer puts the sweep first, so this test asserts nothing"
+    )
 
     ordered = [job.name for job in await worker._with_queued_import(ready)]
 
@@ -600,13 +599,8 @@ async def test_the_worker_model_jobs_do_not_write_across_the_flip(app, db, monke
             return None
         return run
 
-    fitting = worker.Job(
-        "fold-in-tick", "M2", "after each sitting's writes", "ms", spy("fold-in-tick"),
-        every=60, timeout=55,
-    )
-    other = worker.Job(
-        "session-prune", "M0", "hourly", "ms", spy("session-prune"), every=3600, timeout=60,
-    )
+    fitting = worker.Job("fold-in-tick", spy("fold-in-tick"), every=60, timeout=55)
+    other = worker.Job("session-prune", spy("session-prune"), every=3600, timeout=60)
     monkeypatch.setattr(worker, "JOBS", (fitting, other))
 
     held = await asyncpg.connect(settings().database_url)

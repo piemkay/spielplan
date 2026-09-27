@@ -34,7 +34,7 @@ SLOW_FAILURE_SECONDS = 0.25
 
 
 def _job(name: str, run, *, every: int = 60, anchor_hour: int | None = None) -> worker.Job:
-    return worker.Job(name, "M0", "test", "ms", run, every=every, anchor_hour=anchor_hour)
+    return worker.Job(name, run, every=every, anchor_hour=anchor_hour)
 
 
 @pytest.fixture
@@ -219,14 +219,14 @@ async def test_the_prune_never_takes_a_jobs_last_successful_row(worker_env, db):
 
 def test_the_retention_outlasts_the_interval_of_every_job_it_keeps():
     """Retention shorter than a job's interval would erase `_seed_schedule`'s memory between runs."""
-    longest = max(job.every for job in worker.JOBS if job.run is not None)
+    longest = max(job.every for job in worker.JOBS)
     assert longest < worker.JOB_RUN_KEEP_DAYS * 86400
 
 
 async def test_neither_reader_of_job_run_pays_for_the_rows_it_is_not_reading(db):
     """`DISTINCT ON (name)` reads the whole history (7.1 s at a year). Asserted as rows read, not
     time. Rows carry a reached report, as `last_syncs` reads them (decision 454)."""
-    names = [job.name for job in worker.JOBS if job.run is not None]
+    names = [job.name for job in worker.JOBS]
     await db.execute(
         "INSERT INTO job_run (name, started_at, finished_at, ok, detail) "
         " SELECT n, now() - (g * interval '1 minute'), now(), true, '{\"reached\": true}'::jsonb "
@@ -246,30 +246,9 @@ async def test_neither_reader_of_job_run_pays_for_the_rows_it_is_not_reading(db)
     )
 
 
-async def test_the_backup_job_hands_the_dump_the_households_own_clock(data_dir, monkeypatch):
-    """The date must come from the household's clock, as `Job.anchor_hour` does; a range because it is
-    read inside the job."""
-    from spielplan.backup import nightly
-
-    seen: dict[str, object] = {}
-
-    async def fake_run(local):
-        seen["local"] = local
-        return nightly.BackupReport(path=Path("none"), bytes=0, pruned=(), kept=0, skipped=True)
-
-    monkeypatch.setattr(nightly, "run", fake_run)
-    job = next(j for j in worker.JOBS if j.name == "nightly-backup")
-
-    before = worker._now_local()
-    await job.run()
-    after = worker._now_local()
-
-    assert before <= seen["local"] <= after, "the dump was handed a clock that is not the household's"
-
-
 def test_the_job_names_the_card_reads_are_the_registry_s():
     """`api/admin.py` spells the names so the web process never imports torch; this pins them."""
-    live = {j.name for j in worker.JOBS if j.run is not None}
+    live = {j.name for j in worker.JOBS}
     assert set(admin_api.JOB_NAMES) == live
     assert len(admin_api.JOB_NAMES) == len(set(admin_api.JOB_NAMES))
     assert admin_api.BACKUP_JOB in live

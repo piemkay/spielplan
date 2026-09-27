@@ -8,7 +8,7 @@ import asyncio
 import logging
 import random
 from collections.abc import Coroutine
-from typing import Annotated, Any, Literal
+from typing import Any, Literal
 
 import asyncpg
 from fastapi import APIRouter, HTTPException, WebSocket, WebSocketDisconnect, status
@@ -16,14 +16,15 @@ from itsdangerous import BadSignature, URLSafeSerializer
 from pydantic import BaseModel, Field
 
 from spielplan.api.deps import DB, ActiveUser, ActiveUserWS
+from spielplan.connectors import registry
 from spielplan.core import auth
 from spielplan.core.config import settings
 from spielplan.db import pool as db_pool
 from spielplan.home import rail
 from spielplan.models import artifacts
+from spielplan.push import send as push_send
 from spielplan.tonight import ballot as ballot_rules
 from spielplan.tonight import channel as channel_rules
-from spielplan.tonight import evaluation as evaluation_rules
 from spielplan.tonight import play, rooms
 from spielplan.tonight import result as result_rules
 from spielplan.tonight import round as round_rules
@@ -227,12 +228,8 @@ async def open_session(body: OpenBody, user: ActiveUser, conn: DB) -> dict[str, 
 
 
 async def _invite(*, session_id: int, host_user_id: int, room_code: str) -> None:
-    """Its own connection, never the request's, which is released with the response. The sender is
-    optional (§3.1's half-configured boot). Never raises: failures are logged."""
-    try:
-        from spielplan.push import send as push_send
-    except Exception:  # pragma: no cover - the sender is absent only in a partial checkout
-        return
+    """Its own connection, never the request's, which is released with the response. Never raises:
+    failures are logged."""
     try:
         async with db_pool.acquire() as conn:
             await asyncio.wait_for(
@@ -275,7 +272,7 @@ async def lobby(session_id: int, user: ActiveUser, conn: DB) -> dict[str, object
     """Everything a device renders before the reveal, never the pool. Settled first: every device polls
     this, so a stalled room is picked up here (see `play.settle`)."""
     try:
-        await play.settle(conn, session_id, z=round_rules.BOUNDARY_Z)
+        await play.settle(conn, session_id)
         seen = await rooms.lobby(conn, session_id)
     except (rooms.RoomError, play.RoundError) as exc:
         # A domain refusal from `settle` maps here; a failed combine reaches `app.py` as a 500.
@@ -367,10 +364,6 @@ def _public_state(state: dict[str, Any], token: str | None) -> dict[str, Any]:
     }
 
 
-# `z` is always `round_rules.BOUNDARY_Z`, never §6.3's `straddle_z`: different score scales
-# (decisions 175, 205, 214).
-
-
 @router.get("/seats/{participant_id}/round")
 async def round_state(
     participant_id: int, user: ActiveUser, conn: DB
@@ -379,7 +372,7 @@ async def round_state(
     announces: the client reads the round after the session, so nothing else would wake the room."""
     seat = await _seat_for(conn, participant_id, user)
     try:
-        state = await play.state_for(conn, participant_id, z=round_rules.BOUNDARY_Z)
+        state = await play.state_for(conn, participant_id)
     except play.RoundError as exc:
         raise _room_error(exc) from exc
     if state["_ended_now"]:
@@ -401,7 +394,7 @@ async def answer(
     try:
         written = await play.record_answer(
             conn, participant_id=participant_id, pair=pair, answer=body.answer,
-            seq=seq, latency_ms=body.latency_ms, z=round_rules.BOUNDARY_Z,
+            seq=seq, latency_ms=body.latency_ms,
         )
     except play.RoundError as exc:
         raise _room_error(exc) from exc
@@ -434,7 +427,7 @@ async def undo(
     """§6 preamble's undo, where a mis-tap is otherwise permanent."""
     seat = await _seat_for(conn, participant_id, user)
     try:
-        out = await play.retract(conn, participant_id, z=round_rules.BOUNDARY_Z)
+        out = await play.retract(conn, participant_id)
     except play.RoundError as exc:
         raise _room_error(exc) from exc
     await _announce(conn, seat["session_id"])
@@ -465,7 +458,7 @@ async def _announce(conn: asyncpg.Connection, session_id: int) -> None:
     (a write owed to the room); the frames are nudged."""
     progress = channel_rules.progress_frame(session_id, await play.progress(conn, session_id))
     _nudge(HUB.to_session(session_id, progress))
-    if await play.settle(conn, session_id, z=round_rules.BOUNDARY_Z):
+    if await play.settle(conn, session_id):
         lobby = channel_rules.lobby_frame(await rooms.lobby(conn, session_id))
         _nudge(HUB.to_session(session_id, lobby))
 
@@ -475,7 +468,7 @@ async def ballot_card(session_id: int, user: ActiveUser, conn: DB) -> dict[str, 
     """54e's ballot, nothing about anybody's vote. Settled first, so a room whose votes are in never
     shows an empty slate."""
     try:
-        await play.settle(conn, session_id, z=round_rules.BOUNDARY_Z)
+        await play.settle(conn, session_id)
     except play.RoundError as exc:
         raise _room_error(exc) from exc
     submitted, seated = await ballot_rules.submitted_count(conn, session_id)
@@ -524,32 +517,19 @@ async def result(session_id: int, user: ActiveUser, conn: DB) -> dict[str, objec
     """§6.2 step 7's winner card: settled first, then refused by `ballot.tally` until every seat has
     submitted. Only §7.1's deep link is HTTP's; the card is `tonight/result.slate`."""
     try:
-        await play.settle(conn, session_id, z=round_rules.BOUNDARY_Z)
+        await play.settle(conn, session_id)
         counted = await ballot_rules.tally(conn, session_id)
         outcome = await ballot_rules.resolve(conn, session_id)
     except (ballot_rules.BallotError, play.RoundError) as exc:
         raise _room_error(exc) from exc
 
-    jf = await conn.fetchval("SELECT config FROM connector_config WHERE name = 'jellyfin'")
-    base = (jf or {}).get("url", "") if isinstance(jf, dict) else ""
-
-    def play_url(jellyfin_id: str) -> str:
-        """§7.1's deep link."""
-        return f"{base.rstrip('/')}/web/#/details?id={jellyfin_id}"
-
     return await result_rules.slate(
         conn, session_id, counted, outcome,
         # None without a connector (§6.0): absent rather than guessed.
-        play_url=play_url if base else None,
+        play_url=await registry.play_link(conn),
         # Decision 117's gate, asked where the payload is built (decision 486).
         show_model=rail.visible_to(user),
     )
-
-
-@router.get("/sessions/{session_id}/evaluation")
-async def evaluation(session_id: int, user: ActiveUser, conn: DB) -> dict[str, object]:
-    """§13's instrument and §14 risk 6's rates: the held-out stream only, naming no candidate."""
-    return await evaluation_rules.report(conn, session_id)
 
 
 @router.post("/solo")
@@ -578,7 +558,7 @@ async def solo(
         conn, user_id=user.id, kind=body.kind, budget_min=body.runtime_budget_min,
         include_rewatches=body.include_rewatches, bundle_version=version,
         answers=answers, offset=body.offset, sharpen=body.sharpen,
-        z=round_rules.BOUNDARY_Z, rng=_rng, holdout_key=holdout_key,
+        rng=_rng, holdout_key=holdout_key,
     )
 
 
@@ -619,6 +599,3 @@ async def channel(socket: WebSocket, user: ActiveUserWS, session_id: int | None 
         await channel_rules.close_quietly(socket)
     finally:
         HUB.unsubscribe(sub)
-
-
-Router = Annotated[APIRouter, None]

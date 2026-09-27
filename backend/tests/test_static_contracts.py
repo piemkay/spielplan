@@ -223,7 +223,7 @@ _JS_WORD = re.compile(r"[\w$]+")
 _SPIELPLAN = REPO / "backend" / "spielplan"
 _MEMBER_COPY_PACKAGES = ("home", "rate", "rank", "tonight")
 _MEMBER_ROUTERS = ("home", "library", "rank", "rate", "tonight")
-_MEMBER_COPY_CONSTANTS = {"api/artifacts.py": ("RESTART_REQUIRED", "RESTORE_REQUIRED")}
+_MEMBER_COPY_CONSTANTS = {"api/deps.py": ("RESTART_REQUIRED", "RESTORE_REQUIRED")}
 
 
 def _docstrings(tree: ast.AST) -> set[int]:

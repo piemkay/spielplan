@@ -2,14 +2,22 @@
 
 from __future__ import annotations
 
-import unicodedata
 from dataclasses import replace
 from datetime import UTC, datetime
+from typing import Annotated
 
 from fastapi import APIRouter, HTTPException, Request, Response, status
-from pydantic import BaseModel, Field, field_validator
+from pydantic import AfterValidator, BaseModel, Field
 
-from spielplan.api.deps import DB, ActiveUser, CredentialedUser, CurrentUser, set_session_cookie, write_txn
+from spielplan.api.deps import (
+    DB,
+    ActiveUser,
+    CredentialedUser,
+    CurrentUser,
+    printable,
+    set_session_cookie,
+    write_txn,
+)
 from spielplan.core import auth
 from spielplan.core.config import settings
 
@@ -18,17 +26,9 @@ router = APIRouter(prefix="/api/auth", tags=["auth"])
 
 class LoginRequest(BaseModel):
     # Length bounds are part of the defence: this anonymous route reaches argon2 and a query (sec-02).
-    name: str = Field(max_length=128)
-    password: str = Field(max_length=128)
-    device_label: str | None = Field(default=None, max_length=256)
-
-    @field_validator("name", "password", "device_label")
-    @classmethod
-    def _no_control_characters(cls, value: str | None) -> str | None:
-        """Control characters are never typeable; a NUL reached Postgres as a 500. Refuse at the edge."""
-        if value is not None and any(unicodedata.category(ch) == "Cc" for ch in value):
-            raise ValueError("must not contain control characters")
-        return value
+    name: Annotated[str, AfterValidator(printable)] = Field(max_length=128)
+    password: Annotated[str, AfterValidator(printable)] = Field(max_length=128)
+    device_label: Annotated[str, AfterValidator(printable)] | None = Field(default=None, max_length=256)
 
 
 # ASCII digits only: pydantic's `\d` accepts Arabic-Indic and fullwidth digits.

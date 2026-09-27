@@ -565,9 +565,6 @@ from spielplan.tonight import ballot, combine, play  # noqa: E402
 from spielplan.tonight import round as rnd  # noqa: E402
 from spielplan.tonight import tilt as tilt_rules  # noqa: E402
 
-# What the route passes (the round's own constant), not §6.3's `straddle_z` (decision 214).
-Z = rnd.BOUNDARY_Z
-
 
 async def widen(db, world, *, extra=110):
     """Decision 477: rank-standardised members make `world`'s six films resolve in one pair, so tests
@@ -622,12 +619,12 @@ async def running_room(
 
 async def answer_once(db, participant_id, answer=rnd.A):
     """Serve this seat its next pair and answer it, the way a route would."""
-    state = await play.state_for(db, participant_id, z=Z)
+    state = await play.state_for(db, participant_id)
     if state["_pair"] is None:
         return None
     return await play.record_answer(
         db, participant_id=participant_id, pair=state["_pair"], answer=answer,
-        seq=state["answered"] + 1, latency_ms=900, z=Z,
+        seq=state["answered"] + 1, latency_ms=900,
     )
 
 
@@ -705,13 +702,13 @@ async def test_every_answered_pair_writes_exactly_one_row_that_replays_the_round
 
     served = []
     for _ in range(3):
-        state = await play.state_for(db, seat, z=Z)
+        state = await play.state_for(db, seat)
         if state["_pair"] is None:
             break
         served.append((state["_pair"].title_a, state["_pair"].title_b, state["_pair"].selection))
         await play.record_answer(
             db, participant_id=seat, pair=state["_pair"], answer=rnd.A,
-            seq=state["answered"] + 1, latency_ms=1234, z=Z,
+            seq=state["answered"] + 1, latency_ms=1234,
         )
 
     rows = await db.fetch(
@@ -750,14 +747,14 @@ async def test_a_replayed_pair_is_refused_rather_than_counted_twice(db, world):
     # Wide, so a replay is not refused as `round_over`.
     room = await running_room(db, world, wide=True)
     seat = room["seats"][0]["id"]
-    state = await play.state_for(db, seat, z=Z)
+    state = await play.state_for(db, seat)
     await play.record_answer(
-        db, participant_id=seat, pair=state["_pair"], answer=rnd.A, seq=1, latency_ms=None, z=Z
+        db, participant_id=seat, pair=state["_pair"], answer=rnd.A, seq=1, latency_ms=None
     )
     with pytest.raises(play.RoundError) as stale:
         await play.record_answer(
             db, participant_id=seat, pair=state["_pair"], answer=rnd.B, seq=1,
-            latency_ms=None, z=Z,
+            latency_ms=None,
         )
     assert stale.value.reason == "stale_pair"
     assert await db.fetchval(
@@ -772,17 +769,17 @@ async def test_an_answer_moves_the_participants_tilt(db, world):
     chose_a, chose_b = room["seats"][0]["id"], room["seats"][1]["id"]
     assert await db.fetchval("SELECT tilt FROM session_participant WHERE id = $1", chose_a) == {}
 
-    state = await play.state_for(db, chose_a, z=Z)
+    state = await play.state_for(db, chose_a)
     pair = state["_pair"]
     assert pair is not None and pair.selection == rnd.SELECTION_ADAPTIVE, (
         "a held-out answer moves no tilt by design (54b), so this claim needs an adaptive pair"
     )
     # Two seats answer independently against a frozen pool.
     await play.record_answer(
-        db, participant_id=chose_a, pair=pair, answer=rnd.A, seq=1, latency_ms=900, z=Z
+        db, participant_id=chose_a, pair=pair, answer=rnd.A, seq=1, latency_ms=900
     )
     await play.record_answer(
-        db, participant_id=chose_b, pair=pair, answer=rnd.B, seq=1, latency_ms=900, z=Z
+        db, participant_id=chose_b, pair=pair, answer=rnd.B, seq=1, latency_ms=900
     )
 
     after = await db.fetchval("SELECT tilt FROM session_participant WHERE id = $1", chose_a)
@@ -873,18 +870,18 @@ async def test_the_state_reports_when_the_escape_becomes_available(db, world):
     # A household-sized pool, so the shortlist is unsettled at pair five (decision 477).
     room = await running_room(db, world, wide=True)
     seat = room["seats"][0]["id"]
-    assert (await play.state_for(db, seat, z=Z))["escape_available"] is False
+    assert (await play.state_for(db, seat))["escape_available"] is False
 
     for _ in range(rnd.ESCAPE_FROM_PAIR - 1):
         assert await answer_once(db, seat) is not None, "the round ended before 54c's escape opens"
-    state = await play.state_for(db, seat, z=Z)
+    state = await play.state_for(db, seat)
     assert state["answered"] == rnd.ESCAPE_FROM_PAIR - 1, state
     assert state["escape_available"] is True
 
     ended = await play.escape(db, seat)
     assert ended["ended_by"] == rnd.ESCAPE
     assert ended["escape_available"] is False, "the control that ended the round still offers itself"
-    after = await play.state_for(db, seat, z=Z)
+    after = await play.state_for(db, seat)
     assert after["escape_available"] is False, (
         "a seat that has ended still advertises the escape, which the route refuses with round_over"
     )
@@ -905,7 +902,7 @@ async def test_a_participant_can_take_back_the_answer_they_just_gave(db, world):
         answered += 1
     tilt_before = await db.fetchval("SELECT tilt FROM session_participant WHERE id = $1", seat)
 
-    out = await play.retract(db, seat, z=Z)
+    out = await play.retract(db, seat)
     assert out["answered"] == answered - 1
     row = await db.fetchrow(
         "SELECT answered_count, tilt FROM session_participant WHERE id = $1", seat
@@ -925,7 +922,7 @@ async def test_undo_reaches_only_your_own_last_live_answer(db, world):
     room = await running_room(db, world)
     seat = room["seats"][0]["id"]
     with pytest.raises(play.RoundError) as nothing:
-        await play.retract(db, seat, z=Z)
+        await play.retract(db, seat)
     assert nothing.value.reason == "nothing_to_undo"
 
 
@@ -934,7 +931,7 @@ async def test_a_finished_round_cannot_be_edited(db, world):
     seat = room["seats"][0]["id"]
     await run_to_the_end(db, seat)
     with pytest.raises(play.RoundError) as over:
-        await play.retract(db, seat, z=Z)
+        await play.retract(db, seat)
     assert over.value.reason == "round_over"
 
 
@@ -963,11 +960,11 @@ async def test_a_guest_cannot_answer_before_the_initiator_has_finished(db, world
     guest = next(s for s in room["seats"] if s["role"] == "guest")
     host = next(s for s in room["seats"] if s["role"] == "host")
 
-    state = await play.state_for(db, guest["id"], z=Z)
+    state = await play.state_for(db, guest["id"])
     with pytest.raises(play.RoundError) as early:
         await play.record_answer(
             db, participant_id=guest["id"], pair=state["_pair"], answer=rnd.A, seq=1,
-            latency_ms=None, z=Z,
+            latency_ms=None,
         )
     assert early.value.reason == "not_your_turn"
 
@@ -983,11 +980,11 @@ async def test_only_one_guest_turn_is_open_at_a_time(db, world):
     await run_to_the_end(db, host["id"])
 
     assert await answer_once(db, guests[0]["id"]) is not None
-    state = await play.state_for(db, guests[1]["id"], z=Z)
+    state = await play.state_for(db, guests[1]["id"])
     with pytest.raises(play.RoundError) as waiting:
         await play.record_answer(
             db, participant_id=guests[1]["id"], pair=state["_pair"], answer=rnd.A, seq=1,
-            latency_ms=None, z=Z,
+            latency_ms=None,
         )
     assert waiting.value.reason == "not_your_turn"
 
@@ -1017,7 +1014,7 @@ async def finished_session(db, world, **kw):
 async def test_the_slate_is_persisted_rather_than_recomputed_on_read(db, world):
     """A slate re-derived later cannot be compared with the votes that produced it."""
     room = await finished_session(db, world)
-    slate = await play.finish(db, room["session_id"], z=Z)
+    slate = await play.finish(db, room["session_id"])
 
     rows = await db.fetch(
         "SELECT title_id, rank, slot, group_score, per_user_match, conflict FROM session_result "
@@ -1053,7 +1050,7 @@ async def test_a_quiet_session_stores_no_conflict_at_all(db, world):
             continue
         await run_to_the_end(db, seat["id"], answer=rnd.EITHER)
 
-    slate = await play.finish(db, room["session_id"], z=Z)
+    slate = await play.finish(db, room["session_id"])
 
     assert slate.conflict is None, "nobody pulled against anybody"
     stored = await db.fetch(
@@ -1066,7 +1063,7 @@ async def test_a_quiet_session_stores_no_conflict_at_all(db, world):
 async def test_every_participant_gets_a_match_line_naming_terms_the_title_carries(db, world):
     """A winner card shown under a reason it does not satisfy is the defect."""
     room = await finished_session(db, world)
-    await play.finish(db, room["session_id"], z=Z)
+    await play.finish(db, room["session_id"])
     # The rank-1 row's own title: a surfaced split reorders `finalists`.
     winner_row = await db.fetchrow(
         "SELECT title_id, per_user_match FROM session_result WHERE session_id = $1 AND rank = 1",
@@ -1095,7 +1092,7 @@ async def test_every_participant_gets_a_match_line_naming_terms_the_title_carrie
 async def test_approvals_stay_hidden_until_every_participant_has_submitted(db, world):
     """Enforced in the read: a payload carrying an approval is one request from being read."""
     room = await finished_session(db, world)
-    slate = await play.finish(db, room["session_id"], z=Z)
+    slate = await play.finish(db, room["session_id"])
     first, second = room["seats"][0]["id"], room["seats"][1]["id"]
 
     await ballot.submit(db, participant_id=first, approved=slate.finalists[:1])
@@ -1111,7 +1108,7 @@ async def test_approvals_stay_hidden_until_every_participant_has_submitted(db, w
 
 async def test_the_winner_is_the_most_approved_with_ties_broken_by_group_score(db, world):
     room = await finished_session(db, world)
-    slate = await play.finish(db, room["session_id"], z=Z)
+    slate = await play.finish(db, room["session_id"])
     first, second = room["seats"][0]["id"], room["seats"][1]["id"]
     target = slate.finalists[1]
 
@@ -1127,7 +1124,7 @@ async def test_the_winner_is_the_most_approved_with_ties_broken_by_group_score(d
 async def test_the_approval_share_is_approvals_over_participants_and_is_persisted(db, world):
     """Persisted: a share recomputed later would move with the code."""
     room = await finished_session(db, world)
-    slate = await play.finish(db, room["session_id"], z=Z)
+    slate = await play.finish(db, room["session_id"])
     first, second = room["seats"][0]["id"], room["seats"][1]["id"]
 
     await ballot.submit(db, participant_id=first, approved=[slate.finalists[0]])
@@ -1148,7 +1145,7 @@ async def test_the_approval_share_is_approvals_over_participants_and_is_persiste
 async def test_resolving_twice_returns_the_same_outcome(db, world):
     """Two devices revealing at once is normal; the share must not change between them."""
     room = await finished_session(db, world)
-    slate = await play.finish(db, room["session_id"], z=Z)
+    slate = await play.finish(db, room["session_id"])
     for seat in room["seats"]:
         await ballot.submit(db, participant_id=seat["id"], approved=[slate.finalists[0]])
 
@@ -1161,7 +1158,7 @@ async def test_resolving_twice_returns_the_same_outcome(db, world):
 async def test_a_ballot_may_only_name_titles_on_tonights_slate(db, world):
     """A title nobody was offered would land in §13's numbers."""
     room = await finished_session(db, world)
-    await play.finish(db, room["session_id"], z=Z)
+    await play.finish(db, room["session_id"])
     seat = room["seats"][0]["id"]
     with pytest.raises(ballot.BallotError) as off_slate:
         await ballot.submit(db, participant_id=seat, approved=[8])
@@ -1171,7 +1168,7 @@ async def test_a_ballot_may_only_name_titles_on_tonights_slate(db, world):
 async def test_an_empty_ballot_is_an_answer_rather_than_a_silence(db, world):
     """An empty ballot is an answer, or the round never reveals."""
     room = await finished_session(db, world)
-    await play.finish(db, room["session_id"], z=Z)
+    await play.finish(db, room["session_id"])
     for seat in room["seats"]:
         await ballot.submit(db, participant_id=seat["id"], approved=[])
 
@@ -1189,7 +1186,7 @@ async def test_a_held_out_answer_is_stored_as_held_out_and_moves_no_tilt(db, wor
         title_a=1, title_b=2, selection=rnd.SELECTION_HOLDOUT, reason="uniform-random",
     )
     await play.record_answer(
-        db, participant_id=seat, pair=pair, answer=rnd.A, seq=1, latency_ms=None, z=Z
+        db, participant_id=seat, pair=pair, answer=rnd.A, seq=1, latency_ms=None
     )
     row = await db.fetchrow(
         "SELECT a.selection, p.tilt, p.answered_count FROM session_answer a "
@@ -1204,7 +1201,7 @@ async def test_a_held_out_answer_is_stored_as_held_out_and_moves_no_tilt(db, wor
 async def test_the_match_lines_actually_name_something(db, world):
     """A guard against the fixture: with no `dna_tag` rows the term check never runs."""
     room = await finished_session(db, world)
-    await play.finish(db, room["session_id"], z=Z)
+    await play.finish(db, room["session_id"])
     top = await db.fetchrow(
         "SELECT title_id, per_user_match FROM session_result WHERE session_id = $1 AND rank = 1",
         room["session_id"],
@@ -1233,7 +1230,7 @@ async def test_a_household_pulling_opposite_ways_gets_one_of_each(db, world):
     snapshot = await play.snapshot_of(db, room["session_id"])
     for seat, want in ((heavy_seat, "dread"), (light_seat, "cosy")):
         for _ in range(rnd.CAP_PAIRS):
-            state = await play.state_for(db, seat, z=Z)
+            state = await play.state_for(db, seat)
             if state["_pair"] is None or state["stop_reason"] is not None:
                 break
             pair = state["_pair"]
@@ -1242,7 +1239,7 @@ async def test_a_household_pulling_opposite_ways_gets_one_of_each(db, world):
             answer = rnd.A if a_has and not b_has else rnd.B if b_has and not a_has else rnd.EITHER
             await play.record_answer(
                 db, participant_id=seat, pair=pair, answer=answer,
-                seq=state["answered"] + 1, latency_ms=None, z=Z,
+                seq=state["answered"] + 1, latency_ms=None,
             )
     for seat in (heavy_seat, light_seat):
         row = await db.fetchrow(
@@ -1251,7 +1248,7 @@ async def test_a_household_pulling_opposite_ways_gets_one_of_each(db, world):
         if row["ended_by"] is None and row["answered_count"] >= rnd.ESCAPE_FROM_PAIR - 1:
             await play.escape(db, seat)
 
-    slate = await play.finish(db, room["session_id"], z=Z)
+    slate = await play.finish(db, room["session_id"])
     assert slate.contested is not None, (
         "this pool no longer divides the household enough to surface a split, so every "
         "assertion below is about nothing -- fix the fixture (widen the salience gap between "
@@ -1277,9 +1274,6 @@ async def test_a_household_pulling_opposite_ways_gets_one_of_each(db, world):
     assert "hate" not in conflicts[0]["explanation"].lower()
 
 
-from spielplan.tonight import evaluation  # noqa: E402
-
-
 async def test_the_shortlist_is_identical_with_the_held_out_answers_removed(db, world):
     """Through the write path: a combine reading every row would change the slate on a hold-out."""
     room = await running_room(db, world)
@@ -1296,132 +1290,16 @@ async def test_the_shortlist_is_identical_with_the_held_out_answers_removed(db, 
         room["session_id"], seats[0], ids[0], ids[1],
     )
 
-    with_holdout = await play.finish(db, room["session_id"], z=Z)
+    with_holdout = await play.finish(db, room["session_id"])
     await db.execute(
         "DELETE FROM session_answer WHERE session_id = $1 AND selection = 'uniform_holdout'",
         room["session_id"],
     )
-    without = await play.finish(db, room["session_id"], z=Z)
+    without = await play.finish(db, room["session_id"])
 
     assert with_holdout.finalists == without.finalists
     assert with_holdout.wildcard == without.wildcard
     assert [t for t, _ in with_holdout.ranked] == [t for t, _ in without.ranked]
-
-
-async def test_the_evaluation_reads_held_out_rows_and_nothing_else(db, world):
-    """Two functions in two modules: `duel.selection` once had four read paths that looked like one."""
-    room = await running_room(db, world)
-    seat = room["seats"][0]["id"]
-    await answer_once(db, seat)
-    await answer_once(db, seat)
-    snapshot = await play.snapshot_of(db, room["session_id"])
-    ids = sorted(snapshot.title_ids)[:2]
-    await db.execute(
-        "INSERT INTO session_answer "
-        "(session_id, participant_id, seq, title_a, title_b, answer, selection) "
-        "VALUES ($1, $2, 98, $3, $4, 'A', 'uniform_holdout')",
-        room["session_id"], seat, ids[0], ids[1],
-    )
-
-    held = await evaluation.held_out_answers(db, room["session_id"])
-    # Every held-out row: the arm is a per-seat rate (decision 223), so a count cannot be assumed.
-    stored = [
-        r["seq"] for r in await db.fetch(
-            "SELECT seq FROM session_answer WHERE session_id = $1 AND selection = $2 ORDER BY seq",
-            room["session_id"], rnd.SELECTION_HOLDOUT,
-        )
-    ]
-    assert [h["seq"] for h in held] == stored, "an adaptive answer must not reach the evaluation"
-    assert 98 in stored
-
-    total = await db.fetchval(
-        "SELECT count(*) FROM session_answer WHERE session_id = $1", room["session_id"]
-    )
-    assert total > len(held), "the fixture is only meaningful while adaptive rows also exist"
-
-
-async def test_a_retracted_answer_is_not_evaluated(db, world):
-    """An answer taken back must not be scored."""
-    room = await running_room(db, world)
-    seat = room["seats"][0]["id"]
-    snapshot = await play.snapshot_of(db, room["session_id"])
-    ids = sorted(snapshot.title_ids)[:2]
-    await db.execute(
-        "INSERT INTO session_answer "
-        "(session_id, participant_id, seq, title_a, title_b, answer, selection, retracted_at) "
-        "VALUES ($1, $2, 97, $3, $4, 'A', 'uniform_holdout', now())",
-        room["session_id"], seat, ids[0], ids[1],
-    )
-    assert await evaluation.held_out_answers(db, room["session_id"]) == []
-
-
-async def test_the_agreement_figure_carries_its_own_denominator(db, world):
-    """None on an empty sample: a rate over no pairs is not a number."""
-    room = await finished_session(db, world)
-    await play.finish(db, room["session_id"], z=Z)
-    # Starts from a stream it controls; the round's own hold-outs are tested elsewhere.
-    await db.execute(
-        "DELETE FROM session_answer WHERE session_id = $1 AND selection = 'uniform_holdout'",
-        room["session_id"],
-    )
-    empty = await evaluation.shortlist_agreement(db, room["session_id"])
-    assert empty.rate is None and empty.decisive == 0
-
-    slate = await db.fetch(
-        "SELECT title_id, slot FROM session_result WHERE session_id = $1 ORDER BY rank",
-        room["session_id"],
-    )
-    finalist = next(r["title_id"] for r in slate if r["slot"] == "finalist")
-    other = next(r["title_id"] for r in slate if r["slot"] != "finalist")
-    seat = room["seats"][0]["id"]
-    await db.execute(
-        "INSERT INTO session_answer "
-        "(session_id, participant_id, seq, title_a, title_b, answer, selection) "
-        "VALUES ($1, $2, 96, $3, $4, 'A', 'uniform_holdout')",
-        room["session_id"], seat, finalist, other,
-    )
-    agreed = await evaluation.shortlist_agreement(db, room["session_id"])
-    assert agreed.decisive == 1 and agreed.agreed == 1 and agreed.rate == pytest.approx(1.0)
-
-
-async def test_a_level_answer_is_counted_but_not_decisive(db, world):
-    """`either`/`neither` cross no boundary; folding one into a side invents a threshold."""
-    room = await finished_session(db, world)
-    await play.finish(db, room["session_id"], z=Z)
-    # Starts from a stream it controls; the round's own hold-outs are tested elsewhere.
-    await db.execute(
-        "DELETE FROM session_answer WHERE session_id = $1 AND selection = 'uniform_holdout'",
-        room["session_id"],
-    )
-    slate = await db.fetch(
-        "SELECT title_id, slot FROM session_result WHERE session_id = $1 ORDER BY rank",
-        room["session_id"],
-    )
-    finalist = next(r["title_id"] for r in slate if r["slot"] == "finalist")
-    other = next(r["title_id"] for r in slate if r["slot"] != "finalist")
-    seat = room["seats"][0]["id"]
-    await db.execute(
-        "INSERT INTO session_answer "
-        "(session_id, participant_id, seq, title_a, title_b, answer, selection) "
-        "VALUES ($1, $2, 95, $3, $4, 'EITHER', 'uniform_holdout')",
-        room["session_id"], seat, finalist, other,
-    )
-    figure = await evaluation.shortlist_agreement(db, room["session_id"])
-    assert figure.pairs == 1 and figure.decisive == 0 and figure.rate is None
-
-
-async def test_the_report_carries_the_rate_at_which_each_ending_fired(db, world):
-    """§14 risk 6 needs the rate of each ending, so the three must be distinguishable."""
-    room = await finished_session(db, world)
-    await play.finish(db, room["session_id"], z=Z)
-    reported = await evaluation.report(db, room["session_id"])
-
-    assert set(reported["ended_by"]) == set(rnd.END_REASONS)
-    assert sum(reported["ended_by"].values()) == len(room["seats"])
-    assert "chosen_title_id" not in reported, (
-        "§13 evaluates the round; a report that can name a candidate invites a surface to draw "
-        "it, which is how a held-out stream stops being held out"
-    )
 
 
 from spielplan.tonight import solo  # noqa: E402
@@ -1616,7 +1494,7 @@ async def test_the_answer_after_an_undo_is_accepted(db, world):
     seat = room["seats"][0]["id"]
     await answer_once(db, seat)
     await answer_once(db, seat)
-    await play.retract(db, seat, z=Z)
+    await play.retract(db, seat)
 
     assert await answer_once(db, seat) is not None, "the round has to be able to continue"
     live = await db.fetch(
@@ -1670,7 +1548,7 @@ async def test_two_seats_finishing_together_do_not_both_write_the_slate(db, worl
             session_id, title_id,
         )
 
-        loser = asyncio.create_task(play.finish(db, session_id, z=Z))
+        loser = asyncio.create_task(play.finish(db, session_id))
         await asyncio.sleep(0.3)
         assert not loser.done(), "the loser has to wait rather than write into the same slate"
         await txn.commit()
@@ -1860,7 +1738,7 @@ async def test_a_room_whose_every_seat_has_finished_is_settled_by_a_read(db, wor
         "SELECT count(*) FROM session_result WHERE session_id = $1", session_id
     ) == 0, "the votes are in and there is nothing to read them with"
 
-    assert await play.settle(db, session_id, z=Z) is True, "this call is what moved the room"
+    assert await play.settle(db, session_id) is True, "this call is what moved the room"
 
     assert await db.fetchval(
         "SELECT state FROM session WHERE id = $1", session_id
@@ -1874,7 +1752,7 @@ async def test_settling_a_room_twice_leaves_the_one_slate(db, world):
     """Every read calls `settle`, so a second caller is ordinary; the boolean says whose transition."""
     room = await finished_session(db, world)
     session_id = room["session_id"]
-    assert await play.settle(db, session_id, z=Z) is True
+    assert await play.settle(db, session_id) is True
     first = [
         tuple(r) for r in await db.fetch(
             "SELECT title_id, rank, slot FROM session_result WHERE session_id = $1 ORDER BY rank",
@@ -1882,7 +1760,7 @@ async def test_settling_a_room_twice_leaves_the_one_slate(db, world):
         )
     ]
 
-    assert await play.settle(db, session_id, z=Z) is False, "the room has already moved on"
+    assert await play.settle(db, session_id) is False, "the room has already moved on"
 
     again = [
         tuple(r) for r in await db.fetch(
@@ -1899,7 +1777,7 @@ async def test_a_room_that_is_still_answering_is_not_settled_by_a_read(db, world
     session_id = room["session_id"]
     await run_to_the_end(db, room["seats"][0]["id"])
 
-    assert await play.settle(db, session_id, z=Z) is False
+    assert await play.settle(db, session_id) is False
     assert await db.fetchval(
         "SELECT state FROM session WHERE id = $1", session_id
     ) == rooms.STATE_VOTING
@@ -1938,7 +1816,7 @@ async def test_the_reveal_is_assembled_where_the_other_tonight_rules_are(db, wor
     """Runners-up are titles that RAN, by `rank` ascending; the pool's tail is not a runner-up."""
     room = await finished_session(db, world)
     session_id = room["session_id"]
-    await play.settle(db, session_id, z=Z)
+    await play.settle(db, session_id)
     slate = await ballot.slate_of(db, session_id)
     # The wildcard alone approved, so approvals and rank disagree.
     wildcard_id = next(r["title_id"] for r in slate if r["slot"] == combine.SLOT_WILDCARD)
@@ -1988,7 +1866,7 @@ async def test_the_reveal_reads_the_slate_rather_than_the_whole_pool(db, world):
     """`session_result` holds the POOL; the reveal filters to the slate in SQL. Counted, not timed."""
     room = await finished_session(db, world)
     session_id = room["session_id"]
-    await play.settle(db, session_id, z=Z)
+    await play.settle(db, session_id)
     for seat in await db.fetch(
         "SELECT id FROM session_participant WHERE session_id = $1", session_id
     ):
@@ -2153,7 +2031,7 @@ async def test_a_seat_that_can_never_be_asked_ends_itself(db, world):
     snapshot = await play.snapshot_of(db, session_id)
     assert snapshot.pool_scores_for(orphan) == {}, "the fixture is the state finding 5 leaves"
 
-    state = await play.state_for(db, orphan, z=Z)
+    state = await play.state_for(db, orphan)
 
     assert state["pair"] is None and state["stop_reason"] == rnd.CONVERGED
     assert state["ended_by"] == rnd.CONVERGED, "the payload reports the seat as ended"
@@ -2164,11 +2042,11 @@ async def test_a_seat_that_can_never_be_asked_ends_itself(db, world):
     assert row["converged_at"] is not None, "0013 ties the timestamp to the reason"
 
     # Reading again is not a second ending.
-    await play.state_for(db, orphan, z=Z)
-    assert await play.settle(db, session_id, z=Z) is False
+    await play.state_for(db, orphan)
+    assert await play.settle(db, session_id) is False
     for seat in room["seats"]:
         await run_to_the_end(db, seat["id"])
-    assert await play.settle(db, session_id, z=Z) is True
+    assert await play.settle(db, session_id) is True
 
 
 @pytest.mark.parametrize(
@@ -2192,11 +2070,11 @@ async def test_a_pool_too_small_for_a_round_reaches_the_ballot(
         )
     ]
     for seat in seats:
-        state = await play.state_for(db, seat, z=Z)
+        state = await play.state_for(db, seat)
         assert state["pair"] is None, "there is no shortlist boundary to resolve"
         assert state["ended_by"] == rnd.CONVERGED
 
-    assert await play.settle(db, session_id, z=Z) is True
+    assert await play.settle(db, session_id) is True
     assert await db.fetchval(
         "SELECT state FROM session WHERE id = $1", session_id
     ) == rooms.STATE_BALLOT
@@ -2280,7 +2158,7 @@ async def test_the_first_ending_recorded_is_the_one_that_stands(db, world):
     )
 
     racing = _EscapesMidEnding(db, participant_id=seat)
-    state = await play.state_for(racing, seat, z=Z)
+    state = await play.state_for(racing, seat)
 
     assert racing.armed is False, "the window never opened, so nothing was raced"
     row = await db.fetchrow(
@@ -2370,7 +2248,7 @@ async def test_two_answers_on_one_card_are_one_200_and_one_409(db, world, pg_url
     """The loser waits, re-reads and refuses on `stale_pair`: still a 409, with the round's reason."""
     room = await running_room(db, world)
     seat = room["seats"][0]["id"]
-    state = await play.state_for(db, seat, z=Z)
+    state = await play.state_for(db, seat)
     pair, seq = state["_pair"], state["answered"] + 1
 
     first_conn = _SlowSnapshot(await second_connection(pg_url))
@@ -2378,7 +2256,7 @@ async def test_two_answers_on_one_card_are_one_200_and_one_409(db, world, pg_url
 
     async def tap(conn, answer):
         return await play.record_answer(
-            conn, participant_id=seat, pair=pair, answer=answer, seq=seq, latency_ms=900, z=Z,
+            conn, participant_id=seat, pair=pair, answer=answer, seq=seq, latency_ms=900,
         )
 
     try:
@@ -2409,7 +2287,7 @@ async def test_an_undo_gathered_with_an_answer_leaves_the_seat_playing(db, world
     seat = room["seats"][0]["id"]
     await answer_once(db, seat)
     await answer_once(db, seat)
-    state = await play.state_for(db, seat, z=Z)
+    state = await play.state_for(db, seat)
     pair, seq = state["_pair"], state["answered"] + 1
 
     answering = _SlowSnapshot(await second_connection(pg_url))
@@ -2418,9 +2296,9 @@ async def test_an_undo_gathered_with_an_answer_leaves_the_seat_playing(db, world
         outcomes = await asyncio.gather(
             play.record_answer(
                 answering, participant_id=seat, pair=pair, answer=rnd.A, seq=seq,
-                latency_ms=900, z=Z,
+                latency_ms=900,
             ),
-            play.retract(undoing, seat, z=Z),
+            play.retract(undoing, seat),
             return_exceptions=True,
         )
     finally:
@@ -2451,7 +2329,7 @@ async def test_a_replacement_answer_takes_a_fresh_seq_rather_than_the_tombstones
     seat = room["seats"][0]["id"]
     await answer_once(db, seat)
     await answer_once(db, seat)
-    await play.retract(db, seat, z=Z)
+    await play.retract(db, seat)
 
     written = await answer_once(db, seat)
     counted, live, every = await _seat_rows(db, seat)
@@ -2479,7 +2357,7 @@ async def test_two_ballot_submissions_from_one_seat_are_both_recorded(db, world,
     """54e: re-submitting replaces, even when two submits overlap; the loser waits for the lock."""
     room = await finished_session(db, world)
     session_id = room["session_id"]
-    slate = await play.finish(db, session_id, z=Z)
+    slate = await play.finish(db, session_id)
     seat = room["seats"][0]["id"]
     one, two = slate.ballot_titles[:1], slate.ballot_titles[1:2]
     assert one and two, "the fixture needs two slate titles to tell the submissions apart"
@@ -2535,7 +2413,7 @@ async def test_a_re_submitted_ballot_cannot_land_after_the_outcome_is_stored(db,
     tally and INSERT. The assertion is agreement between outcome and ballot rows, not the winner."""
     room = await finished_session(db, world)
     session_id = room["session_id"]
-    slate = await play.finish(db, session_id, z=Z)
+    slate = await play.finish(db, session_id)
     first, second = room["seats"][0]["id"], room["seats"][1]["id"]
     one, two = slate.ballot_titles[:1], slate.ballot_titles[1:2]
     assert one and two, "the fixture needs two slate titles to tell the ballots apart"
@@ -2838,7 +2716,7 @@ async def test_an_undo_during_the_search_leaves_the_seat_playing(db, world, pg_u
     seat = room["seats"][0]["id"]
     await answer_once(db, seat)
     await answer_once(db, seat)
-    state = await play.state_for(db, seat, z=Z)
+    state = await play.state_for(db, seat)
     pair, seq = state["_pair"], state["answered"] + 1
 
     loop = asyncio.get_running_loop()
@@ -2851,13 +2729,13 @@ async def test_an_undo_during_the_search_leaves_the_seat_playing(db, world, pg_u
         if len(calls) > 1:
             # The undo's own replay must be the real one.
             return real(*args, **kw)
-        asyncio.run_coroutine_threadsafe(play.retract(undoing, seat, z=Z), loop).result(timeout=5)
+        asyncio.run_coroutine_threadsafe(play.retract(undoing, seat), loop).result(timeout=5)
         return dataclasses.replace(real(*args, **kw), next_pair=None, stop_reason=rnd.CAP)
 
     monkeypatch.setattr(rnd, "replay", undoes_the_answer_it_is_replaying)
     try:
         written = await play.record_answer(
-            db, participant_id=seat, pair=pair, answer=rnd.A, seq=seq, latency_ms=900, z=Z,
+            db, participant_id=seat, pair=pair, answer=rnd.A, seq=seq, latency_ms=900,
         )
     finally:
         await undoing.close()
@@ -2898,12 +2776,12 @@ async def test_an_undo_during_a_read_of_the_round_leaves_the_seat_playing(
         calls.append(1)
         if len(calls) > 1:
             return real(*args, **kw)
-        asyncio.run_coroutine_threadsafe(play.retract(undoing, seat, z=Z), loop).result(timeout=5)
+        asyncio.run_coroutine_threadsafe(play.retract(undoing, seat), loop).result(timeout=5)
         return dataclasses.replace(real(*args, **kw), next_pair=None, stop_reason=rnd.CAP)
 
     monkeypatch.setattr(rnd, "replay", undoes_the_answer_it_is_replaying)
     try:
-        seen = await play.state_for(db, seat, z=Z)
+        seen = await play.state_for(db, seat)
     finally:
         await undoing.close()
     monkeypatch.undo()
@@ -2920,7 +2798,7 @@ async def test_an_undo_during_a_read_of_the_round_leaves_the_seat_playing(
     assert seen["answered"] == 1, seen
 
     # The next read replays the real answers and serves a pair again.
-    again = await play.state_for(db, seat, z=Z)
+    again = await play.state_for(db, seat)
     assert again["_pair"] is not None and again["ended_by"] is None, again
     assert await answer_once(db, seat) is not None, "the seat cannot be answered any more"
     _sound(*await _seat_rows(db, seat))
@@ -2935,7 +2813,7 @@ async def test_the_combine_does_not_hold_the_loop_either(db, world, monkeypatch)
     tally = _count_the_work(monkeypatch, replay_delay=0.3)
 
     async with _loop_gaps() as gaps:
-        await play.finish(db, room["session_id"], z=Z)
+        await play.finish(db, room["session_id"])
 
     assert tally["replays"] == seats, f"one replay per seat, not {tally['replays']} for {seats}"
     assert tally["snapshots"] == 1, "and one decode of the frozen pool for the whole combine"
@@ -2958,12 +2836,12 @@ async def test_the_combine_does_not_search_for_a_pair_it_will_never_show(db, wor
     _, counted, calls = _counting(rnd, "_select_pair")
     monkeypatch.setattr(rnd, "_select_pair", counted)
 
-    slate = await play.finish(db, room["session_id"], z=Z)
+    slate = await play.finish(db, room["session_id"])
     assert calls == [], f"the combine ran {len(calls)} pair searches for pairs nobody is shown"
 
     real = rnd.replay
     monkeypatch.setattr(rnd, "replay", lambda *a, **kw: real(*a, **{**kw, "select": True}))
-    again = await play.finish(db, room["session_id"], z=Z)
+    again = await play.finish(db, room["session_id"])
 
     assert calls, "no seat had a boundary left to search, so the assertion above proved nothing"
     assert again.rows == slate.rows, "the flag moved the slate, and it may only move the cost"
@@ -3082,7 +2960,7 @@ async def test_a_seat_in_an_ended_room_is_refused_rather_than_served_a_round(hou
 async def test_ending_a_room_the_household_already_resolved_is_refused(db, world):
     """`FOR UPDATE` before `set_state`, so a second End waits and is refused on what committed."""
     room = await finished_session(db, world)
-    slate = await play.finish(db, room["session_id"], z=Z)
+    slate = await play.finish(db, room["session_id"])
     for seat in room["seats"]:
         await ballot.submit(db, participant_id=seat["id"], approved=[slate.finalists[0]])
     outcome = await ballot.resolve(db, room["session_id"])
@@ -3120,7 +2998,7 @@ async def test_a_combine_landing_after_the_host_ended_the_room_does_not_revive_i
 
     monkeypatch.setattr(rnd, "replay", ends_the_room_it_is_combining_for)
     try:
-        settled = await play.settle(db, session_id, z=Z)
+        settled = await play.settle(db, session_id)
     finally:
         await ending.close()
     monkeypatch.undo()
@@ -3135,7 +3013,7 @@ async def test_a_combine_landing_after_the_host_ended_the_room_does_not_revive_i
         "SELECT count(*) FROM session_result WHERE session_id = $1", session_id
     ) == 0, "and no slate was written into an evening that had already ended"
     with pytest.raises(play.RoundError) as refused:
-        await play.state_for(db, room["seats"][0]["id"], z=Z)
+        await play.state_for(db, room["seats"][0]["id"])
     assert refused.value.reason == "no_room", "the seats of an ended room stay unserved"
 
 
@@ -3464,7 +3342,7 @@ async def test_solo_and_the_reveal_speak_in_term_labels_and_never_ids(db, world)
             assert term["term"] not in card["why"], f"an id reached a why-line: {card['why']}"
 
     room = await finished_session(db, world)
-    await play.finish(db, room["session_id"], z=Z)
+    await play.finish(db, room["session_id"])
     lines = [
         line
         for row in await db.fetch(
@@ -3563,7 +3441,7 @@ async def test_the_person_reservation_is_persisted_and_labelled_with_the_member(
     room = await running_room(db, world)
     jenny_seat = next(s["id"] for s in room["seats"] if s["role"] == "member")
 
-    slate = await play.finish(db, room["session_id"], z=Z)
+    slate = await play.finish(db, room["session_id"])
     assert slate.reserved_for == {20: jenny_seat}
     rows = {
         r["title_id"]: r for r in await db.fetch(
@@ -3594,7 +3472,7 @@ async def test_the_person_reservation_is_persisted_and_labelled_with_the_member(
 async def test_the_reveal_carries_each_members_approval_breadth(db, world):
     """"Unanimous." stood over one member's only yes; the reveal now carries each yes's breadth."""
     room = await finished_session(db, world)
-    await play.settle(db, room["session_id"], z=Z)
+    await play.settle(db, room["session_id"])
     slate_titles = [r["title_id"] for r in await ballot.slate_of(db, room["session_id"])]
     host, member = room["seats"][0]["id"], room["seats"][1]["id"]
     await ballot.submit(db, participant_id=host, approved=slate_titles)
@@ -3616,7 +3494,7 @@ async def test_the_reveal_carries_each_members_approval_breadth(db, world):
 async def test_breadth_is_not_readable_before_every_ballot_is_in(db, world):
     """Per-seat counts leak votes, so `result.breadth` refuses until every seat is in (54e)."""
     room = await finished_session(db, world)
-    await play.settle(db, room["session_id"], z=Z)
+    await play.settle(db, room["session_id"])
     first = [r["title_id"] for r in await ballot.slate_of(db, room["session_id"])][:1]
     await ballot.submit(db, participant_id=room["seats"][0]["id"], approved=first)
     with pytest.raises(ballot.BallotError) as early:
@@ -3788,7 +3666,7 @@ async def test_the_pair_card_names_each_titles_genres_in_plain_words(db, world):
     assert snapshot.candidates[1]["genres"] == ["Adventure", "Animation"]
     assert snapshot.candidates[2]["genres"] == ["Drama"]
     assert snapshot.candidates[3]["genres"] == []
-    card = await play.state_for(db, room["seats"][0]["id"], z=Z)
+    card = await play.state_for(db, room["seats"][0]["id"])
     assert card["pair"] is not None, "the round has a pair to show, or this is vacuous"
     for side in ("a", "b"):
         assert isinstance(card["pair"][side]["genres"], list)
@@ -3799,7 +3677,7 @@ async def test_the_reveal_lists_each_card_once(db, world):
     """The runners-up are the finalists that lost; the wildcard is its own block."""
     room = await finished_session(db, world)
     session_id = room["session_id"]
-    await play.settle(db, session_id, z=Z)
+    await play.settle(db, session_id)
     slate = await ballot.slate_of(db, session_id)
     finalists = [r["title_id"] for r in slate if r["slot"] == combine.SLOT_FINALIST]
     wildcard_id = next(r["title_id"] for r in slate if r["slot"] == combine.SLOT_WILDCARD)

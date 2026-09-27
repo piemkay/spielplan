@@ -54,14 +54,6 @@ async def axes_for(conn: asyncpg.Connection, *, version: str) -> dict[str, dict[
     return out
 
 
-async def poles_for(conn: asyncpg.Connection, *, version: str) -> dict[str, tuple[str, str]]:
-    """Each axis's named poles, (left, right) per facet."""
-    rows = await conn.fetch(
-        "SELECT facet, left_pole, right_pole FROM dna_axis WHERE version = $1", version
-    )
-    return {r["facet"]: (r["left_pole"], r["right_pole"]) for r in rows}
-
-
 async def active_version(conn: asyncpg.Connection) -> str | None:
     """The vocabulary every read here is scoped to, resolved as `home/why.py` resolves it."""
     return await dna_terms.active_version(conn)
@@ -97,7 +89,6 @@ __all__ = [
     "TERM_WEIGHT",
     "active_version",
     "axes_for",
-    "poles_for",
     "terms_carried_by",
     "vectors_for",
 ]

@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import asyncio
-import hmac
 import secrets as pysecrets
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
@@ -99,10 +98,6 @@ ABSENT_ACCOUNT_HASH = _hasher.hash(pysecrets.token_urlsafe(32))
 def hash_pin(pin: str) -> str:
     """The work factor is no defence for a 10^4 space; `check_pin`'s lockout is."""
     return _hasher.hash(pin)
-
-
-def verify_pin(stored_hash: str | None, pin: str) -> bool:
-    return verify_password(stored_hash, pin)
 
 
 async def hash_pin_async(pin: str) -> str:
@@ -330,7 +325,3 @@ async def destroy_other_sessions(conn: asyncpg.Connection, user_id: int, keep: s
 async def destroy_user_sessions(conn: asyncpg.Connection, user_id: int) -> int:
     result = await conn.execute("DELETE FROM auth_session WHERE user_id = $1", user_id)
     return int(str(result).rsplit(" ", 1)[-1]) if str(result).startswith("DELETE") else 0
-
-
-def constant_time_equals(a: str, b: str) -> bool:
-    return hmac.compare_digest(a.encode(), b.encode())

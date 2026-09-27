@@ -100,14 +100,9 @@ async def test_the_board_is_an_envelope_and_not_a_bare_list(app, db):
     )
 
 
-async def test_the_per_title_route_returns_its_stages_and_its_queue_rows(app, db):
+async def test_the_per_title_route_returns_its_stages(app, db):
     await _title(db, ACQUIRED, "A Bigger Splash")
     await _job(db, ACQUIRED, stage=5, status="parked", reason=REASON)
-    await _task(
-        db, ACQUIRED, "jellyfin:abc123",
-        state="failed", attempts=2, last_error="host api.trakt.tv paused for 300s",
-        result_note="deferred once for the review window",
-    )
     admin, _member = await _bootstrap(app)
 
     answer = await admin.get(f"/api/admin/acquisition/{ACQUIRED}")
@@ -118,18 +113,6 @@ async def test_the_per_title_route_returns_its_stages_and_its_queue_rows(app, db
     assert payload["job"]["detail"] == {"identify": {"source": "jellyfin"}}, (
         "`detail` is what the stages BEFORE the parked one did - `pipeline.write_board` "
         "concatenates one key per stage into it, and a single job is where that is readable"
-    )
-
-    (task,) = payload["tasks"]
-    assert task["key"] == "jellyfin:abc123"
-    assert (task["state"], task["attempts"], task["max_attempts"]) == ("failed", 2, 4), (
-        "decision 336 needs attempts against max_attempts on this surface: a `failed` task with "
-        "attempts left is a plain retry and one without is not"
-    )
-    assert task["last_error"] == "host api.trakt.tv paused for 300s"
-    assert task["result_note"] == "deferred once for the review window"
-    assert "lease_owner" not in task and "lease_expires" not in task, (
-        "the lease is the drain's fencing and names a process, not a fact about the title"
     )
 
 

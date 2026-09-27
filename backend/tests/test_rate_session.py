@@ -528,11 +528,12 @@ async def test_the_reveal_fires_on_an_unowned_queue_title_with_no_ledger_state_r
     reveals = {}
     for title_id in (98, 99):
         s = await session.open_or_resume(db, user_id=user, kinds=["movie"])
-        s = await session.stash_card(
+        s = await session.stash(
             db,
             s,
             {"type": "sweep", "kind": "movie", "title_id": title_id, "reason": "queued because",
              "p_seen": 0.4, "source": "p_seen", "reask_of": None},
+            expected=s.card_token,
         )
         out = await session.record_verdict(
             db, s, card_token=token(s), value=2, hp=HP, embeddings=src
@@ -566,11 +567,12 @@ async def test_the_reveal_is_dark_only_until_the_first_fit_and_not_for_the_whole
 
     async def tap(title_id: int, value: int) -> dict[str, Any]:
         s = await session.open_or_resume(db, user_id=user, kinds=["movie"])
-        s = await session.stash_card(
+        s = await session.stash(
             db,
             s,
             {"type": "sweep", "kind": "movie", "title_id": title_id, "reason": "queued because",
              "p_seen": 0.4, "source": "p_seen", "reask_of": None},
+            expected=s.card_token,
         )
         out = await session.record_verdict(db, s, card_token=token(s), value=value, hp=HP)
         return out.reveal
@@ -1085,11 +1087,12 @@ async def test_undo_of_a_re_rating_makes_the_previous_verdict_live_again(db, rat
         "SELECT id FROM verdict WHERE user_id = $1 AND title_id = 1", user
     )
     s = await session.open_or_resume(db, user_id=user, kinds=["movie"])
-    s = await session.stash_card(
+    s = await session.stash(
         db,
         s,
         {"type": "sweep", "kind": "movie", "title_id": 1, "reason": "re-rating", "p_seen": None,
          "source": "p_seen", "reask_of": None},
+        expected=s.card_token,
     )
     s = (await session.record_verdict(db, s, card_token=token(s), value=0, hp=HP)).session
     assert await db.fetchval("SELECT superseded_by FROM verdict WHERE id = $1", original)
@@ -1109,11 +1112,12 @@ async def test_a_re_ask_is_written_distinguishably_and_shown_indistinguishably(d
         "SELECT id FROM verdict WHERE user_id = $1 AND title_id = 1", user
     )
     s = await session.open_or_resume(db, user_id=user, kinds=["movie"])
-    s = await session.stash_card(
+    s = await session.stash(
         db,
         s,
         {"type": "sweep", "kind": "movie", "title_id": 1, "p_seen": 1.0, "source": "reask",
          "reason": "queued because: you have this marked seen", "reask_of": original},
+        expected=s.card_token,
     )
     before = (await session.payload(db, s))["class_balance"]["counts"]
     card = await session.public_card(db, s)
@@ -2353,23 +2357,19 @@ async def test_two_long_names_on_the_rail_do_not_lose_the_verdict(db, rate_clien
     assert await db.fetchval("SELECT count(*) FROM verdict WHERE user_id = $1", user_id) == 1
 
 
-async def test_the_balance_route_serves_the_widgets_own_poll(db, rate_client):
-    """Exactly the envelope's `class_balance` block: two copies of one number could disagree."""
+async def test_the_envelope_carries_the_widgets_class_balance(db, rate_client):
     client, user_id = rate_client
     await make_titles(db, [(i, "movie", f"Title {i}") for i in range(1, 9)])
     for title_id in (1, 2, 3, 4, 5):
         await label(db, user_id, title_id, 2)
     await label(db, user_id, 6, 0)
 
-    answered = await client.get("/api/rate/balance")
+    answered = await client.get("/api/rate")
     assert answered.status_code == 200
-    balance = answered.json()
+    balance = answered.json()["class_balance"]
     assert balance["counts"] == [1, 0, 5]
     assert balance["warn"] is False, "5 of 6 liked is past the 60% line, under decision 491's 15"
     assert balance["arms_at"] == 15
-    assert balance == (await client.get("/api/rate")).json()["class_balance"], (
-        "the widget's poll and the envelope must not be able to disagree"
-    )
 
 
 async def test_mix_serves_single_titles_until_a_block_of_ratings_stands(db, world):

@@ -4,7 +4,6 @@ admin's edit, and a secret needs SECRETS_KEY. Needs TEST_DATABASE_URL."""
 from __future__ import annotations
 
 import asyncio
-import dataclasses
 import json
 import logging
 from datetime import UTC, datetime
@@ -509,35 +508,6 @@ async def test_a_custody_failure_does_not_erase_the_library_pick_or_the_watermar
     assert kept.delta_watermark == polled
 
 
-def test_the_jellyfin_spec_is_load_jellyfin_and_save_jellyfin_themselves():
-    """By identity, not a wrapper that could drift from the two hardened functions."""
-    spec = registry.spec_for("jellyfin")
-    assert spec.load is registry.load_jellyfin
-    assert spec.save is registry.save_jellyfin
-    assert spec.seeded is True
-    assert spec.test is None, "api/admin.test_jellyfin stores the 7.1 verdict as it tests (decision 433)"
-    hidden = {f.name for f in dataclasses.fields(registry.JellyfinConfig) if not f.repr}
-    assert set(spec.secret_fields) == hidden == {"api_key", "user_tokens", "webhook_token"}
-    declared = {f.name for f in dataclasses.fields(registry.JellyfinConfig)}
-    assert set(spec.config_fields) <= declared
-
-
-async def test_the_generic_calls_answer_for_jellyfin_exactly_as_its_own_functions_do(
-    db, secrets_key
-):
-    """The generic path refuses the mint: only `api/admin.put_jellyfin` may ask for one."""
-    saved = await registry.save_connector(db, "jellyfin", url="http://jf/", api_key="k")
-    assert isinstance(saved, registry.JellyfinConfig)
-    assert (saved.url, saved.api_key) == ("http://jf", "k")
-    assert saved.webhook_token == "", "a save that did not ask mints nothing (decision 418)"
-    assert saved == await registry.load_jellyfin(db)
-    assert await registry.load_connector(db, "jellyfin") == await registry.load_jellyfin(db)
-
-    with pytest.raises(ValueError, match="decision 416"):
-        await registry.save_connector(db, "jellyfin", url="http://jf", mint_webhook_token=True)
-    assert (await registry.load_jellyfin(db)).webhook_token == ""
-
-
 async def test_a_provider_round_trips_with_its_key_sealed_and_its_model_in_plaintext(
     db, secrets_key
 ):
@@ -593,8 +563,8 @@ async def test_a_save_names_the_fields_a_connector_declares(db):
     assert await db.fetchval("SELECT count(*) FROM connector_config") == 0
 
     with pytest.raises(LookupError, match="gemini"):
-        registry.spec_for("gemeni")
-    with pytest.raises(LookupError, match="jellyfin"):
+        registry.fields_of("gemeni")
+    with pytest.raises(LookupError, match="trakt"):
         await registry.load_connector(db, "plex")
 
 
@@ -682,13 +652,12 @@ def test_every_connector_the_registry_calls_seeded_is_one_env_can_seed():
     """Found through the registry's own names, so a connector added to one side only fails."""
     from spielplan.core.config import Settings
 
-    prefixes = tuple(f"{name}_" for name in registry.CONNECTORS)
+    connectors = {*registry.FIELDS, registry.JELLYFIN}
+    prefixes = tuple(f"{name}_" for name in connectors)
     fields = [name for name in Settings.model_fields if name.startswith(prefixes)]
     assert {"gemini_api_key", "anthropic_api_key", "openai_api_key"} <= set(fields)
     every = _settings(**{name: f"http://{name}.example" for name in fields})
-    seeded = {spec.name for spec in registry.CONNECTORS.values() if spec.seeded}
-    assert seeded == set(registry.env_seeds(every))
-    assert "llm" in registry.CONNECTORS and "llm" not in seeded
+    assert set(registry.env_seeds(every)) == connectors - {"llm"}, "the llm settings seed nothing"
 
 
 async def test_the_test_dispatch_is_one_table_and_refuses_a_connector_with_no_test(monkeypatch):
@@ -700,15 +669,14 @@ async def test_the_test_dispatch_is_one_table_and_refuses_a_connector_with_no_te
         called.append(given)
         return {"ok": True, "detail": "stub"}
 
-    monkeypatch.setitem(
-        registry.CONNECTORS, "tmdb", dataclasses.replace(registry.CONNECTORS["tmdb"], test=probe)
-    )
+    monkeypatch.setitem(registry.TESTS, "tmdb", probe)
     assert await registry.test_connector(conn, "tmdb") == {"ok": True, "detail": "stub"}
     assert called == [conn]
 
-    for untested in ("jellyfin", "llm"):
-        with pytest.raises(LookupError, match=f"connector {untested} has no test in this build"):
-            await registry.test_connector(conn, untested)
+    with pytest.raises(LookupError, match="connector llm has no test in this build"):
+        await registry.test_connector(conn, "llm")
+    with pytest.raises(LookupError, match="jellyfin"):
+        await registry.test_connector(conn, "jellyfin")
 
 
 async def test_a_provider_probe_refuses_before_any_request_when_it_holds_no_usable_key(
@@ -757,8 +725,9 @@ async def test_an_unset_refuses_a_secret_an_undeclared_name_a_contradiction_and_
         await registry.save_connector(db, "gemini", unset=("modle",))
     with pytest.raises(ValueError, match="model"):
         await registry.save_connector(db, "gemini", model="gemini-3.7-flash", unset=("model",))
-    with pytest.raises(ValueError, match="jellyfin"):
+    # Its merge is `save_jellyfin`'s, and only `api/admin.put_jellyfin` mints its token (decision 416).
+    with pytest.raises(LookupError, match="jellyfin"):
         await registry.save_connector(db, "jellyfin", unset=("library_ids",))
-    with pytest.raises(ValueError, match="decision 416"):
+    with pytest.raises(LookupError, match="jellyfin"):
         await registry.save_connector(db, "jellyfin", mint_webhook_token=True)
     assert await db.fetch("SELECT * FROM connector_config ORDER BY name") == before

@@ -15,6 +15,7 @@ from types import ModuleType
 from typing import TYPE_CHECKING, Any
 
 from spielplan.acquire import fetch
+from spielplan.core.logs import scrub
 
 if TYPE_CHECKING:
     import asyncpg
@@ -156,7 +157,7 @@ def billed(provider: str, model: str, resp: fetch.Response, data: dict[str, Any]
 def shown(text: str, key: str) -> str:
     """A provider's words as an error quotes them: the key removed from the whole text, then cut to 300.
     """
-    return _redacted(text, key)[:_SHOWN]
+    return scrub(text, key)[:_SHOWN]
 
 
 def open_fetcher(conn: asyncpg.Connection | None) -> fetch.Fetcher:
@@ -277,7 +278,7 @@ def error_text(resp: fetch.Response, key: str) -> str:
     text = f"HTTP {resp.status}" + (f" {label}" if label else "")
     if message:
         text += f": {shown(message, key)}"
-    return _redacted(text, key)
+    return scrub(text, key)
 
 
 # OpenAI's documented refusals of the household's account; a rate limit's type is never
@@ -333,19 +334,6 @@ def _per_day_quota(details: Any) -> bool:
 def _servers_own(status: int | None) -> bool:
     """Any 5xx is retryable (e.g. Anthropic's 529), keeping it on the queue's curve (decision 431)."""
     return status is not None and status >= 500
-
-
-def _redacted(text: str, key: str) -> str:
-    """The key taken out of any message this module raises or returns, in every spelling (bytes
-    repr, str repr, with a trailing newline), longest first.
-    """
-    if not key:
-        return text
-    spellings = {key, key.strip(), repr(key)[1:-1],
-                 repr(key.encode("utf-8", "backslashreplace"))[2:-1]}
-    for spelling in sorted((s for s in spellings if s), key=len, reverse=True):
-        text = text.replace(spelling, "[redacted]")
-    return text
 
 
 # --- the test button -------------------------------------------------------

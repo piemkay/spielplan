@@ -30,7 +30,7 @@ CEST = timezone(timedelta(hours=2))
 
 
 def test_every_registered_job_matches_its_spec_trigger():
-    """`trigger` is §5.3's prose and `every` what the loop obeys; they must agree."""
+    """`every` is what the loop obeys, and §5.3's cadence is what it must be."""
     by_name = {job.name: job for job in worker.JOBS}
     assert by_name["jellyfin-sessions-poll"].every == 60
     assert by_name["jellyfin-seen-sync"].every == 900        # "15 min + webhook"
@@ -40,8 +40,7 @@ def test_every_registered_job_matches_its_spec_trigger():
 
 def test_the_tick_is_shorter_than_the_shortest_job():
     """A job can never run more often than the loop wakes."""
-    live = [job.every for job in worker.JOBS if job.run is not None]
-    assert min(live) > worker.TICK_SECONDS
+    assert min(job.every for job in worker.JOBS) > worker.TICK_SECONDS
 
 
 def test_an_interval_job_that_has_never_run_is_due_immediately():
@@ -49,9 +48,7 @@ def test_an_interval_job_that_has_never_run_is_due_immediately():
     firing the daily jobs."""
     names = {job.name for job in worker.due(now=0.0, last_run={})}
     assert "jellyfin-seen-sync" in names
-    assert names == {
-        job.name for job in worker.JOBS if job.run is not None and job.anchor_hour is None
-    }
+    assert names == {job.name for job in worker.JOBS if job.anchor_hour is None}
     assert not (names & set(NIGHTLY))
 
 
@@ -70,35 +67,13 @@ def test_only_the_elapsed_jobs_are_due():
     }
 
 
-def test_a_job_awaiting_its_milestone_is_never_due():
-    """`run=None` says "not yet" out loud."""
-    pending = [job for job in worker.JOBS if job.run is None]
-    assert pending, "the registry should still name the jobs later milestones own"
-    due_names = {job.name for job in worker.due(now=1e9, last_run={})}
-    assert not due_names & {job.name for job in pending}
-
-
-def test_the_registry_covers_the_milestones_it_claims():
-    milestones = {job.milestone for job in worker.JOBS}
-    assert {"M0", "M1", "M2", "M5", "M6"} <= milestones
-    live_m1 = {job.name for job in worker.JOBS if job.milestone == "M1" and job.run is not None}
-    assert live_m1 == {
-        "jellyfin-seen-sync", "jellyfin-sessions-poll", "webauthn-challenge-prune"
-    }
-
-
 def test_the_placement_sweep_runs_before_the_fits_that_read_its_coordinates():
-    """Both fits read the coordinates the sweep writes, so `due` sorts by `stage`; the registry stays
-    in §5.3's order for reading."""
+    """Both fits read the coordinates the sweep writes, so it leads the registry `due` fires in."""
     # Late enough that all three anchors have passed: an evening first boot.
     late = datetime(2026, 9, 7, 23, 0, tzinfo=CET)
     order = [j.name for j in worker.due(1e9, {}, local=late, last_date={})]
     assert order.index("placement-reconciliation") < order.index("fold-in-user-vectors")
     assert order.index("placement-reconciliation") < order.index("ledger-map-refit")
-
-    # The table itself is still §5.3's order.
-    table = [j.name for j in worker.JOBS]
-    assert table.index("ledger-map-refit") < table.index("placement-reconciliation")
 
 
 def test_the_fold_in_runs_often_enough_to_answer_within_a_sitting():
@@ -295,30 +270,6 @@ def test_the_loop_still_takes_the_fallback_clock_rather_than_stopping(tz):
     assert worker._now_local().tzinfo is None, "the fallback is the process's own naive clock"
 
 
-# A source path, not `inspect`: the question is where one statement sits inside `main()`.
-WORKER_SOURCE = Path(worker.__file__)
-
-
-def test_a_job_this_loop_does_not_fire_says_which_of_the_three_things_that_means():
-    """`run=None` meant three states; pinned as sets, since a count cannot see a row changing bucket.
-    `dna-projection` is reached through the drain (decision 463); `bundle-import` is live."""
-    elsewhere = {j.name: j.owner for j in worker.JOBS if j.run is None and j.owner is not None}
-    awaiting = {j.name: j.milestone for j in worker.JOBS if j.run is None and j.owner is None}
-
-    assert set(elsewhere) == {"ledger-incremental", "cold-tower-placement", "dna-projection"}
-    assert set(awaiting) == {"explore-frontier-cache"}
-    assert sorted(awaiting.values()) == ["M6"], (
-        "a job with neither an implementation nor an owner has to name the milestone that owes "
-        f"it one, and these name a milestone this build has already shipped: {awaiting}"
-    )
-    for name, module in elsewhere.items():
-        assert importlib.util.find_spec(module) is not None, (
-            f"{name} names {module!r} as its implementation and that module does not exist"
-        )
-    # `owner` means this loop does not fire it; a live job carrying one is counted twice.
-    assert not [j.name for j in worker.JOBS if j.run is not None and j.owner is not None]
-
-
 # The three doors to the ACTIVE bundle. `ArtifactStore.open` is spelled with its type: `open`
 # alone is every `Path.open`, and the type alone is the bundle-less `ArtifactStore.empty()`.
 _BASIS_NAMES = frozenset({"_active_store", "load_active", "ArtifactStore.open"})
@@ -478,16 +429,12 @@ def test_the_model_job_derivation_sees_a_basis_reached_through_a_helper():
     """Today's six all spell `_active_store` themselves, so the rules differ only on jobs not yet
     written: these probes are those jobs."""
     probes = (
-        worker.Job("probe-helper", "M5", "nightly", "seconds", _probe_fits_through_a_helper),
-        worker.Job("probe-direct", "M5", "nightly", "seconds", _probe_loads_the_store_itself),
-        worker.Job("probe-comment", "M5", "nightly", "seconds",
-                   _probe_only_names_the_basis_in_a_comment),
-        worker.Job("probe-open", "M5", "nightly", "seconds",
-                   _probe_opens_the_active_directory_by_path),
-        worker.Job("probe-sentinel", "M5", "nightly", "seconds",
-                   _probe_names_the_type_without_the_door),
-        worker.Job("probe-one-out", "M5", "nightly", "seconds",
-                   _probe_reaches_the_basis_one_module_out),
+        worker.Job("probe-helper", _probe_fits_through_a_helper),
+        worker.Job("probe-direct", _probe_loads_the_store_itself),
+        worker.Job("probe-comment", _probe_only_names_the_basis_in_a_comment),
+        worker.Job("probe-open", _probe_opens_the_active_directory_by_path),
+        worker.Job("probe-sentinel", _probe_names_the_type_without_the_door),
+        worker.Job("probe-one-out", _probe_reaches_the_basis_one_module_out),
     )
     fitting = {job.name for job in probes if _reaches_the_basis(job.run)}
 
@@ -508,8 +455,7 @@ def test_every_job_that_fits_against_the_active_bundle_is_named_in_model_jobs():
     )
     fitting = {
         job.name for job in worker.JOBS
-        if job.run is not None and job.name != worker.BUNDLE_IMPORT_JOB
-        and _reaches_the_basis(job.run)
+        if job.name != worker.BUNDLE_IMPORT_JOB and _reaches_the_basis(job.run)
     }
 
     assert fitting == set(worker.MODEL_JOBS), (
@@ -549,150 +495,3 @@ def test_the_boot_line_does_not_call_a_broken_install_legal(caplog, tmp_path):
     with caplog.at_level(logging.INFO, logger="spielplan.worker"):
         worker._report_basis(ArtifactStore(version="v1", root=tmp_path))
     assert caplog.text == "", f"a healthy basis is not news at boot: {caplog.text}"
-
-
-def _census_line(caplog) -> str:
-    lines = [r.getMessage() for r in caplog.records if "job(s) live" in r.getMessage()]
-    assert len(lines) == 1, f"the boot census is not one line: {lines}"
-    return lines[0]
-
-
-def test_the_boot_census_counts_the_registry_rather_than_a_number_somebody_typed(
-    monkeypatch, caplog
-):
-    """Four fabricated rows, one per state, so a typed number cannot survive."""
-    async def _noop() -> None:
-        return None
-
-    monkeypatch.setattr(worker, "JOBS", (
-        worker.Job("fired-here", "M0", "hourly", "ms", _noop, every=3600),
-        worker.Job("runs-on-a-tap", "M0", "every observation", "ms", owner="spielplan.api.rate"),
-        worker.Job("runs-on-a-post", "M0", "admin action", "minutes",
-                   owner="spielplan.importer.bundle"),
-        worker.Job("nobody-has-written-it", "M9", "nightly", "minutes"),
-    ))
-
-    with caplog.at_level(logging.INFO, logger="spielplan.worker"):
-        worker._report_registry()
-
-    line = _census_line(caplog)
-    assert line.startswith("1 job(s) live in this loop; 2 run outside it: ")
-    assert "runs-on-a-tap(spielplan.api.rate)" in line
-    assert "runs-on-a-post(spielplan.importer.bundle)" in line
-    assert "1 awaiting their milestone: nobody-has-written-it(M9)" in line
-    assert "fired-here" not in line, "the live jobs are counted, not listed"
-    assert line.isascii(), f"the boot line a cp1252 console has to print is not ASCII: {line!r}"
-
-
-def test_the_boot_census_no_longer_reports_two_shipped_jobs_as_pending(caplog):
-    """Asserted exactly: the count was never what was wrong."""
-    with caplog.at_level(logging.INFO, logger="spielplan.worker"):
-        worker._report_registry()
-
-    line = _census_line(caplog)
-    assert line.endswith("1 awaiting their milestone: explore-frontier-cache(M6)"), line
-    outside = line.split("run outside it: ", 1)[1].split(";", 1)[0]
-    assert "ledger-incremental(spielplan.ledger.refit)" in outside
-    assert "cold-tower-placement(spielplan.placement.tower)" in outside
-    # Reached through the drain (decision 463).
-    assert "dna-projection(spielplan.dna.project)" in outside
-    # Live now, so it is named nowhere; asserted as an absence, since a dropped row would look the same.
-    assert "bundle-import" not in line, (
-        "bundle-import is live in this loop now, so the census must not list it as work that "
-        f"runs elsewhere or as work awaiting a milestone: {line}"
-    )
-    assert line.isascii(), f"the boot line a cp1252 console has to print is not ASCII: {line!r}"
-
-
-def _census_calls_in_main(source: str) -> list[str]:
-    """Three ways to lose the line: no call, a call behind a branch, a call nothing boots. `try` and
-    `async with` bodies are unconditional; `if`, loops, `except` and `else` are not."""
-    tree = ast.parse(source)
-    main = next(
-        (
-            node
-            for node in ast.walk(tree)
-            if isinstance(node, ast.AsyncFunctionDef | ast.FunctionDef) and node.name == "main"
-        ),
-        None,
-    )
-    if main is None:
-        return ["worker.py has no main()"]
-
-    found: list[str] = []
-
-    def walk(body: list[ast.stmt], guard: str | None) -> None:
-        # Compound statements are descended into and then skipped, so a call is reported once.
-        for stmt in body:
-            if isinstance(stmt, ast.Try):
-                walk(stmt.body, guard)
-                for handler in stmt.handlers:
-                    walk(handler.body, f"behind `except` at line {handler.lineno}")
-                walk(stmt.orelse, f"behind the `else` of a `try` at line {stmt.lineno}")
-                walk(stmt.finalbody, guard)
-                continue
-            if isinstance(stmt, ast.With | ast.AsyncWith):
-                walk(stmt.body, guard)
-                continue
-            if isinstance(stmt, ast.If):
-                walk(stmt.body, f"behind an `if` at line {stmt.lineno}")
-                walk(stmt.orelse, f"behind an `else` at line {stmt.lineno}")
-                continue
-            if isinstance(stmt, ast.For | ast.AsyncFor | ast.While):
-                walk(stmt.body, f"inside a loop at line {stmt.lineno}")
-                walk(stmt.orelse, f"inside a loop at line {stmt.lineno}")
-                continue
-            if isinstance(stmt, ast.AsyncFunctionDef | ast.FunctionDef | ast.ClassDef):
-                walk(stmt.body, f"inside a nested definition at line {stmt.lineno}")
-                continue
-            for node in ast.walk(stmt):
-                if (
-                    isinstance(node, ast.Call)
-                    and isinstance(node.func, ast.Name)
-                    and node.func.id == "_report_registry"
-                ):
-                    found.append(guard or "unconditional")
-                    break
-
-    walk(main.body, None)
-    return found
-
-
-def test_the_boot_census_is_actually_called_at_boot():
-    """The tests above call `_report_registry()` themselves, so only this sees the boot call site.
-    Read off the source: booting `main()` needs a pool, the migration wait and signals."""
-    calls = _census_calls_in_main(WORKER_SOURCE.read_text(encoding="utf-8"))
-    assert calls == ["unconditional"], (
-        "main() must call _report_registry() exactly once and on every boot; found: "
-        f"{calls or 'no call at all'}"
-    )
-
-
-@pytest.mark.parametrize(
-    ("name", "source", "expected"),
-    [
-        # `main()`'s own shape: inside the try whose `finally` closes the pool.
-        ("the shape that ships",
-         "async def main():\n    try:\n        _report_registry()\n    finally:\n        pass\n",
-         ["unconditional"]),
-        ("at the top of main", "async def main():\n    _report_registry()\n", ["unconditional"]),
-        ("inside an async with", "async def main():\n    async with pool.acquire() as conn:\n"
-                                 "        _report_registry()\n", ["unconditional"]),
-        ("the call deleted",
-         "async def main():\n    try:\n        pass\n    finally:\n        pass\n", []),
-        ("behind a branch the container may not take",
-         "async def main():\n    if store.is_empty:\n        _report_registry()\n",
-         ["behind an `if` at line 2"]),
-        ("behind the migration wait's else",
-         "async def main():\n    try:\n        pass\n    except OSError:\n"
-         "        _report_registry()\n",
-         ["behind `except` at line 4"]),
-        ("called twice", "async def main():\n    _report_registry()\n    _report_registry()\n",
-         ["unconditional", "unconditional"]),
-        ("defined but booted by nothing",
-         "def _boot():\n    _report_registry()\nasync def main():\n    pass\n", []),
-    ],
-)
-def test_the_boot_census_call_site_guard_catches_a_real_violation(name, source, expected):
-    """Each shape named, so the guard can see its own violation."""
-    assert _census_calls_in_main(source) == expected, name
