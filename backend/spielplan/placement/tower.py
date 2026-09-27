@@ -18,10 +18,6 @@ from spielplan.placement.contract import FeatureContract
 
 log = logging.getLogger("spielplan.placement.tower")
 
-# §4.3: "the exporter must ship v2".
-SUPPORTED_VERSIONS = (2,)
-ARCHITECTURES = ("cold_tower_v2",)
-
 EMBED_DIM = 64
 
 
@@ -109,54 +105,17 @@ def _load(path: Path, contract: FeatureContract) -> Tower:
     sha = hashlib.sha256(path.read_bytes()).hexdigest()
     # CPU regardless of where it was saved (§1); `weights_only` so loading cannot execute code.
     checkpoint = torch.load(path, map_location="cpu", weights_only=True)
-    if not isinstance(checkpoint, dict) or not checkpoint:
+    # §4.3: the exporter ships v2 as a bare state_dict, so the dims come from the tensor shapes.
+    if (
+        not isinstance(checkpoint, dict) or not checkpoint
+        or not all(hasattr(v, "shape") for v in checkpoint.values())
+    ):
         raise TowerError(
-            f"{path.name} is not a Cold Tower checkpoint (loaded a "
-            f"{type(checkpoint).__name__}); §8 stage 9 has nothing to place with"
+            f"{path.name} is not a bare state_dict of tensors, the form the corpus ships the v2 "
+            "Cold Tower in; §8 stage 9 has nothing to place with"
         )
-
-    # The corpus ships a bare state_dict, so the dims come from the tensor shapes; a wrapped
-    # checkpoint's declared dims must agree with them.
-    wrapped = "state_dict" in checkpoint
-    state = dict(checkpoint["state_dict"] if wrapped else checkpoint)
-    if not all(hasattr(v, "shape") for v in state.values()):
-        raise TowerError(
-            f"{path.name} holds values that are not tensors; §4.3 ships the fitted model here"
-        )
-
-    shape_input, shape_embed = _dims_from_state(state, path.name)
-    input_dim = int(checkpoint.get("input_dim", 0)) if wrapped else shape_input
-    embed_dim = int(checkpoint.get("embed_dim", 0)) if wrapped else shape_embed
-    input_dim = input_dim or shape_input
-    embed_dim = embed_dim or shape_embed
-    if (input_dim, embed_dim) != (shape_input, shape_embed):
-        raise TowerError(
-            f"{path.name} declares input_dim={input_dim}/embed_dim={embed_dim} and its weights "
-            f"are shaped for {shape_input}/{shape_embed}; the file states one fact twice"
-        )
-
-    # A bare state_dict has no version or arch: assumed, and said so in the notes, not refused.
-    notes: list[str] = []
-    if not wrapped:
-        notes.append(
-            f"{path.name} declares no version or architecture; assumed v{SUPPORTED_VERSIONS[0]} "
-            f"{ARCHITECTURES[0]} from its tensor names - the corpus ships a bare state_dict, so "
-            "this is an assumption and not a check (section 4.3)"
-        )
-    version = int(checkpoint.get("version", 2)) if wrapped else 2
-    if version not in SUPPORTED_VERSIONS:
-        raise TowerError(
-            f"{path.name} declares version {version}; §4.3: 'the earlier cold_tower run is "
-            f"superseded — the exporter must ship v2' (supported: {list(SUPPORTED_VERSIONS)})"
-        )
-    arch = str(checkpoint.get("arch") or "") if wrapped else "cold_tower_v2"
-    if arch not in ARCHITECTURES:
-        raise TowerError(
-            f"{path.name} declares architecture {arch!r}, which this app cannot reconstruct "
-            f"(known: {list(ARCHITECTURES)})"
-        )
-
-    module = _cold_tower_v2(state, input_dim, embed_dim)
+    input_dim, embed_dim = _dims_from_state(checkpoint, path.name)
+    module = _cold_tower_v2(checkpoint)
 
     if input_dim != contract.input_dim:
         raise TowerError(
@@ -173,8 +132,12 @@ def _load(path: Path, contract: FeatureContract) -> Tower:
             "(§5.1, §5.2, title_placement.dim)"
         )
     return Tower(
-        input_dim=input_dim, embed_dim=embed_dim, arch=arch, version=version,
-        sha256=sha, module=module, notes=tuple(notes),
+        input_dim=input_dim, embed_dim=embed_dim, arch="cold_tower_v2", version=2,
+        sha256=sha, module=module, notes=(
+            f"{path.name} declares no version or architecture; assumed v2 cold_tower_v2 from its "
+            "tensor names - the corpus ships a bare state_dict, so this is an assumption and not "
+            "a check (section 4.3)",
+        ),
     )
 
 
@@ -190,7 +153,7 @@ def _dims_from_state(state: dict, name: str) -> tuple[int, int]:
     return int(first.shape[1]), int(head.shape[0])
 
 
-def _cold_tower_v2(state: dict[str, Any], input_dim: int, embed_dim: int) -> Any:
+def _cold_tower_v2(state: dict[str, Any]) -> Any:
     """Rebuild the `cold_tower_v2` module (a ReLU trunk and heads ê, b̂) around the checkpoint's weights.
 
     No dropout layers: at inference in eval mode dropout is the identity.
@@ -201,25 +164,10 @@ def _cold_tower_v2(state: dict[str, Any], input_dim: int, embed_dim: int) -> Any
     trunk_indices = sorted(
         int(k.split(".")[1]) for k in state if k.startswith("trunk.") and k.endswith(".weight")
     )
-    if not trunk_indices:
-        raise TowerError("checkpoint has no `trunk.*.weight` layers")
-    for head in (EMBED_HEAD, PRIOR_HEAD):
-        if f"{head}.weight" not in state:
-            raise TowerError(
-                f"checkpoint has no `{head}` head; §5.1 needs both ê(t) and b̂(t), and the "
-                f"exporter names them {EMBED_HEAD}/{PRIOR_HEAD}"
-            )
-
-    first = state[f"trunk.{trunk_indices[0]}.weight"]
-    if int(first.shape[1]) != input_dim:
+    if f"{PRIOR_HEAD}.weight" not in state:
         raise TowerError(
-            f"checkpoint says input_dim={input_dim} but its first layer takes "
-            f"{int(first.shape[1])} columns — the checkpoint disagrees with itself"
-        )
-    if int(state[f"{EMBED_HEAD}.weight"].shape[0]) != embed_dim:
-        raise TowerError(
-            f"checkpoint says embed_dim={embed_dim} but its embedding head emits "
-            f"{int(state[f'{EMBED_HEAD}.weight'].shape[0])}"
+            f"checkpoint has no `{PRIOR_HEAD}` head; §5.1 needs both ê(t) and b̂(t), and the "
+            f"exporter names them {EMBED_HEAD}/{PRIOR_HEAD}"
         )
 
     class ColdTowerV2(nn.Module):

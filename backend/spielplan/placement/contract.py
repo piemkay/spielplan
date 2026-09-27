@@ -26,27 +26,6 @@ BLOCK_NAMES: tuple[str, ...] = (
 
 TEXT_BLOCK = "review_text"
 
-ENCODINGS = ("multi_hot", "weighted", "scalar")
-NORMALISERS = ("none", "l2", "sum1", "max1")
-
-# How a cell is filled, per block (a contract may override). These match the corpus exporter.
-DEFAULT_ENCODING: dict[str, str] = {
-    # Both DNA tiers are presence (every exported cell is 1.0), not salience.
-    "dna_x": "multi_hot",
-    "dna_p": "multi_hot",
-    "genome": "weighted",     # MovieLens relevance, in [0.5, 1] after the corpus's own cut
-    # These four are COUNTS: the exporter sums duplicate (title, feature) pairs across sources.
-    "genre": "weighted",
-    "keyword": "weighted",
-    "credit": "weighted",
-    "country": "weighted",
-    "award": "scalar",        # two count columns
-    "meta": "scalar",         # flags and normalised scalars, produced by the grammar below
-}
-
-# §4.3 names no per-block normalisation; a contract that declares one is honoured.
-DEFAULT_NORMALISE = "none"
-
 ZERO_IMPUTED = ("genome",)
 
 # Meta columns are produced by code, so their names come from a closed grammar; a name outside it
@@ -64,8 +43,8 @@ META_PRODUCTIONS: tuple[str, ...] = (
 )
 _META_GRAMMAR = re.compile("^(?:" + "|".join(META_PRODUCTIONS) + ")$")
 
-# Used only when the contract ships no `transform` for these; `transforms_defaulted` records it.
-META_TRANSFORM_DEFAULTS: dict[str, dict[str, float]] = {
+# The continuous meta productions, scaled as the corpus exporter scaled them.
+META_TRANSFORMS: dict[str, dict[str, float]] = {
     # 1900..2025 mapped into [0, 1].
     "year_norm": {"offset": 1900.0, "scale": 125.0},
     "runtime_norm": {"offset": 0.0, "scale": 400.0},
@@ -81,12 +60,9 @@ class Block:
     name: str
     size: int
     offset: int
-    encoding: str
-    normalise: str
     impute: str                                    # 'zero' (genome) | 'none' (everything else)
     names: tuple[str, ...]
     index: Mapping[str, int] = field(repr=False)
-    transform: Mapping[str, Mapping[str, float]] = field(default_factory=dict, repr=False)
 
     @property
     def stop(self) -> int:
@@ -128,36 +104,6 @@ class FeatureContract:
         """§4.3's nine that this contract leaves out — the tower is simply not fed them."""
         return tuple(n for n in BLOCK_NAMES if not self.has(n))
 
-    @property
-    def transforms_defaulted(self) -> tuple[str, ...]:
-        """Continuous meta productions the contract shipped no constants for."""
-        if not self.has("meta"):
-            return ()
-        shipped = self.block("meta").transform
-        return tuple(k for k in META_TRANSFORM_DEFAULTS if k not in shipped)
-
-    def meta_transform(self, key: str) -> dict[str, float]:
-        shipped = self.block("meta").transform.get(key) if self.has("meta") else None
-        return dict(shipped) if shipped else dict(META_TRANSFORM_DEFAULTS[key])
-
-    def summary(self) -> dict[str, Any]:
-        return {
-            "sha256": self.sha256,
-            "input_dim": self.input_dim,
-            "content_width": self.content_width,
-            "text": {"offset": self.text_offset, "dims": self.text_dims,
-                     "used": self.text_used, "scale": self.text_scale},
-            "blocks": [
-                {"name": b.name, "size": b.size, "offset": b.offset,
-                 "encoding": b.encoding, "normalise": b.normalise, "impute": b.impute}
-                for b in self.blocks
-            ],
-            "undeclared_blocks": list(self.undeclared_blocks),
-            "unproducible_meta_names": unproducible_meta_names(self)[:8],
-            "transforms_defaulted": list(self.transforms_defaulted),
-            "notes": list(self.notes),
-        }
-
     # --- loading ------------------------------------------------------------------------
 
     @classmethod
@@ -190,37 +136,18 @@ class FeatureContract:
 
         blocks: list[Block] = []
         offset = 0
-        for name, spec in declared:
-            size = spec.get("size")
-            if not isinstance(size, int) or size < 0:
-                raise ContractError(f"block {name!r} has no usable `size` ({size!r})")
-            names = tuple(str(n) for n in spec.get("feature_names") or ())
-            if len(names) != size:
-                raise ContractError(
-                    f"block {name!r} declares size {size} but {len(names)} feature_names; "
-                    "§4.3 makes the per-column names part of the exhaustive definition"
-                )
+        for name, names in declared:
             index = {n: i for i, n in enumerate(names)}
             if len(index) != len(names):
                 dupes = sorted({n for n in names if names.count(n) > 1})[:5]
                 raise ContractError(f"block {name!r} repeats feature_names {dupes}")
-            encoding = str(spec.get("encoding") or DEFAULT_ENCODING.get(name, "multi_hot"))
-            if encoding not in ENCODINGS:
-                raise ContractError(f"block {name!r} declares unknown encoding {encoding!r}")
-            normalise = str(spec.get("normalise") or DEFAULT_NORMALISE)
-            if normalise not in NORMALISERS:
-                raise ContractError(f"block {name!r} declares unknown normalise {normalise!r}")
-            if spec.get("encoding") is None and name in DEFAULT_ENCODING:
-                notes.append(f"block {name}: encoding defaulted to {encoding}")
             blocks.append(
                 Block(
-                    name=name, size=size, offset=offset, encoding=encoding,
-                    normalise=normalise, impute="zero" if name in ZERO_IMPUTED else "none",
-                    names=names, index=index,
-                    transform=dict(spec.get("transform") or {}),
+                    name=name, size=len(names), offset=offset,
+                    impute="zero" if name in ZERO_IMPUTED else "none", names=names, index=index,
                 )
             )
-            offset += size
+            offset += len(names)
 
         content_width = offset
         # §4.3's tenth block. `text_scale` lives INSIDE `text_block`, not at the top level.
@@ -310,10 +237,8 @@ def _column_span(columns: Any) -> int:
         raise ContractError(f"text_block columns {columns!r} is not a range") from exc
 
 
-def _declared_blocks(
-    raw: Mapping[str, Any], blocks_raw: Any
-) -> list[tuple[str, dict[str, Any]]]:
-    """`content_blocks` reduced to (name, spec) pairs **in declared order**.
+def _declared_blocks(raw: Mapping[str, Any], blocks_raw: Any) -> list[tuple[str, tuple[str, ...]]]:
+    """`content_blocks` reduced to (name, feature_names) pairs **in declared order**.
 
     The flat `feature_names` list belongs to the blocks by position, so the sizes must add up.
     """
@@ -329,11 +254,7 @@ def _declared_blocks(
             "names part of the exhaustive definition and the app slices them by block size"
         )
 
-    encodings = raw.get("encodings") or {}
-    normalisers = raw.get("normalise") or {}
-    transforms = raw.get("transforms") or {}
-
-    out: list[tuple[str, dict[str, Any]]] = []
+    out: list[tuple[str, tuple[str, ...]]] = []
     cursor = 0
     for spec in blocks_raw:
         name = str(spec.get("name") or "")
@@ -347,16 +268,7 @@ def _declared_blocks(
                 f"block {name!r} runs past the end of feature_names: it needs columns "
                 f"{cursor}..{cursor + size - 1} of {len(flat)}"
             )
-        out.append((
-            name,
-            {
-                "size": size,
-                "feature_names": [str(n) for n in flat[cursor:cursor + size]],
-                "encoding": spec.get("encoding", encodings.get(name)),
-                "normalise": spec.get("normalise", normalisers.get(name)),
-                "transform": spec.get("transform", transforms.get(name)),
-            },
-        ))
+        out.append((name, tuple(str(n) for n in flat[cursor:cursor + size])))
         cursor += size
 
     if cursor != len(flat):

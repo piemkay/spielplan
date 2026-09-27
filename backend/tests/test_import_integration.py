@@ -632,10 +632,10 @@ async def test_a_freshly_activated_bundle_serves_its_cold_titles_immediately(db,
     )
     assert priced["b"] is not None
 
-    # The report still reads in §10's order.
+    # The report reads in run order.
     rebuild = [f.message for f in report.findings if f.rule == "rebuild"]
-    assert len(rebuild) == 4
-    assert "fold-in" in rebuild[0] and "Cold Tower" in rebuild[3]
+    assert len(rebuild) == 3
+    assert "Cold Tower" in rebuild[0] and "fold-in" in rebuild[1]
     assert patrick
 
 
@@ -1039,14 +1039,14 @@ async def _second_connection(pg_url: str):
 
 
 async def _staggered_imports(db, other, bundle, second, artifacts_root, monkeypatch):
-    """`run_rebuild` is slowed so the second import arrives while the first holds the lock."""
-    real_rebuild = bundle_import.placement.run_rebuild
+    """`rebuild` is slowed so the second import arrives while the first holds the lock."""
+    real_rebuild = bundle_import.rebuild
 
     async def slow_rebuild(*args, **kwargs):
         await asyncio.sleep(0.6)
         return await real_rebuild(*args, **kwargs)
 
-    monkeypatch.setattr(bundle_import.placement, "run_rebuild", slow_rebuild)
+    monkeypatch.setattr(bundle_import, "rebuild", slow_rebuild)
 
     winner = asyncio.create_task(bundle_import.import_bundle(db, bundle, artifacts_root))
     await asyncio.sleep(0.15)
@@ -1133,10 +1133,8 @@ async def test_the_stored_report_carries_the_rebuild_the_swap_and_the_rebuild_se
     )
     assert {"rebuild", "swap", "rebuild-set"} <= stored_rules
     assert stored["ok"] is True
-    rebuilt = [
-        f["message"].split(":")[0] for f in stored["findings"] if f["rule"] == "rebuild"
-    ]
-    assert rebuilt == list(bundle_import.REBUILD_SET)
+    rebuilt = " ".join(f["message"] for f in stored["findings"] if f["rule"] == "rebuild")
+    assert all(step in rebuilt for step in bundle_import.REBUILD_SET), rebuilt
 
     # The fixture half of render()'s ASCII rule, over a report an import actually produced.
     rendered = report.render()
@@ -1220,7 +1218,7 @@ async def test_an_import_that_crashes_inside_the_transaction_leaves_no_staged_tr
     root = tmp_path / "bundle-pg"
     fx.make_bundle(root, version="test-pg")
     monkeypatch.setattr(
-        bundle_import.placement, "run_rebuild",
+        bundle_import, "rebuild",
         explode(asyncpg.exceptions.PostgresError("a constraint with no rule")),
     )
     report = await bundle_import.import_bundle(
@@ -1235,7 +1233,7 @@ async def test_an_import_that_crashes_inside_the_transaction_leaves_no_staged_tr
     crash = tmp_path / "bundle-bug"
     fx.make_bundle(crash, version="test-bug")
     monkeypatch.setattr(
-        bundle_import.placement, "run_rebuild", explode(RuntimeError("not a database error"))
+        bundle_import, "rebuild", explode(RuntimeError("not a database error"))
     )
     with pytest.raises(RuntimeError):
         await bundle_import.import_bundle(db, bundle_import.Bundle.open(crash), artifacts_root)
@@ -1250,7 +1248,7 @@ async def test_an_import_that_crashes_inside_the_transaction_leaves_no_staged_tr
         at_the_rebuild.set()
         await asyncio.sleep(30)
 
-    monkeypatch.setattr(bundle_import.placement, "run_rebuild", stalls)
+    monkeypatch.setattr(bundle_import, "rebuild", stalls)
     other = await _second_connection(pg_url)
     abandoned = asyncio.create_task(
         bundle_import.import_bundle(other, bundle_import.Bundle.open(budget), artifacts_root)

@@ -432,7 +432,7 @@ def test_a_tower_whose_width_disagrees_with_its_contract_is_refused_at_import(cl
 
 
 def test_a_cold_tower_that_is_not_v2_is_refused(clean):
-    """A bare state_dict is taken as v2; a wrapper that *claims* v1 is refused."""
+    """Only a bare state_dict is taken as v2; a wrapper, whatever version it claims, is refused."""
     import torch
 
     path = _artifacts(clean) / "cold_tower.pt"

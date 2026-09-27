@@ -291,8 +291,8 @@ async def test_a_models_only_bundle_imports_and_hot_swaps_without_content(
     swap = await import_bundle_at(db, build("test-v2", models_only=True), artifacts_root)
     assert swap.ok, swap.render()
 
-    rebuilt = [f.message.split(":")[0] for f in swap.findings if f.rule == "rebuild"]
-    assert rebuilt == list(reconcile.REBUILD_SET)
+    rebuilt = " ".join(f.message for f in swap.findings if f.rule == "rebuild")
+    assert all(step in rebuilt for step in bundle_import.REBUILD_SET), swap.render()
     assert (artifacts_root / "test-v2" / "backbone.npz").is_file()
 
     rows = await db.fetch(
@@ -1056,8 +1056,8 @@ async def test_re_importing_the_active_bundle_with_no_files_on_disk_restages_it(
     assert [f.message for f in repair.findings if f.rule == "restage"], "no restage was reported"
     assert (artifacts_root / "test-v1" / "backbone.npz").is_file()
     # The rebuild set runs against the restaged files.
-    rebuilt = [f.message.split(":")[0] for f in repair.findings if f.rule == "rebuild"]
-    assert rebuilt == list(reconcile.REBUILD_SET)
+    rebuilt = " ".join(f.message for f in repair.findings if f.rule == "rebuild")
+    assert all(step in rebuilt for step in bundle_import.REBUILD_SET), repair.render()
     rows = await db.fetch("SELECT version, state FROM artifact_bundle")
     assert [(r["version"], r["state"]) for r in rows] == [("test-v1", "active")]
 

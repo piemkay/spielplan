@@ -37,8 +37,13 @@ from spielplan.placement import reconcile as placement
 # returned, so the staging cleanup outcome is logged instead.
 log = logging.getLogger("spielplan.importer")
 
-# §10's rebuild set, defined once in `placement`.
-REBUILD_SET = placement.REBUILD_SET
+# §10's rebuild set, as the Data tab lists it.
+REBUILD_SET: tuple[str, ...] = (
+    "user fold-in vectors (closed-form, ms)",
+    "per-label-count blend weights",
+    "full Personal Ledger MAP refit",
+    "Cold Tower re-placement of every app-acquired title",
+)
 
 # Decision 162's mint floor, below 2^31 because id columns are `integer` and `ledger_fit.title_ids`
 # is int32. Also in `0015_seed.sql`.
@@ -48,58 +53,30 @@ APP_ID_MIN = 1_000_000_000
 _ID_BEARING_NPZ = ("backbone.npz", "review_text_emb.npz")
 
 
-# `placement.rebuild_plan` takes the rebuild steps injected; each is `async (conn, store, version) ->
-# dict`.
-
-
-async def _rebuild_fold_in(conn: Any, store: Any, version: str) -> dict[str, Any]:
-    """§10 steps 1 and 2 in one pass: one cross-validated fit produces both."""
-    from spielplan.scoring import backbone as bb
-    from spielplan.scoring import foldin
-
-    report = await foldin.run(
-        conn, bb.load_for(store), bundle_version=version, only_stale=False, with_priors=True
-    )
-    return report.as_dict()
-
-
-async def _rebuild_blend_weights(conn: Any, _store: Any, version: str) -> dict[str, Any]:
-    """§10 step 2. Reports the β the step-1 fit produced, per user and kind."""
-    rows = await conn.fetch(
-        "SELECT user_id, kind, blend_beta, label_count FROM user_vector "
-        " WHERE bundle_version = $1 ORDER BY user_id, kind",
-        version,
-    )
-    return {
-        "weights": [
-            {"user_id": r["user_id"], "kind": r["kind"],
-             "beta": float(r["blend_beta"] or 0.0), "labels": r["label_count"]}
-            for r in rows
-        ]
-    }
-
-
-async def _rebuild_ledger_refit(conn: Any, store: Any, version: str) -> dict[str, Any]:
-    """§10 step 3: "a **full** Personal Ledger MAP refit", against the STAGED `version`.
-
-    Without the explicit version the refit read the outgoing bundle's placements and stamped its version.
-    """
+async def rebuild(conn: Any, store: Any, version: str, report: ImportReport) -> None:
+    """§10's rebuild set against the staged bundle. Placement runs first: the fits read its coordinates."""
     from spielplan.ledger import observations, refit
     from spielplan.ledger.hyperparams import load as load_hp
     from spielplan.scoring import backbone as bb
+    from spielplan.scoring import foldin
+
+    await placement.assert_staged(conn, store, version)
+    placed = await placement.reconcile(conn, store, bundle_version=version, scope="reimport")
+    report.note("rebuild", f"{REBUILD_SET[3]}: {placed.as_dict()}")
+
+    basis = bb.load_for(store)
+    # One cross-validated fit produces both the vectors and the blend weights.
+    folded = await foldin.run(conn, basis, bundle_version=version, only_stale=False, with_priors=True)
+    report.note("rebuild", f"{REBUILD_SET[0]}; {REBUILD_SET[1]}: {folded.as_dict()}")
 
     hp, _notes = load_hp(store)
-    # Against the staged bundle's Backbone: the whole point is moving every fitted number to the new
-    # basis. `run_rebuild` has already asserted `store.version == version`.
-    reports = await refit.refit_all(
+    fits = await refit.refit_all(
         conn,
         hp,
-        embeddings=observations.standard_embeddings(
-            conn, bb.load_for(store), bundle_version=version
-        ),
+        embeddings=observations.standard_embeddings(conn, basis, bundle_version=version),
         bundle_version=version,
     )
-    return {"fits": [r.as_dict() for r in reports]}
+    report.note("rebuild", f"{REBUILD_SET[2]}: {[f.as_dict() for f in fits]}")
 
 
 @dataclass
@@ -1054,14 +1031,9 @@ async def import_bundle(
                 )
                 if activate:
                     # Before the flip, so a failed rebuild takes the import down with it.
-                    steps = await placement.run_rebuild(
-                        conn, ArtifactStore.open(staged, bundle.version), bundle.version,
-                        fold_in=_rebuild_fold_in,
-                        blend_weights=_rebuild_blend_weights,
-                        ledger_refit=_rebuild_ledger_refit,
+                    await rebuild(
+                        conn, ArtifactStore.open(staged, bundle.version), bundle.version, report
                     )
-                    for step in steps:
-                        report.note("rebuild", f"{step['title']}: {step.get('result', step)}")
 
                     # §10: transactionally flip. The partial unique index guarantees one active row.
                     already_active = await conn.fetchval(
