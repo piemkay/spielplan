@@ -67,7 +67,6 @@ const bundleState = (over = {}) => ({
   restart_required: false,
   broken: false,
   missing_path: null,
-  import_dir: '/data/import',
   rebuild_set: ['placement.run_rebuild'],
   import_job: null,
   ...over

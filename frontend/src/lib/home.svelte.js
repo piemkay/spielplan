@@ -1,6 +1,3 @@
-// Home's requests, and the rules that must agree on both sides of the wire: `gridReason`
-// mirrors the mode the server computes for `/api/home` (§6.0).
-
 import { get, qs } from '$lib/api.js';
 
 // The shipped facet ids, the prefix of every v1 term: `characters`, not `character`.
@@ -14,7 +11,6 @@ export function facetColour(facet) {
   return FACETS.has(facet) ? `var(--facet-${facet})` : 'var(--ink-4)';
 }
 
-// Never with q or person_id: only `/api/titles` carries every catalog filter.
 export function loadHome(kinds) {
   return get(`/home${qs({ kind: kinds })}`);
 }
@@ -22,10 +18,6 @@ export function loadHome(kinds) {
 // With the toggle off the response has no `events` key at all, never an empty list to hide.
 export function loadModelLog(limit = 15) {
   return get(`/model-log${qs({ limit })}`);
-}
-
-export function loadPendingVerdicts() {
-  return get('/home/pending-verdicts');
 }
 
 // Any catalog filter switches to the grid too: a filter hidden under the shelves is a dead control.
@@ -140,8 +132,6 @@ export function strongEnd(items = [], q = '') {
   return end;
 }
 
-const KIND_NOUN = { movie: 'film', series: 'series' };
-
 // `series` has no plural.
 export function plural(kind, n) {
   return kind === 'movie' ? `film${n === 1 ? '' : 's'}` : 'series';
@@ -175,8 +165,6 @@ export function libraryLabel({ library = {}, kinds = [] } = {}) {
   return parts.join(' · ');
 }
 
-export { KIND_NOUN };
-
 // One switch, three positions; Both is a selection, never a merge (decisions 18, 474).
 export const KIND_CHOICES = [
   { id: 'movie', label: 'Films', kinds: ['movie'] },
@@ -193,43 +181,20 @@ export function kindsFor(choice) {
   return [...(KIND_CHOICES.find((c) => c.id === choice)?.kinds ?? ['movie'])];
 }
 
-// The client refuses an empty why-line too, rather than trusting the server (§6.0).
-export function sectionShips(section) {
-  return Boolean(
-    section &&
-      typeof section.why === 'string' &&
-      section.why.trim().length > 0 &&
-      Array.isArray(section.items) &&
-      section.items.length > 0
-  );
-}
-
 // One row per (shelf, kind), never concatenated (§4.1 rule 5).
 export function shelfRows(payload) {
   return (payload?.shelves ?? []).flatMap((shelf) =>
-    (shelf.sections ?? [])
-      .filter(sectionShips)
-      .map((section) => ({ shelf: shelf.id, ranking: !!shelf.ranking, section }))
+    (shelf.sections ?? []).map((section) => ({ shelf: shelf.id, ranking: !!shelf.ranking, section }))
   );
 }
 
-export function kindsOnShelf(shelf) {
-  return (shelf?.sections ?? []).filter(sectionShips).map((s) => s.kind);
-}
-
-// From the payload's `sections`: one region per kind, each row kind-scoped (decision 474).
+// One region per selected kind, in the payload's order, each row kind-scoped (decision 474).
 export function kindRegions(payload) {
-  return (payload?.sections ?? [])
-    .map((region) => ({
-      kind: region.kind,
-      heading: region.heading,
-      rows: (region.shelves ?? []).flatMap((shelf) =>
-        (shelf.sections ?? [])
-          .filter((section) => section.kind === region.kind && sectionShips(section))
-          .map((section) => ({ shelf: shelf.id, ranking: !!shelf.ranking, section }))
-      )
-    }))
-    .filter((region) => region.rows.length);
+  const rows = shelfRows(payload);
+  return (payload?.kinds ?? []).flatMap((kind) => {
+    const own = rows.filter((row) => row.section.kind === kind);
+    return own.length ? [{ kind, heading: own[0].section.heading, rows: own }] : [];
+  });
 }
 
 // Shown only with Show the model on: the server sends `why_numbers` only then.
@@ -274,19 +239,6 @@ export function toPosterTitle(item) {
     e_source: item.e_source,
     seen_state: item.seen ? 'seen' : 'unseen'
   };
-}
-
-// Null unless the server's link carries every named title as a repeated `head`, in order.
-export function bannerHref(banner) {
-  const route = banner?.cta?.route;
-  if (typeof route !== 'string' || !route) return null;
-  const head = banner?.head_title_ids ?? [];
-  if (!head.length) return null;
-  const query = route.includes('?') ? route.slice(route.indexOf('?') + 1) : '';
-  const carried = new URLSearchParams(query).getAll('head');
-  const wanted = head.map(String);
-  if (wanted.length !== carried.length) return null;
-  return wanted.every((id, i) => id === carried[i]) ? route : null;
 }
 
 export function bannerText(banner, { compact = false } = {}) {

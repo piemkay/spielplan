@@ -17,7 +17,8 @@ const pair = (token, names = ['Heat', 'Drive']) => ({
   left: { id: 1, name: names[0], year: 1995, runtime_min: 170, outcome: 'A' },
   right: { id: 2, name: names[1], year: 2011, runtime_min: 100, outcome: 'B' },
   reason: 'queued because: both of these you rated liked',
-  substituted_for: null
+  substituted_for: null,
+  corrections: { label: 'not seen', sides: ['left', 'both', 'right'] }
 });
 
 let duels = [];

@@ -20,13 +20,6 @@
   const title = $derived(card?.title ?? {});
   // P(seen) rides under the server-gated `model`; show it only while the viewer's switch is on too.
   const pSeen = $derived(showModel ? (card?.model?.p_seen ?? null) : null);
-  const labels = $derived(
-    card?.verdict_labels ?? [
-      [0, 'disliked'],
-      [1, 'fine'],
-      [2, 'liked']
-    ]
-  );
 </script>
 
 <article class="sweep" data-testid="rate-sweep-card" data-card-token={card?.token}>
@@ -63,7 +56,7 @@
       </button>
     {:else}
       <div class="verdicts" role="group" aria-label="Your verdict">
-        {#each labels as [value, label] (value)}
+        {#each card.verdict_labels as [value, label] (value)}
           <button
             class="verdict v{value}"
             class:picked={pending === `verdict-${value}`}

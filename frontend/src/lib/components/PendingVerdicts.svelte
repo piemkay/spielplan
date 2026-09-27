@@ -1,7 +1,6 @@
 <script>
-  // Copy and link are the server's: never compose copy or fall back to a bare /rate, and drop the
-  // CTA when its route does not carry every named title (proposal 150).
-  import { bannerCountLine, bannerHref, bannerLabel, bannerText } from '$lib/home.svelte.js';
+  // Copy and link are the server's: never compose copy or fall back to a bare /rate.
+  import { bannerCountLine, bannerLabel, bannerText } from '$lib/home.svelte.js';
 
   let { banner } = $props();
 
@@ -11,7 +10,6 @@
   const compact = $derived(width <= 720);
 
   const text = $derived(bannerText(banner, { compact }));
-  const href = $derived(bannerHref(banner));
   const label = $derived(bannerLabel(banner, { compact }));
 </script>
 
@@ -23,15 +21,9 @@
       <div class="line" data-testid="pending-verdicts-copy">{text}</div>
       <div class="why names" data-testid="pending-verdicts-count">{bannerCountLine(banner)}</div>
     </div>
-    {#if href}
-      <a class="btn-primary" {href} data-testid="pending-verdicts-cta" data-head={banner.head_title_ids.join(' ')}>
-        {label}
-      </a>
-    {:else}
-      <span class="data broken" data-testid="pending-verdicts-no-cta">
-        queue link unavailable — it would not start with the titles named
-      </span>
-    {/if}
+    <a class="btn-primary" href={banner.cta.route} data-testid="pending-verdicts-cta" data-head={banner.head_title_ids.join(' ')}>
+      {label}
+    </a>
   </div>
 {/if}
 
@@ -53,8 +45,5 @@
   }
   .names {
     margin-top: 3px;
-  }
-  .broken {
-    color: var(--ember-lift);
   }
 </style>

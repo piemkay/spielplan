@@ -47,7 +47,7 @@ const NO_ANSWER = 'the network did not answer — try again';
 const UNSTATED = 'the appliance refused this and did not say why';
 
 // Routes whose 401 answers the question rather than ending a session: the anonymous doors and
-// the three that verify the account password. Not a `/setup` prefix: two routes under it can 401.
+// the three that verify the account password. Not a `/setup` prefix: one route under it can 401.
 const CREDENTIAL_ROUTES = [
   '/auth/login',
   '/auth/switch',

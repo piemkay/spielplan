@@ -3,7 +3,6 @@ import { describe, expect, it } from 'vitest';
 import {
   activeFilterCount,
   bannerCountLine,
-  bannerHref,
   bannerLabel,
   bannerText,
   countLabel,
@@ -17,13 +16,11 @@ import {
   kindHeading,
   kindRegions,
   kindsFor,
-  kindsOnShelf,
   libraryLabel,
   matchStrength,
   otherKinds,
   partitionLine,
   plural,
-  sectionShips,
   shelfRows,
   sortOffered,
   sortWaitingLine,
@@ -118,35 +115,6 @@ describe('the count line (decision 18)', () => {
   });
 });
 
-describe('a shelf that cannot say why it exists (§6.0 M2)', () => {
-  const card = (id) => ({ title_id: id, name: `T${id}`, kind: 'movie', rank: 1, seen: false });
-
-  it('drops a section whose why-line is empty', () => {
-    expect(sectionShips({ why: '', items: [card(1), card(2)] })).toBe(false);
-    expect(sectionShips({ why: '   ', items: [card(1)] })).toBe(false);
-  });
-
-  it('drops a section with no cards rather than rendering a bare heading', () => {
-    expect(sectionShips({ why: 'for a school night', items: [] })).toBe(false);
-  });
-
-  it('keeps a section that has both', () => {
-    expect(sectionShips({ why: 'for a school night', items: [card(1)] })).toBe(true);
-  });
-
-  it('yields nothing at all for a shelf whose every section fails', () => {
-    const payload = {
-      shelves: [{ id: 'school_night', ranking: true, sections: [{ kind: 'movie', why: '', items: [card(1)] }] }]
-    };
-    expect(shelfRows(payload)).toEqual([]);
-  });
-
-  it('survives a payload with no shelves key', () => {
-    expect(shelfRows(null)).toEqual([]);
-    expect(shelfRows({})).toEqual([]);
-  });
-});
-
 describe('the kind partition (§4.1 rule 5, decision 18)', () => {
   const payload = {
     shelves: [
@@ -193,14 +161,13 @@ describe('the kind partition (§4.1 rule 5, decision 18)', () => {
     expect(split.map((r) => r.section.items.map((i) => i.title_id))).toEqual([[1], [2]]);
   });
 
-  it('reports which kinds a shelf actually shipped', () => {
-    expect(kindsOnShelf(payload.shelves[0])).toEqual(['movie', 'series']);
-    expect(kindsOnShelf({ sections: [{ kind: 'movie', why: 'x', items: [] }] })).toEqual([]);
-    expect(kindsOnShelf(undefined)).toEqual([]);
+  it('survives a payload with no shelves key', () => {
+    expect(shelfRows(null)).toEqual([]);
+    expect(shelfRows({})).toEqual([]);
   });
 });
 
-describe('the pending-verdicts banner (proposals 21 and 150)', () => {
+describe('the pending-verdicts banner (proposal 21)', () => {
   const banner = {
     count: 6,
     named: [{ title_id: 1123, name: 'Patriot' }, { title_id: 1023, name: 'Hereditary' }],
@@ -215,33 +182,6 @@ describe('the pending-verdicts banner (proposals 21 and 150)', () => {
       route: '/rate?head=1123&head=1023'
     }
   };
-
-  it('follows the server link verbatim when it carries every named title', () => {
-    expect(bannerHref(banner)).toBe('/rate?head=1123&head=1023');
-  });
-
-  it('refuses a bare /rate — naming titles then serving another card is the failure', () => {
-    expect(bannerHref({ ...banner, cta: { route: '/rate' } })).toBeNull();
-  });
-
-  it('refuses a link that drops one of the named titles', () => {
-    expect(bannerHref({ ...banner, cta: { route: '/rate?head=1123' } })).toBeNull();
-  });
-
-  it('refuses a comma-joined head, which GET /api/rate answers with a 422', () => {
-    expect(bannerHref({ ...banner, cta: { route: '/rate?head=1123,1023' } })).toBeNull();
-  });
-
-  it('refuses a link whose head is in a different order than the copy named', () => {
-    expect(
-      bannerHref({ ...banner, cta: { route: '/rate?head=1023&head=1123' } })
-    ).toBeNull();
-  });
-
-  it('has no link at all when there is no head', () => {
-    expect(bannerHref({ ...banner, head_title_ids: [] })).toBeNull();
-    expect(bannerHref(null)).toBeNull();
-  });
 
   it('uses the two registers proposal 21 specifies rather than one sentence', () => {
     expect(bannerText(banner)).toMatch(/^You watched /);
@@ -351,31 +291,23 @@ describe('the kind switch (decision 474)', () => {
 
 describe('two kind regions under Both (decision 474)', () => {
   const card = (id, kind) => ({ title_id: id, name: `T${id}`, kind, rank: 1, seen: false });
-  const section = (kind, id) => ({ kind, why: 'for a school night', items: [card(id, kind)] });
+  const heading = { movie: 'Films', series: 'Series' };
+  const section = (kind, id) => ({
+    kind, heading: heading[kind], why: 'for a school night', items: [card(id, kind)]
+  });
   const payload = {
     kinds: ['movie', 'series'],
-    sections: [
-      {
-        kind: 'movie',
-        heading: 'Films',
-        shelves: [
-          { id: 'top_of_ledger', ranking: true, sections: [section('movie', 1)] },
-          { id: 'school_night', ranking: true, sections: [section('movie', 2)] }
-        ]
-      },
-      {
-        kind: 'series',
-        heading: 'Series',
-        shelves: [{ id: 'school_night', ranking: true, sections: [section('series', 9)] }]
-      }
+    shelves: [
+      { id: 'top_of_ledger', ranking: true, sections: [section('series', 8)] },
+      { id: 'school_night', ranking: true, sections: [section('movie', 2), section('series', 9)] }
     ]
   };
 
   it('keeps the table order inside each region, Films first', () => {
     const regions = kindRegions(payload);
-    expect(regions.map((r) => r.kind)).toEqual(['movie', 'series']);
-    expect(regions[0].rows.map((r) => r.shelf)).toEqual(['top_of_ledger', 'school_night']);
-    expect(regions[1].rows.map((r) => r.shelf)).toEqual(['school_night']);
+    expect(regions.map((r) => [r.kind, r.heading])).toEqual([['movie', 'Films'], ['series', 'Series']]);
+    expect(regions[0].rows.map((r) => r.shelf)).toEqual(['school_night']);
+    expect(regions[1].rows.map((r) => r.shelf)).toEqual(['top_of_ledger', 'school_night']);
   });
 
   it('never puts the other kind into a region', () => {
@@ -387,10 +319,9 @@ describe('two kind regions under Both (decision 474)', () => {
     }
   });
 
-  it('drops a region with nothing to show and survives a payload without sections', () => {
-    expect(kindRegions({ sections: [{ kind: 'series', heading: 'Series', shelves: [] }] })).toEqual(
-      []
-    );
+  it('drops a region with nothing to show and survives a payload without shelves', () => {
+    const seriesOnly = { ...payload, shelves: [payload.shelves[0]] };
+    expect(kindRegions(seriesOnly).map((r) => r.kind)).toEqual(['series']);
     expect(kindRegions(null)).toEqual([]);
   });
 });

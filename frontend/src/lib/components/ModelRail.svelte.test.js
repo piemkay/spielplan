@@ -17,7 +17,7 @@ const EMPTY = '[data-testid="model-rail-empty"]';
 const log = (id, text) => ({
   show_model: true,
   kinds: ['verdict'],
-  events: [{ id, kind: 'verdict', scope: 'jenny', at: '2026-09-10T20:14:00.000Z', text }]
+  events: [{ id, kind: 'verdict', at: '2026-09-10T20:14:00.000Z', text }]
 });
 
 const FIRST = log(1, 'verdict(jenny, Heat) = liked -> ordered-logit arm, refit 31 ms');

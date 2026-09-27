@@ -1,6 +1,5 @@
 <script>
-  let { sides = ['left', 'both', 'right'], label = 'not seen', busy = false, onCorrect } =
-    $props();
+  let { sides, label, busy = false, onCorrect } = $props();
 </script>
 
 <div class="corrections" data-testid="rate-corrections">
