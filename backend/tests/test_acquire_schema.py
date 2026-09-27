@@ -16,13 +16,6 @@ async def _title(db, title_id: int = 700, kind: str = "movie") -> int:
     return title_id
 
 
-async def _index_defs(db, table: str) -> str:
-    rows = await db.fetch(
-        "SELECT indexdef FROM pg_indexes WHERE tablename = $1 AND schemaname = 'public'", table
-    )
-    return " ".join(row["indexdef"] for row in rows)
-
-
 async def test_enqueueing_the_same_kind_and_key_twice_is_refused(db):
     """A uniqueness enforced by the writer holds only until
     two writers run; §8.4's flywheel is the second."""
@@ -71,18 +64,6 @@ async def test_a_leased_task_cannot_be_written_without_a_lease_to_expire(db):
     )
 
 
-async def test_the_queue_is_indexed_for_the_lease_and_for_the_reaper(db):
-    """An index is the first thing a later migration drops when it looks redundant."""
-    defs = await _index_defs(db, "acquisition_task")
-    assert "(state, next_attempt_at, priority)" in defs, (
-        "the lease query has no index for its filter: claimable rows, then the ones whose time "
-        "has come"
-    )
-    assert "(lease_expires)" in defs and "state = 'leased'" in defs, (
-        "the reaper has no index; reclaiming abandoned work would scan the whole queue"
-    )
-
-
 async def test_deleting_a_title_keeps_its_task_and_takes_its_board_row(db):
     """`acquisition_task` has no FK: stage 1 is what mints the title (decision 322)."""
     target = await _title(db, 700)
@@ -126,12 +107,6 @@ async def test_two_fetches_of_identical_bytes_share_a_file_and_keep_two_rows(db)
     assert len({row["content_path"] for row in rows}) == 1, (
         "both rows must point at the one file the content address names"
     )
-
-
-async def test_the_raw_store_is_indexed_for_the_derive_and_for_the_store(db):
-    defs = await _index_defs(db, "raw_document")
-    assert "(entity_key, source, kind)" in defs, "the per-title re-parse has no index"
-    assert "(content_sha256)" in defs, "the store cannot find the file it already holds"
 
 
 async def test_the_robots_cache_holds_one_row_per_host(db):

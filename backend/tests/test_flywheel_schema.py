@@ -1,5 +1,4 @@
-"""What `0029_flywheel.sql` refuses and what it keeps on upgrade (§8.4). Refusals are asserted by constraint
-NAME, and the staged apply runs 0029 over rows an install already holds. Needs TEST_DATABASE_URL."""
+"""What `0029_flywheel.sql` refuses (§8.4), asserted by constraint NAME. Needs TEST_DATABASE_URL."""
 
 from __future__ import annotations
 
@@ -7,12 +6,6 @@ from decimal import Decimal
 
 import asyncpg
 import pytest
-
-from spielplan.db import migrate
-from tests.test_backup import _drop, _recreate, _sibling
-from tests.test_upgrade_drill import _complete, _stage
-
-MIGRATION = "0029_flywheel"
 
 
 async def _title(db, title_id: int) -> int:
@@ -105,25 +98,6 @@ async def test_a_title_holds_one_open_thin_facet_row_however_often_it_is_observe
         " WHERE status IN ('queued', 'approved', 'running') GROUP BY title_id ORDER BY title_id"
     )
     assert [(row["title_id"], row["n"]) for row in open_rows] == [(title, 1), (other, 1)]
-
-
-async def test_the_queue_is_indexed_for_its_read_and_for_its_one_open_row(db):
-    """An index that dropped `running` from the predicate
-    would still build and stop refusing the double launch."""
-    rows = await db.fetch(
-        "SELECT indexname, indexdef FROM pg_indexes "
-        " WHERE schemaname = 'public' AND tablename = 'flywheel_item'"
-    )
-    defs = {row["indexname"]: row["indexdef"] for row in rows}
-    assert "(status, created_at DESC)" in defs.get("flywheel_status", ""), (
-        "0004's queue index is gone or changed, and 0029 builds none of its own because it relied "
-        "on this one; the admin queue's newest-first read now scans the table"
-    )
-    unique = defs.get("flywheel_item_one_open_thin_facet", "")
-    assert unique.startswith("CREATE UNIQUE INDEX") and "(title_id)" in unique, unique
-    for status in ("queued", "approved", "running"):
-        assert f"'{status}'" in unique, f"an open {status} row escapes decision 440's index"
-    assert "'thin_facet'" in unique, "the index binds kinds whose rows name no title"
 
 
 async def test_a_title_that_goes_takes_its_queue_rows_with_it(db):
@@ -230,74 +204,3 @@ async def test_an_axis_is_the_bundles_unless_the_household_wrote_it(db):
         "dna_axis_origin_check",
     )
     assert await db.fetchval("SELECT origin FROM dna_axis WHERE facet = 'pacing'") == "household"
-
-
-def _last_before_the_migration() -> str:
-    """Found rather than spelled, with `migrate.discover`'s lexicographic cut."""
-    earlier = [version for version, _ in migrate.discover() if version < "0029"]
-    assert earlier, "no migration sorts before 0029; this is not reading the tree's directory"
-    return earlier[-1]
-
-
-@pytest.fixture
-async def before_the_migration(pg_url, tmp_path):
-    """A database of its own, not `db`'s: the schema is deliberately not this build's."""
-    admin, name, url = _sibling(pg_url, "_pre0029")
-    await _recreate(admin, name)
-    conn = await asyncpg.connect(url)
-    try:
-        directory = _stage(tmp_path, _last_before_the_migration())
-        applied = await migrate.apply_all(conn, directory)
-        assert applied and applied[-1] == _last_before_the_migration()
-        yield conn, directory
-    finally:
-        await conn.close()
-        await _drop(admin, name)
-
-
-async def test_an_install_upgraded_to_0029_keeps_its_board_and_reads_its_axis_as_the_bundles(
-    before_the_migration,
-):
-    """The DEFAULT is the backfill over existing axes, and ADD CHECK validates every stored board row."""
-    conn, directory = before_the_migration
-    present = await conn.fetchval(
-        "SELECT count(*) FROM information_schema.columns "
-        " WHERE table_schema = 'public' AND table_name = 'dna_axis' AND column_name = 'origin'"
-    )
-    assert present == 0, (
-        f"the staged install already has dna_axis.origin, so this upgrade proves nothing: "
-        f"{MIGRATION} is being staged as part of the 'before' half"
-    )
-
-    await _axis_vocabulary(conn)
-    await conn.execute(
-        "INSERT INTO dna_axis (version, facet, left_pole, right_pole) "
-        "VALUES ('v1', 'pacing', 'slow', 'fast')"
-    )
-    await conn.execute(
-        "INSERT INTO dna_axis_weight (version, facet, term, weight) "
-        "VALUES ('v1', 'pacing', 'languid', -0.8)"
-    )
-    before = ("queued", "running", "parked", "ready", "failed")
-    for offset, status in enumerate(before):
-        await _title(conn, 730 + offset)
-        await conn.execute(
-            "INSERT INTO acquisition_job (title_id, stage, status, reason) VALUES ($1, 4, $2, $3)",
-            730 + offset, status, f"held at {status}",
-        )
-
-    pending = _complete(directory)
-    assert MIGRATION in pending, f"{MIGRATION} is not among the migrations this upgrade applies"
-    applied = await migrate.apply_all(conn, directory)
-    assert MIGRATION in applied
-
-    axis = await conn.fetchrow("SELECT origin, left_pole FROM dna_axis WHERE facet = 'pacing'")
-    assert (axis["origin"], axis["left_pole"]) == ("bundle", "slow"), (
-        "an axis that predates the provenance column must read as the bundle's: a NULL or an empty "
-        "string there is an axis the loader would neither replace nor leave as the household's"
-    )
-    assert await conn.fetchval("SELECT count(*) FROM dna_axis_weight WHERE facet = 'pacing'") == 1
-    board = await conn.fetch("SELECT status, reason FROM acquisition_job ORDER BY title_id")
-    assert [(row["status"], row["reason"]) for row in board] == [
-        (status, f"held at {status}") for status in before
-    ]

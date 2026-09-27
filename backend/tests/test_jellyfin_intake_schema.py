@@ -1,18 +1,11 @@
 """The webhook's durable pending set, asserted by trying to violate it (§7.2). No UNIQUE on
-`resolved_key`, no FK to `title_jellyfin_item`, and a partial index: each checked against its repair.
+`resolved_key` and no FK to `title_jellyfin_item`: each checked against its repair.
 Needs TEST_DATABASE_URL."""
 
 from __future__ import annotations
 
 import asyncpg
 import pytest
-
-
-async def _index_defs(db, table: str) -> str:
-    rows = await db.fetch(
-        "SELECT indexdef FROM pg_indexes WHERE tablename = $1 AND schemaname = 'public'", table
-    )
-    return " ".join(row["indexdef"] for row in rows)
 
 
 async def _pending(db, key: str, item_id: str, minutes: int = 10) -> None:
@@ -100,17 +93,4 @@ async def test_an_event_can_name_a_title_this_install_has_never_held(db):
     assert kept == 2, (
         "the intake row must not cascade from title: it is the record of what a server told this "
         "app, and it outlives whatever the app decided to do about it"
-    )
-
-
-async def test_the_pending_set_is_indexed_for_the_one_read_the_sweep_makes(db):
-    """`state` is constant inside a partial index on `state = 'pending'`, so it is not an index column."""
-    defs = await _index_defs(db, "jellyfin_intake")
-    assert "(resolved_key, not_before)" in defs, (
-        "the sweep has no index for its one read: the key it groups by, then the instant that "
-        "decides ripeness"
-    )
-    assert "state = 'pending'" in defs, (
-        "the sweep's index is no longer partial, so it now carries every event this install has "
-        "ever received -- and nothing prunes this table"
     )

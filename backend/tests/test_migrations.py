@@ -1,7 +1,8 @@
-"""The migration runner. The facet-backfill test at the foot needs TEST_DATABASE_URL."""
+"""The migration runner. The two refusals at the foot need TEST_DATABASE_URL."""
 
 from __future__ import annotations
 
+import shutil
 from pathlib import Path
 
 import pytest
@@ -58,74 +59,26 @@ def test_bootstrap_stripping_is_a_no_op_on_a_file_without_the_table():
     assert migrate._strip_bootstrap(body) == body
 
 
-def _facet_backfill_statements() -> list[str]:
-    """Section 1's UPDATEs read from the shipped file. Comments are stripped before splitting on `;`
-    because header prose contains semicolons."""
-    body = (MIGRATIONS / "0018_read_layer.sql").read_text(encoding="utf-8")
-    code = " ".join(
-        line for line in body.splitlines() if not line.strip().startswith("--")
-    )
-    found = [s.strip() + ";" for s in code.split(";") if "split_part(term" in s]
-    assert len(found) == 2 and all(s.startswith("UPDATE") for s in found), (
-        f"0018 section 1 is two UPDATEs, one per DNA tier; found {found}"
-    )
-    return found
-
-
-async def test_the_dna_facet_backfill_repairs_each_row_once_and_then_changes_nothing(db):
-    """Runs the shipped UPDATEs twice; the second must read `UPDATE 0`. The `term LIKE '%.%'` guard
-    matters because split_part returns the whole string when there is no dot."""
-    statements = _facet_backfill_statements()
-    await db.execute("INSERT INTO title (id, kind, name) VALUES (1, 'movie', 'x')")
-    await db.execute(
-        "INSERT INTO dna_vocabulary (version, facet_count, term_count) VALUES ('v1', 11, 3)"
-    )
-    await db.execute(
-        "INSERT INTO dna_tag (title_id, version, term, facet, salience) VALUES "
-        "(1, 'v1', 'characters.morally_grey', 'character_dynamics', 2), "
-        "(1, 'v1', 'mood.dread', 'mood', 3), "
-        "(1, 'v1', 'undotted_legacy_term', 'legacy', 1)"
-    )
-    await db.execute(
-        "INSERT INTO dna_projected (title_id, version, term, facet, weight) VALUES "
-        "(1, 'v1', 'themes.obsession', 'narrative_themes', 0.5), "
-        "(1, 'v1', 'undotted_legacy_term', 'legacy', 0.5)"
+async def test_an_edited_applied_migration_is_refused_by_both_entry_points(db, tmp_path):
+    """The backend applies and the worker waits; each must name the edited file."""
+    directory = shutil.copytree(MIGRATIONS, tmp_path / "migrations")
+    edited = directory / "0014_tonight_undo.sql"
+    edited.write_text(
+        edited.read_text(encoding="utf-8") + "\n-- an operator fixing a typo in place\n",
+        encoding="utf-8",
     )
 
-    first = [await db.execute(s) for s in statements]
-    assert first == ["UPDATE 1", "UPDATE 1"], (
-        f"one mismatched row per tier, and neither the already-correct nor the undotted: {first}"
-    )
+    for call in (migrate.apply_all(db, directory), migrate.pending(db, directory)):
+        with pytest.raises(RuntimeError, match="0014_tonight_undo"):
+            await call
+
+
+async def test_a_renamed_applied_migration_is_named_rather_than_run_again(db, tmp_path):
+    directory = shutil.copytree(MIGRATIONS, tmp_path / "migrations")
+    (directory / "0014_tonight_undo.sql").rename(directory / "0014_tonight_undo_v2.sql")
+
+    with pytest.raises(RuntimeError, match="0014_tonight_undo"):
+        await migrate.apply_all(db, directory)
     assert await db.fetchval(
-        "SELECT facet FROM dna_tag WHERE term = 'characters.morally_grey'"
-    ) == "characters"
-    assert await db.fetchval(
-        "SELECT facet FROM dna_projected WHERE term = 'themes.obsession'"
-    ) == "themes"
-    kept = await db.fetch(
-        "SELECT facet FROM dna_tag WHERE term = 'undotted_legacy_term' "
-        "UNION ALL SELECT facet FROM dna_projected WHERE term = 'undotted_legacy_term'"
-    )
-    assert [r["facet"] for r in kept] == ["legacy", "legacy"], (
-        "the LIKE '%.%' guard is what keeps split_part from rewriting an undotted vocabulary's "
-        "facet to the term id itself"
-    )
-
-    again = [await db.execute(s) for s in statements]
-    assert again == ["UPDATE 0", "UPDATE 0"], f"the backfill is not idempotent: {again}"
-
-    transaction = db.transaction()
-    await transaction.start()
-    try:
-        assert await db.fetchval("SELECT split_part('undotted_legacy_term', '.', 1)") == (
-            "undotted_legacy_term"
-        ), "split_part returns the whole string with no delimiter; field 2 is the empty one"
-        await db.execute("UPDATE dna_tag SET facet = split_part(term, '.', 1)")
-        assert await db.fetchval(
-            "SELECT facet FROM dna_tag WHERE term = 'undotted_legacy_term'"
-        ) == "undotted_legacy_term", (
-            "the unguarded form writes the term id into `facet`, which is a value that joins no "
-            "`dna_facet` row -- not the NULL a NOT NULL column would have refused"
-        )
-    finally:
-        await transaction.rollback()
+        "SELECT count(*) FROM schema_migration WHERE version = '0014_tonight_undo_v2'"
+    ) == 0

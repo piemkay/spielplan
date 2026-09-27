@@ -60,7 +60,7 @@ CORPUS_BUNDLE_DIR=/path/to/bundle python -m pytest backend/tests/test_bundle_sha
 
 ## Restore drill
 
-`test_restore_drill.py` and `test_upgrade_drill.py` drive `pg_restore` against a real Postgres. A
+`test_restore_drill.py` drives `pg_restore` against a real Postgres. A
 drill on a real stack follows README's Restore section with a dump this build's worker wrote,
 because a dump restores only into the image that wrote it. `.github/workflows/release.yml` runs
 that drill at stack level on the self-hosted corpus runner.

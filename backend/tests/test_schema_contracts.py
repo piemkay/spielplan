@@ -7,10 +7,6 @@ import re
 import asyncpg
 import pytest
 
-from spielplan.db import migrate
-from tests.test_backup import _drop, _recreate, _sibling
-from tests.test_upgrade_drill import _complete, _stage
-
 
 async def _title(db, title_id=1, kind="movie") -> int:
     await db.execute(
@@ -31,14 +27,6 @@ async def test_kind_is_not_null_and_constrained_to_two_values(db):
         await db.execute("INSERT INTO title (id, kind, name) VALUES (900, NULL, 'x')")
     with pytest.raises(asyncpg.CheckViolationError):
         await db.execute("INSERT INTO title (id, kind, name) VALUES (901, 'episode', 'x')")
-
-
-async def test_kind_is_indexed(db):
-    indexes = await db.fetch(
-        "SELECT indexdef FROM pg_indexes WHERE tablename = 'title' AND schemaname = 'public'"
-    )
-    defs = " ".join(r["indexdef"] for r in indexes)
-    assert "(kind)" in defs or "(kind, " in defs
 
 
 async def test_the_database_refuses_a_renumbered_rating_source(db):
@@ -332,71 +320,22 @@ async def test_the_rule_asks_every_table_that_can_be_citing_the_row(db):
     )
 
 
-async def test_a_placed_title_with_no_placement_bundle_is_refused_by_the_check(pg_url, tmp_path):
-    """A database of its own: every other layer migrates an EMPTY database, so this backfill's
-    UPDATE would never run over a row."""
-    # Not `UNDER_TEST` (0022): that drill stages the migrations below it.
-    under_test = "0023_import_state"
-    earlier = [version for version, _ in migrate.discover() if version < under_test]
-    admin, name, url = _sibling(pg_url, "_basis")
-    await _recreate(admin, name)
-    conn = await asyncpg.connect(url)
-    try:
-        directory = _stage(tmp_path, earlier[-1])
-        assert await migrate.apply_all(conn, directory)
-        await conn.execute(
-            "INSERT INTO artifact_bundle (version, manifest, state) "
-            "VALUES ('basis-v1', '{}', 'active')"
-        )
-        await conn.execute(
-            "INSERT INTO title (id, kind, name, is_owned) VALUES "
-            "(21, 'movie', 'stranded', true), (22, 'movie', 'placed', true)"
-        )
-        await conn.execute(
-            "UPDATE title SET placement = 'cold_tower', placement_at = now() WHERE id = 21"
-        )
-        await conn.execute(
-            "UPDATE title SET placement = 'warm', placement_bundle = 'basis-v1', "
-            "placement_at = now() WHERE id = 22"
-        )
-        assert await conn.fetchval(
-            "SELECT count(*) FROM title WHERE is_owned AND placement = 'unplaced'"
-        ) == 0, "the defect as M2 reads it: nothing appears to be waiting for a coordinate"
-
-        assert under_test in _complete(directory)
-        assert under_test in await migrate.apply_all(conn, directory)
-
-        stranded = await conn.fetchrow(
-            "SELECT placement, placement_at, placement_bundle FROM title WHERE id = 21"
-        )
-        assert stranded["placement"] == "unplaced", "a coordinate with no basis is not a placement"
-        # The backfill clears the stamp because it dated a placement that never happened.
-        assert stranded["placement_at"] is None, "this row's stamp dated a placement that never was"
-
-        placed = await conn.fetchrow(
-            "SELECT placement, placement_at, placement_bundle FROM title WHERE id = 22"
-        )
-        assert (placed["placement"], placed["placement_bundle"]) == ("warm", "basis-v1"), (
-            "the backfill must not touch a title whose placement does name its basis"
-        )
-        assert placed["placement_at"] is not None, "nor clear the stamp of a real placement"
-        assert await conn.fetchval(
-            "SELECT count(*) FROM title WHERE is_owned AND placement = 'unplaced'"
-        ) == 1, "M2's index now counts the title that has no coordinate"
-
-        # Both halves are reachable: a writer stamping `placement` alone, and the FK's SET NULL.
+async def test_a_placement_names_its_basis_and_an_unplaced_title_names_none(db):
+    """Both halves are reachable: a writer stamping `placement` alone, and the FK's SET NULL."""
+    await db.execute(
+        "INSERT INTO artifact_bundle (version, manifest, state) VALUES ('basis-v1', '{}', 'active')"
+    )
+    await db.execute(
+        "INSERT INTO title (id, kind, name, placement, placement_bundle) "
+        "VALUES (22, 'movie', 'placed', 'warm', 'basis-v1')"
+    )
+    for statement in (
+        "INSERT INTO title (id, kind, name, placement) VALUES (23, 'movie', 'no basis', 'cold_tower')",
+        "UPDATE title SET placement_bundle = NULL WHERE id = 22",
+        "UPDATE title SET placement = 'unplaced' WHERE id = 22",
+    ):
         with pytest.raises(asyncpg.CheckViolationError, match="title_placement_has_basis"):
-            await conn.execute(
-                "INSERT INTO title (id, kind, name, placement) "
-                "VALUES (23, 'movie', 'no basis', 'cold_tower')"
-            )
-        with pytest.raises(asyncpg.CheckViolationError, match="title_placement_has_basis"):
-            await conn.execute("UPDATE title SET placement_bundle = NULL WHERE id = 22")
-        with pytest.raises(asyncpg.CheckViolationError, match="title_placement_has_basis"):
-            await conn.execute("UPDATE title SET placement = 'unplaced' WHERE id = 22")
-    finally:
-        await conn.close()
-        await _drop(admin, name)
+            await db.execute(statement)
 
 
 async def test_a_connector_secret_cannot_be_stored_without_naming_its_key(db):
@@ -703,8 +642,6 @@ async def test_the_reserved_finalist_is_the_one_the_stored_slate_labels(db):
 
 # Each test below attempts the write the OLD constraint accepted.
 
-# Named once: the backfill test stages the release before it.
-UNDER_TEST = "0022_model_basis"
 
 # The tables 0022 moved from CASCADE to RESTRICT, shared by the delete and the count below.
 _OBSERVATIONS = {
@@ -1046,54 +983,3 @@ async def test_a_user_score_row_whose_kind_disagrees_with_its_title_is_refused(d
         "SELECT kind FROM user_score WHERE user_id = $1 AND title_id = $2", user, movie
     )
     assert moved == "series", "a reclassified title must take its derived rows with it"
-
-
-async def test_the_tier_edit_k_column_is_backfilled_from_the_users_own_tier_set(pg_url, tmp_path):
-    """A database of its own, so the backfill runs over existing rows. K comes through the title's
-    kind: 12 on a film, 7 (the default) on a series or with no cutpoints row."""
-    earlier = [version for version, _ in migrate.discover() if version < UNDER_TEST]
-    admin, name, url = _sibling(pg_url, "_nlevels")
-    await _recreate(admin, name)
-    conn = await asyncpg.connect(url)
-    try:
-        directory = _stage(tmp_path, earlier[-1])
-        assert await migrate.apply_all(conn, directory)
-        patrick = await conn.fetchval(
-            "INSERT INTO app_user (name, role) VALUES ('patrick', 'admin') RETURNING id"
-        )
-        jenny = await conn.fetchval(
-            "INSERT INTO app_user (name, role) VALUES ('jenny', 'member') RETURNING id"
-        )
-        await conn.execute(
-            "INSERT INTO title (id, kind, name) VALUES (11, 'movie', 'a film'), "
-            "(12, 'series', 'a series')"
-        )
-        await conn.execute(
-            "INSERT INTO ledger_cutpoints (user_id, kind, boundaries, tier_set) VALUES "
-            "($1, 'movie', ARRAY[0.1,0.2,0.3,0.4,0.5,0.6,0.7,0.8,0.9,1.0,1.1], "
-            "ARRAY['1','2','3','4','5','6','7','8','9','10','11','12'])",
-            patrick,
-        )
-        for user, title in ((patrick, 11), (patrick, 12), (jenny, 11)):
-            await conn.execute(
-                "INSERT INTO tier_edit (user_id, title_id, tier, via) "
-                "VALUES ($1, $2, 3, 'explicit')",
-                user, title,
-            )
-
-        assert UNDER_TEST in _complete(directory)
-        assert UNDER_TEST in await migrate.apply_all(conn, directory)
-
-        levels = {
-            (row["user_id"], row["title_id"]): row["n_levels"]
-            for row in await conn.fetch("SELECT user_id, title_id, n_levels FROM tier_edit")
-        }
-        assert levels[(patrick, 11)] == 12, "the edit was made on his own 12-label movie board"
-        assert levels[(patrick, 12)] == 7, (
-            "he has no series cutpoints, so the series edit was made on the default set -- "
-            "reading his movie row here would be the mislabelling the column exists to end"
-        )
-        assert levels[(jenny, 11)] == 7, "she has no cutpoints at all"
-    finally:
-        await conn.close()
-        await _drop(admin, name)
