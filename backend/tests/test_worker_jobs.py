@@ -411,8 +411,6 @@ def test_every_job_this_loop_fires_declares_a_budget_that_fits_inside_its_interv
     from spielplan.backup import nightly
 
     for job in worker.JOBS:
-        if job.run is None:
-            continue
         assert job.timeout > 0, f"{job.name} fires with no budget at all"
         assert job.timeout <= job.every, (
             f"{job.name}: a {job.timeout}s budget does not fit inside its own {job.every}s "
@@ -447,8 +445,8 @@ async def test_a_job_that_never_returns_is_abandoned_at_its_budget_and_the_tick_
         worker,
         "JOBS",
         (
-            worker.Job("t-wedged", "M0", "test", "ms", never_returns, every=60, timeout=0.1),
-            worker.Job("t-after", "M0", "test", "ms", the_next_job, every=60, timeout=5),
+            worker.Job("t-wedged", never_returns, every=60, timeout=0.1),
+            worker.Job("t-after", the_next_job, every=60, timeout=5),
         ),
     )
 
@@ -656,9 +654,9 @@ async def test_a_television_session_whose_series_could_not_be_listed_gets_its_ow
         assert len(again) == 1, "a standing proxy rule is a state, not a line a minute"
 
 
-async def test_the_fold_in_budget_string_names_what_the_tick_measures(rated, db):
-    """The partition rewrite, not the ridge solve, is the cost; `FoldInReport` splits them and the
-    registry names both. Asserted as an ORDERING: on eight titles both are tiny."""
+async def test_the_fold_in_tick_reports_both_of_its_costs(rated, db):
+    """The partition rewrite, not the ridge solve, is the cost; `FoldInReport` splits them.
+    Asserted as an ORDERING: on eight titles both are tiny."""
     from spielplan.scoring import backbone as bb
     from spielplan.scoring import foldin
 
@@ -666,10 +664,6 @@ async def test_the_fold_in_budget_string_names_what_the_tick_measures(rated, db)
     # The import's fold-in makes the new verdicts seconds old, so the tick would decline them.
     await _wait_out_the_pause(db, patrick)
     job = next(j for j in worker.JOBS if j.name == "fold-in-tick")
-    assert job.budget != "ms", "the budget is still the solve's word for the whole job"
-    for half in ("numpy", "write"):
-        assert half in job.budget, f"the budget names no {half} half: {job.budget!r}"
-    assert job.budget.isascii(), "a cp1252 console reads this column"
 
     detail = await job.run()
     assert detail is not None and detail["refit"], "nothing was refit, so nothing was measured"

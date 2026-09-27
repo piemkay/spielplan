@@ -10,7 +10,7 @@ import contextvars
 import logging
 import signal
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import KW_ONLY, dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -30,18 +30,11 @@ log = logging.getLogger("spielplan.worker")
 @dataclass(frozen=True)
 class Job:
     name: str
-    milestone: str
-    trigger: str
-    budget: str
     # The job's report (`as_dict()`), stored in `job_run.detail`; None is legal.
-    run: Callable[[], Awaitable[dict[str, object] | None]] | None = None
-    # The module implementing a row this loop does not fire (a request triggers it, or another job
-    # reaches it). No `run` and no `owner` means unwritten.
-    owner: str | None = None
-    # Seconds; carried even without an implementation, so the registry reads as §5.3.
+    run: Callable[[], Awaitable[dict[str, object] | None]]
+    _: KW_ONLY
+    # Seconds.
     every: int = 3600
-    # Order within one tick, low first: 0 produces coordinates, 1 consumes them.
-    stage: int = 1
     # The household-local hour (§2's `TZ`) at or after which a daily job fires, once per local date;
     # None keeps `every` as a monotonic interval. Restarts must not spend §2's fourteen dump slots.
     anchor_hour: int | None = None
@@ -628,7 +621,7 @@ async def _bundle_import() -> dict[str, object] | None:
     return {"job_id": job_id, "bundle_version": bundle.version, "ok": report.ok}
 
 
-# §5.3's table. `run=None`: not fired by this loop. The daily jobs are anchored one hour apart
+# §5.3's table, in the order one tick fires what is due. The daily jobs are anchored one hour apart
 # (01:00-06:00), in dependency order with the dump last.
 ANCHOR_JOB_RUN_PRUNE = 1
 ANCHOR_PUSH_PRUNE = 2
@@ -642,71 +635,51 @@ ANCHOR_BACKUP = 6
 # (1800 s) so pg_dump's own timeout fires first.
 
 JOBS: tuple[Job, ...] = (
-    Job("session-prune", "M0", "hourly", "ms", _prune_expired_sessions, every=3600,
-        timeout=60),
-    Job("push-subscription-prune", "M0", "daily", "ms", _prune_dead_push_subscriptions,
-        every=86400, anchor_hour=ANCHOR_PUSH_PRUNE, timeout=60),
-    Job("webauthn-challenge-prune", "M1", "hourly", "ms", _prune_webauthn_challenges,
-        every=3600, timeout=60),
-    # Not in §5.3's table: keeps `job_run` bounded (see `JOB_RUN_KEEP_DAYS`).
-    Job("job-run-prune", "M0", "daily", "ms", _prune_job_runs,
-        every=86400, anchor_hour=ANCHOR_JOB_RUN_PRUNE, timeout=60),
-    Job("ledger-incremental", "M2", "every observation", "<50 ms",
-        owner="spielplan.ledger.refit"),
-    Job("ledger-map-refit", "M2", "nightly", "seconds", _ledger_map_refit, every=86400,
-        anchor_hour=ANCHOR_LEDGER_REFIT, timeout=900),
-    # Not in §5.3's table: re-runs the full fit as observations accrue (`_ledger_refresh_tick`).
-    Job("ledger-refresh", "M2", "5+ observations since the last full fit", "seconds",
-        _ledger_refresh_tick, every=60, timeout=55),
-    Job("fold-in-user-vectors", "M2", "nightly", "seconds", _fold_in_user_vectors,
-        every=86400, anchor_hour=ANCHOR_FOLD_IN, timeout=600),
-    # Not in §5.3's table: the shelves must move within a sitting (§12 M2). The budget names both costs.
-    Job("fold-in-tick", "M2", "after each sitting's writes", "ms of numpy + s of partition writes",
-        _fold_in_tick, every=60, timeout=55),
-    # Decision 11's second trigger for §5.3's nightly fit. See `_tier_set_refits`.
-    Job("tier-set-refit", "M3", "tier-set change", "seconds", _tier_set_refits, every=60,
-        timeout=55),
-    Job("cold-tower-placement", "M2", "acquisition pipeline", "<1 s/title",
-        owner="spielplan.placement.tower"),
-    Job("placement-reconciliation", "M2", "bundle import + nightly sweep", "seconds",
-        _placement_reconciliation, every=86400, stage=0, anchor_hour=ANCHOR_PLACEMENT,
-        timeout=1800),
-    # Reached through the drain's stage 8 (decision 463).
-    Job("dna-projection", "M5", "acquisition", "<1 s", owner="spielplan.dna.project"),
-    # Not in §5.3's table: it fires the rows above. 420 s must stay under `queue.LEASE_SECONDS` (900),
-    # or a reaped task gets a second walker (`test_acquire_drain.py` pins it), and above the 300 s
-    # Retry-After sleep, or one 429 cancels the batch. A measured batch is ~69 s of pacing.
-    Job("acquisition-drain", "M5.1", "queue",
-        "~9 s/title of paced crawl x 8 a tick + <1 s/title placed",
-        _acquisition_drain, every=1800, timeout=420),
-    # Decision 522, before the lookup so a title it gives a poster is not filed again.
-    Job("metadata-backfill", "M5", "queue", "~11 s of paced TMDB + a derive/title x 100 a tick",
-        _metadata_backfill, every=1800, timeout=300),
-    # Decision 484; 300 lookups at 18 rps is under 20 s of pacing.
-    Job("art-lookup", "M5", "queue", "~17 s of paced TMDB lookups x 300 a tick",
-        _art_lookup, every=1800, timeout=300),
-    Job("jellyfin-seen-sync", "M1", "15 min + webhook", "—", _jellyfin_seen_sync, every=900,
-        timeout=600),
-    Job("jellyfin-sessions-poll", "M1", "1 min", "ms", _jellyfin_sessions_poll, every=60,
-        timeout=55),
-    # §7.2's two intake paths into the drain's queue (decision 368): 10-15 minutes from an add to a
-    # filed task. The poll may take a third of its interval: an abandoned poll repeats for free.
-    Job("jellyfin-delta-poll", "M5.2", "15 min", "seconds of one filtered read",
-        _jellyfin_delta_poll, every=900, timeout=300),
-    # The sweep: 120 s of its 300 s. An abandonment is free, since undecided keys stay pending.
-    Job("jellyfin-intake-sweep", "M5.2", "webhook + 10 min debounce", "ms + one read per title",
-        _jellyfin_intake_sweep, every=300, timeout=120),
-    Job("explore-frontier-cache", "M6", "nightly", "minutes", every=86400),
+    # First in a tick: it produces the coordinates every fit below consumes.
+    Job("placement-reconciliation", _placement_reconciliation, every=86400,
+        anchor_hour=ANCHOR_PLACEMENT, timeout=1800),
     # No cadence: `every` is a fallback poll, and `_tick` fires the job when a row is queued. 600 s
     # equals the worker's `stop_grace_period` in docker-compose.yml (decision 300): keep them equal.
     # It is ~2.8x the 213 s measured on a warm NVMe box.
-    Job(BUNDLE_IMPORT_JOB, "M0", "admin action", "minutes", _bundle_import,
-        every=3600, stage=0, timeout=BUNDLE_IMPORT_TIMEOUT),
+    Job(BUNDLE_IMPORT_JOB, _bundle_import, every=3600, timeout=BUNDLE_IMPORT_TIMEOUT),
+    Job("session-prune", _prune_expired_sessions, every=3600, timeout=60),
+    Job("push-subscription-prune", _prune_dead_push_subscriptions, every=86400,
+        anchor_hour=ANCHOR_PUSH_PRUNE, timeout=60),
+    Job("webauthn-challenge-prune", _prune_webauthn_challenges, every=3600, timeout=60),
+    # Not in §5.3's table: keeps `job_run` bounded (see `JOB_RUN_KEEP_DAYS`).
+    Job("job-run-prune", _prune_job_runs, every=86400, anchor_hour=ANCHOR_JOB_RUN_PRUNE, timeout=60),
+    Job("ledger-map-refit", _ledger_map_refit, every=86400, anchor_hour=ANCHOR_LEDGER_REFIT,
+        timeout=900),
+    # Not in §5.3's table: re-runs the full fit as observations accrue (`_ledger_refresh_tick`).
+    Job("ledger-refresh", _ledger_refresh_tick, every=60, timeout=55),
+    Job("fold-in-user-vectors", _fold_in_user_vectors, every=86400, anchor_hour=ANCHOR_FOLD_IN,
+        timeout=600),
+    # Not in §5.3's table: the shelves must move within a sitting (§12 M2). Milliseconds of numpy
+    # and seconds of partition writes.
+    Job("fold-in-tick", _fold_in_tick, every=60, timeout=55),
+    # Decision 11's second trigger for §5.3's nightly fit. See `_tier_set_refits`.
+    Job("tier-set-refit", _tier_set_refits, every=60, timeout=55),
+    # Not in §5.3's table: it fires the acquisition rows, ~9 s/title of paced crawl x 8 a tick. 420 s
+    # must stay under `queue.LEASE_SECONDS` (900), or a reaped task gets a second walker
+    # (`test_acquire_drain.py` pins it), and above the 300 s Retry-After sleep, or one 429 cancels
+    # the batch. A measured batch is ~69 s of pacing.
+    Job("acquisition-drain", _acquisition_drain, every=1800, timeout=420),
+    # Decision 522, before the lookup so a title it gives a poster is not filed again; ~11 s of
+    # paced TMDB and a derive per title, x 100 a tick.
+    Job("metadata-backfill", _metadata_backfill, every=1800, timeout=300),
+    # Decision 484; 300 lookups at 18 rps is under 20 s of pacing.
+    Job("art-lookup", _art_lookup, every=1800, timeout=300),
+    Job("jellyfin-seen-sync", _jellyfin_seen_sync, every=900, timeout=600),
+    Job("jellyfin-sessions-poll", _jellyfin_sessions_poll, every=60, timeout=55),
+    # §7.2's two intake paths into the drain's queue (decision 368): 10-15 minutes from an add to a
+    # filed task. The poll may take a third of its interval: an abandoned poll repeats for free.
+    Job("jellyfin-delta-poll", _jellyfin_delta_poll, every=900, timeout=300),
+    # The sweep: 120 s of its 300 s. An abandonment is free, since undecided keys stay pending.
+    Job("jellyfin-intake-sweep", _jellyfin_intake_sweep, every=300, timeout=120),
     # Before the dump in a tick, so an unwritable `/data/backups` is explained on the row above it.
-    Job("storage-check", "M5", "hourly", "ms", _storage_check, every=3600, timeout=60),
+    Job("storage-check", _storage_check, every=3600, timeout=60),
     # §2's backup (see `_nightly_backup`); minutes of pg_dump at corpus scale.
-    Job("nightly-backup", "M0", "nightly", "minutes", _nightly_backup, every=86400,
-        anchor_hour=ANCHOR_BACKUP, timeout=2100),
+    Job("nightly-backup", _nightly_backup, every=86400, anchor_hour=ANCHOR_BACKUP, timeout=2100),
 )
 
 # Jobs that fit against the active bundle and so must not run across §10's flip.
@@ -769,21 +742,6 @@ def _report_starting(cfg: Settings) -> None:
         "worker starting · tz=%s · db=%s",
         zone if zone is not None else "system clock (TZ unresolved)",
         cfg.database_url.rsplit("@", 1)[-1],
-    )
-
-
-def _report_registry() -> None:
-    """The boot census of §5.3's table: live, run elsewhere (`owner`), awaiting a milestone. ASCII only."""
-    live = [j for j in JOBS if j.run is not None]
-    elsewhere = [j for j in JOBS if j.run is None and j.owner is not None]
-    awaiting = [j for j in JOBS if j.run is None and j.owner is None]
-    log.info(
-        "%d job(s) live in this loop; %d run outside it: %s; %d awaiting their milestone: %s",
-        len(live),
-        len(elsewhere),
-        ", ".join(f"{j.name}({j.owner})" for j in elsewhere) or "none",
-        len(awaiting),
-        ", ".join(f"{j.name}({j.milestone})" for j in awaiting) or "none",
     )
 
 
@@ -886,12 +844,10 @@ def due(
 ) -> list[Job]:
     """Pure, so the schedule is testable without a clock. Unanchored jobs keep a monotonic interval;
     anchored ones fire once per local date at or after their hour, and RETRY_AFTER bounds a retry
-    after a failure. Without `local`, no anchored job is due."""
+    after a failure. Without `local`, no anchored job is due. In `JOBS` order."""
     dates = last_date or {}
     ready: list[Job] = []
     for job in JOBS:
-        if job.run is None:
-            continue
         since = now - last_run.get(job.name, float("-inf"))
         if job.anchor_hour is None:
             if since >= job.every:
@@ -903,8 +859,7 @@ def due(
             and since >= RETRY_AFTER
         ):
             ready.append(job)
-    # Stable: equal stages keep §5.3's table order.
-    return sorted(ready, key=lambda j: j.stage)
+    return ready
 
 
 # The `job_run` id of the job running now, handed to `pipeline.drain` (decision 468). Exactly
@@ -942,7 +897,7 @@ async def _record_finish(run_id: int | None, *, ok: bool, detail: dict[str, obje
 async def _with_queued_import(ready: list[Job]) -> list[Job]:
     """`due`'s answer with the bundle import in front when queued: its flip replaces the basis every
     other job here fits against. Moved to the front even when `due` produced it."""
-    job = next((j for j in JOBS if j.name == BUNDLE_IMPORT_JOB and j.run is not None), None)
+    job = next((j for j in JOBS if j.name == BUNDLE_IMPORT_JOB), None)
     if job is None:
         return ready
     # Asked only when `due` did not already produce the row.
@@ -1026,7 +981,7 @@ async def _seed_schedule(
         "       SELECT started_at FROM job_run "
         "        WHERE name = j.name AND ok ORDER BY started_at DESC LIMIT 1"
         "  ) r ON true",
-        [job.name for job in JOBS if job.run is not None],
+        [job.name for job in JOBS],
     )
     now_utc = datetime.now(UTC)
     last_run: dict[str, float] = {}
@@ -1078,7 +1033,6 @@ async def main() -> None:
 
         _report_basis(store)
         _report_storage()
-        _report_registry()
 
         stop = asyncio.Event()
         loop = asyncio.get_running_loop()

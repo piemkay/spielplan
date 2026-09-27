@@ -114,7 +114,6 @@ def test_the_drains_budget_is_bounded_by_the_lease_it_takes_and_by_its_own_batch
     the reaper hands a live task to a second worker."""
     job = _job()
     assert job.run is worker._acquisition_drain
-    assert job.milestone == "M5.1", "the column is the milestone of the WORK, and this is M5.1's"
 
     assert job.timeout * 2 <= queue.LEASE_SECONDS, (
         f"a {job.timeout}s attempt against a {queue.LEASE_SECONDS}s lease leaves the reaper and "
@@ -133,9 +132,6 @@ def test_the_drains_budget_prices_the_crawl_its_stages_now_do():
     fetching = [stage for stage in _SHIPPED_STAGES if stage.implemented and stage.fetches]
     assert fetching, (
         "no implemented stage fetches, so this test is measuring a pipeline that does not exist"
-    )
-    assert "no-op" not in job.budget, (
-        f"stages {[s.number for s in fetching]} fetch, and the budget still reads {job.budget!r}"
     )
 
     ceiling = fetch._retry_after({"retry-after": "100000"})
