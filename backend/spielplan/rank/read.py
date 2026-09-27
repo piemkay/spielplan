@@ -16,7 +16,12 @@ import numpy as np
 
 from spielplan.db.library import RankFilters, rank_filters
 from spielplan.ledger.hyperparams import Hyperparams
-from spielplan.ledger.observations import DEFAULT_TIER_SET, HELD_OUT, rescale_level
+from spielplan.ledger.observations import (
+    DEFAULT_TIER_SET,
+    HELD_OUT,
+    latest_tier_edit_sql,
+    rescale_level,
+)
 from spielplan.rank import board, queue
 
 log = logging.getLogger("spielplan.rank.read")
@@ -76,15 +81,7 @@ async def items(
                  WHERE c.user_id = {user} AND c.kind = ${len(args) + 2}) AS tier_set_k
         FROM ledger_state ls
         JOIN title t ON t.id = ls.title_id
-        -- The person's latest drop per title, in one pass over their own `tier_edit` rows.
-        -- A correlated subquery would re-run per row of a board that can be 839 long, against
-        -- an index keyed (user_id, created_at) that cannot answer "this title's latest".
-        LEFT JOIN (
-            SELECT DISTINCT ON (title_id) title_id, tier, n_levels
-            FROM tier_edit
-            WHERE user_id = {user}
-            ORDER BY title_id, created_at DESC, id DESC
-        ) te ON te.title_id = ls.title_id
+        LEFT JOIN ({latest_tier_edit_sql(user)}) te ON te.title_id = ls.title_id
         -- The live verdict, which holds the model tier inside its band (decision 508). The same
         -- reading as `observations.LIVE_LABEL_SQL`: the latest non-re-ask row per title.
         LEFT JOIN (

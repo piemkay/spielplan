@@ -17,7 +17,13 @@ from spielplan.db import library
 from spielplan.home import taste
 from spielplan.home import why as why_mod
 from spielplan.home.why import WhyTerm
-from spielplan.ledger.observations import LIVE_LABEL_SQL, rescale_level
+from spielplan.ledger.observations import (
+    DEFAULT_TIER_SET,
+    LIVE_LABEL_SQL,
+    latest_tier_edit_sql,
+    rescale_level,
+    tier_set_of,
+)
 from spielplan.scoring import serve
 from spielplan.scoring.backbone import EVIDENCE_K
 
@@ -44,9 +50,6 @@ SWEET_SPOT_MIN_CDF = 0.70
 # §5.1's optimum in this app's coordinates: β is the PERSONAL weight, so the corpus's 0.8 crowd is
 # 0.2 here (decision 167). Printed as `beta_optimum`; a fitted β is what the ordering uses.
 DEFAULT_BETA = 0.2
-
-# §4.2's default tier set, used when `ledger_cutpoints` has no row for this (user, kind) yet.
-DEFAULT_TIER_SET: tuple[str, ...] = ("F", "D", "C", "B", "A", "A+", "S")
 
 # The standard normal the sweet spot reads each member's rank through (decision 477's scale).
 _NORMAL = NormalDist()
@@ -135,10 +138,20 @@ class Ctx:
     claimed: frozenset[int] = frozenset()
     # Decision 512: titles the shelf's audience avoids; apart from `claimed` for the suppressed reason.
     avoided: frozenset[int] = frozenset()
+    # Per kind; absent means no `ledger_cutpoints` row and no fold-in yet.
+    tier_sets: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    betas: dict[str, float] = field(default_factory=dict)
 
     @property
     def excluded(self) -> frozenset[int]:
         return self.claimed | self.avoided
+
+    def tier_set(self, kind: str) -> tuple[str, ...]:
+        return self.tier_sets.get(kind, DEFAULT_TIER_SET)
+
+    def beta(self, kind: str) -> float:
+        """The weight the scores were ACTUALLY computed with; 0.0 when never fitted."""
+        return self.betas.get(kind, 0.0)
 
 
 # --- the pending-verdicts banner ------------------------------------------------------------
@@ -232,22 +245,6 @@ CARD_FROM = """
 """
 
 
-async def tier_set_of(conn: asyncpg.Connection, *, user_id: int, kind: str) -> tuple[str, ...]:
-    """§4.2 / decision 11: the tier set is per user and per kind."""
-    row = await conn.fetchval(
-        "SELECT tier_set FROM ledger_cutpoints WHERE user_id = $1 AND kind = $2", user_id, kind
-    )
-    return tuple(row) if row else DEFAULT_TIER_SET
-
-
-async def beta_of(conn: asyncpg.Connection, *, user_id: int, kind: str) -> tuple[float, bool]:
-    """(β, fitted?): the weight the scores were ACTUALLY computed with; 0.0 when never fitted."""
-    fit = await serve.fit_row(conn, user_id=user_id, kind=kind)
-    if fit and fit["blend_beta"] is not None:
-        return float(fit["blend_beta"]), True
-    return 0.0, False
-
-
 def _float(value: Any) -> float | None:
     return None if value is None else float(value)
 
@@ -322,7 +319,7 @@ async def _finish(
         conn,
         user_id=ctx.user_id,
         title_ids=[int(c["title_id"]) for c in section.items],
-        tier_set=await tier_set_of(conn, user_id=ctx.user_id, kind=section.kind),
+        tier_set=ctx.tier_set(section.kind),
     )
     for card in section.items:
         card["on_board"] = int(card["title_id"]) in board
@@ -348,15 +345,10 @@ async def _board_letters(
     if not title_ids:
         return {}
     rows = await conn.fetch(
-        """
-        SELECT ls.title_id, ls.tier, te.tier AS assigned, te.n_levels AS assigned_k
+        f"""
+        SELECT ls.title_id, ls.tier AS model_tier, te.tier AS assigned, te.n_levels AS assigned_k
           FROM ledger_state ls
-          LEFT JOIN (
-              SELECT DISTINCT ON (title_id) title_id, tier, n_levels
-                FROM tier_edit
-               WHERE user_id = $1 AND title_id = ANY($2)
-               ORDER BY title_id, created_at DESC, id DESC
-          ) te ON te.title_id = ls.title_id
+          LEFT JOIN ({latest_tier_edit_sql()}) te ON te.title_id = ls.title_id
          WHERE ls.user_id = $1 AND ls.title_id = ANY($2) AND ls.observed
         """,
         user_id,
@@ -364,15 +356,17 @@ async def _board_letters(
     )
     letters: dict[int, str | None] = {}
     for r in rows:
-        if r["assigned"] is not None:
-            level: int | None = rescale_level(
-                int(r["assigned"]), k_from=r["assigned_k"], k_to=len(tier_set)
-            )
-        else:
-            level = None if r["tier"] is None else int(r["tier"])
+        level = _board_level(r, len(tier_set))
         in_set = level is not None and 0 <= level < len(tier_set)
         letters[int(r["title_id"])] = tier_set[level] if in_set else None
     return letters
+
+
+def _board_level(row: asyncpg.Record, k: int) -> int | None:
+    """The tier Rank renders: the latest drop rescaled to today's set (decision 11), else the model's."""
+    if row["assigned"] is not None:
+        return rescale_level(int(row["assigned"]), k_from=row["assigned_k"], k_to=k)
+    return None if row["model_tier"] is None else int(row["model_tier"])
 
 
 # --- shelf 1: because_anchor ------------------------------------------------------------------
@@ -392,7 +386,7 @@ async def because_anchor(
 
     # Both seen AND rated: neither implies the other. The anchor is the highest tier the board
     # shows (ordered after `rescale_level`, so in Python), then the live verdict, then `s`.
-    tier_set = await tier_set_of(conn, user_id=ctx.user_id, kind=kind)
+    tier_set = ctx.tier_set(kind)
     candidates = await conn.fetch(
         f"""
         SELECT t.id, t.name, ls.tier AS model_tier, ls.s,
@@ -400,12 +394,7 @@ async def because_anchor(
           FROM ledger_state ls
           JOIN title t ON t.id = ls.title_id
           JOIN user_title ut ON ut.user_id = ls.user_id AND ut.title_id = t.id AND ut.state = 'seen'
-          LEFT JOIN (
-              SELECT DISTINCT ON (title_id) title_id, tier, n_levels
-                FROM tier_edit
-               WHERE user_id = $1
-               ORDER BY title_id, created_at DESC, id DESC
-          ) te ON te.title_id = ls.title_id
+          LEFT JOIN ({latest_tier_edit_sql()}) te ON te.title_id = ls.title_id
           LEFT JOIN ({LIVE_LABEL_SQL}) lv ON lv.title_id = ls.title_id
          WHERE ls.user_id = $1 AND t.kind = $2 AND ls.tier IS NOT NULL AND ls.observed
         """,
@@ -418,16 +407,10 @@ async def because_anchor(
             "no title of this kind is both seen and rated with a fitted tier yet",
         )
 
-    def shown(row: asyncpg.Record) -> int:
-        # The tier Rank renders: the latest drop, rescaled to today's set (decision 11).
-        if row["assigned"] is None:
-            return int(row["model_tier"])
-        return rescale_level(int(row["assigned"]), k_from=row["assigned_k"], k_to=len(tier_set))
-
     anchor = min(
         candidates,
         key=lambda r: (
-            -shown(r),
+            -_board_level(r, len(tier_set)),
             -(r["verdict"] if r["verdict"] is not None else -1),
             -float(r["s"]),
             int(r["id"]),
@@ -439,7 +422,7 @@ async def because_anchor(
         return None, Suppressed(
             sid, kind, f"anchor tier index {model_index} is outside the tier set"
         )
-    index = shown(anchor)
+    index = _board_level(anchor, len(tier_set))
 
     # Decision 513: the anchor's nearest titles, then the pair of its terms that names them best.
     terms = await why_mod.terms_for(conn, int(anchor["id"]), version=ctx.version, limit=None)
@@ -470,7 +453,7 @@ async def because_anchor(
     by_id = {int(r["title_id"]): r for r in scored}
     rows = [by_id[i] for i in members]
 
-    beta, _fitted = await beta_of(conn, user_id=ctx.user_id, kind=kind)
+    beta = ctx.beta(kind)
     tier = tier_set[index]
     if anchor["assigned"] is not None:
         title = f"Because you put {anchor['name']} in {tier}"
@@ -516,7 +499,7 @@ async def top_of_ledger(
     # The β the ordering used: stored `blend_beta`, or 0.0 when never fitted.
     beta = float(ranked["beta"])
     personalised = bool(ranked["personalised"])
-    tier_set = await tier_set_of(conn, user_id=ctx.user_id, kind=kind)
+    tier_set = ctx.tier_set(kind)
     items = [
         _card(row, i + 1, tier_set=tier_set, beta=beta)
         for i, row in enumerate(_as_card_rows(ranked["items"]))
@@ -586,8 +569,7 @@ async def never_watched_term(
         conn, terms=[candidate.term], kind=kind, version=ctx.version, user_id=ctx.user_id,
         exclude=sorted(ctx.excluded),
     )
-    beta, _fitted = await beta_of(conn, user_id=ctx.user_id, kind=kind)
-    tier_set = await tier_set_of(conn, user_id=ctx.user_id, kind=kind)
+    beta, tier_set = ctx.beta(kind), ctx.tier_set(kind)
     rows = await conn.fetch(
         CARD_SELECT + CARD_FROM + """
          WHERE t.kind = $2 AND t.id = ANY($4)
@@ -655,8 +637,7 @@ async def shared_sweet_spot(
     if not ctx.bundle_version:
         return None, Suppressed(sid, kind, "no active artifact bundle — no scores to intersect")
 
-    tier_set = await tier_set_of(conn, user_id=ctx.user_id, kind=kind)
-    beta, _fitted = await beta_of(conn, user_id=ctx.user_id, kind=kind)
+    beta, tier_set = ctx.beta(kind), ctx.tier_set(kind)
     # `pos`/`n` are each member's rank over the owned library of the kind, ties broken by id as
     # `tonight/pool.rank_normal` breaks them, so the quantile below is that function's.
     rows = await conn.fetch(
@@ -742,8 +723,7 @@ async def school_night(
     """§6.0 row 5 — "Under 110 minutes". A NULL runtime is excluded; the bound is strict."""
     sid = "school_night"
     limit_min = SCHOOL_NIGHT_MAX_MIN[kind]
-    tier_set = await tier_set_of(conn, user_id=ctx.user_id, kind=kind)
-    beta, _fitted = await beta_of(conn, user_id=ctx.user_id, kind=kind)
+    beta, tier_set = ctx.beta(kind), ctx.tier_set(kind)
     rows = await conn.fetch(
         CARD_SELECT + CARD_FROM + """
          WHERE t.kind = $2 AND t.is_owned AND t.runtime_min IS NOT NULL AND t.runtime_min < $4
@@ -778,8 +758,7 @@ async def new_in_library(
     Requires no crowd rating at all (`item_n` 0): cold-masked rows are crowd-rated. Not claimed.
     """
     sid = "new_in_library"
-    tier_set = await tier_set_of(conn, user_id=ctx.user_id, kind=kind)
-    beta, _fitted = await beta_of(conn, user_id=ctx.user_id, kind=kind)
+    beta, tier_set = ctx.beta(kind), ctx.tier_set(kind)
     rows = await conn.fetch(
         CARD_SELECT + CARD_FROM + """
          WHERE t.kind = $2 AND t.is_owned AND t.placement = 'cold_tower'
@@ -917,6 +896,8 @@ async def build_home(
         bundle_version=bundle_version,
         version=await why_mod.vocabulary_version(conn),
         kinds=tuple(chosen),
+        tier_sets={k: await tier_set_of(conn, user_id=user.id, kind=k) for k in chosen},
+        betas={k: await _beta(conn, user_id=user.id, kind=k) for k in chosen},
     )
     verdicts = await live_verdict_count(conn, user_id=user.id)
     avoided = await taste.avoided_for(conn, user_id=user.id, version=ctx.version)
@@ -942,6 +923,11 @@ async def build_home(
         # Decision 512's avoid set, ungated: facts about their own ratings.
         "avoiding": avoided.as_dict() if avoided else None,
     }
+
+
+async def _beta(conn: asyncpg.Connection, *, user_id: int, kind: str) -> float:
+    fit = await serve.fit_row(conn, user_id=user_id, kind=kind)
+    return float(fit["blend_beta"]) if fit and fit["blend_beta"] is not None else 0.0
 
 
 def _degraded(bundle_version: str | None, verdicts: int) -> dict[str, Any] | None:

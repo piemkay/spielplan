@@ -89,6 +89,19 @@ async def _placement_pairs(
     }
 
 
+def latest_tier_edit_sql(user: str = "$1") -> str:
+    """The person's latest drop per title (`title_id, tier, n_levels`); `user` is their placeholder.
+
+    One pass over their own `tier_edit` rows: a correlated subquery would re-run per board row.
+    """
+    return f"""
+    SELECT DISTINCT ON (title_id) title_id, tier, n_levels
+      FROM tier_edit
+     WHERE user_id = {user}
+     ORDER BY title_id, created_at DESC, id DESC
+"""
+
+
 # The person's CURRENT label on each title, `$1` = user id. Newest non-re-ask row, NOT
 # `superseded_by IS NULL`: a re-ask supersedes the original, so that predicate would drop the title.
 LIVE_LABEL_SQL = """
@@ -814,6 +827,7 @@ __all__ = [
     "UndoRefused",
     "Write",
     "kind_of",
+    "latest_tier_edit_sql",
     "load_observations",
     "record_duel",
     "record_not_seen",
