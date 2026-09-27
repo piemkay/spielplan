@@ -14986,7 +14986,8 @@ criteria stand and are measured by the regular test suites and the household's o
 filter (453), a `paid` lease filter (322, 348), declared host policies and a Wikidata override
 (340), M6 feed writers (344), placeholder rail kinds (189, 263), run-less worker rows (387, 463),
 serving constants as bundle keys (235 step 34, 242 items 3-5), a blend-ratio measurement (236), a
-self-hosted real-bundle job (183) and a restart between e2e phases (497).
+self-hosted real-bundle job (183), a restart between e2e phases (497) and §4.1's mirror of five
+bundle tables nothing reads (375 derives one of them).
 
 **Why it changes.** On 2026-09-27 the owner approved batch A of the simplification plan: changes no
 member or operator meets. Each clause below kept code that nothing read or that never ran.
@@ -15007,6 +15008,9 @@ member or operator meets. Each clause below kept code that nothing read or that 
   refusal carries the caller's title.
 - 236's `blend_ratios` and its test (503 answered its question), and the write-only
   `ledger_state.straddle`, dropped by migration 0038.
+- §4.1's `title_language` (and 375's derive of it), `rating_title_map`, `watchlist` and the list
+  registry (`title_list`, `title_list_membership`): the importer reports the bundle's copies as
+  skipped, the movie-data archive names them in `RETIRED`, and migration 0039 drops the tables.
 - 235 step 34 and 242 items 3-5: `gate_k`, `warm_gate`, `blend_beta_max`, the β and λ grids, the
   noise floor and the two CV thresholds are module constants. The margin flag and form are
   recognised but fixed: only true and margin/mean(margin).
@@ -15036,8 +15040,8 @@ Descriptive wording now stale and left as dated: 238 and 469 (`placement_counts`
 367 (`ANONYMOUS` is a dict of route to reason, and the webhook is named in `TOKEN_AUTHED`), 485 (the
 gate pair is followed by `test_route_inventory.py` and `test_api_gating.py`) and 433
 (`ADMIN_ROUTE_COUNT` gives way to the /api/admin namespace rule); as provenance, proposals 150 (the
-banner's route is checked by the server alone) and 22 (the greeting reads the device clock). §4.3,
-§5.2, §6.7, §8 and §12's M5.7 row are amended in place (v2.1.8).
+banner's route is checked by the server alone) and 22 (the greeting reads the device clock). §4.1,
+§4.3, §5.2, §6.7, §8 and §12's M5.7 row are amended in place (v2.1.8).
 
 ## §6.2 — Tonight, rewritten (owner decision, 2026-08-29)
 
