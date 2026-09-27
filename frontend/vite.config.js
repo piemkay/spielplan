@@ -8,6 +8,7 @@ export default {
   // Vitest would otherwise resolve svelte's SSR build, where mount() throws; the prerender at
   // build time still needs the server condition.
   resolve: VITEST ? { conditions: ['browser'] } : undefined,
+  test: { setupFiles: ['src/vitest.setup.js'] },
   server: {
     proxy: {
       '/api': { target: API_ORIGIN ?? 'http://127.0.0.1:8080', changeOrigin: true }

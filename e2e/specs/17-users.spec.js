@@ -126,7 +126,7 @@ test.describe('users, roles and the account surface', () => {
     // §3.1: "the account is locked to a password change at first login".
     await expect(memberPage.getByRole('heading', { name: 'Choose a password' })).toBeVisible();
     // `exact`: the page's prose names the one-time password too.
-    await expect(memberPage.getByText('ONE-TIME PASSWORD', { exact: true })).toBeVisible();
+    await expect(memberPage.getByText('One-time password', { exact: true })).toBeVisible();
     const fields = memberPage.locator('input[type=password]');
     await fields.nth(0).fill(third.otp);
     await fields.nth(1).fill(third.password);
@@ -278,7 +278,7 @@ test.describe('users, roles and the account surface', () => {
     for (const [method, url, data] of attempts) {
       const refused = await admin.request.fetch(url, { method, data, failOnStatusCode: false });
       expect(refused.status(), `${method} ${url}`).toBe(409);
-      expect((await refused.json()).detail).toContain('the last active admin cannot be');
+      expect((await refused.json()).detail).toContain("The last active admin can't be");
     }
 
     const roster = await (await admin.request.get('/api/admin/users')).json();

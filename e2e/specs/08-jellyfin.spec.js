@@ -248,7 +248,7 @@ test.describe('jellyfin', () => {
     await expect(page.getByTestId('finish-prompt-cta')).toHaveCount(0);
     // Decision 210(a): un-marking a series is app-only, and the surface says so.
     await expect(handoff).toContainText(
-      'Saved here only - Jellyfin keeps its own episode history.'
+      'Saved here only — Jellyfin keeps its own episode history.'
     );
 
     const state = await (await page.request.get(`/api/titles/${titleId}/state`)).json();

@@ -32,7 +32,9 @@ test.describe('first boot', () => {
 
     await page.goto('/');
     await expect(page).toHaveURL(/\/setup$/);
-    await expect(page.getByText('first boot · a bundle-less app is a legal state')).toBeVisible();
+    await expect(
+      page.getByText('Everything after the admin account can be done later in Admin.')
+    ).toBeVisible();
   });
 
   test('the first step warns that PUBLIC_URL is load-bearing for passkeys', async () => {

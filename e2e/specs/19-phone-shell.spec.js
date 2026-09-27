@@ -100,7 +100,7 @@ test('no form control on the member path zooms on focus', async ({ page, context
   expect(await controlsThatWouldZoom(page), 'on / (Home)').toEqual([]);
 
   await page.goto('/account');
-  await expect(page.getByRole('heading', { name: 'Account', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'You', exact: true })).toBeVisible();
   expect(await controlsThatWouldZoom(page), 'on /account').toEqual([]);
 
   await page.goto('/rank');
@@ -313,6 +313,7 @@ test('a 401 returns the member to the sign-in page', async ({ page, context }) =
     await page.goto('/account');
     const card = page.getByTestId('pin-card');
     await expect(card).toBeVisible();
+    await card.locator('summary').click();
     await card.locator('input[autocomplete="current-password"]').fill('not-the-password');
     await card.locator('input[inputmode="numeric"]').fill('1234');
     await card.getByRole('button', { name: 'Save PIN' }).click();

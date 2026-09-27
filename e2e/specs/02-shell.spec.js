@@ -73,13 +73,13 @@ test('You states the role and the auth method', async ({ page }) => {
 test('the account page speaks plainly and folds what a member need not act on', async ({ page }) => {
   // Decision 518: the same controls and facts, in a member's words.
   await page.goto('/account');
-  await expect(page.getByRole('heading', { name: 'Account' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'You', exact: true })).toBeVisible();
   const body = (await page.locator('main').textContent()) ?? '';
   for (const word of ['WebAuthn', 'Switch PIN', 'switch PIN', 'Tier set']) {
     expect(body, `the account page says "${word}"`).not.toContain(word);
   }
-  await expect(page.getByRole('heading', { name: 'PIN for switching profiles' })).toBeVisible();
-  await expect(page.getByRole('heading', { name: 'Rank letters' })).toBeVisible();
+  await expect(page.getByTestId('pin-card')).toContainText('PIN for switching profiles');
+  await expect(page.getByTestId('tier-set-edit').locator('summary')).toContainText('Rank letters');
   await expect(page.getByTestId('tier-set-current')).toBeVisible();
   await expect(page.getByTestId('tier-set-input')).toBeHidden();
   await expect(page.getByTestId('data-sources')).toBeHidden();
@@ -156,7 +156,7 @@ test("an unknown address renders the app's own error card, not the framework's p
   await page.goto('/not-a-surface');
   const card = page.getByTestId('app-error');
   await expect(card).toBeVisible();
-  await expect(card, 'the card does not say what happened').toContainText('ERROR 404');
+  await expect(card, 'the card does not say what happened').toContainText('Error 404');
   await expect(
     card.getByRole('link', { name: 'Home' }),
     'the error page offers no way back into the shell'

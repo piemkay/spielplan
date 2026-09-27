@@ -58,7 +58,7 @@
 <main class="calm">
   <div class="column">
     <header class="brand">
-      <h1 class="wordmark">Spiel<em>plan</em></h1>
+      <h1 class="wordmark"><span class="sr-only">Sign in to </span>Spiel<em>plan</em></h1>
       <p class="tagline">What to watch tonight, for everyone at home.</p>
     </header>
 

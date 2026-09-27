@@ -472,7 +472,7 @@ test.describe('rate', () => {
 
     const toggle = page.getByTestId('rate-decisive');
     await expect(toggle).toHaveAttribute('aria-checked', 'false');
-    await expect(toggle).toContainText('Clear favourite');
+    await expect(toggle).toHaveAccessibleName('Clear favourite');
     await toggle.click();
     await expect(toggle).toHaveAttribute('aria-checked', 'true');
     await expect(page.getByTestId('rate-decisive-why')).toContainText('resets for the next pair');

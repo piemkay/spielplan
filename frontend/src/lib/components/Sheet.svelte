@@ -3,7 +3,7 @@
   // Escape, the close button and a downward swipe. On a desktop it is a centred panel.
   import { onDestroy, tick } from 'svelte';
   import { pushState } from '$app/navigation';
-  import { page } from '$app/stores';
+  import { page } from '$app/state';
 
   let {
     open = false,
@@ -23,16 +23,16 @@
   let dragFrom = null;
   let dragging = false;
   let opener = null;
-  // The pushed entry reaches `$page.state` a tick after the push; only an entry seen can be popped.
+  // The pushed entry reaches `page.state` a tick after the push; only an entry seen can be popped.
   let entered = false;
 
-  const stack = $derived($page.state?.sheets ?? []);
+  const stack = $derived(page.state?.sheets ?? []);
 
   $effect(() => {
     if (!open || pushed) return;
     pushed = true;
     opener = document.activeElement;
-    pushState('', { ...$page.state, sheets: [...stack, key] });
+    pushState('', { ...page.state, sheets: [...stack, key] });
     document.documentElement.style.overflow = 'hidden';
     tick().then(() => panel?.focus({ preventScroll: true }));
   });

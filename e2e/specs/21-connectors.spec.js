@@ -155,7 +155,7 @@ async function underTheFloor(page) {
   const controls = page
     .locator('main')
     .locator(
-      'button, select, input:not([type=checkbox]):not([type=radio]):not([type=hidden]), label.check'
+      'button:not(.switch), select, input:not([type=checkbox]):not([type=radio]):not([type=hidden]), label.check'
     );
   const short = [];
   const count = await controls.count();
