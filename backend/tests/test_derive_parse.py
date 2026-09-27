@@ -135,9 +135,6 @@ def test_omdb_relays_three_other_platforms_scores_and_files_them_under_their_own
         "`imdbVotes` is '852,057' and belongs to the IMDb row alone"
     )
     assert omdb.source == "omdb"
-    assert omdb.row_sources == {"omdb", "imdb", "rottentomatoes", "metacritic"}, (
-        "the derive's replace scope is the row sources and not the document's source"
-    )
 
 
 def test_omdbs_prose_fields_become_columns_again(omdb):

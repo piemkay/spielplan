@@ -29,8 +29,7 @@ TABLES: tuple[str, ...] = (
 class ParsedTitle:
     """What one raw document says, as rows, before anything has touched the database.
 
-    `source` is the document's; rows may be filed under others (OMDb relays IMDb/RT/MC scores), so
-    the derive scopes its delete by `row_sources`.
+    `source` is the document's; rows may be filed under others (OMDb relays IMDb/RT/MC scores).
     """
 
     source: str
@@ -45,13 +44,6 @@ class ParsedTitle:
         """The `title_meta` payload this document produced, or None; at most one per document."""
         rows = self.table("title_meta")
         return rows[0] if rows else None
-
-    @property
-    def row_sources(self) -> frozenset[str]:
-        """Every `source` value appearing on a row, which is the derive's real delete scope."""
-        return frozenset(
-            str(row["source"]) for table in self.rows.values() for row in table if "source" in row
-        )
 
 
 class _Rows:

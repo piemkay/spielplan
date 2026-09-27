@@ -615,12 +615,9 @@ async def test_a_title_whose_required_document_never_arrived_derives_what_it_has
 
     report = await rebuild.derive_title(db, ARRIVAL)
 
-    assert report.required_missing
+    assert "tmdb:movie_detail" not in report.documents
     assert report.rows["credit"] and report.rows["review"]
     assert "tmdb" not in report.sources
-    # The control: with the document present the same property reads the other way.
-    await _document(db, "tmdb", "movie_detail", "tmdb_movie_detail.json", key=ARRIVAL_KEY)
-    assert not (await rebuild.derive_title(db, ARRIVAL)).required_missing
 
 
 async def test_a_document_no_parser_claims_is_skipped_and_its_bytes_are_never_read(db, raw_root):
@@ -667,7 +664,7 @@ async def test_a_title_with_no_documents_at_all_derives_nothing_and_does_not_rai
 
     report = await rebuild.derive_title(db, SPARSE)
 
-    assert report.documents == () and report.rows == {} and report.required_missing
+    assert report.documents == () and report.rows == {}
     assert await db.fetchval("SELECT count(*) FROM title_meta WHERE title_id = $1", SPARSE) == 0
 
 

@@ -140,11 +140,6 @@ class DeriveReport:
     adjudications: Mapping[str, int] = field(default_factory=dict)
     corrections: Mapping[str, int] = field(default_factory=dict)
 
-    @property
-    def required_missing(self) -> bool:
-        """No `tmdb:detail` document (decision 334). A fact, not a verdict: the derive continues."""
-        return not (REQUIRED_DOCUMENTS & set(self.documents))
-
 
 def _values(tmap: TableMap, row: Mapping[str, Any], title_id: int) -> tuple:
     """One parsed row as `tmap.pg_columns`-ordered values, through the importer's own coercions.

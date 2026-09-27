@@ -22,8 +22,6 @@ if TYPE_CHECKING:
 
 log = logging.getLogger("spielplan.llm.contract")
 
-PROMPT_VERSION = "dna-v1"
-
 # Salience bounds are a request only: OpenAI's strict copy strips them, `verify_payload` enforces.
 EXTRACTION_SCHEMA: dict[str, Any] = {
     "type": "object",
