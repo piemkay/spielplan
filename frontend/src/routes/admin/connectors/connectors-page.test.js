@@ -37,7 +37,6 @@ const cfg = (over = {}) => ({
   has_api_key: true,
   configured: true,
   library_ids: [],
-  linked_users: 2,
   secrets_unreadable: false,
   server_version: '10.9.11',
   server_supported: true,

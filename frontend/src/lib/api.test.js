@@ -422,16 +422,14 @@ describe('api', () => {
     expect(seen).toEqual([]);
   });
 
-  it('signs a member out when one of the setup routes that CAN 401 does', async () => {
-    // Only these two setup routes can 401, and a member reaches the first from /account.
+  it('signs a member out when the one setup route that CAN 401 does', async () => {
+    // A member reaches it from /account.
     const seen = [];
     onUnauthenticated((reason) => seen.push(reason));
     session.user = SIGNED_IN;
-    for (const path of ['/setup/onboarding/complete', '/setup/connectors']) {
-      fetchMock.mockReturnValue(respond(401, { detail: 'not signed in' }, false));
-      await api(path, { method: 'POST', body: {} }).catch(() => {});
-    }
-    expect(seen).toEqual(['signed-out', 'signed-out']);
+    fetchMock.mockReturnValue(respond(401, { detail: 'not signed in' }, false));
+    await api('/setup/onboarding/complete', { method: 'POST', body: {} }).catch(() => {});
+    expect(seen).toEqual(['signed-out']);
   });
 
   it('leaves the three routes that answer 401 for a mistyped current password alone', async () => {
