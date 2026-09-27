@@ -1,5 +1,6 @@
-"""First-boot wizard (§3.1): admin, then the same bundle importer §6.6 uses. Connectors are set, and
-their step recorded, at §6.6's Connectors card; accounts at its Users card (decision 164).
+"""First-boot wizard (§3.1): admin, then the same bundle importer §6.6 uses. Connectors are set at
+§6.6's Connectors card, but only the env seed at boot marks their step done; accounts are made at
+its Users card (decision 164).
 """
 
 from __future__ import annotations
