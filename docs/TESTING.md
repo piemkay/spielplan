@@ -45,7 +45,8 @@ each. `make_bundle(dir, pool_titles=N)` adds generated owned movies when a test 
 ## Real bundle
 
 Two tests compare a real corpus bundle against the committed shape manifest
-(`tests/fixtures/real_bundle_shapes.json`). They skip unless `CORPUS_BUNDLE_DIR` points at one:
+(`tests/fixtures/real_bundle_shapes.json`). They skip unless `CORPUS_BUNDLE_DIR` points at one, so
+run them by hand on each export:
 
 ```bash
 CORPUS_BUNDLE_DIR=/path/to/bundle python -m pytest backend/tests/test_bundle_shapes.py \
@@ -56,8 +57,7 @@ CORPUS_BUNDLE_DIR=/path/to/bundle python -m pytest backend/tests/test_bundle_sha
 
 `test_restore_drill.py` drives `pg_restore` against a real Postgres. A
 drill on a real stack follows README's Restore section with a dump this build's worker wrote,
-because a dump restores only into the image that wrote it. `.github/workflows/release.yml` runs
-that drill at stack level on the self-hosted corpus runner.
+because a dump restores only into the image that wrote it.
 
 ## Frontend
 
@@ -75,12 +75,10 @@ npm --prefix e2e run install-browsers
 node e2e/run.mjs                    # = npm --prefix e2e run fresh
 ```
 
-See [`e2e/README.md`](../e2e/README.md). The runner's two phases are load-bearing; plain
-`playwright test` against a used stack skips the first-boot and bundle specs and reports green.
+See [`e2e/README.md`](../e2e/README.md). The runner resets the stack first: plain
+`playwright test` against a used stack skips the first-boot spec that imports the bundle.
 
 ## CI
 
 `.github/workflows/ci.yml` runs on every push: ruff, the backend suite against Postgres (`-n 4`),
 the frontend tests, check and build, and the e2e suite against the compose stack.
-`real-bundle.yml` and `release.yml` run on a self-hosted runner labelled `spielplan-corpus` that
-holds the corpus bundle (decision 183); until one is registered they queue and are cancelled.
