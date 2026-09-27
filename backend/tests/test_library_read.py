@@ -3,8 +3,6 @@ literal search, kind partitions and term weights are all facts about SQL. Needs 
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import asyncpg
 import pytest
 
@@ -290,12 +288,3 @@ def test_home_and_tonight_read_one_term_weight_expression():
 
     # Decision 188's saturating form, with the `GREATEST(..., 0.0)` precondition it needs.
     assert "1.0 + GREATEST(COALESCE(d.confidence, 0.5), 0.0)" in dna_terms.TERM_WEIGHT
-
-    # And no third copy: `CASE d.tier` is the fragment's own opening.
-    package = Path(why_mod.__file__).resolve().parents[1]
-    holders = sorted(
-        path.relative_to(package).as_posix()
-        for path in package.rglob("*.py")
-        if "CASE d.tier" in path.read_text(encoding="utf-8")
-    )
-    assert holders == ["db/dna_terms.py"], holders

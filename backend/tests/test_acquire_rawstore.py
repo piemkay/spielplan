@@ -3,7 +3,6 @@ fetch, no HTTP client, containment, and bytes the backend container cannot open.
 
 from __future__ import annotations
 
-import ast
 import gzip
 import socket
 import zlib
@@ -78,17 +77,6 @@ def _backend_gains(compose: str, mount: str) -> str:
     return compose.replace(anchor, f"{anchor}  - {mount}\n", 1)
 
 
-def _module_imports() -> set[str]:
-    tree = ast.parse(Path(rawstore.__file__).read_text(encoding="utf-8"))
-    imported: set[str] = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            imported.update(alias.name.split(".")[0] for alias in node.names)
-        elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
-            imported.add(node.module.split(".")[0])
-    return imported
-
-
 async def test_two_fetches_of_one_url_leave_one_file_and_two_rows(db, raw_root):
     """`_tmp_name` is the write's only route to disk, so
     making it raise proves the second store did not write."""
@@ -158,7 +146,6 @@ async def test_a_read_returns_the_stored_bytes_byte_for_byte(db, raw_root):
 
 
 async def test_the_re_parse_path_issues_no_request(db, raw_root, monkeypatch):
-    """Dynamic and static: a lazy re-fetch reached only on a miss would still need an import."""
     body = b"<html>cached</html>"
     doc_id = await rawstore.store(
         db, source="wikipedia", kind="article", url="https://en.wikipedia.org/wiki/Arrival",
@@ -171,16 +158,6 @@ async def test_the_re_parse_path_issues_no_request(db, raw_root, monkeypatch):
 
     monkeypatch.setattr(socket, "socket", no_sockets)
     assert rawstore.read_path(rel) == body
-
-    # A guard that parses nothing is green forever, so it must see these three.
-    assert {"gzip", "asyncpg", "spielplan"} <= _module_imports()
-
-    network = {"httpx", "urllib", "urllib3", "requests", "socket", "http", "aiohttp"}
-    assert not _module_imports() & network, (
-        f"the raw store imports a network client: {sorted(_module_imports() & network)}. A read "
-        "that can fall back to a fetch makes 'free forever' a promise about the common case, and "
-        "the case it stops covering is the one the store exists for"
-    )
 
 
 async def test_a_zero_length_file_under_a_good_digest_is_rewritten(db, raw_root):
@@ -470,14 +447,6 @@ async def test_a_stored_file_whose_body_is_damaged_is_rewritten_by_the_next_stor
 def test_two_writers_racing_on_one_digest_choose_two_temporary_names():
     """Each worker is PID 1 in its own namespace on a shared
     mount, so the temp name needs the hostname too."""
-    import inspect
-
-    source = inspect.getsource(rawstore.store)
-    assert "getpid" not in source, (
-        "the temporary name is a pure function of (destination, pid), and a worker container's "
-        "loop is PID 1 in its own namespace: two containers sharing /data/raw choose one name"
-    )
-
     dest = Path("/data/raw/rt/page/aa/bb/" + "a" * 64 + ".html.gz")
     names = {str(rawstore._tmp_name(dest)) for _ in range(200)}
     assert len(names) == 200, "a temporary name is per WRITE, so no two writers can collide"

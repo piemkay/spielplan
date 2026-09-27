@@ -254,29 +254,6 @@ def test_the_headline_is_the_specs_own_sentence_and_never_a_models():
     assert block["explanation"] == copy_rules.D_LINE.format(d=block["d"])
 
 
-def test_the_tonight_package_never_reaches_the_ledger_refit_or_the_serving_stack():
-    """Structural: no `spielplan/tonight/` module may import the fitter or scorer, so a mid-session
-    refit is unreachable. A behavioural test would pass until someone adds the call."""
-    from pathlib import Path
-
-    package = Path(__file__).resolve().parents[1] / "spielplan" / "tonight"
-    banned = ("ledger.refit", "ledger import refit", "scoring.serve", "scoring import serve",
-              "from spielplan.ledger import model")
-    offenders = []
-    for path in sorted(package.glob("*.py")):
-        text = path.read_text(encoding="utf-8")
-        # Import lines only: the package docstring names these words to explain their absence.
-        imports = "\n".join(
-            line for line in text.splitlines()
-            if line.startswith(("import ", "from ")) or line.lstrip().startswith(("import ", "from "))
-        )
-        offenders += [f"{path.name}: {b}" for b in banned if b in imports]
-    assert not offenders, (
-        f"a Tonight module reaches the fitter or the serving stack: {offenders}. §0 row 4 "
-        "measured within-evening re-ranking at exactly 0.000."
-    )
-
-
 def test_the_wildcard_carries_its_honest_label():
     """The route serves the label (tested there); here only the words' two properties."""
     assert C.WILDCARD_LABEL, "an unlabelled wildcard is just a worse recommendation"

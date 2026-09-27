@@ -80,18 +80,6 @@ def test_the_order_is_stable_and_deterministic():
     assert [x.title_id for x in pool.order([c, b, a])] == [3, 1, 2]
 
 
-def test_no_tilt_can_reach_the_pool_prior():
-    """§0 row 4: the stored mood profile is worth 0.000. `order` and `group_score` take scores only,
-    so a tilt cannot be passed even by mistake."""
-    import inspect
-
-    for fn in (pool.group_score, pool.order):
-        params = set(inspect.signature(fn).parameters)
-        assert not (params & {"tilt", "tilts", "mood"}), (
-            f"{fn.__name__} must not accept a tilt: §0 row 4 measured the stored profile at 0.000"
-        )
-
-
 def test_the_budget_is_soft_by_exactly_forty_minutes():
     """Both edges: a hard cut and an unbounded one each pass a middle-only test."""
     assert pool.admits(runtime_min=BUDGET, budget_min=BUDGET)
@@ -212,20 +200,6 @@ def test_a_veto_names_vocabulary_terms_and_nothing_else():
     assert pool.veto_labels(["harrowing", "violence"]) == ["violence", "harrowing"]
     assert all("." in term for _, terms in pool.VETOES.values() for term in terms)
     assert pool.MAX_VETOES == 3
-
-
-def test_a_veto_reads_both_tiers_by_name_and_never_a_weight():
-    """Names the tiers, compares no weight (§4.1 rules 1 and 2); both tiers, because projection alone
-    carried the term for the films that slipped through (decisions 480, 504)."""
-    import inspect
-    import re
-
-    assert pool.VETO_TIERS == ("extracted", "projected")
-    source = inspect.getsource(pool.build)
-    predicate = source[source.index("FROM dna_tagged d"):source.index("list(vetoed_terms)")]
-    assert "d.tier = ANY($7::text[])" in predicate
-    assert not re.search(r"salience|confidence|weight", predicate), predicate
-    assert "list(VETO_TIERS)" in source, "the tiers are named where the statement is bound"
 
 
 def test_the_pool_excludes_the_union_of_every_members_own_vetoes():

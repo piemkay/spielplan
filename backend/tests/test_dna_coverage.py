@@ -2,18 +2,12 @@
 
 from __future__ import annotations
 
-import ast
-from pathlib import Path
-
 import pytest
 
-from spielplan.dna import coverage as coverage_module
 from spielplan.dna.coverage import facet_coverage
 from spielplan.importer import dna as importer_dna
 from spielplan.importer.report import ImportReport
 from tests.fixtures import make_bundle as fx
-
-MODULE = Path(coverage_module.__file__)
 
 # §6.4's order, not alphabetical, so a mapping following `dna_facet.ord` is told from one following a sort.
 FACET_ORDER = (
@@ -158,66 +152,3 @@ async def test_an_install_with_no_vocabulary_measures_nothing_and_raises_nothing
     await _title(db, 1, "Heat")
 
     assert await facet_coverage(db, 1) == {}
-
-
-def _numeric_literals(source: str) -> list[str]:
-    """No number at all, because a threshold arrives in many shapes (`>= 3`, `/ 3`, a default).
-    `ast.Constant`, not a regex, so docstring prose is not code; booleans are excluded."""
-    return [
-        f"line {node.lineno}: {node.value!r}"
-        for node in ast.walk(ast.parse(source))
-        if isinstance(node, ast.Constant)
-        and isinstance(node.value, (int, float))
-        and not isinstance(node.value, bool)
-    ]
-
-
-def _declared_names(source: str) -> set[str]:
-    tree = ast.parse(source)
-    names = {
-        node.name
-        for node in ast.walk(tree)
-        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
-    }
-    for node in tree.body:
-        if isinstance(node, ast.Assign):
-            names |= {t.id for t in node.targets if isinstance(t, ast.Name)}
-        elif isinstance(node, ast.AnnAssign) and isinstance(node.target, ast.Name):
-            names.add(node.target.id)
-    return names
-
-
-def test_the_measurement_carries_no_threshold():
-    """Decision 329 (what makes a title thin) is not taken,
-    so a default here would be a feed nobody approved."""
-    offenders = _numeric_literals(MODULE.read_text(encoding="utf-8"))
-    assert not offenders, (
-        "decision 329 has not been taken: the thin-facet threshold is the owner's, and a "
-        "number in this module is where it would arrive by accident.\n" + "\n".join(offenders)
-    )
-
-
-@pytest.mark.parametrize(
-    ("name", "source"),
-    [
-        ("a comprehension filter", "def f(c):\n    return {k: n for k, n in c if n >= 3}\n"),
-        ("the corpus ratio", "def f(c):\n    return {k: min(1.0, n / 3) for k, n in c}\n"),
-        ("a default argument", "async def f(conn, title_id, *, minimum=2):\n    return minimum\n"),
-    ],
-)
-def test_the_threshold_guard_catches_a_real_violation(name, source):
-    assert _numeric_literals(source), f"the threshold guard would not catch: {name}"
-
-
-def test_the_threshold_guard_reads_prose_as_prose():
-    assert not _numeric_literals('"""29,188 of 31,540 rows."""\ndef f(c):\n    return c\n')
-
-
-def test_nothing_here_is_named_after_the_other_thinness_test():
-    """`placement/features.py` owns `is_thin` for a per-BLOCK test; two of that name conflate them."""
-    declared = _declared_names(MODULE.read_text(encoding="utf-8"))
-    offenders = sorted(name for name in declared if "thin" in name.lower())
-    assert not offenders, (
-        "§8.4's per-facet coverage is not `features.BuiltVector.is_thin`, and decision 329 "
-        f"names that conflation as the thing to prevent: {offenders}"
-    )

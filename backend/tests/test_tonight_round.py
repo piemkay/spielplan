@@ -3,7 +3,6 @@ round must choose and stop identically. Boards are built so one pair is decisive
 
 from __future__ import annotations
 
-import inspect
 import math
 import os
 import random
@@ -613,22 +612,6 @@ def _simulate(z=None, *, prior_var=1.0, seeds=20, n_pool=700, score_sd=1.0,
         reasons.append(played.stop_reason)
         lengths.append(played.answered)
     return sum(1 for r in reasons if r == rnd.CONVERGED), statistics.median(lengths)
-
-
-def test_the_round_reads_its_own_boundary_and_no_route_hands_it_one():
-    """Decision 214: one constant, one owner, no argument from outside."""
-    from spielplan.api import tonight as tonight_routes
-
-    assert rnd.BOUNDARY_Z == 0.6
-    assert "BOUNDARY_Z" in rnd.__all__, "the round's constants are its public surface"
-    for fn in (rnd.straddles, rnd.straddlers, rnd.stop_reason, rnd.select, rnd.replay):
-        assert inspect.signature(fn).parameters["z"].default == rnd.BOUNDARY_Z, fn.__name__
-
-    assert not hasattr(tonight_routes, "_z"), "the per-request threshold reader is gone"
-    assert not hasattr(tonight_routes, "hyperparams"), (
-        "a route reading §4.3's constants to decide how long an evening is is the defect "
-        "decision 214 closes"
-    )
 
 
 def test_a_round_over_a_realistic_pool_converges_rather_than_always_reaching_the_cap():

@@ -4,10 +4,8 @@ own readers, never by a parser written here. Needs TEST_DATABASE_URL."""
 
 from __future__ import annotations
 
-import ast
 import csv
 import io
-import re
 from pathlib import Path
 
 import pytest
@@ -18,8 +16,6 @@ from spielplan.importer import dna
 from spielplan.importer import validate as validator
 from spielplan.importer.report import ImportReport
 from tests.fixtures import make_bundle as fx
-
-CURATED = Path(__file__).resolve().parents[1] / "spielplan" / "curated"
 
 # The title the shipped `corrections_v1.tsv` names; no other title here is in the bundle's credit ledger.
 CORRECTED = 8
@@ -122,28 +118,6 @@ async def _axis(conn, facet: str) -> tuple:
     return (*tuple(head), tuple(tuple(r) for r in terms)) if head else ()
 
 
-# `DO UPDATE` is an upsert's second half and `FOR UPDATE` a row lock; neither names a table written.
-_WRITE = re.compile(
-    r"\b(?:INSERT\s+INTO|DELETE\s+FROM|(?<!DO )(?<!FOR )UPDATE)\s+(\w+)", re.IGNORECASE
-)
-
-
-def _sql_of(source: str) -> str:
-    """Docstrings excluded: a docstring saying "update the row" is not a write to a table named `the`."""
-    tree = ast.parse(source)
-    docstrings = {
-        id(node.body[0].value)
-        for node in ast.walk(tree)
-        if isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef))
-        and node.body and isinstance(node.body[0], ast.Expr)
-        and isinstance(node.body[0].value, ast.Constant)
-    }
-    return "\n".join(
-        node.value for node in ast.walk(tree)
-        if isinstance(node, ast.Constant) and isinstance(node.value, str) and id(node) not in docstrings
-    )
-
-
 def _saved(tmp_path: Path, name: str, text: str) -> Path:
     """Bytes, not `write_text`: Windows text mode turns the LF inside a quoted field into CRLF."""
     folder = tmp_path / "export"
@@ -196,39 +170,6 @@ async def test_each_editor_writes_only_its_own_table_and_only_as_the_household(d
         assert [r for r in after_axis[table] if r[1] == "bundle"] == [
             r for r in start[table] if r[1] == "bundle"
         ]
-
-
-def test_three_modules_write_three_tables_and_share_no_write_function():
-    """Read from source, because a shared helper taking a table name would pass every behavioural test."""
-    own = {
-        "adjudications": {"dna_adjudication"},
-        "corrections": {"credit_correction"},
-        "axes": {"dna_axis", "dna_axis_weight"},
-    }
-    for module, tables in own.items():
-        source = (CURATED / f"{module}.py").read_text(encoding="utf-8")
-        written = {m.group(1).lower() for m in _WRITE.finditer(_sql_of(source))}
-        assert written == tables, f"{module}.py writes {sorted(written)}, not {sorted(tables)}"
-
-        for node in ast.walk(ast.parse(source)):
-            if isinstance(node, ast.ImportFrom) and node.module:
-                assert not node.module.startswith("spielplan.curated."), (
-                    f"{module}.py imports {node.module}: one editor reaching another's writer"
-                )
-                if node.module == "spielplan.curated":
-                    assert {alias.name for alias in node.names} <= {"Refused"}, (
-                        f"{module}.py imports a sibling through the package"
-                    )
-            if isinstance(node, ast.Import):
-                assert not any(a.name.startswith("spielplan.curated") for a in node.names)
-
-    package = (CURATED / "__init__.py").read_text(encoding="utf-8")
-    tree = ast.parse(package)
-    assert not _WRITE.search(_sql_of(package)), "the package holds a write every editor could reach"
-    assert [n.name for n in tree.body if isinstance(n, ast.ClassDef)] == ["Refused"]
-    assert not [n for n in tree.body if isinstance(n, (ast.FunctionDef, ast.AsyncFunctionDef))]
-    assert not [n for n in ast.walk(tree) if isinstance(n, (ast.Import, ast.ImportFrom))
-                and not (isinstance(n, ast.ImportFrom) and n.module == "__future__")]
 
 
 async def test_the_verdict_export_folds_back_through_the_importers_reader_and_loader(

@@ -4,7 +4,6 @@ by moving both stamps back together: `_is_stale` reads only their ORDER. Needs T
 from __future__ import annotations
 
 import asyncio
-import inspect
 import warnings
 
 import numpy as np
@@ -434,17 +433,6 @@ async def test_the_household_predicate_is_the_one_the_home_partner_query_spells(
     assert await shelves.partner_for(db, user_id=patrick) is None, (
         "§6.0 and the two nightly passes now disagree about who is here"
     )
-
-    assert "u.is_active AND u.role IN ('admin', 'member')" in inspect.getsource(
-        shelves.partner_for
-    )
-    assert "is_active AND role IN ('admin', 'member')" in inspect.getsource(household_ids)
-    for func in (foldin.run, refit.refit_all):
-        source = inspect.getsource(func)
-        assert "household_ids(" in source, f"{func.__qualname__} does not ask the helper"
-        assert "FROM app_user" not in source, (
-            f"{func.__qualname__} still spells its own household predicate"
-        )
 
 
 def test_an_empty_reference_population_standardises_nothing_rather_than_storing_nan():

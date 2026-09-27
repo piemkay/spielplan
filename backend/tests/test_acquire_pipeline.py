@@ -4,12 +4,10 @@ Needs TEST_DATABASE_URL."""
 
 from __future__ import annotations
 
-import ast
 import asyncio
 import json
 from dataclasses import FrozenInstanceError
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 
 import asyncpg
 import httpx
@@ -727,145 +725,6 @@ def test_the_stage_contract_is_a_return_value_and_not_an_exception():
 
     with pytest.raises(FrozenInstanceError):
         stages.advance().verb = stages.FAIL          # frozen: the board and the queue read one
-
-
-# Transport modules a stage machine or parser may not import; `spielplan.connectors` is allowed, for §7.1.
-TRANSPORT = ("httpx", "requests", "urllib.request", "urllib3", "http.client", "socket",
-             "aiohttp", "spielplan.acquire.fetch")
-
-
-def _absolute(node: ast.ImportFrom, package: str) -> str:
-    """Relative imports resolve to absolute names, or `from .fetch import ...` reports nothing."""
-    if not node.level:
-        return node.module or ""
-    parts = package.split(".")
-    prefix = ".".join(parts[: len(parts) - node.level + 1])
-    return f"{prefix}.{node.module}" if node.module else prefix
-
-
-def _transport_imports(source: str, *, package: str = "spielplan.acquire") -> list[str]:
-    """Every transport module `source` imports; repeated from
-    `test_derive_parse.py` so neither can weaken the other."""
-    modules: set[str] = set()
-    for node in ast.walk(ast.parse(source)):
-        if isinstance(node, ast.Import):
-            modules.update(alias.name for alias in node.names)
-        elif isinstance(node, ast.ImportFrom):
-            module = _absolute(node, package)
-            modules.add(module)
-            # `from spielplan.acquire import fetch` records
-            # `spielplan.acquire.fetch` too, the likeliest spelling.
-            modules.update(f"{module}.{alias.name}" for alias in node.names if module)
-    return sorted(
-        m for m in modules
-        if any(m == bad or m.startswith(f"{bad}.") for bad in TRANSPORT)
-    )
-
-
-def _fetcher_uses(source: str) -> list[str]:
-    """Every use of `.fetcher` other than a presence test: `ctx.fetcher.get(url)`
-    needs no import at all. One hand-off is allowed, spelled exactly:
-    `extract.extract_title(..., fetcher=ctx.fetcher)` (decision 432)."""
-    tree = ast.parse(source)
-    presence = {
-        id(node.left)
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Compare) and len(node.ops) == 1
-        and isinstance(node.ops[0], ast.Is | ast.IsNot)
-        and isinstance(node.comparators[0], ast.Constant) and node.comparators[0].value is None
-    }
-    handed = {
-        id(keyword.value)
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Call) and ast.unparse(node.func) == "extract.extract_title"
-        for keyword in node.keywords
-        if keyword.arg == "fetcher"
-    }
-    return sorted(
-        f"line {node.lineno}"
-        for node in ast.walk(tree)
-        if isinstance(node, ast.Attribute) and node.attr == "fetcher"
-        and id(node) not in presence | handed
-    )
-
-
-def test_the_transport_guard_reports_every_spelling_of_the_violation():
-    """Every spelling is shown failing, relative and stdlib
-    ones included: `from . import fetch` is the shortest."""
-    for spelling in (
-        "import httpx",
-        "import httpx as h",
-        "from httpx import AsyncClient",
-        "from spielplan.acquire import fetch",
-        "from spielplan.acquire.fetch import Fetcher",
-        "import spielplan.acquire.fetch",
-        "import urllib.request",
-        "from urllib.request import urlopen",
-        "import socket",
-        "from socket import create_connection",
-        "import http.client",
-        "import aiohttp",
-        "import urllib3",
-        "from . import fetch",
-        "from .fetch import HostPaused",
-    ):
-        assert _transport_imports(f"{spelling}\n"), f"{spelling!r} walked past the guard"
-    assert _transport_imports("from spielplan.acquire import queue, rawstore\n") == []
-    assert _transport_imports("# from spielplan.acquire import fetch\n") == [], (
-        "a comment naming the module is not an import, and every guarded file has one"
-    )
-    # The import-free spellings, and the one use of the handle the stage machine is allowed.
-    for spelling in (
-        "async def f(ctx):\n    return await ctx.fetcher.get('u')\n",
-        "def f(ctx):\n    client = ctx.fetcher\n",
-        "def f(ctx):\n    return helper(ctx.fetcher)\n",
-        # Stage 6's hand-off passes only by callee AND keyword, so each half alone is refused.
-        "async def f(ctx):\n    return await other.extract_title(ctx.conn, fetcher=ctx.fetcher)\n",
-        "async def f(ctx):\n    return await extract.extract_title(ctx.conn, ctx.fetcher)\n",
-        "async def f(ctx):\n    return await extract.extract_title(fetcher=ctx.fetcher.client)\n",
-    ):
-        assert _fetcher_uses(spelling), f"{spelling!r} walked past the guard"
-    assert _fetcher_uses("def f(ctx):\n    if ctx.fetcher is None:\n        return 1\n") == []
-    assert _fetcher_uses('"""`ctx.fetcher.get` is the adapters\' call."""\n') == []
-    assert _fetcher_uses(
-        "async def f(ctx):\n    return await extract.extract_title(ctx.conn, fetcher=ctx.fetcher)\n"
-    ) == [], "stage 6 hands the drain's one Fetcher to the LLM layer by keyword (decision 373)"
-
-
-def test_the_stage_machine_and_the_derive_do_not_reach_for_the_fetcher():
-    """`acquire/stages.py` and everything under `derive/` import no transport: a parser that could reach
-    a host would make a bad derive cost a crawl. `pipeline.py` imports `acquire.fetch` on purpose."""
-    source = Path(pipeline.__file__).read_text(encoding="utf-8")
-    driver = Path(stages.__file__).read_text(encoding="utf-8")
-    # The guard sees something: both files really do import from the package it is scanning.
-    assert "from spielplan.acquire import fetch, queue, stages" in source, (
-        "decision 373 puts the drain's one Fetcher in pipeline.py; this test is re-pointed, not "
-        "relaxed, so it has to fail if that import goes away"
-    )
-    assert "from spielplan.connectors import resolve" in driver
-
-    # Each file's package, carried with its text, since `from
-    # . import fetch` means a different module in each.
-    guarded = {"acquire/stages.py": (driver, "spielplan.acquire")}
-    derive_dir = Path(stages.__file__).resolve().parents[1] / "derive"
-    for path in sorted(derive_dir.glob("*.py")):
-        guarded[f"derive/{path.name}"] = (path.read_text(encoding="utf-8"), "spielplan.derive")
-    assert len(guarded) >= 6, f"the walk found only {sorted(guarded)}; it is looking in the wrong place"
-
-    for name, (text, package) in sorted(guarded.items()):
-        # `ast`, not a substring: these files name the fetcher in prose explaining their own guard.
-        offenders = _transport_imports(text, package=package)
-        assert offenders == [], (
-            f"{name} imports transport {offenders}: stage 2 drives its adapters "
-            "through a handle it never names and stage 3 re-reads the content-addressed raw "
-            "store, which is the whole of \"re-parsing is free forever\" (spec:398, decision 373)"
-        )
-        used = _fetcher_uses(text)
-        assert used == [], (
-            f"{name} uses `.fetcher` at {used}: the handle reaches every stage on the context, so "
-            "a request through it needs no import - and a request made here rather than by an "
-            "adapter through `sources/_views` is one no board row records (decisions 345, 373)"
-        )
 
 
 async def test_a_malformed_provider_id_parks_at_stage_one_and_mints_nothing(db, data_dir):

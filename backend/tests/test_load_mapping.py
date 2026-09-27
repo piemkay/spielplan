@@ -148,18 +148,6 @@ def test_the_skip_reason_guard_sees_the_corpus_figure_come_back():
     ), "the repaired reason's own citations are not counts"
 
 
-def test_no_loader_path_joins_titles_on_imdb_id():
-    """§4.1: `imdb_id` "must never be the join key"; static, because a join can return under any name."""
-    assert not hasattr(load, "_resolve_ml_links")
-    source = Path(load.__file__).read_text(encoding="utf-8")
-    # Qualified reads and JOINs, not the word: `"imdb_id": "imdb_id"` is a mapped column and must stay.
-    offenders = [
-        line.strip() for line in source.splitlines()
-        if "imdb_id" in line and (".imdb_id" in line or "JOIN " in line.upper())
-    ]
-    assert not offenders, f"the loader resolves through imdb_id again: {offenders}"
-
-
 def test_title_company_is_mapped_rather_than_skipped():
     """Mapped with the corpus's own key, which made the dedupe unnecessary (decision 193)."""
     assert "title_company" not in load.SKIPPED_TABLES

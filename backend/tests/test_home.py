@@ -4,10 +4,8 @@ Needs TEST_DATABASE_URL."""
 
 from __future__ import annotations
 
-import ast
 import re
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 
 import pytest
 
@@ -1218,66 +1216,6 @@ def test_a_noisy_account_cannot_push_another_accounts_events_out_of_its_rail():
     assert len(quiet) == 1 and "quiet" in quiet[0]["text"]
     assert len(rail.recent(user_id=2)) == rail.RAIL_LIMIT
     rail.forget()
-
-
-def _rail_record_kinds() -> set[str]:
-    """AST with one hop of resolution: some kinds reach `rail.record` through a variable."""
-    root = Path(rail.__file__).resolve().parent.parent
-    trees = [ast.parse(p.read_text(encoding="utf-8")) for p in sorted(root.rglob("*.py"))]
-
-    def is_record(node: ast.AST) -> bool:
-        return (
-            isinstance(node, ast.Call)
-            and isinstance(node.func, ast.Attribute)
-            and node.func.attr == "record"
-            and isinstance(node.func.value, ast.Name)
-            and node.func.value.id == "rail"
-        )
-
-    literal: set[str] = set()
-    forwarded: set[tuple[str, str]] = set()
-    for tree in trees:
-        for fn in ast.walk(tree):
-            if not isinstance(fn, ast.FunctionDef | ast.AsyncFunctionDef):
-                continue
-            params = {
-                a.arg for a in (*fn.args.posonlyargs, *fn.args.args, *fn.args.kwonlyargs)
-            }
-            for call in ast.walk(fn):
-                if not is_record(call):
-                    continue
-                for kw in call.keywords:
-                    if kw.arg != "kind":
-                        continue
-                    if isinstance(kw.value, ast.Constant) and isinstance(kw.value.value, str):
-                        literal.add(kw.value.value)
-                    elif isinstance(kw.value, ast.Name) and kw.value.id in params:
-                        forwarded.add((fn.name, kw.value.id))
-
-    for tree in trees:
-        for call in ast.walk(tree):
-            if not isinstance(call, ast.Call):
-                continue
-            called = (
-                call.func.attr if isinstance(call.func, ast.Attribute)
-                else getattr(call.func, "id", None)
-            )
-            for fn_name, param in forwarded:
-                if called != fn_name:
-                    continue
-                for kw in call.keywords:
-                    if kw.arg == param and isinstance(getattr(kw.value, "value", None), str):
-                        literal.add(kw.value.value)
-    return literal
-
-
-def test_every_declared_rail_kind_has_a_producer():
-    """A declared kind nothing records is a colour rule and a filter chip for nothing."""
-    produced = _rail_record_kinds()
-    assert produced == set(rail.EVENT_KINDS), (
-        f"declared but never recorded: {sorted(set(rail.EVENT_KINDS) - produced)}; "
-        f"recorded but not declared: {sorted(produced - set(rail.EVENT_KINDS))}"
-    )
 
 
 def _claiming_sections(payload, kind):

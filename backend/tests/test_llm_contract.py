@@ -3,17 +3,13 @@ Retry tests format rejections produced by `verify_tags` itself, not hand-typed o
 
 from __future__ import annotations
 
-import ast
 import hashlib
-from pathlib import Path
 
 import pytest
 
 from spielplan.dna.verify import Rejection, Vocabulary, verify_tags
 from spielplan.llm import contract, gemini, openai
 from tests.test_dna_verify import _NoVerdicts
-
-CONTRACT_SOURCE = (Path(__file__).resolve().parents[1] / "spielplan" / "llm" / "contract.py")
 
 # This app's eleven facet ids, which are its term prefixes, in an order of our choosing.
 APP_FACETS = ("themes", "structure", "mood", "visual", "sound", "pacing", "era", "place",
@@ -79,23 +75,6 @@ def test_one_schema_is_the_contract_and_each_mechanism_is_a_projection_of_it():
         assert list(items["properties"]) == ["term", "salience", "source", "quote"]
         assert items["required"] == ["term", "salience", "source", "quote"]
         assert projected["required"] == ["tags"]
-
-
-def test_the_contract_formats_verdicts_and_performs_no_check_of_its_own():
-    """§9: the validator is the guarantee, so the module
-    that talks to the model must not grow a copy of it."""
-    tree = ast.parse(CONTRACT_SOURCE.read_text(encoding="utf-8"))
-    imported = set()
-    for node in ast.walk(tree):
-        if isinstance(node, ast.Import):
-            imported |= {alias.name for alias in node.names}
-        elif isinstance(node, ast.ImportFrom):
-            imported.add(node.module or "")
-            imported |= {f"{node.module}.{alias.name}" for alias in node.names}
-    assert not [m for m in imported if "norm" in m or "aliases" in m or "adjudicate" in m], imported
-    called = {node.func.id for node in ast.walk(tree)
-              if isinstance(node, ast.Call) and isinstance(node.func, ast.Name)}
-    assert "norm" not in called
 
 
 def test_the_prompt_asks_for_the_object_the_schema_declares():

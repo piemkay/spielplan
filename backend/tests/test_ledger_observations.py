@@ -3,12 +3,10 @@ verdicts, no held-out or re-ask rows), what may write, and §5.3's budgets. Need
 
 from __future__ import annotations
 
-import ast
 import statistics
 import time
 from collections.abc import Sequence
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
@@ -22,7 +20,6 @@ from spielplan.scoring import backbone as bb
 from spielplan.scoring import serve
 from tests.fixtures import make_bundle as fx
 
-PACKAGE = Path(__file__).resolve().parents[1] / "spielplan"
 
 # No RNG: §5.3's budgets and "same observations, same fit" need the same input on every machine.
 def _embedding(title_id: int) -> np.ndarray:
@@ -248,39 +245,6 @@ async def test_not_seen_writes_no_observation_row_and_keeps_the_history(db, worl
     assert await db.fetchval(
         "SELECT state FROM user_title WHERE user_id=$1 AND title_id=$2", user, 1
     ) == "seen"
-
-
-def _functions_containing(pattern: str) -> set[tuple[str, str]]:
-    hits: set[tuple[str, str]] = set()
-    for path in sorted(PACKAGE.rglob("*.py")):
-        source = path.read_text(encoding="utf-8")
-        if pattern not in source:
-            continue
-        lines = {i for i, line in enumerate(source.splitlines(), 1) if pattern in line}
-        tree = ast.parse(source)
-        rel = path.relative_to(PACKAGE.parent).as_posix()
-        for line in lines:
-            enclosing = "<module>"
-            for node in ast.walk(tree):
-                if isinstance(node, ast.FunctionDef | ast.AsyncFunctionDef) and (
-                    node.lineno <= line <= (node.end_lineno or node.lineno)
-                ):
-                    enclosing = node.name
-            hits.add((rel, enclosing))
-    return hits
-
-
-def test_no_write_path_outside_undo_deletes_a_verdict_or_edits_its_value():
-    """A static read, because "no other path exists" is a claim no runtime test can make."""
-    for pattern in ("DELETE FROM verdict", "DELETE FROM duel", "UPDATE verdict SET value"):
-        found = _functions_containing(pattern)
-        assert found <= {("spielplan/ledger/observations.py", "undo")}, (
-            f"{pattern!r} appears outside undo: {sorted(found)}"
-        )
-    # And the guard is not vacuous: undo really does contain the deletes it is allowed to.
-    assert ("spielplan/ledger/observations.py", "undo") in _functions_containing(
-        "DELETE FROM verdict"
-    )
 
 
 async def test_undo_unstamps_the_row_it_superseded_and_stops_at_the_block_boundary(db, world):

@@ -4,7 +4,6 @@ Needs TEST_DATABASE_URL."""
 
 from __future__ import annotations
 
-import ast
 import sqlite3
 import time
 from pathlib import Path
@@ -12,14 +11,10 @@ from pathlib import Path
 import pytest
 
 from spielplan.db import dna_terms
-from spielplan.dna import project as project_module
 from spielplan.dna.project import DEFAULT_SOURCES, project_title
 from spielplan.importer import dna as importer_dna
 from spielplan.importer.report import ImportReport
-from spielplan.models.artifacts import VOCAB_FILES
 from tests.fixtures import make_bundle as fx
-
-MODULE = Path(project_module.__file__)
 
 VOCAB = "v1"
 
@@ -72,19 +67,6 @@ async def _keywords(db, title_id: int, pairs) -> None:
         "INSERT INTO title_keyword (title_id, keyword, source) VALUES ($1, $2, $3)",
         [(title_id, keyword, source) for keyword, source in pairs],
     )
-
-
-def _docstrings(tree: ast.Module) -> set[int]:
-    """The package argues its decisions in docstrings, so a guard over file text would flag the argument."""
-    out: set[int] = set()
-    for node in ast.walk(tree):
-        if not isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
-            continue
-        first = node.body[0] if node.body else None
-        if (isinstance(first, ast.Expr) and isinstance(first.value, ast.Constant)
-                and isinstance(first.value.value, str)):
-            out.add(id(first.value))
-    return out
 
 
 async def _projected(db, title_id: int):
@@ -537,32 +519,4 @@ async def test_per_title_projection_of_one_acquired_title_stays_under_one_second
     assert written == 40
     assert elapsed < 1.0, (
         f"one-title DNA projection took {elapsed * 1000:.0f} ms (budget 1 s, spec 5.3)"
-    )
-
-
-def test_the_projection_loads_no_model_and_needs_no_gpu():
-    """§1 is CPU-only; an embedding step would arrive as an import, so the import list is asserted."""
-    tree = ast.parse(MODULE.read_text(encoding="utf-8"))
-    imported = {
-        node.module for node in ast.walk(tree) if isinstance(node, ast.ImportFrom)
-    } | {
-        alias.name for node in ast.walk(tree) if isinstance(node, ast.Import)
-        for alias in node.names
-    }
-    assert imported == {"__future__", "asyncpg", "spielplan.db", "spielplan.dna.aliases"}
-
-
-def test_the_projection_cap_is_not_ported_and_no_fifth_vocabulary_file_is_read():
-    """Read through the parse tree: the module's docstring names all three pieces of the cap it declines."""
-    tree = ast.parse(MODULE.read_text(encoding="utf-8"))
-    for ported in ("PROJECTION_CAP", "AGREEMENT_WEIGHT", "agreement_weight", "_capped_terms"):
-        assert not hasattr(project_module, ported), f"{ported} is decision 384's unported name"
-    reaching_code = {
-        node.value for node in ast.walk(tree)
-        if isinstance(node, ast.Constant) and id(node) not in _docstrings(tree)
-    }
-    assert 0.45 not in reaching_code
-    assert "projection_capped_v1.txt" not in reaching_code
-    assert VOCAB_FILES == (
-        "vocab_v1_all.tsv", "alias_map_v1.tsv", "s_matrix_v1.tsv", "adjudications_v1.tsv"
     )

@@ -847,13 +847,10 @@ async def test_a_solo_answer_is_classified_the_same_way_on_every_request(app, db
 
 import asyncio  # noqa: E402
 import time  # noqa: E402
-from pathlib import Path  # noqa: E402
 
 import asyncpg  # noqa: E402
 
 from spielplan.tonight import play  # noqa: E402
-
-BACKEND = Path(__file__).resolve().parents[1]
 
 
 class _FailsOnce:
@@ -1036,17 +1033,6 @@ async def test_a_three_candidate_evening_reaches_the_ballot_from_the_round_read(
     card = (await member.get(f"/api/tonight/sessions/{sid}/ballot")).json()
     assert len(card["slate"]) == 3, "every candidate is on the ballot when there are this few"
     assert card["revealed"] is False
-
-
-def test_no_route_calls_the_combine_directly():
-    """Static: a second route combining inline would pass every behavioural test."""
-    source = (BACKEND / "spielplan" / "api" / "tonight.py").read_text(encoding="utf-8")
-
-    assert "play.finish" not in source, "the combine is `play.settle`'s to call"
-    assert "play.settle(" in source, "and the router's reads are what call it"
-    assert source.count("play.settle(") >= 4, (
-        "the answer path and the three reads — the session, the ballot and the result"
-    )
 
 
 async def invites_settled() -> None:

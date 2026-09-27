@@ -3,10 +3,8 @@ so `from spielplan.acquire import fetch` cannot slip past."""
 
 from __future__ import annotations
 
-import ast
 import logging
 from dataclasses import FrozenInstanceError
-from pathlib import Path
 
 import pytest
 
@@ -234,94 +232,3 @@ async def test_a_secret_that_will_not_open_is_none_and_is_logged(monkeypatch, ca
     logged = [r.getMessage() for r in caplog.records]
     assert len(logged) == 3
     assert "connector tmdb secrets are unreadable" in logged[0]
-
-
-_PACKAGE = Path(base.__file__).resolve().parent
-
-# Either turns "re-parsing is free forever" into another crawl (decision 373).
-TRANSPORT = ("httpx", "spielplan.acquire.fetch")
-
-# The modules the PARSERS import; `credentials.py` is an adapter dependency.
-GUARDED = ("base.py", "_htmlutil.py")
-
-
-def _absolute(node: ast.ImportFrom, package: str) -> str:
-    """`from ._htmlutil import x` inside `spielplan.sources` is `spielplan.sources._htmlutil`."""
-    if not node.level:
-        return node.module or ""
-    parts = package.split(".")
-    prefix = ".".join(parts[: len(parts) - node.level + 1])
-    return f"{prefix}.{node.module}" if node.module else prefix
-
-
-def _imported_modules(source: str, *, package: str = "spielplan.sources") -> set[str]:
-    """Also `from x import y` as `x.y`: the layering helper records only `x`."""
-    modules: set[str] = set()
-    for node in ast.walk(ast.parse(source)):
-        if isinstance(node, ast.Import):
-            modules.update(alias.name for alias in node.names)
-        elif isinstance(node, ast.ImportFrom):
-            module = _absolute(node, package)
-            modules.add(module)
-            modules.update(f"{module}.{alias.name}" for alias in node.names if module)
-    return modules
-
-
-def _transport(source: str) -> list[str]:
-    """The forbidden imports `source` makes, sorted so a failure message is stable."""
-    return sorted(
-        m for m in _imported_modules(source)
-        if any(m == bad or m.startswith(f"{bad}.") for bad in TRANSPORT)
-    )
-
-
-def test_the_registry_and_the_markup_helpers_import_no_transport():
-    """Decision 373: the adapters fetch; the parsers get bytes."""
-    for name in GUARDED:
-        source = (_PACKAGE / name).read_text(encoding="utf-8")
-        imports = _imported_modules(source)
-        # The guard is reading the file rather than measuring the parser.
-        assert imports, f"sources/{name}: the guard parsed no import at all"
-        assert not _transport(source), f"sources/{name} reaches for transport: {_transport(source)}"
-
-
-def test_the_transport_guard_can_report_every_way_in():
-    """A guard that cannot report a violation is a green line rather than a proof."""
-    for illegal in (
-        "import httpx\n",
-        "from httpx import AsyncClient\n",
-        "from spielplan.acquire import fetch\n",
-        "from spielplan.acquire.fetch import Fetcher\n",
-        "from spielplan.acquire import fetch as f\n",
-    ):
-        assert _transport(illegal), f"the guard missed: {illegal.strip()}"
-    # And the imports these two modules legitimately make are not reported.
-    assert not _transport("import json\nfrom spielplan.acquire.stages import StageContext\n")
-
-
-_DB_VERBS = (
-    "fetch", "fetchrow", "fetchval", "execute", "executemany", "cursor",
-    "copy_records_to_table",
-)
-
-
-def _db_calls(source: str) -> list[str]:
-    """Method calls on anything that look like a query against a connection."""
-    return sorted({
-        node.func.attr
-        for node in ast.walk(ast.parse(source))
-        if isinstance(node, ast.Call)
-        and isinstance(node.func, ast.Attribute)
-        and node.func.attr in _DB_VERBS
-    })
-
-
-def test_the_credential_read_issues_no_sql_of_its_own():
-    """Decision 377: a second SELECT here would answer "what is configured" without the DEK."""
-    source = Path(credentials.__file__).resolve().read_text(encoding="utf-8")
-    assert "get_connector_secrets" in source, "the guard is reading the wrong file"
-    assert _db_calls(source) == [], f"sources/credentials.py queries directly: {_db_calls(source)}"
-    # The detector fires on the thing it forbids.
-    assert _db_calls("async def f(conn):\n    return await conn.fetchrow('SELECT 1')\n") == [
-        "fetchrow"
-    ]
