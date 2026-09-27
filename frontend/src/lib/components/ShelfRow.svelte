@@ -1,6 +1,6 @@
 <script>
   // One kind's section of a shelf, so a Films row and a Series row never see each other's items
-  // (§4.1 rule 5). `sectionShips` has already refused a section without a why-line.
+  // (§4.1 rule 5).
   import PosterCard, { isColdPlaced } from '$lib/components/PosterCard.svelte';
   import ModelNote from '$lib/components/ModelNote.svelte';
   import { facetColour, toPosterTitle, whyNumbersLine } from '$lib/home.svelte.js';

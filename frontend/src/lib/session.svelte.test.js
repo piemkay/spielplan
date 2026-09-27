@@ -104,7 +104,6 @@ describe('bootstrap', () => {
       setup: null,
       hasBundle: null,
       restartRequired: null,
-      bundle: null,
       publicUrl: '',
       offline: false
     });

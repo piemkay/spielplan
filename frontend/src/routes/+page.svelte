@@ -119,13 +119,10 @@
         : canAdmin ? ' · no bundle imported' : ' · no movie data yet'
   );
 
-  // The greeting is the server's (the install's TZ); the local band only fills the first frame.
-  const greeting = $derived(
-    home?.greeting?.text ??
-      `${fallbackBand()}${session.user ? `, ${session.user.name}` : ''}`
-  );
+  // The device clock: the household's phones share the install's TZ.
+  const greeting = $derived(`${band()}${session.user ? `, ${session.user.name}` : ''}`);
 
-  function fallbackBand() {
+  function band() {
     const h = new Date().getHours();
     if (h < 5) return 'Up late';
     if (h < 12) return 'Good morning';
@@ -317,7 +314,7 @@
 
 <div class="head">
   <div class="greetline">
-    <h1 data-testid="home-greeting" data-band={home?.greeting?.band ?? ""}>{greeting}</h1>
+    <h1 data-testid="home-greeting">{greeting}</h1>
   </div>
 
   <PendingVerdicts banner={home?.banner} />

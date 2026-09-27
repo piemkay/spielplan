@@ -41,8 +41,6 @@ export const session = $state({
   // A bundle is imported but could not load (decision 497); null until `/config` says.
   /** @type {boolean | null} */
   restartRequired: null,
-  /** @type {any} */
-  bundle: null,
   publicUrl: '',
   // The version an app-minted title's poster URL carries (`art.js`); null until `/config` says.
   /** @type {string | null} */
@@ -65,7 +63,6 @@ export async function bootstrap() {
     if (config) {
       session.hasBundle = config.has_bundle;
       session.restartRequired = config.restart_required === true;
-      session.bundle = config.bundle;
       session.publicUrl = config.public_url;
       session.artEpoch = config.art_epoch ?? null;
     }
