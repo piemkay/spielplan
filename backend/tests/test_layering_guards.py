@@ -1,16 +1,11 @@
 """CLAUDE.md's layering rules as tests: `ledger/model.py` is numpy-only, no domain package imports
-`spielplan.api`, the HTTP layer's raw SQL may not grow, and every route is behind a session."""
+`spielplan.api`, and the HTTP layer's raw SQL may not grow."""
 
 from __future__ import annotations
 
 import ast
 import re
 from pathlib import Path
-
-from starlette.routing import Mount
-
-from spielplan.api import deps
-from spielplan.app import create_app
 
 PACKAGE = Path(__file__).resolve().parents[1] / "spielplan"
 
@@ -205,121 +200,4 @@ def test_the_api_layer_holds_no_more_raw_sql_than_it_did():
         f"new raw SQL in the HTTP layer: {grown} (module: measured, allowed). A query is a rule "
         "about the data, so it belongs in the domain package that owns the rule; `api/` decides "
         "only HTTP shapes (CLAUDE.md Conventions)."
-    )
-
-
-# A WebSocket that authenticates in its own body counts as unguarded: nothing is in `route.dependant`.
-# FastAPI 0.141 stops flattening `include_router`; `original_router.routes` carries the WebSocket.
-
-_GATES = ("active_user", "admin_user", "active_user_ws", "active_user_brief")
-_SESSION_ONLY = ("current_user",)
-
-_METHODS = ("GET", "POST", "PUT", "DELETE", "PATCH")
-
-# Every route that answers a caller with no session, with what makes that the right answer.
-ANONYMOUS = {
-    ("POST", "/api/auth/login"): "the password door itself; a session is what it issues",
-    ("POST", "/api/auth/passkey/login/options"): "the WebAuthn challenge the door needs first",
-    ("POST", "/api/auth/passkey/login"): "the passkey door itself",
-    ("POST", "/api/auth/logout"): "clears the cookie for whoever holds it, and grants nothing",
-    ("GET", "/api/health"): "the container probe, answered before anyone can sign in",
-    ("GET", "/api/config"): "the origin and whether a bundle exists, for the shell's first paint",
-    ("POST", "/api/setup/admin"): "first boot has no account to authenticate as",
-    ("GET", "/api/setup/state"): "whether this box still owes a wizard, cut to that one bit",
-    # Token-authed in the handler body for the Jellyfin plugin (decision 332), so the dependant is empty.
-    ("POST", "/events/jellyfin"): "token-authed for a server plugin that cannot hold a cookie",
-}
-
-# Behind a session but deliberately NOT behind `active_user`: decision 179's ways out of the lock.
-CURRENT_ONLY = {
-    ("GET", "/api/auth/me"): "a locked account must be able to see whose lock it is",
-    ("POST", "/api/auth/password"): "the way out of the lock",
-    ("POST", "/api/auth/switch"): "the shared-device chip, reachable while one profile is locked",
-}
-
-
-def _route_leaves(routes):
-    for route in routes:
-        included = getattr(route, "original_router", None)
-        if included is not None:
-            yield from _route_leaves(included.routes)
-            continue
-        nested = getattr(route, "routes", None)
-        if nested:
-            yield from _route_leaves(nested)
-            continue
-        if isinstance(route, Mount):
-            continue
-        yield route
-
-
-def _resolves(dependant, target) -> bool:
-    return any(sub.call is target or _resolves(sub, target) for sub in dependant.dependencies)
-
-
-def _verdict(route) -> str:
-    dependant = getattr(route, "dependant", None)
-    if dependant is None:
-        return "unguarded"
-    if any(_resolves(dependant, getattr(deps, name)) for name in _GATES):
-        return "guarded"
-    if any(_resolves(dependant, getattr(deps, name)) for name in _SESSION_ONLY):
-        return "session-only"
-    return "unguarded"
-
-
-def _route_verdicts(app) -> dict[tuple[str, str], str]:
-    verdicts: dict[tuple[str, str], str] = {}
-    for route in _route_leaves(app.routes):
-        verdict = _verdict(route)
-        methods = sorted(m for m in (getattr(route, "methods", None) or ()) if m in _METHODS)
-        path = getattr(route, "path", "")
-        for method in methods or ["WS"]:
-            verdicts[(method, path)] = verdict
-    return verdicts
-
-
-def _named(keys) -> str:
-    return "\n".join(f"    {method:<7} {path}" for method, path in sorted(keys))
-
-
-def test_every_route_the_app_registers_is_behind_a_session_or_named_anonymous():
-    verdicts = _route_verdicts(create_app())
-    assert verdicts, "the walk found no routes at all - it is measuring itself"
-
-    channel = ("WS", "/api/tonight/channel")
-    assert verdicts.get(channel) == "guarded", (
-        f"the Tonight channel is {verdicts.get(channel, 'not registered at all')}: the session "
-        "socket is what the blind vote's integrity rests on (decision 225)"
-    )
-
-    unguarded = {key for key, verdict in verdicts.items() if verdict == "unguarded"}
-    assert not unguarded - set(ANONYMOUS), (
-        "these routes resolve neither active_user nor admin_user and are not named anonymous:\n"
-        + _named(unguarded - set(ANONYMOUS))
-        + "\nAdd the gate (§3.2 puts every route behind a session), or - if a stranger who "
-        "can reach the origin really may have this - name it in ANONYMOUS with the reason."
-    )
-
-    session_only = {key for key, verdict in verdicts.items() if verdict == "session-only"}
-    assert not session_only - set(CURRENT_ONLY), (
-        "these routes are behind a session but not behind §3.1's first-login lock:\n"
-        + _named(session_only - set(CURRENT_ONLY))
-        + "\nThe set that may skip the lock is decision 179's ways out of it. Use ActiveUser, or "
-        "name the route in CURRENT_ONLY with what makes it a way out."
-    )
-
-
-def test_neither_route_allow_list_outlives_the_routes_it_names():
-    """A stale allow-list entry silently exempts whatever route is next written at that path."""
-    verdicts = _route_verdicts(create_app())
-    stale_anonymous = {key for key in ANONYMOUS if verdicts.get(key) != "unguarded"}
-    assert not stale_anonymous, (
-        "ANONYMOUS names routes that are no longer anonymous (gated since, or deleted):\n"
-        + _named(stale_anonymous)
-    )
-    stale_current_only = {key for key in CURRENT_ONLY if verdicts.get(key) != "session-only"}
-    assert not stale_current_only, (
-        "CURRENT_ONLY names routes that no longer sit between the two gates:\n"
-        + _named(stale_current_only)
     )

@@ -1,11 +1,17 @@
-"""Setup the suite repeats: the household's accounts, a user row, a sibling database, one worker tick."""
+"""Setup the suite repeats: the household's accounts, a user row, a sibling database, one worker tick,
+the app's route table."""
 
 from __future__ import annotations
 
+import re
 from urllib.parse import urlsplit, urlunsplit
+
+from fastapi.routing import APIWebSocketRoute
 
 ADMIN_PASSWORD = "an-admin-password"
 MEMBER_PASSWORD = "a-member-password"
+
+METHODS = ("GET", "POST", "PUT", "DELETE", "PATCH")
 
 
 async def admin_client(app, name: str = "patrick"):
@@ -90,3 +96,54 @@ async def tick_one(job: str, *, due: bool) -> None:
         await worker._tick(time.monotonic(), datetime.now(UTC), last_run, {})
     finally:
         worker.JOBS = jobs
+
+
+def route_table(application) -> dict[tuple[str, str], object]:
+    """(method, path) -> route for everything `application` serves; a WebSocket's method is "WS"."""
+
+    def leaves(routes):
+        # FastAPI 0.141 no longer flattens `include_router`.
+        for route in routes:
+            included = getattr(route, "original_router", None)
+            yield from leaves(included.routes) if included is not None else (route,)
+
+    return {
+        (method, route.path): route
+        for route in leaves(application.routes)
+        for method in (("WS",) if isinstance(route, APIWebSocketRoute) else getattr(route, "methods", ()))
+        if method in (*METHODS, "WS")
+    }
+
+
+def resolves(dependant, target) -> bool:
+    """Recursive: `admin_user` depends on `active_user`, which depends on `current_user`."""
+    return any(sub.call is target or resolves(sub, target) for sub in dependant.dependencies)
+
+
+def concrete(path: str) -> str:
+    """Every path parameter filled with an id that exists nowhere, so the gate must answer first."""
+    return re.sub(r"\{[^}]+\}", "999999", path)
+
+
+async def websocket(client, path: str) -> list[dict]:
+    """The messages the app sends one handshake. httpx has no WebSocket transport, so the app is called
+    directly; the disconnect lets the handler unsubscribe."""
+    cookies = "; ".join(f"{name}={value}" for name, value in client.cookies.items())
+    scope = {
+        "type": "websocket", "asgi": {"version": "3.0", "spec_version": "2.3"},
+        "http_version": "1.1", "scheme": "ws", "path": path, "raw_path": path.encode(),
+        "query_string": b"", "root_path": "", "client": ("127.0.0.1", 51000),
+        "server": ("test", 80), "subprotocols": [],
+        "headers": [(b"host", b"test"), (b"cookie", cookies.encode())],
+    }
+    incoming = [{"type": "websocket.connect"}, {"type": "websocket.disconnect", "code": 1000}]
+    sent: list[dict] = []
+
+    async def receive():
+        return incoming.pop(0) if incoming else {"type": "websocket.disconnect", "code": 1000}
+
+    async def send(message):
+        sent.append(message)
+
+    await client._transport.app(scope, receive, send)
+    return sent

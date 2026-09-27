@@ -13,10 +13,14 @@ from spielplan.app import create_app
 from spielplan.core import auth, webauthn
 from spielplan.core.config import settings
 from tests.fixtures.soft_authenticator import SoftAuthenticator
-from tests.helpers import ADMIN_PASSWORD, MEMBER_PASSWORD, admin_client, member_client
-
-# Imported rather than copied: a second walker is a second thing to keep true of the same app.
-from tests.test_api_gating import _routes, concrete
+from tests.helpers import (
+    ADMIN_PASSWORD,
+    MEMBER_PASSWORD,
+    admin_client,
+    concrete,
+    member_client,
+    route_table,
+)
 
 MEMBER_PIN = "4821"
 
@@ -64,11 +68,9 @@ async def test_the_app_user_check_admits_exactly_two_roles(db):
 async def test_account_creation_exists_at_exactly_one_path_besides_first_boot(app):
     """Walks `create_app()`'s endpoints, so a second minting route is caught however it is filed."""
     minting = {
-        (method, route.path)
-        for route in _routes(create_app().routes)
+        key
+        for key, route in route_table(create_app()).items()
         if "INSERT INTO app_user" in inspect.getsource(route.endpoint)
-        for method in (route.methods or ())
-        if method in ("GET", "POST", "PUT", "DELETE", "PATCH")
     }
     assert minting == {("POST", "/api/admin/users"), ("POST", "/api/setup/admin")}, (
         f"a route outside §6.6 and §3.1's first boot inserts into app_user: {sorted(minting)}"
@@ -81,12 +83,7 @@ async def test_account_creation_exists_at_exactly_one_path_besides_first_boot(ap
 async def test_no_other_mounted_route_can_be_made_to_mint_an_account(db, app):
     """The walk above reads source; this one fires every mounted route and counts `app_user` rows."""
     admin = await admin_client(app)
-    probes = sorted(
-        (method, route.path)
-        for route in _routes(create_app().routes)
-        for method in (route.methods or ())
-        if method in ("GET", "POST", "PUT", "DELETE", "PATCH")
-    )
+    probes = sorted(key for key in route_table(create_app()) if key[0] != "WS")
     assert len(probes) > 50, f"the walk found {len(probes)} routes — it is sweeping a short list"
 
     minted: dict[tuple[str, str], int] = {}

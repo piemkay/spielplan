@@ -8,13 +8,13 @@ import contextlib
 import logging
 
 import pytest
-from fastapi.routing import APIWebSocketRoute
 
 from spielplan.api import deps
 from spielplan.api import tonight as tonight_api
 from spielplan.app import create_app
 from spielplan.db import pool as db_pool
 from spielplan.tonight import channel
+from tests.helpers import resolves, route_table
 
 
 class Recorder:
@@ -261,40 +261,16 @@ async def test_a_slow_socket_costs_the_others_nothing():
     )
 
 
-def _leaves(routes):
-    """FastAPI 0.141 does not flatten `include_router`; only `original_route` knows the socket's path.
-    Duplicated from `test_route_inventory.py` on purpose."""
-    for route in routes:
-        candidates = getattr(route, "effective_candidates", None)
-        if callable(candidates):
-            yield from _leaves(candidates())
-            continue
-        original = getattr(route, "original_route", None)
-        yield original if original is not None else route
-        yield from _leaves(getattr(route, "routes", ()))
-
-
-def _resolves(dependant, target) -> bool:
-    """`test_api_gating.py::_behind` written out: its walk enumerates methods, and a socket has none."""
-    return any(sub.call is target or _resolves(sub, target) for sub in dependant.dependencies)
-
-
 def test_the_channel_is_behind_the_dependency_graph_and_never_behind_deps_db():
     """Decision 225: behind the dependency graph (§3.1's lock applies), but never `deps.db`, which would
     hold a pool connection for the socket's whole evening."""
-    found = [
-        route
-        for route in _leaves(create_app().routes)
-        if isinstance(route, APIWebSocketRoute) and route.path == "/api/tonight/channel"
-    ]
-    assert len(found) == 1, f"the app has {len(found)} Tonight channel routes, not one"
-    dependant = found[0].dependant
+    dependant = route_table(create_app())[("WS", "/api/tonight/channel")].dependant
 
-    assert _resolves(dependant, deps.active_user_ws), (
+    assert resolves(dependant, deps.active_user_ws), (
         "the Tonight channel does not resolve `active_user_ws`: its auth is written out in the "
         "route body, where no dependency sweep can see it and nothing holds it to section 3.1"
     )
-    assert not _resolves(dependant, deps.db), (
+    assert not resolves(dependant, deps.db), (
         "the Tonight channel takes `deps.db`, and a yield dependency on a socket lives as long as "
         "the socket - one of the pool's ten connections per open phone, for the whole evening"
     )
