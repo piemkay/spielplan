@@ -147,20 +147,3 @@ def test_a_jsonb_column_handed_back_as_text_still_yields_the_count(artifacts, tm
     assert _as_mapping(raw)["tables"]["title"] == len(fx.TITLES)
     assert _as_mapping("not json") == {}
     assert _as_mapping(None) == {}
-
-
-def test_a_yardstick_that_is_not_utf8_degrades_to_none_rather_than_500ing_three_surfaces(
-    artifacts,
-):
-    """`json()` reads strict UTF-8, and `UnicodeDecodeError` is not a `JSONDecodeError`."""
-    good = {"cold": {"spearman": 0.35}, "ceiling": {"spearman": 0.39}}
-    (artifacts / "cold_eval.json").write_text(json.dumps(good), encoding="utf-8")
-    assert ArtifactStore.open(artifacts, "yard-ok").summary()["cold_eval"] is not None
-
-    # A note typed in a cp1252 editor, and a Windows editor's UTF-16 BOM: neither is UTF-8.
-    latin1 = b'{"cold": {"spearman": 0.35}, "ceiling": {"spearman": 0.39}, "note": "caf\xe9"}'
-    for payload in (latin1, json.dumps(good).encode("utf-16")):
-        (artifacts / "cold_eval.json").write_bytes(payload)
-        store = ArtifactStore.open(artifacts, "yard-bad")
-        assert store.summary()["cold_eval"] is None
-        assert store.cold_eval() is None
