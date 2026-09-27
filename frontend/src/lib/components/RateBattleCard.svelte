@@ -64,18 +64,18 @@
   <div class="pair">
     <button
       class="side"
-      class:picked={pending === `duel-${left.outcome ?? 'A'}`}
+      class:picked={pending === `duel-${left.outcome}`}
       data-testid="rate-battle-left"
       aria-label="Pick {left.name ?? 'the left title'}"
-      aria-busy={pending === `duel-${left.outcome ?? 'A'}`}
-      data-outcome={left.outcome ?? 'A'}
+      aria-busy={pending === `duel-${left.outcome}`}
+      data-outcome={left.outcome}
       data-title-id={left.id}
       disabled={busy}
-      onpointerdown={() => press(left.outcome ?? 'A')}
+      onpointerdown={() => press(left.outcome)}
       onpointerup={release}
       onpointerleave={release}
       onpointercancel={release}
-      onclick={() => tap(left.outcome ?? 'A')}
+      onclick={() => tap(left.outcome)}
     >
       <RatePoster title={left} />
       <span class="data">{metaLine(left)}</span>
@@ -85,18 +85,18 @@
 
     <button
       class="side"
-      class:picked={pending === `duel-${right.outcome ?? 'B'}`}
+      class:picked={pending === `duel-${right.outcome}`}
       data-testid="rate-battle-right"
       aria-label="Pick {right.name ?? 'the right title'}"
-      aria-busy={pending === `duel-${right.outcome ?? 'B'}`}
-      data-outcome={right.outcome ?? 'B'}
+      aria-busy={pending === `duel-${right.outcome}`}
+      data-outcome={right.outcome}
       data-title-id={right.id}
       disabled={busy}
-      onpointerdown={() => press(right.outcome ?? 'B')}
+      onpointerdown={() => press(right.outcome)}
       onpointerup={release}
       onpointerleave={release}
       onpointercancel={release}
-      onclick={() => tap(right.outcome ?? 'B')}
+      onclick={() => tap(right.outcome)}
     >
       <RatePoster title={right} />
       <span class="data">{metaLine(right)}</span>
@@ -115,10 +115,10 @@
   <div class="strip" role="group" aria-label={PAIR_QUESTION}>
     <button
       class="cell"
-      class:picked={pending === `duel-${left.outcome ?? 'A'}`}
+      class:picked={pending === `duel-${left.outcome}`}
       data-testid="rate-strip-left"
       disabled={busy}
-      onclick={() => onDuel(left.outcome ?? 'A')}
+      onclick={() => onDuel(left.outcome)}
     >left</button>
     <button
       class="cell tie"
@@ -130,10 +130,10 @@
     >tie</button>
     <button
       class="cell"
-      class:picked={pending === `duel-${right.outcome ?? 'B'}`}
+      class:picked={pending === `duel-${right.outcome}`}
       data-testid="rate-strip-right"
       disabled={busy}
-      onclick={() => onDuel(right.outcome ?? 'B')}
+      onclick={() => onDuel(right.outcome)}
     >right</button>
   </div>
 
@@ -155,12 +155,7 @@
     </button>
   </div>
 
-  <RateCorrections
-    sides={card?.corrections?.sides ?? ['left', 'both', 'right']}
-    label={card?.corrections?.label ?? 'not seen'}
-    {busy}
-    {onCorrect}
-  />
+  <RateCorrections sides={card.corrections.sides} label={card.corrections.label} {busy} {onCorrect} />
 </article>
 
 <style>
