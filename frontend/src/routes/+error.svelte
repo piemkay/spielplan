@@ -3,29 +3,37 @@
   // deploy; SvelteKit's built-in page would be a dead end in the standalone PWA.
   import '$lib/design.css';
   import { page } from '$app/stores';
+
+  const missing = $derived($page.status === 404);
 </script>
 
 <div class="page">
-  <div class="card fail" data-testid="app-error">
-    <span class="data">ERROR {$page.status}</span>
-    <h1>That screen did not load</h1>
-    <p class="why">{$page.error?.message || 'No reason was given.'}</p>
+  <section class="fail" data-testid="app-error">
+    <h1 class="title-1">{missing ? 'There is nothing here' : 'That screen did not load'}</h1>
+    <p class="why">
+      {missing
+        ? 'This address is not a screen in Spielplan.'
+        : 'Reloading usually fixes it — the app may have just been updated.'}
+    </p>
     <div class="doors">
       <button class="btn-primary" onclick={() => location.reload()}>Reload</button>
-      <a class="btn-ghost" href="/">Home</a>
+      <a class="btn-secondary" href="/">Home</a>
     </div>
-    <p class="why">
-      Reload if you were in the middle of using the app; Home if you followed a link or typed the
+    <p class="footnote">
+      Reload if you were in the middle of something, Home if you followed a link or typed the
       address.
     </p>
-  </div>
+    <p class="footnote">
+      Error {$page.status}{!missing && $page.error?.message ? ` · ${$page.error.message}` : ''}
+    </p>
+  </section>
 </div>
 
 <style>
   .page {
     display: grid;
     place-items: center;
-    padding: 24px;
+    padding: 48px 0;
   }
   .fail {
     width: min(420px, 100%);
@@ -34,20 +42,16 @@
     gap: 12px;
     align-items: flex-start;
   }
-  h1 {
+  .fail p {
     margin: 0;
-    font-size: 18px;
-    font-weight: 600;
   }
   .doors {
     display: flex;
     align-items: center;
-    gap: 10px;
+    gap: 12px;
+    margin-top: 8px;
   }
-  /* Centre the label in the 48px box, and no accent on a door out of an error page (§6.8). */
-  .doors a {
-    display: inline-flex;
-    align-items: center;
-    color: var(--ink-3);
+  .doors > * {
+    border-radius: var(--r-md);
   }
 </style>

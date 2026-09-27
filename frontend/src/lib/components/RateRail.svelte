@@ -1,8 +1,9 @@
 <script>
-  // A button, not <details>: the wide layout pins the cards open with a media query alone, and a
-  // <details> closed on a phone would stay closed when the window grows.
+  // What sits behind the card's "Why these?": the learning curve, and in Pairs and Mixed why the
+  // pairs are random and what a clear favourite does (decision 527).
   import {
     DECISIVE_COPY,
+    DECISIVE_LABEL,
     LEARNING_CURVE_COPY,
     LEARNING_TARGET,
     PAIR_SELECTION_COPY,
@@ -11,123 +12,83 @@
 
   let { balance, mode, kinds = [], showModel = false } = $props();
 
-  let open = $state(false);
-
   const labelled = $derived(balance?.total ?? 0);
   const position = $derived(Math.min(100, Math.round((labelled / LEARNING_TARGET) * 100)));
 </script>
 
-<aside class="rail" data-testid="rate-rail">
-  <button
-    class="disclosure"
-    data-testid="rate-why-pairs"
-    aria-expanded={open}
-    onclick={() => (open = !open)}
-  >{open ? '▾' : '▸'} why these questions?</button>
+<div class="rail" data-testid="rate-rail">
+  <section class="card" data-testid="rate-learning-curve">
+    <h3>Where you are</h3>
+    <div class="curve" role="img" aria-label="{labelled} of {LEARNING_TARGET} ratings">
+      <span class="fill" style:width="{position}%"></span>
+      <span class="mark" style:left="50%"></span>
+    </div>
+    <p class="count" data-testid="rate-label-count">
+      {ratingsLabel(labelled, kinds)} · 50–100 gets you started
+    </p>
+    <p class="why">{LEARNING_CURVE_COPY}</p>
+  </section>
 
-  <div class="cards" class:open>
-    <section class="card" data-testid="rate-learning-curve">
-      <span class="eyebrow">WHERE YOU ARE</span>
-      <div class="curve" role="img" aria-label="{labelled} of {LEARNING_TARGET} ratings">
-        <span class="fill" style:width="{position}%"></span>
-        <span class="mark" style:left="50%"></span>
-      </div>
-      <div class="data-lg" data-testid="rate-label-count">
-        {ratingsLabel(labelled, kinds)} · 50-100 gets you started
-      </div>
-      <p class="why">{LEARNING_CURVE_COPY}</p>
+  {#if mode !== 'sweep'}
+    <section class="card" data-testid="rate-pair-selection">
+      <h3>Why these pairs</h3>
+      <p class="why">{PAIR_SELECTION_COPY}</p>
     </section>
 
-    {#if mode !== 'sweep'}
-      <section class="card" data-testid="rate-pair-selection">
-        <span class="eyebrow">WHY THESE PAIRS</span>
-        <p class="why">{PAIR_SELECTION_COPY}</p>
-      </section>
-
-      <section class="card" data-testid="rate-resolution">
-        <span class="eyebrow">CLEAR FAVOURITES</span>
-        <p class="why">{DECISIVE_COPY}</p>
-        {#if showModel}
-          <div class="data" data-testid="rate-margin-weights">decisive 1.6 · hesitant 1.0</div>
-        {/if}
-      </section>
-    {/if}
-  </div>
-</aside>
+    <section class="card" data-testid="rate-resolution">
+      <h3>{DECISIVE_LABEL}</h3>
+      <p class="why">{DECISIVE_COPY}</p>
+      {#if showModel}
+        <p class="data" data-testid="rate-margin-weights">decisive 1.6 · hesitant 1.0</p>
+      {/if}
+    </section>
+  {/if}
+</div>
 
 <style>
   .rail {
     display: flex;
     flex-direction: column;
-    gap: 10px;
-  }
-  .disclosure {
-    align-self: flex-start;
-    background: none;
-    border: none;
-    padding: 6px 0;
-    font-family: var(--mono);
-    font-size: 11px;
-    color: var(--ink-4);
-    cursor: pointer;
-  }
-  .disclosure:hover {
-    color: var(--ink-2);
-  }
-  .cards {
-    display: none;
-    flex-direction: column;
     gap: 12px;
-  }
-  .cards.open {
-    display: flex;
   }
   .card {
     display: flex;
     flex-direction: column;
-    gap: 7px;
-    padding: var(--card-pad-tight);
-    background: var(--card);
-    border: 1px solid var(--line);
-    border-radius: var(--r-md);
+    gap: 8px;
   }
-  .eyebrow {
-    font-family: var(--mono);
-    font-size: 9.5px;
-    letter-spacing: 0.12em;
-    color: var(--ink-4);
+  h3 {
+    margin: 0;
+    font-size: var(--fs-subhead);
+    line-height: 20px;
+    font-weight: 600;
   }
-  .why {
+  p {
     margin: 0;
   }
-  /* The progress ramp, not the accent: progress is never a selection (§6.8). */
+  .count {
+    font-size: var(--fs-subhead);
+    line-height: 20px;
+    font-variant-numeric: tabular-nums;
+  }
+  /* A neutral fill, not the accent: progress is never a selection. */
   .curve {
     position: relative;
     height: 6px;
-    border-radius: 3px;
+    border-radius: var(--r-pill);
     background: var(--progress-track);
     overflow: hidden;
   }
   .fill {
     position: absolute;
     inset: 0 auto 0 0;
-    background: var(--progress-fill);
-    border-radius: 3px;
+    background: var(--text);
+    border-radius: var(--r-pill);
   }
   .mark {
     position: absolute;
-    top: -2px;
-    bottom: -2px;
+    top: 0;
+    bottom: 0;
     width: 1px;
-    background: var(--ink-4);
-  }
-
-  @media (min-width: 981px) {
-    .disclosure {
-      display: none;
-    }
-    .cards {
-      display: flex;
-    }
+    background: var(--text-3);
   }
 </style>

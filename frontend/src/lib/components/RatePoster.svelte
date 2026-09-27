@@ -65,16 +65,16 @@
     position: absolute;
     inset: auto 0 0 0;
     height: 46%;
-    background: linear-gradient(to top, rgba(13, 13, 15, 0.88), rgba(13, 13, 15, 0));
+    background: linear-gradient(to top, rgba(12, 11, 10, 0.88), rgba(12, 11, 10, 0));
   }
   .name {
     position: absolute;
     left: 10px;
     right: 10px;
     bottom: 9px;
-    font-size: 13px;
+    font-size: var(--fs-footnote);
     font-weight: 500;
-    line-height: 1.2;
+    line-height: 18px;
     text-wrap: pretty;
   }
 </style>

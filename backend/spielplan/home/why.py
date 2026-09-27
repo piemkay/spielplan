@@ -133,41 +133,6 @@ async def carriers(
     return [int(r["title_id"]) for r in rows]
 
 
-async def common_terms(
-    conn: asyncpg.Connection,
-    *,
-    title_ids: Sequence[int],
-    version: str,
-    limit: int = NAMED_TERM_CAP,
-) -> list[WhyTerm]:
-    """The terms carried by EVERY one of these titles, best-named first, so the clause cannot be false."""
-    ids = sorted({int(t) for t in title_ids})
-    if not ids:
-        return []
-    rows = await conn.fetch(
-        f"""
-        SELECT d.term,
-               min(d.facet) AS facet,
-               CASE WHEN bool_or(d.tier = 'extracted') THEN 'extracted' ELSE 'projected' END AS tier,
-               max({TERM_RANK}) AS term_rank,
-               max(dl.label) AS label
-          FROM dna_tagged d
-          {LABEL_JOIN}
-         WHERE d.version = $1 AND d.title_id = ANY($2)
-         GROUP BY d.term
-        HAVING count(DISTINCT d.title_id) = cardinality($2)
-         ORDER BY max({TERM_RANK}) DESC, d.term
-         LIMIT $3
-        """,
-        version,
-        ids,
-        limit,
-    )
-    return [
-        WhyTerm(term=r["term"], facet=r["facet"], tier=r["tier"], label=r["label"]) for r in rows
-    ]
-
-
 async def frontier_term(
     conn: asyncpg.Connection,
     *,
@@ -323,8 +288,9 @@ async def frontier_term(
 
 
 def phrase(terms: Sequence[WhyTerm]) -> str:
-    """`{term} + {term}` — §6.0's own why-line shape for shelf 1, in the vocabulary's words."""
-    return " + ".join(t.name for t in terms)
+    """`{term} · {term}` — §6.0's own why-line shape for shelf 1, in the vocabulary's words."""
+    line = " · ".join(t.name for t in terms)
+    return line[:1].upper() + line[1:]
 
 
 # --- shelf 1's membership: likeness to the anchor (decisions 475 and 513) ---------------------

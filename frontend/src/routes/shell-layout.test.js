@@ -306,7 +306,7 @@ describe('the shell when it cannot tell where a person belongs', () => {
     const admin = await open();
     try {
       const link = target.querySelector('header a.badge');
-      expect(link.getAttribute('href')).toBe('/admin/data');
+      expect(link.getAttribute('href')).toBe('/admin/movie-data');
       expect(link.textContent).toMatch(/restart needed/i);
     } finally {
       unmount(admin);

@@ -547,6 +547,17 @@ async def genres(conn: asyncpg.Connection, kinds: Sequence[str]) -> list[str]:
     return genre_vocab.facet({r["genre"] for r in rows})
 
 
+async def title_genres(conn: asyncpg.Connection, title_id: int) -> list[str]:
+    """One title's genres in the facet's vocabulary, so the card and the filter name them alike."""
+    rows = await conn.fetch(
+        "SELECT DISTINCT lower(genre) AS genre FROM title_genre "
+        "WHERE title_id = $1 AND source <> ALL($2::text[])",
+        title_id,
+        list(genre_vocab.EXCLUDED_SOURCES),
+    )
+    return genre_vocab.facet({r["genre"] for r in rows})
+
+
 async def decades(conn: asyncpg.Connection, kinds: Sequence[str]) -> list[int]:
     rows = await conn.fetch(
         "SELECT DISTINCT (t.year / 10) * 10 AS decade FROM title t "

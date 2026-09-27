@@ -60,7 +60,7 @@ ABANDONED_REASON = (
 ABANDONED_NOTE = "abandoned from the admin board; retry the job from a stage to bring it back"
 RELEASED = (
     "Its row in the extraction queue is queued again and out of its batch, so it can be launched on"
-    " another plan (decision 448)."
+    " another plan."
 )
 
 # Every task of the title, LOCKED, so the drain's lease cannot land between the check and the write.
@@ -182,17 +182,16 @@ def _admit(job: asyncpg.Record, action: str) -> None:
         return
     if not allowed:
         raise ActionRefused(
-            f"this job is {job['status']}, so it is in flight and admits no action until it stops "
-            "(decision 444)"
+            f"this job is {job['status']}, so it is in flight and admits no action until it stops"
         )
     if action == RETRY:
         raise ActionRefused(
-            f"a plain retry is offered on a failed job alone (decision 336), and this job is "
+            "a plain retry is offered on a failed job alone, and this job is "
             f"{job['status']}: retry it from a stage instead"
         )
     raise ActionRefused(
         f"this job is {job['status']}, which admits {' or '.join(_SPOKEN[a] for a in allowed)} and "
-        f"not {_SPOKEN[action]} (decision 444)"
+        f"not {_SPOKEN[action]}"
     )
 
 
@@ -266,7 +265,7 @@ async def _retry_from(
     if isinstance(stage, bool) or not isinstance(stage, int) or not 1 <= stage <= reached:
         raise ActionRefused(
             f"stage {stage!r} is not one this job can be retried from: a retry resumes at a stage "
-            f"from 1 to {reached}, the stage it reached, and never moves a job forward (decision 444)"
+            f"from 1 to {reached}, the stage it reached, and never moves a job forward"
         )
     # Decision 464: the first stage that fetches or holds a re-ask window, or the paid stage itself.
     first = next(

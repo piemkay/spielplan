@@ -37,7 +37,7 @@ function render(t) {
   return app;
 }
 
-describe('the "new" badge', () => {
+describe('the New badge', () => {
   it('is never worn by a title the crowd has rated, whatever placed it', () => {
     expect(isColdPlaced(title({ e_source: 'cold_tower', placement: 'cold_tower', item_n: 192061 })))
       .toBe(false);
@@ -47,9 +47,10 @@ describe('the "new" badge', () => {
 
   it('explains itself in words a member can check', () => {
     const app = render(title({ e_source: 'cold_tower', item_n: 0 }));
-    const badge = target.querySelector('.badge');
-    expect(badge.textContent).toBe('new');
+    const badge = target.querySelector('[data-testid="new-badge"]');
+    expect(badge.textContent).toBe('New');
     expect(badge.getAttribute('title')).not.toContain('Cold Tower');
+    expect(badge.closest('.poster'), 'the badge sits on the art').not.toBeNull();
     unmount(app);
   });
 });
@@ -57,7 +58,7 @@ describe('the "new" badge', () => {
 describe('the "in library" chip', () => {
   it('marks a catalog card the household owns', () => {
     const app = render(title({ is_owned: true }));
-    expect(target.querySelector('[data-testid="owned-chip"]').textContent).toBe('in library');
+    expect(target.querySelector('[data-testid="owned-chip"]').textContent).toBe('In library');
     unmount(app);
   });
 
@@ -68,6 +69,18 @@ describe('the "in library" chip', () => {
       expect(target.querySelector('[data-testid="owned-chip"]')).toBeNull();
       unmount(app);
     }
+  });
+});
+
+describe('what a card says under its art (decision 527)', () => {
+  it('is the name and "year · runtime", and a seen title wears a check on its art', () => {
+    const app = render(title({ seen_state: 'seen' }));
+    const names = [...target.querySelectorAll('.meta > span')].map((el) => el.textContent);
+    expect(names).toEqual(['Heat', '1995 · 2h 50m']);
+    const seen = target.querySelector('[data-testid="seen-badge"]');
+    expect(seen.getAttribute('aria-label')).toBe('Seen');
+    expect(seen.closest('.poster')).not.toBeNull();
+    unmount(app);
   });
 });
 

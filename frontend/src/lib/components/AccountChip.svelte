@@ -6,6 +6,7 @@
   import { modelGateSettled } from '$lib/home.svelte.js';
   import { toggleRail } from '$lib/rail.svelte.js';
   import { goto } from '$app/navigation';
+  import Avatar from './Avatar.svelte';
   import Sheet from './Sheet.svelte';
 
   let { onLogout } = $props();
@@ -16,7 +17,6 @@
   let pin = $state('');
   let error = $state('');
 
-  const initial = $derived((session.user?.name ?? '?').charAt(0).toUpperCase());
   const method = $derived(authMethodLine(session.user));
   const others = $derived(switchable.filter((u) => u.id !== session.user?.id));
   const showModel = $derived(!!session.user?.show_model);
@@ -65,7 +65,7 @@
   aria-label="You — {session.user?.name ?? 'signed out'}"
   data-testid="account-chip"
 >
-  <span class="avatar">{initial}</span>
+  <Avatar name={session.user?.name} person={session.user} size={32} />
 </button>
 
 <Sheet {open} onClose={() => (open = false)} label="You" width={480}>
@@ -77,7 +77,7 @@
   {#snippet children(close)}
     <div class="you">
       <div class="head">
-        <span class="avatar big">{initial}</span>
+        <Avatar name={session.user?.name} person={session.user} size={72} />
         <h2 class="title-1">{session.user?.name}</h2>
         <p class="line" data-testid="account-line">{roleWord(session.user?.role)} · {method}</p>
       </div>
@@ -115,7 +115,7 @@
                   pin = '';
                 }}
               >
-                <span class="avatar sm" style:background={u.colour ?? null}>{u.name.charAt(0).toUpperCase()}</span>
+                <Avatar name={u.name} person={u} />
                 <span>{u.name}</span>
               </button>
             {:else}
@@ -125,7 +125,7 @@
           {#if !others.length}
             <p class="list-footer">
               People appear here once they set a PIN on
-              <a href="/account" onclick={() => close()}>their account page</a>.
+              <a href="/account" data-sveltekit-replacestate>their account page</a>.
             </p>
           {/if}
         </section>
@@ -134,7 +134,7 @@
         <section class="group">
           <div class="list-group">
             {#each session.user?.nav?.account ?? [] as entry (entry.key)}
-              <a class="list-row" href={entry.href} data-nav={entry.key}>
+              <a class="list-row" href={entry.href} data-nav={entry.key} data-sveltekit-replacestate>
                 <span>{entry.label}</span>
                 <svg class="chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9.5 5.5 6.5 6.5-6.5 6.5" /></svg>
               </a>
@@ -147,7 +147,7 @@
             <div class="list-row">
               <span id="show-model-label">Show the numbers</span>
               <button
-                class="switch hit"
+                class="switch"
                 role="switch"
                 aria-checked={showModel}
                 aria-labelledby="show-model-label"
@@ -195,26 +195,6 @@
     padding: 0;
     border: none;
     background: none;
-  }
-  .avatar {
-    display: grid;
-    place-items: center;
-    width: 32px;
-    height: 32px;
-    border-radius: var(--r-pill);
-    background: #3d6fb6;
-    color: #fff;
-    font-size: var(--fs-footnote);
-    font-weight: 600;
-  }
-  .avatar.big {
-    width: 72px;
-    height: 72px;
-    font-size: var(--fs-title);
-  }
-  .avatar.sm {
-    width: 30px;
-    height: 30px;
   }
   .bar {
     display: flex;
@@ -277,33 +257,5 @@
     color: var(--negative);
     font-size: var(--fs-subhead);
     text-align: center;
-  }
-  .switch {
-    position: relative;
-    flex: none;
-    margin-left: auto;
-    width: 51px;
-    height: 31px;
-    min-height: 31px;
-    padding: 2px;
-    border: none;
-    border-radius: var(--r-pill);
-    background: rgba(245, 240, 232, 0.16);
-    transition: background 0.2s var(--ease);
-  }
-  .switch[aria-checked='true'] {
-    background: var(--accent);
-  }
-  .knob {
-    display: block;
-    width: 27px;
-    height: 27px;
-    border-radius: var(--r-pill);
-    background: var(--text);
-    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
-    transition: transform 0.2s var(--ease);
-  }
-  .switch[aria-checked='true'] .knob {
-    transform: translateX(20px);
   }
 </style>

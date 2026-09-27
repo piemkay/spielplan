@@ -185,13 +185,13 @@ async def test_include_rewatches_admits_both(db, world):
 
 
 async def test_the_budget_admits_forty_minutes_of_grace_and_labels_it(db, world):
-    """Title 3 is 151 min against 130 (admitted, "runs 21 min over"); title 4 is 200 (dropped)."""
+    """Title 3 is 151 min against 130 (admitted, "21 min over"); title 4 is 200 (dropped)."""
     by_id = {c.title_id: c for c in await build(db, world)}
 
     assert 3 in by_id and by_id[3].over_budget_min == 21
-    assert by_id[3].fit_line == "runs 21 min over"
+    assert by_id[3].fit_line == "21 min over"
     assert 4 not in by_id, "200 min is past 130 + 40"
-    assert by_id[1].over_budget_min is None and by_id[1].fit_line == "fits your 130 min"
+    assert by_id[1].over_budget_min is None and by_id[1].fit_line == "Fits your time"
 
 
 async def test_a_wider_budget_admits_the_long_one(db, world):
@@ -275,6 +275,22 @@ async def test_opening_a_room_seats_the_host_first_and_each_guest_after(db, worl
         "§4.2: NULL is the guest slot; a guest with a user_id would have a Ledger and a login"
     )
     assert [s["name"] for s in lobby["seats"][1:]] == ["Guest 1", "Guest 2"]
+
+
+async def test_every_seat_and_listed_room_carries_what_its_avatar_colour_is_keyed_on(db, world):
+    """One person, one colour on every screen: keyed on the account, never on the display name."""
+    await db.execute("UPDATE app_user SET colour = '#7a55b8' WHERE id = $1", world["patrick"])
+    room = await open_room(db, world, guests=1)
+    host, guest = (await rooms.lobby(db, room["session_id"]))["seats"]
+
+    assert (host["user_id"], host["account_role"], host["colour"]) == (
+        world["patrick"], "admin", "#7a55b8"
+    )
+    assert (guest["user_id"], guest["account_role"], guest["colour"]) == (None, None, None), (
+        "a guest has no account, so nothing to take a colour from"
+    )
+    (listed,) = await rooms.open_rooms(db, viewer_id=world["jenny"])
+    assert listed["host_avatar"] == {"id": world["patrick"], "role": "admin", "colour": "#7a55b8"}
 
 
 async def test_every_join_channel_lands_on_the_same_seat(db, world):
@@ -1321,6 +1337,29 @@ async def test_solo_lands_on_three_picks_and_a_wildcard_with_no_round_first(db, 
     assert out["answered"] == 0
 
 
+async def test_every_solo_pick_carries_play_on_jellyfin(db, world):
+    """Decision 527: every pick carries Play, absent with no server rather than guessed."""
+    await db.execute("UPDATE title SET jellyfin_id = 'jf-' || id")
+    out = await solo_picks(db, world)
+    assert all(c["play_url"] is None for c in [*out["picks"], out["wildcard"]])
+    # "No server" and "not in your library" are different sentences.
+    assert {c["play_reason"] for c in [*out["picks"], out["wildcard"]]} == {"no_server"}
+
+    await db.execute(
+        """INSERT INTO connector_config (name, config)
+           VALUES ('jellyfin', '{"url": "http://jellyfin.test/"}'::jsonb)
+           ON CONFLICT (name) DO UPDATE SET config = EXCLUDED.config"""
+    )
+    out = await solo_picks(db, world)
+    for c in [*out["picks"], out["wildcard"]]:
+        assert c["play_url"] == f"http://jellyfin.test/web/#/details?id=jf-{c['title_id']}"
+        assert c["play_reason"] is None
+
+    await db.execute("UPDATE title SET jellyfin_id = NULL")
+    out = await solo_picks(db, world)
+    assert {c["play_reason"] for c in [*out["picks"], out["wildcard"]]} == {"not_in_library"}
+
+
 async def test_the_picks_are_the_persons_own_ledger_order_with_no_tilt(db, world):
     """Patrick's and Jenny's orders differ, so a household average would show."""
     mine = await solo_picks(db, world, user_id=world["patrick"])
@@ -1338,10 +1377,10 @@ async def test_every_pick_carries_a_why_and_a_budget_fit_line(db, world):
         assert card["fit_line"], "the soft budget is only honest if the label is there"
         runtime = card["runtime_min"]
         if runtime is not None and runtime > 130:
-            assert card["fit_line"] == f"runs {runtime - 130} min over"
+            assert card["fit_line"] == f"{runtime - 130} min over"
             assert runtime <= 130 + 40, "nothing past the +40 admission bound"
         elif runtime is not None:
-            assert card["fit_line"] == "fits your 130 min"
+            assert card["fit_line"] == "Fits your time"
 
 
 async def test_the_wildcard_says_it_is_a_stretch_and_the_picks_do_not(db, world):
@@ -1373,7 +1412,7 @@ async def test_a_why_line_only_names_terms_the_pick_carries(db, world):
 async def test_the_provenance_line_reports_the_budget_and_the_filter(db, world):
     """The tilted form replaces the other rather than joining it."""
     plain = await solo_picks(db, world, budget_min=130, include_rewatches=False)
-    assert plain["provenance"] == "130 min budget · unseen first"
+    assert plain["provenance"] == "Unseen first · fits in 2h 10m"
 
 
 async def test_sharpening_re_ranks_in_place_and_changes_the_provenance_line(db, world):
@@ -1391,8 +1430,8 @@ async def test_sharpening_re_ranks_in_place_and_changes_the_provenance_line(db, 
         db, world, budget_min=130, include_rewatches=True, answers=answered, sharpen=True
     )
 
-    assert after["provenance"] == "130 min budget · tilted by your 1 answers"
-    assert "unseen first" not in after["provenance"], "54f says instead of, not as well as"
+    assert after["provenance"] == "Tilted by your 1 answer · fits in 2h 10m"
+    assert "Unseen first" not in after["provenance"], "54f says instead of, not as well as"
     assert after["sharpened"] is True
     assert len(after["picks"]) == solo.PICKS, "re-ranked in place, not replaced by a queue"
 
@@ -1468,7 +1507,7 @@ async def test_an_empty_pool_says_what_to_change(db, world):
     out = await solo_picks(db, world, budget_min=200, include_rewatches=False)
 
     assert out["picks"] == [] and out["wildcard"] is None
-    assert "widen the budget" in out["empty"] and "include rewatches" in out["empty"]
+    assert "longer" in out["empty"] and "include rewatches" in out["empty"]
 
 
 async def test_the_sharpen_pair_carries_no_score(db, world):
@@ -1718,6 +1757,28 @@ async def test_a_projection_never_outranks_a_quote_verified_tag_on_this_surface(
 from spielplan.tonight import result  # noqa: E402
 
 
+def test_the_reveal_card_says_why_there_is_no_play_and_whose_each_match_line_is():
+    """A missing Play names its reason (§6.0); a match line names its seat, for that seat's avatar."""
+    row = {
+        "title_id": 1, "rank": 1, "slot": combine.SLOT_FINALIST, "conflict": None,
+        "per_user_match": {"11": {"name": "patrick", "line": "a line"}},
+        "reserved": False, "reserved_for": None, "reserved_name": None,
+        "name": "Title 1", "year": 2010, "runtime_min": 100, "poster_path": None, "jellyfin_id": None,
+    }
+
+    def card(row, link):
+        return result.card(row, kind="movie", budget_min=130, approvals=1, play_url=link)
+
+    link = "http://jellyfin.test/web/#/details?id={}".format
+    assert card(row, None)["play_reason"] == "no_server"
+    assert card(row, link)["play_reason"] == "not_in_library"
+    owned = card({**row, "jellyfin_id": "jf-1"}, link)
+    assert (owned["play_url"], owned["play_reason"]) == ("http://jellyfin.test/web/#/details?id=jf-1", None)
+    assert card(row, None)["match_lines"] == [
+        {"participant_id": 11, "name": "patrick", "line": "a line"}
+    ]
+
+
 async def test_a_room_whose_every_seat_has_finished_is_settled_by_a_read(db, world):
     """`finished_session` leaves every seat ended, the room in `voting` and no slate: what a dropped
     connection or a restart mid-request leaves."""
@@ -1823,7 +1884,7 @@ async def test_the_reveal_is_assembled_where_the_other_tonight_rules_are(db, wor
 
     card = await result.slate(db, session_id, counted, outcome, play_url=None)
 
-    assert card["beat"] == "VOTES REVEALED TOGETHER"
+    assert card["beat"] == "Tonight's pick"
     assert card["winner"]["title_id"] == wildcard_id
     assert card["winner"]["label"] == combine.WILDCARD_LABEL, (
         "the honestly-labelled wildcard, from the one place that holds the words"
@@ -3186,7 +3247,7 @@ async def test_the_replay_still_runs_when_the_door_does_not_select(db, world):
     tilted = await solo_picks(db, world, answers=answered)
 
     assert tilted["pair"] is None, "a door is a door even with a history behind it"
-    assert tilted["sharpened"] is True and "tilted by your 1 answers" in tilted["provenance"]
+    assert tilted["sharpened"] is True and "Tilted by your 1 answer " in tilted["provenance"]
     assert tilted["tilt"] != {}, "the answers reached the ranking without a search being run"
     assert [p["title_id"] for p in tilted["picks"]] != [p["title_id"] for p in plain["picks"]]
 
@@ -3258,7 +3319,7 @@ async def test_the_provenance_line_counts_the_answers_the_replay_counted(db, wor
 
     assert out["tilt"] == {}, "an answer the replay ignored moved the tilt"
     assert out["sharpened"] is False
-    assert "tilted by your" not in out["provenance"], out["provenance"]
+    assert "Tilted by your" not in out["provenance"], out["provenance"]
     # `answered` is not filtered: an answered pair still costs one of twenty.
     assert out["answered"] == 1
 
@@ -3275,7 +3336,7 @@ async def test_an_answer_inside_the_pool_still_counts(db, world):
 
     assert out["sharpened"] is True
     assert out["tilt"] != {}
-    assert "tilted by your 1 answers" in out["provenance"]
+    assert "Tilted by your 1 answer " in out["provenance"]
 
 
 async def test_an_answer_naming_one_title_twice_is_not_a_comparison(db, world):
@@ -3290,7 +3351,7 @@ async def test_an_answer_naming_one_title_twice_is_not_a_comparison(db, world):
 
     assert out["tilt"] == {}, "a title compared with itself moved the tilt"
     assert out["sharpened"] is False, "and reported that it had tilted the picks"
-    assert "tilted by your" not in out["provenance"], out["provenance"]
+    assert "Tilted by your" not in out["provenance"], out["provenance"]
     assert [p["title_id"] for p in out["picks"]] == [p["title_id"] for p in plain["picks"]], (
         "the ranking moved on an answer that compares nothing"
     )
@@ -3300,19 +3361,20 @@ async def test_an_answer_naming_one_title_twice_is_not_a_comparison(db, world):
 
 async def test_a_series_session_says_its_budget_is_per_episode(db, world):
     """Decision 219: on a series night the budget is per episode. Title 7 runs 45 min per episode."""
-    series = await build(db, world, kind="series", budget_min=60, include_rewatches=True)
+    series = await build(db, world, kind="series", budget_min=30, include_rewatches=True)
     films = await build(db, world, budget_min=130)
 
     assert [c.title_id for c in series] == [7]
-    assert series[0].fit_line == "fits your 60 min per episode"
+    assert series[0].fit_line == "15 min over per episode"
     assert all("per episode" not in c.fit_line for c in films), (
         "a film's runtime is the evening's, and qualifying it would be a different lie"
     )
 
     solo_series = await solo_picks(
-        db, world, kind="series", budget_min=60, include_rewatches=True
+        db, world, kind="series", budget_min=30, include_rewatches=True
     )
-    assert solo_series["picks"][0]["fit_line"] == "fits your 60 min per episode"
+    assert solo_series["picks"][0]["fit_line"] == "15 min over per episode"
+    assert solo_series["provenance"].endswith("fits in 30m per episode")
 
 
 # The 2026-09-25 household evening (decisions 477-481).
@@ -3332,7 +3394,7 @@ async def test_solo_and_the_reveal_speak_in_term_labels_and_never_ids(db, world)
     for card in out["picks"]:
         for term in card["terms"]:
             assert term["label"] == LABELS[term["term"]]
-            assert term["label"] in card["why"]
+            assert term["label"].lower() in card["why"].lower()
             assert term["term"] not in card["why"], f"an id reached a why-line: {card['why']}"
 
     room = await finished_session(db, world)
@@ -3482,6 +3544,7 @@ async def test_the_reveal_carries_each_members_approval_breadth(db, world):
     assert (by_seat[member]["approved"], by_seat[member]["only_yes"]) == (1, True), (
         "the winner was jenny's only yes, and the reveal says so"
     )
+    assert by_seat[host]["said_yes"] is by_seat[member]["said_yes"] is True
     assert by_seat[member]["name"] == "jenny"
 
 

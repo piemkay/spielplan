@@ -1,24 +1,22 @@
-// The board always comes from the server and is replaced whole (§6.3 forbids snapping back); a
-// cancelled lift writes nothing; the queue's pair is a sealed token this module never opens (§13).
+// The board always comes from the server and is replaced whole (§6.3 forbids snapping back); the
+// queue's pair is a sealed token this module never opens (§13).
 
 import { ApiError, get, post, qs } from '$lib/api.js';
+import { runtimeLabel } from '$lib/rate.svelte.js';
+import { showToast } from '$lib/toast.svelte.js';
 
 export const KIND_LABELS = { movie: 'Films', series: 'Series' };
 
-// How to use the board, true on every path; what a move writes is the rail's to say.
-export const TAP_FOOTNOTE =
-  'tap a title to open it · tap Move to pick it up, then tap a tier to drop it';
-
-export const SHARPEN_LABEL = 'sharpen my ranking';
+const NOUNS = { movie: ['film', 'films'], series: ['series', 'series'] };
 
 // Counted here from taps: a server count would stand still on a held-out answer and reveal it (§13).
 export const ROUND_SIZE = 15;
 
-export const ROUND_END_TEXT =
-  `That's ${ROUND_SIZE} comparisons for this round. You can stop here — or keep going for another ${ROUND_SIZE}.`;
+export const ROUND_END_TITLE = `That's ${ROUND_SIZE}.`;
+export const ROUND_END_TEXT = `Stop here, or keep going for another ${ROUND_SIZE}.`;
 
 // The two DNA tiers stay distinguishable (§4.1 rule 1), named by what each is to a member.
-export const DNA_TIER_LABELS = { extracted: 'quoted', projected: 'inferred' };
+export const DNA_TIER_LABELS = { extracted: 'quoted', projected: 'our read' };
 
 export function dnaTierText(tiers) {
   return (tiers ?? []).map((t) => DNA_TIER_LABELS[t] ?? t).join(' + ');
@@ -45,8 +43,6 @@ export const rank = $state({
   ratedTotal: 0,
   /** Decision 209: the server says a full fit is owed, so the two counts above are not yet final. */
   fitting: false,
-  queueEligible: 0,
-  why: '',
   /** @type {Record<string, any>} what the person has switched on */
   filters: {},
   /** @type {Record<string, string[]> | null} §4.1 rule 1: which tier matched each survivor */
@@ -55,8 +51,6 @@ export const rank = $state({
   model: null,
   /** @type {string[]} §6.7's lines for the last write */
   log: [],
-  /** @type {null | {title_id:number, name:string}} the lifted title, on phones */
-  lifted: null,
   /** @type {null | number} decision 496: the title whose card a tap opened */
   opened: null,
   /** @type {any} the comparison queue's current pair, or null */
@@ -98,8 +92,6 @@ export function apply(payload) {
   rank.rated = payload.rated ?? 0;
   rank.ratedTotal = payload.rated_total ?? 0;
   rank.fitting = payload.fitting ?? false;
-  rank.queueEligible = payload.queue_eligible ?? 0;
-  rank.why = payload.why ?? '';
   rank.filters = payload.filters ?? {};
   rank.dnaTiers = payload.dna_tiers ?? null;
   // The server deletes the gated key rather than emptying it, so this reads an absence.
@@ -168,9 +160,8 @@ export async function chooseKind(kind) {
   await load(kind);
 }
 
-// A lift is a pending write naming a bare title id, so it must not survive a sign-out.
+// One person's board, card and round must not carry into the next person's session.
 export function reset() {
-  rank.lifted = null;
   rank.opened = null;
   rank.pair = null;
   rank.queueOpen = false;
@@ -186,34 +177,31 @@ export function reset() {
   requestSeq += 1;                        // and no in-flight response may land after this
 }
 
-// `above`/`below` are the titles it landed between; absent at a tier's ends.
+// `above`/`below` are the titles it landed between; absent at a tier's ends. True once written.
 export async function drop({ title_id, tier, above = null, below = null }) {
-  if (rank.busy) return;                  // two drops in flight would race their two boards
+  if (rank.busy) return false;            // two drops in flight would race their two boards
   rank.busy = true;
   rank.error = '';
   rank.notice = '';
   try {
     apply(await post(`/rank/drop${qs(query())}`, { title_id, tier, above, below }));
-    rank.lifted = null;
+    return true;
   } catch (err) {
     fail(err);
+    return false;
   } finally {
     rank.busy = false;
   }
 }
 
-export function lift(entry) {
-  rank.lifted = rank.lifted?.title_id === entry.title_id ? null : entry;
+/** Move's action sheet (decision 527): the tier it names, naming no neighbour. */
+export async function moveTo(entry, tier) {
+  if (tier === entry.tier) return;        // the checked row: it is there already
+  const label = rank.tiers.find((t) => t.index === tier)?.label ?? '';
+  if (await drop({ title_id: entry.title_id, tier })) showToast(`${entry.name} — moved to ${label}`);
 }
 
-/** The other way out — the banner's Cancel. Writes nothing, by construction. */
-export function putDown() {
-  rank.lifted = null;
-}
-
-// Opening puts a lifted title down first, so a tap behind the card cannot drop it.
 export function openTitle(entry) {
-  rank.lifted = null;
   rank.opened = entry.title_id;
 }
 
@@ -221,28 +209,9 @@ export function closeTitle() {
   rank.opened = null;
 }
 
-// With a title lifted, a tap on another title drops it into that tier, naming no neighbour.
-export function tapTile(entry, tierIndex) {
-  if (!rank.lifted) {
-    openTitle(entry);
-    return Promise.resolve();
-  }
-  if (rank.lifted.title_id === entry.title_id) {
-    putDown();
-    return Promise.resolve();
-  }
-  return dropLifted(tierIndex);
-}
-
-export function dropLifted(tierIndex) {
-  if (!rank.lifted) return Promise.resolve();
-  const title = rank.lifted;
-  return drop({ title_id: title.title_id, tier: tierIndex, ...neighboursIn(tierIndex, title) });
-}
-
-// A drop on a poster lands above it and names both neighbours; a tap or a drop on the row names
-// none, since a named neighbour writes a duel nobody answered (§4.2 keeps it). A stale position
-// names nobody either.
+// A drop on a title lands above it and names both neighbours; a drop into the tier names none,
+// since a named neighbour writes a duel nobody answered (§4.2 keeps it). A stale position names
+// nobody either.
 export function neighboursIn(tierIndex, title, beforeTitleId = null) {
   const tier = rank.tiers.find((t) => t.index === tierIndex);
   const entries = (tier?.entries ?? []).filter((e) => e.title_id !== title.title_id);
@@ -260,7 +229,6 @@ export function neighboursIn(tierIndex, title, beforeTitleId = null) {
 // Every chip opens the queue, so a second call while it is open is not a new round.
 export async function openQueue() {
   if (rank.queueOpen) return;
-  rank.lifted = null;
   rank.queueOpen = true;
   startRound();
   await nextPair();
@@ -334,43 +302,31 @@ export async function answer(outcome, decisive = false) {
   }
 }
 
-// Name the active filters with their values, not just the fields.
-const FILTER_LABELS = {
-  q: 'search',
-  genre: 'genre',
-  decade: 'decade',
-  runtime_max: 'under',
-  runtime_min: 'over',
-  seen: 'seen state',
-  // "tag", not "DNA term": the member register's word for a vocabulary term (decision 486).
-  dna: 'tag'
-};
-
-export function activeFilterText() {
-  const parts = Object.entries(rank.filters).map(([key, value]) => {
-    const label = FILTER_LABELS[key] ?? key;
-    if (key === 'runtime_max' || key === 'runtime_min') return `${label} ${value} min`;
-    return `${label} ${value}`;
-  });
-  return parts.join(', ') || 'these filters';
+/** The count under the title: "70 films · best first", or "12 of 70 films" while filtered. */
+export function countLine() {
+  if (!rank.booted || rank.ratedTotal === 0) return '';
+  const [one, many] = NOUNS[rank.kind] ?? NOUNS.movie;
+  const shown = rank.rated === rank.ratedTotal ? rank.rated : `${rank.rated} of ${rank.ratedTotal}`;
+  return `${shown} ${rank.ratedTotal === 1 ? one : many} · best first`;
 }
 
-// A disabled control says why; during the first fit the cause is the owed fit, not the count.
-export function sharpenWhy() {
-  if (!rank.booted) return null;
-  if (rank.ratedTotal === 0 && rank.fitting) {
-    return { kind: 'fitting', text: 'Nothing to compare until your first tiers are fitted.' };
+/** What the Filters control holds, as removable chips; the title search keeps its own box. */
+export function filterChips() {
+  const chips = [];
+  if (draft.genre) chips.push({ key: 'genre', text: draft.genre });
+  if (draft.decade) chips.push({ key: 'decade', text: `${draft.decade}s` });
+  if (draft.runtime_max) {
+    const limit = runtimeLabel({ runtime_min: Number(draft.runtime_max), kind: rank.kind });
+    chips.push({ key: 'runtime_max', text: `Up to ${limit}` });
   }
-  if (rank.ratedTotal < 2) {
-    return { kind: 'thin', text: 'Nothing to compare yet - the queue draws from titles you have rated.' };
-  }
-  if (rank.queueEligible === 0) {
-    return {
-      kind: 'exploring',
-      text: `${rank.ratedTotal} rated - no title is a close call between two tiers right now, so the pairs explore your board instead.`
-    };
-  }
-  return null;
+  if (draft.seen !== 'any') chips.push({ key: 'seen', text: draft.seen === 'seen' ? 'Seen' : 'Not seen' });
+  if (draft.dna) chips.push({ key: 'dna', text: draft.dna });
+  return chips;
+}
+
+export function clearFilter(key) {
+  draft[key] = key === 'seen' ? 'any' : '';
+  return load(rank.kind);
 }
 
 /** Proposal 80's two states and decision 209's, decided from one payload so two cannot render. */
@@ -381,7 +337,7 @@ export function emptyState() {
   if (rank.ratedTotal === 0 && rank.fitting) {
     return {
       kind: 'fitting',
-      text: 'Nothing is missing — your first tiers are still being fitted. They appear here shortly.',
+      text: 'Nothing is missing — your first tiers are still being worked out. They appear here shortly.',
       cta: 'Rate some titles'
     };
   }
@@ -401,9 +357,13 @@ export function emptyState() {
     };
   }
   if (rank.rated === 0) {
+    const onlySearch = Object.keys(rank.filters).every((key) => key === 'q');
     return {
       kind: 'no-match',
-      text: `Nothing matches ${activeFilterText()}.`,
+      text:
+        onlySearch && rank.filters.q
+          ? `Nothing on your list matches “${rank.filters.q}”.`
+          : 'Nothing on your list matches these filters.',
       cta: 'Clear filters'
     };
   }

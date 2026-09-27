@@ -50,7 +50,6 @@
   let offset = $state(0);
   let loading = $state(false);
   let facets = $state({ genres: [], decades: [] });
-  let hidden = $state({});
   let selected = $state(null);
   let loadError = $state('');
   let filtersOpen = $state(false);
@@ -71,6 +70,7 @@
   let homeError = $state('');
 
   const LIMIT = 60;
+  const SEEN_WORDS = { any: 'Seen or not', seen: 'Seen', unseen: 'Not seen' };
 
   const mode = $derived(homeMode({ q, personId: personIds, genre, decade, seen, owned }));
   const reason = $derived(gridReason({ q, personId: personIds, genre, decade, seen, owned }));
@@ -89,34 +89,24 @@
     return () => publishSuppressed([]);
   });
 
-  const activeFilters = $derived(
-    [
-      genre ? `genre ${genre}` : null,
-      decade ? `${decade}s` : null,
-      seen !== 'any' ? seen : null,
-      owned ? 'in your library' : null
-    ].filter(Boolean)
-  );
   // The grid counts the catalog it lists; the shelves count the household's own library.
   const count = $derived(
     mode === 'grid'
-      ? countLabel({ total, hidden, kinds, filters: activeFilters })
+      ? countLabel({ total, kinds, owned })
       : home?.library
         ? libraryLabel({ library: home.library, kinds })
         : ''
   );
 
-  // The shell's own admin test, so Home and the header agree on who reads the operator's words.
+  // The shell's own admin test, so Home and the header agree on who gets the door to Movie data.
   const canAdmin = $derived(
     (session.user?.nav?.account ?? []).some((entry) => entry.key === 'admin')
   );
-  // "no bundle imported" is the operator's name for the state (§3.1); a member reads plain words.
   const bundleNote = $derived(
-    session.hasBundle
-      ? ''
-      : session.restartRequired
-        ? canAdmin ? ' · bundle imported · restart needed' : ' · waiting for a restart'
-        : canAdmin ? ' · no bundle imported' : ' · no movie data yet'
+    session.hasBundle ? '' : session.restartRequired ? 'waiting for a restart' : 'no movie data yet'
+  );
+  const countLine = $derived(
+    [count, bundleNote].filter(Boolean).join(' · ').replace(/^./, (c) => c.toUpperCase())
   );
 
   // The device clock: the household's phones share the install's TZ.
@@ -163,7 +153,6 @@
       if (seq !== requestSeq) return;      // a newer request has already answered
       items = append ? [...items, ...res.items] : res.items;
       total = res.total;
-      hidden = res.hidden ?? {};
       offset = (append ? offset : 0) + res.items.length;
       // Absent from a build that does not echo it, and then no order control is offered.
       sortEcho = res.sort ?? null;
@@ -238,8 +227,6 @@
   async function chooseKinds(choice) {
     if (kindChoice(kinds) === choice) return;
     kinds = kindsFor(choice);
-    // The open card's tier and weight are per-kind, so switching closes it (proposal 32).
-    selected = null;
     kindNote = '';
     loadShelves();
     // A filter the new kinds carry stays; one they lack is cleared and named.
@@ -260,23 +247,21 @@
     if (dropped.length) {
       const noun = choice === 'series' ? 'series' : choice === 'movie' ? 'films' : 'titles';
       const them = dropped.length > 1 ? 'them' : 'it';
-      kindNote = `${dropped.join(' and ')} cleared - no ${noun} match ${them}.`;
+      kindNote = `${dropped.join(' and ')} cleared — no ${noun} match ${them}.`;
     }
   }
 
   let debounce;
   function onQuery() {
-    // Close the card on the keystroke, not after the debounce.
-    selected = null;
     clearTimeout(debounce);
     debounce = setTimeout(() => load(), 220);
   }
 
+  // The title card has closed itself by now, so its history entry is gone (decision 527).
   function filterToPerson(person) {
     // A credit row may fold several person rows of one human (`person_ids`), so filter by the set.
     personIds = person.person_ids?.length ? person.person_ids : [person.person_id ?? person.id];
     personName = person.name;
-    selected = null;
     q = '';
     load();
   }
@@ -309,116 +294,134 @@
   }
 </script>
 
+{#snippet icon(name)}
+  <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    {#if name === 'search'}
+      <circle cx="11" cy="11" r="6.5" /><path d="m16 16 4.5 4.5" />
+    {:else if name === 'filter'}
+      <path d="M4 7h10M18 7h2M4 17h4M12 17h8" /><circle cx="16" cy="7" r="2" /><circle cx="10" cy="17" r="2" />
+    {:else if name === 'close'}
+      <path d="M6 6l12 12M18 6 6 18" />
+    {:else if name === 'chevron'}
+      <path d="m5.5 9.5 6.5 6.5 6.5-6.5" />
+    {/if}
+  </svg>
+{/snippet}
+
+<!-- A removable chip: the whole chip clears what it names. -->
+{#snippet chip(label, testid, onclick)}
+  <button class="pill on" data-testid={testid} aria-label="Remove {label}" {onclick}>
+    {label}{@render icon('close')}
+  </button>
+{/snippet}
+
+<h1 class="large-title" data-testid="home-greeting">{greeting}</h1>
+
 <!-- Its answer moves the banner's population, so it re-reads the shelves (decision 212). -->
 <FinishPrompt onAnswered={loadShelves} />
+<PendingVerdicts banner={home?.banner} />
 
-<div class="head">
-  <div class="greetline">
-    <h1 data-testid="home-greeting">{greeting}</h1>
+<div class="controls">
+  <!-- On the shelves the switch partitions (§4.1 rule 5); on the grid it is only a filter. -->
+  <div class="segmented kinds" role="group" aria-label="Kind">
+    {#each KIND_CHOICES as choice (choice.id)}
+      <button
+        data-testid="kind-{choice.id}"
+        aria-pressed={kindChoice(kinds) === choice.id}
+        onclick={() => chooseKinds(choice.id)}
+      >{choice.label}</button>
+    {/each}
   </div>
 
-  <PendingVerdicts banner={home?.banner} />
-
-  <div class="controls">
-    <div class="kinds" role="group" aria-label="Kind">
-      <!-- On the shelves the switch partitions (§4.1 rule 5); on the grid it is only a filter. -->
-      {#each KIND_CHOICES as choice (choice.id)}
-        <button
-          class="pill"
-          data-testid="kind-{choice.id}"
-          aria-pressed={kindChoice(kinds) === choice.id}
-          onclick={() => chooseKinds(choice.id)}
-        >{choice.label}</button>
-      {/each}
-    </div>
-
-    <div class="searchrow">
+  <div class="searchrow">
+    <label class="search">
+      {@render icon('search')}
       <input
         type="search"
         data-testid="home-search"
         bind:value={q}
         oninput={onQuery}
-        placeholder="search title, alias"
+        placeholder="Films and series"
         aria-label="Search titles"
       />
-      <button
-        class="pill filtertoggle"
-        aria-expanded={filtersOpen}
-        aria-controls="home-filters"
-        data-testid="filter-toggle"
-        onclick={() => (filtersOpen = !filtersOpen)}
-      >{nFilters ? `Filters · ${nFilters}` : 'Filters'}</button>
-    </div>
+    </label>
+    <button
+      class="pill"
+      aria-expanded={filtersOpen}
+      aria-controls={filtersOpen ? 'home-filters' : undefined}
+      data-testid="filter-toggle"
+      onclick={() => (filtersOpen = !filtersOpen)}
+    >{@render icon('filter')}{nFilters ? `Filters · ${nFilters}` : 'Filters'}</button>
   </div>
 
-  {#if filtersOpen}
-    <div class="filterpanel" id="home-filters" data-testid="filter-panel">
-      <select
-        class="genre"
-        bind:value={genre}
-        onchange={() => load()}
-        aria-label="Genre"
-        data-testid="filter-genre"
-      >
-        <option value="">every genre</option>
+  <p class="footnote count" data-testid="count-line">{countLine}</p>
+</div>
+
+{#if filtersOpen}
+  <div class="list-group filterpanel" id="home-filters" data-testid="filter-panel">
+    <!-- The select covers its row, so a tap anywhere on the row opens the native picker. -->
+    <div class="list-row field">
+      <span>Genre</span>
+      <span class="value">{genre || 'Any'}{@render icon('chevron')}</span>
+      <select bind:value={genre} onchange={() => load()} aria-label="Genre" data-testid="filter-genre">
+        <option value="">Any genre</option>
         {#each facets.genres as g (g)}<option value={g}>{g}</option>{/each}
       </select>
+    </div>
+    <div class="list-row field">
+      <span>Decade</span>
+      <span class="value">{decade ? `${decade}s` : 'Any'}{@render icon('chevron')}</span>
       <select bind:value={decade} onchange={() => load()} aria-label="Decade" data-testid="filter-decade">
-        <option value="">every decade</option>
+        <option value="">Any decade</option>
         {#each facets.decades as d (d)}<option value={d}>{d}s</option>{/each}
       </select>
+    </div>
+    <div class="list-row field">
+      <span>Seen</span>
+      <span class="value">{SEEN_WORDS[seen]}{@render icon('chevron')}</span>
       <select bind:value={seen} onchange={() => load()} aria-label="Seen state" data-testid="filter-seen">
-        <option value="any">seen or not</option>
-        <option value="seen">seen</option>
-        <option value="unseen">unseen</option>
+        <option value="any">Seen or not</option>
+        <option value="seen">Seen</option>
+        <option value="unseen">Not seen</option>
       </select>
-      <button
-        class="pill"
-        aria-pressed={owned}
-        onclick={toggleOwned}
-        data-testid="filter-owned"
-      >in my library</button>
     </div>
-  {/if}
-
-  {#if personIds || (nFilters && !filtersOpen)}
-    <div class="filters">
-      {#if personIds}
-        <!-- The chip is the only way out of a filmography, so it is always visible. -->
-        <button class="pill on" onclick={clearPerson} data-testid="person-chip">{personName} ✕</button>
-      {/if}
-      <!-- A narrowed grid never hides why it is narrow; the open panel already says it. -->
-      {#if !filtersOpen}
-        {#if genre}
-          <button class="pill on" onclick={() => clearFilter('genre')} data-testid="genre-chip">{genre} ✕</button>
-        {/if}
-        {#if decade}
-          <button class="pill on" onclick={() => clearFilter('decade')} data-testid="decade-chip">{decade}s ✕</button>
-        {/if}
-        {#if seen !== 'any'}
-          <button class="pill on" onclick={() => clearFilter('seen')} data-testid="seen-chip">{seen} ✕</button>
-        {/if}
-        {#if owned}
-          <button class="pill on" onclick={() => clearFilter('owned')} data-testid="owned-filter-chip"
-            >in my library ✕</button
-          >
-        {/if}
-      {/if}
-    </div>
-  {/if}
-
-  <div class="data count" data-testid="count-line">
-    {count}{bundleNote}
+    <button
+      class="list-row"
+      role="switch"
+      aria-checked={owned}
+      onclick={toggleOwned}
+      data-testid="filter-owned"
+    >
+      <span>In my library</span>
+      <span class="switch" aria-hidden="true"><span></span></span>
+    </button>
   </div>
-  {#if kindNote}
-    <p class="why kindnote" role="status" data-testid="kind-filter-note">{kindNote}</p>
-  {/if}
-</div>
+{/if}
+
+{#if personIds || (nFilters && !filtersOpen)}
+  <div class="chips">
+    {#if personIds}
+      <!-- The chip is the only way out of a filmography, so it is always visible. -->
+      {@render chip(personName, 'person-chip', clearPerson)}
+    {/if}
+    <!-- A narrowed grid never hides why it is narrow; the open panel already says it. -->
+    {#if !filtersOpen}
+      {#if genre}{@render chip(genre, 'genre-chip', () => clearFilter('genre'))}{/if}
+      {#if decade}{@render chip(`${decade}s`, 'decade-chip', () => clearFilter('decade'))}{/if}
+      {#if seen !== 'any'}{@render chip(SEEN_WORDS[seen], 'seen-chip', () => clearFilter('seen'))}{/if}
+      {#if owned}{@render chip('In my library', 'owned-filter-chip', () => clearFilter('owned'))}{/if}
+    {/if}
+  </div>
+{/if}
+
+{#if kindNote}
+  <p class="footnote kindnote" role="status" data-testid="kind-filter-note">{kindNote}</p>
+{/if}
 
 {#if home?.degraded && home.degraded.state !== 'no_bundle'}
   <!-- `no_bundle` is rendered further down, by the panel the first-boot spec asserts. -->
-  <div class="card degraded" data-testid="home-degraded" data-state={home.degraded.state}>
-    <h2>{home.degraded.headline}</h2>
+  <div class="card notice" data-testid="home-degraded" data-state={home.degraded.state}>
+    <h2 class="section-title">{home.degraded.headline}</h2>
     <p class="why">{home.degraded.why}</p>
     {#if home.degraded.cta}
       <a class="btn-primary" href={home.degraded.cta.route}>{home.degraded.cta.label}</a>
@@ -426,43 +429,35 @@
   </div>
 {/if}
 
-<!-- Only an admin gets §3.1's name for the state and a door; a member gets plain words and none. -->
+<!-- One message for both roles; an admin also gets the door to Movie data. -->
 {#snippet noBundle()}
-  <h2>Nothing to show yet</h2>
-  {#if session.restartRequired}
-    {#if canAdmin}
-      <p class="why">
-        A bundle is imported and this server has not loaded it yet. The Data tab says why.
-      </p>
-      <a class="btn-primary" href="/admin/data">Open the Data tab</a>
-    {:else}
-      <p class="why">
-        The movie data is waiting for a restart. Your shelves appear here once it has loaded.
-      </p>
-    {/if}
-  {:else if canAdmin}
+  <h2 class="section-title">Nothing to show yet</h2>
+  {#if canAdmin}
     <p class="why">
-      No artifact bundle has been imported. That is a legal state — the app runs, the setup
-      wizard and admin routes work, and every artifact-dependent surface says so instead of
-      erroring.
+      {session.restartRequired
+        ? 'New movie data is waiting for a restart — Movie data says what to do.'
+        : 'No movie data yet. Import it in Movie data and your shelves appear here.'}
     </p>
-    <a class="btn-primary" href="/admin/data">Import a bundle</a>
+    <a class="btn-primary" href="/admin/movie-data">Open Movie data</a>
+  {:else if session.restartRequired}
+    <p class="why">
+      The movie data is waiting for a restart. Your shelves appear here once it has loaded.
+    </p>
   {:else}
     <p class="why">There is no movie data yet. Once an admin adds it, your shelves appear here.</p>
   {/if}
 {/snippet}
 
 {#if mode === 'grid'}
-  <div class="gridhead">
-    <p class="modeline why" data-testid="home-mode" data-mode="grid" data-reason={reason}>
-      {gridLine(reason)}
-    </p>
+  <div class="gridhead" data-testid="home-mode" data-mode="grid" data-reason={reason}>
+    {#if gridLine(reason)}
+      <p class="footnote">{gridLine(reason)}</p>
+    {/if}
     {#if sortOffered(reason, sortEcho, forYouAvailable)}
       <!-- The pressed position is the order the server says it used, never the one asked for. -->
-      <div class="sort" role="group" aria-label="Order">
+      <div class="segmented sort" role="group" aria-label="Order">
         {#each SORT_CHOICES as c (c.id)}
           <button
-            class="pill"
             data-testid="sort-{c.id}"
             aria-pressed={sortEcho === c.id}
             onclick={() => chooseSort(c.id)}
@@ -470,53 +465,53 @@
         {/each}
       </div>
     {:else if sortWaitingLine(reason, sortEcho, forYouAvailable)}
-      <p class="why sortwait" data-testid="sort-waiting">
+      <p class="footnote" data-testid="sort-waiting">
         {sortWaitingLine(reason, sortEcho, forYouAvailable)}
       </p>
     {/if}
     {#if partitioned}
-      <p class="why partition" data-testid="grid-partition">{partitionLine(kinds, sortEcho)}</p>
+      <p class="footnote" data-testid="grid-partition">{partitionLine(kinds, sortEcho)}</p>
     {/if}
   </div>
 
   {#if loadError}
-    <div class="empty card"><p>{loadError}</p></div>
+    <div class="empty card"><p class="why">{loadError}</p></div>
   {:else if !items.length && !loading}
     <div class="empty card">
       {#if !session.hasBundle}
         {@render noBundle()}
       {:else if elsewhere}
-        <h2>Not in {kindChoice(kinds) === 'series' ? 'series' : 'films'}</h2>
+        <h2 class="section-title">Not in {kindChoice(kinds) === 'series' ? 'series' : 'films'}</h2>
         <p class="why" data-testid="found-elsewhere">
           {elsewhereLine(elsewhere.kind, elsewhere.names, elsewhere.total)}
         </p>
         <button
-          class="btn-primary"
+          class="btn-secondary"
           data-testid="found-elsewhere-switch"
           onclick={() => chooseKinds(elsewhere.kind)}
         >{elsewhere.kind === 'series' ? 'Show series' : 'Show films'}</button>
       {:else}
-        <h2>No matches</h2>
-        <!-- Names the dimensions the catalog search really has. -->
+        <h2 class="section-title">No matches</h2>
         <!-- The grid lists the whole catalog unless "in my library" is on. -->
         <p class="why">{owned ? 'Nothing in your library matches.' : 'Nothing matches.'}</p>
-        <p class="data" data-testid="no-matches-help">
-          search reads the title and its aliases · the kind switch and Filters (genre, decade,
-          seen state, "in my library") narrow it further · clear a chip to widen it
+        <!-- Names the dimensions the catalog search really has. -->
+        <p class="footnote" data-testid="no-matches-help">
+          Search reads titles and their aliases. The kind switch and Filters (genre, decade, seen
+          state, in my library) narrow it; clear a chip to widen it.
         </p>
       {/if}
     </div>
   {:else}
     {#if items.some(isColdPlaced)}
       <!-- The badge's why, said once for the grid: a title= tooltip does not exist on touch. -->
-      <p class="why" data-testid="catalog-cold-note">
-        Cards marked "new" have no outside ratings yet — we placed them by what they're about.
+      <p class="footnote" data-testid="catalog-cold-note">
+        Titles marked New have no outside ratings yet — we placed them by what they're about.
       </p>
     {/if}
     <div class="grid">
       {#each strongItems as t, i (t.id)}
         {#if partitioned && kindHeading(strongItems, i)}
-          <h2 class="kindhead" data-testid="grid-kind-{t.kind}">{kindHeading(strongItems, i)}</h2>
+          <h2 class="list-header kindhead" data-testid="grid-kind-{t.kind}">{kindHeading(strongItems, i)}</h2>
         {/if}
         <PosterCard title={t} onSelect={() => (selected = t.id)} />
       {/each}
@@ -524,7 +519,7 @@
     {#if weakItems.length}
       <!-- Hits that only contain the letters wait behind one button. -->
       {#if showWeak}
-        <p class="why weakhead" data-testid="weak-matches-head">Looser matches</p>
+        <h2 class="list-header weakhead" data-testid="weak-matches-head">Looser matches</h2>
         <div class="grid" data-testid="weak-matches">
           {#each weakItems as t (t.id)}
             <PosterCard title={t} onSelect={() => (selected = t.id)} />
@@ -532,7 +527,7 @@
         </div>
       {:else}
         <div class="more">
-          <button class="btn-ghost" data-testid="weak-matches-toggle" onclick={() => (showWeak = true)}>
+          <button class="btn-secondary" data-testid="weak-matches-toggle" onclick={() => (showWeak = true)}>
             {`Show ${weakTotal.toLocaleString()} looser ${weakTotal === 1 ? 'match' : 'matches'}`}
           </button>
         </div>
@@ -540,8 +535,8 @@
     {/if}
     {#if offset < total && (showWeak || !weakItems.length)}
       <div class="more">
-        <button class="btn-ghost" onclick={() => load({ append: true })} disabled={loading}>
-          {loading ? 'Loading…' : `Show more · ${(total - offset).toLocaleString()} left`}
+        <button class="btn-secondary" onclick={() => load({ append: true })} disabled={loading}>
+          {loading ? 'Loading…' : `Show ${(total - offset).toLocaleString()} more`}
         </button>
       </div>
     {/if}
@@ -552,9 +547,9 @@
   </div>
 {:else}
   <!-- The marker stays for the tests that read `data-mode`. -->
-  <div class="sr-only" data-testid="home-mode" data-mode="shelves">your shelves</div>
+  <div class="sr-only" data-testid="home-mode" data-mode="shelves">Your shelves</div>
   {#if homeError}
-    <div class="empty card"><p>{homeError}</p></div>
+    <div class="empty card"><p class="why">{homeError}</p></div>
   {:else}
     <ShelfList payload={home} loading={homeLoading} onSelect={(id) => (selected = id)} />
   {/if}
@@ -570,88 +565,120 @@
 {/if}
 
 <style>
-  .head {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-    margin-bottom: 18px;
-  }
-  .greetline {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-  }
-  h1 {
-    margin: 0;
-    font-size: 21px;
-    font-weight: 600;
+  .large-title {
+    margin-bottom: 12px;
   }
   .controls {
     display: flex;
-    align-items: center;
-    gap: 10px;
-    flex-wrap: wrap;
-  }
-  .kinds {
-    display: flex;
-    gap: 6px;
+    flex-direction: column;
+    gap: 12px;
+    margin-bottom: 32px;
   }
   .searchrow {
     display: flex;
     gap: 8px;
-    flex: 1 1 260px;
-    min-width: 0;
-    max-width: 520px;
+    align-items: center;
   }
-  .searchrow input {
+  .search {
     flex: 1;
     min-width: 0;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding-left: 12px;
+    border-radius: var(--r-sm);
+    background: var(--surface-2);
+    color: var(--text-3);
   }
-  .filtertoggle {
-    flex: none;
+  /* Outranks design.css's field rule: the label draws the field, the input only holds the text. */
+  .search > input[type='search'][aria-label] {
+    flex: 1;
+    min-width: 0;
+    padding: 0 12px 0 0;
+    background: none;
+    border-radius: 0;
+    outline: none;
   }
+  .search:focus-within {
+    outline: 2px solid var(--accent-text);
+    outline-offset: 2px;
+  }
+  .count {
+    margin: -4px 4px 0;
+    font-variant-numeric: tabular-nums;
+  }
+
   .filterpanel {
-    display: flex;
-    gap: 8px;
-    flex-wrap: wrap;
-    padding: 10px;
-    border: 1px solid var(--line);
-    border-radius: var(--r-md);
-    background: var(--card);
+    margin: -20px 0 16px;
   }
-  .filters {
+  .field {
+    position: relative;
+  }
+  .field:focus-within {
+    outline: 2px solid var(--accent-text);
+    outline-offset: -2px;
+  }
+  .field .value {
+    margin-left: auto;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    color: var(--text-3);
+  }
+  /* Covers its row; the row's own text says what is chosen. */
+  .field select {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    height: 100%;
+    min-height: 0;
+    opacity: 0;
+    cursor: pointer;
+  }
+  .switch {
+    margin-left: auto;
+    flex: none;
+    width: 51px;
+    height: 31px;
+    padding: 2px;
+    border-radius: var(--r-pill);
+    background: rgba(245, 240, 232, 0.16);
+    display: flex;
+    justify-content: flex-start;
+    transition: background 0.2s var(--ease);
+  }
+  .switch > span {
+    width: 27px;
+    height: 27px;
+    border-radius: var(--r-pill);
+    background: var(--text);
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+  }
+  [aria-checked='true'] > .switch {
+    background: var(--accent);
+    justify-content: flex-end;
+  }
+
+  .chips {
     display: flex;
     gap: 8px;
     flex-wrap: wrap;
+    margin: -20px 0 24px;
   }
   .kindnote {
-    margin: -6px 0 0;
+    margin: -16px 4px 24px;
   }
-  select {
-    padding: 7px 10px;
-    border-radius: var(--r-pill);
-    border: 1px solid var(--line-2);
-    background: var(--card);
-    font-family: var(--mono);
-    font-size: 11px;
-    color: var(--ink-3);
+  .notice {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    align-items: flex-start;
+    margin-bottom: 32px;
   }
-  /* 16px: iOS Safari zooms on focus below it, and this scoped rule outranks design.css's 16px. */
-  @media (pointer: coarse) {
-    select {
-      font-size: 16px;
-    }
+  .notice .why {
+    margin: 0 0 4px;
   }
-  /* A native select is as wide as its longest option, which can outgrow a phone. */
-  .filterpanel select {
-    max-width: 100%;
-    min-width: 0;
-    text-overflow: ellipsis;
-  }
-  .filterpanel select.genre {
-    flex: 1 1 12rem;
-  }
+
   /* In flow, not absolute: `main` is not a containing block, so an absolute marker scrolled the page. */
   .sr-only {
     width: 1px;
@@ -663,81 +690,84 @@
     white-space: nowrap;
     border: 0;
   }
-  .count {
-    letter-spacing: 0.04em;
-  }
+
   .gridhead {
     display: flex;
     align-items: center;
     justify-content: space-between;
     gap: 8px 12px;
     flex-wrap: wrap;
-    margin-bottom: 14px;
+    margin-bottom: 12px;
   }
-  .modeline {
+  .gridhead p {
     margin: 0;
   }
   .sort {
-    display: flex;
-    gap: 6px;
-  }
-  .sortwait,
-  .partition {
-    margin: 0;
-    flex-basis: 100%;
-  }
-  .kindhead {
-    grid-column: 1 / -1;
-    margin: 8px 0 0;
-    font-size: 15px;
-  }
-  .weakhead {
-    margin: 22px 0 10px;
-  }
-  .degraded {
-    margin-bottom: 18px;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    align-items: flex-start;
-    border-color: var(--ember-edge);
-    background: var(--ember-wash);
-  }
-  .degraded h2 {
-    margin: 0;
-    font-size: 16px;
-    font-weight: 600;
+    width: 200px;
   }
   .grid {
     display: grid;
-    grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
-    gap: 14px;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 20px 12px;
+  }
+  .kindhead,
+  .weakhead {
+    padding: 0;
+  }
+  .kindhead {
+    grid-column: 1 / -1;
+  }
+  .weakhead {
+    margin: 32px 0 12px;
   }
   .more {
     display: flex;
     justify-content: center;
-    padding: 22px 0;
+    padding: 24px 0;
   }
   .empty {
     padding: var(--card-pad-roomy);
     text-align: center;
     display: flex;
     flex-direction: column;
-    gap: 10px;
+    gap: 8px;
     align-items: center;
   }
-  .empty h2 {
+  .empty p {
     margin: 0;
-    font-size: 17px;
-    font-weight: 600;
-  }
-  .empty .why {
     max-width: 46ch;
   }
-  @media (max-width: 720px) {
+  .empty .btn-primary,
+  .empty .btn-secondary {
+    margin-top: 8px;
+  }
+
+  @media (min-width: 721px) {
+    .large-title {
+      font-size: var(--fs-display);
+      line-height: 48px;
+      margin: 8px 0 24px;
+    }
+    .controls {
+      flex-direction: row;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .kinds {
+      width: 280px;
+    }
+    .searchrow {
+      flex: 0 1 460px;
+    }
+    .count {
+      margin: 0 0 0 auto;
+    }
+    .filterpanel {
+      max-width: 460px;
+    }
     .grid {
-      grid-template-columns: repeat(auto-fill, minmax(104px, 1fr));
-      gap: 10px;
+      grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
+      gap: 24px 16px;
     }
   }
 </style>

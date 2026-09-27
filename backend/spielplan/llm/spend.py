@@ -42,7 +42,7 @@ OVER_CAP_PREFIX = "over spend cap"
 
 # Equal to `acquire/pipeline.NO_SPEND_CAP` (tested); copied because the import runs the other way.
 NO_CAP_REASON = (
-    "no spend cap is configured, and §8 says a paid stage never auto-retries past one. Configure "
+    "no spend cap is configured, and a paid stage never auto-retries past one. Configure "
     "the extraction providers and the cap in Admin, and this title resumes here"
 )
 
@@ -274,7 +274,7 @@ def _passes_of(config: Mapping[str, Any]) -> int | Refusal:
     if isinstance(passes, bool) or not isinstance(passes, int) or passes < 1:
         return _refused(
             f"the llm connector's passes is {passes!r}; it is a whole number of at least 1, and"
-            " absent means 1 (decision 324). Correct it in Admin, and this title resumes here",
+            " absent means 1. Correct it in Admin, and this title resumes here",
             setting="passes", value=passes,
         )
     return passes
@@ -286,14 +286,14 @@ def _providers_of(config: Mapping[str, Any]) -> tuple[str, ...] | Refusal:
     if not isinstance(parallel, bool):
         return _refused(
             f"the llm connector's parallel is {parallel!r}; it is true or false, and absent means"
-            " false (decision 324). Correct it in Admin, and this title resumes here",
+            " false. Correct it in Admin, and this title resumes here",
             setting="parallel", value=parallel,
         )
     if not parallel:
         named = config.get("extraction_provider")
         if not named:
             return _refused(
-                "no extraction provider is assigned, and stage 6 never guesses one (decision 324)."
+                "no extraction provider is assigned, and none is ever guessed."
                 f" Assign one of {', '.join(client.PROVIDERS)} in Admin, and this title resumes"
                 " here",
                 setting="extraction_provider",
@@ -306,7 +306,7 @@ def _providers_of(config: Mapping[str, Any]) -> tuple[str, ...] | Refusal:
         if not isinstance(chosen, list) or not chosen:
             return _refused(
                 f"parallel mode is on and parallel_providers is {chosen!r}, which names no provider"
-                f" to call (decision 324). Choose from {', '.join(client.PROVIDERS)} in Admin, or"
+                f" to call. Choose from {', '.join(client.PROVIDERS)} in Admin, or"
                 " turn parallel mode off, and this title resumes here",
                 setting=setting, value=chosen,
             )
@@ -314,7 +314,7 @@ def _providers_of(config: Mapping[str, Any]) -> tuple[str, ...] | Refusal:
     if unknown:
         return _refused(
             f"the llm connector's {setting} names {', '.join(repr(n) for n in unknown)}, which this"
-            f" build does not call; it calls {', '.join(client.PROVIDERS)} (spec section 9)",
+            f" build does not call; it calls {', '.join(client.PROVIDERS)}",
             setting=setting, value=chosen,
         )
     return tuple(dict.fromkeys(chosen))
@@ -348,7 +348,7 @@ def _batched(config: Mapping[str, Any], batch: Any) -> Mapping[str, Any] | Refus
     if not isinstance(batch, Mapping):
         return _refused(
             f"the flywheel batch this title was launched in is a {type(batch).__name__} and not a"
-            f" plan of providers and passes (decision 442). {_BATCH_ADVICE}",
+            f" plan of providers and passes. {_BATCH_ADVICE}",
             setting="batch",
         )
     providers, passes = batch.get("providers"), batch.get("passes")
@@ -356,13 +356,13 @@ def _batched(config: Mapping[str, Any], batch: Any) -> Mapping[str, Any] | Refus
             or not all(isinstance(name, str) and name in client.PROVIDERS for name in providers)):
         return _refused(
             f"the flywheel batch this title was launched in names providers {providers!r}; a batch"
-            f" names one or more of {', '.join(client.PROVIDERS)} (decision 442). {_BATCH_ADVICE}",
+            f" names one or more of {', '.join(client.PROVIDERS)}. {_BATCH_ADVICE}",
             setting="batch.providers", value=providers,
         )
     if isinstance(passes, bool) or not isinstance(passes, int) or passes < 1:
         return _refused(
             f"the flywheel batch this title was launched in runs {passes!r} pass(es); a batch runs a"
-            f" whole number of at least 1 (decision 442). {_BATCH_ADVICE}",
+            f" whole number of at least 1. {_BATCH_ADVICE}",
             setting="batch.passes", value=passes,
         )
     chosen = list(dict.fromkeys(providers))
@@ -423,7 +423,7 @@ async def _plan(
             # A model refusing forced tool use is a setting to correct, parked before anything is sent.
             return _refused(
                 f"{name} model {model!r} refuses forced tool use, which is how this app asks Anthropic"
-                " for a structured answer (spec section 9), so every call to it would be refused."
+                " for a structured answer, so every call to it would be refused."
                 f" Choose another {name} model in Admin, and this title resumes here",
                 provider=name, model=model,
             )
@@ -431,7 +431,7 @@ async def _plan(
         if price is None:
             return _refused(
                 f"no price is known for {name} model {model!r}, and a spend cap cannot be held"
-                " against a price nobody knows (decision 343). Set price_input and price_output"
+                " against a price nobody knows. Set price_input and price_output"
                 f" for {name} in Admin, or choose a priced model, and this title resumes here",
                 provider=name, model=model,
             )
@@ -490,7 +490,7 @@ async def _blocked(conn: asyncpg.Connection, config: Mapping[str, Any]) -> str |
         fault = _key_fault(name, await registry.load_connector(conn, name))
         if fault is not None:
             return (f"{fault}, so {name} cannot be put into the extraction plan: a key saved later"
-                    " would start spend at a figure nobody was shown (decision 450). Save a usable"
+                    " would start spend at a figure nobody was shown. Save a usable"
                     f" {name} key on its card first")
     return None
 
@@ -527,13 +527,13 @@ PROJECTION_DAYS = 30
 
 NO_HISTORY_REASON = (
     "there is no acquisition history yet: this install has filed no title, so there is no rate to"
-    " project a month from (decision 451)"
+    " project a month from"
 )
 UNKNOWN_MONTH_REASON = (
-    "the per-title figure is unknown, so the month is too (decision 343)"
+    "the per-title figure is unknown, so the month is too"
 )
 NO_CAP_PROJECTION_REASON = (
-    "no spend cap is configured, so stage 6 parks every title until one is set (decisions 325, 348)"
+    "no spend cap is configured, so every title waits until one is set"
 )
 
 
@@ -632,7 +632,7 @@ def _over(clock: _Clock, used: Decimal, limit: Decimal, need: Decimal | None, pl
                   f" ({clock.tz})")
     if unsettled > 0:
         spent_part += (f" -- {_money(unsettled)} of it is calls whose answer never arrived, counted"
-                       " at the most they could have billed (decision 436)")
+                       " at the most they could have billed")
     if need is None:
         middle = ", so no provider is called for this title."
     else:
@@ -644,7 +644,7 @@ def _over(clock: _Clock, used: Decimal, limit: Decimal, need: Decimal | None, pl
     return Refusal(
         OVER_CAP,
         f"{OVER_CAP_PREFIX}: {spent_part}{middle} It resumes by itself once the month rolls over on"
-        f" {clock.rolls_over}, or once the cap is raised in Admin (decision 325)",
+        f" {clock.rolls_over}, or once the cap is raised in Admin",
         {
             "spent_usd": str(used),
             "unsettled_usd": str(unsettled),

@@ -1634,7 +1634,7 @@ async def payload(
                 "slot": s.slot,
                 "size": BLOCK_SIZE,
                 # §6.1's counter, and the unit decision 35's Undo depth is measured in.
-                "counter": f"{s.slot} / {BLOCK_SIZE}",
+                "counter": f"{s.slot} of {BLOCK_SIZE}",
                 # What the counter calls for, which a substitution does not move (the card says
                 # `substituted_for`); includes decision 492's warm-up.
                 "serving": warm_up(

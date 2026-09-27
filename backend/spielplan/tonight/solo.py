@@ -12,6 +12,7 @@ from typing import Any
 
 import asyncpg
 
+from spielplan.connectors import registry
 from spielplan.db import dna_terms
 from spielplan.tonight import combine as combine_rules
 from spielplan.tonight import dna as dna_reads
@@ -22,14 +23,13 @@ from spielplan.tonight import tilt as tilt_rules
 # 54f: "three picks and a wildcard".
 PICKS = 3
 
-# §6.2 step 8's two why-lines: the pull names carried terms; the stretch is the wildcard's label.
-PULL_WHY = "pulls you with {terms}"
-STRETCH_WHY = "a stretch — outside your usual"
+# §6.2 step 8's two why-lines: "{term} · {term}", and the wildcard's label.
+STRETCH_WHY = "A step outside your usual"
 
-# 54f's provenance line: the tilted form replaces "unseen first", never appended to it.
-PROVENANCE_PLAIN = "{budget} min budget · unseen first"
-PROVENANCE_TILTED = "{budget} min budget · tilted by your {n} answers"
-PROVENANCE_REWATCH = "{budget} min budget · rewatches included"
+# 54f's provenance line: the tilted form replaces "Unseen first", never appended to it.
+PROVENANCE_PLAIN = "Unseen first · fits in {budget}"
+PROVENANCE_TILTED = "Tilted by your {n} {answers} · fits in {budget}"
+PROVENANCE_REWATCH = "Rewatches included · fits in {budget}"
 
 # The same bound `home/why.py` puts on a one-line why.
 NAMED_TERMS = 2
@@ -48,16 +48,26 @@ def _pair_side(candidate, genres: Mapping[int, list[str]]) -> dict[str, Any] | N
     }
 
 
-def provenance(*, budget_min: int, answers: int, include_rewatches: bool) -> str:
+def duration(minutes: int) -> str:
+    """How the app writes a runtime: "2h 10m", "2h", "45m"."""
+    h, m = divmod(minutes, 60)
+    return f"{h}h {m}m" if h and m else f"{h}h" if h else f"{m}m"
+
+
+def provenance(*, budget_min: int, answers: int, include_rewatches: bool, kind: str) -> str:
+    budget = duration(budget_min) + (pool_rules.PER_EPISODE if kind == pool_rules.KIND_SERIES else "")
     if answers:
-        return PROVENANCE_TILTED.format(budget=budget_min, n=answers)
+        return PROVENANCE_TILTED.format(
+            n=answers, answers="answer" if answers == 1 else "answers", budget=budget
+        )
     if include_rewatches:
-        return PROVENANCE_REWATCH.format(budget=budget_min)
-    return PROVENANCE_PLAIN.format(budget=budget_min)
+        return PROVENANCE_REWATCH.format(budget=budget)
+    return PROVENANCE_PLAIN.format(budget=budget)
 
 
 def why_line(terms: Sequence[str]) -> str:
-    return PULL_WHY.format(terms=" + ".join(terms[:NAMED_TERMS]))
+    line = " · ".join(terms[:NAMED_TERMS])
+    return line[:1].upper() + line[1:]
 
 
 async def picks(
@@ -88,11 +98,11 @@ async def picks(
         return {
             "picks": [], "wildcard": None,
             "provenance": provenance(
-                budget_min=budget_min, answers=0, include_rewatches=include_rewatches
+                budget_min=budget_min, answers=0, include_rewatches=include_rewatches, kind=kind
             ),
             "empty": (
-                f"Nothing in the library fits {budget_min} minutes tonight — widen the budget "
-                "or include rewatches."
+                f"Nothing in the library fits {duration(budget_min)} tonight — allow a little "
+                "longer, or include rewatches."
             ),
             "pair": None, "answered": 0, "sharpened": False,
         }
@@ -139,6 +149,15 @@ async def picks(
     if len(chosen) < PICKS:
         chosen += [t for t, _ in order if t not in chosen][: PICKS - len(chosen)]
     wildcard = combine_rules.wildcard_from(order, chosen, vectors)
+    # §7.1's Play on Jellyfin on every pick (decision 527); absent with no server or no item.
+    play_url: dict[int, str] = {}
+    link = await registry.play_link(conn)
+    if link is not None:
+        items = await conn.fetch(
+            "SELECT id, jellyfin_id FROM title WHERE id = ANY($1::int[]) AND jellyfin_id IS NOT NULL",
+            [*chosen, *([] if wildcard is None else [wildcard])],
+        )
+        play_url = {r["id"]: link(r["jellyfin_id"]) for r in items}
 
     async def card(title_id: int, *, stretch: bool) -> dict[str, Any]:
         c = by_id[title_id]
@@ -149,14 +168,19 @@ async def picks(
         named = await dna_terms.labels_for(conn, [t["term"] for t in terms])
         words = [str((named.get(t["term"]) or {}).get("label") or t["term"]) for t in terms]
         return {
-            "title_id": title_id, "name": c.name, "year": c.year,
+            "title_id": title_id, "name": c.name, "year": c.year, "kind": c.kind,
             "runtime_min": c.runtime_min, "poster_path": c.poster_path,
             "fit_line": c.fit_line, "over_budget_min": c.over_budget_min,
+            "play_url": play_url.get(title_id),
+            # Why there is no Play: "no server" and "not in your library" are different sentences.
+            "play_reason": (
+                None if title_id in play_url else "no_server" if link is None else "not_in_library"
+            ),
             # §6.8: every pick gets a why, with no model noun (decision 486).
             "why": (
                 STRETCH_WHY if stretch
                 else why_line(words) if terms
-                else "near the top of your list tonight"
+                else "Near the top of your list tonight"
             ),
             "terms": [
                 {"term": t["term"], "tier": t["tier"], "label": w}
@@ -170,7 +194,8 @@ async def picks(
         "picks": [await card(t, stretch=False) for t in chosen],
         "wildcard": None if wildcard is None else await card(wildcard, stretch=True),
         "provenance": provenance(
-            budget_min=budget_min, answers=len(counted), include_rewatches=include_rewatches
+            budget_min=budget_min, answers=len(counted), include_rewatches=include_rewatches,
+            kind=kind,
         ),
         "empty": None,
         # Every answer given (a hold-out costs one of twenty), while `sharpened` reports what tilted.
@@ -196,8 +221,8 @@ __all__ = [
     "PROVENANCE_PLAIN",
     "PROVENANCE_REWATCH",
     "PROVENANCE_TILTED",
-    "PULL_WHY",
     "STRETCH_WHY",
+    "duration",
     "picks",
     "provenance",
     "why_line",

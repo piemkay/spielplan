@@ -1,14 +1,16 @@
 <script>
   // The meter is the server's SUM over `llm_call`, never counted here (decision 325). A cap takes
   // effect at once, and there is no way back to "no cap": an unset cap parks every title.
-  import { saveCap, spend, usd } from '$lib/spendGuard.svelte.js';
+  import { about, runOutDays, saveCap, spend, usd } from '$lib/spendGuard.svelte.js';
 
   // `spend.ATTEMPTS`: attempt 2 is reserved inside the cap before attempt 1 is sent (decision 325).
   const ATTEMPTS = 2;
 
   let amount = $state('');
+  let editing = $state(false);
 
   const meter = $derived(spend.llm?.meter ?? null);
+  const projected = $derived(spend.llm?.projected ?? null);
   const capped = $derived(meter?.cap_usd !== null && meter?.cap_usd !== undefined);
   // `remaining_usd` is floored at zero, so read "at the cap" off spent and cap.
   const over = $derived(capped && Number(meter.spent_usd) >= Number(meter.cap_usd));
@@ -22,42 +24,61 @@
   const noRoom = $derived(
     capped && !over && reserve !== null && micro(meter.remaining_usd) < reserve
   );
+  const runsOut = $derived(capped && !over && !noRoom && runOutDays(spend.llm) !== null);
+  const attention = $derived(Boolean(meter) && (!capped || over || noRoom || runsOut));
+  const share = $derived(
+    !capped
+      ? 0
+      : Number(meter.cap_usd) > 0
+        ? Math.min(100, (100 * Number(meter.spent_usd)) / Number(meter.cap_usd))
+        : 100
+  );
   const unsettled = $derived(meter && Number(meter.unsettled_usd) > 0);
   const typed = $derived(amount.trim() === '' ? null : Number(amount));
   const valid = $derived(typed !== null && Number.isFinite(typed) && typed >= 0);
 
-  /** The month the meter sums over, in the install's zone, not the browser's. */
-  function month(iso, tz) {
+  /** A date of the month the meter sums over, in the install's zone, not the browser's. */
+  function inZone(iso, tz, options) {
     if (!iso) return '';
+    // English like the sentence it sits in.
     try {
-      return new Date(iso).toLocaleDateString(undefined, {
-        month: 'long',
-        year: 'numeric',
-        timeZone: tz
-      });
+      return new Date(iso).toLocaleDateString('en-GB', { ...options, timeZone: tz });
     } catch {
       // A zone this browser does not know: fall back to the browser's own.
-      return new Date(iso).toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+      return new Date(iso).toLocaleDateString('en-GB', options);
     }
   }
-
-  function day(iso, tz) {
-    if (!iso) return '';
-    try {
-      return new Date(iso).toLocaleDateString(undefined, { dateStyle: 'medium', timeZone: tz });
-    } catch {
-      return new Date(iso).toLocaleDateString();
-    }
-  }
+  const resets = $derived(
+    meter ? inZone(meter.period_end, meter.tz, { day: 'numeric', month: 'long' }) : ''
+  );
+  const nextMonth = $derived(meter ? inZone(meter.period_end, meter.tz, { month: 'long' }) : '');
 
   async function setCap() {
     if (!valid) return;
-    if (await saveCap(typed)) amount = '';
+    if (await saveCap(typed)) {
+      amount = '';
+      editing = false;
+    }
+  }
+
+  function stopEditing() {
+    editing = false;
+    amount = '';
+    spend.capError = '';
   }
 </script>
 
-<section
-  class="card"
+{#snippet warning(title)}
+  <div class="head">
+    <span class="tile" aria-hidden="true">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4 2.8 19.5h18.4z" /><path d="M12 10v4.5M12 17.2v.01" /></svg>
+    </span>
+    <h2>{title}</h2>
+  </div>
+{/snippet}
+
+<div
+  class="meter"
   data-testid="spend-meter"
   data-meter-state={!meter
     ? 'unread'
@@ -69,127 +90,218 @@
           ? 'no-room'
           : 'under-cap'}
 >
-  <h2>Spend guard</h2>
   {#if spend.llmError}<p class="err" role="alert">{spend.llmError}</p>{/if}
   {#if meter}
-    <div class="data-lg reading" data-meter-reading>
-      {#if capped}{usd(meter.spent_usd)} of {usd(meter.cap_usd)} this month{:else}{usd(
-          meter.spent_usd
-        )} this month · no cap{/if}
-    </div>
-    <div class="data">
-      {month(meter.period_start, meter.tz)} · until {day(meter.period_end, meter.tz)} · {meter.tz}
-      {#if capped && !over}· {usd(meter.remaining_usd)} left{/if}
-    </div>
-    {#if unsettled}
-      <p class="why" data-meter-unsettled>
-        Of that, <span class="data">{usd(meter.unsettled_usd)}</span> is calls whose answer never
-        arrived, held at the most they could have billed until the provider reports otherwise
-        (decision 436).
+    <section class="card reading" aria-label="Spent this month">
+      <p class="figure" data-meter-reading>
+        <span class="spent">{usd(meter.spent_usd)}</span>
+        <span class="of">{capped ? `of ${usd(meter.cap_usd)} this month` : 'this month, no cap set'}</span>
       </p>
-    {/if}
+      {#if capped}
+        <div class="track" aria-hidden="true">
+          <div class="fill" class:warn={attention} style:width="{share}%"></div>
+        </div>
+      {/if}
+      <p class="footnote">
+        Resets {resets}.{#if capped && !over}{' '}{usd(meter.remaining_usd)} left.{/if}
+      </p>
+      {#if unsettled}
+        <p class="footnote" data-meter-unsettled>
+          Of that, {usd(meter.unsettled_usd)} is calls whose answer never arrived, held at the most
+          they could cost until the provider reports otherwise.
+        </p>
+      {/if}
+    </section>
 
     {#if !capped}
-      <p class="alert" data-meter-no-cap>
-        No cap is set, so stage 6 parks every title and bills nothing until one is set.
-      </p>
+      <article class="card attention" data-meter-no-cap>
+        {@render warning('No cap is set')}
+        <p>New titles wait, and nothing is spent, until a monthly cap is set.</p>
+      </article>
     {:else if over}
-      <p class="alert" role="alert" data-meter-over-cap>
-        <strong>over spend cap</strong>: stage 6 parks new extractions with that reason until the
-        month rolls over on {day(meter.period_end, meter.tz)} or the cap is raised, and an admin
-        retry that would breach it is refused with the same reason.
-      </p>
+      <article class="card attention" role="alert" data-meter-over-cap>
+        {@render warning("This month's budget is spent")}
+        <p>
+          New titles wait, marked “over spend cap”, until {resets} or until the cap is raised. An
+          admin retry that would pass the cap is refused the same way.
+        </p>
+      </article>
     {:else if noRoom}
-      <p class="alert" role="alert" data-meter-over-cap>
-        <strong>over spend cap</strong> for the next title: the {usd(meter.remaining_usd)} left is
-        less than the {usd(reserve / 1e6)} one title reserves at the estimate ({ATTEMPTS} attempts),
-        so stage 6 parks titles with that reason until the month rolls over on
-        {day(meter.period_end, meter.tz)} or the cap is raised, and an admin retry that would breach
-        it is refused with the same reason.
-      </p>
+      <article class="card attention" role="alert" data-meter-over-cap>
+        {@render warning('Not enough left for the next title')}
+        <p>
+          {usd(meter.remaining_usd)} is left, and one title holds {usd(reserve / 1e6)} for its
+          {ATTEMPTS} attempts. New titles wait, marked “over spend cap”, until {resets} or until the
+          cap is raised. An admin retry that would pass the cap is refused the same way.
+        </p>
+      </article>
+    {:else if runsOut}
+      <article class="card attention" data-meter-runs-out>
+        {@render warning(`About ${about(projected.monthly_usd)} a month at this pace`)}
+        <p>
+          {projected.titles} new title{projected.titles === 1 ? '' : 's'} arrived in the last
+          {projected.window_days} days. Once {usd(meter.cap_usd)} is spent, new titles wait until
+          {nextMonth}.
+        </p>
+      </article>
     {/if}
 
-    <div class="cap">
-      <label>
-        <span class="data">MONTHLY CAP · USD</span>
-        <!-- Raw text, not bind:value: an emptied number field binds null, and Number(null) is 0. -->
-        <input
-          type="number"
-          min="0"
-          step="0.01"
-          inputmode="decimal"
-          value={amount}
-          oninput={(e) => (amount = e.currentTarget.value)}
-          placeholder={capped ? usd(meter.cap_usd) : 'e.g. 5.00'}
-        />
-      </label>
-      <button
-        class="btn-primary"
-        onclick={setCap}
-        disabled={!valid || spend.busy === 'cap'}
-      >
-        {spend.busy === 'cap' ? 'Setting…' : 'Set cap'}
-      </button>
-    </div>
-    <p class="why">
-      In force the moment it is set. 0 is a cap too: it spends nothing.
-    </p>
-    {#if spend.capError}<p class="err" role="alert">{spend.capError}</p>{/if}
+    {#if editing}
+      <div class="card cap">
+        <label class="field">
+          <span>Monthly cap, in dollars</span>
+          <!-- Raw text, not bind:value: an emptied number field binds null, and Number(null) is 0. -->
+          <input
+            type="number"
+            min="0"
+            step="0.01"
+            inputmode="decimal"
+            value={amount}
+            oninput={(e) => (amount = e.currentTarget.value)}
+            placeholder={capped ? usd(meter.cap_usd) : 'e.g. 5.00'}
+          />
+        </label>
+        <p class="footnote">In force the moment it's set. $0 is a cap too: it spends nothing.</p>
+        {#if spend.capError}<p class="err" role="alert">{spend.capError}</p>{/if}
+        <div class="actions">
+          <button class="btn-primary" onclick={setCap} disabled={!valid || spend.busy === 'cap'}>
+            {spend.busy === 'cap' ? 'Setting…' : 'Set cap'}
+          </button>
+          <button class="btn-secondary" onclick={stopEditing}>Cancel</button>
+        </div>
+      </div>
+    {:else}
+      <div class="actions wide">
+        <button
+          class={attention && !spend.proposal ? 'btn-primary' : 'btn-secondary'}
+          data-testid="cap-open"
+          onclick={() => (editing = true)}
+        >
+          {!capped ? 'Set a cap' : attention ? 'Raise the cap' : 'Change the cap'}
+        </button>
+        {#if attention}<a class="btn-secondary" href="#plan">Change the plan</a>{/if}
+      </div>
+    {/if}
 
-    <p class="why" data-meter-caption>
-      Metered as billed: every call is written before it is sent and settled to what the provider
-      reported, thinking tokens included. Gemini bills its reasoning as output, so counting only
-      the visible answer would understate the cost about fivefold (§9).
+    <p class="footnote caption" data-meter-caption>
+      Costs are counted as billed, thinking tokens included: every call is written down before it's
+      sent and settled to what the provider reports. Gemini bills its thinking as output, so counting
+      only the visible answer would understate the cost about fivefold.
     </p>
   {:else if !spend.llmError}
-    <p class="data">loading…</p>
+    <p class="footnote">Loading…</p>
   {/if}
-</section>
+</div>
 
 <style>
-  h2 {
-    margin: 0 0 6px;
-    font-size: 15px;
-    font-weight: 600;
-  }
-  .card {
-    margin-bottom: 16px;
+  .meter {
     display: flex;
     flex-direction: column;
-    gap: 8px;
+    gap: 12px;
   }
-  .reading {
-    font-size: 15px;
-    color: var(--ink);
-  }
+  .reading,
+  .attention,
   .cap {
     display: flex;
-    gap: 8px;
-    align-items: flex-end;
-    flex-wrap: wrap;
+    flex-direction: column;
+    gap: 12px;
   }
-  .cap label {
+  .figure {
+    margin: 0;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 8px;
+    font-variant-numeric: tabular-nums;
+  }
+  .spent {
+    font-size: var(--fs-large);
+    line-height: 40px;
+    font-weight: 600;
+  }
+  .of {
+    font-size: var(--fs-subhead);
+    line-height: 20px;
+    color: var(--text-2);
+  }
+  .track {
+    height: 8px;
+    border-radius: var(--r-pill);
+    background: var(--progress-track);
+    overflow: hidden;
+  }
+  .fill {
+    height: 100%;
+    border-radius: var(--r-pill);
+    background: var(--progress-fill);
+  }
+  .fill.warn {
+    background: var(--warning);
+  }
+  .footnote {
+    margin: 0;
+    font-variant-numeric: tabular-nums;
+  }
+  .head {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .tile {
+    width: 30px;
+    height: 30px;
+    flex: none;
+    display: grid;
+    place-items: center;
+    border-radius: var(--r-poster);
+    background: var(--warning-tint);
+    color: var(--warning);
+  }
+  .head h2 {
+    flex: 1;
+    min-width: 0;
+    margin: 0;
+    font-size: var(--fs-body);
+    line-height: 22px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+  .attention p {
+    margin: 0;
+    font-size: var(--fs-callout);
+    line-height: 21px;
+    color: var(--text-2);
+    font-variant-numeric: tabular-nums;
+  }
+  .field {
     display: flex;
     flex-direction: column;
-    gap: 5px;
-    flex: 1;
-    min-width: 160px;
+    gap: 6px;
+    font-size: var(--fs-footnote);
+    color: var(--text-2);
   }
-  .alert {
-    margin: 0;
-    padding: 8px 10px;
-    border: 1px solid var(--ember-lift);
-    border-radius: var(--r-sm);
-    color: var(--ember-lift);
-    font-size: 12.5px;
-    line-height: 1.45;
+  .actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
   }
-  .why {
-    margin: 0;
+  .actions.wide {
+    flex-direction: column;
+    gap: 12px;
+    padding-top: 4px;
+  }
+  .actions.wide > * {
+    width: 100%;
+  }
+  .actions.wide > .btn-primary {
+    min-height: 50px;
+  }
+  .caption {
+    padding: 0 var(--gutter);
   }
   .err {
-    color: var(--ember-lift);
-    font-size: 12.5px;
     margin: 0;
+    color: var(--negative);
+    font-size: var(--fs-subhead);
   }
 </style>

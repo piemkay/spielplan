@@ -92,12 +92,14 @@ def test_two_keys_have_two_fingerprints():
     )
 
 
-async def test_the_card_reports_six_facts_and_no_more(secrets_key, db, app):
-    """An equality on the key set, so a seventh key arrives here before it arrives on any screen."""
+async def test_the_card_reports_seven_facts_and_no_more(secrets_key, db, app):
+    """An equality on the key set, so an eighth key arrives here before it arrives on any screen."""
     admin = await admin_client(app)
     card = await _card(admin)
 
-    assert sorted(card) == ["backup", "jobs", "last_syncs", "logs", "queue", "secrets"]
+    assert sorted(card) == [
+        "acquisition", "backup", "jobs", "last_syncs", "logs", "queue", "secrets"
+    ]
     assert sorted(card["secrets"]) == ["configured", "fingerprint", "key_id", "unreadable"]
     assert sorted(card["backup"]) == ["at", "bytes", "stale", "stale_after_hours"]
     assert sorted(card["queue"]) == ["by_kind", "by_state"]
@@ -124,6 +126,25 @@ async def test_queue_depth_is_reported_by_state_and_by_kind(secrets_key, db, app
         {"kind": "enrich", "state": "done", "count": 1},
     ]
     assert depth["by_state"] == {"pending": 2, "leased": 0, "done": 1, "failed": 1, "skipped": 0}
+
+
+async def test_the_acquisition_board_is_counted_by_status_zeros_included(secrets_key, db, app):
+    """Overview's parked and failed titles (decision 527): every status printed, none dropped."""
+    admin = await admin_client(app)
+    for title_id, status in ((1000000101, "parked"), (1000000102, "parked"), (1000000103, "failed")):
+        await db.execute(
+            "INSERT INTO title (id, kind, name, year, origin) VALUES ($1, 'movie', $2, 2016, 'acquired')",
+            title_id, f"Title {title_id}",
+        )
+        await db.execute(
+            "INSERT INTO acquisition_job (title_id, stage, status) VALUES ($1, 2, $2)", title_id, status
+        )
+
+    counts = (await _card(admin))["acquisition"]
+
+    assert counts == {
+        "queued": 0, "running": 0, "parked": 2, "ready": 0, "failed": 1, "abandoned": 0
+    }
 
 
 async def test_a_last_sync_is_the_newest_successful_run_not_the_newest_run(secrets_key, db, app):

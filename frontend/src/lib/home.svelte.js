@@ -46,15 +46,12 @@ export function activeFilterCount({ genre = '', decade = '', seen = 'any', owned
   ).length;
 }
 
+// A filtered grid names its order with the order control, and its filters with their chips.
 /** @param {string | null} reason `gridReason`'s answer: 'search', 'person' or 'filter' */
 export function gridLine(reason) {
-  if (reason === 'search') {
-    return 'Search results, best match first. Clear the search to get your shelves back.';
-  }
-  if (reason === 'person') {
-    return 'Everything they worked on. Remove their name to get your shelves back.';
-  }
-  return 'Filtered. Remove the filters to get your shelves back.';
+  if (reason === 'search') return 'Best match first';
+  if (reason === 'person') return 'Everything they worked on';
+  return '';
 }
 
 // Offered for a filtered or person grid only (a search is best match first), only when the
@@ -137,32 +134,20 @@ export function plural(kind, n) {
   return kind === 'movie' ? `film${n === 1 ? '' : 's'}` : 'series';
 }
 
-// The hidden clause is part of the count, not a tooltip (decision 18).
-export function countLabel({ total = 0, hidden = {}, kinds = [], filters = [] } = {}) {
-  const head =
-    kinds.length === 1
-      ? `${total.toLocaleString()} ${plural(kinds[0], total)}`
-      : `${total.toLocaleString()} ${total === 1 ? 'title' : 'titles'}`;
-  const parts = [head];
-  for (const [kind, n] of Object.entries(hidden ?? {})) {
-    parts.push(`${n.toLocaleString()} ${plural(kind, n)} hidden`);
-  }
-  for (const f of filters) if (f) parts.push(f);
-  return parts.join(' · ');
+function counted(n, kinds) {
+  const noun = kinds.length === 1 ? plural(kinds[0], n) : n === 1 ? 'title' : 'titles';
+  return `${n.toLocaleString()} ${noun}`;
 }
 
-// The shelves count the household's own library, not the catalog they are not showing.
+// The grid counts what it lists; the set filters are named by their chips (decision 527).
+export function countLabel({ total = 0, kinds = [], owned = false } = {}) {
+  return `${counted(total, kinds)}${owned ? ' in your library' : ''}`;
+}
+
+// The shelves count the household's own library of the shown kind (§6.0).
 export function libraryLabel({ library = {}, kinds = [] } = {}) {
   const shown = kinds.reduce((sum, kind) => sum + (library?.[kind] ?? 0), 0);
-  const head =
-    kinds.length === 1
-      ? `${shown.toLocaleString()} ${plural(kinds[0], shown)} in your library`
-      : `${shown.toLocaleString()} ${shown === 1 ? 'title' : 'titles'} in your library`;
-  const parts = [head];
-  for (const [kind, n] of Object.entries(library ?? {})) {
-    if (!kinds.includes(kind) && n) parts.push(`${n.toLocaleString()} ${plural(kind, n)} hidden`);
-  }
-  return parts.join(' · ');
+  return `${counted(shown, kinds)} in your library`;
 }
 
 // One switch, three positions; Both is a selection, never a merge (decisions 18, 474).
@@ -184,7 +169,7 @@ export function kindsFor(choice) {
 // One row per (shelf, kind), never concatenated (§4.1 rule 5).
 export function shelfRows(payload) {
   return (payload?.shelves ?? []).flatMap((shelf) =>
-    (shelf.sections ?? []).map((section) => ({ shelf: shelf.id, ranking: !!shelf.ranking, section }))
+    (shelf.sections ?? []).map((section) => ({ shelf: shelf.id, section }))
   );
 }
 

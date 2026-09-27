@@ -11,6 +11,8 @@ from typing import Any
 
 import asyncpg
 
+from spielplan.acquire import actions, pipeline
+
 # Unbounded reads on admin surfaces fall over on large installs.
 BOARD_LIMIT = 200
 
@@ -34,6 +36,8 @@ SELECT j.title_id, j.stage, j.status, j.reason, j.retry_after, j.updated_at, j.d
  WHERE j.title_id = $1
 """
 
+
+_COUNTS = "SELECT status, count(*) AS n FROM acquisition_job GROUP BY status"
 
 _DOCUMENTS = """
 SELECT d.id, d.source, d.kind, d.entity_key, d.url, d.http_status, d.content_sha256,
@@ -70,6 +74,15 @@ async def board(conn: asyncpg.Connection, *, limit: int = BOARD_LIMIT) -> list[d
     INNER JOIN: `acquisition_job` cascades on title delete, so a nameless row cannot exist.
     """
     return [_job_row(row) for row in await conn.fetch(_BOARD, limit)]
+
+
+async def counts(conn: asyncpg.Connection) -> dict[str, int]:
+    """Titles per board status, zeros included; counted in SQL because `board` stops at BOARD_LIMIT."""
+    titles = dict.fromkeys((pipeline.QUEUED, pipeline.RUNNING, pipeline.PARKED, pipeline.READY,
+                            pipeline.FAILED, actions.ABANDONED), 0)
+    for row in await conn.fetch(_COUNTS):
+        titles[row["status"]] = row["n"]
+    return titles
 
 
 async def job(conn: asyncpg.Connection, title_id: int) -> dict[str, Any] | None:

@@ -717,7 +717,7 @@ async def test_curated_ledgers_naming_a_vocabulary_this_install_lacks_are_skippe
         if f.rule == "vocabulary" and "has no row for" in f.message
     ]
     assert len(skipped) == 1, report.render()
-    assert "dna_vocab/v1/" in skipped[0] and "decision 265" in skipped[0]
+    assert "dna_vocab/v1/" in skipped[0] and "filled by a content import" in skipped[0]
     assert await db.fetchval("SELECT count(*) FROM dna_adjudication") == 0
     assert await db.fetchval(
         "SELECT state FROM artifact_bundle WHERE version = 'test-v2'"

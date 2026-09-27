@@ -38,7 +38,7 @@ test.describe('passkeys', () => {
 
   test('the account page starts with no passkey and says so', async () => {
     await page.goto('/account');
-    await expect(page.getByRole('heading', { name: 'Account' })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'You', exact: true })).toBeVisible();
     await expect(page.locator('[data-empty="passkeys"]')).toBeVisible();
   });
 
@@ -48,7 +48,7 @@ test.describe('passkeys', () => {
     await page.getByPlaceholder('Name this device (optional)').fill('e2e-laptop');
     await page.getByRole('button', { name: 'Add a passkey' }).click();
 
-    await expect(page.getByText('Passkey registered.')).toBeVisible();
+    await expect(page.getByText('Passkey added.')).toBeVisible();
     await expect(page.getByText('e2e-laptop')).toBeVisible();
     await expect(page.locator('[data-empty="passkeys"]')).toHaveCount(0);
   });
@@ -57,7 +57,7 @@ test.describe('passkeys', () => {
     // §14.4: the rp_id is shown, so a PUBLIC_URL change explains itself on the screen.
     await page.goto('/account');
     const rpId = new URL(page.url()).hostname;
-    await expect(page.locator('.list li').first()).toContainText(rpId);
+    await expect(page.getByTestId('passkey').first()).toContainText(rpId);
   });
 
   test('a second passkey can be registered for the same account', async () => {
@@ -79,7 +79,7 @@ test.describe('passkeys', () => {
     await page.getByPlaceholder('Name this device (optional)').fill('e2e-key');
     await page.getByRole('button', { name: 'Add a passkey' }).click();
     await expect(page.getByText('e2e-key')).toBeVisible();
-    await expect(page.locator('.list li')).toHaveCount(2);
+    await expect(page.getByTestId('passkey')).toHaveCount(2);
   });
 
   test('signing out and back in with the passkey works, with no password typed', async () => {
@@ -91,7 +91,7 @@ test.describe('passkeys', () => {
     await expect(
       page.getByTestId('home-greeting')
     ).toBeVisible();
-    await expect(page.locator('.chip')).toContainText(ADMIN.name);
+    await expect(page.getByTestId('account-chip')).toHaveAccessibleName(new RegExp(ADMIN.name));
   });
 
   test('the session reports that it was authenticated by passkey', async () => {
@@ -112,15 +112,15 @@ test.describe('passkeys', () => {
     ).toBeVisible();
 
     await page.goto('/account');
-    await expect(page.locator('.list li')).toHaveCount(2);
+    await expect(page.getByTestId('passkey')).toHaveCount(2);
   });
 
   test('a removed passkey is gone and the other still signs in', async () => {
     await page.goto('/account');
-    await page.locator('.list li', { hasText: 'e2e-key' }).getByRole('button', {
+    await page.getByTestId('passkey').filter({ hasText: 'e2e-key' }).getByRole('button', {
       name: 'Remove'
     }).click();
-    await expect(page.locator('.list li')).toHaveCount(1);
+    await expect(page.getByTestId('passkey')).toHaveCount(1);
     await expect(page.getByText('e2e-key')).toHaveCount(0);
 
     // The device is gone, so its authenticator goes too; else sign-in might offer the forgotten key.

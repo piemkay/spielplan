@@ -71,7 +71,7 @@ async def items(
     user = f"${len(args) + 1}"
     rows = await conn.fetch(
         f"""
-        SELECT ls.title_id, t.name, ls.s, COALESCE(ls.sigma_eff, ls.sigma) AS sigma,
+        SELECT ls.title_id, t.name, t.year, ls.s, COALESCE(ls.sigma_eff, ls.sigma) AS sigma,
                te.tier AS assigned_tier, te.n_levels AS assigned_k, lv.value AS verdict,
                -- The K the drop is being READ against, in the same round trip as the drop: a
                -- rescale that depends on a second call is a rescale a caller can forget, and this
@@ -116,6 +116,7 @@ async def items(
                 )
             ),
             verdict=None if r["verdict"] is None else int(r["verdict"]),
+            year=r["year"],
         )
         for r in rows
     ]
@@ -299,6 +300,7 @@ def public(tiers: Sequence[board.Tier]) -> list[dict[str, Any]]:
         {
             "index": tier.index,
             "label": tier.label,
+            "verdict": tier.verdict,
             "entries": [entry.public() for entry in tier.entries],
         }
         for tier in tiers

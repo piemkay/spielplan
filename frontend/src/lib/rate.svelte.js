@@ -12,9 +12,9 @@ export const KIND_LABELS = { movie: 'film', series: 'series' };
 
 // [key, name, what it does]: the keys are the wire's and the tests', the names a member's.
 export const MODES = [
-  ['mix', 'Mixed', 'single titles and pairs in turn - the pairs start at 15 ratings'],
-  ['sweep', 'Singles', 'one title at a time - say how you liked it'],
-  ['battle', 'Pairs', 'two titles you rated the same way - pick the one you enjoyed more']
+  ['mix', 'Mixed', 'Single titles and pairs in turn — the pairs start at 15 ratings'],
+  ['sweep', 'Singles', 'One title at a time — say how you liked it'],
+  ['battle', 'Pairs', 'Two titles you rated the same way — pick the one you enjoyed more']
 ];
 
 /** @param {string | null | undefined} mode */
@@ -25,7 +25,7 @@ export function modeName(mode) {
 export const PAIR_QUESTION = 'Which did you enjoy more?';
 
 // The switch belongs to the pair, so its line says it resets (decision 520).
-export const DECISIVE_LABEL = 'clear favourite';
+export const DECISIVE_LABEL = 'Clear favourite';
 export const DECISIVE_COPY =
   'Turn this on when one is clearly better - that answer counts for more. It resets for the next pair.';
 
@@ -63,6 +63,12 @@ export function ratingsLabel(n, kinds = []) {
   return only ? `${count} ${only} ${noun}` : `${count} ${noun}`;
 }
 
+/** A class or verdict label as a member reads it: "liked" -> "Liked". */
+export function sentenceCase(text) {
+  const s = String(text ?? '');
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
 /** The upper end of §12's M2 exit criterion. */
 export const LEARNING_TARGET = 100;
 
@@ -85,6 +91,8 @@ export const rate = $state({
   card: null,
   /** The counter that belongs to `card` while a reveal is held; null otherwise. */
   frozenBlock: null,
+  /** @type {any} the block an answer just finished, its own screen until the person moves on */
+  done: null,
   holding: false,
   /** @type {null | {cause:string, text:string}} */
   drained: null,
@@ -137,31 +145,13 @@ function consumePin(card) {
   if (id != null && head.includes(id)) head = head.filter((t) => t !== id);
 }
 
-/** @param {string[]} kinds */
-export function kindLabel(kinds) {
-  const names = (kinds ?? []).map((k) => KIND_LABELS[k] ?? k);
-  if (!names.length) return '';
-  return names.join(' + ');
-}
-
-// Built from the server's own `counter` (Undo's depth, decision 35), naming the chosen mode.
-export function counterLine(block, kinds, mode) {
-  if (!block) return '';
-  const parts = [`${block.counter} this block`];
-  const kind = kindLabel(kinds);
-  if (kind) parts.push(kind);
-  const name = modeName(mode);
-  if (name) parts.push(name);
-  return parts.join(' · ');
-}
-
-// The one runtime label: series per episode, and no zero hour.
+// The one runtime label: series per episode, and no zero hour or zero minutes.
 export function runtimeLabel(title) {
   if (!title?.runtime_min) return null;
   if (title.kind === 'series') return `${title.runtime_min}m/ep`;
   const h = Math.floor(title.runtime_min / 60);
   const m = title.runtime_min % 60;
-  return h ? `${h}h ${m}m` : `${m}m`;
+  return h && m ? `${h}h ${m}m` : h ? `${h}h` : `${m}m`;
 }
 
 // Built in JS: Svelte collapses the whitespace around an {#if}, gluing the separator.
@@ -187,9 +177,16 @@ export function sharePct(share) {
 export function undoMessage(undo) {
   if (!undo || undo.available) return '';
   if (undo.reason === 'block_boundary') {
-    return 'undo reaches back to the start of this block of 15 and no further';
+    return 'Undo only goes back to the start of these 15';
   }
-  return 'nothing to undo in this block';
+  return 'Nothing to undo yet';
+}
+
+/** Before the balance check arms, the widget says when it will (decision 491). */
+export function armingLine(balance) {
+  const armsAt = balance?.arms_at ?? 0;
+  if (balance?.warn || !armsAt || (balance?.total ?? 0) >= armsAt) return '';
+  return `A balance check starts at ${armsAt} ratings.`;
 }
 
 // Before the first fit the reveal is suppressed with the server's reason, never banded (proposal 153).
@@ -209,9 +206,14 @@ export function preloadArt(card) {
   return [card?.title, card?.left, card?.right].filter(Boolean).map(preloadPoster);
 }
 
-function apply(res, { holdReveal = false } = {}) {
+function apply(res, { holdReveal = false, answer = false } = {}) {
   const answeredCard = rate.card;
   const answeredBlock = rate.session?.block ?? null;
+  const next = res.session?.block ?? null;
+
+  // The fifteenth answer rolls the block; its end screen stays until an Undo takes it back.
+  if (answer && answeredBlock && next && next.index > answeredBlock.index) rate.done = answeredBlock;
+  else if (rate.done && !(next && next.index > rate.done.index)) rate.done = null;
 
   rate.session = res.session ?? null;
   rate.balance = res.class_balance ?? null;
@@ -267,14 +269,14 @@ async function onError(err) {
     return;
   }
   if (reason === 'empty' || reason === 'block_boundary') {
-    rate.notice = message;
+    rate.notice = undoMessage({ available: false, reason });
     await load({ quiet: true });
     return;
   }
   rate.error = message || 'something went wrong';
 }
 
-async function send(fn, { holdReveal = false, pending = null } = {}) {
+async function send(fn, { holdReveal = false, pending = null, answer = false } = {}) {
   if (rate.busy) return;
   rate.busy = true;
   rate.pending = pending;
@@ -282,7 +284,7 @@ async function send(fn, { holdReveal = false, pending = null } = {}) {
   rate.error = '';
   try {
     const res = await fn();
-    if (res) apply(res, { holdReveal });
+    if (res) apply(res, { holdReveal, answer });
   } catch (err) {
     await onError(err);
   } finally {
@@ -322,7 +324,7 @@ export function verdict(value) {
   if (!token || rate.holding) return;
   return send(
     () => post('/rate/verdict', { card_token: token, value, latency_ms: latency(), head }),
-    { holdReveal: true, pending: `verdict-${value}` }
+    { holdReveal: true, pending: `verdict-${value}`, answer: true }
   );
 }
 
@@ -330,7 +332,8 @@ export function notSeen() {
   const token = rate.card?.token;
   if (!token || rate.holding) return;
   return send(() => post('/rate/not-seen', { card_token: token, latency_ms: latency(), head }), {
-    pending: 'not_seen'
+    pending: 'not_seen',
+    answer: true
   });
 }
 
@@ -338,7 +341,8 @@ export function skip() {
   const token = rate.card?.token;
   if (!token || rate.holding) return;
   return send(() => post('/rate/skip', { card_token: token, latency_ms: latency(), head }), {
-    pending: 'skip'
+    pending: 'skip',
+    answer: true
   });
 }
 
@@ -357,7 +361,7 @@ export function duel(outcome, opts = {}) {
   if (opts.token !== undefined && opts.token !== token) return;
   const body = { card_token: token, outcome, latency_ms: latency(), head };
   if (opts.decisive !== undefined) body.decisive = opts.decisive;
-  return send(() => post('/rate/duel', body), { pending: `duel-${outcome}` });
+  return send(() => post('/rate/duel', body), { pending: `duel-${outcome}`, answer: true });
 }
 
 /** §6.1's corrections row. Writes no duel row and does not advance the counter. */
@@ -379,6 +383,12 @@ export function undo() {
   return send(() => post('/rate/undo', {}));
 }
 
+/** Leave a block's end screen for the card the fifteenth answer already brought. */
+export function continueRating() {
+  rate.done = null;
+  shownAt = Date.now();
+}
+
 /** A stray hold timer would fire into a destroyed component. */
 export function reset() {
   clearTimeout(holdTimer);
@@ -387,6 +397,7 @@ export function reset() {
   rate.holding = false;
   rate.reveal = null;
   rate.frozenBlock = null;
+  rate.done = null;
   rate.pending = null;
   clearFinder();
 }

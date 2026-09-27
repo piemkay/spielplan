@@ -309,7 +309,7 @@ async def world(app, db):
 
 
 async def test_every_section_carries_a_why_line_and_every_card_carries_every_named_term(world):
-    """Every term a why-line names, and every shared term, is on EVERY card of that section."""
+    """Every term a why-line names is on EVERY card of that section."""
     payload = await world.home()
     assert payload["shelves"], "no shelves at all — the fixture is not exercising the surface"
 
@@ -318,7 +318,6 @@ async def test_every_section_carries_a_why_line_and_every_card_carries_every_nam
         for section in shelf["sections"]:
             assert section["why"].strip(), f"{shelf['id']}/{section['kind']} has no why-line"
             named = [t["term"] for t in section["why_terms"] if t["role"] == "member"]
-            named += [t["term"] for t in section["shared_terms"]]
             card_ids = [c["title_id"] for c in section["items"]]
             for term in named:
                 carriers = await world.db.fetchval(
@@ -347,8 +346,8 @@ async def test_a_card_carrying_only_one_of_the_two_named_terms_is_not_on_the_she
         assert [c["title_id"] for c in section["items"]] == ids(base, MEMBERS)
         assert {t["term"] for t in section["why_terms"]} == {"morally-grey", "obsession"}
         assert not set(ids(base, DECOYS)) & {c["title_id"] for c in section["items"]}
-        assert section["why"] == "shares morally-grey + obsession with it"
-        # Decision 476: "you put" only for a title the person placed on Rank.
+        assert section["why"] == "Morally-grey · obsession"
+        # Decision 527: the headline names no tier.
         assert section["title"] == f"Because you liked Home {'Film' if base == 1000 else 'Series'} " \
                                   f"{base}"
 
@@ -407,7 +406,7 @@ async def test_the_school_night_shelf_names_the_threshold_its_cards_obey(world):
         section = world.section(payload, "school_night", kind)
         assert section is not None
         assert section["title"] == title
-        assert section["why"] == "for a school night"
+        assert section["why"] == "For a school night"
         assert section["why_numbers"]["max_minutes"] == threshold
         # SHORT, and not MEMBERS, which are as short: shelf 1 claimed them first.
         assert [c["title_id"] for c in section["items"]] == sorted(ids(base, SHORT))
@@ -453,7 +452,7 @@ async def test_the_new_in_library_shelf_only_carries_titles_with_no_crowd_suppor
         section = world.section(payload, "new_in_library", kind_of(base))
         assert section is not None
         # Decision 476's words for the same claim.
-        assert section["why"] == "no outside ratings yet, so we placed them by what they're about"
+        assert section["why"] == "No outside ratings yet, so we placed them by what they're about"
         shown = [c["title_id"] for c in section["items"]]
         # Ordered by recency, newest first: the one shelf that is not score-ordered.
         assert shown == sorted(ids(base, FRONTIER), reverse=True)
@@ -475,7 +474,7 @@ async def test_the_frontier_shelf_names_a_term_no_seen_title_carries(world):
         section = world.section(payload, "never_watched_term", kind_of(base))
         assert section is not None
         assert section["title"] == "You've never watched anything neon"
-        assert section["why"] == "close to cosy, which you like", section["why"]
+        assert section["why"] == "Close to cosy, which you like", section["why"]
         roles = {t["term"]: t["role"] for t in section["why_terms"]}
         assert roles == {"neon": "member", "cosy": "anchor_side"}
         assert sorted(c["title_id"] for c in section["items"]) == sorted(ids(base, FRONTIER))
@@ -500,7 +499,7 @@ async def test_the_sweet_spot_is_unseen_by_both_and_high_for_both(world):
         assert section is not None
         # Decision 476: the title says what the shelf predicts.
         assert section["title"] == "You and jenny would both enjoy these"
-        assert section["why"] == "neither of you has seen them — a good pick for a night in together"
+        assert section["why"] == "Neither of you has seen them — a good pick for a night in together"
         assert section["caption"] is None
         shown = [c["title_id"] for c in section["items"]]
         assert shown == ids(base, DECOYS), "the fixture's sweet spot is DECOYS, in score order"
@@ -588,8 +587,8 @@ async def test_a_synced_seen_but_unobserved_title_cannot_anchor_shelf_one(world)
     )
 
 
-async def test_the_anchor_headline_names_the_tier_the_owner_assigned(world):
-    """The latest `tier_edit` decides where a title renders, so "you put X in" must read it."""
+async def test_the_anchor_follows_the_tier_the_owner_assigned(world):
+    """The latest `tier_edit` decides where a title renders, and the headline still names no tier."""
     tier_set = shelves.DEFAULT_TIER_SET
     model_tier = await world.db.fetchval(
         "SELECT tier FROM ledger_state WHERE user_id = $1 AND title_id = 1000", world.patrick
@@ -608,9 +607,9 @@ async def test_the_anchor_headline_names_the_tier_the_owner_assigned(world):
     )
     film = world.section(await world.home(), "because_anchor", "movie")
     assert film["anchor"]["tier"] == "F", "Home is still naming the tier the model fitted"
-    assert film["title"] == "Because you put Home Film 1000 in F", film["title"]
+    assert film["title"] == "Because you liked Home Film 1000", film["title"]
 
-    # After the refit too: `tier_edit` is append-only, so the sentence is stable by construction.
+    # After the refit too: `tier_edit` is append-only, so the anchor is stable by construction.
     await world.db.execute(
         "DELETE FROM user_title WHERE user_id = $1 AND title_id BETWEEN 1001 AND 1099",
         world.patrick,
@@ -620,18 +619,18 @@ async def test_the_anchor_headline_names_the_tier_the_owner_assigned(world):
     after = world.section(await world.home(), "because_anchor", "movie")
     assert after is not None, "the refit suppressed shelf 1"
     assert after["anchor"]["title_id"] == 1000
-    assert after["title"] == "Because you put Home Film 1000 in F", after["title"]
+    assert after["anchor"]["tier"] == "F", after["anchor"]
 
     model_after = await world.db.fetchval(
         "SELECT tier FROM ledger_state WHERE user_id = $1 AND title_id = 1000", world.patrick
     )
     assert model_after != 0, (
-        f"the refit fitted the anchor into F itself (tier {model_after}), so the headline would "
+        f"the refit fitted the anchor into F itself (tier {model_after}), so the anchor would "
         "read F whichever column it took — this assertion has stopped being falsifiable"
     )
 
 
-async def test_the_anchor_headline_names_the_tier_rank_renders_after_a_k_change(world):
+async def test_the_anchor_is_at_the_tier_rank_renders_after_a_k_change(world):
     """Home and Rank must map a drop across a K change through the SAME helper."""
     labels = [f"T{i}" for i in range(12)]
     await world.db.execute(
@@ -657,7 +656,7 @@ async def test_the_anchor_headline_names_the_tier_rank_renders_after_a_k_change(
     film = world.section(await world.home(), "because_anchor", "movie")
     assert film is not None, "growing the tier set suppressed shelf 1"
     assert film["anchor"]["tier"] == "T11", "Home is still reading the raw index of the old board"
-    assert film["title"] == "Because you put Home Film 1000 in T11", film["title"]
+    assert film["title"] == "Because you liked Home Film 1000", film["title"]
 
     # And Rank agrees, which is the half neither surface could assert on its own.
     rows = {
@@ -1256,7 +1255,7 @@ async def test_your_top_picks_claims_first_and_keeps_its_whole_list(world):
     first = world.section(payload, "because_anchor", "movie")
     assert 1001 not in {c["title_id"] for c in first["items"]}
     assert [c["title_id"] for c in first["items"]] == ids(1000, DECOYS)
-    assert first["why"] == "shares obsession + period with it", first["why"]
+    assert first["why"] == "Obsession · period", first["why"]
 
 
 async def test_the_floor_applies_after_the_claim_and_says_so(world):
@@ -1333,7 +1332,7 @@ async def test_the_anchor_is_the_highest_tier_before_the_highest_s(world):
 
 
 async def test_the_anchor_headline_says_what_the_person_did(world):
-    """Decision 476: the headline says what the person did, never "you put" for an unplaced title."""
+    """Decision 527: the headline reads the verdict, and a placement on Rank never names a tier."""
     await world.db.execute(
         "UPDATE ledger_state SET observed = false "
         "WHERE user_id = $1 AND kind = 'movie' AND title_id <> 1000",
@@ -1353,7 +1352,7 @@ async def test_the_anchor_headline_says_what_the_person_did(world):
         world.patrick,
     )
     placed = world.section(await world.home(), "because_anchor", "movie")
-    assert placed["title"] == "Because you put Home Film 1000 in A+"
+    assert placed["title"] == "More like Home Film 1000", placed["title"]
 
 
 async def _reask(db, user_id: int, title_id: int, *, real: int, reask: int) -> None:
@@ -1427,44 +1426,9 @@ async def test_the_anchor_is_the_highest_tier_the_board_shows_after_a_k_change(w
     )
     section = world.section(await world.home(), "because_anchor", "movie")
     assert section["anchor"]["title_id"] == 1012, section["anchor"]
-    assert section["title"] == "Because you put Home Film 1012 in T11", section["title"]
+    assert section["title"] == "Because you liked Home Film 1012", section["title"]
     rows = {r.title_id: r for r in await read.items(world.db, user_id=world.patrick, kind="movie")}
     assert rows[1012].assigned_tier == 11, "Rank renders the drop somewhere else"
-
-
-async def test_a_card_says_whether_its_letter_is_the_one_the_rank_board_shows(world):
-    """The card says whether its letter is the board's: unrated
-    titles are on no board, drops render at the drop."""
-    # 1021 seen and unrated; 1015 fitted B and dropped to A+; 1012 fitted A, no drop.
-    await world.db.execute(
-        """
-        INSERT INTO ledger_state (user_id, title_id, s, sigma, cdf, tier, kind, observed)
-        VALUES ($1, 1021, 9.0, 0.2, 0.99, 6, 'movie', false)
-        """,
-        world.patrick,
-    )
-    await world.db.execute(
-        "INSERT INTO tier_edit (user_id, title_id, tier, via) VALUES ($1, 1015, 5, 'drag_drop')",
-        world.patrick,
-    )
-    section = world.section(await world.home(), "top_of_ledger", "movie")
-    cards = {c["title_id"]: c for c in section["items"]}
-    assert (cards[1021]["tier"], cards[1021]["on_board"], cards[1021]["board_tier"]) == (
-        "S", False, None
-    ), "a title nobody rated is not on the Rank board, whatever the fit says"
-    assert (cards[1015]["tier"], cards[1015]["on_board"], cards[1015]["board_tier"]) == (
-        "B", True, "A+"
-    ), "the letter stays the fit's (decision 187) and the board's letter travels beside it"
-    assert (cards[1012]["tier"], cards[1012]["on_board"], cards[1012]["board_tier"]) == (
-        "A", True, "A"
-    )
-    board = {r.title_id: r for r in await read.items(world.db, user_id=world.patrick, kind="movie")}
-    assert 1021 not in board and board[1015].assigned_tier == 5
-    # Every card on every shelf carries the pair.
-    for shelf in (await world.home())["shelves"]:
-        for sec in shelf["sections"]:
-            for card in sec["items"]:
-                assert "on_board" in card and "board_tier" in card, (shelf["id"], card)
 
 
 async def test_a_cold_placed_title_with_crowd_ratings_is_not_new(world):
@@ -1651,7 +1615,7 @@ async def test_shelf_one_weighs_a_shared_term_by_how_rare_it_is(world):
 
     section = world.section(await world.home(kinds=("movie",)), "because_anchor", "movie")
     assert [c["title_id"] for c in section["items"]] == [1030, 1031, 1032], section["items"]
-    assert section["why"] == "shares rare one + rare two with it", section["why"]
+    assert section["why"] == "Rare one · rare two", section["why"]
 
 
 async def _animated(db, *title_ids: int) -> None:
@@ -1697,7 +1661,7 @@ async def test_the_frontier_names_a_neighbour_from_another_facet(world):
     payload = await world.home()
     assert world.section(payload, "never_watched_term", "movie") is None
     series = world.section(payload, "never_watched_term", "series")
-    assert series["why"] == "close to cosy, which you like"
+    assert series["why"] == "Close to cosy, which you like"
 
 
 async def test_the_sweet_spot_ranks_the_two_members_on_one_scale(world):
@@ -1773,7 +1737,7 @@ async def _why(client, title_id: int):
 async def test_the_title_card_says_which_liked_title_it_is_like(world):
     """One member-register sentence naming the liked title this one is like."""
     assert await _why(world.client, 1001) == (
-        "Because you liked Home Film 1000 — they share morally-grey + obsession"
+        "Because you liked Home Film 1000 — morally-grey, obsession"
     )
     jenny = await world.sign_in_jenny()
     assert await _why(jenny, 1001) is None

@@ -9,7 +9,7 @@ vi.mock('$lib/api.js', () => ({ api: vi.fn(), get: vi.fn(), post: vi.fn() }));
 
 import { get, post } from '$lib/api.js';
 import BundleImport from './components/BundleImport.svelte';
-import DataPage from '../routes/admin/data/+page.svelte';
+import MovieDataPage from '../routes/admin/movie-data/+page.svelte';
 import { session } from './session.svelte.js';
 import {
   FAILED,
@@ -59,7 +59,7 @@ const accepted = (over = {}) => ({
   ...over
 });
 
-/** `GET /api/admin/bundle/state`, every key the Data tab reads. */
+/** `GET /api/admin/bundle/state`, every key the Movie data page reads. */
 const bundleState = (over = {}) => ({
   bundles: [],
   active: null,
@@ -331,7 +331,7 @@ describe("a failing finding's detail", () => {
   });
 });
 
-describe("the Data tab's import control", () => {
+describe("Movie data's import control", () => {
   const open = async () => {
     const app = mount(BundleImport, { target, props: {} });
     await settle();
@@ -455,7 +455,7 @@ describe("the Data tab's import control", () => {
   it('asks for a bundle directory or an archive, which is what the importer now takes', async () => {
     const app = await open();
     try {
-      expect(target.querySelector('label').textContent).toContain('.TAR/.TAR.ZST');
+      expect(target.querySelector('label').textContent).toContain('.tar.zst');
     } finally {
       unmount(app);
     }
@@ -533,7 +533,7 @@ describe('what an import leaves served', () => {
   });
 });
 
-describe('the Data tab', () => {
+describe('the Movie data page', () => {
   const pageState = (over = {}) => bundleState({ active: 'test-v1', bundles: [], ...over });
 
   const openPage = async (state) => {
@@ -541,7 +541,7 @@ describe('the Data tab', () => {
       if (path === '/admin/bundle/state') return state;
       throw new Error('no sources in this fixture');
     });
-    const app = mount(DataPage, { target, props: {} });
+    const app = mount(MovieDataPage, { target, props: {} });
     await settle();
     return app;
   };
@@ -596,7 +596,7 @@ describe('the Data tab', () => {
       // The boot reads: the adopted import lands and `onImported` bootstraps the shell.
       return {};
     });
-    const app = mount(DataPage, { target, props: {} });
+    const app = mount(MovieDataPage, { target, props: {} });
     await settle();
     try {
       expect(box().getAttribute('data-phase')).toBe(RUNNING);
@@ -627,7 +627,7 @@ describe('the Data tab', () => {
     });
     // What the server would answer: an install mid-import still validates a bundle ok.
     vi.mocked(post).mockResolvedValue({ report: report(), text: '' });
-    const app = mount(DataPage, { target, props: {} });
+    const app = mount(MovieDataPage, { target, props: {} });
     await settle();
     try {
       expect(box().getAttribute('data-phase')).toBe(RUNNING);
@@ -713,7 +713,7 @@ describe("the first-boot wizard's importer", () => {
     session.user = null;
   });
 
-  it('adopts a running import nobody handed it, the way the Data tab does', async () => {
+  it('adopts a running import nobody handed it, the way Movie data does', async () => {
     session.user = { id: 1, name: 'admin', role: 'admin', must_change_password: false };
     const stored = report({ findings: [finding('note', 'stage', 'artifacts staged to /data')] });
     /** @type {(value: any) => void} */

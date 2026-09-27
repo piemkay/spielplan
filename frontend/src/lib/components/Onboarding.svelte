@@ -17,6 +17,7 @@
     syncSubscription,
     watchInstallPrompt
   } from '$lib/push.js';
+  import RowIcon from './RowIcon.svelte';
 
   // Settled until the server says otherwise, so the nag never flashes on every visit.
   let complete = $state(true);
@@ -47,19 +48,18 @@
           : 'off'
   );
   // Not `perm === 'granted'`: a granted device whose row was pruned is not registered.
+  const PUSH_WORD = { unsupported: 'Unavailable', on: 'On', denied: 'Blocked', off: 'Off' };
+  const installed = $derived(standalone || installOutcome === 'accepted');
 
   // The server's device handle is the only way to mark this row: no `crypto.subtle` over plain HTTP.
   const scopeOf = (device) =>
     localDevice ? (device.device === localDevice ? 'this' : 'other') : 'unknown';
   const devicesWhy = $derived(
     !localSub
-      ? 'None of these is this browser — notifications are per-device, and this one is ' +
-        'not registered yet.'
+      ? 'Notifications reach these devices, not this one.'
       : localDevice
-        ? 'Notifications are per-device. The one you are on is marked; turning them off here ' +
-          'leaves the others on.'
-        : 'Notifications are per-device, and this one is registered too; turning them off ' +
-          'here leaves the others on.'
+        ? 'Turning notifications off here leaves the others on.'
+        : 'Notifications reach this device too. Turning them off here leaves the others on.'
   );
 
   onMount(() => {
@@ -90,8 +90,8 @@
         localDevice = null;
         noteKind = 'stale';
         pushNote =
-          'This device was registered before the server’s notification key changed, so nothing ' +
-          'can reach it. Turning notifications on again re-registers it.';
+          'Notifications stopped reaching this device after a change on the server. Turn them ' +
+          'on again to fix it.';
       } else if (synced) {
         devices = synced.subscriptions;
         localDevice = synced.device ?? null;
@@ -170,9 +170,7 @@
         localSub = null;
         localDevice = null;
         noteKind = 'nothing-local';
-        pushNote =
-          'This browser holds no notification subscription, so there was nothing to turn off ' +
-          'here. The devices listed below are your other ones.';
+        pushNote = 'Notifications were already off here. Your other devices keep theirs.';
       }
     } catch (err) {
       error = err.message || String(err);
@@ -183,228 +181,224 @@
 </script>
 
 <section
-  class="card"
+  class="device"
   data-testid="onboarding"
   data-onboarding-state={complete ? 'settled' : 'prompt'}
   data-platform={where}
   data-push-state={pushState}
   data-standalone={standalone}
 >
-  <h2>This device</h2>
+  <h2 class="list-header">This device</h2>
+
+  <ul class="list-group">
+    <li>
+      <div class="list-row">
+        <RowIcon name="home-screen" tone="green" />
+        <span>Add to Home Screen</span>
+        <span class="value">{installed ? 'Installed' : 'Not yet'}</span>
+      </div>
+      <div class="detail">
+        {#if standalone}
+          <p data-testid="onboarding-installed">
+            You are in the Home Screen app — on an iPhone, the only place notifications work.
+          </p>
+        {:else if where === 'ios-safari'}
+          <!-- No direction word: the host moves the Sign-in group above or below this one. -->
+          <ol class="steps" data-testid="onboarding-ios-steps">
+            <li>Tap the Share button in Safari's toolbar (the square with the arrow).</li>
+            <li>Scroll down and choose <strong>Add to Home Screen</strong>.</li>
+            <li>Open Spielplan from the new icon and sign in there once.</li>
+          </ol>
+          <p>
+            On an iPhone, notifications only work from that icon. The Home Screen app keeps its own
+            sign-in, so it asks who you are once more — adding a passkey on this page first makes
+            that a single tap.
+          </p>
+        {:else if where === 'ios-other'}
+          <p data-testid="onboarding-ios-browser">
+            On an iPhone only Safari can add Spielplan to the Home Screen. Open it in Safari to do
+            it there.
+          </p>
+        {:else if prompt}
+          <button
+            class="btn-tinted"
+            data-testid="onboarding-install"
+            onclick={install}
+            disabled={busy === 'install'}
+          >
+            {busy === 'install' ? 'Waiting for the browser…' : 'Install Spielplan'}
+          </button>
+        {:else}
+          <p data-testid="onboarding-install-unavailable">
+            This browser has not offered to install Spielplan — it may be installed already. It
+            works the same in a tab.
+          </p>
+        {/if}
+        {#if installOutcome}
+          <p data-testid="onboarding-install-outcome">
+            {installOutcome === 'accepted'
+              ? 'Installed. Open Spielplan from the new icon from now on.'
+              : 'Not installed — the browser prompt was dismissed.'}
+          </p>
+        {/if}
+      </div>
+    </li>
+
+    <li>
+      <div class="list-row">
+        <RowIcon name="bell" tone="red" />
+        <span>Notifications</span>
+        <span class="value">{PUSH_WORD[pushState]}</span>
+      </div>
+      <div class="detail">
+        {#if pushState === 'unsupported'}
+          <!-- In a Safari tab the cause is the tab, not the browser: iOS pushes only to the home-screen app. -->
+          {#if where === 'ios-safari'}
+            <p data-testid="onboarding-push-state">
+              On an iPhone, notifications come from the Home Screen app, not a Safari tab. Add the
+              icon first and turn them on there — until then, everything they would tell you waits
+              in the app.
+            </p>
+          {:else}
+            <p data-testid="onboarding-push-state">
+              This browser can't show notifications from Spielplan. Nothing is lost — everything
+              they would tell you waits in the app.
+            </p>
+          {/if}
+        {:else if pushState === 'on'}
+          <p data-testid="onboarding-push-state">
+            On for this device. Anything they tell you also waits in the app.
+          </p>
+          <button
+            class="btn-secondary"
+            data-testid="onboarding-push-disable"
+            onclick={disable}
+            disabled={busy === 'push'}
+          >
+            Turn notifications off
+          </button>
+        {:else if pushState === 'denied'}
+          <p data-testid="onboarding-push-state">
+            Notifications are blocked in this browser. Turn them on in its settings for this site.
+          </p>
+        {:else}
+          <p data-testid="onboarding-push-state">
+            Turn them on to be asked “Did you finish it?” when something plays to the end, and to
+            hear when someone starts a Tonight room.
+          </p>
+          <button
+            class="btn-tinted"
+            data-testid="onboarding-push-enable"
+            onclick={enable}
+            disabled={busy === 'push'}
+          >
+            {busy === 'push' ? 'Waiting for the browser…' : 'Turn on notifications'}
+          </button>
+          {#if !vapidKey}
+            <!-- Saying so beats a button that fails with a DOMException nobody can act on. -->
+            <p data-testid="onboarding-push-unconfigured">
+              Notifications are not set up on this server yet, so this may not work. Everything
+              still shows up in the app.
+            </p>
+          {/if}
+        {/if}
+
+        {#if pushNote}
+          <p data-testid="onboarding-push-note" data-note={noteKind}>{pushNote}</p>
+        {/if}
+      </div>
+    </li>
+  </ul>
 
   {#if complete}
-    <p class="why">
-      Install and notifications are per-device, so this section is here whenever you switch
-      phones. Nothing below is required.
-    </p>
+    <p class="list-footer">Both are optional, and both are just for this device.</p>
   {:else}
-    <p class="why" data-testid="onboarding-prompt">
-      Two things make Spielplan feel like an app on this phone: putting it on the home screen,
-      and letting it tell you when something finished playing. Both are optional, both are just
-      for this device, and you will not be asked again.
+    <p class="list-footer" data-testid="onboarding-prompt">
+      Two things make Spielplan feel like an app on this phone: an icon on the Home Screen, and a
+      nudge when something finishes playing. Both are optional and just for this device, and you
+      will not be asked again.
     </p>
-  {/if}
-
-  <div class="step">
-    <div class="label data">1 · on the home screen</div>
-    {#if standalone}
-      <p class="why" data-testid="onboarding-installed">
-        Installed — you are running the home-screen app. This is the only place notifications
-        work on an iPhone.
-      </p>
-    {:else if where === 'ios-safari'}
-      <!-- No direction word: the host moves the Passkeys card above or below this one. -->
-      <ol class="steps" data-testid="onboarding-ios-steps">
-        <li>Tap the Share button in Safari's toolbar (the square with the arrow).</li>
-        <li>Scroll down and choose <strong>Add to Home Screen</strong>.</li>
-        <li>Open Spielplan from the new icon and sign in there once.</li>
-      </ol>
-      <p class="why">
-        Safari gives a page no way to ask to be installed, so these three taps are the whole
-        mechanism on iOS — and on an iPhone notifications only work from that icon. The icon
-        opens with its own cookies, so the home-screen app keeps its own sign-in and will ask
-        who you are one more time. Adding a passkey on this page is worth doing before you go.
-      </p>
-    {:else if where === 'ios-other'}
-      <p class="why" data-testid="onboarding-ios-browser">
-        On iOS only Safari can add a page to the home screen. Open Spielplan in Safari and this
-        step will explain itself there.
-      </p>
-    {:else if prompt}
-      <button
-        class="btn-primary"
-        data-testid="onboarding-install"
-        onclick={install}
-        disabled={busy === 'install'}
-      >
-        {busy === 'install' ? 'Waiting for the browser…' : 'Install Spielplan'}
-      </button>
-    {:else}
-      <p class="why" data-testid="onboarding-install-unavailable">
-        This browser has not offered an install prompt. Either the app is installed already, or
-        the browser does not do installs — the app works the same either way, in a tab.
-      </p>
-    {/if}
-    {#if installOutcome}
-      <p class="why" data-testid="onboarding-install-outcome">
-        {installOutcome === 'accepted'
-          ? 'Installed. Open Spielplan from the new icon from now on.'
-          : 'Not installed — the browser prompt was dismissed.'}
-      </p>
-    {/if}
-  </div>
-
-  <div class="step">
-    <div class="label data">2 · notifications</div>
-    {#if pushState === 'unsupported'}
-      <!-- In a Safari tab the cause is the tab, not the browser: iOS pushes only to the home-screen app. -->
-      {#if where === 'ios-safari'}
-        <p class="why" data-testid="onboarding-push-state">
-          On an iPhone notifications come from the home-screen app rather than from a Safari
-          tab — add the icon in step 1 and turn them on there. Nothing is lost meanwhile: every
-          prompt notifications would carry also waits for you inside the app.
-        </p>
-      {:else}
-        <p class="why" data-testid="onboarding-push-state">
-          This browser has no Web Push support. Nothing is lost: every prompt notifications would
-          carry also waits for you inside the app.
-        </p>
-      {/if}
-    {:else if pushState === 'on'}
-      <p class="why" data-testid="onboarding-push-state">
-        Notifications are on for this device. They are best-effort — anything they would have
-        told you is also waiting in the app.
-      </p>
-      <button
-        class="btn-ghost"
-        data-testid="onboarding-push-disable"
-        onclick={disable}
-        disabled={busy === 'push'}
-      >
-        Turn notifications off
-      </button>
-    {:else if pushState === 'denied'}
-      <p class="why" data-testid="onboarding-push-state">
-        This browser is blocking notifications for Spielplan. We cannot ask again from here —
-        it has to be changed in the browser's own site settings.
-      </p>
-    {:else}
-      <p class="why" data-testid="onboarding-push-state">
-        Off for this device — each phone or browser asks for itself. Turned on, this one gets the
-        “did you finish it?” question when something plays to the end, and an invitation when
-        someone starts a session.
-      </p>
-      <button
-        class="btn-primary"
-        data-testid="onboarding-push-enable"
-        onclick={enable}
-        disabled={busy === 'push'}
-      >
-        {busy === 'push' ? 'Waiting for the browser…' : 'Turn on notifications'}
-      </button>
-      {#if !vapidKey}
-        <!-- Saying so beats a button that fails with a DOMException nobody can act on. -->
-        <p class="why" data-testid="onboarding-push-unconfigured">
-          This server has no push key configured yet, so your browser may refuse to register.
-          The in-app prompts work regardless.
-        </p>
-      {/if}
-    {/if}
-
-    {#if pushNote}
-      <p class="why" data-testid="onboarding-push-note" data-note={noteKind}>{pushNote}</p>
-    {/if}
-
-    <!-- Outside the state branches: the list is the account's, and a second phone needs it most. -->
-    {#if devices.length}
-      <ul class="list" data-testid="onboarding-devices">
-        {#each devices as device (device.id)}
-          <li data-testid="onboarding-device" data-device={scopeOf(device)}>
-            <span>
-              {device.device_label ?? 'Unnamed device'}{scopeOf(device) === 'this'
-                ? ' · this device'
-                : ''}
-            </span>
-            <span class="data">{device.device}</span>
-          </li>
-        {/each}
-      </ul>
-      <p class="why" data-testid="onboarding-devices-why">{devicesWhy}</p>
-    {/if}
-  </div>
-
-  {#if !complete}
-    <div class="row">
-      <button class="btn-ghost" data-testid="onboarding-decline" onclick={finish}>
-        Not now — don't ask again
-      </button>
-    </div>
+    <button class="btn-plain decline" data-testid="onboarding-decline" onclick={finish}>
+      Not now — don't ask again
+    </button>
   {/if}
 
   {#if error}
-    <div class="err" role="alert" data-testid="onboarding-error">{error}</div>
+    <p class="err" role="alert" data-testid="onboarding-error">{error}</p>
+  {/if}
+
+  <!-- Outside the state branches: the list is the account's, and a second phone needs it most. -->
+  {#if devices.length}
+    <h3 class="list-header devices-head">Getting notifications</h3>
+    <ul class="list-group" data-testid="onboarding-devices">
+      {#each devices as device (device.id)}
+        <li class="list-row" data-testid="onboarding-device" data-device={scopeOf(device)}>
+          <span>{device.device_label ?? 'Unnamed device'}</span>
+          {#if scopeOf(device) === 'this'}<span class="value">This device</span>{/if}
+        </li>
+      {/each}
+    </ul>
+    <p class="list-footer" data-testid="onboarding-devices-why">{devicesWhy}</p>
   {/if}
 </section>
 
 <style>
-  section {
+  .device {
     display: flex;
     flex-direction: column;
-    gap: 10px;
   }
-  h2 {
+  ul {
+    list-style: none;
     margin: 0;
-    font-size: 14px;
-    font-weight: 600;
+    padding: 0;
   }
-  .step {
+  .list-group > li + li {
+    box-shadow: inset 0 0.5px 0 var(--separator);
+  }
+  /* A row's state in words, under its title: indented to the title, past the 30px tile. */
+  .detail {
     display: flex;
     flex-direction: column;
     align-items: flex-start;
     gap: 8px;
-    padding-top: 10px;
-    border-top: 1px solid var(--line);
+    padding: 0 var(--gutter) 12px 58px;
+    font-size: var(--fs-subhead);
+    line-height: 20px;
+    color: var(--text-2);
   }
-  .label {
-    text-transform: uppercase;
-    letter-spacing: 0.06em;
-    color: var(--ink-3);
+  .detail p {
+    margin: 0;
   }
   .steps {
     margin: 0;
     padding-left: 18px;
     display: flex;
     flex-direction: column;
-    gap: 5px;
-    font-size: 13.5px;
-    color: var(--ink-2);
+    gap: 4px;
   }
-  .list {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-    align-self: stretch;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
+  .steps strong {
+    color: var(--text);
+    font-weight: 600;
   }
-  .list li {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    padding: 9px 11px;
-    border: 1px solid var(--line);
-    border-radius: var(--r-sm);
-    font-size: 13.5px;
+  .detail .btn-tinted,
+  .detail .btn-secondary {
+    border-radius: var(--r-pill);
+    font-size: var(--fs-subhead);
   }
-  .row {
-    display: flex;
-    gap: 8px;
-    flex-wrap: wrap;
+  .decline {
+    align-self: flex-start;
+    margin-top: 4px;
+    padding: 0 var(--gutter);
+    color: var(--text-2);
   }
   .err {
-    color: var(--ember-lift);
-    font-size: 12.5px;
+    margin: 0;
+    padding: 6px var(--gutter) 0;
+    color: var(--negative);
+    font-size: var(--fs-footnote);
+    line-height: 18px;
+  }
+  .devices-head {
+    margin-top: 24px;
   }
 </style>

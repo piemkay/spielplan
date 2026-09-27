@@ -10,17 +10,32 @@ export const BUDGET_MAX = 200;
 export const BUDGET_STEP = 5;
 export const BUDGET_DEFAULT = 130;
 
-// Mirrors `tonight/pool.py`'s `BUDGET_GRACE_MIN` (§6.2 step 1).
-export const BUDGET_GRACE_MIN = 40;
-
 /**
- * Makes the soft budget legible before the evening; on a series night the bound is per episode.
+ * The budget is soft, said where it is set; on a series night it is per episode (decision 527).
  * @param {string} kind
  */
 export function budgetSoftLine(kind) {
   return kind === 'series'
-    ? `episodes up to ${BUDGET_GRACE_MIN} min longer can still come up, marked with how far over`
-    : `films up to ${BUDGET_GRACE_MIN} min longer can still come up, marked with how far over`;
+    ? "A little over is fine — we'll say by how much, per episode."
+    : "A little over is fine — we'll say by how much.";
+}
+
+/** "2h 10m", "2h", "45m": the one runtime format; a series night adds "per episode" itself. */
+export function budgetLabel(minutes) {
+  return runtimeLabel({ runtime_min: minutes }) ?? '';
+}
+
+/** The summary row: "Film · up to 2h 10m", per episode on a series night. @param {any} controls */
+export function settingsTitle({ kind, runtime_budget_min }) {
+  const per = kind === 'series' ? ' per episode' : '';
+  return `${kind === 'series' ? 'Series' : 'Film'} · up to ${budgetLabel(runtime_budget_min)}${per}`;
+}
+
+/** "No rewatches, no guests"; a room's seats say who is in, so it passes no guests. */
+export function settingsDetail({ include_rewatches, guests = null }) {
+  const rewatches = include_rewatches ? 'Rewatches included' : 'No rewatches';
+  if (guests === null) return rewatches;
+  return `${rewatches}, ${guests ? `${guests} ${guests === 1 ? 'guest' : 'guests'}` : 'no guests'}`;
 }
 
 /** Where this device remembers each member's last budget, per kind (decision 506). */
@@ -82,17 +97,20 @@ export const ANSWERS = [
   { value: 'A', label: 'This one' },
   { value: 'B', label: 'That one' },
   { value: 'EITHER', label: 'Either is fine' },
-  { value: 'NEITHER', label: 'Neither pulls me tonight' }
+  { value: 'NEITHER', label: 'Neither tonight' }
 ];
 
-export const ESCAPE_LABEL = 'just pick for us';
+export const ESCAPE_LABEL = 'Just pick for us';
 
 /** 54e/proposal 60: "shipping the property without the moment ships half of it." */
-export const REVEAL_BEAT = 'VOTES REVEALED TOGETHER';
+export const REVEAL_BEAT = "Tonight's pick";
 
 // Push can go missing (§6 preamble), so the caption names the channels that cannot.
 export const JOIN_CAPTION =
-  'A phone notification can go missing. The room code, the link and the open-rooms list always reach the same room.';
+  'Missed a notification? The code and the link always reach the same room.';
+
+// §6.4's wildcard, honestly labelled wherever it is offered.
+export const WILDCARD_LINE = 'A step outside your usual';
 
 // The QR that §6.2 step 2 also names is still owed and not promised here.
 export const SHARE_CAPTION = 'Read the code out, or share the link.';
@@ -116,16 +134,16 @@ export function vetoCaption(kind) {
 
 // The round's answers already carry the mood, so the lobby says how rather than adding a question.
 export const MOOD_CAPTION =
-  "In a particular mood? In each pair, pick the one that fits it, and tap “Neither pulls me tonight” when neither does. The pairs learn your mood as you answer.";
+  'In a particular mood? In each pair, pick the one that fits it, and tap “Neither tonight” when neither does. Your answers steer the pick.';
 
 // 54d's reserved finalist; the fact itself is the payload's `reserved` flag (decision 220).
-export const RESERVED_LABEL = 'the other side of the split';
+export const RESERVED_LABEL = 'The other side of the split';
 
 // `SoloBody.offset`'s bound (`le=64` in `api/tonight.py`), which the client cannot discover.
 const SOLO_OFFSET_MAX = 64;
 
 // The reshuffle walk wraps; say so, or a repeat of the same three looks broken.
-export const WRAPPED_LINE = 'back round to the top of the ranking';
+export const WRAPPED_LINE = 'Back round to the top of the ranking';
 
 export const tonight = $state({
   loading: true,
@@ -172,7 +190,7 @@ export const tonight = $state({
 
 function fail(err) {
   tonight.error =
-    err instanceof ApiError ? err.detail?.message || err.message : 'something went wrong';
+    err instanceof ApiError ? err.detail?.message || err.message : 'Something went wrong.';
 }
 
 // When the pair on screen arrived, for §4.2's `latency_ms` (module-level: a local read in the
@@ -306,7 +324,7 @@ export async function refresh({ seat = null } = {}) {
     if (seen.state === 'abandoned') {
       leave();
       await loadRooms();
-      tonight.error = 'this evening has ended';
+      tonight.error = 'This evening has ended.';
       return;
     }
     // After the abandoned branch: an ended room is never stale, and the newer read may fail.
@@ -628,24 +646,25 @@ export function connect(sessionId = null) {
   };
 }
 
-/** §6.2 step 2's row: "MX-2210 · hosted by Mia · 3 min ago · Film · 60 min · skips seen". */
+/** §6.2 step 2's row under the host's name: the code read out across the room, and how long ago. */
 export function roomLine(room) {
   const age = minutesAgo(room.started_at);
-  return [
-    room.room_code,
-    `hosted by ${room.host}`,
-    age === null ? null : `${age} min ago`,
-    room.kind === 'movie' ? 'Film' : 'Series',
-    // On a series night the budget bounds minutes per episode (decision 219).
-    room.kind === 'series'
-      ? `${room.runtime_budget_min} min per episode`
-      : `${room.runtime_budget_min} min`,
-    room.skips_seen ? 'skips seen' : 'includes rewatches',
-    // Decision 480: what the room has ruled out, so somebody deciding whether to join knows.
-    room.vetoes?.length ? `not tonight: ${room.vetoes.map((v) => v.label).join(', ')}` : null
-  ]
-    .filter(Boolean)
-    .join(' · ');
+  const started = age === null ? null : age ? `Started ${age} min ago` : 'Started just now';
+  return [room.room_code, started].filter(Boolean).join(' · ');
+}
+
+/** What evening a listed room is. */
+export function roomEvening(room) {
+  const kind = room.kind === 'series' ? 'Series' : 'Film';
+  // On a series night the budget bounds minutes per episode (decision 219).
+  const per = room.kind === 'series' ? ' per episode' : '';
+  const rewatches = room.skips_seen ? 'no rewatches' : 'rewatches included';
+  return `${kind} up to ${budgetLabel(room.runtime_budget_min)}${per}, ${rewatches}`;
+}
+
+/** Decision 480: what a room has ruled out, so somebody deciding whether to join knows. */
+export function roomVetoLine(room) {
+  return room.vetoes?.length ? `Not tonight: ${room.vetoes.map((v) => v.label).join(', ')}` : '';
 }
 
 export function minutesAgo(iso) {
@@ -655,24 +674,28 @@ export function minutesAgo(iso) {
   return Math.max(0, Math.round((Date.now() - then) / 60000));
 }
 
-// Counts only (54c); past the typical round the server sends no estimate (decision 507).
-export function progressLine(progress) {
-  const parts = progress.map((p) =>
-    p.finished
-      ? `${p.name} ${p.answered}/${p.answered} done`
-      : p.expected == null
-        ? `${p.name} ${p.answered} so far`
-        : `${p.name} ${p.answered}/~${p.expected}`
-  );
-  const waiting = progress.filter((p) => !p.finished).length;
-  return waiting ? `${parts.join(' · ')} · waiting for ${waiting}` : parts.join(' · ');
+/**
+ * Where everyone but the seat on this screen has got to, and never an answer (54c).
+ * @param {any[]} progress @param {number|null} holding
+ */
+export function progressLines(progress, holding = null) {
+  return progress
+    .filter((p) => p.participant_id !== holding)
+    .map((p) => ({
+      participant_id: p.participant_id,
+      name: p.name,
+      line: p.finished ? `${p.name} is done` : `${p.name} is on pair ${(p.answered ?? 0) + 1}`
+    }));
 }
 
-/** §6.8's data voice: a model number never appears bare. */
+/** §13's approval share, said as the people it counts. */
 export function approvalShare(result) {
   if (!result) return '';
-  const approved = Math.round(result.approval_share * result.participants);
-  return `${approved} of ${result.participants} approved`;
+  const n = result.participants;
+  const yes = Math.round(result.approval_share * n);
+  if (yes === n && n === 2) return 'Both of you said yes';
+  if (yes === n && n > 2) return `All ${n} of you said yes`;
+  return `${yes} of ${n} said yes`;
 }
 
 // The ballot frame carries the submitted count; only the count changes.
@@ -686,8 +709,8 @@ export function roundHeader(round) {
   if (!round) return '';
   const n = (round.answered ?? 0) + 1;
   const typical = round.typical ?? 10;
-  if (n <= typical) return `pair ${n} · often about ${typical}`;
-  return [`pair ${n}`, 'longer than most', round.cap ? `max ${round.cap}` : null]
+  if (n <= typical) return `Pair ${n} · usually about ${typical}`;
+  return [`Pair ${n}`, 'longer than most', round.cap ? `max ${round.cap}` : null]
     .filter(Boolean)
     .join(' · ');
 }
@@ -724,7 +747,7 @@ export function breadthLine(result) {
 }
 
 export function onlyYesLines(result) {
-  return (result?.breadth ?? []).filter((b) => b.only_yes).map((b) => `the only one ${b.name} said yes to`);
+  return (result?.breadth ?? []).filter((b) => b.only_yes).map((b) => `The only one ${b.name} said yes to`);
 }
 
 /**

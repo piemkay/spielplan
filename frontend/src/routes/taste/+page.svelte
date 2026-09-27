@@ -3,7 +3,7 @@
 
   const points = [
     'The films you two disagree on, and what in them pulls each of you.',
-    'A split means a night a little below your usual - never that anyone will hate it.',
+    'A split means a night a little below your usual — never that anyone will hate it.',
     'The films you would both enjoy, as the place to start on a night together.'
   ];
 </script>

@@ -48,25 +48,24 @@
 </script>
 
 {#if current}
-  <div class="prompt" role="status" data-finish-prompt={current.title_id}>
+  <div class="card prompt" role="status" data-finish-prompt={current.title_id}>
     <!-- Keyed on `title_id` by hand: this row's own `id` is the prompt's. -->
     <div class="thumb">
       <RatePoster title={{ title_id: current.title_id, name: current.name }} showName={false} />
     </div>
     <div class="text">
-      <div class="q">Did you finish <strong>{current.name}</strong>?</div>
-      <div class="data why">
-        Jellyfin saw it play to {Math.round((current.progress ?? 0) * 100)}%. Either answer is
-        recorded — yes marks it seen, no marks it not seen — and nothing is written until you
-        answer.
-      </div>
-      {#if failure}<div class="data failure" role="alert">{failure}</div>{/if}
+      <p class="q">Did you finish <strong>{current.name}</strong>?</p>
+      <p class="footnote">
+        Jellyfin saw it play to {Math.round((current.progress ?? 0) * 100)}%. Nothing changes until
+        you answer: yes marks it seen, no marks it not seen.
+      </p>
+      {#if failure}<p class="footnote failure" role="alert">{failure}</p>{/if}
     </div>
     <div class="row">
-      <button class="btn-primary" onclick={() => answer(true)} disabled={busy}>
+      <button class="btn-tinted" onclick={() => answer(true)} disabled={busy}>
         Yes — mark it seen
       </button>
-      <button class="btn-ghost" onclick={() => answer(false)} disabled={busy}>
+      <button class="btn-secondary" onclick={() => answer(false)} disabled={busy}>
         No — not seen
       </button>
     </div>
@@ -76,26 +75,26 @@
 <!-- A separate element: the question is over. `/rate?head=` puts this title first in the queue. -->
 {#if answered}
   <div
-    class="handoff"
+    class="card handoff"
     role="status"
     data-finish-handoff={answered.title_id}
     data-answer={answered.seen ? 'seen' : 'unseen'}
   >
     <div class="text">
-      <div class="q">
+      <p class="q">
         {#if answered.seen}
           Marked <strong>{answered.name}</strong> seen.
         {:else}
           <!-- "this viewing": dismissal is per Jellyfin session, so a later viewing asks again. -->
           Marked <strong>{answered.name}</strong> not seen — this viewing will not come back.
         {/if}
-      </div>
-      {#if answered.note}<div class="data why">{answered.note}</div>{/if}
+      </p>
+      {#if answered.note}<p class="footnote">{answered.note}</p>{/if}
     </div>
     {#if answered.seen}
       <div class="row">
         <a
-          class="btn-primary"
+          class="btn-tinted"
           href={`/rate?head=${answered.title_id}`}
           data-testid="finish-prompt-cta"
         >
@@ -109,16 +108,12 @@
 <style>
   .prompt,
   .handoff {
+    margin-bottom: 16px;
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 14px;
+    gap: 12px 16px;
     flex-wrap: wrap;
-    padding: 12px 15px;
-    margin-bottom: 14px;
-    border: 1px solid var(--ember-edge);
-    background: var(--ember-wash);
-    border-radius: var(--r-md);
   }
   .thumb {
     width: 44px;
@@ -127,20 +122,27 @@
   .text {
     flex: 1 1 12rem;
     min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  p {
+    margin: 0;
   }
   .q {
-    font-size: 14px;
+    font-size: var(--fs-callout);
+    line-height: 21px;
   }
-  .why {
-    margin-top: 3px;
+  strong {
+    font-weight: 600;
   }
   .failure {
-    margin-top: 4px;
-    color: var(--ember-lift);
+    color: var(--negative);
   }
   /* A flex row blockifies the anchor, so design.css's min-height gives it its touch target. */
   .row {
     display: flex;
+    flex-wrap: wrap;
     gap: 8px;
   }
 </style>

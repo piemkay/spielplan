@@ -336,10 +336,10 @@ test('a 401 returns the member to the sign-in page', async ({ page, context }) =
     })
   );
   try {
-    await page.goto('/admin/users');
+    await page.goto('/admin/people');
     await expect(page.getByTestId('admin-reauth')).toBeVisible();
     expect(new URL(page.url()).pathname, 'the re-prompt threw away a live admin session').toBe(
-      '/admin/users'
+      '/admin/people'
     );
   } finally {
     await page.unroute('**/api/admin/users');
@@ -376,16 +376,24 @@ test('a request that never answers ends with a sentence, not a dead surface', as
 });
 
 test('a refused field says which field and why', async ({ page }) => {
-  // A pydantic 422 `detail` is a LIST of `{type, loc, msg}`. An emptied guests box sends `null`.
-  await atTonightDoor(page);
-  await page.getByTestId('tonight-guests').fill('');
-  await page.getByTestId('tonight-open').click();
+  // A pydantic 422 `detail` is a LIST of `{type, loc, msg}`. The guests stepper cannot send a
+  // `null`, so the request is rewritten on its way out and the real server refuses it.
+  const OPEN_ROOM = /\/api\/tonight\/sessions$/;
+  await page.route(OPEN_ROOM, (route) =>
+    route.continue({ postData: JSON.stringify({ ...route.request().postDataJSON(), guests: null }) })
+  );
+  try {
+    await atTonightDoor(page);
+    await page.getByTestId('tonight-open').click();
 
-  const error = page.getByTestId('tonight-error');
-  await expect(error).toBeVisible();
-  // The field, then pydantic's sentence, which is left unpinned.
-  await expect(error).toHaveText(/^guests: .+/);
-  await expect(error).not.toHaveText('Unprocessable Entity');
+    const error = page.getByTestId('tonight-error');
+    await expect(error).toBeVisible();
+    // The field, then pydantic's sentence, which is left unpinned.
+    await expect(error).toHaveText(/^guests: .+/);
+    await expect(error).not.toHaveText('Unprocessable Entity');
+  } finally {
+    await page.unroute(OPEN_ROOM);
+  }
 });
 
 // ---------------------------------------------------------------------------------------------
@@ -473,9 +481,14 @@ test("the next person to sign in sees none of the previous one's surfaces", asyn
   // Traces on two surfaces, in ONE document: Rate by a nav tap, since a `goto` resets the stores.
   const nav = page.getByRole('navigation', { name: 'Main' });
   await atTonightDoor(page);
+  // The controls live in a sheet behind the door's summary row (decision 527).
+  await page.getByTestId('tonight-settings').click();
   await page.getByTestId('tonight-kind-series').click();
-  await page.getByTestId('tonight-guests').fill('3');
+  for (let i = 0; i < 3; i++) await page.getByTestId('tonight-guests-more').click();
   await expect(page.getByTestId('tonight-kind-series')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByTestId('tonight-guests')).toHaveText('3');
+  await page.getByTestId('tonight-settings-done').click();
+  await expect(page.getByRole('dialog', { name: "Tonight's settings" })).toHaveCount(0);
 
   await nav.getByRole('link', { name: 'Rate', exact: true }).click();
   await expect(page.getByTestId('rate-surface')).toBeVisible();
@@ -554,6 +567,7 @@ test("the next person to sign in sees none of the previous one's surfaces", asyn
     page.getByTestId('tonight-controls'),
     "the new person landed inside the previous one's evening"
   ).toBeVisible();
+  await page.getByTestId('tonight-settings').click();
   await expect(
     page.getByTestId('tonight-kind-movie'),
     "the previous person's series night carried over"
@@ -561,7 +575,8 @@ test("the next person to sign in sees none of the previous one's surfaces", asyn
   await expect(
     page.getByTestId('tonight-guests'),
     "the previous person's guests carried over"
-  ).toHaveValue('0');
+  ).toHaveText('0');
+  await page.getByTestId('tonight-settings-done').click();
   // `Back` renders only past the door.
   await expect(page.getByTestId('tonight-back')).toHaveCount(0);
 });

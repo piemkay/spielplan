@@ -23,13 +23,13 @@ NOTHING_SELECTED = "select rows first: a batch launches the queue rows it names,
 # An empty provider selection is refused here, never replaced by the stored assignment (decision 442).
 NO_PROVIDER = (
     "choose at least one provider for this batch: a batch extracts with the providers it names, and"
-    " this one names none (decision 442)"
+    " this one names none"
 )
 
 # Decision 343 at the batch's scale.
 UNKNOWN_PRICE = (
     "the per-title estimate is unknown: a provider in this batch has no known price, and a spend cap"
-    " cannot be held against a price nobody knows (decision 343). Set price_input and price_output"
+    " cannot be held against a price nobody knows. Set price_input and price_output"
     " for it in Admin, or choose a priced model"
 )
 
@@ -40,15 +40,14 @@ LAUNCHED = (
 )
 
 FAILED_FOR_GOOD = (
-    "nothing was launched, because {title} failed for good under task {key}, and decision 431 makes"
-    " the board's retry the only way back: a launch would revive the task and pay for the same"
-    " extraction again. Retry the title on the Acquisition board, or leave its row out of the batch"
-    " (decision 448)"
+    "nothing was launched, because {title} failed for good under task {key}, and the board's retry"
+    " is the only way back: a launch would revive the task and pay for the same extraction again."
+    " Retry the title on the Acquisition board, or leave its row out of the batch"
 )
 
 RUNNING_ROW = (
     ". To launch a running row again on another plan once its walk has stopped, abandon its title's"
-    " job on the board: that takes the title out of its batch and queues the row again (decision 448)"
+    " job on the board: that takes the title out of its batch and queues the row again"
 )
 
 _CENT = Decimal("0.01")
@@ -118,12 +117,12 @@ def _over(
             f" left for {month} ({meter['tz']})")
     if meter["unsettled_usd"] > 0:
         left += (f" -- {_dollars(meter['unsettled_usd'])} of the month's spend is calls whose answer"
-                 " never arrived, counted at the most they could have billed (decision 436)")
+                 " never arrived, counted at the most they could have billed")
     return (
         f"{spend.OVER_CAP_PREFIX}: this batch reserves up to {_dollars(reserved)} ({titles} title(s)"
         f" x {_dollars(per_title)} a title x {spend.ATTEMPTS} attempts, at {passes} pass(es) x"
         f" {providers} provider(s)), and only {left}. Select fewer rows, run fewer passes or"
-        " providers, or raise the cap in Admin (decision 441)"
+        " providers, or raise the cap in Admin"
     )
 
 
@@ -209,13 +208,13 @@ def _admit(ids: list[int], rows: list[asyncpg.Record]) -> None:
     if missing:
         raise LaunchRefused(
             f"row(s) {', '.join(missing)} are not in the extraction queue, so nothing was launched."
-            " Reload the queue and select again (decision 443)"
+            " Reload the queue and select again"
         )
     for row in rows:
         if row["status"] != "queued":
             raise LaunchRefused(
                 f"row {row['id']} is {row['status']} and not queued, so nothing was launched: it has"
-                " been launched or closed since it was selected. Reload the queue (decision 443)"
+                " been launched or closed since it was selected. Reload the queue"
                 + (RUNNING_ROW if row["status"] == "running" else "")
             )
 
@@ -248,7 +247,7 @@ async def launch(
             # Rows are locked, so only a kind other than thin_facet (M6's feeds) lands here.
             raise LaunchRefused(
                 "the selection changed while it was being launched, so nothing was launched. Reload"
-                " the queue and select again (decision 443)"
+                " the queue and select again"
             )
         plan = {"providers": chosen, "passes": passes}
         items = []

@@ -82,7 +82,8 @@
   .destructive {
     color: var(--negative);
   }
-  .cancel {
+  .option.cancel {
+    background: var(--surface-1);
     font-weight: 600;
   }
 </style>

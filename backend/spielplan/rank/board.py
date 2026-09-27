@@ -33,6 +33,7 @@ class Item:
     assigned_tier: int | None = None
     # Holds the model tier inside the verdict's band (decision 508).
     verdict: int | None = None
+    year: int | None = None
 
 
 @dataclass(frozen=True)
@@ -45,11 +46,12 @@ class Entry:
     assigned_tier: int | None   # where the person put it, if they have
     tier: int                   # where the board renders it — the one above that exists
     straddle: int | None        # the adjacent tier the posterior also reaches
-    straddle_badge: str | None  # "A/S" from `model_tier`, suppressed while a tension badge holds
+    straddle_badge: str | None  # "A or S?" from `model_tier`, suppressed while a tension badge holds
     above: str | None
     below: str | None
     badge: str
     tension: str | None
+    year: int | None = None
 
     def public(self) -> dict[str, object]:
         """The projection that may reach a client: no `s`/`sigma`, which decision 117 gates."""
@@ -62,6 +64,7 @@ class Entry:
             "straddle_badge": self.straddle_badge,
             "badge": self.badge,
             "tension": self.tension,
+            "year": self.year,
         }
 
 
@@ -70,6 +73,11 @@ class Tier:
     index: int                  # index into the tier set, ascending (0 = worst)
     label: str
     entries: tuple[Entry, ...]
+    verdict: str                # the verdict class it stands for, in words (decision 508)
+
+
+# Indexed by verdict class, the order of `model.verdict_tiers`' rows.
+VERDICT_WORDS = ("Disliked", "Fine", "Liked")
 
 
 def straddles(item: Item, *, cuts: np.ndarray, hp: Hyperparams) -> int | None:
@@ -115,7 +123,7 @@ def tension_of(
     if high > lower and upper > low:          # the intervals meet: not tension
         return None
     return (
-        f"you put it in {tier_set[int(item.assigned_tier)]} — "
+        f"You put it in {tier_set[int(item.assigned_tier)]} — "
         f"your other answers still point to {tier_set[int(model_tier)]}"
     )
 
@@ -218,7 +226,7 @@ def build(
             # Both halves of the chip are the posterior's (`from_model`), never the rendered
             # drop tier. Tension suppresses the chip but not eligibility (proposal 71).
             badge = (
-                f"{labels[from_model]}/{labels[reached]}"
+                f"{labels[from_model]} or {labels[reached]}?"
                 if reached is not None and reached != from_model and tension is None
                 else None
             )
@@ -237,12 +245,20 @@ def build(
                     below=below,
                     badge=_badge(labels[index], above, below),
                     tension=tension,
+                    year=item.year,
                 )
             )
-        tiers.append(Tier(index=index, label=labels[index], entries=tuple(entries)))
+        tiers.append(
+            Tier(
+                index=index,
+                label=labels[index],
+                entries=tuple(entries),
+                verdict=VERDICT_WORDS[model.verdict_class_of_tier(index, len(labels))],
+            )
+        )
 
     # Tiers are stored ascending (F … S); the board renders best-first (proposal 82).
     return tuple(reversed(tiers))
 
 
-__all__ = ["Entry", "Item", "Tier", "build", "straddles", "tension_of", "why_line"]
+__all__ = ["VERDICT_WORDS", "Entry", "Item", "Tier", "build", "straddles", "tension_of", "why_line"]

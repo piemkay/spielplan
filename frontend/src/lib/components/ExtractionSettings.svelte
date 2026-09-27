@@ -3,6 +3,7 @@
   // is stored only through the estimate panel's Confirm (decision 450).
   import {
     PROVIDER_LABELS,
+    about,
     amend,
     basisLine,
     cancel,
@@ -32,6 +33,8 @@
   const passOptions = $derived(
     [1, 2, 3].includes(Number(passes)) || passes === null ? [1, 2, 3] : [1, 2, 3, passes]
   );
+  const model = $derived(providers.find((p) => p.name === provider)?.model ?? '');
+  const stored = $derived(llm?.estimate?.per_title_usd ?? 'unknown');
 
   const canConfirm = $derived(
     Boolean(spend.pending) && !spend.pending.preview?.blocked && spend.busy !== 'confirm'
@@ -69,310 +72,359 @@
   function unknownReason(estimate) {
     if (estimate.reason) return estimate.reason;
     const unpriced = (estimate.providers ?? []).filter((_, i) => estimate.basis?.[i] === 'unknown');
-    const who = unpriced.map(label).join(', ') || 'a planned provider';
+    const who = unpriced.map(label).join(', ') || 'A planned provider';
     return (
-      `${who} has no known price for its model. Stage 6 parks rather than bill at a guess; set a ` +
-      'price override on its card to give it one (decision 343).'
+      `${who} has no known price for its model, so nothing is spent on a guess. Set a price on ` +
+      'its card to give it one.'
     );
   }
 </script>
 
-{#snippet figures(preview, plan)}
+{#snippet technical(estimate, reason)}
+  <details class="tech">
+    <summary>Technical details</summary>
+    <div class="code lines">
+      {#each estimate.basis ?? [] as basis, i (i)}
+        <p data-basis={estimate.providers?.[i] ?? ''}>
+          {label(estimate.providers?.[i])} · {basisLine(basis)}
+        </p>
+      {/each}
+      <p>
+        assumes {tokens(estimate.input_tokens_assumed)} tokens in and
+        {tokens(estimate.output_tokens_assumed)} billed out per call, thinking tokens included
+      </p>
+      {#if reason && estimate.reason}<p>{estimate.reason}</p>{/if}
+    </div>
+  </details>
+{/snippet}
+
+{#snippet figures(preview)}
   {@const estimate = preview.estimate ?? {}}
   {@const projected = preview.projected ?? {}}
   {@const unknown = estimate.per_title_usd === 'unknown'}
-  <div class="figures" data-plan={plan}>
-    <!-- The small per-title figure stays quiet; the month against the cap carries the weight. -->
-    <div class="per-title" data-per-title={estimate.per_title_usd}>
-      <span class="data">PER TITLE</span>
-      <span class="data-lg">{unknown ? 'unknown' : usd(estimate.per_title_usd)}</span>
-      {#if !unknown && estimate.passes}
-        <span class="data">
-          {estimate.passes} pass{estimate.passes === 1 ? '' : 'es'} on {(estimate.providers ?? [])
-            .map(label)
-            .join(' + ')}
-        </span>
-      {/if}
-    </div>
+  {@const monthly = projected.monthly_usd}
+  <div class="figures" data-plan="pending">
+    <p class="per-title" data-per-title={estimate.per_title_usd}>
+      <span class="big">{unknown ? 'Unknown' : usd(estimate.per_title_usd)}</span>
+      <span class="footnote">
+        a title{#if !unknown && estimate.passes}, {estimate.passes} pass{estimate.passes === 1
+            ? ''
+            : 'es'} on {(estimate.providers ?? []).map(label).join(' + ')}{/if}
+      </span>
+    </p>
     {#if unknown}
       <p class="why" data-unknown-reason>{unknownReason(estimate)}</p>
     {/if}
-    {#each estimate.basis ?? [] as basis, i (i)}
-      <div class="data" data-basis={estimate.providers?.[i] ?? ''}>
-        {label(estimate.providers?.[i])} · {basisLine(basis)}
-      </div>
-    {/each}
-    <div class="data">
-      assumes {tokens(estimate.input_tokens_assumed)} tokens in and
-      {tokens(estimate.output_tokens_assumed)} billed out per call, thinking tokens included (§9)
-    </div>
-
-    <div
-      class="month"
-      data-projected={projected.monthly_usd === null || projected.monthly_usd === undefined
+    <p
+      class="why"
+      data-projected={monthly === null || monthly === undefined
         ? 'no-history'
-        : projected.monthly_usd === 'unknown'
+        : monthly === 'unknown'
           ? 'unknown'
           : 'figure'}
       data-exceeds={String(Boolean(projected.exceeds_remaining))}
     >
-      {#if projected.monthly_usd === null || projected.monthly_usd === undefined}
-        <span class="big">no acquisition history yet</span>
-      {:else if projected.monthly_usd === 'unknown'}
-        <span class="big">unknown a month</span>
+      {#if monthly === null || monthly === undefined}
+        No titles have arrived yet, so there's no pace to project a month from.
+      {:else if monthly === 'unknown'}
+        The month can't be estimated while the cost per title is unknown.
       {:else}
-        <span class="big">{usd(projected.monthly_usd)} a month</span>
-        <span class="why">
-          at the {projected.titles} title{projected.titles === 1 ? '' : 's'} filed in the last
-          {projected.window_days} days
-        </span>
+        {usd(monthly)} a month at the last {projected.window_days} days' pace ({projected.titles}
+        title{projected.titles === 1 ? '' : 's'}).
       {/if}
-      <span class="why">
-        {#if projected.remaining_usd !== null && projected.remaining_usd !== undefined}
-          against {usd(projected.remaining_usd)} left of this month's cap
-        {:else}
-          with no cap set
-        {/if}
-      </span>
-    </div>
+      {#if projected.remaining_usd !== null && projected.remaining_usd !== undefined}
+        {usd(projected.remaining_usd)} left this month.
+      {:else}
+        No cap is set.
+      {/if}
+    </p>
     {#if projected.exceeds_remaining}
       <p class="alert" role="alert" data-projected-exceeds>
-        That is more than the {usd(projected.remaining_usd)} left of this month's cap: before the
-        month is out, stage 6 parks titles "over spend cap" and bills nothing more.
+        That's more than the {usd(projected.remaining_usd)} left this month: before the month is out,
+        new titles wait, marked “over spend cap”, and nothing more is spent.
       </p>
     {/if}
-    {#if projected.reason}<p class="why">{projected.reason}</p>{/if}
+    {@render technical(estimate, false)}
   </div>
 {/snippet}
 
-<section class="card" data-testid="llm-extraction">
-  <h2>Extraction</h2>
-  <p class="why">
-    Stage 6 reads each title's pack and extracts its DNA with the provider assigned here. Every
-    change shows what it would cost before anything is stored.
-  </p>
-
-  {#if spend.llmError}<p class="err" role="alert">{spend.llmError}</p>{/if}
+<section class="plan" id="plan" data-testid="llm-extraction" aria-labelledby="plan-title">
+  <h2 class="list-header" id="plan-title">How new titles are read</h2>
   {#if llm}
-    <label>
-      <span class="data">EXTRACTION PROVIDER</span>
-      <select
-        value={provider}
-        disabled={spend.busy === 'confirm'}
-        onchange={(e) =>
-          edit('extraction_provider', e.currentTarget.value || null, settings.extraction_provider)}
-      >
-        <option value="">none (stage 6 parks every title)</option>
+    <div class="list-group">
+      <label class="list-row">
+        <span class="grow">
+          <span>Provider</span>
+          {#if model}<span class="sub">{model}</span>{/if}
+        </span>
+        <select
+          class="inline"
+          aria-label="Provider"
+          value={provider}
+          disabled={spend.busy === 'confirm'}
+          onchange={(e) =>
+            edit('extraction_provider', e.currentTarget.value || null, settings.extraction_provider)}
+        >
+          <option value="">None, new titles wait</option>
+          {#each providers as p (p.name)}
+            <option value={p.name} disabled={!p.has_api_key}>
+              {label(p.name)}{p.has_api_key ? '' : ' (add a key first)'}
+            </option>
+          {/each}
+        </select>
+      </label>
+      <label class="list-row">
+        <span class="grow">Passes</span>
+        <select
+          class="inline"
+          aria-label="Passes"
+          value={passes === null ? '' : String(passes)}
+          disabled={spend.busy === 'confirm'}
+          onchange={(e) => edit('passes', Number(e.currentTarget.value), settings.passes)}
+        >
+          {#if passes === null}<option value="" disabled>As planned</option>{/if}
+          {#each passOptions as n (n)}
+            <option value={String(n)}>{n}</option>
+          {/each}
+        </select>
+      </label>
+      <label class="list-row">
+        <span class="grow">Parallel mode</span>
+        <input
+          type="checkbox"
+          role="switch"
+          class="switch"
+          aria-label="Parallel mode"
+          checked={parallel}
+          disabled={spend.busy === 'confirm'}
+          onchange={(e) => edit('parallel', e.currentTarget.checked, settings.parallel === true)}
+        />
+      </label>
+      {#if parallel}
         {#each providers as p (p.name)}
-          <option value={p.name} disabled={!p.has_api_key}>
-            {label(p.name)}{p.has_api_key ? '' : ' (add a key first)'}
-          </option>
-        {/each}
-      </select>
-    </label>
-
-    <!-- The checkbox is outside design.css's coarse block, so the label is the 48 px target. -->
-    <label class="check">
-      <input
-        type="checkbox"
-        checked={parallel}
-        disabled={spend.busy === 'confirm'}
-        onchange={(e) => edit('parallel', e.currentTarget.checked, settings.parallel === true)}
-      />
-      <span>Parallel mode</span>
-    </label>
-    <p class="why">
-      Runs extraction on each selected provider and merges by the measured consensus rule: the
-      union, with per-tag agreement as confidence. Union recalls 93% against 67% for intersection,
-      measured over providers; agreement is a weight, never a filter. The merge counts runs (one
-      provider at one pass), so two passes of one provider pool exactly as two providers do.
-    </p>
-    {#if parallel}
-      <fieldset class="parallel">
-        <legend class="data">RUN IN PARALLEL</legend>
-        {#each providers as p (p.name)}
-          <label class="check">
+          <label class="list-row indent" data-parallel={p.name}>
+            <span class="grow">{label(p.name)}{p.has_api_key ? '' : ' (add a key first)'}</span>
             <input
               type="checkbox"
+              aria-label="Run {label(p.name)} in parallel"
               checked={chosen.includes(p.name)}
               disabled={!p.has_api_key || spend.busy === 'confirm'}
               onchange={(e) => pickParallel(p.name, e.currentTarget.checked)}
             />
-            <span>Run {label(p.name)} in parallel{p.has_api_key ? '' : ' (add a key first)'}</span>
           </label>
         {/each}
-      </fieldset>
-    {/if}
-
-    <label>
-      <span class="data">PASSES</span>
-      <select
-        value={passes === null ? '' : String(passes)}
-        disabled={spend.busy === 'confirm'}
-        onchange={(e) => edit('passes', Number(e.currentTarget.value), settings.passes)}
-      >
-        {#if passes === null}<option value="" disabled>as the server plans it</option>{/if}
-        {#each passOptions as n (n)}
-          <option value={String(n)}>{n} pass{Number(n) === 1 ? '' : 'es'}</option>
-        {/each}
-      </select>
-    </label>
-
-    <label class="check" data-batch>
-      <input type="checkbox" checked={false} disabled />
-      <span>Batch mode</span>
-    </label>
-    <p class="why" data-batch-reason>{llm.batch?.reason ?? 'batch endpoints are not used'}</p>
+      {/if}
+      <div class="list-row" data-plan="stored">
+        <span class="grow">Cost per title</span>
+        <span class="value" data-per-title={stored}>
+          {stored === 'unknown' ? 'Unknown' : `About ${about(stored)}`}
+        </span>
+      </div>
+    </div>
+    <p class="list-footer">Every change shows its cost before it's saved.</p>
+    <p class="list-footer">
+      Parallel mode reads each title with every provider picked and keeps the union of their tags,
+      with agreement as confidence: the union finds 93% of tags against 67% for the intersection,
+      measured over providers. Agreement is a weight, never a filter, and the merge counts runs, so
+      two passes of one provider count like two providers.
+    </p>
 
     {#if spend.proposal}
       <div
-        class="estimate"
+        class="card estimate"
         data-testid="spend-estimate"
         data-estimate-state={panelState}
         aria-live="polite"
       >
-        <h3>Before this is stored</h3>
+        <h3>Before this is saved</h3>
         {#if spend.refused}
           <p class="alert" role="alert" data-estimate-refused>{spend.refused}</p>
         {/if}
         {#if spend.pending}
-          {@render figures(spend.pending.preview, 'pending')}
+          {@render figures(spend.pending.preview)}
           {#if spend.pending.preview?.blocked}
             <p class="alert" role="alert" data-estimate-blocked>
-              {spend.pending.preview.blocked}. Save that provider's key on its card first: a plan
-              naming a provider with no usable key is never stored (decision 450).
+              {spend.pending.preview.blocked}. Save that provider's key first: a plan naming a
+              provider with no usable key is never saved.
             </p>
           {/if}
         {:else if spend.asking}
-          <p class="data">asking what it would cost…</p>
+          <p class="footnote">Working out what it would cost…</p>
         {:else if spend.error}
           <p class="err" role="alert">{spend.error}</p>
         {:else}
-          <p class="why">An edit is in progress: its figure is asked when you leave the field.</p>
+          <p class="footnote">An edit is in progress: its cost is worked out when you leave the field.</p>
         {/if}
-        <div class="row">
+        <div class="actions">
           <button class="btn-primary" onclick={confirm} disabled={!canConfirm}>
-            {spend.busy === 'confirm' ? 'Storing…' : 'Confirm'}
+            {spend.busy === 'confirm' ? 'Saving…' : 'Confirm'}
           </button>
-          <button class="btn-ghost" onclick={cancel} disabled={spend.busy === 'confirm'}>
+          <button class="btn-secondary" onclick={cancel} disabled={spend.busy === 'confirm'}>
             Cancel
           </button>
         </div>
       </div>
     {:else}
-      <div class="stored">
-        <span class="data">STORED PLAN</span>
-        {@render figures(llm, 'stored')}
-      </div>
+      {@render technical(llm.estimate ?? {}, true)}
     {/if}
   {:else if !spend.llmError}
-    <p class="data">loading…</p>
+    <p class="footnote">Loading…</p>
   {/if}
 </section>
 
 <style>
-  h2 {
-    margin: 0 0 6px;
-    font-size: 15px;
-    font-weight: 600;
+  .plan {
+    display: flex;
+    flex-direction: column;
+    scroll-margin-top: 16px;
+  }
+  .grow {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+  }
+  .sub {
+    font-size: var(--fs-footnote);
+    line-height: 18px;
+    color: var(--text-3);
+  }
+  label.list-row {
+    cursor: pointer;
+  }
+  .indent {
+    padding-left: 32px;
+  }
+  .indent input {
+    width: 20px;
+    height: 20px;
+    margin: 0;
+  }
+  .list-row .value {
+    margin-left: 0;
+    font-variant-numeric: tabular-nums;
+  }
+  .inline {
+    width: auto;
+    min-width: var(--touch);
+    max-width: 55%;
+    min-height: var(--touch);
+    padding: 0 28px 0 8px;
+    background-color: transparent;
+    background-position: right 4px center;
+    color: var(--text-3);
+    text-align: right;
+    text-align-last: right;
+  }
+  .switch {
+    appearance: none;
+    -webkit-appearance: none;
+    flex: none;
+    width: 51px;
+    height: 31px;
+    margin: 0;
+    border-radius: var(--r-pill);
+    background:
+      radial-gradient(circle at 15.5px 50%, var(--text) 0 12.5px, transparent 13.5px),
+      var(--progress-track);
+    cursor: pointer;
+  }
+  .switch:checked {
+    background:
+      radial-gradient(circle at 35.5px 50%, var(--text) 0 12.5px, transparent 13.5px),
+      var(--accent);
+  }
+  .switch:disabled {
+    opacity: 0.45;
+  }
+  .list-footer + .list-footer {
+    padding-top: 8px;
+  }
+  .estimate {
+    margin-top: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
   }
   h3 {
     margin: 0;
-    font-size: 13.5px;
+    font-size: var(--fs-body);
+    line-height: 22px;
     font-weight: 600;
-  }
-  .card {
-    margin-bottom: 16px;
-    display: flex;
-    flex-direction: column;
-    gap: 10px;
-  }
-  label {
-    display: flex;
-    flex-direction: column;
-    gap: 5px;
-  }
-  .check {
-    flex-direction: row;
-    align-items: center;
-    gap: 10px;
-    min-height: var(--touch);
-    min-width: var(--touch);
-    cursor: pointer;
-    font-size: 13.5px;
-  }
-  .check input {
-    width: 18px;
-    height: 18px;
-    margin: 0;
-  }
-  .check input:disabled + span {
-    color: var(--ink-4);
-  }
-  .parallel {
-    margin: 0;
-    padding: 0;
-    border: none;
-    display: flex;
-    flex-direction: column;
-  }
-  .why {
-    margin: 0;
-  }
-  .estimate {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    padding: 10px 12px;
-    border: 1px solid var(--line-2);
-    border-radius: var(--r-sm);
-  }
-  .stored {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
   }
   .figures {
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 8px;
   }
   .per-title {
+    margin: 0;
     display: flex;
     flex-wrap: wrap;
     align-items: baseline;
-    gap: 4px 10px;
-  }
-  .month {
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
+    gap: 4px 8px;
+    font-variant-numeric: tabular-nums;
   }
   .big {
-    font-size: 17px;
+    font-size: var(--fs-section);
+    line-height: 25px;
     font-weight: 600;
-    color: var(--ink);
   }
-  .month[data-exceeds='true'] .big {
-    color: var(--ember-lift);
+  .why,
+  .footnote {
+    margin: 0;
+    font-variant-numeric: tabular-nums;
   }
-  .row {
+  .tech {
+    margin-top: 8px;
+  }
+  .tech summary {
     display: flex;
+    align-items: center;
+    min-height: var(--touch);
+    padding: 0 var(--gutter);
+    list-style: none;
+    color: var(--accent-text);
+    font-size: var(--fs-subhead);
+    cursor: pointer;
+  }
+  .estimate .tech summary {
+    padding: 0;
+  }
+  .tech summary::-webkit-details-marker {
+    display: none;
+  }
+  .lines {
+    display: flex;
+    flex-direction: column;
     gap: 8px;
+    padding: 12px;
+    border-radius: var(--r-sm);
+    background: var(--surface-1);
+    overflow-wrap: anywhere;
+  }
+  .estimate .lines {
+    background: var(--surface-2);
+  }
+  .lines p {
+    margin: 0;
+  }
+  .actions {
+    display: flex;
     flex-wrap: wrap;
+    gap: 8px;
   }
   .alert {
     margin: 0;
-    padding: 8px 10px;
-    border: 1px solid var(--ember-lift);
+    padding: 12px;
     border-radius: var(--r-sm);
-    color: var(--ember-lift);
-    font-size: 12.5px;
-    line-height: 1.45;
+    background: var(--warning-tint);
+    font-size: var(--fs-subhead);
+    line-height: 20px;
   }
   .err {
-    color: var(--ember-lift);
-    font-size: 12.5px;
     margin: 0;
+    color: var(--negative);
+    font-size: var(--fs-subhead);
   }
 </style>

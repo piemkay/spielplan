@@ -262,7 +262,7 @@ async def test_a_title_that_failed_stage_six_for_good_is_not_launched_until_the_
     reason = refused.value.reason
     assert reason.startswith("nothing was launched, because Thin Title 12 (2021) failed for good under"
                              f" task title:{B}"), reason
-    assert "decision 431" in reason and "retry" in reason, reason
+    assert "the board's retry is the only way back" in reason, reason
     assert await _snapshot(db) == before
 
     assert await actions.retry(db, B) == 1

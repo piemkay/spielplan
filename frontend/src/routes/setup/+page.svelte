@@ -2,14 +2,15 @@
   import '$lib/design.css';
   import { onMount } from 'svelte';
   import { goto } from '$app/navigation';
-  import { get, post } from '$lib/api.js';
+  import { post } from '$lib/api.js';
   import { bootstrap, session, setUser } from '$lib/session.svelte.js';
   import BundleImport from '$lib/components/BundleImport.svelte';
+  import FieldGroup from '$lib/components/FieldGroup.svelte';
 
   const STEPS = [
-    { key: 'admin', title: 'Create the admin account' },
-    { key: 'connectors', title: 'Connectors' },
-    { key: 'bundle', title: 'Import the bundle' }
+    { key: 'admin', title: 'Create the admin account', short: 'Admin' },
+    { key: 'connectors', title: 'Connectors', short: 'Connectors' },
+    { key: 'bundle', title: 'Import the bundle', short: 'Bundle' }
   ];
 
   let step = $state(0);
@@ -52,76 +53,117 @@
   }
 </script>
 
-<div class="page">
-  <div class="wrap">
-    <!-- The role sits on a childless sibling: a progressbar's children are presentational. -->
-    <div class="progress">
-      {#each STEPS as s, i (s.key)}
-        <button
-          type="button"
-          data-testid="setup-step"
-          class:on={i <= step}
-          class:done={done.has(s.key)}
-          aria-label={`${s.title}${done.has(s.key) ? ' — done' : ''}`}
-          aria-current={i === step ? 'step' : undefined}
-          onclick={() => (step = i)}
-        ></button>
-      {/each}
-    </div>
-    <span
-      class="progress-value"
-      role="progressbar"
-      aria-label="Setup progress"
-      aria-valuenow={step + 1}
-      aria-valuemin="1"
-      aria-valuemax={STEPS.length}
-    ></span>
-    <div class="ribbon data">{session.setup?.note ?? 'first boot · a bundle-less app is a legal state'}</div>
+{#snippet chevron()}
+  <svg
+    class="chev"
+    width="16"
+    height="16"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    stroke-width="2"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    aria-hidden="true"
+  >
+    <path d="m9.5 5.5 6.5 6.5-6.5 6.5" />
+  </svg>
+{/snippet}
 
-    <h1>{STEPS[step].title}</h1>
+<main class="wizard">
+  <div class="column">
+    <div class="top">
+      <!-- The role sits on a childless sibling: a progressbar's children are presentational. -->
+      <div class="steps">
+        {#each STEPS as s, i (s.key)}
+          <button
+            type="button"
+            data-testid="setup-step"
+            class:on={i <= step}
+            class:done={done.has(s.key)}
+            aria-label={`${s.title}${done.has(s.key) ? ' — done' : ''}`}
+            aria-current={i === step ? 'step' : undefined}
+            onclick={() => (step = i)}
+          >
+            <span class="bar"></span>
+            <span>{s.short}</span>
+          </button>
+        {/each}
+      </div>
+      <span
+        class="progress-value"
+        role="progressbar"
+        aria-label="Setup progress"
+        aria-valuenow={step + 1}
+        aria-valuemin="1"
+        aria-valuemax={STEPS.length}
+      ></span>
+      <p class="footnote">{session.setup?.note ?? 'first boot · a bundle-less app is a legal state'}</p>
+    </div>
+
+    <h1 class="large-title">{STEPS[step].title}</h1>
 
     {#if step === 0}
       <p class="why">
-        One admin. Everyone else is added afterwards from Admin &gt; Users, which is the only
-        place accounts are made. Passkeys can be added from the profile page.
+        One admin account. Everyone else is added later in Admin, under People — the only place
+        accounts are made. Passkeys can be added from Account once you are in.
       </p>
-      <p class="why">
-        Passkeys are bound to the public origin. Changing PUBLIC_URL later invalidates every
-        registered credential.
-      </p>
-      <div class="data-lg" data-testid="setup-public-url">
-        <code>{session.publicUrl || 'PUBLIC_URL is not set'}</code>
-      </div>
+      <section class="group">
+        <h2 class="list-header">Passkeys work at</h2>
+        <div class="list-group">
+          <p class="list-row address" data-testid="setup-public-url">
+            {session.publicUrl || 'PUBLIC_URL is not set'}
+          </p>
+        </div>
+        <p class="list-footer">
+          If this address ever changes, every passkey stops working and has to be added again.
+        </p>
+        <details class="technical">
+          <summary>Technical details {@render chevron()}</summary>
+          <p class="code">
+            PUBLIC_URL sets this origin, and WebAuthn binds every registered credential to it.
+          </p>
+        </details>
+      </section>
       {#if hasAdmin}
-        <p class="note">An admin account already exists — this step is done.</p>
+        <p class="why">An admin account already exists — this step is done.</p>
       {:else}
-        <label><span class="data">NAME</span><input type="text" bind:value={adminName} /></label>
-        <label>
-          <span class="data">PASSWORD · AT LEAST 10 CHARACTERS</span>
-          <input type="password" bind:value={adminPassword} autocomplete="new-password" />
-        </label>
+        <FieldGroup>
+          <label>
+            <span>Name</span>
+            <input type="text" bind:value={adminName} autocomplete="username" autocapitalize="none" />
+          </label>
+          <label>
+            <span>Password</span>
+            <input
+              type="password"
+              bind:value={adminPassword}
+              autocomplete="new-password"
+              placeholder="At least ten characters"
+            />
+          </label>
+        </FieldGroup>
       {/if}
     {:else if step === 1}
       <p class="why">
-        Optional now, changeable later in Admin. Env vars may seed these on first boot for
-        automated installs.
+        Optional now — all of these can be set later in Admin. Environment variables can fill them
+        in on first boot, for automated installs.
       </p>
-      <ul class="rows">
-        <li>
-          <span>Jellyfin</span><a class="go" href="/admin/connectors">configure in Admin</a>
-        </li>
-        <li>
-          <span>LLM providers</span><a class="go" href="/admin/connectors">configure in Admin</a>
-        </li>
-        <li>
-          <span>TMDB / OMDb / Trakt</span><a class="go" href="/admin/connectors">configure in Admin</a>
-        </li>
-      </ul>
+      <div class="list-group">
+        <a class="list-row" href="/admin/connectors">
+          <span>Jellyfin</span><span class="value">In Admin</span>{@render chevron()}
+        </a>
+        <a class="list-row" href="/admin/connectors">
+          <span>AI providers</span><span class="value">In Admin</span>{@render chevron()}
+        </a>
+        <a class="list-row" href="/admin/connectors">
+          <span>TMDB, OMDb and Trakt</span><span class="value">In Admin</span>{@render chevron()}
+        </a>
+      </div>
     {:else}
       <p class="why">
-        The same importer the Data tab exposes. Validation enforces every schema rule before
-        anything is written. The imported bundle is served as soon as the import finishes -
-        nothing needs restarting.
+        The same import as Admin's Movie data. It checks the whole bundle before writing anything,
+        and the app serves it as soon as the import finishes — nothing needs restarting.
       </p>
       <BundleImport
         onImported={() => {
@@ -131,68 +173,97 @@
       />
       <!-- An import watched on this screen reports the restart in its own line. -->
       {#if session.restartRequired && !importedHere}
-        <p class="err" data-restart-required>
-          A bundle is imported, but the backend could not load it by itself (its log says why).
-          Restart backend and worker: <code>docker compose restart backend worker</code>
-        </p>
+        <div class="card restart" data-restart-required>
+          <span class="badge warn">Restart needed</span>
+          <p class="why">
+            A bundle is imported, but the backend could not load it by itself (its log says why).
+            Restart backend and worker:
+          </p>
+          <code class="code">docker compose restart backend worker</code>
+        </div>
       {/if}
     {/if}
 
-    {#if error}<div class="err">{error}</div>{/if}
-
     <div class="actions">
-      <button class="btn-ghost" onclick={() => (step = Math.max(0, step - 1))} disabled={step === 0}>
-        Back
-      </button>
-      {#if step === 0 && !hasAdmin}
-        <button class="btn-primary" onclick={createAdmin} disabled={busy || adminPassword.length < 10}>
-          {busy ? 'Creating…' : 'Create admin'}
-        </button>
-      {:else if step === STEPS.length - 1}
-        <button class="btn-primary" onclick={finish}>Finish</button>
-      {:else}
-        <button class="btn-primary" onclick={() => (step = step + 1)}>Continue</button>
-      {/if}
+      {#if error}<p class="err" role="alert">{error}</p>{/if}
+      <div class="buttons">
+        {#if step > 0}
+          <button class="btn-secondary" onclick={() => (step = step - 1)}>Back</button>
+        {/if}
+        {#if step === 0 && !hasAdmin}
+          <button class="btn-primary" onclick={createAdmin} disabled={busy || adminPassword.length < 10}>
+            {busy ? 'Creating…' : 'Create admin'}
+          </button>
+        {:else if step === STEPS.length - 1}
+          <button class="btn-primary" onclick={finish}>Finish</button>
+        {:else}
+          <button class="btn-primary" onclick={() => (step = step + 1)}>Continue</button>
+        {/if}
+      </div>
     </div>
   </div>
-</div>
+</main>
 
 <style>
-  .page {
-    /* The status-bar inset for the installed app (viewport-fit=cover). */
+  /* No shell here: the page carries the status-bar and home-indicator insets itself. */
+  .wizard {
     min-height: 100vh;
-    padding: max(40px, env(safe-area-inset-top)) 24px 24px;
+    min-height: 100dvh;
     display: flex;
     justify-content: center;
+    padding: max(24px, env(safe-area-inset-top)) max(var(--gutter), env(safe-area-inset-right))
+      max(32px, env(safe-area-inset-bottom)) max(var(--gutter), env(safe-area-inset-left));
   }
-  .wrap {
-    width: min(640px, 100%);
+  .column {
+    width: min(560px, 100%);
     display: flex;
     flex-direction: column;
-    gap: 14px;
+    gap: 24px;
   }
-  .progress {
+  .top {
     display: flex;
-    gap: 6px;
+    flex-direction: column;
+    gap: 4px;
   }
-  /* A 3px bar drawn as buttons: restate `min-height`, which design.css's coarse floor raises. */
-  .progress button {
-    flex: 1;
-    height: 3px;
-    min-height: 3px;
+  /* Each step is a whole 48px control; the bar is only what it draws. */
+  .steps {
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(0, 1fr);
+    gap: 8px;
+  }
+  .steps button {
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    gap: 8px;
+    min-height: var(--touch);
     padding: 0;
     border: none;
+    background: none;
+    color: var(--text-3);
+    font-size: var(--fs-caption);
+    line-height: 16px;
+    font-weight: 500;
+    text-align: left;
+  }
+  .bar {
+    display: block;
+    height: 4px;
     border-radius: 2px;
     background: var(--progress-track);
-    cursor: pointer;
   }
   /* A step the server recorded is behind you, even ahead of the cursor. */
-  .progress button.done {
+  .done .bar {
     background: var(--progress-fill);
   }
   /* The progress ramp, not the accent: the primary action here is Create admin (§6.8). */
-  .progress button.on:not(.done) {
+  .on:not(.done) .bar {
     background: var(--progress-now);
+  }
+  .steps [aria-current='step'] {
+    color: var(--text);
+    font-weight: 600;
   }
   /* Visually hidden but announced; `display: none` would drop the progress semantics. */
   .progress-value {
@@ -202,62 +273,80 @@
     overflow: hidden;
     clip-path: inset(50%);
   }
-  .ribbon {
-    letter-spacing: 0.02em;
-  }
-  h1 {
-    margin: 4px 0 0;
-    font-size: 21px;
-    font-weight: 600;
-  }
-  p.why {
+  .top .footnote {
     margin: 0;
   }
-  .note {
-    font-size: 12.5px;
-    color: var(--ink-3);
+  .why {
+    margin: 0;
   }
-  label {
+  .group {
     display: flex;
     flex-direction: column;
-    gap: 6px;
   }
-  .rows {
+  .address {
+    margin: 0;
+    overflow-wrap: anywhere;
+  }
+  .technical {
+    padding: 8px var(--gutter) 0;
+  }
+  .technical > summary {
+    display: flex;
+    align-items: center;
+    gap: 4px;
     list-style: none;
+    min-height: var(--touch);
+    cursor: pointer;
+    font-size: var(--fs-footnote);
+    color: var(--text-2);
+  }
+  .technical > summary::-webkit-details-marker {
+    display: none;
+  }
+  .technical[open] .chev {
+    transform: rotate(90deg);
+  }
+  .technical .code {
     margin: 0;
-    padding: 0;
+    padding: 12px;
+    border-radius: var(--r-sm);
+    background: var(--surface-1);
+  }
+  .list-row[href] {
+    color: var(--text);
+  }
+  .chev {
+    flex: none;
+    color: rgba(245, 240, 232, 0.35);
+  }
+  .restart {
     display: flex;
     flex-direction: column;
-    gap: 8px;
-  }
-  .rows li {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 12px 14px;
-    border: 1px solid var(--line);
-    border-radius: var(--r-sm);
-    background: var(--card);
-    font-size: 13px;
-  }
-  .go {
-    display: inline-flex;
-    align-items: center;
-    min-height: var(--touch);
-    font-size: 12.5px;
-  }
-  code {
-    font-family: var(--mono);
-    color: var(--ember-lift);
-    letter-spacing: 0.08em;
+    align-items: flex-start;
+    gap: 12px;
   }
   .actions {
     display: flex;
-    gap: 10px;
-    margin-top: 6px;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .buttons {
+    display: flex;
+    gap: 12px;
+  }
+  .buttons .btn-primary {
+    flex: 1;
+    min-height: 50px;
+    border-radius: var(--r-md);
+  }
+  .buttons .btn-secondary {
+    min-height: 50px;
+    border-radius: var(--r-md);
   }
   .err {
-    color: var(--ember-lift);
-    font-size: 12.5px;
+    margin: 0;
+    color: var(--negative);
+    font-size: var(--fs-subhead);
+    line-height: 20px;
   }
 </style>

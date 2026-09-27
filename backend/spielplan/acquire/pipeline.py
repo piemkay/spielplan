@@ -84,7 +84,7 @@ FAILED = "failed"
 QUEUED = "queued"
 
 NO_SPEND_CAP = (
-    "no spend cap is configured, and §8 says a paid stage never auto-retries past one. Configure "
+    "no spend cap is configured, and a paid stage never auto-retries past one. Configure "
     "the extraction providers and the cap in Admin, and this title resumes here"
 )
 

@@ -70,8 +70,8 @@ describe('the two-mode state machine (§6.0)', () => {
   });
 });
 
-describe('the count line (decision 18)', () => {
-  it('names the kind when exactly one toggle is on', () => {
+describe('the count line (§6.0)', () => {
+  it('names the kind when one is shown', () => {
     expect(countLabel({ total: 6, kinds: ['movie'] })).toBe('6 films');
     expect(countLabel({ total: 1, kinds: ['movie'] })).toBe('1 film');
   });
@@ -81,36 +81,23 @@ describe('the count line (decision 18)', () => {
     expect(countLabel({ total: 2, kinds: ['series'] })).toBe('2 series');
   });
 
-  it('says how many the other toggle holds — the whole point of the control', () => {
-    expect(countLabel({ total: 6, hidden: { series: 2 }, kinds: ['movie'] })).toBe(
-      '6 films · 2 series hidden'
-    );
+  it('says "titles" with both kinds, and "1 title", not "1 titles"', () => {
+    expect(countLabel({ total: 8, kinds: ['movie', 'series'] })).toBe('8 titles');
+    expect(countLabel({ total: 1, kinds: ['movie', 'series'] })).toBe('1 title');
   });
 
-  it('says "titles" when both kinds are on and reports nothing hidden', () => {
-    expect(countLabel({ total: 8, hidden: {}, kinds: ['movie', 'series'] })).toBe('8 titles');
+  it('says a grid narrowed to the library is the library', () => {
+    expect(countLabel({ total: 3, kinds: ['movie'], owned: true })).toBe('3 films in your library');
   });
 
-  it('says "1 title", not "1 titles", with both kinds on', () => {
-    expect(countLabel({ total: 1, hidden: {}, kinds: ['movie', 'series'] })).toBe('1 title');
-  });
-
-  it('counts the household library over the shelves, not the whole catalog', () => {
+  it('counts the household library of the shown kind over the shelves, and nothing else', () => {
     const library = { movie: 612, series: 262 };
-    expect(libraryLabel({ library, kinds: ['movie'] })).toBe(
-      '612 films in your library · 262 series hidden'
-    );
+    expect(libraryLabel({ library, kinds: ['movie'] })).toBe('612 films in your library');
     expect(libraryLabel({ library, kinds: ['movie', 'series'] })).toBe(
       '874 titles in your library'
     );
     expect(libraryLabel({ library: { series: 1 }, kinds: ['series'] })).toBe(
       '1 series in your library'
-    );
-  });
-
-  it('states the active filters (proposal 152)', () => {
-    expect(countLabel({ total: 3, kinds: ['movie'], filters: ['genre Drama', '1990s'] })).toBe(
-      '3 films · genre Drama · 1990s'
     );
   });
 });
@@ -326,8 +313,6 @@ describe('two kind regions under Both (decision 474)', () => {
   });
 });
 
-const REFERENCE = /§\s?\d|decision \d|proposal \d|\bM[0-7](\.\d+)?\b/i;
-
 describe('the Filters control and the grid line', () => {
   it('counts the four catalog filters that are set, and not the person', () => {
     expect(activeFilterCount({})).toBe(0);
@@ -335,13 +320,10 @@ describe('the Filters control and the grid line', () => {
     expect(activeFilterCount({ seen: 'any', decade: '' })).toBe(0);
   });
 
-  it('says in words what the grid is and how to get the shelves back', () => {
-    for (const reason of ['search', 'person', 'filter']) {
-      const line = gridLine(reason);
-      expect(line).toMatch(/shelves back\.$/);
-      expect(line).not.toMatch(REFERENCE);
-      expect(line).not.toContain('·');
-    }
+  it('names the order of a search and what a filmography is; the chips name a filter', () => {
+    expect(gridLine('search')).toBe('Best match first');
+    expect(gridLine('person')).toBe('Everything they worked on');
+    expect(gridLine('filter')).toBe('');
   });
 
   it('offers the order control for a filtered or a person grid the server named an order for', () => {

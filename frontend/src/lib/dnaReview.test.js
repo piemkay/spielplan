@@ -92,7 +92,7 @@ describe('reading a row', () => {
     expect(ledgerPrefill(TAGS[0], 5)).toEqual({ scope: 'title', term: 'pacing.slow_burn', title_id: '5' });
     expect(ledgerPrefill(REJECTS[1])).toEqual({ scope: 'title', term: 'themes.robots', title_id: '' });
     expect(titleOf(REJECTS[0])).toBe('Prisoners (2013)');
-    expect(titleOf(REJECTS[1])).toBe('no title');
+    expect(titleOf(REJECTS[1])).toBe('No title');
   });
 });
 

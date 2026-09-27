@@ -3,9 +3,10 @@ import { expect, test } from '@playwright/test';
 import { signedIn } from '../helpers.js';
 
 /**
- * Admin · Data (§6.6, §8, §8.4; decisions 336, 441, 444): that the page shows what the routes
- * answer. EVERY TEST ONLY READS: a Retry or a Launch would make real work due. A state the stack
- * lacks is made by adding one row to the real route's answer before the page sees it.
+ * Admin · New titles, Movie data, Corrections and the extraction queue (§6.6, §8, §8.4; decisions
+ * 336, 441, 444, 527): that the pages show what the routes answer. EVERY TEST ONLY READS: a Retry
+ * or a Launch would make real work due. A state the stack lacks is made by adding one row to the
+ * real route's answer before the page sees it.
  */
 
 // No service worker (decision 284): on WebKit `page.route` would not see the invented rows' reads.
@@ -47,6 +48,16 @@ async function meetsTheTouchFloor(locator, what) {
   expect(box.width, `${what} is ${box.width}px wide, under --touch (48px)`).toBeGreaterThanOrEqual(48);
 }
 
+/** Open a job's sheet from the board, look inside it, and close it again. */
+async function inTitle(page, id, look) {
+  await page.locator(`[data-testid="board-job"][data-title-id="${id}"]`).click();
+  const sheet = page.getByTestId('board-title');
+  await expect(sheet).toHaveAttribute('data-title-id', String(id));
+  await look(sheet);
+  await page.getByRole('dialog').getByRole('button', { name: 'Done', exact: true }).click();
+  await expect(sheet).toHaveCount(0);
+}
+
 /** Answer the page's read of `pattern` with the real route's body, reshaped by `shape`. */
 async function reshape(page, pattern, shape) {
   await page.route(pattern, async (route) => {
@@ -69,17 +80,13 @@ test('the board names the ten stages of section 8 in order and shows each reason
   const read = page.waitForResponse(
     (res) => BOARD.test(new URL(res.url()).pathname) && res.request().method() === 'GET'
   );
-  await page.goto('/admin/data');
+  await page.goto('/admin/titles');
   const response = await read;
   expect(response.ok(), 'GET /api/admin/acquisition must answer an admin').toBeTruthy();
   const envelope = await response.json();
 
   expect(envelope.stages.map((s) => s.name), "the route's stages are section 8's").toEqual(SECTION_8);
   expect(envelope.stages.map((s) => s.number)).toEqual(SECTION_8.map((_, i) => i + 1));
-
-  const board = page.getByTestId('acquisition-board');
-  await expect(board.getByTestId('board-stage')).toHaveCount(SECTION_8.length);
-  expect(await board.getByTestId('board-stage').allTextContents()).toEqual(SECTION_8);
 
   // The import parks thin titles at stage 2, so the board is never empty here.
   const parked = envelope.jobs.filter((job) => job.status === 'parked' && job.reason != null);
@@ -88,14 +95,29 @@ test('the board names the ten stages of section 8 in order and shows each reason
     'the board holds no parked job: the bundle import parks thin titles at stage 2, so either it ' +
       'did not run or the sweep stopped parking - there is no reason here to test'
   ).toBeGreaterThan(0);
+
+  // Every job has its row under All.
+  const board = page.getByTestId('acquisition-board');
+  await board.getByRole('button', { name: /^All · \d+$/ }).click();
   for (const job of envelope.jobs) {
-    if (job.reason == null) continue;
     const row = board.locator(`[data-testid="board-job"][data-title-id="${job.title_id}"]`);
     await expect(row).toHaveCount(1);
-    expect(
-      await row.getByTestId('board-reason').textContent(),
-      `title ${job.title_id}: the board must print acquisition_job.reason byte for byte`
-    ).toBe(job.reason);
+  }
+
+  // One job per status is opened: one markup draws the stages and the reason for every job.
+  const sampled = new Map();
+  for (const job of envelope.jobs) {
+    if (job.reason != null && !sampled.has(job.status)) sampled.set(job.status, job);
+  }
+  for (const job of sampled.values()) {
+    await inTitle(page, job.title_id, async (sheet) => {
+      await expect(sheet.getByTestId('board-stage')).toHaveCount(SECTION_8.length);
+      expect(await sheet.getByTestId('board-stage').allTextContents()).toEqual(SECTION_8);
+      expect(
+        await sheet.getByTestId('board-reason').textContent(),
+        `title ${job.title_id}: the board must print acquisition_job.reason byte for byte`
+      ).toBe(job.reason);
+    });
   }
 });
 
@@ -121,27 +143,33 @@ test(
       return body;
     });
     try {
-      await page.goto('/admin/data');
+      await page.goto('/admin/titles');
       const board = page.getByTestId('acquisition-board');
       await expect(board.getByTestId('board-job').first()).toBeVisible();
       expect(copied, 'the board holds no parked job to copy, so there is nothing to compare').toBeTruthy();
 
+      // Waiting, the filter the page opens on, holds both.
       const parkedRow = board.locator(`[data-testid="board-job"][data-title-id="${copied.title_id}"]`);
       const failedRow = board.locator(`[data-testid="board-job"][data-title-id="${FAILED_ID}"]`);
       await expect(parkedRow).toHaveAttribute('data-status', 'parked');
       await expect(failedRow).toHaveAttribute('data-status', 'failed');
-      const parkedSays = await parkedRow.getByTestId('board-status').textContent();
-      const failedSays = await failedRow.getByTestId('board-status').textContent();
-      expect(parkedSays, 'decision 336: parked is not broken, and the words say so').not.toBe(failedSays);
       expect(await parkedRow.getAttribute('class')).not.toBe(await failedRow.getAttribute('class'));
 
       // Decision 444: a plain retry is failed's alone; abandon is offered on both.
-      await expect(parkedRow.getByRole('button', { name: 'Retry', exact: true })).toHaveCount(0);
-      await expect(failedRow.getByRole('button', { name: 'Retry', exact: true })).toHaveCount(1);
-      await expect(parkedRow.getByRole('button', { name: 'Retry from stage', exact: true })).toHaveCount(1);
-      await expect(failedRow.getByRole('button', { name: 'Retry from stage', exact: true })).toHaveCount(1);
-      await expect(parkedRow.getByRole('button', { name: 'Abandon', exact: true })).toHaveCount(1);
-      await expect(failedRow.getByRole('button', { name: 'Abandon', exact: true })).toHaveCount(1);
+      const says = {};
+      for (const [id, status, retries] of [
+        [copied.title_id, 'parked', 0],
+        [FAILED_ID, 'failed', 1]
+      ]) {
+        await inTitle(page, id, async (sheet) => {
+          says[status] = await sheet.getByTestId('board-status').textContent();
+          const named = (name) => sheet.getByRole('button', { name, exact: true });
+          await expect(named('Retry now')).toHaveCount(retries);
+          await expect(named('Retry from a step…')).toHaveCount(1);
+          await expect(named('Stop trying')).toHaveCount(1);
+        });
+      }
+      expect(says.parked, 'decision 336: parked is not broken, and the words say so').not.toBe(says.failed);
     } finally {
       await page.unroute(BOARD);
     }
@@ -172,7 +200,7 @@ test(
     const measured = chosen.tags.map((tag) => tag.confidence).filter((c) => c !== null);
     expect(measured, 'the route orders weakest first').toEqual([...measured].sort((a, b) => a - b));
 
-    await page.goto('/admin/data');
+    await page.goto('/admin/corrections');
     const review = page.getByTestId('dna-review');
     await review.getByTestId('evidence-title').fill(String(chosen.title_id));
     await review.getByRole('button', { name: 'Show', exact: true }).click();
@@ -192,7 +220,7 @@ test(
     // §8 stage 7: the one action is a ledger row.
     const rows = review.locator('[data-testid="evidence-tag"], [data-testid="dna-reject"]');
     for (const row of await rows.all()) {
-      await expect(row.getByRole('button', { name: 'Write a ledger row' })).toHaveCount(1);
+      await expect(row.getByRole('button', { name: 'Write a verdict' })).toHaveCount(1);
     }
   }
 );
@@ -220,7 +248,8 @@ test('Launch is disabled with its reason and the selection controls meet the tou
   const injected = [row(999_999_101, first), row(999_999_102, second)];
   await reshape(page, FLYWHEEL, (body) => ({ ...body, items: [...injected, ...body.items] }));
   try {
-    await page.goto('/admin/data');
+    // The extraction queue and its Launch sit with the money, under Budget & AI (decision 527).
+    await page.goto('/admin/budget');
     const queue = page.getByTestId('flywheel-queue');
     // §8.4: a "queued just now" marker from each row's own creation time.
     for (const item of injected) {
@@ -275,7 +304,7 @@ test('three separate editors each export their own artifact', async ({ page }) =
     return { ...body, axes: [axis, ...body.axes.filter((a) => a.facet !== facet)] };
   });
   try {
-    await page.goto('/admin/data');
+    await page.goto('/admin/corrections');
     const editors = page.getByTestId('ledger-editor');
     await expect(editors).toHaveCount(3);
     expect(await editors.evaluateAll((els) => els.map((el) => el.getAttribute('data-ledger')))).toEqual([
@@ -309,8 +338,10 @@ test('three separate editors each export their own artifact', async ({ page }) =
 test('the re-import rebuild set is stated where the re-import happens', async ({ page }) => {
   // §10: "everything expressed in the old Backbone's basis is garbage against a new one."
   await signedIn(page);
+  // The old Data address lands on Movie data, where the importer is.
   await page.goto('/admin/data');
-  await expect(page.getByText('RECOMPUTED ON EVERY RE-IMPORT')).toBeVisible();
+  await expect(page).toHaveURL(/\/admin\/movie-data$/);
+  await page.getByText('What a re-import recomputes').click();
   for (const item of ['fold-in vectors', 'blend weights', 'Ledger MAP refit', 'Cold Tower']) {
     await expect(page.getByText(new RegExp(item))).toBeVisible();
   }

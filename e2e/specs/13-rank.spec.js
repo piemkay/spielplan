@@ -3,19 +3,22 @@ import { expect, test } from '@playwright/test';
 import { createMember, signInAsMember, signedIn, waitForBoard } from '../helpers.js';
 
 /**
- * §6.3's Rank surface: that the gestures write what the integration tests expect, that both
- * exits from a lift write nothing, and that "sharpen my ranking" is reachable (§12's M3 exit).
+ * §6.3's Rank surface: that the gestures write what the integration tests expect, that Move's
+ * sheet writes nothing on its way out, and that the comparison round is reachable (§12's M3 exit).
  * Its own member per project, seeded through the shared helpers (decision 186). Serial, one page.
  */
 test.describe.configure({ mode: 'serial' });
 
-// Proposal 75's standing footnote, verbatim; the constant lives in `lib/rank.svelte.js`.
-const FOOTNOTE = 'tap a title to open it · tap Move to pick it up, then tap a tier to drop it';
-
 const board = (page) => page.getByTestId('rank-board');
-const moving = (page) => page.getByTestId('rank-moving');
-
 const moveOf = (page, titleId) => page.getByTestId(`rank-move-${titleId}`);
+const moveSheet = (page) => page.getByRole('dialog', { name: /^Move / });
+
+/** One tier's row in Move's action sheet, which reads "A+ · Liked". */
+function tierOption(sheet, label) {
+  const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  // A space or the dot next, not any non-word: the + of A+ would let A match it.
+  return sheet.getByRole('menuitem', { name: new RegExp(`^${escaped}[\\s·]`) });
+}
 
 /**
  * §6.3's board is "every **rated** title", so rate some. Across all three classes: all "liked"
@@ -121,6 +124,27 @@ async function tierEditCount(page) {
     .filter((entry) => entry.assigned_tier !== null).length;
 }
 
+/** The area a finger can hit: the drawn box plus any hit-area extension (§6: a control may draw smaller). */
+async function hitBox(locator) {
+  await locator.scrollIntoViewIfNeeded();
+  return locator.evaluate((el) => {
+    const r = el.getBoundingClientRect();
+    const x = r.left + r.width / 2;
+    const y = r.top + r.height / 2;
+    const reach = (dx, dy) => {
+      let n = 0;
+      // Half a pixel in, so an edge that falls on a whole pixel is not lost to rounding.
+      const at = (k) => [x + dx * (r.width / 2 + k - 0.5), y + dy * (r.height / 2 + k - 0.5)];
+      while (n < 24 && el.contains(document.elementFromPoint(...at(n + 1)))) n += 1;
+      return n;
+    };
+    return {
+      width: r.width + reach(-1, 0) + reach(1, 0),
+      height: r.height + reach(0, -1) + reach(0, 1)
+    };
+  });
+}
+
 test.describe('rank', () => {
   /** @type {import('@playwright/test').Page} */
   let page;
@@ -141,71 +165,74 @@ test.describe('rank', () => {
     await page?.close();
   });
 
-  test('the board carries its tiers, a why-line and the standing footnote', async () => {
-    // Proposal 82: best-first, empty tiers kept as drop targets.
+  test('the board heads each tier with its letter and the verdict it stands for', async () => {
+    // Proposal 82: best-first, empty tiers kept as drop targets. Decision 508: what each letter means.
     await openRank(page);
 
     const labels = await board(page).locator('[data-tier]').evaluateAll((rows) =>
       rows.map((row) => row.getAttribute('data-tier'))
     );
     expect(labels).toEqual(['S', 'A+', 'A', 'B', 'C', 'D', 'F']);
-    // Decision 486: what the person has told the board, in their words.
-    await expect(page.getByTestId('rank-why')).toContainText('rated');
-    await expect(page.getByTestId('rank-why')).toContainText('compared');
-    await expect(page.getByTestId('rank-why')).not.toContainText('cutpoints');
-    await expect(page.getByText(FOOTNOTE)).toBeVisible();
+    await expect(page.getByTestId('rank-tier-S')).toContainText('Liked');
+    await expect(page.getByTestId('rank-tier-B')).toContainText('Fine');
+    await expect(page.getByTestId('rank-tier-F')).toContainText('Disliked');
+    // Decision 486: the count in the person's words.
+    await expect(page.getByTestId('rank-count')).toContainText('films · best first');
+    await expect(page.getByTestId('rank-surface')).not.toContainText('cutpoints');
   });
 
-  test('a title lifts on a tap and puts itself down again, writing nothing', async () => {
-    // Proposal 74: "a modeless lift with an undiscoverable exit is the classic tap-to-move
-    // failure". Both exits leave the Ledger alone. Lifting is Move's job (decision 496).
+  test('Move opens the tiers with the current one checked, and leaving writes nothing', async () => {
+    // Decision 527: one choice from a short list, closed by Cancel or Back, writes nothing.
     await openRank(page);
     const before = await tierEditCount(page);
 
     const first = board(page).locator('[data-title]').first();
     const titleId = await first.getAttribute('data-title');
-    const move = moveOf(page, titleId);
-    await move.click();
-    await expect(moving(page)).toBeVisible();
-    await expect(moving(page)).toContainText('tap a tier to drop it');
+    expect(titleId, 'the board has at least one title to move').toBeTruthy();
+    const current = await board(page)
+      .locator('[data-tier]', { has: page.locator(`[data-title="${titleId}"]`) })
+      .getAttribute('data-tier');
 
-    await move.click();
-    await expect(moving(page)).toHaveCount(0);
+    await moveOf(page, titleId).click();
+    const sheet = moveSheet(page);
+    await expect(sheet).toBeVisible();
+    await expect(sheet.getByRole('menuitem')).toHaveCount(7);
+    await expect(tierOption(sheet, current)).toHaveAttribute('aria-current', 'true');
+    await sheet.getByRole('button', { name: 'Cancel' }).click();
+    await expect(sheet).toHaveCount(0);
 
-    await move.click();
-    await expect(moving(page)).toBeVisible();
-    await page.getByTestId('rank-cancel-lift').click();
-    await expect(moving(page)).toHaveCount(0);
+    await moveOf(page, titleId).click();
+    await expect(moveSheet(page)).toBeVisible();
+    await page.goBack();
+    await expect(moveSheet(page)).toHaveCount(0);
+    await expect(page, 'Back closes the sheet and stays on Rank').toHaveURL(/\/rank$/);
 
-    expect(titleId, 'the board has at least one title to lift').toBeTruthy();
-    expect(await tierEditCount(page), 'a cancelled lift writes no observation').toBe(before);
+    expect(await tierEditCount(page), 'a cancelled move writes no observation').toBe(before);
   });
 
-  test('tapping a tier drops the lifted title into it, and it stays there', async () => {
+  test('choosing a tier in Move drops the title into it, and it stays there', async () => {
     // §6.3 "shows the tension rather than snapping back": still there after the refit.
+    const tier = await tierIndexOf(page, 'S');
+    const titleId = await titleOutside(page, tier);
     await openRank(page);
 
-    const poster = board(page).locator('[data-title]').first();
-    const titleId = await poster.getAttribute('data-title');
     await moveOf(page, titleId).click();
-    await expect(moving(page)).toBeVisible();
-
     const written = page.waitForResponse(
       (res) => res.url().includes('/api/rank/drop') && res.request().method() === 'POST'
     );
-    await page.getByTestId('rank-tier-S').click();
+    await tierOption(moveSheet(page), 'S').click();
     await written;
 
-    await expect(moving(page)).toHaveCount(0);
+    await expect(moveSheet(page)).toHaveCount(0);
     await expect(board(page).locator(`[data-tier="S"] [data-title="${titleId}"]`)).toHaveCount(1);
 
     await openRank(page);
     await expect(board(page).locator(`[data-tier="S"] [data-title="${titleId}"]`)).toHaveCount(1);
   });
 
-  test('a tap into an occupied tier writes the edit and no neighbour duel', async () => {
-    // §6.3: "dropping a title into a tier emits a `tier_edit`", and nothing else: a tap names no
-    // neighbour. What the server wrote shows only in §6.7's rail line, so Show the model is on
+  test('a move into an occupied tier writes the edit and no neighbour duel', async () => {
+    // §6.3: "choosing a tier drops the title there, the same `tier_edit` semantics, naming no
+    // neighbour". What the server wrote shows only in §6.7's rail line, so Show the model is on
     // for this test alone.
     const tier = await tierIndexOf(page, 'S');
     await seedTier(page, tier, 1);
@@ -217,18 +244,17 @@ test.describe('rank', () => {
       await openRank(page);
       await expect(board(page).locator('[data-tier="S"] [data-title]')).not.toHaveCount(0);
       await moveOf(page, titleId).click();
-      await expect(moving(page)).toBeVisible();
 
       const written = page.waitForResponse(
         (res) => res.url().includes('/api/rank/drop') && res.request().method() === 'POST'
       );
-      await page.getByTestId('rank-tier-S').click();
+      await tierOption(moveSheet(page), 'S').click();
       const response = await written;
-      expect(response.ok(), `tap-to-tier: ${response.status()}`).toBeTruthy();
+      expect(response.ok(), `move to a tier: ${response.status()}`).toBeTruthy();
 
       const body = JSON.parse(response.request().postData() ?? '{}');
       expect(body.title_id).toBe(titleId);
-      expect(body.above, 'a tap names no title above it').toBeNull();
+      expect(body.above, 'a move names no title above it').toBeNull();
       expect(body.below, 'and none below it either, however full the tier is').toBeNull();
 
       // The line names neighbour duels only when there were some. Both gestures are
@@ -236,7 +262,7 @@ test.describe('rank', () => {
       const payload = await response.json();
       expect(payload.log?.[0], 'the rail is open, so the drop reports its own line').toBeTruthy();
       expect(payload.log[0]).toContain('via=drag_drop');
-      expect(payload.log[0], 'a tap writes the edit and nothing else').not.toContain('duels');
+      expect(payload.log[0], 'a move writes the edit and nothing else').not.toContain('duels');
     } finally {
       await page.request.post('/api/auth/preferences', { data: { show_model: false } });
     }
@@ -255,34 +281,34 @@ test.describe('rank', () => {
     await openRank(page);
 
     const target = board(page).locator('[data-tier="A"]');
-    const posters = target.locator('[data-title]');
-    expect(await posters.count(), 'the arranged tier renders what the board says it holds')
+    const rows = target.locator('[data-title]');
+    expect(await rows.count(), 'the arranged tier renders what the board says it holds')
       .toBeGreaterThanOrEqual(2);
-    const above = await posters.nth(0).getAttribute('data-title');
-    const settled = await posters.nth(1).getAttribute('data-title');
+    const above = await rows.nth(0).getAttribute('data-title');
+    const settled = await rows.nth(1).getAttribute('data-title');
     // From OUTSIDE the tier, or it would be filtered out of its own neighbours.
-    const moving = await titleOutside(page, tier);
-    const source = board(page).locator(`[data-title="${moving}"]`);
+    const dragged = await titleOutside(page, tier);
+    const source = board(page).locator(`[data-title="${dragged}"]`);
 
     const written = page.waitForResponse(
       (res) => res.url().includes('/api/rank/drop') && res.request().method() === 'POST'
     );
-    await source.dragTo(posters.nth(1));
+    await source.dragTo(rows.nth(1));
     const response = await written;
     expect(response.ok(), `drag-and-drop in ${browserName}`).toBeTruthy();
 
     const body = JSON.parse(response.request().postData() ?? '{}');
-    expect(body.title_id).toBe(moving);
-    expect(body.below, 'a drop onto a poster names the title it landed above').toBe(
+    expect(body.title_id).toBe(dragged);
+    expect(body.below, 'a drop onto a title names the title it landed above').toBe(
       Number(settled)
     );
     expect(body.above, "and the one it landed below — §6.3's two margin-less duels").toBe(
       Number(above)
     );
-    await expect(board(page).locator(`[data-tier="A"] [data-title="${moving}"]`)).toHaveCount(1);
+    await expect(board(page).locator(`[data-tier="A"] [data-title="${dragged}"]`)).toHaveCount(1);
   });
 
-  test('sharpen my ranking serves a pair, and answering it moves the board', async () => {
+  test('Sharpen your list serves a pair, and answering it moves the board', async () => {
     // §12's M3 exit in miniature: reachable, one duel per answer, and the board re-reads.
     await openRank(page);
     await page.getByTestId('rank-sharpen').click();
@@ -294,7 +320,7 @@ test.describe('rank', () => {
       await (await page.request.get('/api/rank/queue?kind=movie')).json()
     ).pair.token;
     await expect(page.getByTestId('rank-pair-reason')).not.toBeEmpty();
-    await expect(page.getByTestId('rank-pair-tie')).toHaveText('about the same');
+    await expect(page.getByTestId('rank-pair-tie')).toHaveText('About the same');
 
     const answered = page.waitForResponse(
       (res) => res.url().includes('/api/rank/queue/answer') && res.request().method() === 'POST'
@@ -353,9 +379,9 @@ test.describe('rank', () => {
     const titleId = await board(page).locator('[data-title]').first().getAttribute('data-title');
 
     await page.getByTestId(`rank-open-${titleId}`).click();
-    const card = page.locator('aside[aria-label="Title detail"]');
+    const card = page.getByLabel('Title detail');
     await expect(card).toBeVisible();
-    await expect(moving(page), 'a tap opens; it does not lift').toHaveCount(0);
+    await expect(moveSheet(page), 'a tap opens; it does not move').toHaveCount(0);
 
     await page.keyboard.press('Escape');
     await expect(card).toHaveCount(0);
@@ -386,32 +412,46 @@ test.describe('rank', () => {
     await page.getByTestId('rank-queue-close').click();
   });
 
-  test('every tier letter sits at the top of its row', async () => {
-    // The gutter is a button the height of its tier, and a button centres what it holds.
+  test('every tier letter sits at the top of its tier', async () => {
     await openRank(page);
     for (const row of await board(page).locator('[data-tier]').all()) {
       const label = await row.getAttribute('data-tier');
       const rowBox = await row.boundingBox();
       const letterBox = await page.getByTestId(`rank-letter-${label}`).boundingBox();
       expect(rowBox && letterBox, `tier ${label} is not laid out`).toBeTruthy();
-      expect(letterBox.y - rowBox.y, `tier ${label}'s letter is not at the top of its row`)
+      expect(letterBox.y - rowBox.y, `tier ${label}'s letter is not at the top of its tier`)
         .toBeLessThan(48);
     }
   });
 
   test('all six filter dimensions in section 6.3 have a control', async () => {
     // "**Filters:** genre, kind (movie/series — separate by default), decade, runtime,
-    // seen-state, DNA facet/term predicates".
+    // seen-state, DNA facet/term predicates; all but the kind sit behind one Filters control".
     await openRank(page);
+    await expect(page.getByTestId('rank-genre')).toHaveCount(0);
+    await page.getByTestId('rank-filters').click();
+    const filters = page.getByRole('dialog', { name: 'Filters' });
+    await expect(filters).toBeVisible();
     for (const id of ['rank-genre', 'rank-decade', 'rank-runtime', 'rank-seen', 'rank-dna']) {
-      await expect(page.getByTestId(id)).toBeVisible();
+      await expect(filters.getByTestId(id)).toBeVisible();
     }
-    // `kind` is the partition, in the header rather than among the filters.
+    for (const [id, name] of [
+      ['rank-genre', 'Genre'],
+      ['rank-decade', 'Decade'],
+      ['rank-runtime', 'Max length'],
+      ['rank-seen', 'Seen'],
+      ['rank-dna', 'Taste tag']
+    ]) {
+      await expect(filters.locator('label', { has: page.getByTestId(id) })).toContainText(name);
+    }
+    await filters.getByRole('button', { name: 'Done' }).click();
+    await expect(filters).toHaveCount(0);
+    // `kind` is the partition, beside the title rather than among the filters.
     await expect(page.locator('[data-kind="movie"]')).toHaveAttribute('aria-pressed', 'true');
     await expect(page.locator('[data-kind="series"]')).toHaveAttribute('aria-pressed', 'false');
   });
 
-  test('the title box filters as it is typed in, and every picker says what it picks', async () => {
+  test('the search box filters as it is typed in', async () => {
     await openRank(page);
     const first = board(page).locator('[data-title]').first();
     const name =
@@ -423,14 +463,6 @@ test.describe('rank', () => {
     await page.getByTestId('rank-filter').pressSequentially(name.slice(0, 6));
     await read;
     await expect(board(page).locator('[data-title]').first()).toBeVisible();
-    for (const [id, caption] of [
-      ['rank-genre', 'genre'],
-      ['rank-decade', 'decade'],
-      ['rank-runtime', 'max minutes'],
-      ['rank-seen', 'seen']
-    ]) {
-      await expect(page.locator('label', { has: page.getByTestId(id) })).toContainText(caption);
-    }
     // Armed before the fill: WebKit's fill can outlast the debounce and the read.
     const cleared = page.waitForResponse(
       (res) => res.url().includes('/api/rank?') && !res.url().includes('q=')
@@ -440,34 +472,16 @@ test.describe('rank', () => {
   });
 
   test('every control on the board meets the 48 px touch floor', async ({}, testInfo) => {
-    // A scoped rule can outrank design.css's global coarse-pointer floor.
+    // A control may draw smaller than 48 px; what a finger can hit may not (§6 preamble).
     test.skip(testInfo.project.name !== 'phone', 'the 48 px rule is about touch');
     await openRank(page);
-    const first = board(page).locator('[data-title]').first();
-    const firstId = await first.getAttribute('data-title');
-    await moveOf(page, firstId).click();
+    const firstId = await board(page).locator('[data-title]').first().getAttribute('data-title');
 
-    // `--touch: 48px`, in both dimensions: the coarse block raises `min-height` alone.
-    for (const id of [
-      'rank-sharpen',
-      'rank-seen',
-      'rank-genre',
-      'rank-decade',
-      'rank-cancel-lift',
-      `rank-move-${firstId}`
-    ]) {
-      const box = await page.getByTestId(id).boundingBox();
-      expect(box, `${id} is not on screen`).not.toBeNull();
-      expect(
-        box.height,
-        `${id} is ${box.height}px tall, under --touch (48px)`
-      ).toBeGreaterThanOrEqual(48);
-      expect(
-        box.width,
-        `${id} is ${box.width}px wide, under --touch (48px)`
-      ).toBeGreaterThanOrEqual(48);
+    for (const id of ['rank-sharpen', 'rank-filters', `rank-move-${firstId}`, `rank-open-${firstId}`]) {
+      const box = await hitBox(page.getByTestId(id));
+      expect(box.height, `${id} is ${box.height}px tall to a finger, under 48`).toBeGreaterThanOrEqual(48);
+      expect(box.width, `${id} is ${box.width}px wide to a finger, under 48`).toBeGreaterThanOrEqual(48);
     }
-    await page.getByTestId('rank-cancel-lift').click();
   });
 
   test('the tier set is a per-user preference on the account page', async () => {
@@ -481,15 +495,18 @@ test.describe('rank', () => {
     await expect(page.getByTestId('tier-set-current')).toContainText('S');
 
     await page.getByTestId('tier-set-edit').locator('summary').click();
-    await page.getByTestId('tier-set-input').fill('bad ok good');
+    await page.getByTestId('tier-set-input').fill('good ok bad');
     await page.getByRole('button', { name: 'Save letters' }).click();
-    await expect(page.getByTestId('tier-set-current')).toHaveText('bad · ok · good');
+    await expect(page.getByTestId('tier-set-current')).toHaveText('good ok bad');
 
     await openRank(page);
     const labels = await board(page).locator('[data-tier]').evaluateAll((rows) =>
       rows.map((row) => row.getAttribute('data-tier'))
     );
     expect(labels).toEqual(['good', 'ok', 'bad']);
+    // Decision 508 on another tier set: each letter still stands for a verdict.
+    await expect(page.getByTestId('rank-tier-good')).toContainText('Liked');
+    await expect(page.getByTestId('rank-tier-bad')).toContainText('Disliked');
 
     // Decision 11: tier EDITS survive; only the boundaries do not.
     expect(await tierEditCount(page)).toBeGreaterThan(0);

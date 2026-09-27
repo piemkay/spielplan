@@ -34,7 +34,7 @@ const BELIEF_KEYS = [
 // Decision 491: the balance check arms at fifteen ratings, and says so until it does.
 const ARMING = 'A balance check starts at 15 ratings.';
 
-const BOUNDARY_REASON = 'undo reaches back to the start of this block of 15 and no further';
+const BOUNDARY_REASON = 'Undo only goes back to the start of these 15';
 
 // --- reading the surface ---------------------------------------------------------------------
 
@@ -42,10 +42,13 @@ const counter = (page) => page.getByTestId('rate-counter');
 const sweepCard = (page) => page.getByTestId('rate-sweep-card');
 const battleCard = (page) => page.getByTestId('rate-battle-card');
 const undoChip = (page) => page.getByTestId('rate-undo');
+const modeTitle = (page) => page.getByTestId('rate-menu');
 
-/** The counter line, exact, since its parts must move together. It names the mode (decision 519). */
-const counterLine = (slot, mode, kinds = 'film + series') =>
-  `${slot} / 15 this block · ${kinds} · ${mode}`;
+/** The counter reads "7 of 15" and the screen's title names the mode chosen (decisions 519, 527). */
+async function expectAt(page, slot, mode) {
+  await expect(counter(page)).toHaveText(`${slot} of 15`);
+  await expect(modeTitle(page)).toHaveText(mode);
+}
 
 async function envelope(page) {
   const res = await page.request.get('/api/rate');
@@ -104,14 +107,29 @@ async function openFreshBlock(page, body = {}) {
 async function openRate(page) {
   await page.goto('/rate');
   await expect(page.getByTestId('rate-surface')).toBeVisible();
-  await expect(counter(page)).toContainText('this block');
+  await expect(counter(page)).toHaveText(/^\d+ of 15$/);
+}
+
+/** The modes and kinds live in the menu the screen's title opens (decision 527). */
+async function openMenu(page) {
+  await modeTitle(page).click();
+  const menu = page.getByRole('dialog', { name: 'How to rate' });
+  await expect(menu).toBeVisible();
+  return menu;
+}
+
+async function closeSheet(sheet) {
+  await sheet.getByRole('button', { name: 'Done', exact: true }).click();
+  await expect(sheet).toHaveCount(0);
 }
 
 /** Choose a mode and wait for the redraw: `aria-pressed` flips with the new card. */
 async function chooseMode(page, mode) {
-  const pill = page.getByTestId(`rate-mode-${mode}`);
-  await pill.click();
-  await expect(pill).toHaveAttribute('aria-pressed', 'true');
+  const menu = await openMenu(page);
+  const row = page.getByTestId(`rate-mode-${mode}`);
+  await row.click();
+  await expect(row).toHaveAttribute('aria-pressed', 'true');
+  await closeSheet(menu);
 }
 
 /**
@@ -132,7 +150,9 @@ async function tapAnswer(page, { value = 2 } = {}) {
     await page.getByTestId('rate-strip-tie').click();
   }
   const { session } = await (await written).json();
-  await expect(counter(page)).toContainText(`${session.block.slot} / 15 this block`);
+  // Slot 1 after an answer is a roll: the fifteenth ends its block on a screen of its own.
+  if (session.block.slot === 1) await expect(page.getByTestId('rate-done')).toBeVisible();
+  else await expect(counter(page)).toHaveText(`${session.block.slot} of 15`);
   return sweep ? 'sweep' : 'battle';
 }
 
@@ -196,15 +216,17 @@ test.describe('rate', () => {
     await page?.close();
   });
 
-  test('a fresh session opens in Mix, at 1 / 15, on a sweep card that says why it is here', async () => {
+  test('a fresh session opens in Mix, at 1 of 15, on a sweep card that says why it is here', async () => {
     // §6.1: "**Modes:** **Mix** (default — alternates sweep and battle); blocks of 15".
     await openRate(page);
 
+    const menu = await openMenu(page);
     await expect(page.getByTestId('rate-mode-mix')).toHaveAttribute('aria-pressed', 'true');
     await expect(page.getByTestId('rate-mode-sweep')).toHaveAttribute('aria-pressed', 'false');
     await expect(page.getByTestId('rate-mode-battle')).toHaveAttribute('aria-pressed', 'false');
+    await closeSheet(menu);
 
-    await expect(counter(page)).toHaveText(counterLine(1, 'Mixed'));
+    await expectAt(page, 1, 'Mixed');
     await expect(sweepCard(page)).toBeVisible();
     await expect(page.getByTestId('rate-card-title')).not.toBeEmpty();
 
@@ -215,9 +237,7 @@ test.describe('rate', () => {
     // Decision 35: the chip disables visibly, not silently.
     await expect(undoChip(page)).toBeDisabled();
     await expect(undoChip(page)).toHaveAttribute('data-undo-reason', 'empty');
-    await expect(page.getByTestId('rate-undo-reason')).toHaveText(
-      'nothing to undo in this block'
-    );
+    await expect(page.getByTestId('rate-undo-reason')).toHaveText('Nothing to undo yet');
   });
 
   test('the sweep card carries no model belief, and the reveal arrives only with the write', async () => {
@@ -248,9 +268,9 @@ test.describe('rate', () => {
     await expect(page.getByTestId('rate-card-meta')).toHaveText(/^\d{4}( · .+)?$/);
     await expect(page.getByTestId('rate-queue-reason')).not.toHaveText(/guess|predict/i);
     for (const [value, label] of [
-      [0, 'disliked'],
-      [1, 'fine'],
-      [2, 'liked']
+      [0, 'Disliked'],
+      [1, 'Fine'],
+      [2, 'Liked']
     ]) {
       await expect(page.getByTestId(`rate-verdict-${value}`)).toHaveText(label);
     }
@@ -293,11 +313,13 @@ test.describe('rate', () => {
     // Decision 492: Mix alternates only once a block of ratings stands; the alternation itself
     // is beyond the fixture and is covered in `test_rate_session.py`.
     await openFreshBlock(page);
-    await expect(counter(page)).toHaveText(counterLine(1, 'Mixed'));
-    await expect(page.getByTestId('rate-mode-note')).toContainText('the pairs start at 15 ratings');
+    await expectAt(page, 1, 'Mixed');
+    const menu = await openMenu(page);
+    await expect(page.getByTestId('rate-mode-mix')).toContainText('the pairs start at 15 ratings');
+    await closeSheet(menu);
 
     expect(await tapAnswer(page, { value: 2 })).toBe('sweep');
-    await expect(counter(page)).toHaveText(counterLine(2, 'Mixed'));
+    await expectAt(page, 2, 'Mixed');
     await expect(sweepCard(page)).toBeVisible();
     await expect(battleCard(page)).toHaveCount(0);
     await expect(page.getByTestId('rate-substituted')).toHaveCount(0);
@@ -316,12 +338,12 @@ test.describe('rate', () => {
     await expect(page.getByTestId('rate-balance-total')).not.toHaveText(labelsBefore);
     await expect(undoChip(page)).toBeEnabled();
     await expect(undoChip(page)).toHaveAttribute('data-undo-kind', 'verdict');
-    await expect(undoChip(page)).toContainText('undo rating');
+    await expect(undoChip(page)).toHaveAttribute('aria-label', 'Undo the last rating');
 
     await undoChip(page).click();
     await expect(sweepCard(page)).toBeVisible();
     await expect(page.getByTestId('rate-card-title')).toHaveText(title);
-    await expect(counter(page)).toHaveText(counterLine(1, 'Mixed'));
+    await expectAt(page, 1, 'Mixed');
     await expect(page.getByTestId('rate-balance-total')).toHaveText(labelsBefore);
     await expect(undoChip(page)).toBeDisabled();
     await expect(undoChip(page)).toHaveAttribute('data-undo-reason', 'empty');
@@ -346,8 +368,8 @@ test.describe('rate', () => {
     await page.getByTestId('rate-find-input').fill(unrated.name);
     const rated = page.locator(`[data-testid="rate-find-hit"][data-title-id="${unrated.id}"]`);
     await expect(rated).toBeDisabled();
-    await expect(rated).toContainText('you rated it fine');
-    await page.getByTestId('rate-find-toggle').click();
+    await expect(rated).toContainText('You rated it fine');
+    await closeSheet(page.getByRole('dialog', { name: 'Rate a title you know' }));
   });
 
   test('Undo pops a duel too, and the same pair comes back rather than a reshuffled one', async () => {
@@ -365,18 +387,18 @@ test.describe('rate', () => {
     await tapAnswer(page);
     await chooseMode(page, 'battle');
     await expect(battleCard(page)).toBeVisible();
-    await expect(counter(page)).toHaveText(counterLine(2, 'Pairs'));
+    await expectAt(page, 2, 'Pairs');
     const left = await page.getByTestId('rate-battle-left').getAttribute('data-title-id');
     const right = await page.getByTestId('rate-battle-right').getAttribute('data-title-id');
 
     await tapAnswer(page);
-    await expect(counter(page)).toHaveText(counterLine(3, 'Pairs'));
+    await expectAt(page, 3, 'Pairs');
 
     await undoChip(page).click();
     await expect(battleCard(page)).toBeVisible();
     await expect(page.getByTestId('rate-battle-left')).toHaveAttribute('data-title-id', left);
     await expect(page.getByTestId('rate-battle-right')).toHaveAttribute('data-title-id', right);
-    await expect(counter(page)).toHaveText(counterLine(2, 'Pairs'));
+    await expectAt(page, 2, 'Pairs');
     // One pop, not a rewind.
     await expect(undoChip(page)).toBeEnabled();
     await expect(undoChip(page)).toHaveAttribute('data-undo-kind', 'verdict');
@@ -385,7 +407,8 @@ test.describe('rate', () => {
   test('the corrections row swaps the named side, writes no duel, and does not advance', async () => {
     // §6.1: "`not seen: [left] [both] [right]` → sets that side `unseen`, swaps it out of the
     // pair (`both` swaps the whole pair), **writes no duel row**, syncs per §7.3, covered by
-    // the persistent Undo." Films only: the one band deep enough to redraw from.
+    // the persistent Undo." Films only: the one band deep enough to redraw from. Each button
+    // names its title, and the both-case reads Neither (decision 527).
     await openFreshBlock(page, { kinds: ['movie'] });
     await chooseMode(page, 'battle');
     await expect(battleCard(page)).toBeVisible();
@@ -397,10 +420,13 @@ test.describe('rate', () => {
     expect([String(served.left.id), String(served.right.id)]).toEqual([left, right]);
     expect(await seenState(page, left)).toBe('seen');
 
-    await expect(page.getByTestId('rate-corrections')).toContainText('not seen:');
+    await expect(page.getByTestId('rate-corrections')).toContainText("Haven't seen one?");
     for (const side of ['left', 'both', 'right']) {
       await expect(page.getByTestId(`rate-correction-${side}`)).toBeVisible();
     }
+    await expect(page.getByTestId('rate-correction-left')).toHaveText(served.left.name);
+    await expect(page.getByTestId('rate-correction-right')).toHaveText(served.right.name);
+    await expect(page.getByTestId('rate-correction-both')).toHaveText('Neither');
     await page.getByTestId('rate-correction-left').click();
 
     await expect(page.getByTestId('rate-battle-left')).not.toHaveAttribute('data-title-id', left);
@@ -411,7 +437,7 @@ test.describe('rate', () => {
     // "A correction is a repair of the question, not an answer to it": the counter does not move.
     await expect(counter(page)).toHaveText(before);
     await expect(undoChip(page)).toHaveAttribute('data-undo-kind', 'correction');
-    await expect(undoChip(page)).toContainText('undo not seen');
+    await expect(undoChip(page)).toHaveAttribute('aria-label', 'Undo the last not seen');
 
     await undoChip(page).click();
     await expect(page.getByTestId('rate-battle-left')).toHaveAttribute('data-title-id', left);
@@ -446,7 +472,7 @@ test.describe('rate', () => {
 
     const toggle = page.getByTestId('rate-decisive');
     await expect(toggle).toHaveAttribute('aria-checked', 'false');
-    await expect(toggle).toContainText('clear favourite');
+    await expect(toggle).toContainText('Clear favourite');
     await toggle.click();
     await expect(toggle).toHaveAttribute('aria-checked', 'true');
     await expect(page.getByTestId('rate-decisive-why')).toContainText('resets for the next pair');
@@ -466,8 +492,9 @@ test.describe('rate', () => {
 
   test('the kind toggles are either or both, and the empty selection is refused, not sent', async () => {
     // Decision 18: "kind is two toggles, either or both, never neither". The control must never
-    // send the empty selection the server would 422.
+    // send the empty selection the server would 422. They sit in the title's menu (decision 527).
     await openFreshBlock(page);
+    const menu = await openMenu(page);
     const movie = page.getByTestId('rate-kind-movie');
     const series = page.getByTestId('rate-kind-series');
     await expect(movie).toHaveAttribute('aria-pressed', 'true');
@@ -476,7 +503,6 @@ test.describe('rate', () => {
     await movie.click();
     await expect(movie).toHaveAttribute('aria-pressed', 'false');
     await expect(series).toHaveAttribute('aria-pressed', 'true');
-    await expect(counter(page)).toContainText('· series ·');
     // The count is per kind, and says so.
     await expect(page.getByTestId('rate-balance-total')).toHaveText(/^\d+ series ratings?$/);
 
@@ -498,14 +524,16 @@ test.describe('rate', () => {
 
     await movie.click();
     await expect(movie).toHaveAttribute('aria-pressed', 'true');
-    await expect(counter(page)).toContainText('· film + series ·');
+    await expect(page.getByTestId('rate-balance-total')).toHaveText(/^\d+ ratings?$/);
     expect((await envelope(page)).session.kinds).toEqual(['movie', 'series']);
+    await closeSheet(menu);
   });
 
-  test('the counter runs to 15 and rolls, and Undo then disables visibly at the boundary', async () => {
+  test('the counter runs to 15, the block ends on its own screen, and Undo stops at the edge', async () => {
     // Decision 35: "the chip disables visibly, not silently, at the boundary", which decisions 174
-    // and 199 place at the first observation of the next block. Fourteen answers over HTTP, the
-    // fifteenth a tap. A third member, with all eight titles unrated.
+    // and 199 place at the first observation of the next block; decision 527 gives a block's end a
+    // screen of its own. Fourteen answers over HTTP, the fifteenth a tap. A third member, with all
+    // eight titles unrated.
     await switchToFreshMember(page);
     const opened = await openFreshBlock(page);
     const block = opened.session.block.index;
@@ -514,31 +542,38 @@ test.describe('rate', () => {
     }
 
     await openRate(page);
-    await expect(counter(page)).toContainText('15 / 15 this block');
+    await expect(counter(page)).toHaveText('15 of 15');
     await expect(undoChip(page)).toBeEnabled();
 
     const fifteenth = await tapAnswer(page);
 
-    await expect(counter(page)).toContainText('1 / 15 this block');
+    const done = page.getByTestId('rate-done');
+    await expect(done.getByRole('heading', { name: "That's 15." })).toBeVisible();
+    await expect(counter(page)).toHaveText('15 of 15');
+    await expect(battleCard(page)).toHaveCount(0);
+    await expect(sweepCard(page)).toHaveCount(0);
     expect((await envelope(page)).session.block.index, 'the block rolled').toBe(block + 1);
-    // Every card since slot 8 is the drained state's pairs; the counter still names Mix.
-    await expect(counter(page)).toContainText('· Mixed');
-    await expect(battleCard(page)).toBeVisible();
 
     // Decision 199: the roll is not the commit; the fifteenth stays retractable until the
     // sixteenth lands.
     await expect(undoChip(page)).toBeEnabled();
-    // The kind follows the card tapped: `tapAnswer` answers a battle with the tie strip, and a
+    // The kind follows the card tapped: `tapAnswer` answers a battle with the tie button, and a
     // tie is its own journal kind. Slot 15's card type is not fixed (decision 200).
     await expect(undoChip(page)).toHaveAttribute(
       'data-undo-kind',
       fifteenth === 'sweep' ? 'verdict' : 'tie'
     );
 
+    await page.getByTestId('rate-done-more').click();
+    await expect(done).toHaveCount(0);
+    // Every card since slot 8 is the drained state's pairs; the title still names Mix.
+    await expectAt(page, 1, 'Mixed');
+    await expect(battleCard(page)).toBeVisible();
+
     // The sixteenth commits the block it ended: retracting it cannot reach back past slot 1.
     await tapAnswer(page);
     await undoChip(page).click();
-    await expect(counter(page)).toContainText('1 / 15 this block');
+    await expect(counter(page)).toHaveText('1 of 15');
 
     await expect(undoChip(page)).toBeDisabled();
     await expect(undoChip(page)).toHaveAttribute('data-undo-reason', 'block_boundary');

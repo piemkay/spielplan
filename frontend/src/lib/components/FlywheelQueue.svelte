@@ -3,6 +3,8 @@
   // launch route prices the batch again whatever this card shows (decision 441).
   import { onDestroy, onMount } from 'svelte';
   import { get, post } from '$lib/api.js';
+  import { statusOf, stepName } from '$lib/acquisitionBoard.svelte.js';
+  import { PROVIDER_LABELS } from '$lib/spendGuard.svelte.js';
   import {
     acceptQuote,
     defaultPlan,
@@ -41,6 +43,7 @@
 
   const items = $derived(envelope?.items ?? []);
   const providers = $derived(envelope?.providers ?? []);
+  const stages = $derived(envelope?.stages ?? []);
   const current = $derived({
     titles: titlesOf(items, selected),
     providers: orderedProviders(providers, chosen),
@@ -109,7 +112,8 @@
     launched = '';
     try {
       const answer = await post('/admin/flywheel/launch', launchBody(selected, current));
-      launched = `Launched batch ${answer.batch.id}: ${answer.items.length} row(s) now running.`;
+      const n = answer.items.length;
+      launched = `Launched: ${n} title${n === 1 ? ' is' : 's are'} being read now.`;
       selected = new Set();
     } catch (err) {
       launchRefusal = err.message;
@@ -134,73 +138,80 @@
   });
 </script>
 
-<div class="flywheel" data-testid="flywheel-queue">
-  <h2>Extraction flywheel</h2>
-  <p class="why">
-    Naming failures future extraction spend should fix, each with the reason it was queued. Select
-    rows, choose the providers and passes for this batch, and launch it within the monthly cap.
-  </p>
+<section class="flywheel" data-testid="flywheel-queue" aria-labelledby="queue-title">
+  <h2 class="list-header" id="queue-title">Extraction queue</h2>
 
   {#if error}
-    <p class="err">{error}</p>
+    <p class="err" role="alert">{error}</p>
   {:else if !envelope}
-    <p class="data">loading...</p>
+    <p class="footnote">Loading…</p>
   {:else}
     {#if items.length === 0}
-      <p class="why">The queue is empty.</p>
-    {/if}
-    <ul class="items">
-      {#each items as item (item.id)}
-        <li class="item card" class:picked={selected.has(item.id)} data-testid="flywheel-row">
-          <label class="pick">
-            <input
-              type="checkbox"
-              checked={selected.has(item.id)}
-              onchange={() => pick(item.id)}
-              aria-label="Select row {item.id}"
-            />
-          </label>
-          <div class="body">
-            <div class="head">
-              <span class="data-lg">{kindLabel(item.kind)}</span>
-              <span class="data">{item.status}</span>
-              {#if queuedMarker(item.created_at, now)}
-                <span class="data" data-testid="flywheel-queued">{queuedMarker(item.created_at, now)}</span>
+      <div class="list-group"><p class="list-row empty">Nothing is waiting.</p></div>
+    {:else}
+      <ul class="list-group items">
+        {#each items as item (item.id)}
+          <li class="item" class:picked={selected.has(item.id)} data-testid="flywheel-row">
+            <label class="pick">
+              <input
+                type="checkbox"
+                checked={selected.has(item.id)}
+                onchange={() => pick(item.id)}
+                aria-label="Select row {item.id}"
+              />
+            </label>
+            <div class="body">
+              {#if titleOf(item)}<span class="name">{titleOf(item)}</span>{/if}
+              <span class="meta">
+                {kindLabel(item.kind)} ·
+                {#if item.status === 'queued' && queuedMarker(item.created_at, now)}
+                  <span data-testid="flywheel-queued">{queuedMarker(item.created_at, now)}</span>
+                {:else}
+                  {item.status}
+                {/if}
+              </span>
+              <p class="reason" data-testid="flywheel-reason">{item.reason}</p>
+              {#if item.status === 'running' && item.board}
+                {@const step = stepName(stages.find((s) => s.number === Number(item.board.stage)))}
+                <p class="meta" data-testid="flywheel-board">
+                  {statusOf(item.board, stages).label}{#if step}{' · '}{step}{/if}
+                </p>
+                <details class="tech">
+                  <summary>Technical details</summary>
+                  <div class="code lines">
+                    <p>stage {item.board.stage} · {item.board.status}</p>
+                    {#if item.board.reason != null}<p>{item.board.reason}</p>{/if}
+                  </div>
+                </details>
               {/if}
             </div>
-            {#if titleOf(item)}<span class="name">{titleOf(item)}</span>{/if}
-            <p class="reason" data-testid="flywheel-reason">{item.reason}</p>
-            {#if item.status === 'running' && item.board}
-              <p class="data">title's board: {item.board.status} at stage {item.board.stage}</p>
-              {#if item.board.reason != null}
-                <p class="reason">{item.board.reason}</p>
-              {/if}
-            {/if}
-          </div>
-        </li>
-      {/each}
-    </ul>
-
-    <div class="plan">
-      <fieldset class="providers">
-        <legend class="data">PROVIDERS FOR THIS BATCH</legend>
-        {#each providers as provider (provider.name)}
-          <label class="provider">
-            <input
-              type="checkbox"
-              checked={chosen.includes(provider.name)}
-              disabled={!provider.configured}
-              onchange={(e) => chooseProvider(provider.name, e.currentTarget.checked)}
-            />
-            <span>{provider.name}</span>
-          </label>
-          {#if provider.reason}
-            <p class="note">{provider.name}: {provider.reason}</p>
-          {/if}
+          </li>
         {/each}
-      </fieldset>
-      <label class="passes">
-        <span class="data">PASSES</span>
+      </ul>
+    {/if}
+    <p class="list-footer">
+      Titles whose details came back thin, each with the reason. Pick some, choose who reads them and
+      how often, and launch a batch within what is left of the monthly cap.
+    </p>
+
+    <h3 class="list-header">This batch</h3>
+    <div class="list-group">
+      {#each providers as provider (provider.name)}
+        <label class="list-row provider">
+          <span class="grow">
+            <span>{PROVIDER_LABELS[provider.name] ?? provider.name}</span>
+            {#if provider.reason}<span class="note">{provider.reason}</span>{/if}
+          </span>
+          <input
+            type="checkbox"
+            checked={chosen.includes(provider.name)}
+            disabled={!provider.configured}
+            onchange={(e) => chooseProvider(provider.name, e.currentTarget.checked)}
+          />
+        </label>
+      {/each}
+      <label class="list-row passes">
+        <span class="grow">Passes</span>
         <select value={passes} onchange={(e) => (passes = Number(e.currentTarget.value))}>
           {#each passChoices(envelope.defaults?.passes) as n (n)}
             <option value={n}>{n}</option>
@@ -209,26 +220,26 @@
       </label>
     </div>
 
-    <dl class="figures" data-testid="flywheel-figures">
-      <div>
-        <dt class="data">titles selected</dt>
+    <dl class="list-group figures" data-testid="flywheel-figures">
+      <div class="list-row">
+        <dt>Titles selected</dt>
         <dd data-testid="flywheel-titles">{current.titles}</dd>
       </div>
-      <div><dt class="data">per title</dt><dd>{dollars(figures?.per_title_usd)}</dd></div>
-      <div><dt class="data">batch total</dt><dd>{dollars(figures?.total_usd)}</dd></div>
-      <div>
-        <dt class="data">reserved (both attempts)</dt>
+      <div class="list-row"><dt>Per title</dt><dd>{dollars(figures?.per_title_usd)}</dd></div>
+      <div class="list-row"><dt>Batch total</dt><dd>{dollars(figures?.total_usd)}</dd></div>
+      <div class="list-row">
+        <dt>Held for both attempts</dt>
         <dd data-testid="flywheel-reserved">{dollars(figures?.reserved_usd)}</dd>
       </div>
-      <div>
-        <dt class="data">left this month</dt>
+      <div class="list-row">
+        <dt>Left this month</dt>
         <dd>{roomLeft(figures, envelope.meter)}</dd>
       </div>
     </dl>
 
     <div class="launch">
       <button
-        class="btn-primary"
+        class="btn-secondary"
         data-testid="flywheel-launch"
         disabled={launch.disabled}
         onclick={doLaunch}
@@ -239,149 +250,169 @@
         <p class="reason" data-testid="flywheel-launch-reason">{launch.reason}</p>
       {/if}
     </div>
-    {#if quoteError}<p class="err">{quoteError}</p>{/if}
+    {#if quoteError}<p class="err" role="alert">{quoteError}</p>{/if}
     {#if launchRefusal}<p class="err refusal" data-testid="flywheel-refusal">{launchRefusal}</p>{/if}
     {#if launched}<p class="why">{launched}</p>{/if}
   {/if}
-</div>
+</section>
 
 <style>
   .flywheel {
-    margin-top: 26px;
-    padding-top: 14px;
-    border-top: 1px solid var(--line);
     display: flex;
     flex-direction: column;
-    gap: 10px;
-  }
-  h2 {
-    margin: 0;
-    font-size: 15px;
-    font-weight: 600;
-  }
-  .why {
-    margin: 0;
   }
   .items {
     list-style: none;
     margin: 0;
     padding: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
   }
   .item {
     display: flex;
-    gap: 10px;
+    gap: 4px;
     align-items: flex-start;
+    padding: 4px var(--gutter) 12px 4px;
   }
-  /* Selection in ink, not the accent: the only accent here is Launch (§6.8). */
+  .item + .item {
+    box-shadow: inset 0 0.5px 0 var(--separator);
+  }
+  /* Selection is a neutral fill, not the accent (decision 527). */
   .item.picked {
-    border-color: var(--ink-3);
+    background: var(--surface-2);
   }
   .pick {
     display: inline-flex;
     align-items: center;
     justify-content: center;
     flex: none;
+    min-width: var(--touch);
+    min-height: var(--touch);
     cursor: pointer;
+  }
+  .pick input,
+  .provider input {
+    width: 20px;
+    height: 20px;
+    margin: 0;
   }
   .body {
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 2px;
     min-width: 0;
-  }
-  .head {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 4px 12px;
-    align-items: baseline;
+    padding-top: 12px;
   }
   .name {
-    font-weight: 600;
+    font-size: var(--fs-body);
+    line-height: 22px;
+  }
+  .meta,
+  .note {
+    margin: 0;
+    font-size: var(--fs-footnote);
+    line-height: 18px;
+    color: var(--text-3);
+  }
+  .meta {
+    display: block;
+  }
+  .meta::first-letter {
+    text-transform: uppercase;
+  }
+  .note {
+    white-space: pre-wrap;
+    overflow-wrap: anywhere;
   }
   .reason {
     margin: 0;
     white-space: pre-wrap;
     overflow-wrap: anywhere;
-    font-size: 13px;
-    line-height: 1.5;
-    color: var(--ink-2);
+    font-size: var(--fs-subhead);
+    line-height: 20px;
+    color: var(--text-2);
   }
-  .plan {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 12px 24px;
-    align-items: flex-start;
-  }
-  .providers {
-    border: none;
+  .empty {
     margin: 0;
-    padding: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 4px;
+    color: var(--text-3);
   }
-  .provider {
-    display: inline-flex;
+  .tech summary {
+    display: flex;
     align-items: center;
-    gap: 8px;
+    min-height: var(--touch);
+    list-style: none;
+    color: var(--accent-text);
+    font-size: var(--fs-subhead);
     cursor: pointer;
   }
-  .note {
+  .tech summary::-webkit-details-marker {
+    display: none;
+  }
+  .lines {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 12px;
+    border-radius: var(--r-sm);
+    background: var(--surface-2);
+  }
+  .lines p {
     margin: 0;
-    font-size: 12px;
-    line-height: 1.45;
-    color: var(--ink-4);
     white-space: pre-wrap;
     overflow-wrap: anywhere;
   }
-  .passes {
+  h3.list-header {
+    padding-top: 24px;
+  }
+  .grow {
+    flex: 1;
+    min-width: 0;
     display: flex;
     flex-direction: column;
-    gap: 6px;
+  }
+  label.list-row {
+    cursor: pointer;
+  }
+  .passes select {
+    width: auto;
+    min-width: var(--touch);
+    min-height: var(--touch);
+    padding: 0 28px 0 8px;
+    background-color: transparent;
+    background-position: right 4px center;
+    color: var(--text-3);
   }
   .figures {
-    margin: 0;
-    display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
-    gap: 8px;
+    margin: 16px 0 0;
+  }
+  .figures dt {
+    flex: 1;
   }
   .figures dd {
-    margin: 2px 0 0;
-    font-family: var(--mono);
-    font-size: 12px;
-    color: var(--ink-2);
+    margin: 0;
+    color: var(--text-3);
+    font-variant-numeric: tabular-nums;
   }
   .launch {
     display: flex;
     flex-wrap: wrap;
     gap: 8px 12px;
     align-items: center;
+    padding-top: 16px;
+  }
+  .footnote,
+  .why {
+    margin: 0;
+  }
+  .why {
+    padding-top: 8px;
   }
   .err {
-    color: var(--ember-lift);
     margin: 0;
+    padding-top: 8px;
+    color: var(--negative);
+    font-size: var(--fs-subhead);
   }
   .refusal {
     white-space: pre-wrap;
     overflow-wrap: anywhere;
-  }
-
-  @media (pointer: coarse) {
-    /* design.css's coarse floor reaches neither a label nor a checkbox; the label is the target. */
-    .pick {
-      min-height: var(--touch);
-      min-width: var(--touch);
-    }
-    .provider {
-      min-height: var(--touch);
-      min-width: var(--touch);
-    }
-    /* design.css raises a select's height only, and one digit leaves it about 41px wide. */
-    .passes select {
-      min-width: var(--touch);
-    }
   }
 </style>

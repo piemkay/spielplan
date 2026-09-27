@@ -238,6 +238,60 @@ export function projectedForCard(projected, extracted) {
 
 /** @param {string} answer */
 export function answeredLine(answer) {
-  if (answer === 'not_seen') return 'Saved - marked not seen.';
-  return `Saved - you ${answer === 'fine' ? 'thought it was fine' : answer + ' it'}.`;
+  if (answer === 'not_seen') return 'Saved — marked not seen.';
+  return `Saved — you ${answer === 'fine' ? 'thought it was fine' : answer + ' it'}.`;
+}
+
+/**
+ * "Directed by …" from the credits `credits_for` sends, directing first; '' when none directed.
+ *
+ * @param {{name: string, role_class?: string | null, job?: string}[] | null | undefined} credits
+ */
+export function directedBy(credits) {
+  const names = [
+    ...new Set(
+      (credits ?? [])
+        .filter((c) => c.role_class === 'director' || String(c.job).toLowerCase() === 'director')
+        .map((c) => c.name)
+    )
+  ];
+  if (!names.length) return '';
+  if (names.length <= 2) return `Directed by ${names.join(' and ')}`;
+  return `Directed by ${names.slice(0, 2).join(', ')} and ${names.length - 2} more`;
+}
+
+/**
+ * The first two genres as a sentence: "Crime, thriller"; '' when the title has none.
+ *
+ * @param {string[] | null | undefined} genres
+ */
+export function genreLine(genres) {
+  const line = (genres ?? []).slice(0, 2).join(', ').toLowerCase();
+  return line.charAt(0).toUpperCase() + line.slice(1);
+}
+
+const PLACED_BY = {
+  backbone: 'Placed by how people rated it',
+  blended: "Placed by how people rated it and by what it's about",
+  cold_tower: "Placed by what it's about"
+};
+
+/** Where the numbers' coordinate came from, in words; '' for a source with none. */
+export function placedBy(source) {
+  return PLACED_BY[source] ?? '';
+}
+
+const SCORE_WORDS = { critic_score: 'critics', audience_score: 'audience', user_score: 'users' };
+
+/**
+ * A score tile's name: the platform, and the audience only where the platform shows two scores.
+ *
+ * @param {{platform: string, metric: string}} item
+ * @param {{platform: string}[]} items
+ */
+export function scoreLabel(item, items) {
+  const name = sourceLabel(item.platform);
+  const several = items.filter((i) => i.platform === item.platform).length > 1;
+  const word = SCORE_WORDS[item.metric] ?? String(item.metric ?? '').replaceAll('_', ' ');
+  return several || !(item.metric in SCORE_WORDS) ? `${name} ${word}`.trim() : name;
 }

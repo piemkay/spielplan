@@ -10,11 +10,25 @@ import { session } from '$lib/session.svelte.js';
 import { leave, tonight } from '$lib/tonight.svelte.js';
 
 // Recorded rather than stubbed: "the link was consumed" is the observable half of decision 481.
-const navigation = vi.hoisted(() => ({ replaced: [] }));
+// `pushState` feeds the page store, so a sheet sees its own history entry and stays open.
+const navigation = vi.hoisted(() => ({ replaced: [], state: {}, runs: new Set() }));
 vi.mock('$app/navigation', () => ({
   replaceState: vi.fn((url) => {
     navigation.replaced.push(url);
+  }),
+  pushState: vi.fn((url, state) => {
+    navigation.state = state;
+    for (const run of navigation.runs) run({ url: new URL('http://localhost/tonight'), state });
   })
+}));
+vi.mock('$app/stores', () => ({
+  page: {
+    subscribe: (run) => {
+      run({ url: new URL('http://localhost/tonight'), state: navigation.state });
+      navigation.runs.add(run);
+      return () => navigation.runs.delete(run);
+    }
+  }
 }));
 
 // The page is the only caller of `connect`, so a socket after an unmount is the leak.
@@ -60,6 +74,7 @@ let fetchMock;
 
 beforeEach(() => {
   sockets.length = 0;
+  navigation.state = {};
   vi.stubGlobal('WebSocket', FakeSocket);
   fetchMock = vi.fn(async () => reply({ rooms: [] }));
   vi.stubGlobal('fetch', fetchMock);
@@ -136,7 +151,7 @@ describe("54e's ballot on the initiator's phone (finding 13)", () => {
 
     expect(byTestId('tonight-ballot')).not.toBeNull();
     expect(byTestId('tonight-ballot-to-12'), "the guest's turn is not on the ballot").not.toBeNull();
-    expect(byTestId('tonight-ballot-to-12').textContent).toContain('pass to Guest 1');
+    expect(byTestId('tonight-ballot-to-12').textContent).toContain('Pass to Guest 1');
     // Whose ballot is on screen, because on this phone it is not always its owner's.
     expect(byTestId('tonight-ballot-seat').textContent).toContain('Mia');
   });
@@ -233,7 +248,10 @@ describe('the clock behind the answer latency, across a navigation away (finding
     fetchMock.mockImplementation(async (path, opts = {}) => {
       const method = opts.method ?? 'GET';
       if (method === 'POST') posted.push({ path, body: JSON.parse(opts.body) });
-      if (path === '/api/tonight/rooms') return reply({ rooms: [{ ...room, viewer_seated: true }] });
+      // The rooms list names its host by name, where the lobby carries the host's seat.
+      if (path === '/api/tonight/rooms') {
+        return reply({ rooms: [{ ...room, host: 'Mia', viewer_seated: true }] });
+      }
       if (path === '/api/tonight/sessions/7') return reply(room);
       if (/\/api\/tonight\/seats\/11\/(round|answer)$/.test(path)) return reply(round);
       throw new Error(`no fixture for ${method} ${path}`);
@@ -292,20 +310,20 @@ describe('the clock behind the answer latency, across a navigation away (finding
 describe("54f's Reshuffle, pressed inside the sharpen round (M412-SOLO-01)", () => {
   /** Only `pair` differs: Reshuffle's `sharpen: false` gets `pair: null`, which looks converged. */
   const picks = [
-    { title_id: 1, name: 'Heat', why: 'slow burn', fit_line: 'fits your 130 min' },
-    { title_id: 2, name: 'Drive', why: 'neon', fit_line: 'fits your 130 min' },
-    { title_id: 3, name: 'Tampopo', why: 'noodles', fit_line: 'fits your 130 min' }
+    { title_id: 1, name: 'Heat', why: 'Slow burn', fit_line: 'Fits your time' },
+    { title_id: 2, name: 'Drive', why: 'Neon', fit_line: 'Fits your time' },
+    { title_id: 3, name: 'Tampopo', why: 'Noodles', fit_line: 'Fits your time' }
   ];
   const pair = {
     selection: 'straddle',
     reason: 'both near your line',
-    a: { title_id: 1, name: 'Heat', year: 1995, fit_line: 'fits your 130 min' },
-    b: { title_id: 2, name: 'Drive', year: 2011, fit_line: 'fits your 130 min' }
+    a: { title_id: 1, name: 'Heat', year: 1995, fit_line: 'Fits your time' },
+    b: { title_id: 2, name: 'Drive', year: 2011, fit_line: 'Fits your time' }
   };
   const solo = (over = {}) => ({
     picks,
     wildcard: null,
-    provenance: 'tilted by your 1 answers',
+    provenance: 'Tilted by your 1 answer · fits in 2h 10m',
     empty: null,
     answered: 1,
     sharpened: true,
@@ -347,14 +365,52 @@ describe("54f's Reshuffle, pressed inside the sharpen round (M412-SOLO-01)", () 
       'the only control that can ask for a pair is gone, so Back is the only way out'
     ).not.toBeNull();
   });
+
+  it('offers Play on every pick and the wildcard, and says so when there is no link', () => {
+    // Decision 527: every solo pick carries Play, not the first one only.
+    const linked = (t) => ({ ...t, play_url: `http://jf.test/web/#/details?id=jf-${t.title_id}` });
+    tonight.solo = solo({
+      picks: picks.map(linked),
+      wildcard: { ...linked({ title_id: 4, name: 'Hamnet', fit_line: '15 min over' }), why: 'A step outside your usual' }
+    });
+    tonight.step = 'solo';
+    app = mount(TonightPage, { target });
+    flushSync();
+
+    for (const id of [1, 2, 3, 4]) {
+      expect(byTestId(`tonight-play-${id}`)?.getAttribute('href'), `no Play on ${id}`).toBe(
+        `http://jf.test/web/#/details?id=jf-${id}`
+      );
+    }
+    expect(byTestId('tonight-solo-wildcard').textContent).toContain('Wildcard');
+    unmount(app);
+
+    // Two different sentences: no server, and a title the server does not hold.
+    tonight.solo = solo({
+      picks: [{ ...picks[0], play_reason: 'not_in_library' }, ...picks.slice(1).map((t) => ({ ...t, play_reason: 'no_server' }))]
+    });
+    app = mount(TonightPage, { target });
+    flushSync();
+    expect(byTestId('tonight-play-1'), 'a Play with nowhere to go').toBeNull();
+    const hero = byTestId('tonight-pick-1').querySelector('button.play');
+    expect(hero.disabled, 'an unavailable Play that still reads as a button to press').toBe(true);
+    expect(document.getElementById(hero.getAttribute('aria-describedby')).textContent).toBe(
+      'Not in your Jellyfin library.'
+    );
+    const row = byTestId('tonight-pick-2').querySelector('button');
+    expect(row.disabled).toBe(true);
+    expect(row.getAttribute('aria-label')).toContain("Jellyfin isn't connected");
+  });
 });
 
 describe("the budget the household is setting, on a series night (decision 219)", () => {
   const byTestId = (id) => target.querySelector(`[data-testid="${id}"]`);
 
   it('says the number it is setting is per episode once the kind is series', () => {
-    // The control that sets the number sits under the Series pill, so it must say "per episode".
+    // The control that sets the number sits under the Series thumb, so it must say "per episode".
     app = mount(TonightPage, { target });
+    flushSync();
+    byTestId('tonight-settings').click();
     flushSync();
 
     const readout = () => byTestId('tonight-budget-value').textContent;
@@ -362,14 +418,31 @@ describe("the budget the household is setting, on a series night (decision 219)"
 
     byTestId('tonight-kind-series').click();
     flushSync();
-    expect(readout(), 'the number under the Series pill still reads as the evening').toContain(
-      'min per episode'
+    expect(readout(), 'the number under the Series thumb still reads as the evening').toContain(
+      'per episode'
+    );
+    expect(byTestId('tonight-summary').textContent, 'and so does the row it opened from').toContain(
+      'per episode'
     );
 
     // And back: the qualifier belongs to the kind, not the slider.
     byTestId('tonight-kind-movie').click();
     flushSync();
     expect(readout()).not.toContain('per episode');
+  });
+
+  it('counts guests with a stepper that stops at none and at the most one phone holds', () => {
+    app = mount(TonightPage, { target });
+    flushSync();
+    byTestId('tonight-settings').click();
+    flushSync();
+
+    expect(byTestId('tonight-guests-less').disabled, 'fewer than no guests').toBe(true);
+    byTestId('tonight-guests-more').click();
+    flushSync();
+    expect(byTestId('tonight-guests').textContent).toBe('1');
+    expect(byTestId('tonight-summary').parentElement.textContent).toContain('1 guest');
+    tonight.controls.guests = 0;
   });
 });
 
@@ -408,7 +481,7 @@ describe('the first household evening, on the screen (owner instruction of 2026-
       expect(art, 'no shared poster inside the pick').not.toBeNull();
       expect(art.getAttribute('data-title-id'), 'the poster was not keyed on the title').toBe(id);
     }
-    expect(byTestId('tonight-round-count').textContent).toContain('pair 1 · often about 10');
+    expect(byTestId('tonight-round-count').textContent).toContain('Pair 1 · usually about 10');
     expect(byTestId('tonight-round-count').textContent).not.toContain('cap');
   });
 
@@ -433,9 +506,8 @@ describe('the first household evening, on the screen (owner instruction of 2026-
     byTestId('tonight-approve-1').click();
     flushSync();
     expect(byTestId('tonight-approve-1').getAttribute('aria-pressed')).toBe('true');
-    expect(byTestId('tonight-approve-1').textContent).toContain('✓');
     expect(submit.textContent).toContain('Submit 1 pick');
-    expect(byTestId('tonight-approve-2').textContent).toContain('a step outside your usual');
+    expect(byTestId('tonight-approve-2').textContent).toContain('A step outside your usual');
   });
 
   it('shows the ballot status after this phone has voted, never the round counts', () => {
@@ -450,10 +522,59 @@ describe('the first household evening, on the screen (owner instruction of 2026-
     expect(byTestId('tonight-progress'), 'the round counts under a ballot that is waiting').toBeNull();
   });
 
+  it('offers the phone to one guest at a time, and names who follows', () => {
+    // One next step: guests take their turns in seat order (§6.2 step 2).
+    const guest = (n) => ({ ...guestSeat, participant_id: 20 + n, seat: 1 + n, name: `Guest ${n}` });
+    tonight.lobby = { ...room, seats: [{ ...hostSeat, ended_by: 'converged' }, guest(1), guest(2), guest(3)] };
+    tonight.round = { participant_id: 11, answered: 6, pair: null };
+    tonight.activeSeat = 11;
+    tonight.step = 'waiting';
+    app = mount(TonightPage, { target });
+    flushSync();
+
+    const primaries = target.querySelectorAll('[data-testid="tonight-waiting"] .btn-primary');
+    expect(primaries, 'more than one primary action on the screen').toHaveLength(1);
+    expect(byTestId('tonight-hand-to-21').textContent).toBe('Pass the phone to Guest 1');
+    expect(byTestId('tonight-hand-to-22'), 'a later guest offered ahead of their turn').toBeNull();
+    expect(byTestId('tonight-later-turns').textContent.trim()).toBe('Then: Guest 2, Guest 3');
+  });
+
+  it("says where each of the others is, beside that person's own avatar", () => {
+    // One person, one colour: keyed on the account (a stored colour first), never on the name.
+    const jenny = { ...hostSeat, participant_id: 13, seat: 2, user_id: 2, name: 'Jenny', account_role: 'admin' };
+    const patrick = { ...hostSeat, participant_id: 14, seat: 3, user_id: 3, name: 'Patrick', colour: '#7a55b8' };
+    tonight.lobby = { ...room, seats: [hostSeat, jenny, patrick, { ...guestSeat, seat: 4 }] };
+    tonight.progress = [
+      { participant_id: 11, name: 'Mia', answered: 2, finished: false },
+      { participant_id: 13, name: 'Jenny', answered: 3, finished: false, answer: 'NEITHER' },
+      { participant_id: 14, name: 'Patrick', answered: 5, finished: true },
+      { participant_id: 12, name: 'Guest 1', answered: 0, finished: false }
+    ];
+    tonight.round = {
+      participant_id: 11, answered: 2, typical: 10, escape_available: false, card_token: 'card-11',
+      pair: { a: { title_id: 5, name: 'Heat' }, b: { title_id: 6, name: 'Drive' } }
+    };
+    tonight.activeSeat = 11;
+    tonight.step = 'round';
+    app = mount(TonightPage, { target });
+    flushSync();
+
+    const rows = [...byTestId('tonight-round-progress').querySelectorAll('li')];
+    expect(rows.map((r) => r.lastElementChild.textContent)).toEqual([
+      'Jenny is on pair 4',
+      'Patrick is done',
+      'Guest 1 is on pair 1'
+    ]);
+    const tint = (row) => row.querySelector('.avatar').style.background;
+    expect(tint(rows[0]), 'the admin reads graphite wherever they appear').toBe('rgb(107, 99, 91)');
+    expect(tint(rows[1]), "a person's stored colour").toBe('rgb(122, 85, 184)');
+    expect(tint(rows[2]), 'a guest has no account to take a colour from').toBe('');
+  });
+
   it("reveals each person's breadth and a seat's own pick, and never a bare 'Unanimous'", () => {
     tonight.lobby = { ...room, state: 'resolved' };
     tonight.result = {
-      beat: 'VOTES REVEALED TOGETHER',
+      beat: "Tonight's pick",
       approval_share: 1,
       participants: 2,
       winner: {
@@ -461,8 +582,8 @@ describe('the first household evening, on the screen (owner instruction of 2026-
         reserved: false, reserved_for: { participant_id: 12, name: 'Jenny' }
       },
       breadth: [
-        { participant_id: 11, name: 'Patrick', approved: 4, of: 4, only_yes: false },
-        { participant_id: 12, name: 'Jenny', approved: 1, of: 4, only_yes: true }
+        { participant_id: 11, name: 'Patrick', approved: 4, of: 4, said_yes: true, only_yes: false },
+        { participant_id: 12, name: 'Jenny', approved: 1, of: 4, said_yes: true, only_yes: true }
       ],
       runners_up: [],
       wildcard: null,
@@ -476,7 +597,8 @@ describe('the first household evening, on the screen (owner instruction of 2026-
     expect(byTestId('tonight-breadth').textContent).toBe(
       'Patrick said yes to 4 of 4 · Jenny said yes to 1 of 4'
     );
-    expect(byTestId('tonight-only-yes').textContent).toBe('the only one Jenny said yes to');
+    expect(byTestId('tonight-only-yes').textContent).toBe('The only one Jenny said yes to');
+    expect(byTestId('tonight-approval-share').textContent).toBe('Both of you said yes');
     expect(byTestId('tonight-reserved-for').textContent).toContain("Jenny's pick");
     expect(byTestId('tonight-reserved'), 'the axis label over a seat pick').toBeNull();
     expect(byTestId('tonight-winner').querySelector('[data-testid="rate-poster"]')).not.toBeNull();
@@ -509,7 +631,7 @@ describe('the first household evening, on the screen (owner instruction of 2026-
     expect(byTestId('tonight-others-vetoes').textContent).toBe(
       'Jenny: horror, harrowing, sexual_violence'
     );
-    expect(byTestId('tonight-mood-caption').textContent).toContain('Neither pulls me tonight');
+    expect(byTestId('tonight-mood-caption').textContent).toContain('Neither tonight');
   });
 
   it('describes each title on a pair card for somebody who does not know it', () => {
@@ -521,7 +643,7 @@ describe('the first household evening, on the screen (owner instruction of 2026-
         a: { title_id: 5, name: 'Warriors of the Wind', year: 1984, kind: 'movie',
              runtime_min: 117, genres: ['Adventure', 'Animation'] },
         b: { title_id: 6, name: 'Wicked', year: 2024, kind: 'movie', runtime_min: 160,
-             over_budget_min: 40, fit_line: 'runs 40 min over', genres: ['Drama', 'Fantasy'] }
+             over_budget_min: 40, fit_line: '40 min over', genres: ['Drama', 'Fantasy'] }
       }
     };
     tonight.step = 'round';
@@ -531,8 +653,8 @@ describe('the first household evening, on the screen (owner instruction of 2026-
     const facts = (side) =>
       [...target.querySelectorAll(`[data-testid="tonight-pair-fact-${side}"]`)].map((n) => n.textContent);
     expect(facts('A')).toEqual(['1984 · 1h 57m', 'Adventure, Animation']);
-    expect(facts('B')).toEqual(['2024 · 2h 40m', 'runs 40 min over', 'Drama, Fantasy']);
-    expect(byTestId('tonight-round-count').textContent).toBe('pair 13 · longer than most · max 20');
+    expect(facts('B')).toEqual(['2024 · 2h 40m', '40 min over', 'Drama, Fantasy']);
+    expect(byTestId('tonight-round-count').textContent).toBe('Pair 13 · longer than most · max 20');
   });
 
   it('says under the slider that the budget is soft', () => {
@@ -540,12 +662,14 @@ describe('the first household evening, on the screen (owner instruction of 2026-
     tonight.booted = true;
     app = mount(TonightPage, { target });
     flushSync();
-    expect(byTestId('tonight-budget-soft').textContent).toContain('up to 40 min longer');
+    byTestId('tonight-settings').click();
+    flushSync();
+    expect(byTestId('tonight-budget-soft').textContent).toContain('A little over is fine');
   });
 
   it('lists the wildcard once, with its own count, and on the winner card when it won', () => {
     const base = {
-      beat: 'VOTES REVEALED TOGETHER', approval_share: 1, participants: 2, breadth: [],
+      beat: "Tonight's pick", approval_share: 1, participants: 2, breadth: [],
       finalists: []
     };
     tonight.lobby = { ...room, state: 'resolved' };
@@ -554,14 +678,14 @@ describe('the first household evening, on the screen (owner instruction of 2026-
       winner: { title_id: 1, name: 'Raiders', approvals: 2, match_lines: [], label: null },
       runners_up: [{ title_id: 2, name: 'Kiki', approvals: 1, slot: 'finalist' }],
       wildcard: { title_id: 4, name: 'Everything Everywhere All at Once', approvals: 0,
-                  label: 'a step outside your usual', slot: 'wildcard' }
+                  label: 'A step outside your usual', slot: 'wildcard' }
     };
     tonight.step = 'reveal';
     app = mount(TonightPage, { target });
     flushSync();
     expect(byTestId('tonight-runner-up-4'), 'the wildcard among the runners-up').toBeNull();
     expect(byTestId('tonight-wildcard-line').textContent.trim()).toBe(
-      'a step outside your usual · 0 approved'
+      'A step outside your usual · 0 of 2 said yes'
     );
     expect(byTestId('tonight-winner-label')).toBeNull();
     unmount(app);
@@ -569,14 +693,14 @@ describe('the first household evening, on the screen (owner instruction of 2026-
     tonight.result = {
       ...base,
       winner: { title_id: 4, name: 'Everything Everywhere All at Once', approvals: 2,
-                match_lines: [], label: 'a step outside your usual', slot: 'wildcard' },
+                match_lines: [], label: 'A step outside your usual', slot: 'wildcard' },
       runners_up: [{ title_id: 2, name: 'Kiki', approvals: 0, slot: 'finalist' }],
       wildcard: null
     };
     app = mount(TonightPage, { target });
     flushSync();
     expect(byTestId('tonight-wildcard')).toBeNull();
-    expect(byTestId('tonight-winner-label').textContent).toBe('a step outside your usual');
+    expect(byTestId('tonight-winner-label').textContent).toBe('A step outside your usual');
   });
 
   it('joins the room a ?room= link names, and takes the link off the address bar', async () => {

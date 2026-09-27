@@ -130,10 +130,11 @@ async def title_detail(title_id: int, conn: DB, user: ActiveUser, request: Reque
                 "original_language",
             )
         },
+        "genres": await library.title_genres(conn, title_id),
         "credits": await library.credits_for(conn, title_id),
         # §4.1 rule 3: labelled at the boundary; the note is the same fact for members (decision 486).
         "platform_ratings": {
-            "note": "For reference only - these scores never affect your suggestions.",
+            "note": "For reference only — these never change your suggestions.",
             "items": await library.platform_ratings(conn, title_id),
         },
         # §4.1 rule 1 — two tiers, two lists.

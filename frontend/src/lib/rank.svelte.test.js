@@ -1,39 +1,38 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
-  ROUND_END_TEXT,
+  ROUND_END_TITLE,
   ROUND_SIZE,
-  TAP_FOOTNOTE,
   TIER_THRESHOLD,
   TYPING_PAUSE_MS,
   answer,
   apply,
   chipFor,
   chooseKind,
+  clearFilter,
   clearFilters,
   closeQueue,
   closeTitle,
+  countLine,
   dnaTierText,
   draft,
   drop,
-  dropLifted,
   emptyState,
   facets,
+  filterChips,
   keepGoing,
-  lift,
   load,
   loadFacets,
+  moveTo,
   neighboursIn,
   openQueue,
   openTitle,
-  putDown,
   rank,
   reset,
   roundLine,
-  sharpenWhy,
-  tapTile,
   typed
 } from './rank.svelte.js';
+import { hideToast, toast } from './toast.svelte.js';
 
 const board = (over = {}) => ({
   kind: 'movie',
@@ -42,37 +41,42 @@ const board = (over = {}) => ({
     {
       index: 6,
       label: 'S',
+      verdict: 'Liked',
       entries: [
         {
           title_id: 1,
           name: 'Heat',
+          year: 1995,
           tier: 6,
           assigned_tier: null,
           straddle: 5,
-          straddle_badge: 'S/A+',
+          straddle_badge: 'S or A+?',
           badge: 'S — the only one',
           tension: null
         }
       ]
     },
-    { index: 5, label: 'A+', entries: [] },
+    { index: 5, label: 'A+', verdict: 'Liked', entries: [] },
     {
       index: 4,
       label: 'A',
+      verdict: 'Liked',
       entries: [
         {
           title_id: 2,
           name: 'Drive',
+          year: 2011,
           tier: 4,
           assigned_tier: 4,
           straddle: null,
           straddle_badge: null,
           badge: 'A — just above Prisoners',
-          tension: 'you put it in A — your other answers still point to C'
+          tension: 'You put it in A — your other answers still point to C'
         },
         {
           title_id: 3,
           name: 'Prisoners',
+          year: 2013,
           tier: 4,
           assigned_tier: null,
           straddle: null,
@@ -85,19 +89,23 @@ const board = (over = {}) => ({
   ],
   rated: 3,
   rated_total: 3,
-  queue_eligible: 1,
-  why: '3 rated · 0 compared · liked from A up, fine in B, disliked from C down',
   filters: {},
   dna_tiers: null,
   ...over
 });
+
+/** A served queue pair, numbered so a test can tell which one is on the table. */
+function pairN(i) {
+  return { title_a: 1, title_b: 2, token: `t${i}`, reason: 'x', name_a: 'Heat', name_b: 'Drive' };
+}
 
 let fetchMock;
 
 beforeEach(() => {
   fetchMock = vi.fn();
   vi.stubGlobal('fetch', fetchMock);
-  rank.lifted = null;
+  hideToast();
+  rank.kind = 'movie';
   rank.opened = null;
   rank.pair = null;
   rank.error = '';
@@ -152,39 +160,30 @@ describe('the board comes from the server', () => {
   });
 });
 
-describe('the phone lift (proposals 74, 75)', () => {
-  it('lifts a title and puts it down again on a second tap, writing nothing', () => {
-    const entry = rank.tiers[2].entries[0];
-    lift(entry);
-    expect(rank.lifted.title_id).toBe(2);
-    lift(entry);
-    expect(rank.lifted).toBeNull();
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-
-  it('cancels without writing', () => {
-    lift(rank.tiers[2].entries[0]);
-    putDown();
-    expect(rank.lifted).toBeNull();
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-
-  it('drops the lifted title into the tapped tier, and clears the lift', async () => {
-    lift(rank.tiers[0].entries[0]);
+describe("Move's action sheet (decision 527)", () => {
+  it('drops the title into the chosen tier, naming no neighbour, and says so', async () => {
     respond(board());
-    await dropLifted(4);
+    await moveTo(rank.tiers[0].entries[0], 4);
 
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toContain('/api/rank/drop');
     expect(url).toContain('kind=movie');
     // A drop into a tier is a bare `tier_edit`; the two duels belong to a drop between two titles.
     expect(JSON.parse(init.body)).toEqual({ title_id: 1, tier: 4, above: null, below: null });
-    expect(rank.lifted).toBeNull();
+    expect(toast.message).toBe('Heat — moved to A');
   });
 
-  it('does nothing at all when nothing is lifted', async () => {
-    await dropLifted(4);
+  it('writes nothing when the chosen tier is the one it is in', async () => {
+    await moveTo(rank.tiers[0].entries[0], 6);
     expect(fetchMock).not.toHaveBeenCalled();
+    expect(toast.message).toBe('');
+  });
+
+  it('claims no move the server refused', async () => {
+    respond({ detail: 'database error' }, 500);
+    await moveTo(rank.tiers[0].entries[0], 4);
+    expect(rank.error).not.toBe('');
+    expect(toast.message).toBe('');
   });
 });
 
@@ -266,14 +265,14 @@ describe('the comparison queue', () => {
 
 describe('the badge chip (proposal 71)', () => {
   it('gives tension precedence over the straddle badge', () => {
-    expect(chipFor({ tension: 'you put it in A — your other answers still point to C', straddle_badge: 'A/S' }))
-      .toEqual({ kind: 'tension', text: 'you put it in A — your other answers still point to C' });
+    const tension = 'You put it in A — your other answers still point to C';
+    expect(chipFor({ tension, straddle_badge: 'A or S?' })).toEqual({ kind: 'tension', text: tension });
   });
 
   it('falls back to the straddle badge, and to nothing at all', () => {
-    expect(chipFor({ tension: null, straddle_badge: 'S/A+' })).toEqual({
+    expect(chipFor({ tension: null, straddle_badge: 'S or A+?' })).toEqual({
       kind: 'straddle',
-      text: 'S/A+'
+      text: 'S or A+?'
     });
     expect(chipFor({ tension: null, straddle_badge: null })).toBeNull();
   });
@@ -292,13 +291,14 @@ describe("proposal 80's states", () => {
     apply(board({ rated: 0, rated_total: 40, filters: { dna: 'cosy' } }));
     const state = emptyState();
     expect(state.kind).toBe('no-match');
-    // Proposal 80: "say so, with the active filters listed" — the value, not just the field.
-    expect(state.text).toBe('Nothing matches tag cosy.');
+    // The chips above the board name each filter; the sentence points at them.
+    expect(state.text).toBe('Nothing on your list matches these filters.');
+    expect(state.cta).toBe('Clear filters');
   });
 
-  it('names every active filter with its value', () => {
-    apply(board({ rated: 0, rated_total: 40, filters: { dna: 'cosy', runtime_max: 110 } }));
-    expect(emptyState().text).toBe('Nothing matches tag cosy, under 110 min.');
+  it('names the search when the search alone found nothing', () => {
+    apply(board({ rated: 0, rated_total: 40, filters: { q: 'Taxi' } }));
+    expect(emptyState().text).toBe('Nothing on your list matches “Taxi”.');
   });
 
   it('is absent on a board with titles on it', () => {
@@ -311,7 +311,7 @@ describe("proposal 80's states", () => {
     apply(board({ rated: 0, rated_total: 0, tiers: [], fitting: true }));
     const state = emptyState();
     expect(state.kind).toBe('fitting');
-    expect(state.text).toContain('still being fitted');
+    expect(state.text).toContain('still being worked out');
     // "shortly", no duration: the sweep runs every 60s, but a queue may be ahead.
     expect(state.text).toContain('shortly');
     expect(state.text).not.toContain("you're at 0");
@@ -336,6 +336,35 @@ describe('filters', () => {
     expect(url).toContain('dna=mood.cosy');
     expect(url).toContain('runtime_max=110');
     expect(url).not.toContain('genre=');
+  });
+
+  it('show what the Filters control holds as chips, and a chip clears only its own', async () => {
+    draft.q = 'heat';
+    draft.genre = 'Thriller';
+    draft.decade = '1990';
+    draft.runtime_max = '110';
+    draft.seen = 'unseen';
+    draft.dna = 'cosy';
+    // The search keeps its own box, so it is no chip.
+    expect(filterChips().map((c) => c.text)).toEqual([
+      'Thriller',
+      '1990s',
+      'Up to 1h 50m',
+      'Not seen',
+      'cosy'
+    ]);
+
+    respond(board());
+    await clearFilter('decade');
+    expect(draft.decade).toBe('');
+    const url = fetchMock.mock.calls[0][0];
+    expect(url).toContain('genre=Thriller');
+    expect(url).not.toContain('decade=');
+
+    respond(board());
+    await clearFilter('seen');
+    expect(draft.seen).toBe('any');
+    expect(filterChips().map((c) => c.key)).toEqual(['genre', 'runtime_max', 'dna']);
   });
 
   it('clear back to nothing', async () => {
@@ -378,6 +407,28 @@ describe('filters', () => {
   });
 });
 
+describe('the count under the title', () => {
+  it("counts the board in the kind's own word, best first", () => {
+    apply(board({ rated: 70, rated_total: 70 }));
+    expect(countLine()).toBe('70 films · best first');
+    apply(board({ rated: 1, rated_total: 1 }));
+    expect(countLine()).toBe('1 film · best first');
+    rank.kind = 'series';
+    apply(board({ rated: 12, rated_total: 12 }));
+    expect(countLine()).toBe('12 series · best first');
+  });
+
+  it('says how much of the list a filtered board shows', () => {
+    apply(board({ rated: 12, rated_total: 70, filters: { genre: 'Thriller' } }));
+    expect(countLine()).toBe('12 of 70 films · best first');
+  });
+
+  it('says nothing before there is a list', () => {
+    apply(board({ rated: 0, rated_total: 0, tiers: [] }));
+    expect(countLine()).toBe('');
+  });
+});
+
 describe('a drop', () => {
   it('leaves the board untouched until the server answers', async () => {
     const before = rank.tiers;
@@ -401,8 +452,27 @@ describe('a drop', () => {
     expect(rank.rated).toBe(99);
     expect(rank.busy).toBe(false);
   });
-});
 
+  it('refuses to start a second one while the first is in flight', async () => {
+    let release = () => {};
+    fetchMock.mockReturnValueOnce(
+      new Promise((r) => {
+        release = () =>
+          r({
+            ok: true,
+            status: 200,
+            headers: { get: () => null },
+            text: async () => JSON.stringify(board())
+          });
+      })
+    );
+    const first = drop({ title_id: 1, tier: 0 });
+    await drop({ title_id: 2, tier: 6 });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    release();
+    await first;
+  });
+});
 
 describe('the neighbours a drop lands between (§6.3)', () => {
   it('names both when the drop lands on a poster', () => {
@@ -472,12 +542,16 @@ describe('overlapping requests', () => {
 });
 
 describe('reset', () => {
-  it('drops the lift, because a lift is a pending write naming a bare title id', () => {
-    lift(rank.tiers[0].entries[0]);
-    expect(rank.lifted).not.toBeNull();
+  it("forgets one person's card, pair and round before the next person's", () => {
+    openTitle(rank.tiers[2].entries[0]);
+    rank.pair = pairN(1);
+    rank.queueOpen = true;
+    rank.roundAnswered = 3;
     reset();
-    expect(rank.lifted).toBeNull();
+    expect(rank.opened).toBeNull();
     expect(rank.pair).toBeNull();
+    expect(rank.queueOpen).toBe(false);
+    expect(rank.roundAnswered).toBe(0);
     expect(rank.booted).toBe(false);
   });
 
@@ -510,28 +584,6 @@ describe('the queue answer keeps its §6.7 line', () => {
     respond(board());
     await answer('A');
     expect(rank.log).toEqual(['duel(Heat vs Drive) = A']);
-  });
-});
-
-describe('a drop', () => {
-  it('refuses to start a second one while the first is in flight', async () => {
-    let release = () => {};
-    fetchMock.mockReturnValueOnce(
-      new Promise((r) => {
-        release = () =>
-          r({
-            ok: true,
-            status: 200,
-            headers: { get: () => null },
-            text: async () => JSON.stringify(board())
-          });
-      })
-    );
-    const first = drop({ title_id: 1, tier: 0 });
-    await drop({ title_id: 2, tier: 6 });
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    release();
-    await first;
   });
 });
 
@@ -618,29 +670,6 @@ describe('a kind switch (§4.1 rule 5)', () => {
   });
 });
 
-describe('sharpenWhy', () => {
-  it('names the owed fit rather than the ratings, while the first fit is owed', () => {
-    apply({ tiers: [], rated: 0, rated_total: 0, queue_eligible: 0, fitting: true });
-    expect(sharpenWhy().kind).toBe('fitting');
-    expect(sharpenWhy().text).not.toMatch(/titles you have rated/);
-  });
-
-  it('still tells a member who has rated nothing that the queue draws from ratings', () => {
-    apply({ tiers: [], rated: 0, rated_total: 0, queue_eligible: 0, fitting: false });
-    expect(sharpenWhy().kind).toBe('thin');
-    expect(sharpenWhy().text).toMatch(/titles you have rated/);
-  });
-
-  it('says the queue is exploring when a rated board straddles nothing', () => {
-    apply({ tiers: [], rated: 5, rated_total: 5, queue_eligible: 0, fitting: false });
-    expect(sharpenWhy().kind).toBe('exploring');
-    expect(sharpenWhy().text).toMatch(/^5 rated/);
-  });
-});
-
-/** A served queue pair, numbered so a test can tell which one is on the table. */
-const pairN = (i) => ({ title_a: 1, title_b: 2, token: `t${i}`, reason: 'x', name_a: 'Heat', name_b: 'Drive' });
-
 describe('a sitting is a round of fifteen (decision 495)', () => {
   it('counts every accepted answer, ends the round at fifteen and holds the next pair', async () => {
     respond({ kind: 'movie', pair: pairN(0) });
@@ -658,7 +687,7 @@ describe('a sitting is a round of fifteen (decision 495)', () => {
     expect(roundLine()).toBe(`${ROUND_SIZE} of ${ROUND_SIZE} this round`);
     // The pair the fifteenth answer brought is kept for Keep going rather than thrown away.
     expect(rank.pair.token).toBe(`t${ROUND_SIZE}`);
-    expect(ROUND_END_TEXT).toContain(`${ROUND_SIZE} comparisons`);
+    expect(ROUND_END_TITLE).toBe(`That's ${ROUND_SIZE}.`);
   });
 
   it('Keep going starts a new round over the pair already on the table, with no request', () => {
@@ -706,15 +735,6 @@ describe('a sitting is a round of fifteen (decision 495)', () => {
     expect(rank.roundAnswered).toBe(5);
     expect(fetchMock).not.toHaveBeenCalled();
   });
-
-  it('puts a lifted title down when the queue opens, writing nothing', async () => {
-    lift(rank.tiers[0].entries[0]);
-    respond({ kind: 'movie', pair: pairN(1) });
-    await openQueue();
-    expect(rank.lifted).toBeNull();
-    expect(fetchMock.mock.calls).toHaveLength(1);
-    expect(fetchMock.mock.calls[0][0]).toContain('/api/rank/queue?');
-  });
 });
 
 describe('after an answer the sheet names where both titles sit', () => {
@@ -740,69 +760,18 @@ describe('after an answer the sheet names where both titles sit', () => {
   });
 });
 
-describe('a tap opens a title and Move moves it (decision 496)', () => {
-  it('opens the card on a tap and writes nothing', async () => {
-    const drive = rank.tiers[2].entries[0];
-    await tapTile(drive, 4);
+describe('a tap opens a title (decision 496)', () => {
+  it('opens the card and writes nothing', () => {
+    openTitle(rank.tiers[2].entries[0]);
     expect(rank.opened).toBe(2);
-    expect(rank.lifted).toBeNull();
     expect(fetchMock).not.toHaveBeenCalled();
     closeTitle();
     expect(rank.opened).toBeNull();
   });
-
-  it('with a title lifted, a tap on a title in another tier drops it there and names no neighbour', async () => {
-    lift(rank.tiers[0].entries[0]);
-    respond(board());
-    await tapTile(rank.tiers[2].entries[1], 4);
-    const [url, init] = fetchMock.mock.calls[0];
-    expect(url).toContain('/api/rank/drop');
-    // The same body a tap on the tier's letter posts: a tap names no position (finding 17).
-    expect(JSON.parse(init.body)).toEqual({ title_id: 1, tier: 4, above: null, below: null });
-    expect(rank.lifted).toBeNull();
-    expect(rank.opened).toBeNull();
-  });
-
-  it('a tap on the lifted title itself puts it down and writes nothing', async () => {
-    const heat = rank.tiers[0].entries[0];
-    lift(heat);
-    await tapTile(heat, 6);
-    expect(rank.lifted).toBeNull();
-    expect(rank.opened).toBeNull();
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-
-  it('opening a card puts a lifted title down first', () => {
-    lift(rank.tiers[0].entries[0]);
-    openTitle(rank.tiers[2].entries[0]);
-    expect(rank.lifted).toBeNull();
-    expect(rank.opened).toBe(2);
-    expect(fetchMock).not.toHaveBeenCalled();
-  });
-
-  it('reset forgets the open card and the round', () => {
-    openTitle(rank.tiers[2].entries[0]);
-    rank.roundAnswered = 3;
-    reset();
-    expect(rank.opened).toBeNull();
-    expect(rank.roundAnswered).toBe(0);
-  });
 });
 
 describe('the surface speaks the member register (decision 486)', () => {
-  it('the footnote says how to use the board and claims no write', () => {
-    expect(TAP_FOOTNOTE).toContain('tap a title to open it');
-    expect(TAP_FOOTNOTE).toContain('Move');
-    expect(TAP_FOOTNOTE).not.toMatch(/tier_edit|duel|poster/);
-  });
-
-  it('the exploring note says close call, not straddle', () => {
-    apply({ tiers: [], rated: 5, rated_total: 5, queue_eligible: 0, fitting: false });
-    expect(sharpenWhy().text).not.toMatch(/straddl|boundary/);
-    expect(sharpenWhy().text).toContain('close call');
-  });
-
   it('names the two DNA tiers in words', () => {
-    expect(dnaTierText(['extracted', 'projected'])).toBe('quoted + inferred');
+    expect(dnaTierText(['extracted', 'projected'])).toBe('quoted + our read');
   });
 });

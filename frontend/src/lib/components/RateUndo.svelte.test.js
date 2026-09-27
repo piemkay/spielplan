@@ -27,7 +27,7 @@ function chip(undo) {
   return target.querySelector('[data-testid="rate-undo"]');
 }
 
-describe('the undo chip (decision 486)', () => {
+describe('the persistent Undo (decisions 35 and 486)', () => {
   for (const [kind, words] of [
     ['verdict', 'rating'],
     ['not_seen', 'not seen'],
@@ -36,9 +36,10 @@ describe('the undo chip (decision 486)', () => {
     ['tie', 'tie'],
     ['skip', 'skip']
   ]) {
-    it(`says "undo ${words}" for a ${kind}, and keeps the raw kind on the attribute`, () => {
+    it(`names the ${words} it takes back, and keeps the raw kind on the attribute`, () => {
       const el = chip({ available: true, kind, reason: null });
-      expect(el.textContent.trim()).toBe(`undo ${words}`);
+      expect(el.textContent.trim()).toBe('Undo');
+      expect(el.disabled).toBe(false);
       expect(el.getAttribute('aria-label')).toBe(`Undo the last ${words}`);
       expect(el.getAttribute('data-undo-kind')).toBe(kind);
       unmount(app);
@@ -46,12 +47,13 @@ describe('the undo chip (decision 486)', () => {
     });
   }
 
-  it('says only "undo" while disabled, with the reason beside it', () => {
+  it('stays on screen while disabled, and says why', () => {
     const el = chip({ available: false, kind: null, reason: 'empty' });
-    expect(el.textContent.trim()).toBe('undo');
+    expect(el.textContent.trim()).toBe('Undo');
     expect(el.disabled).toBe(true);
-    expect(target.querySelector('[data-testid="rate-undo-reason"]').textContent).toBe(
-      'nothing to undo in this block'
-    );
+    expect(el.getAttribute('aria-label')).toBe('Undo');
+    const reason = target.querySelector('[data-testid="rate-undo-reason"]');
+    expect(reason.textContent).toBe('Nothing to undo yet');
+    expect(el.getAttribute('aria-describedby')).toBe(reason.id);
   });
 });

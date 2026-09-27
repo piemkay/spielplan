@@ -11,6 +11,7 @@ from typing import Any
 from fastapi import APIRouter, HTTPException, Query, status
 from pydantic import BaseModel
 
+from spielplan.acquire import actions
 from spielplan.api import llm as llm_api
 from spielplan.api.deps import DB, AdminUser
 from spielplan.connectors import registry
@@ -71,6 +72,7 @@ async def flywheel_queue(_: AdminUser, conn: DB) -> dict[str, Any]:
                     "passes": stored.passes, "reason": None}
     return {
         "items": await store.queue(conn),
+        "stages": actions.stage_legend(),
         "providers": providers,
         "defaults": defaults,
         "meter": _meter(await spend.meter(conn, now=now)),

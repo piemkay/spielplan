@@ -7,6 +7,7 @@
   import { registerPasskey, supported } from '$lib/passkeys.js';
   import DataSources from '$lib/components/DataSources.svelte';
   import Onboarding from '$lib/components/Onboarding.svelte';
+  import RowIcon from '$lib/components/RowIcon.svelte';
 
   let credentials = $state([]);
   let tiers = $state({ tier_set: [], min: 2, max: 12, warning: '' });
@@ -14,9 +15,9 @@
   let label = $state('');
   let pin = $state('');
   let pinPassword = $state('');
-  let busy = $state(false);
-  let error = $state('');
-  let note = $state('');
+  let busy = $state('');
+  // What the last action said, shown under the control that caused it.
+  let feedback = $state(null);
 
   const canPasskey = $derived(supported());
   // A PIN-switched session cannot mint credentials (the server refuses); hiding the forms only
@@ -25,11 +26,19 @@
   const PIN_SESSION =
     'You switched to this profile with a PIN. Sign in with your password or a passkey to change ' +
     'how you sign in.';
+  const jellyfin = $derived(session.user?.jellyfin);
 
   // Only on the one-time `?welcome=1` hand-off and until a passkey exists: never a standing nag.
   const welcome = $derived(
     $page.url.searchParams.get('welcome') === '1' && credentials.length === 0 && canPasskey
   );
+
+  // Stored worst first; read and typed best first, as Rank lists them.
+  const bestFirst = (set) => [...(set ?? [])].reverse().join(' ');
+
+  function say(at, ok, text) {
+    feedback = { at, ok, text };
+  }
 
   // The DOM node is written back too: a one-way `value` only re-renders when `pin` changes.
   function onPinInput(event) {
@@ -42,43 +51,46 @@
   async function load() {
     credentials = (await get('/auth/passkey/credentials').catch(() => [])) ?? [];
     tiers = (await get('/rank/tiers').catch(() => tiers)) ?? tiers;
-    tierDraft = (tiers.tier_set ?? []).join(' ');
+    tierDraft = bestFirst(tiers.tier_set);
   }
 
   async function saveTierSet() {
-    error = '';
-    note = '';
-    busy = true;
+    feedback = null;
+    busy = 'letters';
     try {
-      const body = { tier_set: tierDraft.split(/[\s,]+/).filter(Boolean) };
+      const body = { tier_set: tierDraft.split(/[\s,]+/).filter(Boolean).reverse() };
       const result = await api('/rank/tiers', { method: 'PUT', body });
       tiers = { ...tiers, tier_set: result.tier_set };
-      tierDraft = result.tier_set.join(' ');
+      tierDraft = bestFirst(result.tier_set);
+      const kept = result.tier_edits_kept;
       // "Shortly", not a clock time: the tier-set refit runs every minute.
-      note = result.k_changed
-        ? `Tiers saved. Your board is being re-sorted into the new tiers and updates shortly; your ${result.tier_edits_kept} hand move${result.tier_edits_kept === 1 ? ' is' : 's are'} kept.`
-        : 'Tiers renamed. Nothing else changed.';
+      say(
+        'letters',
+        true,
+        result.k_changed
+          ? `Saved. Rank re-sorts into the new letters shortly; your ${kept} move${kept === 1 ? '' : 's'} by hand ${kept === 1 ? 'is' : 'are'} kept.`
+          : 'Letters renamed. Nothing else changed.'
+      );
     } catch (err) {
-      error = err.message || String(err);
+      say('letters', false, err.message || String(err));
     } finally {
-      busy = false;
+      busy = '';
     }
   }
 
   async function addPasskey() {
-    error = '';
-    note = '';
-    busy = true;
+    feedback = null;
+    busy = 'passkey';
     try {
       await registerPasskey(label || defaultLabel());
       label = '';
-      note = 'Passkey registered.';
+      say('passkeys', true, 'Passkey added.');
       await load();
       await bootstrap();
     } catch (err) {
-      error = err.message || String(err);
+      say('passkeys', false, err.message || String(err));
     } finally {
-      busy = false;
+      busy = '';
     }
   }
 
@@ -90,299 +102,388 @@
   }
 
   async function removePasskey(id) {
-    error = '';
+    feedback = null;
     try {
       await api(`/auth/passkey/credentials/${encodeURIComponent(id)}`, { method: 'DELETE' });
       await load();
       await bootstrap();
     } catch (err) {
-      error = err.message;
+      say('passkeys', false, err.message);
     }
   }
 
   async function savePin() {
-    error = '';
-    note = '';
+    feedback = null;
     try {
       // Setting the PIN costs the password: the PIN is a convenience derived from it (decision 170).
       await post('/auth/pin', { pin, current_password: pinPassword });
       pin = '';
       pinPassword = '';
-      note = 'PIN saved — this profile can now be switched to from the account chip.';
+      say('pin', true, 'PIN saved — you can now switch to this profile from You on a shared phone.');
       await bootstrap();
     } catch (err) {
-      error = err.message;
+      say('pin', false, err.message);
     }
   }
 </script>
 
-<div class="wrap">
-  <header>
-    <h1>Account</h1>
-    <p class="why">
-      Sign in with a passkey - Face ID, a fingerprint or your phone's screen lock - or with your
-      password. A PIN lets you switch to your profile on a phone that is already signed in.
+{#snippet said(at)}
+  {#if feedback?.at === at}
+    <p class="said" class:err={!feedback.ok} role={feedback.ok ? 'status' : 'alert'}>
+      {feedback.text}
     </p>
-  </header>
+  {/if}
+{/snippet}
+
+{#snippet chevron()}
+  <svg
+    class="chev"
+    width="16"
+    height="16"
+    viewBox="0 0 24 24"
+    fill="none"
+    stroke="currentColor"
+    stroke-width="2"
+    stroke-linecap="round"
+    stroke-linejoin="round"
+    aria-hidden="true"
+  >
+    <path d="m9.5 5.5 6.5 6.5-6.5 6.5" />
+  </svg>
+{/snippet}
+
+{#snippet signIn()}
+  <section class="group" data-testid="sign-in">
+    <h2 class="list-header">Sign-in</h2>
+    <div class="list-group">
+      {#each credentials as c (c.id)}
+        <div class="list-row" class:dead={!c.usable} data-testid="passkey">
+          <RowIcon name="key" tone="blue" />
+          <span class="text">
+            <span>{c.label ?? 'Unnamed passkey'}</span>
+            <span class="sub">
+              {#if c.usable}
+                {c.rp_id} · used {c.sign_count} time{c.sign_count === 1 ? '' : 's'}
+              {:else}
+                Made for {c.rp_id} — it no longer works at this address
+              {/if}
+            </span>
+          </span>
+          {#if !pinSession}
+            <button
+              class="btn-plain remove"
+              aria-label="Remove {c.label ?? 'this passkey'}"
+              onclick={() => removePasskey(c.id)}
+            >
+              Remove
+            </button>
+          {/if}
+        </div>
+      {:else}
+        <div class="list-row" data-empty="passkeys">
+          <RowIcon name="key" tone="blue" />
+          <span class="text">Passkeys</span>
+          <span class="value">None yet</span>
+        </div>
+      {/each}
+
+      {#if canPasskey && !pinSession}
+        <div class="form">
+          <input
+            type="text"
+            placeholder="Name this device (optional)"
+            aria-label="Name for the new passkey"
+            bind:value={label}
+          />
+          <button class={welcome ? 'btn-primary' : 'btn-tinted'} onclick={addPasskey} disabled={!!busy}>
+            {busy === 'passkey' ? 'Waiting for your device…' : 'Add a passkey'}
+          </button>
+          {@render said('passkeys')}
+        </div>
+      {:else if feedback?.at === 'passkeys'}
+        <div class="form">{@render said('passkeys')}</div>
+      {/if}
+
+      <a class="list-row" href="/account/password">
+        <RowIcon name="lock" />
+        <span class="text">Password</span>
+        <span class="value">Change</span>
+        {@render chevron()}
+      </a>
+
+      {#if pinSession}
+        <div class="list-row" data-testid="pin-card">
+          <RowIcon name="key" tone="amber" />
+          <span class="text">PIN for switching profiles</span>
+          <span class="value">{session.user?.has_pin ? 'Set' : 'Not set'}</span>
+        </div>
+      {:else}
+        <details data-testid="pin-card">
+          <summary class="list-row">
+            <RowIcon name="key" tone="amber" />
+            <span class="text">PIN for switching profiles</span>
+            <span class="value">{session.user?.has_pin ? 'Set' : 'Not set'}</span>
+            {@render chevron()}
+          </summary>
+          <div class="form">
+            <p class="note">
+              Four digits that switch a phone someone else is signed in on over to you — handy
+              when you pass it around. It can't sign you in from scratch, and setting it takes your
+              password.
+            </p>
+            <label>
+              <span class="footnote">Your password</span>
+              <input type="password" autocomplete="current-password" bind:value={pinPassword} />
+            </label>
+            <!-- `inputmode` is only a hint; `onPinInput` strips what the server's `^[0-9]+$` would refuse. -->
+            <label>
+              <span class="footnote">New PIN</span>
+              <input
+                type="password"
+                inputmode="numeric"
+                maxlength="4"
+                placeholder="Four digits"
+                value={pin}
+                oninput={onPinInput}
+              />
+            </label>
+            <button class="btn-tinted" onclick={savePin} disabled={pin.length !== 4 || !pinPassword}>
+              Save PIN
+            </button>
+            {@render said('pin')}
+          </div>
+        </details>
+      {/if}
+    </div>
+    <p class="list-footer">
+      {#if pinSession}
+        <span data-pin-session>{PIN_SESSION}</span>
+      {:else if !canPasskey}
+        This browser can't use passkeys — you can still sign in with your password.
+      {:else}
+        A passkey is Face ID, a fingerprint or your phone's screen lock. Your password still works
+        on any device.
+      {/if}
+    </p>
+  </section>
+{/snippet}
+
+<div class="account">
+  <h1 class="large-title">You</h1>
 
   {#if welcome}
-    <div class="welcome" role="status" data-passkey-prompt>
-      <div>
-        <strong>Add a passkey to this device.</strong>
-        <div class="why">
-          Face ID or a fingerprint instead of the password you just set. The password keeps
-          working — this is the faster way in, not a replacement.
-        </div>
-      </div>
+    <div class="card welcome" role="status" data-passkey-prompt>
+      <p class="headline">Add a passkey to this device</p>
+      <p class="why">
+        Face ID or a fingerprint instead of the password you just set. The password keeps working —
+        this is the faster way in, not a replacement.
+      </p>
     </div>
   {/if}
 
-  {#if error}<div class="err" role="alert">{error}</div>{/if}
-  {#if note}<div class="note" role="status">{note}</div>{/if}
-
-  {#snippet passkeys()}
-    <section class="card">
-      <h2>Passkeys</h2>
-      {#if !canPasskey}
-        <p class="why">This browser can't use passkeys - you can still sign in with your password.</p>
-      {/if}
-
-      {#if credentials.length === 0}
-        <p class="why" data-empty="passkeys">You haven't added a passkey yet.</p>
-      {:else}
-        <ul class="list">
-          {#each credentials as c (c.id)}
-            <li class:dead={!c.usable}>
-              <div>
-                <div class="name">{c.label ?? 'Unnamed passkey'}</div>
-                <div class="data meta">
-                  {c.rp_id} · used {c.sign_count} time{c.sign_count === 1 ? '' : 's'}
-                  {#if !c.usable}· registered for a different address — no longer usable{/if}
-                </div>
-              </div>
-              {#if !pinSession}
-                <button class="btn-ghost" onclick={() => removePasskey(c.id)}>Remove</button>
-              {/if}
-            </li>
-          {/each}
-        </ul>
-      {/if}
-
-      {#if pinSession}
-        <p class="why" data-pin-session>{PIN_SESSION}</p>
-      {:else}
-        <div class="row">
-          <input type="text" placeholder="Name this device (optional)" bind:value={label} />
-          <button class="btn-primary" onclick={addPasskey} disabled={busy || !canPasskey}>
-            {busy ? 'Waiting for the device…' : 'Add a passkey'}
-          </button>
-        </div>
-      {/if}
-    </section>
-  {/snippet}
-
-  <!-- On the welcome visit the passkey comes first: the next step sends the member to the
+  <!-- On the welcome visit Sign-in comes first: the next step sends the member to the
        home-screen app, which has its own cookie jar and asks for a second sign-in. -->
-  {#if welcome}{@render passkeys()}{/if}
+  {#if welcome}{@render signIn()}{/if}
 
   <Onboarding />
 
-  {#if !welcome}{@render passkeys()}{/if}
+  {#if !welcome}{@render signIn()}{/if}
 
-  <section class="card">
-    <h2>Password</h2>
-    <p class="why">
-      Works on any device, even without a passkey. At least ten characters; changing it signs you
-      out everywhere else.
-    </p>
-    <div class="row">
-      <a class="btn-ghost" href="/account/password">Change password</a>
-    </div>
-  </section>
-
-  <section class="card" data-testid="pin-card">
-    <h2>PIN for switching profiles</h2>
-    {#if pinSession}
-      <p class="why" data-pin-session>{PIN_SESSION}</p>
-    {:else}
-      <p class="why">
-        Four digits that let you switch to your profile on a phone or tablet someone is already
-        signed in on - handy when you pass the phone around. It can't be used to sign in from
-        scratch, and setting it takes your password.
-        {#if session.user?.has_pin}<strong> A PIN is set.</strong>{/if}
-      </p>
-      <div class="row">
-        <input
-          type="password"
-          autocomplete="current-password"
-          placeholder="your password"
-          bind:value={pinPassword}
-        />
-        <!-- `inputmode` is only a hint; `onPinInput` strips what the server's `^[0-9]+$` would refuse. -->
-        <input
-          type="password"
-          inputmode="numeric"
-          maxlength="4"
-          placeholder="••••"
-          value={pin}
-          oninput={onPinInput}
-        />
-        <button class="btn-primary" onclick={savePin} disabled={pin.length !== 4 || !pinPassword}>
-          Save PIN
-        </button>
-      </div>
-    {/if}
-  </section>
-
-  <section class="card" data-testid="tier-set">
-    <h2>Rank letters</h2>
-    <p class="why">The letters your Rank board sorts titles into, worst first.</p>
-    <p class="data letters" data-testid="tier-set-current">{(tiers.tier_set ?? []).join(' · ')}</p>
-    <details class="fold" data-testid="tier-set-edit">
-      <summary>Change the letters</summary>
-      <p class="why">Type them worst first, with spaces between. {tiers.warning}</p>
-      <div class="row">
-        <input
-          type="text"
-          bind:value={tierDraft}
-          aria-label="Rank letters"
-          data-testid="tier-set-input"
-        />
-        <button class="btn-primary" onclick={saveTierSet} disabled={busy || !tierDraft.trim()}>
+  <section class="group" data-testid="tier-set">
+    <h2 class="list-header">Preferences</h2>
+    <details class="list-group" data-testid="tier-set-edit">
+      <summary class="list-row">
+        <RowIcon name="rank" tone="teal" />
+        <span class="text">Rank letters</span>
+        <span class="value" data-testid="tier-set-current">{bestFirst(tiers.tier_set)}</span>
+        {@render chevron()}
+      </summary>
+      <div class="form">
+        <label>
+          <span class="footnote">
+            Best first, with spaces between — {tiers.min} to {tiers.max} letters.
+          </span>
+          <input
+            type="text"
+            bind:value={tierDraft}
+            aria-label="Rank letters"
+            data-testid="tier-set-input"
+          />
+        </label>
+        <p class="note">{tiers.warning}</p>
+        <button class="btn-tinted" onclick={saveTierSet} disabled={!!busy || !tierDraft.trim()}>
           Save letters
         </button>
+        {@render said('letters')}
       </div>
     </details>
+    <p class="list-footer">The letters Rank sorts your titles into.</p>
   </section>
 
-  <section class="card">
-    <h2>Jellyfin</h2>
-    {#if session.user?.jellyfin?.linked}
-      <p class="why" data-jellyfin="linked">
-        This account is linked to a Jellyfin user, so watched state flows both ways.
-        {#if session.user.jellyfin.state === 'needs_relink'}
-          <strong>
-            The stored sign-in stopped working — ask an admin to link it again from the
-            connectors page.
-          </strong>
-        {/if}
-      </p>
-    {:else}
-      <p class="why" data-jellyfin="unlinked">
-        Not linked. Everything works without it; linking adds two-way watched state and the
-        “did you finish it?” prompt.
-      </p>
-    {/if}
+  <section class="group">
+    <h2 class="list-header">Jellyfin</h2>
+    <div class="list-group">
+      {#if jellyfin?.linked}
+        <div class="list-row" data-jellyfin="linked">
+          <RowIcon name="film" tone="ember" />
+          <span class="text">Linked</span>
+          {#if jellyfin.state === 'needs_relink'}
+            <span class="badge warn">Needs linking again</span>
+          {:else}
+            <svg
+              class="linked"
+              width="20"
+              height="20"
+              viewBox="0 0 24 24"
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2.25"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              aria-hidden="true"
+            >
+              <path d="m5 12.5 4.5 4.5L19 7.5" />
+            </svg>
+          {/if}
+        </div>
+      {:else}
+        <div class="list-row" data-jellyfin="unlinked">
+          <RowIcon name="film" />
+          <span class="text">Not linked</span>
+        </div>
+      {/if}
+    </div>
+    <p class="list-footer">
+      {#if jellyfin?.state === 'needs_relink'}
+        Jellyfin stopped accepting this link. Ask an admin to link it again.
+      {:else if jellyfin?.linked}
+        What you watch in Jellyfin counts as seen here, and the other way round.
+      {:else}
+        Everything works without it. Once an admin links it, what you watch in Jellyfin counts as
+        seen here, and Spielplan asks “Did you finish it?” when a film ends.
+      {/if}
+    </p>
   </section>
 
   <!-- Licence notices bind every viewer, so they sit on the one page every member reaches (decision 293). -->
-  <details class="fold technical" data-testid="account-technical">
-    <summary>Where the film information comes from</summary>
-    <DataSources />
+  <details class="sources" data-testid="account-technical">
+    <summary class="list-row">
+      <RowIcon name="info" />
+      <span class="text">Where the film information comes from</span>
+      {@render chevron()}
+    </summary>
+    <div class="credits"><DataSources /></div>
   </details>
 </div>
 
 <style>
-  .wrap {
-    max-width: 720px;
+  .account {
+    max-width: 640px;
     display: flex;
     flex-direction: column;
-    gap: 16px;
+    gap: 32px;
   }
-  h1 {
-    margin: 0 0 4px;
-    font-size: 21px;
-    font-weight: 600;
-  }
-  h2 {
-    margin: 0 0 8px;
-    font-size: 14px;
-    font-weight: 600;
-  }
-  .card {
+  .group {
     display: flex;
     flex-direction: column;
-    gap: 10px;
   }
-  .list {
-    list-style: none;
-    margin: 0;
-    padding: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
+  .list-group > * + * {
+    box-shadow: inset 0 0.5px 0 var(--separator);
   }
-  .list li {
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px;
-    padding: 9px 11px;
-    border: 1px solid var(--line);
-    border-radius: var(--r-sm);
-  }
-  .list li.dead {
-    opacity: 0.62;
-  }
-  .name {
-    font-size: 13.5px;
-  }
-  .meta {
-    margin-top: 2px;
-  }
-  .row {
-    display: flex;
-    gap: 8px;
-    flex-wrap: wrap;
-  }
-  .row input {
+  .text {
     flex: 1;
-    min-width: 160px;
-  }
-  .letters {
-    margin: 0;
-    font-size: 13px;
-    color: var(--ink-2);
-  }
-  /* A summary is in none of design.css's coarse selectors, so it takes the 48px floor here. */
-  .fold > summary {
+    min-width: 0;
     display: flex;
-    align-items: center;
+    flex-direction: column;
+  }
+  .sub {
+    font-size: var(--fs-footnote);
+    line-height: 18px;
+    color: var(--text-3);
+    overflow-wrap: anywhere;
+  }
+  .dead .text {
+    color: var(--text-3);
+  }
+  .remove {
+    flex: none;
+    margin-right: -8px;
+    color: var(--negative);
+  }
+  .chev {
+    flex: none;
+    color: rgba(245, 240, 232, 0.35);
+    transition: transform 0.2s var(--ease);
+  }
+  .list-row[href] {
+    color: var(--text);
+  }
+  summary {
+    list-style: none;
     cursor: pointer;
-    font-size: 13px;
-    color: var(--ink-3);
-    padding: 6px 0;
   }
-  .fold[open] > summary {
-    margin-bottom: 10px;
+  summary::-webkit-details-marker {
+    display: none;
   }
-  /* A flex summary drops the engine's own marker, so the fold draws its state itself. */
-  .fold > summary::after {
-    content: '▾';
-    margin-left: 8px;
-    color: var(--ink-4);
+  details[open] > summary .chev {
+    transform: rotate(90deg);
   }
-  .fold[open] > summary::after {
-    content: '▴';
+  /* A form that opens inside its group, under the row that names it. */
+  .form {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 12px var(--gutter) 16px;
   }
-  @media (pointer: coarse) {
-    .fold > summary {
-      min-height: var(--touch);
-    }
+  .form label {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .form .btn-tinted,
+  .form .btn-primary {
+    align-self: stretch;
+    border-radius: var(--r-md);
+  }
+  .note,
+  .said {
+    margin: 0;
+    font-size: var(--fs-footnote);
+    line-height: 18px;
+    color: var(--text-2);
+  }
+  .said {
+    color: var(--positive);
+  }
+  .said.err {
+    color: var(--negative);
+  }
+  .linked {
+    flex: none;
+    margin-left: auto;
+    color: var(--positive);
+  }
+  .list-row .badge {
+    margin-left: auto;
   }
   .welcome {
-    padding: 12px 15px;
-    border: 1px solid var(--ember-edge);
-    background: var(--ember-wash);
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .welcome p {
+    margin: 0;
+  }
+  .headline {
+    font-size: var(--fs-body);
+    line-height: 22px;
+    font-weight: 600;
+  }
+  .sources > summary {
     border-radius: var(--r-md);
-    font-size: 13.5px;
+    background: var(--surface-1);
   }
-  .err {
-    color: var(--ember-lift);
-    font-size: 12.5px;
-  }
-  .note {
-    color: var(--ink-2);
-    font-size: 12.5px;
+  .credits {
+    padding-top: 32px;
   }
 </style>

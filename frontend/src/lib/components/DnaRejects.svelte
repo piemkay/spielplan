@@ -57,168 +57,205 @@
     show();
   }
 
+  // Built in JS: Svelte collapses the whitespace around an {#if}, gluing the separators.
+  const joined = (...parts) => parts.filter((part) => part != null && part !== '').join(', ');
+
   onMount(load);
 </script>
 
 <div class="review" data-testid="dna-review">
-  <h2>DNA rejects and low-evidence tags</h2>
-  <p class="why">
-    What the verifier dropped, newest first, and one title's extracted tags from the least evidenced
-    up. Nothing is hidden and nothing here takes a tag back: a fix is a ledger row.
-  </p>
-
-  <h3 class="data">REJECTED BY THE VERIFIER</h3>
-  {#if error}
-    <p class="err">{error}</p>
-  {:else if !rejects}
-    <p class="data">loading...</p>
-  {:else if rows.length === 0}
-    <p class="why">The verifier has rejected nothing on this install.</p>
-  {:else}
-    <ul class="rows">
-      {#each rows as row (row.id)}
-        <li class="row card" data-testid="dna-reject">
-          <div class="head">
-            <span class="data-lg">{row.term}</span>
-            <span class="data">{row.facet ?? ''}</span>
-          </div>
-          <span class="name">{titleOf(row)}</span>
-          {#if row.quote != null}<p class="quote">{row.quote}</p>{/if}
-          <p class="data">
-            rule {row.rule_violated} - salience {figure(row.salience)} - {row.provider ?? ''} -
-            {row.at ? new Date(row.at).toLocaleString() : ''}
-          </p>
-          <div class="actions">
-            <button class="btn-ghost" onclick={() => openVerdict(ledgerPrefill(row))}>
-              Write a ledger row
-            </button>
-            {#if row.title_id != null}
-              <button class="btn-ghost" onclick={() => tagsFor(row)}>Tags for this title</button>
-            {/if}
-          </div>
-        </li>
-      {/each}
-    </ul>
-  {/if}
-
-  <h3 class="data">LOW-EVIDENCE TAGS FOR ONE TITLE</h3>
-  <form
-    class="ask"
-    onsubmit={(e) => {
-      e.preventDefault();
-      show();
-    }}
-  >
-    <label>
-      <span class="data">Title id</span>
-      <input type="text" inputmode="numeric" bind:value={titleText} data-testid="evidence-title" />
-    </label>
-    <button class="btn-ghost" type="submit" disabled={asking}>Show</button>
-  </form>
-  {#if evidenceError}<p class="err">{evidenceError}</p>{/if}
-  {#if evidence}
-    {#if tags.length === 0}
-      <p class="why">Title {evidence.title_id} carries no extracted tag at the active vocabulary.</p>
+  <section class="group">
+    <h2 class="list-header">Rejected tags</h2>
+    <p class="footnote intro">
+      What the checker dropped, newest first. Nothing here takes a tag back: a fix is a verdict.
+    </p>
+    {#if error}
+      <p class="err">{error}</p>
+    {:else if !rejects}
+      <p class="footnote intro">Loading…</p>
+    {:else if rows.length === 0}
+      <p class="card why">The checker has rejected nothing yet.</p>
     {:else}
-      <ol class="rows" data-testid="evidence-tags">
-        {#each tags as tag, i (i)}
-          <li class="row card" data-testid="evidence-tag" data-term={tag.term}>
-            <div class="head">
-              <span class="data-lg">{tag.term}</span>
-              <span class="data">{tag.facet ?? ''} {tag.provider ?? ''}</span>
-            </div>
-            <p class="data">
-              confidence {figure(tag.confidence)} - n_sources {figure(tag.n_sources)} - salience
-              {figure(tag.salience)}
-            </p>
+      <ul class="list-group rows">
+        {#each rows as row (row.id)}
+          <li class="row" data-testid="dna-reject">
+            <span class="name">{row.term}</span>
+            <span class="sub">{joined(titleOf(row), row.facet)}</span>
+            {#if row.quote != null}<p class="quote">{row.quote}</p>{/if}
+            {#if row.at}<p class="facts">{new Date(row.at).toLocaleString()}</p>{/if}
+            <details class="tech">
+              <summary>Technical details</summary>
+              <p class="facts">
+                {joined(`rule ${row.rule_violated}`, `salience ${figure(row.salience)}`, row.provider)}
+              </p>
+            </details>
             <div class="actions">
-              <button
-                class="btn-ghost"
-                onclick={() => openVerdict(ledgerPrefill(tag, evidence.title_id))}
-              >
-                Write a ledger row
+              <button class="btn-plain" onclick={() => openVerdict(ledgerPrefill(row))}>
+                Write a verdict
               </button>
+              {#if row.title_id != null}
+                <button class="btn-plain" onclick={() => tagsFor(row)}>See this title's tags</button>
+              {/if}
             </div>
           </li>
         {/each}
-      </ol>
+      </ul>
     {/if}
-  {/if}
+  </section>
+
+  <section class="group">
+    <h2 class="list-header">Weakest tags on one title</h2>
+    <p class="footnote intro">One title's extracted tags, the least evidenced first.</p>
+    <form
+      class="ask"
+      onsubmit={(e) => {
+        e.preventDefault();
+        show();
+      }}
+    >
+      <label>
+        <span class="sr-only">Title id</span>
+        <input
+          type="text"
+          inputmode="numeric"
+          placeholder="Title id"
+          bind:value={titleText}
+          data-testid="evidence-title"
+        />
+      </label>
+      <button class="btn-secondary" type="submit" disabled={asking}>Show</button>
+    </form>
+    {#if evidenceError}<p class="err">{evidenceError}</p>{/if}
+    {#if evidence}
+      {#if tags.length === 0}
+        <p class="card why">Title {evidence.title_id} carries no extracted tag yet.</p>
+      {:else}
+        <ol class="list-group rows" data-testid="evidence-tags">
+          {#each tags as tag, i (i)}
+            <li class="row" data-testid="evidence-tag" data-term={tag.term}>
+              <span class="name">{tag.term}</span>
+              <span class="sub">{joined(tag.facet, tag.provider)}</span>
+              <p class="facts">
+                {joined(
+                  `confidence ${figure(tag.confidence)}`,
+                  `sources ${figure(tag.n_sources)}`,
+                  `salience ${figure(tag.salience)}`
+                )}
+              </p>
+              <div class="actions">
+                <button
+                  class="btn-plain"
+                  onclick={() => openVerdict(ledgerPrefill(tag, evidence.title_id))}
+                >
+                  Write a verdict
+                </button>
+              </div>
+            </li>
+          {/each}
+        </ol>
+      {/if}
+    {/if}
+  </section>
 </div>
 
 <style>
   .review {
-    margin-top: 26px;
-    padding-top: 14px;
-    border-top: 1px solid var(--line);
     display: flex;
     flex-direction: column;
-    gap: 10px;
+    gap: 32px;
   }
-  h2 {
+  .group {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .intro {
+    margin: 0 0 4px;
+    padding: 0 var(--gutter);
+  }
+  .card.why,
+  .err {
     margin: 0;
-    font-size: 15px;
-    font-weight: 600;
   }
-  h3 {
-    margin: 8px 0 0;
-    font-weight: 400;
-    letter-spacing: 0.12em;
-  }
-  .why {
-    margin: 0;
+  .err {
+    color: var(--negative);
   }
   .rows {
     list-style: none;
     margin: 0;
     padding: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
   }
   .row {
+    position: relative;
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 2px;
+    padding: 12px var(--gutter) 4px;
   }
-  .row p {
-    margin: 0;
-  }
-  .head {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 4px 12px;
-    align-items: baseline;
+  .row + .row::before {
+    content: '';
+    position: absolute;
+    top: 0;
+    right: 0;
+    left: var(--gutter);
+    height: 0.5px;
+    background: var(--separator);
   }
   .name {
-    font-weight: 600;
+    font-size: var(--fs-body);
+    line-height: 22px;
+    overflow-wrap: anywhere;
+  }
+  .sub,
+  .facts {
+    font-size: var(--fs-footnote);
+    line-height: 18px;
+    color: var(--text-3);
+  }
+  .facts {
+    margin: 4px 0 0;
+    font-variant-numeric: tabular-nums;
+    overflow-wrap: anywhere;
+  }
+  .tech summary {
+    width: fit-content;
+    padding: 6px 0;
+    font-size: var(--fs-footnote);
+    line-height: 18px;
+    color: var(--text-2);
+    cursor: pointer;
+  }
+  .tech .facts {
+    margin: 0 0 4px;
   }
   .quote {
-    font-size: 13px;
-    line-height: 1.5;
-    color: var(--ink-2);
+    margin: 6px 0 0;
+    font-size: var(--fs-subhead);
+    line-height: 20px;
+    color: var(--text-2);
     white-space: pre-wrap;
     overflow-wrap: anywhere;
   }
   .actions {
     display: flex;
     flex-wrap: wrap;
-    gap: 8px;
+    margin: 0 -8px;
   }
   .ask {
     display: flex;
-    flex-wrap: wrap;
     gap: 8px;
-    align-items: flex-end;
+    align-items: stretch;
   }
   .ask label {
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
-    flex: 1 1 160px;
+    flex: 1;
+    min-width: 0;
   }
-  .err {
-    color: var(--ember-lift);
-    margin: 0;
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
   }
 </style>

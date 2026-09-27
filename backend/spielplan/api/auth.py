@@ -81,10 +81,8 @@ def _nav(user: auth.SessionUser) -> dict[str, list[dict[str, str | bool]]]:
         {"key": "account", "href": "/account", "label": "Account & passkeys"},
     ]
     if user.is_admin:
-        account += [
-            {"key": "admin", "href": "/admin/data", "label": "Admin view"},
-            {"key": "setup", "href": "/setup", "label": "Setup wizard"},
-        ]
+        # Overview links the setup wizard (decision 527).
+        account.append({"key": "admin", "href": "/admin", "label": "Admin"})
     return {"surfaces": [dict(s) for s in SURFACES if s["built"]], "account": account}
 
 

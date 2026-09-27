@@ -266,7 +266,7 @@ async def test_an_item_with_provider_ids_is_minted_placed_and_badged(db, bundled
     assert section is not None, suppressed
     assert section.title == "New in the library"
     # Compared by its two claims rather than as one literal, since the copy has been reworded.
-    assert section.why.startswith("no outside ratings yet")
+    assert section.why.startswith("No outside ratings yet")
     assert "placed them by what they're about" in section.why
     shown = {card["title_id"]: card for card in section.items}
     for row in rows:

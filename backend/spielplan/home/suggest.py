@@ -1,6 +1,6 @@
 """The title card's one line on why a title is suggested (decision 515), or None.
 
-None if seen, rated or avoided; else "Because you liked {X} — they share {a} + {b}"; else "One of
+None if seen, rated or avoided; else "Because you liked {X} — {a}, {b}"; else "One of
 the ones we think you'll enjoy most" when their own fit ranks it in the top `TOP_SHARE`.
 """
 
@@ -54,7 +54,7 @@ async def why_suggested(
         )
         if liked is not None:
             name, terms = liked
-            return f"Because you liked {name} — they share {' + '.join(terms)}"
+            return f"Because you liked {name} — {', '.join(terms)}"
 
     if bundle_version is not None and await _in_top_share(
         conn, user_id=user_id, title_id=title_id, kind=kind, bundle_version=bundle_version

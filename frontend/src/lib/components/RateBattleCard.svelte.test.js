@@ -43,8 +43,8 @@ function open(token = 't1') {
     busy: false,
     onDuel: (outcome, opts = {}) => duels.push({ outcome, ...opts }),
     onCorrect: () => {},
-    onSkip: () => {},
-    onDecisive: () => {}
+    onDecisive: () => {},
+    onWhy: () => {}
   });
   const app = mount(RateBattleCard, { target, props });
   flushSync();
@@ -108,6 +108,51 @@ describe("proposal 51's long press", () => {
       el.dispatchEvent(new MouseEvent('pointerup', { bubbles: true }));
       el.click();
       expect(duels).toEqual([{ outcome: 'A', decisive: true, token: 't1' }]);
+    } finally {
+      unmount(app);
+    }
+  });
+});
+
+describe('the pair card (decisions 520 and 527)', () => {
+  it('makes the posters the answers and names each title in the corrections zone', () => {
+    const { app } = open('t1');
+    try {
+      const left = target.querySelector(LEFT);
+      expect(left.getAttribute('aria-label')).toBe('Pick Heat');
+      expect(left.querySelector('button, a')).toBeNull();
+      expect(target.querySelector('[data-testid="rate-strip-tie"]').textContent).toBe(
+        'About the same'
+      );
+      const corrections = [...target.querySelectorAll('[data-testid^="rate-correction-"]')];
+      expect(corrections.map((el) => el.textContent)).toEqual(['Heat', 'Drive', 'Neither']);
+      expect(corrections.map((el) => el.getAttribute('data-testid'))).toEqual([
+        'rate-correction-left',
+        'rate-correction-right',
+        'rate-correction-both'
+      ]);
+      expect(target.querySelector('[data-testid="rate-corrections"]').textContent).toContain(
+        "Haven't seen one?"
+      );
+    } finally {
+      unmount(app);
+    }
+  });
+
+  it('shows the clear-favourite switch as a switch, with its line that it resets', () => {
+    const { props, app } = open('t1');
+    try {
+      const toggle = target.querySelector('[data-testid="rate-decisive"]');
+      expect(toggle.getAttribute('role')).toBe('switch');
+      expect(toggle.getAttribute('aria-checked')).toBe('false');
+      expect(toggle.textContent).toContain('Clear favourite');
+      expect(target.querySelector('[data-testid="rate-decisive-why"]').textContent).toBe(
+        'Turn this on when one is clearly better - that answer counts for more. It resets for ' +
+          'the next pair.'
+      );
+      props.decisive = true;
+      flushSync();
+      expect(toggle.getAttribute('aria-checked')).toBe('true');
     } finally {
       unmount(app);
     }

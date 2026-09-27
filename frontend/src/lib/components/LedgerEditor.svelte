@@ -17,6 +17,7 @@
     verdictDraft,
     verdictWarning,
     visibleFields,
+    weightText,
     withdrawPath,
     withdrawable
   } from '$lib/ledgerEditors.svelte.js';
@@ -37,6 +38,8 @@
   // The facet whose household axis the open form is editing, or null while it adds.
   let replacing = $state(null);
   let root = $state(null);
+  // Collapsed until opened; the review's hand-off opens it.
+  let open = $state(false);
   // Starts at the count found on mount: `verdictDraft` is module state that outlives the page,
   // and a dismissed form must not reopen on the next visit.
   let handled = verdictDraft.seq;
@@ -101,14 +104,17 @@
     await refresh();
   }
 
-  // The reject review's "Write a ledger row": open prefilled and scroll to the form.
+  // The reject review's "Write a verdict": open prefilled and scroll to the form.
   $effect(() => {
     const seq = verdictDraft.seq;
     if (ledger !== 'adjudications' || seq <= handled) return;
     handled = seq;
+    open = true;
     untrack(() => start(verdictDraft.prefill ?? {}));
     tick().then(() => root?.scrollIntoView?.({ block: 'start' }));
   });
+
+  const ORIGIN = { household: 'Household', bundle: 'From the bundle, read-only' };
 
   function describe(row) {
     if (ledger === 'adjudications') {
@@ -125,217 +131,253 @@
   onMount(refresh);
 </script>
 
-<div class="editor" data-testid="ledger-editor" data-ledger={ledger} bind:this={root}>
-  <h3>{config.heading}</h3>
-  <p class="data">{config.artifact}</p>
-  {#if envelope?.applies}<p class="why" data-testid="ledger-applies">{envelope.applies}</p>{/if}
+<details class="editor" data-testid="ledger-editor" data-ledger={ledger} bind:open bind:this={root}>
+  <summary class="list-row">
+    <span class="text">
+      <span>{config.heading}</span>
+      <span class="code file">{config.artifact}</span>
+    </span>
+    {#if envelope}<span class="value">{rows.length || 'None'}</span>{/if}
+    <svg class="chevron" viewBox="0 0 24 24" aria-hidden="true"><path d="m5.5 9.5 6.5 6.5 6.5-6.5" /></svg>
+  </summary>
 
-  {#if error}
-    <p class="err">{error}</p>
-  {:else if !envelope}
-    <p class="data">loading...</p>
-  {:else}
-    {#if rows.length === 0}<p class="why">{config.empty}</p>{/if}
-    <ul class="rows">
-      {#each rows as row (rowKey(ledger, row))}
-        <li class="row" data-origin={row.origin}>
-          <div class="head">
+  <div class="body">
+    {#if envelope?.applies}<p class="footnote" data-testid="ledger-applies">{envelope.applies}</p>{/if}
+
+    {#if error}
+      <p class="err">{error}</p>
+    {:else if !envelope}
+      <p class="footnote">Loading…</p>
+    {:else}
+      {#if rows.length === 0}<p class="footnote">{config.empty}</p>{/if}
+      <ul class="rows">
+        {#each rows as row (rowKey(ledger, row))}
+          <li class="row" data-origin={row.origin}>
             <span class="what">{describe(row)}</span>
-            <span class="data">{row.origin}</span>
-          </div>
-          {#if row.quote}<p class="extra">quote: {row.quote}</p>{/if}
-          {#if row.evidence}<p class="extra">evidence: {row.evidence}</p>{/if}
-          {#if ledger === 'axes'}
-            <p class="data">
-              {#each row.weights ?? [] as w (w.term)}<span class="weight">{w.term} {w.weight}</span>{/each}
-            </p>
-          {/if}
-          {#if row.note}<p class="extra">note: {row.note}</p>{/if}
-          {#if withdrawable(row)}
-            {#if confirming === rowKey(ledger, row) && ledger === 'corrections' && row.kind === 'composer'}
-              <p class="why" data-testid="composer-warning">{COMPOSER_WARNING}</p>
+            <span class="footnote">{ORIGIN[row.origin] ?? row.origin}</span>
+            {#if row.quote}<p class="extra">Quote: {row.quote}</p>{/if}
+            {#if row.evidence}<p class="extra">Evidence: {row.evidence}</p>{/if}
+            {#if ledger === 'axes' && row.weights?.length}
+              <p class="extra weights">
+                {row.weights.map((w) => `${w.term} ${weightText(w.weight)}`).join(', ')}
+              </p>
             {/if}
-            <div class="actions">
-              {#if confirming === rowKey(ledger, row)}
-                <button class="btn-ghost" disabled={busy} onclick={() => withdraw(row)}>
-                  Yes, withdraw
-                </button>
-                <button class="btn-ghost" onclick={() => (confirming = null)}>Keep it</button>
-              {:else}
-                <button
-                  class="btn-ghost"
-                  disabled={busy}
-                  onclick={() => (confirming = rowKey(ledger, row))}
-                >
-                  Withdraw
-                </button>
-                {#if ledger === 'axes'}
-                  <button class="btn-ghost" disabled={busy} onclick={() => edit(row)}>Edit</button>
+            {#if row.note}<p class="extra">Note: {row.note}</p>{/if}
+            {#if withdrawable(row)}
+              {#if confirming === rowKey(ledger, row) && ledger === 'corrections' && row.kind === 'composer'}
+                <p class="warning" data-testid="composer-warning">{COMPOSER_WARNING}</p>
+              {/if}
+              <div class="actions">
+                {#if confirming === rowKey(ledger, row)}
+                  <button class="btn-plain btn-destructive" disabled={busy} onclick={() => withdraw(row)}>
+                    Yes, withdraw
+                  </button>
+                  <button class="btn-plain" onclick={() => (confirming = null)}>Keep it</button>
+                {:else}
+                  <button
+                    class="btn-plain btn-destructive"
+                    disabled={busy}
+                    onclick={() => (confirming = rowKey(ledger, row))}
+                  >
+                    Withdraw
+                  </button>
+                  {#if ledger === 'axes'}
+                    <button class="btn-plain" disabled={busy} onclick={() => edit(row)}>Edit</button>
+                  {/if}
                 {/if}
-              {/if}
-              {#if ledger === 'axes'}
-                <a class="export" href={exportHref(ledger, row)} download>Export {row.facet}.tsv</a>
-              {/if}
-            </div>
-          {/if}
-        </li>
-      {/each}
-    </ul>
-
-    <div class="actions">
-      {#if ledger !== 'axes'}
-        <a class="export" href={exportHref(ledger)} download>Export household rows</a>
-      {/if}
-      {#if !editing}
-        <button class="btn-ghost" onclick={() => start()}>{config.add}</button>
-      {/if}
-    </div>
-
-    {#if editing}
-      <form
-        class="form"
-        onsubmit={(e) => {
-          e.preventDefault();
-          save();
-        }}
-      >
-        {#each visibleFields(ledger, form) as field (field.name)}
-          <label>
-            <span class="data">{field.label}</span>
-            {#if field.type === 'select'}
-              <select bind:value={form[field.name]}>
-                {#if field.name === 'action'}<option value="">choose</option>{/if}
-                {#each field.options as option (option)}
-                  <option value={option}>{option}</option>
-                {/each}
-              </select>
-            {:else if field.type === 'facet'}
-              <select bind:value={form[field.name]}>
-                <option value="">choose</option>
-                {#each facetChoices(facets, rows, replacing) as facet (facet)}
-                  <option value={facet}>{facet}</option>
-                {/each}
-              </select>
-            {:else if field.type === 'textarea'}
-              <textarea rows="5" bind:value={form[field.name]}></textarea>
-            {:else}
-              <input type="text" bind:value={form[field.name]} />
+                {#if ledger === 'axes'}
+                  <a class="export btn-plain" href={exportHref(ledger, row)} download>
+                    Export {row.facet}.tsv
+                  </a>
+                {/if}
+              </div>
             {/if}
-          </label>
+          </li>
         {/each}
-        {#if ledger === 'adjudications' && verdictWarning(form.action)}
-          <p class="why" data-testid="verdict-warning">{verdictWarning(form.action)}</p>
+      </ul>
+
+      <div class="actions">
+        {#if !editing}
+          <button class="btn-plain" onclick={() => start()}>{config.add}</button>
         {/if}
-        {#if ledger === 'axes' && replacing}
-          <p class="why" data-testid="axis-replace-note">{AXIS_REPLACE_NOTE}</p>
+        {#if ledger !== 'axes'}
+          <a class="export btn-plain" href={exportHref(ledger)} download>Export household rows</a>
         {/if}
-        {#if ledger === 'corrections' && form.kind === 'composer'}
-          <p class="why" data-testid="composer-warning">{COMPOSER_WARNING}</p>
-        {/if}
-        <div class="actions">
-          <button class="btn-ghost" type="submit" disabled={busy}>
-            {replacing ? config.replace : config.save}
-          </button>
-          <button class="btn-ghost" type="button" onclick={() => (editing = false)}>Cancel</button>
-        </div>
-      </form>
+      </div>
+
+      {#if editing}
+        <form
+          class="form"
+          onsubmit={(e) => {
+            e.preventDefault();
+            save();
+          }}
+        >
+          {#each visibleFields(ledger, form) as field (field.name)}
+            <label>
+              <span class="label">{field.label}</span>
+              {#if field.type === 'select'}
+                <select bind:value={form[field.name]}>
+                  {#if field.name === 'action'}<option value="">Choose</option>{/if}
+                  {#each field.options as option (option)}
+                    <option value={option}>{option}</option>
+                  {/each}
+                </select>
+              {:else if field.type === 'facet'}
+                <select bind:value={form[field.name]}>
+                  <option value="">Choose</option>
+                  {#each facetChoices(facets, rows, replacing) as facet (facet)}
+                    <option value={facet}>{facet}</option>
+                  {/each}
+                </select>
+              {:else if field.type === 'textarea'}
+                <textarea rows="5" bind:value={form[field.name]}></textarea>
+              {:else}
+                <input type="text" bind:value={form[field.name]} />
+              {/if}
+            </label>
+          {/each}
+          {#if ledger === 'adjudications' && verdictWarning(form.action)}
+            <p class="warning" data-testid="verdict-warning">{verdictWarning(form.action)}</p>
+          {/if}
+          {#if ledger === 'axes' && replacing}
+            <p class="warning" data-testid="axis-replace-note">{AXIS_REPLACE_NOTE}</p>
+          {/if}
+          {#if ledger === 'corrections' && form.kind === 'composer'}
+            <p class="warning" data-testid="composer-warning">{COMPOSER_WARNING}</p>
+          {/if}
+          <div class="buttons">
+            <button class="btn-primary" type="submit" disabled={busy}>
+              {replacing ? config.replace : config.save}
+            </button>
+            <button class="btn-secondary" type="button" onclick={() => (editing = false)}>Cancel</button>
+          </div>
+        </form>
+      {/if}
+      {#if refusal}<p class="err refusal">{refusal}</p>{/if}
+      {#if saved}<p class="footnote">{saved}</p>{/if}
     {/if}
-    {#if refusal}<p class="err refusal">{refusal}</p>{/if}
-    {#if saved}<p class="why">{saved}</p>{/if}
-  {/if}
-</div>
+  </div>
+</details>
 
 <style>
-  .editor {
+  summary {
+    list-style: none;
+    cursor: pointer;
+  }
+  summary::-webkit-details-marker {
+    display: none;
+  }
+  .text {
+    flex: 1;
+    min-width: 0;
     display: flex;
     flex-direction: column;
-    gap: 8px;
-    padding-top: 12px;
-    border-top: 1px solid var(--line);
   }
-  h3 {
-    margin: 0;
-    font-size: 14px;
-    font-weight: 600;
+  .file {
+    color: var(--text-3);
+    overflow-wrap: anywhere;
   }
-  .why,
-  .data {
+  summary .value {
+    font-variant-numeric: tabular-nums;
+  }
+  .chevron {
+    flex: none;
+    width: 16px;
+    height: 16px;
+    fill: none;
+    stroke: rgba(245, 240, 232, 0.35);
+    stroke-width: 1.75;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+    transition: transform 0.2s var(--ease);
+  }
+  .editor[open] .chevron {
+    transform: rotate(180deg);
+  }
+  .body {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 0 var(--gutter) var(--gutter);
+  }
+  .footnote,
+  .err {
     margin: 0;
   }
   .rows {
     list-style: none;
     margin: 0;
     padding: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 6px;
+    border-radius: var(--r-sm);
+    background: var(--surface-2);
   }
   .row {
     display: flex;
     flex-direction: column;
-    gap: 4px;
-    padding: 8px 0;
-    border-bottom: 1px solid var(--line);
+    gap: 2px;
+    padding: 10px 12px 4px;
   }
-  .head {
-    display: flex;
-    flex-wrap: wrap;
-    justify-content: space-between;
-    gap: 4px 12px;
-    align-items: baseline;
+  .row + .row {
+    box-shadow: inset 0 0.5px 0 var(--separator);
+  }
+  .rows:empty {
+    display: none;
   }
   .what {
-    font-family: var(--mono);
-    font-size: 12px;
-    color: var(--ink-2);
+    font-size: var(--fs-subhead);
+    line-height: 20px;
     overflow-wrap: anywhere;
   }
   .extra {
     margin: 0;
-    font-size: 13px;
-    line-height: 1.5;
-    color: var(--ink-3);
+    font-size: var(--fs-footnote);
+    line-height: 18px;
+    color: var(--text-2);
     white-space: pre-wrap;
     overflow-wrap: anywhere;
   }
-  .weight {
-    margin-right: 10px;
+  .weights {
+    font-variant-numeric: tabular-nums;
   }
   .actions {
     display: flex;
     flex-wrap: wrap;
-    gap: 8px;
     align-items: center;
-  }
-  /* A download, not an accent (§6.8). */
-  .export {
-    display: inline-flex;
-    align-items: center;
-    color: var(--ink-3);
-    text-decoration: underline;
+    margin: 0 -8px;
   }
   .form {
     display: flex;
     flex-direction: column;
-    gap: 10px;
+    gap: 12px;
   }
   .form label {
     display: flex;
     flex-direction: column;
     gap: 6px;
   }
-  textarea {
-    width: 100%;
-    padding: 11px 13px;
+  .label {
+    padding: 0 4px;
+    font-size: var(--fs-footnote);
+    line-height: 18px;
+    color: var(--text-3);
+  }
+  .warning {
+    margin: 0;
+    padding: 12px;
     border-radius: var(--r-sm);
-    border: 1px solid var(--line-2);
-    background: var(--card);
-    color: var(--ink);
-    font-family: var(--mono);
+    background: var(--warning-tint);
+    font-size: var(--fs-footnote);
+    line-height: 18px;
+    color: var(--text);
+  }
+  .buttons {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
   }
   .err {
-    color: var(--ember-lift);
-    margin: 0;
+    color: var(--negative);
   }
   .refusal {
     white-space: pre-wrap;

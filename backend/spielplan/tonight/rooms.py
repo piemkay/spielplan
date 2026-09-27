@@ -217,7 +217,7 @@ async def lobby(conn: asyncpg.Connection, session_id: int) -> dict[str, Any]:
     people = await conn.fetch(
         """
         SELECT p.id, p.seat, p.role, p.user_id, p.answered_count, p.ended_by,
-               u.name, u.avatar
+               u.name, u.avatar, u.role AS account_role, u.colour
           FROM session_participant p
           LEFT JOIN app_user u ON u.id = p.user_id
          WHERE p.session_id = $1
@@ -249,6 +249,9 @@ async def lobby(conn: asyncpg.Connection, session_id: int) -> dict[str, Any]:
                 # A guest has no account (§4.2), so no invented name.
                 "name": p["name"] or f"Guest {p['seat'] - 1}",
                 "avatar": p["avatar"],
+                # What the avatar's colour is keyed on, so a person reads the same on every screen.
+                "account_role": p["account_role"],
+                "colour": p["colour"],
                 "answered_count": p["answered_count"],
                 "ended_by": p["ended_by"],
                 # This member's own vetoes (decision 505).
@@ -266,13 +269,14 @@ async def open_rooms(conn: asyncpg.Connection, *, viewer_id: int) -> list[dict[s
         SELECT s.id, s.room_code, s.state, s.kind, s.runtime_budget_min, s.include_rewatches,
                s.started_at, u.name AS host_name, s.context -> 'vetoes' AS vetoes,
                s.context -> 'vetoes_by' AS vetoes_by,
+               u.id AS host_id, u.role AS host_role, u.colour AS host_colour,
                count(p.id) AS seated,
                bool_or(p.user_id = $1) AS viewer_seated
           FROM session s
           JOIN app_user u ON u.id = s.host_user_id
           LEFT JOIN session_participant p ON p.session_id = s.id
          WHERE s.ended_at IS NULL
-         GROUP BY s.id, u.name
+         GROUP BY s.id, u.id
          ORDER BY s.started_at DESC
         """,
         viewer_id,
@@ -283,6 +287,7 @@ async def open_rooms(conn: asyncpg.Connection, *, viewer_id: int) -> list[dict[s
             "room_code": r["room_code"],
             "state": r["state"],
             "host": r["host_name"],
+            "host_avatar": {"id": r["host_id"], "role": r["host_role"], "colour": r["host_colour"]},
             "started_at": r["started_at"],
             "kind": r["kind"],
             "runtime_budget_min": r["runtime_budget_min"],

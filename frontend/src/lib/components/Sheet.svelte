@@ -1,7 +1,7 @@
 <script>
   // A sheet is a history entry (§6 preamble, decision 527): Back closes it, and so do the scrim,
   // Escape, the close button and a downward swipe. On a desktop it is a centred panel.
-  import { tick } from 'svelte';
+  import { onDestroy, tick } from 'svelte';
   import { pushState } from '$app/navigation';
   import { page } from '$app/stores';
 
@@ -21,6 +21,7 @@
   let pushed = $state(false);
   let dragY = $state(0);
   let dragFrom = null;
+  let dragging = false;
   let opener = null;
   // The pushed entry reaches `$page.state` a tick after the push; only an entry seen can be popped.
   let entered = false;
@@ -61,28 +62,62 @@
     else settle();
   }
 
-  function onkeydown(event) {
+  // An unmount while open (a parent that drops the sheet) must not leave the page locked.
+  onDestroy(() => {
+    if (!pushed) return;
+    document.documentElement.style.overflow = '';
+    if (stack.at(-1) === key) history.back();
+  });
+
+  const FOCUSABLE = 'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
+
+  // On the window, so Escape works wherever focus sits; only the top-most sheet answers.
+  function onWindowKey(event) {
+    if (!open || !pushed || (stack.length && stack.at(-1) !== key)) return;
     if (event.key === 'Escape') {
       event.stopPropagation();
       close();
+    } else if (event.key === 'Tab' && panel) {
+      const items = [...panel.querySelectorAll(FOCUSABLE)].filter((el) => !el.hasAttribute('disabled'));
+      if (!items.length) return;
+      const first = items[0];
+      const last = items.at(-1);
+      const inside = panel.contains(document.activeElement);
+      if (event.shiftKey && (!inside || document.activeElement === first || document.activeElement === panel)) {
+        event.preventDefault();
+        last.focus();
+      } else if (!event.shiftKey && (!inside || document.activeElement === last)) {
+        event.preventDefault();
+        first.focus();
+      }
     }
   }
 
+  // Capture only once the finger really drags, so a tap on a header button stays a click.
   function grab(event) {
+    if (event.target instanceof Element && event.target.closest(FOCUSABLE)) return;
     dragFrom = event.clientY;
-    event.currentTarget.setPointerCapture?.(event.pointerId);
+    dragging = false;
   }
   function drag(event) {
     if (dragFrom === null) return;
-    dragY = Math.max(0, event.clientY - dragFrom);
+    const dy = event.clientY - dragFrom;
+    if (!dragging && dy > 6) {
+      dragging = true;
+      event.currentTarget.setPointerCapture?.(event.pointerId);
+    }
+    if (dragging) dragY = Math.max(0, dy);
   }
   function release() {
     if (dragFrom === null) return;
     dragFrom = null;
+    dragging = false;
     if (dragY > 96) close();
     else dragY = 0;
   }
 </script>
+
+<svelte:window onkeydown={onWindowKey} />
 
 {#if open}
   <div class="layer" class:plain>
@@ -95,7 +130,6 @@
       aria-label={label}
       tabindex="-1"
       bind:this={panel}
-      {onkeydown}
       style:--w="{width}px"
       style:transform={dragY ? `translateY(${dragY}px)` : null}
     >
@@ -153,6 +187,9 @@
   .panel.medium {
     max-height: 72dvh;
   }
+  .panel.fit {
+    max-height: calc(100dvh - env(safe-area-inset-top) - 12px);
+  }
   .panel.plain {
     background: none;
     box-shadow: none;
@@ -189,7 +226,8 @@
     }
     .panel,
     .panel.large,
-    .panel.medium {
+    .panel.medium,
+    .panel.fit {
       width: min(var(--w), calc(100% - 48px));
       height: auto;
       max-height: 86dvh;

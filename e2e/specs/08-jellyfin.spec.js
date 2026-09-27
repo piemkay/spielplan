@@ -17,11 +17,21 @@ import {
  */
 test.describe.configure({ mode: 'serial' });
 
-/**
- * The Jellyfin card only: Playwright matches names as substrings, and the page has other Save
- * buttons, some inside this card ("Save library pick"), hence `exact`.
- */
+/** The Jellyfin section of Services, whose sheets open inside it. */
 const jellyfinCard = (page) => page.getByTestId('connector-jellyfin');
+
+/** Open the sheet behind one of the Jellyfin rows, the way a tap does. */
+async function openRow(page, name) {
+  await jellyfinCard(page).getByRole('button', { name: new RegExp(`^${name}`) }).click();
+  await expect(page.getByRole('dialog')).toBeVisible();
+}
+
+/** The mapping lives in the People linked sheet; each account is one `[data-user]` block. */
+async function openPeople(page) {
+  await page.goto('/admin/services');
+  await openRow(page, 'People linked');
+  return page.locator('[data-user]').first();
+}
 
 /**
  * Press Sync now and return the result line. Retried: the worker's own sweep holds an advisory
@@ -30,7 +40,7 @@ const jellyfinCard = (page) => page.getByTestId('connector-jellyfin');
  */
 async function sweepFromTheCard(page, attempts = 3) {
   for (let attempt = 1; attempt <= attempts; attempt++) {
-    await page.goto('/admin/connectors');
+    await page.goto('/admin/services');
     const card = jellyfinCard(page);
     await card.getByRole('button', { name: 'Sync now' }).click();
     const line = card.locator('[data-sync]');
@@ -56,13 +66,16 @@ test.describe('jellyfin', () => {
   });
 
   test('the connector is configured and tested from the admin view', async () => {
-    await page.goto('/admin/connectors');
-    await expect(page.getByRole('heading', { name: 'Connectors' })).toBeVisible();
+    await page.goto('/admin/services');
+    await expect(page.getByRole('heading', { name: 'Services', level: 1 })).toBeVisible();
 
     const card = jellyfinCard(page);
-    await card.getByLabel('SERVER URL').fill(JELLYFIN.url);
-    await card.getByLabel('API KEY').fill(JELLYFIN.apiKey);
+    await openRow(page, 'Server address');
+    await card.getByLabel('Server address', { exact: true }).fill(JELLYFIN.url);
+    await card.getByLabel('API key', { exact: true }).fill(JELLYFIN.apiKey);
     await card.getByRole('button', { name: 'Save', exact: true }).click();
+    // Saved, the sheet closes on the page it was opened from.
+    await expect(page.getByRole('dialog')).toHaveCount(0);
 
     await card.getByRole('button', { name: 'Test connection' }).click();
     const probe = card.locator('[data-probe]');
@@ -73,20 +86,24 @@ test.describe('jellyfin', () => {
   test('the api key never comes back out of the form', async () => {
     // §14.3: the key is admin-equivalent, so the page never receives it.
     await page.reload();
-    await expect(jellyfinCard(page).getByLabel('API KEY')).toHaveAttribute('placeholder', /stored/);
-    await expect(jellyfinCard(page).getByLabel('API KEY')).toHaveValue('');
+    await openRow(page, 'API key');
+    const key = jellyfinCard(page).getByLabel('API key', { exact: true });
+    await expect(key).toHaveAttribute('placeholder', 'Saved');
+    await expect(key).toHaveValue('');
     expect(await page.content()).not.toContain(JELLYFIN.apiKey);
   });
 
   test('an account links to one jellyfin user, with that user own sign-in', async () => {
-    const row = page.locator('tr[data-user]').first();
+    const row = await openPeople(page);
     await row.getByRole('combobox').selectOption({ label: 'patrick' });
-    await row.getByPlaceholder('jellyfin username').fill('patrick');
-    await row.getByPlaceholder('password (once)').fill(JELLYFIN.password);
-    await row.getByRole('button', { name: 'Link' }).click();
+    await row.getByPlaceholder('Jellyfin username').fill('patrick');
+    await row.getByPlaceholder('Jellyfin password, used once').fill(JELLYFIN.password);
+    await row.getByRole('button', { name: 'Link', exact: true }).click();
 
-    await expect(row.locator('[data-link-state]')).toHaveAttribute('data-link-state', 'linked');
-    await expect(row).toContainText('token stored');
+    const link = row.locator('[data-link-state]');
+    await expect(link).toHaveAttribute('data-link-state', 'linked');
+    // The per-user token is stored, so Played writes never use the admin key (§7.3).
+    await expect(link).toHaveAttribute('data-has-token', 'true');
   });
 
   test('a flag set in jellyfin arrives in the app', async () => {
@@ -98,7 +115,7 @@ test.describe('jellyfin', () => {
     await expect(swept).toHaveAttribute('data-sync-health', 'ok');
 
     const panel = await openTitle(page, 'Heat');
-    await expect(panel.getByRole('button', { name: 'Seen', exact: true })).toHaveAttribute(
+    await expect(panel.getByRole('button', { name: 'Watched', exact: true })).toHaveAttribute(
       'data-seen',
       'seen'
     );
@@ -106,9 +123,9 @@ test.describe('jellyfin', () => {
 
   test('a tap in the app arrives in jellyfin, under the per-user token', async () => {
     const panel = await openTitle(page, 'Heat');
-    await panel.getByRole('button', { name: 'Seen', exact: true }).click();
+    await panel.getByRole('button', { name: 'Watched', exact: true }).click();
 
-    await expect(panel.getByRole('button', { name: 'Mark seen' })).toBeVisible();
+    await expect(panel.getByRole('button', { name: 'Mark as watched' })).toBeVisible();
     await expect(panel.locator('.syncnote')).toHaveText('Saved, and Jellyfin is up to date.');
 
     const state = await jellyfinState(page.request);
@@ -132,7 +149,7 @@ test.describe('jellyfin', () => {
     expect(after.writes.length).toBe(before);
 
     const panel = await openTitle(page, 'Heat');
-    await expect(panel.getByRole('button', { name: 'Mark seen' })).toBeVisible();
+    await expect(panel.getByRole('button', { name: 'Mark as watched' })).toBeVisible();
   });
 
   test('finishing a title arms a prompt that surfaces on the next app open', async () => {
@@ -155,7 +172,7 @@ test.describe('jellyfin', () => {
 
   test('the prompt marks nothing until it is tapped', async () => {
     const panel = await openTitle(page, 'Severance');
-    await expect(panel.getByRole('button', { name: 'Mark seen' })).toBeVisible();
+    await expect(panel.getByRole('button', { name: 'Mark as watched' })).toBeVisible();
   });
 
   test('the first tap writes seen, and the card does not come back', async () => {
@@ -186,7 +203,7 @@ test.describe('jellyfin', () => {
     );
 
     const panel = await openTitle(page, 'Severance');
-    await expect(panel.getByRole('button', { name: 'Seen', exact: true })).toHaveAttribute(
+    await expect(panel.getByRole('button', { name: 'Watched', exact: true })).toHaveAttribute(
       'data-seen',
       'seen'
     );
@@ -271,16 +288,18 @@ test.describe('jellyfin', () => {
 
   test('unlinking leaves a working account', async () => {
     // §3.3: the link is optional; removing it must break nothing.
-    await page.goto('/admin/connectors');
-    await page.locator('tr[data-user]').first().getByRole('button', { name: 'Unlink' }).click();
-    await expect(page.locator('tr[data-user]').first().getByRole('combobox')).toBeVisible();
+    const row = await openPeople(page);
+    await row.getByRole('button', { name: 'Unlink', exact: true }).click();
+    // It asks first: the saved sign-in goes with the link.
+    await page.getByRole('menuitem', { name: 'Unlink', exact: true }).click();
+    await expect(row.getByRole('combobox')).toBeVisible();
 
     await page.goto('/account');
     await expect(page.locator('[data-jellyfin="unlinked"]')).toBeVisible();
 
     const panel = await openTitle(page, 'Heat');
-    await panel.getByRole('button', { name: 'Mark seen' }).click();
-    await expect(panel.getByRole('button', { name: 'Seen', exact: true })).toBeVisible();
+    await panel.getByRole('button', { name: 'Mark as watched' }).click();
+    await expect(panel.getByRole('button', { name: 'Watched', exact: true })).toBeVisible();
   });
 
   test("an owned title wears the household's own poster, from this app's origin", async () => {

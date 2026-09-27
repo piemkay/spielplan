@@ -13,6 +13,7 @@
   import ModelRail from '$lib/components/ModelRail.svelte';
   import NavRail from '$lib/components/NavRail.svelte';
   import Toast from '$lib/components/Toast.svelte';
+  import { topbar } from '$lib/topbar.svelte.js';
 
   let { children } = $props();
 
@@ -87,6 +88,7 @@
   let retrying = $state(false);
 
   onMount(() => {
+    topbar.host = true;
     // A 401 that `api.js` reads as a lost session lands here once, instead of on each surface.
     onUnauthenticated((reason) => {
       if (reason === 'password-change') {
@@ -106,6 +108,7 @@
     reconnect();
 
     return () => {
+      topbar.host = false;
       onUnauthenticated(null);
       window.removeEventListener('online', reconnect);
     };
@@ -172,7 +175,7 @@
       ended = false;
     }
     clearUser();
-    // Rank's lift is a pending write, and must not carry into the next person's session.
+    // Rank's card, pair and round must not carry into the next person's session.
     resetRank();
     // Leave the document so every module store is cleared, by a navigation that names /login (a
     // reload could land elsewhere). Only once the server ended the session, or the reload would
@@ -291,20 +294,22 @@
   <div class="shell" class:admin={adminRoute}>
     {#if !adminRoute}<NavRail />{/if}
     <div class="page">
-      <header class="topbar">
-        {#if session.restartRequired}
+      <header class="topbar" class:owned={!!topbar.content}>
+        {#if topbar.content}
+          {@render topbar.content()}
+        {:else if session.restartRequired}
           <!-- Imported but not loaded (decision 497): the admin gets Movie data, a member plain words. -->
           {#if canAdmin}
-            <a class="badge warn" href="/admin/data">Restart needed to load the new movie data</a>
+            <a class="badge warn" href="/admin/movie-data">Restart needed to load the new movie data</a>
           {:else}
             <span class="badge warn">Waiting for a restart</span>
           {/if}
         {/if}
-        {#if session.hasBundle === false}
+        {#if !topbar.content && session.hasBundle === false}
           <!-- `=== false`: null means `/config` did not answer, and this badge states a fact. -->
           {#if !session.restartRequired}
             {#if canAdmin}
-              <a class="badge warn" href="/admin/data">No movie data yet — import it</a>
+              <a class="badge warn" href="/admin/movie-data">No movie data yet — import it</a>
             {:else}
               <span class="badge warn">No movie data yet</span>
             {/if}
@@ -365,6 +370,13 @@
   }
   .topbar .badge {
     margin-right: auto;
+  }
+  .topbar.owned {
+    gap: 0;
+  }
+  .topbar.owned > :global(:first-child) {
+    flex: 1;
+    min-width: 0;
   }
   main {
     --main-pad-end: calc(var(--tabbar) + env(safe-area-inset-bottom) + 32px);

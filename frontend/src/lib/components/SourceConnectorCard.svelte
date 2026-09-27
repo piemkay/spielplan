@@ -1,12 +1,10 @@
 <script>
   // Write-only, like the provider cards: the route answers booleans and a field is never filled
   // from the server.
-  import { SOURCE_LABELS, saveKey, spend, testConnector } from '$lib/spendGuard.svelte.js';
+  import { saveKey, spend, testConnector } from '$lib/spendGuard.svelte.js';
 
   let { source } = $props();
 
-  const title = $derived(SOURCE_LABELS[source.name] ?? source.name);
-  const caps = $derived(title.toUpperCase());
   const trakt = $derived(source.name === 'trakt');
   const stored = $derived(
     trakt ? Boolean(source.has_client_id && source.has_client_secret) : Boolean(source.has_api_key)
@@ -39,145 +37,141 @@
 </script>
 
 <section
-  class="card"
+  class="source"
   data-source={source.name}
   data-required={String(Boolean(source.required))}
   data-has-key={String(stored)}
 >
-  <h2>{title}</h2>
-  <div class="data">
-    {source.required ? 'required' : 'best-effort'}{source.used_by ? ` · ${source.used_by}` : ''}
-  </div>
   <p class="why">
     {#if source.required}
-      Required: without this key stage 2 parks every title, because no other source answers the
-      detail it reads.
+      Required. Without it, new titles can't get their film details, so they wait until a key is
+      saved.
     {:else}
-      Best-effort: without it stage 2 goes on with the other sources and the title is simply
-      thinner.
+      Optional. Without it, new titles still arrive, with a little less detail.
     {/if}
   </p>
 
   {#if source.secrets_unreadable}
     <p class="alert" role="alert" data-key-unreadable>
-      The stored {title} credentials cannot be decrypted with this install's
-      <code>SECRETS_KEY</code>. Restore the <code>.env</code> that was current when the backup was
-      taken, or type them again below.
+      The saved credentials can't be read with this install's <span class="code">SECRETS_KEY</span>.
+      Restore the <span class="code">.env</span> that was current when the backup was taken, or type
+      them again below.
     </p>
   {/if}
 
   {#if trakt}
-    <div class="grid">
-      <label>
-        <span class="data">TRAKT CLIENT ID</span>
-        <input
-          type="password"
-          autocomplete="off"
-          bind:value={form.client_id}
-          placeholder={source.has_client_id ? '•••••••• (stored)' : 'paste a client id'}
-        />
-      </label>
-      <label>
-        <span class="data">TRAKT CLIENT SECRET</span>
-        <input
-          type="password"
-          autocomplete="off"
-          bind:value={form.client_secret}
-          placeholder={source.has_client_secret ? '•••••••• (stored)' : 'paste a client secret'}
-        />
-      </label>
-    </div>
+    <label class="field">
+      <span>Client ID</span>
+      <input
+        type="password"
+        autocomplete="off"
+        bind:value={form.client_id}
+        placeholder={source.has_client_id ? 'Saved' : 'Paste the client ID'}
+      />
+    </label>
+    <label class="field">
+      <span>Client secret</span>
+      <input
+        type="password"
+        autocomplete="off"
+        bind:value={form.client_secret}
+        placeholder={source.has_client_secret ? 'Saved' : 'Paste the client secret'}
+      />
+    </label>
   {:else}
-    <label>
-      <span class="data">{caps} KEY</span>
+    <label class="field">
+      <span>API key</span>
       <input
         type="password"
         autocomplete="off"
         bind:value={form.api_key}
-        placeholder={source.has_api_key ? '•••••••• (stored)' : 'paste a key'}
+        placeholder={source.has_api_key ? 'Saved' : 'Paste a key'}
       />
     </label>
   {/if}
 
-  <div class="row">
+  <div class="actions">
     <button
       class="btn-primary"
       onclick={saveThisKey}
       disabled={!typed || spend.busy === `key-${source.name}`}
     >
-      Save {title} key
+      Save
     </button>
-    <button class="btn-ghost" onclick={runTest} disabled={!testable || testing}>
-      {testing ? 'Testing…' : `Test ${title}`}
+    <button class="btn-secondary" onclick={runTest} disabled={!testable || testing}>
+      {testing ? 'Testing…' : 'Test'}
     </button>
   </div>
   {#if source.name === 'omdb'}
-    <p class="why" data-quota>Testing spends one request of OMDb's daily quota.</p>
+    <p class="footnote" data-quota>Testing spends one request of OMDb's daily quota.</p>
   {/if}
   {#if saved && !saved.ok && saved.error}<p class="err" role="alert">{saved.error}</p>{/if}
   {#if result}
-    <div class="data probe" data-test-result={result.ok ? 'ok' : 'fail'}>
-      {#if result.ok}
-        the key works{result.status ? ` (HTTP ${result.status})` : ''}
-      {:else}
-        failed: {result.error ?? 'no reason was reported'}
-      {/if}
-    </div>
+    <p class="why" data-test-result={result.ok ? 'ok' : 'fail'}>
+      {result.ok ? 'It works.' : `It didn't work: ${result.error ?? 'no reason was given'}`}
+    </p>
+  {/if}
+
+  {#if source.used_by}
+    <details class="tech">
+      <summary>Technical details</summary>
+      <p class="code">used by {source.used_by} · stage 2</p>
+    </details>
   {/if}
 </section>
 
 <style>
-  h2 {
-    margin: 0 0 2px;
-    font-size: 15px;
-    font-weight: 600;
-  }
-  .card {
-    margin-bottom: 16px;
+  .source {
     display: flex;
     flex-direction: column;
-    gap: 10px;
+    gap: 16px;
+    padding-top: 8px;
   }
-  label {
+  .field {
     display: flex;
     flex-direction: column;
-    gap: 5px;
+    gap: 6px;
+    font-size: var(--fs-footnote);
+    color: var(--text-2);
   }
-  .grid {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 10px;
-  }
-  .row {
+  .actions {
     display: flex;
-    gap: 8px;
     flex-wrap: wrap;
+    gap: 8px;
   }
-  .probe {
-    padding: 7px 10px;
-    border: 1px solid var(--line);
-    border-radius: var(--r-sm);
-  }
-  .why {
+  .why,
+  .footnote,
+  .code {
     margin: 0;
+  }
+  .tech summary {
+    display: flex;
+    align-items: center;
+    min-height: var(--touch);
+    list-style: none;
+    color: var(--accent-text);
+    font-size: var(--fs-subhead);
+    cursor: pointer;
+  }
+  .tech summary::-webkit-details-marker {
+    display: none;
+  }
+  .tech .code {
+    padding: 12px;
+    border-radius: var(--r-sm);
+    background: var(--surface-1);
   }
   .alert {
     margin: 0;
-    padding: 8px 10px;
-    border: 1px solid var(--ember-lift);
+    padding: 12px;
     border-radius: var(--r-sm);
-    color: var(--ember-lift);
-    font-size: 12.5px;
-    line-height: 1.45;
+    background: var(--warning-tint);
+    font-size: var(--fs-subhead);
+    line-height: 20px;
   }
   .err {
-    color: var(--ember-lift);
-    font-size: 12.5px;
     margin: 0;
-  }
-  @media (max-width: 720px) {
-    .grid {
-      grid-template-columns: 1fr;
-    }
+    color: var(--negative);
+    font-size: var(--fs-subhead);
   }
 </style>

@@ -6,6 +6,16 @@ import { flushSync, mount, unmount } from 'svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('$lib/api.js', () => ({ get: vi.fn(), post: vi.fn() }));
+// The title card is a sheet, which pushes a history entry as it opens.
+const nav = vi.hoisted(() => ({ page: null }));
+vi.mock('$app/stores', async () => {
+  const { writable } = await import('svelte/store');
+  nav.page = writable({ url: new URL('http://localhost/'), state: {} });
+  return { page: nav.page };
+});
+vi.mock('$app/navigation', () => ({
+  pushState: (_url, state) => nav.page.update((p) => ({ ...p, state }))
+}));
 
 import { get } from '$lib/api.js';
 import FinishPrompt from './FinishPrompt.svelte';
@@ -92,7 +102,7 @@ describe('RatePoster', () => {
 });
 
 describe('PosterCard', () => {
-  it('draws the poster lazily under its chips, and drops it on error', () => {
+  it('draws the poster lazily under its badges, and drops it on error', () => {
     app = mount(PosterCard, {
       target,
       props: {
@@ -104,7 +114,7 @@ describe('PosterCard', () => {
     const img = target.querySelector('.poster img');
     expect(img.getAttribute('src')).toBe('/api/art/949/poster');
     expect(img.getAttribute('loading')).toBe('lazy');
-    expect(img.nextElementSibling?.textContent).toBe('seen');
+    expect(img.nextElementSibling?.getAttribute('aria-label')).toBe('Seen');
 
     img.dispatchEvent(new Event('error'));
     flushSync();

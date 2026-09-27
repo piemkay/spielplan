@@ -261,21 +261,32 @@ test('on a phone every Rate control is on screen, and a battle keeps Tie and its
   await page.goto('/rate');
   await expect(page.getByTestId('rate-sweep-card')).toBeVisible();
   for (const id of [
-    'rate-mode-mix', 'rate-mode-sweep', 'rate-mode-battle', 'rate-find-toggle',
-    'rate-kind-movie', 'rate-kind-series', 'rate-undo', 'rate-verdict-0', 'rate-verdict-2'
+    'rate-menu', 'rate-find-toggle', 'rate-undo', 'rate-skip',
+    'rate-verdict-0', 'rate-verdict-2', 'rate-not-seen'
   ]) {
     await expect(page.getByTestId(id), `${id} is on the screen`).toBeInViewport();
   }
   const sideways = await page
     .getByTestId('rate-surface')
-    .locator('.controls')
+    .locator('header.bar')
     .evaluate((row) => row.scrollWidth - row.clientWidth);
-  expect(sideways, 'the control row does not scroll sideways').toBeLessThanOrEqual(0);
+  expect(sideways, 'the header row does not scroll sideways').toBeLessThanOrEqual(0);
+
+  // The modes and kinds live in the sheet the screen's title opens (decision 527).
+  await page.getByTestId('rate-menu').click();
+  const menu = page.getByRole('dialog', { name: 'How to rate' });
+  for (const id of [
+    'rate-mode-mix', 'rate-mode-sweep', 'rate-mode-battle', 'rate-kind-movie', 'rate-kind-series'
+  ]) {
+    await expect(menu.getByTestId(id), `${id} is in the menu`).toBeVisible();
+  }
+  await menu.getByRole('button', { name: 'Done', exact: true }).click();
+  await expect(menu).toHaveCount(0);
 
   await page.request.post('/api/rate/session', { data: { mode: 'battle' } });
   await page.goto('/rate');
   await expect(page.getByTestId('rate-battle-card')).toBeVisible();
-  for (const id of ['rate-strip-tie', 'rate-decisive', 'rate-battle-skip']) {
+  for (const id of ['rate-strip-tie', 'rate-decisive', 'rate-skip']) {
     await expect(page.getByTestId(id), `${id} is on the screen`).toBeInViewport();
   }
 });
