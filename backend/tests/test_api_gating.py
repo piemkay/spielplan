@@ -59,8 +59,8 @@ def paths_behind(target) -> set[tuple[str, str]]:
     }
 
 
-# Two loader pairs since decision 483: the poster route's `current_user_brief` would otherwise be invisible.
-SESSION_LOADERS = (deps.current_user, deps.current_user_brief)
+# Two gates since decision 483: the poster route's `active_user_brief` would otherwise be invisible.
+SESSION_LOADERS = (deps.current_user, deps.active_user_brief)
 FIRST_LOGIN_GATES = (deps.active_user, deps.active_user_brief)
 
 
@@ -121,7 +121,6 @@ def test_the_poster_route_is_gated_and_holds_no_pooled_connection_for_its_reques
     assert ("GET", "/api/art/{title_id}/poster") in brief, sorted(brief)
     held = brief & paths_behind(deps.db)
     assert not held, f"these hold a pooled connection for the whole request: {sorted(held)}"
-    assert brief <= paths_behind(deps.current_user_brief)
 
 
 def test_the_app_actually_has_admin_routes_to_gate():

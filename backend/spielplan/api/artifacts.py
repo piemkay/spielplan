@@ -20,20 +20,6 @@ from spielplan.models import basis
 
 router = APIRouter(prefix="/api/admin/bundle", tags=["admin", "bundle"])
 
-# The member-facing 409 during a swap window, shared with `api/rate.py` and `api/rank.py`: the
-# backend re-pins within seconds (decision 497). `BundleImport.svelte` hard-codes its own copy.
-RESTART_REQUIRED = (
-    "Spielplan is switching to newly imported library data. Try again in a few seconds - if "
-    "this keeps happening, it needs a restart."
-)
-
-# The member's half of a broken install: a restart cannot help, the files must be restored (§10).
-# The operator's half is the log line.
-RESTORE_REQUIRED = (
-    "Spielplan's movie data is missing on this server, so nothing can be saved right now. An admin "
-    "needs to restore it."
-)
-
 # `worker.JOBS`' name, as a literal: importing `spielplan.worker` runs its `logging.basicConfig`.
 # `test_bundle_import_job.py` holds the two equal.
 IMPORT_JOB = "bundle-import"

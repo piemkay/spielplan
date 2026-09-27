@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import unicodedata
 from contextlib import asynccontextmanager
 from typing import Annotated
 
@@ -12,6 +13,9 @@ from fastapi import Depends, HTTPException, Request, Response, WebSocket, WebSoc
 from spielplan.core import auth
 from spielplan.core.config import settings
 from spielplan.db import pool
+from spielplan.ledger import observations
+from spielplan.ledger.hyperparams import Hyperparams
+from spielplan.models import artifacts
 
 log = logging.getLogger("spielplan.api.deps")
 
@@ -19,10 +23,25 @@ log = logging.getLogger("spielplan.api.deps")
 # has no command_timeout). A saturated pool answers 503 rather than hangs.
 _ACQUIRE_TIMEOUT_S = 10
 
+# The member-facing 409 during a swap window: the backend re-pins within seconds (decision 497).
+# `BundleImport.svelte` hard-codes its own copy.
+RESTART_REQUIRED = (
+    "Spielplan is switching to newly imported library data. Try again in a few seconds - if "
+    "this keeps happening, it needs a restart."
+)
 
-async def db() -> asyncpg.Connection:
-    """Bounded at the acquire only: a TimeoutError inside the route body is a query timeout and must
-    reach `app.py`'s handlers. The pool census goes to the log."""
+# The member's half of a broken install: a restart cannot help, the files must be restored (§10).
+# The operator's half is the log line.
+RESTORE_REQUIRED = (
+    "Spielplan's movie data is missing on this server, so nothing can be saved right now. An admin "
+    "needs to restore it."
+)
+
+
+@asynccontextmanager
+async def brief_connection():
+    """One pooled connection for one piece of work, released on exit. Bounded at the acquire only: a
+    TimeoutError inside the body is a query timeout and must reach `app.py`'s handlers."""
     connections = pool.pool()
     try:
         conn = await connections.acquire(timeout=_ACQUIRE_TIMEOUT_S)
@@ -40,7 +59,64 @@ async def db() -> asyncpg.Connection:
         await connections.release(conn)
 
 
+async def db() -> asyncpg.Connection:
+    async with brief_connection() as conn:
+        yield conn
+
+
 DB = Annotated[asyncpg.Connection, Depends(db)]
+
+
+def printable(value: str) -> str:
+    """Control characters are never typeable, and a NUL reaches Postgres as a 500: refuse at the edge."""
+    if any(unicodedata.category(ch) == "Cc" for ch in value):
+        raise ValueError("must not contain control characters")
+    return value
+
+
+def hyperparams(request: Request) -> Hyperparams:
+    """§4.3's constants as `models.basis` pinned them; None there means unusable, and a default would
+    carry another `hp_digest` and refit everyone."""
+    hp = request.app.state.hyperparams
+    if hp is None:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE, "ledger constants unreadable - see backend log"
+        )
+    return hp
+
+
+async def assert_active_basis(request: Request, conn: asyncpg.Connection) -> None:
+    """§10's invariant: 409 before any write rather than a fit in a basis nobody serves (the backend
+    re-pins within seconds, decision 497). Both arms: a broken store carries the active version."""
+    store = request.app.state.artifacts
+    try:
+        store.assert_matches(await artifacts.active_bundle_version(conn))
+    except RuntimeError as exc:
+        log.error("refusing to score or refit: %s", exc)
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={"reason": "bundle_swapped", "message": RESTART_REQUIRED},
+        ) from exc
+    try:
+        store.assert_not_broken()
+    except RuntimeError as exc:
+        log.error("refusing to score or refit: %s", exc)
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={"reason": "bundle_broken", "message": RESTORE_REQUIRED},
+        ) from exc
+
+
+def basis(request: Request) -> str | None:
+    """Which bundle this process fits in; the fit re-checks after the board lock."""
+    return request.app.state.artifacts.version
+
+
+def embeddings(request: Request, conn: asyncpg.Connection) -> observations.EmbeddingSource:
+    """§5.1's coordinates (warm Backbone, then Cold Tower), with the version whose files they came from."""
+    return observations.standard_embeddings(
+        conn, request.app.state.backbone, bundle_version=basis(request)
+    )
 
 
 @asynccontextmanager
@@ -111,85 +187,33 @@ async def active_user(user: CurrentUser) -> auth.SessionUser:
 ActiveUser = Annotated[auth.SessionUser, Depends(active_user)]
 
 
-# The same gates, holding the pool only for the session read: sixty poster requests on `DB` would
-# drain it (decision 483). Dependencies, so the gating sweeps still see them.
-
-
-@asynccontextmanager
-async def brief_connection():
-    """One pooled connection for one piece of work, released on exit, bounded like `db`."""
-    connections = pool.pool()
-    try:
-        conn = await connections.acquire(timeout=_ACQUIRE_TIMEOUT_S)
-    except TimeoutError:
-        log.warning(
-            "no pooled connection within %ss for a brief read: pool size %d, idle %d",
-            _ACQUIRE_TIMEOUT_S,
-            connections.get_size(),
-            connections.get_idle_size(),
-        )
-        raise HTTPException(status.HTTP_503_SERVICE_UNAVAILABLE, "database unavailable") from None
-    try:
-        yield conn
-    finally:
-        await connections.release(conn)
-
-
-async def current_user_brief(request: Request, response: Response) -> auth.SessionUser:
-    """`current_user`, on a connection held for the session read alone - the slide included."""
+async def active_user_brief(request: Request, response: Response) -> auth.SessionUser:
+    """`active_user`, holding the pool only for the session read (the slide included): sixty poster
+    requests on `DB` would drain it (decision 483)."""
     async with brief_connection() as conn:
-        return await current_user(request, response, conn)
-
-
-CurrentUserBrief = Annotated[auth.SessionUser, Depends(current_user_brief)]
-
-
-async def active_user_brief(user: CurrentUserBrief) -> auth.SessionUser:
-    """`active_user`'s predicate, called rather than copied."""
+        user = await current_user(request, response, conn)
     return await active_user(user)
 
 
 ActiveUserBrief = Annotated[auth.SessionUser, Depends(active_user_brief)]
 
 
-# The same gates for a socket, as dependencies so the gating sweeps can see them (decision 225).
-
-
-async def current_user_ws(socket: WebSocket) -> auth.SessionUser:
-    """Closes with 1008 instead of a 401. Takes no `DB`: a yield dependency would hold a pool connection
-    for the socket's whole evening. The acquire is bounded and closes 1011 on timeout; the slide's
-    cookie half cannot ride a handshake."""
+async def active_user_ws(socket: WebSocket) -> auth.SessionUser:
+    """`active_user` for a socket, as a dependency so the gating sweeps can see it (decision 225).
+    WebSocketExceptions, since an HTTPException under a WebSocket scope reaches an HTTP handler: 1008
+    for the door, 1011 for an exhausted pool. Takes no `DB`, which would be held all evening; the
+    slide's cookie half cannot ride a handshake."""
     sid = auth.open_session_cookie(socket.cookies.get(auth.SESSION_COOKIE))
     if not sid:
         # Missing, or signed under a rotated SESSION_SECRET (§2).
         raise WebSocketException(status.WS_1008_POLICY_VIOLATION, "not signed in")
-    connections = pool.pool()
     try:
-        conn = await connections.acquire(timeout=_ACQUIRE_TIMEOUT_S)
-    except TimeoutError:
-        log.warning(
-            "no pooled connection within %ss for a tonight socket: pool size %d, idle %d",
-            _ACQUIRE_TIMEOUT_S,
-            connections.get_size(),
-            connections.get_idle_size(),
-        )
-        raise WebSocketException(
-            status.WS_1011_INTERNAL_ERROR, "database unavailable"
-        ) from None
-    try:
-        user = await auth.load_session(conn, sid)
-    finally:
-        await connections.release(conn)
+        async with brief_connection() as conn:
+            user = await auth.load_session(conn, sid)
+    except HTTPException:
+        raise WebSocketException(status.WS_1011_INTERNAL_ERROR, "database unavailable") from None
     if user is None:
         raise WebSocketException(status.WS_1008_POLICY_VIOLATION, "session expired")
-    return user
-
-
-CurrentUserWS = Annotated[auth.SessionUser, Depends(current_user_ws)]
-
-
-async def active_user_ws(user: CurrentUserWS) -> auth.SessionUser:
-    """A sibling, not a reuse: an HTTPException under a WebSocket scope reaches an HTTP handler."""
     if user.must_change_password:
         raise WebSocketException(
             status.WS_1008_POLICY_VIOLATION,
@@ -228,7 +252,3 @@ async def admin_user(user: ActiveUser) -> auth.SessionUser:
 
 
 AdminUser = Annotated[auth.SessionUser, Depends(admin_user)]
-
-
-def artifacts(request: Request):
-    return request.app.state.artifacts

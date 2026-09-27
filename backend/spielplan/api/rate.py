@@ -11,13 +11,9 @@ import asyncpg
 from fastapi import APIRouter, HTTPException, Query, Request, status
 from pydantic import BaseModel, Field
 
-from spielplan.api.artifacts import RESTART_REQUIRED, RESTORE_REQUIRED
+from spielplan.api import deps
 from spielplan.api.deps import DB, ActiveUser
 from spielplan.connectors import registry
-from spielplan.ledger import hyperparams, observations, refit
-from spielplan.ledger.hyperparams import Hyperparams
-from spielplan.ledger.observations import EmbeddingSource
-from spielplan.models import artifacts
 from spielplan.rate import direct, session
 from spielplan.rate import search as search_rules
 
@@ -63,67 +59,6 @@ class DuelBody(BaseModel):
 class CorrectionBody(BaseModel):
     card_token: str
     side: Literal["left", "both", "right"]
-
-
-def _hyperparams(request: Request) -> Hyperparams:
-    """§4.3's constants, pinned at boot. The fallback serves lifespan-less tests and a bundle-less
-    household; unreadable or unopenable constants are a 503, never defaults (a new `hp_digest`
-    refits everyone)."""
-    cached = getattr(request.app.state, "hyperparams", None)
-    if cached is not None:
-        return cached
-    try:
-        hp, notes = hyperparams.load(getattr(request.app.state, "artifacts", None))
-    except (ValueError, OSError) as exc:
-        log.error("ledger_hyperparams.json is unusable: %s", exc)
-        raise HTTPException(
-            status.HTTP_503_SERVICE_UNAVAILABLE, "ledger constants unreadable - see backend log"
-        ) from exc
-    for note in notes:
-        log.debug("hyperparameters: %s", note)
-    return hp
-
-
-async def _assert_active_basis(request: Request, conn: asyncpg.Connection) -> None:
-    """§10's invariant: 409 before any write rather than a fit in a basis nobody serves (the backend
-    re-pins within seconds, decision 497). Both arms: a broken store carries the active version, so
-    only `assert_not_broken` refuses it."""
-    store = getattr(request.app.state, "artifacts", None)
-    if store is None:
-        return
-    try:
-        store.assert_matches(await artifacts.active_bundle_version(conn))
-    except RuntimeError as exc:
-        log.error("refusing to score or refit: %s", exc)
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            detail={"reason": "bundle_swapped", "message": RESTART_REQUIRED},
-        ) from exc
-    try:
-        store.assert_not_broken()
-    except RuntimeError as exc:
-        log.error("refusing to score or refit: %s", exc)
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            detail={"reason": "bundle_broken", "message": RESTORE_REQUIRED},
-        ) from exc
-
-
-def _basis(request: Request) -> Any:
-    """Which bundle this process fits in; the fit re-checks after the board lock, since a tap can wait
-    out an import. BASIS_UNSTATED when there is no store at all."""
-    store = getattr(request.app.state, "artifacts", None)
-    return refit.BASIS_UNSTATED if store is None else store.version
-
-
-def _embeddings(request: Request, conn: asyncpg.Connection) -> EmbeddingSource:
-    """§5.1's coordinates (warm Backbone, then Cold Tower), with the version whose files they came from."""
-    store = getattr(request.app.state, "artifacts", None)
-    return observations.standard_embeddings(
-        conn,
-        getattr(request.app.state, "backbone", None),
-        bundle_version=None if store is None else store.version,
-    )
 
 
 async def _jellyfin(conn: asyncpg.Connection) -> session.Jellyfin:
@@ -206,7 +141,7 @@ async def verdict(
     body: VerdictBody, conn: DB, user: ActiveUser, request: Request
 ) -> dict[str, Any]:
     """§6.1's verdict (implies `seen`). The reveal rides on this response only: the anchoring rule."""
-    await _assert_active_basis(request, conn)
+    await deps.assert_active_basis(request, conn)
     s = await _resume(conn, user.id)
     try:
         outcome = await session.record_verdict(
@@ -214,9 +149,9 @@ async def verdict(
             s,
             card_token=body.card_token,
             value=body.value,
-            hp=_hyperparams(request),
-            embeddings=_embeddings(request, conn),
-            bundle_version=_basis(request),
+            hp=deps.hyperparams(request),
+            embeddings=deps.embeddings(request, conn),
+            bundle_version=deps.basis(request),
             jf=await _jellyfin(conn),
             latency_ms=body.latency_ms,
             head=body.head,
@@ -266,7 +201,7 @@ async def skip(body: CardBody, conn: DB, user: ActiveUser) -> dict[str, Any]:
 @router.post("/duel")
 async def duel(body: DuelBody, conn: DB, user: ActiveUser, request: Request) -> dict[str, Any]:
     """§6.1's battle answer, `Tie` included — one duel row, never a dropped one."""
-    await _assert_active_basis(request, conn)
+    await deps.assert_active_basis(request, conn)
     s = await _resume(conn, user.id)
     try:
         outcome = await session.record_duel(
@@ -275,9 +210,9 @@ async def duel(body: DuelBody, conn: DB, user: ActiveUser, request: Request) -> 
             card_token=body.card_token,
             outcome=body.outcome,
             decisive=body.decisive,
-            hp=_hyperparams(request),
-            embeddings=_embeddings(request, conn),
-            bundle_version=_basis(request),
+            hp=deps.hyperparams(request),
+            embeddings=deps.embeddings(request, conn),
+            bundle_version=deps.basis(request),
             latency_ms=body.latency_ms,
             head=body.head,
         )
@@ -307,15 +242,15 @@ async def correction(body: CorrectionBody, conn: DB, user: ActiveUser) -> dict[s
 @router.post("/undo")
 async def undo(conn: DB, user: ActiveUser, request: Request) -> dict[str, Any]:
     """Decision 35: refused at the block boundary with a reason, never a silent no-op."""
-    await _assert_active_basis(request, conn)
+    await deps.assert_active_basis(request, conn)
     s = await _resume(conn, user.id)
     try:
         outcome = await session.undo(
             conn,
             s,
-            hp=_hyperparams(request),
-            embeddings=_embeddings(request, conn),
-            bundle_version=_basis(request),
+            hp=deps.hyperparams(request),
+            embeddings=deps.embeddings(request, conn),
+            bundle_version=deps.basis(request),
             jf=await _jellyfin(conn),
         )
     except session.UndoUnavailable as exc:
@@ -354,16 +289,16 @@ async def answer_from_title_card(
     """Decision 487: the title card's four answers, put on the person's table as a sweep card under a
     fresh token, so §6.1's card, counter, Undo and reveal all apply."""
     # First, for all four answers, so the route's first statement never depends on its body.
-    await _assert_active_basis(request, conn)
+    await deps.assert_active_basis(request, conn)
     try:
         outcome = await direct.answer(
             conn,
             user_id=user.id,
             title_id=title_id,
             choice=body.answer,
-            hp=_hyperparams(request),
-            embeddings=_embeddings(request, conn),
-            bundle_version=_basis(request),
+            hp=deps.hyperparams(request),
+            embeddings=deps.embeddings(request, conn),
+            bundle_version=deps.basis(request),
             jf=await _jellyfin(conn),
             later=session.settle_in_background,
         )

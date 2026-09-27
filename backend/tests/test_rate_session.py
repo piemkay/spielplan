@@ -528,11 +528,12 @@ async def test_the_reveal_fires_on_an_unowned_queue_title_with_no_ledger_state_r
     reveals = {}
     for title_id in (98, 99):
         s = await session.open_or_resume(db, user_id=user, kinds=["movie"])
-        s = await session.stash_card(
+        s = await session.stash(
             db,
             s,
             {"type": "sweep", "kind": "movie", "title_id": title_id, "reason": "queued because",
              "p_seen": 0.4, "source": "p_seen", "reask_of": None},
+            expected=s.card_token,
         )
         out = await session.record_verdict(
             db, s, card_token=token(s), value=2, hp=HP, embeddings=src
@@ -566,11 +567,12 @@ async def test_the_reveal_is_dark_only_until_the_first_fit_and_not_for_the_whole
 
     async def tap(title_id: int, value: int) -> dict[str, Any]:
         s = await session.open_or_resume(db, user_id=user, kinds=["movie"])
-        s = await session.stash_card(
+        s = await session.stash(
             db,
             s,
             {"type": "sweep", "kind": "movie", "title_id": title_id, "reason": "queued because",
              "p_seen": 0.4, "source": "p_seen", "reask_of": None},
+            expected=s.card_token,
         )
         out = await session.record_verdict(db, s, card_token=token(s), value=value, hp=HP)
         return out.reveal
@@ -1085,11 +1087,12 @@ async def test_undo_of_a_re_rating_makes_the_previous_verdict_live_again(db, rat
         "SELECT id FROM verdict WHERE user_id = $1 AND title_id = 1", user
     )
     s = await session.open_or_resume(db, user_id=user, kinds=["movie"])
-    s = await session.stash_card(
+    s = await session.stash(
         db,
         s,
         {"type": "sweep", "kind": "movie", "title_id": 1, "reason": "re-rating", "p_seen": None,
          "source": "p_seen", "reask_of": None},
+        expected=s.card_token,
     )
     s = (await session.record_verdict(db, s, card_token=token(s), value=0, hp=HP)).session
     assert await db.fetchval("SELECT superseded_by FROM verdict WHERE id = $1", original)
@@ -1109,11 +1112,12 @@ async def test_a_re_ask_is_written_distinguishably_and_shown_indistinguishably(d
         "SELECT id FROM verdict WHERE user_id = $1 AND title_id = 1", user
     )
     s = await session.open_or_resume(db, user_id=user, kinds=["movie"])
-    s = await session.stash_card(
+    s = await session.stash(
         db,
         s,
         {"type": "sweep", "kind": "movie", "title_id": 1, "p_seen": 1.0, "source": "reask",
          "reason": "queued because: you have this marked seen", "reask_of": original},
+        expected=s.card_token,
     )
     before = (await session.payload(db, s))["class_balance"]["counts"]
     card = await session.public_card(db, s)

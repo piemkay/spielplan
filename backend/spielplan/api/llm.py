@@ -5,7 +5,6 @@ the preview showed still matches, else 409 with a fresh preview. No body is quot
 from __future__ import annotations
 
 import math
-import unicodedata
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from typing import TYPE_CHECKING, Annotated, Any, Literal
@@ -27,7 +26,7 @@ from pydantic import (
 )
 
 from spielplan.acquire import intake, pipeline, queue, stages
-from spielplan.api.deps import DB, AdminUser, write_txn
+from spielplan.api.deps import DB, AdminUser, printable, write_txn
 from spielplan.connectors import registry
 from spielplan.llm import anthropic, client, gemini, openai, pricing, spend
 from spielplan.llm.pricing import ModelPrice
@@ -70,13 +69,6 @@ _CREDENTIALS = {
 _SOURCES = ("tmdb", "omdb", "trakt")
 
 
-def _no_control_characters(value: str) -> str:
-    """A control character arrives only from a paste or a crafted body; refuse it at the edge (422)."""
-    if any(unicodedata.category(ch) == "Cc" for ch in value):
-        raise ValueError("must not contain control characters")
-    return value
-
-
 def _each_once(names: list[str]) -> list[str]:
     if len(set(names)) != len(names):
         raise ValueError("names a provider more than once")
@@ -102,7 +94,7 @@ ProviderName = Literal[client.PROVIDERS]
 Money = Annotated[StrictInt | StrictFloat, Field(ge=0), AfterValidator(_finite)]
 ModelName = Annotated[
     str, Strict(), StringConstraints(strip_whitespace=True, min_length=1, max_length=128),
-    AfterValidator(_no_control_characters),
+    AfterValidator(printable),
 ]
 # Trimmed first: whitespace is no part of a key, and a key of spaces must mean keep.
 Credential = Annotated[

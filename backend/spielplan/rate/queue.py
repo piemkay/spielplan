@@ -1,17 +1,15 @@
 """The §6.1 sweep queue: which title to ask about next, and the one line saying why.
 
 Order: pinned, recorded-seen, seed list (decision 490), then P(seen), a stated-prior logistic
-that only orders the queue. The SQL and `p_seen` spell one formula; keep them in step.
+that only orders the queue. `_CANDIDATES` is its one spelling; Python reads only the terms back.
 """
 
 from __future__ import annotations
 
 import logging
-import math
 import random
 from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any
 
 import asyncpg
 
@@ -51,8 +49,6 @@ CROWD_SATURATION = 100_000.0
 # A recorded state is not an estimate.
 P_SEEN_RECORDED = 1.0
 
-SOURCES: tuple[str, ...] = ("pinned", "seed", "p_seen", "pending_verdict", "reask")
-
 FEATURE_NAMES: tuple[str, ...] = ("playback", "co_seen", "crowd", "owned", "age", "unfamiliar")
 
 # log1p(1000)/log1p(CROWD_SATURATION) = 0.60: below it member copy never says "well-known".
@@ -72,7 +68,7 @@ class Features:
     crowd: float = 0.0        # log1p(item_n) / log1p(CROWD_SATURATION), clipped
     owned: bool = False
     age: float = 0.0          # (this year - release year) / 40, clipped
-    unfamiliar: float = 0.0   # -2..0: `unfamiliarity` of this person's answers in its language
+    unfamiliar: float = 0.0   # -2..0: how firmly this person's answers say they miss its language
 
     def vector(self) -> dict[str, float]:
         return {
@@ -85,36 +81,10 @@ class Features:
         }
 
 
-def unfamiliarity(
-    seen: float,
-    answered: float,
-    kind_seen: float,
-    kind_answered: float,
-    pseudo: float = FAMILIAR_PSEUDO,
-) -> float:
-    """How firmly this person's own answers say they do not know titles of one language and kind.
-
-    The group's seen share, shrunk by 2 x `pseudo` answers towards the person's own seen rate for
-    the kind, read only below that rate and doubled: 0 at or above it, -2 x rate at the limit.
-    Never positive, so the why-line never names it (decision 521).
-    """
-    rate = kind_seen / kind_answered if kind_answered > 0 else 0.5
-    share = (seen + 2.0 * pseudo * rate) / (answered + 2.0 * pseudo)
-    return min(0.0, share - rate) * 2.0
-
-
 def contributions(features: Features, weights: SeenWeights = WEIGHTS) -> dict[str, float]:
     """Each term's signed log-odds contribution; the intercept is the same for every title."""
     v = features.vector()
     return {name: getattr(weights, name) * v[name] for name in FEATURE_NAMES}
-
-
-def p_seen(features: Features, weights: SeenWeights = WEIGHTS) -> float:
-    """P(this person has seen this title); a recorded `seen` is 1.0, not a large weight."""
-    if features.seen:
-        return P_SEEN_RECORDED
-    z = weights.intercept + sum(contributions(features, weights).values())
-    return 1.0 / (1.0 + math.exp(-z))
 
 
 def dominant(features: Features, weights: SeenWeights = WEIGHTS) -> str | None:
@@ -189,13 +159,6 @@ class QueueCard:
     p_seen: float | None
     source: str            # seed | p_seen | pending_verdict | reask
     reask_of: int | None   # verdict.id being silently re-asked; None otherwise
-
-    def public(self) -> dict[str, Any]:
-        """The allow-list projection that may reach the client.
-
-        No `source` and no `reask_of`: either would mark a §13 re-ask on the wire.
-        """
-        return {"title_id": self.title_id, "reason": self.reason, "p_seen": self.p_seen}
 
 
 # --- the candidate query ----------------------------------------------------------------------
@@ -450,7 +413,6 @@ def _interleave(
 __all__ = [
     "AGE_SATURATION_YEARS",
     "CROWD_SATURATION",
-    "SOURCES",
     "WEIGHTS",
     "Features",
     "QueueCard",
@@ -458,7 +420,5 @@ __all__ = [
     "contributions",
     "dominant",
     "next_sweep_cards",
-    "p_seen",
     "reason_for",
-    "unfamiliarity",
 ]

@@ -213,7 +213,7 @@ def test_the_api_layer_holds_no_more_raw_sql_than_it_did():
 # FastAPI 0.141 stops flattening `include_router`; `original_router.routes` carries the WebSocket.
 
 _GATES = ("active_user", "admin_user", "active_user_ws", "active_user_brief")
-_SESSION_ONLY = ("current_user", "current_user_ws", "current_user_brief")
+_SESSION_ONLY = ("current_user",)
 
 _METHODS = ("GET", "POST", "PUT", "DELETE", "PATCH")
 

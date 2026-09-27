@@ -8,8 +8,6 @@ from __future__ import annotations
 from spielplan.ledger import observations
 
 LIVE_LABEL = observations.LIVE_LABEL_SQL
-
-# §4.2's stored ordinal, worst -> best.
-VERDICT_LABELS: tuple[str, str, str] = ("disliked", "fine", "liked")
+VERDICT_LABELS = observations.VERDICT_LABELS
 
 __all__ = ["LIVE_LABEL", "VERDICT_LABELS"]

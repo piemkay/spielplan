@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-import json
+import itertools
 import math
 import random
 from datetime import UTC, datetime, timedelta
@@ -70,13 +70,18 @@ def _age(title_id: int) -> float:
     return min(1.0, max(0.0, (datetime.now(UTC).year - YEARS[title_id]) / queue.AGE_SATURATION_YEARS))
 
 
+def p_seen(features: queue.Features) -> float:
+    """The logistic `_CANDIDATES` computes, from the terms the why-line reads: SQL orders, this checks."""
+    z = queue.WEIGHTS.intercept + sum(queue.contributions(features).values())
+    return 1.0 / (1.0 + math.exp(-z))
+
+
 def expected_p(
     title_id: int, *, owned: bool = True, co_seen: float = 0.0, playback: bool = False
 ) -> float:
-    """A third, independent spelling of P(seen): SQL orders, Python explains, this checks both."""
     crowd = min(1.0, math.log1p(ITEM_N[title_id]) / math.log1p(queue.CROWD_SATURATION))
     age = min(1.0, max(0.0, (datetime.now(UTC).year - YEARS[title_id]) / queue.AGE_SATURATION_YEARS))
-    return queue.p_seen(
+    return p_seen(
         queue.Features(playback=playback, co_seen=co_seen, crowd=crowd, owned=owned, age=age)
     )
 
@@ -223,9 +228,9 @@ async def test_a_cold_masked_titles_crowd_count_still_reaches_the_popularity_ter
     )
     # 2.0 logits is the whole weight: the difference between offering the card and burying it.
     crowd = math.log1p(ITEM_N[7]) / math.log1p(queue.CROWD_SATURATION)
-    blind = queue.p_seen(queue.Features(crowd=0.0, owned=True, age=_age(7)))
+    blind = p_seen(queue.Features(crowd=0.0, owned=True, age=_age(7)))
     assert card.p_seen == pytest.approx(
-        queue.p_seen(queue.Features(crowd=crowd, owned=True, age=_age(7))), abs=1e-9
+        p_seen(queue.Features(crowd=crowd, owned=True, age=_age(7))), abs=1e-9
     )
     assert card.p_seen - blind > 0.2, (
         f"the popularity term contributed {card.p_seen - blind:.4f} for a title with "
@@ -272,47 +277,10 @@ async def test_p_seen_moves_the_queue_when_a_signal_moves(db, world):
     assert with_playback[0].p_seen == pytest.approx(expected_p(3, playback=True), abs=1e-9)
 
 
-def test_unfamiliarity_only_lowers_and_needs_the_answers_to_keep_saying_so():
-    """Shrunk towards the person's own seen rate by two pseudo-answers each way, read only below it
-    (decision 521)."""
-    half = (20_000, 40_000)                       # the kind's answers: half of them seen
-    assert queue.unfamiliarity(0, 0, *half) == 0.0, "no answers, no opinion"
-    assert queue.unfamiliarity(0, 1, *half) == pytest.approx(-0.2)
-    assert queue.unfamiliarity(0, 3, *half) == pytest.approx(2 * (2 / 7 - 0.5))
-    assert (
-        queue.unfamiliarity(0, 30, *half)
-        < queue.unfamiliarity(0, 3, *half)
-        < queue.unfamiliarity(0, 1, *half)
-    )
-    assert queue.unfamiliarity(0, 10_000, *half) > -1.0
-    for seen, answered in ((1, 2), (5, 5), (16, 21), (40, 41)):
-        assert queue.unfamiliarity(seen, answered, *half) == 0.0, "a known language is never raised"
-    # The weight is positive and the feature is not, so it can only lower P(seen).
-    assert queue.WEIGHTS.unfamiliar > 0
-    base = queue.Features(owned=True, crowd=0.5)
-    assert queue.p_seen(base) > queue.p_seen(
-        queue.Features(owned=True, crowd=0.5, unfamiliar=queue.unfamiliarity(0, 3, *half))
-    )
-    assert queue.dominant(queue.Features(unfamiliar=-0.5)) is None, "it is never the named cause"
-
-
-def test_unfamiliarity_is_read_against_the_persons_own_seen_rate():
-    """Read against a fixed half, it lowered every English film for a low-rate member (finding F3)."""
-    assert queue.unfamiliarity(10, 40, 10, 40) == 0.0, "one language at their own rate"
-    assert queue.unfamiliarity(0, 0, 10, 40) == 0.0, "an unasked language"
-    assert queue.unfamiliarity(0, 12, 0, 12) == 0.0, "all 'not seen' is the person, not a language"
-    # Two languages: 16 of 21 English series seen and 0 of 3 Japanese.
-    kind = (16, 24)
-    assert queue.unfamiliarity(16, 21, *kind) == 0.0, "the language they know is not lowered"
-    japanese = queue.unfamiliarity(0, 3, *kind)
-    assert japanese == pytest.approx(2 * (4 * 16 / 24 / 7 - 16 / 24))
-    # The same three misses say less about a person who rarely knows what they are asked.
-    assert japanese < queue.unfamiliarity(0, 3, 4, 24) < 0.0
-
-
 async def test_a_persons_not_seen_answers_lower_that_languages_titles_and_nothing_else(db, world):
-    """A member whose every answer is "not seen" lowers nothing: that is their rate, not a language's.
-    The why-line is unchanged: the term corrects ordering and is not a cause."""
+    """Decision 521: shrunk towards the person's own seen rate by two pseudo-answers each way, and
+    read only below it. A member whose every answer is "not seen" lowers nothing: that is their
+    rate, not a language's. The why-line is unchanged: the term corrects ordering and is not a cause."""
     patrick, mia = world["patrick"], world["mia"]
     await db.execute(
         "INSERT INTO title (id, kind, name, year, is_owned, original_language) VALUES "
@@ -332,18 +300,20 @@ async def test_a_persons_not_seen_answers_lower_that_languages_titles_and_nothin
     before = await queue_for(patrick)
     assert before[54].p_seen == pytest.approx(before[55].p_seen), "the fixture is otherwise even"
 
-    for title_id in (51, 52, 53):
+    await observations.record_not_seen(db, user_id=patrick, title_id=51)
+    one = await queue_for(patrick)
+    for title_id in (52, 53):
         await observations.record_not_seen(db, user_id=patrick, title_id=title_id)
     after = await queue_for(patrick)
+    assert after[54].p_seen < one[54].p_seen < before[54].p_seen, "each miss says it more firmly"
     assert set(after) == {54, 55, 56}, "an answered 'not seen' is never asked again"
     assert list(after)[-1] == 54, "the fourth Japanese series now waits behind the English two"
     age = min(1.0, (datetime.now(UTC).year - 2010) / queue.AGE_SATURATION_YEARS)
+    # 0 of 3 Japanese against a kind rate of 2/5, shrunk by 2 x 2 pseudo-answers, doubled.
+    unfamiliar = 2 * ((2 * 2 * 2 / 5) / (3 + 2 * 2) - 2 / 5)
     assert after[54].p_seen == pytest.approx(
-        queue.p_seen(
-            queue.Features(owned=True, age=age, unfamiliar=queue.unfamiliarity(0, 3, 2, 5))
-        ),
-        abs=1e-9,
-    ), "SQL orders and Python explains: the two spellings of the term agree"
+        p_seen(queue.Features(owned=True, age=age, unfamiliar=unfamiliar)), abs=1e-9
+    )
     assert after[55].p_seen == pytest.approx(before[55].p_seen), "nothing else moves"
     assert after[54].reason == before[54].reason == "It's in your library."
 
@@ -429,10 +399,10 @@ async def test_the_age_why_line_prints_the_titles_real_age_and_not_the_saturatio
     )
 
     # The ordering feature is still clipped at 1.0; only the copy changed.
-    clipped = queue.p_seen(queue.Features(owned=False, age=1.0))
+    clipped = p_seen(queue.Features(owned=False, age=1.0))
     assert cards[41].p_seen == pytest.approx(clipped)
     assert cards[42].p_seen == pytest.approx(
-        queue.p_seen(queue.Features(owned=False, age=(this_year - 2021) / queue.AGE_SATURATION_YEARS))
+        p_seen(queue.Features(owned=False, age=(this_year - 2021) / queue.AGE_SATURATION_YEARS))
     )
     assert cards[41].p_seen > cards[42].p_seen, "and the older film still sorts first"
 
@@ -503,21 +473,21 @@ POOL = [
     battle.PoolMember(9, "series", 2),
     battle.PoolMember(10, "movie", 0),
 ]
+# Every pair `draw` may produce from POOL: in-band only, sorted.
+PAIRS = [(1, 2), (1, 3), (1, 4), (2, 3), (2, 4), (3, 4), (5, 6), (5, 7), (6, 7), (8, 9)]
 
 
 def test_the_battle_sampler_is_uniform_over_every_eligible_in_class_pair():
     """§0 row 6: no rule beats random. 27.88 is chi-square's 0.999 quantile at 9 df; the seed is
     fixed. Uniform-over-strata and member-count weighting both fail."""
-    pairs = battle.eligible_pairs(POOL)
-    assert len(pairs) == 10
-    counts = dict.fromkeys(pairs, 0)
+    counts = dict.fromkeys(PAIRS, 0)
     rng = random.Random(20260830)
     draws = 20_000
     for _ in range(draws):
         a, b, _kind, _cls = battle.draw(POOL, rng=rng)
         counts[(min(a, b), max(a, b))] += 1
 
-    expected = draws / len(pairs)
+    expected = draws / len(PAIRS)
     chi2 = sum((n - expected) ** 2 / expected for n in counts.values())
     assert chi2 < 27.88, f"pair frequencies are not uniform: chi2={chi2:.1f} over {counts}"
     spread = max(counts.values()) / min(counts.values())
@@ -570,14 +540,13 @@ def test_the_battle_why_line_names_the_shared_answer_and_no_section():
 def test_a_pair_already_answered_is_not_drawn_again():
     """A repeat is an independent Davidson row; only §13's re-ask stream brings a pair back."""
     rng = random.Random(5)
-    answered = {frozenset(p) for p in battle.eligible_pairs(POOL)[:9]}
-    left = set(battle.eligible_pairs(POOL)) - {tuple(sorted(p)) for p in answered}
-    assert len(left) == 1
+    answered = {frozenset(p) for p in PAIRS[:9]}
+    left = {PAIRS[9]}
     for _ in range(300):
         a, b, _kind, _cls = battle.draw(POOL, rng=rng, answered=answered)
         assert (min(a, b), max(a, b)) in left
 
-    everything = {frozenset(p) for p in battle.eligible_pairs(POOL)}
+    everything = {frozenset(p) for p in PAIRS}
     assert battle.draw(POOL, rng=rng, answered=everything) is None, (
         "a pool whose every pair has been compared has no battle left"
     )
@@ -587,7 +556,7 @@ def test_the_sampler_is_uniform_over_the_pairs_not_yet_answered():
     """The answered set is all of movie/2, which a sampler weighting by FULL pair count keeps
     picking. 16.27 is the 0.999 quantile at 3 df; the seed is fixed."""
     answered = {frozenset((a, b)) for a in (1, 2, 3, 4) for b in (1, 2, 3, 4) if a < b}
-    remaining = [p for p in battle.eligible_pairs(POOL) if frozenset(p) not in answered]
+    remaining = [p for p in PAIRS if frozenset(p) not in answered]
     assert len(remaining) == 4
     counts = dict.fromkeys(remaining, 0)
     rng = random.Random(20260925)
@@ -599,10 +568,9 @@ def test_the_sampler_is_uniform_over_the_pairs_not_yet_answered():
 
 
 def test_the_enumerated_remainder_is_still_randomised_left_and_right():
-    """A nearly exhausted band falls past `draw`'s rejection budget to the enumerated remainder."""
+    """A nearly exhausted band still puts either title on the left."""
     pool = [battle.PoolMember(i, "movie", 2) for i in range(1, 21)]
-    pairs = battle.eligible_pairs(pool)
-    answered = {frozenset(p) for p in pairs if p != (7, 13)}
+    answered = {frozenset(p) for p in itertools.combinations(range(1, 21), 2) if p != (7, 13)}
     rng = random.Random(11)
     firsts = []
     for _ in range(400):
@@ -769,9 +737,9 @@ async def test_the_widget_counts_one_current_label_per_title(db, world):
     assert result.warn is False
 
 
-async def test_the_served_payload_carries_no_marker_distinguishing_a_re_ask(db, world):
-    """Over the serialised payload: a 'reask' `source` or a different why-line would give it away.
-    The two payloads must be identical apart from the title id."""
+async def test_a_re_ask_card_says_what_a_pending_card_says(db, world):
+    """A different why-line or probability would give the stream away; the wire's allow-list is
+    `session.public_card`'s."""
     patrick = world["patrick"]
     await observations.record_verdict(db, user_id=patrick, title_id=1, value=2)
     await backdate_verdicts(db, patrick, days=10)
@@ -788,15 +756,9 @@ async def test_the_served_payload_carries_no_marker_distinguishing_a_re_ask(db, 
     assert by_source["reask"].reask_of is not None
     assert by_source["pending_verdict"].title_id == 5
 
-    wire = json.dumps([c.public() for c in cards])
-    for marker in ("reask", "is_reask", "reask_of", "source", "pending_verdict"):
-        assert marker not in wire, f"the payload leaks {marker!r}: {wire}"
-
-    again = by_source["reask"].public()
-    pending = by_source["pending_verdict"].public()
-    assert again["reason"] == pending["reason"] == queue.SEEN_REASON
-    assert again["p_seen"] == pending["p_seen"] == 1.0
-    assert set(again) == set(pending) == {"title_id", "reason", "p_seen"}
+    again, pending = by_source["reask"], by_source["pending_verdict"]
+    assert again.reason == pending.reason == queue.SEEN_REASON
+    assert again.p_seen == pending.p_seen == 1.0
 
 
 async def test_a_verdict_younger_than_three_days_is_never_re_asked(db, world):
@@ -925,11 +887,10 @@ async def test_a_duel_re_ask_preserves_the_order_it_was_asked_in(db, world):
     )
     assert (pair.title_a, pair.title_b) == (2, 1)
     assert pair.reask_of == first.row_id
-    assert "reask" not in json.dumps(pair.public())
     ordinary = await battle.next_battle_pair(
         db, user_id=patrick, kinds=["movie"], rng=random.Random(0), reask_rate=0.0
     )
-    assert pair.public()["reason"] == ordinary.public()["reason"]
+    assert pair.reason == ordinary.reason
 
     await observations.record_duel(
         db,

@@ -50,8 +50,9 @@ class _Armed(random.Random):
 
 
 def _arm(monkeypatch, roll: float) -> None:
-    """`api/rank.py._rng` is None in production; `_queue_rng` is the seam the derivation also uses."""
-    monkeypatch.setattr(rank_api, "_rng", _Armed(roll))
+    """One armed generator for every draw, in place of the per-position derivation."""
+    armed = _Armed(roll)
+    monkeypatch.setattr(rank_api, "_queue_rng", lambda *_: armed)
 
 
 def _second(client: httpx.AsyncClient) -> httpx.AsyncClient:
@@ -602,21 +603,7 @@ async def test_a_board_whose_first_fit_is_owed_says_so_instead_of_reading_zero_r
 async def test_a_constant_the_fit_cannot_use_is_a_503_on_the_board_route(db, ranked, monkeypatch):
     """Not defaulted: the defaults carry a different `hp_digest` and would invalidate every cached fit."""
     client, _user_id = ranked
-    monkeypatch.setattr(client._transport.app.state, "hyperparams", None, raising=False)
-
-    def unusable(*_args, **_kwargs):
-        raise ValueError("straddle_z must be a positive number, got 0.0")
-
-    monkeypatch.setattr(rank_api.hyperparams, "load", unusable)
-    refused = await client.get("/api/rank?kind=movie")
-    assert refused.status_code == 503, refused.text
-    assert "ledger constants" in refused.json()["detail"]
-
-    # The real reader on a non-object file: `from_mapping` raised `AttributeError`, not `ValueError`.
-    def shapeless(*_args, **_kwargs):
-        return rank_api.hyperparams.from_mapping([])
-
-    monkeypatch.setattr(rank_api.hyperparams, "load", shapeless)
+    monkeypatch.setattr(client._transport.app.state, "hyperparams", None)
     refused = await client.get("/api/rank?kind=movie")
     assert refused.status_code == 503, refused.text
     assert "ledger constants" in refused.json()["detail"]
@@ -689,7 +676,7 @@ async def test_the_queue_ships_no_arm_to_a_member_who_cannot_see_the_model(
 
 async def test_thirty_draws_return_one_pair_until_it_is_answered(db, ranked):
     """The draw derives from `(user, kind, answered)` under `SESSION_SECRET`, so reloading cannot
-    select the arm. The `_rng` seam is left alone: the derivation is the subject."""
+    select the arm. `_queue_rng` is left alone: the derivation is the subject."""
     client, _user_id = ranked
     first = (await client.get("/api/rank/queue?kind=movie")).json()["pair"]
     assert first is not None

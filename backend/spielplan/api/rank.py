@@ -16,14 +16,13 @@ from fastapi import APIRouter, HTTPException, Query, Request, status
 from itsdangerous import BadSignature, URLSafeSerializer
 from pydantic import BaseModel, Field
 
-from spielplan.api.artifacts import RESTART_REQUIRED, RESTORE_REQUIRED
+from spielplan.api import deps
 from spielplan.api.deps import DB, ActiveUser, write_txn
 from spielplan.core.config import settings
 from spielplan.db import genres, library
 from spielplan.home import rail
-from spielplan.ledger import hyperparams, observations, refit
+from spielplan.ledger import observations, refit
 from spielplan.ledger.hyperparams import Hyperparams
-from spielplan.models import artifacts
 from spielplan.rank import board as board_rules
 from spielplan.rank import drop as drop_rules
 from spielplan.rank import evaluation, queue, read, tiers
@@ -50,9 +49,6 @@ _QUEUE_SETTLED = (
     "Nothing left to compare right now — you've answered every pair worth asking. "
     "Rate a few more titles and new ones turn up."
 )
-
-# Test seam only: production derives each draw from the queue position (`_queue_rng`).
-_rng: random.Random | None = None
 
 
 def _sealer() -> URLSafeSerializer:
@@ -89,87 +85,12 @@ def _unseal(token: str, *, user_id: int) -> dict[str, Any]:
 def _queue_rng(user_id: int, kind: str, answered: int) -> random.Random:
     """Keyed on (user, kind, answered), so reloading cannot re-roll the arm and steer §13's held-out
     rate. HMAC under SESSION_SECRET, so arms cannot be predicted."""
-    if _rng is not None:
-        return _rng
     digest = hmac.new(
         settings().session_secret.encode(),
         f"{user_id}:{kind}:{answered}".encode(),
         hashlib.sha256,
     ).digest()
     return random.Random(int.from_bytes(digest[:8], "big"))
-
-
-def _draw(
-    pool: list[queue.Candidate],
-    *,
-    user_id: int,
-    kind: str,
-    answered: int,
-    asked: set[frozenset[int]],
-    recent: set[int],
-) -> queue.Pair | None:
-    """Production and the test seam share this path, so the seam tests the real draw."""
-    return queue.draw(
-        pool, rng=_queue_rng(user_id, kind, answered), asked=asked, recent=recent
-    )
-
-
-def _hyperparams(request: Request) -> Hyperparams:
-    """§4.3's constants, pinned at boot. The fallback serves lifespan-less tests and a bundle-less
-    household; unreadable constants are a 503, never defaults (a new `hp_digest` refits everyone)."""
-    cached = getattr(request.app.state, "hyperparams", None)
-    if cached is not None:
-        return cached
-    try:
-        hp, notes = hyperparams.load(getattr(request.app.state, "artifacts", None))
-    except (ValueError, OSError) as exc:
-        log.error("ledger_hyperparams.json is unusable: %s", exc)
-        raise HTTPException(
-            status.HTTP_503_SERVICE_UNAVAILABLE, "ledger constants unreadable - see backend log"
-        ) from exc
-    for note in notes:
-        log.debug("hyperparameters: %s", note)
-    return hp
-
-
-async def _assert_active_basis(request: Request, conn: asyncpg.Connection) -> None:
-    """§10's invariant, checked before any durable write as `api/rate.py::_assert_active_basis` does;
-    both arms, since a broken store matches the active version."""
-    store = getattr(request.app.state, "artifacts", None)
-    if store is None:
-        return
-    try:
-        store.assert_matches(await artifacts.active_bundle_version(conn))
-    except RuntimeError as exc:
-        log.error("refusing to score or refit: %s", exc)
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            detail={"reason": "bundle_swapped", "message": RESTART_REQUIRED},
-        ) from exc
-    try:
-        store.assert_not_broken()
-    except RuntimeError as exc:
-        log.error("refusing to score or refit: %s", exc)
-        raise HTTPException(
-            status.HTTP_409_CONFLICT,
-            detail={"reason": "bundle_broken", "message": RESTORE_REQUIRED},
-        ) from exc
-
-
-def _basis(request: Request):
-    """Which bundle this process fits in; `refit.update_incrementally` re-checks after the board lock."""
-    store = getattr(request.app.state, "artifacts", None)
-    return refit.BASIS_UNSTATED if store is None else store.version
-
-
-def _embeddings(request: Request, conn: asyncpg.Connection):
-    """§5.1's coordinates with the version that describes them, so the `ledger_fit` stamp names it."""
-    store = getattr(request.app.state, "artifacts", None)
-    return observations.standard_embeddings(
-        conn,
-        getattr(request.app.state, "backbone", None),
-        bundle_version=None if store is None else store.version,
-    )
 
 
 def _filters(
@@ -303,7 +224,7 @@ async def board(
         conn,
         user=user,
         kind=kind,
-        hp=_hyperparams(request),
+        hp=deps.hyperparams(request),
         filters=_filters(q, genre, decade, runtime_max, runtime_min, seen, dna),
     )
 
@@ -321,8 +242,8 @@ async def drop(
     dna: str | None = None,
 ) -> dict[str, Any]:
     """Takes and answers with the board's filters, or a drop would silently clear them."""
-    await _assert_active_basis(request, conn)
-    hp = _hyperparams(request)
+    await deps.assert_active_basis(request, conn)
+    hp = deps.hyperparams(request)
     # Built before the write: whether a filter was on is an input to the drop (decision 204).
     filters = _filters(q, genre, decade, runtime_max, runtime_min, seen, dna)
     names = await read.names_for(conn, [body.title_id])
@@ -347,7 +268,7 @@ async def drop(
     touched = {body.title_id} | {t for t in (body.above, body.below) if t is not None}
     ledger = await refit.update_incrementally_reporting(
         conn, user_id=user.id, kind=result.kind, title_ids=sorted(touched), hp=hp,
-        embeddings=_embeddings(request, conn), bundle_version=_basis(request),
+        embeddings=deps.embeddings(request, conn), bundle_version=deps.basis(request),
     )
     return await _payload(
         conn, user=user, kind=result.kind, hp=hp, filters=filters,
@@ -361,16 +282,14 @@ async def next_pair(
 ) -> dict[str, Any]:
     """§6.3's 70/20/10 queue. The arm travels sealed and gated, so no client can steer or learn §13's
     held-out stream."""
-    hp = _hyperparams(request)
+    hp = deps.hyperparams(request)
     show_model = rail.visible_to(user)
     pool = await read.candidates(conn, user_id=user.id, kind=kind, hp=hp)
     # One read for the draw and the seal, so a token's pair and its count cannot disagree.
     answered = await read.answered_comparisons(conn, user_id=user.id, kind=kind)
-    pair = _draw(
+    pair = queue.draw(
         pool,
-        user_id=user.id,
-        kind=kind,
-        answered=answered,
+        rng=_queue_rng(user.id, kind, answered),
         # The adaptive arms skip pairs already asked and recent titles (decision 494); both reads leave
         # out the held-out stream, which the selector must never consult.
         asked=await read.asked_pairs(conn, user_id=user.id, kind=kind),
@@ -407,8 +326,8 @@ async def answer(
 ) -> dict[str, Any]:
     """The count check and the INSERT share one transaction under `_ANSWER_LOCK`, so a second answer
     under one seal gets the 409, not a duplicate duel. The refit runs after, outside the lock."""
-    await _assert_active_basis(request, conn)
-    hp = _hyperparams(request)
+    await deps.assert_active_basis(request, conn)
+    hp = deps.hyperparams(request)
     sealed = _unseal(body.pair, user_id=user.id)
     kind = str(sealed["k"])
     async with write_txn(conn):
@@ -437,7 +356,7 @@ async def answer(
         # boundary arm. Reported, not raised, as in `drop`.
         ledger = await refit.update_incrementally_reporting(
             conn, user_id=user.id, kind=kind, title_ids=list(write.title_ids), hp=hp,
-            embeddings=_embeddings(request, conn), bundle_version=_basis(request),
+            embeddings=deps.embeddings(request, conn), bundle_version=deps.basis(request),
         )
     names = await read.names_for(conn, list(write.title_ids))
     # `duel_line` elides long names rather than refusing, so it is safe after the durable write.
