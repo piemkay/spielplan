@@ -3,7 +3,6 @@ No secret leaves; the meter is spelled exactly, in strings. Needs TEST_DATABASE_
 
 from __future__ import annotations
 
-import dataclasses
 import importlib.util
 import json
 import logging
@@ -335,9 +334,7 @@ async def test_a_fault_inside_a_probe_is_a_server_error_and_never_a_404(
     async def broken(conn):
         raise KeyError("models")
 
-    monkeypatch.setitem(
-        registry.CONNECTORS, "tmdb", dataclasses.replace(registry.CONNECTORS["tmdb"], test=broken)
-    )
+    monkeypatch.setitem(registry.TESTS, "tmdb", broken)
     admin = await _admin(app)
     with pytest.raises(KeyError, match="models"):
         await admin.post("/api/admin/connectors/tmdb/test")

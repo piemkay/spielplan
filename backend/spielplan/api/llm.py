@@ -56,17 +56,14 @@ _CHANGEABLE = ("extraction_provider", "parallel", "parallel_providers", "passes"
 # Decision 450: one lock around recompute and write, so two confirms cannot cross.
 _SPEND_SETTINGS_LOCK = "llm-spend-settings"
 
-# The only fields `PUT /connectors/{name}` writes (decision 452): no estimate input can arrive here.
-_CREDENTIALS = {
-    "anthropic": ("api_key",),
-    "openai": ("api_key",),
-    "gemini": ("api_key",),
-    "tmdb": ("api_key",),
-    "omdb": ("api_key",),
-    "trakt": ("client_id", "client_secret"),
-}
-
 _SOURCES = ("tmdb", "omdb", "trakt")
+
+# The only fields `PUT /connectors/{name}` writes (decision 452): a source's every field and a
+# provider's key, so no estimate input can arrive here.
+_CREDENTIALS = {
+    **{name: sum(registry.FIELDS[name], ()) for name in _SOURCES},
+    **{name: registry.FIELDS[name][1] for name in client.PROVIDERS},
+}
 
 
 def _each_once(names: list[str]) -> list[str]:
@@ -445,7 +442,7 @@ async def connector_credentials(name: str, request: Request, _: AdminUser, conn:
             " (decision 450), and the cap by PUT /api/admin/llm/cap (decision 452)",
         )
     try:
-        registry.spec_for(name)
+        registry.fields_of(name)
     except LookupError as exc:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(exc)) from None
     carried = _CREDENTIALS.get(name)

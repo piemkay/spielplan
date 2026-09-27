@@ -295,8 +295,6 @@ class JellyfinClient:
         probe: a wrong URL and a wrong key fail differently and the admin can tell which."""
         return await self._request("GET", "/System/Info/Public", token=None) or {}
 
-    async def version_tuple(self) -> tuple[int, ...]:
-        return parse_version(str((await self.server_info()).get("Version") or ""))
 
     async def probe_version(self) -> tuple[str, bool | None]:
         """The server's version and §7.1's verdict, in one unauthenticated call.
@@ -335,47 +333,48 @@ class JellyfinClient:
             if r.get("Id")
         ]
 
-    async def _items_page(
-        self, jf_user_id: str | None, *, start: int, limit: int
-    ) -> dict[str, Any]:
-        """One page with its envelope intact, `TotalRecordCount` included."""
-        params: dict[str, Any] = {
-            "Recursive": "true",
-            "IncludeItemTypes": ITEM_TYPES,
-            "Fields": FIELDS,
-            "StartIndex": start,
-            "Limit": limit,
-            "EnableTotalRecordCount": "true",
-        }
-        # `is not None`: an empty id must 404, not silently become the keyless read.
-        if jf_user_id is not None:
-            params["userId"] = jf_user_id
-        return await self._request("GET", "/Items", token=self.api_key, params=params) or {}
-
-    async def items(
-        self, jf_user_id: str | None, *, start: int = 0, limit: int = 500
-    ) -> list[dict]:
-        """One page of the library, as `jf_user_id` sees it; with `None`, the admin's view with no
-        `UserData` (§7.2's ownership read)."""
-        payload = await self._items_page(jf_user_id, start=start, limit=limit)
-        return list(payload.get("Items") or [])
-
-    async def all_items(self, jf_user_id: str | None, *, page: int = 500) -> list[dict]:
-        """Every page, bounded three times: by progress, by the server's own count, by `MAX_PAGES`.
+    async def _walk(self, params: dict[str, Any], *, page: int, delta: bool) -> list[dict]:
+        """Every page of one `/Items` read, bounded three times: by progress, by the server's own
+        count, by `MAX_PAGES`.
 
         Bounds count distinct ids, so a server ignoring `StartIndex` raises; a short page ends the
-        walk only when the server's count agrees, else raises (§7.2 would un-own the rest).
-        `start` advances by rows returned, which is what `StartIndex` indexes.
+        walk only when the server's count agrees, else raises. `start` advances by rows returned,
+        which is what `StartIndex` indexes. The `delta` read also refuses a body with no envelope and
+        a count that moved between pages: unsorted paging over a live table can skip a row when one
+        ahead is deleted, and the watermark must not advance past it (decision 366).
         """
         out: list[dict] = []
         ids: set[str] = set()
         claimed = 0
         start = 0
         for _ in range(MAX_PAGES):
-            payload = await self._items_page(jf_user_id, start=start, limit=page)
-            batch = list(payload.get("Items") or [])
+            payload = await self._request("GET", "/Items", token=self.api_key, params={
+                "Recursive": "true",
+                "IncludeItemTypes": ITEM_TYPES,
+                "Fields": FIELDS,
+                "StartIndex": start,
+                "Limit": page,
+                "EnableTotalRecordCount": "true",
+                **params,
+            })
+            if not delta:
+                payload = payload or {}
+                batch = list(payload.get("Items") or [])
+            elif isinstance(payload, dict) and "Items" in payload:
+                batch = _item_rows(payload, "/Items")
+            else:
+                raise JellyfinError(
+                    "GET /Items answered no envelope -- the watermark must not advance past a read "
+                    "that did not happen"
+                )
             total = int(payload.get("TotalRecordCount") or 0)
             if total:
+                if delta and claimed and total != claimed:
+                    raise JellyfinError(
+                        f"/Items counted {claimed} rows and then {total} at StartIndex {start} -- "
+                        "the library changed under the walk, and the watermark must not advance "
+                        "past a read that may have skipped a row"
+                    )
                 claimed = total
             fresh = 0
             for item in batch:
@@ -396,93 +395,10 @@ class JellyfinClient:
                 )
             if len(batch) < page:
                 if claimed and len(out) < claimed:
+                    why = ("the watermark must not advance past a read that did not finish" if delta
+                           else "a short read would un-own the rest")
                     raise JellyfinError(
-                        f"/Items stopped after {len(out)} of the {claimed} rows it counted -- "
-                        "a short read would un-own the rest"
-                    )
-                return out
-            if claimed and len(ids) >= claimed:
-                return out
-        raise JellyfinError(
-            f"/Items did not end after {MAX_PAGES} pages of {page} ({len(out)} items)"
-        )
-
-    # --- §7.2: the delta read, and the boundary §6.6's library pick finally draws --------
-
-    async def _created_page(
-        self, since: datetime, *, library_id: str | None, start: int, limit: int
-    ) -> dict[str, Any]:
-        """One page of the delta read, envelope intact; no `userId`, and no `Episode` (decision 369).
-
-        `MinDateLastSaved` is the whole delta: `DateCreated` is the file's timestamp (decision 409).
-        A body with no `Items` envelope is a failed read, so the watermark cannot advance past it.
-        """
-        params: dict[str, Any] = {
-            "Recursive": "true",
-            "IncludeItemTypes": ITEM_TYPES,
-            "Fields": FIELDS,
-            "StartIndex": start,
-            "Limit": limit,
-            "EnableTotalRecordCount": "true",
-            "MinDateLastSaved": _utc(since).isoformat(),
-        }
-        if library_id is not None:
-            params["ParentId"] = library_id
-        payload = await self._request("GET", "/Items", token=self.api_key, params=params)
-        if not isinstance(payload, dict) or "Items" not in payload:
-            raise JellyfinError(
-                "GET /Items answered no envelope -- the watermark must not advance past a read "
-                "that did not happen"
-            )
-        return payload
-
-    async def _created_walk(
-        self, since: datetime, *, library_id: str | None, page: int
-    ) -> list[dict]:
-        """One scope's pages, bounded as `all_items` is, plus a count that moved between pages.
-
-        Unsorted paging over a live table can skip a row when one ahead is deleted, so a changed
-        count raises and the watermark does not advance (decision 366).
-        """
-        out: list[dict] = []
-        ids: set[str] = set()
-        claimed = 0
-        start = 0
-        for _ in range(MAX_PAGES):
-            payload = await self._created_page(
-                since, library_id=library_id, start=start, limit=page
-            )
-            batch = _item_rows(payload, "/Items")
-            total = int(payload.get("TotalRecordCount") or 0)
-            if total:
-                if claimed and total != claimed:
-                    raise JellyfinError(
-                        f"/Items counted {claimed} rows and then {total} at StartIndex {start} -- "
-                        "the library changed under the walk, and the watermark must not advance "
-                        "past a read that may have skipped a row"
-                    )
-                claimed = total
-            fresh = 0
-            for item in batch:
-                item_id = str(item.get("Id") or "")
-                if item_id:
-                    if item_id in ids:
-                        continue
-                    ids.add(item_id)
-                # Kept and counted as progress, as in `all_items`.
-                out.append(item)
-                fresh += 1
-            start += len(batch)
-            if len(batch) >= page and not fresh:
-                raise JellyfinError(
-                    f"/Items returned {len(batch)} rows at StartIndex {start - len(batch)} and "
-                    "not one of them was new -- the server is ignoring StartIndex"
-                )
-            if len(batch) < page:
-                if claimed and len(out) < claimed:
-                    raise JellyfinError(
-                        f"/Items stopped after {len(out)} of the {claimed} rows it counted -- "
-                        "the watermark must not advance past a read that did not finish"
+                        f"/Items stopped after {len(out)} of the {claimed} rows it counted -- {why}"
                     )
                 return out
             if claimed and len(ids) >= claimed:
@@ -491,20 +407,33 @@ class JellyfinClient:
             f"/Items did not end after {MAX_PAGES} pages of {page} ({len(out)} rows)"
         )
 
+    async def all_items(self, jf_user_id: str | None, *, page: int = 500) -> list[dict]:
+        """The library as `jf_user_id` sees it; with `None`, the admin's view with no `UserData`
+        (§7.2's ownership read)."""
+        # `is not None`: an empty id must 404, not silently become the keyless read.
+        params = {} if jf_user_id is None else {"userId": jf_user_id}
+        return await self._walk(params, page=page, delta=False)
+
+    # --- §7.2: the delta read, and the boundary §6.6's library pick finally draws --------
+
     async def items_created_since(
         self, since: datetime, *, library_ids: Sequence[str] = (), page: int = 500
     ) -> list[dict]:
         """Everything the server has saved since `since`, inside the picked libraries (§7.2 delta).
 
         An empty pick is one unscoped read (decision 364); otherwise one read per library,
-        deduplicated by item id.
+        deduplicated by item id. No `userId`, and no `Episode` (decision 369). `MinDateLastSaved` is
+        the whole delta: `DateCreated` is the file's timestamp (decision 409).
         """
         since = _utc(since)
         scopes: list[str | None] = [str(lib) for lib in library_ids] or [None]
         out: list[dict] = []
         seen: set[str] = set()
         for scope in scopes:
-            for item in await self._created_walk(since, library_id=scope, page=page):
+            params = {"MinDateLastSaved": since.isoformat()}
+            if scope is not None:
+                params["ParentId"] = scope
+            for item in await self._walk(params, page=page, delta=True):
                 item_id = str(item.get("Id") or "")
                 if item_id:
                     if item_id in seen:
