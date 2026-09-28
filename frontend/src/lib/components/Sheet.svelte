@@ -62,11 +62,10 @@
     else settle();
   }
 
-  // An unmount while open (a parent that drops the sheet) must not leave the page locked.
+  // An unmount while open must not leave the page locked. History is left alone: the unmount may
+  // be a navigation already under way (a logout's document load), which a back() would cancel.
   onDestroy(() => {
-    if (!pushed) return;
-    document.documentElement.style.overflow = '';
-    if (stack.at(-1) === key) history.back();
+    if (pushed) document.documentElement.style.overflow = '';
   });
 
   const FOCUSABLE = 'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])';
