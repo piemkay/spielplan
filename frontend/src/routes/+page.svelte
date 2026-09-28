@@ -2,6 +2,7 @@
   // Two modes (§6.0): shelves from `/api/home`, and the catalog grid from `/api/titles`, the only
   // route with every filter. Search or a person filter switches to the grid; clearing returns.
   import { onMount } from 'svelte';
+  import { afterNavigate, beforeNavigate } from '$app/navigation';
   import { get, qs } from '$lib/api.js';
   import { session } from '$lib/session.svelte.js';
   import {
@@ -12,6 +13,7 @@
     elsewhereLine,
     gridLine,
     gridReason,
+    homeKept,
     homeMode,
     kindChoice,
     kindHeading,
@@ -35,8 +37,11 @@
   import ShelfList from '$lib/components/ShelfList.svelte';
   import TitleDetail from '$lib/components/TitleDetail.svelte';
 
+  // Back from another tab, the last shelves show at once and are re-read quietly (decision 530).
+  const kept = homeKept.user === session.user?.id ? homeKept : null;
+
   // One switch: Films, Series or Both, never neither (decisions 18, 474).
-  let kinds = $state(['movie']);
+  let kinds = $state(kept?.kinds ?? ['movie']);
   let q = $state('');
   let genre = $state('');
   let decade = $state('');
@@ -66,9 +71,11 @@
   let kindNote = $state('');
 
   /** @type {any} */
-  let home = $state(null);
+  let home = $state(kept?.payload ?? null);
   let homeLoading = $state(false);
   let homeError = $state('');
+  // A kind switch in flight: the shelves on screen are the previous kind's.
+  const shelvesStale = $derived(homeLoading && kindChoice(home?.kinds ?? []) !== kindChoice(kinds));
 
   const LIMIT = 60;
   const SEEN_WORDS = { any: 'Seen or not', seen: 'Seen', unseen: 'Not seen' };
@@ -125,6 +132,11 @@
   // Overlapping filter requests: a sequence number keeps a slow earlier answer from landing last.
   let requestSeq = 0;
 
+  // The question the listed grid answers. From the keystroke on, a list for another one is dimmed,
+  // and one for another reason (the catalog under a first search letter) is not shown at all.
+  let shown = $state({ query: null, reason: null });
+  const gridStale = $derived(shown.query !== titlesQuery(kinds));
+
   function titlesQuery(forKinds, { limit = LIMIT, offset: from = 0 } = {}) {
     return `/titles${qs({
       kind: forKinds,
@@ -143,6 +155,8 @@
 
   async function load({ append = false } = {}) {
     const seq = ++requestSeq;
+    const query = titlesQuery(kinds, { offset: append ? offset : 0 });
+    const asked = reason;
     loading = true;
     loadError = '';
     if (!append) {
@@ -151,8 +165,9 @@
       kindNote = '';
     }
     try {
-      const res = await get(titlesQuery(kinds, { offset: append ? offset : 0 }));
+      const res = await get(query);
       if (seq !== requestSeq) return;      // a newer request has already answered
+      if (!append) shown = { query, reason: asked };
       items = append ? [...items, ...res.items] : res.items;
       total = res.total;
       offset = (append ? offset : 0) + res.items.length;
@@ -193,6 +208,7 @@
       const res = await loadHome(kinds);
       if (seq !== homeSeq) return;
       home = res;
+      Object.assign(homeKept, { user: session.user?.id, kinds: [...kinds], payload: res });
     } catch (err) {
       if (seq === homeSeq) homeError = err.message;
     } finally {
@@ -214,6 +230,16 @@
 
   onMount(async () => {
     await Promise.all([load(), loadFacets(), loadShelves()]);
+  });
+
+  // A tab's link lands at the top, so Home puts back its kept place; Back restores its own.
+  let restoreY = kept?.scrollY ?? 0;
+  beforeNavigate(() => {
+    homeKept.scrollY = mode === 'shelves' ? window.scrollY : 0;
+  });
+  afterNavigate(({ type }) => {
+    if (restoreY && type !== 'popstate') window.scrollTo(0, restoreY);
+    restoreY = 0;
   });
 
   // A Show the model flip re-reads the shelves once the server has the preference (the epoch, not
@@ -490,6 +516,10 @@
 
   {#if loadError}
     <div class="empty card"><p class="why">{loadError}</p></div>
+  {:else if gridStale && shown.reason !== reason}
+    <div class="grid" aria-hidden="true">
+      {#each { length: 9 }, i (i)}<span class="skeleton cell"></span>{/each}
+    </div>
   {:else if !items.length && !loading}
     <div class="empty card">
       {#if !session.hasBundle}
@@ -516,44 +546,46 @@
       {/if}
     </div>
   {:else}
-    {#if items.some(isColdPlaced)}
-      <!-- The badge's why, said once for the grid: a title= tooltip does not exist on touch. -->
-      <p class="footnote" data-testid="catalog-cold-note">
-        Titles marked New have no outside ratings yet — we placed them by what they're about.
-      </p>
-    {/if}
-    <div class="grid">
-      {#each strongItems as t, i (t.id)}
-        {#if partitioned && kindHeading(strongItems, i)}
-          <h2 class="list-header kindhead" data-testid="grid-kind-{t.kind}">{kindHeading(strongItems, i)}</h2>
+    <div class="results" aria-busy={gridStale}>
+      {#if items.some(isColdPlaced)}
+        <!-- The badge's why, said once for the grid: a title= tooltip does not exist on touch. -->
+        <p class="footnote" data-testid="catalog-cold-note">
+          Titles marked New have no outside ratings yet — we placed them by what they're about.
+        </p>
+      {/if}
+      <div class="grid">
+        {#each strongItems as t, i (t.id)}
+          {#if partitioned && kindHeading(strongItems, i)}
+            <h2 class="list-header kindhead" data-testid="grid-kind-{t.kind}">{kindHeading(strongItems, i)}</h2>
+          {/if}
+          <PosterCard title={t} onSelect={() => (selected = t)} />
+        {/each}
+      </div>
+      {#if weakItems.length}
+        <!-- Hits that only contain the letters wait behind one button. -->
+        {#if showWeak}
+          <h2 class="list-header weakhead" data-testid="weak-matches-head">Looser matches</h2>
+          <div class="grid" data-testid="weak-matches">
+            {#each weakItems as t (t.id)}
+              <PosterCard title={t} onSelect={() => (selected = t)} />
+            {/each}
+          </div>
+        {:else}
+          <div class="more">
+            <button class="btn-secondary" data-testid="weak-matches-toggle" onclick={() => (showWeak = true)}>
+              {`Show ${weakTotal.toLocaleString()} looser ${weakTotal === 1 ? 'match' : 'matches'}`}
+            </button>
+          </div>
         {/if}
-        <PosterCard title={t} onSelect={() => (selected = t.id)} />
-      {/each}
-    </div>
-    {#if weakItems.length}
-      <!-- Hits that only contain the letters wait behind one button. -->
-      {#if showWeak}
-        <h2 class="list-header weakhead" data-testid="weak-matches-head">Looser matches</h2>
-        <div class="grid" data-testid="weak-matches">
-          {#each weakItems as t (t.id)}
-            <PosterCard title={t} onSelect={() => (selected = t.id)} />
-          {/each}
-        </div>
-      {:else}
+      {/if}
+      {#if offset < total && (showWeak || !weakItems.length)}
         <div class="more">
-          <button class="btn-secondary" data-testid="weak-matches-toggle" onclick={() => (showWeak = true)}>
-            {`Show ${weakTotal.toLocaleString()} looser ${weakTotal === 1 ? 'match' : 'matches'}`}
+          <button class="btn-secondary" onclick={() => load({ append: true })} disabled={loading}>
+            {loading ? 'Loading…' : `Show ${(total - offset).toLocaleString()} more`}
           </button>
         </div>
       {/if}
-    {/if}
-    {#if offset < total && (showWeak || !weakItems.length)}
-      <div class="more">
-        <button class="btn-secondary" onclick={() => load({ append: true })} disabled={loading}>
-          {loading ? 'Loading…' : `Show ${(total - offset).toLocaleString()} more`}
-        </button>
-      </div>
-    {/if}
+    </div>
   {/if}
 {:else if !session.hasBundle}
   <div class="empty card">
@@ -565,13 +597,19 @@
   {#if homeError}
     <div class="empty card"><p class="why">{homeError}</p></div>
   {:else}
-    <ShelfList payload={home} loading={homeLoading} onSelect={(id) => (selected = id)} />
+    <ShelfList
+      payload={home}
+      loading={homeLoading}
+      stale={shelvesStale}
+      onSelect={(title) => (selected = title)}
+    />
   {/if}
 {/if}
 
 {#if selected}
   <TitleDetail
-    titleId={selected}
+    titleId={selected.id}
+    seed={selected}
     onClose={() => (selected = null)}
     onPerson={filterToPerson}
     onStateChange={onSeenChange}
@@ -719,6 +757,19 @@
     display: grid;
     grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 20px 12px;
+  }
+  .cell {
+    display: block;
+    aspect-ratio: 2 / 3;
+  }
+  .results {
+    transition: opacity var(--dur-quick) var(--ease);
+  }
+  /* An answer to the previous question steps back and takes no tap until the new one lands. */
+  .results[aria-busy='true'] {
+    opacity: 0.45;
+    pointer-events: none;
+    transition-delay: 120ms;
   }
   .kindhead,
   .weakhead {

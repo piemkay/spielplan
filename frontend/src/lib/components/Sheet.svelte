@@ -21,7 +21,10 @@
   let pushed = $state(false);
   let dragY = $state(0);
   let dragFrom = null;
-  let dragging = false;
+  // State, so the panel drops its transition and follows the finger 1:1.
+  let dragging = $state(false);
+  // The finger's last move, for its speed when it lifts (px per ms).
+  let pace = { y: 0, t: 0, v: 0 };
   let opener = null;
   // The pushed entry reaches `page.state` a tick after the push; only an entry seen can be popped.
   let entered = false;
@@ -97,6 +100,7 @@
     if (event.target instanceof Element && event.target.closest(FOCUSABLE)) return;
     dragFrom = event.clientY;
     dragging = false;
+    pace = { y: event.clientY, t: event.timeStamp, v: 0 };
   }
   function drag(event) {
     if (dragFrom === null) return;
@@ -106,12 +110,16 @@
       event.currentTarget.setPointerCapture?.(event.pointerId);
     }
     if (dragging) dragY = Math.max(0, dy);
+    const dt = event.timeStamp - pace.t;
+    if (dt > 0) pace = { y: event.clientY, t: event.timeStamp, v: (event.clientY - pace.y) / dt };
   }
-  function release() {
+  function release(event) {
     if (dragFrom === null) return;
     dragFrom = null;
     dragging = false;
-    if (dragY > 96) close();
+    // A flick still moves down fast as the finger lifts; a finger that stopped first is no flick.
+    const flick = pace.v > 0.5 && event.timeStamp - pace.t < 100;
+    if (dragY > 96 || (flick && dragY > 16)) close();
     else dragY = 0;
   }
 </script>
@@ -120,10 +128,17 @@
 
 {#if open}
   <div class="layer" class:plain>
-    <button class="scrim" aria-label="Close" tabindex="-1" onclick={close}></button>
+    <button
+      class="scrim"
+      aria-label="Close"
+      tabindex="-1"
+      onclick={close}
+      style:opacity={dragY ? 1 - 0.6 * Math.min(1, dragY / 600) : null}
+    ></button>
     <div
       class="panel {detent}"
       class:plain
+      class:dragging
       role="dialog"
       aria-modal="true"
       aria-label={label}
@@ -152,6 +167,7 @@
 
 <style>
   .layer {
+    --ease-sheet: cubic-bezier(0.32, 0.72, 0, 1);
     position: fixed;
     inset: 0;
     z-index: 100;
@@ -166,7 +182,7 @@
     padding: 0;
     background: var(--scrim);
     cursor: default;
-    animation: fade 0.2s var(--ease);
+    animation: fade 240ms var(--ease);
   }
   .panel {
     position: relative;
@@ -177,8 +193,12 @@
     border-radius: var(--r-lg) var(--r-lg) 0 0;
     box-shadow: var(--shadow-sheet);
     outline: none;
-    animation: rise 0.34s var(--ease);
-    transition: transform 0.2s var(--ease);
+    /* Up from the screen's edge, opaque all the way; let go short of closing, it springs back. */
+    animation: rise var(--dur-slow) var(--ease-sheet);
+    transition: transform 280ms var(--ease-sheet);
+  }
+  .panel.dragging {
+    transition: none;
   }
   .panel.large {
     height: calc(100dvh - env(safe-area-inset-top) - 12px);
@@ -231,6 +251,7 @@
       height: auto;
       max-height: 86dvh;
       border-radius: var(--r-lg);
+      animation: appear var(--dur-base) var(--ease);
     }
     .panel.plain {
       width: min(400px, calc(100% - 48px));
@@ -242,8 +263,13 @@
 
   @keyframes rise {
     from {
-      transform: translateY(24px);
+      transform: translateY(100%);
+    }
+  }
+  @keyframes appear {
+    from {
       opacity: 0;
+      transform: translateY(8px) scale(0.98);
     }
   }
   @keyframes fade {

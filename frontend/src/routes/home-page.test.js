@@ -13,11 +13,14 @@ vi.mock('$app/stores', async () => {
   return { page: nav.page };
 });
 vi.mock('$app/navigation', () => ({
-  pushState: (_url, state) => nav.page.update((p) => ({ ...p, state }))
+  pushState: (_url, state) => nav.page.update((p) => ({ ...p, state })),
+  beforeNavigate: () => {},
+  afterNavigate: () => {}
 }));
 
 import HomePage from './+page.svelte';
 import PAGE_SOURCE from './+page.svelte?raw';
+import { homeKept } from '$lib/home.svelte.js';
 import { session } from '$lib/session.svelte.js';
 import { topbar } from '$lib/topbar.svelte.js';
 
@@ -59,6 +62,7 @@ afterEach(() => {
   if (app) unmount(app);
   app = null;
   Object.assign(session, { user: null, hasBundle: null, restartRequired: null });
+  Object.assign(homeKept, { user: null, kinds: null, payload: null, scrollY: 0 });
   vi.unstubAllGlobals();
   target.remove();
 });
@@ -460,6 +464,70 @@ describe('a kind switch keeps the filters the new kind has', () => {
     // The note belongs to the kind switch; the next list asked for clears it.
     await type('heat');
     expect($('[data-testid="kind-filter-note"]'), 'a search after the switch').toBeNull();
+  });
+});
+
+describe('a list for another question never stands in for the answer (decision 530)', () => {
+  it('shows no catalog under a first search letter, and dims a refined search until it lands', async () => {
+    backend({
+      titles: (p) => ({ items: p.get('q') ? [film(2, 'Heat')] : [film(1, 'Up')], total: 1, hidden: {} })
+    });
+    await openHome();
+    const box = $('[data-testid="home-search"]');
+    const letter = (text) => {
+      box.value = text;
+      box.dispatchEvent(new Event('input', { bubbles: true }));
+      flushSync();
+    };
+    const names = () => [...target.querySelectorAll('.card-wrap .name')].map((n) => n.textContent);
+
+    letter('h');
+    expect(names(), 'the catalog under the first letter').toEqual([]);
+    await tick(80);
+    await tick(80);
+    expect(names()).toEqual(['Heat']);
+
+    letter('he');
+    expect(names()).toEqual(['Heat']);
+    expect($('.card-wrap').closest('[aria-busy]').getAttribute('aria-busy')).toBe('true');
+    await tick(80);
+    await tick(80);
+    expect($('.card-wrap').closest('[aria-busy]').getAttribute('aria-busy')).toBe('false');
+  });
+});
+
+describe('Home keeps its place across tabs (decision 530)', () => {
+  it('comes back to the last shelves and kind at once, and re-reads them quietly', async () => {
+    const section = {
+      kind: 'series',
+      heading: 'Series',
+      title: 'Your top picks',
+      why: 'For you',
+      items: [{ title_id: 2, kind: 'series', name: 'Dark', seen: false }]
+    };
+    backend({
+      home: (kinds) => ({
+        kinds,
+        library: {},
+        shelves: kinds.includes('series') ? [{ id: 'top_of_ledger', sections: [section] }] : [],
+        shelves_total: 1
+      })
+    });
+    await openHome();
+    $('[data-testid="kind-series"]').click();
+    await tick();
+    unmount(app);
+
+    // The re-read never answers here: whatever shows is what Home kept.
+    const reads = vi.fn((url) => (String(url).includes('/api/home') ? new Promise(() => {}) : route(url)));
+    vi.stubGlobal('fetch', reads);
+    app = mount(HomePage, { target });
+    await tick();
+    expect($('[data-testid="kind-series"]').getAttribute('aria-pressed')).toBe('true');
+    expect($('[data-testid="shelves-loading"]'), 'a cold reload').toBeNull();
+    expect($('[data-testid="shelf-title"]').textContent).toBe('Your top picks');
+    expect($('[data-testid="shelves"]').getAttribute('aria-busy')).toBe('false');
+    expect(reads.mock.calls.some(([url]) => String(url).includes('/api/home?kind=series'))).toBe(true);
   });
 });
 

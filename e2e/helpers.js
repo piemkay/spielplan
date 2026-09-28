@@ -149,6 +149,8 @@ export async function openTitle(page, name, { ensureKinds = ['Films', 'Series'] 
   await card.click();
   const panel = page.getByRole('dialog', { name: 'Title detail' });
   await expect(panel.getByRole('heading', { name })).toBeVisible();
+  // The heading is the tapped poster's at once (decision 530); the answers come with the read.
+  await expect(panel.getByTestId('title-rate')).toBeVisible();
   return panel;
 }
 

@@ -10,7 +10,7 @@
 
 <script>
   import { runtimeLabel } from '$lib/rate.svelte.js';
-  import { noteMissing, posterSrc } from '$lib/art.js';
+  import { artReady, noteMissing, posterSrc } from '$lib/art.js';
   import { displayNames } from '$lib/titleCard.js';
 
   let { title, onSelect } = $props();
@@ -38,7 +38,7 @@
 </script>
 
 <button
-  class="card-wrap"
+  class="card-wrap press"
   onclick={onSelect}
   title={names.secondary ? `${names.primary} (${names.secondary})` : names.primary}
 >
@@ -46,21 +46,25 @@
     class="poster"
     style:background="linear-gradient(150deg, hsl({h} 22% 17%), hsl({(h + 40) % 360} 18% 11%))"
   >
-    {#if src && failed !== src}
-      <!-- alt="": the name is printed under the poster. Lazy: a grid draws more cards than fit. -->
-      <img
-        class="art"
-        {src}
-        alt=""
-        loading="lazy"
-        decoding="async"
-        draggable="false"
-        onerror={() => {
-          failed = src;
-          noteMissing(src);
-        }}
-      />
-    {/if}
+    <!-- Keyed on the URL: a reused <img> keeps the old picture until the new src loads. -->
+    {#key src}
+      {#if src && failed !== src}
+        <!-- alt="": the name is printed under the poster. Lazy: a grid draws more cards than fit. -->
+        <img
+          class="art"
+          {src}
+          alt=""
+          loading="lazy"
+          decoding="async"
+          draggable="false"
+          {@attach artReady}
+          onerror={() => {
+            failed = src;
+            noteMissing(src);
+          }}
+        />
+      {/if}
+    {/key}
     {#if noCrowdData}
       <!-- The shelf or grid carries the explaining sentence once; the tooltip is for a pointer. -->
       <span class="new" data-testid="new-badge" title="No outside ratings yet — placed by what it's about"
@@ -84,6 +88,7 @@
 
 <style>
   .card-wrap {
+    --press: 0.96;
     display: flex;
     flex-direction: column;
     gap: 8px;
@@ -99,8 +104,11 @@
   .poster {
     transition: filter 0.12s var(--ease);
   }
-  .card-wrap:hover .poster {
-    filter: brightness(1.08);
+  /* Only where hover exists: a tap on a phone would leave the poster lit. */
+  @media (hover: hover) {
+    .card-wrap:hover .poster {
+      filter: brightness(1.08);
+    }
   }
   /* Inert, so the card's button takes every tap and a long press offers no image callout. */
   .art {

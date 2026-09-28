@@ -382,6 +382,35 @@ describe("the model line is Show the model's", () => {
   });
 });
 
+describe('a card opened from a poster (decision 530)', () => {
+  it('shows the tapped poster and its name before the read lands, and the rest once it has', async () => {
+    /** @type {(body: any) => void} */
+    let land = () => {};
+    vi.mocked(get).mockReturnValue(new Promise((resolve) => (land = resolve)));
+    const seed = { id: 6, kind: 'movie', name: 'Heat', year: 1995, runtime_min: 170 };
+    const app = mount(TitleDetail, {
+      target,
+      props: { titleId: 6, seed, onClose: () => {}, onPerson: () => {}, onStateChange: () => {} }
+    });
+    try {
+      await settle();
+      expect(target.querySelector('.title-1').textContent).toBe('Heat');
+      expect(target.querySelector('.sub').textContent).toMatch(/^1995 · 2h/);
+      expect(target.querySelector('[data-testid="rate-poster"]').getAttribute('data-title-id')).toBe('6');
+      expect(target.textContent, 'a loading line instead of the film').not.toContain('Loading');
+      expect(target.querySelector('[data-answer]'), 'answers before the read').toBeNull();
+
+      land(payload({ kind: 'movie', name: 'Heat', year: 1995, runtime_min: 170, seen_state: 'unseen' }));
+      await settle();
+      expect(target.querySelector('.title-1').textContent).toBe('Heat');
+      expect(target.querySelector('[data-answer="liked"]')).not.toBeNull();
+      expect(target.querySelector('[data-testid="title-more"]').hidden).toBe(false);
+    } finally {
+      unmount(app);
+    }
+  });
+});
+
 describe('the header', () => {
   it('draws the poster primitive for this title, inert and nameless', async () => {
     const app = await open();
@@ -846,6 +875,7 @@ describe("the card's own answer (decision 487)", () => {
       const note = target.querySelector('[data-testid="title-rate-note"]').textContent;
       expect(note).toContain('you liked it');
       expect(note).toContain("We'd have guessed the same.");
+      expect(note.replace(/\s+/g, ' ').trim()).toBe("Saved — you liked it. We'd have guessed the same.");
       expect(note, "the reveal's number is Show the model's").not.toContain('0.71');
       expect(target.querySelector('[data-answer="liked"]').getAttribute('aria-pressed')).toBe(
         'true'
