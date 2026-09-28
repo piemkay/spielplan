@@ -143,6 +143,17 @@ function respond(payload, status = 200) {
   });
 }
 
+function held(payload) {
+  let release = () => {};
+  fetchMock.mockReturnValueOnce(
+    new Promise((r) => {
+      release = () =>
+        r({ ok: true, status: 200, headers: { get: () => null }, text: async () => JSON.stringify(payload) });
+    })
+  );
+  return () => release();
+}
+
 describe('the board comes from the server', () => {
   it('replaces the tiers wholesale rather than merging them', async () => {
     respond(board({ tiers: [{ index: 0, label: 'F', entries: [] }], rated: 0, rated_total: 0 }));
@@ -509,23 +520,23 @@ describe('a drop', () => {
   });
 
   it('refuses to start a second one while the first is in flight', async () => {
-    let release = () => {};
-    fetchMock.mockReturnValueOnce(
-      new Promise((r) => {
-        release = () =>
-          r({
-            ok: true,
-            status: 200,
-            headers: { get: () => null },
-            text: async () => JSON.stringify(board())
-          });
-      })
-    );
+    const release = held(board());
     const first = drop({ title_id: 1, tier: 0 });
     await drop({ title_id: 2, tier: 6 });
     expect(fetchMock).toHaveBeenCalledTimes(1);
     release();
     await first;
+  });
+
+  it('is not painted over by a read that started before it', async () => {
+    // A debounced search or a held drag's tier opener may still be reading the board from before.
+    const release = held(board({ rated: 1 }));
+    respond(board({ rated: 2 }));
+    const read = load('movie');
+    await drop({ title_id: 1, tier: 0 });
+    release();
+    await read;
+    expect(rank.rated).toBe(2);
   });
 });
 
@@ -568,18 +579,7 @@ describe('the empty state waits for the board', () => {
 describe('overlapping requests', () => {
   it('drops a slow earlier response in favour of the newer one', async () => {
     // Tap Series then Films: the Series board must not land second under a Films tab.
-    let releaseFirst = () => {};
-    fetchMock.mockReturnValueOnce(
-      new Promise((r) => {
-        releaseFirst = () =>
-          r({
-            ok: true,
-            status: 200,
-            headers: { get: () => null },
-            text: async () => JSON.stringify(board({ kind: 'series', rated: 111 }))
-          });
-      })
-    );
+    const releaseFirst = held(board({ kind: 'series', rated: 111 }));
     respond(board({ kind: 'movie', rated: 222 }));
 
     const slow = load('series');
@@ -594,12 +594,16 @@ describe('overlapping requests', () => {
 });
 
 describe('reset', () => {
-  it("forgets one person's card, pair and round before the next person's", () => {
+  it("forgets one person's board, card, pair and round before the next person's", () => {
     openTitle(rank.tiers[2].entries[0]);
+    rank.straddling = 4;
     rank.pair = pairN(1);
     rank.queueOpen = true;
     rank.roundAnswered = 3;
     reset();
+    expect(rank.tiers).toEqual([]);
+    expect(rank.ratedTotal).toBe(0);
+    expect(rank.straddling).toBe(0);
     expect(rank.opened).toBeNull();
     expect(rank.pair).toBeNull();
     expect(rank.queueOpen).toBe(false);
@@ -607,19 +611,15 @@ describe('reset', () => {
     expect(rank.booted).toBe(false);
   });
 
+  it('keeps the board when only the tab is left', () => {
+    const tiers = rank.tiers;
+    reset({ board: false });
+    expect(rank.tiers).toBe(tiers);
+    expect(rank.booted).toBe(false);
+  });
+
   it('makes an in-flight response land nowhere', async () => {
-    let release = () => {};
-    fetchMock.mockReturnValueOnce(
-      new Promise((r) => {
-        release = () =>
-          r({
-            ok: true,
-            status: 200,
-            headers: { get: () => null },
-            text: async () => JSON.stringify(board({ rated: 999 }))
-          });
-      })
-    );
+    const release = held(board({ rated: 999 }));
     const pending = load('movie');
     reset();
     release();
@@ -643,24 +643,41 @@ describe('the queue answer', () => {
   it('refuses to start a second one while the first is in flight', async () => {
     // A double tap on one sealed pair must not write two duels (§4.2 is append-only).
     rank.pair = { title_a: 1, title_b: 2, token: 'sealed', reason: 'x' };
-    let release = () => {};
-    fetchMock.mockReturnValueOnce(
-      new Promise((r) => {
-        release = () =>
-          r({
-            ok: true,
-            status: 200,
-            headers: { get: () => null },
-            text: async () => JSON.stringify({ kind: 'movie', pair: null, reason: 'done' })
-          });
-      })
-    );
+    const release = held({ kind: 'movie', pair: null, reason: 'done' });
     respond(board());                       // the board re-read the answer ends with
     const first = answer('A');
     await answer('B');
     expect(fetchMock).toHaveBeenCalledTimes(1);
     release();
     await first;
+  });
+
+  it('shows its pick while written, and frees the next pair before the board re-reads', async () => {
+    rank.pair = pairN(1);
+    respond({ kind: 'movie', pair: pairN(2), reason: '' });
+    const release = held(board());
+    const answering = answer('TIE');
+    expect(rank.pending).toBe('duel-TIE');
+    expect(rank.busy).toBe(true);
+    await vi.waitFor(() => expect(rank.pair.token).toBe('t2'));
+    expect(rank.busy).toBe(false);
+    expect(rank.pending).toBeNull();
+    release();
+    await answering;
+  });
+
+  it("keeps the newest answer's line when an older re-read lands last", async () => {
+    rank.pair = pairN(1);
+    respond({ kind: 'movie', pair: pairN(2), log: ['first'] });
+    const release = held(board());
+    const first = answer('A');
+    await vi.waitFor(() => expect(rank.busy).toBe(false));
+    respond({ kind: 'movie', pair: pairN(3), log: ['second'] });
+    respond(board());
+    await answer('B');
+    release();
+    await first;
+    expect(rank.log).toEqual(['second']);
   });
 });
 
@@ -692,20 +709,20 @@ describe('a kind switch (§4.1 rule 5)', () => {
     expect(boardUrl).not.toContain('decade=');
   });
 
+  it('flips on the tap and reads the board and its vocabulary at once', async () => {
+    respond({ genres: ['Drama'], decades: [2000] });
+    respond(board({ kind: 'series' }));
+    const switching = chooseKind('series');
+    expect(rank.kind).toBe('series');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(rank.reading).toBe(1);             // the board on screen is stale until this lands
+    await switching;
+    expect(rank.reading).toBe(0);
+  });
+
   it('keeps the newer kind vocabulary when an earlier facets read answers last', async () => {
     // `loadFacets` carries a sequence number, so the later kind's vocabulary wins.
-    let releaseFilm = () => {};
-    fetchMock.mockReturnValueOnce(
-      new Promise((r) => {
-        releaseFilm = () =>
-          r({
-            ok: true,
-            status: 200,
-            headers: { get: () => null },
-            text: async () => JSON.stringify({ genres: ['Heist'], decades: [1990] })
-          });
-      })
-    );
+    const releaseFilm = held({ genres: ['Heist'], decades: [1990] });
     respond({ genres: ['Procedural'], decades: [2010] });
 
     const film = loadFacets('movie');

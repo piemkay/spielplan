@@ -21,7 +21,6 @@
     KIND_LABELS,
     MODES,
     clearFinder,
-    commit,
     continueRating,
     correct,
     duel,
@@ -34,7 +33,6 @@
     rate,
     rateTitle,
     reset,
-    revealLine,
     setHead,
     setKinds,
     setMode,
@@ -52,11 +50,11 @@
 
   const kinds = $derived(rate.session?.kinds ?? []);
   const mode = $derived(rate.session?.mode ?? 'mix');
-  // A block's end screen waits for the reveal of its last answer (decision 527).
-  const done = $derived(rate.holding ? null : rate.done);
-  // While a reveal holds, the counter belongs to the card being shown.
-  const block = $derived(rate.frozenBlock ?? rate.done ?? rate.session?.block ?? null);
-  const reveal = $derived(revealLine(rate.reveal));
+  // A block's end screen opens with the reply to its last answer, and echoes that guess (decision 530).
+  const done = $derived(rate.done);
+  const block = $derived(rate.done ?? rate.session?.block ?? null);
+  // The card's dash lights on the tap; a skip or a correction never counts (§6.1).
+  const answered = $derived(!!done || /^(verdict|duel|not_seen)/.test(rate.pending ?? ''));
   const showModel = $derived(!!session.user?.show_model);
   const heavy = $derived(heavyClass(rate.balance));
 
@@ -180,6 +178,18 @@
 
 <svelte:window onkeydown={onKey} />
 
+<!-- The guess for the card just rated, in the reason line of the one now up: the answer given, the
+     film it was about, then the server's words (§6.1). Agreeing looks the same as not. -->
+{#snippet echoLine()}
+  {@const e = rate.echo}
+  <span
+    class="echo"
+    data-testid="rate-reveal"
+    data-reveal-available={e.available ? 'true' : 'false'}
+    data-reveal-agreed={e.agreed ? 'true' : 'false'}
+  ><Icon name={e.said} size={14} /><span class="echo-text">{e.name} · {e.text}</span></span>
+{/snippet}
+
 <!-- In the sheet's body, not its header: the header's drag area captures the pointer. -->
 {#snippet sheetBar(title, close)}
   <div class="sheet-bar">
@@ -190,7 +200,7 @@
 
 {#snippet rateBar()}
   <div class="bar">
-    <RateUndo undo={rate.undo} busy={rate.busy} onUndo={undo} />
+    <RateUndo undo={rate.undo} busy={rate.busy} pending={rate.pending === 'undo'} onUndo={undo} />
     <h1 class="title">
       {#if done}
         Rate
@@ -218,7 +228,7 @@
           class="btn-plain hit skip"
           data-testid="rate-skip"
           aria-busy={rate.pending === 'skip'}
-          disabled={!rate.card || rate.busy || rate.holding}
+          disabled={!rate.card || rate.busy}
           onclick={skip}
         >Skip</button>
       {/if}
@@ -230,10 +240,11 @@
   {#if !topbar.host}{@render rateBar()}{/if}
 
   <section class="progress" aria-label="Progress">
-    <RateBlockCounter {block}>
+    <RateBlockCounter {block} {answered}>
       <RateClassBalance balance={rate.balance} {kinds} compact onOpen={() => (mixOpen = true)} />
     </RateBlockCounter>
   </section>
+  <p class="sr-only" role="status">{rate.echo ? `${rate.echo.name} · ${rate.echo.text}` : ''}</p>
 
   {#if heavy && !done}
     <button
@@ -263,15 +274,21 @@
 
   <div class="stage">
     {#if rate.loading}
-      <p class="footnote" data-testid="rate-loading">Finding something to rate…</p>
+      <!-- The frame's shape until the session lands; which card comes is not known yet. -->
+      <div class="loading" data-testid="rate-loading">
+        <p class="sr-only" role="status">Finding something to rate…</p>
+        <span class="skeleton poster-slot"></span>
+        <span class="skeleton answers-slot"></span>
+      </div>
     {:else if done}
       <section class="done" data-testid="rate-done">
+        <p class="echo-slot">{#if rate.echo}{@render echoLine()}{/if}</p>
         <div class="done-body">
           <div class="done-head">
             <span class="done-mark" aria-hidden="true">
               <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                 stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-                <path d="m5 12.5 4.5 4.5L19 7.5" />
+                <path pathLength="1" d="m5 12.5 4.5 4.5L19 7.5" />
               </svg>
             </span>
             <h2 class="large-title">That's {done.size ?? 15}.</h2>
@@ -281,7 +298,12 @@
         </div>
         <!-- The last answer stays undoable here until the next one lands (decision 199). -->
         <div class="done-actions">
-          <button class="btn-primary" data-testid="rate-done-more" onclick={continueRating}>
+          <button
+            class="btn-primary"
+            data-testid="rate-done-more"
+            onclick={continueRating}
+            {@attach (el) => el.focus({ preventScroll: true })}
+          >
             Rate {done.size ?? 15} more
           </button>
           <a class="btn-secondary" data-testid="rate-done-home" href="/">Back to Home</a>
@@ -290,22 +312,24 @@
     {:else if rate.card?.type === 'sweep'}
       <RateSweepCard
         card={rate.card}
-        {reveal}
-        holding={rate.holding}
+        echo={rate.echo ? echoLine : null}
+        back={rate.back}
         busy={rate.busy}
         pending={rate.pending}
+        failed={rate.failed}
         {showModel}
         onVerdict={verdict}
         onNotSeen={notSeen}
-        onContinue={commit}
         onPeek={() => openPeek(null)}
         onWhy={() => (whyOpen = true)}
       />
     {:else if rate.card?.type === 'battle'}
       <RateBattleCard
         card={rate.card}
+        echo={rate.echo ? echoLine : null}
         busy={rate.busy}
         pending={rate.pending}
+        failed={rate.failed}
         onDuel={duel}
         onCorrect={correct}
         onPeek={openPeek}
@@ -343,7 +367,7 @@
   {@const { side, token } = peek}
   <RatePeek
     title={peek.title}
-    busy={rate.busy}
+    busy={rate.busy || rate.card?.token !== token}
     onNotSeen={() => rate.card?.token === token && (side ? correct(side) : notSeen())}
     onClose={() => (peek = null)}
   />
@@ -479,15 +503,15 @@
 
 <style>
   /* Exactly the screen between the top row and the tab bar, so nothing scrolls; of the main's 32px
-     end padding it keeps 8 (decision 528). */
+     end padding it keeps 16 (decisions 528 and 530). */
   .rate {
     display: flex;
     flex-direction: column;
     gap: 12px;
     height: calc(
-      100dvh - 44px - env(safe-area-inset-top) - var(--tabbar) - env(safe-area-inset-bottom) - 8px
+      100dvh - 44px - env(safe-area-inset-top) - var(--tabbar) - env(safe-area-inset-bottom) - 16px
     );
-    margin-bottom: -24px;
+    margin-bottom: -16px;
   }
   .bar {
     display: grid;
@@ -530,6 +554,11 @@
   }
   .skip {
     padding-right: 0;
+    transition: opacity var(--dur-quick) var(--ease);
+  }
+  .skip[aria-busy='true'] {
+    opacity: 1;
+    animation: pop 180ms var(--ease);
   }
   /* The row's end is the screen's gutter: a finger's reach may not widen the row past it. */
   .skip::after {
@@ -547,6 +576,8 @@
     border: none;
     background: none;
     color: var(--accent-text);
+    overflow: hidden;
+    animation: grow var(--dur-base) var(--ease);
   }
   .heavy .face {
     height: 32px;
@@ -576,6 +607,21 @@
     line-height: 20px;
     color: var(--text-2);
     text-wrap: pretty;
+    overflow: hidden;
+    animation: grow var(--dur-base) var(--ease);
+  }
+  /* A notice or the balance chip grows in, so the poster eases down rather than jumping. */
+  @keyframes grow {
+    from {
+      min-height: 0;
+      max-height: 0;
+      margin-block: -12px 0;
+      padding-block: 0;
+      opacity: 0;
+    }
+    to {
+      max-height: 64px;
+    }
   }
   .note > :global(svg) {
     flex: none;
@@ -595,6 +641,47 @@
     display: flex;
     flex-direction: column;
   }
+  .loading {
+    flex: 1;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 12px;
+    padding-top: 58px;
+  }
+  .poster-slot {
+    flex: 0 1 330px;
+    min-height: 0;
+    aspect-ratio: 2 / 3;
+  }
+  .answers-slot {
+    flex: none;
+    align-self: stretch;
+    height: 64px;
+    margin-top: auto;
+    border-radius: var(--r-md);
+  }
+  .echo {
+    min-width: 0;
+    height: 18px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    color: var(--text);
+    white-space: nowrap;
+    animation: enter var(--dur-quick) var(--ease);
+  }
+  .echo > :global(svg) {
+    flex: none;
+    color: var(--text-2);
+  }
+  .echo-text {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
   .drained {
     margin: auto 0;
     display: flex;
@@ -611,6 +698,11 @@
     display: flex;
     flex-direction: column;
     gap: 16px;
+  }
+  .echo-slot {
+    flex: none;
+    height: 18px;
+    margin: 0;
   }
   .done-body {
     flex: 1;
@@ -634,19 +726,42 @@
     display: grid;
     place-items: center;
     border-radius: var(--r-pill);
-    background: var(--accent-tint);
-    color: var(--accent-text);
+    background: var(--surface-2);
+    color: var(--text);
+    --enter-s: 0.7;
+    animation: enter 220ms var(--ease-spring) both;
   }
   .done-sub {
     margin: 0;
     font-size: var(--fs-body);
     line-height: 22px;
     color: var(--text-2);
+    animation: fadeIn 240ms var(--ease) 220ms both;
   }
   .done-actions {
     display: flex;
     flex-direction: column;
     gap: 8px;
+    animation: enter 200ms var(--ease) 420ms both;
+  }
+  .done-mark path {
+    stroke-dasharray: 1;
+    animation: draw 280ms var(--ease) 120ms both;
+  }
+  .done-head h2 {
+    animation: fadeIn 240ms var(--ease) 160ms both;
+  }
+  .done :global(.bar > span) {
+    animation: unclip 360ms var(--ease) 260ms both;
+  }
+  .done :global(li:nth-child(2) .bar > span) {
+    animation-delay: 320ms;
+  }
+  .done :global(li:nth-child(3) .bar > span) {
+    animation-delay: 380ms;
+  }
+  @keyframes unclip {
+    from { clip-path: inset(0 100% 0 0); }
   }
   .done-actions .btn-primary {
     min-height: 50px;
@@ -750,6 +865,20 @@
     }
     .stage {
       flex: none;
+    }
+    .loading {
+      flex: none;
+      align-items: flex-start;
+      gap: 20px;
+      padding-top: 72px;
+    }
+    .poster-slot {
+      flex: none;
+      width: var(--rate-col);
+      height: calc(var(--rate-col) * 1.5);
+    }
+    .echo {
+      justify-content: flex-start;
     }
     .heavy {
       align-self: flex-start;

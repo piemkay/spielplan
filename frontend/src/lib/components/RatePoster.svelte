@@ -2,7 +2,7 @@
   // Inert and badge-free: the poster is the button on the battle card, and the anchoring rule
   // forbids any model number before the answer (§6.1).
   import { hueOf } from '$lib/rate.svelte.js';
-  import { noteMissing, posterSrc, titleIdOf } from '$lib/art.js';
+  import { artReady, noteMissing, posterSrc, titleIdOf } from '$lib/art.js';
 
   // `showName: 'missing'` names only a poster with no art; `lazy` suits a grid of many (Rank).
   /** @type {{ title: any, showName?: boolean | 'missing', lazy?: boolean }} */
@@ -32,6 +32,7 @@
         loading={lazy ? 'lazy' : 'eager'}
         decoding="async"
         draggable="false"
+        {@attach artReady}
         onerror={() => {
           failed = src;
           noteMissing(src);
@@ -49,7 +50,6 @@
   .poster {
     display: block;
     width: 100%;
-    transition: border-color 0.18s ease, transform 0.18s ease;
   }
   /* Inert: the poster sits inside a button, and iOS's image callout would take a long press. */
   .art {

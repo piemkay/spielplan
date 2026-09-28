@@ -234,7 +234,8 @@ describe('a row pages itself and leaves the wheel to the page (decision 528)', (
     const names = [...sheet.querySelectorAll('.card-wrap .name')].map((n) => n.textContent);
     expect(names).toEqual(['Film 1', 'Film 2', 'Film 3', 'Film 4', 'Film 5']);
     sheet.querySelector('.card-wrap').click();
-    expect(onSelect).toHaveBeenCalledWith(1);
+    // The poster as drawn travels with the id, so the card opens on it (decision 530).
+    expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({ id: 1, name: 'Film 1' }));
     unmount(app);
   });
 });

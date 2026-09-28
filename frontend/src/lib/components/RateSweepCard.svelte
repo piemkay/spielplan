@@ -6,16 +6,18 @@
   import RatePoster from '$lib/components/RatePoster.svelte';
   import { metaLine, sentenceCase } from '$lib/rate.svelte.js';
 
+  // `echo`, a snippet, stands in for the reason line a moment after a verdict; `back` deals the card
+  // in from the left, as Undo brought it back.
   let {
     card,
-    reveal = null,
-    holding = false,
+    echo = null,
+    back = false,
     busy = false,
     pending = null,
+    failed = null,
     showModel = false,
     onVerdict,
     onNotSeen,
-    onContinue,
     onPeek,
     onWhy
   } = $props();
@@ -35,7 +37,9 @@
       testid: `rate-verdict-${value}`
     }))
   );
-  const inFlight = $derived(answers.find((a) => pending === `verdict-${a.value}`)?.answer ?? null);
+  const answerOf = (key) => answers.find((a) => key === `verdict-${a.value}`)?.answer ?? null;
+  const inFlight = $derived(answerOf(pending));
+  const pose = $derived(inFlight ?? (pending === 'not_seen' || pending === 'skip' ? pending : null));
 
   // The recall aid shows two lines until "more"; a new card starts clamped again.
   let recall = $state(null);
@@ -55,91 +59,78 @@
   <div class="ask">
     <h2 class="question">How was it?</h2>
     <p class="sub reason">
-      <span data-testid="rate-queue-reason">{reason}</span><span class="tail"
-        >{'\u00a0· '}<button
-          class="hit why-link"
-          data-testid="rate-why"
-          aria-haspopup="dialog"
-          onclick={onWhy}>Why these?</button
-        ></span
-      >
+      {#if echo}{@render echo()}{:else}<span data-testid="rate-queue-reason">{reason}</span><span
+          class="tail"
+          >{'\u00a0· '}<button
+            class="hit why-link"
+            data-testid="rate-why"
+            aria-haspopup="dialog"
+            onclick={onWhy}>Why these?</button
+          ></span
+        >{/if}
     </p>
   </div>
 
-  <div class="film">
-    <button
-      class="art"
-      data-testid="rate-sweep-poster"
-      aria-label="About {title.name ?? 'this title'}"
-      aria-haspopup="dialog"
-      onclick={onPeek}
-    ><RatePoster {title} showName={false} /></button>
-    <div class="under">
-      <h3 class="name" data-testid="rate-card-title">{title.name ?? '—'}</h3>
-      <p class="data" data-testid="rate-card-meta">{metaLine(title)}</p>
+  {#key card?.token}
+    <div class="film" style:--enter-x={back ? '-14px' : null}>
       <button
-        class="hit unseen"
-        data-testid="rate-not-seen"
-        aria-label="Not seen: {title.name ?? 'this title'}"
-        aria-busy={pending === 'not_seen'}
-        disabled={busy}
-        onclick={onNotSeen}
-      ><span class="face"><Icon name="eye-off" size={16} />Not seen</span></button>
-    </div>
-    {#if title.recall_aid || pSeen != null}
-      <div class="recall">
-        {#if pSeen != null}
-          <p class="data" data-testid="rate-queue-p-seen">P(seen) {pSeen.toFixed(2)}</p>
-        {/if}
-        {#if title.recall_aid}
-          <p class="footnote" class:open={expanded} bind:this={recall} data-testid="rate-recall-aid">
-            {title.recall_aid}
-          </p>
-          {#if clamped}
-            <span class="more footnote">…&nbsp;<button
-                class="hit why-link"
-                aria-expanded="false"
-                onclick={() => (expanded = true)}>more</button
-              ></span>
-          {/if}
-        {/if}
+        class="art"
+        data-pose={pose}
+        data-testid="rate-sweep-poster"
+        aria-label="About {title.name ?? 'this title'}"
+        aria-haspopup="dialog"
+        onclick={onPeek}
+      ><RatePoster {title} showName={false} /></button>
+      <div class="under">
+        <h3 class="name" data-testid="rate-card-title">{title.name ?? '—'}</h3>
+        <p class="data" data-testid="rate-card-meta">{metaLine(title)}</p>
+        <button
+          class="hit unseen"
+          data-testid="rate-not-seen"
+          aria-label="Not seen: {title.name ?? 'this title'}"
+          aria-busy={pending === 'not_seen'}
+          disabled={busy}
+          onclick={onNotSeen}
+        ><span class="face"><Icon name="eye-off" size={16} />Not seen</span></button>
       </div>
-    {/if}
-  </div>
+      {#if title.recall_aid || pSeen != null}
+        <div class="recall">
+          {#if pSeen != null}
+            <p class="data" data-testid="rate-queue-p-seen">P(seen) {pSeen.toFixed(2)}</p>
+          {/if}
+          {#if title.recall_aid}
+            <p class="footnote" class:open={expanded} bind:this={recall} data-testid="rate-recall-aid">
+              {title.recall_aid}
+            </p>
+            {#if clamped}
+              <span class="more footnote">…&nbsp;<button
+                  class="hit why-link"
+                  aria-expanded="false"
+                  onclick={() => (expanded = true)}>more</button
+                ></span>
+            {/if}
+          {/if}
+        </div>
+      {/if}
+    </div>
+  {/key}
 
   <div class="answers">
-    {#if holding && reveal}
-      <button
-        class="reveal"
-        data-testid="rate-reveal"
-        data-reveal-available={reveal.available ? 'true' : 'false'}
-        data-reveal-agreed={reveal.agreed ? 'true' : 'false'}
-        onclick={onContinue}
-      >
-        <span class="reveal-text">{reveal.text}</span>
-        <span class="next">
-          Next
-          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-            stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <path d="m9.5 5.5 6.5 6.5-6.5 6.5" />
-          </svg>
-        </span>
-      </button>
-    {:else}
-      <AnswerTiles
-        {answers}
-        label="How was it?"
-        pending={inFlight}
-        disabled={busy}
-        onAnswer={(a) => onVerdict(a.value)}
-      />
-    {/if}
+    <AnswerTiles
+      {answers}
+      label="How was it?"
+      pending={inFlight}
+      failed={answerOf(failed)}
+      disabled={busy}
+      onAnswer={(a) => onVerdict(a.value)}
+    />
   </div>
 </article>
 
 <style>
   /* One frame with a pair (decision 529): the question, the film with Not seen under it, and the
-     answers below at the same place. On a phone the poster takes what height is left. */
+     answers below at the same place. On a phone the poster takes what height is left, up to the
+     desktop's 220 px column (decision 530). */
   .sweep {
     --gap: 12px;
     --col: var(--rate-col, min((100cqw - var(--gap)) / 2, 220px));
@@ -149,7 +140,6 @@
     display: flex;
     flex-direction: column;
     gap: 12px;
-    animation: fadeIn 0.15s var(--ease);
   }
   p {
     margin: 0;
@@ -195,15 +185,19 @@
     font: inherit;
   }
   .film {
+    --enter-x: 14px;
+    --enter-s: 0.985;
     flex: 0 1 auto;
     min-height: 0;
     display: grid;
     grid-template-columns: minmax(0, calc(var(--col) * 2 + var(--gap)));
-    grid-template-rows: minmax(0, calc(var(--col) * 1.5)) auto auto;
+    grid-template-rows: minmax(0, 330px) auto auto;
     grid-template-areas: 'art' 'under' 'recall';
     justify-content: center;
+    animation: enter 260ms var(--ease) backwards;
   }
   .art {
+    position: relative;
     grid-area: art;
     justify-self: center;
     height: 100%;
@@ -213,6 +207,44 @@
     border-radius: var(--r-poster);
     background: none;
     -webkit-tap-highlight-color: transparent;
+    transition: transform 160ms var(--ease), filter 160ms var(--ease), opacity 160ms var(--ease);
+  }
+  /* Liked rises toward the light: a glow painted once, only its opacity moves. */
+  .art::after {
+    content: '';
+    position: absolute;
+    inset: 0;
+    border-radius: inherit;
+    box-shadow: 0 14px 40px -10px rgba(245, 240, 232, 0.3);
+    opacity: 0;
+    transition: opacity 160ms var(--ease);
+    pointer-events: none;
+  }
+  .art[data-pose='liked']::after {
+    opacity: 1;
+  }
+  .art[data-pose='disliked'] {
+    filter: brightness(0.8);
+  }
+  .art[data-pose='not_seen'] {
+    filter: grayscale(0.7) brightness(0.75);
+  }
+  .art[data-pose='skip'] {
+    opacity: 0.85;
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    .art[data-pose='liked'] {
+      transform: translateY(-6px) scale(1.015);
+    }
+    .art[data-pose='fine'] {
+      transform: scale(0.99);
+    }
+    .art[data-pose='disliked'] {
+      transform: translateY(4px) scale(0.985);
+    }
+    .art[data-pose='skip'] {
+      transform: translateX(-6px);
+    }
   }
   .under {
     grid-area: under;
@@ -247,6 +279,7 @@
     border: none;
     background: none;
     color: var(--text-2);
+    transition: opacity var(--dur-quick) var(--ease);
   }
   .face {
     height: 32px;
@@ -260,9 +293,20 @@
     line-height: 18px;
     font-weight: 600;
     white-space: nowrap;
+    transition: transform var(--dur-base) var(--ease-spring), background var(--dur-quick) var(--ease);
   }
-  .unseen:disabled {
+  .unseen:active:not(:disabled) .face {
+    transform: scale(var(--press));
+    transition-duration: var(--dur-press);
+  }
+  .unseen[aria-busy='true'] .face {
+    background: var(--text);
+    color: var(--bg);
+    animation: pop 180ms var(--ease);
+  }
+  .unseen:disabled:not([aria-busy='true']) {
     opacity: 0.45;
+    transition-delay: var(--busy-delay);
   }
   .recall {
     grid-area: recall;
@@ -293,36 +337,6 @@
     flex: none;
     min-height: 74px;
     margin-top: auto;
-  }
-  .reveal {
-    width: 100%;
-    height: 64px;
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 0 16px;
-    border: none;
-    border-radius: var(--r-md);
-    background: var(--surface-1);
-    color: var(--text);
-    text-align: left;
-    animation: fadeIn 0.2s var(--ease);
-  }
-  .reveal-text {
-    flex: 1;
-    display: block;
-    font-size: var(--fs-body);
-    line-height: 22px;
-  }
-  .reveal-text::first-letter {
-    text-transform: uppercase;
-  }
-  .next {
-    display: flex;
-    align-items: center;
-    gap: 2px;
-    font-size: var(--fs-subhead);
-    color: var(--text-3);
   }
 
   /* Left-aligned like every other page; the recall aid takes the second poster's column. */

@@ -2,7 +2,7 @@
   // Never hidden: with nothing it can take back it shows disabled (decisions 35 and 528).
   import { undoKindLabel } from '$lib/rate.svelte.js';
 
-  let { undo, busy = false, onUndo } = $props();
+  let { undo, busy = false, pending = false, onUndo } = $props();
 
   const available = $derived(!!undo?.available);
   // Words, never the journal's column value; `data-undo-kind` keeps the raw kind for tests.
@@ -15,6 +15,7 @@
   aria-label={kindWords ? `Undo the last ${kindWords}` : 'Undo'}
   data-undo-kind={undo?.kind ?? ''}
   data-undo-reason={undo?.reason ?? ''}
+  aria-busy={pending}
   disabled={!available || busy}
   onclick={onUndo}
 >
@@ -30,8 +31,18 @@
   .undo {
     justify-self: start;
     padding-left: 0;
+    transition: opacity var(--dur-quick) var(--ease);
   }
   .undo:disabled {
     opacity: 0.35;
+  }
+  .undo[aria-busy='true'] {
+    opacity: 1;
+  }
+  .undo[aria-busy='true'] svg {
+    animation: unwind 240ms var(--ease-spring);
+  }
+  @keyframes unwind {
+    from { transform: rotate(-40deg); }
   }
 </style>

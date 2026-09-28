@@ -31,8 +31,9 @@
   import RatePoster from '$lib/components/RatePoster.svelte';
   import Sheet from '$lib/components/Sheet.svelte';
 
-  // `ranking`: the rows only Rank passes in, above the answers (decision 528).
-  let { titleId, onClose, onPerson, onStateChange, ranking = undefined } = $props();
+  // `ranking`: the rows only Rank passes in, above the answers (decision 528). `seed`: the title as
+  // the tapped poster had it, so the card opens on its poster and name before the read lands.
+  let { titleId, seed = undefined, onClose, onPerson, onStateChange, ranking = undefined } = $props();
 
   let open = $state(true);
   let data = $state(null);
@@ -40,8 +41,11 @@
   let error = $state('');
   let syncNote = $state('');
   let saving = $state(false);
-  let answerNote = $state('');
+  // Watched just now, so its check draws; one already watched shows it drawn.
+  let justWatched = $state(false);
+  let answerNote = $state(null);
   let answering = $state(null);
+  let refused = $state(null);
   // The server already omits the numbers when off; this gates only labels beside data always sent.
   const showModel = $derived(!!session.user?.show_model);
   const CREDIT_FOLD = 12;
@@ -63,7 +67,8 @@
     data = null;
     error = '';
     syncNote = '';
-    answerNote = '';
+    answerNote = null;
+    justWatched = false;
     // Reset too, or the previous film's credit count shows against this one's people.
     showAllCredits = false;
     picked = null;
@@ -103,6 +108,7 @@
         why: next === 'seen' ? null : data.why
       };
       syncNote = syncNoteFor(res);
+      justWatched = next === 'seen';
       onStateChange?.(data.title.id, next);
     } catch (err) {
       syncNote = `Could not save that — ${err.message}`;
@@ -121,7 +127,8 @@
         : data.title.seen_state === 'seen' && data.my_verdict?.label === choice;
     if (standing) return;
     answering = choice;
-    answerNote = '';
+    answerNote = null;
+    refused = null;
     try {
       const res = await post(`/rate/title/${data.title.id}`, { answer: choice });
       const next = choice === 'not_seen' ? 'unseen' : 'seen';
@@ -136,16 +143,18 @@
         // Rated now, so the why line goes, as on the next open.
         why: choice === 'not_seen' ? data.why : null
       };
-      answerNote = [answeredLine(choice), revealLine(res?.reveal)].filter(Boolean).join(' ');
+      answerNote = { saved: answeredLine(choice), reveal: revealLine(res?.reveal) };
       onStateChange?.(data.title.id, next);
     } catch (err) {
-      answerNote = `Could not save that — ${err.message}`;
+      answerNote = { saved: `Could not save that — ${err.message}`, reveal: '' };
+      refused = choice;
     } finally {
       answering = null;
     }
   }
 
-  const runtime = $derived(runtimeLabel(data?.title));
+  const lead = $derived(data?.title ?? seed ?? null);
+  const runtime = $derived(runtimeLabel(lead));
   // `credits_for` returns every row; the disclosure spends what the payload holds.
   const shownCredits = $derived(
     showAllCredits ? (data?.credits ?? []) : (data?.credits ?? []).slice(0, CREDIT_FOLD)
@@ -153,7 +162,7 @@
   // One list read in two places, so the count line counts every row shown.
   const topCredits = $derived(shownCredits.slice(0, CREDIT_TOP));
   const moreCredits = $derived(shownCredits.slice(CREDIT_TOP));
-  const names = $derived(displayNames(data?.title));
+  const names = $derived(displayNames(lead));
   const directed = $derived(directedBy(data?.credits));
   // The server's reason for this member, or nothing: a card opened from search has none.
   const why = $derived(typeof data?.why === 'string' ? data.why.trim() : '');
@@ -164,7 +173,7 @@
   const kindNoun = $derived(data?.title?.kind === 'series' ? 'series' : 'film');
   const scores = $derived(data?.platform_ratings?.items ?? []);
   // Joined in JS: Svelte collapses the whitespace around {#if} blocks.
-  const subline = $derived(data ? [data.title.year ?? '—', runtime].filter(Boolean).join(' · ') : '');
+  const subline = $derived(lead ? [lead.year ?? '—', runtime].filter(Boolean).join(' · ') : '');
   const pressed = (a) =>
     a.answer !== 'not_seen' &&
     data?.title.seen_state === 'seen' &&
@@ -178,7 +187,7 @@
     {:else if name === 'trailer'}
       <circle cx="12" cy="12" r="8.5" /><path d="M10 8.8v6.4l5-3.2z" fill="currentColor" stroke="none" />
     {:else if name === 'check'}
-      <path d="m5 12.5 4.5 4.5L19 7.5" />
+      <path d="m5 12.5 4.5 4.5L19 7.5" pathLength="1" />
     {:else if name === 'close'}
       <path d="M6 6l12 12M18 6 6 18" />
     {:else if name === 'chevron'}
@@ -237,10 +246,10 @@
 
     {#if error}
       <p class="why err">{error}</p>
-    {:else if !data}
+    {:else if !lead}
       <p class="footnote loading">Loading…</p>
     {:else}
-      {@const t = data.title}
+      {@const t = lead}
       <div class="detail">
         <div class="lead">
           <div class="art"><RatePoster title={t} showName={false} /></div>
@@ -251,106 +260,118 @@
               <p class="alt" data-testid="title-alt-name">{names.secondary}</p>
             {/if}
             <p class="sub">{subline}</p>
-            {#if genreLine(data.genres)}
-              <p class="alt" data-testid="title-genres">{genreLine(data.genres)}</p>
+            {#if genreLine(data?.genres)}
+              <p class="alt" data-testid="title-genres">{genreLine(data?.genres)}</p>
             {/if}
             {#if directed}<p class="footnote" data-testid="title-directed">{directed}</p>{/if}
           </div>
 
-          <div class="main">
-            {#if why}
-              <p class="why" data-testid="title-why">{why}</p>
-            {/if}
-
-            {#if data.actions.play_on_jellyfin}
-              <a class="btn-primary play" href={data.actions.play_on_jellyfin} target="_blank" rel="noreferrer">
-                {@render icon('play')}Play on Jellyfin
-              </a>
+          <div class="main" class:arrive={seed && data}>
+            {#if !data}
+              <div class="pending" aria-hidden="true">
+                <span></span><span class="play"></span><span class="label"></span><span class="tiles"></span>
+              </div>
             {:else}
-              <div class="playblock">
-                <button class="btn-primary play" disabled>{@render icon('play')}Play on Jellyfin</button>
-                <!-- A visible line, not a title= tooltip: touch has no hover. -->
-                <p class="footnote" data-testid="title-jellyfin-why">
-                  {playWhy(data.actions.play_reason ?? 'no_server')}
+              {#if why}
+                <p class="why" data-testid="title-why">{why}</p>
+              {/if}
+
+              {#if data.actions.play_on_jellyfin}
+                <a class="btn-primary play" href={data.actions.play_on_jellyfin} target="_blank" rel="noreferrer">
+                  {@render icon('play')}Play on Jellyfin
+                </a>
+              {:else}
+                <div class="playblock">
+                  <button class="btn-primary play" disabled>{@render icon('play')}Play on Jellyfin</button>
+                  <!-- A visible line, not a title= tooltip: touch has no hover. -->
+                  <p class="footnote" data-testid="title-jellyfin-why">
+                    {playWhy(data.actions.play_reason ?? 'no_server')}
+                  </p>
+                </div>
+              {/if}
+
+              {@render ranking?.()}
+
+              <div class="answerblock">
+                <h3 class="list-header">Your answer</h3>
+                <AnswerTiles
+                  answers={ANSWERS}
+                  label="Your answer"
+                  testid="title-rate"
+                  compact
+                  pending={answering}
+                  {pressed}
+                  failed={refused}
+                  onAnswer={(a) => answer(a.answer)}
+                />
+                <!-- Always there, so a note arriving pushes nothing under it down. -->
+                <p class="footnote status" role="status" data-testid="title-rate-note">
+                  {#if answerNote}
+                    <span class="beat">{answerNote.saved}</span>
+                    <span class="beat reveal">{answerNote.reveal}</span>
+                  {:else if !data.my_verdict}
+                    You haven't rated this yet.
+                  {/if}
                 </p>
               </div>
-            {/if}
 
-            {@render ranking?.()}
-
-            <div class="answerblock">
-              <h3 class="list-header">Your answer</h3>
-              <AnswerTiles
-                answers={ANSWERS}
-                label="Your answer"
-                testid="title-rate"
-                compact
-                pending={answering}
-                {pressed}
-                onAnswer={(a) => answer(a.answer)}
-              />
-              {#if answerNote}
-                <p class="footnote" role="status" data-testid="title-rate-note">{answerNote}</p>
-              {:else if !data.my_verdict}
-                <p class="footnote">You haven't rated this yet.</p>
-              {/if}
-            </div>
-
-            <div class="actions" class:pair={t.trailer_key}>
-              {#if t.trailer_key}
-                <a
-                  class="btn-secondary trailer"
-                  href={`https://www.youtube.com/watch?v=${t.trailer_key}`}
-                  target="_blank"
-                  rel="noreferrer"
-                  aria-label="Watch the trailer on YouTube"
+              <div class="actions" class:pair={t.trailer_key}>
+                {#if t.trailer_key}
+                  <a
+                    class="btn-secondary trailer"
+                    href={`https://www.youtube.com/watch?v=${t.trailer_key}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    aria-label="Watch the trailer on YouTube"
+                  >
+                    {@render icon('trailer')}Trailer
+                  </a>
+                {/if}
+                <!-- Two states only (§4.2); this explicit action outranks what Jellyfin inferred (§7.3). -->
+                <button
+                  class="btn-secondary seen"
+                  class:drawn={justWatched}
+                  aria-pressed={t.seen_state === 'seen'}
+                  onclick={toggleSeen}
+                  aria-busy={saving}
+                  data-seen={t.seen_state ?? 'unseen'}
                 >
-                  {@render icon('trailer')}Trailer
-                </a>
-              {/if}
-              <!-- Two states only (§4.2); this explicit action outranks what Jellyfin inferred (§7.3). -->
-              <button
-                class="btn-secondary seen"
-                aria-pressed={t.seen_state === 'seen'}
-                onclick={toggleSeen}
-                aria-busy={saving}
-                data-seen={t.seen_state ?? 'unseen'}
-              >
-                {@render icon('check')}{t.seen_state === 'seen' ? 'Watched' : 'Mark as watched'}
-              </button>
-              {#if data.actions.show_on_map}
-                <!-- The server sends the target only once the Map ships. -->
-                <a class="btn-secondary" href="/map?title={t.id}">Show on map</a>
-              {/if}
-            </div>
-            {#if syncNote}
-              <p class="footnote syncnote" role="status">{syncNote}</p>
-            {/if}
-            {#if t.kind === 'series' && t.seen_state === 'seen'}
-              <!-- Un-marking a series would need a recursive DELETE over every episode, so it stays app-only. -->
-              <p class="footnote" data-testid="title-series-unseen-note">
-                Marking a series not seen is kept in Spielplan only — Jellyfin is never told to
-                un-play its episodes.
-              </p>
-            {/if}
-
-            {#if t.overview}<p class="overview">{t.overview}</p>{/if}
-
-            {#if data.model_line}
-              <!-- The server's own `text`, so the card and the rail print the same number. -->
-              <div class="modelline" data-testid="title-model-line">
-                {#if data.model_line.available}
-                  <span class="data-lg">{data.model_line.text}</span>
-                  {#if data.model_line.second_line}
-                    <span class="data">{data.model_line.second_line}</span>
-                  {/if}
-                  {#if placedBy(data.model_line.e_source)}
-                    <span class="footnote">{placedBy(data.model_line.e_source)}</span>
-                  {/if}
-                {:else}
-                  <span class="footnote">No numbers for this one — {data.model_line.reason}</span>
+                  {@render icon('check')}{t.seen_state === 'seen' ? 'Watched' : 'Mark as watched'}
+                </button>
+                {#if data.actions.show_on_map}
+                  <!-- The server sends the target only once the Map ships. -->
+                  <a class="btn-secondary" href="/map?title={t.id}">Show on map</a>
                 {/if}
               </div>
+              {#if syncNote}
+                <p class="footnote syncnote" role="status">{syncNote}</p>
+              {/if}
+              {#if t.kind === 'series' && t.seen_state === 'seen'}
+                <!-- Un-marking a series would need a recursive DELETE over every episode, so it stays app-only. -->
+                <p class="footnote" data-testid="title-series-unseen-note">
+                  Marking a series not seen is kept in Spielplan only — Jellyfin is never told to
+                  un-play its episodes.
+                </p>
+              {/if}
+
+              {#if t.overview}<p class="overview">{t.overview}</p>{/if}
+
+              {#if data.model_line}
+                <!-- The server's own `text`, so the card and the rail print the same number. -->
+                <div class="modelline" data-testid="title-model-line">
+                  {#if data.model_line.available}
+                    <span class="data-lg">{data.model_line.text}</span>
+                    {#if data.model_line.second_line}
+                      <span class="data">{data.model_line.second_line}</span>
+                    {/if}
+                    {#if placedBy(data.model_line.e_source)}
+                      <span class="footnote">{placedBy(data.model_line.e_source)}</span>
+                    {/if}
+                  {:else}
+                    <span class="footnote">No numbers for this one — {data.model_line.reason}</span>
+                  {/if}
+                </div>
+              {/if}
             {/if}
           </div>
         </div>
@@ -365,7 +386,7 @@
         {/if}
 
         <!-- A native <details>: the content stays in the document, and the browser owns the state. -->
-        <details class="more" data-testid="title-more">
+        <details class="more" data-testid="title-more" hidden={!data}>
           <summary data-testid="title-more-toggle">
             <span>More about this {kindNoun}</span>{@render icon('chevron', 16)}
           </summary>
@@ -557,6 +578,47 @@
     flex-direction: column;
     gap: 16px;
   }
+  .pending {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+    animation: enter var(--dur-quick) var(--ease) 150ms both;
+  }
+  .pending > span {
+    display: block;
+    width: 70%;
+    height: 20px;
+    border-radius: var(--r-sm);
+    background: var(--surface-1);
+  }
+  .pending > .play,
+  .pending > .tiles {
+    width: auto;
+    height: 50px;
+    border-radius: var(--r-md);
+  }
+  .pending > .label {
+    width: 30%;
+    height: 18px;
+  }
+  .pending > .tiles {
+    height: 60px;
+  }
+  .arrive > * {
+    animation: fadeIn var(--dur-base) var(--ease) both;
+  }
+  .arrive > :nth-child(2) {
+    animation-delay: 30ms;
+  }
+  .arrive > :nth-child(3) {
+    animation-delay: 60ms;
+  }
+  .arrive > :nth-child(4) {
+    animation-delay: 90ms;
+  }
+  .arrive > :nth-child(n + 5) {
+    animation-delay: 120ms;
+  }
   .alt,
   .sub {
     font-size: var(--fs-subhead);
@@ -584,6 +646,15 @@
   .answerblock .list-header {
     padding: 0;
   }
+  .status {
+    min-height: 18px;
+  }
+  .beat {
+    animation: fadeIn var(--dur-quick) var(--ease) both;
+  }
+  .beat.reveal {
+    animation-delay: 160ms;
+  }
   .actions {
     display: grid;
     gap: 12px;
@@ -598,6 +669,17 @@
   }
   .actions .btn-secondary:not(.trailer):not(.seen) {
     grid-column: 1 / -1;
+  }
+  .seen[aria-busy='true'] {
+    opacity: 0.6;
+    transition-delay: 120ms;
+  }
+  .seen[aria-pressed='true'] > svg {
+    color: var(--positive);
+  }
+  .seen.drawn path {
+    stroke-dasharray: 1;
+    animation: draw var(--dur-slow) var(--ease) both;
   }
   .overview {
     font-size: var(--fs-body);

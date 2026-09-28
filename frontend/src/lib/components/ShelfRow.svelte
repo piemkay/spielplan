@@ -1,14 +1,17 @@
 <script>
   // One kind's section of a shelf, so a Films row and a Series row never see each other's items
   // (§4.1 rule 5). No rank number and no tier letter: those live on Rank (decision 527).
+  import { untrack } from 'svelte';
   import Icon from '$lib/components/Icon.svelte';
   import PosterCard, { isColdPlaced } from '$lib/components/PosterCard.svelte';
   import ModelNote from '$lib/components/ModelNote.svelte';
   import Sheet from '$lib/components/Sheet.svelte';
   import { toPosterTitle, whyNumbersLine } from '$lib/home.svelte.js';
 
-  // `level` is 'h3' inside a kind region, whose own heading is the h2.
-  let { section, shelfId, onSelect, level = 'h2' } = $props();
+  // `level` is 'h3' inside a kind region, whose own heading is the h2. `enter` is the row's place
+  // in a staggered arrival, read once: a row already drawn never replays it.
+  let { section, shelfId, onSelect, level = 'h2', enter = null } = $props();
+  const arrival = untrack(() => enter);
 
   // Present only with Show the model on: the server sends `why_numbers` then and at no other time.
   const numbers = $derived(whyNumbersLine(section.why_numbers));
@@ -48,6 +51,8 @@
 
 <section
   class="shelf"
+  class:enter={arrival !== null}
+  style:--i={arrival}
   data-testid="shelf"
   data-shelf={shelfId}
   data-kind={section.kind}
@@ -88,8 +93,9 @@
   <div class="rowwrap" class:fade-start={!atStart} class:fade-end={!atEnd}>
     <div class="row" bind:this={row} onscroll={measure} data-nobar data-testid="shelf-items">
       {#each section.items as item (item.title_id)}
+        {@const title = toPosterTitle(item)}
         <div class="cell" data-testid="shelf-card" data-title={item.title_id}>
-          <PosterCard title={toPosterTitle(item)} onSelect={() => onSelect?.(item.title_id)} />
+          <PosterCard {title} onSelect={() => onSelect?.(title)} />
           <ModelNote model={item.model} compact />
         </div>
       {/each}
@@ -112,7 +118,8 @@
   {/snippet}
   <div class="all" data-testid="shelf-all">
     {#each section.items as item (item.title_id)}
-      <PosterCard title={toPosterTitle(item)} onSelect={() => onSelect?.(item.title_id)} />
+      {@const title = toPosterTitle(item)}
+      <PosterCard {title} onSelect={() => onSelect?.(title)} />
     {/each}
   </div>
 </Sheet>

@@ -1,31 +1,58 @@
 <script>
   // The server's order is §6.0's table; never re-sort it.
+  import { onMount } from 'svelte';
   import ShelfRow from '$lib/components/ShelfRow.svelte';
   import { kindRegions, shelfRows } from '$lib/home.svelte.js';
 
-  let { payload, onSelect, loading = false } = $props();
+  // `stale`: the shelves on screen answer another kind than the one asked for.
+  let { payload, onSelect, loading = false, stale = false } = $props();
 
   const rows = $derived(shelfRows(payload));
   const regions = $derived(kindRegions(payload));
   const both = $derived((payload?.kinds ?? []).length > 1);
+
+  // Rows drawn as the list mounts (Home kept across tabs) are already there: only later ones arrive.
+  let mounted = $state(false);
+  onMount(() => (mounted = true));
 </script>
 
 {#if loading && !rows.length}
-  <p class="footnote" data-testid="shelves-loading">Loading your shelves…</p>
+  <div class="shelves loading" data-testid="shelves-loading">
+    <p class="sr-only" role="status">Loading your shelves…</p>
+    {#each { length: 3 }, i (i)}
+      <div class="skel" aria-hidden="true">
+        <div class="bars"><span class="skeleton"></span><span class="skeleton"></span></div>
+        <div class="cells">
+          {#each { length: 4 }, j (j)}<span class="skeleton"></span>{/each}
+        </div>
+      </div>
+    {/each}
+  </div>
 {:else if rows.length}
-  <div class="shelves" data-testid="shelves" data-shelf-count={payload?.shelves_total ?? 0}>
+  <div
+    class="shelves dims"
+    data-testid="shelves"
+    data-shelf-count={payload?.shelves_total ?? 0}
+    aria-busy={stale}
+  >
     {#if both}
       {#each regions as region (region.kind)}
         <section class="shelves" data-testid="kind-region" data-kind={region.kind}>
           <h2 class="list-header regionhead">{region.heading}</h2>
-          {#each region.rows as row (row.shelf + ':' + row.section.kind)}
-            <ShelfRow section={row.section} shelfId={row.shelf} {onSelect} level="h3" />
+          {#each region.rows as row, i (row.shelf + ':' + row.section.kind)}
+            <ShelfRow
+              section={row.section}
+              shelfId={row.shelf}
+              {onSelect}
+              level="h3"
+              enter={mounted ? i : null}
+            />
           {/each}
         </section>
       {/each}
     {:else}
-      {#each rows as row (row.shelf + ':' + row.section.kind)}
-        <ShelfRow section={row.section} shelfId={row.shelf} {onSelect} />
+      {#each rows as row, i (row.shelf + ':' + row.section.kind)}
+        <ShelfRow section={row.section} shelfId={row.shelf} {onSelect} enter={mounted ? i : null} />
       {/each}
     {/if}
   </div>
@@ -43,6 +70,42 @@
     flex-direction: column;
     gap: 32px;
   }
+  /* Holds the status line, which design.css places absolutely. */
+  .loading {
+    position: relative;
+  }
+  .skel {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .bars {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .bars > span {
+    display: block;
+    width: min(210px, 60%);
+    height: 22px;
+    border-radius: var(--r-xs);
+  }
+  .bars > span + span {
+    width: min(150px, 45%);
+    height: 16px;
+  }
+  .cells {
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: 104px;
+    gap: 10px;
+    margin-right: calc(-1 * var(--gutter));
+    overflow: hidden;
+  }
+  .cells > span {
+    display: block;
+    aspect-ratio: 2 / 3;
+  }
   .regionhead {
     padding: 0;
     margin-bottom: -20px;
@@ -58,5 +121,13 @@
   .empty .why {
     margin: 0;
     max-width: 44ch;
+  }
+
+  @media (min-width: 721px) {
+    .cells {
+      grid-auto-columns: 148px;
+      gap: 16px;
+      margin-right: 0;
+    }
   }
 </style>

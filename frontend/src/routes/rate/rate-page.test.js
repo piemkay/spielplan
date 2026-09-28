@@ -551,6 +551,42 @@ describe('the keyboard (decision 528)', () => {
   });
 });
 
+describe('the echo (decision 530)', () => {
+  const sweep = { ...substitutedSweep, substituted_for: null };
+  const next = { ...sweep, token: 'tok-2', title: { ...sweep.title, id: 42, name: 'Drive' } };
+
+  it("names the card just rated and its guess in the next card's reason line, until the next tap", async () => {
+    await open(envelope({ session: { mode: 'sweep' }, card: sweep }));
+    respond(
+      envelope({
+        session: { mode: 'sweep' },
+        card: next,
+        reveal: { available: true, agreed: false, text: "we'd have guessed fine" }
+      })
+    );
+    target.querySelector('[data-testid="rate-verdict-2"]').click();
+    await settle();
+
+    // The next card is up at once; the guess sits where its reason goes, with the answer's glyph.
+    expect(target.querySelector('[data-testid="rate-card-title"]').textContent).toBe('Drive');
+    const echo = target.querySelector('.reason [data-testid="rate-reveal"]');
+    expect(echo.textContent).toBe("Heat · we'd have guessed fine");
+    expect(echo.querySelector('svg')).toBeTruthy();
+    expect(echo.getAttribute('data-reveal-available')).toBe('true');
+    expect(echo.getAttribute('data-reveal-agreed')).toBe('false');
+    expect(target.querySelector('[data-testid="rate-queue-reason"]')).toBeNull();
+    expect(target.querySelector('.sr-only[role="status"]').textContent).toBe(
+      "Heat · we'd have guessed fine"
+    );
+
+    fetchMock.mockReturnValueOnce(new Promise(() => {}));
+    target.querySelector('[data-testid="rate-verdict-0"]').click();
+    flushSync();
+    expect(target.querySelector('[data-testid="rate-reveal"]')).toBeNull();
+    expect(target.querySelector('[data-testid="rate-queue-reason"]')).toBeTruthy();
+  });
+});
+
 describe("a block's end (decisions 199 and 527)", () => {
   const sweep = { ...substitutedSweep, substituted_for: null };
   const at = (slot, index = 0) =>
@@ -564,7 +600,11 @@ describe("a block's end (decisions 199 and 527)", () => {
       card: sweep,
       class_balance: { ...envelope().class_balance, counts: [3, 5, 7], total: 15 }
     });
-  const fifteenth = { ...at(1, 1), undo: { available: true, kind: 'verdict', reason: null } };
+  const fifteenth = {
+    ...at(1, 1),
+    reveal: { available: true, agreed: true, text: "we'd have guessed the same" },
+    undo: { available: true, kind: 'verdict', reason: null }
+  };
 
   it('is a screen of its own, still undoable, and Rate 15 more goes on to the next card', async () => {
     await open(at(15));
@@ -585,10 +625,12 @@ describe("a block's end (decisions 199 and 527)", () => {
     expect(target.querySelector('[data-testid="rate-sweep-card"]')).toBeNull();
     expect(target.querySelector('[data-testid="rate-skip"]')).toBeNull();
     expect(done.querySelector('[data-testid="rate-done-home"]').getAttribute('href')).toBe('/');
+    expect(done.querySelector('.echo-slot [data-testid="rate-reveal"]')).toBeTruthy();
 
     target.querySelector('[data-testid="rate-done-more"]').click();
     flushSync();
     expect(target.querySelector('[data-testid="rate-done"]')).toBeNull();
+    expect(target.querySelector('[data-testid="rate-reveal"]'), 'the echo shows once').toBeNull();
     expect(target.querySelector('[data-testid="rate-sweep-card"]')).toBeTruthy();
     expect(target.querySelector('[data-testid="rate-counter"]').textContent).toBe('1 of 15');
   });

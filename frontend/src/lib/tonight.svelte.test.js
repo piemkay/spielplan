@@ -58,8 +58,10 @@ import {
   toggleVeto,
   tonight,
   undo,
-  vetoCaption
+  vetoCaption,
+  waitingLine
 } from './tonight.svelte.js';
+import { hideToast, toast } from './toast.svelte.js';
 import { runtimeLabel } from './rate.svelte.js';
 
 describe('the open-rooms row (§6.2 step 2)', () => {
@@ -111,7 +113,7 @@ describe('the waiting lines (54c)', () => {
   it('says where each of the others is in words, and nothing that could be an answer', () => {
     // The renderer must not draw answers even when they are handed to it (54c).
     const lines = progressLines(progress, 3).map((p) => p.line);
-    expect(lines).toEqual(['Patrick is done', 'Jenny is on pair 12']);
+    expect(lines).toEqual(['Patrick 6/6 done', 'Jenny 11 so far']);
     const all = lines.join(' ');
     expect(all, "a seat's answer reached the waiting lines").not.toMatch(/EITHER|NEITHER/i);
     expect(all, 'the pair a seat answered about reached the waiting lines').not.toMatch(
@@ -128,10 +130,15 @@ describe('the waiting lines (54c)', () => {
     expect(progressLines(progress.slice(0, 1), 1)).toEqual([]);
   });
 
-  it('never names an end the round may not reach', () => {
-    // An estimate is not a promise, and the cap is never said (decisions 477 and 507).
-    const lines = progressLines(progress).map((p) => p.line).join(' ');
-    expect(lines).not.toMatch(/~|of about|\/\d/);
+  it('estimates with the typical round until a seat reaches it, and never with the cap', () => {
+    // §6.2 step 4: "Patrick 6/6 done · Jenny 12 so far · Mia 4/~10 · waiting for 2" (decision 507).
+    expect(progressLines(progress).map((p) => p.line)).toEqual([
+      'Patrick 6/6 done',
+      'Jenny 11 so far',
+      'Mia 3/~10'
+    ]);
+    expect(waitingLine(progress)).toBe('Waiting for 2');
+    expect(waitingLine(progress.slice(0, 1)), 'nobody left to wait for').toBe('');
   });
 });
 
@@ -725,7 +732,8 @@ describe('the copy and the controls this milestone moved', () => {
 
     expect(tonight.step).toBe('door');
     expect(tonight.lobby).toBeNull();
-    expect(tonight.error).toMatch(/ended/);
+    expect(tonight.notice, 'news, not a failure').toMatch(/ended/);
+    expect(tonight.error).toBe('');
   });
 
   it('ends the room through the host-only route and lands at the door', async () => {
@@ -809,7 +817,7 @@ describe('overlapping reads land in order (finding 21)', () => {
 
     expect(tonight.step, 'the end of the evening was discarded as stale').toBe('door');
     expect(tonight.lobby).toBeNull();
-    expect(tonight.error).toMatch(/ended/);
+    expect(tonight.notice).toMatch(/ended/);
   });
 
   it('keeps the newer pair on screen when an earlier round read answers last', async () => {
@@ -983,6 +991,15 @@ describe('the first household evening (owner instruction of 2026-09-25)', () => 
     expect(tonight.shareUrl).toBe('https://spielplan.home/tonight?room=QC-4397');
     leave();
     expect(tonight.shareUrl, 'the link outlived the room it belongs to').toBe('');
+  });
+
+  it('says so when the link went to the clipboard', async () => {
+    vi.stubGlobal('location', { protocol: 'https:', host: 'spielplan.home', origin: 'https://spielplan.home' });
+    vi.stubGlobal('navigator', { clipboard: { writeText: async () => {} } });
+    tonight.lobby = roomOf({ room_code: 'QC-4397' });
+    expect(await shareRoom()).toBe('copied');
+    expect(toast.message).toBe('Link copied');
+    hideToast();
   });
 
   it('follows a link by joining that room, and does nothing for the room already on screen', async () => {

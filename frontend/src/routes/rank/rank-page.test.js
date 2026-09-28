@@ -147,6 +147,8 @@ beforeEach(() => {
   phone(1024);
   // jsdom measures nothing, so the desktop grid reads as one column wide.
   vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
+  // jsdom has no Web Animations; the board's animate:flip asks a leaving cell for its running ones.
+  Element.prototype.getAnimations ??= () => [];
   // jsdom here has no storage; the page reads and writes the poster size through this one.
   const saved = new Map();
   vi.stubGlobal('localStorage', {
@@ -180,6 +182,16 @@ afterEach(() => {
   target.remove();
 });
 
+/** Holds the reply to one route until `release()`; the call itself is recorded at once. */
+function hold(part) {
+  let release = () => {};
+  fetchMock.mockImplementation((url, init) => {
+    const reply = route(url, init);
+    return url.includes(part) ? new Promise((r) => (release = () => r(reply))) : reply;
+  });
+  return () => release();
+}
+
 async function settle() {
   for (let i = 0; i < 4; i++) await new Promise((resolve) => setTimeout(resolve, 0));
   flushSync();
@@ -192,6 +204,19 @@ async function open() {
 
 const $ = (testid) => target.querySelector(`[data-testid="${testid}"]`);
 const dialog = (name) => target.querySelector(`[role="dialog"][aria-label="${name}"]`);
+
+describe('a slow first read', () => {
+  it("draws the board's shape and says so, naming no tier", async () => {
+    const release = hold('/api/rank?');
+    await open();
+    expect($('rank-loading').querySelector('[role="status"]').textContent).toBe('Loading your list…');
+    expect(target.querySelector('[data-tier]')).toBeNull();
+    release();
+    await settle();
+    expect($('rank-loading')).toBeNull();
+    expect(target.querySelector('[data-tier]')).toBeTruthy();
+  });
+});
 
 describe('the board (decision 528)', () => {
   it('heads each tier with its letter, the verdict it stands for and its count, best first', async () => {
@@ -250,6 +275,23 @@ describe('Needs a look (§6.3)', () => {
     await settle();
     expect($('rank-queue')).toBeTruthy();
     expect(posts).toEqual([]);
+  });
+
+  it('holds its count while the round runs, and shows the new one once it closes', async () => {
+    boardOver = { straddling: 12 };
+    queueReplies.push({ kind: 'movie', pair: pair(), pool: 3 });
+    queueReplies.push({ kind: 'movie', pair: pair({ token: 'sealed-2' }) });
+    await open();
+    $('rank-sharpen').click();
+    await settle();
+    boardOver = { straddling: 7 };
+    $('rate-duel-A').click();
+    await settle();
+    expect(rank.straddling).toBe(7);
+    expect(look().textContent).toContain('12 titles sit between two tiers');
+    $('rank-queue-close').click();
+    await settle();
+    expect(look().textContent).toContain('7 titles sit between two tiers');
   });
 });
 
@@ -387,6 +429,26 @@ describe('the keyboard lifts, moves and drops a poster (decision 528)', () => {
     expect(posts).toHaveLength(1);
     expect(posts[0].body).toEqual({ title_id: 2, tier: 4, above: 3, below: null });
     expect(toast.message).toBe('Drive moved to A');
+  });
+
+  it('rests the poster in its new spot until the board lands, never back where it was', async () => {
+    await open();
+    const release = hold('/api/rank/drop');
+    const drive = $('rank-open-2');
+    press(drive, ' ');
+    press(drive, 'ArrowRight');
+    flushSync();
+    press(drive, ' ');
+    await settle();
+    expect(posts).toHaveLength(1);
+    const tier = target.querySelector('[data-tier="A"]');
+    expect(tier.querySelector('[data-title="2"]')).toBeNull();
+    expect(tier.querySelector('.slot [data-testid="rate-poster"]').getAttribute('data-title-id')).toBe('2');
+
+    release();
+    await settle();
+    expect(tier.querySelector('.slot')).toBeNull();
+    expect(document.activeElement).toBe(tier.querySelector('[data-title="2"]'));
   });
 
   it('puts the poster back on Esc and writes nothing', async () => {
