@@ -108,7 +108,7 @@
 
   /* Hit areas stay 48px (§6 preamble); a control may draw smaller and extend its hit area. */
   --touch: 48px;
-  --tabbar: 49px;
+  --tabbar: 56px;
   --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
 
   /* Motion (decision 530): arrive on --ease, leave on --ease-in, spring only where something lands. */
