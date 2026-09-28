@@ -2,6 +2,7 @@
 // App-minted ids carry the database's `art_epoch` as `?v=`: a re-seed reuses them, and a 200 is
 // cached for 180 days.
 
+import { still } from '$lib/motion.js';
 import { session } from '$lib/session.svelte.js';
 
 /** `derive/ids.APP_ID_MIN`: the first id this app mints; below it, the corpus's own ids. */
@@ -48,7 +49,7 @@ export function personSrc(credit) {
   return credit?.photo && Number.isInteger(id) && id > 0 ? artSrc(`/api/art/person/${id}`, id) : null;
 }
 
-/** Warm the HTTP cache during Rate's reveal hold, so the next card's art is ready. */
+/** Fetch and decode a poster before its card is drawn, so the next card's art is ready. */
 export function preloadPoster(title) {
   const src = posterSrc(title);
   if (!src || typeof Image === 'undefined') return null;
@@ -56,5 +57,26 @@ export function preloadPoster(title) {
   image.decoding = 'async';
   image.onerror = () => noteMissing(src);
   image.src = src;
+  image.decode?.().catch(() => {});
   return image;
+}
+
+/**
+ * Resolves once these preloaded images have decoded, or after `cap` ms, so a card is not swapped in
+ * over a blank poster. Undefined, with no timer, when none can decode or motion is still.
+ */
+export function ready(images, cap) {
+  const decodable = images.filter((image) => image?.decode);
+  if (!decodable.length || still()) return undefined;
+  const decoded = Promise.all(decodable.map((image) => image.decode().catch(() => {})));
+  return Promise.race([decoded, new Promise((done) => setTimeout(done, cap))]);
+}
+
+/** `{@attach artReady}` on an <img>: art still on its way develops in, cached art shows at once. */
+export function artReady(img) {
+  if (img.complete) return;
+  img.dataset.art = 'loading';
+  const land = () => (img.dataset.art = 'in');
+  img.addEventListener('load', land, { once: true });
+  img.addEventListener('error', land, { once: true });
 }

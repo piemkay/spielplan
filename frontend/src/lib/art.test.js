@@ -1,6 +1,15 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { MISSING_FOR_MS, noteMissing, personSrc, posterSrc, preloadPoster, titleIdOf } from './art.js';
+import {
+  MISSING_FOR_MS,
+  artReady,
+  noteMissing,
+  personSrc,
+  posterSrc,
+  preloadPoster,
+  ready,
+  titleIdOf
+} from './art.js';
 import { preloadArt } from './rate.svelte.js';
 import { session } from './session.svelte.js';
 
@@ -74,18 +83,24 @@ describe('personSrc', () => {
 });
 
 describe('preloading', () => {
-  it('asks the browser for the poster before the card is drawn', () => {
+  it('asks the browser for the poster, decoded, before the card is drawn', () => {
     const made = [];
+    const decoded = [];
     vi.stubGlobal(
       'Image',
       class {
         constructor() {
           made.push(this);
         }
+        decode() {
+          decoded.push(/** @type {any} */ (this).src);
+          return Promise.resolve();
+        }
       }
     );
     preloadPoster({ id: 3 });
     expect(made.map((image) => image.src)).toEqual(['/api/art/3/poster']);
+    expect(decoded).toEqual(['/api/art/3/poster']);
   });
 
   it("preloads every title on Rate's held-back card: the sweep's one or the battle's two", () => {
@@ -121,6 +136,44 @@ describe('preloading', () => {
     preloadPoster({ id: 4051 });
     made[0].onerror();
     expect(posterSrc({ id: 4051 })).toBeNull();
+  });
+});
+
+describe('art readiness', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it('waits for nothing, and arms no timer, when no image can decode or motion is still', () => {
+    vi.useFakeTimers();
+    expect(ready([null, {}], 150)).toBeUndefined();
+    expect(ready([{ decode: () => Promise.resolve() }], 150), 'no matchMedia: still').toBeUndefined();
+    expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it('waits for the decode, but never longer than the cap', async () => {
+    vi.stubGlobal('matchMedia', () => ({ matches: true }));
+    vi.useFakeTimers();
+    let done = false;
+    ready([{ decode: () => Promise.resolve() }, { decode: () => new Promise(() => {}) }], 150).then(
+      () => (done = true)
+    );
+    await vi.advanceTimersByTimeAsync(149);
+    expect(done).toBe(false);
+    await vi.advanceTimersByTimeAsync(1);
+    expect(done).toBe(true);
+  });
+
+  it('hides art still on its way until it lands, and shows cached art at once', () => {
+    const heard = {};
+    const img = { complete: false, dataset: {}, addEventListener: (type, fn) => (heard[type] = fn) };
+    artReady(img);
+    expect(img.dataset.art).toBe('loading');
+    heard.load();
+    expect(img.dataset.art).toBe('in');
+    const cached = { complete: true, dataset: {} };
+    artReady(cached);
+    expect(cached.dataset.art).toBeUndefined();
   });
 });
 

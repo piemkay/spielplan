@@ -215,6 +215,8 @@
 </script>
 
 <svelte:window onkeydown={onRailKey} />
+<!-- WebKit draws :active only on a page that listens for touches; Svelte makes this one passive. -->
+<svelte:document ontouchstart={() => {}} />
 <svelte:head><title>{docTitle}</title></svelte:head>
 
 <!-- A snippet: /setup is bare yet an admin surface, so the banner renders outside the shell too. -->
@@ -337,6 +339,10 @@
     display: grid;
     place-items: center;
     background: var(--ground);
+  }
+  /* Connecting shows only once a boot passes 400 ms, so a quick one never flashes it. */
+  .boot > .footnote {
+    animation: fadeIn var(--dur-base) var(--ease) 400ms both;
   }
   .shell {
     min-height: 100vh;

@@ -1,7 +1,7 @@
 <script>
   // A credit's face: its photo from this origin, else initials on the person's tone (decision 528).
   // The caller sizes it with `--face`.
-  import { noteMissing, personSrc } from '$lib/art.js';
+  import { artReady, noteMissing, personSrc } from '$lib/art.js';
   import { avatarColour } from './Avatar.svelte';
 
   let { credit } = $props();
@@ -23,6 +23,7 @@
       alt=""
       loading="lazy"
       decoding="async"
+      {@attach artReady}
       onerror={() => {
         failed = src;
         noteMissing(src);

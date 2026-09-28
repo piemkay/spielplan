@@ -14,8 +14,13 @@
 
 <script>
   // One 24px grid, 1.75 stroke. With `tone`, a list row's 30px leading tile: a white glyph on a
-  // TONES colour, or `warn`/`wait` on their tints.
+  // TONES colour, or `warn`/`wait` on their tints. The four answers are names too.
   let { name, size = 24, tone = '' } = $props();
+
+  const THUMB = [
+    'M7 10.5V20H4.5a1 1 0 0 1-1-1v-7.5a1 1 0 0 1 1-1z',
+    'M7 10.5 10.8 3.6a1.9 1.9 0 0 1 3.5 1.3L13.4 9h5.2a2 2 0 0 1 2 2.4l-1.4 7A2 2 0 0 1 17.2 20H7'
+  ];
 </script>
 
 {#if tone}
@@ -127,11 +132,17 @@
     {:else if name === 'share'}
       <path d="M12 3.5v11M8 7.5l4-4 4 4" />
       <path d="M6 11H5a1 1 0 0 0-1 1v7.5a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1V12a1 1 0 0 0-1-1h-1" />
-    {:else if name === 'eye-off'}
+    {:else if name === 'eye-off' || name === 'not_seen'}
       <path d="M3.5 3.5l17 17" />
       <path d="M10.6 5.1A9.6 9.6 0 0 1 12 5c5 0 8.5 4.5 9.5 7a13 13 0 0 1-2.7 3.9" />
       <path d="M6.6 6.6C4.6 7.9 3.2 9.9 2.5 12c1 2.5 4.5 7 9.5 7 1.7 0 3.2-.5 4.6-1.2" />
       <path d="M9.9 9.9a3 3 0 0 0 4.2 4.2" />
+    {:else if name === 'liked'}
+      {#each THUMB as d (d)}<path {d} />{/each}
+    {:else if name === 'disliked'}
+      <g transform="rotate(180 12 12)">{#each THUMB as d (d)}<path {d} />{/each}</g>
+    {:else if name === 'fine'}
+      <circle cx="12" cy="12" r="8.5" /><path d="M8.5 14.5h7" /><path d="M9.2 9.8h.01M14.8 9.8h.01" />
     {/if}
   </svg>
 {/snippet}

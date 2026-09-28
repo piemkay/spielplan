@@ -3,7 +3,7 @@
   // Document URLs are text, not links: the bytes live on the worker's volume.
   import { onMount } from 'svelte';
   import { api, get } from '$lib/api.js';
-  import { noteMissing, posterSrc } from '$lib/art.js';
+  import { artReady, noteMissing, posterSrc } from '$lib/art.js';
   import { showToast } from '$lib/toast.svelte.js';
   import Sheet from './Sheet.svelte';
   import ActionSheet from './ActionSheet.svelte';
@@ -113,6 +113,7 @@
         alt=""
         loading="lazy"
         decoding="async"
+        {@attach artReady}
         onerror={() => {
           missing[src] = true;
           noteMissing(src);
