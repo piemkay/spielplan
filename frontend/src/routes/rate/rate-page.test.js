@@ -359,6 +359,27 @@ describe('the second household test on Rate (2026-09-26)', () => {
     expect(JSON.parse(init.body)).toMatchObject({ card_token: 'tok-3', outcome: 'A', decisive: true });
   });
 
+  it('frames a single as a pair: the question, Not seen under the poster, three answers (decision 529)', async () => {
+    const sweep = { ...substitutedSweep, substituted_for: null };
+    await open(mixed({ card: sweep }));
+
+    const card = target.querySelector('[data-testid="rate-sweep-card"]');
+    expect(card.querySelector('.question').textContent).toBe('How was it?');
+    expect([...card.querySelectorAll('.tiles [data-answer]')].map((t) => t.textContent)).toEqual([
+      'Disliked',
+      'Fine',
+      'Liked'
+    ]);
+    const unseen = target.querySelector('[data-testid="rate-not-seen"]');
+    expect(unseen.closest('.tiles')).toBeNull();
+    expect(unseen.getAttribute('aria-label')).toBe('Not seen: Heat');
+
+    respond(mixed({ card: sweep }));
+    unseen.click();
+    await settle();
+    expect(fetchMock.mock.calls[1][0]).toContain('/api/rate/not-seen');
+  });
+
   it('lights the answer in flight while the rest of the card waits (A4)', async () => {
     await open(mixed({ card: { ...substitutedSweep, substituted_for: null } }));
 

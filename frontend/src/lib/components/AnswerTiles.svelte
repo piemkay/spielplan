@@ -63,6 +63,10 @@
   .tile[data-answer='not_seen'] {
     grid-column: 5;
   }
+  /* Rate's single card: the three verdicts alone, Not seen under the poster (decision 529). */
+  .tiles:not(:has([data-answer='not_seen'])) {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
   .tile {
     height: 64px;
     min-width: 0;
@@ -109,12 +113,6 @@
   @media (min-width: 981px) {
     .tiles:not(.compact) {
       gap: 12px;
-    }
-    .tiles:not(.compact) .tile {
-      height: 100px;
-      gap: 8px;
-      font-size: var(--fs-subhead);
-      line-height: 20px;
     }
   }
 </style>

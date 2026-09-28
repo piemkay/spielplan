@@ -2,6 +2,7 @@
   // No model number reaches this card before the answer (§6.1's anchoring rule; the server
   // allow-lists the payload), and nothing is cached between cards.
   import AnswerTiles from '$lib/components/AnswerTiles.svelte';
+  import Icon from '$lib/components/Icon.svelte';
   import RatePoster from '$lib/components/RatePoster.svelte';
   import { metaLine, sentenceCase } from '$lib/rate.svelte.js';
 
@@ -25,21 +26,16 @@
   // P(seen) rides under the server-gated `model`; show it only while the viewer's switch is on too.
   const pSeen = $derived(showModel ? (card?.model?.p_seen ?? null) : null);
 
-  // The wire's verdict labels name the tiles; Not seen is the fourth (§4.2's one seen-state control).
-  const answers = $derived([
-    ...(card?.verdict_labels ?? []).map(([value, label]) => ({
+  // The wire's verdict labels name the tiles; Not seen sits under the poster, as on a pair (decision 529).
+  const answers = $derived(
+    (card?.verdict_labels ?? []).map(([value, label]) => ({
       answer: label,
       value,
       label: sentenceCase(label),
       testid: `rate-verdict-${value}`
-    })),
-    { answer: 'not_seen', label: 'Not seen', testid: 'rate-not-seen' }
-  ]);
-  const inFlight = $derived(
-    pending === 'not_seen'
-      ? 'not_seen'
-      : (answers.find((a) => pending === `verdict-${a.value}`)?.answer ?? null)
+    }))
   );
+  const inFlight = $derived(answers.find((a) => pending === `verdict-${a.value}`)?.answer ?? null);
 
   // The recall aid shows two lines until "more"; a new card starts clamped again.
   let recall = $state(null);
@@ -56,35 +52,46 @@
 </script>
 
 <article class="sweep" data-testid="rate-sweep-card" data-card-token={card?.token}>
-  <div class="hero">
-    <div class="slot">
-      <button
-        class="art"
-        data-testid="rate-sweep-poster"
-        aria-label="About {title.name ?? 'this title'}"
-        aria-haspopup="dialog"
-        onclick={onPeek}
-      ><RatePoster {title} showName={false} /></button>
-    </div>
+  <div class="ask">
+    <h2 class="question">How was it?</h2>
+    <p class="sub reason">
+      <span data-testid="rate-queue-reason">{reason}</span><span class="tail"
+        >{'\u00a0· '}<button
+          class="hit why-link"
+          data-testid="rate-why"
+          aria-haspopup="dialog"
+          onclick={onWhy}>Why these?</button
+        ></span
+      >
+    </p>
+  </div>
 
-    <div class="text">
-      <h2 class="name" data-testid="rate-card-title">{title.name ?? '—'}</h2>
+  <div class="film">
+    <button
+      class="art"
+      data-testid="rate-sweep-poster"
+      aria-label="About {title.name ?? 'this title'}"
+      aria-haspopup="dialog"
+      onclick={onPeek}
+    ><RatePoster {title} showName={false} /></button>
+    <div class="under">
+      <h3 class="name" data-testid="rate-card-title">{title.name ?? '—'}</h3>
       <p class="data" data-testid="rate-card-meta">{metaLine(title)}</p>
-      <p class="why reason">
-        <span data-testid="rate-queue-reason">{reason}</span><span class="tail"
-          >{' · '}<button
-            class="hit why-link"
-            data-testid="rate-why"
-            aria-haspopup="dialog"
-            onclick={onWhy}>Why these?</button
-          ></span
-        >
-      </p>
-      {#if pSeen != null}
-        <p class="data" data-testid="rate-queue-p-seen">P(seen) {pSeen.toFixed(2)}</p>
-      {/if}
-      {#if title.recall_aid}
-        <div class="recall">
+      <button
+        class="hit unseen"
+        data-testid="rate-not-seen"
+        aria-label="Not seen: {title.name ?? 'this title'}"
+        aria-busy={pending === 'not_seen'}
+        disabled={busy}
+        onclick={onNotSeen}
+      ><span class="face"><Icon name="eye-off" size={16} />Not seen</span></button>
+    </div>
+    {#if title.recall_aid || pSeen != null}
+      <div class="recall">
+        {#if pSeen != null}
+          <p class="data" data-testid="rate-queue-p-seen">P(seen) {pSeen.toFixed(2)}</p>
+        {/if}
+        {#if title.recall_aid}
           <p class="footnote" class:open={expanded} bind:this={recall} data-testid="rate-recall-aid">
             {title.recall_aid}
           </p>
@@ -95,9 +102,9 @@
                 onclick={() => (expanded = true)}>more</button
               ></span>
           {/if}
-        </div>
-      {/if}
-    </div>
+        {/if}
+      </div>
+    {/if}
   </div>
 
   <div class="answers">
@@ -124,74 +131,51 @@
         label="How was it?"
         pending={inFlight}
         disabled={busy}
-        onAnswer={(a) => (a.answer === 'not_seen' ? onNotSeen() : onVerdict(a.value))}
+        onAnswer={(a) => onVerdict(a.value)}
       />
     {/if}
   </div>
 </article>
 
 <style>
-  /* The poster takes what height is left, down to a thumbnail on a short screen (decision 528). */
+  /* One frame with a pair (decision 529): the question, the film with Not seen under it, and the
+     answers below at the same place. On a phone the poster takes what height is left. */
   .sweep {
+    --gap: 12px;
+    --col: var(--rate-col, min((100cqw - var(--gap)) / 2, 220px));
+    container-type: inline-size;
     flex: 1;
     min-height: 0;
     display: flex;
     flex-direction: column;
-    gap: 16px;
+    gap: 12px;
     animation: fadeIn 0.15s var(--ease);
   }
-  .hero {
-    flex: 1;
-    min-height: 0;
+  p {
+    margin: 0;
+  }
+  .ask {
+    flex: none;
     display: flex;
     flex-direction: column;
-    justify-content: center;
     align-items: center;
-    gap: 12px;
     text-align: center;
   }
-  .slot {
-    flex: 0 1 300px;
-    min-height: 72px;
-    max-width: 100%;
-    display: flex;
-    justify-content: center;
-  }
-  .art {
-    height: 100%;
-    aspect-ratio: 2 / 3;
-    max-width: 100%;
-    padding: 0;
-    border: none;
-    border-radius: var(--r-poster);
-    background: none;
-    -webkit-tap-highlight-color: transparent;
-  }
-  .text {
-    flex: none;
-    width: 100%;
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-  }
-  .name {
+  .question {
     margin: 0;
     font-family: var(--serif);
     font-weight: 400;
     font-size: 24px;
     line-height: 28px;
-    text-wrap: balance;
   }
-  p {
-    margin: 0;
-  }
-  .text > .data {
+  .sub {
+    font-size: var(--fs-footnote);
     line-height: 18px;
+    color: var(--text-2);
   }
   /* One line: a long reason gives way, "Why these?" never does. */
   .reason {
     max-width: 100%;
-    margin-top: 6px;
     display: flex;
     white-space: nowrap;
   }
@@ -210,13 +194,83 @@
     color: var(--accent-text);
     font: inherit;
   }
-  .recall {
-    position: relative;
-    width: 100%;
-    max-width: 56ch;
-    margin-top: 4px;
+  .film {
+    flex: 0 1 auto;
+    min-height: 0;
+    display: grid;
+    grid-template-columns: minmax(0, calc(var(--col) * 2 + var(--gap)));
+    grid-template-rows: minmax(0, calc(var(--col) * 1.5)) auto auto;
+    grid-template-areas: 'art' 'under' 'recall';
+    justify-content: center;
   }
-  .recall p {
+  .art {
+    grid-area: art;
+    justify-self: center;
+    height: 100%;
+    aspect-ratio: 2 / 3;
+    padding: 0;
+    border: none;
+    border-radius: var(--r-poster);
+    background: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .under {
+    grid-area: under;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding-top: 6px;
+    text-align: center;
+  }
+  .name,
+  .under .data {
+    max-width: 100%;
+    margin: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .name {
+    font-size: var(--fs-subhead);
+    line-height: 20px;
+    font-weight: 600;
+  }
+  .under .data {
+    line-height: 18px;
+  }
+  .unseen {
+    height: 44px;
+    min-height: 44px;
+    margin: 2px 0 -6px;
+    padding: 0;
+    border: none;
+    background: none;
+    color: var(--text-2);
+  }
+  .face {
+    height: 32px;
+    padding: 0 12px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    border-radius: var(--r-pill);
+    background: var(--surface-2);
+    font-size: var(--fs-footnote);
+    line-height: 18px;
+    font-weight: 600;
+    white-space: nowrap;
+  }
+  .unseen:disabled {
+    opacity: 0.45;
+  }
+  .recall {
+    grid-area: recall;
+    position: relative;
+    margin-top: 8px;
+    text-align: center;
+  }
+  .recall p.footnote {
     display: -webkit-box;
     -webkit-line-clamp: 2;
     line-clamp: 2;
@@ -234,8 +288,11 @@
     padding-left: 20px;
     background: linear-gradient(90deg, transparent 0, var(--bg) 16px);
   }
+  /* As tall as a pair's five steps, so both rows start at the same height. */
   .answers {
     flex: none;
+    min-height: 74px;
+    margin-top: auto;
   }
   .reveal {
     width: 100%;
@@ -268,19 +325,48 @@
     color: var(--text-3);
   }
 
-  @media (min-width: 981px) {
+  /* Left-aligned like every other page; the recall aid takes the second poster's column. */
+  @media (min-width: 721px) {
     .sweep {
-      gap: 32px;
+      --gap: var(--rate-gap, 32px);
+      flex: none;
+      gap: 20px;
     }
-    .slot {
-      flex-basis: 420px;
+    .ask {
+      align-items: flex-start;
+      text-align: left;
     }
-    .name {
-      font-size: var(--fs-display);
-      line-height: 48px;
+    .question {
+      font-size: var(--fs-title);
+      line-height: 34px;
     }
-    .reveal {
-      height: 100px;
+    .film {
+      grid-template-columns: var(--col) var(--col);
+      grid-template-rows: calc(var(--col) * 1.5) auto;
+      grid-template-areas: 'art recall' 'under .';
+      column-gap: var(--gap);
+      justify-content: start;
+    }
+    .art {
+      justify-self: start;
+    }
+    .under {
+      align-items: flex-start;
+      text-align: left;
+    }
+    .recall {
+      margin-top: 0;
+      text-align: left;
+    }
+    .recall p.footnote {
+      -webkit-line-clamp: 10;
+      line-clamp: 10;
+      font-size: var(--fs-subhead);
+      line-height: 20px;
+      color: var(--text-2);
+    }
+    .answers {
+      margin-top: 0;
     }
   }
 </style>

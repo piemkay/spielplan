@@ -737,17 +737,36 @@
     opacity: 0.55;
   }
 
+  /* A left-aligned column like every other page, as tall as it needs: the posters take the
+     window's height up to 420px and the answers follow right under them (decision 529). */
   @media (min-width: 721px) {
     .rate {
-      width: 100%;
-      max-width: 560px;
-      margin-inline: auto;
-      height: calc(100dvh - 60px - 32px);
+      --rate-gap: 32px;
+      --rate-col: calc(clamp(240px, 100dvh - 410px, 420px) * 2 / 3);
+      width: min(100%, calc(var(--rate-col) * 2 + var(--rate-gap)));
+      height: auto;
+      margin-bottom: 0;
+      gap: 16px;
     }
-  }
-  @media (min-width: 981px) {
-    .rate {
-      max-width: 660px;
+    .stage {
+      flex: none;
+    }
+    .heavy {
+      align-self: flex-start;
+    }
+    .bar {
+      display: flex;
+    }
+    .title {
+      order: -1;
+      margin-right: auto;
+    }
+    .mode {
+      margin-left: -8px;
+    }
+    .done-head {
+      align-items: flex-start;
+      text-align: left;
     }
   }
 </style>
