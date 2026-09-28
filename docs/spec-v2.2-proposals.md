@@ -15321,6 +15321,78 @@ spec is amended in place (v2.1.11): §6.1's Screen bullet, whose reason line now
 whose end screen opens at the reply, and §6.8, which gains the motion clause. Items 2 and 4 to 6 are
 presentation inside §6.1 and §6.2 as written, and item 7 is conformance.
 
+## Decisions taken (owner, 2026-09-28, ranking from the title card)
+
+### 531. Every title card ranks: the tier row goes wherever the card opens, and a tier on an unrated title answers it
+
+**What the record says.** §6.3 gives the title card two rows above the answers, **In your ranking**
+and **Place with questions**, on the card "opened from Rank alone" (decisions 496, 527 and 528).
+Decision 527 keeps tier letters to Rank (its item 3), and §6.0 and §6.8 say a card carries no tier
+letter or rank number anywhere but Rank. §4.2 records a drop as a `tier_edit`, which puts a title in
+the fit and on the board in the chosen tier. §6.1 says a verdict implies `seen` and says nothing of
+a tier, so a `tier_edit` leaves the title's seen state and verdict as they were. Decision 487 sends
+an answer given on the card through the person's Rate session, which is how it meets decision 212.
+
+**Why it changes.** On 2026-09-28, on the title card opened from Home for a film they had not rated,
+the owner wrote: "there is no option to rank a movie when opening it. I want an option to rank it in
+a tier there". Moving the rows alone would not do it. A `tier_edit` on an unseen title puts it on
+the board while it stays unseen. One that also set `seen` with no verdict would put the title in
+Home's "Rate {n} you watched" row, and the card would still say it is not rated and keep its line on
+why it is suggested.
+
+**The decision.**
+1. **Every title card carries the rows.** Wherever the title card opens (Home, a search, a
+   filmography, Rank), In your ranking and Place with questions sit above the answers. The title
+   read, `GET /api/titles/{id}`, carries `ranking`: this title's tier and tension line, and the
+   person's tiers for its kind, best first, each with its label, verdict word and count. The rank
+   package builds it from the board Rank renders. Rank keeps its behaviour: its move replaces its
+   board, and its tension line, Place link, toast and Undo are unchanged.
+2. **The person's own letter, never the model's.** The row names a letter and verdict word only for
+   a title on the person's board; any other title reads "Not placed yet" and names none. The tier
+   the model guesses for a title the person never placed is not sent, so no guess is shown before
+   the person's own answer (§6.1). The sheet reads "Move {name}" with the current tier checked, or
+   "Rank {name}" with nothing checked, and nothing is revealed before or after the tap. Place with
+   questions shows once the title is on the board and its tier holds another title.
+3. **A tier implies `seen`, and answers a missing verdict.** Every drop, from any surface, sets
+   `seen` as a verdict does. When the title has no live verdict, the same locked transaction first
+   records the verdict its tier stands for: decision 508's class, the verdict word the sheet shows
+   beside the tier. One tap therefore does this:
+   - No verdict (never rated, or only marked not seen): the tier's verdict, the `tier_edit` and
+     `seen`. The title is on the board in that tier once the drop's incremental refit lands, and it
+     leaves Home's "Rate {n} you watched" row.
+   - A verdict, but not on the board yet (its first fit still owed): the `tier_edit`, and `seen`
+     where it was not. It renders in the chosen tier once the fit lands.
+   - A verdict, but marked not seen: the `tier_edit` and `seen`. The verdict stands, as Not seen
+     never removed it.
+   - On the board and seen: the drop as before.
+
+   The rule is the drop's, so it reaches Rank's drag too: dragging a title marked not seen marks it
+   seen.
+4. **The drop writes that verdict itself.** It answers no Rate card: there is no card on the table,
+   no reveal to show and no answer given inside a block. Sent through the Rate session (decision
+   487's route, then the drop) it would replace the card Rate had parked and split one tap into two
+   transactions, and Undo could still not take the tier back. So it has no journal row, block tick,
+   Rate Undo or immediate Played push; the `seen` it sets is owed to Jellyfin and goes out with the
+   worker's seen sync (§7.3). Decisions 212 and 487 stand for the answers the card's own tiles give.
+5. **Undo moves the tier back, and a first placement has none.** A move from a tier offers Undo,
+   which drops the title back into its old tier naming no neighbour; `seen` and the verdict stand. A
+   title that had no tier has none to go back to, so its toast, "{name} placed in {tier}", offers no
+   Undo: taking the placement back would need a second path that deletes an observation, which §4.2
+   allows only for decision 35's Undo. The row stays to pick another tier, and the answer tiles
+   change the verdict or mark the title not seen.
+6. **Off Rank the move replaces no board.** It is the same `POST /api/rank/drop`, for the title's
+   kind, and the row shows the new tier at once. Home re-reads its shelves only when the tap added a
+   verdict or `seen`, as after a rating; a move of a rated, seen title leaves Home as it was. Place
+   with questions opens `/rank/place/{id}?kind=...`, whose Done and Cancel return to where it was
+   opened.
+
+This narrows decision 527's item 3 by this one row: Home, Rate and Tonight still show no tier
+letter on a card in a shelf or grid, on a Rate card or in a reveal, and the title card's In your
+ranking row names the person's own. It restates decision 528's item 7, whose rows were Rank's
+alone. Decisions 508 and 510 stand. The spec is amended in place (v2.1.12): §4.2's `tier_edit`
+comment, §6.0's title card and its sentence on letters, §6.1's Sweep bullet, §6.3's Without a drag
+and Place with questions bullets, and §6.8.
+
 ## §6.2 — Tonight, rewritten (owner decision, 2026-08-29)
 
 Proposal 54 asked which slot carries the alternative on a split axis. The owner answered by
