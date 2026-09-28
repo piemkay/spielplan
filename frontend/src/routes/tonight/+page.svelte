@@ -1,13 +1,16 @@
 <script>
-  // One screen per step: door, lobby, round, waiting, ballot, reveal, solo. The pool is never
-  // sent here, so nothing can draw it even by accident (§6.2 step 3).
+  // One screen per step: door, solo, and a room's lobby, round, waiting, ballot and reveal. The pool
+  // is never sent here, so nothing can draw it even by accident (§6.2 step 3).
   import { onDestroy, onMount } from 'svelte';
   import { replaceState } from '$app/navigation';
+  import ActionSheet from '$lib/components/ActionSheet.svelte';
   import RatePoster from '$lib/components/RatePoster.svelte';
+  import Sheet from '$lib/components/Sheet.svelte';
+  import Avatar from '$lib/components/Avatar.svelte';
+  import Icon from '$lib/components/Icon.svelte';
   import { session } from '$lib/session.svelte.js';
   import {
     ANSWERS,
-    BUDGET_DEFAULT,
     BUDGET_MAX,
     BUDGET_MIN,
     BUDGET_STEP,
@@ -19,6 +22,7 @@
     RESERVED_LABEL,
     REVEAL_BEAT,
     SHARE_CAPTION,
+    WILDCARD_LINE,
     WRAPPED_LINE,
     answer,
     approvalShare,
@@ -26,6 +30,7 @@
     ballotWaitingLine,
     bootstrap,
     breadthLine,
+    budgetLabel,
     budgetSoftLine,
     chooseKind,
     leave,
@@ -36,7 +41,6 @@
     handBallot,
     join,
     linkedRoom,
-    loadBallot,
     loadRooms,
     loadRound,
     loadSolo,
@@ -46,11 +50,15 @@
     othersVetoLines,
     pairFacts,
     pickLabel,
-    progressLine,
+    progressLines,
     rememberBudget,
     restoreBudget,
+    roomEvening,
     roomLine,
+    roomVetoLine,
     roundHeader,
+    settingsDetail,
+    settingsTitle,
     shareRoom,
     sharpen,
     start,
@@ -64,11 +72,13 @@
     vetoCaption
   } from '$lib/tonight.svelte.js';
   // The one runtime formatter, so a series reads `45m/ep` here too.
-  import { metaLine } from '$lib/rate.svelte.js';
+  import { metaLine, runtimeLabel, sentenceCase } from '$lib/rate.svelte.js';
+  import { playWhy } from '$lib/titleCard.js';
 
   let code = $state('');
   let sharpening = $state(false);
   let ending = $state(false);
+  let settingsOpen = $state(false);
   let disconnect = () => {};
 
   // The session this device's socket watches, re-pointed in one place so a racing tap cannot win.
@@ -120,6 +130,12 @@
   const isHost = $derived(
     !!tonight.lobby && tonight.lobby.host?.user_id === session.user?.id
   );
+  // A room is a full-screen flow over the tab bar (§6 preamble, decision 527).
+  const inFlow = $derived(
+    tonight.booted && ['lobby', 'round', 'waiting', 'ballot', 'reveal'].includes(tonight.step)
+  );
+  // Host-only, and on every step a room can stall in.
+  const canEnd = $derived(isHost && tonight.step !== 'reveal');
   // Guests answer on the host's phone once every earlier seat has finished (§6.2 step 2).
   const guestTurns = $derived(
     isHost
@@ -135,6 +151,11 @@
   const ballotOpen = $derived(
     !!ballotSeat && !tonight.submittedSeats.includes(ballotSeat.participant_id)
   );
+  const seated = $derived(tonight.lobby?.seats?.length ?? 0);
+  const perEpisode = $derived(tonight.controls.kind === 'series' ? ' per episode' : '');
+  const budgetFill = $derived(
+    ((tonight.controls.runtime_budget_min - BUDGET_MIN) / (BUDGET_MAX - BUDGET_MIN)) * 100
+  );
 
   // Back to the door; the seat is kept, and the rooms list offers resume.
   async function toDoor() {
@@ -146,7 +167,7 @@
     await loadRooms();
   }
 
-  // Two taps: ending is terminal and releases the room code.
+  // Ending is terminal and releases the room code, so the action sheet asks first.
   async function endTheRoom() {
     await endRoom();
     ending = false;
@@ -174,306 +195,513 @@
       watch(joined.session_id);
     }
   }
+
+  function setGuests(n) {
+    tonight.controls.guests = Math.max(0, Math.min(MAX_GUESTS, n));
+  }
+
+  function seatLine(seat) {
+    if (seat.role === 'guest') {
+      return isHost ? 'On this phone' : `On ${tonight.lobby?.host?.name}'s phone`;
+    }
+    const you = seat.user_id === session.user?.id;
+    const host = seat.user_id === tonight.lobby?.host?.user_id;
+    if (you) return host ? 'You · host' : 'You';
+    return host ? 'Host' : 'Joined';
+  }
+
+  // The account behind a seat, which its avatar's colour is keyed on; a guest has none.
+  function personOf(participantId) {
+    const seat = (tonight.lobby?.seats ?? []).find((s) => s.participant_id === participantId);
+    return seat?.user_id == null
+      ? null
+      : { id: seat.user_id, role: seat.account_role, colour: seat.colour };
+  }
+
+  // Everyone but the seat on this screen.
+  const others = $derived(progressLines(tonight.progress, tonight.activeSeat));
+
+  const low = (s) => (s ? s.charAt(0).toLowerCase() + s.slice(1) : '');
+  // Green only when the title fits; over is a plain fact, not a warning.
+  const fits = (t) => t?.runtime_min != null && !t?.over_budget_min;
 </script>
 
-<section data-testid="tonight-surface">
-  <header>
-    <h1>Tonight</h1>
-    {#if tonight.step !== 'door'}
-      <!-- Back keeps the seat, so a restored room is never a trap. -->
-      <button class="pill back" onclick={toDoor} data-testid="tonight-back">Back</button>
-    {/if}
-    <!-- In the header so every stuck state can reach it; host-only, and not on the reveal. -->
-    {#if isHost && tonight.lobby && tonight.step !== 'door' && tonight.step !== 'reveal'}
-      {#if ending}
+{#snippet problem()}
+  {#if tonight.error}
+    <p class="error" role="alert" data-testid="tonight-error">{tonight.error}</p>
+  {/if}
+{/snippet}
+
+{#snippet bar(title)}
+  <header class="bar">
+    <!-- Back keeps the seat, so a restored room is never a trap. -->
+    <button class="btn-plain back" onclick={toDoor} data-testid="tonight-back">
+      <Icon name="chevron-left" />Tonight
+    </button>
+    <h1 class="bar-title">{title}</h1>
+    <span class="bar-end">
+      {#if canEnd}
         <button
-          class="pill end on"
-          onclick={endTheRoom}
-          disabled={tonight.busy}
-          data-testid="tonight-end-room-confirm">Yes, end it</button
-        >
-        <button class="pill end" onclick={() => (ending = false)} data-testid="tonight-end-room-cancel"
-          >Keep going</button
-        >
-      {:else}
-        <button class="pill end" onclick={() => (ending = true)} data-testid="tonight-end-room"
-          >End room</button
+          class="btn-plain btn-destructive"
+          onclick={() => (ending = true)}
+          data-testid="tonight-end-room">End</button
         >
       {/if}
-    {/if}
-    {#if tonight.error}
-      <p class="error" role="alert" data-testid="tonight-error">{tonight.error}</p>
-    {/if}
+    </span>
   </header>
+{/snippet}
 
+{#snippet play(pick, big)}
+  {#if pick.play_url}
+    <a
+      class={big ? 'btn-primary play' : 'play-icon'}
+      href={pick.play_url}
+      aria-label="Play {pick.name} on Jellyfin"
+      data-testid="tonight-play-{pick.title_id}"
+    >
+      <Icon name="play" size={big ? 20 : 24} />{#if big}<span>Play</span>{/if}
+    </a>
+  {:else if big}
+    <button class="btn-primary play" disabled aria-describedby="play-why-{pick.title_id}"
+      ><Icon name="play" size={20} /><span>Play</span></button
+    >
+    <span class="footnote" id="play-why-{pick.title_id}">{playWhy(pick.play_reason ?? 'no_server')}</span>
+  {:else}
+    <button
+      class="play-icon"
+      disabled
+      aria-label="Play {pick.name} on Jellyfin. {playWhy(pick.play_reason ?? 'no_server')}"
+    >
+      <Icon name="play" />
+    </button>
+  {/if}
+{/snippet}
+
+<!-- Where each of the others has got to, never an answer (54c). -->
+{#snippet whereOthersAre(testid)}
+  <div class="blind">
+    <ul class="others" data-testid={testid}>
+      {#each others as other (other.participant_id)}
+        <li>
+          <Avatar name={other.name} person={personOf(other.participant_id)} size={24} />
+          <span>{other.line}</span>
+        </li>
+      {/each}
+    </ul>
+    <p class="footnote">Answers stay hidden until everyone's done.</p>
+  </div>
+{/snippet}
+
+<!-- The same question as the round (§6.2 step 4), drawing both titles. -->
+{#snippet chooser(pair, onAnswer, ids)}
+  <h2 class="title-1 question">Which one tonight?</h2>
+  <div class="pair">
+    {#each [['A', pair.a], ['B', pair.b]] as [side, title] (side)}
+      <!-- `.choice`, never `.poster`: design.css's `.poster` is a 2:3 frame that fills the phone. -->
+      <button
+        class="choice"
+        onclick={() => onAnswer(side)}
+        disabled={tonight.busy}
+        data-testid="{ids.pick}-{side}"
+      >
+        <span class="art"><RatePoster title={posterOf(title)} showName={false} /></span>
+        <span class="choice-name">{title?.name}</span>
+        {#each pairFacts(title) as fact, i (i)}
+          <span class="fact" data-testid={ids.fact && `${ids.fact}-${side}`}>{fact}</span>
+        {/each}
+      </button>
+    {/each}
+  </div>
+  <div class="answers">
+    {#each ANSWERS.filter((a) => a.value === 'EITHER' || a.value === 'NEITHER') as choice (choice.value)}
+      <button
+        class="btn-secondary"
+        onclick={() => onAnswer(choice.value)}
+        disabled={tonight.busy}
+        data-testid="{ids.answer}-{choice.value}"
+        >{choice.label}</button
+      >
+    {/each}
+  </div>
+{/snippet}
+
+<section class="tonight" class:flow={inFlow} data-testid="tonight-surface">
   {#if !tonight.booted}
     <!-- Until the restore lands, a live door could open a second room for someone already seated. -->
-    <p class="why" data-testid="tonight-booting">reading the room...</p>
+    <p class="footnote" data-testid="tonight-booting">Loading…</p>
   {:else if tonight.step === 'door'}
-    <!-- §6.2 step 1: the controls sit before the solo/group fork and apply to both. -->
-    <div class="controls card" data-testid="tonight-controls">
-      <div class="row">
-        <span class="data label">TYPE</span>
-        {#each [['movie', 'Film'], ['series', 'Series']] as [value, label]}
+    <div class="screen">
+      <h1 class="large-title">Tonight</h1>
+      {@render problem()}
+      <div class="fork">
+        <div class="doors">
+          <button class="door" onclick={openAndWatch} disabled={tonight.busy} data-testid="tonight-open">
+            <span class="door-top">
+              <span class="tile blue"><Icon name="people" size={18} /></span>
+              <span class="chev"><Icon name="chevron-right" size={16} /></span>
+            </span>
+            <span class="door-name">Watch together</span>
+            <span class="why"
+              >Everyone answers a few quick pairs on their own phone, then we reveal one {tonight
+                .controls.kind === 'series'
+                ? 'series'
+                : 'film'} you'll all enjoy.</span
+            >
+          </button>
           <button
-            class="pill"
-            aria-pressed={tonight.controls.kind === value}
-            onclick={() => chooseKind(value, session.user?.id)}
-            data-testid={`tonight-kind-${value}`}>{label}</button
+            class="door"
+            onclick={() => {
+              rememberControls();
+              loadSolo();
+            }}
+            disabled={tonight.busy}
+            data-testid="tonight-solo-door"
           >
-        {/each}
+            <span class="door-top">
+              <span class="tile ember"><Icon name="person" size={18} /></span>
+              <span class="chev"><Icon name="chevron-right" size={16} /></span>
+            </span>
+            <span class="door-name">Just me</span>
+            <span class="why">Three picks and a wildcard, straight away.</span>
+          </button>
+        </div>
+
+        <!-- §6.2 step 1: the controls sit before the fork and apply to both, behind one row. -->
+        <div class="list-group" data-testid="tonight-controls">
+          <button class="list-row summary" onclick={() => (settingsOpen = true)} data-testid="tonight-settings">
+            <span class="tile graphite"><Icon name="sliders" size={18} /></span>
+            <span class="row-text">
+              <span class="figures" data-testid="tonight-summary">{settingsTitle(tonight.controls)}</span>
+              <span class="footnote">{settingsDetail(tonight.controls)}</span>
+            </span>
+            <span class="change">Change</span>
+            <span class="chev"><Icon name="chevron-right" size={16} /></span>
+          </button>
+        </div>
       </div>
-      <label class="row">
-        <span class="data label">TIME</span>
-        <input
-          type="range"
-          min={BUDGET_MIN}
-          max={BUDGET_MAX}
-          step={BUDGET_STEP}
-          bind:value={tonight.controls.runtime_budget_min}
-          data-testid="tonight-budget"
-        />
-        <!-- On a series night the number bounds minutes per episode, and this is where it is set. -->
-        <span class="data" data-testid="tonight-budget-value"
-          >{tonight.controls.runtime_budget_min} min{tonight.controls.kind === 'series'
-            ? ' per episode'
-            : ''}</span
+
+      <section class="group">
+        <h2 class="list-header">Join a room</h2>
+        <form
+          class="join"
+          onsubmit={(e) => {
+            e.preventDefault();
+            joinAndWatch({ roomCode: code });
+          }}
         >
-      </label>
-      <!-- The budget is soft; said here, before the evening. -->
-      <p class="why soft" data-testid="tonight-budget-soft">
-        {budgetSoftLine(tonight.controls.kind)}
-      </p>
-      <label class="row">
-        <span class="data label">REWATCHES</span>
-        <input
-          type="checkbox"
-          bind:checked={tonight.controls.include_rewatches}
-          data-testid="tonight-rewatches"
-        />
-        <span class="why"
-          >{tonight.controls.include_rewatches
-            ? 'including titles you have already seen'
-            : 'skipping what everyone here has seen'}</span
-        >
-      </label>
-      <label class="row">
-        <span class="data label">GUESTS</span>
-        <input
-          type="number"
-          min="0"
-          max={MAX_GUESTS}
-          bind:value={tonight.controls.guests}
-          data-testid="tonight-guests"
-        />
-        <span class="why">they take their turns on this phone, after you</span>
-      </label>
-    </div>
+          <input
+            bind:value={code}
+            placeholder="Room code, e.g. MX-2210"
+            aria-label="Room code"
+            autocomplete="off"
+            autocapitalize="characters"
+            data-testid="tonight-code"
+          />
+          <button class="capsule hit" type="submit" data-testid="tonight-join">Join</button>
+        </form>
+      </section>
 
-    <div class="doors">
-      <button class="door" onclick={openAndWatch} disabled={tonight.busy} data-testid="tonight-open">
-        <span class="big">Together</span>
-        <span class="why">a room the household can join</span>
+      <section class="group" data-testid="tonight-rooms">
+        <h2 class="list-header">Open rooms</h2>
+        {#if tonight.rooms.length === 0}
+          <p class="list-footer" data-testid="tonight-no-rooms">No room is open right now.</p>
+        {:else}
+          <ul class="list-group rows">
+            {#each tonight.rooms as room (room.session_id)}
+              <li class="room" data-testid={`tonight-room-${room.room_code}`}>
+                <Avatar name={room.host} person={room.host_avatar} size={36} />
+                <span class="row-text">
+                  <span>{room.host}'s room</span>
+                  <span class="footnote figures">{roomLine(room)}</span>
+                  <span class="footnote">{roomEvening(room)}</span>
+                  {#if roomVetoLine(room)}<span class="footnote">{roomVetoLine(room)}</span>{/if}
+                </span>
+                {#if room.joinable}
+                  <button
+                    class="capsule tinted hit"
+                    onclick={() => joinAndWatch({ sessionId: room.session_id })}
+                    aria-label="Join {room.host}'s room"
+                    data-testid={`tonight-seat-${room.room_code}`}>Join</button
+                  >
+                {:else if room.viewer_seated}
+                  <button
+                    class="capsule hit"
+                    onclick={() => joinAndWatch({ sessionId: room.session_id })}
+                    data-testid={`tonight-resume-${room.room_code}`}>Resume</button
+                  >
+                {:else}
+                  <span class="footnote">Started</span>
+                {/if}
+              </li>
+            {/each}
+          </ul>
+        {/if}
+        <p class="list-footer">{JOIN_CAPTION}</p>
+      </section>
+    </div>
+  {:else if tonight.step === 'solo' && tonight.solo}
+    {@const [hero, ...rest] = tonight.solo.picks ?? []}
+    {@const wildcard = tonight.solo.wildcard}
+    <div class="screen solo" data-testid="tonight-solo">
+      <button class="btn-plain back" onclick={toDoor} data-testid="tonight-back">
+        <Icon name="chevron-left" />Tonight
       </button>
-      <button
-        class="door"
-        onclick={() => {
-          rememberControls();
-          loadSolo();
-        }}
-        disabled={tonight.busy}
-        data-testid="tonight-solo-door"
-      >
-        <span class="big">Just me</span>
-        <span class="why">three picks and a wildcard, straight away</span>
-      </button>
-    </div>
-
-    <div class="join card">
-      <p class="data label">JOIN A ROOM</p>
-      <form
-        onsubmit={(e) => {
-          e.preventDefault();
-          joinAndWatch({ roomCode: code });
-        }}
-      >
-        <input
-          bind:value={code}
-          placeholder="MX-2210"
-          aria-label="room code"
-          data-testid="tonight-code"
-        />
-        <button class="pill" type="submit" data-testid="tonight-join">Join</button>
-      </form>
-      <p class="why">{JOIN_CAPTION}</p>
-    </div>
-
-    <div class="rooms card" data-testid="tonight-rooms">
-      <p class="data label">OPEN ROOMS</p>
-      {#if tonight.rooms.length === 0}
-        <p class="why" data-testid="tonight-no-rooms">No room is open right now.</p>
+      <div class="solo-head">
+        <h1 class="large-title">Tonight, for {session.user?.name ?? 'you'}</h1>
+        <p class="footnote figures" data-testid="tonight-provenance">{tonight.solo.provenance}</p>
+      </div>
+      {@render problem()}
+      {#if tonight.solo.empty}
+        <p class="why" data-testid="tonight-solo-empty">{tonight.solo.empty}</p>
       {:else}
-        <ul>
-          {#each tonight.rooms as room (room.session_id)}
-            <li data-testid={`tonight-room-${room.room_code}`}>
-              <span class="data">{roomLine(room)}</span>
-              {#if room.joinable}
-                <button
-                  class="pill seat"
-                  onclick={() => joinAndWatch({ sessionId: room.session_id })}
-                  data-testid={`tonight-seat-${room.room_code}`}>tap to join</button
-                >
-              {:else if room.viewer_seated}
-                <button
-                  class="pill seat"
-                  onclick={() => joinAndWatch({ sessionId: room.session_id })}
-                  data-testid={`tonight-resume-${room.room_code}`}>resume</button
-                >
-              {:else}
-                <span class="why">started</span>
-              {/if}
+        <div class="picks" data-testid="tonight-picks">
+          {#if hero}
+            <article class="hero" data-testid={`tonight-pick-${hero.title_id}`}>
+              <span class="hero-art"><RatePoster title={posterOf(hero)} showName={false} /></span>
+              <div class="hero-text">
+                <div class="stack">
+                  <h2 class="title-1">{hero.name}</h2>
+                  <p class="why figures">{metaLine(hero)}</p>
+                  <p class="why" data-testid="tonight-why">{hero.why}</p>
+                </div>
+                <div class="hero-actions">
+                  <span class="badge" class:ok={fits(hero)} data-testid="tonight-fit"
+                    ><span class="dot"></span>{hero.fit_line}</span
+                  >
+                  {@render play(hero, true)}
+                </div>
+              </div>
+            </article>
+          {/if}
+          <ul class="list-group rows">
+            {#each rest as pick (pick.title_id)}
+              <li class="pick" data-testid={`tonight-pick-${pick.title_id}`}>
+                <span class="thumb"><RatePoster title={posterOf(pick)} showName={false} /></span>
+                <span class="row-text">
+                  <span class="pick-name">{pick.name}</span>
+                  <span class="why" data-testid="tonight-why">{pick.why}</span>
+                  <span class="footnote figures" data-testid="tonight-fit"
+                    >{[runtimeLabel(pick), low(pick.fit_line)].filter(Boolean).join(' · ')}</span
+                  >
+                </span>
+                {@render play(pick, false)}
+              </li>
+            {/each}
+            {#if wildcard}
+              <li class="pick" data-testid="tonight-solo-wildcard">
+                <span class="thumb"><RatePoster title={posterOf(wildcard)} showName={false} /></span>
+                <span class="row-text">
+                  <span class="label"><Icon name="sparkle" size={14} />Wildcard</span>
+                  <span class="pick-name">{wildcard.name}</span>
+                  <span class="why" data-testid="tonight-why">{wildcard.why}</span>
+                  <span class="footnote figures" data-testid="tonight-fit"
+                    >{[runtimeLabel(wildcard), low(wildcard.fit_line)].filter(Boolean).join(' · ')}</span
+                  >
+                </span>
+                {@render play(wildcard, false)}
+              </li>
+            {/if}
+          </ul>
+        </div>
+        <div class="two">
+          <!-- Reshuffle posts `sharpen: false`, so no pair back is not a converged round: clear the flag. -->
+          <button
+            class="btn-secondary"
+            onclick={() => {
+              sharpening = false;
+              loadSolo({ reshuffle: true });
+            }}
+            data-testid="tonight-reshuffle"><Icon name="dice" size={20} />Reshuffle</button
+          >
+          {#if !sharpening}
+            <!-- Not gated on a pair in hand: this tap is what asks for one. -->
+            <button
+              class="btn-secondary"
+              onclick={() => {
+                sharpening = true;
+                loadSolo({ sharpen: true });
+              }}
+              data-testid="tonight-sharpen">Sharpen this</button
+            >
+          {/if}
+        </div>
+        {#if tonight.solo.wrapped}
+          <!-- A reshuffle that has come back round returns titles already seen here, so say so. -->
+          <p class="footnote" data-testid="tonight-wrapped">{WRAPPED_LINE}</p>
+        {/if}
+        {#if sharpening && !tonight.solo.pair}
+          <!-- Said out loud, or a converged round would answer "Sharpen this" with a blank. -->
+          <p class="footnote" data-testid="tonight-sharpen-done">
+            Nothing left to ask — these picks are as sharp as they get tonight.
+          </p>
+        {/if}
+        {#if tonight.solo.pair && sharpening}
+          <div class="round" data-testid="tonight-sharpen-pair">
+            {@render chooser(tonight.solo.pair, sharpen, { pick: 'tonight-sharpen', answer: 'tonight-sharpen' })}
+          </div>
+        {/if}
+      {/if}
+    </div>
+  {:else if tonight.step === 'lobby' && tonight.lobby}
+    <div class="screen" data-testid="tonight-lobby">
+      {@render bar(isHost ? 'Your room' : `${tonight.lobby.host?.name}'s room`)}
+      {@render problem()}
+      <section class="code-card">
+        <h2 class="list-header">Room code</h2>
+        <p class="room-code" data-testid="tonight-room-code">{tonight.lobby.room_code}</p>
+        <p class="footnote" data-testid="tonight-share-caption">{SHARE_CAPTION}</p>
+        <!-- Share opens the phone's sheet; without one the link is written out below. -->
+        <button class="capsule hit" onclick={shareRoom} data-testid="tonight-share">
+          <Icon name="share" size={18} />Share link
+        </button>
+        {#if tonight.shareUrl}
+          <p class="footnote link" data-testid="tonight-share-url">{tonight.shareUrl}</p>
+        {/if}
+      </section>
+
+      <section class="group">
+        <h2 class="list-header">Who's in</h2>
+        <ul class="list-group rows" data-testid="tonight-seats">
+          {#each tonight.lobby.seats as seat (seat.participant_id)}
+            <li class="seat">
+              <Avatar name={seat.name} person={personOf(seat.participant_id)} />
+              <span class="row-text">
+                <span>{seat.name}</span>
+                <span class="footnote">{seatLine(seat)}</span>
+              </span>
+              <span class="badge ok"><span class="dot"></span>Ready</span>
             </li>
           {/each}
         </ul>
-      {/if}
-    </div>
-  {/if}
+      </section>
 
-  {#if tonight.step === 'lobby' && tonight.lobby}
-    <div class="card lobby" data-testid="tonight-lobby">
-      <p class="data code" data-testid="tonight-room-code">{tonight.lobby.room_code}</p>
-      <!-- Share opens the phone's sheet; without one the link is written out below. -->
-      <div class="row">
-        <p class="why" data-testid="tonight-share-caption">{SHARE_CAPTION}</p>
-        <button class="pill" onclick={shareRoom} data-testid="tonight-share">Share link</button>
-      </div>
-      {#if tonight.shareUrl}
-        <p class="data link" data-testid="tonight-share-url">{tonight.shareUrl}</p>
-      {/if}
-      <p class="why">{JOIN_CAPTION}</p>
-      <ul class="seats" data-testid="tonight-seats">
-        {#each tonight.lobby.seats as seat (seat.participant_id)}
-          <li>
-            <span>{seat.name}</span>
-            <span class="data label"
-              >{seat.user_id === session.user?.id ? 'this phone' : seat.role}</span
-            >
-          </li>
-        {/each}
-      </ul>
       <!-- Up to three chips each; the pool leaves out anything anyone ruled out (decision 505). -->
-      <div class="vetoes" data-testid="tonight-vetoes">
-        <p class="data label">NOT TONIGHT</p>
-        <div class="row">
+      <section class="group" data-testid="tonight-vetoes">
+        <h2 class="list-header">Not tonight</h2>
+        <div class="chips">
           {#each tonight.lobby.veto_options ?? [] as option (option.key)}
             {@const on = vetoKeys.includes(option.key)}
             <button
-              class="pill veto"
+              class="pill"
               aria-pressed={on}
               disabled={tonight.busy || (!on && vetoKeys.length >= MAX_VETOES)}
               onclick={() => toggleVeto(option.key, session.user?.id)}
-              data-testid={`tonight-veto-${option.key}`}>{option.label}</button
+              data-testid={`tonight-veto-${option.key}`}>{sentenceCase(option.label)}</button
             >
           {/each}
         </div>
         {#each othersVetoes as line (line)}
-          <p class="data" data-testid="tonight-others-vetoes">{line}</p>
+          <p class="list-footer" data-testid="tonight-others-vetoes">{line}</p>
         {/each}
-        <p class="why" data-testid="tonight-veto-caption">{vetoCaption(tonight.lobby.kind)}</p>
-        <p class="why" data-testid="tonight-mood-caption">{MOOD_CAPTION}</p>
-      </div>
-      {#if isHost}
-        <p class="why">Start whenever you are ready. Anyone who joins before you start is in.</p>
-        <button
-          class="pill on"
-          onclick={start}
-          disabled={tonight.busy}
-          data-testid="tonight-start">Start</button
-        >
-      {:else}
-        <p class="why" data-testid="tonight-waiting-for-host">
-          {tonight.lobby.host?.name} starts when everyone is in.
-        </p>
-      {/if}
-    </div>
-  {/if}
+        <p class="list-footer" data-testid="tonight-veto-caption">{vetoCaption(tonight.lobby.kind)}</p>
+      </section>
 
-  {#if tonight.step === 'round' && tonight.round?.pair}
-    <div class="round" data-testid="tonight-round">
-      <!-- What to expect, not the cap, which the round is built to avoid. -->
-      <p class="data label roundcount" data-testid="tonight-round-count">{roundHeader(tonight.round)}</p>
-      <h2>Which one tonight?</h2>
-      <!-- `.choice`, never `.poster`: design.css's global `.poster` is a 2:3 frame that filled the phone. -->
-      <div class="pair">
-        {#each [['A', tonight.round.pair.a], ['B', tonight.round.pair.b]] as [side, title]}
-          <button
-            class="choice"
-            onclick={() => answer(side)}
-            disabled={tonight.busy}
-            data-testid={`tonight-pick-${side}`}
+      <section class="group">
+        <div class="list-group">
+          <div class="list-row summary">
+            <span class="tile graphite"><Icon name="sliders" size={18} /></span>
+            <span class="row-text">
+              <span class="figures">{settingsTitle(tonight.lobby)}</span>
+              <span class="footnote">{settingsDetail({ include_rewatches: tonight.lobby.include_rewatches })}</span>
+            </span>
+          </div>
+        </div>
+        <p class="list-footer" data-testid="tonight-mood-caption">{MOOD_CAPTION}</p>
+      </section>
+
+      <div class="dock">
+        {#if isHost}
+          <button class="btn-primary wide" onclick={start} disabled={tonight.busy} data-testid="tonight-start"
+            >Start — {seated} {seated === 1 ? 'person' : 'people'}</button
           >
-            <span class="art"><RatePoster title={posterOf(title)} showName={false} /></span>
-            <span class="big">{title?.name}</span>
-            {#each pairFacts(title) as fact, i (i)}
-              <span class="why fact" data-testid={`tonight-pair-fact-${side}`}>{fact}</span>
-            {/each}
-          </button>
-        {/each}
-      </div>
-      <!-- Side by side: stacked, the two answers cost the height the pair cards need. -->
-      <div class="levels">
-        {#each ANSWERS.filter((a) => a.value === 'EITHER' || a.value === 'NEITHER') as choice}
-          <button
-            class="pill level"
-            onclick={() => answer(choice.value)}
-            disabled={tonight.busy}
-            data-testid={`tonight-answer-${choice.value}`}>{choice.label}</button
-          >
-        {/each}
-      </div>
-      <div class="row quiet">
-        <button class="pill" onclick={undo} data-testid="tonight-undo">Undo</button>
-        {#if tonight.round.escape_available}
-          <button class="pill" onclick={escape} data-testid="tonight-escape">{ESCAPE_LABEL}</button>
         {:else}
-          <span class="why" data-testid="tonight-escape-locked"
-            >“{ESCAPE_LABEL}” opens at pair 6</span
+          <p class="footnote center" data-testid="tonight-waiting-for-host">
+            {tonight.lobby.host?.name} starts when everyone is in.
+          </p>
+        {/if}
+      </div>
+    </div>
+  {:else if tonight.step === 'round' && tonight.round?.pair}
+    {@const now = (tonight.round.answered ?? 0) + 1}
+    <div class="screen round" data-testid="tonight-round">
+      <header class="bar">
+        <button class="btn-plain back" onclick={toDoor} data-testid="tonight-back">Leave</button>
+        <!-- What to expect, not the cap, which the round is built to avoid. -->
+        <p class="bar-count figures" data-testid="tonight-round-count">{roundHeader(tonight.round)}</p>
+        <span class="bar-end">
+          <button class="btn-plain" onclick={undo} data-testid="tonight-undo">Undo</button>
+        </span>
+      </header>
+      <div class="dots" aria-hidden="true">
+        {#each { length: Math.max(tonight.round.typical ?? 10, now) }, i (i)}
+          <span class:on={i < now}></span>
+        {/each}
+      </div>
+      {@render problem()}
+      {@render chooser(tonight.round.pair, answer, {
+        pick: 'tonight-pick',
+        answer: 'tonight-answer',
+        fact: 'tonight-pair-fact'
+      })}
+      {#if others.length}
+        {@render whereOthersAre('tonight-round-progress')}
+      {/if}
+      <div class="escape">
+        {#if tonight.round.escape_available}
+          <button class="btn-plain" onclick={escape} data-testid="tonight-escape">{ESCAPE_LABEL}</button>
+        {:else}
+          <p class="locked" data-testid="tonight-escape-locked">
+            <span>{ESCAPE_LABEL}</span>
+            <span class="footnote">Available from pair 6</span>
+          </p>
+        {/if}
+        {#if canEnd}
+          <button class="btn-plain btn-destructive" onclick={() => (ending = true)} data-testid="tonight-end-room"
+            >End the room</button
           >
         {/if}
       </div>
     </div>
-  {/if}
-
-  {#if tonight.step === 'waiting'}
-    <div class="card" data-testid="tonight-waiting">
-      <p class="data label">WAITING</p>
+  {:else if tonight.step === 'waiting'}
+    <div class="screen" data-testid="tonight-waiting">
+      {@render bar(tonight.lobby?.state === 'ballot' ? 'Votes' : 'Waiting')}
+      {@render problem()}
       {#if tonight.lobby?.state === 'ballot'}
         <!-- After this phone has voted, the ballot's status, not the round's counts. -->
-        <p class="data" data-testid="tonight-ballot-waiting">{ballotWaitingLine(tonight.ballot)}</p>
-        <p class="why">Nobody sees anybody's votes until every vote is in.</p>
+        <h2 class="title-1">Waiting for the others</h2>
+        <p class="why" data-testid="tonight-ballot-waiting">{ballotWaitingLine(tonight.ballot)}</p>
+        <p class="footnote">Nobody sees anybody's votes until every vote is in.</p>
       {:else}
-        <p class="data" data-testid="tonight-progress">{progressLine(tonight.progress)}</p>
-        <p class="why">Nobody sees anybody's answers until every round has finished.</p>
-        {#each guestTurns as guest (guest.participant_id)}
+        <h2 class="title-1">Your answers are in</h2>
+        {@render whereOthersAre('tonight-progress')}
+        {#if guestTurns.length}
+          <!-- Guests take turns in seat order, so there is one next step (§6.2 step 2). -->
+          {@const [next, ...later] = guestTurns}
           <button
-            class="pill"
-            onclick={() => loadRound(guest.participant_id)}
-            data-testid={`tonight-hand-to-${guest.participant_id}`}>pass to {guest.name}</button
+            class="btn-primary wide"
+            onclick={() => loadRound(next.participant_id)}
+            data-testid={`tonight-hand-to-${next.participant_id}`}>Pass the phone to {next.name}</button
           >
-        {/each}
+          {#if later.length}
+            <p class="footnote center" data-testid="tonight-later-turns">
+              Then: {later.map((g) => g.name).join(', ')}
+            </p>
+          {/if}
+        {/if}
       {/if}
     </div>
-  {/if}
-
-  {#if tonight.step === 'ballot' && tonight.ballot?.slate}
-    <div class="card" data-testid="tonight-ballot">
-      <h2>Tap what you'd be happy with</h2>
-      <p class="why">Approvals stay hidden until everyone has submitted.</p>
+  {:else if tonight.step === 'ballot' && tonight.ballot?.slate}
+    <div class="screen" data-testid="tonight-ballot">
+      {@render bar('Vote')}
+      {@render problem()}
+      <div class="stack">
+        <h2 class="title-1">Which would you be happy with?</h2>
+        <p class="footnote">Tap every one you'd watch. Votes stay hidden until everyone has voted.</p>
+      </div>
       {#if ballotOpen}
         <!-- Whose ballot this is: on the host's phone it is not always the owner's. -->
-        <p class="data label" data-testid="tonight-ballot-seat">{ballotSeat.name}</p>
-        <!-- Chosen rows are outlined and ticked; the one filled control is Submit. -->
-        <ul class="slate">
+        <p class="whose"><span data-testid="tonight-ballot-seat">{ballotSeat.name}</span>'s turn</p>
+        <ul class="list-group rows">
           {#each tonight.ballot.slate as card (card.title_id)}
             {@const picked = tonight.approved.includes(card.title_id)}
             <li>
@@ -484,337 +712,935 @@
                 data-testid={`tonight-approve-${card.title_id}`}
               >
                 <span class="thumb"><RatePoster title={posterOf(card)} showName={false} /></span>
-                <span class="option-text">
-                  <span class="big">{card.name}</span>
-                  {#if card.slot === 'wildcard'}<span class="why">a step outside your usual</span>{/if}
+                <span class="row-text">
+                  {#if card.slot === 'wildcard'}
+                    <span class="label"><Icon name="sparkle" size={14} />Wildcard</span>
+                  {/if}
+                  <span class="pick-name">{card.name}</span>
+                  <span class="footnote figures">{metaLine({ ...card, kind: tonight.lobby?.kind })}</span>
+                  {#if card.slot === 'wildcard'}<span class="why">{WILDCARD_LINE}</span>{/if}
                 </span>
-                <span class="tick" aria-hidden="true">{picked ? '✓' : ''}</span>
+                <span class="tick" aria-hidden="true">{#if picked}<Icon name="check" size={16} />{/if}</span>
               </button>
             </li>
           {/each}
         </ul>
-        <div class="submitbar" data-testid="tonight-submit-bar">
+      {/if}
+      <!-- The ballot's hand-off: without it a guest's vote could never be cast. -->
+      {#each ballotSeats as guest (guest.participant_id)}
+        <button
+          class="btn-secondary wide"
+          onclick={() => handBallot(guest.participant_id)}
+          data-testid={`tonight-ballot-to-${guest.participant_id}`}>Pass to {guest.name}</button
+        >
+      {/each}
+      <p class="footnote figures" data-testid="tonight-ballot-progress">
+        {tonight.ballot.submitted} of {tonight.ballot.seated} have voted
+      </p>
+      {#if ballotOpen}
+        <!-- Docked at the bottom, so no ballot row shows, or is tappable, beneath Submit. -->
+        <div class="dock" data-testid="tonight-submit-bar">
           <button
-            class="btn-primary submit"
+            class="btn-primary wide"
             onclick={() => submitBallot(tonight.activeSeat)}
             disabled={tonight.busy || tonight.activeSeat === null}
             data-testid="tonight-submit-ballot">{submitLabel(tonight.approved.length)}</button
           >
         </div>
       {/if}
-      <!-- The ballot's hand-off: without it a guest's vote could never be cast. -->
-      {#each ballotSeats as guest (guest.participant_id)}
-        <button
-          class="pill hand"
-          onclick={() => handBallot(guest.participant_id)}
-          data-testid={`tonight-ballot-to-${guest.participant_id}`}>pass to {guest.name}</button
-        >
-      {/each}
-      <p class="data" data-testid="tonight-ballot-progress">
-        {tonight.ballot.submitted} of {tonight.ballot.seated} submitted
-      </p>
     </div>
-  {/if}
-
-  {#if tonight.step === 'reveal' && tonight.result}
-    <div class="reveal" data-testid="tonight-reveal">
-      <p class="data beat" data-testid="tonight-beat">{REVEAL_BEAT}</p>
-      <div class="winner card" data-testid="tonight-winner">
-        <!-- `.hero` bounds the poster so Play stays on a phone's first screen. -->
-        <span class="hero"><RatePoster title={posterOf(tonight.result.winner)} showName={false} /></span>
-        <h2>{tonight.result.winner?.name}</h2>
-        <p class="why">{metaLine(tonight.result.winner)}</p>
-        {#if tonight.result.winner?.label}
-          <!-- The wildcard won: this card carries its label. -->
-          <p class="why" data-testid="tonight-winner-label">{tonight.result.winner.label}</p>
-        {/if}
-        <p class="data" data-testid="tonight-approval-share">{approvalShare(tonight.result)}</p>
-        {#if tonight.result.winner?.reserved}
-          <!-- The reserved finalist is labelled as such (54d). -->
-          <p class="data" data-testid="tonight-reserved">{RESERVED_LABEL}</p>
-        {/if}
-        {#if tonight.result.winner?.reserved_for}
-          <!-- A seat's own pick carries its own label, never the counterweight's (decision 479). -->
-          <p class="data" data-testid="tonight-reserved-for">
-            {pickLabel(tonight.result.winner.reserved_for.name)}
+  {:else if tonight.step === 'reveal' && tonight.result}
+    {@const result = tonight.result}
+    {@const winner = result.winner}
+    <div class="screen reveal" data-testid="tonight-reveal">
+      <header class="bar">
+        <span></span>
+        <p class="list-header beat" data-testid="tonight-beat">{REVEAL_BEAT}</p>
+        <span class="bar-end">
+          <button class="btn-plain done" onclick={toDoor} data-testid="tonight-back">Done</button>
+        </span>
+      </header>
+      {@render problem()}
+      {#if winner}
+        <div class="winner" data-testid="tonight-winner">
+          <span class="winner-art"><RatePoster title={posterOf(winner)} showName={false} /></span>
+          <h2 class="title-1">{winner.name}</h2>
+          <p class="winner-meta">
+            <span class="why figures">{metaLine(winner)}</span>
+            <span class="badge" class:ok={fits(winner)} data-testid="tonight-fit-line"
+              ><span class="dot"></span>{winner.fit_line}</span
+            >
+          </p>
+          {#if winner.label}
+            <!-- The wildcard won: this card carries its label. -->
+            <p class="label" data-testid="tonight-winner-label"><Icon name="sparkle" size={14} />{winner.label}</p>
+          {/if}
+          {#if winner.reserved}
+            <!-- The reserved finalist is labelled as such (54d). -->
+            <p class="label" data-testid="tonight-reserved">{RESERVED_LABEL}</p>
+          {/if}
+          {#if winner.reserved_for}
+            <!-- A seat's own pick carries its own label, never the counterweight's (decision 479). -->
+            <p class="label" data-testid="tonight-reserved-for">{pickLabel(winner.reserved_for.name)}</p>
+          {/if}
+          <p class="approval">
+            <span class="faces">
+              {#each result.breadth ?? [] as b (b.participant_id)}
+                <Avatar name={b.name} person={personOf(b.participant_id)} size={32} yes={b.said_yes} />
+              {/each}
+            </span>
+            <span data-testid="tonight-approval-share">{approvalShare(result)}</span>
+          </p>
+        </div>
+        {#if winner.conflict}
+          <p class="why" data-testid="tonight-conflict">
+            {winner.conflict.headline}
+            {winner.conflict.explanation}
           </p>
         {/if}
-        <!-- How broad each yes was, released with the reveal (54e). -->
-        <p class="why" data-testid="tonight-breadth">{breadthLine(tonight.result)}</p>
-        {#each onlyYesLines(tonight.result) as only (only)}
-          <p class="why" data-testid="tonight-only-yes">{only}</p>
-        {/each}
-        <p class="why" data-testid="tonight-fit-line">{tonight.result.winner?.fit_line}</p>
-        <ul class="matches" data-testid="tonight-match-lines">
-          {#each tonight.result.winner?.match_lines ?? [] as line}
-            <li class="why">{line.line}</li>
+        <ul class="list-group rows" data-testid="tonight-match-lines">
+          {#each winner.match_lines ?? [] as line, i (i)}
+            <li class="seat">
+              <Avatar name={line.name} person={personOf(line.participant_id)} />
+              <span class="row-text">
+                <span class="pick-name">{line.name}</span>
+                <span class="why sentence">{line.line}</span>
+              </span>
+            </li>
           {/each}
         </ul>
-        {#if tonight.result.winner?.conflict}
-          <p class="why" data-testid="tonight-conflict">
-            {tonight.result.winner.conflict.headline}
-            {tonight.result.winner.conflict.explanation}
-          </p>
-        {/if}
-        {#if tonight.result.winner?.play_url}
-          <a
-            class="btn-primary play"
-            href={tonight.result.winner.play_url}
-            data-testid="tonight-play">Play on Jellyfin</a
+        <div class="stack">
+          <!-- How broad each yes was, released with the reveal (54e). -->
+          <p class="footnote figures" data-testid="tonight-breadth">{breadthLine(result)}</p>
+          {#each onlyYesLines(result) as only (only)}
+            <p class="footnote" data-testid="tonight-only-yes">{only}</p>
+          {/each}
+        </div>
+        {#if winner.play_url}
+          <a class="btn-primary play wide" href={winner.play_url} data-testid="tonight-play"
+            ><Icon name="play" size={20} />Play on Jellyfin</a
           >
         {:else}
-          <span class="pill disabled play" aria-disabled="true" data-testid="tonight-play"
-            >Play on Jellyfin — no Jellyfin link</span
+          <button class="btn-primary play wide" disabled aria-describedby="tonight-play-why" data-testid="tonight-play"
+            ><Icon name="play" size={20} />Play on Jellyfin</button
           >
+          <p class="footnote center" id="tonight-play-why">{playWhy(winner.play_reason ?? 'no_server')}</p>
         {/if}
-      </div>
+      {/if}
 
-      <div class="runners-up card" data-testid="tonight-runners-up">
-        <p class="data label">RUNNERS-UP</p>
-        <ul>
-          {#each tonight.result.runners_up ?? [] as card (card.title_id)}
-            <!-- A `const` keeps the row one text node; the labels follow the card wherever it lands. -->
+      <section class="group" data-testid="tonight-runners-up">
+        <h3 class="list-header">Runners-up</h3>
+        <ul class="list-group rows">
+          {#each result.runners_up ?? [] as card (card.title_id)}
+            <!-- A `const` keeps the line one text node; the labels follow the card wherever it lands. -->
             {@const counterweight = card.reserved
               ? ` · ${RESERVED_LABEL}`
               : card.reserved_for
                 ? ` · ${pickLabel(card.reserved_for.name)}`
                 : ''}
-            <li class="runner">
-              <span class="thumb"><RatePoster title={posterOf(card)} showName={false} /></span>
-              <span class="why" data-testid={`tonight-runner-up-${card.title_id}`}
-                >{card.name} · {card.approvals} approved{counterweight}</span
-              >
-            </li>
-          {/each}
-          {#if (tonight.result.runners_up ?? []).length === 0}
-            <li class="why">nothing else was in the running</li>
-          {/if}
-        </ul>
-      </div>
-
-      {#if tonight.result.wildcard}
-        <div class="wildcard card" data-testid="tonight-wildcard">
-          <p class="data label">WILDCARD</p>
-          <div class="runner">
-            <span class="thumb"><RatePoster title={posterOf(tonight.result.wildcard)} showName={false} /></span>
-            <div>
-              <p>{tonight.result.wildcard.name}</p>
-              <!-- The label is the honesty (§6.4); approvals are said here once. -->
-              <p class="why" data-testid="tonight-wildcard-line">
-                {`${tonight.result.wildcard.label} · ${tonight.result.wildcard.approvals ?? 0} approved`}
-              </p>
-            </div>
-          </div>
-        </div>
-      {/if}
-    </div>
-  {/if}
-
-  {#if tonight.step === 'solo' && tonight.solo}
-    <div class="solo" data-testid="tonight-solo">
-      <p class="data" data-testid="tonight-provenance">{tonight.solo.provenance}</p>
-      {#if tonight.solo.empty}
-        <p class="empty" data-testid="tonight-solo-empty">{tonight.solo.empty}</p>
-      {:else}
-        <ul class="picks" data-testid="tonight-picks">
-          {#each tonight.solo.picks as pick (pick.title_id)}
-            <li class="card pick" data-testid={`tonight-pick-${pick.title_id}`}>
-              <span class="thumb"><RatePoster title={posterOf(pick)} showName={false} /></span>
-              <span class="pick-text">
-                <span class="big">{pick.name}</span>
-                <span class="why">{pick.why}</span>
-                <span class="data">{pick.fit_line}</span>
+            <li class="pick">
+              <span class="thumb small"><RatePoster title={posterOf(card)} showName={false} /></span>
+              <span class="row-text">
+                <span>{card.name}</span>
+                <span class="footnote figures" data-testid={`tonight-runner-up-${card.title_id}`}
+                  >{card.approvals} of {result.participants} said yes{counterweight}</span
+                >
               </span>
             </li>
+          {:else}
+            <li class="pick"><span class="footnote">Nothing else was in the running.</span></li>
           {/each}
         </ul>
-        {#if tonight.solo.wildcard}
-          <div class="card pick" data-testid="tonight-solo-wildcard">
-            <span class="thumb"><RatePoster title={posterOf(tonight.solo.wildcard)} showName={false} /></span>
-            <span class="pick-text">
-              <span class="big">{tonight.solo.wildcard.name}</span>
-              <span class="why">{tonight.solo.wildcard.why}</span>
-              <span class="data">{tonight.solo.wildcard.fit_line}</span>
-            </span>
-          </div>
-        {/if}
-        <div class="row">
-          <!-- Reshuffle posts `sharpen: false`, so no pair back is not a converged round: clear the flag. -->
-          <button
-            class="pill"
-            onclick={() => {
-              sharpening = false;
-              loadSolo({ reshuffle: true });
-            }}
-            data-testid="tonight-reshuffle">Reshuffle</button
-          >
-          {#if !sharpening}
-            <!-- Not gated on a pair in hand: this tap is what asks for one. -->
-            <button
-              class="pill"
-              onclick={() => {
-                sharpening = true;
-                loadSolo({ sharpen: true });
-              }}
-              data-testid="tonight-sharpen">sharpen this</button
-            >
-          {/if}
-        </div>
-        {#if tonight.solo.wrapped}
-          <!-- A reshuffle that has come back round returns titles already seen here, so say so. -->
-          <p class="why" data-testid="tonight-wrapped">{WRAPPED_LINE}</p>
-        {/if}
-        {#if sharpening && !tonight.solo.pair}
-          <!-- Said out loud, or a converged round would answer "sharpen this" with a blank. -->
-          <p class="why" data-testid="tonight-sharpen-done">
-            The round has nothing left to ask — these picks are as sharp as this pool gets.
-          </p>
-        {/if}
-        {#if tonight.solo.pair && sharpening}
-          <!-- The same question as the round (§6.2 step 4), drawing both titles. -->
-          <div class="round" data-testid="tonight-sharpen-pair">
-            <h2>Which one tonight?</h2>
-            <div class="pair">
-              {#each [['A', tonight.solo.pair.a], ['B', tonight.solo.pair.b]] as [side, title]}
-                <button
-                  class="choice"
-                  onclick={() => sharpen(side)}
-                  disabled={tonight.busy}
-                  data-testid={`tonight-sharpen-${side}`}
+      </section>
+
+      {#if result.wildcard}
+        <section class="group" data-testid="tonight-wildcard">
+          <h3 class="list-header">Wildcard</h3>
+          <div class="list-group">
+            <div class="pick">
+              <span class="thumb small"><RatePoster title={posterOf(result.wildcard)} showName={false} /></span>
+              <span class="row-text">
+                <span>{result.wildcard.name}</span>
+                <!-- The label is the honesty (§6.4); approvals are said here once. -->
+                <span class="footnote figures" data-testid="tonight-wildcard-line"
+                  >{`${result.wildcard.label} · ${result.wildcard.approvals ?? 0} of ${result.participants} said yes`}</span
                 >
-                  <span class="art"><RatePoster title={posterOf(title)} showName={false} /></span>
-                  <span class="big">{title?.name}</span>
-                  {#each pairFacts(title) as fact, i (i)}
-                    <span class="why fact">{fact}</span>
-                  {/each}
-                </button>
-              {/each}
-            </div>
-            <div class="levels">
-              {#each ANSWERS.filter((a) => a.value !== 'A' && a.value !== 'B') as choice}
-                <button
-                  class="pill level"
-                  onclick={() => sharpen(choice.value)}
-                  disabled={tonight.busy}
-                  data-testid={`tonight-sharpen-${choice.value}`}>{choice.label}</button
-                >
-              {/each}
+              </span>
             </div>
           </div>
-        {/if}
+        </section>
       {/if}
     </div>
   {/if}
 </section>
 
+<!-- The bar sits in the body, not the header: the header's drag area captures the pointer. -->
+<Sheet open={settingsOpen} onClose={() => (settingsOpen = false)} label="Tonight's settings" detent="medium" width={480}>
+  {#snippet children(close)}
+    <div class="sheet-bar">
+      <span></span>
+      <h2>Tonight's settings</h2>
+      <button class="btn-plain done" onclick={close} data-testid="tonight-settings-done">Done</button>
+    </div>
+    <div class="settings">
+      <div class="segmented" role="group" aria-label="Kind">
+        {#each [['movie', 'Film'], ['series', 'Series']] as [value, label] (value)}
+          <button
+            aria-pressed={tonight.controls.kind === value}
+            onclick={() => chooseKind(value, session.user?.id)}
+            data-testid={`tonight-kind-${value}`}>{label}</button
+          >
+        {/each}
+      </div>
+
+      <section class="group">
+        <div class="setting how-long">
+          <label class="setting-line" for="tonight-budget">
+            <span>How long?</span>
+            <!-- On a series night the number bounds minutes per episode, and this is where it is set. -->
+            <span class="readout figures" data-testid="tonight-budget-value"
+              >{budgetLabel(tonight.controls.runtime_budget_min)}{perEpisode}</span
+            >
+          </label>
+          <input
+            id="tonight-budget"
+            class="range"
+            type="range"
+            min={BUDGET_MIN}
+            max={BUDGET_MAX}
+            step={BUDGET_STEP}
+            bind:value={tonight.controls.runtime_budget_min}
+            aria-valuetext="{budgetLabel(tonight.controls.runtime_budget_min)}{perEpisode}"
+            style:--fill="{budgetFill}%"
+            data-testid="tonight-budget"
+          />
+        </div>
+        <p class="list-footer" data-testid="tonight-budget-soft">{budgetSoftLine(tonight.controls.kind)}</p>
+      </section>
+
+      <section class="group">
+        <label class="setting setting-line">
+          <span id="tonight-rewatches-label">Include rewatches</span>
+          <button
+            class="switch"
+            role="switch"
+            aria-checked={tonight.controls.include_rewatches}
+            aria-labelledby="tonight-rewatches-label"
+            onclick={() => (tonight.controls.include_rewatches = !tonight.controls.include_rewatches)}
+            data-testid="tonight-rewatches"><span class="knob"></span></button
+          >
+        </label>
+        <p class="list-footer">Off skips what everyone here has seen.</p>
+      </section>
+
+      <section class="group">
+        <div class="setting setting-line">
+          <span class="grow">Guests</span>
+          <span class="readout figures" data-testid="tonight-guests">{tonight.controls.guests}</span>
+          <span class="stepper">
+            <button
+              class="hit"
+              aria-label="Fewer guests"
+              disabled={tonight.controls.guests <= 0}
+              onclick={() => setGuests(tonight.controls.guests - 1)}
+              data-testid="tonight-guests-less"><Icon name="minus" size={16} /></button
+            >
+            <span class="sep" aria-hidden="true"></span>
+            <button
+              class="hit"
+              aria-label="More guests"
+              disabled={tonight.controls.guests >= MAX_GUESTS}
+              onclick={() => setGuests(tonight.controls.guests + 1)}
+              data-testid="tonight-guests-more"><Icon name="plus" size={16} /></button
+            >
+          </span>
+        </div>
+        <p class="list-footer">Guests take their turn on this phone, after you.</p>
+      </section>
+    </div>
+  {/snippet}
+</Sheet>
+
+<ActionSheet
+  open={ending}
+  title="End this room for everyone?"
+  options={[{ label: 'End the room', destructive: true, onSelect: endTheRoom }]}
+  onClose={() => (ending = false)}
+/>
+
 <style>
-  section { display: flex; flex-direction: column; gap: 16px; max-width: 62ch; }
-  h1 { margin: 0; font-size: 21px; font-weight: 600; }
-  h2 { margin: 0; font-size: 17px; font-weight: 600; }
-  .label { letter-spacing: 0.14em; color: var(--ink-4); font-size: 10px; }
-  /* One line, or Undo and the escape fall under the bottom bar. */
-  .roundcount { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  .why { color: var(--ink-3); font-size: 12.5px; line-height: 1.55; }
-  .data { font-family: var(--mono); font-size: 12px; color: var(--ink-2); }
-  .row { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-  /* design.css's full-width input rule outranks any selector here, but in a flex row the basis
-     decides the main size. */
-  .controls input[type='number'] { flex: 0 0 4.5rem; }
-  /* The accent on the value the person chose, as on a pressed pill (§6.8). */
-  .controls input[type='range'] { accent-color: var(--ember); }
-  .quiet { opacity: 0.85; }
-  .controls { display: flex; flex-direction: column; gap: 10px; }
-  .doors { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .tonight {
+    display: flex;
+    flex-direction: column;
+  }
+  /* Over the tab bar and the top row: a room is a flow of its own until it resolves. */
+  .flow {
+    position: fixed;
+    inset: 0;
+    z-index: 55;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    background: var(--bg);
+    padding: env(safe-area-inset-top) max(var(--gutter), env(safe-area-inset-right)) 0
+      max(var(--gutter), env(safe-area-inset-left));
+  }
+  .screen {
+    width: 100%;
+    max-width: 560px;
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+  }
+  .flow .screen {
+    min-height: 100%;
+    margin: 0 auto;
+    gap: 20px;
+    padding-bottom: calc(16px + env(safe-area-inset-bottom));
+  }
+  .stack {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+  .group {
+    display: flex;
+    flex-direction: column;
+  }
+  p {
+    margin: 0;
+  }
+  .figures {
+    font-variant-numeric: tabular-nums;
+  }
+  .center {
+    text-align: center;
+  }
+  .wide {
+    width: 100%;
+    min-height: 50px;
+  }
+  .error {
+    color: var(--negative);
+    font-size: var(--fs-subhead);
+    line-height: 20px;
+  }
+  .footnote.link {
+    word-break: break-all;
+  }
+  .dot {
+    width: 6px;
+    height: 6px;
+    border-radius: var(--r-pill);
+    background: currentColor;
+  }
+  .chev {
+    display: grid;
+    color: rgba(245, 240, 232, 0.35);
+  }
+  .tile {
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 30px;
+    height: 30px;
+    border-radius: 8px;
+    color: #fff;
+  }
+  .tile.blue { background: #3d6fb6; }
+  .tile.ember { background: var(--accent); }
+  .tile.graphite { background: #6b635b; }
+  .row-text {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    text-align: left;
+  }
+  .rows {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+  }
+  .rows > li + li {
+    box-shadow: inset 0 0.5px 0 var(--separator);
+  }
+  .capsule {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    height: 34px;
+    min-height: 34px;
+    padding: 0 14px;
+    border: none;
+    border-radius: var(--r-pill);
+    background: var(--surface-2);
+    color: var(--text);
+    font-size: var(--fs-subhead);
+    line-height: 20px;
+    font-weight: 600;
+  }
+  .capsule.tinted {
+    background: var(--accent-tint);
+    color: var(--accent-text);
+  }
+
+  /* The door. */
+  .fork {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+  .doors {
+    display: grid;
+    gap: 12px;
+  }
   .door {
-    min-height: var(--touch);
-    display: flex; flex-direction: column; gap: 4px; padding: 18px 14px;
-    background: var(--card); border: 1px solid var(--line-2); border-radius: var(--r-lg);
-    color: var(--ink); text-align: left; cursor: pointer;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 16px 12px 16px 16px;
+    border: none;
+    border-radius: var(--r-md);
+    background: var(--surface-1);
+    color: var(--text);
+    text-align: left;
   }
-  .door:hover, .door:focus-visible { border-color: var(--ember-edge); }
-  .big { font-size: 16px; font-weight: 600; }
-  .join form { display: flex; gap: 8px; }
-  .join input { min-height: var(--touch); flex: 1; }
-  .rooms ul, .seats, .slate, .picks, .matches, .reveal ul {
-    list-style: none; margin: 0; padding: 0;
+  .door:disabled {
+    opacity: 0.6;
   }
-  .rooms li, .seats li {
-    display: flex; justify-content: space-between; align-items: center; gap: 10px;
-    padding: 8px 0; border-bottom: 1px solid var(--line);
+  .door-top {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
   }
-  .seat { min-height: var(--touch); }
-  /* Full ink, not the accent: the primary action on this step is Start (§6.8). */
-  .code { font-size: 22px; letter-spacing: 0.18em; color: var(--ink); }
+  .door .tile {
+    width: 28px;
+    height: 28px;
+  }
+  .door-name {
+    font-size: var(--fs-section);
+    line-height: 25px;
+    font-weight: 600;
+  }
+  .summary {
+    min-height: 60px;
+    padding-right: 12px;
+  }
+  .change {
+    color: var(--accent-text);
+  }
+  .join {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-height: 52px;
+    padding: 0 8px 0 16px;
+    border-radius: var(--r-md);
+    background: var(--surface-1);
+  }
+  /* The `:not()`s outrank design.css's field fill: here the row is the field. */
+  .join input:not([type='checkbox']):not([type='radio']) {
+    flex: 1;
+    min-width: 0;
+    padding: 0;
+    background: none;
+  }
+  .room,
+  .seat,
+  .pick {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    min-height: 60px;
+    padding: 8px 8px 8px 16px;
+  }
+  .seat {
+    padding-right: 16px;
+  }
+
+  /* Solo. */
+  .back {
+    align-self: flex-start;
+    gap: 2px;
+    margin-left: -10px;
+    padding-left: 2px;
+  }
+  .solo {
+    gap: 16px;
+  }
+  .solo-head {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    margin-top: -12px;
+  }
+  .picks {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+  .hero {
+    display: flex;
+    gap: 12px;
+    padding: 12px;
+    border-radius: var(--r-md);
+    background: var(--surface-1);
+  }
+  .hero-art {
+    flex: none;
+    width: 120px;
+  }
+  .hero-text {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .hero-actions {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+  .hero-actions .play {
+    width: 100%;
+    min-height: 50px;
+  }
+  .thumb {
+    flex: none;
+    width: 56px;
+  }
+  .thumb.small {
+    width: 40px;
+  }
+  .pick-name {
+    font-size: var(--fs-body);
+    line-height: 22px;
+    font-weight: 600;
+  }
+  .label {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: var(--fs-footnote);
+    line-height: 18px;
+    font-weight: 600;
+    color: var(--text-2);
+  }
+  .play {
+    text-decoration: none;
+  }
+  .play:hover {
+    color: var(--on-accent);
+  }
+  .play-icon {
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 44px;
+    height: 44px;
+    padding: 0;
+    border: none;
+    background: none;
+    color: var(--accent-text);
+  }
+  .play-icon:disabled {
+    color: var(--text-3);
+    opacity: 0.5;
+    cursor: default;
+  }
+  .two {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+  }
+
+  /* A room's own bar, in place of the tab bar's frame. */
+  .bar {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+    align-items: center;
+    min-height: 44px;
+    margin: 0 -8px;
+  }
+  .bar .back {
+    margin-left: 0;
+  }
+  .bar-title,
+  .bar-count {
+    margin: 0;
+    font-size: var(--fs-body);
+    line-height: 22px;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .bar-count {
+    font-size: var(--fs-subhead);
+    font-weight: 400;
+    color: var(--text-2);
+  }
+  .bar-end {
+    justify-self: end;
+  }
+  .beat {
+    padding: 0;
+  }
+  .done {
+    font-weight: 600;
+  }
+  .dock {
+    position: sticky;
+    bottom: 0;
+    z-index: 1;
+    margin: auto calc(-1 * var(--gutter)) calc(-16px - env(safe-area-inset-bottom));
+    padding: 12px var(--gutter) calc(12px + env(safe-area-inset-bottom));
+    background: var(--bar);
+    -webkit-backdrop-filter: blur(24px) saturate(1.5);
+    backdrop-filter: blur(24px) saturate(1.5);
+    box-shadow: inset 0 0.5px 0 var(--separator);
+  }
+
+  /* The lobby. */
+  .code-card {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    padding: 20px;
+    border-radius: var(--r-md);
+    background: var(--surface-1);
+    text-align: center;
+  }
+  .code-card .list-header {
+    padding: 0;
+  }
+  .room-code {
+    font-size: var(--fs-display);
+    line-height: 48px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    font-variant-numeric: tabular-nums;
+  }
+  .code-card .capsule {
+    margin-top: 8px;
+  }
+  .chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 12px 16px;
+    border-radius: var(--r-md);
+    background: var(--surface-1);
+  }
+  .chips .pill:disabled {
+    opacity: 0.45;
+    cursor: default;
+  }
+
+  /* The round, and the sharpen round that asks the same question. */
+  .round {
+    gap: 16px;
+  }
+  .dots {
+    display: flex;
+    justify-content: center;
+    gap: 6px;
+  }
+  .dots span {
+    width: 6px;
+    height: 6px;
+    border-radius: var(--r-pill);
+    background: rgba(245, 240, 232, 0.16);
+  }
+  .dots span.on {
+    background: var(--text);
+  }
+  .question {
+    text-align: center;
+  }
   /* Two columns at every width: stacked, the second option fell below the fold. */
-  .pair { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
-  .choice {
-    display: flex; flex-direction: column; gap: 6px; padding: 8px; min-width: 0;
-    background: var(--card-raised);
-    border: 1px solid var(--line-2); border-radius: var(--r-lg); color: var(--ink);
-    text-align: left; cursor: pointer;
+  .pair {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
   }
-  .choice:hover, .choice:focus-visible { border-color: var(--ember-edge); }
-  /* Width bounds the 2:3 art, so the pair, the answers and Undo fit above an iPhone 13's bottom bar. */
-  .art { display: block; width: min(100%, 13vh); align-self: center; }
-  .choice .big {
-    display: -webkit-box; -webkit-line-clamp: 2; line-clamp: 2; -webkit-box-orient: vertical;
+  .choice {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    min-width: 0;
+    padding: 0;
+    border: none;
+    background: none;
+    color: var(--text);
+    text-align: center;
+  }
+  .choice .art {
+    display: block;
+    width: min(100%, 200px);
+    margin-bottom: 8px;
+    transition: transform 0.12s var(--ease);
+  }
+  .choice:active .art {
+    transform: scale(0.97);
+  }
+  .choice-name {
+    font-size: var(--fs-body);
+    line-height: 22px;
+    font-weight: 600;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    -webkit-box-orient: vertical;
     overflow: hidden;
   }
-  .choice .fact { line-height: 1.35; }
-  /* Side by side and wrapping inside their half: still one 48px target each. */
-  .levels { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-  .level { white-space: normal; line-height: 1.25; padding-inline: 12px; }
-  .soft { margin: 0; }
-  .thumb { display: block; flex: 0 0 44px; width: 44px; }
-  /* Bounded like `.art`, so the winner's Play on Jellyfin stays on a phone's first screen. */
-  .hero { display: block; width: min(100%, 16vh); }
-  .link { word-break: break-all; }
-  .vetoes { display: flex; flex-direction: column; gap: 8px; padding-top: 10px; }
-  .vetoes p { margin: 0; }
-  /* Outlined, not filled: the lobby's one filled control is Start. */
-  .veto[aria-pressed='true'] {
-    border-color: var(--ember-edge); background: var(--ember-wash); color: var(--ink);
+  .fact {
+    font-size: var(--fs-footnote);
+    line-height: 18px;
+    color: var(--text-3);
+    font-variant-numeric: tabular-nums;
   }
-  .beat { letter-spacing: 0.2em; }
-  .winner { border-color: var(--ember-edge); }
-  .slate li { padding: 4px 0; }
+  .answers {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
+  }
+  .answers .btn-secondary {
+    padding: 0 12px;
+    line-height: 20px;
+  }
+  .others {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    margin: 0;
+    padding: 0;
+    list-style: none;
+  }
+  .others li {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: var(--fs-subhead);
+    line-height: 20px;
+    color: var(--text-2);
+  }
+  .blind,
+  .escape {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    text-align: center;
+  }
+  .locked {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 2px;
+    color: var(--text-3);
+  }
+
+  /* The ballot. */
+  .whose {
+    font-size: var(--fs-subhead);
+    color: var(--text-2);
+  }
   .option {
-    display: flex; align-items: center; gap: 12px; width: 100%; min-height: var(--touch);
-    padding: 6px 12px 6px 6px; background: var(--card-raised); color: var(--ink);
-    border: 1px solid var(--line-2); border-radius: var(--r-md); text-align: left; cursor: pointer;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    width: 100%;
+    min-height: 60px;
+    padding: 8px 16px 8px 12px;
+    border: none;
+    background: none;
+    color: var(--text);
+    text-align: left;
   }
-  .option[aria-pressed='true'] { border-color: var(--ember-edge); background: var(--ember-wash); }
-  .option-text { display: flex; flex-direction: column; gap: 2px; flex: 1; min-width: 0; }
-  .tick { flex: 0 0 18px; color: var(--ember-lift); font-size: 16px; }
-  /* Sticky at the bottom of `main`, reaching through its end padding so no ballot row shows, or
-     is tappable, beneath Submit. */
-  .submitbar {
-    position: sticky; bottom: calc(-1 * var(--main-pad-end, 0px)); z-index: 1;
-    margin-top: 8px; padding: 8px 0 calc(8px + var(--main-pad-end, 0px));
-    background: var(--card);
+  .tick {
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 24px;
+    height: 24px;
+    border-radius: var(--r-pill);
+    box-shadow: inset 0 0 0 1.5px rgba(245, 240, 232, 0.28);
+    color: var(--on-accent);
   }
-  .submit { width: 100%; min-height: var(--touch); }
-  .runner { display: flex; align-items: center; gap: 10px; padding: 4px 0; }
-  .runner p { margin: 0; }
-  .pick { display: flex; align-items: flex-start; gap: 12px; }
-  .pick-text { display: flex; flex-direction: column; gap: 4px; min-width: 0; }
-  .picks { display: flex; flex-direction: column; gap: 10px; }
-  .solo, .reveal, .round, .rooms { display: flex; flex-direction: column; gap: 12px; }
-  .wildcard, .runners-up { display: flex; flex-direction: column; gap: 6px; }
-  .wildcard p, .runners-up p { margin: 0; }
-  .error { color: var(--ember-lift); font-size: 12.5px; }
-  header { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
-  .back { min-height: var(--touch); }
-  /* On every pointer: a guest meets the hand-off first, and End must not be hit by accident. */
-  .hand, .end { min-height: var(--touch); }
-  .empty { color: var(--ink-2); font-size: 13px; }
-  .disabled { opacity: 0.55; }
-  /* An <a> and an aria-disabled <span>, which design.css's coarse floor does not reach. */
-  .play {
-    display: inline-flex; align-items: center; justify-content: center;
-    min-height: var(--touch); padding-inline: 20px;
+  .option[aria-pressed='true'] .tick {
+    background: var(--accent);
+    box-shadow: none;
   }
-  @media (max-width: 560px) {
-    .doors { grid-template-columns: 1fr; }
+
+  /* The reveal. */
+  .reveal .bar {
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  }
+  .winner {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    text-align: center;
+  }
+  /* Bounded, so Play on Jellyfin stays close to a phone's first screen. */
+  .winner-art {
+    display: block;
+    width: min(200px, 26dvh);
+    margin-bottom: 8px;
+  }
+  .winner-meta {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .approval {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    margin-top: 4px;
+    font-size: var(--fs-body);
+    font-weight: 600;
+  }
+  .faces {
+    display: flex;
+    gap: 6px;
+  }
+  .sentence::first-letter {
+    text-transform: uppercase;
+  }
+
+  /* The settings sheet. */
+  .sheet-bar {
+    display: grid;
+    grid-template-columns: 1fr auto 1fr;
+    align-items: center;
+    margin: -4px -8px 8px;
+  }
+  .sheet-bar h2 {
+    margin: 0;
+    font-size: var(--fs-body);
+    line-height: 22px;
+    font-weight: 600;
+  }
+  .sheet-bar .done {
+    justify-self: end;
+  }
+  .settings {
+    display: flex;
+    flex-direction: column;
+    gap: 24px;
+    padding-top: 8px;
+  }
+  .setting {
+    border-radius: var(--r-md);
+    background: var(--surface-1);
+    padding: 0 16px;
+    min-height: 52px;
+    font-size: var(--fs-body);
+    line-height: 22px;
+  }
+  .setting-line {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .how-long {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 16px 16px 12px;
+  }
+  .grow {
+    flex: 1;
+  }
+  .readout {
+    color: var(--text-2);
+  }
+  .range {
+    -webkit-appearance: none;
+    appearance: none;
+    width: 100%;
+    height: 28px;
+    margin: 0;
+    background: transparent;
+  }
+  .range::-webkit-slider-runnable-track {
+    height: 4px;
+    border-radius: 2px;
+    background: linear-gradient(
+      to right,
+      var(--accent) var(--fill),
+      rgba(245, 240, 232, 0.16) var(--fill)
+    );
+  }
+  .range::-webkit-slider-thumb {
+    -webkit-appearance: none;
+    width: 28px;
+    height: 28px;
+    margin-top: -12px;
+    border-radius: var(--r-pill);
+    background: var(--text);
+    box-shadow: var(--shadow-menu);
+  }
+  .range::-moz-range-track {
+    height: 4px;
+    border-radius: 2px;
+    background: rgba(245, 240, 232, 0.16);
+  }
+  .range::-moz-range-progress {
+    height: 4px;
+    border-radius: 2px;
+    background: var(--accent);
+  }
+  .range::-moz-range-thumb {
+    width: 28px;
+    height: 28px;
+    border: none;
+    border-radius: var(--r-pill);
+    background: var(--text);
+    box-shadow: var(--shadow-menu);
+  }
+  .stepper {
+    flex: none;
+    display: flex;
+    align-items: center;
+    width: 94px;
+    height: 32px;
+    border-radius: 8px;
+    background: var(--surface-2);
+  }
+  .stepper button {
+    flex: 1;
+    height: 100%;
+    display: grid;
+    place-items: center;
+    padding: 0;
+    border: none;
+    background: none;
+    color: var(--text);
+  }
+  .stepper button:disabled {
+    color: var(--text-3);
+    cursor: default;
+  }
+  .stepper .sep {
+    flex: none;
+    width: 0.5px;
+    height: 18px;
+    background: var(--separator);
   }
 </style>

@@ -17,18 +17,16 @@ from spielplan.dna import review
 router = APIRouter(prefix="/api/admin", tags=["admin", "curated"])
 
 APPLIES_VERDICTS = (
-    "DNA verdicts apply at ingest: at every derive (section 8 stage 3) and after every extraction"
-    " (section 8 stage 6), the household's before the bundle's. A saved verdict is applied at once"
-    " to the titles it rules on."
+    "Verdicts apply every time a title's features are worked out and after every extraction, the"
+    " household's before the bundle's. A saved verdict is applied at once to the titles it rules on."
 )
 APPLIES_CORRECTIONS = (
-    "Credit facts apply last at every derive (section 8 stage 3), the household's after the"
-    " bundle's so it wins. A saved correction is applied to its title at once."
+    "Credit facts apply last every time a title's features are worked out, the household's after"
+    " the bundle's so it wins. A saved correction is applied to its title at once."
 )
 APPLIES_AXES = (
-    "An axis is read live, by Tonight's split surfacing (section 6.2 step 5) now and by the Map"
-    " (section 6.4) at M6; no derive re-applies it. No axis file has been authored and the bundle"
-    " ships none."
+    "An axis is read live, by Tonight's split surfacing now and by the Map once it ships; nothing"
+    " re-applies it. No axis file has been authored and the bundle ships none."
 )
 
 _TSV = "text/tab-separated-values; charset=utf-8"

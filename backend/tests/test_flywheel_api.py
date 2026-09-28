@@ -6,7 +6,7 @@ from decimal import Decimal
 
 import pytest
 
-from spielplan.acquire import pipeline
+from spielplan.acquire import actions, pipeline
 from spielplan.flywheel import batch, store
 from spielplan.llm import client, pricing, spend
 from tests.helpers import household
@@ -63,7 +63,8 @@ async def test_the_queue_read_carries_the_rows_the_providers_the_defaults_and_th
 
     payload = (await admin.get("/api/admin/flywheel")).json()
 
-    assert set(payload) == {"items", "providers", "defaults", "meter", "input_tokens_assumed"}
+    assert set(payload) == {"items", "stages", "providers", "defaults", "meter", "input_tokens_assumed"}
+    assert payload["stages"] == actions.stage_legend()
     assert sorted(row["id"] for row in payload["items"]) == sorted(queued.values())
     cards = {card["name"]: card for card in payload["providers"]}
     assert list(cards) == list(client.PROVIDERS)

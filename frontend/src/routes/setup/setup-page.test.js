@@ -40,6 +40,26 @@ async function openBundleStep() {
   return app;
 }
 
+describe("the wizard's connectors step", () => {
+  it('sends each connector to the admin section that configures it', async () => {
+    const app = mount(SetupPage, { target });
+    await settle();
+    try {
+      const rows = [...target.querySelectorAll('a.list-row')].map((a) => [
+        a.querySelector('span').textContent,
+        a.getAttribute('href')
+      ]);
+      expect(rows).toEqual([
+        ['Jellyfin', '/admin/services'],
+        ['AI providers', '/admin/budget'],
+        ['TMDB, OMDb and Trakt', '/admin/services']
+      ]);
+    } finally {
+      unmount(app);
+    }
+  });
+});
+
 describe("the wizard's bundle step", () => {
   it('names the restart and its command when the backend could not load an imported bundle', async () => {
     session.restartRequired = true;

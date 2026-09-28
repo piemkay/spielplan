@@ -12,15 +12,13 @@ test.beforeEach(async ({ page }) => {
   await page.goto('/');
 });
 
-test('films only, and the hidden count names what is missing', async ({ page }) => {
-  // §6.0: a toggle that hides things has to say how many.
+test('films only, and the count line says how many films the library holds', async ({ page }) => {
+  // §6.0 (decision 527): the count is of the kind shown; the kind not shown is not counted.
   await expect(kindToggle(page, 'Films')).toHaveAttribute('aria-pressed', 'true');
   await expect(kindToggle(page, 'Series')).toHaveAttribute('aria-pressed', 'false');
-  await expect(countLine(page)).toContainText(
-    /\d+ films? in your library · \d+ series hidden/
-  );
+  await expect(countLine(page)).toHaveText(/^\d+ films? in your library$/);
   await page.getByLabel('Search titles').fill('a');
-  await expect(countLine(page)).toContainText(/\d+ films? · \d+ series hidden/);
+  await expect(countLine(page)).toHaveText(/^\d+ films?$/);
 });
 
 test('both kinds on shows everything and nothing is reported hidden', async ({ page }) => {
@@ -94,8 +92,8 @@ test('owned titles are marked in the catalog and one pill narrows to them', asyn
   await page.getByTestId('filter-toggle').click();
   await page.getByTestId('filter-owned').click();
   await expect(page.getByTestId('home-mode')).toHaveAttribute('data-mode', 'grid');
-  await expect(page.getByTestId('filter-owned')).toHaveAttribute('aria-pressed', 'true');
-  await expect(countLine(page)).toContainText('in your library');
+  await expect(page.getByTestId('filter-owned')).toHaveAttribute('aria-checked', 'true');
+  await expect(countLine(page)).toHaveText(/^\d+ films? in your library$/);
   const cards = page.locator('.grid .card-wrap');
   await expect(cards.first()).toBeVisible();
   const n = await cards.count();
@@ -185,12 +183,12 @@ test('a person filter keeps the kind partition and can be cleared', async ({ pag
   const name = (await person.locator('.pname').textContent())?.trim();
   await person.click();
 
-  const chip = page.locator('.filters .pill.on');
+  const chip = page.getByTestId('person-chip');
   await expect(chip).toContainText(name ?? '');
   await expect(kindToggle(page, 'Films')).toHaveAttribute('aria-pressed', 'true');
 
   await chip.click();
-  await expect(page.locator('.filters .pill.on')).toHaveCount(0);
+  await expect(chip).toHaveCount(0);
 });
 
 test('the no-matches state names only controls that exist', async ({ page }) => {

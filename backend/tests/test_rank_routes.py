@@ -568,7 +568,6 @@ async def test_a_board_whose_first_fit_is_owed_says_so_instead_of_reading_zero_r
 
     unstarted = (await client.get("/api/rank?kind=movie")).json()
     assert unstarted["rated_total"] == 0 and unstarted["fitting"] is False, unstarted
-    assert "0 rated" in unstarted["why"], unstarted["why"]
 
     dropped = await client.post("/api/rank/drop?kind=movie", json={"title_id": 1, "tier": 4})
     assert dropped.status_code == 200, dropped.text
@@ -581,11 +580,8 @@ async def test_a_board_whose_first_fit_is_owed_says_so_instead_of_reading_zero_r
     owed = (await client.get("/api/rank?kind=movie")).json()
     assert owed["rated_total"] == 0, "the fixture gained a fit this test needs it not to have"
     assert owed["fitting"] is True, (
-        f"the board reads the same as one nobody has started: rated={owed['rated']}, "
-        f"why={owed['why']!r}"
+        f"the board reads the same as one nobody has started: rated={owed['rated']}"
     )
-    assert "still being fitted" in owed["why"], owed["why"]
-    assert "0 rated" not in owed["why"], owed["why"]
 
     # Serviced the way `worker.py`'s `tier-set-refit` services it, and not by waiting.
     report = await refit.refit_user(
@@ -597,7 +593,6 @@ async def test_a_board_whose_first_fit_is_owed_says_so_instead_of_reading_zero_r
     )
     fitted = (await client.get("/api/rank?kind=movie")).json()
     assert fitted["rated_total"] > 0 and fitted["fitting"] is False, fitted
-    assert f"{fitted['rated_total']} rated" in fitted["why"], fitted["why"]
 
 
 async def test_a_constant_the_fit_cannot_use_is_a_503_on_the_board_route(db, ranked, monkeypatch):
@@ -805,31 +800,6 @@ async def test_a_queue_answer_returns_both_titles_placement_on_every_arm(db, ran
 def answered_tier_label(spot) -> str:
     """The badge leads with the tier the row renders in (§6.3, "A — between Heat and Prisoners")."""
     return list(observations.DEFAULT_TIER_SET)[spot["tier"]]
-
-
-async def test_the_why_line_counts_every_answer_and_claims_no_learned_cutpoints(
-    db, ranked, monkeypatch
-):
-    """The count moves on a held-out answer too; one standing still would name it (M4.10 finding 16)."""
-    client, _user_id = ranked
-    before = (await client.get("/api/rank?kind=movie")).json()
-    n = before["rated_total"]
-    assert before["why"] == (
-        f"{n} rated · 4 compared · liked from A up, fine in B, disliked from C down"
-    )
-    for noun in ("cutpoint", "refit", "learned", "ledger"):
-        assert noun not in before["why"], before["why"]
-
-    for count, roll in ((5, HOLDOUT_ROLL), (6, EXPLORATION_ROLL)):
-        _arm(monkeypatch, roll)
-        pair = (await client.get("/api/rank/queue?kind=movie")).json()["pair"]
-        await client.post("/api/rank/queue/answer", json={"pair": pair["token"], "outcome": "A"})
-        why = (await client.get("/api/rank?kind=movie")).json()["why"]
-        assert f"· {count} compared ·" in why, why
-
-    await client.post("/api/rank/drop?kind=movie", json={"title_id": 1, "tier": 6})
-    placed = (await client.get("/api/rank?kind=movie")).json()["why"]
-    assert "· 1 placed by you ·" in placed, placed
 
 
 async def test_the_recent_window_reads_neither_battles_nor_the_held_out_stream(db, ranked):

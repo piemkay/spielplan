@@ -3,7 +3,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   ANSWERS,
   BUDGET_DEFAULT,
-  BUDGET_GRACE_MIN,
   BUDGET_MAX,
   BUDGET_MIN,
   BUDGET_STEP,
@@ -20,6 +19,7 @@ import {
   ballotTurns,
   ballotWaitingLine,
   breadthLine,
+  budgetLabel,
   budgetSoftLine,
   chooseKind,
   connect,
@@ -38,14 +38,18 @@ import {
   othersVetoLines,
   pairFacts,
   pickLabel,
-  progressLine,
+  progressLines,
   reconnectDelay,
   refresh,
   rememberBudget,
   rememberedBudget,
   restoreBudget,
+  roomEvening,
   roomLine,
+  roomVetoLine,
   roundHeader,
+  settingsDetail,
+  settingsTitle,
   shareLink,
   shareRoom,
   submitBallot,
@@ -56,6 +60,7 @@ import {
   undo,
   vetoCaption
 } from './tonight.svelte.js';
+import { runtimeLabel } from './rate.svelte.js';
 
 describe('the open-rooms row (§6.2 step 2)', () => {
   const room = {
@@ -67,23 +72,24 @@ describe('the open-rooms row (§6.2 step 2)', () => {
     skips_seen: true
   };
 
-  it('reads the way the spec writes it', () => {
-    // §6.2's own example: "MX-2210 · hosted by Mia · 3 min ago · Film · 60 min · skips seen".
-    expect(roomLine(room)).toBe('MX-2210 · hosted by Mia · 3 min ago · Film · 60 min · skips seen');
+  it("names the code, how long ago, and what evening it is, under the host's name", () => {
+    // Two rooms from one host differ by their code, which is also what is read out across a room.
+    expect(roomLine(room)).toBe('MX-2210 · Started 3 min ago');
+    expect(roomEvening(room)).toBe('Film up to 1h, no rewatches');
   });
 
   it('says the opposite when rewatches are in', () => {
-    expect(roomLine({ ...room, skips_seen: false })).toContain('includes rewatches');
+    expect(roomEvening({ ...room, skips_seen: false })).toContain('rewatches included');
   });
 
   it('names the kind the way the controls do', () => {
-    expect(roomLine({ ...room, kind: 'series' })).toContain('Series');
+    expect(roomEvening({ ...room, kind: 'series' })).toContain('Series');
   });
 
   it('drops the age rather than printing a lie when the timestamp is missing', () => {
     // A row is still a row without an age; "NaN min ago" is worse than one fewer facet.
     expect(roomLine({ ...room, started_at: null })).not.toContain('min ago');
-    expect(roomLine({ ...room, started_at: null })).toContain('MX-2210');
+    expect(roomLine({ ...room, started_at: null })).toBe('MX-2210');
     expect(minutesAgo('not-a-date')).toBeNull();
     expect(minutesAgo(null)).toBeNull();
   });
@@ -94,49 +100,47 @@ describe('the open-rooms row (§6.2 step 2)', () => {
   });
 });
 
-describe('the waiting line (54c)', () => {
+describe('the waiting lines (54c)', () => {
   // The rows carry an answer and a pair on purpose, so the claim below can fail.
   const progress = [
-    { name: 'Patrick', answered: 6, expected: 10, finished: true, answer: 'NEITHER', pair: 'Heat' },
-    { name: 'Jenny', answered: 11, expected: null, finished: false, answer: 'EITHER', pair: 'Drive' },
-    { name: 'Mia', answered: 4, expected: 10, finished: false, answer: 'A', pair: 'Sicario' }
+    { participant_id: 1, name: 'Patrick', answered: 6, expected: 10, finished: true, answer: 'NEITHER', pair: 'Heat' },
+    { participant_id: 2, name: 'Jenny', answered: 11, expected: null, finished: false, answer: 'EITHER', pair: 'Drive' },
+    { participant_id: 3, name: 'Mia', answered: 3, expected: 10, finished: false, answer: 'A', pair: 'Sicario' }
   ];
 
-  it('shows counts and names, and nothing that could be an answer', () => {
+  it('says where each of the others is in words, and nothing that could be an answer', () => {
     // The renderer must not draw answers even when they are handed to it (54c).
-    const line = progressLine(progress);
-    expect(line).toContain('Patrick 6/6 done');
-    expect(line).toContain('Jenny 11 so far');
-    expect(line).toContain('Mia 4/~10');
-    expect(line).toContain('waiting for 2');
-    expect(line, "a seat's answer reached the waiting line").not.toMatch(/EITHER|NEITHER/i);
-    expect(line, 'the pair a seat answered about reached the waiting line').not.toMatch(
+    const lines = progressLines(progress, 3).map((p) => p.line);
+    expect(lines).toEqual(['Patrick is done', 'Jenny is on pair 12']);
+    const all = lines.join(' ');
+    expect(all, "a seat's answer reached the waiting lines").not.toMatch(/EITHER|NEITHER/i);
+    expect(all, 'the pair a seat answered about reached the waiting lines').not.toMatch(
       /Heat|Drive|Sicario/
     );
   });
 
-  it('stops saying "waiting" once everybody has finished', () => {
-    const done = progress.map((p) => ({ ...p, finished: true }));
-    expect(progressLine(done)).not.toContain('waiting for');
+  it('keys each line on its seat, so the avatar beside it is that person', () => {
+    expect(progressLines(progress, 1).map((p) => p.participant_id)).toEqual([2, 3]);
   });
 
-  it('is empty rather than wrong with nobody seated', () => {
-    expect(progressLine([])).toBe('');
+  it('is empty rather than wrong with nobody else seated', () => {
+    expect(progressLines([])).toEqual([]);
+    expect(progressLines(progress.slice(0, 1), 1)).toEqual([]);
   });
 
-  it('gives the count alone once a seat is past the typical round, never an invented end', () => {
-    // Past the typical round the server sends no estimate, so no invented end (decision 507).
-    const long = [{ name: 'Jenny', answered: 12, expected: null, finished: false }];
-    expect(progressLine(long)).toBe('Jenny 12 so far · waiting for 1');
-    expect(progressLine(long)).not.toMatch(/~\d/);
+  it('never names an end the round may not reach', () => {
+    // An estimate is not a promise, and the cap is never said (decisions 477 and 507).
+    const lines = progressLines(progress).map((p) => p.line).join(' ');
+    expect(lines).not.toMatch(/~|of about|\/\d/);
   });
 });
 
-describe('the approval share (§6.8, §13)', () => {
-  it('is a count next to its name, never a bare number', () => {
-    expect(approvalShare({ approval_share: 0.75, participants: 4 })).toBe('3 of 4 approved');
-    expect(approvalShare({ approval_share: 1, participants: 2 })).toBe('2 of 2 approved');
-    expect(approvalShare({ approval_share: 0, participants: 3 })).toBe('0 of 3 approved');
+describe('the approval share (§13)', () => {
+  it('is said as the people it counts, never a bare number', () => {
+    expect(approvalShare({ approval_share: 0.75, participants: 4 })).toBe('3 of 4 said yes');
+    expect(approvalShare({ approval_share: 1, participants: 2 })).toBe('Both of you said yes');
+    expect(approvalShare({ approval_share: 1, participants: 3 })).toBe('All 3 of you said yes');
+    expect(approvalShare({ approval_share: 0, participants: 3 })).toBe('0 of 3 said yes');
   });
 
   it('says nothing at all before there is a result', () => {
@@ -147,9 +151,9 @@ describe('the approval share (§6.8, §13)', () => {
 describe('the constants the spec fixes', () => {
   it('offers exactly decision 154\'s four answers', () => {
     expect(ANSWERS.map((a) => a.value)).toEqual(['A', 'B', 'EITHER', 'NEITHER']);
-    // Opposite signals, so opposite copy; "Neither pulls me tonight" is §6.2's own string.
+    // Opposite signals, so opposite copy.
     expect(ANSWERS.find((a) => a.value === 'EITHER').label).toBe('Either is fine');
-    expect(ANSWERS.find((a) => a.value === 'NEITHER').label).toBe('Neither pulls me tonight');
+    expect(ANSWERS.find((a) => a.value === 'NEITHER').label).toBe('Neither tonight');
   });
 
   it('bounds the runtime slider', () => {
@@ -161,9 +165,10 @@ describe('the constants the spec fixes', () => {
     expect(MAX_GUESTS).toBe(6);
   });
 
-  it('keeps the two strings the spec fixes verbatim', () => {
-    expect(REVEAL_BEAT).toBe('VOTES REVEALED TOGETHER');
-    expect(ESCAPE_LABEL).toBe('just pick for us');
+  it('keeps the strings the spec fixes verbatim', () => {
+    expect(REVEAL_BEAT).toBe("Tonight's pick");
+    // §6.2 step 4's "just pick for us", sentence-cased as a control.
+    expect(ESCAPE_LABEL).toBe('Just pick for us');
     // The join caption is household copy, held to the member register rather than verbatim.
     expect(JOIN_CAPTION).not.toMatch(/push|best effort/i);
   });
@@ -630,11 +635,10 @@ describe('the reconnect (§6 preamble; finding 18)', () => {
 describe('the copy and the controls this milestone moved', () => {
   it('names only the join channels that still exist', () => {
     // The TV client is retired (decision 165); the link is a channel since decision 481.
-    expect(JOIN_CAPTION).toContain('can go missing');
+    expect(JOIN_CAPTION).toContain('Missed a notification');
     expect(JOIN_CAPTION).not.toMatch(/TV/i);
-    expect(JOIN_CAPTION).toContain('room code');
+    expect(JOIN_CAPTION).toContain('code');
     expect(JOIN_CAPTION).toContain('link');
-    expect(JOIN_CAPTION).toContain('open-rooms list');
   });
 
   it('says which minutes a series room is counting', () => {
@@ -647,9 +651,9 @@ describe('the copy and the controls this milestone moved', () => {
       runtime_budget_min: 130,
       skips_seen: true
     };
-    expect(roomLine(room)).toContain('130 min per episode');
-    expect(roomLine({ ...room, kind: 'movie' })).toContain('130 min');
-    expect(roomLine({ ...room, kind: 'movie' })).not.toContain('per episode');
+    expect(roomEvening(room)).toContain('Series up to 2h 10m per episode');
+    expect(roomEvening({ ...room, kind: 'movie' })).toContain('Film up to 2h 10m');
+    expect(roomEvening({ ...room, kind: 'movie' })).not.toContain('per episode');
   });
 
   it('asks the solo round for a pair only when the person asks to sharpen', async () => {
@@ -837,18 +841,18 @@ describe('overlapping reads land in order (finding 21)', () => {
 describe('the first household evening (owner instruction of 2026-09-25)', () => {
   it('heads the round with what to expect, and names the cap only once the round runs long', () => {
     // The cap joins the header only once the round runs long (decision 507).
-    expect(roundHeader({ answered: 0, cap: 20, typical: 10 })).toBe('pair 1 · often about 10');
-    expect(roundHeader({ answered: 9, cap: 20, typical: 10 })).toBe('pair 10 · often about 10');
+    expect(roundHeader({ answered: 0, cap: 20, typical: 10 })).toBe('Pair 1 · usually about 10');
+    expect(roundHeader({ answered: 9, cap: 20, typical: 10 })).toBe('Pair 10 · usually about 10');
     expect(roundHeader({ answered: 9, cap: 20, typical: 10 })).not.toContain('20');
     expect(roundHeader({ answered: 12, cap: 20, typical: 10 })).toBe(
-      'pair 13 · longer than most · max 20'
+      'Pair 13 · longer than most · max 20'
     );
     expect(roundHeader({ answered: 12, cap: 20, typical: 10 })).not.toContain('about 10');
     expect(roundHeader(null)).toBe('');
   });
 
   it('keeps the header to what one line of a 390 px phone holds', () => {
-    // 36 characters of 12px mono at 0.14em fit a 390px phone.
+    // 36 characters fit the round's bar between Leave and Undo on a 390px phone.
     for (const answered of [0, 9, 10, 18, 98]) {
       const line = roundHeader({ answered, cap: 99, typical: 10 });
       expect(line.length, line).toBeLessThanOrEqual(36);
@@ -896,7 +900,7 @@ describe('the first household evening (owner instruction of 2026-09-25)', () => 
       ]
     };
     expect(breadthLine(result)).toBe('Patrick said yes to 4 of 4 · Jenny said yes to 1 of 4');
-    expect(onlyYesLines(result)).toEqual(['the only one Jenny said yes to']);
+    expect(onlyYesLines(result)).toEqual(['The only one Jenny said yes to']);
     expect(breadthLine({})).toBe('');
   });
 
@@ -906,12 +910,13 @@ describe('the first household evening (owner instruction of 2026-09-25)', () => 
   });
 
   it('shows what a room has ruled out on its open-rooms row', () => {
-    const row = roomLine({
+    const room = {
       room_code: 'QC-4397', host: 'Patrick', started_at: null, kind: 'movie',
       runtime_budget_min: 130, skips_seen: true,
       vetoes: [{ key: 'violence', label: 'violence' }, { key: 'horror', label: 'horror' }]
-    });
-    expect(row).toContain('not tonight: violence, horror');
+    };
+    expect(roomVetoLine(room)).toBe('Not tonight: violence, horror');
+    expect(roomVetoLine({ ...room, vetoes: [] }), 'nothing ruled out, nothing said').toBe('');
   });
 
   it('sets the whole veto set, and never a fourth', async () => {
@@ -1005,13 +1010,24 @@ describe('the second household evening (owner instruction of 2026-09-26)', () =>
     };
   };
 
-  it('says under the slider that the budget is soft, and by how much', () => {
-    // §6.2 step 1 admits up to budget + 40; the door says so.
-    expect(BUDGET_GRACE_MIN).toBe(40);
-    expect(budgetSoftLine('movie')).toBe(
-      'films up to 40 min longer can still come up, marked with how far over'
+  it('says under the slider that the budget is soft, per episode on a series night', () => {
+    // §6.2 step 1's softness line, where the budget is set (decision 527).
+    expect(budgetSoftLine('movie')).toBe("A little over is fine — we'll say by how much.");
+    expect(budgetSoftLine('series')).toContain('per episode');
+  });
+
+  it('writes the budget and the summary row the way the app writes a runtime', () => {
+    expect([130, 120, 45].map(budgetLabel)).toEqual(['2h 10m', '2h', '45m']);
+    // The same minutes read the same on a poster, a title card and a Rank row.
+    for (const m of [130, 120, 45]) expect(budgetLabel(m)).toBe(runtimeLabel({ runtime_min: m }));
+    expect(settingsTitle({ kind: 'movie', runtime_budget_min: 130 })).toBe('Film · up to 2h 10m');
+    expect(settingsTitle({ kind: 'series', runtime_budget_min: 45 })).toBe(
+      'Series · up to 45m per episode'
     );
-    expect(budgetSoftLine('series')).toContain('episodes up to 40 min longer');
+    expect(settingsDetail({ include_rewatches: false, guests: 0 })).toBe('No rewatches, no guests');
+    expect(settingsDetail({ include_rewatches: true, guests: 1 })).toBe('Rewatches included, 1 guest');
+    // A room's seats already say who is in.
+    expect(settingsDetail({ include_rewatches: false })).toBe('No rewatches');
   });
 
   it('opens the slider at the budget this member last used for this kind', () => {
@@ -1074,9 +1090,9 @@ describe('the second household evening (owner instruction of 2026-09-26)', () =>
     expect(
       pairFacts({
         year: 2024, kind: 'movie', runtime_min: 160, over_budget_min: 40,
-        fit_line: 'runs 40 min over', genres: ['Drama']
+        fit_line: '40 min over', genres: ['Drama']
       })
-    ).toEqual(['2024 · 2h 40m', 'runs 40 min over', 'Drama']);
+    ).toEqual(['2024 · 2h 40m', '40 min over', 'Drama']);
     // Two genres only when they fit half a phone's line; else the first.
     expect(pairFacts({ year: 2009, genres: ['Adventure', 'Science Fiction'] })).toEqual([
       '2009',

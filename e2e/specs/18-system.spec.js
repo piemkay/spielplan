@@ -3,18 +3,21 @@ import { expect, test } from '@playwright/test';
 import { JELLYFIN, signedIn } from '../helpers.js';
 
 /**
- * Admin > System (§6.6, §2, §14.3; decisions 181, 182, 454): six read-only facts and one control
- * that narrows what was already read, so what is NOT here matters as much as what is.
- * Every DOM assertion reads the response THE PAGE RENDERED FROM: the worker's jobs run every
- * minute, so a second call may legitimately disagree. One page for the file; desktop only.
- * The last test is the Connectors card's custody warning, the twin of this card's.
+ * Admin > System (§6.6, §2, §14.3; decisions 181, 182, 454, 527): read-only facts, plain on top
+ * and verbatim under Technical details, and one control that narrows what was already read, so
+ * what is NOT here matters as much as what is. Every DOM assertion reads the response THE PAGE
+ * RENDERED FROM: the worker's jobs run every minute, so a second call may legitimately disagree.
+ * One page for the file; desktop only. The last test is the Services card's custody warning,
+ * the twin of this page's.
  */
 test.describe.configure({ mode: 'serial' });
 
-// Decisions 182 and 454, sorted as the route's keys are compared.
-const FACTS = ['backup', 'jobs', 'last_syncs', 'logs', 'queue', 'secrets'];
+// The route's keys, sorted: decisions 182 and 454, and the board counts Overview reads (527).
+const FACTS = ['acquisition', 'backup', 'jobs', 'last_syncs', 'logs', 'queue', 'secrets'];
+// What the page shows at a glance; the rest is one tap down.
+const SHOWN = ['backup', 'secrets', 'storage', 'queue', 'jobs', 'logs', 'technical'];
 
-test.describe('the System card', () => {
+test.describe('the System page', () => {
   /** @type {import('@playwright/test').Page} */
   let admin;
   const contexts = [];
@@ -30,25 +33,36 @@ test.describe('the System card', () => {
     for (const context of contexts) await context.close();
   });
 
+  const answered = (r) => r.url().endsWith('/api/admin/system') && r.request().method() === 'GET';
+
   async function render() {
-    const [res] = await Promise.all([
-      admin.waitForResponse(
-        (r) => r.url().endsWith('/api/admin/system') && r.request().method() === 'GET'
-      ),
-      admin.goto('/admin/system')
-    ]);
+    const [res] = await Promise.all([admin.waitForResponse(answered), admin.goto('/admin/system')]);
     return res.json();
+  }
+
+  /** Open one of the page's disclosures by its test id. */
+  async function disclose(testId) {
+    const details = admin.getByTestId(testId);
+    if ((await details.getAttribute('open')) === null) await details.locator('summary').first().click();
+    return details;
   }
 
   // --- 1 ------------------------------------------------------------------------------------
 
-  test('the System tab is a link to a card of six facts and no control that writes', async () => {
-    await admin.goto('/admin/data');
-    await admin.getByRole('link', { name: 'System' }).click();
-    await expect(admin.getByRole('heading', { name: 'System' })).toBeVisible();
+  test('System is a section of Admin, showing facts and no control that writes', async () => {
+    await admin.goto('/admin');
+    // The page's own read settles before anything below watches the network.
+    await Promise.all([
+      admin.waitForResponse(answered),
+      admin
+        .getByRole('navigation', { name: 'Admin', exact: true })
+        .getByRole('link', { name: 'System', exact: true })
+        .click()
+    ]);
+    await expect(admin.getByRole('heading', { level: 1, name: 'System' })).toBeVisible();
     await expect(admin).toHaveURL(/\/admin\/system$/);
 
-    for (const fact of FACTS) {
+    for (const fact of SHOWN) {
       await expect(admin.getByTestId(`system-${fact}`)).toBeVisible();
     }
 
@@ -56,15 +70,14 @@ test.describe('the System card', () => {
     const body = await (await admin.request.get('/api/admin/system')).json();
     expect(Object.keys(body).sort()).toEqual(FACTS);
 
-    // Inside the six facts only (the shell has buttons of its own): the one control is the log
-    // level select.
-    const controls = admin
-      .locator(FACTS.map((f) => `[data-testid="system-${f}"]`).join(', '))
-      .locator('button, input, select, [role=button]');
+    // Inside the page only (the shell's top row has buttons of its own): the one control is the
+    // log level select; the rest are disclosures.
+    const controls = admin.locator('main').locator('button, input, select, [role=button]');
     await expect(controls).toHaveCount(1);
-    const level = admin.getByTestId('system-logs').getByLabel('LOG LEVEL');
-    await expect(admin.getByTestId('system-logs').locator('select')).toHaveCount(1);
+    await disclose('system-logs');
+    const level = admin.getByTestId('system-logs').getByLabel('Log level');
     await expect(level).toBeVisible();
+    await expect(level, 'warnings and errors first (decision 527)').toHaveValue('warning');
 
     // It asks the server nothing (decision 454). The closing round trip gives a stray request
     // time to leave; `admin.request` is not the page's network.
@@ -77,7 +90,7 @@ test.describe('the System card', () => {
     };
     admin.on('request', watch);
     try {
-      for (const value of ['warning', 'error', 'all']) {
+      for (const value of ['error', 'all', 'warning']) {
         await level.selectOption(value);
         await expect(level).toHaveValue(value);
       }
@@ -103,9 +116,12 @@ test.describe('the System card', () => {
     expect(secrets.fingerprint).toMatch(/^[0-9a-f]{12}$/);
     expect(typeof secrets.key_id, 'the active data-encryption key row').toBe('string');
 
-    const card = admin.getByTestId('system-secrets');
-    await expect(card).toContainText(secrets.fingerprint);
-    await expect(card).toContainText(secrets.key_id);
+    await expect(admin.getByTestId('system-secrets')).toContainText('Loaded');
+    // The verbatim facts sit one tap down.
+    await disclose('system-technical');
+    const detail = admin.getByTestId('system-secrets-detail');
+    await expect(detail).toContainText(secrets.fingerprint);
+    await expect(detail).toContainText(secrets.key_id);
     expect(secrets.unreadable).toBe(false);
     await expect(admin.getByTestId('system-secrets-unreadable')).toHaveCount(0);
   });
@@ -121,12 +137,10 @@ test.describe('the System card', () => {
 
     const card = admin.getByTestId('system-backup');
     if (backup.at === null) {
-      await expect(card).toContainText('no dump has ever completed');
+      await expect(card).toContainText('Never');
       expect(backup.stale, 'never having dumped is stale by the same rule').toBe(true);
     } else {
-      // The age, not the locale-formatted timestamp.
-      await expect(card).not.toContainText('no dump has ever completed');
-      await expect(card).toContainText(/ago/);
+      await expect(card).not.toContainText('Never');
     }
     await expect(admin.getByTestId('system-backup-stale')).toHaveCount(backup.stale ? 1 : 0);
   });
@@ -144,6 +158,9 @@ test.describe('the System card', () => {
       .toBeGreaterThan(0);
 
     const { jobs } = await render();
+    // "All N jobs" opens the full list.
+    const all = await disclose('system-jobs');
+    await expect(all.locator('summary')).toContainText(`All ${jobs.length} jobs`);
     const rows = admin.getByTestId('system-job');
     await expect(rows).toHaveCount(jobs.length);
 
@@ -153,6 +170,12 @@ test.describe('the System card', () => {
       // No `finished_at` is its own fact (a kill, an OOM), not a guessed outcome.
       const expected = job.finished_at === null ? 'unfinished' : job.ok ? 'ok' : 'failed';
       await expect(row).toHaveAttribute('data-outcome', expected);
+      // Named plainly on top; the verbatim name is under Technical details.
+      await expect(row).not.toContainText(job.name);
+    }
+    await disclose('system-technical');
+    for (const job of jobs) {
+      await expect(admin.getByTestId('system-technical')).toContainText(job.name);
     }
     // The minutely job proves a live worker rather than a seeded table.
     expect(jobs.map((j) => j.name)).toContain('jellyfin-sessions-poll');
@@ -166,7 +189,15 @@ test.describe('the System card', () => {
     const states = ['pending', 'leased', 'done', 'failed', 'skipped'];
     expect(Object.keys(queue.by_state).sort()).toEqual([...states].sort());
 
-    const card = admin.getByTestId('system-queue');
+    // Plain on top: what is waiting, done and skipped.
+    const waiting = queue.by_state.pending + queue.by_state.leased;
+    const stats = admin.getByTestId('system-queue');
+    await expect(stats).toContainText(`${waiting.toLocaleString('en')}Waiting`);
+    await expect(stats).toContainText(`${queue.by_state.done.toLocaleString('en')}Done`);
+    await expect(stats).toContainText(`${queue.by_state.skipped.toLocaleString('en')}Skipped`);
+
+    await disclose('system-technical');
+    const card = admin.getByTestId('system-queue-detail');
     for (const state of states) {
       // Word-bounded, because "pending 1" is a substring of "pending 10".
       await expect(card).toContainText(new RegExp(`\\b${state} ${queue.by_state[state]}\\b`));
@@ -184,7 +215,7 @@ test.describe('the System card', () => {
       );
     }
     // Nothing here drains or retries: that is the board's.
-    await expect(card.locator('button, input, select, [role=button]')).toHaveCount(0);
+    await expect(stats.locator('button, input, select, [role=button]')).toHaveCount(0);
   });
 
   // --- 6 ------------------------------------------------------------------------------------
@@ -200,11 +231,12 @@ test.describe('the System card', () => {
       'jellyfin-sessions-poll',
       'acquisition-drain'
     ]);
+    await disclose('system-technical');
     for (const sync of last_syncs) {
       const row = admin.locator(`[data-last-sync="${sync.name}"]`);
       await expect(row).toHaveAttribute('data-synced', sync.at ? 'yes' : 'never');
       await expect(row).toContainText(sync.connector);
-      await expect(row).toContainText(sync.at ? /ago/ : /never succeeded/);
+      await expect(row).toContainText(sync.at ? /ago|just now/ : /never succeeded/);
       // A newest row that reached its server bounds the last sync from below. A row closed ok
       // that asked nobody (no report, or `reached: false`) is not a sync.
       const newest = jobs.find((job) => job.name === sync.name);
@@ -218,7 +250,7 @@ test.describe('the System card', () => {
   // --- 7 ------------------------------------------------------------------------------------
 
   test('the recent log lines are listed and filter by level', async () => {
-    // Decision 454: the web process's own lines, INFO and up, at most 200, redacted. The card
+    // Decision 454: the web process's own lines, INFO and up, at most 200, redacted. The page
     // says the worker's are in its container log.
     const { logs } = await render();
     expect(logs.scope).toBe('web process');
@@ -230,14 +262,15 @@ test.describe('the System card', () => {
     }
     expect(JSON.stringify(logs)).not.toContain(JELLYFIN.apiKey);
 
-    const card = admin.getByTestId('system-logs');
+    const card = await disclose('system-logs');
     await expect(card).toContainText('web process');
     await expect(card).toContainText('container log');
 
     const RANK = { DEBUG: 10, INFO: 20, WARNING: 30, ERROR: 40, CRITICAL: 50 };
     const lines = card.locator('[data-log-level]');
-    const level = card.getByLabel('LOG LEVEL');
-    for (const [value, floor] of [['all', 0], ['warning', 30], ['error', 40], ['all', 0]]) {
+    const level = card.getByLabel('Log level');
+    // Warnings and errors first (decision 527), then every level and back.
+    for (const [value, floor] of [['warning', 30], ['all', 0], ['error', 40], ['warning', 30]]) {
       await level.selectOption(value);
       const expected = logs.records.filter((r) => (RANK[r.level] ?? 0) >= floor).length;
       await expect(lines, `lines at ${value}`).toHaveCount(expected);
@@ -284,7 +317,10 @@ test.describe('the System card', () => {
       // Both ways back, named: the right `.env`, or the command that retires what will not open.
       await expect(warning).toContainText('.env');
       await expect(warning).toContainText('spielplan-secrets reset');
-      await expect(admin.getByTestId('system-secrets')).toContainText(live.secrets.fingerprint);
+      await disclose('system-technical');
+      await expect(admin.getByTestId('system-secrets-detail')).toContainText(
+        live.secrets.fingerprint
+      );
     } finally {
       await admin.unroute('**/api/admin/system');
     }
@@ -292,7 +328,7 @@ test.describe('the System card', () => {
 
   // --- 10 -----------------------------------------------------------------------------------
 
-  test('the Connectors card says what its own custody repair costs', async () => {
+  test('the Services Jellyfin card says what its own custody repair costs', async () => {
     // The twin, and where the repair is offered: the only place that says Save fixes Jellyfin
     // by retiring the DEK it cannot open, stranding web push with it (§14.3).
 
@@ -302,17 +338,17 @@ test.describe('the System card', () => {
           (r) =>
             r.url().endsWith('/api/admin/connectors/jellyfin') && r.request().method() === 'GET'
         ),
-        admin.goto('/admin/connectors')
+        admin.goto('/admin/services')
       ]);
       return res.json();
     }
 
     const live = await load();
     expect(live.secrets_unreadable, 'the stack under test has intact custody').toBe(false);
-    // A mapping row means `cfg` was assigned, so the absence below is not a page still loading.
-    await expect(admin.locator('tr[data-user]').first()).toBeVisible();
     // The Jellyfin card only: other cards have Saves, and names match as substrings.
     const card = admin.getByTestId('connector-jellyfin');
+    // The users load after `cfg`, so a count means the absence below is not a page still loading.
+    await expect(card.getByRole('button', { name: /^People linked/ })).toContainText(/\d+ of [1-9]/);
     await expect(card.locator('[data-secrets="unreadable"]')).toHaveCount(0);
 
     // The shape the backend really produces: an unreadable row degrades to the URL alone, with
@@ -340,7 +376,13 @@ test.describe('the System card', () => {
       await expect(warning).toContainText('the old key is retired');
       await expect(warning).toContainText('web push');
       // Save stays reachable although `configured: false` disables Test and Sync.
-      await expect(card.getByRole('button', { name: 'Save', exact: true })).toBeEnabled();
+      await card.getByRole('button', { name: /^API key/ }).click();
+      await expect(
+        admin.getByRole('dialog', { name: 'Jellyfin server' }).getByRole('button', {
+          name: 'Save',
+          exact: true
+        })
+      ).toBeEnabled();
     } finally {
       await admin.unroute('**/api/admin/connectors/jellyfin');
     }

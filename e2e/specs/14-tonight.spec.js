@@ -55,8 +55,19 @@ test.describe('tonight', () => {
     await otherContext?.close();
   });
 
-  /** §6.2 step 1's controls. The surface restores a seated device into its room, so this first
-   * steps back out of whatever the last test left live. */
+  /** §6.2 step 1's controls live in a sheet behind the door's summary row (decision 527). */
+  async function openSettings() {
+    await page.getByTestId('tonight-settings').click();
+    await expect(page.getByRole('dialog', { name: "Tonight's settings" })).toBeVisible();
+  }
+
+  async function closeSettings() {
+    await page.getByTestId('tonight-settings-done').click();
+    await expect(page.getByRole('dialog', { name: "Tonight's settings" })).toHaveCount(0);
+  }
+
+  /** The surface restores a seated device into its room, so this first steps back out of
+   * whatever the last test left live. */
   async function atTheDoor({ rewatches = true, guests = 0 } = {}) {
     await page.goto('/tonight');
     // Surface first: client-rendered, so "no placeholder" is also true of an empty page.
@@ -68,9 +79,23 @@ test.describe('tonight', () => {
     await expect(back.or(controls).first()).toBeVisible();
     if (await back.isVisible()) await back.click();
     await expect(controls).toBeVisible();
+    if (!rewatches && !guests) return;
+    await openSettings();
     if (rewatches) await page.getByTestId('tonight-rewatches').check();
-    if (guests) await page.getByTestId('tonight-guests').fill(String(guests));
+    for (let i = 0; i < guests; i++) await page.getByTestId('tonight-guests-more').click();
+    await expect(page.getByTestId('tonight-guests')).toHaveText(String(guests));
+    await closeSettings();
   }
+
+  /** Ending is terminal, so it asks first in an action sheet (decision 527). */
+  async function endTheRoom() {
+    await page.getByTestId('tonight-end-room').click();
+    await page.getByRole('menuitem', { name: 'End the room' }).click();
+  }
+
+  /** The solo picks: the first as the hero card, the rest as rows. */
+  const soloPicks = () =>
+    page.getByTestId('tonight-picks').locator('[data-testid^="tonight-pick-"]');
 
   /** Answer the round on screen to its end, waiting on each answer's write. */
   async function playOut() {
@@ -97,26 +122,30 @@ test.describe('tonight', () => {
   });
 
   test('the session controls sit before the fork and apply to both doors', async () => {
-    // §6.2 step 1: kind, a runtime budget slider, and a rewatch toggle, above both doors.
+    // §6.2 step 1: kind, a runtime budget slider, and a rewatch toggle, one summary row above
+    // neither door in particular (decision 527).
     await atTheDoor({ rewatches: false });
+    await expect(page.getByTestId('tonight-open')).toBeVisible();
+    await expect(page.getByTestId('tonight-solo-door')).toBeVisible();
+    await expect(page.getByTestId('tonight-summary')).toHaveText('Film · up to 2h 10m');
 
+    await openSettings();
     await expect(page.getByTestId('tonight-kind-movie')).toBeVisible();
     await expect(page.getByTestId('tonight-kind-series')).toBeVisible();
     await expect(page.getByTestId('tonight-rewatches')).toBeVisible();
-    await expect(page.getByTestId('tonight-open')).toBeVisible();
-    await expect(page.getByTestId('tonight-solo-door')).toBeVisible();
 
     const slider = page.getByTestId('tonight-budget');
     await expect(slider).toHaveAttribute('min', '60');
     await expect(slider).toHaveAttribute('max', '200');
     const readout = page.getByTestId('tonight-budget-value');
-    await expect(readout).toContainText('130 min');
+    await expect(readout).toHaveText('2h 10m');
 
     // Decision 219: on a series night the budget is PER EPISODE, and says so here.
     await page.getByTestId('tonight-kind-series').click();
-    await expect(readout).toContainText('130 min per episode');
+    await expect(readout).toContainText('per episode');
     await page.getByTestId('tonight-kind-movie').click();
     await expect(readout).not.toContainText('per episode');
+    await closeSettings();
   });
 
   test('solo lands on three picks and a wildcard with no round and no ballot', async () => {
@@ -127,7 +156,7 @@ test.describe('tonight', () => {
     await expect(page.getByTestId('tonight-solo')).toBeVisible();
     await expect(page.getByTestId('tonight-round')).toHaveCount(0);
     await expect(page.getByTestId('tonight-ballot')).toHaveCount(0);
-    await expect(page.getByTestId('tonight-picks').locator('li')).toHaveCount(3);
+    await expect(soloPicks()).toHaveCount(3);
     await expect(page.getByTestId('tonight-solo-wildcard')).toBeVisible();
   });
 
@@ -137,21 +166,21 @@ test.describe('tonight', () => {
     await page.getByTestId('tonight-solo-door').click();
     await expect(page.getByTestId('tonight-solo')).toBeVisible();
 
-    const cards = await page.getByTestId('tonight-picks').locator('li').all();
+    const cards = await soloPicks().all();
     expect(cards.length, 'no picks means every assertion below is vacuous').toBe(3);
     for (const card of cards) {
-      await expect(card.locator('.why')).not.toBeEmpty();
-      await expect(card.locator('.data')).toContainText(/fits your \d+ min|runs \d+ min over/);
+      await expect(card.getByTestId('tonight-why')).not.toBeEmpty();
+      await expect(card.getByTestId('tonight-fit')).toContainText(/fits your time|\d+ min over/i);
     }
-    await expect(page.getByTestId('tonight-solo-wildcard')).toContainText('a stretch');
+    await expect(page.getByTestId('tonight-solo-wildcard')).toContainText('A step outside your usual');
   });
 
   test('the provenance line names the budget and the filter', async () => {
-    // 54f: "unseen first" until a sharpen answer tilts it.
+    // 54f: "Unseen first" until a sharpen answer tilts it.
     await atTheDoor({ rewatches: false });
     await page.getByTestId('tonight-solo-door').click();
-    await expect(page.getByTestId('tonight-provenance')).toContainText('130 min budget');
-    await expect(page.getByTestId('tonight-provenance')).toContainText('unseen first');
+    await expect(page.getByTestId('tonight-provenance')).toContainText('fits in 2h 10m');
+    await expect(page.getByTestId('tonight-provenance')).toContainText('Unseen first');
   });
 
   test('reshuffle walks the ranking and asks nothing', async () => {
@@ -187,7 +216,9 @@ test.describe('tonight', () => {
   });
 
   test('the round offers all four answers and locks the escape until pair 6', async () => {
-    // Decision 154's four answers; 54c's escape is not drawn before it is available.
+    // Decision 154's four answers; 54c's escape is not drawn before it is available. Playing the
+    // round out to its end outruns 60 s on WebKit.
+    test.setTimeout(120_000);
     await atTheDoor();
     await page.getByTestId('tonight-open').click();
     await expect(page.getByTestId('tonight-lobby')).toBeVisible();
@@ -200,14 +231,12 @@ test.describe('tonight', () => {
     await expect(page.getByTestId('tonight-answer-NEITHER')).toBeVisible();
     await expect(page.getByTestId('tonight-escape-locked')).toBeVisible();
     await expect(page.getByTestId('tonight-escape')).toHaveCount(0);
-    await expect(page.getByTestId('tonight-round-count')).toContainText('often about');
-    await expect(page.getByTestId('tonight-round-count')).not.toContainText('cap');
+    await expect(page.getByTestId('tonight-round-count')).toContainText('usually about');
+    await expect(page.getByTestId('tonight-round-count')).not.toContainText('max');
 
-    // All four on screen at once, above the bottom bar where the nav is one (a desktop rail's
-    // top is not a fold), and the pair side by side.
-    const nav = await page.getByRole('navigation', { name: 'Surfaces' }).boundingBox();
-    const viewport = page.viewportSize().height;
-    const bottom = nav && nav.y > viewport / 2 ? nav.y : viewport;
+    // All four on screen at once, and the pair side by side. The round is a full-screen flow
+    // over the tab bar (decision 527), so the fold is the viewport's.
+    const bottom = page.viewportSize().height;
     for (const id of ['tonight-pick-A', 'tonight-pick-B', 'tonight-answer-EITHER',
       'tonight-answer-NEITHER']) {
       const box = await page.getByTestId(id).boundingBox();
@@ -259,7 +288,7 @@ test.describe('tonight', () => {
 
     const guestRound = page.getByTestId('tonight-round');
     await expect(guestRound).toBeVisible();
-    await expect(page.getByTestId('tonight-round-count')).toContainText('pair 1');
+    await expect(page.getByTestId('tonight-round-count')).toContainText('Pair 1');
     await expect(page.getByTestId('tonight-rail')).toHaveCount(0);
 
     // "no control on that screen, browser back and in-round history entries included, reaches
@@ -309,7 +338,7 @@ test.describe('tonight', () => {
     await page.goBack();
     await page.waitForLoadState('domcontentloaded');
     if (await page.getByTestId('tonight-round').isVisible().catch(() => false)) {
-      await expect(page.getByTestId('tonight-round-count')).toContainText('pair 1');
+      await expect(page.getByTestId('tonight-round-count')).toContainText('Pair 1');
     }
 
     // --- and on through the guest's ballot to the reveal (M4.12) ----------------------------
@@ -340,10 +369,8 @@ test.describe('tonight', () => {
     const first = await options.first().getAttribute('data-testid');
     await page.getByTestId(first).click();
     await expect(ticked(page), 'the owner voted, or the blindness claim below is vacuous').toHaveCount(1);
-    // Submit within reach, above the bottom bar where the nav is one.
-    const bar = await page.getByRole('navigation', { name: 'Surfaces' }).boundingBox();
-    const height = page.viewportSize().height;
-    const fold = bar && bar.y > height / 2 ? bar.y : height;
+    // Submit within reach: the ballot is a full-screen flow over the tab bar (decision 527).
+    const fold = page.viewportSize().height;
     const submitBox = await page.getByTestId('tonight-submit-ballot').boundingBox();
     expect(submitBox.y + submitBox.height, 'Submit sits below the fold').toBeLessThanOrEqual(fold + 1);
     // And no option between Submit and the fold, where a near miss would approve it.
@@ -377,7 +404,7 @@ test.describe('tonight', () => {
     await page.getByTestId('tonight-submit-ballot').click();
 
     await expect(page.getByTestId('tonight-reveal')).toBeVisible({ timeout: 25_000 });
-    await expect(page.getByTestId('tonight-approval-share')).toContainText(/\d+ of \d+ approved/);
+    await expect(page.getByTestId('tonight-approval-share')).toContainText(/said yes/);
   });
 
   test('a household frame does not take the guest off the phone', async () => {
@@ -397,7 +424,7 @@ test.describe('tonight', () => {
     const guestSeat = (await handOff.getAttribute('data-testid')).replace('tonight-hand-to-', '');
     await handOff.click();
     await expect(page.getByTestId('tonight-round')).toBeVisible();
-    await expect(page.getByTestId('tonight-round-count')).toContainText('pair 1');
+    await expect(page.getByTestId('tonight-round-count')).toContainText('Pair 1');
     const showing = await page.getByTestId('tonight-round').innerText();
 
     // The RE-READ the frame provokes, not the screen alone, which would settle on the old DOM.
@@ -415,7 +442,7 @@ test.describe('tonight', () => {
     ).toContain(`/api/tonight/seats/${guestSeat}/round`);
 
     await expect(page.getByTestId('tonight-round')).toBeVisible();
-    await expect(page.getByTestId('tonight-round-count')).toContainText('pair 1');
+    await expect(page.getByTestId('tonight-round-count')).toContainText('Pair 1');
     await expect(page.getByTestId('tonight-waiting')).toHaveCount(0);
     expect(
       await page.getByTestId('tonight-round').innerText(),
@@ -424,8 +451,7 @@ test.describe('tonight', () => {
 
     // Both rooms closed, so the next test's open-rooms list is its own (decision 169).
     await other.request.post(`/api/tonight/sessions/${elsewhere.session_id}/end`);
-    await page.getByTestId('tonight-end-room').click();
-    await page.getByTestId('tonight-end-room-confirm').click();
+    await endTheRoom();
     await expect(page.getByTestId('tonight-controls')).toBeVisible();
   });
 
@@ -438,8 +464,8 @@ test.describe('tonight', () => {
     await atTheDoor();
     const roomsBefore = (await (await page.request.get('/api/tonight/rooms')).json()).rooms.length;
     await page.getByTestId('tonight-solo-door').click();
-    await expect(page.getByTestId('tonight-picks').locator('li')).toHaveCount(3);
-    await expect(page.getByTestId('tonight-provenance')).toContainText('rewatches included');
+    await expect(soloPicks()).toHaveCount(3);
+    await expect(page.getByTestId('tonight-provenance')).toContainText('Rewatches included');
 
     await page.getByTestId('tonight-sharpen').click();
     await expect(page.getByTestId('tonight-sharpen-pair')).toBeVisible();
@@ -450,7 +476,7 @@ test.describe('tonight', () => {
     // Answered until the line moves, up to three times: 54b's hold-out draw is keyed on the
     // user id (decision 223), so any one answer may legitimately not count.
     const provenance = page.getByTestId('tonight-provenance');
-    const tilted = /tilted by your \d+ answers/;
+    const tilted = /Tilted by your \d+ answers?/;
     for (let press = 0; press < 3 && !tilted.test((await provenance.textContent()) ?? ''); press++) {
       if (!(await page.getByTestId('tonight-sharpen-pair').isVisible())) break;
       await page.getByTestId('tonight-sharpen-A').click();
@@ -462,10 +488,10 @@ test.describe('tonight', () => {
     await expect(provenance, 'three answers and the line counted none of them').toContainText(
       tilted
     );
-    await expect(provenance).not.toContainText('rewatches included');
+    await expect(provenance).not.toContainText('Rewatches included');
     const line = (await provenance.textContent()) ?? '';
     await expect(page.getByTestId('tonight-solo')).toBeVisible();
-    await expect(page.getByTestId('tonight-picks').locator('li')).toHaveCount(3);
+    await expect(soloPicks()).toHaveCount(3);
     await expect(page.getByTestId('tonight-ballot')).toHaveCount(0);
 
     // Reshuffle inside the round is a browse gesture: no pair drawn is not a converged round, and
@@ -566,30 +592,34 @@ test.describe('tonight', () => {
     await page.goto('/tonight');
     await expect(page.getByTestId('tonight-surface')).toBeVisible();
     await expect(page.getByTestId('tonight-booting')).toHaveCount(0);
-    await page.getByTestId('tonight-end-room').click();
-    await page.getByTestId('tonight-end-room-confirm').click();
+    await endTheRoom();
     await expect(page.getByTestId('tonight-controls')).toBeVisible();
   });
 
   test('the slider says the budget is soft, and opens where this member last left it', async () => {
-    // Decision 506: the door says the budget admits up to 40 min over, and reopens at the budget
-    // last used, per kind. Same timeout as above, for the same shared page.
+    // Decision 506: the sheet says a little over is fine where the budget is set, and reopens
+    // at the budget last used, per kind. Same timeout as above, for the same shared page.
     test.setTimeout(300_000);
     await atTheDoor({ rewatches: false });
-    await expect(page.getByTestId('tonight-budget-soft')).toContainText('up to 40 min longer');
+    await openSettings();
+    await expect(page.getByTestId('tonight-budget-soft')).toContainText('A little over is fine');
     await page.getByTestId('tonight-budget').fill('120');
-    await expect(page.getByTestId('tonight-budget-value')).toContainText('120 min');
+    await expect(page.getByTestId('tonight-budget-value')).toHaveText('2h');
+    await closeSettings();
+    await expect(page.getByTestId('tonight-summary')).toHaveText('Film · up to 2h');
     await page.getByTestId('tonight-solo-door').click();
     await expect(page.getByTestId('tonight-solo')).toBeVisible();
 
     await atTheDoor({ rewatches: false });
-    await expect(page.getByTestId('tonight-budget-value')).toHaveText('120 min');
+    await expect(page.getByTestId('tonight-summary')).toHaveText('Film · up to 2h');
 
     // Back to the default, so the file leaves the phone as it found it.
+    await openSettings();
     await page.getByTestId('tonight-budget').fill('130');
+    await closeSettings();
     await page.getByTestId('tonight-solo-door').click();
     await expect(page.getByTestId('tonight-solo')).toBeVisible();
     await atTheDoor({ rewatches: false });
-    await expect(page.getByTestId('tonight-budget-value')).toHaveText('130 min');
+    await expect(page.getByTestId('tonight-summary')).toHaveText('Film · up to 2h 10m');
   });
 });

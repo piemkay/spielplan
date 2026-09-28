@@ -259,10 +259,8 @@ async def undo(conn: DB, user: ActiveUser, request: Request) -> dict[str, Any]:
             detail={
                 "reason": exc.reason,
                 "message": {
-                    "empty": "nothing to undo in this block",
-                    "block_boundary": (
-                        "undo reaches back to the start of this block of 15 and no further"
-                    ),
+                    "empty": "Nothing to undo yet",
+                    "block_boundary": "Undo only goes back to the start of these 15",
                 }[exc.reason],
             },
         ) from exc

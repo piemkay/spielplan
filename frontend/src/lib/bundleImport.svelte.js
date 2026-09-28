@@ -1,4 +1,4 @@
-// Pure rules, not module `$state`: the wizard and the Data tab mount the same importer, and
+// Pure rules, not module `$state`: the wizard and Movie data mount the same importer, and
 // module state would share one screen's phase with the other.
 
 export const IDLE = 'idle';
@@ -14,7 +14,8 @@ export const FAILED = 'failed';
 export const UNKNOWN = 'unknown';
 
 /** Names the next action; ASCII, since a failing vitest prints it. */
-export const UNKNOWN_OUTCOME = 'outcome unknown - check the bundle state before retrying';
+export const UNKNOWN_OUTCOME =
+  'We cannot tell whether the import started. Check what Movie data shows before you try again.';
 
 // Fast enough to catch the terminal phase, cheap against a ~127s import.
 export const POLL_INTERVAL_MS = 2_000;

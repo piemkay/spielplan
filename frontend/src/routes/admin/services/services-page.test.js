@@ -5,31 +5,47 @@
 import { flushSync, mount, unmount } from 'svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+// A page store that follows `pushState`, so a sheet stays open once it has pushed its entry.
+const nav = vi.hoisted(() => {
+  let value = { url: new URL('http://localhost/admin/services'), state: {} };
+  const runs = new Set();
+  return {
+    page: {
+      subscribe(run) {
+        runs.add(run);
+        run(value);
+        return () => runs.delete(run);
+      }
+    },
+    push(state) {
+      value = { ...value, state };
+      for (const run of runs) run(value);
+    }
+  };
+});
+
+vi.mock('$app/stores', () => ({ page: nav.page }));
+vi.mock('$app/navigation', () => ({ goto: vi.fn(), pushState: (_url, state) => nav.push(state) }));
 vi.mock('$lib/api.js', () => ({
   api: vi.fn(),
   get: vi.fn(),
   post: vi.fn(),
-  // `session.svelte.js` imports it, and the page reads `session.publicUrl` for the webhook path.
   ApiError: class extends Error {}
 }));
 vi.mock('$lib/jellyfin.js', () => ({ jellyfinDirectory: vi.fn() }));
-// The page reads `session.publicUrl` for the webhook path; the wizard reads `session.setup`.
+// The page reads `session.publicUrl` for the webhook address.
 vi.mock('$lib/session.svelte.js', () => ({
-  session: { setup: { required: false, steps: [] }, publicUrl: 'http://localhost:8080', user: null },
-  bootstrap: vi.fn(),
-  setUser: vi.fn()
+  session: { publicUrl: 'http://localhost:8080', user: null }
 }));
-vi.mock('$app/navigation', () => ({ goto: vi.fn() }));
 
 import { api, get, post } from '$lib/api.js';
 import { jellyfinDirectory } from '$lib/jellyfin.js';
-import ConnectorsPage from './+page.svelte';
-import SetupPage from '../../setup/+page.svelte';
+import ServicesPage from './+page.svelte';
 
 const SYNC = '[data-sync]';
 const FAILURE = '[data-sync-failure]';
 const VERDICT = '[data-server-supported]';
-const PROBE = '[data-probe]';
+const JELLYFIN = '[data-testid="connector-jellyfin"]';
 
 /** `GET /api/admin/connectors/jellyfin`, including §7.1's stored verdict. */
 const cfg = (over = {}) => ({
@@ -64,7 +80,7 @@ const report = (over = {}) => ({
   ...over
 });
 
-/** `GET /api/admin/connectors/jellyfin/libraries`, M5.2's envelope (decision 364). */
+/** `GET /api/admin/connectors/jellyfin/libraries`, decision 364's envelope. */
 const libraries = (over = {}) => ({
   ok: true,
   libraries: [
@@ -74,60 +90,6 @@ const libraries = (over = {}) => ({
   ...over
 });
 
-/** `GET /api/admin/llm`, every key `api/llm._read` answers, trimmed to one provider's detail. */
-const llm = () => ({
-  providers: ['anthropic', 'openai', 'gemini'].map((name) => ({
-    name,
-    configured: name === 'gemini',
-    has_api_key: name === 'gemini',
-    secrets_unreadable: false,
-    model: `${name}-model`,
-    structured_output: { anthropic: 'forced tool-use', openai: 'strict schema', gemini: 'responseSchema' }[
-      name
-    ],
-    price: { input: 1, output: 2, valid_until: null },
-    models: [`${name}-model`],
-    price_basis: {
-      provider: name,
-      model: `${name}-model`,
-      source: 'table',
-      input: 1,
-      output: 2,
-      valid_until: null,
-      then: null
-    }
-  })),
-  settings: { extraction_provider: null, parallel: null, parallel_providers: null, passes: null, cap_usd: null },
-  meter: {
-    spent_usd: '0',
-    unsettled_usd: '0',
-    cap_usd: null,
-    remaining_usd: null,
-    period_start: '2026-09-01T00:00:00+02:00',
-    period_end: '2026-10-01T00:00:00+02:00',
-    tz: 'Europe/Berlin'
-  },
-  estimate: {
-    per_title_usd: 'unknown',
-    input_tokens_assumed: 23500,
-    output_tokens_assumed: 3900,
-    passes: null,
-    providers: [],
-    reason: 'no extraction provider is assigned',
-    basis: []
-  },
-  projected: {
-    window_days: 30,
-    titles: 0,
-    ever_filed: false,
-    monthly_usd: null,
-    remaining_usd: null,
-    exceeds_remaining: null,
-    reason: 'there is no acquisition history yet'
-  },
-  batch: { available: false, reason: 'batch endpoints are not used at M5 (decision 338)' }
-});
-
 /** `GET /api/admin/connectors`: the three keyed sources as booleans and the keyless five. */
 const sources = () => ({
   sources: [
@@ -135,7 +97,7 @@ const sources = () => ({
     { name: 'omdb', has_api_key: false, secrets_unreadable: false, required: false, used_by: 'omdb' },
     {
       name: 'trakt',
-      has_client_id: false,
+      has_client_id: true,
       has_client_secret: false,
       secrets_unreadable: false,
       required: false,
@@ -145,13 +107,25 @@ const sources = () => ({
   keyless: ['wikidata', 'wikipedia', 'tvmaze', 'rottentomatoes', 'metacritic']
 });
 
+const users = () => [
+  {
+    id: 1,
+    name: 'admin',
+    role: 'admin',
+    jellyfin_user_id: 'jf-1',
+    jellyfin_link_state: 'linked',
+    has_jellyfin_token: true
+  },
+  { id: 2, name: 'jenny', role: 'member', jellyfin_user_id: null, has_jellyfin_token: false }
+];
+
 /** Every GET the page makes, by path, so each test overrides only the one it is about. */
 function wire(over = {}) {
   const answers = {
-    '/admin/users': () => [],
-    '/admin/llm': llm,
+    '/admin/users': users,
     '/admin/connectors': sources,
     '/admin/connectors/jellyfin/libraries': libraries,
+    '/admin/system': () => ({ last_syncs: [{ name: 'jellyfin-seen-sync', at: null }] }),
     ...over
   };
   vi.mocked(get).mockImplementation(async (path) => {
@@ -164,6 +138,7 @@ function wire(over = {}) {
 let target;
 
 beforeEach(() => {
+  nav.push({});
   target = document.createElement('div');
   document.body.appendChild(target);
   vi.mocked(api).mockReset();
@@ -171,7 +146,7 @@ beforeEach(() => {
   vi.mocked(post).mockReset();
   vi.mocked(jellyfinDirectory).mockReset();
   wire();
-  vi.mocked(jellyfinDirectory).mockResolvedValue({ cfg: cfg(), users: [] });
+  vi.mocked(jellyfinDirectory).mockResolvedValue({ cfg: cfg(), users: [{ id: 'jf-1', name: 'pat' }] });
 });
 
 afterEach(() => {
@@ -184,17 +159,53 @@ async function settle() {
 }
 
 async function open() {
-  const app = mount(ConnectorsPage, { target });
+  const app = mount(ServicesPage, { target });
   await settle();
   return app;
 }
 
-const press = async (label) => {
-  const button = [...target.querySelectorAll('button')].find((b) => b.textContent.includes(label));
-  expect(button, `no button named ${label}`).toBeDefined();
-  button.click();
+/** A button whose whole name is `label`, inside `scope`. */
+function button(label, scope = JELLYFIN) {
+  const root = target.querySelector(scope);
+  expect(root, `no ${scope} on the page`).not.toBeNull();
+  const found = [...root.querySelectorAll('button')].find((b) => b.textContent.trim() === label);
+  expect(found, `no button named exactly ${label} in ${scope}`).toBeDefined();
+  return found;
+}
+
+const press = async (label, scope) => {
+  button(label, scope).click();
   await settle();
 };
+
+/** Open the sheet behind a list row, the way a tap does. */
+async function row(label) {
+  const found = [...target.querySelectorAll('.list-row')].find((r) =>
+    r.textContent.trim().startsWith(label)
+  );
+  expect(found, `no row named ${label}`).toBeDefined();
+  found.click();
+  await settle();
+  return found;
+}
+
+const text = (selector) => target.querySelector(selector)?.textContent.replace(/\s+/g, ' ') ?? '';
+
+function library(name) {
+  const label = [...target.querySelectorAll('[data-library-pick] label')].find((l) =>
+    l.textContent.includes(name)
+  );
+  expect(label, `no library named ${name} in the pick`).toBeDefined();
+  return label.querySelector('input[type="checkbox"]');
+}
+
+const jellyfinPuts = () =>
+  vi
+    .mocked(api)
+    .mock.calls.filter(
+      ([path, opts]) => path === '/admin/connectors/jellyfin' && opts?.method === 'PUT'
+    )
+    .map(([, opts]) => opts.body);
 
 describe('the sweep line', () => {
   it('reports a sweep whose Played writes all failed as a failure', async () => {
@@ -205,32 +216,31 @@ describe('the sweep line', () => {
     try {
       await press('Sync now');
       expect(target.querySelector(SYNC).getAttribute('data-sync-health')).toBe('failing');
-      const failure = target.querySelector(FAILURE);
-      expect(failure).not.toBeNull();
-      expect(failure.textContent).toContain('4 Played write(s) failed');
-      expect(failure.textContent).toContain('GET /Users/jf-1/Items -> 404');
+      expect(text(FAILURE)).toContain("4 watched marks didn't reach Jellyfin");
+      expect(text(SYNC)).not.toContain('Synced just now');
+      // The server's reason, verbatim, one tap down.
+      expect(text('[data-sync-report]')).toContain('GET /Users/jf-1/Items -> 404');
     } finally {
       unmount(app);
     }
   });
 
-  it('names the other three debts the sweep can now count', async () => {
-    // `resolve.unmatched` is a count and `unmatched_names` the list, as `SyncReport.as_dict` sends.
+  it('names the other debts the sweep counts, in plain words', async () => {
     vi.mocked(post).mockResolvedValue(
       report({
         owed_no_token: 2,
         unowned: 3,
-        resolve: { unmatched: 2, unmatched_names: ['jf-90', 'jf-91'] }
+        resolve: { unmatched: 2, unmatched_names: ['Home Movies 2019', 'jf-91'] }
       })
     );
     const app = await open();
     try {
       await press('Sync now');
-      // Whitespace-collapsed: the sentence is wrapped across source lines.
-      const line = target.querySelector(SYNC).textContent.replace(/\s+/g, ' ');
-      expect(line).toContain('2 owed write(s) with no stored sign-in');
-      expect(line).toContain('3 title(s) no longer in the library');
-      expect(line).toContain('2 library item(s) matched no title');
+      const line = text(SYNC);
+      expect(line).toContain("2 marks wait for their person's own Jellyfin sign-in");
+      expect(line).toContain('3 titles are no longer in the library');
+      expect(line).toContain('2 library items matched no title');
+      expect(text('[data-unmatched-names]')).toContain('Home Movies 2019, jf-91');
       // Nothing failed, so the health attribute must not cry wolf.
       expect(target.querySelector(SYNC).getAttribute('data-sync-health')).toBe('ok');
       expect(target.querySelector(FAILURE)).toBeNull();
@@ -247,6 +257,7 @@ describe('the sweep line', () => {
       await press('Sync now');
       expect(target.querySelector(SYNC).getAttribute('data-sync-health')).toBe('unreachable');
       expect(target.querySelector('[data-sync-unreachable]')).not.toBeNull();
+      expect(text(SYNC)).not.toContain('Synced just now');
     } finally {
       unmount(app);
     }
@@ -261,9 +272,7 @@ describe('the sweep line', () => {
     try {
       await press('Sync now');
       expect(target.querySelector(SYNC).getAttribute('data-sync-health')).toBe('unreachable');
-      const alert = target.querySelector('[data-sync-member-failed]');
-      expect(alert).not.toBeNull();
-      expect(alert.textContent.replace(/\s+/g, ' ')).toContain('but not for patrick');
+      expect(text('[data-sync-member-failed]')).toContain('but not for patrick');
       // The other alert is about a library read that never happened, which is not what this is.
       expect(target.querySelector('[data-sync-unreachable]')).toBeNull();
     } finally {
@@ -271,7 +280,7 @@ describe('the sweep line', () => {
     }
   });
 
-  it('calls a household with nothing configured neither healthy nor unreachable', async () => {
+  it('calls a household with nothing linked neither healthy nor unreachable', async () => {
     // A half-configured install is legal (§3.1): a sweep that correctly did nothing is not an outage.
     vi.mocked(post).mockResolvedValue(
       report({ unchanged: 0, users: [], completed: [], skipped_no_link: true })
@@ -295,8 +304,22 @@ describe('the sweep line', () => {
     try {
       await press('Sync now');
       expect(target.querySelector(SYNC).getAttribute('data-sync')).toBe('already-running');
-      expect(target.querySelector(SYNC).textContent).toContain('a sweep is already running');
-      expect(target.querySelector(SYNC).textContent).not.toContain('pushed');
+      expect(text(SYNC)).toContain('already running');
+      expect(target.querySelector('[data-sync-report]')).toBeNull();
+    } finally {
+      unmount(app);
+    }
+  });
+
+  it('reads the watched-status row off the last seen sync that reached Jellyfin', async () => {
+    const at = new Date(Date.now() - 4 * 60_000).toISOString();
+    wire({ '/admin/system': () => ({ last_syncs: [{ name: 'jellyfin-seen-sync', at }] }) });
+    const app = await open();
+    try {
+      const watched = [...target.querySelectorAll('.list-row')].find((r) =>
+        r.textContent.includes('Watched status')
+      );
+      expect(watched.textContent).toContain('Synced 4 min ago');
     } finally {
       unmount(app);
     }
@@ -304,15 +327,15 @@ describe('the sweep line', () => {
 });
 
 describe("§7.1's pin", () => {
-  it('names the write, not the reads, when the stored verdict is below the pin', async () => {
+  it('says plainly that marks cannot reach an old server, and names the write one tap down', async () => {
     vi.mocked(jellyfinDirectory).mockResolvedValue({
       cfg: cfg({ server_version: '10.8.13', server_supported: false }),
       users: []
     });
     const app = await open();
     try {
+      expect(text('[data-below-pin]')).toContain('older than 10.9');
       const verdict = target.querySelector(VERDICT);
-      expect(verdict).not.toBeNull();
       expect(verdict.getAttribute('data-server-supported')).toBe('false');
       expect(verdict.textContent).toContain('POST /UserPlayedItems');
       expect(verdict.textContent).toContain('10.8.13');
@@ -330,6 +353,8 @@ describe("§7.1's pin", () => {
     const app = await open();
     try {
       expect(target.querySelector(VERDICT)).toBeNull();
+      expect(target.querySelector('[data-below-pin]')).toBeNull();
+      expect(text(JELLYFIN)).toContain('Connected');
     } finally {
       unmount(app);
     }
@@ -347,57 +372,28 @@ describe("§7.1's pin", () => {
     const app = await open();
     try {
       await press('Test connection');
-      const probe = target.querySelector(PROBE);
-      expect(probe.textContent).toContain('POST');
-      expect(probe.textContent).toContain('/UserPlayedItems');
-      expect(probe.textContent).not.toContain('reads may miss fields');
+      expect(target.querySelector('[data-probe]').getAttribute('data-probe')).toBe('ok');
+      expect(text('[data-probe]')).toContain('Fake Jellyfin answered');
+      expect(text('[data-below-pin]')).toContain('older than 10.9');
+      expect(text('[data-probe-detail]')).toContain('POST /UserPlayedItems');
     } finally {
       unmount(app);
     }
   });
 });
 
-const JELLYFIN = '[data-testid="connector-jellyfin"]';
-
-/** A button whose whole name is `label`, inside `scope`: several cards now carry a Save. */
-function button(label, scope = JELLYFIN) {
-  const root = target.querySelector(scope);
-  expect(root, `no ${scope} on the page`).not.toBeNull();
-  const found = [...root.querySelectorAll('button')].find((b) => b.textContent.trim() === label);
-  expect(found, `no button named exactly ${label} in ${scope}`).toBeDefined();
-  return found;
-}
-
-function library(name) {
-  const label = [...target.querySelectorAll('[data-library-pick] label')].find((l) =>
-    l.textContent.includes(name)
-  );
-  expect(label, `no library named ${name} in the pick`).toBeDefined();
-  return label.querySelector('input[type="checkbox"]');
-}
-
-const jellyfinPuts = () =>
-  vi
-    .mocked(api)
-    .mock.calls.filter(
-      ([path, opts]) => path === '/admin/connectors/jellyfin' && opts?.method === 'PUT'
-    )
-    .map(([, opts]) => opts.body);
-
-describe("the Jellyfin card's library pick (decisions 364, 410, 455)", () => {
-  it('is its own write: the plain Save sends the URL and the key and never the pick', async () => {
-    vi.mocked(jellyfinDirectory).mockResolvedValue({
-      cfg: cfg({ library_ids: ['lib-films'] }),
-      users: []
-    });
+describe('the library pick (decisions 364, 410, 455)', () => {
+  it('is its own write: the server Save sends the URL and the key and never the pick', async () => {
+    vi.mocked(jellyfinDirectory).mockResolvedValue({ cfg: cfg({ library_ids: ['lib-films'] }), users: [] });
     vi.mocked(api).mockResolvedValue({});
     const app = await open();
     try {
-      // A changed, unsaved pick: the plain Save must not carry it into the stored boundary.
+      // A changed, unsaved pick: the server's Save must not carry it into the stored boundary.
+      await row('Libraries');
       library('Series').click();
       await settle();
-      button('Save').click();
-      await settle();
+      await row('Server address');
+      await press('Save');
       expect(jellyfinPuts()).toEqual([{ url: 'http://jellyfin.test', api_key: '' }]);
     } finally {
       unmount(app);
@@ -405,20 +401,18 @@ describe("the Jellyfin card's library pick (decisions 364, 410, 455)", () => {
   });
 
   it('sends only library_ids from its own button, and only once the selection changed', async () => {
-    vi.mocked(jellyfinDirectory).mockResolvedValue({
-      cfg: cfg({ library_ids: ['lib-films'] }),
-      users: []
-    });
+    vi.mocked(jellyfinDirectory).mockResolvedValue({ cfg: cfg({ library_ids: ['lib-films'] }), users: [] });
     vi.mocked(api).mockResolvedValue({});
     const app = await open();
     try {
+      expect(text(JELLYFIN), 'the row names the stored pick').toContain('Films');
+      await row('Libraries');
       expect(library('Films').checked, 'the stored pick is what the boxes start from').toBe(true);
-      expect(button('Save library pick').disabled, 'nothing changed, nothing to send').toBe(true);
+      expect(button('Save libraries').disabled, 'nothing changed, nothing to send').toBe(true);
       library('Series').click();
       await settle();
-      expect(button('Save library pick').disabled).toBe(false);
-      button('Save library pick').click();
-      await settle();
+      expect(button('Save libraries').disabled).toBe(false);
+      await press('Save libraries');
       expect(jellyfinPuts()).toEqual([{ library_ids: ['lib-films', 'lib-series'] }]);
     } finally {
       unmount(app);
@@ -431,17 +425,15 @@ describe("the Jellyfin card's library pick (decisions 364, 410, 455)", () => {
       '/admin/connectors/jellyfin/libraries': () =>
         libraries({ ok: false, error: 'Jellyfin answered 401', libraries: [] })
     });
-    vi.mocked(jellyfinDirectory).mockResolvedValue({
-      cfg: cfg({ library_ids: ['lib-films'] }),
-      users: []
-    });
+    vi.mocked(jellyfinDirectory).mockResolvedValue({ cfg: cfg({ library_ids: ['lib-films'] }), users: [] });
     vi.mocked(api).mockResolvedValue({});
     const app = await open();
     try {
+      await row('Libraries');
       const pick = target.querySelector('[data-library-pick]');
       expect(pick.getAttribute('data-library-pick')).toBe('unavailable');
       expect(pick.textContent).toContain('Jellyfin answered 401');
-      const save = button('Save library pick');
+      const save = button('Save libraries');
       expect(save.disabled).toBe(true);
       save.click();
       await settle();
@@ -461,8 +453,8 @@ describe("the Jellyfin card's library pick (decisions 364, 410, 455)", () => {
     });
     const app = await open();
     try {
+      await row('Libraries');
       const stale = target.querySelector('[data-library-stale]');
-      expect(stale).not.toBeNull();
       expect(stale.textContent).toContain('lib-gone');
       expect(stale.textContent).not.toContain('lib-films');
     } finally {
@@ -471,7 +463,7 @@ describe("the Jellyfin card's library pick (decisions 364, 410, 455)", () => {
   });
 });
 
-describe("the Jellyfin card's webhook (decisions 418, 455)", () => {
+describe('new-title alerts (decisions 418, 455)', () => {
   const trigger = (over = {}) => ({
     webhook: {
       last_item_added_at: '2026-09-23T20:15:00+00:00',
@@ -489,18 +481,23 @@ describe("the Jellyfin card's webhook (decisions 418, 455)", () => {
     ...over
   });
 
-  it('reports what arrived and what the poll did, as facts', async () => {
-    vi.mocked(jellyfinDirectory).mockResolvedValue({ cfg: cfg({ trigger: trigger() }), users: [] });
+  it('reports what arrived and what the poll did, verbatim one tap down', async () => {
+    vi.mocked(jellyfinDirectory).mockResolvedValue({
+      cfg: cfg({ has_webhook_token: true, trigger: trigger() }),
+      users: []
+    });
     const app = await open();
     try {
       const webhook = target.querySelector('[data-trigger="webhook"]');
+      expect(webhook.closest('details'), 'the facts sit under Technical details').not.toBeNull();
       expect(webhook.getAttribute('data-item-added')).toBe('received');
-      expect(webhook.textContent.replace(/\s+/g, ' ')).toContain('9 in the last 7 days');
+      expect(text('[data-trigger="webhook"]')).toContain('9 in the last 7 days');
       // The refusal is `acquire/intake`'s own sentence, rendered as it was recorded.
       expect(webhook.textContent).toContain('not an ItemAdded: PlaybackStart');
       const poll = target.querySelector('[data-trigger="delta-poll"]');
       expect(poll.getAttribute('data-poll-outcome')).toBe('ok');
-      expect(poll.textContent.replace(/\s+/g, ' ')).toContain('filed 2');
+      expect(text('[data-trigger="delta-poll"]')).toContain('filed 2');
+      expect(text(JELLYFIN)).toMatch(/New-title alerts\s*\d+ (h|days) ago/);
     } finally {
       unmount(app);
     }
@@ -509,6 +506,7 @@ describe("the Jellyfin card's webhook (decisions 418, 455)", () => {
   it('says when no ItemAdded has ever arrived, whatever else was delivered', async () => {
     vi.mocked(jellyfinDirectory).mockResolvedValue({
       cfg: cfg({
+        has_webhook_token: true,
         trigger: trigger({ webhook: { ...trigger().webhook, last_item_added_at: null } })
       }),
       users: []
@@ -518,13 +516,13 @@ describe("the Jellyfin card's webhook (decisions 418, 455)", () => {
       const webhook = target.querySelector('[data-trigger="webhook"]');
       expect(webhook.getAttribute('data-item-added')).toBe('none');
       expect(webhook.textContent).toContain('none received yet');
+      expect(text(JELLYFIN)).toContain('New-title alerts None yet');
     } finally {
       unmount(app);
     }
   });
 
-  it('still renders a card read without the trigger, as the M4.7-era payload is', async () => {
-    // `18-system.spec.js` test 7 fulfils this GET with exactly this shape.
+  it('still renders a card read without the trigger, as an older payload is', async () => {
     vi.mocked(jellyfinDirectory).mockResolvedValue({
       cfg: {
         url: 'http://jellyfin.test',
@@ -540,15 +538,19 @@ describe("the Jellyfin card's webhook (decisions 418, 455)", () => {
     try {
       expect(target.querySelector('[data-secrets="unreadable"]')).not.toBeNull();
       expect(target.querySelector('[data-trigger]')).toBeNull();
+      await row('API key');
       expect(button('Save').disabled).toBe(false);
-      // `has_webhook_token` absent is not `false`: no Generate is offered on a guess.
-      expect(target.textContent).not.toContain('Generate webhook token');
+      // `has_webhook_token` absent is not `false`: no Create is offered on a guess.
+      await row('New-title alerts');
+      expect(target.textContent).not.toContain('Create token');
     } finally {
       unmount(app);
     }
   });
 
-  it('mints a token only on Generate, shows it once, and offers no second press', async () => {
+  it('mints a token only on Create, shows it once with Copy, and offers no second press', async () => {
+    const writeText = vi.fn().mockResolvedValue(undefined);
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
     vi.mocked(jellyfinDirectory).mockResolvedValue({
       cfg: cfg({ has_webhook_token: false, trigger: trigger() }),
       users: []
@@ -560,47 +562,46 @@ describe("the Jellyfin card's webhook (decisions 418, 455)", () => {
         cfg: cfg({ has_webhook_token: true, trigger: trigger() }),
         users: []
       });
-      button('Generate webhook token').click();
-      await settle();
+      await row('New-title alerts');
+      await press('Create token');
       expect(jellyfinPuts()).toEqual([{ mint_webhook_token: true }]);
-      const reveal = target.querySelector('[data-webhook-token]');
-      expect(reveal.textContent).toContain('tok-once-only-7f3a');
+      expect(text('[data-webhook-token]')).toContain('tok-once-only-7f3a');
       expect(target.textContent).toContain('X-Spielplan-Token');
       // `PUBLIC_URL` as the wizard shows it: the origin the plugin has to post to.
       expect(target.textContent).toContain('http://localhost:8080/events/jellyfin');
       expect(target.innerHTML.split('tok-once-only-7f3a').length - 1, 'shown once').toBe(1);
-      expect(target.textContent).not.toContain('Generate webhook token');
+      expect(target.textContent).not.toContain('Create token');
+      await press('Copy');
+      expect(writeText).toHaveBeenCalledWith('tok-once-only-7f3a');
     } finally {
       unmount(app);
     }
   });
 
-  it('offers no Generate once a token exists, and says it cannot be shown again', async () => {
+  it('offers no Create once a token exists, and says it cannot be shown again', async () => {
     vi.mocked(jellyfinDirectory).mockResolvedValue({
       cfg: cfg({ has_webhook_token: true, trigger: trigger() }),
       users: []
     });
     const app = await open();
     try {
-      expect(target.textContent).not.toContain('Generate webhook token');
+      await row('New-title alerts');
+      expect(target.textContent).not.toContain('Create token');
       const state = target.querySelector('[data-webhook-token-state]');
       expect(state.getAttribute('data-webhook-token-state')).toBe('exists');
-      expect(state.textContent).toContain('cannot be shown again');
+      expect(state.textContent).toContain("can't be shown again");
     } finally {
       unmount(app);
     }
   });
 
-  it('never sends the mint flag from the plain Save', async () => {
-    vi.mocked(jellyfinDirectory).mockResolvedValue({
-      cfg: cfg({ has_webhook_token: false }),
-      users: []
-    });
+  it('never sends the mint flag from the server Save', async () => {
+    vi.mocked(jellyfinDirectory).mockResolvedValue({ cfg: cfg({ has_webhook_token: false }), users: [] });
     vi.mocked(api).mockResolvedValue({});
     const app = await open();
     try {
-      button('Save').click();
-      await settle();
+      await row('Server address');
+      await press('Save');
       expect(jellyfinPuts()).toEqual([{ url: 'http://jellyfin.test', api_key: '' }]);
     } finally {
       unmount(app);
@@ -608,24 +609,26 @@ describe("the Jellyfin card's webhook (decisions 418, 455)", () => {
   });
 
   // `save_jellyfin` mints only for a configured connector; elsewhere it answers `webhook_token: null`.
-  it('offers no Generate until the connector is configured, the only state it mints in', async () => {
+  it('offers no Create until the connector is configured, the only state it mints in', async () => {
     const unconfigured = [
       { url: '', has_api_key: false, configured: false },
       { has_api_key: false, configured: false },
       { has_api_key: false, configured: false, secrets_unreadable: true }
     ];
     for (const over of unconfigured) {
+      nav.push({});
       vi.mocked(jellyfinDirectory).mockResolvedValue({
         cfg: cfg({ ...over, has_webhook_token: false, trigger: trigger() }),
         users: []
       });
       const app = await open();
       try {
-        expect(target.textContent).not.toContain('Generate webhook token');
+        await row('New-title alerts');
+        expect(target.textContent).not.toContain('Create token');
         const state = target.querySelector('[data-webhook-token-state]');
         expect(state.getAttribute('data-webhook-token-state')).toBe('unconfigured');
         expect(state.textContent.replace(/\s+/g, ' ')).toContain(
-          'once the server URL and API key are saved'
+          'once the server address and API key are saved'
         );
         expect(target.textContent).not.toContain('already existed');
       } finally {
@@ -634,6 +637,7 @@ describe("the Jellyfin card's webhook (decisions 418, 455)", () => {
     }
 
     // Saved, and so configured: the press is offered on the same visit.
+    nav.push({});
     vi.mocked(jellyfinDirectory).mockResolvedValue({
       cfg: cfg({ url: '', has_api_key: false, configured: false, has_webhook_token: false }),
       users: []
@@ -645,9 +649,10 @@ describe("the Jellyfin card's webhook (decisions 418, 455)", () => {
         cfg: cfg({ has_webhook_token: false, trigger: trigger() }),
         users: []
       });
-      button('Save').click();
-      await settle();
-      expect(button('Generate webhook token').disabled).toBe(false);
+      await row('Server address');
+      await press('Save');
+      await row('New-title alerts');
+      expect(button('Create token').disabled).toBe(false);
     } finally {
       unmount(app);
     }
@@ -666,13 +671,11 @@ describe("the Jellyfin card's webhook (decisions 418, 455)", () => {
         cfg: cfg({ has_api_key: false, configured: false, has_webhook_token: false, trigger: trigger() }),
         users: []
       });
-      button('Generate webhook token').click();
-      await settle();
+      await row('New-title alerts');
+      await press('Create token');
       expect(target.textContent).not.toContain('already existed');
       expect(target.querySelector('[data-webhook-token-state="revealed"]')).toBeNull();
-      expect(target.querySelector('[data-webhook-unminted]').textContent).toContain(
-        'Nothing was minted'
-      );
+      expect(text('[data-webhook-unminted]')).toContain('Nothing was made');
 
       // Configured again by a Save: the press is back, and the note about the last one is gone.
       vi.mocked(api).mockResolvedValue({});
@@ -680,15 +683,17 @@ describe("the Jellyfin card's webhook (decisions 418, 455)", () => {
         cfg: cfg({ has_webhook_token: false, trigger: trigger() }),
         users: []
       });
-      button('Save').click();
-      await settle();
-      expect(button('Generate webhook token').disabled).toBe(false);
+      await row('Server address');
+      await press('Save');
+      await row('New-title alerts');
+      expect(button('Create token').disabled).toBe(false);
       expect(target.querySelector('[data-webhook-unminted]')).toBeNull();
     } finally {
       unmount(app);
     }
 
     // Another tab minted first: the one case "already existed" is true of.
+    nav.push({});
     vi.mocked(jellyfinDirectory).mockResolvedValue({
       cfg: cfg({ has_webhook_token: false, trigger: trigger() }),
       users: []
@@ -700,8 +705,8 @@ describe("the Jellyfin card's webhook (decisions 418, 455)", () => {
         cfg: cfg({ has_webhook_token: true, trigger: trigger() }),
         users: []
       });
-      button('Generate webhook token').click();
-      await settle();
+      await row('New-title alerts');
+      await press('Create token');
       const state = target.querySelector('[data-webhook-token-state]');
       expect(state.getAttribute('data-webhook-token-state')).toBe('revealed');
       expect(state.textContent).toContain('already existed');
@@ -712,74 +717,55 @@ describe("the Jellyfin card's webhook (decisions 418, 455)", () => {
   });
 });
 
-describe('the sweep line names what it could not identify (D4)', () => {
-  it('lists resolve.unmatched_names under the unmatched count', async () => {
-    vi.mocked(post).mockResolvedValue(
-      report({ resolve: { unmatched: 2, unmatched_names: ['Home Movies 2019', 'jf-91'] } })
-    );
+describe('people linked', () => {
+  it('counts the links, and asks before an unlink drops a saved sign-in', async () => {
+    vi.mocked(api).mockResolvedValue({ ok: true });
     const app = await open();
     try {
-      await press('Sync now');
-      const names = target.querySelector('[data-unmatched-names]');
-      expect(names).not.toBeNull();
-      expect(names.textContent).toContain('Home Movies 2019');
-      expect(names.textContent).toContain('jf-91');
+      expect(text(JELLYFIN)).toContain('People linked 1 of 2');
+      await row('People linked');
+      const admin = target.querySelector('[data-user="admin"]');
+      expect(admin.querySelector('[data-link-state]').getAttribute('data-has-token')).toBe('true');
+      expect(target.querySelector('[data-user="jenny"] select')).not.toBeNull();
+
+      await press('Unlink');
+      expect(api, 'nothing is unlinked on the first tap').not.toHaveBeenCalled();
+      const confirm = [...document.querySelectorAll('button[role="menuitem"]')].find(
+        (b) => b.textContent.trim() === 'Unlink'
+      );
+      /** @type {HTMLButtonElement} */ (confirm).click();
+      await settle();
+      expect(api).toHaveBeenCalledWith('/admin/users/1/jellyfin', { method: 'DELETE' });
     } finally {
       unmount(app);
     }
   });
 });
 
-describe("the first-boot wizard's connector rows (plan C3; user test 2026-09-25)", () => {
-  it('all three link to this page, and none carries a milestone tag', async () => {
-    const app = mount(SetupPage, { target });
-    await settle();
-    try {
-      const rows = [...target.querySelectorAll('.rows li')];
-      const row = (name) => rows.find((li) => li.textContent.includes(name));
-      for (const name of ['Jellyfin', 'LLM providers', 'TMDB / OMDb / Trakt']) {
-        const link = row(name).querySelector('a');
-        expect(link, `${name} is a link`).not.toBeNull();
-        expect(link.getAttribute('href')).toBe('/admin/connectors');
-        expect(row(name).textContent, `${name} still names a milestone`).not.toMatch(/· M\d/);
-      }
-    } finally {
-      unmount(app);
-    }
-  });
-});
-
-describe('the rest of the Connectors card (plan B, C, D3)', () => {
-  it('no longer says the library pick and the webhook arrive later', async () => {
+describe('film information and the rest of the page', () => {
+  it('lists the three keyed sources with their state in words, and the keyless five', async () => {
     const app = await open();
     try {
-      expect(target.textContent).not.toContain('arrive with M5');
+      const rows = [...target.querySelectorAll('[data-source-row]')];
+      expect(rows.map((r) => r.getAttribute('data-source-row'))).toEqual(['tmdb', 'omdb', 'trakt']);
+      expect(rows[0].textContent).toContain('Required');
+      expect(rows[0].textContent).toContain('Connected');
+      expect(rows[1].textContent).toContain('Not set up');
+      expect(rows[2].textContent).toContain('Secret missing');
+      expect(text('[data-keyless]')).toContain('Metacritic need no key');
+      expect(text('[data-keyless]')).toContain('Rotten Tomatoes');
+
+      rows[0].click();
+      await settle();
+      expect(target.querySelector('[data-source="tmdb"]')).not.toBeNull();
     } finally {
       unmount(app);
     }
   });
 
-  it('mounts the three provider cards and the three source cards beside the Jellyfin card', async () => {
-    const app = await open();
-    try {
-      const providers = [...target.querySelectorAll('[data-provider]')];
-      expect(providers.map((c) => c.getAttribute('data-provider'))).toEqual([
-        'anthropic',
-        'openai',
-        'gemini'
-      ]);
-      const cards = [...target.querySelectorAll('[data-source]')];
-      expect(cards.map((c) => c.getAttribute('data-source'))).toEqual(['tmdb', 'omdb', 'trakt']);
-      expect(target.querySelector('[data-keyless]').textContent).toContain('Rotten Tomatoes');
-      expect(target.querySelector('[data-testid="spend-meter"]')).not.toBeNull();
-    } finally {
-      unmount(app);
-    }
-  });
-
-  it('keeps the Jellyfin card on the page when the LLM read fails', async () => {
+  it('keeps the Jellyfin card on the page when the sources read fails', async () => {
     wire({
-      '/admin/llm': () => {
+      '/admin/connectors': () => {
         throw new Error('Not Found');
       }
     });
@@ -787,6 +773,15 @@ describe('the rest of the Connectors card (plan B, C, D3)', () => {
     try {
       expect(target.querySelector(JELLYFIN)).not.toBeNull();
       expect(target.textContent).toContain('Not Found');
+    } finally {
+      unmount(app);
+    }
+  });
+
+  it('points AI providers at Budget and AI', async () => {
+    const app = await open();
+    try {
+      expect(target.querySelector('a[href="/admin/budget"]')).not.toBeNull();
     } finally {
       unmount(app);
     }

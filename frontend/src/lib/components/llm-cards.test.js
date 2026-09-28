@@ -62,6 +62,8 @@ const projected = (over = {}) => ({
   ...over
 });
 
+const inDays = (n) => new Date(Date.now() + n * 86_400_000).toISOString();
+
 const meter = (over = {}) => ({
   spent_usd: '4.12',
   unsettled_usd: '0',
@@ -145,13 +147,20 @@ function field(text) {
   return label.querySelector('input, select');
 }
 
+/** A control by its accessible name, for the rows whose label is the whole row. */
+function control(name) {
+  const found = target.querySelector(`[aria-label="${name}"]`);
+  expect(found, `no control named ${name}`).not.toBeNull();
+  return found;
+}
+
 function type(input, value) {
   input.value = value;
   input.dispatchEvent(new Event('input', { bubbles: true }));
   flushSync();
 }
 
-/** A checkbox pressed the way a finger presses it: `click` flips it and fires `change`. */
+/** A switch pressed the way a finger presses it. */
 function toggle(input) {
   input.click();
   flushSync();
@@ -167,13 +176,13 @@ describe('a provider card (plan B1-B3)', () => {
   it('never renders a stored key, masks it, and empties the field after a save', async () => {
     vi.mocked(api).mockResolvedValue({ name: 'gemini', has_api_key: true, secrets_unreadable: false });
     await show(LlmProviderCard, { card: provider('gemini') });
-    const key = field('GEMINI KEY');
+    const key = field('API key');
     expect(key.type).toBe('password');
     expect(key.value, 'nothing the server sent is bound to the field').toBe('');
-    expect(key.placeholder).toContain('(stored)');
+    expect(key.placeholder).toBe('Saved');
 
     type(key, 'sk-live-not-a-real-key');
-    button('Save Gemini key').click();
+    button('Save key').click();
     await settle();
     expect(api).toHaveBeenCalledWith('/admin/connectors/gemini', {
       method: 'PUT',
@@ -183,11 +192,11 @@ describe('a provider card (plan B1-B3)', () => {
     expect(target.innerHTML).not.toContain('sk-live-not-a-real-key');
   });
 
-  it('says "paste a key" when none is stored, and an empty field sends nothing', async () => {
+  it('says "Paste a key" when none is stored, and an empty field sends nothing', async () => {
     await show(LlmProviderCard, { card: provider('openai', { has_api_key: false, configured: false }) });
-    expect(field('OPENAI KEY').placeholder).toBe('paste a key');
-    expect(button('Save OpenAI key').disabled).toBe(true);
-    button('Save OpenAI key').click();
+    expect(field('API key').placeholder).toBe('Paste a key');
+    expect(button('Save key').disabled).toBe(true);
+    button('Save key').click();
     await settle();
     expect(api).not.toHaveBeenCalled();
   });
@@ -197,7 +206,7 @@ describe('a provider card (plan B1-B3)', () => {
     await show(LlmProviderCard, { card: provider('gemini') });
     const [bare, ready] = target.querySelectorAll('[data-provider]');
     expect(bare.getAttribute('data-configured')).toBe('false');
-    expect(bare.querySelector('[data-unconfigured]').textContent).toContain('no key is stored');
+    expect(bare.querySelector('[data-unconfigured]').textContent).toContain('no key is saved');
     expect(ready.getAttribute('data-configured')).toBe('true');
     expect(ready.querySelector('[data-unconfigured]')).toBeNull();
   });
@@ -240,15 +249,15 @@ describe('a provider card (plan B1-B3)', () => {
     expect(alert.textContent).toContain('.env');
     expect(alert.textContent).toContain('paste the key');
     const unconfigured = target.querySelector('[data-unconfigured]').textContent;
-    expect(unconfigured).not.toContain('no key is stored');
-    expect(unconfigured).toContain('will not open');
-    expect(field('GEMINI KEY').placeholder).not.toBe('paste a key');
+    expect(unconfigured).not.toContain('no key is saved');
+    expect(unconfigured).toContain("won't open");
+    expect(field('API key').placeholder).not.toBe('Paste a key');
   });
 
   it('proposes a model change through the preview and never through the key route', async () => {
     vi.mocked(post).mockResolvedValue(preview());
     await show(LlmProviderCard, { card: provider('gemini') });
-    commit(field('GEMINI MODEL'), 'gemini-other');
+    commit(field('Model'), 'gemini-other');
     await settle();
     expect(post).toHaveBeenCalledWith('/admin/llm/preview', {
       providers: { gemini: { model: 'gemini-other' } }
@@ -260,11 +269,11 @@ describe('a provider card (plan B1-B3)', () => {
   it('proposes a price override as a pair, and holds half of one without asking', async () => {
     vi.mocked(post).mockResolvedValue(preview());
     await show(LlmProviderCard, { card: provider('openai') });
-    commit(field('OPENAI PRICE IN'), '2');
+    commit(field('Price in'), '2');
     await settle();
     expect(post).not.toHaveBeenCalled();
     expect(target.querySelector('[data-price-half]')).not.toBeNull();
-    commit(field('OPENAI PRICE OUT'), '8');
+    commit(field('Price out'), '8');
     await settle();
     expect(post).toHaveBeenCalledWith('/admin/llm/preview', {
       providers: { openai: { price_input: 2, price_output: 8 } }
@@ -293,17 +302,9 @@ describe('the extraction settings and their estimate (decisions 339, 450)', () =
       ]
     });
     await show(ExtractionSettings);
-    const option = field('EXTRACTION PROVIDER').querySelector('option[value="anthropic"]');
+    const option = control('Provider').querySelector('option[value="anthropic"]');
     expect(option.disabled).toBe(true);
     expect(option.textContent).toContain('add a key first');
-  });
-
-  it('renders batch mode disabled, with the reason the server gives', async () => {
-    await show(ExtractionSettings);
-    const batch = target.querySelector('[data-batch] input');
-    expect(batch.disabled).toBe(true);
-    expect(batch.checked).toBe(false);
-    expect(target.querySelector('[data-batch-reason]').textContent).toContain('decision 338');
   });
 
   it("starts parallel mode and the pass count from the server's settings, not the page's", async () => {
@@ -312,11 +313,11 @@ describe('the extraction settings and their estimate (decisions 339, 450)', () =
       estimate: estimate({ passes: 2 })
     });
     await show(ExtractionSettings);
-    expect(field('Parallel mode').checked).toBe(true);
-    expect(field('Run Gemini in parallel').checked).toBe(true);
-    expect(field('Run Anthropic in parallel').checked).toBe(false);
+    expect(control('Parallel mode').getAttribute('aria-checked')).toBe('true');
+    expect(control('Run Gemini in parallel').checked).toBe(true);
+    expect(control('Run Anthropic in parallel').checked).toBe(false);
     // An absent `passes` shows the count the server's own plan uses (decision 324 lives there).
-    expect(field('PASSES').value).toBe('2');
+    expect(control('Passes').value).toBe('2');
   });
 
   it('caption carries the consensus numbers, measured over providers, and that the merge counts runs', async () => {
@@ -336,7 +337,7 @@ describe('the extraction settings and their estimate (decisions 339, 450)', () =
     );
     vi.mocked(api).mockResolvedValue(llm());
     await show(ExtractionSettings);
-    const passes = field('PASSES');
+    const passes = control('Passes');
     passes.value = '2';
     passes.dispatchEvent(new Event('change', { bubbles: true }));
     await settle();
@@ -366,7 +367,7 @@ describe('the extraction settings and their estimate (decisions 339, 450)', () =
       preview({ projected: projected({ monthly_usd: '31.20', exceeds_remaining: true }) })
     );
     await show(ExtractionSettings);
-    toggle(field('Parallel mode'));
+    toggle(control('Parallel mode'));
     await settle();
     const warning = target.querySelector('[data-projected-exceeds]');
     expect(warning).not.toBeNull();
@@ -379,11 +380,12 @@ describe('the extraction settings and their estimate (decisions 339, 450)', () =
       preview({ projected: projected({ ever_filed: false, titles: 0, monthly_usd: null }) })
     );
     await show(ExtractionSettings);
-    toggle(field('Parallel mode'));
+    toggle(control('Parallel mode'));
     await settle();
     const month = target.querySelector('[data-projected]');
     expect(month.getAttribute('data-projected')).toBe('no-history');
-    expect(month.textContent).toContain('no acquisition history yet');
+    expect(month.textContent).toContain('No titles have arrived yet');
+    expect(month.textContent, 'no figure for a month').not.toMatch(/\$[\d.]+ a month/);
   });
 
   it('prints unknown and its reason for an unpriced plan, never a figure', async () => {
@@ -394,12 +396,12 @@ describe('the extraction settings and their estimate (decisions 339, 450)', () =
       })
     );
     await show(ExtractionSettings);
-    const select = field('EXTRACTION PROVIDER');
+    const select = control('Provider');
     select.value = 'openai';
     select.dispatchEvent(new Event('change', { bubbles: true }));
     await settle();
     const perTitle = target.querySelector('[data-plan="pending"] [data-per-title]');
-    expect(perTitle.textContent).toContain('unknown');
+    expect(perTitle.textContent).toContain('Unknown');
     expect(perTitle.textContent).not.toContain('$');
     expect(target.querySelector('[data-unknown-reason]').textContent).toContain('OpenAI');
   });
@@ -407,7 +409,7 @@ describe('the extraction settings and their estimate (decisions 339, 450)', () =
   it('refuses to confirm a plan that names a provider with no usable key', async () => {
     vi.mocked(post).mockResolvedValue(preview({ blocked: 'no API key is configured for openai' }));
     await show(ExtractionSettings);
-    const select = field('EXTRACTION PROVIDER');
+    const select = control('Provider');
     select.value = 'openai';
     select.dispatchEvent(new Event('change', { bubbles: true }));
     await settle();
@@ -421,9 +423,9 @@ describe('the extraction settings and their estimate (decisions 339, 450)', () =
   it('cancels with no request and puts the controls back as stored', async () => {
     vi.mocked(post).mockResolvedValue(preview());
     await show(ExtractionSettings);
-    toggle(field('Parallel mode'));
+    toggle(control('Parallel mode'));
     await settle();
-    expect(field('Parallel mode').checked).toBe(true);
+    expect(control('Parallel mode').getAttribute('aria-checked')).toBe('true');
     vi.mocked(post).mockClear();
     vi.mocked(get).mockClear();
     button('Cancel').click();
@@ -432,7 +434,7 @@ describe('the extraction settings and their estimate (decisions 339, 450)', () =
     expect(get).not.toHaveBeenCalled();
     expect(api).not.toHaveBeenCalled();
     expect(target.querySelector('[data-testid="spend-estimate"]')).toBeNull();
-    expect(field('Parallel mode').checked).toBe(false);
+    expect(control('Parallel mode').getAttribute('aria-checked')).toBe('false');
   });
 });
 
@@ -442,8 +444,10 @@ describe('the spend meter (decisions 325, 343, 436, 452)', () => {
     const card = target.querySelector('[data-testid="spend-meter"]');
     expect(card.getAttribute('data-meter-state')).toBe('under-cap');
     expect(card.querySelector('[data-meter-reading]').textContent).toContain('$4.12 of $25.00 this month');
-    expect(card.textContent).toContain('Europe/Berlin');
+    // The month ends in the install's zone, whatever the browser's.
+    expect(card.textContent).toContain('Resets 1 October. $20.88 left.');
     expect(card.textContent).toContain('$20.88 left');
+    expect(card.querySelector('[data-meter-runs-out]'), 'nothing runs out at this pace').toBeNull();
     expect(card.querySelector('[data-meter-caption]').textContent).toContain('thinking tokens');
     // §6.6's corpus baseline rests on a model family new keys cannot call (decision 343).
     expect(card.textContent).not.toContain('0.005');
@@ -462,7 +466,8 @@ describe('the spend meter (decisions 325, 343, 436, 452)', () => {
     expect(card.getAttribute('data-meter-state')).toBe('over-cap');
     const alert = card.querySelector('[data-meter-over-cap]').textContent.replace(/\s+/g, ' ');
     expect(alert).toContain('over spend cap');
-    expect(alert).toContain('admin retry that would breach it is refused with the same reason');
+    expect(alert).toContain('admin retry that would pass the cap is refused the same way');
+    expect(button('Raise the cap').classList.contains('btn-primary')).toBe(true);
   });
 
   // The gate parks a title once the month plus its reservation would pass the cap, short of the cap.
@@ -477,7 +482,7 @@ describe('the spend meter (decisions 325, 343, 436, 452)', () => {
     const text = alert.textContent.replace(/\s+/g, ' ');
     expect(text).toContain('over spend cap');
     expect(text).toContain('$0.06435');
-    expect(text).toContain('admin retry that would breach it is refused with the same reason');
+    expect(text).toContain('admin retry that would pass the cap is refused the same way');
     expect(card.textContent).toContain('$0.02 left');
   });
 
@@ -502,18 +507,53 @@ describe('the spend meter (decisions 325, 343, 436, 452)', () => {
     expect(unpriced.querySelector('[data-meter-over-cap]')).toBeNull();
   });
 
-  it('says stage 6 parks every title while no cap is set', async () => {
+  it('says new titles wait while no cap is set', async () => {
     spend.llm = llm({ meter: meter({ cap_usd: null, remaining_usd: null }) });
     await show(SpendMeter);
     expect(target.querySelector('[data-meter-no-cap]').textContent).toContain(
-      'stage 6 parks every title'
+      'New titles wait, and nothing is spent'
     );
+    expect(button('Set a cap').classList.contains('btn-primary')).toBe(true);
+  });
+
+  it('warns when the stored plan outruns what is left, from its own projection', async () => {
+    spend.llm = llm({
+      meter: meter({ spent_usd: '0.31', cap_usd: '2', remaining_usd: '1.69', period_end: inDays(20) }),
+      projected: projected({
+        titles: 889,
+        monthly_usd: '28.667',
+        remaining_usd: '1.69',
+        exceeds_remaining: true
+      })
+    });
+    await show(SpendMeter);
+    const card = target.querySelector('[data-testid="spend-meter"]');
+    expect(card.getAttribute('data-meter-state')).toBe('under-cap');
+    const warning = card.querySelector('[data-meter-runs-out]').textContent.replace(/\s+/g, ' ');
+    expect(warning).toContain('About $28.67 a month at this pace');
+    expect(warning).toContain('889 new titles arrived in the last 30 days');
+    expect(warning).toContain('Once $2.00 is spent, new titles wait until');
+    expect(button('Raise the cap').classList.contains('btn-primary')).toBe(true);
+    expect(target.querySelector('a[href="#plan"]').textContent).toBe('Change the plan');
+  });
+
+  it('stays quiet when the month ends before the pace spends what is left, as Overview does', async () => {
+    spend.llm = llm({
+      meter: meter({ spent_usd: '7', cap_usd: '10', remaining_usd: '3', period_end: inDays(2) }),
+      projected: projected({ monthly_usd: '10', remaining_usd: '3', exceeds_remaining: true })
+    });
+    await show(SpendMeter);
+    expect(target.querySelector('[data-meter-runs-out]'), 'nine days of room outlast the month').toBeNull();
+    expect(button('Change the cap').classList.contains('btn-primary')).toBe(false);
   });
 
   it('sets a cap of zero as a real cap, and an empty field as nothing at all', async () => {
     vi.mocked(api).mockResolvedValue({ meter: meter({ cap_usd: '0' }) });
     await show(SpendMeter);
-    const cap = field('MONTHLY CAP');
+    expect(target.querySelector('input[type="number"]'), 'the cap opens on a tap').toBeNull();
+    button('Change the cap').click();
+    flushSync();
+    const cap = field('Monthly cap');
     expect(button('Set cap').disabled, 'an empty field is not a cap of zero').toBe(true);
     type(cap, '0');
     button('Set cap').click();
@@ -530,7 +570,7 @@ describe('a source card (plan C, decision 453)', () => {
     const card = target.querySelector('[data-source="tmdb"]');
     expect(card.getAttribute('data-required')).toBe('true');
     expect(card.textContent).toContain('Required');
-    expect(field('TMDB KEY').placeholder).toBe('paste a key');
+    expect(field('API key').placeholder).toBe('Paste a key');
   });
 
   it('takes a Trakt client id and secret, sends only what was typed, and empties both', async () => {
@@ -545,15 +585,15 @@ describe('a source card (plan C, decision 453)', () => {
         used_by: 'trakt'
       }
     });
-    type(field('TRAKT CLIENT ID'), 'trakt-id-123');
-    button('Save Trakt key').click();
+    type(field('Client ID'), 'trakt-id-123');
+    button('Save').click();
     await settle();
     expect(api).toHaveBeenCalledWith('/admin/connectors/trakt', {
       method: 'PUT',
       body: { client_id: 'trakt-id-123' }
     });
-    expect(field('TRAKT CLIENT ID').value).toBe('');
-    expect(field('TRAKT CLIENT SECRET').value).toBe('');
+    expect(field('Client ID').value).toBe('');
+    expect(field('Client secret').value).toBe('');
   });
 
   it("says OMDb's test spends one request of its daily quota", async () => {
@@ -561,6 +601,6 @@ describe('a source card (plan C, decision 453)', () => {
       source: { name: 'omdb', has_api_key: true, secrets_unreadable: false, required: false, used_by: 'omdb' }
     });
     expect(target.querySelector('[data-quota]').textContent).toContain('daily quota');
-    expect(button('Test OMDb').disabled).toBe(false);
+    expect(button('Test').disabled).toBe(false);
   });
 });

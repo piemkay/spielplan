@@ -20,7 +20,7 @@ D_THRESHOLD = 0.40
 FINALISTS = 3
 
 # §6.4's explore policy: "~1 exploratory slot in 6 ... honestly labelled".
-WILDCARD_LABEL = "a step outside your usual"
+WILDCARD_LABEL = "A step outside your usual"
 
 # The wildcard is drawn from the best twentieth of the ranking, at least twelve (decision 482).
 WILDCARD_SHARE = 0.05

@@ -443,7 +443,7 @@ async def test_an_admin_cannot_reset_or_disable_their_own_account_from_this_tab(
         await admin.post(f"/api/admin/users/{me}/active", json={"is_active": False}),
     ):
         assert response.status_code == 409
-        assert "their own" in response.json()["detail"]
+        assert "your own" in response.json()["detail"]
 
     row = await db.fetchrow("SELECT is_active, must_change_password FROM app_user WHERE id = $1", me)
     assert row["is_active"] is True
@@ -466,11 +466,11 @@ async def test_two_admins_removing_each_other_at_once_cannot_empty_the_floor(app
     arrivals = 0
     check = admin_api._refuse_if_last_active_admin
 
-    async def hold(conn, row, verb):
+    async def hold(conn, row):
         """A lapsing wait, not a barrier: with the lock the second
         request never arrives, and a barrier would deadlock."""
         nonlocal arrivals
-        await check(conn, row, verb)
+        await check(conn, row)
         arrivals += 1
         if arrivals == 2:
             both_arrived.set()

@@ -13,22 +13,22 @@ export const CORRECTION_KINDS = ['composer', 'composer_add'];
 
 // Withdrawing a verdict restores nothing it dropped (decision 445), so the form warns first.
 export const DROP_WARNING =
-  'A dropped tag is gone until the title is extracted again (section 8 stage 7). Withdrawing ' +
-  'this verdict later stops it applying and brings nothing back.';
+  'A dropped tag is gone until the title is extracted again. Withdrawing this verdict later ' +
+  'stops it applying and brings nothing back.';
 
 // The quote matches as a case-insensitive substring, so a short phrase can drop every quote.
 export const DROP_EVIDENCE_WARNING =
   'The quote is matched as case-insensitive text inside each quote this term has on the title, so ' +
   'a short phrase drops every quote that contains it, and a tag with no quote left is dropped with ' +
-  'them (section 4.1 rule 1). Neither comes back until the title is extracted again (section 8 ' +
-  'stage 7), and withdrawing this verdict later brings nothing back.';
+  'them. Neither comes back until the title is extracted again, and withdrawing this verdict ' +
+  'later brings nothing back.';
 
 // A REPOINT onto a term the title carries merges the tags, and withdrawing does not unmerge them.
 export const REPOINT_WARNING =
   'Each tag this verdict rules on moves onto the new term, and where a title already carries that ' +
   'term the two are merged into one tag holding both quotes. Withdrawing this verdict later stops ' +
   'it applying and moves nothing back: a merged tag stays merged until the title is extracted ' +
-  'again (section 8 stage 7).';
+  'again.';
 
 const VERDICT_WARNINGS = {
   DROP: DROP_WARNING,
@@ -51,17 +51,17 @@ export const COMPOSER_WARNING =
   'A composer correction replaces every music credit this title carries. Withdrawing it brings ' +
   'none of them back: a title from the bundle has no raw store to derive them from again, so its ' +
   'replaced credit is gone for good, and an acquired title gets its back only when it is derived ' +
-  'again (retry it from stage 3 on the board). Note the credit you are replacing first.';
+  'again (retry it from Work out features in New titles). Note the credit you are replacing first.';
 
 // The export link is a plain href the browser downloads: the file is the importer's own.
 export const LEDGERS = {
   adjudications: {
-    heading: 'DNA verdicts',
+    heading: 'Tag verdicts',
     artifact: 'adjudications_v1.tsv',
     path: '/admin/curated/adjudications',
     add: 'Add a verdict',
     save: 'Save verdict',
-    empty: 'No verdict at the active vocabulary yet.'
+    empty: 'No verdict yet.'
   },
   corrections: {
     heading: 'Credit corrections',
@@ -72,7 +72,7 @@ export const LEDGERS = {
     empty: 'No credit correction yet.'
   },
   axes: {
-    heading: 'Per-facet axes',
+    heading: 'Facet axes',
     artifact: '<facet>.tsv',
     path: '/admin/curated/axes',
     add: 'Add an axis',

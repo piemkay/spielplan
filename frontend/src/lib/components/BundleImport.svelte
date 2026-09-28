@@ -40,8 +40,12 @@
   let gone = false;
 
   const bySeverity = (sev) => (report?.findings ?? []).filter((f) => f.severity === sev);
-  // A glyph map is fine here: the ASCII rule is for Windows consoles, not the browser.
-  const glyph = { fail: '×', warn: '!', note: '✓' };
+  const SEVERITY = { fail: 'Fails', warn: 'Warning', note: 'Fine' };
+  const ICON = {
+    fail: 'M6.5 6.5l11 11M17.5 6.5l-11 11',
+    warn: 'M12 5v9M12 19v.01',
+    note: 'm5 12.5 4.5 4.5L19 7.5'
+  };
 
   async function run(endpoint) {
     busy = true;
@@ -113,21 +117,24 @@
 </script>
 
 <div class="box" data-phase={phase}>
-  <div class="steps">
-    {#each ['validate', 'report', 'swap', 'active'] as s, i (s)}
-      <span class="step data" class:on={i < stepsLit(phase, !!report)}>{s}</span>
+  <ol class="steps" aria-label="Import steps">
+    {#each ['Validate', 'Report', 'Swap', 'Live'] as s, i (s)}
+      <li class="step" class:on={i < stepsLit(phase, !!report)}>{s}</li>
     {/each}
-  </div>
+  </ol>
 
-  <label>
-    <span class="data">BUNDLE PATH · A BUNDLE DIRECTORY OR .TAR/.TAR.ZST · DEFAULTS TO /data/import</span>
+  <label class="path">
+    <span class="label">Where the bundle is</span>
     <input type="text" bind:value={path} placeholder="/data/import" />
+    <span class="footnote">
+      A bundle folder or a .tar or .tar.zst file. Leave it empty for /data/import.
+    </span>
   </label>
 
   <div class="row">
     <!-- Also dark while RUNNING: an adopted watch sets the phase without `busy`, and a validate
          mid-swap would overwrite it. -->
-    <button class="btn-ghost" onclick={() => run('validate')} disabled={busy || phase === RUNNING}>
+    <button class="btn-secondary" onclick={() => run('validate')} disabled={busy || phase === RUNNING}>
       {busy ? 'Working…' : 'Validate bundle'}
     </button>
     <button
@@ -140,45 +147,54 @@
   </div>
 
   <!-- A refusal that carries a report sets no sentence, so this never repeats the report. -->
-  {#if error}<div class="err">{error}</div>{/if}
+  {#if error}<p class="err">{error}</p>{/if}
 
   {#if phase === UNKNOWN}
     <!-- The button stays dark: the 202 may have queued a job this tab lost track of. -->
-    <div class="err" data-unknown>{UNKNOWN_OUTCOME}</div>
+    <p class="err" data-unknown>{UNKNOWN_OUTCOME}</p>
   {/if}
 
   {#if report}
-    <div class="report card">
+    <div class="report">
       <div class="head">
-        <span class="data-lg">
-          bundle {report.bundle_version ?? '(unknown)'} · vocabulary
-          {report.vocabulary_version ?? '(unknown)'}
+        <span class="version">
+          {report.bundle_version ?? 'Unknown version'}
+          <span class="footnote">vocabulary {report.vocabulary_version ?? 'unknown'}</span>
         </span>
-        <span class="verdict" class:bad={!report.ok}>{report.ok ? 'valid' : 'rejected'}</span>
+        <!-- Capitalised by CSS: the word itself is what scripts read. -->
+        <span class="verdict badge" class:ok={report.ok} class:bad={!report.ok}>
+          {report.ok ? 'valid' : 'rejected'}
+        </span>
       </div>
 
-      {#each ['fail', 'warn', 'note'] as sev}
-        {#each bySeverity(sev) as f}
-          <div class="finding {sev}">
-            <span class="g">{glyph[sev]}</span>
-            <span class="rule data">{f.rule}</span>
-            <span class="msg">{f.message}</span>
-          </div>
-          <!-- A failure's detail names the tables or columns (failures only, as the report renders). -->
-          {#if sev === 'fail'}
-            {#each detailPairs(f) as [key, line] (key)}
-              <div class="detail"><span class="data">{key}</span><span class="msg">{line}</span></div>
-            {/each}
-          {/if}
+      <ul class="findings">
+        {#each ['fail', 'warn', 'note'] as sev}
+          {#each bySeverity(sev) as f}
+            <li class="finding {sev}">
+              <svg class="g" viewBox="0 0 24 24" role="img" aria-label={SEVERITY[sev]}>
+                <path d={ICON[sev]} />
+              </svg>
+              <span class="body">
+                <span class="msg">{f.message}</span>
+                <span class="rule code">{f.rule}</span>
+                <!-- A failure's detail names its tables or columns, as the report renders it. -->
+                {#if sev === 'fail'}
+                  {#each detailPairs(f) as [key, line] (key)}
+                    <span class="detail code"><span class="key">{key}</span> {line}</span>
+                  {/each}
+                {/if}
+              </span>
+            </li>
+          {/each}
         {/each}
-      {/each}
+      </ul>
 
       {#if Object.keys(report.counts ?? {}).length}
         <details>
-          <summary class="data">ROW COUNTS</summary>
+          <summary>Row counts</summary>
           <div class="counts">
             {#each Object.entries(report.counts).sort() as [table, n] (table)}
-              <div class="count"><span class="data">{table}</span><span class="data">{n.toLocaleString()}</span></div>
+              <div class="count"><span class="code">{table}</span><span class="data">{n.toLocaleString()}</span></div>
             {/each}
           </div>
         </details>
@@ -186,14 +202,14 @@
 
       {#if Object.keys(report.unmapped_columns ?? {}).length}
         <details>
-          <summary class="data">UNMAPPED BUNDLE COLUMNS</summary>
+          <summary>Columns the importer does not read</summary>
           <div class="counts">
             {#each Object.entries(report.unmapped_columns) as [table, cols] (table)}
-              <div class="count"><span class="data">{table}</span><span class="data">{cols.join(', ')}</span></div>
+              <div class="count"><span class="code">{table}</span><span class="code">{cols.join(', ')}</span></div>
             {/each}
           </div>
-          <p class="why">
-            Reported, not dropped silently — the corpus export is the authority on its own
+          <p class="footnote">
+            Reported rather than dropped silently: the corpus export is the authority on its own
             column names.
           </p>
         </details>
@@ -204,12 +220,12 @@
   <!-- The backend loads the flipped bundle itself; the command shows only when a restart is owed. -->
   {#if phase === IMPORTED && served === LIVE}
     <p class="why" data-served={LIVE}>
-      Bundle {servedVersion} is live. Nothing needs restarting.
+      Movie data {servedVersion} is live. Nothing needs restarting.
     </p>
   {:else if phase === IMPORTED && served === RESTART}
     <p class="err" data-served={RESTART}>
-      Bundle {servedVersion} is imported, but the backend could not load it by itself (its log
-      says why). Restart backend and worker: <code>docker compose restart backend worker</code>
+      Movie data {servedVersion} is imported, but the backend could not load it by itself (its log
+      says why). Restart backend and worker: <code class="code">docker compose restart backend worker</code>
     </p>
   {/if}
 </div>
@@ -218,123 +234,164 @@
   .box {
     display: flex;
     flex-direction: column;
-    gap: 12px;
+    gap: 16px;
   }
   .steps {
-    display: flex;
-    gap: 6px;
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 4px;
   }
+  /* Progress in neutral light, not the accent: nothing here is selected. */
   .step {
-    flex: 1;
-    text-align: center;
-    padding: 8px;
-    border: 1px solid var(--line-2);
-    border-radius: var(--r-sm);
+    padding-top: 8px;
+    border-top: 3px solid var(--surface-3);
+    font-size: var(--fs-footnote);
+    line-height: 18px;
+    color: var(--text-3);
   }
-  /* The progress ramp, not the accent: nothing here is selected (§6.8). */
   .step.on {
-    border-color: var(--progress-now);
-    color: var(--ink);
+    border-top-color: var(--text);
+    color: var(--text);
   }
-  label {
+  .path {
     display: flex;
     flex-direction: column;
     gap: 6px;
+  }
+  .label {
+    padding: 0 4px;
+    font-size: var(--fs-subhead);
+    line-height: 20px;
+    color: var(--text-2);
+  }
+  .path .footnote {
+    padding: 0 4px;
   }
   .row {
     display: flex;
+    flex-wrap: wrap;
     gap: 8px;
   }
+  .row button {
+    flex: 1 1 220px;
+  }
   .report {
-    padding: var(--card-pad-tight);
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 12px;
+    padding: var(--card-pad);
+    border-radius: var(--r-md);
+    background: var(--surface-1);
   }
   .head {
     display: flex;
     justify-content: space-between;
-    align-items: baseline;
-    border-bottom: 1px solid var(--line);
-    padding-bottom: 8px;
-    margin-bottom: 4px;
+    align-items: flex-start;
+    gap: 12px;
   }
-  .verdict {
-    font-family: var(--mono);
-    font-size: 10px;
-    color: #5fae7a;
-  }
-  .verdict.bad {
-    color: var(--ember-lift);
-  }
-  /* Messages carry unbreakable paths, so the column must be able to shrink and wrap. */
-  .finding {
-    display: grid;
-    grid-template-columns: 14px minmax(0, 150px) minmax(0, 1fr);
-    gap: 8px;
-    align-items: baseline;
-    font-size: 12.5px;
-    line-height: 1.45;
-  }
-  .finding .msg,
-  .finding .rule,
-  .detail .msg,
-  .err {
+  .version {
+    display: flex;
+    flex-direction: column;
+    font-size: var(--fs-body);
+    line-height: 22px;
+    font-variant-numeric: tabular-nums;
     overflow-wrap: anywhere;
   }
-  .finding.fail .g,
-  .finding.fail .msg {
-    color: var(--ember-lift);
+  .verdict {
+    flex: none;
+    text-transform: capitalize;
+  }
+  .findings {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+  }
+  .finding {
+    display: flex;
+    gap: 10px;
+    align-items: flex-start;
+  }
+  .g {
+    flex: none;
+    width: 18px;
+    height: 18px;
+    margin-top: 1px;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 2;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+  }
+  .finding.fail .g {
+    color: var(--negative);
   }
   .finding.warn .g {
-    color: #c9a227;
+    color: var(--warning);
   }
   .finding.note .g {
-    color: #5fae7a;
+    color: var(--positive);
   }
-  .detail {
-    /* Indented under its failure, so the keys line up under the message they qualify. */
-    display: grid;
-    grid-template-columns: 140px minmax(0, 1fr);
-    gap: 8px;
-    align-items: baseline;
-    font-size: 12px;
-    line-height: 1.45;
-    padding-left: 30px;
+  /* Messages carry unbreakable paths, so the column must be able to shrink and wrap. */
+  .body {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    overflow-wrap: anywhere;
   }
   .msg {
-    color: var(--ink-2);
+    font-size: var(--fs-subhead);
+    line-height: 20px;
+    color: var(--text);
+  }
+  .rule,
+  .detail {
+    color: var(--text-3);
+  }
+  .key {
+    color: var(--text-2);
+  }
+  details {
+    border-top: 0.5px solid var(--separator);
+    padding-top: 8px;
+  }
+  summary {
+    min-height: 44px;
+    display: flex;
+    align-items: center;
+    font-size: var(--fs-subhead);
+    color: var(--text-2);
+    cursor: pointer;
   }
   .counts {
     display: flex;
     flex-direction: column;
     gap: 2px;
-    padding-top: 6px;
   }
   .count {
     display: flex;
     justify-content: space-between;
     gap: 12px;
+    overflow-wrap: anywhere;
   }
-  summary {
-    cursor: pointer;
-    padding-top: 6px;
+  details .footnote {
+    margin: 8px 0 0;
+  }
+  .why {
+    margin: 0;
   }
   .err {
-    color: var(--ember-lift);
-    font-size: 12.5px;
-  }
-  /* Phone: the message goes under its rule, full width; last, so it wins. */
-  @media (max-width: 480px) {
-    .finding {
-      grid-template-columns: 14px minmax(0, 1fr);
-    }
-    .finding .msg {
-      grid-column: 2;
-    }
-    .detail {
-      grid-template-columns: minmax(0, 96px) minmax(0, 1fr);
-      padding-left: 22px;
-    }
+    margin: 0;
+    color: var(--negative);
+    font-size: var(--fs-subhead);
+    line-height: 20px;
+    overflow-wrap: anywhere;
   }
 </style>

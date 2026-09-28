@@ -190,7 +190,7 @@ async def test_a_plain_retry_is_refused_on_a_parked_job_and_walks_a_failed_one_a
     before = await _snapshot(db)
 
     reason = await _refused(actions.retry(db, PARKED))
-    assert "decision 336" in reason and "retry it from a stage instead" in reason, reason
+    assert "failed job alone" in reason and "retry it from a stage instead" in reason, reason
     assert await _snapshot(db) == before
 
     assert await actions.retry(db, FAILED) == 1
@@ -286,7 +286,7 @@ async def test_an_abandoned_job_leases_nothing_until_it_is_retried_from_a_stage(
     drained = await pipeline.drain(db, limit=4)
     assert drained.leased == 0, drained.as_dict()
     assert (await _board(db, PARKED))["status"] == actions.ABANDONED
-    assert "decision 336" in await _refused(actions.retry(db, PARKED))
+    assert "failed job alone" in await _refused(actions.retry(db, PARKED))
     assert "not abandon" in await _refused(actions.abandon(db, PARKED))
 
     assert await actions.retry_from(db, PARKED, 2) == 1
@@ -480,7 +480,7 @@ async def test_the_three_actions_answer_with_the_job_or_refuse_with_the_sentence
     assert job["reason"].startswith("retried from the admin board: resumes at stage 3 (derive)")
 
     plain = await admin.post(f"/api/admin/acquisition/{PARKED}/retry")
-    assert plain.status_code == 409 and "decision 336" in plain.json()["detail"], plain.text
+    assert plain.status_code == 409 and "failed job alone" in plain.json()["detail"], plain.text
     forward = await admin.post(f"/api/admin/acquisition/{PARKED}/retry-from", json={"stage": 9})
     assert forward.status_code == 409 and "never moves a job forward" in forward.json()["detail"]
 

@@ -9,13 +9,13 @@ import {
   PAIR_QUESTION,
   PAIR_SELECTION_COPY,
   UNDO_KIND_LABELS,
+  armingLine,
   modeName,
   commit,
-  counterLine,
+  continueRating,
   findTitles,
   finder,
   hueOf,
-  kindLabel,
   metaLine,
   pendingHead,
   rate,
@@ -32,7 +32,8 @@ import {
   undo,
   skip,
   duel,
-  reset
+  reset,
+  sentenceCase
 } from './rate.svelte.js';
 
 const envelope = (over = {}) => ({
@@ -41,7 +42,7 @@ const envelope = (over = {}) => ({
     mode: 'mix',
     kinds: ['movie', 'series'],
     decisive: false,
-    block: { index: 0, slot: 1, size: 15, counter: '1 / 15', serving: 'sweep' }
+    block: { index: 0, slot: 1, size: 15, counter: '1 of 15', serving: 'sweep' }
   },
   card: {
     type: 'sweep',
@@ -96,22 +97,10 @@ function conflict(detail) {
 }
 
 describe('pure helpers', () => {
-  it('names the active partition the way the counter does', () => {
-    expect(kindLabel(['movie'])).toBe('film');
-    expect(kindLabel(['series'])).toBe('series');
-    expect(kindLabel(['movie', 'series'])).toBe('film + series');
-    expect(kindLabel([])).toBe('');
-  });
-
-  it('builds §6.1 counter with proposal 46 partition and the mode that was chosen', () => {
-    // The server's own counter with context appended, never recomputed: Undo's depth is counted in it.
-    expect(
-      counterLine({ counter: '7 / 15', serving: 'battle' }, ['movie'], 'mix')
-    ).toBe('7 / 15 this block · film · Mixed');
-    expect(counterLine({ counter: '2 / 15', serving: 'sweep' }, ['series'], 'battle')).toBe(
-      '2 / 15 this block · series · Pairs'
-    );
-    expect(counterLine(null, ['movie'], 'mix')).toBe('');
+  it('writes a class label the way a member reads it', () => {
+    expect(sentenceCase('disliked')).toBe('Disliked');
+    expect(sentenceCase('')).toBe('');
+    expect(sentenceCase(null)).toBe('');
   });
 
   it('formats runtime per kind and joins the meta line without stray spacing', () => {
@@ -125,8 +114,9 @@ describe('pure helpers', () => {
   it('says 45m rather than 0h 45m, on every surface that asks', () => {
     expect(runtimeLabel({ kind: 'movie', runtime_min: 45 })).toBe('45m');
     expect(runtimeLabel({ kind: 'movie', runtime_min: 59 })).toBe('59m');
-    // The hour boundary is where an `h ? ...` branch goes wrong in the other direction.
-    expect(runtimeLabel({ kind: 'movie', runtime_min: 60 })).toBe('1h 0m');
+    // Whole hours drop the zero minutes, as the boards and Tonight's budget write them.
+    expect(runtimeLabel({ kind: 'movie', runtime_min: 60 })).toBe('1h');
+    expect(metaLine({ kind: 'movie', year: 2004, runtime_min: 120 })).toBe('2004 · 2h');
     // A series is per-episode whatever its length: the kind branch outranks the zero-hour one.
     expect(runtimeLabel({ kind: 'series', runtime_min: 45 })).toBe('45m/ep');
     expect(runtimeLabel({ kind: 'series', runtime_min: 170 })).toBe('170m/ep');
@@ -148,12 +138,18 @@ describe('pure helpers', () => {
 
   it('explains a disabled Undo rather than leaving it silent', () => {
     expect(undoMessage({ available: true })).toBe('');
-    expect(undoMessage({ available: false, reason: 'empty' })).toBe(
-      'nothing to undo in this block'
-    );
+    expect(undoMessage({ available: false, reason: 'empty' })).toBe('Nothing to undo yet');
     expect(undoMessage({ available: false, reason: 'block_boundary' })).toBe(
-      'undo reaches back to the start of this block of 15 and no further'
+      'Undo only goes back to the start of these 15'
     );
+  });
+
+  it('says when the balance check starts, and only until it does', () => {
+    const balance = { arms_at: 15, total: 3, warn: false };
+    expect(armingLine(balance)).toBe('A balance check starts at 15 ratings.');
+    expect(armingLine({ ...balance, total: 15 })).toBe('');
+    expect(armingLine({ ...balance, warn: true })).toBe('');
+    expect(armingLine(null)).toBe('');
   });
 
   it('suppresses the reveal rather than banding it before the first fit', () => {
@@ -197,7 +193,7 @@ describe('the envelope', () => {
 
   it('opens on the served card with its counter, balance and undo state', () => {
     expect(rate.card.token).toBe('t1');
-    expect(rate.session.block.counter).toBe('1 / 15');
+    expect(rate.session.block.counter).toBe('1 of 15');
     expect(rate.balance.total).toBe(6);
     expect(rate.undo).toEqual({ available: false, kind: null, reason: 'empty' });
     expect(rate.reveal).toBe(null);
@@ -210,7 +206,7 @@ describe('the envelope', () => {
         envelope({
           session: {
             ...envelope().session,
-            block: { index: 0, slot: 2, size: 15, counter: '2 / 15', serving: 'battle' }
+            block: { index: 0, slot: 2, size: 15, counter: '2 of 15', serving: 'battle' }
           },
           card: { ...envelope().card, token: 't2', title: { ...envelope().card.title, id: 2 } },
           reveal: { available: true, agreed: true, text: "we'd have guessed the same · cdf 0.71" },
@@ -222,7 +218,7 @@ describe('the envelope', () => {
 
     expect(rate.holding).toBe(true);
     expect(rate.card.token).toBe('t1');                 // still the card just rated
-    expect(rate.frozenBlock.counter).toBe('1 / 15');    // and its counter
+    expect(rate.frozenBlock.counter).toBe('1 of 15');   // and its counter
     expect(rate.reveal.text).toContain("we'd have guessed");
     expect(rate.undo.available).toBe(true);             // Undo is reachable immediately
 
@@ -290,7 +286,8 @@ describe('the envelope', () => {
       )
       .mockResolvedValueOnce(ok(envelope()));
     await undo();
-    expect(rate.notice).toMatch(/no further/);
+    // The server's wording names its mechanism; the member reads the same line as the chip's.
+    expect(rate.notice).toBe('Undo only goes back to the start of these 15');
   });
 
   it('answers the card the gesture started on, or no card at all', async () => {
@@ -331,6 +328,56 @@ describe('the envelope', () => {
     expect(rate.holding).toBe(false);
     expect(rate.reveal).toBe(null);
     expect(rate.card.token).toBe('t1');
+  });
+
+  it("ends a block on a screen of its own, after the last reveal, until Undo takes it back", async () => {
+    const at = (index, slot) => ({
+      ...envelope().session,
+      block: { index, slot, size: 15, counter: `${slot} of 15`, serving: 'sweep' }
+    });
+    fetchMock.mockResolvedValue(ok(envelope({ session: at(0, 15) })));
+    await load({ quiet: true });
+
+    fetchMock.mockResolvedValue(
+      ok(
+        envelope({
+          session: at(1, 1),
+          card: { ...envelope().card, token: 't2' },
+          reveal: { available: true, agreed: true, text: "we'd have guessed the same" },
+          undo: { available: true, kind: 'verdict', reason: null }
+        })
+      )
+    );
+    await verdict(2);
+    // The fifteenth card keeps its reveal first; the end screen names the block it finished.
+    expect(rate.holding).toBe(true);
+    expect(rate.done.counter).toBe('15 of 15');
+    vi.advanceTimersByTime(HOLD_MS);
+    expect(rate.done.counter).toBe('15 of 15');
+    expect(rate.card.token).toBe('t2');
+
+    // A quiet re-read of the new block does not dismiss it; an Undo into the old block does.
+    fetchMock.mockResolvedValue(
+      ok(envelope({ session: at(1, 1), card: { ...envelope().card, token: 't2' } }))
+    );
+    await load({ quiet: true });
+    expect(rate.done).not.toBe(null);
+    fetchMock.mockResolvedValue(ok(envelope({ session: at(0, 15) })));
+    await undo();
+    expect(rate.done).toBe(null);
+
+    // An answer inside a block is no end, and moving on leaves the card the last answer brought.
+    fetchMock.mockResolvedValue(
+      ok(envelope({ session: at(1, 1), card: { ...envelope().card, token: 't3' } }))
+    );
+    await skip();
+    expect(rate.done.counter).toBe('15 of 15');
+    continueRating();
+    expect(rate.done).toBe(null);
+    expect(rate.card.token).toBe('t3');
+    fetchMock.mockResolvedValue(ok(envelope({ session: at(1, 2) })));
+    await skip();
+    expect(rate.done).toBe(null);
   });
 
   it('drops a pin once its card is on the table, so a skip does not bring it straight back', async () => {

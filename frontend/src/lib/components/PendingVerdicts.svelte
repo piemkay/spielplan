@@ -16,12 +16,12 @@
 <svelte:window bind:innerWidth={width} />
 
 {#if banner && banner.count > 0 && text}
-  <div class="banner" role="status" data-testid="pending-verdicts" data-count={banner.count}>
+  <div class="card banner" role="status" data-testid="pending-verdicts" data-count={banner.count}>
     <div class="text">
-      <div class="line" data-testid="pending-verdicts-copy">{text}</div>
-      <div class="why names" data-testid="pending-verdicts-count">{bannerCountLine(banner)}</div>
+      <p class="line" data-testid="pending-verdicts-copy">{text}</p>
+      <p class="footnote" data-testid="pending-verdicts-count">{bannerCountLine(banner)}</p>
     </div>
-    <a class="btn-primary" href={banner.cta.route} data-testid="pending-verdicts-cta" data-head={banner.head_title_ids.join(' ')}>
+    <a class="btn-tinted" href={banner.cta.route} data-testid="pending-verdicts-cta" data-head={banner.head_title_ids.join(' ')}>
       {label}
     </a>
   </div>
@@ -29,21 +29,25 @@
 
 <style>
   .banner {
+    margin-bottom: 16px;
     display: flex;
     align-items: center;
     justify-content: space-between;
-    gap: 14px;
+    gap: 12px 16px;
     flex-wrap: wrap;
-    padding: 12px 15px;
-    margin-bottom: 16px;
-    border: 1px solid var(--ember-edge);
-    background: var(--ember-wash);
-    border-radius: var(--r-md);
+  }
+  .text {
+    flex: 1 1 14rem;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  p {
+    margin: 0;
   }
   .line {
-    font-size: 14px;
-  }
-  .names {
-    margin-top: 3px;
+    font-size: var(--fs-callout);
+    line-height: 21px;
   }
 </style>

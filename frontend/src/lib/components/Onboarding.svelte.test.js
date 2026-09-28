@@ -117,7 +117,9 @@ describe('a second device', () => {
       const rows = target.querySelectorAll(DEVICE);
       expect(rows).toHaveLength(1);
       expect(rows[0].getAttribute('data-device')).toBe('unknown');
-      expect(target.textContent).toContain('None of these is this browser');
+      expect(target.querySelector('[data-testid="onboarding-devices-why"]').textContent).toContain(
+        'not this one'
+      );
     } finally {
       unmount(app);
     }
@@ -141,7 +143,7 @@ describe('a device that is registered', () => {
       expect(target.querySelector(DISABLE)).not.toBeNull();
       const scopes = [...target.querySelectorAll(DEVICE)].map((li) => li.getAttribute('data-device'));
       expect(scopes).toEqual(['other', 'this']);
-      expect(target.querySelector('[data-device="this"]').textContent).toContain('this device');
+      expect(target.querySelector('[data-device="this"]').textContent).toContain('This device');
     } finally {
       unmount(app);
     }
@@ -172,9 +174,9 @@ describe('a browser with no Web Push at all', () => {
     try {
       expect(target.querySelector(SECTION).getAttribute('data-push-state')).toBe('unsupported');
       expect(target.querySelector(ENABLE)).toBeNull();
-      // Off iOS, "no Web Push support" is the true cause.
+      // Off iOS, the browser itself is the true cause.
       expect(target.querySelector(PUSH_STATE).textContent).toContain(
-        'This browser has no Web Push support'
+        "This browser can't show notifications"
       );
     } finally {
       unmount(app);
@@ -229,8 +231,10 @@ describe('an iPhone in a Safari tab', () => {
       expect(third).toContain('Open Spielplan from the new icon and sign in there once');
       expect(target.textContent).not.toContain('come back here for notifications');
       // The sentence names no direction: the host moves the Passkeys card.
-      expect(target.textContent).toContain('the home-screen app keeps its own sign-in');
-      expect(target.textContent).toContain('Adding a passkey on this page');
+      // Whitespace-normalised: textContent keeps the markup's line breaks.
+      const said = target.textContent.replace(/\s+/g, ' ');
+      expect(said).toContain('The Home Screen app keeps its own sign-in');
+      expect(said).toContain('adding a passkey on this page');
       expect(target.textContent).not.toContain('passkey below');
     } finally {
       unmount(app);
@@ -245,10 +249,10 @@ describe('an iPhone in a Safari tab', () => {
     try {
       expect(target.querySelector(SECTION).getAttribute('data-platform')).toBe('ios-safari');
       expect(target.querySelector(SECTION).getAttribute('data-push-state')).toBe('unsupported');
-      const said = target.querySelector(PUSH_STATE).textContent;
-      expect(said).toContain('notifications come from the home-screen app');
-      expect(said).toContain('add the icon in step 1');
-      expect(said).not.toContain('This browser has no Web Push support');
+      const said = target.querySelector(PUSH_STATE).textContent.replace(/\s+/g, ' ');
+      expect(said).toContain('notifications come from the Home Screen app');
+      expect(said).toContain('Add the icon first');
+      expect(said).not.toContain("This browser can't show notifications");
     } finally {
       unmount(app);
     }

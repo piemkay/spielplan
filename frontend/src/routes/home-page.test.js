@@ -5,6 +5,17 @@
 import { flushSync, mount, unmount } from 'svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+// The title card is a sheet, which pushes a history entry as it opens.
+const nav = vi.hoisted(() => ({ page: null }));
+vi.mock('$app/stores', async () => {
+  const { writable } = await import('svelte/store');
+  nav.page = writable({ url: new URL('http://localhost/'), state: {} });
+  return { page: nav.page };
+});
+vi.mock('$app/navigation', () => ({
+  pushState: (_url, state) => nav.page.update((p) => ({ ...p, state }))
+}));
+
 import HomePage from './+page.svelte';
 import PAGE_SOURCE from './+page.svelte?raw';
 import { session } from '$lib/session.svelte.js';
@@ -57,38 +68,40 @@ const card = () => target.querySelector('.empty.card');
 describe('Home with no movie data', () => {
   it('tells a member in their own words and offers no admin door', async () => {
     await open({ user: MEMBER });
-    expect(countLine()).toContain('no movie data yet');
-    expect(countLine()).not.toContain('bundle');
+    expect(countLine()).toBe('No movie data yet');
     expect(card().textContent).toContain('There is no movie data yet');
     expect(card().textContent).not.toContain('bundle');
-    expect(card().querySelector('a[href="/admin/data"]')).toBeNull();
+    expect(card().querySelector('a')).toBeNull();
   });
 
-  it("keeps the operator's name for the state, and the door, for an admin", async () => {
+  it('tells an admin the same, and adds the door to Movie data', async () => {
     await open({ user: ADMIN });
-    expect(countLine()).toContain('no bundle imported');
-    expect(card().textContent).toContain('No artifact bundle has been imported');
-    expect(card().querySelector('a[href="/admin/data"]').textContent).toBe('Import a bundle');
+    expect(countLine()).toBe('No movie data yet');
+    expect(card().textContent).toContain('No movie data yet. Import it in Movie data');
+    expect(card().textContent).not.toMatch(/bundle|artifact/);
+    expect(card().querySelector('a[href="/admin/movie-data"]').textContent).toBe('Open Movie data');
   });
 
-  it('never says no bundle is imported while one waits for a restart', async () => {
+  it('never says there is no movie data while it waits for a restart', async () => {
     await open({ user: ADMIN, restartRequired: true });
-    expect(countLine()).toContain('bundle imported · restart needed');
-    expect(countLine()).not.toContain('no bundle imported');
-    expect(card().textContent).not.toContain('No artifact bundle has been imported');
-    expect(card().querySelector('a[href="/admin/data"]').textContent).toBe('Open the Data tab');
+    expect(countLine()).toBe('Waiting for a restart');
+    expect(card().textContent).toContain('New movie data is waiting for a restart');
+    expect(card().textContent).not.toContain('No movie data yet');
+    expect(card().querySelector('a[href="/admin/movie-data"]').textContent).toBe('Open Movie data');
     unmount(app);
 
     await open({ user: MEMBER, restartRequired: true });
-    expect(countLine()).toContain('waiting for a restart');
+    expect(countLine()).toBe('Waiting for a restart');
     expect(card().textContent).toContain('waiting for a restart');
     expect(card().textContent).not.toContain('bundle');
+    expect(card().querySelector('a')).toBeNull();
   });
 });
 
 function backend({
   titles = (/** @type {URLSearchParams} */ _params) => ({ items: [], total: 0, hidden: {} }),
-  facets = (/** @type {string[]} */ _kinds) => ({ genres: [], decades: [] })
+  facets = (/** @type {string[]} */ _kinds) => ({ genres: [], decades: [] }),
+  home = (/** @type {string[]} */ _kinds) => ({})
 } = {}) {
   const seen = [];
   vi.stubGlobal(
@@ -99,6 +112,7 @@ function backend({
       let payload = {};
       if (u.pathname === '/api/titles') payload = titles(u.searchParams);
       else if (u.pathname === '/api/facets') payload = facets(u.searchParams.getAll('kind'));
+      else if (u.pathname === '/api/home') payload = home(u.searchParams.getAll('kind'));
       else if (u.pathname.startsWith('/api/prompts/finish')) payload = [];
       return Promise.resolve({
         ok: true,
@@ -144,9 +158,14 @@ describe('Home opens on the shelves, with the filters behind one control', () =>
     }
     const toggle = $('[data-testid="filter-toggle"]');
     expect(toggle.getAttribute('aria-expanded')).toBe('false');
+    // It names the panel only while the panel exists.
+    expect(toggle.hasAttribute('aria-controls')).toBe(false);
     toggle.click();
     flushSync();
     expect(toggle.getAttribute('aria-expanded')).toBe('true');
+    expect(document.getElementById(toggle.getAttribute('aria-controls'))).toBe(
+      $('[data-testid="filter-panel"]')
+    );
     for (const id of ['filter-genre', 'filter-decade', 'filter-seen', 'filter-owned']) {
       expect($(`[data-testid="${id}"]`), `${id} is not in the panel`).not.toBeNull();
     }
@@ -164,11 +183,52 @@ describe('Home opens on the shelves, with the filters behind one control', () =>
     $('[data-testid="filter-toggle"]').click();
     flushSync();
     const chip = $('[data-testid="owned-filter-chip"]');
-    expect(chip.textContent).toContain('in my library');
+    expect(chip.textContent).toContain('In my library');
     chip.click();
     await tick();
     expect($('[data-testid="filter-toggle"]').textContent.trim()).toBe('Filters');
     expect($('[data-testid="home-mode"]').dataset.mode).toBe('shelves');
+  });
+});
+
+describe('the shelves (decision 527)', () => {
+  it('count the library of the shown kind and say nothing of the kind not shown', async () => {
+    backend({
+      home: (kinds) => ({ kinds, library: { movie: 759, series: 127 }, shelves: [], shelves_total: 0 })
+    });
+    await openHome();
+    expect(countLine().trim()).toBe('759 films in your library');
+    $('[data-testid="kind-both"]').click();
+    await tick();
+    expect(countLine().trim()).toBe('886 titles in your library');
+  });
+
+  it('head each shelf one level under its kind on Both, and at the top on one kind', async () => {
+    const section = (kind) => ({
+      kind,
+      heading: kind === 'movie' ? 'Films' : 'Series',
+      title: 'Your top picks',
+      why: 'For you',
+      items: [{ title_id: kind === 'movie' ? 1 : 2, kind, name: 'T', seen: false }]
+    });
+    backend({
+      home: (kinds) => ({
+        kinds,
+        library: {},
+        shelves: [{ id: 'top_of_ledger', sections: kinds.map(section) }],
+        shelves_total: 1
+      })
+    });
+    await openHome();
+    expect($('h2[data-testid="shelf-title"]')).not.toBeNull();
+    $('[data-testid="kind-both"]').click();
+    await tick();
+    const regions = [...target.querySelectorAll('[data-testid="kind-region"]')];
+    expect(regions.map((r) => r.querySelector('h2').textContent)).toEqual(['Films', 'Series']);
+    for (const region of regions) {
+      expect(region.querySelector('h3[data-testid="shelf-title"]').textContent).toBe('Your top picks');
+      expect(region.querySelector('h2[data-testid="shelf-title"]')).toBeNull();
+    }
   });
 });
 
@@ -346,7 +406,7 @@ describe('a kind switch keeps the filters the new kind has', () => {
     $('[data-testid="kind-series"]').click();
     await tick();
     expect($('[data-testid="filter-genre"]').value).toBe('');
-    expect($('[data-testid="kind-filter-note"]').textContent).toBe('Musical cleared - no series match it.');
+    expect($('[data-testid="kind-filter-note"]').textContent).toBe('Musical cleared — no series match it.');
 
     // The note belongs to the kind switch; the next list asked for clears it.
     await type('heat');

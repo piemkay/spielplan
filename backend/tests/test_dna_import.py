@@ -1199,7 +1199,8 @@ async def test_the_data_card_names_the_paths_the_axis_loader_actually_reads(db, 
     assert not any("axes/" in p for p in axes["expected"]), (
         "the card still sends the operator to the subdirectory decision 173 retired"
     )
-    assert any("§6.2 step 5" in line for line in axes["disables"]), axes["disables"]
+    assert any("Tonight's facet split" in line for line in axes["disables"]), axes["disables"]
+    assert not any("§" in line or "decision" in line for line in axes["disables"]), axes["disables"]
 
     _strip_axis_definitions(vocab_dir)
     named = PurePosixPath(axes["expected"][0])

@@ -264,9 +264,7 @@ test.describe('onboarding', () => {
       const rows = page.getByTestId('onboarding-device');
       await expect(rows).toHaveCount(1);
       await expect(rows.first()).toHaveAttribute('data-device', 'unknown');
-      await expect(page.getByTestId('onboarding-devices-why')).toContainText(
-        'None of these is this browser'
-      );
+      await expect(page.getByTestId('onboarding-devices-why')).toContainText('not this one');
 
       expect((await pushState(page)).subscriptions).toHaveLength(1);
     } finally {

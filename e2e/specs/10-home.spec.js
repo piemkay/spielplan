@@ -106,18 +106,19 @@ function shelfPoster(page, titleId) {
     .getByRole('button');
 }
 
+/** The title card, a sheet since decision 527. */
 function titlePanel(page) {
-  return page.getByRole('complementary', { name: 'Title detail' });
+  return page.getByRole('dialog', { name: 'Title detail' });
 }
 
-/** Set decision 117's switch through the account dropdown; a no-op if already in position. */
+/** Set decision 117's switch in You, a sheet; a no-op if already in position. */
 async function setShowModel(page, on) {
   await page.getByTestId('account-chip').click();
   const toggle = page.getByTestId('show-model-toggle');
   await expect(toggle).toBeVisible();
   if ((await toggle.getAttribute('aria-checked')) !== String(on)) await toggle.click();
   await expect(toggle).toHaveAttribute('aria-checked', String(on));
-  await page.getByTestId('account-chip').click();
+  await page.keyboard.press('Escape');
   await expect(toggle).toHaveCount(0);
 }
 
@@ -168,21 +169,30 @@ test.afterEach(async ({ page }) => {
 
 // --- §6.0's grid switch -------------------------------------------------------------------
 
-test('search replaces the shelves with the catalog grid and closes the open title card', async ({
-  page
-}) => {
+test('a shelf card opens its title as a sheet, and Back closes it on Home', async ({ page }) => {
+  // Decision 527: the title card is a sheet and a history entry.
+  await expect(page.getByTestId('home-mode')).toHaveAttribute('data-mode', 'shelves');
+  const film = shelfCards(await homePayload(page.request, ['movie']))[0];
+  expect(film, 'no film on any shelf — the fixture bundle owns six').toBeTruthy();
+
+  await shelfPoster(page, film.title_id).click();
+  await expect(titlePanel(page).getByRole('heading', { name: film.name })).toBeVisible();
+  await page.goBack();
+  // Count, not visibility: a hidden card would come back.
+  await expect(titlePanel(page)).toHaveCount(0);
+  await expect(page).toHaveURL(/\/$/);
+  await expect(page.getByTestId('shelves')).toBeVisible();
+});
+
+test('search replaces the shelves with the catalog grid', async ({ page }) => {
   // The shelves first, since the grid has to REPLACE them.
   await expect(page.getByTestId('home-mode')).toHaveAttribute('data-mode', 'shelves');
   await expect(page.getByTestId('shelves')).toBeVisible();
   await expect(page.getByTestId('shelf-why').first()).not.toBeEmpty();
 
   // Films only: what Home opens with (decision 18).
-  const home = await homePayload(page.request, ['movie']);
-  const film = shelfCards(home)[0];
+  const film = shelfCards(await homePayload(page.request, ['movie']))[0];
   expect(film, 'no film on any shelf — the fixture bundle owns six').toBeTruthy();
-
-  await shelfPoster(page, film.title_id).click();
-  await expect(titlePanel(page)).toBeVisible();
 
   await page.getByTestId('home-search').fill(film.name);
 
@@ -192,8 +202,6 @@ test('search replaces the shelves with the catalog grid and closes the open titl
   await expect(page.getByTestId('shelves')).toHaveCount(0);
   await expect(page.getByTestId('shelf')).toHaveCount(0);
   await expect(page.locator('.card-wrap', { hasText: film.name }).first()).toBeVisible();
-  // The switch CLOSES the card. Count, not visibility: a hidden card would come back.
-  await expect(titlePanel(page)).toHaveCount(0);
 });
 
 test('clearing the search box returns the shelves', async ({ page }) => {
@@ -282,39 +290,27 @@ test('Series switches to series, and Both shows the two kinds as two regions', a
   }
 });
 
-test('every shelf says how many titles it holds', async ({ page }) => {
-  // A phone shows under three cards with no scrollbar: the count says there is more.
-  const home = await homePayload(page.request, ['movie']);
-  const first = (home.shelves[0]?.sections ?? [])[0];
-  expect(first, 'no shelf shipped').toBeTruthy();
-  await expect(page.getByTestId('shelf-count').first()).toHaveText(
-    `${first.items.length} titles`
-  );
-});
-
-test('a tier letter on a shelf card is explained once, in words', async ({ page }) => {
-  // Decision 187's letter alone read as a grade: a legend, once, only where a letter is shown.
+test('Home shows no rank number and no tier letter: those live on Rank', async ({ page }) => {
+  // Decision 527. Both kinds, so every shelf the fixture ships is on screen.
   await page.getByTestId('kind-both').click();
   await expect(page.getByTestId('kind-both')).toHaveAttribute('aria-pressed', 'true');
-  await expect(page.getByTestId('shelves')).toBeVisible();
-  const letters = await page.getByTestId('shelf-tier').count();
-  await expect(page.getByTestId('tier-legend')).toHaveCount(letters ? 1 : 0);
-  if (letters) {
-    await expect(page.getByTestId('shelf-tier').first()).toHaveAttribute('aria-label', /tier /);
-  }
+  await expect(page.getByTestId('shelf-card').first()).toBeVisible();
+  await expect(page.getByTestId('shelf-rank')).toHaveCount(0);
+  await expect(page.getByTestId('shelf-tier')).toHaveCount(0);
+  await expect(page.getByTestId('tier-legend')).toHaveCount(0);
+  // Under the art, the name and "year · runtime" and nothing else.
+  const meta = page.getByTestId('shelf-card').first().locator('.meta > span');
+  await expect(meta).toHaveCount(2);
+  await expect(meta.nth(1)).toHaveText(/^(\d{4}|—)( · .+)?$/);
 });
 
-test('the shelves say they are the library, and a card keeps its art clear', async ({ page }) => {
-  // Decision 516: the shelves say they are the library, badges stay off the art, and "New in the
-  // library" states its reason once.
+test('the count line says the shelves are the library, and New says its reason once', async ({
+  page
+}) => {
+  // §6.0: the count line counts the household's library of the shown kind, and "New in the
+  // library", whose why-line is the badge's reason, does not repeat it (decision 516).
   await expect(page.getByTestId('shelves')).toBeVisible();
-  await expect(page.getByTestId('shelves-from-library')).toHaveText(
-    /^Everything on these shelves is in your library\./
-  );
-  const rank = page.getByTestId('shelf-rank').first();
-  await expect(rank).toBeVisible();
-  const onArt = await rank.evaluate((el) => Boolean(el.closest('.poster')));
-  expect(onArt, 'a badge sits on the art').toBe(false);
+  await expect(page.getByTestId('count-line')).toHaveText(/^\d+ films? in your library$/);
   const fresh = page.locator('[data-testid="shelf"][data-shelf="new_in_library"]');
   for (const row of await fresh.all()) {
     await expect(row.getByTestId('shelf-cold-note')).toHaveCount(0);
@@ -347,7 +343,7 @@ test('with the toggle off the rail and every inline number are absent, not merel
 test('the title card model line renders only with the toggle on', async ({ page }) => {
   // Decision 486: the toggle governs the model line too, absent from the payload as well.
   await openTitle(page, 'Heat');
-  await expect(page.getByRole('complementary', { name: 'Title detail' })).toBeVisible();
+  await expect(titlePanel(page)).toBeVisible();
   await expect(page.getByTestId('title-model-line')).toHaveCount(0);
   const listing = await (await page.request.get('/api/titles?kind=movie&q=Heat')).json();
   const heat = listing.items.find((t) => t.name === 'Heat');
@@ -378,13 +374,17 @@ test('turning the toggle on reveals the rail, the inline numbers and what did no
   await page.getByTestId('kind-both').click();
   await expect(page.getByTestId('kind-both')).toHaveAttribute('aria-pressed', 'true');
 
+  // The model log opens from You (decision 527).
+  await page.getByTestId('account-chip').click();
   await expect(page.getByTestId('model-rail-open')).toBeVisible();
+  await page.keyboard.press('Escape');
 
   const notes = page.locator('[data-model-note]');
   expect(await notes.count(), 'no inline annotation with the toggle on').toBeGreaterThan(0);
   // §6.8: "model numbers appear in the data voice next to their name … never bare."
   await expect(notes.first()).toHaveText(/[a-zβ]\S*\s+-?\d/i);
 
+  await page.getByTestId('account-chip').click();
   await page.getByTestId('model-rail-open').click();
   const rail = page.getByTestId('model-rail');
   await expect(rail).toBeVisible();
@@ -430,13 +430,14 @@ test('the toggle is off by default, and one user turning it on leaves the other 
     // The greeting renders before `/api/home` lands; `shelves` means the payload is rendered,
     // which the non-retrying `.count()` calls below need.
     await expect(other.getByTestId('shelves')).toBeVisible();
-    await expect(other.getByTestId('account-chip')).toContainText(SECOND.name);
-    await expect(page.getByTestId('account-chip')).not.toContainText(SECOND.name);
+    // The avatar prints an initial; the name is in its accessible name.
+    await expect(other.getByTestId('account-chip')).toHaveAccessibleName(new RegExp(SECOND.name));
+    await expect(page.getByTestId('account-chip')).not.toHaveAccessibleName(new RegExp(SECOND.name));
 
     // "Default off", on the one account whose switch nobody has thrown.
     await other.getByTestId('account-chip').click();
     await expect(other.getByTestId('show-model-toggle')).toHaveAttribute('aria-checked', 'false');
-    await other.getByTestId('account-chip').click();
+    await other.keyboard.press('Escape');
 
     const shelfCardCount = await other.getByTestId('shelf-card').count();
     expect(
@@ -451,7 +452,9 @@ test('the toggle is off by default, and one user turning it on leaves the other 
     await page.goto('/');
     // The same gate: the rail button comes from `/api/auth/me`, the notes from `/api/home`.
     await expect(page.getByTestId('shelves')).toBeVisible();
+    await page.getByTestId('account-chip').click();
     await expect(page.getByTestId('model-rail-open')).toBeVisible();
+    await page.keyboard.press('Escape');
     expect(await page.locator('[data-model-note]').count()).toBeGreaterThan(0);
 
     // …and the second account's Home is unchanged, on the screen and in the payload.
@@ -467,113 +470,10 @@ test('the toggle is off by default, and one user turning it on leaves the other 
 
     // Nor the title card's model line (decision 486).
     await openTitle(other, 'Heat');
-    await expect(other.getByRole('complementary', { name: 'Title detail' })).toBeVisible();
+    await expect(titlePanel(other)).toBeVisible();
     await expect(other.getByTestId('title-model-line')).toHaveCount(0);
   } finally {
     await context.close();
   }
 });
 
-// --- §6.8's palette, where a shelf spends it -------------------------------------------------
-
-// §4.3's vocabulary id, `facet.term`, which a chip must never print (decision 486).
-const VOCAB_ID = /[a-z_]+\.[a-z0-9_]+/;
-
-// The name a chip prints, as `lib/terms.js` derives it.
-function termName(tag) {
-  const label = typeof tag.label === 'string' ? tag.label.trim() : '';
-  if (label) return label;
-  const dot = tag.term.indexOf('.');
-  return (dot === -1 ? tag.term : tag.term.slice(dot + 1)).replaceAll('_', ' ');
-}
-
-test('a shelf term chip prints its term once and wears its facet colour', async ({ page }) => {
-  // The title card's two chip rules, on the shelves' own copy of the chip.
-  //
-  // THE SHARED TERMS ARE SUPPLIED: no three-member section of the fixture shares a term, so the
-  // server's payload gets a real tag of a card genuinely on that shelf, in `WhyTerm`'s shape.
-  const payload = await homePayload(page.request, ['movie']);
-  const sections = payload.shelves.flatMap((shelf) => shelf.sections ?? []);
-
-  let chosen = null;
-  for (const section of sections) {
-    for (const card of section.items ?? []) {
-      const title = await (await page.request.get(`/api/titles/${card.title_id}`)).json();
-      const tag = (title.dna?.extracted ?? [])[0] ?? (title.dna?.projected ?? [])[0];
-      if (tag) {
-        chosen = { kind: section.kind, titleId: card.title_id, tag };
-        break;
-      }
-    }
-    if (chosen) break;
-  }
-  expect(chosen, 'no shipped shelf card carries a DNA row — there is no chip to test').toBeTruthy();
-
-  const home = /\/api\/home\?/;
-  await page.route(home, async (route) => {
-    const response = await route.fetch();
-    const body = await response.json();
-    for (const shelf of body.shelves ?? []) {
-      for (const section of shelf.sections ?? []) {
-        if (section.kind !== chosen.kind) continue;
-        if (!(section.items ?? []).some((i) => i.title_id === chosen.titleId)) continue;
-        section.shared_terms = [
-          {
-            term: chosen.tag.term,
-            facet: chosen.tag.facet,
-            tier: 'extracted',
-            role: 'member',
-            label: chosen.tag.label
-          }
-        ];
-      }
-    }
-    await route.fulfill({
-      status: response.status(),
-      contentType: 'application/json',
-      body: JSON.stringify(body)
-    });
-  });
-
-  try {
-    await page.goto('/');
-    const chip = page.getByTestId('shelf-term').first();
-    await expect(chip).toBeVisible();
-
-    // Without the nested "· inferred" note, subtracted by node rather than by regex.
-    const label = (
-      await chip.evaluate((el) => {
-        const note = el.querySelector('.tier-note')?.textContent ?? '';
-        return (el.textContent ?? '').replace(note, '');
-      })
-    ).trim();
-    // Decision 486: the NAME, never the id - "World War II", not `era.wwii`.
-    expect(label, `shelf chip "${label}" prints a vocabulary id`).not.toMatch(VOCAB_ID);
-    expect(label, 'the chip is not the term the payload named').toBe(termName(chosen.tag));
-
-    // The declared token, since computed colours are all rgb; resolved too, so an undefined
-    // `--facet-*` fails.
-    const colour = await chip.evaluate((el) => {
-      const declared = el.style.color || '';
-      const named = declared.match(/var\(\s*(--[a-z0-9-]+)\s*\)/);
-      const token = named ? named[1] : '';
-      return {
-        declared,
-        token,
-        value: token
-          ? getComputedStyle(document.documentElement).getPropertyValue(token).trim()
-          : ''
-      };
-    });
-    expect(
-      colour.token,
-      `shelf chip "${label}" was painted with ${colour.declared || 'no colour at all'}`
-    ).toMatch(/^--facet-/);
-    expect(
-      colour.value,
-      `shelf chip "${label}" names ${colour.token}, which design.css does not define`
-    ).not.toBe('');
-  } finally {
-    await page.unroute(home);
-  }
-});

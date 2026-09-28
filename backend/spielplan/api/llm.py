@@ -386,12 +386,11 @@ async def llm_confirm(request: Request, _: AdminUser, conn: DB) -> dict[str, Any
     async with write_txn(conn, lock=_SPEND_SETTINGS_LOCK):
         fresh = await _preview_body(conn, now=datetime.now(UTC), change=change, providers=providers)
         if fresh["blocked"] is not None:
-            refused = (f"{fresh['blocked']}. Nothing was stored; the fresh preview is attached"
-                       " (decision 450)")
+            refused = f"{fresh['blocked']}. Nothing was stored; the fresh preview is attached"
         elif body.accepted_estimate != fresh["estimate"]["per_title_usd"]:
             refused = (f"the per-title estimate is now {fresh['estimate']['per_title_usd']}, not the"
                        f" {body.accepted_estimate} this confirm carried, so nothing was stored: show"
-                       " the fresh preview attached and confirm that figure (decision 450)")
+                       " the fresh preview attached and confirm that figure")
         else:
             for name, fields in providers.items():
                 await _save(conn, name, fields)

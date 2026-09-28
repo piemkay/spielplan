@@ -3,9 +3,21 @@
  */
 
 import { flushSync, mount, unmount } from 'svelte';
+import { get as read } from 'svelte/store';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('$lib/api.js', () => ({ get: vi.fn(), post: vi.fn() }));
+
+// The sheet is a history entry: `pushState` adds it and Back (here `history.back`) takes it away.
+const nav = vi.hoisted(() => ({ page: null }));
+vi.mock('$app/stores', async () => {
+  const { writable } = await import('svelte/store');
+  nav.page = writable({ url: new URL('http://localhost/'), state: {} });
+  return { page: nav.page };
+});
+vi.mock('$app/navigation', () => ({
+  pushState: (_url, state) => nav.page.update((p) => ({ ...p, state }))
+}));
 
 import { get, post } from '$lib/api.js';
 import TitleDetail from './TitleDetail.svelte';
@@ -29,6 +41,7 @@ const payload = (over = {}) => ({
     ...over
   },
   // No `model_line`: the server omits it while Show the model is off, the default here.
+  genres: [],
   credits: [],
   platform_ratings: { items: [], note: 'display-only' },
   dna: { extracted: [], projected: [] },
@@ -43,9 +56,14 @@ beforeEach(() => {
   document.body.appendChild(target);
   vi.mocked(get).mockReset();
   vi.mocked(post).mockReset();
+  nav.page.update((p) => ({ ...p, state: {} }));
+  vi.spyOn(history, 'back').mockImplementation(() =>
+    nav.page.update((p) => ({ ...p, state: { ...p.state, sheets: (p.state.sheets ?? []).slice(0, -1) } }))
+  );
 });
 
 afterEach(() => {
+  vi.restoreAllMocks();
   target.remove();
 });
 
@@ -71,13 +89,6 @@ async function open(over = {}, extra = {}) {
   await settle();
   return app;
 }
-
-// jsdom ships no PointerEvent, and the action reads none of it.
-const tap = (/** @type {Element} */ el) =>
-  el.dispatchEvent(new Event('pointerdown', { bubbles: true, cancelable: true }));
-
-const press = (/** @type {string} */ key) =>
-  document.body.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }));
 
 const tapSeen = async () => {
   const button = target.querySelector('button.seen');
@@ -138,7 +149,7 @@ describe('the sync note', () => {
     }
   });
 
-  it('sits under the actions and outside the credits, in the display face', async () => {
+  it('sits under the actions and outside the credits, as a quiet line', async () => {
     vi.mocked(post).mockResolvedValue({ state: 'seen', synced: false, reason: 'not on Jellyfin' });
     const app = await open(
       { kind: 'movie', seen_state: 'unseen' },
@@ -149,8 +160,8 @@ describe('the sync note', () => {
       const note = target.querySelector(SYNCNOTE);
       expect(note.textContent).toContain("isn't in your Jellyfin library");
       expect(note.closest('section'), 'the note is inside a section').toBeNull();
-      expect(note.classList.contains('why')).toBe(true);
-      expect(note.classList.contains('data')).toBe(false);
+      expect(note.closest('.actions'), 'the note is inside the button row').toBeNull();
+      expect(note.classList.contains('footnote')).toBe(true);
     } finally {
       unmount(app);
     }
@@ -167,7 +178,7 @@ describe("§6.0's second action, on a screen with no hover", () => {
       expect(why.textContent, 'a milestone label in member copy (decision 486)').not.toMatch(
         /\bM\d\b/
       );
-      expect(why.classList.contains('why')).toBe(true);
+      expect(why.classList.contains('footnote')).toBe(true);
       expect(why.tagName).toBe('P');
 
       const button = target.querySelector('button.btn-primary[disabled]');
@@ -195,51 +206,66 @@ describe("§6.0's second action, on a screen with no hover", () => {
   });
 });
 
-describe('the panel dismisses', () => {
-  it('closes when the pointer lands outside it', async () => {
+describe('the card is a sheet (decision 527)', () => {
+  const sheets = () => read(nav.page).state.sheets ?? [];
+  const dialog = () => target.querySelector('[role="dialog"]');
+
+  it('opens as a history entry and closes by its button, the scrim, Escape and Back', async () => {
+    for (const leave of [
+      () => target.querySelector('button.close').click(),
+      () => target.querySelector('.scrim').click(),
+      () => dialog().dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true })),
+      () => history.back()
+    ]) {
+      const onClose = vi.fn();
+      const app = await open({}, { props: { onClose } });
+      try {
+        expect(dialog().getAttribute('aria-label')).toBe('Title detail');
+        expect(sheets(), 'the sheet pushed no history entry').toHaveLength(1);
+        leave();
+        await settle();
+        expect(onClose).toHaveBeenCalledTimes(1);
+        expect(sheets(), 'the history entry outlived the sheet').toHaveLength(0);
+      } finally {
+        unmount(app);
+      }
+    }
+  });
+
+  it('stays open for a tap inside it and for another key', async () => {
     const onClose = vi.fn();
+    vi.mocked(post).mockResolvedValue({ synced: true });
     const app = await open({}, { props: { onClose } });
     try {
-      tap(document.body);
-      expect(onClose, 'the panel has no outside-tap dismissal').toHaveBeenCalledTimes(1);
+      dialog().dispatchEvent(new KeyboardEvent('keydown', { key: 'm', bubbles: true }));
+      await tapSeen();
+      expect(onClose).not.toHaveBeenCalled();
+      expect(sheets()).toHaveLength(1);
     } finally {
       unmount(app);
     }
   });
 
-  it('stays open when the pointer lands inside it', async () => {
-    const onClose = vi.fn();
-    const app = await open({}, { props: { onClose } });
+  it('closes itself before a credit filters the library, so Back has nothing left to undo', async () => {
+    const calls = [];
+    const credit = { person_id: 1, name: 'Michael Mann', job: 'Director', role_class: 'director' };
+    const app = await open(
+      { kind: 'movie' },
+      {
+        credits: [credit],
+        props: {
+          onClose: () => calls.push(['close', sheets().length]),
+          onPerson: (c) => calls.push(['person', c.name, sheets().length])
+        }
+      }
+    );
     try {
-      tap(target.querySelector('.panel'));
-      tap(target.querySelector('button.seen'));
-      expect(onClose, 'tapping the card closed it').not.toHaveBeenCalled();
+      target.querySelector('.person').click();
+      await settle();
+      expect(calls).toEqual([['close', 0], ['person', 'Michael Mann', 0]]);
     } finally {
       unmount(app);
     }
-  });
-
-  it('closes on Escape', async () => {
-    const onClose = vi.fn();
-    const app = await open({}, { props: { onClose } });
-    try {
-      press('Escape');
-      expect(onClose, 'Escape does not close the panel').toHaveBeenCalledTimes(1);
-      press('m');
-      expect(onClose, 'a key that is not Escape closed it').toHaveBeenCalledTimes(1);
-    } finally {
-      unmount(app);
-    }
-  });
-
-  it('stops listening once it is gone', async () => {
-    // Mounted per selection, so a leaked listener is one per title ever opened.
-    const onClose = vi.fn();
-    const app = await open({}, { props: { onClose } });
-    unmount(app);
-    tap(document.body);
-    press('Escape');
-    expect(onClose, 'the unmounted panel is still listening on document').not.toHaveBeenCalled();
   });
 });
 
@@ -329,14 +355,26 @@ describe("the model line is Show the model's", () => {
         model_line: {
           available: true,
           text: 'b(t) 0.52 · β 0.20 · gate 0.93',
-          e_source: 'backbone',
-          bundle: 'v1'
+          e_source: 'cold_tower',
+          bundle: 'v20260926b'
         }
       }
     );
     try {
-      expect(target.querySelector('[data-testid="title-model-line"]').textContent).toContain(
-        'b(t) 0.52'
+      const line = target.querySelector('[data-testid="title-model-line"]').textContent;
+      expect(line).toContain('b(t) 0.52');
+      expect(line).toContain("Placed by what it's about");
+      expect(line).not.toMatch(/cold_tower|bundle|v20260926b/);
+    } finally {
+      unmount(app);
+    }
+  });
+
+  it('says in a sentence when there are no numbers for the title', async () => {
+    const app = await open({}, { model_line: { available: false, reason: 'no such title' } });
+    try {
+      expect(target.querySelector('[data-testid="title-model-line"]').textContent.trim()).toBe(
+        'No numbers for this one — no such title'
       );
     } finally {
       unmount(app);
@@ -357,12 +395,33 @@ describe('the header', () => {
     }
   });
 
-  it('names the kind in words, not by its column value', async () => {
-    const app = await open({ kind: 'movie', seen_state: 'unseen' });
+  it('reads the year and the runtime, then who directed it, and no column value', async () => {
+    const app = await open(
+      { kind: 'movie', seen_state: 'unseen', year: 2004, runtime_min: 120 },
+      { credits: [{ person_id: 1, name: 'Michael Mann', job: 'Director', role_class: 'director' }] }
+    );
     try {
       const sub = target.querySelector('.sub').textContent;
-      expect(sub).toContain('film');
+      expect(sub).toMatch(/^2004 · 2h/);
       expect(sub).not.toContain('movie');
+      expect(target.querySelector('[data-testid="title-directed"]').textContent).toBe(
+        'Directed by Michael Mann'
+      );
+    } finally {
+      unmount(app);
+    }
+  });
+
+  it('names its first two genres under the year, and no line when it has none', async () => {
+    let app = await open({}, { genres: ['Crime', 'Thriller', 'Drama'] });
+    try {
+      expect(target.querySelector('[data-testid="title-genres"]').textContent).toBe('Crime, thriller');
+    } finally {
+      unmount(app);
+    }
+    app = await open();
+    try {
+      expect(target.querySelector('[data-testid="title-genres"]')).toBeNull();
     } finally {
       unmount(app);
     }
@@ -372,7 +431,8 @@ describe('the header', () => {
     const app = await open({ trailer_key: 'F-eMt3SrfFU' });
     try {
       const link = target.querySelector('a.trailer');
-      expect(link.textContent.trim()).toBe('Watch the trailer');
+      expect(link.textContent.trim()).toBe('Trailer');
+      expect(link.getAttribute('aria-label')).toBe('Watch the trailer on YouTube');
       expect(link.getAttribute('href')).toBe('https://www.youtube.com/watch?v=F-eMt3SrfFU');
       expect(link.textContent).not.toContain('F-eMt3SrfFU');
     } finally {
@@ -469,7 +529,7 @@ describe('the DNA card in the member register', () => {
       const fold = target.querySelector('[data-testid="title-weak-chips"]');
       expect(fold.tagName).toBe('DETAILS');
       expect(fold.open).toBe(false);
-      expect(fold.querySelector('summary').textContent.trim()).toBe('1 less certain');
+      expect(fold.querySelector('summary').textContent.trim()).toBe('Show 1 more');
       const weak = fold.querySelector('.chip');
       expect(weak.querySelector('.chiplabel').textContent.trim()).toBe('teen lead');
       expect(weak.classList.contains('faint')).toBe(true);
@@ -603,12 +663,42 @@ describe('the DNA card says each thing once', () => {
     try {
       const tags = [...target.querySelectorAll('.tag')];
       expect(tags).toHaveLength(1);
-      expect([...tags[0].querySelectorAll('.quote')].map((q) => q.textContent)).toEqual([
+      // The one chip's quotes, each once, on the evidence card beneath the chips.
+      const card = target.querySelector('[data-testid="title-evidence"]');
+      expect([...card.querySelectorAll('.quote')].map((q) => q.textContent)).toEqual([
         '“…the cinematic master poet of nocturnal Los Angeles…”',
         '“…the nighttime LA…”'
       ]);
       const chips = [...target.querySelectorAll('.chip .chiplabel')].map((c) => c.textContent.trim());
       expect(chips).toEqual(['loneliness']);
+    } finally {
+      unmount(app);
+    }
+  });
+
+  it('shows the quotes of the one chip a member picks', async () => {
+    const tag = (term, label, quote) => ({
+      term, facet: term.split('.')[0], label, provider: '', evidence: [{ quote, source: 'trakt:1' }]
+    });
+    const app = await open(
+      {},
+      {
+        dna: {
+          extracted: [tag('mood.tense', 'tense', 'Tense.'), tag('place.los_angeles', 'Los Angeles', 'Nocturnal LA.')],
+          projected: []
+        }
+      }
+    );
+    try {
+      const card = () => target.querySelector('[data-testid="title-evidence"]');
+      const chips = [...target.querySelectorAll('.tag')];
+      expect(chips.map((c) => c.getAttribute('aria-pressed'))).toEqual(['true', 'false']);
+      expect(card().textContent).toContain('Tense.');
+      chips[1].click();
+      flushSync();
+      expect(chips.map((c) => c.getAttribute('aria-pressed'))).toEqual(['false', 'true']);
+      expect(card().textContent).toContain('Nocturnal LA.');
+      expect(card().textContent).not.toContain('Tense.');
     } finally {
       unmount(app);
     }
@@ -703,7 +793,7 @@ describe('credits', () => {
     ];
     const app = await open({}, { credits });
     try {
-      const rows = [...target.querySelectorAll('.person .data')].map((r) => r.textContent.trim());
+      const rows = [...target.querySelectorAll('.person .job')].map((r) => r.textContent.trim());
       expect(rows).toEqual(['Original Music Composer', 'Writer', 'Director', 'Screenplay · Novel']);
       // The source count is the operator's provenance (decision 486).
       expect(target.textContent).not.toContain('2 sources');
@@ -733,7 +823,7 @@ describe("the card's own answer (decision 487)", () => {
       expect(target.querySelector('[data-answer="liked"]').getAttribute('aria-pressed')).toBe(
         'true'
       );
-      expect(target.querySelector('button.seen').textContent.trim()).toBe('Seen');
+      expect(target.querySelector('button.seen').textContent.trim()).toBe('Watched');
       expect(onStateChange).toHaveBeenCalledWith(6, 'seen');
     } finally {
       unmount(app);
@@ -816,7 +906,7 @@ describe("the card's own answer (decision 487)", () => {
       target.querySelector('[data-answer="not_seen"]').click();
       await settle();
       expect(vi.mocked(post)).toHaveBeenCalledWith('/rate/title/6', { answer: 'not_seen' });
-      expect(target.querySelector('button.seen').textContent.trim()).toBe('Mark seen');
+      expect(target.querySelector('button.seen').textContent.trim()).toBe('Mark as watched');
       // The verdict survives the flip (§4.2) but is not what the person just said.
       expect(target.querySelector('[aria-pressed="true"][data-answer]')).toBeNull();
     } finally {

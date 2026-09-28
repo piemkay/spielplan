@@ -58,11 +58,12 @@ export async function signedIn(page, admin = ADMIN) {
   }
 }
 
-/** By test id: `.chip` is a shared pill class and is ambiguous off Home. */
+/** You (decision 527): the avatar opens a sheet holding what the account menu held. */
 export async function openAccountMenu(page) {
   await page.getByTestId('account-chip').click();
-  await expect(page.locator('.menu')).toBeVisible();
-  return page.locator('.menu');
+  const sheet = page.getByRole('dialog', { name: 'You' });
+  await expect(sheet).toBeVisible();
+  return sheet;
 }
 
 /** Home's kind switch (decision 474): Films, Series or Both, one position pressed. */
@@ -128,7 +129,7 @@ export async function playInJellyfin(request, itemId, fraction = 0.96, sessionId
 }
 
 /**
- * Open a title's detail panel from the catalog. The card is matched by name, because the search
+ * Open a title's detail sheet from the catalog. The card is matched by name, because the search
  * is debounced; Home shows Films only, so pass `['Films']` to leave that default alone.
  */
 export async function openTitle(page, name, { ensureKinds = ['Films', 'Series'] } = {}) {
@@ -138,7 +139,7 @@ export async function openTitle(page, name, { ensureKinds = ['Films', 'Series'] 
   await page.getByRole('searchbox', { name: 'Search titles' }).fill(name);
   const card = page.locator('.card-wrap', { hasText: name }).first();
   await card.click();
-  const panel = page.getByRole('complementary', { name: 'Title detail' });
+  const panel = page.getByRole('dialog', { name: 'Title detail' });
   await expect(panel.getByRole('heading', { name })).toBeVisible();
   return panel;
 }

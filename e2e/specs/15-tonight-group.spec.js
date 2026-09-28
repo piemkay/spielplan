@@ -48,9 +48,19 @@ test.describe('tonight together', () => {
     await expect(controls).toBeVisible();
   }
 
+  /** Ending is terminal, so it asks first in an action sheet (decision 527). */
+  async function endTheRoom(page) {
+    await page.getByTestId('tonight-end-room').click();
+    await page.getByRole('menuitem', { name: 'End the room' }).click();
+  }
+
   async function room({ join = 'code' } = {}) {
     await toDoor(a);
+    // The controls live in a sheet behind the door's summary row (decision 527).
+    await a.getByTestId('tonight-settings').click();
     await a.getByTestId('tonight-rewatches').check();
+    await a.getByTestId('tonight-settings-done').click();
+    await expect(a.getByRole('dialog', { name: "Tonight's settings" })).toHaveCount(0);
     await a.getByTestId('tonight-open').click();
     await expect(a.getByTestId('tonight-lobby')).toBeVisible();
     const code = (await a.getByTestId('tonight-room-code').innerText()).trim();
@@ -97,9 +107,8 @@ test.describe('tonight together', () => {
     const row = b.getByTestId(`tonight-room-${code}`);
     await expect(row).toBeVisible({ timeout: 25_000 });
 
-    await expect(row).toContainText(code);
-    await expect(row).toContainText('Film');
-    await expect(row).toContainText('min');
+    await expect(row).toContainText("'s room");
+    await expect(row).toContainText('Film up to');
 
     await b.getByTestId(`tonight-seat-${code}`).click();
     await expect(b.getByTestId('tonight-lobby')).toBeVisible();
@@ -175,14 +184,12 @@ test.describe('tonight together', () => {
       const beat = await page.getByTestId('tonight-beat').boundingBox();
       const winner = await page.getByTestId('tonight-winner').boundingBox();
       expect(beat.y).toBeLessThan(winner.y);
-      await expect(page.getByTestId('tonight-beat')).toHaveText('VOTES REVEALED TOGETHER');
+      await expect(page.getByTestId('tonight-beat')).toHaveText("Tonight's pick");
 
-      await expect(page.getByTestId('tonight-approval-share')).toContainText(
-        /\d+ of \d+ approved/
-      );
+      await expect(page.getByTestId('tonight-approval-share')).toContainText(/said yes/);
       await expect(page.getByTestId('tonight-match-lines').locator('li')).not.toHaveCount(0);
       await expect(page.getByTestId('tonight-fit-line')).toContainText(
-        /fits your \d+ min|runs \d+ min over/
+        /Fits your time|\d+ min over/
       );
       await expect(page.getByTestId('tonight-runners-up')).toBeVisible();
       await expect(page.getByTestId('tonight-play')).toBeVisible();
@@ -205,8 +212,7 @@ test.describe('tonight together', () => {
     await expect(b.getByTestId('tonight-room-code')).toHaveText(code);
     await expect(b).toHaveURL(/\/tonight$/);
     await expect(a.getByTestId('tonight-seats').locator('li')).toHaveCount(2, { timeout: 15_000 });
-    await a.getByTestId('tonight-end-room').click();
-    await a.getByTestId('tonight-end-room-confirm').click();
+    await endTheRoom(a);
   });
 
   test("each member rules out their own three, and one member's three leave the other theirs", async () => {
@@ -218,7 +224,7 @@ test.describe('tonight together', () => {
       await expect(a.getByTestId(`tonight-veto-${key}`)).toHaveAttribute('aria-pressed', 'true');
     }
     await expect(a.getByTestId('tonight-veto-sexual_violence')).toBeDisabled();
-    await expect(a.getByTestId('tonight-mood-caption')).toContainText('Neither pulls me tonight');
+    await expect(a.getByTestId('tonight-mood-caption')).toContainText('Neither tonight');
 
     await expect(b.getByTestId('tonight-others-vetoes')).toContainText('violence, horror, harrowing', {
       timeout: 15_000
@@ -231,10 +237,9 @@ test.describe('tonight together', () => {
 
     await toDoor(b);
     await expect(b.getByTestId(`tonight-room-${code}`)).toContainText(
-      'not tonight: violence, sexual violence, horror, harrowing',
+      'Not tonight: violence, sexual violence, horror, harrowing',
       { timeout: 15_000 }
     );
-    await a.getByTestId('tonight-end-room').click();
-    await a.getByTestId('tonight-end-room-confirm').click();
+    await endTheRoom(a);
   });
 });

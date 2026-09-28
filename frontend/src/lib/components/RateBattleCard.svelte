@@ -13,12 +13,16 @@
     pending = null,
     onDuel,
     onCorrect,
-    onSkip,
-    onDecisive
+    onDecisive,
+    onWhy
   } = $props();
 
   const left = $derived(card?.left ?? {});
   const right = $derived(card?.right ?? {});
+  const sides = $derived([
+    ['left', left],
+    ['right', right]
+  ]);
 
   /** Proposal 51's long-press: "equivalent to toggle-on plus tap", and only that. */
   const LONG_PRESS_MS = 500;
@@ -59,148 +63,148 @@
 </script>
 
 <article class="battle" data-testid="rate-battle-card" data-card-token={card?.token}>
-  <h2 class="question" data-testid="rate-battle-question">{PAIR_QUESTION}</h2>
-
-  <div class="pair">
-    <button
-      class="side"
-      class:picked={pending === `duel-${left.outcome}`}
-      data-testid="rate-battle-left"
-      aria-label="Pick {left.name ?? 'the left title'}"
-      aria-busy={pending === `duel-${left.outcome}`}
-      data-outcome={left.outcome}
-      data-title-id={left.id}
-      disabled={busy}
-      onpointerdown={() => press(left.outcome)}
-      onpointerup={release}
-      onpointerleave={release}
-      onpointercancel={release}
-      onclick={() => tap(left.outcome)}
-    >
-      <RatePoster title={left} />
-      <span class="data">{metaLine(left)}</span>
-    </button>
-
-    <span class="vs data" aria-hidden="true">vs</span>
-
-    <button
-      class="side"
-      class:picked={pending === `duel-${right.outcome}`}
-      data-testid="rate-battle-right"
-      aria-label="Pick {right.name ?? 'the right title'}"
-      aria-busy={pending === `duel-${right.outcome}`}
-      data-outcome={right.outcome}
-      data-title-id={right.id}
-      disabled={busy}
-      onpointerdown={() => press(right.outcome)}
-      onpointerup={release}
-      onpointerleave={release}
-      onpointercancel={release}
-      onclick={() => tap(right.outcome)}
-    >
-      <RatePoster title={right} />
-      <span class="data">{metaLine(right)}</span>
-    </button>
+  <div class="ask">
+    <h2 class="title-1" data-testid="rate-battle-question">{PAIR_QUESTION}</h2>
+    <p class="why">
+      <span data-testid="rate-battle-reason">{card?.reason ?? ''}</span>
+      <button class="hit why-link" data-testid="rate-why" onclick={onWhy}>Why these?</button>
+    </p>
+    <!-- A pair stands in for a single title only when nothing new is left to rate (§6.1). -->
+    {#if card?.substituted_for}
+      <p class="footnote" data-testid="rate-substituted">
+        Nothing new to rate right now — comparing titles you've already rated.
+      </p>
+    {/if}
   </div>
 
-  <p class="why" data-testid="rate-battle-reason">{card?.reason ?? ''}</p>
+  <div class="pair">
+    {#each sides as [side, title] (side)}
+      <button
+        class="side"
+        class:picked={pending === `duel-${title.outcome}`}
+        data-testid="rate-battle-{side}"
+        aria-label="Pick {title.name ?? `the ${side} title`}"
+        aria-busy={pending === `duel-${title.outcome}`}
+        data-outcome={title.outcome}
+        data-title-id={title.id}
+        disabled={busy}
+        onpointerdown={() => press(title.outcome)}
+        onpointerup={release}
+        onpointerleave={release}
+        onpointercancel={release}
+        onclick={() => tap(title.outcome)}
+      >
+        <span class="art"><RatePoster {title} showName={false} /></span>
+        <span class="name">{title.name ?? '—'}</span>
+        <span class="data">{metaLine(title)}</span>
+      </button>
+    {/each}
+  </div>
 
-  <!-- A battle stands in for a sweep only when nothing new is left to rate (§6.1's drained state). -->
-  {#if card?.substituted_for}
-    <p class="data" data-testid="rate-substituted">
-      Nothing new to rate right now - comparing titles you've already rated.
-    </p>
-  {/if}
-
-  <div class="strip" role="group" aria-label={PAIR_QUESTION}>
+  <div class="more">
     <button
-      class="cell"
-      class:picked={pending === `duel-${left.outcome}`}
-      data-testid="rate-strip-left"
-      disabled={busy}
-      onclick={() => onDuel(left.outcome)}
-    >left</button>
-    <button
-      class="cell tie"
+      class="btn-secondary tie"
       class:picked={pending === 'duel-TIE'}
       data-testid="rate-strip-tie"
       aria-busy={pending === 'duel-TIE'}
       disabled={busy}
       onclick={() => onDuel('TIE')}
-    >tie</button>
-    <button
-      class="cell"
-      class:picked={pending === `duel-${right.outcome}`}
-      data-testid="rate-strip-right"
-      disabled={busy}
-      onclick={() => onDuel(right.outcome)}
-    >right</button>
+    >About the same</button>
+
+    <label class="favourite">
+      <span class="words">
+        <span class="label" id="rate-decisive-label">{DECISIVE_LABEL}</span>
+        <span class="footnote" id="rate-decisive-why" data-testid="rate-decisive-why">{DECISIVE_COPY}</span>
+      </span>
+      <button
+        class="switch"
+        role="switch"
+        aria-checked={decisive}
+        aria-labelledby="rate-decisive-label"
+        aria-describedby="rate-decisive-why"
+        data-testid="rate-decisive"
+        disabled={busy}
+        onclick={() => onDecisive(!decisive)}><span class="knob"></span></button
+      >
+    </label>
   </div>
 
-  <div class="knobs">
-    <button
-      class="toggle"
-      role="switch"
-      aria-checked={decisive}
-      data-testid="rate-decisive"
-      disabled={busy}
-      onclick={() => onDecisive(!decisive)}
-    >
-      <span class="track" class:on={decisive}><span class="knob"></span></span>
-      <span class="label data">{DECISIVE_LABEL}</span>
-    </button>
-    <span class="why decisive-why" data-testid="rate-decisive-why">{DECISIVE_COPY}</span>
-    <button class="text" data-testid="rate-battle-skip" disabled={busy} onclick={onSkip}>
-      skip
-    </button>
-  </div>
-
-  <RateCorrections sides={card.corrections.sides} label={card.corrections.label} {busy} {onCorrect} />
+  <RateCorrections
+    sides={card.corrections.sides}
+    names={{ left: left.name, right: right.name }}
+    {busy}
+    {onCorrect}
+  />
 </article>
 
 <style>
   .battle {
     display: flex;
     flex-direction: column;
-    gap: 12px;
-    padding: 16px 16px 0;
-    background: var(--card);
-    border: 1px solid var(--line);
-    border-radius: var(--r-lg);
-    animation: fadeIn 0.15s ease;
+    gap: 24px;
+    animation: fadeIn 0.15s var(--ease);
   }
-  .question {
+  .ask {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+    text-align: center;
+  }
+  h2 {
+    text-wrap: balance;
+  }
+  p {
     margin: 0;
-    font-size: 17px;
-    font-weight: 600;
-    line-height: 1.25;
+  }
+  .why-link {
+    padding: 0;
+    border: none;
+    background: none;
+    color: var(--accent-text);
+    font: inherit;
   }
   .pair {
     display: grid;
-    grid-template-columns: 1fr auto 1fr;
-    align-items: center;
-    gap: 12px;
+    grid-template-columns: repeat(2, minmax(0, 160px));
+    justify-content: center;
+    gap: 16px;
   }
   .side {
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    align-items: center;
+    gap: 2px;
+    min-width: 0;
     padding: 0;
-    background: none;
     border: none;
-    cursor: pointer;
-    text-align: left;
-    color: inherit;
+    background: none;
+    color: var(--text);
+    text-align: center;
     -webkit-tap-highlight-color: transparent;
     touch-action: manipulation;
   }
-  .side:hover:not(:disabled) :global(.poster),
-  .side:focus-visible :global(.poster) {
-    border-color: var(--ember);
+  /* The width follows the screen's height too, so the pair and Tie fit above the tab bar. */
+  .art {
+    display: block;
+    width: min(100%, 20dvh);
+    aspect-ratio: 2 / 3;
+    margin: 0 auto 6px;
+    border-radius: var(--r-poster);
+    transition: transform 0.18s var(--ease), box-shadow 0.18s var(--ease);
+  }
+  .name {
+    font-size: var(--fs-body);
+    line-height: 22px;
+    font-weight: 600;
+    text-wrap: balance;
+  }
+  .side:hover:not(:disabled) .art,
+  .side:focus-visible .art {
     transform: translateY(-4px);
   }
-  .side:active:not(:disabled) :global(.poster) {
-    border-color: var(--ember-lift);
+  .side:active:not(:disabled) .art {
+    transform: scale(0.97);
   }
   .side:disabled {
     opacity: 0.5;
@@ -209,166 +213,59 @@
   .side.picked:disabled {
     opacity: 1;
   }
-  .side.picked :global(.poster) {
-    border-color: var(--ember);
+  .side.picked .art {
+    box-shadow: 0 0 0 2px var(--text);
   }
-  .vs {
-    letter-spacing: 0.12em;
-  }
-  .why {
-    margin: 0;
-  }
-  .strip {
+  .more {
     display: flex;
-    gap: 6px;
+    flex-direction: column;
+    gap: 12px;
   }
-  .cell {
-    flex: 1;
-    min-height: var(--touch);
-    padding: 14px 8px;
-    border-radius: var(--r-sm);
-    border: 1px solid var(--line-2);
-    background: var(--card-raised);
-    color: var(--ink-2);
-    font-family: var(--mono);
-    font-size: 13px;
-    cursor: pointer;
-    transition: border-color 0.12s ease, color 0.12s ease;
+  .tie {
+    width: 100%;
   }
-  .cell.tie {
-    flex: 0 0 150px;
-    opacity: 0.82;
-  }
-  .cell:hover:not(:disabled),
-  .cell:focus-visible {
-    border-color: var(--ember);
-    color: var(--ink);
-  }
-  .cell:disabled {
-    opacity: 0.45;
-    cursor: default;
-  }
-  .cell.picked:disabled {
+  .tie.picked:disabled {
     opacity: 1;
-    border-color: var(--ember);
-    background: var(--ember-wash);
-    color: var(--ink);
+    background: var(--text);
+    color: var(--bg);
   }
-  .knobs {
+  .favourite {
+    min-height: 52px;
     display: flex;
     align-items: center;
     gap: 12px;
-    flex-wrap: wrap;
   }
-  .toggle {
-    display: flex;
-    align-items: center;
-    gap: 9px;
-    background: none;
-    border: none;
-    padding: 6px 0;
-    cursor: pointer;
-  }
-  .track {
-    width: 26px;
-    height: 15px;
-    border-radius: var(--r-pill);
-    background: rgba(255, 255, 255, 0.14);
-    position: relative;
-    transition: background 0.12s ease;
-    flex: none;
-  }
-  .track.on {
-    background: var(--ember);
-  }
-  .knob {
-    position: absolute;
-    top: 2px;
-    left: 2px;
-    width: 11px;
-    height: 11px;
-    border-radius: var(--r-pill);
-    background: var(--ink);
-    transition: transform 0.12s ease;
-  }
-  .track.on .knob {
-    transform: translateX(11px);
-    background: var(--ember-ink);
-  }
-  .toggle .label {
-    color: var(--ink-2);
-  }
-  .decisive-why {
+  .words {
     flex: 1;
-    min-width: 200px;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
   }
-  .text {
-    background: none;
-    border: none;
-    padding: 6px 0;
-    color: var(--ink-4);
-    font-family: var(--mono);
-    font-size: 11.5px;
-    text-decoration: underline dotted;
-    text-underline-offset: 4px;
-    cursor: pointer;
-  }
-  .text:hover:not(:disabled) {
-    color: var(--ink-2);
+  .label {
+    font-size: var(--fs-body);
+    line-height: 22px;
   }
 
-  @media (max-width: 720px) {
+  /* A short phone screen: tighter, so the pair and its answers stay in view. */
+  @media (max-height: 700px) {
     .battle {
-      padding: 12px 12px 0;
-      gap: 8px;
-    }
-    .pair {
-      gap: 8px;
-    }
-    .question {
-      font-size: 15px;
-    }
-    .vs {
-      display: none;
-    }
-    /* Phone: posters capped so the pair, the strip and the toggle row fit above the bottom bar. */
-    .pair {
-      grid-template-columns: 1fr 1fr;
-      width: 100%;
-      max-width: 200px;
-      margin: 0 auto;
-    }
-    .strip {
-      order: 1;
-    }
-    .knobs {
-      order: 2;
-      gap: 0 12px;
-    }
-    .battle > .why,
-    .battle > .data {
-      order: 3;
-    }
-    .battle > :global(.corrections) {
-      order: 4;
-    }
-    .cell {
-      border-radius: 2px;
-    }
-    .cell.tie {
-      flex: 0 0 96px;
-    }
-    .decisive-why {
-      order: 3;
-      flex: 1 0 100%;
-      min-width: 0;
+      gap: 16px;
     }
   }
 
-  /* design.css's coarse floor sets height only, and `skip` would be 25px wide. */
-  @media (pointer: coarse) {
-    .text {
-      min-width: var(--touch);
+  @media (min-width: 981px) {
+    .pair {
+      grid-template-columns: repeat(2, minmax(0, 220px));
+      gap: 32px;
+    }
+    .art {
+      width: min(100%, 27dvh);
+    }
+    .more,
+    .battle > :global(.corrections) {
+      width: 100%;
+      max-width: 472px;
+      margin: 0 auto;
     }
   }
 </style>

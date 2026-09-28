@@ -154,11 +154,11 @@ async def test_a_member_receives_no_admin_entry_in_its_navigation(app):
     assert "admin" not in str(payload["nav"])
 
 
-async def test_an_admin_receives_the_admin_entries(app):
+async def test_an_admin_receives_one_admin_entry_that_opens_on_overview(app):
+    """Decision 527: Admin opens on Overview, which links the setup wizard itself."""
     admin, _member = await household(app)
     payload = (await admin.get("/api/auth/me")).json()
-    keys = {entry["key"] for entry in payload["nav"]["account"]}
-    assert {"admin", "setup"} <= keys
+    assert payload["nav"]["account"][1:] == [{"key": "admin", "href": "/admin", "label": "Admin"}]
 
 
 async def test_both_roles_see_every_shipped_surface(app):

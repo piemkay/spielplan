@@ -33,6 +33,7 @@ class Item:
     assigned_tier: int | None = None
     # Holds the model tier inside the verdict's band (decision 508).
     verdict: int | None = None
+    year: int | None = None
 
 
 @dataclass(frozen=True)
@@ -45,11 +46,12 @@ class Entry:
     assigned_tier: int | None   # where the person put it, if they have
     tier: int                   # where the board renders it — the one above that exists
     straddle: int | None        # the adjacent tier the posterior also reaches
-    straddle_badge: str | None  # "A/S" from `model_tier`, suppressed while a tension badge holds
+    straddle_badge: str | None  # "A or S?" from `model_tier`, suppressed while a tension badge holds
     above: str | None
     below: str | None
     badge: str
     tension: str | None
+    year: int | None = None
 
     def public(self) -> dict[str, object]:
         """The projection that may reach a client: no `s`/`sigma`, which decision 117 gates."""
@@ -62,6 +64,7 @@ class Entry:
             "straddle_badge": self.straddle_badge,
             "badge": self.badge,
             "tension": self.tension,
+            "year": self.year,
         }
 
 
@@ -70,6 +73,11 @@ class Tier:
     index: int                  # index into the tier set, ascending (0 = worst)
     label: str
     entries: tuple[Entry, ...]
+    verdict: str                # the verdict class it stands for, in words (decision 508)
+
+
+# Indexed by verdict class, the order of `model.verdict_tiers`' rows.
+VERDICT_WORDS = ("Disliked", "Fine", "Liked")
 
 
 def straddles(item: Item, *, cuts: np.ndarray, hp: Hyperparams) -> int | None:
@@ -115,48 +123,9 @@ def tension_of(
     if high > lower and upper > low:          # the intervals meet: not tension
         return None
     return (
-        f"you put it in {tier_set[int(item.assigned_tier)]} — "
+        f"You put it in {tier_set[int(item.assigned_tier)]} — "
         f"your other answers still point to {tier_set[int(model_tier)]}"
     )
-
-
-def why_line(
-    *,
-    rated: int,
-    compared: int,
-    placed_by_you: int,
-    fitting: bool,
-    tier_set: Sequence[str],
-) -> str:
-    """§6.8's one-line why for the board (decision 486): the counts, then what the letters mean.
-
-    `compared` includes the held-out tenth, so no single answer is singled out (§13).
-    """
-    if fitting and rated == 0:
-        return "tiers are still being fitted"
-    counts = f"{rated} rated · {compared} compared"
-    if placed_by_you:
-        counts = f"{counts} · {placed_by_you} placed by you"
-    return f"{counts} · {_band_words(tier_set)}"
-
-
-def _band_words(tier_set: Sequence[str]) -> str:
-    """Decision 508's rule in the person's own letters, best-first like the board."""
-    labels = list(tier_set)
-    bands = model.verdict_tiers(len(labels))
-    (d_low, d_high), (f_low, f_high), (l_low, l_high) = (tuple(int(x) for x in b) for b in bands)
-    liked = f"liked in {labels[l_low]}" if l_low == l_high else f"liked from {labels[l_low]} up"
-    fine = (
-        f"fine in {labels[f_low]}"
-        if f_low == f_high
-        else f"fine in {labels[f_low]} to {labels[f_high]}"
-    )
-    disliked = (
-        f"disliked in {labels[d_high]}"
-        if d_low == d_high
-        else f"disliked from {labels[d_high]} down"
-    )
-    return f"{liked}, {fine}, {disliked}"
 
 
 def _badge(label: str, above: str | None, below: str | None) -> str:
@@ -218,7 +187,7 @@ def build(
             # Both halves of the chip are the posterior's (`from_model`), never the rendered
             # drop tier. Tension suppresses the chip but not eligibility (proposal 71).
             badge = (
-                f"{labels[from_model]}/{labels[reached]}"
+                f"{labels[from_model]} or {labels[reached]}?"
                 if reached is not None and reached != from_model and tension is None
                 else None
             )
@@ -237,12 +206,20 @@ def build(
                     below=below,
                     badge=_badge(labels[index], above, below),
                     tension=tension,
+                    year=item.year,
                 )
             )
-        tiers.append(Tier(index=index, label=labels[index], entries=tuple(entries)))
+        tiers.append(
+            Tier(
+                index=index,
+                label=labels[index],
+                entries=tuple(entries),
+                verdict=VERDICT_WORDS[model.verdict_class_of_tier(index, len(labels))],
+            )
+        )
 
     # Tiers are stored ascending (F … S); the board renders best-first (proposal 82).
     return tuple(reversed(tiers))
 
 
-__all__ = ["Entry", "Item", "Tier", "build", "straddles", "tension_of", "why_line"]
+__all__ = ["VERDICT_WORDS", "Entry", "Item", "Tier", "build", "straddles", "tension_of"]

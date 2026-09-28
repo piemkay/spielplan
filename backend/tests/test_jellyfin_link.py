@@ -429,7 +429,7 @@ async def test_one_jellyfin_user_cannot_be_linked_to_two_accounts(admin):
         json={"jellyfin_user_id": PATRICK_JF},
     )
     assert second.status_code == 409
-    assert "one-to-one" in second.json()["detail"]
+    assert "already linked to someone else" in second.json()["detail"]
     assert (await _users(client))["jenny"]["jellyfin_user_id"] is None
 
 

@@ -93,6 +93,20 @@ def test_the_board_renders_best_first_and_keeps_empty_tiers():
     assert sum(1 for t in tiers if not t.entries) == len(TIER_SET) - 2
 
 
+def test_each_section_head_names_the_verdict_its_tier_stands_for():
+    """Decision 508's bands in the words the section head shows, on any tier set."""
+    tiers = board.build([], cuts=model.initial_cutpoints(7), tier_set=TIER_SET, hp=DEFAULTS)
+    assert [t.verdict for t in tiers] == ["Liked"] * 3 + ["Fine"] + ["Disliked"] * 3
+    three = board.build([], cuts=np.array([-1.0, 1.0]), tier_set=("meh", "ok", "great"), hp=DEFAULTS)
+    assert [t.verdict for t in three] == ["Liked", "Fine", "Disliked"]
+
+
+def test_a_row_carries_its_year():
+    heat = board.Item(title_id=1, name="Heat", s=0.0, sigma=0.01, year=1995)
+    tiers = board.build([heat], cuts=model.initial_cutpoints(7), tier_set=TIER_SET, hp=DEFAULTS)
+    assert by_id(tiers)[1].public()["year"] == 1995
+
+
 def test_within_a_tier_the_board_is_ordered_by_the_ledger():
     tiers = board.build(items([0.10, 0.30, 0.20]), cuts=np.array([-9.0, 9.0]),
                         tier_set=("low", "mid", "high"), hp=DEFAULTS)
@@ -271,8 +285,8 @@ def test_the_top_and_bottom_tiers_never_straddle_into_themselves():
     )
     top, bottom = by_id(tiers)[1], by_id(tiers)[2]
     assert top.tier == len(TIER_SET) - 1 and bottom.tier == 0
-    assert top.straddle_badge == "S/A+"
-    assert bottom.straddle_badge == "F/D"
+    assert top.straddle_badge == "S or A+?"
+    assert bottom.straddle_badge == "F or D?"
 
 
 def test_a_straddle_badge_never_repeats_the_titles_own_tier():
@@ -288,7 +302,7 @@ def test_a_straddle_badge_never_repeats_the_titles_own_tier():
         for entry in entries.values():
             assert entry.straddle != entry.model_tier, "never the tier it was computed against"
             if entry.straddle_badge is not None:
-                head, _, tail = entry.straddle_badge.partition("/")
+                head, _, tail = entry.straddle_badge.removesuffix("?").partition(" or ")
                 assert head != tail, f"a badge naming one tier twice: {entry.straddle_badge}"
                 assert head == TIER_SET[entry.model_tier], (
                     "the badge leads with the posterior's own tier, not the rendered one"
@@ -306,7 +320,7 @@ def test_the_straddle_chip_is_built_from_the_posteriors_own_placement():
     assert entry.tier == 5, "§6.3: it stays where it was put"
     assert entry.model_tier == 4 and entry.straddle == 5
     assert entry.tension is None, "the bands meet, so the straddle chip is the one on screen"
-    assert entry.straddle_badge == "A/A+"
+    assert entry.straddle_badge == "A or A+?"
 
 
 def test_a_queue_eligible_title_dropped_into_the_tier_it_reaches_still_wears_a_chip():
@@ -318,7 +332,7 @@ def test_a_queue_eligible_title_dropped_into_the_tier_it_reaches_still_wears_a_c
     ))[1]
     assert entry.straddle is not None, "still queue-eligible"
     assert entry.tier == 3 and entry.tension is None
-    assert entry.straddle_badge == "A/A+"
+    assert entry.straddle_badge == "A or A+?"
 
 
 def test_a_tier_outside_the_eighty_percent_interval_is_tension():
@@ -355,27 +369,8 @@ def test_a_tension_badge_names_both_tiers():
     entry = by_id(tiers)[1]
     assert entry.model_tier == 2 and entry.tier == 6
     # Member register (decision 486): no model nouns on a chip every member reads.
-    assert entry.tension == "you put it in S — your other answers still point to C"
+    assert entry.tension == "You put it in S — your other answers still point to C"
     assert "ledger" not in entry.tension
-
-
-def test_the_why_line_speaks_the_member_register_and_keeps_decision_209s_window():
-    """The cutpoints learn from `tier_edit` alone, so "learned cutpoints, refit nightly" was false.
-    Decision 209's window keeps its own words; decision 508 adds what the letters mean."""
-    assert board.why_line(
-        rated=0, compared=0, placed_by_you=0, fitting=True, tier_set=TIER_SET
-    ) == "tiers are still being fitted"
-    fresh = board.why_line(rated=59, compared=12, placed_by_you=0, fitting=False, tier_set=TIER_SET)
-    assert fresh == (
-        "59 rated · 12 compared · liked from A up, fine in B, disliked from C down"
-    )
-    moved = board.why_line(rated=59, compared=12, placed_by_you=3, fitting=True, tier_set=TIER_SET)
-    assert moved == (
-        "59 rated · 12 compared · 3 placed by you · liked from A up, fine in B, disliked from C down"
-    ), "a refit owed over a board that already reads keeps its counts (decision 11's window)"
-    for line in (fresh, moved):
-        for noun in ("cutpoint", "refit", "learned", "ledger", "nightly", "overnight"):
-            assert noun not in line, line
 
 
 def test_the_board_never_moves_a_title_out_of_the_tier_it_was_dropped_in():
@@ -458,19 +453,9 @@ def test_a_rated_title_renders_inside_the_tiers_its_verdict_names():
     tiers = {t.label: t for t in board.build(rows, cuts=cuts, tier_set=TIER_SET, hp=DEFAULTS)}
     placed = {e.name: (label, e) for label, t in tiers.items() for e in t.entries}
     assert placed["La La Land"][0] == "C" and placed["La La Land"][1].straddle == 3
-    assert placed["La La Land"][1].straddle_badge == "C/B"
+    assert placed["La La Land"][1].straddle_badge == "C or B?"
     assert [e.name for e in tiers["C"].entries] == ["La La Land", "Twilight"]
     assert placed["Psycho"][0] == "B" and placed["Heat"][0] == "A"
     assert placed["Saw"][0] == "A+" and placed["Saw"][1].model_tier == 4, "a drop is not held"
     eligible = [i.title_id for i in rows if board.straddles(i, cuts=cuts, hp=DEFAULTS) is not None]
     assert 1 in eligible, "the held title's chip and its queue eligibility are one predicate"
-
-
-def test_the_why_line_names_the_verdict_tiers_in_the_persons_own_letters():
-    assert board.why_line(
-        rated=3, compared=0, placed_by_you=0, fitting=False, tier_set=("meh", "ok", "great")
-    ) == "3 rated · 0 compared · liked in great, fine in ok, disliked in meh"
-    five = ("1", "2", "3", "4", "5")
-    assert board.why_line(rated=3, compared=0, placed_by_you=0, fitting=False, tier_set=five) == (
-        "3 rated · 0 compared · liked from 4 up, fine in 2 to 3, disliked in 1"
-    )

@@ -10,17 +10,15 @@ import {
 } from '../helpers.js';
 
 /**
- * Admin > Users, end to end (§6.6, §3.1, §3.2; decisions 164, 166, 170). In a browser because
- * §6.6's surface *enforces* the floors, and a one-time password shown exactly once is a claim
- * about a screen and a reload. One admin page for the file, plus contexts for the others.
+ * Admin > People, end to end (§6.6, §3.1, §3.2; decisions 164, 166, 170, 527). In a browser
+ * because §6.6's surface *enforces* the floors, and a one-time password shown exactly once is a
+ * claim about a screen and a reload. One admin page for the file, plus contexts for the others.
  */
 test.describe.configure({ mode: 'serial' });
 
-/** §6.6's roster line: role, passkey count, PIN state, Jellyfin link, active state. */
-const FACTS = new RegExp(
-  '^(admin|member) · \\d+ passkeys? · PIN (set|unset)' +
-    ' · Jellyfin (unlinked|linked|needs sign-in) · (active|disabled)$'
-);
+/** A roster row's two plain lines (§6.6): role, state and Jellyfin, then passkeys and PIN. */
+const FACTS = /^(Admin|Member)( · you)?( · disabled)?( · (linked to Jellyfin|Jellyfin needs sign-in))?$/;
+const SIGN_IN = /^(No passkey|1 passkey|\d+ passkeys) · (PIN set|no PIN)$/;
 
 test.describe('users, roles and the account surface', () => {
   /** @type {import('@playwright/test').Page} */
@@ -46,22 +44,30 @@ test.describe('users, roles and the account surface', () => {
     for (const context of contexts) await context.close();
   });
 
-  /** Open one roster row's editor, by account name. */
-  async function openRow(name) {
+  /** Open one person's page from the roster, by account name. */
+  async function openPerson(name) {
+    await admin.goto('/admin/people');
     const row = admin.getByTestId('user-row').filter({ hasText: name }).first();
     await expect(row).toBeVisible();
-    if ((await row.getByRole('button', { expanded: true }).count()) === 0) {
-      await row.locator('button').first().click();
-    }
-    return row;
+    await row.click();
+    await expect(admin.getByRole('heading', { level: 1, name, exact: true })).toBeVisible();
+  }
+
+  /** A destructive action asks first (decision 527): the row opens a question, this answers it. */
+  async function confirm(label) {
+    await admin.getByRole('menuitem', { name: label, exact: true }).click();
   }
 
   // --- 1 ------------------------------------------------------------------------------------
 
-  test('the Users tab is a link and the roster carries every column 6.6 names', async () => {
-    await admin.goto('/admin/data');
-    await admin.getByRole('link', { name: 'Users' }).click();
-    await expect(admin.getByRole('heading', { name: 'Users' })).toBeVisible();
+  test('People is a section of Admin and the roster names each account plainly', async () => {
+    await admin.goto('/admin');
+    await admin
+      .getByRole('navigation', { name: 'Admin', exact: true })
+      .getByRole('link', { name: 'People', exact: true })
+      .click();
+    await expect(admin.getByRole('heading', { level: 1, name: 'People' })).toBeVisible();
+    await expect(admin).toHaveURL(/\/admin\/people$/);
 
     await expect(admin.getByTestId('users-roster')).toBeVisible();
     await expect(admin.getByTestId('user-row')).not.toHaveCount(0);
@@ -71,18 +77,26 @@ test.describe('users, roles and the account surface', () => {
     for (const facts of await admin.locator('[data-user-facts]').allInnerTexts()) {
       expect(facts.replace(/\s+/g, ' ').trim()).toMatch(FACTS);
     }
+    const signIns = await admin.locator('[data-user-signin]').allInnerTexts();
+    expect(signIns).toHaveLength(await admin.getByTestId('user-row').count());
+    for (const line of signIns) expect(line.replace(/\s+/g, ' ').trim()).toMatch(SIGN_IN);
+
+    // The old address lands here.
+    await admin.goto('/admin/users');
+    await expect(admin).toHaveURL(/\/admin\/people$/);
   });
 
   // --- 2 ------------------------------------------------------------------------------------
 
   test('adding a member shows its one-time password once and nowhere afterwards', async () => {
-    await admin.goto('/admin/users');
-    await admin.getByLabel('New account name').fill(third.name);
-    await admin.getByRole('button', { name: 'Create' }).click();
+    await admin.goto('/admin/people');
+    await admin.getByLabel("New person's name").fill(third.name);
+    await admin.getByRole('button', { name: 'Add a person' }).click();
 
     const card = admin.getByTestId('user-otp');
     await expect(card).toContainText(third.name);
-    third.otp = (await card.locator('code').innerText()).trim();
+    await expect(card.getByRole('button', { name: 'Copy' })).toBeVisible();
+    third.otp = (await card.getByTestId('user-otp-value').innerText()).trim();
     expect(third.otp.length).toBeGreaterThan(8);
 
     // §6.6's third floor: shown once. A reload asks a second time.
@@ -112,7 +126,7 @@ test.describe('users, roles and the account surface', () => {
     // §3.1: "the account is locked to a password change at first login".
     await expect(memberPage.getByRole('heading', { name: 'Choose a password' })).toBeVisible();
     // `exact`: the page's prose names the one-time password too.
-    await expect(memberPage.getByText('ONE-TIME PASSWORD', { exact: true })).toBeVisible();
+    await expect(memberPage.getByText('One-time password', { exact: true })).toBeVisible();
     const fields = memberPage.locator('input[type=password]');
     await fields.nth(0).fill(third.otp);
     await fields.nth(1).fill(third.password);
@@ -135,11 +149,11 @@ test.describe('users, roles and the account surface', () => {
   test('a password reset reissues, re-arms the lock and ends the sessions', async ({
     request
   }) => {
-    await admin.goto('/admin/users');
-    await openRow(third.name);
-    await admin.getByRole('button', { name: 'Reset password' }).click();
+    await openPerson(third.name);
+    await admin.getByRole('button', { name: /^Reset password/ }).click();
+    await confirm('Reset password');
 
-    const reissued = (await admin.getByTestId('user-otp').locator('code').innerText()).trim();
+    const reissued = (await admin.getByTestId('user-otp-value').innerText()).trim();
     expect(reissued).not.toBe(third.otp);
 
     const stale = await request.post('/api/auth/login', {
@@ -168,12 +182,10 @@ test.describe('users, roles and the account surface', () => {
     });
     expect(back.ok(), 'the member is signed in again, so disable has a session to end').toBeTruthy();
 
-    await admin.goto('/admin/users');
-    await openRow(third.name);
-    await admin.getByRole('button', { name: 'Disable' }).click();
-    await expect(
-      admin.getByTestId('user-row').filter({ hasText: third.name }).first()
-    ).toContainText('disabled');
+    await openPerson(third.name);
+    await admin.getByRole('button', { name: 'Disable account' }).click();
+    await confirm('Disable account');
+    await expect(admin.getByRole('button', { name: 'Turn account back on' })).toBeVisible();
 
     expect((await memberPage.request.get('/api/auth/me')).status()).toBe(401);
     const refused = await request.post('/api/auth/login', {
@@ -182,9 +194,10 @@ test.describe('users, roles and the account surface', () => {
     });
     expect(refused.status(), 'a disabled account cannot sign in either').toBe(401);
 
-    await openRow(third.name);
-    await admin.getByRole('button', { name: 'Delete', exact: true }).click();
-    await admin.getByRole('button', { name: 'Confirm delete' }).click();
+    await admin.getByRole('button', { name: `Delete ${third.name}` }).click();
+    await confirm(`Delete ${third.name}`);
+    await expect(admin).toHaveURL(/\/admin\/people$/);
+    await expect(admin.getByTestId('users-roster')).toBeVisible();
     await expect(admin.getByTestId('user-row').filter({ hasText: third.name })).toHaveCount(0);
   });
 
@@ -255,7 +268,6 @@ test.describe('users, roles and the account surface', () => {
   // --- 7 ------------------------------------------------------------------------------------
 
   test('the last active admin cannot be demoted, disabled or deleted', async () => {
-    await admin.goto('/admin/users');
     const me = (await (await admin.request.get('/api/auth/me')).json()).id;
 
     const attempts = [
@@ -266,7 +278,7 @@ test.describe('users, roles and the account surface', () => {
     for (const [method, url, data] of attempts) {
       const refused = await admin.request.fetch(url, { method, data, failOnStatusCode: false });
       expect(refused.status(), `${method} ${url}`).toBe(409);
-      expect((await refused.json()).detail).toContain('the last active admin cannot be');
+      expect((await refused.json()).detail).toContain("The last active admin can't be");
     }
 
     const roster = await (await admin.request.get('/api/admin/users')).json();
@@ -274,16 +286,14 @@ test.describe('users, roles and the account surface', () => {
     expect([still.role, still.is_active]).toEqual(['admin', true]);
 
     // §6.6 enforces the floors on the surface too.
-    await admin.reload();
-    await openRow(ADMIN.name);
+    await openPerson(ADMIN.name);
     for (const action of ['demote', 'delete', 'disable', 'reset-password', 'reset-pin']) {
       await expect(admin.locator(`[data-floor="${action}"]`)).toBeVisible();
     }
-    // Demote is the role `<select>`, not a button, so it is asserted by name.
-    await expect(admin.getByLabel(`Role for ${ADMIN.name}`, { exact: true })).toBeDisabled();
-    await expect(admin.getByRole('button', { name: 'Disable', exact: true })).toBeDisabled();
-    await expect(admin.getByRole('button', { name: 'Delete', exact: true })).toBeDisabled();
-    await expect(admin.getByRole('button', { name: 'Reset password' })).toBeDisabled();
+    await expect(admin.getByRole('button', { name: `Role for ${ADMIN.name}` })).toBeDisabled();
+    await expect(admin.getByRole('button', { name: 'Disable account' })).toBeDisabled();
+    await expect(admin.getByRole('button', { name: `Delete ${ADMIN.name}` })).toBeDisabled();
+    await expect(admin.getByRole('button', { name: /^Reset password/ })).toBeDisabled();
   });
 
   // --- 8 ------------------------------------------------------------------------------------
@@ -359,7 +369,7 @@ test.describe('users, roles and the account surface', () => {
 
   // --- 9 ------------------------------------------------------------------------------------
 
-  test('the row editor lists a passkey and revokes that one credential', async ({
+  test("a person's page lists a passkey and revokes that one credential", async ({
     browser,
     baseURL,
     browserName
@@ -386,16 +396,16 @@ test.describe('users, roles and the account surface', () => {
     await device.getByRole('button', { name: 'Add a passkey' }).click();
     await expect(device.getByText('lost-phone')).toBeVisible();
 
-    await admin.goto('/admin/users');
-    const row = await openRow(member.name);
-    const credential = row.getByTestId('user-passkey');
+    await openPerson(member.name);
+    const credential = admin.getByTestId('user-passkey');
     await expect(credential).toHaveCount(1);
     await expect(credential).toContainText('lost-phone');
     await credential.getByRole('button', { name: 'Revoke' }).click();
+    await confirm('Revoke passkey');
 
     // The count comes from the roster, re-read: the server agreeing.
-    await expect(row.locator('[data-user-facts]')).toContainText('0 passkeys');
-    await expect(row.locator('[data-empty="passkeys"]')).toBeVisible();
+    await expect(admin.getByTestId('user-passkeys')).toContainText('None');
+    await expect(admin.getByTestId('user-passkey')).toHaveCount(0);
 
     await device.goto('/account');
     await expect(device.locator('[data-empty="passkeys"]')).toBeVisible();
@@ -403,26 +413,32 @@ test.describe('users, roles and the account surface', () => {
 
   // --- 10 -----------------------------------------------------------------------------------
 
-  test('the row editor links, re-links and unlinks Jellyfin', async () => {
-    // §6.6: "Jellyfin re-link / unlink" in the row editor. 08-jellyfin left both fake users free.
+  test("a person's page links, re-links and unlinks Jellyfin", async () => {
+    // §6.6: "Jellyfin re-link / unlink". 08-jellyfin left both fake users free.
     const member = await createMember(admin, 'jellyfin-link');
-    await admin.goto('/admin/users');
-    const row = await openRow(member.name);
-    const jellyfin = row.getByTestId('user-jellyfin');
-    await jellyfin.getByRole('combobox').selectOption({ label: 'patrick' });
-    await jellyfin.getByRole('button', { name: 'Link', exact: true }).click();
+    await openPerson(member.name);
+    const jellyfin = admin.getByTestId('user-jellyfin');
+    const state = jellyfin.locator('[data-link-state]');
+    const sheet = admin.getByRole('dialog', { name: 'Link to Jellyfin' });
 
+    await jellyfin.getByRole('button', { name: 'Link to Jellyfin' }).click();
+    await sheet.getByRole('combobox').selectOption({ label: 'patrick' });
+    await sheet.getByRole('button', { name: 'Link', exact: true }).click();
     // §7.3: without a sign-in the link cannot write Played state.
-    await expect(row.locator('[data-user-facts]')).toContainText('Jellyfin needs sign-in');
+    await expect(state).toHaveAttribute('data-link-state', 'needs_relink');
+    await expect(jellyfin.locator('[data-jellyfin="no-token"]')).toBeVisible();
 
-    await jellyfin.getByPlaceholder('jellyfin username').fill('patrick');
-    await jellyfin.getByPlaceholder('password (once)').fill(JELLYFIN.password);
-    await jellyfin.getByRole('button', { name: 'Re-link' }).click();
-    await expect(row.locator('[data-user-facts]')).toContainText('Jellyfin linked');
+    await jellyfin.getByRole('button', { name: 'Change link' }).click();
+    await sheet.getByRole('combobox').selectOption({ label: 'patrick' });
+    await sheet.getByPlaceholder('Their Jellyfin username').fill('patrick');
+    await sheet.getByPlaceholder('Their Jellyfin password').fill(JELLYFIN.password);
+    await sheet.getByRole('button', { name: 'Link', exact: true }).click();
+    await expect(state).toHaveAttribute('data-link-state', 'linked');
     await expect(jellyfin.locator('[data-jellyfin="token"]')).toBeVisible();
 
-    // §3.3: the link is optional.
+    // §3.3: the link is optional, and unlinking asks first.
     await jellyfin.getByRole('button', { name: 'Unlink' }).click();
-    await expect(row.locator('[data-user-facts]')).toContainText('Jellyfin unlinked');
+    await confirm('Unlink');
+    await expect(state).toHaveAttribute('data-link-state', 'unlinked');
   });
 });

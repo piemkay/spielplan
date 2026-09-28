@@ -121,10 +121,10 @@
 {/if}
 
 <style>
-  /* Clear the installed app's status bar (viewport-fit=cover); the compact sheet needs none. */
+  /* Below the top row, so You stays in reach while the log is open. */
   .rail {
     position: fixed;
-    top: calc(54px + env(safe-area-inset-top));
+    top: calc(env(safe-area-inset-top) + 64px);
     right: 0;
     bottom: 0;
     width: min(430px, 100%);
@@ -132,7 +132,7 @@
     background: var(--ground-raised);
     border-left: 1px solid var(--line-3);
     padding: 16px 18px 40px;
-    z-index: 55;
+    z-index: 60;
     animation: fadeIn 0.12s ease;
   }
   header {

@@ -338,11 +338,42 @@ describe('the mounted queue', () => {
     await flush(260);
     try {
       const room = [...target.querySelectorAll('.figures div')]
-        .find((d) => d.querySelector('dt').textContent === 'left this month')
+        .find((d) => d.querySelector('dt').textContent === 'Left this month')
         .querySelector('dd').textContent;
       expect(room).toBe('$3.75 of $5.00');
       expect(target.textContent).not.toContain('no cap');
       expect(launchButton().disabled, 'no quote in hand, so nothing arms Launch').toBe(true);
+    } finally {
+      unmount(app);
+    }
+  });
+
+  it('names a running row by its plain step, the verbatim under Technical details', async () => {
+    const running = {
+      ...items[0],
+      status: 'running',
+      board: { stage: 6, status: 'running', reason: 'launched in flywheel batch 5' }
+    };
+    vi.mocked(get).mockImplementation(async (path) =>
+      path === '/admin/flywheel'
+        ? envelope({ items: [running], stages: [{ number: 6, name: 'dna extract' }] })
+        : quote()
+    );
+    const app = mount(FlywheelQueue, { target, props: {} });
+    await flush(260);
+    try {
+      const row = target.querySelector('[data-testid="flywheel-row"]');
+      const plain = row.querySelector('[data-testid="flywheel-board"]').textContent;
+      expect(plain).toContain('Running');
+      expect(plain).toContain("Read what it's like");
+      const details = row.querySelector('details');
+      expect(details.querySelector('summary').textContent).toBe('Technical details');
+      expect(details.textContent).toContain('stage 6');
+      expect(details.textContent).toContain('launched in flywheel batch 5');
+      const outside = row.cloneNode(true);
+      outside.querySelector('details').remove();
+      expect(outside.textContent).not.toContain('stage 6');
+      expect(outside.textContent).not.toContain('launched in flywheel batch 5');
     } finally {
       unmount(app);
     }

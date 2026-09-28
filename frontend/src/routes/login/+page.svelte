@@ -5,11 +5,13 @@
   import { post } from '$lib/api.js';
   import { refreshUser, setUser } from '$lib/session.svelte.js';
   import { signInWithPasskey, supported } from '$lib/passkeys.js';
+  import FieldGroup from '$lib/components/FieldGroup.svelte';
 
   let name = $state('');
   let password = $state('');
-  let error = $state('');
-  let busy = $state(false);
+  // Which way in failed, so the reason sits under the control that was used.
+  let error = $state({ at: '', text: '' });
+  let busy = $state('');
 
   const canPasskey = $derived(supported());
 
@@ -21,111 +23,194 @@
   }
 
   async function passkey() {
-    error = '';
-    busy = true;
+    error = { at: '', text: '' };
+    busy = 'passkey';
     try {
       await land(await signInWithPasskey(name));
     } catch (err) {
       // A dismissed prompt is not a failure worth shouting about; a rejected assertion is.
-      error = err?.name === 'NotAllowedError' ? '' : err.message || String(err);
+      if (err?.name !== 'NotAllowedError') error = { at: 'passkey', text: err.message || String(err) };
     } finally {
-      busy = false;
+      busy = '';
     }
   }
 
   async function submit(event) {
     event.preventDefault();
-    error = '';
-    busy = true;
+    error = { at: '', text: '' };
+    busy = 'password';
     try {
       await land(
         await post('/auth/login', { name, password, device_label: navigator.userAgent })
       );
     } catch (err) {
-      error = err.message;
+      error = { at: 'password', text: err.message };
     } finally {
-      busy = false;
+      busy = '';
     }
   }
 </script>
 
-<div class="page">
-  <form class="card" onsubmit={submit}>
-    <div class="brand">SPIELPLAN</div>
-    <h1>Sign in</h1>
-    <p class="why">
-      Use the passkey on this device, or the password you were given — or set.
-    </p>
+{#snippet failed(at)}
+  {#if error.at === at}<p class="err" role="alert">{error.text}</p>{/if}
+{/snippet}
 
-    {#if canPasskey}
-      <button class="btn-primary passkey" type="button" onclick={passkey} disabled={busy}>
-        Sign in with a passkey
-      </button>
-      <div class="or data">OR</div>
-    {/if}
+<main class="calm">
+  <div class="column">
+    <header class="brand">
+      <h1 class="wordmark"><span class="sr-only">Sign in to </span>Spiel<em>plan</em></h1>
+      <p class="tagline">What to watch tonight, for everyone at home.</p>
+    </header>
 
-    <label>
-      <span class="data">NAME</span>
-      <input type="text" bind:value={name} autocomplete="username" required />
-    </label>
-    <label>
-      <span class="data">PASSWORD</span>
-      <input type="password" bind:value={password} autocomplete="current-password" required />
-    </label>
+    <form onsubmit={submit}>
+      {#if canPasskey}
+        <button class="btn-primary wide" type="button" onclick={passkey} disabled={!!busy}>
+          <svg
+            width="20"
+            height="20"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.75"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <circle cx="8" cy="15" r="4" /><path d="m11 12 8.5-8.5M16 7l2.5 2.5M14 9l2 2" />
+          </svg>
+          Sign in with a passkey
+        </button>
+        {@render failed('passkey')}
+        <p class="or">or</p>
+      {/if}
 
-    {#if error}<div class="err">{error}</div>{/if}
+      <div class="password">
+        <FieldGroup>
+          <label>
+            <span>Name</span>
+            <input
+              type="text"
+              bind:value={name}
+              autocomplete="username"
+              autocapitalize="none"
+              placeholder="Your name"
+              required
+            />
+          </label>
+          <label>
+            <span>Password</span>
+            <input
+              type="password"
+              bind:value={password}
+              autocomplete="current-password"
+              placeholder="Password"
+              required
+            />
+          </label>
+        </FieldGroup>
+        <button
+          class="wide {canPasskey ? 'btn-secondary' : 'btn-primary'}"
+          type="submit"
+          disabled={!!busy || !name || !password}
+        >
+          {busy === 'password' ? 'Checking…' : 'Sign in'}
+        </button>
+        {@render failed('password')}
+      </div>
 
-    <button class="btn-primary" type="submit" disabled={busy || !name || !password}>
-      {busy ? 'Checking…' : 'Sign in'}
-    </button>
-  </form>
-</div>
+      <p class="footnote first">
+        First time? Use the name and <span class="nowrap">one-time</span> password you were given.
+      </p>
+    </form>
+  </div>
+</main>
 
 <style>
-  .page {
+  /* No shell here: the page carries the status-bar and home-indicator insets itself. */
+  .calm {
     min-height: 100vh;
+    min-height: 100dvh;
     display: grid;
-    place-items: center;
-    /* The installed PWA draws the status bar over the page top (viewport-fit=cover). */
-    padding: max(24px, env(safe-area-inset-top)) 24px 24px;
+    align-content: center;
+    justify-items: center;
+    padding: max(32px, env(safe-area-inset-top)) max(var(--gutter), env(safe-area-inset-right))
+      max(32px, env(safe-area-inset-bottom)) max(var(--gutter), env(safe-area-inset-left));
   }
-  form {
-    width: min(380px, 100%);
-    padding: var(--card-pad-roomy);
+  .column {
+    width: min(400px, 100%);
     display: flex;
     flex-direction: column;
-    gap: 14px;
+    gap: 32px;
   }
   .brand {
-    font-weight: 700;
-    font-size: 12px;
-    letter-spacing: 0.13em;
-    color: var(--ink-4);
-  }
-  h1 {
-    margin: 0;
-    font-size: 22px;
-    font-weight: 600;
-  }
-  label {
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 8px;
+    text-align: center;
   }
-  .err {
-    color: var(--ember-lift);
-    font-size: 12.5px;
+  .wordmark {
+    margin: 0;
+    font-family: var(--serif);
+    font-weight: 400;
+    font-size: var(--fs-display);
+    line-height: 48px;
+  }
+  .wordmark em {
+    font-style: italic;
+  }
+  .tagline {
+    margin: 0;
+    font-size: var(--fs-body);
+    line-height: 22px;
+    color: var(--text-2);
+  }
+  form,
+  .password {
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+  .password {
+    gap: 12px;
+  }
+  .wide {
+    width: 100%;
+    border-radius: var(--r-md);
+  }
+  .btn-primary.wide {
+    min-height: 50px;
   }
   .or {
-    text-align: center;
-    color: var(--ink-4);
-    font-size: 10.5px;
-    letter-spacing: 0.12em;
+    margin: 0;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    font-size: var(--fs-footnote);
+    line-height: 18px;
+    color: var(--text-3);
   }
-  /* This scoped rule outranks design.css's coarse `.data` floor, so restate it here, last. */
-  @media (pointer: coarse) {
-    .or {
-      font-size: 11px;
-    }
+  .or::before,
+  .or::after {
+    content: '';
+    flex: 1;
+    height: 0.5px;
+    background: var(--separator);
+  }
+  .err {
+    margin: 0;
+    padding: 0 var(--gutter);
+    color: var(--negative);
+    font-size: var(--fs-subhead);
+    line-height: 20px;
+    text-align: center;
+  }
+  .nowrap {
+    white-space: nowrap;
+  }
+  .first {
+    margin: 0;
+    padding: 0 var(--gutter);
+    text-align: center;
+    text-wrap: balance;
   }
 </style>

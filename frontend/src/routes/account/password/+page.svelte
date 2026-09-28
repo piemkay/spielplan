@@ -5,6 +5,7 @@
   import { post } from '$lib/api.js';
   import { refreshUser, session } from '$lib/session.svelte.js';
   import { supported } from '$lib/passkeys.js';
+  import FieldGroup from '$lib/components/FieldGroup.svelte';
 
   let current = $state('');
   let next = $state('');
@@ -36,73 +37,110 @@
   }
 </script>
 
-<div class="page">
-  <form class="card" onsubmit={submit}>
-    <h1>Choose a password</h1>
-    <p class="why">
-      {#if forced}
-        This account was created with a one-time password. Setting your own unlocks the rest of
-        the app; a passkey can be added afterwards from the account page.
+<main class="calm">
+  <form class="column" onsubmit={submit}>
+    <header class="head">
+      <h1 class="large-title">Choose a password</h1>
+      <p class="why">
+        {#if forced}
+          This account was made with a one-time password. Choose your own to open the rest of the
+          app; you can add a passkey afterwards.
+        {:else}
+          Your password works on any device, passkey or not. Changing it signs out every other
+          device; this one stays signed in.
+        {/if}
+      </p>
+    </header>
+
+    <div class="fields">
+      <FieldGroup>
+        <label>
+          <span>{forced ? 'One-time password' : 'Current password'}</span>
+          <input type="password" bind:value={current} autocomplete="current-password" required />
+        </label>
+        <label>
+          <span>New password</span>
+          <input type="password" bind:value={next} autocomplete="new-password" required />
+        </label>
+        <label>
+          <span>Confirm</span>
+          <input type="password" bind:value={confirm} autocomplete="new-password" required />
+        </label>
+      </FieldGroup>
+      {#if tooShort}
+        <p class="err">Ten characters or more.</p>
+      {:else if mismatch}
+        <p class="err">Those don't match.</p>
       {:else}
-        Your password stays available as a fallback on any device. Changing it signs every
-        other session out; this one stays.
+        <p class="footnote hint">At least ten characters.</p>
       {/if}
-    </p>
+    </div>
 
-    <label>
-      <span class="data">{forced ? 'ONE-TIME PASSWORD' : 'CURRENT PASSWORD'}</span>
-      <input type="password" bind:value={current} autocomplete="current-password" required />
-    </label>
-    <label>
-      <span class="data">NEW PASSWORD · AT LEAST 10 CHARACTERS</span>
-      <input type="password" bind:value={next} autocomplete="new-password" required />
-    </label>
-    <label>
-      <span class="data">CONFIRM</span>
-      <input type="password" bind:value={confirm} autocomplete="new-password" required />
-    </label>
-
-    {#if tooShort}<div class="err">Ten characters or more.</div>{/if}
-    {#if mismatch}<div class="err">Those do not match.</div>{/if}
-    {#if error}<div class="err">{error}</div>{/if}
-
-    <button
-      class="btn-primary"
-      type="submit"
-      disabled={busy || tooShort || mismatch || !current || !next || !confirm}
-    >
-      {busy ? 'Saving…' : 'Set password'}
-    </button>
+    <div class="actions">
+      <button
+        class="btn-primary wide"
+        type="submit"
+        disabled={busy || tooShort || mismatch || !current || !next || !confirm}
+      >
+        {busy ? 'Saving…' : 'Set password'}
+      </button>
+      {#if error}<p class="err" role="alert">{error}</p>{/if}
+      <!-- The installed app has no back button, so a voluntary visit needs its own way out. -->
+      {#if !forced}<a class="btn-plain cancel" href="/account">Cancel</a>{/if}
+    </div>
   </form>
-</div>
+</main>
 
 <style>
-  .page {
+  /* No shell here: the page carries the status-bar and home-indicator insets itself. */
+  .calm {
     min-height: 100vh;
+    min-height: 100dvh;
     display: grid;
-    place-items: center;
-    /* The same status-bar inset as /login: no shell header carries it here. */
-    padding: max(24px, env(safe-area-inset-top)) 24px 24px;
+    align-content: center;
+    justify-items: center;
+    padding: max(32px, env(safe-area-inset-top)) max(var(--gutter), env(safe-area-inset-right))
+      max(32px, env(safe-area-inset-bottom)) max(var(--gutter), env(safe-area-inset-left));
   }
-  form {
-    width: min(400px, 100%);
-    padding: var(--card-pad-roomy);
+  .column {
+    width: min(440px, 100%);
     display: flex;
     flex-direction: column;
-    gap: 14px;
+    gap: 32px;
   }
-  h1 {
+  .head {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+  .head .why {
     margin: 0;
-    font-size: 22px;
-    font-weight: 600;
   }
-  label {
+  .fields,
+  .actions {
     display: flex;
     flex-direction: column;
-    gap: 6px;
+    gap: 8px;
+  }
+  .actions {
+    gap: 12px;
+  }
+  .hint,
+  .err {
+    margin: 0;
+    padding: 0 var(--gutter);
   }
   .err {
-    color: var(--ember-lift);
-    font-size: 12.5px;
+    color: var(--negative);
+    font-size: var(--fs-footnote);
+    line-height: 18px;
+  }
+  .wide {
+    width: 100%;
+    min-height: 50px;
+    border-radius: var(--r-md);
+  }
+  .cancel {
+    align-self: center;
   }
 </style>

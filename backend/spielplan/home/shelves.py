@@ -90,7 +90,6 @@ class Section:
     why: str
     why_terms: list[WhyTerm] = field(default_factory=list)
     why_numbers: dict[str, Any] = field(default_factory=dict)
-    shared_terms: list[WhyTerm] = field(default_factory=list)
     caption: str | None = None
     anchor: dict[str, Any] | None = None
     items: list[dict[str, Any]] = field(default_factory=list)
@@ -103,7 +102,6 @@ class Section:
             "why": self.why,
             "why_terms": [t.as_dict() for t in self.why_terms],
             "why_numbers": self.why_numbers,
-            "shared_terms": [t.as_dict() for t in self.shared_terms],
             "caption": self.caption,
             "anchor": self.anchor,
             "items": self.items,
@@ -257,10 +255,7 @@ def _card(
     beta: float,
     extra: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    """One shelf card. Rank, seen dot and tier letter are ungated chrome; numbers live in `model`.
-
-    The letter is the FITTED tier (decision 187), not Rank's; `_finish` adds `board_tier` beside it.
-    """
+    """One shelf card. Rank, seen dot and tier letter are ungated chrome; numbers live in `model`."""
     index = row["tier"]
     tier = tier_set[index] if index is not None and 0 <= index < len(tier_set) else None
     card = {
@@ -294,10 +289,8 @@ def _card(
     return card
 
 
-async def _finish(
-    conn: asyncpg.Connection, section: Section, *, shelf_id: str, ctx: Ctx
-) -> tuple[Section | None, Suppressed | None]:
-    """The gate every section passes: the floor, a why-line, and every named term on every card."""
+def _finish(section: Section, *, shelf_id: str, ctx: Ctx) -> tuple[Section | None, Suppressed | None]:
+    """The gate every section passes: the floor and a why-line."""
     if len(section.items) < SECTION_FLOOR:
         after = _thinned_by(ctx)
         return None, Suppressed(
@@ -310,20 +303,6 @@ async def _finish(
             shelf_id, section.kind,
             "no why-line — a shelf that cannot say why it exists does not ship",
         )
-    if ctx.version:
-        # Intersected over the cards actually returned, so it cannot be false (§6.8).
-        section.shared_terms = await why_mod.common_terms(
-            conn, title_ids=[c["title_id"] for c in section.items], version=ctx.version
-        )
-    board = await _board_letters(
-        conn,
-        user_id=ctx.user_id,
-        title_ids=[int(c["title_id"]) for c in section.items],
-        tier_set=ctx.tier_set(section.kind),
-    )
-    for card in section.items:
-        card["on_board"] = int(card["title_id"]) in board
-        card["board_tier"] = board.get(int(card["title_id"]))
     return section, None
 
 
@@ -336,30 +315,6 @@ def _thinned_by(ctx: Ctx) -> str:
     if ctx.avoided:
         parts.append("leaving out titles like ones you disliked")
     return (" " + " and ".join(parts)) if parts else ""
-
-
-async def _board_letters(
-    conn: asyncpg.Connection, *, user_id: int, title_ids: Sequence[int], tier_set: Sequence[str]
-) -> dict[int, str | None]:
-    """The letter §6.3's board renders for each of these titles that is on it (`ls.observed`)."""
-    if not title_ids:
-        return {}
-    rows = await conn.fetch(
-        f"""
-        SELECT ls.title_id, ls.tier AS model_tier, te.tier AS assigned, te.n_levels AS assigned_k
-          FROM ledger_state ls
-          LEFT JOIN ({latest_tier_edit_sql()}) te ON te.title_id = ls.title_id
-         WHERE ls.user_id = $1 AND ls.title_id = ANY($2) AND ls.observed
-        """,
-        user_id,
-        list(title_ids),
-    )
-    letters: dict[int, str | None] = {}
-    for r in rows:
-        level = _board_level(r, len(tier_set))
-        in_set = level is not None and 0 <= level < len(tier_set)
-        letters[int(r["title_id"])] = tier_set[level] if in_set else None
-    return letters
 
 
 def _board_level(row: asyncpg.Record, k: int) -> int | None:
@@ -375,10 +330,10 @@ def _board_level(row: asyncpg.Record, k: int) -> int | None:
 async def because_anchor(
     conn: asyncpg.Connection, *, ctx: Ctx, kind: str
 ) -> tuple[Section | None, Suppressed | None]:
-    """§6.0 row 1 — "Because you put *{anchor}* in {tier}" / "shares {term} + {term} with it".
+    """§6.0 row 1 — "Because you liked *{anchor}*" or "More like *{anchor}*" / "{term} · {term}".
 
     The anchor's likest unseen owned titles (decision 513), and a term pair every card carries.
-    The headline says what the person did (decision 476): "put" needs a `tier_edit`.
+    The headline names no tier (decision 527).
     """
     sid = "because_anchor"
     if not ctx.version:
@@ -455,9 +410,7 @@ async def because_anchor(
 
     beta = ctx.beta(kind)
     tier = tier_set[index]
-    if anchor["assigned"] is not None:
-        title = f"Because you put {anchor['name']} in {tier}"
-    elif anchor["verdict"] == 2:
+    if anchor["verdict"] == 2:
         title = f"Because you liked {anchor['name']}"
     else:
         title = f"More like {anchor['name']}"
@@ -465,12 +418,12 @@ async def because_anchor(
         kind=kind,
         heading=KIND_HEADINGS[kind],
         title=title,
-        why=f"shares {why_mod.phrase([t1, t2])} with it",
+        why=why_mod.phrase([t1, t2]),
         why_terms=[t1.with_role("member"), t2.with_role("member")],
         anchor={"title_id": int(anchor["id"]), "name": anchor["name"], "tier": tier},
         items=[_card(row, i + 1, tier_set=tier_set, beta=beta) for i, row in enumerate(rows)],
     )
-    return await _finish(conn, section, shelf_id=sid, ctx=ctx)
+    return _finish(section, shelf_id=sid, ctx=ctx)
 
 
 # --- shelf 2: top_of_ledger -------------------------------------------------------------------
@@ -506,9 +459,9 @@ async def top_of_ledger(
     ]
     why = (
         # Member register (decision 476); β travels in the gated `why_numbers`.
-        "the ones we think you'll enjoy most — rewatches included"
+        "The ones we think you'll enjoy most — rewatches included"
         if personalised
-        else "what most people rate highest, until your own ratings take over — rewatches included"
+        else "What most people rate highest, until your own ratings take over — rewatches included"
     )
     section = Section(
         kind=kind,
@@ -521,7 +474,7 @@ async def top_of_ledger(
         caption=None,
         items=items,
     )
-    return await _finish(conn, section, shelf_id=sid, ctx=ctx)
+    return _finish(section, shelf_id=sid, ctx=ctx)
 
 
 def _as_card_rows(items: Sequence[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -582,15 +535,15 @@ async def never_watched_term(
         kind=kind,
         heading=KIND_HEADINGS[kind],
         title=f"You've never watched anything {candidate.name}",
-        why=f"close to {neighbour.name}, which you like",
+        why=f"Close to {neighbour.name}, which you like",
         why_terms=[candidate, neighbour],
         why_numbers={"cos": round(cos, 4), "affinity": round(aff, 4),
                      "min_seen": FRONTIER_MIN_SEEN},
         # §6.4's "honestly labelled" exploratory slot, in words.
-        caption="a step outside what you usually watch, on purpose",
+        caption="A step outside what you usually watch, on purpose",
         items=[_card(row, i + 1, tier_set=tier_set, beta=beta) for i, row in enumerate(rows)],
     )
-    return await _finish(conn, section, shelf_id=sid, ctx=ctx)
+    return _finish(section, shelf_id=sid, ctx=ctx)
 
 
 # --- shelf 4: shared_sweet_spot ---------------------------------------------------------------
@@ -705,13 +658,13 @@ async def shared_sweet_spot(
         kind=kind,
         heading=KIND_HEADINGS[kind],
         title=f"You and {partner['name']} would both enjoy these",
-        why="neither of you has seen them — a good pick for a night in together",
+        why="Neither of you has seen them — a good pick for a night in together",
         why_numbers={"min_cdf": SWEET_SPOT_MIN_CDF, "partner_user_id": partner["user_id"],
                      "co_seen": partner["co_seen"]},
         caption=None,
         items=items,
     )
-    return await _finish(conn, section, shelf_id=sid, ctx=ctx)
+    return _finish(section, shelf_id=sid, ctx=ctx)
 
 
 # --- shelf 5: school_night --------------------------------------------------------------------
@@ -737,14 +690,14 @@ async def school_night(
         kind=kind,
         heading=KIND_HEADINGS[kind],
         title=SCHOOL_NIGHT_TITLE[kind],
-        why="for a school night",
+        why="For a school night",
         why_numbers={"max_minutes": limit_min},
         caption=(
-            "series runtime is minutes per episode" if kind == "series" else None
+            "Series runtime is minutes per episode" if kind == "series" else None
         ),
         items=[_card(row, i + 1, tier_set=tier_set, beta=beta) for i, row in enumerate(rows)],
     )
-    return await _finish(conn, section, shelf_id=sid, ctx=ctx)
+    return _finish(section, shelf_id=sid, ctx=ctx)
 
 
 # --- shelf 6: new_in_library ------------------------------------------------------------------
@@ -774,11 +727,11 @@ async def new_in_library(
         kind=kind,
         heading=KIND_HEADINGS[kind],
         title="New in the library",
-        why="no outside ratings yet, so we placed them by what they're about",
+        why="No outside ratings yet, so we placed them by what they're about",
         why_numbers={"gate_k": EVIDENCE_K},
         items=[_card(row, i + 1, tier_set=tier_set, beta=beta) for i, row in enumerate(rows)],
     )
-    return await _finish(conn, section, shelf_id=sid, ctx=ctx)
+    return _finish(section, shelf_id=sid, ctx=ctx)
 
 
 # --- assembly -----------------------------------------------------------------------------------
@@ -935,15 +888,15 @@ def _degraded(bundle_version: str | None, verdicts: int) -> dict[str, Any] | Non
     if bundle_version is None:
         return {
             "state": "no_bundle",
-            "headline": "No artifact bundle imported.",
-            "why": "the catalog and the shelves come from a data bundle an admin imports",
-            "cta": {"label": "Import a bundle", "route": "/admin/data"},
+            "headline": "No movie data yet.",
+            "why": "Your shelves appear here once an admin imports it",
+            "cta": {"label": "Open Movie data", "route": "/admin/movie-data"},
         }
     if verdicts == 0:
         return {
             "state": "zero_verdicts",
             "headline": "Rate a few titles to get your shelves.",
-            "why": "your suggestions get about three times more personal between 5 and 100 "
+            "why": "Your suggestions get about three times more personal between 5 and 100 "
                    "ratings — aim for 50–100 in your first sitting or two",
             "cta": {"label": "Rate 50 titles", "route": "/rate"},  # decision 203
         }

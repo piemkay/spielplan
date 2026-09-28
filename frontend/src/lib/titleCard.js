@@ -8,32 +8,32 @@
  */
 export function syncNote(res) {
   const reason = String(res?.reason ?? '');
-  if (!reason) return res?.synced ? 'Saved, and Jellyfin is up to date.' : 'Saved here - Jellyfin was not told.';
+  if (!reason) return res?.synced ? 'Saved, and Jellyfin is up to date.' : 'Saved here — Jellyfin was not told.';
   if (reason.includes('series unseen is app-only')) {
-    return 'Saved here only - Jellyfin keeps its own episode history.';
+    return 'Saved here only — Jellyfin keeps its own episode history.';
   }
   if (reason.includes('not on Jellyfin')) {
-    return "Saved here - this title isn't in your Jellyfin library.";
+    return "Saved here — this title isn't in your Jellyfin library.";
   }
   if (reason.includes('re-link required')) {
-    return 'Saved here - Jellyfin was not told. Ask an admin to link your account again.';
+    return 'Saved here — Jellyfin was not told. Ask an admin to link your account again.';
   }
   if (reason.includes('not linked to a Jellyfin user')) {
-    return "Saved here - your account isn't linked to Jellyfin.";
+    return "Saved here — your account isn't linked to Jellyfin.";
   }
-  if (reason.includes('Jellyfin not configured')) return "Saved here - Jellyfin isn't connected.";
+  if (reason.includes('Jellyfin not configured')) return "Saved here — Jellyfin isn't connected.";
   if (reason.includes('secrets unreadable')) {
-    return "Saved here - Jellyfin's saved sign-in can't be read. Tell whoever runs Spielplan.";
+    return "Saved here — Jellyfin's saved sign-in can't be read. Tell whoever runs Spielplan.";
   }
   if (reason.includes('nothing owed')) return 'Saved.';
   // What is left leaves the row owed, which the sweep settles.
-  return 'Saved here - Jellyfin was not updated this time; it catches up on its next sync.';
+  return 'Saved here — Jellyfin was not updated this time; it catches up on its next sync.';
 }
 
 /** @param {string | null | undefined} reason */
 export function playWhy(reason) {
   if (reason === 'not_in_library') return 'Not in your Jellyfin library.';
-  if (reason === 'no_server') return "Jellyfin isn't connected yet - ask whoever runs Spielplan.";
+  if (reason === 'no_server') return "Jellyfin isn't connected yet — ask whoever runs Spielplan.";
   return '';
 }
 
@@ -238,6 +238,60 @@ export function projectedForCard(projected, extracted) {
 
 /** @param {string} answer */
 export function answeredLine(answer) {
-  if (answer === 'not_seen') return 'Saved - marked not seen.';
-  return `Saved - you ${answer === 'fine' ? 'thought it was fine' : answer + ' it'}.`;
+  if (answer === 'not_seen') return 'Saved — marked not seen.';
+  return `Saved — you ${answer === 'fine' ? 'thought it was fine' : answer + ' it'}.`;
+}
+
+/**
+ * "Directed by …" from the credits `credits_for` sends, directing first; '' when none directed.
+ *
+ * @param {{name: string, role_class?: string | null, job?: string}[] | null | undefined} credits
+ */
+export function directedBy(credits) {
+  const names = [
+    ...new Set(
+      (credits ?? [])
+        .filter((c) => c.role_class === 'director' || String(c.job).toLowerCase() === 'director')
+        .map((c) => c.name)
+    )
+  ];
+  if (!names.length) return '';
+  if (names.length <= 2) return `Directed by ${names.join(' and ')}`;
+  return `Directed by ${names.slice(0, 2).join(', ')} and ${names.length - 2} more`;
+}
+
+/**
+ * The first two genres as a sentence: "Crime, thriller"; '' when the title has none.
+ *
+ * @param {string[] | null | undefined} genres
+ */
+export function genreLine(genres) {
+  const line = (genres ?? []).slice(0, 2).join(', ').toLowerCase();
+  return line.charAt(0).toUpperCase() + line.slice(1);
+}
+
+const PLACED_BY = {
+  backbone: 'Placed by how people rated it',
+  blended: "Placed by how people rated it and by what it's about",
+  cold_tower: "Placed by what it's about"
+};
+
+/** Where the numbers' coordinate came from, in words; '' for a source with none. */
+export function placedBy(source) {
+  return PLACED_BY[source] ?? '';
+}
+
+const SCORE_WORDS = { critic_score: 'critics', audience_score: 'audience', user_score: 'users' };
+
+/**
+ * A score tile's name: the platform, and the audience only where the platform shows two scores.
+ *
+ * @param {{platform: string, metric: string}} item
+ * @param {{platform: string}[]} items
+ */
+export function scoreLabel(item, items) {
+  const name = sourceLabel(item.platform);
+  const several = items.filter((i) => i.platform === item.platform).length > 1;
+  const word = SCORE_WORDS[item.metric] ?? String(item.metric ?? '').replaceAll('_', ' ');
+  return several || !(item.metric in SCORE_WORDS) ? `${name} ${word}`.trim() : name;
 }

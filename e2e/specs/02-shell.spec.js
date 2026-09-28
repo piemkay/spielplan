@@ -2,7 +2,7 @@ import { expect, test } from '@playwright/test';
 
 import { openAccountMenu, signedIn } from '../helpers.js';
 
-/** §6 (surface names), §3.2 (the account chip), §6.7 + decision 117 (show the model). */
+/** §6 (surface names), §3.2 (You), §6.7 + decision 117 (show the model, labelled Show the numbers). */
 
 test.beforeEach(async ({ page }) => {
   await signedIn(page);
@@ -10,7 +10,7 @@ test.beforeEach(async ({ page }) => {
 
 test('the nav carries the shipped surfaces and no unbuilt one', async ({ page }) => {
   // Decision 488: an unshipped surface (Map, Taste) is absent from navigation.
-  const nav = page.getByRole('navigation', { name: 'Surfaces' });
+  const nav = page.getByRole('navigation', { name: 'Main' });
   for (const name of ['Home', 'Rate', 'Tonight', 'Rank']) {
     await expect(nav.getByRole('link', { name, exact: true })).toBeVisible();
   }
@@ -39,7 +39,7 @@ const MARKER = {
 };
 
 test('every nav destination resolves to its own surface', async ({ page }) => {
-  const nav = page.getByRole('navigation', { name: 'Surfaces' });
+  const nav = page.getByRole('navigation', { name: 'Main' });
   const hrefs = await nav.getByRole('link').evaluateAll((els) => els.map((e) => e.getAttribute('href')));
 
   // A surface added or renamed in `api/auth.py`'s SURFACES fails here by name.
@@ -55,7 +55,7 @@ test('every nav destination resolves to its own surface', async ({ page }) => {
   }
 });
 
-test('the account chip states the role and the auth method', async ({ page }) => {
+test('You states the role and the auth method', async ({ page }) => {
   // §3.2: the line is an inventory of what the account holds, so it is derived from the server:
   // desktop runs before 09-passkeys and the phone after it (wording: decision 518).
   const me = await (await page.request.get('/api/auth/me')).json();
@@ -73,13 +73,13 @@ test('the account chip states the role and the auth method', async ({ page }) =>
 test('the account page speaks plainly and folds what a member need not act on', async ({ page }) => {
   // Decision 518: the same controls and facts, in a member's words.
   await page.goto('/account');
-  await expect(page.getByRole('heading', { name: 'Account' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'You', exact: true })).toBeVisible();
   const body = (await page.locator('main').textContent()) ?? '';
   for (const word of ['WebAuthn', 'Switch PIN', 'switch PIN', 'Tier set']) {
     expect(body, `the account page says "${word}"`).not.toContain(word);
   }
-  await expect(page.getByRole('heading', { name: 'PIN for switching profiles' })).toBeVisible();
-  await expect(page.getByRole('heading', { name: 'Rank letters' })).toBeVisible();
+  await expect(page.getByTestId('pin-card')).toContainText('PIN for switching profiles');
+  await expect(page.getByTestId('tier-set-edit').locator('summary')).toContainText('Rank letters');
   await expect(page.getByTestId('tier-set-current')).toBeVisible();
   await expect(page.getByTestId('tier-set-input')).toBeHidden();
   await expect(page.getByTestId('data-sources')).toBeHidden();
@@ -90,7 +90,7 @@ test('the account page speaks plainly and folds what a member need not act on', 
 test('show the model is off by default, toggles, and persists', async ({ page }) => {
   // Decision 117: one global per-user preference, in the account dropdown, default off.
   const menu = await openAccountMenu(page);
-  const toggle = menu.getByRole('switch', { name: /Show the model/ });
+  const toggle = menu.getByRole('switch', { name: /Show the numbers/ });
 
   await expect(toggle).toHaveAttribute('aria-checked', 'false');
   await toggle.click();
@@ -104,13 +104,13 @@ test('show the model is off by default, toggles, and persists', async ({ page })
 
   await page.reload();
   const again = await openAccountMenu(page);
-  await expect(again.getByRole('switch', { name: /Show the model/ })).toHaveAttribute(
+  await expect(again.getByRole('switch', { name: /Show the numbers/ })).toHaveAttribute(
     'aria-checked',
     'true'
   );
 
   // Put it back — default off is part of the contract.
-  await again.getByRole('switch', { name: /Show the model/ }).click();
+  await again.getByRole('switch', { name: /Show the numbers/ }).click();
   await expect(async () => {
     const after = await (await page.request.get('/api/auth/me')).json();
     expect(after.show_model).toBe(false);
@@ -156,7 +156,7 @@ test("an unknown address renders the app's own error card, not the framework's p
   await page.goto('/not-a-surface');
   const card = page.getByTestId('app-error');
   await expect(card).toBeVisible();
-  await expect(card, 'the card does not say what happened').toContainText('ERROR 404');
+  await expect(card, 'the card does not say what happened').toContainText('Error 404');
   await expect(
     card.getByRole('link', { name: 'Home' }),
     'the error page offers no way back into the shell'
@@ -191,7 +191,8 @@ test('the model rail opens from every surface, not only Home', async ({ page }) 
       // The trigger is absent on `/login` too, for an unrelated reason.
       await expect(page, `${surface} bounced to sign-in`).not.toHaveURL(/\/login$/);
 
-      const trigger = page.getByTestId('model-rail-open');
+      const menu = await openAccountMenu(page);
+      const trigger = menu.getByTestId('model-rail-open');
       await expect(trigger, `no rail control on ${surface}`).toHaveCount(1);
       await trigger.click();
 
@@ -217,7 +218,7 @@ test('reopening the rail refills it from the live log, once', async ({ page }) =
     const rail = page.getByTestId('model-rail');
     const body = rail.getByTestId('model-rail-event').or(rail.getByTestId('model-rail-empty'));
 
-    await page.getByTestId('model-rail-open').click();
+    await (await openAccountMenu(page)).getByTestId('model-rail-open').click();
     await expect(rail).toBeVisible();
     await expect(body.first(), 'the first open never finished reading').toBeVisible();
     const read = await body.allTextContents();
@@ -225,7 +226,7 @@ test('reopening the rail refills it from the live log, once', async ({ page }) =
     await page.getByTestId('model-rail-close').click();
     await expect(rail).toHaveCount(0);
 
-    await page.getByTestId('model-rail-open').click();
+    await (await openAccountMenu(page)).getByTestId('model-rail-open').click();
     await expect(rail).toBeVisible();
     await expect(body.first(), 'the reopened drawer never finished reading').toBeVisible();
     expect(await body.allTextContents(), 'the reopened drawer is not the log again').toEqual(read);

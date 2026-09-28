@@ -160,9 +160,9 @@ def _vocabulary_version(
         findings.append((
             "fail",
             f"BUNDLE.json declares DNA vocabulary {declared!r} and this bundle ships "
-            f"dna_vocab/{derived}/ - section 4.3 names the vocabulary by the directory, so this "
-            "bundle gives two answers and decision 163's comparison cannot be made against "
-            "either; export it with the key and the tree naming one version",
+            f"dna_vocab/{derived}/ - the directory names the vocabulary, so this bundle gives two "
+            "answers and the installed vocabulary cannot be compared against either; export it "
+            "with the key and the tree naming one version",
         ))
     return declared or derived
 
@@ -402,7 +402,7 @@ def _report_app_range(report: ImportReport, source: str, offending: Iterable[Any
     report.fail(
         "id-partition",
         f"{source} carries id {ids[0]}, which is inside the range this app mints from "
-        f"(>= {APP_ID_MIN:,}). decision 162 partitions the two namespaces so a title the "
+        f"(>= {APP_ID_MIN:,}). The two namespaces are kept apart so a title the "
         "household acquired and a title the corpus exported can never be the same id; a bundle "
         "reaching across the boundary claims ids this install owns",
         source=source, floor=APP_ID_MIN, ids=ids,
@@ -432,21 +432,21 @@ def refuse_on_path(bundle: Bundle, report: ImportReport) -> None:
         # install-state pass misdiagnose it.
         report.fail(
             "bundle",
-            f"{bundle.root} holds a BUNDLE.json and no artifacts/ - section 4.3 makes both of "
-            "them things every bundle carries, so this is a partial copy rather than a bundle. "
+            f"{bundle.root} holds a BUNDLE.json and no artifacts/ - every bundle carries both, "
+            "so this is a partial copy rather than a bundle. "
             "Re-copy or re-extract it and import it again",
         )
     elif not (bundle.root / "BUNDLE.json").is_file():
         report.fail(
             "bundle-identity",
             "BUNDLE.json is missing from the bundle root — it records `bundle_version`, which "
-            "names the artifact directory and stamps every placement, prior and score (§10)",
+            "names the artifact directory and stamps every placement, prior and score",
         )
     elif not (declared := bundle.identity.get("bundle_version")):
         report.fail(
             "bundle-identity",
             "BUNDLE.json records no `bundle_version`; an import stamped 'unknown' cannot be "
-            "told apart from the next one (§10's migration report), and the artifact directory it "
+            "told apart from the next one in the migration report, and the artifact directory it "
             "names would be shared by every bundle",
         )
     elif bundle.version == "unknown":
@@ -487,8 +487,8 @@ def validate(
         # Decision 162: a bundle with no content.sqlite is a models-only re-import, not broken.
         report.note(
             "bundle",
-            "models-only bundle (decision 162): no content.sqlite, so no content is loaded and "
-            "§10's rebuild set runs against the existing spine",
+            "models-only bundle: no content.sqlite, so no content is loaded and the rebuild set "
+            "runs against the existing spine",
         )
     else:
         db = sqlite3.connect(f"file:{bundle.content_db}?mode=ro", uri=True)
@@ -550,7 +550,7 @@ def _note_series_runtime(db: sqlite3.Connection, report: ImportReport) -> None:
         "runtime-semantics",
         f"{total_shaped:,} series carry runtime_min >= 110, which is a season or series total "
         "rather than minutes per episode; the column is imported as shipped and nothing "
-        "derives per-episode minutes from it (decision 192)",
+        "derives per-episode minutes from it",
         series=total_shaped, threshold=110,
     )
 
@@ -631,7 +631,7 @@ async def refuse_on_install_state(
             report.fail(
                 "ordering",
                 "this is a models-only bundle and the install has no content: restore or seed "
-                "movie data first, then load the model bundle (decision 162). §10's rebuild set "
+                "movie data first, then load the model bundle. The rebuild set "
                 "re-places every title against the staged basis, and there are no titles",
             )
         if seeded is not None and bundle.version == seeded and not restaging:
@@ -641,7 +641,7 @@ async def refuse_on_install_state(
                 f"bundle version {bundle.version!r} is the version this install's content seed "
                 "was imported under, and this bundle carries no content. Importing it would "
                 "rewrite the seed's `artifact_bundle` row and erase the only record that movie "
-                "data was ever seeded (decision 162) — export the model bundle under its own "
+                "data was ever seeded — export the model bundle under its own "
                 "version string",
                 seeded=seeded,
             )
@@ -649,8 +649,8 @@ async def refuse_on_install_state(
         # Not on a restage: the row being repaired IS the seed row.
         report.fail(
             "seed-once",
-            f"movie data was already seeded by bundle {seeded!r} (decision 162: content is "
-            "exported once and imported once; every later title is acquired by this app). A "
+            f"movie data was already seeded by bundle {seeded!r}: content is exported once and "
+            "imported once, and every later title is acquired by this app. A "
             "second content import would upsert the corpus's rows over ids this install now "
             "owns — re-import the models only, or restore movie data from a backup",
             seeded=seeded,
@@ -665,7 +665,7 @@ async def refuse_on_install_state(
         report.fail(
             "vocabulary-migration",
             "this bundle declares no DNA vocabulary version and the install is on "
-            f"{active_vocab!r}, so decision 163's comparison cannot be made — export the bundle "
+            f"{active_vocab!r}, so the two cannot be compared — export the bundle "
             "with `vocabulary_version` in BUNDLE.json, or ship its `dna_vocab/<version>/` tree",
             active=active_vocab, bundle=None,
         )
@@ -674,8 +674,8 @@ async def refuse_on_install_state(
             "vocabulary-migration",
             f"bundle carries DNA vocabulary {bundle.vocabulary_version!r} and this install is on "
             f"{active_vocab!r}; the {active_vocab} -> {bundle.vocabulary_version} vocabulary "
-            "migration does not exist yet (decision 163: a vocabulary change is a fundamental "
-            "data migration, not a bundle swap). Importing it would leave dna_tag and "
+            "migration does not exist yet: a vocabulary change is a fundamental "
+            "data migration, not a bundle swap. Importing it would leave dna_tag and "
             "dna_projected on the old version while the feature builder filters on the new one, "
             "so both DNA blocks would be empty for every title and nothing in the read path "
             "would call that an error",
@@ -870,7 +870,7 @@ async def import_bundle(
             report.note(
                 "restage",
                 f"restaged: artifacts were missing for the active bundle {bundle.version} and have "
-                f"been copied back to {staged}; §10's rebuild set runs again against them",
+                f"been copied back to {staged}; the rebuild set runs again against them",
             )
         else:
             report.note("stage", f"artifacts staged to {staged}")
@@ -905,7 +905,7 @@ async def import_bundle(
                         report.note(
                             "vocabulary",
                             "this bundle ships no DNA rows and names no vocabulary version, so "
-                            "the naming layer is empty (§3.1) and the artifact_bundle row "
+                            "the naming layer is empty and the artifact_bundle row "
                             "records no vocabulary",
                         )
                     # Rule 1: two tiers, two calls, even with no vocabulary, so the missing-table refusals
@@ -951,7 +951,7 @@ async def import_bundle(
                                 f"this bundle names DNA vocabulary {vocabulary!r} and ships no "
                                 f"dna_vocab/{vocabulary}/ tree, so it carries neither the "
                                 "adjudications ledger nor any axis definition: the ones already "
-                                "installed are left in place and not re-applied (decision 266)",
+                                "installed are left in place and not re-applied",
                                 version=vocabulary,
                             )
                         elif installed_vocab is None:
@@ -959,9 +959,8 @@ async def import_bundle(
                                 "vocabulary",
                                 f"the curated DNA ledgers in dna_vocab/{vocabulary}/ name a "
                                 "vocabulary this install has no row for, so they are not applied "
-                                "and nothing installed changes: section 3.1's empty naming layer "
-                                "is filled by a content import, and decision 162 allows one of "
-                                "those (decision 265)",
+                                "and nothing installed changes: the empty naming layer is filled "
+                                "by a content import, and an install takes only one of those",
                                 version=vocabulary,
                             )
                         else:

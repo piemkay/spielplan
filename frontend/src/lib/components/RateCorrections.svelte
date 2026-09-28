@@ -1,55 +1,57 @@
 <script>
-  let { sides, label, busy = false, onCorrect } = $props();
+  // §6.1's corrections zone: a side the person has not seen leaves the pair and writes no duel.
+  let { sides, names = {}, busy = false, onCorrect } = $props();
+
+  const ORDER = ['left', 'right', 'both'];
+  const shown = $derived(ORDER.filter((side) => sides.includes(side)));
+  const label = (side) => (side === 'both' ? 'Neither' : names[side] ?? side);
+  const spoken = (side) =>
+    side === 'both' ? "I haven't seen either" : `I haven't seen ${names[side] ?? side}`;
 </script>
 
-<div class="corrections" data-testid="rate-corrections">
-  <span class="lead data">{label}:</span>
-  {#each sides as side (side)}
-    <button
-      class="side"
-      data-testid="rate-correction-{side}"
-      disabled={busy}
-      onclick={() => onCorrect(side)}
-    >{side}</button>
-  {/each}
-</div>
+<section class="corrections" data-testid="rate-corrections" aria-labelledby="rate-unseen-label">
+  <h3 class="footnote" id="rate-unseen-label">Haven't seen one?</h3>
+  <div class="row">
+    {#each shown as side (side)}
+      <button
+        class="pill"
+        data-testid="rate-correction-{side}"
+        aria-label={spoken(side)}
+        disabled={busy}
+        onclick={() => onCorrect(side)}
+      ><span class="name">{label(side)}</span></button>
+    {/each}
+  </div>
+</section>
 
 <style>
   .corrections {
     display: flex;
-    align-items: center;
+    flex-direction: column;
     gap: 8px;
+    padding-top: 12px;
+    box-shadow: inset 0 0.5px 0 var(--separator);
+  }
+  h3 {
+    margin: 0;
+    font-weight: 400;
+  }
+  .row {
+    display: flex;
     flex-wrap: wrap;
-    padding: 10px 12px;
-    border-top: 1px solid var(--line);
+    gap: 8px;
   }
-  .lead {
-    letter-spacing: 0.06em;
+  .pill {
+    max-width: 100%;
+    font-weight: 600;
   }
-  .side {
-    padding: 7px 14px;
-    min-height: 34px;
-    border-radius: var(--r-pill);
-    border: 1px solid var(--line-2);
-    background: transparent;
-    color: var(--ink-3);
-    font-family: var(--mono);
-    font-size: 11px;
-    cursor: pointer;
-    transition: border-color 0.12s ease, color 0.12s ease;
-  }
-  .side:hover:not(:disabled),
-  .side:focus-visible {
-    border-color: var(--ember);
-    color: var(--ink-2);
-  }
-  .side:disabled {
+  .pill:disabled {
     opacity: 0.45;
     cursor: default;
   }
-  @media (pointer: coarse) {
-    .side {
-      min-height: var(--touch);
-    }
+  .name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 </style>

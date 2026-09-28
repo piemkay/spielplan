@@ -499,7 +499,7 @@ async def test_the_result_is_refused_until_every_seat_has_submitted(app, db, lib
     revealed = await host.get(f"/api/tonight/sessions/{sid}/result")
     assert revealed.status_code == 200, revealed.text
     body = revealed.json()
-    assert body["beat"] == "VOTES REVEALED TOGETHER"
+    assert body["beat"] == "Tonight's pick"
     assert body["winner"]["title_id"] == chosen[0]
     assert body["approval_share"] == pytest.approx(1.0)
     assert body["participants"] == 2
@@ -543,7 +543,7 @@ async def test_solo_returns_picks_without_a_room(app, db, library):
 
     assert len(out["picks"]) == 3
     assert out["wildcard"] is not None
-    assert out["provenance"].startswith("200 min budget")
+    assert out["provenance"].endswith("fits in 3h 20m")
     assert (await client.get("/api/tonight/rooms")).json()["rooms"] == []
     assert await db.fetchval("SELECT count(*) FROM session") == 0
 
@@ -804,8 +804,8 @@ async def test_solos_held_out_pair_is_still_held_out_when_it_comes_back(app, db,
         for seq in range(1, held + 1)
     ]
     after = (await host.post("/api/tonight/solo", json={**body, "answers": sent})).json()
-    assert "tilted by your" in after["provenance"]
-    counted = int(after["provenance"].split("tilted by your ")[1].split()[0])
+    assert "Tilted by your" in after["provenance"]
+    counted = int(after["provenance"].split("Tilted by your ")[1].split()[0])
     assert counted == len(sent) - 1, (
         f"{len(sent)} answers sent, the one at pair {held} held out, provenance claims {counted}"
     )
@@ -836,7 +836,7 @@ async def test_a_solo_answer_is_classified_the_same_way_on_every_request(app, db
     assert {tuple(p["title_id"] for p in out["picks"]) for out in again}.__len__() == 1
 
     # One answer is held out, so the line reports one fewer than were sent.
-    counted = int(again[0]["provenance"].split("tilted by your ")[1].split()[0])
+    counted = int(again[0]["provenance"].split("Tilted by your ")[1].split()[0])
     assert counted == len(sent) - 1, (
         f"{len(sent)} answers sent, the one at pair {held} drawn by the arm, {counted} counted"
     )
@@ -1191,7 +1191,7 @@ async def test_the_arm_is_still_the_servers_and_never_the_clients(app, db, libra
     b = (await client.post("/api/tonight/solo", json={**body, "answers": lying})).json()
 
     assert a["provenance"] == b["provenance"], "a client moved an answer into the adaptive stream"
-    counted = int(a["provenance"].split("tilted by your ")[1].split()[0])
+    counted = int(a["provenance"].split("Tilted by your ")[1].split()[0])
     assert counted == len(honest) - 1, (
         f"{len(honest)} answers sent, the one at pair {held} held out, provenance claims {counted}"
     )

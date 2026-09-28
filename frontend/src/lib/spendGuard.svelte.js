@@ -185,7 +185,7 @@ export async function confirm() {
 // In force at once with no preview, since the cap enables no provider. Zero means spend nothing.
 export async function saveCap(amount) {
   if (typeof amount !== 'number' || !Number.isFinite(amount) || amount < 0) {
-    spend.capError = 'the cap is a number of dollars, 0 or more; 0 spends nothing';
+    spend.capError = 'The cap is a number of dollars, 0 or more.';
     return false;
   }
   spend.busy = 'cap';
@@ -252,6 +252,36 @@ export function usd(amount) {
   const [whole, frac = ''] = plain.split('.');
   const kept = frac.replace(/0+$/, '').padEnd(2, '0');
   return `$${whole}.${kept}`;
+}
+
+// For a sentence, not a confirm: cents, or two significant figures under a cent.
+export function about(amount) {
+  const n = Number(amount);
+  if (amount == null || amount === '' || !Number.isFinite(n)) return usd(amount);
+  const digits =
+    n === 0 || n >= 0.01
+      ? { minimumFractionDigits: 2, maximumFractionDigits: 2 }
+      : { maximumSignificantDigits: 2 };
+  return `$${n.toLocaleString('en', digits)}`;
+}
+
+const DAY_MS = 86_400_000;
+const figure = (value) =>
+  value === null || value === undefined || value === '' || !Number.isFinite(Number(value))
+    ? null
+    : Number(value);
+
+/**
+ * Days until the cap is spent at the last 30 days' pace, or null when that pace lasts the month.
+ * Budget, Overview and the admin sidebar all warn on this one rule.
+ */
+export function runOutDays(llm, now = Date.now()) {
+  const meter = llm?.meter;
+  const remaining = figure(meter?.remaining_usd);
+  const monthly = figure(llm?.projected?.monthly_usd);
+  if (!meter || remaining === null || !monthly) return null;
+  const days = remaining / (monthly / (llm.projected.window_days ?? 30));
+  return days < (Date.parse(meter.period_end) - now) / DAY_MS ? days : null;
 }
 
 // A dated table price says when it ends and what it becomes (decision 343).

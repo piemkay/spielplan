@@ -13,8 +13,7 @@
   import { noteMissing, posterSrc } from '$lib/art.js';
   import { displayNames } from '$lib/titleCard.js';
 
-  // `chrome` is a row the caller draws between the art and the name, never over the art.
-  let { title, onSelect, chrome = null } = $props();
+  let { title, onSelect } = $props();
 
   const names = $derived(displayNames(title));
 
@@ -63,30 +62,33 @@
       />
     {/if}
     {#if noCrowdData}
-      <!-- The shelf or grid header carries the explaining sentence once; the tooltip is for a pointer. -->
-      <span class="badge data" title="no outside ratings yet — placed by what it's about">new</span>
+      <!-- The shelf or grid carries the explaining sentence once; the tooltip is for a pointer. -->
+      <span class="new" data-testid="new-badge" title="No outside ratings yet — placed by what it's about"
+        >New</span
+      >
     {/if}
     {#if title.seen_state === 'seen'}
-      <span class="seen data">seen</span>
+      <span class="seen" role="img" aria-label="Seen" data-testid="seen-badge">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7.5" /></svg>
+      </span>
     {/if}
     {#if title.is_owned === true}
-      <span class="owned data" data-testid="owned-chip">in library</span>
+      <span class="owned" data-testid="owned-chip">In library</span>
     {/if}
   </div>
-  {#if chrome}
-    <div class="chrome">{@render chrome()}</div>
-  {/if}
-  <div class="meta">
-    <div class="name">{names.primary}</div>
-    <div class="data">{meta}</div>
-  </div>
+  <span class="meta">
+    <span class="name">{names.primary}</span>
+    <span class="sub">{meta}</span>
+  </span>
 </button>
 
 <style>
   .card-wrap {
     display: flex;
     flex-direction: column;
-    gap: 7px;
+    gap: 8px;
+    width: 100%;
+    min-width: 0;
     background: none;
     border: none;
     padding: 0;
@@ -94,11 +96,11 @@
     text-align: left;
     color: inherit;
   }
-  .card-wrap:hover .poster {
-    border-color: var(--ember-edge);
-  }
   .poster {
-    transition: border-color 0.12s ease;
+    transition: filter 0.12s var(--ease);
+  }
+  .card-wrap:hover .poster {
+    filter: brightness(1.08);
   }
   /* Inert, so the card's button takes every tap and a long press offers no image callout. */
   .art {
@@ -112,51 +114,61 @@
     -webkit-user-select: none;
     -webkit-touch-callout: none;
   }
-  .badge,
-  .seen {
-    position: absolute;
-    top: 7px;
-    padding: 2px 7px;
-    border-radius: var(--r-pill);
-    font-size: 9px;
-    letter-spacing: 0.06em;
-  }
-  /* A status, not the accent (§6.8); opaque, because an alpha fill over art varies in contrast. */
-  .badge {
-    left: 7px;
-    background: var(--status);
-    color: var(--ground);
-  }
-  .seen {
-    right: 7px;
-    background: rgba(13, 13, 15, 0.72);
-    color: var(--ink-3);
-  }
+  .new,
   .owned {
     position: absolute;
-    bottom: 7px;
-    left: 7px;
-    padding: 2px 7px;
-    border-radius: var(--r-pill);
-    letter-spacing: 0.06em;
-    background: rgba(13, 13, 15, 0.72);
-    border: 1px solid var(--line-2);
-    color: var(--ink-2);
+    left: 6px;
+    height: 20px;
+    padding: 0 7px;
+    border-radius: var(--r-xs);
+    display: grid;
+    place-items: center;
+    font-size: var(--fs-caption);
+    line-height: 16px;
+    font-weight: 600;
   }
-  .chrome {
+  .new {
+    top: 6px;
+    background: var(--text);
+    color: var(--bg);
+  }
+  .owned {
+    bottom: 6px;
+    background: rgba(12, 11, 10, 0.72);
+    color: var(--text);
+  }
+  .seen {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    width: 22px;
+    height: 22px;
+    border-radius: var(--r-pill);
+    background: rgba(12, 11, 10, 0.72);
+    color: var(--text);
+    display: grid;
+    place-items: center;
+  }
+  .meta {
     display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 6px;
-    min-height: 18px;
-    margin-top: -2px;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
   }
   .name {
-    font-size: 12.5px;
-    line-height: 1.25;
+    font-size: var(--fs-subhead);
+    line-height: 20px;
+    font-weight: 500;
     overflow: hidden;
     display: -webkit-box;
     -webkit-line-clamp: 2;
+    line-clamp: 2;
     -webkit-box-orient: vertical;
+  }
+  .sub {
+    font-size: var(--fs-footnote);
+    line-height: 18px;
+    color: var(--text-3);
+    font-variant-numeric: tabular-nums;
   }
 </style>

@@ -17,7 +17,7 @@ from spielplan.tonight import copy as copy_rules
 from spielplan.tonight import pool as pool_rules
 
 # 54e/proposal 60: the explicit beat before the winner, rendered verbatim by the client.
-BEAT = "VOTES REVEALED TOGETHER"
+BEAT = "Tonight's pick"
 
 ON_THE_BALLOT = (combine_rules.SLOT_FINALIST, combine_rules.SLOT_WILDCARD)
 
@@ -39,7 +39,11 @@ def card(
         "name": row["name"], "year": row["year"], "runtime_min": row["runtime_min"],
         "poster_path": row["poster_path"],
         "approvals": approvals,
-        "match_lines": list((row["per_user_match"] or {}).values()),
+        # Keyed by seat, so the client can draw each line with that person's avatar.
+        "match_lines": [
+            {"participant_id": int(seat), **line}
+            for seat, line in (row["per_user_match"] or {}).items()
+        ],
         # Decision 486: without Show the model, plain sentences and no D (`copy.for_member`).
         "conflict": row["conflict"] if show_model else copy_rules.for_member(row["conflict"]),
         # 54d's reserved slot, "labelled as such"; the words are the client's (decision 220).
@@ -61,6 +65,9 @@ def card(
         "play_url": (
             play_url(row["jellyfin_id"])
             if play_url is not None and row["jellyfin_id"] else None
+        ),
+        "play_reason": (
+            "no_server" if play_url is None else None if row["jellyfin_id"] else "not_in_library"
         ),
     }
 
@@ -163,6 +170,7 @@ async def breadth(
         {
             "participant_id": r["id"], "name": r["name"],
             "approved": int(r["yes"]), "of": int(r["of"]),
+            "said_yes": bool(r["chose_winner"]),
             "only_yes": int(r["yes"]) == 1 and bool(r["chose_winner"]),
         }
         for r in rows

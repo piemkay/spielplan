@@ -3,7 +3,8 @@ import { expect, test } from '@playwright/test';
 import { openTitle, signedIn } from '../helpers.js';
 
 /**
- * §6.0's title detail card, and the §4.1 rules that are only observable at the last step —
+ * §6.0's title detail card, a sheet since decision 527, and the §4.1 rules that are only
+ * observable at the last step —
  * the two DNA tiers staying distinguishable, credits deduped at read time, and platform
  * scores carrying their display-only caption.
  */
@@ -29,9 +30,9 @@ async function openMore(panel) {
 test('the card carries metadata, overview and the model line', async ({ page }) => {
   let panel = page.getByLabel('Title detail');
   await expect(panel.getByRole('heading', { name: 'Heat' })).toBeVisible();
-  await expect(panel.locator('.sub')).toContainText('1995');
-  // The kind in words (decision 486): `movie` is the column value.
-  await expect(panel.locator('.sub')).toContainText('film');
+  // "1995 · 2h 50m": no column value on the card (decision 486).
+  await expect(panel.locator('.sub')).toHaveText(/^1995 · \d/);
+  await expect(panel.getByTestId('title-directed')).toHaveText('Directed by Michael Mann');
   // Decision 486: the model line is shown only with Show the model on.
   await expect(panel.locator('.modelline')).toHaveCount(0);
   await showModel(page, true);
@@ -46,8 +47,10 @@ test('the card carries metadata, overview and the model line', async ({ page }) 
 async function expectTheModelLine(panel) {
   // Asserted outright, never as an alternation with the failure: the import builds Heat's prior.
   // b(t) is centred (§5.1) and Heat's is negative; `_format_line` prints two decimals.
-  await expect(panel.locator('.modelline')).toContainText('bundle test-v1');
   await expect(panel.locator('.modelline')).toContainText(/b\(t\) -?\d+\.\d\d/);
+  // Where the coordinate came from, in words; the source id and the bundle stay off the card.
+  await expect(panel.locator('.modelline')).toContainText('Placed by');
+  await expect(panel.locator('.modelline')).not.toContainText(/bundle|_/);
 }
 
 test('the card leads with the answers and Play, and folds the rest behind one disclosure', async ({
@@ -95,8 +98,9 @@ test('the two DNA tiers are visibly distinct, and a term in both is shown once, 
 
   const panel = page.getByLabel('Title detail');
   await openMore(panel);
-  await expect(panel.getByText("WHAT IT'S LIKE")).toBeVisible();
-  await expect(panel.getByText('PROBABLY ALSO')).toBeVisible();
+  await expect(panel.getByRole('heading', { name: "What it's like" })).toBeVisible();
+  // The inferred tier is apart and named as less certain; Heat's one guess is folded.
+  await expect(panel.getByText('Our read · less certain')).toBeVisible();
 
   // By label: the fixture ships `themes.obsession` with the label "obsession".
   const extracted = panel.locator('.tag .term');
@@ -106,21 +110,25 @@ test('the two DNA tiers are visibly distinct, and a term in both is shown once, 
 });
 
 test('every extracted tag shows its evidence quote and source', async ({ page }) => {
-  // §4.1 rule 1: "a tag without its quote is unfalsifiable."
+  // §4.1 rule 1: "a tag without its quote is unfalsifiable." A chip shows its quotes when picked.
   const panel = page.getByLabel('Title detail');
   await openMore(panel);
   const tags = panel.locator('.tag');
   await expect(tags.first()).toBeVisible();
+  const card = panel.getByTestId('title-evidence');
 
   for (const tag of await tags.all()) {
-    const quotes = tag.locator('.quote');
+    await tag.click();
+    await expect(tag).toHaveAttribute('aria-pressed', 'true');
+    await expect(card).toContainText((await tag.textContent())?.trim() ?? '');
+    const quotes = card.locator('.quote');
     await expect(quotes.first()).toBeVisible();
     // A codec bug once rendered ~80 empty quotes per tag.
     await expect(quotes.first()).not.toHaveText('“”');
     expect(await quotes.count()).toBeLessThan(6);
     // By name ("Trakt · comment"), never the stored key (decision 486).
-    await expect(tag.locator('.src').first()).toHaveText(/\S/);
-    await expect(tag.locator('.src').first()).not.toContainText(':');
+    await expect(card.locator('.src').first()).toHaveText(/\S/);
+    await expect(card.locator('.src').first()).not.toContainText(':');
   }
 });
 
@@ -131,6 +139,8 @@ test('a quote cut mid-sentence says so and a one-source projection is fainter, n
   // fragment; a single-source projection is fainter and folded, never dropped (decision 517).
   const panel = page.getByLabel('Title detail');
   await openMore(panel);
+  // The chip's text starts with the dot's whitespace, so the label is matched on its own span.
+  await panel.locator('.tag').filter({ has: page.locator('.term', { hasText: /^obsession$/ }) }).click();
   await expect(panel.locator('.quote', { hasText: 'the work eats the man' })).toHaveText(
     '“…the work eats the man and he lets it…”'
   );
@@ -151,7 +161,7 @@ test("salience is Show the model's, and nothing is filtered by it", async ({ pag
   try {
     panel = await openTitle(page, 'Heat');
     await openMore(panel);
-    await expect(panel.locator('.tag').first().getByText(/sal [123]/)).toBeVisible();
+    await expect(panel.getByTestId('title-evidence').getByText(/sal [123]/)).toBeVisible();
     await expect(panel.locator('.tag')).toHaveCount(tags);
   } finally {
     await showModel(page, false);
@@ -173,12 +183,14 @@ test('platform scores travel with their display-only caption', async ({ page }) 
   const panel = page.getByLabel('Title detail');
   await openMore(panel);
   await expect(panel.locator('.scores')).toBeVisible();
-  await expect(panel.getByText(/never affect your suggestions/)).toBeVisible();
+  await expect(panel.getByText(/never change your suggestions/)).toBeVisible();
 });
 
 test('tapping a second poster re-fetches instead of showing the first', async ({ page }) => {
-  // Both posters from the SAME grid: a new search closes the card, which would hide the bug.
+  // Both posters from the SAME grid. The card is a sheet over the grid, so it closes between.
   const panel = page.getByLabel('Title detail');
+  await page.keyboard.press('Escape');
+  await expect(panel).toHaveCount(0);
   await page.getByRole('searchbox', { name: 'Search titles' }).fill('e');
   // "e" only sits inside "Prisoners", so it waits behind the looser matches (decision 516).
   await page.getByTestId('weak-matches-toggle').click();
@@ -189,6 +201,8 @@ test('tapping a second poster re-fetches instead of showing the first', async ({
 
   await heat.click();
   await expect(panel.getByRole('heading', { name: 'Heat' })).toBeVisible();
+  await page.keyboard.press('Escape');
+  await expect(panel).toHaveCount(0);
   await prisoners.click();
   await expect(panel.getByRole('heading', { name: 'Prisoners' })).toBeVisible();
   await expect(panel.getByRole('heading', { name: 'Heat' })).toHaveCount(0);
@@ -202,12 +216,12 @@ const VOCAB_ID = /^[a-z_]+\.[a-z0-9_]+$/;
 const DOUBLED = /^[a-z_]+\.[a-z_]+\./;
 
 /**
- * The token a chip was painted with and its resolved value. The declared property, because
- * computed colours are all rgb; resolved too, so an undefined `--facet-*` name fails.
+ * The token a chip's facet dot was painted with and its resolved value. The declared property,
+ * because computed colours are all rgb; resolved too, so an undefined `--facet-*` name fails.
  */
 async function chipColour(chip) {
   return chip.evaluate((el) => {
-    const declared = el.style.color || '';
+    const declared = el.querySelector('.dot')?.style.background || '';
     const named = declared.match(/var\(\s*(--[a-z0-9-]+)\s*\)/);
     const token = named ? named[1] : '';
     return {
@@ -221,11 +235,11 @@ async function chipColour(chip) {
 }
 
 test('a DNA chip prints its term once and wears its facet colour', async ({ page }) => {
-  // The term's label, never its id (decision 486); the facet is spent on the colour, "a fixed
-  // colour per vocabulary facet" (§6.8). Both tiers, built from different payload keys.
+  // The term's label, never its id (decision 486); the facet is spent on the dot beside it, "a
+  // fixed colour per vocabulary facet" (§6.8). Both tiers, built from different payload keys.
   const panel = page.getByLabel('Title detail');
   const chips = [
-    ...(await panel.locator('.tag .term').all()).map((el) => [el, el]),
+    ...(await panel.locator('.tag').all()).map((el) => [el, el.locator('.term')]),
     ...(await panel.locator('.chips .chip').all()).map((el) => [el, el.locator('.chiplabel')])
   ];
   expect(
@@ -346,7 +360,7 @@ test('the worst cross-department titles open without a console error', async ({ 
     // Past the credits, where the throw was: a card that dies mid-render still shows its heading.
     await expect(panel.locator('.people .person').first()).toBeVisible();
     await openMore(panel);
-    await expect(panel.getByText("WHAT IT'S LIKE")).toBeVisible();
+    await expect(panel.getByRole('heading', { name: "What it's like" })).toBeVisible();
   }
   expect(errors, `the card threw on ${worst.map((t) => t.name).join(', ')}`).toEqual([]);
 });

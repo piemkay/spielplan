@@ -4,6 +4,7 @@ vi.mock('$lib/api.js', () => ({ api: vi.fn(), get: vi.fn(), post: vi.fn() }));
 
 import { api, get, post } from '$lib/api.js';
 import {
+  about,
   amend,
   basisLine,
   cancel,
@@ -279,6 +280,15 @@ describe('the figures as the cards print them', () => {
     expect(usd(0.75)).toBe('$0.75');
     expect(usd('unknown')).toBe('unknown');
     expect(usd(null)).toBeNull();
+  });
+
+  it('rounds a figure for a sentence to the cent, and keeps two digits under a cent', () => {
+    expect(about('28.667')).toBe('$28.67');
+    expect(about('0.032175')).toBe('$0.03');
+    expect(about('0.0049')).toBe('$0.0049');
+    expect(about('0')).toBe('$0.00');
+    expect(about('1234.5')).toBe('$1,234.50');
+    expect(about('unknown')).toBe('unknown');
   });
 
   it('names the model, the rates, their source and the date the price changes (decision 343)', () => {

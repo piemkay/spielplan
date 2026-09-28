@@ -148,17 +148,16 @@ def over_budget_by(*, runtime_min: int | None, budget_min: int) -> int | None:
 
 
 def fit_line(*, runtime_min: int | None, budget_min: int, kind: str) -> str:
-    """§6.2 step 8's "fits your 130 min" / "runs 21 min over", with 54h's " per episode" on a series.
+    """§6.2 step 8's "Fits your time" / "21 min over", with 54h's " per episode" on a series.
 
-    `kind` is required so the qualifier cannot go missing; "runtime unknown" takes none.
+    `kind` is required so the qualifier cannot go missing where a number is stated.
     """
     if runtime_min is None:
-        return "runtime unknown"
-    per = PER_EPISODE if kind == KIND_SERIES else ""
+        return "Runtime unknown"
     over = over_budget_by(runtime_min=runtime_min, budget_min=budget_min)
     if over is None:
-        return f"fits your {budget_min} min{per}"
-    return f"runs {over} min over{per}"
+        return "Fits your time"
+    return f"{over} min over{PER_EPISODE if kind == KIND_SERIES else ''}"
 
 
 def with_budget(candidates: Iterable[Candidate], *, budget_min: int) -> list[Candidate]:

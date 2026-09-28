@@ -684,7 +684,7 @@ async def _match_lines(
         pulls = [x for x in scored if x[1] > 0.0][:2]
         leaned = bool(pulls)
         if not pulls and not below_usual:
-            # Theirs by stable taste: the title's own loudest terms, as solo says (`solo.PULL_WHY`).
+            # Theirs by stable taste: the title's own loudest terms, as solo says (`solo.why_line`).
             pulls = [(t["term"], 0.0, t["tier"]) for t in carried[:2]]
         if pulls:
             words = [word(t) for t, _, _ in pulls]

@@ -103,22 +103,21 @@ def test_an_over_budget_title_says_how_far_over_and_a_fitting_one_says_nothing()
 
 
 def test_the_fit_line_reads_the_way_the_spec_writes_it():
-    """§6.2 step 7 fixes both branches verbatim: "fits your 130 min" / "runs 21 min over"."""
-    assert pool.fit_line(runtime_min=110, budget_min=BUDGET, kind="movie") == "fits your 130 min"
-    assert pool.fit_line(runtime_min=151, budget_min=BUDGET, kind="movie") == "runs 21 min over"
-    assert pool.fit_line(runtime_min=None, budget_min=BUDGET, kind="movie") == "runtime unknown"
+    """§6.2 step 8 fixes both branches verbatim: "Fits your time" / "21 min over"."""
+    assert pool.fit_line(runtime_min=110, budget_min=BUDGET, kind="movie") == "Fits your time"
+    assert pool.fit_line(runtime_min=151, budget_min=BUDGET, kind="movie") == "21 min over"
+    assert pool.fit_line(runtime_min=None, budget_min=BUDGET, kind="movie") == "Runtime unknown"
 
 
 def test_a_series_label_says_which_minutes_it_is_counting():
-    """Decision 219: a series budget is per episode, and the label says so; the arithmetic is unchanged."""
-    assert pool.fit_line(runtime_min=45, budget_min=60, kind="series") == (
-        "fits your 60 min per episode"
-    )
+    """Decision 219: a series budget is per episode, and a label with a number says so; the
+    arithmetic is unchanged."""
+    assert pool.fit_line(runtime_min=45, budget_min=60, kind="series") == "Fits your time"
     assert pool.fit_line(runtime_min=81, budget_min=60, kind="series") == (
-        "runs 21 min over per episode"
+        "21 min over per episode"
     )
-    # "runtime unknown" measures nothing, so no per-episode note.
-    assert pool.fit_line(runtime_min=None, budget_min=60, kind="series") == "runtime unknown"
+    # "Runtime unknown" measures nothing, so no per-episode note.
+    assert pool.fit_line(runtime_min=None, budget_min=60, kind="series") == "Runtime unknown"
     # The bound is untouched by the label, on either kind.
     assert pool.admits(runtime_min=45, budget_min=60)
     assert pool.over_budget_by(runtime_min=81, budget_min=60) == 21
@@ -132,21 +131,21 @@ def test_a_candidate_carries_its_own_over_budget_label():
     by_id = {c.title_id: c for c in built}
 
     assert by_id[1].over_budget_min == 21
-    assert by_id[1].fit_line == "runs 21 min over"
+    assert by_id[1].fit_line == "21 min over"
     assert by_id[2].over_budget_min is None
-    assert by_id[2].fit_line == "fits your 130 min"
+    assert by_id[2].fit_line == "Fits your time"
 
 
 def test_a_series_candidate_is_stamped_with_the_qualifier_and_a_film_is_not():
     """Stamped once off the candidate's kind, so all three surfaces agree (decision 219)."""
     built = pool.with_budget(
-        [candidate(1, [0.5], runtime=45, kind="series"), candidate(2, [0.5], runtime=110)],
+        [candidate(1, [0.5], runtime=150, kind="series"), candidate(2, [0.5], runtime=150)],
         budget_min=BUDGET,
     )
     by_id = {c.title_id: c for c in built}
 
-    assert by_id[1].fit_line == "fits your 130 min per episode"
-    assert by_id[2].fit_line == "fits your 130 min"
+    assert by_id[1].fit_line == "20 min over per episode"
+    assert by_id[2].fit_line == "20 min over"
 
 
 def test_the_budget_filter_drops_only_what_it_must():

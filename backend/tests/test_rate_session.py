@@ -1204,7 +1204,7 @@ async def test_the_route_serves_a_card_with_its_counter_its_balance_and_its_undo
 
     first = (await client.get("/api/rate")).json()
     assert first["session"]["block"] == {
-        "index": 0, "slot": 1, "size": 15, "counter": "1 / 15", "serving": "sweep"
+        "index": 0, "slot": 1, "size": 15, "counter": "1 of 15", "serving": "sweep"
     }
     assert first["card"]["type"] == "sweep"
     assert first["undo"] == {"available": False, "kind": None, "reason": "empty"}
@@ -1259,7 +1259,7 @@ async def test_the_route_reports_undo_as_unavailable_rather_than_no_opping(db, r
     await client.get("/api/rate")
     refused = await client.post("/api/rate/undo")
     assert refused.status_code == 409
-    assert refused.json()["detail"]["reason"] == "empty"
+    assert refused.json()["detail"] == {"reason": "empty", "message": "Nothing to undo yet"}
 
 
 async def test_the_route_rejects_an_empty_kind_selection(rate_client):

@@ -6,12 +6,16 @@ import {
   creditJobs,
   creditKey,
   dedupeEvidence,
+  directedBy,
   displayNames,
   extractedByTerm,
+  genreLine,
+  placedBy,
   playWhy,
   projectedForCard,
   quoteText,
   revealLine,
+  scoreLabel,
   sourceLabel,
   syncNote
 } from './titleCard.js';
@@ -21,7 +25,7 @@ const REFERENCE = /§\s?\d|decision \d|proposal \d|\bM[0-7](\.\d+)?\b/i;
 describe('syncNote', () => {
   it('says Jellyfin was told only when it was', () => {
     expect(syncNote({ synced: true, reason: null })).toBe('Saved, and Jellyfin is up to date.');
-    expect(syncNote({ synced: false, reason: null })).toBe('Saved here - Jellyfin was not told.');
+    expect(syncNote({ synced: false, reason: null })).toBe('Saved here — Jellyfin was not told.');
   });
 
   it("lets decision 210(a)'s reason win over a success", () => {
@@ -158,10 +162,61 @@ describe('revealLine and answeredLine', () => {
   });
 
   it('says what was saved in words', () => {
-    expect(answeredLine('liked')).toBe('Saved - you liked it.');
-    expect(answeredLine('fine')).toBe('Saved - you thought it was fine.');
-    expect(answeredLine('disliked')).toBe('Saved - you disliked it.');
-    expect(answeredLine('not_seen')).toBe('Saved - marked not seen.');
+    expect(answeredLine('liked')).toBe('Saved — you liked it.');
+    expect(answeredLine('fine')).toBe('Saved — you thought it was fine.');
+    expect(answeredLine('disliked')).toBe('Saved — you disliked it.');
+    expect(answeredLine('not_seen')).toBe('Saved — marked not seen.');
+  });
+});
+
+describe('directedBy', () => {
+  const credit = (name, role_class, job) => ({ person_id: name.length, name, role_class, job });
+
+  it('names who directed, once each, and nothing when nobody did', () => {
+    expect(directedBy([credit('Michael Mann', 'director', 'Director'), credit('Al Pacino', 'cast', 'Actor')]))
+      .toBe('Directed by Michael Mann');
+    expect(directedBy([credit('Joel Coen', 'director', 'Director'), credit('Ethan Coen', null, 'Director')]))
+      .toBe('Directed by Joel Coen and Ethan Coen');
+    expect(directedBy([credit('Al Pacino', 'cast', 'Actor')])).toBe('');
+    expect(directedBy(null)).toBe('');
+  });
+
+  it('counts the rest of a long list rather than printing it', () => {
+    const many = ['A', 'B', 'C', 'D'].map((n) => credit(n, 'director', 'Director'));
+    expect(directedBy(many)).toBe('Directed by A, B and 2 more');
+  });
+});
+
+describe('genreLine', () => {
+  it('reads the first two as one sentence, and nothing when there are none', () => {
+    expect(genreLine(['Crime', 'Thriller', 'Drama'])).toBe('Crime, thriller');
+    expect(genreLine(['Science Fiction'])).toBe('Science fiction');
+    expect(genreLine([])).toBe('');
+    expect(genreLine(undefined)).toBe('');
+  });
+});
+
+describe('placedBy', () => {
+  it('says where the coordinate came from in words, never the source id', () => {
+    for (const source of ['backbone', 'blended', 'cold_tower']) {
+      expect(placedBy(source)).toMatch(/^Placed by /);
+      expect(placedBy(source)).not.toMatch(/_|backbone|cold|tower/i);
+    }
+    expect(placedBy('none')).toBe('');
+    expect(placedBy(undefined)).toBe('');
+  });
+});
+
+describe('scoreLabel', () => {
+  it('names the platform, and the audience only where one platform shows two scores', () => {
+    const imdb = { platform: 'imdb', metric: 'user_score' };
+    const critics = { platform: 'rottentomatoes', metric: 'critic_score' };
+    const audience = { platform: 'rottentomatoes', metric: 'audience_score' };
+    const items = [imdb, critics, audience];
+    expect(scoreLabel(imdb, items)).toBe('IMDb');
+    expect(scoreLabel(critics, items)).toBe('Rotten Tomatoes critics');
+    expect(scoreLabel(audience, items)).toBe('Rotten Tomatoes audience');
+    expect(scoreLabel({ platform: 'trakt', metric: 'watch_rating' }, items)).toBe('Trakt watch rating');
   });
 });
 

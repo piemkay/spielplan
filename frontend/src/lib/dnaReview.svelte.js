@@ -45,5 +45,5 @@ export function ledgerPrefill(row, titleId = null) {
 
 export function titleOf(row) {
   if (row.name) return row.year ? `${row.name} (${row.year})` : row.name;
-  return row.title_id == null ? 'no title' : `title ${row.title_id}`;
+  return row.title_id == null ? 'No title' : `Title ${row.title_id}`;
 }

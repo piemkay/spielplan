@@ -71,7 +71,7 @@ async def items(
     user = f"${len(args) + 1}"
     rows = await conn.fetch(
         f"""
-        SELECT ls.title_id, t.name, ls.s, COALESCE(ls.sigma_eff, ls.sigma) AS sigma,
+        SELECT ls.title_id, t.name, t.year, ls.s, COALESCE(ls.sigma_eff, ls.sigma) AS sigma,
                te.tier AS assigned_tier, te.n_levels AS assigned_k, lv.value AS verdict,
                -- The K the drop is being READ against, in the same round trip as the drop: a
                -- rescale that depends on a second call is a rescale a caller can forget, and this
@@ -116,6 +116,7 @@ async def items(
                 )
             ),
             verdict=None if r["verdict"] is None else int(r["verdict"]),
+            year=r["year"],
         )
         for r in rows
     ]
@@ -188,26 +189,6 @@ async def recent_titles(
         window,
     )
     return {int(r[side]) for r in rows for side in ("title_a", "title_b")}
-
-
-async def compared_count(conn: asyncpg.Connection, *, user_id: int, kind: str) -> int:
-    """Comparisons answered for this kind, for the board's why-line.
-
-    Held-out INCLUDED, or the count would stand still on exactly those answers (§13).
-    `tier_insert` duels are a drop's by-product and are left out.
-    """
-    return int(
-        await conn.fetchval(
-            """
-            SELECT count(*) FROM duel d
-            JOIN title t ON t.id = d.title_a AND t.kind = $2
-            WHERE d.user_id = $1 AND d.context IN ('profile_battle', 'tier_queue')
-            """,
-            user_id,
-            kind,
-        )
-        or 0
-    )
 
 
 async def answered_comparisons(
@@ -299,6 +280,7 @@ def public(tiers: Sequence[board.Tier]) -> list[dict[str, Any]]:
         {
             "index": tier.index,
             "label": tier.label,
+            "verdict": tier.verdict,
             "entries": [entry.public() for entry in tier.entries],
         }
         for tier in tiers
@@ -310,7 +292,6 @@ __all__ = [
     "answered_comparisons",
     "asked_pairs",
     "candidates",
-    "compared_count",
     "comparison_counts",
     "cutpoints_of",
     "items",

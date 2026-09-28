@@ -32,10 +32,9 @@ const card = (overrides = {}) => ({
 const section = (items) => ({
   kind: 'movie',
   title: 'Because you liked Paddington',
-  heading: 'FILMS',
+  heading: 'Films',
   why: 'warm comedies, gentle pacing',
   caption: null,
-  shared_terms: [],
   items
 });
 
@@ -80,7 +79,7 @@ describe('the cold-placement note', () => {
     expect(notes).toHaveLength(1);
     expect(notes[0].textContent).toContain('no outside ratings yet');
     expect(notes[0].textContent).not.toContain('Cold Tower');
-    expect(notes[0].className).toContain('why');
+    expect(notes[0].className).toContain('footnote');
     unmount(app);
   });
 
@@ -98,7 +97,7 @@ describe('the cold-placement note', () => {
     // The evaluation holdout serves crowd-rated rows from the Cold Tower.
     const app = render([card({ e_source: 'cold_tower', placement: 'cold_tower', item_n: 192061 })]);
     expect(target.querySelectorAll(COLD_NOTE)).toHaveLength(0);
-    expect(target.querySelector('.badge')).toBeNull();
+    expect(target.querySelector('[data-testid="new-badge"]')).toBeNull();
     unmount(app);
   });
 
@@ -110,7 +109,7 @@ describe('the cold-placement note', () => {
     });
     flushSync();
     expect(target.querySelectorAll(COLD_NOTE)).toHaveLength(0);
-    expect(target.querySelector('.badge').textContent).toBe('new');
+    expect(target.querySelector('[data-testid="new-badge"]').textContent).toBe('New');
     unmount(app);
   });
 
@@ -137,73 +136,30 @@ function renderSection(overrides) {
 }
 
 describe('what a row says about itself', () => {
-  it('states how many titles it holds, since a phone shows fewer than three', () => {
-    const items = Array.from({ length: 12 }, (_, i) => card({ title_id: i + 1 }));
-    const app = renderSection({ items });
-    expect(target.querySelector('[data-testid="shelf-count"]').textContent.trim()).toBe(
-      '12 titles'
-    );
-    unmount(app);
-  });
-
-  it('names a shared term by its label and never by its vocabulary id', () => {
+  it('is a heading and one reason line, with no chips of terms, kinds or counts', () => {
     const app = renderSection({
-      shared_terms: [
-        { term: 'era.wwii', facet: 'era', tier: 'extracted', role: 'member', label: 'World War II' },
-        { term: 'pacing.slow_burn', facet: 'pacing', tier: 'projected', role: 'member' }
-      ]
+      why_terms: [{ term: 'era.wwii', facet: 'era', tier: 'extracted', label: 'World War II' }]
     });
-    const chips = [...target.querySelectorAll('[data-testid="shelf-term"]')].map((el) =>
-      el.firstChild.textContent.trim()
-    );
-    expect(chips).toEqual(['World War II', 'slow burn']);
-    expect(target.textContent).not.toContain('era.wwii');
+    const header = target.querySelector('header');
+    expect([...header.children].map((el) => el.dataset.testid)).toEqual(['shelf-title', 'shelf-why']);
+    expect(target.textContent).not.toContain('World War II');
+    expect(target.textContent).not.toContain('FILMS');
     unmount(app);
   });
 
-  it('says a tier letter on an unseen title is a guess, and one on the Rank board is not', () => {
+  // Tier letters live on Rank (decision 527).
+  it('prints no rank number and no tier letter on a card, whatever the payload carries', () => {
     const app = render([
-      card({ title_id: 1, tier: 'S', seen: false }),
-      card({ title_id: 2, tier: 'B', seen: true, on_board: true, board_tier: 'B' })
+      card({ title_id: 1, name: 'Heat', tier: 'S', rank: 1 }),
+      card({ title_id: 2, name: 'Up', tier: 'B', rank: 2, seen: true })
     ]);
-    const [guess, placed] = target.querySelectorAll('[data-testid="shelf-tier"]');
-    expect(guess.getAttribute('aria-label')).toBe(
-      "our guess: tier S if you rated it — you haven't seen it"
-    );
-    expect(guess.dataset.guess).toBe('true');
-    expect(placed.getAttribute('aria-label')).toBe('tier B, as on your Rank board');
-    expect(placed.dataset.guess).toBe('false');
-    unmount(app);
-  });
-
-  // "as on your Rank board" is said only where Rank shows this letter (decision 486).
-  it('never quotes the Rank board for a title that is not on it, or at another letter there', () => {
-    const app = render([
-      card({ title_id: 1, tier: 'S', seen: true, on_board: false, board_tier: null }),
-      card({ title_id: 2, tier: 'C', seen: true, on_board: true, board_tier: 'A' })
+    const cards = [...target.querySelectorAll('[data-testid="shelf-card"]')];
+    expect(cards.map((c) => c.querySelector('.meta').textContent.replace(/\s+/g, ' ').trim())).toEqual([
+      'Heat 2014 · 1h 35m',
+      'Up 2014 · 1h 35m'
     ]);
-    const [unrated, moved] = target.querySelectorAll('[data-testid="shelf-tier"]');
-    expect(unrated.getAttribute('aria-label')).toBe('our guess: tier S if you rated it');
-    expect(unrated.dataset.guess).toBe('true');
-    expect(moved.getAttribute('aria-label')).toBe(
-      'tier C, where your other answers point — you put it in A on your Rank board'
-    );
-    expect(moved.dataset.guess).toBe('false');
-    expect(target.textContent).not.toContain('as on your Rank board');
-    unmount(app);
-  });
-
-  it('draws the rank and the tier under the art, never over it', () => {
-    const app = render([card({ title_id: 1, tier: 'A', rank: 1 })]);
-    const rank = target.querySelector('[data-testid="shelf-rank"]');
-    const tier = target.querySelector('[data-testid="shelf-tier"]');
-    for (const badge of [rank, tier]) {
-      expect(badge.closest('.poster'), 'a badge is on the art').toBeNull();
-      expect(badge.closest('.chrome'), 'a badge left the row under the art').not.toBeNull();
-    }
-    const cardWrap = target.querySelector('.card-wrap');
-    const order = [...cardWrap.children].map((el) => el.className.split(' ')[0]);
-    expect(order).toEqual(['poster', 'chrome', 'meta']);
+    for (const c of cards) expect(c.textContent).not.toMatch(/\b(S|B)\b/);
+    expect(cards[1].querySelector('[data-testid="seen-badge"]')).not.toBeNull();
     unmount(app);
   });
 

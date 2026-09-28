@@ -32,16 +32,17 @@ test.describe('first boot', () => {
 
     await page.goto('/');
     await expect(page).toHaveURL(/\/setup$/);
-    await expect(page.getByText('first boot · a bundle-less app is a legal state')).toBeVisible();
+    await expect(
+      page.getByText('Everything after the admin account can be done later in Admin.')
+    ).toBeVisible();
   });
 
   test('the first step warns that PUBLIC_URL is load-bearing for passkeys', async () => {
     await page.goto('/setup');
-    // \s+: the paragraph wraps in the source, so the text node carries a newline.
-    await expect(
-      page.getByText(/Passkeys are bound to the public origin\.\s+Changing PUBLIC_URL/)
-    ).toBeVisible();
-    await expect(page.getByText(/invalidates every\s+registered credential/)).toBeVisible();
+    await expect(page.getByText(/every passkey stops working/)).toBeVisible();
+    // The variable's name is the verbatim part, one tap down.
+    await page.getByText('Technical details').click();
+    await expect(page.getByText(/PUBLIC_URL sets this origin/)).toBeVisible();
 
     // The rendered origin must be the server's actual PUBLIC_URL, not the literal token.
     const config = await page.request.get('/api/config');
@@ -53,7 +54,7 @@ test.describe('first boot', () => {
 
   test('creating the admin signs them in and lands on Home', async () => {
     await createAdminThroughWizard(page);
-    await expect(page.locator('.chip')).toContainText(ADMIN.name);
+    await expect(page.getByTestId('account-chip')).toHaveAccessibleName(new RegExp(ADMIN.name));
   });
 
   test('the wizard asks for no push permission and runs no install walkthrough', async () => {
@@ -90,14 +91,14 @@ test.describe('first boot', () => {
     await anonymous.dispose();
   });
 
-  test('Home renders the no-bundle state rather than an error', async () => {
+  test('Home renders the no-movie-data state rather than an error', async () => {
     await page.goto('/');
     await expect(page.getByRole('heading', { name: 'Nothing to show yet' })).toBeVisible();
-    await expect(page.getByText(/That is a legal state/)).toBeVisible();
-    await expect(page.getByRole('link', { name: 'Import a bundle' })).toBeVisible();
+    await expect(page.getByText(/Import it in Movie data/)).toBeVisible();
+    await expect(page.getByRole('link', { name: 'Open Movie data' })).toBeVisible();
     // Both places say it; each is asserted apart so a bare text match does not trip strict mode.
-    await expect(page.getByRole('link', { name: 'no bundle imported' })).toBeVisible();
-    await expect(page.locator('.count')).toContainText('no bundle imported');
+    await expect(page.getByRole('link', { name: /No movie data yet/ })).toBeVisible();
+    await expect(page.locator('.count')).toHaveText('No movie data yet');
   });
 
   test('validation reports every §4.1 landmine rule before anything is written', async () => {
@@ -157,9 +158,9 @@ test.describe('first boot', () => {
     await expect(page.locator('[data-served="restart"]')).toHaveCount(0);
 
     await page.reload();
-    await expect(page.locator('.bundle-active')).toContainText('active: test-v1');
-    await expect(page.locator('.bundle-active .warn')).toHaveCount(0);
-    await expect(page.getByRole('link', { name: 'no bundle imported' })).toHaveCount(0);
+    await expect(page.getByTestId('bundle-version')).toHaveText('test-v1');
+    await expect(page.locator('.card.warn')).toHaveCount(0);
+    await expect(page.getByRole('link', { name: /No movie data yet/ })).toHaveCount(0);
     expect((await health(page.request)).bundle).toBe('test-v1');
   });
 });

@@ -18,8 +18,8 @@
 </script>
 
 {#if log.length || ledger}
-  <section class="log" data-testid="rate-model-log">
-    <span class="eyebrow">MODEL LOG</span>
+  <section class="card log" data-testid="rate-model-log">
+    <h3>Model log</h3>
     {#each log as line, i (i)}
       <div class="line" data-testid="rate-model-log-line">{line}</div>
     {/each}
@@ -33,23 +33,20 @@
   .log {
     display: flex;
     flex-direction: column;
-    gap: 5px;
-    padding: 11px 13px;
-    background: var(--card);
-    border: 1px solid var(--line);
-    border-radius: var(--r-md);
+    gap: 4px;
   }
-  .eyebrow {
-    font-family: var(--mono);
-    font-size: 9.5px;
-    letter-spacing: 0.12em;
-    color: var(--ink-4);
+  h3 {
+    margin: 0 0 4px;
+    font-size: var(--fs-subhead);
+    line-height: 20px;
+    font-weight: 600;
   }
+  /* The data voice: tabular figures in the interface face. */
   .line {
-    font-family: var(--mono);
-    font-size: 10.5px;
-    line-height: 1.55;
-    color: var(--ink-3);
+    font-size: var(--fs-footnote);
+    line-height: 18px;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-2);
     word-break: break-word;
   }
 </style>

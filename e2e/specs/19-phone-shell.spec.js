@@ -100,7 +100,7 @@ test('no form control on the member path zooms on focus', async ({ page, context
   expect(await controlsThatWouldZoom(page), 'on / (Home)').toEqual([]);
 
   await page.goto('/account');
-  await expect(page.getByRole('heading', { name: 'Account', exact: true })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'You', exact: true })).toBeVisible();
   expect(await controlsThatWouldZoom(page), 'on /account').toEqual([]);
 
   await page.goto('/rank');
@@ -167,7 +167,7 @@ test("the account menu's entries and the overlay exits meet the touch floor", as
   await showModel(page, true);
   try {
     await page.goto('/');
-    await page.getByTestId('model-rail-open').click();
+    await (await openAccountMenu(page)).getByTestId('model-rail-open').click();
     await expect(page.getByTestId('model-rail')).toBeVisible();
     await meetsTheTouchFloor(page.getByTestId('model-rail-close'), "the model rail's close button");
     // The kind filters render only with more than one kind.
@@ -199,18 +199,24 @@ test("the account menu's entries and the overlay exits meet the touch floor", as
 
 test('every menu and overlay dismisses by outside tap and by Escape', async ({ page }) => {
   // Proposal 131: "Every popover, menu and sheet dismisses on outside click and on Escape".
-  // The header brand is outside all three by construction and has no handler of its own.
-  // `.click()`: `.tap()` throws on desktop, and the listener is on `pointerdown`.
-  const outside = page.getByText('SPIELPLAN', { exact: true });
+  // The top-left corner is outside every sheet and drawer: the scrim or the page lies there.
+  const outside = { click: () => page.mouse.click(4, 4) };
+  const you = page.getByRole('dialog', { name: 'You' });
 
-  // --- the account menu
-  const menu = await openAccountMenu(page);
+  // --- You
+  await openAccountMenu(page);
   await outside.click();
-  await expect(menu, 'the account menu has no outside-tap dismissal').toHaveCount(0);
+  await expect(you, 'You has no outside-tap dismissal').toHaveCount(0);
 
   await openAccountMenu(page);
   await page.keyboard.press('Escape');
-  await expect(page.locator('.menu'), 'the account menu does not close on Escape').toHaveCount(0);
+  await expect(you, 'You does not close on Escape').toHaveCount(0);
+
+  // A sheet is a history entry (decision 527): Back closes it and stays on the page.
+  await openAccountMenu(page);
+  await page.goBack();
+  await expect(you, 'Back does not close You').toHaveCount(0);
+  await expect(page).not.toHaveURL(/\/login$/);
 
   // --- the title detail panel
   await page.goto('/');
@@ -231,25 +237,15 @@ test('every menu and overlay dismisses by outside tap and by Escape', async ({ p
     await page.goto('/');
     const rail = page.getByTestId('model-rail');
 
-    await page.getByTestId('model-rail-open').click();
+    await (await openAccountMenu(page)).getByTestId('model-rail-open').click();
     await expect(rail).toBeVisible();
     await page.keyboard.press('Escape');
     await expect(rail, 'the model rail does not close on Escape').toHaveCount(0);
 
-    await page.getByTestId('model-rail-open').click();
+    await (await openAccountMenu(page)).getByTestId('model-rail-open').click();
     await expect(rail).toBeVisible();
     await outside.click();
     await expect(rail, 'the model rail has no outside-tap dismissal').toHaveCount(0);
-
-    // The trigger sits outside the drawer and toggles: without its exemption from the outside-tap
-    // dismissal, its pointerdown would close and its click reopen.
-    await page.getByTestId('model-rail-open').click();
-    await expect(rail).toBeVisible();
-    await page.getByTestId('model-rail-open').click();
-    await expect(
-      rail,
-      'the rail trigger opens the drawer but can no longer close it'
-    ).toHaveCount(0);
   } finally {
     await showModel(page, false);
   }
@@ -258,10 +254,7 @@ test('every menu and overlay dismisses by outside tap and by Escape', async ({ p
   const again = await openAccountMenu(page);
   await again.locator('[data-nav="account"]').click();
   await expect(page).toHaveURL(/\/account$/);
-  await expect(
-    page.locator('.menu'),
-    'the account menu rode a client-side navigation onto the next surface'
-  ).toHaveCount(0);
+  await expect(you, 'You rode a client-side navigation onto the next surface').toHaveCount(0);
 });
 
 // ---------------------------------------------------------------------------------------------
@@ -284,7 +277,7 @@ test('a 401 returns the member to the sign-in page', async ({ page, context }) =
 
   await context.clearCookies();
   await page
-    .getByRole('navigation', { name: 'Surfaces' })
+    .getByRole('navigation', { name: 'Main' })
     .getByRole('link', { name: 'Rank', exact: true })
     .click();
 
@@ -320,6 +313,7 @@ test('a 401 returns the member to the sign-in page', async ({ page, context }) =
     await page.goto('/account');
     const card = page.getByTestId('pin-card');
     await expect(card).toBeVisible();
+    await card.locator('summary').click();
     await card.locator('input[autocomplete="current-password"]').fill('not-the-password');
     await card.locator('input[inputmode="numeric"]').fill('1234');
     await card.getByRole('button', { name: 'Save PIN' }).click();
@@ -343,10 +337,10 @@ test('a 401 returns the member to the sign-in page', async ({ page, context }) =
     })
   );
   try {
-    await page.goto('/admin/users');
+    await page.goto('/admin/people');
     await expect(page.getByTestId('admin-reauth')).toBeVisible();
     expect(new URL(page.url()).pathname, 'the re-prompt threw away a live admin session').toBe(
-      '/admin/users'
+      '/admin/people'
     );
   } finally {
     await page.unroute('**/api/admin/users');
@@ -383,16 +377,24 @@ test('a request that never answers ends with a sentence, not a dead surface', as
 });
 
 test('a refused field says which field and why', async ({ page }) => {
-  // A pydantic 422 `detail` is a LIST of `{type, loc, msg}`. An emptied guests box sends `null`.
-  await atTonightDoor(page);
-  await page.getByTestId('tonight-guests').fill('');
-  await page.getByTestId('tonight-open').click();
+  // A pydantic 422 `detail` is a LIST of `{type, loc, msg}`. The guests stepper cannot send a
+  // `null`, so the request is rewritten on its way out and the real server refuses it.
+  const OPEN_ROOM = /\/api\/tonight\/sessions$/;
+  await page.route(OPEN_ROOM, (route) =>
+    route.continue({ postData: JSON.stringify({ ...route.request().postDataJSON(), guests: null }) })
+  );
+  try {
+    await atTonightDoor(page);
+    await page.getByTestId('tonight-open').click();
 
-  const error = page.getByTestId('tonight-error');
-  await expect(error).toBeVisible();
-  // The field, then pydantic's sentence, which is left unpinned.
-  await expect(error).toHaveText(/^guests: .+/);
-  await expect(error).not.toHaveText('Unprocessable Entity');
+    const error = page.getByTestId('tonight-error');
+    await expect(error).toBeVisible();
+    // The field, then pydantic's sentence, which is left unpinned.
+    await expect(error).toHaveText(/^guests: .+/);
+    await expect(error).not.toHaveText('Unprocessable Entity');
+  } finally {
+    await page.unroute(OPEN_ROOM);
+  }
 });
 
 // ---------------------------------------------------------------------------------------------
@@ -478,11 +480,16 @@ test("the next person to sign in sees none of the previous one's surfaces", asyn
   await login(page);
 
   // Traces on two surfaces, in ONE document: Rate by a nav tap, since a `goto` resets the stores.
-  const nav = page.getByRole('navigation', { name: 'Surfaces' });
+  const nav = page.getByRole('navigation', { name: 'Main' });
   await atTonightDoor(page);
+  // The controls live in a sheet behind the door's summary row (decision 527).
+  await page.getByTestId('tonight-settings').click();
   await page.getByTestId('tonight-kind-series').click();
-  await page.getByTestId('tonight-guests').fill('3');
+  for (let i = 0; i < 3; i++) await page.getByTestId('tonight-guests-more').click();
   await expect(page.getByTestId('tonight-kind-series')).toHaveAttribute('aria-pressed', 'true');
+  await expect(page.getByTestId('tonight-guests')).toHaveText('3');
+  await page.getByTestId('tonight-settings-done').click();
+  await expect(page.getByRole('dialog', { name: "Tonight's settings" })).toHaveCount(0);
 
   await nav.getByRole('link', { name: 'Rate', exact: true }).click();
   await expect(page.getByTestId('rate-surface')).toBeVisible();
@@ -561,6 +568,7 @@ test("the next person to sign in sees none of the previous one's surfaces", asyn
     page.getByTestId('tonight-controls'),
     "the new person landed inside the previous one's evening"
   ).toBeVisible();
+  await page.getByTestId('tonight-settings').click();
   await expect(
     page.getByTestId('tonight-kind-movie'),
     "the previous person's series night carried over"
@@ -568,7 +576,8 @@ test("the next person to sign in sees none of the previous one's surfaces", asyn
   await expect(
     page.getByTestId('tonight-guests'),
     "the previous person's guests carried over"
-  ).toHaveValue('0');
+  ).toHaveText('0');
+  await page.getByTestId('tonight-settings-done').click();
   // `Back` renders only past the door.
   await expect(page.getByTestId('tonight-back')).toHaveCount(0);
 });

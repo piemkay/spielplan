@@ -15043,6 +15043,70 @@ gate pair is followed by `test_route_inventory.py` and `test_api_gating.py`) and
 banner's route is checked by the server alone) and 22 (the greeting reads the device clock). §4.1,
 §4.3, §5.2, §6.7, §8 and §12's M5.7 row are amended in place (v2.1.8).
 
+## Decisions taken (owner, 2026-09-27, the UI redesign)
+
+### 527. Night cinema: the app looks and moves like a phone app, and Admin opens on what needs the admin
+
+**What the record says.** §6.8 lifts the prototype's design language: Space Grotesk, JetBrains Mono
+as a "data voice" for every number and id, and one ember accent for selection and primary actions.
+§6's preamble asks for a phone-first PWA with 48 px targets. §6.0 puts a card's rank and tier under
+its art (516) and can headline shelf 1 "Because you put {anchor} in {tier}" (476). §6.1 quotes its
+block counter, §6.2 its door and solo lines, and §6.3 its phone Move as a lift with a banner (295,
+496). §6.6 names four admin tabs (Connectors, Data, Users, System), and 486 leaves Admin in the
+operator's register.
+
+**Why it changes.** On 2026-09-27 the owner reported the UI as too technical, inconsistent, messy
+and not native on a phone, bulky, and the admin view as confusing. A walk-through of the live demo
+and a census of `frontend/src` traced it to five causes: monospace on nearly every control and
+label; no type or spacing scale (22 font sizes, 86 padding values); the desktop layout flipped for
+phones, scrolling inside a box, with overlays that neither swipe nor answer Back; a 48 px floor
+wrapped round 10-13 px text; and admin tabs that mirror the backend, opening on a first-boot task
+with health spread over four tabs. The owner chose the "Night cinema" direction, kept tier letters
+to Rank and kept Home as the front door.
+
+**The decision.**
+1. **Look.** Dark and warm, one theme. All interface text is the device's own font; Instrument Serif,
+   self-hosted, sets page titles, the name of the film a screen is about, and the wordmark. One type
+   scale, a 4 px spacing scale and five radii. Members never see monospace: the data voice becomes
+   tabular figures in the interface face, and monospace stays only for verbatim technical text on
+   admin surfaces. Ember marks a screen's primary action and an on state (a switch, the current
+   tab); choosing one of several is a neutral fill. Positive, warning and negative colours exist and
+   always travel with a word or an icon. Facet colours stay identity, as a dot beside a term.
+2. **Frame.** The document scrolls. A translucent tab bar is fixed at the bottom, each root opens on
+   a large title, and the avatar on every root opens **You**: the account menu's contents as a sheet,
+   with Admin inside it for an admin. The title card, settings and pickers are sheets, a room's round
+   and reveal a full-screen flow, and every sheet and pushed view is a history entry that Back
+   closes. Hit areas stay 48 px; a control may draw smaller.
+3. **Tier letters live on Rank.** Home, Rate and Tonight show no tier letter and no rank number, and
+   shelf 1 reads "Because you liked {anchor}" or "More like {anchor}". On Rank the letters head the
+   sections, and a straddle chip reads "{tier} or {tier}?", still a control of its own.
+4. **Rate.** The four answers are four equal tiles, worst to best, Not seen as large as the verdicts,
+   and the title card uses the same tiles. Modes and kinds move to the screen title's menu, the
+   counter reads "{n} of 15", the pair-selection and learning-curve copy sit behind "Why these?", and
+   a block's end is a screen of its own.
+5. **Tonight.** The door opens on the choice, together or just me; kind, budget, rewatches and
+   guests are one summary row set in a sheet, whose softness line reads "A little over is fine —
+   we'll say by how much". Every solo pick carries Play. Why-lines name terms without "pulls you
+   with" ("Antihero · dark comedy"), and fit lines read "Fits your time" or "{n} min over" (per episode
+   on a series night, 219).
+6. **Rank on phones.** A tap opens the title card; Move opens an action sheet of the tiers, the
+   current one checked, with Cancel. It replaces 295 and 496's lift, banner, armed rows and dimming:
+   one choice from a short list is legible and cancellable by construction. Drag-and-drop stays for
+   pointer devices, and the filters sit behind one Filters control as on Home.
+7. **Admin opens on Overview.** First what needs the admin, computed from facts the app already
+   holds (the spend cap's run-out at the current pace, parked or failed titles, a stale backup, a
+   failing job, unreadable secrets, a missing required key), then health, then sections by job: New
+   titles, People, Services, Budget & AI, Movie data, Corrections and System. Money sits in one place:
+   the cap, the plan, the providers and the extraction queue's Launch. Each section speaks plainly on
+   top, with §8's verbatim stage names and reasons, fingerprints, job names and log lines one tap down
+   under Technical details, and no admin surface renders a spec or decision reference. A destructive
+   action asks first, and a one-time password or token appears where it was issued, with Copy.
+8. **Show the model** keeps its semantics and reads "Show the numbers".
+
+The spec is amended in place (v2.1.9): §3.2, §6's preamble, §6.0, §6.1, §6.2 steps 1 and 8, §6.3,
+§6.6, §6.7 and §6.8. The code lands in three steps: the foundations (tokens, fonts, frame, shared
+components), the member surfaces with their server-side copy, then Admin.
+
 ## §6.2 — Tonight, rewritten (owner decision, 2026-08-29)
 
 Proposal 54 asked which slot carries the alternative on a split axis. The owner answered by

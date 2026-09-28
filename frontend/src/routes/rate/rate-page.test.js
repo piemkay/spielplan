@@ -5,18 +5,17 @@
 import { flushSync, mount, unmount } from 'svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-// The page reads `$page.url` synchronously at init, so the store answers on subscribe.
-vi.mock('$app/stores', () => {
-  const url = new URL('http://localhost/rate');
-  return {
-    page: {
-      subscribe: (run) => {
-        run({ url });
-        return () => {};
-      }
-    }
-  };
+// The page reads `$page.url` synchronously at init, so the store answers on subscribe; a sheet
+// stays open while its history entry is in `$page.state`.
+const nav = vi.hoisted(() => ({ page: null }));
+vi.mock('$app/stores', async () => {
+  const { writable } = await import('svelte/store');
+  nav.page = writable({ url: new URL('http://localhost/rate'), state: {} });
+  return { page: nav.page };
 });
+vi.mock('$app/navigation', () => ({
+  pushState: (_url, state) => nav.page.update((p) => ({ ...p, state }))
+}));
 
 import RatePage from './+page.svelte';
 import { rate, rateTitle } from '$lib/rate.svelte.js';
@@ -31,7 +30,7 @@ const envelope = (over = {}) => ({
     mode: 'battle',
     kinds: ['movie'],
     decisive: false,
-    block: { index: 0, slot: 1, size: 15, counter: '1 / 15', serving: 'battle' }
+    block: { index: 0, slot: 1, size: 15, counter: '1 of 15', serving: 'battle' }
   },
   card: null,
   drained: null,
@@ -104,6 +103,8 @@ beforeEach(() => {
   rate.session = null;
   rate.notice = '';
   rate.error = '';
+  rate.done = null;
+  nav.page.update((p) => ({ ...p, state: {} }));
   target = document.createElement('div');
   document.body.appendChild(target);
 });
@@ -190,7 +191,8 @@ describe('the substitution line (finding 21, M410-D8-07; C4.5 of the household t
     expect(target.querySelector('[data-testid="rate-sweep-card"]')).toBeTruthy();
     expect(target.querySelector(SUBSTITUTED)).toBeNull();
     expect(target.textContent).not.toMatch(/was due in this slot/);
-    expect(target.querySelector('[data-testid="rate-counter"]').textContent).toMatch(/· Pairs$/);
+    // The title names the mode chosen, whatever card stands in.
+    expect(target.querySelector('[data-testid="rate-menu"]').textContent.trim()).toBe('Pairs');
   });
 
   it('says in plain words why a battle stands in for a sweep', async () => {
@@ -209,7 +211,7 @@ describe('the substitution line (finding 21, M410-D8-07; C4.5 of the household t
     await open(envelope({ card: battle }));
 
     const line = target.querySelector(SUBSTITUTED);
-    expect(line.textContent).toContain("Nothing new to rate right now - comparing titles you've");
+    expect(line.textContent).toContain("Nothing new to rate right now — comparing titles you've");
     expect(line.textContent).not.toMatch(/sweep queue|drained/);
   });
 });
@@ -243,7 +245,7 @@ describe('"a title you know" (C5.2 of the household test)', () => {
     expect(buttons).toHaveLength(2);
     expect(buttons[0].disabled).toBe(false);
     expect(buttons[1].disabled).toBe(true);
-    expect(buttons[1].textContent).toContain('you rated it fine');
+    expect(buttons[1].textContent).toContain('You rated it fine');
 
     respond(envelope({ session: { mode: 'mix' }, card: { ...substitutedSweep, substituted_for: null } }));
     buttons[0].click();
@@ -289,27 +291,51 @@ describe('the second household test on Rate (2026-09-26)', () => {
         mode: 'mix',
         kinds: ['movie', 'series'],
         decisive: false,
-        block: { index: 0, slot: 4, size: 15, counter: '4 / 15', serving: 'battle' }
+        block: { index: 0, slot: 4, size: 15, counter: '4 of 15', serving: 'battle' }
       },
       ...over
     });
 
-  it('names the modes plainly and puts the chosen one in the header (A2, A3, policy h)', async () => {
+  it('names the modes plainly, in the title and its menu (A2, A3, policy h)', async () => {
     await open(mixed({ card: pairCard }));
 
-    const pills = [...target.querySelectorAll('[data-testid^="rate-mode-"]')].filter(
-      (el) => el.tagName === 'BUTTON'
+    // The card on the table is a pair, and the title still says what was chosen.
+    const title = target.querySelector('[data-testid="rate-menu"]');
+    expect(title.textContent.trim()).toBe('Mixed');
+    expect(target.querySelector('[data-testid="rate-counter"]').textContent).toBe('4 of 15');
+    expect(target.querySelector('[data-testid="rate-mode-mix"]')).toBeNull();
+
+    title.click();
+    flushSync();
+    const modes = [...target.querySelectorAll('[data-testid^="rate-mode-"]')];
+    expect(modes.map((el) => el.querySelector('.row-text > span').textContent)).toEqual([
+      'Mixed',
+      'Singles',
+      'Pairs'
+    ]);
+    expect(modes.map((el) => el.getAttribute('aria-pressed'))).toEqual(['true', 'false', 'false']);
+    expect(target.querySelector('[data-testid="rate-mode-mix"]').textContent).toContain(
+      'the pairs start at 15 ratings'
     );
-    expect(pills.map((el) => el.textContent.trim())).toEqual(['Mixed', 'Singles', 'Pairs']);
-    expect(target.querySelector('[data-testid="rate-mode-mix"]').getAttribute('aria-pressed')).toBe(
-      'true'
-    );
-    // The card on the table is a pair, and the header still says what was chosen.
-    expect(target.querySelector('[data-testid="rate-counter"]').textContent).toBe(
-      '4 / 15 this block · film + series · Mixed'
-    );
-    expect(target.querySelector('[data-testid="rate-mode-note"]').textContent).toMatch(/^Mixed: /);
     expect(target.textContent).not.toMatch(/\b(sweep|battle)\b/i);
+
+    // A mode change is a write; the kinds are two toggles, and the last one on stays on.
+    respond(mixed({ session: { ...mixed().session, mode: 'battle' }, card: pairCard }));
+    target.querySelector('[data-testid="rate-mode-battle"]').click();
+    await settle();
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body).mode).toBe('battle');
+    expect(title.textContent.trim()).toBe('Pairs');
+    expect(
+      target.querySelector('[data-testid="rate-mode-battle"]').getAttribute('aria-pressed')
+    ).toBe('true');
+
+    respond(mixed({ session: { ...mixed().session, kinds: ['series'] }, card: pairCard }));
+    target.querySelector('[data-testid="rate-kind-movie"]').click();
+    await settle();
+    expect(JSON.parse(fetchMock.mock.calls[2][1].body).kinds).toEqual(['series']);
+    target.querySelector('[data-testid="rate-kind-series"]').click();
+    await settle();
+    expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
   it('asks the pair question and says the clear-favourite switch is for this pair (A1, A6)', async () => {
@@ -318,8 +344,9 @@ describe('the second household test on Rate (2026-09-26)', () => {
     expect(target.querySelector('[data-testid="rate-battle-question"]').textContent).toBe(
       'Which did you enjoy more?'
     );
-    expect(target.querySelector('[data-testid="rate-decisive"]').textContent).toContain(
-      'clear favourite'
+    const decisive = target.querySelector('[data-testid="rate-decisive"]');
+    expect(document.getElementById(decisive.getAttribute('aria-labelledby')).textContent).toBe(
+      'Clear favourite'
     );
     expect(target.querySelector('[data-testid="rate-decisive-why"]').textContent).toMatch(
       /resets for the next pair/
@@ -363,17 +390,97 @@ describe('the second household test on Rate (2026-09-26)', () => {
           mode: 'sweep',
           kinds: ['series'],
           decisive: false,
-          block: { index: 0, slot: 2, size: 15, counter: '2 / 15', serving: 'sweep' }
+          block: { index: 0, slot: 2, size: 15, counter: '2 of 15', serving: 'sweep' }
         },
         card: { ...substitutedSweep, substituted_for: null },
-        class_balance: { ...envelope().class_balance, counts: [2, 3, 4], total: 9 }
+        class_balance: { ...envelope().class_balance, counts: [2, 3, 4], total: 9, arms_at: 15 }
       })
     );
+    // On a phone the spread sits behind the card's "Why these?", with the learning curve.
+    expect(target.querySelector('[data-testid="rate-mix"]').getAttribute('aria-label')).toBe(
+      'Your mix: 2 disliked, 3 fine, 4 liked'
+    );
+    // When the balance check starts stays on the rating screen itself (§6.1).
+    expect(target.querySelector('[data-testid="rate-balance-arming"]').textContent).toBe(
+      'A balance check starts at 15 ratings.'
+    );
+    target.querySelector('[data-testid="rate-why"]').click();
+    flushSync();
     expect(target.querySelector('[data-testid="rate-balance-total"]').textContent).toBe(
       '9 series ratings'
     );
     expect(target.querySelector('[data-testid="rate-label-count"]').textContent).toContain(
       '9 series ratings'
     );
+  });
+
+  it('shows the balance warning as the server words it, once it has armed', async () => {
+    const copy =
+      "Heavy on 'liked'. Spreading your ratings across all three answers matters about five " +
+      "times more than anything else you can do here. Rate some titles you didn't enjoy as " +
+      'well - but never change an honest answer to even things out.';
+    const armed = { ...envelope().class_balance, counts: [2, 3, 12], total: 17, warn: true, copy };
+    await open(mixed({ card: { ...substitutedSweep, substituted_for: null }, class_balance: armed }));
+    expect(target.querySelector('[data-testid="rate-balance-warning"]').textContent).toBe(copy);
+    expect(target.querySelector('[data-testid="rate-balance-arming"]')).toBeNull();
+  });
+});
+
+describe("a block's end (decisions 199 and 527)", () => {
+  const sweep = { ...substitutedSweep, substituted_for: null };
+  const at = (slot, index = 0) =>
+    envelope({
+      session: {
+        id: 7,
+        mode: 'sweep',
+        kinds: ['movie'],
+        decisive: false,
+        block: { index, slot, size: 15, counter: `${slot} of 15`, serving: 'sweep' }
+      },
+      card: sweep,
+      class_balance: { ...envelope().class_balance, counts: [3, 5, 7], total: 15 }
+    });
+  const fifteenth = { ...at(1, 1), undo: { available: true, kind: 'verdict', reason: null } };
+
+  it('is a screen of its own, still undoable, and Rate 15 more goes on to the next card', async () => {
+    await open(at(15));
+    expect(target.querySelector('[data-testid="rate-done"]')).toBeNull();
+
+    respond(fifteenth);
+    target.querySelector('[data-testid="rate-verdict-1"]').click();
+    await settle();
+
+    const done = target.querySelector('[data-testid="rate-done"]');
+    expect(done.querySelector('h2').textContent).toBe("That's 15.");
+    expect(done.textContent).toContain('Your suggestions just got sharper.');
+    expect(target.querySelector('[data-testid="rate-counter"]').textContent).toBe('15 of 15');
+    expect(done.querySelector('[data-testid="rate-balance-total"]').textContent).toBe(
+      '15 film ratings'
+    );
+    expect(target.querySelector('[data-testid="rate-undo"]').disabled).toBe(false);
+    expect(target.querySelector('[data-testid="rate-sweep-card"]')).toBeNull();
+    expect(target.querySelector('[data-testid="rate-skip"]')).toBeNull();
+    expect(done.querySelector('[data-testid="rate-done-home"]').getAttribute('href')).toBe('/');
+
+    target.querySelector('[data-testid="rate-done-more"]').click();
+    flushSync();
+    expect(target.querySelector('[data-testid="rate-done"]')).toBeNull();
+    expect(target.querySelector('[data-testid="rate-sweep-card"]')).toBeTruthy();
+    expect(target.querySelector('[data-testid="rate-counter"]').textContent).toBe('1 of 15');
+  });
+
+  it('goes back to the fifteenth card when Undo takes that answer back', async () => {
+    await open(at(15));
+    respond(fifteenth);
+    target.querySelector('[data-testid="rate-verdict-1"]').click();
+    await settle();
+    expect(target.querySelector('[data-testid="rate-done"]')).toBeTruthy();
+
+    respond(at(15));
+    target.querySelector('[data-testid="rate-undo"]').click();
+    await settle();
+    expect(target.querySelector('[data-testid="rate-done"]')).toBeNull();
+    expect(target.querySelector('[data-testid="rate-counter"]').textContent).toBe('15 of 15');
+    expect(target.querySelector('[data-testid="rate-sweep-card"]')).toBeTruthy();
   });
 });

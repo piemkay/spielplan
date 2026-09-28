@@ -1,120 +1,68 @@
-/* Spielplan design language — spec v2.1 §6.8, lifted from the prototype.
+/* Spielplan design language: "Night cinema" (§6.8, decision 527).
  *
- *   "Dark-first single-theme UI: ground #0d0d0f, cards #141416, one ember accent #c8613a
- *    spent on selection and primary actions. Type: Space Grotesk (display/body) +
- *    JetBrains Mono for every model number, ID and data annotation (the 'data voice').
- *    A fixed colour per vocabulary facet (11). Poster-forward 2:3 cards."
- *
- * The copy register is "quiet reasons": every shelf, recommendation, question and conflict
- * carries a one-line why in vocabulary terms, and model numbers appear in the data voice next
- * to their name (`b(t) 0.52 · β 0.8 · gate 0.93`), never bare. `.data` is that voice; using it
- * for anything that is not a model number, an id or a count is a design bug.
- *
- * So the two voices are two faces, not two sizes: `.why` is the prose register and is set in the
- * display face, `.data` is the data voice and is the only class in this file set in JetBrains
- * Mono. §6.8 gives the mono face to "every model number, ID and data annotation" and to nothing
- * else, which made a why-line wearing it this tree's largest single §6.8 deviation by element
- * count — 129 elements across 27 files, every one of them prose. [decision 275]
+ * Dark and warm, posters are the light. Interface text is the device's own font; Instrument Serif
+ * sets page titles, the film a screen is about, and the wordmark. Members never see monospace:
+ * `.data` is tabular figures in the interface face, and `--code` is for verbatim admin text only.
  */
 
 :root {
-  /* §6.8: dark-first and single-theme. Telling the UA so is what makes an unstyled or
-     future control degrade to a dark default rather than a white one. */
   color-scheme: dark;
-  --ground: #0d0d0f;
-  --ground-raised: #0f0f11;
-  --card: #141416;
-  --card-raised: #17171a;
-  --ink: #ece9e4;
-  --ink-2: rgba(236, 233, 228, 0.75);
-  --ink-3: rgba(236, 233, 228, 0.6);
-  /* Every --ink-* is drawn as text, so every one of them clears WCAG AA's 4.5:1 against each
-     ground it lands on. These two did not: 0.35 measured 2.82 against --ground and 2.87 against
-     --card, 0.28 measured 2.22 / 2.28 — under even the 3:1 large-text floor, on the quiet-reason
-     copy §6.8 makes load-bearing.
 
-     "Each ground it lands on" is eight surfaces, not four. --ember-wash is a 10% tint laid over
-     one of the opaque grounds at sixteen sites and it carries this ink on them, so the ground
-     under a why-line or a .data hint inside a tinted callout is the COMPOSITE — and the composite
-     is lighter than the card beneath it, which is the direction that costs contrast. 0.50 cleared
-     all four opaque grounds (4.60 / 4.58 / 4.55) and measured 4.43 on the wash over --card, where
-     the sweep card's reveal hint is drawn. 0.52 is the SMALLEST alpha that clears 4.5 on all
-     eight (worst case 4.61 on the wash over --card-raised); 0.51 measures 4.49 and fails. That
-     the bottom two rungs are now three points of alpha apart is what the floor costs: 4.5:1 over
-     the tint is where this ramp runs out, and a rung that cannot be read is not a rung.
-     [§6.8; decision 275, amended at M4.15 review cycle 1] */
-  --ink-4: rgba(236, 233, 228, 0.55);
-  --ink-5: rgba(236, 233, 228, 0.52);
-  --line: rgba(255, 255, 255, 0.08);
-  --line-2: rgba(255, 255, 255, 0.13);
-  --line-3: rgba(255, 255, 255, 0.14);
+  --bg: #0c0b0a;
+  --bg-elevated: #151311;
+  --surface-1: #1b1916;
+  --surface-2: #24211e;
+  --surface-3: #2f2b27;
+  --thumb: #3a3531;
+  --separator: rgba(255, 240, 225, 0.1);
+  --text: #f5f0e8;
+  --text-2: rgba(245, 240, 232, 0.72);
+  --text-3: rgba(245, 240, 232, 0.55);
 
-  /* The card's box model, as three named sizes rather than a number each surface picks.
-     `.card` used to ship only a skin — background, border, radius — so every consumer had to
-     finish it, and fourteen of them finished it seven ways (30, 26, 18/20, 16/18, 14, 12/14,
-     12/13) while one finished it not at all and drew its text on its own border. `.pill`, which
-     ships its padding, is used in six files and redefined in none.
+  /* Ember: a screen's primary action and an on state, nothing else. */
+  --accent: #c8613a;
+  --accent-text: #e58a60;
+  --on-accent: #160b06;
+  --accent-tint: rgba(200, 97, 58, 0.16);
 
-     A surface may still want a different box; what it may not do is invent the number. Naming
-     one of these keeps the vocabulary three wide and every exception greppable. */
-  --card-pad: 16px 18px;
-  --card-pad-tight: 12px 14px;  /* a dense informational block: a rail panel, a status strip */
-  --card-pad-roomy: 26px;       /* a card that IS the screen: a sign-in form, an empty state */
+  /* Status always travels with a word or an icon, never colour alone. */
+  --positive: #5cb87a;
+  --positive-tint: rgba(92, 184, 122, 0.14);
+  --warning: #e3a03a;
+  --warning-tint: rgba(227, 160, 58, 0.14);
+  --negative: #e5534b;
+  --negative-tint: rgba(229, 83, 75, 0.14);
 
-  /* The single accent. Spent on selection and primary actions — nothing else. */
-  --ember: #c8613a;
-  --ember-lift: #e0865e;
-  --ember-ink: #150c08;
-  --ember-wash: rgba(200, 97, 58, 0.1);
+  --scrim: rgba(0, 0, 0, 0.55);
+  --bar: rgba(21, 19, 17, 0.82);
+  --shadow-sheet: 0 -8px 30px rgba(0, 0, 0, 0.45);
+  --shadow-menu: 0 12px 32px rgba(0, 0, 0, 0.5);
+
+  /* The earlier names, pointed at the new palette so every surface follows it. */
+  --ground: var(--bg);
+  --ground-raised: var(--bg-elevated);
+  --card: var(--surface-1);
+  --card-raised: var(--surface-2);
+  --ink: var(--text);
+  --ink-2: var(--text-2);
+  --ink-3: var(--text-2);
+  --ink-4: var(--text-3);
+  --ink-5: var(--text-3);
+  --line: var(--separator);
+  --line-2: rgba(255, 240, 225, 0.14);
+  --line-3: rgba(255, 240, 225, 0.14);
+  --ember: var(--accent);
+  --ember-lift: var(--accent-text);
+  --ember-ink: var(--on-accent);
+  --ember-wash: var(--accent-tint);
   --ember-edge: rgba(200, 97, 58, 0.35);
-
-  /* The roles the accent was playing. "Nothing else" above is a rule with a consequence: eight
-     fills that are neither a selection nor a primary action — an avatar, a status badge, a
-     class-balance bar, a block tick, two progress fills and a wizard's step — each needs a
-     colour named for what it IS, or the single accent goes on meaning everything and marks
-     nothing. None of these is a new hue: a second accent would be the same violation with a
-     different hex, and a facet colour may not be borrowed either, because a facet colour is an
-     identity that means one vocabulary term on every surface it appears. [§6.8; decision 276] */
-
-  /* A status the title carries, not a choice the household made: PosterCard's "new - no crowd
-     data" badge and the high end of Rate's class-balance ramp, which reads 0.22 / 0.42 / this.
-     Opaque, because the badge is drawn over a poster and an alpha fill would let the artwork
-     decide its contrast; bone rather than white so it sits under the ember rather than over it.
-     Text on it is var(--ground), which measures 9.4:1. */
   --status: #b9b4ad;
+  --identity: rgba(245, 240, 232, 0.16);
+  --progress-track: rgba(245, 240, 232, 0.16);
+  --progress-fill: var(--text-2);
+  --progress-now: var(--text);
 
-  /* Whose session this is, on the account chip's disc. Identity is not an alert: a quiet raised
-     disc with the initial in var(--ink) says who you are without competing with the one selected
-     thing on the screen, which is what an ember disc did on every surface at once. It is legible
-     on both grounds it is drawn on: --ink on --identity measures 10.58:1 on --ground-raised, the
-     header's own ground, and --ink on --identity measures 9.56:1 on --card-raised, the account
-     menu's, which is the worse of the two.
-
-     Both figures are composites twice over — the disc is an alpha over a ground before the
-     initial is an ink over the disc — so neither is a number a token's own value states. They
-     were published as 10.8 and 9.6: 10.8 is the reading on --ground, which the header is not, and
-     the card worst case is 9.56, which rounds the wrong way. Each is written on one line, in the
-     form `test_every_contrast_figure_the_record_publishes_is_the_one_it_measures` re-derives, and
-     that guard counts the figures it can read — re-wrapping one across a line break takes it out
-     of reach, which is the only way to satisfy the guard without obeying it.
-     [§6.8; decision 276; review cycle 2: M415-C2-CSS-06] */
-  --identity: rgba(236, 233, 228, 0.16);
-
-  /* How far through: Rate's rail fill, its block ticks, the first-boot wizard's steps. Three
-     states and no new colour — the unfilled remainder is the line the UI is already drawn with,
-     the part behind you is ink at reading weight, and the step you are on is full ink. Progress
-     is a fact about the session and never a selection, which is the whole reason it stops being
-     the accent; the brightness ramp carries the meaning the hue used to. */
-  --progress-track: var(--line-2);
-  --progress-fill: var(--ink-3);
-  --progress-now: var(--ink);
-
-  /* A fixed colour per vocabulary-v1 facet (11). These are identity, not decoration:
-     the same facet is the same colour on the map, the silhouette and every DNA chip.
-     The names are the SHIPPED facet ids — the prefix of every term in dna_vocab/v1, which is
-     what `facetColour` is handed. `characters`, not `character`: the vocabulary file is
-     `vocab_characters_v1.tsv`, and the singular spelled a twelfth facet no row can carry while
-     leaving the real one at --ink-4. [§6.8; M4.9 finding 4] */
+  /* Identity, not decoration: one colour per vocabulary facet, shown as a dot beside a term. */
   --facet-mood: #c8613a;
   --facet-themes: #3f7f6f;
   --facet-pacing: #8b6bd6;
@@ -127,214 +75,433 @@
   --facet-sensibility: #4fa3a3;
   --facet-register: #b06a6a;
 
-  --display: 'Space Grotesk', system-ui, -apple-system, sans-serif;
-  --mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+  --font-ui: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI Variable Text', 'Segoe UI',
+    system-ui, sans-serif;
+  --serif: 'Instrument Serif', 'New York', Georgia, serif;
+  --code: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  --display: var(--font-ui);
+  --mono: var(--font-ui);
 
-  --r-sm: 7px;
-  --r-md: 11px;
-  --r-lg: 14px;
+  /* Ten sizes. */
+  --fs-tab: 10.5px;
+  --fs-caption: 12px;
+  --fs-footnote: 13px;
+  --fs-subhead: 15px;
+  --fs-callout: 16px;
+  --fs-body: 17px;
+  --fs-section: 20px;
+  --fs-title: 30px;
+  --fs-large: 34px;
+  --fs-display: 44px;
+
+  --gutter: 16px;
+  --card-pad: 16px;
+  --card-pad-tight: 12px;
+  --card-pad-roomy: 24px;
+
+  --r-xs: 6px;
+  --r-sm: 10px;
+  --r-md: 14px;
+  --r-lg: 20px;
   --r-pill: 999px;
+  --r-poster: 8px;
 
-  /* Phone-first: 48 px targets, one-handed (§6 preamble). */
+  /* Hit areas stay 48px (§6 preamble); a control may draw smaller and extend its hit area. */
   --touch: 48px;
+  --tabbar: 49px;
+  --ease: cubic-bezier(0.2, 0.8, 0.2, 1);
 }
 
 * { box-sizing: border-box; }
 
-html, body {
-  margin: 0;
-  padding: 0;
-  background: var(--ground);
-  color: var(--ink);
-  font-family: var(--display);
-  -webkit-font-smoothing: antialiased;
+html {
+  -webkit-text-size-adjust: 100%;
+  background: var(--bg);
 }
 
-a { color: var(--ember); text-decoration: none; }
-a:hover { color: var(--ember-lift); }
-button, input, select, textarea { font-family: inherit; color: inherit; }
+body {
+  margin: 0;
+  padding: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: var(--font-ui);
+  font-size: var(--fs-callout);
+  line-height: 1.4;
+  -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
+}
 
-/* One ring, for the whole app. Proposals 127 and 131 put dismissal and focus in the same clause
-   of baseline hygiene the prototype has neither half of, and in its absence six components each
-   grew a ring of their own — six answers to a question §6.8 answers once, which is the same
-   failure the card's box model had. `:focus-visible` rather than `:focus` so a tap does not draw
-   one. The accent is spent here under its own rule rather than beside it: a focused control is
-   the one the keyboard has selected. [§6.8; proposals 127, 131] */
+a { color: var(--accent-text); text-decoration: none; }
+a:hover { color: #f0a27e; }
+button, input, select, textarea { font-family: inherit; color: inherit; }
+button { cursor: pointer; }
+
 :focus-visible {
-  outline: 2px solid var(--ember);
+  outline: 2px solid var(--accent-text);
   outline-offset: 2px;
 }
 
-/* The data voice. Model numbers, ids, counts, stage names — never prose. */
-.data {
-  font-family: var(--mono);
-  font-size: 10px;
-  letter-spacing: 0.02em;
-  color: var(--ink-4);
+/* Titles. */
+.large-title {
+  margin: 0;
+  font-family: var(--serif);
+  font-weight: 400;
+  font-size: var(--fs-large);
+  line-height: 40px;
+  letter-spacing: -0.005em;
 }
-.data-lg { font-family: var(--mono); font-size: 12px; color: var(--ink-3); }
+@media (min-width: 721px) {
+  .large-title {
+    font-size: var(--fs-display);
+    line-height: 48px;
+  }
+}
+.title-1 {
+  margin: 0;
+  font-family: var(--serif);
+  font-weight: 400;
+  font-size: var(--fs-title);
+  line-height: 34px;
+}
+.section-title {
+  margin: 0;
+  font-size: var(--fs-section);
+  line-height: 25px;
+  font-weight: 600;
+}
+.footnote {
+  font-size: var(--fs-footnote);
+  line-height: 18px;
+  color: var(--text-3);
+}
+.list-header {
+  margin: 0;
+  padding: 0 var(--gutter) 6px;
+  font-size: var(--fs-footnote);
+  line-height: 18px;
+  font-weight: 400;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  color: var(--text-3);
+}
 
-/* "quiet reasons": the one-line why that every shelf, pick and conflict must carry. It is prose,
-   so it wears the prose face — the mono face here was §6.8's rule read backwards, and at 10.5px
-   it also made the sentence the household is meant to read the smallest text in the app, half a
-   pixel from the numbers it is explaining. Where a why-line quotes a model number, that fragment
-   wears `.data`, as §6.7's model annotation on the shelf card already does: two voices inside one
-   sentence, rather than one of them becoming the other. [§6.8; decision 275] */
+/* The data voice: numbers that line up, in the interface face. */
+.data {
+  font-family: var(--font-ui);
+  font-size: var(--fs-footnote);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-3);
+}
+.data-lg {
+  font-family: var(--font-ui);
+  font-size: var(--fs-subhead);
+  font-variant-numeric: tabular-nums;
+  color: var(--text-2);
+}
+/* Verbatim technical text: admin surfaces only. */
+.code {
+  font-family: var(--code);
+  font-size: var(--fs-footnote);
+  line-height: 18px;
+  color: var(--text-2);
+}
+
+/* A reason line: every shelf, pick and question carries one. */
 .why {
-  font-family: var(--display);
-  font-size: 13px;
-  color: var(--ink-4);
-  line-height: 1.5;
+  font-family: var(--font-ui);
+  font-size: var(--fs-subhead);
+  line-height: 20px;
+  color: var(--text-2);
 }
 
 .card {
-  background: var(--card);
-  border: 1px solid var(--line);
+  background: var(--surface-1);
+  border: none;
   border-radius: var(--r-md);
   padding: var(--card-pad);
 }
 
-/* Poster-forward 2:3 cards. */
 .poster {
   aspect-ratio: 2 / 3;
-  border-radius: 10px;
+  border-radius: var(--r-poster);
   overflow: hidden;
   position: relative;
-  background: var(--card);
-  border: 1px solid var(--line);
+  background: var(--surface-1);
+  box-shadow: inset 0 0 0 0.5px rgba(255, 240, 225, 0.12);
 }
 
-.pill {
-  padding: 8px 18px;
-  border-radius: var(--r-pill);
-  cursor: pointer;
-  font-family: var(--mono);
-  font-size: 12px;
-  white-space: nowrap;
-  border: 1px solid var(--line-2);
-  background: transparent;
-  color: var(--ink-3);
-  transition: border-color 0.12s ease, filter 0.12s ease;
-}
-.pill[aria-pressed='true'], .pill.on {
-  border-color: var(--ember);
-  background: var(--ember);
-  color: var(--ember-ink);
-}
-
-.btn-primary {
-  padding: 9px 18px;
+/* Buttons: one family. */
+.btn-primary,
+.btn-ghost,
+.btn-secondary,
+.btn-tinted {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  min-height: 44px;
+  padding: 0 18px;
   border: none;
-  border-radius: var(--r-pill);
-  background: var(--ember);
-  color: var(--ember-ink);
+  border-radius: 12px;
+  font-size: var(--fs-body);
+  line-height: 22px;
+  cursor: pointer;
+  transition: filter 0.12s var(--ease), transform 0.12s var(--ease);
+}
+.btn-primary {
+  background: var(--accent);
+  color: var(--on-accent);
   font-weight: 600;
-  font-size: 12.5px;
-  cursor: pointer;
-  transition: filter 0.12s ease;
 }
-.btn-primary:hover { filter: brightness(1.12); }
-.btn-primary:disabled { opacity: 0.45; cursor: default; filter: none; }
-
-.btn-ghost {
-  padding: 9px 18px;
-  border: 1px solid var(--line-2);
-  border-radius: var(--r-pill);
-  background: transparent;
-  color: var(--ink-3);
-  font-size: 12.5px;
+.btn-ghost,
+.btn-secondary {
+  background: var(--surface-2);
+  color: var(--text);
+  font-weight: 500;
+}
+.btn-tinted {
+  background: var(--accent-tint);
+  color: var(--accent-text);
+  font-weight: 600;
+}
+.btn-plain {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 44px;
+  padding: 0 8px;
+  border: none;
+  background: none;
+  color: var(--accent-text);
+  font-size: var(--fs-body);
   cursor: pointer;
 }
-
-/* A pressed state, because a phone has no hover to borrow one from. `.btn-primary:hover` was the
-   only feedback any of the three primitives had, and on touch a hover either never fires or
-   sticks after the finger has gone — so on the primary form factor these controls acknowledged
-   nothing. The transform is what makes one rule serve all three: a filter reads on the primary's
-   opaque fill and on nothing else, while a scale reads on a transparent background too. It stays
-   off the background so a selected pill keeps its ember while it is held. [§6 preamble] */
-.pill:active,
+.btn-destructive { color: var(--negative); }
+.btn-primary:hover { filter: brightness(1.08); }
+.btn-primary:disabled,
+.btn-ghost:disabled,
+.btn-secondary:disabled,
+.btn-tinted:disabled,
+.btn-plain:disabled {
+  opacity: 0.45;
+  cursor: default;
+  filter: none;
+}
 .btn-primary:active,
-.btn-ghost:active {
+.btn-ghost:active,
+.btn-secondary:active,
+.btn-tinted:active,
+.pill:active,
+.segmented > button:active {
   transform: scale(0.97);
   filter: brightness(0.92);
 }
 
-/* Matched by exclusion, not enumeration. An attribute selector reads the DOM attribute rather
-   than the IDL default, so `<input>` with no `type` matched none of the old rules: it kept
-   `color: var(--ink)` from the bare element rule and got the user agent's light background,
-   which is near-white text on white — invisible, and impossible to see in any snapshot test
-   that reads attributes rather than pixels. */
-input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='file']) {
-  width: 100%;
-  padding: 11px 13px;
-  border-radius: var(--r-sm);
-  border: 1px solid var(--line-2);
-  background: var(--card);
-  color: var(--ink);
-  font-size: 13px;
+/* A chip: filters, toggles, small choices. Selected is a light fill, never ember. */
+.pill,
+.chip {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 36px;
+  padding: 0 14px;
+  border: none;
+  border-radius: var(--r-pill);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: var(--fs-subhead);
+  line-height: 20px;
+  font-weight: 500;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background 0.12s var(--ease), transform 0.12s var(--ease);
 }
-input::placeholder { color: var(--ink-5); }
+.pill[aria-pressed='true'],
+.pill.on {
+  background: var(--text);
+  color: var(--bg);
+  font-weight: 600;
+}
 
-::-webkit-scrollbar { width: 9px; height: 9px; }
-::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.11); border-radius: 5px; }
+/* One of several: a neutral thumb on a track. */
+.segmented {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  gap: 2px;
+  padding: 2px;
+  min-height: 36px;
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+}
+.segmented > button {
+  position: relative;
+  border: none;
+  border-radius: 8px;
+  background: none;
+  color: var(--text-2);
+  font-size: var(--fs-subhead);
+  line-height: 20px;
+  font-weight: 500;
+  padding: 0 8px;
+  cursor: pointer;
+}
+.segmented > button[aria-pressed='true'],
+.segmented > button.on {
+  background: var(--thumb);
+  color: var(--text);
+  font-weight: 600;
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.35);
+}
+
+/* Grouped list, the settings and admin pattern. */
+.list-group {
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--r-md);
+  background: var(--surface-1);
+  overflow: hidden;
+}
+.list-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 52px;
+  padding: 8px var(--gutter);
+  border: none;
+  background: none;
+  color: var(--text);
+  font-size: var(--fs-body);
+  line-height: 22px;
+  text-align: left;
+  width: 100%;
+}
+.list-row + .list-row { box-shadow: inset 0 0.5px 0 var(--separator); }
+.list-row .value { margin-left: auto; color: var(--text-3); }
+.list-footer {
+  margin: 0;
+  padding: 6px var(--gutter) 0;
+  font-size: var(--fs-footnote);
+  line-height: 18px;
+  color: var(--text-3);
+}
+
+/* An on/off setting: ember when on (decision 527). */
+button.switch {
+  position: relative;
+  flex: none;
+  width: 51px;
+  height: 31px;
+  min-height: 31px;
+  padding: 2px;
+  border: none;
+  border-radius: var(--r-pill);
+  background: rgba(245, 240, 232, 0.16);
+  cursor: pointer;
+  transition: background 0.2s var(--ease);
+}
+button.switch[aria-checked='true'] { background: var(--accent); }
+button.switch .knob {
+  display: block;
+  width: 27px;
+  height: 27px;
+  border-radius: var(--r-pill);
+  background: var(--text);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.3);
+  transition: transform 0.2s var(--ease);
+}
+button.switch[aria-checked='true'] .knob { transform: translateX(20px); }
+button.switch:disabled { opacity: 0.45; cursor: default; }
+.list-row > .switch { margin-left: auto; }
+
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 10px;
+  border-radius: var(--r-xs);
+  background: var(--surface-2);
+  color: var(--text-2);
+  font-size: var(--fs-footnote);
+  font-weight: 600;
+}
+.badge.ok { background: var(--positive-tint); color: var(--positive); }
+.badge.warn { background: var(--warning-tint); color: var(--warning); }
+.badge.bad { background: var(--negative-tint); color: var(--negative); }
+
+input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='file']),
+select,
+textarea {
+  width: 100%;
+  min-height: 44px;
+  padding: 10px 12px;
+  border: none;
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  color: var(--text);
+  font-size: var(--fs-body);
+  line-height: 22px;
+}
+select {
+  appearance: none;
+  padding-right: 36px;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='14' height='14' viewBox='0 0 24 24' fill='none' stroke='%23f5f0e8' stroke-opacity='.55' stroke-width='2.25' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m5.5 9.5 6.5 6.5 6.5-6.5'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 12px center;
+}
+input::placeholder, textarea::placeholder { color: var(--text-3); }
+input[type='checkbox'], input[type='radio'], input[type='range'] { accent-color: var(--accent); }
+
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-thumb { background: rgba(255, 255, 255, 0.12); border-radius: 4px; }
 ::-webkit-scrollbar-track { background: transparent; }
+
+/* Read by a screen reader, not drawn. */
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
 
 [data-nobar] { scrollbar-width: none; -ms-overflow-style: none; }
 [data-nobar]::-webkit-scrollbar { display: none; }
 
-/* §6 preamble: "responsive PWA, phone-first (48 px targets, one-handed, swipe)". The rule is
- * useless if it lives only in the nav, so every interactive primitive grows on touch
- * viewports. `pointer: coarse` rather than a width query — a finger is a finger on a tablet. */
+/* Fingers: small visuals keep a 48px hit area; plain buttons and fields reach it outright. */
 @media (pointer: coarse) {
-  .pill,
-  .btn-primary,
-  .btn-ghost,
-  button,
+  .pill::after,
+  .chip::after,
+  .segmented > button::after,
+  button.switch::after,
+  .hit::after {
+    content: '';
+    position: absolute;
+    inset: -6px -2px;
+  }
+  .segmented > button::after { inset: -8px -2px; }
+  button.switch::after { inset: -9px -2px; }
+  .hit { position: relative; }
+  .hit::after { inset: -9px; }
+  button:not(.pill, .chip, .segmented > button, .switch, .hit),
+  [role='button'],
   select,
-  [role='button'] {
-    min-height: var(--touch);
-  }
-  .pill,
-  .btn-primary,
-  .btn-ghost {
-    padding-inline: 20px;
-  }
-  /* 16 px is not a taste, it is iOS Safari's threshold: the page zooms in on focus for any
-     control whose text is smaller and does not zoom back out, so the first field a new member
-     ever touches leaves them on a magnified page with the tab bar off-screen and no gesture
-     that says "undo that". §6 preamble makes the phone the primary form factor, which makes the
-     coarse size the real size — the desktop 13 px below is untouched, because a mouse has no
-     such threshold. Specificity, not intent, decides whether this holds: the input selector is
-     (0,4,1) and outranks any component's scoped rule, while a bare `select` is (0,0,1) and loses
-     to every one of them, which is why the sweep measures the computed size on the phone rather
-     than trusting that this rule reached the control. */
   input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='file']) {
     min-height: var(--touch);
-    font-size: 16px;
   }
-  select,
-  textarea {
-    font-size: 16px;
-  }
-  /* The data voice may stay the small one — it is a number beside a name, not a sentence — but
-     10 px of a narrow mono face on a phone is under the floor for reading a digit correctly,
-     and a misread digit is worse than no digit. The prose register does not need a coarse size:
-     `.why` is 13 px display everywhere, which decision 275 sized for the phone first.
+}
 
-     What this rule REACHES is not what it says, and the sentence above is the whole reason that
-     matters: a bare `.data` is (0,1,0) and a media query adds no specificity, while Svelte
-     compiles every scoped rule to `.sel.svelte-hash` at (0,2,0) and wins. The rule fourteen lines
-     up has the same trap and answers it twice — per-component coarse overrides and a sweep that
-     measures the computed size on the phone — because focus zoom strands a member on a magnified
-     page. This one is answered at the source instead, by
-     `test_the_data_voices_coarse_floor_reaches_every_element_it_claims`: every scoped rule that
-     puts a `.data` element under 11 px either raises itself in its own coarse block or is named
-     there as an exemption. Two raise themselves and both are prose, not overlays: /login's
-     divider and the Users page's group heading. Five are named, four of them M4.9's corner
-     overlays under proposal 29's geometry, and the fifth a `.data` Tonight re-declares at 12 px
-     on the line after. [decision 275; §6 preamble; review cycle 2: M415-C2-CSS-04] */
-  .data {
-    font-size: 11px;
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
   }
 }
 

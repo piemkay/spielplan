@@ -119,7 +119,7 @@ async def test_a_confirm_without_the_figure_is_422_and_with_the_wrong_one_is_409
     wrong = await admin.put(CONFIRM, json={"passes": 2, "accepted_estimate": "0.000001"})
     assert wrong.status_code == 409, wrong.text
     refused = wrong.json()
-    assert isinstance(refused["detail"], str) and "decision 450" in refused["detail"]
+    assert isinstance(refused["detail"], str) and "confirm that figure" in refused["detail"]
     assert refused["preview"] == await _preview(admin, {"passes": 2})
     assert refused["preview"]["estimate"]["passes"] == 2
     assert await _rows(db) == before
