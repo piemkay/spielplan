@@ -41,7 +41,7 @@ describe('the rail (decisions 486 and 491)', () => {
   it('shows the margin weights beside their names once Show the model is on', () => {
     open({ balance: { total: 12 }, mode: 'battle', showModel: true });
     expect(target.querySelector('[data-testid="rate-margin-weights"]').textContent).toBe(
-      'decisive 1.6 · hesitant 1.0'
+      'much more 1.6 · more 1.0 · same 1.0'
     );
   });
 });

@@ -31,10 +31,9 @@ export async function createAdminThroughWizard(page, admin = ADMIN) {
   await page.getByRole('button', { name: 'Continue' }).click();
   await expect(page.getByRole('heading', { name: 'Import the bundle' })).toBeVisible();
   await page.getByRole('button', { name: 'Finish' }).click();
-  await expect(page.getByTestId('home-greeting')).toBeVisible();
+  await expect(page.getByTestId('home-title')).toBeVisible();
 }
 
-// Asserts landing on Home, not the greeting's words, which change with the time of day.
 export async function login(page, admin = ADMIN) {
   await page.goto('/login');
   await page.locator('input[type=text]').first().fill(admin.name);
@@ -46,7 +45,7 @@ export async function login(page, admin = ADMIN) {
   );
   // `exact`: "Sign in with a passkey" is on the same page.
   await page.getByRole('button', { name: 'Sign in', exact: true }).click();
-  await expect(page.getByTestId('home-greeting')).toBeVisible();
+  await expect(page.getByTestId('home-title')).toBeVisible();
 }
 
 export async function signedIn(page, admin = ADMIN) {
@@ -133,9 +132,18 @@ export async function playInJellyfin(request, itemId, fraction = 0.96, sessionId
  * is debounced; Home shows Films only, so pass `['Films']` to leave that default alone.
  */
 export async function openTitle(page, name, { ensureKinds = ['Films', 'Series'] } = {}) {
+  // The pending row lands with /api/home, above the grid: a tap aimed before it lands can hit the
+  // space it pushes the card out of.
+  const home = () => page.waitForResponse((res) => res.url().includes('/api/home?'));
+  let landed = home();
   await page.goto('/');
+  await landed;
   const position = kindPosition(ensureKinds);
-  if (!(await kindIsOn(page, position))) await kindToggle(page, position).click();
+  if (!(await kindIsOn(page, position))) {
+    landed = home();
+    await kindToggle(page, position).click();
+    await landed;
+  }
   await page.getByRole('searchbox', { name: 'Search titles' }).fill(name);
   const card = page.locator('.card-wrap', { hasText: name }).first();
   await card.click();
@@ -192,7 +200,7 @@ export async function loginAsMember(page, member) {
   await page.locator('input[type=text]').first().fill(member.name);
   await page.locator('input[type=password]').fill(member.password);
   await page.getByRole('button', { name: 'Sign in', exact: true }).click();
-  await expect(page.getByTestId('home-greeting')).toBeVisible();
+  await expect(page.getByTestId('home-title')).toBeVisible();
 }
 
 /**

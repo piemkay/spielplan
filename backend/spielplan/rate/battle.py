@@ -66,7 +66,7 @@ def draw(
 
 def reason_for(verdict_class: int) -> str:
     """§6.8's one-line why: a function of the band alone, so a re-ask reads the same."""
-    return f"You rated both of these {VERDICT_LABELS[verdict_class]}."
+    return f"You rated both {VERDICT_LABELS[verdict_class]}"
 
 
 _POOL = f"""

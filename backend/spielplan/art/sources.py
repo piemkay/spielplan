@@ -1,4 +1,4 @@
-"""Where a title's poster may come from, in decision 483's order.
+"""Where a title's poster may come from, in decision 483's order, and a person's headshot.
 
 Household Jellyfin first, then a servable `poster_path` at w342, then decision 484's lookup.
 """
@@ -32,12 +32,12 @@ class Candidate:
 
 @dataclass(frozen=True)
 class PosterRow:
-    title_id: int
     jellyfin_id: str | None
     poster_path: str | None
     lookup_outcome: str | None
     lookup_url: str | None
     lookup_owed: bool
+    size: str = "w342"
 
     def candidates(self) -> list[Candidate]:
         out: list[Candidate] = []
@@ -45,10 +45,10 @@ class PosterRow:
             out.append(Candidate(JELLYFIN, f"jellyfin:{self.jellyfin_id}",
                                  jellyfin_id=self.jellyfin_id))
         if servable(self.poster_path):
-            url = tmdb_size(self.poster_path)
+            url = tmdb_size(self.poster_path, self.size)
             out.append(Candidate(POSTER_PATH, url, url=url))
         if self.lookup_outcome == FOUND and servable(self.lookup_url):
-            url = tmdb_size(self.lookup_url)
+            url = tmdb_size(self.lookup_url, self.size)
             if all(c.key != url for c in out):
                 out.append(Candidate(LOOKUP, url, url=url))
         return out
@@ -88,7 +88,6 @@ async def read(conn: asyncpg.Connection, title_id: int) -> PosterRow | None:
         )
         filed = True
     return PosterRow(
-        title_id=int(row["id"]),
         jellyfin_id=row["jellyfin_id"] or None,
         poster_path=row["poster_path"],
         lookup_outcome=row["outcome"],
@@ -97,7 +96,16 @@ async def read(conn: asyncpg.Connection, title_id: int) -> PosterRow | None:
     )
 
 
+async def read_person(conn: asyncpg.Connection, person_id: int) -> PosterRow | None:
+    """A person's headshot: their stored `profile_path` at w185, with no Jellyfin and no lookup."""
+    row = await conn.fetchrow("SELECT profile_path FROM person WHERE id = $1", person_id)
+    if row is None:
+        return None
+    return PosterRow(jellyfin_id=None, poster_path=row["profile_path"], lookup_outcome=None,
+                     lookup_url=None, lookup_owed=False, size="w185")
+
+
 __all__ = [
     "FAILED", "FOUND", "JELLYFIN", "LOOKUP", "NONE", "POSTER_PATH", "Candidate", "PosterRow",
-    "read", "servable_prefixes",
+    "read", "read_person", "servable_prefixes",
 ]

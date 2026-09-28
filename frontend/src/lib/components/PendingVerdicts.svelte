@@ -1,53 +1,78 @@
 <script>
   // Copy and link are the server's: never compose copy or fall back to a bare /rate.
-  import { bannerCountLine, bannerLabel, bannerText } from '$lib/home.svelte.js';
+  import RatePoster from '$lib/components/RatePoster.svelte';
 
   let { banner } = $props();
-
-  // Chosen by width rather than hidden with CSS: a hidden copy stays in the a11y tree. Chrome's
-  // device emulation fires no resize, so there the register is only right on load.
-  let width = $state(1024);
-  const compact = $derived(width <= 720);
-
-  const text = $derived(bannerText(banner, { compact }));
-  const label = $derived(bannerLabel(banner, { compact }));
 </script>
 
-<svelte:window bind:innerWidth={width} />
-
-{#if banner && banner.count > 0 && text}
+{#if banner && banner.count > 0 && banner.copy}
   <div class="card banner" role="status" data-testid="pending-verdicts" data-count={banner.count}>
-    <div class="text">
-      <p class="line" data-testid="pending-verdicts-copy">{text}</p>
-      <p class="footnote" data-testid="pending-verdicts-count">{bannerCountLine(banner)}</p>
-    </div>
-    <a class="btn-tinted" href={banner.cta.route} data-testid="pending-verdicts-cta" data-head={banner.head_title_ids.join(' ')}>
-      {label}
+    <span class="stack" aria-hidden="true">
+      {#each banner.named.slice(0, 2) as title (title.title_id)}
+        <span class="thumb"><RatePoster {title} showName={false} /></span>
+      {/each}
+    </span>
+    <span class="text">
+      <span class="line" data-testid="pending-verdicts-copy">{banner.copy.headline}</span>
+      <span class="footnote line" data-testid="pending-verdicts-names">{banner.copy.names}</span>
+    </span>
+    <a class="btn-tinted cta hit" href={banner.cta.route} data-testid="pending-verdicts-cta" data-head={banner.head_title_ids.join(' ')}>
+      {banner.cta.label}
     </a>
   </div>
 {/if}
 
 <style>
   .banner {
-    margin-bottom: 16px;
+    max-width: 560px;
+    min-height: 60px;
+    margin-bottom: 24px;
+    padding: 0 4px 0 12px;
     display: flex;
     align-items: center;
-    justify-content: space-between;
-    gap: 12px 16px;
-    flex-wrap: wrap;
+    gap: 12px;
+  }
+  .stack {
+    display: flex;
+    flex: none;
+  }
+  .thumb {
+    width: 28px;
+    border-radius: var(--r-xs);
+  }
+  .thumb :global(.poster) {
+    border-radius: var(--r-xs);
+  }
+  .thumb:first-child {
+    position: relative;
+    z-index: 1;
+    box-shadow: 0 0 0 2px var(--surface-1);
+  }
+  .thumb + .thumb {
+    margin-left: -16px;
   }
   .text {
-    flex: 1 1 14rem;
+    flex: 1;
     min-width: 0;
     display: flex;
     flex-direction: column;
-    gap: 2px;
-  }
-  p {
-    margin: 0;
   }
   .line {
-    font-size: var(--fs-callout);
-    line-height: 21px;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+  .line:first-child {
+    font-size: var(--fs-subhead);
+    line-height: 20px;
+    font-weight: 600;
+  }
+  .cta {
+    min-height: 32px;
+    margin: 0 8px;
+    padding: 0 14px;
+    border-radius: var(--r-pill);
+    font-size: var(--fs-subhead);
+    line-height: 20px;
   }
 </style>

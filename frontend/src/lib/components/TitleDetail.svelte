@@ -27,10 +27,12 @@
     syncNote as syncNoteFor
   } from '$lib/titleCard.js';
   import AnswerTiles from '$lib/components/AnswerTiles.svelte';
+  import Headshot from '$lib/components/Headshot.svelte';
   import RatePoster from '$lib/components/RatePoster.svelte';
   import Sheet from '$lib/components/Sheet.svelte';
 
-  let { titleId, onClose, onPerson, onStateChange } = $props();
+  // `ranking`: the rows only Rank passes in, above the answers (decision 528).
+  let { titleId, onClose, onPerson, onStateChange, ranking = undefined } = $props();
 
   let open = $state(true);
   let data = $state(null);
@@ -186,7 +188,7 @@
 {/snippet}
 
 <!-- Callers key rows by `creditKey` (person and role class), so `onPerson` stays attached. -->
-{#snippet person(c, close)}
+{#snippet person(c, close, chevron = false)}
   <button
     class="person"
     onclick={() => {
@@ -194,15 +196,16 @@
       close();
     }}
   >
-    <span class="initial" aria-hidden="true">{c.name.charAt(0)}</span>
+    <Headshot credit={c} />
     <span class="who">
       <span class="pname">{c.name}</span>
       <span class="job"
-        >{[creditJobs(c), showModel && c.sources?.length > 1 ? `${c.sources.length} sources` : null]
+        >{[c.character || creditJobs(c), showModel && c.sources?.length > 1 ? `${c.sources.length} sources` : null]
           .filter(Boolean)
           .join(' · ')}</span
       >
     </span>
+    {#if chevron}{@render icon('chevron', 16)}{/if}
   </button>
 {/snippet}
 
@@ -272,6 +275,8 @@
                 </p>
               </div>
             {/if}
+
+            {@render ranking?.()}
 
             <div class="answerblock">
               <h3 class="list-header">Your answer</h3>
@@ -459,7 +464,7 @@
                   >
                 </div>
                 <ul class="people list">
-                  {#each moreCredits as c (creditKey(c))}<li>{@render person(c, close)}</li>{/each}
+                  {#each moreCredits as c (creditKey(c))}<li>{@render person(c, close, true)}</li>{/each}
                 </ul>
                 {#if data.credits.length > CREDIT_FOLD}
                   <!-- Both labels use the constant, so raising CREDIT_FOLD cannot leave a stale word. -->
@@ -618,8 +623,9 @@
     list-style: none;
   }
   .strip {
+    --face: 72px;
     display: flex;
-    gap: 4px;
+    gap: 12px;
     overflow-x: auto;
     margin: 0 calc(-1 * var(--gutter));
     padding: 0 var(--gutter);
@@ -631,15 +637,6 @@
     padding: 0;
     cursor: pointer;
     text-align: left;
-  }
-  .initial {
-    flex: none;
-    border-radius: var(--r-pill);
-    background: var(--surface-2);
-    color: var(--text-2);
-    display: grid;
-    place-items: center;
-    font-weight: 600;
   }
   .who {
     display: flex;
@@ -653,24 +650,36 @@
   .job {
     font-size: var(--fs-caption);
     line-height: 16px;
-    font-weight: 500;
     color: var(--text-3);
   }
   .strip .person {
-    width: 84px;
+    width: 88px;
     display: flex;
     flex-direction: column;
     align-items: center;
     gap: 8px;
     text-align: center;
   }
-  .strip .initial {
-    width: 56px;
-    height: 56px;
-    font-size: var(--fs-section);
-    line-height: 25px;
+  .strip .who {
+    width: 100%;
+  }
+  .strip .pname {
+    padding: 0 4px;
+    font-weight: 600;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  .strip .job,
+  .list .who > span {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   .list {
+    --face: 40px;
     padding: 0;
     border-radius: var(--r-md);
     background: var(--surface-1);
@@ -681,16 +690,18 @@
   }
   .list .person {
     width: 100%;
-    min-height: 52px;
+    min-height: 56px;
     display: flex;
     align-items: center;
     gap: 12px;
-    padding: 8px var(--gutter);
+    padding: 8px 12px 8px var(--gutter);
   }
-  .list .initial {
-    width: 30px;
-    height: 30px;
-    font-size: var(--fs-footnote);
+  .list .who {
+    flex: 1;
+  }
+  .list .person > :global(svg) {
+    flex: none;
+    color: var(--text-3);
   }
   .list .pname {
     font-size: var(--fs-body);
@@ -699,7 +710,6 @@
   .list .job {
     font-size: var(--fs-footnote);
     line-height: 18px;
-    font-weight: 400;
   }
 
   .more > summary {
@@ -890,9 +900,13 @@
       grid-template-columns: repeat(3, minmax(0, 1fr));
     }
     .strip {
+      --face: 80px;
       margin: 0;
       padding: 0;
       gap: 16px;
+    }
+    .strip .person {
+      width: 96px;
     }
   }
 </style>

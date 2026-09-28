@@ -3,17 +3,32 @@ import { expect, test } from '@playwright/test';
 import { createMember, signInAsMember, signedIn, waitForBoard } from '../helpers.js';
 
 /**
- * §6.3's Rank surface: that the gestures write what the integration tests expect, that Move's
- * sheet writes nothing on its way out, and that the comparison round is reachable (§12's M3 exit).
+ * §6.3's Rank surface: that the gestures write what the integration tests expect, that the title
+ * card's tier sheet writes nothing on its way out, and that the comparison round is reachable (§12's
+ * M3 exit).
  * Its own member per project, seeded through the shared helpers (decision 186). Serial, one page.
  */
 test.describe.configure({ mode: 'serial' });
 
 const board = (page) => page.getByTestId('rank-board');
-const moveOf = (page, titleId) => page.getByTestId(`rank-move-${titleId}`);
 const moveSheet = (page) => page.getByRole('dialog', { name: /^Move / });
+const card = (page) => page.getByRole('dialog', { name: 'Title detail' });
 
-/** One tier's row in Move's action sheet, which reads "A+ · Liked". */
+/** Decision 528: a title moves from its card, whose "In your ranking" row opens the tier sheet. */
+async function openMove(page, titleId) {
+  await page.getByTestId(`rank-open-${titleId}`).click();
+  await card(page).getByTestId('rank-card-tier').click();
+  await expect(moveSheet(page)).toBeVisible();
+}
+
+/** A phone keeps the search behind its icon in the top bar. */
+async function searchBox(page) {
+  const icon = page.getByTestId('rank-search');
+  if (await icon.isVisible()) await icon.click();
+  return page.getByTestId('rank-filter');
+}
+
+/** One tier's row in the tier sheet, which reads "A+ Liked". */
 function tierOption(sheet, label) {
   const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
   // A space or the dot next, not any non-word: the + of A+ would let A match it.
@@ -176,13 +191,16 @@ test.describe('rank', () => {
     await expect(page.getByTestId('rank-tier-S')).toContainText('Liked');
     await expect(page.getByTestId('rank-tier-B')).toContainText('Fine');
     await expect(page.getByTestId('rank-tier-F')).toContainText('Disliked');
-    // Decision 486: the count in the person's words.
-    await expect(page.getByTestId('rank-count')).toContainText('films · best first');
+    // Decisions 486 and 528: the count in the person's words, in the search field.
+    await expect(await searchBox(page)).toHaveAttribute('placeholder', /^Search \d+ rated films?$/);
+    await expect(page.getByRole('region', { name: 'Needs a look' })).toContainText(
+      /between two tiers|Sharpen your list/
+    );
     await expect(page.getByTestId('rank-surface')).not.toContainText('cutpoints');
   });
 
-  test('Move opens the tiers with the current one checked, and leaving writes nothing', async () => {
-    // Decision 527: one choice from a short list, closed by Cancel or Back, writes nothing.
+  test('the tier sheet opens with the current tier checked, and leaving writes nothing', async () => {
+    // Decisions 527 and 528: one choice from a short list, closed by Cancel or Back, writes nothing.
     await openRank(page);
     const before = await tierEditCount(page);
 
@@ -193,30 +211,31 @@ test.describe('rank', () => {
       .locator('[data-tier]', { has: page.locator(`[data-title="${titleId}"]`) })
       .getAttribute('data-tier');
 
-    await moveOf(page, titleId).click();
+    await openMove(page, titleId);
     const sheet = moveSheet(page);
-    await expect(sheet).toBeVisible();
     await expect(sheet.getByRole('menuitem')).toHaveCount(7);
     await expect(tierOption(sheet, current)).toHaveAttribute('aria-current', 'true');
     await sheet.getByRole('button', { name: 'Cancel' }).click();
     await expect(sheet).toHaveCount(0);
 
-    await moveOf(page, titleId).click();
+    await card(page).getByTestId('rank-card-tier').click();
     await expect(moveSheet(page)).toBeVisible();
     await page.goBack();
     await expect(moveSheet(page)).toHaveCount(0);
     await expect(page, 'Back closes the sheet and stays on Rank').toHaveURL(/\/rank$/);
+    await page.keyboard.press('Escape');
+    await expect(card(page)).toHaveCount(0);
 
     expect(await tierEditCount(page), 'a cancelled move writes no observation').toBe(before);
   });
 
-  test('choosing a tier in Move drops the title into it, and it stays there', async () => {
+  test('choosing a tier in the sheet drops the title into it, and it stays there', async () => {
     // §6.3 "shows the tension rather than snapping back": still there after the refit.
     const tier = await tierIndexOf(page, 'S');
     const titleId = await titleOutside(page, tier);
     await openRank(page);
 
-    await moveOf(page, titleId).click();
+    await openMove(page, titleId);
     const written = page.waitForResponse(
       (res) => res.url().includes('/api/rank/drop') && res.request().method() === 'POST'
     );
@@ -243,7 +262,7 @@ test.describe('rank', () => {
       const titleId = await titleOutside(page, tier);
       await openRank(page);
       await expect(board(page).locator('[data-tier="S"] [data-title]')).not.toHaveCount(0);
-      await moveOf(page, titleId).click();
+      await openMove(page, titleId);
 
       const written = page.waitForResponse(
         (res) => res.url().includes('/api/rank/drop') && res.request().method() === 'POST'
@@ -268,12 +287,12 @@ test.describe('rank', () => {
     }
   });
 
-  test('dragging a title onto another writes the edit and two neighbour duels', async ({
+  test('dragging a poster onto another writes the edit and two neighbour duels', async ({
     browserName
   }, testInfo) => {
     // §6.3: "**Drag-and-drop rearrange** — the owner's requirement … dropping it *between* two
     // titles emits that edit **plus two margin-less duels** against its new neighbours."
-    test.skip(testInfo.project.name === 'phone', 'HTML5 drag is a pointer gesture (§6.3)');
+    test.skip(testInfo.project.name === 'phone', 'a long press and a drag is a touch sequence Playwright cannot send');
 
     // ARRANGED, not searched for: a search that skipped when it found nothing never ran.
     const tier = await tierIndexOf(page, 'A');
@@ -308,19 +327,58 @@ test.describe('rank', () => {
     await expect(board(page).locator(`[data-tier="A"] [data-title="${dragged}"]`)).toHaveCount(1);
   });
 
+  test('Place with questions asks inside the tier and ends on the new spot', async () => {
+    // Decision 528: about log2(n) either-or questions from the card, then where the title sits.
+    const tier = await tierIndexOf(page, 'A');
+    await seedTier(page, tier, 3);
+    await openRank(page);
+    const titleId = await board(page)
+      .locator('[data-tier="A"] [data-title]')
+      .first()
+      .getAttribute('data-title');
+    await page.getByTestId(`rank-open-${titleId}`).click();
+    await card(page).getByTestId('rank-card-place').click();
+
+    await expect(page).toHaveURL(new RegExp(`/rank/place/${titleId}\\?kind=movie$`));
+    await expect(page.getByTestId('rank-place-where')).toHaveText(/^Somewhere between #1 and #\d+ of \d+ in A$/);
+    // The title being placed has been seen: Not seen sits under the neighbour alone.
+    await expect(page.getByTestId('rate-correction-left')).toHaveCount(0);
+    await expect(page.getByTestId('rate-correction-right')).toBeVisible();
+
+    const done = page.getByTestId('rank-place-done');
+    const ready = page.locator('[data-testid="rate-duel-B"]:not([disabled])');
+    for (let asked = 0; asked < 8 && !(await done.isVisible()); asked++) {
+      const answered = page.waitForResponse(
+        (res) => res.url().includes('/api/rank/place/answer') && res.request().method() === 'POST'
+      );
+      await ready.click();
+      expect((await answered).ok(), 'each answer is one duel the server accepts').toBeTruthy();
+      await expect(done.or(ready)).toBeVisible();
+    }
+    await expect(done).toHaveText(/ sits in A$/);
+    // Every answer preferred the neighbour, so the search ends at the foot of the tier.
+    await expect(page.getByTestId('rank-place')).toContainText(/At the bottom of A, below .+ — \d questions?/);
+
+    await page.getByTestId('rank-place-finish').click();
+    await expect(page).toHaveURL(/\/rank$/);
+    await expect(page.getByTestId('rank-surface')).toBeVisible();
+  });
+
   test('Sharpen your list serves a pair, and answering it moves the board', async () => {
     // §12's M3 exit in miniature: reachable, one duel per answer, and the board re-reads.
     await openRank(page);
     await page.getByTestId('rank-sharpen').click();
     await expect(page.getByTestId('rank-queue')).toBeVisible();
 
-    const pairA = page.getByTestId('rank-pair-a');
+    const pairA = page.getByTestId('rate-duel-A');
     await expect(pairA).toBeVisible();
     const answeredToken = (
       await (await page.request.get('/api/rank/queue?kind=movie')).json()
     ).pair.token;
-    await expect(page.getByTestId('rank-pair-reason')).not.toBeEmpty();
-    await expect(page.getByTestId('rank-pair-tie')).toHaveText('About the same');
+    await expect(page.getByTestId('rate-battle-reason')).not.toBeEmpty();
+    // More, Same, More: the round has no decisive answer (decision 201), and a poster never answers.
+    await expect(page.getByTestId('rate-duel-TIE')).toHaveAccessibleName('About the same');
+    await expect(page.getByTestId('rate-duel-A-much')).toHaveCount(0);
 
     const answered = page.waitForResponse(
       (res) => res.url().includes('/api/rank/queue/answer') && res.request().method() === 'POST'
@@ -359,12 +417,12 @@ test.describe('rank', () => {
 
     await openRank(page);
     await page.getByTestId('rank-sharpen').click();
-    await expect(page.getByTestId('rank-pair-a')).toBeVisible();
+    await expect(page.getByTestId('rate-duel-A')).toBeVisible();
 
     const request = page.waitForRequest(
       (req) => req.url().includes('/api/rank/queue/answer') && req.method() === 'POST'
     );
-    await page.getByTestId('rank-pair-a').click();
+    await page.getByTestId('rate-duel-A').click();
     const body = JSON.parse((await request).postData() ?? '{}');
 
     expect(Object.keys(body).sort()).toEqual(['decisive', 'outcome', 'pair']);
@@ -403,9 +461,9 @@ test.describe('rank', () => {
       await expect(sheet.locator(`[data-testid="rate-poster"][data-title-id="${id}"]`))
         .toHaveCount(1);
     }
-    await expect(page.getByTestId('rank-pair-reason')).not.toContainText('one more comparison');
+    await expect(page.getByTestId('rate-battle-reason')).not.toContainText('one more comparison');
 
-    await page.getByTestId('rank-pair-a').click();
+    await page.getByTestId('rate-duel-A').click();
     await expect(page.getByTestId('rank-round')).toHaveText('2 of 15 this round');
     await expect(page.getByTestId(`rank-placed-${served.title_a}`)).toBeVisible();
     await expect(page.getByTestId(`rank-placed-${served.title_b}`)).toBeVisible();
@@ -454,20 +512,21 @@ test.describe('rank', () => {
   test('the search box filters as it is typed in', async () => {
     await openRank(page);
     const first = board(page).locator('[data-title]').first();
-    const name =
-      (await first.locator('[data-testid^="rank-open-"] .name').textContent())?.trim() ?? '';
+    // Posters carry no name beneath (decision 528); the button's label starts with it.
+    const name = (await first.getAttribute('aria-label'))?.split(',')[0].trim() ?? '';
     expect(name, 'the seeded board has a title to look for').not.toBe('');
+    const box = await searchBox(page);
     const read = page.waitForResponse(
       (res) => res.url().includes('/api/rank?') && res.url().includes('q=')
     );
-    await page.getByTestId('rank-filter').pressSequentially(name.slice(0, 6));
+    await box.pressSequentially(name.slice(0, 6));
     await read;
     await expect(board(page).locator('[data-title]').first()).toBeVisible();
     // Armed before the fill: WebKit's fill can outlast the debounce and the read.
     const cleared = page.waitForResponse(
       (res) => res.url().includes('/api/rank?') && !res.url().includes('q=')
     );
-    await page.getByTestId('rank-filter').fill('');
+    await box.fill('');
     await cleared;
   });
 
@@ -477,7 +536,7 @@ test.describe('rank', () => {
     await openRank(page);
     const firstId = await board(page).locator('[data-title]').first().getAttribute('data-title');
 
-    for (const id of ['rank-sharpen', 'rank-filters', `rank-move-${firstId}`, `rank-open-${firstId}`]) {
+    for (const id of ['rank-sharpen', 'rank-search', 'rank-filters', `rank-open-${firstId}`]) {
       const box = await hitBox(page.getByTestId(id));
       expect(box.height, `${id} is ${box.height}px tall to a finger, under 48`).toBeGreaterThanOrEqual(48);
       expect(box.width, `${id} is ${box.width}px wide to a finger, under 48`).toBeGreaterThanOrEqual(48);

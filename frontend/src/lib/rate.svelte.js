@@ -24,11 +24,6 @@ export function modeName(mode) {
 
 export const PAIR_QUESTION = 'Which did you enjoy more?';
 
-// The switch belongs to the pair, so its line says it resets (decision 520).
-export const DECISIVE_LABEL = 'Clear favourite';
-export const DECISIVE_COPY =
-  'Turn this on when one is clearly better - that answer counts for more. It resets for the next pair.';
-
 export const PAIR_SELECTION_COPY =
   'Pairs are picked at random from titles you rated the same way. For learning your taste, ' +
   'random works as well as anything cleverer. Choosing pairs cleverly only helps when the ' +
@@ -85,7 +80,7 @@ export const rate = $state({
   error: '',
   /** A refusal we can explain and recover from — a stale card, an Undo at the boundary. */
   notice: '',
-  /** @type {null | {id:number,mode:string,kinds:string[],decisive:boolean,block:any}} */
+  /** @type {null | {id:number,mode:string,kinds:string[],block:any}} */
   session: null,
   /** @type {any} the card on the table, or the card just answered while the reveal holds */
   card: null,
@@ -180,6 +175,13 @@ export function undoMessage(undo) {
     return 'Undo only goes back to the start of these 15';
   }
   return 'Nothing to undo yet';
+}
+
+/** The class the balance warning is about, as the server picks it: the most, the lowest on a tie. */
+export function heavyClass(balance) {
+  if (!balance?.warn) return '';
+  const counts = balance.counts ?? [];
+  return balance.labels?.[counts.indexOf(Math.max(...counts))] ?? '';
 }
 
 /** Before the balance check arms, the widget says when it will (decision 491). */
@@ -314,9 +316,6 @@ export const setMode = (mode) => send(() => controls({ mode }));
 
 export const setKinds = (kinds) => send(() => controls({ kinds }));
 
-// The backend turns the switch off with the pair on the table (decision 520).
-export const setDecisive = (decisive) => send(() => controls({ decisive }), { pending: 'decisive' });
-
 export const restart = () => send(() => controls({ restart: true }));
 
 export function verdict(value) {
@@ -347,24 +346,21 @@ export function skip() {
 }
 
 /**
- * `token` names the card the long press started on: the write fires 500ms later, and `load()`
- * may have swapped the card by then. A mismatch writes nothing; absent means the card on the table.
+ * The five-step answer: "Much more" is `decisive`, and the server never weights a TIE.
  *
  * @param {'A'|'B'|'TIE'} outcome
- * @param {{decisive?: boolean, token?: string}} [opts] proposal 51's long-press: one answer may
- *   override the persistent toggle without moving it, and `token` is the card the gesture started
- *   on.
  */
-export function duel(outcome, opts = {}) {
+export function duel(outcome, decisive = false) {
   const token = rate.card?.token;
   if (!token || rate.holding) return;
-  if (opts.token !== undefined && opts.token !== token) return;
-  const body = { card_token: token, outcome, latency_ms: latency(), head };
-  if (opts.decisive !== undefined) body.decisive = opts.decisive;
-  return send(() => post('/rate/duel', body), { pending: `duel-${outcome}`, answer: true });
+  const body = { card_token: token, outcome, decisive, latency_ms: latency(), head };
+  return send(() => post('/rate/duel', body), {
+    pending: `duel-${outcome}${decisive ? '-much' : ''}`,
+    answer: true
+  });
 }
 
-/** §6.1's corrections row. Writes no duel row and does not advance the counter. */
+/** Not seen under one film of a pair: no duel row, and the counter does not move. */
 export function correct(side) {
   const token = rate.card?.token;
   if (!token || rate.holding) return;

@@ -118,11 +118,13 @@ class ArtService:
         clock: Callable[[], float] = time.time,
     ) -> None:
         self.cache = cache.ArtCache(root, clock=clock)
+        # Its own directory, so a person's id never answers for a title's.
+        self.people = cache.ArtCache(root / "person", clock=clock)
         # Egress off (e2e, CI) means no internet fetch; the household Jellyfin is asked either way.
         self.egress = egress
         self._fetcher = Fetcher(transport=transport)
         self._opened = False
-        self._inflight: dict[int, asyncio.Task[Answer]] = {}
+        self._inflight: dict[tuple[Path, int], asyncio.Task[Answer]] = {}
         self._jellyfin = asyncio.Semaphore(JELLYFIN_POLICY.max_concurrency)
 
     async def open(self) -> ArtService:
@@ -138,6 +140,15 @@ class ArtService:
     async def poster(self, title_id: int, *, connect: Connect) -> Answer:
         async with connect() as conn:
             row = await sources.read(conn, title_id)
+        return await self._serve(self.cache, title_id, row, connect)
+
+    async def person(self, person_id: int, *, connect: Connect) -> Answer:
+        """A credit's headshot, under the posters' rules (decision 528)."""
+        async with connect() as conn:
+            row = await sources.read_person(conn, person_id)
+        return await self._serve(self.people, person_id, row, connect)
+
+    async def _serve(self, store: cache.ArtCache, key: int, row, connect: Connect) -> Answer:
         if row is None:
             return Answer.none(BROWSER_NONE)
         candidates = row.candidates()
@@ -145,32 +156,33 @@ class ArtService:
             return Answer.none(BROWSER_PENDING if row.lookup_owed else BROWSER_NONE)
 
         sig = row.signature
-        hit = await asyncio.to_thread(self.cache.read, title_id, sig)
+        hit = await asyncio.to_thread(store.read, key, sig)
         if hit is not None:
-            return await self._from_cache(title_id, hit, row)
+            return await self._from_cache(store, key, hit, row)
 
-        task = self._inflight.get(title_id)
+        slot = (store.root, key)
+        task = self._inflight.get(slot)
         if task is None:
             task = asyncio.get_running_loop().create_task(
-                self._fill(title_id, row, candidates, sig, connect)
+                self._fill(store, key, row, candidates, sig, connect)
             )
-            self._inflight[title_id] = task
-            task.add_done_callback(lambda _t, key=title_id: self._inflight.pop(key, None))
+            self._inflight[slot] = task
+            task.add_done_callback(lambda _t, slot=slot: self._inflight.pop(slot, None))
         # Shielded: the first phone closing its tab must not cancel the fetch for the others.
         return await asyncio.shield(task)
 
-    async def _from_cache(self, title_id: int, entry: cache.Entry, row) -> Answer:
+    async def _from_cache(self, store: cache.ArtCache, key: int, entry: cache.Entry, row) -> Answer:
         if entry.status != cache.OK:
             if entry.status == cache.ERROR:
                 return Answer.none(BROWSER_TRANSIENT)
             return Answer.none(BROWSER_PENDING if row.lookup_owed else BROWSER_NONE)
         try:
-            body = await asyncio.to_thread(self.cache.bytes_of, title_id)
+            body = await asyncio.to_thread(store.bytes_of, key)
         except OSError:
             return Answer.none(BROWSER_TRANSIENT)
         return Answer(200, BROWSER_MAX_AGE, body, entry.content_type, entry.etag)
 
-    async def _fill(self, title_id, row, candidates, sig, connect: Connect) -> Answer:
+    async def _fill(self, store: cache.ArtCache, key, row, candidates, sig, connect: Connect) -> Answer:
         outcomes: list[str] = []
         for candidate in candidates:
             if candidate.source == sources.JELLYFIN:
@@ -189,13 +201,13 @@ class ArtService:
                 ttl = THIRD_PARTY_TTL
             try:
                 entry = await asyncio.to_thread(
-                    self.cache.store, title_id, sig, data,
+                    store.store, key, sig, data,
                     content_type=content_type, source=candidate.source, ttl=ttl,
                 )
                 etag = entry.etag
             except OSError as exc:
                 # A cache write failure costs the next view a fetch, not this one its poster.
-                log.warning("poster for title %s not cached: %s", title_id, exc)
+                log.warning("art %s not cached under %s: %s", key, store.root, exc)
                 etag = None
             return Answer(200, BROWSER_MAX_AGE, data, content_type, etag)
 
@@ -205,7 +217,7 @@ class ArtService:
         failed = _Outcome.ERROR in outcomes
         with contextlib.suppress(OSError):
             await asyncio.to_thread(
-                self.cache.store_negative, title_id, sig,
+                store.store_negative, key, sig,
                 status=cache.ERROR if failed else cache.MISSING,
                 ttl=ERROR_TTL if failed else MISSING_TTL,
             )

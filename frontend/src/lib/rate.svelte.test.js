@@ -1,8 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
-  DECISIVE_COPY,
-  DECISIVE_LABEL,
   HOLD_MS,
   LEARNING_CURVE_COPY,
   MODES,
@@ -10,6 +8,7 @@ import {
   PAIR_SELECTION_COPY,
   UNDO_KIND_LABELS,
   armingLine,
+  heavyClass,
   modeName,
   commit,
   continueRating,
@@ -41,7 +40,6 @@ const envelope = (over = {}) => ({
     id: 1,
     mode: 'mix',
     kinds: ['movie', 'series'],
-    decisive: false,
     block: { index: 0, slot: 1, size: 15, counter: '1 of 15', serving: 'sweep' }
   },
   card: {
@@ -150,6 +148,14 @@ describe('pure helpers', () => {
     expect(armingLine({ ...balance, total: 15 })).toBe('');
     expect(armingLine({ ...balance, warn: true })).toBe('');
     expect(armingLine(null)).toBe('');
+  });
+
+  it('names the class the balance warning is about, and none while it is quiet', () => {
+    const labels = ['disliked', 'fine', 'liked'];
+    expect(heavyClass({ labels, counts: [2, 3, 12], warn: true })).toBe('liked');
+    expect(heavyClass({ labels, counts: [13, 3, 2], warn: true })).toBe('disliked');
+    expect(heavyClass({ labels, counts: [2, 3, 12], warn: false })).toBe('');
+    expect(heavyClass(null)).toBe('');
   });
 
   it('suppresses the reveal rather than banding it before the first fit', () => {
@@ -290,30 +296,28 @@ describe('the envelope', () => {
     expect(rate.notice).toBe('Undo only goes back to the start of these 15');
   });
 
-  it('answers the card the gesture started on, or no card at all', async () => {
-    // A long press is a delayed write, and `load()` can swap the card within those 500ms.
-    fetchMock.mockResolvedValue(ok(envelope()));
-    await duel('A', { decisive: true, token: 't1' });
+  it('sends "Much more" as decisive and names that step while it is in flight', async () => {
+    /** @type {(response: any) => void} */
+    let answer = () => {};
+    fetchMock.mockReturnValueOnce(new Promise((resolve) => (answer = resolve)));
+    const picked = duel('B', true);
+    expect(rate.pending).toBe('duel-B-much');
     const sent = JSON.parse(fetchMock.mock.calls[0][1].body);
-    expect(sent.card_token, 'the pressed token is the one that is answered').toBe('t1');
-    expect(sent.decisive).toBe(true);
-
-    // Now the card moves under the press, exactly as a reload would move it.
-    fetchMock.mockResolvedValueOnce(ok(envelope({ card: { ...envelope().card, token: 't2' } })));
-    await load({ quiet: true });
-    expect(rate.card.token).toBe('t2');
-    fetchMock.mockClear();
-
-    await duel('A', { decisive: true, token: 't1' });
-    expect(fetchMock, 'the long press answered the card that replaced the pressed one')
-      .not.toHaveBeenCalled();
+    expect(sent).toMatchObject({ card_token: 't1', outcome: 'B', decisive: true });
+    answer(ok(envelope()));
+    await picked;
+    expect(rate.pending).toBe(null);
   });
 
-  it('still answers the live card when the caller names no token', async () => {
-    // The strip buttons and the keyboard capture no token; absent means the card on the table.
+  it('sends More and Same as not decisive', async () => {
     fetchMock.mockResolvedValue(ok(envelope()));
+    await duel('A');
     await duel('TIE');
-    expect(JSON.parse(fetchMock.mock.calls[0][1].body).card_token).toBe('t1');
+    const sent = fetchMock.mock.calls.map(([, init]) => JSON.parse(init.body));
+    expect(sent.map((b) => [b.outcome, b.decisive])).toEqual([
+      ['A', false],
+      ['TIE', false]
+    ]);
   });
 
   it('drops a held reveal when Undo takes the observation back', async () => {
@@ -423,8 +427,6 @@ describe('the member register (decisions 486 and 491)', () => {
     const shipped = [
       PAIR_SELECTION_COPY,
       LEARNING_CURVE_COPY,
-      DECISIVE_COPY,
-      DECISIVE_LABEL,
       PAIR_QUESTION,
       ...MODES.flatMap(([, name, why]) => [name, why])
     ];
@@ -445,8 +447,6 @@ describe('the member register (decisions 486 and 491)', () => {
       expect(`${name} ${why}`).not.toMatch(/\b(sweep|battle)\b/i);
     }
     expect(PAIR_QUESTION).toBe('Which did you enjoy more?');
-    expect(DECISIVE_COPY).toMatch(/resets for the next pair/);
-    expect(DECISIVE_COPY).not.toMatch(/decisive|hesitant|teaches/);
   });
 });
 

@@ -29,7 +29,6 @@ class ControlsBody(BaseModel):
 
     mode: Literal["mix", "sweep", "battle"] | None = None
     kinds: list[Literal["movie", "series"]] | None = None
-    decisive: bool | None = None
     restart: bool = False
     head: Head
 
@@ -50,8 +49,8 @@ class CardBody(BaseModel):
 class DuelBody(BaseModel):
     card_token: str
     outcome: Literal["A", "B", "TIE"]
-    # One answer's override of the session toggle (§6.1's long-press).
-    decisive: bool | None = None
+    # "Much more" (decision 528).
+    decisive: bool = False
     latency_ms: int | None = None
     head: Head
 
@@ -104,15 +103,13 @@ async def current(
 async def controls(
     body: ControlsBody, conn: DB, user: ActiveUser, request: Request
 ) -> dict[str, Any]:
-    """§6.1's mode, kind and decisive controls (decision 520). A fresh session opens in Mix."""
+    """§6.1's mode and kind controls. A fresh session opens in Mix."""
     try:
         s = await session.open_or_resume(
             conn, user_id=user.id, kinds=body.kinds, restart=body.restart
         )
-        if body.mode is not None or body.kinds is not None or body.decisive is not None:
-            s = await session.set_controls(
-                conn, s, mode=body.mode, kinds=body.kinds, decisive=body.decisive
-            )
+        if body.mode is not None or body.kinds is not None:
+            s = await session.set_controls(conn, s, mode=body.mode, kinds=body.kinds)
     except ValueError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
     s = await session.ensure_card(conn, s, head=body.head)

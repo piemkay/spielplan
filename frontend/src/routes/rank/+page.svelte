@@ -1,70 +1,148 @@
 <script>
-  // A tap opens the title card, Move opens an action sheet of the tiers, and a pointer can drag
-  // (decision 527). The board is never re-sorted here: a drop waits and the response replaces it.
-  import { onDestroy, onMount } from 'svelte';
+  // A tier list of posters (decision 528): a tap opens the title card, and a drag or the card's tier
+  // sheet moves a title. The board is never re-sorted here: a drop waits and the response replaces it.
+  import { onDestroy, onMount, tick } from 'svelte';
   import ActionSheet from '$lib/components/ActionSheet.svelte';
+  import RateBattleCard from '$lib/components/RateBattleCard.svelte';
+  import RatePeek from '$lib/components/RatePeek.svelte';
   import RatePoster from '$lib/components/RatePoster.svelte';
   import Sheet from '$lib/components/Sheet.svelte';
   import TitleDetail from '$lib/components/TitleDetail.svelte';
   import { modelGate } from '$lib/home.svelte.js';
   import { session } from '$lib/session.svelte.js';
+  import { topbar } from '$lib/topbar.svelte.js';
   import {
     KIND_LABELS,
     ROUND_END_TEXT,
     ROUND_END_TITLE,
     ROUND_SIZE,
     answer,
-    chipFor,
     chooseKind,
     clearFilter,
     clearFilters,
     closeQueue,
     closeTitle,
-    countLine,
     dnaTierText,
     draft,
-    drop,
     emptyState,
     facets,
     filterChips,
     keepGoing,
     load,
     loadFacets,
-    moveTo,
-    neighboursIn,
+    move,
+    neighboursAt,
+    nounFor,
     openQueue,
     openTitle,
     rank,
     reset,
     roundLine,
+    searchHint,
+    showAll,
+    showLess,
+    spot,
     typed
   } from '$lib/rank.svelte.js';
 
   const showModel = $derived(!!session.user?.show_model);
   const empty = $derived(emptyState());
-  const count = $derived(countLine());
   const chips = $derived(filterChips());
+  const filtersLabel = $derived(chips.length ? `Filters · ${chips.length}` : 'Filters');
+
+  let width = $state(typeof window === 'undefined' ? 390 : window.innerWidth);
+  const wide = $derived(width > 720);
+
+  // A desktop's poster size, remembered on the device.
+  const SIZES = { small: 72, medium: 94, large: 124 };
+  const SIZE_KEY = 'rank-poster-size';
+  let size = $state(savedSize());
+  function savedSize() {
+    try {
+      const saved = localStorage.getItem(SIZE_KEY);
+      return saved && Object.hasOwn(SIZES, saved) ? saved : 'medium';
+    } catch {
+      return 'medium';
+    }
+  }
+  function pickSize(next) {
+    size = next;
+    try {
+      localStorage.setItem(SIZE_KEY, next);
+    } catch {
+      // Private mode: the choice lasts the visit.
+    }
+  }
+
+  let gridWidth = $state(0);
+  const cols = $derived(wide ? Math.max(1, Math.floor((gridWidth + 8) / (SIZES[size] + 8))) : 4);
 
   let filtersOpen = $state(false);
+  let searchOpen = $state(false);
+  let searchInput = $state();
+  const searching = $derived(searchOpen || !!draft.q);
 
-  /** @type {any} the row whose Move sheet is open */
+  async function openSearch() {
+    searchOpen = true;
+    await tick();
+    searchInput?.focus();
+  }
+  function closeSearch() {
+    searchOpen = false;
+    if (draft.q) {
+      draft.q = '';
+      load(rank.kind);
+    }
+  }
+
+  /** @type {any} the title whose card is open, kept past a move to a page not loaded */
+  let card = $state(null);
+  // The comparison round answers as Rate's pairs do; a poster only shows the film (decision 528).
+  let queuePeek = $state(null);
+  const queueCard = $derived(
+    rank.pair && {
+      token: rank.pair.token,
+      reason: rank.pair.reason,
+      left: { id: rank.pair.title_a, name: rank.pair.name_a, outcome: 'A' },
+      right: { id: rank.pair.title_b, name: rank.pair.name_b, outcome: 'B' }
+    }
+  );
+  /** @type {any} the title whose tier sheet is open */
   let moving = $state(null);
   const moveOptions = $derived.by(() => {
     const entry = moving;
     if (!entry) return [];
     return rank.tiers.map((tier) => ({
       label: tier.label,
-      detail: tier.verdict ? `· ${tier.verdict}` : undefined,
+      detail: tier.verdict || undefined,
       checked: tier.index === entry.tier,
-      onSelect: () => moveTo(entry, tier.index)
+      onSelect: async () => {
+        if ((await move(entry, tier.index)) && card?.title_id === entry.title_id) {
+          card = { ...card, tier: tier.index };
+        }
+      }
     }));
   });
+  const cardTier = $derived(card && rank.tiers.find((t) => t.index === card.tier));
+  // About log2(n) either-or questions place a title inside its tier.
+  const questions = $derived(cardTier ? Math.ceil(Math.log2(cardTier.count ?? cardTier.entries.length)) : 0);
+
+  function open(entry) {
+    if (suppressClick) return;
+    card = entry;
+    openTitle(entry);
+  }
 
   onMount(() => {
+    // Two rows' worth of each tier, generously: the grid measures its columns only once drawn.
+    rank.perTier = window.innerWidth > 720 ? 2 * Math.ceil(window.innerWidth / 80) : 8;
     loadFacets('movie');
     return load('movie');
   });
-  onDestroy(reset);
+  onDestroy(() => {
+    cancel();
+    reset();
+  });
 
   let lastModelEpoch = modelGate.epoch;
   $effect(() => {
@@ -74,109 +152,440 @@
     load(rank.kind);
   });
 
-  function metaOf(entry) {
+  // The kind switch and the search are the shell's top row here, beside You (decision 528).
+  $effect(() => {
+    if (!topbar.host) return;
+    topbar.content = rankBar;
+    return () => {
+      if (topbar.content === rankBar) topbar.content = null;
+    };
+  });
+
+  const countOf = (tier) => tier.count ?? tier.entries.length;
+
+  /** A closed tier shows two rows: its first posters, then "+N" when more follow. */
+  function shownOf(tier) {
+    if (rank.expanded.includes(tier.index) || countOf(tier) <= 2 * cols) return tier.entries;
+    return tier.entries.slice(0, 2 * cols - 1);
+  }
+
+  function labelOf(entry) {
     const matched = rank.dnaTiers?.[entry.title_id];
-    return [entry.year, matched && dnaTierText(matched)].filter(Boolean).join(' · ');
+    return [
+      entry.name,
+      entry.year,
+      entry.straddle != null && 'between two tiers',
+      matched && dnaTierText(matched)
+    ]
+      .filter(Boolean)
+      .join(', ');
   }
 
-  /** Pointer devices only: §6.3 keeps drag-and-drop "for pointer devices" beside Move. */
-  let dragging = $state(null);
+  // --- the tier strip (phones) ---------------------------------------------------------------
 
-  function onDragStart(entry, event) {
-    dragging = entry;
-    // Firefox will not start a drag unless `dataTransfer` is written synchronously.
-    event.dataTransfer?.setData('text/plain', String(entry.title_id));
-    if (event.dataTransfer) event.dataTransfer.effectAllowed = 'move';
+  let strip = $state();
+  let inView = $state(null);
+  const current = $derived(inView ?? rank.tiers[0]?.index ?? null);
+
+  function onScroll() {
+    if (wide || !strip) return;
+    // A tier is in view once its head reaches the strip's foot, where a jump lands it.
+    const line = strip.getBoundingClientRect().bottom + 12;
+    let seen = rank.tiers[0]?.index ?? null;
+    for (const tier of rank.tiers) {
+      const top = document.getElementById(`tier-${tier.index}`)?.getBoundingClientRect().top;
+      if (top !== undefined && top <= line) seen = tier.index;
+    }
+    inView = seen;
   }
 
-  // Dropping on a title means "above this one" and names both neighbours; anywhere else in the
-  // section it is a drop into the tier (§6.3).
-  async function onDropInto(tierIndex, event, beforeTitleId = null) {
-    event.preventDefault();
-    event.stopPropagation();
-    if (!dragging) return;
-    const entry = dragging;
-    dragging = null;
-    await drop({
-      title_id: entry.title_id,
-      tier: tierIndex,
-      ...neighboursIn(tierIndex, entry, beforeTitleId)
-    });
+  function jump(index) {
+    const smooth = !window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches;
+    document.getElementById(`tier-${index}`)?.scrollIntoView({ block: 'start', behavior: smooth ? 'smooth' : 'auto' });
+    inView = index;
   }
+
+  // --- drag (decision 528) --------------------------------------------------------------------
+  // `at` counts the target tier's posters without the lifted one; null is the tier alone, which
+  // names no neighbour. `x` is null for a keyboard lift.
+
+  /** @type {any} */
+  let drag = $state(null);
+  /** @type {any} a pointer down on a poster, before it lifts */
+  let press = null;
+  let suppressClick = false;
+  let live = $state('');
+  let opener;
+  let frame;
+  let board = $state();
+
+  function cellsOf(tier) {
+    const lifted = drag?.entry.title_id;
+    let n = 0;
+    const cells = shownOf(tier).map((entry) => ({
+      key: entry.title_id,
+      entry,
+      at: entry.title_id === lifted ? n : n++
+    }));
+    const home = drag && drag.tier === drag.entry.tier && drag.at === drag.origin;
+    if (drag && drag.tier === tier.index && drag.at !== null && !home) {
+      const before = cells.findIndex((c) => c.entry.title_id !== lifted && c.at === drag.at);
+      const i = before < 0 ? cells.length : before;
+      const col = i % cols;
+      const { chip } = spot(tier.label, neighboursAt(tier.index, drag.entry, drag.at));
+      cells.splice(i, 0, { key: 'slot', chip, align: col === 0 ? 'start' : col === cols - 1 ? 'end' : '' });
+    }
+    return { cells, others: n };
+  }
+
+  function whereNow() {
+    const tier = rank.tiers.find((t) => t.index === drag.tier);
+    return spot(tier?.label ?? '', neighboursAt(drag.tier, drag.entry, drag.at)).said;
+  }
+
+  function lift(entry, pointer = null) {
+    const entries = rank.tiers.find((t) => t.index === entry.tier)?.entries ?? [];
+    const origin = entries.findIndex((e) => e.title_id === entry.title_id);
+    drag = { entry, tier: entry.tier, at: origin, origin, x: null, y: null, ...pointer };
+    if (pointer) frame = requestAnimationFrame(autoscroll);
+  }
+
+  function down(entry, event) {
+    if (event.button !== 0 || rank.busy || drag) return;
+    const box = event.currentTarget.getBoundingClientRect();
+    press = {
+      entry,
+      x: event.clientX,
+      y: event.clientY,
+      dx: event.clientX - box.left,
+      dy: event.clientY - box.top,
+      w: box.width,
+      touch: event.pointerType !== 'mouse'
+    };
+    if (press.touch) press.timer = setTimeout(() => begin(press.x, press.y), 400);
+  }
+
+  function begin(x, y) {
+    const { entry, dx, dy, w } = press;
+    lift(entry, { x, y, dx, dy, w });
+  }
+
+  function pointerMove(event) {
+    if (press && !drag) {
+      const far = Math.hypot(event.clientX - press.x, event.clientY - press.y);
+      // A finger that moves before the long press is a scroll; a mouse must move to drag.
+      if (press.touch && far > 8) {
+        clearTimeout(press.timer);
+        press = null;
+      }
+      if (!press || press.touch || far <= 4) return;
+      begin(event.clientX, event.clientY);
+    }
+    if (drag?.x == null) return;
+    drag.x = event.clientX;
+    drag.y = event.clientY;
+    aim(event.clientX, event.clientY);
+  }
+
+  function pointerUp() {
+    clearTimeout(press?.timer);
+    press = null;
+    if (drag?.x == null) return;
+    // The click that follows a drag is not a tap on the poster.
+    suppressClick = true;
+    setTimeout(() => (suppressClick = false));
+    finish();
+  }
+
+  function cancel() {
+    clearTimeout(press?.timer);
+    press = null;
+    stop();
+  }
+
+  function stop() {
+    clearTimeout(opener);
+    cancelAnimationFrame(frame);
+    drag = null;
+  }
+
+  function aim(x, y) {
+    const el = document.elementFromPoint(x, y);
+    if (!drag || !el || el.closest('.slot')) return;
+    const letter = el.closest('[data-drop-tier]');
+    const cell = el.closest('[data-at]');
+    const section = el.closest('[data-tier-index]');
+    let tier = null;
+    let at = null;
+    if (letter) {
+      tier = Number(letter.getAttribute('data-drop-tier'));
+    } else if (cell && section) {
+      tier = Number(section.getAttribute('data-tier-index'));
+      const box = cell.getBoundingClientRect();
+      const after = !cell.hasAttribute('data-fixed') && x > box.left + box.width / 2;
+      at = Number(cell.getAttribute('data-at')) + (after ? 1 : 0);
+    } else if (section) {
+      tier = Number(section.getAttribute('data-tier-index'));
+      at = tier === drag.tier ? drag.at : null;
+    }
+    drag.hold = !!letter;
+    if (tier !== drag.tier) {
+      clearTimeout(opener);
+      const target = rank.tiers.find((t) => t.index === tier);
+      if (target && shownOf(target).length < countOf(target)) {
+        opener = setTimeout(() => showAll(target.index), 600);
+      }
+    }
+    drag.tier = tier;
+    drag.at = at;
+  }
+
+  // The viewport's top and bottom 48 px scroll the page while a poster is held there.
+  function autoscroll() {
+    if (drag?.x == null) return;
+    const edge = drag.hold ? 0 : drag.y < 48 ? -1 : drag.y > window.innerHeight - 48 ? 1 : 0;
+    if (edge) {
+      window.scrollBy(0, edge * 12);
+      aim(drag.x, drag.y);
+    }
+    frame = requestAnimationFrame(autoscroll);
+  }
+
+  async function finish() {
+    const { entry, tier, at } = drag;
+    stop();
+    if (tier === null) return;
+    const { above, below } = neighboursAt(tier, entry, at);
+    await move(entry, tier, above?.title_id ?? null, below?.title_id ?? null);
+  }
+
+  // Space lifts and drops, the arrows move through the grid and past a tier's edge, Esc cancels.
+  function key(entry, event) {
+    if (!drag) {
+      if (event.key !== ' ' || rank.busy) return;
+      event.preventDefault();
+      lift(entry);
+      live = `${entry.name}, lifted. ${whereNow()}`;
+      return;
+    }
+    if (drag.x !== null || drag.entry.title_id !== entry.title_id) return;
+    const steps = { ArrowLeft: -1, ArrowRight: 1, ArrowUp: -cols, ArrowDown: cols };
+    if (event.key === ' ') {
+      event.preventDefault();
+      finish().then(async () => {
+        await tick();
+        board?.querySelector(`[data-title="${entry.title_id}"]`)?.focus();
+      });
+    } else if (event.key === 'Escape') {
+      event.preventDefault();
+      stop();
+      live = `${entry.name}, put back.`;
+    } else if (event.key in steps) {
+      event.preventDefault();
+      step(steps[event.key]);
+      live = whereNow();
+    }
+  }
+
+  function step(delta) {
+    const room = (tier) => shownOf(tier).filter((e) => e.title_id !== drag.entry.title_id).length;
+    let i = rank.tiers.findIndex((t) => t.index === drag.tier);
+    let at = drag.at + delta;
+    if (at < 0 && i > 0) {
+      i -= 1;
+      at = room(rank.tiers[i]);
+    } else if (at > room(rank.tiers[i]) && i < rank.tiers.length - 1) {
+      i += 1;
+      at = 0;
+    }
+    drag.tier = rank.tiers[i].index;
+    drag.at = Math.max(0, Math.min(at, room(rank.tiers[i])));
+  }
+
+  // Once a finger has lifted a poster, its moves drag rather than scroll. Not passive, so it can.
+  $effect(() => {
+    if (!board) return;
+    const hold = (event) => {
+      if (drag?.x != null) event.preventDefault();
+    };
+    board.addEventListener('touchmove', hold, { passive: false });
+    return () => board.removeEventListener('touchmove', hold);
+  });
 </script>
 
-<section class="rank" data-testid="rank-surface">
-  <h1 class="large-title">Rank</h1>
+<svelte:window
+  bind:innerWidth={width}
+  onscroll={onScroll}
+  onpointermove={pointerMove}
+  onpointerup={pointerUp}
+  onpointercancel={cancel}
+  onkeydown={(e) => e.key === 'Escape' && drag?.x != null && cancel()}
+/>
 
-  <div class="stack">
-    <div class="segmented" role="group" aria-label="Kind">
-      {#each Object.entries(KIND_LABELS) as [key, label] (key)}
-        <button aria-pressed={rank.kind === key} data-kind={key} onclick={() => chooseKind(key)}
-          >{label}</button
-        >
+{#snippet icon(name)}
+  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+    {#if name === 'search'}
+      <circle cx="11" cy="11" r="6.5" /><path d="m16 16 4.5 4.5" />
+    {:else if name === 'filter'}
+      <path d="M4 7h10M18 7h2M4 17h4M12 17h8" /><circle cx="16" cy="7" r="2" /><circle cx="10" cy="17" r="2" />
+    {:else if name === 'small'}
+      {#each [3.75, 10.5, 17.25] as y (y)}
+        {#each [3.75, 10.5, 17.25] as x (x)}<rect {x} {y} width="3" height="3" rx="0.75" />{/each}
       {/each}
-    </div>
-    {#if count}<p class="footnote count" data-testid="rank-count">{count}</p>{/if}
-  </div>
+    {:else if name === 'medium'}
+      <rect x="4" y="4" width="6" height="6" rx="1.25" /><rect x="14" y="4" width="6" height="6" rx="1.25" />
+      <rect x="4" y="14" width="6" height="6" rx="1.25" /><rect x="14" y="14" width="6" height="6" rx="1.25" />
+    {:else if name === 'large'}
+      <rect x="4" y="5" width="6" height="14" rx="1.25" /><rect x="14" y="5" width="6" height="14" rx="1.25" />
+    {:else if name === 'chevron'}
+      <path d="m9.5 5.5 6.5 6.5-6.5 6.5" />
+    {/if}
+  </svg>
+{/snippet}
 
-  <div class="stack">
-    <div class="searchrow">
-      <label class="search">
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="6.5" /><path d="m16 16 4.5 4.5" /></svg>
-        <input
-          class="q"
-          type="search"
-          placeholder="Search your list"
-          aria-label="Search your list"
-          bind:value={draft.q}
-          oninput={typed}
-          data-testid="rank-filter"
-        />
-      </label>
+{#snippet searchField()}
+  <label class="search">
+    {@render icon('search')}
+    <input
+      class="q"
+      type="search"
+      placeholder={searchHint()}
+      aria-label="Search your ranking"
+      bind:value={draft.q}
+      bind:this={searchInput}
+      oninput={typed}
+      data-testid="rank-filter"
+    />
+  </label>
+{/snippet}
+
+{#snippet rankBar()}
+  <div class="top" class:wide>
+    <h1 class="sr-only">Rank</h1>
+    {#if searching && !wide}
+      {@render searchField()}
+      <button class="btn-plain" onclick={closeSearch}>Cancel</button>
+    {:else}
+      <div class="segmented kinds" role="group" aria-label="Kind">
+        {#each Object.entries(KIND_LABELS) as [key, label] (key)}
+          <button aria-pressed={rank.kind === key} data-kind={key} onclick={() => chooseKind(key)}
+            >{label}</button
+          >
+        {/each}
+      </div>
+      {#if wide}{@render searchField()}{:else}<span class="grow"></span>{/if}
+      {#if !wide}
+        <button class="btn-plain icon" aria-label="Search your ranking" data-testid="rank-search" onclick={openSearch}
+          >{@render icon('search')}</button
+        >
+      {/if}
       <button
-        class="pill"
+        class={wide ? 'pill' : 'btn-plain icon'}
+        aria-label={wide ? undefined : filtersLabel}
         aria-haspopup="dialog"
         aria-expanded={filtersOpen}
         onclick={() => (filtersOpen = true)}
         data-testid="rank-filters"
       >
-        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M4 7h10M18 7h2M4 17h4M12 17h8" /><circle cx="16" cy="7" r="2" /><circle cx="10" cy="17" r="2" /></svg>
-        {chips.length ? `Filters · ${chips.length}` : 'Filters'}
+        {@render icon('filter')}{#if wide}{filtersLabel}{/if}
       </button>
-    </div>
-    {#if chips.length}
-      <div class="chips">
-        {#each chips as chip (chip.key)}
-          <button
-            class="pill on"
-            onclick={() => clearFilter(chip.key)}
-            aria-label={`Remove ${chip.text}`}
-            data-testid={`rank-filter-chip-${chip.key}`}
-          >
-            {chip.text}
-            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" /></svg>
-          </button>
-        {/each}
-      </div>
+      {#if wide}
+        <span class="grow"></span>
+        <div class="segmented sizes" role="group" aria-label="Poster size">
+          {#each Object.keys(SIZES) as name (name)}
+            <button aria-label="{name[0].toUpperCase()}{name.slice(1)} posters" aria-pressed={size === name} onclick={() => pickSize(name)}
+              >{@render icon(name)}</button
+            >
+          {/each}
+        </div>
+      {/if}
     {/if}
   </div>
+{/snippet}
 
-  {#if rank.ratedTotal >= 2}
-    <div class="stack">
-      <div class="card sharpen">
-        <div class="sharpen-text">
-          <h2 class="card-title">Sharpen your list</h2>
-          <p class="why">{ROUND_SIZE} quick either-or questions</p>
-        </div>
-        <button
-          class="btn-tinted hit start"
-          onclick={openQueue}
-          disabled={rank.busy}
-          data-testid="rank-sharpen">Start</button
-        >
-      </div>
-      <p class="footnote hint">Drag a title to move it, or use Move.</p>
+{#snippet ranking()}
+  {#if cardTier}
+    <div class="list-group ranking">
+      <button
+        class="list-row"
+        aria-haspopup="dialog"
+        aria-label="In your ranking: {cardTier.label}{cardTier.verdict ? `, ${cardTier.verdict}` : ''}"
+        onclick={() => (moving = card)}
+        data-testid="rank-card-tier"
+      >
+        <span class="grow">In your ranking</span>
+        <span class="letter">{cardTier.label}</span>
+        {#if cardTier.verdict}<span class="footnote">{cardTier.verdict}</span>{/if}
+        {@render icon('chevron')}
+      </button>
+      {#if questions > 0}
+        <a class="list-row" href="/rank/place/{card.title_id}?kind={rank.kind}" data-testid="rank-card-place">
+          <span class="grow">Place with questions</span>
+          <span class="footnote">{questions} quick {questions === 1 ? 'question' : 'questions'}</span>
+          {@render icon('chevron')}
+        </a>
+      {/if}
     </div>
+    {#if card.tension}<p class="list-footer" data-testid="rank-card-tension">{card.tension}</p>{/if}
+  {/if}
+{/snippet}
+
+<section class="rank" class:wide class:dragging={!!drag} data-testid="rank-surface">
+  {#if !topbar.host}{@render rankBar()}{/if}
+
+  {#if chips.length}
+    <div class="chips">
+      {#each chips as chip (chip.key)}
+        <button
+          class="pill on"
+          onclick={() => clearFilter(chip.key)}
+          aria-label={`Remove ${chip.text}`}
+          data-testid={`rank-filter-chip-${chip.key}`}
+        >
+          {chip.text}
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" /></svg>
+        </button>
+      {/each}
+    </div>
+  {/if}
+
+  {#if !wide && rank.tiers.length}
+    <nav class="strip" aria-label="Tiers" bind:this={strip}>
+      {#each rank.tiers as tier (tier.index)}
+        <button
+          class:on={!drag && current === tier.index}
+          class:lit={drag && drag.tier === tier.index && drag.at === null}
+          class:target={!!drag}
+          data-drop-tier={tier.index}
+          aria-label="{tier.label}, {countOf(tier)} {nounFor(countOf(tier))}"
+          aria-current={current === tier.index ? 'true' : undefined}
+          onclick={() => jump(tier.index)}
+        >
+          <span class="l">{tier.label}</span>
+          <span class="c">{countOf(tier)}</span>
+        </button>
+      {/each}
+    </nav>
+  {/if}
+
+  {#if drag && !wide}
+    <p class="look hint">Drop between posters to place it · on a letter to move it there</p>
+  {:else if rank.ratedTotal >= 2}
+    <section class="look" aria-label="Needs a look">
+      {#if rank.straddling}<span class="dot" aria-hidden="true"></span>{/if}
+      <p>
+        {rank.straddling
+          ? `${rank.straddling} ${rank.straddling === 1 ? 'title sits' : 'titles sit'} between two tiers`
+          : 'Sharpen your list'}
+      </p>
+      <button
+        class="go {wide ? 'btn-tinted' : 'btn-plain'}"
+        onclick={openQueue}
+        disabled={rank.busy}
+        data-testid="rank-sharpen"
+        >{rank.straddling ? 'Sharpen' : 'Start'}{#if wide}{` — ${ROUND_SIZE} quick questions`}{/if}</button
+      >
+    </section>
   {/if}
 
   {#if rank.error}
@@ -200,82 +609,84 @@
     </div>
   {/if}
 
+  <p class="sr-only" aria-live="polite">{live}</p>
+
   <!-- Empty tiers stay on screen as drop targets. -->
-  <div class="board" data-testid="rank-board">
+  <div class="board" style:--poster="{SIZES[size]}px" data-testid="rank-board" bind:this={board}>
     {#each rank.tiers as tier (tier.index)}
-      <div
+      {@const count = countOf(tier)}
+      {@const { cells, others } = cellsOf(tier)}
+      {@const more = count - shownOf(tier).length}
+      <section
         class="tier"
-        role="group"
-        aria-labelledby={`tier-${tier.index}`}
+        id="tier-{tier.index}"
+        aria-labelledby="tier-name-{tier.index}"
         data-tier={tier.label}
         data-tier-index={tier.index}
-        ondragover={(e) => e.preventDefault()}
-        ondrop={(e) => onDropInto(tier.index, e)}
       >
-        <div class="tier-head" data-testid={`rank-tier-${tier.label}`}>
-          <h2 class="tier-name" id={`tier-${tier.index}`}>
-            <span class="letter" data-testid={`rank-letter-${tier.label}`}>{tier.label}</span>
+        <div
+          class="head"
+          class:lit={drag?.tier === tier.index}
+          data-drop-tier={tier.index}
+          data-testid="rank-tier-{tier.label}"
+        >
+          <h2 class="name" id="tier-name-{tier.index}">
+            <span class="letter" data-testid="rank-letter-{tier.label}">{tier.label}</span>
             {#if tier.verdict}<span>{tier.verdict}</span>{/if}
           </h2>
-          <span class="footnote data">{tier.entries.length}</span>
+          <span class="count">{count} {nounFor(count)}</span>
+          {#if rank.expanded.includes(tier.index) && count > 2 * cols}
+            <button class="btn-plain less" onclick={() => showLess(tier.index)}>Show less</button>
+          {/if}
         </div>
         {#if tier.entries.length}
-          <ul class="rows">
-            {#each tier.entries as entry (entry.title_id)}
-              {@const chip = chipFor(entry)}
-              {@const meta = metaOf(entry)}
-              <li
-                class="row"
-                draggable="true"
-                ondragstart={(e) => onDragStart(entry, e)}
-                ondragend={() => (dragging = null)}
-                ondragover={(e) => e.preventDefault()}
-                ondrop={(e) => onDropInto(tier.index, e, entry.title_id)}
-                data-title={entry.title_id}
-                data-testid={`rank-title-${entry.title_id}`}
-              >
-                <div class="main">
+          <ol class="grid" bind:clientWidth={gridWidth}>
+            {#each cells as cell (cell.key)}
+              {#if cell.entry}
+                {@const lifted = drag?.entry.title_id === cell.entry.title_id}
+                <li class:ghost={lifted}>
                   <button
-                    class="open"
-                    onclick={() => openTitle(entry)}
-                    data-testid={`rank-open-${entry.title_id}`}
+                    class="tile"
+                    data-title={cell.entry.title_id}
+                    data-at={cell.at}
+                    data-fixed={lifted ? '' : undefined}
+                    data-testid="rank-open-{cell.entry.title_id}"
+                    aria-label={labelOf(cell.entry)}
+                    onclick={() => open(cell.entry)}
+                    onpointerdown={(e) => down(cell.entry, e)}
+                    onkeydown={(e) => key(cell.entry, e)}
+                    onkeyup={(e) => e.key === ' ' && e.preventDefault()}
+                    onblur={() => drag?.x === null && stop()}
+                    oncontextmenu={(e) => e.preventDefault()}
                   >
-                    <span class="thumb" aria-hidden="true">
-                      <RatePoster title={{ id: entry.title_id, name: entry.name }} showName={false} />
-                    </span>
-                    <span class="text">
-                      <span class="name">{entry.name}</span>
-                      {#if meta}<span class="footnote data">{meta}</span>{/if}
-                    </span>
+                    <RatePoster title={{ id: cell.entry.title_id, name: cell.entry.name }} showName="missing" lazy />
+                    {#if cell.entry.straddle != null}<span class="dot" aria-hidden="true"></span>{/if}
                   </button>
-                  <button
-                    class="move"
-                    onclick={() => (moving = entry)}
-                    disabled={rank.busy}
-                    aria-haspopup="dialog"
-                    aria-label={`Move ${entry.name}`}
-                    data-testid={`rank-move-${entry.title_id}`}>Move</button
-                  >
-                </div>
-                {#if chip}
-                  <!-- Its own control: it opens the comparison queue and moves nothing (decision 496). -->
-                  <button
-                    class="pill chip"
-                    class:tension={chip.kind === 'tension'}
-                    onclick={openQueue}
-                    disabled={rank.busy}
-                    data-chip={chip.kind}
-                    data-testid={`rank-chip-${entry.title_id}`}
-                    aria-label={`${chip.text} Compare titles to settle it`}>{chip.text}</button
-                  >
-                {/if}
-              </li>
+                </li>
+              {:else}
+                <li class="slot" aria-hidden="true"><span class="where {cell.align}">{cell.chip}</span></li>
+              {/if}
             {/each}
-          </ul>
+            {#if more > 0}
+              <li>
+                <button
+                  class="more"
+                  data-at={others}
+                  data-fixed=""
+                  aria-label="Show all {count} in {tier.label}"
+                  data-testid="rank-more-{tier.label}"
+                  onclick={() => showAll(tier.index)}
+                >
+                  <span class="n">+{more}</span>
+                  <span>Show all</span>
+                </button>
+              </li>
+            {/if}
+          </ol>
         {:else}
           <p class="nothing">Nothing here yet</p>
         {/if}
-      </div>
+      </section>
     {/each}
   </div>
 
@@ -293,6 +704,18 @@
     </ul>
   {/if}
 </section>
+
+{#if drag?.x != null}
+  <div
+    class="lifted"
+    aria-hidden="true"
+    style:left="{drag.x - drag.dx}px"
+    style:top="{drag.y - drag.dy}px"
+    style:width="{drag.w}px"
+  >
+    <RatePoster title={{ id: drag.entry.title_id, name: drag.entry.name }} showName="missing" />
+  </div>
+{/if}
 
 <!-- The bars sit in the content, not the header: the header's grab area captures the pointer. -->
 <Sheet open={filtersOpen} onClose={() => (filtersOpen = false)} label="Filters" detent="medium" width={480}>
@@ -376,40 +799,18 @@
           </div>
         </div>
       {:else if rank.pair}
-        <p class="why reason" data-testid="rank-pair-reason">{rank.pair.reason}</p>
         {#if showModel && rank.pair.model}
           <p class="data arm" data-testid="rank-pair-arm">
             {rank.pair.model.arm} · {rank.pair.model.reason}
           </p>
         {/if}
-        <div class="pair">
-          <button
-            class="side"
-            onclick={() => answer('A')}
-            disabled={rank.busy}
-            aria-label={`Pick ${rank.pair.name_a}`}
-            data-testid="rank-pair-a"
-          >
-            <RatePoster title={{ id: rank.pair.title_a, name: rank.pair.name_a }} showName={false} />
-            <span class="side-name">{rank.pair.name_a}</span>
-          </button>
-          <button
-            class="side"
-            onclick={() => answer('B')}
-            disabled={rank.busy}
-            aria-label={`Pick ${rank.pair.name_b}`}
-            data-testid="rank-pair-b"
-          >
-            <RatePoster title={{ id: rank.pair.title_b, name: rank.pair.name_b }} showName={false} />
-            <span class="side-name">{rank.pair.name_b}</span>
-          </button>
-        </div>
-        <button
-          class="btn-secondary tie"
-          onclick={() => answer('TIE')}
-          disabled={rank.busy}
-          data-testid="rank-pair-tie">About the same</button
-        >
+        <RateBattleCard
+          card={queueCard}
+          busy={rank.busy}
+          much={false}
+          onDuel={(outcome) => answer(outcome)}
+          onPeek={(side) => (queuePeek = queueCard[side])}
+        />
       {:else}
         <p class="why" data-testid="rank-queue-empty">{rank.queueReason}</p>
       {/if}
@@ -431,12 +832,9 @@
   {/snippet}
 </Sheet>
 
-<ActionSheet
-  open={moving !== null}
-  title={moving ? `Move ${moving.name}` : ''}
-  options={moveOptions}
-  onClose={() => (moving = null)}
-/>
+{#if queuePeek}
+  <RatePeek title={queuePeek} onClose={() => (queuePeek = null)} />
+{/if}
 
 {#if rank.opened !== null}
   <!-- A credit tap closes the card (Rank has no list to filter); a seen change re-reads the board. -->
@@ -445,41 +843,83 @@
     onClose={closeTitle}
     onPerson={closeTitle}
     onStateChange={() => load(rank.kind)}
+    {ranking}
   />
 {/if}
+
+<!-- After the card, so the tier sheet opens over it. -->
+<ActionSheet
+  open={moving !== null}
+  title={moving ? `Move ${moving.name}` : ''}
+  options={moveOptions}
+  onClose={() => (moving = null)}
+/>
 
 <style>
   .rank {
     display: flex;
     flex-direction: column;
-    gap: 24px;
+    gap: 12px;
+  }
+  .rank:not(.wide) {
     max-width: 720px;
   }
-  .stack {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
+  .dragging,
+  .dragging :global(*) {
+    cursor: grabbing;
+    -webkit-user-select: none;
+    user-select: none;
   }
-  .count,
-  .hint {
-    margin: 0;
-    padding: 0 4px;
-    font-variant-numeric: tabular-nums;
-  }
-  /* Only a mouse can drag; a finger has Move. */
-  .hint {
-    display: none;
-  }
-  @media (pointer: fine) {
-    .hint {
-      display: block;
-    }
+  .grow {
+    flex: 1;
+    min-width: 0;
   }
 
-  .searchrow {
+  .top {
     display: flex;
     align-items: center;
-    gap: 8px;
+    gap: 4px;
+    min-height: 44px;
+  }
+  .top.wide {
+    gap: 12px;
+    min-height: 64px;
+  }
+  .top .btn-plain {
+    font-weight: 600;
+  }
+  .kinds {
+    flex: none;
+    width: 150px;
+    min-height: 32px;
+  }
+  .kinds > button,
+  .sizes > button {
+    font-size: var(--fs-footnote);
+    line-height: 18px;
+  }
+  .sizes {
+    flex: none;
+    width: 116px;
+    min-height: 32px;
+  }
+  .sizes > button {
+    display: grid;
+    place-items: center;
+  }
+  .sizes svg {
+    width: 20px;
+    height: 20px;
+  }
+  .icon {
+    width: var(--touch);
+    justify-content: center;
+    padding: 0;
+    color: var(--text);
+  }
+  .top .pill svg {
+    width: 18px;
+    height: 18px;
   }
   .search {
     position: relative;
@@ -489,9 +929,14 @@
     align-items: center;
     color: var(--text-3);
   }
+  .top.wide .search {
+    flex: 0 1 320px;
+  }
   .search svg {
     position: absolute;
     left: 12px;
+    width: 18px;
+    height: 18px;
     pointer-events: none;
   }
   /* Class and type both: design.css's input rule is four :not()s deep. */
@@ -500,40 +945,116 @@
     appearance: none;
     padding-left: 38px;
   }
+  .top.wide .search input.q[type='search'] {
+    min-height: 40px;
+    font-size: var(--fs-subhead);
+  }
   .chips {
     display: flex;
     flex-wrap: wrap;
     gap: 8px;
   }
 
-  .sharpen {
+  /* Phones: the tiers' letters and counts stay in view, and jump to a tier. */
+  .strip {
+    position: sticky;
+    top: env(safe-area-inset-top);
+    z-index: 5;
     display: flex;
-    align-items: center;
-    gap: 12px;
+    gap: 4px;
+    margin: 0 calc(-1 * var(--gutter)) -4px;
+    padding: 8px var(--gutter) 0;
+    background: var(--bg);
+    /* Covers the status bar's strip above it once it sticks. */
+    box-shadow: 0 calc(-1 * env(safe-area-inset-top)) 0 var(--bg);
   }
-  .sharpen-text {
-    flex: 1;
+  .strip button {
+    flex: 1 1 0;
     min-width: 0;
+    height: 44px;
+    min-height: 44px;
+    padding: 0;
+    border: none;
+    border-radius: var(--r-sm);
+    background: var(--surface-1);
+    color: var(--text);
     display: flex;
     flex-direction: column;
-    gap: 2px;
+    align-items: center;
+    justify-content: center;
   }
-  .card-title {
-    margin: 0;
-    font-size: var(--fs-body);
+  .strip .l {
+    font-family: var(--serif);
+    font-size: var(--fs-section);
     line-height: 22px;
-    font-weight: 600;
   }
-  .sharpen .why {
+  .strip .c {
+    font-size: var(--fs-caption);
+    line-height: 14px;
+    color: var(--text-3);
+    font-variant-numeric: tabular-nums;
+  }
+  .strip button.on {
+    background: var(--text);
+    color: var(--bg);
+  }
+  .strip button.on .c {
+    color: rgba(12, 11, 10, 0.6);
+  }
+  .strip button.target {
+    outline: 1px dashed rgba(245, 240, 232, 0.28);
+    outline-offset: -1px;
+  }
+  .strip button.lit {
+    outline: none;
+    background: var(--accent-tint);
+    box-shadow: inset 0 0 0 1.5px var(--accent);
+    transform: scale(1.08);
+  }
+
+  /* Needs a look: the dots' legend, and the comparison round's way in. */
+  .look {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-height: 44px;
     margin: 0;
+    padding: 0 6px 0 12px;
+    border-radius: var(--r-md);
+    background: var(--surface-1);
   }
-  .start {
-    flex: none;
-    min-height: 34px;
-    padding: 0 14px;
-    border-radius: var(--r-pill);
+  .look p {
+    flex: 1;
+    min-width: 0;
+    margin: 0;
     font-size: var(--fs-subhead);
     line-height: 20px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .look.hint {
+    font-size: var(--fs-footnote);
+    line-height: 18px;
+    color: var(--text-2);
+  }
+  .look .go {
+    flex: none;
+    font-size: var(--fs-subhead);
+    line-height: 20px;
+    font-weight: 600;
+  }
+  .look .btn-tinted {
+    min-height: 32px;
+    padding: 0 14px;
+    border-radius: var(--r-pill);
+  }
+  .dot {
+    flex: none;
+    width: 8px;
+    height: 8px;
+    border-radius: var(--r-pill);
+    background: var(--warning);
   }
 
   .error {
@@ -554,119 +1075,178 @@
   .board {
     display: flex;
     flex-direction: column;
-    gap: 32px;
+    gap: 16px;
   }
   .tier {
     display: flex;
     flex-direction: column;
-    gap: 12px;
+    gap: 8px;
+    scroll-margin-top: calc(env(safe-area-inset-top) + 60px);
   }
-  .tier-head {
+  .head {
     display: flex;
     align-items: center;
     gap: 12px;
+    min-height: 36px;
   }
-  .tier-name {
+  .name {
     flex: 1;
     min-width: 0;
     margin: 0;
     display: flex;
     align-items: center;
-    gap: 12px;
+    gap: 10px;
     font-size: var(--fs-footnote);
     line-height: 18px;
     font-weight: 400;
     color: var(--text-3);
   }
   .letter {
-    width: 40px;
-    height: 40px;
+    min-width: 28px;
+    height: 28px;
     flex: none;
+    padding: 0 3px;
     display: grid;
     place-items: center;
-    border-radius: var(--r-sm);
+    border-radius: 8px;
     background: var(--surface-2);
     font-family: var(--serif);
-    font-size: var(--fs-title);
-    line-height: 34px;
+    font-size: var(--fs-section);
+    line-height: 22px;
     color: var(--text);
   }
-  .rows {
+  .head.lit .letter {
+    background: var(--accent-tint);
+    color: var(--accent-text);
+  }
+  .count {
+    font-size: var(--fs-footnote);
+    line-height: 18px;
+    color: var(--text-3);
+    font-variant-numeric: tabular-nums;
+  }
+  .less {
+    margin-right: -8px;
+    font-size: var(--fs-footnote);
+  }
+  .grid {
     margin: 0;
     padding: 0;
     list-style: none;
-    border-radius: var(--r-md);
-    background: var(--surface-1);
-    overflow: hidden;
+    display: grid;
+    grid-template-columns: repeat(4, minmax(0, 1fr));
+    gap: 6px;
   }
-  .row {
+  .tile {
     position: relative;
-  }
-  .row + .row::before {
-    content: '';
-    position: absolute;
-    top: 0;
-    left: 68px;
-    right: 0;
-    height: 0.5px;
-    background: var(--separator);
-  }
-  .main {
-    display: flex;
-    align-items: stretch;
-  }
-  .open {
-    flex: 1;
-    min-width: 0;
-    min-height: 76px;
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    padding: 8px 0 8px 16px;
+    display: block;
+    width: 100%;
+    padding: 0;
     border: none;
+    border-radius: var(--r-poster);
     background: none;
     color: inherit;
-    text-align: left;
+    -webkit-touch-callout: none;
+    -webkit-user-select: none;
+    user-select: none;
+    transition: transform 0.15s var(--ease);
   }
-  .thumb {
-    width: 40px;
-    flex: none;
+  @media (hover: hover) and (pointer: fine) {
+    .tile {
+      cursor: grab;
+    }
+    .tile:hover {
+      transform: translateY(-2px);
+    }
   }
-  .text {
-    flex: 1;
-    min-width: 0;
+  .tile .dot {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    box-shadow: 0 0 0 2px var(--bg);
+  }
+  .ghost {
+    border-radius: var(--r-poster);
+    outline: 1.5px dashed rgba(245, 240, 232, 0.28);
+    outline-offset: -1.5px;
+  }
+  .ghost .tile {
+    opacity: 0.4;
+  }
+  .slot {
+    position: relative;
+    aspect-ratio: 2 / 3;
+    border: 1.5px dashed var(--ember-edge);
+    border-radius: var(--r-poster);
+    background: var(--accent-tint);
+    animation: fadeIn 0.2s var(--ease);
+  }
+  /* The insertion bar, with a dot at each end, in the gap before the slot. */
+  .slot::before {
+    content: '';
+    position: absolute;
+    top: -4px;
+    bottom: -4px;
+    left: -7px;
+    width: 6px;
+    background:
+      radial-gradient(circle at 50% 3px, var(--accent) 2.5px, transparent 3px),
+      radial-gradient(circle at 50% calc(100% - 3px), var(--accent) 2.5px, transparent 3px),
+      linear-gradient(var(--accent), var(--accent)) center / 3px 100% no-repeat;
+  }
+  .where {
+    position: absolute;
+    bottom: calc(100% + 8px);
+    left: 50%;
+    z-index: 2;
+    max-width: calc(100vw - 2 * var(--gutter));
+    height: 24px;
+    padding: 0 10px;
+    display: flex;
+    align-items: center;
+    border-radius: var(--r-pill);
+    background: var(--surface-3);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.35);
+    font-size: var(--fs-caption);
+    line-height: 16px;
+    font-weight: 600;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    transform: translateX(-50%);
+    pointer-events: none;
+  }
+  .where.start {
+    left: 0;
+    transform: none;
+  }
+  .where.end {
+    left: auto;
+    right: 0;
+    transform: none;
+  }
+  .more {
+    width: 100%;
+    aspect-ratio: 2 / 3;
+    padding: 0;
+    border: none;
+    border-radius: var(--r-poster);
+    background: var(--surface-2);
+    color: var(--text-3);
     display: flex;
     flex-direction: column;
+    align-items: center;
+    justify-content: center;
     gap: 2px;
+    font-size: var(--fs-caption);
+    line-height: 16px;
   }
-  .name {
+  .more .n {
+    color: var(--text);
     font-size: var(--fs-body);
     line-height: 22px;
-  }
-  .move {
-    flex: none;
-    padding: 0 16px;
-    border: none;
-    background: none;
-    color: var(--text-2);
-    font-size: var(--fs-subhead);
-  }
-  .move:disabled,
-  .chip:disabled {
-    opacity: 0.45;
-  }
-  .chip {
-    max-width: calc(100% - 84px);
-    margin: -4px 16px 12px 68px;
-  }
-  /* The tension chip carries a sentence, so it wraps. */
-  .chip.tension {
-    min-height: 36px;
-    padding: 8px 12px;
-    border-radius: var(--r-sm);
-    white-space: normal;
-    text-align: left;
-    justify-content: flex-start;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
   }
   .nothing {
     margin: 0;
@@ -680,6 +1260,104 @@
     line-height: 20px;
     color: var(--text-3);
   }
+  .lifted {
+    position: fixed;
+    z-index: 80;
+    border-radius: var(--r-poster);
+    box-shadow: var(--shadow-menu);
+    transform: rotate(2deg) scale(1.06);
+    pointer-events: none;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    .lifted,
+    .strip button.lit,
+    .tile:hover {
+      transform: none;
+    }
+  }
+
+  /* Desktop: each tier a band, its letter cell beside a wrapping grid. */
+  .wide .board {
+    gap: 12px;
+  }
+  .wide .tier {
+    flex-direction: row;
+    gap: 12px;
+    padding: 8px;
+    border-radius: var(--r-md);
+    background: var(--surface-1);
+  }
+  .wide .head {
+    width: 96px;
+    flex: none;
+    flex-direction: column;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 0;
+    padding-top: 20px;
+    border-radius: var(--r-sm);
+    background: var(--surface-2);
+    text-align: center;
+  }
+  .wide .head.lit {
+    background: var(--accent-tint);
+    box-shadow: inset 0 0 0 1px var(--ember-edge);
+  }
+  .wide .name {
+    flex: none;
+    flex-direction: column;
+    gap: 4px;
+    font-size: var(--fs-caption);
+    line-height: 16px;
+  }
+  .wide .letter {
+    height: auto;
+    background: none;
+    font-size: var(--fs-display);
+    line-height: 48px;
+  }
+  .wide .head.lit .letter {
+    background: none;
+  }
+  .wide .count {
+    font-size: var(--fs-caption);
+    line-height: 16px;
+  }
+  .wide .less {
+    margin: 4px 0 0;
+    font-size: var(--fs-caption);
+  }
+  .wide .grid {
+    flex: 1;
+    min-width: 0;
+    grid-template-columns: repeat(auto-fill, var(--poster));
+    gap: 8px;
+    align-content: start;
+  }
+  .wide .nothing {
+    flex: 1;
+    background: none;
+  }
+
+  .ranking .list-row {
+    gap: 8px;
+    padding-right: 12px;
+    color: var(--text);
+  }
+  .ranking .letter {
+    background: var(--surface-3);
+  }
+  .ranking .footnote {
+    flex: none;
+    margin: 0;
+  }
+  .ranking svg {
+    width: 16px;
+    height: 16px;
+    flex: none;
+    color: var(--text-3);
+  }
+
   .model,
   .log {
     margin: 0;
@@ -747,33 +1425,8 @@
   .queue p {
     margin: 0;
   }
-  .reason,
   .arm {
     text-align: center;
-  }
-  .pair {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 12px;
-  }
-  .side {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    padding: 0;
-    border: none;
-    background: none;
-    color: inherit;
-    text-align: center;
-  }
-  .side-name {
-    font-size: var(--fs-body);
-    line-height: 22px;
-    font-weight: 600;
-  }
-  .tie {
-    width: 100%;
-    min-height: 50px;
   }
   .round-end {
     display: flex;

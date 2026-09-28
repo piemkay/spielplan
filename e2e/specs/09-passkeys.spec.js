@@ -89,7 +89,7 @@ test.describe('passkeys', () => {
 
     await page.getByRole('button', { name: 'Sign in with a passkey' }).click();
     await expect(
-      page.getByTestId('home-greeting')
+      page.getByTestId('home-title')
     ).toBeVisible();
     await expect(page.getByTestId('account-chip')).toHaveAccessibleName(new RegExp(ADMIN.name));
   });
@@ -108,7 +108,7 @@ test.describe('passkeys', () => {
 
     await page.getByRole('button', { name: 'Sign in with a passkey' }).click();
     await expect(
-      page.getByTestId('home-greeting')
+      page.getByTestId('home-title')
     ).toBeVisible();
 
     await page.goto('/account');
@@ -132,7 +132,7 @@ test.describe('passkeys', () => {
     await menu.getByRole('button', { name: 'Log out' }).click();
     await page.getByRole('button', { name: 'Sign in with a passkey' }).click();
     await expect(
-      page.getByTestId('home-greeting')
+      page.getByTestId('home-title')
     ).toBeVisible();
   });
 

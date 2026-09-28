@@ -7,13 +7,11 @@ import {
   TYPING_PAUSE_MS,
   answer,
   apply,
-  chipFor,
   chooseKind,
   clearFilter,
   clearFilters,
   closeQueue,
   closeTitle,
-  countLine,
   dnaTierText,
   draft,
   drop,
@@ -23,13 +21,17 @@ import {
   keepGoing,
   load,
   loadFacets,
-  moveTo,
-  neighboursIn,
+  move,
+  neighboursAt,
   openQueue,
   openTitle,
   rank,
   reset,
   roundLine,
+  searchHint,
+  showAll,
+  showLess,
+  spot,
   typed
 } from './rank.svelte.js';
 import { hideToast, toast } from './toast.svelte.js';
@@ -116,6 +118,8 @@ beforeEach(() => {
   rank.roundAnswered = 0;
   rank.roundDone = false;
   rank.placed = [];
+  rank.expanded = [];
+  rank.perTier = null;
   // `draft` is module state, so reset it or a test depends on the last one's filters.
   draft.q = '';
   draft.genre = '';
@@ -160,28 +164,50 @@ describe('the board comes from the server', () => {
   });
 });
 
-describe("Move's action sheet (decision 527)", () => {
+describe('a move (decision 528)', () => {
   it('drops the title into the chosen tier, naming no neighbour, and says so', async () => {
     respond(board());
-    await moveTo(rank.tiers[0].entries[0], 4);
+    await move(rank.tiers[0].entries[0], 4);
 
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toContain('/api/rank/drop');
     expect(url).toContain('kind=movie');
     // A drop into a tier is a bare `tier_edit`; the two duels belong to a drop between two titles.
     expect(JSON.parse(init.body)).toEqual({ title_id: 1, tier: 4, above: null, below: null });
-    expect(toast.message).toBe('Heat — moved to A');
+    expect(toast.message).toBe('Heat moved to A');
+    expect(toast.actionLabel).toBe('Undo');
   });
 
-  it('writes nothing when the chosen tier is the one it is in', async () => {
-    await moveTo(rank.tiers[0].entries[0], 6);
+  it('undoes by taking the tier back, naming no neighbour', async () => {
+    respond(board());
+    await move(rank.tiers[2].entries[1], 6, 1, null);
+    respond(board());
+    await toast.action();
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({
+      title_id: 3,
+      tier: 4,
+      above: null,
+      below: null
+    });
+  });
+
+  it('offers no undo for a new spot in the same tier', async () => {
+    respond(board());
+    await move(rank.tiers[2].entries[0], 4, 3, null);
+    expect(toast.message).toBe('Drive moved to A');
+    expect(toast.actionLabel).toBe('');
+  });
+
+  it('writes nothing when the title stays where it is', async () => {
+    await move(rank.tiers[0].entries[0], 6);
+    await move(rank.tiers[2].entries[0], 4, null, 3);
     expect(fetchMock).not.toHaveBeenCalled();
     expect(toast.message).toBe('');
   });
 
   it('claims no move the server refused', async () => {
     respond({ detail: 'database error' }, 500);
-    await moveTo(rank.tiers[0].entries[0], 4);
+    await move(rank.tiers[0].entries[0], 4);
     expect(rank.error).not.toBe('');
     expect(toast.message).toBe('');
   });
@@ -190,17 +216,17 @@ describe("Move's action sheet (decision 527)", () => {
 describe('the neighbours a drop lands between', () => {
   it('names nobody for a drop into a tier, however full that tier is', () => {
     // Naming the tier's last entry would write a duel the person never made, on every move.
-    expect(neighboursIn(4, { title_id: 1 })).toEqual({ above: null, below: null });
+    expect(neighboursAt(4, { title_id: 1 })).toEqual({ above: null, below: null });
   });
 
   it('names none when the tier is empty', () => {
-    expect(neighboursIn(5, { title_id: 1 })).toEqual({ above: null, below: null });
+    expect(neighboursAt(5, { title_id: 1 }, 0)).toEqual({ above: null, below: null });
   });
 
-  it('never names the title being dropped', () => {
-    // The self-filter still matters on the poster path.
-    expect(neighboursIn(4, { title_id: 2 }, 3)).toEqual({ above: null, below: 3 });
-    expect(neighboursIn(4, { title_id: 3 })).toEqual({ above: null, below: null });
+  it('counts the spots without the title being dropped', () => {
+    expect(neighboursAt(4, { title_id: 2 }, 0).above).toBeNull();
+    expect(neighboursAt(4, { title_id: 2 }, 0).below.title_id).toBe(3);
+    expect(neighboursAt(4, { title_id: 3 }, 1).above.title_id).toBe(2);
   });
 });
 
@@ -263,18 +289,12 @@ describe('the comparison queue', () => {
   });
 });
 
-describe('the badge chip (proposal 71)', () => {
-  it('gives tension precedence over the straddle badge', () => {
-    const tension = 'You put it in A — your other answers still point to C';
-    expect(chipFor({ tension, straddle_badge: 'A or S?' })).toEqual({ kind: 'tension', text: tension });
-  });
-
-  it('falls back to the straddle badge, and to nothing at all', () => {
-    expect(chipFor({ tension: null, straddle_badge: 'S or A+?' })).toEqual({
-      kind: 'straddle',
-      text: 'S or A+?'
-    });
-    expect(chipFor({ tension: null, straddle_badge: null })).toBeNull();
+describe('Needs a look (§6.3)', () => {
+  it('counts what the server says Sharpen would ask about, and nothing when it says nothing', () => {
+    apply(board({ straddling: 12 }));
+    expect(rank.straddling).toBe(12);
+    apply(board());
+    expect(rank.straddling).toBe(0);
   });
 });
 
@@ -407,25 +427,60 @@ describe('filters', () => {
   });
 });
 
-describe('the count under the title', () => {
-  it("counts the board in the kind's own word, best first", () => {
+describe("the search field's placeholder carries the count (decision 528)", () => {
+  it("counts the rated list in the kind's own word, filtered or not", () => {
     apply(board({ rated: 70, rated_total: 70 }));
-    expect(countLine()).toBe('70 films · best first');
+    expect(searchHint()).toBe('Search 70 rated films');
     apply(board({ rated: 1, rated_total: 1 }));
-    expect(countLine()).toBe('1 film · best first');
+    expect(searchHint()).toBe('Search 1 rated film');
+    apply(board({ rated: 12, rated_total: 70, filters: { genre: 'Thriller' } }));
+    expect(searchHint()).toBe('Search 70 rated films');
     rank.kind = 'series';
     apply(board({ rated: 12, rated_total: 12 }));
-    expect(countLine()).toBe('12 series · best first');
+    expect(searchHint()).toBe('Search 12 rated series');
   });
 
-  it('says how much of the list a filtered board shows', () => {
-    apply(board({ rated: 12, rated_total: 70, filters: { genre: 'Thriller' } }));
-    expect(countLine()).toBe('12 of 70 films · best first');
-  });
-
-  it('says nothing before there is a list', () => {
+  it('names no number before there is a list', () => {
     apply(board({ rated: 0, rated_total: 0, tiers: [] }));
-    expect(countLine()).toBe('');
+    expect(searchHint()).toBe('Search your ranking');
+  });
+});
+
+describe('a tier pages (decision 528)', () => {
+  const paged = () =>
+    board({
+      tiers: [{ index: 6, label: 'S', verdict: 'Liked', count: 3, entries: [board().tiers[0].entries[0]] }]
+    });
+  const rest = { index: 6, count: 3, offset: 1, entries: [{ title_id: 7 }, { title_id: 8 }] };
+
+  it('asks for the first entries of each tier, and for the rest once one is opened', async () => {
+    rank.perTier = 8;
+    respond(paged());
+    await load('movie');
+    expect(fetchMock.mock.calls[0][0]).toContain('per_tier=8');
+    expect(rank.tiers[0].entries).toHaveLength(1);
+
+    respond(paged());
+    respond(rest);
+    await showAll(6);
+    const tierRead = fetchMock.mock.calls[2][0];
+    expect(tierRead).toContain('/api/rank/tier?');
+    expect(tierRead).toContain('index=6');
+    expect(tierRead).toContain('offset=1');
+    expect(tierRead).not.toContain('per_tier');
+    expect(rank.tiers[0].entries.map((e) => e.title_id)).toEqual([1, 7, 8]);
+  });
+
+  it('keeps an opened tier whole across a drop, and Show less closes it without a read', async () => {
+    rank.expanded = [6];
+    respond(paged());
+    respond(rest);
+    await drop({ title_id: 3, tier: 6 });
+    expect(rank.tiers[0].entries).toHaveLength(3);
+
+    showLess(6);
+    expect(rank.expanded).toEqual([]);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });
 
@@ -474,28 +529,25 @@ describe('a drop', () => {
   });
 });
 
-describe('the neighbours a drop lands between (§6.3)', () => {
-  it('names both when the drop lands on a poster', () => {
+describe('the spot a drop lands in (§6.3)', () => {
+  it('names both neighbours between two posters, in the label and the live region', () => {
     // §6.3: a drop between two titles emits the edit plus two margin-less duels.
-    expect(neighboursIn(4, { title_id: 1 }, 3)).toEqual({ above: 2, below: 3 });
+    const between = neighboursAt(4, { title_id: 1 }, 1);
+    expect([between.above.title_id, between.below.title_id]).toEqual([2, 3]);
+    expect(spot('A', between)).toEqual({
+      chip: 'A · between Drive and Prisoners',
+      said: 'In A, between Drive and Prisoners.'
+    });
   });
 
-  it('names one when the drop lands above the first title in the tier', () => {
-    expect(neighboursIn(4, { title_id: 1 }, 2)).toEqual({ above: null, below: 2 });
+  it('says the top and the bottom of a tier at its edges', () => {
+    expect(spot('A', neighboursAt(4, { title_id: 1 }, 0)).chip).toBe('top of A');
+    expect(spot('A', neighboursAt(4, { title_id: 1 }, 2)).chip).toBe('bottom of A');
+    expect(spot('A', neighboursAt(4, { title_id: 1 }, 2)).said).toBe('At the bottom of A.');
   });
 
-  it('names neither when no position is given', () => {
-    // The other half of finding 17: a drop on the row's empty space is "into this tier" too.
-    expect(neighboursIn(4, { title_id: 1 })).toEqual({ above: null, below: null });
-  });
-
-  it('ignores a position that is the title being dropped', () => {
-    expect(neighboursIn(4, { title_id: 2 }, 2)).toEqual({ above: null, below: null });
-  });
-
-  it('names neither when the position is not in that tier any more', () => {
-    // A stale board names a poster the tier no longer holds; guessing the end would fabricate.
-    expect(neighboursIn(4, { title_id: 1 }, 999)).toEqual({ above: null, below: null });
+  it('names only the tier for a drop on its letter', () => {
+    expect(spot('A+', neighboursAt(5, { title_id: 1 }))).toEqual({ chip: 'A+', said: 'In A+.' });
   });
 });
 

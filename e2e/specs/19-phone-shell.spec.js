@@ -96,7 +96,7 @@ test('no form control on the member path zooms on focus', async ({ page, context
   expect(await controlsThatWouldZoom(page), 'on /login, before anyone is signed in').toEqual([]);
 
   await login(page);
-  await expect(page.getByTestId('home-greeting')).toBeVisible();
+  await expect(page.getByTestId('home-title')).toBeVisible();
   expect(await controlsThatWouldZoom(page), 'on / (Home)').toEqual([]);
 
   await page.goto('/account');
@@ -265,8 +265,8 @@ test('a 401 returns the member to the sign-in page', async ({ page, context }) =
   // §3.2: the session is a server fact. A nav TAP, not a `goto`: the shell reads `/auth/me` only
   // at boot, so only the surface's own 401 can know the session ended.
   await page.goto('/');
-  await expect(page.getByTestId('home-greeting')).toBeVisible();
-  // Home's posters are session-gated and arrive after the greeting; cut the cookie after them.
+  await expect(page.getByTestId('home-title')).toBeVisible();
+  // Home's posters are session-gated and arrive after its title; cut the cookie after them.
   await page.waitForLoadState('networkidle');
 
   const unauthorized = [];
@@ -417,7 +417,7 @@ test.describe('the shell cache', () => {
     );
     // §3.1: "an explicit state instead of erroring". A failed read is not a sign-out.
     await page.goto('/');
-    await expect(page.getByTestId('home-greeting')).toBeVisible();
+    await expect(page.getByTestId('home-title')).toBeVisible();
 
     // The worker must CONTROL the page before going offline, or the reload is a browser error.
     const controlled = await page.evaluate(async () => {
@@ -463,7 +463,7 @@ test.describe('the shell cache', () => {
     // Back without a reload, which a standalone web view has no gesture for: the shell's own
     // retry (decision 283), since Chromium's emulation dispatches no `online` event.
     await expect(
-      page.getByTestId('home-greeting'),
+      page.getByTestId('home-title'),
       'the shell stayed on the unreachable card after the network came back'
     ).toBeVisible({ timeout: 30_000 });
   });
@@ -521,7 +521,7 @@ test("the next person to sign in sees none of the previous one's surfaces", asyn
   await page.locator('input[type=text]').first().fill(member.name);
   await page.locator('input[type=password]').fill(member.password);
   await page.getByRole('button', { name: 'Sign in', exact: true }).click();
-  await expect(page.getByTestId('home-greeting')).toBeVisible();
+  await expect(page.getByTestId('home-title')).toBeVisible();
 
   const RATE = /\/api\/rate(\?|$)/;
   const RANK = /\/api\/rank(\?|$)/;

@@ -33,3 +33,9 @@ async def poster(title_id: int, request: Request, user: ActiveUserBrief) -> Resp
     answer = await request.app.state.art.poster(title_id, connect=deps.brief_connection)
     # A whole `Response` skips FastAPI's, and with it the slid session's Set-Cookie.
     return deps.carry_slid_session_cookie(request, _response(request, answer))
+
+
+@router.get("/art/person/{person_id}", response_class=Response)
+async def person(person_id: int, request: Request, user: ActiveUserBrief) -> Response:
+    answer = await request.app.state.art.person(person_id, connect=deps.brief_connection)
+    return deps.carry_slid_session_cookie(request, _response(request, answer))

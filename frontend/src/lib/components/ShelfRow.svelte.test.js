@@ -6,6 +6,16 @@ import { flushSync, mount, unmount } from 'svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('$lib/api.js', () => ({ get: vi.fn(), qs: vi.fn(() => '') }));
+// See all is a sheet, which pushes a history entry as it opens.
+const nav = vi.hoisted(() => ({ page: null }));
+vi.mock('$app/stores', async () => {
+  const { writable } = await import('svelte/store');
+  nav.page = writable({ url: new URL('http://localhost/'), state: {} });
+  return { page: nav.page };
+});
+vi.mock('$app/navigation', () => ({
+  pushState: (_url, state) => nav.page.update((p) => ({ ...p, state }))
+}));
 
 import ShelfRow from './ShelfRow.svelte';
 
@@ -172,5 +182,59 @@ describe('what a row says about itself', () => {
       'β 0.62 · gate k 10'
     );
     unmount(on);
+  });
+});
+
+describe('a row pages itself and leaves the wheel to the page (decision 528)', () => {
+  const films = () => [1, 2, 3, 4, 5].map((id) => card({ title_id: id, name: `Film ${id}` }));
+
+  /** A row wider than its box, which jsdom does not lay out. */
+  function overflowing(app) {
+    const row = target.querySelector('[data-testid="shelf-items"]');
+    Object.defineProperty(row, 'scrollWidth', { configurable: true, value: 1000 });
+    Object.defineProperty(row, 'clientWidth', { configurable: true, value: 300 });
+    row.dispatchEvent(new Event('scroll'));
+    flushSync();
+    return { app, row };
+  }
+
+  it('never takes a vertical wheel from the page, even over a row that scrolls sideways', () => {
+    const { app, row } = overflowing(render(films()));
+    const wheel = new WheelEvent('wheel', { deltaY: 120, bubbles: true, cancelable: true });
+    expect(row.dispatchEvent(wheel), 'the row cancelled the page scroll').toBe(true);
+    expect(row.scrollLeft).toBe(0);
+    unmount(app);
+  });
+
+  it('pages with Previous and Next, each disabled at its own end', () => {
+    const { app, row } = overflowing(render(films()));
+    const prev = target.querySelector('[aria-label="Previous page"]');
+    const next = target.querySelector('[aria-label="Next page"]');
+    expect(prev.disabled).toBe(true);
+    expect(next.disabled).toBe(false);
+    next.click();
+    flushSync();
+    expect(row.scrollLeft).toBe(240);
+    expect(prev.disabled).toBe(false);
+    unmount(app);
+  });
+
+  it('opens every poster of the shelf in a sheet from See all, each one a title card', () => {
+    const onSelect = vi.fn();
+    const app = mount(ShelfRow, {
+      target,
+      props: { section: section(films()), shelfId: 'because-you', onSelect }
+    });
+    flushSync();
+    expect(target.querySelector('[role="dialog"]')).toBeNull();
+    target.querySelector('[data-testid="shelf-see-all"]').click();
+    flushSync();
+    const sheet = target.querySelector('[role="dialog"]');
+    expect(sheet.getAttribute('aria-label')).toBe('Because you liked Paddington');
+    const names = [...sheet.querySelectorAll('.card-wrap .name')].map((n) => n.textContent);
+    expect(names).toEqual(['Film 1', 'Film 2', 'Film 3', 'Film 4', 'Film 5']);
+    sheet.querySelector('.card-wrap').click();
+    expect(onSelect).toHaveBeenCalledWith(1);
+    unmount(app);
   });
 });

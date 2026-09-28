@@ -197,9 +197,9 @@ test('a phone opens Home on the shelves, with the filters behind one control', a
   }
   const toggle = page.getByTestId('filter-toggle');
   await expect(toggle).toHaveAttribute('aria-expanded', 'false');
-  // Room for a shelf under the count line on the first screen, above the 61 px bottom bar.
-  const count = await page.getByTestId('count-line').boundingBox();
-  expect(count.y + count.height).toBeLessThan(page.viewportSize().height - 160);
+  // Room for a shelf under the search on the first screen, above the 61 px bottom bar.
+  const search = await page.getByTestId('home-search').boundingBox();
+  expect(search.y + search.height).toBeLessThan(page.viewportSize().height - 160);
   await toggle.click();
   await expect(page.getByTestId('filter-genre')).toBeVisible();
 });
@@ -233,12 +233,12 @@ test('the title detail panel is full-width on a phone', async ({ page, isMobile 
   expect(box.width).toBeGreaterThan(page.viewportSize().width * 0.95);
 });
 
-test('on a phone every Rate control is on screen, and a battle keeps Tie and its toggle in reach', async ({
+test('on a phone every Rate control is on screen with nothing scrolled, pairs included', async ({
   page,
   isMobile
 }) => {
-  // §6.1's "persistent Undo" and the decisive switch (decision 520) must be on the screen, not
-  // past a hidden scrollbar or below the fold.
+  // §6.1's "persistent Undo" and every answer must be on the screen, not past a hidden scrollbar
+  // or below the fold, and the page itself does not scroll (decision 528).
   test.skip(!isMobile, 'the wrap and the fold are the phone layout');
 
   // Three films liked so a pair exists. Not the admin: 19-phone-shell reads the admin's queue.
@@ -260,12 +260,13 @@ test('on a phone every Rate control is on screen, and a battle keeps Tie and its
 
   await page.goto('/rate');
   await expect(page.getByTestId('rate-sweep-card')).toBeVisible();
+  const unscrolled = () => page.evaluate(() => document.documentElement.scrollHeight - innerHeight);
   for (const id of [
-    'rate-menu', 'rate-find-toggle', 'rate-undo', 'rate-skip',
-    'rate-verdict-0', 'rate-verdict-2', 'rate-not-seen'
+    'rate-menu', 'rate-undo', 'rate-skip', 'rate-verdict-0', 'rate-verdict-2', 'rate-not-seen'
   ]) {
-    await expect(page.getByTestId(id), `${id} is on the screen`).toBeInViewport();
+    await expect(page.getByTestId(id), `${id} is on the screen`).toBeInViewport({ ratio: 1 });
   }
+  expect(await unscrolled(), 'the page does not scroll').toBeLessThanOrEqual(0);
   // The row is the shell's top row on Rate (decision 527).
   const sideways = await page
     .locator('header.topbar .bar')
@@ -276,7 +277,8 @@ test('on a phone every Rate control is on screen, and a battle keeps Tie and its
   await page.getByTestId('rate-menu').click();
   const menu = page.getByRole('dialog', { name: 'How to rate' });
   for (const id of [
-    'rate-mode-mix', 'rate-mode-sweep', 'rate-mode-battle', 'rate-kind-movie', 'rate-kind-series'
+    'rate-mode-mix', 'rate-mode-sweep', 'rate-mode-battle', 'rate-kind-movie', 'rate-kind-series',
+    'rate-find-toggle'
   ]) {
     await expect(menu.getByTestId(id), `${id} is in the menu`).toBeVisible();
   }
@@ -286,9 +288,13 @@ test('on a phone every Rate control is on screen, and a battle keeps Tie and its
   await page.request.post('/api/rate/session', { data: { mode: 'battle' } });
   await page.goto('/rate');
   await expect(page.getByTestId('rate-battle-card')).toBeVisible();
-  for (const id of ['rate-strip-tie', 'rate-decisive', 'rate-skip']) {
-    await expect(page.getByTestId(id), `${id} is on the screen`).toBeInViewport();
+  for (const id of [
+    'rate-duel-A-much', 'rate-duel-TIE', 'rate-duel-B-much',
+    'rate-correction-left', 'rate-correction-right', 'rate-skip'
+  ]) {
+    await expect(page.getByTestId(id), `${id} is on the screen`).toBeInViewport({ ratio: 1 });
   }
+  expect(await unscrolled(), 'the page does not scroll').toBeLessThanOrEqual(0);
 });
 
 test('the app is installable: a manifest, an icon, and a theme colour', async ({ page }) => {

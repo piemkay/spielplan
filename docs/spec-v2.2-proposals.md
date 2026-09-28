@@ -15107,6 +15107,123 @@ The spec is amended in place (v2.1.9): §3.2, §6's preamble, §6.0, §6.1, §6.
 §6.6, §6.7 and §6.8. The code lands in three steps: the foundations (tokens, fonts, frame, shared
 components), the member surfaces with their server-side copy, then Admin.
 
+## Decisions taken (owner, 2026-09-28, the Night cinema fine-tune)
+
+### 528. Night cinema, fine-tuned: Home starts on the shelves, Rate fits one screen and answers in one tap, Rank is a tier list
+
+**What the record says.** §6's preamble opens each root on a large title, and on a desktop a sidebar
+takes the tab bar's place. §6.0 opens Home on a greeting and a pending-verdicts banner ("You've
+watched *X* and *Y* recently — rate them?"), puts a count line under the kind switch ("759 films in
+your library"), and lists the title card's credits as names. §6.1 carries the balance warning's
+sentence on the Rate screen (decision 491), makes a pair's two posters its buttons beside a Tie, a
+per-pair "clear favourite" switch and long-press (decisions 519 and 520), and puts the corrections
+in one row at the bottom, `not seen: [left] [both] [right]`. §6.3 lists each tier as rows with a
+straddle chip that is a control of its own (496), moves a title on a phone through the title card's
+Move (527) and leaves drag to pointer devices; the board loads whole. §6.8 serves posters alone.
+
+**Why it changes.** On 2026-09-28 the test group sent seven notes on the Night cinema build.
+- Home's welcome message wastes the top of the screen: the greeting and an otherwise empty avatar
+  row take 96 px before anything usable.
+- On a desktop the wheel over a shelf row moves it sideways and never hands the scroll back, and rows
+  cover about three quarters of each shelf.
+- The title card has no actor pictures. `person.profile_path` is stored for the top six billed and
+  nothing serves it; the character name is in the payload and not shown.
+- Rate does not fit a phone. On the owner's Pixel 10 Pro Fold (412x790) the balance advice takes four
+  lines, "About the same" and the switch's two lines follow the posters, and "Haven't seen one?" sits
+  under the tab bar.
+- The clear-favourite switch is neither intuitive nor quick.
+- Rank's drag shows nothing: no insertion line, no highlight, no animation.
+- Rank will not hold hundreds or thousands of titles: every rated title renders in one list with
+  every poster loaded, and at 612 rated films tiers A and B hold about 150 each (about 750 at 3,000).
+
+Reviewing the canvas, the owner added three: Not seen was too hard to reach for an answer a new
+member gives often; a stray tap on a poster must never vote; and Rank should show more titles at
+once, as a grid, with no Move, since a title can be dragged, or opened and changed there.
+
+**The decision.**
+1. **Frame.** No root opens on a large title: the top bar names the place or holds its scope switch
+   (Home's kind switch, Rank's Films/Series, Rate's mode title, a compact title on Tonight), and each
+   page keeps a visually hidden heading. Between 721 and 1099 px wide the sidebar is a 72 px icon rail,
+   a label under each icon and a serif "S" for the wordmark; from 1100 px it is the full sidebar.
+2. **Home.** No greeting. The kind switch sits in the top bar; under it the search, whose placeholder
+   is the count ("Search 612 films", "Search 262 series", on Both "Search 874 titles"). Pending
+   verdicts are one compact row: two small posters, "Rate {n} you watched" with the titles named under
+   it, and a Rate pill. The wheel and a vertical swipe always scroll the page; a sideways swipe or
+   Shift+wheel moves a row, which keeps its native scroll and snap. With a fine pointer each shelf
+   header carries See all and previous and next page buttons, disabled at the row's ends, in place of
+   the hover arrows, and the row fades where posters continue; See all opens the shelf's posters as a
+   grid in a sheet, and is all a phone's header carries.
+3. **Title card.** Each person shows a round photo, served from this app's origin under §6.8's
+   artwork rules at `/api/art/person/{person_id}`, or initials on a tone when there is none or it
+   fails. An actor is shown with the character, crew with their job. A tap on a person still filters
+   the library to their films.
+4. **Rate fits one screen.** Every Rate screen fits 390x664 (Safari on an iPhone 13) and 412x790
+   (Chrome on the Pixel's cover screen) with nothing scrolled; posters keep 2:3 and shrink with the
+   height. The top bar holds Undo, the mode title, Skip and the avatar; finding a title moves into the
+   mode sheet ("Find a title to rate"), and a disabled Undo has no line under it. A progress row shows
+   the block's fifteen ticks, "{slot} of 15" and a small meter of the person's mix, which opens **Your
+   mix**: the three counts as labelled bars, decision 491's sentence while the warning holds, and "A
+   balance check starts at 15 ratings." before it arms. While the warning holds the screen carries one
+   line, "Heavy on {class} · See why", which opens the same sheet. The floor, the sentence and its
+   tails are 491's, unchanged; only where they sit changes.
+5. **Posters never answer.** A tap on a poster, on a pair or a single, opens **About this film**: the
+   poster, name, year · runtime · genres, the director, three lines of overview, the first four billed
+   cast with their photos, a Not seen button, and "Looking never counts as an answer." Under each
+   poster of a pair a **Not seen** pill sends that side's correction; the session keeps the other
+   title on its side and draws it a new partner by the same pairing rules, falling back to a single
+   title when its band has none. The "Haven't seen one?" row and its sheet go; the API keeps `both`.
+   The pair's why-line shortens to "You rated both {class}", followed by "Why these?".
+6. **The five-step answer.** A pair is answered on one row: **Much more**, **More**, **Same**,
+   **More**, **Much more**, each poster's two on its side. Much more records that side's win at the
+   decisive weight, More at the hesitant one, and Same a tie, which is never weighted whatever a
+   request sends. The clear-favourite switch, its copy, the session's decisive flag in the API and
+   long-press go. Keys, ignored while typing or while a sheet is open: on a pair ←/→ More, Shift+←/→
+   Much more, ↓ Same, Q/P Not seen left and right; on a single 1/2/3 Disliked, Fine and Liked and N
+   Not seen; S Skip and Z Undo on both.
+   Rank's comparison round ("Sharpen") answers on the same row without the two Much more steps,
+   since decision 201 gives the queue no decisive control; its posters only show the film too.
+7. **Rank is a tier list of posters.** Every tier is on screen, headed by its letter, verdict word
+   and count, its posters in a grid: four columns on a phone; on a desktop a band beside a letter
+   cell, at a poster size the device remembers. A tier shows two rows until opened: its last cell,
+   "+N", opens it in place and fetches the rest, and an open tier offers Show less. A phone keeps a
+   sticky strip of the tiers' letters and counts that jumps to a tier and marks the one in view. Rows,
+   names under posters, the Move button, the hint line and the chips go; posters load lazily. A
+   straddling title carries a small warning dot, and a **Needs a look** line is its legend and the
+   comparison round's way in: "{n} titles sit between two tiers" with Sharpen, or "Sharpen your list"
+   with Start when none do. A tap on a poster opens the title card, which, opened from Rank alone,
+   carries two rows above the answers: **In your ranking**, whose tier sheet ("Move {name}") drops the
+   title in the chosen tier with no neighbour, and **Place with questions**.
+8. **Drag you can see.** A mouse drag, or a long press (~400 ms) on a touch screen, through pointer
+   events. The poster lifts (1.06, a shadow, a 2° tilt) and leaves its cell as a ghost; the grid under
+   it opens a slot with an insertion bar and a label naming the spot ("A · between Heat and
+   Prisoners", "top of A", "bottom of A"); the target tier's letter lights and a closed tier opens
+   after 600 ms; the viewport's top and bottom 48 px autoscroll; and a touch drop on a letter in the
+   strip moves the title to that tier with no neighbour. A drop is the existing `POST /api/rank/drop`,
+   and its toast, "{name} moved to {tier}", offers Undo, which drops the title back between its old
+   neighbours. From the keyboard Space lifts and drops, the arrows move through the grid and past a
+   tier's edge into the next, and Esc cancels, while a polite live region names the spot. With
+   reduced motion nothing scales, tilts or animates.
+9. **Paging.** `GET /api/rank` takes an optional `per_tier` (each tier's first N entries, its count
+   still whole); `GET /api/rank/tier` returns one tier's entries under the same filters by `index`,
+   `offset` and `limit` (at most 200); and a drop answers with the board paged as its client asked.
+   The board is built as before and sliced in the API.
+10. **Place with questions.** One title is placed exactly inside its tier by about log2(n) either-or
+    questions (8 in a tier of 150): a binary search over the tier in the board's order, whose state
+    travels in a sealed, stateless token as the comparison queue's pairs do. Each answer is a duel
+    through the ordinary observation path under a context of its own, refitted incrementally; a tie
+    ends the search at that neighbour; Not seen, offered on the neighbour alone, marks it not seen and
+    asks about the next. The flow is full-screen, shows how far the window has narrowed and about how
+    many questions are left, uses §6.1's pair and five-step answer, and ends on where the title now
+    sits among its neighbours. Order inside a tier stays the fitted estimate; nothing stores a
+    position.
+
+This supersedes decision 520, with decision 519's clear-favourite copy and pair why-line (its items
+6 and 3), and decision 491 only where its widget and sentence sit. It restates decision 527's large
+titles (its item 2) and Rank on phones (its item 6), and decision 496's chip as a control of its
+own. Decision 201 stands for the comparison round; Place with questions answers on the five-step
+row, so its Much more is decisive. The spec is amended in place (v2.1.10): §6's preamble, §6.0 (Home
+and the title card's credits), §6.1, §6.3 and §6.8.
+
 ## §6.2 — Tonight, rewritten (owner decision, 2026-08-29)
 
 Proposal 54 asked which slot carries the alternative on a split axis. The owner answered by

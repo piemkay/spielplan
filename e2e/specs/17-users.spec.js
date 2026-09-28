@@ -132,7 +132,7 @@ test.describe('users, roles and the account surface', () => {
     await fields.nth(1).fill(third.password);
     await fields.nth(2).fill(third.password);
     await memberPage.getByRole('button', { name: 'Set password' }).click();
-    // Not `home-greeting`: a WebAuthn browser lands on /account (§3.1's passkey prompt).
+    // Not `home-title`: a WebAuthn browser lands on /account (§3.1's passkey prompt).
     await expect(memberPage).not.toHaveURL(/\/account\/password/);
     const me = await (await memberPage.request.get('/api/auth/me')).json();
     expect(me.must_change_password).toBe(false);

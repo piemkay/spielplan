@@ -6,10 +6,12 @@
   import { modelGate } from '$lib/home.svelte.js';
   import { page } from '$app/stores';
 
+  import Icon from '$lib/components/Icon.svelte';
   import RateBattleCard from '$lib/components/RateBattleCard.svelte';
   import RateBlockCounter from '$lib/components/RateBlockCounter.svelte';
   import RateClassBalance from '$lib/components/RateClassBalance.svelte';
   import RateModelLog from '$lib/components/RateModelLog.svelte';
+  import RatePeek from '$lib/components/RatePeek.svelte';
   import RateRail from '$lib/components/RateRail.svelte';
   import RateSweepCard from '$lib/components/RateSweepCard.svelte';
   import RateUndo from '$lib/components/RateUndo.svelte';
@@ -18,7 +20,6 @@
     FIND_MIN_CHARS,
     KIND_LABELS,
     MODES,
-    armingLine,
     clearFinder,
     commit,
     continueRating,
@@ -26,6 +27,7 @@
     duel,
     findTitles,
     finder,
+    heavyClass,
     load,
     modeName,
     notSeen,
@@ -33,7 +35,6 @@
     rateTitle,
     reset,
     revealLine,
-    setDecisive,
     setHead,
     setKinds,
     setMode,
@@ -57,14 +58,18 @@
   const block = $derived(rate.frozenBlock ?? rate.done ?? rate.session?.block ?? null);
   const reveal = $derived(revealLine(rate.reveal));
   const showModel = $derived(!!session.user?.show_model);
-  const arming = $derived(armingLine(rate.balance));
-
-  // The progress and the mix move to a side column once there is room for one beside the card.
-  let width = $state(0);
-  const wide = $derived(width >= 1280);
+  const heavy = $derived(heavyClass(rate.balance));
 
   let menuOpen = $state(false);
   let whyOpen = $state(false);
+  let mixOpen = $state(false);
+  /** @type {null | {title: any, side: 'left' | 'right' | null, token: string}} "About this film". */
+  let peek = $state(null);
+
+  function openPeek(side) {
+    const card = rate.card;
+    if (card) peek = { title: side ? card[side] : card.title, side, token: card.token };
+  }
 
   // Read at init: `onMount` runs ahead of the effect below, so a deep link's head would be lost.
   let lastSearch = $page.url.search;
@@ -117,10 +122,11 @@
     findTimer = setTimeout(() => findTitles(value), 250);
   }
 
-  // Closed either way: a pick that could not be served says so on the page behind the sheet.
+  // Closed either way, the menu under it too: a pick that could not be served says so on the page.
   async function pick(item) {
     await rateTitle(item);
     finding = false;
+    menuOpen = false;
   }
 
   onDestroy(() => clearTimeout(findTimer));
@@ -130,6 +136,36 @@
     const on = kinds.includes(kind);
     if (on && kinds.length === 1) return;
     setKinds(on ? kinds.filter((k) => k !== kind) : [...kinds, kind]);
+  }
+
+  // Ignored while typing or while any sheet is open; a held key answers once (decision 528).
+  function onKey(event) {
+    if (event.repeat || event.defaultPrevented || event.ctrlKey || event.metaKey || event.altKey) return;
+    const typing = event.target instanceof Element && event.target.closest('input, textarea, select');
+    if (typing || document.querySelector('[aria-modal="true"]')) return;
+    const key = event.key.length === 1 ? event.key.toLowerCase() : event.key;
+    const card = done || rate.loading ? null : rate.card;
+    const much = event.shiftKey;
+    const act = {
+      z: () => rate.undo?.available && undo(),
+      ...(card && { s: skip }),
+      ...(card?.type === 'battle' && {
+        ArrowLeft: () => duel(card.left.outcome, much),
+        ArrowRight: () => duel(card.right.outcome, much),
+        ArrowDown: () => duel('TIE'),
+        q: () => correct('left'),
+        p: () => correct('right')
+      }),
+      ...(card?.type === 'sweep' && {
+        1: () => verdict(0),
+        2: () => verdict(1),
+        3: () => verdict(2),
+        n: notSeen
+      })
+    }[key];
+    if (!act || rate.busy) return;
+    event.preventDefault();
+    act();
   }
 
   // The undo, mode and skip row is the shell's top row here, beside You (decision 527).
@@ -142,31 +178,13 @@
   });
 </script>
 
-<svelte:window bind:innerWidth={width} />
-
-{#snippet progress()}
-  <RateBlockCounter {block}>
-    {#if !wide}<RateClassBalance balance={rate.balance} {kinds} compact />{/if}
-  </RateBlockCounter>
-{/snippet}
-
-{#snippet balanceNote(small = false)}
-  {#if rate.balance?.warn && rate.balance?.copy}
-    <p class="note" class:small role="status">
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-        stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-        <circle cx="12" cy="12" r="8.5" /><path d="M12 11v5M12 8v.01" />
-      </svg>
-      <span data-testid="rate-balance-warning">{rate.balance.copy}</span>
-    </p>
-  {/if}
-{/snippet}
+<svelte:window onkeydown={onKey} />
 
 <!-- In the sheet's body, not its header: the header's drag area captures the pointer. -->
 {#snippet sheetBar(title, close)}
   <div class="sheet-bar">
     <h2>{title}</h2>
-    <button class="btn-plain" onclick={close}>Done</button>
+    <button class="btn-plain done" onclick={close}>Done</button>
   </div>
 {/snippet}
 
@@ -179,7 +197,7 @@
       {:else}
         <!-- Mix is where every entry point lands; a mode sticks only once the person changes it. -->
         <button
-          class="mode"
+          class="mode hit"
           data-testid="rate-menu"
           aria-haspopup="dialog"
           aria-expanded={menuOpen}
@@ -195,22 +213,9 @@
     </h1>
     <div class="end">
       {#if !done}
-        <button
-          class="btn-plain icon"
-          data-testid="rate-find-toggle"
-          aria-label="Find a title you know to rate"
-          aria-haspopup="dialog"
-          aria-expanded={finding}
-          onclick={() => (finding = true)}
-        >
-          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-            stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-            <circle cx="11" cy="11" r="6.5" /><path d="m16 16 4.5 4.5" />
-          </svg>
-        </button>
         <!-- Skip writes no observation; it only suppresses the redraw for this sitting. -->
         <button
-          class="btn-plain skip"
+          class="btn-plain hit skip"
           data-testid="rate-skip"
           aria-busy={rate.pending === 'skip'}
           disabled={!rate.card || rate.busy || rate.holding}
@@ -221,131 +226,135 @@
   </div>
 {/snippet}
 
-<div class="rate" class:wide data-testid="rate-surface">
-  <div class="main">
-    {#if !topbar.host}{@render rateBar()}{/if}
+<div class="rate" data-testid="rate-surface">
+  {#if !topbar.host}{@render rateBar()}{/if}
 
-    {#if !wide}
-      <section class="progress" aria-label="Progress">
-        {@render progress()}
-        <!-- The compact mix has no room for it, and §6.1 says it while rating. -->
-        {#if arming && !done}
-          <p class="footnote arming" data-testid="rate-balance-arming">{arming}</p>
-        {/if}
-      </section>
-    {/if}
+  <section class="progress" aria-label="Progress">
+    <RateBlockCounter {block}>
+      <RateClassBalance balance={rate.balance} {kinds} compact onOpen={() => (mixOpen = true)} />
+    </RateBlockCounter>
+  </section>
 
-    {#if !done}{@render balanceNote(true)}{/if}
-    {#if rate.notice}
-      <p class="note" role="status">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-          stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <circle cx="12" cy="12" r="8.5" /><path d="M12 11v5M12 8v.01" />
-        </svg>
-        <span data-testid="rate-notice">{rate.notice}</span>
-      </p>
-    {/if}
-    {#if rate.error}
-      <p class="note error" role="alert">
-        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-          stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-          <path d="M12 4 2.8 19.5h18.4z" /><path d="M12 10v4.5M12 17.2v.01" />
-        </svg>
-        <span data-testid="rate-error">{rate.error}</span>
-      </p>
-    {/if}
+  {#if heavy && !done}
+    <button
+      class="heavy"
+      data-testid="rate-balance-chip"
+      aria-haspopup="dialog"
+      onclick={() => (mixOpen = true)}
+    >
+      <span class="face">
+        <Icon name="warning" size={16} />
+        <span><strong>Heavy on {heavy}</strong> · See why</span>
+      </span>
+    </button>
+  {/if}
+  {#if rate.notice}
+    <p class="note" role="status">
+      <Icon name="info" size={20} />
+      <span data-testid="rate-notice">{rate.notice}</span>
+    </p>
+  {/if}
+  {#if rate.error}
+    <p class="note error" role="alert">
+      <Icon name="warning" size={20} />
+      <span data-testid="rate-error">{rate.error}</span>
+    </p>
+  {/if}
 
-    <div class="stage">
-      {#if rate.loading}
-        <p class="footnote" data-testid="rate-loading">Finding something to rate…</p>
-      {:else if done}
-        <section class="done" data-testid="rate-done">
-          <div class="done-body">
-            <div class="done-head">
-              <span class="done-mark" aria-hidden="true">
-                <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-                  stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
-                  <path d="m5 12.5 4.5 4.5L19 7.5" />
-                </svg>
-              </span>
-              <h2 class="large-title">That's {done.size ?? 15}.</h2>
-              <p class="done-sub">Your suggestions just got sharper.</p>
-            </div>
-            <RateClassBalance balance={rate.balance} {kinds} />
-            {@render balanceNote()}
+  <div class="stage">
+    {#if rate.loading}
+      <p class="footnote" data-testid="rate-loading">Finding something to rate…</p>
+    {:else if done}
+      <section class="done" data-testid="rate-done">
+        <div class="done-body">
+          <div class="done-head">
+            <span class="done-mark" aria-hidden="true">
+              <svg width="40" height="40" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round">
+                <path d="m5 12.5 4.5 4.5L19 7.5" />
+              </svg>
+            </span>
+            <h2 class="large-title">That's {done.size ?? 15}.</h2>
+            <p class="done-sub">Your suggestions just got sharper.</p>
           </div>
-          <!-- The last answer stays undoable here until the next one lands (decision 199). -->
-          <div class="done-actions">
-            <button class="btn-primary" data-testid="rate-done-more" onclick={continueRating}>
-              Rate {done.size ?? 15} more
-            </button>
-            <a class="btn-secondary" data-testid="rate-done-home" href="/">Back to Home</a>
-          </div>
-        </section>
-      {:else if rate.card?.type === 'sweep'}
-        <RateSweepCard
-          card={rate.card}
-          {reveal}
-          holding={rate.holding}
-          busy={rate.busy}
-          pending={rate.pending}
-          {showModel}
-          onVerdict={verdict}
-          onNotSeen={notSeen}
-          onContinue={commit}
-          onWhy={() => (whyOpen = true)}
-        />
-      {:else if rate.card?.type === 'battle'}
-        <RateBattleCard
-          card={rate.card}
-          decisive={!!rate.session?.decisive}
-          busy={rate.busy}
-          pending={rate.pending}
-          onDuel={duel}
-          onCorrect={correct}
-          onDecisive={setDecisive}
-          onWhy={() => (whyOpen = true)}
-        />
-      {:else if rate.drained}
-        <!-- Keyed to `drained.cause`: an empty pair pool means too few ratings, not too many. -->
-        <div class="drained" data-testid="rate-drained">
-          {#if rate.drained.cause === 'pool'}
-            <h2 class="section-title">No pair to compare yet</h2>
-            <p class="why">{rate.drained.text}</p>
-            <button
-              class="btn-secondary"
-              data-testid="rate-drained-cta"
-              disabled={rate.busy}
-              onclick={() => setMode('sweep')}
-            >Switch to Singles</button>
-          {:else}
-            <h2 class="section-title">Nothing left to queue</h2>
-            <p class="why">{rate.drained.text}</p>
-            <p class="why">
-              "Sharpen my ranking" on the Rank page fine-tunes your tiers from here.
-            </p>
-            <a class="btn-secondary" data-testid="rate-drained-cta" href="/rank">Go to Rank</a>
-          {/if}
+          <RateClassBalance balance={rate.balance} {kinds} />
         </div>
-      {/if}
-    </div>
-
-    {#if showModel && !wide}
-      <RateModelLog log={rate.log} ledger={rate.ledger} />
+        <!-- The last answer stays undoable here until the next one lands (decision 199). -->
+        <div class="done-actions">
+          <button class="btn-primary" data-testid="rate-done-more" onclick={continueRating}>
+            Rate {done.size ?? 15} more
+          </button>
+          <a class="btn-secondary" data-testid="rate-done-home" href="/">Back to Home</a>
+        </div>
+      </section>
+    {:else if rate.card?.type === 'sweep'}
+      <RateSweepCard
+        card={rate.card}
+        {reveal}
+        holding={rate.holding}
+        busy={rate.busy}
+        pending={rate.pending}
+        {showModel}
+        onVerdict={verdict}
+        onNotSeen={notSeen}
+        onContinue={commit}
+        onPeek={() => openPeek(null)}
+        onWhy={() => (whyOpen = true)}
+      />
+    {:else if rate.card?.type === 'battle'}
+      <RateBattleCard
+        card={rate.card}
+        busy={rate.busy}
+        pending={rate.pending}
+        onDuel={duel}
+        onCorrect={correct}
+        onPeek={openPeek}
+        onWhy={() => (whyOpen = true)}
+      />
+    {:else if rate.drained}
+      <!-- Keyed to `drained.cause`: an empty pair pool means too few ratings, not too many. -->
+      <div class="drained" data-testid="rate-drained">
+        {#if rate.drained.cause === 'pool'}
+          <h2 class="section-title">No pair to compare yet</h2>
+          <p class="why">{rate.drained.text}</p>
+          <button
+            class="btn-secondary"
+            data-testid="rate-drained-cta"
+            disabled={rate.busy}
+            onclick={() => setMode('sweep')}
+          >Switch to Singles</button>
+        {:else}
+          <h2 class="section-title">Nothing left to queue</h2>
+          <p class="why">{rate.drained.text}</p>
+          <p class="why">
+            "Sharpen my ranking" on the Rank page fine-tunes your tiers from here.
+          </p>
+          <a class="btn-secondary" data-testid="rate-drained-cta" href="/rank">Go to Rank</a>
+        {/if}
+      </div>
     {/if}
   </div>
-
-  {#if wide}
-    <aside class="side" aria-label="Progress">
-      <div class="card progress-card">
-        <h2>Your progress</h2>
-        {@render progress()}
-      </div>
-      {#if !done}<RateClassBalance balance={rate.balance} {kinds} />{/if}
-      {#if showModel}<RateModelLog log={rate.log} ledger={rate.ledger} />{/if}
-    </aside>
-  {/if}
 </div>
+
+<!-- Below the fold on purpose: the rating screen itself fits without scrolling (decision 528). -->
+{#if showModel}<RateModelLog log={rate.log} ledger={rate.ledger} />{/if}
+
+{#if peek}
+  {@const { side, token } = peek}
+  <RatePeek
+    title={peek.title}
+    busy={rate.busy}
+    onNotSeen={() => rate.card?.token === token && (side ? correct(side) : notSeen())}
+    onClose={() => (peek = null)}
+  />
+{/if}
+
+<Sheet open={mixOpen} onClose={() => (mixOpen = false)} label="Your mix" detent="fit" width={440}>
+  {#snippet children(close)}
+    <div class="sheet-top">{@render sheetBar('Your mix', close)}</div>
+    <RateClassBalance balance={rate.balance} {kinds} />
+  {/snippet}
+</Sheet>
 
 <Sheet open={menuOpen} onClose={() => (menuOpen = false)} label="How to rate" detent="medium" width={440}>
   {#snippet children(close)}
@@ -385,6 +394,23 @@
         {/each}
       </div>
       <p class="list-footer">At least one stays on.</p>
+
+      <div class="list-group find-row">
+        <button
+          class="list-row"
+          data-testid="rate-find-toggle"
+          aria-haspopup="dialog"
+          aria-expanded={finding}
+          onclick={() => (finding = true)}
+        >
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+            <circle cx="11" cy="11" r="6.5" /><path d="m16 16 4.5 4.5" />
+          </svg>
+          <span class="row-text">Find a title to rate</span>
+          <Icon name="chevron-right" size={16} />
+        </button>
+      </div>
     </div>
   {/snippet}
 </Sheet>
@@ -393,7 +419,6 @@
   {#snippet children(close)}
     <div class="sheet-top">{@render sheetBar('Why these?', close)}</div>
     <div class="why-sheet">
-      {#if !wide}<RateClassBalance balance={rate.balance} {kinds} />{/if}
       <RateRail balance={rate.balance} {mode} {kinds} {showModel} />
     </div>
   {/snippet}
@@ -453,19 +478,16 @@
 </Sheet>
 
 <style>
-  /* Fills the screen between the top row and the tab bar, so the answers sit at the bottom. */
+  /* Exactly the screen between the top row and the tab bar, so nothing scrolls; of the main's 32px
+     end padding it keeps 8 (decision 528). */
   .rate {
     display: flex;
-    min-height: calc(
-      100dvh - 44px - env(safe-area-inset-top) - var(--tabbar) - env(safe-area-inset-bottom) - 32px
-    );
-  }
-  .main {
-    flex: 1;
-    min-width: 0;
-    display: flex;
     flex-direction: column;
-    gap: 16px;
+    gap: 12px;
+    height: calc(
+      100dvh - 44px - env(safe-area-inset-top) - var(--tabbar) - env(safe-area-inset-bottom) - 8px
+    );
+    margin-bottom: -24px;
   }
   .bar {
     display: grid;
@@ -476,15 +498,9 @@
   }
   .bar > :global(.undo) {
     grid-column: 1;
-    grid-row: 1;
-  }
-  .bar > :global(.undo-reason) {
-    grid-column: 1 / -1;
-    grid-row: 2;
   }
   .title {
     grid-column: 2;
-    grid-row: 1;
     margin: 0;
     font-size: var(--fs-body);
     line-height: 22px;
@@ -508,19 +524,48 @@
   }
   .end {
     grid-column: 3;
-    grid-row: 1;
     justify-self: end;
     display: flex;
     align-items: center;
   }
-  .icon {
-    padding: 0 8px;
-  }
-  .arming {
-    margin: 8px 0 0;
-  }
   .skip {
     padding-right: 0;
+  }
+  /* The row's end is the screen's gutter: a finger's reach may not widen the row past it. */
+  .skip::after {
+    right: 0;
+  }
+  .progress {
+    flex: none;
+  }
+  .heavy {
+    flex: none;
+    align-self: center;
+    min-height: 44px;
+    margin: -6px 0;
+    padding: 0;
+    border: none;
+    background: none;
+    color: var(--accent-text);
+  }
+  .heavy .face {
+    height: 32px;
+    padding: 0 12px 0 10px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    border-radius: var(--r-pill);
+    background: var(--warning-tint);
+    font-size: var(--fs-footnote);
+    line-height: 18px;
+    white-space: nowrap;
+  }
+  .heavy .face > :global(svg) {
+    color: var(--warning);
+  }
+  .heavy strong {
+    font-weight: 600;
+    color: var(--text);
   }
   .note {
     margin: 0;
@@ -532,16 +577,8 @@
     color: var(--text-2);
     text-wrap: pretty;
   }
-  .note svg {
+  .note > :global(svg) {
     flex: none;
-  }
-  .note.small {
-    font-size: var(--fs-footnote);
-    line-height: 18px;
-  }
-  .note.small svg {
-    width: 18px;
-    height: 18px;
   }
   .note.error {
     padding: 12px 16px;
@@ -549,12 +586,12 @@
     background: var(--negative-tint);
     color: var(--text);
   }
-  .note.error svg {
+  .note.error > :global(svg) {
     color: var(--negative);
   }
   .stage {
     flex: 1;
-    min-width: 0;
+    min-height: 0;
     display: flex;
     flex-direction: column;
   }
@@ -614,24 +651,6 @@
   .done-actions .btn-primary {
     min-height: 50px;
   }
-  .side {
-    width: 320px;
-    flex: none;
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-  }
-  .progress-card {
-    display: flex;
-    flex-direction: column;
-    gap: 12px;
-  }
-  .progress-card h2 {
-    margin: 0;
-    font-size: var(--fs-subhead);
-    line-height: 20px;
-    font-weight: 600;
-  }
   .sheet-top {
     position: sticky;
     top: 0;
@@ -643,23 +662,26 @@
     background: var(--bg-elevated);
   }
   .sheet-bar {
-    display: flex;
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
     align-items: center;
-    justify-content: space-between;
     gap: 8px;
     min-height: 44px;
   }
   .sheet-bar h2 {
+    grid-column: 2;
     margin: 0;
     font-size: var(--fs-body);
     line-height: 22px;
     font-weight: 600;
   }
-  .sheet-bar .btn-plain {
+  .sheet-bar .done {
+    justify-self: end;
     padding-right: 0;
     font-weight: 600;
   }
-  .menu .include {
+  .menu .include,
+  .menu .find-row {
     margin-top: 24px;
   }
   .list-group {
@@ -668,8 +690,15 @@
     list-style: none;
   }
   .mode-row,
-  .find-hit {
+  .find-hit,
+  .find-row .list-row {
     cursor: pointer;
+  }
+  .find-row .list-row {
+    gap: 12px;
+  }
+  .find-row :global(svg:last-child) {
+    color: var(--text-3);
   }
   .row-text {
     flex: 1;
@@ -710,17 +739,15 @@
 
   @media (min-width: 721px) {
     .rate {
-      min-height: calc(100dvh - 60px - 56px);
-    }
-    .done {
       width: 100%;
-      max-width: 480px;
-      margin: 0 auto;
+      max-width: 560px;
+      margin-inline: auto;
+      height: calc(100dvh - 60px - 32px);
     }
   }
-  .rate.wide {
-    gap: 48px;
-    max-width: 1080px;
-    margin: 0 auto;
+  @media (min-width: 981px) {
+    .rate {
+      max-width: 660px;
+    }
   }
 </style>

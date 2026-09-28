@@ -198,9 +198,7 @@ test.describe('jellyfin', () => {
     );
     // No reload: that would prove the route and not the wiring (`onAnswered`).
     await expect(page.getByTestId('pending-verdicts')).toContainText('Severance');
-    await expect(page.getByTestId('pending-verdicts-count')).toHaveText(
-      /^\d+ titles? you watched (is|are) waiting for your rating\.$/
-    );
+    await expect(page.getByTestId('pending-verdicts-copy')).toHaveText(/^Rate [\d,]+ you watched$/);
 
     const panel = await openTitle(page, 'Severance');
     await expect(panel.getByRole('button', { name: 'Watched', exact: true })).toHaveAttribute(
