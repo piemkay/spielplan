@@ -15249,6 +15249,78 @@ and that in Mixed the two card types move the buttons around, which makes voting
 
 Amends §6.1's Screen and Sweep bullets (spec v2.1.10 stays: the amendment lands with this record).
 
+## Decisions taken (owner, 2026-09-28, the UX polish)
+
+### 530. Rating keeps a pair's pace: the guess echoes and never holds, and motion never gates a control
+
+**What the record says.** §6.1 phrases the prediction reveal and shows it strictly after the tap, but
+says neither where nor for how long; proposal 42, provenance only, had it replace the verdict strip
+for about 1.2 s. The code holds a single card for 1.2 s with the reveal in place of its tiles, and
+opens a block's end screen only after the last reveal, which it reads into decision 527's "a screen
+of its own". §6's preamble keeps v1.1's budgets: under 2 s a sweep card, under 1.5 s a battle, the
+next card preloaded. §6.8 says nothing of motion, though proposal 129 asked for a paragraph on it.
+Decision 529 puts the answer row at the foot of a phone's screen on both cards. §6.2 step 4 gives the
+waiting line as "Patrick 6/6 done · Jenny 12 so far · Mia 4/~10 · waiting for 2" (decision 507).
+
+**Why it changes.** On 2026-09-28 a walk-through of the deployed app and six code audits found it
+correct but still. Nothing moves: a verdict waits for the server, then 1.2 s more, then cuts hard. On
+an iPhone a press may not show at all, since WebKit draws `:active` only once a touch listener
+exists. Posters pop in or sit blank, because only the verdict path preloads the next one and nothing
+decodes it. The reduced-motion switch zeroes durations, while delays, loops and anything JavaScript
+starts slip past it. In Mixed a swap between a single card and a pair replays a fade over the whole
+frame. Tonight's last voter sees an empty flow until the result arrives, its waiting line reads
+"Jenny is on pair 5", and Home reloads its shelves cold, at the top, each time its tab is re-entered.
+Reviewing the plan's prototypes the same day, the owner found the single card's rating animation nice
+but too slow: rating must stay quick, and a pair's pace is right. On a tall phone the answer buttons
+felt glued to the bottom under empty space. The rest was adopted as recommended.
+
+**The decision.**
+1. **Motion language.** Motion is quick, physical and calm, and never gates a control: 90, 140, 220
+   and 320 ms carry every movement, with one small overshoot only where something lands. A tap
+   answers under the finger within a frame, and nothing says saved, watched or moved before the
+   server does. Reduced motion keeps every state change (fills, dims, words) and drops every
+   movement, delays and loops included. There is no sound and no confetti. A committed answer (a
+   verdict, Not seen, Skip, a pair step, a Rank drop, a Tonight ballot tick) gives a short vibration
+   where the platform has one, and nothing where it has none. No View Transitions, no tab animation.
+2. **Rating at the pace of a pair.** A single card no longer holds. From the tap to the reply its
+   poster leans with the answer; as on a pair, the answered card is then replaced when the reply
+   lands, never before 150 ms so the press finishes, and after at most 150 ms more while the next
+   poster decodes. The next card is dealt in from the right and an undone one comes back from the
+   left, and every answer, not a verdict alone, decodes the next art. In Mixed the question and the
+   answer row stay put across a swap between a single card and a pair (decision 529).
+3. **The guess echoes; it never holds.** For 1.6 s after a verdict's reply, the next card's reason
+   line under its question shows the person's own answer as its glyph and "{the film just rated} ·
+   {the reveal}" in §6.1's words ("Annie Hall · we'd have guessed the same"), in place of the reason
+   and "Why these?". The next answer and Undo clear it. The line keeps its height, a polite live
+   region announces the reveal, and agreement is never marked: no check, ring or colour. A block's
+   fifteenth verdict opens the end screen at the reply, which shows that echo once, for 1.6 s, at its
+   top. With nothing held, a key during a reveal needs no rule and the hold's dead taps go with it;
+   About this film's Not seen is disabled once its card has left the screen.
+4. **A tall phone's height is used.** On a phone a single card's poster grows into the free height
+   past a pair column's size, up to 220 px wide (the desktop column's cap), about 216x324 on a
+   390x844 phone. A pair's posters stay width-bound, and the pair centres between the question and
+   the answer row. The row lifts 16 px off the tab bar and starts at the same height on both cards
+   (decision 529). 390x664 and 412x790 still fit with nothing scrolled (decision 528), and from
+   721 px nothing changes.
+5. **Home keeps its place.** Back on Home from another tab, the last shelves show at once at the
+   scroll position left, and are re-read quietly: no cold reload and no loading line.
+6. **Tonight's reveal is staged once.** At the step change the reveal's stage is drawn at once, dark
+   and empty, so the last voter never sees a blank flow. It lights when the result is in and the
+   winner's poster has decoded, waiting at most 700 ms: the poster develops, the name and its facts
+   rise, the yeses land, and Play docks at the bottom, within thumb reach, last. It plays only on the
+   screen that saw the step change, and a reload shows the reveal at rest. There is no curtain, beam
+   or lamp; §6.2 steps 6 and 7 keep their inventory, and Play stays the primary action.
+7. **Tonight's waiting line follows §6.2 step 4.** "Patrick 6/6 done · Jenny 12 so far · Mia 4/~10 ·
+   waiting for 2": the ~ figure is the typical round until the seat reaches it, then the count alone
+   (decision 507). The code's "{name} is on pair N" and "{name} is done" drifted; the spec stands.
+
+Proposal 42's hold is not adopted, and item 1 answers proposal 129. Decision 527's end screen stands;
+the code's reading of it, under which the screen waited for the last reveal, is superseded. No spec
+text described the hold, so §6.1's reveal wording and its after-the-tap rule stand as written. The
+spec is amended in place (v2.1.11): §6.1's Screen bullet, whose reason line now carries the echo and
+whose end screen opens at the reply, and §6.8, which gains the motion clause. Items 2 and 4 to 6 are
+presentation inside §6.1 and §6.2 as written, and item 7 is conformance.
+
 ## §6.2 — Tonight, rewritten (owner decision, 2026-08-29)
 
 Proposal 54 asked which slot carries the alternative on a split axis. The owner answered by
