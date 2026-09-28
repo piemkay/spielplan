@@ -77,7 +77,7 @@
   import { metaLine, runtimeLabel, sentenceCase } from '$lib/rate.svelte.js';
   import { playWhy } from '$lib/titleCard.js';
   import { preloadPoster, ready } from '$lib/art.js';
-  import { haptic } from '$lib/motion.js';
+  import { haptic, still } from '$lib/motion.js';
 
   let code = $state('');
   let sharpening = $state(false);
@@ -244,6 +244,9 @@
     sent = null;
   }
   const pose = (said, side) => (!said ? '' : said === side || said === 'EITHER' ? 'up' : 'down');
+  // "Sharpen this" is pressed below the picks; the round it opens sits above them.
+  const intoView = (el) =>
+    el.scrollIntoView?.({ block: 'start', behavior: still() ? 'auto' : 'smooth' });
 
   // The reveal plays only when this page saw the last vote land, never on a reload or a re-read,
   // and lights once the result and the winner's poster are in (decision 530).
@@ -530,6 +533,17 @@
       {#if tonight.solo.empty}
         <p class="why" data-testid="tonight-solo-empty">{tonight.solo.empty}</p>
       {:else}
+        {#if sharpening && !tonight.solo.pair && !tonight.busy}
+          <!-- Said once the reply is in, or a converged round would answer "Sharpen this" with a blank. -->
+          <p class="footnote" data-testid="tonight-sharpen-done" {@attach intoView}>
+            Nothing left to ask — these picks are as sharp as they get tonight.
+          </p>
+        {/if}
+        {#if tonight.solo.pair && sharpening}
+          <div class="round" data-testid="tonight-sharpen-pair" {@attach intoView}>
+            {@render chooser(tonight.solo.pair, sharpen, { pick: 'tonight-sharpen', answer: 'tonight-sharpen' })}
+          </div>
+        {/if}
         <!-- A new set of picks rises in; a sharpen that re-ranks the same set only reorders it. -->
         {#key (tonight.solo.picks ?? []).map((p) => p.title_id).sort().join()}
           <div class="picks" data-testid="tonight-picks">
@@ -607,17 +621,6 @@
         {#if tonight.solo.wrapped}
           <!-- A reshuffle that has come back round returns titles already seen here, so say so. -->
           <p class="footnote" data-testid="tonight-wrapped">{WRAPPED_LINE}</p>
-        {/if}
-        {#if sharpening && !tonight.solo.pair}
-          <!-- Said out loud, or a converged round would answer "Sharpen this" with a blank. -->
-          <p class="footnote" data-testid="tonight-sharpen-done">
-            Nothing left to ask — these picks are as sharp as they get tonight.
-          </p>
-        {/if}
-        {#if tonight.solo.pair && sharpening}
-          <div class="round" data-testid="tonight-sharpen-pair">
-            {@render chooser(tonight.solo.pair, sharpen, { pick: 'tonight-sharpen', answer: 'tonight-sharpen' })}
-          </div>
         {/if}
       {/if}
     </div>
@@ -1286,6 +1289,9 @@
   }
   .solo {
     gap: 16px;
+  }
+  .solo > * {
+    scroll-margin-top: calc(env(safe-area-inset-top) + var(--gutter));
   }
   .solo-head {
     display: flex;

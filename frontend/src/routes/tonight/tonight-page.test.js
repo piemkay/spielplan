@@ -382,6 +382,54 @@ describe("54f's Reshuffle, pressed inside the sharpen round (M412-SOLO-01)", () 
     ).not.toBeNull();
   });
 
+  it('asks the sharpen question above the picks it re-ranks', async () => {
+    tonight.solo = solo();
+    tonight.step = 'solo';
+    fetchMock.mockImplementation(async (path) =>
+      reply(path === '/api/tonight/solo' ? solo({ pair }) : { rooms: [] })
+    );
+
+    app = mount(TonightPage, { target });
+    flushSync();
+    byTestId('tonight-sharpen').click();
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    flushSync();
+
+    const round = byTestId('tonight-sharpen-pair');
+    expect(round, 'the round never started').not.toBeNull();
+    expect(
+      round.compareDocumentPosition(byTestId('tonight-picks')) & Node.DOCUMENT_POSITION_FOLLOWING,
+      'the question sits below the picks, off the bottom of a phone'
+    ).toBeTruthy();
+  });
+
+  it('says the round is out of questions only once the reply does, and brings that into view', async () => {
+    tonight.solo = solo();
+    tonight.step = 'solo';
+    /** @type {(response: any) => void} */
+    let answer = () => {};
+    fetchMock.mockImplementation(async (path) =>
+      path === '/api/tonight/solo' ? new Promise((resolve) => (answer = resolve)) : reply({ rooms: [] })
+    );
+    const scrolled = vi.fn();
+    Element.prototype.scrollIntoView = scrolled;
+
+    app = mount(TonightPage, { target });
+    flushSync();
+    byTestId('tonight-sharpen').click();
+    flushSync();
+    const early = byTestId('tonight-sharpen-done');
+    answer(reply(solo()));
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    flushSync();
+    const done = byTestId('tonight-sharpen-done');
+    delete Element.prototype.scrollIntoView;
+
+    expect(early, 'the question is still on its way').toBeNull();
+    expect(done, 'a converged round answered the press with a blank').not.toBeNull();
+    expect(scrolled.mock.contexts, 'the line sits above the picks, off a scrolled phone').toContain(done);
+  });
+
   it('offers Play on every pick and the wildcard, and says so when there is no link', () => {
     // Decision 527: every solo pick carries Play, not the first one only.
     const linked = (t) => ({ ...t, play_url: `http://jf.test/web/#/details?id=jf-${t.title_id}` });
