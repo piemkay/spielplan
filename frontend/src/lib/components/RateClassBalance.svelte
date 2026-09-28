@@ -1,9 +1,9 @@
 <script>
   // Counts cover the session's kinds, so the total names the kind when only one is selected. The
-  // warning copy is the server's and the page shows it; `compact` is the header's small bar.
+  // warning copy is the server's, verbatim; `compact` is the progress row's meter, which opens it.
   import { armingLine, ratingsLabel, sentenceCase, sharePct } from '$lib/rate.svelte.js';
 
-  let { balance, kinds = [], compact = false } = $props();
+  let { balance, kinds = [], compact = false, onOpen = undefined } = $props();
 
   const labels = $derived(balance?.labels ?? ['disliked', 'fine', 'liked']);
   const counts = $derived(balance?.counts ?? [0, 0, 0]);
@@ -16,35 +16,36 @@
   const bestFirst = $derived(labels.map((label, i) => ({ label, i })).reverse());
 </script>
 
-{#snippet bar()}
-  {#each labels as label, i (label)}
-    <span
-      class="seg {TONE[i]}"
-      data-testid={compact ? undefined : `rate-balance-segment-${label}`}
-      data-share={sharePct(shares[i])}
-      style:flex="{Math.max(shares[i] ?? 0, total ? 0.02 : 1 / 3)} 1 0"
-    ></span>
-  {/each}
-{/snippet}
-
 {#if compact}
-  <div class="mini" role="img" aria-label={summary} data-testid="rate-mix">
-    <span class="footnote">Your mix</span>
-    <span class="bar thin">{@render bar()}</span>
-  </div>
+  <button
+    class="meter hit"
+    data-testid="rate-mix"
+    aria-label={summary}
+    aria-haspopup="dialog"
+    onclick={onOpen}
+  >
+    <span class="stack">
+      {#each labels as label, i (label)}
+        <span class={TONE[i]} style:flex="{Math.max(shares[i] ?? 0, total ? 0.02 : 1 / 3)} 1 0"></span>
+      {/each}
+    </span>
+  </button>
 {:else}
-  <section class="card mix" data-testid="rate-balance" data-warn={balance?.warn ? 'true' : 'false'}>
-    <h3>Your mix</h3>
-    <div class="bar" role="img" aria-label={summary}>{@render bar()}</div>
-    <ul class="counts">
+  <section class="mix" data-testid="rate-balance" data-warn={balance?.warn ? 'true' : 'false'}>
+    <ul>
       {#each bestFirst as { label, i } (label)}
         <li data-testid="rate-balance-count-{label}">
-          <span class="dot {TONE[i]}" aria-hidden="true"></span>
-          <span class="label">{sentenceCase(label)}</span>
-          <span class="n">{counts[i]}</span>
+          <span class="row"><span>{sentenceCase(label)}</span> <span class="n">{counts[i]}</span></span>
+          <span class="bar" aria-hidden="true">
+            <span class={TONE[i]} data-share={sharePct(shares[i])} style:width="{sharePct(shares[i])}%"
+            ></span>
+          </span>
         </li>
       {/each}
     </ul>
+    {#if balance?.warn && balance?.copy}
+      <p class="why" data-testid="rate-balance-warning">{balance.copy}</p>
+    {/if}
     <p class="footnote">
       <span data-testid="rate-balance-total">{ratingsLabel(total, kinds)}</span> so far
     </p>
@@ -53,73 +54,80 @@
 {/if}
 
 <style>
-  .mini {
+  .meter {
+    flex: none;
+    width: 36px;
+    min-height: 0;
+    height: 30px;
+    margin: -3px 0;
+    padding: 0;
+    border: none;
+    background: none;
+    display: grid;
+    place-items: center;
+  }
+  .stack {
+    width: 36px;
+    height: 6px;
     display: flex;
-    align-items: center;
-    gap: 8px;
+    gap: 2px;
+    border-radius: var(--r-pill);
+    overflow: hidden;
   }
   .mix {
     display: flex;
     flex-direction: column;
     gap: 12px;
   }
-  h3 {
-    margin: 0;
-    font-size: var(--fs-subhead);
-    line-height: 20px;
-    font-weight: 600;
-  }
-  .bar {
-    display: flex;
-    gap: 2px;
-    height: 8px;
-    border-radius: var(--r-pill);
-    overflow: hidden;
-  }
-  .bar.thin {
-    width: 64px;
-    height: 6px;
-  }
-  .seg {
-    min-width: 2px;
-  }
-  .low {
-    background: rgba(245, 240, 232, 0.28);
-  }
-  .mid {
-    background: var(--text-3);
-  }
-  /* The loud end is the text colour, not the accent: the mix is never a selection. */
-  .high {
-    background: var(--text);
-  }
-  .counts {
+  ul {
     list-style: none;
-    margin: 0;
+    margin: 0 0 8px;
     padding: 0;
     display: flex;
     flex-direction: column;
-    gap: 4px;
+    gap: 16px;
+  }
+  li {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .row {
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
     font-size: var(--fs-subhead);
     line-height: 20px;
+  }
+  .n {
     font-variant-numeric: tabular-nums;
+    color: var(--text-2);
   }
-  .counts li {
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
-  .label {
-    flex: 1;
-  }
-  .dot {
-    width: 8px;
-    height: 8px;
+  .bar {
+    height: 12px;
     border-radius: var(--r-pill);
-    flex: none;
+    overflow: hidden;
+    background: var(--surface-2);
+  }
+  .bar > span {
+    display: block;
+    height: 100%;
+    border-radius: var(--r-pill);
+  }
+  /* The loud end is the text colour, not the accent: the mix is never a selection. */
+  .low {
+    background: var(--text-3);
+  }
+  .mid {
+    background: var(--text-2);
+  }
+  .high {
+    background: var(--text);
+  }
+  p {
+    margin: 0;
   }
   .footnote {
-    margin: 0;
     font-variant-numeric: tabular-nums;
   }
 </style>

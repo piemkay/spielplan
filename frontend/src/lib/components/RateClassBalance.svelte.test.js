@@ -52,8 +52,10 @@ describe('the balance widget (decisions 486 and 491)', () => {
   });
 
   it('stops saying when the check begins once it has armed, and shows no threshold', () => {
-    // The warning itself is the page's to place, verbatim (see rate-page.test.js).
-    open(balance({ counts: [2, 3, 12], shares: [2 / 17, 3 / 17, 12 / 17], total: 17, warn: true }));
+    const copy = "Heavy on 'liked'. Rate some titles you didn't enjoy as well.";
+    open(balance({ counts: [2, 3, 12], shares: [2 / 17, 3 / 17, 12 / 17], total: 17, warn: true, copy }));
+    // The server's sentence, verbatim.
+    expect(target.querySelector('[data-testid="rate-balance-warning"]').textContent).toBe(copy);
     expect(target.querySelector('[data-testid="rate-balance"]').getAttribute('data-warn')).toBe(
       'true'
     );

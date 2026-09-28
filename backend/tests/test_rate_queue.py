@@ -525,7 +525,7 @@ def test_the_battle_why_line_names_the_shared_answer_and_no_section():
     are drawn is the rail's to say."""
     for verdict_class, label in enumerate(("disliked", "fine", "liked")):
         line = battle.reason_for(verdict_class)
-        assert line == f"You rated both of these {label}.", line
+        assert line == f"You rated both {label}", line
         assert "queued because" not in line and "profile" not in line, line
         assert "§" not in line and "tier queue" not in line, line
         assert "only pay off" not in line, "the clause 54a deleted is back"
@@ -647,7 +647,7 @@ async def test_the_battle_pool_is_only_titles_that_are_both_seen_and_verdicted(d
     )
     assert {pair.title_a, pair.title_b} == {1, 2}
     assert pair.verdict_class == 2
-    assert pair.reason == "You rated both of these liked."
+    assert pair.reason == "You rated both liked"
 
     assert (
         await battle.next_battle_pair(

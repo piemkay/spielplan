@@ -117,7 +117,6 @@ class RateSession:
     user_id: int
     kinds: list[str]
     mode: str
-    decisive: bool
     block_index: int
     slot: int
     seq: int
@@ -196,7 +195,7 @@ def advance(block_index: int, slot: int) -> tuple[int, int]:
 
 
 _SESSION_COLUMNS = (
-    "id, user_id, kinds, mode, decisive, block_index, slot, seq, current_card, card_token"
+    "id, user_id, kinds, mode, block_index, slot, seq, current_card, card_token"
 )
 
 
@@ -207,7 +206,6 @@ def _session(row: asyncpg.Record) -> RateSession:
         user_id=row["user_id"],
         kinds=list(row["kinds"]),
         mode=row["mode"],
-        decisive=row["decisive"],
         block_index=row["block_index"],
         slot=row["slot"],
         seq=row["seq"],
@@ -269,32 +267,24 @@ async def set_controls(
     *,
     mode: str | None = None,
     kinds: Sequence[str] | None = None,
-    decisive: bool | None = None,
 ) -> RateSession:
-    """§6.1's three controls: the mode, the kind toggles, and the decisive switch.
-
-    A mode or kind change drops the card on the table; the decisive switch belongs to the pair on
-    the table, so a redraw turns it off.
-    """
+    """§6.1's two controls: the mode and the kind toggles. A change drops the card on the table."""
     if mode is not None and mode not in MODES:
         raise ValueError(f"mode must be one of {MODES}, not {mode!r}")
     wanted = normalise_kinds(kinds) if kinds is not None else s.kinds
     redraw = (mode is not None and mode != s.mode) or wanted != s.kinds
-    if decisive is None:
-        decisive = False if redraw else s.decisive
     row = await conn.fetchrow(
         f"""
         UPDATE rate_session
-           SET mode = $2, kinds = $3::text[], decisive = $4, last_seen_at = now(),
-               current_card = CASE WHEN $5 THEN NULL ELSE current_card END,
-               card_token   = CASE WHEN $5 THEN NULL ELSE card_token END
+           SET mode = $2, kinds = $3::text[], last_seen_at = now(),
+               current_card = CASE WHEN $4 THEN NULL ELSE current_card END,
+               card_token   = CASE WHEN $4 THEN NULL ELSE card_token END
          WHERE id = $1
         RETURNING {_SESSION_COLUMNS}
         """,
         s.id,
         mode or s.mode,
         wanted,
-        decisive,
         redraw,
     )
     return _session(row)
@@ -1033,11 +1023,10 @@ async def _append(
                 raise
             # Two taps on one card: §6.1's stale card, the 409 the client can act on.
             raise StaleCard("stale_card") from exc
-        # The decisive switch belongs to the pair just answered (decision 520).
         row = await conn.fetchrow(
             f"""
             UPDATE rate_session
-               SET seq = $2, block_index = $3, slot = $4, decisive = false,
+               SET seq = $2, block_index = $3, slot = $4,
                    current_card = NULL, card_token = NULL, last_seen_at = now()
              WHERE id = $1
             RETURNING {_SESSION_COLUMNS}
@@ -1278,7 +1267,7 @@ async def record_duel(
     card_token: str,
     outcome: str,
     hp: Hyperparams,
-    decisive: bool | None = None,
+    decisive: bool = False,
     embeddings: EmbeddingSource | None = None,
     bundle_version: Any = refit.BASIS_UNSTATED,
     latency_ms: int | None = None,
@@ -1287,13 +1276,11 @@ async def record_duel(
 ) -> Outcome:
     """§6.1's battle answer: exactly one duel row, context `profile_battle`; a TIE is data.
 
-    The margin comes from the session's per-pair decisive switch (decision 520) via
-    `hp.margin_for`; a per-request `decisive` overrides it for one answer.
+    "Much more" is `decisive`, weighted by `hp.margin_for`; a TIE never is (decision 528).
     """
     card = _take_card(s, card_token, want="battle")
     if outcome not in OUTCOMES:
         raise ValueError(f"outcome must be one of {OUTCOMES}, not {outcome!r}")
-    hard = s.decisive if decisive is None else decisive
 
     async with conn.transaction():
         await _claim_card(conn, s, card_token)
@@ -1305,7 +1292,7 @@ async def record_duel(
             outcome=outcome,
             context=BATTLE_CONTEXT,
             selection=BATTLE_SELECTION,
-            decisive=hard,
+            decisive=decisive and outcome != "TIE",
             hp=hp,
             is_reask=card.get("reask_of") is not None,
             reask_of=card.get("reask_of"),
@@ -1554,12 +1541,11 @@ async def undo(
         await conn.execute(
             "UPDATE rate_observation SET undone_at = now() WHERE id = $1", row["id"]
         )
-        # The restored pair is asked afresh, so the decisive switch starts off (decision 520).
         restored = await conn.fetchrow(
             f"""
             UPDATE rate_session
                SET block_index = $2, slot = $3, current_card = $4::jsonb, card_token = $5,
-                   decisive = false, last_seen_at = now()
+                   last_seen_at = now()
              WHERE id = $1
             RETURNING {_SESSION_COLUMNS}
             """,
@@ -1628,7 +1614,6 @@ async def payload(
             "id": s.id,
             "mode": s.mode,
             "kinds": s.kinds,
-            "decisive": s.decisive,
             "block": {
                 "index": s.block_index,
                 "slot": s.slot,

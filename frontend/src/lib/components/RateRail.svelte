@@ -1,9 +1,7 @@
 <script>
   // What sits behind the card's "Why these?": the learning curve, and in Pairs and Mixed why the
-  // pairs are random and what a clear favourite does (decision 527).
+  // pairs are random (decision 527).
   import {
-    DECISIVE_COPY,
-    DECISIVE_LABEL,
     LEARNING_CURVE_COPY,
     LEARNING_TARGET,
     PAIR_SELECTION_COPY,
@@ -33,13 +31,8 @@
     <section class="card" data-testid="rate-pair-selection">
       <h3>Why these pairs</h3>
       <p class="why">{PAIR_SELECTION_COPY}</p>
-    </section>
-
-    <section class="card" data-testid="rate-resolution">
-      <h3>{DECISIVE_LABEL}</h3>
-      <p class="why">{DECISIVE_COPY}</p>
       {#if showModel}
-        <p class="data" data-testid="rate-margin-weights">decisive 1.6 · hesitant 1.0</p>
+        <p class="data" data-testid="rate-margin-weights">much more 1.6 · more 1.0 · same 1.0</p>
       {/if}
     </section>
   {/if}

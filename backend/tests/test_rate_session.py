@@ -676,66 +676,24 @@ async def test_one_battle_answer_writes_exactly_one_duel_row(db, rated, outcome)
     assert out.session.slot == 2
 
 
-async def test_the_decisive_switch_weights_one_pair_and_resets_for_the_next(db, rated):
-    """Decision 520: the decisive switch belongs to the pair it was set on. The weights come from
-    `hp.margin_for`, which keeps them in `ledger_hyperparams.json`."""
+async def test_much_more_weights_one_answer_and_a_tie_never(db, rated):
+    """Decision 528: "Much more" is `decisive` for that answer alone; a TIE sent as decisive is still
+    unweighted. The weights come from `hp.margin_for`, which keeps them in `ledger_hyperparams.json`."""
     user = rated["user"]
     s = await open_session(db, user, mode="battle")
-    assert s.decisive is False
-    s = (await session.record_duel(db, s, card_token=token(s), outcome="A", hp=HP)).session
-
-    s = await session.set_controls(db, s, decisive=True)
-    assert s.current_card is not None, "the switch changes the weight, not the question"
-    assert s.decisive is True
-    s = (await session.record_duel(db, s, card_token=token(s), outcome="B", hp=HP)).session
-    assert s.decisive is False, "the next pair starts with the switch off"
-    assert (await session.payload(db, s))["session"]["decisive"] is False
-    s = (await session.record_duel(db, s, card_token=token(s), outcome="A", hp=HP)).session
+    for outcome, decisive in (("A", True), ("B", False), ("TIE", True)):
+        s = (
+            await session.record_duel(
+                db, s, card_token=token(s), outcome=outcome, decisive=decisive, hp=HP
+            )
+        ).session
 
     margins = [
         r["margin"]
         for r in await db.fetch("SELECT margin FROM duel WHERE user_id = $1 ORDER BY id", user)
     ]
-    assert margins == pytest.approx([1.0, 1.6, 1.0])
+    assert margins == pytest.approx([1.6, 1.0, 1.0])
     assert HP.margin_for(True) == 1.6 and HP.margin_for(False) == 1.0
-
-
-async def test_the_decisive_switch_leaves_with_its_pair_on_a_skip_an_undo_and_a_mode_change(
-    db, rated
-):
-    """A skip, a mode change and an Undo each bring a new question, so the switch leaves with its pair."""
-    user = rated["user"]
-    s = await open_session(db, user, mode="battle")
-
-    s = await session.set_controls(db, s, decisive=True)
-    s = (await session.record_skip(db, s, card_token=token(s))).session
-    assert s.decisive is False, "a skipped pair takes its switch with it"
-
-    s = await session.set_controls(db, s, decisive=True)
-    s = await session.set_controls(db, s, mode="mix")
-    assert s.decisive is False, "a mode change redraws, and the switch goes with the old card"
-
-    s = await session.ensure_card(db, await session.set_controls(db, s, mode="battle"))
-    s = await session.set_controls(db, s, decisive=True)
-    s = (await session.record_duel(db, s, card_token=token(s), outcome="A", hp=HP)).session
-    s = await session.set_controls(db, s, decisive=True)
-    s = (await session.undo(db, s, hp=HP)).session
-    assert s.current_card["type"] == "battle", "the undone pair is back on the table"
-    assert s.decisive is False, "and it is asked afresh, with the switch off"
-
-    # A control that names no switch leaves it where the person put it on this pair.
-    s = await session.set_controls(db, s, decisive=True)
-    s = await session.set_controls(db, s, kinds=["movie"])
-    assert s.decisive is True, "narrowing to the kind already on the table redraws nothing"
-
-
-async def test_one_answer_may_override_the_toggle_without_moving_it(db, rated):
-    s = await open_session(db, rated["user"], mode="battle")
-    out = await session.record_duel(
-        db, s, card_token=token(s), outcome="A", decisive=True, hp=HP
-    )
-    assert out.session.decisive is False
-    assert await db.fetchval("SELECT margin FROM duel") == pytest.approx(1.6)
 
 
 @pytest.mark.parametrize("side", ["left", "right"])
@@ -758,9 +716,9 @@ async def test_a_correction_unsees_exactly_the_named_side_and_writes_no_duel(db,
     assert states[corrected] == "unseen"
     assert states[survivor] == "seen", "only the named side is corrected"
     assert await db.fetchval("SELECT count(*) FROM duel WHERE user_id = $1", user) == 0
-    # The survivor keeps its place; the corrected half is replaced.
+    # The survivor stays on its side; the corrected half is replaced.
     assert s.current_card["type"] == "battle"
-    assert survivor in (s.current_card["title_a"], s.current_card["title_b"])
+    assert s.current_card["title_b" if side == "left" else "title_a"] == survivor
     assert corrected not in (s.current_card["title_a"], s.current_card["title_b"])
 
 

@@ -29,7 +29,6 @@ const envelope = (over = {}) => ({
     id: 7,
     mode: 'battle',
     kinds: ['movie'],
-    decisive: false,
     block: { index: 0, slot: 1, size: 15, counter: '1 of 15', serving: 'battle' }
   },
   card: null,
@@ -228,6 +227,9 @@ describe('"a title you know" (C5.2 of the household test)', () => {
 
   it('finds a title, offers only the unrated one, and pins the pick into the queue', async () => {
     await open(envelope({ session: { mode: 'mix' }, card: other }));
+    // In the menu the screen's title opens (decision 528).
+    target.querySelector('[data-testid="rate-menu"]').click();
+    flushSync();
     target.querySelector('[data-testid="rate-find-toggle"]').click();
     flushSync();
 
@@ -278,7 +280,7 @@ describe('the second household test on Rate (2026-09-26)', () => {
     kind: 'movie',
     left: { id: 1, name: 'Heat', year: 1995, runtime_min: 170, outcome: 'A' },
     right: { id: 2, name: 'Drive', year: 2011, runtime_min: 100, outcome: 'B' },
-    reason: 'You rated both of these liked.',
+    reason: 'You rated both liked',
     substituted_for: null,
     outcomes: ['A', 'B', 'TIE'],
     corrections: { label: 'not seen', sides: ['left', 'both', 'right'] },
@@ -290,7 +292,6 @@ describe('the second household test on Rate (2026-09-26)', () => {
         id: 7,
         mode: 'mix',
         kinds: ['movie', 'series'],
-        decisive: false,
         block: { index: 0, slot: 4, size: 15, counter: '4 of 15', serving: 'battle' }
       },
       ...over
@@ -338,22 +339,24 @@ describe('the second household test on Rate (2026-09-26)', () => {
     expect(fetchMock).toHaveBeenCalledTimes(3);
   });
 
-  it('asks the pair question and says the clear-favourite switch is for this pair (A1, A6)', async () => {
+  it('asks the pair question and answers it in one tap, no switch first (decision 528)', async () => {
     await open(mixed({ card: pairCard }));
 
     expect(target.querySelector('[data-testid="rate-battle-question"]').textContent).toBe(
       'Which did you enjoy more?'
     );
-    const decisive = target.querySelector('[data-testid="rate-decisive"]');
-    expect(document.getElementById(decisive.getAttribute('aria-labelledby')).textContent).toBe(
-      'Clear favourite'
-    );
-    expect(target.querySelector('[data-testid="rate-decisive-why"]').textContent).toMatch(
-      /resets for the next pair/
-    );
     expect(target.querySelector('[data-testid="rate-battle-reason"]').textContent).toBe(
-      'You rated both of these liked.'
+      'You rated both liked'
     );
+    expect(target.querySelector('[role="switch"]')).toBeNull();
+    expect(target.textContent).not.toMatch(/Clear favourite|About the same|Haven't seen one/);
+
+    respond(mixed({ card: { ...pairCard, token: 'tok-4' } }));
+    target.querySelector('[data-testid="rate-duel-A-much"]').click();
+    await settle();
+    const [url, init] = fetchMock.mock.calls[1];
+    expect(url).toContain('/api/rate/duel');
+    expect(JSON.parse(init.body)).toMatchObject({ card_token: 'tok-3', outcome: 'A', decisive: true });
   });
 
   it('lights the answer in flight while the rest of the card waits (A4)', async () => {
@@ -389,26 +392,29 @@ describe('the second household test on Rate (2026-09-26)', () => {
           id: 7,
           mode: 'sweep',
           kinds: ['series'],
-          decisive: false,
           block: { index: 0, slot: 2, size: 15, counter: '2 of 15', serving: 'sweep' }
         },
         card: { ...substitutedSweep, substituted_for: null },
         class_balance: { ...envelope().class_balance, counts: [2, 3, 4], total: 9, arms_at: 15 }
       })
     );
-    // On a phone the spread sits behind the card's "Why these?", with the learning curve.
-    expect(target.querySelector('[data-testid="rate-mix"]').getAttribute('aria-label')).toBe(
-      'Your mix: 2 disliked, 3 fine, 4 liked'
-    );
-    // When the balance check starts stays on the rating screen itself (§6.1).
-    expect(target.querySelector('[data-testid="rate-balance-arming"]').textContent).toBe(
-      'A balance check starts at 15 ratings.'
-    );
-    target.querySelector('[data-testid="rate-why"]').click();
+    // The progress row's meter opens the mix, and when the balance check starts (decision 528).
+    const meter = target.querySelector('[data-testid="rate-mix"]');
+    expect(meter.getAttribute('aria-label')).toBe('Your mix: 2 disliked, 3 fine, 4 liked');
+    expect(target.querySelector('[data-testid="rate-balance-arming"]')).toBeNull();
+    meter.click();
     flushSync();
-    expect(target.querySelector('[data-testid="rate-balance-total"]').textContent).toBe(
+    const mix = target.querySelector('[role="dialog"][aria-label="Your mix"]');
+    expect(mix.querySelector('[data-testid="rate-balance-total"]').textContent).toBe(
       '9 series ratings'
     );
+    expect(mix.querySelector('[data-testid="rate-balance-arming"]').textContent).toBe(
+      'A balance check starts at 15 ratings.'
+    );
+    mix.querySelector('.done').click();
+    flushSync();
+    target.querySelector('[data-testid="rate-why"]').click();
+    flushSync();
     expect(target.querySelector('[data-testid="rate-label-count"]').textContent).toContain(
       '9 series ratings'
     );
@@ -421,8 +427,106 @@ describe('the second household test on Rate (2026-09-26)', () => {
       'well - but never change an honest answer to even things out.';
     const armed = { ...envelope().class_balance, counts: [2, 3, 12], total: 17, warn: true, copy };
     await open(mixed({ card: { ...substitutedSweep, substituted_for: null }, class_balance: armed }));
+    // One line on the screen; the sentence is in the sheet it opens.
+    const chip = target.querySelector('[data-testid="rate-balance-chip"]');
+    expect(chip.textContent.replace(/\s+/g, ' ').trim()).toBe('Heavy on liked · See why');
+    expect(target.querySelector('[data-testid="rate-balance-warning"]')).toBeNull();
+    chip.click();
+    flushSync();
     expect(target.querySelector('[data-testid="rate-balance-warning"]').textContent).toBe(copy);
     expect(target.querySelector('[data-testid="rate-balance-arming"]')).toBeNull();
+  });
+
+  it('opens "About this film" from a poster, and its Not seen corrects that side', async () => {
+    await open(mixed({ card: pairCard }));
+    respond({
+      title: { id: 2, name: 'Drive', overview: 'A driver for hire.' },
+      genres: ['Crime', 'Drama'],
+      credits: [
+        { person_id: 9, name: 'Nicolas Winding Refn', role_class: 'director', job: 'Director' },
+        { person_id: 7, name: 'Ryan Gosling', role_class: 'cast', job: 'Actor', character: 'Driver' }
+      ]
+    });
+    target.querySelector('[data-testid="rate-battle-right"]').click();
+    await settle();
+
+    expect(fetchMock.mock.calls[1][0]).toContain('/api/titles/2');
+    const peek = target.querySelector('[data-testid="rate-peek"]');
+    expect(peek.textContent).toContain('2011 · 1h 40m · Crime, drama');
+    expect(peek.textContent).toContain('Directed by Nicolas Winding Refn');
+    expect(peek.textContent).toContain('Driver');
+    expect(peek.textContent).toContain('Looking never counts as an answer.');
+    expect(fetchMock.mock.calls.some(([url]) => url.includes('/rate/duel'))).toBe(false);
+
+    respond(mixed({ card: { ...pairCard, token: 'tok-5' } }));
+    target.querySelector('[data-testid="rate-peek-not-seen"]').click();
+    await settle();
+    const [url, init] = fetchMock.mock.calls[2];
+    expect(url).toContain('/api/rate/correction');
+    expect(JSON.parse(init.body)).toEqual({ card_token: 'tok-3', side: 'right' });
+  });
+});
+
+describe('the keyboard (decision 528)', () => {
+  const pairCard = {
+    type: 'battle',
+    token: 'tok-7',
+    kind: 'movie',
+    left: { id: 1, name: 'Heat', year: 1995, runtime_min: 170, outcome: 'A' },
+    right: { id: 2, name: 'Drive', year: 2011, runtime_min: 100, outcome: 'B' },
+    reason: 'You rated both liked',
+    corrections: { label: 'not seen', sides: ['left', 'both', 'right'] }
+  };
+  const press = (key, init = {}) =>
+    window.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true, ...init }));
+  const sent = () =>
+    fetchMock.mock.calls
+      .slice(1)
+      .map(([url, init]) => [url.replace(/^.*\/api/, ''), JSON.parse(init.body)]);
+
+  it('answers a pair with the arrows, Shift for much more, and Q or P for not seen', async () => {
+    await open(envelope({ card: pairCard }));
+    for (const [key, init] of [
+      ['ArrowLeft', {}],
+      ['ArrowRight', { shiftKey: true }],
+      ['ArrowDown', {}],
+      ['q', {}],
+      ['P', {}]
+    ]) {
+      respond(envelope({ card: pairCard }));
+      press(key, init);
+      await settle();
+    }
+    expect(sent().map(([url, body]) => [url, body.outcome ?? body.side, body.decisive])).toEqual([
+      ['/rate/duel', 'A', false],
+      ['/rate/duel', 'B', true],
+      ['/rate/duel', 'TIE', false],
+      ['/rate/correction', 'left', undefined],
+      ['/rate/correction', 'right', undefined]
+    ]);
+  });
+
+  it('rates a single with 1, 2 and 3, and says not seen with N', async () => {
+    const sweep = { ...substitutedSweep, substituted_for: null };
+    await open(envelope({ session: { mode: 'sweep' }, card: sweep }));
+    respond(envelope({ session: { mode: 'sweep' }, card: sweep }));
+    press('3');
+    await settle();
+    expect(sent()[0]).toEqual(['/rate/verdict', expect.objectContaining({ value: 2 })]);
+    respond(envelope({ session: { mode: 'sweep' }, card: sweep }));
+    press('n');
+    await settle();
+    expect(sent()[1][0]).toBe('/rate/not-seen');
+  });
+
+  it('does nothing while a sheet is open', async () => {
+    await open(envelope({ card: pairCard }));
+    target.querySelector('[data-testid="rate-menu"]').click();
+    flushSync();
+    press('ArrowLeft');
+    press('s');
+    await settle();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });
 
@@ -434,7 +538,6 @@ describe("a block's end (decisions 199 and 527)", () => {
         id: 7,
         mode: 'sweep',
         kinds: ['movie'],
-        decisive: false,
         block: { index, slot, size: 15, counter: `${slot} of 15`, serving: 'sweep' }
       },
       card: sweep,

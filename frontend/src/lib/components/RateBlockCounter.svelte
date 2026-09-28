@@ -8,37 +8,33 @@
 </script>
 
 <div class="counter" data-testid="rate-block">
-  <div class="line">
-    <span class="count" data-testid="rate-counter">{block?.counter ?? ''}</span>
-    {#if children}{@render children()}{/if}
-  </div>
   <div class="ticks" aria-hidden="true">
     {#each ticks as t (t)}
       <span class="tick" class:done={t <= slot}></span>
     {/each}
   </div>
+  <span class="count" data-testid="rate-counter">{block?.counter ?? ''}</span>
+  {#if children}{@render children()}{/if}
 </div>
 
 <style>
   .counter {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-  }
-  .line {
-    min-height: 18px;
+    height: 24px;
     display: flex;
     align-items: center;
-    justify-content: space-between;
     gap: 12px;
   }
   .count {
+    flex: none;
     font-size: var(--fs-footnote);
     line-height: 18px;
     font-variant-numeric: tabular-nums;
+    white-space: nowrap;
     color: var(--text-2);
   }
   .ticks {
+    flex: 1;
+    min-width: 0;
     height: 4px;
     display: grid;
     grid-auto-flow: column;

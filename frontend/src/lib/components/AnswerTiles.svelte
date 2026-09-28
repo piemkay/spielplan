@@ -19,7 +19,7 @@
 </script>
 
 {#snippet icon(answer)}
-  <svg width={compact ? 22 : 26} height={compact ? 22 : 26} viewBox="0 0 24 24" fill="none"
+  <svg width={compact ? 22 : 24} height={compact ? 22 : 24} viewBox="0 0 24 24" fill="none"
     stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"
     aria-hidden="true">
     {#if answer === 'disliked'}
@@ -64,7 +64,7 @@
     grid-column: 5;
   }
   .tile {
-    height: 76px;
+    height: 64px;
     min-width: 0;
     padding: 0;
     border: none;

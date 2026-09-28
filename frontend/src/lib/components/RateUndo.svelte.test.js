@@ -47,13 +47,12 @@ describe('the persistent Undo (decisions 35 and 486)', () => {
     });
   }
 
-  it('stays on screen while disabled, and says why', () => {
+  it('stays on screen while disabled, with no line under it (decision 528)', () => {
     const el = chip({ available: false, kind: null, reason: 'empty' });
     expect(el.textContent.trim()).toBe('Undo');
     expect(el.disabled).toBe(true);
     expect(el.getAttribute('aria-label')).toBe('Undo');
-    const reason = target.querySelector('[data-testid="rate-undo-reason"]');
-    expect(reason.textContent).toBe('Nothing to undo yet');
-    expect(el.getAttribute('aria-describedby')).toBe(reason.id);
+    expect(el.getAttribute('data-undo-reason')).toBe('empty');
+    expect(target.textContent).not.toContain('Nothing to undo yet');
   });
 });
