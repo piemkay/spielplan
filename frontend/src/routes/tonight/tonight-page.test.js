@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import TonightPage from './+page.svelte';
 import { session } from '$lib/session.svelte.js';
 import { leave, tonight } from '$lib/tonight.svelte.js';
+import { topbar } from '$lib/topbar.svelte.js';
 
 // Recorded rather than stubbed: "the link was consumed" is the observable half of decision 481.
 // `pushState` feeds the page store, so a sheet sees its own history entry and stays open.
@@ -120,6 +121,21 @@ describe('leaving the surface while it is still booting (finding 19)', () => {
 
     expect(tonight.booted, 'the continuation never ran, so the guard was never reached').toBe(true);
     expect(sockets, 'a destroyed page opened a channel nothing can close').toHaveLength(0);
+  });
+});
+
+describe('the door opens on no large title (decision 528)', () => {
+  it("hands the shell's top row its name and draws no heading of its own", () => {
+    topbar.host = true;
+    try {
+      app = mount(TonightPage, { target });
+      flushSync();
+      expect(target.querySelector('[data-testid="tonight-controls"]')).not.toBeNull();
+      expect(topbar.content, 'the shell was handed no title').not.toBeNull();
+      expect(target.querySelector('h1'), 'the door drew its own title as well').toBeNull();
+    } finally {
+      topbar.host = false;
+    }
   });
 });
 

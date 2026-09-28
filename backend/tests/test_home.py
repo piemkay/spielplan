@@ -733,19 +733,16 @@ async def test_the_banner_is_exactly_the_seen_titles_with_no_live_verdict(world)
     assert not {c["title_id"] for c in banner["named"]} & {1001, 1002, 1000}
 
 
-async def test_the_banner_that_names_at_most_three_counts_the_rest(world):
-    """At most three titles are named; beyond that "and N more"."""
+async def test_the_banner_counts_every_title_and_names_at_most_three(world):
+    """One compact row (decision 528): "Rate 6 you watched" over the names it queues first."""
     payload = await world.home()
     banner = payload["banner"]
     assert banner["count"] == 6
     assert len(banner["named"]) == 2
     assert len(banner["head_title_ids"]) == 2
-    assert "and 4 more" in banner["copy"]["wide"], banner["copy"]["wide"]
-    for card in banner["named"]:
-        assert card["name"] in banner["copy"]["wide"]
-        assert card["name"] in banner["copy"]["compact"]
-    assert banner["copy"]["wide"].startswith("You watched ")
-    assert banner["copy"]["compact"].startswith("Watched, not rated: ")
+    assert banner["copy"]["headline"] == "Rate 6 you watched"
+    assert banner["copy"]["names"] == " · ".join(card["name"] for card in banner["named"])
+    assert banner["cta"]["label"] == "Rate"
 
 
 async def test_three_pending_titles_are_all_named(world):
@@ -758,8 +755,8 @@ async def test_three_pending_titles_are_all_named(world):
     banner = (await world.home())["banner"]
     assert banner["count"] == 3
     assert len(banner["named"]) == 3 == len(banner["head_title_ids"])
-    assert " more" not in banner["copy"]["wide"]
-    assert banner["copy"]["wide"].count(",") == 1 and " and " in banner["copy"]["wide"]
+    assert banner["copy"]["headline"] == "Rate 3 you watched"
+    assert banner["copy"]["names"].count(" · ") == 2
 
 
 async def test_the_banner_cta_carries_exactly_the_named_titles_as_the_queue_head(world):
@@ -801,7 +798,7 @@ async def test_the_banner_names_only_the_kinds_the_live_session_can_serve(world)
     films = (await world.home())["banner"]
     assert films["count"] == 3, "the count is the population the CTA can serve, not all of it"
     assert {c["kind"] for c in films["named"]} == {"movie"}
-    assert "Home Series" not in films["copy"]["wide"], films["copy"]["wide"]
+    assert "Home Series" not in films["copy"]["names"], films["copy"]["names"]
 
     # The stashed card is cleared first, so the pin is asserted, not `ensure_card`'s idempotency.
     await world.db.execute(
@@ -1121,13 +1118,6 @@ async def test_a_bundle_less_app_says_so_instead_of_erroring(app, db):
     assert payload["degraded"]["state"] == "no_bundle"
     assert payload["shelves"] == []
     assert payload["banner"] is None
-
-
-def test_the_name_list_copy_matches_proposal_21():
-    assert shelves._name_list(["A"], 1) == "A"
-    assert shelves._name_list(["A", "B"], 2) == "A and B"
-    assert shelves._name_list(["A", "B", "C"], 3) == "A, B and C"
-    assert shelves._name_list(["A", "B"], 7) == "A, B and 5 more"
 
 
 async def test_the_term_reader_keeps_the_two_tiers_distinguishable(world):

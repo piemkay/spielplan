@@ -19,6 +19,7 @@ vi.mock('$app/navigation', () => ({
 import HomePage from './+page.svelte';
 import PAGE_SOURCE from './+page.svelte?raw';
 import { session } from '$lib/session.svelte.js';
+import { topbar } from '$lib/topbar.svelte.js';
 
 const MEMBER = { id: 5, name: 'Jenny', role: 'member', nav: { account: [{ key: 'account' }] } };
 const ADMIN = {
@@ -63,12 +64,14 @@ afterEach(() => {
 });
 
 const countLine = () => target.querySelector('[data-testid="count-line"]').textContent;
+const placeholder = () => target.querySelector('[data-testid="home-search"]').placeholder;
 const card = () => target.querySelector('.empty.card');
 
 describe('Home with no movie data', () => {
   it('tells a member in their own words and offers no admin door', async () => {
     await open({ user: MEMBER });
     expect(countLine()).toBe('No movie data yet');
+    expect(placeholder()).toBe('Search');
     expect(card().textContent).toContain('There is no movie data yet');
     expect(card().textContent).not.toContain('bundle');
     expect(card().querySelector('a')).toBeNull();
@@ -192,15 +195,16 @@ describe('Home opens on the shelves, with the filters behind one control', () =>
 });
 
 describe('the shelves (decision 527)', () => {
-  it('count the library of the shown kind and say nothing of the kind not shown', async () => {
+  it('count the library of the shown kind in the search field, and nothing of the kind not shown', async () => {
     backend({
       home: (kinds) => ({ kinds, library: { movie: 759, series: 127 }, shelves: [], shelves_total: 0 })
     });
     await openHome();
-    expect(countLine().trim()).toBe('759 films in your library');
+    expect(placeholder()).toBe('Search 759 films');
+    expect($('[data-testid="count-line"]'), 'the count is the placeholder (decision 528)').toBeNull();
     $('[data-testid="kind-both"]').click();
     await tick();
-    expect(countLine().trim()).toBe('886 titles in your library');
+    expect(placeholder()).toBe('Search 886 titles');
   });
 
   it('head each shelf one level under its kind on Both, and at the top on one kind', async () => {
@@ -229,6 +233,51 @@ describe('the shelves (decision 527)', () => {
       expect(region.querySelector('h3[data-testid="shelf-title"]').textContent).toBe('Your top picks');
       expect(region.querySelector('h2[data-testid="shelf-title"]')).toBeNull();
     }
+  });
+});
+
+describe('the top of Home (decision 528)', () => {
+  it('hands the kind switch to the shell and names the page only for a screen reader', async () => {
+    topbar.host = true;
+    try {
+      backend();
+      await openHome();
+      expect(topbar.content, 'the shell was handed no row').not.toBeNull();
+      expect($('[role="group"][aria-label="Kind"]'), 'the switch is drawn twice').toBeNull();
+      const h1 = target.querySelectorAll('h1');
+      expect(h1).toHaveLength(1);
+      expect(h1[0].textContent).toBe('Home');
+      expect(h1[0].classList.contains('sr-only')).toBe(true);
+    } finally {
+      topbar.host = false;
+    }
+  });
+
+  it('shows what waits for a verdict as one row: the count, the names and one Rate link', async () => {
+    const banner = {
+      count: 2,
+      named: [
+        { title_id: 1, name: 'Heat', kind: 'movie' },
+        { title_id: 2, name: 'Zodiac', kind: 'movie' }
+      ],
+      head_title_ids: [1, 2],
+      copy: { headline: 'Rate 2 you watched', names: 'Heat · Zodiac' },
+      cta: { label: 'Rate', route: '/rate?head=1&head=2' }
+    };
+    backend({ home: (kinds) => ({ kinds, library: {}, shelves: [], shelves_total: 0, banner }) });
+    await openHome();
+    const row = $('[data-testid="pending-verdicts"]');
+    expect(row.querySelector('[data-testid="pending-verdicts-copy"]').textContent).toBe(
+      'Rate 2 you watched'
+    );
+    expect(row.querySelector('[data-testid="pending-verdicts-names"]').textContent).toBe(
+      'Heat · Zodiac'
+    );
+    expect(row.querySelectorAll('[data-testid="rate-poster"]')).toHaveLength(2);
+    const links = row.querySelectorAll('a');
+    expect(links).toHaveLength(1);
+    expect(links[0].getAttribute('href')).toBe('/rate?head=1&head=2');
+    expect(links[0].textContent.trim()).toBe('Rate');
   });
 });
 

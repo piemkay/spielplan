@@ -2,9 +2,6 @@ import { describe, expect, it } from 'vitest';
 
 import {
   activeFilterCount,
-  bannerCountLine,
-  bannerLabel,
-  bannerText,
   countLabel,
   elsewhereLine,
   eventTime,
@@ -92,13 +89,9 @@ describe('the count line (§6.0)', () => {
 
   it('counts the household library of the shown kind over the shelves, and nothing else', () => {
     const library = { movie: 612, series: 262 };
-    expect(libraryLabel({ library, kinds: ['movie'] })).toBe('612 films in your library');
-    expect(libraryLabel({ library, kinds: ['movie', 'series'] })).toBe(
-      '874 titles in your library'
-    );
-    expect(libraryLabel({ library: { series: 1 }, kinds: ['series'] })).toBe(
-      '1 series in your library'
-    );
+    expect(libraryLabel({ library, kinds: ['movie'] })).toBe('612 films');
+    expect(libraryLabel({ library, kinds: ['movie', 'series'] })).toBe('874 titles');
+    expect(libraryLabel({ library: { series: 1 }, kinds: ['series'] })).toBe('1 series');
   });
 });
 
@@ -151,31 +144,6 @@ describe('the kind partition (§4.1 rule 5, decision 18)', () => {
   it('survives a payload with no shelves key', () => {
     expect(shelfRows(null)).toEqual([]);
     expect(shelfRows({})).toEqual([]);
-  });
-});
-
-describe('the pending-verdicts banner (proposal 21)', () => {
-  const banner = {
-    count: 6,
-    named: [{ title_id: 1123, name: 'Patriot' }, { title_id: 1023, name: 'Hereditary' }],
-    head_title_ids: [1123, 1023],
-    copy: {
-      wide: 'You watched Patriot, Hereditary and 4 more — a quick verdict keeps your profile sharp.',
-      compact: 'Watched, not rated: Patriot, Hereditary and 4 more'
-    },
-    cta: {
-      label_wide: 'Rate now',
-      label_compact: 'Rate',
-      route: '/rate?head=1123&head=1023'
-    }
-  };
-
-  it('uses the two registers proposal 21 specifies rather than one sentence', () => {
-    expect(bannerText(banner)).toMatch(/^You watched /);
-    expect(bannerText(banner, { compact: true })).toMatch(/^Watched, not rated: /);
-    expect(bannerLabel(banner)).toBe('Rate now');
-    expect(bannerLabel(banner, { compact: true })).toBe('Rate');
-    expect(bannerText(null)).toBe('');
   });
 });
 
@@ -400,19 +368,6 @@ describe('the looser matches of a search', () => {
     expect(strongEnd(items, 'up'), 'a weak hit ranked among strong ones stays with them').toBe(3);
     expect(strongEnd([{ name: 'Superman' }, { name: 'Cupid' }], 'up')).toBe(0);
     expect(strongEnd([], 'up')).toBe(0);
-  });
-});
-
-describe("the banner's count, in words", () => {
-  it('says how many are waiting and nothing about how the sentence was built', () => {
-    expect(bannerCountLine({ count: 16, named: [{}, {}] })).toBe(
-      '16 titles you watched are waiting for your rating.'
-    );
-    expect(bannerCountLine({ count: 1, named: [{}] })).toBe(
-      '1 title you watched is waiting for your rating.'
-    );
-    expect(bannerCountLine(null)).toBe('');
-    expect(bannerCountLine({ count: 16 })).not.toMatch(/verdict|named/);
   });
 });
 

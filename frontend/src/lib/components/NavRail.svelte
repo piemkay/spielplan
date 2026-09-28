@@ -1,6 +1,7 @@
 <script>
   // The list comes from `/auth/me`: which surfaces a user sees is a server decision, never a
-  // client-side role check. A translucent tab bar on a phone, a sidebar on a desktop (decision 527).
+  // client-side role check. A translucent tab bar on a phone, a sidebar on a desktop (decision 527),
+  // and an icon rail between the two (decision 528).
   import { page } from '$app/stores';
   import { session } from '$lib/session.svelte.js';
 
@@ -22,7 +23,7 @@
 </script>
 
 <div class="rail">
-  <a class="brand" href="/" aria-label="Spielplan, Home">Spiel<em>plan</em></a>
+  <a class="brand" href="/" aria-label="Spielplan, Home">S<span class="rest">piel<em>plan</em></span></a>
   <nav aria-label="Main">
     {#each surfaces as s (s.key)}
       <a
@@ -142,6 +143,45 @@
     svg {
       width: 20px;
       height: 20px;
+    }
+  }
+
+  /* Small tablets and a foldable's inner screen: a 72px rail under an "S" monogram. */
+  @media (min-width: 721px) and (max-width: 1099px) {
+    .rail {
+      width: 72px;
+      align-items: center;
+      gap: 24px;
+      padding: 12px 0;
+    }
+    .brand {
+      padding: 0;
+      font-size: 30px;
+      line-height: 36px;
+    }
+    .rest {
+      display: none;
+    }
+    nav {
+      gap: 8px;
+    }
+    a:not(.brand) {
+      flex-direction: column;
+      justify-content: center;
+      gap: 4px;
+      width: 56px;
+      min-height: 56px;
+      padding: 0;
+      color: var(--text-3);
+      font-size: var(--fs-tab);
+      line-height: 12px;
+    }
+    a.on {
+      color: var(--accent-text);
+    }
+    svg {
+      width: 24px;
+      height: 24px;
     }
   }
 </style>

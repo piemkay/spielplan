@@ -147,7 +147,7 @@ export function countLabel({ total = 0, kinds = [], owned = false } = {}) {
 // The shelves count the household's own library of the shown kind (§6.0).
 export function libraryLabel({ library = {}, kinds = [] } = {}) {
   const shown = kinds.reduce((sum, kind) => sum + (library?.[kind] ?? 0), 0);
-  return `${counted(shown, kinds)} in your library`;
+  return counted(shown, kinds);
 }
 
 // One switch, three positions; Both is a selection, never a merge (decisions 18, 474).
@@ -224,26 +224,6 @@ export function toPosterTitle(item) {
     e_source: item.e_source,
     seen_state: item.seen ? 'seen' : 'unseen'
   };
-}
-
-export function bannerText(banner, { compact = false } = {}) {
-  const copy = banner?.copy;
-  if (!copy) return '';
-  return (compact ? copy.compact : copy.wide) ?? '';
-}
-
-export function bannerCountLine(banner) {
-  const n = Number(banner?.count) || 0;
-  if (!n) return '';
-  return n === 1
-    ? '1 title you watched is waiting for your rating.'
-    : `${n.toLocaleString()} titles you watched are waiting for your rating.`;
-}
-
-export function bannerLabel(banner, { compact = false } = {}) {
-  const cta = banner?.cta;
-  if (!cta) return '';
-  return (compact ? cta.label_compact : cta.label_wide) ?? 'Rate now';
 }
 
 export function eventTime(at) {

@@ -155,17 +155,6 @@ class Ctx:
 # --- the pending-verdicts banner ------------------------------------------------------------
 
 
-def _name_list(names: Sequence[str], total: int) -> str:
-    """Proposal 21's copy, exactly: one, two, three, then two-and-N-more."""
-    if total <= 1:
-        return names[0]
-    if total == 2:
-        return f"{names[0]} and {names[1]}"
-    if total == 3:
-        return f"{names[0]}, {names[1]} and {names[2]}"
-    return f"{names[0]}, {names[1]} and {total - 2} more"
-
-
 async def pending_verdicts(
     conn: asyncpg.Connection, *, user_id: int, cap: int = NAMED_TITLES_CAP
 ) -> dict[str, Any] | None:
@@ -199,7 +188,6 @@ async def pending_verdicts(
     # The queue head is exactly the titles the copy names: two beyond three (proposal 21).
     named_n = total if total <= cap else cap - 1
     named = [dict(r) for r in rows[:named_n]]
-    text = _name_list([r["name"] for r in named], total)
     head = [int(r["id"]) for r in named]
     # Repeated `head=`, not comma-joined: `GET /api/rate` takes `head: list[int]`.
     query = "&".join(f"head={i}" for i in head)
@@ -207,14 +195,13 @@ async def pending_verdicts(
         "count": total,
         "named": [{"title_id": int(r["id"]), "name": r["name"], "kind": r["kind"]} for r in named],
         "head_title_ids": head,
+        # One compact row on every viewport (decision 528): the count, then the names.
         "copy": {
-            # Proposal 21, verbatim, on both viewports.
-            "wide": f"You watched {text} — a quick verdict keeps your profile sharp.",
-            "compact": f"Watched, not rated: {text}",
+            "headline": f"Rate {total:,} you watched",
+            "names": " · ".join(r["name"] for r in named),
         },
         "cta": {
-            "label_wide": "Rate now",
-            "label_compact": "Rate",
+            "label": "Rate",
             # The server builds the link, so it cannot drift from the copy (proposal 150).
             "route": f"/rate?{query}",
         },

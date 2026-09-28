@@ -9,6 +9,7 @@
   import Avatar from '$lib/components/Avatar.svelte';
   import Icon from '$lib/components/Icon.svelte';
   import { session } from '$lib/session.svelte.js';
+  import { topbar } from '$lib/topbar.svelte.js';
   import {
     ANSWERS,
     BUDGET_MAX,
@@ -134,6 +135,14 @@
   const inFlow = $derived(
     tonight.booted && ['lobby', 'round', 'waiting', 'ballot', 'reveal'].includes(tonight.step)
   );
+  // The door names the place in the shell's top row (decision 528); a room brings its own bar.
+  $effect(() => {
+    if (!topbar.host || tonight.step !== 'door') return;
+    topbar.content = doorBar;
+    return () => {
+      if (topbar.content === doorBar) topbar.content = null;
+    };
+  });
   // Host-only, and on every step a room can stall in.
   const canEnd = $derived(isHost && tonight.step !== 'reveal');
   // Guests answer on the host's phone once every earlier seat has finished (§6.2 step 2).
@@ -230,6 +239,10 @@
   {#if tonight.error}
     <p class="error" role="alert" data-testid="tonight-error">{tonight.error}</p>
   {/if}
+{/snippet}
+
+{#snippet doorBar()}
+  <h1 class="bar-title">Tonight</h1>
 {/snippet}
 
 {#snippet bar(title)}
@@ -330,8 +343,8 @@
     <!-- Until the restore lands, a live door could open a second room for someone already seated. -->
     <p class="footnote" data-testid="tonight-booting">Loading…</p>
   {:else if tonight.step === 'door'}
-    <div class="screen">
-      <h1 class="large-title">Tonight</h1>
+    <div class="screen at-door">
+      {#if !topbar.host}{@render doorBar()}{/if}
       {@render problem()}
       <div class="fork">
         <div class="doors">
@@ -990,6 +1003,9 @@
     display: flex;
     flex-direction: column;
     gap: 24px;
+  }
+  .at-door {
+    padding-top: 8px;
   }
   .flow .screen {
     min-height: 100%;

@@ -1,8 +1,10 @@
 <script>
   // One kind's section of a shelf, so a Films row and a Series row never see each other's items
   // (§4.1 rule 5). No rank number and no tier letter: those live on Rank (decision 527).
+  import Icon from '$lib/components/Icon.svelte';
   import PosterCard, { isColdPlaced } from '$lib/components/PosterCard.svelte';
   import ModelNote from '$lib/components/ModelNote.svelte';
+  import Sheet from '$lib/components/Sheet.svelte';
   import { toPosterTitle, whyNumbersLine } from '$lib/home.svelte.js';
 
   // `level` is 'h3' inside a kind region, whose own heading is the h2.
@@ -20,6 +22,7 @@
   let row = $state();
   let atStart = $state(true);
   let atEnd = $state(false);
+  let seeAll = $state(false);
 
   function measure() {
     if (!row) return;
@@ -28,25 +31,9 @@
   }
 
   $effect(() => {
-    // A shorter row has no overflow and must not offer a dead chevron.
+    // A shorter row has no overflow, and a chevron with nowhere to go is disabled.
     section.items.length;
     measure();
-  });
-
-  // Attached by hand: Svelte 5 registers `wheel` as passive, so `preventDefault` in `onwheel`
-  // is ignored and the page scrolls along with the row.
-  $effect(() => {
-    const node = row;
-    if (!node) return;
-    const onWheel = (event) => {
-      if (Math.abs(event.deltaY) <= Math.abs(event.deltaX)) return;
-      if (node.scrollWidth <= node.clientWidth) return;
-      event.preventDefault();
-      node.scrollLeft += event.deltaY;
-      measure();
-    };
-    node.addEventListener('wheel', onWheel, { passive: false });
-    return () => node.removeEventListener('wheel', onWheel);
   });
 
   // Pages 80% of the viewport; scroll-snap lands it on a card.
@@ -57,36 +44,48 @@
   }
 </script>
 
+<svelte:window onresize={measure} />
+
 <section
   class="shelf"
   data-testid="shelf"
   data-shelf={shelfId}
   data-kind={section.kind}
 >
-  <header>
-    <svelte:element this={level} class="section-title" data-testid="shelf-title"
-      >{section.title}</svelte:element
-    >
-    <p class="why" data-testid="shelf-why">{section.why}</p>
-    {#if section.caption}
-      <p class="footnote" data-testid="shelf-caption">{section.caption}</p>
-    {/if}
-    {#if numbers}
-      <p class="data" data-model-note data-testid="shelf-numbers">{numbers}</p>
-    {/if}
-  </header>
+  <div class="head">
+    <header>
+      <svelte:element this={level} class="section-title" data-testid="shelf-title"
+        >{section.title}</svelte:element
+      >
+      <p class="why" data-testid="shelf-why">{section.why}</p>
+      {#if section.caption}
+        <p class="footnote" data-testid="shelf-caption">{section.caption}</p>
+      {/if}
+      {#if numbers}
+        <p class="data" data-model-note data-testid="shelf-numbers">{numbers}</p>
+      {/if}
+    </header>
+    <!-- The wheel always scrolls the page; a pointer pages a row from here (decision 528). -->
+    <div class="paging">
+      <button class="btn-plain" data-testid="shelf-see-all" onclick={() => (seeAll = true)}>See all</button>
+      <button
+        class="step"
+        aria-label="Previous page"
+        data-testid="shelf-page-left"
+        disabled={atStart}
+        onclick={() => nudge(-1)}
+      ><Icon name="chevron-left" size={18} /></button>
+      <button
+        class="step"
+        aria-label="Next page"
+        data-testid="shelf-page-right"
+        disabled={atEnd}
+        onclick={() => nudge(1)}
+      ><Icon name="chevron-right" size={18} /></button>
+    </div>
+  </div>
 
-  <div class="rowwrap">
-    <button
-      class="nudge left"
-      aria-label="Scroll {section.title} left"
-      data-testid="shelf-page-left"
-      onclick={() => nudge(-1)}
-      hidden={atStart}
-    >
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M15 5 8 12l7 7" /></svg>
-    </button>
-
+  <div class="rowwrap" class:fade-start={!atStart} class:fade-end={!atEnd}>
     <div class="row" bind:this={row} onscroll={measure} data-nobar data-testid="shelf-items">
       {#each section.items as item (item.title_id)}
         <div class="cell" data-testid="shelf-card" data-title={item.title_id}>
@@ -95,16 +94,6 @@
         </div>
       {/each}
     </div>
-
-    <button
-      class="nudge right"
-      aria-label="Scroll {section.title} right"
-      data-testid="shelf-page-right"
-      onclick={() => nudge(1)}
-      hidden={atEnd}
-    >
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9.5 5.5 6.5 6.5-6.5 6.5" /></svg>
-    </button>
   </div>
 
   {#if coldNote}
@@ -114,13 +103,34 @@
   {/if}
 </section>
 
+<Sheet open={seeAll} onClose={() => (seeAll = false)} label={section.title} width={880}>
+  {#snippet header(close)}
+    <div class="sheet-bar">
+      <h2>{section.title}</h2>
+      <button class="btn-plain" onclick={close}>Done</button>
+    </div>
+  {/snippet}
+  <div class="all" data-testid="shelf-all">
+    {#each section.items as item (item.title_id)}
+      <PosterCard title={toPosterTitle(item)} onSelect={() => onSelect?.(item.title_id)} />
+    {/each}
+  </div>
+</Sheet>
+
 <style>
   .shelf {
     display: flex;
     flex-direction: column;
     gap: 12px;
   }
+  .head {
+    display: flex;
+    align-items: flex-start;
+    gap: 16px;
+  }
   header {
+    flex: 1;
+    min-width: 0;
     display: flex;
     flex-direction: column;
     gap: 2px;
@@ -146,6 +156,7 @@
     scroll-padding-inline: var(--gutter);
     overflow-x: auto;
     overflow-y: hidden;
+    overscroll-behavior-x: contain;
     /* No smooth scrolling: a scripted Chrome does not animate it, so a chevron could not be tested. */
     scroll-snap-type: x proximity;
   }
@@ -157,41 +168,92 @@
     min-width: 0;
   }
 
-  .nudge {
-    position: absolute;
-    top: 57px;
-    z-index: 2;
-    width: 40px;
-    height: 40px;
+  /* Centred on the title's line, so the controls never push the header taller. */
+  .paging {
+    flex: none;
+    height: 25px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  .paging .btn-plain {
+    padding: 0 4px;
+    font-size: var(--fs-subhead);
+  }
+  .step {
+    width: 32px;
+    height: 32px;
+    padding: 0;
     border: none;
     border-radius: var(--r-pill);
-    background: var(--surface-3);
-    box-shadow: var(--shadow-menu);
+    background: var(--surface-2);
     color: var(--text);
     display: grid;
     place-items: center;
-    opacity: 0;
-    transition: opacity 0.12s var(--ease);
   }
-  .nudge[hidden] {
-    display: none;
+  .step:hover:not(:disabled) {
+    background: var(--surface-3);
   }
-  .nudge.left {
-    left: 4px;
+  .step:disabled {
+    color: rgba(245, 240, 232, 0.35);
+    cursor: default;
   }
-  .nudge.right {
-    right: 4px;
-  }
-  .rowwrap:hover .nudge,
-  .nudge:focus-visible {
-    opacity: 1;
-  }
-
-  /* Touch: native momentum scroll instead of chevrons. */
+  /* Fingers swipe the row. */
   @media (pointer: coarse) {
-    .nudge {
+    .step {
       display: none;
     }
+  }
+  /* A pointer sees a fade on whichever side has more posters. */
+  @media (pointer: fine) {
+    .rowwrap::before,
+    .rowwrap::after {
+      content: '';
+      position: absolute;
+      top: 0;
+      bottom: 0;
+      z-index: 1;
+      width: 64px;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.12s var(--ease);
+    }
+    .rowwrap::before {
+      left: 0;
+      background: linear-gradient(to right, var(--bg), transparent);
+    }
+    .rowwrap::after {
+      right: 0;
+      background: linear-gradient(to left, var(--bg), transparent);
+    }
+    .fade-start::before,
+    .fade-end::after {
+      opacity: 1;
+    }
+  }
+
+  .sheet-bar {
+    min-height: 44px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .sheet-bar h2 {
+    margin: 0;
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    font-size: var(--fs-body);
+    line-height: 22px;
+    font-weight: 600;
+  }
+  .all {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 20px 12px;
+    padding-top: 8px;
   }
 
   @media (min-width: 721px) {
@@ -204,8 +266,9 @@
       padding: 0;
       scroll-padding-inline: 0;
     }
-    .nudge {
-      top: 91px;
+    .all {
+      grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
+      gap: 24px 16px;
     }
   }
 </style>

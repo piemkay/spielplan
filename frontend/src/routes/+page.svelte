@@ -28,6 +28,7 @@
   } from '$lib/home.svelte.js';
   import { publishSuppressed } from '$lib/rail.svelte.js';
   import { displayNames } from '$lib/titleCard.js';
+  import { topbar } from '$lib/topbar.svelte.js';
   import FinishPrompt from '$lib/components/FinishPrompt.svelte';
   import PendingVerdicts from '$lib/components/PendingVerdicts.svelte';
   import PosterCard, { isColdPlaced } from '$lib/components/PosterCard.svelte';
@@ -105,19 +106,21 @@
   const bundleNote = $derived(
     session.hasBundle ? '' : session.restartRequired ? 'waiting for a restart' : 'no movie data yet'
   );
-  // With no movie data a count of nothing says nothing: the note stands alone.
-  const countLine = $derived((bundleNote || count).replace(/^./, (c) => c.toUpperCase()));
+  // The count is the search field's placeholder (decision 528). With no movie data a count of
+  // nothing says nothing: the note stands alone, under the field.
+  const placeholder = $derived(count && !bundleNote ? `Search ${count}` : 'Search');
+  const note = $derived(bundleNote.replace(/^./, (c) => c.toUpperCase()));
 
-  // The device clock: the household's phones share the install's TZ.
-  const greeting = $derived(`${band()}${session.user ? `, ${session.user.name}` : ''}`);
-
-  function band() {
-    const h = new Date().getHours();
-    if (h < 5) return 'Up late';
-    if (h < 12) return 'Good morning';
-    if (h < 18) return 'Good afternoon';
-    return 'Good evening';
-  }
+  // The kind switch is the shell's top row; on a wide screen the search joins it (decision 528).
+  let width = $state(0);
+  const wide = $derived(width >= 1100);
+  $effect(() => {
+    if (!topbar.host) return;
+    topbar.content = homeBar;
+    return () => {
+      if (topbar.content === homeBar) topbar.content = null;
+    };
+  });
 
   // Overlapping filter requests: a sequence number keeps a slow earlier answer from landing last.
   let requestSeq = 0;
@@ -314,24 +317,7 @@
   </button>
 {/snippet}
 
-<h1 class="large-title" data-testid="home-greeting">{greeting}</h1>
-
-<!-- Its answer moves the banner's population, so it re-reads the shelves (decision 212). -->
-<FinishPrompt onAnswered={loadShelves} />
-<PendingVerdicts banner={home?.banner} />
-
-<div class="controls">
-  <!-- On the shelves the switch partitions (§4.1 rule 5); on the grid it is only a filter. -->
-  <div class="segmented kinds" role="group" aria-label="Kind">
-    {#each KIND_CHOICES as choice (choice.id)}
-      <button
-        data-testid="kind-{choice.id}"
-        aria-pressed={kindChoice(kinds) === choice.id}
-        onclick={() => chooseKinds(choice.id)}
-      >{choice.label}</button>
-    {/each}
-  </div>
-
+{#snippet searchRow()}
   <div class="searchrow">
     <label class="search">
       {@render icon('search')}
@@ -340,7 +326,7 @@
         data-testid="home-search"
         bind:value={q}
         oninput={onQuery}
-        placeholder="Films and series"
+        {placeholder}
         aria-label="Search titles"
       />
     </label>
@@ -352,8 +338,32 @@
       onclick={() => (filtersOpen = !filtersOpen)}
     >{@render icon('filter')}{nFilters ? `Filters · ${nFilters}` : 'Filters'}</button>
   </div>
+{/snippet}
 
-  <p class="footnote count" data-testid="count-line">{countLine}</p>
+{#snippet homeBar()}
+  <div class="bar">
+    <!-- On the shelves the switch partitions (§4.1 rule 5); on the grid it is only a filter. -->
+    <div class="segmented kinds" role="group" aria-label="Kind">
+      {#each KIND_CHOICES as choice (choice.id)}
+        <button
+          data-testid="kind-{choice.id}"
+          aria-pressed={kindChoice(kinds) === choice.id}
+          onclick={() => chooseKinds(choice.id)}
+        >{choice.label}</button>
+      {/each}
+    </div>
+    {#if wide}{@render searchRow()}{/if}
+  </div>
+{/snippet}
+
+<svelte:window bind:innerWidth={width} />
+
+<h1 class="sr-only" data-testid="home-title">Home</h1>
+{#if !topbar.host}{@render homeBar()}{/if}
+
+<div class="controls">
+  {#if !wide}{@render searchRow()}{/if}
+  {#if note}<p class="footnote count" data-testid="count-line">{note}</p>{/if}
 </div>
 
 {#if filtersOpen}
@@ -417,6 +427,10 @@
 {#if kindNote}
   <p class="footnote kindnote" role="status" data-testid="kind-filter-note">{kindNote}</p>
 {/if}
+
+<!-- Its answer moves the banner's population, so it re-reads the shelves (decision 212). -->
+<FinishPrompt onAnswered={loadShelves} />
+<PendingVerdicts banner={home?.banner} />
 
 {#if home?.degraded && home.degraded.state !== 'no_bundle'}
   <!-- `no_bundle` is rendered further down, by the panel the first-boot spec asserts. -->
@@ -565,14 +579,34 @@
 {/if}
 
 <style>
-  .large-title {
-    margin-bottom: 12px;
+  .bar {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+  .kinds {
+    flex: none;
+    width: 208px;
+    min-height: 32px;
+  }
+  .kinds > button {
+    font-size: var(--fs-footnote);
+    line-height: 18px;
+  }
+  /* The compact switch keeps a 48px tap; so does the row that holds it. */
+  @media (pointer: coarse) {
+    .bar {
+      min-height: 48px;
+    }
+    .kinds > button::after {
+      inset: -12px -2px;
+    }
   }
   .controls {
     display: flex;
     flex-direction: column;
     gap: 12px;
-    margin-bottom: 32px;
+    margin: 8px 0 16px;
   }
   .searchrow {
     display: flex;
@@ -605,11 +639,10 @@
   }
   .count {
     margin: -4px 4px 0;
-    font-variant-numeric: tabular-nums;
   }
 
   .filterpanel {
-    margin: -20px 0 16px;
+    margin-bottom: 16px;
   }
   .field {
     position: relative;
@@ -640,10 +673,10 @@
     display: flex;
     gap: 8px;
     flex-wrap: wrap;
-    margin: -20px 0 24px;
+    margin-bottom: 16px;
   }
   .kindnote {
-    margin: -16px 4px 24px;
+    margin: 0 4px 16px;
   }
   .notice {
     display: flex;
@@ -720,24 +753,11 @@
   }
 
   @media (min-width: 721px) {
-    .large-title {
-      font-size: var(--fs-display);
-      line-height: 48px;
-      margin: 8px 0 24px;
-    }
-    .controls {
-      flex-direction: row;
-      align-items: center;
-      flex-wrap: wrap;
-    }
     .kinds {
-      width: 280px;
+      width: 240px;
     }
     .searchrow {
-      flex: 0 1 460px;
-    }
-    .count {
-      margin: 0 0 0 auto;
+      width: min(100%, 460px);
     }
     .filterpanel {
       max-width: 460px;
