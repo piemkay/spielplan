@@ -10,7 +10,7 @@ import pytest
 from spielplan.art.poster import ArtService, url_epoch
 from spielplan.connectors import registry
 from spielplan.connectors.jellyfin import JellyfinClient
-from spielplan.db import pool
+from spielplan.db import library, pool
 from tests.helpers import admin_client
 
 JPEG = b"\xff\xd8\xff\xe0" + b"\x00" * 200
@@ -174,6 +174,57 @@ async def test_no_pooled_connection_is_held_while_the_host_is_asked(app, db, tmp
     finally:
         release.set()
     assert (await pending).status_code == 200
+
+
+async def test_a_persons_photo_is_served_at_w185_and_never_answers_for_a_title_of_the_same_id(
+    app, db, tmp_path
+):
+    admin = await admin_client(app)
+    host = Host()
+    await _host(admin, tmp_path, host)
+    await _title(db, 5, poster_path=W500)
+    await db.execute("INSERT INTO person (id, name, profile_path) VALUES (5, 'Val Kilmer', $1)",
+                     "https://image.tmdb.org/t/p/w500/val.jpg")
+    assert (await app().get("/api/art/person/5")).status_code == 401
+    served = await admin.get("/api/art/person/5")
+    assert served.status_code == 200 and served.content == JPEG
+    assert served.headers["cache-control"] == "private, max-age=15552000"
+    assert served.headers["x-content-type-options"] == "nosniff"
+    assert (await admin.get(poster_url(5))).status_code == 200
+    assert host.asked == ["https://image.tmdb.org/t/p/w185/val.jpg", W342]
+
+
+async def test_a_person_with_no_servable_photo_is_a_cacheable_404_and_no_host_is_asked(
+    app, db, tmp_path
+):
+    admin = await admin_client(app)
+    host = Host()
+    await _host(admin, tmp_path, host)
+    await db.executemany("INSERT INTO person (id, name, profile_path) VALUES ($1, $2, $3)", [
+        (6, "Jon Voight", None), (7, "Tom Sizemore", "https://m.media-amazon.com/images/M/ts.jpg"),
+    ])
+    for person_id in (6, 7, 999999):
+        answer = await admin.get(f"/api/art/person/{person_id}")
+        assert answer.status_code == 404
+        assert answer.headers["cache-control"] == "private, max-age=86400"
+    assert host.asked == []
+
+
+async def test_a_credit_says_whether_the_person_route_has_a_photo_to_serve(db):
+    await _title(db, 1)
+    await db.executemany("INSERT INTO person (id, name, profile_path) VALUES ($1, $2, $3)", [
+        (5, "Val Kilmer", "https://image.tmdb.org/t/p/w185/val.jpg"), (6, "Jon Voight", None),
+        (7, "Tom Sizemore", "https://m.media-amazon.com/images/M/ts.jpg"),
+    ])
+    await db.executemany(
+        "INSERT INTO credit (title_id, person_id, department, job, character, billing_order, source,"
+        " role_class) VALUES (1, $1, 'Acting', 'Actor', $2, $3, 'tmdb', 'cast')",
+        [(5, "Chris Shiherlis", 3), (6, "Nate", 4), (7, "Michael Cheritto", 5)],
+    )
+    credits = await library.credits_for(db, 1)
+    assert [(c["name"], c["photo"]) for c in credits] == [
+        ("Val Kilmer", True), ("Jon Voight", False), ("Tom Sizemore", False),
+    ]
 
 
 @pytest.mark.parametrize("title_id", ["x", "1.5"])

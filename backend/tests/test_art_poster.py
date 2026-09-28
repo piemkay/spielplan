@@ -56,8 +56,8 @@ class Pool:
 
 
 def _row(**overrides) -> sources.PosterRow:
-    base = dict(title_id=7, jellyfin_id=None, poster_path=W500, lookup_outcome=None,
-                lookup_url=None, lookup_owed=False)
+    base = dict(jellyfin_id=None, poster_path=W500, lookup_outcome=None, lookup_url=None,
+                lookup_owed=False)
     return sources.PosterRow(**{**base, **overrides})
 
 

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { MISSING_FOR_MS, noteMissing, posterSrc, preloadPoster, titleIdOf } from './art.js';
+import { MISSING_FOR_MS, noteMissing, personSrc, posterSrc, preloadPoster, titleIdOf } from './art.js';
 import { preloadArt } from './rate.svelte.js';
 import { session } from './session.svelte.js';
 
@@ -49,6 +49,27 @@ describe('posterSrc', () => {
   it('never names a third-party host', () => {
     const src = posterSrc({ id: 1, poster_path: 'https://image.tmdb.org/t/p/w500/a.jpg' });
     expect(src.startsWith('/api/')).toBe(true);
+  });
+});
+
+describe('personSrc', () => {
+  it('asks this origin for a photo only when the credit says there is one', () => {
+    expect(personSrc({ person_id: 31, name: 'Al Pacino', photo: true })).toBe('/api/art/person/31');
+    expect(personSrc({ person_id: 31, name: 'Al Pacino', photo: false })).toBeNull();
+    expect(personSrc({ person_id: 31, name: 'Al Pacino' })).toBeNull();
+    expect(personSrc({ person_id: null, photo: true })).toBeNull();
+  });
+
+  it("versions an app-minted person's URL as it does a title's, and remembers a 404", () => {
+    session.artEpoch = 'a1b2c3';
+    expect(personSrc({ person_id: 1000000007, photo: true })).toBe(
+      '/api/art/person/1000000007?v=a1b2c3'
+    );
+    noteMissing('/api/art/person/4043');
+    expect(personSrc({ person_id: 4043, photo: true })).toBeNull();
+    expect(posterSrc({ id: 4043 }), 'a person and a title never share an answer').toBe(
+      '/api/art/4043/poster'
+    );
   });
 });
 

@@ -31,14 +31,21 @@ export function titleIdOf(title) {
   return Number.isInteger(id) && id > 0 ? id : null;
 }
 
+function artSrc(path, id) {
+  const epoch = id >= APP_ID_MIN ? session.artEpoch : null;
+  const src = epoch ? `${path}?v=${encodeURIComponent(epoch)}` : path;
+  return knownMissing(src) ? null : src;
+}
+
 export function posterSrc(title) {
   const id = titleIdOf(title);
-  if (id === null) return null;
-  const epoch = id >= APP_ID_MIN ? session.artEpoch : null;
-  const src = epoch
-    ? `/api/art/${id}/poster?v=${encodeURIComponent(epoch)}`
-    : `/api/art/${id}/poster`;
-  return knownMissing(src) ? null : src;
+  return id === null ? null : artSrc(`/api/art/${id}/poster`, id);
+}
+
+/** A credit's headshot, only where the payload says there is one to serve (decision 528). */
+export function personSrc(credit) {
+  const id = Number(credit?.person_id);
+  return credit?.photo && Number.isInteger(id) && id > 0 ? artSrc(`/api/art/person/${id}`, id) : null;
 }
 
 /** Warm the HTTP cache during Rate's reveal hold, so the next card's art is ready. */

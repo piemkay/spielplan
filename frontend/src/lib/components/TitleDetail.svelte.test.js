@@ -803,6 +803,33 @@ describe('credits', () => {
   });
 });
 
+describe('faces (decision 528)', () => {
+  it("print an actor's character and a crew member's job under a photo or their initials", async () => {
+    const credits = [
+      { person_id: 1, name: 'Michael Mann', job: 'Director', role_class: 'director', photo: true },
+      {
+        person_id: 2, name: 'Al Pacino', job: 'Actor', role_class: 'cast',
+        character: 'Vincent Hanna', photo: true
+      },
+      { person_id: 3, name: 'Jon Voight', job: 'Actor', role_class: 'cast', character: 'Nate' }
+    ];
+    const app = await open({}, { credits });
+    try {
+      const people = [...target.querySelectorAll('.strip .person')];
+      expect(people.map((p) => p.querySelector('.job').textContent.trim())).toEqual([
+        'Director',
+        'Vincent Hanna',
+        'Nate'
+      ]);
+      expect(people[1].querySelector('img').getAttribute('src')).toBe('/api/art/person/2');
+      expect(people[2].querySelector('img')).toBeNull();
+      expect(people[2].querySelector('.face').textContent.trim()).toBe('JV');
+    } finally {
+      unmount(app);
+    }
+  });
+});
+
 describe("the card's own answer (decision 487)", () => {
   it('writes through the Rate session and says what it saved and what we guessed', async () => {
     vi.mocked(post).mockResolvedValue({

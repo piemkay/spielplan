@@ -10,6 +10,7 @@ from typing import Any, Literal
 
 import asyncpg
 
+from spielplan.art.hosts import servable
 from spielplan.db import dna_terms
 from spielplan.db import genres as genre_vocab
 from spielplan.derive import ids as derive_ids
@@ -403,7 +404,7 @@ async def carry_original_names(
 
 
 _CREDIT_ROWS = """
-    SELECT c.person_id, p.name, p.imdb_id, p.tmdb_id, c.source, c.department, c.job,
+    SELECT c.person_id, p.name, p.imdb_id, p.tmdb_id, p.profile_path, c.source, c.department, c.job,
            c.character, c.billing_order, c.role_class
       FROM credit c JOIN person p ON p.id = c.person_id
      WHERE c.title_id = $1
@@ -469,6 +470,8 @@ def _credit_row(rows, keys, people, rank) -> dict[str, Any]:
         "person_id": lead["person_id"],
         "person_ids": sorted({pid for pid, _ in keys}),
         "name": lead["name"],
+        # What `/api/art/person/{person_id}` can serve (decision 528).
+        "photo": servable(lead["profile_path"]),
         "role_class": cls,
         "job": min(
             rows, key=lambda row: (place(row), row["billing_order"] is None,
