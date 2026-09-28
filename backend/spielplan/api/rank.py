@@ -9,10 +9,10 @@ import hashlib
 import hmac
 import logging
 import random
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 import asyncpg
-from fastapi import APIRouter, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from itsdangerous import BadSignature, URLSafeSerializer
 from pydantic import BaseModel, Field
 
@@ -25,6 +25,7 @@ from spielplan.ledger import observations, refit
 from spielplan.ledger.hyperparams import Hyperparams
 from spielplan.rank import drop as drop_rules
 from spielplan.rank import evaluation, queue, read, tiers
+from spielplan.rank import place as place_rules
 
 log = logging.getLogger("spielplan.api.rank")
 
@@ -34,6 +35,8 @@ Kind = Literal["movie", "series"]
 
 # Its own salt, so a sealed pair is never a session cookie; rotating SESSION_SECRET voids both (§2).
 _PAIR_SALT = "spielplan/rank/pair/v1"
+# Place with questions has its own too, so neither token passes for the other.
+_PLACE_SALT = "spielplan/rank/place/v1"
 
 # The namespace half of a two-int advisory lock, so a user id cannot collide with other features' locks.
 _ANSWER_LOCK = 6303
@@ -50,8 +53,8 @@ _QUEUE_SETTLED = (
 )
 
 
-def _sealer() -> URLSafeSerializer:
-    return URLSafeSerializer(settings().session_secret, _PAIR_SALT)
+def _sealer(salt: str = _PAIR_SALT) -> URLSafeSerializer:
+    return URLSafeSerializer(settings().session_secret, salt)
 
 
 def _seal(user_id: int, kind: str, pair: queue.Pair, answered: int) -> str:
@@ -67,9 +70,9 @@ def _seal(user_id: int, kind: str, pair: queue.Pair, answered: int) -> str:
     )
 
 
-def _unseal(token: str, *, user_id: int) -> dict[str, Any]:
+def _unseal(token: str, *, user_id: int, salt: str = _PAIR_SALT) -> dict[str, Any]:
     try:
-        payload = _sealer().loads(token)
+        payload = _sealer(salt).loads(token)
     except BadSignature as exc:
         raise HTTPException(
             status.HTTP_409_CONFLICT,
@@ -79,6 +82,21 @@ def _unseal(token: str, *, user_id: int) -> dict[str, Any]:
         # The seal proves the server drew it; the id proves who for.
         raise HTTPException(status.HTTP_403_FORBIDDEN, "that pair belongs to another account")
     return payload
+
+
+async def _claim(
+    conn: asyncpg.Connection, *, user_id: int, kind: str, sealed: dict[str, Any], context: str
+) -> None:
+    """Inside the answer's transaction: the answer count is the token, so a double tap, a replay and
+    a second tab are one question."""
+    await conn.execute("SELECT pg_advisory_xact_lock($1, $2)", _ANSWER_LOCK, user_id)
+    if await read.answered_comparisons(
+        conn, user_id=user_id, kind=kind, context=context
+    ) != sealed.get("n"):
+        raise HTTPException(
+            status.HTTP_409_CONFLICT,
+            detail={"reason": "stale_pair", "message": "that pair has already been answered"},
+        )
 
 
 def _queue_rng(user_id: int, kind: str, answered: int) -> random.Random:
@@ -93,13 +111,15 @@ def _queue_rng(user_id: int, kind: str, answered: int) -> random.Random:
 
 
 def _filters(
-    q: str | None,
-    genre: str | None,
-    decade: int | None,
-    runtime_max: int | None,
-    runtime_min: int | None,
-    seen: str,
-    dna: str | None,
+    q: str | None = None,
+    genre: str | None = None,
+    decade: int | None = None,
+    runtime_max: int | None = Query(None, ge=1),
+    runtime_min: int | None = Query(None, ge=1),
+    seen: Literal["any", "seen", "unseen"] = "any",
+    dna: str | None = Query(
+        None, description="§6.3: a term by its id, bare or facet-qualified, or by its label."
+    ),
 ) -> library.RankFilters:
     # Decision 473: an unknown genre lands in the board's no-match state rather than a 422.
     if genre:
@@ -109,6 +129,11 @@ def _filters(
         q=q, genre=genre, decade=decade, runtime_max=runtime_max,
         runtime_min=runtime_min, seen=seen, dna=dna,
     )
+
+
+Filters = Annotated[library.RankFilters, Depends(_filters)]
+# Decision 528: each tier's first N entries; the counts stay whole.
+PerTier = Annotated[int | None, Query(ge=1)]
 
 
 class DropBody(BaseModel):
@@ -132,6 +157,21 @@ class TierSetBody(BaseModel):
     tier_set: list[str]
 
 
+class PlaceBody(BaseModel):
+    title_id: int
+    kind: Kind
+
+
+class PlaceAnswerBody(BaseModel):
+    token: str
+    outcome: Literal["A", "B", "TIE"]
+    decisive: bool = False
+
+
+class PlaceSkipBody(BaseModel):
+    token: str
+
+
 async def _payload(
     conn: asyncpg.Connection,
     *,
@@ -141,6 +181,7 @@ async def _payload(
     filters: library.RankFilters,
     log_line: str | None = None,
     ledger: dict[str, Any] | None = None,
+    per_tier: int | None = None,
 ) -> dict[str, Any]:
     """§6.3's board, in the one shape every route here returns."""
     show_model = rail.visible_to(user)
@@ -162,8 +203,10 @@ async def _payload(
     payload: dict[str, Any] = {
         "kind": kind,
         "tier_set": list(cuts.tier_set),
-        "tiers": read.public(tiers_out),
+        "tiers": read.public(tiers_out, per_tier),
         "rated": len(rows),
+        # What Sharpen will ask about: the queue's eligible set, which is the straddle badge (§6.3).
+        "straddling": len(queue.eligible(unfiltered, cuts=cuts.boundaries, hp=hp)),
         "rated_total": len(unfiltered),
         "fitting": fitting,
         "filters": filters.active(),
@@ -196,43 +239,53 @@ async def board(
     conn: DB,
     user: ActiveUser,
     request: Request,
+    filters: Filters,
     kind: Kind = Query(..., description="§4.1 rule 5: one board at a time, never a merge."),
-    q: str | None = None,
-    genre: str | None = None,
-    decade: int | None = None,
-    runtime_max: int | None = Query(None, ge=1),
-    runtime_min: int | None = Query(None, ge=1),
-    seen: Literal["any", "seen", "unseen"] = "any",
-    dna: str | None = Query(
-        None, description="§6.3: a term by its id, bare or facet-qualified, or by its label."
-    ),
+    per_tier: PerTier = None,
 ) -> dict[str, Any]:
     return await _payload(
-        conn,
-        user=user,
-        kind=kind,
-        hp=deps.hyperparams(request),
-        filters=_filters(q, genre, decade, runtime_max, runtime_min, seen, dna),
+        conn, user=user, kind=kind, hp=deps.hyperparams(request), filters=filters, per_tier=per_tier
     )
+
+
+@router.get("/tier")
+async def tier_page(
+    conn: DB,
+    user: ActiveUser,
+    request: Request,
+    filters: Filters,
+    kind: Kind = Query(...),
+    index: int = Query(..., ge=0),
+    offset: int = Query(0, ge=0),
+    limit: int = Query(60, ge=1, le=200),
+) -> dict[str, Any]:
+    """One tier's entries a page at a time, cut from the same board `board` builds (decision 528)."""
+    tiers_out, _cuts, _rows = await read.load(
+        conn, user_id=user.id, kind=kind, hp=deps.hyperparams(request), filters=filters
+    )
+    tier = next((t for t in tiers_out if t.index == index), None)
+    if tier is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, f"there is no tier {index} on this board")
+    payload = {
+        "kind": kind,
+        "index": index,
+        "count": len(tier.entries),
+        "offset": offset,
+        "entries": [entry.public() for entry in tier.entries[offset : offset + limit]],
+    }
+    return rail.redact(payload, show_model=rail.visible_to(user))
 
 
 @router.post("/drop")
 async def drop(
-    body: DropBody, conn: DB, user: ActiveUser, request: Request,
+    body: DropBody, conn: DB, user: ActiveUser, request: Request, filters: Filters,
     kind: Kind = Query(...),
-    q: str | None = None,
-    genre: str | None = None,
-    decade: int | None = None,
-    runtime_max: int | None = Query(None, ge=1),
-    runtime_min: int | None = Query(None, ge=1),
-    seen: Literal["any", "seen", "unseen"] = "any",
-    dna: str | None = None,
+    per_tier: PerTier = None,
 ) -> dict[str, Any]:
-    """Takes and answers with the board's filters, or a drop would silently clear them."""
+    """Takes and answers with the board's filters and paging, or a drop would silently clear them.
+    Whether a filter was on is an input to the drop (decision 204)."""
     await deps.assert_active_basis(request, conn)
     hp = deps.hyperparams(request)
-    # Built before the write: whether a filter was on is an input to the drop (decision 204).
-    filters = _filters(q, genre, decade, runtime_max, runtime_min, seen, dna)
     names = await read.names_for(conn, [body.title_id])
     try:
         result = await drop_rules.drop(
@@ -259,7 +312,7 @@ async def drop(
     )
     return await _payload(
         conn, user=user, kind=result.kind, hp=hp, filters=filters,
-        log_line=result.log, ledger=ledger,
+        log_line=result.log, ledger=ledger, per_tier=per_tier,
     )
 
 
@@ -318,13 +371,7 @@ async def answer(
     sealed = _unseal(body.pair, user_id=user.id)
     kind = str(sealed["k"])
     async with write_txn(conn):
-        await conn.execute("SELECT pg_advisory_xact_lock($1, $2)", _ANSWER_LOCK, user.id)
-        if await read.answered_comparisons(conn, user_id=user.id, kind=kind) != sealed.get("n"):
-            # The answer count is the token: double tap, replay and second tab are one question.
-            raise HTTPException(
-                status.HTTP_409_CONFLICT,
-                detail={"reason": "stale_pair", "message": "that pair has already been answered"},
-            )
+        await _claim(conn, user_id=user.id, kind=kind, sealed=sealed, context="tier_queue")
         write = await observations.record_duel(
             conn,
             user_id=user.id,
@@ -364,6 +411,135 @@ async def answer(
     payload["log"] = [line]
     payload["ledger"] = ledger
     return rail.redact(payload, show_model=rail.visible_to(user))
+
+
+def _search(sealed: dict[str, Any]) -> place_rules.Search:
+    return place_rules.Search(
+        title_id=int(sealed["t"]),
+        tier=int(sealed["i"]),
+        low=int(sealed["lo"]),
+        high=int(sealed["hi"]),
+        asked=int(sealed["q"]),
+        skipped=tuple(int(t) for t in sealed["x"]),
+    )
+
+
+async def _placing(
+    conn: asyncpg.Connection, *, user_id: int, kind: str, view: place_rules.View
+) -> dict[str, Any]:
+    """The next pair under a fresh seal, or where the search put the title."""
+    s, probe = view.search, view.probe
+    if probe is None:
+        above, below, around = view.spot()
+        cards = await read.cards_for(conn, around)
+        return {
+            "done": True,
+            "kind": kind,
+            "title_id": s.title_id,
+            "tier": view.label,
+            "above": cards.get(above),
+            "below": cards.get(below),
+            "asked": s.asked,
+            "around": [cards[t] for t in around if t in cards],
+        }
+    neighbour = view.others[probe]
+    cards = await read.cards_for(conn, [s.title_id, neighbour])
+    token = _sealer(_PLACE_SALT).dumps(
+        {
+            "u": user_id,
+            "k": kind,
+            "t": s.title_id,
+            "i": s.tier,
+            "lo": s.low,
+            "hi": s.high,
+            "q": s.asked,
+            "x": list(s.skipped),
+            "b": neighbour,
+            "m": probe,
+            "n": await read.answered_comparisons(
+                conn, user_id=user_id, kind=kind, context=place_rules.CONTEXT
+            ),
+        }
+    )
+    return {
+        "kind": kind,
+        "token": token,
+        "tier": view.label,
+        "left": {**cards[s.title_id], "outcome": "A"},
+        "right": {**cards[neighbour], "outcome": "B"},
+        "progress": view.progress(),
+    }
+
+
+async def _resumed(
+    conn: asyncpg.Connection, request: Request, *, user_id: int, kind: str,
+    search: place_rules.Search,
+) -> dict[str, Any]:
+    try:
+        view = await place_rules.resume(
+            conn, user_id=user_id, kind=kind, hp=deps.hyperparams(request), search=search
+        )
+    except place_rules.PlaceRefused as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    return await _placing(conn, user_id=user_id, kind=kind, view=view)
+
+
+@router.post("/place")
+async def place(body: PlaceBody, conn: DB, user: ActiveUser, request: Request) -> dict[str, Any]:
+    """§6.3's Place with questions: the first pair, or the end when the tier holds no other title."""
+    try:
+        view = await place_rules.begin(
+            conn, user_id=user.id, kind=body.kind, hp=deps.hyperparams(request),
+            title_id=body.title_id,
+        )
+    except place_rules.PlaceRefused as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+    return await _placing(conn, user_id=user.id, kind=body.kind, view=view)
+
+
+@router.post("/place/answer")
+async def place_answer(
+    body: PlaceAnswerBody, conn: DB, user: ActiveUser, request: Request
+) -> dict[str, Any]:
+    """Single-use as the queue's seal is; the refit runs after the lock, reported as in `drop`."""
+    await deps.assert_active_basis(request, conn)
+    hp = deps.hyperparams(request)
+    sealed = _unseal(body.token, user_id=user.id, salt=_PLACE_SALT)
+    kind = str(sealed["k"])
+    async with write_txn(conn):
+        await _claim(conn, user_id=user.id, kind=kind, sealed=sealed, context=place_rules.CONTEXT)
+        search, write = await place_rules.answer(
+            conn, user_id=user.id, search=_search(sealed), neighbour=int(sealed["b"]),
+            index=int(sealed["m"]), outcome=body.outcome, decisive=body.decisive, hp=hp,
+        )
+    await refit.update_incrementally_reporting(
+        conn, user_id=user.id, kind=kind, title_ids=list(write.title_ids), hp=hp,
+        embeddings=deps.embeddings(request, conn), bundle_version=deps.basis(request),
+    )
+    names = await read.names_for(conn, list(write.title_ids))
+    a, b = write.title_ids
+    rail.record(
+        user_id=user.id,
+        kind="duel",
+        line=rail.duel_line(
+            names.get(a, str(a)), names.get(b, str(b)), body.outcome,
+            context=place_rules.CONTEXT, selection="random",
+        ),
+    )
+    return await _resumed(conn, request, user_id=user.id, kind=kind, search=search)
+
+
+@router.post("/place/skip")
+async def place_skip(
+    body: PlaceSkipBody, conn: DB, user: ActiveUser, request: Request
+) -> dict[str, Any]:
+    """The neighbour on the table is not seen: no duel, so no claim, and a replay marks it again."""
+    sealed = _unseal(body.token, user_id=user.id, salt=_PLACE_SALT)
+    kind = str(sealed["k"])
+    search = await place_rules.skip(
+        conn, user_id=user.id, search=_search(sealed), neighbour=int(sealed["b"])
+    )
+    return await _resumed(conn, request, user_id=user.id, kind=kind, search=search)
 
 
 @router.get("/tiers")

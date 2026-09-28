@@ -192,11 +192,11 @@ async def recent_titles(
 
 
 async def answered_comparisons(
-    conn: asyncpg.Connection, *, user_id: int, kind: str
+    conn: asyncpg.Connection, *, user_id: int, kind: str, context: str = "tier_queue"
 ) -> int:
-    """How many comparison-queue answers this person has given for this kind.
+    """How many answers this person has given for this kind in one duel context.
 
-    Sealed with each pair, so a replayed seal names a count that has moved on. `tier_queue` only:
+    Sealed with each pair, so a replayed seal names a count that has moved on. One context only:
     a drop mid-queue must not invalidate the pair on screen.
     """
     return int(
@@ -204,10 +204,11 @@ async def answered_comparisons(
             """
             SELECT count(*) FROM duel d
             JOIN title t ON t.id = d.title_a AND t.kind = $2
-            WHERE d.user_id = $1 AND d.context = 'tier_queue'
+            WHERE d.user_id = $1 AND d.context = $3
             """,
             user_id,
             kind,
+            context,
         )
         or 0
     )
@@ -275,13 +276,25 @@ async def names_for(
     return {int(r["id"]): str(r["name"]) for r in rows}
 
 
-def public(tiers: Sequence[board.Tier]) -> list[dict[str, Any]]:
+async def cards_for(
+    conn: asyncpg.Connection, title_ids: Sequence[int]
+) -> dict[int, dict[str, Any]]:
+    """What a pair shows of each title: the poster's id, the name and the meta line's facts."""
+    rows = await conn.fetch(
+        "SELECT id, kind, name, year, runtime_min FROM title WHERE id = ANY($1::int[])",
+        [int(t) for t in title_ids],
+    )
+    return {int(r["id"]): dict(r) for r in rows}
+
+
+def public(tiers: Sequence[board.Tier], per_tier: int | None = None) -> list[dict[str, Any]]:
     return [
         {
             "index": tier.index,
             "label": tier.label,
             "verdict": tier.verdict,
-            "entries": [entry.public() for entry in tier.entries],
+            "count": len(tier.entries),
+            "entries": [entry.public() for entry in tier.entries[:per_tier]],
         }
         for tier in tiers
     ]
@@ -292,6 +305,7 @@ __all__ = [
     "answered_comparisons",
     "asked_pairs",
     "candidates",
+    "cards_for",
     "comparison_counts",
     "cutpoints_of",
     "items",

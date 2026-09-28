@@ -39,8 +39,14 @@ export const rank = $state({
   tierSet: [],
   /** @type {any[]} one entry per tier, best-first, empty tiers kept (proposal 82) */
   tiers: [],
+  /** Decision 528: how many of each tier's entries the board asks for; null is all of them. */
+  perTier: null,
+  /** @type {number[]} the tiers opened in place, which come whole */
+  expanded: [],
   rated: 0,
   ratedTotal: 0,
+  /** What Sharpen would ask about: the titles that sit between two tiers. */
+  straddling: 0,
   /** Decision 209: the server says a full fit is owed, so the two counts above are not yet final. */
   fitting: false,
   /** @type {Record<string, any>} what the person has switched on */
@@ -76,6 +82,7 @@ export const draft = $state({
 function query() {
   return {
     kind: rank.kind,
+    per_tier: rank.perTier ?? undefined,
     q: draft.q || undefined,
     genre: draft.genre || undefined,
     decade: draft.decade || undefined,
@@ -91,6 +98,7 @@ export function apply(payload) {
   rank.tiers = payload.tiers ?? [];
   rank.rated = payload.rated ?? 0;
   rank.ratedTotal = payload.rated_total ?? 0;
+  rank.straddling = payload.straddling ?? 0;
   rank.fitting = payload.fitting ?? false;
   rank.filters = payload.filters ?? {};
   rank.dnaTiers = payload.dna_tiers ?? null;
@@ -128,12 +136,31 @@ export async function loadFacets(kind = rank.kind) {
   }
 }
 
+// An opened tier comes whole: the board sends its first `per_tier`, the tier route the rest.
+async function withOpened(payload) {
+  const tiers = await Promise.all(
+    (payload.tiers ?? []).map(async (tier) => {
+      if (!rank.expanded.includes(tier.index)) return tier;
+      const entries = [...tier.entries];
+      while (entries.length < tier.count) {
+        const page = await get(
+          `/rank/tier${qs({ ...query(), per_tier: undefined, index: tier.index, offset: entries.length, limit: 200 })}`
+        );
+        if (!page.entries?.length) break;
+        entries.push(...page.entries);
+      }
+      return { ...tier, entries };
+    })
+  );
+  return { ...payload, tiers };
+}
+
 export async function load(kind = rank.kind) {
   const mine = ++requestSeq;
   rank.kind = kind;
   rank.error = '';
   try {
-    const payload = await get(`/rank${qs(query())}`);
+    const payload = await withOpened(await get(`/rank${qs(query())}`));
     if (mine !== requestSeq) return;      // a newer request has already answered
     apply(payload);
   } catch (err) {
@@ -156,6 +183,7 @@ export function typed() {
 export async function chooseKind(kind) {
   draft.genre = '';
   draft.decade = '';
+  rank.expanded = [];
   await loadFacets(kind);
   await load(kind);
 }
@@ -163,6 +191,7 @@ export async function chooseKind(kind) {
 // One person's board, card and round must not carry into the next person's session.
 export function reset() {
   rank.opened = null;
+  rank.expanded = [];
   rank.pair = null;
   rank.queueOpen = false;
   rank.roundAnswered = 0;
@@ -184,7 +213,7 @@ export async function drop({ title_id, tier, above = null, below = null }) {
   rank.error = '';
   rank.notice = '';
   try {
-    apply(await post(`/rank/drop${qs(query())}`, { title_id, tier, above, below }));
+    apply(await withOpened(await post(`/rank/drop${qs(query())}`, { title_id, tier, above, below })));
     return true;
   } catch (err) {
     fail(err);
@@ -194,11 +223,31 @@ export async function drop({ title_id, tier, above = null, below = null }) {
   }
 }
 
-/** Move's action sheet (decision 527): the tier it names, naming no neighbour. */
-export async function moveTo(entry, tier) {
-  if (tier === entry.tier) return;        // the checked row: it is there already
+/** A drag or the tier sheet (decision 528): the drop, then a toast whose Undo takes the tier back. */
+export async function move(entry, tier, above = null, below = null) {
+  const from = rank.tiers.find((t) => t.index === entry.tier)?.entries ?? [];
+  const at = from.findIndex((e) => e.title_id === entry.title_id);
+  const held = [from[at - 1]?.title_id ?? null, at < 0 ? null : (from[at + 1]?.title_id ?? null)];
+  // Its own tier, and no spot or the one it holds: nothing moved.
+  if (tier === entry.tier && ((!above && !below) || (above === held[0] && below === held[1]))) {
+    return false;
+  }
+  if (!(await drop({ title_id: entry.title_id, tier, above, below }))) return false;
   const label = rank.tiers.find((t) => t.index === tier)?.label ?? '';
-  if (await drop({ title_id: entry.title_id, tier })) showToast(`${entry.name} — moved to ${label}`);
+  // Undo names no neighbours: comparisons the person never made are never written.
+  const undo = tier === entry.tier ? null : { label: 'Undo', run: () => drop({ title_id: entry.title_id, tier: entry.tier }) };
+  showToast(`${entry.name} moved to ${label}`, undo);
+  return true;
+}
+
+/** "+N" opens a tier in place; the read fetches the rest of it. */
+export function showAll(index) {
+  if (!rank.expanded.includes(index)) rank.expanded = [...rank.expanded, index];
+  return load(rank.kind);
+}
+
+export function showLess(index) {
+  rank.expanded = rank.expanded.filter((i) => i !== index);
 }
 
 export function openTitle(entry) {
@@ -209,21 +258,25 @@ export function closeTitle() {
   rank.opened = null;
 }
 
-// A drop on a title lands above it and names both neighbours; a drop into the tier names none,
-// since a named neighbour writes a duel nobody answered (§4.2 keeps it). A stale position names
-// nobody either.
-export function neighboursIn(tierIndex, title, beforeTitleId = null) {
-  const tier = rank.tiers.find((t) => t.index === tierIndex);
-  const entries = (tier?.entries ?? []).filter((e) => e.title_id !== title.title_id);
-  const at =
-    beforeTitleId === null || beforeTitleId === title.title_id
-      ? -1
-      : entries.findIndex((e) => e.title_id === beforeTitleId);
-  if (at < 0) return { above: null, below: null };
-  return {
-    above: at > 0 ? entries[at - 1].title_id : null,
-    below: entries[at].title_id
-  };
+/** The entries a drop at `at` lands between, counted without the title itself; no `at` is the tier
+ *  alone, which names nobody, since a named neighbour writes a duel nobody answered (§4.2). */
+export function neighboursAt(tierIndex, title, at = null) {
+  if (at === null) return { above: null, below: null };
+  const entries = (rank.tiers.find((t) => t.index === tierIndex)?.entries ?? []).filter(
+    (e) => e.title_id !== title.title_id
+  );
+  return { above: entries[at - 1] ?? null, below: entries[at] ?? null };
+}
+
+/** The drag's label and the live region's sentence for a spot (decision 528). */
+export function spot(label, { above, below }) {
+  if (above && below) {
+    const between = `between ${above.name} and ${below.name}`;
+    return { chip: `${label} · ${between}`, said: `In ${label}, ${between}.` };
+  }
+  const edge = below ? 'top' : above ? 'bottom' : null;
+  if (!edge) return { chip: label, said: `In ${label}.` };
+  return { chip: `${edge} of ${label}`, said: `At the ${edge} of ${label}.` };
 }
 
 // Every chip opens the queue, so a second call while it is open is not a new round.
@@ -302,12 +355,16 @@ export async function answer(outcome, decisive = false) {
   }
 }
 
-/** The count under the title: "70 films · best first", or "12 of 70 films" while filtered. */
-export function countLine() {
-  if (!rank.booted || rank.ratedTotal === 0) return '';
+/** The kind's own word for `n` titles: "film", "films", "series". */
+export function nounFor(n) {
   const [one, many] = NOUNS[rank.kind] ?? NOUNS.movie;
-  const shown = rank.rated === rank.ratedTotal ? rank.rated : `${rank.rated} of ${rank.ratedTotal}`;
-  return `${shown} ${rank.ratedTotal === 1 ? one : many} · best first`;
+  return n === 1 ? one : many;
+}
+
+/** The search field carries the count (decision 528): "Search 612 rated films". */
+export function searchHint() {
+  if (!rank.booted || rank.ratedTotal === 0) return 'Search your ranking';
+  return `Search ${rank.ratedTotal} rated ${nounFor(rank.ratedTotal)}`;
 }
 
 /** What the Filters control holds, as removable chips; the title search keeps its own box. */
@@ -378,11 +435,4 @@ export function clearFilters() {
   draft.seen = 'any';
   draft.dna = '';
   return load(rank.kind);
-}
-
-// Tension takes precedence over the straddle badge (proposal 71).
-export function chipFor(entry) {
-  if (entry.tension) return { kind: 'tension', text: entry.tension };
-  if (entry.straddle_badge) return { kind: 'straddle', text: entry.straddle_badge };
-  return null;
 }

@@ -864,6 +864,47 @@ async def test_the_drop_route_answers_with_the_board_under_the_filters_it_was_gi
     assert await db.fetchval(edits, user_id) == before_edits + 2
 
 
+async def test_the_board_pages_each_tier_and_the_tier_route_serves_the_rest(db, ranked):
+    """Decision 528: `per_tier` cuts a tier's entries, never its count, and a drop pages as asked."""
+    client, _user_id = ranked
+    whole = (await client.get("/api/rank?kind=movie")).json()
+    paged = (await client.get("/api/rank?kind=movie&per_tier=1")).json()
+    for full, cut in zip(whole["tiers"], paged["tiers"], strict=True):
+        assert cut["count"] == full["count"] == len(full["entries"])
+        assert cut["entries"] == full["entries"][:1]
+
+    fullest = max(whole["tiers"], key=lambda t: t["count"])
+    assert fullest["count"] >= 2, "the fixture needs a tier of two to page"
+    rest = await client.get(
+        "/api/rank/tier", params={"kind": "movie", "index": fullest["index"], "offset": 1, "limit": 1}
+    )
+    assert rest.status_code == 200, rest.text
+    assert rest.json()["count"] == fullest["count"]
+    assert rest.json()["entries"] == fullest["entries"][1:2]
+    assert (await client.get("/api/rank/tier?kind=movie&index=99")).status_code == 404
+    assert (await client.get("/api/rank/tier?kind=movie&index=0&limit=201")).status_code == 422
+
+    outside = next(e for t in whole["tiers"] if t["index"] != fullest["index"] for e in t["entries"])
+    dropped = await client.post(
+        "/api/rank/drop?kind=movie&per_tier=1",
+        json={"title_id": outside["title_id"], "tier": fullest["index"]},
+    )
+    assert dropped.status_code == 200, dropped.text
+    into = next(t for t in dropped.json()["tiers"] if t["index"] == fullest["index"])
+    assert (into["count"], len(into["entries"])) == (fullest["count"] + 1, 1)
+
+
+async def test_needs_a_look_counts_what_sharpen_will_ask_about_whatever_the_filter(db, ranked):
+    """§6.3's one predicate: the count is the straddle badges, over the queue's unfiltered pool."""
+    client, _user_id = ranked
+    whole = (await client.get("/api/rank?kind=movie")).json()
+    badged = sum(e["straddle"] is not None for t in whole["tiers"] for e in t["entries"])
+    assert whole["straddling"] == badged
+    filtered = (await client.get("/api/rank?kind=movie&runtime_max=120&per_tier=1")).json()
+    assert filtered["rated"] < filtered["rated_total"]
+    assert filtered["straddling"] == badged
+
+
 async def test_the_drop_route_refuses_a_tier_outside_the_set_and_writes_nothing(db, ranked):
     client, user_id = ranked
     before = await db.fetchval("SELECT count(*) FROM tier_edit WHERE user_id = $1", user_id)
@@ -925,6 +966,7 @@ async def test_the_whole_rank_surface_is_behind_a_session(db, app):
         ("get", "/api/rank?kind=movie", None),
         ("get", "/api/rank/queue?kind=movie", None),
         ("get", "/api/rank/tiers", None),
+        ("get", "/api/rank/tier?kind=movie&index=0", None),
         ("post", "/api/rank/drop?kind=movie", {"title_id": 1, "tier": 0}),
         ("post", "/api/rank/queue/answer", {"pair": "x", "outcome": "A"}),
         ("put", "/api/rank/tiers", {"tier_set": ["a", "b"]}),
