@@ -355,9 +355,11 @@ export async function refresh({ seat = null } = {}) {
   }
 }
 
-// Step out to the door keeping the seat (it lives on the server). The room's state goes too, or
-// the next frame's `refresh` would drag the device back in.
+// Step out to the door keeping the seat (it lives on the server). The room's state goes too, and
+// every read in flight is dropped, or a late answer would drag the device back in.
 export function leave() {
+  refreshSeq += 1;
+  roundSeq += 1;
   tonight.lobby = null;
   tonight.round = null;
   tonight.ballot = null;
@@ -471,8 +473,10 @@ export async function escape() {
 
 export async function loadBallot() {
   try {
-    tonight.ballot = await get(`/tonight/sessions/${tonight.lobby.session_id}/ballot`);
-    tonight.step = tonight.ballot.revealed ? 'reveal' : 'ballot';
+    const ballot = await get(`/tonight/sessions/${tonight.lobby.session_id}/ballot`);
+    if (!tonight.lobby) return;
+    tonight.ballot = ballot;
+    tonight.step = ballot.revealed ? 'reveal' : 'ballot';
     if (tonight.ballot.revealed) await loadResult();
   } catch (err) {
     fail(err);
@@ -532,7 +536,9 @@ export async function endRoom() {
 
 export async function loadResult() {
   try {
-    tonight.result = await get(`/tonight/sessions/${tonight.lobby.session_id}/result`);
+    const result = await get(`/tonight/sessions/${tonight.lobby.session_id}/result`);
+    if (!tonight.lobby) return;
+    tonight.result = result;
     tonight.step = 'reveal';
     tonight.error = '';
   } catch (err) {

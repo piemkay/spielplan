@@ -800,6 +800,24 @@ describe('overlapping reads land in order (finding 21)', () => {
     expect(tonight.lobby.state).toBe('ballot');
   });
 
+  it('does not pull a device back into the room it has just left', async () => {
+    // A read in flight when the person taps Leave used to land after it and restore the room.
+    tonight.lobby = roomOf({ state: 'ballot' });
+    tonight.step = 'ballot';
+    const release = heldSessionRead(
+      () => reply(roomOf({ state: 'ballot' })),
+      () => reply(roomOf({ state: 'ballot' }))
+    );
+
+    const late = refresh();
+    leave();
+    release();
+    await late;
+
+    expect(tonight.step, 'a late read put the device back into the room').toBe('door');
+    expect(tonight.lobby).toBeNull();
+  });
+
   it('still leaves a room the host ended when the read that overtook it failed', async () => {
     // The check sits after the abandoned branch: the end of the evening is never stale.
     tonight.lobby = roomOf();
