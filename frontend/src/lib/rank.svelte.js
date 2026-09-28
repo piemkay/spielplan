@@ -2,6 +2,7 @@
 // queue's pair is a sealed token this module never opens (§13).
 
 import { ApiError, get, post, qs } from '$lib/api.js';
+import { haptic } from '$lib/motion.js';
 import { runtimeLabel } from '$lib/rate.svelte.js';
 import { showToast } from '$lib/toast.svelte.js';
 
@@ -32,6 +33,10 @@ export const rank = $state({
   loading: true,
   booted: false,
   busy: false,
+  /** Board reads in flight: the board on screen is stale while this is above 0. */
+  reading: 0,
+  /** @type {string | null} the queue answer in flight, in the pair card's words */
+  pending: null,
   error: '',
   notice: '',
   kind: 'movie',
@@ -159,6 +164,7 @@ export async function load(kind = rank.kind) {
   const mine = ++requestSeq;
   rank.kind = kind;
   rank.error = '';
+  rank.reading += 1;
   try {
     const payload = await withOpened(await get(`/rank${qs(query())}`));
     if (mine !== requestSeq) return;      // a newer request has already answered
@@ -167,6 +173,8 @@ export async function load(kind = rank.kind) {
     if (mine !== requestSeq) return;
     rank.loading = false;
     fail(err);
+  } finally {
+    rank.reading -= 1;
   }
 }
 
@@ -184,12 +192,16 @@ export async function chooseKind(kind) {
   draft.genre = '';
   draft.decade = '';
   rank.expanded = [];
-  await loadFacets(kind);
-  await load(kind);
+  rank.kind = kind;                       // the control flips on the tap; the board dims until it lands
+  await Promise.all([loadFacets(kind), load(kind)]);
 }
 
 // One person's board, card and round must not carry into the next person's session.
 export function reset() {
+  rank.tiers = [];
+  rank.ratedTotal = 0;
+  rank.straddling = 0;
+  rank.model = null;
   rank.opened = null;
   rank.expanded = [];
   rank.pair = null;
@@ -212,6 +224,7 @@ export async function drop({ title_id, tier, above = null, below = null }) {
   rank.busy = true;
   rank.error = '';
   rank.notice = '';
+  requestSeq += 1;                        // a read started before the drop must not paint over it
   try {
     apply(await withOpened(await post(`/rank/drop${qs(query())}`, { title_id, tier, above, below })));
     return true;
@@ -223,15 +236,18 @@ export async function drop({ title_id, tier, above = null, below = null }) {
   }
 }
 
-/** A drag or the tier sheet (decision 528): the drop, then a toast whose Undo takes the tier back. */
-export async function move(entry, tier, above = null, below = null) {
+/** Its own tier, and no spot or the one it holds: nothing moved, so nothing is written. */
+export function stays(entry, tier, above = null, below = null) {
   const from = rank.tiers.find((t) => t.index === entry.tier)?.entries ?? [];
   const at = from.findIndex((e) => e.title_id === entry.title_id);
   const held = [from[at - 1]?.title_id ?? null, at < 0 ? null : (from[at + 1]?.title_id ?? null)];
-  // Its own tier, and no spot or the one it holds: nothing moved.
-  if (tier === entry.tier && ((!above && !below) || (above === held[0] && below === held[1]))) {
-    return false;
-  }
+  return tier === entry.tier && ((!above && !below) || (above === held[0] && below === held[1]));
+}
+
+/** A drag or the tier sheet (decision 528): the drop, then a toast whose Undo takes the tier back. */
+export async function move(entry, tier, above = null, below = null) {
+  if (stays(entry, tier, above, below)) return false;
+  haptic();
   if (!(await drop({ title_id: entry.title_id, tier, above, below }))) return false;
   const label = rank.tiers.find((t) => t.index === tier)?.label ?? '';
   // Undo names no neighbours: comparisons the person never made are never written.
@@ -321,12 +337,18 @@ export async function nextPair() {
   }
 }
 
+// Only the newest answer's §6.7 line survives its board re-read.
+let answerSeq = 0;
+
 // The token carries the pair and its sealed arm; this module never names an arm (§13).
 export async function answer(outcome, decisive = false) {
   // Not the fix for a double answer (the route's lock is); this only stops a double tap here.
   if (!rank.pair || rank.busy) return;
+  const mine = ++answerSeq;
   rank.busy = true;
+  rank.pending = `duel-${outcome}`;
   rank.notice = '';
+  let line;
   try {
     const payload = await post('/rank/queue/answer', {
       pair: rank.pair.token,
@@ -339,10 +361,7 @@ export async function answer(outcome, decisive = false) {
     rank.roundAnswered += 1;
     if (rank.roundAnswered >= ROUND_SIZE) rank.roundDone = true;
     rank.placed = payload.placed ?? [];
-    const line = payload.log ?? [];
-    // Re-read the refitted board, then restore the log line that `apply()` blanks.
-    await load(rank.kind);
-    rank.log = line;
+    line = payload.log ?? [];
   } catch (err) {
     fail(err);
     if (err instanceof ApiError && err.status === 409) {
@@ -350,9 +369,15 @@ export async function answer(outcome, decisive = false) {
       rank.pair = null;
       await nextPair();
     }
+    return;
   } finally {
+    // The next pair answers while the board re-reads.
     rank.busy = false;
+    rank.pending = null;
   }
+  // Re-read the refitted board, then restore the log line that `apply()` blanks.
+  await load(rank.kind);
+  if (mine === answerSeq) rank.log = line;
 }
 
 /** The kind's own word for `n` titles: "film", "films", "series". */

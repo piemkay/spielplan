@@ -60,7 +60,7 @@
   {:else}
     <header class="top">
       <a class="btn-plain cancel" href="/rank" onclick={leave} data-testid="rank-place-cancel">Cancel</a>
-      <h1>Place {placed?.name ?? ''}</h1>
+      <h1>Place {placed?.name ?? place.name}</h1>
     </header>
     {#if card}
       <section class="narrow" aria-label="Where {placed.name} can still go">

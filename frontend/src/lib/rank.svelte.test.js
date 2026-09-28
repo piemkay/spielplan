@@ -527,6 +527,28 @@ describe('a drop', () => {
     release();
     await first;
   });
+
+  it('is not painted over by a read that started before it', async () => {
+    // A debounced search or a held drag's tier opener may still be reading the board from before.
+    let release = () => {};
+    fetchMock.mockReturnValueOnce(
+      new Promise((r) => {
+        release = () =>
+          r({
+            ok: true,
+            status: 200,
+            headers: { get: () => null },
+            text: async () => JSON.stringify(board({ rated: 1 }))
+          });
+      })
+    );
+    respond(board({ rated: 2 }));
+    const read = load('movie');
+    await drop({ title_id: 1, tier: 0 });
+    release();
+    await read;
+    expect(rank.rated).toBe(2);
+  });
 });
 
 describe('the spot a drop lands in (§6.3)', () => {
@@ -594,12 +616,16 @@ describe('overlapping requests', () => {
 });
 
 describe('reset', () => {
-  it("forgets one person's card, pair and round before the next person's", () => {
+  it("forgets one person's board, card, pair and round before the next person's", () => {
     openTitle(rank.tiers[2].entries[0]);
+    rank.straddling = 4;
     rank.pair = pairN(1);
     rank.queueOpen = true;
     rank.roundAnswered = 3;
     reset();
+    expect(rank.tiers).toEqual([]);
+    expect(rank.ratedTotal).toBe(0);
+    expect(rank.straddling).toBe(0);
     expect(rank.opened).toBeNull();
     expect(rank.pair).toBeNull();
     expect(rank.queueOpen).toBe(false);
@@ -662,6 +688,56 @@ describe('the queue answer', () => {
     release();
     await first;
   });
+
+  it('shows its pick while written, and frees the next pair before the board re-reads', async () => {
+    rank.pair = pairN(1);
+    respond({ kind: 'movie', pair: pairN(2), reason: '' });
+    let release = () => {};
+    fetchMock.mockReturnValueOnce(
+      new Promise((r) => {
+        release = () =>
+          r({
+            ok: true,
+            status: 200,
+            headers: { get: () => null },
+            text: async () => JSON.stringify(board())
+          });
+      })
+    );
+    const answering = answer('TIE');
+    expect(rank.pending).toBe('duel-TIE');
+    expect(rank.busy).toBe(true);
+    await vi.waitFor(() => expect(rank.pair.token).toBe('t2'));
+    expect(rank.busy).toBe(false);
+    expect(rank.pending).toBeNull();
+    release();
+    await answering;
+  });
+
+  it("keeps the newest answer's line when an older re-read lands last", async () => {
+    rank.pair = pairN(1);
+    respond({ kind: 'movie', pair: pairN(2), log: ['first'] });
+    let release = () => {};
+    fetchMock.mockReturnValueOnce(
+      new Promise((r) => {
+        release = () =>
+          r({
+            ok: true,
+            status: 200,
+            headers: { get: () => null },
+            text: async () => JSON.stringify(board())
+          });
+      })
+    );
+    const first = answer('A');
+    await vi.waitFor(() => expect(rank.busy).toBe(false));
+    respond({ kind: 'movie', pair: pairN(3), log: ['second'] });
+    respond(board());
+    await answer('B');
+    release();
+    await first;
+    expect(rank.log).toEqual(['second']);
+  });
 });
 
 describe('a kind switch (§4.1 rule 5)', () => {
@@ -690,6 +766,17 @@ describe('a kind switch (§4.1 rule 5)', () => {
     expect(boardUrl).toContain('q=heat');
     expect(boardUrl).not.toContain('genre=');
     expect(boardUrl).not.toContain('decade=');
+  });
+
+  it('flips on the tap and reads the board and its vocabulary at once', async () => {
+    respond({ genres: ['Drama'], decades: [2000] });
+    respond(board({ kind: 'series' }));
+    const switching = chooseKind('series');
+    expect(rank.kind).toBe('series');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(rank.reading).toBe(1);             // the board on screen is stale until this lands
+    await switching;
+    expect(rank.reading).toBe(0);
   });
 
   it('keeps the newer kind vocabulary when an earlier facets read answers last', async () => {

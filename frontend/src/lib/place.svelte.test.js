@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-import { answer, narrowing, notSeen, place, reset, resultLine, start } from './place.svelte.js';
+import { answer, narrowing, notSeen, place, reset, resultLine, seed, start } from './place.svelte.js';
 
 const heat = { id: 1, name: 'Heat', year: 1995 };
 const zodiac = { id: 2, name: 'Zodiac', year: 2007 };
@@ -76,6 +76,18 @@ describe('the flow follows the server', () => {
     await skipping;
     expect(sent(1)).toEqual({ url: '/api/rank/place/skip', body: { token: 't1' } });
     expect(place.pair.right.name).toBe('Heat');
+  });
+
+  it('names the title Rank handed over before the first pair lands, and no other', async () => {
+    seed({ title_id: 3, name: 'Sicario' });
+    respond(pair());
+    const opening = start(3, 'movie');
+    expect(place.name).toBe('Sicario');
+    await opening;
+    seed({ title_id: 9, name: 'Heat' });
+    respond(pair());
+    await start(3, 'movie');
+    expect(place.name).toBe('');
   });
 
   it('sends one answer at a time', async () => {

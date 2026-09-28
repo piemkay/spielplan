@@ -11,7 +11,9 @@ export const place = $state({
   busy: false,
   /** @type {string | null} the answer in flight, in the pair card's words */
   pending: null,
-  error: ''
+  error: '',
+  /** The title's name as the board showed it, for the header before the first pair lands. */
+  name: ''
 });
 
 export function reset() {
@@ -20,6 +22,15 @@ export function reset() {
   place.busy = false;
   place.pending = null;
   place.error = '';
+  place.name = '';
+}
+
+/** @type {{ title_id: number, name: string } | null} what Rank handed over, until `start` reads it */
+let seeded = null;
+
+/** Rank names the title it is about to place, so the flow never opens on a nameless header. */
+export function seed(title) {
+  seeded = title;
 }
 
 async function send(path, body, pending = null) {
@@ -41,6 +52,8 @@ async function send(path, body, pending = null) {
 
 export function start(titleId, kind) {
   reset();
+  if (seeded?.title_id === titleId) place.name = seeded.name;
+  seeded = null;
   return send('/rank/place', { title_id: titleId, kind });
 }
 

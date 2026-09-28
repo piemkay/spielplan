@@ -2,6 +2,8 @@
   // A tier list of posters (decision 528): a tap opens the title card, and a drag or the card's tier
   // sheet moves a title. The board is never re-sorted here: a drop waits and the response replaces it.
   import { onDestroy, onMount, tick } from 'svelte';
+  import { flip } from 'svelte/animate';
+  import { cubicOut } from 'svelte/easing';
   import ActionSheet from '$lib/components/ActionSheet.svelte';
   import RateBattleCard from '$lib/components/RateBattleCard.svelte';
   import RatePeek from '$lib/components/RatePeek.svelte';
@@ -9,6 +11,8 @@
   import Sheet from '$lib/components/Sheet.svelte';
   import TitleDetail from '$lib/components/TitleDetail.svelte';
   import { modelGate } from '$lib/home.svelte.js';
+  import { flipFrom, ms, still } from '$lib/motion.js';
+  import { seed } from '$lib/place.svelte.js';
   import { session } from '$lib/session.svelte.js';
   import { topbar } from '$lib/topbar.svelte.js';
   import {
@@ -42,6 +46,7 @@
     showAll,
     showLess,
     spot,
+    stays,
     typed
   } from '$lib/rank.svelte.js';
 
@@ -107,6 +112,17 @@
       right: { id: rank.pair.title_b, name: rank.pair.name_b, outcome: 'B' }
     }
   );
+  // The banner keeps the count it had when the round opened; closing lets the new one re-enter.
+  let held = $state(null);
+  const straddling = $derived(held ?? rank.straddling);
+  function sharpen() {
+    held = rank.straddling;
+    openQueue();
+  }
+  function endRound() {
+    held = null;
+    closeQueue();
+  }
   /** @type {any} the title whose tier sheet is open */
   let moving = $state(null);
   const moveOptions = $derived.by(() => {
@@ -200,8 +216,7 @@
   }
 
   function jump(index) {
-    const smooth = !window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches;
-    document.getElementById(`tier-${index}`)?.scrollIntoView({ block: 'start', behavior: smooth ? 'smooth' : 'auto' });
+    document.getElementById(`tier-${index}`)?.scrollIntoView({ block: 'start', behavior: still() ? 'auto' : 'smooth' });
     inView = index;
   }
 
@@ -213,27 +228,43 @@
   let drag = $state(null);
   /** @type {any} a pointer down on a poster, before it lifts */
   let press = null;
+  /** The poster a resting finger charges, from 120 ms until it lifts at 400 ms. */
+  let pressing = $state(null);
   let suppressClick = false;
   let live = $state('');
   let opener;
   let frame;
+  let scrolledAt = 0;
   let board = $state();
+  let clone = $state();
+
+  // Cells reflow at once under a live finger, so aim() never reads a moving cell; the slot never glides.
+  const glide = (cell) => ({
+    duration: cell.entry && !(drag?.x != null && !drag.settling) ? ms(200) : 0,
+    easing: cubicOut
+  });
 
   function cellsOf(tier) {
     const lifted = drag?.entry.title_id;
     let n = 0;
-    const cells = shownOf(tier).map((entry) => ({
-      key: entry.title_id,
-      entry,
-      at: entry.title_id === lifted ? n : n++
-    }));
+    const cells = shownOf(tier)
+      // Released, it rests in the slot until the board says where it sits.
+      .filter((entry) => !(drag?.settling && entry.title_id === lifted))
+      .map((entry) => ({
+        key: entry.title_id,
+        entry,
+        at: entry.title_id === lifted ? n : n++
+      }));
     const home = drag && drag.tier === drag.entry.tier && drag.at === drag.origin;
     if (drag && drag.tier === tier.index && drag.at !== null && !home) {
       const before = cells.findIndex((c) => c.entry.title_id !== lifted && c.at === drag.at);
       const i = before < 0 ? cells.length : before;
       const col = i % cols;
       const { chip } = spot(tier.label, neighboursAt(tier.index, drag.entry, drag.at));
-      cells.splice(i, 0, { key: 'slot', chip, align: col === 0 ? 'start' : col === cols - 1 ? 'end' : '' });
+      const align = col === 0 ? 'start' : col === cols - 1 ? 'end' : '';
+      // Released and not flown in by the clone, the slot shows the poster itself.
+      const resting = drag.settling && !drag.flying ? drag.entry : null;
+      cells.splice(i, 0, { key: 'slot', chip, align, settling: !!drag.settling, resting });
     }
     return { cells, others: n };
   }
@@ -247,6 +278,7 @@
     const entries = rank.tiers.find((t) => t.index === entry.tier)?.entries ?? [];
     const origin = entries.findIndex((e) => e.title_id === entry.title_id);
     drag = { entry, tier: entry.tier, at: origin, origin, x: null, y: null, ...pointer };
+    scrolledAt = 0;
     if (pointer) frame = requestAnimationFrame(autoscroll);
   }
 
@@ -262,35 +294,42 @@
       w: box.width,
       touch: event.pointerType !== 'mouse'
     };
-    if (press.touch) press.timer = setTimeout(() => begin(press.x, press.y), 400);
+    if (press.touch) {
+      press.timer = setTimeout(() => begin(press.x, press.y), 400);
+      press.charge = setTimeout(() => (pressing = entry.title_id), 120);
+    }
   }
 
   function begin(x, y) {
     const { entry, dx, dy, w } = press;
+    pressing = null;
     lift(entry, { x, y, dx, dy, w });
+  }
+
+  function unpress() {
+    clearTimeout(press?.timer);
+    clearTimeout(press?.charge);
+    press = null;
+    pressing = null;
   }
 
   function pointerMove(event) {
     if (press && !drag) {
       const far = Math.hypot(event.clientX - press.x, event.clientY - press.y);
       // A finger that moves before the long press is a scroll; a mouse must move to drag.
-      if (press.touch && far > 8) {
-        clearTimeout(press.timer);
-        press = null;
-      }
+      if (press.touch && far > 8) unpress();
       if (!press || press.touch || far <= 4) return;
       begin(event.clientX, event.clientY);
     }
-    if (drag?.x == null) return;
+    if (drag?.x == null || drag.settling) return;
     drag.x = event.clientX;
     drag.y = event.clientY;
     aim(event.clientX, event.clientY);
   }
 
   function pointerUp() {
-    clearTimeout(press?.timer);
-    press = null;
-    if (drag?.x == null) return;
+    unpress();
+    if (drag?.x == null || drag.settling) return;
     // The click that follows a drag is not a tap on the poster.
     suppressClick = true;
     setTimeout(() => (suppressClick = false));
@@ -298,9 +337,8 @@
   }
 
   function cancel() {
-    clearTimeout(press?.timer);
-    press = null;
-    stop();
+    unpress();
+    if (!drag?.settling) stop();
   }
 
   function stop() {
@@ -340,23 +378,55 @@
     drag.at = at;
   }
 
-  // The viewport's top and bottom 48 px scroll the page while a poster is held there.
-  function autoscroll() {
+  // The viewport's top and bottom 48 px scroll the page while a poster is held there: faster the
+  // deeper it goes, up to 0.75 px a millisecond, whatever the display's refresh rate.
+  function autoscroll(now) {
     if (drag?.x == null) return;
-    const edge = drag.hold ? 0 : drag.y < 48 ? -1 : drag.y > window.innerHeight - 48 ? 1 : 0;
-    if (edge) {
-      window.scrollBy(0, edge * 12);
+    const depth = drag.hold ? 0 : drag.y < 48 ? drag.y - 48 : Math.max(0, drag.y - window.innerHeight + 48);
+    const dt = Math.min(now - (scrolledAt || now), 50);
+    scrolledAt = now;
+    if (depth) {
+      const px = Math.max(1, Math.round((Math.min(Math.abs(depth), 48) / 48) * 0.75 * dt));
+      window.scrollBy(0, Math.sign(depth) * px);
       aim(drag.x, drag.y);
     }
     frame = requestAnimationFrame(autoscroll);
   }
 
+  // The write goes at release; the poster rests in the slot until the board lands (200 ms at least),
+  // then glides from there to wherever the board puts it (decision 530).
   async function finish() {
     const { entry, tier, at } = drag;
-    stop();
-    if (tier === null) return;
     const { above, below } = neighboursAt(tier, entry, at);
-    await move(entry, tier, above?.title_id ?? null, below?.title_id ?? null);
+    const ids = [above?.title_id ?? null, below?.title_id ?? null];
+    if (tier === null || stays(entry, tier, ...ids)) return stop();
+    clearTimeout(opener);
+    cancelAnimationFrame(frame);
+    drag.settling = true;
+    drag.flying = drag.x != null && !still();
+    const moved = move(entry, tier, ...ids);
+    await tick();
+    const slot = board?.querySelector('.slot')?.getBoundingClientRect();
+    if (slot && drag.flying) land(slot);
+    else drag.flying = false;
+    const [ok] = await Promise.all([moved, new Promise((done) => setTimeout(done, ms(200)))]);
+    const from = (clone ?? board?.querySelector('.slot'))?.getBoundingClientRect();
+    stop();
+    await tick();
+    if (ok) flipFrom(board?.querySelector(`[data-title="${entry.title_id}"]`)?.parentElement, from, 240);
+  }
+
+  /** The clone sets down from under the finger into the slot. */
+  function land(slot) {
+    const to = `translate(${slot.left - (drag.x - drag.dx)}px, ${slot.top - (drag.y - drag.dy)}px) rotate(0deg)`;
+    clone?.animate?.(
+      [
+        { transform: 'translate(0px, 0px) rotate(2deg) scale(1.06)' },
+        { transform: `${to} scale(0.985)`, offset: 0.75 },
+        { transform: `${to} scale(1)`, boxShadow: 'none' }
+      ],
+      { duration: 200, easing: 'cubic-bezier(0.2, 0.8, 0.2, 1)', fill: 'forwards' }
+    );
   }
 
   // Space lifts and drops, the arrows move through the grid and past a tier's edge, Esc cancels.
@@ -519,7 +589,12 @@
         {@render icon('chevron')}
       </button>
       {#if questions > 0}
-        <a class="list-row" href="/rank/place/{card.title_id}?kind={rank.kind}" data-testid="rank-card-place">
+        <a
+          class="list-row"
+          href="/rank/place/{card.title_id}?kind={rank.kind}"
+          onclick={() => seed(card)}
+          data-testid="rank-card-place"
+        >
           <span class="grow">Place with questions</span>
           <span class="footnote">{questions} quick {questions === 1 ? 'question' : 'questions'}</span>
           {@render icon('chevron')}
@@ -572,18 +647,21 @@
     <p class="look hint">Drop between posters to place it · on a letter to move it there</p>
   {:else if rank.ratedTotal >= 2}
     <section class="look" aria-label="Needs a look">
-      {#if rank.straddling}<span class="dot" aria-hidden="true"></span>{/if}
+      {#if straddling}<span class="dot" aria-hidden="true"></span>{/if}
       <p>
-        {rank.straddling
-          ? `${rank.straddling} ${rank.straddling === 1 ? 'title sits' : 'titles sit'} between two tiers`
-          : 'Sharpen your list'}
+        {#if straddling}
+          {#key straddling}<span class="n">{straddling}</span>{/key}
+          {straddling === 1 ? 'title sits' : 'titles sit'} between two tiers
+        {:else}
+          Sharpen your list
+        {/if}
       </p>
       <button
         class="go {wide ? 'btn-tinted' : 'btn-plain'}"
-        onclick={openQueue}
+        onclick={sharpen}
         disabled={rank.busy}
         data-testid="rank-sharpen"
-        >{rank.straddling ? 'Sharpen' : 'Start'}{#if wide}{` — ${ROUND_SIZE} quick questions`}{/if}</button
+        >{straddling ? 'Sharpen' : 'Start'}{#if wide}{` — ${ROUND_SIZE} quick questions`}{/if}</button
       >
     </section>
   {/if}
@@ -595,7 +673,15 @@
     <p class="footnote" role="status">{rank.notice}</p>
   {/if}
   {#if rank.loading}
-    <p class="footnote" data-testid="rank-loading">Loading your list…</p>
+    <div class="waiting" style:--poster="{SIZES[size]}px" data-testid="rank-loading">
+      <p class="sr-only" role="status">Loading your list…</p>
+      {#if !wide}<span class="skeleton band"></span>{/if}
+      <span class="skeleton band"></span>
+      {#each [0, 1] as t (t)}
+        <span class="skeleton mark"></span>
+        <div class="grid">{#each { length: 8 }}<span class="skeleton"></span>{/each}</div>
+      {/each}
+    </div>
   {/if}
 
   {#if empty}
@@ -612,13 +698,20 @@
   <p class="sr-only" aria-live="polite">{live}</p>
 
   <!-- Empty tiers stay on screen as drop targets. -->
-  <div class="board" style:--poster="{SIZES[size]}px" data-testid="rank-board" bind:this={board}>
-    {#each rank.tiers as tier (tier.index)}
+  <div
+    class="board"
+    class:stale={rank.reading > 0}
+    style:--poster="{SIZES[size]}px"
+    data-testid="rank-board"
+    bind:this={board}
+  >
+    {#each rank.tiers as tier, i (tier.index)}
       {@const count = countOf(tier)}
       {@const { cells, others } = cellsOf(tier)}
       {@const more = count - shownOf(tier).length}
       <section
-        class="tier"
+        class="tier enter"
+        style:--i={i}
         id="tier-{tier.index}"
         aria-labelledby="tier-name-{tier.index}"
         data-tier={tier.label}
@@ -642,11 +735,18 @@
         {#if tier.entries.length}
           <ol class="grid" bind:clientWidth={gridWidth}>
             {#each cells as cell (cell.key)}
-              {#if cell.entry}
-                {@const lifted = drag?.entry.title_id === cell.entry.title_id}
-                <li class:ghost={lifted}>
+              {@const lifted = !!cell.entry && drag?.entry.title_id === cell.entry.title_id}
+              <li
+                class:ghost={lifted}
+                class:slot={!cell.entry}
+                class:settling={cell.settling}
+                aria-hidden={cell.entry ? undefined : 'true'}
+                animate:flip={glide(cell)}
+              >
+                {#if cell.entry}
                   <button
                     class="tile"
+                    class:pressing={pressing === cell.entry.title_id}
                     data-title={cell.entry.title_id}
                     data-at={cell.at}
                     data-fixed={lifted ? '' : undefined}
@@ -656,16 +756,18 @@
                     onpointerdown={(e) => down(cell.entry, e)}
                     onkeydown={(e) => key(cell.entry, e)}
                     onkeyup={(e) => e.key === ' ' && e.preventDefault()}
-                    onblur={() => drag?.x === null && stop()}
+                    onblur={() => drag?.x === null && !drag.settling && stop()}
                     oncontextmenu={(e) => e.preventDefault()}
                   >
                     <RatePoster title={{ id: cell.entry.title_id, name: cell.entry.name }} showName="missing" lazy />
                     {#if cell.entry.straddle != null}<span class="dot" aria-hidden="true"></span>{/if}
                   </button>
-                </li>
-              {:else}
-                <li class="slot" aria-hidden="true"><span class="where {cell.align}">{cell.chip}</span></li>
-              {/if}
+                {:else if cell.resting}
+                  <RatePoster title={{ id: cell.resting.title_id, name: cell.resting.name }} showName="missing" />
+                {:else if !cell.settling}
+                  <span class="where {cell.align}">{cell.chip}</span>
+                {/if}
+              </li>
             {/each}
             {#if more > 0}
               <li>
@@ -705,9 +807,10 @@
   {/if}
 </section>
 
-{#if drag?.x != null}
+{#if drag?.x != null && (!drag.settling || drag.flying)}
   <div
     class="lifted"
+    bind:this={clone}
     aria-hidden="true"
     style:left="{drag.x - drag.dx}px"
     style:top="{drag.y - drag.dy}px"
@@ -781,7 +884,7 @@
   {/snippet}
 </Sheet>
 
-<Sheet open={rank.queueOpen} onClose={closeQueue} label="Sharpen your list" width={480}>
+<Sheet open={rank.queueOpen} onClose={endRound} label="Sharpen your list" width={480}>
   {#snippet children(close)}
     <div class="bar">
       <span class="footnote data" data-testid="rank-round">{roundLine()}</span>
@@ -807,6 +910,7 @@
         <RateBattleCard
           card={queueCard}
           busy={rank.busy}
+          pending={rank.pending}
           much={false}
           onDuel={(outcome) => answer(outcome)}
           onPeek={(side) => (queuePeek = queueCard[side])}
@@ -1033,6 +1137,13 @@
     overflow: hidden;
     text-overflow: ellipsis;
   }
+  /* A changed count re-enters, as when a Sharpen round closes. */
+  .look .n {
+    display: inline-block;
+    --enter-y: 6px;
+    --enter-s: 1;
+    animation: enter 200ms var(--ease);
+  }
   .look.hint {
     font-size: var(--fs-footnote);
     line-height: 18px;
@@ -1072,10 +1183,35 @@
     margin: 0;
   }
 
+  /* The board's shape while its first read is slow: bars, two tier letters, two rows of posters. */
+  .waiting {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .waiting .band {
+    height: 44px;
+    border-radius: var(--r-md);
+  }
+  .waiting .mark {
+    width: 28px;
+    height: 28px;
+    border-radius: 8px;
+  }
+  .waiting .grid > span {
+    aspect-ratio: 2 / 3;
+  }
+
   .board {
     display: flex;
     flex-direction: column;
     gap: 16px;
+    transition: opacity var(--dur-quick) var(--ease);
+  }
+  /* A read in flight dims the board it will replace, once it has taken 150 ms. */
+  .board.stale {
+    opacity: 0.6;
+    transition-delay: 150ms;
   }
   .tier {
     display: flex;
@@ -1115,6 +1251,15 @@
     line-height: 22px;
     color: var(--text);
   }
+  /* The target lights at once and fades after the drop. */
+  .head,
+  .letter {
+    transition: background 480ms var(--ease), color 480ms var(--ease);
+  }
+  .head.lit,
+  .head.lit .letter {
+    transition-duration: var(--dur-quick);
+  }
   .head.lit .letter {
     background: var(--accent-tint);
     color: var(--accent-text);
@@ -1151,6 +1296,12 @@
     user-select: none;
     transition: transform 0.15s var(--ease);
   }
+  /* A held finger charges the poster until it lifts at 400 ms. */
+  .tile.pressing {
+    transform: scale(0.96);
+    filter: brightness(0.92);
+    transition: transform 280ms linear, filter 280ms linear;
+  }
   @media (hover: hover) and (pointer: fine) {
     .tile {
       cursor: grab;
@@ -1180,6 +1331,15 @@
     border-radius: var(--r-poster);
     background: var(--accent-tint);
     animation: fadeIn 0.2s var(--ease);
+    transition: border-color 160ms var(--ease), background 160ms var(--ease);
+  }
+  /* Released: the label and bar go at once, and the border fades under the landing poster. */
+  .slot.settling {
+    border-color: transparent;
+    background: transparent;
+  }
+  .slot.settling::before {
+    content: none;
   }
   /* The insertion bar, with a dot at each end, in the gap before the slot. */
   .slot::before {
@@ -1267,11 +1427,19 @@
     box-shadow: var(--shadow-menu);
     transform: rotate(2deg) scale(1.06);
     pointer-events: none;
+    animation: lift 160ms var(--ease-spring) both;
+  }
+  @keyframes lift {
+    from {
+      transform: none;
+      box-shadow: none;
+    }
   }
   @media (prefers-reduced-motion: reduce) {
     .lifted,
     .strip button.lit,
-    .tile:hover {
+    .tile:hover,
+    .tile.pressing {
       transform: none;
     }
   }
