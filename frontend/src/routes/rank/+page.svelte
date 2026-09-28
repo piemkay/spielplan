@@ -3,6 +3,8 @@
   // sheet moves a title. The board is never re-sorted here: a drop waits and the response replaces it.
   import { onDestroy, onMount, tick } from 'svelte';
   import ActionSheet from '$lib/components/ActionSheet.svelte';
+  import RateBattleCard from '$lib/components/RateBattleCard.svelte';
+  import RatePeek from '$lib/components/RatePeek.svelte';
   import RatePoster from '$lib/components/RatePoster.svelte';
   import Sheet from '$lib/components/Sheet.svelte';
   import TitleDetail from '$lib/components/TitleDetail.svelte';
@@ -95,6 +97,16 @@
 
   /** @type {any} the title whose card is open, kept past a move to a page not loaded */
   let card = $state(null);
+  // The comparison round answers as Rate's pairs do; a poster only shows the film (decision 528).
+  let queuePeek = $state(null);
+  const queueCard = $derived(
+    rank.pair && {
+      token: rank.pair.token,
+      reason: rank.pair.reason,
+      left: { id: rank.pair.title_a, name: rank.pair.name_a, outcome: 'A' },
+      right: { id: rank.pair.title_b, name: rank.pair.name_b, outcome: 'B' }
+    }
+  );
   /** @type {any} the title whose tier sheet is open */
   let moving = $state(null);
   const moveOptions = $derived.by(() => {
@@ -787,40 +799,18 @@
           </div>
         </div>
       {:else if rank.pair}
-        <p class="why reason" data-testid="rank-pair-reason">{rank.pair.reason}</p>
         {#if showModel && rank.pair.model}
           <p class="data arm" data-testid="rank-pair-arm">
             {rank.pair.model.arm} · {rank.pair.model.reason}
           </p>
         {/if}
-        <div class="pair">
-          <button
-            class="side"
-            onclick={() => answer('A')}
-            disabled={rank.busy}
-            aria-label={`Pick ${rank.pair.name_a}`}
-            data-testid="rank-pair-a"
-          >
-            <RatePoster title={{ id: rank.pair.title_a, name: rank.pair.name_a }} showName={false} />
-            <span class="side-name">{rank.pair.name_a}</span>
-          </button>
-          <button
-            class="side"
-            onclick={() => answer('B')}
-            disabled={rank.busy}
-            aria-label={`Pick ${rank.pair.name_b}`}
-            data-testid="rank-pair-b"
-          >
-            <RatePoster title={{ id: rank.pair.title_b, name: rank.pair.name_b }} showName={false} />
-            <span class="side-name">{rank.pair.name_b}</span>
-          </button>
-        </div>
-        <button
-          class="btn-secondary tie"
-          onclick={() => answer('TIE')}
-          disabled={rank.busy}
-          data-testid="rank-pair-tie">About the same</button
-        >
+        <RateBattleCard
+          card={queueCard}
+          busy={rank.busy}
+          much={false}
+          onDuel={(outcome) => answer(outcome)}
+          onPeek={(side) => (queuePeek = queueCard[side])}
+        />
       {:else}
         <p class="why" data-testid="rank-queue-empty">{rank.queueReason}</p>
       {/if}
@@ -841,6 +831,10 @@
     </div>
   {/snippet}
 </Sheet>
+
+{#if queuePeek}
+  <RatePeek title={queuePeek} onClose={() => (queuePeek = null)} />
+{/if}
 
 {#if rank.opened !== null}
   <!-- A credit tap closes the card (Rank has no list to filter); a seen change re-reads the board. -->
@@ -1431,33 +1425,8 @@
   .queue p {
     margin: 0;
   }
-  .reason,
   .arm {
     text-align: center;
-  }
-  .pair {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 12px;
-  }
-  .side {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    padding: 0;
-    border: none;
-    background: none;
-    color: inherit;
-    text-align: center;
-  }
-  .side-name {
-    font-size: var(--fs-body);
-    line-height: 22px;
-    font-weight: 600;
-  }
-  .tie {
-    width: 100%;
-    min-height: 50px;
   }
   .round-end {
     display: flex;

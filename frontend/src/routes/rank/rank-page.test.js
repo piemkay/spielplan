@@ -423,9 +423,10 @@ describe('the comparison sheet (decisions 483, 495)', () => {
     const posters = [...$('rank-queue').querySelectorAll('[data-testid="rate-poster"]')];
     expect(posters.map((p) => p.getAttribute('data-title-id'))).toEqual(['1', '2']);
     expect($('rank-round').textContent).toBe('1 of 15 this round');
-    expect($('rank-pair-tie').textContent).toBe('About the same');
+    expect($('rate-duel-TIE').getAttribute('aria-label')).toBe('About the same');
+    expect($('rate-duel-A-much')).toBeNull();
 
-    $('rank-pair-a').click();
+    $('rate-duel-A').click();
     await settle();
     expect($('rank-round').textContent).toBe('2 of 15 this round');
     expect($('rank-placed-1').textContent).toContain('Heat');
@@ -443,11 +444,11 @@ describe('the comparison sheet (decisions 483, 495)', () => {
     await settle();
 
     expect($('rank-round-end').textContent).toContain("That's 15.");
-    expect($('rank-pair-a')).toBeNull();
+    expect($('rate-duel-A')).toBeNull();
     $('rank-round-more').click();
     flushSync();
     expect($('rank-round-end')).toBeNull();
-    expect($('rank-pair-a')).toBeTruthy();
+    expect($('rate-duel-A')).toBeTruthy();
     expect($('rank-round').textContent).toBe('1 of 15 this round');
   });
 

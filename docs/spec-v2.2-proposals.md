@@ -15180,6 +15180,8 @@ once, as a grid, with no Move, since a title can be dragged, or opened and chang
    long-press go. Keys, ignored while typing or while a sheet is open: on a pair ←/→ More, Shift+←/→
    Much more, ↓ Same, Q/P Not seen left and right; on a single 1/2/3 Disliked, Fine and Liked and N
    Not seen; S Skip and Z Undo on both.
+   Rank's comparison round ("Sharpen") answers on the same row without the two Much more steps,
+   since decision 201 gives the queue no decisive control; its posters only show the film too.
 7. **Rank is a tier list of posters.** Every tier is on screen, headed by its letter, verdict word
    and count, its posters in a grid: four columns on a phone; on a desktop a band beside a letter
    cell, at a poster size the device remembers. A tier shows two rows until opened: its last cell,

@@ -9,7 +9,7 @@
   import RatePoster from '$lib/components/RatePoster.svelte';
   import Sheet from '$lib/components/Sheet.svelte';
 
-  let { title, busy = false, onNotSeen, onClose } = $props();
+  let { title, busy = false, onNotSeen = null, onClose } = $props();
 
   let open = $state(true);
   let data = $state(null);

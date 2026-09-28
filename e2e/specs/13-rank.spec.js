@@ -370,13 +370,15 @@ test.describe('rank', () => {
     await page.getByTestId('rank-sharpen').click();
     await expect(page.getByTestId('rank-queue')).toBeVisible();
 
-    const pairA = page.getByTestId('rank-pair-a');
+    const pairA = page.getByTestId('rate-duel-A');
     await expect(pairA).toBeVisible();
     const answeredToken = (
       await (await page.request.get('/api/rank/queue?kind=movie')).json()
     ).pair.token;
-    await expect(page.getByTestId('rank-pair-reason')).not.toBeEmpty();
-    await expect(page.getByTestId('rank-pair-tie')).toHaveText('About the same');
+    await expect(page.getByTestId('rate-battle-reason')).not.toBeEmpty();
+    // More, Same, More: the round has no decisive answer (decision 201), and a poster never answers.
+    await expect(page.getByTestId('rate-duel-TIE')).toHaveAccessibleName('About the same');
+    await expect(page.getByTestId('rate-duel-A-much')).toHaveCount(0);
 
     const answered = page.waitForResponse(
       (res) => res.url().includes('/api/rank/queue/answer') && res.request().method() === 'POST'
@@ -415,12 +417,12 @@ test.describe('rank', () => {
 
     await openRank(page);
     await page.getByTestId('rank-sharpen').click();
-    await expect(page.getByTestId('rank-pair-a')).toBeVisible();
+    await expect(page.getByTestId('rate-duel-A')).toBeVisible();
 
     const request = page.waitForRequest(
       (req) => req.url().includes('/api/rank/queue/answer') && req.method() === 'POST'
     );
-    await page.getByTestId('rank-pair-a').click();
+    await page.getByTestId('rate-duel-A').click();
     const body = JSON.parse((await request).postData() ?? '{}');
 
     expect(Object.keys(body).sort()).toEqual(['decisive', 'outcome', 'pair']);
@@ -459,9 +461,9 @@ test.describe('rank', () => {
       await expect(sheet.locator(`[data-testid="rate-poster"][data-title-id="${id}"]`))
         .toHaveCount(1);
     }
-    await expect(page.getByTestId('rank-pair-reason')).not.toContainText('one more comparison');
+    await expect(page.getByTestId('rate-battle-reason')).not.toContainText('one more comparison');
 
-    await page.getByTestId('rank-pair-a').click();
+    await page.getByTestId('rate-duel-A').click();
     await expect(page.getByTestId('rank-round')).toHaveText('2 of 15 this round');
     await expect(page.getByTestId(`rank-placed-${served.title_a}`)).toBeVisible();
     await expect(page.getByTestId(`rank-placed-${served.title_b}`)).toBeVisible();

@@ -5,7 +5,8 @@
   import RatePoster from '$lib/components/RatePoster.svelte';
   import { PAIR_QUESTION, metaLine } from '$lib/rate.svelte.js';
 
-  let { card, busy = false, pending = null, onDuel, onCorrect, onPeek, onWhy = null } = $props();
+  // `much` false leaves More, Same, More: Rank's comparison round has no decisive answer (decision 201).
+  let { card, busy = false, pending = null, much = true, onDuel, onCorrect = null, onPeek, onWhy = null } = $props();
 
   const left = $derived(card?.left ?? {});
   const right = $derived(card?.right ?? {});
@@ -24,6 +25,7 @@
     ['B', 'B', false, 'More', 'mid', ['M9 6l6 6-6 6']],
     ['B-much', 'B', true, 'Much more', 'big', ['M6 6.5 11.5 12 6 17.5', 'M12.5 6.5 18 12l-5.5 5.5']]
   ];
+  const steps = $derived(much ? STEPS : STEPS.filter((step) => !step[2]));
   const ICON_PX = { big: 24, mid: 20, small: 16 };
   const aria = (outcome, much) =>
     outcome === 'TIE'
@@ -93,9 +95,9 @@
     {/each}
   </div>
 
-  <div class="scale" role="group" aria-label={PAIR_QUESTION}>
+  <div class="scale" role="group" aria-label={PAIR_QUESTION} style:--steps={steps.length}>
     <span class="track" aria-hidden="true"></span>
-    {#each STEPS as [key, outcome, much, label, circle, icon] (key)}
+    {#each steps as [key, outcome, much, label, circle, icon] (key)}
       <button
         class="step"
         class:picked={pending === `duel-${key}`}
@@ -259,7 +261,7 @@
     align-self: center;
     width: calc(var(--col) * 2 + var(--gap));
     display: grid;
-    grid-template-columns: repeat(5, minmax(0, 1fr));
+    grid-template-columns: repeat(var(--steps), minmax(0, 1fr));
   }
   .track {
     position: absolute;
