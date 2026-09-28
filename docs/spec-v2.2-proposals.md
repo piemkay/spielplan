@@ -15224,6 +15224,31 @@ own. Decision 201 stands for the comparison round; Place with questions answers 
 row, so its Much more is decisive. The spec is amended in place (v2.1.10): §6's preamble, §6.0 (Home
 and the title card's credits), §6.1, §6.3 and §6.8.
 
+### 529. Rate keeps one frame: a single card is framed as a pair, and a wide screen reads left to right
+
+**What the record says.** Decision 528 fits Rate to a phone and gives a pair its five-step answer row
+under the films, while a single card keeps §6.1's four equal tiles (decision 527) at the screen's foot.
+On a wider screen Rate is a centred column as tall as the window.
+
+**Why it changes.** On 2026-09-28 the owner reported that on a desktop Rate alone is centred where
+every other page reads from the top left, that its buttons sit at the very bottom of a tall window,
+and that in Mixed the two card types move the buttons around, which makes voting unpleasant.
+
+**The decision.**
+1. A single card and a pair share one frame: the question in the title face ("How was it?" on a
+   single card, "Which did you enjoy more?" on a pair) with its reason and "Why these?", the film or
+   films with name, year and a Not seen pill under each, then the answer row. The row starts at the
+   same height and spans the same width on both cards.
+2. A single card answers on three equal tiles, Disliked, Fine and Liked; its Not seen is the pill
+   under the poster, as on a pair (decision 528). Keys are unchanged.
+3. On a phone the answer row sits at the foot of the screen on both cards. From 721 px Rate is a
+   left-aligned column: the top row reads mode, then Undo and Skip at its end, as Home and Rank read
+   their switch first; the posters take the window's height up to 420 px, the answers follow right
+   under them, and the page is no taller than its content. A single card's recall aid takes the
+   second poster's column there.
+
+Amends §6.1's Screen and Sweep bullets (spec v2.1.10 stays: the amendment lands with this record).
+
 ## §6.2 — Tonight, rewritten (owner decision, 2026-08-29)
 
 Proposal 54 asked which slot carries the alternative on a split axis. The owner answered by

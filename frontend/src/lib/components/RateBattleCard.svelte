@@ -121,16 +121,16 @@
 </article>
 
 <style>
-  /* The posters take what height is left, 2:3 and never wider than their column (decision 528). */
+  /* The posters take what height is left, 2:3 and never wider than their column (decision 528);
+     the answers sit where a single's do, at the foot on a phone (decision 529). */
   .battle {
     --gap: 12px;
-    --col: min((100cqw - var(--gap)) / 2, 220px);
+    --col: var(--rate-col, min((100cqw - var(--gap)) / 2, 220px));
     container-type: inline-size;
     flex: 1;
     min-height: 0;
     display: flex;
     flex-direction: column;
-    justify-content: space-evenly;
     gap: 12px;
     animation: fadeIn 0.15s var(--ease);
   }
@@ -259,6 +259,7 @@
   .scale {
     position: relative;
     align-self: center;
+    margin-top: auto;
     width: calc(var(--col) * 2 + var(--gap));
     display: grid;
     grid-template-columns: repeat(var(--steps), minmax(0, 1fr));
@@ -344,13 +345,35 @@
     opacity: 0.45;
   }
 
+  /* Left-aligned like every other page, the answers right under the films (decision 529). */
   @media (min-width: 721px) {
     .battle {
-      --gap: 32px;
+      --gap: var(--rate-gap, 32px);
+      flex: none;
+      gap: 20px;
+    }
+    .ask {
+      align-items: flex-start;
+      text-align: left;
     }
     .question {
       font-size: var(--fs-title);
       line-height: 34px;
+    }
+    .pair {
+      grid-template-rows: calc(var(--col) * 1.5) auto;
+      justify-content: start;
+    }
+    .art {
+      justify-self: start;
+    }
+    .under {
+      align-items: flex-start;
+      text-align: left;
+    }
+    .scale {
+      align-self: flex-start;
+      margin-top: 0;
     }
   }
 </style>
