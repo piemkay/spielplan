@@ -4,21 +4,19 @@ import { kindToggle, openTitle, signedIn } from '../helpers.js';
 
 /** §6.0 the catalog; §4.1 rule 5: one kind or both, never neither (decisions 18, 474). */
 
-// By test id: every shelf row carries a `.count` of its own.
-const countLine = (page) => page.getByTestId('count-line');
+// The count is the search field's placeholder (decision 528).
+const search = (page) => page.getByTestId('home-search');
 
 test.beforeEach(async ({ page }) => {
   await signedIn(page);
   await page.goto('/');
 });
 
-test('films only, and the count line says how many films the library holds', async ({ page }) => {
+test('films only, and the search says how many films the library holds', async ({ page }) => {
   // §6.0 (decision 527): the count is of the kind shown; the kind not shown is not counted.
   await expect(kindToggle(page, 'Films')).toHaveAttribute('aria-pressed', 'true');
   await expect(kindToggle(page, 'Series')).toHaveAttribute('aria-pressed', 'false');
-  await expect(countLine(page)).toHaveText(/^\d+ films? in your library$/);
-  await page.getByLabel('Search titles').fill('a');
-  await expect(countLine(page)).toHaveText(/^\d+ films?$/);
+  await expect(search(page)).toHaveAttribute('placeholder', /^Search \d+ films?$/);
 });
 
 test('both kinds on shows everything and nothing is reported hidden', async ({ page }) => {
@@ -26,8 +24,7 @@ test('both kinds on shows everything and nothing is reported hidden', async ({ p
   await expect(kindToggle(page, 'Both')).toHaveAttribute('aria-pressed', 'true');
   await expect(kindToggle(page, 'Films')).toHaveAttribute('aria-pressed', 'false');
   await expect(kindToggle(page, 'Series')).toHaveAttribute('aria-pressed', 'false');
-  await expect(countLine(page)).toContainText(/\d+ titles? in your library/);
-  await expect(countLine(page)).not.toContainText('hidden');
+  await expect(search(page)).toHaveAttribute('placeholder', /^Search \d+ titles?$/);
 });
 
 test('the kind switch selects one kind or both, never neither', async ({ page }) => {
@@ -93,7 +90,7 @@ test('owned titles are marked in the catalog and one pill narrows to them', asyn
   await page.getByTestId('filter-owned').click();
   await expect(page.getByTestId('home-mode')).toHaveAttribute('data-mode', 'grid');
   await expect(page.getByTestId('filter-owned')).toHaveAttribute('aria-checked', 'true');
-  await expect(countLine(page)).toHaveText(/^\d+ films? in your library$/);
+  await expect(search(page)).toHaveAttribute('placeholder', /^Search \d+ films? in your library$/);
   const cards = page.locator('.grid .card-wrap');
   await expect(cards.first()).toBeVisible();
   const n = await cards.count();
@@ -106,14 +103,13 @@ test('owned titles are marked in the catalog and one pill narrows to them', asyn
 test('search matches an alias, not just the title', async ({ page }) => {
   // The fixture's CJK title carries its English name only as an alias.
   await page.getByLabel('Search titles').fill('chungking');
-  await expect(countLine(page)).toContainText(/[1-9]/);
-  await expect(page.locator('.grid')).toBeVisible();
+  await expect(page.locator('.grid .card-wrap').first()).toBeVisible();
 });
 
 test('a query with no matches says so instead of showing an empty grid', async ({ page }) => {
   await page.getByLabel('Search titles').fill('zzzzzzzz');
   await expect(page.getByRole('heading', { name: 'No matches' })).toBeVisible();
-  await expect(countLine(page)).toContainText('0 films');
+  await expect(page.locator('.grid .card-wrap')).toHaveCount(0);
 });
 
 test('a search that finds only the other kind says where, and switches there', async ({ page }) => {

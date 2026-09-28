@@ -304,13 +304,14 @@ test('Home shows no rank number and no tier letter: those live on Rank', async (
   await expect(meta.nth(1)).toHaveText(/^(\d{4}|—)( · .+)?$/);
 });
 
-test('the count line says the shelves are the library, and New says its reason once', async ({
+test('the search counts the library the shelves come from, and New says its reason once', async ({
   page
 }) => {
-  // §6.0: the count line counts the household's library of the shown kind, and "New in the
-  // library", whose why-line is the badge's reason, does not repeat it (decision 516).
+  // §6.0: the count, the search field's placeholder (decision 528), counts the household's
+  // library of the shown kind, and "New in the library", whose why-line is the badge's reason,
+  // does not repeat it (decision 516).
   await expect(page.getByTestId('shelves')).toBeVisible();
-  await expect(page.getByTestId('count-line')).toHaveText(/^\d+ films? in your library$/);
+  await expect(page.getByTestId('home-search')).toHaveAttribute('placeholder', /^Search \d+ films?$/);
   const fresh = page.locator('[data-testid="shelf"][data-shelf="new_in_library"]');
   for (const row of await fresh.all()) {
     await expect(row.getByTestId('shelf-cold-note')).toHaveCount(0);
@@ -426,8 +427,8 @@ test('the toggle is off by default, and one user turning it on leaves the other 
   try {
     await seedLedger(other.request);
     await other.goto('/');
-    await expect(other.getByTestId('home-greeting')).toBeVisible();
-    // The greeting renders before `/api/home` lands; `shelves` means the payload is rendered,
+    await expect(other.getByTestId('home-title')).toBeVisible();
+    // The title renders before `/api/home` lands; `shelves` means the payload is rendered,
     // which the non-retrying `.count()` calls below need.
     await expect(other.getByTestId('shelves')).toBeVisible();
     // The avatar prints an initial; the name is in its accessible name.
@@ -459,8 +460,8 @@ test('the toggle is off by default, and one user turning it on leaves the other 
 
     // …and the second account's Home is unchanged, on the screen and in the payload.
     await other.reload();
-    await expect(other.getByTestId('home-greeting')).toBeVisible();
-    await expect(other.getByTestId('shelves')).toBeVisible();   // the greeting is the placeholder
+    await expect(other.getByTestId('home-title')).toBeVisible();
+    await expect(other.getByTestId('shelves')).toBeVisible();   // the title renders first
     // Not an equality: the worker keeps adding shelves on its own clock. This only says nothing
     // was lost; the three assertions below are the claim.
     expect(await other.getByTestId('shelf-card').count()).toBeGreaterThanOrEqual(shelfCardCount);

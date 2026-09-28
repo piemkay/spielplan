@@ -96,8 +96,7 @@ test.describe('first boot', () => {
     await expect(page.getByRole('heading', { name: 'Nothing to show yet' })).toBeVisible();
     await expect(page.getByText(/Import it in Movie data/)).toBeVisible();
     await expect(page.getByRole('link', { name: 'Open Movie data' })).toBeVisible();
-    // Both places say it; each is asserted apart so a bare text match does not trip strict mode.
-    await expect(page.getByRole('link', { name: /No movie data yet/ })).toBeVisible();
+    // Home's top row is its kind switch (decision 528), so the note stands under the search.
     await expect(page.locator('.count')).toHaveText('No movie data yet');
   });
 
