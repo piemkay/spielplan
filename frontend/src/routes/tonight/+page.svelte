@@ -70,16 +70,23 @@
     toggleVeto,
     tonight,
     undo,
-    vetoCaption
+    vetoCaption,
+    waitingLine
   } from '$lib/tonight.svelte.js';
   // The one runtime formatter, so a series reads `45m/ep` here too.
   import { metaLine, runtimeLabel, sentenceCase } from '$lib/rate.svelte.js';
   import { playWhy } from '$lib/titleCard.js';
+  import { preloadPoster, ready } from '$lib/art.js';
+  import { haptic } from '$lib/motion.js';
 
   let code = $state('');
   let sharpening = $state(false);
   let ending = $state(false);
   let settingsOpen = $state(false);
+  // The door being opened, so it can say it is working.
+  let opening = $state('');
+  // The answer in flight and the pair it answers: the posters take it before the reply lands.
+  let sent = $state(null);
   let disconnect = () => {};
 
   // The session this device's socket watches, re-pointed in one place so a racing tap cannot win.
@@ -190,7 +197,9 @@
   }
 
   async function openAndWatch() {
+    opening = 'room';
     const room = await openRoom();
+    opening = '';
     if (room) {
       rememberControls();
       watch(room.session_id);
@@ -230,6 +239,37 @@
   // Everyone but the seat on this screen.
   const others = $derived(progressLines(tonight.progress, tonight.activeSeat));
 
+  async function say(key, onAnswer, value) {
+    sent = { key, value };
+    await onAnswer(value);
+    sent = null;
+  }
+  // A or B lifts that side and lowers the other; Either lifts both, Neither lowers both.
+  const pose = (said, side) => (!said ? '' : said === side || said === 'EITHER' ? 'up' : 'down');
+
+  // The reveal plays only when this page saw the last vote land, never on a reload or a re-read,
+  // and lights once the result and the winner's poster are in (decision 530).
+  let playing = $state(false);
+  let lit = $state(false);
+  let lastStep = '';
+  $effect(() => {
+    if (tonight.step === 'reveal' && lastStep !== 'reveal') {
+      playing = lastStep === 'waiting' || lastStep === 'ballot';
+      lit = false;
+    }
+    lastStep = tonight.step;
+  });
+  $effect(() => {
+    const result = tonight.result;
+    if (!playing || !result || lit) return;
+    let live = true;
+    const light = () => live && (lit = true);
+    const wait = ready([preloadPoster(result.winner)], 700);
+    if (wait) wait.then(light);
+    else light();
+    return () => (live = false);
+  });
+
   const low = (s) => (s ? s.charAt(0).toLowerCase() + s.slice(1) : '');
   // Green only when the title fits; over is a plain fact, not a warning.
   const fits = (t) => t?.runtime_min != null && !t?.over_budget_min;
@@ -243,6 +283,10 @@
 
 {#snippet doorBar()}
   <h1 class="bar-title">Tonight</h1>
+{/snippet}
+
+{#snippet working(busy)}
+  {#if busy}<span class="spinner"></span>{:else}<Icon name="chevron-right" size={16} />{/if}
 {/snippet}
 
 {#snippet bar(title)}
@@ -307,29 +351,35 @@
 
 <!-- The same question as the round (§6.2 step 4), drawing both titles. -->
 {#snippet chooser(pair, onAnswer, ids)}
+  {@const key = `${pair.a?.title_id}:${pair.b?.title_id}`}
+  {@const said = sent?.key === key ? sent.value : null}
   <h2 class="title-1 question">Which one tonight?</h2>
-  <div class="pair">
-    {#each [['A', pair.a], ['B', pair.b]] as [side, title] (side)}
-      <!-- `.choice`, never `.poster`: design.css's `.poster` is a 2:3 frame that fills the phone. -->
-      <button
-        class="choice"
-        onclick={() => onAnswer(side)}
-        disabled={tonight.busy}
-        data-testid="{ids.pick}-{side}"
-      >
-        <span class="art"><RatePoster title={posterOf(title)} showName={false} /></span>
-        <span class="choice-name">{title?.name}</span>
-        {#each pairFacts(title) as fact, i (i)}
-          <span class="fact" data-testid={ids.fact && `${ids.fact}-${side}`}>{fact}</span>
-        {/each}
-      </button>
-    {/each}
-  </div>
+  <!-- Keyed on both titles, so the next pair deals in and a re-read of this one replays nothing. -->
+  {#key key}
+    <div class="pair">
+      {#each [['A', pair.a], ['B', pair.b]] as [side, title] (side)}
+        <!-- `.choice`, never `.poster`: design.css's `.poster` is a 2:3 frame that fills the phone. -->
+        <button
+          class="choice {pose(said, side)}"
+          onclick={() => say(key, onAnswer, side)}
+          disabled={tonight.busy}
+          data-testid="{ids.pick}-{side}"
+        >
+          <span class="art"><RatePoster title={posterOf(title)} showName={false} /></span>
+          <span class="choice-name">{title?.name}</span>
+          {#each pairFacts(title) as fact, i (i)}
+            <span class="fact" data-testid={ids.fact && `${ids.fact}-${side}`}>{fact}</span>
+          {/each}
+        </button>
+      {/each}
+    </div>
+  {/key}
   <div class="answers">
     {#each ANSWERS.filter((a) => a.value === 'EITHER' || a.value === 'NEITHER') as choice (choice.value)}
       <button
         class="btn-secondary"
-        onclick={() => onAnswer(choice.value)}
+        class:held={said === choice.value}
+        onclick={() => say(key, onAnswer, choice.value)}
         disabled={tonight.busy}
         data-testid="{ids.answer}-{choice.value}"
         >{choice.label}</button
@@ -341,41 +391,56 @@
 <section class="tonight" class:flow={inFlow} data-testid="tonight-surface">
   {#if !tonight.booted}
     <!-- Until the restore lands, a live door could open a second room for someone already seated. -->
-    <p class="footnote" data-testid="tonight-booting">Loading…</p>
+    <div class="screen at-door" data-testid="tonight-booting">
+      <p class="sr-only" role="status">Loading…</p>
+      <div class="doors">
+        <span class="skeleton door-shape"></span>
+        <span class="skeleton door-shape"></span>
+      </div>
+    </div>
   {:else if tonight.step === 'door'}
     <div class="screen at-door">
       {#if !topbar.host}{@render doorBar()}{/if}
       {@render problem()}
+      {#if tonight.notice}<p class="why" data-testid="tonight-notice">{tonight.notice}</p>{/if}
       <div class="fork">
         <div class="doors">
-          <button class="door" onclick={openAndWatch} disabled={tonight.busy} data-testid="tonight-open">
+          <button class="door press" onclick={openAndWatch} disabled={tonight.busy} data-testid="tonight-open">
             <span class="door-top">
               <span class="tile blue"><Icon name="people" size={18} /></span>
-              <span class="chev"><Icon name="chevron-right" size={16} /></span>
+              <span class="chev">{@render working(opening === 'room')}</span>
             </span>
             <span class="door-name">Watch together</span>
             <span class="why"
-              >Everyone answers a few quick pairs on their own phone, then we reveal one {tonight
-                .controls.kind === 'series'
-                ? 'series'
-                : 'film'} you'll all enjoy.</span
+              >{opening === 'room'
+                ? 'Opening a room…'
+                : `Everyone answers a few quick pairs on their own phone, then we reveal one ${tonight
+                    .controls.kind === 'series'
+                    ? 'series'
+                    : 'film'} you'll all enjoy.`}</span
             >
           </button>
           <button
-            class="door"
-            onclick={() => {
+            class="door press"
+            onclick={async () => {
               rememberControls();
-              loadSolo();
+              opening = 'solo';
+              await loadSolo();
+              opening = '';
             }}
             disabled={tonight.busy}
             data-testid="tonight-solo-door"
           >
             <span class="door-top">
               <span class="tile ember"><Icon name="person" size={18} /></span>
-              <span class="chev"><Icon name="chevron-right" size={16} /></span>
+              <span class="chev">{@render working(opening === 'solo')}</span>
             </span>
             <span class="door-name">Just me</span>
-            <span class="why">Three picks and a wildcard, straight away.</span>
+            <span class="why"
+              >{opening === 'solo'
+                ? "Finding tonight's picks…"
+                : 'Three picks and a wildcard, straight away.'}</span
+            >
           </button>
         </div>
 
@@ -467,55 +532,58 @@
       {#if tonight.solo.empty}
         <p class="why" data-testid="tonight-solo-empty">{tonight.solo.empty}</p>
       {:else}
-        <div class="picks" data-testid="tonight-picks">
-          {#if hero}
-            <article class="hero" data-testid={`tonight-pick-${hero.title_id}`}>
-              <span class="hero-art"><RatePoster title={posterOf(hero)} showName={false} /></span>
-              <div class="hero-text">
-                <div class="stack">
-                  <h2 class="title-1">{hero.name}</h2>
-                  <p class="why figures">{metaLine(hero)}</p>
-                  <p class="why" data-testid="tonight-why">{hero.why}</p>
+        <!-- A new set of picks rises in; a sharpen that re-ranks the same set only reorders it. -->
+        {#key (tonight.solo.picks ?? []).map((p) => p.title_id).sort().join()}
+          <div class="picks" data-testid="tonight-picks">
+            {#if hero}
+              <article class="hero rise" data-testid={`tonight-pick-${hero.title_id}`}>
+                <span class="hero-art"><RatePoster title={posterOf(hero)} showName={false} /></span>
+                <div class="hero-text">
+                  <div class="stack">
+                    <h2 class="title-1">{hero.name}</h2>
+                    <p class="why figures">{metaLine(hero)}</p>
+                    <p class="why" data-testid="tonight-why">{hero.why}</p>
+                  </div>
+                  <div class="hero-actions">
+                    <span class="badge" class:ok={fits(hero)} data-testid="tonight-fit"
+                      ><span class="dot"></span>{hero.fit_line}</span
+                    >
+                    {@render play(hero, true)}
+                  </div>
                 </div>
-                <div class="hero-actions">
-                  <span class="badge" class:ok={fits(hero)} data-testid="tonight-fit"
-                    ><span class="dot"></span>{hero.fit_line}</span
-                  >
-                  {@render play(hero, true)}
-                </div>
-              </div>
-            </article>
-          {/if}
-          <ul class="list-group rows">
-            {#each rest as pick (pick.title_id)}
-              <li class="pick" data-testid={`tonight-pick-${pick.title_id}`}>
-                <span class="thumb"><RatePoster title={posterOf(pick)} showName={false} /></span>
-                <span class="row-text">
-                  <span class="pick-name">{pick.name}</span>
-                  <span class="why" data-testid="tonight-why">{pick.why}</span>
-                  <span class="footnote figures" data-testid="tonight-fit"
-                    >{[runtimeLabel(pick), low(pick.fit_line)].filter(Boolean).join(' · ')}</span
-                  >
-                </span>
-                {@render play(pick, false)}
-              </li>
-            {/each}
-            {#if wildcard}
-              <li class="pick" data-testid="tonight-solo-wildcard">
-                <span class="thumb"><RatePoster title={posterOf(wildcard)} showName={false} /></span>
-                <span class="row-text">
-                  <span class="label"><Icon name="sparkle" size={14} />Wildcard</span>
-                  <span class="pick-name">{wildcard.name}</span>
-                  <span class="why" data-testid="tonight-why">{wildcard.why}</span>
-                  <span class="footnote figures" data-testid="tonight-fit"
-                    >{[runtimeLabel(wildcard), low(wildcard.fit_line)].filter(Boolean).join(' · ')}</span
-                  >
-                </span>
-                {@render play(wildcard, false)}
-              </li>
+              </article>
             {/if}
-          </ul>
-        </div>
+            <ul class="list-group rows">
+              {#each rest as pick, i (pick.title_id)}
+                <li class="pick rise" style:--i={i + 1} data-testid={`tonight-pick-${pick.title_id}`}>
+                  <span class="thumb"><RatePoster title={posterOf(pick)} showName={false} /></span>
+                  <span class="row-text">
+                    <span class="pick-name">{pick.name}</span>
+                    <span class="why" data-testid="tonight-why">{pick.why}</span>
+                    <span class="footnote figures" data-testid="tonight-fit"
+                      >{[runtimeLabel(pick), low(pick.fit_line)].filter(Boolean).join(' · ')}</span
+                    >
+                  </span>
+                  {@render play(pick, false)}
+                </li>
+              {/each}
+              {#if wildcard}
+                <li class="pick rise" style:--i={rest.length + 1} data-testid="tonight-solo-wildcard">
+                  <span class="thumb"><RatePoster title={posterOf(wildcard)} showName={false} /></span>
+                  <span class="row-text">
+                    <span class="label"><Icon name="sparkle" size={14} />Wildcard</span>
+                    <span class="pick-name">{wildcard.name}</span>
+                    <span class="why" data-testid="tonight-why">{wildcard.why}</span>
+                    <span class="footnote figures" data-testid="tonight-fit"
+                      >{[runtimeLabel(wildcard), low(wildcard.fit_line)].filter(Boolean).join(' · ')}</span
+                    >
+                  </span>
+                  {@render play(wildcard, false)}
+                </li>
+              {/if}
+            </ul>
+          </div>
+        {/key}
         <div class="two">
           <!-- Reshuffle posts `sharpen: false`, so no pair back is not a converged round: clear the flag. -->
           <button
@@ -686,6 +754,9 @@
         <p class="footnote">Nobody sees anybody's votes until every vote is in.</p>
       {:else}
         <h2 class="title-1">Your answers are in</h2>
+        {#if waitingLine(tonight.progress)}
+          <p class="why" data-testid="tonight-waiting-for">{waitingLine(tonight.progress)}</p>
+        {/if}
         {@render whereOthersAre('tonight-progress')}
         {#if guestTurns.length}
           <!-- Guests take turns in seat order, so there is one next step (§6.2 step 2). -->
@@ -721,7 +792,10 @@
               <button
                 class="option"
                 aria-pressed={picked}
-                onclick={() => toggleApproval(card.title_id)}
+                onclick={() => {
+                  haptic();
+                  toggleApproval(card.title_id);
+                }}
                 data-testid={`tonight-approve-${card.title_id}`}
               >
                 <span class="thumb"><RatePoster title={posterOf(card)} showName={false} /></span>
@@ -762,10 +836,11 @@
         </div>
       {/if}
     </div>
-  {:else if tonight.step === 'reveal' && tonight.result}
+  {:else if tonight.step === 'reveal'}
     {@const result = tonight.result}
-    {@const winner = result.winner}
-    <div class="screen reveal" data-testid="tonight-reveal">
+    {@const winner = result?.winner}
+    <!-- The stage stands before the result lands, so the last voter never sees an empty flow. -->
+    <div class="screen reveal" class:playing>
       <header class="bar">
         <span></span>
         <p class="list-header beat" data-testid="tonight-beat">{REVEAL_BEAT}</p>
@@ -774,114 +849,123 @@
         </span>
       </header>
       {@render problem()}
-      {#if winner}
-        <div class="winner" data-testid="tonight-winner">
-          <span class="winner-art"><RatePoster title={posterOf(winner)} showName={false} /></span>
-          <h2 class="title-1">{winner.name}</h2>
-          <p class="winner-meta">
-            <span class="why figures">{metaLine(winner)}</span>
-            <span class="badge" class:ok={fits(winner)} data-testid="tonight-fit-line"
-              ><span class="dot"></span>{winner.fit_line}</span
-            >
-          </p>
-          {#if winner.label}
-            <!-- The wildcard won: this card carries its label. -->
-            <p class="label" data-testid="tonight-winner-label"><Icon name="sparkle" size={14} />{winner.label}</p>
-          {/if}
-          {#if winner.reserved}
-            <!-- The reserved finalist is labelled as such (54d). -->
-            <p class="label" data-testid="tonight-reserved">{RESERVED_LABEL}</p>
-          {/if}
-          {#if winner.reserved_for}
-            <!-- A seat's own pick carries its own label, never the counterweight's (decision 479). -->
-            <p class="label" data-testid="tonight-reserved-for">{pickLabel(winner.reserved_for.name)}</p>
-          {/if}
-          <p class="approval">
-            <span class="faces">
-              {#each result.breadth ?? [] as b (b.participant_id)}
-                <Avatar name={b.name} person={personOf(b.participant_id)} size={32} yes={b.said_yes} />
-              {/each}
-            </span>
-            <span data-testid="tonight-approval-share">{approvalShare(result)}</span>
-          </p>
-        </div>
-        {#if winner.conflict}
-          <p class="why" data-testid="tonight-conflict">
-            {winner.conflict.headline}
-            {winner.conflict.explanation}
-          </p>
-        {/if}
-        <ul class="list-group rows" data-testid="tonight-match-lines">
-          {#each winner.match_lines ?? [] as line, i (i)}
-            <li class="seat">
-              <Avatar name={line.name} person={personOf(line.participant_id)} />
-              <span class="row-text">
-                <span class="pick-name">{line.name}</span>
-                <span class="why sentence">{line.line}</span>
-              </span>
-            </li>
-          {/each}
-        </ul>
-        <div class="stack">
-          <!-- How broad each yes was, released with the reveal (54e). -->
-          <p class="footnote figures" data-testid="tonight-breadth">{breadthLine(result)}</p>
-          {#each onlyYesLines(result) as only (only)}
-            <p class="footnote" data-testid="tonight-only-yes">{only}</p>
-          {/each}
-        </div>
-        {#if winner.play_url}
-          <a class="btn-primary play wide" href={winner.play_url} data-testid="tonight-play"
-            ><Icon name="play" size={20} />Play on Jellyfin</a
-          >
-        {:else}
-          <button class="btn-primary play wide" disabled aria-describedby="tonight-play-why" data-testid="tonight-play"
-            ><Icon name="play" size={20} />Play on Jellyfin</button
-          >
-          <p class="footnote center" id="tonight-play-why">{playWhy(winner.play_reason ?? 'no_server')}</p>
-        {/if}
-      {/if}
-
-      <section class="group" data-testid="tonight-runners-up">
-        <h3 class="list-header">Runners-up</h3>
-        <ul class="list-group rows">
-          {#each result.runners_up ?? [] as card (card.title_id)}
-            <!-- A `const` keeps the line one text node; the labels follow the card wherever it lands. -->
-            {@const counterweight = card.reserved
-              ? ` · ${RESERVED_LABEL}`
-              : card.reserved_for
-                ? ` · ${pickLabel(card.reserved_for.name)}`
-                : ''}
-            <li class="pick">
-              <span class="thumb small"><RatePoster title={posterOf(card)} showName={false} /></span>
-              <span class="row-text">
-                <span>{card.name}</span>
-                <span class="footnote figures" data-testid={`tonight-runner-up-${card.title_id}`}
-                  >{card.approvals} of {result.participants} said yes{counterweight}</span
+      {#if result && (lit || !playing)}
+        <div class="result" data-testid="tonight-reveal">
+          {#if winner}
+            <div class="winner" data-testid="tonight-winner">
+              <span class="winner-art"><RatePoster title={posterOf(winner)} showName={false} /></span>
+              <h2 class="title-1">{winner.name}</h2>
+              <p class="winner-meta">
+                <span class="why figures">{metaLine(winner)}</span>
+                <span class="badge" class:ok={fits(winner)} data-testid="tonight-fit-line"
+                  ><span class="dot"></span>{winner.fit_line}</span
                 >
-              </span>
-            </li>
-          {:else}
-            <li class="pick"><span class="footnote">Nothing else was in the running.</span></li>
-          {/each}
-        </ul>
-      </section>
-
-      {#if result.wildcard}
-        <section class="group" data-testid="tonight-wildcard">
-          <h3 class="list-header">Wildcard</h3>
-          <div class="list-group">
-            <div class="pick">
-              <span class="thumb small"><RatePoster title={posterOf(result.wildcard)} showName={false} /></span>
-              <span class="row-text">
-                <span>{result.wildcard.name}</span>
-                <!-- The label is the honesty (§6.4); approvals are said here once. -->
-                <span class="footnote figures" data-testid="tonight-wildcard-line"
-                  >{`${result.wildcard.label} · ${result.wildcard.approvals ?? 0} of ${result.participants} said yes`}</span
-                >
-              </span>
+              </p>
+              {#if winner.label}
+                <!-- The wildcard won: this card carries its label. -->
+                <p class="label" data-testid="tonight-winner-label"><Icon name="sparkle" size={14} />{winner.label}</p>
+              {/if}
+              {#if winner.reserved}
+                <!-- The reserved finalist is labelled as such (54d). -->
+                <p class="label" data-testid="tonight-reserved">{RESERVED_LABEL}</p>
+              {/if}
+              {#if winner.reserved_for}
+                <!-- A seat's own pick carries its own label, never the counterweight's (decision 479). -->
+                <p class="label" data-testid="tonight-reserved-for">{pickLabel(winner.reserved_for.name)}</p>
+              {/if}
+              <p class="approval">
+                <span class="faces">
+                  {#each result.breadth ?? [] as b (b.participant_id)}
+                    <Avatar name={b.name} person={personOf(b.participant_id)} size={32} yes={b.said_yes} />
+                  {/each}
+                </span>
+                <span data-testid="tonight-approval-share">{approvalShare(result)}</span>
+              </p>
             </div>
+            {#if winner.conflict}
+              <p class="why lines" data-testid="tonight-conflict">
+                {winner.conflict.headline}
+                {winner.conflict.explanation}
+              </p>
+            {/if}
+            <ul class="list-group rows lines" data-testid="tonight-match-lines">
+              {#each winner.match_lines ?? [] as line, i (i)}
+                <li class="seat">
+                  <Avatar name={line.name} person={personOf(line.participant_id)} />
+                  <span class="row-text">
+                    <span class="pick-name">{line.name}</span>
+                    <span class="why sentence">{line.line}</span>
+                  </span>
+                </li>
+              {/each}
+            </ul>
+            <div class="stack lines">
+              <!-- How broad each yes was, released with the reveal (54e). -->
+              <p class="footnote figures" data-testid="tonight-breadth">{breadthLine(result)}</p>
+              {#each onlyYesLines(result) as only (only)}
+                <p class="footnote" data-testid="tonight-only-yes">{only}</p>
+              {/each}
+            </div>
+          {/if}
+
+          <section class="group lines" data-testid="tonight-runners-up">
+            <h3 class="list-header">Runners-up</h3>
+            <ul class="list-group rows">
+              {#each result.runners_up ?? [] as card (card.title_id)}
+                <!-- A `const` keeps the line one text node; the labels follow the card wherever it lands. -->
+                {@const counterweight = card.reserved
+                  ? ` · ${RESERVED_LABEL}`
+                  : card.reserved_for
+                    ? ` · ${pickLabel(card.reserved_for.name)}`
+                    : ''}
+                <li class="pick">
+                  <span class="thumb small"><RatePoster title={posterOf(card)} showName={false} /></span>
+                  <span class="row-text">
+                    <span>{card.name}</span>
+                    <span class="footnote figures" data-testid={`tonight-runner-up-${card.title_id}`}
+                      >{card.approvals} of {result.participants} said yes{counterweight}</span
+                    >
+                  </span>
+                </li>
+              {:else}
+                <li class="pick"><span class="footnote">Nothing else was in the running.</span></li>
+              {/each}
+            </ul>
+          </section>
+
+          {#if result.wildcard}
+            <section class="group lines" data-testid="tonight-wildcard">
+              <h3 class="list-header">Wildcard</h3>
+              <div class="list-group">
+                <div class="pick">
+                  <span class="thumb small"><RatePoster title={posterOf(result.wildcard)} showName={false} /></span>
+                  <span class="row-text">
+                    <span>{result.wildcard.name}</span>
+                    <!-- The label is the honesty (§6.4); approvals are said here once. -->
+                    <span class="footnote figures" data-testid="tonight-wildcard-line"
+                      >{`${result.wildcard.label} · ${result.wildcard.approvals ?? 0} of ${result.participants} said yes`}</span
+                    >
+                  </span>
+                </div>
+              </div>
+            </section>
+          {/if}
+        </div>
+        {#if winner}
+          <!-- Docked like the ballot's Submit, so Play is in thumb reach. -->
+          <div class="dock">
+            {#if winner.play_url}
+              <a class="btn-primary play wide" href={winner.play_url} data-testid="tonight-play"
+                ><Icon name="play" size={20} />Play on Jellyfin</a
+              >
+            {:else}
+              <button class="btn-primary play wide" disabled aria-describedby="tonight-play-why" data-testid="tonight-play"
+                ><Icon name="play" size={20} />Play on Jellyfin</button
+              >
+              <p class="footnote center" id="tonight-play-why">{playWhy(winner.play_reason ?? 'no_server')}</p>
+            {/if}
           </div>
-        </section>
+        {/if}
       {/if}
     </div>
   {/if}
@@ -996,6 +1080,9 @@
     background: var(--bg);
     padding: env(safe-area-inset-top) max(var(--gutter), env(safe-area-inset-right)) 0
       max(var(--gutter), env(safe-area-inset-left));
+    --enter-y: 16px;
+    --enter-s: 1;
+    animation: enter var(--dur-slow) var(--ease);
   }
   .screen {
     width: 100%;
@@ -1012,6 +1099,8 @@
     margin: 0 auto;
     gap: 20px;
     padding-bottom: calc(16px + env(safe-area-inset-bottom));
+    --enter-y: 0;
+    animation: enter 180ms var(--ease);
   }
   .stack {
     display: flex;
@@ -1123,8 +1212,23 @@
     color: var(--text);
     text-align: left;
   }
-  .door:disabled {
-    opacity: 0.6;
+  .door-shape {
+    display: block;
+    height: 140px;
+    border-radius: var(--r-md);
+  }
+  .spinner {
+    width: 16px;
+    height: 16px;
+    border: 2px solid var(--text-2);
+    border-right-color: transparent;
+    border-radius: var(--r-pill);
+    animation: spin 0.8s linear infinite;
+  }
+  @keyframes spin {
+    to {
+      transform: rotate(1turn);
+    }
   }
   .door-top {
     display: flex;
@@ -1196,6 +1300,11 @@
     display: flex;
     flex-direction: column;
     gap: 16px;
+  }
+  .rise {
+    --enter-y: 10px;
+    --enter-s: 1;
+    animation: enter var(--dur-base) var(--ease) calc(var(--i, 0) * 70ms) backwards;
   }
   .hero {
     display: flex;
@@ -1398,14 +1507,46 @@
     color: var(--text);
     text-align: center;
   }
+  /* Only the posters and their words move: a button's own box never does. */
+  .choice :is(.art, .choice-name, .fact) {
+    transition: transform 180ms var(--ease), opacity 180ms var(--ease), filter 180ms var(--ease),
+      box-shadow 180ms var(--ease);
+  }
   .choice .art {
     display: block;
     width: min(100%, 200px);
     margin-bottom: 8px;
-    transition: transform 0.12s var(--ease);
+    border-radius: var(--r-poster);
   }
-  .choice:active .art {
-    transform: scale(0.97);
+  .choice:active:not(:disabled) .art {
+    transform: scale(var(--press));
+    transition-duration: var(--dur-press);
+  }
+  .choice.up .art {
+    box-shadow: 0 0 0 2px var(--text);
+  }
+  .choice.down :is(.art, .choice-name, .fact) {
+    opacity: 0.35;
+  }
+  .choice.down .art {
+    filter: saturate(0.5);
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    .choice.up .art {
+      transform: translateY(-6px) scale(1.03);
+    }
+    .choice.down .art {
+      transform: scale(0.95);
+    }
+  }
+  /* The next pair deals in, B a beat after A. */
+  .pair :is(.art, .choice-name, .fact) {
+    --enter-y: 14px;
+    --enter-s: 1;
+    animation: enter 260ms var(--ease) backwards;
+  }
+  .choice + .choice :is(.art, .choice-name, .fact) {
+    animation-delay: 60ms;
   }
   .choice-name {
     font-size: var(--fs-body);
@@ -1431,6 +1572,10 @@
   .answers .btn-secondary {
     padding: 0 12px;
     line-height: 20px;
+  }
+  /* The answer in flight keeps its fill while the other waits. */
+  .answers .held:disabled {
+    opacity: 1;
   }
   .others {
     display: flex;
@@ -1493,13 +1638,57 @@
     color: var(--on-accent);
   }
   .option[aria-pressed='true'] .tick {
+    --press: 0.85;
     background: var(--accent);
     box-shadow: none;
+    animation: pop 240ms var(--ease-spring);
   }
 
   /* The reveal. */
   .reveal .bar {
     grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr);
+  }
+  .result {
+    display: flex;
+    flex-direction: column;
+    gap: 20px;
+  }
+  /* Once per evening: the poster develops, the name rises, the yeses land, Play docks, then the
+     rest. Only filter, transform and opacity move. */
+  .playing .winner-art {
+    animation: develop 600ms var(--ease) backwards;
+  }
+  .playing .winner h2 {
+    --enter-y: 8px;
+    animation: enter 260ms var(--ease) 300ms backwards;
+  }
+  .playing :is(.winner-meta, .label) {
+    --enter-y: 4px;
+    animation: enter 240ms var(--ease) 400ms backwards;
+  }
+  .playing .approval {
+    animation: enter 200ms var(--ease) 500ms backwards;
+  }
+  .playing .approval :global(.yes) {
+    animation: land 280ms var(--ease-spring) 500ms backwards;
+  }
+  .playing .dock {
+    --enter-y: 100%;
+    animation: enter var(--dur-slow) var(--ease) 640ms backwards;
+  }
+  .playing .lines {
+    animation: enter 200ms var(--ease) 700ms backwards;
+  }
+  @keyframes develop {
+    from {
+      filter: brightness(0.25) saturate(0.6);
+      transform: scale(0.965);
+    }
+  }
+  @keyframes land {
+    from {
+      transform: scale(0);
+    }
   }
   .winner {
     display: flex;

@@ -3,6 +3,7 @@
 
 import { ApiError, get, post } from '$lib/api.js';
 import { runtimeLabel } from '$lib/rate.svelte.js';
+import { showToast } from '$lib/toast.svelte.js';
 
 // Proposal 57's bounds and default: §6.2 gives none.
 export const BUDGET_MIN = 60;
@@ -150,6 +151,8 @@ export const tonight = $state({
   booted: false,
   busy: false,
   error: '',
+  /** News for the door, not a failure: the host ended the evening. */
+  notice: '',
   /** 'door' | 'lobby' | 'round' | 'waiting' | 'ballot' | 'reveal' | 'solo' */
   step: 'door',
   controls: {
@@ -324,7 +327,7 @@ export async function refresh({ seat = null } = {}) {
     if (seen.state === 'abandoned') {
       leave();
       await loadRooms();
-      tonight.error = 'This evening has ended.';
+      tonight.notice = 'This evening has ended.';
       return;
     }
     // After the abandoned branch: an ended room is never stale, and the newer read may fail.
@@ -370,6 +373,7 @@ export function leave() {
   stopClock();
   tonight.step = 'door';
   tonight.error = '';
+  tonight.notice = '';
 }
 
 export async function start() {
@@ -675,7 +679,8 @@ export function minutesAgo(iso) {
 }
 
 /**
- * Where everyone but the seat on this screen has got to, and never an answer (54c).
+ * Where everyone but the seat on this screen has got to, and never an answer (54c): "Patrick 6/6
+ * done", "Jenny 12 so far", "Mia 4/~10". The ~ is the typical round until the seat reaches it (507).
  * @param {any[]} progress @param {number|null} holding
  */
 export function progressLines(progress, holding = null) {
@@ -684,8 +689,18 @@ export function progressLines(progress, holding = null) {
     .map((p) => ({
       participant_id: p.participant_id,
       name: p.name,
-      line: p.finished ? `${p.name} is done` : `${p.name} is on pair ${(p.answered ?? 0) + 1}`
+      line: p.finished
+        ? `${p.name} ${p.answered}/${p.answered} done`
+        : p.expected == null
+          ? `${p.name} ${p.answered} so far`
+          : `${p.name} ${p.answered}/~${p.expected}`
     }));
+}
+
+/** The line's end, "waiting for 2": every seat still answering. @param {any[]} progress */
+export function waitingLine(progress) {
+  const left = progress.filter((p) => !p.finished).length;
+  return left ? `Waiting for ${left}` : '';
 }
 
 /** §13's approval share, said as the people it counts. */
@@ -835,6 +850,7 @@ export async function shareRoom() {
   try {
     if (nav?.clipboard?.writeText) {
       await nav.clipboard.writeText(url);
+      showToast('Link copied');
       return 'copied';
     }
   } catch {

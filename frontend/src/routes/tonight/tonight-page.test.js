@@ -561,10 +561,10 @@ describe('the first household evening, on the screen (owner instruction of 2026-
     const patrick = { ...hostSeat, participant_id: 14, seat: 3, user_id: 3, name: 'Patrick', colour: '#7a55b8' };
     tonight.lobby = { ...room, seats: [hostSeat, jenny, patrick, { ...guestSeat, seat: 4 }] };
     tonight.progress = [
-      { participant_id: 11, name: 'Mia', answered: 2, finished: false },
-      { participant_id: 13, name: 'Jenny', answered: 3, finished: false, answer: 'NEITHER' },
-      { participant_id: 14, name: 'Patrick', answered: 5, finished: true },
-      { participant_id: 12, name: 'Guest 1', answered: 0, finished: false }
+      { participant_id: 11, name: 'Mia', answered: 2, expected: 10, finished: false },
+      { participant_id: 13, name: 'Jenny', answered: 3, expected: 10, finished: false, answer: 'NEITHER' },
+      { participant_id: 14, name: 'Patrick', answered: 5, expected: 10, finished: true },
+      { participant_id: 12, name: 'Guest 1', answered: 0, expected: 10, finished: false }
     ];
     tonight.round = {
       participant_id: 11, answered: 2, typical: 10, escape_available: false, card_token: 'card-11',
@@ -577,9 +577,9 @@ describe('the first household evening, on the screen (owner instruction of 2026-
 
     const rows = [...byTestId('tonight-round-progress').querySelectorAll('li')];
     expect(rows.map((r) => r.lastElementChild.textContent)).toEqual([
-      'Jenny is on pair 4',
-      'Patrick is done',
-      'Guest 1 is on pair 1'
+      'Jenny 3/~10',
+      'Patrick 5/5 done',
+      'Guest 1 0/~10'
     ]);
     const tint = (row) => row.querySelector('.avatar').style.background;
     expect(tint(rows[0]), 'the admin reads graphite wherever they appear').toBe('rgb(107, 99, 91)');
@@ -618,6 +618,30 @@ describe('the first household evening, on the screen (owner instruction of 2026-
     expect(byTestId('tonight-reserved-for').textContent).toContain("Jenny's pick");
     expect(byTestId('tonight-reserved'), 'the axis label over a seat pick').toBeNull();
     expect(byTestId('tonight-winner').querySelector('[data-testid="rate-poster"]')).not.toBeNull();
+    expect(target.querySelector('.reveal.playing'), "a reload replays the evening's beat").toBeNull();
+  });
+
+  it('draws the stage before the result lands, so the last voter never sees an empty flow', () => {
+    // The last ballot sets the step before the result read answers.
+    tonight.lobby = { ...room, state: 'ballot' };
+    tonight.ballot = { slate: [{ title_id: 1, slot: 'finalist', name: 'Heat' }], submitted: 1, seated: 2 };
+    tonight.activeSeat = 11;
+    tonight.step = 'ballot';
+    app = mount(TonightPage, { target });
+    flushSync();
+
+    tonight.step = 'reveal';
+    flushSync();
+    expect(byTestId('tonight-beat').textContent).toBe("Tonight's pick");
+    expect(byTestId('tonight-reveal'), 'drawn before there is a result').toBeNull();
+
+    tonight.result = {
+      participants: 2, approval_share: 1, breadth: [], runners_up: [], wildcard: null,
+      winner: { title_id: 1, name: 'Heat', match_lines: [], fit_line: '' }
+    };
+    flushSync();
+    expect(byTestId('tonight-winner').textContent).toContain('Heat');
+    expect(target.querySelector('.reveal.playing'), 'this page saw the votes land').not.toBeNull();
   });
 
   it('offers the lobby its share link and the not-tonight chips', () => {
