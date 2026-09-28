@@ -223,6 +223,28 @@ async def test_a_verdict_implies_seen_and_undo_restores_the_exact_prior_state(db
     assert await db.fetchval("SELECT count(*) FROM verdict WHERE user_id = $1", user) == 0
 
 
+async def test_a_tier_implies_seen_and_a_seen_title_owes_jellyfin_nothing(db, world):
+    """Decision 531. A title already seen keeps its row as it was, or every move queues a push."""
+    user = world["user"]
+    stamp = datetime(2026, 1, 2, 3, 4, 5, tzinfo=UTC)
+    state = "SELECT state, jf_synced_at FROM user_title WHERE user_id=$1 AND title_id=$2"
+    await db.executemany(
+        "INSERT INTO user_title (user_id, title_id, state, jf_synced_at) VALUES ($1,$2,$3,$4)",
+        [(user, 1, "unseen", stamp), (user, 2, "seen", stamp)],
+    )
+
+    write = await observations.record_tier_edit(db, user_id=user, title_id=1, tier=4)
+    assert write.implied_seen is True
+    assert tuple(await db.fetchrow(state, user, 1)) == ("seen", None)
+    await observations.undo(db, user_id=user, write=write)
+    assert tuple(await db.fetchrow(state, user, 1)) == ("unseen", stamp)
+    assert await db.fetchval("SELECT count(*) FROM tier_edit WHERE user_id = $1", user) == 0
+
+    moved = await observations.record_tier_edit(db, user_id=user, title_id=2, tier=4)
+    assert moved.implied_seen is False
+    assert tuple(await db.fetchrow(state, user, 2)) == ("seen", stamp)
+
+
 async def test_not_seen_writes_no_observation_row_and_keeps_the_history(db, world):
     user = world["user"]
     await observations.record_verdict(db, user_id=user, title_id=1, value=2)

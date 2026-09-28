@@ -4,7 +4,6 @@
   import { onDestroy, onMount, tick } from 'svelte';
   import { flip } from 'svelte/animate';
   import { cubicOut } from 'svelte/easing';
-  import ActionSheet from '$lib/components/ActionSheet.svelte';
   import RateBattleCard from '$lib/components/RateBattleCard.svelte';
   import RatePeek from '$lib/components/RatePeek.svelte';
   import RatePoster from '$lib/components/RatePoster.svelte';
@@ -12,7 +11,6 @@
   import TitleDetail from '$lib/components/TitleDetail.svelte';
   import { modelGate } from '$lib/home.svelte.js';
   import { flipFrom, ms, still } from '$lib/motion.js';
-  import { seed } from '$lib/place.svelte.js';
   import { session } from '$lib/session.svelte.js';
   import { topbar } from '$lib/topbar.svelte.js';
   import {
@@ -100,8 +98,6 @@
     }
   }
 
-  /** @type {any} the title whose card is open, kept past a move to a page not loaded */
-  let card = $state(null);
   // The comparison round answers as Rate's pairs do; a poster only shows the film (decision 528).
   let queuePeek = $state(null);
   const queueCard = $derived(
@@ -123,29 +119,8 @@
     held = null;
     closeQueue();
   }
-  /** @type {any} the title whose tier sheet is open */
-  let moving = $state(null);
-  const moveOptions = $derived.by(() => {
-    const entry = moving;
-    if (!entry) return [];
-    return rank.tiers.map((tier) => ({
-      label: tier.label,
-      detail: tier.verdict || undefined,
-      checked: tier.index === entry.tier,
-      onSelect: async () => {
-        if ((await move(entry, tier.index)) && card?.title_id === entry.title_id) {
-          card = { ...card, tier: tier.index };
-        }
-      }
-    }));
-  });
-  const cardTier = $derived(card && rank.tiers.find((t) => t.index === card.tier));
-  // About log2(n) either-or questions place a title inside its tier.
-  const questions = $derived(cardTier ? Math.ceil(Math.log2(cardTier.count ?? cardTier.entries.length)) : 0);
-
   function open(entry) {
     if (suppressClick) return;
-    card = entry;
     openTitle(entry);
   }
 
@@ -503,8 +478,6 @@
       <rect x="4" y="14" width="6" height="6" rx="1.25" /><rect x="14" y="14" width="6" height="6" rx="1.25" />
     {:else if name === 'large'}
       <rect x="4" y="5" width="6" height="14" rx="1.25" /><rect x="14" y="5" width="6" height="14" rx="1.25" />
-    {:else if name === 'chevron'}
-      <path d="m9.5 5.5 6.5 6.5-6.5 6.5" />
     {/if}
   </svg>
 {/snippet}
@@ -567,38 +540,6 @@
       {/if}
     {/if}
   </div>
-{/snippet}
-
-{#snippet ranking()}
-  {#if cardTier}
-    <div class="list-group ranking">
-      <button
-        class="list-row"
-        aria-haspopup="dialog"
-        aria-label="In your ranking: {cardTier.label}{cardTier.verdict ? `, ${cardTier.verdict}` : ''}"
-        onclick={() => (moving = card)}
-        data-testid="rank-card-tier"
-      >
-        <span class="grow">In your ranking</span>
-        <span class="letter">{cardTier.label}</span>
-        {#if cardTier.verdict}<span class="footnote">{cardTier.verdict}</span>{/if}
-        {@render icon('chevron')}
-      </button>
-      {#if questions > 0}
-        <a
-          class="list-row"
-          href="/rank/place/{card.title_id}?kind={rank.kind}"
-          onclick={() => seed(card)}
-          data-testid="rank-card-place"
-        >
-          <span class="grow">Place with questions</span>
-          <span class="footnote">{questions} quick {questions === 1 ? 'question' : 'questions'}</span>
-          {@render icon('chevron')}
-        </a>
-      {/if}
-    </div>
-    {#if card.tension}<p class="list-footer" data-testid="rank-card-tension">{card.tension}</p>{/if}
-  {/if}
 {/snippet}
 
 <section class="rank" class:wide class:dragging={!!drag} data-testid="rank-surface">
@@ -943,17 +884,9 @@
     onClose={closeTitle}
     onPerson={closeTitle}
     onStateChange={() => load(rank.kind)}
-    {ranking}
+    onMove={(entry, tier) => move(entry, tier.index)}
   />
 {/if}
-
-<!-- After the card, so the tier sheet opens over it. -->
-<ActionSheet
-  open={moving !== null}
-  title={moving ? `Move ${moving.name}` : ''}
-  options={moveOptions}
-  onClose={() => (moving = null)}
-/>
 
 <style>
   .rank {
@@ -1494,25 +1427,6 @@
   .wide .nothing {
     flex: 1;
     background: none;
-  }
-
-  .ranking .list-row {
-    gap: 8px;
-    padding-right: 12px;
-    color: var(--text);
-  }
-  .ranking .letter {
-    background: var(--surface-3);
-  }
-  .ranking .footnote {
-    flex: none;
-    margin: 0;
-  }
-  .ranking svg {
-    width: 16px;
-    height: 16px;
-    flex: none;
-    color: var(--text-3);
   }
 
   .model,

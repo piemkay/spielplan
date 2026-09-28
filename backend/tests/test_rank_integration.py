@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 
 from spielplan.db import library
-from spielplan.home import rail
+from spielplan.home import rail, shelves
 from spielplan.ledger import model, observations, refit
 from spielplan.ledger.hyperparams import DEFAULTS
 from spielplan.rank import drop, evaluation, queue, read, tiers
@@ -241,6 +241,47 @@ async def test_tap_to_tier_writes_exactly_what_the_pointer_path_writes(db, board
     assert await db.fetchval(
         "SELECT count(*) FROM duel WHERE user_id=$1 AND context='tier_insert'", board_of
     ) == 0, "a tap into a tier invents no comparison"
+
+
+async def test_a_tier_on_an_unrated_title_answers_the_verdict_it_stands_for(db, board_of):
+    """Decision 531: one tap puts a title never rated on the board in that tier, seen. Seen with no
+    verdict it would sit on Home's banner, so the tier's verdict comes with it."""
+    before = await read.standing(db, user_id=board_of, kind="movie", title_id=7, hp=DEFAULTS)
+    assert before["tier"] is None, "the model's guess for an unrated title reached the card"
+    assert [t["label"] for t in before["tiers"]] == ["S", "A+", "A", "B", "C", "D", "F"]
+
+    result = await drop.drop(db, user_id=board_of, title_id=7, tier=5, title_name="Thief")
+
+    rows = await db.fetch("SELECT value, source FROM verdict WHERE user_id=$1 AND title_id=7", board_of)
+    assert [(r["value"], r["source"]) for r in rows] == [(model.verdict_class_of_tier(5, 7), "tier")]
+    assert await db.fetchval(
+        "SELECT state FROM user_title WHERE user_id=$1 AND title_id=7", board_of
+    ) == "seen"
+    assert await db.fetchval(
+        "SELECT tier FROM tier_edit WHERE user_id=$1 AND title_id=7", board_of
+    ) == 5
+    assert result.log == "tier_edit(Thief → A+, via=drag_drop) + verdict = liked"
+    assert await shelves.pending_verdicts(db, user_id=board_of) is None
+
+    await fitted(db, board_of)
+    after = await read.standing(db, user_id=board_of, kind="movie", title_id=7, hp=DEFAULTS)
+    assert after["tier"] == 5
+    assert next(t for t in after["tiers"] if t["index"] == 5)["count"] >= 1
+
+
+async def test_a_tier_on_a_rated_title_keeps_its_verdict_and_counts_it_seen(db, board_of):
+    """Decision 531: the verdict stands even where the tier's class says otherwise, and Not seen,
+    which never removed it, is undone by the tier."""
+    verdicts = "SELECT id, value, superseded_by FROM verdict WHERE user_id=$1 AND title_id=3"
+    before = [dict(r) for r in await db.fetch(verdicts, board_of)]
+    await observations.record_not_seen(db, user_id=board_of, title_id=3)
+
+    await drop.drop(db, user_id=board_of, title_id=3, tier=0)
+
+    assert [dict(r) for r in await db.fetch(verdicts, board_of)] == before
+    assert await db.fetchval(
+        "SELECT state FROM user_title WHERE user_id=$1 AND title_id=3", board_of
+    ) == "seen"
 
 
 async def test_ledger_cutpoints_is_keyed_by_user_and_kind(db, world):

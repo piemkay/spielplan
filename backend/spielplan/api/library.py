@@ -15,6 +15,7 @@ from spielplan.core.config import settings
 from spielplan.db import dna_terms, genres, library
 from spielplan.home import rail, suggest
 from spielplan.models import artifacts, basis
+from spielplan.rank import read as rank_read
 from spielplan.rate import direct
 from spielplan.scoring import serve
 
@@ -145,6 +146,13 @@ async def title_detail(title_id: int, conn: DB, user: ActiveUser, request: Reque
         },
         # Decision 487: the person's own standing answer.
         "my_verdict": await direct.live_verdict(conn, user_id=user.id, title_id=title_id),
+        # Decision 531: §6.3's ranking rows. Unreadable constants hide them rather than 503 the card.
+        "ranking": None
+        if request.app.state.hyperparams is None
+        else await rank_read.standing(
+            conn, user_id=user.id, kind=title["kind"], title_id=title_id,
+            hp=request.app.state.hyperparams,
+        ),
         # Decision 515: why this title is suggested, or None.
         "why": await suggest.why_suggested(
             conn, user_id=user.id, title_id=title_id,

@@ -20,6 +20,7 @@ vi.mock('$app/navigation', () => ({
 }));
 
 import { get, post } from '$lib/api.js';
+import { hideToast, toast } from '$lib/toast.svelte.js';
 import TitleDetail from './TitleDetail.svelte';
 
 const NOTE = '[data-testid="title-series-unseen-note"]';
@@ -967,6 +968,151 @@ describe("the card's own answer (decision 487)", () => {
       expect(target.querySelector('button.seen').textContent.trim()).toBe('Mark as watched');
       // The verdict survives the flip (§4.2) but is not what the person just said.
       expect(target.querySelector('[aria-pressed="true"][data-answer]')).toBeNull();
+    } finally {
+      unmount(app);
+    }
+  });
+});
+
+describe('the ranking rows on every card (decision 531)', () => {
+  // `api/library.py`'s `ranking`: the person's tier set, best first, with each tier's count.
+  const TIERS = [
+    ['S', 'Liked', 1],
+    ['A+', 'Liked', 0],
+    ['A', 'Liked', 3],
+    ['B', 'Fine', 2],
+    ['C', 'Disliked', 0],
+    ['D', 'Disliked', 0],
+    ['F', 'Disliked', 0]
+  ].map(([label, verdict, count], i) => ({ index: 6 - i, label, verdict, count, entries: [] }));
+  const ranking = (tier, tension = null) => ({ tier, tension, tiers: TIERS });
+  const heat = { kind: 'movie', name: 'Heat' };
+
+  const byTestId = (testid) => target.querySelector(`[data-testid="${testid}"]`);
+  const sheet = (name) => target.querySelector(`[role="dialog"][aria-label="${name}"]`);
+  const options = (name) => [...sheet(name).querySelectorAll('[role="menuitem"]')];
+  async function choose(name, label) {
+    byTestId('rank-card-tier').click();
+    await settle();
+    options(name).find((o) => o.querySelector('.label').textContent === label).click();
+    await settle();
+  }
+
+  beforeEach(() => hideToast());
+
+  it('names the tier on a card opened from Home, moves it there, and undoes the move', async () => {
+    vi.mocked(post).mockResolvedValue({});
+    const onStateChange = vi.fn();
+    const app = await open(
+      { ...heat, seen_state: 'seen' },
+      { my_verdict: { value: 2, label: 'liked' }, ranking: ranking(4), props: { onStateChange } }
+    );
+    try {
+      expect(byTestId('rank-card-tier').getAttribute('aria-label')).toBe('In your ranking: A, Liked');
+      expect(byTestId('rank-card-place').getAttribute('href')).toBe('/rank/place/6?kind=movie');
+      expect(byTestId('rank-card-place').textContent).toContain('2 quick questions');
+
+      byTestId('rank-card-tier').click();
+      await settle();
+      const shown = options('Move Heat');
+      expect(shown.map((o) => o.querySelector('.label').textContent)).toEqual(['S', 'A+', 'A', 'B', 'C', 'D', 'F']);
+      expect(shown[0].textContent).toContain('Liked');
+      expect(shown[2].getAttribute('aria-current')).toBe('true');
+      shown[4].click();
+      await settle();
+
+      expect(vi.mocked(post)).toHaveBeenCalledWith('/rank/drop?kind=movie&per_tier=1', { title_id: 6, tier: 2 });
+      expect(toast.message).toBe('Heat moved to C');
+      expect(toast.actionLabel).toBe('Undo');
+      expect(byTestId('rank-card-tier').getAttribute('aria-label')).toBe('In your ranking: C, Disliked');
+      expect(onStateChange, 'a rated, seen title moved touches Home not at all').not.toHaveBeenCalled();
+
+      await toast.action();
+      expect(vi.mocked(post)).toHaveBeenLastCalledWith('/rank/drop?kind=movie&per_tier=1', { title_id: 6, tier: 4 });
+    } finally {
+      unmount(app);
+    }
+  });
+
+  it('names no letter for a title not on the board, and one tap places it as seen and rated', async () => {
+    vi.mocked(post).mockResolvedValue({});
+    const onStateChange = vi.fn();
+    const app = await open(
+      { ...heat, seen_state: 'unseen' },
+      { ranking: ranking(null), why: 'Because you liked Drive', props: { onStateChange } }
+    );
+    try {
+      const row = byTestId('rank-card-tier');
+      expect(row.getAttribute('aria-label')).toBe('In your ranking: not placed yet');
+      expect(row.querySelector('.letter'), "the model's guess reached the card").toBeNull();
+      expect(byTestId('rank-card-place')).toBeNull();
+      expect(byTestId('rank-card-tension')).toBeNull();
+
+      row.click();
+      await settle();
+      expect(options('Rank Heat').some((o) => o.hasAttribute('aria-current'))).toBe(false);
+      options('Rank Heat')[2].click();
+      await settle();
+
+      expect(vi.mocked(post)).toHaveBeenCalledWith('/rank/drop?kind=movie&per_tier=1', { title_id: 6, tier: 4 });
+      expect(toast.message).toBe('Heat placed in A');
+      expect(toast.actionLabel, 'a first placement has no tier to go back to').toBe('');
+      expect(byTestId('rank-card-tier').getAttribute('aria-label')).toBe('In your ranking: A, Liked');
+      expect(target.querySelector('[data-answer="liked"]').getAttribute('aria-pressed')).toBe('true');
+      expect(target.querySelector('button.seen').textContent.trim()).toBe('Watched');
+      expect(byTestId('title-why')).toBeNull();
+      expect(onStateChange).toHaveBeenCalledWith(6, 'seen');
+    } finally {
+      unmount(app);
+    }
+  });
+
+  it('counts a rated title marked not seen as seen again, and keeps its verdict', async () => {
+    vi.mocked(post).mockResolvedValue({});
+    const onStateChange = vi.fn();
+    const app = await open(
+      { ...heat, seen_state: 'unseen' },
+      { my_verdict: { value: 1, label: 'fine' }, ranking: ranking(3), props: { onStateChange } }
+    );
+    try {
+      await choose('Move Heat', 'A');
+      expect(target.querySelector('[data-answer="fine"]').getAttribute('aria-pressed')).toBe('true');
+      expect(target.querySelector('button.seen').textContent.trim()).toBe('Watched');
+      expect(onStateChange).toHaveBeenCalledWith(6, 'seen');
+    } finally {
+      unmount(app);
+    }
+  });
+
+  it("hands the move to Rank's own when Rank opened the card", async () => {
+    const onMove = vi.fn().mockResolvedValue(true);
+    const app = await open(
+      { ...heat, seen_state: 'seen' },
+      {
+        my_verdict: { value: 2, label: 'liked' },
+        ranking: ranking(4, 'You put it in A — your other answers still point to C'),
+        props: { onMove }
+      }
+    );
+    try {
+      expect(byTestId('rank-card-tension').textContent).toBe('You put it in A — your other answers still point to C');
+      await choose('Move Heat', 'C');
+      expect(onMove).toHaveBeenCalledWith(
+        { title_id: 6, name: 'Heat', kind: 'movie', tier: 4 },
+        expect.objectContaining({ index: 2, label: 'C' })
+      );
+      expect(vi.mocked(post)).not.toHaveBeenCalled();
+      expect(byTestId('rank-card-tier').getAttribute('aria-label')).toBe('In your ranking: C, Disliked');
+      expect(byTestId('rank-card-tension'), 'the line described the old placement').toBeNull();
+    } finally {
+      unmount(app);
+    }
+  });
+
+  it('draws no row when the payload carries no ranking', async () => {
+    const app = await open(heat, { ranking: null });
+    try {
+      expect(byTestId('rank-card-tier')).toBeNull();
     } finally {
       unmount(app);
     }

@@ -118,17 +118,29 @@ function route(url, init) {
   else if (url.includes('/api/rank/tier')) payload = tierReply;
   else if (url.includes('/api/rank')) payload = board(boardOver);
   else if (url.includes('/api/titles/')) {
-    // `api/library.py`'s title payload, in the shape `TitleDetail.svelte.test.js` pins.
+    // `api/library.py`'s title payload, in the shape `TitleDetail.svelte.test.js` pins; its
+    // `ranking` read off the same board, as `rank/read.py::standing` reads it.
+    const id = Number(url.match(/\/api\/titles\/(\d+)/)[1]);
+    const { tiers } = board(boardOver);
+    const on = tiers.flatMap((t) => t.entries).find((e) => e.title_id === id);
     payload = {
       title: {
-        id: 2, name: 'Drive', kind: 'movie', year: 2011, runtime_min: 100, seen_state: 'seen',
+        id, name: on?.name ?? 'Drive', kind: 'movie', year: 2011, runtime_min: 100, seen_state: 'seen',
         original_name: null, overview: null, trailer_key: null
       },
       model_line: { available: false, reason: 'no bundle' },
       credits: [],
       platform_ratings: { items: [], note: 'display-only' },
       dna: { extracted: [], projected: [] },
-      actions: { play_on_jellyfin: null, show_on_map: { title_id: 2 } }
+      my_verdict: { value: 2, label: 'liked' },
+      ranking: {
+        tier: on?.tier ?? null,
+        tension: on?.tension ?? null,
+        tiers: tiers.map(({ index, label, verdict, count, entries }) => ({
+          index, label, verdict, count: count ?? entries.length, entries: []
+        }))
+      },
+      actions: { play_on_jellyfin: null, show_on_map: { title_id: id } }
     };
   } else payload = {};
   return Promise.resolve({

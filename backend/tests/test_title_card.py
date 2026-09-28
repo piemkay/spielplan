@@ -8,6 +8,8 @@ import json
 import pytest
 
 from spielplan.api import auth as auth_api
+from spielplan.ledger import refit
+from spielplan.ledger.hyperparams import DEFAULTS
 from tests.helpers import household
 
 VOCAB = "v1"
@@ -233,6 +235,31 @@ async def test_the_card_answer_takes_the_table_and_the_old_token_goes_stale(card
     stale = await card.post("/api/rate/verdict", json={"card_token": parked["token"], "value": 2})
     assert stale.status_code == 409
     assert stale.json()["detail"]["reason"] == "stale_card"
+
+
+async def test_the_card_ranks_a_title_with_no_letter_before_the_persons_own_answer(db, card):
+    """Decision 531: the rows name the person's own tier, never the model's guess; one tap places."""
+    uid = await db.fetchval("SELECT id FROM app_user WHERE name = 'jenny'")
+    await db.execute(
+        "INSERT INTO ledger_state (user_id, title_id, kind, s, sigma, tier, observed) "
+        "VALUES ($1, 4, 'movie', 2.0, 0.3, 6, false)",
+        uid,
+    )
+    ranking = (await card.get("/api/titles/4")).json()["ranking"]
+    assert ranking["tier"] is None and ranking["tension"] is None
+    assert [(t["label"], t["verdict"], t["count"]) for t in ranking["tiers"]] == [
+        ("S", "Liked", 0), ("A+", "Liked", 0), ("A", "Liked", 0), ("B", "Fine", 0),
+        ("C", "Disliked", 0), ("D", "Disliked", 0), ("F", "Disliked", 0),
+    ]
+
+    placed = await card.post("/api/rank/drop?kind=movie&per_tier=1", json={"title_id": 4, "tier": 5})
+    assert placed.status_code == 200, placed.text
+    # The first observation of a kind is fitted by the sweep, not in the request.
+    await refit.refit_user(db, user_id=uid, kind="movie", hp=DEFAULTS)
+    body = (await card.get("/api/titles/4")).json()
+    assert body["ranking"]["tier"] == 5
+    assert body["my_verdict"] == {"value": 2, "label": "liked"}
+    assert body["title"]["seen_state"] == "seen"
 
 
 async def test_the_card_answer_route_refuses_what_it_cannot_answer(app, card):

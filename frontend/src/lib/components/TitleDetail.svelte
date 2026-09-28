@@ -4,6 +4,8 @@
   // Show the model on.
   import { get, post } from '$lib/api.js';
   import { facetColour, modelGate } from '$lib/home.svelte.js';
+  import { seed as seedPlace } from '$lib/place.svelte.js';
+  import { cardMove } from '$lib/rank.svelte.js';
   import { runtimeLabel } from '$lib/rate.svelte.js';
   import { session } from '$lib/session.svelte.js';
   import { termLabel } from '$lib/terms.js';
@@ -26,14 +28,16 @@
     sourceLabel,
     syncNote as syncNoteFor
   } from '$lib/titleCard.js';
+  import ActionSheet from '$lib/components/ActionSheet.svelte';
   import AnswerTiles from '$lib/components/AnswerTiles.svelte';
   import Headshot from '$lib/components/Headshot.svelte';
   import RatePoster from '$lib/components/RatePoster.svelte';
   import Sheet from '$lib/components/Sheet.svelte';
 
-  // `ranking`: the rows only Rank passes in, above the answers (decision 528). `seed`: the title as
-  // the tapped poster had it, so the card opens on its poster and name before the read lands.
-  let { titleId, seed = undefined, onClose, onPerson, onStateChange, ranking = undefined } = $props();
+  // `seed`: the title as the tapped poster had it, so the card opens on its poster and name before
+  // the read lands. `onMove(entry, tier)`: Rank's own move, which also replaces its board; anywhere
+  // else the card drops the title itself (decision 531).
+  let { titleId, seed = undefined, onClose, onPerson, onStateChange, onMove = undefined } = $props();
 
   let open = $state(true);
   let data = $state(null);
@@ -151,6 +155,39 @@
     } finally {
       answering = null;
     }
+  }
+
+  // §6.3's two rows; `tier` is null until the title is on the person's own board.
+  let choosing = $state(false);
+  const ranking = $derived(data?.ranking ?? null);
+  const placedTier = $derived(ranking?.tiers.find((tier) => tier.index === ranking.tier) ?? null);
+  // About log2(n) either-or questions place a title inside its tier.
+  const questions = $derived(placedTier ? Math.ceil(Math.log2(placedTier.count)) : 0);
+  const moveOptions = $derived(
+    (ranking?.tiers ?? []).map((tier) => ({
+      label: tier.label,
+      detail: tier.verdict || undefined,
+      checked: tier.index === ranking.tier,
+      onSelect: () => chooseTier(tier)
+    }))
+  );
+
+  // A tier implies seen, and on an unrated title answers the verdict it stands for (decision 531).
+  async function chooseTier(tier) {
+    const t = data.title;
+    const entry = { title_id: t.id, name: t.name, kind: t.kind, tier: data.ranking.tier };
+    if (!(await (onMove ?? cardMove)(entry, tier))) return;
+    const added = !data.my_verdict || t.seen_state !== 'seen';
+    const verdict = tier.verdict.toLowerCase();
+    data = {
+      ...data,
+      title: { ...data.title, seen_state: 'seen' },
+      my_verdict: data.my_verdict ?? { value: ['disliked', 'fine', 'liked'].indexOf(verdict), label: verdict },
+      // The tension line described the old placement.
+      ranking: { ...data.ranking, tier: tier.index, tension: null },
+      why: null
+    };
+    if (added) onStateChange?.(t.id, 'seen');
   }
 
   const lead = $derived(data?.title ?? seed ?? null);
@@ -290,7 +327,43 @@
                 </div>
               {/if}
 
-              {@render ranking?.()}
+              {#if ranking}
+                <div class="list-group ranking">
+                  <button
+                    class="list-row"
+                    aria-haspopup="dialog"
+                    aria-label="In your ranking: {placedTier
+                      ? `${placedTier.label}${placedTier.verdict ? `, ${placedTier.verdict}` : ''}`
+                      : 'not placed yet'}"
+                    onclick={() => (choosing = true)}
+                    data-testid="rank-card-tier"
+                  >
+                    <span class="grow">In your ranking</span>
+                    {#if placedTier}
+                      <span class="letter">{placedTier.label}</span>
+                      {#if placedTier.verdict}<span class="footnote">{placedTier.verdict}</span>{/if}
+                    {:else}
+                      <span class="footnote">Not placed yet</span>
+                    {/if}
+                    {@render icon('chevron', 16)}
+                  </button>
+                  {#if questions > 0}
+                    <a
+                      class="list-row"
+                      href="/rank/place/{t.id}?kind={t.kind}"
+                      onclick={() => seedPlace({ title_id: t.id, name: t.name })}
+                      data-testid="rank-card-place"
+                    >
+                      <span class="grow">Place with questions</span>
+                      <span class="footnote">{questions} quick {questions === 1 ? 'question' : 'questions'}</span>
+                      {@render icon('chevron', 16)}
+                    </a>
+                  {/if}
+                </div>
+                {#if ranking.tension}
+                  <p class="list-footer" data-testid="rank-card-tension">{ranking.tension}</p>
+                {/if}
+              {/if}
 
               <div class="answerblock">
                 <h3 class="list-header">Your answer</h3>
@@ -509,6 +582,14 @@
   {/snippet}
 </Sheet>
 
+<!-- After the card, so the tier sheet opens over it. -->
+<ActionSheet
+  open={choosing}
+  title={data ? `${data.ranking?.tier == null ? 'Rank' : 'Move'} ${data.title.name}` : ''}
+  options={moveOptions}
+  onClose={() => (choosing = false)}
+/>
+
 <style>
   p,
   h2,
@@ -645,6 +726,36 @@
   }
   .answerblock .list-header {
     padding: 0;
+  }
+  .ranking .list-row {
+    gap: 8px;
+    padding-right: 12px;
+    color: var(--text);
+  }
+  .ranking .grow {
+    flex: 1;
+    min-width: 0;
+  }
+  .letter {
+    min-width: 28px;
+    height: 28px;
+    flex: none;
+    padding: 0 3px;
+    display: grid;
+    place-items: center;
+    border-radius: 8px;
+    background: var(--surface-3);
+    font-family: var(--serif);
+    font-size: var(--fs-section);
+    line-height: 22px;
+    color: var(--text);
+  }
+  .ranking .footnote {
+    flex: none;
+  }
+  .ranking svg {
+    flex: none;
+    color: var(--text-3);
   }
   .status {
     min-height: 18px;

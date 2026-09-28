@@ -246,6 +246,26 @@ async def placements(
     return [by_id[int(t)].public() for t in title_ids if int(t) in by_id]
 
 
+async def standing(
+    conn: asyncpg.Connection,
+    *,
+    user_id: int,
+    kind: str,
+    title_id: int,
+    hp: Hyperparams,
+) -> dict[str, Any]:
+    """The title card's ranking rows (decision 531): where the title sits on the whole UNFILTERED
+    board, and the tiers it can be moved to. `tier` is None off the board, so the model's guess for
+    a title the person has not placed never reaches the card (§6.1)."""
+    tiers, _cuts, _rows = await load(conn, user_id=user_id, kind=kind, hp=hp)
+    entry = next((e for tier in tiers for e in tier.entries if e.title_id == title_id), None)
+    return {
+        "tier": None if entry is None else entry.tier,
+        "tension": None if entry is None else entry.tension,
+        "tiers": public(tiers, 0),
+    }
+
+
 async def candidates(
     conn: asyncpg.Connection,
     *,
@@ -314,4 +334,5 @@ __all__ = [
     "placements",
     "public",
     "recent_titles",
+    "standing",
 ]

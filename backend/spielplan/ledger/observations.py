@@ -626,7 +626,7 @@ async def record_duel(
 async def record_tier_edit(
     conn: asyncpg.Connection, *, user_id: int, title_id: int, tier: int, via: str = "drag_drop"
 ) -> Write:
-    """§5.2 arm 3. No implied `seen`: §6.1 says that only of a verdict."""
+    """§5.2 arm 3. A tier, like a verdict, implies `seen` (decision 531)."""
     if via not in ("drag_drop", "explicit"):
         raise ValueError(f"via must be 'drag_drop' or 'explicit', not {via!r}")
     kind = await kind_of(conn, title_id)
@@ -634,25 +634,34 @@ async def record_tier_edit(
     if not 0 <= tier < len(tier_set):
         raise ValueError(f"tier {tier} is outside the configured set {tier_set}")
 
-    # `n_levels` records the K this index means (decision 11); no tier-set history exists.
-    row_id = await conn.fetchval(
-        "INSERT INTO tier_edit (user_id, title_id, tier, via, n_levels) "
-        "VALUES ($1,$2,$3,$4,$5) RETURNING id",
-        user_id,
-        title_id,
-        tier,
-        via,
-        len(tier_set),
-    )
+    async with conn.transaction():
+        prior = await _capture_prior(conn, user_id=user_id, title_id=title_id)
+        # `n_levels` records the K this index means (decision 11); no tier-set history exists.
+        row_id = await conn.fetchval(
+            "INSERT INTO tier_edit (user_id, title_id, tier, via, n_levels) "
+            "VALUES ($1,$2,$3,$4,$5) RETURNING id",
+            user_id,
+            title_id,
+            tier,
+            via,
+            len(tier_set),
+        )
+        implied_seen = prior.state != "seen"
+        # Only a change is written: a move of a seen title must not owe Jellyfin a push (§7.3).
+        if implied_seen:
+            await _set_state(conn, user_id=user_id, title_id=title_id, state="seen")
     return Write(
         arm="tier_edit",
         row_id=int(row_id),
         user_id=user_id,
         kind=kind,
         title_ids=(title_id,),
+        implied_seen=implied_seen,
+        prior_state=(prior,) if implied_seen else (),
         log=(
             f"tier_edit(title {title_id} -> {tier_set[tier]}, via={via}) "
             "-> K-level ordered logit"
+            + (" · implies seen" if implied_seen else "")
         ),
     )
 

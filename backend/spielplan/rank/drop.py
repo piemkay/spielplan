@@ -2,6 +2,7 @@
 
 Neighbours are re-checked under a per-user lock in the same transaction as the writes, so a duel is
 never stored against a title that has moved. Under a filter no neighbour duels are written (decision 204).
+A tier on a title with no verdict also answers the verdict it stands for (decision 531).
 """
 
 from __future__ import annotations
@@ -130,6 +131,17 @@ async def drop(
                     raise DropRefused(
                         f"title {neighbour} is not in {tier_set[tier]} any more - reload the board"
                     )
+        answered: int | None = None
+        live = await conn.fetchval(
+            f"SELECT 1 FROM ({observations.LIVE_LABEL_SQL}) l WHERE l.title_id = $2",
+            user_id,
+            title_id,
+        )
+        if live is None:
+            answered = model.verdict_class_of_tier(tier, len(tier_set))
+            await observations.record_verdict(
+                conn, user_id=user_id, title_id=title_id, value=answered, source="tier"
+            )
         edit = await observations.record_tier_edit(
             conn, user_id=user_id, title_id=title_id, tier=tier, via=via
         )
@@ -160,6 +172,8 @@ async def drop(
         via=via,
         neighbour_duels=len(duel_ids),
     )
+    if answered is not None:
+        line += f" + verdict = {observations.VERDICT_LABELS[answered]}"
     return DropResult(
         user_id=user_id,
         title_id=title_id,

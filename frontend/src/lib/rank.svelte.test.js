@@ -7,6 +7,7 @@ import {
   TYPING_PAUSE_MS,
   answer,
   apply,
+  cardMove,
   chooseKind,
   clearFilter,
   clearFilters,
@@ -221,6 +222,42 @@ describe('a move (decision 528)', () => {
     await move(rank.tiers[0].entries[0], 4);
     expect(rank.error).not.toBe('');
     expect(toast.message).toBe('');
+  });
+});
+
+describe('a move from a title card off Rank (decision 531)', () => {
+  const heat = { title_id: 1, name: 'Heat', kind: 'series', tier: 6 };
+  const tierC = { index: 2, label: 'C', verdict: 'Disliked' };
+
+  it('drops the title for its own kind and leaves the board on Rank alone', async () => {
+    const before = JSON.stringify(rank.tiers);
+    respond(board({ kind: 'series', tiers: [] }));
+    expect(await cardMove(heat, tierC)).toBe(true);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(url).toContain('/api/rank/drop?kind=series&per_tier=1');
+    expect(JSON.parse(init.body)).toEqual({ title_id: 1, tier: 2 });
+    expect(JSON.stringify(rank.tiers)).toBe(before);
+    expect(toast.message).toBe('Heat moved to C');
+
+    respond(board());
+    await toast.action();
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({ title_id: 1, tier: 6 });
+  });
+
+  it('offers no Undo for a first placement, and writes nothing for the tier it holds', async () => {
+    expect(await cardMove(heat, { index: 6, label: 'S' })).toBe(false);
+    expect(fetchMock).not.toHaveBeenCalled();
+    respond(board());
+    await cardMove({ ...heat, tier: null }, tierC);
+    expect(toast.message).toBe('Heat placed in C');
+    expect(toast.actionLabel).toBe('');
+  });
+
+  it('says so when the server refuses, and claims no move', async () => {
+    respond({ detail: 'database error' }, 500);
+    expect(await cardMove(heat, tierC)).toBe(false);
+    expect(toast.message).toMatch(/^Could not move Heat — /);
+    expect(toast.actionLabel).toBe('');
   });
 });
 

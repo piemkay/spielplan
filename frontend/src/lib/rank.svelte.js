@@ -259,6 +259,29 @@ export async function move(entry, tier, above = null, below = null) {
   return true;
 }
 
+/** The tier sheet on a title card off Rank (decision 531): the same drop, replacing no board. A
+ *  first placement has no tier to go back to, so it offers no Undo. */
+export async function cardMove(entry, tier) {
+  if (tier.index === entry.tier) return false;
+  haptic();
+  const to = async (index) => {
+    try {
+      await post(`/rank/drop?kind=${entry.kind}&per_tier=1`, { title_id: entry.title_id, tier: index });
+      return true;
+    } catch (err) {
+      showToast(`Could not move ${entry.name} — ${err.message}`);
+      return false;
+    }
+  };
+  if (!(await to(tier.index))) return false;
+  const first = entry.tier == null;
+  showToast(
+    first ? `${entry.name} placed in ${tier.label}` : `${entry.name} moved to ${tier.label}`,
+    first ? null : { label: 'Undo', run: () => to(entry.tier) }
+  );
+  return true;
+}
+
 /** "+N" opens a tier in place; the read fetches the rest of it. */
 export function showAll(index) {
   if (!rank.expanded.includes(index)) rank.expanded = [...rank.expanded, index];
