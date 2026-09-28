@@ -928,6 +928,7 @@ describe("the card's own answer (decision 487)", () => {
     try {
       target.querySelector('[data-answer="liked"]').click();
       await settle();
+      expect(target.querySelector('[data-answer="liked"]').hasAttribute('data-flick')).toBe(true);
       expect(vi.mocked(post)).not.toHaveBeenCalled();
       expect(target.querySelector('[data-answer="liked"]').getAttribute('aria-pressed')).toBe(
         'true'

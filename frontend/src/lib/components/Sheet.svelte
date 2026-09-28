@@ -193,7 +193,6 @@
     border-radius: var(--r-lg) var(--r-lg) 0 0;
     box-shadow: var(--shadow-sheet);
     outline: none;
-    /* Up from the screen's edge, opaque all the way; let go short of closing, it springs back. */
     animation: rise var(--dur-slow) var(--ease-sheet);
     transition: transform 280ms var(--ease-sheet);
   }

@@ -30,7 +30,7 @@
   </div>
 {:else if rows.length}
   <div
-    class="shelves"
+    class="shelves dims"
     data-testid="shelves"
     data-shelf-count={payload?.shelves_total ?? 0}
     aria-busy={stale}
@@ -69,19 +69,11 @@
     display: flex;
     flex-direction: column;
     gap: 32px;
-    transition: opacity var(--dur-quick) var(--ease);
-  }
-  /* The previous kind's shelves step back and take no tap until the new ones land. */
-  .shelves[aria-busy='true'] {
-    opacity: 0.45;
-    pointer-events: none;
-    transition-delay: 120ms;
   }
   /* Holds the status line, which design.css places absolutely. */
   .loading {
     position: relative;
   }
-  /* ShelfRow's shape: a title and a why line, then 2:3 cells running to the screen's edge. */
   .skel {
     display: flex;
     flex-direction: column;

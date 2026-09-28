@@ -662,7 +662,6 @@
     margin-top: auto;
     border-radius: var(--r-md);
   }
-  /* One line, the height of the reason it stands in for. */
   .echo {
     min-width: 0;
     height: 18px;
@@ -672,7 +671,6 @@
     gap: 6px;
     color: var(--text);
     white-space: nowrap;
-    --enter-s: 1;
     animation: enter var(--dur-quick) var(--ease);
   }
   .echo > :global(svg) {
@@ -683,9 +681,6 @@
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
-  }
-  .echo-text::first-letter {
-    text-transform: uppercase;
   }
   .drained {
     margin: auto 0;
@@ -747,10 +742,8 @@
     display: flex;
     flex-direction: column;
     gap: 8px;
-    --enter-s: 1;
     animation: enter 200ms var(--ease) 420ms both;
   }
-  /* One composed arrival of about 700 ms, the ember action last, then stillness. */
   .done-mark path {
     stroke-dasharray: 1;
     animation: draw 280ms var(--ease) 120ms both;
@@ -766,10 +759,6 @@
   }
   .done :global(li:nth-child(3) .bar > span) {
     animation-delay: 380ms;
-  }
-  .done :global(.mix > p) {
-    --enter-s: 1;
-    animation: enter 200ms var(--ease) 360ms both;
   }
   @keyframes unclip {
     from { clip-path: inset(0 100% 0 0); }

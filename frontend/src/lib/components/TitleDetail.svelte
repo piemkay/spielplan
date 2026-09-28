@@ -45,7 +45,6 @@
   let justWatched = $state(false);
   let answerNote = $state(null);
   let answering = $state(null);
-  // The answer the server refused: its tile shakes once.
   let refused = $state(null);
   // The server already omits the numbers when off; this gates only labels beside data always sent.
   const showModel = $derived(!!session.user?.show_model);
@@ -579,9 +578,7 @@
     flex-direction: column;
     gap: 16px;
   }
-  /* The rest at its real heights, drawn only once the read passes 150 ms. */
   .pending {
-    --enter-s: 1;
     display: flex;
     flex-direction: column;
     gap: 16px;
@@ -607,7 +604,6 @@
   .pending > .tiles {
     height: 60px;
   }
-  /* A seeded card's rest arrives in a short stagger under the lead already there. */
   .arrive > * {
     animation: fadeIn var(--dur-base) var(--ease) both;
   }
@@ -653,7 +649,6 @@
   .status {
     min-height: 18px;
   }
-  /* What was saved lands with the reply, and the reveal a beat after it. */
   .beat {
     animation: fadeIn var(--dur-quick) var(--ease) both;
   }
@@ -675,7 +670,6 @@
   .actions .btn-secondary:not(.trailer):not(.seen) {
     grid-column: 1 / -1;
   }
-  /* A slow push to Jellyfin reads as work; the label still changes only once it is saved. */
   .seen[aria-busy='true'] {
     opacity: 0.6;
     transition-delay: 120ms;

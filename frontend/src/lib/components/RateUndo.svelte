@@ -36,7 +36,6 @@
   .undo:disabled {
     opacity: 0.35;
   }
-  /* In flight it stays lit and winds back. */
   .undo[aria-busy='true'] {
     opacity: 1;
   }

@@ -83,12 +83,9 @@
     border-radius: 2px;
     background: var(--text);
     transform-origin: left center;
-    animation: seal 360ms var(--ease) 120ms both;
+    animation: grow-x 360ms var(--ease) 120ms both;
   }
   @keyframes tick-pop {
     40% { transform: scaleY(1.75); }
-  }
-  @keyframes seal {
-    from { transform: scaleX(0); }
   }
 </style>

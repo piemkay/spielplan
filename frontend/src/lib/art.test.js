@@ -144,15 +144,13 @@ describe('art readiness', () => {
     vi.useRealTimers();
   });
 
-  it('waits for nothing, and arms no timer, when no image can decode or motion is still', () => {
+  it('waits for nothing, and arms no timer, when no image can decode', () => {
     vi.useFakeTimers();
     expect(ready([null, {}], 150)).toBeUndefined();
-    expect(ready([{ decode: () => Promise.resolve() }], 150), 'no matchMedia: still').toBeUndefined();
     expect(vi.getTimerCount()).toBe(0);
   });
 
   it('waits for the decode, but never longer than the cap', async () => {
-    vi.stubGlobal('matchMedia', () => ({ matches: true }));
     vi.useFakeTimers();
     let done = false;
     ready([{ decode: () => Promise.resolve() }, { decode: () => new Promise(() => {}) }], 150).then(

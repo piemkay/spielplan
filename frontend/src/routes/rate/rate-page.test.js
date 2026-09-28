@@ -600,7 +600,11 @@ describe("a block's end (decisions 199 and 527)", () => {
       card: sweep,
       class_balance: { ...envelope().class_balance, counts: [3, 5, 7], total: 15 }
     });
-  const fifteenth = { ...at(1, 1), undo: { available: true, kind: 'verdict', reason: null } };
+  const fifteenth = {
+    ...at(1, 1),
+    reveal: { available: true, agreed: true, text: "we'd have guessed the same" },
+    undo: { available: true, kind: 'verdict', reason: null }
+  };
 
   it('is a screen of its own, still undoable, and Rate 15 more goes on to the next card', async () => {
     await open(at(15));
@@ -621,10 +625,12 @@ describe("a block's end (decisions 199 and 527)", () => {
     expect(target.querySelector('[data-testid="rate-sweep-card"]')).toBeNull();
     expect(target.querySelector('[data-testid="rate-skip"]')).toBeNull();
     expect(done.querySelector('[data-testid="rate-done-home"]').getAttribute('href')).toBe('/');
+    expect(done.querySelector('.echo-slot [data-testid="rate-reveal"]')).toBeTruthy();
 
     target.querySelector('[data-testid="rate-done-more"]').click();
     flushSync();
     expect(target.querySelector('[data-testid="rate-done"]')).toBeNull();
+    expect(target.querySelector('[data-testid="rate-reveal"]'), 'the echo shows once').toBeNull();
     expect(target.querySelector('[data-testid="rate-sweep-card"]')).toBeTruthy();
     expect(target.querySelector('[data-testid="rate-counter"]').textContent).toBe('1 of 15');
   });

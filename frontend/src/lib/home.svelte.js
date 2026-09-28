@@ -16,7 +16,7 @@ export function loadHome(kinds) {
 }
 
 // Home's place while another tab is open (decision 530): its member, kinds, shelves and scroll.
-export const homeKept = { user: null, kinds: null, payload: null, scrollY: 0 };
+export const homeKept = { user: null, epoch: 0, kinds: null, payload: null, scrollY: 0 };
 
 // With the toggle off the response has no `events` key at all, never an empty list to hide.
 export function loadModelLog(limit = 15) {

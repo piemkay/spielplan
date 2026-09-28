@@ -83,7 +83,6 @@
   let sharpening = $state(false);
   let ending = $state(false);
   let settingsOpen = $state(false);
-  // The door being opened, so it can say it is working.
   let opening = $state('');
   // The answer in flight and the pair it answers: the posters take it before the reply lands.
   let sent = $state(null);
@@ -244,7 +243,6 @@
     await onAnswer(value);
     sent = null;
   }
-  // A or B lifts that side and lowers the other; Either lifts both, Neither lowers both.
   const pose = (said, side) => (!said ? '' : said === side || said === 'EITHER' ? 'up' : 'down');
 
   // The reveal plays only when this page saw the last vote land, never on a reload or a re-read,
@@ -402,7 +400,7 @@
     <div class="screen at-door">
       {#if !topbar.host}{@render doorBar()}{/if}
       {@render problem()}
-      {#if tonight.notice}<p class="why" data-testid="tonight-notice">{tonight.notice}</p>{/if}
+      {#if tonight.notice}<p class="why" role="alert" data-testid="tonight-notice">{tonight.notice}</p>{/if}
       <div class="fork">
         <div class="doors">
           <button class="door press" onclick={openAndWatch} disabled={tonight.busy} data-testid="tonight-open">
@@ -1081,7 +1079,6 @@
     padding: env(safe-area-inset-top) max(var(--gutter), env(safe-area-inset-right)) 0
       max(var(--gutter), env(safe-area-inset-left));
     --enter-y: 16px;
-    --enter-s: 1;
     animation: enter var(--dur-slow) var(--ease);
   }
   .screen {
@@ -1303,7 +1300,6 @@
   }
   .rise {
     --enter-y: 10px;
-    --enter-s: 1;
     animation: enter var(--dur-base) var(--ease) calc(var(--i, 0) * 70ms) backwards;
   }
   .hero {
@@ -1539,10 +1535,8 @@
       transform: scale(0.95);
     }
   }
-  /* The next pair deals in, B a beat after A. */
   .pair :is(.art, .choice-name, .fact) {
     --enter-y: 14px;
-    --enter-s: 1;
     animation: enter 260ms var(--ease) backwards;
   }
   .choice + .choice :is(.art, .choice-name, .fact) {
@@ -1573,7 +1567,6 @@
     padding: 0 12px;
     line-height: 20px;
   }
-  /* The answer in flight keeps its fill while the other waits. */
   .answers .held:disabled {
     opacity: 1;
   }
@@ -1653,8 +1646,6 @@
     flex-direction: column;
     gap: 20px;
   }
-  /* Once per evening: the poster develops, the name rises, the yeses land, Play docks, then the
-     rest. Only filter, transform and opacity move. */
   .playing .winner-art {
     animation: develop 600ms var(--ease) backwards;
   }

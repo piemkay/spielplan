@@ -88,6 +88,14 @@
     color: var(--accent-text);
     font-weight: 600;
   }
+  svg {
+    transition: transform var(--dur-base) var(--ease-spring);
+  }
+  a:active svg {
+    --press: 0.86;
+    transform: scale(var(--press));
+    transition-duration: var(--dur-press);
+  }
 
   @media (min-width: 721px) {
     .rail {

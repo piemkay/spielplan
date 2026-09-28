@@ -363,22 +363,12 @@ button { cursor: pointer; }
 }
 
 /* The press: gives at finger-down, springs back on release. Anything else opts in with `.press`. */
-.press,
-.btn-primary,
-.btn-ghost,
-.btn-secondary,
-.btn-tinted,
-.pill,
+:is(.press, .btn-primary, .btn-ghost, .btn-secondary, .btn-tinted, .pill),
 .segmented > button {
   transition: transform var(--dur-base) var(--ease-spring), filter var(--dur-quick) var(--ease),
     background var(--dur-quick) var(--ease), opacity var(--dur-quick) var(--ease);
 }
-.press:active:not(:disabled),
-.btn-primary:active:not(:disabled),
-.btn-ghost:active:not(:disabled),
-.btn-secondary:active:not(:disabled),
-.btn-tinted:active:not(:disabled),
-.pill:active:not(:disabled),
+:is(.press, .btn-primary, .btn-ghost, .btn-secondary, .btn-tinted, .pill):active:not(:disabled),
 .segmented > button:active:not(:disabled) {
   transform: scale(var(--press));
   filter: brightness(0.92);
@@ -535,7 +525,6 @@ input[type='checkbox'], input[type='radio'], input[type='range'] { accent-color:
 
 /* A wait in the shape of what is coming, drawn only once it passes 200 ms. Leaf blocks only: it breathes. */
 .skeleton {
-  --enter-s: 1;
   background: var(--surface-1);
   border-radius: var(--r-poster);
   animation: enter var(--dur-base) var(--ease) 200ms both, breathe 1.4s ease-in-out 420ms infinite alternate;
@@ -580,7 +569,7 @@ img[data-art='loading'] {
 @keyframes enter {
   from {
     opacity: 0;
-    transform: translate(var(--enter-x, 0), var(--enter-y, 0)) scale(var(--enter-s, 0.985));
+    transform: translate(var(--enter-x, 0), var(--enter-y, 0)) scale(var(--enter-s, 1));
   }
 }
 /* A stroke drawing itself: the path carries pathLength="1" and stroke-dasharray: 1. */
@@ -590,4 +579,20 @@ img[data-art='loading'] {
 }
 @keyframes breathe {
   to { opacity: 0.6; }
+}
+@keyframes grow-x {
+  from { transform: scaleX(0); }
+}
+/* A stale answer steps back and takes no tap until the new one lands. */
+.dims { transition: opacity var(--dur-quick) var(--ease); }
+.dims[aria-busy='true'] {
+  opacity: 0.45;
+  pointer-events: none;
+  transition-delay: 120ms;
+}
+.shake { animation: shake 260ms var(--ease); }
+@keyframes shake {
+  20% { transform: translateX(-4px); }
+  45% { transform: translateX(4px); }
+  70% { transform: translateX(-2px); }
 }

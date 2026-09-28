@@ -98,7 +98,6 @@
     background: var(--text);
     color: var(--bg);
   }
-  /* The tap lands: the tile pops, its glyph flicks toward what it means, the others recede. */
   .tile[aria-busy='true'] {
     animation: pop 180ms var(--ease);
   }
@@ -116,9 +115,6 @@
   .tile:is([aria-busy='true'], [data-flick])[data-answer='fine'] :global(svg) {
     animation: swell 180ms var(--ease-spring);
   }
-  .tile.shake {
-    animation: shake 260ms var(--ease);
-  }
   @keyframes flick-up {
     from { transform: scale(0.8) rotate(-14deg); }
     55% { transform: translateY(-3px) scale(1.18); }
@@ -130,11 +126,6 @@
   @keyframes swell {
     from { transform: scale(0.85); }
     55% { transform: scale(1.15); }
-  }
-  @keyframes shake {
-    20% { transform: translateX(-4px); }
-    45% { transform: translateX(4px); }
-    70% { transform: translateX(-2px); }
   }
 
   @media (min-width: 981px) {

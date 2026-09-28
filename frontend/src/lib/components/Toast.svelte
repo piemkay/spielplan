@@ -58,7 +58,6 @@
     transition: none;
     animation: enter 260ms var(--ease-spring);
   }
-  /* A new message while open: only the words cross over. */
   .body {
     --enter-y: 0;
     --enter-s: 1;

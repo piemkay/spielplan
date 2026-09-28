@@ -369,13 +369,13 @@ export function correct(side) {
   });
 }
 
-// Restores the exact card; the echo of the answer it takes back goes with it.
 export function undo() {
   return send(() => post('/rate/undo', {}), { pending: 'undo' });
 }
 
 /** Leave a block's end screen for the card the fifteenth answer already brought. */
 export function continueRating() {
+  clearEcho();
   rate.done = null;
   shownAt = Date.now();
 }

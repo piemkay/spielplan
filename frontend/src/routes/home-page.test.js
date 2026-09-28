@@ -62,7 +62,7 @@ afterEach(() => {
   if (app) unmount(app);
   app = null;
   Object.assign(session, { user: null, hasBundle: null, restartRequired: null });
-  Object.assign(homeKept, { user: null, kinds: null, payload: null, scrollY: 0 });
+  Object.assign(homeKept, { user: null, epoch: 0, kinds: null, payload: null, scrollY: 0 });
   vi.unstubAllGlobals();
   target.remove();
 });

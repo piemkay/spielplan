@@ -157,7 +157,7 @@
   });
   onDestroy(() => {
     cancel();
-    reset();
+    reset({ board: false });
   });
 
   let lastModelEpoch = modelGate.epoch;
@@ -228,7 +228,6 @@
   let drag = $state(null);
   /** @type {any} a pointer down on a poster, before it lifts */
   let press = null;
-  /** The poster a resting finger charges, from 120 ms until it lifts at 400 ms. */
   let pressing = $state(null);
   let suppressClick = false;
   let live = $state('');
@@ -249,7 +248,7 @@
     let n = 0;
     const cells = shownOf(tier)
       // Released, it rests in the slot until the board says where it sits.
-      .filter((entry) => !(drag?.settling && entry.title_id === lifted))
+      .filter((entry) => !(drag?.settling && drag.at !== null && entry.title_id === lifted))
       .map((entry) => ({
         key: entry.title_id,
         entry,
@@ -393,8 +392,6 @@
     frame = requestAnimationFrame(autoscroll);
   }
 
-  // The write goes at release; the poster rests in the slot until the board lands (200 ms at least),
-  // then glides from there to wherever the board puts it (decision 530).
   async function finish() {
     const { entry, tier, at } = drag;
     const { above, below } = neighboursAt(tier, entry, at);
@@ -416,7 +413,6 @@
     if (ok) flipFrom(board?.querySelector(`[data-title="${entry.title_id}"]`)?.parentElement, from, 240);
   }
 
-  /** The clone sets down from under the finger into the slot. */
   function land(slot) {
     const to = `translate(${slot.left - (drag.x - drag.dx)}px, ${slot.top - (drag.y - drag.dy)}px) rotate(0deg)`;
     clone?.animate?.(
@@ -476,7 +472,7 @@
   $effect(() => {
     if (!board) return;
     const hold = (event) => {
-      if (drag?.x != null) event.preventDefault();
+      if (drag?.x != null && !drag.settling) event.preventDefault();
     };
     board.addEventListener('touchmove', hold, { passive: false });
     return () => board.removeEventListener('touchmove', hold);
@@ -672,7 +668,7 @@
   {#if rank.notice && !rank.queueOpen}
     <p class="footnote" role="status">{rank.notice}</p>
   {/if}
-  {#if rank.loading}
+  {#if rank.loading && !rank.tiers.length}
     <div class="waiting" style:--poster="{SIZES[size]}px" data-testid="rank-loading">
       <p class="sr-only" role="status">Loading your list…</p>
       {#if !wide}<span class="skeleton band"></span>{/if}
@@ -1137,11 +1133,9 @@
     overflow: hidden;
     text-overflow: ellipsis;
   }
-  /* A changed count re-enters, as when a Sharpen round closes. */
   .look .n {
     display: inline-block;
     --enter-y: 6px;
-    --enter-s: 1;
     animation: enter 200ms var(--ease);
   }
   .look.hint {
@@ -1183,7 +1177,6 @@
     margin: 0;
   }
 
-  /* The board's shape while its first read is slow: bars, two tier letters, two rows of posters. */
   .waiting {
     display: flex;
     flex-direction: column;
@@ -1208,7 +1201,6 @@
     gap: 16px;
     transition: opacity var(--dur-quick) var(--ease);
   }
-  /* A read in flight dims the board it will replace, once it has taken 150 ms. */
   .board.stale {
     opacity: 0.6;
     transition-delay: 150ms;
@@ -1251,7 +1243,6 @@
     line-height: 22px;
     color: var(--text);
   }
-  /* The target lights at once and fades after the drop. */
   .head,
   .letter {
     transition: background 480ms var(--ease), color 480ms var(--ease);
@@ -1296,7 +1287,6 @@
     user-select: none;
     transition: transform 0.15s var(--ease);
   }
-  /* A held finger charges the poster until it lifts at 400 ms. */
   .tile.pressing {
     transform: scale(0.96);
     filter: brightness(0.92);
@@ -1333,7 +1323,6 @@
     animation: fadeIn 0.2s var(--ease);
     transition: border-color 160ms var(--ease), background 160ms var(--ease);
   }
-  /* Released: the label and bar go at once, and the border fades under the landing poster. */
   .slot.settling {
     border-color: transparent;
     background: transparent;

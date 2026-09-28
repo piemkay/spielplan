@@ -2,7 +2,6 @@
 // App-minted ids carry the database's `art_epoch` as `?v=`: a re-seed reuses them, and a 200 is
 // cached for 180 days.
 
-import { still } from '$lib/motion.js';
 import { session } from '$lib/session.svelte.js';
 
 /** `derive/ids.APP_ID_MIN`: the first id this app mints; below it, the corpus's own ids. */
@@ -63,11 +62,11 @@ export function preloadPoster(title) {
 
 /**
  * Resolves once these preloaded images have decoded, or after `cap` ms, so a card is not swapped in
- * over a blank poster. Undefined, with no timer, when none can decode or motion is still.
+ * over a blank poster. Undefined, with no timer, when none can decode.
  */
 export function ready(images, cap) {
   const decodable = images.filter((image) => image?.decode);
-  if (!decodable.length || still()) return undefined;
+  if (!decodable.length) return undefined;
   const decoded = Promise.all(decodable.map((image) => image.decode().catch(() => {})));
   return Promise.race([decoded, new Promise((done) => setTimeout(done, cap))]);
 }

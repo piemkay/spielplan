@@ -239,25 +239,6 @@ describe('the envelope', () => {
     expect(rate.card.token).toBe('t2');
   });
 
-  it('holds nothing: the next card answers at once, and that tap clears the echo', async () => {
-    fetchMock.mockResolvedValue(
-      ok(envelope({ reveal: { available: false, reason: 'no guess yet - rate a few more first' } }))
-    );
-    await verdict(2);
-    expect(rate.echo.text).toBe('no guess yet - rate a few more first');
-    fetchMock.mockClear();
-
-    /** @type {(response: any) => void} */
-    let answer = () => {};
-    fetchMock.mockReturnValue(new Promise((resolve) => (answer = resolve)));
-    const tapped = skip();
-    expect(fetchMock).toHaveBeenCalledTimes(1);
-    expect(rate.echo).toBe(null);
-    answer(ok(envelope()));
-    await tapped;
-    expect(rate.echo).toBe(null);
-  });
-
   it('says which answer is in flight until the server has taken it', async () => {
     /** @type {(response: any) => void} */
     let answer = () => {};

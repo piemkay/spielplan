@@ -196,11 +196,14 @@ export async function chooseKind(kind) {
   await Promise.all([loadFacets(kind), load(kind)]);
 }
 
-// One person's board, card and round must not carry into the next person's session.
-export function reset() {
-  rank.tiers = [];
-  rank.ratedTotal = 0;
-  rank.straddling = 0;
+// One person's board, card and round must not carry into the next person's session; leaving the tab
+// keeps the board, so Back lands where it was.
+export function reset({ board = true } = {}) {
+  if (board) {
+    rank.tiers = [];
+    rank.ratedTotal = 0;
+    rank.straddling = 0;
+  }
   rank.model = null;
   rank.opened = null;
   rank.expanded = [];

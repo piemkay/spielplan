@@ -43,8 +43,6 @@
     outcome === 'TIE'
       ? 'About the same'
       : `${(outcome === 'A' ? left : right).name}: ${much ? 'much more' : 'more'}`;
-  // The side an answer in flight favours: its poster leans in, ringed, and the other recedes, further
-  // for Much more; the track runs from the middle as far as the step picked.
   const leaning = $derived(pending?.match(/^duel-([AB])/)?.[1] ?? null);
   const far = $derived(!!pending?.endsWith('-much'));
   const reach = $derived.by(() => {
@@ -213,7 +211,6 @@
     transition: transform 0.18s var(--ease), opacity 0.18s var(--ease), box-shadow 0.18s var(--ease),
       filter 0.18s var(--ease);
   }
-  /* A new side is dealt in, the right one a beat behind. */
   .art,
   .under {
     --enter-s: 0.97;
@@ -342,7 +339,7 @@
     background: var(--text-3);
     transform: scaleX(var(--reach));
     transform-origin: left center;
-    animation: pull 200ms var(--ease);
+    animation: grow-x 200ms var(--ease);
   }
   .step {
     position: relative;
@@ -422,17 +419,6 @@
   .step:disabled:not(.picked) {
     opacity: 0.45;
     transition-delay: var(--busy-delay);
-  }
-  .step.shake {
-    animation: shake 260ms var(--ease);
-  }
-  @keyframes pull {
-    from { transform: scaleX(0); }
-  }
-  @keyframes shake {
-    20% { transform: translateX(-4px); }
-    45% { transform: translateX(4px); }
-    70% { transform: translateX(-2px); }
   }
 
   /* Left-aligned like every other page, the answers right under the films (decision 529). */

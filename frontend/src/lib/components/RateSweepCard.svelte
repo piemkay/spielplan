@@ -39,7 +39,6 @@
   );
   const answerOf = (key) => answers.find((a) => key === `verdict-${a.value}`)?.answer ?? null;
   const inFlight = $derived(answerOf(pending));
-  // From the tap to the reply the poster answers too: it leans the way the answer goes.
   const pose = $derived(inFlight ?? (pending === 'not_seen' || pending === 'skip' ? pending : null));
 
   // The recall aid shows two lines until "more"; a new card starts clamped again.
@@ -185,9 +184,9 @@
     color: var(--accent-text);
     font: inherit;
   }
-  /* Each card is dealt in, from the right, or from the left when Undo brought it back. */
   .film {
     --enter-x: 14px;
+    --enter-s: 0.985;
     flex: 0 1 auto;
     min-height: 0;
     display: grid;
@@ -300,7 +299,6 @@
     transform: scale(var(--press));
     transition-duration: var(--dur-press);
   }
-  /* In flight it takes the light fill rather than the dim, like a tile. */
   .unseen[aria-busy='true'] .face {
     background: var(--text);
     color: var(--bg);

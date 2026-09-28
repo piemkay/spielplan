@@ -38,7 +38,7 @@
   import TitleDetail from '$lib/components/TitleDetail.svelte';
 
   // Back from another tab, the last shelves show at once and are re-read quietly (decision 530).
-  const kept = homeKept.user === session.user?.id ? homeKept : null;
+  const kept = homeKept.user === session.user?.id && homeKept.epoch === modelGate.epoch ? homeKept : null;
 
   // One switch: Films, Series or Both, never neither (decisions 18, 474).
   let kinds = $state(kept?.kinds ?? ['movie']);
@@ -74,7 +74,6 @@
   let home = $state(kept?.payload ?? null);
   let homeLoading = $state(false);
   let homeError = $state('');
-  // A kind switch in flight: the shelves on screen are the previous kind's.
   const shelvesStale = $derived(homeLoading && kindChoice(home?.kinds ?? []) !== kindChoice(kinds));
 
   const LIMIT = 60;
@@ -208,7 +207,7 @@
       const res = await loadHome(kinds);
       if (seq !== homeSeq) return;
       home = res;
-      Object.assign(homeKept, { user: session.user?.id, kinds: [...kinds], payload: res });
+      Object.assign(homeKept, { user: session.user?.id, epoch: modelGate.epoch, kinds: [...kinds], payload: res });
     } catch (err) {
       if (seq === homeSeq) homeError = err.message;
     } finally {
@@ -546,7 +545,7 @@
       {/if}
     </div>
   {:else}
-    <div class="results" aria-busy={gridStale}>
+    <div class="dims" aria-busy={gridStale}>
       {#if items.some(isColdPlaced)}
         <!-- The badge's why, said once for the grid: a title= tooltip does not exist on touch. -->
         <p class="footnote" data-testid="catalog-cold-note">
@@ -761,15 +760,6 @@
   .cell {
     display: block;
     aspect-ratio: 2 / 3;
-  }
-  .results {
-    transition: opacity var(--dur-quick) var(--ease);
-  }
-  /* An answer to the previous question steps back and takes no tap until the new one lands. */
-  .results[aria-busy='true'] {
-    opacity: 0.45;
-    pointer-events: none;
-    transition-delay: 120ms;
   }
   .kindhead,
   .weakhead {
