@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import {
-  HOLD_MS,
+  ECHO_MS,
   LEARNING_CURVE_COPY,
   MODES,
   PAIR_QUESTION,
@@ -10,7 +10,6 @@ import {
   armingLine,
   heavyClass,
   modeName,
-  commit,
   continueRating,
   findTitles,
   finder,
@@ -202,11 +201,11 @@ describe('the envelope', () => {
     expect(rate.session.block.counter).toBe('1 of 15');
     expect(rate.balance.total).toBe(6);
     expect(rate.undo).toEqual({ available: false, kind: null, reason: 'empty' });
-    expect(rate.reveal).toBe(null);
+    expect(rate.echo).toBe(null);
   });
 
-  it('holds the answered card and its counter while the reveal shows, then swaps in the preloaded one', async () => {
-    // The next card is already in this response, so the swap costs no request.
+  it('puts the next card up with the reply and echoes the guess for the one just rated', async () => {
+    // The next card is already in this response, so the swap costs no request (decision 530).
     fetchMock.mockResolvedValue(
       ok(
         envelope({
@@ -222,17 +221,41 @@ describe('the envelope', () => {
     );
     await verdict(2);
 
-    expect(rate.holding).toBe(true);
-    expect(rate.card.token).toBe('t1');                 // still the card just rated
-    expect(rate.frozenBlock.counter).toBe('1 of 15');   // and its counter
-    expect(rate.reveal.text).toContain("we'd have guessed");
-    expect(rate.undo.available).toBe(true);             // Undo is reachable immediately
-
-    vi.advanceTimersByTime(HOLD_MS);
-    expect(rate.holding).toBe(false);
     expect(rate.card.token).toBe('t2');
-    expect(rate.frozenBlock).toBe(null);
-    expect(rate.reveal).toBe(null);
+    expect(rate.session.block.counter).toBe('2 of 15');
+    expect(rate.echo).toEqual({
+      name: 'Heat',
+      said: 'liked',
+      available: true,
+      agreed: true,
+      text: "we'd have guessed the same · cdf 0.71"
+    });
+    expect(rate.undo.available).toBe(true);
+
+    vi.advanceTimersByTime(ECHO_MS - 1);
+    expect(rate.echo).not.toBe(null);
+    vi.advanceTimersByTime(1);
+    expect(rate.echo).toBe(null);
+    expect(rate.card.token).toBe('t2');
+  });
+
+  it('holds nothing: the next card answers at once, and that tap clears the echo', async () => {
+    fetchMock.mockResolvedValue(
+      ok(envelope({ reveal: { available: false, reason: 'no guess yet - rate a few more first' } }))
+    );
+    await verdict(2);
+    expect(rate.echo.text).toBe('no guess yet - rate a few more first');
+    fetchMock.mockClear();
+
+    /** @type {(response: any) => void} */
+    let answer = () => {};
+    fetchMock.mockReturnValue(new Promise((resolve) => (answer = resolve)));
+    const tapped = skip();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(rate.echo).toBe(null);
+    answer(ok(envelope()));
+    await tapped;
+    expect(rate.echo).toBe(null);
   });
 
   it('says which answer is in flight until the server has taken it', async () => {
@@ -245,7 +268,6 @@ describe('the envelope', () => {
     answer(ok(envelope({ reveal: { available: false, reason: 'no guess yet' } })));
     await tapped;
     expect(rate.pending).toBe(null);
-    commit();
 
     fetchMock.mockReturnValue(new Promise((resolve) => (answer = resolve)));
     const picked = duel('TIE');
@@ -254,22 +276,6 @@ describe('the envelope', () => {
     fetchMock.mockResolvedValue(ok(envelope()));
     await picked;
     expect(rate.pending).toBe(null);
-  });
-
-  it('will not answer a card it is only showing', async () => {
-    fetchMock.mockResolvedValue(
-      ok(envelope({ reveal: { available: false, reason: 'no fit yet' } }))
-    );
-    await verdict(2);
-    fetchMock.mockClear();
-
-    // Mid-hold the strip is the reveal, not the buttons — and the token on screen is spent.
-    await verdict(0);
-    await skip();
-    expect(fetchMock).not.toHaveBeenCalled();
-
-    expect(commit()).toBe(true);
-    expect(commit()).toBe(false);
   });
 
   it('reports a stale card and re-reads the table instead of guessing', async () => {
@@ -320,21 +326,26 @@ describe('the envelope', () => {
     ]);
   });
 
-  it('drops a held reveal when Undo takes the observation back', async () => {
+  it('drops the echo when Undo takes the observation back, and the card comes back', async () => {
     fetchMock.mockResolvedValue(
-      ok(envelope({ reveal: { available: true, agreed: false, text: "we'd have guessed fine" } }))
+      ok(
+        envelope({
+          card: { ...envelope().card, token: 't2' },
+          reveal: { available: true, agreed: false, text: "we'd have guessed fine" }
+        })
+      )
     );
     await verdict(2);
-    expect(rate.holding).toBe(true);
+    expect(rate.echo.text).toBe("we'd have guessed fine");
 
     fetchMock.mockResolvedValue(ok(envelope({ card: { ...envelope().card, token: 't1' } })));
     await undo();
-    expect(rate.holding).toBe(false);
-    expect(rate.reveal).toBe(null);
+    expect(rate.echo).toBe(null);
+    expect(rate.back).toBe(true);
     expect(rate.card.token).toBe('t1');
   });
 
-  it("ends a block on a screen of its own, after the last reveal, until Undo takes it back", async () => {
+  it("ends a block on a screen of its own at the reply, until Undo takes it back", async () => {
     const at = (index, slot) => ({
       ...envelope().session,
       block: { index, slot, size: 15, counter: `${slot} of 15`, serving: 'sweep' }
@@ -353,11 +364,9 @@ describe('the envelope', () => {
       )
     );
     await verdict(2);
-    // The fifteenth card keeps its reveal first; the end screen names the block it finished.
-    expect(rate.holding).toBe(true);
+    // The end screen names the block it finished, and echoes the fifteenth card's guess.
     expect(rate.done.counter).toBe('15 of 15');
-    vi.advanceTimersByTime(HOLD_MS);
-    expect(rate.done.counter).toBe('15 of 15');
+    expect(rate.echo.text).toBe("we'd have guessed the same");
     expect(rate.card.token).toBe('t2');
 
     // A quiet re-read of the new block does not dismiss it; an Undo into the old block does.

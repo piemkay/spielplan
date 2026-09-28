@@ -74,6 +74,9 @@
     border-radius: var(--r-pill);
     overflow: hidden;
   }
+  .stack > span {
+    transition: flex-grow var(--dur-slow) var(--ease);
+  }
   .mix {
     display: flex;
     flex-direction: column;

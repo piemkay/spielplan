@@ -1,12 +1,13 @@
 // Writes name the server's `card_token`, never a title, and nothing here caches a model belief
-// between cards (§6.1). The reveal hold is the one timing that is ours: the verdict response
-// already carries the next card, so the swap costs no request.
+// between cards (§6.1). The echo is the one timing that is ours: every response already carries
+// the next card, which goes up at once while the guess for the one just rated echoes.
 
 import { ApiError, get, post, qs } from '$lib/api.js';
-import { preloadPoster } from '$lib/art.js';
+import { preloadPoster, ready } from '$lib/art.js';
+import { haptic, ms } from '$lib/motion.js';
 
-/** Proposal 42: "~1.2 s or until the next card". */
-export const HOLD_MS = 1200;
+/** How long the guess for the card just rated stays under the question; it never holds the card. */
+export const ECHO_MS = 1600;
 
 export const KIND_LABELS = { movie: 'film', series: 'series' };
 
@@ -82,20 +83,25 @@ export const rate = $state({
   notice: '',
   /** @type {null | {id:number,mode:string,kinds:string[],block:any}} */
   session: null,
-  /** @type {any} the card on the table, or the card just answered while the reveal holds */
+  /** @type {any} the card on the table */
   card: null,
-  /** The counter that belongs to `card` while a reveal is held; null otherwise. */
-  frozenBlock: null,
+  /** True when Undo brought the card on the table back, so it comes in from the left. */
+  back: false,
   /** @type {any} the block an answer just finished, its own screen until the person moves on */
   done: null,
-  holding: false,
   /** @type {null | {cause:string, text:string}} */
   drained: null,
   /** @type {any} `rate.balance.ClassBalance.as_dict()` */
   balance: null,
   undo: { available: false, kind: null, reason: 'empty' },
-  /** @type {any} present only in the response to a verdict — never before the tap. */
-  reveal: null,
+  /**
+   * The verdict response's reveal for the card just rated, never before the tap, with that card's
+   * name and the answer given; it clears on the next action or after ECHO_MS.
+   * @type {null | {name:string, said:string, available:boolean, text:string, agreed:boolean}}
+   */
+  echo: null,
+  /** The answer the server refused or failed (a `pending` value), so its control can say so. */
+  failed: null,
   /** @type {any} §6.7, gated by the show_model preference at the render site. */
   ledger: null,
   /** @type {string[]} §6.7's lines for this write. */
@@ -118,8 +124,7 @@ export const FIND_MIN_CHARS = 2;
 
 // The banner's pins, sent as repeated `?head=` parameters.
 let head = [];
-let pendingCard = null;
-let holdTimer = null;
+let echoTimer = null;
 let shownAt = 0;
 let findSeq = 0;
 
@@ -203,13 +208,12 @@ export function latency() {
   return shownAt ? Math.max(0, Date.now() - shownAt) : null;
 }
 
-// Warm the next card's art during the reveal hold, inside §6's per-card budget.
+// Fetch and decode the next card's art before it is drawn, inside §6's per-card budget.
 export function preloadArt(card) {
   return [card?.title, card?.left, card?.right].filter(Boolean).map(preloadPoster);
 }
 
-function apply(res, { holdReveal = false, answer = false } = {}) {
-  const answeredCard = rate.card;
+function apply(res, { answer = false, echo = null, back = false } = {}) {
   const answeredBlock = rate.session?.block ?? null;
   const next = res.session?.block ?? null;
 
@@ -225,37 +229,19 @@ function apply(res, { holdReveal = false, answer = false } = {}) {
   rate.drained = res.drained ?? null;
   consumePin(res.card);
 
-  clearTimeout(holdTimer);
-  if (holdReveal && res.reveal && answeredCard) {
-    // The reveal belongs to the card just rated, so that card and its counter stay put.
-    rate.reveal = res.reveal;
-    rate.card = answeredCard;
-    rate.frozenBlock = answeredBlock;
-    rate.holding = true;
-    pendingCard = res.card ?? null;
-    preloadArt(pendingCard);
-    holdTimer = setTimeout(commit, HOLD_MS);
-    return;
+  // The reveal belongs to the card just rated, so it names that card; the next one is already up.
+  if (echo && res.reveal) {
+    rate.echo = { ...echo, ...revealLine(res.reveal) };
+    echoTimer = setTimeout(clearEcho, ECHO_MS);
   }
-  rate.reveal = null;
-  rate.holding = false;
-  rate.frozenBlock = null;
-  pendingCard = null;
+  rate.back = back;
   rate.card = res.card ?? null;
   shownAt = Date.now();
 }
 
-/** End the reveal hold early — "it clears on any subsequent action" (proposal 42). */
-export function commit() {
-  if (!rate.holding) return false;
-  clearTimeout(holdTimer);
-  rate.holding = false;
-  rate.reveal = null;
-  rate.frozenBlock = null;
-  rate.card = pendingCard;
-  pendingCard = null;
-  shownAt = Date.now();
-  return true;
+function clearEcho() {
+  clearTimeout(echoTimer);
+  rate.echo = null;
 }
 
 const STALE = new Set(['stale_card', 'no_card', 'wrong_card_type']);
@@ -278,16 +264,28 @@ async function onError(err) {
   rate.error = message || 'something went wrong';
 }
 
-async function send(fn, { holdReveal = false, pending = null, answer = false } = {}) {
+async function send(fn, { pending = null, answer = false, echo = null } = {}) {
   if (rate.busy) return;
+  if (answer) haptic();
   rate.busy = true;
   rate.pending = pending;
   rate.notice = '';
   rate.error = '';
+  rate.failed = null;
+  clearEcho();
+  // An answer's card goes no sooner than its press and flick have played (decision 530).
+  const floor = pending && ms(150) ? new Promise((done) => setTimeout(done, 150)) : null;
   try {
     const res = await fn();
-    if (res) apply(res, { holdReveal, answer });
+    if (res) {
+      // Never a blank poster: the next art decodes first, for at most 150 ms.
+      const decoded = pending ? ready(preloadArt(res.card), 150) : undefined;
+      if (decoded) await decoded;
+      if (floor) await floor;
+      apply(res, { answer, echo, back: pending === 'undo' });
+    }
   } catch (err) {
+    rate.failed = pending;
     await onError(err);
   } finally {
     rate.busy = false;
@@ -319,17 +317,18 @@ export const setKinds = (kinds) => send(() => controls({ kinds }));
 export const restart = () => send(() => controls({ restart: true }));
 
 export function verdict(value) {
-  const token = rate.card?.token;
-  if (!token || rate.holding) return;
+  const card = rate.card;
+  if (!card?.token) return;
+  const said = card.verdict_labels?.find(([v]) => v === value)?.[1] ?? '';
   return send(
-    () => post('/rate/verdict', { card_token: token, value, latency_ms: latency(), head }),
-    { holdReveal: true, pending: `verdict-${value}`, answer: true }
+    () => post('/rate/verdict', { card_token: card.token, value, latency_ms: latency(), head }),
+    { pending: `verdict-${value}`, answer: true, echo: { name: card.title?.name ?? '', said } }
   );
 }
 
 export function notSeen() {
   const token = rate.card?.token;
-  if (!token || rate.holding) return;
+  if (!token) return;
   return send(() => post('/rate/not-seen', { card_token: token, latency_ms: latency(), head }), {
     pending: 'not_seen',
     answer: true
@@ -338,7 +337,7 @@ export function notSeen() {
 
 export function skip() {
   const token = rate.card?.token;
-  if (!token || rate.holding) return;
+  if (!token) return;
   return send(() => post('/rate/skip', { card_token: token, latency_ms: latency(), head }), {
     pending: 'skip',
     answer: true
@@ -352,7 +351,7 @@ export function skip() {
  */
 export function duel(outcome, decisive = false) {
   const token = rate.card?.token;
-  if (!token || rate.holding) return;
+  if (!token) return;
   const body = { card_token: token, outcome, decisive, latency_ms: latency(), head };
   return send(() => post('/rate/duel', body), {
     pending: `duel-${outcome}${decisive ? '-much' : ''}`,
@@ -363,20 +362,16 @@ export function duel(outcome, decisive = false) {
 /** Not seen under one film of a pair: no duel row, and the counter does not move. */
 export function correct(side) {
   const token = rate.card?.token;
-  if (!token || rate.holding) return;
+  if (!token) return;
   return send(() => post('/rate/correction', { card_token: token, side }), {
-    pending: `correction-${side}`
+    pending: `correction-${side}`,
+    answer: true
   });
 }
 
-// Restores the exact card, even one taken during a reveal hold, so the hold is cleared, not committed.
+// Restores the exact card; the echo of the answer it takes back goes with it.
 export function undo() {
-  clearTimeout(holdTimer);
-  rate.holding = false;
-  rate.reveal = null;
-  rate.frozenBlock = null;
-  pendingCard = null;
-  return send(() => post('/rate/undo', {}));
+  return send(() => post('/rate/undo', {}), { pending: 'undo' });
 }
 
 /** Leave a block's end screen for the card the fifteenth answer already brought. */
@@ -385,16 +380,12 @@ export function continueRating() {
   shownAt = Date.now();
 }
 
-/** A stray hold timer would fire into a destroyed component. */
+/** A stray echo timer would fire into a destroyed component. */
 export function reset() {
-  clearTimeout(holdTimer);
-  holdTimer = null;
-  pendingCard = null;
-  rate.holding = false;
-  rate.reveal = null;
-  rate.frozenBlock = null;
+  clearEcho();
   rate.done = null;
   rate.pending = null;
+  rate.failed = null;
   clearFinder();
 }
 

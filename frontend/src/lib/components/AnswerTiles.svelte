@@ -1,55 +1,48 @@
 <script>
   // Rate's and the title card's four answers, worst to best, then Not seen a gap apart (decision
-  // 527). `pending` names the answer in flight; `pressed`, when given, marks the standing one.
+  // 527). `pending` names the answer in flight; `pressed`, when given, marks the standing one;
+  // `failed` names one the server refused.
+  import Icon from './Icon.svelte';
+
   let {
     answers,
     label,
     testid = undefined,
     pending = null,
     pressed = null,
+    failed = null,
     disabled = false,
     compact = false,
     onAnswer
   } = $props();
 
-  const THUMB = [
-    'M7 10.5V20H4.5a1 1 0 0 1-1-1v-7.5a1 1 0 0 1 1-1z',
-    'M7 10.5 10.8 3.6a1.9 1.9 0 0 1 3.5 1.3L13.4 9h5.2a2 2 0 0 1 2 2.4l-1.4 7A2 2 0 0 1 17.2 20H7'
-  ];
-</script>
+  // A tap on the standing answer writes nothing, so its glyph flicks again to say it was heard.
+  let replay = $state({ answer: null, n: 0 });
 
-{#snippet icon(answer)}
-  <svg width={compact ? 22 : 24} height={compact ? 22 : 24} viewBox="0 0 24 24" fill="none"
-    stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"
-    aria-hidden="true">
-    {#if answer === 'disliked'}
-      <g transform="rotate(180 12 12)">{#each THUMB as d (d)}<path {d} />{/each}</g>
-    {:else if answer === 'fine'}
-      <circle cx="12" cy="12" r="8.5" /><path d="M8.5 14.5h7" /><path d="M9.2 9.8h.01M14.8 9.8h.01" />
-    {:else if answer === 'liked'}
-      {#each THUMB as d (d)}<path {d} />{/each}
-    {:else}
-      <path d="M3.5 3.5l17 17" />
-      <path d="M10.6 5.1A9.6 9.6 0 0 1 12 5c5 0 8.5 4.5 9.5 7a13 13 0 0 1-2.7 3.9" />
-      <path d="M6.6 6.6C4.6 7.9 3.2 9.9 2.5 12c1 2.5 4.5 7 9.5 7 1.7 0 3.2-.5 4.6-1.2" />
-      <path d="M9.9 9.9a3 3 0 0 0 4.2 4.2" />
-    {/if}
-  </svg>
-{/snippet}
+  function tap(a, standing) {
+    replay = { answer: standing ? a.answer : null, n: replay.n + 1 };
+    onAnswer(a);
+  }
+</script>
 
 <div class="tiles" class:compact role="group" aria-label={label} data-testid={testid}>
   {#each answers as a (a.answer)}
     {@const on = pressed ? pressed(a) : undefined}
+    {@const again = replay.answer === a.answer}
     <button
-      class="tile"
+      class="tile press"
       class:picked={pending === a.answer || on}
+      class:shake={failed === a.answer}
       data-answer={a.answer}
+      data-flick={again || undefined}
       data-testid={a.testid}
       aria-pressed={on}
       aria-busy={pending === a.answer}
       {disabled}
-      onclick={() => onAnswer(a)}
-    >{@render icon(a.answer)}<span>{a.label}</span></button>
+      onclick={() => tap(a, on)}
+    >{#key again && replay.n}<Icon name={a.answer} size={compact ? 22 : 24} />{/key}<span
+        >{a.label}</span
+      ></button>
   {/each}
 </div>
 
@@ -83,7 +76,6 @@
     font-size: var(--fs-footnote);
     line-height: 18px;
     font-weight: 600;
-    transition: background 0.12s var(--ease), transform 0.12s var(--ease);
   }
   .compact .tile {
     height: 60px;
@@ -93,13 +85,10 @@
       background: var(--surface-2);
     }
   }
-  .tile:active:not(:disabled) {
-    transform: scale(0.97);
-    background: var(--surface-2);
-  }
   .tile:disabled {
     opacity: 0.45;
     cursor: default;
+    transition-delay: var(--busy-delay);
   }
   /* The standing answer or the one in flight: a light fill, a selection and not the accent. */
   .tile.picked,
@@ -108,6 +97,44 @@
     opacity: 1;
     background: var(--text);
     color: var(--bg);
+  }
+  /* The tap lands: the tile pops, its glyph flicks toward what it means, the others recede. */
+  .tile[aria-busy='true'] {
+    animation: pop 180ms var(--ease);
+  }
+  .tiles:has([aria-busy='true']) .tile:not([aria-busy='true']) {
+    opacity: 0.4;
+    transform: scale(var(--press));
+    transition-delay: var(--busy-delay);
+  }
+  .tile:is([aria-busy='true'], [data-flick])[data-answer='liked'] :global(svg) {
+    animation: flick-up 180ms var(--ease-spring);
+  }
+  .tile:is([aria-busy='true'], [data-flick])[data-answer='disliked'] :global(svg) {
+    animation: flick-down 180ms var(--ease-spring);
+  }
+  .tile:is([aria-busy='true'], [data-flick])[data-answer='fine'] :global(svg) {
+    animation: swell 180ms var(--ease-spring);
+  }
+  .tile.shake {
+    animation: shake 260ms var(--ease);
+  }
+  @keyframes flick-up {
+    from { transform: scale(0.8) rotate(-14deg); }
+    55% { transform: translateY(-3px) scale(1.18); }
+  }
+  @keyframes flick-down {
+    from { transform: scale(0.8) rotate(14deg); }
+    55% { transform: translateY(3px) scale(1.18); }
+  }
+  @keyframes swell {
+    from { transform: scale(0.85); }
+    55% { transform: scale(1.15); }
+  }
+  @keyframes shake {
+    20% { transform: translateX(-4px); }
+    45% { transform: translateX(4px); }
+    70% { transform: translateX(-2px); }
   }
 
   @media (min-width: 981px) {

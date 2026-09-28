@@ -152,12 +152,10 @@ async function chooseMode(page, mode) {
 }
 
 /**
- * Answer the card as a person does and return its type. Proposal 42's reveal holds the previous
- * card and a frozen counter for ~1.2 s, so this waits it out and asserts the counter reaches the
- * slot the write's response names.
+ * Answer the card as a person does and return its type. The next card comes up with the reply
+ * (decision 530), so this asserts the counter reaches the slot the write's response names.
  */
 async function tapAnswer(page, { value = 2 } = {}) {
-  await expect(page.getByTestId('rate-reveal')).toHaveCount(0);
   const sweep = (await sweepCard(page).count()) > 0;
   const route = sweep ? '/api/rate/verdict' : '/api/rate/duel';
   const written = page.waitForResponse(
@@ -315,7 +313,6 @@ test.describe('rate', () => {
     // §5.2's 60% line, armed at fifteen ratings (decision 491): past the line and under the floor,
     // it only says when the check begins. The warning itself needs more than the fixture's titles.
     // Both sit in the sheet the progress row's meter opens (decision 528).
-    await expect(page.getByTestId('rate-reveal')).toHaveCount(0);
     await inMix(page, async (mix) => {
       await expect(mix.getByTestId('rate-balance-total')).toHaveText('1 rating');
       await expect(mix.getByTestId('rate-balance')).toHaveAttribute('data-warn', 'false');
@@ -362,7 +359,6 @@ test.describe('rate', () => {
     const labelsBefore = await ratingsSoFar(page);
 
     await tapAnswer(page);
-    await expect(page.getByTestId('rate-reveal')).toHaveCount(0);
     expect(await ratingsSoFar(page)).not.toBe(labelsBefore);
     await expect(undoChip(page)).toBeEnabled();
     await expect(undoChip(page)).toHaveAttribute('data-undo-kind', 'verdict');

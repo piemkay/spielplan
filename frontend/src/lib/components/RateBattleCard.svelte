@@ -6,7 +6,19 @@
   import { PAIR_QUESTION, metaLine } from '$lib/rate.svelte.js';
 
   // `much` false leaves More, Same, More: Rank's comparison round has no decisive answer (decision 201).
-  let { card, busy = false, pending = null, much = true, onDuel, onCorrect = null, onPeek, onWhy = null } = $props();
+  // Rate alone passes `echo`, a snippet that stands in for the reason line a moment after a verdict.
+  let {
+    card,
+    busy = false,
+    pending = null,
+    failed = null,
+    much = true,
+    echo = null,
+    onDuel,
+    onCorrect = null,
+    onPeek,
+    onWhy = null
+  } = $props();
 
   const left = $derived(card?.left ?? {});
   const right = $derived(card?.right ?? {});
@@ -31,21 +43,28 @@
     outcome === 'TIE'
       ? 'About the same'
       : `${(outcome === 'A' ? left : right).name}: ${much ? 'much more' : 'more'}`;
-  // The side an answer in flight favours: its poster rings, the other dims.
+  // The side an answer in flight favours: its poster leans in, ringed, and the other recedes, further
+  // for Much more; the track runs from the middle as far as the step picked.
   const leaning = $derived(pending?.match(/^duel-([AB])/)?.[1] ?? null);
+  const far = $derived(!!pending?.endsWith('-much'));
+  const reach = $derived.by(() => {
+    const i = steps.findIndex(([key]) => pending === `duel-${key}`);
+    return i < 0 ? 0 : ((i + 0.5) / steps.length - 0.5) / 0.4;
+  });
 </script>
 
 <article class="battle" data-testid="rate-battle-card" data-card-token={card?.token}>
   <div class="ask">
     <h2 class="question" data-testid="rate-battle-question">{PAIR_QUESTION}</h2>
-    {#if card?.reason}
+    {#if card?.reason || echo}
       <p class="sub">
-        <span data-testid="rate-battle-reason">{card.reason}</span>{#if onWhy}{' · '}<button
-            class="hit why-link"
-            data-testid="rate-why"
-            aria-haspopup="dialog"
-            onclick={onWhy}>Why these?</button
-          >{/if}
+        {#if echo}{@render echo()}{:else}<span data-testid="rate-battle-reason">{card.reason}</span
+          >{#if onWhy}{' · '}<button
+              class="hit why-link"
+              data-testid="rate-why"
+              aria-haspopup="dialog"
+              onclick={onWhy}>Why these?</button
+            >{/if}{/if}
       </p>
     {/if}
     <!-- A pair stands in for a single title only when nothing new is left to rate (§6.1). -->
@@ -56,12 +75,14 @@
     {/if}
   </div>
 
-  <div class="pair">
-    {#each sides as [side, title] (side)}
+  <!-- Keyed by title, so only a side that changed is dealt in; a correction's survivor stays. -->
+  <div class="pair" class:far class:tie={pending === 'duel-TIE'}>
+    {#each sides as [side, title] (`${side}-${title.id}`)}
       <button
         class="art"
         class:ringed={leaning === title.outcome}
         class:dimmed={leaning && leaning !== title.outcome}
+        class:greyed={pending === `correction-${side}`}
         data-testid="rate-battle-{side}"
         data-outcome={title.outcome}
         data-title-id={title.id}
@@ -77,7 +98,7 @@
         </span>
       </button>
     {/each}
-    {#each sides as [side, title] (side)}
+    {#each sides as [side, title] (`${side}-${title.id}`)}
       <div class="under">
         <span class="name">{title.name ?? '—'}</span>
         <span class="data">{metaLine(title)}</span>
@@ -97,10 +118,12 @@
 
   <div class="scale" role="group" aria-label={PAIR_QUESTION} style:--steps={steps.length}>
     <span class="track" aria-hidden="true"></span>
+    {#if reach}<span class="pull" aria-hidden="true" style:--reach={reach}></span>{/if}
     {#each steps as [key, outcome, much, label, circle, icon] (key)}
       <button
         class="step"
         class:picked={pending === `duel-${key}`}
+        class:shake={failed === `duel-${key}`}
         data-testid="rate-duel-{key}"
         aria-label={aria(outcome, much)}
         aria-busy={pending === `duel-${key}`}
@@ -121,8 +144,9 @@
 </article>
 
 <style>
-  /* The posters take what height is left, 2:3 and never wider than their column (decision 528);
-     the answers sit where a single's do, at the foot on a phone (decision 529). */
+  /* The posters take what height is left, 2:3 and never wider than their column (decision 528),
+     centred in any height to spare; the answers sit where a single's do, at the foot on a phone
+     (decision 529). */
   .battle {
     --gap: 12px;
     --col: var(--rate-col, min((100cqw - var(--gap)) / 2, 220px));
@@ -132,7 +156,6 @@
     display: flex;
     flex-direction: column;
     gap: 12px;
-    animation: fadeIn 0.15s var(--ease);
   }
   .ask,
   .scale {
@@ -170,6 +193,7 @@
   .pair {
     flex: 0 1 auto;
     min-height: 0;
+    margin-block: auto;
     display: grid;
     grid-template-columns: repeat(2, var(--col));
     grid-template-rows: minmax(0, calc(var(--col) * 1.5)) auto;
@@ -186,14 +210,50 @@
     border-radius: var(--r-poster);
     background: none;
     -webkit-tap-highlight-color: transparent;
-    transition: transform 0.18s var(--ease), opacity 0.18s var(--ease), box-shadow 0.18s var(--ease);
+    transition: transform 0.18s var(--ease), opacity 0.18s var(--ease), box-shadow 0.18s var(--ease),
+      filter 0.18s var(--ease);
   }
+  /* A new side is dealt in, the right one a beat behind. */
+  .art,
+  .under {
+    --enter-s: 0.97;
+    animation: enter var(--dur-base) var(--ease) backwards;
+  }
+  .pair > :nth-child(even) {
+    animation-delay: 40ms;
+  }
+  /* A neutral ring: choosing one of two is a selection, never the accent (§6.8). */
   .art.ringed {
-    transform: scale(1.02);
-    box-shadow: 0 0 0 2px var(--accent);
+    box-shadow: 0 0 0 2px var(--text);
   }
   .art.dimmed {
-    opacity: 0.6;
+    opacity: 0.55;
+  }
+  .far .art.dimmed {
+    opacity: 0.4;
+  }
+  .art.greyed {
+    filter: grayscale(0.7) brightness(0.75);
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    .art.ringed {
+      transform: translateY(-4px) scale(1.03);
+    }
+    .far .art.ringed {
+      transform: translateY(-6px) scale(1.05);
+    }
+    .art.dimmed {
+      transform: scale(0.98);
+    }
+    .far .art.dimmed {
+      transform: scale(0.96);
+    }
+    .tie .art:nth-child(1) {
+      transform: translateX(4px) scale(0.98);
+    }
+    .tie .art:nth-child(2) {
+      transform: translateX(-4px) scale(0.98);
+    }
   }
   .info {
     position: absolute;
@@ -259,7 +319,6 @@
   .scale {
     position: relative;
     align-self: center;
-    margin-top: auto;
     width: calc(var(--col) * 2 + var(--gap));
     display: grid;
     grid-template-columns: repeat(var(--steps), minmax(0, 1fr));
@@ -272,6 +331,18 @@
     height: 2px;
     border-radius: 1px;
     background: var(--progress-track);
+  }
+  .pull {
+    position: absolute;
+    left: 50%;
+    top: 25px;
+    width: 40%;
+    height: 2px;
+    border-radius: 1px;
+    background: var(--text-3);
+    transform: scaleX(var(--reach));
+    transform-origin: left center;
+    animation: pull 200ms var(--ease);
   }
   .step {
     position: relative;
@@ -286,6 +357,7 @@
     align-items: center;
     gap: 6px;
     -webkit-tap-highlight-color: transparent;
+    transition: opacity var(--dur-quick) var(--ease);
   }
   .dot {
     height: 52px;
@@ -335,14 +407,32 @@
     transform: scale(0.94);
   }
   .step.picked .dot::before {
-    border-color: var(--accent);
-    background: var(--accent);
+    --press: 0.94;
+    --pop: 1.08;
+    border-color: var(--text);
+    background: var(--text);
+    animation: pop 180ms var(--ease);
   }
   .step.picked {
-    color: var(--on-accent);
+    color: var(--bg);
+  }
+  .step.picked .label {
+    color: var(--text);
   }
   .step:disabled:not(.picked) {
     opacity: 0.45;
+    transition-delay: var(--busy-delay);
+  }
+  .step.shake {
+    animation: shake 260ms var(--ease);
+  }
+  @keyframes pull {
+    from { transform: scaleX(0); }
+  }
+  @keyframes shake {
+    20% { transform: translateX(-4px); }
+    45% { transform: translateX(4px); }
+    70% { transform: translateX(-2px); }
   }
 
   /* Left-aligned like every other page, the answers right under the films (decision 529). */
@@ -373,7 +463,6 @@
     }
     .scale {
       align-self: flex-start;
-      margin-top: 0;
     }
   }
 </style>
