@@ -105,9 +105,8 @@
   const bundleNote = $derived(
     session.hasBundle ? '' : session.restartRequired ? 'waiting for a restart' : 'no movie data yet'
   );
-  const countLine = $derived(
-    [count, bundleNote].filter(Boolean).join(' · ').replace(/^./, (c) => c.toUpperCase())
-  );
+  // With no movie data a count of nothing says nothing: the note stands alone.
+  const countLine = $derived((bundleNote || count).replace(/^./, (c) => c.toUpperCase()));
 
   // The device clock: the household's phones share the install's TZ.
   const greeting = $derived(`${band()}${session.user ? `, ${session.user.name}` : ''}`);
