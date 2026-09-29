@@ -1410,6 +1410,21 @@ describe('asking one person first (owner instruction of 2026-09-29)', () => {
     expect(said()).toHaveLength(5);
   });
 
+  it("leaves a refused answer's complaint behind with the round it was about", async () => {
+    soloRoute();
+    await loadSolo();
+    for (const value of ['A', 'B', 'EITHER', 'NEITHER', 'A']) await answerSolo(value);
+    fetchMock.mockImplementationOnce(async () => reply({ detail: 'boom' }, 500));
+    await answerSolo('B');
+    expect(tonight.error).not.toBe('');
+    expect(tonight.solo.escape_available).toBe(true);
+
+    escapeSolo();
+
+    expect(tonight.solo.pair).toBeNull();
+    expect(tonight.error, 'the picks opened under an error about the round').toBe('');
+  });
+
   it('lands on the picks once the round ends, and Reshuffle walks them with every answer', async () => {
     soloRoute({ until: 2 });
     await loadSolo();

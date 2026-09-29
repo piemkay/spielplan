@@ -469,9 +469,14 @@ describe('solo asks for the mood before it picks (decision 532)', () => {
     await openSolo();
     await tap('tonight-mood-B');
     expect(byTestId('tonight-mood-A').textContent).toContain('Left 1');
+    const shown = [];
+    const watcher = new MutationObserver(() => shown.push(byTestId('tonight-mood-A')?.textContent));
+    watcher.observe(target, { subtree: true, childList: true, characterData: true });
 
     await tap('tonight-mood-undo');
+    watcher.disconnect();
 
+    expect(shown.join(' | '), 'the pair drawn and discarded was rendered').not.toContain('Left 2');
     expect(posted.at(-1)).toMatchObject({ sharpen: true, answers: [] });
     expect(byTestId('tonight-mood-A').textContent, 'undo showed a pair never answered').toContain(
       'Left 0'

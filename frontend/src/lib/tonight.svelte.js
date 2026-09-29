@@ -554,8 +554,9 @@ export async function loadResult() {
 let soloSeq = 0;
 
 // One solo request. `ask` serves the round's next pair; a walk asks for none, so its reply is
-// always the picks. False when refused or overtaken.
-async function postSolo({ ask, walk = false }) {
+// always the picks. `keep` is the pair to show in place of the one served. False when refused or
+// overtaken.
+async function postSolo({ ask, walk = false, keep = null }) {
   if (tonight.busy) return false;
   tonight.busy = true;
   const mine = ++soloSeq;
@@ -576,7 +577,8 @@ async function postSolo({ ask, walk = false }) {
       sharpen: ask
     });
     if (mine !== soloSeq) return false;
-    tonight.solo = reply;
+    // One write, so the served pair never renders before the kept one replaces it.
+    tonight.solo = keep && reply.pair ? { ...reply, pair: keep } : reply;
     tonight.step = 'solo';
     tonight.error = '';
     return true;
@@ -625,17 +627,15 @@ export async function undoSolo() {
   const last = before.at(-1);
   if (!last || !tonight.solo?.pair || tonight.busy) return;
   tonight.soloAnswers = before.slice(0, -1);
-  if (!(await postSolo({ ask: true }))) {
-    tonight.soloAnswers = before;
-    return;
-  }
-  if (tonight.solo.pair) tonight.solo = { ...tonight.solo, pair: last.pair };
+  if (!(await postSolo({ ask: true, keep: last.pair }))) tonight.soloAnswers = before;
 }
 
 // Availability comes from the server. Nothing is sent: the picks in hand carry every answer.
 export function escapeSolo() {
   if (!tonight.solo?.escape_available || tonight.busy) return;
   tonight.solo = { ...tonight.solo, pair: null, escape_available: false };
+  // A refused answer's complaint was about the round, which is over.
+  tonight.error = '';
 }
 
 // Backoff bounds: a fixed short retry hammers the backend restart a bundle swap ends in.

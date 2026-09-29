@@ -1415,6 +1415,8 @@ async def test_the_provenance_line_reports_the_budget_and_the_filter(db, world):
     """The tilted form replaces the other rather than joining it."""
     plain = await solo_picks(db, world, budget_min=130, include_rewatches=False)
     assert plain["provenance"] == "Unseen first · fits in 2h 10m"
+    rewatch = await solo_picks(db, world, budget_min=130, include_rewatches=True)
+    assert rewatch["provenance"] == "Rewatches included · fits in 2h 10m"
 
 
 async def test_an_answer_re_ranks_in_place_and_changes_the_provenance_line(db, world):

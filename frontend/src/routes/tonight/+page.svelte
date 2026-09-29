@@ -1069,7 +1069,7 @@
     display: flex;
     flex-direction: column;
   }
-  /* Over the tab bar and the top row: a room is a flow of its own until it resolves. */
+  /* Over the tab bar and the top row: a room, or solo's round, is a flow until it resolves. */
   .flow {
     position: fixed;
     inset: 0;
@@ -1288,9 +1288,6 @@
   .solo {
     gap: 16px;
   }
-  .solo > * {
-    scroll-margin-top: calc(env(safe-area-inset-top) + var(--gutter));
-  }
   .solo-head {
     display: flex;
     flex-direction: column;
@@ -1462,7 +1459,7 @@
     cursor: default;
   }
 
-  /* The round, and the sharpen round that asks the same question. */
+  /* The round, a room's seat's or solo's. */
   .round {
     gap: 16px;
   }
