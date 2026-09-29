@@ -15515,6 +15515,54 @@ both from the first evening.
 
 The spec is amended in place (v2.1.14): §4.2's `tier_edit` and §6.3's drag and sheet bullets.
 
+## Decisions taken (owner, 2026-09-29, every model of the three providers)
+
+### 535. Every model the three providers serve this app is offered, and Anthropic answers by structured outputs
+
+**What the record says.** §9 ports the corpus's adapters, and Anthropic's asks for the tags by
+forced tool-use; §6.6 captions its card "forced tool-use". Decision 437 priced Anthropic by three
+family prefixes (`claude-opus`, `claude-sonnet`, `claude-haiku`) plus rows from Opus 4.5 up, left
+Fable unpriced, and parked Opus 5.5, Fable 5.1 and Mythos 5.1 before sending, because they answer
+a forced `tool_choice` with a 400. The card's model field suggests the table's keys: for Anthropic
+three prefixes that are no model id, and for all three providers nothing released after 2026-09-24.
+
+**Why it changes.** The owner, 2026-09-29: "I need support for more models. e.g anthrophic I want
+to use sonnette 5.5. Please make sure to give options for all models of all 3 provider". Claude
+Sonnet 5.5 (released 2026-09-28, $2/$10) also refuses a forced `tool_choice`, so forced tool-use
+fails every current Claude model but Haiku 4.5. Anthropic's structured outputs,
+`output_config.format` with a JSON schema, is generally available and works on every Claude model
+a household key can call, thinking included; like OpenAI's strict mode it refuses `minimum` and
+`maximum` (https://platform.claude.com/docs/en/build-with-claude/structured-outputs, read
+2026-09-29).
+
+**The decision.**
+1. Anthropic is asked by structured outputs: `output_config.format` carries `EXTRACTION_SCHEMA`
+   stripped of the keywords the strict grammars refuse, the same copy OpenAI's strict mode gets.
+   The answer is the first `text` block after any thinking; only `stop_reason` `end_turn` is an
+   answer. Forced tool-use goes, and with it decision 437's pre-send park. The caption reads
+   "structured outputs".
+2. The price table has one row per model id: every text model each provider serves on this app's
+   endpoint and structured-output mechanism, priced from the provider's pricing page on 2026-09-29
+   (cited per provider block), dated successors included. A row prices its own id and its dated
+   snapshots, and no other id that begins with it. The family prefixes go, so a retired or
+   unreleased id is unpriced and parks (decision 343).
+3. The card suggests the table's ids, newest first; any other id can still be typed.
+4. Anthropic's default model is `claude-sonnet-5-5`. OpenAI's and Gemini's defaults stay: their
+   newer models are unmeasured on this prompt.
+
+Not offered, each for its reason: models served only on another endpoint (OpenAI's `-pro`, codex
+and cyber models), invitation-only models (Mythos), models whose shutdown falls in 2026 (o3,
+o4-mini, gpt-4.1-nano), audio, image, embedding and Live models, and `-latest` aliases, whose model
+changes under a fixed price. `gpt-5`, `gpt-5-mini` and `gpt-5-nano`, which the table already
+had, stay priced until their 2026-12-11 shutdown.
+
+This supersedes decision 437's family prefixes and forced-tool park; its prices stand. The spec is
+amended in place (v2.1.15): §6.6's model pick and caption, §9's provider list and the M5.5 row.
+
+**Cost.** Three pricing pages to re-read whenever a provider ships a model, as decisions 343 and
+437 said. Anthropic's structured-output system prompt is unpublished, so the write-ahead ceiling
+keeps its 804-token margin until a `count_tokens` call measures it.
+
 ## §6.2 — Tonight, rewritten (owner decision, 2026-08-29)
 
 Proposal 54 asked which slot carries the alternative on a split axis. The owner answered by
