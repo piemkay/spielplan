@@ -28,8 +28,6 @@ from spielplan.importer.bundle import Bundle, refuse_on_install_state
 from spielplan.importer.report import ImportReport
 from tests.helpers import create_database, drop_database, sibling
 
-pytestmark = pytest.mark.anyio
-
 # Planted in the tables the archive must not touch; ASCII so a failure prints on a cp1252 console.
 MARKER_SECRET = "MARKER-JELLYFIN-ADMIN-KEY-3f9c"
 MARKER_VERDICT = "MARKER-VERDICT-SOURCE"

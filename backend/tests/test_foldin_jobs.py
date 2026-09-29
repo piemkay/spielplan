@@ -20,8 +20,6 @@ from spielplan.scoring import foldin, serve
 from spielplan.scoring.backbone import EMBED_DIM, Coordinate
 from tests.fixtures import make_bundle as fx
 
-pytestmark = pytest.mark.anyio
-
 BUNDLE = "test-v1"
 
 # Five coordinated movies (`MIN_LABELS_FOR_CV`); the sixth

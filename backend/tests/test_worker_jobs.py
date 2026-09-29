@@ -22,8 +22,6 @@ from spielplan.ledger.hyperparams import load as load_hp
 from spielplan.models.artifacts import ArtifactStore
 from tests.fixtures import make_bundle as fx
 
-pytestmark = pytest.mark.anyio
-
 M2_JOBS = ("ledger-map-refit", "fold-in-user-vectors", "placement-reconciliation")
 # Decision 11's "queued for that user alone" is serviced by a callable nothing else calls.
 M3_JOBS = ("tier-set-refit",)
