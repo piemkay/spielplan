@@ -334,7 +334,8 @@ export async function refresh({ seat = null } = {}) {
     if (mine !== refreshSeq) return;      // a newer read has already answered
     tonight.lobby = seen;
     tonight.progress = seen.progress;
-    tonight.ballot = seen.ballot;
+    // The room carries the ballot's counts, not its slate: a re-read must not blank the ballot.
+    tonight.ballot = seen.ballot && { ...tonight.ballot, ...seen.ballot };
     if (seen.ballot?.revealed) await loadResult();
     else if (seen.state === 'ballot') {
       if (!ballotDone()) {

@@ -800,6 +800,38 @@ describe('overlapping reads land in order (finding 21)', () => {
     expect(tonight.lobby.state).toBe('ballot');
   });
 
+  it('keeps the ballot on screen while a re-read of the room lands', async () => {
+    // The room's read carries the counts, not the slate; dropping the slate blanked the ballot.
+    tonight.lobby = roomOf({ state: 'ballot' });
+    tonight.step = 'ballot';
+    tonight.ballot = {
+      session_id: 7,
+      slate: [{ title_id: 1, slot: 'finalist', name: 'Heat' }],
+      submitted: 0,
+      seated: 2,
+      revealed: false
+    };
+    world.room = roomOf({ state: 'ballot', ballot: { submitted: 1, seated: 2, revealed: false } });
+    const base = router();
+    let held = false;
+    let release = () => {};
+    fetchMock.mockImplementation(async (path, opts) => {
+      if (/\/ballot$/.test(path)) {
+        held = true;
+        await new Promise((r) => (release = () => r(undefined)));
+      }
+      return base(path, opts);
+    });
+
+    const pending = refresh();
+    await vi.waitFor(() => expect(held).toBe(true));
+
+    expect(tonight.ballot.slate, 'the re-read blanked the ballot').toHaveLength(1);
+    expect(tonight.ballot.submitted).toBe(1);
+    release();
+    await pending;
+  });
+
   it('does not pull a device back into the room it has just left', async () => {
     // A read in flight when the person taps Leave used to land after it and restore the room.
     tonight.lobby = roomOf({ state: 'ballot' });
