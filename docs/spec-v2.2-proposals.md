@@ -15393,6 +15393,72 @@ alone. Decisions 508 and 510 stand. The spec is amended in place (v2.1.12): §4.
 comment, §6.0's title card and its sentence on letters, §6.1's Sweep bullet, §6.3's Without a drag
 and Place with questions bullets, and §6.8.
 
+## Decisions taken (owner, 2026-09-29, solo Tonight asks first)
+
+### 532. Solo Tonight asks first: "Just me" opens on the round, and the picks follow it
+
+**What the record says.** §6.2 step 8 lands solo "**directly on three picks and a wildcard** from
+the same pool ranked by the personal Ledger with no tilt", because "the fastest path to a film must
+not be slower than browsing Home". Its **sharpen this** control "runs the same adaptive round
+against the same pool and re-ranks in place", after which the provenance line reads "tilted by your
+N answers" instead of "unseen first". That is 54f, which inverted the prototype's transition: there
+"Just me" entered the mood-question round before any pick, which proposal 55, provenance only,
+called residue of the round §6.2's preamble deletes. The preamble keeps that round deleted and says
+the round's answers "both decide the evening and carry the mood signal"; decision 480 keeps it
+deleted too. Step 4 ends a seat's round when the boundary is resolved, at the cap of 20, or on
+"just pick for us" from the sixth pair, under decision 507's seat header, and decision 215 ends a
+seat that has nothing to ask. Decision 477 standardises solo's sharpen round over its own
+per-request pool, decision 223 keys its hold-out rate on `user.id`, decision 222 renders the wrap
+line beside Reshuffle, and decision 527 puts Play on every solo pick. Step 8 has no session row,
+so the client carries the answers, and M4-open-points §2.3 left open whether "solo's votes are
+outside risk 6 or step 8 needs a row that is not a room".
+
+**Why it changes.** On 2026-09-29 the owner wrote: "Please revise the "tonight workflow" for a
+single person. Currently it directly suggests title without quering the mood. I want to have a mood
+voting flow before suggesting titles." The door promised "Three picks and a wildcard, straight
+away.", and the only way to a pair was Sharpen this, a button beside Reshuffle under the picks, so a
+solo evening read the Ledger alone unless the person knew to ask. §0's Mood row is the measurement
+behind the request: "the stored profile is worth 0.000 for choose-tonight; 3 shortlist-anchored
+answers ≈ +0.088 AUC", and "centring on the shortlist matters more than question form". The vote
+the owner asks for already exists: step 4's pairs are answers anchored on tonight's candidates,
+their tilt centred on the candidate-pool mean. Solo only has to ask them first.
+
+**The decision.**
+1. **The door opens on the round.** "Just me" opens on step 4's round for one seat, "Which one
+   tonight?" `A` / `B` / `either` / `neither`, over its own per-request pool on the group round's
+   scale (decision 477), full-screen like a room's round. These pairs are the mood vote the owner
+   asks for; the mood-question round stays deleted (§6.2's preamble, decision 480). The door reads
+   "A few quick pairs for your mood, then three picks and a wildcard."
+2. **It is step 4's round for one seat.** It ends as a seat's does: the boundary resolved, the cap
+   of 20, or no pair left to ask, which the round records as `cap` (M4-open-points §2.2). A pool
+   too small to ask anything lands on the picks at once, as decision 215 settles a room to the
+   ballot. The header is decision 507's. From the sixth pair a persistent "just pick for me", step
+   4's "just pick for us" in the singular, ends the round on what is known so far; it sends
+   nothing, since the last reply's picks already carry every answer. Undo takes back the last
+   answer and puts the pair it answered back on screen: with no row there is no tombstone to write,
+   and solo's hold-out pair is drawn afresh on every request, so the pair restored is the one that
+   was shown. There is no waiting line, with nobody to wait for, and no ballot.
+3. **The picks follow the round.** When the round ends, three picks and a wildcard show, ranked by
+   the personal Ledger tilted by those answers, each with its why-line, fit line and Play as before
+   (decision 527).
+4. **The provenance line says what tilted.** It reads "Tilted by your N answers" once an answer has
+   tilted the ranking, and "Unseen first" or "Rewatches included" only when none has, as on a pool
+   too small to ask anything. N counts the answers that tilted, and a hold-out answer (54b) is not
+   among them.
+5. **Sharpen this goes.** The round it opened now comes first, and the re-rank in place goes with
+   it. Reshuffle stays and walks the tilted ranking, with decision 222's line when it wraps.
+6. **Still no session row.** The answers stay on the client, which sends them with every request
+   for the server to replay. Solo's votes are outside §14 risk 6's log: this answers M4-open-points
+   §2.3 by keeping step 8's "no session row". `session_participant.ended_by`, and with it §13's
+   rate of the cap and the escape, stays a room's.
+
+This supersedes 54f's "lands directly" and "sharpen this" sentences, and with them proposal 55,
+provenance only; 54f's sentences on the ballot and on Reshuffle stand. Decisions 215, 222, 223,
+477 and 507 stand, and 477's "Solo's sharpen round" now reads solo's round. Decision 527's item 5
+stands: the door's two choices and Play on every solo pick. The spec is amended in place
+(v2.1.13): §6.2 step 8, step 4's escape, which names solo's "just pick for me", and §6's preamble,
+whose full-screen flows now include solo's round.
+
 ## §6.2 — Tonight, rewritten (owner decision, 2026-08-29)
 
 Proposal 54 asked which slot carries the alternative on a split axis. The owner answered by
