@@ -145,7 +145,7 @@ describe("§6.1's empty state, by cause (finding 20, M410-D8-01)", () => {
     expect(block).toBeTruthy();
     expect(block.textContent).toContain('no new pair to compare yet');
     expect(block.querySelector('h2').textContent).not.toMatch(/left to queue/i);
-    expect(block.textContent).not.toMatch(/Sharpen my ranking/);
+    expect(block.textContent).not.toMatch(/Sharpen your list/);
   });
 
   it('sends a person with no pairs to Sweep rather than to an empty tier board', async () => {
@@ -169,7 +169,7 @@ describe("§6.1's empty state, by cause (finding 20, M410-D8-01)", () => {
 
     const block = target.querySelector(DRAINED);
     expect(block.querySelector('h2').textContent).toBe('Nothing left to queue');
-    expect(block.textContent).toContain('"Sharpen my ranking" on the Rank page');
+    expect(block.textContent).toContain('"Sharpen your list" on the Rank page');
     expect(block.textContent).not.toMatch(/§|\bM[0-7]\b/);
     expect(block.querySelector('a[href="/rank"]')).toBeTruthy();
   });
@@ -247,7 +247,7 @@ describe('"a title you know" (C5.2 of the household test)', () => {
     expect(buttons).toHaveLength(2);
     expect(buttons[0].disabled).toBe(false);
     expect(buttons[1].disabled).toBe(true);
-    expect(buttons[1].textContent).toContain('You rated it fine');
+    expect(buttons[1].textContent).toContain('You thought it was fine');
 
     respond(envelope({ session: { mode: 'mix' }, card: { ...substitutedSweep, substituted_for: null } }));
     buttons[0].click();

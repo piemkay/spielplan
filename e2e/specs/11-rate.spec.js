@@ -393,7 +393,7 @@ test.describe('rate', () => {
     await page.getByTestId('rate-find-input').fill(unrated.name);
     const rated = page.locator(`[data-testid="rate-find-hit"][data-title-id="${unrated.id}"]`);
     await expect(rated).toBeDisabled();
-    await expect(rated).toContainText('You rated it fine');
+    await expect(rated).toContainText('You thought it was fine');
     await closeSheet(find);
     await closeSheet(menu);
   });

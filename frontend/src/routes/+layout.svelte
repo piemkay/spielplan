@@ -348,8 +348,20 @@
     min-height: 100vh;
     min-height: 100dvh;
   }
+  /* The status bar is translucent in the installed app: scrolled content would pass under the clock. */
+  .shell::before {
+    content: '';
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: env(safe-area-inset-top);
+    z-index: 60;
+    background: var(--bg);
+    pointer-events: none;
+  }
   .unreachable {
-    width: min(420px, 100%);
+    width: min(420px, calc(100% - 48px));
     margin: 24px;
     display: flex;
     flex-direction: column;

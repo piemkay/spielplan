@@ -35,6 +35,8 @@
 
   // Stored worst first; read and typed best first, as Rank lists them.
   const bestFirst = (set) => [...(set ?? [])].reverse().join(' ');
+  // A synced iCloud passkey reports a sign count of 0 for ever, so the row reads the dates.
+  const day = (iso) => new Date(iso).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' });
 
   function say(at, ok, text) {
     feedback = { at, ok, text };
@@ -163,7 +165,7 @@
             <span>{c.label ?? 'Unnamed passkey'}</span>
             <span class="sub">
               {#if c.usable}
-                {c.rp_id} · used {c.sign_count} time{c.sign_count === 1 ? '' : 's'}
+                {c.rp_id} · {c.last_used_at ? `last used ${day(c.last_used_at)}` : `added ${day(c.created_at)}`}
               {:else}
                 Made for {c.rp_id} — it no longer works at this address
               {/if}

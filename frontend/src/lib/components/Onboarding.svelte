@@ -205,7 +205,10 @@
         {:else if where === 'ios-safari'}
           <!-- No direction word: the host moves the Sign-in group above or below this one. -->
           <ol class="steps" data-testid="onboarding-ios-steps">
-            <li>Tap the Share button in Safari's toolbar (the square with the arrow).</li>
+            <li>
+              Tap the Share button (the square with the arrow) — on newer iPhones it sits in the
+              ••• menu beside the address bar.
+            </li>
             <li>Scroll down and choose <strong>Add to Home Screen</strong>.</li>
             <li>Open Spielplan from the new icon and sign in there once.</li>
           </ol>

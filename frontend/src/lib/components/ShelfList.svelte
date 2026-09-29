@@ -56,7 +56,8 @@
       {/each}
     {/if}
   </div>
-{:else}
+{:else if payload?.degraded?.state !== 'zero_verdicts'}
+  <!-- With no verdicts Home's degraded card already asks for ratings. -->
   <div class="card empty" data-testid="shelves-empty">
     <h2 class="section-title">No shelves yet</h2>
     <p class="why">Rate a few titles and your shelves arrive here, each with its reason.</p>

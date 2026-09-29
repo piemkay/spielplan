@@ -351,7 +351,7 @@
           <h2 class="section-title">Nothing left to queue</h2>
           <p class="why">{rate.drained.text}</p>
           <p class="why">
-            "Sharpen my ranking" on the Rank page fine-tunes your tiers from here.
+            "Sharpen your list" on the Rank page fine-tunes your tiers from here.
           </p>
           <a class="btn-secondary" data-testid="rate-drained-cta" href="/rank">Go to Rank</a>
         {/if}
@@ -483,7 +483,7 @@
                     {[item.year, KIND_LABELS[item.kind] ?? item.kind].filter(Boolean).join(' · ')}
                   </span>
                   {#if item.rated}
-                    <span class="footnote" data-testid="rate-find-rated">You rated it {item.rated}</span>
+                    <span class="footnote" data-testid="rate-find-rated">You {item.rated === 'fine' ? 'thought it was fine' : `${item.rated} it`}</span>
                   {/if}
                 </span>
               </button>

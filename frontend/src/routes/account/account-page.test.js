@@ -133,7 +133,10 @@ describe('the welcome hand-off from the forced password change', () => {
 });
 
 describe('the account page in plain words', () => {
-  const PASSKEY = { id: 1, label: 'iPhone', rp_id: 'spielplan.example', sign_count: 3, usable: true };
+  const PASSKEY = {
+    id: 1, label: 'iPhone', rp_id: 'spielplan.example', sign_count: 0, usable: true,
+    created_at: '2026-09-01T10:00:00Z', last_used_at: '2026-09-28T20:00:00Z'
+  };
 
   it('names passkeys, the PIN and the Rank letters by what they do, the letters best first', async () => {
     answers({ credentials: [PASSKEY] });
@@ -143,6 +146,10 @@ describe('the account page in plain words', () => {
       for (const word of ['WebAuthn', 'Switch PIN', 'Tier set', 'switch PIN', 'authenticator']) {
         expect(text, word).not.toContain(word);
       }
+      // A synced passkey's sign count stays 0, so the row says when it was last used instead.
+      const row = target.querySelector('[data-testid="passkey"]').textContent;
+      expect(row).toContain('last used');
+      expect(row).not.toMatch(/used \d+ time/);
       expect(target.querySelector('[data-testid="pin-card"] summary').textContent).toContain(
         'PIN for switching profiles'
       );

@@ -33,7 +33,7 @@ describe('the rail (decisions 486 and 491)', () => {
     expect(target.querySelector('[data-testid="rate-label-count"]').textContent).toContain(
       '12 ratings'
     );
-    expect(text).toContain('Sharpen my ranking');
+    expect(text).toContain('Sharpen your list');
     expect(text).not.toMatch(/§|\blabels?\b|1\.6|1\.0/);
     expect(target.querySelector('[data-testid="rate-margin-weights"]')).toBeNull();
   });

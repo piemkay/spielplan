@@ -34,7 +34,8 @@
     left: max(12px, env(safe-area-inset-left));
     right: max(12px, env(safe-area-inset-right));
     bottom: calc(var(--tabbar) + env(safe-area-inset-bottom) + 12px);
-    z-index: 90;
+    /* Above Sheet's layer (100): a move made from the title card toasts its Undo while the card stays open. */
+    z-index: 110;
     display: flex;
     min-height: 50px;
     padding: 0 6px 0 16px;

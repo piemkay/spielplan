@@ -5,6 +5,7 @@
   import { post } from '$lib/api.js';
   import { refreshUser, setUser } from '$lib/session.svelte.js';
   import { signInWithPasskey, supported } from '$lib/passkeys.js';
+  import { isStandalone, pushSupported, readState } from '$lib/push.js';
   import FieldGroup from '$lib/components/FieldGroup.svelte';
 
   let name = $state('');
@@ -17,9 +18,15 @@
 
   async function land(user) {
     setUser(user);
+    if (user.must_change_password) return goto('/account/password');
     // The sign-in response carries identity only; the shell's nav comes from `/auth/me`.
-    if (!user.must_change_password) await refreshUser();
-    await goto(user.must_change_password ? '/account/password' : '/');
+    await refreshUser();
+    // The Home Screen app is the one place an iPhone can be asked for notifications.
+    const ask =
+      isStandalone() &&
+      pushSupported() &&
+      (await readState().catch(() => null))?.onboarding_complete === false;
+    await goto(ask ? '/account' : '/');
   }
 
   async function passkey() {

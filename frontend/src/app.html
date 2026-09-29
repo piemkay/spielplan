@@ -11,6 +11,8 @@
     <link rel="apple-touch-icon" href="%sveltekit.assets%/icon-192.png" />
     <meta name="apple-mobile-web-app-capable" content="yes" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <!-- Without it iOS names the home-screen icon after the page it was added from. -->
+    <meta name="apple-mobile-web-app-title" content="Spielplan" />
     <!-- Fonts are self-hosted: the app has to render on the LAN and over Tailscale with no
          route to the internet, and a blocking stylesheet from a third-party host would make
          the shell wait on something it may not be able to reach. -->

@@ -424,7 +424,7 @@ describe('the member register (decisions 486 and 491)', () => {
       expect(line).not.toMatch(/§|decision \d|proposal \d|\bM[0-7]\b/);
       expect(line).not.toMatch(/\blabels?\b|\bcdf\b|\bledger\b|\bmargin\b/);
     }
-    expect(PAIR_SELECTION_COPY).toContain('Sharpen my ranking');
+    expect(PAIR_SELECTION_COPY).toContain('Sharpen your list');
     expect(LEARNING_CURVE_COPY).toContain('ratings');
     expect(MODES.find(([key]) => key === 'mix')[2]).toContain('the pairs start at 15 ratings');
   });

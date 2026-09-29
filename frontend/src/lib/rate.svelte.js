@@ -28,7 +28,7 @@ export const PAIR_QUESTION = 'Which did you enjoy more?';
 export const PAIR_SELECTION_COPY =
   'Pairs are picked at random from titles you rated the same way. For learning your taste, ' +
   'random works as well as anything cleverer. Choosing pairs cleverly only helps when the ' +
-  "question is which of a few is best - that is what Sharpen my ranking on Rank and Tonight's " +
+  "question is which of a few is best - that is what Sharpen your list on Rank and Tonight's " +
   'round do.';
 
 export const LEARNING_CURVE_COPY =
