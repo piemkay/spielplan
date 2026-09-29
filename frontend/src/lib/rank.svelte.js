@@ -226,7 +226,7 @@ const undoing = (edit) => (Number.isInteger(edit) ? { undoes: edit } : {});
 // `above`/`below` are the titles it landed between; absent at a tier's ends. `via` and `undoes` are
 // recorded as how the tier was chosen and which edit an Undo takes back (decision 533). Once written,
 // the edit's id (true from a server that names none); false otherwise.
-export async function drop({ title_id, tier, above = null, below = null, via, undoes }) {
+export async function drop({ title_id, tier, above = null, below = null, via = undefined, undoes = undefined }) {
   if (rank.busy) return false;            // two drops in flight would race their two boards
   rank.busy = true;
   rank.error = '';

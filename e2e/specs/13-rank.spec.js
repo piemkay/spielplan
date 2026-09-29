@@ -276,11 +276,12 @@ test.describe('rank', () => {
       expect(body.above, 'a move names no title above it').toBeNull();
       expect(body.below, 'and none below it either, however full the tier is').toBeNull();
 
-      // The line names neighbour duels only when there were some. Both gestures are
-      // `via=drag_drop`: one route, one set of semantics.
+      // The line names neighbour duels only when there were some. The sheet's pick is recorded
+      // `via=explicit`; a drag stays `drag_drop` (decision 533).
+      expect(body.via).toBe('explicit');
       const payload = await response.json();
       expect(payload.log?.[0], 'the rail is open, so the drop reports its own line').toBeTruthy();
-      expect(payload.log[0]).toContain('via=drag_drop');
+      expect(payload.log[0]).toContain('via=explicit');
       expect(payload.log[0], 'a move writes the edit and nothing else').not.toContain('duels');
     } finally {
       await page.request.post('/api/auth/preferences', { data: { show_model: false } });

@@ -15439,8 +15439,8 @@ link is recorded. On 2026-09-29, before the first production deploy, the owner c
 both from the first evening.
 
 **The decision.**
-1. The title card's tier sheet, on Rank and off it, writes `via = 'explicit'`; a pointer drag and a
-   drop on the tier strip stay `drag_drop`.
+1. The title card's tier sheet, on Rank and off it, writes `via = 'explicit'`; a pointer drag, a
+   drop on the tier strip and a toast's Undo stay `drag_drop`.
 2. `tier_edit.undoes` (0042) names the edit a toast's Undo takes back: `POST /api/rank/drop`
    answers with the `tier_edit_id` it wrote, and the Undo sends it as `undoes`, refused unless it is
    the same person's edit of the same title.
