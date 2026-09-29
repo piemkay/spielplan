@@ -129,7 +129,7 @@ def adjustment(tilt: Mapping[str, float], vec: Vector, f: Frame) -> float:
     """What this participant's tilt adds to one candidate's tonight score.
 
     The tilt against the candidate's centred vector, over the frame's term count; an empty tilt
-    is exactly zero (54f's "no tilt").
+    is exactly zero.
     """
     if not tilt:
         return 0.0

@@ -14,7 +14,9 @@ import {
   RECONNECT_MAX_MS,
   RESERVED_LABEL,
   REVEAL_BEAT,
+  SOLO_ESCAPE_LABEL,
   answer,
+  answerSolo,
   approvalShare,
   ballotTurns,
   ballotWaitingLine,
@@ -25,6 +27,7 @@ import {
   connect,
   endRoom,
   escape,
+  escapeSolo,
   followLink,
   handBallot,
   leave,
@@ -58,6 +61,7 @@ import {
   toggleVeto,
   tonight,
   undo,
+  undoSolo,
   vetoCaption,
   waitingLine
 } from './tonight.svelte.js';
@@ -663,18 +667,14 @@ describe('the copy and the controls this milestone moved', () => {
     expect(roomEvening({ ...room, kind: 'movie' })).not.toContain('per episode');
   });
 
-  it('asks the solo round for a pair only when the person asks to sharpen', async () => {
-    // Only "sharpen this" asks for a pair; the door and Reshuffle do not.
+  it('asks for a pair at the door, and for none when Reshuffle walks the picks', async () => {
+    // Solo asks first (decision 532); a walk only re-reads the ranking the answers tilted.
     await loadSolo();
-    expect(posted('/api/tonight/solo').sharpen).toBe(false);
+    expect(posted('/api/tonight/solo').sharpen, 'the door went straight to the picks').toBe(true);
 
     calls.length = 0;
     await loadSolo({ reshuffle: true });
-    expect(posted('/api/tonight/solo').sharpen).toBe(false);
-
-    calls.length = 0;
-    await loadSolo({ sharpen: true });
-    expect(posted('/api/tonight/solo').sharpen).toBe(true);
+    expect(posted('/api/tonight/solo').sharpen, 'a reshuffle reopened the round').toBe(false);
   });
 
   it('does not advance the walk when the reshuffle it asked for was refused', async () => {
@@ -1180,5 +1180,287 @@ describe('the second household evening (owner instruction of 2026-09-26)', () =>
     for (const copy of [vetoCaption('movie'), vetoCaption('series'), MOOD_CAPTION]) {
       expect(copy).not.toMatch(/tier|projected|extracted|tilt|decision|§/i);
     }
+  });
+});
+
+describe('asking one person first (owner instruction of 2026-09-29)', () => {
+  const pairOf = (n) => ({
+    a: { title_id: n * 10 + 1, name: `Heat ${n}` },
+    b: { title_id: n * 10 + 2, name: `Drive ${n}` }
+  });
+
+  // The route as it plays one seat's round: a pair while the round is asked for and running, drawn
+  // afresh on every request as a hold-out pair is, and the picks either way.
+  function soloRoute({ until = 20 } = {}) {
+    let drawn = 0;
+    fetchMock.mockImplementation(async (path, opts = {}) => {
+      const body = JSON.parse(opts.body);
+      calls.push({ method: opts.method ?? 'GET', path, body });
+      const answered = body.answers.length;
+      const asking = body.sharpen && answered < until;
+      drawn += 1;
+      return reply({
+        picks: [{ title_id: 900 + answered }],
+        provenance: 'x',
+        answered,
+        cap: 20,
+        typical: 10,
+        escape_available: asking && answered >= 5,
+        pair: asking ? pairOf(drawn) : null
+      });
+    });
+  }
+
+  /** The next request, held open until the test lets it land as `landing` answers it. */
+  function holdNext(landing) {
+    let release = () => {};
+    fetchMock.mockImplementationOnce(
+      (path, opts) => new Promise((r) => (release = () => r(landing(path, opts))))
+    );
+    return () => release();
+  }
+
+  const said = () => tonight.soloAnswers.map((a) => a.answer);
+
+  it('names the escape for who is asking: one person, or a room', () => {
+    expect(SOLO_ESCAPE_LABEL).toBe('Just pick for me');
+    expect(ESCAPE_LABEL).toBe('Just pick for us');
+  });
+
+  it('opens the round afresh at the door, whatever the last evening left behind', async () => {
+    soloRoute();
+    tonight.soloAnswers = [{ seq: 1, title_a: 11, title_b: 12, answer: 'A', pair: pairOf(1) }];
+    tonight.soloOffset = 3;
+
+    await loadSolo();
+
+    expect(posted('/api/tonight/solo')).toMatchObject({ offset: 0, answers: [], sharpen: true });
+    expect(tonight.soloAnswers).toEqual([]);
+    expect(tonight.soloOffset).toBe(0);
+    expect(tonight.step).toBe('solo');
+    expect(tonight.solo.pair, 'the door landed on the picks without asking').toEqual(pairOf(1));
+  });
+
+  it('lands on the picks at once when the pool is too small to ask about', async () => {
+    soloRoute({ until: 0 });
+
+    await loadSolo();
+
+    expect(tonight.step).toBe('solo');
+    expect(tonight.solo.pair).toBeNull();
+    expect(tonight.solo.picks).toHaveLength(1);
+  });
+
+  it('carries every answer back to the route, and not the pair it keeps for undo', async () => {
+    // Stateless (§6.2 step 8): the route replays what the device sends, in `SoloAnswer`'s shape.
+    soloRoute();
+    await loadSolo();
+    await answerSolo('A');
+    calls.length = 0;
+
+    await answerSolo('NEITHER');
+
+    expect(posted('/api/tonight/solo')).toMatchObject({ sharpen: true, offset: 0 });
+    expect(posted('/api/tonight/solo').answers).toEqual([
+      { seq: 1, title_a: 11, title_b: 12, answer: 'A' },
+      { seq: 2, title_a: 21, title_b: 22, answer: 'NEITHER' }
+    ]);
+    expect(tonight.solo.answered).toBe(2);
+    expect(tonight.solo.pair).toEqual(pairOf(3));
+  });
+
+  it('takes a refused answer back, so a retry does not count the same pair twice', async () => {
+    soloRoute();
+    await loadSolo();
+    fetchMock.mockImplementationOnce(async () => reply({ detail: { message: 'nope' } }, 500));
+
+    await answerSolo('A');
+
+    expect(said(), 'the refused answer stayed on the list').toEqual([]);
+    expect(tonight.solo.pair, 'the pair it answered left the screen').toEqual(pairOf(1));
+    expect(tonight.error).toBe('nope');
+
+    calls.length = 0;
+    await answerSolo('A');
+    expect(posted('/api/tonight/solo').answers).toEqual([
+      { seq: 1, title_a: 11, title_b: 12, answer: 'A' }
+    ]);
+    expect(tonight.error, 'the answer that landed left the refusal standing').toBe('');
+  });
+
+  it('ignores a second tap while the first is in flight', async () => {
+    soloRoute();
+    await loadSolo();
+    calls.length = 0;
+    const release = holdNext(fetchMock.getMockImplementation());
+
+    const first = answerSolo('A');
+    await answerSolo('B');
+    await undoSolo();
+    release();
+    await first;
+
+    expect(calls, 'a tap in flight sent a request of its own').toHaveLength(1);
+    expect(said(), 'a tap in flight changed the answers').toEqual(['A']);
+    expect(tonight.solo.pair).toEqual(pairOf(2));
+  });
+
+  it('sends nothing for an answer or an undo it cannot act on', async () => {
+    soloRoute({ until: 1 });
+    await loadSolo();
+    calls.length = 0;
+
+    await undoSolo();
+    await answerSolo('MAYBE');
+    expect(calls, 'nothing to take back, and no such answer').toEqual([]);
+
+    await answerSolo('A');
+    expect(tonight.solo.pair, 'the round had one pair to ask').toBeNull();
+    calls.length = 0;
+    await answerSolo('B');
+    await undoSolo();
+
+    expect(calls, 'a tap with no pair on screen reached the route').toEqual([]);
+    expect(said()).toEqual(['A']);
+  });
+
+  it('takes the last answer back and puts the pair it answered back on screen', async () => {
+    // A hold-out pair is drawn afresh on every request, so the route cannot say which one it was.
+    soloRoute();
+    await loadSolo();
+    await answerSolo('A');
+    await answerSolo('B');
+    calls.length = 0;
+
+    await undoSolo();
+
+    expect(posted('/api/tonight/solo')).toMatchObject({
+      sharpen: true,
+      answers: [{ seq: 1, answer: 'A' }]
+    });
+    expect(said()).toEqual(['A']);
+    expect(tonight.solo.answered).toBe(1);
+    expect(tonight.solo.pair, 'the undo showed a fresh pair, not the one taken back').toEqual(pairOf(2));
+
+    calls.length = 0;
+    await answerSolo('EITHER');
+    expect(posted('/api/tonight/solo').answers.at(-1)).toEqual({
+      seq: 2,
+      title_a: 21,
+      title_b: 22,
+      answer: 'EITHER'
+    });
+  });
+
+  it('puts no pair back when the route has ended the round the undo went into', async () => {
+    soloRoute();
+    await loadSolo();
+    await answerSolo('A');
+    fetchMock.mockImplementationOnce(async () =>
+      reply({ picks: [{ title_id: 900 }], provenance: 'x', answered: 0, pair: null })
+    );
+
+    await undoSolo();
+
+    expect(said()).toEqual([]);
+    expect(tonight.solo.pair, 'the undo reopened a round the route has ended').toBeNull();
+    expect(tonight.step).toBe('solo');
+  });
+
+  it('keeps the answer an undo was refused for, and the pair on screen', async () => {
+    soloRoute();
+    await loadSolo();
+    await answerSolo('A');
+    await answerSolo('EITHER');
+    fetchMock.mockImplementationOnce(async () => {
+      throw new TypeError('Load failed');
+    });
+
+    await undoSolo();
+
+    expect(said(), 'a refused undo lost the answer anyway').toEqual(['A', 'EITHER']);
+    expect(tonight.solo.pair).toEqual(pairOf(3));
+    expect(tonight.error).not.toBe('');
+  });
+
+  it('keeps the escape shut until the sixth pair, then ends the round without a request', async () => {
+    // The picks in hand already carry every answer, so the escape has nothing to ask.
+    soloRoute();
+    await loadSolo();
+    for (const value of ['A', 'B', 'EITHER', 'NEITHER']) await answerSolo(value);
+    expect(tonight.solo.escape_available).toBe(false);
+    calls.length = 0;
+
+    escapeSolo();
+    expect(tonight.solo.pair, 'the escape opened on the fifth pair').toEqual(pairOf(5));
+    expect(calls).toEqual([]);
+
+    await answerSolo('A');
+    expect(tonight.solo.escape_available).toBe(true);
+    const picks = tonight.solo.picks;
+    calls.length = 0;
+
+    escapeSolo();
+
+    expect(calls, 'the escape asked the route for picks it had already sent').toEqual([]);
+    expect(tonight.solo.pair).toBeNull();
+    expect(tonight.solo.escape_available).toBe(false);
+    expect(tonight.solo.picks).toEqual(picks);
+    expect(tonight.step).toBe('solo');
+    expect(said()).toHaveLength(5);
+  });
+
+  it("leaves a refused answer's complaint behind with the round it was about", async () => {
+    soloRoute();
+    await loadSolo();
+    for (const value of ['A', 'B', 'EITHER', 'NEITHER', 'A']) await answerSolo(value);
+    fetchMock.mockImplementationOnce(async () => reply({ detail: 'boom' }, 500));
+    await answerSolo('B');
+    expect(tonight.error).not.toBe('');
+    expect(tonight.solo.escape_available).toBe(true);
+
+    escapeSolo();
+
+    expect(tonight.solo.pair).toBeNull();
+    expect(tonight.error, 'the picks opened under an error about the round').toBe('');
+  });
+
+  it('lands on the picks once the round ends, and Reshuffle walks them with every answer', async () => {
+    soloRoute({ until: 2 });
+    await loadSolo();
+    await answerSolo('A');
+    await answerSolo('B');
+    expect(tonight.solo.pair).toBeNull();
+    expect(tonight.step).toBe('solo');
+    calls.length = 0;
+
+    await loadSolo({ reshuffle: true });
+
+    expect(posted('/api/tonight/solo')).toMatchObject({ sharpen: false, offset: 1 });
+    const walked = posted('/api/tonight/solo').answers.map((a) => a.answer);
+    expect(walked, 'the walk dropped the answers that tilt it').toEqual(['A', 'B']);
+    expect(tonight.solo.pair, 'a reshuffle reopened the round').toBeNull();
+  });
+
+  it('stays at the door when a solo reply lands after Leave', async () => {
+    // Leave is the round's own Back, so a late pair must not pull the device back into it.
+    const release = holdNext(async () =>
+      reply({ picks: [], provenance: 'x', answered: 0, pair: pairOf(1) })
+    );
+    const late = loadSolo();
+    leave();
+    release();
+    await late;
+
+    expect(tonight.step, 'a late solo reply pulled the device off the door').toBe('door');
+    expect(tonight.busy).toBe(false);
+
+    const refused = holdNext(async () => reply({ detail: { message: 'nope' } }, 500));
+    const lateRefusal = loadSolo();
+    leave();
+    refused();
+    await lateRefusal;
+
+    expect(tonight.error, 'a late refusal complained at the door').toBe('');
   });
 });

@@ -323,111 +323,201 @@ describe('the clock behind the answer latency, across a navigation away (finding
   });
 });
 
-describe("54f's Reshuffle, pressed inside the sharpen round (M412-SOLO-01)", () => {
-  /** Only `pair` differs: Reshuffle's `sharpen: false` gets `pair: null`, which looks converged. */
+describe('solo asks for the mood before it picks (decision 532)', () => {
   const picks = [
     { title_id: 1, name: 'Heat', why: 'Slow burn', fit_line: 'Fits your time' },
     { title_id: 2, name: 'Drive', why: 'Neon', fit_line: 'Fits your time' },
     { title_id: 3, name: 'Tampopo', why: 'Noodles', fit_line: 'Fits your time' }
   ];
-  const pair = {
+  /** The n-th pair this server draws. */
+  const drawn = (n) => ({
     selection: 'straddle',
     reason: 'both near your line',
-    a: { title_id: 1, name: 'Heat', year: 1995, fit_line: 'Fits your time' },
-    b: { title_id: 2, name: 'Drive', year: 2011, fit_line: 'Fits your time' }
-  };
+    a: { title_id: 100 + 2 * n, name: `Left ${n}` },
+    b: { title_id: 101 + 2 * n, name: `Right ${n}` }
+  });
   const solo = (over = {}) => ({
     picks,
     wildcard: null,
-    provenance: 'Tilted by your 1 answer · fits in 2h 10m',
+    provenance: 'Unseen first',
     empty: null,
-    answered: 1,
-    sharpened: true,
+    answered: 0,
+    sharpened: false,
     wrapped: false,
     pair: null,
+    stop_reason: null,
+    cap: 20,
+    typical: 10,
+    escape_available: false,
     ...over
   });
 
-  const byTestId = (id) => target.querySelector(`[data-testid="${id}"]`);
+  /** The solo request bodies, in order. */
+  let posted;
+  /** Once `hold()` is called, solo replies wait for `release()`. */
+  let held = null;
+  /** @type {(value?: any) => void} */
+  let release = () => {};
+  const hold = () => (held = new Promise((resolve) => (release = resolve)));
+  // A test that fails while holding would otherwise leave `busy` set for the tests after it.
+  afterEach(() => release());
 
-  it('comes back to the picks rather than reporting a round that is out of questions', async () => {
-    // Reshuffle asks for no pair, so no pair back is not a converged round.
-    tonight.solo = solo({ pair });
-    tonight.step = 'solo';
+  // A new pair on every request, as a hold-out draw can be; the escape opens at five answers.
+  function serve({ ends = 20 } = {}) {
+    posted = [];
+    held = null;
+    let draws = 0;
     fetchMock.mockImplementation(async (path, opts = {}) => {
-      if (path !== '/api/tonight/solo') throw new Error(`no fixture for ${path}`);
+      if (path !== '/api/tonight/solo') return reply({ rooms: [] });
       const body = JSON.parse(opts.body);
-      return reply(body.sharpen ? solo({ pair }) : solo());
+      posted.push(body);
+      if (held) await held;
+      const n = body.answers.length;
+      const asking = body.sharpen && n < ends;
+      return reply(
+        solo({
+          answered: n,
+          sharpened: n > 0,
+          provenance: n ? `Tilted by your ${n} answer${n === 1 ? '' : 's'}` : 'Unseen first',
+          pair: asking ? drawn(draws++) : null,
+          stop_reason: body.sharpen && !asking ? 'converged' : null,
+          escape_available: asking && n >= 5
+        })
+      );
     });
+  }
 
-    app = mount(TonightPage, { target });
-    flushSync();
-    byTestId('tonight-sharpen').click();
+  const byTestId = (id) => target.querySelector(`[data-testid="${id}"]`);
+  const inFlow = () => byTestId('tonight-surface').classList.contains('flow');
+  const settle = async () => {
     await new Promise((resolve) => setTimeout(resolve, 10));
     flushSync();
-    expect(byTestId('tonight-sharpen-pair'), 'the round never started').not.toBeNull();
+  };
+  async function tap(id) {
+    byTestId(id).click();
+    await settle();
+  }
+  async function openSolo() {
+    app = mount(TonightPage, { target });
+    flushSync();
+    await tap('tonight-solo-door');
+  }
 
+  it('opens on a pair in the full-screen flow, with no picks yet', async () => {
+    serve();
+    await openSolo();
+
+    expect(byTestId('tonight-mood'), 'the door skipped the question').not.toBeNull();
+    expect(inFlow(), 'the round sits under the tab bar').toBe(true);
+    expect(byTestId('tonight-picks'), 'the picks came before the mood was asked').toBeNull();
+    expect(posted).toEqual([expect.objectContaining({ sharpen: true, offset: 0, answers: [] })]);
+    expect(byTestId('tonight-mood-count').textContent).toBe('Pair 1 · usually about 10');
+    expect(byTestId('tonight-mood-caption')).not.toBeNull();
+
+    await tap('tonight-mood-A');
+
+    expect(posted.at(-1).sharpen, 'the answer asked for no next pair').toBe(true);
+    expect(posted.at(-1).answers).toEqual([{ seq: 1, title_a: 100, title_b: 101, answer: 'A' }]);
+    expect(byTestId('tonight-mood-count').textContent).toBe('Pair 2 · usually about 10');
+    expect(byTestId('tonight-mood-caption'), 'the caption outstays the first pair').toBeNull();
+  });
+
+  it('lands on the picks, out of the flow, once a reply brings no pair', async () => {
+    serve({ ends: 1 });
+    await openSolo();
+    await tap('tonight-mood-NEITHER');
+
+    expect(byTestId('tonight-mood')).toBeNull();
+    expect(byTestId('tonight-picks'), 'the round ended on nothing').not.toBeNull();
+    expect(byTestId('tonight-provenance').textContent).toContain('Tilted by your 1 answer');
+    expect(inFlow(), 'the picks stayed a full-screen flow').toBe(false);
+  });
+
+  it('lands on the picks at once when there is nothing to ask', async () => {
+    serve({ ends: 0 });
+    await openSolo();
+
+    expect(byTestId('tonight-mood')).toBeNull();
+    expect(byTestId('tonight-picks')).not.toBeNull();
+  });
+
+  it('keeps the escape locked until the server offers it, and takes it without asking again', async () => {
+    serve();
+    await openSolo();
+    for (let i = 0; i < 5; i += 1) {
+      expect(byTestId('tonight-mood-escape'), `the escape opened at pair ${i + 1}`).toBeNull();
+      expect(byTestId('tonight-mood-escape-locked')).not.toBeNull();
+      await tap('tonight-mood-EITHER');
+    }
+
+    expect(byTestId('tonight-mood-count').textContent).toBe('Pair 6 · usually about 10');
+    expect(byTestId('tonight-mood-escape-locked')).toBeNull();
+    const escape = byTestId('tonight-mood-escape');
+    expect(escape.textContent).toBe('Just pick for me');
+    const sent = posted.length;
+    escape.click();
+    await settle();
+
+    expect(posted, 'the escape asked the server again').toHaveLength(sent);
+    expect(byTestId('tonight-mood')).toBeNull();
+    expect(byTestId('tonight-picks')).not.toBeNull();
+    expect(byTestId('tonight-provenance').textContent).toContain('Tilted by your 5 answers');
+  });
+
+  it('undoes the last answer and puts its pair back, not the one the server drew next', async () => {
+    serve();
+    await openSolo();
+    await tap('tonight-mood-B');
+    expect(byTestId('tonight-mood-A').textContent).toContain('Left 1');
+    const shown = [];
+    const watcher = new MutationObserver(() => shown.push(byTestId('tonight-mood-A')?.textContent));
+    watcher.observe(target, { subtree: true, childList: true, characterData: true });
+
+    await tap('tonight-mood-undo');
+    watcher.disconnect();
+
+    expect(shown.join(' | '), 'the pair drawn and discarded was rendered').not.toContain('Left 2');
+    expect(posted.at(-1)).toMatchObject({ sharpen: true, answers: [] });
+    expect(byTestId('tonight-mood-A').textContent, 'undo showed a pair never answered').toContain(
+      'Left 0'
+    );
+    expect(byTestId('tonight-mood-count').textContent).toBe('Pair 1 · usually about 10');
+
+    await tap('tonight-mood-EITHER');
+    expect(posted.at(-1).answers).toEqual([{ seq: 1, title_a: 100, title_b: 101, answer: 'EITHER' }]);
+  });
+
+  it('drops a reply that lands after Leave', async () => {
+    serve();
+    await openSolo();
+    hold();
+    byTestId('tonight-mood-A').click();
+    flushSync();
+    await tap('tonight-back');
+    release();
+    await settle();
+
+    expect(byTestId('tonight-mood'), 'the late reply pulled the device back into the round').toBeNull();
+    expect(byTestId('tonight-solo-door')).not.toBeNull();
+  });
+
+  it('reshuffles the picks without asking for a pair, and only once at a time', async () => {
+    serve({ ends: 1 });
+    await openSolo();
+    await tap('tonight-mood-A');
+    hold();
     byTestId('tonight-reshuffle').click();
-    await new Promise((resolve) => setTimeout(resolve, 10));
     flushSync();
 
-    expect(byTestId('tonight-picks'), 'the walk did not land back on the picks').not.toBeNull();
-    expect(
-      byTestId('tonight-sharpen-done'),
-      'the screen says the round is out of questions, which the server never said'
-    ).toBeNull();
-    expect(
-      byTestId('tonight-sharpen'),
-      'the only control that can ask for a pair is gone, so Back is the only way out'
-    ).not.toBeNull();
-  });
+    expect(posted.at(-1)).toMatchObject({ sharpen: false, offset: 1 });
+    expect(posted.at(-1).answers, 'the walk dropped the answers that tilt it').toHaveLength(1);
+    expect(byTestId('tonight-reshuffle').disabled, 'a second press would race the first').toBe(true);
 
-  it('asks the sharpen question above the picks it re-ranks', async () => {
-    tonight.solo = solo();
-    tonight.step = 'solo';
-    fetchMock.mockImplementation(async (path) =>
-      reply(path === '/api/tonight/solo' ? solo({ pair }) : { rooms: [] })
-    );
-
-    app = mount(TonightPage, { target });
-    flushSync();
-    byTestId('tonight-sharpen').click();
-    await new Promise((resolve) => setTimeout(resolve, 10));
-    flushSync();
-
-    const round = byTestId('tonight-sharpen-pair');
-    expect(round, 'the round never started').not.toBeNull();
-    expect(
-      round.compareDocumentPosition(byTestId('tonight-picks')) & Node.DOCUMENT_POSITION_FOLLOWING,
-      'the question sits below the picks, off the bottom of a phone'
-    ).toBeTruthy();
-  });
-
-  it('says the round is out of questions only once the reply does, and brings that into view', async () => {
-    tonight.solo = solo();
-    tonight.step = 'solo';
-    /** @type {(response: any) => void} */
-    let answer = () => {};
-    fetchMock.mockImplementation(async (path) =>
-      path === '/api/tonight/solo' ? new Promise((resolve) => (answer = resolve)) : reply({ rooms: [] })
-    );
-    const scrolled = vi.fn();
-    Element.prototype.scrollIntoView = scrolled;
-
-    app = mount(TonightPage, { target });
-    flushSync();
-    byTestId('tonight-sharpen').click();
-    flushSync();
-    const early = byTestId('tonight-sharpen-done');
-    answer(reply(solo()));
-    await new Promise((resolve) => setTimeout(resolve, 10));
-    flushSync();
-    const done = byTestId('tonight-sharpen-done');
-    delete Element.prototype.scrollIntoView;
-
-    expect(early, 'the question is still on its way').toBeNull();
-    expect(done, 'a converged round answered the press with a blank').not.toBeNull();
-    expect(scrolled.mock.contexts, 'the line sits above the picks, off a scrolled phone').toContain(done);
+    release();
+    await settle();
+    expect(byTestId('tonight-reshuffle').disabled).toBe(false);
+    expect(byTestId('tonight-picks')).not.toBeNull();
+    expect(byTestId('tonight-mood')).toBeNull();
   });
 
   it('offers Play on every pick and the wildcard, and says so when there is no link', () => {

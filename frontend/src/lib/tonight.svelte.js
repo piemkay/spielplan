@@ -102,6 +102,7 @@ export const ANSWERS = [
 ];
 
 export const ESCAPE_LABEL = 'Just pick for us';
+export const SOLO_ESCAPE_LABEL = 'Just pick for me';
 
 /** 54e/proposal 60: "shipping the property without the moment ships half of it." */
 export const REVEAL_BEAT = "Tonight's pick";
@@ -181,10 +182,10 @@ export const tonight = $state({
   approved: [],
   /** @type {any} */
   result: null,
-  /** @type {any} 54f's solo picks */
+  /** @type {any} the last solo reply: the round while it carries a `pair`, then the picks */
   solo: null,
-  /** @type {any[]} 54f's sharpen round, carried by the client because §6.2 step 8 mints no
-   * session row and therefore no `session_answer` to hold them */
+  /** @type {any[]} solo's round, carried by the client because §6.2 step 8 mints no session row
+   * and therefore no `session_answer` to hold them. Each keeps the pair it answered, for undo. */
   soloAnswers: [],
   soloOffset: 0,
   /** @type {string} the join link, shown once Share fell back to the clipboard or nothing */
@@ -361,6 +362,7 @@ export async function refresh({ seat = null } = {}) {
 export function leave() {
   refreshSeq += 1;
   roundSeq += 1;
+  soloSeq += 1;
   tonight.lobby = null;
   tonight.round = null;
   tonight.ballot = null;
@@ -548,50 +550,92 @@ export async function loadResult() {
   }
 }
 
-// Solo lands directly on the picks, no round first (54f).
-export async function loadSolo({ sharpen = false, reshuffle = false } = {}) {
+// Bumped by `leave()`, so a solo reply that lands after Back cannot pull the device off the door.
+let soloSeq = 0;
+
+// One solo request. `ask` serves the round's next pair; a walk asks for none, so its reply is
+// always the picks. `keep` is the pair to show in place of the one served. False when refused or
+// overtaken.
+async function postSolo({ ask, walk = false, keep = null }) {
+  if (tonight.busy) return false;
   tonight.busy = true;
+  const mine = ++soloSeq;
   // Where the walk is, so a refused press can be taken back below.
   const walked = tonight.soloOffset;
+  // Never past what the route serves (`SOLO_OFFSET_MAX`).
+  if (walk) tonight.soloOffset = Math.min(tonight.soloOffset + 1, SOLO_OFFSET_MAX);
   try {
-    // Never past what the route serves (`SOLO_OFFSET_MAX`).
-    if (reshuffle) tonight.soloOffset = Math.min(tonight.soloOffset + 1, SOLO_OFFSET_MAX);
-    if (!sharpen && !reshuffle) {
-      tonight.soloAnswers = [];
-      tonight.soloOffset = 0;
-    }
-    tonight.solo = await post('/tonight/solo', {
+    const reply = await post('/tonight/solo', {
       ...tonight.controls,
       offset: tonight.soloOffset,
-      answers: tonight.soloAnswers,
-      // Only "sharpen this" asks for a pair search (54f).
-      sharpen
+      answers: tonight.soloAnswers.map(({ seq, title_a, title_b, answer }) => ({
+        seq,
+        title_a,
+        title_b,
+        answer
+      })),
+      sharpen: ask
     });
+    if (mine !== soloSeq) return false;
+    // One write, so the served pair never renders before the kept one replaces it.
+    tonight.solo = keep && reply.pair ? { ...reply, pair: keep } : reply;
     tonight.step = 'solo';
     tonight.error = '';
+    return true;
   } catch (err) {
+    if (mine !== soloSeq) return false;
     fail(err);
     // A refused walk has not walked.
     tonight.soloOffset = walked;
+    return false;
   } finally {
     tonight.busy = false;
   }
 }
 
-// The answers live here because §6.2 step 8 mints no session row; the pair is shown before asking.
-export async function sharpen(value) {
+// Solo asks first: the door opens on the round, and the picks follow it (decision 532).
+export async function loadSolo({ reshuffle = false } = {}) {
+  if (reshuffle) return postSolo({ ask: false, walk: true });
+  if (tonight.busy) return false;
+  tonight.soloAnswers = [];
+  tonight.soloOffset = 0;
+  return postSolo({ ask: true });
+}
+
+// A refused answer is taken back, or a retry would count the same pair twice.
+export async function answerSolo(value) {
   const pair = tonight.solo?.pair;
-  if (!pair || !ANSWERS.some((a) => a.value === value)) return;
+  if (!pair || tonight.busy || !ANSWERS.some((a) => a.value === value)) return;
+  const before = tonight.soloAnswers;
   tonight.soloAnswers = [
-    ...tonight.soloAnswers,
+    ...before,
     {
-      seq: tonight.soloAnswers.length + 1,
+      seq: before.length + 1,
       title_a: pair.a.title_id,
       title_b: pair.b.title_id,
-      answer: value
+      answer: value,
+      pair
     }
   ];
-  await loadSolo({ sharpen: true });
+  if (!(await postSolo({ ask: true }))) tonight.soloAnswers = before;
+}
+
+// No tombstone to write: the last answer leaves the list, and the pair it answered comes back,
+// since a hold-out pair is drawn afresh on every request.
+export async function undoSolo() {
+  const before = tonight.soloAnswers;
+  const last = before.at(-1);
+  if (!last || !tonight.solo?.pair || tonight.busy) return;
+  tonight.soloAnswers = before.slice(0, -1);
+  if (!(await postSolo({ ask: true, keep: last.pair }))) tonight.soloAnswers = before;
+}
+
+// Availability comes from the server. Nothing is sent: the picks in hand carry every answer.
+export function escapeSolo() {
+  if (!tonight.solo?.escape_available || tonight.busy) return;
+  tonight.solo = { ...tonight.solo, pair: null, escape_available: false };
+  // A refused answer's complaint was about the round, which is over.
+  tonight.error = '';
 }
 
 // Backoff bounds: a fixed short retry hammers the backend restart a bundle swap ends in.
