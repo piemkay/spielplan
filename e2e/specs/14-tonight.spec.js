@@ -3,15 +3,18 @@ import { expect, test } from '@playwright/test';
 import { createMember, seedFilmLedger, signInAsMember, signedIn, waitForPool } from '../helpers.js';
 
 /**
- * §6.2's Tonight surface (54a–54g): solo lands on picks with no round or ballot (54f); the guest
- * hand-off on one phone is sequential and blind, which only rendering can enforce (§6.2 step 2);
- * a guest seat reaches the reveal; a household frame does not clobber the seat being played; and
- * `latency_ms` is measured, against §6's card budgets. One page for the file (observations are
- * append-only), plus one second context to send a `rooms.changed` frame.
+ * §6.2's Tonight surface (54a–54g): solo asks a round of its own first and then lands on picks
+ * with no ballot (decision 532); the guest hand-off on one phone is sequential and blind, which
+ * only rendering can enforce (§6.2 step 2); a guest seat reaches the reveal; a household frame
+ * does not clobber the seat being played; and `latency_ms` is measured, against §6's card budgets.
+ * One page for the file (observations are append-only), plus one second context to send a
+ * `rooms.changed` frame.
  */
 
 // §6.2's round is one POST per pair, so the thing to wait on is the write itself.
 const ANSWER = /\/api\/tonight\/seats\/\d+\/answer$/;
+// Solo's round has no seat: each answer re-posts the whole round (§6.2 step 8).
+const SOLO = /\/api\/tonight\/solo$/;
 
 // The dwell being measured (not a wait), and a margin for the phone's clock.
 const DWELL_MS = 400;
@@ -111,6 +114,29 @@ test.describe('tonight', () => {
     }
   }
 
+  const soloReply = () =>
+    page.waitForResponse((res) => res.request().method() === 'POST' && SOLO.test(res.url()), {
+      timeout: 15_000
+    });
+
+  /** Answer solo's round to its end and land on the picks; a pool too small to ask about lands
+   * there at once. Returns how many answers it gave. */
+  async function playSoloOut() {
+    const mood = page.getByTestId('tonight-mood');
+    const solo = page.getByTestId('tonight-solo');
+    const pickA = page.getByTestId('tonight-mood-A');
+    await expect(mood.or(solo)).toBeVisible();
+    let given = 0;
+    for (; await mood.isVisible(); given++) {
+      expect(given, 'solo asked a pair past the round cap of 20').toBeLessThan(20);
+      await Promise.all([soloReply(), pickA.click()]);
+      // Settled: the next pair's controls re-enable, or the picks replace the round.
+      await expect(pickA.or(solo).first()).toBeEnabled();
+    }
+    await expect(solo).toBeVisible();
+    return given;
+  }
+
   /** The approvals ticked on the ballot drawn: 54e's blindness is falsified by one. */
   const ticked = (p) => p.locator('[data-testid^="tonight-approve-"][aria-pressed="true"]');
 
@@ -148,23 +174,51 @@ test.describe('tonight', () => {
     await closeSettings();
   });
 
-  test('solo lands on three picks and a wildcard with no round and no ballot', async () => {
-    // 54f: "no pair round and no ballot anywhere in the flow".
+  test('solo asks its round first, then lands on three picks and a wildcard', async () => {
+    // Step 4's round for one seat before any pick (decision 532), and still no session: no room
+    // is published and no ballot drawn. A round played out can outrun 60 s on WebKit.
+    test.setTimeout(300_000);
     await atTheDoor();
+    const roomsBefore = (await (await page.request.get('/api/tonight/rooms')).json()).rooms.length;
     await page.getByTestId('tonight-solo-door').click();
 
-    await expect(page.getByTestId('tonight-solo')).toBeVisible();
+    await expect(page.getByTestId('tonight-mood')).toBeVisible();
+    await expect(page.getByTestId('tonight-mood-count')).toContainText(/^Pair 1\b/);
+    await expect(page.getByTestId('tonight-mood-count')).toContainText('usually about');
+    await expect(page.getByTestId('tonight-mood-caption')).toBeVisible();
+    await expect(page.getByTestId('tonight-mood-escape-locked')).toBeVisible();
+    await expect(page.getByTestId('tonight-mood-escape')).toHaveCount(0);
+    await expect(page.getByTestId('tonight-picks')).toHaveCount(0);
     await expect(page.getByTestId('tonight-round')).toHaveCount(0);
-    await expect(page.getByTestId('tonight-ballot')).toHaveCount(0);
+
+    // All four answers on pair 1 without a scroll: the round is a full-screen flow, so the fold
+    // is the viewport's.
+    const bottom = page.viewportSize().height;
+    for (const id of ['tonight-mood-A', 'tonight-mood-B', 'tonight-mood-EITHER',
+      'tonight-mood-NEITHER']) {
+      await expect(page.getByTestId(id)).toBeVisible();
+      const box = await page.getByTestId(id).boundingBox();
+      expect(box, `${id} is not laid out`).not.toBeNull();
+      expect(box.y, `${id} starts above the top of the page`).toBeGreaterThanOrEqual(0);
+      expect(box.y + box.height, `${id} ends below the fold`).toBeLessThanOrEqual(bottom + 1);
+    }
+
+    await playSoloOut();
     await expect(soloPicks()).toHaveCount(3);
     await expect(page.getByTestId('tonight-solo-wildcard')).toBeVisible();
+    await expect(page.getByTestId('tonight-round')).toHaveCount(0);
+    await expect(page.getByTestId('tonight-ballot')).toHaveCount(0);
+    // Earlier tests leave rooms behind: the claim is that solo added none.
+    const rooms = (await (await page.request.get('/api/tonight/rooms')).json()).rooms;
+    expect(rooms.length, '§6.2 step 8: solo publishes no room').toBe(roomsBefore);
   });
 
   test('every solo pick carries a why and a budget-fit line', async () => {
     // §6.8's mandatory why, and §6.2 step 8's two fit-line branches.
+    test.setTimeout(300_000);
     await atTheDoor();
     await page.getByTestId('tonight-solo-door').click();
-    await expect(page.getByTestId('tonight-solo')).toBeVisible();
+    await playSoloOut();
 
     const cards = await soloPicks().all();
     expect(cards.length, 'no picks means every assertion below is vacuous').toBe(3);
@@ -176,25 +230,35 @@ test.describe('tonight', () => {
   });
 
   test('the provenance line names the budget and the filter', async () => {
-    // 54f: "Unseen first" until a sharpen answer tilts it.
+    // §6.2 step 8: "Unseen first" until an answer tilts it. A rated film is seen, so with rewatches out
+    // the fixture's pool is empty and the door lands on the picks with nothing to ask.
+    test.setTimeout(300_000);
     await atTheDoor({ rewatches: false });
     await page.getByTestId('tonight-solo-door').click();
+    const answered = await playSoloOut();
     await expect(page.getByTestId('tonight-provenance')).toContainText('fits in 2h 10m');
-    await expect(page.getByTestId('tonight-provenance')).toContainText('Unseen first');
+    await expect(page.getByTestId('tonight-provenance')).toContainText(
+      answered ? /Tilted by your \d+ answers?/ : 'Unseen first'
+    );
   });
 
   test('reshuffle walks the ranking and asks nothing', async () => {
-    // §6.2 step 8: a browse gesture that asks nothing.
+    // §6.2 step 8: a browse gesture that asks nothing, over the ranking the round tilted.
+    test.setTimeout(300_000);
     await atTheDoor();
     await page.getByTestId('tonight-solo-door').click();
+    await playSoloOut();
     await expect(page.getByTestId('tonight-picks')).toBeVisible();
     const before = await page.getByTestId('tonight-picks').innerText();
+    const provenance = page.getByTestId('tonight-provenance');
+    const line = (await provenance.textContent()) ?? '';
 
     await page.getByTestId('tonight-reshuffle').click();
-    await expect(page.getByTestId('tonight-round')).toHaveCount(0);
     await expect
       .poll(async () => page.getByTestId('tonight-picks').innerText(), { timeout: 10_000 })
       .not.toBe(before);
+    await expect(page.getByTestId('tonight-mood')).toHaveCount(0);
+    await expect(provenance, 'the walk dropped the answers the round had taken').toHaveText(line);
 
     // Decision 222: the walk "wraps", and says so. Pressed until it appears: which press wraps
     // depends on the pool's size.
@@ -455,79 +519,67 @@ test.describe('tonight', () => {
     await expect(page.getByTestId('tonight-controls')).toBeVisible();
   });
 
-  test('sharpen runs the round in place and says so in the provenance line', async () => {
-    // 54f: "'sharpen this' runs the adaptive round and re-ranks in place, after which the
-    // provenance line reads 'tilted by your N answers' instead of 'unseen first'". Over 60 s on
-    // WebKit.
+  test('the solo escape opens at pair 6 and lands on the picks the answers tilted', async () => {
+    // A seat's escape, for one (decision 532). NEITHER keeps the fixture's six films in the round
+    // well past pair 6; a round that ends first lands on the same tilted picks.
     test.setTimeout(300_000);
-    // Rewatches in: the fixture is all seen. The tilt replaces the filter clause.
     await atTheDoor();
-    const roomsBefore = (await (await page.request.get('/api/tonight/rooms')).json()).rooms.length;
     await page.getByTestId('tonight-solo-door').click();
-    await expect(soloPicks()).toHaveCount(3);
-    await expect(page.getByTestId('tonight-provenance')).toContainText('Rewatches included');
-
-    await page.getByTestId('tonight-sharpen').click();
-    await expect(page.getByTestId('tonight-sharpen-pair')).toBeVisible();
-    for (const answer of ['A', 'B', 'EITHER', 'NEITHER']) {
-      await expect(page.getByTestId(`tonight-sharpen-${answer}`)).toBeVisible();
+    const mood = page.getByTestId('tonight-mood');
+    const solo = page.getByTestId('tonight-solo');
+    const neither = page.getByTestId('tonight-mood-NEITHER');
+    const escape = page.getByTestId('tonight-mood-escape');
+    await expect(mood).toBeVisible();
+    for (let i = 0; i < 5 && (await mood.isVisible()); i++) {
+      await expect(escape, `the escape opened at pair ${i + 1}`).toHaveCount(0);
+      await expect(page.getByTestId('tonight-mood-escape-locked')).toBeVisible();
+      await Promise.all([soloReply(), neither.click()]);
+      await expect(neither.or(solo).first()).toBeEnabled();
     }
-
-    // Answered until the line moves, up to three times: 54b's hold-out draw is keyed on the
-    // user id (decision 223), so any one answer may legitimately not count.
-    const provenance = page.getByTestId('tonight-provenance');
-    const tilted = /Tilted by your \d+ answers?/;
-    for (let press = 0; press < 3 && !tilted.test((await provenance.textContent()) ?? ''); press++) {
-      if (!(await page.getByTestId('tonight-sharpen-pair').isVisible())) break;
-      await page.getByTestId('tonight-sharpen-A').click();
-      // The controls re-enable when the new payload is on screen.
-      await expect(
-        page.getByTestId('tonight-sharpen-A').or(page.getByTestId('tonight-sharpen-done')).first()
-      ).toBeEnabled();
+    if (await mood.isVisible()) {
+      await expect(page.getByTestId('tonight-mood-count')).toContainText(/^Pair 6\b/);
+      await expect(escape).toBeVisible();
+      // The reply in hand already carries all five answers, so there is nothing to ask.
+      let asked = 0;
+      const onRequest = (req) => {
+        if (SOLO.test(req.url())) asked += 1;
+      };
+      page.on('request', onRequest);
+      await escape.click();
+      await expect(solo).toBeVisible();
+      page.off('request', onRequest);
+      expect(asked, 'the escape asked the server again for the picks it held').toBe(0);
     }
-    await expect(provenance, 'three answers and the line counted none of them').toContainText(
-      tilted
-    );
-    await expect(provenance).not.toContainText('Rewatches included');
-    const line = (await provenance.textContent()) ?? '';
-    await expect(page.getByTestId('tonight-solo')).toBeVisible();
+    await expect(solo).toBeVisible();
     await expect(soloPicks()).toHaveCount(3);
-    await expect(page.getByTestId('tonight-ballot')).toHaveCount(0);
-
-    // Reshuffle inside the round is a browse gesture: no pair drawn is not a converged round, and
-    // the answers survive the walk.
-    await Promise.all([
-      page.waitForResponse(
-        (res) => res.request().method() === 'POST' && res.url().endsWith('/api/tonight/solo'),
-        { timeout: 15_000 }
-      ),
-      page.getByTestId('tonight-reshuffle').click()
-    ]);
-    await expect(page.getByTestId('tonight-sharpen-done')).toHaveCount(0);
-    await expect(page.getByTestId('tonight-sharpen')).toBeVisible();
-    await expect(provenance, 'the walk dropped the answers the round had already taken').toHaveText(
-      line
+    await expect(page.getByTestId('tonight-solo-wildcard')).toBeVisible();
+    await expect(page.getByTestId('tonight-provenance')).toContainText(
+      /Tilted by your \d+ answers?/
     );
-    // And the control that came back answers the press with a pair or with "done", whichever
-    // the round served: on the fixture's six films one answer can resolve the boundary (54c).
-    const [asked] = await Promise.all([
-      page.waitForResponse(
-        (res) => res.request().method() === 'POST' && res.url().endsWith('/api/tonight/solo'),
-        { timeout: 15_000 }
-      ),
-      page.getByTestId('tonight-sharpen').click()
-    ]);
-    const served = await asked.json();
-    const shown = served.pair
-      ? page.getByTestId('tonight-sharpen-pair')
-      : page.getByTestId('tonight-sharpen-done');
-    await expect(
-      shown,
-      `the round served ${served.stop_reason ?? 'a pair'} and the screen showed neither`
-    ).toBeVisible();
-    // Earlier tests leave rooms behind: the claim is that solo added none.
-    const rooms = (await (await page.request.get('/api/tonight/rooms')).json()).rooms;
-    expect(rooms.length, '§6.2 step 8: solo publishes no room').toBe(roomsBefore);
+  });
+
+  test('undo in the solo round takes the last answer back and puts its pair back', async () => {
+    // A hold-out pair is drawn afresh on every request, so the pair comes back from the client.
+    // NEITHER keeps the fixture's films in the round past pair 2.
+    test.setTimeout(120_000);
+    await atTheDoor();
+    await page.getByTestId('tonight-solo-door').click();
+    const count = page.getByTestId('tonight-mood-count');
+    await expect(count).toContainText(/^Pair 1\b/);
+    const shown = async () => [
+      await page.getByTestId('tonight-mood-A').innerText(),
+      await page.getByTestId('tonight-mood-B').innerText()
+    ];
+    const first = await shown();
+
+    await Promise.all([soloReply(), page.getByTestId('tonight-mood-NEITHER').click()]);
+    await expect(count).toContainText(/^Pair 2\b/);
+    await expect(page.getByTestId('tonight-mood-caption')).toHaveCount(0);
+
+    await Promise.all([soloReply(), page.getByTestId('tonight-mood-undo').click()]);
+    await expect(count).toContainText(/^Pair 1\b/);
+    await expect(page.getByTestId('tonight-mood-caption')).toBeVisible();
+    expect(await shown(), 'undo put up a different pair from the one it took back').toEqual(first);
   });
 
   test('an answer carries the time it took, and the card budgets hold', async () => {
@@ -608,7 +660,7 @@ test.describe('tonight', () => {
     await closeSettings();
     await expect(page.getByTestId('tonight-summary')).toHaveText('Film · up to 2h');
     await page.getByTestId('tonight-solo-door').click();
-    await expect(page.getByTestId('tonight-solo')).toBeVisible();
+    await playSoloOut();
 
     await atTheDoor({ rewatches: false });
     await expect(page.getByTestId('tonight-summary')).toHaveText('Film · up to 2h');
@@ -618,7 +670,7 @@ test.describe('tonight', () => {
     await page.getByTestId('tonight-budget').fill('130');
     await closeSettings();
     await page.getByTestId('tonight-solo-door').click();
-    await expect(page.getByTestId('tonight-solo')).toBeVisible();
+    await playSoloOut();
     await atTheDoor({ rewatches: false });
     await expect(page.getByTestId('tonight-summary')).toHaveText('Film · up to 2h 10m');
   });

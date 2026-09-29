@@ -1326,10 +1326,12 @@ async def solo_picks(db, world, **kw):
     return await solo.picks(db, **params)
 
 
-async def test_solo_lands_on_three_picks_and_a_wildcard_with_no_round_first(db, world):
-    """54f: straight to picks; the fastest path to a film must not be slower than Home."""
-    out = await solo_picks(db, world)
+async def test_the_solo_door_asks_first_and_already_holds_three_picks_and_a_wildcard(db, world):
+    """Decision 532: the door opens on a pair, and every reply carries the picks (untilted before any
+    answer), so ending the round needs no request of its own."""
+    out = await solo_picks(db, world, sharpen=True)
 
+    assert out["pair"] is not None, "the door has to ask before it picks"
     assert len(out["picks"]) == solo.PICKS
     assert out["wildcard"] is not None
     assert out["wildcard"]["title_id"] not in {p["title_id"] for p in out["picks"]}
@@ -1415,12 +1417,11 @@ async def test_the_provenance_line_reports_the_budget_and_the_filter(db, world):
     assert plain["provenance"] == "Unseen first · fits in 2h 10m"
 
 
-async def test_sharpening_re_ranks_in_place_and_changes_the_provenance_line(db, world):
-    """54f: the provenance line reads 'tilted by your N answers' after sharpening."""
-    # Rewatches included so the pool exceeds the shortlist. `sharpen=True`: it is now the only thing
-    # that draws a pair (finding 35).
+async def test_an_answer_re_ranks_in_place_and_changes_the_provenance_line(db, world):
+    """§6.2 step 8: the provenance line reads 'tilted by your N answers' once the round has one."""
+    # Rewatches included so the pool exceeds the shortlist.
     first = await solo_picks(db, world, budget_min=130, include_rewatches=True, sharpen=True)
-    assert first["pair"] is not None, "the sharpen round has to have something to ask"
+    assert first["pair"] is not None, "the round has to have something to ask"
 
     answered = [
         rnd.Answered(seq=1, title_a=first["pair"]["a"]["title_id"],
@@ -1431,7 +1432,7 @@ async def test_sharpening_re_ranks_in_place_and_changes_the_provenance_line(db, 
     )
 
     assert after["provenance"] == "Tilted by your 1 answer · fits in 2h 10m"
-    assert "Unseen first" not in after["provenance"], "54f says instead of, not as well as"
+    assert "Unseen first" not in after["provenance"], "the tilted line replaces it, never joins it"
     assert after["sharpened"] is True
     assert len(after["picks"]) == solo.PICKS, "re-ranked in place, not replaced by a queue"
 
@@ -1451,13 +1452,13 @@ async def test_solo_leaves_no_session_row_and_publishes_no_room(db, world):
         for table in ("session", "session_participant", "session_answer",
                       "session_result", "session_outcome", "session_ballot")
     }
-    out = await solo_picks(db, world)
+    out = await solo_picks(db, world, sharpen=True)
     await solo_picks(db, world, offset=2)
-    if out["pair"] is not None:
-        await solo_picks(db, world, answers=[
-            rnd.Answered(seq=1, title_a=out["pair"]["a"]["title_id"],
-                         title_b=out["pair"]["b"]["title_id"], answer=rnd.A)
-        ])
+    assert out["pair"] is not None, "or the round's answer below is never sent"
+    await solo_picks(db, world, sharpen=True, answers=[
+        rnd.Answered(seq=1, title_a=out["pair"]["a"]["title_id"],
+                     title_b=out["pair"]["b"]["title_id"], answer=rnd.A)
+    ])
 
     after = {
         table: await db.fetchval(f"SELECT count(*) FROM {table}")
@@ -1473,13 +1474,13 @@ async def test_solo_writes_no_observation_of_any_kind(db, world):
         table: await db.fetchval(f"SELECT count(*) FROM {table}")
         for table in ("verdict", "duel", "tier_edit", "user_title")
     }
-    out = await solo_picks(db, world)
+    out = await solo_picks(db, world, sharpen=True)
     await solo_picks(db, world, offset=1)
-    if out["pair"] is not None:
-        await solo_picks(db, world, answers=[
-            rnd.Answered(seq=1, title_a=out["pair"]["a"]["title_id"],
-                         title_b=out["pair"]["b"]["title_id"], answer=rnd.NEITHER)
-        ])
+    assert out["pair"] is not None, "or the round's answer below is never sent"
+    await solo_picks(db, world, sharpen=True, answers=[
+        rnd.Answered(seq=1, title_a=out["pair"]["a"]["title_id"],
+                     title_b=out["pair"]["b"]["title_id"], answer=rnd.NEITHER)
+    ])
     after = {table: await db.fetchval(f"SELECT count(*) FROM {table}") for table in before}
     assert after == before
 
@@ -1510,11 +1511,11 @@ async def test_an_empty_pool_says_what_to_change(db, world):
     assert "longer" in out["empty"] and "include rewatches" in out["empty"]
 
 
-async def test_the_sharpen_pair_carries_no_score(db, world):
-    """The pool is never shown, so a sharpen card carries no score. No skip: the pair is asserted to
-    exist first (finding 44)."""
+async def test_solos_round_pair_carries_no_score(db, world):
+    """The pool is never shown, so a card of solo's round carries no score. No skip: the pair is
+    asserted to exist first (finding 44)."""
     out = await solo_picks(db, world, sharpen=True)
-    assert out["pair"] is not None, "the sharpen control has to ask something on this pool"
+    assert out["pair"] is not None, "the round has to ask something on this pool"
     for side in ("a", "b"):
         assert "scores" not in out["pair"][side]
         assert "group_score" not in out["pair"][side]
@@ -3178,7 +3179,7 @@ async def test_the_arm_a_seat_is_served_is_the_one_the_rule_draws_for_that_seat(
     )
 
 
-# 54f: solo is "the fastest path to a film", so taps must not pay for searches they do not show.
+# Solo pays for a pair search only on a request that shows its pair: the round's, never Reshuffle's.
 
 
 def _counting(module, name):
@@ -3194,33 +3195,20 @@ def _counting(module, name):
     return original, counted, calls
 
 
-async def test_the_solo_door_lands_on_picks_without_running_the_pair_search(
-    db, world, monkeypatch
-):
-    """The call count, not the clock: a six-film fixture is fast either way."""
+async def test_reshuffle_does_not_run_the_pair_search(db, world, monkeypatch):
+    """Reshuffle draws no pair, so it may not pay for one (finding 35). The call count, not the
+    clock: a six-film fixture is fast either way."""
     original, counted, calls = _counting(rnd, "_select_pair")
-    monkeypatch.setattr(rnd, "_select_pair", counted)
-
-    out = await solo_picks(db, world)
-
-    assert calls == [], "the door paid for a pair search nobody asked for"
-    assert out["pair"] is None and out["stop_reason"] is None, (
-        "a door that reports a stop reason has run a round, and 54f says it has not"
-    )
-    assert len(out["picks"]) == solo.PICKS and out["wildcard"] is not None
-    assert original is rnd.select, "the alias and the public selector must be one function"
-
-
-async def test_reshuffle_does_not_run_the_pair_search_either(db, world, monkeypatch):
-    """Reshuffle draws no pair, so it may not pay for one (finding 35)."""
-    _, counted, calls = _counting(rnd, "_select_pair")
     monkeypatch.setattr(rnd, "_select_pair", counted)
 
     out = await solo_picks(db, world, offset=1)
 
-    assert calls == []
-    assert out["pair"] is None
-    assert len(out["picks"]) == solo.PICKS
+    assert calls == [], "Reshuffle paid for a pair search nobody asked for"
+    assert out["pair"] is None and out["stop_reason"] is None, (
+        "a request that asks for no pair has not ended a round"
+    )
+    assert len(out["picks"]) == solo.PICKS and out["wildcard"] is not None
+    assert original is rnd.select, "the alias and the public selector must be one function"
 
 
 async def test_only_an_explicit_sharpen_draws_a_pair(db, world, monkeypatch):
@@ -3230,12 +3218,13 @@ async def test_only_an_explicit_sharpen_draws_a_pair(db, world, monkeypatch):
     out = await solo_picks(db, world, sharpen=True)
 
     assert len(calls) == 1, "one tap, one search"
-    assert out["pair"] is not None, "the control that exists to ask has to ask"
+    assert out["pair"] is not None, "the round's request has to ask"
     assert "scores" not in out["pair"]["a"]
 
 
-async def test_the_replay_still_runs_when_the_door_does_not_select(db, world):
-    """The door skips the SELECTION, not the replay: answers must still re-rank the picks."""
+async def test_the_replay_still_runs_when_a_request_does_not_select(db, world):
+    """A request that asks for no pair skips the SELECTION, not the replay: answers must still
+    re-rank the picks."""
     first = await solo_picks(db, world, sharpen=True)
     assert first["pair"] is not None
     answered = [rnd.Answered(
@@ -3246,7 +3235,7 @@ async def test_the_replay_still_runs_when_the_door_does_not_select(db, world):
     plain = await solo_picks(db, world)
     tilted = await solo_picks(db, world, answers=answered)
 
-    assert tilted["pair"] is None, "a door is a door even with a history behind it"
+    assert tilted["pair"] is None, "no pair was asked for, history or not"
     assert tilted["sharpened"] is True and "Tilted by your 1 answer " in tilted["provenance"]
     assert tilted["tilt"] != {}, "the answers reached the ranking without a search being run"
     assert [p["title_id"] for p in tilted["picks"]] != [p["title_id"] for p in plain["picks"]]

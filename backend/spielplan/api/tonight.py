@@ -196,7 +196,7 @@ class SoloBody(BaseModel):
     runtime_budget_min: int = Field(default=130, ge=60, le=200)
     include_rewatches: bool = False
     offset: int = Field(default=0, ge=0, le=64)
-    # 54f: only the "sharpen this" tap draws a pair; the expensive answer must be asked for.
+    # The round's requests ask for its next pair; Reshuffle asks for none (decision 532).
     sharpen: bool = False
     # Stateless (§6.2 step 8 forbids a row), so the client carries its answers.
     answers: list[SoloAnswer] = Field(default_factory=list, max_length=64)
@@ -536,8 +536,8 @@ async def result(session_id: int, user: ActiveUser, conn: DB) -> dict[str, objec
 async def solo(
     body: SoloBody, user: ActiveUser, conn: DB
 ) -> dict[str, object]:
-    """54f: solo lands on three picks and a wildcard. No session row, so the sharpen answers travel
-    with the request."""
+    """§6.2 step 8: solo asks first, then lands on three picks and a wildcard (decision 532). No
+    session row, so the round's answers travel with the request."""
     version = await _bundle_version(conn)
     # One key for both the re-derivation and `picks`, stable across requests and server-side (54b).
     holdout_key = str(user.id)

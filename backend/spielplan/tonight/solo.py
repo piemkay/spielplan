@@ -1,7 +1,8 @@
-"""§6.2 step 8 — "Tonight, for {name}": three picks and a wildcard from the same pool, no session.
+"""§6.2 step 8 — "Tonight, for {name}": step 4's round for one seat, then three picks and a
+wildcard from the same pool, no session.
 
-§6.2 forbids a session row, so the sharpen round is stateless: the client carries its answers and
-the server replays them (so §14 risk 6's vote log cannot cover solo).
+§6.2 forbids a session row, so the round is stateless: the client carries its answers and the
+server replays them (so §14 risk 6's vote log cannot cover solo).
 """
 
 from __future__ import annotations
@@ -26,7 +27,7 @@ PICKS = 3
 # §6.2 step 8's two why-lines: "{term} · {term}", and the wildcard's label.
 STRETCH_WHY = "A step outside your usual"
 
-# 54f's provenance line: the tilted form replaces "Unseen first", never appended to it.
+# §6.2 step 8's provenance line: the tilted form replaces "Unseen first", never appended to it.
 PROVENANCE_PLAIN = "Unseen first · fits in {budget}"
 PROVENANCE_TILTED = "Tilted by your {n} {answers} · fits in {budget}"
 PROVENANCE_REWATCH = "Rewatches included · fits in {budget}"
@@ -36,7 +37,7 @@ NAMED_TERMS = 2
 
 
 def _pair_side(candidate, genres: Mapping[int, list[str]]) -> dict[str, Any] | None:
-    """One side of a sharpen pair, field by field so per-seat scores never ship (§6.2 step 3)."""
+    """One side of the round's pair, field by field so per-seat scores never ship (§6.2 step 3)."""
     if candidate is None:
         return None
     return {
@@ -84,10 +85,10 @@ async def picks(
     sharpen: bool = False,
     rng: random.Random | None = None,
 ) -> dict[str, Any]:
-    """Three picks, a wildcard, and the next pair if the person is sharpening.
+    """Three picks, a wildcard, and the round's next pair when `sharpen` asks for one.
 
-    With no `answers` the tilt is exactly zero (54f's "no tilt"). `holdout_key` arrives made, so
-    the route and this call derive the arm from one key; `sharpen=False` skips only the search.
+    With no `answers` the tilt is exactly zero. `holdout_key` arrives made, so the route and this
+    call derive the arm from one key; `sharpen=False` skips only the search.
     """
     seat = pool_rules.Seat(participant_id=user_id, user_id=user_id, is_member=True)
     candidates = await pool_rules.build(
@@ -203,7 +204,7 @@ async def picks(
         "sharpened": bool(counted),
         # A wrap by modulus or by the wrap-fill above, which fires first on uneven pools (decision 222).
         "wrapped": bool(offset) and (start + PICKS > span or start < offset * PICKS),
-        # 54f's sharpen round, on the same pool. None once it has converged or hit the cap.
+        # The round, on the same pool (decision 532). None once it has ended, or when none was asked.
         "pair": None if nxt is None else {
             "selection": nxt.selection,
             "reason": nxt.reason,
@@ -211,6 +212,10 @@ async def picks(
             "b": _pair_side(by_id.get(nxt.title_b), pair_genres),
         },
         "stop_reason": played.stop_reason,
+        # A seat's header and escape, named as its card names them (`play._card`).
+        "cap": round_rules.CAP_PAIRS,
+        "typical": round_rules.TYPICAL_PAIRS,
+        "escape_available": nxt is not None and round_rules.escape_available(len(answers)),
         "tilt": tilt,
     }
 
