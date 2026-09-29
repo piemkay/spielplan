@@ -1076,10 +1076,8 @@ async def test_a_series_marked_unseen_in_the_app_is_not_re_adopted_from_the_fold
     module, patrick = world["module"], world["patrick"]
     await db.execute("UPDATE title SET jellyfin_id = 'jf-6' WHERE id = 6")
 
-    await seen.set_state(
-        db, world["client"], world["cfg"], user_id=patrick, title_id=6, state="seen"
-    )
-    assert "jf-6" in module.state.played[PATRICK_JF], "the POST is decision 210(b)'s half"
+    # Played on Jellyfin's own account: the app never writes a series (decision 532).
+    module.state.played[PATRICK_JF].add("jf-6")
 
     result = await seen.set_state(
         db, world["client"], world["cfg"], user_id=patrick, title_id=6, state="unseen"
@@ -1106,14 +1104,15 @@ async def test_a_series_stays_seen_when_a_new_episode_recomputes_the_folder_flag
     result = await seen.set_state(
         db, world["client"], world["cfg"], user_id=patrick, title_id=6, state="seen"
     )
-    assert result["synced"] is True
-    assert module.state.write_log == [
-        {"user": PATRICK_JF, "item": "jf-6", "played": True}
-    ], "decision 210(b): 'seen' on a series still POSTs"
+    assert result == {"state": "seen", "synced": True, "reason": "series seen is app-only"}
+    assert module.state.write_log == [], (
+        "decision 532: a POST on a Series folder is a recursive MarkPlayed that marks every "
+        "remaining episode played and zeroes its resume point"
+    )
+    assert (await _state(db, patrick, 6))["jf_synced_at"] is not None
 
     # A new episode arrives and the folder flag is recomputed to false. Nobody acted.
     module.state.played[PATRICK_JF].discard("jf-6")
-    module.state.write_log.clear()
 
     report = seen.SyncReport()
     await seen.sync_user(db, world["client"], _linked(world), report)

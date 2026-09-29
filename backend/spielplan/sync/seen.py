@@ -28,7 +28,7 @@ STATES = ("seen", "unseen")
 
 # `_push`'s outcome; `sync_user` must tell a missing token, a rejected one and an outage apart.
 PUSH_OK = "ok"
-PUSH_APP_ONLY = "app_only"          # decision 210: a series unseen is settled without a write
+PUSH_APP_ONLY = "app_only"          # decisions 210, 532: a series is settled without a write
 PUSH_NO_TOKEN = "no_token"
 PUSH_AUTH_FAILURE = "auth_failure"
 PUSH_ERROR = "error"
@@ -225,11 +225,12 @@ async def _push(
     copies: list[str] | None = None,
 ) -> tuple[bool, str | None, str]:
     """Write one Played flag with that user's own token. Returns (pushed, refusal, outcome)."""
-    if kind == "series" and not seen:
-        # Decision 210(a): a DELETE on the series folder resets every episode, irreversibly, so
-        # series unseen is app-only; this stamp settles the debt without certifying agreement (213).
+    if kind == "series":
+        # Decisions 210(a) and 532: a write on the Series folder is Jellyfin's recursive MarkPlayed or
+        # MarkUnplayed, which rewrites every episode's history and zeroes its resume point, so a
+        # series is app-only both ways; this stamp settles the debt without certifying agreement (213).
         await _stamp(conn, user.app_user_id, title_id, seen)
-        return True, "series unseen is app-only", PUSH_APP_ONLY
+        return True, f"series {'seen' if seen else 'unseen'} is app-only", PUSH_APP_ONLY
     if not user.token:
         # §7.3's least-privilege path: no admin key; a half-made link is a re-link prompt.
         await _mark_needs_relink(conn, user.app_user_id)

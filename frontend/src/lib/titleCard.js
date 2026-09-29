@@ -1,15 +1,15 @@
 // The title card's member-facing sentences, one rule per function; the component only places them.
 
 /**
- * The reason wins over `synced`: a series un-mark reports `synced: true` with the reason that
- * nothing was sent (decision 210a).
+ * The reason wins over `synced`: a series reports `synced: true` with the reason that nothing was
+ * sent (decisions 210a, 532).
  *
  * @param {{synced?: boolean, reason?: string | null} | null | undefined} res
  */
 export function syncNote(res) {
   const reason = String(res?.reason ?? '');
   if (!reason) return res?.synced ? 'Saved, and Jellyfin is up to date.' : 'Saved here — Jellyfin was not told.';
-  if (reason.includes('series unseen is app-only')) {
+  if (reason.includes('is app-only')) {
     return 'Saved here only — Jellyfin keeps its own episode history.';
   }
   if (reason.includes('not on Jellyfin')) {
