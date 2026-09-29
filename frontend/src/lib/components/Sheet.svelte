@@ -4,6 +4,7 @@
   import { onDestroy, tick } from 'svelte';
   import { pushState } from '$app/navigation';
   import { page } from '$app/state';
+  import { hideToast } from '$lib/toast.svelte.js';
 
   let {
     open = false,
@@ -34,6 +35,8 @@
   $effect(() => {
     if (!open || pushed) return;
     pushed = true;
+    // The toast sits above sheets so a card's Undo shows; one left from before would cover this one.
+    hideToast();
     opener = document.activeElement;
     pushState('', { ...page.state, sheets: [...stack, key] });
     document.documentElement.style.overflow = 'hidden';

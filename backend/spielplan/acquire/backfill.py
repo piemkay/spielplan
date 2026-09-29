@@ -230,7 +230,7 @@ async def _failure(conn: asyncpg.Connection, result: Any) -> tuple[str, str]:
 
 
 # `resolve_title_id`'s match columns and whether each is per kind (§4.1 rule 6).
-_RESOLVER_IDS = (("imdb_id", False), ("tmdb_id", True), ("tvdb_id", True))
+_RESOLVER_IDS = (("imdb_id", True), ("tmdb_id", True), ("tvdb_id", True))
 
 
 async def _give_back_shared_ids(
