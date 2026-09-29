@@ -182,7 +182,7 @@ def create_app() -> FastAPI:
     dev = cfg.insecure_dev
     app = FastAPI(
         title="Spielplan",
-        version="1.0.0",
+        version="1.0.1",
         lifespan=lifespan,
         docs_url="/api/docs" if dev else None,
         redoc_url="/redoc" if dev else None,
