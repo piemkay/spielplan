@@ -66,6 +66,9 @@ ROBOTS_TIMEOUT_S = 15.0
 # relaxes a `Disallow`.
 ROBOTS_MAX_BYTES = 500 * 1024
 
+# TMDB's `api_key` and OMDb's `apikey` ride in the query, and the requested url is filed in raw_document.
+CREDENTIAL_PARAMS = frozenset({"api_key", "apikey"})
+
 
 class FetchError(Exception):
     """Every failure this layer raises, so a caller can catch one type; `retryable` is what the driver
@@ -502,8 +505,9 @@ class Fetcher:
         scheme = parsed.scheme or "https"
         host = normalise_host(parsed.netloc, scheme=scheme)
         rt = await self._runtime(host)
-        # The url actually requested, query included: the validators' key and what robots judges.
-        request_url = str(httpx.URL(url, params=params)) if params else url
+        # The url actually requested, query included: the validators' key and what robots judges. The
+        # request itself sends `params`; this spelling is stored, so its credentials are masked.
+        request_url = str(httpx.URL(url, params=_masked(params))) if params else url
 
         self._raise_if_paused(host, rt)
         await self._check_robots(host, rt, request_url, scheme)
@@ -685,6 +689,10 @@ class Fetcher:
             }
             for host, rt in sorted(self._hosts.items())
         ]
+
+
+def _masked(params: Mapping[str, Any]) -> dict[str, Any]:
+    return {k: ("REDACTED" if k.lower() in CREDENTIAL_PARAMS else v) for k, v in params.items()}
 
 
 def _same_origin(from_scheme: str, from_host: str, to_scheme: str, to_host: str) -> bool:

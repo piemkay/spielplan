@@ -1,7 +1,7 @@
 """One fetch, filed in the raw store. Every adapter goes through here.
 
 Files under `ctx.task.key` and the made-against `request_url` (what `_validators` reads). Stores
-non-retryable failures only. TMDB/OMDb keys ride in the stored url; bounded, see decision 377.
+non-retryable failures only.
 """
 
 from __future__ import annotations

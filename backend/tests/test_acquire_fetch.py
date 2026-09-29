@@ -1053,6 +1053,27 @@ async def test_the_validator_is_keyed_on_the_url_the_request_was_made_against(db
     assert other.request_url == f"{url}?append_to_response=images"
 
 
+async def test_a_credential_parameter_is_sent_but_never_part_of_the_url_a_caller_stores():
+    """TMDB's `api_key` and OMDb's `apikey` reach the provider; the spelling filed in raw_document masks them."""
+    sent: list[str] = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        sent.append(str(request.url))
+        return httpx.Response(200, content=b"{}")
+
+    async with _fetcher(handler, _Clock()) as f:
+        tmdb = await f.get(f"https://{FAST}/3/movie/603", params={"api_key": "SEKRIT-tmdb"})
+        omdb = await f.get(f"https://{FAST}/", params={"apikey": "SEKRIT-omdb", "i": "tt0133093"})
+
+    assert sent == [
+        f"https://{FAST}/3/movie/603?api_key=SEKRIT-tmdb",
+        f"https://{FAST}/?apikey=SEKRIT-omdb&i=tt0133093",
+    ], "the provider must still receive its key"
+    for answer in (tmdb, omdb):
+        assert "SEKRIT" not in answer.request_url, answer.request_url
+    assert omdb.request_url == f"https://{FAST}/?apikey=REDACTED&i=tt0133093"
+
+
 async def test_the_report_says_what_the_drain_did_after_the_context_has_closed(db):
     """`host_report()` is read after the context closes, so the flush writes a delta and zeroes nothing."""
     async with _fetcher(_always(200, content=b"{}"), _Clock(), conn=db) as f:
