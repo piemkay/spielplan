@@ -15393,6 +15393,62 @@ alone. Decisions 508 and 510 stand. The spec is amended in place (v2.1.12): §4.
 comment, §6.0's title card and its sentence on letters, §6.1's Sweep bullet, §6.3's Without a drag
 and Place with questions bullets, and §6.8.
 
+## Decisions taken (owner, 2026-09-29, the pre-deploy review)
+
+### 532. A series is app-only both ways: the app never writes a Series folder's Played flag
+
+**What the record says.** §7.3 maps `seen` to Played = true and `unseen` to Played = false through
+`POST/DELETE /UserPlayedItems/{itemId}`. Decision 210 made a series asymmetric: `unseen` is
+app-only, because the DELETE is Jellyfin's recursive `MarkUnplayed`, while `seen` still POSTs,
+because 210(b) read that direction as "additive, reversible by the person in Jellyfin's own UI".
+A verdict and, since decision 531, a tier both imply `seen`, so either one owes that POST.
+
+**Why it changes.** The pre-deploy review read Jellyfin's own source (release 10.10):
+`UpdatePlayedStatus` calls `MarkPlayed(user, datePlayed, resetPosition: true)`, and
+`Folder.MarkPlayed` marks every recursive child. A POST on a Series folder therefore marks every
+remaining episode played and zeroes the resume point of the one being watched, and the show leaves
+Next Up. Rate serves owned titles with no row, which is exactly a show someone is halfway through
+(the sweep adopts only a fully played folder), so one Liked on it rewrites that person's episode
+history, and Undo of a first verdict has no prior state to send back. The POST is not additive,
+and undoing it in Jellyfin's UI is the recursive un-mark 210(a) exists to prevent. On 2026-09-29,
+before the first production deploy, the owner chose app-only in both directions.
+
+**The decision.**
+1. For `kind = 'series'` neither state is written to Jellyfin. The row is stamped `jf_synced_at`,
+   as decision 210(a) stamps an `unseen`, so the sweep does not re-owe it, and the surface says the
+   change is app-only ("Saved here only — Jellyfin keeps its own episode history.").
+2. The sweep is unchanged: a fully played folder over an absent row is still adopted, and a folder
+   flag never overrides an app-side series row in either direction (decision 213).
+3. Movies are unchanged: `seen` and `unseen` still write Played on every copy (§7.3, decision 211).
+
+This supersedes decision 210(b). The spec is amended in place (v2.1.13): §7.3's series sentence
+and its conflict rule.
+
+### 533. Rank records how a tier was chosen and which edit a toast's Undo takes back
+
+**What the record says.** §5.2's third arm is "tier edits (drag-drop, explicit picks)", and 0005's
+`tier_edit.via` CHECK allows both, but every drop was written `drag_drop`: the sheet on the title
+card, the tier strip and a pointer drag alike. A toast's Undo (decision 528, §6.3) is a second
+drop into the old tier, so the fit reads the mistaken edit, its two neighbour duels and the Undo as
+three observations, and nothing marks the first as taken back.
+
+**Why it changes.** A mis-drag followed by Undo can sink a title about one fitted tier on Home and
+Tonight while the board still shows the person's tier. Whether the fit should leave an undone edit
+out is a later call; telling the two apart afterwards is only possible for rows written once the
+link is recorded. On 2026-09-29, before the first production deploy, the owner chose to record
+both from the first evening.
+
+**The decision.**
+1. The title card's tier sheet, on Rank and off it, writes `via = 'explicit'`; a pointer drag and a
+   drop on the tier strip stay `drag_drop`.
+2. `tier_edit.undoes` (0042) names the edit a toast's Undo takes back: `POST /api/rank/drop`
+   answers with the `tier_edit_id` it wrote, and the Undo sends it as `undoes`, refused unless it is
+   the same person's edit of the same title.
+3. Both are recorded, not read: the fit reads every `tier_edit` and every `tier_insert` duel as
+   before. Leaving undone edits out of the fit is a later decision.
+
+The spec is amended in place (v2.1.13): §4.2's `tier_edit` and §6.3's drag and sheet bullets.
+
 ## §6.2 — Tonight, rewritten (owner decision, 2026-08-29)
 
 Proposal 54 asked which slot carries the alternative on a split axis. The owner answered by
