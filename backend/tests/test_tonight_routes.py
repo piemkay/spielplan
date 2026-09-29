@@ -774,13 +774,13 @@ async def test_solos_held_out_pair_is_still_held_out_when_it_comes_back(app, db,
     await score(db, host_id, library)
     key = str(host_id)
 
-    # `sharpen` on every request: the door draws no pair (finding 35).
+    # `sharpen` on every request, as the round sends it: a request without it draws no pair.
     body = {
         "kind": "movie", "runtime_budget_min": 200, "include_rewatches": True,
         "offset": 0, "sharpen": True,
     }
     first = (await host.post("/api/tonight/solo", json={**body, "answers": []})).json()
-    assert first["pair"] is not None, "54f's sharpen round serves nothing on this pool at all"
+    assert first["pair"] is not None, "solo's round serves nothing on this pool at all"
 
     # Half one: every served pair carries the arm the rule names for this person.
     answers = []
@@ -1121,22 +1121,23 @@ async def test_a_hanging_invitation_gives_its_pooled_connection_back(
 # Findings 35 and 38 are about `SoloBody`, invisible from `solo.picks`.
 
 
-async def test_the_solo_door_draws_no_pair_and_an_explicit_sharpen_does(app, db, library):
-    """`sharpen` defaults to False: the expensive answer must be the one asked for."""
+async def test_the_rounds_request_draws_a_pair_and_reshuffles_draws_none(app, db, library):
+    """`sharpen` defaults to False, so only the round's requests pay for the pair search and a
+    Reshuffle's gets the picks alone."""
     client, user_id = await admin_client(app)
     await score(db, user_id, library)
     body = {"kind": "movie", "runtime_budget_min": 200, "include_rewatches": True}
 
-    door = (await client.post("/api/tonight/solo", json=body)).json()
-    sharpened = (await client.post(
+    asked = (await client.post(
         "/api/tonight/solo", json={**body, "sharpen": True}
     )).json()
+    unasked = (await client.post("/api/tonight/solo", json=body)).json()
 
-    assert door["pair"] is None and door["stop_reason"] is None
-    assert len(door["picks"]) == 3 and door["wildcard"] is not None
-    assert sharpened["pair"] is not None, "the control that exists to ask has to ask"
-    assert [p["title_id"] for p in sharpened["picks"]] == [p["title_id"] for p in door["picks"]], (
-        "'re-ranks in place' -- with no answers yet, the two orders are the same ranking"
+    assert asked["pair"] is not None, "the round has to open on a pair"
+    assert unasked["pair"] is None and unasked["stop_reason"] is None
+    assert len(unasked["picks"]) == 3 and unasked["wildcard"] is not None
+    assert [p["title_id"] for p in asked["picks"]] == [p["title_id"] for p in unasked["picks"]], (
+        "with no answers yet, asking for a pair leaves the ranking as it is"
     )
 
 
@@ -1304,6 +1305,41 @@ async def test_the_round_card_says_what_to_expect_rather_than_the_cap(solo_room)
     card = (await client.get(f"/api/tonight/seats/{seat}/round")).json()
     assert card["typical"] == rnd.TYPICAL_PAIRS
     assert card["typical"] < card["cap"] == rnd.CAP_PAIRS
+
+
+async def test_solo_offers_its_escape_from_the_sixth_pair_and_only_while_it_asks(app, db, library):
+    """Solo's reply carries a seat card's header and escape: offered once five are answered, and only
+    while a pair is on screen."""
+    client, user_id = await admin_client(app)
+    await score(db, user_id, library)
+    body = {"kind": "movie", "runtime_budget_min": 200, "include_rewatches": True, "sharpen": True}
+
+    # An A settles this pool in one pair; NEITHER keeps it asking past the sixth.
+    answers, offered = [], []
+    for seq in range(1, rnd.CAP_PAIRS + 2):
+        out = (await client.post("/api/tonight/solo", json={**body, "answers": answers})).json()
+        assert (out["cap"], out["typical"]) == (rnd.CAP_PAIRS, rnd.TYPICAL_PAIRS)
+        if out["pair"] is None:
+            break
+        offered.append(out["escape_available"])
+        answers.append(
+            {"seq": seq, "title_a": out["pair"]["a"]["title_id"],
+             "title_b": out["pair"]["b"]["title_id"], "answer": rnd.NEITHER}
+        )
+
+    assert len(offered) > 5, f"the round stopped after {len(offered)} pairs, before its sixth"
+    assert offered[:5] == [False] * 5, f"the escape was offered before the sixth pair: {offered}"
+    assert all(offered[5:]), f"the escape was not offered from the sixth pair on: {offered}"
+    assert out["stop_reason"] is not None and out["escape_available"] is False, (
+        "a round that has stopped has nothing to escape"
+    )
+
+    # Reshuffle after an escape at the sixth pair: five answered, and no pair asked for.
+    reshuffle = (await client.post(
+        "/api/tonight/solo", json={**body, "sharpen": False, "offset": 1, "answers": answers[:5]}
+    )).json()
+    assert reshuffle["pair"] is None and reshuffle["escape_available"] is False
+    assert (reshuffle["cap"], reshuffle["typical"]) == (rnd.CAP_PAIRS, rnd.TYPICAL_PAIRS)
 
 
 def test_the_reveal_route_asks_the_callers_own_toggle_before_it_shows_d():

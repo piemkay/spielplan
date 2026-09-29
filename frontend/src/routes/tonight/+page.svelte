@@ -23,9 +23,11 @@
     RESERVED_LABEL,
     REVEAL_BEAT,
     SHARE_CAPTION,
+    SOLO_ESCAPE_LABEL,
     WILDCARD_LINE,
     WRAPPED_LINE,
     answer,
+    answerSolo,
     approvalShare,
     ballotTurns,
     ballotWaitingLine,
@@ -38,6 +40,7 @@
     connect,
     endRoom,
     escape,
+    escapeSolo,
     followLink,
     handBallot,
     join,
@@ -61,7 +64,6 @@
     settingsDetail,
     settingsTitle,
     shareRoom,
-    sharpen,
     start,
     stopClock,
     submitBallot,
@@ -70,6 +72,7 @@
     toggleVeto,
     tonight,
     undo,
+    undoSolo,
     vetoCaption,
     waitingLine
   } from '$lib/tonight.svelte.js';
@@ -77,10 +80,9 @@
   import { metaLine, runtimeLabel, sentenceCase } from '$lib/rate.svelte.js';
   import { playWhy } from '$lib/titleCard.js';
   import { preloadPoster, ready } from '$lib/art.js';
-  import { haptic, still } from '$lib/motion.js';
+  import { haptic } from '$lib/motion.js';
 
   let code = $state('');
-  let sharpening = $state(false);
   let ending = $state(false);
   let settingsOpen = $state(false);
   let opening = $state('');
@@ -137,9 +139,12 @@
   const isHost = $derived(
     !!tonight.lobby && tonight.lobby.host?.user_id === session.user?.id
   );
-  // A room is a full-screen flow over the tab bar (§6 preamble, decision 527).
+  // Solo's round, before its picks (decision 532).
+  const soloAsking = $derived(tonight.step === 'solo' && !!tonight.solo?.pair);
+  // A room, and solo's round, is a full-screen flow over the tab bar (§6 preamble, decision 527).
   const inFlow = $derived(
-    tonight.booted && ['lobby', 'round', 'waiting', 'ballot', 'reveal'].includes(tonight.step)
+    tonight.booted &&
+      (['lobby', 'round', 'waiting', 'ballot', 'reveal'].includes(tonight.step) || soloAsking)
   );
   // The door names the place in the shell's top row (decision 528); a room brings its own bar.
   $effect(() => {
@@ -177,7 +182,6 @@
     leave();
     // Stop watching the room too, or a session frame would re-read it.
     watch(null);
-    sharpening = false;
     ending = false;
     await loadRooms();
   }
@@ -187,7 +191,6 @@
     await endRoom();
     ending = false;
     watch(null);
-    sharpening = false;
   }
 
   // Remember the budget when an evening is opened, not on every nudge.
@@ -244,9 +247,6 @@
     sent = null;
   }
   const pose = (said, side) => (!said ? '' : said === side || said === 'EITHER' ? 'up' : 'down');
-  // "Sharpen this" is pressed below the picks; the round it opens sits above them.
-  const intoView = (el) =>
-    el.scrollIntoView?.({ block: 'start', behavior: still() ? 'auto' : 'smooth' });
 
   // The reveal plays only when this page saw the last vote land, never on a reload or a re-read,
   // and lights once the result and the winner's poster are in (decision 530).
@@ -350,6 +350,35 @@
   </div>
 {/snippet}
 
+<!-- A round's bar and dots: a room's seat or solo's (decision 532). -->
+{#snippet roundTop(state, onUndo, ids)}
+  {@const now = (state.answered ?? 0) + 1}
+  <header class="bar">
+    <button class="btn-plain back" onclick={toDoor} data-testid="tonight-back">Leave</button>
+    <!-- What to expect, not the cap, which the round is built to avoid. -->
+    <p class="bar-count figures" data-testid={ids.count}>{roundHeader(state)}</p>
+    <span class="bar-end">
+      <button class="btn-plain" onclick={onUndo} data-testid={ids.undo}>Undo</button>
+    </span>
+  </header>
+  <div class="dots" aria-hidden="true">
+    {#each { length: Math.max(state.typical ?? 10, now) }, i (i)}
+      <span class:on={i < now}></span>
+    {/each}
+  </div>
+{/snippet}
+
+{#snippet escapeControl(available, onEscape, label, testid)}
+  {#if available}
+    <button class="btn-plain" onclick={onEscape} data-testid={testid}>{label}</button>
+  {:else}
+    <p class="locked" data-testid="{testid}-locked">
+      <span>{label}</span>
+      <span class="footnote">Available from pair 6</span>
+    </p>
+  {/if}
+{/snippet}
+
 <!-- The same question as the round (§6.2 step 4), drawing both titles. -->
 {#snippet chooser(pair, onAnswer, ids)}
   {@const key = `${pair.a?.title_id}:${pair.b?.title_id}`}
@@ -439,8 +468,8 @@
             <span class="door-name">Just me</span>
             <span class="why"
               >{opening === 'solo'
-                ? "Finding tonight's picks…"
-                : 'Three picks and a wildcard, straight away.'}</span
+                ? 'Finding your first pair…'
+                : 'A few quick pairs for your mood, then three picks and a wildcard.'}</span
             >
           </button>
         </div>
@@ -518,6 +547,22 @@
         <p class="list-footer">{JOIN_CAPTION}</p>
       </section>
     </div>
+  {:else if soloAsking}
+    <div class="screen round" data-testid="tonight-mood">
+      {@render roundTop(tonight.solo, undoSolo, { count: 'tonight-mood-count', undo: 'tonight-mood-undo' })}
+      {@render problem()}
+      {@render chooser(tonight.solo.pair, answerSolo, {
+        pick: 'tonight-mood',
+        answer: 'tonight-mood',
+        fact: 'tonight-mood-fact'
+      })}
+      {#if !tonight.solo.answered}
+        <p class="footnote" data-testid="tonight-mood-caption">{MOOD_CAPTION}</p>
+      {/if}
+      <div class="escape">
+        {@render escapeControl(tonight.solo.escape_available, escapeSolo, SOLO_ESCAPE_LABEL, 'tonight-mood-escape')}
+      </div>
+    </div>
   {:else if tonight.step === 'solo' && tonight.solo}
     {@const [hero, ...rest] = tonight.solo.picks ?? []}
     {@const wildcard = tonight.solo.wildcard}
@@ -533,18 +578,7 @@
       {#if tonight.solo.empty}
         <p class="why" data-testid="tonight-solo-empty">{tonight.solo.empty}</p>
       {:else}
-        {#if sharpening && !tonight.solo.pair && !tonight.busy}
-          <!-- Said once the reply is in, or a converged round would answer "Sharpen this" with a blank. -->
-          <p class="footnote" data-testid="tonight-sharpen-done" {@attach intoView}>
-            Nothing left to ask — these picks are as sharp as they get tonight.
-          </p>
-        {/if}
-        {#if tonight.solo.pair && sharpening}
-          <div class="round" data-testid="tonight-sharpen-pair" {@attach intoView}>
-            {@render chooser(tonight.solo.pair, sharpen, { pick: 'tonight-sharpen', answer: 'tonight-sharpen' })}
-          </div>
-        {/if}
-        <!-- A new set of picks rises in; a sharpen that re-ranks the same set only reorders it. -->
+        <!-- A new set of picks rises in; a walk that returns the same set only reorders it. -->
         {#key (tonight.solo.picks ?? []).map((p) => p.title_id).sort().join()}
           <div class="picks" data-testid="tonight-picks">
             {#if hero}
@@ -596,28 +630,12 @@
             </ul>
           </div>
         {/key}
-        <div class="two">
-          <!-- Reshuffle posts `sharpen: false`, so no pair back is not a converged round: clear the flag. -->
-          <button
-            class="btn-secondary"
-            onclick={() => {
-              sharpening = false;
-              loadSolo({ reshuffle: true });
-            }}
-            data-testid="tonight-reshuffle"><Icon name="dice" size={20} />Reshuffle</button
-          >
-          {#if !sharpening}
-            <!-- Not gated on a pair in hand: this tap is what asks for one. -->
-            <button
-              class="btn-secondary"
-              onclick={() => {
-                sharpening = true;
-                loadSolo({ sharpen: true });
-              }}
-              data-testid="tonight-sharpen">Sharpen this</button
-            >
-          {/if}
-        </div>
+        <button
+          class="btn-secondary"
+          onclick={() => loadSolo({ reshuffle: true })}
+          disabled={tonight.busy}
+          data-testid="tonight-reshuffle"><Icon name="dice" size={20} />Reshuffle</button
+        >
         {#if tonight.solo.wrapped}
           <!-- A reshuffle that has come back round returns titles already seen here, so say so. -->
           <p class="footnote" data-testid="tonight-wrapped">{WRAPPED_LINE}</p>
@@ -704,21 +722,8 @@
       </div>
     </div>
   {:else if tonight.step === 'round' && tonight.round?.pair}
-    {@const now = (tonight.round.answered ?? 0) + 1}
     <div class="screen round" data-testid="tonight-round">
-      <header class="bar">
-        <button class="btn-plain back" onclick={toDoor} data-testid="tonight-back">Leave</button>
-        <!-- What to expect, not the cap, which the round is built to avoid. -->
-        <p class="bar-count figures" data-testid="tonight-round-count">{roundHeader(tonight.round)}</p>
-        <span class="bar-end">
-          <button class="btn-plain" onclick={undo} data-testid="tonight-undo">Undo</button>
-        </span>
-      </header>
-      <div class="dots" aria-hidden="true">
-        {#each { length: Math.max(tonight.round.typical ?? 10, now) }, i (i)}
-          <span class:on={i < now}></span>
-        {/each}
-      </div>
+      {@render roundTop(tonight.round, undo, { count: 'tonight-round-count', undo: 'tonight-undo' })}
       {@render problem()}
       {@render chooser(tonight.round.pair, answer, {
         pick: 'tonight-pick',
@@ -729,14 +734,7 @@
         {@render whereOthersAre('tonight-round-progress')}
       {/if}
       <div class="escape">
-        {#if tonight.round.escape_available}
-          <button class="btn-plain" onclick={escape} data-testid="tonight-escape">{ESCAPE_LABEL}</button>
-        {:else}
-          <p class="locked" data-testid="tonight-escape-locked">
-            <span>{ESCAPE_LABEL}</span>
-            <span class="footnote">Available from pair 6</span>
-          </p>
-        {/if}
+        {@render escapeControl(tonight.round.escape_available, escape, ESCAPE_LABEL, 'tonight-escape')}
         {#if canEnd}
           <button class="btn-plain btn-destructive" onclick={() => (ending = true)} data-testid="tonight-end-room"
             >End the room</button
@@ -1071,7 +1069,7 @@
     display: flex;
     flex-direction: column;
   }
-  /* Over the tab bar and the top row: a room is a flow of its own until it resolves. */
+  /* Over the tab bar and the top row: a room, or solo's round, is a flow until it resolves. */
   .flow {
     position: fixed;
     inset: 0;
@@ -1290,9 +1288,6 @@
   .solo {
     gap: 16px;
   }
-  .solo > * {
-    scroll-margin-top: calc(env(safe-area-inset-top) + var(--gutter));
-  }
   .solo-head {
     display: flex;
     flex-direction: column;
@@ -1380,12 +1375,6 @@
     opacity: 0.5;
     cursor: default;
   }
-  .two {
-    display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 12px;
-  }
-
   /* A room's own bar, in place of the tab bar's frame. */
   .bar {
     display: grid;
@@ -1470,7 +1459,7 @@
     cursor: default;
   }
 
-  /* The round, and the sharpen round that asks the same question. */
+  /* The round, a room's seat's or solo's. */
   .round {
     gap: 16px;
   }
