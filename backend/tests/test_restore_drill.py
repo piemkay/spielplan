@@ -316,7 +316,9 @@ async def test_the_same_dump_under_a_changed_secrets_key_boots_and_every_member_
             for member in installed["members"]:
                 phone = await _sign_in(make, str(member["name"]), MEMBER_PASSWORD)
 
-                state = await phone.post("/api/titles/1/state", json={"state": "seen"})
+                # Unseen, so the card Rate serves next is one the verdict makes seen: a verdict on a
+                # title already seen owes Jellyfin nothing and has no custody line to report.
+                state = await phone.post("/api/titles/1/state", json={"state": "unseen"})
                 assert state.status_code == 200, state.text
                 assert state.json()["synced"] is False
                 assert state.json()["reason"] == registry.SECRETS_UNREADABLE_REASON
@@ -370,13 +372,10 @@ async def test_the_same_dump_under_a_changed_secrets_key_boots_and_every_member_
     conn = await asyncpg.connect(target)
     try:
         # §3.3: the tap is kept; the reason reports on Jellyfin, not on the person's state.
+        state = "SELECT state FROM user_title WHERE user_id = $1 AND title_id = $2"
         for member in installed["members"]:
-            assert await conn.fetchval(
-                "SELECT count(*) FROM user_title WHERE user_id = $1 AND state = 'seen' "
-                "AND title_id IN (1, $2)",
-                member["id"],
-                member["title_id"],
-            ) == 2
+            assert await conn.fetchval(state, member["id"], 1) == "unseen"
+            assert await conn.fetchval(state, member["id"], member["title_id"]) == "seen"
     finally:
         await conn.close()
 
