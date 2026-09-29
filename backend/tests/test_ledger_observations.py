@@ -184,6 +184,8 @@ async def test_the_insert_and_the_supersede_stamp_are_one_transaction(db, world,
     """Failing at the last step asks whether the insert and the stamp share a transaction."""
     user = world["user"]
     first = await observations.record_verdict(db, user_id=user, title_id=1, value=0)
+    # Unseen again, so the second verdict reaches its last step: the seen write.
+    await db.execute("UPDATE user_title SET state = 'unseen' WHERE user_id = $1 AND title_id = 1", user)
 
     async def explode(*_args, **_kwargs):
         raise RuntimeError("Jellyfin fell over mid-write")
@@ -243,6 +245,27 @@ async def test_a_tier_implies_seen_and_a_seen_title_owes_jellyfin_nothing(db, wo
     moved = await observations.record_tier_edit(db, user_id=user, title_id=2, tier=4)
     assert moved.implied_seen is False
     assert tuple(await db.fetchrow(state, user, 2)) == ("seen", stamp)
+
+
+async def test_re_rating_a_seen_title_owes_jellyfin_nothing_and_its_undo_leaves_the_row(db, world):
+    """A series push re-marks every episode, so a verdict writes `seen` only where it was not."""
+    user = world["user"]
+    stamp = datetime(2026, 1, 2, 3, 4, 5, tzinfo=UTC)
+    state = "SELECT state, jf_synced_at FROM user_title WHERE user_id=$1 AND title_id=$2"
+    await db.execute(
+        "INSERT INTO user_title (user_id, title_id, state, jf_synced_at) VALUES ($1,$2,'seen',$3)",
+        user,
+        1,
+        stamp,
+    )
+
+    write = await observations.record_verdict(db, user_id=user, title_id=1, value=2)
+    assert write.implied_seen is False and write.prior_state == ()
+    assert tuple(await db.fetchrow(state, user, 1)) == ("seen", stamp)
+
+    await observations.undo(db, user_id=user, write=write)
+    assert tuple(await db.fetchrow(state, user, 1)) == ("seen", stamp)
+    assert await db.fetchval("SELECT count(*) FROM verdict WHERE user_id = $1", user) == 0
 
 
 async def test_not_seen_writes_no_observation_row_and_keeps_the_history(db, world):

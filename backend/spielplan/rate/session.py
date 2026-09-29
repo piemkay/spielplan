@@ -1152,11 +1152,14 @@ async def record_verdict(
             latency_ms=latency_ms,
         )
 
-    # §7.3's push after the commit: the row already stands as owed (`jf_synced_at` NULL).
-    sync_lines = await _settle_push(
-        conn, jf, later, state="seen", event_kind="verdict", user_id=s.user_id,
-        session_id=s.id, seq=s.seq, writes=(write,), title_ids=(title_id,),
-    )
+    # §7.3's push after the commit, where the verdict made the title seen: the row then stands as
+    # owed (`jf_synced_at` NULL).
+    sync_lines: list[str] = []
+    if write.implied_seen:
+        sync_lines = await _settle_push(
+            conn, jf, later, state="seen", event_kind="verdict", user_id=s.user_id,
+            session_id=s.id, seq=s.seq, writes=(write,), title_ids=(title_id,),
+        )
 
     ledger = await refit.update_incrementally_reporting(
         conn,

@@ -528,7 +528,10 @@ async def record_verdict(
             title_id,
         )
         implied_seen = prior.state != "seen"
-        await _set_state(conn, user_id=user_id, title_id=title_id, state="seen")
+        # As on the tier arm: re-rating a seen title owes Jellyfin nothing, and a series push
+        # re-marks every episode, new ones included (§7.3).
+        if implied_seen:
+            await _set_state(conn, user_id=user_id, title_id=title_id, state="seen")
 
     if len(superseded) > 1:
         log.warning(
@@ -547,7 +550,7 @@ async def record_verdict(
         title_ids=(title_id,),
         superseded_id=int(superseded[0]["id"]) if superseded else None,
         implied_seen=implied_seen,
-        prior_state=(prior,),
+        prior_state=(prior,) if implied_seen else (),
         log=(
             f"verdict(title {title_id}) = {VERDICT_LABELS[value]} -> ordered-logit arm"
             + (" · re-ask (§13 stream b), held out of the fit" if is_reask else "")

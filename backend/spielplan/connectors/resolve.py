@@ -1,6 +1,7 @@
 """Jellyfin item -> `title` row (§7.1, §4.1 rules 5-6): the ported fill-never-clobber resolver.
 
-tmdb/tvdb matches are qualified by kind (ids repeat across kinds). One pass over the whole library
+Every match is qualified by kind: tmdb/tvdb ids repeat across kinds, and an imdb id matched to a
+title of the other kind would send a movie's Played write to a Series folder. One pass over the whole library
 also writes the copy map and elects one representative `jellyfin_id` per title, deterministically.
 """
 
@@ -105,7 +106,9 @@ async def resolve_title_id(conn: asyncpg.Connection, item: dict) -> int | None:
 
     ids = identity(item)
     if ids["imdb_id"]:
-        found = await conn.fetchval("SELECT id FROM title WHERE imdb_id = $1", ids["imdb_id"])
+        found = await conn.fetchval(
+            "SELECT id FROM title WHERE imdb_id = $1 AND kind = $2", ids["imdb_id"], kind
+        )
         if found:
             return found
     for column in ("tmdb_id", "tvdb_id"):
@@ -194,7 +197,7 @@ async def upsert_item(conn: asyncpg.Connection, item: dict, report: ResolveRepor
 
     report.matched += 1
     report.matched_title_ids.add(title_id)
-    # The title's own kind, for decision 210's series rule; an imdb match is not kind-qualified.
+    # The title's own kind, for decision 210's series rule.
     report.kinds[title_id] = row["kind"]
     for column in fills:
         report.filled[column] = report.filled.get(column, 0) + 1

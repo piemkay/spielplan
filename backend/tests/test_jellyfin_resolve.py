@@ -41,10 +41,14 @@ def test_only_movies_and_series_are_recognised():
     assert resolve.kind_of(item(Type="Series")) == "series"
 
 
-async def test_imdb_id_resolves_across_kinds(db):
+async def test_an_imdb_match_is_qualified_by_kind(db):
+    """A Series folder mapped onto a movie would take the movie's Played write, recursively."""
     await _title(db, 1, "movie", "Heat", 1995, imdb_id="tt0113277")
-    found = await resolve.resolve_title_id(db, item(ProviderIds={"Imdb": "tt0113277"}))
-    assert found == 1
+    as_movie = await resolve.resolve_title_id(db, item(ProviderIds={"Imdb": "tt0113277"}))
+    as_series = await resolve.resolve_title_id(
+        db, item(Type="Series", Name="Heat: The Series", ProviderIds={"Imdb": "tt0113277"})
+    )
+    assert (as_movie, as_series) == (1, None)
 
 
 async def test_a_tmdb_match_is_qualified_by_kind(db):
