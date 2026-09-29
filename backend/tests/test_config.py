@@ -52,6 +52,23 @@ def test_a_real_public_url_still_yields_its_rp_id():
     assert ok("http://localhost:8080").rp_id == "localhost"
 
 
+def test_public_url_is_kept_in_the_spelling_the_browser_sends_as_its_origin():
+    """py_webauthn compares the expected origin with clientData's byte for byte."""
+    def spelled(url: str) -> str:
+        return Settings(public_url=url, session_secret=_SECRET, secrets_key=None).public_url
+
+    assert spelled(" HTTPS://Spielplan.Example.tld:443/ ") == "https://spielplan.example.tld"
+    assert spelled("http://localhost:8080") == "http://localhost:8080"
+    assert spelled("http://localhost:80") == "http://localhost"
+
+
+def test_a_public_url_with_anything_after_the_origin_is_refused():
+    """No browser origin carries a path, a query or credentials, so every ceremony would fail."""
+    for url in ("https://spielplan.example.tld/app", "https://spielplan.example.tld?x=1",
+                "https://user@spielplan.example.tld"):
+        assert "PUBLIC_URL" in _fails(public_url=url), url
+
+
 def test_a_short_session_secret_is_refused_and_names_the_generator():
     """The message must carry `.env.example`'s one-liner, or the operator guesses at a length."""
     message = _fails(session_secret="short")

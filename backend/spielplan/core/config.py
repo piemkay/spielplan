@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 from functools import lru_cache
 from pathlib import Path
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlsplit
 
 from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -12,6 +12,13 @@ log = logging.getLogger("spielplan")
 
 # §2's documented `token_urlsafe` gesture emits 43+ chars; anything shorter was typed by hand.
 _MIN_SECRET_CHARS = 32
+
+
+_DEFAULT_PORTS = {"http": 80, "https": 443}
+
+
+def _beyond_origin(parts) -> bool:
+    return bool(parts.path or parts.query or parts.fragment or parts.username or parts.password)
 
 
 class Settings(BaseSettings):
@@ -54,8 +61,21 @@ class Settings(BaseSettings):
 
     @field_validator("public_url")
     @classmethod
-    def _strip_trailing_slash(cls, v: str) -> str:
-        return v.rstrip("/")
+    def _origin_spelling(cls, v: str) -> str:
+        """The browser's spelling of the origin, which WebAuthn compares byte for byte: lowercase, no
+        default port, no trailing slash. Anything that is not a bare origin is left for the refusal."""
+        v = v.strip().rstrip("/")
+        parts = urlsplit(v)
+        scheme = parts.scheme.lower()
+        try:
+            port = parts.port
+        except ValueError:
+            return v
+        host = parts.hostname
+        if scheme not in _DEFAULT_PORTS or not host or _beyond_origin(parts):
+            return v
+        host = f"[{host}]" if ":" in host else host
+        return f"{scheme}://{host}" + (f":{port}" if port and port != _DEFAULT_PORTS[scheme] else "")
 
     @model_validator(mode="after")
     def _required_config_is_present(self) -> Settings:
@@ -70,11 +90,16 @@ class Settings(BaseSettings):
 
         problems: list[str] = []
         parsed = urlparse(self.public_url)
-        if parsed.scheme not in ("http", "https") or not parsed.hostname:
+        if (
+            parsed.scheme not in ("http", "https")
+            or not parsed.hostname
+            or _beyond_origin(urlsplit(self.public_url))
+        ):
             problems.append(
-                f"PUBLIC_URL must be the full origin the app is reached on, scheme included "
-                f"(e.g. https://spielplan.example.tld) - got {self.public_url!r}. WebAuthn binds "
-                f"every passkey to this origin (spec section 2, section 14.4)"
+                f"PUBLIC_URL must be the full origin the app is reached on, scheme included and "
+                f"nothing after the host and port (e.g. https://spielplan.example.tld) - got "
+                f"{self.public_url!r}. WebAuthn binds every passkey to this origin (spec section 2, "
+                f"section 14.4)"
             )
         if len(self.session_secret) < _MIN_SECRET_CHARS:
             problems.append(
