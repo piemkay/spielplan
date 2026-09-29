@@ -82,7 +82,8 @@
       {:else}
         <p class="card why">
           No movie data is loaded yet. The app still runs: the admin pages work, and the screens
-          that need movie data say so until you import it.
+          that need movie data say so until you import it. The first import is the only one that
+          brings movie data, so check the version in the report before you import.
         </p>
       {/if}
 

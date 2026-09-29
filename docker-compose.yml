@@ -35,13 +35,24 @@ x-backend-volumes: &backend-volumes
   - ./data/cache:/data/cache
   - ./data/import:/data/import
 
+# Docker's json-file default never rotates, and the backend logs a line per healthcheck.
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
 services:
   db:
-    image: postgres:16
+    # The Debian suite is pinned with the major: a new one under `postgres:16` changes glibc's
+    # collation, and every text index built under the old one needs a REINDEX.
+    image: postgres:16-trixie
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-spielplan}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-spielplan}
       POSTGRES_DB: ${POSTGRES_DB:-spielplan}
+      # Read only when data/pg is first created; a cluster cannot turn checksums on while running.
+      POSTGRES_INITDB_ARGS: "--data-checksums"
     volumes:
       - ./data/pg:/var/lib/postgresql/data
       # The read side of the worker's dumps, for pg_restore. Restore per README's Recovery block:
@@ -53,6 +64,7 @@ services:
       timeout: 5s
       retries: 20
     restart: unless-stopped
+    logging: *logging
 
   backend:
     build:
@@ -70,6 +82,7 @@ services:
     # Enough for an in-flight request. A bundle import killed mid-copy is repaired by re-importing.
     stop_grace_period: 30s
     restart: unless-stopped
+    logging: *logging
 
   worker:
     build:
@@ -95,3 +108,4 @@ services:
     # to this value: change both in one edit.
     stop_grace_period: 10m
     restart: unless-stopped
+    logging: *logging

@@ -19,7 +19,7 @@
   // Whether an import finished on this screen, whose own line then says whether it is served.
   let importedHere = $state(false);
 
-  let adminName = $state('admin');
+  let adminName = $state('');
   let adminPassword = $state('');
 
   const done = $derived(new Set((session.setup?.steps ?? []).filter((s) => s.done).map((s) => s.step)));
@@ -107,8 +107,9 @@
 
     {#if step === 0}
       <p class="why">
-        One admin account. Everyone else is added later in Admin, under People — the only place
-        accounts are made. Passkeys can be added from Account once you are in.
+        One admin account, and it is your own profile too: your ratings live on it. Everyone else
+        is added later in Admin, under People — the only place accounts are made. Passkeys can be
+        added from Account once you are in.
       </p>
       <section class="group">
         <h2 class="list-header">Passkeys work at</h2>
@@ -133,7 +134,13 @@
         <FieldGroup>
           <label>
             <span>Name</span>
-            <input type="text" bind:value={adminName} autocomplete="username" autocapitalize="none" />
+            <input
+              type="text"
+              bind:value={adminName}
+              autocomplete="username"
+              autocapitalize="none"
+              placeholder="Your name"
+            />
           </label>
           <label>
             <span>Password</span>
@@ -149,7 +156,9 @@
     {:else if step === 1}
       <p class="why">
         Optional now — all of these can be set later in Admin. Environment variables can fill them
-        in on first boot, for automated installs.
+        in on first boot, for automated installs. Import the bundle before you save Jellyfin: once it
+        is saved, new library items start becoming titles, and one made before the import stays a
+        second copy of a film the bundle brings.
       </p>
       <div class="list-group">
         <a class="list-row" href="/admin/services">
@@ -165,7 +174,8 @@
     {:else}
       <p class="why">
         The same import as Admin's Movie data. It checks the whole bundle before writing anything,
-        and the app serves it as soon as the import finishes — nothing needs restarting.
+        and the app serves it as soon as the import finishes — nothing needs restarting. This is
+        the one movie-data import this install takes, so check the version in the report first.
       </p>
       <BundleImport
         onImported={() => {
