@@ -27,8 +27,21 @@ PROVIDERS = ("anthropic", "openai", "gemini")
 # the full price of the call for nothing.
 TIMEOUT_S = 300.0
 
-# Sent to every provider as the tool/schema name, so it says what the call returns.
+# OpenAI's json_schema name, so it says what the call returns.
 TOOL_NAME = "emit_dna"
+
+# JSON-schema keywords OpenAI's strict mode and Anthropic's structured outputs refuse.
+STRICT_UNSUPPORTED = frozenset({"minItems", "maxItems", "minimum", "maximum", "multipleOf",
+                                "minLength", "maxLength", "pattern", "format", "default"})
+
+
+def strict_schema(node: Any) -> Any:
+    """`node` without the `STRICT_UNSUPPORTED` keywords, at every depth."""
+    if isinstance(node, dict):
+        return {k: strict_schema(v) for k, v in node.items() if k not in STRICT_UNSUPPORTED}
+    if isinstance(node, list):
+        return [strict_schema(v) for v in node]
+    return node
 
 # Reasoning bills as output and counts against this ceiling; twice the measured ~3.9k bill.
 MAX_OUTPUT_TOKENS = 8000

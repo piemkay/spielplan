@@ -33,7 +33,7 @@ const NOT_HELD = 'jf-e2e-not-held';
 const UNPRICED = 'e2e-unpriced-model';
 
 const PROVIDERS = [
-  { name: 'anthropic', caption: 'forced tool-use' },
+  { name: 'anthropic', caption: 'structured outputs' },
   { name: 'openai', caption: 'strict schema' },
   { name: 'gemini', caption: 'responseSchema' }
 ];

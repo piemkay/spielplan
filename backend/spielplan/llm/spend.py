@@ -19,7 +19,7 @@ from spielplan.connectors import registry
 from spielplan.core.config import settings
 from spielplan.db.dna_terms import active_version
 from spielplan.dna import verify
-from spielplan.llm import anthropic, client, contract, pricing
+from spielplan.llm import client, contract, pricing
 from spielplan.llm.pricing import ModelPrice
 
 if TYPE_CHECKING:
@@ -419,14 +419,6 @@ async def _plan(
                 provider=name,
             )
         model = str(state.config.get("model") or pricing.DEFAULT_MODELS[name])
-        if name == "anthropic" and anthropic.refuses_forced_tool(model):
-            # A model refusing forced tool use is a setting to correct, parked before anything is sent.
-            return _refused(
-                f"{name} model {model!r} refuses forced tool use, which is how this app asks Anthropic"
-                " for a structured answer, so every call to it would be refused."
-                f" Choose another {name} model in Admin, and this title resumes here",
-                provider=name, model=model,
-            )
         price = pricing.effective_price(name, model, override=state.config, on=on)
         if price is None:
             return _refused(

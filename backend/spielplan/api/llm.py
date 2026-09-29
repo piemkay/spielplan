@@ -236,7 +236,7 @@ def provider_card(name: str, state: registry.ConnectorState, *, on: date) -> dic
         "model": model,
         "structured_output": _ADAPTERS[name].STRUCTURED_OUTPUT,
         "price": _price(price),
-        "models": sorted(pricing.PRICING[name]),
+        "models": list(pricing.PRICING[name]),
         "price_basis": _basis(basis),
     }
 

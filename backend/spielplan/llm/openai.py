@@ -20,10 +20,6 @@ MODELS_URL = "https://api.openai.com/v1/models"
 # §6.6's caption word for this provider's mechanism.
 STRUCTURED_OUTPUT = "strict schema"
 
-_STRICT_UNSUPPORTED = {"minItems", "maxItems", "minimum", "maximum",
-                       "minLength", "maxLength", "pattern", "format",
-                       "default"}
-
 # Pins the standard tier the table prices; the answer is metered at the tier the response names
 # (2x for "priority" or any unpriced tier).
 SERVICE_TIER = "default"
@@ -36,15 +32,6 @@ CEILING_OVERHEAD = 0
 CEILING_RATE = 1.0
 
 
-def _strip_keywords(node: Any, drop: set[str]) -> Any:
-    if isinstance(node, dict):
-        return {k: _strip_keywords(v, drop) for k, v in node.items()
-                if k not in drop}
-    if isinstance(node, list):
-        return [_strip_keywords(v, drop) for v in node]
-    return node
-
-
 def auth_headers(key: str) -> dict[str, str]:
     """The key as a bearer token."""
     return {"Authorization": f"Bearer {key}"}
@@ -53,7 +40,7 @@ def auth_headers(key: str) -> dict[str, str]:
 async def call(fetcher: fetch.Fetcher, key: str, model: str, system: str,
                user: str, schema: dict[str, Any],
                max_tokens: int) -> client.LLMResult:
-    strict_schema = _strip_keywords(schema, _STRICT_UNSUPPORTED)
+    strict_schema = client.strict_schema(schema)
     body = {
         "model": model,
         "messages": [{"role": "system", "content": system},

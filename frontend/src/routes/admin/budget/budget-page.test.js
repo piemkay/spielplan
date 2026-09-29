@@ -37,7 +37,7 @@ const provider = (name, over = {}) => ({
   has_api_key: true,
   secrets_unreadable: false,
   model: `${name}-model`,
-  structured_output: 'forced tool-use',
+  structured_output: 'structured outputs',
   price_basis: 'unknown',
   models: [],
   ...over

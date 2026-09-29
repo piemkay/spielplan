@@ -8,7 +8,7 @@ import hashlib
 import pytest
 
 from spielplan.dna.verify import Rejection, Vocabulary, verify_tags
-from spielplan.llm import contract, gemini, openai
+from spielplan.llm import client, contract, gemini
 from tests.test_dna_verify import _NoVerdicts
 
 # This app's eleven facet ids, which are its term prefixes, in an order of our choosing.
@@ -37,8 +37,8 @@ async def _rejects(tags):
 
 
 def test_one_schema_is_the_contract_and_each_mechanism_is_a_projection_of_it():
-    """An object root, because Anthropic's `input_schema`
-    and OpenAI's strict `json_schema` both require one."""
+    """An object root, because Anthropic's structured outputs and OpenAI's strict `json_schema` both
+    require one."""
     tag = {
         "type": "object",
         "properties": {
@@ -58,7 +58,7 @@ def test_one_schema_is_the_contract_and_each_mechanism_is_a_projection_of_it():
         "additionalProperties": False,
     }
 
-    strict = openai._strip_keywords(contract.EXTRACTION_SCHEMA, openai._STRICT_UNSUPPORTED)
+    strict = client.strict_schema(contract.EXTRACTION_SCHEMA)
     strict_tag = strict["properties"]["tags"]["items"]
     assert strict_tag["properties"]["salience"] == {"type": "integer"}
     assert strict_tag["additionalProperties"] is False and strict["additionalProperties"] is False

@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import logging
 import math
+import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date
@@ -15,6 +16,9 @@ from decimal import ROUND_HALF_UP, Decimal
 from typing import Any
 
 log = logging.getLogger("spielplan.llm.pricing")
+
+# A dated snapshot of a row's model: Anthropic's `-20251001`, OpenAI's `-2025-08-07`.
+_SNAPSHOT = re.compile(r"-(\d{8}|\d{4}-\d{2}-\d{2})")
 
 
 @dataclass(frozen=True)
@@ -32,52 +36,79 @@ class ModelPrice:
     cache_read: float | None = None
 
 
-# Keyed by provider, then by model id prefix (longest prefix wins).
+# Keyed by provider, then by model id, newest first: the order Admin suggests them in. A row also prices
+# its dated snapshots (`claude-haiku-4-5-20251001`) at the name boundary (decision 535).
 PRICING: dict[str, dict[str, tuple[ModelPrice, ...]]] = {
+    # https://platform.claude.com/docs/en/about-claude/pricing, read 2026-09-29. No cache prices: no
+    # `cache_control` is sent. Mythos is invitation-only and has no row.
     "anthropic": {
-        "claude-opus": (ModelPrice(15.0, 75.0),),
-        "claude-sonnet": (ModelPrice(3.0, 15.0),),
-        "claude-haiku": (ModelPrice(1.0, 5.0),),
-        # Newer Anthropic models have their own rows so they never fall back to a family prefix's price
-        # (decision 437; read 2026-09-24).
-        "claude-sonnet-5": (ModelPrice(2.0, 10.0),),
+        "claude-sonnet-5-5": (ModelPrice(2.0, 10.0),),
         "claude-opus-5-5": (ModelPrice(4.0, 20.0),),
+        "claude-fable-5-1": (ModelPrice(10.0, 50.0),),
         "claude-opus-5": (ModelPrice(5.0, 25.0),),
-        "claude-opus-4-5": (ModelPrice(5.0, 25.0),),
-        "claude-opus-4-6": (ModelPrice(5.0, 25.0),),
-        "claude-opus-4-7": (ModelPrice(5.0, 25.0),),
+        "claude-sonnet-5": (ModelPrice(2.0, 10.0),),
+        "claude-fable-5": (ModelPrice(10.0, 50.0),),
         "claude-opus-4-8": (ModelPrice(5.0, 25.0),),
+        "claude-opus-4-7": (ModelPrice(5.0, 25.0),),
+        "claude-sonnet-4-6": (ModelPrice(3.0, 15.0),),
+        "claude-opus-4-6": (ModelPrice(5.0, 25.0),),
+        "claude-opus-4-5": (ModelPrice(5.0, 25.0),),
+        "claude-haiku-4-5": (ModelPrice(1.0, 5.0),),
+        "claude-sonnet-4-5": (ModelPrice(3.0, 15.0),),
     },
+    # https://developers.openai.com/api/docs/pricing, read 2026-09-29: standard tier, under 272k.
+    # GPT-5.6 and later bill a cache write (1.25x input) by default; earlier models bill none.
     "openai": {
-        "gpt-5-mini": (ModelPrice(0.25, 2.0),),
-        "gpt-5-nano": (ModelPrice(0.05, 0.4),),
-        "gpt-5": (ModelPrice(1.25, 10.0),),
-        "gpt-4.1-mini": (ModelPrice(0.4, 1.6),),
-        "gpt-4.1": (ModelPrice(2.0, 8.0),),
-        # Standard (short-context) rate.  Prompts here are nowhere near the 272k long-context tier.
-        # Cache writes are billed by default on GPT-5.6.
+        "gpt-6.1-sol": (ModelPrice(2.0, 10.0, cache_write=2.50, cache_read=0.10),),
+        "gpt-6-sol": (ModelPrice(2.0, 10.0, cache_write=2.50, cache_read=0.20),),
+        "gpt-6-luna": (ModelPrice(0.10, 0.50, cache_write=0.125, cache_read=0.01),),
+        "gpt-6-astra": (ModelPrice(10.0, 50.0, cache_write=12.50, cache_read=1.00),),
+        # Promotional "at least through November 21, 2026"; no later price is published.
+        "gpt-5.6-sol": (ModelPrice(4.0, 20.0, valid_until=date(2026, 11, 22), cache_write=5.00,
+                                   cache_read=0.40),),
         "gpt-5.6-terra": (ModelPrice(2.0, 12.0, cache_write=2.50, cache_read=0.20),),
+        "gpt-5.6-luna": (ModelPrice(0.20, 1.20, cache_write=0.25, cache_read=0.02),),
+        "gpt-5.5": (ModelPrice(5.0, 30.0, cache_read=0.50),),
+        "gpt-5.4": (ModelPrice(2.50, 15.0, cache_read=0.25),),
+        "gpt-5.4-mini": (ModelPrice(0.75, 4.50, cache_read=0.075),),
+        "gpt-5.4-nano": (ModelPrice(0.20, 1.25, cache_read=0.02),),
+        "gpt-5.2": (ModelPrice(1.75, 14.0, cache_read=0.175),),
+        "gpt-5.1": (ModelPrice(1.25, 10.0, cache_read=0.125),),
+        # Shut down 2026-12-11, and unpriced from then on.
+        "gpt-5": (ModelPrice(1.25, 10.0, valid_until=date(2026, 12, 11), cache_read=0.125),),
+        "gpt-5-mini": (ModelPrice(0.25, 2.0, valid_until=date(2026, 12, 11), cache_read=0.025),),
+        "gpt-5-nano": (ModelPrice(0.05, 0.40, valid_until=date(2026, 12, 11), cache_read=0.005),),
+        "gpt-4.1": (ModelPrice(2.0, 8.0, cache_read=0.50),),
+        "gpt-4.1-mini": (ModelPrice(0.40, 1.60, cache_read=0.10),),
+        "gpt-4o": (ModelPrice(2.50, 10.0, cache_read=1.25),),
+        "gpt-4o-mini": (ModelPrice(0.15, 0.60, cache_read=0.075),),
     },
+    # https://ai.google.dev/gemini-api/docs/pricing, read 2026-09-29: prompts up to 200k tokens.
     "gemini": {
-        # The 2.5 family is retired: it still appears in ListModels but
-        # `generateContent` answers 404 "no longer available to new users",
-        # so these prices only apply to a key old enough to keep access.
-        "gemini-2.5-pro": (ModelPrice(1.25, 10.0),),
-        "gemini-2.5-flash-lite": (ModelPrice(0.10, 0.40),),
-        "gemini-2.5-flash": (ModelPrice(0.30, 2.50),),
-        # Introductory pricing, and it is worth knowing it expires: from
-        # 2027-01-01 these double to $1.50 / $7.50.
+        # Introductory through 2026-12-31; from 2027-01-01 these double to $1.50 / $7.50.
+        "gemini-3.8-flash": (ModelPrice(0.75, 3.75, valid_until=date(2027, 1, 1)),
+                             ModelPrice(1.50, 7.50)),
         "gemini-3.7-flash": (ModelPrice(0.75, 3.75, valid_until=date(2027, 1, 1)),
                              ModelPrice(1.50, 7.50)),
         "gemini-3.6-flash": (ModelPrice(0.75, 3.75, valid_until=date(2027, 1, 1)),
                              ModelPrice(1.50, 7.50)),
+        "gemini-3.5-flash-lite": (ModelPrice(0.30, 2.50),),
+        "gemini-3.5-flash": (ModelPrice(1.50, 9.00),),
+        "gemini-3.1-pro-preview": (ModelPrice(2.00, 12.00),),
+        "gemini-3.1-flash-lite": (ModelPrice(0.25, 1.50),),
+        "gemini-3-flash-preview": (ModelPrice(0.50, 3.00),),
+        # Open only to a key that has used them before: a new key gets 404 "no longer available to new
+        # users".
+        "gemini-2.5-pro": (ModelPrice(1.25, 10.0),),
+        "gemini-2.5-flash": (ModelPrice(0.30, 2.50),),
+        "gemini-2.5-flash-lite": (ModelPrice(0.10, 0.40),),
     },
 }
 
 # Stage 6's call is grounded generation from provided text, so a cheap mid-tier model;
 # the model tier is most of the bill.
 DEFAULT_MODELS: dict[str, str] = {
-    "anthropic": "claude-sonnet-5",
+    "anthropic": "claude-sonnet-5-5",
     "openai": "gpt-5.6-terra",
     "gemini": "gemini-3.7-flash",
 }
@@ -105,15 +136,13 @@ _SIX_PLACES = Decimal("0.000001")
 def price_for(provider: str, model: str, *, on: date | None = None) -> ModelPrice | None:
     """Price for a model, or None when we genuinely do not know.
 
-    A prefix only matches at a name boundary - `gpt-5-mini-2025-08-07` matches
-    `gpt-5-mini`, but `gpt-5.6-terra` does **not** match `gpt-5`.  A bare
-    ``startswith`` would let a new release inherit another model's price. A matched prefix whose
-    prices have all expired answers None rather than falling to a shorter prefix.
+    A row prices its own id and its dated snapshots - `gpt-5-mini-2025-08-07` is `gpt-5-mini` - and
+    nothing else: `claude-opus-5-6` and `gpt-5-pro` are not the rows they begin with, so a new
+    release never inherits another model's price. A row whose prices have all expired answers None.
     """
-    table = PRICING.get(provider) or {}
-    for prefix in sorted(table, key=len, reverse=True):
-        if model == prefix or model.startswith(prefix + "-"):
-            return _in_effect(table[prefix], on or date.today())
+    for name, prices in (PRICING.get(provider) or {}).items():
+        if model == name or (model.startswith(name) and _SNAPSHOT.fullmatch(model[len(name):])):
+            return _in_effect(prices, on or date.today())
     return None
 
 

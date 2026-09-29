@@ -547,7 +547,7 @@ async def test_every_estimate_names_its_model_and_its_price_basis(secrets_key, d
     assert read["estimate"]["output_tokens_assumed"] == pricing.MEAN_OUTPUT_TOKENS
     cards = {card["name"]: card for card in read["providers"]}
     assert cards["gemini"]["price_basis"] == _spelled(table)
-    assert cards["gemini"]["models"] == sorted(pricing.PRICING["gemini"])
+    assert cards["gemini"]["models"] == list(pricing.PRICING["gemini"])
     if today < table.price.valid_until:
         assert read["estimate"]["basis"][0]["valid_until"] == "2027-01-01"
         assert read["estimate"]["basis"][0]["then"] == {"input": 1.5, "output": 7.5}

@@ -22,7 +22,7 @@ if TYPE_CHECKING:
 
 log = logging.getLogger("spielplan.llm.contract")
 
-# Salience bounds are a request only: OpenAI's strict copy strips them, `verify_tags` enforces.
+# Salience bounds are a request only: the strict copies strip them, `verify_tags` enforces.
 EXTRACTION_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {

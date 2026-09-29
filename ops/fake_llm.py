@@ -36,17 +36,18 @@ KEYS = {
 # A model outside this list is a 404, as on the real providers. Gemini 2.5 Flash is listed but
 # retired: `generateContent` answers 404 "no longer available to new users".
 MODELS: dict[str, tuple[str, ...]] = {
-    "anthropic": ("claude-sonnet-5", "claude-opus-5", "claude-opus-5-5", "claude-fable-5-1",
-                  "claude-mythos-5-1"),
+    "anthropic": ("claude-sonnet-5-5", "claude-sonnet-5", "claude-opus-5", "claude-opus-5-5",
+                  "claude-fable-5-1", "claude-mythos-5-1"),
     "openai": ("gpt-5.6-terra", "gpt-5-mini"),
     "gemini": ("gemini-3.7-flash", "gemini-3.6-flash", "gemini-2.5-flash"),
 }
 RETIRED: dict[str, frozenset[str]] = {"gemini": frozenset({"gemini-2.5-flash"})}
 
-# Anthropic's errors page: these answer a forced `tool_choice` with a 400.
-FORCED_TOOL_REFUSED = frozenset({"claude-opus-5-5", "claude-fable-5-1", "claude-mythos-5-1"})
 # The ones with safety classifiers that can return `refusal`; on any other model it answers normally.
-CLASSIFIED = frozenset({"claude-opus-5", "claude-opus-5-5", "claude-fable-5-1"})
+CLASSIFIED = frozenset({"claude-opus-5", "claude-opus-5-5", "claude-fable-5-1", "claude-sonnet-5-5"})
+# Anthropic's structured outputs: a schema carrying one of these is a 400.
+ANTHROPIC_SCHEMA_REFUSED = frozenset({"minimum", "maximum", "multipleOf", "minLength", "maxLength",
+                                      "maxItems"})
 
 # The corpus's retry opening. Not imported from the app; `test_llm_extract.py` holds the two equal.
 RETRY_MARKER = "Your previous answer was rejected:"
@@ -57,7 +58,7 @@ POSTURES = ("comply", "stubborn")
 # is a 200 with empty content whose usage is reported and NOT billed; Gemini's `safety` ends a
 # candidate after generation, `blocked` refuses the prompt before it.
 ENVELOPES: dict[str, tuple[str, ...]] = {
-    "anthropic": ("normal", "max_tokens", "prose", "refusal"),
+    "anthropic": ("normal", "max_tokens", "refusal"),
     "openai": ("normal", "refusal", "max_tokens"),
     "gemini": ("normal", "max_tokens", "blocked", "safety"),
 }
@@ -79,13 +80,8 @@ PROJECT_TIERS = ("default", "flex", "priority")
 GEOS = ("global", "us")
 _SERVED_TIER = {"default": "default", "flex": "flex", "priority": "priority", "fast": "priority"}
 
-# Anthropic's pricing page: the 4.7+ tokenizer makes ~30% more tokens than 4 chars/token, and tool
-# use adds a system prompt per model, as (auto/none, any/tool) token counts.
+# Anthropic's pricing page: the 4.7+ tokenizer makes ~30% more tokens than 4 chars/token.
 ANTHROPIC_TOKENIZER = 1.3
-ANTHROPIC_TOOL_PROMPT: dict[str, tuple[int, int]] = {
-    "claude-sonnet-5": (354, 474),
-    "claude-opus-5": (286, 406),
-}
 FAULT_WHEN = ("always", "retry")
 
 # OpenAI models that bill a prompt-cache write (GPT-5.6 and later, on by default, 1,024-token minimum).
@@ -284,7 +280,7 @@ def _note(req: _Request, model: str, envelope: str, tags: list[dict[str, Any]],
     """What the log keeps about an answer. `usage` is what the provider bills (None where it bills
     nothing), so a test holds the meter to this log (decision 436)."""
     return {"model": model, "retry": req.retry, "envelope": envelope,
-            "terms": [tag["term"] for tag in tags] if envelope in ("normal", "unforced") else [],
+            "terms": [tag["term"] for tag in tags] if envelope == "normal" else [],
             "usage": usage, "service_tier": service_tier}
 
 
@@ -321,13 +317,20 @@ def _prompt_tokens(req: _Request, sc: Scenario) -> int:
     return max(1, (len(req.system) + len(req.user)) // 4)
 
 
-def _anthropic_prompt_tokens(req: _Request, sc: Scenario, model: str, tools: list[dict[str, Any]],
-                             forced: bool) -> int:
+def _anthropic_prompt_tokens(req: _Request, sc: Scenario, schema: dict[str, Any] | None) -> int:
     if sc.prompt_tokens is not None:
         return sc.prompt_tokens
-    chars = len(req.system) + len(req.user) + (len(json.dumps(tools)) if tools else 0)
-    tool_prompt = ANTHROPIC_TOOL_PROMPT.get(model, (0, 0))[1 if forced else 0] if tools else 0
-    return max(1, -(-int(chars * ANTHROPIC_TOKENIZER) // 4)) + tool_prompt
+    chars = len(req.system) + len(req.user) + (len(json.dumps(schema)) if schema else 0)
+    return max(1, -(-int(chars * ANTHROPIC_TOKENIZER) // 4))
+
+
+def _keywords(node: Any) -> set[str]:
+    """Every key used anywhere in a JSON schema."""
+    if isinstance(node, dict):
+        return set(node).union(*(_keywords(v) for v in node.values()))
+    if isinstance(node, list):
+        return set().union(*(_keywords(v) for v in node))
+    return set()
 
 
 async def _body(request: Request) -> Any:
@@ -385,32 +388,23 @@ async def _anthropic_answer(request: Request) -> tuple[JSONResponse, Note]:
         return _anthropic_error(400, "invalid_request_error", "top_p: is not supported for this model"), {}
     if "top_k" in body:
         return _anthropic_error(400, "invalid_request_error", "top_k: is not supported for this model"), {}
-    tools = [tool for tool in body.get("tools") or [] if isinstance(tool, dict)]
-    names = [tool.get("name") for tool in tools]
-    for i, tool in enumerate(tools):
-        schema = tool.get("input_schema")
-        if not isinstance(schema, dict) or schema.get("type") != "object":
-            return _anthropic_error(400, "invalid_request_error",
-                                    f"tools.{i}.input_schema.type: Input should be 'object'"), {}
-    choice = body.get("tool_choice") if isinstance(body.get("tool_choice"), dict) else {"type": "auto"}
-    forced: str | None = None
-    if choice.get("type") == "tool":
-        if choice.get("name") not in names:
-            return _anthropic_error(400, "invalid_request_error",
-                                    f"tool_choice.name: no tool named {choice.get('name')!r}"), {}
-        forced = choice["name"]
-    elif choice.get("type") == "any" and names:
-        forced = names[0]
-    # 4.7 and later removed manual extended thinking: a 400 whatever `tool_choice` says.
+    output = body.get("output_config") if isinstance(body.get("output_config"), dict) else {}
+    fmt = output.get("format")
+    schema = fmt.get("schema") if isinstance(fmt, dict) else None
+    if fmt is not None and (not isinstance(fmt, dict) or fmt.get("type") != "json_schema"
+                            or not isinstance(schema, dict) or schema.get("type") != "object"):
+        return _anthropic_error(400, "invalid_request_error",
+                                "output_config.format: a json_schema with an object schema"), {}
+    if refused := sorted(_keywords(schema) & ANTHROPIC_SCHEMA_REFUSED):
+        return _anthropic_error(400, "invalid_request_error",
+                                f"output_config.format.schema: {refused[0]} is not supported"), {}
+    # 4.7 and later removed manual extended thinking: a 400.
     thinking = body.get("thinking")
     if isinstance(thinking, dict) and thinking.get("type") == "enabled":
         return _anthropic_error(
             400, "invalid_request_error",
             '"thinking.type.enabled" is not supported for this model. Use "thinking.type.adaptive" and'
             ' "output_config.effort" to control thinking behavior.'), {}
-    if choice.get("type") in ("tool", "any") and body["model"] in FORCED_TOOL_REFUSED:
-        return _anthropic_error(400, "invalid_request_error",
-                                'tool_choice: type "tool" and "any" are not supported for this model.'), {}
 
     messages = body["messages"] if isinstance(body["messages"], list) else []
     user = "\n\n".join(text for m in messages if isinstance(m, dict) and m.get("role") == "user"
@@ -420,7 +414,7 @@ async def _anthropic_answer(request: Request) -> tuple[JSONResponse, Note]:
     if faulted := _faulted(req, sc, "anthropic"):
         return faulted, _note(req, body["model"], f"fault {sc.fault}", [])
     tags = _answer(req, sc)
-    envelope = sc.envelope if forced else "unforced"
+    envelope = sc.envelope
     if envelope == "refusal" and body["model"] not in CLASSIFIED:
         envelope = "normal"
     # Thinking is on by default: an empty `thinking` block comes first in `content`, and its tokens
@@ -428,33 +422,21 @@ async def _anthropic_answer(request: Request) -> tuple[JSONResponse, Note]:
     thought = sc.thought_tokens if sc.thoughts else 0
     thinking = ([{"type": "thinking", "thinking": "", "signature": f"Eo{uuid.uuid4().hex}"}]
                 if thought else [])
-    stop, out = "tool_use", sc.output_tokens + thought
-    if envelope == "normal":
-        content: list[dict[str, Any]] = thinking + [
-            {"type": "tool_use", "id": f"toolu_{uuid.uuid4().hex[:24]}", "name": forced,
-             "input": {"tags": tags}}]
-    elif envelope == "max_tokens":
-        # Billed in full. Under a forced tool the truncated answer is an incomplete `tool_use`
-        # block, never text: here the first tag only.
+    stop, out = "end_turn", sc.output_tokens + thought
+    answer = json.dumps({"tags": tags})
+    if envelope == "max_tokens":
+        # Billed in full; the truncated answer is a prefix of the JSON.
         stop, out = "max_tokens", int(body["max_tokens"])
-        content = thinking + [{"type": "tool_use", "id": f"toolu_{uuid.uuid4().hex[:24]}",
-                               "name": forced, "input": {"tags": tags[:1]}}]
-    elif envelope == "prose":
-        stop = "end_turn"
-        content = thinking + [{"type": "text", "text": "I would rather describe this film in prose "
-                                                       "than call the tool: it is a tense, patient "
-                                                       "piece of work."}]
+        content: list[dict[str, Any]] = thinking + [{"type": "text", "text": answer[:40]}]
     elif envelope == "refusal":
         # Before any output: no content, `output_tokens` 0, the prompt counted and not charged.
         stop, out = "refusal", 0
         content = []
     else:
-        # No tool was forced, so the JSON comes as text, not as a `tool_use` block.
-        stop = "end_turn"
-        content = thinking + [{"type": "text", "text": json.dumps({"tags": tags})}]
+        content = thinking + [{"type": "text", "text": answer}]
     geo = body.get("inference_geo") if body.get("inference_geo") in GEOS else sc.geo
     usage: dict[str, Any] = {
-        "input_tokens": _anthropic_prompt_tokens(req, sc, body["model"], tools, forced is not None),
+        "input_tokens": _anthropic_prompt_tokens(req, sc, schema),
         "output_tokens": out, "inference_geo": geo}
     if thought and out:
         usage["output_tokens_details"] = {"thinking_tokens": min(thought, out)}

@@ -14,7 +14,7 @@ import LlmProviderCard from './LlmProviderCard.svelte';
 import SourceConnectorCard from './SourceConnectorCard.svelte';
 import SpendMeter from './SpendMeter.svelte';
 
-const MODES = { anthropic: 'forced tool-use', openai: 'strict schema', gemini: 'responseSchema' };
+const MODES = { anthropic: 'structured outputs', openai: 'strict schema', gemini: 'responseSchema' };
 
 const tableBasis = (provider, model) => ({
   provider,
@@ -216,7 +216,7 @@ describe('a provider card (plan B1-B3)', () => {
       await show(LlmProviderCard, { card: provider(name) });
     }
     const captions = [...target.querySelectorAll('[data-structured-output]')].map((c) => c.textContent);
-    expect(captions[0]).toContain('forced tool-use');
+    expect(captions[0]).toContain('structured outputs');
     expect(captions[1]).toContain('strict schema');
     expect(captions[2]).toContain('responseSchema');
   });

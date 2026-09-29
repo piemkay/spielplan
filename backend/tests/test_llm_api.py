@@ -123,7 +123,7 @@ async def test_a_fresh_install_reads_every_provider_unconfigured_no_cap_and_batc
             "model": model, "structured_output": ADAPTERS[name].STRUCTURED_OUTPUT,
             "price": _shape(pricing.price_for(name, model)),
         }, name
-        assert card["models"] == sorted(pricing.PRICING[name]), name
+        assert card["models"] == list(pricing.PRICING[name]), name
         assert card["price"] != "unknown", f"{name}'s default model must be one the table prices"
 
     assert body["settings"] == {

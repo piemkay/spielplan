@@ -28,7 +28,7 @@ REPO = Path(__file__).resolve().parents[2]
 DOUBLE = REPO / "ops" / "fake_llm.py"
 
 PROVIDERS = ("anthropic", "openai", "gemini")
-MODELS = {"anthropic": "claude-sonnet-5", "openai": "gpt-5.6-terra", "gemini": "gemini-3.7-flash"}
+MODELS = {"anthropic": "claude-sonnet-5-5", "openai": "gpt-5.6-terra", "gemini": "gemini-3.7-flash"}
 # The documented endpoint of each paid call, which is what `raw_document.url` must equal.
 URLS = {
     "anthropic": "https://api.anthropic.com/v1/messages",
@@ -398,7 +398,6 @@ UNCHARGED = {("anthropic", "refusal"): "claude-opus-5"}
 
 
 @pytest.mark.parametrize(("provider", "envelope", "status"), [
-    ("anthropic", "prose", extract.REFUSED),
     ("anthropic", "refusal", extract.REFUSED),
     ("anthropic", "max_tokens", extract.TRANSIENT),
     ("openai", "refusal", extract.REFUSED),
@@ -684,8 +683,7 @@ def _full_pack_reviews() -> list[tuple[str, str]]:
 async def test_a_lost_anthropic_cut_off_stays_in_the_meter_at_no_less_than_its_bill(
     db, packed, double, pack
 ):
-    """Anthropic bills the tools block and an injected system
-    prompt, so the ceiling must still be >= the bill."""
+    """A cut-off whose answer is lost stays at its ceiling, which the tokenizer margin keeps >= the bill."""
     if pack == "full":
         text, info = packs.render_pack(TITLE, "Grey Harbour", 2021, "film", None, None, PLOT,
                                        _full_pack_reviews())
@@ -971,25 +969,19 @@ async def test_nothing_is_called_without_a_plan_a_vocabulary_or_a_pack(
         assert "extraction provider" in outcome.reason
 
 
-@pytest.mark.parametrize("model", ["claude-opus-5-5", "claude-fable-5-1", "claude-mythos-5-1",
-                                   "claude-opus-5-5-20260801"])
-async def test_a_model_that_refuses_forced_tool_use_parks_before_anything_is_sent(
+@pytest.mark.parametrize("model", ["claude-sonnet-5-5", "claude-opus-5-5", "claude-fable-5-1"])
+async def test_the_claude_models_that_refuse_forced_tool_use_extract_by_structured_outputs(
     db, packed, double, model
 ):
-    """A model refusing forced tool use would fail every title; it is a setting to correct, so it parks."""
+    """Decision 535: these 400 on a forced `tool_choice`, so the schema travels in `output_config`."""
     await _assign(db, "anthropic")
-    await registry.save_connector(db, "anthropic", model=model, price_input=4, price_output=20)
+    await registry.save_connector(db, "anthropic", model=model)
+    await _scenario(double, provider="anthropic", content="clean")
 
     outcome = await _extract(db, double)
 
-    assert (outcome.status, outcome.calls) == (extract.PLAN, 0), outcome
-    assert model in outcome.reason and "forced tool use" in outcome.reason
-    assert double.state.requests == []
-    assert await _metered(db) == []
-
-    await registry.save_connector(db, "anthropic", model="claude-opus-5", price_input=None,
-                                  price_output=None)
-    assert (await _extract(db, double)).status == extract.WRITTEN
+    assert (outcome.status, outcome.calls) == (extract.WRITTEN, 1), outcome
+    assert [r["status"] for r in double.state.requests if r["method"] == "POST"] == [200]
 
 
 @pytest.mark.parametrize("provider", PROVIDERS)

@@ -37,15 +37,14 @@ TAGS = [{"term": "mood.bleak", "salience": 3, "source": "imdb:1",
 
 
 def _anthropic_ok(payload, *, usage=None):
-    """https://docs.anthropic.com/en/api/messages and
-    https://docs.anthropic.com/en/docs/agents-and-tools/tool-use/implement-tool-use:
-    `stop_reason` "tool_use"."""
+    """https://platform.claude.com/docs/en/build-with-claude/structured-outputs: the JSON is a `text`
+    block after the (empty) thinking, `stop_reason` "end_turn"."""
     return {
         "id": "msg_01Aq9w938a90dw8q", "type": "message", "role": "assistant",
-        "model": "claude-sonnet-5",
-        "content": [{"type": "tool_use", "id": "toolu_01A09q90qw90lq917835lq9",
-                     "name": "emit_dna", "input": payload}],
-        "stop_reason": "tool_use", "stop_sequence": None,
+        "model": "claude-sonnet-5-5",
+        "content": [{"type": "thinking", "thinking": "", "signature": "EosnCkYICxIMMb3LzNrMv"},
+                    {"type": "text", "text": json.dumps(payload)}],
+        "stop_reason": "end_turn", "stop_sequence": None,
         "usage": usage or {"input_tokens": 2095, "output_tokens": 503},
     }
 
@@ -60,15 +59,14 @@ def _anthropic_prose(stop_reason):
     }
 
 
-def _anthropic_cut_off_mid_call(payload):
+def _anthropic_cut_off_mid_json(payload):
     """https://platform.claude.com/docs/en/build-with-claude/handling-stop-reasons:
-    an incomplete `tool_use` block."""
+    a prefix of the JSON."""
     return {
         "id": "msg_01Aq9w938a90dw8s", "type": "message", "role": "assistant",
-        "model": "claude-sonnet-5",
+        "model": "claude-sonnet-5-5",
         "content": [{"type": "thinking", "thinking": "", "signature": "EosnCkYICxIMMb3LzNrMu"},
-                    {"type": "tool_use", "id": "toolu_01A09q90qw90lq917835lq8", "name": "emit_dna",
-                     "input": payload}],
+                    {"type": "text", "text": json.dumps(payload)[:40]}],
         "stop_reason": "max_tokens", "stop_sequence": None,
         "usage": {"input_tokens": 2095, "output_tokens": 8000,
                   "output_tokens_details": {"thinking_tokens": 7400}},
@@ -250,15 +248,16 @@ async def test_each_adapter_posts_once_through_the_fetcher_with_the_key_in_its_d
     assert not [line for line in lines if KEY in line], lines
 
 
-async def test_the_anthropic_request_forces_the_one_tool_and_sends_no_temperature():
-    """`temperature` is a hard 400 on the current Sonnet/Opus models that no retry can fix."""
+async def test_the_anthropic_request_asks_for_the_schema_and_sends_no_temperature():
+    """Forced tool use and `temperature` are hard 400s on the current Claude models."""
     seen: list[httpx.Request] = []
     await _complete("anthropic", _anthropic_ok({"tags": TAGS}), seen=seen)
     body = _body(seen[0])
 
-    assert body["tools"] == [{"name": "emit_dna", "description": "Return the extracted DNA tags.",
-                              "input_schema": contract.EXTRACTION_SCHEMA}]
-    assert body["tool_choice"] == {"type": "tool", "name": "emit_dna"}
+    assert body["output_config"] == {"format": {
+        "type": "json_schema", "schema": client.strict_schema(contract.EXTRACTION_SCHEMA)}}
+    assert "minimum" not in json.dumps(body["output_config"])
+    assert "tools" not in body and "tool_choice" not in body
     assert "temperature" not in body
     assert body["max_tokens"] == client.MAX_OUTPUT_TOKENS == 8000
     assert body["system"] == "SYSTEM PROMPT"
@@ -274,8 +273,7 @@ async def test_the_openai_request_is_strict_and_uses_max_completion_tokens():
     assert body["response_format"] == {
         "type": "json_schema",
         "json_schema": {"name": "emit_dna", "strict": True,
-                        "schema": openai._strip_keywords(contract.EXTRACTION_SCHEMA,
-                                                         openai._STRICT_UNSUPPORTED)},
+                        "schema": client.strict_schema(contract.EXTRACTION_SCHEMA)},
     }
     assert body["max_completion_tokens"] == 8000
     assert "max_tokens" not in body
@@ -310,12 +308,12 @@ async def test_a_gemini_model_name_stays_one_path_segment_and_never_opens_a_quer
     assert KEY not in str(seen[0].url)
 
 
-def test_strip_keywords_removes_exactly_the_corpus_set():
-    """Strict mode rejects the array-length and numeric-range keywords at every depth."""
-    dropped = openai._STRICT_UNSUPPORTED
+def test_the_strict_copy_drops_exactly_the_refused_keywords():
+    """The strict grammars reject the array-length and numeric-range keywords at every depth."""
+    dropped = client.STRICT_UNSUPPORTED
     assert dropped == {
-        "minItems", "maxItems", "minimum", "maximum", "minLength", "maxLength", "pattern",
-        "format", "default",
+        "minItems", "maxItems", "minimum", "maximum", "multipleOf", "minLength", "maxLength",
+        "pattern", "format", "default",
     }
     schema = {
         "type": "object", "required": ["a"], "additionalProperties": False,
@@ -325,7 +323,7 @@ def test_strip_keywords_removes_exactly_the_corpus_set():
              "description": "kept"},
         ]}},
     }
-    assert openai._strip_keywords(schema, openai._STRICT_UNSUPPORTED) == {
+    assert client.strict_schema(schema) == {
         "type": "object", "required": ["a"], "additionalProperties": False,
         "properties": {"a": {"type": "array", "items": [
             {"type": "integer"}, {"type": "string", "description": "kept"},
@@ -335,7 +333,7 @@ def test_strip_keywords_removes_exactly_the_corpus_set():
 
 def test_the_adapters_name_their_structured_output_mechanisms():
     """Decision 338: batch mode does not ship, so "batch" would describe something absent."""
-    assert anthropic.STRUCTURED_OUTPUT == "forced tool-use"
+    assert anthropic.STRUCTURED_OUTPUT == "structured outputs"
     assert openai.STRUCTURED_OUTPUT == "strict schema"
     assert gemini.STRUCTURED_OUTPUT == "responseSchema"
     assert client.PROVIDERS == ("anthropic", "openai", "gemini")
@@ -363,17 +361,16 @@ async def test_anthropic_tokens_come_from_its_usage_block():
     result = await _complete("anthropic", _anthropic_ok({"tags": TAGS}))
     assert (result.tokens_in, result.tokens_out) == (2095, 503)
     assert result.payload == {"tags": TAGS}
-    assert result.provider == "anthropic" and result.model == "claude-sonnet-5"
+    assert result.provider == "anthropic" and result.model == "claude-sonnet-5-5"
 
 
 BRANCHES = [
     # (id, provider, status, envelope, retryable, fragment, requests)
-    ("anthropic-prose", "anthropic", 200, _anthropic_prose("end_turn"), False,
-     "stop_reason=end_turn", 1),
+    ("anthropic-not-json", "anthropic", 200, _anthropic_prose("end_turn"), True, "not JSON", 1),
     ("anthropic-cut-off", "anthropic", 200, _anthropic_prose("max_tokens"), True,
      "stop_reason=max_tokens", 1),
     # A prefix of tags that verifies would be written as the whole tier.
-    ("anthropic-cut-off-mid-call", "anthropic", 200, _anthropic_cut_off_mid_call({"tags": TAGS}),
+    ("anthropic-cut-off-mid-json", "anthropic", 200, _anthropic_cut_off_mid_json({"tags": TAGS}),
      True, "stop_reason=max_tokens", 1),
     ("anthropic-refusal", "anthropic", 200, _anthropic_refusal(), False, "stop_reason=refusal", 1),
     ("anthropic-401", "anthropic", 401, ANTHROPIC_401, False, "authentication_error", 1),
@@ -423,8 +420,8 @@ async def test_every_error_branch_is_a_named_llm_error_with_its_retryability(
 
 # The usage each refused 200 reported, which the provider bills whatever the adapter thought.
 BILLED_FAILURES = [
-    ("anthropic-prose", "anthropic", _anthropic_prose("end_turn"), (2095, 8000)),
-    ("anthropic-cut-off-mid-call", "anthropic", _anthropic_cut_off_mid_call({"tags": TAGS}),
+    ("anthropic-not-json", "anthropic", _anthropic_prose("end_turn"), (2095, 8000)),
+    ("anthropic-cut-off-mid-json", "anthropic", _anthropic_cut_off_mid_json({"tags": TAGS}),
      (2095, 8000)),
     ("anthropic-refusal", "anthropic", _anthropic_refusal(), (0, 0)),
     ("anthropic-refusal-after-output", "anthropic", _anthropic_refusal_after_output(), (2095, 412)),
