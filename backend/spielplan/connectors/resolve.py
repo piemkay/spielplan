@@ -1,8 +1,9 @@
 """Jellyfin item -> `title` row (§7.1, §4.1 rules 5-6): the ported fill-never-clobber resolver.
 
 Every match is qualified by kind: tmdb/tvdb ids repeat across kinds, and an imdb id matched to a
-title of the other kind would send a movie's Played write to a Series folder. One pass over the whole library
-also writes the copy map and elects one representative `jellyfin_id` per title, deterministically.
+title of the other kind would send a movie's Played write to a Series folder. One pass over the
+whole library also writes the copy map and elects one representative `jellyfin_id` per title,
+deterministically.
 """
 
 from __future__ import annotations

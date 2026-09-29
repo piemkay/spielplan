@@ -1054,7 +1054,7 @@ async def test_the_validator_is_keyed_on_the_url_the_request_was_made_against(db
 
 
 async def test_a_credential_parameter_is_sent_but_never_part_of_the_url_a_caller_stores():
-    """TMDB's `api_key` and OMDb's `apikey` reach the provider; the spelling filed in raw_document masks them."""
+    """TMDB's `api_key` and OMDb's `apikey` reach the provider; the url filed in raw_document masks them."""
     sent: list[str] = []
 
     def handler(request: httpx.Request) -> httpx.Response:
