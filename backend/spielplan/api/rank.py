@@ -138,7 +138,7 @@ PerTier = Annotated[int | None, Query(ge=1)]
 
 class DropBody(BaseModel):
     """Pointer drag and tap-to-tier send the same body: the same `tier_edit` semantics (§6.3). `via`
-    and `undoes` are recorded, not read by the fit (decision 533)."""
+    and `undoes` are recorded, not read by the fit (decision 534)."""
 
     title_id: int
     tier: int = Field(ge=0)

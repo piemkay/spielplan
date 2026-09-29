@@ -1076,7 +1076,7 @@ async def test_a_series_marked_unseen_in_the_app_is_not_re_adopted_from_the_fold
     module, patrick = world["module"], world["patrick"]
     await db.execute("UPDATE title SET jellyfin_id = 'jf-6' WHERE id = 6")
 
-    # Played on Jellyfin's own account: the app never writes a series (decision 532).
+    # Played on Jellyfin's own account: the app never writes a series (decision 533).
     module.state.played[PATRICK_JF].add("jf-6")
 
     result = await seen.set_state(
@@ -1106,7 +1106,7 @@ async def test_a_series_stays_seen_when_a_new_episode_recomputes_the_folder_flag
     )
     assert result == {"state": "seen", "synced": True, "reason": "series seen is app-only"}
     assert module.state.write_log == [], (
-        "decision 532: a POST on a Series folder is a recursive MarkPlayed that marks every "
+        "decision 533: a POST on a Series folder is a recursive MarkPlayed that marks every "
         "remaining episode played and zeroes its resume point"
     )
     assert (await _state(db, patrick, 6))["jf_synced_at"] is not None
@@ -1456,7 +1456,7 @@ async def test_the_copy_map_is_pruned_before_the_sweep_pushes_against_it(db, wor
 
 
 async def test_an_owed_series_settles_app_only_without_a_token_and_is_not_counted_as_sent(db, world):
-    """Decision 532: a series needs no token and no write, so a tier on it is not owed for ever."""
+    """Decision 533: a series needs no token and no write, so a tier on it is not owed for ever."""
     module, patrick = world["module"], world["patrick"]
     await db.execute("UPDATE title SET jellyfin_id = 'jf-6' WHERE id = 6")
     await db.execute(

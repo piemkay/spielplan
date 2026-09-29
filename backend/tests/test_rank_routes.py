@@ -976,7 +976,7 @@ async def test_the_whole_rank_surface_is_behind_a_session(db, app):
 
 
 async def test_a_tier_pick_and_the_undo_that_takes_it_back_are_recorded_as_such(db, app, ranked):
-    """Decision 533: the sheet's pick is `explicit`, and an Undo names the edit it takes back."""
+    """Decision 534: the sheet's pick is `explicit`, and an Undo names the edit it takes back."""
     client, user_id = ranked
     seated = await client.post("/api/rank/drop?kind=movie", json={"title_id": 1, "tier": 6})
     picked = await client.post(

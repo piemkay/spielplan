@@ -277,7 +277,7 @@ test.describe('rank', () => {
       expect(body.below, 'and none below it either, however full the tier is').toBeNull();
 
       // The line names neighbour duels only when there were some. The sheet's pick is recorded
-      // `via=explicit`; a drag stays `drag_drop` (decision 533).
+      // `via=explicit`; a drag stays `drag_drop` (decision 534).
       expect(body.via).toBe('explicit');
       const payload = await response.json();
       expect(payload.log?.[0], 'the rail is open, so the drop reports its own line').toBeTruthy();

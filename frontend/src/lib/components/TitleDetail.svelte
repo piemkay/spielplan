@@ -420,7 +420,7 @@
                 <p class="footnote syncnote" role="status">{syncNote}</p>
               {/if}
               {#if t.kind === 'series'}
-                <!-- A Played write on a series would rewrite every episode, so it stays app-only both ways (decision 532). -->
+                <!-- A Played write on a series would rewrite every episode, so it stays app-only both ways (decision 533). -->
                 <p class="footnote" data-testid="title-series-unseen-note">
                   Watched or not, a series is kept in Spielplan only — Jellyfin keeps its own episode
                   history.

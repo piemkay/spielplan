@@ -28,7 +28,7 @@ describe('syncNote', () => {
     expect(syncNote({ synced: false, reason: null })).toBe('Saved here — Jellyfin was not told.');
   });
 
-  it("lets a series' app-only reason win over a success, both ways (decisions 210a, 532)", () => {
+  it("lets a series' app-only reason win over a success, both ways (decisions 210a, 533)", () => {
     for (const reason of ['series unseen is app-only', 'series seen is app-only']) {
       const note = syncNote({ synced: true, reason });
       expect(note).toContain('Saved here only');

@@ -108,7 +108,7 @@ async def drop(
 
     `above` is the better neighbour and `below` the worse; either may be absent. `filtered`
     suppresses the neighbour duels only (decision 204). `undoes` names the edit a toast's Undo takes
-    back (decision 533).
+    back (decision 534).
     """
     kind = await observations.kind_of(conn, title_id)
     tier_set = await tiers.tier_set_of(conn, user_id=user_id, kind=kind)

@@ -98,7 +98,7 @@ const tapSeen = async () => {
   await settle();
 };
 
-describe("decisions 210(a) and 532's why-line", () => {
+describe("decisions 210(a) and 533's why-line", () => {
   it('warns before the tap that a series stays in this app, watched or not', async () => {
     for (const seen_state of ['seen', 'unseen']) {
       const app = await open({ seen_state });

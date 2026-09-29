@@ -15395,7 +15395,7 @@ and Place with questions bullets, and §6.8.
 
 ## Decisions taken (owner, 2026-09-29, the pre-deploy review)
 
-### 532. A series is app-only both ways: the app never writes a Series folder's Played flag
+### 533. A series is app-only both ways: the app never writes a Series folder's Played flag
 
 **What the record says.** §7.3 maps `seen` to Played = true and `unseen` to Played = false through
 `POST/DELETE /UserPlayedItems/{itemId}`. Decision 210 made a series asymmetric: `unseen` is
@@ -15421,10 +15421,10 @@ before the first production deploy, the owner chose app-only in both directions.
    flag never overrides an app-side series row in either direction (decision 213).
 3. Movies are unchanged: `seen` and `unseen` still write Played on every copy (§7.3, decision 211).
 
-This supersedes decision 210(b). The spec is amended in place (v2.1.13): §7.3's series sentence
+This supersedes decision 210(b). The spec is amended in place (v2.1.14): §7.3's series sentence
 and its conflict rule.
 
-### 533. Rank records how a tier was chosen and which edit a toast's Undo takes back
+### 534. Rank records how a tier was chosen and which edit a toast's Undo takes back
 
 **What the record says.** §5.2's third arm is "tier edits (drag-drop, explicit picks)", and 0005's
 `tier_edit.via` CHECK allows both, but every drop was written `drag_drop`: the sheet on the title
@@ -15447,7 +15447,7 @@ both from the first evening.
 3. Both are recorded, not read: the fit reads every `tier_edit` and every `tier_insert` duel as
    before. Leaving undone edits out of the fit is a later decision.
 
-The spec is amended in place (v2.1.13): §4.2's `tier_edit` and §6.3's drag and sheet bullets.
+The spec is amended in place (v2.1.14): §4.2's `tier_edit` and §6.3's drag and sheet bullets.
 
 ## §6.2 — Tonight, rewritten (owner decision, 2026-08-29)
 

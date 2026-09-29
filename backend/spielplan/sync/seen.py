@@ -28,7 +28,7 @@ STATES = ("seen", "unseen")
 
 # `_push`'s outcome; `sync_user` must tell a missing token, a rejected one and an outage apart.
 PUSH_OK = "ok"
-PUSH_APP_ONLY = "app_only"          # decisions 210, 532: a series is settled without a write
+PUSH_APP_ONLY = "app_only"          # decisions 210, 533: a series is settled without a write
 PUSH_NO_TOKEN = "no_token"
 PUSH_AUTH_FAILURE = "auth_failure"
 PUSH_ERROR = "error"
@@ -226,7 +226,7 @@ async def _push(
 ) -> tuple[bool, str | None, str]:
     """Write one Played flag with that user's own token. Returns (pushed, refusal, outcome)."""
     if kind == "series":
-        # Decisions 210(a) and 532: a write on the Series folder is Jellyfin's recursive MarkPlayed or
+        # Decisions 210(a) and 533: a write on the Series folder is Jellyfin's recursive MarkPlayed or
         # MarkUnplayed, which rewrites every episode's history and zeroes its resume point, so a
         # series is app-only both ways; this stamp settles the debt without certifying agreement (213).
         await _stamp(conn, user.app_user_id, title_id, seen)
@@ -544,7 +544,7 @@ async def sync_user(
         app_seen = row["state"] == "seen"
         acted_during_this_sweep = row["state_changed_at"] > snapshot_at
         if row["jf_synced_at"] is None or acted_during_this_sweep:
-            # A series needs no token: it is settled app-only (decision 532).
+            # A series needs no token: it is settled app-only (decision 533).
             if adopt_only and kind != "series":
                 report.owed_no_token += 1
                 continue

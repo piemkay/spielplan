@@ -1190,7 +1190,7 @@ async def record_verdict(
 def _sync_line(state: str, pushed: bool, reason: str | None) -> str:
     """§6.7's rail reports what actually happened, never a write that did not happen."""
     played = "true" if state == "seen" else "false"
-    # Settled with a reason is a series stamped app-only (decision 532): nothing reached Jellyfin.
+    # Settled with a reason is a series stamped app-only (decision 533): nothing reached Jellyfin.
     if pushed and reason is None:
         return f"user_title.state = {state} -> Jellyfin Played {played}"
     return f"user_title.state = {state} -> not pushed ({reason or 'no connector'})"

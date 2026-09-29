@@ -204,7 +204,7 @@ describe('a move (decision 528)', () => {
     });
   });
 
-  it("records the tier sheet's pick as explicit (decision 533)", async () => {
+  it("records the tier sheet's pick as explicit (decision 534)", async () => {
     respond(board());
     await move(rank.tiers[0].entries[0], 4, null, null, 'explicit');
     expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({

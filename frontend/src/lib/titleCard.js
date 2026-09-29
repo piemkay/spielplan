@@ -2,7 +2,7 @@
 
 /**
  * The reason wins over `synced`: a series reports `synced: true` with the reason that nothing was
- * sent (decisions 210a, 532).
+ * sent (decisions 210a, 533).
  *
  * @param {{synced?: boolean, reason?: string | null} | null | undefined} res
  */
