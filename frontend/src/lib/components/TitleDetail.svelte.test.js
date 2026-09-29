@@ -1021,7 +1021,7 @@ describe('the ranking rows on every card (decision 531)', () => {
       shown[4].click();
       await settle();
 
-      expect(vi.mocked(post)).toHaveBeenCalledWith('/rank/drop?kind=movie&per_tier=1', { title_id: 6, tier: 2 });
+      expect(vi.mocked(post)).toHaveBeenCalledWith('/rank/drop?kind=movie&per_tier=1', { title_id: 6, tier: 2, via: 'explicit' });
       expect(toast.message).toBe('Heat moved to C');
       expect(toast.actionLabel).toBe('Undo');
       expect(byTestId('rank-card-tier').getAttribute('aria-label')).toBe('In your ranking: C, Disliked');
@@ -1054,7 +1054,7 @@ describe('the ranking rows on every card (decision 531)', () => {
       options('Rank Heat')[2].click();
       await settle();
 
-      expect(vi.mocked(post)).toHaveBeenCalledWith('/rank/drop?kind=movie&per_tier=1', { title_id: 6, tier: 4 });
+      expect(vi.mocked(post)).toHaveBeenCalledWith('/rank/drop?kind=movie&per_tier=1', { title_id: 6, tier: 4, via: 'explicit' });
       expect(toast.message).toBe('Heat placed in A');
       expect(toast.actionLabel, 'a first placement has no tier to go back to').toBe('');
       expect(byTestId('rank-card-tier').getAttribute('aria-label')).toBe('In your ranking: A, Liked');

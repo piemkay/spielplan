@@ -100,13 +100,15 @@ async def drop(
     above: int | None = None,
     below: int | None = None,
     via: str = "drag_drop",
+    undoes: int | None = None,
     title_name: str | None = None,
     filtered: bool = False,
 ) -> DropResult:
     """One drop: the tier edit, and a duel per neighbour it landed between.
 
     `above` is the better neighbour and `below` the worse; either may be absent. `filtered`
-    suppresses the neighbour duels only (decision 204).
+    suppresses the neighbour duels only (decision 204). `undoes` names the edit a toast's Undo takes
+    back (decision 533).
     """
     kind = await observations.kind_of(conn, title_id)
     tier_set = await tiers.tier_set_of(conn, user_id=user_id, kind=kind)
@@ -124,6 +126,13 @@ async def drop(
     async with conn.transaction():
         # First, before the neighbours are read, so a concurrent drop cannot move one in between.
         await conn.execute("SELECT pg_advisory_xact_lock($1, $2)", _DROP_LOCK, user_id)
+        if undoes is not None and not await conn.fetchval(
+            "SELECT 1 FROM tier_edit WHERE id = $1 AND user_id = $2 AND title_id = $3",
+            undoes,
+            user_id,
+            title_id,
+        ):
+            raise DropRefused(f"tier_edit {undoes} is not this person's edit of this title")
         if named and not filtered:
             placed = await _tiers_of(conn, user_id=user_id, title_ids=named, levels=len(tier_set))
             for neighbour in named:
@@ -143,7 +152,7 @@ async def drop(
                 conn, user_id=user_id, title_id=title_id, value=answered, source="tier"
             )
         edit = await observations.record_tier_edit(
-            conn, user_id=user_id, title_id=title_id, tier=tier, via=via
+            conn, user_id=user_id, title_id=title_id, tier=tier, via=via, undoes=undoes
         )
         if filtered and named:
             log.info(

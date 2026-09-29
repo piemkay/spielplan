@@ -338,7 +338,7 @@ describe('the title card opened from Rank (decision 528)', () => {
     await settle();
     expect(posts).toHaveLength(1);
     expect(posts[0].url).toContain('/api/rank/drop');
-    expect(posts[0].body).toEqual({ title_id: 1, tier: 4, above: null, below: null });
+    expect(posts[0].body).toEqual({ title_id: 1, tier: 4, above: null, below: null, via: 'explicit' });
     expect(toast.message).toBe('Heat moved to A');
     expect($('rank-card-tier').getAttribute('aria-label')).toBe('In your ranking: A, Liked');
   });

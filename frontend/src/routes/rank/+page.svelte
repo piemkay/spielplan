@@ -884,7 +884,7 @@
     onClose={closeTitle}
     onPerson={closeTitle}
     onStateChange={() => load(rank.kind)}
-    onMove={(entry, tier) => move(entry, tier.index)}
+    onMove={(entry, tier) => move(entry, tier.index, null, null, 'explicit')}
   />
 {/if}
 

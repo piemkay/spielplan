@@ -190,8 +190,8 @@ describe('a move (decision 528)', () => {
     expect(toast.actionLabel).toBe('Undo');
   });
 
-  it('undoes by taking the tier back, naming no neighbour', async () => {
-    respond(board());
+  it('undoes by taking the tier back, naming no neighbour and the edit it undoes', async () => {
+    respond({ ...board(), tier_edit_id: 41 });
     await move(rank.tiers[2].entries[1], 6, 1, null);
     respond(board());
     await toast.action();
@@ -199,7 +199,20 @@ describe('a move (decision 528)', () => {
       title_id: 3,
       tier: 4,
       above: null,
-      below: null
+      below: null,
+      undoes: 41
+    });
+  });
+
+  it("records the tier sheet's pick as explicit (decision 533)", async () => {
+    respond(board());
+    await move(rank.tiers[0].entries[0], 4, null, null, 'explicit');
+    expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
+      title_id: 1,
+      tier: 4,
+      above: null,
+      below: null,
+      via: 'explicit'
     });
   });
 
@@ -231,17 +244,17 @@ describe('a move from a title card off Rank (decision 531)', () => {
 
   it('drops the title for its own kind and leaves the board on Rank alone', async () => {
     const before = JSON.stringify(rank.tiers);
-    respond(board({ kind: 'series', tiers: [] }));
+    respond({ ...board({ kind: 'series', tiers: [] }), tier_edit_id: 52 });
     expect(await cardMove(heat, tierC)).toBe(true);
     const [url, init] = fetchMock.mock.calls[0];
     expect(url).toContain('/api/rank/drop?kind=series&per_tier=1');
-    expect(JSON.parse(init.body)).toEqual({ title_id: 1, tier: 2 });
+    expect(JSON.parse(init.body)).toEqual({ title_id: 1, tier: 2, via: 'explicit' });
     expect(JSON.stringify(rank.tiers)).toBe(before);
     expect(toast.message).toBe('Heat moved to C');
 
     respond(board());
     await toast.action();
-    expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({ title_id: 1, tier: 6 });
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({ title_id: 1, tier: 6, undoes: 52 });
   });
 
   it('offers no Undo for a first placement, and writes nothing for the tier it holds', async () => {

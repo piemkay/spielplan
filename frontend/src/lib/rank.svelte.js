@@ -221,16 +221,22 @@ export function reset({ board = true } = {}) {
   requestSeq += 1;                        // and no in-flight response may land after this
 }
 
-// `above`/`below` are the titles it landed between; absent at a tier's ends. True once written.
-export async function drop({ title_id, tier, above = null, below = null }) {
+const undoing = (edit) => (Number.isInteger(edit) ? { undoes: edit } : {});
+
+// `above`/`below` are the titles it landed between; absent at a tier's ends. `via` and `undoes` are
+// recorded as how the tier was chosen and which edit an Undo takes back (decision 533). Once written,
+// the edit's id (true from a server that names none); false otherwise.
+export async function drop({ title_id, tier, above = null, below = null, via, undoes }) {
   if (rank.busy) return false;            // two drops in flight would race their two boards
   rank.busy = true;
   rank.error = '';
   rank.notice = '';
   requestSeq += 1;                        // a read started before the drop must not paint over it
   try {
-    apply(await withOpened(await post(`/rank/drop${qs(query())}`, { title_id, tier, above, below })));
-    return true;
+    const body = { title_id, tier, above, below, ...(via ? { via } : {}), ...undoing(undoes) };
+    const res = await post(`/rank/drop${qs(query())}`, body);
+    apply(await withOpened(res));
+    return res?.tier_edit_id ?? true;
   } catch (err) {
     fail(err);
     return false;
@@ -247,14 +253,16 @@ export function stays(entry, tier, above = null, below = null) {
   return tier === entry.tier && ((!above && !below) || (above === held[0] && below === held[1]));
 }
 
-/** A drag or the tier sheet (decision 528): the drop, then a toast whose Undo takes the tier back. */
-export async function move(entry, tier, above = null, below = null) {
+/** A drag or the tier sheet (decision 528): the drop, then a toast whose Undo takes the tier back.
+ *  The sheet passes `via: 'explicit'`. */
+export async function move(entry, tier, above = null, below = null, via = undefined) {
   if (stays(entry, tier, above, below)) return false;
   haptic();
-  if (!(await drop({ title_id: entry.title_id, tier, above, below }))) return false;
+  const edit = await drop({ title_id: entry.title_id, tier, above, below, via });
+  if (!edit) return false;
   const label = rank.tiers.find((t) => t.index === tier)?.label ?? '';
   // Undo names no neighbours: comparisons the person never made are never written.
-  const undo = tier === entry.tier ? null : { label: 'Undo', run: () => drop({ title_id: entry.title_id, tier: entry.tier }) };
+  const undo = tier === entry.tier ? null : { label: 'Undo', run: () => drop({ title_id: entry.title_id, tier: entry.tier, undoes: edit }) };
   showToast(`${entry.name} moved to ${label}`, undo);
   return true;
 }
@@ -264,20 +272,21 @@ export async function move(entry, tier, above = null, below = null) {
 export async function cardMove(entry, tier) {
   if (tier.index === entry.tier) return false;
   haptic();
-  const to = async (index) => {
+  const to = async (index, extra) => {
     try {
-      await post(`/rank/drop?kind=${entry.kind}&per_tier=1`, { title_id: entry.title_id, tier: index });
-      return true;
+      const res = await post(`/rank/drop?kind=${entry.kind}&per_tier=1`, { title_id: entry.title_id, tier: index, ...extra });
+      return res?.tier_edit_id ?? true;
     } catch (err) {
       showToast(`Could not move ${entry.name} — ${err.message}`);
       return false;
     }
   };
-  if (!(await to(tier.index))) return false;
+  const edit = await to(tier.index, { via: 'explicit' });
+  if (!edit) return false;
   const first = entry.tier == null;
   showToast(
     first ? `${entry.name} placed in ${tier.label}` : `${entry.name} moved to ${tier.label}`,
-    first ? null : { label: 'Undo', run: () => to(entry.tier) }
+    first ? null : { label: 'Undo', run: () => to(entry.tier, undoing(edit)) }
   );
   return true;
 }

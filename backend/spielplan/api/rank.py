@@ -137,12 +137,15 @@ PerTier = Annotated[int | None, Query(ge=1)]
 
 
 class DropBody(BaseModel):
-    """Pointer drag and tap-to-tier send the same body: the same `tier_edit` semantics (§6.3)."""
+    """Pointer drag and tap-to-tier send the same body: the same `tier_edit` semantics (§6.3). `via`
+    and `undoes` are recorded, not read by the fit (decision 533)."""
 
     title_id: int
     tier: int = Field(ge=0)
     above: int | None = None
     below: int | None = None
+    via: Literal["drag_drop", "explicit"] = "drag_drop"
+    undoes: int | None = None
 
 
 class AnswerBody(BaseModel):
@@ -295,6 +298,8 @@ async def drop(
             tier=body.tier,
             above=body.above,
             below=body.below,
+            via=body.via,
+            undoes=body.undoes,
             title_name=names.get(body.title_id),
             filtered=bool(filters.active()),
         )
@@ -310,10 +315,12 @@ async def drop(
         conn, user_id=user.id, kind=result.kind, title_ids=sorted(touched), hp=hp,
         embeddings=deps.embeddings(request, conn), bundle_version=deps.basis(request),
     )
-    return await _payload(
+    payload = await _payload(
         conn, user=user, kind=result.kind, hp=hp, filters=filters,
         log_line=result.log, ledger=ledger, per_tier=per_tier,
     )
+    # What a toast's Undo names as the edit it takes back.
+    return {**payload, "tier_edit_id": result.tier_edit_id}
 
 
 @router.get("/queue")

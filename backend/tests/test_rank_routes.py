@@ -973,3 +973,33 @@ async def test_the_whole_rank_surface_is_behind_a_session(db, app):
     ):
         response = await getattr(anonymous, method)(path, **({"json": body} if body else {}))
         assert response.status_code == 401, f"{method.upper()} {path} is reachable signed out"
+
+
+async def test_a_tier_pick_and_the_undo_that_takes_it_back_are_recorded_as_such(db, app, ranked):
+    """Decision 533: the sheet's pick is `explicit`, and an Undo names the edit it takes back."""
+    client, user_id = ranked
+    seated = await client.post("/api/rank/drop?kind=movie", json={"title_id": 1, "tier": 6})
+    picked = await client.post(
+        "/api/rank/drop?kind=movie", json={"title_id": 1, "tier": 2, "via": "explicit"}
+    )
+    assert picked.status_code == 200, picked.text
+    edit = picked.json()["tier_edit_id"]
+    undone = await client.post(
+        "/api/rank/drop?kind=movie", json={"title_id": 1, "tier": 6, "undoes": edit}
+    )
+    assert undone.status_code == 200, undone.text
+
+    rows = await db.fetch(
+        "SELECT id, tier, via, undoes FROM tier_edit WHERE user_id = $1 ORDER BY id", user_id
+    )
+    assert [(r["tier"], r["via"], r["undoes"]) for r in rows] == [
+        (6, "drag_drop", None), (2, "explicit", None), (6, "drag_drop", edit),
+    ]
+    assert seated.json()["tier_edit_id"] == rows[0]["id"]
+
+    # An Undo may only name this person's edit of this title.
+    other_title = await client.post(
+        "/api/rank/drop?kind=movie", json={"title_id": 2, "tier": 6, "undoes": edit}
+    )
+    assert other_title.status_code == 422
+    assert await db.fetchval("SELECT count(*) FROM tier_edit WHERE user_id = $1", user_id) == 3

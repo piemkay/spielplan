@@ -627,7 +627,13 @@ async def record_duel(
 
 
 async def record_tier_edit(
-    conn: asyncpg.Connection, *, user_id: int, title_id: int, tier: int, via: str = "drag_drop"
+    conn: asyncpg.Connection,
+    *,
+    user_id: int,
+    title_id: int,
+    tier: int,
+    via: str = "drag_drop",
+    undoes: int | None = None,
 ) -> Write:
     """§5.2 arm 3. A tier, like a verdict, implies `seen` (decision 531)."""
     if via not in ("drag_drop", "explicit"):
@@ -641,13 +647,14 @@ async def record_tier_edit(
         prior = await _capture_prior(conn, user_id=user_id, title_id=title_id)
         # `n_levels` records the K this index means (decision 11); no tier-set history exists.
         row_id = await conn.fetchval(
-            "INSERT INTO tier_edit (user_id, title_id, tier, via, n_levels) "
-            "VALUES ($1,$2,$3,$4,$5) RETURNING id",
+            "INSERT INTO tier_edit (user_id, title_id, tier, via, n_levels, undoes) "
+            "VALUES ($1,$2,$3,$4,$5,$6) RETURNING id",
             user_id,
             title_id,
             tier,
             via,
             len(tier_set),
+            undoes,
         )
         implied_seen = prior.state != "seen"
         # Only a change is written: a move of a seen title must not owe Jellyfin a push (§7.3).
