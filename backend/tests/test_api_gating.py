@@ -136,6 +136,12 @@ async def test_the_spa_fallback_does_not_answer_for_the_api_namespace(tmp_path):
             client_route = await client.get("/rank")
             assert client_route.status_code == 200
             assert "shell" in client_route.text, "the fallback must still serve the SPA"
+            for shell in ("/", "/rank", "/index.html"):
+                answer = await client.get(shell)
+                assert answer.headers.get("cache-control") == "no-cache", (
+                    f"{shell} carries no revalidation: an installed phone may keep a heuristically "
+                    "fresh shell whose chunks the next deploy removes"
+                )
     finally:
         if previous is None:
             os.environ.pop("SPIELPLAN_STATIC_DIR", None)

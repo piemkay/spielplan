@@ -310,17 +310,20 @@ def create_app() -> FastAPI:
                 return match, child
 
         async def spa(path: str) -> FileResponse:
-            """The path arrives un-normalised: resolve it, then refuse anything outside the static root."""
+            """The path arrives un-normalised: resolve it, then refuse anything outside the static root.
+            Nothing served here is content-hashed, so each answer is revalidated: a heuristically fresh
+            index.html outlives the chunks it names on an installed phone after the next deploy."""
             index = root / "index.html"
+            revalidate = {"Cache-Control": "no-cache"}
             if not path:
-                return FileResponse(index)
+                return FileResponse(index, headers=revalidate)
             try:
                 candidate = (root / path).resolve()
             except (OSError, ValueError):
-                return FileResponse(index)
+                return FileResponse(index, headers=revalidate)
             if candidate.is_file() and candidate.is_relative_to(root):
-                return FileResponse(candidate)
-            return FileResponse(index)
+                return FileResponse(candidate, headers=revalidate)
+            return FileResponse(index, headers=revalidate)
 
         app.router.routes.append(SpaFallback("/{path:path}", spa, methods=["GET"]))
 

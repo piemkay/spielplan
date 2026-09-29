@@ -5,7 +5,8 @@ import { build, files, version } from '$service-worker';
 const CACHE = `spielplan-shell-${version}`;
 
 // addAll is all-or-nothing: a half-cached shell that boots into a missing chunk is worse than none.
-const SHELL = [...build, ...files, '/'];
+// '/' bypasses the HTTP cache, which may still hold the previous release's index.html.
+const SHELL = [...build, ...files, new Request('/', { cache: 'reload' })];
 
 self.addEventListener('install', (event) => {
   event.waitUntil(
@@ -41,8 +42,14 @@ self.addEventListener('fetch', (event) => {
   }
 
   // Network first: index.html is not content-hashed, so cache-first would pin the old release.
+  // The backend answers every navigation 200, so a 404 or 5xx is the proxy's page during a restart.
   if (request.mode === 'navigate') {
-    event.respondWith(fetch(request).catch(() => caches.match('/').then((hit) => hit ?? Response.error())));
+    const shell = (fallback) => caches.match('/').then((hit) => hit ?? fallback);
+    event.respondWith(
+      fetch(request)
+        .then((res) => (res.status === 404 || res.status >= 500 ? shell(res) : res))
+        .catch(() => shell(Response.error()))
+    );
   }
 });
 
