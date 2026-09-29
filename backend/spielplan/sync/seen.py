@@ -544,13 +544,16 @@ async def sync_user(
         app_seen = row["state"] == "seen"
         acted_during_this_sweep = row["state_changed_at"] > snapshot_at
         if row["jf_synced_at"] is None or acted_during_this_sweep:
-            if adopt_only:
+            # A series needs no token: it is settled app-only (decision 532).
+            if adopt_only and kind != "series":
                 report.owed_no_token += 1
                 continue
             pushed, refusal, outcome = await _push_current(
                 conn, client, user, title_id=title_id, kind=kind, copies=copies
             )
-            if pushed:
+            if pushed and outcome == PUSH_APP_ONLY:
+                report.unchanged += 1
+            elif pushed:
                 report.pushed += 1
                 if outcome == PUSH_OK:
                     # Evidence for clearing §7.3's badge: a write the member's own token made.

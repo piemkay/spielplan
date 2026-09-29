@@ -419,11 +419,11 @@
               {#if syncNote}
                 <p class="footnote syncnote" role="status">{syncNote}</p>
               {/if}
-              {#if t.kind === 'series' && t.seen_state === 'seen'}
-                <!-- Un-marking a series would need a recursive DELETE over every episode, so it stays app-only. -->
+              {#if t.kind === 'series'}
+                <!-- A Played write on a series would rewrite every episode, so it stays app-only both ways (decision 532). -->
                 <p class="footnote" data-testid="title-series-unseen-note">
-                  Marking a series not seen is kept in Spielplan only — Jellyfin is never told to
-                  un-play its episodes.
+                  Watched or not, a series is kept in Spielplan only — Jellyfin keeps its own episode
+                  history.
                 </p>
               {/if}
 

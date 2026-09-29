@@ -98,21 +98,20 @@ const tapSeen = async () => {
   await settle();
 };
 
-describe("decision 210(a)'s why-line", () => {
-  it('warns before the tap that un-marking a series stays in this app', async () => {
-    const app = await open();
-    try {
-      expect(target.querySelector(NOTE).textContent).toContain('kept in Spielplan only');
-    } finally {
-      unmount(app);
+describe("decisions 210(a) and 532's why-line", () => {
+  it('warns before the tap that a series stays in this app, watched or not', async () => {
+    for (const seen_state of ['seen', 'unseen']) {
+      const app = await open({ seen_state });
+      try {
+        expect(target.querySelector(NOTE).textContent).toContain('kept in Spielplan only');
+      } finally {
+        unmount(app);
+      }
     }
   });
 
-  it('is absent on a film, and absent on a series that is not seen yet', async () => {
-    let app = await open({ kind: 'movie' });
-    expect(target.querySelector(NOTE)).toBeNull();
-    unmount(app);
-    app = await open({ seen_state: 'unseen' });
+  it('is absent on a film', async () => {
+    const app = await open({ kind: 'movie' });
     try {
       expect(target.querySelector(NOTE)).toBeNull();
     } finally {

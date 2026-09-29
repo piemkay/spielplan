@@ -1453,3 +1453,19 @@ async def test_the_copy_map_is_pruned_before_the_sweep_pushes_against_it(db, wor
     assert await db.fetchval(
         "SELECT count(*) FROM title_jellyfin_item WHERE jellyfin_id = 'jf-1'"
     ) == 0
+
+
+async def test_an_owed_series_settles_app_only_without_a_token_and_is_not_counted_as_sent(db, world):
+    """Decision 532: a series needs no token and no write, so a tier on it is not owed for ever."""
+    module, patrick = world["module"], world["patrick"]
+    await db.execute("UPDATE title SET jellyfin_id = 'jf-6' WHERE id = 6")
+    await db.execute(
+        "INSERT INTO user_title (user_id, title_id, state) VALUES ($1, 6, 'seen')", patrick
+    )
+
+    report = seen.SyncReport()
+    await seen.sync_user(db, world["client"], _linked(world, token=None), report)
+
+    assert (report.pushed, report.owed_no_token) == (0, 0)
+    assert module.state.write_log == []
+    assert (await _state(db, patrick, 6))["jf_synced_at"] is not None

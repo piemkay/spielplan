@@ -2496,3 +2496,10 @@ async def test_the_recall_aid_never_shows_an_mpst_synopsis(db, world):
     cards = await session._title_cards(db, [6, 7])
     assert cards[7]["recall_aid"] is None
     assert cards[6]["recall_aid"] == "A film about Title 6", "a non-MPST overview keeps its aid"
+
+
+def test_the_rail_never_reports_a_jellyfin_write_for_a_series_settled_app_only():
+    """Decision 532: the push reports success with a reason, and nothing reached Jellyfin."""
+    line = session._sync_line("seen", True, "series seen is app-only")
+    assert "Jellyfin Played" not in line and "app-only" in line
+    assert session._sync_line("seen", True, None).endswith("Jellyfin Played true")
