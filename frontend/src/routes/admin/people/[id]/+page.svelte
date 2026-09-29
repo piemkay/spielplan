@@ -167,8 +167,9 @@
 
   const remove = () =>
     ask(
-      `This removes ${u.name}'s ratings and every Tonight they hosted, with everyone's ` +
-        "answers in it. It can't be undone.",
+      `This removes ${u.name}'s ratings, their answers in evenings others hosted, and every ` +
+        "Tonight they hosted with everyone's answers in it. Disable the account instead to keep " +
+        "all of that. It can't be undone.",
       `Delete ${u.name}`,
       async () => {
         const name = u.name;

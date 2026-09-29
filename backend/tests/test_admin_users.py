@@ -9,6 +9,7 @@ import contextlib
 import pytest
 
 from spielplan.api import admin as admin_api
+from spielplan.connectors.registry import load_jellyfin, save_jellyfin
 from spielplan.core import auth, webauthn
 from spielplan.core.config import settings
 from tests.fixtures.soft_authenticator import SoftAuthenticator
@@ -355,6 +356,18 @@ async def test_deleting_an_account_removes_the_row(db, app):
     assert created["id"] not in await _roster(admin)
     assert await db.fetchval("SELECT count(*) FROM app_user WHERE id = $1", created["id"]) == 0
     assert (await admin.delete(f"/api/admin/users/{created['id']}")).status_code == 404
+
+
+async def test_deleting_an_account_forgets_its_jellyfin_sign_in(secrets_key, db, app):
+    """The per-user token lives in the sealed connector row, which no foreign key reaches."""
+    admin = await admin_client(app)
+    created = await _create(admin, "jenny")
+    await save_jellyfin(
+        db, url="http://jellyfin.test", api_key="jf-admin-key", user_tokens={str(created["id"]): "tok"}
+    )
+
+    assert (await admin.delete(f"/api/admin/users/{created['id']}")).status_code == 200
+    assert (await load_jellyfin(db)).user_tokens == {}
 
 
 @pytest.mark.parametrize(("method", "path", "body"), ROW_EDITOR_ROUTES, ids=lambda v: str(v))

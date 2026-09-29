@@ -429,6 +429,8 @@ async def delete_user(user_id: int, _: AdminUser, conn: DB) -> dict[str, bool]:
         row = await _target(conn, user_id)
         await _refuse_if_last_active_admin(conn, row)
         await conn.execute("DELETE FROM app_user WHERE id = $1", user_id)
+        # The sealed token map is no foreign key, so nothing cascades into it.
+        await seen.forget_token(conn, user_id)
     return {"ok": True}
 
 
