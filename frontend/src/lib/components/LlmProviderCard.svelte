@@ -2,6 +2,7 @@
   // The key is write-only: the route answers `has_api_key` only. Model and price go through the
   // page's one spend proposal, never the key route, because both move the estimate (decision 450).
   import {
+    about,
     amend,
     basisLine,
     invalidate,
@@ -14,18 +15,26 @@
 
   let { card } = $props();
 
-  const name = $derived(card.name);
+  // Never an id: ids are stored trimmed.
+  const ANOTHER = ' another';
 
   let form = $state({ api_key: '' });
   let saved = $state(null);
   let result = $state(null);
   let testing = $state(false);
+  let another = $state(false);
+
+  // A proposal that ends, cancelled or confirmed, puts the pick back.
+  $effect(() => {
+    void spend.epoch;
+    another = false;
+  });
 
   const proposed = $derived(spend.proposal?.providers?.[card.name] ?? {});
   const named = (field) => Object.prototype.hasOwnProperty.call(proposed, field);
   const basis = $derived(card.price_basis);
   const override = $derived(basis && basis !== 'unknown' && basis.source === 'override');
-  const model = $derived(named('model') ? (proposed.model ?? '') : (card.model ?? ''));
+  const model = $derived(proposed.model ?? card.model ?? '');
   const priceIn = $derived(
     named('price_input') ? (proposed.price_input ?? '') : override ? basis.input : ''
   );
@@ -33,6 +42,19 @@
     named('price_output') ? (proposed.price_output ?? '') : override ? basis.output : ''
   );
   const touched = $derived(Object.keys(proposed).length > 0);
+
+  const models = $derived(card.models ?? []);
+  const listed = (id) => models.some((m) => m.id === id);
+  const picked = $derived(another || !listed(model) ? ANOTHER : model);
+  // The id field proposes nothing of its own until one is typed.
+  const typedId = $derived(!named('model') && listed(model) ? '' : model);
+
+  const day = (iso) =>
+    new Date(iso).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', timeZone: 'UTC' });
+  const optionText = (m) =>
+    `${m.id} · ${about(m.per_title_usd)} a title` +
+    (m.leaves ? ` · leaves ${day(m.leaves)}` : '') +
+    (m.default ? ' · default' : '');
 
   let halfPrice = $state(false);
 
@@ -56,10 +78,15 @@
 
   function pickModel(value) {
     const typed = value.trim();
-    // Empty is null, "back to the provider default"; the stored model typed again is no change.
-    const next = typed === '' ? null : typed;
-    const fields = { model: next === (card.model ?? null) ? undefined : next };
-    propose(amend(spend.proposal, { providers: { [card.name]: fields } }));
+    // Nothing typed and the stored model again are both no change.
+    const next = typed === '' || typed === card.model ? undefined : typed;
+    if (next === undefined && !named('model')) return;
+    propose(amend(spend.proposal, { providers: { [card.name]: { model: next } } }));
+  }
+
+  function choose(value) {
+    another = value === ANOTHER;
+    if (!another) pickModel(value);
   }
 
   // The override is a pair or nothing (the route refuses half of one), so hold a half-typed pair.
@@ -145,19 +172,32 @@
   {#key spend.epoch}
     <label class="field">
       <span>Model</span>
-      <input
-        type="text"
-        list={`models-${name}`}
-        autocomplete="off"
-        value={model}
-        oninput={invalidate}
-        onchange={(e) => pickModel(e.currentTarget.value)}
-        onblur={reask}
-      />
+      <!-- Named outright: the label's text would otherwise carry every option's. -->
+      <select aria-label="Model" value={picked} onchange={(e) => choose(e.currentTarget.value)}>
+        {#each models as m (m.id)}<option value={m.id}>{optionText(m)}</option>{/each}
+        <option value={ANOTHER}>Another model…</option>
+      </select>
     </label>
-    <datalist id={`models-${name}`}>
-      {#each card.models ?? [] as m (m)}<option value={m}></option>{/each}
-    </datalist>
+    {#if picked === ANOTHER}
+      <label class="field">
+        <span>Model id</span>
+        <input
+          type="text"
+          autocomplete="off"
+          autocapitalize="off"
+          autocorrect="off"
+          spellcheck="false"
+          value={typedId}
+          oninput={invalidate}
+          onchange={(e) => pickModel(e.currentTarget.value)}
+          onblur={reask}
+        />
+      </label>
+    {/if}
+    <p class="footnote">
+      Each figure is one title at one pass, at the price Spielplan ships with. The confirm shows what
+      your plan costs before anything is saved.
+    </p>
     <form class="prices" onsubmit={(e) => e.preventDefault()} onchange={(e) => pickPrice(e.currentTarget)}>
       <label class="field">
         <span>Price in</span>

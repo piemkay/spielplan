@@ -35,7 +35,10 @@ const provider = (name, over = {}) => ({
   model: `${name}-model`,
   structured_output: MODES[name],
   price: { input: 0.75, output: 3.75, valid_until: '2027-01-01' },
-  models: [`${name}-model`, `${name}-other`],
+  models: [
+    { id: `${name}-model`, per_title_usd: '0.032175', leaves: null, default: true },
+    { id: `${name}-other`, per_title_usd: '0.004875', leaves: '2026-12-11', default: false }
+  ],
   price_basis: tableBasis(name, `${name}-model`),
   ...over
 });
@@ -254,6 +257,22 @@ describe('a provider card (plan B1-B3)', () => {
     expect(field('API key').placeholder).not.toBe('Paste a key');
   });
 
+  it('lists every priced model with its cost per title, the default, and the day a price leaves', async () => {
+    await show(LlmProviderCard, { card: provider('gemini') });
+    const pick = field('Model');
+    expect(pick.tagName).toBe('SELECT');
+    const options = [...pick.options];
+    expect(options.map((o) => o.textContent)).toEqual([
+      'gemini-model · $0.03 a title · default',
+      'gemini-other · $0.0049 a title · leaves 11 Dec',
+      'Another model…'
+    ]);
+    expect(options.at(-1).value, 'an empty value would read as no model').not.toBe('');
+    expect(pick.value).toBe('gemini-model');
+    expect(target.textContent).not.toContain('Model id');
+    expect(target.textContent).toContain('Each figure is one title at one pass');
+  });
+
   it('proposes a model change through the preview and never through the key route', async () => {
     vi.mocked(post).mockResolvedValue(preview());
     await show(LlmProviderCard, { card: provider('gemini') });
@@ -264,6 +283,61 @@ describe('a provider card (plan B1-B3)', () => {
     });
     expect(api, 'a model moves the estimate, so it never goes to PUT /connectors').not.toHaveBeenCalled();
     expect(target.querySelector('[data-provider-pending]')).not.toBeNull();
+  });
+
+  it('proposes the default by its id, and the stored model again is no change', async () => {
+    vi.mocked(post).mockResolvedValue(preview());
+    await show(LlmProviderCard, { card: provider('gemini', { model: 'gemini-other' }) });
+    commit(field('Model'), 'gemini-model');
+    await settle();
+    expect(post).toHaveBeenCalledWith('/admin/llm/preview', {
+      providers: { gemini: { model: 'gemini-model' } }
+    });
+    vi.mocked(post).mockClear();
+    commit(field('Model'), 'gemini-other');
+    await settle();
+    expect(post).not.toHaveBeenCalled();
+    expect(spend.proposal).toBeNull();
+    expect(field('Model').value).toBe('gemini-other');
+  });
+
+  it('shows a stored model the list does not price as Another model…, with its id filled in', async () => {
+    await show(LlmProviderCard, {
+      card: provider('gemini', {
+        model: 'gemini-9-ultra',
+        configured: false,
+        price: 'unknown',
+        price_basis: 'unknown'
+      })
+    });
+    const pick = field('Model');
+    expect(pick.selectedOptions[0].textContent).toBe('Another model…');
+    expect(field('Model id').value).toBe('gemini-9-ultra');
+  });
+
+  it('takes another model id only once one is typed, and a cancel puts the pick back', async () => {
+    vi.mocked(post).mockResolvedValue(preview());
+    await show(LlmProviderCard, { card: provider('gemini') });
+    const pick = field('Model');
+    commit(pick, pick.options[pick.options.length - 1].value);
+    await settle();
+    expect(post, 'choosing Another model… proposes nothing').not.toHaveBeenCalled();
+    const typed = field('Model id');
+    expect(typed.value).toBe('');
+    expect(typed.getAttribute('autocapitalize')).toBe('off');
+    expect(typed.getAttribute('autocorrect')).toBe('off');
+    expect(typed.getAttribute('spellcheck')).toBe('false');
+
+    commit(typed, ' gemini-9-ultra ');
+    await settle();
+    expect(post).toHaveBeenCalledWith('/admin/llm/preview', {
+      providers: { gemini: { model: 'gemini-9-ultra' } }
+    });
+
+    cancel();
+    await settle();
+    expect(target.textContent).not.toContain('Model id');
+    expect(field('Model').value).toBe('gemini-model');
   });
 
   it('proposes a price override as a pair, and holds half of one without asking', async () => {

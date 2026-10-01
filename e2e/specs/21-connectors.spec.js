@@ -206,7 +206,16 @@ test('each provider says what it is and never shows a stored key', async ({ page
       'placeholder',
       read.has_api_key ? 'Saved' : /Paste a key|paste it again/
     );
-    await expect(card.getByLabel('Model', { exact: true })).toHaveValue(read.model);
+    // Every priced id with its figure, then a way to any other (decisions 543, 550).
+    const pick = card.getByLabel('Model', { exact: true });
+    await expect(pick).toHaveValue(read.model);
+    const options = pick.locator('option');
+    await expect(options).toHaveCount(read.models.length + 1);
+    await expect(options.last()).toHaveText('Another model…');
+    const fallback = pick.locator(`option[value="${read.models.find((m) => m.default).id}"]`);
+    await expect(fallback).toContainText(' a title');
+    await expect(fallback).toHaveText(/ · default$/);
+    await expect(card.getByLabel('Model id', { exact: true })).toHaveCount(0);
     await expect(card.getByRole('button', { name: 'Test key', exact: true })).toBeVisible();
     await done(page);
   }
@@ -449,13 +458,18 @@ test('the estimate names the model and the price it used', async ({ page }) => {
   for (const part of caption) await expect(named).toContainText(part);
   await expect(extraction).toContainText('23,500 tokens in');
 
-  // An unpriced model is "Unknown", never a number (decision 343). Committed with Enter: a
-  // dispatched `change` leaves the engine owing its own on blur, which re-proposes under Cancel.
+  // An unpriced model is "Unknown", never a number (decision 343). Another model… proposes nothing
+  // until an id is typed. Committed with Enter: a dispatched `change` leaves the engine owing its
+  // own on blur, which re-proposes under Cancel.
   await row.click();
   const model = card.getByLabel('Model', { exact: true });
+  await model.selectOption({ label: 'Another model…' });
+  const typed = card.getByLabel('Model id', { exact: true });
+  await expect(typed).toHaveValue('');
+  await expect(card.locator('[data-provider-pending]')).toHaveCount(0);
   const asked = page.waitForResponse(isPreview);
-  await model.fill(UNPRICED);
-  await model.press('Enter');
+  await typed.fill(UNPRICED);
+  await typed.press('Enter');
   const previewed = await asked;
   expect(previewed.request().postDataJSON().providers).toEqual({ gemini: { model: UNPRICED } });
   const preview = await previewed.json();
@@ -476,6 +490,7 @@ test('the estimate names the model and the price it used', async ({ page }) => {
   await expect(page.getByTestId('spend-estimate')).toHaveCount(0);
   await row.click();
   await expect(model).toHaveValue(gemini.model);
+  await expect(typed).toHaveCount(0);
   await done(page);
   expect(writesBesidePreviews(requests)).toEqual([]);
   const after = await llmNow(page);
