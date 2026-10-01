@@ -9,7 +9,7 @@ test.beforeEach(async ({ page }) => {
 });
 
 test('the nav carries the shipped surfaces and no unbuilt one', async ({ page }) => {
-  // Decision 488: an unshipped surface (Map, Taste) is absent from navigation.
+  // Decision 488: the unshipped Map is absent from navigation; Taste is opened from You, never a tab.
   const nav = page.getByRole('navigation', { name: 'Main' });
   for (const name of ['Home', 'Rate', 'Tonight', 'Rank']) {
     await expect(nav.getByRole('link', { name, exact: true })).toBeVisible();
@@ -20,11 +20,13 @@ test('the nav carries the shipped surfaces and no unbuilt one', async ({ page })
   }
 });
 
-test('the account menu links no unbuilt surface', async ({ page }) => {
+test('You links Your taste and no unbuilt surface', async ({ page }) => {
+  // Decision 540: Taste is reached from You, as the row under the head.
   const menu = await openAccountMenu(page);
   await expect(menu.getByRole('link', { name: /Account/ })).toBeVisible();
-  await expect(menu.locator('a[href="/taste"], a[href="/map"]')).toHaveCount(0);
-  await expect(menu).not.toContainText('My Taste');
+  await expect(menu.getByTestId('taste-row')).toHaveAttribute('href', '/taste');
+  await expect(menu.locator('a[href="/taste"]')).toHaveCount(1);
+  await expect(menu.locator('a[href="/map"]')).toHaveCount(0);
 });
 
 /**
