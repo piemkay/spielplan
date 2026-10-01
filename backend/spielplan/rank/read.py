@@ -14,7 +14,9 @@ from typing import Any
 import asyncpg
 import numpy as np
 
+from spielplan.db import genres as genre_vocab
 from spielplan.db.library import RankFilters, rank_filters
+from spielplan.ledger import ladder
 from spielplan.ledger.hyperparams import Hyperparams
 from spielplan.ledger.observations import (
     DEFAULT_TIER_SET,
@@ -27,6 +29,9 @@ from spielplan.ledger.observations import (
 from spielplan.rank import board, queue
 
 log = logging.getLogger("spielplan.rank.read")
+
+# Decision 550: the order inside each step is "still mostly our guess" under this many comparisons.
+GUESS_UNTIL = 30
 
 
 @dataclass(frozen=True)
@@ -166,18 +171,22 @@ async def asked_pairs(
 
 
 async def recent_titles(
-    conn: asyncpg.Connection, *, user_id: int, kind: str, window: int = queue.RECENT_WINDOW
+    conn: asyncpg.Connection,
+    *,
+    user_id: int,
+    kind: str,
+    window: int = queue.RECENT_WINDOW,
+    context: str = "tier_queue",
 ) -> set[int]:
-    """The titles of this person's last `window` answered queue pairs, **held-out excluded**.
-
-    Decision 494's no-repeat window; `tier_queue` only, since it is about the current sitting.
+    """The titles of this person's last `window` answered pairs in one context, **held-out
+    excluded**: decision 494's no-repeat window, which is about the current sitting.
     """
     rows = await conn.fetch(
         f"""
         SELECT d.title_a, d.title_b FROM duel d
         JOIN title ta ON ta.id = d.title_a AND ta.kind = $2
         JOIN title tb ON tb.id = d.title_b AND tb.kind = $2
-        WHERE d.user_id = $1 AND d.context = 'tier_queue' AND d.selection <> $3
+        WHERE d.user_id = $1 AND d.context = $5 AND d.selection <> $3
           AND d.created_at >= {cutover_sql()}
         ORDER BY d.id DESC
         LIMIT $4
@@ -186,8 +195,66 @@ async def recent_titles(
         kind,
         HELD_OUT,
         window,
+        context,
     )
     return {int(r[side]) for r in rows for side in ("title_a", "title_b")}
+
+
+async def comparisons_since_setup(conn: asyncpg.Connection, *, user_id: int, kind: str) -> int:
+    """Sharpen's and Place's answers of the kind since the cut-over, held-out in and re-asks out:
+    what "still mostly our guess" counts (decision 550)."""
+    return int(
+        await conn.fetchval(
+            f"""
+            SELECT count(*) FROM duel d
+            JOIN title t ON t.id = d.title_a AND t.kind = $2
+            WHERE d.user_id = $1 AND d.context IN ('tier_queue', 'tier_place') AND NOT d.is_reask
+              AND d.created_at >= {cutover_sql()}
+            """,
+            user_id,
+            kind,
+        )
+        or 0
+    )
+
+
+async def reask_pairs(
+    conn: asyncpg.Connection, *, user_id: int, kind: str
+) -> list[tuple[int, int, int]]:
+    """§13(b)'s Sharpen pairs of the kind as `(duel_id, title_a, title_b)`: answered since the
+    cut-over and at least `REASK_MIN_AGE` ago, not a re-ask itself, and not re-asked within
+    `REASK_COOLDOWN`. Both ages read the clock that stamped `created_at`. **Held-out excluded**:
+    a re-ask counts among the selector's inputs, so one of a held-out pair would carry it there."""
+    rows = await conn.fetch(
+        f"""
+        SELECT d.id, d.title_a, d.title_b FROM duel d
+        JOIN title t ON t.id = d.title_a AND t.kind = $2
+        WHERE d.user_id = $1 AND d.context = 'tier_queue' AND NOT d.is_reask AND d.selection <> $5
+          AND d.created_at >= {cutover_sql()} AND d.created_at <= now() - $3::interval
+          AND NOT EXISTS (SELECT 1 FROM duel r
+                           WHERE r.reask_of = d.id AND r.created_at > now() - $4::interval)
+        ORDER BY d.id
+        """,
+        user_id,
+        kind,
+        queue.REASK_MIN_AGE,
+        queue.REASK_COOLDOWN,
+        HELD_OUT,
+    )
+    return [(int(r["id"]), int(r["title_a"]), int(r["title_b"])) for r in rows]
+
+
+async def genres_of(
+    conn: asyncpg.Connection, title_ids: Sequence[int]
+) -> dict[int, tuple[str, ...]]:
+    """Each title's genres in decision 473's vocabulary, in one read."""
+    rows = await conn.fetch(
+        "SELECT title_id, array_agg(DISTINCT lower(genre)) AS raw FROM title_genre "
+        "WHERE title_id = ANY($1::int[]) AND source <> ALL($2::text[]) GROUP BY title_id",
+        [int(t) for t in title_ids],
+        list(genre_vocab.EXCLUDED_SOURCES),
+    )
+    return {int(r["title_id"]): tuple(genre_vocab.facet(r["raw"])) for r in rows}
 
 
 async def answered_comparisons(
@@ -259,6 +326,7 @@ async def standing(
     tiers, _cuts, _rows = await load(conn, user_id=user_id, kind=kind, hp=hp)
     entry = next((e for tier in tiers for e in tier.entries if e.title_id == title_id), None)
     return {
+        "set_up": await ladder.set_up_at(conn, user_id=user_id) is not None,
         "tier": None if entry is None else entry.tier,
         "tension": None if entry is None else entry.tension,
         "tiers": public(tiers, 0),
@@ -282,6 +350,7 @@ async def candidates(
         tier_set=cuts.tier_set,
         hp=hp,
         comparisons=await comparison_counts(conn, user_id=user_id, kind=kind),
+        genres=await genres_of(conn, [item.title_id for item in pool]),
     )
 
 
@@ -311,7 +380,7 @@ def public(tiers: Sequence[board.Tier], per_tier: int | None = None) -> list[dic
         {
             "index": tier.index,
             "label": tier.label,
-            "verdict": tier.verdict,
+            "word": tier.word,
             "count": len(tier.entries),
             "entries": [entry.public() for entry in tier.entries[:per_tier]],
         }
@@ -320,18 +389,22 @@ def public(tiers: Sequence[board.Tier], per_tier: int | None = None) -> list[dic
 
 
 __all__ = [
+    "GUESS_UNTIL",
     "Cutpoints",
     "answered_comparisons",
     "asked_pairs",
     "candidates",
     "cards_for",
     "comparison_counts",
+    "comparisons_since_setup",
     "cutpoints_of",
+    "genres_of",
     "items",
     "load",
     "names_for",
     "placements",
     "public",
+    "reask_pairs",
     "recent_titles",
     "standing",
 ]

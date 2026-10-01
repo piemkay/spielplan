@@ -23,9 +23,6 @@ export function dnaTierText(tiers) {
   return (tiers ?? []).map((t) => DNA_TIER_LABELS[t] ?? t).join(' + ');
 }
 
-// Proposal 80's handoff figure for a board worth trusting.
-export const TIER_THRESHOLD = 30;
-
 /** §6.3's genre and decade vocabularies, scoped to the kind on screen (as Home scopes them). */
 export const facets = $state({ genres: [], decades: [] });
 
@@ -50,6 +47,10 @@ export const rank = $state({
   expanded: [],
   rated: 0,
   ratedTotal: 0,
+  /** Decision 550: before the person's set-up the board is read-only. */
+  setUp: true,
+  /** Too few comparisons since the set-up for the order inside a step to be theirs (decision 550). */
+  guessing: false,
   /** What Sharpen would ask about: the titles that sit between two tiers. */
   straddling: 0,
   /** Decision 209: the server says a full fit is owed, so the two counts above are not yet final. */
@@ -103,6 +104,8 @@ export function apply(payload) {
   rank.tiers = payload.tiers ?? [];
   rank.rated = payload.rated ?? 0;
   rank.ratedTotal = payload.rated_total ?? 0;
+  rank.setUp = payload.set_up ?? true;
+  rank.guessing = payload.guessing ?? false;
   rank.straddling = payload.straddling ?? 0;
   rank.fitting = payload.fitting ?? false;
   rank.filters = payload.filters ?? {};
@@ -202,6 +205,8 @@ export function reset({ board = true } = {}) {
   if (board) {
     rank.tiers = [];
     rank.ratedTotal = 0;
+    rank.setUp = true;
+    rank.guessing = false;
     rank.straddling = 0;
   }
   rank.model = null;
@@ -450,6 +455,8 @@ export function clearFilter(key) {
 export function emptyState() {
   // Nothing is claimed before the board has been read, or after it failed.
   if (rank.loading || !rank.booted || rank.error) return null;
+  // Before the set-up its own card is the way on (Rate is closed); only a filter can still miss.
+  if (!rank.setUp) return rank.rated === 0 && rank.ratedTotal > 0 ? noMatch() : null;
   // Before the counting states: an owed fit is why the count reads 0, and no duration is promised.
   if (rank.ratedTotal === 0 && rank.fitting) {
     return {
@@ -458,33 +465,27 @@ export function emptyState() {
       cta: 'Rate some titles'
     };
   }
-  // The board shows tiers from the first rated title; what 30 buys is a board worth trusting.
+  // A young board says nothing here: Needs a look's guess line speaks for it (decision 550).
   if (rank.ratedTotal === 0) {
     return {
       kind: 'unrated',
-      text: `Your tiers fill in as you rate titles — about ${TIER_THRESHOLD} makes a good start, and you're at 0.`,
+      text: `Your tiers fill in as you place ${nounFor(2)} on Rate.`,
       cta: 'Rate some titles'
     };
   }
-  if (rank.ratedTotal < TIER_THRESHOLD) {
-    return {
-      kind: 'thin',
-      text: `These tiers are a first guess until you've rated about ${TIER_THRESHOLD} titles — you're at ${rank.ratedTotal}.`,
-      cta: 'Rate some titles'
-    };
-  }
-  if (rank.rated === 0) {
-    const onlySearch = Object.keys(rank.filters).every((key) => key === 'q');
-    return {
-      kind: 'no-match',
-      text:
-        onlySearch && rank.filters.q
-          ? `Nothing on your list matches “${rank.filters.q}”.`
-          : 'Nothing on your list matches these filters.',
-      cta: 'Clear filters'
-    };
-  }
-  return null;
+  return rank.rated === 0 ? noMatch() : null;
+}
+
+function noMatch() {
+  const onlySearch = Object.keys(rank.filters).every((key) => key === 'q');
+  return {
+    kind: 'no-match',
+    text:
+      onlySearch && rank.filters.q
+        ? `Nothing on your list matches “${rank.filters.q}”.`
+        : 'Nothing on your list matches these filters.',
+    cta: 'Clear filters'
+  };
 }
 
 export function clearFilters() {

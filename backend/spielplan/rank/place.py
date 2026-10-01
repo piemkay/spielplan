@@ -6,8 +6,8 @@ the caller's sealed token, and each read of it is taken against the tier as the 
 from __future__ import annotations
 
 import math
-from collections.abc import Sequence
-from dataclasses import dataclass, replace
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field, replace
 
 import asyncpg
 
@@ -20,6 +20,11 @@ CONTEXT = "tier_place"
 
 # The result's neighbourhood: two rows of a phone's four columns.
 AROUND = 8
+
+# Decision 538: the window's middle, taken loosely, is this many seen titles nearest it.
+MIDDLE_K = 3
+# The titles of the last few answered pairs rest while another can serve (decision 538).
+RECENT_PAIRS = 2
 
 
 class PlaceRefused(ValueError):
@@ -38,11 +43,33 @@ class Search:
     asked: int = 0
     skipped: tuple[int, ...] = ()
 
-    def probe(self, others: Sequence[int]) -> int | None:
-        """The window's middle, or the title nearest it the person has seen; None ends the search."""
+    def probe(
+        self,
+        others: Sequence[int],
+        *,
+        recent: frozenset[int] = frozenset(),
+        genres: Mapping[int, Sequence[str]] | None = None,
+        comparisons: Mapping[int, int] | None = None,
+    ) -> int | None:
+        """Of the `MIDDLE_K` seen titles nearest the window's middle, the one outside the last pairs,
+        then sharing a genre with the placed title, then the least compared; None ends the search."""
         middle = (self.low + self.high) // 2
         seen = [i for i in range(self.low, self.high) if others[i] not in self.skipped]
-        return min(seen, key=lambda i: (abs(i - middle), i), default=None)
+        nearest = sorted(seen, key=lambda i: (abs(i - middle), i))[:MIDDLE_K]
+        genres = genres or {}
+        counts = comparisons or {}
+        mine = set(genres.get(self.title_id, ()))
+        return min(
+            nearest,
+            key=lambda i: (
+                others[i] in recent,
+                mine.isdisjoint(genres.get(others[i], ())),
+                counts.get(others[i], 0),
+                abs(i - middle),
+                i,
+            ),
+            default=None,
+        )
 
     def answered(self, index: int, outcome: str) -> Search:
         """A puts the title above `others[index]`, B below it, and a tie ends it just below it."""
@@ -56,15 +83,21 @@ class Search:
 
 @dataclass(frozen=True)
 class View:
-    """A search read against its tier: `others` is the tier best first, the placed title left out."""
+    """A search read against its tier: `others` is the tier best first, the placed title left out,
+    with what its probe weighs."""
 
     search: Search
     label: str
     others: tuple[int, ...]
+    recent: frozenset[int] = frozenset()
+    genres: Mapping[int, Sequence[str]] = field(default_factory=dict)
+    comparisons: Mapping[int, int] = field(default_factory=dict)
 
     @property
     def probe(self) -> int | None:
-        return self.search.probe(self.others)
+        return self.search.probe(
+            self.others, recent=self.recent, genres=self.genres, comparisons=self.comparisons
+        )
 
     def progress(self) -> dict[str, int]:
         """Places in the tier counted from 1, the placed title among them."""
@@ -87,10 +120,22 @@ class View:
         return above, below, placed[start : start + AROUND]
 
 
-def _view(tier: board.Tier, search: Search) -> View:
+async def _view(
+    conn: asyncpg.Connection, *, user_id: int, kind: str, tier: board.Tier, search: Search
+) -> View:
     others = tuple(e.title_id for e in tier.entries if e.title_id != search.title_id)
     high = min(search.high, len(others))
-    return View(replace(search, low=min(search.low, high), high=high), tier.label, others)
+    recent = await read.recent_titles(
+        conn, user_id=user_id, kind=kind, window=RECENT_PAIRS, context=CONTEXT
+    )
+    return View(
+        replace(search, low=min(search.low, high), high=high),
+        tier.label,
+        others,
+        recent=frozenset(recent),
+        genres=await read.genres_of(conn, [search.title_id, *others]),
+        comparisons=await read.comparison_counts(conn, user_id=user_id, kind=kind),
+    )
 
 
 async def begin(
@@ -101,7 +146,8 @@ async def begin(
     tier = next((t for t in tiers if any(e.title_id == title_id for e in t.entries)), None)
     if tier is None:
         raise PlaceRefused(f"title {title_id} is not on your {kind} board")
-    return _view(tier, Search(title_id=title_id, tier=tier.index, low=0, high=len(tier.entries)))
+    search = Search(title_id=title_id, tier=tier.index, low=0, high=len(tier.entries))
+    return await _view(conn, user_id=user_id, kind=kind, tier=tier, search=search)
 
 
 async def resume(
@@ -112,7 +158,7 @@ async def resume(
     tier = next((t for t in tiers if t.index == search.tier), None)
     if tier is None:
         raise PlaceRefused("that tier is no longer on your board")
-    return _view(tier, search)
+    return await _view(conn, user_id=user_id, kind=kind, tier=tier, search=search)
 
 
 async def answer(
@@ -148,4 +194,16 @@ async def skip(
     return replace(search, skipped=(*search.skipped, neighbour))
 
 
-__all__ = ["AROUND", "CONTEXT", "PlaceRefused", "Search", "View", "answer", "begin", "resume", "skip"]
+__all__ = [
+    "AROUND",
+    "CONTEXT",
+    "MIDDLE_K",
+    "RECENT_PAIRS",
+    "PlaceRefused",
+    "Search",
+    "View",
+    "answer",
+    "begin",
+    "resume",
+    "skip",
+]

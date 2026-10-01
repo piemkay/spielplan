@@ -1,24 +1,36 @@
 import { expect, test } from '@playwright/test';
 
-import { createMember, signInAsMember, signedIn, waitForBoard } from '../helpers.js';
+import {
+  createMember,
+  placeThroughRate,
+  setUpLadder,
+  signInAsMember,
+  signedIn,
+  waitForBoard
+} from '../helpers.js';
 
 /**
  * §6.3's Rank surface: that the gestures write what the integration tests expect, that the title
- * card's tier sheet writes nothing on its way out, and that the comparison round is reachable (§12's
- * M3 exit).
+ * card's ladder sheet writes nothing on its way out, that the comparison round is reachable (§12's
+ * M3 exit), and that a member not yet set up reads the board and writes nothing (decision 550).
  * Its own member per project, seeded through the shared helpers (decision 186). Serial, one page.
  */
 test.describe.configure({ mode: 'serial' });
 
 const board = (page) => page.getByTestId('rank-board');
-const moveSheet = (page) => page.getByRole('dialog', { name: /^Move / });
 const card = (page) => page.getByRole('dialog', { name: 'Title detail' });
+const ladder = (page) => page.getByTestId('ladder-sheet');
+const shelf = (page, index) =>
+  ladder(page).locator(`[data-testid="ladder-shelf"][data-tier="${index}"]`);
 
-/** Decision 528: a title moves from its card, whose "In your ranking" row opens the tier sheet. */
-async function openMove(page, titleId) {
+// Decision 550's reason: the steps, lower first, and at most one shared genre.
+const REASON = /^(Both in \S+|One in \S+, one in \S+)( · both [a-z ]+ films)?$/;
+
+/** Decision 550: a title moves from its card, whose "In your ranking" row opens the ladder sheet. */
+async function openLadder(page, titleId) {
   await page.getByTestId(`rank-open-${titleId}`).click();
   await card(page).getByTestId('rank-card-tier').click();
-  await expect(moveSheet(page)).toBeVisible();
+  await expect(ladder(page)).toBeVisible();
 }
 
 /** A phone keeps the search behind its icon in the top bar. */
@@ -28,45 +40,25 @@ async function searchBox(page) {
   return page.getByTestId('rank-filter');
 }
 
-/** One tier's row in the tier sheet, which reads "A+ Liked". */
-function tierOption(sheet, label) {
-  const escaped = label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-  // A space or the dot next, not any non-word: the + of A+ would let A match it.
-  return sheet.getByRole('menuitem', { name: new RegExp(`^${escaped}[\\s·]`) });
+/** The tier a title sits in on the board, as `{index, label, word}`. */
+async function stepOf(page, titleId) {
+  const payload = await (await page.request.get('/api/rank?kind=movie')).json();
+  const tier = payload.tiers.find((t) => t.entries.some((e) => e.title_id === Number(titleId)));
+  expect(tier, `title ${titleId} is not on the board`).toBeTruthy();
+  return tier;
 }
 
-/**
- * §6.3's board is "every **rated** title", so rate some. Across all three classes: all "liked"
- * would collapse the cutpoints into one tier.
- */
-async function rateSome(page, count = 8) {
-  const opened = await page.request.post('/api/rate/session', {
-    data: { restart: true, kinds: ['movie'] }
-  });
-  expect(opened.ok(), `seeding needs a rating session: ${opened.status()} ${await opened.text()}`)
-    .toBeTruthy();
-  const values = [2, 1, 0];
-  let rated = 0;
-  for (let i = 0; i < count * 4 && rated < count; i++) {
-    const res = await page.request.get('/api/rate');
-    expect(res.ok(), 'GET /api/rate while seeding').toBeTruthy();
-    const { card } = await res.json();
-    if (!card) break;
-    const [path, data] =
-      card.type === 'sweep'
-        ? ['/api/rate/verdict', { card_token: card.token, value: values[rated % 3] }]
-        : ['/api/rate/duel', { card_token: card.token, outcome: 'A' }];
-    const written = await page.request.post(path, { data });
-    expect(written.ok(), `seeding: POST ${path}`).toBeTruthy();
-    if (card.type === 'sweep') rated += 1;
+/** Every request but a read, while `act` runs: what "writes nothing" means on the wire. */
+async function writesDuring(page, act) {
+  const writes = [];
+  const watch = (req) => req.method() !== 'GET' && writes.push(`${req.method()} ${req.url()}`);
+  page.on('request', watch);
+  try {
+    await act();
+  } finally {
+    page.off('request', watch);
   }
-  // The ledger's state, not this run's writes (a `reuse`d account writes nothing), read from the
-  // live labels, so no labels fails here rather than as 120 s in `waitForBoard`.
-  const balance = await page.request.get('/api/rate');
-  expect(balance.ok(), 'reading the seeded ledger back (§6.1)').toBeTruthy();
-  const labels = (await balance.json()).class_balance.total;
-  expect(labels, 'this account has no rated films, so §6.3 has no board to fit').toBeGreaterThan(0);
-  return rated;
+  return writes;
 }
 
 async function openRank(page) {
@@ -171,8 +163,11 @@ test.describe('rank', () => {
     await signedIn(page);
     const member = await createMember(page, `rank-e2e-${testInfo.project.name}`, { reuse: true });
     await signInAsMember(page, member);
-    await rateSome(page);
-    // The board arrives with the worker's refit, however this run got its ratings.
+    // Decision 550: Rank writes wait for the set-up, so set up, then place the rest through Rate
+    // across the board, so the cutpoints do not collapse into one tier. Both are a no-op on reuse.
+    await setUpLadder(page.request);
+    await placeThroughRate(page.request, 'movie', [6, 4, 3, 1]);
+    // The board arrives with the worker's refit, however this run got its placements.
     await waitForBoard(page, { atLeast: 3 });
   });
 
@@ -180,69 +175,72 @@ test.describe('rank', () => {
     await page?.close();
   });
 
-  test('the board heads each tier with its letter and the verdict it stands for', async () => {
-    // Proposal 82: best-first, empty tiers kept as drop targets. Decision 508: what each letter means.
+  test('the board heads each tier with its letter and its word', async () => {
+    // Proposal 82: best-first, empty tiers kept as drop targets. Decision 550: the step's word.
     await openRank(page);
 
     const labels = await board(page).locator('[data-tier]').evaluateAll((rows) =>
       rows.map((row) => row.getAttribute('data-tier'))
     );
     expect(labels).toEqual(['S', 'A+', 'A', 'B', 'C', 'D', 'F']);
-    await expect(page.getByTestId('rank-tier-S')).toContainText('Liked');
-    await expect(page.getByTestId('rank-tier-B')).toContainText('Fine');
-    await expect(page.getByTestId('rank-tier-F')).toContainText('Disliked');
+    await expect(page.getByTestId('rank-tier-S')).toContainText('All-time favourite');
+    await expect(page.getByTestId('rank-tier-B')).toContainText('It was fine');
+    await expect(page.getByTestId('rank-tier-F')).toContainText('Hated it');
     // Decisions 486 and 528: the count in the person's words, in the search field.
     await expect(await searchBox(page)).toHaveAttribute('placeholder', /^Search \d+ rated films?$/);
     await expect(page.getByRole('region', { name: 'Needs a look' })).toContainText(
-      /between two tiers|Sharpen your list/
+      /between two tiers|still mostly our guess|Sharpen your list/
     );
+    await expect(page.getByTestId('rank-setup-card')).toHaveCount(0);
     await expect(page.getByTestId('rank-surface')).not.toContainText('cutpoints');
   });
 
-  test('the tier sheet opens with the current tier checked, and leaving writes nothing', async () => {
-    // Decisions 527 and 528: one choice from a short list, closed by Cancel or Back, writes nothing.
+  test('the ladder sheet names the current step, and leaving it writes nothing', async () => {
+    // Decision 550: a short sheet of the shelves over the card, closed by Done or Back.
     await openRank(page);
-    const before = await tierEditCount(page);
-
-    const first = board(page).locator('[data-title]').first();
-    const titleId = await first.getAttribute('data-title');
+    const titleId = await board(page).locator('[data-title]').first().getAttribute('data-title');
     expect(titleId, 'the board has at least one title to move').toBeTruthy();
-    const current = await board(page)
-      .locator('[data-tier]', { has: page.locator(`[data-title="${titleId}"]`) })
-      .getAttribute('data-tier');
+    const step = await stepOf(page, titleId);
 
-    await openMove(page, titleId);
-    const sheet = moveSheet(page);
-    await expect(sheet.getByRole('menuitem')).toHaveCount(7);
-    await expect(tierOption(sheet, current)).toHaveAttribute('aria-current', 'true');
-    await sheet.getByRole('button', { name: 'Cancel' }).click();
-    await expect(sheet).toHaveCount(0);
+    const writes = await writesDuring(page, async () => {
+      await openLadder(page, titleId);
+      await expect(ladder(page).getByTestId('ladder-shelf')).toHaveCount(7);
+      // Every shelf carries its word, so the current step's is looked for outside them.
+      const named = await ladder(page).evaluate((sheet) => {
+        const copy = sheet.cloneNode(true);
+        copy.querySelectorAll('[data-testid="ladder-shelf"]').forEach((s) => s.remove());
+        return copy.textContent;
+      });
+      expect(named, 'the sheet names the current step by its word').toContain(step.word);
+      await ladder(page).getByTestId('ladder-done').click();
+      await expect(ladder(page)).toHaveCount(0);
+      await expect(card(page)).toBeVisible();
 
-    await card(page).getByTestId('rank-card-tier').click();
-    await expect(moveSheet(page)).toBeVisible();
-    await page.goBack();
-    await expect(moveSheet(page)).toHaveCount(0);
-    await expect(page, 'Back closes the sheet and stays on Rank').toHaveURL(/\/rank$/);
-    await page.keyboard.press('Escape');
-    await expect(card(page)).toHaveCount(0);
-
-    expect(await tierEditCount(page), 'a cancelled move writes no observation').toBe(before);
+      await card(page).getByTestId('rank-card-tier').click();
+      await expect(ladder(page)).toBeVisible();
+      await page.goBack();
+      await expect(ladder(page)).toHaveCount(0);
+      await expect(page, 'Back closes the sheet and stays on Rank').toHaveURL(/\/rank$/);
+      await page.keyboard.press('Escape');
+      await expect(card(page)).toHaveCount(0);
+    });
+    expect(writes, 'a sheet left without a tap writes nothing').toEqual([]);
   });
 
-  test('choosing a tier in the sheet drops the title into it, and it stays there', async () => {
+  test('a tap on a shelf drops the title into that tier, and it stays there', async () => {
     // §6.3 "shows the tension rather than snapping back": still there after the refit.
     const tier = await tierIndexOf(page, 'S');
     const titleId = await titleOutside(page, tier);
     await openRank(page);
 
-    await openMove(page, titleId);
+    await openLadder(page, titleId);
     const written = page.waitForResponse(
       (res) => res.url().includes('/api/rank/drop') && res.request().method() === 'POST'
     );
-    await tierOption(moveSheet(page), 'S').click();
+    await shelf(page, tier).click();
     await written;
 
-    await expect(moveSheet(page)).toHaveCount(0);
+    await expect(ladder(page)).toHaveCount(0);
     await expect(board(page).locator(`[data-tier="S"] [data-title="${titleId}"]`)).toHaveCount(1);
 
     await openRank(page);
@@ -250,8 +248,8 @@ test.describe('rank', () => {
   });
 
   test('a move into an occupied tier writes the edit and no neighbour duel', async () => {
-    // §6.3: "choosing a tier drops the title there, the same `tier_edit` semantics, naming no
-    // neighbour". What the server wrote shows only in §6.7's rail line, so Show the model is on
+    // §6.3: a tap on a shelf "drops the title in that tier, the same `tier_edit` semantics, naming
+    // no neighbour". What the server wrote shows only in §6.7's rail line, so Show the model is on
     // for this test alone.
     const tier = await tierIndexOf(page, 'S');
     await seedTier(page, tier, 1);
@@ -262,12 +260,12 @@ test.describe('rank', () => {
       const titleId = await titleOutside(page, tier);
       await openRank(page);
       await expect(board(page).locator('[data-tier="S"] [data-title]')).not.toHaveCount(0);
-      await openMove(page, titleId);
+      await openLadder(page, titleId);
 
       const written = page.waitForResponse(
         (res) => res.url().includes('/api/rank/drop') && res.request().method() === 'POST'
       );
-      await tierOption(moveSheet(page), 'S').click();
+      await shelf(page, tier).click();
       const response = await written;
       expect(response.ok(), `move to a tier: ${response.status()}`).toBeTruthy();
 
@@ -376,7 +374,8 @@ test.describe('rank', () => {
     const answeredToken = (
       await (await page.request.get('/api/rank/queue?kind=movie')).json()
     ).pair.token;
-    await expect(page.getByTestId('rate-battle-reason')).not.toBeEmpty();
+    // Decision 550: the reason names the steps and a genre the two share.
+    await expect(page.getByTestId('rate-battle-reason')).toHaveText(REASON);
     // More, Same, More: the round has no decisive answer (decision 201), and a poster never answers.
     await expect(page.getByTestId('rate-duel-TIE')).toHaveAccessibleName('About the same');
     await expect(page.getByTestId('rate-duel-A-much')).toHaveCount(0);
@@ -413,8 +412,7 @@ test.describe('rank', () => {
     expect([...keysOf(served)]).not.toContain('arm');
     expect([...keysOf(served)]).not.toContain('model');
     expect(JSON.stringify(served)).not.toContain('never tunes the model');
-    expect(served.pair.reason, '§6.8 still owes a why-line, and it says the same on every arm')
-      .not.toBe('');
+    expect(served.pair.reason, '§6.8 still owes a why-line, in one form on every arm').toMatch(REASON);
 
     await openRank(page);
     await page.getByTestId('rank-sharpen').click();
@@ -440,7 +438,7 @@ test.describe('rank', () => {
     await page.getByTestId(`rank-open-${titleId}`).click();
     const card = page.getByLabel('Title detail');
     await expect(card).toBeVisible();
-    await expect(moveSheet(page), 'a tap opens; it does not move').toHaveCount(0);
+    await expect(ladder(page), 'a tap opens; it does not move').toHaveCount(0);
 
     await page.keyboard.press('Escape');
     await expect(card).toHaveCount(0);
@@ -462,7 +460,6 @@ test.describe('rank', () => {
       await expect(sheet.locator(`[data-testid="rate-poster"][data-title-id="${id}"]`))
         .toHaveCount(1);
     }
-    await expect(page.getByTestId('rate-battle-reason')).not.toContainText('one more comparison');
 
     await page.getByTestId('rate-duel-A').click();
     await expect(page.getByTestId('rank-round')).toHaveText('2 of 15 this round');
@@ -564,11 +561,64 @@ test.describe('rank', () => {
       rows.map((row) => row.getAttribute('data-tier'))
     );
     expect(labels).toEqual(['good', 'ok', 'bad']);
-    // Decision 508 on another tier set: each letter still stands for a verdict.
-    await expect(page.getByTestId('rank-tier-good')).toContainText('Liked');
-    await expect(page.getByTestId('rank-tier-bad')).toContainText('Disliked');
+    // A custom label is its own word, shown once, and no verdict word stands in for it.
+    for (const label of labels) {
+      await expect(page.getByTestId(`rank-tier-${label}`).locator('h2')).toHaveText(label);
+    }
+    await expect(board(page)).not.toContainText(/Liked|Disliked|Fine/);
 
     // Decision 11: tier EDITS survive; only the boundaries do not.
     expect(await tierEditCount(page)).toBeGreaterThan(0);
+  });
+});
+
+test.describe('rank before the set-up', () => {
+  /** @type {import('@playwright/test').Page} */
+  let page;
+
+  test.beforeAll(async ({ browser, baseURL }) => {
+    page = await browser.newPage({ baseURL });
+    await signedIn(page);
+    // Nobody sets this member up, so a reuse on the second project is as fresh as the first.
+    const member = await createMember(page, 'rank-before', { reuse: true });
+    await signInAsMember(page, member);
+  });
+
+  test.afterAll(async () => {
+    await page?.close();
+  });
+
+  test('a member not yet set up sees the set-up card over a board that takes no writes', async () => {
+    // Decision 550: no drag, no Needs a look, no Place with questions; the card is the way on.
+    // A long press that lifts nothing is the page test's: this member has no poster to press.
+    await openRank(page);
+    const setup = page.getByTestId('rank-setup-card');
+    await expect(setup).toContainText('Set up your ladder.');
+    await expect(setup.getByRole('link', { name: 'Set up my ladder' })).toHaveAttribute(
+      'href',
+      '/rate/setup'
+    );
+    await expect(page.getByTestId('rank-sharpen')).toHaveCount(0);
+    await expect(page.getByRole('region', { name: 'Needs a look' })).toHaveCount(0);
+    await expect(page.getByTestId('rank-empty')).toHaveCount(0);
+    // Its empty tiers stay on screen, and neither a head nor a strip letter takes a drop.
+    await expect(board(page).locator('[data-tier]')).toHaveCount(7);
+    await expect(page.locator('[data-drop-tier]')).toHaveCount(0);
+
+    const film = (await (await page.request.get('/api/titles?kind=movie&limit=1')).json()).items[0];
+    const refusals = {
+      'a drop': await page.request.post('/api/rank/drop?kind=movie', {
+        data: { title_id: film.id, tier: 6, via: 'explicit' }
+      }),
+      'a pair': await page.request.get('/api/rank/queue?kind=movie'),
+      'Place with questions': await page.request.post('/api/rank/place', {
+        data: { title_id: film.id, kind: 'movie' }
+      })
+    };
+    for (const [what, response] of Object.entries(refusals)) {
+      expect(response.status(), `${what} before the set-up`).toBe(409);
+      expect((await response.json()).detail.reason, what).toBe('not_set_up');
+    }
+    expect((await (await page.request.get('/api/rank?kind=movie')).json()).set_up).toBe(false);
   });
 });

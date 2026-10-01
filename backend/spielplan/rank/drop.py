@@ -19,7 +19,6 @@ from spielplan.rank import tiers
 
 log = logging.getLogger("spielplan.rank.drop")
 
-# §4.2: "context: profile_battle | tier_queue | tier_insert".
 INSERT_CONTEXT = "tier_insert"
 
 

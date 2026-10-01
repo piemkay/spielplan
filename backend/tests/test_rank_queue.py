@@ -239,11 +239,11 @@ def test_the_selector_reads_no_held_out_comparison():
     """Nothing in a `Candidate` carries a duel row, so there is no second path to the stream."""
     candidate = pool(n=2)[0]
     fields = set(vars(candidate))
-    assert fields == {"item", "comparisons", "straddle", "tier"}
+    assert fields == {"item", "comparisons", "straddle", "tier", "genres"}
     assert not hasattr(candidate.item, "duels")
 
 
-def board_of(spec, *, comparisons=None):
+def board_of(spec, *, comparisons=None, genres=None):
     """`(title_id, s, reach)`, reach 0 for a settled title. The cuts are §6.3's prior: B/A at 0.0,
     A+/S at 2.442."""
     items = [
@@ -254,7 +254,7 @@ def board_of(spec, *, comparisons=None):
         for title_id, s, reach in spec
     ]
     return queue.candidates(
-        items, cuts=CUTS, tier_set=TIER_SET, hp=DEFAULTS, comparisons=comparisons
+        items, cuts=CUTS, tier_set=TIER_SET, hp=DEFAULTS, comparisons=comparisons, genres=genres
     )
 
 
@@ -433,3 +433,87 @@ def test_a_board_with_every_adaptive_pair_asked_still_draws_the_held_out_tenth()
         outcomes[None if pair is None else pair.arm] += 1
     assert set(outcomes) == {None, queue.ARM_HOLDOUT}, outcomes
     assert outcomes[queue.ARM_HOLDOUT] / 6_000 == pytest.approx(0.10, abs=0.015)
+
+
+def test_a_partner_sharing_a_genre_goes_first_among_the_five_nearest_and_is_never_required():
+    """Decision 538: ordered after the recent window and before the comparison count; it removes
+    nobody, so the sixth nearest is never reached and a board with no shared genre still pairs."""
+    spec = [(1, -0.01, 0.05)] + [(10 + i, 0.1 * i, 0) for i in range(1, 7)]
+    crime = {1: ("Crime",), 14: ("Crime",), 16: ("Crime",)}
+    candidates = board_of(spec, genres=crime, comparisons={14: 10})
+    rng = random.Random(3)
+    assert Counter(queue._boundary(candidates, rng).title_b for _ in range(300)) == Counter({14: 300})
+
+    for _ in range(300):
+        rested = queue._boundary(candidates, rng, recent={14})
+        assert rested.title_b not in (14, 16), "the recent window still goes first"
+
+    plain = board_of(spec, comparisons={11: 4, 12: 3, 13: 0, 14: 5, 15: 5})
+    assert {queue._boundary(plain, rng).title_b for _ in range(300)} == {13}
+
+
+def test_the_held_out_arm_reads_no_genre():
+    """§13: the evaluation stream stays uniform and memoryless, whatever the board is tagged with."""
+    plain = pool(n=8, sigma=0.35)
+    tagged = queue.candidates(
+        [c.item for c in plain], cuts=CUTS, tier_set=TIER_SET, hp=DEFAULTS,
+        genres={i: ("Crime",) if i % 2 else ("Drama",) for i in range(1, 9)},
+    )
+    for seed in range(200):
+        a, b = queue._holdout(plain, random.Random(seed)), queue._holdout(tagged, random.Random(seed))
+        assert (a.title_a, a.title_b) == (b.title_a, b.title_b)
+
+
+def _tagged(assigned, genres, tier_set=TIER_SET):
+    items = [
+        board.Item(title_id=t, name=f"T{t}", s=0.0, sigma=1e-6, assigned_tier=tier)
+        for t, tier in assigned.items()
+    ]
+    found = queue.candidates(items, cuts=CUTS, tier_set=tier_set, hp=DEFAULTS, genres=genres)
+    return {c.title_id: c for c in found}
+
+
+def test_a_pairs_reason_names_its_steps_lower_first_and_the_rarest_genre_both_share():
+    """Decision 550's form, from the steps the board renders and the genre fewest of its titles carry."""
+    by_id = _tagged(
+        {1: 5, 2: 5, 3: 4, 4: 3, 5: None},
+        {
+            1: ("Drama", "Crime"),
+            2: ("Thriller", "Crime", "Drama"),
+            3: ("Mystery", "Drama"),
+            4: ("Drama",),
+            5: ("Drama",),
+        },
+    )
+    assert queue.why(by_id[1], by_id[2], TIER_SET, "movie") == "Both in A+ · both crime films"
+    assert queue.why(by_id[2], by_id[1], TIER_SET, "series") == "Both in A+ · both crime series"
+    for a, b in ((1, 3), (3, 1)):
+        assert queue.why(by_id[a], by_id[b], TIER_SET, "movie") == (
+            "One in A, one in A+ · both drama films"
+        )
+    # A title nobody placed renders where the model holds it: B/A's 0.0 opens A.
+    assert queue.why(by_id[5], by_id[4], TIER_SET, "movie") == "One in B, one in A · both drama films"
+
+    bare = _tagged({1: 2, 2: 2, 3: 0}, {1: ("Crime",), 3: ("Crime",)}, tier_set=("bad", "ok", "good"))
+    assert queue.why(bare[1], bare[2], ("bad", "ok", "good"), "movie") == "Both in good"
+    assert queue.why(bare[1], bare[3], ("bad", "ok", "good"), "movie") == (
+        "One in bad, one in good · both crime films"
+    )
+
+
+def test_a_re_ask_comes_about_one_draw_in_ten_and_only_while_both_titles_are_on_the_board():
+    """§13(b): stored apart by `reask_of`, which never reaches the wire."""
+    candidates = pool(n=8, sigma=0.35)
+    answered = [(77, 2, 1), (78, 3, 99)]
+    rng = random.Random(3)
+    served = [p for p in (queue.reask(candidates, answered, rng) for _ in range(20_000)) if p]
+    assert len(served) / 20_000 == pytest.approx(queue.REASK_RATE, abs=0.01)
+    assert {(p.title_a, p.title_b, p.reask_of, p.arm) for p in served} == {
+        (2, 1, 77, queue.ARM_REASK)
+    }
+    assert "reask_of" not in served[0].public()
+
+    rng = random.Random(5)
+    state = rng.getstate()
+    assert queue.reask(candidates, [(78, 3, 99)], rng) is None
+    assert rng.getstate() == state, "with nothing eligible no coin is spent"

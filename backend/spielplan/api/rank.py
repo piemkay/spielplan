@@ -21,7 +21,7 @@ from spielplan.api.deps import DB, ActiveUser, write_txn
 from spielplan.core.config import settings
 from spielplan.db import genres, library
 from spielplan.home import rail
-from spielplan.ledger import observations, refit
+from spielplan.ledger import ladder, observations, refit
 from spielplan.ledger.hyperparams import Hyperparams
 from spielplan.rank import drop as drop_rules
 from spielplan.rank import evaluation, queue, read, tiers
@@ -41,9 +41,8 @@ _PLACE_SALT = "spielplan/rank/place/v1"
 # The namespace half of a two-int advisory lock, so a user id cannot collide with other features' locks.
 _ANSWER_LOCK = 6303
 
-# Arm-independent (§6.8): the person must not learn which answers §13 ignores. The arm's own
-# sentence travels under `model`.
-_QUEUE_WHY = "Pick the one you enjoyed more — your answers are what put your board in order."
+# Every write here waits for the member's set-up (decision 550); the board stays readable.
+_NOT_SET_UP = "Set up your ladder first."
 
 # The queue's two zero states (decision 495): too thin to pair, or every pair worth asking asked.
 _QUEUE_THIN = "There is nothing to compare yet — rate a few more titles and the queue fills up."
@@ -66,8 +65,18 @@ def _seal(user_id: int, kind: str, pair: queue.Pair, answered: int) -> str:
             "b": pair.title_b,
             "arm": pair.arm,
             "n": answered,
+            "r": pair.reask_of,
         }
     )
+
+
+async def _set_up(conn: asyncpg.Connection, user_id: int) -> None:
+    try:
+        await ladder.require_set_up(conn, user_id=user_id)
+    except ladder.NotSetUp as exc:
+        raise HTTPException(
+            status.HTTP_409_CONFLICT, detail={"reason": "not_set_up", "message": _NOT_SET_UP}
+        ) from exc
 
 
 def _unseal(token: str, *, user_id: int, salt: str = _PAIR_SALT) -> dict[str, Any]:
@@ -99,14 +108,12 @@ async def _claim(
         )
 
 
-def _queue_rng(user_id: int, kind: str, answered: int) -> random.Random:
+def _queue_rng(user_id: int, kind: str, answered: int, stream: str = "") -> random.Random:
     """Keyed on (user, kind, answered), so reloading cannot re-roll the arm and steer §13's held-out
-    rate. HMAC under SESSION_SECRET, so arms cannot be predicted."""
-    digest = hmac.new(
-        settings().session_secret.encode(),
-        f"{user_id}:{kind}:{answered}".encode(),
-        hashlib.sha256,
-    ).digest()
+    rate. HMAC under SESSION_SECRET, so arms cannot be predicted. `stream` keys the re-ask coin apart
+    from the arm's roll."""
+    key = f"{user_id}:{kind}:{answered}" + (f":{stream}" if stream else "")
+    digest = hmac.new(settings().session_secret.encode(), key.encode(), hashlib.sha256).digest()
     return random.Random(int.from_bytes(digest[:8], "big"))
 
 
@@ -203,8 +210,11 @@ async def _payload(
     # Decision 209: before the sweep's first fit, "0 rated" would read as "not started"; the owed
     # stamp says fitting instead.
     fitting = cuts.refit_owed
+    compared = await read.comparisons_since_setup(conn, user_id=user.id, kind=kind)
     payload: dict[str, Any] = {
         "kind": kind,
+        "set_up": await ladder.set_up_at(conn, user_id=user.id) is not None,
+        "guessing": compared < read.GUESS_UNTIL,
         "tier_set": list(cuts.tier_set),
         "tiers": read.public(tiers_out, per_tier),
         "rated": len(rows),
@@ -223,6 +233,7 @@ async def _payload(
             "hyperparams": hp.source,
             "straddle_z": hp.straddle_z,
             "tension_credible_mass": hp.tension_credible_mass,
+            "comparisons": compared,
             "held_out": (
                 await evaluation.held_out_agreement(conn, user_id=user.id, kind=kind)
             ).as_dict(),
@@ -288,6 +299,7 @@ async def drop(
     """Takes and answers with the board's filters and paging, or a drop would silently clear them.
     Whether a filter was on is an input to the drop (decision 204)."""
     await deps.assert_active_basis(request, conn)
+    await _set_up(conn, user.id)
     hp = deps.hyperparams(request)
     names = await read.names_for(conn, [body.title_id])
     try:
@@ -327,14 +339,19 @@ async def drop(
 async def next_pair(
     conn: DB, user: ActiveUser, request: Request, kind: Kind = Query(...)
 ) -> dict[str, Any]:
-    """§6.3's 70/20/10 queue. The arm travels sealed and gated, so no client can steer or learn §13's
-    held-out stream."""
+    """§6.3's 70/20/10 queue, with §13(b)'s re-asks. The arm travels sealed and gated, so no client
+    can steer or learn §13's held-out stream."""
+    await _set_up(conn, user.id)
     hp = deps.hyperparams(request)
     show_model = rail.visible_to(user)
     pool = await read.candidates(conn, user_id=user.id, kind=kind, hp=hp)
     # One read for the draw and the seal, so a token's pair and its count cannot disagree.
     answered = await read.answered_comparisons(conn, user_id=user.id, kind=kind)
-    pair = queue.draw(
+    pair = queue.reask(
+        pool,
+        await read.reask_pairs(conn, user_id=user.id, kind=kind),
+        _queue_rng(user.id, kind, answered, "reask"),
+    ) or queue.draw(
         pool,
         rng=_queue_rng(user.id, kind, answered),
         # The adaptive arms skip pairs already asked and recent titles (decision 494); both reads leave
@@ -350,6 +367,8 @@ async def next_pair(
             "reason": _QUEUE_SETTLED if len(pool) >= 2 else _QUEUE_THIN,
         }
     names = await read.names_for(conn, [pair.title_a, pair.title_b])
+    by_id = {c.title_id: c for c in pool}
+    tier_set = await tiers.tier_set_of(conn, user_id=user.id, kind=kind)
     served = pair.public()
     arm = {"arm": served.pop("arm"), "reason": served.pop("reason")}
     payload = {
@@ -359,7 +378,8 @@ async def next_pair(
             "name_a": names.get(pair.title_a),
             "name_b": names.get(pair.title_b),
             "token": _seal(user.id, kind, pair, answered),
-            "reason": _QUEUE_WHY,
+            # One form on every arm, so no reason tells §13's pairs apart.
+            "reason": queue.why(by_id[pair.title_a], by_id[pair.title_b], tier_set, kind),
             "model": arm,
         },
         "pool": len(pool),
@@ -374,9 +394,11 @@ async def answer(
     """The count check and the INSERT share one transaction under `_ANSWER_LOCK`, so a second answer
     under one seal gets the 409, not a duplicate duel. The refit runs after, outside the lock."""
     await deps.assert_active_basis(request, conn)
+    await _set_up(conn, user.id)
     hp = deps.hyperparams(request)
     sealed = _unseal(body.pair, user_id=user.id)
     kind = str(sealed["k"])
+    reask_of = sealed.get("r")
     async with write_txn(conn):
         await _claim(conn, user_id=user.id, kind=kind, sealed=sealed, context="tier_queue")
         write = await observations.record_duel(
@@ -389,12 +411,14 @@ async def answer(
             selection=str(sealed["arm"]),
             decisive=body.decisive,
             hp=hp,
+            is_reask=reask_of is not None,
+            reask_of=reask_of,
         )
-    # None on the held-out arm, where no fit ran: distinct from a fit that refused.
+    # None on the held-out arm and on a re-ask, where no fit ran: distinct from a fit that refused.
     ledger: dict[str, Any] | None = None
-    if str(sealed["arm"]) != queue.ARM_HOLDOUT:
-        # §13: the fit cannot see a held-out row, but refitting would restamp freshness and steer the
-        # boundary arm. Reported, not raised, as in `drop`.
+    if str(sealed["arm"]) != queue.ARM_HOLDOUT and reask_of is None:
+        # §13: the fit sees neither a held-out row nor a re-ask, but refitting would restamp
+        # freshness and steer the boundary arm. Reported, not raised, as in `drop`.
         ledger = await refit.update_incrementally_reporting(
             conn, user_id=user.id, kind=kind, title_ids=list(write.title_ids), hp=hp,
             embeddings=deps.embeddings(request, conn), bundle_version=deps.basis(request),
@@ -407,7 +431,7 @@ async def answer(
         body.outcome,
         context="tier_queue",
         selection=str(sealed["arm"]),
-    )
+    ) + (" · asked again, held out of the fit" if reask_of is not None else "")
     rail.record(user_id=user.id, kind="duel", line=line)
     # Where the answered pair now sits, after the refit (see `read.placements`).
     placed = await read.placements(
@@ -494,6 +518,7 @@ async def _resumed(
 @router.post("/place")
 async def place(body: PlaceBody, conn: DB, user: ActiveUser, request: Request) -> dict[str, Any]:
     """§6.3's Place with questions: the first pair, or the end when the tier holds no other title."""
+    await _set_up(conn, user.id)
     try:
         view = await place_rules.begin(
             conn, user_id=user.id, kind=body.kind, hp=deps.hyperparams(request),
@@ -510,6 +535,7 @@ async def place_answer(
 ) -> dict[str, Any]:
     """Single-use as the queue's seal is; the refit runs after the lock, reported as in `drop`."""
     await deps.assert_active_basis(request, conn)
+    await _set_up(conn, user.id)
     hp = deps.hyperparams(request)
     sealed = _unseal(body.token, user_id=user.id, salt=_PLACE_SALT)
     kind = str(sealed["k"])
@@ -541,6 +567,7 @@ async def place_skip(
     body: PlaceSkipBody, conn: DB, user: ActiveUser, request: Request
 ) -> dict[str, Any]:
     """The neighbour on the table is not seen: no duel, so no claim, and a replay marks it again."""
+    await _set_up(conn, user.id)
     sealed = _unseal(body.token, user_id=user.id, salt=_PLACE_SALT)
     kind = str(sealed["k"])
     search = await place_rules.skip(
