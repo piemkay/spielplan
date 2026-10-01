@@ -6,44 +6,37 @@ import { flushSync, mount, unmount } from 'svelte';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 
 import MapPage from './+page.svelte';
-import TastePage from '../taste/+page.svelte';
 
 const REFERENCE = /§\s?\d|decision \d|proposal \d|\bM[0-7](\.\d+)?\b/i;
 
 const MODEL_NOUNS = /has\(|predicate|artifact|bundle|prior|extraction queue|vocabulary/i;
 
 let target;
+let page;
 
 beforeEach(() => {
   target = document.createElement('div');
   document.body.appendChild(target);
+  page = mount(MapPage, { target });
+  flushSync();
 });
 
-afterEach(() => target.remove());
+afterEach(() => {
+  unmount(page);
+  target.remove();
+});
 
-function open(Page) {
-  const app = mount(Page, { target });
-  flushSync();
-  return app;
-}
+describe('the Map, which has no chosen form yet', () => {
+  it('says it is not built, in plain words, and names no milestone', () => {
+    expect(target.querySelector('h1').textContent.trim()).toBe('Map');
+    expect(target.textContent).toContain('Not built yet');
+    expect(target.textContent).toContain('coming in a later update');
+    expect(target.textContent).not.toMatch(REFERENCE);
+    expect(target.textContent).not.toMatch(MODEL_NOUNS);
+  });
 
-describe('a surface §12 has not reached yet', () => {
-  for (const [name, Page] of [
-    ['Map', MapPage],
-    ['Taste', TastePage]
-  ]) {
-    it(`${name} says it is not built, in plain words, and names no milestone`, () => {
-      const page = open(Page);
-      try {
-        expect(target.querySelector('h1').textContent.trim()).toBe(name);
-        expect(target.textContent).toContain('Not built yet');
-        expect(target.textContent).toContain('coming in a later update');
-        expect(target.textContent).not.toMatch(REFERENCE);
-        expect(target.textContent).not.toMatch(MODEL_NOUNS);
-        expect(target.querySelectorAll('li').length, 'a placeholder says what it will do').toBeGreaterThan(0);
-      } finally {
-        unmount(page);
-      }
-    });
-  }
+  it('promises no form: no axes, no lenses, no list of what it will do', () => {
+    expect(target.querySelectorAll('li')).toHaveLength(0);
+    expect(target.textContent).not.toMatch(/\baxis\b|\baxes\b|\blens|colour the map/i);
+  });
 });

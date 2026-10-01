@@ -51,7 +51,8 @@
     ['/account', 'You'],
     ['/admin', 'Admin'],
     ['/map', 'Map'],
-    ['/taste', 'Taste'],
+    ['/taste/compare', 'Compare'],
+    ['/taste', 'Your taste'],
     ['/login', 'Sign in'],
     ['/setup', 'Setup']
   ];

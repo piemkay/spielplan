@@ -13,8 +13,7 @@
     ],
     tonight: ['M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z'],
     rank: ['M9 20V9h6v11', 'M3 20v-7h6', 'M15 20v-5h6v5', 'M2 20h20'],
-    map: ['M9 4 3.5 6v14L9 18l6 2 5.5-2V4L15 6z', 'M9 4v14M15 6v14'],
-    taste: ['M4 20V10M9.3 20V4M14.7 20v-8M20 20V7']
+    map: ['M9 4 3.5 6v14L9 18l6 2 5.5-2V4L15 6z', 'M9 4v14M15 6v14']
   };
 
   const surfaces = $derived(session.user?.nav?.surfaces ?? []);

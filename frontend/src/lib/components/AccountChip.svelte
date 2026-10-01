@@ -1,6 +1,6 @@
 <script>
   // You (§3.2, decision 527): the avatar on every root opens this sheet. Who is signed in and how,
-  // switching profile, the account and admin entries, Show the model, and Log out.
+  // Your taste, switching profile, the account and admin entries, Show the model, and Log out.
   import { authMethodLine, refreshUser, roleWord, session, setShowModel } from '$lib/session.svelte.js';
   import { get, post } from '$lib/api.js';
   import { modelGateSettled } from '$lib/home.svelte.js';
@@ -18,6 +18,8 @@
   let error = $state('');
 
   const method = $derived(authMethodLine(session.user));
+  const tasteEntry = $derived((session.user?.nav?.account ?? []).find((e) => e.key === 'taste'));
+  const entries = $derived((session.user?.nav?.account ?? []).filter((e) => e.key !== 'taste'));
   const others = $derived(switchable.filter((u) => u.id !== session.user?.id));
   const showModel = $derived(!!session.user?.show_model);
 
@@ -56,6 +58,10 @@
     }
   }
 </script>
+
+{#snippet chevron()}
+  <svg class="chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9.5 5.5 6.5 6.5-6.5 6.5" /></svg>
+{/snippet}
 
 <button
   class="avatar-btn hit"
@@ -104,6 +110,18 @@
           </div>
         </section>
       {:else}
+        {#if tasteEntry}
+          <section class="group">
+            <div class="list-group">
+              <a class="list-row" href={tasteEntry.href} data-nav="taste" data-testid="taste-row" data-sveltekit-replacestate>
+                <span>{tasteEntry.label}</span>
+                {@render chevron()}
+              </a>
+            </div>
+            <p class="list-footer">What sits high on your ladder, and where you and someone else meet and part.</p>
+          </section>
+        {/if}
+
         <section class="group">
           <h3 class="list-header">Switch profile</h3>
           <div class="list-group">
@@ -133,10 +151,10 @@
         <!-- Entries come from the server's nav payload: a member's browser never receives admin links. -->
         <section class="group">
           <div class="list-group">
-            {#each session.user?.nav?.account ?? [] as entry (entry.key)}
+            {#each entries as entry (entry.key)}
               <a class="list-row" href={entry.href} data-nav={entry.key} data-sveltekit-replacestate>
                 <span>{entry.label}</span>
-                <svg class="chev" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9.5 5.5 6.5 6.5-6.5 6.5" /></svg>
+                {@render chevron()}
               </a>
             {/each}
           </div>
