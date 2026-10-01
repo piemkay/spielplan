@@ -42,7 +42,7 @@ const card = (over = {}) => ({
 });
 const DRIVE = card({ token: 'tok-2', title: { ...film(42, 'Drive'), year: 2011, runtime_min: 100 } });
 
-/** One `GET /api/rate` envelope, in the shape of the plan's contract C7. */
+/** One `GET /api/rate` envelope, in the shape `api/rate.py` sends. */
 const envelope = (over = {}) => ({
   setup: { done: true, earlier_ratings: 104, rated_before: 37 },
   session: { kinds: ['movie'], kind: 'movie', block: { slot: 4, size: 15, counter: '4 of 15' } },

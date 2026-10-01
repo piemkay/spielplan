@@ -314,7 +314,7 @@ describe('the title card opened from Rank (decisions 528 and 545)', () => {
   };
   const reply = (payload) =>
     Promise.resolve({ ok: true, status: 200, headers: { get: () => null }, text: async () => JSON.stringify(payload) });
-  // The card's own payload (contract C10: words and `set_up`), and the sheet's shelves.
+  // The card's own payload, its tiers worded and `set_up` (decision 550), and the sheet's shelves.
   function card(id) {
     const { tiers } = board(boardOver);
     const on = tiers.flatMap((t) => t.entries).find((e) => e.title_id === id);

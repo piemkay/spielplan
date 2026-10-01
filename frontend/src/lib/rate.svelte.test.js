@@ -39,7 +39,7 @@ const card = (over = {}) => ({
   ...over
 });
 
-/** One `GET /api/rate` envelope, in the shape of the plan's contract C7. */
+/** One `GET /api/rate` envelope, in the shape `api/rate.py` sends. */
 const envelope = (over = {}) => ({
   setup: { done: true, earlier_ratings: 0, rated_before: 0 },
   session: { kinds: ['movie'], kind: 'movie', block: { slot: 1, size: 15, counter: '1 of 15' } },
