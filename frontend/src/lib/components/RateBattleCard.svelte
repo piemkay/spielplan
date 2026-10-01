@@ -120,7 +120,7 @@
      (decision 529). */
   .battle {
     --gap: 12px;
-    --col: var(--rate-col, min((100cqw - var(--gap)) / 2, 220px));
+    --col: min((100cqw - var(--gap)) / 2, 220px);
     container-type: inline-size;
     flex: 1;
     min-height: 0;

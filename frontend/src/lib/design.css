@@ -590,9 +590,3 @@ img[data-art='loading'] {
   pointer-events: none;
   transition-delay: 120ms;
 }
-.shake { animation: shake 260ms var(--ease); }
-@keyframes shake {
-  20% { transform: translateX(-4px); }
-  45% { transform: translateX(4px); }
-  70% { transform: translateX(-2px); }
-}

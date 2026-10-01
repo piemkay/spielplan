@@ -189,7 +189,8 @@
       {showModel}
       onPlace={place}
       onNotSeen={notSeen}
-      onPeek={() => (peek = { title: rate.card.title, token: rate.card.token })}
+      onPeek={() =>
+        (peek = { title: { ...rate.card.title, kind: rate.card.kind }, token: rate.card.token })}
     />
   {:else if rate.drained}
     <p class="why drained" data-testid="rate-drained">{rate.drained.line}</p>

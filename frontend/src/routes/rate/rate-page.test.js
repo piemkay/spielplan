@@ -269,6 +269,15 @@ describe('the ladder card (decisions 545 and 551)', () => {
     expect(writes()[1]).toEqual(['/rate/not-seen', expect.objectContaining({ card_token: 'tok-2' })]);
   });
 
+  it('times a series per episode on its card and in "About this film"', async () => {
+    const show = card({ kind: 'series', title: { ...film(43, 'Broadchurch'), year: 2013, runtime_min: 50 } });
+    await open(envelope({ card: show }));
+    expect($('rate-card-meta').textContent).toBe('2013 · 50m/ep');
+    target.querySelector('[aria-label="About Broadchurch"]').click();
+    await settle();
+    expect($('rate-peek').textContent).toContain('2013 · 50m/ep');
+  });
+
   it('takes the last answer back with Undo, and the film comes back', async () => {
     await open(envelope({ card: DRIVE, undo: { available: true, kind: 'placement', name: 'Heat' } }));
     replies.push(envelope());
