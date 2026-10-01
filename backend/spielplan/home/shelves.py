@@ -168,18 +168,19 @@ class Ctx:
 async def pending_verdicts(
     conn: asyncpg.Connection, *, user_id: int, cap: int = NAMED_TITLES_CAP
 ) -> dict[str, Any] | None:
-    """§6.0's pending row, in the live Rate session's kinds, or None. Before the set-up: seen titles with
-    no LIVE verdict. After it: seen titles never answered ("Rate {n} you watched"), else the films rated
-    before the set-up that wait for their step ("Rate {n} again", decision 550).
+    """§6.0's pending row, or None. Before the set-up: seen titles of either kind with no LIVE verdict.
+    After it: seen titles never answered ("Rate {n} you watched"), else the films rated before the
+    set-up that wait for their step ("Rate {n} again", decision 550).
 
-    Filtered by the session's kinds so the CTA can serve what the copy names (proposal 150).
+    After the set-up, filtered by the live session's kinds so the CTA can serve what the copy names
+    (proposal 150). Before it Rate is closed, and a session only journals the card's Not seen.
     """
+    set_up = await ladder.set_up_at(conn, user_id=user_id)
     # One live session per person, so one row or none.
-    live = await conn.fetchval(
+    live = None if set_up is None else await conn.fetchval(
         "SELECT kinds FROM rate_session WHERE user_id = $1 AND ended_at IS NULL", user_id
     )
     kinds = list(live or KIND_HEADINGS)
-    set_up = await ladder.set_up_at(conn, user_id=user_id)
     if set_up is None:
         unanswered = """
             NOT EXISTS (
@@ -211,6 +212,8 @@ async def pending_verdicts(
         found = await conn.fetch("SELECT id, name, kind FROM title WHERE id = ANY($1::int[])", waiting)
         by_id = {r["id"]: r for r in found}
         rows = [by_id[i] for i in waiting]
+        # Rate opens on the first pin's kind, so with no live session the row counts that kind alone.
+        rows = [r for r in rows if r["kind"] == rows[0]["kind"]]
     if not rows:
         return None
 
@@ -218,8 +221,7 @@ async def pending_verdicts(
     # The queue head is exactly the titles the copy names: two beyond three (proposal 21).
     named_n = total if total <= cap else cap - 1
     named = [dict(r) for r in rows[:named_n]]
-    # Rate serves the films rated before first, in this order, so "again" pins no head.
-    head = [] if again else [int(r["id"]) for r in named]
+    head = [int(r["id"]) for r in named]
     # Repeated `head=`, not comma-joined: `GET /api/rate` takes `head: list[int]`.
     query = "&".join(f"head={i}" for i in head)
     return {
@@ -234,7 +236,7 @@ async def pending_verdicts(
         "cta": {
             "label": "Rate",
             # The server builds the link, so it cannot drift from the copy (proposal 150).
-            "route": f"/rate?{query}" if head else "/rate",
+            "route": f"/rate?{query}",
         },
     }
 

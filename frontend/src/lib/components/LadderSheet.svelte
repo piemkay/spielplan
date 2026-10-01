@@ -73,14 +73,14 @@
 
 <Sheet {open} onClose={closed} label="In your ranking" detent="fit" width={440}>
   {#snippet children(close)}
-    <div class="bar" {@attach () => void (closeSheet = close)}>
-      <div class="who">
-        <h2>{name}</h2>
-        <p class="footnote">{standing}</p>
-      </div>
-      <button class="btn-plain done" data-testid="ladder-done" onclick={close}>Done</button>
-    </div>
     <div data-testid="ladder-sheet">
+      <div class="bar" {@attach () => void (closeSheet = close)}>
+        <div class="who">
+          <h2>{name}</h2>
+          <p class="footnote">{standing}</p>
+        </div>
+        <button class="btn-plain done" data-testid="ladder-done" onclick={close}>Done</button>
+      </div>
       <RateShelves
         shelves={shown}
         {name}

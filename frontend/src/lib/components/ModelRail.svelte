@@ -175,11 +175,15 @@
     border-color: var(--ember);
     color: var(--ember-lift);
   }
-  /* design.css's coarse floor sets min-height only; the width is for fingers, not for a mouse. */
+  /* design.css's coarse floor sets min-height only, and not on a chip, whose extended hit area
+     would overlap the next row's once these wrap; the width is for fingers, not for a mouse. */
   @media (pointer: coarse) {
     .close,
     .chip {
       min-width: var(--touch);
+    }
+    .chip {
+      min-height: var(--touch);
     }
   }
   .events {
