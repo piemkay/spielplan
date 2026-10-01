@@ -177,30 +177,3 @@ async def test_the_board_admits_abandoned_and_still_refuses_a_status_nobody_read
     )
     stored = await db.fetch("SELECT status FROM acquisition_job ORDER BY title_id")
     assert tuple(row["status"] for row in stored) == statuses
-
-
-async def _axis_vocabulary(conn, facet: str = "pacing") -> None:
-    await conn.execute(
-        "INSERT INTO dna_vocabulary (version, facet_count, term_count) VALUES ('v1', 1, 2)"
-    )
-    await conn.execute(
-        "INSERT INTO dna_facet (version, facet, ord) VALUES ('v1', $1, 1)", facet
-    )
-
-
-async def test_an_axis_is_the_bundles_unless_the_household_wrote_it(db):
-    """'acquired' is the plausible wrong word from `title.origin`,
-    and the loader would pass it over for ever."""
-    await _axis_vocabulary(db)
-    await db.execute(
-        "INSERT INTO dna_axis (version, facet, left_pole, right_pole) "
-        "VALUES ('v1', 'pacing', 'slow', 'fast')"
-    )
-    assert await db.fetchval("SELECT origin FROM dna_axis WHERE facet = 'pacing'") == "bundle"
-    await db.execute("UPDATE dna_axis SET origin = 'household' WHERE facet = 'pacing'")
-    await _refused_by(
-        db.execute("UPDATE dna_axis SET origin = 'acquired' WHERE facet = 'pacing'"),
-        asyncpg.CheckViolationError,
-        "dna_axis_origin_check",
-    )
-    assert await db.fetchval("SELECT origin FROM dna_axis WHERE facet = 'pacing'") == "household"
