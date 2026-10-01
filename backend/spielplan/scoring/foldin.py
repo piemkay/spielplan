@@ -18,7 +18,14 @@ from typing import Any
 import numpy as np
 
 from spielplan.db.library import KINDS, Kind, household_ids
-from spielplan.ledger.observations import LIVE_LABEL_SQL
+from spielplan.ledger.model import class_step
+from spielplan.ledger.observations import (
+    LIVE_LABEL_SQL,
+    cutover_sql,
+    latest_tier_edit_sql,
+    rescale_level,
+    tier_set_of,
+)
 from spielplan.scoring import serve
 from spielplan.scoring.backbone import (
     COORDINATE_GEOMETRY,
@@ -54,10 +61,6 @@ HARD_CAP_SECONDS = 300
 # after it.
 CLOCK_MARGIN_SECONDS = 2
 
-# §4.2: verdict 0 disliked / 1 ok / 2 liked. The target is the raw verdict, not the Ledger's `s`,
-# which would make the nightly pass order-dependent.
-VERDICT_TO_Y: dict[int, float] = {0: -1.0, 1: 0.0, 2: 1.0}
-
 
 @dataclass(frozen=True, eq=False)
 class Fit:
@@ -71,7 +74,7 @@ class Fit:
     cf_sd: float             # the PRE-normalisation sd of ⟨v, e⟩; 0 means "no signal"
     prior_mean: float
     prior_sd: float
-    label_count: int         # every live verdict for this kind; `used` is how many the fit saw
+    label_count: int         # every title of this kind with a step target; `used` is how many the fit saw
     used: int = 0
     dropped: int = 0         # labels on titles with no coordinate, counted rather than ignored
     beta_clamped: bool = False
@@ -122,7 +125,7 @@ def fold_in(x: np.ndarray, y: np.ndarray, lam: float) -> np.ndarray:
 
 
 def _ranks(a: np.ndarray) -> np.ndarray:
-    """Tie-averaged ranks. Ties are not rare here: the target has three levels."""
+    """Tie-averaged ranks. Ties are not rare here: the target has K levels."""
     a = np.asarray(a, dtype=np.float64)
     order = np.argsort(a, kind="mergesort")
     ranked = np.empty(a.size, dtype=np.float64)
@@ -170,7 +173,7 @@ def fit_user(
     *,
     seed: int = 0,
 ) -> Fit:
-    """§5.1's fold-in and blend weight for one (user, kind).
+    """§5.1's fold-in and blend weight for one (user, kind), fitted to `(title_id, step)` targets.
 
     Both halves are standardised over `reference`, a fixed population, so a score does not
     depend on the filter the user has typed.
@@ -184,7 +187,7 @@ def fit_user(
 
     # Sorted so the positional CV folds depend on the label set, not on row order.
     ordered = sorted(labels, key=lambda pair: int(pair[0]))
-    labelled = [(coords[t], VERDICT_TO_Y[int(v)]) for t, v in ordered if t in coords]
+    labelled = [(coords[t], float(step)) for t, step in ordered if t in coords]
     rows = [
         (d, y, c.b)
         for (c, y), d in zip(labelled, directions([c for c, _ in labelled]), strict=True)
@@ -287,18 +290,31 @@ def score_many(fit: Fit, coords: Sequence[Coordinate]) -> list[tuple[int, float,
 # --- the job -----------------------------------------------------------------------------------
 
 
+# Every title of the kind the person answered since their cut-over, `$1` = user, `$2` = kind.
+_ANSWERED_SQL = f"""
+    WITH edit AS ({latest_tier_edit_sql()}), label AS ({LIVE_LABEL_SQL})
+    SELECT COALESCE(e.title_id, l.title_id) AS title_id, e.tier, e.n_levels, l.value,
+           GREATEST(e.created_at, l.created_at) AS created_at
+      FROM edit e FULL JOIN label l ON l.title_id = e.title_id
+      JOIN title t ON t.id = COALESCE(e.title_id, l.title_id)
+     WHERE t.kind = $2
+"""
+
+
 async def live_labels(conn, *, user_id: int, kind: Kind) -> list[tuple[int, int]]:
-    """The user's live verdicts on titles of this kind."""
-    rows = await conn.fetch(
-        """
-        WITH label AS ({LIVE_LABEL})
-        SELECT l.title_id, l.value
-          FROM label l JOIN title t ON t.id = l.title_id
-         WHERE t.kind = $2
-        """.replace("{LIVE_LABEL}", LIVE_LABEL_SQL),
-        user_id, kind,
-    )
-    return [(int(r["title_id"]), int(r["value"])) for r in rows]
+    """§5.1's step targets, `(title_id, step)` in today's K: the placed tier, else the middle tier of
+    the live verdict's class (decision 536)."""
+    k = len(await tier_set_of(conn, user_id=user_id, kind=kind))
+    rows = await conn.fetch(_ANSWERED_SQL, user_id, kind)
+    return [
+        (
+            int(r["title_id"]),
+            class_step(int(r["value"]), k)
+            if r["tier"] is None
+            else rescale_level(int(r["tier"]), k_from=r["n_levels"], k_to=k),
+        )
+        for r in rows
+    ]
 
 
 async def write_fit(
@@ -361,7 +377,7 @@ async def refit_user(
         )
     if fit.dropped:
         log.warning(
-            "user %s/%s: %d verdicts sit on titles with no coordinate and cannot inform the fit",
+            "user %s/%s: %d step targets sit on titles with no coordinate and cannot inform the fit",
             user_id, kind, fit.dropped,
         )
 
@@ -447,8 +463,9 @@ async def _fitted_under_another_geometry(conn) -> bool:
 async def _is_stale(conn, *, user_id: int, kind: Kind, bundle_version: str) -> bool:
     """Never fitted, another basis or geometry, a newer placement, or a label moved since the fit.
 
-    "Moved" is the count OR a label newer than the fit, since a re-rating leaves the count alone.
-    Label moves are debounced by PAUSE_SECONDS / HARD_CAP_SECONDS; the other triggers are not.
+    "Moved" is the count, a verdict or tier edit newer than the fit (a re-rating or a move leaves the
+    count alone), or a cut-over since it. Label moves are debounced by PAUSE_SECONDS /
+    HARD_CAP_SECONDS; the other triggers are not.
     """
     row = await conn.fetchrow(
         "SELECT label_count, bundle_version, geometry, updated_at, "
@@ -469,17 +486,19 @@ async def _is_stale(conn, *, user_id: int, kind: Kind, bundle_version: str) -> b
     if placed_since:
         return True
     live = await conn.fetchrow(
-        """
-        WITH label AS ({LIVE_LABEL})
-        SELECT count(*) AS n, max(l.created_at) AS newest,
-               max(l.created_at) < now() - ($3::int * interval '1 second') AS paused
-          FROM label l JOIN title t ON t.id = l.title_id WHERE t.kind = $2
-        """.replace("{LIVE_LABEL}", LIVE_LABEL_SQL),
-        user_id, kind, PAUSE_SECONDS,
+        f"""
+        SELECT count(*) AS n, max(a.created_at) AS newest,
+               max(a.created_at) < now() - ($3::int * interval '1 second') AS paused,
+               {cutover_sql()} > $4::timestamptz AS cut_since
+          FROM ({_ANSWERED_SQL}) a
+        """,
+        user_id, kind, PAUSE_SECONDS, row["updated_at"],
     )
     newest = live["newest"]
-    moved = int(live["n"] or 0) != int(row["label_count"] or 0) or (
-        newest is not None and newest > row["updated_at"]
+    moved = (
+        int(live["n"] or 0) != int(row["label_count"] or 0)
+        or (newest is not None and newest > row["updated_at"])
+        or bool(live["cut_since"])
     )
     if not moved:
         return False

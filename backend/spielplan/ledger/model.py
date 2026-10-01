@@ -280,6 +280,15 @@ def verdict_class_of_tier(tier: int, k: int) -> int:
     return 0 if tier < bands[1, 0] else 2
 
 
+def class_step(cls: int, k: int) -> int:
+    """The step a verdict class stands for: its tier nearest the middle, C, B or A at K = 7 (§5.1).
+
+    At K = 2 disliked and fine share the lower tier.
+    """
+    low, high = verdict_tiers(k)[cls]
+    return int(min(max((k - 1) // 2, int(low)), int(high)))
+
+
 def guess_tier(tier: np.ndarray, k: int) -> np.ndarray:
     """Decision 510: an unrated title wears its guessed class's tier nearest the middle (C, B or A)."""
     bands = verdict_tiers(k)
