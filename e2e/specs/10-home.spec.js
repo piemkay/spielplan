@@ -1,12 +1,13 @@
 import { expect, test } from '@playwright/test';
 
-import { openTitle, signedIn } from '../helpers.js';
+import { openTitle, placeThroughRate, setUpLadder, signedIn } from '../helpers.js';
 
 /**
  * §6.0's two Home modes: "Search or an active person-filter switches Home into the catalog grid;
  * clearing it returns the shelves." And §6.7's toggle (decision 117): a server-side deletion, so
  * gated numbers are asserted absent from the payload too, not only from the DOM. The file seeds
- * a ledger first, because a profile with no verdicts has no shelf cards (proposal 20).
+ * a ledger first, because a profile with no verdicts has no shelf cards (proposal 20); its first
+ * test is the admin's Home before the set-up, so it seeds nothing.
  */
 
 /** Signed in inside its OWN context: a second tab shares the cookie jar (decision 117, per user). */
@@ -57,27 +58,15 @@ function gatedKeysIn(value, found = new Set()) {
 }
 
 /**
- * Give this user enough of a ledger for §6.0's shelves to ship, through §6.1's routes. SERIES
- * ONLY: rating films would mark seen the three short films `school_night` needs.
+ * Give this user enough of a ledger for §6.0's shelves to ship: the set-up's two long films, then
+ * the series straight onto the ladder through §6.1's Rate. No short film: placing one would mark
+ * seen the three `school_night` needs.
  */
 async function seedLedger(request) {
   if (shelfCards(await homePayload(request)).length) return; // this profile already has one
 
-  await request.post('/api/rate/session', {
-    data: { mode: 'sweep', kinds: ['series'], restart: true }
-  });
-  for (let i = 0; i < 8; i++) {
-    const { card } = await (await request.get('/api/rate')).json();
-    if (!card || card.type !== 'sweep' || card.kind !== 'series') break;
-    // Varied: §6.1's class-balance widget warns above a 0.6 share in one class.
-    const answered = await request.post('/api/rate/verdict', {
-      data: { card_token: card.token, value: i % 3 },
-      failOnStatusCode: false
-    });
-    expect(answered.ok(), `seeding a verdict (§6.1): ${answered.status()}`).toBeTruthy();
-  }
-  // Closes the live session only, so a later spec does not resume a half-filled block.
-  await request.delete('/api/rate/session');
+  await setUpLadder(request);
+  await placeThroughRate(request, 'series', [5, 2]);
 
   expect(
     shelfCards(await homePayload(request)).length,
@@ -154,11 +143,13 @@ async function secondAccount(page, browser, baseURL) {
   return { context, other };
 }
 
-test.beforeEach(async ({ page }) => {
+const BEFORE_SET_UP = 'Home asks for the set-up over its shelves until it is done';
+
+test.beforeEach(async ({ page }, testInfo) => {
   await signedIn(page);
   // A persisted preference: the starting state is set, not assumed.
   await page.request.post('/api/auth/preferences', { data: { show_model: false } });
-  await seedLedger(page.request);
+  if (testInfo.title !== BEFORE_SET_UP) await seedLedger(page.request);
   await page.goto('/');
 });
 
@@ -166,6 +157,29 @@ test.afterEach(async ({ page }) => {
   await page.request
     .post('/api/auth/preferences', { data: { show_model: false }, failOnStatusCode: false })
     .catch(() => {});
+});
+
+// --- decision 550's notice -----------------------------------------------------------------
+
+test(BEFORE_SET_UP, async ({ page }) => {
+  const { done } = await (await page.request.get('/api/ladder/setup')).json();
+  test.skip(done, 'an earlier run set the admin up; `npm --prefix e2e run fresh` starts before it');
+
+  const notice = page.getByTestId('home-setup-notice');
+  await expect(notice.getByRole('heading')).toHaveText('Set up your ladder.');
+  await expect(notice).toContainText('Rating is one tap now, on seven steps of your own.');
+  await expect(notice.getByRole('link', { name: 'Set up my ladder' })).toHaveAttribute(
+    'href',
+    '/rate/setup'
+  );
+
+  await setUpLadder(page.request);
+  expect((await homePayload(page.request)).setup_notice).toBeNull();
+  const landed = page.waitForResponse((res) => res.url().includes('/api/home?'));
+  await page.reload();
+  await landed;
+  await expect(page.getByTestId('home-title')).toBeVisible();
+  await expect(notice).toHaveCount(0);
 });
 
 // --- §6.0's grid switch -------------------------------------------------------------------
