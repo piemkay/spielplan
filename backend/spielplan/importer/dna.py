@@ -93,8 +93,8 @@ def read_vocabulary(vocab_dir: Path, version: str, report: ImportReport) -> list
 async def load_vocabulary(
     conn: asyncpg.Connection, vocab_dir: Path, version: str, report: ImportReport
 ) -> None:
-    """Load `dna_vocab/<version>/` — the per-facet vocabulary TSVs, the alias map, the
-    per-title adjudications, and §6.4's authored axis definitions.
+    """Load `dna_vocab/<version>/` — the per-facet vocabulary TSVs, the alias map and the
+    per-title adjudications.
 
     The term id already carries its facet (`mood.dread`); never prefix it again.
     """
@@ -131,8 +131,6 @@ async def load_vocabulary(
 
     await _load_aliases(conn, vocab_dir / f"alias_map_{version}.tsv", version, report)
     await load_adjudications(conn, vocab_dir, version, report)
-    # `dna_axis` has an FK to `dna_facet`, so the declared set travels.
-    await load_axes(conn, vocab_dir, version, report, set(facets))
 
 
 async def backfill_labels(conn: asyncpg.Connection, vocab_dir: Path, version: str) -> int:
@@ -270,144 +268,6 @@ async def load_adjudications(
         f"{len(rows)} DNA adjudications loaded ({per_title} scoped to a single title) — "
         "§8 stage 3 re-applies them at every derive",
         adjudications=len(rows), per_title=per_title,
-    )
-
-
-async def load_axes(
-    conn: asyncpg.Connection, vocab_dir: Path, version: str, report: ImportReport,
-    facets: set[str] | None = None,
-) -> None:
-    """§6.4: 'Axis definitions are a shipped, authored artifact: one TSV per vocabulary-v1 facet
-    (left pole, right pole, term → weight ∈ [−1, 1]) … shipped in `dna_vocab/v1/`'.
-    Deterministic — no nightly rebuild, no Procrustes anchoring, no map shift on re-import.
-
-    Every TSV beside the vocabulary is a candidate; only a file opening with exactly two poles is an
-    axis, and its stem must be a declared facet (an FK violation would abort the import).
-    """
-    if facets is None:
-        facets = {
-            r["facet"]
-            for r in await conn.fetch("SELECT facet FROM dna_facet WHERE version = $1", version)
-        }
-    loaded = 0
-    not_an_axis = 0
-    unreadable: list[str] = []
-    # This loader reads files it does not own, so an undecodable neighbour is a warn, not a failure.
-    for path in sorted(vocab_dir.glob("*.tsv")):
-        try:
-            with path.open(encoding="utf-8", newline="") as fh:
-                reader = csv.reader(fh, delimiter="\t")
-                header = next(reader, None)
-                poles = [c.strip() for c in header] if header else []
-                if len(poles) != 2 or not all(poles):
-                    not_an_axis += 1
-                    continue
-                facet = path.stem
-                if facet not in facets:
-                    report.warn(
-                        "axes",
-                        f"{path.name}: poles {poles[0]!r}/{poles[1]!r}, but {facet!r} is not a "
-                        "vocabulary facet — an axis file is named for the facet it turns",
-                    )
-                    continue
-                left, right = poles
-                weights: list[tuple[str, str, str, float]] = []
-                for row in reader:
-                    if len(row) < 2 or not row[0].strip():
-                        continue
-                    try:
-                        w = float(row[1])
-                    except ValueError:
-                        report.warn(
-                            "axes", f"{path.name}: non-numeric weight for {row[0]!r}; skipped"
-                        )
-                        continue
-                    if not -1.0 <= w <= 1.0:
-                        report.fail(
-                            "axes", f"{path.name}: weight {w} for {row[0]!r} is outside [-1, 1]"
-                        )
-                        continue
-                    weights.append((version, facet, row[0].strip(), w))
-        except (OSError, UnicodeDecodeError, csv.Error):
-            unreadable.append(path.name)
-            continue
-
-        # Decision 264: a valid header with no usable weights must not clear the facet's weights.
-        if not weights:
-            stored = await conn.fetchval(
-                "SELECT count(*) FROM dna_axis_weight WHERE version = $1 AND facet = $2",
-                version, facet,
-            )
-            report.warn(
-                "axes",
-                f"{path.name} parses to no axis weights; the {stored} already stored for facet "
-                f"{facet!r} under {version} are left in place rather than replaced (decision 264)",
-                facet=facet, stored=stored,
-            )
-            continue
-
-        # Decision 342: a household-authored axis is left in place; the report says so.
-        stored_by = await conn.fetchval(
-            "SELECT origin FROM dna_axis WHERE version = $1 AND facet = $2", version, facet
-        )
-        if stored_by == "household":
-            report.warn(
-                "axes",
-                f"{path.name}: facet {facet!r} keeps the axis the household authored in the app; "
-                "this bundle's axis for it is not loaded (decisions 342 and 423 - the household's "
-                "curated row takes effect and survives every re-import)",
-                facet=facet,
-            )
-            continue
-
-        await conn.execute(
-            "INSERT INTO dna_axis (version, facet, left_pole, right_pole) VALUES ($1,$2,$3,$4) "
-            "ON CONFLICT (version, facet) DO UPDATE SET left_pole = EXCLUDED.left_pole, "
-            "right_pole = EXCLUDED.right_pole",
-            version, facet, left, right,
-        )
-        # Decision 261: the bundle's copy replaces this facet's weights, so removed terms go.
-        await conn.execute(
-            "DELETE FROM dna_axis_weight WHERE version = $1 AND facet = $2", version, facet
-        )
-        await conn.executemany(
-            "INSERT INTO dna_axis_weight (version, facet, term, weight) VALUES ($1,$2,$3,$4) "
-            "ON CONFLICT (version, facet, term) DO UPDATE SET weight = EXCLUDED.weight",
-            weights,
-        )
-        loaded += 1
-
-    # Without weights, Tonight's conflict and tie-break are permanently zero; warn so that reads as
-    # a missing artifact.
-    if not loaded:
-        # Only claim the consequences when the install really has no weights.
-        stored = await conn.fetchval(
-            "SELECT count(*) FROM dna_axis_weight WHERE version = $1", version
-        )
-        report.warn(
-            "axes",
-            f"no authored axis definition in dna_vocab/{version}/ in this bundle; the {stored} "
-            f"already stored under {version} are left in place and not re-applied (decision 247)"
-            if stored else
-            f"no authored axis definition in dna_vocab/{version}/ - the Map surface, when it "
-            "ships, has no axes to plot, and Tonight's facet split (§6.2 step 5) is off: a split "
-            "is surfaced by person and never names a facet (decision 479), and 54c's "
-            "widest-axis tie-break is 0.0 for every pair",
-            stored=stored,
-        )
-    if unreadable:
-        report.warn(
-            "axes",
-            f"{len(unreadable)} file(s) in dna_vocab/{version}/ are not readable as UTF-8 text "
-            "and were not read as axis definitions",
-            files=unreadable,
-        )
-    # §10 asks for counts, and zero is the count that matters here, so the line is unconditional.
-    report.note(
-        "axes",
-        f"{loaded} authored axis definition(s) loaded ({not_an_axis} file(s) in "
-        f"dna_vocab/{version}/ open with column names rather than two poles)",
-        facets=loaded, not_axes=not_an_axis,
     )
 
 

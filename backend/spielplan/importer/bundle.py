@@ -949,9 +949,9 @@ async def import_bundle(
                             report.warn(
                                 "vocabulary",
                                 f"this bundle names DNA vocabulary {vocabulary!r} and ships no "
-                                f"dna_vocab/{vocabulary}/ tree, so it carries neither the "
-                                "adjudications ledger nor any axis definition: the ones already "
-                                "installed are left in place and not re-applied",
+                                f"dna_vocab/{vocabulary}/ tree, so it carries no adjudications "
+                                "ledger: the one already installed is left in place and not "
+                                "re-applied",
                                 version=vocabulary,
                             )
                         elif installed_vocab is None:
@@ -967,8 +967,6 @@ async def import_bundle(
                             await dna_loader.load_adjudications(
                                 conn, vocab_dir, vocabulary, report
                             )
-                            # `load_axes` reads `dna_facet` itself on a models-only bundle (decision 173).
-                            await dna_loader.load_axes(conn, vocab_dir, vocabulary, report)
 
                 if not report.ok:
                     raise _Rollback(report)

@@ -159,13 +159,6 @@ KEYWORDS = [
     (8, "tmdb", "cooking"),
 ]
 
-AXES = {
-    # facet -> (left pole, right pole, {term: weight})
-    "mood": ("heavy", "light", {"mood.dread": -1.0, "mood.cosy": 1.0}),
-    "pacing": ("patient", "propulsive", {"pacing.patient": -1.0, "pacing.relentless": 0.8}),
-    "sensibility": ("bleak", "playful", {"sensibility.bleak": -1.0, "register.deadpan": 0.6}),
-}
-
 # §5.1's gate input n_t, spread near 1, near 0 and between;
 # title 8's Backbone row uses `COLD_BACKBONE_ROWS`.
 ITEM_SUPPORT = {1: 4218, 2: 900, 3: 120, 4: 30, 5: 6, 6: 240, 7: 55, 8: 0}
@@ -699,11 +692,6 @@ def _write_vocab(vocab: Path) -> None:
     (vocab / "s_matrix_v1.tsv").write_text(
         "facet\ta\tb\ts\nmood\tmood.dread\tmood.cosy\t-0.8\n", encoding="utf-8"
     )
-    # The corpus ships no axis TSVs yet, so they sit beside
-    # the vocabulary files under the name the app reads.
-    for facet, (left, right, weights) in AXES.items():
-        body = f"{left}\t{right}\n" + "".join(f"{t}\t{w}\n" for t, w in weights.items())
-        (vocab / f"{facet}.tsv").write_text(body, encoding="utf-8")
 
 
 def _identity_tokens(ids: np.ndarray, titles: list) -> np.ndarray:

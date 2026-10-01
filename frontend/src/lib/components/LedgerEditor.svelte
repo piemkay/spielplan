@@ -4,25 +4,19 @@
   import { onMount, tick, untrack } from 'svelte';
   import { api, get, post } from '$lib/api.js';
   import {
-    AXIS_REPLACE_NOTE,
     COMPOSER_WARNING,
-    axisForm,
     emptyForm,
     exportHref,
-    facetChoices,
     ledgerOf,
-    rowKey,
-    rowsOf,
     validate,
     verdictDraft,
     verdictWarning,
     visibleFields,
-    weightText,
     withdrawPath,
     withdrawable
   } from '$lib/ledgerEditors.svelte.js';
 
-  /** @type {{ ledger: 'adjudications' | 'corrections' | 'axes' }} */
+  /** @type {{ ledger: 'adjudications' | 'corrections' }} */
   let { ledger } = $props();
 
   const config = $derived(ledgerOf(ledger));
@@ -35,8 +29,6 @@
   let busy = $state(false);
   // A second tap confirms Withdraw: a withdrawn verdict restores nothing it dropped.
   let confirming = $state(null);
-  // The facet whose household axis the open form is editing, or null while it adds.
-  let replacing = $state(null);
   let root = $state(null);
   // Collapsed until opened; the review's hand-off opens it.
   let open = $state(false);
@@ -44,8 +36,7 @@
   // and a dismissed form must not reopen on the next visit.
   let handled = verdictDraft.seq;
 
-  const rows = $derived(rowsOf(ledger, envelope));
-  const facets = $derived(envelope?.facets ?? []);
+  const rows = $derived(Array.isArray(envelope?.rows) ? envelope.rows : []);
 
   async function refresh() {
     try {
@@ -58,15 +49,9 @@
 
   function start(prefill = {}) {
     form = { ...emptyForm(ledger), ...prefill };
-    replacing = null;
     refusal = '';
     saved = '';
     editing = true;
-  }
-
-  function edit(row) {
-    start(axisForm(row));
-    replacing = row.facet;
   }
 
   async function save() {
@@ -122,10 +107,7 @@
       const onto = row.target ? ` onto ${row.target}` : '';
       return `${row.action} ${row.term}${onto} ${on}`;
     }
-    if (ledger === 'corrections') {
-      return `${row.kind} = ${row.value} on ${row.name ?? `title ${row.title_id}`}`;
-    }
-    return `${row.facet}: ${row.left_pole} to ${row.right_pole}`;
+    return `${row.kind} = ${row.value} on ${row.name ?? `title ${row.title_id}`}`;
   }
 
   onMount(refresh);
@@ -151,24 +133,19 @@
     {:else}
       {#if rows.length === 0}<p class="footnote">{config.empty}</p>{/if}
       <ul class="rows">
-        {#each rows as row (rowKey(ledger, row))}
+        {#each rows as row (row.id)}
           <li class="row" data-origin={row.origin}>
             <span class="what">{describe(row)}</span>
             <span class="footnote">{ORIGIN[row.origin] ?? row.origin}</span>
             {#if row.quote}<p class="extra">Quote: {row.quote}</p>{/if}
             {#if row.evidence}<p class="extra">Evidence: {row.evidence}</p>{/if}
-            {#if ledger === 'axes' && row.weights?.length}
-              <p class="extra weights">
-                {row.weights.map((w) => `${w.term} ${weightText(w.weight)}`).join(', ')}
-              </p>
-            {/if}
             {#if row.note}<p class="extra">Note: {row.note}</p>{/if}
             {#if withdrawable(row)}
-              {#if confirming === rowKey(ledger, row) && ledger === 'corrections' && row.kind === 'composer'}
+              {#if confirming === row.id && ledger === 'corrections' && row.kind === 'composer'}
                 <p class="warning" data-testid="composer-warning">{COMPOSER_WARNING}</p>
               {/if}
               <div class="actions">
-                {#if confirming === rowKey(ledger, row)}
+                {#if confirming === row.id}
                   <button class="btn-plain btn-destructive" disabled={busy} onclick={() => withdraw(row)}>
                     Yes, withdraw
                   </button>
@@ -177,18 +154,10 @@
                   <button
                     class="btn-plain btn-destructive"
                     disabled={busy}
-                    onclick={() => (confirming = rowKey(ledger, row))}
+                    onclick={() => (confirming = row.id)}
                   >
                     Withdraw
                   </button>
-                  {#if ledger === 'axes'}
-                    <button class="btn-plain" disabled={busy} onclick={() => edit(row)}>Edit</button>
-                  {/if}
-                {/if}
-                {#if ledger === 'axes'}
-                  <a class="export btn-plain" href={exportHref(ledger, row)} download>
-                    Export {row.facet}.tsv
-                  </a>
                 {/if}
               </div>
             {/if}
@@ -200,9 +169,7 @@
         {#if !editing}
           <button class="btn-plain" onclick={() => start()}>{config.add}</button>
         {/if}
-        {#if ledger !== 'axes'}
-          <a class="export btn-plain" href={exportHref(ledger)} download>Export household rows</a>
-        {/if}
+        <a class="export btn-plain" href={exportHref(ledger)} download>Export household rows</a>
       </div>
 
       {#if editing}
@@ -223,15 +190,6 @@
                     <option value={option}>{option}</option>
                   {/each}
                 </select>
-              {:else if field.type === 'facet'}
-                <select bind:value={form[field.name]}>
-                  <option value="">Choose</option>
-                  {#each facetChoices(facets, rows, replacing) as facet (facet)}
-                    <option value={facet}>{facet}</option>
-                  {/each}
-                </select>
-              {:else if field.type === 'textarea'}
-                <textarea rows="5" bind:value={form[field.name]}></textarea>
               {:else}
                 <input type="text" bind:value={form[field.name]} />
               {/if}
@@ -240,16 +198,11 @@
           {#if ledger === 'adjudications' && verdictWarning(form.action)}
             <p class="warning" data-testid="verdict-warning">{verdictWarning(form.action)}</p>
           {/if}
-          {#if ledger === 'axes' && replacing}
-            <p class="warning" data-testid="axis-replace-note">{AXIS_REPLACE_NOTE}</p>
-          {/if}
           {#if ledger === 'corrections' && form.kind === 'composer'}
             <p class="warning" data-testid="composer-warning">{COMPOSER_WARNING}</p>
           {/if}
           <div class="buttons">
-            <button class="btn-primary" type="submit" disabled={busy}>
-              {replacing ? config.replace : config.save}
-            </button>
+            <button class="btn-primary" type="submit" disabled={busy}>{config.save}</button>
             <button class="btn-secondary" type="button" onclick={() => (editing = false)}>Cancel</button>
           </div>
         </form>
@@ -336,9 +289,6 @@
     color: var(--text-2);
     white-space: pre-wrap;
     overflow-wrap: anywhere;
-  }
-  .weights {
-    font-variant-numeric: tabular-nums;
   }
   .actions {
     display: flex;

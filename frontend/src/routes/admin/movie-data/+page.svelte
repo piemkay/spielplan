@@ -189,31 +189,6 @@
               {/each}
             </ul>
           </details>
-
-          {#if !sources.axes.loaded}
-            <details class="ref axes">
-              <summary class="list-row">
-                <span>Axis files not written yet</span>{@render chevron()}
-              </summary>
-              <div class="ref-body">
-                <p>
-                  Each kind of tag can have an authored axis: a left pole, a right pole and term
-                  weights. This movie data ships none, and without them:
-                </p>
-                <!-- The backend's sentences: what the missing file costs is the importer's claim. -->
-                <ul>
-                  {#each sources.axes.disables as line}<li>{line}</li>{/each}
-                </ul>
-                <p>
-                  The importer looks for
-                  {sources.axes.expected.length === 1 ? 'this file' : 'these files'} inside it:
-                </p>
-                <ul class="code">
-                  {#each sources.axes.expected as path}<li>{path}</li>{/each}
-                </ul>
-              </div>
-            </details>
-          {/if}
         {/if}
       </div>
     </section>

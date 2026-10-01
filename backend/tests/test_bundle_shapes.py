@@ -118,28 +118,15 @@ def test_the_fixture_npz_arrays_are_named_the_way_the_corpus_names_them(shipped,
     assert not mismatched, f"npz array names differ from the shipped bundle: {mismatched}"
 
 
-# §6.4's axis TSVs are not shipped yet; declared file by file, built off `make_bundle.AXES`.
-SPEC_REQUIRED_NOT_YET_SHIPPED = tuple(
-    f"artifacts/dna_vocab/v1/{facet}.tsv" for facet in sorted(make_bundle.AXES)
-)
-
-
 def test_the_fixture_ships_the_dna_vocabulary_files_the_corpus_ships(shipped, built):
     """`dna_tag` and `dna_projected` FK to `dna_vocabulary(version)`,
     so misnamed files load no DNA at all."""
     theirs = {f for f in shipped["files"] if f.startswith("artifacts/dna_vocab/")}
     ours = {f for f in built["files"] if f.startswith("artifacts/dna_vocab/")}
     assert theirs, "manifest is stale; the shipped bundle has no dna_vocab directory"
-
-    declared = {f for f in ours if f.startswith(SPEC_REQUIRED_NOT_YET_SHIPPED)}
-    # The exception must still be one: if the corpus starts shipping axes, this fails.
-    assert not (declared & theirs), (
-        f"the corpus now ships {sorted(declared & theirs)} — delete the "
-        "SPEC_REQUIRED_NOT_YET_SHIPPED entry and compare them like everything else."
-    )
-    assert (ours - declared) <= theirs, (
+    assert ours <= theirs, (
         f"the fixture invents vocabulary files the corpus does not ship: "
-        f"{sorted((ours - declared) - theirs)}. Shipped: {sorted(theirs)}."
+        f"{sorted(ours - theirs)}. Shipped: {sorted(theirs)}."
     )
 
 
@@ -211,7 +198,7 @@ def test_the_fixture_seed_list_entries_carry_the_shipped_keys(shipped, built):
     )
 
 
-# Proposal 157's two thresholds are not shipped yet: declared here like the axes and `title_identity`.
+# Proposal 157's two thresholds are not shipped yet: declared here like `title_identity`.
 PROPOSAL_157_NOT_YET_SHIPPED = frozenset({"straddle_z", "tension_credible_mass"})
 
 
@@ -603,9 +590,3 @@ def test_the_scale_mode_grows_the_pool_without_widening_the_contract(tmp_path, b
         f"{sorted(set(scaled['feature_names']) - set(default['feature_names']))}"
     )
     assert scaled["input_dim"] == default["input_dim"]
-
-    # Axis TSVs are the one artifact the corpus does not ship,
-    # so only this notices if the pool stops writing them.
-    vocab = root / "artifacts" / "dna_vocab" / "v1"
-    assert {f"{facet}.tsv" for facet in make_bundle.AXES} <= {p.name for p in vocab.glob("*.tsv")}
-    assert not (vocab / "axes").exists(), "an axis in a subdirectory cannot reach a real bundle"

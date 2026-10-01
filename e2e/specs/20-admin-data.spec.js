@@ -28,7 +28,6 @@ const SECTION_8 = [
 
 const BOARD = /\/api\/admin\/acquisition(\?.*)?$/;
 const FLYWHEEL = /\/api\/admin\/flywheel(\?.*)?$/;
-const AXES = /\/api\/admin\/curated\/axes(\?.*)?$/;
 const WEIGHT_NAMED = /confidence|salience|n_sources|threshold/i;
 
 // `19-phone-shell.spec.js`'s pair: measure at rest, in both axes.
@@ -292,47 +291,27 @@ test('Launch is disabled with its reason and the selection controls meet the tou
   }
 });
 
-test('three separate editors each export their own artifact', async ({ page }) => {
+test('two separate editors each export their own artifact', async ({ page }) => {
   await signedIn(page);
-  // One household axis added, so the axis editor draws its per-facet export (§6.4).
-  let facet = null;
-  await reshape(page, AXES, (body) => {
-    facet = body.facets?.[0] ?? null;
-    if (!facet) return body;
-    const axis = { facet, left_pole: 'e2e left', right_pole: 'e2e right', origin: 'household' };
-    axis.weights = [];
-    return { ...body, axes: [axis, ...body.axes.filter((a) => a.facet !== facet)] };
-  });
-  try {
-    await page.goto('/admin/corrections');
-    const editors = page.getByTestId('ledger-editor');
-    await expect(editors).toHaveCount(3);
-    expect(await editors.evaluateAll((els) => els.map((el) => el.getAttribute('data-ledger')))).toEqual([
-      'adjudications',
-      'corrections',
-      'axes'
-    ]);
-    const axes = page.locator('[data-ledger="axes"]');
-    const notice = axes.getByTestId('ledger-applies');
-    await expect(notice).toContainText('No axis file has been authored and the bundle ships none');
-    await expect(notice).toContainText("Tonight's split surfacing");
-    expect(facet, 'the active vocabulary declares no facet, so no axis can be drawn').toBeTruthy();
+  await page.goto('/admin/corrections');
+  const editors = page.getByTestId('ledger-editor');
+  await expect(editors).toHaveCount(2);
+  expect(await editors.evaluateAll((els) => els.map((el) => el.getAttribute('data-ledger')))).toEqual([
+    'adjudications',
+    'corrections'
+  ]);
 
-    const hrefs = [];
-    for (const ledger of ['adjudications', 'corrections', 'axes']) {
-      const link = page.locator(`[data-ledger="${ledger}"] a.export`);
-      await expect(link).toHaveCount(1);
-      await expect(link).toHaveAttribute('download', '');
-      hrefs.push(await link.getAttribute('href'));
-    }
-    expect(hrefs).toEqual([
-      '/api/admin/curated/adjudications/export',
-      '/api/admin/curated/corrections/export',
-      `/api/admin/curated/axes/${encodeURIComponent(facet)}/export`
-    ]);
-  } finally {
-    await page.unroute(AXES);
+  const hrefs = [];
+  for (const ledger of ['adjudications', 'corrections']) {
+    const link = page.locator(`[data-ledger="${ledger}"] a.export`);
+    await expect(link).toHaveCount(1);
+    await expect(link).toHaveAttribute('download', '');
+    hrefs.push(await link.getAttribute('href'));
   }
+  expect(hrefs).toEqual([
+    '/api/admin/curated/adjudications/export',
+    '/api/admin/curated/corrections/export'
+  ]);
 });
 
 test('the re-import rebuild set is stated where the re-import happens', async ({ page }) => {
