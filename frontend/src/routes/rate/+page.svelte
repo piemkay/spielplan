@@ -32,6 +32,13 @@
   const kind = $derived(rate.session?.kind ?? null);
   const showModel = $derived(!!session.user?.show_model);
 
+  // The server's noun is the plural: one film still waits for its step.
+  function waitingLine({ rated_before: n, noun }) {
+    return n === 1
+      ? `1 ${noun === 'films' ? 'film' : noun} you rated before still waits for its step.`
+      : `${n} ${noun} you rated before still wait for their step.`;
+  }
+
   let choosingKind = $state(false);
   /** @type {null | {title: any, token: string}} "About this film". */
   let peek = $state(null);
@@ -163,9 +170,7 @@
         <h2 class="large-title">That's 15.</h2>
         <p class="done-sub">Your suggestions just got sharper.</p>
         {#if rate.done.rated_before > 0}
-          <p class="footnote" data-testid="rate-done-waiting">
-            {rate.done.rated_before} {rate.done.noun} you rated before still wait for their step.
-          </p>
+          <p class="footnote" data-testid="rate-done-waiting">{waitingLine(rate.done)}</p>
         {/if}
       </div>
       <!-- The last answer stays undoable here until the next one lands (decision 199). -->

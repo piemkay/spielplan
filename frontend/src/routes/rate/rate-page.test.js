@@ -360,6 +360,11 @@ describe("a block's end (decision 550)", () => {
     expect($('rate-done-waiting')).toBeNull();
   });
 
+  it('says one film still waits for its step', async () => {
+    await open(envelope({ done: { rated_before: 1, noun: 'films' } }));
+    expect($('rate-done-waiting').textContent).toBe('1 film you rated before still waits for its step.');
+  });
+
   it('says so plainly when there is nothing more to rate', async () => {
     await open(envelope({ card: null, drained: { line: "There's nothing more to rate right now." } }));
     expect($('rate-drained').textContent).toBe("There's nothing more to rate right now.");
