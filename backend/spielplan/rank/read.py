@@ -223,12 +223,13 @@ async def reask_pairs(
 ) -> list[tuple[int, int, int]]:
     """§13(b)'s Sharpen pairs of the kind as `(duel_id, title_a, title_b)`: answered since the
     cut-over and at least `REASK_MIN_AGE` ago, not a re-ask itself, and not re-asked within
-    `REASK_COOLDOWN`. Both ages read the clock that stamped `created_at`."""
+    `REASK_COOLDOWN`. Both ages read the clock that stamped `created_at`. **Held-out excluded**:
+    a re-ask counts among the selector's inputs, so one of a held-out pair would carry it there."""
     rows = await conn.fetch(
         f"""
         SELECT d.id, d.title_a, d.title_b FROM duel d
         JOIN title t ON t.id = d.title_a AND t.kind = $2
-        WHERE d.user_id = $1 AND d.context = 'tier_queue' AND NOT d.is_reask
+        WHERE d.user_id = $1 AND d.context = 'tier_queue' AND NOT d.is_reask AND d.selection <> $5
           AND d.created_at >= {cutover_sql()} AND d.created_at <= now() - $3::interval
           AND NOT EXISTS (SELECT 1 FROM duel r
                            WHERE r.reask_of = d.id AND r.created_at > now() - $4::interval)
@@ -238,6 +239,7 @@ async def reask_pairs(
         kind,
         queue.REASK_MIN_AGE,
         queue.REASK_COOLDOWN,
+        HELD_OUT,
     )
     return [(int(r["id"]), int(r["title_a"]), int(r["title_b"])) for r in rows]
 

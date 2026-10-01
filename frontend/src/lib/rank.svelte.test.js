@@ -3,7 +3,6 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   ROUND_END_TITLE,
   ROUND_SIZE,
-  TIER_THRESHOLD,
   TYPING_PAUSE_MS,
   answer,
   apply,
@@ -370,12 +369,9 @@ describe('Needs a look (§6.3)', () => {
 });
 
 describe("proposal 80's states", () => {
-  it('names the handoff to Rate with the real count', () => {
-    apply(board({ rated: 0, rated_total: 12 }));
-    const state = emptyState();
-    expect(state.kind).toBe('thin');
-    expect(state.text).toContain(`about ${TIER_THRESHOLD} titles`);
-    expect(state.text).toContain("you're at 12");
+  it('claims nothing on a young board, whose guess line is in Needs a look (decision 550)', () => {
+    apply(board({ rated: 3, rated_total: 3 }));
+    expect(emptyState()).toBeNull();
   });
 
   it('distinguishes "no match" from "not enough yet"', () => {
@@ -425,7 +421,7 @@ describe("proposal 80's states", () => {
     apply(board({ rated: 0, rated_total: 0, tiers: [], fitting: false }));
     const state = emptyState();
     expect(state.kind).toBe('unrated');
-    expect(state.text).toContain("you're at 0");
+    expect(state.text).toBe('Your tiers fill in as you place films on Rate.');
     expect(state.cta).toBe('Rate some titles');
   });
 });

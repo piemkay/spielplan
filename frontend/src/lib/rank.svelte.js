@@ -23,9 +23,6 @@ export function dnaTierText(tiers) {
   return (tiers ?? []).map((t) => DNA_TIER_LABELS[t] ?? t).join(' + ');
 }
 
-// Proposal 80's handoff figure for a board worth trusting.
-export const TIER_THRESHOLD = 30;
-
 /** §6.3's genre and decade vocabularies, scoped to the kind on screen (as Home scopes them). */
 export const facets = $state({ genres: [], decades: [] });
 
@@ -468,18 +465,11 @@ export function emptyState() {
       cta: 'Rate some titles'
     };
   }
-  // The board shows tiers from the first rated title; what 30 buys is a board worth trusting.
+  // A young board says nothing here: Needs a look's guess line speaks for it (decision 550).
   if (rank.ratedTotal === 0) {
     return {
       kind: 'unrated',
-      text: `Your tiers fill in as you rate titles — about ${TIER_THRESHOLD} makes a good start, and you're at 0.`,
-      cta: 'Rate some titles'
-    };
-  }
-  if (rank.ratedTotal < TIER_THRESHOLD) {
-    return {
-      kind: 'thin',
-      text: `These tiers are a first guess until you've rated about ${TIER_THRESHOLD} titles — you're at ${rank.ratedTotal}.`,
+      text: `Your tiers fill in as you place ${nounFor(2)} on Rate.`,
       cta: 'Rate some titles'
     };
   }

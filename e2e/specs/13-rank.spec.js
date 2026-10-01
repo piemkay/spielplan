@@ -205,7 +205,13 @@ test.describe('rank', () => {
     const writes = await writesDuring(page, async () => {
       await openLadder(page, titleId);
       await expect(ladder(page).getByTestId('ladder-shelf')).toHaveCount(7);
-      await expect(ladder(page)).toContainText(step.word);
+      // Every shelf carries its word, so the current step's is looked for outside them.
+      const named = await ladder(page).evaluate((sheet) => {
+        const copy = sheet.cloneNode(true);
+        copy.querySelectorAll('[data-testid="ladder-shelf"]').forEach((s) => s.remove());
+        return copy.textContent;
+      });
+      expect(named, 'the sheet names the current step by its word').toContain(step.word);
       await ladder(page).getByTestId('ladder-done').click();
       await expect(ladder(page)).toHaveCount(0);
       await expect(card(page)).toBeVisible();
@@ -595,6 +601,9 @@ test.describe('rank before the set-up', () => {
     await expect(page.getByTestId('rank-sharpen')).toHaveCount(0);
     await expect(page.getByRole('region', { name: 'Needs a look' })).toHaveCount(0);
     await expect(page.getByTestId('rank-empty')).toHaveCount(0);
+    // Its empty tiers stay on screen, and neither a head nor a strip letter takes a drop.
+    await expect(board(page).locator('[data-tier]')).toHaveCount(7);
+    await expect(page.locator('[data-drop-tier]')).toHaveCount(0);
 
     const film = (await (await page.request.get('/api/titles?kind=movie&limit=1')).json()).items[0];
     const refusals = {

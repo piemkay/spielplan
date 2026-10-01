@@ -1235,8 +1235,8 @@ async def test_the_guess_line_counts_sharpen_and_place_since_the_set_up_held_out
 
 
 async def test_a_re_ask_comes_from_sharpen_answers_three_days_old_and_rests_ninety_days(db, world):
-    """§13(b): since the cut-over, never a re-ask of a re-ask, and the held-out stream may be asked
-    again too: the re-ask is stored apart from it."""
+    """§13(b): since the cut-over, never a re-ask of a re-ask, and never a held-out pair, whose
+    re-ask would count among the selector's inputs (§13(a))."""
     user = world["patrick"]
     await db.execute(
         "INSERT INTO ladder_setup (user_id, finished_at) VALUES ($1, now() - interval '200 days')",
@@ -1254,5 +1254,5 @@ async def test_a_re_ask_comes_from_sharpen_answers_three_days_old_and_rests_nine
     await _compared(db, user, 11, 12, "tier_queue", days_ago=10)
 
     found = await read.reask_pairs(db, user_id=user, kind="movie")
-    assert {(a, b) for _id, a, b in found} == {(1, 2), (7, 8), (2, 4)}
+    assert {(a, b) for _id, a, b in found} == {(1, 2), (2, 4)}
     assert await read.reask_pairs(db, user_id=world["jenny"], kind="movie") == []
