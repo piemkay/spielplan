@@ -16306,6 +16306,63 @@ still shows its closest four, which may be weak matches.
 sample films illustrate the layout; the rule here decides which films appear). Where a board differs
 from this decision or the spec, the spec wins.
 
+## Decisions taken (owner, 2026-10-02, the 1.1.0 build)
+
+### 552. The wish list and Worth getting serve any number of members, and You opens the wish list
+
+**What the record says.** Decision 544 item 2 gives Worth getting's See all two views, **For you**
+and **For you and {other}**, and item 4 groups the household's wish list by who wants each title,
+each row saying whether the other would likely enjoy it. As built, the list's headings read "You
+want", "You both want" and "{other} wants", the shared view's cards lead with the other member's
+name, and the list opens only from a row under Home's Worth getting shelf.
+
+**Why it changes.** The owner, 2026-10-02: "we also need to iterate on the wishlist. I need a
+button in the user menu to open it. Maybe bellow 'Your Taste'. Also the two views wishlist and
+worth getting are hardcoded to our 2 users. However there might be any number of users at some
+point. So it needs a redesign". Shown three layouts for the list, he chose "Yours / everyone
+else's". For See all: "I want to select either a single user (including myself) or the household
+(everyone)". §3.1 already makes a third member first-class, and decision 549 met the same objection
+on Taste.
+
+**The decision.**
+1. **You opens the wish list.** A **Wish list** row directly under Your taste in You (§3.2) opens
+   the same wish list sheet. Home's row under the Worth getting shelf stays.
+2. **Two sections, whatever the household's size.** **You want** holds the viewer's own wanted
+   titles; a title others want too shows their avatars, and under it the names of the other members
+   who would likely enjoy it. **Others want** holds the titles only others want, each with the
+   avatars of who wants it, **Me too**, and the viewer's own "you: likely too" where it applies.
+   Each section is most wanted first, then newest. **Remove** takes the viewer's own want back;
+   **Copy the list** stays, most wanted first.
+3. **Worth getting's See all chooses whom it is for:** one member (the viewer by default, or any
+   other member) or **Everyone**. For one member it ranks the unowned titles of the kind by that
+   member's own score with that member's leave-outs (decision 512). Everyone ranks as the shared
+   sweet spot does, by the plain average of each member's score rank-standardised over the unowned
+   titles of the kind, over every member whose ratings open the shelf (20 rated titles of the kind),
+   and leaves out what any of them avoids. A member whose ratings do not yet open it is listed but
+   cannot be picked, with the reason. Each card's "Like {film}" line names one of the viewer's own
+   liked films, or is absent, and never another member's, so no member's ratings show to another
+   (in the spirit of decision 549 item 4).
+4. **No fixed partner.** No copy on the wish list or Worth getting's sheet names one: the "You both
+   want" and "{other} wants" headings and "For you and {other}" go.
+
+This supersedes decision 544 item 2's "For you or For you and {other}" and item 4's grouping by who
+wants each title, with its "whether the other would likely enjoy it". Decision 544's other items
+stand, and Home's shared shelf, *You and {other}*, is not part of this. The spec is amended in place
+(v2.1.18): §3.2's You and §6.0's Worth getting and wish list.
+
+**Cost.** Everyone reads each eligible member's score over the unowned titles of the kind, one read
+per member where the shared sweet spot reads two. The list reads, per row, who wants it and which
+other members would likely enjoy it. No table, job or migration: `wish` already holds every
+member's wants. Picking another member shows the titles the model expects them to enjoy most,
+though none of their ratings.
+
+**Design reference.** Canvas https://claude.ai/artifact/SmSBSMgW21T3MmSvgKgf7a, boards
+WishList.dc.html and WorthGetting.dc.html; no new board. The build keeps their look with the
+structures above: two sections in place of the grouping, and a member-or-Everyone choice in place of
+the two views. The You row follows Your taste's on You.dc.html (canvas
+https://claude.ai/artifact/VD4kvtiYKnMmrBjWjzuPSs). Where a board differs from this decision or the
+spec, the spec wins.
+
 ### To do for 1.1.0 (owner, 2026-10-01)
 
 - **A fresh export from the data curator, and a re-seed that keeps accounts and keys.** The owner
