@@ -53,17 +53,18 @@ async function expectTheModelLine(panel) {
   await expect(panel.locator('.modelline')).not.toContainText(/bundle|_/);
 }
 
-test('the card leads with the answers and Play, and folds the rest behind one disclosure', async ({
+test('the card leads with Play, the ranking row and Watched or Not seen, and folds the rest', async ({
   page
 }) => {
-  // Decision 517: the answers read in Rate's order; the long sections are folded.
+  // Decisions 517 and 536: no verdict tiles, the ladder rates; the long sections are folded.
   const panel = page.getByLabel('Title detail');
-  const answers = panel.getByTestId('title-rate').locator('[data-answer]');
-  await expect(answers).toHaveCount(4);
-  expect(await answers.evaluateAll((els) => els.map((el) => el.dataset.answer))).toEqual([
-    'disliked', 'fine', 'liked', 'not_seen'
-  ]);
   await expect(panel.getByRole('button', { name: 'Play on Jellyfin' })).toBeVisible();
+  await expect(panel.getByTestId('rank-card-tier')).toBeVisible();
+  // Heat is unwatched here, so Not seen is the standing state.
+  await expect(panel.getByTestId('title-watched')).toHaveText('Mark as watched');
+  await expect(panel.getByTestId('title-not-seen')).toHaveAttribute('aria-pressed', 'true');
+  await expect(panel.locator('[data-answer]')).toHaveCount(0);
+  await expect(panel.getByText("You haven't rated this yet.")).toHaveCount(0);
   const more = panel.getByTestId('title-more');
   await expect(more).not.toHaveAttribute('open', '');
   await expect(panel.getByTestId('title-more-toggle')).toHaveText('More about this film');
@@ -74,15 +75,21 @@ test('the card leads with the answers and Play, and folds the rest behind one di
   await expect(panel.locator('.tag').first()).toBeVisible();
 });
 
-test('Play is disabled with its reason, and Show on map waits for the Map', async ({ page }) => {
-  // The real reason, never a milestone label (decision 486). No Show on map while the Map is
-  // unbuilt (decision 488).
+test('Play is disabled with its reason', async ({ page }) => {
+  // The real reason, never a milestone label (decision 486).
   const panel = page.getByLabel('Title detail');
   await expect(panel.getByRole('button', { name: 'Play on Jellyfin' })).toBeDisabled();
   const why = panel.getByTestId('title-jellyfin-why');
   await expect(why).toBeVisible();
   await expect(why).not.toContainText(/\bM\d\b/);
-  await expect(panel.getByRole('link', { name: 'Show on map' })).toHaveCount(0);
+});
+
+test('Shares a lot with is absent while fewer than three films share with Heat', async ({ page }) => {
+  // Decision 550: absent under 3; each fixture term sits on one title, so nothing shares two.
+  const listing = await (await page.request.get('/api/titles?kind=movie&q=heat')).json();
+  const heat = listing.items.find((t) => t.name === 'Heat');
+  expect((await (await page.request.get(`/api/titles/${heat.id}`)).json()).shares).toEqual([]);
+  await expect(page.getByLabel('Title detail').getByTestId('title-shares')).toHaveCount(0);
 });
 
 test('the two DNA tiers are visibly distinct, and a term in both is shown once, quoted', async ({

@@ -267,26 +267,20 @@ async def undo(conn: DB, user: ActiveUser, request: Request) -> dict[str, Any]:
 
 
 class TitleAnswerBody(BaseModel):
-    answer: Literal["disliked", "fine", "liked", "not_seen"]
+    answer: Literal["not_seen"]
 
 
 @router.post("/title/{title_id}")
 async def answer_from_title_card(
-    title_id: int, body: TitleAnswerBody, conn: DB, user: ActiveUser, request: Request
+    title_id: int, body: TitleAnswerBody, conn: DB, user: ActiveUser
 ) -> dict[str, Any]:
-    """Decision 487: the title card's four answers, put on the person's table as a sweep card under a
-    fresh token, so §6.1's card, counter, Undo and reveal all apply."""
-    # First, for all four answers, so the route's first statement never depends on its body.
-    await deps.assert_active_basis(request, conn)
+    """Decision 487: the title card's Not seen, put on the person's table as a sweep card under a
+    fresh token, so §6.1's card, counter and Undo apply."""
     try:
-        outcome = await direct.answer(
+        outcome = await direct.not_seen(
             conn,
             user_id=user.id,
             title_id=title_id,
-            choice=body.answer,
-            hp=deps.hyperparams(request),
-            embeddings=deps.embeddings(request, conn),
-            bundle_version=deps.basis(request),
             jf=await _jellyfin(conn),
             later=session.settle_in_background,
         )
@@ -294,8 +288,6 @@ async def answer_from_title_card(
         raise HTTPException(status.HTTP_404_NOT_FOUND, "no such title") from exc
     except session.StaleCard as exc:
         raise _stale(exc) from exc
-    event = "not_seen" if body.answer == "not_seen" else "verdict"
     return await session.payload(
-        conn, outcome.session, reveal=outcome.reveal, log=outcome.log,
-        ledger=outcome.ledger, event_kind=event, user=user,
+        conn, outcome.session, log=outcome.log, event_kind="not_seen", user=user
     )

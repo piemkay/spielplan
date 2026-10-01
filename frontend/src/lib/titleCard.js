@@ -107,24 +107,6 @@ export function creditKey(credit) {
   return `${credit.person_id}:${credit.role_class ?? credit.job}`;
 }
 
-/**
- * Built from the class, not `text`, whose number is Show the model's (decision 486).
- *
- * @param {{available?: boolean, agreed?: boolean, predicted_label?: string, cdf?: number} | null | undefined} reveal
- */
-export function revealLine(reveal) {
-  if (!reveal?.available || !reveal.predicted_label) return '';
-  return reveal.agreed ? "We'd have guessed the same." : `We'd have guessed ${reveal.predicted_label}.`;
-}
-
-// Worst to best, then Not seen: the order Rate's sweep card uses.
-export const ANSWERS = [
-  { answer: 'disliked', label: 'Disliked' },
-  { answer: 'fine', label: 'Fine' },
-  { answer: 'liked', label: 'Liked' },
-  { answer: 'not_seen', label: 'Not seen' }
-];
-
 // Credit rows shown before the fold; `credits_for` orders directing first, then billing.
 export const CREDIT_TOP = 5;
 
@@ -234,12 +216,6 @@ export function projectedForCard(projected, extracted) {
     (lone || (pace && pole && pole !== pace) ? weak : strong).push(p);
   }
   return { strong, weak };
-}
-
-/** @param {string} answer */
-export function answeredLine(answer) {
-  if (answer === 'not_seen') return 'Saved — marked not seen.';
-  return `Saved — you ${answer === 'fine' ? 'thought it was fine' : answer + ' it'}.`;
 }
 
 /**

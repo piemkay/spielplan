@@ -150,7 +150,7 @@ describe('the surfaces that render a poster', () => {
       credits: [],
       platform_ratings: { items: [], note: 'display-only' },
       dna: { extracted: [], projected: [] },
-      actions: { play_on_jellyfin: null, show_on_map: { title_id: 6 } }
+      actions: { play_on_jellyfin: null }
     });
     app = mount(TitleDetail, {
       target,

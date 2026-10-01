@@ -7,8 +7,8 @@ import json
 
 import pytest
 
-from spielplan.api import auth as auth_api
-from spielplan.ledger import refit
+from spielplan.home import why
+from spielplan.ledger import observations, refit
 from spielplan.ledger.hyperparams import DEFAULTS
 from tests.helpers import household
 
@@ -144,6 +144,7 @@ async def test_play_names_which_of_its_two_reasons_it_is(db, card):
     owned = (await card.get("/api/titles/1")).json()["actions"]
     assert owned["play_on_jellyfin"] == "http://jellyfin.test/web/#/details?id=jf-1"
     assert owned["play_reason"] is None
+    assert set(owned) == {"play_on_jellyfin", "play_reason"}, "decision 548: no Show on map"
 
     # With no server, the server is the reason for every title, owned or not.
     await db.execute("DELETE FROM connector_config WHERE name = 'jellyfin'")
@@ -153,15 +154,6 @@ async def test_play_names_which_of_its_two_reasons_it_is(db, card):
         assert serverless["play_reason"] == "no_server"
 
 
-async def test_show_on_map_is_absent_until_the_map_ships(card, monkeypatch):
-    """Decision 488: follows the flag navigation follows."""
-    assert (await card.get("/api/titles/1")).json()["actions"]["show_on_map"] is None
-
-    shipped = tuple({**s, "built": True} if s["key"] == "map" else s for s in auth_api.SURFACES)
-    monkeypatch.setattr(auth_api, "SURFACES", shipped)
-    assert (await card.get("/api/titles/1")).json()["actions"]["show_on_map"] == {"title_id": 1}
-
-
 async def _journal(db) -> list[dict]:
     rows = await db.fetch(
         "SELECT kind_of, title_ids, card, undone_at FROM rate_observation ORDER BY seq"
@@ -169,61 +161,41 @@ async def _journal(db) -> list[dict]:
     return [dict(r) for r in rows]
 
 
-async def test_a_verdict_from_the_card_is_a_sweep_answer_in_the_rate_session(db, card):
-    """Written through the Rate session (decision 212): a journal row Undo reverses, the counter
-    moves, and the reveal rides on this response only."""
-    answered = await card.post("/api/rate/title/3", json={"answer": "liked"})
+async def test_not_seen_from_the_card_is_a_sweep_answer_in_the_rate_session(db, card):
+    """Written through the Rate session (decision 212): a journal row Undo reverses, and the
+    counter moves."""
+    uid = await db.fetchval("SELECT id FROM app_user WHERE name = 'jenny'")
+    await db.execute(
+        "INSERT INTO user_title (user_id, title_id, state) VALUES ($1, 3, 'seen')", uid
+    )
+    answered = await card.post("/api/rate/title/3", json={"answer": "not_seen"})
     assert answered.status_code == 200, answered.text
     body = answered.json()
-    assert body["session"]["block"]["slot"] == 2, "the answer did not move §6.1's counter"
-    assert body["undo"] == {"available": True, "kind": "verdict", "reason": None}
-    assert "reveal" in body
+    assert body["session"]["block"]["slot"] == 2, "the answer did not move the counter"
+    assert body["undo"]["available"] is True and body["undo"]["kind"] == "not_seen"
 
-    uid = await db.fetchval("SELECT id FROM app_user WHERE name = 'jenny'")
-    assert await db.fetchval(
-        "SELECT value FROM verdict WHERE user_id = $1 AND title_id = 3", uid
-    ) == 2
-    assert await db.fetchval(
-        "SELECT state FROM user_title WHERE user_id = $1 AND title_id = 3", uid
-    ) == "seen", "§6.1: a verdict implies seen"
+    state = "SELECT state FROM user_title WHERE user_id = $1 AND title_id = 3"
+    assert await db.fetchval(state, uid) == "unseen"
     (row,) = await _journal(db)
-    assert row["kind_of"] == "verdict" and list(row["title_ids"]) == [3]
+    assert row["kind_of"] == "not_seen" and list(row["title_ids"]) == [3]
     assert row["card"]["source"] == "title_card"
-
-    detail = (await card.get("/api/titles/3")).json()
-    assert detail["my_verdict"] == {"value": 2, "label": "liked"}
 
     undone = await card.post("/api/rate/undo")
     assert undone.status_code == 200, undone.text
-    assert await db.fetchval("SELECT count(*) FROM verdict WHERE title_id = 3") == 0
-    assert (await card.get("/api/titles/3")).json()["my_verdict"] is None
-
-
-async def test_the_card_answers_a_title_the_queue_would_never_serve(db, card):
-    """A second verdict supersedes the first (§4.2)."""
-    assert (await card.post("/api/rate/title/3", json={"answer": "liked"})).status_code == 200
-    again = await card.post("/api/rate/title/3", json={"answer": "fine"})
-    assert again.status_code == 200, again.text
-    assert (await card.get("/api/titles/3")).json()["my_verdict"] == {"value": 1, "label": "fine"}
-    live = await db.fetchval(
-        "SELECT count(*) FROM verdict WHERE title_id = 3 AND superseded_by IS NULL"
-    )
-    assert live == 1, "a re-rating left two live verdicts"
+    assert await db.fetchval(state, uid) == "seen"
 
 
 async def test_not_seen_from_the_card_flips_the_state_and_keeps_the_verdict(db, card):
     """Not seen is a state; the verdict survives the flip."""
-    assert (await card.post("/api/rate/title/3", json={"answer": "disliked"})).status_code == 200
+    uid = await db.fetchval("SELECT id FROM app_user WHERE name = 'jenny'")
+    await observations.record_verdict(db, user_id=uid, title_id=3, value=0)
     flipped = await card.post("/api/rate/title/3", json={"answer": "not_seen"})
     assert flipped.status_code == 200, flipped.text
-    uid = await db.fetchval("SELECT id FROM app_user WHERE name = 'jenny'")
+    assert (await card.get("/api/titles/3")).json()["title"]["seen_state"] == "unseen"
     assert await db.fetchval(
-        "SELECT state FROM user_title WHERE user_id = $1 AND title_id = 3", uid
-    ) == "unseen"
-    detail = (await card.get("/api/titles/3")).json()
-    assert detail["title"]["seen_state"] == "unseen"
-    assert detail["my_verdict"] == {"value": 0, "label": "disliked"}
-    assert [r["kind_of"] for r in await _journal(db)] == ["verdict", "not_seen"]
+        "SELECT value FROM verdict WHERE user_id = $1 AND title_id = 3 AND superseded_by IS NULL", uid
+    ) == 0
+    assert [r["kind_of"] for r in await _journal(db)] == ["not_seen"]
 
 
 async def test_the_card_answer_takes_the_table_and_the_old_token_goes_stale(card):
@@ -231,7 +203,8 @@ async def test_the_card_answer_takes_the_table_and_the_old_token_goes_stale(card
     parked = (await card.get("/api/rate")).json()["card"]
     assert parked is not None and parked["type"] == "sweep"
     target = 4 if parked["title"]["id"] != 4 else 3
-    assert (await card.post(f"/api/rate/title/{target}", json={"answer": "fine"})).status_code == 200
+    taken = await card.post(f"/api/rate/title/{target}", json={"answer": "not_seen"})
+    assert taken.status_code == 200, taken.text
     stale = await card.post("/api/rate/verdict", json={"card_token": parked["token"], "value": 2})
     assert stale.status_code == 409
     assert stale.json()["detail"]["reason"] == "stale_card"
@@ -258,13 +231,107 @@ async def test_the_card_ranks_a_title_with_no_letter_before_the_persons_own_answ
     await refit.refit_user(db, user_id=uid, kind="movie", hp=DEFAULTS)
     body = (await card.get("/api/titles/4")).json()
     assert body["ranking"]["tier"] == 5
-    assert body["my_verdict"] == {"value": 2, "label": "liked"}
     assert body["title"]["seen_state"] == "seen"
+    assert await db.fetchval(
+        "SELECT value FROM verdict WHERE user_id = $1 AND title_id = 4 AND superseded_by IS NULL", uid
+    ) == 2
 
 
-async def test_the_card_answer_route_refuses_what_it_cannot_answer(app, card):
-    """An unknown title is a 404, an answer §6.1 does not offer is a 422, and a stranger is a 401."""
-    assert (await card.post("/api/rate/title/999", json={"answer": "liked"})).status_code == 404
-    assert (await card.post("/api/rate/title/3", json={"answer": "loved"})).status_code == 422
+async def test_the_card_answer_route_takes_not_seen_alone(db, app, card):
+    """Decision 536: the card rates on the ladder, so a verdict here is a 422 and writes nothing; an
+    unknown title is a 404, and a stranger is a 401."""
+    assert (await card.post("/api/rate/title/999", json={"answer": "not_seen"})).status_code == 404
+    for answer in ("disliked", "fine", "liked", "loved"):
+        assert (await card.post("/api/rate/title/3", json={"answer": answer})).status_code == 422
+    assert await db.fetchval("SELECT count(*) FROM verdict") == 0
     stranger = app()
-    assert (await stranger.post("/api/rate/title/3", json={"answer": "liked"})).status_code == 401
+    assert (await stranger.post("/api/rate/title/3", json={"answer": "not_seen"})).status_code == 401
+
+
+# --- Shares a lot with (decisions 541 and 550) ---------------------------------------------------
+
+LA, HEIST, TENSE, RARE = "place.los_angeles", "themes.heist", "mood.tense", "themes.rare"
+
+
+@pytest.fixture
+async def shares(db, card):
+    """Target 10 carries three terms. 11 shares all three, 12-19 two (eight of them reach the cap,
+    19 does not), 20 one. 21 is unowned, 22 a series and 23 animated, each carrying all three, and
+    `themes.rare` sits on no owned title."""
+    await db.executemany(
+        "INSERT INTO dna_facet (version, facet, ord) VALUES ($1, $2, $3)",
+        [(VOCAB, "place", 2), (VOCAB, "themes", 3)],
+    )
+    await db.executemany(
+        "INSERT INTO dna_term (version, term, facet, gloss, label) VALUES ($1, $2, $3, '', $4)",
+        [(VOCAB, LA, "place", "Los Angeles"), (VOCAB, HEIST, "themes", "Heist"),
+         (VOCAB, TENSE, "mood", None), (VOCAB, RARE, "themes", "Rare")],
+    )
+    titles = [(10, "movie", "Target", True), *[(i, "movie", f"Film {i}", True) for i in range(11, 21)],
+              (21, "movie", "Unowned", False), (22, "series", "A Series", True),
+              (23, "movie", "A Cartoon", True), (24, "movie", "Also Unowned", False)]
+    await db.executemany(
+        "INSERT INTO title (id, kind, name, year, is_owned) VALUES ($1, $2, $3, 2000, $4)", titles
+    )
+    await db.execute("INSERT INTO title_genre (title_id, genre, source) VALUES (23, 'Animation', 'tmdb')")
+    tags = {10: (LA, HEIST, TENSE), 11: (LA, HEIST, TENSE), 20: (HEIST,), 21: (LA, HEIST, TENSE, RARE),
+            22: (LA, HEIST, TENSE), 23: (LA, HEIST, TENSE), 24: (HEIST, RARE),
+            **{i: (HEIST, TENSE) for i in range(12, 20)}}
+    await db.executemany(
+        "INSERT INTO dna_projected (title_id, version, term, facet, weight, via) "
+        "VALUES ($1, $2, $3, $4, 1, 'movielens_tags')",
+        [(t, VOCAB, term, term.split(".")[0]) for t, terms in tags.items() for term in terms],
+    )
+    uid = await db.fetchval("SELECT id FROM app_user WHERE name = 'jenny'")
+    await db.execute("INSERT INTO user_title (user_id, title_id, state) VALUES ($1, 11, 'seen')", uid)
+    return card
+
+
+async def test_shares_are_the_closest_owned_titles_of_the_kind_seen_ones_included(shares):
+    """Owned, the card's kind and form, two terms or more, at most eight, closest first; the seen
+    one carries its mark and each its strongest shared term."""
+    items = (await shares.get("/api/titles/10")).json()["shares"]
+    assert [i["title_id"] for i in items] == [11, 12, 13, 14, 15, 16, 17, 18]
+    first, second = items[0], items[1]
+    assert first["seen"] is True and second["seen"] is False
+    # The rarer the shared term in the owned films, the stronger: three films carry Los Angeles.
+    assert first["term"] == {"term": LA, "facet": "place", "label": "Los Angeles"}
+    assert second["term"] == {"term": TENSE, "facet": "mood", "label": "tense"}
+    assert set(first) == {
+        "title_id", "kind", "name", "original_name", "original_language", "year", "runtime_min",
+        "poster_path", "seen", "term",
+    }
+    assert first["kind"] == "movie" and first["name"] == "Film 11"
+
+
+async def test_an_unowned_card_shares_with_the_library_and_never_with_itself(shares):
+    items = (await shares.get("/api/titles/21")).json()["shares"]
+    assert [i["title_id"] for i in items][:2] == [10, 11]
+    assert 21 not in [i["title_id"] for i in items] and len(items) == 8
+
+
+async def test_shares_are_absent_under_three(db, shares):
+    await db.execute("DELETE FROM dna_projected WHERE title_id BETWEEN 13 AND 19")
+    assert (await shares.get("/api/titles/10")).json()["shares"] == []
+    await db.execute(
+        "INSERT INTO dna_projected (title_id, version, term, facet, weight, via) "
+        "VALUES (13, $1, $2, 'themes', 1, 'x'), (13, $1, $3, 'mood', 1, 'x')",
+        VOCAB, HEIST, TENSE,
+    )
+    assert [i["title_id"] for i in (await shares.get("/api/titles/10")).json()["shares"]] == [11, 12, 13]
+    # A title sharing nothing has no row at all.
+    assert (await shares.get("/api/titles/3")).json()["shares"] == []
+
+
+async def test_likeness_reads_any_two_titles_owned_or_not(db, shares):
+    """Rate's shelves reuse it (decision 551): no owned, unseen, kind or form filter, one shared term
+    is enough, and a term no owned title carries weighs as the rarest."""
+    likes = await why.likeness(
+        db, title_id=21, candidate_ids=[10, 20, 21, 22, 23, 24, 3], kind="movie", version=VOCAB
+    )
+    assert set(likes) == {10, 20, 22, 23, 24}
+    assert likes[24].shared == 2 and likes[24].term == RARE and likes[24].label == "Rare"
+    assert likes[20].shared == 1
+    same = await why.likeness(db, title_id=10, candidate_ids=[23, 11], kind="movie", version=VOCAB)
+    assert same[23].likeness == pytest.approx(1.0) and same[11].likeness == pytest.approx(1.0)
+    assert likes[10].likeness < 1.0, "the rare term is the target's and not the candidate's"

@@ -122,14 +122,17 @@ test.describe('jellyfin', () => {
   });
 
   test('a tap in the app arrives in jellyfin, under the per-user token', async () => {
+    // The card's Not seen, through the Rate session, which hands the push off after answering.
     const panel = await openTitle(page, 'Heat');
-    await panel.getByRole('button', { name: 'Watched', exact: true }).click();
+    await panel.getByRole('button', { name: 'Not seen', exact: true }).click();
 
     await expect(panel.getByRole('button', { name: 'Mark as watched' })).toBeVisible();
-    await expect(panel.locator('.syncnote')).toHaveText('Saved, and Jellyfin is up to date.');
+    await expect(panel.getByTestId('title-seen-note')).toHaveText('Saved — marked not seen.');
 
+    await expect
+      .poll(async () => (await jellyfinState(page.request)).played[JELLYFIN.user.patrick])
+      .not.toContain(JELLYFIN.item.heat);
     const state = await jellyfinState(page.request);
-    expect(state.played[JELLYFIN.user.patrick]).not.toContain(JELLYFIN.item.heat);
     // The fake refuses the admin key here, so any write proves the per-user token (§7.3).
     expect(state.writes.at(-1)).toEqual({
       user: JELLYFIN.user.patrick,

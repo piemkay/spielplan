@@ -1,8 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
 import {
-  ANSWERS,
-  answeredLine,
   creditJobs,
   creditKey,
   dedupeEvidence,
@@ -14,7 +12,6 @@ import {
   playWhy,
   projectedForCard,
   quoteText,
-  revealLine,
   scoreLabel,
   sourceLabel,
   syncNote
@@ -152,25 +149,6 @@ describe('creditJobs and creditKey', () => {
   });
 });
 
-describe('revealLine and answeredLine', () => {
-  it("builds §6.1's phrase from the class and never prints the number", () => {
-    expect(revealLine({ available: true, agreed: true, predicted_label: 'liked', cdf: 0.7 })).toBe(
-      "We'd have guessed the same."
-    );
-    const miss = revealLine({ available: true, agreed: false, predicted_label: 'fine', cdf: 0.4 });
-    expect(miss).toBe("We'd have guessed fine.");
-    expect(revealLine({ available: false })).toBe('');
-    expect(revealLine(null)).toBe('');
-  });
-
-  it('says what was saved in words', () => {
-    expect(answeredLine('liked')).toBe('Saved — you liked it.');
-    expect(answeredLine('fine')).toBe('Saved — you thought it was fine.');
-    expect(answeredLine('disliked')).toBe('Saved — you disliked it.');
-    expect(answeredLine('not_seen')).toBe('Saved — marked not seen.');
-  });
-});
-
 describe('directedBy', () => {
   const credit = (name, role_class, job) => ({ person_id: name.length, name, role_class, job });
 
@@ -219,12 +197,6 @@ describe('scoreLabel', () => {
     expect(scoreLabel(critics, items)).toBe('Rotten Tomatoes critics');
     expect(scoreLabel(audience, items)).toBe('Rotten Tomatoes audience');
     expect(scoreLabel({ platform: 'trakt', metric: 'watch_rating' }, items)).toBe('Trakt watch rating');
-  });
-});
-
-describe('ANSWERS', () => {
-  it("run worst to best, as Rate's sweep card does, then Not seen", () => {
-    expect(ANSWERS.map((a) => a.answer)).toEqual(['disliked', 'fine', 'liked', 'not_seen']);
   });
 });
 

@@ -6,7 +6,7 @@ import { flushSync, mount, unmount } from 'svelte';
 import { get as read } from 'svelte/store';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('$lib/api.js', () => ({ get: vi.fn(), post: vi.fn() }));
+vi.mock('$lib/api.js', () => ({ api: vi.fn(), get: vi.fn(), post: vi.fn() }));
 
 // The sheet is a history entry: `pushState` adds it and Back (here `history.back`) takes it away.
 const nav = vi.hoisted(() => ({ page: null }));
@@ -19,12 +19,12 @@ vi.mock('$app/navigation', () => ({
   pushState: (_url, state) => nav.page.update((p) => ({ ...p, state }))
 }));
 
-import { get, post } from '$lib/api.js';
+import { api, get, post } from '$lib/api.js';
 import { hideToast, toast } from '$lib/toast.svelte.js';
 import TitleDetail from './TitleDetail.svelte';
 
 const NOTE = '[data-testid="title-series-unseen-note"]';
-const SYNCNOTE = '.syncnote';
+const SEEN_NOTE = '[data-testid="title-seen-note"]';
 const JELLYFIN_WHY = '[data-testid="title-jellyfin-why"]';
 
 /** One `GET /api/titles/{id}` payload, in the shape `api/library.py` sends. */
@@ -46,8 +46,8 @@ const payload = (over = {}) => ({
   credits: [],
   platform_ratings: { items: [], note: 'display-only' },
   dna: { extracted: [], projected: [] },
-  my_verdict: null,
-  actions: { play_on_jellyfin: null, play_reason: 'no_server', show_on_map: null }
+  shares: [],
+  actions: { play_on_jellyfin: null, play_reason: 'no_server' }
 });
 
 let target;
@@ -55,6 +55,7 @@ let target;
 beforeEach(() => {
   target = document.createElement('div');
   document.body.appendChild(target);
+  vi.mocked(api).mockReset();
   vi.mocked(get).mockReset();
   vi.mocked(post).mockReset();
   nav.page.update((p) => ({ ...p, state: {} }));
@@ -91,8 +92,10 @@ async function open(over = {}, extra = {}) {
   return app;
 }
 
-const tapSeen = async () => {
-  const button = target.querySelector('button.seen');
+const byTestId = (testid) => target.querySelector(`[data-testid="${testid}"]`);
+
+const tapWatched = async () => {
+  const button = byTestId('title-watched');
   expect(button, 'the seen control is not on screen').not.toBeNull();
   button.click();
   await settle();
@@ -122,15 +125,11 @@ describe("decisions 210(a) and 533's why-line", () => {
 
 describe('the sync note', () => {
   it('prints the reason a successful write gives, rather than claiming a push', async () => {
-    vi.mocked(post).mockResolvedValue({
-      state: 'unseen',
-      synced: true,
-      reason: 'series unseen is app-only'
-    });
-    const app = await open();
+    vi.mocked(post).mockResolvedValue({ state: 'seen', synced: true, reason: 'series seen is app-only' });
+    const app = await open({ seen_state: 'unseen' });
     try {
-      await tapSeen();
-      const note = target.querySelector(SYNCNOTE).textContent;
+      await tapWatched();
+      const note = byTestId('title-seen-note').textContent;
       expect(note).toContain('Jellyfin keeps its own episode history');
       expect(note).not.toContain('up to date');
     } finally {
@@ -142,25 +141,28 @@ describe('the sync note', () => {
     vi.mocked(post).mockResolvedValue({ state: 'seen', synced: true, reason: null });
     const app = await open({ kind: 'movie', seen_state: 'unseen' });
     try {
-      await tapSeen();
-      expect(target.querySelector(SYNCNOTE).textContent).toContain('Jellyfin is up to date');
+      await tapWatched();
+      expect(byTestId('title-seen-note').textContent).toContain('Jellyfin is up to date');
     } finally {
       unmount(app);
     }
   });
 
-  it('sits under the actions and outside the credits, as a quiet line', async () => {
+  it('sits under the pair and outside the credits, as a quiet line', async () => {
     vi.mocked(post).mockResolvedValue({ state: 'seen', synced: false, reason: 'not on Jellyfin' });
     const app = await open(
       { kind: 'movie', seen_state: 'unseen' },
       { credits: [{ person_id: 1, name: 'Michael Mann', job: 'Director', sources: ['tmdb'] }] }
     );
     try {
-      await tapSeen();
-      const note = target.querySelector(SYNCNOTE);
+      await tapWatched();
+      const note = target.querySelector(SEEN_NOTE);
       expect(note.textContent).toContain("isn't in your Jellyfin library");
+      expect(note.getAttribute('role')).toBe('status');
       expect(note.closest('section'), 'the note is inside a section').toBeNull();
-      expect(note.closest('.actions'), 'the note is inside the button row').toBeNull();
+      expect(note.closest('.pair'), 'the note is inside the button row').toBeNull();
+      const pair = byTestId('title-not-seen').closest('.pair');
+      expect(pair.compareDocumentPosition(note) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
       expect(note.classList.contains('footnote')).toBe(true);
     } finally {
       unmount(app);
@@ -238,7 +240,7 @@ describe('the card is a sheet (decision 527)', () => {
     const app = await open({}, { props: { onClose } });
     try {
       dialog().dispatchEvent(new KeyboardEvent('keydown', { key: 'm', bubbles: true }));
-      await tapSeen();
+      await tapWatched();
       expect(onClose).not.toHaveBeenCalled();
       expect(sheets()).toHaveLength(1);
     } finally {
@@ -398,12 +400,12 @@ describe('a card opened from a poster (decision 530)', () => {
       expect(target.querySelector('.sub').textContent).toMatch(/^1995 · 2h/);
       expect(target.querySelector('[data-testid="rate-poster"]').getAttribute('data-title-id')).toBe('6');
       expect(target.textContent, 'a loading line instead of the film').not.toContain('Loading');
-      expect(target.querySelector('[data-answer]'), 'answers before the read').toBeNull();
+      expect(byTestId('title-not-seen'), 'answers before the read').toBeNull();
 
       land(payload({ kind: 'movie', name: 'Heat', year: 1995, runtime_min: 170, seen_state: 'unseen' }));
       await settle();
       expect(target.querySelector('.title-1').textContent).toBe('Heat');
-      expect(target.querySelector('[data-answer="liked"]')).not.toBeNull();
+      expect(byTestId('title-not-seen')).not.toBeNull();
       expect(target.querySelector('[data-testid="title-more"]').hidden).toBe(false);
     } finally {
       unmount(app);
@@ -456,10 +458,11 @@ describe('the header', () => {
     }
   });
 
-  it('links the trailer by what it is and never prints its key', async () => {
+  it('links the trailer by what it is, on a row of its own, and never prints its key', async () => {
     const app = await open({ trailer_key: 'F-eMt3SrfFU' });
     try {
       const link = target.querySelector('a.trailer');
+      expect(link.closest('.pair'), 'the trailer shares a row').toBeNull();
       expect(link.textContent.trim()).toBe('Trailer');
       expect(link.getAttribute('aria-label')).toBe('Watch the trailer on YouTube');
       expect(link.getAttribute('href')).toBe('https://www.youtube.com/watch?v=F-eMt3SrfFU');
@@ -470,23 +473,12 @@ describe('the header', () => {
   });
 });
 
-describe("§6.0's Show on map waits for the Map (decision 488)", () => {
-  it('is absent while the payload carries no target', async () => {
+describe('Show on map waits with the Map (decision 548)', () => {
+  it('is on no card', async () => {
     const app = await open();
     try {
       expect(target.textContent).not.toContain('Show on map');
-    } finally {
-      unmount(app);
-    }
-  });
-
-  it('links to the map on the day the server sends one', async () => {
-    const app = await open({}, { actions: { play_on_jellyfin: null, show_on_map: { title_id: 6 } } });
-    try {
-      const link = [...target.querySelectorAll('a')].find((a) =>
-        a.textContent.includes('Show on map')
-      );
-      expect(link?.getAttribute('href')).toBe('/map?title=6');
+      expect(target.querySelector('a[href^="/map"]')).toBeNull();
     } finally {
       unmount(app);
     }
@@ -582,9 +574,9 @@ describe('the card leads with what a member opens it for', () => {
     let app = await open({ kind: 'movie' }, { why: 'Because you liked Heat' });
     const why = target.querySelector('[data-testid="title-why"]');
     expect(why.textContent.trim()).toBe('Because you liked Heat');
-    // It comes before the answers, Play and the synopsis.
-    const rate = target.querySelector('[data-testid="title-rate"]');
-    expect(why.compareDocumentPosition(rate) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    // It comes before Play, the pair and the synopsis.
+    const pair = byTestId('title-not-seen');
+    expect(why.compareDocumentPosition(pair) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
     unmount(app);
     for (const absent of [{}, { why: null }, { why: '  ' }]) {
       app = await open({ kind: 'movie' }, absent);
@@ -593,13 +585,16 @@ describe('the card leads with what a member opens it for', () => {
     }
   });
 
-  it('puts the answers and Play above the synopsis', async () => {
-    const app = await open({ kind: 'movie', overview: 'A thief and a cop.' });
+  it('puts Play, the ranking rows, the pair and the trailer above the synopsis, in that order', async () => {
+    const app = await open(
+      { kind: 'movie', overview: 'A thief and a cop.', trailer_key: 'x' },
+      { ranking: { tier: null, tension: null, tiers: [] } }
+    );
     try {
-      const overview = target.querySelector('.overview');
-      for (const sel of ['[data-testid="title-rate"]', '.actions']) {
-        const el = target.querySelector(sel);
-        expect(el.compareDocumentPosition(overview) & Node.DOCUMENT_POSITION_FOLLOWING, sel).toBeTruthy();
+      const order = ['.play', '[data-testid="rank-card-tier"]', '[data-testid="title-watched"]', 'a.trailer', '.overview'];
+      for (let i = 1; i < order.length; i++) {
+        const [before, after] = [order[i - 1], order[i]].map((sel) => target.querySelector(sel));
+        expect(before.compareDocumentPosition(after) & Node.DOCUMENT_POSITION_FOLLOWING, order[i]).toBeTruthy();
       }
     } finally {
       unmount(app);
@@ -659,11 +654,11 @@ describe('the card leads with what a member opens it for', () => {
     }
   });
 
-  it('reads the answers worst to best, as Rate does', async () => {
-    const app = await open({ kind: 'movie' });
+  it('draws no verdict tiles: the ladder rates (decision 536)', async () => {
+    const app = await open({ kind: 'movie', seen_state: 'unseen' });
     try {
-      const order = [...target.querySelectorAll('[data-answer]')].map((b) => b.dataset.answer);
-      expect(order).toEqual(['disliked', 'fine', 'liked', 'not_seen']);
+      expect(target.querySelector('[data-answer]')).toBeNull();
+      expect(target.textContent).not.toMatch(/Disliked|Liked|You haven't rated this yet/);
     } finally {
       unmount(app);
     }
@@ -859,114 +854,82 @@ describe('faces (decision 528)', () => {
   });
 });
 
-describe("the card's own answer (decision 487)", () => {
-  it('writes through the Rate session and says what it saved and what we guessed', async () => {
-    vi.mocked(post).mockResolvedValue({
-      reveal: { available: true, agreed: true, predicted_label: 'liked', cdf: 0.71, text: 'x' }
-    });
+describe('Watched and Not seen', () => {
+  const pressed = (testid) => byTestId(testid).getAttribute('aria-pressed');
+
+  it('Not seen writes through the Rate session, says so, and reads the card again', async () => {
+    vi.mocked(post).mockResolvedValue({});
     const onStateChange = vi.fn();
-    const app = await open({ kind: 'movie', seen_state: 'unseen' }, { props: { onStateChange } });
+    const app = await open({ kind: 'movie', seen_state: 'seen' }, { props: { onStateChange } });
     try {
-      const liked = target.querySelector('[data-answer="liked"]');
-      expect(liked.getAttribute('aria-pressed')).toBe('false');
-      liked.click();
+      expect(byTestId('title-watched').textContent.trim()).toBe('Watched');
+      expect([pressed('title-watched'), pressed('title-not-seen')]).toEqual(['true', 'false']);
+      // The server's own reading after the write, why line and all (decision 515).
+      vi.mocked(get).mockResolvedValue({
+        ...payload({ kind: 'movie', seen_state: 'unseen' }),
+        why: 'Because you liked Heat'
+      });
+      byTestId('title-not-seen').click();
       await settle();
-      expect(vi.mocked(post)).toHaveBeenCalledWith('/rate/title/6', { answer: 'liked' });
-      const note = target.querySelector('[data-testid="title-rate-note"]').textContent;
-      expect(note).toContain('you liked it');
-      expect(note).toContain("We'd have guessed the same.");
-      expect(note.replace(/\s+/g, ' ').trim()).toBe("Saved — you liked it. We'd have guessed the same.");
-      expect(note, "the reveal's number is Show the model's").not.toContain('0.71');
-      expect(target.querySelector('[data-answer="liked"]').getAttribute('aria-pressed')).toBe(
-        'true'
-      );
-      expect(target.querySelector('button.seen').textContent.trim()).toBe('Watched');
+      expect(vi.mocked(post)).toHaveBeenCalledWith('/rate/title/6', { answer: 'not_seen' });
+      expect(vi.mocked(get)).toHaveBeenCalledTimes(2);
+      expect(byTestId('title-seen-note').textContent).toBe('Saved — marked not seen.');
+      expect(byTestId('title-watched').textContent.trim()).toBe('Mark as watched');
+      expect([pressed('title-watched'), pressed('title-not-seen')]).toEqual(['false', 'true']);
+      expect(byTestId('title-why').textContent).toBe('Because you liked Heat');
+      expect(onStateChange).toHaveBeenCalledWith(6, 'unseen');
+    } finally {
+      unmount(app);
+    }
+  });
+
+  it('Watched marks the title seen and drops the why line', async () => {
+    vi.mocked(post).mockResolvedValue({ state: 'seen', synced: true, reason: null });
+    const onStateChange = vi.fn();
+    const app = await open(
+      { kind: 'movie', seen_state: 'unseen' },
+      { why: 'Because you liked Heat', props: { onStateChange } }
+    );
+    try {
+      expect(byTestId('title-watched').textContent.trim()).toBe('Mark as watched');
+      await tapWatched();
+      expect(vi.mocked(post)).toHaveBeenCalledWith('/titles/6/state', { state: 'seen' });
+      expect(byTestId('title-watched').textContent.trim()).toBe('Watched');
+      expect(pressed('title-watched')).toBe('true');
+      expect(byTestId('title-why')).toBeNull();
       expect(onStateChange).toHaveBeenCalledWith(6, 'seen');
     } finally {
       unmount(app);
     }
   });
 
-  it('stops saying why a title is suggested once the member has rated it or marked it seen', async () => {
-    // The server omits the line on the next open; the open card must drop it too.
-    const why = { why: 'Because you liked Heat' };
-    const line = () => target.querySelector('[data-testid="title-why"]');
-    vi.mocked(post).mockResolvedValue({ reveal: null });
-    let app = await open({ kind: 'movie', seen_state: 'unseen' }, why);
+  it('writes nothing for a tap on the state that already stands', async () => {
+    vi.mocked(post).mockResolvedValue({});
+    let app = await open({ kind: 'movie', seen_state: 'seen' });
     try {
-      target.querySelector('[data-answer="not_seen"]').click();
-      await settle();
-      expect(line(), 'Not seen leaves an unseen title unseen').not.toBeNull();
+      await tapWatched();
+      expect(vi.mocked(post)).not.toHaveBeenCalled();
     } finally {
       unmount(app);
     }
-    app = await open({ kind: 'movie', seen_state: 'unseen' }, why);
+    app = await open({ kind: 'movie', seen_state: 'unseen' });
     try {
-      expect(line()).not.toBeNull();
-      target.querySelector('[data-answer="liked"]').click();
+      byTestId('title-not-seen').click();
       await settle();
-      expect(line(), 'rated from the card').toBeNull();
-    } finally {
-      unmount(app);
-    }
-    vi.mocked(post).mockResolvedValue({ synced: true });
-    app = await open({ kind: 'movie', seen_state: 'unseen' }, why);
-    try {
-      await tapSeen();
-      expect(line(), 'marked seen from the card').toBeNull();
+      expect(vi.mocked(post)).not.toHaveBeenCalled();
     } finally {
       unmount(app);
     }
   });
 
-  it('writes nothing for a tap on the answer that already stands', async () => {
-    vi.mocked(post).mockResolvedValue({ reveal: null });
-    const rated = await open(
-      { kind: 'movie', seen_state: 'seen' },
-      { my_verdict: { value: 2, label: 'liked' } }
-    );
+  it('keeps the note on the card when a write fails', async () => {
+    vi.mocked(post).mockRejectedValue(new Error('the server is busy'));
+    const app = await open({ kind: 'movie', seen_state: 'seen' });
     try {
-      target.querySelector('[data-answer="liked"]').click();
+      byTestId('title-not-seen').click();
       await settle();
-      expect(target.querySelector('[data-answer="liked"]').hasAttribute('data-flick')).toBe(true);
-      expect(vi.mocked(post)).not.toHaveBeenCalled();
-      expect(target.querySelector('[data-answer="liked"]').getAttribute('aria-pressed')).toBe(
-        'true'
-      );
-      // A change of mind still writes.
-      target.querySelector('[data-answer="fine"]').click();
-      await settle();
-      expect(vi.mocked(post)).toHaveBeenCalledWith('/rate/title/6', { answer: 'fine' });
-    } finally {
-      unmount(rated);
-    }
-    vi.mocked(post).mockClear();
-    const unseen = await open({ kind: 'movie', seen_state: 'unseen' });
-    try {
-      target.querySelector('[data-answer="not_seen"]').click();
-      await settle();
-      expect(vi.mocked(post)).not.toHaveBeenCalled();
-    } finally {
-      unmount(unseen);
-    }
-  });
-
-  it('shows the standing verdict pressed, and Not seen flips the state and keeps it', async () => {
-    vi.mocked(post).mockResolvedValue({ reveal: null });
-    const app = await open(
-      { kind: 'movie', seen_state: 'seen' },
-      { my_verdict: { value: 1, label: 'fine' } }
-    );
-    try {
-      expect(target.querySelector('[data-answer="fine"]').getAttribute('aria-pressed')).toBe(
-        'true'
-      );
-      target.querySelector('[data-answer="not_seen"]').click();
-      await settle();
-      expect(vi.mocked(post)).toHaveBeenCalledWith('/rate/title/6', { answer: 'not_seen' });
-      expect(target.querySelector('button.seen').textContent.trim()).toBe('Mark as watched');
-      // The verdict survives the flip (§4.2) but is not what the person just said.
-      expect(target.querySelector('[aria-pressed="true"][data-answer]')).toBeNull();
+      expect(byTestId('title-seen-note').textContent).toBe('Could not save that — the server is busy');
+      expect(pressed('title-watched')).toBe('true');
     } finally {
       unmount(app);
     }
@@ -987,7 +950,6 @@ describe('the ranking rows on every card (decision 531)', () => {
   const ranking = (tier, tension = null) => ({ tier, tension, tiers: TIERS });
   const heat = { kind: 'movie', name: 'Heat' };
 
-  const byTestId = (testid) => target.querySelector(`[data-testid="${testid}"]`);
   const sheet = (name) => target.querySelector(`[role="dialog"][aria-label="${name}"]`);
   const options = (name) => [...sheet(name).querySelectorAll('[role="menuitem"]')];
   async function choose(name, label) {
@@ -1002,10 +964,7 @@ describe('the ranking rows on every card (decision 531)', () => {
   it('names the tier on a card opened from Home, moves it there, and undoes the move', async () => {
     vi.mocked(post).mockResolvedValue({});
     const onStateChange = vi.fn();
-    const app = await open(
-      { ...heat, seen_state: 'seen' },
-      { my_verdict: { value: 2, label: 'liked' }, ranking: ranking(4), props: { onStateChange } }
-    );
+    const app = await open({ ...heat, seen_state: 'seen' }, { ranking: ranking(4), props: { onStateChange } });
     try {
       expect(byTestId('rank-card-tier').getAttribute('aria-label')).toBe('In your ranking: A, Liked');
       expect(byTestId('rank-card-place').getAttribute('href')).toBe('/rank/place/6?kind=movie');
@@ -1040,6 +999,8 @@ describe('the ranking rows on every card (decision 531)', () => {
       { ...heat, seen_state: 'unseen' },
       { ranking: ranking(null), why: 'Because you liked Drive', props: { onStateChange } }
     );
+    // Read again after the drop: the board takes a first placement at its next refit.
+    vi.mocked(get).mockResolvedValue({ ...payload({ ...heat, seen_state: 'seen' }), ranking: ranking(null) });
     try {
       const row = byTestId('rank-card-tier');
       expect(row.getAttribute('aria-label')).toBe('In your ranking: not placed yet');
@@ -1057,8 +1018,7 @@ describe('the ranking rows on every card (decision 531)', () => {
       expect(toast.message).toBe('Heat placed in A');
       expect(toast.actionLabel, 'a first placement has no tier to go back to').toBe('');
       expect(byTestId('rank-card-tier').getAttribute('aria-label')).toBe('In your ranking: A, Liked');
-      expect(target.querySelector('[data-answer="liked"]').getAttribute('aria-pressed')).toBe('true');
-      expect(target.querySelector('button.seen').textContent.trim()).toBe('Watched');
+      expect(byTestId('title-watched').textContent.trim()).toBe('Watched');
       expect(byTestId('title-why')).toBeNull();
       expect(onStateChange).toHaveBeenCalledWith(6, 'seen');
     } finally {
@@ -1066,17 +1026,13 @@ describe('the ranking rows on every card (decision 531)', () => {
     }
   });
 
-  it('counts a rated title marked not seen as seen again, and keeps its verdict', async () => {
+  it('counts a placed title marked not seen as seen again', async () => {
     vi.mocked(post).mockResolvedValue({});
     const onStateChange = vi.fn();
-    const app = await open(
-      { ...heat, seen_state: 'unseen' },
-      { my_verdict: { value: 1, label: 'fine' }, ranking: ranking(3), props: { onStateChange } }
-    );
+    const app = await open({ ...heat, seen_state: 'unseen' }, { ranking: ranking(3), props: { onStateChange } });
     try {
       await choose('Move Heat', 'A');
-      expect(target.querySelector('[data-answer="fine"]').getAttribute('aria-pressed')).toBe('true');
-      expect(target.querySelector('button.seen').textContent.trim()).toBe('Watched');
+      expect(byTestId('title-watched').textContent.trim()).toBe('Watched');
       expect(onStateChange).toHaveBeenCalledWith(6, 'seen');
     } finally {
       unmount(app);
@@ -1088,7 +1044,6 @@ describe('the ranking rows on every card (decision 531)', () => {
     const app = await open(
       { ...heat, seen_state: 'seen' },
       {
-        my_verdict: { value: 2, label: 'liked' },
         ranking: ranking(4, 'You put it in A — your other answers still point to C'),
         props: { onMove }
       }
@@ -1112,6 +1067,221 @@ describe('the ranking rows on every card (decision 531)', () => {
     const app = await open(heat, { ranking: null });
     try {
       expect(byTestId('rank-card-tier')).toBeNull();
+    } finally {
+      unmount(app);
+    }
+  });
+});
+
+describe('Shares a lot with (decisions 541 and 550)', () => {
+  const share = (title_id, name, seen, term) => ({
+    title_id, kind: 'movie', name, original_name: null, original_language: null, year: 2004,
+    runtime_min: 120, poster_path: null, seen, term
+  });
+  const SHARES = [
+    share(11, 'Collateral', true, { term: 'place.los_angeles', facet: 'place', label: 'Los Angeles' }),
+    share(12, "Ocean's Eleven", false, { term: 'themes.heist', facet: 'themes', label: 'Heist' }),
+    share(13, 'Thief', false, { term: 'mood.tense', facet: 'mood', label: 'tense' })
+  ];
+  const credits = [{ person_id: 1, name: 'Michael Mann', job: 'Director', role_class: 'director' }];
+  const dialogs = () => [...target.querySelectorAll('[role="dialog"][aria-label="Title detail"]')];
+  const sheets = () => read(nav.page).state.sheets ?? [];
+
+  /** The outer card is title 6; every other read is the Shares title asked for. */
+  function serve(outer) {
+    vi.mocked(get).mockImplementation((path) =>
+      Promise.resolve(
+        path === '/titles/6'
+          ? outer
+          : { ...payload({ id: Number(path.split('/').pop()), name: 'Collateral', kind: 'movie' }), credits }
+      )
+    );
+  }
+
+  it('is absent when the payload names none', async () => {
+    const app = await open({ kind: 'movie' });
+    try {
+      expect(byTestId('title-shares')).toBeNull();
+    } finally {
+      unmount(app);
+    }
+  });
+
+  it('shows each title with its seen mark and shared term, between the cast and the fold', async () => {
+    const app = await open({ kind: 'movie' }, { shares: SHARES, credits });
+    try {
+      const row = byTestId('title-shares');
+      expect(row.querySelector('h3').textContent).toBe('Shares a lot with');
+      expect(row.textContent).toContain('From your library, closest first');
+      const items = [...row.querySelectorAll('[data-testid="title-share"]')];
+      expect(items.map((i) => i.querySelector('.sharename').textContent)).toEqual([
+        'Collateral', "Ocean's Eleven", 'Thief'
+      ]);
+      expect(items.map((i) => !!i.querySelector('[aria-label="Seen"]'))).toEqual([true, false, false]);
+      expect(items[0].querySelector('.shareterm').textContent.trim()).toBe('Los Angeles');
+      expect(items[0].querySelector('.dot').style.background).toBe('var(--facet-place)');
+      expect(items[2].querySelector('.shareterm').textContent.trim()).toBe('tense');
+      const cast = target.querySelector('.cast');
+      const more = byTestId('title-more');
+      expect(cast.compareDocumentPosition(row) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(row.compareDocumentPosition(more) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    } finally {
+      unmount(app);
+    }
+  });
+
+  it('opens a tapped title as a card on top, and Back walks back to this one', async () => {
+    serve({ ...payload({ kind: 'movie' }), shares: SHARES });
+    const onClose = vi.fn();
+    const app = mount(TitleDetail, {
+      target,
+      props: { titleId: 6, onClose, onPerson: () => {}, onStateChange: () => {} }
+    });
+    try {
+      await settle();
+      byTestId('title-share').click();
+      await settle();
+      expect(vi.mocked(get)).toHaveBeenLastCalledWith('/titles/11');
+      expect(dialogs()).toHaveLength(2);
+      expect(sheets()).toHaveLength(2);
+      expect(dialogs()[1].querySelector('.title-1').textContent).toBe('Collateral');
+
+      history.back();
+      await settle();
+      expect(dialogs()).toHaveLength(1);
+      expect(sheets()).toHaveLength(1);
+      expect(onClose).not.toHaveBeenCalled();
+      expect(dialogs()[0].querySelector('.title-1').textContent).toBe('Severance');
+    } finally {
+      unmount(app);
+    }
+  });
+
+  it('closes the whole stack before a person on the nested card filters the library', async () => {
+    serve({ ...payload({ kind: 'movie' }), shares: SHARES });
+    const calls = [];
+    const app = mount(TitleDetail, {
+      target,
+      props: {
+        titleId: 6,
+        onClose: () => calls.push(['close', sheets().length]),
+        onPerson: (c) => calls.push(['person', c.name, sheets().length]),
+        onStateChange: () => {}
+      }
+    });
+    try {
+      await settle();
+      byTestId('title-share').click();
+      await settle();
+      dialogs()[1].querySelector('.person').click();
+      await settle();
+      expect(calls).toEqual([['close', 0], ['person', 'Michael Mann', 0]]);
+      expect(dialogs()).toHaveLength(0);
+    } finally {
+      unmount(app);
+    }
+  });
+});
+
+describe('a title the household does not have (decision 544)', () => {
+  const tiers = ['S', 'A+', 'A', 'B', 'C', 'D', 'F'].map((label, i) => ({
+    index: 6 - i, label, verdict: '', count: 0, entries: []
+  }));
+  const unowned = { kind: 'movie', name: 'Prisoners', is_owned: false, seen_state: 'unseen' };
+  const opened = (extra = {}) =>
+    open(unowned, {
+      actions: { play_on_jellyfin: null, play_reason: 'not_in_library' },
+      ranking: { tier: null, tension: null, tiers },
+      ...extra
+    });
+
+  it("puts the panel where Play stands, and keeps the ranking row and the pair", async () => {
+    const app = await opened();
+    try {
+      const panel = byTestId('title-unowned');
+      expect(panel.textContent).toContain('Not in the library');
+      expect(target.querySelector('.play'), 'Play beside the panel').toBeNull();
+      expect(byTestId('title-want').textContent.trim()).toBe('Want it');
+      expect(byTestId('title-want').getAttribute('aria-pressed')).toBe('false');
+      expect(byTestId('title-want').classList.contains('btn-primary')).toBe(true);
+      expect(byTestId('title-not-for-me').getAttribute('aria-pressed')).toBe('false');
+      expect(byTestId('rank-card-tier')).not.toBeNull();
+      expect(byTestId('title-not-seen')).not.toBeNull();
+    } finally {
+      unmount(app);
+    }
+  });
+
+  it('Want it puts the title on the wish list and a second tap takes it off', async () => {
+    vi.mocked(api).mockResolvedValueOnce({ state: 'want' }).mockResolvedValueOnce({ state: null });
+    const app = await opened();
+    try {
+      byTestId('title-want').click();
+      await settle();
+      expect(vi.mocked(api)).toHaveBeenLastCalledWith('/wish/6', { method: 'PUT', body: { state: 'want' } });
+      expect(byTestId('title-want').textContent.trim()).toBe('On the wish list');
+      expect(byTestId('title-want').getAttribute('aria-pressed')).toBe('true');
+      byTestId('title-want').click();
+      await settle();
+      expect(vi.mocked(api)).toHaveBeenLastCalledWith('/wish/6', { method: 'DELETE' });
+      expect(byTestId('title-want').textContent.trim()).toBe('Want it');
+    } finally {
+      unmount(app);
+    }
+  });
+
+  it('Not for me is a toggle that starts from the standing state', async () => {
+    vi.mocked(api).mockResolvedValue({ state: null });
+    const app = await opened({ wish: { state: 'not_for_me' } });
+    try {
+      expect(byTestId('title-not-for-me').getAttribute('aria-pressed')).toBe('true');
+      byTestId('title-not-for-me').click();
+      await settle();
+      expect(vi.mocked(api)).toHaveBeenCalledWith('/wish/6', { method: 'DELETE' });
+      expect(byTestId('title-not-for-me').getAttribute('aria-pressed')).toBe('false');
+      vi.mocked(api).mockResolvedValue({ state: 'not_for_me' });
+      byTestId('title-not-for-me').click();
+      await settle();
+      expect(vi.mocked(api)).toHaveBeenLastCalledWith('/wish/6', {
+        method: 'PUT', body: { state: 'not_for_me' }
+      });
+      expect(byTestId('title-not-for-me').getAttribute('aria-pressed')).toBe('true');
+    } finally {
+      unmount(app);
+    }
+  });
+
+  it('Seen it, rate it opens the tier picker', async () => {
+    const app = await opened();
+    try {
+      byTestId('title-seen-rate').click();
+      await settle();
+      expect(target.querySelector('[role="dialog"][aria-label="Rank Prisoners"]')).not.toBeNull();
+    } finally {
+      unmount(app);
+    }
+  });
+
+  it('says so when the wish list cannot be reached', async () => {
+    vi.mocked(api).mockRejectedValue(new Error('the server is busy'));
+    const app = await opened();
+    try {
+      byTestId('title-want').click();
+      await settle();
+      expect(byTestId('title-unowned').querySelector('[role="status"]').textContent).toBe(
+        'Could not save that — the server is busy'
+      );
+      expect(byTestId('title-want').textContent.trim()).toBe('Want it');
+    } finally {
+      unmount(app);
+    }
+  });
+
+  it('is not on a card the library holds', async () => {
+    const app = await open({ kind: 'movie', is_owned: true });
+    try {
+      expect(byTestId('title-unowned')).toBeNull();
+      expect(target.querySelector('.play')).not.toBeNull();
     } finally {
       unmount(app);
     }
