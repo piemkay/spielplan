@@ -257,7 +257,7 @@
   }
 
   function down(entry, event) {
-    if (event.button !== 0 || rank.busy || drag) return;
+    if (event.button !== 0 || rank.busy || drag || !rank.setUp) return;
     const box = event.currentTarget.getBoundingClientRect();
     press = {
       entry,
@@ -403,7 +403,7 @@
   // Space lifts and drops, the arrows move through the grid and past a tier's edge, Esc cancels.
   function key(entry, event) {
     if (!drag) {
-      if (event.key !== ' ' || rank.busy) return;
+      if (event.key !== ' ' || rank.busy || !rank.setUp) return;
       event.preventDefault();
       lift(entry);
       live = `${entry.name}, lifted. ${whereNow()}`;
@@ -561,6 +561,14 @@
     </div>
   {/if}
 
+  {#if !rank.setUp}
+    <div class="card setup" data-testid="rank-setup-card">
+      <h2 class="section-title">Set up your ladder.</h2>
+      <p class="why">Your list opens for moving and comparing once your ladder is set up. It takes about a minute.</p>
+      <a class="btn-primary" href="/rate/setup">Set up my ladder</a>
+    </div>
+  {/if}
+
   {#if !wide && rank.tiers.length}
     <nav class="strip" aria-label="Tiers" bind:this={strip}>
       {#each rank.tiers as tier (tier.index)}
@@ -568,7 +576,7 @@
           class:on={!drag && current === tier.index}
           class:lit={drag && drag.tier === tier.index && drag.at === null}
           class:target={!!drag}
-          data-drop-tier={tier.index}
+          data-drop-tier={rank.setUp ? tier.index : undefined}
           aria-label="{tier.label}, {countOf(tier)} {nounFor(countOf(tier))}"
           aria-current={current === tier.index ? 'true' : undefined}
           onclick={() => jump(tier.index)}
@@ -582,23 +590,21 @@
 
   {#if drag && !wide}
     <p class="look hint">Drop between posters to place it · on a letter to move it there</p>
-  {:else if rank.ratedTotal >= 2}
-    <section class="look" aria-label="Needs a look">
+  {:else if rank.setUp && rank.ratedTotal >= 2}
+    <section class="look" aria-label="Needs a look" data-testid="rank-look">
       {#if straddling}<span class="dot" aria-hidden="true"></span>{/if}
-      <p>
+      <p class:wrap={!straddling && rank.guessing}>
         {#if straddling}
           {#key straddling}<span class="n">{straddling}</span>{/key}
           {straddling === 1 ? 'title sits' : 'titles sit'} between two tiers
+        {:else if rank.guessing}
+          The order inside each step is still mostly our guess
         {:else}
           Sharpen your list
         {/if}
       </p>
-      <button
-        class="go {wide ? 'btn-tinted' : 'btn-plain'}"
-        onclick={sharpen}
-        disabled={rank.busy}
-        data-testid="rank-sharpen"
-        >{straddling ? 'Sharpen' : 'Start'}{#if wide}{` — ${ROUND_SIZE} quick questions`}{/if}</button
+      <button class="go btn-tinted" onclick={sharpen} disabled={rank.busy} data-testid="rank-sharpen"
+        ><span class="hit" aria-hidden="true"></span>Sharpen{#if wide}{` — ${ROUND_SIZE} quick questions`}{/if}</button
       >
     </section>
   {/if}
@@ -657,12 +663,13 @@
         <div
           class="head"
           class:lit={drag?.tier === tier.index}
-          data-drop-tier={tier.index}
+          data-drop-tier={rank.setUp ? tier.index : undefined}
           data-testid="rank-tier-{tier.label}"
         >
           <h2 class="name" id="tier-name-{tier.index}">
             <span class="letter" data-testid="rank-letter-{tier.label}">{tier.label}</span>
-            {#if tier.verdict}<span>{tier.verdict}</span>{/if}
+            <!-- A custom label is its own word, so it shows once. -->
+            {#if tier.word && tier.word !== tier.label}<span>{tier.word}</span>{/if}
           </h2>
           <span class="count">{count} {nounFor(count)}</span>
           {#if rank.expanded.includes(tier.index) && count > 2 * cols}
@@ -1076,16 +1083,36 @@
     line-height: 18px;
     color: var(--text-2);
   }
+  .look p.wrap {
+    padding: 12px 0;
+    white-space: normal;
+  }
   .look .go {
+    position: relative;
     flex: none;
+    min-height: 32px;
+    padding: 0 14px;
+    border-radius: var(--r-pill);
     font-size: var(--fs-subhead);
     line-height: 20px;
     font-weight: 600;
   }
-  .look .btn-tinted {
-    min-height: 32px;
-    padding: 0 14px;
-    border-radius: var(--r-pill);
+  /* The pill draws 32 px; a finger reaches 48. */
+  .hit {
+    position: absolute;
+    inset: -8px 0;
+  }
+  .setup {
+    display: flex;
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 8px;
+  }
+  .setup .why {
+    margin: 0;
+  }
+  .setup .btn-primary {
+    min-height: var(--touch);
   }
   .dot {
     flex: none;

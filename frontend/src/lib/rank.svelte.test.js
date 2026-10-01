@@ -44,7 +44,7 @@ const board = (over = {}) => ({
     {
       index: 6,
       label: 'S',
-      verdict: 'Liked',
+      word: 'All-time favourite',
       entries: [
         {
           title_id: 1,
@@ -59,11 +59,11 @@ const board = (over = {}) => ({
         }
       ]
     },
-    { index: 5, label: 'A+', verdict: 'Liked', entries: [] },
+    { index: 5, label: 'A+', word: 'Loved it', entries: [] },
     {
       index: 4,
       label: 'A',
-      verdict: 'Liked',
+      word: 'Liked it',
       entries: [
         {
           title_id: 2,
@@ -92,6 +92,8 @@ const board = (over = {}) => ({
   ],
   rated: 3,
   rated_total: 3,
+  set_up: true,
+  guessing: true,
   filters: {},
   dna_tiers: null,
   ...over
@@ -174,6 +176,14 @@ describe('the board comes from the server', () => {
     await load('movie');
     expect(rank.model.cutpoints).toEqual([0.1]);
   });
+
+  it('carries whether the ladder is set up and whether the order is still a guess (decision 550)', () => {
+    expect([rank.setUp, rank.guessing]).toEqual([true, true]);
+    apply(board({ set_up: false, guessing: false }));
+    expect([rank.setUp, rank.guessing]).toEqual([false, false]);
+    reset();
+    expect([rank.setUp, rank.guessing]).toEqual([true, false]);
+  });
 });
 
 describe('a move (decision 528)', () => {
@@ -240,7 +250,7 @@ describe('a move (decision 528)', () => {
 
 describe('a move from a title card off Rank (decision 531)', () => {
   const heat = { title_id: 1, name: 'Heat', kind: 'series', tier: 6 };
-  const tierC = { index: 2, label: 'C', verdict: 'Disliked' };
+  const tierC = { index: 2, label: 'C', word: 'Not really for me' };
 
   it('drops the title for its own kind and leaves the board on Rank alone', async () => {
     const before = JSON.stringify(rank.tiers);
@@ -398,6 +408,19 @@ describe("proposal 80's states", () => {
     expect(state.text).not.toContain("you're at 0");
   });
 
+  it('claims nothing before the set-up, whose card is the way on, but a filter can still miss', () => {
+    for (const over of [
+      { rated: 0, rated_total: 0 },
+      { rated: 5, rated_total: 5 },
+      { rated: 0, rated_total: 0, fitting: true }
+    ]) {
+      apply(board({ set_up: false, tiers: [], ...over }));
+      expect(emptyState(), JSON.stringify(over)).toBeNull();
+    }
+    apply(board({ set_up: false, rated: 0, rated_total: 5, filters: { q: 'Taxi' } }));
+    expect(emptyState().kind).toBe('no-match');
+  });
+
   it('still tells a member who has rated nothing that they have rated nothing', () => {
     apply(board({ rated: 0, rated_total: 0, tiers: [], fitting: false }));
     const state = emptyState();
@@ -510,7 +533,7 @@ describe("the search field's placeholder carries the count (decision 528)", () =
 describe('a tier pages (decision 528)', () => {
   const paged = () =>
     board({
-      tiers: [{ index: 6, label: 'S', verdict: 'Liked', count: 3, entries: [board().tiers[0].entries[0]] }]
+      tiers: [{ index: 6, label: 'S', word: 'All-time favourite', count: 3, entries: [board().tiers[0].entries[0]] }]
     });
   const rest = { index: 6, count: 3, offset: 1, entries: [{ title_id: 7 }, { title_id: 8 }] };
 

@@ -28,7 +28,7 @@ vi.mock('$app/navigation', () => ({
 }));
 
 import RankPage from './+page.svelte';
-import { rank, reset } from '$lib/rank.svelte.js';
+import { load, rank, reset } from '$lib/rank.svelte.js';
 import { session } from '$lib/session.svelte.js';
 import { hideToast, toast } from '$lib/toast.svelte.js';
 
@@ -48,7 +48,7 @@ const board = (over = {}) => ({
     {
       index: 6,
       label: 'S',
-      verdict: 'Liked',
+      word: 'All-time favourite',
       entries: [
         entry({
           title_id: 1, name: 'Heat', year: 1995, tier: 6, straddle: 5, straddle_badge: 'S or A+?',
@@ -56,11 +56,11 @@ const board = (over = {}) => ({
         })
       ]
     },
-    { index: 5, label: 'A+', verdict: 'Liked', entries: [] },
+    { index: 5, label: 'A+', word: 'Loved it', entries: [] },
     {
       index: 4,
       label: 'A',
-      verdict: 'Liked',
+      word: 'Liked it',
       entries: [
         entry({
           title_id: 2, name: 'Drive', year: 2011, tier: 4, assigned_tier: 4, badge: 'A — just above Prisoners',
@@ -69,13 +69,15 @@ const board = (over = {}) => ({
         entry({ title_id: 3, name: 'Prisoners', year: 2013, tier: 4, badge: 'A — just below Drive' })
       ]
     },
-    { index: 3, label: 'B', verdict: 'Fine', entries: [] },
-    { index: 2, label: 'C', verdict: 'Disliked', entries: [] },
-    { index: 1, label: 'D', verdict: 'Disliked', entries: [] },
-    { index: 0, label: 'F', verdict: 'Disliked', entries: [] }
+    { index: 3, label: 'B', word: 'It was fine', entries: [] },
+    { index: 2, label: 'C', word: 'Not really for me', entries: [] },
+    { index: 1, label: 'D', word: "Didn't like it", entries: [] },
+    { index: 0, label: 'F', word: 'Hated it', entries: [] }
   ],
   rated: 3,
   rated_total: 40,
+  set_up: true,
+  guessing: false,
   fitting: false,
   filters: {},
   dna_tiers: null,
@@ -88,7 +90,7 @@ const pair = (over = {}) => ({
   name_a: 'Heat',
   name_b: 'Drive',
   token: 'sealed-1',
-  reason: 'Pick the one you enjoyed more — your answers are what put your board in order.',
+  reason: 'One in A, one in S · both crime films',
   ...over
 });
 
@@ -132,15 +134,17 @@ function route(url, init) {
       credits: [],
       platform_ratings: { items: [], note: 'display-only' },
       dna: { extracted: [], projected: [] },
-      my_verdict: { value: 2, label: 'liked' },
       ranking: {
+        set_up: board(boardOver).set_up,
         tier: on?.tier ?? null,
         tension: on?.tension ?? null,
-        tiers: tiers.map(({ index, label, verdict, count, entries }) => ({
-          index, label, verdict, count: count ?? entries.length, entries: []
+        tiers: tiers.map(({ index, label, word, count, entries }) => ({
+          index, label, word, count: count ?? entries.length, entries: [],
+          // The card's tier sheet still names the verdict class each tier stands for.
+          verdict: index > 3 ? 'Liked' : index === 3 ? 'Fine' : 'Disliked'
         }))
       },
-      actions: { play_on_jellyfin: null, show_on_map: { title_id: id } }
+      actions: { play_on_jellyfin: null }
     };
   } else payload = {};
   return Promise.resolve({
@@ -231,15 +235,28 @@ describe('a slow first read', () => {
 });
 
 describe('the board (decision 528)', () => {
-  it('heads each tier with its letter, the verdict it stands for and its count, best first', async () => {
+  it('heads each tier with its letter, its word and its count, best first', async () => {
     await open();
     const heads = [...target.querySelectorAll('[data-tier]')].map((t) => t.getAttribute('data-tier'));
     expect(heads).toEqual(['S', 'A+', 'A', 'B', 'C', 'D', 'F']);
     expect($('rank-letter-S').textContent).toBe('S');
-    expect($('rank-tier-S').textContent).toContain('Liked');
-    expect($('rank-tier-B').textContent).toContain('Fine');
+    expect(target.querySelector('#tier-name-6').textContent.trim()).toBe('S All-time favourite');
+    expect($('rank-tier-B').textContent).toContain('It was fine');
     expect($('rank-tier-A').textContent).toContain('2 films');
     expect(target.querySelector('[data-tier="A+"]').textContent).toContain('Nothing here yet');
+  });
+
+  it('names a custom tier once, its label being its word', async () => {
+    boardOver = {
+      tier_set: ['bad', 'ok', 'good'],
+      tiers: [
+        { index: 2, label: 'good', word: 'good', entries: [] },
+        { index: 1, label: 'ok', word: 'ok', entries: [] },
+        { index: 0, label: 'bad', word: 'bad', entries: [] }
+      ]
+    };
+    await open();
+    expect(target.querySelector('#tier-name-2').textContent.trim()).toBe('good');
   });
 
   it('shows each title as a lazy poster with no name beneath, and the count in the search field', async () => {
@@ -271,10 +288,20 @@ describe('the board (decision 528)', () => {
 describe('Needs a look (§6.3)', () => {
   const look = () => target.querySelector('[aria-label="Needs a look"]');
 
-  it('offers Sharpen your list with Start while no title sits between two tiers', async () => {
+  it('says the order is still mostly a guess until comparisons accrue, and Sharpen always', async () => {
+    phone();
+    boardOver = { guessing: true };
     await open();
+    expect(look().textContent.trim()).toBe('The order inside each step is still mostly our guess Sharpen');
+    expect(look().querySelector('p').classList.contains('wrap')).toBe(true);
+    expect($('rank-sharpen').textContent).toBe('Sharpen');
+    expect($('rank-sharpen').classList.contains('btn-tinted')).toBe(true);
+
+    boardOver = { guessing: false };
+    await load('movie');
+    await settle();
     expect(look().textContent).toContain('Sharpen your list');
-    expect($('rank-sharpen').textContent).toMatch(/^Start/);
+    expect($('rank-sharpen').textContent).toBe('Sharpen');
   });
 
   it('counts the titles between two tiers, and Sharpen opens the round, moving nothing', async () => {
@@ -304,6 +331,68 @@ describe('Needs a look (§6.3)', () => {
     $('rank-queue-close').click();
     await settle();
     expect(look().textContent).toContain('7 titles sit between two tiers');
+  });
+});
+
+describe('before the set-up (decision 550)', () => {
+  const press = (el, key) => el.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }));
+
+  it('shows the set-up card over the board, with no Needs a look and no drop target', async () => {
+    phone();
+    boardOver = { set_up: false, guessing: true };
+    await open();
+    const card = $('rank-setup-card');
+    expect(card.querySelector('h2').textContent).toBe('Set up your ladder.');
+    const cta = card.querySelector('a');
+    expect([cta.textContent, cta.getAttribute('href')]).toEqual(['Set up my ladder', '/rate/setup']);
+    expect(target.querySelector('[aria-label="Needs a look"]')).toBeNull();
+    expect($('rank-sharpen')).toBeNull();
+    expect(target.querySelector('[data-drop-tier]')).toBeNull();
+    expect($('rank-board').querySelectorAll('[data-title]')).toHaveLength(3);
+  });
+
+  /** A touch's long press on Drive: jsdom's events carry no pointer type, which reads as a finger.
+   *  A lifted poster aims and autoscrolls through two calls jsdom lacks. */
+  async function longPress() {
+    document.elementFromPoint = () => null;
+    vi.spyOn(window, 'scrollBy').mockImplementation(() => {});
+    $('rank-open-2').dispatchEvent(new MouseEvent('pointerdown', { button: 0, bubbles: true }));
+    await new Promise((resolve) => setTimeout(resolve, 450));
+    flushSync();
+    const lifted = !!target.querySelector('.dragging');
+    window.dispatchEvent(new MouseEvent('pointercancel', { bubbles: true }));
+    flushSync();
+    delete document.elementFromPoint;
+    return lifted;
+  }
+
+  it('lifts nothing by key or by a long press, and a tap still opens the card', async () => {
+    await open();
+    expect(await longPress(), 'the control: a set-up board lifts on a long press').toBe(true);
+    unmount(app);
+
+    boardOver = { set_up: false };
+    await open();
+    press($('rank-open-2'), ' ');
+    flushSync();
+    expect(target.querySelector('[aria-live="polite"]').textContent).toBe('');
+    expect(await longPress()).toBe(false);
+
+    $('rank-open-2').click();
+    await settle();
+    expect(rank.opened).toBe(2);
+    expect(posts).toEqual([]);
+  });
+
+  it('has no card once the ladder is set up, and no empty state while it is not', async () => {
+    boardOver = { set_up: false, rated: 0, rated_total: 0, tiers: [] };
+    await open();
+    expect($('rank-setup-card')).toBeTruthy();
+    expect($('rank-empty')).toBeNull();
+    boardOver = {};
+    await load('movie');
+    await settle();
+    expect($('rank-setup-card')).toBeNull();
   });
 });
 
@@ -363,7 +452,7 @@ describe('a tier shows two rows until opened (decision 528)', () => {
 
   it('shows seven posters and +N on a phone, opens in place, and Show less closes it', async () => {
     phone();
-    boardOver = { tiers: [{ index: 4, label: 'A', verdict: 'Liked', count: 12, entries: many(8, 10) }] };
+    boardOver = { tiers: [{ index: 4, label: 'A', word: 'Liked it', count: 12, entries: many(8, 10) }] };
     tierReply = { index: 4, count: 12, offset: 8, entries: many(4, 30) };
     await open();
     const reads = fetchMock.mock.calls.map(([url]) => url).filter((u) => u.includes('/api/rank?'));
