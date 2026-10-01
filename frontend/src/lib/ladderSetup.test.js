@@ -203,6 +203,22 @@ describe('the search', () => {
     await search('');
     expect(setup.hits).toBeNull();
   });
+
+  it("leaves out the library's looser matches", async () => {
+    const item = (id, name, match) => ({ id, kind: 'movie', name, year: 2000, poster_path: null, match });
+    replies['/api/titles'] = {
+      body: {
+        items: [
+          item(1, 'Western', 'strong'),
+          item(2, 'Brazilian Western', 'strong'),
+          item(3, 'Vampire Academy', 'weak'),
+          item(4, 'A Tale of Two Sisters', 'weak')
+        ]
+      }
+    };
+    await search('western');
+    expect(setup.hits.map((f) => f.name)).toEqual(['Western', 'Brazilian Western']);
+  });
 });
 
 describe('the done screen', () => {

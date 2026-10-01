@@ -100,6 +100,7 @@ test.describe('the ladder set-up', () => {
     });
 
     await test.step('a search finds a film by name and puts it on this step', async () => {
+      await page.getByTestId('setup-find').click();
       await page.getByTestId('setup-search').fill('Prison');
       const found = page.getByTestId('setup-hit').first();
       await expect(found).toHaveAccessibleName(/^Prisoners/);

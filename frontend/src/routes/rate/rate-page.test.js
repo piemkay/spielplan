@@ -198,7 +198,9 @@ describe('the ladder card (decisions 545 and 551)', () => {
     shelfRows()[1].click();
     flushSync();
     expect(shelfRows()[1].classList.contains('lit'), 'the tapped shelf lights at once').toBe(true);
+    expect($('rate-not-seen').classList.contains('placing'), 'Not seen steps back with the shelves').toBe(true);
     await settle();
+    expect($('rate-not-seen').classList.contains('placing')).toBe(false);
 
     expect(writes()).toEqual([['/rate/place', expect.objectContaining({ card_token: 'tok-1', tier: 5 })]]);
     expect($('rate-card-title').textContent).toBe('Drive');
@@ -227,8 +229,11 @@ describe('the ladder card (decisions 545 and 551)', () => {
     vi.advanceTimersByTime(250);
     flushSync();
     expect(target.querySelector('.look .look-word').textContent).toBe('Not really for me');
+    expect($('rate-not-seen').classList.contains('aside'), 'Not seen steps back while a shelf is held').toBe(true);
     list.dispatchEvent(pointer('pointermove', 30));
     list.dispatchEvent(pointer('pointerup', 30));
+    flushSync();
+    expect($('rate-not-seen').classList.contains('aside')).toBe(false);
     await vi.runAllTimersAsync();
     flushSync();
     vi.useRealTimers();

@@ -45,7 +45,6 @@
 
 <style>
   .closed {
-    margin-top: 8px;
     padding: var(--card-pad);
     border-radius: var(--r-md);
     background: var(--surface-1);
