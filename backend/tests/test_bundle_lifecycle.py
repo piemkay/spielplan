@@ -1225,7 +1225,7 @@ async def test_the_recorded_vocabulary_version_is_never_null_after_a_successful_
     ) == 0
 
 
-# Decision 247: the models-only path used to skip all four curated ledgers.
+# Decision 247: the models-only path used to skip the curated ledgers.
 
 
 def rewrite_curated_ledgers(root: Path, *, keep: int = 3) -> None:

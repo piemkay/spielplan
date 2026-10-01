@@ -1,6 +1,6 @@
 """Load the naming layer (§4.1 rule 1, §4.3, §6.4). The two tiers load separately, never unioned.
 
-The four curated ledgers also load on models-only re-imports (decision 247); each replaces only the
+The three curated ledgers also load on models-only re-imports (decision 247); each replaces only the
 bundle's rows (decision 326) and never treats an absent, unreadable or empty file as a delete.
 """
 

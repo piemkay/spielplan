@@ -939,9 +939,8 @@ async def import_bundle(
                     )
                     if vocabulary is not None:
                         vocab_dir = bundle.artifacts_dir / "dna_vocab" / vocabulary
-                        # Decisions 265 and 266: no vocabulary row (or no tree) for the ledgers to
-                        # reference, so skip them
-                        # with a line; a refusal here could never be satisfied.
+                        # Decisions 265 and 266: no vocabulary row (or no tree) for the ledger to
+                        # reference, so skip it with a line; a refusal here could never be satisfied.
                         installed_vocab = await conn.fetchval(
                             "SELECT version FROM dna_vocabulary WHERE version = $1", vocabulary
                         )
@@ -957,8 +956,8 @@ async def import_bundle(
                         elif installed_vocab is None:
                             report.warn(
                                 "vocabulary",
-                                f"the curated DNA ledgers in dna_vocab/{vocabulary}/ name a "
-                                "vocabulary this install has no row for, so they are not applied "
+                                f"the curated DNA ledger in dna_vocab/{vocabulary}/ names a "
+                                "vocabulary this install has no row for, so it is not applied "
                                 "and nothing installed changes: the empty naming layer is filled "
                                 "by a content import, and an install takes only one of those",
                                 version=vocabulary,
