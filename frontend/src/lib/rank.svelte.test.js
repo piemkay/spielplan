@@ -225,6 +225,13 @@ describe('a move (decision 528)', () => {
     });
   });
 
+  it('places a title that had no tier, offering no undo (decision 531)', async () => {
+    respond(board());
+    await move({ title_id: 9, name: 'Collateral', tier: null }, 4, null, null, 'explicit');
+    expect(toast.message).toBe('Collateral placed in A');
+    expect(toast.actionLabel).toBe('');
+  });
+
   it('offers no undo for a new spot in the same tier', async () => {
     respond(board());
     await move(rank.tiers[2].entries[0], 4, 3, null);

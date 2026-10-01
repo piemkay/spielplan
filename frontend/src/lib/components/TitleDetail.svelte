@@ -3,13 +3,14 @@
   // (credits, scores, both DNA tiers) sits behind one disclosure. Model numbers arrive only with
   // Show the model on.
   import { goto } from '$app/navigation';
-  import { api, get, post } from '$lib/api.js';
+  import { get, post } from '$lib/api.js';
   import { facetColour, modelGate } from '$lib/home.svelte.js';
   import { seed as seedPlace } from '$lib/place.svelte.js';
   import { cardMove } from '$lib/rank.svelte.js';
   import { runtimeLabel } from '$lib/rate.svelte.js';
   import { session } from '$lib/session.svelte.js';
   import { termLabel } from '$lib/terms.js';
+  import { clearWish, likelyTooLine, setWish as putWish } from '$lib/wish.svelte.js';
   import {
     CREDIT_TOP,
     creditJobs,
@@ -152,17 +153,14 @@
 
   // Decision 544: one row per person and title, so a tap on the standing state clears it.
   const wish = $derived(data?.wish?.state ?? null);
+  const likelyToo = $derived(likelyTooLine(data?.wish?.likely_too));
   async function setWish(state) {
     if (!data || wishing) return;
-    const path = `/wish/${data.title.id}`;
     wishing = state;
     wishNote = '';
     try {
-      const res =
-        wish === state
-          ? await api(path, { method: 'DELETE' })
-          : await api(path, { method: 'PUT', body: { state } });
-      data = { ...data, wish: { state: res?.state ?? null } };
+      const res = wish === state ? await clearWish(data.title.id) : await putWish(data.title.id, state);
+      data = { ...data, wish: { ...data.wish, state: res?.state ?? null } };
     } catch (err) {
       wishNote = `Could not save that — ${err.message}`;
     } finally {
@@ -338,7 +336,13 @@
               {#if t.is_owned === false}
                 <!-- Decision 544: what to do with a title the household does not have, where Play stands. -->
                 <div class="unowned" data-testid="title-unowned">
-                  <p class="unowned-head"><Icon name="not-in-library" size={20} />Not in the library</p>
+                  <div class="unowned-head">
+                    <Icon name="not-in-library" size={20} />
+                    <div>
+                      <p>Not in the library</p>
+                      {#if likelyToo}<p class="why" data-testid="title-likely-too">{likelyToo}</p>{/if}
+                    </div>
+                  </div>
                   <button
                     class={wish === 'want' ? 'btn-tinted' : 'btn-primary'}
                     aria-pressed={wish === 'want'}
@@ -821,14 +825,22 @@
   }
   .unowned-head {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     gap: 10px;
+  }
+  .unowned-head > div {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
+  .unowned-head p:first-child {
     font-size: var(--fs-body);
     line-height: 22px;
     font-weight: 600;
   }
   .unowned-head > :global(svg) {
     flex: none;
+    margin-top: 1px;
     color: var(--text-2);
   }
   .unowned > button {
@@ -841,7 +853,9 @@
     font-size: var(--fs-subhead);
     line-height: 20px;
   }
+  /* Restated: the coarse-pointer touch floor on `button` outranks `.list-row`'s 52px. */
   .ranking .list-row {
+    min-height: 52px;
     gap: 8px;
     padding-right: 12px;
     color: var(--text);

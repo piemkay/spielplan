@@ -676,6 +676,18 @@ async def test_the_queue_ships_no_arm_to_a_member_who_cannot_see_the_model(
     )
 
 
+async def test_a_served_pair_carries_each_titles_meta_line(db, ranked):
+    """Sharpen's pair prints year and runtime under each name, as Place with questions does."""
+    client, _user_id = ranked
+    served = (await client.get("/api/rank/queue?kind=movie")).json()["pair"]
+    for side in ("a", "b"):
+        title_id = served[f"title_{side}"]
+        assert (served[f"name_{side}"], served[f"kind_{side}"], served[f"year_{side}"]) == (
+            f"Title {title_id}", "movie", 1995
+        )
+        assert served[f"runtime_min_{side}"] == 90 + (title_id * 13) % 80
+
+
 async def test_thirty_draws_return_one_pair_until_it_is_answered(db, ranked):
     """The draw derives from `(user, kind, answered)` under `SESSION_SECRET`, so reloading cannot
     select the arm. `_queue_rng` is left alone: the derivation is the subject."""

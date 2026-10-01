@@ -100,12 +100,19 @@
 
   // The comparison round answers as Rate's pairs do; a poster only shows the film (decision 528).
   let queuePeek = $state(null);
+  const pairSide = (p, s) => ({
+    id: p[`title_${s}`],
+    name: p[`name_${s}`],
+    kind: p[`kind_${s}`],
+    year: p[`year_${s}`],
+    runtime_min: p[`runtime_min_${s}`]
+  });
   const queueCard = $derived(
     rank.pair && {
       token: rank.pair.token,
       reason: rank.pair.reason,
-      left: { id: rank.pair.title_a, name: rank.pair.name_a, outcome: 'A' },
-      right: { id: rank.pair.title_b, name: rank.pair.name_b, outcome: 'B' }
+      left: { ...pairSide(rank.pair, 'a'), outcome: 'A' },
+      right: { ...pairSide(rank.pair, 'b'), outcome: 'B' }
     }
   );
   // The banner keeps the count it had when the round opened; closing lets the new one re-enter.

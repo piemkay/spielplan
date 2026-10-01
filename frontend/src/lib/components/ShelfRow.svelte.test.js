@@ -280,16 +280,20 @@ describe('Worth getting (decision 544)', () => {
   });
 
   it('opens the whole list from See all, for you or for two, with Want on every row', async () => {
-    const row = (title_id, name, wanted = false, like = heat) => ({
-      title_id, kind: 'movie', name, year: 2004, runtime_min: 120, like, wanted
+    const wanted = new Set([1]);
+    const row = (title_id, name, like = heat) => ({
+      title_id, kind: 'movie', name, year: 2004, runtime_min: 120, like, wanted: wanted.has(title_id)
     });
     vi.mocked(get).mockImplementation(async (path) =>
       path.includes('with=pair')
-        ? { kind: 'movie', with: 'pair', other: { id: 2, name: 'Jenny' }, items: [row(3, 'Ronin', false, null)] }
+        ? { kind: 'movie', with: 'pair', other: { id: 2, name: 'Jenny' }, items: [row(3, 'Ronin', null)] }
         : { kind: 'movie', with: 'me', other: { id: 2, name: 'Jenny' },
-            items: [row(1, 'Collateral', true), row(2, 'Thief')] }
+            items: [row(1, 'Collateral'), row(2, 'Thief')] }
     );
-    vi.mocked(api).mockResolvedValue({ state: 'want' });
+    vi.mocked(api).mockImplementation(async (path) => {
+      wanted.add(Number(path.split('/').pop()));
+      return { state: 'want' };
+    });
     const app = renderWorth();
     target.querySelector('[data-testid="shelf-see-all"]').click();
     await settle();
@@ -301,15 +305,24 @@ describe('Worth getting (decision 544)', () => {
       'Like Heat · night city, cat and mouse',
       'Like Heat · night city, cat and mouse'
     ]);
+    // A row with no art names the title on its panel; one with art leaves the name beside it.
+    const panels = () => [...sheet.querySelectorAll('[data-testid="rate-poster"]')];
+    expect(panels().map((p) => p.querySelector('.name'))).toEqual([null, null]);
+    panels()[0].querySelector('img').dispatchEvent(new Event('error'));
+    flushSync();
+    expect(panels().map((p) => p.querySelector('.name')?.textContent ?? null)).toEqual(['Collateral', null]);
     const wants = () => [...sheet.querySelectorAll('[data-testid="worth-getting-want"]')];
     expect(wants().map((b) => [b.textContent.trim(), b.getAttribute('aria-pressed')])).toEqual([
       ['Wanted', 'true'],
       ['Want', 'false']
     ]);
 
+    const reads = vi.mocked(get).mock.calls.length;
     wants()[1].click();
     await settle();
     expect(vi.mocked(api)).toHaveBeenCalledWith('/wish/2', { method: 'PUT', body: { state: 'want' } });
+    // A wish written anywhere, a card over the sheet included, re-reads the list.
+    expect(vi.mocked(get).mock.calls.slice(reads)).toEqual([['/home/worth-getting?kind=movie&with=me']]);
     expect(wants()[1].getAttribute('aria-pressed')).toBe('true');
 
     const pair = [...target.querySelectorAll('[aria-label="Whose list"] button')];

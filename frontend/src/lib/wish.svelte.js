@@ -33,12 +33,13 @@ export function loadWorthGetting(kind, audience = 'me') {
   return get(`/home/worth-getting${qs({ kind, with: audience })}`);
 }
 
-/** Home's row under Worth getting: "4 wanted, 1 by both of you". */
+/** Home's row under Worth getting: "4 wanted, 1 by both of you", where the household is two. */
 export function wishSummary(summary) {
   const wanted = summary?.wanted ?? 0;
   if (!wanted) return 'Nothing on it yet';
   const both = summary?.both ?? 0;
-  return `${wanted.toLocaleString()} wanted${both ? `, ${both.toLocaleString()} by both of you` : ''}`;
+  const by = summary?.members === 2 ? 'by both of you' : 'by more than one of you';
+  return `${wanted.toLocaleString()} wanted${both ? `, ${both.toLocaleString()} ${by}` : ''}`;
 }
 
 /** The row stands under Worth getting, or after the last shelf while the list holds anything. */
@@ -60,6 +61,11 @@ export function groupHeading(wanters = [], viewerId = null) {
   if (!others.length) return 'You want';
   if (others.length === 1) return 'You both want';
   return `You, ${namesOf(others)} want`;
+}
+
+/** An unowned title's card: "Jenny would likely enjoy it too.", or nothing. @param {string[]} names */
+export function likelyTooLine(names = []) {
+  return names.length ? `${namesOf(names)} would likely enjoy it too.` : '';
 }
 
 /** "Jenny: likely too", "you: maybe"; nothing for someone the scores say little about. */

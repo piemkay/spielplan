@@ -5,6 +5,7 @@ import {
   dismissArrival,
   groupHeading,
   likeLine,
+  likelyTooLine,
   loadWorthGetting,
   othersLine,
   setWish,
@@ -30,8 +31,9 @@ afterEach(() => vi.unstubAllGlobals());
 
 describe("Home's wish list row", () => {
   it('counts the list and how much of it more than one of you wants', () => {
-    expect(wishSummary({ wanted: 4, both: 1 })).toBe('4 wanted, 1 by both of you');
-    expect(wishSummary({ wanted: 2, both: 0 })).toBe('2 wanted');
+    expect(wishSummary({ wanted: 4, both: 1, members: 2 })).toBe('4 wanted, 1 by both of you');
+    expect(wishSummary({ wanted: 3, both: 1, members: 4 })).toBe('3 wanted, 1 by more than one of you');
+    expect(wishSummary({ wanted: 2, both: 0, members: 2 })).toBe('2 wanted');
     expect(wishSummary({ wanted: 0, both: 0 })).toBe('Nothing on it yet');
     expect(wishSummary(undefined)).toBe('Nothing on it yet');
   });
@@ -66,6 +68,13 @@ describe('the wish list in the viewer\'s own words', () => {
     ];
     expect(othersLine(others, 1)).toBe('Jenny: likely too · you: maybe');
     expect(othersLine([], 1)).toBe('');
+  });
+
+  it("says on an unowned title's card who else would likely enjoy it, and nothing for nobody", () => {
+    expect(likelyTooLine(['Jenny'])).toBe('Jenny would likely enjoy it too.');
+    expect(likelyTooLine(['Jenny', 'Sam'])).toBe('Jenny and Sam would likely enjoy it too.');
+    expect(likelyTooLine([])).toBe('');
+    expect(likelyTooLine(undefined)).toBe('');
   });
 
   it("names a Worth getting row's liked film, or for two the other first", () => {

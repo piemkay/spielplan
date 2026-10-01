@@ -5,7 +5,7 @@
   import Sheet from '$lib/components/Sheet.svelte';
   import { toPosterTitle } from '$lib/home.svelte.js';
   import { runtimeLabel } from '$lib/rate.svelte.js';
-  import { clearWish, likeLine, loadWorthGetting, setWish } from '$lib/wish.svelte.js';
+  import { clearWish, likeLine, loadWorthGetting, setWish, wishes } from '$lib/wish.svelte.js';
 
   let { open = false, onClose, kind = 'movie', onSelect } = $props();
 
@@ -29,8 +29,9 @@
     }
   }
 
-  // Opening the sheet or switching whose list it is reads that list.
+  // Opening it, switching whose list it is, or a wish written from a card over it reads the list.
   $effect(() => {
+    void wishes.epoch;
     if (open) load(kind, audience);
   });
 
@@ -76,7 +77,7 @@
       {#each data?.items ?? [] as item (item.title_id)}
         <li>
           <button class="open" onclick={() => onSelect?.(toPosterTitle(item))}>
-            <span class="thumb"><RatePoster title={item} showName={false} lazy /></span>
+            <span class="thumb"><RatePoster title={item} showName="missing" lazy /></span>
             <span class="text">
               <span class="name">{item.name}</span>
               <span class="footnote meta">{meta(item)}</span>
@@ -155,6 +156,12 @@
   }
   .thumb :global(.poster) {
     border-radius: var(--r-xs);
+  }
+  .thumb :global(.poster .name) {
+    inset: auto 5px 5px;
+    font-family: var(--serif);
+    font-weight: 400;
+    line-height: 14px;
   }
   .text {
     flex: 1;

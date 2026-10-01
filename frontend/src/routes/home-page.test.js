@@ -636,7 +636,7 @@ describe('a wanted film arrives, and the household wish list (decision 544)', ()
     };
     backend({
       home: (kinds) => ({ kinds, library: {}, shelves: [worth], shelves_total: 1,
-                          wish: { wanted: 4, both: 1 } }),
+                          wish: { wanted: 4, both: 1, members: 2 } }),
       wish: () => listing
     });
     const clipboard = { writeText: vi.fn(async () => {}) };

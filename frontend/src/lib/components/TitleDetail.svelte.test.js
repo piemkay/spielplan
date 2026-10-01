@@ -23,6 +23,7 @@ vi.mock('$app/navigation', () => ({
 import { goto } from '$app/navigation';
 import { api, get, post } from '$lib/api.js';
 import { hideToast, toast } from '$lib/toast.svelte.js';
+import { wishes } from '$lib/wish.svelte.js';
 import TitleDetail from './TitleDetail.svelte';
 
 const NOTE = '[data-testid="title-series-unseen-note"]';
@@ -1316,13 +1317,36 @@ describe('a title the household does not have (decision 544)', () => {
     }
   });
 
+  it('says who else would likely enjoy it, and nothing when nobody would', async () => {
+    vi.mocked(api).mockResolvedValue({ state: 'want' });
+    let app = await opened({ wish: { state: null, likely_too: ['Jenny'] } });
+    try {
+      expect(byTestId('title-likely-too').textContent).toBe('Jenny would likely enjoy it too.');
+      byTestId('title-want').click();
+      await settle();
+      expect(byTestId('title-likely-too').textContent, 'a want keeps the line').toBe(
+        'Jenny would likely enjoy it too.'
+      );
+    } finally {
+      unmount(app);
+    }
+    app = await opened({ wish: { state: null, likely_too: [] } });
+    try {
+      expect(byTestId('title-likely-too')).toBeNull();
+    } finally {
+      unmount(app);
+    }
+  });
+
   it('Want it puts the title on the wish list and a second tap takes it off', async () => {
     vi.mocked(api).mockResolvedValueOnce({ state: 'want' }).mockResolvedValueOnce({ state: null });
     const app = await opened();
+    const epoch = wishes.epoch;
     try {
       byTestId('title-want').click();
       await settle();
       expect(vi.mocked(api)).toHaveBeenLastCalledWith('/wish/6', { method: 'PUT', body: { state: 'want' } });
+      expect(wishes.epoch, 'Home and an open sheet re-read the list').toBe(epoch + 1);
       expect(byTestId('title-want').textContent.trim()).toBe('On the wish list');
       expect(byTestId('title-want').getAttribute('aria-pressed')).toBe('true');
       byTestId('title-want').click();
