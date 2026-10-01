@@ -290,7 +290,7 @@ button { cursor: pointer; }
 }
 .btn-destructive { color: var(--negative); }
 @media (hover: hover) {
-  .btn-primary:hover { filter: brightness(1.08); }
+  .btn-primary:hover { filter: brightness(1.08); color: var(--on-accent); }
 }
 .btn-primary:disabled,
 .btn-ghost:disabled,
