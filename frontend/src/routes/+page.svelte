@@ -469,14 +469,12 @@
 <PendingVerdicts banner={home?.banner} />
 <ArrivedBanner arrived={home?.arrived ?? []} onSelect={(title) => (selected = title)} />
 
-{#if home?.degraded && home.degraded.state !== 'no_bundle'}
-  <!-- `no_bundle` is rendered further down, by the panel the first-boot spec asserts. -->
-  <div class="card notice" data-testid="home-degraded" data-state={home.degraded.state}>
-    <h2 class="section-title">{home.degraded.headline}</h2>
-    <p class="why">{home.degraded.why}</p>
-    {#if home.degraded.cta}
-      <a class="btn-primary" href={home.degraded.cta.route}>{home.degraded.cta.label}</a>
-    {/if}
+{#if home?.setup_notice}
+  {@const notice = home.setup_notice}
+  <div class="card notice" data-testid="home-setup-notice">
+    <h2 class="section-title">{notice.headline}</h2>
+    <p class="why">{notice.why}</p>
+    <a class="btn-primary" href={notice.cta.route}>{notice.cta.label}</a>
   </div>
 {/if}
 
@@ -736,6 +734,9 @@
   }
   .notice .why {
     margin: 0 0 4px;
+  }
+  .notice .btn-primary {
+    min-height: var(--touch);
   }
 
   /* In flow, not absolute: `main` is not a containing block, so an absolute marker scrolled the page. */
