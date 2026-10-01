@@ -36,7 +36,7 @@ class ModelPrice:
     cache_read: float | None = None
 
 
-# Keyed by provider, then by model id, newest first: the order Admin suggests them in. A row also prices
+# Keyed by provider, then by model id, newest first: the order Admin lists them in. A row also prices
 # its dated snapshots (`claude-haiku-4-5-20251001`) at the name boundary (decision 535).
 PRICING: dict[str, dict[str, tuple[ModelPrice, ...]]] = {
     # https://platform.claude.com/docs/en/about-claude/pricing, read 2026-09-29. No cache prices: no
