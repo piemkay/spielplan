@@ -816,6 +816,12 @@
     .filterpanel {
       max-width: 460px;
     }
+    .notice {
+      max-width: 560px;
+    }
+    .notice .why {
+      text-wrap: pretty;
+    }
     .grid {
       grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
       gap: 24px 16px;
