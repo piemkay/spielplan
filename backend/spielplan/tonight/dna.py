@@ -1,4 +1,4 @@
-"""The DNA the round reasons over: one vector per candidate, and §6.4's authored axes.
+"""The DNA the round reasons over: one vector per candidate.
 
 Both tiers via `dna_tagged` (§4.1 rule 1); salience and confidence weight but never filter
 (rule 2); every read is scoped to one vocabulary version (§10).
@@ -41,19 +41,6 @@ async def vectors_for(
     return out
 
 
-async def axes_for(conn: asyncpg.Connection, *, version: str) -> dict[str, dict[str, float]]:
-    """§6.4's authored axis artifact: one bipolar axis per facet, `term -> weight ∈ [−1, 1]`."""
-    if not version:
-        return {}
-    rows = await conn.fetch(
-        "SELECT facet, term, weight FROM dna_axis_weight WHERE version = $1", version
-    )
-    out: dict[str, dict[str, float]] = {}
-    for row in rows:
-        out.setdefault(row["facet"], {})[row["term"]] = float(row["weight"])
-    return out
-
-
 async def active_version(conn: asyncpg.Connection) -> str | None:
     """The vocabulary every read here is scoped to, resolved as `home/why.py` resolves it."""
     return await dna_terms.active_version(conn)
@@ -88,7 +75,6 @@ async def terms_carried_by(
 __all__ = [
     "TERM_WEIGHT",
     "active_version",
-    "axes_for",
     "terms_carried_by",
     "vectors_for",
 ]

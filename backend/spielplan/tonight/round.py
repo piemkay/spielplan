@@ -262,17 +262,6 @@ def is_holdout(seq: int, *, key: str) -> bool:
     return random.Random(f"{key}:{seq}").random() < 1.0 / HOLDOUT_EVERY
 
 
-def _axis_span(axes: Mapping[int, Mapping[str, float]] | None, a: int, b: int) -> float:
-    """How far apart two candidates sit on the widest shared §6.4 axis (54c's tie-break)."""
-    if not axes:
-        return 0.0
-    va, vb = axes.get(a, {}), axes.get(b, {})
-    shared = set(va) & set(vb)
-    if not shared:
-        return 0.0
-    return max(abs(va[f] - vb[f]) for f in shared)
-
-
 def _answer_probabilities(a: Belief, b: Belief, anchor: float) -> dict[str, float]:
     """What the model expects a participant to answer: A/B by the pairwise Gaussian, the rest
     split into `either`/`neither` by level against the anchor (decision 154)."""
@@ -533,7 +522,6 @@ def select(
     rng: random.Random,
     holdout_key: str,
     z: float = BOUNDARY_Z,
-    axes: Mapping[int, Mapping[str, float]] | None = None,
     asked: Iterable[frozenset[int]] | None = None,
 ) -> Pair | None:
     """The next pair, and the arm that produced it.
@@ -564,7 +552,7 @@ def select(
         dtype=np.int64,
     )
 
-    def _best(pairs: tuple[np.ndarray, np.ndarray]) -> tuple[float, float, int, int] | None:
+    def _best(pairs: tuple[np.ndarray, np.ndarray]) -> tuple[float, int, int] | None:
         ia, ib = pairs
         if ia.size and blocked.size:
             keep = ~np.isin(ia * n + ib, blocked)
@@ -572,7 +560,7 @@ def select(
         if not ia.size:
             return None
         expected = board.expected(ia, ib)
-        # Rounded so equal information is a real tie for the axis rule; `np.round` only narrows
+        # Rounded so equal information is a real tie; `np.round` only narrows
         # the field and the tie is decided with the scalar's own `round`.
         approx = np.round(expected, 9)
         near = np.flatnonzero(approx <= approx.min() + 1.5e-9)
@@ -581,17 +569,9 @@ def select(
         best = rounded.min()
         tie = near[rounded == best]
         a_ids, b_ids = board.ids[ia[tie]], board.ids[ib[tie]]
-        if axes:
-            k = min(
-                range(tie.size),
-                key=lambda i: (-_axis_span(axes, int(a_ids[i]), int(b_ids[i])),
-                               int(a_ids[i]), int(b_ids[i])),
-            )
-        else:
-            # No axes: every span is 0.0, so the smallest (a, b) wins.
-            k = int(np.lexsort((b_ids, a_ids))[0])
-        a, b = int(a_ids[k]), int(b_ids[k])
-        return (float(best), -_axis_span(axes, a, b), a, b)
+        # The smallest (a, b) wins a tie.
+        k = int(np.lexsort((b_ids, a_ids))[0])
+        return (float(best), int(a_ids[k]), int(b_ids[k]))
 
     def _within(xs: np.ndarray) -> tuple[np.ndarray, np.ndarray]:
         i, j = np.triu_indices(xs.size, 1)
@@ -616,7 +596,7 @@ def select(
         best = _best(_within(np.arange(n, dtype=np.int64)))
     if best is None:
         return None
-    _, _, a, b = best
+    _, a, b = best
     return Pair(
         title_a=a, title_b=b,
         selection=SELECTION_ADAPTIVE,
@@ -639,7 +619,6 @@ def replay(
     z: float = BOUNDARY_Z,
     prior_var: float = 1.0,
     has_profile: bool = True,
-    axes: Mapping[int, Mapping[str, float]] | None = None,
     rng: random.Random | None = None,
     escaped: bool = False,
     select: bool = True,
@@ -681,7 +660,7 @@ def replay(
         None
         if reason or not select
         else _select_pair(beliefs, seq=count + 1, rng=rng or random.Random(0),
-                          holdout_key=holdout_key, z=z, axes=axes, asked=asked)
+                          holdout_key=holdout_key, z=z, asked=asked)
     )
     if select and reason is None and nxt is None:
         # Out of distinct pairs with the boundary unresolved: recorded as `cap`, 54g's nearest ending.

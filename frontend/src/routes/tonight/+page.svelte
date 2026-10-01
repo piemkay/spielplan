@@ -20,7 +20,6 @@
     MAX_GUESTS,
     MAX_VETOES,
     MOOD_CAPTION,
-    RESERVED_LABEL,
     REVEAL_BEAT,
     SHARE_CAPTION,
     SOLO_ESCAPE_LABEL,
@@ -864,12 +863,7 @@
                 <!-- The wildcard won: this card carries its label. -->
                 <p class="label" data-testid="tonight-winner-label"><Icon name="sparkle" size={14} />{winner.label}</p>
               {/if}
-              {#if winner.reserved}
-                <!-- The reserved finalist is labelled as such (54d). -->
-                <p class="label" data-testid="tonight-reserved">{RESERVED_LABEL}</p>
-              {/if}
               {#if winner.reserved_for}
-                <!-- A seat's own pick carries its own label, never the counterweight's (decision 479). -->
                 <p class="label" data-testid="tonight-reserved-for">{pickLabel(winner.reserved_for.name)}</p>
               {/if}
               <p class="approval">
@@ -912,17 +906,13 @@
             <ul class="list-group rows">
               {#each result.runners_up ?? [] as card (card.title_id)}
                 <!-- A `const` keeps the line one text node; the labels follow the card wherever it lands. -->
-                {@const counterweight = card.reserved
-                  ? ` · ${RESERVED_LABEL}`
-                  : card.reserved_for
-                    ? ` · ${pickLabel(card.reserved_for.name)}`
-                    : ''}
+                {@const pick = card.reserved_for ? ` · ${pickLabel(card.reserved_for.name)}` : ''}
                 <li class="pick">
                   <span class="thumb small"><RatePoster title={posterOf(card)} showName={false} /></span>
                   <span class="row-text">
                     <span>{card.name}</span>
                     <span class="footnote figures" data-testid={`tonight-runner-up-${card.title_id}`}
-                      >{card.approvals} of {result.participants} said yes{counterweight}</span
+                      >{card.approvals} of {result.participants} said yes{pick}</span
                     >
                   </span>
                 </li>

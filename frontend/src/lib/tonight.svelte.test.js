@@ -12,7 +12,6 @@ import {
   MAX_VETOES,
   MOOD_CAPTION,
   RECONNECT_MAX_MS,
-  RESERVED_LABEL,
   REVEAL_BEAT,
   SOLO_ESCAPE_LABEL,
   answer,
@@ -962,9 +961,8 @@ describe('the first household evening (owner instruction of 2026-09-25)', () => 
     expect(breadthLine({})).toBe('');
   });
 
-  it("labels a seat's own pick by name and never as the axis counterweight", () => {
+  it("labels a seat's own pick by name", () => {
     expect(pickLabel('Jenny')).toBe("Jenny's pick");
-    expect(pickLabel('Jenny')).not.toBe(RESERVED_LABEL);
   });
 
   it('shows what a room has ruled out on its open-rooms row', () => {

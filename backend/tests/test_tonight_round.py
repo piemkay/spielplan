@@ -215,35 +215,6 @@ def test_the_pair_served_is_the_one_that_resolves_the_most_straddlers():
         ) + 1e-9, f"({a}, {b}) would have settled more of the shortlist"
 
 
-def test_a_tie_on_information_breaks_toward_the_widest_dna_axis():
-    """The four straddlers are identical in the posterior, so only the DNA axis decides. 3 and 4 span
-    the whole mood axis; 5 and 6 are all but the same film."""
-    state = {
-        1: rnd.Belief(1.00, 0.0001),
-        2: rnd.Belief(0.90, 0.0001),
-        3: rnd.Belief(0.70, 0.04), 4: rnd.Belief(0.70, 0.04),
-        5: rnd.Belief(0.70, 0.04), 6: rnd.Belief(0.70, 0.04),
-        7: rnd.Belief(0.05, 0.0001),
-    }
-    anchor = rnd.anchor_of(state)
-    tied = {
-        rnd.expected_straddlers(state, title_a=a, title_b=b, anchor=anchor, z=1.0)
-        for a, b in ((3, 4), (3, 5), (4, 6), (5, 6))
-    }
-    assert len(tied) == 1, "the fixture is only meaningful while the pairs are a genuine tie"
-
-    axes = {
-        3: {"mood": -1.0}, 4: {"mood": 1.0},     # spans the whole mood axis
-        5: {"mood": 0.1}, 6: {"mood": 0.0},      # spans almost none of it
-    }
-    pair = rnd.select(state, seq=1, rng=random.Random(0), holdout_key=ADAPTIVE_ARM, z=1.0, axes=axes)
-    assert {pair.title_a, pair.title_b} == {3, 4}
-
-    # Without axes it still returns a straddling pair: the tie-break is a preference.
-    bare = rnd.select(state, seq=1, rng=random.Random(0), holdout_key=ADAPTIVE_ARM, z=1.0)
-    assert {bare.title_a, bare.title_b} <= {3, 4, 5, 6}
-
-
 def test_selection_never_serves_a_pair_the_participant_has_already_answered():
     """A repeat is an independent observation of one judgement, inflating reliability (§13)."""
     state = {
@@ -694,7 +665,7 @@ def test_a_heavy_tailed_ledger_does_not_end_the_round_at_one_pair():
 # The defect is only visible at the real size: 696 titles, sd 0.504.
 
 
-def _scalar_select(beliefs_, *, z, axes=None, asked=None):
+def _scalar_select(beliefs_, *, z, asked=None):
     """The reference `select` must reproduce; a rule change can hide in the argmin."""
     pool = sorted(beliefs_)
     already = set(asked or ())
@@ -709,7 +680,7 @@ def _scalar_select(beliefs_, *, z, axes=None, asked=None):
             expected = rnd.expected_straddlers(
                 beliefs_, title_a=a, title_b=b, anchor=anchor, z=z
             )
-            key = (round(expected, 9), -rnd._axis_span(axes, a, b), a, b)
+            key = (round(expected, 9), a, b)
             if out is None or key < out:
                 out = key
         return out
@@ -725,7 +696,7 @@ def _scalar_select(beliefs_, *, z, axes=None, asked=None):
         found = best(touching(unresolved))
     if found is None:
         found = best(within(pool))
-    return None if found is None else (found[2], found[3])
+    return None if found is None else (found[1], found[2])
 
 
 def _random_board(n, seed, *, sd=0.504, var=1.0, quantise=None, mixed_var=False, answers=0):
@@ -851,18 +822,12 @@ def test_the_pair_search_evaluates_the_error_function_three_times_per_pair(monke
 
 
 def test_the_fast_pair_search_serves_the_pair_the_scalar_argmin_serves():
-    """`_axis_span` is 0.0 on release data (decision 173), so authored axes exercise the tie-break."""
-    axes = {i + 1: {"pace": (i % 5) / 4.0, "warmth": (i % 3) / 2.0} for i in range(60)}
     for n in (4, 6, 9, 20, 45):
         for seed in range(4):
             for z in (1.0, 0.6, 0.15):
                 board = _random_board(n, seed)
                 got = rnd.select(board, seq=1, rng=random.Random(0), holdout_key=ADAPTIVE_ARM, z=z)
                 assert _pair_of(got) == _scalar_select(board, z=z), (n, seed, z)
-                got = rnd.select(
-                    board, seq=1, rng=random.Random(0), holdout_key=ADAPTIVE_ARM, z=z, axes=axes
-                )
-                assert _pair_of(got) == _scalar_select(board, z=z, axes=axes), (n, seed, z)
 
     # Every pair between straddlers answered, so the round falls through.
     for n in (6, 9, 20):
