@@ -76,8 +76,9 @@ async def custody(secrets_key, db, app):
         "VALUES ('jellyfin', 2, $1, true) RETURNING id",
         user_id,
     )
-    # Sweep throughout, so one session answers both a verdict and a not-seen.
-    assert (await client.post("/api/rate/session", json={"mode": "sweep"})).status_code == 200
+    # One session answers both a placement and a not-seen; its first card is drawn here.
+    await db.execute("INSERT INTO ladder_setup (user_id) VALUES ($1)", user_id)
+    assert (await client.post("/api/rate/session", json={"kinds": ["movie"]})).status_code == 200
     return {"client": client, "user_id": user_id, "event_id": event_id}
 
 
@@ -111,13 +112,11 @@ async def test_every_member_write_still_commits_under_a_changed_secrets_key(
     ) == "seen"
 
     card = (await client.get("/api/rate")).json()["card"]
-    verdict = await client.post(
-        "/api/rate/verdict", json={"card_token": card["token"], "value": 2}
-    )
-    assert verdict.status_code == 200, verdict.text
-    assert any("SECRETS_KEY" in line for line in verdict.json()["log"]), verdict.json()["log"]
+    placed = await client.post("/api/rate/place", json={"card_token": card["token"], "tier": 5})
+    assert placed.status_code == 200, placed.text
+    assert any("SECRETS_KEY" in line for line in placed.json()["log"]), placed.json()["log"]
 
-    nxt = verdict.json()["card"]
+    nxt = placed.json()["card"]
     not_seen = await client.post("/api/rate/not-seen", json={"card_token": nxt["token"]})
     assert not_seen.status_code == 200, not_seen.text
     assert any("SECRETS_KEY" in line for line in not_seen.json()["log"]), not_seen.json()["log"]

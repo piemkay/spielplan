@@ -1,6 +1,7 @@
-"""Not seen from the title card (decision 487), written through `rate.session` as a sweep answer.
+"""Not seen from the title card (decision 487), written through `rate.session` as a Rate answer.
 
-No second observation writer (decision 212): the title is stashed as a sweep card and answered.
+No second observation writer (decision 212): the title is stashed as a card and answered. It works
+before the set-up too, where the session journals it and draws nothing after it.
 """
 
 from __future__ import annotations
@@ -18,14 +19,13 @@ SOURCE = "title_card"
 async def _put_on_table(
     conn: asyncpg.Connection, s: session.RateSession, *, title_id: int
 ) -> session.RateSession:
-    """Replace the standing card with a sweep card for `title_id`, under a fresh token.
+    """Replace the standing card with a card for `title_id`, under a fresh token.
 
     Under the session row's lock, which every answer takes first: a mid-flight tap on the old
     card finishes, and its next tap is §6.1's stale-card 409.
     """
     kind = await observations.kind_of(conn, title_id)
     card = {
-        "type": "sweep",
         "kind": kind,
         "title_id": title_id,
         "reason": REASON,

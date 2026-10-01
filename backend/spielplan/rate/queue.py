@@ -1,7 +1,8 @@
-"""The §6.1 sweep queue: which title to ask about next, and the one line saying why.
+"""The §6.1 queue: which film to place next, and the one line saying why.
 
-Order: pinned, recorded-seen, seed list (decision 490), then P(seen), a stated-prior logistic
-that only orders the queue. `_CANDIDATES` is its one spelling; Python reads only the terms back.
+Order: pinned, rated before the set-up (decision 550), recorded seen, seed list (decision 490), then
+P(seen), a stated-prior logistic that only orders the queue. `_CANDIDATES` is its one spelling;
+Python reads only the terms back.
 """
 
 from __future__ import annotations
@@ -13,6 +14,8 @@ from dataclasses import dataclass
 
 import asyncpg
 
+from spielplan.ledger import ladder
+from spielplan.ledger.observations import KINDS, latest_tier_edit_sql
 from spielplan.rate import reask as reask_stream
 
 log = logging.getLogger("spielplan.rate.queue")
@@ -36,7 +39,7 @@ WEIGHTS = SeenWeights()
 # Decision 521 watches these weights through §13's not-seen rate (">50% = queue bug"), read by hand:
 #   SELECT count(*) FILTER (WHERE kind_of = 'not_seen')::float8 / count(*) FROM (
 #       SELECT kind_of FROM rate_observation WHERE user_id = $1 AND undone_at IS NULL
-#          AND kind_of IN ('verdict', 'not_seen') ORDER BY id DESC LIMIT 200) recent;
+#          AND kind_of IN ('placement', 'not_seen') ORDER BY id DESC LIMIT 200) recent;
 
 # Pseudo-count shrinking a person's own answers towards their own seen rate for the kind.
 FAMILIAR_PSEUDO = 2.0
@@ -112,6 +115,9 @@ SEEN_REASON = "You have this marked as seen."
 
 PINNED_REASON = "You picked this one."
 
+# The old answer itself is never shown (decision 550).
+RATED_BEFORE_REASON = "You rated this one before."
+
 
 def reason_for(
     features: Features,
@@ -126,7 +132,9 @@ def reason_for(
 
     A seed card says "well-known" only where the crowd term bears it out (`WELL_KNOWN_CROWD`).
     """
-    if source in ("pending_verdict", "reask"):
+    if source == "rated_before":
+        return RATED_BEFORE_REASON
+    if source in ("seen", "reask"):
         return SEEN_REASON
     if source == "pinned":
         return PINNED_REASON
@@ -157,16 +165,15 @@ class QueueCard:
     title_id: int
     reason: str            # §6.8 one-line why, e.g. "It's in your library."
     p_seen: float | None
-    source: str            # seed | p_seen | pending_verdict | reask
-    reask_of: int | None   # verdict.id being silently re-asked; None otherwise
+    source: str            # pinned | rated_before | seen | seed | p_seen | reask
+    reask_of: int | None   # tier_edit.id being silently re-asked; None otherwise
 
 
 # --- the candidate query ----------------------------------------------------------------------
 
-# A rated title never returns (`NOT is_reask`: a re-ask supersedes the row it re-asks); a "not
-# seen" answer returns only when pinned. History arrives as CTEs rather than per-row sub-selects,
-# because the whole partition is scored whatever the LIMIT.
-_CANDIDATES = """
+# A title placed since the set-up and a "not seen" answer return only when pinned. History arrives as
+# CTEs rather than per-row sub-selects, because the whole partition is scored whatever the LIMIT.
+_CANDIDATES = f"""
 WITH household AS (
     SELECT count(*)::float8 AS n
       FROM app_user
@@ -182,8 +189,7 @@ WITH household AS (
     SELECT DISTINCT title_id
       FROM playback_event
      WHERE user_id = $1 AND finished AND title_id IS NOT NULL
-), rated AS (
-    SELECT DISTINCT title_id FROM verdict WHERE user_id = $1 AND NOT is_reask
+), placed AS ({latest_tier_edit_sql()}
 ), familiar AS (
     -- This person's own answers per kind and original language: `unfamiliarity`'s two counts.
     -- An 'unseen' row is an answer somebody gave (an adopted unseen is an absent row).
@@ -224,20 +230,21 @@ WITH household AS (
            COALESCE(fa.seen_n, 0.0)                                 AS lang_seen_n,
            COALESCE(fa.answered_n, 0.0)                             AS lang_answered_n,
            COALESCE(fk.rate, 0.5)                                   AS kind_rate,
-           array_position($6::int[], t.id)                          AS head_pos
+           array_position($6::int[], t.id)                          AS head_pos,
+           array_position($16::int[], t.id)                         AS before_pos
       FROM title t
       LEFT JOIN user_title  ut ON ut.title_id = t.id AND ut.user_id = $1
       LEFT JOIN seed_list   sl ON sl.title_id = t.id
       LEFT JOIN title_prior tp ON tp.title_id = t.id
       LEFT JOIN co_seen     cs ON cs.title_id = t.id
       LEFT JOIN played      pl ON pl.title_id = t.id
-      LEFT JOIN rated       rt ON rt.title_id = t.id
+      LEFT JOIN placed      pd ON pd.title_id = t.id
       LEFT JOIN familiar    fa ON fa.kind = t.kind AND fa.lang = t.original_language
       LEFT JOIN familiar_kind fk ON fk.kind = t.kind
-     WHERE t.kind = ANY($2::text[])
+     WHERE t.kind = $2
        AND NOT (t.id = ANY($3::int[]))
-       AND rt.title_id IS NULL
-       AND (t.id = ANY($6::int[]) OR NOT (ut.title_id IS NOT NULL AND ut.state = 'unseen'))
+       AND (t.id = ANY($6::int[])
+            OR (pd.title_id IS NULL AND NOT (ut.title_id IS NOT NULL AND ut.state = 'unseen')))
 ), scored AS (
     SELECT c.*,
            least(1.0, ln(1.0 + c.item_n) / ln(1.0 + $7::float8))              AS crowd,
@@ -258,6 +265,7 @@ SELECT s.*,
                                      + $14::float8 * s.unfamiliar ))) END AS p_seen
   FROM scored s
  ORDER BY s.head_pos ASC NULLS LAST,
+          s.before_pos ASC NULLS LAST,
           NOT s.seen,
           -- Decision 490: the seed list still leads, and inside it P(seen) decides.
           s.seed_position IS NULL,
@@ -282,8 +290,10 @@ def _features(row: asyncpg.Record) -> Features:
 
 def _card(row: asyncpg.Record, *, weights: SeenWeights) -> QueueCard:
     features = _features(row)
-    if features.seen:
-        source = "pending_verdict"
+    if row["before_pos"] is not None:
+        source = "rated_before"
+    elif features.seen:
+        source = "seen"
     elif row["head_pos"] is not None:
         source = "pinned"
     elif row["seed_position"] is not None:
@@ -310,11 +320,11 @@ def _card(row: asyncpg.Record, *, weights: SeenWeights) -> QueueCard:
     )
 
 
-async def next_sweep_cards(
+async def next_cards(
     conn: asyncpg.Connection,
     *,
     user_id: int,
-    kinds: Sequence[str],
+    kind: str,
     limit: int,
     exclude: Sequence[int] = (),
     head: Sequence[int] = (),
@@ -322,23 +332,24 @@ async def next_sweep_cards(
     reask_rate: float = reask_stream.REASK_RATE,
     weights: SeenWeights = WEIGHTS,
 ) -> list[QueueCard]:
-    """The next `limit` sweep cards, best first. An empty list means the queue is drained.
+    """The next `limit` cards of one kind, best first. An empty list means the queue is drained.
 
-    `head` pins titles to the front in order (§6.0's banner, search, "Rate it"); a pin lifts an
-    earlier "not seen", and `exclude` still wins over it. `rng`, `reask_rate` and `weights` are
-    test seams.
+    `head` pins titles to the front in order (§6.0's banner, the finish prompt); a pin lifts an
+    earlier "not seen" and a placement (a rewatch is placed again), and `exclude` still wins over
+    it. `rng`, `reask_rate` and `weights` are test seams.
     """
-    if not kinds:
-        raise ValueError("select at least one kind: 'movie', 'series', or both")
+    if kind not in KINDS:
+        raise ValueError(f"kind must be one of {KINDS}, not {kind!r}")
     if limit <= 0:
         return []
     rng = rng or random.Random()
     skip = list(dict.fromkeys(int(t) for t in exclude))
+    before = await ladder.rated_before(conn, user_id=user_id, kinds=[kind])
 
     fresh_rows = await conn.fetch(
         _CANDIDATES,
         user_id,
-        list(kinds),
+        kind,
         skip,
         limit,
         AGE_SATURATION_YEARS,
@@ -352,14 +363,15 @@ async def next_sweep_cards(
         weights.age,
         weights.unfamiliar,
         FAMILIAR_PSEUDO,
+        before,
     )
     fresh = [_card(row, weights=weights) for row in fresh_rows]
 
     # §13 stream (b): the draw is per slot, so the rate is a property of the queue.
-    reasks: list[reask_stream.VerdictReask] = []
+    reasks: list[reask_stream.PlacementReask] = []
     if reask_rate > 0.0:
-        reasks = await reask_stream.verdict_candidates(
-            conn, user_id=user_id, kinds=kinds, limit=limit, exclude=skip, rng=rng
+        reasks = await reask_stream.placement_candidates(
+            conn, user_id=user_id, kind=kind, limit=limit, exclude=skip, rng=rng
         )
     return _interleave(
         fresh, reasks, limit=limit, rate=reask_rate, rng=rng, head=tuple(head)
@@ -368,7 +380,7 @@ async def next_sweep_cards(
 
 def _interleave(
     fresh: list[QueueCard],
-    reasks: Sequence[reask_stream.VerdictReask],
+    reasks: Sequence[reask_stream.PlacementReask],
     *,
     limit: int,
     rate: float,
@@ -395,11 +407,11 @@ def _interleave(
                 continue
             card = QueueCard(
                 title_id=candidate.title_id,
-                # Same sentence and probability as a pending card: a re-ask is indistinguishable.
+                # The sentence and probability a fresh card of a seen film carries: indistinguishable.
                 reason=SEEN_REASON,
                 p_seen=P_SEEN_RECORDED,
                 source="reask",
-                reask_of=candidate.verdict_id,
+                reask_of=candidate.tier_edit_id,
             )
         else:
             card = fresh_q.pop(0)
@@ -413,12 +425,13 @@ def _interleave(
 __all__ = [
     "AGE_SATURATION_YEARS",
     "CROWD_SATURATION",
+    "RATED_BEFORE_REASON",
     "WEIGHTS",
     "Features",
     "QueueCard",
     "SeenWeights",
     "contributions",
     "dominant",
-    "next_sweep_cards",
+    "next_cards",
     "reason_for",
 ]

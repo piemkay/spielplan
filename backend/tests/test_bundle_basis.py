@@ -61,7 +61,7 @@ async def test_a_first_import_is_served_without_a_restart(app, db, tmp_path):
 
     assert (await admin.get("/api/health")).json()["bundle"] == "test-v1"
 
-    tap = await admin.post("/api/rate/verdict", json={"card_token": "whatever", "value": 2})
+    tap = await admin.post("/api/rate/place", json={"card_token": "whatever", "tier": 2})
     reason = tap.json().get("detail", {}).get("reason")
     assert reason not in ("bundle_swapped", "bundle_broken"), (
         f"a Rate tap after the import is still refused for the basis: {tap.text}"

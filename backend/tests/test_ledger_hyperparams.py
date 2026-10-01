@@ -389,13 +389,15 @@ async def _admin(client) -> None:
 
 
 async def _titles(db, count: int = 8) -> None:
-    """Written straight to the table: these tests are about what the surface reads from the bundle."""
+    """Written straight to the table: these tests are about what the surface reads from the bundle.
+    The admin's ladder is set up, so Rate serves a card."""
     await db.execute(
         "INSERT INTO title (id, kind, name, is_owned, overview) "
         "SELECT i, 'movie', 'Title ' || i, true, 'A film about ' || i "
         "FROM generate_series(1, $1) AS i",
         count,
     )
+    await db.execute("INSERT INTO ladder_setup (user_id) SELECT id FROM app_user")
 
 
 async def test_the_lifespan_reads_the_constants_once_and_the_rate_route_never_again(
@@ -422,16 +424,14 @@ async def test_the_lifespan_reads_the_constants_once_and_the_rate_route_never_ag
     await _admin(client)
     await _titles(db)
     card = (await client.get("/api/rate")).json()["card"]
-    first = await client.post(
-        "/api/rate/verdict", json={"card_token": card["token"], "value": 2}
-    )
+    first = await client.post("/api/rate/place", json={"card_token": card["token"], "tier": 5})
     assert first.status_code == 200, first.text
     second = await client.post(
-        "/api/rate/verdict", json={"card_token": first.json()["card"]["token"], "value": 1}
+        "/api/rate/place", json={"card_token": first.json()["card"]["token"], "tier": 3}
     )
     assert second.status_code == 200, second.text
 
-    assert await db.fetchval("SELECT count(*) FROM verdict") == 2, "two real taps, not two no-ops"
+    assert await db.fetchval("SELECT count(*) FROM tier_edit") == 2, "two real taps, not two no-ops"
     assert reads == ["hp-v1"], f"the routes re-read the file {len(reads) - 1} more time(s)"
 
 
@@ -462,7 +462,7 @@ async def test_an_unusable_basis_does_not_cost_the_constants_their_one_read(
     await _admin(client)
     await _titles(db)
     card = (await client.get("/api/rate")).json()["card"]
-    tap = await client.post("/api/rate/verdict", json={"card_token": card["token"], "value": 2})
+    tap = await client.post("/api/rate/place", json={"card_token": card["token"], "tier": 5})
     assert tap.status_code == 200, tap.text
     assert reads == ["hp-v1"], f"the routes re-read the file {len(reads) - 1} more time(s)"
 
@@ -486,10 +486,10 @@ async def test_a_constants_file_that_is_not_an_object_degrades_the_boot_rather_t
     await _admin(client)
     await _titles(db)
     card = (await client.get("/api/rate")).json()["card"]
-    tap = await client.post("/api/rate/verdict", json={"card_token": card["token"], "value": 2})
+    tap = await client.post("/api/rate/place", json={"card_token": card["token"], "tier": 5})
     assert tap.status_code == 503, tap.text
     assert "ledger constants" in tap.json()["detail"]
-    assert await db.fetchval("SELECT count(*) FROM verdict") == 0
+    assert await db.fetchval("SELECT count(*) FROM tier_edit") == 0
 
 
 async def test_a_constant_the_fit_cannot_use_is_a_503_with_a_reason_and_not_a_500(
@@ -511,7 +511,7 @@ async def test_a_constant_the_fit_cannot_use_is_a_503_with_a_reason_and_not_a_50
 
     # A real card, so a real tap is refused; the refusal precedes the write.
     card = (await client.get("/api/rate")).json()["card"]
-    tap = await client.post("/api/rate/verdict", json={"card_token": card["token"], "value": 2})
+    tap = await client.post("/api/rate/place", json={"card_token": card["token"], "tier": 5})
     assert tap.status_code == 503, tap.text
     assert "ledger constants" in tap.json()["detail"]
-    assert await db.fetchval("SELECT count(*) FROM verdict") == 0
+    assert await db.fetchval("SELECT count(*) FROM tier_edit") == 0

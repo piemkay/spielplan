@@ -19,8 +19,7 @@ RAIL_LIMIT = 15
 # A closed set, so a typo in a caller is a loud error rather than a line nobody can filter on.
 EVENT_KINDS: tuple[str, ...] = ("verdict", "duel", "tier_edit", "session_answer", "not_seen", "undo")
 
-# Decision 117's inventory, the only thing `redact` knows about. `reveal` is deliberately absent:
-# it is the product; `rate/session.viewer_reveal` strips its numbers (decisions 486, 491).
+# Decision 117's inventory, the only thing `redact` knows about.
 GATED_KEYS: tuple[str, ...] = ("model", "rail", "suppressed", "log", "ledger", "why_numbers")
 
 MAX_LINE = 400  # Enforced here so a caller learns at the write rather than at the render.
@@ -136,9 +135,13 @@ def verdict_line(user_name: str, title_name: str, label: str, *, refit_ms: float
     return f"verdict({_elide(user_name)}, {_elide(title_name)}) = {label} → {tail}"
 
 
-def tier_edit_line(title_name: str, tier: str, *, via: str, neighbour_duels: int = 0) -> str:
-    """`tier_edit(Drive → A, via=drag_drop) + 2 margin-less duels vs new neighbours` (§6.7)."""
-    line = f"tier_edit({_elide(title_name)} → {tier}, via={via})"
+def tier_edit_line(
+    title_name: str, tier: str, *, via: str, neighbour_duels: int = 0, rater: str | None = None
+) -> str:
+    """`tier_edit(Drive → A, via=drag_drop) + 2 margin-less duels vs new neighbours`, or with the
+    rater `tier_edit(jenny, Heat → A+, via=explicit)` (§6.7)."""
+    who = f"{_elide(rater)}, " if rater else ""
+    line = f"tier_edit({who}{_elide(title_name)} → {tier}, via={via})"
     if neighbour_duels:
         line += f" + {neighbour_duels} margin-less duels vs new neighbours"
     return line

@@ -130,8 +130,9 @@ async def installed(secrets_key, db, pg_url, tmp_path, monkeypatch):
             )
             assert changed.status_code == 200, changed.text
             # Decision 117 gates the rail line where Rate says why a push did not happen; without it the
-            # assertions below would be vacuous.
+            # assertions below would be vacuous. Set up, so Rate is open after the restore.
             await db.execute("UPDATE app_user SET show_model = true WHERE id = $1", user_id)
+            await db.execute("INSERT INTO ladder_setup (user_id) VALUES ($1)", user_id)
             event_id = await db.fetchval(
                 "INSERT INTO playback_event (source, title_id, user_id, finished) "
                 "VALUES ('jellyfin', $2, $1, true) RETURNING id",
@@ -316,25 +317,25 @@ async def test_the_same_dump_under_a_changed_secrets_key_boots_and_every_member_
             for member in installed["members"]:
                 phone = await _sign_in(make, str(member["name"]), MEMBER_PASSWORD)
 
-                # Unseen, so the card Rate serves next is one the verdict makes seen: a verdict on a
-                # title already seen owes Jellyfin nothing and has no custody line to report.
+                # Unseen, so the card Rate serves next is one the placement makes seen: a placement
+                # on a title already seen owes Jellyfin nothing and has no custody line to report.
                 state = await phone.post("/api/titles/1/state", json={"state": "unseen"})
                 assert state.status_code == 200, state.text
                 assert state.json()["synced"] is False
                 assert state.json()["reason"] == registry.SECRETS_UNREADABLE_REASON
 
-                opened = await phone.post("/api/rate/session", json={"mode": "sweep"})
+                opened = await phone.post("/api/rate/session", json={"kinds": ["movie"]})
                 assert opened.status_code == 200, opened.text
                 card = (await phone.get("/api/rate")).json()["card"]
-                verdict = await phone.post(
-                    "/api/rate/verdict", json={"card_token": card["token"], "value": 2}
+                placed = await phone.post(
+                    "/api/rate/place", json={"card_token": card["token"], "tier": 5}
                 )
-                assert verdict.status_code == 200, verdict.text
-                assert any("SECRETS_KEY" in line for line in verdict.json()["log"]), (
-                    verdict.json()["log"]
+                assert placed.status_code == 200, placed.text
+                assert any("SECRETS_KEY" in line for line in placed.json()["log"]), (
+                    placed.json()["log"]
                 )
 
-                nxt = verdict.json()["card"]
+                nxt = placed.json()["card"]
                 not_seen = await phone.post("/api/rate/not-seen", json={"card_token": nxt["token"]})
                 assert not_seen.status_code == 200, not_seen.text
                 assert any("SECRETS_KEY" in line for line in not_seen.json()["log"]), (

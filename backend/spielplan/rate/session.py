@@ -1,7 +1,8 @@
-"""The Rate surface's state machine (§6.1, §6.7, §13, decision 35).
+"""The Rate surface's state machine: one placement card at a time (§6.1, §6.7, decision 35).
 
 The server owns the block counter, the card on the table and its token, so Undo's boundary and a
-stale tap are enforceable. It draws no cards itself: `queue` and `battle` decide what to ask.
+stale tap are enforceable. It draws no cards itself: `queue` decides what to ask and `shelves` what
+each shelf shows.
 """
 
 from __future__ import annotations
@@ -11,7 +12,6 @@ import contextlib
 import functools
 import logging
 import math
-import random
 import uuid
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass
@@ -20,79 +20,39 @@ from typing import Any, Literal
 import asyncpg
 import numpy as np
 
+from spielplan.art.poster import url_epoch
 from spielplan.connectors.jellyfin import JellyfinClient
 from spielplan.connectors.registry import SECRETS_UNREADABLE_REASON, JellyfinConfig
+from spielplan.db import dna_terms
 from spielplan.db import pool as db_pool
 from spielplan.db.library import normalise_kinds
+from spielplan.derive.ids import APP_ID_MIN
 from spielplan.home import rail
-from spielplan.ledger import model, observations, refit
+from spielplan.ledger import ladder, model, observations, refit
 from spielplan.ledger.hyperparams import Hyperparams
-from spielplan.ledger.observations import VERDICT_LABELS, EmbeddingSource, PriorState
-from spielplan.rate import balance, battle, queue
+from spielplan.ledger.observations import EmbeddingSource, PriorState
+from spielplan.rate import queue
+from spielplan.rate import shelves as rate_shelves
 from spielplan.sync import seen
 
 log = logging.getLogger("spielplan.rate.session")
 
-# §6.1: "blocks of 15", the unit decision 35 measures Undo's depth in.
+# §6.1: "A block is 15 films", the unit decision 35 measures Undo's depth in.
 BLOCK_SIZE = 15
 
-# Decision 492: Mix starts battling once the person holds one block of live ratings. See `warm_up`.
-MIX_WARMUP_LABELS = BLOCK_SIZE
-
-MODES: tuple[str, ...] = ("mix", "sweep", "battle")
-CardType = Literal["sweep", "battle"]
-Side = Literal["left", "both", "right"]
-
-# §4.2: outcome A | B | TIE. "About the same" is first-class data (22% of random pairs are
-# genuine ties), so TIE is an outcome here and never a skip.
-OUTCOMES: tuple[str, ...] = ("A", "B", "TIE")
-
-# Random by design (§0 row 6), so neither boundary-targeted nor in §13 stream (a)'s holdout.
-BATTLE_CONTEXT = "profile_battle"
-BATTLE_SELECTION = "random"
-
-
-# §6.1's empty state, keyed by its cause: the mode decided which draws were attempted.
-DRAINED_CAUSES: dict[str, dict[str, str]] = {
-    "queue": {
-        "cause": "queue",
-        "text": (
-            "You've rated everything we can queue right now. Pairs sharpen what you've "
-            "already said."
-        ),
-    },
-    "pool": {
-        "cause": "pool",
-        "text": (
-            "A pair is two titles you rated the same way, and there is no new pair to "
-            "compare yet. Rate a few more one by one and the pairs start arriving."
-        ),
-    },
-    "both": {
-        "cause": "both",
-        "text": (
-            "You've rated everything we can queue right now, and there is no new pair of your "
-            "ratings left to compare either."
-        ),
-    },
-}
-
-
-def drained_for(mode: str) -> dict[str, str]:
-    """Which empty state this is, from the mode that decided which pools were tried."""
-    if mode == "sweep":
-        return DRAINED_CAUSES["queue"]
-    if mode == "battle":
-        return DRAINED_CAUSES["pool"]
-    return DRAINED_CAUSES["both"]
+DRAINED_LINE = "There's nothing more to rate right now."
 
 
 class StaleCard(Exception):
     """The answer names a card that is not the one on the table (double tap, back, second device)."""
 
-    def __init__(self, reason: str = "stale_card") -> None:
+    def __init__(self, reason: Literal["no_card", "stale_card"] = "stale_card") -> None:
         super().__init__(reason)
         self.reason = reason
+
+
+class BadTier(ValueError):
+    """A placement on a step outside the person's set for the card's kind."""
 
 
 class UndoUnavailable(Exception):
@@ -116,12 +76,16 @@ class RateSession:
     id: int
     user_id: int
     kinds: list[str]
-    mode: str
     block_index: int
     slot: int
     seq: int
     current_card: dict[str, Any] | None
     card_token: uuid.UUID | None
+
+    @property
+    def kind(self) -> str:
+        """Rate asks one kind at a time; a session from before that held two and asks the first."""
+        return self.kinds[0]
 
 
 class RailLine(str):
@@ -142,7 +106,7 @@ class Outcome:
     """One tap's result: the session as it now stands, and everything the response carries."""
 
     session: RateSession
-    reveal: dict[str, Any] | None = None
+    echo: dict[str, Any] | None = None
     # Plain strings except where §6.7's line is about one title, which `RailLine` carries.
     log: tuple[str, ...] = ()
     ledger: dict[str, Any] | None = None
@@ -152,39 +116,8 @@ class Outcome:
 # --- the block machine -------------------------------------------------------------------
 
 
-def observation_index(block_index: int, slot: int) -> int:
-    """The monotone observation count decision 200 derives the card type from.
-
-    Not `rate_session.seq`: a correction appends without advancing, and Undo moves this back.
-    """
-    return block_index * BLOCK_SIZE + slot - 1
-
-
-def card_type_for(mode: str, index: int) -> CardType:
-    """§6.1: "Mix (default — alternates sweep and battle); blocks of 15."
-
-    On the monotone index, not the slot: fifteen is odd, so the slot served two sweeps at every
-    roll (decision 200). Index 0 is a sweep.
-    """
-    if mode == "sweep":
-        return "sweep"
-    if mode == "battle":
-        return "battle"
-    return "sweep" if index % 2 == 0 else "battle"
-
-
-def warm_up(wanted: CardType, *, mode: str, labels: int) -> CardType:
-    """Decision 492: in Mix, no battle until `MIX_WARMUP_LABELS` live ratings stand.
-
-    Changes the counter's call, not the card under it, so nothing is marked as a substitution.
-    """
-    if mode == "mix" and labels < MIX_WARMUP_LABELS:
-        return "sweep"
-    return wanted
-
-
 def advance(block_index: int, slot: int) -> tuple[int, int]:
-    """§6.1: "the counter runs 1..15 and rolls into a new block."
+    """§6.1: the counter runs 1..15 and rolls into a new block.
 
     The roll moves the counter only: the fifteenth tap stays undoable until the next block's
     first observation lands (decisions 174, 199).
@@ -194,9 +127,7 @@ def advance(block_index: int, slot: int) -> tuple[int, int]:
     return block_index, slot + 1
 
 
-_SESSION_COLUMNS = (
-    "id, user_id, kinds, mode, block_index, slot, seq, current_card, card_token"
-)
+_SESSION_COLUMNS = "id, user_id, kinds, block_index, slot, seq, current_card, card_token"
 
 
 def _session(row: asyncpg.Record) -> RateSession:
@@ -205,13 +136,20 @@ def _session(row: asyncpg.Record) -> RateSession:
         id=row["id"],
         user_id=row["user_id"],
         kinds=list(row["kinds"]),
-        mode=row["mode"],
         block_index=row["block_index"],
         slot=row["slot"],
         seq=row["seq"],
         current_card=dict(card) if card else None,
         card_token=row["card_token"],
     )
+
+
+def one_kind(kinds: Sequence[str]) -> list[str]:
+    """Rate asks one kind at a time, switched from its title (§4.1 rule 5)."""
+    wanted = normalise_kinds(kinds)
+    if len(wanted) != 1:
+        raise ValueError("Rate asks about films or series, one at a time")
+    return wanted
 
 
 async def open_or_resume(
@@ -221,8 +159,9 @@ async def open_or_resume(
     kinds: Sequence[str] | None = None,
     restart: bool = False,
 ) -> RateSession:
-    """One live session per person (`rate_session_one_live`); `restart=True` ends it first."""
-    wanted = normalise_kinds(kinds) if kinds else list(observations.KINDS)
+    """One live session per person (`rate_session_one_live`); `restart=True` ends it first. A new
+    session asks about films unless `kinds` says otherwise; a resumed one keeps its kind."""
+    wanted = one_kind(kinds) if kinds is not None else ["movie"]
     async with conn.transaction():
         if restart:
             await conn.execute(
@@ -233,8 +172,8 @@ async def open_or_resume(
         # The conflict target names the partial index's own predicate.
         row = await conn.fetchrow(
             f"""
-            INSERT INTO rate_session (user_id, kinds, mode)
-            VALUES ($1, $2::text[], 'mix')
+            INSERT INTO rate_session (user_id, kinds)
+            VALUES ($1, $2::text[])
             ON CONFLICT (user_id) WHERE ended_at IS NULL DO NOTHING
             RETURNING {_SESSION_COLUMNS}
             """,
@@ -261,31 +200,21 @@ async def end_session(conn: asyncpg.Connection, *, user_id: int) -> bool:
     return ended is not None
 
 
-async def set_controls(
-    conn: asyncpg.Connection,
-    s: RateSession,
-    *,
-    mode: str | None = None,
-    kinds: Sequence[str] | None = None,
-) -> RateSession:
-    """§6.1's two controls: the mode and the kind toggles. A change drops the card on the table."""
-    if mode is not None and mode not in MODES:
-        raise ValueError(f"mode must be one of {MODES}, not {mode!r}")
-    wanted = normalise_kinds(kinds) if kinds is not None else s.kinds
-    redraw = (mode is not None and mode != s.mode) or wanted != s.kinds
+async def set_kinds(conn: asyncpg.Connection, s: RateSession, kinds: Sequence[str]) -> RateSession:
+    """The Films/Series switch. A change drops the card on the table; the block carries on."""
+    wanted = one_kind(kinds)
     row = await conn.fetchrow(
         f"""
         UPDATE rate_session
-           SET mode = $2, kinds = $3::text[], last_seen_at = now(),
-               current_card = CASE WHEN $4 THEN NULL ELSE current_card END,
-               card_token   = CASE WHEN $4 THEN NULL ELSE card_token END
+           SET kinds = $2::text[], last_seen_at = now(),
+               current_card = CASE WHEN $3 THEN NULL ELSE current_card END,
+               card_token   = CASE WHEN $3 THEN NULL ELSE card_token END
          WHERE id = $1
         RETURNING {_SESSION_COLUMNS}
         """,
         s.id,
-        mode or s.mode,
         wanted,
-        redraw,
+        wanted != s.kinds,
     )
     return _session(row)
 
@@ -293,41 +222,33 @@ async def set_controls(
 # --- the card cursor ---------------------------------------------------------------------
 
 
-async def _observed_title_ids(
-    conn: asyncpg.Connection, session_id: int, *, kinds_of: Sequence[str] | None = None
-) -> list[int]:
-    """What this sitting has already put in front of the person; Undo lifts the suppression.
-
-    The sweep excludes everything; the battle pool excludes only skips, because Mix battles over
-    the very verdicts the sweep half just collected.
-    """
+async def _observed_title_ids(conn: asyncpg.Connection, session_id: int) -> list[int]:
+    """What this sitting has already put in front of the person; Undo lifts the suppression."""
     rows = await conn.fetch(
         "SELECT DISTINCT unnest(title_ids) AS title_id FROM rate_observation "
-        "WHERE session_id = $1 AND undone_at IS NULL "
-        "  AND ($2::text[] IS NULL OR kind_of = ANY($2::text[]))",
+        "WHERE session_id = $1 AND undone_at IS NULL",
         session_id,
-        list(kinds_of) if kinds_of is not None else None,
     )
     return [r["title_id"] for r in rows]
 
 
-async def _skipped_title_ids(conn: asyncpg.Connection, session_id: int) -> list[int]:
-    return await _observed_title_ids(conn, session_id, kinds_of=("skip",))
-
-
-async def _draw_sweep(
-    conn: asyncpg.Connection, s: RateSession, *, exclude: Sequence[int], head: Sequence[int]
+async def _draw(
+    conn: asyncpg.Connection,
+    s: RateSession,
+    *,
+    exclude: Sequence[int],
+    head: Sequence[int],
+    rng: Any = None,
 ) -> dict[str, Any] | None:
-    cards = await queue.next_sweep_cards(
-        conn, user_id=s.user_id, kinds=s.kinds, limit=1, exclude=tuple(exclude), head=tuple(head)
+    cards = await queue.next_cards(
+        conn, user_id=s.user_id, kind=s.kind, limit=1, exclude=tuple(exclude), head=tuple(head),
+        rng=rng,
     )
     if not cards:
         return None
     card = cards[0]
-    kind = await observations.kind_of(conn, card.title_id)
     return {
-        "type": "sweep",
-        "kind": kind,
+        "kind": s.kind,
         "title_id": card.title_id,
         "reason": card.reason,
         "p_seen": card.p_seen,
@@ -338,78 +259,33 @@ async def _draw_sweep(
 
 
 async def _draw_pinned(
-    conn: asyncpg.Connection, s: RateSession, *, served: Sequence[int], head: Sequence[int]
+    conn: asyncpg.Connection,
+    s: RateSession,
+    *,
+    served: Sequence[int],
+    head: Sequence[int],
+    rng: Any = None,
 ) -> dict[str, Any] | None:
-    """A sweep card for the first drawable pinned title, or None.
+    """A card for the first drawable pinned title, or None.
 
     A pin lifts this sitting's suppression of the titles it names: the person asked for them again.
     """
     pinned = set(head)
-    card = await _draw_sweep(
-        conn, s, exclude=[t for t in served if t not in pinned], head=head
-    )
+    card = await _draw(conn, s, exclude=[t for t in served if t not in pinned], head=head, rng=rng)
     return card if card is not None and card["title_id"] in pinned else None
 
 
-async def _admit_pinned_kinds(
+async def _follow_pins(
     conn: asyncpg.Connection, s: RateSession, head: Sequence[int]
 ) -> RateSession:
-    """A pin of a kind the session does not hold widens the session to hold it.
-
-    Widening rather than serving across the partition keeps §4.1 rule 5; a rated title widens
-    nothing.
-    """
-    rows = await conn.fetch(
-        """
-        SELECT DISTINCT t.kind
-          FROM title t
-         WHERE t.id = ANY($1::int[])
-           AND NOT EXISTS (
-               SELECT 1 FROM verdict v
-                WHERE v.user_id = $2 AND v.title_id = t.id AND NOT v.is_reask
-           )
-        """,
-        [int(t) for t in head],
-        s.user_id,
-    )
-    missing = [r["kind"] for r in rows if r["kind"] not in s.kinds]
-    if not missing:
+    """Pins of the other kind only (a finish prompt for a series) switch the session to that kind,
+    rather than serving across §4.1 rule 5's partition."""
+    rows = await conn.fetch("SELECT id, kind FROM title WHERE id = ANY($1::int[])", list(head))
+    kinds = {int(r["id"]): r["kind"] for r in rows}
+    pinned = [kinds[t] for t in head if t in kinds]
+    if not pinned or s.kind in pinned:
         return s
-    return await set_controls(conn, s, kinds=[*s.kinds, *missing])
-
-
-async def _live_labels(conn: asyncpg.Connection, s: RateSession) -> int:
-    """The person's live ratings over the session's kinds: the class-balance widget's own total."""
-    return (await balance.class_balance(conn, user_id=s.user_id, kinds=s.kinds)).total
-
-
-async def _draw_battle(
-    conn: asyncpg.Connection,
-    s: RateSession,
-    *,
-    exclude: Sequence[int],
-    rng: Any = None,
-    labels: int | None = None,
-) -> dict[str, Any] | None:
-    pair = await battle.next_battle_pair(
-        conn, user_id=s.user_id, kinds=s.kinds, exclude=tuple(exclude), rng=rng, labels=labels
-    )
-    if pair is None:
-        return None
-    return _battle_card(await observations.kind_of(conn, pair.title_a), pair)
-
-
-def _battle_card(kind: str, pair: battle.BattlePair) -> dict[str, Any]:
-    return {
-        "type": "battle",
-        "kind": kind,
-        "title_a": pair.title_a,
-        "title_b": pair.title_b,
-        # Server-side only; see `public_card`.
-        "verdict_class": pair.verdict_class,
-        "reason": pair.reason,
-        "reask_of": pair.reask_of,
-    }
+    return await set_kinds(conn, s, [pinned[0]])
 
 
 async def ensure_card(
@@ -419,67 +295,28 @@ async def ensure_card(
     rng: Any = None,
     head: Sequence[int] = (),
 ) -> RateSession:
-    """Idempotent: draws only when the table is empty.
-
-    A battle slot with no drawable pair serves a sweep without changing the slot, so alternation
-    resumes by itself. An explicit `head` the stashed card does not satisfy redraws once (§6.0's
-    banner must serve the titles it names); a pin is also served on an empty table first.
+    """Idempotent: draws only when the table is empty, and never before the person's set-up (Rate
+    is closed until then). An explicit `head` the stashed card does not satisfy redraws once
+    (§6.0's banner must serve the titles it names); a pin is also served on an empty table first.
     """
+    if await ladder.set_up_at(conn, user_id=s.user_id) is None:
+        return s
     head = tuple(int(t) for t in head)
     if head:
-        s = await _admit_pinned_kinds(conn, s, head)
+        s = await _follow_pins(conn, s, head)
     served = await _observed_title_ids(conn, s.id)
-    labels = await _live_labels(conn, s)
-    wanted = warm_up(
-        card_type_for(s.mode, observation_index(s.block_index, s.slot)), mode=s.mode, labels=labels
-    )
     if s.current_card is not None:
         if not head or s.current_card.get("title_id") in head:
             return s
-        replacement = await _draw_pinned(conn, s, served=served, head=head)
+        replacement = await _draw_pinned(conn, s, served=served, head=head, rng=rng)
         if replacement is None:
             return s
-        # The banner's redraw is a sweep whatever the counter called for: mark it.
-        return await stash(
-            conn, s, _mark_substitution(replacement, instead_of=wanted), expected=s.card_token
-        )
+        return await stash(conn, s, replacement, expected=s.card_token)
 
-    if head:
-        pinned = await _draw_pinned(conn, s, served=served, head=head)
-        if pinned is not None:
-            marked = _mark_substitution(pinned, instead_of=wanted)
-            return await stash(conn, s, marked, expected=None)
-
-    skipped = await _skipped_title_ids(conn, s.id)
-    card: dict[str, Any] | None = None
-    if wanted == "battle":
-        card = await _draw_battle(conn, s, exclude=skipped, rng=rng, labels=labels)
-        if card is None and s.mode != "battle":
-            card = _mark_substitution(
-                await _draw_sweep(conn, s, exclude=served, head=head), instead_of=wanted
-            )
-    else:
-        card = await _draw_sweep(conn, s, exclude=served, head=head)
-        if card is None and s.mode != "sweep":
-            # §6.1's drained state: the queue is spent but the ratings already given can still
-            # be sharpened against each other.
-            card = _mark_substitution(
-                await _draw_battle(conn, s, exclude=skipped, rng=rng, labels=labels),
-                instead_of=wanted,
-            )
+    card = await _draw_pinned(conn, s, served=served, head=head, rng=rng) if head else None
+    if card is None:
+        card = await _draw(conn, s, exclude=served, head=head, rng=rng)
     return await stash(conn, s, card, expected=None)
-
-
-def _mark_substitution(
-    card: dict[str, Any] | None, *, instead_of: CardType
-) -> dict[str, Any] | None:
-    """Mark a card the counter did not call for, wherever the type flips.
-
-    The type and no cause: three sites flip for three different reasons. `serving` relies on it.
-    """
-    if card is not None and card["type"] != instead_of:
-        card["substituted_for"] = instead_of
-    return card
 
 
 async def stash(
@@ -512,101 +349,75 @@ async def stash(
     return _session(row)
 
 
-# `overview_is_mpst`: the overview IS the title's MPST synopsis, a full retelling.
-_TITLE_CARDS = """
-SELECT t.id, t.kind, t.name, t.year, t.runtime_min, t.poster_path, t.overview,
-       EXISTS (
-           SELECT 1 FROM title_meta m
-            WHERE m.title_id = t.id AND m.source = 'mpst'
-              AND btrim(m.payload->>'plot_full') = btrim(t.overview)
-       ) AS overview_is_mpst
-  FROM title t
- WHERE t.id = ANY($1::int[])
-"""
-
-
-async def _title_cards(conn: asyncpg.Connection, ids: Sequence[int]) -> dict[int, dict[str, Any]]:
-    """The poster-forward card of §6.8, and nothing else.
-
-    No `ledger_state`, `user_score` or `title.placement`: the card must not anchor on the model.
-    """
-    rows = await conn.fetch(_TITLE_CARDS, list(ids))
-    return {
-        r["id"]: {
-            "id": r["id"],
-            "kind": r["kind"],
-            "name": r["name"],
-            "year": r["year"],
-            "runtime_min": r["runtime_min"],
-            "poster_path": r["poster_path"],
-            # A recall aid, never an MPST synopsis: those retell the ending.
-            "recall_aid": None if r["overview_is_mpst"] else _recall_aid(r["overview"]),
-        }
-        for r in rows
-    }
-
-
-def _recall_aid(overview: str | None, limit: int = 180) -> str | None:
-    if not overview:
-        return None
-    text = overview.strip()
-    if len(text) <= limit:
-        return text
-    return text[:limit].rsplit(" ", 1)[0] + "…"
+async def _titles(conn: asyncpg.Connection, ids: Sequence[int]) -> dict[int, dict[str, Any]]:
+    """The poster-forward card of §6.8, and nothing else: no `ledger_state`, `user_score` or
+    `title.placement`, so the card cannot anchor on the model."""
+    rows = await conn.fetch(
+        "SELECT id, name, original_name, original_language, year, runtime_min, poster_path "
+        "FROM title WHERE id = ANY($1::int[])",
+        list(ids),
+    )
+    return {int(r["id"]): dict(r) for r in rows}
 
 
 async def public_card(
-    conn: asyncpg.Connection, s: RateSession
+    conn: asyncpg.Connection, s: RateSession, *, version: str | None
 ) -> dict[str, Any] | None:
-    """§6.1: "Prediction reveal strictly *after* the tap (anchoring; Cosley 2003)."
+    """§6.1: nothing the model guesses shows before the tap (anchoring; Cosley 2003).
 
-    Built from an allow-list: `reask_of` and the pair's verdict band must never reach the card.
+    Built from an allow-list, so `reask_of` and the card's source never reach the wire.
     """
     card = s.current_card
     if card is None or s.card_token is None:
         return None
-    token = str(s.card_token)
-    if card["type"] == "sweep":
-        titles = await _title_cards(conn, [card["title_id"]])
-        public = {
-            "type": "sweep",
-            "token": token,
-            "kind": card["kind"],
-            "title": titles.get(card["title_id"]),
-            "reason": card["reason"],
-            # `source` stays server-side with `reask_of` (§13).
-            "substituted_for": card.get("substituted_for"),
-            # §6.8 / proposal 52: lowercase, worst -> best, matching the stored ordinal.
-            "verdict_labels": [[i, label] for i, label in enumerate(VERDICT_LABELS)],
-            "controls": ["verdict", "not_seen", "skip"],
-        }
-        # P(seen) travels under `model`, which `rail.redact` strips with Show the model off, and
-        # only where the queue placed the card by it.
-        if card.get("source") in ("seed", "p_seen") and card.get("p_seen") is not None:
-            public["model"] = {"p_seen": round(float(card["p_seen"]), 2)}
-        return public
-    titles = await _title_cards(conn, [card["title_a"], card["title_b"]])
-    # `left`/`right` match §6.1's corrections row; each poster carries its outcome letter.
-    return {
-        "type": "battle",
-        "token": token,
+    title_id = card["title_id"]
+    shelves = await rate_shelves.shelves_for(
+        conn, user_id=s.user_id, title_id=title_id, kind=card["kind"], version=version
+    )
+    public = {
+        "token": str(s.card_token),
         "kind": card["kind"],
-        "left": {**(titles.get(card["title_a"]) or {}), "outcome": "A"},
-        "right": {**(titles.get(card["title_b"]) or {}), "outcome": "B"},
+        "title": (await _titles(conn, [title_id])).get(title_id),
         "reason": card["reason"],
-        "substituted_for": card.get("substituted_for"),
-        "outcomes": list(OUTCOMES),
-        # §6.1: "Corrections zone at the bottom (nothing tappable inside the poster cards),
-        # one row: `not seen: [left] [both] [right]`".
-        "corrections": {"label": "not seen", "sides": ["left", "both", "right"]},
-        "controls": ["duel", "correction", "skip"],
+        "shelves": [shelf.as_dict() for shelf in shelves],
     }
+    # P(seen) travels under `model`, which `rail.redact` strips with Show the model off, and only
+    # where the queue placed the card by it.
+    if card.get("source") in ("seed", "p_seen") and card.get("p_seen") is not None:
+        public["model"] = {"p_seen": round(float(card["p_seen"]), 2)}
+    return public
 
 
-# --- the reveal, which happens only after the tap ------------------------------------------
+async def _preload(
+    conn: asyncpg.Connection, s: RateSession, *, version: str | None
+) -> list[str]:
+    """The art of the card most likely next (§6: the next card preloaded): its poster and its
+    shelves', each URL as the client draws it. A peek with no re-ask draw, so it may miss; it
+    writes nothing."""
+    served = await _observed_title_ids(conn, s.id)
+    current = [s.current_card["title_id"]] if s.current_card else []
+    nxt = await queue.next_cards(
+        conn, user_id=s.user_id, kind=s.kind, limit=1, exclude=[*served, *current], reask_rate=0.0
+    )
+    if not nxt:
+        return []
+    shelves = await rate_shelves.shelves_for(
+        conn, user_id=s.user_id, title_id=nxt[0].title_id, kind=s.kind, version=version
+    )
+    ids = list(dict.fromkeys([nxt[0].title_id, *(film.id for shelf in shelves for film in shelf.films)]))
+    epoch = await url_epoch(conn) if any(t >= APP_ID_MIN for t in ids) else None
+    return [
+        f"/api/art/{t}/poster" + (f"?v={epoch}" if epoch and t >= APP_ID_MIN else "") for t in ids
+    ]
 
-# Proposal 153's suppressed reveal: no fit yet or no labels, one remedy.
-NO_GUESS_YET = "no guess yet - rate a few more first"
+
+# --- the model's guess, read before the tap and shown only after it --------------------------
+
+
+@dataclass(frozen=True)
+class Guess:
+    tier: int      # in the person's set today
+    cdf: float
 
 
 async def _predicted_coordinate(
@@ -617,7 +428,7 @@ async def _predicted_coordinate(
     kind: str,
     hp: Hyperparams,
     embeddings: EmbeddingSource | None,
-) -> tuple[float, float, int, int] | None:
+) -> tuple[float, int, int] | None:
     """§5.2's zero-parameter prediction for a title with no `ledger_state` row of its own.
 
     `ledger_state` is sized to the owned library and the seed-list queue is not, so this computes
@@ -634,11 +445,10 @@ async def _predicted_coordinate(
     if not (math.isfinite(s) and math.isfinite(cdf)):
         # The same refusal `refit` makes of a non-finite update.
         return None
-    # The tier Home would show, against the stored cuts (decision 510).
-    return s, cdf, int(model.tier_of(np.asarray([s]), cache.cuts)[0]), cache.n_levels
+    return cdf, int(model.tier_of(np.asarray([s]), cache.cuts)[0]), cache.n_levels
 
 
-async def predicted_class(
+async def guess(
     conn: asyncpg.Connection,
     *,
     user_id: int,
@@ -646,14 +456,11 @@ async def predicted_class(
     kind: str,
     hp: Hyperparams,
     embeddings: EmbeddingSource | None = None,
-) -> dict[str, Any]:
-    """What the model would have guessed, read BEFORE the write and served after it.
-
-    The class the title's tier stands for, on the person's own cutpoints (decision 510). The
-    stored row first, the cached fit second (see `_predicted_coordinate`).
-    """
+) -> Guess | None:
+    """The step the model would have guessed, on the person's own cutpoints (decision 510), read
+    BEFORE the write. The stored row first, the cached fit second; None before a fit."""
     row = await conn.fetchrow(
-        "SELECT ls.s, ls.sigma, ls.cdf, ls.tier, "
+        "SELECT ls.cdf, ls.tier, "
         "       (SELECT cardinality(c.tier_set) FROM ledger_cutpoints c "
         "         WHERE c.user_id = ls.user_id AND c.kind = ls.kind) AS k "
         "  FROM ledger_state ls WHERE ls.user_id = $1 AND ls.title_id = $2",
@@ -665,51 +472,12 @@ async def predicted_class(
             conn, user_id=user_id, title_id=title_id, kind=kind, hp=hp, embeddings=embeddings
         )
         if coordinate is None:
-            return {"available": False, "reason": NO_GUESS_YET}
-        predicted_s, predicted_cdf, predicted_tier, levels = coordinate
+            return None
+        cdf, tier, levels = coordinate
     else:
-        predicted_s, predicted_cdf = float(row["s"]), float(row["cdf"])
-        predicted_tier = int(row["tier"])
-        levels = int(row["k"] or len(observations.DEFAULT_TIER_SET))
-    total = (await balance.class_balance(conn, user_id=user_id, kinds=[kind])).total
-    if total == 0:
-        return {"available": False, "reason": NO_GUESS_YET}
-
-    cdf = predicted_cdf
-    # Decision 510: the class the tier letter stands for, so the reveal matches the badge on Home.
-    guess = model.verdict_class_of_tier(predicted_tier, levels)
-    return {
-        "available": True,
-        "predicted": guess,
-        "predicted_label": VERDICT_LABELS[guess],
-        "cdf": cdf,
-        "s": predicted_s,
-        "label_count": total,
-    }
-
-
-def reveal_for(prediction: dict[str, Any], value: int) -> dict[str, Any]:
-    """§6.1's phrasing: "we'd have guessed the same" / "we'd have guessed {class}"; no number."""
-    if not prediction.get("available"):
-        return dict(prediction)
-    agreed = prediction["predicted"] == value
-    head = "we'd have guessed the same" if agreed else (
-        f"we'd have guessed {prediction['predicted_label']}"
-    )
-    return {**prediction, "agreed": agreed, "text": head}
-
-
-# The reveal's model quantities: the displayed weight, the coordinate and the band's support.
-_REVEAL_NUMBERS = ("cdf", "s", "label_count")
-
-
-def viewer_reveal(reveal: dict[str, Any] | None, *, show_model: bool) -> dict[str, Any] | None:
-    """The reveal as one viewer may see it: with Show the model off, no model number is sent."""
-    if reveal is None or not reveal.get("available"):
-        return reveal
-    if not show_model:
-        return {key: value for key, value in reveal.items() if key not in _REVEAL_NUMBERS}
-    return {**reveal, "text": f"{reveal['text']} · cdf {reveal['cdf']:.2f}"}
+        cdf, tier, levels = float(row["cdf"]), int(row["tier"]), row["k"]
+    k = len(await observations.tier_set_of(conn, user_id=user_id, kind=kind))
+    return Guess(tier=observations.rescale_level(tier, k_from=levels, k_to=k), cdf=cdf)
 
 
 # --- §7.3's push, and its symmetric retraction ----------------------------------------------
@@ -735,14 +503,11 @@ async def _push_state(
 
 
 def _state_entries(
-    write: observations.Write, pushed: dict[int, bool]
+    priors: Sequence[PriorState], pushed: dict[int, bool]
 ) -> list[dict[str, Any]]:
     """`rate_observation.prior_state`: what `user_title` held, plus whether we reached
     Jellyfin. Undo compensates what it did, not what it intended."""
-    return [
-        {**p.as_dict(), "pushed": bool(pushed.get(p.title_id, False))}
-        for p in write.prior_state
-    ]
+    return [{**p.as_dict(), "pushed": bool(pushed.get(p.title_id, False))} for p in priors]
 
 
 async def _mark_pushed(
@@ -840,7 +605,7 @@ async def _push_and_mark(
     user_id: int,
     session_id: int,
     seq: int,
-    writes: Sequence[observations.Write],
+    priors: Sequence[PriorState],
     title_ids: Sequence[int],
 ) -> dict[int, tuple[bool, str | None]]:
     """Push each touched title's committed state, then correct the journal's `pushed` flags."""
@@ -854,7 +619,7 @@ async def _push_and_mark(
         user_id=user_id,
         session_id=session_id,
         seq=seq,
-        entries=[e for w in writes for e in _state_entries(w, pushed)],
+        entries=_state_entries(priors, pushed),
     )
     return results
 
@@ -868,12 +633,12 @@ async def _push_and_narrate(
     user_id: int,
     session_id: int,
     seq: int,
-    writes: Sequence[observations.Write],
+    priors: Sequence[PriorState],
     title_ids: Sequence[int],
 ) -> None:
     """A handed-off push, and §6.7's line for how it ended, recorded when it ends."""
     results = await _push_and_mark(
-        conn, jf, user_id=user_id, session_id=session_id, seq=seq, writes=writes,
+        conn, jf, user_id=user_id, session_id=session_id, seq=seq, priors=priors,
         title_ids=title_ids,
     )
     for title_id in title_ids:
@@ -890,7 +655,7 @@ async def _settle_push(
     user_id: int,
     session_id: int,
     seq: int,
-    writes: Sequence[observations.Write],
+    priors: Sequence[PriorState],
     title_ids: Sequence[int],
 ) -> list[str]:
     """§7.3's push for one tap, now or after the response; returns §6.7's line per title.
@@ -898,17 +663,17 @@ async def _settle_push(
     With `later` and a client, the push runs on its own connection after the response (a series
     Played write can take seconds); with no client, inline, since `_push_state` needs no query.
     """
-    writes, title_ids = tuple(writes), tuple(title_ids)
+    priors, title_ids = tuple(priors), tuple(title_ids)
     if later is not None and jf is not None and jf.client is not None:
         later(
             functools.partial(
                 _push_and_narrate, jf=jf, state=state, event_kind=event_kind, user_id=user_id,
-                session_id=session_id, seq=seq, writes=writes, title_ids=title_ids,
+                session_id=session_id, seq=seq, priors=priors, title_ids=title_ids,
             )
         )
         return [_follows_line(state) for _ in title_ids]
     results = await _push_and_mark(
-        conn, jf, user_id=user_id, session_id=session_id, seq=seq, writes=writes,
+        conn, jf, user_id=user_id, session_id=session_id, seq=seq, priors=priors,
         title_ids=title_ids,
     )
     return [_sync_line(state, *results[title_id]) for title_id in title_ids]
@@ -965,6 +730,20 @@ async def settled(timeout: float | None = None) -> None:
         await asyncio.wait(list(_SETTLING), timeout=left)
 
 
+def _sync_line(state: str, pushed: bool, reason: str | None) -> str:
+    """§6.7's rail reports what actually happened, never a write that did not happen."""
+    played = "true" if state == "seen" else "false"
+    # Settled with a reason is a series stamped app-only (decision 533): nothing reached Jellyfin.
+    if pushed and reason is None:
+        return f"user_title.state = {state} -> Jellyfin Played {played}"
+    return f"user_title.state = {state} -> not pushed ({reason or 'no connector'})"
+
+
+def _follows_line(state: str) -> str:
+    """The line for a push handed to `later`: it has not happened yet, so it says it follows."""
+    return f"user_title.state = {state} -> Jellyfin push follows"
+
+
 # --- the journal -----------------------------------------------------------------------------
 
 
@@ -972,24 +751,21 @@ async def _append(
     conn: asyncpg.Connection,
     s: RateSession,
     *,
-    kind_of: str,
+    kind_of: Literal["placement", "not_seen"],
     card: dict[str, Any],
     title_ids: Sequence[int],
+    tier_edit_id: int | None = None,
     verdict_id: int | None = None,
-    duel_id: int | None = None,
     superseded_verdict_id: int | None = None,
     prior_state: Sequence[dict[str, Any]] = (),
     latency_ms: int | None = None,
 ) -> RateSession:
     """One journal row, then the cursor moves (decision 35's observation journal).
 
-    A correction does not advance (`rate_observation_advances_rule`). The INSERT and UPDATE are
-    atomic here too: split, they leave the journal a row ahead and every later append refused.
+    The INSERT and UPDATE are atomic here too: split, they leave the journal a row ahead and every
+    later append refused.
     """
-    advances = kind_of != "correction"
-    block_index, slot = (
-        advance(s.block_index, s.slot) if advances else (s.block_index, s.slot)
-    )
+    block_index, slot = advance(s.block_index, s.slot)
     async with contextlib.AsyncExitStack() as stack:
         if not conn.is_in_transaction():
             await stack.enter_async_context(conn.transaction())
@@ -998,10 +774,10 @@ async def _append(
                 """
                 INSERT INTO rate_observation
                     (session_id, user_id, seq, block_index, slot, kind_of, advances, card,
-                     title_ids, verdict_id, duel_id, superseded_verdict_id, prior_state,
+                     title_ids, tier_edit_id, verdict_id, superseded_verdict_id, prior_state,
                      latency_ms)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9::int[], $10, $11, $12,
-                        $13::jsonb, $14)
+                VALUES ($1, $2, $3, $4, $5, $6, true, $7::jsonb, $8::int[], $9, $10, $11,
+                        $12::jsonb, $13)
                 """,
                 s.id,
                 s.user_id,
@@ -1009,11 +785,10 @@ async def _append(
                 s.block_index,
                 s.slot,
                 kind_of,
-                advances,
                 card,
                 list(title_ids),
+                tier_edit_id,
                 verdict_id,
-                duel_id,
                 superseded_verdict_id,
                 list(prior_state),
                 latency_ms,
@@ -1052,28 +827,15 @@ async def _claim_card(conn: asyncpg.Connection, s: RateSession, card_token: str)
         raise StaleCard("stale_card")
 
 
-def _take_card(s: RateSession, token: str, *, want: CardType) -> dict[str, Any]:
+def _take_card(s: RateSession, token: str) -> dict[str, Any]:
     if s.current_card is None or s.card_token is None:
         raise StaleCard("no_card")
     if str(s.card_token) != str(token):
         raise StaleCard("stale_card")
-    if s.current_card["type"] != want:
-        raise StaleCard("wrong_card_type")
     return s.current_card
 
 
-async def _verdict_rail_line(
-    conn: asyncpg.Connection,
-    *,
-    user_id: int,
-    title_id: int,
-    value: int,
-    refit_ms: float | None,
-) -> RailLine:
-    """§6.7's commonest line, composed here where the title, label and refit time are all in hand.
-
-    Deliberately not `ledger/observations.py`'s audit sentence: §6.8 wants names, not ids.
-    """
+async def _names(conn: asyncpg.Connection, *, user_id: int, title_id: int) -> tuple[str, str]:
     row = await conn.fetchrow(
         "SELECT (SELECT name FROM app_user WHERE id = $1) AS rater,"
         " (SELECT name FROM title WHERE id = $2) AS title",
@@ -1081,23 +843,26 @@ async def _verdict_rail_line(
         title_id,
     )
     # Both exist by foreign key; the fallbacks cover a database that broke its constraints.
-    rater = row["rater"] or "an unknown rater"
-    title_name = row["title"] or "an unknown title"
-    return RailLine(
-        rail.verdict_line(rater, title_name, VERDICT_LABELS[value], refit_ms=refit_ms),
-        title_id=title_id,
-    )
+    return row["rater"] or "an unknown rater", row["title"] or "an unknown title"
 
 
-# --- the five taps ---------------------------------------------------------------------------
+def _placement_line(rater: str, title: str, label: str, *, refit_ms: float | None) -> str:
+    """§6.7's `tier_edit(jenny, Heat → A+, via=explicit) → tier arm, incremental refit 31 ms`."""
+    line = rail.tier_edit_line(title, label, via="explicit", rater=rater) + " → tier arm"
+    if refit_ms is not None:
+        line += f", incremental refit {refit_ms:.0f} ms"
+    return line
 
 
-async def record_verdict(
+# --- the two taps ----------------------------------------------------------------------------
+
+
+async def record_placement(
     conn: asyncpg.Connection,
     s: RateSession,
     *,
     card_token: str,
-    value: int,
+    tier: int,
     hp: Hyperparams,
     embeddings: EmbeddingSource | None = None,
     bundle_version: Any = refit.BASIS_UNSTATED,
@@ -1107,98 +872,76 @@ async def record_verdict(
     head: Sequence[int] = (),
     later: Later | None = None,
 ) -> Outcome:
-    """§6.1's `Liked / Fine / Disliked`, and "Verdict implies `seen`".
+    """§6.1's placement: a `tier_edit` (`via = 'explicit'`) that implies `seen` and records its
+    tier's verdict (`ladder.place`); a re-ask card's edit names the edit it re-asks.
 
-    `bundle_version` names the basis `embeddings` is in, so `refit.load_cache` can check it.
-    `later` takes §7.3's push off the response (`_settle_push`).
+    Raises BadTier for a tier outside the person's set, before anything is written.
+    `bundle_version` names the basis `embeddings` is in; `later` takes §7.3's push off the response.
     """
-    card = _take_card(s, card_token, want="sweep")
-    if value not in (0, 1, 2):
-        raise ValueError(f"verdict value must be 0, 1 or 2, not {value!r}")
-    title_id = card["title_id"]
+    card = _take_card(s, card_token)
+    title_id, kind = int(card["title_id"]), str(card["kind"])
+    tier_set = await observations.tier_set_of(conn, user_id=s.user_id, kind=kind)
+    if not 0 <= tier < len(tier_set):
+        raise BadTier(f"tier {tier} is outside the set of {len(tier_set)} steps")
 
-    # Strictly first: the reveal is what the model believed *before* this label existed.
-    prediction = await predicted_class(
-        conn,
-        user_id=s.user_id,
-        title_id=title_id,
-        kind=card["kind"],
-        hp=hp,
-        embeddings=embeddings,
+    # Strictly first: the echo's guess is what the model believed *before* this placement existed.
+    before = await guess(
+        conn, user_id=s.user_id, title_id=title_id, kind=kind, hp=hp, embeddings=embeddings
     )
 
     async with conn.transaction():
         await _claim_card(conn, s, card_token)
-        write = await observations.record_verdict(
-            conn,
-            user_id=s.user_id,
-            title_id=title_id,
-            value=value,
-            source="sweep",
-            # §13 stream (b): distinguishable server-side, invisible in the payload.
-            is_reask=card.get("reask_of") is not None,
-            reask_of=card.get("reask_of"),
+        placed = await ladder.place(
+            conn, user_id=s.user_id, title_id=title_id, tier=tier, via="explicit",
+            source="ladder", reask_of=card.get("reask_of"),
         )
         s = await _append(
             conn,
             s,
-            kind_of="verdict",
+            kind_of="placement",
             card=card,
-            title_ids=write.title_ids,
-            verdict_id=write.row_id,
-            superseded_verdict_id=write.superseded_id,
+            title_ids=(title_id,),
+            tier_edit_id=placed.tier_edit_id,
+            verdict_id=placed.verdict_id,
+            superseded_verdict_id=placed.superseded_verdict_id,
             # `pushed` is corrected by `_mark_pushed` once the push has happened.
-            prior_state=_state_entries(write, {}),
+            prior_state=_state_entries(placed.prior_state, {}),
             latency_ms=latency_ms,
         )
 
-    # §7.3's push after the commit, where the verdict made the title seen: the row then stands as
-    # owed (`jf_synced_at` NULL).
+    # §7.3's push after the commit, where the placement made the title seen: the row then stands
+    # as owed (`jf_synced_at` NULL).
     sync_lines: list[str] = []
-    if write.implied_seen:
+    if placed.implied_seen:
         sync_lines = await _settle_push(
-            conn, jf, later, state="seen", event_kind="verdict", user_id=s.user_id,
-            session_id=s.id, seq=s.seq, writes=(write,), title_ids=(title_id,),
+            conn, jf, later, state="seen", event_kind="tier_edit", user_id=s.user_id,
+            session_id=s.id, seq=s.seq, priors=placed.prior_state, title_ids=(title_id,),
         )
 
     ledger = await refit.update_incrementally_reporting(
         conn,
         user_id=s.user_id,
-        kind=write.kind,
-        title_ids=write.title_ids,
+        kind=placed.kind,
+        title_ids=(title_id,),
         hp=hp,
         embeddings=embeddings,
         bundle_version=bundle_version,
     )
-    # Replaces `write.log` on this arm, so one write is narrated once.
-    line = await _verdict_rail_line(
-        conn,
-        user_id=s.user_id,
+    rater, name = await _names(conn, user_id=s.user_id, title_id=title_id)
+    line = RailLine(
+        _placement_line(rater, name, placed.label, refit_ms=(ledger or {}).get("ms")),
         title_id=title_id,
-        value=value,
-        refit_ms=(ledger or {}).get("ms"),
     )
+    echo: dict[str, Any] = {
+        "title_id": title_id, "name": name, "tier": placed.tier, "word": placed.word,
+    }
+    if before is not None:
+        echo["model"] = {
+            "guess_word": observations.tier_words(tier_set)[before.tier],
+            "cdf": round(before.cdf, 2),
+        }
     s = await ensure_card(conn, s, rng=rng, head=head)
-    return Outcome(
-        session=s,
-        reveal=reveal_for(prediction, value),
-        log=(line, *sync_lines),
-        ledger=ledger,
-    )
-
-
-def _sync_line(state: str, pushed: bool, reason: str | None) -> str:
-    """§6.7's rail reports what actually happened, never a write that did not happen."""
-    played = "true" if state == "seen" else "false"
-    # Settled with a reason is a series stamped app-only (decision 533): nothing reached Jellyfin.
-    if pushed and reason is None:
-        return f"user_title.state = {state} -> Jellyfin Played {played}"
-    return f"user_title.state = {state} -> not pushed ({reason or 'no connector'})"
-
-
-def _follows_line(state: str) -> str:
-    """The line for a push handed to `later`: it has not happened yet, so it says it follows."""
-    return f"user_title.state = {state} -> Jellyfin push follows"
+    return Outcome(session=s, echo=echo, log=(line, *sync_lines), ledger=ledger)
 
 
 async def record_not_seen(
@@ -1212,244 +955,41 @@ async def record_not_seen(
     head: Sequence[int] = (),
     later: Later | None = None,
 ) -> Outcome:
-    """§6.1's `Not seen`: plain `unseen` (no third state); writes no observation row, deletes none."""
-    card = _take_card(s, card_token, want="sweep")
-    title_id = card["title_id"]
+    """§6.1's `Not seen`: plain `unseen` (no third state); writes no observation row, deletes none,
+    and a placed film keeps its step (decision 550)."""
+    card = _take_card(s, card_token)
+    title_id = int(card["title_id"])
     async with conn.transaction():
         await _claim_card(conn, s, card_token)
-        write = await observations.record_not_seen(
-            conn, user_id=s.user_id, title_id=title_id
-        )
+        write = await observations.record_not_seen(conn, user_id=s.user_id, title_id=title_id)
         s = await _append(
             conn,
             s,
             kind_of="not_seen",
             card=card,
             title_ids=write.title_ids,
-            prior_state=_state_entries(write, {}),
+            prior_state=_state_entries(write.prior_state, {}),
             latency_ms=latency_ms,
         )
     sync_lines = await _settle_push(
         conn, jf, later, state="unseen", event_kind="not_seen", user_id=s.user_id,
-        session_id=s.id, seq=s.seq, writes=(write,), title_ids=(title_id,),
+        session_id=s.id, seq=s.seq, priors=write.prior_state, title_ids=(title_id,),
     )
     s = await ensure_card(conn, s, rng=rng, head=head)
     return Outcome(session=s, log=(write.log, *sync_lines))
 
 
-async def record_skip(
-    conn: asyncpg.Connection,
-    s: RateSession,
-    *,
-    card_token: str,
-    latency_ms: int | None = None,
-    rng: Any = None,
-    head: Sequence[int] = (),
-) -> Outcome:
-    """`Skip` writes to no arm; its journal row suppresses the card's titles for the sitting."""
-    if s.current_card is None or s.card_token is None:
-        raise StaleCard("no_card")
-    if str(s.card_token) != str(card_token):
-        raise StaleCard("stale_card")
-    card = s.current_card
-    titles = (
-        [card["title_id"]] if card["type"] == "sweep" else [card["title_a"], card["title_b"]]
-    )
-    # In a transaction like its siblings; see `_append`.
-    async with conn.transaction():
-        await _claim_card(conn, s, card_token)
-        s = await _append(conn, s, kind_of="skip", card=card, title_ids=titles,
-                          latency_ms=latency_ms)
-    s = await ensure_card(conn, s, rng=rng, head=head)
-    return Outcome(session=s, log=("skipped — no observation row written",))
-
-
-async def record_duel(
-    conn: asyncpg.Connection,
-    s: RateSession,
-    *,
-    card_token: str,
-    outcome: str,
-    hp: Hyperparams,
-    decisive: bool = False,
-    embeddings: EmbeddingSource | None = None,
-    bundle_version: Any = refit.BASIS_UNSTATED,
-    latency_ms: int | None = None,
-    rng: Any = None,
-    head: Sequence[int] = (),
-) -> Outcome:
-    """§6.1's battle answer: exactly one duel row, context `profile_battle`; a TIE is data.
-
-    "Much more" is `decisive`, weighted by `hp.margin_for`; a TIE never is (decision 528).
-    """
-    card = _take_card(s, card_token, want="battle")
-    if outcome not in OUTCOMES:
-        raise ValueError(f"outcome must be one of {OUTCOMES}, not {outcome!r}")
-
-    async with conn.transaction():
-        await _claim_card(conn, s, card_token)
-        write = await observations.record_duel(
-            conn,
-            user_id=s.user_id,
-            title_a=card["title_a"],
-            title_b=card["title_b"],
-            outcome=outcome,
-            context=BATTLE_CONTEXT,
-            selection=BATTLE_SELECTION,
-            decisive=decisive and outcome != "TIE",
-            hp=hp,
-            is_reask=card.get("reask_of") is not None,
-            reask_of=card.get("reask_of"),
-        )
-        s = await _append(
-            conn,
-            s,
-            kind_of="tie" if outcome == "TIE" else "duel",
-            card=card,
-            title_ids=write.title_ids,
-            duel_id=write.row_id,
-            latency_ms=latency_ms,
-        )
-
-    ledger = await refit.update_incrementally_reporting(
-        conn,
-        user_id=s.user_id,
-        kind=write.kind,
-        title_ids=write.title_ids,
-        hp=hp,
-        embeddings=embeddings,
-        bundle_version=bundle_version,
-    )
-    s = await ensure_card(conn, s, rng=rng, head=head)
-    return Outcome(session=s, log=(write.log,), ledger=ledger)
-
-
-async def record_correction(
-    conn: asyncpg.Connection,
-    s: RateSession,
-    *,
-    card_token: str,
-    side: Side,
-    jf: Jellyfin | None = None,
-    rng: Any = None,
-    later: Later | None = None,
-) -> Outcome:
-    """§6.1's corrections zone: `not seen: [left] [both] [right]`, writing no duel row.
-
-    It does not advance (`rate_observation_advances_rule`). History is untouched; the title
-    leaves the pool because the pool needs "marked seen".
-    """
-    card = _take_card(s, card_token, want="battle")
-    if side not in ("left", "both", "right"):
-        raise ValueError(f"side must be left, both or right, not {side!r}")
-    corrected = {
-        "left": [card["title_a"]],
-        "right": [card["title_b"]],
-        "both": [card["title_a"], card["title_b"]],
-    }[side]
-
-    writes: list[observations.Write] = []
-    lines: list[str] = []
-    async with conn.transaction():
-        await _claim_card(conn, s, card_token)
-        for title_id in corrected:
-            writes.append(
-                await observations.record_not_seen(
-                    conn, user_id=s.user_id, title_id=title_id
-                )
-            )
-        s = await _append(
-            conn,
-            s,
-            kind_of="correction",
-            card=card,
-            title_ids=corrected,
-            prior_state=[e for w in writes for e in _state_entries(w, {})],
-        )
-        replacement = await _redraw_pair(conn, s, card, corrected=corrected, rng=rng)
-        s = await stash(conn, s, replacement, expected=s.card_token)
-
-    lines.extend(
-        await _settle_push(
-            conn, jf, later, state="unseen", event_kind="not_seen", user_id=s.user_id,
-            session_id=s.id, seq=s.seq, writes=writes, title_ids=corrected,
-        )
-    )
-
-    lines.append(
-        "pair half swapped, no duel row written"
-        if side != "both"
-        else "pair swapped, no duel row written"
-    )
-    return Outcome(session=s, log=tuple(lines))
-
-
-async def _redraw_pair(
-    conn: asyncpg.Connection,
-    s: RateSession,
-    card: dict[str, Any],
-    *,
-    corrected: Sequence[int],
-    rng: Any = None,
-) -> dict[str, Any] | None:
-    """Keep the half the person did not correct, against a fresh opponent from its own band.
-
-    Drawn from the band directly and uniformly (§0 row 6): a whole-pair draw rarely hits a small
-    band.
-    """
-    survivor = next((t for t in (card["title_a"], card["title_b"]) if t not in corrected), None)
-    exclude = set(await _skipped_title_ids(conn, s.id)) | set(corrected)
-    if survivor is None:
-        pair = await _draw_battle(conn, s, exclude=sorted(exclude), rng=rng)
-        if pair is not None:
-            return pair
-        # Nothing to keep and no pair to draw: a marked sweep, as the counter wanted a battle.
-        return _mark_substitution(
-            await _draw_sweep(
-                conn, s, exclude=sorted(await _observed_title_ids(conn, s.id)), head=()
-            ),
-            instead_of=card["type"],
-        )
-
-    pool = await battle.battle_pool(
-        conn,
-        user_id=s.user_id,
-        kinds=[card["kind"]],
-        exclude=tuple(sorted(exclude | {survivor})),
-    )
-    # `battle.draw`'s no-repeat rule holds for the repaired pair too.
-    answered = await battle.answered_pairs(conn, user_id=s.user_id, kinds=[card["kind"]])
-    band = sorted(
-        m.title_id
-        for m in pool
-        if m.verdict_class == card["verdict_class"]
-        and frozenset((survivor, m.title_id)) not in answered
-    )
-    if band:
-        opponent = (rng or random).choice(band)
-        keep_left = survivor == card["title_a"]
-        return {
-            "type": "battle",
-            "kind": card["kind"],
-            "title_a": survivor if keep_left else opponent,
-            "title_b": opponent if keep_left else survivor,
-            "verdict_class": card["verdict_class"],
-            "reason": card["reason"],
-            "reask_of": None,
-        }
-    # The survivor's band is empty: fall back to a marked sweep, as `ensure_card` does.
-    return _mark_substitution(
-        await _draw_sweep(
-            conn,
-            s,
-            exclude=sorted(set(await _observed_title_ids(conn, s.id)) | set(corrected)),
-            head=(),
-        ),
-        instead_of=card["type"],
-    )
-
-
 # --- undo ------------------------------------------------------------------------------------
+
+
+async def _block_started(conn: asyncpg.Connection, s: RateSession) -> bool:
+    """Has the current block ever held a journal row, tombstones included (decision 199)?"""
+    started = await conn.fetchval(
+        "SELECT 1 FROM rate_observation WHERE session_id = $1 AND block_index = $2 LIMIT 1",
+        s.id,
+        s.block_index,
+    )
+    return started is not None
 
 
 async def _undo_reaches(
@@ -1458,32 +998,28 @@ async def _undo_reaches(
     """Decision 35's depth with decision 199's boundary: is this journal row still undoable?
 
     The fifteenth row of the previous block stays reachable at slot 1 until the new block has
-    ever held a row, tombstones included; otherwise undo would walk back block by block.
+    ever held a row; otherwise undo would walk back block by block.
     """
     if block_index == s.block_index:
         return True
     if not (s.slot == 1 and block_index == s.block_index - 1 and slot == BLOCK_SIZE):
         return False
-    started = await conn.fetchval(
-        "SELECT 1 FROM rate_observation WHERE session_id = $1 AND block_index = $2 LIMIT 1",
-        s.id,
-        s.block_index,
-    )
-    return started is None
+    return not await _block_started(conn, s)
 
 
 async def undo_availability(conn: asyncpg.Connection, s: RateSession) -> dict[str, Any]:
-    """Decision 35: "the chip disables visibly at the boundary"."""
+    """§6.1: Undo is always drawn, dimmed with nothing to undo, and names what it takes back."""
     row = await conn.fetchrow(
-        "SELECT kind_of, block_index, slot FROM rate_observation "
-        "WHERE session_id = $1 AND undone_at IS NULL ORDER BY seq DESC LIMIT 1",
+        "SELECT o.kind_of, o.block_index, o.slot, t.name FROM rate_observation o "
+        "LEFT JOIN title t ON t.id = o.title_ids[1] "
+        "WHERE o.session_id = $1 AND o.undone_at IS NULL ORDER BY o.seq DESC LIMIT 1",
         s.id,
     )
-    if row is None:
-        return {"available": False, "kind": None, "reason": "empty"}
-    if not await _undo_reaches(conn, s, block_index=row["block_index"], slot=row["slot"]):
-        return {"available": False, "kind": None, "reason": "block_boundary"}
-    return {"available": True, "kind": row["kind_of"], "reason": None}
+    if row is None or not await _undo_reaches(
+        conn, s, block_index=row["block_index"], slot=row["slot"]
+    ):
+        return {"available": False, "kind": None, "name": None}
+    return {"available": True, "kind": row["kind_of"], "name": row["name"]}
 
 
 async def undo(
@@ -1495,16 +1031,15 @@ async def undo(
     bundle_version: Any = refit.BASIS_UNSTATED,
     jf: Jellyfin | None = None,
 ) -> Outcome:
-    """Pop the most recent observation of any kind and put the card that produced it back.
-
-    Decision 35: any kind, the exact card (`rate_observation.card`), one block (`_undo_reaches`).
-    Compared on the row's block and slot, not a timestamp: the journal row lands after the ledger's.
+    """Take back the last placement or Not seen in the block and put its card back (decision 35):
+    the exact card (`rate_observation.card`), one block (`_undo_reaches`). Compared on the row's
+    block and slot, not a timestamp: the journal row lands after the ledger's.
     """
     async with conn.transaction():
         row = await conn.fetchrow(
             """
-            SELECT id, kind_of, block_index, slot, card, title_ids, verdict_id, duel_id,
-                   superseded_verdict_id, prior_state
+            SELECT id, kind_of, block_index, slot, card, title_ids, tier_edit_id, verdict_id,
+                   prior_state
               FROM rate_observation
              WHERE session_id = $1 AND undone_at IS NULL
              ORDER BY seq DESC LIMIT 1
@@ -1521,26 +1056,15 @@ async def undo(
         pushed = {int(p["title_id"]): bool(p.get("pushed")) for p in (row["prior_state"] or [])}
         kind_of = row["kind_of"]
         title_ids = list(row["title_ids"])
-        arm = {
-            "verdict": "verdict",
-            "duel": "duel",
-            "tie": "duel",
-            "not_seen": "not_seen",
-            "correction": "not_seen",
-        }.get(kind_of)
-        row_id = row["verdict_id"] if kind_of == "verdict" else row["duel_id"]
-
-        undone: observations.Undo | None = None
-        if arm is not None:
-            # The only code permitted to delete a verdict or duel row (§4.2 is append-only).
-            # `not_seen` covers the corrections row too: both restore `user_title` exactly.
+        if kind_of == "placement":
+            # With `observations.undo` under it, the only code permitted to delete these rows (§4.2).
+            undone = await ladder.undo_placement(
+                conn, user_id=s.user_id, tier_edit_id=row["tier_edit_id"],
+                verdict_id=row["verdict_id"], prior_state=priors,
+            )
+        else:
             undone = await observations.undo(
-                conn,
-                user_id=s.user_id,
-                arm=arm,
-                row_id=row_id,
-                title_ids=title_ids,
-                prior_state=priors,
+                conn, user_id=s.user_id, arm="not_seen", title_ids=title_ids, prior_state=priors
             )
         await conn.execute(
             "UPDATE rate_observation SET undone_at = now() WHERE id = $1", row["id"]
@@ -1573,7 +1097,7 @@ async def undo(
             )
 
     ledger = None
-    if undone is not None and arm in ("verdict", "duel"):
+    if kind_of == "placement":
         ledger = await refit.update_incrementally_reporting(
             conn,
             user_id=s.user_id,
@@ -1583,65 +1107,82 @@ async def undo(
             embeddings=embeddings,
             bundle_version=bundle_version,
         )
-    lines = [undone.log] if undone is not None else [f"undo: {kind_of} — nothing to retract"]
-    return Outcome(session=s, log=tuple(lines), ledger=ledger, undone=kind_of)
+    return Outcome(session=s, log=(undone.log,), ledger=ledger, undone=kind_of)
 
 
 # --- the payload -------------------------------------------------------------------------------
 
 
+async def _done(conn: asyncpg.Connection, s: RateSession) -> dict[str, Any] | None:
+    """The block's end (§6.1): from its fifteenth answer until the next block's first."""
+    if s.slot != 1 or s.block_index == 0 or await _block_started(conn, s):
+        return None
+    waiting = await ladder.rated_before(conn, user_id=s.user_id, kinds=s.kinds)
+    return {"rated_before": len(waiting), "noun": "films" if s.kind == "movie" else "series"}
+
+
+def _closed(state: ladder.LadderState) -> dict[str, Any]:
+    """Rate before the person's set-up (decision 550): one card, and nothing else."""
+    return {
+        "setup": {"done": False, "earlier_ratings": state.earlier_ratings, "rated_before": 0},
+        "session": None,
+        "card": None,
+        "preload": [],
+        "echo": None,
+        "done": None,
+        "drained": None,
+        "undo": {"available": False, "kind": None, "name": None},
+    }
+
+
 async def payload(
     conn: asyncpg.Connection,
-    s: RateSession,
+    s: RateSession | None,
     *,
-    reveal: dict[str, Any] | None = None,
+    echo: dict[str, Any] | None = None,
     log: Sequence[str] = (),
     ledger: dict[str, Any] | None = None,
     event_kind: str | None = None,
     user: Any = None,
 ) -> dict[str, Any]:
-    """One envelope for every route; the next card travels in the response to the write (§6)."""
-    # §6.7's rail narrates model writes only, so a read or a skip passes no `event_kind`.
+    """One envelope for every route; the next card travels in the response to the write (§6).
+
+    `s` is None for a person who has no session because they have not set up their ladder.
+    """
+    user_id = s.user_id if s is not None else user.id
+    # §6.7's rail narrates model writes only, so a read passes no `event_kind`.
     if event_kind is not None:
         for line in log:
             rail.record(
                 kind=event_kind,
                 line=line,
-                user_id=s.user_id,
+                user_id=user_id,
                 title_id=getattr(line, "title_id", None),
             )
 
-    card = await public_card(conn, s)
-    shares = await balance.class_balance(conn, user_id=s.user_id, kinds=s.kinds)
+    state = await ladder.state(conn, user_id=user_id)
+    if s is None or not state.done:
+        return _closed(state)
+    version = await dna_terms.active_version(conn)
+    card = await public_card(conn, s, version=version)
     body = {
+        "setup": {
+            "done": True,
+            "earlier_ratings": state.earlier_ratings,
+            "rated_before": state.rated_before,
+        },
         "session": {
-            "id": s.id,
-            "mode": s.mode,
             "kinds": s.kinds,
-            "block": {
-                "index": s.block_index,
-                "slot": s.slot,
-                "size": BLOCK_SIZE,
-                # §6.1's counter, and the unit decision 35's Undo depth is measured in.
-                "counter": f"{s.slot} of {BLOCK_SIZE}",
-                # What the counter calls for, which a substitution does not move (the card says
-                # `substituted_for`); includes decision 492's warm-up.
-                "serving": warm_up(
-                    card_type_for(s.mode, observation_index(s.block_index, s.slot)),
-                    mode=s.mode,
-                    labels=shares.total,
-                ),
-            },
+            "kind": s.kind,
+            # §6.1's counter, and the unit decision 35's Undo depth is measured in.
+            "block": {"slot": s.slot, "size": BLOCK_SIZE, "counter": f"{s.slot} of {BLOCK_SIZE}"},
         },
         "card": card,
-        # Keyed by cause: one of the three is not a drained queue at all.
-        "drained": None if card else drained_for(s.mode),
-        # §5.2's measured 5x lever, rendered by `balance`'s own projection.
-        "class_balance": shares.as_dict(),
+        "preload": await _preload(conn, s, version=version) if card else [],
+        "echo": echo,
+        "done": await _done(conn, s),
+        "drained": None if card else {"line": DRAINED_LINE},
         "undo": await undo_availability(conn, s),
-        "reveal": reveal if user is None else viewer_reveal(
-            reveal, show_model=rail.visible_to(user)
-        ),
         "ledger": ledger,
         # §6.7's rail, also carried here so the client shows this tap's line without a request.
         "log": list(log),
@@ -1652,34 +1193,28 @@ async def payload(
 
 __all__ = [
     "BLOCK_SIZE",
-    "DRAINED_CAUSES",
-    "MODES",
-    "OUTCOMES",
+    "BadTier",
+    "DRAINED_LINE",
+    "Guess",
     "Jellyfin",
     "Outcome",
     "RateSession",
     "StaleCard",
     "UndoUnavailable",
     "advance",
-    "card_type_for",
-    "drained_for",
-    "viewer_reveal",
-    "warm_up",
     "end_session",
     "ensure_card",
-    "observation_index",
+    "guess",
+    "one_kind",
     "open_or_resume",
     "payload",
-    "predicted_class",
     "public_card",
-    "record_correction",
-    "record_duel",
     "record_not_seen",
-    "record_skip",
-    "record_verdict",
-    "set_controls",
+    "record_placement",
+    "set_kinds",
     "settle_in_background",
     "settled",
+    "stash",
     "undo",
     "undo_availability",
 ]

@@ -433,7 +433,7 @@ async def test_a_scoring_request_on_a_stale_bundle_answers_409_with_the_restart_
     await _make_active(db, "test-v2")
 
     verdict = await client.post(
-        "/api/rate/verdict", json={"card_token": "whatever", "value": 2}
+        "/api/rate/place", json={"card_token": "whatever", "tier": 2}
     )
     assert verdict.status_code == 409, verdict.text
     assert verdict.json()["detail"] == {
@@ -514,7 +514,7 @@ async def test_a_fitting_request_on_a_broken_bundle_answers_409_and_writes_nothi
     client._transport.app.state.artifacts = store
 
     verdict = await client.post(
-        "/api/rate/verdict", json={"card_token": "whatever", "value": 2}
+        "/api/rate/place", json={"card_token": "whatever", "tier": 2}
     )
     assert verdict.status_code == 409, verdict.text
     assert verdict.json()["detail"] == {
@@ -550,7 +550,7 @@ async def test_a_process_that_is_both_stale_and_broken_is_diagnosed_by_the_calle
     client._transport.app.state.artifacts = pinned
 
     verdict = await client.post(
-        "/api/rate/verdict", json={"card_token": "whatever", "value": 2}
+        "/api/rate/place", json={"card_token": "whatever", "tier": 2}
     )
     assert verdict.status_code == 409, verdict.text
     assert verdict.json()["detail"] == {
