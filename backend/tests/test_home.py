@@ -823,6 +823,16 @@ async def test_the_banner_names_only_the_kinds_the_live_session_can_serve(world)
     assert {c["kind"] for c in series["named"]} == {"series"}
 
 
+async def test_before_the_set_up_the_session_the_cards_not_seen_opens_narrows_nothing(world):
+    """Rate is closed until the set-up; the films session journalling a card's Not seen serves nothing."""
+    answered = await world.client.post("/api/rate/title/1008", json={"answer": "not_seen"})
+    assert answered.status_code == 200, answered.text
+    assert await world.db.fetchval(
+        "SELECT kinds FROM rate_session WHERE user_id = $1 AND ended_at IS NULL", world.patrick
+    ) == ["movie"]
+    assert (await world.home())["banner"]["count"] == 6, "both kinds count before the set-up"
+
+
 async def _set_up(world, picks=((1012, 6),)):
     """The admin's set-up, as the finish route writes it."""
     return await ladder.finish_setup(world.db, user_id=world.patrick, picks=list(picks))
@@ -847,15 +857,36 @@ async def test_with_none_just_watched_the_row_asks_for_the_films_rated_before_ag
         "UPDATE user_title SET state = 'unseen' WHERE user_id = $1 AND title_id = ANY($2::int[])",
         world.patrick, list(WATCHED_AFTER_SET_UP),
     )
-    waiting = await ladder.rated_before(world.db, user_id=world.patrick, kinds=("movie", "series"))
-    assert 1012 not in waiting, "the set-up placed it"
+    both = await ladder.rated_before(world.db, user_id=world.patrick, kinds=("movie", "series"))
+    assert 1012 not in both, "the set-up placed it"
+    kind = "movie" if both[0] in MOVIES else "series"
+    waiting = await ladder.rated_before(world.db, user_id=world.patrick, kinds=(kind,))
+    assert 0 < len(waiting) < len(both), "the fixture must leave both kinds waiting"
+
     banner = (await world.home())["banner"]
-    assert banner["count"] == len(waiting) == 20
-    assert banner["copy"]["headline"] == "Rate 20 again"
-    assert [c["title_id"] for c in banner["named"]] == waiting[:2]
-    # Rate serves these first anyway; no old answer travels with them.
-    assert banner["cta"]["route"] == "/rate" and banner["head_title_ids"] == []
+    assert banner["count"] == len(waiting), "Rate opens one kind, so the row counts that kind alone"
+    assert banner["copy"]["headline"] == f"Rate {len(waiting)} again"
+    named = [c["title_id"] for c in banner["named"]]
+    assert named == waiting[:2]
+    assert banner["head_title_ids"] == named
+    assert banner["cta"]["route"] == "/rate?" + "&".join(f"head={t}" for t in named)
     assert set(banner["named"][0]) == {"title_id", "name", "kind"}
+
+    served = await world.client.get("/api" + banner["cta"]["route"])
+    assert served.status_code == 200, served.text
+    card = served.json()["card"]
+    assert card["title"]["id"] == named[0], "the queue served a different card than the row named"
+    # No old answer travels with it.
+    assert card["reason"] == "You rated this one before."
+
+    # A live session of the other kind is what Rate serves, so the row follows it.
+    other = "series" if kind == "movie" else "movie"
+    switched = await world.client.post("/api/rate/session", json={"kinds": [other]})
+    assert switched.status_code == 200, switched.text
+    theirs = await ladder.rated_before(world.db, user_id=world.patrick, kinds=(other,))
+    row = (await world.home())["banner"]
+    assert row["count"] == len(theirs) == len(both) - len(waiting)
+    assert {c["kind"] for c in row["named"]} == {other}
 
 
 async def test_with_nothing_waiting_after_the_set_up_there_is_no_row(world):
