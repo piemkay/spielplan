@@ -5,7 +5,12 @@
 import { flushSync, mount, unmount } from 'svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('$lib/api.js', () => ({ get: vi.fn(async () => []), post: vi.fn() }));
+const roster = vi.hoisted(() => ({ read: { members: [], default: [7, null] } }));
+vi.mock('$lib/api.js', () => ({
+  get: vi.fn(async (path) => (path.startsWith('/taste/members') ? roster.read : [])),
+  post: vi.fn(),
+  qs: (params) => `?${new URLSearchParams(params)}`
+}));
 
 const nav = vi.hoisted(() => ({ page: null }));
 vi.mock('$app/stores', async () => {
@@ -50,7 +55,8 @@ async function openYou(account) {
 }
 
 describe('You', () => {
-  it('opens Your taste from its own row under the head, and names nobody in its footnote', async () => {
+  it('opens Your taste from its own row under the head, and names nobody when Compare has no one', async () => {
+    roster.read = { members: [{ id: 7, name: 'Jenny' }], default: [7, null] };
     const sheet = await openYou([TASTE, ACCOUNT]);
     const row = sheet.querySelector('[data-testid="taste-row"]');
 
@@ -64,6 +70,22 @@ describe('You', () => {
     // Taste is its own row, not one of the account entries below.
     expect(sheet.querySelectorAll('a[href="/taste"]')).toHaveLength(1);
     expect(sheet.querySelector('a[data-nav="account"]')).not.toBeNull();
+  });
+
+  it('names the member Compare opens on beside the viewer', async () => {
+    roster.read = {
+      members: [
+        { id: 7, name: 'Jenny' },
+        { id: 3, name: 'Patrick' }
+      ],
+      default: [7, 3]
+    };
+    const sheet = await openYou([TASTE, ACCOUNT]);
+    const group = sheet.querySelector('[data-testid="taste-row"]').closest('section');
+
+    expect(group.querySelector('.list-footer').textContent).toBe(
+      'What sits high on your ladder, and where you and Patrick meet and part.'
+    );
   });
 
   it('has no Taste row when the server sends none', async () => {

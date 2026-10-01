@@ -128,11 +128,12 @@ def _low_first(row: _Row) -> tuple[float, int, str]:
     return (row.pos, -len(row.carriers), row.label)
 
 
+def _cards(films: list[_Film] | tuple[_Film, ...]) -> list[dict[str, Any]]:
+    return [{"id": f.id, "name": f.name, "poster_path": f.poster_path} for f in films]
+
+
 def _films(films: list[_Film] | tuple[_Film, ...]) -> dict[str, Any]:
-    return {
-        "films": [{"id": f.id, "name": f.name, "poster_path": f.poster_path} for f in films[:SLOTS]],
-        "more": max(0, len(films) - SLOTS),
-    }
+    return {"films": _cards(films[:SLOTS]), "more": max(0, len(films) - SLOTS)}
 
 
 def _own_row(row: _Row) -> dict[str, Any]:
@@ -159,6 +160,21 @@ async def chart(conn: asyncpg.Connection, *, user_id: int, kind: str) -> dict[st
         "high": [_own_row(r) for r in ordered if r.pos > 0][:SIDE],
         "low": [_own_row(r) for r in low[:SIDE]],
         "all": [_own_row(r) for r in ordered],
+    }
+
+
+async def term(conn: asyncpg.Connection, *, user_id: int, kind: str, term: str) -> dict[str, Any] | None:
+    """One term's films on Your taste, above the person's middle step and below it, each in their own
+    order; None when the term is not read for them."""
+    ladder = await _ladder(conn, user_id=user_id, kind=kind)
+    row = ladder.rows.get(term)
+    if row is None:
+        return None
+    mean = sum(f.step for f in ladder.films) / len(ladder.films)
+    return {
+        "term": term,
+        "high": _cards([f for f in row.carriers if f.step >= mean]),
+        "low": _cards([f for f in row.carriers if f.step < mean]),
     }
 
 
@@ -249,10 +265,10 @@ def _behind(term: str, mine: _Ladder, theirs: _Ladder) -> list[_Film]:
     return [f for f in own if f.id in other] + [f for f in own if f.id not in other] + rest
 
 
-async def compare(
-    conn: asyncpg.Connection, *, viewer_id: int, kind: str, a: int, b: int
-) -> dict[str, Any]:
-    """Compare: the terms both members read, Most alike and Most different. Raises NotPickable."""
+async def _seated(
+    conn: asyncpg.Connection, *, kind: str, a: int, b: int
+) -> tuple[dict[int, dict[str, Any]], dict[int, _Ladder]]:
+    """The two seats' people and ladders. Raises NotPickable."""
     people = {p["id"]: p for p in await _people(conn)}
     if a == b or a not in people or b not in people:
         raise NotPickable("Pick two different people to compare.")
@@ -261,7 +277,14 @@ async def compare(
         raise NotPickable(
             f"Comparing {NOUN[kind]} opens once two of you have each placed {PICKABLE_AT} {NOUN[kind]}."
         )
+    return people, ladders
 
+
+async def compare(
+    conn: asyncpg.Connection, *, viewer_id: int, kind: str, a: int, b: int
+) -> dict[str, Any]:
+    """Compare: the terms both members read, Most alike and Most different. Raises NotPickable."""
+    people, ladders = await _seated(conn, kind=kind, a=a, b=b)
     seated = viewer_id in (a, b)
     mine, theirs = (ladders[a], ladders[b]) if viewer_id != b else (ladders[b], ladders[a])
     rows = []
@@ -306,4 +329,28 @@ async def compare(
     }
 
 
-__all__ = ["MIN_CARRIERS", "PICKABLE_AT", "NotPickable", "chart", "compare", "members"]
+async def compare_term(
+    conn: asyncpg.Connection, *, viewer_id: int, kind: str, a: int, b: int, term: str
+) -> dict[str, Any] | None:
+    """One term's films on Compare: only those both placed, in the viewer's own order, and none unless
+    the viewer sits in a seat; None when the term is not read for both. Raises NotPickable."""
+    _, ladders = await _seated(conn, kind=kind, a=a, b=b)
+    rows = {x: ladders[x].rows.get(term) for x in (a, b)}
+    if any(r is None for r in rows.values()):
+        return None
+    if viewer_id not in (a, b):
+        return {"term": term, "films": []}
+    other = {f.id for f in rows[b if viewer_id == a else a].carriers}
+    return {"term": term, "films": _cards([f for f in rows[viewer_id].carriers if f.id in other])}
+
+
+__all__ = [
+    "MIN_CARRIERS",
+    "PICKABLE_AT",
+    "NotPickable",
+    "chart",
+    "compare",
+    "compare_term",
+    "members",
+    "term",
+]
