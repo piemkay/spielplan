@@ -1,7 +1,7 @@
 # Spielplan
 
-A household media graph: your Jellyfin library, a taste model that learns from three-class
-verdicts and comparisons, and a Tonight session that resolves what to watch without an argument.
+A household media graph: your Jellyfin library, a taste model that learns from each person's own
+seven-step ladder and comparisons, and a Tonight session that resolves what to watch without an argument.
 Standalone by design — backend, database, front end, no cloud, CPU only.
 
 **The spec is the authority.** [`docs/spielplan-spec_v2.1.md`](docs/spielplan-spec_v2.1.md) is
