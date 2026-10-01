@@ -59,14 +59,15 @@ class PreferencesRequest(BaseModel):
     show_model: bool
 
 
-# Decision 488: an unshipped surface is absent from navigation; `built` flips when it ships.
+# Decision 488: an unshipped surface is absent from navigation; `built` flips when it ships. Taste is
+# no tab: You opens it (decision 540).
 SURFACES: tuple[dict[str, str | bool], ...] = (
     {"key": "home", "href": "/", "label": "Home", "milestone": "M0", "built": True},
     {"key": "rate", "href": "/rate", "label": "Rate", "milestone": "M2", "built": True},
     {"key": "tonight", "href": "/tonight", "label": "Tonight", "milestone": "M4", "built": True},
     {"key": "rank", "href": "/rank", "label": "Rank", "milestone": "M3", "built": True},
-    {"key": "map", "href": "/map", "label": "Map", "milestone": "M6", "built": False},
-    {"key": "taste", "href": "/taste", "label": "Taste", "milestone": "M6", "built": False},
+    {"key": "map", "href": "/map", "label": "Map", "milestone": "M7", "built": False},
+    {"key": "taste", "href": "/taste", "label": "Taste", "milestone": "M6", "built": True, "tab": False},
 )
 
 
@@ -80,10 +81,13 @@ def _nav(user: auth.SessionUser) -> dict[str, list[dict[str, str | bool]]]:
     account: list[dict[str, str | bool]] = [
         {"key": "account", "href": "/account", "label": "Account & passkeys"},
     ]
+    if shipped("taste"):
+        account.insert(0, {"key": "taste", "href": "/taste", "label": "Your taste"})
     if user.is_admin:
         # Overview links the setup wizard (decision 527).
         account.append({"key": "admin", "href": "/admin", "label": "Admin"})
-    return {"surfaces": [dict(s) for s in SURFACES if s["built"]], "account": account}
+    tabs = [dict(s) for s in SURFACES if s["built"] and s.get("tab", True)]
+    return {"surfaces": tabs, "account": account}
 
 
 def _me(user: auth.SessionUser) -> dict[str, object]:

@@ -154,9 +154,8 @@ async def test_a_member_receives_no_admin_entry_in_its_navigation(app):
     """"Hidden, not merely disabled": a client-side check still ships the link in the response."""
     _admin, member = await household(app)
     payload = (await member.get("/api/auth/me")).json()
-    keys = {entry["key"] for entry in payload["nav"]["account"]}
-    # "My Taste" left with decision 488: it led to the same unbuilt placeholder as the tab.
-    assert keys == {"account"}
+    keys = [entry["key"] for entry in payload["nav"]["account"]]
+    assert keys == ["taste", "account"]
     assert "admin" not in str(payload["nav"])
 
 
@@ -164,19 +163,21 @@ async def test_an_admin_receives_one_admin_entry_that_opens_on_overview(app):
     """Decision 527: Admin opens on Overview, which links the setup wizard itself."""
     admin, _member = await household(app)
     payload = (await admin.get("/api/auth/me")).json()
-    assert payload["nav"]["account"][1:] == [{"key": "admin", "href": "/admin", "label": "Admin"}]
+    assert payload["nav"]["account"][-1:] == [{"key": "admin", "href": "/admin", "label": "Admin"}]
 
 
 async def test_both_roles_see_every_shipped_surface(app):
-    """Decision 488: an unshipped surface is in neither role's navigation."""
+    """Decision 488: an unshipped surface is in neither role's navigation; You opens Taste, which is
+    no tab (decision 540)."""
     admin, member = await household(app)
     for client in (admin, member):
         payload = (await client.get("/api/auth/me")).json()
         assert [s["key"] for s in payload["nav"]["surfaces"]] == [
             "home", "rate", "tonight", "rank"
         ]
+        assert payload["nav"]["account"][0] == {"key": "taste", "href": "/taste", "label": "Your taste"}
         hrefs = [e["href"] for e in payload["nav"]["surfaces"] + payload["nav"]["account"]]
-        assert "/map" not in hrefs and "/taste" not in hrefs, hrefs
+        assert "/map" not in hrefs, hrefs
 
 
 async def test_a_surface_enters_navigation_in_its_place_when_it_ships(app, monkeypatch):
@@ -190,7 +191,7 @@ async def test_a_surface_enters_navigation_in_its_place_when_it_ships(app, monke
     assert [s["key"] for s in payload["nav"]["surfaces"]] == [
         "home", "rate", "tonight", "rank", "map"
     ]
-    assert auth_api.shipped("map") and not auth_api.shipped("taste")
+    assert auth_api.shipped("map")
 
 
 async def test_a_stale_admin_session_is_re_prompted(db, app):
