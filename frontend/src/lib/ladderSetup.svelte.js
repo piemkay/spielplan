@@ -213,6 +213,9 @@ export async function search(q) {
 export const readyLine = (n) =>
   `${films(n)} ${n === 1 ? 'is' : 'are'} on it. From now on, one tap puts each film you rate on it.`;
 
+// §6.1: the learning curve, counted in ratings (decision 491).
+export const LEARNING_LINE = 'Your suggestions get about three times more personal between 5 and 100 ratings.';
+
 /** The done screen's last line: each clause only when its count is above zero. */
 export function historyLine(earlier, before) {
   const parts = [];

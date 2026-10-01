@@ -7,6 +7,7 @@
   import RatePoster from '$lib/components/RatePoster.svelte';
   import { displayNames } from '$lib/titleCard.js';
   import {
+    LEARNING_LINE,
     PAGE,
     cells,
     films,
@@ -137,6 +138,7 @@
     <div class="scroll" data-testid="setup-done">
       <h2 class="large-title ready">Your ladder is ready</h2>
       <p class="lede">{readyLine(done.placed)}</p>
+      <p class="lede" data-testid="setup-learning">{LEARNING_LINE}</p>
       <!-- role: WebKit drops a list's role once its markers are gone. -->
       <ol class="rungs" role="list" aria-label="Your ladder">
         {#each done.tiers as tier (tier.tier)}

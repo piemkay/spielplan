@@ -224,6 +224,9 @@ describe('the set-up, step by step', () => {
     const done = $('setup-done');
     expect(done.querySelector('h2').textContent).toBe('Your ladder is ready');
     expect(done.textContent).toContain('2 films are on it. From now on, one tap puts each film you rate on it.');
+    expect($('setup-learning').textContent).toBe(
+      'Your suggestions get about three times more personal between 5 and 100 ratings.'
+    );
     const rungs = [...done.querySelectorAll('li')];
     expect(rungs.map((li) => li.querySelector('.rung-word').textContent)).toEqual([
       'All-time favourite', 'Loved it', 'Liked it'
