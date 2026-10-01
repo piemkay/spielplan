@@ -116,12 +116,12 @@ class Mood:
 
 @dataclass(frozen=True, eq=False)
 class Round:
-    """Everything a replay produces: the mood, the seat's top three, what to ask next, and whether to."""
+    """Everything a replay produces: the mood, how many answers moved it, what to ask next, and
+    whether to."""
 
     mood: Mood
     answered: int
     adaptive: int
-    top: frozenset[int]
     next_pair: Pair | None
     stop_reason: str | None
 
@@ -234,9 +234,9 @@ def _askable(
     ids = np.asarray([f.title_id for f in ordered], dtype=np.int64)
     steps = np.asarray([np.nan if f.step is None else f.step for f in ordered], dtype=float)
     runtime = np.asarray([np.nan if f.runtime_min is None else f.runtime_min for f in ordered])
-    with np.errstate(invalid="ignore"):
-        ok = ~(np.abs(steps[i] - steps[j]) > PAIR_STEP)
-        ok &= np.abs(runtime[i] - runtime[j]) <= PAIR_RUNTIME_MIN
+    # NaN compares false: an unknown step holds level, an unknown runtime does not.
+    ok = ~(np.abs(steps[i] - steps[j]) > PAIR_STEP)
+    ok &= np.abs(runtime[i] - runtime[j]) <= PAIR_RUNTIME_MIN
     span = int(ids.max()) + 1
     asked = [min(p) * span + max(p) for p in shown if len(p) == 2]
     ok &= ~np.isin(ids[i] * span + ids[j], np.asarray(asked, dtype=np.int64))
@@ -298,7 +298,7 @@ def select(
         )
     z = np.asarray([f.z for f in ordered], dtype=float)
     d = z[i] - z[j]
-    gain = np.einsum("pk,kl,pl->p", d, mood.cov, d)
+    gain = np.maximum(np.einsum("pk,kl,pl->p", d, mood.cov, d), 0.0)
     near = np.flatnonzero(gain >= NEAR_BEST * float(gain.max()))
     k = int(near[rng.randrange(near.size)])
     a, b = _oriented(ordered[i[k]], ordered[j[k]], rng)
@@ -384,8 +384,7 @@ def replay(
         # Sooner only when no level pair is left: recorded as `cap`, the nearest ending.
         reason = CAP
     return Round(
-        mood=mood, answered=count, adaptive=len(tops) - 1, top=tops[-1],
-        next_pair=nxt, stop_reason=reason,
+        mood=mood, answered=count, adaptive=len(tops) - 1, next_pair=nxt, stop_reason=reason
     )
 
 

@@ -294,6 +294,7 @@ async def start(conn: asyncpg.Connection, session_id: int) -> Snapshot:
         await _refuse_unscored_members(conn, session_id, bundle_version=row["bundle_version"])
         version = await dna_reads.active_version(conn)
         vetoes = rooms.vetoes_of(row["context"])
+        vetoed = pool_rules.veto_terms(vetoes)
         candidates = await pool_rules.build(
             conn,
             seats=seats,
@@ -301,12 +302,12 @@ async def start(conn: asyncpg.Connection, session_id: int) -> Snapshot:
             budget_min=row["runtime_budget_min"],
             include_rewatches=row["include_rewatches"],
             bundle_version=row["bundle_version"],
-            vetoed_terms=pool_rules.veto_terms(vetoes),
+            vetoed_terms=vetoed,
             dna_version=version,
         )
         if len(candidates) < 2:
-            # A pool of two or three is admitted and ends at zero answers (decision 215). A pool
-            # the vetoes emptied says so (decision 480).
+            # A pool of two or three is admitted (decision 215). A pool the vetoes emptied says so
+            # (decision 480).
             named = pool_rules.veto_labels(vetoes)
             raise RoundError(
                 "empty_pool",
@@ -321,7 +322,7 @@ async def start(conn: asyncpg.Connection, session_id: int) -> Snapshot:
         space = tilt_rules.space({t: dna.get(t, {}) for t in ids})
         seat_rounds, reached = await _frozen_rounds(
             conn, seats=seats, kind=row["kind"], bundle_version=row["bundle_version"],
-            vetoed_terms=pool_rules.veto_terms(vetoes), version=version, space=space,
+            vetoed_terms=vetoed, version=version, space=space,
             ledger=_on_scale({c.title_id: dict(c.scores) for c in candidates}),
         )
         payload = {
@@ -532,7 +533,7 @@ async def state_for(conn: asyncpg.Connection, participant_id: int) -> dict[str, 
     ended_now = False
     if stop_reason is not None and ended_by is None:
         # A reason with no pair means nothing can be asked, so end the seat here or it strands
-        # (a pool of two or three, decision 215). A write on a read, idempotent, and guarded by
+        # (too little to ask about, decision 539). A write on a read, idempotent, and guarded by
         # `when_answered`: if the count moved, report the row with no pair; if another writer
         # ended it first, the row keeps theirs.
         if await _end(conn, participant_id, stop_reason, when_answered=answered):
