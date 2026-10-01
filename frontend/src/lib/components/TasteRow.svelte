@@ -7,8 +7,8 @@
   import { TRACK, markPair, markX, placeWord, strip } from '$lib/taste.svelte.js';
   import RatePoster from './RatePoster.svelte';
 
-  /** @type {{ row: any, marks: {pos: number, initials: string, colour: string|null, who: string}[], onOpen: (film: any) => void, expand?: ((term: string) => Promise<{head: string, films: any[]}[]>) | null, none?: string, wide?: boolean }} */
-  let { row, marks, onOpen, expand = null, none = '', wide = false } = $props();
+  /** @type {{ row: any, marks: {pos: number, initials: string, colour: string|null, who: string}[], onOpen: (film: any) => void, expand?: ((term: string) => Promise<{head: string, films: any[]}[]>) | null, none?: string, wide?: boolean, line?: boolean }} */
+  let { row, marks, onOpen, expand = null, none = '', wide = false, line = false } = $props();
 
   // The track narrows on a narrow phone; every row's track is the same width, so rows compare.
   let measured = $state(0);
@@ -53,7 +53,7 @@
   {/each}
 {/snippet}
 
-<div class="trow" class:wide data-testid="taste-term" data-term={row.term}>
+<div class="trow" class:wide class:line data-testid="taste-term" data-term={row.term}>
   <div class="face">
     {#if expand}
       <button class="toggle" aria-expanded={open} onclick={() => (open = !open)}>
@@ -318,21 +318,50 @@
     line-height: 18px;
     color: var(--text-3);
   }
-  /* Compare on a wide screen (TasteChartDesktop): a longer track and larger posters. */
-  @media (min-width: 1100px) {
-    .wide .track {
-      width: clamp(96px, calc(100% - 196px), 176px);
+  /* A desktop row: the track takes the width the posters leave, and the posters take their desktop size. */
+  @media (min-width: 721px) {
+    .track {
+      width: calc(100% - 208px);
     }
-    .wide .posters {
+    .posters {
       width: 184px;
       gap: 8px;
     }
-    .wide .posters > .thumb,
-    .wide .plus {
+    .posters > .thumb,
+    .plus {
       width: 40px;
     }
-    .wide .plus {
+    .plus {
       height: 60px;
+    }
+  }
+  @media (min-width: 1100px) {
+    /* Compare's two columns (TasteChartDesktop). */
+    .wide .track {
+      width: clamp(96px, calc(100% - 196px), 176px);
+    }
+    /* A list the full width of the page: the label, the track and the posters on one line. */
+    .line .face {
+      display: grid;
+      grid-template-columns: 236px minmax(0, 1fr);
+      column-gap: 24px;
+      align-items: center;
+      padding: 8px var(--gutter);
+    }
+    .line .head {
+      flex-wrap: wrap;
+      row-gap: 0;
+      height: auto;
+    }
+    .line .head .data {
+      flex-basis: 100%;
+      margin-left: 14px;
+    }
+    .line .body {
+      margin-top: 0;
+    }
+    .line .panel {
+      padding-left: calc(var(--gutter) + 260px);
     }
   }
 </style>

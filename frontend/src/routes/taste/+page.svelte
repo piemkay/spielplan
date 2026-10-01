@@ -111,6 +111,7 @@
               marks={marksFor(row)}
               onOpen={(film) => (selected = film)}
               expand={(term) => ownGroups(taste.kind, term)}
+              line
             />
           {/each}
         </div>
@@ -217,5 +218,20 @@
     width: 100%;
     margin-top: 24px;
     min-height: 48px;
+  }
+  /* The legend spans the track, which on a desktop takes the width the posters leave. */
+  @media (min-width: 721px) {
+    .legend {
+      width: calc(100% - 2 * var(--gutter) - 208px);
+    }
+  }
+  @media (min-width: 1100px) {
+    .taste {
+      max-width: 968px;
+    }
+    .legend {
+      width: calc(100% - 2 * var(--gutter) - 468px);
+      margin-left: calc(var(--gutter) + 260px);
+    }
   }
 </style>
