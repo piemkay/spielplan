@@ -21,6 +21,14 @@ async def your_taste(conn: DB, user: ActiveUser, kind: Kind = Query(...)) -> dic
     return rail.redact(payload, show_model=rail.visible_to(user))
 
 
+@router.get("/term")
+async def your_term(conn: DB, user: ActiveUser, term: str, kind: Kind = Query(...)) -> dict[str, Any]:
+    payload = await chart.term(conn, user_id=user.id, kind=kind, term=term)
+    if payload is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That term is no longer on your chart.")
+    return payload
+
+
 @router.get("/members")
 async def members(conn: DB, user: ActiveUser, kind: Kind = Query(...)) -> dict[str, Any]:
     return await chart.members(conn, viewer_id=user.id, kind=kind)
@@ -33,7 +41,24 @@ async def compare(
     try:
         payload = await chart.compare(conn, viewer_id=user.id, kind=kind, a=a, b=b)
     except chart.NotPickable as exc:
-        raise HTTPException(
-            status.HTTP_422_UNPROCESSABLE_CONTENT, {"reason": "not_pickable", "message": str(exc)}
-        ) from exc
+        raise _not_pickable(exc) from exc
     return rail.redact(payload, show_model=rail.visible_to(user))
+
+
+@router.get("/compare/term")
+async def compare_term(
+    conn: DB, user: ActiveUser, a: int, b: int, term: str, kind: Kind = Query(...)
+) -> dict[str, Any]:
+    try:
+        payload = await chart.compare_term(conn, viewer_id=user.id, kind=kind, a=a, b=b, term=term)
+    except chart.NotPickable as exc:
+        raise _not_pickable(exc) from exc
+    if payload is None:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "That term is no longer on this chart.")
+    return payload
+
+
+def _not_pickable(exc: chart.NotPickable) -> HTTPException:
+    return HTTPException(
+        status.HTTP_422_UNPROCESSABLE_CONTENT, {"reason": "not_pickable", "message": str(exc)}
+    )

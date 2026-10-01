@@ -6,7 +6,7 @@
   import TitleDetail from '$lib/components/TitleDetail.svelte';
   import { modelGate } from '$lib/home.svelte.js';
   import { session } from '$lib/session.svelte.js';
-  import { KINDS, NOUNS, loadTaste, taste } from '$lib/taste.svelte.js';
+  import { KINDS, NOUNS, loadTaste, ownGroups, taste } from '$lib/taste.svelte.js';
   import { topbar } from '$lib/topbar.svelte.js';
 
   let data = $state(null);
@@ -20,11 +20,12 @@
   const colour = $derived(avatarColour(session.user));
   const marksFor = (row) => [{ pos: row.pos, initials: initial, colour, who: 'You' }];
   const LOWER = 'Lower only means you may enjoy that kind of night a little less than usual.';
+  const HINT = 'Tap a term to see your films that have it.';
   const sections = $derived.by(() => {
     if (!data) return [];
-    if (all) return [{ head: `All ${data.n_terms}, high to low`, rows: data.all, foot: LOWER }];
+    if (all) return [{ head: `All ${data.n_terms}, high to low`, rows: data.all, foot: `${LOWER} ${HINT}` }];
     return [
-      { head: 'Sits high for you', rows: data.high, foot: '' },
+      { head: 'Sits high for you', rows: data.high, foot: HINT },
       { head: 'Lands lower for you', rows: data.low, foot: LOWER }
     ].filter((s) => s.rows.length);
   });
@@ -105,7 +106,12 @@
         <h2 class="list-header">{s.head}</h2>
         <div class="list-group">
           {#each s.rows as row (row.term)}
-            <TasteRow {row} marks={marksFor(row)} onOpen={(film) => (selected = film)} />
+            <TasteRow
+              {row}
+              marks={marksFor(row)}
+              onOpen={(film) => (selected = film)}
+              expand={(term) => ownGroups(taste.kind, term)}
+            />
           {/each}
         </div>
         {#if s.foot}<p class="list-footer">{s.foot}</p>{/if}

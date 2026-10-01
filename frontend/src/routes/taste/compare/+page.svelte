@@ -9,11 +9,14 @@
   import { session } from '$lib/session.svelte.js';
   import {
     KINDS,
+    NOUNS,
     facetsOf,
     gateLine,
     loadCompare,
     loadMembers,
+    pickerOrder,
     seatsReady,
+    sharedGroups,
     showAll,
     takeSeat,
     taste
@@ -49,14 +52,17 @@
       ? 'Lower only means one of you may enjoy that kind of night a little less than usual.'
       : `Lower only means one of them may enjoy that kind of night a little less than usual. Only ${pair} see the films behind these.`
   );
+  const hint = $derived(seated ? "Tap a term to see the films you've both placed that have it." : '');
   const sections = $derived.by(() => {
     if (!data) return [];
     if (all) {
       const list = showAll(data.all, { sort, facet });
-      return list.map((s, i) => ({ ...s, foot: i === list.length - 1 ? lower : '' }));
+      const last = [lower, hint].filter(Boolean).join(' ');
+      return list.map((s, i) => ({ ...s, foot: i === list.length - 1 ? last : '' }));
     }
+    const alike = [data.note, hint].filter(Boolean).join(' ');
     return [
-      { key: 'alike', head: 'Most alike', facet: null, rows: data.alike, foot: data.note ?? '' },
+      { key: 'alike', head: 'Most alike', facet: null, rows: data.alike, foot: alike },
       { key: 'different', head: 'Most different', facet: null, rows: data.different, foot: lower }
     ].filter((s) => s.rows.length);
   });
@@ -217,24 +223,33 @@
       </div>
     {/if}
     <div class="legend" aria-hidden="true">
-      <span><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5 8 12l7 7" /></svg>Lower</span>
-      <span>Middle</span>
-      <span>High<svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><path d="m9.5 5.5 6.5 6.5-6.5 6.5" /></svg></span>
+      <span><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5 8 12l7 7" /></svg><span class="phone">Lower</span><span class="desk">Lands lower</span></span>
+      <span><span class="phone">Middle</span><span class="desk">Each one's middle</span></span>
+      <span><span class="phone">High</span><span class="desk">Sits high</span><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><path d="m9.5 5.5 6.5 6.5-6.5 6.5" /></svg></span>
     </div>
-    {#each sections as s, i (s.key)}
-      <section class="group" class:first={i === 0}>
-        <h2 class="list-header">
-          {#if all && sort === 'facet'}<span class="dot" style:background={facetColour(s.facet)}></span>{/if}
-          {s.head}
-        </h2>
-        <div class="list-group">
-          {#each s.rows as row (row.term)}
-            <TasteRow {row} marks={marksFor(row)} onOpen={(film) => (selected = film)} />
-          {/each}
-        </div>
-        {#if s.foot}<p class="list-footer">{s.foot}</p>{/if}
-      </section>
-    {/each}
+    <div class="sections" class:sides={!all}>
+      {#each sections as s, i (s.key)}
+        <section class="group" class:first={i === 0}>
+          <h2 class="list-header">
+            {#if all && sort === 'facet'}<span class="dot" style:background={facetColour(s.facet)}></span>{/if}
+            {s.head}
+          </h2>
+          <div class="list-group">
+            {#each s.rows as row (row.term)}
+              <TasteRow
+                {row}
+                marks={marksFor(row)}
+                onOpen={(film) => (selected = film)}
+                expand={data.films_visible ? (term) => sharedGroups(taste.kind, seats[0], seats[1], term) : null}
+                none="None of the {NOUNS[taste.kind]} you've both placed has this."
+                wide
+              />
+            {/each}
+          </div>
+          {#if s.foot}<p class="list-footer">{s.foot}</p>{/if}
+        </section>
+      {/each}
+    </div>
     {#if all || data.all.length > data.alike.length + data.different.length}
       <button class="btn-secondary more" onclick={() => showAllTerms(!all)}>
         {all ? 'Show fewer' : `Show all ${data.all.length} terms`}
@@ -263,7 +278,7 @@
           {picking === 1 ? `${labelOf(seats[0])} and …` : `… and ${labelOf(seats[1])}`}
         </p>
         <div class="list-group" role="radiogroup" aria-label="Who to compare">
-          {#each members?.members ?? [] as m (m.id)}
+          {#each pickerOrder(members?.members ?? [], viewer) as m (m.id)}
             {@const mine = picking !== null && seats[picking] === m.id}
             <button
               class="list-row who"
@@ -450,6 +465,46 @@
     width: 100%;
     margin-top: 24px;
     min-height: 48px;
+  }
+  .sections {
+    display: flex;
+    flex-direction: column;
+  }
+  .desk {
+    display: none;
+  }
+  /* The full sidebar's width (TasteChartDesktop): Most alike and Most different side by side. */
+  @media (min-width: 1100px) {
+    .compare {
+      max-width: 968px;
+    }
+    .seats {
+      grid-template-columns: 240px auto 240px;
+      column-gap: 12px;
+      justify-content: start;
+    }
+    .legend {
+      width: 472px;
+      margin-left: 0;
+      padding: 0 52px 0 var(--gutter);
+      font-size: var(--fs-footnote);
+    }
+    .desk {
+      display: inline;
+    }
+    .phone {
+      display: none;
+    }
+    .sides {
+      margin-top: 24px;
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      column-gap: 24px;
+      align-items: start;
+    }
+    .sides > .group {
+      margin-top: 0;
+    }
   }
   .bar {
     display: flex;

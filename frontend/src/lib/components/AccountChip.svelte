@@ -5,6 +5,7 @@
   import { get, post } from '$lib/api.js';
   import { modelGateSettled } from '$lib/home.svelte.js';
   import { toggleRail } from '$lib/rail.svelte.js';
+  import { loadMembers, taste } from '$lib/taste.svelte.js';
   import { goto } from '$app/navigation';
   import Avatar from './Avatar.svelte';
   import Sheet from './Sheet.svelte';
@@ -16,6 +17,8 @@
   let switching = $state(null);
   let pin = $state('');
   let error = $state('');
+  // Whom Compare opens on beside the viewer, named in Your taste's footnote.
+  let partner = $state(null);
 
   const method = $derived(authMethodLine(session.user));
   const tasteEntry = $derived((session.user?.nav?.account ?? []).find((e) => e.key === 'taste'));
@@ -27,8 +30,11 @@
     open = true;
     error = '';
     switching = null;
+    const roster = tasteEntry ? loadMembers(taste.kind).catch(() => null) : null;
     // Re-read on every open: a PIN set on another phone makes that profile switchable.
     switchable = (await get('/auth/switchable').catch(() => [])) ?? [];
+    const read = await roster;
+    partner = read?.members?.find((m) => m.id === read.default?.[1])?.name ?? null;
   }
 
   async function toggleModel() {
@@ -118,7 +124,9 @@
                 {@render chevron()}
               </a>
             </div>
-            <p class="list-footer">What sits high on your ladder, and where you and someone else meet and part.</p>
+            <p class="list-footer">
+              What sits high on your ladder, and where you and {partner ?? 'someone else'} meet and part.
+            </p>
           </section>
         {/if}
 

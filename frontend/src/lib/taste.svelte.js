@@ -35,6 +35,26 @@ export const loadTaste = (kind) => get(`/taste${qs({ kind })}`);
 export const loadMembers = (kind) => get(`/taste/members${qs({ kind })}`);
 export const loadCompare = (kind, a, b) => get(`/taste/compare${qs({ kind, a, b })}`);
 
+/** Your taste's open row: the person's films above their middle, then those below, each in their order. */
+export async function ownGroups(kind, term) {
+  const read = await get(`/taste/term${qs({ kind, term })}`);
+  return [
+    { head: 'These sit high for you', films: read.high },
+    { head: 'These land lower for you', films: read.low }
+  ].filter((g) => g.films.length);
+}
+
+/** Compare's open row: only the films both placed, in the viewer's own order, never split by who. */
+export async function sharedGroups(kind, a, b, term) {
+  const read = await get(`/taste/compare/term${qs({ kind, a, b, term })}`);
+  return read.films.length ? [{ head: "You've both placed these", films: read.films }] : [];
+}
+
+/** The seat picker: the viewer first, then everyone else in the roster's name order. */
+export function pickerOrder(members, viewer) {
+  return [...members].sort((x, y) => Number(y.id === viewer) - Number(x.id === viewer));
+}
+
 /** A marker's centre: the person's middle at half the track, their strongest term near an end. */
 export function markX(pos, width = TRACK) {
   return width / 2 + pos * (width / 2 - INSET);

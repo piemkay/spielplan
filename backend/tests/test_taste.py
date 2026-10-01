@@ -181,6 +181,26 @@ async def test_posters_lead_with_the_highest_placed_on_a_high_row_and_the_lowest
     assert dark["films"][0] == {"id": 2, "name": "Film 02", "poster_path": "/p2.jpg"}
 
 
+async def test_a_terms_films_split_at_the_persons_middle_each_in_their_own_order(world):
+    user = await insert_user(world, "patrick", "admin")
+    # Mean step 2.5.
+    await place(world, user, {1: 6, 2: 6, 3: 5, 4: 4, 5: 3, 6: 0, 7: 0, 8: 0, 9: 0, 10: 1})
+    await world.executemany(
+        "INSERT INTO ledger_state (user_id, title_id, kind, s, sigma) VALUES ($1, $2, 'movie', $3, 1)",
+        [(user, 1, 0.5), (user, 2, 1.0)],
+    )
+    await tag(world, "mood.dark", (1, 2, 3, 4, 5, 10))
+    await tag(world, "themes.heist", (3, 6, 7, 8, 9, 10))
+
+    dark = await chart.term(world, user_id=user, kind="movie", term="mood.dark")
+    heist = await chart.term(world, user_id=user, kind="movie", term="themes.heist")
+
+    assert ([f["id"] for f in dark["high"]], [f["id"] for f in dark["low"]]) == ([2, 1, 3, 4, 5], [10])
+    assert ([f["id"] for f in heist["high"]], [f["id"] for f in heist["low"]]) == ([3], [10, 6, 7, 8, 9])
+    assert dark["high"][0] == {"id": 2, "name": "Film 02", "poster_path": "/p2.jpg"}
+    assert await chart.term(world, user_id=user, kind="movie", term="pacing.slow_burn") is None
+
+
 async def test_films_and_series_are_read_apart(world):
     user = await insert_user(world, "patrick", "admin")
     await place(world, user, EIGHT)
@@ -282,6 +302,25 @@ async def test_the_films_behind_a_term_go_only_to_the_two_compared_in_the_viewer
     assert all(r["films"] == [] and r["more"] == 0 for r in outside["all"])
 
 
+async def test_a_terms_films_on_compare_are_those_both_placed_in_each_viewers_own_order(world):
+    who = await pair(world)
+    jenny, lena = who["jenny"], who["lena"]
+    # On t01 Jenny puts film 4 above films 1-3 and Lena places the four alike; each placed one alone.
+    await place(world, jenny, {1: 5, 2: 5, 3: 5, 49: 6})
+    await place(world, lena, {50: 6})
+    await tag(world, "themes.t01", (49, 50))
+
+    def read(viewer: int, a: int = lena, b: int = jenny, term: str = "themes.t01"):
+        return chart.compare_term(world, viewer_id=viewer, kind="movie", a=a, b=b, term=term)
+
+    assert [f["id"] for f in (await read(jenny))["films"]] == [4, 1, 2, 3]
+    assert [f["id"] for f in (await read(lena))["films"]] == [1, 2, 3, 4]
+    assert await read(who["patrick"]) == {"term": "themes.t01", "films": []}
+    assert await read(jenny, term="mood.dark") is None
+    with pytest.raises(chart.NotPickable):
+        await read(jenny, b=who["patrick"])
+
+
 async def test_compare_refuses_a_seat_that_cannot_be_picked(world):
     who = await pair(world)
     with pytest.raises(chart.NotPickable):
@@ -331,6 +370,30 @@ async def test_no_payload_carries_another_members_steps_letters_or_counts(world,
     refused = await patrick.get("/api/taste/compare", params={"kind": "movie", "a": p, "b": lena})
     assert refused.status_code == 422
     assert refused.json()["detail"]["reason"] == "not_pickable"
+
+
+async def test_a_terms_whole_film_list_goes_to_its_reader_and_to_no_one_outside_the_seats(world, app):
+    patrick, jenny = await household(app)
+    j = await ids(jenny)
+    lena = await insert_user(world, "lena")
+    await place(world, j, groups())
+    await place(world, lena, groups((6, 0, 5, 1, 4, 2, 2, 4, 1, 5, 0, 6)))
+    await tag_groups(world)
+    params = {"kind": "movie", "a": j, "b": lena, "term": "themes.t01"}
+
+    seated = await jenny.get("/api/taste/compare/term", params=params)
+    outside = await patrick.get("/api/taste/compare/term", params=params)
+    own = await jenny.get("/api/taste/term", params={"kind": "movie", "term": "themes.t01"})
+    unread = await jenny.get("/api/taste/term", params={"kind": "movie", "term": "mood.dark"})
+
+    assert seated.status_code == 200, seated.text
+    assert [f["id"] for f in seated.json()["films"]] == [1, 2, 3, 4]
+    assert keys_of(seated.json()) <= COMPARE_KEYS
+    assert outside.json() == {"term": "themes.t01", "films": []}
+    assert [f["id"] for f in own.json()["high"]] == [1, 2, 3, 4]
+    assert unread.status_code == 404
+    unpicked = await jenny.get("/api/taste/compare/term", params={**params, "b": await ids(patrick)})
+    assert unpicked.json()["detail"]["reason"] == "not_pickable"
 
 
 async def test_the_numbers_behind_a_row_wait_for_show_the_numbers(world, app):

@@ -10,8 +10,11 @@ import {
   markX,
   mostAlike,
   mostDifferent,
+  ownGroups,
+  pickerOrder,
   placeWord,
   seatsReady,
+  sharedGroups,
   showAll,
   strip,
   takeSeat
@@ -116,6 +119,11 @@ describe("Compare's seats", () => {
     expect(seatsReady([1, 1], members)).toBe(false);
   });
 
+  it('lists the viewer first in the picker, then everyone else in the roster order', () => {
+    const roster = [{ id: 3 }, { id: 9 }, { id: 7 }, { id: 1 }];
+    expect(pickerOrder(roster, 7).map((m) => m.id)).toEqual([7, 3, 9, 1]);
+  });
+
   it('says what opens Compare in the kind it is on', () => {
     expect(gateLine('series')).toBe('Comparing series opens once two of you have each placed 20 series.');
   });
@@ -123,14 +131,15 @@ describe("Compare's seats", () => {
 
 describe('the reads', () => {
   let fetchMock;
+  const answer = (body) => ({
+    ok: true,
+    status: 200,
+    headers: { get: () => null },
+    text: async () => JSON.stringify(body)
+  });
 
   beforeEach(() => {
-    fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      status: 200,
-      headers: { get: () => null },
-      text: async () => '{}'
-    });
+    fetchMock = vi.fn().mockResolvedValue(answer({}));
     vi.stubGlobal('fetch', fetchMock);
   });
 
@@ -145,5 +154,31 @@ describe('the reads', () => {
       '/api/taste/members?kind=movie',
       '/api/taste/compare?kind=movie&a=1&b=7'
     ]);
+  });
+
+  it("opens a row of Your taste onto the person's films above their middle, then below", async () => {
+    const film = (id) => ({ id, name: `Film ${id}`, poster_path: null });
+    fetchMock.mockResolvedValueOnce(answer({ term: 'mood.dark', high: [film(2), film(1)], low: [film(5)] }));
+    fetchMock.mockResolvedValueOnce(answer({ term: 'mood.cosy', high: [], low: [film(5)] }));
+
+    const dark = await ownGroups('movie', 'mood.dark');
+    const cosy = await ownGroups('movie', 'mood.cosy');
+
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/taste/term?kind=movie&term=mood.dark');
+    expect(dark.map((g) => [g.head, g.films.map((f) => f.id)])).toEqual([
+      ['These sit high for you', [2, 1]],
+      ['These land lower for you', [5]]
+    ]);
+    expect(cosy.map((g) => g.head)).toEqual(['These land lower for you']);
+  });
+
+  it('opens a row of Compare onto the films both placed as one group, never split by who', async () => {
+    const films = [{ id: 4, name: 'Heat', poster_path: null }];
+    fetchMock.mockResolvedValueOnce(answer({ term: 'mood.dark', films }));
+    fetchMock.mockResolvedValueOnce(answer({ term: 'mood.cosy', films: [] }));
+
+    expect(await sharedGroups('movie', 1, 7, 'mood.dark')).toEqual([{ head: "You've both placed these", films }]);
+    expect(await sharedGroups('movie', 1, 7, 'mood.cosy')).toEqual([]);
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/taste/compare/term?kind=movie&a=1&b=7&term=mood.dark');
   });
 });
