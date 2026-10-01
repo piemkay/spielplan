@@ -75,6 +75,21 @@ test('the card leads with Play, the ranking row and Watched or Not seen, and fol
   await expect(panel.locator('.tag').first()).toBeVisible();
 });
 
+test('before the set-up the ranking row reads "Set up your ladder first" and goes to Rate', async ({
+  page
+}) => {
+  // Decision 550: the admin has no ladder yet at this point of the run.
+  const panel = page.getByLabel('Title detail');
+  const row = panel.getByTestId('rank-card-tier');
+  await expect(row).toContainText('Set up your ladder first');
+  await expect(row).toHaveAttribute('aria-label', 'In your ranking: set up your ladder first');
+  await expect(panel.getByTestId('rank-card-place')).toHaveCount(0);
+  await row.click();
+  await expect(page).toHaveURL(/\/rate$/);
+  await expect(page.getByTestId('rate-before-setup')).toBeVisible();
+  await expect(page.getByLabel('Title detail')).toHaveCount(0);
+});
+
 test('Play is disabled with its reason', async ({ page }) => {
   // The real reason, never a milestone label (decision 486).
   const panel = page.getByLabel('Title detail');

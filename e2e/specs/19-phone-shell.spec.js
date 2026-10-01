@@ -493,13 +493,14 @@ test("the next person to sign in sees none of the previous one's surfaces", asyn
 
   await nav.getByRole('link', { name: 'Rate', exact: true }).click();
   await expect(page.getByTestId('rate-surface')).toBeVisible();
+  // The admin is set up by now: a ladder card, or the drained line once 11-rate placed every film.
   const theirCard = page.getByTestId('rate-card-title');
+  const theirDrained = page.getByTestId('rate-drained');
   await expect(
-    theirCard,
-    'the admin was served no card, so this test would prove nothing about clearing one'
+    theirCard.or(theirDrained),
+    "the admin's Rate drew nothing, so this test would prove nothing about clearing it"
   ).toBeVisible({ timeout: 20_000 });
-  const theirTitle = (await theirCard.textContent())?.trim();
-  expect(theirTitle, 'the card on screen carries no title to recognise it by').toBeTruthy();
+  const theirTitle = (await theirCard.count()) ? (await theirCard.textContent())?.trim() : null;
 
   // Logout leaves the document (`location.assign('/login')`, decisions 272 and 285), which
   // clears every store at once.
@@ -539,12 +540,14 @@ test("the next person to sign in sees none of the previous one's surfaces", asyn
     await nav.getByRole('link', { name: 'Rate', exact: true }).click();
     await expect(page.getByTestId('rate-surface')).toBeVisible();
     await expect(page.getByTestId('rate-loading')).toBeVisible();
-    await expect(page.getByTestId('rate-sweep-card')).toHaveCount(0);
-    await expect(page.getByTestId('rate-battle-card')).toHaveCount(0);
-    await expect(
-      page.getByText(theirTitle, { exact: true }),
-      "the previous person's card is on the new person's screen"
-    ).toHaveCount(0);
+    await expect(page.getByTestId('rate-card')).toHaveCount(0);
+    await expect(page.getByTestId('rate-drained')).toHaveCount(0);
+    if (theirTitle) {
+      await expect(
+        page.getByText(theirTitle, { exact: true }),
+        "the previous person's card is on the new person's screen"
+      ).toHaveCount(0);
+    }
 
     // The board element is always drawn (proposal 82), so count its rows.
     await nav.getByRole('link', { name: 'Rank', exact: true }).click();
