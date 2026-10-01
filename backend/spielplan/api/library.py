@@ -8,15 +8,13 @@ from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, Query, Request, status
 
-from spielplan.api import auth as auth_api
 from spielplan.api.deps import DB, ActiveUser
 from spielplan.connectors import registry
 from spielplan.core.config import settings
 from spielplan.db import dna_terms, genres, library
-from spielplan.home import rail, suggest
+from spielplan.home import rail, suggest, why
 from spielplan.models import artifacts, basis
 from spielplan.rank import read as rank_read
-from spielplan.rate import direct
 from spielplan.scoring import serve
 
 router = APIRouter(prefix="/api", tags=["library"])
@@ -104,7 +102,8 @@ async def title_detail(title_id: int, conn: DB, user: ActiveUser, request: Reque
     # Decision 486: model numbers only while Show the model is on, gated where the payload is built.
     show_model = rail.visible_to(user)
     # Resolved once, so the card cannot mix two vocabularies (§10).
-    dna = await library.dna_for(conn, title_id, version=await dna_terms.active_version(conn))
+    version = await dna_terms.active_version(conn)
+    dna = await library.dna_for(conn, title_id, version=version)
     # Decision 486: a term is shown by its shipped label, never its id.
     labels = await dna_terms.labels_for(
         conn, [t["term"] for t in dna["extracted"]] + [p["term"] for p in dna["projected"]]
@@ -144,8 +143,6 @@ async def title_detail(title_id: int, conn: DB, user: ActiveUser, request: Reque
             "projected": [{**p, **labels[p["term"]]} for p in dna["projected"]],
             "note": "extracted tags are quote-verified; projected tags are inferred",
         },
-        # Decision 487: the person's own standing answer.
-        "my_verdict": await direct.live_verdict(conn, user_id=user.id, title_id=title_id),
         # Decision 531: §6.3's ranking rows. Unreadable constants hide them rather than 503 the card.
         "ranking": None
         if request.app.state.hyperparams is None
@@ -158,11 +155,14 @@ async def title_detail(title_id: int, conn: DB, user: ActiveUser, request: Reque
             conn, user_id=user.id, title_id=title_id,
             bundle_version=await artifacts.active_bundle_version(conn),
         ),
+        "shares": []
+        if version is None
+        else await why.shares_with(
+            conn, user_id=user.id, title_id=title_id, kind=title["kind"], version=version
+        ),
         "actions": {
             "play_on_jellyfin": jf_url,
             "play_reason": play_reason,
-            # Decision 488: absent until §6.4's Map ships, on the same flag as navigation.
-            "show_on_map": {"title_id": title_id} if auth_api.shipped("map") else None,
         },
     }
     if show_model:

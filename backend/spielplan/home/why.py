@@ -427,3 +427,148 @@ def likest_pair(
         return None
     (_, first, second), cards = best
     return cards, by_term[first], by_term[second]
+
+
+# --- likeness between any two titles: Shares a lot with and Rate's shelves (decisions 541, 551) ---
+
+
+@dataclass(frozen=True)
+class Like:
+    """How much one candidate shares with a target, and the strongest term the two share."""
+
+    title_id: int
+    likeness: float
+    shared: int
+    term: str | None
+    facet: str | None
+    label: str | None
+
+
+async def likeness(
+    conn: asyncpg.Connection,
+    *,
+    title_id: int,
+    candidate_ids: Sequence[int],
+    kind: str,
+    version: str,
+) -> dict[int, Like]:
+    """Every candidate sharing at least one term with `title_id`, keyed by candidate id.
+
+    Shelf 1's cosine of idf-weighted term sets over both tiers (decision 513), idf over the owned
+    titles of `kind`; a term no owned title carries weighs as one carried by a single title. Neither
+    the target nor a candidate need be owned, unseen or of the target's form. The strongest term is
+    named as `suggest._likest_liked` names them: idf times the lesser naming rank.
+    """
+    rows = await conn.fetch(
+        f"""
+        WITH {specificity_ctes("$3", "$4")},
+        terms AS (
+            SELECT d.title_id, d.term, min(d.facet) AS facet, max({TERM_RANK}) AS r
+              FROM dna_tagged d
+             WHERE d.version = $4 AND (d.title_id = $1 OR d.title_id = ANY($2::int[]))
+             GROUP BY d.title_id, d.term
+        ),
+        weighted AS (
+            SELECT g.*, COALESCE(s.idf, ln((SELECT greatest(count(*), 1) FROM owned)::float8)) AS idf
+              FROM terms g LEFT JOIN spec s USING (term)
+        ),
+        norm AS (
+            SELECT title_id, sqrt(sum(idf * idf)) AS n FROM weighted GROUP BY title_id
+        )
+        SELECT c.title_id,
+               sum(c.idf * c.idf) / nullif(nc.n * nt.n, 0) AS likeness,
+               count(*) AS shared,
+               (array_agg(c.term ORDER BY c.idf * least(c.r, t.r) DESC, c.term))[1] AS term,
+               (array_agg(c.facet ORDER BY c.idf * least(c.r, t.r) DESC, c.term))[1] AS facet,
+               (array_agg(dl.label ORDER BY c.idf * least(c.r, t.r) DESC, c.term))[1] AS label
+          FROM weighted c
+          JOIN weighted t ON t.term = c.term AND t.title_id = $1
+          JOIN norm nc ON nc.title_id = c.title_id
+          JOIN norm nt ON nt.title_id = $1
+          LEFT JOIN dna_term dl ON dl.version = $4 AND dl.term = c.term
+         WHERE c.title_id <> $1
+         GROUP BY c.title_id, nc.n, nt.n
+        """,
+        title_id,
+        list(candidate_ids),
+        kind,
+        version,
+    )
+    return {
+        int(r["title_id"]): Like(
+            title_id=int(r["title_id"]),
+            likeness=float(r["likeness"] or 0.0),
+            shared=int(r["shared"]),
+            term=r["term"],
+            facet=r["facet"],
+            label=dna_terms.label_of(r["term"], r["label"]),
+        )
+        for r in rows
+    }
+
+
+_SHARE_FIELDS = (
+    "kind", "name", "original_name", "original_language", "year", "runtime_min", "poster_path",
+)
+
+
+async def shares_with(
+    conn: asyncpg.Connection,
+    *,
+    user_id: int,
+    title_id: int,
+    kind: str,
+    version: str,
+    cap: int = 8,
+    floor: int = 3,
+) -> list[dict[str, Any]]:
+    """§6.4's Shares a lot with: the owned titles of `kind` most like `title_id`, read as shelf 1
+    reads them (the anchor's form, at least two shared terms), seen ones included; [] below `floor`."""
+    owned = await conn.fetch(
+        """
+        WITH animated AS (
+            SELECT DISTINCT g.title_id FROM title_genre g
+             WHERE (g.title_id IN (SELECT id FROM title WHERE kind = $2 AND is_owned) OR g.title_id = $1)
+               AND g.source <> ALL($4::text[]) AND lower(g.genre) = ANY($3::text[])
+        )
+        SELECT t.id FROM title t
+         WHERE t.kind = $2 AND t.is_owned AND t.id <> $1
+           AND (t.id IN (SELECT title_id FROM animated)) = ($1 IN (SELECT title_id FROM animated))
+        """,
+        title_id,
+        kind,
+        genre_vocab.raw_labels("Animation"),
+        list(genre_vocab.EXCLUDED_SOURCES),
+    )
+    likes = await likeness(
+        conn, title_id=title_id, candidate_ids=[int(r["id"]) for r in owned], kind=kind,
+        version=version,
+    )
+    closest = sorted(
+        (like for like in likes.values() if like.shared >= 2),
+        key=lambda like: (-like.likeness, like.title_id),
+    )[:cap]
+    if len(closest) < floor:
+        return []
+    rows = await conn.fetch(
+        """
+        SELECT t.id, t.kind, t.name, t.original_name, t.original_language, t.year, t.runtime_min,
+               t.poster_path, COALESCE(ut.state, 'unseen') = 'seen' AS seen
+          FROM title t
+          LEFT JOIN user_title ut ON ut.title_id = t.id AND ut.user_id = $1
+         WHERE t.id = ANY($2::int[])
+        """,
+        user_id,
+        [like.title_id for like in closest],
+    )
+    by_id = {int(r["id"]): r for r in rows}
+    return [
+        {
+            "title_id": like.title_id,
+            **{k: by_id[like.title_id][k] for k in _SHARE_FIELDS},
+            "seen": bool(by_id[like.title_id]["seen"]),
+            "term": {"term": like.term, "facet": like.facet, "label": like.label},
+        }
+        for like in closest
+    ]
+

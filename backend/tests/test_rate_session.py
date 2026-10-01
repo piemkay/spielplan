@@ -1986,7 +1986,7 @@ async def test_the_rate_routes_hand_the_push_off_and_answer_without_waiting_for_
         card = reply.json()["card"]
     untouched = next(int(i) for i in owned if int(i) not in asked)
     started = time.monotonic()
-    reply = await client.post(f"/api/rate/title/{untouched}", json={"answer": "fine"})
+    reply = await client.post(f"/api/rate/title/{untouched}", json={"answer": "not_seen"})
     answered.append(time.monotonic() - started)
     assert reply.status_code == 200, reply.text
     assert max(answered) < 0.45, f"a Rate route waited for Jellyfin: {answered}"
