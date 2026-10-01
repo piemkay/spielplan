@@ -366,7 +366,7 @@ async def next_pair(
             "pair": None,
             "reason": _QUEUE_SETTLED if len(pool) >= 2 else _QUEUE_THIN,
         }
-    names = await read.names_for(conn, [pair.title_a, pair.title_b])
+    cards = await read.cards_for(conn, [pair.title_a, pair.title_b])
     by_id = {c.title_id: c for c in pool}
     tier_set = await tiers.tier_set_of(conn, user_id=user.id, kind=kind)
     served = pair.public()
@@ -375,8 +375,11 @@ async def next_pair(
         "kind": kind,
         "pair": {
             **served,
-            "name_a": names.get(pair.title_a),
-            "name_b": names.get(pair.title_b),
+            **{
+                f"{field}_{side}": cards.get(title_id, {}).get(field)
+                for side, title_id in (("a", pair.title_a), ("b", pair.title_b))
+                for field in ("name", "kind", "year", "runtime_min")
+            },
             "token": _seal(user.id, kind, pair, answered),
             # One form on every arm, so no reason tells §13's pairs apart.
             "reason": queue.why(by_id[pair.title_a], by_id[pair.title_b], tier_set, kind),

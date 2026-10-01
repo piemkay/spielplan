@@ -89,6 +89,12 @@ const pair = (over = {}) => ({
   title_b: 2,
   name_a: 'Heat',
   name_b: 'Drive',
+  kind_a: 'movie',
+  kind_b: 'movie',
+  year_a: 1995,
+  year_b: 2011,
+  runtime_min_a: 170,
+  runtime_min_b: 100,
   token: 'sealed-1',
   reason: 'One in A, one in S · both crime films',
   ...over
@@ -625,6 +631,8 @@ describe('the comparison sheet (decisions 483, 495)', () => {
     expect(dialog('Sharpen your list')).toBeTruthy();
     const posters = [...$('rank-queue').querySelectorAll('[data-testid="rate-poster"]')];
     expect(posters.map((p) => p.getAttribute('data-title-id'))).toEqual(['1', '2']);
+    const meta = [...$('rank-queue').querySelectorAll('.under .data')].map((m) => m.textContent);
+    expect(meta).toEqual(['1995 · 2h 50m', '2011 · 1h 40m']);
     expect($('rank-round').textContent).toBe('1 of 15 this round');
     expect($('rate-duel-TIE').getAttribute('aria-label')).toBe('About the same');
     expect($('rate-duel-A-much')).toBeNull();
