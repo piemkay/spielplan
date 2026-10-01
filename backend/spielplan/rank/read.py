@@ -321,13 +321,19 @@ async def standing(
     hp: Hyperparams,
 ) -> dict[str, Any]:
     """The title card's ranking rows (decision 531): where the title sits on the whole UNFILTERED
-    board, and the tiers it can be moved to. `tier` is None off the board, so the model's guess for
-    a title the person has not placed never reaches the card (§6.1)."""
+    board, and the tiers it can be moved to. Off the fitted board `tier` is the person's own latest
+    placement or None: the model's guess for a title they have not placed never reaches the card
+    (§6.1), and a placement the refit has not caught up with still reads as theirs."""
     tiers, _cuts, _rows = await load(conn, user_id=user_id, kind=kind, hp=hp)
     entry = next((e for tier in tiers for e in tier.entries if e.title_id == title_id), None)
+    tier = (
+        entry.tier
+        if entry is not None
+        else (await ladder.placements(conn, user_id=user_id, kind=kind)).get(title_id)
+    )
     return {
         "set_up": await ladder.set_up_at(conn, user_id=user_id) is not None,
-        "tier": None if entry is None else entry.tier,
+        "tier": tier,
         "tension": None if entry is None else entry.tension,
         "tiers": public(tiers, 0),
     }

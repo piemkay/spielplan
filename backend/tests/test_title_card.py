@@ -240,7 +240,10 @@ async def test_the_card_ranks_a_title_with_no_letter_before_the_persons_own_answ
     assert (await card.get("/api/titles/4")).json()["ranking"]["set_up"] is True
     placed = await card.post("/api/rank/drop?kind=movie&per_tier=1", json={"title_id": 4, "tier": 5})
     assert placed.status_code == 200, placed.text
-    # The first observation of a kind is fitted by the sweep, not in the request.
+    # The first observation of a kind is fitted by the sweep, not in the request; until then the row
+    # still names the person's own placement.
+    early = (await card.get("/api/titles/4")).json()["ranking"]
+    assert (early["tier"], early["tension"]) == (5, None)
     await refit.refit_user(db, user_id=uid, kind="movie", hp=DEFAULTS)
     body = (await card.get("/api/titles/4")).json()
     assert body["ranking"]["tier"] == 5

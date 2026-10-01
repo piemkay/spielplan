@@ -266,6 +266,10 @@ export async function move(entry, tier, above = null, below = null, via = undefi
   const edit = await drop({ title_id: entry.title_id, tier, above, below, via });
   if (!edit) return false;
   const label = rank.tiers.find((t) => t.index === tier)?.label ?? '';
+  if (entry.tier == null) {
+    showToast(`${entry.name} placed in ${label}`, null);
+    return true;
+  }
   // Undo names no neighbours: comparisons the person never made are never written.
   const undo = tier === entry.tier ? null : { label: 'Undo', run: () => drop({ title_id: entry.title_id, tier: entry.tier, undoes: edit }) };
   showToast(`${entry.name} moved to ${label}`, undo);
