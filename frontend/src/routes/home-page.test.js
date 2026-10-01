@@ -108,7 +108,8 @@ describe('Home with no movie data', () => {
 function backend({
   titles = (/** @type {URLSearchParams} */ _params) => ({ items: [], total: 0, hidden: {} }),
   facets = (/** @type {string[]} */ _kinds) => ({ genres: [], decades: [] }),
-  home = (/** @type {string[]} */ _kinds) => ({})
+  home = (/** @type {string[]} */ _kinds) => ({}),
+  wish = () => ({ groups: [], copy_text: '' })
 } = {}) {
   const seen = [];
   vi.stubGlobal(
@@ -120,6 +121,7 @@ function backend({
       if (u.pathname === '/api/titles') payload = titles(u.searchParams);
       else if (u.pathname === '/api/facets') payload = facets(u.searchParams.getAll('kind'));
       else if (u.pathname === '/api/home') payload = home(u.searchParams.getAll('kind'));
+      else if (u.pathname === '/api/wish') payload = wish();
       else if (u.pathname.startsWith('/api/prompts/finish')) payload = [];
       return Promise.resolve({
         ok: true,
@@ -528,6 +530,109 @@ describe('Home keeps its place across tabs (decision 530)', () => {
     expect($('[data-testid="shelf-title"]').textContent).toBe('Your top picks');
     expect($('[data-testid="shelves"]').getAttribute('aria-busy')).toBe('false');
     expect(reads.mock.calls.some(([url]) => String(url).includes('/api/home?kind=series'))).toBe(true);
+  });
+});
+
+describe('a wanted film arrives, and the household wish list (decision 544)', () => {
+  const calls = (method, path) =>
+    vi.mocked(globalThis.fetch).mock.calls.filter(
+      ([url, init]) => (init?.method ?? 'GET') === method && String(url) === path
+    );
+  const worth = {
+    id: 'worth_getting',
+    sections: [{
+      kind: 'movie', heading: 'Films', title: 'Worth getting',
+      why: 'Not in the library yet, close to what you love',
+      items: [{ title_id: 7, kind: 'movie', name: 'Collateral', seen: false,
+                like: { title_id: 9, name: 'Heat', terms: [] } }]
+    }]
+  };
+
+  it('says the film is here with its Play, and dismissing asks the server and re-reads Home', async () => {
+    const arrived = [{
+      title_id: 2, name: 'Prisoners', poster_path: null, since: '2026-09-12T10:00:00Z',
+      play_url: 'http://jellyfin.test/web/#/details?id=jf-2'
+    }];
+    const seen = backend({ home: (kinds) => ({ kinds, library: {}, shelves: [], arrived }) });
+    await openHome();
+    const banner = $('[data-testid="home-arrived"]');
+    expect(banner.querySelector('.headline').textContent).toBe('Prisoners is here');
+    expect(banner.textContent).toContain("On your wish list since 12 Sep. It's in the library now.");
+    expect(banner.querySelector('a').getAttribute('href')).toBe(arrived[0].play_url);
+
+    const reads = seen.filter((u) => u.startsWith('/api/home')).length;
+    banner.querySelector('[aria-label="Dismiss Prisoners"]').click();
+    await tick();
+    expect(calls('POST', '/api/wish/2/dismiss')).toHaveLength(1);
+    expect($('[data-testid="home-arrived"]')).toBeNull();
+    expect(seen.filter((u) => u.startsWith('/api/home')).length).toBe(reads + 1);
+  });
+
+  it('keeps the row under Worth getting and opens the list grouped by who wants each film', async () => {
+    const listing = {
+      groups: [
+        {
+          wanters: [{ id: 5, name: 'Jenny' }, { id: 1, name: 'Patrick', role: 'admin' }],
+          items: [{ title_id: 3, kind: 'movie', name: 'Princess Mononoke', year: 1997,
+                    since: '2026-09-14T08:00:00Z', mine: true, others_likely: [], link: null }]
+        },
+        {
+          wanters: [{ id: 1, name: 'Patrick', role: 'admin' }],
+          items: [{ title_id: 4, kind: 'movie', name: 'Wolf Children', year: 2012,
+                    since: '2026-09-30T08:00:00Z', mine: false,
+                    others_likely: [{ id: 5, name: 'Jenny', likely: 'likely' }], link: null }]
+        }
+      ],
+      copy_text: 'Princess Mononoke (1997)\nWolf Children (2012)'
+    };
+    backend({
+      home: (kinds) => ({ kinds, library: {}, shelves: [worth], shelves_total: 1,
+                          wish: { wanted: 4, both: 1 } }),
+      wish: () => listing
+    });
+    const clipboard = { writeText: vi.fn(async () => {}) };
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: clipboard });
+    await openHome();
+
+    const row = $('[data-testid="home-wish-row"]');
+    expect(row.textContent).toContain('Wish list');
+    expect(row.textContent).toContain('4 wanted, 1 by both of you');
+    expect(row.previousElementSibling.dataset.shelf, 'directly under Worth getting').toBe('worth_getting');
+    row.click();
+    await tick();
+
+    const sheet = $('[data-testid="wish-list-sheet"]');
+    expect([...sheet.querySelectorAll('h3')].map((h) => h.textContent)).toEqual([
+      'You both want', 'Patrick wants'
+    ]);
+    const [mine, theirs] = [...sheet.querySelectorAll('[data-testid="wish-item"]')];
+    expect(mine.textContent).toContain('1997 · since 14 Sep');
+    expect(theirs.textContent).toContain('2012 · since 30 Sep · you: likely too');
+
+    mine.querySelector('[aria-label="Remove Princess Mononoke"]').click();
+    await tick();
+    expect(calls('DELETE', '/api/wish/3')).toHaveLength(1);
+    theirs.querySelector('button.metoo').click();
+    await tick();
+    const [put] = calls('PUT', '/api/wish/4');
+    expect(JSON.parse(String(put[1].body))).toEqual({ state: 'want' });
+
+    sheet.querySelector('[data-testid="wish-copy"]').click();
+    await tick();
+    expect(clipboard.writeText).toHaveBeenCalledWith(listing.copy_text);
+    Reflect.deleteProperty(navigator, 'clipboard');
+  });
+
+  it('shows no row while there is no Worth getting shelf and nothing is wanted', async () => {
+    backend({ home: (kinds) => ({ kinds, library: {}, shelves: [], wish: { wanted: 0, both: 0 } }) });
+    await openHome();
+    expect($('[data-testid="home-wish-row"]')).toBeNull();
+    unmount(app);
+    app = null;
+
+    backend({ home: (kinds) => ({ kinds, library: {}, shelves: [], wish: { wanted: 2, both: 0 } }) });
+    await openHome();
+    expect($('[data-testid="home-wish-row"]').textContent).toContain('2 wanted');
   });
 });
 

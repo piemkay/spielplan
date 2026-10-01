@@ -130,8 +130,10 @@ async def avoided_titles(
     kind: str,
     version: str | None,
     title_ids: Sequence[int] | None = None,
+    owned: bool = True,
 ) -> frozenset[int]:
-    """The owned titles of `kind` any of these members avoids (or, with `title_ids`, those titles)."""
+    """The owned (or, with `owned=False`, the unowned) titles of `kind` any of these members avoids;
+    with `title_ids`, those titles instead."""
     terms = sorted(set().union(*(a.terms for a in avoids))) if avoids else []
     genres = sorted(set().union(*(a.genres for a in avoids))) if avoids else []
     ceilings = [a.runtime_max for a in avoids if a.runtime_max is not None]
@@ -139,7 +141,10 @@ async def avoided_titles(
     if not terms and not genres and runtime_max is None:
         return frozenset()
     raw = sorted({label for g in genres for label in genre_vocab.raw_labels(g)})
-    scope = "t.is_owned" if title_ids is None else "t.id = ANY($7::int[])"
+    if title_ids is not None:
+        scope = "t.id = ANY($7::int[])"
+    else:
+        scope = "t.is_owned" if owned else "NOT t.is_owned"
     rows = await conn.fetch(
         f"""
         SELECT t.id FROM title t

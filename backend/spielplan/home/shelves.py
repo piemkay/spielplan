@@ -1,4 +1,4 @@
-"""§6.0's Home: the pending-verdicts banner and the six shelves.
+"""§6.0's Home: the pending-verdicts banner and the seven shelves.
 
 A shelf has no items, only one `section` per kind, so an interleaved ranking is unrepresentable
 (§4.1 rule 5, decision 18). A shelf that names terms selects its cards BY them (`why.py`).
@@ -14,7 +14,7 @@ from typing import Any
 import asyncpg
 
 from spielplan.db import library
-from spielplan.home import taste
+from spielplan.home import suggest, taste, wish
 from spielplan.home import why as why_mod
 from spielplan.home.why import WhyTerm
 from spielplan.ledger.observations import (
@@ -54,6 +54,13 @@ DEFAULT_BETA = 0.2
 # The standard normal the sweet spot reads each member's rank through (decision 477's scale).
 _NORMAL = NormalDist()
 
+# Decision 544: Worth getting opens once this many of the person's titles of the kind shape their scores.
+WORTH_GETTING_MIN_LABELS = 20
+# Candidates read per card: a title no liked title is like is left out.
+WORTH_GETTING_POOL = 4
+# See all's whole list, longer than a shelf.
+WORTH_GETTING_LIST_CAP = 60
+
 # §6.0's shelf order, verbatim from the (normative) table.
 SHELF_IDS: tuple[str, ...] = (
     "because_anchor",
@@ -62,6 +69,7 @@ SHELF_IDS: tuple[str, ...] = (
     "shared_sweet_spot",
     "school_night",
     "new_in_library",
+    "worth_getting",
 )
 
 
@@ -563,6 +571,10 @@ async def partner_for(conn: asyncpg.Connection, *, user_id: int) -> dict[str, An
     return {"user_id": int(row["id"]), "name": row["name"], "co_seen": int(row["co_seen"])}
 
 
+def _standardised(pos: int, n: int) -> float:
+    return _NORMAL.inv_cdf((pos - 0.5) / n)
+
+
 async def shared_sweet_spot(
     conn: asyncpg.Connection, *, ctx: Ctx, kind: str, partner: dict[str, Any] | None
 ) -> tuple[Section | None, Suppressed | None]:
@@ -616,14 +628,11 @@ async def shared_sweet_spot(
         sorted(ctx.excluded),
     )
 
-    def standardised(pos: int, n: int) -> float:
-        return _NORMAL.inv_cdf((pos - 0.5) / n)
-
     paired = sorted(
         (
             (
-                (standardised(r["mine_pos"], r["mine_n"])
-                 + standardised(r["theirs_pos"], r["theirs_n"])) / 2.0,
+                (_standardised(r["mine_pos"], r["mine_n"])
+                 + _standardised(r["theirs_pos"], r["theirs_n"])) / 2.0,
                 r,
             )
             for r in rows
@@ -710,28 +719,244 @@ async def new_in_library(
         """,
         ctx.user_id, kind, ctx.bundle_version, SHELF_CAP,
     )
+    wanted = await wish.wanted_by(
+        conn, user_id=ctx.user_id, title_ids=[int(r["title_id"]) for r in rows]
+    )
     section = Section(
         kind=kind,
         heading=KIND_HEADINGS[kind],
         title="New in the library",
         why="No outside ratings yet, so we placed them by what they're about",
         why_numbers={"gate_k": EVIDENCE_K},
-        items=[_card(row, i + 1, tier_set=tier_set, beta=beta) for i, row in enumerate(rows)],
+        items=[
+            {**_card(row, i + 1, tier_set=tier_set, beta=beta),
+             "wanted": int(row["title_id"]) in wanted}
+            for i, row in enumerate(rows)
+        ],
     )
     return _finish(section, shelf_id=sid, ctx=ctx)
 
 
+# --- shelf 7: worth_getting -------------------------------------------------------------------
+
+
+async def _worth_getting_opens(
+    conn: asyncpg.Connection, *, user_id: int, kind: str
+) -> tuple[bool, int]:
+    """Whether the person's own ratings of the kind are enough to suggest beyond the library."""
+    fit = await serve.fit_row(conn, user_id=user_id, kind=kind)
+    labels = int(fit["label_count"] or 0) if fit else 0
+    beta = float(fit["blend_beta"] or 0.0) if fit else 0.0
+    return labels >= WORTH_GETTING_MIN_LABELS and beta > 0.0, labels
+
+
+def _with_likes(
+    rows: Sequence[asyncpg.Record],
+    likes: dict[int, suggest.Liked],
+    *,
+    ctx: Ctx,
+    kind: str,
+    cap: int,
+    required: bool,
+) -> list[dict[str, Any]]:
+    """Cards carrying `like` and `wanted`; with `required`, a title no liked title is like is left out."""
+    tier_set, beta = ctx.tier_set(kind), ctx.beta(kind)
+    kept = [r for r in rows if not required or int(r["title_id"]) in likes][:cap]
+    cards = []
+    for i, row in enumerate(kept):
+        liked = likes.get(int(row["title_id"]))
+        extra = (
+            {"mine_cdf": _float(row["mine_cdf"]), "theirs_cdf": _float(row["theirs_cdf"])}
+            if "mine_cdf" in row else None
+        )
+        cards.append({
+            **_card(row, i + 1, tier_set=tier_set, beta=beta, extra=extra),
+            "like": liked.as_dict() if liked else None,
+            "wanted": row["wish_state"] == "want",
+        })
+    return cards
+
+
+async def _unowned_for_me(
+    conn: asyncpg.Connection,
+    *,
+    ctx: Ctx,
+    kind: str,
+    avoids: Sequence[taste.Avoided],
+    cap: int,
+    keep_wanted: bool,
+) -> list[dict[str, Any]]:
+    """Unowned titles of the kind by the person's own score, with the ranking shelves' leave-outs and
+    a crowd rating, each naming the liked title it is most like (decision 515)."""
+    avoided = await taste.avoided_titles(conn, avoids, kind=kind, version=ctx.version, owned=False)
+    rows = await conn.fetch(
+        f"WITH lv AS ({LIVE_LABEL_SQL})" + CARD_SELECT + ", w.state AS wish_state" + CARD_FROM + """
+          LEFT JOIN wish w ON w.title_id = t.id AND w.user_id = $1
+         WHERE t.kind = $2 AND NOT t.is_owned AND us.score IS NOT NULL AND tp.item_n > 0
+           AND COALESCE(ut.state, 'unseen') = 'unseen'
+           AND t.id NOT IN (SELECT title_id FROM lv)
+           AND (w.state IS NULL OR (w.state = 'want' AND $6))
+           AND NOT (t.id = ANY($4::int[]))
+         ORDER BY us.score DESC, t.id
+         LIMIT $5
+        """,
+        ctx.user_id, kind, ctx.bundle_version, sorted(avoided), cap * WORTH_GETTING_POOL,
+        keep_wanted,
+    )
+    likes = await suggest.likest_liked(
+        conn, user_id=ctx.user_id, title_ids=[int(r["title_id"]) for r in rows], kind=kind,
+        version=ctx.version,
+    )
+    return _with_likes(rows, likes, ctx=ctx, kind=kind, cap=cap, required=True)
+
+
+async def _unowned_for_pair(
+    conn: asyncpg.Connection,
+    *,
+    ctx: Ctx,
+    kind: str,
+    partner_id: int,
+    avoids: Sequence[taste.Avoided],
+    cap: int,
+) -> list[dict[str, Any]]:
+    """For you and {other}: unowned titles ranked as the shared sweet spot ranks owned ones
+    (decision 477), with either member's leave-outs and Not for me."""
+    avoided = await taste.avoided_titles(conn, avoids, kind=kind, version=ctx.version, owned=False)
+    rows = await conn.fetch(
+        f"""
+        WITH lv AS ({LIVE_LABEL_SQL}),
+        ranked AS (
+            SELECT us.user_id, us.title_id,
+                   percent_rank() OVER (PARTITION BY us.user_id ORDER BY us.score) AS cdf,
+                   row_number() OVER (PARTITION BY us.user_id ORDER BY us.score, us.title_id)
+                       AS pos,
+                   count(*) OVER (PARTITION BY us.user_id) AS n
+              FROM user_score us
+              JOIN title o ON o.id = us.title_id AND NOT o.is_owned
+             WHERE us.user_id = ANY($4::bigint[]) AND us.kind = $2 AND us.bundle_version = $3
+        )
+        SELECT t.id AS title_id, t.kind, t.name, t.year, t.runtime_min, t.poster_path,
+               t.placement, NULL::timestamptz AS placement_at,
+               false AS seen,
+               us.score, us.cf, tp.b, tp.gate, tp.item_n, tp.e_source,
+               ls.s, ls.sigma, ls.cdf, ls.tier, w.state AS wish_state,
+               a.cdf AS mine_cdf, b.cdf AS theirs_cdf,
+               a.pos AS mine_pos, a.n AS mine_n, b.pos AS theirs_pos, b.n AS theirs_n
+          FROM ranked a
+          JOIN ranked b ON b.title_id = a.title_id AND b.user_id = $5
+          JOIN title t ON t.id = a.title_id
+          JOIN user_score us ON us.title_id = t.id AND us.user_id = $1 AND us.kind = $2
+                            AND us.bundle_version = $3
+          JOIN title_prior tp ON tp.title_id = t.id AND tp.bundle_version = $3 AND tp.item_n > 0
+          LEFT JOIN ledger_state ls ON ls.title_id = t.id AND ls.user_id = $1
+          LEFT JOIN wish w ON w.title_id = t.id AND w.user_id = $1
+         WHERE a.user_id = $1 AND a.cdf >= $6 AND b.cdf >= $6
+           AND NOT EXISTS (SELECT 1 FROM user_title s WHERE s.title_id = t.id
+                            AND s.user_id = ANY($4::bigint[]) AND s.state = 'seen')
+           AND t.id NOT IN (SELECT title_id FROM lv)
+           AND NOT EXISTS (SELECT 1 FROM wish x WHERE x.title_id = t.id
+                            AND x.user_id = ANY($4::bigint[]) AND x.state = 'not_for_me')
+           AND NOT (t.id = ANY($7::int[]))
+        """,
+        ctx.user_id, kind, ctx.bundle_version, [ctx.user_id, partner_id], partner_id,
+        SWEET_SPOT_MIN_CDF, sorted(avoided),
+    )
+    ranked = sorted(
+        rows,
+        key=lambda r: (
+            -(_standardised(r["mine_pos"], r["mine_n"])
+              + _standardised(r["theirs_pos"], r["theirs_n"])),
+            int(r["title_id"]),
+        ),
+    )[:cap]
+    likes = await suggest.likest_liked(
+        conn, user_id=ctx.user_id, title_ids=[int(r["title_id"]) for r in ranked], kind=kind,
+        version=ctx.version,
+    )
+    return _with_likes(ranked, likes, ctx=ctx, kind=kind, cap=cap, required=False)
+
+
+async def worth_getting(
+    conn: asyncpg.Connection, *, ctx: Ctx, kind: str, avoided: taste.Avoided | None
+) -> tuple[Section | None, Suppressed | None]:
+    """§6.0 row 7 — "Worth getting": beyond the library, absent until the person has rated enough of
+    the kind. A ranking shelf that neither claims nor is thinned (decision 544)."""
+    sid = "worth_getting"
+    if not ctx.bundle_version:
+        return None, Suppressed(sid, kind, "no active artifact bundle — no scores to rank")
+    if not ctx.version:
+        return None, Suppressed(sid, kind, "no DNA vocabulary imported — no liked title to name")
+    opens, labels = await _worth_getting_opens(conn, user_id=ctx.user_id, kind=kind)
+    if not opens:
+        return None, Suppressed(
+            sid, kind,
+            f"your own scores rest on {labels} titles of this kind · it opens at "
+            f"{WORTH_GETTING_MIN_LABELS} with a ranking of your own",
+        )
+    items = await _unowned_for_me(
+        conn, ctx=ctx, kind=kind, avoids=[avoided] if avoided else [], cap=SHELF_CAP,
+        keep_wanted=False,
+    )
+    section = Section(
+        kind=kind,
+        heading=KIND_HEADINGS[kind],
+        title="Worth getting",
+        why="Not in the library yet, close to what you love",
+        why_numbers={"label_count": labels},
+        items=items,
+    )
+    return _finish(section, shelf_id=sid, ctx=ctx)
+
+
+async def worth_getting_list(
+    conn: asyncpg.Connection, *, user_id: int, kind: str, pair: bool, bundle_version: str | None
+) -> dict[str, Any]:
+    """See all: For you, or For you and {other}; empty while the shelf itself is absent."""
+    ctx = Ctx(
+        user_id=user_id,
+        bundle_version=bundle_version,
+        version=await why_mod.vocabulary_version(conn),
+        kinds=(kind,),
+        tier_sets={kind: await tier_set_of(conn, user_id=user_id, kind=kind)},
+        betas={kind: await _beta(conn, user_id=user_id, kind=kind)},
+    )
+    partner = await partner_for(conn, user_id=user_id)
+    opens, _labels = await _worth_getting_opens(conn, user_id=user_id, kind=kind)
+    items: list[dict[str, Any]] = []
+    if opens and ctx.bundle_version and ctx.version and (partner or not pair):
+        mine = await taste.avoided_for(conn, user_id=user_id, version=ctx.version)
+        if pair:
+            theirs = await taste.avoided_for(conn, user_id=partner["user_id"], version=ctx.version)
+            items = await _unowned_for_pair(
+                conn, ctx=ctx, kind=kind, partner_id=partner["user_id"], avoids=[mine, theirs],
+                cap=WORTH_GETTING_LIST_CAP,
+            )
+        else:
+            items = await _unowned_for_me(
+                conn, ctx=ctx, kind=kind, avoids=[mine], cap=WORTH_GETTING_LIST_CAP,
+                keep_wanted=True,
+            )
+        await library.carry_original_names(conn, items, key="title_id")
+    return {
+        "kind": kind,
+        "with": "pair" if pair else "me",
+        "other": {"id": partner["user_id"], "name": partner["name"]} if partner else None,
+        "items": items,
+    }
+
+
 # --- assembly -----------------------------------------------------------------------------------
 
-# `ranking=True` for the five shelves ordered by a ledger score; `new_in_library` is ordered by
-# recency. All six partition by kind regardless — a Home row reads as a recommendation.
+# `ranking=True` for the six shelves ordered by a ledger score; `new_in_library` is ordered by
+# recency. All seven partition by kind regardless — a Home row reads as a recommendation.
 RANKING_SHELVES: frozenset[str] = frozenset(SHELF_IDS) - {"new_in_library"}
 
 # Decision 475's claim order: "Your top picks" first. Display order stays `SHELF_IDS`.
 CLAIM_ORDER: tuple[str, ...] = ("top_of_ledger",) + tuple(
     s for s in SHELF_IDS if s != "top_of_ledger"
 )
-CLAIMING_SHELVES: frozenset[str] = RANKING_SHELVES
+# Decision 544: Worth getting holds titles no other shelf can, so it neither claims nor is thinned.
+CLAIMING_SHELVES: frozenset[str] = RANKING_SHELVES - {"worth_getting"}
 
 
 async def live_verdict_count(conn: asyncpg.Connection, *, user_id: int) -> int:
@@ -751,7 +976,7 @@ async def build_shelves(
     zero_verdicts: bool,
     avoided: taste.Avoided | None,
 ) -> tuple[list[Shelf], list[Suppressed]]:
-    """§6.0's six shelves, in the table's order, each as one section per selected kind.
+    """§6.0's seven shelves, in the table's order, each as one section per selected kind.
 
     With zero verdicts every score-ordered shelf is suppressed (proposal 20).
     """
@@ -802,6 +1027,8 @@ async def build_shelves(
                 )
             elif shelf_id == "school_night":
                 section, note = await school_night(conn, ctx=scoped, kind=kind)
+            elif shelf_id == "worth_getting":
+                section, note = await worth_getting(conn, ctx=scoped, kind=kind, avoided=avoided)
             else:
                 section, note = await new_in_library(conn, ctx=scoped, kind=kind)
             if section is not None:
@@ -862,6 +1089,8 @@ async def build_home(
         "suppressed": [s.as_dict() for s in dropped],
         # Decision 512's avoid set, ungated: facts about their own ratings.
         "avoiding": avoided.as_dict() if avoided else None,
+        "arrived": await wish.arrived(conn, user_id=user.id),
+        "wish": await wish.summary(conn),
     }
 
 

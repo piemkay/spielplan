@@ -13,7 +13,7 @@ from spielplan.api.deps import DB, ActiveUser
 from spielplan.connectors import registry
 from spielplan.core.config import settings
 from spielplan.db import dna_terms, genres, library
-from spielplan.home import rail, suggest
+from spielplan.home import rail, suggest, wish
 from spielplan.models import artifacts, basis
 from spielplan.rank import read as rank_read
 from spielplan.rate import direct
@@ -158,6 +158,7 @@ async def title_detail(title_id: int, conn: DB, user: ActiveUser, request: Reque
             conn, user_id=user.id, title_id=title_id,
             bundle_version=await artifacts.active_bundle_version(conn),
         ),
+        "wish": await wish.state_for(conn, user_id=user.id, title_id=title_id),
         "actions": {
             "play_on_jellyfin": jf_url,
             "play_reason": play_reason,

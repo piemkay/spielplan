@@ -93,13 +93,14 @@ def _sql_strings(node: ast.AST):
 
 
 # A string is a statement when it OPENS with a verb, optionally behind its own SQL comments; a
-# non-DML verb is read with the object it acts on, so "Drop one device" stays English.
+# non-DML verb is read with the object it acts on, so "Drop one device" stays English, and a bare
+# "with" (a `with=` query parameter's name) is no statement.
 _SQL_OBJECT = (
     r"(?:table|index|view|schema|sequence|function|trigger|type|extension|materialized\s+view)"
 )
 _SQL_HEAD = re.compile(
     r"^\s*(?:--[^\n]*\n\s*|(?s:/\*.*?\*/)\s*)*(?:"
-    r"(?:select|insert|update|delete|with)\b"
+    r"(?:select|insert|update|delete)\b|with\b(?!\s*$)"
     r"|create\s+(?:or\s+replace\s+|unique\s+|temp\w*\s+|global\s+|local\s+|unlogged\s+)*"
     + _SQL_OBJECT + r"\b"
     r"|(?:alter|drop)\s+" + _SQL_OBJECT + r"\b"

@@ -50,6 +50,22 @@ async def home(
     return rail.redact(payload, show_model=rail.visible_to(user))
 
 
+@router.get("/home/worth-getting")
+async def worth_getting(
+    conn: DB,
+    user: ActiveUser,
+    request: Request,
+    kind: Literal["movie", "series"],
+    with_: Literal["me", "pair"] = Query("me", alias="with"),
+) -> dict[str, Any]:
+    """Worth getting's See all: For you, or For you and the partner the shared shelf names."""
+    payload = await shelves.worth_getting_list(
+        conn, user_id=user.id, kind=kind, pair=with_ == "pair",
+        bundle_version=await _bundle(request, conn),
+    )
+    return rail.redact(payload, show_model=rail.visible_to(user))
+
+
 @router.get("/model-log")
 async def model_log(
     user: ActiveUser, limit: int = Query(rail.RAIL_LIMIT, ge=1, le=rail.RAIL_LIMIT)

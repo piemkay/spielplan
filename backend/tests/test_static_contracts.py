@@ -222,7 +222,7 @@ _JS_WORD = re.compile(r"[\w$]+")
 
 _SPIELPLAN = REPO / "backend" / "spielplan"
 _MEMBER_COPY_PACKAGES = ("home", "rate", "rank", "taste", "tonight")
-_MEMBER_ROUTERS = ("home", "library", "rank", "rate", "taste", "tonight")
+_MEMBER_ROUTERS = ("home", "library", "rank", "rate", "taste", "tonight", "wish")
 _MEMBER_COPY_CONSTANTS = {"api/deps.py": ("RESTART_REQUIRED", "RESTORE_REQUIRED")}
 
 

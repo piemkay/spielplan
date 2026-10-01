@@ -46,6 +46,7 @@ from spielplan.api import setup as setup_api
 from spielplan.api import state as state_api
 from spielplan.api import taste as taste_api
 from spielplan.api import tonight as tonight_api
+from spielplan.api import wish as wish_api
 from spielplan.api.deps import carry_slid_session_cookie
 from spielplan.art.poster import ArtService, url_epoch
 from spielplan.connectors import registry
@@ -203,6 +204,7 @@ def create_app() -> FastAPI:
     app.include_router(taste_api.router)
     app.include_router(tonight_api.router)
     app.include_router(push_api.router)
+    app.include_router(wish_api.router)
     app.include_router(admin_api.router)
     app.include_router(acquisition_api.router)
     app.include_router(flywheel_api.router)

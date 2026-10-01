@@ -173,8 +173,17 @@ describe('the shelf card (proposal 29)', () => {
       placement: 'warm',
       item_n: 480,
       e_source: 'backbone',
-      seen_state: 'seen'
+      seen_state: 'seen',
+      wanted: false,
+      like: null
     });
+  });
+
+  it('carries the wanted mark and the liked film a Worth getting card is like', () => {
+    const like = { title_id: 9, name: 'Heat', terms: ['night city'] };
+    const card = toPosterTitle({ title_id: 1, seen: false, wanted: true, like });
+    expect(card.wanted).toBe(true);
+    expect(card.like).toEqual(like);
   });
 
   it('maps an unseen card to the string the catalog card expects, not to false', () => {

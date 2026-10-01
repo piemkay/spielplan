@@ -6,6 +6,7 @@
   import PosterCard, { isColdPlaced } from '$lib/components/PosterCard.svelte';
   import ModelNote from '$lib/components/ModelNote.svelte';
   import Sheet from '$lib/components/Sheet.svelte';
+  import WorthGettingSheet from '$lib/components/WorthGettingSheet.svelte';
   import { toPosterTitle, whyNumbersLine } from '$lib/home.svelte.js';
 
   // `level` is 'h3' inside a kind region, whose own heading is the h2. `enter` is the row's place
@@ -20,6 +21,8 @@
   const anyColdPlaced = $derived(section.items.some((item) => isColdPlaced(toPosterTitle(item))));
   // That shelf's why-line already says it.
   const coldNote = $derived(anyColdPlaced && shelfId !== 'new_in_library');
+  // Beyond the library: larger cards, each naming the liked film it is like; See all is its own list.
+  const worth = $derived(shelfId === 'worth_getting');
 
   /** @type {HTMLElement | undefined} */
   let row = $state();
@@ -91,7 +94,7 @@
   </div>
 
   <div class="rowwrap" class:fade-start={!atStart} class:fade-end={!atEnd}>
-    <div class="row" bind:this={row} onscroll={measure} data-nobar data-testid="shelf-items">
+    <div class="row" class:worth bind:this={row} onscroll={measure} data-nobar data-testid="shelf-items">
       {#each section.items as item (item.title_id)}
         {@const title = toPosterTitle(item)}
         <div class="cell" data-testid="shelf-card" data-title={item.title_id}>
@@ -109,6 +112,9 @@
   {/if}
 </section>
 
+{#if worth}
+  <WorthGettingSheet open={seeAll} onClose={() => (seeAll = false)} kind={section.kind} {onSelect} />
+{:else}
 <Sheet open={seeAll} onClose={() => (seeAll = false)} label={section.title} width={880}>
   {#snippet header(close)}
     <div class="sheet-bar">
@@ -123,6 +129,7 @@
     {/each}
   </div>
 </Sheet>
+{/if}
 
 <style>
   .shelf {
@@ -166,6 +173,10 @@
     overscroll-behavior-x: contain;
     /* No smooth scrolling: a scripted Chrome does not animate it, so a chevron could not be tested. */
     scroll-snap-type: x proximity;
+  }
+  .row.worth {
+    grid-auto-columns: 132px;
+    gap: 12px;
   }
   .cell {
     display: grid;
@@ -267,7 +278,8 @@
     .rowwrap {
       margin: 0;
     }
-    .row {
+    .row,
+    .row.worth {
       grid-auto-columns: 148px;
       gap: 16px;
       padding: 0;

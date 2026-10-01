@@ -19,7 +19,8 @@ const SHELF_IDS = [
   'never_watched_term',
   'shared_sweet_spot',
   'school_night',
-  'new_in_library'
+  'new_in_library',
+  'worth_getting'
 ];
 
 /** `home/rail.py`'s `GATED_KEYS` (decisions 117, 486). */
