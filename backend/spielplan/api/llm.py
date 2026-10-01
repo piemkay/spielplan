@@ -221,6 +221,25 @@ def _price(price: ModelPrice | None) -> dict[str, Any] | str:
     }
 
 
+def _listed(name: str, *, on: date) -> list[dict[str, Any]]:
+    """Every id the table prices on `on`, in table order, at one title and one pass of its table price
+    (decision 550): not the override, not the pass count. `leaves` is the day a price ends unpriced."""
+    listed = []
+    for model in pricing.PRICING[name]:
+        basis = pricing.price_basis(name, model, on=on)
+        if basis is None:
+            continue
+        ends = basis.price.valid_until
+        listed.append({
+            "id": model,
+            "per_title_usd": _money(pricing.estimate_title(
+                tokens_in=pricing.SPEC_INPUT_TOKENS, prices=[basis.price], passes=1)),
+            "leaves": ends.isoformat() if ends is not None and basis.then is None else None,
+            "default": model == pricing.DEFAULT_MODELS[name],
+        })
+    return listed
+
+
 def provider_card(name: str, state: registry.ConnectorState, *, on: date) -> dict[str, Any]:
     """`model` falls back as `spend.extraction_plan` does; `configured` means stage 6 could call it (an
     openable key and a price in effect). `secrets_unreadable` is not `has_api_key: false`."""
@@ -236,7 +255,7 @@ def provider_card(name: str, state: registry.ConnectorState, *, on: date) -> dic
         "model": model,
         "structured_output": _ADAPTERS[name].STRUCTURED_OUTPUT,
         "price": _price(price),
-        "models": list(pricing.PRICING[name]),
+        "models": _listed(name, on=on),
         "price_basis": _basis(basis),
     }
 
