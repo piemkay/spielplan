@@ -178,9 +178,8 @@
   }
   .legend {
     margin-top: 24px;
-    width: 152px;
-    box-sizing: content-box;
-    padding-left: var(--gutter);
+    width: clamp(96px, calc(100% - 206px), 152px);
+    margin-left: var(--gutter);
     display: grid;
     grid-template-columns: 1fr auto 1fr;
     align-items: center;

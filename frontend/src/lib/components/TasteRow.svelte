@@ -8,13 +8,19 @@
   /** @type {{ row: any, marks: {pos: number, initials: string, colour: string|null, who: string}[], onOpen: (film: any) => void }} */
   let { row, marks, onOpen } = $props();
 
+  // The track narrows on a narrow phone; every row's track is the same width, so rows compare.
+  let measured = $state(0);
+  const width = $derived(measured || TRACK);
   const xs = $derived(
-    marks.length === 2 ? markPair(marks[0].pos, marks[1].pos) : marks.map((m) => markX(m.pos))
+    marks.length === 2
+      ? markPair(marks[0].pos, marks[1].pos, width)
+      : marks.map((m) => markX(m.pos, width))
   );
   // One marker reads from the middle; two read between each other, unless they had to part.
   const span = $derived.by(() => {
-    const [from, to] = xs.length === 2 ? xs : [TRACK / 2, xs[0]];
-    const parted = xs.length === 2 && Math.abs(markX(marks[0].pos) - markX(marks[1].pos)) < 20;
+    const [from, to] = xs.length === 2 ? xs : [width / 2, xs[0]];
+    const parted =
+      xs.length === 2 && Math.abs(markX(marks[0].pos, width) - markX(marks[1].pos, width)) < 20;
     return parted ? null : { left: Math.min(from, to), width: Math.abs(to - from) };
   });
   const posters = $derived(strip(row.films ?? [], row.more ?? 0));
@@ -34,10 +40,10 @@
     {/if}
   </div>
   <div class="body">
-    <span class="track" aria-hidden="true">
+    <span class="track" aria-hidden="true" bind:clientWidth={measured}>
       <span class="rule"></span>
-      <span class="tick" style:left="0"></span>
-      <span class="tick" style:left="{TRACK - 2}px"></span>
+      <span class="tick start"></span>
+      <span class="tick end"></span>
       {#if span}<span class="span" style:left="{span.left}px" style:width="{span.width}px"></span>{/if}
       <span class="middle"></span>
       {#each marks as m, i}
@@ -105,7 +111,7 @@
   .track {
     position: relative;
     flex: none;
-    width: 152px;
+    width: clamp(96px, calc(100% - 174px), 152px);
     height: 24px;
   }
   .track > span {
@@ -125,13 +131,19 @@
     height: 10px;
     background: var(--progress-track);
   }
+  .tick.start {
+    left: 0;
+  }
+  .tick.end {
+    right: 0;
+  }
   .span {
     top: 11px;
     height: 2px;
     background: var(--text-3);
   }
   .middle {
-    left: 75px;
+    left: calc(50% - 1px);
     top: 4px;
     width: 2px;
     height: 16px;
@@ -150,9 +162,12 @@
     line-height: 1;
     font-weight: 600;
   }
+  /* Four slots wide whatever a row holds, so the track is one width down the chart. */
   .posters {
     flex: none;
+    width: 162px;
     display: flex;
+    justify-content: flex-end;
     gap: 6px;
   }
   .thumb {
