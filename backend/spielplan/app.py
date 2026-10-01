@@ -36,6 +36,7 @@ from spielplan.api import curated as curated_api
 from spielplan.api import events as events_api
 from spielplan.api import flywheel as flywheel_api
 from spielplan.api import home as home_api
+from spielplan.api import ladder as ladder_api
 from spielplan.api import library as library_api
 from spielplan.api import llm as llm_api
 from spielplan.api import passkeys as passkeys_api
@@ -200,6 +201,7 @@ def create_app() -> FastAPI:
     app.include_router(state_api.router)
     app.include_router(rate_api.router)
     app.include_router(rank_api.router)
+    app.include_router(ladder_api.router)
     app.include_router(home_api.router)
     app.include_router(taste_api.router)
     app.include_router(tonight_api.router)

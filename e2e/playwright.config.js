@@ -41,7 +41,7 @@ export default defineConfig({
       // Playwright runs the whole desktop pass first on the same stack, so a spec here reads its
       // starting state and puts back what it changed. 15-tonight-group needs two contexts and
       // stays on desktop. `shell` matches 02-shell and 19-phone-shell (decision 267).
-      testMatch: /(shell|library|responsive|13-rank|14-tonight|20-admin-data|21-connectors|22-taste)\.spec\.js/,
+      testMatch: /(shell|library|responsive|11-ladder-setup|13-rank|14-tonight|20-admin-data|21-connectors|22-taste)\.spec\.js/,
     },
   ],
 });

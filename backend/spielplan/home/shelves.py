@@ -17,9 +17,11 @@ from spielplan.db import library
 from spielplan.home import suggest, taste, wish
 from spielplan.home import why as why_mod
 from spielplan.home.why import WhyTerm
+from spielplan.ledger import ladder
 from spielplan.ledger.observations import (
     DEFAULT_TIER_SET,
     LIVE_LABEL_SQL,
+    cutover_sql,
     latest_tier_edit_sql,
     rescale_level,
     tier_set_of,
@@ -166,7 +168,9 @@ class Ctx:
 async def pending_verdicts(
     conn: asyncpg.Connection, *, user_id: int, cap: int = NAMED_TITLES_CAP
 ) -> dict[str, Any] | None:
-    """§6.0's banner: seen titles with no LIVE verdict, in the live Rate session's kinds. Or None.
+    """§6.0's pending row, in the live Rate session's kinds, or None. Before the set-up: seen titles with
+    no LIVE verdict. After it: seen titles never answered ("Rate {n} you watched"), else the films rated
+    before the set-up that wait for their step ("Rate {n} again", decision 550).
 
     Filtered by the session's kinds so the CTA can serve what the copy names (proposal 150).
     """
@@ -175,20 +179,38 @@ async def pending_verdicts(
         "SELECT kinds FROM rate_session WHERE user_id = $1 AND ended_at IS NULL", user_id
     )
     kinds = list(live or KIND_HEADINGS)
+    set_up = await ladder.set_up_at(conn, user_id=user_id)
+    if set_up is None:
+        unanswered = """
+            NOT EXISTS (
+                SELECT 1 FROM verdict v
+                 WHERE v.user_id = $1 AND v.title_id = t.id AND v.superseded_by IS NULL)"""
+    else:
+        # Neither placed since the cut-over nor answered before it, so not one of `rated_before`.
+        unanswered = f"""
+            NOT EXISTS (SELECT 1 FROM tier_edit e WHERE e.user_id = $1 AND e.title_id = t.id)
+            AND NOT EXISTS (
+                SELECT 1 FROM verdict v
+                 WHERE v.user_id = $1 AND v.title_id = t.id AND NOT v.is_reask
+                   AND v.created_at < {cutover_sql()})"""
     rows = await conn.fetch(
-        """
-        SELECT t.id, t.name, t.kind, ut.state_changed_at
+        f"""
+        SELECT t.id, t.name, t.kind
           FROM user_title ut
           JOIN title t ON t.id = ut.title_id
          WHERE ut.user_id = $1 AND ut.state = 'seen' AND t.kind = ANY($2::text[])
-           AND NOT EXISTS (
-                SELECT 1 FROM verdict v
-                 WHERE v.user_id = $1 AND v.title_id = t.id AND v.superseded_by IS NULL)
+           AND {unanswered}
          ORDER BY ut.state_changed_at DESC, t.id DESC
         """,
         user_id,
         kinds,
     )
+    again = not rows and set_up is not None
+    if again:
+        waiting = await ladder.rated_before(conn, user_id=user_id, kinds=kinds)
+        found = await conn.fetch("SELECT id, name, kind FROM title WHERE id = ANY($1::int[])", waiting)
+        by_id = {r["id"]: r for r in found}
+        rows = [by_id[i] for i in waiting]
     if not rows:
         return None
 
@@ -196,7 +218,8 @@ async def pending_verdicts(
     # The queue head is exactly the titles the copy names: two beyond three (proposal 21).
     named_n = total if total <= cap else cap - 1
     named = [dict(r) for r in rows[:named_n]]
-    head = [int(r["id"]) for r in named]
+    # Rate serves the films rated before first, in this order, so "again" pins no head.
+    head = [] if again else [int(r["id"]) for r in named]
     # Repeated `head=`, not comma-joined: `GET /api/rate` takes `head: list[int]`.
     query = "&".join(f"head={i}" for i in head)
     return {
@@ -205,13 +228,13 @@ async def pending_verdicts(
         "head_title_ids": head,
         # One compact row on every viewport (decision 528): the count, then the names.
         "copy": {
-            "headline": f"Rate {total:,} you watched",
+            "headline": f"Rate {total:,} again" if again else f"Rate {total:,} you watched",
             "names": " · ".join(r["name"] for r in named),
         },
         "cta": {
             "label": "Rate",
             # The server builds the link, so it cannot drift from the copy (proposal 150).
-            "route": f"/rate?{query}",
+            "route": f"/rate?{query}" if head else "/rate",
         },
     }
 
@@ -960,13 +983,8 @@ CLAIMING_SHELVES: frozenset[str] = RANKING_SHELVES - {"worth_getting"}
 
 
 async def live_verdict_count(conn: asyncpg.Connection, *, user_id: int) -> int:
-    """How many LIVE verdicts (§4.2), as the banner counts them."""
-    return int(
-        await conn.fetchval(
-            "SELECT count(*) FROM verdict WHERE user_id = $1 AND superseded_by IS NULL", user_id
-        )
-        or 0
-    )
+    """How many titles carry a live verdict (§4.2), since the member's cut-over."""
+    return int(await conn.fetchval(f"SELECT count(*) FROM ({LIVE_LABEL_SQL}) l", user_id) or 0)
 
 
 async def build_shelves(
@@ -1081,11 +1099,12 @@ async def build_home(
     return {
         "kinds": chosen,
         "banner": await pending_verdicts(conn, user_id=user.id),
+        "setup_notice": await setup_notice(conn, user_id=user.id) if bundle_version else None,
         # OWNED titles per kind: what the shelves draw on.
         "library": await library.count_by_kind(conn, owned_only=True),
         "shelves": [s.as_dict() for s in shelves],
         "shelves_total": len(shelves),
-        "degraded": _degraded(bundle_version, verdicts),
+        "degraded": _degraded(bundle_version),
         "suppressed": [s.as_dict() for s in dropped],
         # Decision 512's avoid set, ungated: facts about their own ratings.
         "avoiding": avoided.as_dict() if avoided else None,
@@ -1099,8 +1118,8 @@ async def _beta(conn: asyncpg.Connection, *, user_id: int, kind: str) -> float:
     return float(fit["blend_beta"]) if fit and fit["blend_beta"] is not None else 0.0
 
 
-def _degraded(bundle_version: str | None, verdicts: int) -> dict[str, Any] | None:
-    """Proposal 20's two first-week states: copy and route only, never a second code path."""
+def _degraded(bundle_version: str | None) -> dict[str, Any] | None:
+    """Proposal 20's first-week state: copy and route only, never a second code path."""
     if bundle_version is None:
         return {
             "state": "no_bundle",
@@ -1108,12 +1127,23 @@ def _degraded(bundle_version: str | None, verdicts: int) -> dict[str, Any] | Non
             "why": "Your shelves appear here once an admin imports it",
             "cta": {"label": "Open Movie data", "route": "/admin/movie-data"},
         }
-    if verdicts == 0:
-        return {
-            "state": "zero_verdicts",
-            "headline": "Rate a few titles to get your shelves.",
-            "why": "Your suggestions get about three times more personal between 5 and 100 "
-                   "ratings — aim for 50–100 in your first sitting or two",
-            "cta": {"label": "Rate 50 titles", "route": "/rate"},  # decision 203
-        }
     return None
+
+
+async def setup_notice(conn: asyncpg.Connection, *, user_id: int) -> dict[str, Any] | None:
+    """Home's card before the member's set-up (decision 550); the shelves stay under it."""
+    state = await ladder.state(conn, user_id=user_id)
+    if state.done:
+        return None
+    k = len(await tier_set_of(conn, user_id=user_id, kind="movie"))
+    why = (
+        f"Rating is one tap now, on {'seven' if k == 7 else k} steps of your own. "
+        "The set-up takes about a minute"
+    )
+    if state.earlier_ratings:
+        why += " — until then your shelves keep using your earlier ratings"
+    return {
+        "headline": "Set up your ladder.",
+        "why": why,
+        "cta": {"label": "Set up my ladder", "route": "/rate/setup"},
+    }

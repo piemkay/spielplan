@@ -539,6 +539,75 @@ async def platform_ratings(conn: asyncpg.Connection, title_id: int) -> list[dict
     return [dict(r) for r in rows]
 
 
+# Decision 547: one score per title, IMDb's user score, else TMDB's, else the mean of the others, each
+# over its own scale.
+_PLATFORM_SCORE = """
+    SELECT title_id,
+           COALESCE(
+               max(score / scale) FILTER (WHERE platform = 'imdb' AND metric = 'user_score'),
+               max(score / scale) FILTER (WHERE platform = 'tmdb' AND metric = 'user_score'),
+               avg(score / scale)
+           ) AS score
+      FROM display.platform_rating
+     WHERE score IS NOT NULL AND scale > 0
+     GROUP BY title_id
+"""
+
+# The crowd support at which a film counts as well-known, as the Rate queue's copy reads it.
+WELL_KNOWN_ITEM_N = 1000
+
+
+async def films_by_platform_score(
+    conn: asyncpg.Connection,
+    *,
+    user_id: int,
+    start: float,
+    offset: int,
+    limit: int,
+    exclude: Sequence[int] = (),
+) -> tuple[list[dict[str, Any]], bool]:
+    """Every film in the set-up's order (decision 547), and whether more follow the page: well-known
+    films first, then the rest, each by distance from `start` (0 = the highest score, 1 = the lowest)
+    with ties toward the middle; films with no score last. Rule 3: this orders a pick list and feeds
+    no model."""
+    rows = await conn.fetch(
+        f"""
+        WITH score AS ({_PLATFORM_SCORE}),
+        pool AS (
+            SELECT t.id, t.name, t.original_name, t.original_language, t.year, t.poster_path,
+                   COALESCE(tp.item_n, 0) AS item_n, s.score,
+                   CASE WHEN s.score IS NULL THEN 2
+                        WHEN COALESCE(tp.item_n, 0) >= $6 THEN 0 ELSE 1 END AS band
+              FROM title t
+              LEFT JOIN score s ON s.title_id = t.id
+              LEFT JOIN title_prior tp ON tp.title_id = t.id
+             WHERE t.kind = 'movie'
+        ),
+        ranked AS (
+            SELECT p.*, percent_rank() OVER (PARTITION BY p.band ORDER BY p.score DESC, p.id) AS q
+              FROM pool p
+        )
+        SELECT r.id, r.name, r.original_name, r.original_language, r.year, r.poster_path,
+               COALESCE(ut.state = 'seen', false) AS seen
+          FROM ranked r
+          LEFT JOIN user_title ut ON ut.user_id = $1 AND ut.title_id = r.id
+         WHERE r.id <> ALL($3::int[])
+         ORDER BY r.band,
+                  CASE WHEN r.band < 2 THEN abs(r.q - $2) END,
+                  CASE WHEN r.band < 2 THEN abs(r.q - 0.5) END,
+                  r.item_n DESC, r.id
+         LIMIT $4 OFFSET $5
+        """,
+        user_id,
+        start,
+        [int(t) for t in exclude],
+        limit + 1,
+        offset,
+        WELL_KNOWN_ITEM_N,
+    )
+    return [dict(r) for r in rows[:limit]], len(rows) > limit
+
+
 async def genres(conn: asyncpg.Connection, kinds: Sequence[str]) -> list[str]:
     """Raw labels mapped to decision 473's vocabulary rather than listed raw."""
     rows = await conn.fetch(

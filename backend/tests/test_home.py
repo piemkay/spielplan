@@ -11,7 +11,7 @@ import pytest
 
 from spielplan.home import rail, shelves
 from spielplan.home import why as why_mod
-from spielplan.ledger import model, refit
+from spielplan.ledger import ladder, model, refit
 from spielplan.ledger.hyperparams import DEFAULTS
 from spielplan.rank import read
 
@@ -776,12 +776,14 @@ async def test_the_banner_cta_carries_exactly_the_named_titles_as_the_queue_head
 
 
 async def test_following_the_banners_own_link_serves_the_first_named_title(world):
-    """`head` is a repeated integer parameter; a comma-joined one would be a 422."""
+    """`head` is a repeated integer parameter; a comma-joined one would be a 422. Rate is closed
+    before the set-up, so the queue is asked after it."""
+    await _set_up(world)
     banner = (await world.home())["banner"]
     served = await world.client.get("/api" + banner["cta"]["route"])
     assert served.status_code == 200, served.text
     card = served.json()["card"]
-    assert card is not None and card["type"] == "sweep"
+    assert card is not None
     assert card["title"]["id"] == banner["head_title_ids"][0], (
         "the queue served a different card than the banner named"
     )
@@ -789,14 +791,15 @@ async def test_following_the_banners_own_link_serves_the_first_named_title(world
 
 async def test_the_banner_names_only_the_kinds_the_live_session_can_serve(world):
     """A films-only session must not be named a series the CTA cannot serve."""
+    await _set_up(world)
     both = (await world.home())["banner"]
-    assert both["count"] == 6
+    assert both["count"] == 5
     assert "series" in {c["kind"] for c in both["named"]}, both["named"]
 
     opened = await world.client.post("/api/rate/session", json={"kinds": ["movie"]})
     assert opened.status_code == 200, opened.text
     films = (await world.home())["banner"]
-    assert films["count"] == 3, "the count is the population the CTA can serve, not all of it"
+    assert films["count"] == 2, "the count is the population the CTA can serve, not all of it"
     assert {c["kind"] for c in films["named"]} == {"movie"}
     assert "Home Series" not in films["copy"]["names"], films["copy"]["names"]
 
@@ -817,7 +820,77 @@ async def test_the_banner_names_only_the_kinds_the_live_session_can_serve(world)
         "/api/rate/session", json={"kinds": ["movie", "series"]}
     )
     assert widened.status_code == 200, widened.text
-    assert (await world.home())["banner"]["count"] == 6
+    assert (await world.home())["banner"]["count"] == 5
+
+
+async def _set_up(world, picks=((1012, 6),)):
+    """The admin's set-up, as the finish route writes it."""
+    return await ladder.finish_setup(world.db, user_id=world.patrick, picks=list(picks))
+
+
+# The seen titles with no answer at all; 1021's only verdict, though superseded, is an earlier rating.
+WATCHED_AFTER_SET_UP = {1022, 1023, 1121, 1122, 1123}
+
+
+async def test_after_the_set_up_the_row_counts_the_titles_watched_and_never_answered(world):
+    await _set_up(world)
+    banner = (await world.home())["banner"]
+    assert banner["count"] == len(WATCHED_AFTER_SET_UP)
+    assert banner["copy"]["headline"] == "Rate 5 you watched"
+    assert {c["title_id"] for c in banner["named"]} <= WATCHED_AFTER_SET_UP
+    assert banner["head_title_ids"] == [c["title_id"] for c in banner["named"]]
+
+
+async def test_with_none_just_watched_the_row_asks_for_the_films_rated_before_again(world):
+    await _set_up(world)
+    await world.db.execute(
+        "UPDATE user_title SET state = 'unseen' WHERE user_id = $1 AND title_id = ANY($2::int[])",
+        world.patrick, list(WATCHED_AFTER_SET_UP),
+    )
+    waiting = await ladder.rated_before(world.db, user_id=world.patrick, kinds=("movie", "series"))
+    assert 1012 not in waiting, "the set-up placed it"
+    banner = (await world.home())["banner"]
+    assert banner["count"] == len(waiting) == 20
+    assert banner["copy"]["headline"] == "Rate 20 again"
+    assert [c["title_id"] for c in banner["named"]] == waiting[:2]
+    # Rate serves these first anyway; no old answer travels with them.
+    assert banner["cta"]["route"] == "/rate" and banner["head_title_ids"] == []
+    assert set(banner["named"][0]) == {"title_id", "name", "kind"}
+
+
+async def test_with_nothing_waiting_after_the_set_up_there_is_no_row(world):
+    await _set_up(world)
+    await world.db.execute("UPDATE user_title SET state = 'unseen' WHERE user_id = $1", world.patrick)
+    assert (await world.home())["banner"] is None
+
+
+async def test_before_the_set_up_home_carries_the_notice_over_its_shelves(world):
+    payload = await world.home()
+    assert payload["setup_notice"] == {
+        "headline": "Set up your ladder.",
+        "why": "Rating is one tap now, on seven steps of your own. The set-up takes about a minute"
+               " — until then your shelves keep using your earlier ratings",
+        "cta": {"label": "Set up my ladder", "route": "/rate/setup"},
+    }
+    assert payload["shelves"], "the shelves stay under the notice"
+
+    await _set_up(world)
+    assert (await world.home())["setup_notice"] is None
+
+
+async def test_the_notice_counts_a_custom_sets_steps_and_says_nothing_of_ratings_never_given(world):
+    """Jenny has rated nothing, so her shelves keep nothing; her set has three steps."""
+    await world.db.execute(
+        "INSERT INTO ledger_cutpoints (user_id, kind, tier_set, boundaries) VALUES "
+        "($1, 'movie', ARRAY['Bad', 'Okay', 'Good'], ARRAY[-1.0, 1.0]::double precision[])",
+        world.jenny,
+    )
+    jenny = await world.sign_in_jenny()
+    response = await jenny.get("/api/home", params=[("kind", "movie")])
+    assert response.status_code == 200, response.text
+    assert response.json()["setup_notice"]["why"] == (
+        "Rating is one tap now, on 3 steps of your own. The set-up takes about a minute"
+    )
 
 
 async def test_rendering_home_writes_nothing(world):
@@ -1099,12 +1172,13 @@ def test_the_gate_removes_gated_keys_at_every_depth():
     assert rail.redact(payload, show_model=False) == {"a": 1, "rows": [{"name": "x"}]}
 
 
-async def test_a_profile_with_no_verdicts_gets_the_seed_route_not_a_meaningless_ranking(world):
-    """Zero verdicts: a route into the seed queue; `new_in_library` survives."""
+async def test_a_profile_with_no_verdicts_gets_the_set_up_not_a_meaningless_ranking(world):
+    """Zero verdicts: no score-ordered shelf and no "Rate 50" card, the set-up's notice instead;
+    `new_in_library` survives."""
     await world.db.execute("DELETE FROM verdict WHERE user_id = $1", world.patrick)
     payload = await world.home()
-    assert payload["degraded"]["state"] == "zero_verdicts"
-    assert payload["degraded"]["cta"]["route"] == "/rate"
+    assert payload["degraded"] is None
+    assert payload["setup_notice"]["cta"]["route"] == "/rate/setup"
     assert [s["id"] for s in payload["shelves"]] == ["new_in_library"]
 
 
@@ -1118,6 +1192,7 @@ async def test_a_bundle_less_app_says_so_instead_of_erroring(app, db):
     assert payload["degraded"]["state"] == "no_bundle"
     assert payload["shelves"] == []
     assert payload["banner"] is None
+    assert payload["setup_notice"] is None, "a set-up with no films to pick is a dead end"
 
 
 async def test_the_term_reader_keeps_the_two_tiers_distinguishable(world):
@@ -1455,11 +1530,9 @@ async def test_no_shelf_sentence_carries_a_model_word_with_the_switch_off(world)
                     text = section.get(key) or ""
                     assert not _MODEL_WORDS.search(text), f"{shelf['id']}.{key}: {text!r}"
 
-    await world.db.execute("DELETE FROM verdict WHERE user_id = $1", world.patrick)
-    degraded = (await world.home())["degraded"]
-    assert degraded["state"] == "zero_verdicts"
+    notice = (await world.home())["setup_notice"]
     for key in ("headline", "why"):
-        assert not _MODEL_WORDS.search(degraded[key]), degraded[key]
+        assert not _MODEL_WORDS.search(notice[key]), notice[key]
 
 
 async def test_every_shelf_card_carries_its_original_title_and_language(world):

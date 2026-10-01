@@ -168,13 +168,14 @@ export async function createMember(page, label, { reuse = false } = {}) {
     if (existing) {
       const reset = await page.request.post(`/api/admin/users/${existing.id}/reset-password`);
       expect(reset.ok(), 'reissuing a member one-time password (§6.6)').toBeTruthy();
-      return { name: label, otp: (await reset.json()).one_time_password, password };
+      return { id: existing.id, name: label, otp: (await reset.json()).one_time_password, password };
     }
   }
   const name = reuse ? label : `${label}-${Date.now()}-${Math.floor(Math.random() * 1000)}`;
   const res = await page.request.post('/api/admin/users', { data: { name, role: 'member' } });
   expect(res.status(), 'the admin adds a household member (§6.6)').toBe(201);
-  return { name, otp: (await res.json()).one_time_password, password };
+  const created = await res.json();
+  return { id: created.id, name, otp: created.one_time_password, password };
 }
 
 export async function signInAsMember(page, member) {
@@ -206,40 +207,72 @@ export async function loginAsMember(page, member) {
 }
 
 /**
- * Give this session's member a film ledger through §6.1's routes: Tonight needs more than three
- * candidates, or the round has no shortlist boundary.
+ * The set-up's picks (§6.1) by the fixture bundle's ids: Heat (1) on "Loved it" and Prisoners (2) on
+ * "It was fine". Both run long, so Home's school-night shelf keeps its three short films unseen,
+ * and four films are left for Rate: Paddington 2, Chungking Express, its CJK twin and Tampopo.
  */
-export async function seedFilmLedger(page, rounds = 8) {
-  await page.request.post('/api/rate/session', {
-    data: { mode: 'sweep', kinds: ['movie'], restart: true }
+export const DEFAULT_SETUP_PICKS = [
+  { title_id: 1, tier: 5 },
+  { title_id: 2, tier: 3 }
+];
+
+/** Finish this session's member's set-up over HTTP; a member already set up counts as done. */
+export async function setUpLadder(request, picks = DEFAULT_SETUP_PICKS) {
+  const res = await request.post('/api/ladder/setup/finish', {
+    data: { picks },
+    failOnStatusCode: false
   });
-  for (let i = 0; i < rounds; i++) {
-    const { card } = await (await page.request.get('/api/rate')).json();
-    // Drained is the one legitimate exit: a `reuse`d account may have spent its sweep already.
-    if (!card) break;
-    // Sweep mode never serves another card type; one here is the route breaking §6.1.
-    expect(card.type, `a sweep session was served a ${card.type} card (§6.1)`).toBe('sweep');
-    const answered = await page.request.post('/api/rate/verdict', {
-      data: { card_token: card.token, value: i % 3 },
-      failOnStatusCode: false
-    });
-    // Loud: a refused write must not surface later as an empty pool.
-    expect(answered.ok(), `seeding a verdict (§6.1): ${answered.status()}`).toBeTruthy();
-  }
-  // The ledger's state, not this run's writes (a `reuse`d account wrote nothing). Read from the
-  // live labels, which the verdict writes; the board is fitted later by the worker.
-  const seeded = await page.request.get('/api/rate');
-  expect(seeded.ok(), 'reading the seeded ledger back (§6.1)').toBeTruthy();
-  const rated = (await seeded.json()).class_balance.total;
-  await page.request.delete('/api/rate/session');
-  expect(rated, 'this member has no rated films, so §6.2 has nothing to build a pool from')
-    .toBeGreaterThan(0);
-  return rated;
+  expect(
+    res.ok() || res.status() === 409,
+    `finishing the set-up (§6.1): ${res.status()} ${await res.text()}`
+  ).toBeTruthy();
 }
 
 /**
- * Wait until §6.3's board holds this member's ratings. A verdict only queues the full fit; the
- * worker's `tier-set-refit` job (`every=60`) writes the board.
+ * Place what Rate serves of one kind, one tier per card in order (0 = the lowest step), until the
+ * tiers or the queue run out. Rate opens only after the set-up. Returns how many were placed.
+ */
+export async function placeThroughRate(request, kind, tiers) {
+  const opened = await request.post('/api/rate/session', {
+    data: { kinds: [kind], restart: true },
+    failOnStatusCode: false
+  });
+  expect(opened.ok(), `opening Rate for ${kind} (§6.1): ${opened.status()}`).toBeTruthy();
+  let placed = 0;
+  for (const tier of tiers) {
+    const { card } = await (await request.get('/api/rate')).json();
+    // Drained is the one legitimate exit: a `reuse`d account may have placed everything already.
+    if (!card) break;
+    expect(card.kind, `a ${kind} session served a ${card.kind} card (§6.1)`).toBe(kind);
+    const answered = await request.post('/api/rate/place', {
+      data: { card_token: card.token, tier },
+      failOnStatusCode: false
+    });
+    // Loud: a refused write must not surface later as an empty pool.
+    expect(answered.ok(), `placing ${card.title?.name} (§6.1): ${answered.status()}`).toBeTruthy();
+    placed += 1;
+  }
+  // Closes the live session only, so a later spec does not resume a half-filled block.
+  await request.delete('/api/rate/session');
+  return placed;
+}
+
+/**
+ * Give this session's member a film ladder: the set-up, then what Rate serves, across the steps.
+ * Tonight needs more than three candidates, or the round has no shortlist boundary.
+ */
+export async function seedFilmLedger(page, rounds = 8) {
+  await setUpLadder(page.request);
+  return placeThroughRate(
+    page.request,
+    'movie',
+    Array.from({ length: rounds }, (_, i) => [5, 3, 1][i % 3])
+  );
+}
+
+/**
+ * Wait until §6.3's board holds this member's placements. A placement only queues the full fit;
+ * the worker's `tier-set-refit` job (`every=60`) writes the board.
  */
 export async function waitForBoard(page, { kind = 'movie', atLeast = 1 } = {}) {
   // `fitting` (decision 209) tells "the worker owes a fit" from "nothing asked for one", which
@@ -263,9 +296,9 @@ export async function waitForBoard(page, { kind = 'movie', atLeast = 1 } = {}) {
         {
           // Two 60 s ticks: one missed plus a spare.
           message:
-            'no board after 120s: §6.3\'s board is every row of `ledger_state`, which a verdict ' +
-            'no longer writes - it queues the full refit and the tier-set-refit sweep runs it ' +
-            'every 60 s (worker.py; M4.10 finding 9)',
+            'no board after 120s: §6.3\'s board is every row of `ledger_state`, which a placement ' +
+            'does not write - the set-up and each placement queue the full refit and the ' +
+            'tier-set-refit sweep runs it every 60 s (worker.py; M4.10 finding 9)',
           timeout: 120_000,
           intervals: [2000]
         }
@@ -281,8 +314,8 @@ export async function waitForBoard(page, { kind = 'movie', atLeast = 1 } = {}) {
         : owed === false
           ? 'no fit is owed for this account (`fitting: false`), so NOTHING will arrive however ' +
             'long this waits. Either the seed wrote no observation at all - ' +
-            '`createMember(..., {reuse: true})` hands a re-run the account it seeded last time, ' +
-            'whose sweep pool is drained, and `_queue_full_refit` is only reached by a write - or ' +
+            '`createMember(..., {reuse: true})` hands a re-run the account it set up last time, ' +
+            'whose Rate queue is drained, and `_queue_full_refit` is only reached by a write - or ' +
             'a fit was attempted and raised, and `_tier_set_refits` clears ' +
             '`refit_requested_at` either way (M4.10 finding 6), so only §5.3\'s nightly pass will ' +
             'fit it now. Check the worker log for `tier-set refit failed`'

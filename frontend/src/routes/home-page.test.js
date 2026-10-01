@@ -287,6 +287,55 @@ describe('the top of Home (decision 528)', () => {
   });
 });
 
+describe('before the set-up (decision 550)', () => {
+  const notice = {
+    headline: 'Set up your ladder.',
+    why: 'Rating is one tap now, on seven steps of your own. The set-up takes about a minute',
+    cta: { label: 'Set up my ladder', route: '/rate/setup' }
+  };
+  const section = {
+    kind: 'movie',
+    heading: 'Films',
+    title: 'Your top picks',
+    why: 'For you',
+    items: [{ title_id: 1, kind: 'movie', name: 'Heat', seen: false }]
+  };
+
+  it('puts the notice over the shelves, with the one way into the set-up', async () => {
+    backend({
+      home: (kinds) => ({
+        kinds,
+        library: {},
+        shelves: [{ id: 'top_of_ledger', sections: [section] }],
+        shelves_total: 1,
+        setup_notice: notice
+      })
+    });
+    await openHome();
+    const card = $('[data-testid="home-setup-notice"]');
+    expect(card.querySelector('h2').textContent).toBe('Set up your ladder.');
+    expect(card.querySelector('.why').textContent).toBe(notice.why);
+    const link = card.querySelector('a');
+    expect(link.getAttribute('href')).toBe('/rate/setup');
+    expect(link.textContent).toBe('Set up my ladder');
+    expect($('[data-testid="shelf-title"]').textContent).toBe('Your top picks');
+  });
+
+  it('asks for no ratings in an empty shelf list while the notice stands, and is gone after it', async () => {
+    let payload = { library: {}, shelves: [], shelves_total: 0, setup_notice: notice };
+    backend({ home: (kinds) => ({ kinds, ...payload }) });
+    await openHome();
+    expect($('[data-testid="shelves-empty"]'), 'Rate is closed until the set-up').toBeNull();
+
+    unmount(app);
+    payload = { library: {}, shelves: [], shelves_total: 0, setup_notice: null };
+    Object.assign(homeKept, { user: null, payload: null });
+    await openHome();
+    expect($('[data-testid="home-setup-notice"]')).toBeNull();
+    expect($('[data-testid="shelves-empty"]')).not.toBeNull();
+  });
+});
+
 describe('a filtered grid is read in the order the server says it used', () => {
   it('offers For you and Newest with the echoed order pressed, and asks for the other on a tap', async () => {
     const seen = backend({
