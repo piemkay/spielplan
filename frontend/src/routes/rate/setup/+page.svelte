@@ -119,7 +119,8 @@
     <div class="scroll" data-testid="setup-done">
       <h2 class="large-title ready">Your ladder is ready</h2>
       <p class="lede">{readyLine(done.placed)}</p>
-      <ol class="rungs" aria-label="Your ladder">
+      <!-- role: WebKit drops a list's role once its markers are gone. -->
+      <ol class="rungs" role="list" aria-label="Your ladder">
         {#each done.tiers as tier (tier.tier)}
           <li class="rung" class:empty={!tier.count} data-tier={tier.tier}>
             <span class="rung-word">{tier.word}</span>
@@ -194,7 +195,10 @@
               {#each setup.hits as film (film.id)}
                 <button class="cell" data-testid="setup-hit" aria-label={hitLabel(film)} aria-describedby={film.seen ? 'setup-watched' : undefined} onclick={() => choose(film)}>
                   {@render poster(film, picked(film), stepOf(film.id) >= 0)}
-                  <span class="name">{name(film)}</span>
+                  <span class="lines">
+                    <span class="name">{name(film)}</span>
+                    {#if film.year}<span class="name year">{film.year}</span>{/if}
+                  </span>
                 </button>
               {/each}
             </div>
@@ -454,6 +458,15 @@
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
+  }
+  .lines {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+  }
+  .year {
+    color: var(--text-3);
+    font-variant-numeric: tabular-nums;
   }
   .cell-skeleton {
     aspect-ratio: 2 / 3;

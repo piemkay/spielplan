@@ -165,6 +165,19 @@ describe('the draft', () => {
     expect(setup.status).toBe('set');
   });
 
+  it('keeps the picks and says why when the server refuses for another reason', async () => {
+    replies['/api/ladder/setup/finish'] = {
+      status: 409,
+      body: { detail: { reason: 'bundle_swapped', message: 'Restart needed.' } }
+    };
+    await start();
+    toggle(film(1));
+    await finish();
+    expect(setup.status).toBe('steps');
+    expect(setup.error).toBe('Restart needed.');
+    expect(total()).toBe(1);
+  });
+
   it('opens on nothing for a member already set up', async () => {
     replies['/api/ladder/setup'] = { body: { done: true, earlier_ratings: 0, steps: STEPS } };
     await start();

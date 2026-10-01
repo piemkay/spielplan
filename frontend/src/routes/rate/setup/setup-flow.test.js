@@ -131,6 +131,24 @@ describe('the set-up, step by step', () => {
     expect($('setup-undo').hasAttribute('disabled')).toBe(false);
   });
 
+  it('finds a film by name, with its year, and a hit joins this step first and picked', async () => {
+    replies['/api/titles'] = () => ({
+      items: [{ id: 7, kind: 'movie', name: 'Prisoners', year: 2013, poster_path: null, seen_state: 'unseen' }]
+    });
+    await open();
+    const field = /** @type {HTMLInputElement} */ ($('setup-search'));
+    field.value = 'Pris';
+    field.dispatchEvent(new Event('input', { bubbles: true }));
+    await new Promise((resolve) => setTimeout(resolve, 250));
+    await settle();
+    const found = $('setup-hit');
+    expect(found.getAttribute('aria-label')).toBe('Prisoners, 2013');
+    expect(found.textContent).toContain('2013');
+    await click(found);
+    expect(all('setup-film')[0].getAttribute('aria-label')).toBe('Prisoners');
+    expect(all('setup-film')[0].getAttribute('aria-pressed')).toBe('true');
+  });
+
   it('holds Finish until one film is on the ladder', async () => {
     await open();
     await click($('setup-next'));

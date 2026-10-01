@@ -177,7 +177,8 @@ export async function finish() {
     // Home's kept payload still carries the notice.
     homeKept.payload = null;
   } catch (err) {
-    if (err.status === 409) setup.status = 'set';
+    // A 409 also answers a swapped or broken bundle; only this one means the ladder exists.
+    if (err.detail?.reason === 'already_set_up') setup.status = 'set';
     else setup.error = err.message;
   } finally {
     setup.busy = false;
