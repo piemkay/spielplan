@@ -1284,5 +1284,12 @@
     .strip .person {
       width: 96px;
     }
+    .shares .strip {
+      gap: 16px;
+      scroll-padding: 0;
+    }
+    .share {
+      width: 148px;
+    }
   }
 </style>
