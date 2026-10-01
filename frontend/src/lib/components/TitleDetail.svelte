@@ -2,6 +2,7 @@
   // A sheet (decision 527) that leads with what a member opens it for; the rest of §6.0's card
   // (credits, scores, both DNA tiers) sits behind one disclosure. Model numbers arrive only with
   // Show the model on.
+  import { goto } from '$app/navigation';
   import { api, get, post } from '$lib/api.js';
   import { facetColour, modelGate } from '$lib/home.svelte.js';
   import { seed as seedPlace } from '$lib/place.svelte.js';
@@ -25,9 +26,9 @@
     sourceLabel,
     syncNote as syncNoteFor
   } from '$lib/titleCard.js';
-  import ActionSheet from '$lib/components/ActionSheet.svelte';
   import Headshot from '$lib/components/Headshot.svelte';
   import Icon from '$lib/components/Icon.svelte';
+  import LadderSheet from '$lib/components/LadderSheet.svelte';
   import RatePoster from '$lib/components/RatePoster.svelte';
   import Sheet from '$lib/components/Sheet.svelte';
   import TitleDetail from './TitleDetail.svelte';
@@ -169,20 +170,34 @@
     }
   }
 
-  // §6.3's two rows; `tier` is null until the title is on the person's own board.
-  let choosing = $state(false);
+  // §6.3's two rows; `tier` is null until the title is on the person's own board, and before the
+  // set-up the row only leads to Rate (decision 550).
+  let laddering = $state(false);
   const ranking = $derived(data?.ranking ?? null);
-  const placedTier = $derived(ranking?.tiers.find((tier) => tier.index === ranking.tier) ?? null);
+  const setUp = $derived(ranking?.set_up !== false);
+  const placedTier = $derived(
+    (setUp && ranking?.tiers.find((tier) => tier.index === ranking.tier)) || null
+  );
+  // A custom set's label is its own word, said once.
+  const tierWord = $derived(placedTier && placedTier.word !== placedTier.label ? placedTier.word : '');
+  const rowWords = $derived(
+    !setUp
+      ? 'set up your ladder first'
+      : placedTier
+        ? [placedTier.label, tierWord].filter(Boolean).join(', ')
+        : 'not placed yet'
+  );
   // About log2(n) either-or questions place a title inside its tier.
   const questions = $derived(placedTier ? Math.ceil(Math.log2(placedTier.count)) : 0);
-  const moveOptions = $derived(
-    (ranking?.tiers ?? []).map((tier) => ({
-      label: tier.label,
-      detail: tier.verdict || undefined,
-      checked: tier.index === ranking.tier,
-      onSelect: () => chooseTier(tier)
-    }))
-  );
+
+  function openLadder(close) {
+    if (setUp) {
+      laddering = true;
+      return;
+    }
+    afterClose = () => goto('/rate');
+    close();
+  }
 
   // A tier implies seen, and on an unrated title answers the verdict it stands for (decision 531).
   async function chooseTier(tier) {
@@ -340,8 +355,8 @@
                   <div class="pair">
                     <button
                       class="btn-secondary"
-                      aria-haspopup="dialog"
-                      onclick={() => (choosing = true)}
+                      aria-haspopup={setUp ? 'dialog' : undefined}
+                      onclick={() => openLadder(close)}
                       data-testid="title-seen-rate">Seen it, rate it</button
                     >
                     <button
@@ -372,19 +387,17 @@
                 <div class="list-group ranking">
                   <button
                     class="list-row"
-                    aria-haspopup="dialog"
-                    aria-label="In your ranking: {placedTier
-                      ? `${placedTier.label}${placedTier.verdict ? `, ${placedTier.verdict}` : ''}`
-                      : 'not placed yet'}"
-                    onclick={() => (choosing = true)}
+                    aria-haspopup={setUp ? 'dialog' : undefined}
+                    aria-label="In your ranking: {rowWords}"
+                    onclick={() => openLadder(close)}
                     data-testid="rank-card-tier"
                   >
                     <span class="grow">In your ranking</span>
                     {#if placedTier}
                       <span class="letter">{placedTier.label}</span>
-                      {#if placedTier.verdict}<span class="footnote">{placedTier.verdict}</span>{/if}
+                      {#if tierWord}<span class="footnote">{tierWord}</span>{/if}
                     {:else}
-                      <span class="footnote">Not placed yet</span>
+                      <span class="footnote">{setUp ? 'Not placed yet' : 'Set up your ladder first'}</span>
                     {/if}
                     {@render icon('chevron', 16)}
                   </button>
@@ -644,13 +657,16 @@
   {/snippet}
 </Sheet>
 
-<!-- After the card, so the tier sheet opens over it. -->
-<ActionSheet
-  open={choosing}
-  title={data ? `${data.ranking?.tier == null ? 'Rank' : 'Move'} ${data.title.name}` : ''}
-  options={moveOptions}
-  onClose={() => (choosing = false)}
-/>
+<!-- After the card, so the ladder opens over it. -->
+{#if laddering && data?.ranking}
+  <LadderSheet
+    title={data.title}
+    tiers={data.ranking.tiers}
+    current={data.ranking.tier}
+    onPlace={chooseTier}
+    onClose={() => (laddering = false)}
+  />
+{/if}
 
 <!-- Outside the panel, whose transform would hold a fixed child. Back closes it alone; a person
      closes this card too before the library filters. -->

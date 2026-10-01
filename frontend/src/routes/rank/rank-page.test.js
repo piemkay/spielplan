@@ -307,40 +307,82 @@ describe('Needs a look (§6.3)', () => {
   });
 });
 
-describe('the title card opened from Rank (decision 528)', () => {
-  it('shows where the title sits, and its tier sheet moves it with no neighbour', async () => {
+describe('the title card opened from Rank (decisions 528 and 545)', () => {
+  const WORDS = {
+    S: 'All-time favourite', 'A+': 'Loved it', A: 'Liked it', B: 'It was fine',
+    C: 'Not really for me', D: "Didn't like it", F: 'Hated it'
+  };
+  const reply = (payload) =>
+    Promise.resolve({ ok: true, status: 200, headers: { get: () => null }, text: async () => JSON.stringify(payload) });
+  // The card's own payload (contract C10: words and `set_up`), and the sheet's shelves.
+  function card(id) {
+    const { tiers } = board(boardOver);
+    const on = tiers.flatMap((t) => t.entries).find((e) => e.title_id === id);
+    return {
+      title: {
+        id, name: on?.name ?? 'Drive', kind: 'movie', year: 2011, runtime_min: 100, seen_state: 'seen',
+        original_name: null, overview: null, trailer_key: null
+      },
+      credits: [],
+      platform_ratings: { items: [], note: 'display-only' },
+      dna: { extracted: [], projected: [] },
+      shares: [],
+      ranking: {
+        set_up: true,
+        tier: on?.tier ?? null,
+        tension: on?.tension ?? null,
+        tiers: tiers.map(({ index, label, count, entries }) => ({
+          index, label, word: WORDS[label], count: count ?? entries.length, entries: []
+        }))
+      },
+      actions: { play_on_jellyfin: null }
+    };
+  }
+  const shelves = () => ({
+    title_id: 1,
+    kind: 'movie',
+    current: { tier: 6, word: WORDS.S },
+    shelves: board(boardOver).tiers.map((t) => ({ tier: t.index, word: WORDS[t.label], count: 0, films: [] }))
+  });
+
+  beforeEach(() => {
+    fetchMock.mockImplementation((url, init) => {
+      if (url.includes('/api/rate/shelves')) return reply(shelves());
+      const titled = url.match(/\/api\/titles\/(\d+)/);
+      return titled ? reply(card(Number(titled[1]))) : route(url, init);
+    });
+  });
+
+  it('shows where the title sits, and its ladder sheet moves it with no neighbour', async () => {
     await open();
     $('rank-open-1').click();
     await settle();
     const row = $('rank-card-tier');
-    expect(row.getAttribute('aria-label')).toBe('In your ranking: S, Liked');
+    expect(row.getAttribute('aria-label')).toBe('In your ranking: S, All-time favourite');
     // Alone in its tier, it has nothing to be placed against.
     expect($('rank-card-place')).toBeNull();
     expect($('rank-card-tension')).toBeNull();
 
     row.click();
     await settle();
-    const sheet = dialog('Move Heat');
-    const options = [...sheet.querySelectorAll('[role="menuitem"]')];
-    expect(options.map((o) => o.querySelector('.label').textContent)).toEqual([
-      'S', 'A+', 'A', 'B', 'C', 'D', 'F'
-    ]);
-    expect(options[0].textContent).toContain('Liked');
-    expect(options[0].getAttribute('aria-current')).toBe('true');
-    [...sheet.querySelectorAll('button')].find((b) => b.textContent === 'Cancel').click();
+    const shelf = (tier) => $('ladder-sheet').querySelector(`[data-testid="ladder-shelf"][data-tier="${tier}"]`);
+    expect([...$('ladder-sheet').querySelectorAll('.word')].map((w) => w.textContent)).toEqual(Object.values(WORDS));
+    expect(shelf(6).getAttribute('aria-current')).toBe('true');
+    $('ladder-done').click();
     await settle();
-    expect(dialog('Move Heat')).toBeNull();
+    expect($('ladder-sheet')).toBeNull();
     expect(posts).toEqual([]);
 
     $('rank-card-tier').click();
     await settle();
-    [...dialog('Move Heat').querySelectorAll('[role="menuitem"]')][2].click();
+    shelf(4).click();
     await settle();
     expect(posts).toHaveLength(1);
     expect(posts[0].url).toContain('/api/rank/drop');
     expect(posts[0].body).toEqual({ title_id: 1, tier: 4, above: null, below: null, via: 'explicit' });
     expect(toast.message).toBe('Heat moved to A');
-    expect($('rank-card-tier').getAttribute('aria-label')).toBe('In your ranking: A, Liked');
+    expect($('ladder-sheet')).toBeNull();
+    expect($('rank-card-tier').getAttribute('aria-label')).toBe('In your ranking: A, Liked it');
   });
 
   it('offers Place with questions, about log2(n) of them', async () => {
