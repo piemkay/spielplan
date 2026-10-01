@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import random
+import re
 
 import httpx
 import numpy as np
@@ -32,6 +33,9 @@ def fixture_embeddings(title_ids):
 
 # The first number `queue.draw` reads, per arm: `SHARES` walks 0.70 / 0.90 / 1.00 cumulatively.
 BOUNDARY_ROLL, EXPLORATION_ROLL, HOLDOUT_ROLL = 0.10, 0.80, 0.95
+
+# Decision 550's reason: the steps, lower first, and at most one shared genre.
+REASON = re.compile(r"(Both in \S+|One in \S+, one in \S+)( · both [a-z ]+ (films|series))?")
 
 
 class _Armed(random.Random):
@@ -112,6 +116,8 @@ async def ranked(db, app):
     )
     assert created.status_code == 201
     user_id = (await client.get("/api/auth/me")).json()["id"]
+    # Set up before the answers, so every one of them reads as since the cut-over.
+    await db.execute("INSERT INTO ladder_setup (user_id) VALUES ($1)", user_id)
 
     for title_id, value in ((1, 2), (2, 2), (3, 1), (4, 1), (5, 0), (6, 0)):
         await observations.record_verdict(db, user_id=user_id, title_id=title_id, value=value)
@@ -306,6 +312,7 @@ async def test_one_persons_sealed_pair_cannot_be_answered_by_another(db, app, ra
     await other.post(
         "/api/auth/password", json={"current_password": otp, "new_password": "jennys-password"}
     )
+    await db.execute("INSERT INTO ladder_setup (user_id) SELECT id FROM app_user WHERE name = 'jenny'")
 
     refused = await other.post(
         "/api/rank/queue/answer", json={"pair": served["token"], "outcome": "A"}
@@ -657,15 +664,15 @@ async def test_the_queue_ships_no_arm_to_a_member_who_cannot_see_the_model(
         for _key, value in _walk(off):
             if isinstance(value, str):
                 assert "held out" not in value and "tunes the model" not in value, value
-        assert off["pair"]["reason"] == rank_api._QUEUE_WHY
+        assert REASON.fullmatch(off["pair"]["reason"]), off["pair"]["reason"]
 
     await client.post("/api/auth/preferences", json={"show_model": True})
     _arm(monkeypatch, HOLDOUT_ROLL)
     on = (await client.get("/api/rank/queue?kind=movie")).json()
     assert on["pair"]["model"]["arm"] == queue.ARM_HOLDOUT
     assert "held out" in on["pair"]["model"]["reason"]
-    assert on["pair"]["reason"] == rank_api._QUEUE_WHY, (
-        "the user-facing why-line is the same sentence on every arm"
+    assert REASON.fullmatch(on["pair"]["reason"]), (
+        "the user-facing why-line takes the same form on every arm"
     )
 
 
@@ -1003,3 +1010,152 @@ async def test_a_tier_pick_and_the_undo_that_takes_it_back_are_recorded_as_such(
     )
     assert other_title.status_code == 422
     assert await db.fetchval("SELECT count(*) FROM tier_edit WHERE user_id = $1", user_id) == 3
+
+
+async def _member(db, app, client, name: str = "jenny") -> httpx.AsyncClient:
+    """A second member, signed in, with no set-up."""
+    otp = (
+        await client.post("/api/admin/users", json={"name": name, "role": "member"})
+    ).json()["one_time_password"]
+    other = app()
+    await other.post("/api/auth/login", json={"name": name, "password": otp})
+    await other.post(
+        "/api/auth/password", json={"current_password": otp, "new_password": f"{name}s-password"}
+    )
+    return other
+
+
+async def test_every_rank_write_waits_for_the_set_up_and_the_board_stays_readable(db, app, ranked):
+    """Decision 550: before the member's set-up the board is read-only, and a write refuses before
+    it reads a token or a title."""
+    client, _user_id = ranked
+    assert (await client.get("/api/rank?kind=movie")).json()["set_up"] is True
+    other = await _member(db, app, client)
+
+    board = await other.get("/api/rank?kind=movie")
+    assert board.status_code == 200, board.text
+    assert board.json()["set_up"] is False
+    counts = (
+        "SELECT (SELECT count(*) FROM tier_edit), (SELECT count(*) FROM duel), "
+        "(SELECT count(*) FROM user_title WHERE state = 'unseen')"
+    )
+    before = await db.fetchrow(counts)
+    for method, path, body in (
+        ("post", "/api/rank/drop?kind=movie", {"title_id": 1, "tier": 6, "via": "explicit"}),
+        ("get", "/api/rank/queue?kind=movie", None),
+        ("post", "/api/rank/queue/answer", {"pair": "x", "outcome": "A"}),
+        ("post", "/api/rank/place", {"title_id": 1, "kind": "movie"}),
+        ("post", "/api/rank/place/answer", {"token": "x", "outcome": "A"}),
+        ("post", "/api/rank/place/skip", {"token": "x"}),
+    ):
+        refused = await getattr(other, method)(path, **({"json": body} if body else {}))
+        assert refused.status_code == 409, f"{method.upper()} {path}: {refused.text}"
+        assert refused.json()["detail"]["reason"] == "not_set_up"
+    assert await db.fetchrow(counts) == before
+
+
+async def test_needs_a_look_reads_guessing_until_thirty_comparisons_and_counts_only_behind_the_gate(
+    db, ranked
+):
+    """Decision 550's 30, counted since the set-up; the number itself is a model number."""
+    client, user_id = ranked
+    board = (await client.get("/api/rank?kind=movie")).json()
+    assert board["guessing"] is True and "model" not in board
+
+    pairs = [(a, b) for a in range(1, 7) for b in range(a + 1, 7)]
+    for i in range(read.GUESS_UNTIL):
+        a, b = pairs[i % len(pairs)]
+        await observations.record_duel(
+            db, user_id=user_id, title_a=a, title_b=b, outcome="A",
+            context="tier_queue" if i % 2 else "tier_place", decisive=False, hp=DEFAULTS,
+        )
+        if i == read.GUESS_UNTIL - 2:
+            assert (await client.get("/api/rank?kind=movie")).json()["guessing"] is True
+    assert (await client.get("/api/rank?kind=movie")).json()["guessing"] is False
+
+    await client.post("/api/auth/preferences", json={"show_model": True})
+    on = (await client.get("/api/rank?kind=movie")).json()
+    assert on["model"]["comparisons"] == read.GUESS_UNTIL
+
+
+async def test_a_pairs_reason_names_its_steps_and_the_rarest_genre_the_two_share(db, ranked, monkeypatch):
+    """Decision 550: the board's own steps, lower first, and one shared genre, on every arm."""
+    client, _user_id = ranked
+    await db.executemany(
+        "INSERT INTO title_genre (title_id, genre, source) VALUES ($1, $2, 'tmdb')",
+        [(t, "Drama") for t in range(1, 9)] + [(1, "crime"), (2, "Crime"), (5, "Crime")],
+    )
+    for roll in (BOUNDARY_ROLL, EXPLORATION_ROLL, HOLDOUT_ROLL):
+        _arm(monkeypatch, roll)
+        pair = (await client.get("/api/rank/queue?kind=movie")).json()["pair"]
+        board = (await client.get("/api/rank?kind=movie")).json()
+        index = {e["title_id"]: t["index"] for t in board["tiers"] for e in t["entries"]}
+        low, high = sorted((index[pair["title_a"]], index[pair["title_b"]]))
+        labels = board["tier_set"]
+        steps = (
+            f"Both in {labels[low]}" if low == high else f"One in {labels[low]}, one in {labels[high]}"
+        )
+        genre = "crime" if {pair["title_a"], pair["title_b"]} <= {1, 2, 5} else "drama"
+        assert pair["reason"] == f"{steps} · both {genre} films", (roll, pair)
+
+
+def _reask_roll(monkeypatch, roll: float) -> None:
+    """The re-ask coin alone, forced; the arm's roll stays the route's own."""
+    real = rank_api._queue_rng
+    monkeypatch.setattr(
+        rank_api, "_queue_rng",
+        lambda user_id, kind, answered, stream="": (
+            _Armed(roll) if stream else real(user_id, kind, answered)
+        ),
+    )
+
+
+async def _answered_row(client, db, user_id: int, token: str):
+    answered = await client.post("/api/rank/queue/answer", json={"pair": token, "outcome": "A"})
+    assert answered.status_code == 200, answered.text
+    row = await db.fetchrow(
+        "SELECT title_a, title_b, selection, is_reask, reask_of FROM duel WHERE user_id = $1 "
+        "ORDER BY id DESC LIMIT 1",
+        user_id,
+    )
+    return answered.json(), row
+
+
+async def test_a_sharpen_pair_answered_three_days_ago_comes_back_as_a_silent_re_ask(
+    db, ranked, monkeypatch
+):
+    """§13(b): sealed like any pair, the same reason form, recorded as a re-ask no fit reads, and not
+    asked again within its cooldown."""
+    client, user_id = ranked
+    await client.post("/api/auth/preferences", json={"show_model": True})
+    await db.execute(
+        "UPDATE ladder_setup SET finished_at = now() - interval '10 days' WHERE user_id = $1", user_id
+    )
+    first = await observations.record_duel(
+        db, user_id=user_id, title_a=3, title_b=6, outcome="B", context="tier_queue",
+        selection=queue.ARM_BOUNDARY, decisive=False, hp=DEFAULTS,
+    )
+    backdate = "UPDATE duel SET created_at = now() - make_interval(days => $2) WHERE id = $1"
+    _reask_roll(monkeypatch, 0.05)
+
+    await db.execute(backdate, first.row_id, 2)
+    young = (await client.get("/api/rank/queue?kind=movie")).json()["pair"]
+    _body, row = await _answered_row(client, db, user_id, young["token"])
+    assert not row["is_reask"], "a pair answered two days ago is not old enough to ask again"
+
+    await db.execute(backdate, first.row_id, 4)
+    again = (await client.get("/api/rank/queue?kind=movie")).json()["pair"]
+    assert (again["title_a"], again["title_b"]) == (3, 6), "posed in the order it was first asked"
+    assert REASON.fullmatch(again["reason"]), again["reason"]
+    assert not {"reask_of", "r"} & {key for key, _ in _walk(again)}, again
+    body, row = await _answered_row(client, db, user_id, again["token"])
+    assert dict(row) == {
+        "title_a": 3, "title_b": 6, "selection": queue.ARM_REASK, "is_reask": True,
+        "reask_of": first.row_id,
+    }
+    assert body["ledger"] is None, "a re-ask is never fitted, so nothing refits"
+    assert body["log"][0].endswith("asked again, held out of the fit")
+
+    later = (await client.get("/api/rank/queue?kind=movie")).json()["pair"]
+    _body, row = await _answered_row(client, db, user_id, later["token"])
+    assert not row["is_reask"], "re-asked once, the pair rests for its cooldown"

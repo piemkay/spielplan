@@ -54,6 +54,33 @@ def test_a_neighbour_not_seen_hands_the_question_to_the_one_beside_it():
     assert place.Search(0, 0, 1, 2, skipped=(12,)).probe(others) is None
 
 
+def test_the_probe_weighs_rest_then_genre_then_comparisons_among_the_three_nearest_the_middle():
+    """Decision 538: the middle is taken loosely, and never further than its three nearest."""
+    others = (11, 12, 13, 14, 15, 16, 17)
+    search = place.Search(title_id=0, tier=0, low=0, high=len(others))
+    assert others[search.probe(others)] == 14
+    counts = {14: 5, 13: 2, 15: 1, 11: 0}
+    assert others[search.probe(others, comparisons=counts)] == 15
+    crime = {0: ("Crime",), 13: ("Crime",), 11: ("Crime",)}
+    assert others[search.probe(others, genres=crime, comparisons=counts)] == 13
+    assert others[search.probe(others, recent=frozenset({13}), genres=crime, comparisons=counts)] == 15
+    assert search.probe(others, recent=frozenset(others)) == 3, "with every title resting, it still asks"
+
+
+def test_a_loosely_taken_middle_still_places_in_about_log2_questions():
+    """Comparison counts that pull every probe off the middle cost a question or two, not a walk."""
+    for n in (5, 16, 149):
+        others = tuple(range(1, n + 1))
+        counts = {t: 0 if t % 2 else 9 for t in others}
+        estimate = math.ceil(math.log2(n + 1))
+        for target in {0, 1, n // 2, n - 1, n}:
+            search = place.Search(title_id=0, tier=0, low=0, high=n)
+            while (i := search.probe(others, comparisons=counts)) is not None:
+                search = search.answered(i, "A" if target <= i else "B")
+            assert (search.low, search.high) == (target, target)
+            assert search.asked <= estimate + 2, (n, target, search.asked)
+
+
 def test_the_neighbourhood_rings_the_title_in_two_rows_of_four():
     others = tuple(range(1, 11))
     view = place.View(place.Search(99, 0, 5, 5, asked=4), "A", others)
@@ -95,6 +122,32 @@ async def test_placing_opens_on_the_middle_of_the_titles_tier(db, tier):
     assert unrated.status_code == 422
     other_kind = await client.post("/api/rank/place", json={"title_id": placed, "kind": "series"})
     assert other_kind.status_code == 422
+
+
+async def test_placing_asks_a_genre_sharer_near_the_middle_and_rests_the_last_two_pairs(db, tier):
+    """Decision 538 over the route: genres, comparisons and the last pairs are read at each step."""
+    client, user_id, order = tier
+    placed, others = order[0], order[1:]
+    await db.executemany(
+        "INSERT INTO title_genre (title_id, genre, source) VALUES ($1, 'Crime', 'tmdb')",
+        [(placed,), (others[3],)],
+    )
+
+    async def opened():
+        return (await client.post("/api/rank/place", json={"title_id": placed, "kind": "movie"})).json()
+
+    async def asked(neighbour):
+        await observations.record_duel(
+            db, user_id=user_id, title_a=placed, title_b=neighbour, outcome="A",
+            context=place.CONTEXT, decisive=False, hp=DEFAULTS,
+        )
+
+    assert (await opened())["right"]["id"] == others[3], "the crime film one off the middle"
+    await asked(others[3])
+    assert (await opened())["right"]["id"] == others[2], "the last pair's neighbour rests"
+    await asked(others[0])
+    await asked(others[0])
+    assert (await opened())["right"]["id"] == others[3], "two pairs on, it serves again"
 
 
 async def test_a_placement_records_one_duel_per_question_and_ends_between_two_titles(db, tier):
@@ -188,6 +241,7 @@ async def test_a_tampered_replayed_or_borrowed_token_is_refused_and_writes_nothi
     await other.post(
         "/api/auth/password", json={"current_password": otp, "new_password": "jennys-password"}
     )
+    await db.execute("INSERT INTO ladder_setup (user_id) SELECT id FROM app_user WHERE name = 'jenny'")
     borrowed = await other.post(
         "/api/rank/place/answer", json={"token": first.json()["token"], "outcome": "A"}
     )

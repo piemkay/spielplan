@@ -93,12 +93,15 @@ def test_the_board_renders_best_first_and_keeps_empty_tiers():
     assert sum(1 for t in tiers if not t.entries) == len(TIER_SET) - 2
 
 
-def test_each_section_head_names_the_verdict_its_tier_stands_for():
-    """Decision 508's bands in the words the section head shows, on any tier set."""
+def test_each_section_head_names_its_tiers_word():
+    """Decision 550's words on the default set; a custom set's labels are their own words."""
     tiers = board.build([], cuts=model.initial_cutpoints(7), tier_set=TIER_SET, hp=DEFAULTS)
-    assert [t.verdict for t in tiers] == ["Liked"] * 3 + ["Fine"] + ["Disliked"] * 3
+    assert [t.word for t in tiers] == [
+        "All-time favourite", "Loved it", "Liked it", "It was fine", "Not really for me",
+        "Didn't like it", "Hated it",
+    ]
     three = board.build([], cuts=np.array([-1.0, 1.0]), tier_set=("meh", "ok", "great"), hp=DEFAULTS)
-    assert [t.verdict for t in three] == ["Liked", "Fine", "Disliked"]
+    assert [t.word for t in three] == ["great", "ok", "meh"]
 
 
 def test_a_row_carries_its_year():

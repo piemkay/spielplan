@@ -1198,3 +1198,61 @@ async def test_the_evaluation_abstains_when_the_model_has_no_ordering(db, board_
     assert agreement.undecided == 1
     assert agreement.decisive == 0 and agreement.agreed == 0
     assert agreement.rate is None, "no ordering is an abstention, not a coin flip scored as B"
+
+
+async def _compared(db, user, a, b, context, *, days_ago=0, **kw) -> int:
+    written = await observations.record_duel(
+        db, user_id=user, title_a=a, title_b=b, outcome="A", context=context, **kw
+    )
+    await db.execute(
+        "UPDATE duel SET created_at = now() - make_interval(days => $2) WHERE id = $1",
+        written.row_id, days_ago,
+    )
+    return int(written.row_id)
+
+
+async def test_the_guess_line_counts_sharpen_and_place_since_the_set_up_held_out_in_re_asks_out(
+    db, world
+):
+    """Decision 550's count, per kind; a Rate battle or a drop's neighbours are not comparisons
+    the person asked for."""
+    user = world["patrick"]
+    await _compared(db, user, 1, 2, "tier_queue", days_ago=5)
+    await db.execute(
+        "INSERT INTO ladder_setup (user_id, finished_at) VALUES ($1, now() - interval '1 day')", user
+    )
+    await _compared(db, user, 1, 2, "tier_queue")
+    await _compared(db, user, 1, 3, "tier_place")
+    await _compared(db, user, 2, 3, "tier_queue", selection=queue.ARM_HOLDOUT)
+    await _compared(db, user, 2, 3, "tier_queue", is_reask=True)
+    await _compared(db, user, 1, 3, "tier_insert")
+    await _compared(db, user, 1, 3, "profile_battle")
+    await _compared(db, user, 11, 12, "tier_queue")
+
+    assert await read.comparisons_since_setup(db, user_id=user, kind="movie") == 3
+    assert await read.comparisons_since_setup(db, user_id=user, kind="series") == 1
+    assert await read.comparisons_since_setup(db, user_id=world["jenny"], kind="movie") == 0
+
+
+async def test_a_re_ask_comes_from_sharpen_answers_three_days_old_and_rests_ninety_days(db, world):
+    """§13(b): since the cut-over, never a re-ask of a re-ask, and the held-out stream may be asked
+    again too: the re-ask is stored apart from it."""
+    user = world["patrick"]
+    await db.execute(
+        "INSERT INTO ladder_setup (user_id, finished_at) VALUES ($1, now() - interval '200 days')",
+        user,
+    )
+    await _compared(db, user, 4, 5, "tier_queue", days_ago=300)
+    await _compared(db, user, 1, 2, "tier_queue", days_ago=10)
+    await _compared(db, user, 3, 4, "tier_queue", days_ago=2)
+    await _compared(db, user, 5, 6, "profile_battle", days_ago=10)
+    await _compared(db, user, 7, 8, "tier_queue", days_ago=10, selection=queue.ARM_HOLDOUT)
+    rested = await _compared(db, user, 1, 3, "tier_queue", days_ago=10)
+    await _compared(db, user, 1, 3, "tier_queue", days_ago=5, is_reask=True, reask_of=rested)
+    lapsed = await _compared(db, user, 2, 4, "tier_queue", days_ago=150)
+    await _compared(db, user, 2, 4, "tier_queue", days_ago=100, is_reask=True, reask_of=lapsed)
+    await _compared(db, user, 11, 12, "tier_queue", days_ago=10)
+
+    found = await read.reask_pairs(db, user_id=user, kind="movie")
+    assert {(a, b) for _id, a, b in found} == {(1, 2), (7, 8), (2, 4)}
+    assert await read.reask_pairs(db, user_id=world["jenny"], kind="movie") == []

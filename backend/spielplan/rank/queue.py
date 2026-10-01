@@ -1,18 +1,21 @@
 """§6.3's comparison queue: 70% boundary / 20% exploration / 10% uniform held out (§13). Pure, seeded.
 
 The held-out arm never receives a fallback and stays uniform and memoryless; a fallback is reported as
-the arm that drew. Not §6.1's battle, which draws uniformly on purpose (§0 row 6).
+the arm that drew.
 """
 
 from __future__ import annotations
 
 import random
+from collections import Counter
 from collections.abc import Iterable, Sequence
 from dataclasses import dataclass
+from datetime import timedelta
 
 import numpy as np
 
 from spielplan.ledger.hyperparams import Hyperparams
+from spielplan.ledger.observations import rescale_level
 from spielplan.rank.board import Item, _placed, straddles
 
 # `duel.selection` values (0005's CHECK); ARM_HOLDOUT must equal `observations.HELD_OUT`.
@@ -34,15 +37,28 @@ K_NEAREST = 5
 # is never emptied.
 RECENT_WINDOW = 3
 
+# §13 stream (b): about one Sharpen pair in ten poses again a pair answered three or more days ago.
+REASK_RATE = 0.10
+REASK_MIN_AGE = timedelta(days=3)
+# Not in §13: without it a small board re-asks the same handful every sitting.
+REASK_COOLDOWN = timedelta(days=90)
+# The `duel.selection` a re-ask is stored under: no arm drew it.
+ARM_REASK = "random"
+
+# A pair's reason names its shared genre with the kind's noun (decision 550).
+NOUNS = {"movie": "films", "series": "series"}
+
 
 @dataclass(frozen=True)
 class Candidate:
-    """One title the queue may draw. `comparisons` EXCLUDES held-out duels (§13), in the query."""
+    """One title the queue may draw. `comparisons` EXCLUDES held-out duels (§13), in the query.
+    `genres` are the canonical genres, the rarest on this board first."""
 
     item: Item
     comparisons: int = 0
     straddle: int | None = None
     tier: int = 0
+    genres: tuple[str, ...] = ()
 
     @property
     def title_id(self) -> int:
@@ -59,6 +75,8 @@ class Pair:
     title_b: int
     arm: str
     reason: str
+    # The duel a §13(b) re-ask poses again; sealed, never sent.
+    reask_of: int | None = None
 
     def public(self) -> dict[str, object]:
         """The arm travels so the held-out stream is identifiable end to end (proposal 146)."""
@@ -84,9 +102,12 @@ def candidates(
     tier_set: Sequence[str],
     hp: Hyperparams,
     comparisons: dict[int, int] | None = None,
+    genres: dict[int, tuple[str, ...]] | None = None,
 ) -> list[Candidate]:
     """Decorate the board's items with what the selector needs, via the board's `_placed`."""
     counts = comparisons or {}
+    by_title = genres or {}
+    carried = Counter(g for item in items for g in by_title.get(item.title_id, ()))
     cuts = np.asarray(cuts, dtype=float)
     out = []
     for item in items:
@@ -97,9 +118,32 @@ def candidates(
                 comparisons=int(counts.get(item.title_id, 0)),
                 straddle=straddle,
                 tier=tier,
+                genres=tuple(sorted(by_title.get(item.title_id, ()), key=lambda g: (carried[g], g))),
             )
         )
     return out
+
+
+def _shares_genre(a: Candidate, b: Candidate) -> bool:
+    return not set(a.genres).isdisjoint(b.genres)
+
+
+def why(a: Candidate, b: Candidate, tier_set: Sequence[str], kind: str) -> str:
+    """A pair's reason, the same form on every arm (decision 550): the steps the board shows the two
+    in, lower first, and the rarest genre they share. "One in A, one in A+ · both mystery films"."""
+    low, high = sorted(
+        c.tier
+        if c.item.assigned_tier is None
+        else rescale_level(int(c.item.assigned_tier), k_from=None, k_to=len(tier_set))
+        for c in (a, b)
+    )
+    steps = (
+        f"Both in {tier_set[low]}"
+        if low == high
+        else f"One in {tier_set[low]}, one in {tier_set[high]}"
+    )
+    shared = next((g for g in a.genres if g in b.genres), None)
+    return steps if shared is None else f"{steps} · both {shared.lower()} {NOUNS[kind]}"
 
 
 def _jitter(pool: Iterable[Candidate], rng: random.Random) -> dict[int, float]:
@@ -116,7 +160,8 @@ def _partner(
     jitter: dict[int, float],
 ) -> Candidate | None:
     """Decision 494's partner: of the `K_NEAREST` unasked titles nearest in `s`, the one outside the
-    recent window, then the least-compared. An answered pair is never re-served (§13 inflation)."""
+    recent window, then sharing a genre with the anchor (decision 538), then the least-compared. An
+    answered pair is never re-served (§13 inflation)."""
     fresh = [
         c
         for c in options
@@ -127,7 +172,13 @@ def _partner(
         return None
     nearest = sorted(fresh, key=lambda c: (abs(c.s - anchor.s), jitter[c.title_id]))[:K_NEAREST]
     return min(
-        nearest, key=lambda c: (c.title_id in recent, c.comparisons, jitter[c.title_id])
+        nearest,
+        key=lambda c: (
+            c.title_id in recent,
+            not _shares_genre(anchor, c),
+            c.comparisons,
+            jitter[c.title_id],
+        ),
     )
 
 
@@ -255,11 +306,36 @@ def draw(
     return _exploration(pool, rng, asked=already, recent=held)
 
 
+def reask(
+    pool: Sequence[Candidate], answered: Sequence[tuple[int, int, int]], rng: random.Random
+) -> Pair | None:
+    """§13(b): while an answered `(duel_id, title_a, title_b)` has both titles still on the board,
+    `REASK_RATE` of draws pose one again, chosen uniformly and in its first order, so a flip reads
+    against the first outcome."""
+    on_board = {c.title_id for c in pool}
+    eligible = [row for row in answered if row[1] in on_board and row[2] in on_board]
+    if not eligible or rng.random() >= REASK_RATE:
+        return None
+    duel_id, title_a, title_b = eligible[rng.randrange(len(eligible))]
+    return Pair(
+        title_a=title_a,
+        title_b=title_b,
+        arm=ARM_REASK,
+        reason="asked again, held out of the fit",
+        reask_of=duel_id,
+    )
+
+
 __all__ = [
     "ARM_BOUNDARY",
     "ARM_EXPLORATION",
     "ARM_HOLDOUT",
+    "ARM_REASK",
     "K_NEAREST",
+    "NOUNS",
+    "REASK_COOLDOWN",
+    "REASK_MIN_AGE",
+    "REASK_RATE",
     "RECENT_WINDOW",
     "Candidate",
     "Pair",
@@ -268,4 +344,6 @@ __all__ = [
     "candidates",
     "draw",
     "eligible",
+    "reask",
+    "why",
 ]

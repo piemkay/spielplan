@@ -15,7 +15,7 @@ from spielplan.ledger import model
 from spielplan.ledger.hyperparams import Hyperparams
 
 # Pure arithmetic, so this module still opens no connection.
-from spielplan.ledger.observations import rescale_level
+from spielplan.ledger.observations import rescale_level, tier_words
 
 
 @dataclass(frozen=True)
@@ -73,11 +73,7 @@ class Tier:
     index: int                  # index into the tier set, ascending (0 = worst)
     label: str
     entries: tuple[Entry, ...]
-    verdict: str                # the verdict class it stands for, in words (decision 508)
-
-
-# Indexed by verdict class, the order of `model.verdict_tiers`' rows.
-VERDICT_WORDS = ("Disliked", "Fine", "Liked")
+    word: str                   # §6.1's word for the tier; a custom label is its own word
 
 
 def straddles(item: Item, *, cuts: np.ndarray, hp: Hyperparams) -> int | None:
@@ -149,6 +145,7 @@ def build(
     """The whole board: every tier in the set, best-first, empty ones kept as drop targets."""
     cuts = np.asarray(cuts, dtype=float)
     labels = list(tier_set)
+    words = tier_words(labels)
     buckets: dict[int, list[Item]] = {i: [] for i in range(len(labels))}
     model_tiers: dict[int, int] = {}
     tensions: dict[int, str | None] = {}
@@ -214,7 +211,7 @@ def build(
                 index=index,
                 label=labels[index],
                 entries=tuple(entries),
-                verdict=VERDICT_WORDS[model.verdict_class_of_tier(index, len(labels))],
+                word=words[index],
             )
         )
 
@@ -222,4 +219,4 @@ def build(
     return tuple(reversed(tiers))
 
 
-__all__ = ["VERDICT_WORDS", "Entry", "Item", "Tier", "build", "straddles", "tension_of"]
+__all__ = ["Entry", "Item", "Tier", "build", "straddles", "tension_of"]
