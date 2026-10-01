@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 
-import { createMember, signedIn, signInAsMember } from '../helpers.js';
+import { signedIn } from '../helpers.js';
 
 /**
  * §6 preamble: "responsive PWA, phone-first (48 px targets, one-handed, swipe), desktop as
@@ -231,70 +231,6 @@ test('the title detail panel is full-width on a phone', async ({ page, isMobile 
   await expect(panel).toBeVisible();
   const box = await panel.boundingBox();
   expect(box.width).toBeGreaterThan(page.viewportSize().width * 0.95);
-});
-
-test('on a phone every Rate control is on screen with nothing scrolled, pairs included', async ({
-  page,
-  isMobile
-}) => {
-  // §6.1's "persistent Undo" and every answer must be on the screen, not past a hidden scrollbar
-  // or below the fold, and the page itself does not scroll (decision 528).
-  test.skip(!isMobile, 'the wrap and the fold are the phone layout');
-
-  // Three films liked so a pair exists. Not the admin: 19-phone-shell reads the admin's queue.
-  await signInAsMember(page, await createMember(page, 'rate-phone'));
-  await page.request.post('/api/rate/session', {
-    data: { restart: true, mode: 'sweep', kinds: ['movie'] }
-  });
-  for (let i = 0; i < 3; i++) {
-    const { card } = await (await page.request.get('/api/rate')).json();
-    if (card?.type !== 'sweep') break;
-    const res = await page.request.post('/api/rate/verdict', {
-      data: { card_token: card.token, value: 2 }
-    });
-    expect(res.ok(), 'seeding a liked film (§6.1)').toBeTruthy();
-  }
-  await page.request.post('/api/rate/session', {
-    data: { restart: true, kinds: ['movie', 'series'] }
-  });
-
-  await page.goto('/rate');
-  await expect(page.getByTestId('rate-sweep-card')).toBeVisible();
-  const unscrolled = () => page.evaluate(() => document.documentElement.scrollHeight - innerHeight);
-  for (const id of [
-    'rate-menu', 'rate-undo', 'rate-skip', 'rate-verdict-0', 'rate-verdict-2', 'rate-not-seen'
-  ]) {
-    await expect(page.getByTestId(id), `${id} is on the screen`).toBeInViewport({ ratio: 1 });
-  }
-  expect(await unscrolled(), 'the page does not scroll').toBeLessThanOrEqual(0);
-  // The row is the shell's top row on Rate (decision 527).
-  const sideways = await page
-    .locator('header.topbar .bar')
-    .evaluate((row) => row.scrollWidth - row.clientWidth);
-  expect(sideways, 'the header row does not scroll sideways').toBeLessThanOrEqual(0);
-
-  // The modes and kinds live in the sheet the screen's title opens (decision 527).
-  await page.getByTestId('rate-menu').click();
-  const menu = page.getByRole('dialog', { name: 'How to rate' });
-  for (const id of [
-    'rate-mode-mix', 'rate-mode-sweep', 'rate-mode-battle', 'rate-kind-movie', 'rate-kind-series',
-    'rate-find-toggle'
-  ]) {
-    await expect(menu.getByTestId(id), `${id} is in the menu`).toBeVisible();
-  }
-  await menu.getByRole('button', { name: 'Done', exact: true }).click();
-  await expect(menu).toHaveCount(0);
-
-  await page.request.post('/api/rate/session', { data: { mode: 'battle' } });
-  await page.goto('/rate');
-  await expect(page.getByTestId('rate-battle-card')).toBeVisible();
-  for (const id of [
-    'rate-duel-A-much', 'rate-duel-TIE', 'rate-duel-B-much',
-    'rate-correction-left', 'rate-correction-right', 'rate-skip'
-  ]) {
-    await expect(page.getByTestId(id), `${id} is on the screen`).toBeInViewport({ ratio: 1 });
-  }
-  expect(await unscrolled(), 'the page does not scroll').toBeLessThanOrEqual(0);
 });
 
 test('the app is installable: a manifest, an icon, and a theme colour', async ({ page }) => {

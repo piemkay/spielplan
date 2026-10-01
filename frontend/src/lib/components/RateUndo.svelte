@@ -1,48 +1,72 @@
 <script>
-  // Never hidden: with nothing it can take back it shows disabled (decisions 35 and 528).
-  import { undoKindLabel } from '$lib/rate.svelte.js';
-
-  let { undo, busy = false, pending = false, onUndo } = $props();
+  // Always on screen, dimmed with nothing to take back (decision 550); `data-undo-kind` keeps the
+  // journal's raw kind for tests.
+  let { undo, pending = false, onUndo } = $props();
 
   const available = $derived(!!undo?.available);
-  // Words, never the journal's column value; `data-undo-kind` keeps the raw kind for tests.
-  const kindWords = $derived(available ? undoKindLabel(undo?.kind) : '');
+  const label = $derived(
+    !available
+      ? 'Undo'
+      : undo.kind === 'placement'
+        ? `Undo placing ${undo.name}`
+        : undo.kind === 'not_seen'
+          ? 'Undo not seen'
+          : 'Undo'
+  );
 </script>
 
 <button
-  class="btn-plain hit undo"
+  class="hit undo"
   data-testid="rate-undo"
-  aria-label={kindWords ? `Undo the last ${kindWords}` : 'Undo'}
+  aria-label={label}
   data-undo-kind={undo?.kind ?? ''}
-  data-undo-reason={undo?.reason ?? ''}
   aria-busy={pending}
-  disabled={!available || busy}
+  disabled={!available}
   onclick={onUndo}
 >
-  <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor"
-    stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
-    <path d="M9 14 4.5 9.5 9 5" />
-    <path d="M4.5 9.5H15a5 5 0 0 1 0 10h-3" />
-  </svg>
-  <span>Undo</span>
+  <span class="disc">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+      stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+      <path d="M9 14 4.5 9.5 9 5" />
+      <path d="M4.5 9.5H15a5 5 0 0 1 0 10h-3" />
+    </svg>
+  </span>
 </button>
 
 <style>
   .undo {
-    justify-self: start;
-    padding-left: 0;
-    transition: opacity var(--dur-quick) var(--ease);
+    width: 44px;
+    height: 44px;
+    min-height: 44px;
+    padding: 0;
+    border: none;
+    background: none;
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+  }
+  .disc {
+    width: 36px;
+    height: 36px;
+    display: grid;
+    place-items: center;
+    border-radius: var(--r-pill);
+    background: var(--surface-2);
+    color: var(--text);
+    transition: color var(--dur-quick) var(--ease);
   }
   .undo:disabled {
-    opacity: 0.35;
+    cursor: default;
   }
-  .undo[aria-busy='true'] {
-    opacity: 1;
+  .undo:disabled .disc {
+    color: rgba(245, 240, 232, 0.3);
   }
   .undo[aria-busy='true'] svg {
     animation: unwind 240ms var(--ease-spring);
   }
   @keyframes unwind {
-    from { transform: rotate(-40deg); }
+    from {
+      transform: rotate(-40deg);
+    }
   }
 </style>

@@ -16,9 +16,11 @@ vi.mock('$app/stores', async () => {
   return { page: nav.page };
 });
 vi.mock('$app/navigation', () => ({
+  goto: vi.fn(),
   pushState: (_url, state) => nav.page.update((p) => ({ ...p, state }))
 }));
 
+import { goto } from '$app/navigation';
 import { api, get, post } from '$lib/api.js';
 import { hideToast, toast } from '$lib/toast.svelte.js';
 import TitleDetail from './TitleDetail.svelte';
@@ -58,6 +60,7 @@ beforeEach(() => {
   vi.mocked(api).mockReset();
   vi.mocked(get).mockReset();
   vi.mocked(post).mockReset();
+  vi.mocked(goto).mockReset();
   nav.page.update((p) => ({ ...p, state: {} }));
   vi.spyOn(history, 'back').mockImplementation(() =>
     nav.page.update((p) => ({ ...p, state: { ...p.state, sheets: (p.state.sheets ?? []).slice(0, -1) } }))
@@ -936,57 +939,91 @@ describe('Watched and Not seen', () => {
   });
 });
 
-describe('the ranking rows on every card (decision 531)', () => {
-  // `api/library.py`'s `ranking`: the person's tier set, best first, with each tier's count.
+describe('the ranking rows and the ladder sheet (decisions 531, 545 and 550)', () => {
+  // `api/library.py`'s `ranking`: the person's tier set, best first, each with its word and count.
   const TIERS = [
-    ['S', 'Liked', 1],
-    ['A+', 'Liked', 0],
-    ['A', 'Liked', 3],
-    ['B', 'Fine', 2],
-    ['C', 'Disliked', 0],
-    ['D', 'Disliked', 0],
-    ['F', 'Disliked', 0]
-  ].map(([label, verdict, count], i) => ({ index: 6 - i, label, verdict, count, entries: [] }));
-  const ranking = (tier, tension = null) => ({ tier, tension, tiers: TIERS });
+    ['S', 'All-time favourite', 1],
+    ['A+', 'Loved it', 0],
+    ['A', 'Liked it', 3],
+    ['B', 'It was fine', 2],
+    ['C', 'Not really for me', 0],
+    ['D', "Didn't like it", 0],
+    ['F', 'Hated it', 0]
+  ].map(([label, word, count], i) => ({ index: 6 - i, label, word, count, entries: [] }));
+  const ranking = (tier, { tension = null, set_up = true } = {}) => ({ set_up, tier, tension, tiers: TIERS });
   const heat = { kind: 'movie', name: 'Heat' };
+  const zodiac = { id: 31, name: 'Zodiac', original_name: null, original_language: null, poster_path: null };
+  const SHELVES = {
+    title_id: 6,
+    kind: 'movie',
+    current: null,
+    shelves: TIERS.map((t) => ({ tier: t.index, word: t.word, count: t.count, films: t.index === 4 ? [zodiac] : [] }))
+  };
 
-  const sheet = (name) => target.querySelector(`[role="dialog"][aria-label="${name}"]`);
-  const options = (name) => [...sheet(name).querySelectorAll('[role="menuitem"]')];
-  async function choose(name, label) {
+  const sheet = () => byTestId('ladder-sheet');
+  const shelf = (index) => target.querySelector(`[data-testid="ladder-shelf"][data-tier="${index}"]`);
+  // The card reads its title; the sheet reads its shelves.
+  function serveShelves(title) {
+    vi.mocked(get).mockImplementation(async (path) => (path.startsWith('/rate/shelves') ? SHELVES : title));
+  }
+  async function openLadder() {
     byTestId('rank-card-tier').click();
-    await settle();
-    options(name).find((o) => o.querySelector('.label').textContent === label).click();
     await settle();
   }
 
   beforeEach(() => hideToast());
 
-  it('names the tier on a card opened from Home, moves it there, and undoes the move', async () => {
+  it('names the tier by its letter and word, and its sheet moves the title with Undo', async () => {
     vi.mocked(post).mockResolvedValue({});
     const onStateChange = vi.fn();
     const app = await open({ ...heat, seen_state: 'seen' }, { ranking: ranking(4), props: { onStateChange } });
     try {
-      expect(byTestId('rank-card-tier').getAttribute('aria-label')).toBe('In your ranking: A, Liked');
+      const row = byTestId('rank-card-tier');
+      expect(row.getAttribute('aria-label')).toBe('In your ranking: A, Liked it');
+      expect(row.querySelector('.letter').textContent).toBe('A');
+      expect(row.textContent).toContain('Liked it');
       expect(byTestId('rank-card-place').getAttribute('href')).toBe('/rank/place/6?kind=movie');
       expect(byTestId('rank-card-place').textContent).toContain('2 quick questions');
 
-      byTestId('rank-card-tier').click();
-      await settle();
-      const shown = options('Move Heat');
-      expect(shown.map((o) => o.querySelector('.label').textContent)).toEqual(['S', 'A+', 'A', 'B', 'C', 'D', 'F']);
-      expect(shown[0].textContent).toContain('Liked');
-      expect(shown[2].getAttribute('aria-current')).toBe('true');
-      shown[4].click();
-      await settle();
+      serveShelves({ ...payload({ ...heat, seen_state: 'seen' }), ranking: ranking(4) });
+      await openLadder();
+      expect(vi.mocked(get)).toHaveBeenCalledWith('/rate/shelves?title_id=6');
+      const dialog = target.querySelector('[role="dialog"][aria-label="In your ranking"]');
+      expect(dialog.querySelector('h2').textContent).toBe('Heat');
+      expect(dialog.querySelector('.footnote').textContent).toBe('Liked it');
+      expect([...sheet().querySelectorAll('.word')].map((w) => w.textContent)).toEqual(TIERS.map((t) => t.word));
+      expect(shelf(4).getAttribute('aria-current')).toBe('true');
+      expect(shelf(4).getAttribute('aria-label')).toBe('Liked it, with Zodiac');
+      expect(sheet().textContent, 'no letter on the shelves').not.toMatch(/\b(S|A\+|A|B|C|D|F)\b/);
 
-      expect(vi.mocked(post)).toHaveBeenCalledWith('/rank/drop?kind=movie&per_tier=1', { title_id: 6, tier: 2, via: 'explicit' });
+      shelf(2).click();
+      await settle();
+      expect(vi.mocked(post)).toHaveBeenCalledWith('/rank/drop?kind=movie&per_tier=1', {
+        title_id: 6, tier: 2, via: 'explicit'
+      });
       expect(toast.message).toBe('Heat moved to C');
       expect(toast.actionLabel).toBe('Undo');
-      expect(byTestId('rank-card-tier').getAttribute('aria-label')).toBe('In your ranking: C, Disliked');
+      expect(sheet(), 'a shelf tap closes the sheet').toBeNull();
+      expect(byTestId('rank-card-tier').getAttribute('aria-label')).toBe('In your ranking: C, Not really for me');
       expect(onStateChange, 'a rated, seen title moved touches Home not at all').not.toHaveBeenCalled();
 
       await toast.action();
       expect(vi.mocked(post)).toHaveBeenLastCalledWith('/rank/drop?kind=movie&per_tier=1', { title_id: 6, tier: 4 });
+    } finally {
+      unmount(app);
+    }
+  });
+
+  it('draws the shelf frames and words before the shelves land', async () => {
+    const app = await open({ ...heat, seen_state: 'seen' }, { ranking: ranking(4) });
+    try {
+      vi.mocked(get).mockImplementation((path) =>
+        path.startsWith('/rate/shelves') ? new Promise(() => {}) : Promise.resolve(payload(heat))
+      );
+      await openLadder();
+      const tiers = [...sheet().querySelectorAll('[data-testid="ladder-shelf"]')].map((s) => s.dataset.tier);
+      expect(tiers).toEqual(['6', '5', '4', '3', '2', '1', '0']);
+      expect(shelf(6).getAttribute('aria-label')).toBe('All-time favourite');
     } finally {
       unmount(app);
     }
@@ -999,8 +1036,6 @@ describe('the ranking rows on every card (decision 531)', () => {
       { ...heat, seen_state: 'unseen' },
       { ranking: ranking(null), why: 'Because you liked Drive', props: { onStateChange } }
     );
-    // Read again after the drop: the board takes a first placement at its next refit.
-    vi.mocked(get).mockResolvedValue({ ...payload({ ...heat, seen_state: 'seen' }), ranking: ranking(null) });
     try {
       const row = byTestId('rank-card-tier');
       expect(row.getAttribute('aria-label')).toBe('In your ranking: not placed yet');
@@ -1008,19 +1043,56 @@ describe('the ranking rows on every card (decision 531)', () => {
       expect(byTestId('rank-card-place')).toBeNull();
       expect(byTestId('rank-card-tension')).toBeNull();
 
-      row.click();
-      await settle();
-      expect(options('Rank Heat').some((o) => o.hasAttribute('aria-current'))).toBe(false);
-      options('Rank Heat')[2].click();
+      // Read again after the drop: the board takes a first placement at its next refit.
+      serveShelves({ ...payload({ ...heat, seen_state: 'seen' }), ranking: ranking(null) });
+      await openLadder();
+      const header = target.querySelector('[role="dialog"][aria-label="In your ranking"] .footnote');
+      expect(header.textContent).toBe('Not placed yet');
+      expect(sheet().querySelector('[aria-current]')).toBeNull();
+      shelf(4).click();
       await settle();
 
-      expect(vi.mocked(post)).toHaveBeenCalledWith('/rank/drop?kind=movie&per_tier=1', { title_id: 6, tier: 4, via: 'explicit' });
+      expect(vi.mocked(post)).toHaveBeenCalledWith('/rank/drop?kind=movie&per_tier=1', {
+        title_id: 6, tier: 4, via: 'explicit'
+      });
       expect(toast.message).toBe('Heat placed in A');
       expect(toast.actionLabel, 'a first placement has no tier to go back to').toBe('');
-      expect(byTestId('rank-card-tier').getAttribute('aria-label')).toBe('In your ranking: A, Liked');
+      expect(byTestId('rank-card-tier').getAttribute('aria-label')).toBe('In your ranking: A, Liked it');
       expect(byTestId('title-watched').textContent.trim()).toBe('Watched');
       expect(byTestId('title-why')).toBeNull();
       expect(onStateChange).toHaveBeenCalledWith(6, 'seen');
+    } finally {
+      unmount(app);
+    }
+  });
+
+  it('places with the keys 1 to 7 from the top, and closes with Done or Escape writing nothing', async () => {
+    vi.mocked(post).mockResolvedValue({});
+    const app = await open({ ...heat, seen_state: 'seen' }, { ranking: ranking(4) });
+    const press = (key) => window.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }));
+    try {
+      serveShelves(payload({ ...heat, seen_state: 'seen' }));
+      await openLadder();
+      byTestId('ladder-done').click();
+      await settle();
+      expect(sheet()).toBeNull();
+      await openLadder();
+      press('Escape');
+      await settle();
+      expect(sheet()).toBeNull();
+      expect(byTestId('title-watched'), 'Escape closed the ladder alone').not.toBeNull();
+      expect(vi.mocked(post)).not.toHaveBeenCalled();
+
+      press('7');
+      await settle();
+      expect(vi.mocked(post), 'no key places with the sheet closed').not.toHaveBeenCalled();
+      await openLadder();
+      press('7');
+      await settle();
+      expect(vi.mocked(post)).toHaveBeenCalledWith('/rank/drop?kind=movie&per_tier=1', {
+        title_id: 6, tier: 0, via: 'explicit'
+      });
+      expect(sheet()).toBeNull();
     } finally {
       unmount(app);
     }
@@ -1031,7 +1103,9 @@ describe('the ranking rows on every card (decision 531)', () => {
     const onStateChange = vi.fn();
     const app = await open({ ...heat, seen_state: 'unseen' }, { ranking: ranking(3), props: { onStateChange } });
     try {
-      await choose('Move Heat', 'A');
+      await openLadder();
+      shelf(4).click();
+      await settle();
       expect(byTestId('title-watched').textContent.trim()).toBe('Watched');
       expect(onStateChange).toHaveBeenCalledWith(6, 'seen');
     } finally {
@@ -1041,23 +1115,53 @@ describe('the ranking rows on every card (decision 531)', () => {
 
   it("hands the move to Rank's own when Rank opened the card", async () => {
     const onMove = vi.fn().mockResolvedValue(true);
-    const app = await open(
-      { ...heat, seen_state: 'seen' },
-      {
-        ranking: ranking(4, 'You put it in A — your other answers still point to C'),
-        props: { onMove }
-      }
-    );
+    const tension = 'You put it in A — your other answers still point to C';
+    const app = await open({ ...heat, seen_state: 'seen' }, { ranking: ranking(4, { tension }), props: { onMove } });
     try {
-      expect(byTestId('rank-card-tension').textContent).toBe('You put it in A — your other answers still point to C');
-      await choose('Move Heat', 'C');
+      expect(byTestId('rank-card-tension').textContent).toBe(tension);
+      await openLadder();
+      shelf(2).click();
+      await settle();
       expect(onMove).toHaveBeenCalledWith(
         { title_id: 6, name: 'Heat', kind: 'movie', tier: 4 },
-        expect.objectContaining({ index: 2, label: 'C' })
+        expect.objectContaining({ index: 2, label: 'C', word: 'Not really for me' })
       );
       expect(vi.mocked(post)).not.toHaveBeenCalled();
-      expect(byTestId('rank-card-tier').getAttribute('aria-label')).toBe('In your ranking: C, Disliked');
+      expect(byTestId('rank-card-tier').getAttribute('aria-label')).toBe('In your ranking: C, Not really for me');
       expect(byTestId('rank-card-tension'), 'the line described the old placement').toBeNull();
+    } finally {
+      unmount(app);
+    }
+  });
+
+  it('says a custom label once, as its own word', async () => {
+    const custom = ['good', 'ok', 'bad'].map((label, i) => ({ index: 2 - i, label, word: label, count: 2, entries: [] }));
+    const app = await open(
+      { ...heat, seen_state: 'seen' },
+      { ranking: { set_up: true, tier: 2, tension: null, tiers: custom } }
+    );
+    try {
+      expect(byTestId('rank-card-tier').getAttribute('aria-label')).toBe('In your ranking: good');
+      expect(byTestId('rank-card-tier').querySelectorAll('.footnote')).toHaveLength(0);
+    } finally {
+      unmount(app);
+    }
+  });
+
+  it('reads "Set up your ladder first" before the set-up, and goes to Rate', async () => {
+    const app = await open({ ...heat, seen_state: 'seen' }, { ranking: ranking(4, { set_up: false }) });
+    try {
+      const row = byTestId('rank-card-tier');
+      expect(row.getAttribute('aria-label')).toBe('In your ranking: set up your ladder first');
+      expect(row.textContent).toContain('Set up your ladder first');
+      expect(row.querySelector('.letter'), 'no letter before the set-up').toBeNull();
+      expect(byTestId('rank-card-place')).toBeNull();
+
+      row.click();
+      await settle();
+      expect(sheet()).toBeNull();
+      expect(target.querySelector('[role="dialog"][aria-label="Title detail"]'), 'the card closes first').toBeNull();
+      expect(vi.mocked(goto)).toHaveBeenCalledWith('/rate');
     } finally {
       unmount(app);
     }
@@ -1185,13 +1289,13 @@ describe('Shares a lot with (decisions 541 and 550)', () => {
 
 describe('a title the household does not have (decision 544)', () => {
   const tiers = ['S', 'A+', 'A', 'B', 'C', 'D', 'F'].map((label, i) => ({
-    index: 6 - i, label, verdict: '', count: 0, entries: []
+    index: 6 - i, label, word: label, count: 0, entries: []
   }));
   const unowned = { kind: 'movie', name: 'Prisoners', is_owned: false, seen_state: 'unseen' };
   const opened = (extra = {}) =>
     open(unowned, {
       actions: { play_on_jellyfin: null, play_reason: 'not_in_library' },
-      ranking: { tier: null, tension: null, tiers },
+      ranking: { set_up: true, tier: null, tension: null, tiers },
       ...extra
     });
 
@@ -1251,12 +1355,22 @@ describe('a title the household does not have (decision 544)', () => {
     }
   });
 
-  it('Seen it, rate it opens the tier picker', async () => {
-    const app = await opened();
+  it('Seen it, rate it opens the ladder, or goes to Rate before the set-up', async () => {
+    let app = await opened();
     try {
       byTestId('title-seen-rate').click();
       await settle();
-      expect(target.querySelector('[role="dialog"][aria-label="Rank Prisoners"]')).not.toBeNull();
+      expect(byTestId('ladder-sheet')).not.toBeNull();
+      expect(target.querySelectorAll('[data-testid="ladder-shelf"]')).toHaveLength(7);
+    } finally {
+      unmount(app);
+    }
+    app = await opened({ ranking: { set_up: false, tier: null, tension: null, tiers } });
+    try {
+      byTestId('title-seen-rate').click();
+      await settle();
+      expect(byTestId('ladder-sheet')).toBeNull();
+      expect(vi.mocked(goto)).toHaveBeenCalledWith('/rate');
     } finally {
       unmount(app);
     }

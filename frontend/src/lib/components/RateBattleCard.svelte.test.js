@@ -14,8 +14,7 @@ const pair = (token = 't1') => ({
   kind: 'movie',
   left: { id: 1, name: 'Heat', year: 1995, runtime_min: 170, outcome: 'A' },
   right: { id: 2, name: 'Drive', year: 2011, runtime_min: 100, outcome: 'B' },
-  reason: 'You rated both liked',
-  substituted_for: null,
+  reason: 'Both in A+ · both crime films',
   corrections: { label: 'not seen', sides: ['left', 'both', 'right'] }
 });
 
@@ -43,7 +42,6 @@ function open(over = {}) {
     onDuel: (outcome, much) => calls.push(['duel', outcome, much]),
     onCorrect: (side) => calls.push(['correct', side]),
     onPeek: (side) => calls.push(['peek', side]),
-    onWhy: () => calls.push(['why']),
     ...over
   });
   app = mount(RateBattleCard, { target, props });
@@ -113,10 +111,9 @@ describe('the pair card (decision 528)', () => {
     expect(q('[data-testid="rate-battle-left"]').classList.contains('dimmed')).toBe(true);
   });
 
-  it('says why these two on one line, "Why these?" beside it', () => {
+  it('says why these two in one line, and offers no "Why these?"', () => {
     open();
-    expect(q('.sub').textContent.replace(/\s+/g, ' ').trim()).toBe('You rated both liked · Why these?');
-    q('[data-testid="rate-why"]').click();
-    expect(calls).toEqual([['why']]);
+    expect(q('[data-testid="rate-battle-reason"]').textContent).toBe('Both in A+ · both crime films');
+    expect(target.textContent).not.toContain('Why these?');
   });
 });

@@ -22,37 +22,29 @@ afterEach(() => {
 });
 
 function chip(undo) {
-  app = mount(RateUndo, { target, props: { undo, busy: false, onUndo: () => {} } });
+  app = mount(RateUndo, { target, props: { undo, onUndo: () => {} } });
   flushSync();
   return target.querySelector('[data-testid="rate-undo"]');
 }
 
-describe('the persistent Undo (decisions 35 and 486)', () => {
-  for (const [kind, words] of [
-    ['verdict', 'rating'],
-    ['not_seen', 'not seen'],
-    ['correction', 'not seen'],
-    ['duel', 'pick'],
-    ['tie', 'tie'],
-    ['skip', 'skip']
-  ]) {
-    it(`names the ${words} it takes back, and keeps the raw kind on the attribute`, () => {
-      const el = chip({ available: true, kind, reason: null });
-      expect(el.textContent.trim()).toBe('Undo');
-      expect(el.disabled).toBe(false);
-      expect(el.getAttribute('aria-label')).toBe(`Undo the last ${words}`);
-      expect(el.getAttribute('data-undo-kind')).toBe(kind);
-      unmount(app);
-      app = null;
-    });
-  }
+describe('the round Undo (decision 550)', () => {
+  it('names the film a placement put on the ladder, and keeps the raw kind on the attribute', () => {
+    const el = chip({ available: true, kind: 'placement', name: 'Heat' });
+    expect(el.disabled).toBe(false);
+    expect(el.getAttribute('aria-label')).toBe('Undo placing Heat');
+    expect(el.getAttribute('data-undo-kind')).toBe('placement');
+  });
 
-  it('stays on screen while disabled, with no line under it (decision 528)', () => {
-    const el = chip({ available: false, kind: null, reason: 'empty' });
-    expect(el.textContent.trim()).toBe('Undo');
+  it('says Undo not seen for a Not seen', () => {
+    const el = chip({ available: true, kind: 'not_seen', name: 'Heat' });
+    expect(el.getAttribute('aria-label')).toBe('Undo not seen');
+    expect(el.getAttribute('data-undo-kind')).toBe('not_seen');
+  });
+
+  it('stays on screen, dimmed, with nothing to take back', () => {
+    const el = chip({ available: false, kind: null, name: null });
     expect(el.disabled).toBe(true);
     expect(el.getAttribute('aria-label')).toBe('Undo');
-    expect(el.getAttribute('data-undo-reason')).toBe('empty');
-    expect(target.textContent).not.toContain('Nothing to undo yet');
+    expect(el.getAttribute('data-undo-kind')).toBe('');
   });
 });

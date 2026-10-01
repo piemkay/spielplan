@@ -103,7 +103,7 @@ describe('preloading', () => {
     expect(decoded).toEqual(['/api/art/3/poster']);
   });
 
-  it("preloads every title on Rate's held-back card: the sweep's one or the battle's two", () => {
+  it("preloads every title on Rate's held-back card: the film and its shelves' posters", () => {
     const made = [];
     vi.stubGlobal(
       'Image',
@@ -113,8 +113,7 @@ describe('preloading', () => {
         }
       }
     );
-    preloadArt({ type: 'sweep', title: { id: 5 } });
-    preloadArt({ type: 'battle', left: { id: 6 }, right: { id: 7 } });
+    preloadArt({ card: { title: { id: 5 }, shelves: [{ films: [{ id: 6 }, { id: 7 }] }, { films: [] }] } });
     preloadArt(null);
     expect(made.map((image) => image.src)).toEqual([
       '/api/art/5/poster',
