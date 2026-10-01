@@ -1,7 +1,7 @@
 <script>
   // The ladder's set-up (decision 547): a full-screen flow over the tab bar, one step per tier from the
   // best down, each named by its word and never by a letter, then the ladder it made.
-  import { onDestroy, onMount } from 'svelte';
+  import { flushSync, onDestroy, onMount } from 'svelte';
   import { afterNavigate, goto } from '$app/navigation';
   import ActionSheet from '$lib/components/ActionSheet.svelte';
   import RatePoster from '$lib/components/RatePoster.svelte';
@@ -44,10 +44,15 @@
   const done = $derived(setup.result);
 
   let q = $state('');
+  let searching = $state(false);
   let timer;
   let leaving = $state(false);
   /** @type {HTMLElement | undefined} */
   let list = $state();
+  /** @type {HTMLInputElement | undefined} */
+  let field = $state();
+  /** @type {HTMLButtonElement | undefined} */
+  let opener = $state();
 
   $effect(() => {
     if (setup.status === 'set') goto('/rate', { replaceState: true });
@@ -66,16 +71,25 @@
     timer = setTimeout(() => search(q), 200);
   }
 
-  function clearSearch() {
+  // Focus moves in the tap itself, or a phone opens no keyboard.
+  function openSearch() {
+    searching = true;
+    flushSync();
+    field?.focus();
+  }
+
+  function closeSearch() {
     clearTimeout(timer);
     q = '';
     search('');
+    searching = false;
+    flushSync();
+    opener?.focus({ preventScroll: true });
   }
 
   function choose(film) {
-    clearTimeout(timer);
-    q = '';
     hit(film);
+    closeSearch();
     list?.scrollTo?.(0, 0);
   }
 
@@ -99,6 +113,10 @@
 
 {#snippet check(px)}
   <svg width={px} height={px} viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 12.5 4.5 4.5L19 7.5" /></svg>
+{/snippet}
+
+{#snippet glass()}
+  <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="6.5" /><path d="m16 16 4.5 4.5" /></svg>
 {/snippet}
 
 {#snippet poster(film, on, mark)}
@@ -141,21 +159,42 @@
       <a class="btn-primary wide" href="/rate">Start rating</a>
     </div>
   {:else}
-    <div class="top">
-      <button class="btn-plain" aria-haspopup="dialog" data-testid="setup-leave" onclick={() => (count ? (leaving = true) : leave())}>
-        Leave
-      </button>
-      <p class="counter">{#if step}Step {setup.at + 1} of {setup.steps.length}{/if}</p>
-      <button
-        class="btn-plain end"
-        disabled={setup.at === 0}
-        aria-label={setup.at > 0 ? `Undo, back to ${setup.steps[setup.at - 1].word}` : 'Undo'}
-        data-testid="setup-undo"
-        onclick={() => go(undo)}
-      >Undo</button>
-    </div>
+    {#if searching}
+      <div class="top finding" role="search">
+        <label class="search">
+          {@render glass()}
+          <input
+            type="search"
+            autocomplete="off"
+            enterkeyhint="search"
+            aria-label="Find a film"
+            placeholder="A film you have seen"
+            data-testid="setup-search"
+            bind:this={field}
+            bind:value={q}
+            oninput={onQuery}
+            onkeydown={(event) => event.key === 'Escape' && closeSearch()}
+          />
+        </label>
+        <button class="btn-plain" data-testid="setup-cancel" onclick={closeSearch}>Cancel</button>
+      </div>
+    {:else}
+      <div class="top">
+        <button class="btn-plain" aria-haspopup="dialog" data-testid="setup-leave" onclick={() => (count ? (leaving = true) : leave())}>
+          Leave
+        </button>
+        <p class="counter">{#if step}Step {setup.at + 1} of {setup.steps.length}{/if}</p>
+        <button
+          class="btn-plain end"
+          disabled={setup.at === 0}
+          aria-label={setup.at > 0 ? `Undo, back to ${setup.steps[setup.at - 1].word}` : 'Undo'}
+          data-testid="setup-undo"
+          onclick={() => go(undo)}
+        >Undo</button>
+      </div>
+    {/if}
 
-    <div class="scroll" bind:this={list}>
+    <div class="scroll" class:covered={searching} bind:this={list}>
       {#if step && draft}
         <h1 class="title-1 word" data-testid="setup-step" data-tier={step.tier}>{step.word}</h1>
         <p class="hint">{step.hint}</p>
@@ -172,77 +211,69 @@
           </div>
         {/if}
 
-        <div class="find">
-          <label class="search">
-            <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="6.5" /><path d="m16 16 4.5 4.5" /></svg>
-            <input
-              type="search"
-              autocomplete="off"
-              enterkeyhint="search"
-              aria-label="Find a film"
-              placeholder="A film you have seen"
-              data-testid="setup-search"
-              bind:value={q}
-              oninput={onQuery}
-            />
-          </label>
-          {#if q}<button class="btn-plain" onclick={clearSearch}>Cancel</button>{/if}
-        </div>
+        <button
+          class="search find"
+          aria-label="Find a film you have seen"
+          data-testid="setup-find"
+          bind:this={opener}
+          onclick={openSearch}
+        >{@render glass()}A film you have seen</button>
 
-        {#if q.trim()}
-          {#if setup.hits?.length}
-            <div class="grid" role="group" aria-label="Films that match">
-              {#each setup.hits as film (film.id)}
-                <button class="cell" data-testid="setup-hit" aria-label={hitLabel(film)} aria-describedby={film.seen ? 'setup-watched' : undefined} onclick={() => choose(film)}>
-                  {@render poster(film, picked(film), stepOf(film.id) >= 0)}
-                  <span class="lines">
-                    <span class="name">{name(film)}</span>
-                    {#if film.year}<span class="name year">{film.year}</span>{/if}
-                  </span>
-                </button>
-              {/each}
-            </div>
-          {:else if setup.hits}
-            <p class="footnote note">
-              {q.trim().length < 2 ? 'Type at least two letters' : `Nothing matches “${q.trim()}”`}
-            </p>
-          {/if}
-        {:else}
-          <div class="grid" role="group" aria-label="Films for {step.word}">
-            {#each grid as film (film.id)}
-              {@const on = picked(film)}
-              <button
-                class="cell"
-                data-testid="setup-film"
-                data-title-id={film.id}
-                aria-pressed={on}
-                aria-label={name(film)}
-                aria-describedby={film.seen ? 'setup-watched' : undefined}
-                onclick={() => toggle(film)}
-              >
-                {@render poster(film, on, on)}
-                <span class="name">{name(film)}</span>
-              </button>
-            {/each}
-            {#if setup.loading && !draft.films.length}
-              {#each { length: PAGE }, i (i)}<span class="skeleton cell-skeleton"></span>{/each}
-            {/if}
-          </div>
-          {#if draft.more}
-            <button class="btn-secondary wide more" data-testid="setup-more" disabled={setup.loading} onclick={more}>
-              Show {PAGE} more
+        <div class="grid" role="group" aria-label="Films for {step.word}">
+          {#each grid as film (film.id)}
+            {@const on = picked(film)}
+            <button
+              class="cell"
+              data-testid="setup-film"
+              data-title-id={film.id}
+              aria-pressed={on}
+              aria-label={name(film)}
+              aria-describedby={film.seen ? 'setup-watched' : undefined}
+              onclick={() => toggle(film)}
+            >
+              {@render poster(film, on, on)}
+              <span class="name">{name(film)}</span>
             </button>
-          {:else if draft.films.length && !setup.loading}
-            <p class="footnote note" data-testid="setup-end">
-              That's the end of the list. Search finds any other film.
-            </p>
+          {/each}
+          {#if setup.loading && !draft.films.length}
+            {#each { length: PAGE }, i (i)}<span class="skeleton cell-skeleton"></span>{/each}
           {/if}
+        </div>
+        {#if draft.more}
+          <button class="btn-secondary wide more" data-testid="setup-more" disabled={setup.loading} onclick={more}>
+            Show {PAGE} more
+          </button>
+        {:else if draft.films.length && !setup.loading}
+          <p class="footnote note" data-testid="setup-end">
+            That's the end of the list. Search finds any other film.
+          </p>
         {/if}
       {/if}
       {#if setup.error}<p class="footnote note" role="alert">{setup.error}</p>{/if}
     </div>
 
-    {#if step}
+    {#if searching}
+      <div class="scroll" data-testid="setup-hits">
+        {#if setup.hits?.length}
+          <div class="grid" role="group" aria-label="Films that match">
+            {#each setup.hits as film (film.id)}
+              <button class="cell" data-testid="setup-hit" aria-label={hitLabel(film)} aria-describedby={film.seen ? 'setup-watched' : undefined} onclick={() => choose(film)}>
+                {@render poster(film, picked(film), stepOf(film.id) >= 0)}
+                <span class="lines">
+                  <span class="name">{name(film)}</span>
+                  {#if film.year}<span class="name year">{film.year}</span>{/if}
+                </span>
+              </button>
+            {/each}
+          </div>
+        {:else if q.trim().length < 2}
+          <p class="footnote note">Type at least two letters</p>
+        {:else if setup.hits}
+          <p class="footnote note">Nothing matches “{q.trim()}”</p>
+        {/if}
+        {#if setup.error}<p class="footnote note" role="alert">{setup.error}</p>{/if}
+      </div>
+    {:else if step}
       <div class="dock">
         {#if !last}
           <button class="btn-primary wide" data-testid="setup-next" onclick={() => go(next)}>
@@ -284,12 +315,13 @@
     padding: env(safe-area-inset-top) env(safe-area-inset-right) 0 env(safe-area-inset-left);
     background: var(--bg);
   }
+  /* The step and the search's hits share the middle row, the hits drawn over the step. */
   .screen {
     height: 100%;
     max-width: 560px;
     margin: 0 auto;
-    display: flex;
-    flex-direction: column;
+    display: grid;
+    grid-template: auto minmax(0, 1fr) auto / minmax(0, 1fr);
   }
   p,
   h1,
@@ -307,6 +339,11 @@
   }
   .top > :first-child {
     justify-self: start;
+  }
+  .finding {
+    display: flex;
+    gap: 8px;
+    padding-left: var(--gutter);
   }
   .end {
     justify-self: end;
@@ -331,11 +368,17 @@
     white-space: nowrap;
   }
   .scroll {
-    flex: 1;
-    min-height: 0;
+    grid-area: 2 / 1;
     overflow-y: auto;
     overscroll-behavior: contain;
+    scrollbar-width: none;
     padding: 0 var(--gutter) 24px;
+  }
+  .scroll::-webkit-scrollbar {
+    display: none;
+  }
+  .covered {
+    visibility: hidden;
   }
   .word {
     margin-top: 8px;
@@ -374,12 +417,6 @@
     font-weight: 600;
     font-variant-numeric: tabular-nums;
   }
-  .find {
-    margin-top: 12px;
-    display: flex;
-    align-items: center;
-    gap: 8px;
-  }
   .search {
     flex: 1;
     min-width: 0;
@@ -400,9 +437,17 @@
     border-radius: 0;
     outline: none;
   }
-  .search:focus-within {
+  label.search:focus-within {
     outline: 2px solid var(--accent-text);
     outline-offset: 2px;
+  }
+  .find {
+    width: 100%;
+    margin-top: 12px;
+    padding: 0 12px;
+    border: none;
+    font-size: var(--fs-body);
+    line-height: 22px;
   }
   .grid {
     margin-top: 12px;

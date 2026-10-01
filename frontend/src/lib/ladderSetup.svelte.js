@@ -3,7 +3,7 @@
 // found on, moving off an earlier one, and Undo puts it back.
 
 import { get, post, qs } from '$lib/api.js';
-import { homeKept } from '$lib/home.svelte.js';
+import { homeKept, strongEnd } from '$lib/home.svelte.js';
 
 export const PAGE = 12;
 
@@ -185,7 +185,7 @@ export async function finish() {
   }
 }
 
-/** Any film by name, as the library's search finds it; two letters at least. */
+/** Any film by name as the library's search finds it, looser matches left out; two letters at least. */
 export async function search(q) {
   const seq = ++searchSeq;
   const text = q.trim();
@@ -196,7 +196,7 @@ export async function search(q) {
   try {
     const res = await get(`/titles${qs({ kind: 'movie', q: text, limit: 16 })}`);
     if (seq !== searchSeq) return;
-    setup.hits = res.items.map((t) => ({
+    setup.hits = res.items.slice(0, strongEnd(res.items, text)).map((t) => ({
       id: t.id,
       name: t.name,
       original_name: t.original_name ?? null,

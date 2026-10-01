@@ -90,6 +90,16 @@ async function click(el) {
   await settle();
 }
 
+/** Types into the search, opening it first, past the field's 200 ms pause. */
+async function type(text) {
+  if (!$('setup-search')) await click($('setup-find'));
+  const field = /** @type {HTMLInputElement} */ ($('setup-search'));
+  field.value = text;
+  field.dispatchEvent(new Event('input', { bubbles: true }));
+  await new Promise((resolve) => setTimeout(resolve, 250));
+  await settle();
+}
+
 describe('the set-up, step by step', () => {
   it('names the step by its word, never a letter, over a grid of its films', async () => {
     await open();
@@ -98,7 +108,8 @@ describe('the set-up, step by step', () => {
     expect(target.textContent).toContain('Highest rated first. Tap the ones you remember well.');
     expect(target.textContent).not.toMatch(/\bS\b|A\+/);
     expect(all('setup-film').map((el) => el.getAttribute('aria-label'))).toEqual(['Heat', 'Zodiac', 'Sicario']);
-    expect($('setup-search').getAttribute('placeholder')).toBe('A film you have seen');
+    expect($('setup-find').textContent.trim()).toBe('A film you have seen');
+    expect($('setup-search'), 'the field opens in the top row, on a tap').toBeNull();
     expect($('setup-end').textContent.trim()).toBe(
       "That's the end of the list. Search finds any other film."
     );
@@ -136,17 +147,40 @@ describe('the set-up, step by step', () => {
       items: [{ id: 7, kind: 'movie', name: 'Prisoners', year: 2013, poster_path: null, seen_state: 'unseen' }]
     });
     await open();
-    const field = /** @type {HTMLInputElement} */ ($('setup-search'));
-    field.value = 'Pris';
-    field.dispatchEvent(new Event('input', { bubbles: true }));
-    await new Promise((resolve) => setTimeout(resolve, 250));
-    await settle();
+    await type('Pris');
     const found = $('setup-hit');
     expect(found.getAttribute('aria-label')).toBe('Prisoners, 2013');
     expect(found.textContent).toContain('2013');
     await click(found);
+    expect($('setup-search'), 'a hit ends the search').toBeNull();
+    expect(document.activeElement).toBe($('setup-find'));
     expect(all('setup-film')[0].getAttribute('aria-label')).toBe('Prisoners');
     expect(all('setup-film')[0].getAttribute('aria-pressed')).toBe('true');
+  });
+
+  it('searches in the top row, its hits over the step and no dock, and Cancel brings the step back', async () => {
+    replies['/api/titles'] = () => ({
+      items: [{ id: 7, kind: 'movie', name: 'Prisoners', year: 2013, poster_path: null, seen_state: 'unseen', match: 'strong' }]
+    });
+    await open();
+    await click($('setup-find'));
+    const field = $('setup-search');
+    expect(document.activeElement, 'the field takes focus in the tap').toBe(field);
+    expect(field.closest('[role="search"]').textContent).toContain('Cancel');
+    expect($('setup-leave'), 'the field takes the top row').toBeNull();
+    expect($('setup-undo')).toBeNull();
+    expect($('setup-next'), 'no dock while searching').toBeNull();
+    expect($('setup-hits').textContent.trim()).toBe('Type at least two letters');
+
+    await type('Pris');
+    expect(all('setup-hit')).toHaveLength(1);
+    await click($('setup-cancel'));
+    expect($('setup-search')).toBeNull();
+    expect($('setup-hits')).toBeNull();
+    expect($('setup-step').textContent).toBe('All-time favourite');
+    expect($('setup-next').textContent.trim()).toBe('None for All-time favourite');
+    expect(document.activeElement, 'focus goes back to what opened the search').toBe($('setup-find'));
+    expect(all('setup-film').map((el) => el.getAttribute('aria-label'))).toEqual(['Heat', 'Zodiac', 'Sicario']);
   });
 
   it('holds Finish until one film is on the ladder', async () => {
