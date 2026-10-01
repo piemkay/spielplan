@@ -18,6 +18,7 @@ from spielplan.connectors.registry import (
     load_jellyfin,
     save_jellyfin,
 )
+from spielplan.home import wish
 from spielplan.push import keys
 from spielplan.push import send as push_send
 from spielplan.sync import seen
@@ -383,6 +384,40 @@ async def test_the_sweep_that_makes_a_wanted_title_owned_announces_it_once(db, w
     await db.execute("UPDATE title SET owned_checked_at = now() - interval '2 hours'")
     await seen.sync_all(db, world["client"])
     assert len(service.requests) == 1, "an owned title re-checked after the hour is no arrival"
+
+
+async def test_a_watched_arrival_that_leaves_the_library_is_not_wanted_again(db, world, monkeypatch):
+    """Decision 544: the wish list is not asked to get a film its wanter has seen, and a re-add is
+    no second arrival."""
+    module, patrick = world["module"], world["patrick"]
+    await keys.ensure_keypair(db)
+    await _device(db, patrick, "https://push.example.test/f/patrick-phone")
+    await db.execute("INSERT INTO wish (user_id, title_id, state) VALUES ($1, 2, 'want')", patrick)
+    await _store_connector(db, world, tokens={str(patrick): world["token"]})
+    service = FakePushService()
+    deliver = push_send.send_to_user
+
+    async def through_the_fake(conn, user_id, payload, *, transport=None):
+        return await deliver(conn, user_id, payload, transport=service)
+
+    monkeypatch.setattr(push_send, "send_to_user", through_the_fake)
+
+    await seen.sync_all(db, world["client"])
+    assert len(service.requests) == 1, "Prisoners arrived"
+    module.state.played[PATRICK_JF].add("jf-2")
+    await seen.sync_all(db, world["client"])
+    assert (await _state(db, patrick, 2))["state"] == "seen"
+
+    library = module.ITEMS
+    monkeypatch.setattr(module, "ITEMS", [item for item in library if item["Id"] != "jf-2"])
+    await seen.sync_all(db, world["client"])
+    assert await db.fetchval("SELECT is_owned FROM title WHERE id = 2") is False
+    assert await wish.summary(db) == {"wanted": 0, "both": 0}
+
+    monkeypatch.setattr(module, "ITEMS", library)
+    await seen.sync_all(db, world["client"])
+    assert await db.fetchval("SELECT is_owned FROM title WHERE id = 2") is True
+    assert len(service.requests) == 1
 
 
 @pytest.fixture

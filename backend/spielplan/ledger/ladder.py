@@ -275,6 +275,9 @@ async def finish_setup(
     chosen = [(int(title_id), int(tier)) for title_id, tier in picks]
     async with conn.transaction():
         await conn.execute("SELECT pg_advisory_xact_lock($1, $2)", LOCK, user_id)
+        # A full fit in flight read the history; it commits first, so the DELETEs below remove it.
+        for kind in observations.KINDS:
+            await refit._take_board_lock(conn, user_id=user_id, kind=kind)
         if await set_up_at(conn, user_id=user_id) is not None:
             raise AlreadySetUp(f"user {user_id} has already set up their ladder")
         if not chosen:
@@ -307,6 +310,11 @@ async def finish_setup(
         await conn.execute("DELETE FROM ledger_state WHERE user_id = $1", user_id)
         for kind in observations.KINDS:
             await refit._queue_full_refit(conn, user_id=user_id, kind=kind)
+        # Newer than any request a sweep is servicing, whose clear would otherwise take this one too.
+        await conn.execute(
+            "UPDATE ledger_cutpoints SET refit_requested_at = clock_timestamp() WHERE user_id = $1",
+            user_id,
+        )
         after = await state(conn, user_id=user_id)
     return SetupResult(
         finished_at=finished_at,

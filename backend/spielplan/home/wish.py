@@ -1,7 +1,8 @@
 """The household's wish list, each person's Not for me, and the arrivals (decision 544, §4.2).
 
 A want row whose title is not owned is on the list. One whose title is owned has arrived: it stands
-as that person's banner until they dismiss it, which deletes the row, or see or rate the title.
+as that person's banner until they dismiss it, which deletes the row, or see or rate the title, after
+which the sweep deletes it.
 """
 
 from __future__ import annotations
@@ -13,7 +14,7 @@ import asyncpg
 import httpx
 
 from spielplan.connectors import registry
-from spielplan.ledger.observations import KINDS, LIVE_LABEL_SQL
+from spielplan.ledger.observations import KINDS, LIVE_LABEL_SQL, live_label_sql
 from spielplan.push import send as push_send
 from spielplan.scoring import serve
 
@@ -80,6 +81,21 @@ async def dismiss(conn: asyncpg.Connection, *, user_id: int, title_id: int) -> b
         user_id, title_id,
     )
     return deleted is not None
+
+
+async def retire_settled(conn: asyncpg.Connection) -> None:
+    """Deletes each arrival its wanter has seen or rated, before the sweep can un-own its title and
+    put it back on the list."""
+    await conn.execute(
+        f"""
+        DELETE FROM wish w USING title t
+         WHERE w.state = 'want' AND t.id = w.title_id AND t.is_owned
+           AND (EXISTS (SELECT 1 FROM user_title ut WHERE ut.user_id = w.user_id
+                         AND ut.title_id = t.id AND ut.state = 'seen')
+                OR EXISTS (SELECT 1 FROM ({live_label_sql("w.user_id")}) lv
+                            WHERE lv.title_id = t.id))
+        """
+    )
 
 
 async def wanted_by(
@@ -166,7 +182,7 @@ async def _cdfs(
     bundle_version: str | None,
 ) -> dict[tuple[int, int], float]:
     """(member, title) -> the member's score percentile among unowned titles of its kind, read only
-    where their own ratings rank that kind."""
+    where their own ratings rank that kind and they have not said Not for me."""
     if not member_ids or not title_ids or bundle_version is None:
         return {}
     personal = {
@@ -182,7 +198,10 @@ async def _cdfs(
               JOIN title t ON t.id = us.title_id AND NOT t.is_owned
              WHERE us.user_id = ANY($1::bigint[]) AND us.bundle_version = $2
         )
-        SELECT user_id, title_id, kind, cdf FROM ranked WHERE title_id = ANY($3::int[])
+        SELECT user_id, title_id, kind, cdf FROM ranked r
+         WHERE r.title_id = ANY($3::int[])
+           AND NOT EXISTS (SELECT 1 FROM wish x WHERE x.user_id = r.user_id
+                            AND x.title_id = r.title_id AND x.state = 'not_for_me')
         """,
         list(member_ids), bundle_version, list(title_ids),
     )
@@ -314,6 +333,7 @@ __all__ = [
     "dismiss",
     "household_list",
     "link_for",
+    "retire_settled",
     "set_state",
     "state_for",
     "summary",

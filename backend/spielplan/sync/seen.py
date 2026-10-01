@@ -679,6 +679,7 @@ async def sync_all(
                 )
         _failed_users_logged = frozenset(report.failed_users)
 
+        await wish.retire_settled(conn)
         await _falsify_ownership(conn, resolved, report)
 
         # Clear a stale re-link flag only on a Played write this member's token made.

@@ -4,12 +4,15 @@ re-asks (§13 stream b). Needs TEST_DATABASE_URL."""
 
 from __future__ import annotations
 
+import asyncio
+
+import asyncpg
 import numpy as np
 import pytest
 
 from spielplan.ledger import ladder, observations, refit
 from spielplan.ledger.hyperparams import DEFAULTS
-from spielplan.rank import evaluation, read
+from spielplan.rank import evaluation, read, tiers
 from spielplan.scoring import foldin
 from tests.helpers import insert_user
 
@@ -229,6 +232,48 @@ async def test_the_board_and_its_duel_readers_start_at_the_cut_over(db, world):
 
     agreement = await evaluation.held_out_agreement(db, user_id=patrick, kind="movie")
     assert agreement.pairs + agreement.unplaced == 1
+
+
+async def test_a_set_up_during_the_sweeps_fit_of_the_history_leaves_no_stale_board(
+    db, world, pg_url, monkeypatch
+):
+    """The sweep is fitting an older request from the history when the set-up commits: its board must
+    not outlive the cut-over, and clearing the request it serviced must not drop the cut-over's."""
+    patrick = world["patrick"]
+    await _history(db, patrick)
+    await refit._queue_full_refit(db, user_id=patrick, kind="movie")
+    (_, _, serviced), = await tiers.refits_owed(db)
+
+    loaded, carry_on = asyncio.Event(), asyncio.Event()
+    load = observations.load_observations
+
+    async def held(*args, **kwargs):
+        result = await load(*args, **kwargs)
+        loaded.set()
+        await carry_on.wait()
+        return result
+
+    monkeypatch.setattr(observations, "load_observations", held)
+    sweep = await asyncpg.connect(pg_url)
+    try:
+        fitting = asyncio.create_task(_fitted(sweep, patrick))
+        await asyncio.wait_for(loaded.wait(), 10)
+        setting_up = asyncio.create_task(_set_up(db, patrick))
+        await asyncio.wait({setting_up}, timeout=0.5)
+        carry_on.set()
+        await asyncio.wait_for(fitting, 10)
+        await asyncio.wait_for(setting_up, 10)
+        await tiers.clear_refit_request(
+            sweep, user_id=patrick, kind="movie", requested_at=serviced
+        )
+    finally:
+        await sweep.close()
+
+    assert await db.fetchval("SELECT count(*) FROM ledger_fit WHERE user_id = $1", patrick) == 0
+    assert await db.fetchval("SELECT count(*) FROM ledger_state WHERE user_id = $1", patrick) == 0
+    assert {(u, k) for u, k, _ in await tiers.refits_owed(db)} == {
+        (patrick, "movie"), (patrick, "series"),
+    }
 
 
 async def test_a_second_finish_is_refused_and_writes_nothing(db, world):
