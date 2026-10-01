@@ -1,5 +1,5 @@
 <script>
-  // The review and the three editors stay apart: each has its own semantics (decisions 341, 445).
+  // The review and the two editors stay apart: each has its own semantics (decisions 341, 445).
   import DnaRejects from '$lib/components/DnaRejects.svelte';
   import LedgerEditor from '$lib/components/LedgerEditor.svelte';
 </script>
@@ -20,7 +20,6 @@
     <div class="list-group editors">
       <LedgerEditor ledger="adjudications" />
       <LedgerEditor ledger="corrections" />
-      <LedgerEditor ledger="axes" />
     </div>
   </section>
 </div>

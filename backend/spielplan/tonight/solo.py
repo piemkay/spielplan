@@ -118,7 +118,6 @@ async def picks(
 
     played = round_rules.replay(
         prior, list(answers), has_profile=True,
-        axes=combine_rules.axis_positions(vectors, await dna_reads.axes_for(conn, version=version or "")),
         rng=rng or random.Random(0), holdout_key=holdout_key, select=sharpen,
     )
     # The rows the replay counted and no others (`tilt.applies`); N counts answers that tilted.

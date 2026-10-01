@@ -4,13 +4,11 @@ ledgers a models-only import reloads (decision 247). Shapes are held to `real_bu
 from __future__ import annotations
 
 import json
-import shutil
 import sqlite3
-from pathlib import Path, PurePosixPath
+from pathlib import Path
 
 import pytest
 
-from spielplan.api import admin as admin_api
 from spielplan.dna import aliases as dna_aliases
 from spielplan.importer import dna
 from spielplan.importer import validate as validator
@@ -391,49 +389,6 @@ async def test_an_absent_curated_ledger_names_what_is_still_installed(db, bundle
     assert "will not survive" not in lines["corrections"].message, lines["corrections"].message
 
 
-async def test_a_bundle_with_no_axis_file_says_which_weights_it_left_standing(
-    db, bundle_dir, tmp_path
-):
-    """With weights installed, the no-axis warning must not claim consequences the install lacks."""
-    vocab = bundle_dir / "artifacts" / "dna_vocab" / "v1"
-    await dna.load_vocabulary(db, vocab, "v1", ImportReport())
-    await dna.load_axes(db, vocab, "v1", ImportReport())
-    weights = await db.fetch(
-        "SELECT facet, term, weight FROM dna_axis_weight WHERE version = 'v1' ORDER BY facet, term"
-    )
-    assert weights, "the fixture authors axes; without them this test cannot fail"
-
-    for axis in vocab.glob("*.tsv"):
-        if axis.stem in fx.AXES:
-            axis.unlink()
-    report = ImportReport()
-
-    await dna.load_axes(db, vocab, "v1", report)
-
-    assert report.ok, report.render()
-    after = await db.fetch(
-        "SELECT facet, term, weight FROM dna_axis_weight WHERE version = 'v1' ORDER BY facet, term"
-    )
-    assert [tuple(r) for r in after] == [tuple(r) for r in weights], "decision 247: nothing moves"
-    warned = [f for f in report.findings if f.rule == "axes" and f.severity == "warn"]
-    assert len(warned) == 1, report.render()
-    assert "no authored axis definition" in warned[0].message
-    assert warned[0].detail["stored"] == len(weights)
-    assert str(len(weights)) in warned[0].message, warned[0].message
-    assert "no axes to plot" not in warned[0].message, warned[0].message
-    assert "facet split" not in warned[0].message, warned[0].message
-
-    # The install that HAS those consequences is still told about them.
-    await db.execute("DELETE FROM dna_axis_weight WHERE version = 'v1'")
-    bare = ImportReport()
-    await dna.load_axes(db, vocab, "v1", bare)
-    axis_warn = next(f for f in bare.findings if f.rule == "axes" and f.severity == "warn")
-    assert "no axes to plot" in axis_warn.message, axis_warn.message
-    # Since decision 479 an axisless split is surfaced by person, so the facet split is what is lost.
-    assert "facet split (§6.2 step 5) is off" in axis_warn.message, axis_warn.message
-    assert "surfaced by person" in axis_warn.message, axis_warn.message
-
-
 async def test_the_vocabulary_loads_from_the_per_facet_files_the_bundle_ships(db, vocab_dir):
     """The term id already carries its facet, so the facet is the prefix, never `mood.mood.dread`."""
     assert not (vocab_dir / "terms.tsv").exists(), "no bundle contains this file"
@@ -568,7 +523,7 @@ async def test_an_alias_that_maps_to_nothing_is_skipped_rather_than_crashing(db,
 
 
 async def test_a_latin_1_byte_in_the_alias_map_is_a_report_line_not_an_exception(db, vocab_dir):
-    """`load_axes` globs every `*.tsv`, so it meets the alias map's bad byte too and must not raise."""
+    """The bad byte fails the alias map's own line; the rest of the vocabulary still loads."""
     (vocab_dir / "alias_map_v1.tsv").write_bytes(
         b"raw_term\tdf\tfacet\tvocab_term\tvia_concept\tkind\n"
         + "cosy\xa0\t12\tmood\tmood.cosy\t\talias\n".encode("latin-1")
@@ -583,12 +538,6 @@ async def test_a_latin_1_byte_in_the_alias_map_is_a_report_line_not_an_exception
     assert await db.fetchval("SELECT count(*) FROM dna_alias") == 0
     assert await db.fetchval("SELECT count(*) FROM dna_term WHERE version = 'v1'") == len(fx.VOCAB)
     assert await db.fetchval("SELECT count(*) FROM dna_adjudication") == 2
-    assert {r["facet"] for r in await db.fetch("SELECT facet FROM dna_axis")} == set(fx.AXES)
-    passed_over = [
-        f for f in report.findings
-        if f.rule == "axes" and f.detail.get("files") == ["alias_map_v1.tsv"]
-    ]
-    assert [f.severity for f in passed_over] == ["warn"], report.render()
 
 
 async def test_adjudications_load_in_their_real_per_title_shape(db, vocab_dir):
@@ -1009,207 +958,3 @@ async def test_every_shipped_dna_table_is_loaded_or_skipped_with_a_reason(
         assert loaded or reason, f"{table} is neither loaded nor reported as skipped"
         # A loader that claims a table it never writes is the same silence with a count on it.
         assert not (loaded and reason), f"{table} is both loaded and named as skipped"
-
-
-def _strip_axis_definitions(vocab_dir: Path) -> None:
-    """No authored axis beside the vocabulary files nor in the old `axes/` subdirectory."""
-    for facet in fx.AXES:
-        (vocab_dir / f"{facet}.tsv").unlink(missing_ok=True)
-    shutil.rmtree(vocab_dir / "axes", ignore_errors=True)
-
-
-async def test_a_bundle_with_no_axis_artifact_loads_and_the_report_says_what_is_off(db, vocab_dir):
-    """Decision 173: no axes ship; the report must say the facet split is off, not fail or stay quiet."""
-    _strip_axis_definitions(vocab_dir)
-    report = ImportReport()
-
-    await dna.load_vocabulary(db, vocab_dir, "v1", report)
-
-    assert report.ok, "a bundle with no axes is a legal bundle (decision 173)"
-    assert await db.fetchval("SELECT count(*) FROM dna_axis") == 0
-    warnings = [f for f in report.findings if f.rule == "axes" and f.severity == "warn"]
-    assert len(warnings) == 1, report.render()
-    assert "§6.2 step 5" in warnings[0].message, warnings[0].message
-    assert "facet split" in warnings[0].message, warnings[0].message
-    assert "Map" in warnings[0].message, "the Map surface's half of the gap is still true"
-    # The line is not conditional on there being something to count.
-    assert "authored axis definition" in report.render()
-
-
-async def test_an_axis_tsv_beside_the_vocabulary_files_is_the_one_that_loads(db, vocab_dir):
-    """The exporter does not descend into subdirectories, so axes must sit beside the vocabulary files."""
-    _strip_axis_definitions(vocab_dir)
-    (vocab_dir / "visual.tsv").write_text(
-        "murky\tluminous\nvisual.neon\t0.75\nvisual.grainy\t-0.5\n", encoding="utf-8"
-    )
-    # The subdirectory is not a second supported location.
-    (vocab_dir / "axes").mkdir(exist_ok=True)
-    (vocab_dir / "axes" / "mood.tsv").write_text(
-        "heavy\tlight\nmood.dread\t-1.0\n", encoding="utf-8"
-    )
-    report = ImportReport()
-
-    await dna.load_vocabulary(db, vocab_dir, "v1", report)
-
-    assert report.ok, report.render()
-    rows = await db.fetch("SELECT facet, left_pole, right_pole FROM dna_axis")
-    assert [(r["facet"], r["left_pole"], r["right_pole"]) for r in rows] == [
-        ("visual", "murky", "luminous")
-    ], "the axes/ subdirectory is read, or the file beside the vocabulary is not"
-    weights = await db.fetch("SELECT term, weight FROM dna_axis_weight ORDER BY term")
-    assert [(r["term"], round(r["weight"], 3)) for r in weights] == [
-        ("visual.grainy", -0.5), ("visual.neon", 0.75)
-    ]
-
-
-async def test_the_pacing_coordinates_file_is_not_read_as_an_axis_definition(db, vocab_dir):
-    """The pacing coordinates file must be passed over in silence, neither loaded nor warned about."""
-    columns = SHAPES["tsv"]["artifacts/dna_vocab/v1/vocab_pacing_axes_v1.tsv"]
-    assert columns[0] == "id" and len(columns) > 2, "this file opens with column names, not poles"
-    (vocab_dir / "vocab_pacing_axes_v1.tsv").write_text(
-        "\t".join(columns) + "\npacing.patient\t0.1\t0.2\t0.3\t0.4\t0.5\t\n", encoding="utf-8"
-    )
-    report = ImportReport()
-
-    await dna.load_vocabulary(db, vocab_dir, "v1", report)
-
-    assert report.ok, report.render()
-    facets = {r["facet"] for r in await db.fetch("SELECT facet FROM dna_axis")}
-    assert facets == set(fx.AXES), facets
-    pacing = await db.fetchrow("SELECT left_pole, right_pole FROM dna_axis WHERE facet = 'pacing'")
-    assert (pacing["left_pole"], pacing["right_pole"]) == fx.AXES["pacing"][:2]
-    # `load_vocabulary` already notes this file; the axis rule must not add a second line.
-    named = [
-        f.message for f in report.findings
-        if f.rule == "axes" and "vocab_pacing_axes_v1.tsv" in f.message
-    ]
-    assert not named, f"a vocabulary artifact was reported as a misnamed axis: {named}"
-
-
-async def test_a_re_authored_axis_that_drops_a_term_drops_its_weight(db, vocab_dir):
-    """Decision 261: a re-authored axis replaces its facet's weights, so a dropped term loses its weight."""
-    report = ImportReport()
-    await dna.load_vocabulary(db, vocab_dir, "v1", report)
-    left, right = fx.AXES["mood"][:2]
-    before = await db.fetch(
-        "SELECT term FROM dna_axis_weight WHERE facet = 'mood' ORDER BY term"
-    )
-    assert len(before) > 1, "the fixture axis has to carry more than one term to shrink"
-    kept, dropped = before[0]["term"], before[-1]["term"]
-
-    (vocab_dir / "mood.tsv").write_text(
-        f"{left}\t{right}\n{kept}\t0.25\n", encoding="utf-8"
-    )
-    second = ImportReport()
-
-    await dna.load_axes(db, vocab_dir, "v1", second)
-
-    assert second.ok, second.render()
-    rows = await db.fetch(
-        "SELECT term, weight FROM dna_axis_weight WHERE facet = 'mood' ORDER BY term"
-    )
-    assert [(r["term"], r["weight"]) for r in rows] == [(kept, 0.25)], (
-        f"{dropped} kept its installed weight after the bundle stopped carrying it"
-    )
-    # The other facets are untouched: the clear is the re-authored facet's, not the version's.
-    assert await db.fetchval(
-        "SELECT count(*) FROM dna_axis_weight WHERE facet <> 'mood'"
-    ) > 0, "clearing one facet's weights emptied the others"
-
-
-async def test_an_axis_file_that_parses_to_no_weight_leaves_the_facets_weights_standing(
-    db, vocab_dir
-):
-    """Decision 264: a header-only or unreadable-weights file must not clear the facet's weights."""
-    report = ImportReport()
-    await dna.load_vocabulary(db, vocab_dir, "v1", report)
-    left, right = fx.AXES["mood"][:2]
-    installed = [
-        (r["term"], r["weight"]) for r in await db.fetch(
-            "SELECT term, weight FROM dna_axis_weight WHERE facet = 'mood' ORDER BY term"
-        )
-    ]
-    assert installed, "the fixture ships mood weights for this to have something to lose"
-
-    for body in (f"{left}\t{right}\n", f"{left}\t{right}\nmood.dread\tnot-a-number\n"):
-        (vocab_dir / "mood.tsv").write_text(body, encoding="utf-8")
-        second = ImportReport()
-
-        await dna.load_axes(db, vocab_dir, "v1", second)
-
-        assert second.ok, second.render()
-        rows = [
-            (r["term"], r["weight"]) for r in await db.fetch(
-                "SELECT term, weight FROM dna_axis_weight WHERE facet = 'mood' ORDER BY term"
-            )
-        ]
-        assert rows == installed, f"mood.tsv parsing to nothing cleared the facet: {rows}"
-        kept = [
-            f for f in second.findings
-            if f.rule == "axes" and "left in place rather than replaced" in f.message
-        ]
-        assert len(kept) == 1, second.render()
-        assert kept[0].severity == "warn" and "mood.tsv" in kept[0].message, kept[0].message
-        assert kept[0].detail.get("stored") == len(installed), kept[0].detail
-        # The count used to include the file that loaded nothing.
-        loaded = next(f for f in second.findings if "authored axis definition(s) loaded" in f.message)
-        assert loaded.detail["facets"] == len(fx.AXES) - 1, loaded.message
-
-
-async def test_an_axis_named_for_something_that_is_not_a_facet_is_reported_rather_than_raised(
-    db, vocab_dir
-):
-    """`axis_mood_v1.tsv` would name a facet `axis_mood_v1`; the FK refusal must be a report line."""
-    (vocab_dir / "axis_mood_v1.tsv").write_text(
-        "heavy\tlight\nmood.dread\t-1.0\n", encoding="utf-8"
-    )
-    report = ImportReport()
-
-    await dna.load_vocabulary(db, vocab_dir, "v1", report)
-
-    assert report.ok, report.render()
-    warnings = [f for f in report.findings if f.rule == "axes" and f.severity == "warn"]
-    assert len(warnings) == 1, report.render()
-    assert "axis_mood_v1.tsv" in warnings[0].message, warnings[0].message
-    assert {r["facet"] for r in await db.fetch("SELECT facet FROM dna_axis")} == set(fx.AXES)
-
-
-async def test_the_axis_loader_reads_the_installed_facets_when_no_vocabulary_ran(db, vocab_dir):
-    """With no vocabulary run, the loader reads `dna_facet`, the only set the FK accepts."""
-    report = ImportReport()
-    await dna.load_vocabulary(db, vocab_dir, "v1", report)
-    await db.execute("DELETE FROM dna_axis_weight")
-    await db.execute("DELETE FROM dna_axis")
-    second = ImportReport()
-
-    await dna.load_axes(db, vocab_dir, "v1", second)
-
-    assert second.ok, second.render()
-    assert {r["facet"] for r in await db.fetch("SELECT facet FROM dna_axis")} == set(fx.AXES)
-    named = [f.message for f in second.findings if f.rule == "axes" and f.severity == "warn"]
-    assert not named, named
-
-
-async def test_the_data_card_names_the_paths_the_axis_loader_actually_reads(db, vocab_dir):
-    """The card builds its path from the loader's rule; that path must load."""
-    card = await admin_api.data_sources(None, db)
-    axes = card["axes"]
-
-    assert axes["expected"], "the card names nothing for an operator to author"
-    assert not any("axes/" in p for p in axes["expected"]), (
-        "the card still sends the operator to the subdirectory decision 173 retired"
-    )
-    assert any("Tonight's facet split" in line for line in axes["disables"]), axes["disables"]
-    assert not any("§" in line or "decision" in line for line in axes["disables"]), axes["disables"]
-
-    _strip_axis_definitions(vocab_dir)
-    named = PurePosixPath(axes["expected"][0])
-    (vocab_dir / named.name).write_text(
-        f"left\tright\n{named.stem}.example\t-1.0\n", encoding="utf-8"
-    )
-    report = ImportReport()
-    await dna.load_vocabulary(db, vocab_dir, "v1", report)
-
-    assert report.ok, report.render()
-    loaded = [r["facet"] for r in await db.fetch("SELECT facet FROM dna_axis")]
-    assert loaded == [named.stem], f"the card names {named}, the loader loaded {loaded}"

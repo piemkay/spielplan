@@ -150,7 +150,6 @@ test.describe('first boot', () => {
 
     await expect(page.locator('.finding', { hasText: 'artifacts staged to' })).toBeVisible();
     await expect(page.locator('.finding', { hasText: 'vocabulary v1' })).toBeVisible();
-    await expect(page.locator('.finding', { hasText: 'authored axis definition' })).toBeVisible();
 
     // Decision 497: the backend loads the flipped bundle itself, so no restart is asked for.
     await expect(page.locator('[data-served="live"]')).toContainText('test-v1 is live');

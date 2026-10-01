@@ -117,7 +117,6 @@ export const WILDCARD_LINE = 'A step outside your usual';
 // The QR that §6.2 step 2 also names is still owed and not promised here.
 export const SHARE_CAPTION = 'Read the code out, or share the link.';
 
-// Not RESERVED_LABEL, the axis counterweight's, which would mislabel somebody's favourite.
 export function pickLabel(name) {
   return `${name}'s pick`;
 }
@@ -137,9 +136,6 @@ export function vetoCaption(kind) {
 // The round's answers already carry the mood, so the lobby says how rather than adding a question.
 export const MOOD_CAPTION =
   'In a particular mood? In each pair, pick the one that fits it, and tap “Neither tonight” when neither does. Your answers steer the pick.';
-
-// 54d's reserved finalist; the fact itself is the payload's `reserved` flag (decision 220).
-export const RESERVED_LABEL = 'The other side of the split';
 
 // `SoloBody.offset`'s bound (`le=64` in `api/tonight.py`), which the client cannot discover.
 const SOLO_OFFSET_MAX = 64;

@@ -1,4 +1,4 @@
-"""§6.2 step 5's combine: three finalists, a wildcard, and the split that reserves a slot (54d).
+"""§6.2 step 5's combine: three finalists, a wildcard, and the person split that reserves a slot.
 
 D is mean - min of the seated members' rank-standardised Ledger scores for the leading candidate
 (owner decision 2026-08-29; threshold recalibrated by decision 478).
@@ -39,12 +39,9 @@ class Slate:
     ranked: list[tuple[int, float]]
     finalists: list[int]
     wildcard: int | None
-    contested: str | None = None
     conflict: dict[str, Any] | None = None
     d: float = 0.0
     rows: list[dict[str, Any]] = field(default_factory=list)
-    # 54d's opposite-pole title "labelled as such" (decision 220); None with no reservation.
-    reserved: int | None = None
     # The person split's reservations, {title_id: participant_id} (decision 479).
     reserved_for: dict[int, int] = field(default_factory=dict)
 
@@ -86,87 +83,6 @@ def divergence(member_scores: Sequence[float]) -> float:
     if len(values) < 2:
         return 0.0
     return sum(values) / len(values) - min(values)
-
-
-def divergent_answers(orderings: Sequence[Mapping[int, float]], leading: Sequence[int]) -> bool:
-    """§6.2 step 5's other trigger: two participants order a pair of leading candidates oppositely."""
-    for i, a in enumerate(leading):
-        for b in leading[i + 1 :]:
-            signs = {
-                (scores[a] > scores[b]) - (scores[a] < scores[b])
-                for scores in orderings
-                if a in scores and b in scores
-            }
-            if 1 in signs and -1 in signs:
-                return True
-    return False
-
-
-# --- the contested axis --------------------------------------------------------------------
-
-
-def axis_position(dna: Mapping[str, float], weights: Mapping[str, float]) -> float:
-    """Where one title sits on one authored axis (§6.4), normalised by the weight it engaged.
-
-    Weights are used as weights and never as a filter (§4.1 rule 2).
-    """
-    engaged = sum(abs(weights[t]) * abs(dna[t]) for t in set(dna) & set(weights))
-    if engaged <= 0.0:
-        return 0.0
-    total = sum(weights[t] * dna[t] for t in set(dna) & set(weights))
-    return total / engaged
-
-
-def axis_positions(
-    dna: Mapping[int, Mapping[str, float]], axes: Mapping[str, Mapping[str, float]]
-) -> dict[int, dict[str, float]]:
-    """Every candidate's position on every authored axis: 54c's tie-break is about axes, not terms."""
-    return {
-        title_id: {facet: axis_position(vec, weights) for facet, weights in axes.items()}
-        for title_id, vec in dna.items()
-    }
-
-
-def contested_facet(
-    tilts: Sequence[Mapping[str, float]], axes: Mapping[str, Mapping[str, float]]
-) -> str | None:
-    """The authored axis two participants' pool-centred tilts pull against each other on most."""
-    if len(tilts) < 2:
-        return None
-    best: tuple[float, str] | None = None
-    for facet, weights in axes.items():
-        positions = [
-            sum(weights.get(term, 0.0) * value for term, value in tilt.items())
-            for tilt in tilts
-        ]
-        if max(positions) <= 0.0 or min(positions) >= 0.0:
-            continue          # everyone leans the same way; nothing is contested
-        magnitude = max(positions) - min(positions)
-        if best is None or magnitude > best[0]:
-            best = (magnitude, facet)
-    return best[1] if best else None
-
-
-def zeroed(scores: Mapping[int, float], *, facet: str, dna, axes) -> dict[int, float]:
-    """"The contested axis is **zeroed, not averaged**."
-
-    By regression on axis position, keeping the residual: subtracting a [-1, 1] position from a
-    group score would multiply the axis's influence, not remove it.
-    """
-    weights = axes.get(facet, {})
-    positions = {t: axis_position(dna.get(t, {}), weights) for t in scores}
-    n = len(scores)
-    if n < 2:
-        return dict(scores)
-    mean_x = sum(positions.values()) / n
-    mean_y = sum(scores.values()) / n
-    var_x = sum((positions[t] - mean_x) ** 2 for t in scores)
-    if var_x <= 1e-12:
-        # Every candidate sits at the same point on this axis, so it decides nothing already.
-        return dict(scores)
-    cov = sum((positions[t] - mean_x) * (scores[t] - mean_y) for t in scores)
-    slope = cov / var_x
-    return {t: scores[t] - slope * (positions[t] - mean_x) for t in scores}
 
 
 # --- the slate -------------------------------------------------------------------------------
@@ -247,8 +163,6 @@ def combine(
     *,
     per_participant: Mapping[int, Mapping[int, float]],
     member_ledger: Mapping[int, Sequence[float]],
-    tilts: Sequence[Mapping[str, float]] = (),
-    axes: Mapping[str, Mapping[str, float]] | None = None,
     dna: Mapping[int, Mapping[str, float]] | None = None,
 ) -> Slate:
     """§6.2 step 5, end to end.
@@ -256,82 +170,31 @@ def combine(
     `member_ledger` is {title_id: [each member's rank-standardised Ledger score]}: D's input, not
     the tonight scores, which move with the round's answers (decisions 477, 478).
     """
-    axes = axes or {}
     dna = dna or {}
     scores = group_scores(per_participant)
     order = ranked(scores)
     if not order:
         return Slate(ranked=[], finalists=[], wildcard=None)
 
-    leading = [t for t, _ in order[:FINALISTS]]
-    top = order[0][0]
-    d = divergence(member_ledger.get(top, ()))
-    split = d >= D_THRESHOLD or divergent_answers(list(per_participant.values()), leading)
-
-    contested = contested_facet(tilts, axes) if split else None
+    d = divergence(member_ledger.get(order[0][0], ()))
+    finalists = [t for t, _ in order[:FINALISTS]]
     conflict = None
-    finalists = list(leading)
-    reserved: int | None = None
-    # The ranking the slate is drawn from; a surfaced split replaces it with the zeroed one.
-    slate_order = order
-
-    if split and contested:
-        # Zeroed, then the alternative: the third slot is REPLACED, never a fourth finalist.
-        adjusted = zeroed(scores, facet=contested, dna=dna, axes=axes)
-        adjusted_order = ranked(adjusted)
-        free = [t for t, _ in adjusted_order[:FINALISTS - 1]]
-        weights = axes.get(contested, {})
-        poles = {t: axis_position(dna.get(t, {}), weights) for t, _ in adjusted_order}
-        # The reference pole comes from a free finalist, else the pool: a leader may carry no DNA.
-        ref = next((poles[t] for t in free if poles.get(t, 0.0) != 0.0), 0.0)
-        if ref == 0.0:
-            ref = next((p for p in poles.values() if p != 0.0), 0.0)
-        finalists = list(free)
-        opposite = [
-            t for t, _ in adjusted_order
-            if t not in finalists and poles.get(t, 0.0) * ref < 0.0
-        ]
-        if opposite and not any(poles.get(t, 0.0) * ref > 0.0 for t in free):
-            # Neither free slot is on the reference pole: reserve slot two as well (decision 221).
-            on_ref = [t for t, _ in adjusted_order if poles.get(t, 0.0) * ref > 0.0]
-            reserved = opposite[0]
-            finalists = [free[0], on_ref[0], reserved]
-        elif opposite:
-            reserved = opposite[0]
-            finalists.append(reserved)
-        elif any(poles.get(t, 0.0) * ref < 0.0 for t in finalists):
-            # The free slots already span the axis: still surfaced, and the third is the next best.
-            # A two-candidate pool has no third, which is a complete slate.
-            third = next((t for t, _ in adjusted_order if t not in finalists), None)
-            if third is not None:
-                finalists.append(third)
-        else:
-            # Nothing on the other pole: decide silently (§0), and on `order`, since nothing is
-            # surfaced.
-            finalists = [t for t, _ in order[:FINALISTS]]
-            contested = None
-        if contested:
-            slate_order = adjusted_order
-            conflict = copy_rules.conflict(contested, d=d)
-
-    # No axis artifact loaded (decision 173): a split by D alone is surfaced by person
-    # (decision 479); `divergent_answers` fires too often to trigger it.
     reserved_for: dict[int, int] = {}
-    by_person = not axes and len(per_participant) >= 2 and d >= D_THRESHOLD
-    if by_person:
+    # A hard split is surfaced by person, on D alone (decisions 479 and 542).
+    split = len(per_participant) >= 2 and d >= D_THRESHOLD
+    if split:
         finalists, reserved_for, each = one_for_each(order, per_participant)
         conflict = copy_rules.person_conflict(d=d, one_for_each=each)
 
-    # The wildcard comes from the same ranking the slate was built from.
-    wildcard = wildcard_from(slate_order, finalists, dna)
+    wildcard = wildcard_from(order, finalists, dna)
     # A surfaced split persists the slate's reading order as rank, since its finalists are no
     # longer a prefix of `order`; `group_score` stays the plain average.
-    if contested or by_person:
+    if split:
         placed = {*finalists, wildcard}
         sequence = [
             *finalists,
             *([wildcard] if wildcard is not None else []),
-            *(t for t, _ in slate_order if t not in placed),
+            *(t for t, _ in order if t not in placed),
         ]
     else:
         sequence = [t for t, _ in order]
@@ -345,13 +208,11 @@ def combine(
             slot = SLOT_RUNNER_UP
         rows.append({
             "title_id": title_id, "rank": rank, "group_score": scores[title_id], "slot": slot,
-            "reserved": title_id == reserved,
             "reserved_for": reserved_for.get(title_id),
         })
 
     return Slate(
-        ranked=order, finalists=finalists, wildcard=wildcard,
-        contested=contested, conflict=conflict, d=d, rows=rows, reserved=reserved,
+        ranked=order, finalists=finalists, wildcard=wildcard, conflict=conflict, d=d, rows=rows,
         reserved_for=reserved_for,
     )
 
@@ -366,15 +227,10 @@ __all__ = [
     "WILDCARD_FLOOR",
     "WILDCARD_LABEL",
     "WILDCARD_SHARE",
-    "axis_position",
-    "axis_positions",
     "combine",
-    "contested_facet",
     "divergence",
-    "divergent_answers",
     "group_scores",
     "one_for_each",
     "ranked",
     "wildcard_from",
-    "zeroed",
 ]

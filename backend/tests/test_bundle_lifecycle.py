@@ -724,16 +724,13 @@ async def test_curated_ledgers_naming_a_vocabulary_this_install_lacks_are_skippe
     ) == "active", "the model bundle was refused on a layer it could never fill"
 
 
-async def test_a_bundle_that_names_a_vocabulary_and_ships_no_tree_says_which_ledgers_it_skipped(
+async def test_a_bundle_that_names_a_vocabulary_and_ships_no_tree_says_which_ledger_it_skipped(
     db, build, artifacts_root
 ):
-    """Decision 266: a declared version with no tree skips two ledgers, and the report must say which."""
+    """Decision 266: a declared version with no tree skips the adjudications, and the report says so."""
     await seed(db, build, artifacts_root)
-    before = (
-        await db.fetchval("SELECT count(*) FROM dna_adjudication"),
-        await db.fetchval("SELECT count(*) FROM dna_axis_weight"),
-    )
-    assert all(before), "the fixture ships both ledgers for this to have something to lose"
+    before = await db.fetchval("SELECT count(*) FROM dna_adjudication")
+    assert before, "the fixture ships the ledger for this to have something to lose"
 
     silent = build("test-v2", models_only=True)
     shutil.rmtree(silent / "artifacts" / "dna_vocab")
@@ -750,10 +747,7 @@ async def test_a_bundle_that_names_a_vocabulary_and_ships_no_tree_says_which_led
     ]
     assert len(skipped) == 1, report.render()
     assert "left in place and not re-applied" in skipped[0]
-    assert (
-        await db.fetchval("SELECT count(*) FROM dna_adjudication"),
-        await db.fetchval("SELECT count(*) FROM dna_axis_weight"),
-    ) == before
+    assert await db.fetchval("SELECT count(*) FROM dna_adjudication") == before
     assert "the naming layer will be empty" not in report.render(), (
         "the validator said something about an install it has no connection to read"
     )
@@ -1231,7 +1225,7 @@ async def test_the_recorded_vocabulary_version_is_never_null_after_a_successful_
     ) == 0
 
 
-# Decision 247: the models-only path used to skip all four curated ledgers.
+# Decision 247: the models-only path used to skip the curated ledgers.
 
 
 def rewrite_curated_ledgers(root: Path, *, keep: int = 3) -> None:
@@ -1276,7 +1270,6 @@ async def test_a_models_only_import_loads_the_curated_ledgers_and_no_content_tie
     assert await db.fetchval(
         "SELECT count(*) FROM dna_adjudication WHERE version = 'v1' AND title_id = 2"
     ) == 1
-    assert await db.fetchval("SELECT count(*) FROM dna_axis_weight") > 0
 
     assert before == {
         "terms": await db.fetchval("SELECT count(*) FROM dna_term"),
@@ -1328,13 +1321,11 @@ async def test_a_seed_list_entry_naming_an_unknown_title_is_counted_and_skipped(
 async def test_an_absent_curated_ledger_leaves_the_installed_rows_standing(
     db, build, artifacts_root
 ):
-    """Omission is a warning that changes nothing: all four absent, and every installed row stands."""
+    """Omission is a warning that changes nothing: all three absent, and every installed row stands."""
     await seed(db, build, artifacts_root)
     installed = {
         table: await db.fetchval(f"SELECT count(*) FROM {table}")
-        for table in (
-            "credit_correction", "seed_list", "dna_adjudication", "dna_axis", "dna_axis_weight"
-        )
+        for table in ("credit_correction", "seed_list", "dna_adjudication")
     }
     assert all(installed.values()), f"the fixture stopped shipping a ledger: {installed}"
 
@@ -1343,8 +1334,6 @@ async def test_an_absent_curated_ledger_leaves_the_installed_rows_standing(
     (models / "artifacts" / "corrections_v1.tsv").unlink()
     (models / "artifacts" / "seed_list.json").unlink()
     (vocab_dir / "adjudications_v1.tsv").unlink()
-    for facet in fx.AXES:
-        (vocab_dir / f"{facet}.tsv").unlink()
     fx.reinventory(models)
 
     report = await import_bundle_at(db, models, artifacts_root)
@@ -1362,7 +1351,6 @@ async def test_an_absent_curated_ledger_leaves_the_installed_rows_standing(
         ("corrections", "corrections_v1.tsv"),
         ("seed-list", "seed_list.json"),
         ("adjudications", "adjudications_v1.tsv"),
-        ("axes", "no authored axis definition"),
     ):
         assert len(warned.get(rule, [])) == 1, f"{rule}: {warned.get(rule)}"
         assert named in warned[rule][0], warned[rule][0]

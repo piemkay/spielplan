@@ -1,4 +1,4 @@
-// Three ledgers with separate semantics (decision 445): each has its own paths and validator, so
+// Two ledgers with separate semantics (decision 445): each has its own paths and validator, so
 // no form posts to another ledger's route. The server is the authority; these catch form typos.
 // The sentences are ASCII because a failing vitest prints them.
 
@@ -41,11 +41,6 @@ export function verdictWarning(action) {
   return VERDICT_WARNINGS[String(action ?? '').trim().toUpperCase()] ?? null;
 }
 
-// A save replaces the facet's whole axis (decision 261), so the form holds every term.
-export const AXIS_REPLACE_NOTE =
-  'Saving replaces this axis whole: the poles and terms below become the axis, and a term you ' +
-  'remove here stops turning it.';
-
 // Withdrawing a composer correction restores no credit: a bundle title is never re-derived.
 export const COMPOSER_WARNING =
   'A composer correction replaces every music credit this title carries. Withdrawing it brings ' +
@@ -70,15 +65,6 @@ export const LEDGERS = {
     add: 'Add a correction',
     save: 'Save correction',
     empty: 'No credit correction yet.'
-  },
-  axes: {
-    heading: 'Facet axes',
-    artifact: '<facet>.tsv',
-    path: '/admin/curated/axes',
-    add: 'Add an axis',
-    save: 'Save axis',
-    replace: 'Replace axis',
-    empty: 'No facet has an axis.'
   }
 };
 
@@ -89,26 +75,12 @@ export function ledgerOf(ledger) {
   return found;
 }
 
-/** The axes route answers `{facets, axes}` rather than `{rows}`. */
-export function rowsOf(ledger, envelope) {
-  const rows = ledger === 'axes' ? envelope?.axes : envelope?.rows;
-  return Array.isArray(rows) ? rows : [];
-}
-
-export function rowKey(ledger, row) {
-  return ledger === 'axes' ? row.facet : row.id;
-}
-
 export function withdrawPath(ledger, row) {
-  const base = ledgerOf(ledger).path;
-  return ledger === 'axes' ? `${base}/${encodeURIComponent(row.facet)}` : `${base}/${row.id}`;
+  return `${ledgerOf(ledger).path}/${row.id}`;
 }
 
-/** One export per ledger, but one per household axis: §6.4's file is `<facet>.tsv`. */
-export function exportHref(ledger, row = null) {
-  const base = `/api${ledgerOf(ledger).path}`;
-  if (ledger !== 'axes') return `${base}/export`;
-  return `${base}/${encodeURIComponent(row.facet)}/export`;
+export function exportHref(ledger) {
+  return `/api${ledgerOf(ledger).path}/export`;
 }
 
 /** A bundle row is read-only in the app (decision 445). */
@@ -122,10 +94,7 @@ export function emptyForm(ledger) {
       scope: 'title', term: '', action: '', title_id: '', target: '', quote: '', source: '', note: ''
     };
   }
-  if (ledger === 'corrections') {
-    return { title_id: '', kind: CORRECTION_KINDS[0], value: '', evidence: '', note: '' };
-  }
-  return { facet: '', left_pole: '', right_pole: '', weights: '' };
+  return { title_id: '', kind: CORRECTION_KINDS[0], value: '', evidence: '', note: '' };
 }
 
 // A hidden field is sent as null, so a value typed before the choice changed cannot ride along.
@@ -146,55 +115,11 @@ export const FIELDS = {
     { name: 'value', label: 'Credit', type: 'text' },
     { name: 'evidence', label: 'Evidence', type: 'text' },
     { name: 'note', label: 'Note', type: 'text' }
-  ],
-  axes: [
-    { name: 'facet', label: 'Facet', type: 'facet' },
-    { name: 'left_pole', label: 'Left pole', type: 'text' },
-    { name: 'right_pole', label: 'Right pole', type: 'text' },
-    { name: 'weights', label: 'Terms and weights, one "term weight" per line', type: 'textarea' }
   ]
 };
 
 export function visibleFields(ledger, form) {
   return FIELDS[ledger].filter((field) => !field.when || field.when(form));
-}
-
-/**
- * Adding offers only facets with no axis, since a save replaces the whole axis; editing offers
- * only the facet being edited.
- *
- * @param {string[]} facets the declared facets, in the vocabulary's order
- * @param {{facet: string}[]} axes every axis at the version, household and bundle
- * @param {string | null} replacing the facet whose household axis is open for editing
- */
-export function facetChoices(facets, axes, replacing = null) {
-  if (replacing != null) return [replacing];
-  const taken = new Set((axes ?? []).map((axis) => axis.facet));
-  return (facets ?? []).filter((facet) => !taken.has(facet));
-}
-
-/**
- * The shortest decimal that reads back as the same float4: 0.3 arrives as 0.30000001192092896.
- *
- * @param {number} weight
- */
-export function weightText(weight) {
-  const n = Number(weight);
-  if (!Number.isFinite(n)) return String(weight);
-  for (let digits = 1; digits <= 9; digits += 1) {
-    const text = String(Number(n.toPrecision(digits)));
-    if (Math.fround(Number(text)) === Math.fround(n)) return text;
-  }
-  return String(n);
-}
-
-export function axisForm(row) {
-  return {
-    facet: row.facet,
-    left_pole: row.left_pole ?? '',
-    right_pole: row.right_pole ?? '',
-    weights: (row.weights ?? []).map((w) => `${w.term} ${weightText(w.weight)}`).join('\n')
-  };
 }
 
 function text(value) {
@@ -259,40 +184,6 @@ function correction(form) {
   return { ok: true, body: { title_id: title, kind, value, evidence, note: text(form.note) } };
 }
 
-/** One "term weight" per line, blank lines skipped; weights run -1 to 1, as `curated/axes` takes. */
-export function parseWeights(textarea) {
-  const weights = [];
-  const seen = new Set();
-  const lines = String(textarea ?? '').split(/\r?\n/);
-  for (let i = 0; i < lines.length; i += 1) {
-    const line = lines[i].trim();
-    if (line === '') continue;
-    const parts = line.split(/\s+/);
-    if (parts.length !== 2) return refuse(`Line ${i + 1} is not one term and one number.`);
-    const [term, raw] = parts;
-    const weight = Number(raw);
-    if (!Number.isFinite(weight) || weight < -1 || weight > 1) {
-      return refuse(`The number for ${term} is ${raw}; an axis runs from -1 to 1.`);
-    }
-    if (seen.has(term)) return refuse(`${term} appears twice on this axis; give it one number.`);
-    seen.add(term);
-    weights.push({ term, weight });
-  }
-  if (weights.length === 0) return refuse('An axis carries at least one term and its weight.');
-  return { ok: true, weights };
-}
-
-function axis(form) {
-  const facet = text(form.facet);
-  if (facet === null) return refuse('Choose the facet the axis turns.');
-  const left = text(form.left_pole);
-  const right = text(form.right_pole);
-  if (left === null || right === null) return refuse('An axis names both of its poles.');
-  const parsed = parseWeights(form.weights);
-  if (!parsed.ok) return parsed;
-  return { ok: true, body: { facet, left_pole: left, right_pole: right, weights: parsed.weights } };
-}
-
 /**
  * @param {string} ledger
  * @param {object} form
@@ -301,7 +192,6 @@ function axis(form) {
 export function validate(ledger, form) {
   if (ledger === 'adjudications') return verdict(form);
   if (ledger === 'corrections') return correction(form);
-  if (ledger === 'axes') return axis(form);
   throw new Error(`there is no ledger named ${ledger}`);
 }
 

@@ -19,7 +19,6 @@ from spielplan.connectors.jellyfin import JellyfinClient, JellyfinError, canonic
 from spielplan.connectors.registry import JellyfinConfig, load_jellyfin, save_jellyfin
 from spielplan.core import auth, logs, secrets, webauthn
 from spielplan.core.config import settings
-from spielplan.importer import dna
 from spielplan.llm.client import header_key
 from spielplan.sync import playback, seen
 
@@ -629,44 +628,13 @@ async def job_health(conn) -> dict[str, object]:
     }
 
 
-# What the missing axis artifact costs, one sentence per surface.
-AXES_DISABLES = (
-    "The Map, when it ships, has no axes to plot.",
-    "Tonight's facet split is off: a split is surfaced by person and never names a facet, and the "
-    "round's widest-axis tie-break is 0.0 for every pair.",
-)
-
-
 @router.get("/data/sources")
 async def data_sources(_: AdminUser, conn: DB) -> dict[str, object]:
-    """§6.6 Data's two read-only lists: dataset terms (§4.1 rule 4's licences) and the axis files the
-    loader expects, built from the loader's own rule over this install's facets."""
+    """§6.6 Data's read-only list of dataset terms (§4.1 rule 4's licences)."""
     sources = await conn.fetch(
         "SELECT id, name, scale, url, license, version, notes FROM rating_source ORDER BY id"
     )
-    version = await conn.fetchval(
-        "SELECT vocabulary_version FROM artifact_bundle WHERE state = 'active'"
-    )
-    facets = [
-        r["facet"] for r in await conn.fetch(
-            "SELECT facet FROM dna_facet WHERE version = $1 ORDER BY ord, facet", version
-        )
-    ] if version else []
-    # No vocabulary loaded: name the app's default facets rather than nothing.
-    if not facets:
-        facets = sorted(dna.DEFAULT_FACET_COLOURS)
-    loaded = await conn.fetchval(
-        "SELECT count(*) FROM dna_axis WHERE version = $1", version
-    ) if version else 0
-    return {
-        "sources": [dict(r) for r in sources],
-        "axes": {
-            "vocabulary_version": version,
-            "loaded": int(loaded or 0),
-            "expected": [f"dna_vocab/{version or '<version>'}/{f}.tsv" for f in facets],
-            "disables": list(AXES_DISABLES),
-        },
-    }
+    return {"sources": [dict(r) for r in sources]}
 
 
 @router.get("/system")

@@ -1,6 +1,6 @@
-"""§6.6 Data's three ledger editors: DNA verdicts, credit facts and the per-facet axes.
+"""§6.6 Data's two ledger editors: DNA verdicts and credit facts.
 
-Three modules and no shared write path (§14.5; decision 423); household rows only, never a bundle
+Two modules and no shared write path (§14.5; decision 423); household rows only, never a bundle
 row (decisions 326, 445). This file imports nothing, so no editor reaches a sibling's writer.
 """
 

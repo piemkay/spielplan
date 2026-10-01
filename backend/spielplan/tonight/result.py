@@ -46,8 +46,6 @@ def card(
         ],
         # Decision 486: without Show the model, plain sentences and no D (`copy.for_member`).
         "conflict": row["conflict"] if show_model else copy_rules.for_member(row["conflict"]),
-        # 54d's reserved slot, "labelled as such"; the words are the client's (decision 220).
-        "reserved": bool(row["reserved"]),
         # Decision 479's person reservation: the seat and its name, never its scores.
         "reserved_for": (
             None if row["reserved_for"] is None
@@ -89,7 +87,7 @@ async def slate(
     rows = await conn.fetch(
         """
         SELECT r.title_id, r.rank, r.slot, r.group_score, r.per_user_match, r.conflict,
-               r.reserved, r.reserved_for,
+               r.reserved_for,
                coalesce(u.name, 'Guest ' || (p.seat - 1)) AS reserved_name,
                t.name, t.year, t.runtime_min, t.poster_path, t.jellyfin_id
           FROM session_result r JOIN title t ON t.id = r.title_id

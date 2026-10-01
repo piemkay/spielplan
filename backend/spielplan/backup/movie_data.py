@@ -63,8 +63,6 @@ TABLES: tuple[Table, ...] = (
     Table("public", "dna_facet"),
     Table("public", "dna_term"),
     Table("public", "dna_alias"),
-    Table("public", "dna_axis"),
-    Table("public", "dna_axis_weight"),
     Table("public", "dna_tag"),
     Table("public", "dna_evidence"),
     Table("public", "dna_projected"),
@@ -81,7 +79,7 @@ TABLES: tuple[Table, ...] = (
 RETIRED: frozenset[str] = frozenset({
     "public.ml_genome_tag", "public.ml_link", "public.ml_genome_score",
     "public.title_language", "public.rating_title_map", "public.watchlist", "public.title_list",
-    "public.title_list_membership",
+    "public.title_list_membership", "public.dna_axis", "public.dna_axis_weight",
 })
 
 # The placement stamp and state stay behind: they name a bundle and a coordinate this archive
@@ -251,7 +249,7 @@ async def write_archive(conn: asyncpg.Connection, path: Path) -> ArchiveReport:
                 # In the same snapshot, so the printed counts are one reading of one install.
                 for qualified in sorted(RETIRED):
                     schema, _, table = qualified.partition(".")
-                    # 0039 dropped five of them; the genome slice is still held (decision 311).
+                    # 0039 and 0044 dropped seven of them; the genome slice is still held (decision 311).
                     if await conn.fetchval("SELECT to_regclass($1)", qualified) and await conn.fetchval(
                         f'SELECT EXISTS (SELECT 1 FROM "{schema}"."{table}")'
                     ):

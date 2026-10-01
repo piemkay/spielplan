@@ -17,39 +17,24 @@ import {
   LEDGERS,
   REPOINT_WARNING,
   VERDICT_ACTIONS,
-  axisForm,
   emptyForm,
   exportHref,
   openVerdict,
-  parseWeights,
-  rowKey,
-  rowsOf,
   validate,
   verdictDraft,
   visibleFields,
-  weightText,
   withdrawPath,
   withdrawable
 } from './ledgerEditors.svelte.js';
 
-describe('three ledgers, three sets of routes', () => {
+describe('two ledgers, two sets of routes', () => {
   it('gives each ledger its own path and its own export, and no two share one', () => {
     const paths = Object.values(LEDGERS).map((l) => l.path);
-    expect(new Set(paths).size).toBe(3);
+    expect(new Set(paths).size).toBe(2);
     expect(exportHref('adjudications')).toBe('/api/admin/curated/adjudications/export');
     expect(exportHref('corrections')).toBe('/api/admin/curated/corrections/export');
-    expect(exportHref('axes', { facet: 'mood' })).toBe('/api/admin/curated/axes/mood/export');
     expect(withdrawPath('adjudications', { id: 4 })).toBe('/admin/curated/adjudications/4');
     expect(withdrawPath('corrections', { id: 4 })).toBe('/admin/curated/corrections/4');
-    expect(withdrawPath('axes', { facet: 'mood' })).toBe('/admin/curated/axes/mood');
-  });
-
-  it("reads each list route's own shape and keys an axis by its facet", () => {
-    expect(rowsOf('adjudications', { rows: [{ id: 1 }] })).toEqual([{ id: 1 }]);
-    expect(rowsOf('axes', { facets: ['mood'], axes: [{ facet: 'mood' }] })).toEqual([{ facet: 'mood' }]);
-    expect(rowsOf('corrections', null)).toEqual([]);
-    expect(rowKey('axes', { facet: 'mood' })).toBe('mood');
-    expect(rowKey('corrections', { id: 9 })).toBe(9);
   });
 
   it('lets the household withdraw its own rows and never a bundle row', () => {
@@ -123,56 +108,6 @@ describe('the correction form', () => {
     expect(validate('corrections', { ...ok, kind: 'director' }).ok).toBe(false);
     expect(validate('corrections', { ...ok, title_id: '' }).ok).toBe(false);
     expect(CORRECTION_KINDS).toEqual(['composer', 'composer_add']);
-  });
-});
-
-describe('the axis form', () => {
-  it('reads one term and one weight per line, from -1 to 1, each term once, at least one', () => {
-    expect(parseWeights('mood.dread -0.8\r\n\r\nmood.cosy\t0.9')).toEqual({
-      ok: true,
-      weights: [
-        { term: 'mood.dread', weight: -0.8 },
-        { term: 'mood.cosy', weight: 0.9 }
-      ]
-    });
-    expect(parseWeights('').ok).toBe(false);
-    expect(parseWeights('mood.dread 1.5').reason).toMatch(/-1 to 1/);
-    expect(parseWeights('mood.dread 0.1\nmood.dread 0.2').reason).toMatch(/twice/);
-    expect(parseWeights('mood dread 0.1').ok).toBe(false);
-  });
-
-  it('needs the facet and both poles', () => {
-    const ok = { facet: 'mood', left_pole: 'bleak', right_pole: 'warm', weights: 'mood.cosy 0.9' };
-    expect(validate('axes', ok).ok).toBe(true);
-    expect(validate('axes', { ...ok, facet: '' }).ok).toBe(false);
-    expect(validate('axes', { ...ok, right_pole: '' }).ok).toBe(false);
-  });
-
-  // A float4 weight prints as the shortest number that is the same float4.
-  it('reads a stored axis back into the form as the lines it would save', () => {
-    expect(weightText(0.10000000149011612)).toBe('0.1');
-    expect(weightText(-0.800000011920929)).toBe('-0.8');
-    expect(weightText(1)).toBe('1');
-    const row = {
-      facet: 'mood',
-      left_pole: 'bleak',
-      right_pole: 'warm',
-      origin: 'household',
-      weights: [
-        { term: 'mood.cosy', weight: 0.8999999761581421 },
-        { term: 'mood.dread', weight: -0.800000011920929 }
-      ]
-    };
-    const form = axisForm(row);
-    expect(form).toEqual({
-      facet: 'mood',
-      left_pole: 'bleak',
-      right_pole: 'warm',
-      weights: 'mood.cosy 0.9\nmood.dread -0.8'
-    });
-    expect(parseWeights(form.weights).weights.map((w) => Math.fround(w.weight))).toEqual(
-      row.weights.map((w) => Math.fround(w.weight))
-    );
   });
 });
 
@@ -314,26 +249,6 @@ describe('the mounted editors', () => {
     }
   });
 
-  it("prints the server's sentence on what reads an axis and exports a household axis", async () => {
-    vi.mocked(get).mockResolvedValue({
-      version: 'v1',
-      facets: ['mood', 'era'],
-      axes: [{ facet: 'mood', left_pole: 'bleak', right_pole: 'warm', origin: 'household', weights: [] }],
-      applies: 'An axis is read live. No axis file has been authored and the bundle ships none.'
-    });
-    const app = mount(LedgerEditor, { target, props: { ledger: 'axes' } });
-    await settle();
-    try {
-      expect(target.querySelector('[data-testid="ledger-applies"]').textContent).toBe(
-        'An axis is read live. No axis file has been authored and the bundle ships none.'
-      );
-      const hrefs = [...target.querySelectorAll('a.export')].map((a) => a.getAttribute('href'));
-      expect(hrefs).toEqual(['/api/admin/curated/axes/mood/export']);
-    } finally {
-      unmount(app);
-    }
-  });
-
   it('warns before a DROP_EVIDENCE and a REPOINT as it does before a DROP', async () => {
     vi.mocked(get).mockResolvedValue({ rows: [], applies: '' });
     const app = mount(LedgerEditor, { target, props: { ledger: 'adjudications' } });
@@ -394,75 +309,6 @@ describe('the mounted editors', () => {
       }
     } finally {
       delete Element.prototype.scrollIntoView;
-    }
-  });
-
-  // A save replaces the facet's whole axis, so Add offers only a facet without one.
-  it('adds an axis only where there is none and edits a household axis prefilled whole', async () => {
-    vi.mocked(get).mockResolvedValue({
-      version: 'v1',
-      facets: ['mood', 'era', 'pacing'],
-      axes: [
-        {
-          facet: 'mood',
-          left_pole: 'bleak',
-          right_pole: 'warm',
-          origin: 'household',
-          weights: [
-            { term: 'mood.cosy', weight: 0.8999999761581421 },
-            { term: 'mood.dread', weight: -0.800000011920929 }
-          ]
-        },
-        {
-          facet: 'era',
-          left_pole: 'old',
-          right_pole: 'new',
-          origin: 'bundle',
-          weights: [{ term: 'era.silent', weight: -1 }]
-        }
-      ],
-      applies: ''
-    });
-    vi.mocked(post).mockResolvedValue({ axis: {} });
-    const app = mount(LedgerEditor, { target, props: { ledger: 'axes' } });
-    await settle();
-    try {
-      const button = (within, label) =>
-        [...within.querySelectorAll('button')].find((b) => b.textContent.trim() === label);
-      const choices = () =>
-        [...target.querySelectorAll('form select option')].map((o) => o.value).filter((v) => v !== '');
-      button(target, 'Add an axis').click();
-      await settle();
-      expect(choices(), 'a facet that has an axis is not offered to Add').toEqual(['pacing']);
-      button(target, 'Cancel').click();
-      await settle();
-
-      const rows = [...target.querySelectorAll('li')];
-      expect(
-        rows.map((li) => Boolean(button(li, 'Edit'))),
-        'the household axis is edited from its row; the bundle one is read-only'
-      ).toEqual([true, false]);
-      button(rows[0], 'Edit').click();
-      await settle();
-      expect(choices()).toEqual(['mood']);
-      expect(target.querySelector('form select').value).toBe('mood');
-      expect([...target.querySelectorAll('form input')].map((i) => i.value)).toEqual(['bleak', 'warm']);
-      expect(target.querySelector('form textarea').value).toBe('mood.cosy 0.9\nmood.dread -0.8');
-      expect(target.querySelector('[data-testid="axis-replace-note"]')).not.toBe(null);
-      expect(target.querySelector('form button[type="submit"]').textContent.trim()).toBe('Replace axis');
-      target.querySelector('form').dispatchEvent(new Event('submit', { cancelable: true }));
-      await settle();
-      expect(vi.mocked(post)).toHaveBeenCalledWith('/admin/curated/axes', {
-        facet: 'mood',
-        left_pole: 'bleak',
-        right_pole: 'warm',
-        weights: [
-          { term: 'mood.cosy', weight: 0.9 },
-          { term: 'mood.dread', weight: -0.8 }
-        ]
-      });
-    } finally {
-      unmount(app);
     }
   });
 });

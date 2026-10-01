@@ -1024,14 +1024,8 @@ async def _seed_observations(db) -> None:
     )
 
 
-async def test_a_reimport_rebuild_re_places_titles_and_leaves_the_map_alone(db, reimported):
-    """The axis scatter is authored TSVs and must not be rebuilt."""
-    axes_before = await db.fetch("SELECT * FROM dna_axis_weight ORDER BY facet, term")
+async def test_a_reimport_rebuild_re_places_titles(db, reimported):
     await bundle_import.rebuild(db, reimported, "test-v2", ImportReport())
-
-    axes_after = await db.fetch("SELECT * FROM dna_axis_weight ORDER BY facet, term")
-    assert [tuple(r) for r in axes_before] == [tuple(r) for r in axes_after]
-    assert axes_after, "the fixture ships authored axes; an empty table proves nothing"
 
     assert await db.fetchval("SELECT placement FROM title WHERE id = 7") == "cold_tower"
     assert await db.fetchval(

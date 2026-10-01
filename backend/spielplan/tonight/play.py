@@ -38,12 +38,11 @@ class RoundError(Exception):
 
 @dataclass(frozen=True)
 class Snapshot:
-    """The frozen evening: which titles, what each seat scores them, their DNA, the axes."""
+    """The frozen evening: which titles, what each seat scores them, their DNA."""
 
     candidates: dict[int, dict[str, Any]]
     scores: dict[int, dict[int, float]]      # title_id -> {participant_id: §5.1 score}
     dna: dict[int, dict[str, float]]
-    axes: dict[str, dict[str, float]]
     version: str | None
     # §13's hold-out draw, sealed with the pool (decision 223); None for older rooms.
     holdout_seed: str | None = None
@@ -114,7 +113,6 @@ def _as_snapshot(context: Any) -> Snapshot:
         candidates={int(k): v for k, v in (raw.get("candidates") or {}).items()},
         scores=scores,
         dna={int(k): {t: float(w) for t, w in v.items()} for k, v in (raw.get("dna") or {}).items()},
-        axes={f: {t: float(w) for t, w in v.items()} for f, v in (raw.get("axes") or {}).items()},
         version=raw.get("version"),
         holdout_seed=raw.get("holdout_seed"),
         scale=scale,
@@ -227,7 +225,6 @@ async def start(conn: asyncpg.Connection, session_id: int) -> Snapshot:
                 str(k): v
                 for k, v in (await dna_reads.vectors_for(conn, ids, version=version or "")).items()
             },
-            "axes": await dna_reads.axes_for(conn, version=version or ""),
             "version": version,
             # §13's draw, sealed for the evening (decision 223); `secrets` so a client cannot predict it.
             "holdout_seed": secrets.token_hex(16),
@@ -329,7 +326,6 @@ async def _round_of(
     def played() -> round_rules.Round:
         return round_rules.replay(
             prior, answers, has_profile=is_member,
-            axes=combine_rules.axis_positions(snapshot.dna, snapshot.axes),
             # The seat, never the seed: 54b's arm has a second caller with no pool (decision 223).
             holdout_key=str(row["id"]),
             rng=rng, escaped=escaped,
@@ -730,7 +726,6 @@ async def finish(conn: asyncpg.Connection, session_id: int) -> combine_rules.Sla
     )
     frame = snapshot.frame()
     per_participant: dict[int, dict[int, float]] = {}
-    tilts: list[dict[str, float]] = []
     for seat in seats:
         is_member = seat["role"] != rooms.ROLE_GUEST
         prior = (
@@ -746,8 +741,6 @@ async def finish(conn: asyncpg.Connection, session_id: int) -> combine_rules.Sla
             select=False,
         )
         tilt = dict(seat["tilt"] or {})
-        if is_member:
-            tilts.append(tilt)
         per_participant[seat["id"]] = {
             t: b.mu + tilt_rules.adjustment(tilt, snapshot.dna.get(t, {}), frame)
             for t, b in played.beliefs.items()
@@ -757,8 +750,6 @@ async def finish(conn: asyncpg.Connection, session_id: int) -> combine_rules.Sla
         per_participant=per_participant,
         # On the room's scale, the one decision 478 recalibrated the threshold on.
         member_ledger=snapshot.member_ledger(),
-        tilts=tilts,
-        axes=snapshot.axes,
         dna=snapshot.dna,
     )
     # Match lines for the ballot's titles only (§6.2 step 7), not the pool's tail.
@@ -785,15 +776,12 @@ async def finish(conn: asyncpg.Connection, session_id: int) -> combine_rules.Sla
                 """
                 INSERT INTO session_result
                     (session_id, title_id, rank, slot, group_score, per_user_match, conflict,
-                     reserved, reserved_for)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                     reserved_for)
+                VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
                 """,
                 session_id, row["title_id"], row["rank"], row["slot"], row["group_score"],
                 matches.get(row["title_id"], {}),
                 slate.conflict if slate.conflict and row["slot"] != "runner_up" else None,
-                # 54d's counterweight, persisted: it cannot be re-derived once axes move (decision 220).
-                row["reserved"],
-                # The person reservation, a different claim from `reserved` (decision 479).
                 row["reserved_for"],
             )
         await rooms.set_state(conn, session_id, rooms.STATE_BALLOT)

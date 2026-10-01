@@ -1,4 +1,4 @@
-"""§6.6 Data's three ledger editors: three artifacts, household rows only,
+"""§6.6 Data's two ledger editors: two artifacts, household rows only,
 applied at once (decision 445). Exports are read back by the importer's
 own readers, never by a parser written here. Needs TEST_DATABASE_URL."""
 
@@ -10,7 +10,7 @@ from pathlib import Path
 
 import pytest
 
-from spielplan.curated import Refused, adjudications, axes, corrections
+from spielplan.curated import Refused, adjudications, corrections
 from spielplan.derive import ids, ledgers, rebuild
 from spielplan.importer import dna
 from spielplan.importer import validate as validator
@@ -22,9 +22,6 @@ CORRECTED = 8
 BUNDLE_COMPOSER = "Kunihiko Murai"
 HOUSEHOLD_COMPOSER = "The Household Composer"
 
-# A facet with no shipped axis, so the household's axis lands beside the bundle's rather than over one.
-UNSHIPPED_FACET = "structure"
-
 # The three bytes a writer that joins on TAB and ends lines on LF corrupts.
 AWKWARD = 'a line\twith a tab\nand a second, "quoted" line'
 
@@ -35,11 +32,6 @@ def bundle_dir(tmp_path) -> Path:
     an unused name to ruff and couples collection order."""
     fx.make_bundle(tmp_path / "bundle")
     return tmp_path / "bundle"
-
-
-@pytest.fixture
-def vocab_dir(bundle_dir) -> Path:
-    return bundle_dir / "artifacts" / "dna_vocab" / "v1"
 
 
 async def _install(conn, bundle_dir: Path) -> None:
@@ -55,7 +47,6 @@ async def _install(conn, bundle_dir: Path) -> None:
     assert report.ok, report.render()
     assert await conn.fetchval("SELECT count(*) FROM dna_adjudication WHERE origin = 'bundle'") == 2
     assert await conn.fetchval("SELECT count(*) FROM credit_correction WHERE origin = 'bundle'") == 1
-    assert await conn.fetchval("SELECT count(*) FROM dna_axis WHERE origin = 'bundle'") == len(fx.AXES)
 
 
 async def _tag(conn, title_id: int, term: str, facet: str) -> None:
@@ -100,22 +91,7 @@ async def _ledgers(conn) -> dict[str, list[tuple]]:
         "credit_correction": [tuple(r) for r in await conn.fetch(
             "SELECT id, origin, title_id, field, new_value, evidence, note FROM credit_correction"
             " ORDER BY id")],
-        "dna_axis": [tuple(r) for r in await conn.fetch(
-            "SELECT facet, origin, left_pole, right_pole FROM dna_axis ORDER BY facet")],
-        "dna_axis_weight": [tuple(r) for r in await conn.fetch(
-            "SELECT facet, term, weight FROM dna_axis_weight ORDER BY facet, term")],
     }
-
-
-async def _axis(conn, facet: str) -> tuple:
-    head = await conn.fetchrow(
-        "SELECT origin, left_pole, right_pole FROM dna_axis WHERE version = 'v1' AND facet = $1", facet
-    )
-    terms = await conn.fetch(
-        "SELECT term, weight FROM dna_axis_weight WHERE version = 'v1' AND facet = $1 ORDER BY term",
-        facet,
-    )
-    return (*tuple(head), tuple(tuple(r) for r in terms)) if head else ()
 
 
 def _saved(tmp_path: Path, name: str, text: str) -> Path:
@@ -128,7 +104,7 @@ def _saved(tmp_path: Path, name: str, text: str) -> Path:
 
 
 async def test_each_editor_writes_only_its_own_table_and_only_as_the_household(db, bundle_dir):
-    """Each write is checked against all four curated tables,
+    """Each write is checked against both curated tables,
     so a sibling-table write is caught where it happens."""
     await _install(db, bundle_dir)
     start = await _ledgers(db)
@@ -151,23 +127,9 @@ async def test_each_editor_writes_only_its_own_table_and_only_as_the_household(d
         k: v for k, v in after_verdict.items() if k != "credit_correction"
     }
 
-    await axes.author(
-        db, facet=UNSHIPPED_FACET, left_pole="linear", right_pole="fractured",
-        weights=[("structure.procedural", -0.5)],
-    )
-    after_axis = await _ledgers(db)
-    assert [r for r in after_axis["dna_axis"] if r not in after_fact["dna_axis"]] == [
-        (UNSHIPPED_FACET, "household", "linear", "fractured")
-    ]
-    assert [r for r in after_axis["dna_axis_weight"] if r not in after_fact["dna_axis_weight"]] == [
-        (UNSHIPPED_FACET, "structure.procedural", -0.5)
-    ]
-    assert after_axis["dna_adjudication"] == after_fact["dna_adjudication"]
-    assert after_axis["credit_correction"] == after_fact["credit_correction"]
-
     # And every bundle row that stood at the start stands at the end, unchanged and unrenumbered.
     for table in ("dna_adjudication", "credit_correction"):
-        assert [r for r in after_axis[table] if r[1] == "bundle"] == [
+        assert [r for r in after_fact[table] if r[1] == "bundle"] == [
             r for r in start[table] if r[1] == "bundle"
         ]
 
@@ -239,31 +201,6 @@ async def test_the_correction_export_folds_back_through_parse_corrections(db, bu
     assert report.ok, report.render()
     assert parsed == household
     assert BUNDLE_COMPOSER not in text
-
-
-async def test_the_axis_export_is_the_file_load_axes_reads(db, bundle_dir, tmp_path):
-    """The household axis is withdrawn first, since `load_axes` leaves a household axis in place."""
-    await _install(db, bundle_dir)
-    await axes.author(
-        db, facet=UNSHIPPED_FACET, left_pole='linear, "straight"', right_pole="fractured",
-        weights=[("structure.procedural", -0.75), ('mood.it"s', 0.3), ("pacing.patient", 1.0)],
-    )
-    stored = await _axis(db, UNSHIPPED_FACET)
-
-    name, text = await axes.export(db, UNSHIPPED_FACET)
-
-    assert name == f"{UNSHIPPED_FACET}.tsv"
-    lines = list(csv.reader(io.StringIO(text), delimiter="\t"))
-    assert lines[0] == ['linear, "straight"', "fractured"], "the header line is the two poles alone"
-    assert all(len(line) == 2 for line in lines[1:])
-    path = _saved(tmp_path, name, text)
-    await axes.withdraw(db, UNSHIPPED_FACET)
-    report = ImportReport()
-
-    await dna.load_axes(db, path.parent, "v1", report)
-
-    assert report.ok, report.render()
-    assert await _axis(db, UNSHIPPED_FACET) == ("bundle", *stored[1:])
 
 
 async def test_a_household_correction_survives_a_models_only_re_import_and_still_takes_effect(
@@ -378,29 +315,6 @@ async def test_a_global_drop_is_true_at_once_on_every_title_that_carries_the_ter
     assert await _terms(db, 3) == ["mood.dread"], "a withdrawn verdict is still being applied"
 
 
-async def test_a_household_axis_survives_a_bundle_that_ships_the_same_facet(db, bundle_dir, vocab_dir):
-    """Without the guard the loader overwrote the axis while the row still said `household`."""
-    await _install(db, bundle_dir)
-    await axes.author(
-        db, facet=UNSHIPPED_FACET, left_pole="linear", right_pole="fractured",
-        weights=[("structure.procedural", -0.5), ("pacing.relentless", 0.4)],
-    )
-    typed = await _axis(db, UNSHIPPED_FACET)
-    (vocab_dir / f"{UNSHIPPED_FACET}.tsv").write_text(
-        "episodic\tserial\nstructure.procedural\t1.0\n", encoding="utf-8"
-    )
-    report = ImportReport()
-
-    await dna.load_axes(db, vocab_dir, "v1", report)
-
-    assert report.ok, report.render()
-    assert await _axis(db, UNSHIPPED_FACET) == typed
-    kept = [f for f in report.findings if f.rule == "axes" and f.detail.get("facet") == UNSHIPPED_FACET]
-    assert len(kept) == 1 and kept[0].severity == "warn", report.render()
-    assert "342" in kept[0].message and "423" in kept[0].message, kept[0].message
-    assert (await _axis(db, "mood"))[0] == "bundle", "the bundle's own facets stopped loading"
-
-
 async def test_a_bundle_row_is_read_only_in_every_editor(db, bundle_dir):
     """A bundle row withdrawn in the app comes back at the next models-only import."""
     await _install(db, bundle_dir)
@@ -412,22 +326,12 @@ async def test_a_bundle_row_is_read_only_in_every_editor(db, bundle_dir):
         await adjudications.withdraw(db, verdict)
     with pytest.raises(Refused):
         await corrections.withdraw(db, fact)
-    with pytest.raises(Refused):
-        await axes.withdraw(db, "mood")
-    with pytest.raises(Refused):
-        await axes.author(
-            db, facet="mood", left_pole="grim", right_pole="sunny", weights=[("mood.dread", -1.0)]
-        )
-    with pytest.raises(Refused):
-        await axes.export(db, "mood")
 
     assert await _ledgers(db) == before
     with pytest.raises(LookupError):
         await adjudications.withdraw(db, 10**9)
     with pytest.raises(LookupError):
         await corrections.withdraw(db, 10**9)
-    with pytest.raises(LookupError):
-        await axes.withdraw(db, UNSHIPPED_FACET)
 
 
 async def test_the_verdict_editor_refuses_what_the_applier_could_not_apply(db, bundle_dir):
@@ -472,32 +376,6 @@ async def test_the_correction_editor_refuses_an_opinion_and_a_title_nobody_holds
     for kwargs in refusals:
         with pytest.raises(Refused) as refused:
             await corrections.author(db, **kwargs)
-        assert refused.value.reason and refused.value.reason.isascii(), kwargs
-
-    assert await _ledgers(db) == before
-
-
-async def test_the_axis_editor_refuses_every_file_load_axes_would_refuse(db, bundle_dir):
-    with pytest.raises(Refused, match="vocabulary"):
-        await axes.author(db, facet="mood", left_pole="a", right_pole="b", weights=[("mood.dread", 1)])
-    await _install(db, bundle_dir)
-    before = await _ledgers(db)
-
-    good = dict(facet=UNSHIPPED_FACET, left_pole="linear", right_pole="fractured")
-    refusals = [
-        dict(good, facet="tone", weights=[("structure.procedural", 0.5)]),
-        dict(good, weights=[("structure.procedural", 1.5)]),
-        dict(good, weights=[("structure.procedural", float("nan"))]),
-        dict(good, weights=[("structure.procedural", float("inf"))]),
-        dict(good, weights=[("structure.procedural", "heavy")]),
-        dict(good, weights=[]),
-        dict(good, weights=[("structure.procedural", 0.5), ("structure.procedural", -0.5)]),
-        dict(good, weights=[(" ", 0.5)]),
-        dict(good, left_pole=" ", weights=[("structure.procedural", 0.5)]),
-    ]
-    for kwargs in refusals:
-        with pytest.raises(Refused) as refused:
-            await axes.author(db, **kwargs)
         assert refused.value.reason and refused.value.reason.isascii(), kwargs
 
     assert await _ledgers(db) == before

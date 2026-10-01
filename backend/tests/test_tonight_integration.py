@@ -12,15 +12,10 @@ BUNDLE = "test-v1"
 
 VOCAB = "v1"
 
-# A clean ±1.0 pair plus a second axis, so "the widest axis" has a choice. Shaped like §6.4's TSVs.
-AXES = {
-    "mood": ("heavy", "light", {"dread": -1.0, "cosy": 1.0}),
-    "pacing": ("patient", "propulsive", {"patient": -1.0, "relentless": 0.8}),
-}
+FACETS = ("mood", "pacing")
 TERMS = {"dread": "mood", "cosy": "mood", "patient": "pacing", "relentless": "pacing"}
 
-# Titles 1-3 heavy, 4-6 light, so there is a contested axis. Title 2's projected duplicate of an
-# extracted tag must be counted once (§4.1 rule 1).
+# Title 2's projected duplicate of an extracted tag must be counted once (§4.1 rule 1).
 EXTRACTED = [
     (1, "dread", 3), (1, "patient", 2),
     (2, "dread", 2), (2, "relentless", 3),
@@ -38,9 +33,9 @@ async def seed_dna(db):
     """Without it every DNA read returns {} and three assertions go vacuous."""
     await db.execute(
         "INSERT INTO dna_vocabulary (version, facet_count, term_count) VALUES ($1, $2, $3)",
-        VOCAB, len(AXES), len(TERMS),
+        VOCAB, len(FACETS), len(TERMS),
     )
-    for ord_, facet in enumerate(AXES):
+    for ord_, facet in enumerate(FACETS):
         await db.execute(
             "INSERT INTO dna_facet (version, facet, ord) VALUES ($1, $2, $3)", VOCAB, facet, ord_
         )
@@ -48,16 +43,6 @@ async def seed_dna(db):
         await db.execute(
             "INSERT INTO dna_term (version, term, facet) VALUES ($1, $2, $3)", VOCAB, term, facet
         )
-    for facet, (left, right, weights) in AXES.items():
-        await db.execute(
-            "INSERT INTO dna_axis (version, facet, left_pole, right_pole) VALUES ($1, $2, $3, $4)",
-            VOCAB, facet, left, right,
-        )
-        for term, weight in weights.items():
-            await db.execute(
-                "INSERT INTO dna_axis_weight (version, facet, term, weight) VALUES ($1, $2, $3, $4)",
-                VOCAB, facet, term, weight,
-            )
     for title_id, term, salience in EXTRACTED:
         tag_id = await db.fetchval(
             "INSERT INTO dna_tag (title_id, version, term, facet, salience, confidence, provider) "
@@ -1230,60 +1215,6 @@ async def test_the_match_lines_actually_name_something(db, world):
     assert all(line["sign"] in ("pull", "against", "neutral", "none") for line in lines.values())
 
 
-async def test_a_household_pulling_opposite_ways_gets_one_of_each(db, world):
-    """No skip: a `pytest.skip` here reported a regression as green (finding 44). If the fixture stops
-    dividing the household, fix the fixture."""
-    room = await running_room(db, world)
-    heavy_seat, light_seat = room["seats"][0]["id"], room["seats"][1]["id"]
-
-    # Each seat picks the title matching its own pole, whichever side the pair puts it.
-    snapshot = await play.snapshot_of(db, room["session_id"])
-    for seat, want in ((heavy_seat, "dread"), (light_seat, "cosy")):
-        for _ in range(rnd.CAP_PAIRS):
-            state = await play.state_for(db, seat)
-            if state["_pair"] is None or state["stop_reason"] is not None:
-                break
-            pair = state["_pair"]
-            a_has = want in snapshot.dna.get(pair.title_a, {})
-            b_has = want in snapshot.dna.get(pair.title_b, {})
-            answer = rnd.A if a_has and not b_has else rnd.B if b_has and not a_has else rnd.EITHER
-            await play.record_answer(
-                db, participant_id=seat, pair=pair, answer=answer,
-                seq=state["answered"] + 1, latency_ms=None,
-            )
-    for seat in (heavy_seat, light_seat):
-        row = await db.fetchrow(
-            "SELECT ended_by, answered_count FROM session_participant WHERE id = $1", seat
-        )
-        if row["ended_by"] is None and row["answered_count"] >= rnd.ESCAPE_FROM_PAIR - 1:
-            await play.escape(db, seat)
-
-    slate = await play.finish(db, room["session_id"])
-    assert slate.contested is not None, (
-        "this pool no longer divides the household enough to surface a split, so every "
-        "assertion below is about nothing -- fix the fixture (widen the salience gap between "
-        "titles 1-3 and 4-6, or seat a third member), do not skip"
-    )
-
-    stored = await db.fetch(
-        "SELECT title_id, slot, conflict FROM session_result WHERE session_id = $1 "
-        "AND slot IN ('finalist', 'wildcard') ORDER BY rank",
-        room["session_id"],
-    )
-    weights = snapshot.axes[slate.contested]
-    poles = [
-        combine.axis_position(snapshot.dna.get(r["title_id"], {}), weights)
-        for r in stored if r["slot"] == "finalist"
-    ]
-    assert any(p < 0 for p in poles) and any(p > 0 for p in poles), (
-        "a surfaced split must put a title from each pole on the slate, not merely say so"
-    )
-    conflicts = [r["conflict"] for r in stored if r["conflict"] is not None]
-    assert conflicts, "a surfaced split is stored"
-    assert conflicts[0]["headline"].startswith(f"You're split on {slate.contested}")
-    assert "hate" not in conflicts[0]["explanation"].lower()
-
-
 async def test_the_shortlist_is_identical_with_the_held_out_answers_removed(db, world):
     """Through the write path: a combine reading every row would change the slate on a hold-out."""
     room = await running_room(db, world)
@@ -1749,8 +1680,8 @@ async def test_a_projection_never_outranks_a_quote_verified_tag_on_this_surface(
 
     vectors = await tonight_dna.vectors_for(db, [2], version=VOCAB)
     assert vectors[2]["dread"] == pytest.approx(extracted), (
-        "the tilt and the authored-axis positions read this vector, so the two tiers crossing "
-        "moves where the round thinks a title sits"
+        "the tilt reads this vector, so the two tiers crossing moves where the round thinks a "
+        "title sits"
     )
 
 
@@ -1765,7 +1696,7 @@ def test_the_reveal_card_says_why_there_is_no_play_and_whose_each_match_line_is(
     row = {
         "title_id": 1, "rank": 1, "slot": combine.SLOT_FINALIST, "conflict": None,
         "per_user_match": {"11": {"name": "patrick", "line": "a line"}},
-        "reserved": False, "reserved_for": None, "reserved_name": None,
+        "reserved_for": None, "reserved_name": None,
         "name": "Title 1", "year": 2010, "runtime_min": 100, "poster_path": None, "jellyfin_id": None,
     }
 
@@ -3454,12 +3385,6 @@ async def test_a_room_started_before_the_marker_keeps_its_raw_scale(db, world):
     assert unknown.value.reason == "no_room"
 
 
-async def _no_axes(db):
-    """Release data ships no axis artifact (decision 173)."""
-    await db.execute("DELETE FROM dna_axis_weight")
-    await db.execute("DELETE FROM dna_axis")
-
-
 async def _disjoint_household(db, world):
     """Nine films; the plain top three are Patrick's own top three and none of Jenny's."""
     await db.execute(
@@ -3482,8 +3407,7 @@ async def _disjoint_household(db, world):
 
 
 async def test_the_person_reservation_is_persisted_and_labelled_with_the_member(db, world):
-    """Decision 479: Jenny's pick is `reserved_for` her seat, never `reserved`. Decision 486 gates D."""
-    await _no_axes(db)
+    """Decision 479: Jenny's pick is `reserved_for` her seat. Decision 486 gates D."""
     await _disjoint_household(db, world)
     room = await running_room(db, world)
     jenny_seat = next(s["id"] for s in room["seats"] if s["role"] == "member")
@@ -3492,13 +3416,12 @@ async def test_the_person_reservation_is_persisted_and_labelled_with_the_member(
     assert slate.reserved_for == {20: jenny_seat}
     rows = {
         r["title_id"]: r for r in await db.fetch(
-            "SELECT title_id, slot, reserved, reserved_for, conflict FROM session_result "
+            "SELECT title_id, slot, reserved_for, conflict FROM session_result "
             "WHERE session_id = $1",
             room["session_id"],
         )
     }
     assert rows[20]["slot"] == "finalist" and rows[20]["reserved_for"] == jenny_seat
-    assert not any(r["reserved"] for r in rows.values()), "never the axis counterweight's flag"
     assert rows[20]["conflict"]["headline"] == copy_rules.PERSON_SPLIT_LINE
 
     for seat in room["seats"]:
@@ -3508,7 +3431,6 @@ async def test_the_person_reservation_is_persisted_and_labelled_with_the_member(
     member_view = await result.slate(db, room["session_id"], counted, outcome)
     card = next(c for c in member_view["finalists"] + [member_view["winner"]] if c["title_id"] == 20)
     assert card["reserved_for"]["name"] == "jenny"
-    assert card["reserved"] is False
     assert "d" not in card["conflict"] and card["conflict"]["explanation"] == copy_rules.D_LINE_PLAIN
 
     modelled = await result.slate(db, room["session_id"], counted, outcome, show_model=True)

@@ -733,7 +733,7 @@ describe('the first household evening, on the screen (owner instruction of 2026-
       participants: 2,
       winner: {
         title_id: 5, name: 'Eternal Sunshine', approvals: 2, match_lines: [], fit_line: 'fits',
-        reserved: false, reserved_for: { participant_id: 12, name: 'Jenny' }
+        reserved_for: { participant_id: 12, name: 'Jenny' }
       },
       breadth: [
         { participant_id: 11, name: 'Patrick', approved: 4, of: 4, said_yes: true, only_yes: false },
@@ -754,7 +754,6 @@ describe('the first household evening, on the screen (owner instruction of 2026-
     expect(byTestId('tonight-only-yes').textContent).toBe('The only one Jenny said yes to');
     expect(byTestId('tonight-approval-share').textContent).toBe('Both of you said yes');
     expect(byTestId('tonight-reserved-for').textContent).toContain("Jenny's pick");
-    expect(byTestId('tonight-reserved'), 'the axis label over a seat pick').toBeNull();
     expect(byTestId('tonight-winner').querySelector('[data-testid="rate-poster"]')).not.toBeNull();
     expect(target.querySelector('.reveal.playing'), "a reload replays the evening's beat").toBeNull();
   });

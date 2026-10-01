@@ -1,4 +1,4 @@
-"""§6.6 Data's three ledger editors and the reject review, over HTTP. Needs TEST_DATABASE_URL."""
+"""§6.6 Data's two ledger editors and the reject review, over HTTP. Needs TEST_DATABASE_URL."""
 
 from __future__ import annotations
 
@@ -8,14 +8,14 @@ from pathlib import Path
 import pytest
 
 from spielplan.api import curated as curated_api
-from spielplan.curated import adjudications, axes, corrections
+from spielplan.curated import adjudications, corrections
 from spielplan.dna import review
 from spielplan.importer import dna
 from spielplan.importer import validate as validator
 from spielplan.importer.report import ImportReport
 from tests.fixtures import make_bundle as fx
 from tests.helpers import household
-from tests.test_curated_editors import AWKWARD, UNSHIPPED_FACET, _install, _saved
+from tests.test_curated_editors import AWKWARD, _install, _saved
 from tests.test_dna_review import TITLE as REVIEWED
 from tests.test_dna_review import _reject
 from tests.test_dna_review import _tag as _extracted
@@ -134,49 +134,6 @@ async def test_the_correction_editor_lists_writes_exports_and_withdraws_over_htt
     assert opinion.json()["detail"].startswith("A correction carries the evidence that settles it")
 
 
-async def test_the_axis_editor_lists_writes_exports_and_withdraws_over_http(db, app, bundle_dir, tmp_path):
-    admin, _member = await household(app)
-    await _install(db, bundle_dir)
-
-    listed = (await admin.get("/api/admin/curated/axes")).json()
-    assert listed["applies"] == curated_api.APPLIES_AXES
-    assert UNSHIPPED_FACET in listed["facets"]
-    assert {axis["facet"] for axis in listed["axes"]} == set(fx.AXES)
-
-    written = await admin.post("/api/admin/curated/axes", json={
-        "facet": UNSHIPPED_FACET, "left_pole": 'linear, "straight"', "right_pole": "fractured",
-        "weights": [{"term": "structure.procedural", "weight": -0.75}, {"term": "pacing.patient",
-                                                                         "weight": 1.0}],
-    })
-    assert written.status_code == 201, written.text
-    axis = written.json()["axis"]
-    assert (axis["origin"], axis["left_pole"]) == ("household", 'linear, "straight"')
-
-    exported = await admin.get(f"/api/admin/curated/axes/{UNSHIPPED_FACET}/export")
-    path = _saved(tmp_path, _attachment(exported), exported.content.decode("utf-8"))
-    assert path.name == f"{UNSHIPPED_FACET}.tsv"
-    withdrawn = await admin.delete(f"/api/admin/curated/axes/{UNSHIPPED_FACET}")
-    assert withdrawn.status_code == 204
-    assert (await admin.delete(f"/api/admin/curated/axes/{UNSHIPPED_FACET}")).status_code == 404
-    report = ImportReport()
-    await dna.load_axes(db, path.parent, "v1", report)
-    assert report.ok, report.render()
-    back = (await admin.get("/api/admin/curated/axes")).json()
-    (reloaded,) = [a for a in back["axes"] if a["facet"] == UNSHIPPED_FACET]
-    assert (reloaded["origin"], reloaded["left_pole"], reloaded["right_pole"]) == (
-        "bundle", 'linear, "straight"', "fractured"
-    )
-    assert reloaded["weights"] == axis["weights"]
-
-    refused = await admin.delete("/api/admin/curated/axes/mood")
-    assert (refused.status_code, refused.json()["detail"]) == (409, axes.READ_ONLY)
-    unknown = await admin.post("/api/admin/curated/axes", json={
-        "facet": "nonsense", "left_pole": "a", "right_pole": "b",
-        "weights": [{"term": "mood.dread", "weight": 0.5}],
-    })
-    assert unknown.status_code == 409 and "is not a facet of this vocabulary" in unknown.json()["detail"]
-
-
 async def test_the_review_hands_on_both_orderings_and_filters_nothing(db, app, bundle_dir):
     admin, _member = await household(app)
     await _install(db, bundle_dir)
@@ -212,11 +169,6 @@ async def test_the_review_hands_on_both_orderings_and_filters_nothing(db, app, b
          {"title_id": 1, "kind": "composer", "value": "x", "evidence": "y"}),
         ("DELETE", "/api/admin/curated/corrections/1", None),
         ("GET", "/api/admin/curated/corrections/export", None),
-        ("GET", "/api/admin/curated/axes", None),
-        ("POST", "/api/admin/curated/axes",
-         {"facet": "mood", "left_pole": "a", "right_pole": "b", "weights": []}),
-        ("DELETE", "/api/admin/curated/axes/mood", None),
-        ("GET", "/api/admin/curated/axes/mood/export", None),
         ("GET", "/api/admin/dna/rejects", None),
         ("GET", "/api/admin/dna/evidence/1", None),
     ],
