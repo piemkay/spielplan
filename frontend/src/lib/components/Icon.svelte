@@ -132,6 +132,15 @@
     {:else if name === 'share'}
       <path d="M12 3.5v11M8 7.5l4-4 4 4" />
       <path d="M6 11H5a1 1 0 0 0-1 1v7.5a1 1 0 0 0 1 1h14a1 1 0 0 0 1-1V12a1 1 0 0 0-1-1h-1" />
+    {:else if name === 'bookmark'}
+      <path d="M7 3.5h10a1 1 0 0 1 1 1V21l-6-4-6 4V4.5a1 1 0 0 1 1-1z" />
+    {:else if name === 'bookmark-fill'}
+      <path d="M7 3.5h10a1 1 0 0 1 1 1V21l-6-4-6 4V4.5a1 1 0 0 1 1-1z" fill="currentColor" />
+    {:else if name === 'not-in-library'}
+      <rect x="3.5" y="5" width="17" height="14" rx="2" />
+      <path d="M3.5 9h17M8 5v4M16 5v4" />
+    {:else if name === 'close'}
+      <path d="M6 6l12 12M18 6 6 18" />
     {:else if name === 'eye-off' || name === 'not_seen'}
       <path d="M3.5 3.5l17 17" />
       <path d="M10.6 5.1A9.6 9.6 0 0 1 12 5c5 0 8.5 4.5 9.5 7a13 13 0 0 1-2.7 3.9" />

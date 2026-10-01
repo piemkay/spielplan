@@ -211,7 +211,7 @@ export function whyNumbersLine(numbers) {
 }
 
 // The one rename from the shelf payload to the catalog card's shape. `e_source` and `item_n`
-// must travel: the "new" badge is decided on them.
+// must travel: the "new" badge is decided on them; so must `wanted` and `like` (decision 544).
 export function toPosterTitle(item) {
   return {
     id: item.title_id,
@@ -225,7 +225,9 @@ export function toPosterTitle(item) {
     placement: item.placement,
     item_n: item.item_n,
     e_source: item.e_source,
-    seen_state: item.seen ? 'seen' : 'unseen'
+    seen_state: item.seen ? 'seen' : 'unseen',
+    wanted: Boolean(item.wanted),
+    like: item.like ?? null
   };
 }
 

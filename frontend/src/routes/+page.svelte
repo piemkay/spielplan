@@ -31,6 +31,8 @@
   import { publishSuppressed } from '$lib/rail.svelte.js';
   import { displayNames } from '$lib/titleCard.js';
   import { topbar } from '$lib/topbar.svelte.js';
+  import { wishes } from '$lib/wish.svelte.js';
+  import ArrivedBanner from '$lib/components/ArrivedBanner.svelte';
   import FinishPrompt from '$lib/components/FinishPrompt.svelte';
   import PendingVerdicts from '$lib/components/PendingVerdicts.svelte';
   import PosterCard, { isColdPlaced } from '$lib/components/PosterCard.svelte';
@@ -251,6 +253,15 @@
     loadShelves();
   });
 
+  // A wish written anywhere (a sheet, the banner, a title card) moves Home's banner, row and shelf.
+  let lastWishes = wishes.epoch;
+  $effect(() => {
+    const epoch = wishes.epoch;
+    if (epoch === lastWishes) return;
+    lastWishes = epoch;
+    loadShelves();
+  });
+
   async function chooseKinds(choice) {
     if (kindChoice(kinds) === choice) return;
     kinds = kindsFor(choice);
@@ -456,6 +467,7 @@
 <!-- Its answer moves the banner's population, so it re-reads the shelves (decision 212). -->
 <FinishPrompt onAnswered={loadShelves} />
 <PendingVerdicts banner={home?.banner} />
+<ArrivedBanner arrived={home?.arrived ?? []} onSelect={(title) => (selected = title)} />
 
 {#if home?.degraded && home.degraded.state !== 'no_bundle'}
   <!-- `no_bundle` is rendered further down, by the panel the first-boot spec asserts. -->

@@ -1,8 +1,11 @@
 <script>
   // The server's order is §6.0's table; never re-sort it.
   import { onMount } from 'svelte';
+  import Icon from '$lib/components/Icon.svelte';
   import ShelfRow from '$lib/components/ShelfRow.svelte';
+  import WishListSheet from '$lib/components/WishListSheet.svelte';
   import { kindRegions, shelfRows } from '$lib/home.svelte.js';
+  import { wishRowShown, wishSummary } from '$lib/wish.svelte.js';
 
   // `stale`: the shelves on screen answer another kind than the one asked for.
   let { payload, onSelect, loading = false, stale = false } = $props();
@@ -14,7 +17,23 @@
   // Rows drawn as the list mounts (Home kept across tabs) are already there: only later ones arrive.
   let mounted = $state(false);
   onMount(() => (mounted = true));
+
+  let wishOpen = $state(false);
 </script>
+
+<!-- Once, after the last shelf: under Worth getting, which the table puts last (decision 544). -->
+{#snippet wishRow()}
+  {#if wishRowShown(payload)}
+    <button class="wishrow" data-testid="home-wish-row" onclick={() => (wishOpen = true)}>
+      <span class="glyph"><Icon name="bookmark" size={22} /></span>
+      <span class="text">
+        <span class="label">Wish list</span>
+        <span class="footnote">{wishSummary(payload.wish)}</span>
+      </span>
+      <span class="chev"><Icon name="chevron-right" size={16} /></span>
+    </button>
+  {/if}
+{/snippet}
 
 {#if loading && !rows.length}
   <div class="shelves loading" data-testid="shelves-loading">
@@ -55,6 +74,7 @@
         <ShelfRow section={row.section} shelfId={row.shelf} {onSelect} enter={mounted ? i : null} />
       {/each}
     {/if}
+    {@render wishRow()}
   </div>
 {:else if payload?.degraded?.state !== 'zero_verdicts'}
   <!-- With no verdicts Home's degraded card already asks for ratings. -->
@@ -63,7 +83,12 @@
     <p class="why">Rate a few titles and your shelves arrive here, each with its reason.</p>
     <a class="btn-primary" href="/rate">Rate some titles</a>
   </div>
+  {@render wishRow()}
+{:else}
+  {@render wishRow()}
 {/if}
+
+<WishListSheet open={wishOpen} onClose={() => (wishOpen = false)} {onSelect} />
 
 <style>
   .shelves {
@@ -110,6 +135,44 @@
   .regionhead {
     padding: 0;
     margin-bottom: -20px;
+  }
+  .wishrow {
+    max-width: 560px;
+    min-height: 56px;
+    padding: 8px 16px;
+    border: none;
+    border-radius: var(--r-md);
+    background: var(--surface-1);
+    color: var(--text);
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    text-align: left;
+  }
+  /* Closer to the shelf above than the shelves are to each other. */
+  .shelves > .wishrow {
+    margin-top: -12px;
+  }
+  .empty + .wishrow {
+    margin-top: 16px;
+  }
+  .glyph {
+    flex: none;
+    color: var(--text-2);
+  }
+  .wishrow .text {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+  }
+  .label {
+    font-size: var(--fs-body);
+    line-height: 22px;
+  }
+  .chev {
+    flex: none;
+    color: rgba(245, 240, 232, 0.35);
   }
   .empty {
     display: flex;

@@ -84,6 +84,26 @@ describe('what a card says under its art (decision 527)', () => {
   });
 });
 
+describe('a card beyond the library (decision 544)', () => {
+  it('wears an ember bookmark on its art when the viewer wanted it, and nothing otherwise', () => {
+    let app = render(title({ wanted: true }));
+    const mark = target.querySelector('[data-testid="wanted-mark"]');
+    expect(mark.getAttribute('aria-label')).toBe('On your wish list');
+    expect(mark.closest('.poster'), 'the mark sits on the art').not.toBeNull();
+    unmount(app);
+    app = render(title({ wanted: false }));
+    expect(target.querySelector('[data-testid="wanted-mark"]')).toBeNull();
+    unmount(app);
+  });
+
+  it('names the liked film it is like as a third line', () => {
+    const app = render(title({ like: { title_id: 9, name: 'Collateral', terms: ['night city'] } }));
+    const lines = [...target.querySelectorAll('.meta > span')].map((el) => el.textContent);
+    expect(lines).toEqual(['Heat', '1995 · 2h 50m', 'Like Collateral']);
+    unmount(app);
+  });
+});
+
 describe('the name on the card (decision 516)', () => {
   const langs = Object.getOwnPropertyDescriptor(Navigator.prototype, 'languages');
   afterEach(() => {

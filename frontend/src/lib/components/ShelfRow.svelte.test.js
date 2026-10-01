@@ -5,7 +5,11 @@
 import { flushSync, mount, unmount } from 'svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('$lib/api.js', () => ({ get: vi.fn(), qs: vi.fn(() => '') }));
+vi.mock('$lib/api.js', async (importOriginal) => ({
+  ...(await importOriginal()),
+  get: vi.fn(),
+  api: vi.fn()
+}));
 // See all is a sheet, which pushes a history entry as it opens.
 const nav = vi.hoisted(() => ({ page: null }));
 vi.mock('$app/stores', async () => {
@@ -17,6 +21,7 @@ vi.mock('$app/navigation', () => ({
   pushState: (_url, state) => nav.page.update((p) => ({ ...p, state }))
 }));
 
+import { api, get } from '$lib/api.js';
 import ShelfRow from './ShelfRow.svelte';
 
 const COLD_NOTE = '[data-testid="shelf-cold-note"]';
@@ -236,6 +241,84 @@ describe('a row pages itself and leaves the wheel to the page (decision 528)', (
     sheet.querySelector('.card-wrap').click();
     // The poster as drawn travels with the id, so the card opens on it (decision 530).
     expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({ id: 1, name: 'Film 1' }));
+    unmount(app);
+  });
+});
+
+describe('Worth getting (decision 544)', () => {
+  const heat = { title_id: 9, name: 'Heat', terms: ['night city', 'cat and mouse'] };
+  const worthSection = {
+    ...section([
+      card({ title_id: 1, name: 'Collateral', like: heat }),
+      card({ title_id: 2, name: 'Thief', like: heat })
+    ]),
+    title: 'Worth getting',
+    why: 'Not in the library yet, close to what you love'
+  };
+  const settle = async () => {
+    for (let i = 0; i < 4; i++) await new Promise((resolve) => setTimeout(resolve, 0));
+    flushSync();
+  };
+
+  afterEach(() => vi.mocked(get).mockReset());
+
+  function renderWorth() {
+    const app = mount(ShelfRow, {
+      target,
+      props: { section: worthSection, shelfId: 'worth_getting', onSelect: () => {} }
+    });
+    flushSync();
+    return app;
+  }
+
+  it('draws larger cards, each naming the liked film it is like', () => {
+    const app = renderWorth();
+    expect(target.querySelector('[data-testid="shelf-items"]').classList.contains('worth')).toBe(true);
+    const likes = [...target.querySelectorAll('[data-testid="like-line"]')].map((el) => el.textContent);
+    expect(likes).toEqual(['Like Heat', 'Like Heat']);
+    unmount(app);
+  });
+
+  it('opens the whole list from See all, for you or for two, with Want on every row', async () => {
+    const row = (title_id, name, wanted = false, like = heat) => ({
+      title_id, kind: 'movie', name, year: 2004, runtime_min: 120, like, wanted
+    });
+    vi.mocked(get).mockImplementation(async (path) =>
+      path.includes('with=pair')
+        ? { kind: 'movie', with: 'pair', other: { id: 2, name: 'Jenny' }, items: [row(3, 'Ronin', false, null)] }
+        : { kind: 'movie', with: 'me', other: { id: 2, name: 'Jenny' },
+            items: [row(1, 'Collateral', true), row(2, 'Thief')] }
+    );
+    vi.mocked(api).mockResolvedValue({ state: 'want' });
+    const app = renderWorth();
+    target.querySelector('[data-testid="shelf-see-all"]').click();
+    await settle();
+
+    const sheet = target.querySelector('[data-testid="worth-getting-sheet"]');
+    expect(vi.mocked(get)).toHaveBeenCalledWith('/home/worth-getting?kind=movie&with=me');
+    expect(sheet.closest('[role="dialog"]').getAttribute('aria-label')).toBe('Worth getting');
+    expect([...sheet.querySelectorAll('.reason')].map((el) => el.textContent)).toEqual([
+      'Like Heat · night city, cat and mouse',
+      'Like Heat · night city, cat and mouse'
+    ]);
+    const wants = () => [...sheet.querySelectorAll('[data-testid="worth-getting-want"]')];
+    expect(wants().map((b) => [b.textContent.trim(), b.getAttribute('aria-pressed')])).toEqual([
+      ['Wanted', 'true'],
+      ['Want', 'false']
+    ]);
+
+    wants()[1].click();
+    await settle();
+    expect(vi.mocked(api)).toHaveBeenCalledWith('/wish/2', { method: 'PUT', body: { state: 'want' } });
+    expect(wants()[1].getAttribute('aria-pressed')).toBe('true');
+
+    const pair = [...target.querySelectorAll('[aria-label="Whose list"] button')];
+    expect(pair.map((b) => b.textContent)).toEqual(['For you', 'For you and Jenny']);
+    pair[1].click();
+    await settle();
+    expect(vi.mocked(get)).toHaveBeenLastCalledWith('/home/worth-getting?kind=movie&with=pair');
+    const reasons = [...target.querySelectorAll('[data-testid="worth-getting-sheet"] .reason')];
+    expect(reasons.map((el) => el.textContent)).toEqual(['Jenny too']);
     unmount(app);
   });
 });

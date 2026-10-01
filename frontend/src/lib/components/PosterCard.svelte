@@ -12,6 +12,7 @@
   import { runtimeLabel } from '$lib/rate.svelte.js';
   import { artReady, noteMissing, posterSrc } from '$lib/art.js';
   import { displayNames } from '$lib/titleCard.js';
+  import Icon from '$lib/components/Icon.svelte';
 
   let { title, onSelect } = $props();
 
@@ -79,10 +80,18 @@
     {#if title.is_owned === true}
       <span class="owned" data-testid="owned-chip">In library</span>
     {/if}
+    {#if title.wanted}
+      <span class="wanted" role="img" aria-label="On your wish list" data-testid="wanted-mark">
+        <Icon name="bookmark-fill" size={13} />
+      </span>
+    {/if}
   </div>
   <span class="meta">
     <span class="name">{names.primary}</span>
     <span class="sub">{meta}</span>
+    {#if title.like}
+      <span class="like" data-testid="like-line">Like {title.like.name}</span>
+    {/if}
   </span>
 </button>
 
@@ -145,7 +154,8 @@
     background: rgba(12, 11, 10, 0.72);
     color: var(--text);
   }
-  .seen {
+  .seen,
+  .wanted {
     position: absolute;
     top: 6px;
     right: 6px;
@@ -156,6 +166,11 @@
     color: var(--text);
     display: grid;
     place-items: center;
+  }
+  .wanted {
+    width: 24px;
+    height: 24px;
+    color: var(--accent-text);
   }
   .meta {
     display: flex;
@@ -178,5 +193,13 @@
     line-height: 18px;
     color: var(--text-3);
     font-variant-numeric: tabular-nums;
+  }
+  .like {
+    font-size: var(--fs-footnote);
+    line-height: 18px;
+    color: var(--text-2);
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
   }
 </style>
