@@ -6,19 +6,7 @@
   import { PAIR_QUESTION, metaLine } from '$lib/rate.svelte.js';
 
   // `much` false leaves More, Same, More: Rank's comparison round has no decisive answer (decision 201).
-  // Rate alone passes `echo`, a snippet that stands in for the reason line a moment after a verdict.
-  let {
-    card,
-    busy = false,
-    pending = null,
-    failed = null,
-    much = true,
-    echo = null,
-    onDuel,
-    onCorrect = null,
-    onPeek,
-    onWhy = null
-  } = $props();
+  let { card, busy = false, pending = null, much = true, onDuel, onCorrect = null, onPeek } = $props();
 
   const left = $derived(card?.left ?? {});
   const right = $derived(card?.right ?? {});
@@ -54,22 +42,8 @@
 <article class="battle" data-testid="rate-battle-card" data-card-token={card?.token}>
   <div class="ask">
     <h2 class="question" data-testid="rate-battle-question">{PAIR_QUESTION}</h2>
-    {#if card?.reason || echo}
-      <p class="sub">
-        {#if echo}{@render echo()}{:else}<span data-testid="rate-battle-reason">{card.reason}</span
-          >{#if onWhy}{' · '}<button
-              class="hit why-link"
-              data-testid="rate-why"
-              aria-haspopup="dialog"
-              onclick={onWhy}>Why these?</button
-            >{/if}{/if}
-      </p>
-    {/if}
-    <!-- A pair stands in for a single title only when nothing new is left to rate (§6.1). -->
-    {#if card?.substituted_for}
-      <p class="footnote" data-testid="rate-substituted">
-        Nothing new to rate right now — comparing titles you've already rated.
-      </p>
+    {#if card?.reason}
+      <p class="sub" data-testid="rate-battle-reason">{card.reason}</p>
     {/if}
   </div>
 
@@ -121,7 +95,6 @@
       <button
         class="step"
         class:picked={pending === `duel-${key}`}
-        class:shake={failed === `duel-${key}`}
         data-testid="rate-duel-{key}"
         aria-label={aria(outcome, much)}
         aria-busy={pending === `duel-${key}`}
@@ -180,13 +153,6 @@
     font-size: var(--fs-footnote);
     line-height: 18px;
     color: var(--text-2);
-  }
-  .why-link {
-    padding: 0;
-    border: none;
-    background: none;
-    color: var(--accent-text);
-    font: inherit;
   }
   .pair {
     flex: 0 1 auto;
