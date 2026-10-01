@@ -357,6 +357,27 @@ def test_a_round_whose_answers_move_nothing_stops_at_three():
     assert played.stop_reason == rnd.CONVERGED and played.next_pair is None
 
 
+def test_titles_outside_the_reach_do_not_hold_the_top_three_still():
+    """A seen favourite above the reach is one the mood never moves: the stop rule watches the reach,
+    so a round whose answers keep reshuffling it runs on whatever sits above."""
+    seat = [film(i + 1, z=axis(i)) for i in range(4)] + films(6, start=5)
+    reach = {200 + i: axis(i - 1, 3.0) for i in range(1, 5)}
+    reach.update({t: (0.0,) * K for t in range(205, 231)})
+    stable = {t: (-0.1 if t < 205 else 0.0) - 0.001 * t for t in reach}
+    seen_above = {101: 5.0, 102: 4.0, 103: 3.0}
+    # Each answer favours a new direction, so a new film of the reach climbs into its top three.
+    rows = [
+        rnd.Answered(seq=1, title_a=1, title_b=2, answer=A),
+        rnd.Answered(seq=2, title_a=3, title_b=1, answer=A),
+        rnd.Answered(seq=3, title_a=4, title_b=3, answer=A),
+    ]
+    alone = rnd.replay(seat, stable, reach, rows, holdout_key=ADAPTIVE_ARM)
+    assert alone.stop_reason is None, "the reach's top three moved on the third answer"
+
+    played = rnd.replay(seat, {**stable, **seen_above}, reach, rows, holdout_key=ADAPTIVE_ARM)
+    assert played.stop_reason is None and played.next_pair is not None
+
+
 def test_eight_pairs_end_the_round_hold_outs_included():
     seat = films(10)
     rows = [

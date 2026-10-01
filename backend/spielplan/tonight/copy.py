@@ -32,8 +32,14 @@ NO_ROUND_LINE = (
     "No mood questions tonight — they need {need} films on your ladder at {word} or higher, "
     "and you have {n}."
 )
+# When some of those films cannot be asked about: marked Not seen, or carrying a vetoed term.
+NO_ROUND_SEEN_LINE = (
+    "No mood questions tonight — they need {need} films on your ladder at {word} or higher that "
+    "you've seen{vetoes}, and you have {n}."
+)
 NO_ROUND_GUEST_LINE = (
-    "No mood questions tonight — they need {need} well-known films in the library, and it has {n}."
+    "No mood questions tonight — they need {need} well-known films in the library{vetoes}, "
+    "and it has {n}."
 )
 
 # §6.2 step 8's provenance lines; `{budget}` is "2h 10m", per episode on a series night.
@@ -42,10 +48,17 @@ PROVENANCE_FLAT = "No strong mood tonight — your usual favourites · fits in {
 PROVENANCE_USUAL = "Your usual favourites · fits in {budget}"
 
 
-def no_round(*, need: int, have: int, word: str | None) -> str:
-    """`word` is the lowest liked tier's word on the person's ladder; None for a guest."""
+def no_round(
+    *, need: int, have: int, word: str | None, placed: int = 0, vetoed: bool = False
+) -> str:
+    """`word` is the lowest liked tier's word on the person's ladder, None for a guest; `placed` is
+    how many films that tier and above hold, `have` how many of them the round may ask about."""
     if word is None:
-        return NO_ROUND_GUEST_LINE.format(need=need, n=have)
+        vetoes = " that tonight's vetoes leave in" if vetoed else ""
+        return NO_ROUND_GUEST_LINE.format(need=need, n=have, vetoes=vetoes)
+    if placed > have:
+        vetoes = " and tonight's vetoes leave in" if vetoed else ""
+        return NO_ROUND_SEEN_LINE.format(need=need, word=word, n=have, vetoes=vetoes)
     return NO_ROUND_LINE.format(need=need, word=word, n=have)
 
 
@@ -106,6 +119,7 @@ __all__ = [
     "NO_PULL_LINE",
     "NO_ROUND_GUEST_LINE",
     "NO_ROUND_LINE",
+    "NO_ROUND_SEEN_LINE",
     "PERSON_SPLIT_LINE",
     "PERSON_SPLIT_SHORT",
     "PROVENANCE_FLAT",

@@ -1128,6 +1128,54 @@ async def test_a_seat_with_fewer_than_eight_films_goes_straight_to_the_picks_say
     assert host_state["no_round"] is None, "a seat that had a round has no why"
 
 
+async def test_the_no_round_line_says_why_placed_films_do_not_count(db, world):
+    """A placed film marked Not seen keeps its step (decision 550) and a vetoed one stays on the
+    ladder: the count is what the round could ask, and the line says what it leaves out."""
+    patrick = world["patrick"]
+    await db.execute(
+        "UPDATE user_title SET state = 'unseen' WHERE user_id = $1 AND title_id = ANY($2::int[])",
+        patrick, FILMS[:3],
+    )
+    await _veto_fixture(db)
+    await db.execute(
+        "INSERT INTO dna_projected (title_id, version, term, facet, weight, via) "
+        "VALUES (305, $1, 'mood.violent', 'mood', 1, 'keyword:fixture')",
+        VOCAB,
+    )
+    await db.execute("DELETE FROM title_prior WHERE title_id = ANY($1::int[])", GUEST_FILMS[:6])
+    room = await open_room(db, world, guests=1, include_rewatches=True, budget_min=200)
+    await rooms.join(db, session_id=room["session_id"], user_id=world["jenny"])
+    await rooms.set_vetoes(
+        db, session_id=room["session_id"], user_id=world["jenny"], keys=["violence"]
+    )
+    snapshot = await play.start(db, room["session_id"])
+    seats = await db.fetch(
+        "SELECT id, role FROM session_participant WHERE session_id = $1", room["session_id"]
+    )
+    why = {s["role"]: snapshot.round_of(s["id"]).no_round for s in seats}
+
+    assert why["host"] == (
+        "No mood questions tonight — they need 8 films on your ladder at Liked it or higher that "
+        "you've seen and tonight's vetoes leave in, and you have 7."
+    ), "eleven placed: three marked Not seen, one vetoed"
+    assert why["member"] is None
+    assert why["guest"] == (
+        "No mood questions tonight — they need 8 well-known films in the library that tonight's "
+        "vetoes leave in, and it has 4."
+    )
+
+    # Solo has no vetoes: eleven placed, four marked Not seen.
+    await db.execute(
+        "UPDATE user_title SET state = 'unseen' WHERE user_id = $1 AND title_id = $2",
+        patrick, FILMS[3],
+    )
+    out = await solo_picks(db, world, sharpen=True)
+    assert out["no_round"] == (
+        "No mood questions tonight — they need 8 films on your ladder at Liked it or higher that "
+        "you've seen, and you have 7."
+    )
+
+
 async def test_a_vetoed_term_keeps_a_film_out_of_the_pairs(db, world):
     """Decision 550: a film carrying a vetoed term in either tier is never in a pair."""
     await _veto_fixture(db)
@@ -1869,6 +1917,52 @@ async def test_each_match_line_branch_says_the_thing_it_is_for(db, world):
     # Claims only what the branch establishes; never "leaned toward".
     assert favourite["line"].startswith("suits patrick's usual taste — "), favourite["line"]
     assert "leaned" not in favourite["line"] and "+" not in favourite["line"]
+
+
+async def test_a_lean_is_what_the_mood_did_to_the_title_not_any_term_it_weighs_up(db, world):
+    """The stored tilt is the whole mood written back onto the vocabulary, so nearly every term has a
+    weight, half of them positive. Driven by one real answer each way."""
+    room = await running_room(db, world)
+    snapshot = await play.snapshot_of(db, room["session_id"])
+    host = room["seats"][0]["id"]
+    reach = snapshot.round_of(host).reach
+    z = {f.title_id: f.z for f in snapshot.round_of(host).films}
+    seats_sql = (
+        "SELECT p.id, p.role, p.tilt, p.seat, u.name FROM session_participant p "
+        "LEFT JOIN app_user u ON u.id = p.user_id WHERE p.session_id = $1 ORDER BY p.seat"
+    )
+
+    async def line_for(answer, title_id, *, below):
+        mood = rnd.observe(rnd.prior(), a=z[301], b=z[302], answer=answer)
+        tilt = snapshot.tilt(mood.mean)
+        await db.execute("UPDATE session_participant SET tilt = $1 WHERE id = $2", tilt, host)
+        others = [t for t in snapshot.title_ids if t != title_id]
+        order = {title_id: -1.0 if below else 99.0, **{t: float(i) for i, t in enumerate(others)}}
+        lines = await play._match_lines(
+            db, snapshot=snapshot, seats=await db.fetch(seats_sql, room["session_id"]),
+            title_id=title_id, tonight={host: order},
+        )
+        return mood.mean, tilt, lines[str(host)]
+
+    mean, tilt, _ = await line_for(rnd.B, reach[0], below=True)
+    lift = rnd.adjustments(mean, snapshot.reach_of(host))
+    pushed_down = next(
+        t for t in reach
+        if lift[t] < 0 and any(tilt.get(term, 0.0) > 0 for term in snapshot.dna[t])
+    )
+    _, _, line = await line_for(rnd.B, pushed_down, below=True)
+    assert line["sign"] == "against", line
+    assert "works against them" in line["line"] and "leaned" not in line["line"]
+
+    mean, _, line = await line_for(rnd.A, pushed_down, below=False)
+    lift = rnd.adjustments(mean, snapshot.reach_of(host))
+    assert lift[pushed_down] >= play.LEAN_LIFT, "the other answer lifts it"
+    assert line["line"].startswith("patrick leaned toward "), line
+
+    # A title past the reach is one the mood never moved, whatever its terms weigh.
+    seen = next(t for t in snapshot.title_ids if t not in reach and snapshot.dna.get(t))
+    _, _, line = await line_for(rnd.A, seen, below=False)
+    assert line["line"].startswith("suits patrick's usual taste — "), line
 
 
 from spielplan.tonight import dna as tonight_dna  # noqa: E402

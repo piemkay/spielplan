@@ -30,6 +30,10 @@ from spielplan.tonight import tilt as tilt_rules
 # Advisory-lock namespace for `finish`; two ints so a session id cannot collide with other locks.
 _FINISH_LOCK = 6202
 
+# Half a standard deviation on the room's scale, solo's bar for a strong mood: a smaller lift is
+# not one a match line may call a lean.
+LEAN_LIFT = 0.5
+
 
 class RoundError(Exception):
     def __init__(self, reason: str, message: str) -> None:
@@ -227,10 +231,10 @@ async def _frozen_rounds(
     a guest's well-known films and the pool's own top 30. Also every candidate some seat can reach."""
     average = {t: pool_rules.group_score(s) for t, s in ledger.items()}
     well_known: list[dict[str, Any]] | None = None
-    chosen: dict[int, tuple[list[dict[str, Any]], str | None, list[int]]] = {}
+    chosen: dict[int, tuple[list[dict[str, Any]], str, list[int]]] = {}
     for seat in seats:
         if seat.is_member and seat.user_id is not None:
-            films, word = await pool_rules.liked_films(
+            films, word, placed = await pool_rules.liked_films(
                 conn, user_id=seat.user_id, kind=kind, vetoed_terms=vetoed_terms, dna_version=version,
             )
             stable = {t: s[seat.participant_id] for t, s in ledger.items() if seat.participant_id in s}
@@ -241,8 +245,12 @@ async def _frozen_rounds(
                     conn, kind=kind, bundle_version=bundle_version, vetoed_terms=vetoed_terms,
                     dna_version=version,
                 )
-            films, word, stable, seen = well_known, None, average, set()
-        chosen[seat.participant_id] = (films, word, pool_rules.reach(stable, seen=seen))
+            films, word, placed, stable, seen = well_known, None, 0, average, set()
+        why = copy_rules.no_round(
+            need=round_rules.MIN_ROUND_FILMS, have=len(films), word=word, placed=placed,
+            vetoed=bool(vetoed_terms),
+        )
+        chosen[seat.participant_id] = (films, why, pool_rules.reach(stable, seen=seen))
 
     asked = sorted(
         {f["title_id"] for films, _, _ in chosen.values() if round_rules.has_round(films) for f in films}
@@ -250,7 +258,7 @@ async def _frozen_rounds(
     dna = await dna_reads.vectors_for(conn, asked, version=version or "")
     genres = await pool_rules.genres_of(conn, asked)
     frozen = {}
-    for participant_id, (films, word, reach) in chosen.items():
+    for participant_id, (films, why, reach) in chosen.items():
         has_round = round_rules.has_round(films)
         frozen[str(participant_id)] = {
             "films": [
@@ -262,9 +270,7 @@ async def _frozen_rounds(
                 for f in films
             ] if has_round else [],
             "reach": reach,
-            "no_round": None if has_round else copy_rules.no_round(
-                need=round_rules.MIN_ROUND_FILMS, have=len(films), word=word
-            ),
+            "no_round": None if has_round else why,
         }
     return frozen, {t for _, _, reach in chosen.values() for t in reach}
 
@@ -750,13 +756,20 @@ async def _match_lines(
 ) -> dict[str, Any]:
     """§6.2 step 7's per-person match lines, "in DNA terms including the honest negative".
 
-    Terms come from the title's own rows and the tilt only orders them. The negative is printed
-    only for a title below the seat's median tonight score; every line names its person in labels.
+    Terms come from the title's own rows, ordered by their share of what the mood did to the title.
+    A lean is claimed only where the mood clearly lifted the title within the seat's reach; the
+    negative is printed only for a title below the seat's median tonight score; every line names
+    its person in labels.
     """
     carried = await dna_reads.terms_carried_by(
         conn, title_id, version=snapshot.version or "", limit=8
     )
     named = await dna_terms.labels_for(conn, [t["term"] for t in carried])
+    # Dotted with a tilt, this is the mood's adjustment of the title (`tilt.back`).
+    place = tilt_rules.centred(
+        snapshot.dna.get(title_id, {}),
+        tilt_rules.frame({t: snapshot.dna.get(t, {}) for t in snapshot.title_ids}),
+    )
 
     def word(term: str) -> str:
         return str((named.get(term) or {}).get("label") or dna_terms.label_of(term, None))
@@ -775,12 +788,16 @@ async def _match_lines(
             continue
         own = tonight.get(seat["id"]) or {}
         below_usual = title_id in own and own[title_id] < statistics.median(own.values())
-        # The tilt weights carried terms; it never admits one.
+        share = {t: tilt.get(t, 0.0) * x for t, x in place.items()}
+        lifted = (
+            title_id in snapshot.round_of(seat["id"]).reach and sum(share.values()) >= LEAN_LIFT
+        )
+        # The mood orders carried terms; it never admits one.
         scored = sorted(
-            ((t["term"], tilt.get(t["term"], 0.0), t["tier"]) for t in carried),
+            ((t["term"], share.get(t["term"], 0.0), t["tier"]) for t in carried),
             key=lambda x: -x[1],
         )
-        pulls = [x for x in scored if x[1] > 0.0][:2]
+        pulls = [x for x in scored if x[1] > 0.0][:2] if lifted else []
         leaned = bool(pulls)
         if not pulls and not below_usual:
             # Theirs by stable taste: the title's own loudest terms, as solo says (`solo.why_line`).
