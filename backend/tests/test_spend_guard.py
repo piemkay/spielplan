@@ -547,7 +547,10 @@ async def test_every_estimate_names_its_model_and_its_price_basis(secrets_key, d
     assert read["estimate"]["output_tokens_assumed"] == pricing.MEAN_OUTPUT_TOKENS
     cards = {card["name"]: card for card in read["providers"]}
     assert cards["gemini"]["price_basis"] == _spelled(table)
-    assert cards["gemini"]["models"] == list(pricing.PRICING["gemini"])
+    # A one-pass plan at the table price: the list's figure is the one the confirm carries.
+    default = next(row for row in cards["gemini"]["models"] if row["default"])
+    assert default["id"] == "gemini-3.7-flash"
+    assert default["per_title_usd"] == read["estimate"]["per_title_usd"]
     if today < table.price.valid_until:
         assert read["estimate"]["basis"][0]["valid_until"] == "2027-01-01"
         assert read["estimate"]["basis"][0]["then"] == {"input": 1.5, "output": 7.5}

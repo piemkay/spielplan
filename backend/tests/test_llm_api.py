@@ -111,6 +111,7 @@ async def test_a_fresh_install_reads_every_provider_unconfigured_no_cap_and_batc
     before = datetime.now(UTC)
     body = await _read(await admin_client(app))
     after = datetime.now(UTC)
+    today = before.astimezone(spend.local_zone()).date()
 
     # `projected`, `models` and `price_basis` were added
     # later; every original key is still spelled as it was.
@@ -123,7 +124,9 @@ async def test_a_fresh_install_reads_every_provider_unconfigured_no_cap_and_batc
             "model": model, "structured_output": ADAPTERS[name].STRUCTURED_OUTPUT,
             "price": _shape(pricing.price_for(name, model)),
         }, name
-        assert card["models"] == list(pricing.PRICING[name]), name
+        priced = [m for m in pricing.PRICING[name] if pricing.price_for(name, m, on=today) is not None]
+        assert [listed["id"] for listed in card["models"]] == priced, name
+        assert [listed["id"] for listed in card["models"] if listed["default"]] == [model], name
         assert card["price"] != "unknown", f"{name}'s default model must be one the table prices"
 
     assert body["settings"] == {
@@ -354,6 +357,39 @@ async def test_the_jellyfin_test_button_is_still_its_own_route_which_keeps_the_v
     )
     stored = await registry.load_jellyfin(db)
     assert (stored.server_version, stored.server_supported) == ("10.8.13", False)
+
+
+def test_each_listed_model_costs_one_title_at_one_pass_of_its_table_price_until_the_price_lapses():
+    """Decisions 543 and 550: the figure ignores a stored override, and a price that ends with nothing
+    after it names the day its row leaves the list."""
+    state = registry.ConnectorState(name="openai", config={"model": "gpt-5", "price_input": 90,
+                                                          "price_output": 90})
+    november = date(2026, 11, 1)
+    listed = {row["id"]: row for row in llm_api.provider_card("openai", state, on=november)["models"]}
+    assert list(listed) == list(pricing.PRICING["openai"])
+    terra = pricing.price_for("openai", "gpt-5.6-terra", on=november)
+    # (23,500 written at $2.50 + 3,900 out at $12) per 1M, once.
+    assert listed["gpt-5.6-terra"] == {
+        "id": "gpt-5.6-terra", "per_title_usd": "0.105550", "leaves": None, "default": True,
+    }
+    assert Decimal("0.105550") == pricing.estimate_title(tokens_in=23_500, prices=[terra], passes=1)
+    assert [model for model, row in listed.items() if row["default"]] == ["gpt-5.6-terra"]
+    assert {model: row["leaves"] for model, row in listed.items() if row["leaves"]} == {
+        "gpt-5.6-sol": "2026-11-22", "gpt-5": "2026-12-11", "gpt-5-mini": "2026-12-11",
+        "gpt-5-nano": "2026-12-11",
+    }
+
+    lapsed = llm_api.provider_card("openai", state, on=date(2026, 12, 11))
+    assert [row["id"] for row in lapsed["models"]] == [
+        model for model in pricing.PRICING["openai"]
+        if model not in ("gpt-5.6-sol", "gpt-5", "gpt-5-mini", "gpt-5-nano")
+    ]
+    assert lapsed["model"] == "gpt-5", "a stored id the list no longer prices is still the card's model"
+
+    # A dated price with a successor does not leave.
+    gemini = llm_api.provider_card("gemini", registry.ConnectorState(name="gemini"), on=november)
+    assert gemini["models"][0]["id"] == "gemini-3.8-flash"
+    assert gemini["models"][0]["leaves"] is None
 
 
 def test_the_llm_router_declares_the_read_the_gated_write_the_cap_the_keys_and_the_dispatch():
