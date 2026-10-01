@@ -278,12 +278,12 @@ async def _draw_pinned(
 async def _follow_pins(
     conn: asyncpg.Connection, s: RateSession, head: Sequence[int]
 ) -> RateSession:
-    """Pins of the other kind only (a finish prompt for a series) switch the session to that kind,
-    rather than serving across §4.1 rule 5's partition."""
+    """The first pin's kind is the session's (a finish prompt for a series, §6.0's banner naming a
+    series first), rather than serving across §4.1 rule 5's partition."""
     rows = await conn.fetch("SELECT id, kind FROM title WHERE id = ANY($1::int[])", list(head))
     kinds = {int(r["id"]): r["kind"] for r in rows}
     pinned = [kinds[t] for t in head if t in kinds]
-    if not pinned or s.kind in pinned:
+    if not pinned or pinned[0] == s.kind:
         return s
     return await set_kinds(conn, s, [pinned[0]])
 

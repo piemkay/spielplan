@@ -815,12 +815,12 @@ async def test_the_banner_names_only_the_kinds_the_live_session_can_serve(world)
         "the queue served a different card than the banner named"
     )
 
-    # Widen the session and the series is nameable again.
-    widened = await world.client.post(
-        "/api/rate/session", json={"kinds": ["movie", "series"]}
-    )
-    assert widened.status_code == 200, widened.text
-    assert (await world.home())["banner"]["count"] == 5
+    # Rate is one kind at a time: a series session names the series alone.
+    switched = await world.client.post("/api/rate/session", json={"kinds": ["series"]})
+    assert switched.status_code == 200, switched.text
+    series = (await world.home())["banner"]
+    assert series["count"] == 3
+    assert {c["kind"] for c in series["named"]} == {"series"}
 
 
 async def _set_up(world, picks=((1012, 6),)):
