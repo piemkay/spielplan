@@ -1,4 +1,4 @@
-"""Tonight's strings (§6.2 step 5, §6.5).
+"""Tonight's strings (§6.2 steps 4, 5 and 8).
 
 D supports "one of you is likely to land below your usual" (AUC 0.610), never "someone will hate
 this".
@@ -26,6 +26,36 @@ USUAL_LINE = "suits {name}'s usual taste — {terms}"
 
 # §6.2 step 7: every participant gets a match line, a guest without a profile too.
 NO_PROFILE_LINE = "{name} — no profile yet"
+
+# §6.2 step 4: a seat with too little to ask about goes straight to the picks, saying why.
+NO_ROUND_LINE = (
+    "No mood questions tonight — they need {need} films on your ladder at {word} or higher, "
+    "and you have {n}."
+)
+NO_ROUND_GUEST_LINE = (
+    "No mood questions tonight — they need {need} well-known films in the library, and it has {n}."
+)
+
+# §6.2 step 8's provenance lines; `{budget}` is "2h 10m", per episode on a series night.
+PROVENANCE_MOOD = "Your mood tonight — {terms} · fits in {budget}"
+PROVENANCE_FLAT = "No strong mood tonight — your usual favourites · fits in {budget}"
+PROVENANCE_USUAL = "Your usual favourites · fits in {budget}"
+
+
+def no_round(*, need: int, have: int, word: str | None) -> str:
+    """`word` is the lowest liked tier's word on the person's ladder; None for a guest."""
+    if word is None:
+        return NO_ROUND_GUEST_LINE.format(need=need, n=have)
+    return NO_ROUND_LINE.format(need=need, word=word, n=have)
+
+
+def provenance(*, budget: str, terms: list[str] | None) -> str:
+    """No round: `terms` is None. A round that read no strong mood: an empty list."""
+    if terms is None:
+        return PROVENANCE_USUAL.format(budget=budget)
+    if not terms:
+        return PROVENANCE_FLAT.format(budget=budget)
+    return PROVENANCE_MOOD.format(terms=" · ".join(terms), budget=budget)
 
 
 def person_conflict(*, d: float, one_for_each: bool) -> dict[str, object]:
@@ -74,13 +104,20 @@ __all__ = [
     "LEANED_LINE",
     "NO_PROFILE_LINE",
     "NO_PULL_LINE",
+    "NO_ROUND_GUEST_LINE",
+    "NO_ROUND_LINE",
     "PERSON_SPLIT_LINE",
+    "PROVENANCE_FLAT",
+    "PROVENANCE_MOOD",
+    "PROVENANCE_USUAL",
     "PERSON_SPLIT_SHORT",
     "USUAL_LINE",
     "for_member",
     "leaned",
     "no_profile",
     "no_pull",
+    "no_round",
     "person_conflict",
+    "provenance",
     "usual",
 ]

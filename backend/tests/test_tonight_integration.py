@@ -29,6 +29,53 @@ EXTRACTED = [
 PROJECTED = [(2, "dread", 8), (7, "relentless", 1)]
 
 
+async def tag(db, title_id, term, salience):
+    tag_id = await db.fetchval(
+        "INSERT INTO dna_tag (title_id, version, term, facet, salience, confidence, provider) "
+        "VALUES ($1, $2, $3, $4, $5, $6, 'fixture') RETURNING id",
+        title_id, VOCAB, term, TERMS[term], salience, 0.4 + 0.1 * salience,
+    )
+    # §4.1 rule 1: "a tag without its quote is unfalsifiable."
+    await db.execute(
+        "INSERT INTO dna_evidence (dna_tag_id, quote, source) VALUES ($1, $2, 'fixture')",
+        tag_id, f"a line about {term}",
+    )
+
+
+# Decision 539: a member's pairs are their own seen films placed A or above (A, A+, S at K = 7); a
+# guest's are owned films with 30,000 crowd ratings. Neither set is scored, so neither is a candidate.
+FILMS = list(range(301, 311))      # both members' liked films; 311 is Patrick's alone
+GUEST_FILMS = list(range(401, 411))
+
+
+async def seed_films(db, members):
+    await db.execute(
+        "INSERT INTO title (id, kind, name, year, runtime_min, is_owned) "
+        "SELECT g, 'movie', 'Film ' || g, 2005, 100 + (g % 3) * 10, g > 400 FROM unnest($1::int[]) g",
+        [*FILMS, 311, *GUEST_FILMS],
+    )
+    await db.execute(
+        "INSERT INTO title_prior (title_id, bundle_version, b, item_n, gate, e_source) "
+        "SELECT g, $2, 0.5, 50000, 0.99, 'backbone' FROM unnest($1::int[]) g",
+        GUEST_FILMS, BUNDLE,
+    )
+    for user_id, films in members.items():
+        await db.execute(
+            "INSERT INTO tier_edit (user_id, title_id, tier, n_levels, via) "
+            "SELECT $1, g, 4 + g % 3, 7, 'explicit' FROM unnest($2::int[]) g",
+            user_id, films,
+        )
+        await db.execute(
+            "INSERT INTO user_title (user_id, title_id, state) "
+            "SELECT $1, g, 'seen' FROM unnest($2::int[]) g",
+            user_id, films,
+        )
+    terms = list(TERMS)
+    for g in [*FILMS, 311, *GUEST_FILMS]:
+        await tag(db, g, terms[g % 4], 1 + g % 3)
+        await tag(db, g, terms[(g + 1) % 4], 3 - g % 3)
+
+
 async def seed_dna(db):
     """Without it every DNA read returns {} and three assertions go vacuous."""
     await db.execute(
@@ -71,7 +118,8 @@ async def world(db):
     5     owned film, both have seen it     - the rewatch default removes it
     6     owned film, only Patrick has seen - the rewatch default KEEPS it
     7     owned series                      - the kind filter removes it from a film night
-    8     film in the catalog, NOT owned    - the ownership filter removes it"""
+    8     film in the catalog, NOT owned    - the ownership filter removes it
+    301+  each member's liked films, 401+ a guest's well-known ones (`seed_films`)"""
     await db.execute(
         "INSERT INTO artifact_bundle (version, manifest, state) VALUES ($1, '{}', 'active')",
         BUNDLE,
@@ -121,6 +169,7 @@ async def world(db):
         "INSERT INTO user_title (user_id, title_id, state) VALUES ($1, 6, 'seen')", patrick
     )
     await seed_dna(db)
+    await seed_films(db, {patrick: [*FILMS, 311], jenny: FILMS})
 
     return {
         "patrick": patrick,
@@ -561,10 +610,15 @@ from spielplan.tonight import round as rnd  # noqa: E402
 from spielplan.tonight import tilt as tilt_rules  # noqa: E402
 
 
+@pytest.fixture
+def long_rounds(monkeypatch):
+    """A round that never reads a settled mood runs to the cap: for tests of what happens past the
+    third answer, which `world`'s small pool would otherwise settle at three."""
+    monkeypatch.setattr(rnd, "STOP_AFTER", rnd.CAP_PAIRS + 1)
+
+
 async def widen(db, world, *, extra=110):
-    """Decision 477: rank-standardised members make `world`'s six films resolve in one pair, so tests
-    of later answers need a household-sized pool. Each title carries one verified term so answers
-    move the tilt."""
+    """A household-sized pool, past the mood's reach of 30. Each title carries one verified term."""
     first = 100
     ids = list(range(first, first + extra))
     await db.execute(
@@ -597,7 +651,7 @@ async def widen(db, world, *, extra=110):
 async def running_room(
     db, world, *, guests=0, budget_min=200, include_rewatches=True, wide=False
 ):
-    """Wide by default: a two-title pool has no shortlist boundary. `wide` adds `widen`'s films."""
+    """Rewatches in and a long budget, so the pool is all of `world`'s films. `wide` adds `widen`'s."""
     if wide:
         await widen(db, world)
     room = await open_room(
@@ -653,10 +707,16 @@ async def test_starting_a_room_freezes_the_pool_it_was_built_from(db, world):
 
     await db.execute("UPDATE user_score SET score = 0.01 WHERE user_id = $1", world["patrick"])
     await db.execute("UPDATE title SET is_owned = false WHERE id = 1")
+    await db.execute("DELETE FROM tier_edit WHERE user_id = $1", world["patrick"])
     after = await play.snapshot_of(db, room["session_id"])
 
     assert after.scores == before.scores
     assert after.title_ids == before.title_ids
+    host = room["seats"][0]["id"]
+    assert after.round_of(host).films == before.round_of(host).films != (), (
+        "each seat's films are frozen with the pool, so a placement mid-evening moves no pair"
+    )
+    assert after.reach_of(host) == before.reach_of(host)
 
 
 async def test_a_started_room_cannot_be_started_twice(db, world):
@@ -739,8 +799,7 @@ async def test_the_counter_never_drifts_from_the_rows_it_counts(db, world):
 
 async def test_a_replayed_pair_is_refused_rather_than_counted_twice(db, world):
     """§13 counts rows and §4.2 is append-only, so a replay is refused, as `api/rank.py` does."""
-    # Wide, so a replay is not refused as `round_over`.
-    room = await running_room(db, world, wide=True)
+    room = await running_room(db, world)
     seat = room["seats"][0]["id"]
     state = await play.state_for(db, seat)
     await play.record_answer(
@@ -758,18 +817,14 @@ async def test_a_replayed_pair_is_refused_rather_than_counted_twice(db, world):
 
 
 async def test_an_answer_moves_the_participants_tilt(db, world):
-    """Directional: the served pair moves only its terms, the chosen title outranks the rejected one
-    under the tilt, and the opposite answer is the exact negation."""
+    """Directional: written back as terms, the mood scores the chosen film above the rejected one,
+    and the opposite answer is the exact negation."""
     room = await running_room(db, world)
     chose_a, chose_b = room["seats"][0]["id"], room["seats"][1]["id"]
     assert await db.fetchval("SELECT tilt FROM session_participant WHERE id = $1", chose_a) == {}
 
-    state = await play.state_for(db, chose_a)
-    pair = state["_pair"]
-    assert pair is not None and pair.selection == rnd.SELECTION_ADAPTIVE, (
-        "a held-out answer moves no tilt by design (54b), so this claim needs an adaptive pair"
-    )
-    # Two seats answer independently against a frozen pool.
+    # Two seats answer one pair of the films both have liked, against a frozen pool.
+    pair = rnd.Pair(title_a=301, title_b=302, selection=rnd.SELECTION_ADAPTIVE, reason="")
     await play.record_answer(
         db, participant_id=chose_a, pair=pair, answer=rnd.A, seq=1, latency_ms=900
     )
@@ -780,16 +835,15 @@ async def test_an_answer_moves_the_participants_tilt(db, world):
     after = await db.fetchval("SELECT tilt FROM session_participant WHERE id = $1", chose_a)
     mirrored = await db.fetchval("SELECT tilt FROM session_participant WHERE id = $1", chose_b)
     snapshot = await play.snapshot_of(db, room["session_id"])
-    frame = snapshot.frame()
-    chosen, rejected = snapshot.dna[pair.title_a], snapshot.dna[pair.title_b]
+    frame = tilt_rules.frame(snapshot.dna)
+    films = await tonight_dna.vectors_for(db, [301, 302], version=VOCAB)
+
+    def adjusted(title_id):
+        centred = tilt_rules.centred(films[title_id], frame)
+        return sum(w * centred.get(t, 0.0) for t, w in after.items())
 
     assert after != {}, "the vote chose without meaning anything"
-    assert set(after) <= set(chosen) | set(rejected), (
-        "a term neither film in the pair carries cannot be what the answer said"
-    )
-    assert tilt_rules.adjustment(after, chosen, frame) > (
-        tilt_rules.adjustment(after, rejected, frame)
-    ), "the answer has to raise what was chosen above what was not"
+    assert adjusted(301) > adjusted(302), "the answer has to raise what was chosen above what was not"
     assert mirrored == pytest.approx({t: -v for t, v in after.items()}), (
         "the opposite answer on the same pair is the opposite reading"
     )
@@ -802,19 +856,25 @@ async def test_a_round_ends_with_exactly_one_named_reason(db, world):
     assert reason in rnd.END_REASONS
 
 
-async def test_the_cap_ends_a_round_that_will_not_resolve(db, world):
-    """EITHER to everything lifts the whole pool together, so the cap is the only exit."""
+async def test_a_round_that_reads_no_mood_stops_at_three_answers(db, world):
+    """EITHER to everything says no difference matters, so the top three never move."""
+    room = await running_room(db, world)
+    seat = room["seats"][1]["id"]
+    reason = await run_to_the_end(db, seat, answer=rnd.EITHER)
+    row = await db.fetchrow(
+        "SELECT answered_count, converged_at FROM session_participant WHERE id = $1", seat
+    )
+    assert reason == rnd.CONVERGED and row["converged_at"] is not None
+    assert row["answered_count"] == rnd.STOP_AFTER
+
+
+async def test_the_cap_ends_a_round_at_eight_pairs(db, world, long_rounds):
     room = await running_room(db, world)
     seat = room["seats"][0]["id"]
-    reason = await run_to_the_end(db, seat, answer=rnd.EITHER)
-    answered = await db.fetchval(
+    assert await run_to_the_end(db, seat) == rnd.CAP
+    assert await db.fetchval(
         "SELECT answered_count FROM session_participant WHERE id = $1", seat
-    )
-    assert reason == rnd.CAP
-    assert answered <= rnd.CAP_PAIRS
-    # The eight-title fixture runs out of pairs first; the 20-pair bound is tested in
-    # `test_tonight_round.py`.
-    assert answered >= 6, "a round has to actually ask before it gives up"
+    ) == rnd.CAP_PAIRS
 
 
 async def test_two_participants_may_stop_at_different_pair_counts(db, world):
@@ -835,40 +895,39 @@ async def test_two_participants_may_stop_at_different_pair_counts(db, world):
     assert counts[0]["answered_count"] != counts[1]["answered_count"]
 
 
-async def test_the_escape_is_refused_before_pair_six_and_ends_the_round_after(db, world):
+async def test_the_escape_is_refused_before_pair_four_and_ends_the_round_after(
+    db, world, long_rounds
+):
     """Refused, not ignored: a control that silently does nothing is worse than none."""
     room = await running_room(db, world)
     seat = room["seats"][0]["id"]
 
+    for _ in range(rnd.ESCAPE_FROM_PAIR - 2):
+        assert await answer_once(db, seat) is not None
     with pytest.raises(play.RoundError) as early:
         await play.escape(db, seat)
     assert early.value.reason == "too_early"
     # The member reads the refusal, so it names the control by its label (decision 486).
     assert "just pick for us" in str(early.value) and "escape" not in str(early.value)
 
-    for _ in range(5):
-        if await answer_once(db, seat) is None:
-            break
-    row = await db.fetchrow("SELECT ended_by, answered_count FROM session_participant WHERE id = $1", seat)
-    if row["ended_by"] is None and row["answered_count"] >= rnd.ESCAPE_FROM_PAIR - 1:
-        out = await play.escape(db, seat)
-        assert out["ended_by"] == rnd.ESCAPE
-        stored = await db.fetchrow(
-            "SELECT ended_by, converged_at FROM session_participant WHERE id = $1", seat
-        )
-        assert stored["ended_by"] == "escape"
-        assert stored["converged_at"] is None, "an escape is not a convergence"
+    assert await answer_once(db, seat) is not None
+    out = await play.escape(db, seat)
+    assert out["ended_by"] == rnd.ESCAPE
+    stored = await db.fetchrow(
+        "SELECT ended_by, converged_at FROM session_participant WHERE id = $1", seat
+    )
+    assert stored["ended_by"] == "escape"
+    assert stored["converged_at"] is None, "an escape is not a convergence"
 
 
-async def test_the_state_reports_when_the_escape_becomes_available(db, world):
+async def test_the_state_reports_when_the_escape_becomes_available(db, world, long_rounds):
     """Asserted, not guarded by an `if`; and it closes again when the seat ends (finding 9)."""
-    # A household-sized pool, so the shortlist is unsettled at pair five (decision 477).
-    room = await running_room(db, world, wide=True)
+    room = await running_room(db, world)
     seat = room["seats"][0]["id"]
     assert (await play.state_for(db, seat))["escape_available"] is False
 
     for _ in range(rnd.ESCAPE_FROM_PAIR - 1):
-        assert await answer_once(db, seat) is not None, "the round ended before 54c's escape opens"
+        assert await answer_once(db, seat) is not None, "the round ended before the escape opens"
     state = await play.state_for(db, seat)
     assert state["answered"] == rnd.ESCAPE_FROM_PAIR - 1, state
     assert state["escape_available"] is True
@@ -885,11 +944,11 @@ async def test_the_state_reports_when_the_escape_becomes_available(db, world):
     )
 
 
-async def test_a_participant_can_take_back_the_answer_they_just_gave(db, world):
+async def test_a_participant_can_take_back_the_answer_they_just_gave(db, world, long_rounds):
     """Tombstone, not DELETE: §14 risk 6 logs every vote."""
-    room = await running_room(db, world, wide=True)
+    room = await running_room(db, world)
     seat = room["seats"][0]["id"]
-    # The last answer must be adaptive: 54b's arm moves no tilt, so undoing it proves nothing.
+    # The last answer must be adaptive: the hold-out arm moves no tilt, so undoing it proves nothing.
     # The arm is per seat (decision 223), so the rows are asked.
     answered = 0
     while answered < 2 or await _last_arm(db, seat) == rnd.SELECTION_HOLDOUT:
@@ -932,7 +991,7 @@ async def test_a_finished_round_cannot_be_edited(db, world):
 
 async def test_the_waiting_payload_carries_counts_and_never_an_answer(db, world):
     """The payload cannot carry the answers, not merely that the UI declines to draw them."""
-    room = await running_room(db, world, wide=True)
+    room = await running_room(db, world)
     first = room["seats"][0]["id"]
     await answer_once(db, first)
     await answer_once(db, first)
@@ -995,6 +1054,118 @@ async def test_a_guest_is_ranked_by_the_pools_order_and_never_a_members_ledger(d
     host_prior = snapshot.pool_scores_for(host["id"])
     assert guest["id"] not in {p for s in snapshot.scores.values() for p in s}
     assert guest_prior != host_prior
+
+
+async def _films_of(db, room, role):
+    snapshot = await play.snapshot_of(db, room["session_id"])
+    seat = next(s["id"] for s in room["seats"] if s["role"] == role)
+    return {f.title_id for f in snapshot.round_of(seat).films}
+
+
+async def test_a_members_pairs_are_their_own_seen_films_placed_liked_or_higher(db, world):
+    """Decision 539: seen, of the evening's kind, placed A or above (A, A+, S at K = 7)."""
+    patrick = world["patrick"]
+    await db.execute(
+        "INSERT INTO title (id, kind, name, year, runtime_min, is_owned) VALUES "
+        "(321, 'movie', 'Fine', 2005, 110, false), (322, 'movie', 'Forgotten', 2005, 110, false), "
+        "(323, 'series', 'A show', 2005, 50, false)"
+    )
+    await db.execute(
+        "INSERT INTO tier_edit (user_id, title_id, tier, n_levels, via) VALUES "
+        "($1, 321, 3, 7, 'explicit'), ($1, 322, 6, 7, 'explicit'), ($1, 323, 6, 7, 'explicit'), "
+        "($1, 310, 2, 7, 'drag_drop')",
+        patrick,
+    )
+    await db.execute(
+        "INSERT INTO user_title (user_id, title_id, state) VALUES "
+        "($1, 321, 'seen'), ($1, 322, 'unseen'), ($1, 323, 'seen')",
+        patrick,
+    )
+    room = await running_room(db, world)
+
+    assert await _films_of(db, room, "host") == {*FILMS[:-1], 311}, (
+        "B is not liked, a film marked Not seen is not seen, a series is not tonight's kind, and the "
+        "latest placement of film 310 is C"
+    )
+    assert await _films_of(db, room, "member") == set(FILMS), "Jenny's films are her own"
+
+
+async def test_a_guest_gets_well_known_owned_films(db, world):
+    """Owned, of the kind, with 30,000 crowd ratings or more; a guest need not have seen them."""
+    await db.execute("UPDATE title_prior SET item_n = 29999 WHERE title_id = 401")
+    await db.execute("UPDATE title SET is_owned = false WHERE id = 402")
+    room = await running_room(db, world, guests=1)
+    assert await _films_of(db, room, "guest") == set(GUEST_FILMS) - {401, 402}
+
+
+async def test_a_seat_with_fewer_than_eight_films_goes_straight_to_the_picks_saying_why(db, world):
+    """Decision 539 by decision 215's path: ended at once, `converged`, no tilt, a one-line why."""
+    await db.execute(
+        "DELETE FROM tier_edit WHERE user_id = $1 AND title_id = ANY($2::int[])",
+        world["jenny"], FILMS[:5],
+    )
+    await db.execute("DELETE FROM title_prior WHERE title_id = ANY($1::int[])", GUEST_FILMS[:6])
+    room = await running_room(db, world, guests=1)
+    member = next(s["id"] for s in room["seats"] if s["role"] == "member")
+    guest = next(s["id"] for s in room["seats"] if s["role"] == "guest")
+
+    state = await play.state_for(db, member)
+    assert state["pair"] is None and state["ended_by"] == rnd.CONVERGED
+    assert state["no_round"] == (
+        "No mood questions tonight — they need 8 films on your ladder at Liked it or higher, "
+        "and you have 5."
+    )
+    row = await db.fetchrow("SELECT answered_count, tilt FROM session_participant WHERE id = $1", member)
+    assert (row["answered_count"], row["tilt"]) == (0, {})
+
+    await run_to_the_end(db, room["seats"][0]["id"])
+    guest_state = await play.state_for(db, guest)
+    assert guest_state["pair"] is None and guest_state["ended_by"] == rnd.CONVERGED
+    assert guest_state["no_round"] == (
+        "No mood questions tonight — they need 8 well-known films in the library, and it has 4."
+    )
+    host_state = await play.state_for(db, room["seats"][0]["id"])
+    assert host_state["no_round"] is None, "a seat that had a round has no why"
+
+
+async def test_a_vetoed_term_keeps_a_film_out_of_the_pairs(db, world):
+    """Decision 550: a film carrying a vetoed term in either tier is never in a pair."""
+    await _veto_fixture(db)
+    await db.execute(
+        "INSERT INTO dna_projected (title_id, version, term, facet, weight, via) "
+        "VALUES (305, $1, 'mood.violent', 'mood', 1, 'keyword:fixture')",
+        VOCAB,
+    )
+    room = await open_room(db, world, include_rewatches=True, budget_min=200)
+    await rooms.join(db, session_id=room["session_id"], user_id=world["jenny"])
+    await rooms.set_vetoes(
+        db, session_id=room["session_id"], user_id=world["jenny"], keys=["violence"]
+    )
+    await play.start(db, room["session_id"])
+    seats = await db.fetch(
+        "SELECT id, seat, role FROM session_participant WHERE session_id = $1 ORDER BY seat",
+        room["session_id"],
+    )
+    films = await _films_of(db, {**room, "seats": [dict(s) for s in seats]}, "host")
+    assert 305 not in films and 304 in films, "Jenny's veto reaches Patrick's pairs too"
+
+
+async def test_the_mood_reaches_each_seats_top_thirty_unseen(db, world):
+    """Decision 550: the mood re-ranks only a seat's top 30 by stable taste, never one it has seen."""
+    await widen(db, world)
+    room = await running_room(db, world, guests=1)
+    snapshot = await play.snapshot_of(db, room["session_id"])
+    host = room["seats"][0]["id"]
+    reach = snapshot.round_of(host).reach
+
+    assert len(reach) == rnd.TILT_REACH
+    stable = snapshot.pool_scores_for(host)
+    unseen = [t for t in sorted(stable, key=lambda t: (-stable[t], t)) if t not in (5, 6)]
+    assert list(reach) == unseen[: rnd.TILT_REACH], "Patrick has seen 5 and 6"
+    guest = next(s["id"] for s in room["seats"] if s["role"] == "guest")
+    average = snapshot.member_average()
+    assert list(snapshot.round_of(guest).reach) == sorted(average, key=lambda t: (-average[t], t))[:30]
+    assert set(snapshot.reach_of(host)) == set(reach), "every reached candidate is placed on the mood"
 
 
 async def finished_session(db, world, **kw):
@@ -1173,12 +1344,12 @@ async def test_an_empty_ballot_is_an_answer_rather_than_a_silence(db, world):
 
 
 async def test_a_held_out_answer_is_stored_as_held_out_and_moves_no_tilt(db, world):
-    """The tilt feeds the shortlist's score, so hold-out answers move none. The arm comes off the
-    served pair, never from the client."""
+    """The tilt feeds the picks, so hold-out answers move none. The arm comes off the served pair,
+    never from the client."""
     room = await running_room(db, world)
     seat = room["seats"][0]["id"]
     pair = rnd.Pair(
-        title_a=1, title_b=2, selection=rnd.SELECTION_HOLDOUT, reason="uniform-random",
+        title_a=301, title_b=302, selection=rnd.SELECTION_HOLDOUT, reason="uniform-random",
     )
     await play.record_answer(
         db, participant_id=seat, pair=pair, answer=rnd.A, seq=1, latency_ms=None
@@ -1190,7 +1361,7 @@ async def test_a_held_out_answer_is_stored_as_held_out_and_moves_no_tilt(db, wor
     )
     assert row["selection"] == "uniform_holdout"
     assert row["tilt"] == {}, "a held-out answer must not move the tilt"
-    assert row["answered_count"] == 1, "it still costs the person one of their twenty"
+    assert row["answered_count"] == 1, "it still costs the person one of their eight"
 
 
 async def test_the_match_lines_actually_name_something(db, world):
@@ -1221,9 +1392,8 @@ async def test_the_shortlist_is_identical_with_the_held_out_answers_removed(db, 
     seats = [s["id"] for s in room["seats"]]
     for seat in seats:
         await run_to_the_end(db, seat)
-    # Written after the fact, so it cannot have steered the served pairs.
-    snapshot = await play.snapshot_of(db, room["session_id"])
-    ids = sorted(snapshot.title_ids)[:2]
+    # Written after the fact, so it cannot have steered the served pairs; two of the seat's own films.
+    ids = FILMS[:2]
     await db.execute(
         "INSERT INTO session_answer "
         "(session_id, participant_id, seq, title_a, title_b, answer, selection) "
@@ -1250,11 +1420,16 @@ async def solo_picks(db, world, **kw):
     params = dict(
         user_id=world["patrick"], kind="movie", budget_min=200,
         include_rewatches=True, bundle_version=BUNDLE,
-        # What the route passes (decision 223): solo mints no session row, so `user.id` is the stable key.
-        holdout_key=str(world["patrick"]),
     )
     params.update(kw)
     return await solo.picks(db, **params)
+
+
+def _answered(out, answer=rnd.A, seq=1):
+    return rnd.Answered(
+        seq=seq, title_a=out["pair"]["a"]["title_id"], title_b=out["pair"]["b"]["title_id"],
+        answer=answer,
+    )
 
 
 async def test_the_solo_door_asks_first_and_already_holds_three_picks_and_a_wildcard(db, world):
@@ -1268,6 +1443,36 @@ async def test_the_solo_door_asks_first_and_already_holds_three_picks_and_a_wild
     assert out["wildcard"]["title_id"] not in {p["title_id"] for p in out["picks"]}
     assert out["sharpened"] is False
     assert out["answered"] == 0
+    assert out["no_round"] is None
+
+
+async def test_solos_pairs_are_the_persons_own_liked_films_and_never_a_hold_out(db, world):
+    """Decision 539: the person's own films; solo stores nothing, so it asks no hold-out pair."""
+    answers = []
+    for seq in range(1, rnd.CAP_PAIRS + 1):
+        out = await solo_picks(db, world, sharpen=True, answers=answers)
+        if out["pair"] is None:
+            break
+        assert {out["pair"]["a"]["title_id"], out["pair"]["b"]["title_id"]} <= {*FILMS, 311}
+        assert out["pair"]["selection"] == rnd.SELECTION_ADAPTIVE
+        answers.append(_answered(out, seq=seq))
+    assert out["stop_reason"] in rnd.END_REASONS
+
+
+async def test_solo_with_too_few_films_lands_on_the_picks_saying_why(db, world):
+    await db.execute(
+        "DELETE FROM tier_edit WHERE user_id = $1 AND title_id = ANY($2::int[])",
+        world["patrick"], FILMS[:4],
+    )
+    out = await solo_picks(db, world, sharpen=True, budget_min=130)
+
+    assert out["pair"] is None and out["stop_reason"] == rnd.CONVERGED
+    assert len(out["picks"]) == solo.PICKS
+    assert out["no_round"] == (
+        "No mood questions tonight — they need 8 films on your ladder at Liked it or higher, "
+        "and you have 7."
+    )
+    assert out["provenance"] == "Your usual favourites · fits in 2h 10m"
 
 
 async def test_every_solo_pick_carries_play_on_jellyfin(db, world):
@@ -1342,32 +1547,40 @@ async def test_a_why_line_only_names_terms_the_pick_carries(db, world):
     assert named, "the fixture carries no DNA, so this assertion is vacuous"
 
 
-async def test_the_provenance_line_reports_the_budget_and_the_filter(db, world):
-    """The tilted form replaces the other rather than joining it."""
-    plain = await solo_picks(db, world, budget_min=130, include_rewatches=False)
-    assert plain["provenance"] == "Unseen first · fits in 2h 10m"
-    rewatch = await solo_picks(db, world, budget_min=130, include_rewatches=True)
-    assert rewatch["provenance"] == "Rewatches included · fits in 2h 10m"
+async def test_with_no_round_the_provenance_line_is_the_usual_favourites(db, world):
+    for rewatches in (False, True):
+        out = await solo_picks(db, world, budget_min=130, include_rewatches=rewatches)
+        assert out["provenance"] == "Your usual favourites · fits in 2h 10m"
 
 
-async def test_an_answer_re_ranks_in_place_and_changes_the_provenance_line(db, world):
-    """§6.2 step 8: the provenance line reads 'tilted by your N answers' once the round has one."""
-    # Rewatches included so the pool exceeds the shortlist.
-    first = await solo_picks(db, world, budget_min=130, include_rewatches=True, sharpen=True)
-    assert first["pair"] is not None, "the round has to have something to ask"
+async def test_a_round_that_reads_no_strong_mood_says_so(db, world):
+    """EITHER to every pair: the round ran, and the mood it read moves nothing."""
+    answers = []
+    for seq in range(1, 4):
+        out = await solo_picks(db, world, budget_min=130, sharpen=True, answers=answers)
+        answers.append(_answered(out, rnd.EITHER, seq=seq))
+    out = await solo_picks(db, world, budget_min=130, sharpen=True, answers=answers)
 
-    answered = [
-        rnd.Answered(seq=1, title_a=first["pair"]["a"]["title_id"],
-                     title_b=first["pair"]["b"]["title_id"], answer=rnd.A)
-    ]
-    after = await solo_picks(
-        db, world, budget_min=130, include_rewatches=True, answers=answered, sharpen=True
+    assert out["sharpened"] is True and out["pair"] is None
+    assert out["provenance"] == "No strong mood tonight — your usual favourites · fits in 2h 10m"
+    assert len(out["picks"]) == solo.PICKS, "re-ranked in place, not replaced by a queue"
+
+
+async def test_a_strong_mood_names_the_two_terms_it_projects_back_highest(db, world, monkeypatch):
+    """A wide prior makes one answer a strong reading, so the line names it in term labels."""
+    monkeypatch.setattr(rnd, "MOOD_PRIOR_SD", 3.0)
+    for term, label in LABELS.items():
+        await db.execute("UPDATE dna_term SET label = $1 WHERE term = $2", label.capitalize(), term)
+    first = await solo_picks(db, world, budget_min=130, sharpen=True)
+    out = await solo_picks(db, world, budget_min=130, answers=[_answered(first)])
+
+    head, budget = out["provenance"].rsplit(" · fits in ", 1)
+    assert budget == "2h 10m"
+    assert head.startswith("Your mood tonight — "), out["provenance"]
+    named = head.removeprefix("Your mood tonight — ").split(" · ")
+    assert len(named) == 2 and set(named) <= set(LABELS.values()), (
+        "two labels, lower-cased in the sentence, never vocabulary ids"
     )
-
-    assert after["provenance"] == "Tilted by your 1 answer · fits in 2h 10m"
-    assert "Unseen first" not in after["provenance"], "the tilted line replaces it, never joins it"
-    assert after["sharpened"] is True
-    assert len(after["picks"]) == solo.PICKS, "re-ranked in place, not replaced by a queue"
 
 
 async def test_reshuffle_walks_the_ranking_rather_than_redrawing(db, world):
@@ -1452,12 +1665,13 @@ async def test_solos_round_pair_carries_no_score(db, world):
     for side in ("a", "b"):
         assert "scores" not in out["pair"][side]
         assert "group_score" not in out["pair"][side]
+        assert "step" not in out["pair"][side], "no tier shows on Tonight"
 
 
-async def test_the_answer_after_an_undo_is_accepted(db, world):
+async def test_the_answer_after_an_undo_is_accepted(db, world, long_rounds):
     """Undo and carry on: the replacement takes a fresh seq (every row counts, tombstones included),
     so it cannot collide with the tombstone."""
-    room = await running_room(db, world, wide=True)
+    room = await running_room(db, world)
     seat = room["seats"][0]["id"]
     await answer_once(db, seat)
     await answer_once(db, seat)
@@ -1476,22 +1690,19 @@ async def test_the_answer_after_an_undo_is_accepted(db, world):
 
 
 async def test_a_guest_is_ranked_by_the_pools_order_rather_than_a_flat_prior(db, world):
-    """A flat prior makes every candidate straddle at once: O(n²) pair search for no information."""
+    """A guest has no Ledger and is carried by their answers from the pool's own order."""
     room = await running_room(db, world, guests=1)
     snapshot = await play.snapshot_of(db, room["session_id"])
     guest = next(s for s in room["seats"] if s["role"] == "guest")
 
-    beliefs = rnd.initial(snapshot.member_average(), prior_var=1.0, has_profile=False)
-    means = {t: b.mu for t, b in beliefs.items()}
-    pool_order = sorted(snapshot.member_average(), key=lambda t: -snapshot.member_average()[t])
-    guest_order = sorted(means, key=lambda t: -means[t])
-
-    assert guest_order == pool_order, "the guest is ranked by the pool's own order"
-    assert len(set(means.values())) > 1, "a flat prior ranks nothing and straddles everything"
+    stable = snapshot.stable_for(guest["id"], guest=True)
+    assert stable == snapshot.member_average(), "the guest is ranked by the pool's own order"
+    assert len(set(stable.values())) > 1, "a flat prior ranks nothing"
     # Still no member's Ledger: the pool average is not one person's scores.
     host = next(s for s in room["seats"] if s["role"] == "host")
-    assert means != snapshot.pool_scores_for(host["id"])
+    assert stable != snapshot.pool_scores_for(host["id"])
     assert guest["id"] not in {p for s in snapshot.scores.values() for p in s}
+
 
 async def test_two_seats_finishing_together_do_not_both_write_the_slate(db, world, pg_url):
     """Two final answers can both see `voting` and both combine; the loser's DELETE cannot see the
@@ -2041,11 +2252,12 @@ async def test_a_seat_that_can_never_be_asked_ends_itself(db, world):
 @pytest.mark.parametrize(
     "budget_min,include_rewatches,candidates", [(70, False, 3), (60, True, 2)]
 )
-async def test_a_pool_too_small_for_a_round_reaches_the_ballot(
+async def test_a_pool_of_two_or_three_reaches_the_ballot(
     db, world, budget_min, include_rewatches, candidates
 ):
     """Decision 215: two or three candidates go to the ballot. Admission is unchanged: refusing below
-    four would deny a small household any evening."""
+    four would deny a small household any evening. Every candidate is in the top three, so no
+    answer can move it and each round stops at three."""
     room = await open_room(db, world, budget_min=budget_min, include_rewatches=include_rewatches)
     session_id = room["session_id"]
     await rooms.join(db, session_id=session_id, user_id=world["jenny"])
@@ -2059,9 +2271,11 @@ async def test_a_pool_too_small_for_a_round_reaches_the_ballot(
         )
     ]
     for seat in seats:
-        state = await play.state_for(db, seat)
-        assert state["pair"] is None, "there is no shortlist boundary to resolve"
-        assert state["ended_by"] == rnd.CONVERGED
+        assert await run_to_the_end(db, seat) == rnd.CONVERGED
+        assert await db.fetchval(
+            "SELECT count(*) FROM session_answer WHERE participant_id = $1 AND selection = 'adaptive'",
+            seat,
+        ) == rnd.STOP_AFTER
 
     assert await play.settle(db, session_id) is True
     assert await db.fetchval(
@@ -2270,9 +2484,11 @@ async def test_two_answers_on_one_card_are_one_200_and_one_409(db, world, pg_url
     _one_of_them_waited(first_conn, second_conn)
 
 
-async def test_an_undo_gathered_with_an_answer_leaves_the_seat_playing(db, world, pg_url):
+async def test_an_undo_gathered_with_an_answer_leaves_the_seat_playing(
+    db, world, pg_url, long_rounds
+):
     """`retract` recounted around its own tombstone, leaving the counter behind the highest seq."""
-    room = await running_room(db, world, wide=True)
+    room = await running_room(db, world)
     seat = room["seats"][0]["id"]
     await answer_once(db, seat)
     await answer_once(db, seat)
@@ -2312,9 +2528,11 @@ async def test_an_undo_gathered_with_an_answer_leaves_the_seat_playing(db, world
         _sound(*await _seat_rows(db, seat))
 
 
-async def test_a_replacement_answer_takes_a_fresh_seq_rather_than_the_tombstones(db, world):
+async def test_a_replacement_answer_takes_a_fresh_seq_rather_than_the_tombstones(
+    db, world, long_rounds
+):
     """The counter counts live rows; the seq is minted from every row there has ever been."""
-    room = await running_room(db, world, wide=True)
+    room = await running_room(db, world)
     seat = room["seats"][0]["id"]
     await answer_once(db, seat)
     await answer_once(db, seat)
@@ -2460,39 +2678,14 @@ async def test_a_re_submitted_ballot_cannot_land_after_the_outcome_is_stored(db,
     )
 
 
-# The pair search runs off the loop, and a tap replays once. A patched replay blocks its own
-# thread with `time.sleep`; the assertions are mechanisms (a coroutine run mid-search, timer
-# gaps, decode and replay counts), not the real selector's duration.
+# A tap replays once; the assertions count the work rather than time it.
 
 
 import contextlib  # noqa: E402
 import dataclasses  # noqa: E402
 
 
-async def _watch_the_loop(gaps):
-    """A 10 ms timer resumed after 600 ms was not scheduled at all: one frame owned the thread."""
-    last = time.perf_counter()
-    while True:
-        await asyncio.sleep(0.01)
-        now = time.perf_counter()
-        gaps.append(now - last)
-        last = now
-
-
-@contextlib.asynccontextmanager
-async def _loop_gaps():
-    gaps: list[float] = []
-    watcher = asyncio.create_task(_watch_the_loop(gaps))
-    await asyncio.sleep(0.03)  # one reading before the work starts, so `max` is never over nothing
-    try:
-        yield gaps
-    finally:
-        watcher.cancel()
-        with contextlib.suppress(asyncio.CancelledError):
-            await watcher
-
-
-def _count_the_work(monkeypatch, *, replay_delay=0.0):
+def _count_the_work(monkeypatch):
     """Patched where `play` looks them up, so the tally is of what the code did. Counting, not timing:
     two fast replays are still twice the work."""
     tally = {"snapshots": 0, "replays": 0}
@@ -2504,8 +2697,6 @@ def _count_the_work(monkeypatch, *, replay_delay=0.0):
 
     def counted_replay(*args, **kw):
         tally["replays"] += 1
-        if replay_delay:
-            time.sleep(replay_delay)
         return real_replay(*args, **kw)
 
     monkeypatch.setattr(play, "snapshot_of", counted_snapshot)
@@ -2513,35 +2704,10 @@ def _count_the_work(monkeypatch, *, replay_delay=0.0):
     return tally
 
 
-def _reads_the_rooms_mid_search(monkeypatch, client, *, hold=0.6):
-    """THE DEADLOCK IS THE ASSERTION: `run_coroutine_threadsafe` from a replay on the loop can never
-    be served, and from a thread it is served at once."""
-    loop = asyncio.get_running_loop()
-    real = rnd.replay
-    probe = {"status": None, "elapsed": None, "error": None, "replays": 0}
-
-    def replay(*args, **kw):
-        probe["replays"] += 1
-        if probe["replays"] == 1:
-            began = time.perf_counter()
-            pending = asyncio.run_coroutine_threadsafe(client.get("/api/tonight/rooms"), loop)
-            try:
-                probe["status"] = pending.result(timeout=hold).status_code
-            except Exception as exc:
-                probe["error"] = type(exc).__name__
-                pending.cancel()
-            probe["elapsed"] = time.perf_counter() - began
-        time.sleep(hold)
-        return real(*args, **kw)
-
-    monkeypatch.setattr(rnd, "replay", replay)
-    return probe
-
-
 @pytest.fixture
 async def household(app, db):
-    """Two real accounts on one ASGI app: `world`'s admin has no obtainable cookie. 120 films, so a
-    round still runs at pair six on the rank-standardised scale (decision 477)."""
+    """Two real accounts on one ASGI app: `world`'s admin has no obtainable cookie. 120 films, ten of
+    them seen and placed A or above by both, so each has a round."""
     host = app()
     created = await host.post(
         "/api/setup/admin", json={"name": "patrick", "password": "an-admin-password"}
@@ -2575,6 +2741,16 @@ async def household(app, db):
             "INSERT INTO user_score (user_id, title_id, kind, bundle_version, score, cf) "
             "SELECT $1, g, 'movie', $2, 0.9 - 0.005 * g, 0.0 FROM generate_series(1, 120) AS g",
             user_id, BUNDLE,
+        )
+        await db.execute(
+            "INSERT INTO tier_edit (user_id, title_id, tier, n_levels, via) "
+            "SELECT $1, g, 5, 7, 'explicit' FROM generate_series(101, 110) AS g",
+            user_id,
+        )
+        await db.execute(
+            "INSERT INTO user_title (user_id, title_id, state) "
+            "SELECT $1, g, 'seen' FROM generate_series(101, 110) AS g",
+            user_id,
         )
 
     opened = await host.post(
@@ -2617,30 +2793,9 @@ def _pair_ids(card):
     return None if pair is None else (pair["a"]["title_id"], pair["b"]["title_id"])
 
 
-async def test_the_selector_does_not_block_the_household(household, monkeypatch):
-    """The pair search is pure CPU on the one event loop, so it stalled the other phone and health."""
-    seat = household["seats"]["patrick"]
-    card = await _round_card(household["host"], seat)
-    assert card["pair"], "the fixture needs a pair to answer"
-    probe = _reads_the_rooms_mid_search(monkeypatch, household["member"])
-
-    async with _loop_gaps() as gaps:
-        answered = await _tap(household["host"], seat, card)
-
-    assert answered.status_code == 200, answered.text
-    assert probe["error"] is None, (
-        "an unrelated GET /api/tonight/rooms could not be served while the pair search ran "
-        f"({probe['error']} after {probe['elapsed']:.3f}s) -- the loop was the selector's"
-    )
-    assert probe["status"] == 200
-    assert probe["elapsed"] < 0.2, (
-        f"the other phone's read waited {probe['elapsed']:.3f}s on this seat's answer"
-    )
-    assert max(gaps) < 0.2, f"a handler held the event loop for {max(gaps):.3f}s"
-    assert probe["replays"] == 1, f"one tap, one search: {probe}"
-
-
-async def test_one_tap_reads_the_frozen_pool_once_and_runs_the_round_once(household, monkeypatch):
+async def test_one_tap_reads_the_frozen_pool_once_and_runs_the_round_once(
+    household, monkeypatch, long_rounds
+):
     """Counted, not timed: two decodes and two replays per tap are wrong at any speed."""
     seat = household["seats"]["patrick"]
     tally = _count_the_work(monkeypatch)
@@ -2658,7 +2813,7 @@ async def test_one_tap_reads_the_frozen_pool_once_and_runs_the_round_once(househ
     assert undone.status_code == 200, undone.text
     assert (tally["snapshots"], tally["replays"]) == (1, 1), f"one undo: {tally}"
 
-    # Five answers, so 54c's control is open: `escape_available` is `answered >= 6 - 1`.
+    # Three answers, so the escape is open: `escape_available` is `answered >= 4 - 1`.
     for _ in range(rnd.ESCAPE_FROM_PAIR - 1):
         card = await _round_card(household["host"], seat)
         assert card["pair"], f"the pool ran out at {card['answered']}: {card['stop_reason']}"
@@ -2698,39 +2853,56 @@ async def test_the_card_a_tap_hands_back_is_the_one_the_round_would_have_served(
         card = written
 
 
-async def test_an_undo_during_the_search_leaves_the_seat_playing(db, world, pg_url, monkeypatch):
-    """The replay runs after the commit, so an undo can land in between; `_end`'s `when_answered`
-    refuses the stale ending. Fired from inside the search on a second connection."""
-    room = await running_room(db, world, wide=True)
+@contextlib.asynccontextmanager
+async def _undo_before_the_ending(monkeypatch, pg_url, seat):
+    """The first replay claims an ending; just before that ending is written, the seat's last answer
+    is taken back on a second connection. Yields the list the undo lands in."""
+    real_replay, real_end = rnd.replay, play._end
+    replays: list[int] = []
+    undone: list[bool] = []
+    undoing = await second_connection(pg_url)
+
+    def ends_the_round(*args, **kw):
+        replays.append(1)
+        played = real_replay(*args, **kw)
+        return played if len(replays) > 1 else dataclasses.replace(
+            played, next_pair=None, stop_reason=rnd.CAP
+        )
+
+    async def undoes_first(conn, participant_id, reason, **kw):
+        if not undone:
+            undone.append(True)
+            await play.retract(undoing, seat)
+        return await real_end(conn, participant_id, reason, **kw)
+
+    monkeypatch.setattr(rnd, "replay", ends_the_round)
+    monkeypatch.setattr(play, "_end", undoes_first)
+    try:
+        yield undone
+    finally:
+        await undoing.close()
+        monkeypatch.setattr(rnd, "replay", real_replay)
+        monkeypatch.setattr(play, "_end", real_end)
+
+
+async def test_an_undo_before_the_answers_ending_leaves_the_seat_playing(
+    db, world, pg_url, monkeypatch, long_rounds
+):
+    """The ending is written after the commit, so an undo can land in between; `_end`'s
+    `when_answered` refuses the stale ending."""
+    room = await running_room(db, world)
     seat = room["seats"][0]["id"]
     await answer_once(db, seat)
     await answer_once(db, seat)
     state = await play.state_for(db, seat)
     pair, seq = state["_pair"], state["answered"] + 1
 
-    loop = asyncio.get_running_loop()
-    real = rnd.replay
-    undoing = await second_connection(pg_url)
-    calls: list[int] = []
-
-    def undoes_the_answer_it_is_replaying(*args, **kw):
-        calls.append(1)
-        if len(calls) > 1:
-            # The undo's own replay must be the real one.
-            return real(*args, **kw)
-        asyncio.run_coroutine_threadsafe(play.retract(undoing, seat), loop).result(timeout=5)
-        return dataclasses.replace(real(*args, **kw), next_pair=None, stop_reason=rnd.CAP)
-
-    monkeypatch.setattr(rnd, "replay", undoes_the_answer_it_is_replaying)
-    try:
+    async with _undo_before_the_ending(monkeypatch, pg_url, seat) as undone:
         written = await play.record_answer(
             db, participant_id=seat, pair=pair, answer=rnd.A, seq=seq, latency_ms=900,
         )
-    finally:
-        await undoing.close()
-    monkeypatch.undo()
 
-    assert len(calls) == 2, "the undo never landed inside the search, so nothing was raced"
+    assert undone, "the undo never landed before the ending, so nothing was raced"
     assert written["ended_by"] is None, "a stale reason ended a seat that is playing again"
     assert written["stop_reason"] is None and written["pair"] is None, (
         "a card built from a replay the seat has moved past reports the row and no pair"
@@ -2747,35 +2919,19 @@ async def test_an_undo_during_the_search_leaves_the_seat_playing(db, world, pg_u
 
 
 async def test_an_undo_during_a_read_of_the_round_leaves_the_seat_playing(
-    db, world, pg_url, monkeypatch
+    db, world, pg_url, monkeypatch, long_rounds
 ):
-    """`state_for` ends stranded seats and its replay is off the loop, so it needs `when_answered`
-    too: refusing costs one read, ending on a stale reason costs the round."""
-    room = await running_room(db, world, wide=True)
+    """`state_for` ends stranded seats, so it needs `when_answered` too: refusing costs one read,
+    ending on a stale reason costs the round."""
+    room = await running_room(db, world)
     seat = room["seats"][0]["id"]
     await answer_once(db, seat)
     await answer_once(db, seat)
 
-    loop = asyncio.get_running_loop()
-    real = rnd.replay
-    undoing = await second_connection(pg_url)
-    calls: list[int] = []
-
-    def undoes_the_answer_it_is_replaying(*args, **kw):
-        calls.append(1)
-        if len(calls) > 1:
-            return real(*args, **kw)
-        asyncio.run_coroutine_threadsafe(play.retract(undoing, seat), loop).result(timeout=5)
-        return dataclasses.replace(real(*args, **kw), next_pair=None, stop_reason=rnd.CAP)
-
-    monkeypatch.setattr(rnd, "replay", undoes_the_answer_it_is_replaying)
-    try:
+    async with _undo_before_the_ending(monkeypatch, pg_url, seat) as undone:
         seen = await play.state_for(db, seat)
-    finally:
-        await undoing.close()
-    monkeypatch.undo()
 
-    assert len(calls) == 2, "the undo never landed inside the read's search, so nothing was raced"
+    assert undone, "the undo never landed inside the read, so nothing was raced"
     row = await db.fetchrow(
         "SELECT ended_by, answered_count FROM session_participant WHERE id = $1", seat
     )
@@ -2793,35 +2949,25 @@ async def test_an_undo_during_a_read_of_the_round_leaves_the_seat_playing(
     _sound(*await _seat_rows(db, seat))
 
 
-async def test_the_combine_does_not_hold_the_loop_either(db, world, monkeypatch):
-    """`finish` replays once per seat on the answer that ends the room; the tally shows it is per seat."""
+async def test_the_combine_replays_each_seat_once_and_decodes_the_pool_once(db, world, monkeypatch):
     room = await finished_session(db, world)
     seats = await db.fetchval(
         "SELECT count(*) FROM session_participant WHERE session_id = $1", room["session_id"]
     )
-    tally = _count_the_work(monkeypatch, replay_delay=0.3)
+    tally = _count_the_work(monkeypatch)
 
-    async with _loop_gaps() as gaps:
-        await play.finish(db, room["session_id"])
+    await play.finish(db, room["session_id"])
 
     assert tally["replays"] == seats, f"one replay per seat, not {tally['replays']} for {seats}"
     assert tally["snapshots"] == 1, "and one decode of the frozen pool for the whole combine"
-    assert max(gaps) < 0.2, (
-        f"the combine held the loop for {max(gaps):.3f}s over {tally['replays']} seats"
-    )
 
 
 async def test_the_combine_does_not_search_for_a_pair_it_will_never_show(db, world, monkeypatch):
-    """`finish` reads beliefs only, so it passes `select=False`. The second run with the flag forced
-    on must search and give the identical slate, keeping the first assertion non-vacuous."""
-    # Wide, so one answer leaves a boundary to straddle (decision 477).
-    room = await running_room(db, world, wide=True)
+    """`finish` reads the mood only, so it passes `select=False`. The second run with the flag forced
+    on must draw and give the identical slate, keeping the first assertion non-vacuous."""
+    room = await running_room(db, world)
     for seat in room["seats"]:
         await answer_once(db, seat["id"])
-        # The escape written directly: `play.escape` refuses before pair six.
-        await db.execute(
-            "UPDATE session_participant SET ended_by = 'escape' WHERE id = $1", seat["id"]
-        )
     _, counted, calls = _counting(rnd, "_select_pair")
     monkeypatch.setattr(rnd, "_select_pair", counted)
 
@@ -2968,24 +3114,21 @@ async def test_ending_a_room_the_household_already_resolved_is_refused(db, world
 async def test_a_combine_landing_after_the_host_ended_the_room_does_not_revive_it(
     db, world, pg_url, monkeypatch
 ):
-    """`finish` moved the room with a bare `set_state`, reviving an ended room. The End is fired from
-    inside the combine's replay: the real interleaving."""
+    """`finish` moved the room with a bare `set_state`, reviving an ended room. The End is fired on a
+    second connection while the combine reads the seats' answers: the real interleaving."""
     room = await finished_session(db, world)
     session_id = room["session_id"]
-    loop = asyncio.get_running_loop()
-    real = rnd.replay
+    real = play._answers
     ending = await second_connection(pg_url)
     calls: list[int] = []
 
-    def ends_the_room_it_is_combining_for(*args, **kw):
+    async def ends_the_room_it_is_combining_for(conn, participant_id):
         calls.append(1)
         if len(calls) == 1:
-            asyncio.run_coroutine_threadsafe(rooms.end_session(ending, session_id), loop).result(
-                timeout=5
-            )
-        return real(*args, **kw)
+            await rooms.end_session(ending, session_id)
+        return await real(conn, participant_id)
 
-    monkeypatch.setattr(rnd, "replay", ends_the_room_it_is_combining_for)
+    monkeypatch.setattr(play, "_answers", ends_the_room_it_is_combining_for)
     try:
         settled = await play.settle(db, session_id)
     finally:
@@ -3090,7 +3233,7 @@ async def test_the_card_a_phone_stashed_is_the_card_the_undo_re_issues(household
 
 
 async def test_the_arm_a_seat_is_served_is_the_one_the_rule_draws_for_that_seat(household, db):
-    """The arm is drawn from the seat id, so solo can re-derive it (decision 223)."""
+    """The arm is drawn from the seat id, never the client (decision 223)."""
     host, seat = household["host"], household["seats"]["patrick"]
     served = []
     for _ in range(rnd.CAP_PAIRS):
@@ -3112,7 +3255,7 @@ async def test_the_arm_a_seat_is_served_is_the_one_the_rule_draws_for_that_seat(
     )
 
 
-# Solo pays for a pair search only on a request that shows its pair: the round's, never Reshuffle's.
+# Solo draws a pair only on a request that shows it: the round's, never Reshuffle's.
 
 
 def _counting(module, name):
@@ -3156,22 +3299,17 @@ async def test_only_an_explicit_sharpen_draws_a_pair(db, world, monkeypatch):
 
 
 async def test_the_replay_still_runs_when_a_request_does_not_select(db, world):
-    """A request that asks for no pair skips the SELECTION, not the replay: answers must still
-    re-rank the picks."""
+    """A request that asks for no pair skips the draw, not the replay: answers still reach the picks."""
     first = await solo_picks(db, world, sharpen=True)
     assert first["pair"] is not None
-    answered = [rnd.Answered(
-        seq=1, title_a=first["pair"]["a"]["title_id"],
-        title_b=first["pair"]["b"]["title_id"], answer=rnd.A,
-    )]
 
     plain = await solo_picks(db, world)
-    tilted = await solo_picks(db, world, answers=answered)
+    tilted = await solo_picks(db, world, answers=[_answered(first)])
 
     assert tilted["pair"] is None, "no pair was asked for, history or not"
-    assert tilted["sharpened"] is True and "Tilted by your 1 answer " in tilted["provenance"]
-    assert tilted["tilt"] != {}, "the answers reached the ranking without a search being run"
-    assert [p["title_id"] for p in tilted["picks"]] != [p["title_id"] for p in plain["picks"]]
+    assert tilted["sharpened"] is True
+    assert plain["provenance"].startswith("Your usual favourites")
+    assert not tilted["provenance"].startswith("Your usual favourites"), tilted["provenance"]
 
 
 async def test_reshuffle_moves_the_picks_on_a_four_title_pool(db, world):
@@ -3233,51 +3371,38 @@ async def test_every_title_in_a_seven_title_pool_is_reachable_as_a_pick(db, worl
     assert reached == pool_ids, f"unreachable by any Reshuffle: {sorted(pool_ids - reached)}"
 
 
-async def test_the_provenance_line_counts_the_answers_the_replay_counted(db, world):
-    """Solo must skip an answer whose titles left the pool, as `round.replay` does. Title 8 is unowned."""
-    sent = [rnd.Answered(seq=1, title_a=1, title_b=8, answer=rnd.A)]
+async def test_an_answer_about_films_that_are_not_the_persons_moves_nothing(db, world):
+    """Solo's answers are the client's, so the replay skips a pair that is not two of the person's own
+    liked films. Title 1 is a candidate, title 8 is not even owned."""
+    out = await solo_picks(db, world, answers=[rnd.Answered(seq=1, title_a=1, title_b=8, answer=rnd.A)])
 
-    out = await solo_picks(db, world, answers=sent)
-
-    assert out["tilt"] == {}, "an answer the replay ignored moved the tilt"
     assert out["sharpened"] is False
-    assert "Tilted by your" not in out["provenance"], out["provenance"]
-    # `answered` is not filtered: an answered pair still costs one of twenty.
+    assert out["provenance"].startswith("Your usual favourites"), out["provenance"]
+    # `answered` is not filtered: an answered pair still costs one of eight.
     assert out["answered"] == 1
 
 
-async def test_an_answer_inside_the_pool_still_counts(db, world):
-    """The guard is pool membership, never "carries DNA"."""
+async def test_an_answer_about_the_persons_own_films_counts(db, world):
+    """The guard is the person's films, never "carries DNA"."""
     first = await solo_picks(db, world, sharpen=True)
-    sent = [rnd.Answered(
-        seq=1, title_a=first["pair"]["a"]["title_id"],
-        title_b=first["pair"]["b"]["title_id"], answer=rnd.A,
-    )]
-
-    out = await solo_picks(db, world, answers=sent)
-
+    out = await solo_picks(db, world, answers=[_answered(first)])
     assert out["sharpened"] is True
-    assert out["tilt"] != {}
-    assert "Tilted by your 1 answer " in out["provenance"]
 
 
 async def test_an_answer_naming_one_title_twice_is_not_a_comparison(db, world):
-    """One title named twice is not two candidates; `tilt.applies` and `round.replay` both said it was.
-    Only solo's client-supplied answers can send it."""
+    """One title named twice compares nothing. Only solo's client-supplied answers can send it."""
     plain = await solo_picks(db, world)
-    top = plain["picks"][0]["title_id"]
 
     out = await solo_picks(db, world, answers=[
-        rnd.Answered(seq=1, title_a=top, title_b=top, answer=rnd.A)
+        rnd.Answered(seq=1, title_a=FILMS[0], title_b=FILMS[0], answer=rnd.A)
     ])
 
-    assert out["tilt"] == {}, "a title compared with itself moved the tilt"
     assert out["sharpened"] is False, "and reported that it had tilted the picks"
-    assert "Tilted by your" not in out["provenance"], out["provenance"]
+    assert out["provenance"].startswith("Your usual favourites"), out["provenance"]
     assert [p["title_id"] for p in out["picks"]] == [p["title_id"] for p in plain["picks"]], (
         "the ranking moved on an answer that compares nothing"
     )
-    # The filtered number is what tilted; `answered` is what they answered.
+    # What moved the mood is filtered; `answered` is what they answered.
     assert out["answered"] == 1
 
 
@@ -3365,16 +3490,23 @@ async def test_the_round_prior_and_the_combine_read_the_standardised_scores(db, 
     assert snapshot.scores[1][host["id"]] == pytest.approx(0.50), "the raw read is kept"
 
 
-async def test_a_room_started_before_the_marker_keeps_its_raw_scale(db, world):
-    """A deploy must not move an evening in flight: no marker reads raw; an unknown marker is refused."""
+async def test_a_room_started_under_another_round_or_scale_is_refused(db, world):
+    """A deploy must not move an evening in flight: a room frozen before this round, or under an
+    unknown scale, is refused rather than guessed at."""
     room = await running_room(db, world)
     await db.execute(
-        "UPDATE session SET context = context #- '{pool,scale}' WHERE id = $1", room["session_id"]
+        "UPDATE session SET context = context #- '{pool,round}' WHERE id = $1", room["session_id"]
     )
-    legacy = await play.snapshot_of(db, room["session_id"])
-    assert legacy.scale is None
-    assert legacy.ledger == legacy.scores
+    with pytest.raises(play.RoundError) as earlier:
+        await play.snapshot_of(db, room["session_id"])
+    assert earlier.value.reason == "no_room" and "start a new one" in str(earlier.value)
+    with pytest.raises(play.RoundError):
+        await play.state_for(db, room["seats"][0]["id"])
 
+    await db.execute(
+        "UPDATE session SET context = jsonb_set(context, '{pool,round}', $2) WHERE id = $1",
+        room["session_id"], rnd.ROUND_MARKER,
+    )
     await db.execute(
         "UPDATE session SET context = jsonb_set(context, '{pool,scale}', '\"rank_normal_sd9\"') "
         "WHERE id = $1",
@@ -3473,8 +3605,8 @@ async def test_breadth_is_not_readable_before_every_ballot_is_in(db, world):
 
 
 async def test_progress_expected_is_an_estimate_not_the_cap(db, world):
-    """Decision 507: past the median the expected count is dropped; the count alone is honest."""
-    room = await running_room(db, world, wide=True)
+    """Decision 507: past the typical round the expected count is dropped; the count alone is honest."""
+    room = await running_room(db, world)
     first = room["seats"][0]["id"]
     fresh = await play.progress(db, room["session_id"])
     assert {p["expected"] for p in fresh} == {rnd.TYPICAL_PAIRS}
@@ -3631,16 +3763,22 @@ async def test_the_pair_card_names_each_titles_genres_in_plain_words(db, world):
         1: ["Adventure", "Animation"], 2: ["Drama"],
     }, "two at most, in the canonical order; a title with none is absent"
 
+    for title_id in FILMS:
+        await db.execute(
+            "INSERT INTO title_genre (title_id, genre, source) VALUES ($1, 'Crime', 'tmdb')", title_id
+        )
     room = await running_room(db, world)
     snapshot = await play.snapshot_of(db, room["session_id"])
     assert snapshot.candidates[1]["genres"] == ["Adventure", "Animation"]
     assert snapshot.candidates[2]["genres"] == ["Drama"]
     assert snapshot.candidates[3]["genres"] == []
-    card = await play.state_for(db, room["seats"][0]["id"])
+    card = await play.state_for(db, room["seats"][1]["id"])
     assert card["pair"] is not None, "the round has a pair to show, or this is vacuous"
     for side in ("a", "b"):
-        assert isinstance(card["pair"][side]["genres"], list)
-        assert "." not in "".join(card["pair"][side]["genres"]), "a vocabulary id, not a genre"
+        assert card["pair"][side]["genres"] == ["Crime"]
+        assert set(card["pair"][side]) == {
+            "title_id", "name", "year", "kind", "runtime_min", "poster_path", "genres",
+        }, "a film's card, never its step"
 
 
 async def test_the_reveal_lists_each_card_once(db, world):

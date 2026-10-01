@@ -2,12 +2,13 @@
 wildcard from the same pool, no session.
 
 §6.2 forbids a session row, so the round is stateless: the client carries its answers and the
-server replays them (so §14 risk 6's vote log cannot cover solo).
+server replays them (so §14 risk 6's vote log cannot cover solo). Solo asks no hold-out pair.
 """
 
 from __future__ import annotations
 
 import random
+import statistics
 from collections.abc import Mapping, Sequence
 from typing import Any
 
@@ -16,36 +17,33 @@ import asyncpg
 from spielplan.connectors import registry
 from spielplan.db import dna_terms
 from spielplan.tonight import combine as combine_rules
+from spielplan.tonight import copy as copy_rules
 from spielplan.tonight import dna as dna_reads
 from spielplan.tonight import pool as pool_rules
 from spielplan.tonight import round as round_rules
 from spielplan.tonight import tilt as tilt_rules
 
-# 54f: "three picks and a wildcard".
+# "three picks and a wildcard".
 PICKS = 3
 
-# §6.2 step 8's two why-lines: "{term} · {term}", and the wildcard's label.
+# §6.2 step 8's why-line for the wildcard.
 STRETCH_WHY = "A step outside your usual"
 
-# §6.2 step 8's provenance line: the tilted form replaces "Unseen first", never appended to it.
-PROVENANCE_PLAIN = "Unseen first · fits in {budget}"
-PROVENANCE_TILTED = "Tilted by your {n} {answers} · fits in {budget}"
-PROVENANCE_REWATCH = "Rewatches included · fits in {budget}"
-
-# The same bound `home/why.py` puts on a one-line why.
+# The same bound `home/why.py` puts on a one-line why, and the provenance's two mood terms.
 NAMED_TERMS = 2
 
+# Below half a pool standard deviation of adjustment over the reach, the round read no strong mood.
+STRONG_MOOD = 0.5
 
-def _pair_side(candidate, genres: Mapping[int, list[str]]) -> dict[str, Any] | None:
-    """One side of the round's pair, field by field so per-seat scores never ship (§6.2 step 3)."""
-    if candidate is None:
+
+def _pair_side(film: Mapping[str, Any] | None, genres: Mapping[int, list[str]]) -> dict[str, Any] | None:
+    """One side of the round's pair, field by field: never its step, never a score."""
+    if film is None:
         return None
     return {
-        "title_id": candidate.title_id, "name": candidate.name, "year": candidate.year,
-        "kind": candidate.kind, "runtime_min": candidate.runtime_min,
-        "poster_path": candidate.poster_path, "fit_line": candidate.fit_line,
-        "over_budget_min": candidate.over_budget_min,
-        "genres": genres.get(candidate.title_id, []),
+        "title_id": film["title_id"], "name": film["name"], "year": film["year"],
+        "kind": film["kind"], "runtime_min": film["runtime_min"],
+        "poster_path": film["poster_path"], "genres": genres.get(film["title_id"], []),
     }
 
 
@@ -55,20 +53,29 @@ def duration(minutes: int) -> str:
     return f"{h}h {m}m" if h and m else f"{h}h" if h else f"{m}m"
 
 
-def provenance(*, budget_min: int, answers: int, include_rewatches: bool, kind: str) -> str:
-    budget = duration(budget_min) + (pool_rules.PER_EPISODE if kind == pool_rules.KIND_SERIES else "")
-    if answers:
-        return PROVENANCE_TILTED.format(
-            n=answers, answers="answer" if answers == 1 else "answers", budget=budget
-        )
-    if include_rewatches:
-        return PROVENANCE_REWATCH.format(budget=budget)
-    return PROVENANCE_PLAIN.format(budget=budget)
-
-
 def why_line(terms: Sequence[str]) -> str:
     line = " · ".join(terms[:NAMED_TERMS])
     return line[:1].upper() + line[1:]
+
+
+async def _mood_terms(
+    conn: asyncpg.Connection,
+    space: tilt_rules.Space,
+    played: round_rules.Round,
+    reach: Mapping[int, Sequence[float]],
+) -> list[str] | None:
+    """The provenance's terms: None with no round, [] for no strong mood, else the two terms the
+    mood projects back highest, as labels."""
+    if not played.adaptive:
+        return None
+    adjust = list(round_rules.adjustments(played.mood.mean, reach).values())
+    if len(adjust) < 2 or statistics.pstdev(adjust) < STRONG_MOOD:
+        return []
+    weights = tilt_rules.back(space.terms, space.axes, played.mood.mean)
+    top = [t for t, w in sorted(weights.items(), key=lambda kv: (-kv[1], kv[0])) if w > 0][:NAMED_TERMS]
+    named = await dna_terms.labels_for(conn, top)
+    words = [str((named.get(t) or {}).get("label") or dna_terms.label_of(t, None)) for t in top]
+    return [w[:1].lower() + w[1:] for w in words]
 
 
 async def picks(
@@ -79,7 +86,6 @@ async def picks(
     budget_min: int,
     include_rewatches: bool,
     bundle_version: str,
-    holdout_key: str,
     answers: Sequence[round_rules.Answered] = (),
     offset: int = 0,
     sharpen: bool = False,
@@ -87,20 +93,19 @@ async def picks(
 ) -> dict[str, Any]:
     """Three picks, a wildcard, and the round's next pair when `sharpen` asks for one.
 
-    With no `answers` the tilt is exactly zero. `holdout_key` arrives made, so the route and this
-    call derive the arm from one key; `sharpen=False` skips only the search.
+    With no `answers` the order is the person's own; `sharpen=False` skips only the draw.
     """
     seat = pool_rules.Seat(participant_id=user_id, user_id=user_id, is_member=True)
     candidates = await pool_rules.build(
         conn, seats=[seat], kind=kind, budget_min=budget_min,
         include_rewatches=include_rewatches, bundle_version=bundle_version,
     )
+    budget = duration(budget_min) + (pool_rules.PER_EPISODE if kind == pool_rules.KIND_SERIES else "")
     if not candidates:
         return {
             "picks": [], "wildcard": None,
-            "provenance": provenance(
-                budget_min=budget_min, answers=0, include_rewatches=include_rewatches, kind=kind
-            ),
+            "provenance": copy_rules.provenance(budget=budget, terms=None),
+            "no_round": None,
             "empty": (
                 f"Nothing in the library fits {duration(budget_min)} tonight — allow a little "
                 "longer, or include rewatches."
@@ -111,38 +116,37 @@ async def picks(
     version = await dna_reads.active_version(conn)
     ids = [c.title_id for c in candidates]
     tagged = await dna_reads.vectors_for(conn, ids, version=version or "")
-    # A key per candidate, so a library with no DNA still counts as the pool (§10 predicate below).
     vectors = {t: tagged.get(t, {}) for t in ids}
-    # The group round's scale (decision 477); monotone, so the no-tilt order is the Ledger's own.
-    prior = pool_rules.rank_normal({c.title_id: c.group_score for c in candidates})
+    space = tilt_rules.space(vectors)
+    # The group round's scale (decision 477); monotone, so the order with no mood is the Ledger's own.
+    stable = pool_rules.rank_normal({c.title_id: c.group_score for c in candidates})
+    seen = await pool_rules.seen_among(conn, user_id=user_id, title_ids=ids)
+    reach = {t: space.project(vectors[t]) for t in pool_rules.reach(stable, seen=seen)}
 
-    played = round_rules.replay(
-        prior, list(answers), has_profile=True,
-        rng=rng or random.Random(0), holdout_key=holdout_key, select=sharpen,
+    liked, word = await pool_rules.liked_films(
+        conn, user_id=user_id, kind=kind, dna_version=version
     )
-    # The rows the replay counted and no others (`tilt.applies`); N counts answers that tilted.
-    counted = [
-        a for a in answers
-        if a.selection != round_rules.SELECTION_HOLDOUT
-        and tilt_rules.applies(vectors, title_a=a.title_a, title_b=a.title_b)
-    ]
-    frame = tilt_rules.frame(vectors)
-    tilt: dict[str, float] = {}
-    for a in counted:
-        tilt = tilt_rules.applied(
-            tilt, answer=a.answer, title_a=a.title_a, title_b=a.title_b,
-            vectors=vectors, frame=frame,
+    has_round = round_rules.has_round(liked)
+    film_dna = (
+        await dna_reads.vectors_for(conn, [f["title_id"] for f in liked], version=version or "")
+        if has_round else {}
+    )
+    films = [
+        round_rules.Film(
+            title_id=f["title_id"], step=f["step"], runtime_min=f["runtime_min"],
+            z=space.project(film_dna.get(f["title_id"], {})),
         )
-
-    scored = {
-        t: b.mu + tilt_rules.adjustment(tilt, vectors.get(t, {}), frame)
-        for t, b in played.beliefs.items()
-    }
-    order = combine_rules.ranked(scored)
+        for f in liked
+    ] if has_round else []
+    played = round_rules.replay(
+        films, stable, reach, list(answers),
+        holdout_key=None, rng=rng or random.Random(0), select=sharpen,
+    )
+    order = combine_rules.ranked(round_rules.tonight(stable, reach, played.mood.mean))
     by_id = {c.title_id: c for c in candidates}
 
-    # 54f/proposal 65: reshuffle walks further down the ranking and wraps (decision 222). The span
-    # is the ranking's full length, so every title is reachable.
+    # Reshuffle walks further down the ranking, the re-ranked top 30 first, and wraps (decision 222).
+    # The span is the ranking's full length, so every title is reachable.
     span = max(len(order), 1)
     start = (offset * PICKS) % span if offset else 0
     chosen = [t for t, _ in order[start:start + PICKS]]
@@ -189,45 +193,44 @@ async def picks(
         }
 
     nxt = None if played.stop_reason else played.next_pair
+    shown = {f["title_id"]: f for f in liked}
     pair_genres = await pool_rules.genres_of(conn, [nxt.title_a, nxt.title_b]) if nxt else {}
     return {
         "picks": [await card(t, stretch=False) for t in chosen],
         "wildcard": None if wildcard is None else await card(wildcard, stretch=True),
-        "provenance": provenance(
-            budget_min=budget_min, answers=len(counted), include_rewatches=include_rewatches,
-            kind=kind,
+        "provenance": copy_rules.provenance(
+            budget=budget, terms=await _mood_terms(conn, space, played, reach)
+        ),
+        "no_round": None if has_round else copy_rules.no_round(
+            need=round_rules.MIN_ROUND_FILMS, have=len(liked), word=word
         ),
         "empty": None,
-        # Every answer given (a hold-out costs one of twenty), while `sharpened` reports what tilted.
         "answered": len(answers),
-        "sharpened": bool(counted),
+        # Whether any answer moved the mood.
+        "sharpened": bool(played.adaptive),
         # A wrap by modulus or by the wrap-fill above, which fires first on uneven pools (decision 222).
         "wrapped": bool(offset) and (start + PICKS > span or start < offset * PICKS),
         # The round, on the same pool (decision 532). None once it has ended, or when none was asked.
         "pair": None if nxt is None else {
             "selection": nxt.selection,
             "reason": nxt.reason,
-            "a": _pair_side(by_id.get(nxt.title_a), pair_genres),
-            "b": _pair_side(by_id.get(nxt.title_b), pair_genres),
+            "a": _pair_side(shown.get(nxt.title_a), pair_genres),
+            "b": _pair_side(shown.get(nxt.title_b), pair_genres),
         },
         "stop_reason": played.stop_reason,
         # A seat's header and escape, named as its card names them (`play._card`).
         "cap": round_rules.CAP_PAIRS,
         "typical": round_rules.TYPICAL_PAIRS,
         "escape_available": nxt is not None and round_rules.escape_available(len(answers)),
-        "tilt": tilt,
     }
 
 
 __all__ = [
     "NAMED_TERMS",
     "PICKS",
-    "PROVENANCE_PLAIN",
-    "PROVENANCE_REWATCH",
-    "PROVENANCE_TILTED",
     "STRETCH_WHY",
+    "STRONG_MOOD",
     "duration",
     "picks",
-    "provenance",
     "why_line",
 ]

@@ -3,8 +3,6 @@ payload carries, and the blind ballot."""
 
 from __future__ import annotations
 
-import itertools
-
 import httpx
 import pytest
 
@@ -40,7 +38,7 @@ async def member_client(app, admin, name="jenny"):
 
 @pytest.fixture
 async def library(db):
-    """The pool is larger than the shortlist, which gives the round a boundary."""
+    """Six owned films, the pool; and ten more the household has seen elsewhere, not owned."""
     await db.execute(
         "INSERT INTO artifact_bundle (version, manifest, state) VALUES ($1, '{}', 'active')",
         BUNDLE,
@@ -51,17 +49,34 @@ async def library(db):
         SELECT g, 'movie', 'Film ' || g, 2010, 95 + g, true FROM generate_series(1, 6) AS g
         """
     )
+    await db.execute(
+        """
+        INSERT INTO title (id, kind, name, year, runtime_min, is_owned)
+        SELECT g, 'movie', 'Seen ' || g, 2000, 110, false FROM generate_series(201, 210) AS g
+        """
+    )
     return list(range(1, 7))
 
 
 async def score(db, user_id, titles):
-    """§5.1's per-user half, as the nightly job would have written it."""
+    """§5.1's per-user half, as the nightly job would have written it; and ten films the member has
+    seen and placed A+, so their round has pairs to ask (decision 539)."""
     for i, title_id in enumerate(titles):
         await db.execute(
             "INSERT INTO user_score (user_id, title_id, kind, bundle_version, score, cf) "
             "VALUES ($1, $2, 'movie', $3, $4, 0.0) ON CONFLICT (user_id, title_id) DO NOTHING",
             user_id, title_id, BUNDLE, 0.9 - 0.1 * i,
         )
+    await db.execute(
+        "INSERT INTO tier_edit (user_id, title_id, tier, n_levels, via) "
+        "SELECT $1, g, 5, 7, 'explicit' FROM generate_series(201, 210) AS g",
+        user_id,
+    )
+    await db.execute(
+        "INSERT INTO user_title (user_id, title_id, state) "
+        "SELECT $1, g, 'seen' FROM generate_series(201, 210) AS g ON CONFLICT DO NOTHING",
+        user_id,
+    )
 
 
 async def _register(db, user_id: int, endpoint: str) -> str:
@@ -107,8 +122,7 @@ async def solo_room(app, db, library):
 
 @pytest.fixture
 async def wide_solo_room(app, db, library):
-    """For tests about a round's second answer: what keeps it asking is how many titles sit near the
-    cut (decision 477)."""
+    """A household-sized library: 120 films in the pool."""
     await db.execute(
         """
         INSERT INTO title (id, kind, name, year, runtime_min, is_owned)
@@ -767,79 +781,37 @@ async def test_the_wildcard_card_carries_the_label_it_is_honest_about(app, db, l
         assert finalist["label"] is None, "a finalist is not a step outside anybody's usual"
 
 
-async def test_solos_held_out_pair_is_still_held_out_when_it_comes_back(app, db, library):
-    """Solo's answers return without `selection` (defaulting to adaptive), so the arm is re-derived
-    from seq and `user.id` (decision 223). No skip in either half (finding 44)."""
+async def test_solo_asks_no_hold_out_and_reads_one_history_one_way(app, db, library):
+    """Decision 539: solo stores nothing, so it asks no hold-out pair; the client carries the answers
+    and every request replays them the same way."""
     host, host_id = await admin_client(app)
     await score(db, host_id, library)
-    key = str(host_id)
 
     # `sharpen` on every request, as the round sends it: a request without it draws no pair.
     body = {
         "kind": "movie", "runtime_budget_min": 200, "include_rewatches": True,
         "offset": 0, "sharpen": True,
     }
-    first = (await host.post("/api/tonight/solo", json={**body, "answers": []})).json()
-    assert first["pair"] is not None, "solo's round serves nothing on this pool at all"
-
-    # Half one: every served pair carries the arm the rule names for this person.
     answers = []
     for seq in range(1, rnd.CAP_PAIRS + 1):
         out = (await host.post("/api/tonight/solo", json={**body, "answers": answers})).json()
         pair = out["pair"]
         if pair is None:
             break
-        assert pair["selection"] == (
-            rnd.SELECTION_HOLDOUT if rnd.is_holdout(seq, key=key) else rnd.SELECTION_ADAPTIVE
-        ), f"the arm served at pair {seq} is not the one the rule draws for this person"
+        assert pair["selection"] == rnd.SELECTION_ADAPTIVE, f"pair {seq} was held out"
         answers.append(
             {"seq": seq, "title_a": pair["a"]["title_id"], "title_b": pair["b"]["title_id"],
              "answer": rnd.A}
         )
-
-    # Half two: the round trip, over a history holding this person's first hold-out.
-    held = next(seq for seq in itertools.count(1) if rnd.is_holdout(seq, key=key))
-    sent = [
-        {"seq": seq, "title_a": library[0], "title_b": library[1], "answer": rnd.A}
-        for seq in range(1, held + 1)
-    ]
-    after = (await host.post("/api/tonight/solo", json={**body, "answers": sent})).json()
-    assert "Tilted by your" in after["provenance"]
-    counted = int(after["provenance"].split("Tilted by your ")[1].split()[0])
-    assert counted == len(sent) - 1, (
-        f"{len(sent)} answers sent, the one at pair {held} held out, provenance claims {counted}"
-    )
-
-
-async def test_a_solo_answer_is_classified_the_same_way_on_every_request(app, db, library):
-    """Solo re-derives the arm per request, so the same history must classify the same way every time;
-    `user.id` is stable, server-side and never client-supplied (decision 223)."""
-    host, host_id = await admin_client(app)
-    await score(db, host_id, library)
-    key = str(host_id)
-
-    body = {"kind": "movie", "runtime_budget_min": 200, "include_rewatches": True, "offset": 0}
-    held = next(seq for seq in itertools.count(1) if rnd.is_holdout(seq, key=key))
-    sent = [
-        {"seq": seq, "title_a": library[0], "title_b": library[1], "answer": rnd.A}
-        for seq in range(1, held + 2)
-    ]
+    assert answers, "solo's round served nothing on this pool at all"
 
     again = [
-        (await host.post("/api/tonight/solo", json={**body, "answers": sent})).json()
-        for _ in range(4)
+        (await host.post("/api/tonight/solo", json={**body, "answers": answers, "sharpen": False}))
+        .json()
+        for _ in range(3)
     ]
-    lines = {out["provenance"] for out in again}
-    assert len(lines) == 1, f"the same answers were counted differently across requests: {lines}"
-    tilts = {tuple(sorted(out["tilt"].items())) for out in again}
-    assert len(tilts) == 1, "the same answers moved the tilt differently across requests"
-    assert {tuple(p["title_id"] for p in out["picks"]) for out in again}.__len__() == 1
-
-    # One answer is held out, so the line reports one fewer than were sent.
-    counted = int(again[0]["provenance"].split("Tilted by your ")[1].split()[0])
-    assert counted == len(sent) - 1, (
-        f"{len(sent)} answers sent, the one at pair {held} drawn by the arm, {counted} counted"
-    )
+    assert len({out["provenance"] for out in again}) == 1
+    assert len({tuple(p["title_id"] for p in out["picks"]) for out in again}) == 1
 
 
 # Finding 4: a GET of the session, ballot and result must call `play.settle` before reading;
@@ -997,13 +969,14 @@ async def test_a_stuck_rooms_result_read_lets_the_evening_finish(app, db, librar
     ) == 1, "§13's one row per evening"
 
 
-async def test_a_three_candidate_evening_reaches_the_ballot_from_the_round_read(app, db, library):
-    """Decision 215: with two or three candidates only the round read can end a seat, and the client
-    reads the session BEFORE the round, so the round route itself must settle."""
+async def test_an_evening_with_no_round_reaches_the_ballot_from_the_round_read(app, db, library):
+    """Decisions 215 and 539: a seat with too few films on its ladder is ended by the round read
+    alone, and the client reads the session BEFORE the round, so the round route itself must settle."""
     host, host_id = await admin_client(app)
     member, member_id = await member_client(app, host)
     await score(db, host_id, library)
     await score(db, member_id, library)
+    await db.execute("DELETE FROM tier_edit")
     # Three candidates by making the others too long: the budget floor is 60 and the grace 40.
     await db.execute("UPDATE title SET runtime_min = 240 WHERE id > 3")
 
@@ -1176,26 +1149,19 @@ async def test_a_malformed_solo_answer_is_a_refusal_that_names_the_field(app, db
 
 
 async def test_the_arm_is_still_the_servers_and_never_the_clients(app, db, library):
-    """`SoloAnswer` has no `selection`; an extra key is ignored and the arm re-derived."""
+    """`SoloAnswer` has no `selection`: a client naming the hold-out arm cannot take its answer out
+    of the mood."""
     client, user_id = await admin_client(app)
     await score(db, user_id, library)
-    key = str(user_id)
-    held = next(seq for seq in itertools.count(1) if rnd.is_holdout(seq, key=key))
     body = {"kind": "movie", "runtime_budget_min": 200, "include_rewatches": True}
-    honest = [
-        {"seq": seq, "title_a": library[0], "title_b": library[1], "answer": rnd.A}
-        for seq in range(1, held + 1)
-    ]
-    lying = [{**a, "selection": rnd.SELECTION_ADAPTIVE} for a in honest]
+    honest = [{"seq": 1, "title_a": 201, "title_b": 202, "answer": rnd.A}]
+    lying = [{**a, "selection": rnd.SELECTION_HOLDOUT} for a in honest]
 
     a = (await client.post("/api/tonight/solo", json={**body, "answers": honest})).json()
     b = (await client.post("/api/tonight/solo", json={**body, "answers": lying})).json()
 
-    assert a["provenance"] == b["provenance"], "a client moved an answer into the adaptive stream"
-    counted = int(a["provenance"].split("Tilted by your ")[1].split()[0])
-    assert counted == len(honest) - 1, (
-        f"{len(honest)} answers sent, the one at pair {held} held out, provenance claims {counted}"
-    )
+    assert a["sharpened"] is b["sharpened"] is True, "a client held its own answer out"
+    assert a["provenance"] == b["provenance"]
 
 
 class _Records:
@@ -1300,21 +1266,25 @@ async def test_each_seated_member_sets_their_own_vetoes_over_http(app, db, libra
 
 
 async def test_the_round_card_says_what_to_expect_rather_than_the_cap(solo_room):
-    """The card carries the sweep's median beside the cap."""
+    """The card carries the typical round beside the cap."""
     client, seat = solo_room["client"], solo_room["seat"]
     card = (await client.get(f"/api/tonight/seats/{seat}/round")).json()
     assert card["typical"] == rnd.TYPICAL_PAIRS
     assert card["typical"] < card["cap"] == rnd.CAP_PAIRS
+    assert card["no_round"] is None
 
 
-async def test_solo_offers_its_escape_from_the_sixth_pair_and_only_while_it_asks(app, db, library):
-    """Solo's reply carries a seat card's header and escape: offered once five are answered, and only
-    while a pair is on screen."""
+async def test_solo_offers_its_escape_from_the_fourth_pair_and_only_while_it_asks(
+    app, db, library, monkeypatch
+):
+    """Solo's reply carries a seat card's header and escape: offered once three are answered, and
+    only while a pair is on screen."""
     client, user_id = await admin_client(app)
     await score(db, user_id, library)
     body = {"kind": "movie", "runtime_budget_min": 200, "include_rewatches": True, "sharpen": True}
 
-    # An A settles this pool in one pair; NEITHER keeps it asking past the sixth.
+    # A round that never settles, so it keeps asking past the fourth pair to the cap.
+    monkeypatch.setattr(rnd, "STOP_AFTER", rnd.CAP_PAIRS + 1)
     answers, offered = [], []
     for seq in range(1, rnd.CAP_PAIRS + 2):
         out = (await client.post("/api/tonight/solo", json={**body, "answers": answers})).json()
@@ -1327,16 +1297,16 @@ async def test_solo_offers_its_escape_from_the_sixth_pair_and_only_while_it_asks
              "title_b": out["pair"]["b"]["title_id"], "answer": rnd.NEITHER}
         )
 
-    assert len(offered) > 5, f"the round stopped after {len(offered)} pairs, before its sixth"
-    assert offered[:5] == [False] * 5, f"the escape was offered before the sixth pair: {offered}"
-    assert all(offered[5:]), f"the escape was not offered from the sixth pair on: {offered}"
-    assert out["stop_reason"] is not None and out["escape_available"] is False, (
+    assert len(offered) == rnd.CAP_PAIRS, f"the round stopped after {len(offered)} pairs"
+    assert offered[:3] == [False] * 3, f"the escape was offered before the fourth pair: {offered}"
+    assert all(offered[3:]), f"the escape was not offered from the fourth pair on: {offered}"
+    assert out["stop_reason"] == rnd.CAP and out["escape_available"] is False, (
         "a round that has stopped has nothing to escape"
     )
 
-    # Reshuffle after an escape at the sixth pair: five answered, and no pair asked for.
+    # Reshuffle after an escape at the fourth pair: three answered, and no pair asked for.
     reshuffle = (await client.post(
-        "/api/tonight/solo", json={**body, "sharpen": False, "offset": 1, "answers": answers[:5]}
+        "/api/tonight/solo", json={**body, "sharpen": False, "offset": 1, "answers": answers[:3]}
     )).json()
     assert reshuffle["pair"] is None and reshuffle["escape_available"] is False
     assert (reshuffle["cap"], reshuffle["typical"]) == (rnd.CAP_PAIRS, rnd.TYPICAL_PAIRS)

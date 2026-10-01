@@ -37,8 +37,8 @@ router = APIRouter(prefix="/api/tonight", tags=["tonight"])
 # Its own salt: a Tonight pair is never a session cookie or a Rank pair.
 _PAIR_SALT = "spielplan/tonight/pair/v1"
 
-# For the room code and solo's hold-out pair only. A group round's draw is seeded from the pool's
-# frozen nonce, so no client can re-roll it (decision 223).
+# For the room code and solo's draw only. A group round's draw is seeded from the pool's frozen
+# nonce, so no client can re-roll it (decision 223).
 _rng = random.SystemRandom()
 
 HUB = channel_rules.Hub()
@@ -182,7 +182,7 @@ class VetoBody(BaseModel):
 
 
 class SoloAnswer(BaseModel):
-    """A shape, so a malformed entry is a 422. No `selection`: the arm is re-derived server-side (54b).
+    """A shape, so a malformed entry is a 422. No `selection`: solo asks no hold-out pair.
     `seq` falls back to the position."""
 
     title_a: int
@@ -354,6 +354,7 @@ def _public_state(state: dict[str, Any], token: str | None) -> dict[str, Any]:
         "ended_by": state["ended_by"],
         "stop_reason": state["stop_reason"],
         "escape_available": state["escape_available"],
+        "no_round": state["no_round"],
         "card_token": token,
         "pair": None if pair is None else {
             "a": pair["a"], "b": pair["b"],
@@ -539,26 +540,18 @@ async def solo(
     """§6.2 step 8: solo asks first, then lands on three picks and a wildcard (decision 532). No
     session row, so the round's answers travel with the request."""
     version = await _bundle_version(conn)
-    # One key for both the re-derivation and `picks`, stable across requests and server-side (54b).
-    holdout_key = str(user.id)
-    # A loop, so the seq fallback is spelled once. Candidacy is the domain's to enforce, not this route's.
-    answers = []
-    for i, a in enumerate(body.answers):
-        seq = a.seq if a.seq is not None else i + 1
-        answers.append(round_rules.Answered(
-            seq=seq, title_a=a.title_a, title_b=a.title_b, answer=a.answer,
-            # Re-derived, never accepted (54b).
-            selection=(
-                round_rules.SELECTION_HOLDOUT
-                if round_rules.is_holdout(seq, key=holdout_key)
-                else round_rules.SELECTION_ADAPTIVE
-            ),
-        ))
+    # Candidacy is the domain's to enforce, not this route's.
+    answers = [
+        round_rules.Answered(
+            seq=a.seq if a.seq is not None else i + 1,
+            title_a=a.title_a, title_b=a.title_b, answer=a.answer,
+        )
+        for i, a in enumerate(body.answers)
+    ]
     return await solo_rules.picks(
         conn, user_id=user.id, kind=body.kind, budget_min=body.runtime_budget_min,
         include_rewatches=body.include_rewatches, bundle_version=version,
-        answers=answers, offset=body.offset, sharpen=body.sharpen,
-        rng=_rng, holdout_key=holdout_key,
+        answers=answers, offset=body.offset, sharpen=body.sharpen, rng=_rng,
     )
 
 
