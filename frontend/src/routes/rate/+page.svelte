@@ -385,12 +385,18 @@
     min-height: 50px;
   }
 
-  /* A left-aligned column like every other page, as tall as it needs. */
+  /* Two columns from the content's left edge: the film at the window's height (260x390 at 800, up
+     to 280x420), and seven shelves of four posters and 170px for the word, fitting under the top
+     row and growing with the window as long as the film keeps 180px. */
   @media (min-width: 721px) {
     .rate {
-      width: min(100%, 480px);
+      --rate-col: calc(clamp(240px, 100dvh - 410px, 420px) * 2 / 3);
+      --shelf-ph: clamp(64px, min((100dvh - 188px) / 7, (100cqw - 398px) / 2.75), 104px);
+      --shelves-w: calc(var(--shelf-ph) * 2.75 + 186px);
+      --rate-grid: min(var(--rate-col), 100cqw - 32px - var(--shelves-w)) var(--shelves-w);
+      container-type: inline-size;
       min-height: 0;
-      padding-top: 0;
+      padding-top: 16px;
       margin-bottom: 0;
       gap: 16px;
     }
@@ -406,9 +412,38 @@
       margin-left: -12px;
       align-items: flex-start;
     }
+    .plain {
+      margin-left: -8px;
+    }
+    .loading {
+      display: grid;
+      grid-template-columns: var(--rate-grid);
+      align-items: start;
+      gap: 32px;
+    }
+    .poster-slot {
+      width: auto;
+      height: auto;
+      aspect-ratio: 2 / 3;
+    }
+    .shelves-slot {
+      height: calc((var(--shelf-ph) + 8px) * 7);
+    }
+    .done {
+      align-items: flex-start;
+      gap: 32px;
+    }
     .done-head {
       align-items: flex-start;
       text-align: left;
+    }
+    .done-actions {
+      flex-direction: row;
+      gap: 12px;
+    }
+    .done-actions > * {
+      min-height: 50px;
+      padding: 0 24px;
     }
   }
 </style>
