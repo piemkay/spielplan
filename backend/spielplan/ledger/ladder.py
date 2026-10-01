@@ -1,8 +1,8 @@
-"""The ladder's data layer (§6.1): a member's cut-over (decision 537), the one placement writer, and
-the reads every ladder surface shares.
+"""The ladder's data layer: a member's cut-over (decision 537), the one placement writer, and the
+reads every ladder surface shares.
 
 A placement is a `tier_edit` that implies `seen`, plus the verdict its tier stands for wherever the
-live one is none or another class (§4.2, decision 536). Surfaces gate on the set-up; `place` does not.
+live one is none or another class. Surfaces gate on the set-up; `place` does not.
 """
 
 from __future__ import annotations

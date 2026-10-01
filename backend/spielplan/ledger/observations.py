@@ -144,8 +144,8 @@ def live_label_sql(user: str = "$1") -> str:
 
 LIVE_LABEL_SQL = live_label_sql()
 
-# What the fit reads (§5.2, decisions 536 and 537), `$1` = user id: no verdict after a cut-over,
-# and no tier_edit `e` that re-asks an edit and lands on the same step (§13 stream b).
+# What the fit reads, `$1` = user id: no verdict after a cut-over (decision 537), and no tier_edit
+# `e` that re-asks an edit and lands on the same step.
 NOT_SET_UP_SQL = "NOT EXISTS (SELECT 1 FROM ladder_setup s WHERE s.user_id = $1)"
 SAME_ANSWER_SQL = (
     "EXISTS (SELECT 1 FROM tier_edit o WHERE o.id = e.reask_of AND o.tier = e.tier "
