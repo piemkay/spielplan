@@ -123,7 +123,7 @@ async def picks(
     seen = await pool_rules.seen_among(conn, user_id=user_id, title_ids=ids)
     reach = {t: space.project(vectors[t]) for t in pool_rules.reach(stable, seen=seen)}
 
-    liked, word = await pool_rules.liked_films(
+    liked, word, placed = await pool_rules.liked_films(
         conn, user_id=user_id, kind=kind, dna_version=version
     )
     has_round = round_rules.has_round(liked)
@@ -202,7 +202,7 @@ async def picks(
             budget=budget, terms=await _mood_terms(conn, space, played, reach)
         ),
         "no_round": None if has_round else copy_rules.no_round(
-            need=round_rules.MIN_ROUND_FILMS, have=len(liked), word=word
+            need=round_rules.MIN_ROUND_FILMS, have=len(liked), word=word, placed=placed
         ),
         "empty": None,
         "answered": len(answers),

@@ -289,9 +289,10 @@ async def liked_films(
     kind: str,
     vetoed_terms: Sequence[str] = (),
     dna_version: str | None = None,
-) -> tuple[list[dict[str, Any]], str]:
+) -> tuple[list[dict[str, Any]], str, int]:
     """A member's own seen films of the kind placed in the liked band of their ladder (decision 539),
-    none carrying a vetoed term, each with its step; and that band's lowest word, for the no-round line."""
+    none carrying a vetoed term, each with its step; and, for the no-round line, that band's lowest
+    word and how many films it holds."""
     tier_set = await observations.tier_set_of(conn, user_id=user_id, kind=kind)
     k = len(tier_set)
     placed = await ladder.placements(conn, user_id=user_id, kind=kind)
@@ -306,7 +307,7 @@ async def liked_films(
         user_id, list(liked), kind, list(vetoed_terms), dna_version, list(VETO_TIERS),
     )
     word = observations.tier_words(tier_set)[int(model.verdict_tiers(k)[2][0])]
-    return [{**dict(r), "step": liked[r["title_id"]]} for r in rows], word
+    return [{**dict(r), "step": liked[r["title_id"]]} for r in rows], word, len(liked)
 
 
 async def well_known_films(

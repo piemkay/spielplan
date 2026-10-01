@@ -208,8 +208,10 @@ def tonight(
 def top_three(
     stable: Mapping[int, float], reach: Mapping[int, Sequence[float]], mean: np.ndarray
 ) -> frozenset[int]:
+    """The stop rule's three, read over the reach: a title outside it is one no answer can move."""
     scores = tonight(stable, reach, mean)
-    return frozenset(sorted(scores, key=lambda t: (-scores[t], t))[:SHORTLIST_SIZE])
+    within = [t for t in reach if t in scores]
+    return frozenset(sorted(within, key=lambda t: (-scores[t], t))[:SHORTLIST_SIZE])
 
 
 # --- which pairs may be asked ------------------------------------------------------------------
