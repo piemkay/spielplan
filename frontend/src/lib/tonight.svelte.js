@@ -93,16 +93,25 @@ export function chooseKind(kind, userId) {
 /** §6.2 step 1: "members and/or N guests", who share the initiator's phone. */
 export const MAX_GUESTS = 6;
 
-/** Decision 154's four answers: `EITHER` lifts both, `NEITHER` lowers both. */
+/** The four answers (decision 539): a side is the film nearer tonight's mood, `EITHER` says the
+ * difference does not matter, `NEITHER` that tonight lies away from both. */
 export const ANSWERS = [
   { value: 'A', label: 'This one' },
-  { value: 'B', label: 'That one' },
+  { value: 'B', label: 'This one' },
   { value: 'EITHER', label: 'Either is fine' },
   { value: 'NEITHER', label: 'Neither tonight' }
 ];
 
+export const ROUND_QUESTION = 'Which feels more like tonight?';
+
+// Under the first pair alone; a room's member seat gets none, since the lobby has said it.
+export const FIRST_PAIR_LINE =
+  "Two films you've liked. Tap the one closer to tonight's mood — we'll find something new in that spirit.";
+export const GUEST_FIRST_PAIR_LINE = "Well-known films — you don't need to have seen them.";
+
 export const ESCAPE_LABEL = 'Just pick for us';
 export const SOLO_ESCAPE_LABEL = 'Just pick for me';
+export const ESCAPE_LOCKED_LINE = 'Available from pair 4';
 
 /** 54e/proposal 60: "shipping the property without the moment ships half of it." */
 export const REVEAL_BEAT = "Tonight's pick";
@@ -133,9 +142,11 @@ export function vetoCaption(kind) {
   return `Each of you can rule out up to three. ${title} that may contain any of them is left out for everyone tonight.`;
 }
 
-// The round's answers already carry the mood, so the lobby says how rather than adding a question.
-export const MOOD_CAPTION =
-  'In a particular mood? In each pair, pick the one that fits it, and tap “Neither tonight” when neither does. Your answers steer the pick.';
+// What the round will ask, said once in the lobby and once at solo's door (§6.2 step 4).
+export const LOBBY_LINE =
+  "Each of you gets a few pairs of films you've liked — a guest gets well-known ones, and anyone with too few on their ladder skips ahead. Tap the one closer to tonight's mood, or “Neither tonight” when neither is. Your answers steer the pick.";
+export const SOLO_DOOR_LINE =
+  "Three picks and a wildcard — first a few quick pairs of films you've liked, if your ladder has enough.";
 
 // `SoloBody.offset`'s bound (`le=64` in `api/tonight.py`), which the client cannot discover.
 const SOLO_OFFSET_MAX = 64;
@@ -617,7 +628,7 @@ export async function answerSolo(value) {
 }
 
 // No tombstone to write: the last answer leaves the list, and the pair it answered comes back,
-// since a hold-out pair is drawn afresh on every request.
+// since solo's pair is drawn afresh on every request.
 export async function undoSolo() {
   const before = tonight.soloAnswers;
   const last = before.at(-1);
@@ -770,24 +781,30 @@ export function applyBallotCount(frame) {
 export function roundHeader(round) {
   if (!round) return '';
   const n = (round.answered ?? 0) + 1;
-  const typical = round.typical ?? 10;
+  const typical = round.typical ?? 5;
   if (n <= typical) return `Pair ${n} · usually about ${typical}`;
   return [`Pair ${n}`, 'longer than most', round.cap ? `max ${round.cap}` : null]
     .filter(Boolean)
     .join(' · ');
 }
 
+/** One dot per pair up to the typical round, then one more per pair shown, never past the cap. */
+export function roundDots(round) {
+  const now = (round?.answered ?? 0) + 1;
+  const typical = round?.typical ?? 5;
+  return Math.min(round?.cap ?? Infinity, Math.max(typical, now));
+}
+
 // Characters of genres that fit half a phone's width.
 const PAIR_GENRE_CHARS = 22;
 
-// Year and runtime, the over-budget label on its own line, and genres in plain words.
+// Year and runtime, then genres in plain words.
 export function pairFacts(title) {
   if (!title) return [];
   const genres = title.genres ?? [];
   const both = genres.slice(0, 2).join(', ');
   return [
     [title.year, runtimeLabel(title)].filter(Boolean).join(' · '),
-    title.over_budget_min ? title.fit_line : null,
     both.length <= PAIR_GENRE_CHARS ? both : genres[0]
   ].filter(Boolean);
 }
