@@ -185,6 +185,11 @@ def test_no_pair_repeats_in_an_evening():
     assert pairs == []
 
 
+def test_a_shown_pair_naming_a_film_the_seat_no_longer_has_blocks_no_other_pair():
+    """§10 can take a film out from under a stored answer; that row must not rule out a live pair."""
+    assert (2, 3) in rnd.askable(films(10), [frozenset({1, 14})])
+
+
 def test_a_film_returns_only_once_every_film_has_shown():
     """Decision 550: with 1-2 shown, the next pair is two fresh films; once all four have shown, a
     film returns with a new partner."""

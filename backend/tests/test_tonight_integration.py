@@ -2978,7 +2978,7 @@ async def test_the_combine_does_not_search_for_a_pair_it_will_never_show(db, wor
     monkeypatch.setattr(rnd, "replay", lambda *a, **kw: real(*a, **{**kw, "select": True}))
     again = await play.finish(db, room["session_id"])
 
-    assert calls, "no seat had a boundary left to search, so the assertion above proved nothing"
+    assert calls, "no seat had a pair left to draw, so the assertion above proved nothing"
     assert again.rows == slate.rows, "the flag moved the slate, and it may only move the cost"
 
 

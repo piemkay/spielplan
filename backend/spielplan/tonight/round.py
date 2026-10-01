@@ -237,11 +237,12 @@ def _askable(
     # NaN compares false: an unknown step holds level, an unknown runtime does not.
     ok = ~(np.abs(steps[i] - steps[j]) > PAIR_STEP)
     ok &= np.abs(runtime[i] - runtime[j]) <= PAIR_RUNTIME_MIN
+    row = {int(t): k for k, t in enumerate(ids)}
     span = int(ids.max()) + 1
-    asked = [min(p) * span + max(p) for p in shown if len(p) == 2]
+    # Only pairs of these films: an id past `span` would alias another pair's key.
+    asked = [min(p) * span + max(p) for p in shown if len(p) == 2 and all(t in row for t in p)]
     ok &= ~np.isin(ids[i] * span + ids[j], np.asarray(asked, dtype=np.int64))
     times = np.zeros(n, dtype=np.int64)
-    row = {int(t): k for k, t in enumerate(ids)}
     for pair in shown:
         for t in pair:
             if t in row:
