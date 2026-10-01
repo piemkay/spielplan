@@ -236,6 +236,11 @@
   .actions .btn-plain {
     justify-content: center;
   }
+  @media (min-width: 721px) {
+    .narrow {
+      padding-bottom: 20px;
+    }
+  }
   @media (prefers-reduced-motion: reduce) {
     .track span {
       transition: none;

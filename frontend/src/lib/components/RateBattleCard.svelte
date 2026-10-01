@@ -387,16 +387,12 @@
     transition-delay: var(--busy-delay);
   }
 
-  /* Left-aligned like every other page, the answers right under the films (decision 529). */
+  /* The answers right under the films (decision 529). */
   @media (min-width: 721px) {
     .battle {
       --gap: var(--rate-gap, 32px);
       flex: none;
       gap: 20px;
-    }
-    .ask {
-      align-items: flex-start;
-      text-align: left;
     }
     .question {
       font-size: var(--fs-title);
@@ -404,17 +400,6 @@
     }
     .pair {
       grid-template-rows: calc(var(--col) * 1.5) auto;
-      justify-content: start;
-    }
-    .art {
-      justify-self: start;
-    }
-    .under {
-      align-items: flex-start;
-      text-align: left;
-    }
-    .scale {
-      align-self: flex-start;
     }
   }
 </style>
