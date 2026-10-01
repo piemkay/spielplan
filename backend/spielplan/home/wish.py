@@ -40,6 +40,29 @@ async def state_for(conn: asyncpg.Connection, *, user_id: int, title_id: int) ->
     return {"state": state}
 
 
+async def likely_too(
+    conn: asyncpg.Connection, *, viewer_id: int, title_id: int, bundle_version: str | None
+) -> list[str]:
+    """The names of the other members who would likely enjoy an unowned title, leaving out anyone who
+    marked it Not for me; none for an owned one."""
+    members = await conn.fetch(
+        """
+        SELECT u.id, u.name FROM app_user u
+         WHERE u.is_active AND u.role IN ('admin', 'member') AND u.id <> $1
+           AND EXISTS (SELECT 1 FROM title t WHERE t.id = $2 AND NOT t.is_owned)
+           AND NOT EXISTS (SELECT 1 FROM wish w WHERE w.user_id = u.id AND w.title_id = $2
+                            AND w.state = 'not_for_me')
+         ORDER BY u.id
+        """,
+        viewer_id, title_id,
+    )
+    cdfs = await _cdfs(
+        conn, member_ids=[int(m["id"]) for m in members], title_ids=[title_id],
+        bundle_version=bundle_version,
+    )
+    return [m["name"] for m in members if _likely(cdfs.get((int(m["id"]), title_id))) == "likely"]
+
+
 async def set_state(
     conn: asyncpg.Connection, *, user_id: int, title_id: int, state: str
 ) -> dict[str, Any]:
@@ -125,10 +148,13 @@ async def arrived(conn: asyncpg.Connection, *, user_id: int) -> list[dict[str, A
 
 
 async def summary(conn: asyncpg.Connection) -> dict[str, int]:
-    """Home's wish list row: titles on the list, and how many more than one person wants."""
+    """Home's wish list row: titles on the list, how many more than one person wants, and how many
+    members there are to want them."""
     row = await conn.fetchrow(
         """
-        SELECT count(*) AS wanted, count(*) FILTER (WHERE n > 1) AS both
+        SELECT count(*) AS wanted, count(*) FILTER (WHERE n > 1) AS both,
+               (SELECT count(*) FROM app_user
+                 WHERE is_active AND role IN ('admin', 'member')) AS members
           FROM (SELECT w.title_id, count(*) AS n
                   FROM wish w
                   JOIN title t ON t.id = w.title_id AND NOT t.is_owned
@@ -138,7 +164,7 @@ async def summary(conn: asyncpg.Connection) -> dict[str, int]:
                  GROUP BY w.title_id) listed
         """
     )
-    return {"wanted": int(row["wanted"]), "both": int(row["both"])}
+    return {"wanted": int(row["wanted"]), "both": int(row["both"]), "members": int(row["members"])}
 
 
 def link_for(kind: str, imdb_id: str | None, tmdb_id: int | None) -> str | None:
@@ -313,6 +339,7 @@ __all__ = [
     "clear",
     "dismiss",
     "household_list",
+    "likely_too",
     "link_for",
     "set_state",
     "state_for",

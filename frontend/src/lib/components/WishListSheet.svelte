@@ -12,7 +12,8 @@
     groupHeading,
     loadWishList,
     othersLine,
-    setWish
+    setWish,
+    wishes
   } from '$lib/wish.svelte.js';
 
   let { open = false, onClose, onSelect } = $props();
@@ -33,7 +34,9 @@
     }
   }
 
+  // Every wish write bumps the epoch, this sheet's own and one from a card opened over it.
   $effect(() => {
+    void wishes.epoch;
     if (open) load();
   });
 
@@ -43,7 +46,6 @@
     failure = '';
     try {
       await write(item.title_id);
-      await load();
     } catch (err) {
       failure = err.message;
     } finally {

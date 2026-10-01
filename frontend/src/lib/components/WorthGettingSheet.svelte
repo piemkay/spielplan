@@ -5,7 +5,7 @@
   import Sheet from '$lib/components/Sheet.svelte';
   import { toPosterTitle } from '$lib/home.svelte.js';
   import { runtimeLabel } from '$lib/rate.svelte.js';
-  import { clearWish, likeLine, loadWorthGetting, setWish } from '$lib/wish.svelte.js';
+  import { clearWish, likeLine, loadWorthGetting, setWish, wishes } from '$lib/wish.svelte.js';
 
   let { open = false, onClose, kind = 'movie', onSelect } = $props();
 
@@ -29,8 +29,9 @@
     }
   }
 
-  // Opening the sheet or switching whose list it is reads that list.
+  // Opening it, switching whose list it is, or a wish written from a card over it reads the list.
   $effect(() => {
+    void wishes.epoch;
     if (open) load(kind, audience);
   });
 

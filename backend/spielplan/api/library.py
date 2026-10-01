@@ -160,7 +160,13 @@ async def title_detail(title_id: int, conn: DB, user: ActiveUser, request: Reque
         else await why.shares_with(
             conn, user_id=user.id, title_id=title_id, kind=title["kind"], version=version
         ),
-        "wish": await wish.state_for(conn, user_id=user.id, title_id=title_id),
+        "wish": {
+            **await wish.state_for(conn, user_id=user.id, title_id=title_id),
+            "likely_too": await wish.likely_too(
+                conn, viewer_id=user.id, title_id=title_id,
+                bundle_version=await artifacts.active_bundle_version(conn),
+            ),
+        },
         "actions": {
             "play_on_jellyfin": jf_url,
             "play_reason": play_reason,
