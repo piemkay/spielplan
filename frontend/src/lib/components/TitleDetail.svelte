@@ -860,13 +860,15 @@
     flex-direction: column;
     gap: 12px;
   }
+  /* Halves, except that "Mark as watched" takes the width it needs on a narrow phone. */
   .pair {
     display: grid;
-    grid-template-columns: repeat(2, minmax(0, 1fr));
+    grid-template-columns: repeat(2, minmax(max-content, 1fr));
     gap: 12px;
   }
   .actions .btn-secondary {
     min-height: var(--touch);
+    padding: 0 14px;
     border-radius: var(--r-md);
     white-space: nowrap;
   }

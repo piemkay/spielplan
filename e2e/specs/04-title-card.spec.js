@@ -60,7 +60,7 @@ test('the card leads with Play, the ranking row and Watched or Not seen, and fol
   const panel = page.getByLabel('Title detail');
   await expect(panel.getByRole('button', { name: 'Play on Jellyfin' })).toBeVisible();
   await expect(panel.getByTestId('rank-card-tier')).toBeVisible();
-  // Heat is unwatched here, so the pair stands on Not seen; 08-jellyfin taps "Mark as watched".
+  // Heat is unwatched here, so Not seen is the standing state.
   await expect(panel.getByTestId('title-watched')).toHaveText('Mark as watched');
   await expect(panel.getByTestId('title-not-seen')).toHaveAttribute('aria-pressed', 'true');
   await expect(panel.locator('[data-answer]')).toHaveCount(0);
