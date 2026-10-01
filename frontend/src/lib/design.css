@@ -144,7 +144,7 @@ body {
 
 a { color: var(--accent-text); text-decoration: none; }
 @media (hover: hover) {
-  a:hover { color: #f0a27e; }
+  a:where(:not(.btn-primary, .btn-ghost, .btn-secondary, .btn-tinted)):hover { color: #f0a27e; }
 }
 button, input, select, textarea { font-family: inherit; color: inherit; }
 button { cursor: pointer; }
