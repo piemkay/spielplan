@@ -24,6 +24,7 @@
   const title = $derived({ ...card.title, kind: card.kind });
   const name = $derived(displayNames(title).primary);
   const lit = $derived(pending?.startsWith('place-') ? Number(pending.slice(6)) : null);
+  let held = $state(-1);
   // Built in JS: Svelte trims the whitespace that opens an element, gluing the separator.
   const pSeen = $derived(
     showModel && card.model?.p_seen != null ? ` · P(seen) ${card.model.p_seen.toFixed(2)}` : ''
@@ -61,6 +62,8 @@
         </p>
         <button
           class="hit unseen"
+          class:placing={lit != null}
+          class:aside={held >= 0}
           data-testid="rate-not-seen"
           aria-label="Not seen: {name}"
           aria-busy={pending === 'not_seen'}
@@ -75,6 +78,7 @@
       kind={card.kind}
       {lit}
       {busy}
+      bind:held
       {onPlace}
     />
   {/key}
@@ -168,6 +172,16 @@
     border: none;
     background: none;
     color: var(--text-2);
+    transition: opacity var(--dur-quick) var(--ease), transform var(--dur-quick) var(--ease);
+  }
+  /* It steps back with the other shelves while one places or is held. */
+  .unseen.placing,
+  .unseen.aside {
+    opacity: 0.4;
+  }
+  .unseen.placing {
+    transform: scale(0.97);
+    transition-delay: 90ms;
   }
   .face {
     height: 32px;
@@ -188,11 +202,17 @@
     color: var(--on-accent);
     animation: pop 180ms var(--ease);
   }
-  /* A screen shorter than the phone the board was drawn on keeps the name and reason one line each. */
-  @media (max-width: 720px) and (max-height: 860px) {
+  /* `--spare`: what a one-line name leaves under the last shelf (the screen less the top row, 8px, the
+     126px head, 16px, seven 72px shelves and the tab bar). A second line costs 21px, so the name takes
+     it where the shelves still clear the tab bar, or where the page scrolls anyway (§6.1). */
+  @media (max-width: 720px) {
     .name {
-      -webkit-line-clamp: 1;
-      line-clamp: 1;
+      --spare: calc(
+        100dvh - 44px - env(safe-area-inset-top) - var(--tabbar) - env(safe-area-inset-bottom) - 654px
+      );
+      max-height: calc(
+        34px + clamp(0px, (var(--spare) - 20px) * 34, 34px) + clamp(0px, var(--spare) * -34, 34px)
+      );
     }
   }
 </style>

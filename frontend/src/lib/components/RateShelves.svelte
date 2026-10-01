@@ -17,6 +17,7 @@
     current = null,
     busy = false,
     testid = 'rate-shelf',
+    held = $bindable(-1),
     onPlace
   } = $props();
 
@@ -26,7 +27,6 @@
 
   let list = $state();
   let pressed = $state(-1);
-  let held = $state(-1);
   /** @type {null | {id: number, x0: number, y0: number, y: number, look: boolean, timer: any}} */
   let grip = null;
   // A release that placed is followed by the button's own click, which must not place again.
