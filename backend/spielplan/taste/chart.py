@@ -167,24 +167,35 @@ async def _people(conn: asyncpg.Connection) -> list[dict[str, Any]]:
         "SELECT id, name, role, colour FROM app_user "
         "WHERE is_active AND role IN ('admin', 'member') ORDER BY lower(name), id"
     )
-    firsts = Counter(r["name"].strip()[:1].upper() for r in rows)
+    initials = _initials([r["name"] for r in rows])
     return [
         {
             "id": int(r["id"]),
             "name": r["name"],
             "role": r["role"],
             "colour": r["colour"],
-            "initials": _initials(r["name"], firsts),
+            "initials": mark,
         }
-        for r in rows
+        for r, mark in zip(rows, initials, strict=True)
     ]
 
 
-def _initials(name: str, firsts: Counter[str]) -> str:
-    """One letter, or two where another member's name starts with the same one."""
-    name = name.strip()
-    first = name[:1].upper()
-    return first + name[1:2].lower() if firsts[first] > 1 else first
+def _initials(names: list[str]) -> list[str]:
+    """One letter, or two where another name starts with the same one: the first letter and the
+    earliest later one no namesake before it took, so no two markers read alike."""
+    firsts = Counter(n.strip()[:1].upper() for n in names)
+    taken: set[str] = set()
+    marks = []
+    for name in (n.strip() for n in names):
+        first = name[:1].upper()
+        if firsts[first] == 1:
+            marks.append(first)
+            continue
+        tails = [c.lower() for c in name[1:] if c.isalnum()] + [str(i) for i in range(2, len(names) + 2)]
+        mark = next(first + c for c in tails if first + c not in taken)
+        taken.add(mark)
+        marks.append(mark)
+    return marks
 
 
 def _seat(person: dict[str, Any], placed: int, kind: str) -> dict[str, Any]:

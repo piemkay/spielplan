@@ -237,7 +237,8 @@ async def test_initials_take_a_second_letter_only_where_two_names_start_alike(wo
 
     listed = (await chart.members(world, viewer_id=patrick, kind="movie"))["members"]
 
-    assert {m["name"]: m["initials"] for m in listed} == {"jenny": "J", "Paula": "Pa", "patrick": "Pa"}
+    # Patrick and Paula share their first two letters too, and two markers never read alike.
+    assert {m["name"]: m["initials"] for m in listed} == {"jenny": "J", "Paula": "Pu", "patrick": "Pa"}
 
 
 async def pair(db) -> dict[str, int]:
