@@ -2,7 +2,7 @@
   // A sheet (decision 527) that leads with what a member opens it for; the rest of §6.0's card
   // (credits, scores, both DNA tiers) sits behind one disclosure. Model numbers arrive only with
   // Show the model on.
-  import { get, post } from '$lib/api.js';
+  import { api, get, post } from '$lib/api.js';
   import { facetColour, modelGate } from '$lib/home.svelte.js';
   import { seed as seedPlace } from '$lib/place.svelte.js';
   import { cardMove } from '$lib/rank.svelte.js';
@@ -10,9 +10,7 @@
   import { session } from '$lib/session.svelte.js';
   import { termLabel } from '$lib/terms.js';
   import {
-    ANSWERS,
     CREDIT_TOP,
-    answeredLine,
     creditJobs,
     creditKey,
     directedBy,
@@ -23,16 +21,16 @@
     playWhy,
     projectedForCard,
     quoteText,
-    revealLine,
     scoreLabel,
     sourceLabel,
     syncNote as syncNoteFor
   } from '$lib/titleCard.js';
   import ActionSheet from '$lib/components/ActionSheet.svelte';
-  import AnswerTiles from '$lib/components/AnswerTiles.svelte';
   import Headshot from '$lib/components/Headshot.svelte';
+  import Icon from '$lib/components/Icon.svelte';
   import RatePoster from '$lib/components/RatePoster.svelte';
   import Sheet from '$lib/components/Sheet.svelte';
+  import TitleDetail from './TitleDetail.svelte';
 
   // `seed`: the title as the tapped poster had it, so the card opens on its poster and name before
   // the read lands. `onMove(entry, tier)`: Rank's own move, which also replaces its board; anywhere
@@ -43,13 +41,17 @@
   let data = $state(null);
   // `error` is the load failing and replaces the card; an action failing must not.
   let error = $state('');
-  let syncNote = $state('');
-  let saving = $state(false);
+  // What the last Watched or Not seen did, or why it could not.
+  let seenNote = $state('');
+  // 'seen' or 'unseen' while that write is in flight.
+  let saving = $state(null);
   // Watched just now, so its check draws; one already watched shows it drawn.
   let justWatched = $state(false);
-  let answerNote = $state(null);
-  let answering = $state(null);
-  let refused = $state(null);
+  let wishing = $state(null);
+  let wishNote = $state('');
+  // A Shares title opened as a card of its own over this one, and this sheet's close for it.
+  let nested = $state(null);
+  let closeThis = null;
   // The server already omits the numbers when off; this gates only labels beside data always sent.
   const showModel = $derived(!!session.user?.show_model);
   const CREDIT_FOLD = 12;
@@ -70,8 +72,8 @@
     let cancelled = false;
     data = null;
     error = '';
-    syncNote = '';
-    answerNote = null;
+    seenNote = '';
+    wishNote = '';
     justWatched = false;
     // Reset too, or the previous film's credit count shows against this one's people.
     showAllCredits = false;
@@ -96,64 +98,74 @@
     run?.();
   }
 
-  // The app-side write never depends on Jellyfin (§7.3); the note says whether it was told. Busy,
-  // not disabled, while it saves: a disabled button drops focus out of the sheet, and Escape with it.
-  async function toggleSeen() {
-    if (!data || saving) return;
-    const next = data.title.seen_state === 'seen' ? 'unseen' : 'seen';
-    saving = true;
-    syncNote = '';
+  // The server's own reading after a write, so the why line and the rest move together.
+  async function reread() {
+    const id = data.title.id;
     try {
-      const res = await post(`/titles/${data.title.id}/state`, { state: next });
-      // The why line is absent for a seen title (decision 515), so drop it here too.
-      data = {
-        ...data,
-        title: { ...data.title, seen_state: next },
-        why: next === 'seen' ? null : data.why
-      };
-      syncNote = syncNoteFor(res);
-      justWatched = next === 'seen';
-      onStateChange?.(data.title.id, next);
-    } catch (err) {
-      syncNote = `Could not save that — ${err.message}`;
-    } finally {
-      saving = false;
+      const fresh = await get(`/titles/${id}`);
+      if (data?.title.id === id) data = fresh;
+    } catch {
+      // The write stands; the card shows the rest as it was until it opens again.
     }
   }
 
-  // Answered through §6.1's own session, so Undo, the counter and the reveal all apply (decision 487).
-  async function answer(choice) {
-    if (!data || answering) return;
-    // A tap on the standing answer writes nothing: posted, it would be a fresh verdict row.
-    const standing =
-      choice === 'not_seen'
-        ? data.title.seen_state !== 'seen'
-        : data.title.seen_state === 'seen' && data.my_verdict?.label === choice;
-    if (standing) return;
-    answering = choice;
-    answerNote = null;
-    refused = null;
+  // The app-side write never depends on Jellyfin (§7.3); the note says whether it was told. Busy,
+  // not disabled, while it saves: a disabled button drops focus out of the sheet, and Escape with it.
+  // A tap on the standing state writes nothing.
+  async function markWatched() {
+    if (!data || saving || data.title.seen_state === 'seen') return;
+    saving = 'seen';
+    seenNote = '';
     try {
-      const res = await post(`/rate/title/${data.title.id}`, { answer: choice });
-      const next = choice === 'not_seen' ? 'unseen' : 'seen';
-      data = {
-        ...data,
-        title: { ...data.title, seen_state: next },
-        // Not seen writes no observation, so the verdict survives the flip (§4.2).
-        my_verdict:
-          choice === 'not_seen'
-            ? data.my_verdict
-            : { value: ['disliked', 'fine', 'liked'].indexOf(choice), label: choice },
-        // Rated now, so the why line goes, as on the next open.
-        why: choice === 'not_seen' ? data.why : null
-      };
-      answerNote = { saved: answeredLine(choice), reveal: revealLine(res?.reveal) };
-      onStateChange?.(data.title.id, next);
+      const res = await post(`/titles/${data.title.id}/state`, { state: 'seen' });
+      // The why line is absent for a seen title (decision 515), so drop it here too.
+      data = { ...data, title: { ...data.title, seen_state: 'seen' }, why: null };
+      seenNote = syncNoteFor(res);
+      justWatched = true;
+      onStateChange?.(data.title.id, 'seen');
     } catch (err) {
-      answerNote = { saved: `Could not save that — ${err.message}`, reveal: '' };
-      refused = choice;
+      seenNote = `Could not save that — ${err.message}`;
     } finally {
-      answering = null;
+      saving = null;
+    }
+  }
+
+  // Through §6.1's own session, so its journal row, Undo and Jellyfin push apply (decision 487).
+  async function markNotSeen() {
+    if (!data || saving || data.title.seen_state !== 'seen') return;
+    saving = 'unseen';
+    seenNote = '';
+    try {
+      await post(`/rate/title/${data.title.id}`, { answer: 'not_seen' });
+      data = { ...data, title: { ...data.title, seen_state: 'unseen' } };
+      seenNote = 'Saved — marked not seen.';
+      justWatched = false;
+      onStateChange?.(data.title.id, 'unseen');
+      await reread();
+    } catch (err) {
+      seenNote = `Could not save that — ${err.message}`;
+    } finally {
+      saving = null;
+    }
+  }
+
+  // Decision 544: one row per person and title, so a tap on the standing state clears it.
+  const wish = $derived(data?.wish?.state ?? null);
+  async function setWish(state) {
+    if (!data || wishing) return;
+    const path = `/wish/${data.title.id}`;
+    wishing = state;
+    wishNote = '';
+    try {
+      const res =
+        wish === state
+          ? await api(path, { method: 'DELETE' })
+          : await api(path, { method: 'PUT', body: { state } });
+      data = { ...data, wish: { state: res?.state ?? null } };
+    } catch (err) {
+      wishNote = `Could not save that — ${err.message}`;
+    } finally {
+      wishing = null;
     }
   }
 
@@ -177,17 +189,16 @@
     const t = data.title;
     const entry = { title_id: t.id, name: t.name, kind: t.kind, tier: data.ranking.tier };
     if (!(await (onMove ?? cardMove)(entry, tier))) return;
-    const added = !data.my_verdict || t.seen_state !== 'seen';
-    const verdict = tier.verdict.toLowerCase();
+    // A first placement can answer Home's pending row as well as its seen state.
+    if (entry.tier == null || t.seen_state !== 'seen') onStateChange?.(t.id, 'seen');
+    await reread();
+    // The board takes a first placement at its next refit, so the row names the tier chosen; the
+    // tension line described the old placement.
     data = {
       ...data,
       title: { ...data.title, seen_state: 'seen' },
-      my_verdict: data.my_verdict ?? { value: ['disliked', 'fine', 'liked'].indexOf(verdict), label: verdict },
-      // The tension line described the old placement.
-      ranking: { ...data.ranking, tier: tier.index, tension: null },
-      why: null
+      ranking: data.ranking && { ...data.ranking, tier: tier.index, tension: null }
     };
-    if (added) onStateChange?.(t.id, 'seen');
   }
 
   const lead = $derived(data?.title ?? seed ?? null);
@@ -211,10 +222,6 @@
   const scores = $derived(data?.platform_ratings?.items ?? []);
   // Joined in JS: Svelte collapses the whitespace around {#if} blocks.
   const subline = $derived(lead ? [lead.year ?? '—', runtime].filter(Boolean).join(' · ') : '');
-  const pressed = (a) =>
-    a.answer !== 'not_seen' &&
-    data?.title.seen_state === 'seen' &&
-    data?.my_verdict?.label === a.answer;
 </script>
 
 {#snippet icon(name, size = 20)}
@@ -306,14 +313,48 @@
           <div class="main" class:arrive={seed && data}>
             {#if !data}
               <div class="pending" aria-hidden="true">
-                <span></span><span class="play"></span><span class="label"></span><span class="tiles"></span>
+                <span></span><span class="play"></span><span class="label"></span><span class="pair"></span>
               </div>
             {:else}
               {#if why}
                 <p class="why" data-testid="title-why">{why}</p>
               {/if}
 
-              {#if data.actions.play_on_jellyfin}
+              {#if t.is_owned === false}
+                <!-- Decision 544: what to do with a title the household does not have, where Play stands. -->
+                <div class="unowned" data-testid="title-unowned">
+                  <p class="unowned-head"><Icon name="not-in-library" size={20} />Not in the library</p>
+                  <button
+                    class={wish === 'want' ? 'btn-tinted' : 'btn-primary'}
+                    aria-pressed={wish === 'want'}
+                    aria-busy={wishing === 'want'}
+                    onclick={() => setWish('want')}
+                    data-testid="title-want"
+                  >
+                    {#if wish === 'want'}
+                      <Icon name="bookmark-fill" size={20} />On the wish list
+                    {:else}
+                      <Icon name="bookmark" size={20} />Want it
+                    {/if}
+                  </button>
+                  <div class="pair">
+                    <button
+                      class="btn-secondary"
+                      aria-haspopup="dialog"
+                      onclick={() => (choosing = true)}
+                      data-testid="title-seen-rate">Seen it, rate it</button
+                    >
+                    <button
+                      class="btn-secondary choice"
+                      aria-pressed={wish === 'not_for_me'}
+                      aria-busy={wishing === 'not_for_me'}
+                      onclick={() => setWish('not_for_me')}
+                      data-testid="title-not-for-me">Not for me</button
+                    >
+                  </div>
+                  {#if wishNote}<p class="footnote" role="status">{wishNote}</p>{/if}
+                </div>
+              {:else if data.actions.play_on_jellyfin}
                 <a class="btn-primary play" href={data.actions.play_on_jellyfin} target="_blank" rel="noreferrer">
                   {@render icon('play')}Play on Jellyfin
                 </a>
@@ -365,30 +406,33 @@
                 {/if}
               {/if}
 
-              <div class="answerblock">
-                <h3 class="list-header">Your answer</h3>
-                <AnswerTiles
-                  answers={ANSWERS}
-                  label="Your answer"
-                  testid="title-rate"
-                  compact
-                  pending={answering}
-                  {pressed}
-                  failed={refused}
-                  onAnswer={(a) => answer(a.answer)}
-                />
-                <!-- Always there, so a note arriving pushes nothing under it down. -->
-                <p class="footnote status" role="status" data-testid="title-rate-note">
-                  {#if answerNote}
-                    <span class="beat">{answerNote.saved}</span>
-                    <span class="beat reveal">{answerNote.reveal}</span>
-                  {:else if !data.my_verdict}
-                    You haven't rated this yet.
-                  {/if}
-                </p>
-              </div>
-
-              <div class="actions" class:pair={t.trailer_key}>
+              <div class="actions">
+                <!-- Two states only (§4.2); this explicit action outranks what Jellyfin inferred (§7.3). -->
+                <div class="pair">
+                  <button
+                    class="btn-secondary choice seen"
+                    class:drawn={justWatched}
+                    aria-pressed={t.seen_state === 'seen'}
+                    aria-busy={saving === 'seen'}
+                    onclick={markWatched}
+                    data-seen={t.seen_state ?? 'unseen'}
+                    data-testid="title-watched"
+                  >
+                    {@render icon('check')}{t.seen_state === 'seen' ? 'Watched' : 'Mark as watched'}
+                  </button>
+                  <button
+                    class="btn-secondary choice"
+                    aria-pressed={t.seen_state !== 'seen'}
+                    aria-busy={saving === 'unseen'}
+                    onclick={markNotSeen}
+                    data-testid="title-not-seen"
+                  >
+                    <Icon name="eye-off" size={20} />Not seen
+                  </button>
+                </div>
+                {#if seenNote}
+                  <p class="footnote" role="status" data-testid="title-seen-note">{seenNote}</p>
+                {/if}
                 {#if t.trailer_key}
                   <a
                     class="btn-secondary trailer"
@@ -400,25 +444,7 @@
                     {@render icon('trailer')}Trailer
                   </a>
                 {/if}
-                <!-- Two states only (§4.2); this explicit action outranks what Jellyfin inferred (§7.3). -->
-                <button
-                  class="btn-secondary seen"
-                  class:drawn={justWatched}
-                  aria-pressed={t.seen_state === 'seen'}
-                  onclick={toggleSeen}
-                  aria-busy={saving}
-                  data-seen={t.seen_state ?? 'unseen'}
-                >
-                  {@render icon('check')}{t.seen_state === 'seen' ? 'Watched' : 'Mark as watched'}
-                </button>
-                {#if data.actions.show_on_map}
-                  <!-- The server sends the target only once the Map ships. -->
-                  <a class="btn-secondary" href="/map?title={t.id}">Show on map</a>
-                {/if}
               </div>
-              {#if syncNote}
-                <p class="footnote syncnote" role="status">{syncNote}</p>
-              {/if}
               {#if t.kind === 'series'}
                 <!-- A Played write on a series would rewrite every episode, so it stays app-only both ways (decision 533). -->
                 <p class="footnote" data-testid="title-series-unseen-note">
@@ -454,6 +480,42 @@
             <h3 class="section-title">Cast &amp; crew</h3>
             <ul class="people strip" data-nobar>
               {#each topCredits as c (creditKey(c))}<li>{@render person(c, close)}</li>{/each}
+            </ul>
+          </section>
+        {/if}
+
+        {#if data?.shares?.length}
+          <section class="shares" data-testid="title-shares">
+            <div class="heading">
+              <h3 class="section-title">Shares a lot with</h3>
+              <p class="alt">From your library, closest first</p>
+            </div>
+            <ul class="strip" data-nobar>
+              {#each data.shares as s (s.title_id)}
+                <li>
+                  <button
+                    class="share"
+                    aria-haspopup="dialog"
+                    onclick={() => {
+                      closeThis = close;
+                      nested = s;
+                    }}
+                    data-testid="title-share"
+                  >
+                    <span class="shareart">
+                      <RatePoster title={s} showName={false} lazy />
+                      {#if s.seen}
+                        <span class="seenmark" role="img" aria-label="Seen">{@render icon('check', 14)}</span>
+                      {/if}
+                    </span>
+                    <span class="sharename">{displayNames(s).primary}</span>
+                    <span class="shareterm">
+                      <span class="dot" style:background={facetColour(s.term.facet)}></span>
+                      <span>{termLabel(s.term)}</span>
+                    </span>
+                  </button>
+                </li>
+              {/each}
             </ul>
           </section>
         {/if}
@@ -590,6 +652,22 @@
   onClose={() => (choosing = false)}
 />
 
+<!-- Outside the panel, whose transform would hold a fixed child. Back closes it alone; a person
+     closes this card too before the library filters. -->
+{#if nested}
+  <TitleDetail
+    titleId={nested.title_id}
+    seed={nested}
+    onClose={() => (nested = null)}
+    onPerson={(c) => {
+      afterClose = () => onPerson(c);
+      closeThis?.();
+    }}
+    {onStateChange}
+    {onMove}
+  />
+{/if}
+
 <style>
   p,
   h2,
@@ -673,7 +751,7 @@
     background: var(--surface-1);
   }
   .pending > .play,
-  .pending > .tiles {
+  .pending > .pair {
     width: auto;
     height: 50px;
     border-radius: var(--r-md);
@@ -681,9 +759,6 @@
   .pending > .label {
     width: 30%;
     height: 18px;
-  }
-  .pending > .tiles {
-    height: 60px;
   }
   .arrive > * {
     animation: fadeIn var(--dur-base) var(--ease) both;
@@ -715,17 +790,40 @@
     border-radius: var(--r-md);
     text-decoration: none;
   }
-  .playblock,
-  .answerblock {
+  .playblock {
     display: flex;
     flex-direction: column;
     gap: 8px;
   }
-  .answerblock {
-    padding-top: 8px;
+  .unowned {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 14px var(--card-pad);
+    border-radius: var(--r-md);
+    background: var(--surface-1);
   }
-  .answerblock .list-header {
-    padding: 0;
+  .unowned-head {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: var(--fs-body);
+    line-height: 22px;
+    font-weight: 600;
+  }
+  .unowned-head > :global(svg) {
+    flex: none;
+    color: var(--text-2);
+  }
+  .unowned > button {
+    min-height: var(--touch);
+  }
+  .unowned .pair {
+    gap: 8px;
+  }
+  .unowned .pair > button {
+    font-size: var(--fs-subhead);
+    line-height: 20px;
   }
   .ranking .list-row {
     gap: 8px;
@@ -757,36 +855,30 @@
     flex: none;
     color: var(--text-3);
   }
-  .status {
-    min-height: 18px;
-  }
-  .beat {
-    animation: fadeIn var(--dur-quick) var(--ease) both;
-  }
-  .beat.reveal {
-    animation-delay: 160ms;
-  }
   .actions {
-    display: grid;
+    display: flex;
+    flex-direction: column;
     gap: 12px;
   }
-  .actions.pair {
-    grid-template-columns: minmax(0, 2fr) minmax(0, 3fr);
+  .pair {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 12px;
   }
-  .actions > * {
-    white-space: nowrap;
+  .actions .btn-secondary {
+    min-height: var(--touch);
     border-radius: var(--r-md);
-    text-decoration: none;
+    white-space: nowrap;
   }
-  .actions .btn-secondary:not(.trailer):not(.seen) {
-    grid-column: 1 / -1;
+  /* One of two states: the standing one is a light fill, as a pressed chip is (§6.8). */
+  .choice[aria-pressed='true'] {
+    background: var(--text);
+    color: var(--bg);
+    font-weight: 600;
   }
-  .seen[aria-busy='true'] {
+  .main button[aria-busy='true'] {
     opacity: 0.6;
     transition-delay: 120ms;
-  }
-  .seen[aria-pressed='true'] > svg {
-    color: var(--positive);
   }
   .seen.drawn path {
     stroke-dasharray: 1;
@@ -903,6 +995,70 @@
   .list .job {
     font-size: var(--fs-footnote);
     line-height: 18px;
+  }
+
+  .shares {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+  }
+  .shares .strip {
+    gap: 10px;
+    list-style: none;
+    scroll-snap-type: x proximity;
+    scroll-padding: 0 var(--gutter);
+  }
+  .share {
+    width: 104px;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    padding: 0;
+    border: none;
+    background: none;
+    color: inherit;
+    text-align: left;
+    scroll-snap-align: start;
+  }
+  .shareart {
+    position: relative;
+    display: block;
+  }
+  .seenmark {
+    position: absolute;
+    top: 6px;
+    right: 6px;
+    width: 22px;
+    height: 22px;
+    border-radius: var(--r-pill);
+    background: rgba(12, 11, 10, 0.72);
+    color: var(--text);
+    display: grid;
+    place-items: center;
+  }
+  .sharename {
+    font-size: var(--fs-subhead);
+    line-height: 20px;
+    font-weight: 500;
+    display: -webkit-box;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+  }
+  .shareterm {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    min-width: 0;
+    font-size: var(--fs-footnote);
+    line-height: 18px;
+    color: var(--text-3);
+    white-space: nowrap;
+  }
+  .shareterm > :last-child {
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .more > summary {
@@ -1083,11 +1239,6 @@
       width: auto;
       align-self: flex-start;
       padding: 0 48px;
-    }
-    .actions,
-    .actions.pair {
-      display: flex;
-      flex-wrap: wrap;
     }
     .scores {
       grid-template-columns: repeat(3, minmax(0, 1fr));
