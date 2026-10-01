@@ -20,11 +20,13 @@ from typing import Any, Literal
 import asyncpg
 import numpy as np
 
+from spielplan.art.poster import url_epoch
 from spielplan.connectors.jellyfin import JellyfinClient
 from spielplan.connectors.registry import SECRETS_UNREADABLE_REASON, JellyfinConfig
 from spielplan.db import dna_terms
 from spielplan.db import pool as db_pool
 from spielplan.db.library import normalise_kinds
+from spielplan.derive.ids import APP_ID_MIN
 from spielplan.home import rail
 from spielplan.ledger import ladder, model, observations, refit
 from spielplan.ledger.hyperparams import Hyperparams
@@ -159,7 +161,7 @@ async def open_or_resume(
 ) -> RateSession:
     """One live session per person (`rate_session_one_live`); `restart=True` ends it first. A new
     session asks about films unless `kinds` says otherwise; a resumed one keeps its kind."""
-    wanted = one_kind(kinds) if kinds else ["movie"]
+    wanted = one_kind(kinds) if kinds is not None else ["movie"]
     async with conn.transaction():
         if restart:
             await conn.execute(
@@ -390,7 +392,8 @@ async def _preload(
     conn: asyncpg.Connection, s: RateSession, *, version: str | None
 ) -> list[str]:
     """The art of the card most likely next (§6: the next card preloaded): its poster and its
-    shelves'. A peek with no re-ask draw, so it may miss; it writes nothing."""
+    shelves', each URL as the client draws it. A peek with no re-ask draw, so it may miss; it
+    writes nothing."""
     served = await _observed_title_ids(conn, s.id)
     current = [s.current_card["title_id"]] if s.current_card else []
     nxt = await queue.next_cards(
@@ -401,8 +404,11 @@ async def _preload(
     shelves = await rate_shelves.shelves_for(
         conn, user_id=s.user_id, title_id=nxt[0].title_id, kind=s.kind, version=version
     )
-    ids = [nxt[0].title_id, *(film.id for shelf in shelves for film in shelf.films)]
-    return [f"/api/art/{title_id}/poster" for title_id in dict.fromkeys(ids)]
+    ids = list(dict.fromkeys([nxt[0].title_id, *(film.id for shelf in shelves for film in shelf.films)]))
+    epoch = await url_epoch(conn) if any(t >= APP_ID_MIN for t in ids) else None
+    return [
+        f"/api/art/{t}/poster" + (f"?v={epoch}" if epoch and t >= APP_ID_MIN else "") for t in ids
+    ]
 
 
 # --- the model's guess, read before the tap and shown only after it --------------------------

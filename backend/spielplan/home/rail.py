@@ -19,8 +19,7 @@ RAIL_LIMIT = 15
 # A closed set, so a typo in a caller is a loud error rather than a line nobody can filter on.
 EVENT_KINDS: tuple[str, ...] = ("verdict", "duel", "tier_edit", "session_answer", "not_seen", "undo")
 
-# Decision 117's inventory, the only thing `redact` knows about. `reveal` is deliberately absent:
-# it is the product; `rate/session.viewer_reveal` strips its numbers (decisions 486, 491).
+# Decision 117's inventory, the only thing `redact` knows about.
 GATED_KEYS: tuple[str, ...] = ("model", "rail", "suppressed", "log", "ledger", "why_numbers")
 
 MAX_LINE = 400  # Enforced here so a caller learns at the write rather than at the render.

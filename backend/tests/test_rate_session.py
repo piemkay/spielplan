@@ -15,6 +15,7 @@ import httpx
 import numpy as np
 import pytest
 
+from spielplan.art.poster import url_epoch
 from spielplan.connectors.jellyfin import JellyfinClient
 from spielplan.connectors.registry import JellyfinConfig
 from spielplan.home import rail
@@ -582,6 +583,13 @@ async def test_the_preload_names_the_next_cards_art(db, world):
 
     s = (await session.record_placement(db, s, card_token=token(s), tier=3, hp=HP)).session
     assert body["preload"][0] == f"/api/art/{s.current_card['title_id']}/poster"
+
+    # An app-minted id carries the art epoch the client puts on its own poster URLs.
+    minted = 1_000_000_001
+    await make_titles(db, [(minted, "movie", "Minted")])
+    await place(db, user, {minted: 6})
+    epoch = await url_epoch(db)
+    assert epoch and f"/api/art/{minted}/poster?v={epoch}" in (await session.payload(db, s))["preload"]
 
 
 async def test_one_live_session_per_person_and_a_resume_returns_the_same_card(db, world):
@@ -1228,7 +1236,11 @@ async def test_the_session_route_switches_the_kind_and_refuses_two(db, rate_clie
     assert series["session"]["kind"] == "series" and series["card"]["title"]["id"] == 90
     both = await client.post("/api/rate/session", json={"kinds": ["movie", "series"]})
     assert both.status_code == 422 and both.json()["detail"]["reason"] == "bad_kinds"
-    assert (await client.post("/api/rate/session", json={"kinds": []})).status_code == 422
+    refused = await client.post("/api/rate/session", json={"kinds": [], "restart": True})
+    assert refused.status_code == 422 and refused.json()["detail"]["reason"] == "bad_kinds"
+    assert (await client.get("/api/rate")).json()["card"]["token"] == series["card"]["token"], (
+        "a refused switch restarts nothing"
+    )
     assert (await client.delete("/api/rate/session")).json() == {"ended": True}
 
 
