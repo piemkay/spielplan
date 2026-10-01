@@ -139,8 +139,8 @@ async def test_the_list_groups_by_who_wants_most_wanters_first_and_copies_with_l
     assert theirs["copy_text"].splitlines()[0].startswith("Prisoners (2013)")
 
 
-async def test_another_members_likely_reads_their_own_score_among_unowned_titles(house):
-    """Likely too at the 70th percentile, maybe from the 50th, nothing below or without a ranking."""
+async def _ranked(house) -> list[int]:
+    """Both members' scores over ten unowned films, read by Jenny's own ranking alone."""
     db = house.db
     await db.execute(
         "INSERT INTO artifact_bundle (version, manifest, state) VALUES ($1, '{}'::jsonb, 'active')",
@@ -165,6 +165,12 @@ async def test_another_members_likely_reads_their_own_score_among_unowned_titles
         "VALUES ($1, 'movie', 'foldin', $2, 0.4, 25, $3)",
         house.jenny_id, b"\x00" * 256, BUNDLE,
     )
+    return fillers
+
+
+async def test_another_members_likely_reads_their_own_score_among_unowned_titles(house):
+    """Likely too at the 70th percentile, maybe from the 50th, nothing below or without a ranking."""
+    fillers = await _ranked(house)
     await _put(house.patrick, PRISONERS, "want")
     await _put(house.patrick, COLLATERAL, "want")
     await _put(house.jenny, fillers[0], "want")
@@ -179,6 +185,16 @@ async def test_another_members_likely_reads_their_own_score_among_unowned_titles
     assert likely["Prisoners"] == {"jenny": "likely"}
     assert likely["Collateral"] == {"jenny": "maybe"}
     assert likely[f"Filler {fillers[0]}"] == {"patrick": None}, "Patrick has no ranking of his own"
+
+
+async def test_a_member_who_said_not_for_me_is_never_likely_too(house):
+    """Prisoners tops Jenny's ranking, and her answer outranks it, in either member's view."""
+    await _ranked(house)
+    await _put(house.jenny, PRISONERS, "not_for_me")
+    await _put(house.patrick, PRISONERS, "want")
+    for viewer in (house.patrick, house.jenny):
+        item = (await _list(viewer))["groups"][0]["items"][0]
+        assert {o["name"]: o["likely"] for o in item["others_likely"]} == {"jenny": None}
 
 
 async def test_a_wanted_title_leaves_the_list_and_arrives_for_its_wanters_only(house):
@@ -200,7 +216,7 @@ async def test_a_wanted_title_leaves_the_list_and_arrives_for_its_wanters_only(h
     jenny_home = (await house.jenny.get("/api/home", params={"kind": "movie"})).json()
     assert jenny_home["arrived"] == []
 
-    # Seen stops the banner; the row itself stays until dismissed.
+    # Seen stops the banner; the row itself stays until dismissed or the sweep retires it.
     await db.execute(
         "INSERT INTO user_title (user_id, title_id, state) VALUES ($1, $2, 'seen')",
         house.patrick_id, PRISONERS,
