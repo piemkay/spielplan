@@ -13,7 +13,8 @@ rests only on one of them rests on nothing the owner has agreed to. **Entries 16
 numbered owner decisions**, and each is normative from the day it is taken until the amendment it
 mandates lands in `spielplan-spec_v2.1.md`; the first wave was folded into that file on 2026-09-03,
 this one on 2026-09-17, M5.2's on 2026-09-23, M5.6's and M5's on 2026-09-24, the first
-household user test's on 2026-09-25, and the second's on 2026-09-26. The decision numbering
+household user test's on 2026-09-25, the second's on 2026-09-26, and later waves on the dates the
+spec's Status block gives. The decision numbering
 is neither contiguous nor confined here: 168-178 were taken in `docs/milestones/ROADMAP-to-M5.md`
 on 2026-09-04, and 228-233 were reserved and never spent, as are the numbers M5's
 decomposition still leaves unspent inside those ranges for the sub-milestones that own each step, and
@@ -15562,6 +15563,766 @@ amended in place (v2.1.15): §6.6's model pick and caption, §9's provider list 
 **Cost.** Three pricing pages to re-read whenever a provider ships a model, as decisions 343 and
 437 said. Anthropic's structured-output system prompt is unpublished, so the write-ahead ceiling
 keeps its 804-token margin until a `count_tokens` call measures it.
+
+## Decisions taken (owner, 2026-09-30, the 1.1.0 approach)
+
+### 536. The ladder is the rating: set up once, then one tap puts each film on the person's own tier rows
+
+**What the record says.** §6.1 rates one film on three tiles, Disliked, Fine and Liked, beside a
+class-balance meter whose warning arms at fifteen ratings (decisions 491 and 527-529), and §5.2
+asks for that meter on a "~5×" figure. The title card answers on the same tiles through Rate's
+session (decision 487). A tier letter shows only on Rank and the title card's In your ranking row,
+whose sheet adds a verdict only where none stands (decision 531). §5.1's fold-in, which orders Home
+and Tonight, is fitted to the verdict alone.
+
+**Why it changes.** In the feedback that opened 1.1.0 the owner wrote: "rating of liked, fine,
+disliked doesn't really work". On the first evening 80% (Patrick) and 83% (Jenny) of verdicts were
+Liked, under a balance warning that stayed on all evening and moved nothing. Three answers order
+nothing among the films the household chooses between, and the fold-in's cross-validated ρ was 0.51
+and 0.25, in the same order. The owner proposed his own method: "1. seed. Only needed once when the
+userdata is empty. Ask to (maybe even manual through search) rank x movies/series per rank /
+letter. 2. rank new title. Show one movie per rank in a row. With the new title in the center or
+so. Ask the user to move into in the row where it fits best." A two-person lab on 2026-09-30 set it
+against two other prototypes, five answers with comparison cards after a top one and a
+pick-your-favourites grid, under a decision rule fixed before the first sitting (kept out of this
+repository, since it lists the household's films). Only the ladder passed. Its largest step held
+43% and 38% of films; two films got different steps 71% and 73% of the time; a placement took a
+median 2.2 s and 3.5 s; both scored it 7 of 7 for doing it after every film; 13 of 13 re-asks
+landed within one step; and it called 85% of held-out liked-vs-liked pairs, where the crowd called
+50%. Both ranked it first. The re-asks came minutes, not days, after the first answers, so
+repeatability is optimistic.
+
+**The decision.**
+1. **The ladder rates.** The film sits on top and the person's tiers, S to F, are rows under it,
+   each with its letter, its word and one of the person's own films in that tier as its example,
+   preferring one that shares a genre with the new film and rotating. One tap on a row places the
+   film. Rate is the ladder alone (decision 538).
+2. **A set-up, once.** A person with no ladder starts with it: for each tier from S down they tap
+   the films that belong there from a grid of their films, and a tier may stay empty. Finishing it
+   is their cut-over (decision 537).
+3. **The title card opens the same ladder.** Its In your ranking row opens it for the title. Not
+   seen stays a button, on decision 487's route. The Disliked, Fine and Liked tiles go.
+4. **The placement is the answer the model reads.** It is a `tier_edit`, `via = 'explicit'`
+   wherever the ladder opens, and implies `seen`. Every placement or move records the verdict its
+   tier stands for (decision 508) wherever the live one is none or another class, so a placed
+   title's verdict is its tier's class. The readers that ask for a class read that verdict; after a
+   member's cut-over the Ledger does not read it as a second answer.
+5. **The fold-in reads the step.** Its target is a title's tier level where the person placed it,
+   and otherwise the middle tier of its verdict's class, C, B or A (decision 510).
+6. **Tier letters show on the ladder**, as on Rank and the title card's row.
+7. **The class-balance meter and its warning go**, with §5.2's "~5×" clause: that figure compared
+   two harness set-ups and was never measured on the app.
+8. **The reveal rule stays:** nothing the model guesses shows before the tap.
+
+**Open for the design pass.** The owner, 2026-09-30: "I consider this a very rough draft and a
+decision of the approach but the actual flow is not yet finalized". The 1.1.0 design pass settles
+these, and its answers land in §6.1:
+- The words. The lab's are where it starts: S All-time favourite, A+ Loved it, A Liked it, B It was
+  fine, C Not really for me, D Didn't like it, F Hated it.
+- The set-up: which films its grid offers and how many (the person's seen films, the queue's seed
+  list, a search), whether series get a set-up of their own, and what an empty tier's row shows on
+  the ladder.
+- The example: its size, how it rotates, and what a tap on it does.
+- After the tap: whether a guess shows and in what words, the echo decision 530 gave the tiles,
+  Skip, how Undo shows, keys, the block count and its end.
+- A half-remembered film. Jenny set 9 of 22 lab films aside as "don't remember it well"; until the
+  pass says otherwise such a film is plain Not seen (owner, 2026-08-29).
+- The pace: §6's "<2 s per sweep card" went with the tiles, and the lab's medians were 2.2 s and
+  3.5 s.
+- The ladder from the title card: a sheet or a full-screen flow, and whether it keeps decision 531's
+  toast (no Undo for a first placement) or §6.1's Undo.
+- Whether the ladder keeps decision 528's one-screen fit (390x664 and 412x790, nothing scrolled).
+
+This supersedes decision 487's tiles (its route stays for Not seen), decision 491's warning (its
+learning-curve copy stands), §6.1's reveal wording under decision 510, decision 517's answer order,
+Rate's single card in decisions 527-530, and §5.2's class-balance clause. It restates decision 531's
+item 3, whose verdict now follows the tier's class, and decision 534's item 1, whose `explicit` is
+now a tap on the ladder, and it widens decision 531's letters by the ladder. The spec is amended in
+place (v2.1.16): the Companions line, §4.2's `tier_edit`, §5.1, §5.2's arms and measured
+expectations, §6's preamble, §6.0's title card, §6.1, §6.3's board and Without a drag bullets,
+§6.7's rail, §6.8, §7.3's finish prompt and §13's re-ask stream.
+
+**Cost.** Every member sits a set-up (about 50 s in the lab), and a placement is slower than a
+verdict was (a median 2.2 s and 3.5 s against 2.0 s and 2.3 s). The lab's rule still owes its
+confirmation: the spread on each person's next 15 new films, and the app's own re-asks after three
+days or more. The tiles, the balance module and the fold-in's three-class target go, and every
+board refits once.
+
+### 537. Start fresh: each member's ladder begins empty, and their earlier answers become history
+
+**What the record says.** §4.2 keeps verdict, duel and tier_edit rows append-only, and §5.2's
+Ledger and §5.1's fold-in read every live one. On 2026-09-29 each member gave about 105 verdicts,
+four in five of them Liked; the two gave 87 duels, most of them Patrick's and all Liked against
+Liked, and three tier edits.
+
+**Why it changes.** Asked what becomes of those answers under the ladder (decision 536), the owner
+chose "Start fresh": keep them as history and rebuild everything from the ladder's set-up and new
+placements. Three classes cannot be read back as seven steps, and the boards they built are the
+bunching the ladder replaces: 80 of Jenny's 102 films sat in A+, and 55 of Patrick's 104 in S.
+
+**The decision.**
+1. Start fresh is a per-member cut-over, taken when the member finishes the ladder's set-up.
+2. Their verdict, duel and tier_edit rows from before the set-up stay, append-only as before, as
+   history. From the cut-over the Ledger, the fold-in and every other reader of their answers
+   (Home's shelves, Tonight's liked films, the re-ask stream) read only the set-up and what came
+   after.
+3. Seen state and the Jellyfin sync are untouched: `user_title` keeps every seen and not seen, and
+   the cut-over writes nothing to Jellyfin.
+4. Until their set-up, a member's answers are read as today.
+
+**Open for the design pass.** What Rate and Home say to a member before their set-up, and while
+films they rated before wait to be placed again.
+
+How the cut-over is recorded, and what holds decision 508's tier cuts once no verdict is fitted, is
+the build's; the spec names it and no more. The spec is amended in place (v2.1.16): §4.2 and §6.1's
+set-up.
+
+**Cost.** Home and Tonight order from the set-up alone until placements accrue, so the first evening
+after a cut-over is less personal than the one before it. About 210 verdicts, 87 duels and 3 tier
+edits stop counting. A seen film rated before returns to Rate's queue until it is placed.
+
+### 538. Rate asks no pairs: comparisons live in Rank, rotated and matched by genre
+
+**What the record says.** §6.1's Mixed alternates single cards and pairs once fifteen ratings
+stand, and Singles and Pairs are modes of their own (decisions 492 and 519). A pair is drawn at
+random inside a verdict band, with no memory of what was just shown (§0 row 6, decision 493).
+Rank's Sharpen your list pairs a boundary title with the least-compared of its nearest neighbours
+and rests the last three pairs' titles (decision 494); Place with questions asks the middle of its
+window.
+
+**Why it changes.** The owner wrote that Rate's pair card "always shows the same movies" and gives
+"hard to compare pairs"; asked which pairs, he answered "Different genres". The draw did what it
+said. With four in five verdicts Liked, 95-97% of pairs fell in the liked band; the earliest-rated
+films came back most (Patrick's first fifteen liked films averaged 3.7 appearances, later ones 1.1
+to 1.8); and 44% of his 81 pairs shared no genre. In the lab, comparison cards after a top answer
+failed their gate as well: Patrick scored that method 3 of 7 for doing it after every film, and
+Jenny could not compare 17% of its pairs. Offered rotation and a ratings gate instead, the owner
+chose "Retire it from Rate": the ladder orders the films inside Liked on its own (decision 536), and
+comparisons stay where a person asks for them.
+
+**The decision.**
+1. Rate is the ladder alone. Mixed, Singles and Pairs, the pair card, its band draw and its "Why
+   these?" copy go.
+2. Comparisons live in Rank's Sharpen your list and Place with questions, which keep their answer
+   rows: three steps on Sharpen, never decisive (decision 201), and five on Place (decision 528).
+3. Both rotate: the least-compared title first, and a title from the last few pairs rests while
+   another can serve. Decision 494 already does this on Sharpen; Place asks the least-compared of
+   the titles nearest its window's middle.
+4. Both prefer a partner that shares a genre with the other title. Like every weighting on Rank it
+   orders and never removes, because pairs matched by likeness tie more: Patrick's pairs sharing two
+   or more genres tied 50% of the time, those sharing none 17%.
+5. The held-out tenth stays uniform and memoryless, and is now §13's only held-out comparison
+   stream. `duel.context = 'profile_battle'` gets no new rows and stays for history.
+
+**Open for the design pass.** How Rank invites a comparison now that Rate asks none.
+
+This supersedes decisions 492 and 493, decision 519's modes and pair wording, decision 491's
+pair-selection copy, the pair in decisions 528 and 529's Rate frame, and §0 row 6's "random pairs
+for profile battles", whose measurement stands. It adds to decision 494. The spec is amended in
+place (v2.1.16): §0 row 6, §4.2's `duel.context`, §6's preamble, §6.1, §6.3's comparison queue and
+Place with questions, §13's streams and Appendix A.
+
+**Cost.** Comparisons now wait for a person to open Rank; all 87 so far were given in Rate. The
+rest window and how far Place looks from its middle are build constants. A genre match can still
+manufacture ties, which the re-ask stream would show.
+
+### 539. Tonight's pairs are the person's own liked films, chosen to learn tonight's mood
+
+**What the record says.** On 2026-08-29 the owner replaced v2.0's seen-only mood pairs with votes on
+real candidates (Appendix A: "candidate votes supersede the seen-only mood pairs"), and the 54a-54h
+fold made that round adaptive: §6.2 step 4 picks each pair to settle the rank-3/4 shortlist boundary
+at `boundary_z` 0.6 (decision 214), for a median of about ten pairs (decision 477), a cap of 20 and an
+escape from the sixth. Decisions 480 and 532 say the mood-question round stays deleted. Decision 154
+makes `neither` a rejection of two live candidates, and decision 223 draws the one-in-ten hold-out
+from the candidate pool, in solo keyed on the person.
+
+**Why it changes.** The owner, 2026-09-30: "I would prefer to only show titles to the user that the
+user has already seen. And craft the pairs to optimize knowledge gain. To really get the mood of the
+user". On the one production evening (2026-09-29) about 90% of the films shown were unseen by the
+person answering, nobody answered either or neither (0 of 31), one seat ran to the cap of 20, and all
+three finalists were titles that had been asked about: the round kept shortlist books rather than
+reading a mood. The corpus's +0.088 AUC at three answers came from a person's seen films set against
+their other seen films (an oracle upper bound); its 0.000 for questions off the shortlist came from a
+simulation with no evening term to find. v1.1 said it first: asking about unseen titles "measures
+poster appeal, not mood". Of four options the owner chose the seen-film round over one ending on
+candidate pairs, five random pairs, and today's round.
+
+**The decision.**
+1. **A member's pairs are their own films**: both of the evening's kind, seen and placed A or above
+   on their ladder (decision 536). The mood read from the answers (chosen-minus-rejected DNA, centred
+   on tonight's pool) tilts the member's Ledger, rank-standardised over the pool (decision 477), and
+   so chooses among the candidates; steps 5 to 8 combine, ballot and reveal as before.
+2. **Each pair is the one expected to teach the most about tonight's mood**, and the round is short
+   and adaptive. The per-candidate posterior, the straddle objective, the candidate-pair search and
+   `boundary_z` retire.
+3. **The four answers keep their values** and change meaning: `A` or `B` names the film nearer
+   tonight's mood, `either` says the difference does not matter tonight, `neither` says tonight lies
+   away from both. No answer is a Ledger observation.
+4. **The hold-out stays in rooms**: one pair in ten, sealed as decision 223 says, drawn uniformly
+   from the seat's own pairs. It now measures whether the mood read is consistent, not whether it
+   carries to unseen films. Solo asks none, since it stores nothing (decision 532).
+5. **A guest gets well-known owned films**, which they need not have seen, chosen the same way.
+6. **Too little to ask about, no round.** A seat with too few films placed A or above of the
+   evening's kind (for a guest, too few well-known ones) ends at once with no tilt, by decision 215's
+   path. That is every series night today.
+
+**Open for the design pass.**
+- The question, the answer words and any line under them, and whether a side can be set aside as
+  not remembered (in the rating lab one person could not place 9 of her 22 seen films).
+- The numbers: the stop rule, the typical round, the cap, the pair from which the escape shows, and
+  the fewest films that make a round.
+- What a pair also holds level (how much each film was liked, runtime), whether the lobby's vetoes
+  keep a film out of the pairs, and how films rotate between evenings.
+- How the mood is represented (today's term tilt, or a few directions computed from tonight's pool,
+  which the research proposes to damp rare terms) and how far it moves a candidate against stable
+  taste.
+- What counts as well-known for a guest.
+- Whether the picks or the reveal name the mood read, and solo's provenance line.
+
+This reverses the 2026-08-29 "candidate votes supersede the seen-only mood pairs" and the sentence
+decisions 480 and 532 share, "the mood-question round stays deleted"; 480's vetoes and 532's order,
+the round and then the picks, stand. It supersedes 54c's candidate objective, decision 214's
+`boundary_z` and decision 477's round-length figures, gives decision 154's `either` and `neither` the
+meanings above, and moves decision 223's hold-out onto the seat's own pairs. Decisions 166, 215, 216,
+218, 477's scale and 507 stand. The spec is amended in place (v2.1.16): §0 row 4, §4.2's
+`session_answer` comment, §6.2's preamble and steps 4 and 8, §13, §14 risk 6 and Appendix A.
+
+**Cost.** Whether a mood read from seen films carries to unseen ones is unmeasured with real
+answers, and the room hold-out cannot tell. Two measured results are overridden by name: the corpus's
+0.000 for off-shortlist questions, and §0 row 6's null for clever pair selection, set aside on the
+corpus's own simulation (which it flags as inflating) that puts adaptive choice at two to four
+questions' worth on a small round. The seen-only promise holds for members, not guests. Before
+their set-up (decision 537) members have few or no placements, so their seats skip the round. The
+candidate search, the heaviest code in Tonight, goes; every room test fixture needs seen, placed
+films.
+
+### 540. Taste reads your own ranking by DNA term, on a page opened from You, and says where you and {other} part and meet
+
+**What the record says.** §6.5 compares any two accounts through a two-slot picker in four tabs:
+a facet silhouette over the 11 DNA facets by a "Ledger-weighted affinity" it never defines, the
+seven taste axes of CONTENT_TASTE §5, a divisive-title list that must beat a crowd-divisive
+baseline, and the shared sweet spot. §5.3 files nightly taste-viz caches. §12 schedules Taste at M6.
+Decision 488 took it out of navigation until then and left where it is reached from to M6. None of
+it is built.
+
+**Why it changes.** The owner's 1.1.0 feedback, 2026-09-30: "Also the earlier defered topics like
+the map and taste profile." Asked what a taste profile should be, the owner chose "Personal page +
+You and Jenny". Measured read-only on the household's install on 2026-09-30, §6.5 as written has
+little to show:
+- The facet silhouette is flat. Nearly every rated film carries every facet, and each facet's
+  affinity sits within 0.05 of the person's mean.
+- The seven axes have no data. No bundle carries their loadings, and the curator's loading
+  matrices no longer exist.
+- Of 74 films both members had rated, 1 had opposite verdicts. Most Ledger gaps were ordering
+  within one verdict.
+- The shared sweet spot already ships as Home's shelf 4.
+
+What does separate people is the Ledger read per DNA term against the middle of each person's own
+ranking. It named 8 to 14 terms a side for each member, against about 2 by chance, and found 11
+term-level partings between them, against about 4. It holds at 80% liked, because a ranking runs
+from top to bottom however lopsided the answers are.
+
+**The decision.**
+1. **Your taste.** A page opened from You, not a tab. It names the DNA terms that sit high in the
+   person's own ranking and those that land lower, read against the middle of that ranking. Each
+   term is shown with three of the person's own titles that carry it. Lower is relative and never
+   reads as a dislike.
+2. **You and {other}.** A section of the same page. It says where the person's ranking and the
+   other member's part and where they meet, named in DNA terms and read on titles both have placed.
+   {other} is the member Home's shared shelf names, so there is no picker. A parting predicts that
+   one of them may enjoy such a night a little less than usual, never hate (DNA_MODEL §5.3).
+3. **A parting beats chance, not the crowd.** For term-level partings, §6.5's "contestedness must
+   beat the crowd-divisive baseline" gives way to a test against chance on the titles both placed.
+   The baseline still binds the title-level list in item 5.
+4. **Cut:** the facet silhouette, the two-slot picker, the sweet-spot tab (Home's shelf is that
+   tab) and §5.3's taste-viz caches.
+5. **Deferred, each until its preconditions hold:**
+   - The title-level divisive list waits for the app to read a crowd-divisive baseline and for both
+     members' orders to rest on their own comparisons. The bundle already ships per-title residual
+     variance that could serve as the baseline, and nothing reads it.
+   - The seven taste axes wait for the curator to ship their loadings as a bundle artifact, and for
+     a measurement showing a member's position reads reliably from a household's own answers. The
+     eighth axis stays held back.
+
+**Open for the design pass.**
+- The page's words, the order of its parts, where its row sits in You, and the section's title.
+- The test that names a term and its threshold, how many terms a side, and how the three titles
+  are chosen and kept from repeating (correlated terms, one franchise behind a term).
+- How many placements each part needs before it shows, per kind, and what it says until then;
+  series, whose placements are few.
+- Whether the page sends a person to Rank's Sharpen your list (decision 538) where their order is
+  mostly the model's guess.
+- What "meet" names, whether a parting shows titles, whether the section links to Home's shared
+  shelf, and what each member sees of the other's ranking.
+- Re-reading the counts above on the ladder's rankings after the fresh start (decisions 536, 537).
+
+This supersedes §6.5's four tabs and its two-slot picker. It also settles where Taste is reached
+from, which decision 488 left to M6: from You. The spec is amended in place (v2.1.16): §3.2's You,
+§6's surface names, §5.3's jobs table, §6.5 and Appendix A's Taste row. §12's M6 row loses its
+taste comparison viz.
+
+**Cost.** Two queries per page read, one over the person's placed titles and one over the titles
+both placed. No table, job, cache or bundle change. Until each member's order within a tier rests on
+their own comparisons, part of a parting is the model's guess. The section also shows each member
+where the other ranks a term higher.
+
+### 541. The Map is a board of named regions on four fixed axes, and every title card shows what it shares a lot with
+
+**What the record says.** §6.4's v1 Map is a zoomable dot scatter on two per-facet bipolar axes,
+each read from an authored `<facet>.tsv`, with three lenses, a wander view whose edges are shared
+terms and an LLM-parsed compositional search; §12 files it at M6 with no exit criterion. No axis
+file was ever authored and the bundle ships none (decision 173, which left commissioning them to the
+owner), so under decision 488 the Map is absent from navigation and the title card has no Show on
+map. On 2026-08-29 the owner called the Map "a big open exploration point" (proposal 84, provenance
+only).
+
+**Why it changes.** On 2026-09-30 the owner asked for "the earlier defered topics like the map and
+taste profile" and chose "Region board + 'Shares a lot with'" over the dot scatter, the row alone and
+a typed search. Measured on the household's owned films that day, the scatter does not fit: the
+spec's weighted mean puts 365 of 728 films exactly on a pole of light ↔ heavy and 173 of 707 on the
+four corners of the default pair, and a phone cannot give some 700 dots finger-sized targets. The
+corpus project has already authored ten cross-facet mood axes (`scripts/_dm_axes.py`); all 348 of
+their term ids resolve in the active vocabulary, and DNA_MODEL §3.2-3.3 found they buy words rather
+than signal, which is what a Map is for. Four of them place 677-728 of 761 owned films each and
+overlap at |r| ≤ 0.50; the rest redraw the same board (light ↔ heavy moves with easy ↔ demanding and
+safe ↔ scary at 0.75). The owner framed the whole 1.1.0 set as "a very rough draft and a decision of
+the approach but the actual flow is not yet finalized", so this records the approach and leaves the
+flow to the design pass.
+
+**The decision.**
+1. **The Map tab is a board of named regions** over the owned titles of one kind, on two of four
+   fixed axes: light ↔ heavy, calm ↔ intense, grounded ↔ fantastical and serious ↔ comic, asked as
+   How heavy? / How much energy? / How real? / How funny?. A region is named in its axes' words and
+   opens its titles; one lens shows what the person has seen, one what is for them; Show on map
+   lands on the board at the title's region.
+2. **A title's place** on an axis is the weighted mean of its terms' axis weights over both tiers,
+   kept near the middle while little evidence carries it, so thin inferred evidence does not reach a
+   pole. A title carrying none of an axis's terms is not placed on it and is counted apart, never set
+   at the centre.
+3. **The axes ship in code as a fixed list, versioned with the vocabulary.** A term the active
+   vocabulary does not carry places nothing, and a vocabulary change (decision 163) re-authors the
+   list rather than silently emptying the board. No axis artifact is read (decision 542).
+4. **Shares a lot with, on every title card:** the owned titles of the card's own kind that share the
+   most DNA terms with it, read over both tiers as Home's shelf 1 reads them (decision 513), each
+   captioned with the strongest term the two share. A tap opens that title's card, and Back walks
+   back. It replaces the wander view.
+5. **Deferred to M7's row:** the dot scatter with zoom/pan and its facet-colour lens; compositional
+   search with its query-parsing task and flywheel feed; the UMAP layout. **Cut:** the flywheel
+   queue docked on the Map, an admin queue on a member surface.
+6. The Map enters navigation, and Show on map appears, the day the board ships (decision 488).
+
+**Open for the design pass.**
+- The regions: how many, their bounds, their names, and how titles counted apart are shown.
+- The axis questions' wording, the default pair and how the board is turned.
+- The lenses' names and what counts as "for them".
+- What a region opens, and in what order.
+- Where Show on map lands for a title the household does not own, and how it marks the region.
+- The Shares a lot with row: how many titles, whether titles the person has seen are among them, and
+  where it sits on the card.
+- The Map's copy throughout, in the member register (§6.8).
+
+This supersedes §6.4's axis scatter, its per-facet artifact and its wander view, and answers
+decision 173's open commission: the eleven per-facet axes are not authored. The card's row takes the
+title's own kind, as shelf 1 does, overriding decision 198's caller-kind partition. Decision 488
+stands. The spec is amended in place (v2.1.16): §6.0's title card, §6.4, §6.7's rail, §8.4's feeds,
+§10's rebuild note and §12's M6 and M7 rows.
+
+**Cost.** A region hides a film's exact place, a series board is thin (128 owned series), and the tab
+bar gains the Map. The axes change only in code. Some captions ride on inferred terms and read oddly,
+as shelf 1's can. Compositional search's measured edge over embedding arithmetic (p@10 0.52 vs 0.46)
+waits with it.
+
+### 542. The per-facet axis machinery is deleted, and Tonight's split is by person alone
+
+**What the record says.** §6.4 names one authored `<facet>.tsv` per facet as the axis artifact
+(decisions 173 and 227). The importer loads it and reports its absence, §6.6 Corrections gives it a
+third ledger editor (decision 342), and §6.2 reads it twice: step 5's facet split zeroes the
+contested axis and reserves the third finalist slot, and the second where needed, for its opposite
+pole, labelled through `session_result.reserved` (decisions 220 and 221); step 4 breaks ties toward
+the pair spanning the widest axis. With no axis loaded the split is by person (decision 479).
+Production holds no axis row, and the editor has never saved one. On 2026-09-27 the owner answered
+a proposal to delete the subsystem: "LEt's leave it as is for now."
+
+**Why it changes.** On 2026-09-30, asked whether the machinery that "has never held a row" should go
+with the Map work, the owner chose "Delete it". After decision 541 the Map reads a fixed list and
+nothing reads the artifact. Storing the Map's axes in it would file cross-facet axes under
+single-facet names, and would switch Tonight from "one for each of you" to a facet split no evening
+has tried, in the release that rewrites Tonight (decision 539). The subsystem is roughly 780
+production and 800 test lines, part of them Tonight code decision 539 removes anyway.
+
+**The decision.**
+1. Deleted: the `<facet>.tsv` artifact, the importer's axis loader and its report line, the admin
+   Facet axes editor and the Data card's axis notice, and Tonight's facet split — the contested
+   axis, its zeroing, the reserved pole slots, their copy and the divergent-answers trigger that fed
+   only that branch (decision 217 measured it firing on 84–97% of evenings). Step 4's widest-axis
+   tie-break goes in decision 539's rewrite of the round.
+2. A new migration drops `dna_axis`, `dna_axis_weight` and `session_result.reserved`. Production
+   holds no axis row, so no pole slot was ever reserved there. Applied migrations are not edited.
+3. Tonight's split is by person alone, on D (decision 479, without its "no axis" condition).
+4. Corrections keeps two editors: DNA verdicts and credit facts.
+
+This supersedes decisions 220, 221, 227, 261, 264 and 342 and decision 173's axis clauses, and
+reverses the owner's 2026-09-27 answer for this subsystem alone. The spec is amended in place
+(v2.1.16): §0's group row, §4.2's `session_result`, §6.2 steps 5 and 7, §6.6 Corrections and §12's
+M5.6 row.
+
+**Cost.** Nobody can author an axis in the app; the Map's four change only in code (decision 541).
+The e2e fixture's axis files and the tests over the facet branch go too.
+
+### 543. The model pick lists every priced model with its cost per title, and §6.6's assignment names extraction alone
+
+**What the record says.** Decision 535 gave each provider card a free model field that suggests
+every id the price table prices, newest first, with any other id typed (§6.6). The field is
+pre-filled with the stored model or the provider default and tied to a `<datalist>`. Decision 339
+narrowed §6.6's per-task assignment to extraction and left the sentence owed; §6.6 still lists
+"extraction / query parsing / conflict phrasing", and §9 "per-task assignment".
+
+**Why it changes.** The owner, 2026-09-30: "anthrophic showed multiple models. openai and gemini
+only one model". Browsers show only the datalist options that match the field's value
+(whatwg/html#9986), and the field always holds a full id, so a card offers little beyond its own
+model while the table prices 13 Anthropic, 20 OpenAI and 11 Gemini ids. The ids also say nothing
+about cost, which runs about 180x across OpenAI's rows ($0.0027 to $0.49 a title, 2026-09-30).
+
+**The decision.**
+1. The model pick is a list of every id the price table prices today, newest first, each with its
+   estimated cost per title from the estimate the confirm shows (decision 450). The confirm's
+   figure is still the one that counts.
+2. Its last entry, "Another model…", takes any other id. An unpriced id stays unpriced and parks
+   until a price pair is set (decision 343).
+3. §6.6 and §9 name one assignment, for extraction, the one task with a caller. A task that gains a
+   caller brings its own slot (decision 339).
+
+**Open for the design pass.** The option's words and how its figure is spelled; whether the figure
+counts the pass count and a stored price override, or the table price for one pass.
+
+This supersedes decision 535's item 3; its other items stand, and decision 339's owed sentence
+lands. The spec is amended in place (v2.1.16): §6.2 step 5's conflict copy, §6.6's Budget & AI
+bullet, §9's admin settings and §12's M5.7 prose.
+
+**Cost.** A figure per listed id on every card read, from the table and estimator that exist. The
+figure assumes the default's measured output for every model, so one that thinks longer costs more
+than it says; on production's first 16 titles the estimate sat within about 30% of the bill on
+both providers used. A row whose price lapses (the `gpt-5` rows on 2026-12-11) leaves the list that
+day.
+
+### 544. Home suggests films worth getting from beyond the library, and the household keeps a wish list
+
+**What the record says.** Every ranking shelf on Home, the shared sweet spot and Tonight's pool
+read owned titles only (§6.0, decisions 475 and 513). `user_score` scores every title in the
+corpus, owned or not, and the corpus carries DNA for about 11,300 titles against roughly 760 owned
+films. A title outside the library reaches a person only by search, and its card's Play says it is
+not in the library. Nothing records that someone wants a title.
+
+**Why it changes.** The owner, 2026-10-01: "After the users have rated multiple entries we should be
+able to give recommendations for movies they might like but aren't in the library." The scores
+and the why-line already exist for those titles; what is missing is a place to show them and a way
+to act on one. Design canvas: https://claude.ai/artifact/SmSBSMgW21T3MmSvgKgf7a (2026-10-01).
+
+**The decision.**
+1. **Worth getting** is a Home shelf after the table's others: the unowned titles of the kind the
+   person would enjoy most, by the same score and the same leave-outs as the ranking shelves
+   (decision 512), each card naming the liked film it is most like (decision 515's line). It is
+   absent, with no placeholder, until the person has rated enough titles of the kind; then it
+   appears. It neither claims nor is thinned, and the floor of three holds.
+2. Its See all opens the whole list in a sheet, **For you** or **For you and {other}**, the second
+   ranked as the shared sweet spot is, over unowned titles.
+3. An unowned title's card puts **Want it**, **Seen it, rate it** and **Not for me** where Play
+   stands. Seen it opens the ladder (decision 536); the title leaves the list and its rating counts
+   like any other. Not for me hides the title from this person's list only and is no rating.
+4. A **wish list** for the household, from a row under the shelf: grouped by who wants each title,
+   each row saying whether the other would likely enjoy it, with Me too and Remove, and **Copy the
+   list** (title, year and an IMDb link, else TMDB). A title leaves the list when it becomes owned
+   (§7.2's resolve sets `is_owned`), and each person who wanted it gets an in-app banner, and a push
+   where they allow one, saying it arrived; its card in New in the library carries a wanted mark.
+5. One new table, `wish(user_id, title_id, state, created_at)`, state `want` or `not_for_me`, by a
+   new migration. Nothing is fetched, bought or requested from another service.
+
+**Open for the design pass.** How many ratings open the shelf (the canvas guessed 20 of the kind);
+whether a title with no crowd rating and only inferred DNA may appear; series now or films first;
+who sees the wish list (every member, or the admin to copy it out); the arrival banner's words and
+how long it stays; whether Not for me can be undone, and where.
+
+The spec is amended in place (v2.1.16): §4.2's `wish`, §6.0's shelf table, shelf rules and title
+card.
+
+**Cost.** A second read of `user_score` per kind on Home, over unowned titles, and a small sheet,
+card branch and table. Scores for unowned titles with no crowd rating and thin DNA are weaker than
+the library's; the design pass decides whether they appear. Copy the list hands off by hand; a
+Radarr or Jellyseerr request would be a connector of its own and is not part of this.
+
+## Decisions taken (owner, 2026-10-01, the 1.1.0 design pass)
+
+### 545. Rate is drawn as shelves: the person's own films lead, and no letter shows
+
+**What the record says.** Decision 536 draws the ladder as tier rows, each with its letter, its word
+and one of the person's films as its example, and item 6 shows the letters. The design brief of
+2026-10-01 answered the example's size as a 26x39 poster beside its name, the whole row one button,
+and kept decision 528's one-screen fit at 390x664 and 412x790.
+
+**Why it changes.** Shown the brief's screens, the owner wanted the person to relate the new film
+"to other movies they already classified": the references lead, not the rank. One small example per
+row does not carry that.
+
+**The decision.**
+1. **The film on top:** a 2:3 poster at 84x126 with a soft shadow, its title in the serif face, year
+   and runtime, and a "Not seen" capsule.
+2. **Seven shelves under it, S to F.** Each holds up to four of the person's own placed films of
+   that tier as 44x64 posters, the first sharing a genre with the film on top, the rest rotating.
+   The tier's word is a quiet right-aligned caption. No tier letter shows on Rate.
+3. **One tap on a shelf places the film.** Holding a shelf opens a larger view of its films (76x113);
+   sliding moves between shelves, and release places.
+4. **The top bar:** a round Undo button left; "Films" with "n of 15" as its subtitle in the centre;
+   the avatar right.
+5. **After a placement** the metadata line briefly reads "{film} · {tier word}" with a check, and the
+   placed shelf lights in ember with dark text.
+6. All seven shelves fit without scrolling on a 390x844 phone.
+
+This supersedes decision 536's items 1 and 6 and its example, and the brief's answers on the
+example's size, a tap on it and the one-screen fit numbers. Decision 536's other items stand. The
+spec is amended in place (v2.1.17): §6, §6.1, §6.3's Without a drag and §6.8.
+
+**Cost.** Up to 28 posters per placement where seven stood; a person with few placed films sees thin
+shelves until placements accrue.
+
+**Design reference.** Canvas https://claude.ai/artifact/VD4kvtiYKnMmrBjWjzuPSs, boards Main.dc.html; the card's row on TitleCard.dc.html. The boards show layout, sizes and copy; where they differ from this decision or the spec, the spec wins.
+
+### 546. Only "Not seen": a half-remembered film is answered Not seen
+
+**What the record says.** The owner's 2026-08-29 rule makes a film one cannot recall plain `unseen`.
+Decisions 536 and 539 left a half-remembered film open, and the design brief proposed a separate
+"Don't remember it well" answer, with the key R, that writes no step and rests the film 90 days.
+
+**Why it changes.** The owner, 2026-10-01: "we treat it the same".
+
+**The decision.** Rate, the title card and Tonight offer Not seen and no other set-aside answer. A
+half-remembered film is answered Not seen.
+
+This confirms the 2026-08-29 rule and supersedes the brief's proposal. No spec text changes: §4.2
+and §6.1 already say it.
+
+**Cost.** A film watched but half-remembered is marked unplayed in Jellyfin (§7.3), as today.
+
+**Design reference.** Canvas https://claude.ai/artifact/VD4kvtiYKnMmrBjWjzuPSs, boards Main.dc.html. The boards show layout, sizes and copy; where they differ from this decision or the spec, the spec wins.
+
+### 547. The set-up is step by step, best first, from films ordered by platform score
+
+**What the record says.** Decision 536 item 2: for each tier from S down the person taps the films
+that belong there from a grid of their films. The design brief answered with 11 of the person's own
+seen films, the same set on every step.
+
+**Why it changes.** The owner chose a set-up that starts where a person's extremes are likeliest and
+lets them find any film by name.
+
+**The decision.**
+1. Seven steps, S down to F. Each offers films ordered by platform score (IMDb and the others in
+   `display.platform_rating`): the top steps open on the highest-rated films, the bottom steps on
+   the lowest, each step's start moving toward the middle.
+2. 12 films a page, with "Show 12 more" and no end. A search field on every step finds a film by
+   name.
+3. The films the person put on the step above show above the grid as a small strip, "not quite
+   these". A step may stay empty. Watched marks from Jellyfin show on the posters.
+4. Finishing the last step is the cut-over (decision 537).
+5. Ordering a list a person picks from is not a model feature, so §4.1 rule 3 holds: the platform
+   score orders the grid and enters no model.
+
+This supersedes decision 536 item 2's grid and the brief's set-up answer. The spec is amended in
+place (v2.1.17): §6.1's set-up.
+
+**Cost.** The grid leans toward famous films; a person's own favourites that the crowd rates lower
+are found by search or further pages.
+
+**Design reference.** Canvas https://claude.ai/artifact/VD4kvtiYKnMmrBjWjzuPSs, boards SetupOptA.dc.html, SetupDone.dc.html, RateBeforeSetup.dc.html, HomeBeforeSetup.dc.html. The boards show layout, sizes and copy; where they differ from this decision or the spec, the spec wins.
+
+### 548. The Map is deferred out of 1.1.0; Shares a lot with stays
+
+**What the record says.** Decision 541 makes the Map tab a board of named regions on four fixed axes,
+shipped in code, with two lenses and Show on map, and adds Shares a lot with to every title card. The
+design brief drew a 3x3 board.
+
+**Why it changes.** The owner, 2026-10-01: "I don't like any. Let's not include it in 1.1.0".
+
+**The decision.**
+1. Reversed from decision 541: item 1 (the board, its axes and lenses, the Map tab and Show on map),
+   item 2 (a title's place on an axis), item 3 (the axes in code) and item 6 (the Map enters
+   navigation with the board). The Map has no chosen form.
+2. The Map moves to M7's row with compositional search and the UMAP lens. Decision 488 keeps it out
+   of navigation: the tab bar stays Home, Rate, Tonight, Rank, and no card offers Show on map.
+3. Decision 541 item 4, **Shares a lot with**, stays on every title card; it needs no map. Item 5's
+   cut of the flywheel queue docked on the Map stands.
+4. Decision 542 stands: the per-facet axis machinery is still deleted.
+
+The spec is amended in place (v2.1.17): §6, §6.0, §6.4, §10 and §12's M6 and M7 rows.
+
+**Cost.** 1.1.0 ships no exploration surface beyond search, Home's frontier shelf and Shares a lot
+with.
+
+**Design reference.** Canvas https://claude.ai/artifact/VD4kvtiYKnMmrBjWjzuPSs, boards TitleCard.dc.html (Shares a lot with, no Show on map) and every board's tab bar. The boards show layout, sizes and copy; where they differ from this decision or the spec, the spec wins.
+
+### 549. Taste is a chart per DNA term, and compares any two members
+
+**What the record says.** Decision 540 item 2 names one partner, {other}, the member Home's shared
+shelf names, with no picker, and item 4 cuts §6.5's two-slot picker. Item 1 lists terms high and low,
+each with three titles.
+
+**Why it changes.** The owner, 2026-10-01: "Don't hard code Patrick and Jenny. The app might have any
+number of users ... add a compare option that allows to select 2 users".
+
+**The decision.**
+1. **Your taste** (from You) shows one row per DNA term: the facet dot and the term's label; a short
+   track with the person's marker, left where the term lands lower and right where it sits high,
+   centred on the person's own middle (the mean ladder step of their placed films carrying the
+   term minus their overall mean step, scaled so their strongest term sits near the end); and up to
+   four of their films carrying the term as posters with no titles, highest-placed first on a high
+   row and lowest first on a low one, with a "+N" tile for the rest.
+2. First the 5 terms that sit highest and the 5 that land lowest, then "Show all {n} terms". A term
+   needs at least 4 of the person's placed films carrying it in the extracted tier.
+3. **Compare** opens the same chart for two members chosen in two seats: any two members, defaulting
+   to the viewer and the member they share most placed films with. A member with fewer than 20
+   placed films is listed but cannot be picked, with the reason. Each row carries both markers, told
+   apart by the initials inside them and not by colour; its posters are films both placed, first.
+   "Most alike" and "Most different" show 5 each, then Show all with a facet filter and a sort.
+4. **Privacy:** anyone may compare any two members, and everyone sees the terms and both markers.
+   The films behind a term show only to the two members compared. Nobody sees another member's
+   letters, order or ladder size.
+
+This reverses decision 540 items 2 and 4's picker cut, and supersedes its item 1's three titles, its
+item 3's chance test (rows are ordered, not tested) and all the brief's Taste answers. Decision 540's
+other cuts and its item 5 deferrals stand. The spec is amended in place (v2.1.17): §6.5 and Appendix
+A.
+
+**Cost.** One query per member per chart over placed films and their extracted terms. A term's row is
+read on a few films and moves as placements accrue; until a person's order within a tier rests on
+their own comparisons, part of each marker is the model's guess.
+
+**Design reference.** Canvas https://claude.ai/artifact/VD4kvtiYKnMmrBjWjzuPSs, boards You.dc.html, TasteChartMe.dc.html, TasteChart.dc.html, TasteChartAll.dc.html, TasteChartDesktop.dc.html. The boards show layout, sizes and copy; where they differ from this decision or the spec, the spec wins.
+
+### 550. The design pass settles the open items
+
+**What the record says.** Decisions 536-539 and 543 leave their screens, words and numbers to the
+1.1.0 design pass. The design brief of 2026-10-01 (part C) answered them.
+
+**Why it changes.** The owner accepted the brief's answers except where decisions 545-549 replace
+them.
+
+**The decision.**
+1. **The ladder (536).** The words: S All-time favourite, A+ Loved it, A Liked it, B It was fine,
+   C Not really for me, D Didn't like it, F Hated it; they replace Liked, Fine and Disliked on Rank's
+   heads and the card's row. An empty shelf keeps its size and word and still places. The first
+   poster on a shelf is one sharing a genre with the film on top, then the one shown least this
+   sitting; never the film being placed, always the same kind. Series get no set-up and go straight
+   onto the ladder. No guess shows after the tap; with Show the numbers on, the echo adds the guess
+   and its cdf. The echo stays 1.6 s, for placements only. Undo is always visible, dimmed with
+   nothing to undo, takes back the last placement or Not seen in the block, and the film slides back
+   in. Keys: 1-7 place from the top (1 = S), N Not seen, Z Undo; 1-7 and Esc in the card's sheet; a
+   custom set of more than nine tiers keys its first nine; no hints are drawn. Blocks of 15, ending
+   "That's 15.", "Your suggestions just got sharper.", "{n} films you rated before still wait for
+   their step.", then "Rate 15 more" and "Back to Home". Not seen on a placed film changes the seen
+   state alone: the step stays, Rank keeps the title, and Watched puts it back. About one Rate card
+   in ten is a film placed 3 or more days ago, shown like any other with no mark of its step; a
+   different answer moves it, and it counts toward the 15. A rewatch from the finish prompt is a new
+   placement, not a re-ask. A placement's target is a median of 3.5 s or less, film shown to tap,
+   with no timer; "<2 s" retires. From the title card the ladder is a short sheet of the same
+   shelves over the card, closed by Back, Done or a swipe, naming the current step by its word, and
+   keeping decision 531's toast.
+2. **Before the set-up (537).** Rate shows one card, "Rate on your own ladder.", a short
+   explanation, "Your {n} earlier ratings are kept as history…" and "Set up my ladder", and is closed
+   until the set-up is done. Home's notice card reads "Set up your ladder.", "until then your shelves
+   keep using your earlier ratings" and "Set up my ladder", and the shelves stay. Rank shows a "Set
+   up your ladder." card over a read-only board: no drag, no Needs a look, no Place with questions;
+   the card's row reads "Set up your ladder first" and goes to Rate. Films rated before come first
+   on Rate with the reason "You rated this one before."; the block end and the set-up's last screen
+   count them; Home's pending row reads "Rate {n} again" when no just-watched title waits. The old
+   answer is never shown.
+3. **Rank's invitation (538).** The Needs a look bar carries a tinted Sharpen button on the phone.
+   With nothing between two tiers it reads "The order inside each step is still mostly our guess"
+   until 30 comparisons of the kind are answered since the set-up. Sharpen's reason names the step
+   and a shared genre ("Both in A+ · both crime films"), and it has no skip. Nothing on Rate or Home
+   pushes it.
+4. **Tonight's round (539).** "Which feels more like tonight?", "This one" under each poster,
+   "Either is fine" and "Neither tonight"; posters open About and never answer. The first pair alone
+   carries a line under the answers ("Two films you've liked. Tap the one closer to tonight's mood —
+   we'll find something new in that spirit."; a guest "Well-known films — you don't need to have
+   seen them."; a room seat none), and the door and lobby say the same in a sentence each. The round
+   stops once 3 or more answers are in and the top three picks have held for 2 answers running;
+   usually about 5, cap 8, sooner only when no level pair is left. The escape shows from pair 4,
+   quiet text before. A round needs 8 films of the kind placed A or above (a guest, 8 well-known
+   owned films), else the seat goes straight to the picks with a one-line why. A pair's films are at
+   most one step apart and within 30 minutes of each other; a film carrying a vetoed term is never
+   in a pair; no pair repeats in an evening, and a film returns with a new partner only once every
+   eligible film has shown; the sealed draw picks among near-best pairs, so evenings differ. The
+   mood is 5 directions computed from tonight's pool, and it re-ranks only the person's top 30
+   unseen by usual taste; Reshuffle walks on down that order, then past the 30. Well-known is owned
+   with at least 30,000 crowd ratings. Solo's provenance line reads "Your mood tonight — {term} ·
+   {term} · fits in {time}", "No strong mood tonight — your usual favourites · …" below half a pool
+   standard deviation, or "Your usual favourites · …" with no round.
+5. **Shares a lot with (541 item 4).** Up to 8 owned titles of the card's kind, absent under 3, seen
+   ones included with their mark, each captioned with its shared term, after Cast & crew and before
+   "More about this film".
+6. **The model pick (543).** A plain select of "{model} · $0.11 a title", " · default" on the default,
+   " · leaves 11 Dec" only where a price ends with nothing after it, and "Another model…" last; a
+   stored id the list does not price shows as Another model… with the id filled in. The figure is
+   one title at one pass at the shipped table price, spelled in cents or two significant figures
+   under a cent, with a footnote saying so; the confirm's figure still counts.
+
+This settles the open items of decisions 536 (the words, series, the empty step, rotation, the guess,
+the echo, Undo, keys, the block, the pace and the card's ladder), 537, 538, 539 and 543, and of 541
+item 4. Superseded by decisions 545-549 and not taken: the brief's example size and tap, Skip turned
+"Don't remember it well", the half-remembered answer, the old one-screen fit numbers, its set-up film
+choice, a Sharpen card on Taste, and all its Taste (540) and Map (541) answers. Decision
+544's open items stay open. The spec is amended in place (v2.1.17): §6, §6.0, §6.1, §6.2's preamble
+and steps 4 and 8, §6.3 and §6.6.
+
+**Cost.** None beyond the decisions it settles; every number here is a starting value the household's
+evenings may move.
+
+**Design reference.** Canvas https://claude.ai/artifact/VD4kvtiYKnMmrBjWjzuPSs, boards Rank.dc.html, RankSharpen.dc.html, TonightRound.dc.html, TonightPicks.dc.html, TonightNoRound.dc.html, AdminModels.dc.html, TitleCard.dc.html. The boards show layout, sizes and copy; where they differ from this decision or the spec, the spec wins.
+
+### 551. Each shelf shows the person's films most like the one being placed
+
+**What the record says.** Decision 545 puts up to four of the person's own films of each tier on its
+shelf, the first sharing a genre with the film on top and the rest rotating; decision 550 item 1 adds
+"then the one shown least this sitting".
+
+**Why it changes.** The owner, 2026-10-01: "it should always place the closest matching titles as
+sample on the ladder. This makes it easier to relate." A rotating example is a film the person must
+place against; the closest one is a film they can compare with.
+
+**The decision.**
+1. Each shelf shows the person's placed films of that tier that are most like the film being placed,
+   most alike first, up to four. Likeness is read as Home's shelf 1 and Shares a lot with read it: the
+   DNA terms the two share over both tiers (decisions 513 and 541).
+2. No rotation: the same film on top always shows the same shelves. Ties go to a shared genre, then to
+   the higher-placed film. Never the film being placed, always the same kind.
+3. The same rule holds wherever the shelves open, the title card's sheet included.
+
+This supersedes decision 545's "first sharing a genre ... the rest rotating" and decision 550 item 1's
+"then the one shown least this sitting". The spec is amended in place (v2.1.17): §6.1.
+
+**Cost.** One likeness read per tier for each film shown, over the person's placed films, from the
+term index Shares a lot with already reads. A tier whose films share little with the film on top
+still shows its closest four, which may be weak matches.
+
+**Design reference.** Canvas https://claude.ai/artifact/VD4kvtiYKnMmrBjWjzuPSs, board Main.dc.html (its
+sample films illustrate the layout; the rule here decides which films appear). Where a board differs
+from this decision or the spec, the spec wins.
+
+### To do for 1.1.0 (owner, 2026-10-01)
+
+- **A fresh export from the data curator, and a re-seed that keeps accounts and keys.** The owner
+  ran Sonnet DNA extraction on about 1,000 more titles in the curator database since bundle
+  v20260929; the vocabulary is unchanged (decision 163 is not touched). 1.1.0 ships on a new bundle
+  exported from it, and the owner accepts a re-seed of production for the release (2026-10-01), so
+  decision 162's seed-once rule holds: content is wiped and seeded from the new bundle. Accounts and
+  keys are kept, because their tables reference no content: `app_user`, `webauthn_credential`,
+  `push_subscription`, `data_encryption_key`, `connector_config`, `app_setting` and `setup_step`.
+  Steps: a full `pg_dump` of production first; a data-only dump of those seven tables; the same
+  `.env` (its `SECRETS_KEY` unwraps the kept key, so the stored API keys still decrypt); drop and
+  recreate the database, run the migrations, restore the seven tables, then import the new bundle
+  from Admin · Data. Rehearse it once on a throwaway database first, as v20260929 was, including
+  that sign-in, passkeys, push and every connector still work and that the import accepts an install
+  with accounts but no content. What the re-seed loses fits the release: ratings, duels and tier
+  edits start fresh anyway (decision 537), seen state comes back from the Jellyfin sync, and
+  Corrections ledger rows are lost unless exported first.
 
 ## §6.2 — Tonight, rewritten (owner decision, 2026-08-29)
 
