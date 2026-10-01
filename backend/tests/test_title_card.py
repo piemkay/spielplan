@@ -294,7 +294,7 @@ async def test_shares_are_the_closest_owned_titles_of_the_kind_seen_ones_include
     assert [i["title_id"] for i in items] == [11, 12, 13, 14, 15, 16, 17, 18]
     first, second = items[0], items[1]
     assert first["seen"] is True and second["seen"] is False
-    # The rarer the shared term in the owned films, the stronger: two films carry Los Angeles.
+    # The rarer the shared term in the owned films, the stronger: three films carry Los Angeles.
     assert first["term"] == {"term": LA, "facet": "place", "label": "Los Angeles"}
     assert second["term"] == {"term": TENSE, "facet": "mood", "label": "tense"}
     assert set(first) == {

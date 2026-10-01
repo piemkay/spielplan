@@ -11,7 +11,7 @@ from spielplan.ledger import observations
 from spielplan.rate import session
 
 # Undo restores the journal's card verbatim, so this is the reason shown after an undo.
-REASON = "You rated it from its title card."
+REASON = "You marked it not seen on its title card."
 SOURCE = "title_card"
 
 
