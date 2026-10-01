@@ -161,10 +161,11 @@ async def _journal(db) -> list[dict]:
     return [dict(r) for r in rows]
 
 
-async def test_not_seen_from_the_card_is_a_sweep_answer_in_the_rate_session(db, card):
+async def test_not_seen_from_the_card_is_a_rate_answer_in_the_persons_session(db, card):
     """Written through the Rate session (decision 212): a journal row Undo reverses, and the
     counter moves."""
     uid = await db.fetchval("SELECT id FROM app_user WHERE name = 'jenny'")
+    await db.execute("INSERT INTO ladder_setup (user_id) VALUES ($1)", uid)
     await db.execute(
         "INSERT INTO user_title (user_id, title_id, state) VALUES ($1, 3, 'seen')", uid
     )
@@ -172,7 +173,7 @@ async def test_not_seen_from_the_card_is_a_sweep_answer_in_the_rate_session(db, 
     assert answered.status_code == 200, answered.text
     body = answered.json()
     assert body["session"]["block"]["slot"] == 2, "the answer did not move the counter"
-    assert body["undo"]["available"] is True and body["undo"]["kind"] == "not_seen"
+    assert body["undo"] == {"available": True, "kind": "not_seen", "name": "Rated From Its Card"}
 
     state = "SELECT state FROM user_title WHERE user_id = $1 AND title_id = 3"
     assert await db.fetchval(state, uid) == "unseen"
@@ -185,27 +186,30 @@ async def test_not_seen_from_the_card_is_a_sweep_answer_in_the_rate_session(db, 
     assert await db.fetchval(state, uid) == "seen"
 
 
-async def test_not_seen_from_the_card_flips_the_state_and_keeps_the_verdict(db, card):
-    """Not seen is a state; the verdict survives the flip."""
+async def test_not_seen_from_the_card_works_before_the_set_up(db, card):
+    """Plan reading 17: journalled through a session that draws no card, since Rate is closed."""
     uid = await db.fetchval("SELECT id FROM app_user WHERE name = 'jenny'")
     await observations.record_verdict(db, user_id=uid, title_id=3, value=0)
     flipped = await card.post("/api/rate/title/3", json={"answer": "not_seen"})
     assert flipped.status_code == 200, flipped.text
+    assert flipped.json()["setup"]["done"] is False and flipped.json()["card"] is None
     assert (await card.get("/api/titles/3")).json()["title"]["seen_state"] == "unseen"
     assert await db.fetchval(
         "SELECT value FROM verdict WHERE user_id = $1 AND title_id = 3 AND superseded_by IS NULL", uid
-    ) == 0
+    ) == 0, "Not seen is a state; the verdict survives the flip"
     assert [r["kind_of"] for r in await _journal(db)] == ["not_seen"]
 
 
-async def test_the_card_answer_takes_the_table_and_the_old_token_goes_stale(card):
+async def test_the_card_answer_takes_the_table_and_the_old_token_goes_stale(db, card):
     """A device holding the parked card's token meets the ordinary stale-card refusal."""
+    uid = await db.fetchval("SELECT id FROM app_user WHERE name = 'jenny'")
+    await db.execute("INSERT INTO ladder_setup (user_id) VALUES ($1)", uid)
     parked = (await card.get("/api/rate")).json()["card"]
-    assert parked is not None and parked["type"] == "sweep"
+    assert parked is not None
     target = 4 if parked["title"]["id"] != 4 else 3
     taken = await card.post(f"/api/rate/title/{target}", json={"answer": "not_seen"})
     assert taken.status_code == 200, taken.text
-    stale = await card.post("/api/rate/verdict", json={"card_token": parked["token"], "value": 2})
+    stale = await card.post("/api/rate/place", json={"card_token": parked["token"], "tier": 2})
     assert stale.status_code == 409
     assert stale.json()["detail"]["reason"] == "stale_card"
 

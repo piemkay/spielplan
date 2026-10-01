@@ -136,9 +136,13 @@ def verdict_line(user_name: str, title_name: str, label: str, *, refit_ms: float
     return f"verdict({_elide(user_name)}, {_elide(title_name)}) = {label} → {tail}"
 
 
-def tier_edit_line(title_name: str, tier: str, *, via: str, neighbour_duels: int = 0) -> str:
-    """`tier_edit(Drive → A, via=drag_drop) + 2 margin-less duels vs new neighbours` (§6.7)."""
-    line = f"tier_edit({_elide(title_name)} → {tier}, via={via})"
+def tier_edit_line(
+    title_name: str, tier: str, *, via: str, neighbour_duels: int = 0, rater: str | None = None
+) -> str:
+    """`tier_edit(Drive → A, via=drag_drop) + 2 margin-less duels vs new neighbours`, or with the
+    rater `tier_edit(jenny, Heat → A+, via=explicit)` (§6.7)."""
+    who = f"{_elide(rater)}, " if rater else ""
+    line = f"tier_edit({who}{_elide(title_name)} → {tier}, via={via})"
     if neighbour_duels:
         line += f" + {neighbour_duels} margin-less duels vs new neighbours"
     return line

@@ -1,11 +1,11 @@
-"""§13 stream (b): the silent re-ask stream.
+"""§13 stream (b): the silent re-ask of ladder placements (decision 550).
 
-Invisible on the wire (no `reask_of` in `public()`), marked in the row, and excluded from the fit.
+Invisible on the wire (the card's `reask_of` stays server-side), marked in the row
+(`tier_edit.reask_of`), and skipped by the fit where the answer lands on the same step.
 """
 
 from __future__ import annotations
 
-import logging
 import random
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -14,11 +14,9 @@ from typing import Any
 
 import asyncpg
 
-from spielplan.rate import LIVE_LABEL
+from spielplan.ledger.observations import latest_tier_edit_sql
 
-log = logging.getLogger("spielplan.rate.reask")
-
-# §13: "~10% of comparisons/verdicts re-asked".
+# §13: "~10% of comparisons and ladder placements re-asked".
 REASK_RATE = 0.10
 # §13: "after >=3 days".
 REASK_MIN_AGE = timedelta(days=3)
@@ -26,79 +24,29 @@ REASK_MIN_AGE = timedelta(days=3)
 REASK_COOLDOWN = timedelta(days=90)
 
 
-def draws(rng: random.Random, *, rate: float = REASK_RATE) -> bool:
-    """One slot's coin flip. Separate so a test can watch the rate rather than the outcome."""
-    return rng.random() < rate
-
-
 @dataclass(frozen=True)
-class VerdictReask:
-    """A verdict worth posing again; `verdict_id` becomes the new row's `reask_of`."""
+class PlacementReask:
+    """A placement worth posing again; `tier_edit_id` becomes the new edit's `reask_of`."""
 
-    verdict_id: int
+    tier_edit_id: int
     title_id: int
-    value: int
+    tier: int
     asked_at: datetime
 
 
-@dataclass(frozen=True)
-class DuelReask:
-    """A duel worth posing again, in the order it was asked, so a flip is `outcome <> original`."""
-
-    duel_id: int
-    title_a: int
-    title_b: int
-    verdict_class: int
-    outcome: str
-    asked_at: datetime
-
-
-_VERDICT_CANDIDATES = f"""
-WITH label AS ({LIVE_LABEL})
-SELECT v.id, v.title_id, v.value, v.created_at
-  FROM verdict v
-  JOIN title t ON t.id = v.title_id
-  -- the person's CURRENT answer only. `label` is the newest non-re-ask row per title, so
-  -- joining on its *id* is what excludes an answer they have since replaced — and it is the
-  -- same definition of "current label" the battle bands and the class-balance widget use.
-  JOIN label l ON l.verdict_id = v.id
-  JOIN user_title ut ON ut.user_id = v.user_id AND ut.title_id = v.title_id
- WHERE v.user_id = $1
-   AND NOT v.is_reask
-   AND t.kind = ANY($2::text[])
+_PLACEMENT_CANDIDATES = f"""
+SELECT e.id, e.title_id, e.tier, e.created_at
+  FROM ({latest_tier_edit_sql()}) e
+  JOIN title t ON t.id = e.title_id
+  JOIN user_title ut ON ut.user_id = $1 AND ut.title_id = e.title_id
+ WHERE t.kind = $2
    AND ut.state = 'seen'
-   AND v.created_at <= COALESCE($6::timestamptz, now()) - $3::interval
-   AND NOT (v.title_id = ANY($4::int[]))
-   AND NOT EXISTS (SELECT 1 FROM verdict r
-                    WHERE r.reask_of = v.id
+   AND e.created_at <= COALESCE($6::timestamptz, now()) - $3::interval
+   AND NOT (e.title_id = ANY($4::int[]))
+   AND NOT EXISTS (SELECT 1 FROM tier_edit r
+                    WHERE r.user_id = $1 AND r.title_id = e.title_id AND r.reask_of IS NOT NULL
                       AND r.created_at > COALESCE($6::timestamptz, now()) - $5::interval)
- ORDER BY v.id
-"""
-
-_DUEL_CANDIDATES = f"""
-WITH label AS ({LIVE_LABEL})
-SELECT d.id, d.title_a, d.title_b, d.outcome, d.created_at, la.value AS verdict_class
-  FROM duel d
-  JOIN title ta ON ta.id = d.title_a
-  JOIN title tb ON tb.id = d.title_b
-  JOIN label la ON la.title_id = d.title_a
-  JOIN label lb ON lb.title_id = d.title_b
-  JOIN user_title ua ON ua.user_id = d.user_id AND ua.title_id = d.title_a
-  JOIN user_title ub ON ub.user_id = d.user_id AND ub.title_id = d.title_b
- WHERE d.user_id = $1
-   AND NOT d.is_reask
-   AND d.context = 'profile_battle'
-   AND ta.kind = ANY($2::text[]) AND tb.kind = ANY($2::text[])
-   AND ua.state = 'seen' AND ub.state = 'seen'
-   -- §6.1: both members of a battle pair share a verdict class. A re-rating that split the
-   -- pair makes the pair unaskable rather than making it a cross-class question.
-   AND la.value = lb.value
-   AND d.created_at <= COALESCE($6::timestamptz, now()) - $3::interval
-   AND NOT (d.title_a = ANY($4::int[])) AND NOT (d.title_b = ANY($4::int[]))
-   AND NOT EXISTS (SELECT 1 FROM duel r
-                    WHERE r.reask_of = d.id
-                      AND r.created_at > COALESCE($6::timestamptz, now()) - $5::interval)
- ORDER BY d.id
+ ORDER BY e.id
 """
 
 
@@ -116,75 +64,39 @@ def _sample(rows: list[Any], *, limit: int, rng: random.Random | None) -> list[A
     return (rng or random).sample(rows, limit)
 
 
-async def verdict_candidates(
+async def placement_candidates(
     conn: asyncpg.Connection,
     *,
     user_id: int,
-    kinds: Sequence[str],
+    kind: str,
     limit: int = 1,
     exclude: Sequence[int] = (),
     rng: random.Random | None = None,
     now: datetime | None = None,
     min_age: timedelta = REASK_MIN_AGE,
     cooldown: timedelta = REASK_COOLDOWN,
-) -> list[VerdictReask]:
-    """Up to `limit` verdicts eligible to be posed again, in a uniformly random order.
+) -> list[PlacementReask]:
+    """Up to `limit` of the person's latest placements since their set-up that may be posed again, in
+    a uniformly random order: seen, `min_age` old, and the title not re-asked inside `cooldown`.
 
-    Both age cutoffs use Postgres's clock, the one that stamped `created_at`; `now` overrides both.
+    Both cutoffs use Postgres's clock, the one that stamped `created_at`; `now` overrides both.
     """
-    if limit <= 0 or not kinds:
+    if limit <= 0:
         return []
     rows = await conn.fetch(
-        _VERDICT_CANDIDATES,
+        _PLACEMENT_CANDIDATES,
         user_id,
-        list(kinds),
+        kind,
         min_age,
         [int(t) for t in exclude],
         cooldown,
         now,
     )
     return [
-        VerdictReask(
-            verdict_id=int(r["id"]),
+        PlacementReask(
+            tier_edit_id=int(r["id"]),
             title_id=int(r["title_id"]),
-            value=int(r["value"]),
-            asked_at=r["created_at"],
-        )
-        for r in _sample(list(rows), limit=limit, rng=rng)
-    ]
-
-
-async def duel_candidates(
-    conn: asyncpg.Connection,
-    *,
-    user_id: int,
-    kinds: Sequence[str],
-    limit: int = 1,
-    exclude: Sequence[int] = (),
-    rng: random.Random | None = None,
-    now: datetime | None = None,
-    min_age: timedelta = REASK_MIN_AGE,
-    cooldown: timedelta = REASK_COOLDOWN,
-) -> list[DuelReask]:
-    """Up to `limit` duels eligible to be posed again; cutoffs as in `verdict_candidates`."""
-    if limit <= 0 or not kinds:
-        return []
-    rows = await conn.fetch(
-        _DUEL_CANDIDATES,
-        user_id,
-        list(kinds),
-        min_age,
-        [int(t) for t in exclude],
-        cooldown,
-        now,
-    )
-    return [
-        DuelReask(
-            duel_id=int(r["id"]),
-            title_a=int(r["title_a"]),
-            title_b=int(r["title_b"]),
-            verdict_class=int(r["verdict_class"]),
-            outcome=str(r["outcome"]),
+            tier=int(r["tier"]),
             asked_at=r["created_at"],
         )
         for r in _sample(list(rows), limit=limit, rng=rng)
@@ -195,9 +107,6 @@ __all__ = [
     "REASK_COOLDOWN",
     "REASK_MIN_AGE",
     "REASK_RATE",
-    "DuelReask",
-    "VerdictReask",
-    "draws",
-    "duel_candidates",
-    "verdict_candidates",
+    "PlacementReask",
+    "placement_candidates",
 ]

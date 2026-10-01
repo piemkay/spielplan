@@ -129,15 +129,15 @@ async def test_a_title_its_verdict_holds_is_a_neighbour_where_the_board_shows_it
     assert result.tier == 2 and result.neighbour_duels == 1
 
 
-async def test_the_guess_on_the_card_is_the_class_the_letter_on_home_stands_for(db, household):
-    """R4 (decision 510): the reveal reads the class off the title's tier, owned or not."""
+async def test_rates_guess_is_the_tier_home_shows_owned_or_not(db, household):
+    """R4 (decision 510): Rate's guess is the title's tier on the person's cuts, owned or not."""
     await _fit(db, household)
     for title_id in (26, 27, 12):
-        guess = await rate_session.predicted_class(
+        guess = await rate_session.guess(
             db, user_id=household, title_id=title_id, kind="movie", hp=DEFAULTS,
             embeddings=axis_embeddings,
         )
-        assert guess["available"], guess
+        assert guess is not None
         cache = await refit.load_cache(
             db, user_id=household, kind="movie", hp=DEFAULTS, lock=False
         )
@@ -152,7 +152,7 @@ async def test_the_guess_on_the_card_is_the_class_the_letter_on_home_stands_for(
                 np.array([cache.mu + axis_embeddings([title_id])[0][0] @ cache.v]), cache.cuts
             )[0])
         )
-        assert guess["predicted"] == model.verdict_class_of_tier(tier, 7), (title_id, tier, guess)
+        assert guess.tier == tier, (title_id, tier, guess)
     unrated = await db.fetch(
         "SELECT tier FROM ledger_state WHERE user_id = $1 AND NOT observed", household
     )
