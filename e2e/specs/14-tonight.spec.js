@@ -1,37 +1,21 @@
 import { expect, test } from '@playwright/test';
 
-import { createMember, seedFilmLedger, signInAsMember, signedIn, waitForPool } from '../helpers.js';
+import { createMember, setUpLadder, signInAsMember, signedIn, waitForPool } from '../helpers.js';
 
 /**
- * §6.2's Tonight surface (54a–54g): solo asks a round of its own first and then lands on picks
- * with no ballot (decision 532); the guest hand-off on one phone is sequential and blind, which
- * only rendering can enforce (§6.2 step 2); a guest seat reaches the reveal; a household frame
- * does not clobber the seat being played; and `latency_ms` is measured, against §6's card budgets.
- * One page for the file (observations are append-only), plus one second context to send a
- * `rooms.changed` frame.
+ * §6.2's Tonight surface: solo lands on picks with no ballot (decision 532); the guest hand-off on
+ * one phone is sequential and blind, which only rendering can enforce (§6.2 step 2); a guest seat
+ * reaches the reveal. The fixture's six films hold no member's eight liked films and no film with
+ * 30,000 crowd ratings, so every seat here skips the round (decision 539): the round itself, its
+ * escape and its cap are covered by the backend and unit tests. One page for the file.
  */
 
-// §6.2's round is one POST per pair, so the thing to wait on is the write itself.
-const ANSWER = /\/api\/tonight\/seats\/\d+\/answer$/;
-// Solo's round has no seat: each answer re-posts the whole round (§6.2 step 8).
+// Solo has no seat: each request re-posts the whole round (§6.2 step 8).
 const SOLO = /\/api\/tonight\/solo$/;
-
-// The dwell being measured (not a wait), and a margin for the phone's clock.
-const DWELL_MS = 400;
-const CLOCK_SLOP_MS = 100;
-
-// §6's preamble: "<2 s per sweep card, <1.5 s per battle". A Tonight pair is a battle.
-const BATTLE_BUDGET_MS = 1_500;
-const SWEEP_BUDGET_MS = 2_000;
 
 test.describe('tonight', () => {
   /** @type {import('@playwright/test').Page} */
   let page;
-  /** A second household device, never seated in `page`'s room.
-   * @type {import('@playwright/test').Page} */
-  let other;
-  /** @type {import('@playwright/test').BrowserContext} */
-  let otherContext;
   let memberName;
 
   test.beforeAll(async ({ browser, baseURL }, testInfo) => {
@@ -42,20 +26,14 @@ test.describe('tonight', () => {
     const member = await createMember(page, `tonight-${testInfo.project.name}`, { reuse: true });
     memberName = member.name;
     await signInAsMember(page, member);
-    await seedFilmLedger(page);
+    await setUpLadder(page.request);
     await waitForPool(page);
-
-    // In the household and out of the room: `rooms.changed` is broadcast household-wide.
-    otherContext = await browser.newContext({ baseURL });
-    other = await otherContext.newPage();
-    await signedIn(other);
   });
 
   test.afterAll(async () => {
     // A hook has its own budget, and tearing down a long-lived WebKit context can take ~60 s.
     test.setTimeout(300_000);
     await page?.close();
-    await otherContext?.close();
   });
 
   /** §6.2 step 1's controls live in a sheet behind the door's summary row (decision 527). */
@@ -90,51 +68,20 @@ test.describe('tonight', () => {
     await closeSettings();
   }
 
-  /** Ending is terminal, so it asks first in an action sheet (decision 527). */
-  async function endTheRoom() {
-    await page.getByTestId('tonight-end-room').click();
-    await page.getByRole('menuitem', { name: 'End the room' }).click();
-  }
-
   /** The solo picks: the first as the hero card, the rest as rows. */
   const soloPicks = () =>
     page.getByTestId('tonight-picks').locator('[data-testid^="tonight-pick-"]');
 
-  /** Answer the round on screen to its end, waiting on each answer's write. */
-  async function playOut() {
-    for (let i = 0; i < 24; i++) {
-      if (!(await page.getByTestId('tonight-round').isVisible())) break;
-      await Promise.all([
-        page.waitForResponse(
-          (res) => res.request().method() === 'POST' && ANSWER.test(res.url()),
-          { timeout: 15_000 }
-        ),
-        page.getByTestId('tonight-pick-A').click()
-      ]);
-    }
-  }
-
-  const soloReply = () =>
-    page.waitForResponse((res) => res.request().method() === 'POST' && SOLO.test(res.url()), {
-      timeout: 15_000
-    });
-
-  /** Answer solo's round to its end and land on the picks; a pool too small to ask about lands
-   * there at once. Returns how many answers it gave. */
-  async function playSoloOut() {
-    const mood = page.getByTestId('tonight-mood');
-    const solo = page.getByTestId('tonight-solo');
-    const pickA = page.getByTestId('tonight-mood-A');
-    await expect(mood.or(solo)).toBeVisible();
-    let given = 0;
-    for (; await mood.isVisible(); given++) {
-      expect(given, 'solo asked a pair past the round cap of 20').toBeLessThan(20);
-      await Promise.all([soloReply(), pickA.click()]);
-      // Settled: the next pair's controls re-enable, or the picks replace the round.
-      await expect(pickA.or(solo).first()).toBeEnabled();
-    }
-    await expect(solo).toBeVisible();
-    return given;
+  /** Solo's door, landing on the picks: with too few films on the ladder it asks nothing. */
+  async function soloPicksAtOnce() {
+    await Promise.all([
+      page.waitForResponse((res) => res.request().method() === 'POST' && SOLO.test(res.url()), {
+        timeout: 15_000
+      }),
+      page.getByTestId('tonight-solo-door').click()
+    ]);
+    await expect(page.getByTestId('tonight-solo')).toBeVisible();
+    await expect(page.getByTestId('tonight-mood')).toHaveCount(0);
   }
 
   /** The approvals ticked on the ballot drawn: 54e's blindness is falsified by one. */
@@ -153,6 +100,9 @@ test.describe('tonight', () => {
     await atTheDoor({ rewatches: false });
     await expect(page.getByTestId('tonight-open')).toBeVisible();
     await expect(page.getByTestId('tonight-solo-door')).toBeVisible();
+    await expect(page.getByTestId('tonight-solo-door')).toContainText(
+      "first a few quick pairs of films you've liked, if your ladder has enough"
+    );
     await expect(page.getByTestId('tonight-summary')).toHaveText('Film · up to 2h 10m');
 
     await openSettings();
@@ -174,36 +124,17 @@ test.describe('tonight', () => {
     await closeSettings();
   });
 
-  test('solo asks its round first, then lands on three picks and a wildcard', async () => {
-    // Step 4's round for one seat before any pick (decision 532), and still no session: no room
-    // is published and no ballot drawn. A round played out can outrun 60 s on WebKit.
-    test.setTimeout(300_000);
+  test('solo with too few films on the ladder lands on the picks at once, saying why', async () => {
+    // Decision 539: fewer than eight films placed Liked it or higher, so no round; still no
+    // session, no room published and no ballot drawn.
+    test.setTimeout(120_000);
     await atTheDoor();
     const roomsBefore = (await (await page.request.get('/api/tonight/rooms')).json()).rooms.length;
-    await page.getByTestId('tonight-solo-door').click();
+    await soloPicksAtOnce();
 
-    await expect(page.getByTestId('tonight-mood')).toBeVisible();
-    await expect(page.getByTestId('tonight-mood-count')).toContainText(/^Pair 1\b/);
-    await expect(page.getByTestId('tonight-mood-count')).toContainText('usually about');
-    await expect(page.getByTestId('tonight-mood-caption')).toBeVisible();
-    await expect(page.getByTestId('tonight-mood-escape-locked')).toBeVisible();
-    await expect(page.getByTestId('tonight-mood-escape')).toHaveCount(0);
-    await expect(page.getByTestId('tonight-picks')).toHaveCount(0);
-    await expect(page.getByTestId('tonight-round')).toHaveCount(0);
-
-    // All four answers on pair 1 without a scroll: the round is a full-screen flow, so the fold
-    // is the viewport's.
-    const bottom = page.viewportSize().height;
-    for (const id of ['tonight-mood-A', 'tonight-mood-B', 'tonight-mood-EITHER',
-      'tonight-mood-NEITHER']) {
-      await expect(page.getByTestId(id)).toBeVisible();
-      const box = await page.getByTestId(id).boundingBox();
-      expect(box, `${id} is not laid out`).not.toBeNull();
-      expect(box.y, `${id} starts above the top of the page`).toBeGreaterThanOrEqual(0);
-      expect(box.y + box.height, `${id} ends below the fold`).toBeLessThanOrEqual(bottom + 1);
-    }
-
-    await playSoloOut();
+    await expect(page.getByTestId('tonight-no-round')).toHaveText(
+      /^No mood questions tonight — they need 8 films on your ladder at Liked it or higher, and you have \d\.$/
+    );
     await expect(soloPicks()).toHaveCount(3);
     await expect(page.getByTestId('tonight-solo-wildcard')).toBeVisible();
     await expect(page.getByTestId('tonight-round')).toHaveCount(0);
@@ -215,10 +146,9 @@ test.describe('tonight', () => {
 
   test('every solo pick carries a why and a budget-fit line', async () => {
     // §6.8's mandatory why, and §6.2 step 8's two fit-line branches.
-    test.setTimeout(300_000);
+    test.setTimeout(120_000);
     await atTheDoor();
-    await page.getByTestId('tonight-solo-door').click();
-    await playSoloOut();
+    await soloPicksAtOnce();
 
     const cards = await soloPicks().all();
     expect(cards.length, 'no picks means every assertion below is vacuous').toBe(3);
@@ -229,25 +159,21 @@ test.describe('tonight', () => {
     await expect(page.getByTestId('tonight-solo-wildcard')).toContainText('A step outside your usual');
   });
 
-  test('the provenance line names the budget and the filter', async () => {
-    // §6.2 step 8: "Unseen first" until an answer tilts it. A rated film is seen, so with rewatches out
-    // the fixture's pool is empty and the door lands on the picks with nothing to ask.
-    test.setTimeout(300_000);
+  test('the provenance line says the picks are the usual favourites, and the budget', async () => {
+    // §6.2 step 8: "Your usual favourites · …" with no round.
+    test.setTimeout(120_000);
     await atTheDoor({ rewatches: false });
-    await page.getByTestId('tonight-solo-door').click();
-    const answered = await playSoloOut();
-    await expect(page.getByTestId('tonight-provenance')).toContainText('fits in 2h 10m');
-    await expect(page.getByTestId('tonight-provenance')).toContainText(
-      answered ? /Tilted by your \d+ answers?/ : 'Unseen first'
+    await soloPicksAtOnce();
+    await expect(page.getByTestId('tonight-provenance')).toHaveText(
+      'Your usual favourites · fits in 2h 10m'
     );
   });
 
   test('reshuffle walks the ranking and asks nothing', async () => {
-    // §6.2 step 8: a browse gesture that asks nothing, over the ranking the round tilted.
-    test.setTimeout(300_000);
+    // §6.2 step 8: a browse gesture that asks nothing.
+    test.setTimeout(120_000);
     await atTheDoor();
-    await page.getByTestId('tonight-solo-door').click();
-    await playSoloOut();
+    await soloPicksAtOnce();
     await expect(page.getByTestId('tonight-picks')).toBeVisible();
     const before = await page.getByTestId('tonight-picks').innerText();
     const provenance = page.getByTestId('tonight-provenance');
@@ -258,7 +184,7 @@ test.describe('tonight', () => {
       .poll(async () => page.getByTestId('tonight-picks').innerText(), { timeout: 10_000 })
       .not.toBe(before);
     await expect(page.getByTestId('tonight-mood')).toHaveCount(0);
-    await expect(provenance, 'the walk dropped the answers the round had taken').toHaveText(line);
+    await expect(provenance).toHaveText(line);
 
     // Decision 222: the walk "wraps", and says so. Pressed until it appears: which press wraps
     // depends on the pool's size.
@@ -266,7 +192,7 @@ test.describe('tonight', () => {
     for (let press = 0; press < 8 && !(await wrapped.isVisible()); press++) {
       await Promise.all([
         page.waitForResponse(
-          (res) => res.request().method() === 'POST' && res.url().endsWith('/api/tonight/solo'),
+          (res) => res.request().method() === 'POST' && SOLO.test(res.url()),
           { timeout: 15_000 }
         ),
         page.getByTestId('tonight-reshuffle').click()
@@ -279,144 +205,30 @@ test.describe('tonight', () => {
     ).toBeVisible();
   });
 
-  test('the round offers all four answers and locks the escape until pair 6', async () => {
-    // Decision 154's four answers; 54c's escape is not drawn before it is available. Playing the
-    // round out to its end outruns 60 s on WebKit.
-    test.setTimeout(120_000);
-    await atTheDoor();
-    await page.getByTestId('tonight-open').click();
-    await expect(page.getByTestId('tonight-lobby')).toBeVisible();
-    await page.getByTestId('tonight-start').click();
-
-    await expect(page.getByTestId('tonight-round')).toBeVisible();
-    await expect(page.getByTestId('tonight-pick-A')).toBeVisible();
-    await expect(page.getByTestId('tonight-pick-B')).toBeVisible();
-    await expect(page.getByTestId('tonight-answer-EITHER')).toBeVisible();
-    await expect(page.getByTestId('tonight-answer-NEITHER')).toBeVisible();
-    await expect(page.getByTestId('tonight-escape-locked')).toBeVisible();
-    await expect(page.getByTestId('tonight-escape')).toHaveCount(0);
-    await expect(page.getByTestId('tonight-round-count')).toContainText('usually about');
-    await expect(page.getByTestId('tonight-round-count')).not.toContainText('max');
-
-    // All four on screen at once, and the pair side by side. The round is a full-screen flow
-    // over the tab bar (decision 527), so the fold is the viewport's.
-    const bottom = page.viewportSize().height;
-    for (const id of ['tonight-pick-A', 'tonight-pick-B', 'tonight-answer-EITHER',
-      'tonight-answer-NEITHER']) {
-      const box = await page.getByTestId(id).boundingBox();
-      expect(box, `${id} is not laid out`).not.toBeNull();
-      expect(box.y, `${id} starts above the top of the page`).toBeGreaterThanOrEqual(0);
-      expect(box.y + box.height, `${id} ends below the fold`).toBeLessThanOrEqual(bottom + 1);
-    }
-    const [a, b] = [
-      await page.getByTestId('tonight-pick-A').boundingBox(),
-      await page.getByTestId('tonight-pick-B').boundingBox()
-    ];
-    expect(Math.abs(a.y - b.y), 'the pair stacked instead of sitting side by side').toBeLessThan(2);
-
-    // Resolve the room, so the next test's open-rooms list is its own.
-    for (let i = 0; i < 24; i++) {
-      if (!(await page.getByTestId('tonight-round').isVisible())) break;
-      await Promise.all([
-        page.waitForResponse(
-          (res) =>
-            res.request().method() === 'POST' && /\/api\/tonight\/seats\/\d+\/answer$/.test(res.url()),
-          { timeout: 15_000 }
-        ),
-        page.getByTestId('tonight-pick-A').click()
-      ]);
-    }
-  });
-
-  test('the guest hand-off clears the screen and offers nothing early', async () => {
-    // §6.2 step 2: nothing on the incoming screen may reach the previous participant's pairs.
-    // On to 54e's reveal, which counts guest seats. Two rounds and two ballots outrun 60 s.
+  test("a room's seats skip the round, and the guest's ballot hand-off stays blind", async () => {
+    // §6.2 step 2's hand-the-phone, with no round to play: each seat says why it asked nothing
+    // and the room goes on to 54e's ballot, which counts guest seats.
     test.setTimeout(300_000);
     await atTheDoor({ guests: 1 });
     await page.getByTestId('tonight-open').click();
     await expect(page.getByTestId('tonight-lobby')).toBeVisible();
     await expect(page.getByTestId('tonight-seats').locator('li')).toHaveCount(2);
     await page.getByTestId('tonight-start').click();
-    await expect(page.getByTestId('tonight-round')).toBeVisible();
 
-    // The initiator's own round is on screen; the guest's turn is not offered yet.
-    await expect(page.locator('[data-testid^="tonight-hand-to-"]')).toHaveCount(0);
-
-    await playOut();
+    // The host's seat ends at once, saying why, and only then is the guest's turn offered.
     await expect(page.getByTestId('tonight-waiting')).toBeVisible();
-
-    // Now — and only now — the phone offers the guest's turn.
+    await expect(page.getByTestId('tonight-no-round')).toContainText('No mood questions tonight');
+    await expect(page.getByTestId('tonight-round')).toHaveCount(0);
     const handOff = page.locator('[data-testid^="tonight-hand-to-"]').first();
     await expect(handOff).toBeVisible();
+    const guestSeat = (await handOff.getAttribute('data-testid')).replace('tonight-hand-to-', '');
     await handOff.click();
 
-    const guestRound = page.getByTestId('tonight-round');
-    await expect(guestRound).toBeVisible();
-    await expect(page.getByTestId('tonight-round-count')).toContainText('Pair 1');
-    await expect(page.getByTestId('tonight-rail')).toHaveCount(0);
-
-    // "no control on that screen, browser back and in-round history entries included, reaches
-    // them". Falsifiable as a WRITE: Undo at the guest's pair 1 must not retract the host's last.
-    const answered = async (participantId) => {
-      const seen = await page.evaluate(async () => {
-        const rooms = await (await fetch('/api/tonight/rooms')).json();
-        const id = rooms.rooms.find((r) => r.viewer_seated).session_id;
-        return (await (await fetch(`/api/tonight/sessions/${id}`)).json()).progress;
-      });
-      return seen.find((p) => p.participant_id === participantId).answered;
-    };
-    const undo = page.getByTestId('tonight-undo');
-    const seats = await page.evaluate(async () => {
-      const rooms = await (await fetch('/api/tonight/rooms')).json();
-      const id = rooms.rooms.find((r) => r.viewer_seated).session_id;
-      return (await (await fetch(`/api/tonight/sessions/${id}`)).json()).seats;
-    });
-    const hostSeat = seats.find((s) => s.seat === 1).participant_id;
-    const guestSeat = seats.find((s) => s.role === 'guest').participant_id;
-    const hostAnswers = await answered(hostSeat);
-    expect(hostAnswers, 'the host answered, or the assertion below is vacuous').toBeGreaterThan(0);
-    // An assertion, not a guard, and before the window below opens so it cannot spend it.
-    await expect(undo).toBeVisible();
-    // The TIMEOUT is the proof: a POST to the host's seat resolves this, and resolving fails.
-    // Attached where the promise is made: a rejection with nothing listening fails the worker.
-    const strayWrite = expect(
-      page.waitForRequest(
-        (req) => req.method() === 'POST' && req.url().includes(`/api/tonight/seats/${hostSeat}/`),
-        { timeout: 2_000 }
-      ),
-      "the guest's screen wrote to the host's seat"
-    ).rejects.toThrow();
-    await undo.click();
-    await strayWrite;
-    expect(
-      await answered(hostSeat),
-      "the guest's screen reached the host's answers"
-    ).toBe(hostAnswers);
-    // And Undo here is about THIS seat's round, which has nothing behind it at pair 1.
-    expect(
-      await answered(guestSeat),
-      "the guest's Undo moved a count that should have had nothing to take back"
-    ).toBe(0);
-
-    // And browser back does not re-render the round the phone just passed on from.
-    await page.goBack();
-    await page.waitForLoadState('domcontentloaded');
-    if (await page.getByTestId('tonight-round').isVisible().catch(() => false)) {
-      await expect(page.getByTestId('tonight-round-count')).toContainText('Pair 1');
-    }
-
-    // --- and on through the guest's ballot to the reveal (M4.12) ----------------------------
-    //
-    // The restore forgets which seat the phone held and falls back to its own, ended one, so
-    // the guest's turn is offered again, as after a screen lock.
-    await page.goto('/tonight');
-    await expect(page.getByTestId('tonight-surface')).toBeVisible();
-    await expect(page.getByTestId('tonight-booting')).toHaveCount(0);
-    const backToGuest = page.getByTestId(`tonight-hand-to-${guestSeat}`);
-    await expect(backToGuest).toBeVisible();
-    await backToGuest.click();
-    await expect(page.getByTestId('tonight-round')).toBeVisible();
-    await playOut();
+    // No well-known films in the library, so the guest asks nothing either.
+    const guest = await (await page.request.get(`/api/tonight/seats/${guestSeat}/round`)).json();
+    expect(guest.pair, "the guest was served a pair the fixture cannot make").toBeNull();
+    expect(guest.no_round).toContain('well-known films');
+    await expect(page.getByTestId('tonight-round')).toHaveCount(0);
 
     // 54e's ballot opens on the guest's seat, with nothing ticked: the baseline.
     await expect(page.getByTestId('tonight-ballot')).toBeVisible({ timeout: 25_000 });
@@ -471,186 +283,9 @@ test.describe('tonight', () => {
     await expect(page.getByTestId('tonight-approval-share')).toContainText(/said yes/);
   });
 
-  test('a household frame does not take the guest off the phone', async () => {
-    // A household-wide `rooms.changed` frame must re-read the seat this device is playing, not
-    // the viewer's own.
-    test.setTimeout(300_000);
-    await atTheDoor({ guests: 1 });
-    await page.getByTestId('tonight-open').click();
-    await expect(page.getByTestId('tonight-lobby')).toBeVisible();
-    await page.getByTestId('tonight-start').click();
-    await expect(page.getByTestId('tonight-round')).toBeVisible();
-    await playOut();
-    await expect(page.getByTestId('tonight-waiting')).toBeVisible();
-
-    const handOff = page.locator('[data-testid^="tonight-hand-to-"]').first();
-    await expect(handOff).toBeVisible();
-    const guestSeat = (await handOff.getAttribute('data-testid')).replace('tonight-hand-to-', '');
-    await handOff.click();
-    await expect(page.getByTestId('tonight-round')).toBeVisible();
-    await expect(page.getByTestId('tonight-round-count')).toContainText('Pair 1');
-    const showing = await page.getByTestId('tonight-round').innerText();
-
-    // The RE-READ the frame provokes, not the screen alone, which would settle on the old DOM.
-    const reread = page.waitForRequest(
-      (req) => req.method() === 'GET' && /\/api\/tonight\/seats\/\d+\/round$/.test(req.url()),
-      { timeout: 25_000 }
-    );
-    const elsewhere = await (
-      await other.request.post('/api/tonight/sessions', { data: { guests: 0 } })
-    ).json();
-    expect(elsewhere.session_id, 'the second device opened no room, so no frame was sent').toBeTruthy();
-    expect(
-      (await reread).url(),
-      'a household frame re-read a seat this phone is not playing'
-    ).toContain(`/api/tonight/seats/${guestSeat}/round`);
-
-    await expect(page.getByTestId('tonight-round')).toBeVisible();
-    await expect(page.getByTestId('tonight-round-count')).toContainText('Pair 1');
-    await expect(page.getByTestId('tonight-waiting')).toHaveCount(0);
-    expect(
-      await page.getByTestId('tonight-round').innerText(),
-      "the guest's pair was replaced on the way through the frame"
-    ).toBe(showing);
-
-    // Both rooms closed, so the next test's open-rooms list is its own (decision 169).
-    await other.request.post(`/api/tonight/sessions/${elsewhere.session_id}/end`);
-    await endTheRoom();
-    await expect(page.getByTestId('tonight-controls')).toBeVisible();
-  });
-
-  test('the solo escape opens at pair 6 and lands on the picks the answers tilted', async () => {
-    // A seat's escape, for one (decision 532). NEITHER keeps the fixture's six films in the round
-    // well past pair 6; a round that ends first lands on the same tilted picks.
-    test.setTimeout(300_000);
-    await atTheDoor();
-    await page.getByTestId('tonight-solo-door').click();
-    const mood = page.getByTestId('tonight-mood');
-    const solo = page.getByTestId('tonight-solo');
-    const neither = page.getByTestId('tonight-mood-NEITHER');
-    const escape = page.getByTestId('tonight-mood-escape');
-    await expect(mood).toBeVisible();
-    for (let i = 0; i < 5 && (await mood.isVisible()); i++) {
-      await expect(escape, `the escape opened at pair ${i + 1}`).toHaveCount(0);
-      await expect(page.getByTestId('tonight-mood-escape-locked')).toBeVisible();
-      await Promise.all([soloReply(), neither.click()]);
-      await expect(neither.or(solo).first()).toBeEnabled();
-    }
-    if (await mood.isVisible()) {
-      await expect(page.getByTestId('tonight-mood-count')).toContainText(/^Pair 6\b/);
-      await expect(escape).toBeVisible();
-      // The reply in hand already carries all five answers, so there is nothing to ask.
-      let asked = 0;
-      const onRequest = (req) => {
-        if (SOLO.test(req.url())) asked += 1;
-      };
-      page.on('request', onRequest);
-      await escape.click();
-      await expect(solo).toBeVisible();
-      page.off('request', onRequest);
-      expect(asked, 'the escape asked the server again for the picks it held').toBe(0);
-    }
-    await expect(solo).toBeVisible();
-    await expect(soloPicks()).toHaveCount(3);
-    await expect(page.getByTestId('tonight-solo-wildcard')).toBeVisible();
-    await expect(page.getByTestId('tonight-provenance')).toContainText(
-      /Tilted by your \d+ answers?/
-    );
-  });
-
-  test('undo in the solo round takes the last answer back and puts its pair back', async () => {
-    // A hold-out pair is drawn afresh on every request, so the pair comes back from the client.
-    // NEITHER keeps the fixture's films in the round past pair 2.
-    test.setTimeout(120_000);
-    await atTheDoor();
-    await page.getByTestId('tonight-solo-door').click();
-    const count = page.getByTestId('tonight-mood-count');
-    await expect(count).toContainText(/^Pair 1\b/);
-    const shown = async () => [
-      await page.getByTestId('tonight-mood-A').innerText(),
-      await page.getByTestId('tonight-mood-B').innerText()
-    ];
-    const first = await shown();
-
-    await Promise.all([soloReply(), page.getByTestId('tonight-mood-NEITHER').click()]);
-    await expect(count).toContainText(/^Pair 2\b/);
-    await expect(page.getByTestId('tonight-mood-caption')).toHaveCount(0);
-
-    await Promise.all([soloReply(), page.getByTestId('tonight-mood-undo').click()]);
-    await expect(count).toContainText(/^Pair 1\b/);
-    await expect(page.getByTestId('tonight-mood-caption')).toBeVisible();
-    expect(await shown(), 'undo put up a different pair from the one it took back').toEqual(first);
-  });
-
-  test('an answer carries the time it took, and the card budgets hold', async () => {
-    // §4.2's `session_answer.latency_ms` is the CLIENT's measurement, so it is checked on the
-    // request the client sends. The timeout budgets WebKit's slowing shared page, not the app:
-    // the card budgets below are read off resource timing.
-    test.setTimeout(300_000);
-    await atTheDoor();
-    await page.getByTestId('tonight-open').click();
-    await expect(page.getByTestId('tonight-lobby')).toBeVisible();
-    await page.getByTestId('tonight-start').click();
-    await expect(page.getByTestId('tonight-round')).toBeVisible();
-
-    // NOT a wait: the dwell under measurement.
-    await page.waitForTimeout(DWELL_MS);
-    const [answered] = await Promise.all([
-      page.waitForResponse(
-        (res) => res.request().method() === 'POST' && ANSWER.test(res.url()),
-        { timeout: 15_000 }
-      ),
-      page.getByTestId('tonight-pick-A').click()
-    ]);
-    const sent = answered.request().postDataJSON();
-    expect(
-      sent.latency_ms,
-      'the answer carries no measurement of how long its pair was on the screen'
-    ).toBeGreaterThanOrEqual(DWELL_MS - CLOCK_SLOP_MS);
-    // THIS card's time, not the evening's.
-    expect(sent.latency_ms, 'the clock is the session\'s and not the card\'s').toBeLessThan(60_000);
-
-    // The round trip, from resource timing. `responseEnd` is -1 until the body arrives, and
-    // `waitForResponse` resolves on the headers.
-    await answered.finished();
-    const battle = answered.request().timing().responseEnd;
-    expect(battle, 'no resource timing was recorded, so the budget below is vacuous').toBeGreaterThan(0);
-    expect(battle, '§6 budgets a battle at 1.5 s').toBeLessThan(BATTLE_BUDGET_MS);
-
-    // A sweep card on a series (the films are all rated), taken back afterwards so a re-run
-    // measures the same thing.
-    await page.request.post('/api/rate/session', {
-      data: { mode: 'sweep', kinds: ['series'], restart: true }
-    });
-    await page.goto('/rate');
-    await expect(page.getByTestId('rate-sweep-card')).toBeVisible();
-    const [verdict] = await Promise.all([
-      page.waitForResponse(
-        (res) => res.request().method() === 'POST' && res.url().includes('/api/rate/verdict'),
-        { timeout: 15_000 }
-      ),
-      page.getByTestId('rate-verdict-1').click()
-    ]);
-    expect(verdict.ok(), 'the verdict was refused, so the timing below is about nothing').toBeTruthy();
-    await verdict.finished();  // as above: waitForResponse resolves on the headers
-    const sweep = verdict.request().timing().responseEnd;
-    expect(sweep, 'no resource timing was recorded, so the budget below is vacuous').toBeGreaterThan(0);
-    expect(sweep, '§6 budgets a sweep card at 2 s').toBeLessThan(SWEEP_BUDGET_MS);
-
-    const undone = await page.request.post('/api/rate/undo');
-    expect(undone.ok(), `taking the measured verdict back (§6.1): ${undone.status()}`).toBeTruthy();
-    await page.request.delete('/api/rate/session');
-
-    await page.goto('/tonight');
-    await expect(page.getByTestId('tonight-surface')).toBeVisible();
-    await expect(page.getByTestId('tonight-booting')).toHaveCount(0);
-    await endTheRoom();
-    await expect(page.getByTestId('tonight-controls')).toBeVisible();
-  });
-
   test('the slider says the budget is soft, and opens where this member last left it', async () => {
     // Decision 506: the sheet says a little over is fine where the budget is set, and reopens
-    // at the budget last used, per kind. Same timeout as above, for the same shared page.
+    // at the budget last used, per kind.
     test.setTimeout(300_000);
     await atTheDoor({ rewatches: false });
     await openSettings();
@@ -659,8 +294,7 @@ test.describe('tonight', () => {
     await expect(page.getByTestId('tonight-budget-value')).toHaveText('2h');
     await closeSettings();
     await expect(page.getByTestId('tonight-summary')).toHaveText('Film · up to 2h');
-    await page.getByTestId('tonight-solo-door').click();
-    await playSoloOut();
+    await soloPicksAtOnce();
 
     await atTheDoor({ rewatches: false });
     await expect(page.getByTestId('tonight-summary')).toHaveText('Film · up to 2h');
@@ -669,8 +303,7 @@ test.describe('tonight', () => {
     await openSettings();
     await page.getByTestId('tonight-budget').fill('130');
     await closeSettings();
-    await page.getByTestId('tonight-solo-door').click();
-    await playSoloOut();
+    await soloPicksAtOnce();
     await atTheDoor({ rewatches: false });
     await expect(page.getByTestId('tonight-summary')).toHaveText('Film · up to 2h 10m');
   });
