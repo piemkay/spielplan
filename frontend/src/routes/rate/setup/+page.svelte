@@ -445,11 +445,17 @@
   }
   .find {
     width: 100%;
+    min-height: 44px;
     margin-top: 12px;
     padding: 0 12px;
     border: none;
     font-size: var(--fs-body);
     line-height: 22px;
+  }
+  @media (pointer: coarse) {
+    .find {
+      min-height: var(--touch);
+    }
   }
   .grid {
     margin-top: 12px;
@@ -599,5 +605,27 @@
   }
   .history {
     margin-top: 16px;
+  }
+
+  /* The rows span the window, so the list scrolls under the pointer anywhere and the dock's bar runs
+     edge to edge; what they hold keeps the 560px column. */
+  @media (min-width: 721px) {
+    .flow {
+      padding-top: calc(16px + env(safe-area-inset-top));
+    }
+    .screen {
+      --side: calc((100% - 560px) / 2);
+      max-width: none;
+    }
+    .top {
+      padding-inline: calc(var(--side) + 8px);
+    }
+    .finding {
+      padding-left: calc(var(--side) + var(--gutter));
+    }
+    .scroll,
+    .dock {
+      padding-inline: calc(var(--side) + var(--gutter));
+    }
   }
 </style>
