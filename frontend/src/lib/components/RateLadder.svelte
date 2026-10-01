@@ -215,4 +215,37 @@
       );
     }
   }
+  /* The film in its own column beside the shelves, both sized by the Rate page. */
+  @media (min-width: 721px) {
+    .ladder {
+      display: grid;
+      grid-template-columns: var(--rate-grid);
+      align-items: start;
+      gap: 32px;
+    }
+    .film {
+      flex-direction: column;
+      gap: 16px;
+    }
+    .art {
+      width: 100%;
+      height: auto;
+    }
+    .head {
+      align-self: stretch;
+      min-height: 0;
+    }
+    .name {
+      margin: 0;
+      -webkit-line-clamp: 3;
+      line-clamp: 3;
+    }
+    .reason {
+      color: var(--text-2);
+      white-space: normal;
+    }
+    .unseen {
+      margin: 8px 0 0;
+    }
+  }
 </style>

@@ -66,4 +66,10 @@
     min-height: var(--touch);
     text-decoration: none;
   }
+  @media (min-width: 721px) {
+    .closed {
+      max-width: 560px;
+      padding: var(--card-pad-roomy);
+    }
+  }
 </style>

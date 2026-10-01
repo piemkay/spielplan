@@ -23,7 +23,6 @@
 
   const HOLD_MS = 250;
   const SLOP_PX = 10;
-  const PITCH = 72;
 
   let list = $state();
   let pressed = $state(-1);
@@ -160,8 +159,8 @@
     <div
       class="look"
       aria-hidden="true"
-      style:top={held < split ? `${split * PITCH + 8}px` : null}
-      style:bottom={held < split ? null : `calc(100% - ${split * PITCH - 8}px)`}
+      style:top={held < split ? `calc(${split} * var(--pitch) + 8px)` : null}
+      style:bottom={held < split ? null : `calc(100% - ${split} * var(--pitch) + 8px)`}
     >
       <div class="look-head">
         <span class="look-word">{s.word}</span>
@@ -180,7 +179,10 @@
 </div>
 
 <style>
+  /* A shelf poster's height; the Rate page sets a larger one on a desktop. */
   .shelves {
+    --ph: var(--shelf-ph, 64px);
+    --pitch: calc(var(--ph) + 8px);
     position: relative;
   }
   .list {
@@ -196,8 +198,8 @@
   .shelf {
     position: relative;
     width: 100%;
-    height: 72px;
-    min-height: 72px;
+    height: var(--pitch);
+    min-height: var(--pitch);
     padding: 0 0 0 4px;
     border: none;
     border-radius: 0;
@@ -217,8 +219,8 @@
   }
   .p {
     flex: none;
-    width: 44px;
-    height: 64px;
+    width: calc(var(--ph) * 11 / 16);
+    height: var(--ph);
     animation: fadeIn var(--dur-quick) var(--ease) calc(var(--i) * 24ms) both;
   }
   .p :global(.poster) {
@@ -241,6 +243,14 @@
   .lifted .word {
     color: var(--text);
     font-weight: 600;
+  }
+  @media (hover: hover) {
+    .list:not(.deciding, .looking) .shelf:hover:not(.lifted) {
+      background: var(--surface-2);
+    }
+    .list:not(.deciding, .looking) .shelf:hover .word {
+      color: var(--text);
+    }
   }
   .lifted {
     background: var(--surface-3);
@@ -307,7 +317,7 @@
   }
   .look-grid {
     margin-top: 12px;
-    min-height: 133px;
+    min-height: calc(var(--ph) * 113 / 64 + 20px);
     display: grid;
     grid-template-columns: repeat(4, minmax(0, 1fr));
     column-gap: 8px;
@@ -319,7 +329,7 @@
     gap: 4px;
   }
   .big :global(.poster) {
-    height: 113px;
+    height: calc(var(--ph) * 113 / 64);
     aspect-ratio: auto;
   }
   .cell-name {
