@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
-from statistics import NormalDist
+from statistics import NormalDist, fmean
 from typing import Any
 
 import asyncpg
@@ -23,6 +23,7 @@ from spielplan.ledger.observations import (
     LIVE_LABEL_SQL,
     cutover_sql,
     latest_tier_edit_sql,
+    live_label_sql,
     rescale_level,
     tier_set_of,
 )
@@ -790,115 +791,123 @@ def _with_likes(
     cards = []
     for i, row in enumerate(kept):
         liked = likes.get(int(row["title_id"]))
-        extra = (
-            {"mine_cdf": _float(row["mine_cdf"]), "theirs_cdf": _float(row["theirs_cdf"])}
-            if "mine_cdf" in row else None
-        )
         cards.append({
-            **_card(row, i + 1, tier_set=tier_set, beta=beta, extra=extra),
+            **_card(row, i + 1, tier_set=tier_set, beta=beta),
             "like": liked.as_dict() if liked else None,
             "wanted": row["wish_state"] == "want",
         })
     return cards
 
 
-async def _unowned_for_me(
+async def _likes(
+    conn: asyncpg.Connection, rows: Sequence[asyncpg.Record], *, ctx: Ctx, kind: str
+) -> dict[int, suggest.Liked]:
+    """The viewer's own liked titles alone, whoever the list is for, so no one's ratings show to
+    another (decision 552)."""
+    return await suggest.likest_liked(
+        conn, user_id=ctx.user_id, title_ids=[int(r["title_id"]) for r in rows], kind=kind,
+        version=ctx.version,
+    )
+
+
+async def _unowned_for_one(
     conn: asyncpg.Connection,
     *,
     ctx: Ctx,
     kind: str,
+    member_id: int,
     avoids: Sequence[taste.Avoided],
     cap: int,
     keep_wanted: bool,
 ) -> list[dict[str, Any]]:
-    """Unowned titles of the kind by the person's own score, with the ranking shelves' leave-outs and
-    a crowd rating, each naming the liked title it is most like (decision 515)."""
+    """Unowned titles of the kind by one member's own score, with that member's leave-outs and a crowd
+    rating. The card and its Want are the viewer's; the viewer's own list keeps only titles like one
+    they liked (decision 515)."""
     avoided = await taste.avoided_titles(conn, avoids, kind=kind, version=ctx.version, owned=False)
     rows = await conn.fetch(
-        f"WITH lv AS ({LIVE_LABEL_SQL})" + CARD_SELECT + ", w.state AS wish_state" + CARD_FROM + """
+        f"WITH lv AS ({live_label_sql('$7')})" + CARD_SELECT + ", w.state AS wish_state" + CARD_FROM
+        + """
+          JOIN user_score ms ON ms.title_id = t.id AND ms.user_id = $7 AND ms.kind = t.kind
+                            AND ms.bundle_version = $3
           LEFT JOIN wish w ON w.title_id = t.id AND w.user_id = $1
-         WHERE t.kind = $2 AND NOT t.is_owned AND us.score IS NOT NULL AND tp.item_n > 0
-           AND COALESCE(ut.state, 'unseen') = 'unseen'
+         WHERE t.kind = $2 AND NOT t.is_owned AND tp.item_n > 0
+           AND NOT EXISTS (SELECT 1 FROM user_title s WHERE s.title_id = t.id
+                            AND s.user_id = $7 AND s.state = 'seen')
            AND t.id NOT IN (SELECT title_id FROM lv)
-           AND (w.state IS NULL OR (w.state = 'want' AND $6))
+           AND NOT EXISTS (SELECT 1 FROM wish x WHERE x.title_id = t.id
+                            AND x.user_id = $7 AND x.state = 'not_for_me')
+           AND (w.state IS NULL OR $6)
            AND NOT (t.id = ANY($4::int[]))
-         ORDER BY us.score DESC, t.id
+         ORDER BY ms.score DESC, t.id
          LIMIT $5
         """,
         ctx.user_id, kind, ctx.bundle_version, sorted(avoided), cap * WORTH_GETTING_POOL,
-        keep_wanted,
+        keep_wanted, member_id,
     )
-    likes = await suggest.likest_liked(
-        conn, user_id=ctx.user_id, title_ids=[int(r["title_id"]) for r in rows], kind=kind,
-        version=ctx.version,
-    )
-    return _with_likes(rows, likes, ctx=ctx, kind=kind, cap=cap, required=True)
+    likes = await _likes(conn, rows, ctx=ctx, kind=kind)
+    return _with_likes(rows, likes, ctx=ctx, kind=kind, cap=cap, required=member_id == ctx.user_id)
 
 
-async def _unowned_for_pair(
+async def _unowned_for_everyone(
     conn: asyncpg.Connection,
     *,
     ctx: Ctx,
     kind: str,
-    partner_id: int,
+    member_ids: Sequence[int],
     avoids: Sequence[taste.Avoided],
     cap: int,
 ) -> list[dict[str, Any]]:
-    """For you and {other}: unowned titles ranked as the shared sweet spot ranks owned ones
-    (decision 477), with either member's leave-outs and Not for me."""
+    """Unowned titles ranked as the shared sweet spot ranks owned ones (decision 477), over every
+    member given, leaving out what any of them has seen, rated, avoids or said Not for me."""
     avoided = await taste.avoided_titles(conn, avoids, kind=kind, version=ctx.version, owned=False)
     rows = await conn.fetch(
         f"""
-        WITH lv AS ({LIVE_LABEL_SQL}),
+        WITH rated AS (
+            SELECT lv.title_id FROM unnest($1::bigint[]) m(id), LATERAL ({live_label_sql('m.id')}) lv
+        ),
         ranked AS (
             SELECT us.user_id, us.title_id,
-                   percent_rank() OVER (PARTITION BY us.user_id ORDER BY us.score) AS cdf,
                    row_number() OVER (PARTITION BY us.user_id ORDER BY us.score, us.title_id)
                        AS pos,
                    count(*) OVER (PARTITION BY us.user_id) AS n
               FROM user_score us
               JOIN title o ON o.id = us.title_id AND NOT o.is_owned
-             WHERE us.user_id = ANY($4::bigint[]) AND us.kind = $2 AND us.bundle_version = $3
+             WHERE us.user_id = ANY($1::bigint[]) AND us.kind = $2 AND us.bundle_version = $3
         )
-        SELECT t.id AS title_id, t.kind, t.name, t.year, t.runtime_min, t.poster_path,
-               t.placement, NULL::timestamptz AS placement_at,
-               false AS seen,
-               us.score, us.cf, tp.b, tp.gate, tp.item_n, tp.e_source,
-               ls.s, ls.sigma, ls.cdf, ls.tier, w.state AS wish_state,
-               a.cdf AS mine_cdf, b.cdf AS theirs_cdf,
-               a.pos AS mine_pos, a.n AS mine_n, b.pos AS theirs_pos, b.n AS theirs_n
-          FROM ranked a
-          JOIN ranked b ON b.title_id = a.title_id AND b.user_id = $5
-          JOIN title t ON t.id = a.title_id
-          JOIN user_score us ON us.title_id = t.id AND us.user_id = $1 AND us.kind = $2
-                            AND us.bundle_version = $3
-          JOIN title_prior tp ON tp.title_id = t.id AND tp.bundle_version = $3 AND tp.item_n > 0
-          LEFT JOIN ledger_state ls ON ls.title_id = t.id AND ls.user_id = $1
-          LEFT JOIN wish w ON w.title_id = t.id AND w.user_id = $1
-         WHERE a.user_id = $1 AND a.cdf >= $6 AND b.cdf >= $6
-           AND NOT EXISTS (SELECT 1 FROM user_title s WHERE s.title_id = t.id
-                            AND s.user_id = ANY($4::bigint[]) AND s.state = 'seen')
-           AND t.id NOT IN (SELECT title_id FROM lv)
-           AND NOT EXISTS (SELECT 1 FROM wish x WHERE x.title_id = t.id
-                            AND x.user_id = ANY($4::bigint[]) AND x.state = 'not_for_me')
-           AND NOT (t.id = ANY($7::int[]))
+        SELECT r.title_id, array_agg(r.pos) AS pos, array_agg(r.n) AS n
+          FROM ranked r
+          JOIN title_prior tp ON tp.title_id = r.title_id AND tp.bundle_version = $3
+                             AND tp.item_n > 0
+         WHERE r.title_id NOT IN (SELECT title_id FROM rated)
+           AND NOT EXISTS (SELECT 1 FROM user_title s WHERE s.title_id = r.title_id
+                            AND s.user_id = ANY($1::bigint[]) AND s.state = 'seen')
+           AND NOT EXISTS (SELECT 1 FROM wish x WHERE x.title_id = r.title_id
+                            AND x.user_id = ANY($1::bigint[]) AND x.state = 'not_for_me')
+           AND NOT (r.title_id = ANY($4::int[]))
+         GROUP BY r.title_id
+        HAVING count(*) = cardinality($1::bigint[])
         """,
-        ctx.user_id, kind, ctx.bundle_version, [ctx.user_id, partner_id], partner_id,
-        SWEET_SPOT_MIN_CDF, sorted(avoided),
+        list(member_ids), kind, ctx.bundle_version, sorted(avoided),
     )
-    ranked = sorted(
+    top = sorted(
         rows,
         key=lambda r: (
-            -(_standardised(r["mine_pos"], r["mine_n"])
-              + _standardised(r["theirs_pos"], r["theirs_n"])),
+            -fmean(_standardised(p, n) for p, n in zip(r["pos"], r["n"], strict=True)),
             int(r["title_id"]),
         ),
     )[:cap]
-    likes = await suggest.likest_liked(
-        conn, user_id=ctx.user_id, title_ids=[int(r["title_id"]) for r in ranked], kind=kind,
-        version=ctx.version,
+    ids = [int(r["title_id"]) for r in top]
+    found = await conn.fetch(
+        CARD_SELECT + ", w.state AS wish_state" + CARD_FROM + """
+          LEFT JOIN wish w ON w.title_id = t.id AND w.user_id = $1
+         WHERE t.kind = $2 AND t.id = ANY($4::int[])
+        """,
+        ctx.user_id, kind, ctx.bundle_version, ids,
     )
-    return _with_likes(ranked, likes, ctx=ctx, kind=kind, cap=cap, required=False)
+    by_id = {int(r["title_id"]): r for r in found}
+    cards = [by_id[i] for i in ids]
+    likes = await _likes(conn, cards, ctx=ctx, kind=kind)
+    return _with_likes(cards, likes, ctx=ctx, kind=kind, cap=cap, required=False)
 
 
 async def worth_getting(
@@ -918,9 +927,9 @@ async def worth_getting(
             f"your own scores rest on {labels} titles of this kind · it opens at "
             f"{WORTH_GETTING_MIN_LABELS} with a ranking of your own",
         )
-    items = await _unowned_for_me(
-        conn, ctx=ctx, kind=kind, avoids=[avoided] if avoided else [], cap=SHELF_CAP,
-        keep_wanted=False,
+    items = await _unowned_for_one(
+        conn, ctx=ctx, kind=kind, member_id=ctx.user_id, avoids=[avoided] if avoided else [],
+        cap=SHELF_CAP, keep_wanted=False,
     )
     section = Section(
         kind=kind,
@@ -933,10 +942,52 @@ async def worth_getting(
     return _finish(section, shelf_id=sid, ctx=ctx)
 
 
+class NotPickable(ValueError):
+    """See all asked for a member whose own ratings do not open Worth getting, or for no member."""
+
+
+async def _worth_getting_members(
+    conn: asyncpg.Connection, *, viewer_id: int, kind: str
+) -> list[dict[str, Any]]:
+    """Every member, the viewer first, each pickable once their own ratings open the shelf."""
+    rows = await conn.fetch(
+        "SELECT id, name, role, colour FROM app_user WHERE is_active AND role IN ('admin', 'member') "
+        "ORDER BY id <> $1, lower(name), id",
+        viewer_id,
+    )
+    members = []
+    for r in rows:
+        opens, _labels = await _worth_getting_opens(conn, user_id=int(r["id"]), kind=kind)
+        members.append({
+            "id": int(r["id"]), "name": r["name"], "role": r["role"], "colour": r["colour"],
+            "pickable": opens,
+            "reason": None if opens else f"Not enough {KIND_HEADINGS[kind].lower()} rated yet",
+        })
+    return members
+
+
 async def worth_getting_list(
-    conn: asyncpg.Connection, *, user_id: int, kind: str, pair: bool, bundle_version: str | None
+    conn: asyncpg.Connection,
+    *,
+    user_id: int,
+    kind: str,
+    audience: int | str | None,
+    bundle_version: str | None,
 ) -> dict[str, Any]:
-    """See all: For you, or For you and {other}; empty while the shelf itself is absent."""
+    """See all, for one member (the viewer unless `audience` names another) or for "everyone" whose
+    own ratings open the shelf (decision 552). Naming a member they do not open it for is refused;
+    the viewer's own list is empty while their shelf is absent."""
+    members = await _worth_getting_members(conn, viewer_id=user_id, kind=kind)
+    pickable = [m["id"] for m in members if m["pickable"]]
+    member = None
+    if audience != "everyone":
+        member = next(
+            (m for m in members if m["id"] == (user_id if audience is None else audience)), None
+        )
+        if member is None:
+            raise NotPickable("No such member")
+        if audience is not None and not member["pickable"]:
+            raise NotPickable(member["reason"])
     ctx = Ctx(
         user_id=user_id,
         bundle_version=bundle_version,
@@ -945,27 +996,30 @@ async def worth_getting_list(
         tier_sets={kind: await tier_set_of(conn, user_id=user_id, kind=kind)},
         betas={kind: await _beta(conn, user_id=user_id, kind=kind)},
     )
-    partner = await partner_for(conn, user_id=user_id)
-    opens, _labels = await _worth_getting_opens(conn, user_id=user_id, kind=kind)
+    if member is None:
+        audience_ids = pickable
+    elif member["pickable"]:
+        audience_ids = [member["id"]]
+    else:
+        audience_ids = []
     items: list[dict[str, Any]] = []
-    if opens and ctx.bundle_version and ctx.version and (partner or not pair):
-        mine = await taste.avoided_for(conn, user_id=user_id, version=ctx.version)
-        if pair:
-            theirs = await taste.avoided_for(conn, user_id=partner["user_id"], version=ctx.version)
-            items = await _unowned_for_pair(
-                conn, ctx=ctx, kind=kind, partner_id=partner["user_id"], avoids=[mine, theirs],
-                cap=WORTH_GETTING_LIST_CAP,
+    if audience_ids and ctx.bundle_version and ctx.version:
+        avoids = [await taste.avoided_for(conn, user_id=m, version=ctx.version) for m in audience_ids]
+        if member:
+            items = await _unowned_for_one(
+                conn, ctx=ctx, kind=kind, member_id=member["id"], avoids=avoids,
+                cap=WORTH_GETTING_LIST_CAP, keep_wanted=True,
             )
         else:
-            items = await _unowned_for_me(
-                conn, ctx=ctx, kind=kind, avoids=[mine], cap=WORTH_GETTING_LIST_CAP,
-                keep_wanted=True,
+            items = await _unowned_for_everyone(
+                conn, ctx=ctx, kind=kind, member_ids=audience_ids, avoids=avoids,
+                cap=WORTH_GETTING_LIST_CAP,
             )
         await library.carry_original_names(conn, items, key="title_id")
     return {
         "kind": kind,
-        "with": "pair" if pair else "me",
-        "other": {"id": partner["user_id"], "name": partner["name"]} if partner else None,
+        "for": {"id": member["id"], "name": member["name"]} if member else "everyone",
+        "members": members,
         "items": items,
     }
 

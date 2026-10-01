@@ -28,9 +28,9 @@ export function loadWishList() {
   return get('/wish');
 }
 
-/** @param {'movie' | 'series'} kind @param {'me' | 'pair'} audience */
-export function loadWorthGetting(kind, audience = 'me') {
-  return get(`/home/worth-getting${qs({ kind, with: audience })}`);
+/** @param {'movie' | 'series'} kind @param {number | 'everyone' | null} audience null is the viewer */
+export function loadWorthGetting(kind, audience = null) {
+  return get(`/home/worth-getting${qs({ kind, for: audience })}`);
 }
 
 /** Home's row under Worth getting: "4 wanted, 1 by both of you", where the household is two. */
@@ -53,27 +53,30 @@ function namesOf(people) {
   return `${people.slice(0, -1).join(', ')} and ${people.at(-1)}`;
 }
 
-/** A group's heading, in the viewer's own words. @param {{id: number, name: string}[]} wanters */
-export function groupHeading(wanters = [], viewerId = null) {
-  const mine = wanters.some((w) => w.id === viewerId);
-  const others = wanters.filter((w) => w.id !== viewerId).map((w) => w.name);
-  if (!mine) return `${namesOf(others)} ${others.length === 1 ? 'wants' : 'want'}`;
-  if (!others.length) return 'You want';
-  if (others.length === 1) return 'You both want';
-  return `You, ${namesOf(others)} want`;
-}
-
 /** An unowned title's card: "Jenny would likely enjoy it too.", or nothing. @param {string[]} names */
 export function likelyTooLine(names = []) {
   return names.length ? `${namesOf(names)} would likely enjoy it too.` : '';
 }
 
-/** "Jenny: likely too", "you: maybe"; nothing for someone the scores say little about. */
-export function othersLine(others = [], viewerId = null) {
-  return others
-    .filter((o) => o.likely === 'likely' || o.likely === 'maybe')
-    .map((o) => `${o.id === viewerId ? 'you' : o.name}: ${o.likely === 'likely' ? 'likely too' : 'maybe'}`)
-    .join(' · ');
+/** On a title others want: "you: likely too", "you: maybe", or nothing the scores can say. */
+export function youLine(likely) {
+  if (likely === 'likely') return 'you: likely too';
+  return likely === 'maybe' ? 'you: maybe' : '';
+}
+
+/** "You, Jenny and Sam": people in the viewer's words. @param {{id: number, name: string}[]} people */
+export function peopleLine(people = [], viewerId = null) {
+  return namesOf(people.map((p) => (p.id === viewerId ? 'You' : p.name)));
+}
+
+/** Worth getting's lede for whom the list is for: the viewer, another member, or everyone. */
+export function worthLede(kind, forWhom, viewerId = null) {
+  const noun = kind === 'series' ? 'Series' : 'Films';
+  if (forWhom === 'everyone') {
+    return `${noun} the library doesn't have that would suit all of you, leaving out what anyone avoids.`;
+  }
+  const who = !forWhom || forWhom.id === viewerId ? 'you rate' : `${forWhom.name} rates`;
+  return `${noun} the library doesn't have, closest to the ones ${who} highest.`;
 }
 
 // Spelled here: ICU versions disagree on September ("Sep" or "Sept").
@@ -85,11 +88,10 @@ export function dayMonth(iso) {
   return Number.isNaN(at.getTime()) ? '' : `${at.getDate()} ${MONTHS[at.getMonth()]}`;
 }
 
-/** A Worth getting row's reason: the liked film it is like, or for two, the other's name first. */
-export function likeLine(item, otherName = '') {
+/** A Worth getting row's reason: the viewer's own liked film it is like, or nothing. */
+export function likeLine(item) {
   const like = item?.like;
   const terms = like?.terms?.length ? like.terms.join(', ') : '';
-  if (otherName) return [`${otherName} too`, terms].filter(Boolean).join(' · ');
   if (!like) return '';
   return [`Like ${like.name}`, terms].filter(Boolean).join(' · ');
 }

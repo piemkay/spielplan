@@ -241,7 +241,8 @@ async def _cdfs(
 async def household_list(
     conn: asyncpg.Connection, *, viewer_id: int, bundle_version: str | None
 ) -> dict[str, Any]:
-    """Every member's wants, grouped by who wants each title, most wanters first."""
+    """The viewer's wants, then the titles only others want (decision 552); each most wanted first,
+    then newest."""
     members = await conn.fetch(
         "SELECT id, name, role, colour FROM app_user "
         "WHERE is_active AND role IN ('admin', 'member') ORDER BY id"
@@ -255,7 +256,7 @@ async def household_list(
           JOIN title t ON t.id = w.title_id AND NOT t.is_owned
          WHERE w.state = 'want' AND w.user_id = ANY($1::bigint[])
          GROUP BY t.id
-         ORDER BY min(w.created_at), t.id
+         ORDER BY count(*) DESC, min(w.created_at) DESC, t.id
         """,
         list(by_id),
     )
@@ -268,46 +269,35 @@ async def household_list(
         m = by_id[member_id]
         return {"id": member_id, "name": m["name"], "role": m["role"], "colour": m["colour"]}
 
-    groups: dict[tuple[int, ...], list[dict[str, Any]]] = {}
+    listed: dict[str, list[dict[str, Any]]] = {"mine": [], "others": []}
+    copy_lines = []
     for r in rows:
         title_id = int(r["id"])
-        wanters = tuple(int(u) for u in r["wanters"])
+        wanters = [int(u) for u in r["wanters"]]
+        mine = viewer_id in wanters
         link = link_for(r["kind"], r["imdb_id"], r["tmdb_id"])
-        groups.setdefault(wanters, []).append({
+        listed["mine" if mine else "others"].append({
             "title_id": title_id,
             "kind": r["kind"],
             "name": r["name"],
             "year": r["year"],
             "poster_path": r["poster_path"],
             "since": r["since"],
-            "mine": viewer_id in wanters,
-            "others_likely": [
-                {**person(m), "likely": _likely(cdfs.get((m, title_id)))}
-                for m in sorted(by_id, key=lambda m: (m != viewer_id, m))
-                if m not in wanters
-            ],
+            "wanters": [person(m) for m in sorted(wanters, key=lambda m: m != viewer_id)],
+            "mine": mine,
+            # On others' titles the viewer's own; on the viewer's, who else would likely enjoy it.
+            "likely": None if mine else _likely(cdfs.get((viewer_id, title_id))),
+            "likely_too": [
+                by_id[m]["name"]
+                for m in by_id
+                if m not in wanters and _likely(cdfs.get((m, title_id))) == "likely"
+            ] if mine else [],
             "link": link,
         })
-    ordered = sorted(groups, key=lambda w: (-len(w), viewer_id not in w, w))
-    copy_lines = [
-        " ".join(
-            part for part in (
-                item["name"], f"({item['year']})" if item["year"] else "", item["link"] or ""
-            ) if part
-        )
-        for wanters in ordered
-        for item in groups[wanters]
-    ]
-    return {
-        "groups": [
-            {
-                "wanters": [person(m) for m in sorted(w, key=lambda m: (m != viewer_id, m))],
-                "items": groups[w],
-            }
-            for w in ordered
-        ],
-        "copy_text": "\n".join(copy_lines),
-    }
+        copy_lines.append(" ".join(
+            part for part in (r["name"], f"({r['year']})" if r["year"] else "", link or "") if part
+        ))
+    return {**listed, "copy_text": "\n".join(copy_lines)}
 
 
 async def announce_arrivals(

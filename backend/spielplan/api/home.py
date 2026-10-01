@@ -56,13 +56,18 @@ async def worth_getting(
     user: ActiveUser,
     request: Request,
     kind: Literal["movie", "series"],
-    with_: Literal["me", "pair"] = Query("me", alias="with"),
+    for_: int | Literal["everyone"] | None = Query(None, alias="for"),
 ) -> dict[str, Any]:
-    """Worth getting's See all: For you, or For you and the partner the shared shelf names."""
-    payload = await shelves.worth_getting_list(
-        conn, user_id=user.id, kind=kind, pair=with_ == "pair",
-        bundle_version=await _bundle(request, conn),
-    )
+    """Worth getting's See all: for one member, the viewer by default, or for everyone."""
+    try:
+        payload = await shelves.worth_getting_list(
+            conn, user_id=user.id, kind=kind, audience=for_,
+            bundle_version=await _bundle(request, conn),
+        )
+    except shelves.NotPickable as exc:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_CONTENT, {"reason": "not_pickable", "message": str(exc)}
+        ) from exc
     return rail.redact(payload, show_model=rail.visible_to(user))
 
 

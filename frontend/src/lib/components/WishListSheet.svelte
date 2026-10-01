@@ -1,5 +1,6 @@
 <script>
-  // The household's wish list: grouped by who wants each title, with Me too, Remove and Copy the list.
+  // The household's wish list (decision 552): what you want, then what only others want, each most
+  // wanted first, with Remove, Me too and Copy the list.
   import Avatar from '$lib/components/Avatar.svelte';
   import Icon from '$lib/components/Icon.svelte';
   import RatePoster from '$lib/components/RatePoster.svelte';
@@ -9,14 +10,18 @@
   import {
     clearWish,
     dayMonth,
-    groupHeading,
+    likelyTooLine,
     loadWishList,
-    othersLine,
+    peopleLine,
     setWish,
-    wishes
+    wishes,
+    youLine
   } from '$lib/wish.svelte.js';
 
   let { open = false, onClose, onSelect } = $props();
+
+  // Past three faces a row says how many more.
+  const FACES = 3;
 
   let data = $state(null);
   let failure = $state('');
@@ -24,6 +29,12 @@
   let copyBlocked = $state(false);
 
   const viewer = $derived(session.user?.id ?? null);
+  const sections = $derived(
+    [
+      { key: 'mine', head: 'You want', items: data?.mine ?? [] },
+      { key: 'others', head: 'Others want', items: data?.others ?? [] }
+    ].filter((s) => s.items.length)
+  );
 
   async function load() {
     failure = '';
@@ -64,7 +75,7 @@
   }
 
   function meta(item) {
-    return [item.year, item.since ? `since ${dayMonth(item.since)}` : '', othersLine(item.others_likely, viewer)]
+    return [item.year, item.since ? `since ${dayMonth(item.since)}` : '', youLine(item.likely)]
       .filter(Boolean)
       .join(' · ');
   }
@@ -80,27 +91,35 @@
   {/snippet}
   <div class="body" data-testid="wish-list-sheet">
     {#if failure}<p class="footnote" role="alert">{failure}</p>{/if}
-    {#if data && !data.groups.length}
+    {#if data && !sections.length}
       <p class="why">Nothing on the list yet. Want a film from Worth getting or from its card, and it shows here.</p>
     {/if}
-    {#each data?.groups ?? [] as group (group.wanters.map((w) => w.id).join('-'))}
-      <section class="group" data-testid="wish-group">
-        <h3 class="list-header">{groupHeading(group.wanters, viewer)}</h3>
+    {#each sections as section (section.key)}
+      <section class="group" data-testid="wish-section" data-section={section.key}>
+        <h3 class="list-header">{section.head}</h3>
         <div class="list-group">
-          {#each group.items as item (item.title_id)}
+          {#each section.items as item (item.title_id)}
+            {@const people = item.wanters.filter((w) => w.id !== viewer)}
+            {@const likely = likelyTooLine(item.likely_too)}
             <div class="row" data-testid="wish-item" data-title={item.title_id}>
               <button class="open" onclick={() => onSelect?.({ id: item.title_id, ...item })}>
                 <span class="thumb"><RatePoster title={item} showName={false} lazy /></span>
                 <span class="text">
                   <span class="name">{item.name}</span>
                   <span class="footnote">{meta(item)}</span>
+                  {#if likely}<span class="footnote likely">{likely}</span>{/if}
                 </span>
               </button>
-              {#if group.wanters.length > 1}
-                <span class="faces" role="img" aria-label={group.wanters.map((w) => w.name).join(' and ')}>
-                  {#each group.wanters as person (person.id)}
+              {#if people.length}
+                <span
+                  class="faces"
+                  role="img"
+                  aria-label="{item.mine ? 'Also wanted by' : 'Wanted by'} {peopleLine(people, viewer)}"
+                >
+                  {#each people.slice(0, people.length > FACES ? FACES - 1 : FACES) as person (person.id)}
                     <Avatar name={person.name} {person} size={24} />
                   {/each}
+                  {#if people.length > FACES}<span class="more">+{people.length - FACES + 1}</span>{/if}
                 </span>
               {/if}
               {#if item.mine}
@@ -122,7 +141,7 @@
         </div>
       </section>
     {/each}
-    {#if data?.groups.length}
+    {#if sections.length}
       <button class="pill copy" data-testid="wish-copy" onclick={copy}><Icon name="copy" size={18} />Copy the list</button>
       <p class="footnote copynote">Titles, years and IMDb links, one per line, the most wanted first.</p>
       {#if copyBlocked}
@@ -202,15 +221,31 @@
     line-height: 22px;
     font-weight: 500;
   }
+  .likely {
+    color: var(--text-2);
+  }
   .faces {
     flex: none;
     display: flex;
   }
-  .faces > :global(.avatar) {
+  .faces > :global(.avatar),
+  .more {
     box-shadow: 0 0 0 2px var(--surface-1);
   }
-  .faces > :global(.avatar + .avatar) {
+  .faces > :global(* + *) {
     margin-left: -6px;
+  }
+  .more {
+    display: grid;
+    place-items: center;
+    min-width: 24px;
+    height: 24px;
+    padding: 0 5px;
+    border-radius: var(--r-pill);
+    background: var(--surface-2);
+    color: var(--text-2);
+    font-size: 11px;
+    font-weight: 600;
   }
   .remove {
     flex: none;

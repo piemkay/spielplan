@@ -9,6 +9,8 @@
   import { goto } from '$app/navigation';
   import Avatar from './Avatar.svelte';
   import Sheet from './Sheet.svelte';
+  import TitleDetail from './TitleDetail.svelte';
+  import WishListSheet from './WishListSheet.svelte';
 
   let { onLogout } = $props();
 
@@ -19,6 +21,9 @@
   let error = $state('');
   // Whom Compare opens on beside the viewer, named in Your taste's footnote.
   let partner = $state(null);
+  let wishOpen = $state(false);
+  // A title opened from the wish list.
+  let selected = $state(null);
 
   const method = $derived(authMethodLine(session.user));
   const tasteEntry = $derived((session.user?.nav?.account ?? []).find((e) => e.key === 'taste'));
@@ -131,6 +136,16 @@
         {/if}
 
         <section class="group">
+          <div class="list-group">
+            <button class="list-row" data-testid="you-wish-row" onclick={() => (wishOpen = true)}>
+              <span>Wish list</span>
+              {@render chevron()}
+            </button>
+          </div>
+          <p class="list-footer">What the household wants that the library doesn't have yet.</p>
+        </section>
+
+        <section class="group">
           <h3 class="list-header">Switch profile</h3>
           <div class="list-group">
             {#each others as u (u.id)}
@@ -209,6 +224,18 @@
     </div>
   {/snippet}
 </Sheet>
+
+<!-- Over You, so Back returns to it; a title opened from the list stacks over both. -->
+<WishListSheet open={wishOpen} onClose={() => (wishOpen = false)} onSelect={(title) => (selected = title)} />
+{#if selected}
+  <TitleDetail
+    titleId={selected.id}
+    seed={selected}
+    onClose={() => (selected = null)}
+    onPerson={() => (selected = null)}
+    onStateChange={() => {}}
+  />
+{/if}
 
 <style>
   .avatar-btn {

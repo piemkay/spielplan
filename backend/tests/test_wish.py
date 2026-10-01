@@ -9,7 +9,7 @@ import pytest
 
 from spielplan.home import wish
 from spielplan.push import keys
-from tests.helpers import household
+from tests.helpers import household, insert_user
 from tests.test_push_sender import FakePushService, _decrypt, _device
 
 BUNDLE = "test-wish-v1"
@@ -66,35 +66,42 @@ async def _list(client) -> dict:
     return response.json()
 
 
-def _groups(listing: dict) -> list[tuple[list[str], list[str]]]:
-    return [
-        ([w["name"] for w in g["wanters"]], [i["name"] for i in g["items"]])
-        for g in listing["groups"]
-    ]
+def _sections(listing: dict) -> dict[str, list[tuple[str, list[str]]]]:
+    """Each section's titles with who wants them, in order."""
+    return {
+        section: [(i["name"], [w["name"] for w in i["wanters"]]) for i in listing[section]]
+        for section in ("mine", "others")
+    }
 
 
 async def test_want_me_too_and_remove_each_touch_only_the_persons_own_row(house):
     assert (await _put(house.patrick, PRISONERS, "want")).json() == {"state": "want"}
     assert await _card_state(house.patrick, PRISONERS) == "want"
     assert await _card_state(house.jenny, PRISONERS) is None
+    assert _sections(await _list(house.jenny)) == {
+        "mine": [], "others": [("Prisoners", ["patrick"])]
+    }
 
     assert (await _put(house.jenny, PRISONERS, "want")).status_code == 200
     listing = await _list(house.jenny)
-    assert _groups(listing) == [(["jenny", "patrick"], ["Prisoners"])], "the viewer is named first"
-    assert listing["groups"][0]["items"][0]["mine"] is True
+    assert _sections(listing) == {
+        "mine": [("Prisoners", ["jenny", "patrick"])], "others": []
+    }, "Me too moves it to the viewer's own, the viewer named first"
+    assert listing["mine"][0]["mine"] is True
 
     removed = await house.patrick.delete(f"/api/wish/{PRISONERS}")
     assert removed.json() == {"state": None}
     assert await _card_state(house.patrick, PRISONERS) is None
-    item = (await _list(house.patrick))["groups"][0]["items"][0]
-    assert item["mine"] is False
-    assert [o["name"] for o in item["others_likely"]] == ["patrick"], "the viewer reads as 'you'"
+    listing = await _list(house.patrick)
+    assert _sections(listing) == {"mine": [], "others": [("Prisoners", ["jenny"])]}
+    assert listing["others"][0]["mine"] is False
 
 
 async def test_not_for_me_is_a_pressed_answer_the_same_route_undoes(house):
     assert (await _put(house.patrick, COLLATERAL, "not_for_me")).json() == {"state": "not_for_me"}
     assert await _card_state(house.patrick, COLLATERAL) == "not_for_me"
-    assert (await _list(house.patrick))["groups"] == [], "Not for me is no want"
+    listing = await _list(house.patrick)
+    assert (listing["mine"], listing["others"]) == ([], []), "Not for me is no want"
     await house.patrick.delete(f"/api/wish/{COLLATERAL}")
     assert await _card_state(house.patrick, COLLATERAL) is None
 
@@ -117,26 +124,38 @@ async def test_a_repeated_want_keeps_the_date_it_was_first_wanted(house):
     ) == first
 
 
-async def test_the_list_groups_by_who_wants_most_wanters_first_and_copies_with_links(house):
-    await _put(house.patrick, PRISONERS, "want")
-    await _put(house.jenny, PRISONERS, "want")
-    await _put(house.patrick, SEVERANCE, "want")
-    await _put(house.jenny, COLLATERAL, "want")
+async def test_the_list_is_yours_then_others_most_wanted_first_and_copies_with_links(house):
+    """Three members: two sections whoever looks, each most wanted first, then newest."""
+    db = house.db
+    sam = await insert_user(db, "sam")
+    await db.execute("INSERT INTO title (id, kind, name, year) VALUES (505, 'movie', 'Thief', 1981)")
+    for user_id, title_id, day in (
+        (house.patrick_id, PRISONERS, 10), (house.jenny_id, PRISONERS, 11),
+        (house.patrick_id, SEVERANCE, 20),
+        (house.jenny_id, COLLATERAL, 12), (sam, COLLATERAL, 13),
+        (sam, 505, 25),
+    ):
+        await db.execute(
+            "INSERT INTO wish (user_id, title_id, state, created_at) "
+            "VALUES ($1, $2, 'want', make_timestamptz(2026, 9, $3, 12, 0, 0))",
+            user_id, title_id, day,
+        )
 
-    mine = await _list(house.patrick)
-    assert _groups(mine) == [
-        (["patrick", "jenny"], ["Prisoners"]),
-        (["patrick"], ["Severance"]),
-        (["jenny"], ["Collateral"]),
-    ]
-    assert mine["copy_text"].splitlines() == [
-        "Prisoners (2013) https://www.imdb.com/title/tt1392214/",
-        "Severance (2022) https://www.themoviedb.org/tv/95396",
+    patricks = await _list(house.patrick)
+    assert _sections(patricks) == {
+        "mine": [("Prisoners", ["patrick", "jenny"]), ("Severance", ["patrick"])],
+        "others": [("Collateral", ["jenny", "sam"]), ("Thief", ["sam"])],
+    }
+    assert patricks["copy_text"].splitlines() == [
         "Collateral (2004)",
-    ]
-    theirs = await _list(house.jenny)
-    assert [g[0] for g in _groups(theirs)] == [["jenny", "patrick"], ["jenny"], ["patrick"]]
-    assert theirs["copy_text"].splitlines()[0].startswith("Prisoners (2013)")
+        "Prisoners (2013) https://www.imdb.com/title/tt1392214/",
+        "Thief (1981)",
+        "Severance (2022) https://www.themoviedb.org/tv/95396",
+    ], "most wanted first, then newest, whichever section a title is in"
+    assert _sections(await _list(house.jenny)) == {
+        "mine": [("Collateral", ["jenny", "sam"]), ("Prisoners", ["jenny", "patrick"])],
+        "others": [("Thief", ["sam"]), ("Severance", ["patrick"])],
+    }
 
 
 async def _ranked(house) -> list[int]:
@@ -175,16 +194,18 @@ async def test_another_members_likely_reads_their_own_score_among_unowned_titles
     await _put(house.patrick, COLLATERAL, "want")
     await _put(house.jenny, fillers[0], "want")
 
-    listing = await _list(house.patrick)
-    likely = {
-        item["name"]: {o["name"]: o["likely"] for o in item["others_likely"]}
-        for group in listing["groups"]
-        for item in group["items"]
-    }
     # Percentiles among the nine unowned films: Prisoners 1.0, Collateral 0.5.
-    assert likely["Prisoners"] == {"jenny": "likely"}
-    assert likely["Collateral"] == {"jenny": "maybe"}
-    assert likely[f"Filler {fillers[0]}"] == {"patrick": None}, "Patrick has no ranking of his own"
+    patricks = await _list(house.patrick)
+    assert {i["name"]: i["likely_too"] for i in patricks["mine"]} == {
+        "Prisoners": ["jenny"], "Collateral": []
+    }, "under his own titles, only who would likely enjoy it"
+    assert [(i["name"], i["likely"]) for i in patricks["others"]] == [
+        (f"Filler {fillers[0]}", None)
+    ], "Patrick has no ranking of his own"
+    jennys = await _list(house.jenny)
+    assert {i["name"]: (i["likely"], i["likely_too"]) for i in jennys["others"]} == {
+        "Prisoners": ("likely", []), "Collateral": ("maybe", [])
+    }, "on others' titles, the viewer's own"
 
     # The card names only who would likely enjoy it, and never someone who marked it Not for me.
     async def card_likely(title_id: int) -> list[str]:
@@ -201,9 +222,8 @@ async def test_a_member_who_said_not_for_me_is_never_likely_too(house):
     await _ranked(house)
     await _put(house.jenny, PRISONERS, "not_for_me")
     await _put(house.patrick, PRISONERS, "want")
-    for viewer in (house.patrick, house.jenny):
-        item = (await _list(viewer))["groups"][0]["items"][0]
-        assert {o["name"]: o["likely"] for o in item["others_likely"]} == {"jenny": None}
+    assert (await _list(house.patrick))["mine"][0]["likely_too"] == []
+    assert (await _list(house.jenny))["others"][0]["likely"] is None
 
 
 async def test_a_wanted_title_leaves_the_list_and_arrives_for_its_wanters_only(house):
@@ -215,7 +235,9 @@ async def test_a_wanted_title_leaves_the_list_and_arrives_for_its_wanters_only(h
     assert home["arrived"] == []
 
     await db.execute("UPDATE title SET is_owned = true WHERE id = $1", PRISONERS)
-    assert _groups(await _list(house.patrick)) == [(["patrick"], ["Collateral"])]
+    assert _sections(await _list(house.patrick)) == {
+        "mine": [("Collateral", ["patrick"])], "others": []
+    }
     home = (await house.patrick.get("/api/home", params={"kind": "movie"})).json()
     assert home["wish"] == {"wanted": 1, "both": 0, "members": 2}
     assert [(a["title_id"], a["name"], a["play_url"]) for a in home["arrived"]] == [
