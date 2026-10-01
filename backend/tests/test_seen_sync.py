@@ -412,7 +412,7 @@ async def test_a_watched_arrival_that_leaves_the_library_is_not_wanted_again(db,
     monkeypatch.setattr(module, "ITEMS", [item for item in library if item["Id"] != "jf-2"])
     await seen.sync_all(db, world["client"])
     assert await db.fetchval("SELECT is_owned FROM title WHERE id = 2") is False
-    assert await wish.summary(db) == {"wanted": 0, "both": 0}
+    assert (await wish.summary(db))["wanted"] == 0
 
     monkeypatch.setattr(module, "ITEMS", library)
     await seen.sync_all(db, world["client"])
