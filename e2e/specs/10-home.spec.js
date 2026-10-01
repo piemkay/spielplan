@@ -7,7 +7,7 @@ import { openTitle, placeThroughRate, setUpLadder, signedIn } from '../helpers.j
  * clearing it returns the shelves." And §6.7's toggle (decision 117): a server-side deletion, so
  * gated numbers are asserted absent from the payload too, not only from the DOM. The file seeds
  * a ledger first, because a profile with no verdicts has no shelf cards (proposal 20); its first
- * test is the admin's Home before the set-up, so it seeds nothing.
+ * test is the admin's Home before the set-up, so it seeds only after looking.
  */
 
 /** Signed in inside its OWN context: a second tab shares the cookie jar (decision 117, per user). */
@@ -63,7 +63,9 @@ function gatedKeysIn(value, found = new Set()) {
  * seen the three `school_night` needs.
  */
 async function seedLedger(request) {
-  if (shelfCards(await homePayload(request)).length) return; // this profile already has one
+  // New in library ships before any rating, so shelves alone do not say the ladder was seeded.
+  const { done } = await (await request.get('/api/ladder/setup')).json();
+  if (done && shelfCards(await homePayload(request)).length) return; // this profile already has one
 
   await setUpLadder(request);
   await placeThroughRate(request, 'series', [5, 2]);
@@ -173,7 +175,7 @@ test(BEFORE_SET_UP, async ({ page }) => {
     '/rate/setup'
   );
 
-  await setUpLadder(page.request);
+  await seedLedger(page.request);
   expect((await homePayload(page.request)).setup_notice).toBeNull();
   const landed = page.waitForResponse((res) => res.url().includes('/api/home?'));
   await page.reload();
