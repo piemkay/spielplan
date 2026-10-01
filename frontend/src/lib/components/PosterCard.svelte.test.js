@@ -94,6 +94,10 @@ describe('a card beyond the library (decision 544)', () => {
     app = render(title({ wanted: false }));
     expect(target.querySelector('[data-testid="wanted-mark"]')).toBeNull();
     unmount(app);
+    app = render(title({ wanted: true, seen_state: 'seen' }));
+    expect(target.querySelector('[data-testid="wanted-mark"]'), 'the seen tick keeps its corner').toBeNull();
+    expect(target.querySelector('[data-testid="seen-badge"]')).not.toBeNull();
+    unmount(app);
   });
 
   it('names the liked film it is like as a third line', () => {

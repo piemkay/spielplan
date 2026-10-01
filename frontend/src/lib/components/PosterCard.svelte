@@ -80,7 +80,8 @@
     {#if title.is_owned === true}
       <span class="owned" data-testid="owned-chip">In library</span>
     {/if}
-    {#if title.wanted}
+    <!-- The seen tick takes the corner: a wanted film already watched has nothing left to flag. -->
+    {#if title.wanted && title.seen_state !== 'seen'}
       <span class="wanted" role="img" aria-label="On your wish list" data-testid="wanted-mark">
         <Icon name="bookmark-fill" size={13} />
       </span>

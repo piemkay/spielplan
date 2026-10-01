@@ -228,6 +228,9 @@ async def test_an_arrival_is_pushed_to_each_member_who_wanted_it(house, secrets_
     jennys = await _device(db, house.jenny_id, "https://push.example.test/f/jenny-phone")
     await _put(house.patrick, PRISONERS, "want")
     await _put(house.jenny, COLLATERAL, "want")
+    # A disabled member keeps their devices; an arrival is not theirs to hear about.
+    await _put(house.jenny, PRISONERS, "want")
+    await db.execute("UPDATE app_user SET is_active = false WHERE id = $1", house.jenny_id)
 
     service = FakePushService()
     sent = await wish.announce_arrivals(db, {PRISONERS}, transport=service)

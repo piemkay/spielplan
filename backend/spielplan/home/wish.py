@@ -279,6 +279,7 @@ async def announce_arrivals(
         """
         SELECT w.user_id, t.id, t.name
           FROM wish w JOIN title t ON t.id = w.title_id
+          JOIN app_user u ON u.id = w.user_id AND u.is_active
          WHERE w.state = 'want' AND w.title_id = ANY($1::int[])
          ORDER BY t.id, w.user_id
         """,
