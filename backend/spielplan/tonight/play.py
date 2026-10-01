@@ -1,12 +1,12 @@
 """The round's write path: start, serve, answer, retract, escape, finish (§6.2 steps 3-6).
 
-The pool is snapshot at start, so nothing re-ranks within the evening. Every answer names a sealed
-pair, so the client cannot choose its stream (§13). `progress()` selects counts, never titles.
+The pool, and each seat's films and reach, are snapshot at start, so nothing re-ranks within the
+evening. Every answer names a sealed pair, so the client cannot choose its stream (§13). `progress()`
+selects counts, never titles.
 """
 
 from __future__ import annotations
 
-import asyncio
 import json
 import random
 import secrets
@@ -16,6 +16,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 import asyncpg
+import numpy as np
 
 from spielplan.db import dna_terms
 from spielplan.tonight import combine as combine_rules
@@ -37,23 +38,54 @@ class RoundError(Exception):
 
 
 @dataclass(frozen=True)
+class SeatRound:
+    """One seat's frozen round: the films it may be asked about, each film's card, the candidates
+    its mood may re-rank, and why it has no round when it has none."""
+
+    films: tuple[round_rules.Film, ...] = ()
+    cards: dict[int, dict[str, Any]] = field(default_factory=dict)
+    reach: tuple[int, ...] = ()
+    no_round: str | None = None
+
+
+@dataclass(frozen=True, eq=False)
 class Snapshot:
-    """The frozen evening: which titles, what each seat scores them, their DNA."""
+    """The frozen evening: which titles, what each seat scores them, their DNA, and each seat's round."""
 
     candidates: dict[int, dict[str, Any]]
     scores: dict[int, dict[int, float]]      # title_id -> {participant_id: §5.1 score}
     dna: dict[int, dict[str, float]]
     version: str | None
-    # §13's hold-out draw, sealed with the pool (decision 223); None for older rooms.
+    # §13's hold-out draw, sealed with the pool (decision 223).
     holdout_seed: str | None = None
     # The scale rule, frozen with the pool so a deploy cannot move an evening in flight (decision 477).
     scale: str | None = None
     # Derived from `scores` under `scale` in `_as_snapshot`, never stored.
     ledger: dict[int, dict[int, float]] = field(default_factory=dict)
+    rounds: dict[int, SeatRound] = field(default_factory=dict)
+    # Where each candidate within some seat's reach sits on the mood directions.
+    z: dict[int, tuple[float, ...]] = field(default_factory=dict)
+    # The directions as term weights, so a mood can be written back as terms (`tilt.back`).
+    mood_terms: tuple[str, ...] = ()
+    mood_axes: np.ndarray = field(default_factory=lambda: np.zeros((0, round_rules.MOOD_DIRECTIONS)))
 
     @property
     def title_ids(self) -> list[int]:
         return list(self.candidates)
+
+    def round_of(self, participant_id: int) -> SeatRound:
+        """A seat seated after the start has nothing frozen, so no round."""
+        return self.rounds.get(participant_id, SeatRound())
+
+    def stable_for(self, participant_id: int, *, guest: bool) -> dict[int, float]:
+        """A seat's stable taste over the pool: its own Ledger, or for a guest the pool's own order."""
+        return self.member_average() if guest else self.pool_scores_for(participant_id)
+
+    def reach_of(self, participant_id: int) -> dict[int, tuple[float, ...]]:
+        return {t: self.z[t] for t in self.round_of(participant_id).reach if t in self.z}
+
+    def tilt(self, mean: np.ndarray) -> dict[str, float]:
+        return tilt_rules.back(self.mood_terms, self.mood_axes, mean)
 
     def pool_scores_for(self, participant_id: int) -> dict[int, float]:
         """One seat's Ledger over the pool, on the room's scale; empty for a guest (54c).
@@ -78,18 +110,9 @@ class Snapshot:
         `combine.D_THRESHOLD` was recalibrated on (decision 478)."""
         return {t: list(s.values()) for t, s in self.ledger.items()}
 
-    def frame(self) -> tilt_rules.Frame:
-        return tilt_rules.frame(self.dna)
 
-
-def _on_scale(scores: dict[int, dict[int, float]], scale: str | None) -> dict[int, dict[int, float]]:
-    """`scores` as the room's scale reads them; an unknown marker is refused, never guessed at."""
-    if scale is None:
-        return scores
-    if scale != pool_rules.SCALE_MARKER:
-        raise RoundError(
-            "no_room", "this room was started by a different version of Spielplan - start a new one"
-        )
+def _on_scale(scores: dict[int, dict[int, float]]) -> dict[int, dict[int, float]]:
+    """`scores` as the room's scale reads them: each member's ranks as normal quantiles (decision 477)."""
     by_member: dict[int, dict[int, float]] = {}
     for t, seats in scores.items():
         for p, v in seats.items():
@@ -101,22 +124,52 @@ def _on_scale(scores: dict[int, dict[int, float]], scale: str | None) -> dict[in
     return out
 
 
+# What a pair card shows of a film: never its step, and no score.
+_CARD = ("title_id", "name", "year", "kind", "runtime_min", "poster_path", "genres")
+
+
+def _seat_round(raw: Mapping[str, Any]) -> SeatRound:
+    films = raw.get("films") or []
+    return SeatRound(
+        films=tuple(
+            round_rules.Film(
+                title_id=int(f["title_id"]), step=f["step"], runtime_min=f["runtime_min"],
+                z=tuple(float(v) for v in f["z"]),
+            )
+            for f in films
+        ),
+        cards={int(f["title_id"]): {k: f[k] for k in _CARD} for f in films},
+        reach=tuple(int(t) for t in raw.get("reach") or ()),
+        no_round=raw.get("no_round"),
+    )
+
+
 def _as_snapshot(context: Any) -> Snapshot:
+    """The frozen evening; a room started under another round or scale is refused, never guessed at."""
     ctx = context if isinstance(context, dict) else json.loads(context or "{}")
     raw = ctx.get("pool") or {}
+    if raw.get("round") != round_rules.ROUND_MARKER or raw.get("scale") != pool_rules.SCALE_MARKER:
+        raise RoundError(
+            "no_room", "this room was started by a different version of Spielplan - start a new one"
+        )
     scores = {
         int(t): {int(p): float(v) for p, v in seats.items()}
         for t, seats in (raw.get("scores") or {}).items()
     }
-    scale = raw.get("scale")
+    mood = raw.get("mood") or {}
+    axes = np.asarray(mood.get("axes") or [], dtype=float)
     return Snapshot(
         candidates={int(k): v for k, v in (raw.get("candidates") or {}).items()},
         scores=scores,
         dna={int(k): {t: float(w) for t, w in v.items()} for k, v in (raw.get("dna") or {}).items()},
         version=raw.get("version"),
         holdout_seed=raw.get("holdout_seed"),
-        scale=scale,
-        ledger=_on_scale(scores, scale),
+        scale=raw["scale"],
+        ledger=_on_scale(scores),
+        rounds={int(p): _seat_round(v) for p, v in (raw.get("seats") or {}).items()},
+        z={int(t): tuple(float(x) for x in v) for t, v in (raw.get("z") or {}).items()},
+        mood_terms=tuple(mood.get("terms") or ()),
+        mood_axes=axes.reshape(-1, round_rules.MOOD_DIRECTIONS),
     )
 
 
@@ -159,8 +212,65 @@ async def _refuse_unscored_members(
     )
 
 
+async def _frozen_rounds(
+    conn: asyncpg.Connection,
+    *,
+    seats: Sequence[pool_rules.Seat],
+    kind: str,
+    bundle_version: str,
+    vetoed_terms: Sequence[str],
+    version: str | None,
+    space: tilt_rules.Space,
+    ledger: Mapping[int, Mapping[int, float]],
+) -> tuple[dict[str, dict[str, Any]], set[int]]:
+    """Each seat's films and reach (decision 539): a member's own liked films and their top 30 unseen,
+    a guest's well-known films and the pool's own top 30. Also every candidate some seat can reach."""
+    average = {t: pool_rules.group_score(s) for t, s in ledger.items()}
+    well_known: list[dict[str, Any]] | None = None
+    chosen: dict[int, tuple[list[dict[str, Any]], str | None, list[int]]] = {}
+    for seat in seats:
+        if seat.is_member and seat.user_id is not None:
+            films, word = await pool_rules.liked_films(
+                conn, user_id=seat.user_id, kind=kind, vetoed_terms=vetoed_terms, dna_version=version,
+            )
+            stable = {t: s[seat.participant_id] for t, s in ledger.items() if seat.participant_id in s}
+            seen = await pool_rules.seen_among(conn, user_id=seat.user_id, title_ids=list(stable))
+        else:
+            if well_known is None:
+                well_known = await pool_rules.well_known_films(
+                    conn, kind=kind, bundle_version=bundle_version, vetoed_terms=vetoed_terms,
+                    dna_version=version,
+                )
+            films, word, stable, seen = well_known, None, average, set()
+        chosen[seat.participant_id] = (films, word, pool_rules.reach(stable, seen=seen))
+
+    asked = sorted(
+        {f["title_id"] for films, _, _ in chosen.values() if round_rules.has_round(films) for f in films}
+    )
+    dna = await dna_reads.vectors_for(conn, asked, version=version or "")
+    genres = await pool_rules.genres_of(conn, asked)
+    frozen = {}
+    for participant_id, (films, word, reach) in chosen.items():
+        has_round = round_rules.has_round(films)
+        frozen[str(participant_id)] = {
+            "films": [
+                {
+                    **f,
+                    "z": list(space.project(dna.get(f["title_id"], {}))),
+                    "genres": genres.get(f["title_id"], []),
+                }
+                for f in films
+            ] if has_round else [],
+            "reach": reach,
+            "no_round": None if has_round else copy_rules.no_round(
+                need=round_rules.MIN_ROUND_FILMS, have=len(films), word=word
+            ),
+        }
+    return frozen, {t for _, _, reach in chosen.values() for t in reach}
+
+
 async def start(conn: asyncpg.Connection, session_id: int) -> Snapshot:
-    """Close the join window, build the pool once, and freeze it.
+    """Close the join window, build the pool once, and freeze it with each seat's round.
 
     One transaction whose first statement is the claim, so a join cannot land mid-build and a
     refusal rolls the claim back; `rooms.join`'s `FOR SHARE` serialises against it.
@@ -184,6 +294,7 @@ async def start(conn: asyncpg.Connection, session_id: int) -> Snapshot:
         await _refuse_unscored_members(conn, session_id, bundle_version=row["bundle_version"])
         version = await dna_reads.active_version(conn)
         vetoes = rooms.vetoes_of(row["context"])
+        vetoed = pool_rules.veto_terms(vetoes)
         candidates = await pool_rules.build(
             conn,
             seats=seats,
@@ -191,12 +302,12 @@ async def start(conn: asyncpg.Connection, session_id: int) -> Snapshot:
             budget_min=row["runtime_budget_min"],
             include_rewatches=row["include_rewatches"],
             bundle_version=row["bundle_version"],
-            vetoed_terms=pool_rules.veto_terms(vetoes),
+            vetoed_terms=vetoed,
             dna_version=version,
         )
         if len(candidates) < 2:
-            # A pool of two or three is admitted and ends at zero answers (decision 215). A pool
-            # the vetoes emptied says so (decision 480).
+            # A pool of two or three is admitted (decision 215). A pool the vetoes emptied says so
+            # (decision 480).
             named = pool_rules.veto_labels(vetoes)
             raise RoundError(
                 "empty_pool",
@@ -207,6 +318,13 @@ async def start(conn: asyncpg.Connection, session_id: int) -> Snapshot:
         ids = [c.title_id for c in candidates]
         # Genres rather than DNA: the card must not preview the pool's order.
         genres = await pool_rules.genres_of(conn, ids)
+        dna = await dna_reads.vectors_for(conn, ids, version=version or "")
+        space = tilt_rules.space({t: dna.get(t, {}) for t in ids})
+        seat_rounds, reached = await _frozen_rounds(
+            conn, seats=seats, kind=row["kind"], bundle_version=row["bundle_version"],
+            vetoed_terms=vetoed, version=version, space=space,
+            ledger=_on_scale({c.title_id: dict(c.scores) for c in candidates}),
+        )
         payload = {
             "candidates": {
                 str(c.title_id): {
@@ -221,15 +339,16 @@ async def start(conn: asyncpg.Connection, session_id: int) -> Snapshot:
             "scores": {
                 str(c.title_id): {str(p): v for p, v in c.scores.items()} for c in candidates
             },
-            "dna": {
-                str(k): v
-                for k, v in (await dna_reads.vectors_for(conn, ids, version=version or "")).items()
-            },
+            "dna": {str(k): v for k, v in dna.items()},
             "version": version,
             # §13's draw, sealed for the evening (decision 223); `secrets` so a client cannot predict it.
             "holdout_seed": secrets.token_hex(16),
             # Decision 477's rule; `scores` stays the raw §5.1 read and `_as_snapshot` derives the rest.
             "scale": pool_rules.SCALE_MARKER,
+            "round": round_rules.ROUND_MARKER,
+            "seats": seat_rounds,
+            "z": {str(t): list(space.project(dna.get(t, {}))) for t in reached},
+            "mood": {"terms": list(space.terms), "axes": space.axes.tolist()},
             # Frozen for §14 risk 6's reader, with whose each one was (decisions 480, 505).
             "vetoes": vetoes,
             "vetoes_by": {str(s): k for s, k in rooms.vetoes_by_seat(row["context"]).items()},
@@ -308,30 +427,26 @@ async def _turn_is_open(conn: asyncpg.Connection, row: asyncpg.Record) -> None:
         )
 
 
-async def _round_of(
-    snapshot: Snapshot, row: asyncpg.Record, answers: list[round_rules.Answered]
+def _round_of(
+    snapshot: Snapshot, row: asyncpg.Record, answers: list[round_rules.Answered], *, select: bool = True
 ) -> round_rules.Round:
-    """One seat's whole round, replayed off the event loop (the search is CPU-bound).
+    """One seat's whole round, replayed from its rows.
 
-    The hold-out draw is seeded by (the pool's sealed nonce, this seat, live answer count + 1), so
-    every read shows the same pair and an undo re-opens its seq with the same card (decision 223).
+    The draw is seeded by (the pool's sealed nonce, this seat, live answer count + 1), so every read
+    shows the same pair and an undo re-opens its seq with the same card (decision 223).
     """
-    is_member = row["role"] != rooms.ROLE_GUEST
-    prior = snapshot.pool_scores_for(row["id"]) if is_member else snapshot.member_average()
-    escaped = row["ended_by"] == round_rules.ESCAPE
     seq = len(answers) + 1
-    seed = snapshot.holdout_seed or str(row["session_id"])
-    rng = random.Random(f"{seed}:{row['id']}:{seq}")
-
-    def played() -> round_rules.Round:
-        return round_rules.replay(
-            prior, answers, has_profile=is_member,
-            # The seat, never the seed: 54b's arm has a second caller with no pool (decision 223).
-            holdout_key=str(row["id"]),
-            rng=rng, escaped=escaped,
-        )
-
-    return await asyncio.to_thread(played)
+    return round_rules.replay(
+        snapshot.round_of(row["id"]).films,
+        snapshot.stable_for(row["id"], guest=row["role"] == rooms.ROLE_GUEST),
+        snapshot.reach_of(row["id"]),
+        answers,
+        # The seat, never the seed: the arm is a rate keyed on who answers (decision 223).
+        holdout_key=str(row["id"]),
+        rng=random.Random(f"{snapshot.holdout_seed}:{row['id']}:{seq}"),
+        escaped=row["ended_by"] == round_rules.ESCAPE,
+        select=select,
+    )
 
 
 def _card(
@@ -344,13 +459,15 @@ def _card(
     snapshot: Snapshot | None = None,
     ended_now: bool = False,
 ) -> dict[str, Any]:
-    """What one seat's device renders: the next pair, or that they are done.
+    """What one seat's device renders: the next pair, or that they are done, and why a seat with too
+    little to ask about has no round.
 
     One shape for the read and the three writes. `played is None` is a seat with no round to
     report (an escape, or a stale ending in `_next_card`).
     """
     pair = None if played is None or stop_reason is not None else played.next_pair
-    candidates = {} if snapshot is None else snapshot.candidates
+    seat = None if snapshot is None else snapshot.round_of(participant_id)
+    cards = {} if seat is None else seat.cards
     return {
         "participant_id": participant_id,
         "answered": answered,
@@ -361,11 +478,12 @@ def _card(
         "cap": round_rules.CAP_PAIRS,
         # The header's expectation: the typical round, not the cap.
         "typical": round_rules.TYPICAL_PAIRS,
+        "no_round": None if seat is None else seat.no_round,
         "pair": None if pair is None else {
             "selection": pair.selection,
             "reason": pair.reason,
-            "a": candidates.get(pair.title_a),
-            "b": candidates.get(pair.title_b),
+            "a": cards.get(pair.title_a),
+            "b": cards.get(pair.title_b),
         },
         "_pair": pair,
         # Private: whether this call ended the seat, so the round read (the only handler that
@@ -379,15 +497,15 @@ async def _next_card(
     row: asyncpg.Record,
     *,
     answered: int,
-    answers: list[round_rules.Answered],
+    played: round_rules.Round,
     snapshot: Snapshot,
 ) -> dict[str, Any]:
-    """The card a write hands straight back: one snapshot read and one replay for the whole tap.
+    """The card a write hands straight back, from the write's own replay: one snapshot read and one
+    replay for the whole tap.
 
     Runs after the commit, so the ending is conditional on the answer count (`when_answered`): on
     a refusal the card reports the row with no pair and the client re-reads.
     """
-    played = await _round_of(snapshot, row, answers)
     ended_by, stop_reason = row["ended_by"], played.stop_reason
     ended_now = False
     if stop_reason is not None and ended_by is None:
@@ -408,14 +526,14 @@ async def state_for(conn: asyncpg.Connection, participant_id: int) -> dict[str, 
     row = await _participant(conn, participant_id)
     snapshot = await snapshot_of(conn, row["session_id"])
     answers = await _answers(conn, participant_id)
-    played = await _round_of(snapshot, row, answers)
+    played = _round_of(snapshot, row, answers)
 
     answered, ended_by = row["answered_count"], row["ended_by"]
     stop_reason = played.stop_reason
     ended_now = False
     if stop_reason is not None and ended_by is None:
         # A reason with no pair means nothing can be asked, so end the seat here or it strands
-        # (a pool of two or three, decision 215). A write on a read, idempotent, and guarded by
+        # (too little to ask about, decision 539). A write on a read, idempotent, and guarded by
         # `when_answered`: if the count moved, report the row with no pair; if another writer
         # ended it first, the row keeps theirs.
         if await _end(conn, participant_id, stop_reason, when_answered=answered):
@@ -445,8 +563,7 @@ async def record_answer(
     """Write one answer, move the tilt, and hand back the next card.
 
     Guards run under the seat's row lock, so a double tap refuses as `stale_pair`. The row's seq
-    is minted from the rows (tombstones included), independent of `answered_count`; the round is
-    replayed after the commit.
+    is minted from the rows (tombstones included), independent of `answered_count`.
     """
     async with conn.transaction():
         row = await _participant(conn, participant_id, lock=True)
@@ -474,18 +591,13 @@ async def record_answer(
             row["session_id"], participant_id, written_seq,
             pair.title_a, pair.title_b, answer, pair.selection, latency_ms,
         )
-        # §6.2 step 4's tilt; held-out answers never move it (54b).
-        tilt = dict(row["tilt"] or {})
-        if pair.selection != round_rules.SELECTION_HOLDOUT:
-            # `tilt.applied` carries the §10 membership check for all three callers.
-            tilt = tilt_rules.applied(
-                tilt, answer=answer, title_a=pair.title_a, title_b=pair.title_b,
-                vectors=snapshot.dna, frame=snapshot.frame(),
-            )
-        await _set_answered(conn, participant_id, count=row["answered_count"] + 1, tilt=tilt)
         answers = await _answers(conn, participant_id)
+        played = _round_of(snapshot, row, answers)
+        # The mood as term weights; a held-out answer moves none of it.
+        tilt = snapshot.tilt(played.mood.mean)
+        await _set_answered(conn, participant_id, count=row["answered_count"] + 1, tilt=tilt)
     card = await _next_card(
-        conn, row, answered=row["answered_count"] + 1, answers=answers, snapshot=snapshot,
+        conn, row, answered=row["answered_count"] + 1, played=played, snapshot=snapshot,
     )
     # The seq WRITTEN, which after an undo differs from the one the card carried.
     return {**card, "seq": written_seq, "tilt": tilt}
@@ -556,27 +668,18 @@ async def retract(conn: asyncpg.Connection, participant_id: int) -> dict[str, An
             "UPDATE session_answer SET retracted_at = now() WHERE id = $1", last["id"]
         )
         answers = await _answers(conn, participant_id)
-        frame = snapshot.frame()
-        tilt: dict[str, float] = {}
-        for a in answers:
-            if a.selection == round_rules.SELECTION_HOLDOUT:
-                continue
-            # Skip the same rows `round.replay` skips (§10); `tilt.applied` holds that predicate.
-            tilt = tilt_rules.applied(
-                tilt, answer=a.answer, title_a=a.title_a, title_b=a.title_b,
-                vectors=snapshot.dna, frame=frame,
-            )
-        await _set_answered(conn, participant_id, count=len(answers), tilt=tilt)
-    card = await _next_card(
-        conn, row, answered=len(answers), answers=answers, snapshot=snapshot,
-    )
+        played = _round_of(snapshot, row, answers)
+        await _set_answered(
+            conn, participant_id, count=len(answers), tilt=snapshot.tilt(played.mood.mean)
+        )
+    card = await _next_card(conn, row, answered=len(answers), played=played, snapshot=snapshot)
     return {**card, "retracted_seq": last["seq"]}
 
 
 async def escape(conn: asyncpg.Connection, participant_id: int) -> dict[str, Any]:
-    """54c's "just pick for us": end this seat's round on what is known so far.
+    """"Just pick for us": end this seat's round on what is known so far.
 
-    Refused before pair 6 and recorded as `escape` (§14 risk 6); decided under the row lock.
+    Refused before pair 4 and recorded as `escape` (§14 risk 6); decided under the row lock.
     """
     async with conn.transaction():
         row = await _participant(conn, participant_id, lock=True)
@@ -709,7 +812,6 @@ async def _match_lines(
     return lines
 
 
-
 async def finish(conn: asyncpg.Connection, session_id: int) -> combine_rules.Slate | None:
     """§6.2 step 5, against the stored rows, persisted to `session_result` (§14 risk 6).
 
@@ -718,33 +820,22 @@ async def finish(conn: asyncpg.Connection, session_id: int) -> combine_rules.Sla
     snapshot = await snapshot_of(conn, session_id)
     seats = await conn.fetch(
         """
-        SELECT p.id, p.role, p.tilt, p.seat, u.name
+        SELECT p.id, p.role, p.tilt, p.seat, p.ended_by, u.name
           FROM session_participant p LEFT JOIN app_user u ON u.id = p.user_id
          WHERE p.session_id = $1 ORDER BY p.seat
         """,
         session_id,
     )
-    frame = snapshot.frame()
     per_participant: dict[int, dict[int, float]] = {}
     for seat in seats:
-        is_member = seat["role"] != rooms.ROLE_GUEST
-        prior = (
-            snapshot.pool_scores_for(seat["id"]) if is_member else snapshot.member_average()
-        )
         answers = await _answers(conn, seat["id"])
-        # Off the loop (see `_round_of`), one seat at a time: threads on four vCPUs finish no sooner.
-        played = await asyncio.to_thread(
-            round_rules.replay, prior, answers, has_profile=is_member,
-            # The seat, as `_round_of` keys it (decision 223).
-            holdout_key=str(seat["id"]),
-            # No pair: only `played.beliefs` is read, and the pair search is the expensive part.
-            select=False,
+        # No pair: only the mood is read.
+        played = _round_of(snapshot, seat, answers, select=False)
+        per_participant[seat["id"]] = round_rules.tonight(
+            snapshot.stable_for(seat["id"], guest=seat["role"] == rooms.ROLE_GUEST),
+            snapshot.reach_of(seat["id"]),
+            played.mood.mean,
         )
-        tilt = dict(seat["tilt"] or {})
-        per_participant[seat["id"]] = {
-            t: b.mu + tilt_rules.adjustment(tilt, snapshot.dna.get(t, {}), frame)
-            for t, b in played.beliefs.items()
-        }
 
     slate = combine_rules.combine(
         per_participant=per_participant,

@@ -1,11 +1,13 @@
 import { expect, test } from '@playwright/test';
 
-import { createMember, seedFilmLedger, signInAsMember, signedIn, waitForPool } from '../helpers.js';
+import { createMember, setUpLadder, signInAsMember, signedIn, waitForPool } from '../helpers.js';
 
 /**
  * Tonight with two people in two browsers (§6.2 steps 2, 6, 7): the open-rooms list and the lobby
- * update live without a reload, the round is blind, and the result card carries its whole
- * inventory. Two pages for the file, built once. Desktop only.
+ * update live without a reload, a seat's round is its own, and the result card carries its whole
+ * inventory. Neither member has eight films on their ladder at Liked it or higher, so both seats
+ * skip the round (decision 539) and the room goes straight on to the ballot. Two pages for the
+ * file, built once. Desktop only.
  */
 test.describe('tonight together', () => {
   /** @type {import('@playwright/test').Page} */
@@ -23,7 +25,7 @@ test.describe('tonight together', () => {
       const page = await context.newPage();
       await signedIn(page);
       await signInAsMember(page, await createMember(page, `tonight-${label}`, { reuse: true }));
-      await seedFilmLedger(page);
+      await setUpLadder(page.request);
       await waitForPool(page);
       if (label === 'host') a = page;
       else b = page;
@@ -75,27 +77,29 @@ test.describe('tonight together', () => {
   }
 
   /**
-   * Answer one person's round to its end, wherever it has got to. On the fixture's six films
-   * one answer can end a round (decision 214), so the round may already be over: settle on the
-   * round, 54c's progress view or 54e's ballot.
+   * One person's seat after Start: with too few films on the ladder it asks nothing, so the device
+   * settles on 54c's progress view or, once both seats have ended, 54e's ballot.
    */
-  async function playOut(page) {
-    const round = page.getByTestId('tonight-round');
+  async function skipsTheRound(page) {
     await expect(
-      round.or(page.getByTestId('tonight-waiting')).or(page.getByTestId('tonight-ballot')).first()
+      page.getByTestId('tonight-waiting').or(page.getByTestId('tonight-ballot')).first()
     ).toBeVisible({ timeout: 20_000 });
-    for (let i = 0; i < 24; i++) {
-      if (!(await round.isVisible())) break;
-      // Wait on the write: §6.2's round is one POST per pair.
-      await Promise.all([
-        page.waitForResponse(
-          (res) =>
-            res.request().method() === 'POST' && /\/api\/tonight\/seats\/\d+\/answer$/.test(res.url()),
-          { timeout: 15_000 }
-        ),
-        page.getByTestId('tonight-pick-A').click()
-      ]);
-    }
+    await expect(page.getByTestId('tonight-round')).toHaveCount(0);
+  }
+
+  /** This device's own seat in the room it is in, and the other one. */
+  async function seatsOf(page) {
+    const sessionId = await page.evaluate(async () => {
+      const rooms = await (await fetch('/api/tonight/rooms')).json();
+      return rooms.rooms.find((r) => r.viewer_seated).session_id;
+    });
+    const seen = await (await page.request.get(`/api/tonight/sessions/${sessionId}`)).json();
+    const mine = seen.me.participant_id;
+    return {
+      sessionId,
+      mine,
+      theirs: seen.seats.find((s) => s.participant_id !== mine).participant_id
+    };
   }
 
   test('a room one member opens appears on the other device, live, with a tappable seat', async () => {
@@ -119,48 +123,47 @@ test.describe('tonight together', () => {
     });
 
     await a.getByTestId('tonight-start').click();
-    await playOut(a);
-    await playOut(b);
+    await skipsTheRound(a);
+    await skipsTheRound(b);
   });
 
-  test('the round is blind: neither device shows the other any answer', async () => {
-    // 54c: "Someone who finishes early sees the others' progress and never their answers."
-    // Falsifiable at the API: b asks for a's seat with its own cookie and must be refused.
+  test("each seat skips the round on its own, and no seat reads another's", async () => {
+    // Decision 539: a seat with too little to ask about ends at once, saying why. 54c's blindness
+    // is falsifiable at the API: b asks for a's seat with its own cookie and must be refused.
     await room();
     await a.getByTestId('tonight-start').click();
-    await expect(a.getByTestId('tonight-round')).toBeVisible();
-    await a.getByTestId('tonight-pick-A').click();
+    await skipsTheRound(a);
+    await skipsTheRound(b);
 
-    const sessionId = await b.evaluate(async () => {
-      const rooms = await (await fetch('/api/tonight/rooms')).json();
-      return rooms.rooms.find((r) => r.viewer_seated).session_id;
-    });
-    const seats = await (await b.request.get(`/api/tonight/sessions/${sessionId}`)).json();
-    const mine = seats.me.participant_id;
-    const theirs = seats.seats.find((s) => s.participant_id !== mine).participant_id;
-
+    const { sessionId, mine, theirs } = await seatsOf(b);
     const refused = await b.request.get(`/api/tonight/seats/${theirs}/round`);
     expect(refused.status(), "one seat read another seat's round").toBe(403);
-    expect((await b.request.get(`/api/tonight/seats/${mine}/round`)).status()).toBe(200);
+    const own = await b.request.get(`/api/tonight/seats/${mine}/round`);
+    expect(own.status()).toBe(200);
+    const card = await own.json();
+    expect(card.pair, 'the fixture cannot give a seat eight liked films').toBeNull();
+    expect(card.ended_by).toBe('converged');
+    expect(card.no_round).toMatch(
+      /^No mood questions tonight — they need 8 films on your ladder at Liked it or higher, and you have \d\.$/
+    );
 
     const progress = await b.evaluate(async (id) => {
       const seen = await (await fetch(`/api/tonight/sessions/${id}`)).json();
       return seen.progress;
     }, sessionId);
-    const them = progress.find((p) => p.participant_id === theirs);
-    expect(them.answered, 'the first device answered, so the count moved').toBeGreaterThan(0);
-    expect(JSON.stringify(progress)).not.toMatch(/EITHER|NEITHER|"answer"|card_token/);
+    expect(progress.map((p) => p.answered), 'a seat with no round answered nothing').toEqual([0, 0]);
+    expect(progress.every((p) => p.finished)).toBe(true);
+    expect(JSON.stringify(progress)).not.toMatch(/EITHER|NEITHER|"answer"|card_token|no_round/);
 
-    await playOut(a);
-    await playOut(b);
     await expect(a.getByTestId('tonight-ballot')).toBeVisible({ timeout: 25_000 });
+    await expect(b.getByTestId('tonight-ballot')).toBeVisible({ timeout: 25_000 });
   });
 
   test('the reveal beat precedes the winner, and the card carries its whole inventory', async () => {
     await room();
     await a.getByTestId('tonight-start').click();
-    await playOut(a);
-    await playOut(b);
+    await skipsTheRound(a);
+    await skipsTheRound(b);
 
     await expect(a.getByTestId('tonight-ballot')).toBeVisible({ timeout: 25_000 });
     await expect(b.getByTestId('tonight-ballot')).toBeVisible({ timeout: 25_000 });

@@ -7,12 +7,17 @@ import {
   BUDGET_MIN,
   BUDGET_STEP,
   ESCAPE_LABEL,
+  ESCAPE_LOCKED_LINE,
+  FIRST_PAIR_LINE,
+  GUEST_FIRST_PAIR_LINE,
   JOIN_CAPTION,
+  LOBBY_LINE,
   MAX_GUESTS,
   MAX_VETOES,
-  MOOD_CAPTION,
   RECONNECT_MAX_MS,
   REVEAL_BEAT,
+  ROUND_QUESTION,
+  SOLO_DOOR_LINE,
   SOLO_ESCAPE_LABEL,
   answer,
   answerSolo,
@@ -49,6 +54,7 @@ import {
   roomEvening,
   roomLine,
   roomVetoLine,
+  roundDots,
   roundHeader,
   settingsDetail,
   settingsTitle,
@@ -159,11 +165,11 @@ describe('the approval share (§13)', () => {
 });
 
 describe('the constants the spec fixes', () => {
-  it('offers exactly decision 154\'s four answers', () => {
+  it('offers exactly the four answers, "This one" under each film', () => {
     expect(ANSWERS.map((a) => a.value)).toEqual(['A', 'B', 'EITHER', 'NEITHER']);
-    // Opposite signals, so opposite copy.
-    expect(ANSWERS.find((a) => a.value === 'EITHER').label).toBe('Either is fine');
-    expect(ANSWERS.find((a) => a.value === 'NEITHER').label).toBe('Neither tonight');
+    expect(ANSWERS.map((a) => a.label)).toEqual([
+      'This one', 'This one', 'Either is fine', 'Neither tonight'
+    ]);
   });
 
   it('bounds the runtime slider', () => {
@@ -181,6 +187,20 @@ describe('the constants the spec fixes', () => {
     expect(ESCAPE_LABEL).toBe('Just pick for us');
     // The join caption is household copy, held to the member register rather than verbatim.
     expect(JOIN_CAPTION).not.toMatch(/push|best effort/i);
+  });
+
+  it("says the round's question and its first lines as §6.2 step 4 writes them", () => {
+    expect(ROUND_QUESTION).toBe('Which feels more like tonight?');
+    expect(FIRST_PAIR_LINE).toBe(
+      "Two films you've liked. Tap the one closer to tonight's mood — we'll find something new in that spirit."
+    );
+    expect(GUEST_FIRST_PAIR_LINE).toBe("Well-known films — you don't need to have seen them.");
+    expect(LOBBY_LINE).toContain("Each of you gets a few pairs of films you've liked");
+    expect(LOBBY_LINE).toContain('“Neither tonight” when neither is');
+    expect(SOLO_DOOR_LINE).toBe(
+      "Three picks and a wildcard — first a few quick pairs of films you've liked, if your ladder has enough."
+    );
+    expect(ESCAPE_LOCKED_LINE).toBe('Available from pair 4');
   });
 });
 
@@ -898,14 +918,18 @@ describe('overlapping reads land in order (finding 21)', () => {
 describe('the first household evening (owner instruction of 2026-09-25)', () => {
   it('heads the round with what to expect, and names the cap only once the round runs long', () => {
     // The cap joins the header only once the round runs long (decision 507).
-    expect(roundHeader({ answered: 0, cap: 20, typical: 10 })).toBe('Pair 1 · usually about 10');
-    expect(roundHeader({ answered: 9, cap: 20, typical: 10 })).toBe('Pair 10 · usually about 10');
-    expect(roundHeader({ answered: 9, cap: 20, typical: 10 })).not.toContain('20');
-    expect(roundHeader({ answered: 12, cap: 20, typical: 10 })).toBe(
-      'Pair 13 · longer than most · max 20'
-    );
-    expect(roundHeader({ answered: 12, cap: 20, typical: 10 })).not.toContain('about 10');
+    expect(roundHeader({ answered: 0, cap: 8, typical: 5 })).toBe('Pair 1 · usually about 5');
+    expect(roundHeader({ answered: 4, cap: 8, typical: 5 })).toBe('Pair 5 · usually about 5');
+    expect(roundHeader({ answered: 4, cap: 8, typical: 5 })).not.toContain('8');
+    expect(roundHeader({ answered: 5, cap: 8, typical: 5 })).toBe('Pair 6 · longer than most · max 8');
     expect(roundHeader(null)).toBe('');
+  });
+
+  it('draws a dot per pair up to the typical round, then one per pair shown, never past the cap', () => {
+    expect(roundDots({ answered: 0, cap: 8, typical: 5 })).toBe(5);
+    expect(roundDots({ answered: 5, cap: 8, typical: 5 })).toBe(6);
+    expect(roundDots({ answered: 7, cap: 8, typical: 5 })).toBe(8);
+    expect(roundDots({ answered: 9, cap: 8, typical: 5 })).toBe(8);
   });
 
   it('keeps the header to what one line of a 390 px phone holds', () => {
@@ -1151,13 +1175,13 @@ describe('the second household evening (owner instruction of 2026-09-26)', () =>
     expect(
       pairFacts({ year: 1984, kind: 'movie', runtime_min: 117, genres: ['Adventure', 'Animation'] })
     ).toEqual(['1984 · 1h 57m', 'Adventure, Animation']);
-    // Over budget: the spec's label on a line of its own, so the card does not wrap mid-phrase.
+    // The pair's films are ones already seen, never candidates, so no budget line.
     expect(
       pairFacts({
         year: 2024, kind: 'movie', runtime_min: 160, over_budget_min: 40,
         fit_line: '40 min over', genres: ['Drama']
       })
-    ).toEqual(['2024 · 2h 40m', '40 min over', 'Drama']);
+    ).toEqual(['2024 · 2h 40m', 'Drama']);
     // Two genres only when they fit half a phone's line; else the first.
     expect(pairFacts({ year: 2009, genres: ['Adventure', 'Science Fiction'] })).toEqual([
       '2009',
@@ -1174,8 +1198,8 @@ describe('the second household evening (owner instruction of 2026-09-26)', () =>
     // On a series night the vetoes leave out series, and the caption says so (review UX-8).
     expect(vetoCaption('series')).toContain('A series that may contain');
     expect(vetoCaption('series')).not.toContain('film');
-    expect(MOOD_CAPTION).toContain(ANSWERS.find((a) => a.value === 'NEITHER').label);
-    for (const copy of [vetoCaption('movie'), vetoCaption('series'), MOOD_CAPTION]) {
+    expect(LOBBY_LINE).toContain(ANSWERS.find((a) => a.value === 'NEITHER').label);
+    for (const copy of [vetoCaption('movie'), vetoCaption('series'), LOBBY_LINE]) {
       expect(copy).not.toMatch(/tier|projected|extracted|tilt|decision|§/i);
     }
   });
@@ -1188,8 +1212,8 @@ describe('asking one person first (owner instruction of 2026-09-29)', () => {
   });
 
   // The route as it plays one seat's round: a pair while the round is asked for and running, drawn
-  // afresh on every request as a hold-out pair is, and the picks either way.
-  function soloRoute({ until = 20 } = {}) {
+  // afresh on every request as solo's pair is, and the picks either way.
+  function soloRoute({ until = 8 } = {}) {
     let drawn = 0;
     fetchMock.mockImplementation(async (path, opts = {}) => {
       const body = JSON.parse(opts.body);
@@ -1201,9 +1225,9 @@ describe('asking one person first (owner instruction of 2026-09-29)', () => {
         picks: [{ title_id: 900 + answered }],
         provenance: 'x',
         answered,
-        cap: 20,
-        typical: 10,
-        escape_available: asking && answered >= 5,
+        cap: 8,
+        typical: 5,
+        escape_available: asking && answered >= 3,
         pair: asking ? pairOf(drawn) : null
       });
     });
@@ -1381,16 +1405,16 @@ describe('asking one person first (owner instruction of 2026-09-29)', () => {
     expect(tonight.error).not.toBe('');
   });
 
-  it('keeps the escape shut until the sixth pair, then ends the round without a request', async () => {
+  it('keeps the escape shut until the fourth pair, then ends the round without a request', async () => {
     // The picks in hand already carry every answer, so the escape has nothing to ask.
     soloRoute();
     await loadSolo();
-    for (const value of ['A', 'B', 'EITHER', 'NEITHER']) await answerSolo(value);
+    for (const value of ['A', 'EITHER']) await answerSolo(value);
     expect(tonight.solo.escape_available).toBe(false);
     calls.length = 0;
 
     escapeSolo();
-    expect(tonight.solo.pair, 'the escape opened on the fifth pair').toEqual(pairOf(5));
+    expect(tonight.solo.pair, 'the escape opened on the third pair').toEqual(pairOf(3));
     expect(calls).toEqual([]);
 
     await answerSolo('A');
@@ -1405,13 +1429,13 @@ describe('asking one person first (owner instruction of 2026-09-29)', () => {
     expect(tonight.solo.escape_available).toBe(false);
     expect(tonight.solo.picks).toEqual(picks);
     expect(tonight.step).toBe('solo');
-    expect(said()).toHaveLength(5);
+    expect(said()).toHaveLength(3);
   });
 
   it("leaves a refused answer's complaint behind with the round it was about", async () => {
     soloRoute();
     await loadSolo();
-    for (const value of ['A', 'B', 'EITHER', 'NEITHER', 'A']) await answerSolo(value);
+    for (const value of ['A', 'B', 'EITHER']) await answerSolo(value);
     fetchMock.mockImplementationOnce(async () => reply({ detail: 'boom' }, 500));
     await answerSolo('B');
     expect(tonight.error).not.toBe('');

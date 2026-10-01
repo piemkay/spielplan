@@ -221,3 +221,11 @@ def test_the_pool_excludes_the_union_of_every_members_own_vetoes():
     assert rooms.vetoes_of(legacy) == ["violence", "horror"]
     assert rooms.vetoes_by_seat({"vetoes_by": {"13": ["retired-chip"]}}) == {}
     assert rooms.vetoes_of({}) == [] and rooms.vetoes_of(None) == []
+
+
+def test_the_mood_reaches_a_seats_top_thirty_unseen_by_stable_taste():
+    """Decision 550: the mood re-ranks only these; a film the seat has seen is never in reach."""
+    stable = {t: -float(t) for t in range(1, 50)}
+    assert pool.reach(stable) == list(range(1, 31))
+    assert pool.reach(stable, seen={1, 2}) == list(range(3, 33))
+    assert pool.reach({1: 0.5, 2: 0.5}) == [1, 2], "ties by id, so two builds agree"

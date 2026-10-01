@@ -4,6 +4,7 @@
   import { onDestroy, onMount } from 'svelte';
   import { replaceState } from '$app/navigation';
   import ActionSheet from '$lib/components/ActionSheet.svelte';
+  import RatePeek from '$lib/components/RatePeek.svelte';
   import RatePoster from '$lib/components/RatePoster.svelte';
   import Sheet from '$lib/components/Sheet.svelte';
   import Avatar from '$lib/components/Avatar.svelte';
@@ -16,12 +17,17 @@
     BUDGET_MIN,
     BUDGET_STEP,
     ESCAPE_LABEL,
+    ESCAPE_LOCKED_LINE,
+    FIRST_PAIR_LINE,
+    GUEST_FIRST_PAIR_LINE,
     JOIN_CAPTION,
+    LOBBY_LINE,
     MAX_GUESTS,
     MAX_VETOES,
-    MOOD_CAPTION,
     REVEAL_BEAT,
+    ROUND_QUESTION,
     SHARE_CAPTION,
+    SOLO_DOOR_LINE,
     SOLO_ESCAPE_LABEL,
     WILDCARD_LINE,
     WRAPPED_LINE,
@@ -59,6 +65,7 @@
     roomEvening,
     roomLine,
     roomVetoLine,
+    roundDots,
     roundHeader,
     settingsDetail,
     settingsTitle,
@@ -87,6 +94,8 @@
   let opening = $state('');
   // The answer in flight and the pair it answers: the posters take it before the reply lands.
   let sent = $state(null);
+  // The film a poster tap is looking at; a look never answers.
+  let peek = $state(null);
   let disconnect = () => {};
 
   // The session this device's socket watches, re-pointed in one place so a racing tap cannot win.
@@ -160,6 +169,12 @@
     isHost
       ? (tonight.lobby?.seats ?? []).filter((s) => s.role === 'guest' && !s.ended_by)
       : []
+  );
+  // A guest's first pair says they need not have seen the films; a member's room seat says nothing.
+  const playingGuest = $derived(
+    (tonight.lobby?.seats ?? []).some(
+      (s) => s.participant_id === tonight.activeSeat && s.role === 'guest'
+    )
   );
   // The store's list, so the round's and the ballot's hand-offs agree on whose phone this is.
   const ballotSeats = $derived(ballotTurns());
@@ -350,18 +365,19 @@
 {/snippet}
 
 <!-- A round's bar and dots: a room's seat or solo's (decision 532). -->
-{#snippet roundTop(state, onUndo, ids)}
+{#snippet roundTop(state, onUndo, canUndo, ids)}
   {@const now = (state.answered ?? 0) + 1}
   <header class="bar">
     <button class="btn-plain back" onclick={toDoor} data-testid="tonight-back">Leave</button>
     <!-- What to expect, not the cap, which the round is built to avoid. -->
     <p class="bar-count figures" data-testid={ids.count}>{roundHeader(state)}</p>
     <span class="bar-end">
-      <button class="btn-plain" onclick={onUndo} data-testid={ids.undo}>Undo</button>
+      <!-- Always there, dimmed with nothing to take back. -->
+      <button class="btn-plain" onclick={onUndo} disabled={!canUndo} data-testid={ids.undo}>Undo</button>
     </span>
   </header>
   <div class="dots" aria-hidden="true">
-    {#each { length: Math.max(state.typical ?? 10, now) }, i (i)}
+    {#each { length: roundDots(state) }, i (i)}
       <span class:on={i < now}></span>
     {/each}
   </div>
@@ -373,48 +389,58 @@
   {:else}
     <p class="locked" data-testid="{testid}-locked">
       <span>{label}</span>
-      <span class="footnote">Available from pair 6</span>
+      <span class="footnote">{ESCAPE_LOCKED_LINE}</span>
     </p>
   {/if}
 {/snippet}
 
-<!-- The same question as the round (§6.2 step 4), drawing both titles. -->
-{#snippet chooser(pair, onAnswer, ids)}
+<!-- The round's question (§6.2 step 4): two films, "This one" under each, and the two level answers. -->
+{#snippet chooser(pair, onAnswer, ids, firstLine)}
   {@const key = `${pair.a?.title_id}:${pair.b?.title_id}`}
   {@const said = sent?.key === key ? sent.value : null}
-  <h2 class="title-1 question">Which one tonight?</h2>
+  <h2 class="title-1 question">{ROUND_QUESTION}</h2>
   <!-- Keyed on both titles, so the next pair deals in and a re-read of this one replays nothing. -->
   {#key key}
     <div class="pair">
       {#each [['A', pair.a], ['B', pair.b]] as [side, title] (side)}
-        <!-- `.choice`, never `.poster`: design.css's `.poster` is a 2:3 frame that fills the phone. -->
-        <button
-          class="choice {pose(said, side)}"
-          onclick={() => say(key, onAnswer, side)}
-          disabled={tonight.busy}
-          data-testid="{ids.pick}-{side}"
-        >
-          <span class="art"><RatePoster title={posterOf(title)} showName={false} /></span>
+        <div class="choice {pose(said, side)}">
+          <!-- A poster opens About and never answers. `.art`, never `.poster`: design.css's
+               `.poster` is a 2:3 frame that fills the phone. -->
+          <button
+            class="art"
+            aria-label="About {title?.name}"
+            aria-haspopup="dialog"
+            onclick={() => (peek = posterOf(title))}
+            data-testid="{ids.pick}-about-{side}"
+          >
+            <RatePoster title={posterOf(title)} showName={false} />
+            <span class="info" aria-hidden="true"><Icon name="info" size={20} /></span>
+          </button>
           <span class="choice-name">{title?.name}</span>
           {#each pairFacts(title) as fact, i (i)}
             <span class="fact" data-testid={ids.fact && `${ids.fact}-${side}`}>{fact}</span>
           {/each}
-        </button>
+        </div>
       {/each}
     </div>
   {/key}
   <div class="answers">
-    {#each ANSWERS.filter((a) => a.value === 'EITHER' || a.value === 'NEITHER') as choice (choice.value)}
+    {#each ANSWERS as choice (choice.value)}
+      {@const title = choice.value === 'A' ? pair.a : choice.value === 'B' ? pair.b : null}
       <button
         class="btn-secondary"
         class:held={said === choice.value}
+        aria-label={title ? `${title.name}: this one` : null}
         onclick={() => say(key, onAnswer, choice.value)}
         disabled={tonight.busy}
-        data-testid="{ids.answer}-{choice.value}"
+        data-testid={title ? `${ids.pick}-${choice.value}` : `${ids.answer}-${choice.value}`}
         >{choice.label}</button
       >
     {/each}
   </div>
+  {#if firstLine}
+    <p class="why center" data-testid="tonight-first-pair">{firstLine}</p>
+  {/if}
 {/snippet}
 
 <section class="tonight" class:flow={inFlow} data-testid="tonight-surface">
@@ -465,11 +491,7 @@
               <span class="chev">{@render working(opening === 'solo')}</span>
             </span>
             <span class="door-name">Just me</span>
-            <span class="why"
-              >{opening === 'solo'
-                ? 'Finding your first pair…'
-                : 'A few quick pairs for your mood, then three picks and a wildcard.'}</span
-            >
+            <span class="why">{opening === 'solo' ? 'Finding your first pair…' : SOLO_DOOR_LINE}</span>
           </button>
         </div>
 
@@ -548,16 +570,17 @@
     </div>
   {:else if soloAsking}
     <div class="screen round" data-testid="tonight-mood">
-      {@render roundTop(tonight.solo, undoSolo, { count: 'tonight-mood-count', undo: 'tonight-mood-undo' })}
-      {@render problem()}
-      {@render chooser(tonight.solo.pair, answerSolo, {
-        pick: 'tonight-mood',
-        answer: 'tonight-mood',
-        fact: 'tonight-mood-fact'
+      {@render roundTop(tonight.solo, undoSolo, tonight.soloAnswers.length > 0, {
+        count: 'tonight-mood-count',
+        undo: 'tonight-mood-undo'
       })}
-      {#if !tonight.solo.answered}
-        <p class="footnote" data-testid="tonight-mood-caption">{MOOD_CAPTION}</p>
-      {/if}
+      {@render problem()}
+      {@render chooser(
+        tonight.solo.pair,
+        answerSolo,
+        { pick: 'tonight-mood', answer: 'tonight-mood', fact: 'tonight-mood-fact' },
+        tonight.solo.answered ? null : FIRST_PAIR_LINE
+      )}
       <div class="escape">
         {@render escapeControl(tonight.solo.escape_available, escapeSolo, SOLO_ESCAPE_LABEL, 'tonight-mood-escape')}
       </div>
@@ -573,6 +596,10 @@
         <h1 class="large-title">Tonight, for {session.user?.name ?? 'you'}</h1>
         <p class="footnote figures" data-testid="tonight-provenance">{tonight.solo.provenance}</p>
       </div>
+      {#if tonight.solo.no_round}
+        <!-- Too few films on the ladder to ask about: straight to the picks, saying why. -->
+        <p class="why" data-testid="tonight-no-round">{tonight.solo.no_round}</p>
+      {/if}
       {@render problem()}
       {#if tonight.solo.empty}
         <p class="why" data-testid="tonight-solo-empty">{tonight.solo.empty}</p>
@@ -705,7 +732,7 @@
             </span>
           </div>
         </div>
-        <p class="list-footer" data-testid="tonight-mood-caption">{MOOD_CAPTION}</p>
+        <p class="list-footer" data-testid="tonight-mood-caption">{LOBBY_LINE}</p>
       </section>
 
       <div class="dock">
@@ -722,13 +749,17 @@
     </div>
   {:else if tonight.step === 'round' && tonight.round?.pair}
     <div class="screen round" data-testid="tonight-round">
-      {@render roundTop(tonight.round, undo, { count: 'tonight-round-count', undo: 'tonight-undo' })}
-      {@render problem()}
-      {@render chooser(tonight.round.pair, answer, {
-        pick: 'tonight-pick',
-        answer: 'tonight-answer',
-        fact: 'tonight-pair-fact'
+      {@render roundTop(tonight.round, undo, tonight.round.answered > 0, {
+        count: 'tonight-round-count',
+        undo: 'tonight-undo'
       })}
+      {@render problem()}
+      {@render chooser(
+        tonight.round.pair,
+        answer,
+        { pick: 'tonight-pick', answer: 'tonight-answer', fact: 'tonight-pair-fact' },
+        playingGuest && !tonight.round.answered ? GUEST_FIRST_PAIR_LINE : null
+      )}
       {#if others.length}
         {@render whereOthersAre('tonight-round-progress')}
       {/if}
@@ -751,7 +782,12 @@
         <p class="why" data-testid="tonight-ballot-waiting">{ballotWaitingLine(tonight.ballot)}</p>
         <p class="footnote">Nobody sees anybody's votes until every vote is in.</p>
       {:else}
-        <h2 class="title-1">Your answers are in</h2>
+        {#if tonight.round?.no_round}
+          <h2 class="title-1">Waiting for the others</h2>
+          <p class="why" data-testid="tonight-no-round">{tonight.round.no_round}</p>
+        {:else}
+          <h2 class="title-1">Your answers are in</h2>
+        {/if}
         {#if waitingLine(tonight.progress)}
           <p class="why" data-testid="tonight-waiting-for">{waitingLine(tonight.progress)}</p>
         {/if}
@@ -1046,6 +1082,11 @@
     </div>
   {/snippet}
 </Sheet>
+
+{#if peek}
+  <!-- About, without its Not seen: Tonight never answers for a film (decision 546). -->
+  <RatePeek title={peek} onClose={() => (peek = null)} />
+{/if}
 
 <ActionSheet
   open={ending}
@@ -1467,8 +1508,12 @@
   .dots span.on {
     background: var(--text);
   }
+  /* Two lines on a phone, as the round's board sets it. */
   .question {
+    max-width: 8em;
+    margin: 4px auto 0;
     text-align: center;
+    text-wrap: balance;
   }
   /* Two columns at every width: stacked, the second option fell below the fold. */
   .pair {
@@ -1482,9 +1527,6 @@
     align-items: center;
     gap: 2px;
     min-width: 0;
-    padding: 0;
-    border: none;
-    background: none;
     color: var(--text);
     text-align: center;
   }
@@ -1494,14 +1536,30 @@
       box-shadow 180ms var(--ease);
   }
   .choice .art {
+    position: relative;
     display: block;
     width: min(100%, 200px);
     margin-bottom: 8px;
+    padding: 0;
+    border: none;
     border-radius: var(--r-poster);
+    background: none;
   }
-  .choice:active:not(:disabled) .art {
+  .choice .art:active {
     transform: scale(var(--press));
     transition-duration: var(--dur-press);
+  }
+  .info {
+    position: absolute;
+    top: 8px;
+    right: 8px;
+    display: grid;
+    place-items: center;
+    width: 24px;
+    height: 24px;
+    border-radius: var(--r-pill);
+    background: rgba(12, 11, 10, 0.72);
+    color: var(--text);
   }
   .choice.up .art {
     box-shadow: 0 0 0 2px var(--text);
@@ -1549,8 +1607,17 @@
     gap: 12px;
   }
   .answers .btn-secondary {
+    min-height: 48px;
     padding: 0 12px;
     line-height: 20px;
+    transition: background-color 140ms var(--ease), color 140ms var(--ease),
+      opacity 140ms var(--ease);
+  }
+  /* The answer given takes the light fill; the rest step back. */
+  .answers .held {
+    background: var(--text);
+    color: var(--bg);
+    font-weight: 600;
   }
   .answers .held:disabled {
     opacity: 1;
@@ -1572,12 +1639,22 @@
     line-height: 20px;
     color: var(--text-2);
   }
-  .blind,
-  .escape {
+  .blind {
     display: flex;
     flex-direction: column;
     align-items: center;
     gap: 4px;
+    text-align: center;
+  }
+  /* At the foot of the round, the escape beside the host's End the room. */
+  .escape {
+    display: grid;
+    grid-auto-flow: column;
+    grid-auto-columns: minmax(0, 1fr);
+    justify-items: center;
+    align-items: center;
+    gap: 12px;
+    margin-top: auto;
     text-align: center;
   }
   .locked {

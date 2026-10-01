@@ -14,6 +14,8 @@ from typing import Any
 import asyncpg
 
 from spielplan.db import genres as genre_vocab
+from spielplan.ledger import ladder, model, observations
+from spielplan.tonight import round as round_rules
 
 # One scale for every member, frozen with the pool (decision 477): §5.1 scores are not standardised
 # over the owned pool. A rule that changes takes a new marker.
@@ -48,6 +50,18 @@ def veto_terms(keys: Iterable[str]) -> list[str]:
 
 def veto_labels(keys: Iterable[str]) -> list[str]:
     return [VETOES[k][0] for k in VETOES if k in set(keys)]
+
+
+def _unvetoed(terms: str, version: str, tiers: str) -> str:
+    """No vetoed term on `t` in either tier (decision 504); with no vocabulary version, nothing is."""
+    return f"""(
+        cardinality({terms}::text[]) = 0 OR {version}::text IS NULL
+        OR NOT EXISTS (
+            SELECT 1 FROM dna_tagged d
+             WHERE d.title_id = t.id AND d.version = {version} AND d.tier = ANY({tiers}::text[])
+               AND d.term = ANY({terms}::text[])
+        )
+    )"""
 
 # §6.2 step 1: "the pool admits up to budget + 40 min"; the spec's number, not a tunable.
 BUDGET_GRACE_MIN = 40
@@ -205,7 +219,7 @@ async def build(
         return []
 
     rows = await conn.fetch(
-        """
+        f"""
         SELECT t.id AS title_id, t.kind, t.name, t.year, t.runtime_min, t.poster_path,
                us.user_id, us.score
           FROM user_score us
@@ -225,14 +239,7 @@ async def build(
                      )
                 )
            )
-           AND (
-                cardinality($5::text[]) = 0 OR $6::text IS NULL
-                OR NOT EXISTS (
-                    SELECT 1 FROM dna_tagged d
-                     WHERE d.title_id = t.id AND d.version = $6 AND d.tier = ANY($7::text[])
-                       AND d.term = ANY($5::text[])
-                )
-           )
+           AND {_unvetoed("$5", "$6", "$7")}
         """,
         member_user_ids, kind, bundle_version, include_rewatches,
         list(vetoed_terms), dna_version, list(VETO_TIERS),
@@ -270,6 +277,77 @@ async def build(
     return order(with_budget(candidates, budget_min=budget_min))
 
 
+# --- the films a seat is asked about (§6.2 step 4) --------------------------------------------
+
+_FILM = "t.id AS title_id, t.kind, t.name, t.year, t.runtime_min, t.poster_path"
+
+
+async def liked_films(
+    conn: asyncpg.Connection,
+    *,
+    user_id: int,
+    kind: str,
+    vetoed_terms: Sequence[str] = (),
+    dna_version: str | None = None,
+) -> tuple[list[dict[str, Any]], str]:
+    """A member's own seen films of the kind placed in the liked band of their ladder (decision 539),
+    none carrying a vetoed term, each with its step; and that band's lowest word, for the no-round line."""
+    tier_set = await observations.tier_set_of(conn, user_id=user_id, kind=kind)
+    k = len(tier_set)
+    placed = await ladder.placements(conn, user_id=user_id, kind=kind)
+    liked = {t: step for t, step in placed.items() if model.verdict_class_of_tier(step, k) == 2}
+    rows = await conn.fetch(
+        f"""
+        SELECT {_FILM}
+          FROM title t
+          JOIN user_title ut ON ut.title_id = t.id AND ut.user_id = $1 AND ut.state = 'seen'
+         WHERE t.id = ANY($2::int[]) AND t.kind = $3 AND {_unvetoed("$4", "$5", "$6")}
+        """,
+        user_id, list(liked), kind, list(vetoed_terms), dna_version, list(VETO_TIERS),
+    )
+    word = observations.tier_words(tier_set)[int(model.verdict_tiers(k)[2][0])]
+    return [{**dict(r), "step": liked[r["title_id"]]} for r in rows], word
+
+
+async def well_known_films(
+    conn: asyncpg.Connection,
+    *,
+    kind: str,
+    bundle_version: str,
+    vetoed_terms: Sequence[str] = (),
+    dna_version: str | None = None,
+) -> list[dict[str, Any]]:
+    """A guest's films (decision 539): owned, of the kind, with at least 30,000 crowd ratings, none
+    carrying a vetoed term. A guest need not have seen them, so they carry no step."""
+    rows = await conn.fetch(
+        f"""
+        SELECT {_FILM}
+          FROM title t
+          JOIN title_prior tp ON tp.title_id = t.id AND tp.bundle_version = $2
+         WHERE t.is_owned AND t.kind = $1 AND tp.item_n >= $3 AND {_unvetoed("$4", "$5", "$6")}
+        """,
+        kind, bundle_version, round_rules.WELL_KNOWN_CROWD,
+        list(vetoed_terms), dna_version, list(VETO_TIERS),
+    )
+    return [{**dict(r), "step": None} for r in rows]
+
+
+async def seen_among(conn: asyncpg.Connection, *, user_id: int, title_ids: Sequence[int]) -> set[int]:
+    rows = await conn.fetch(
+        "SELECT title_id FROM user_title WHERE user_id = $1 AND title_id = ANY($2::int[]) "
+        "AND state = 'seen'",
+        user_id, list(title_ids),
+    )
+    return {r["title_id"] for r in rows}
+
+
+def reach(stable: Mapping[int, float], *, seen: Iterable[int] = ()) -> list[int]:
+    """The candidates the mood may re-rank: a seat's top 30 unseen by stable taste (decision 550)."""
+    skip = set(seen)
+    ranked = sorted((t for t in stable if t not in skip), key=lambda t: (-stable[t], t))
+    return ranked[: round_rules.TILT_REACH]
+
+
 # Genres a pair card names; two, since a third wraps a half-phone-wide card.
 CARD_GENRES = 2
 
@@ -304,11 +382,15 @@ __all__ = [
     "fit_line",
     "genres_of",
     "group_score",
+    "liked_films",
     "order",
     "over_budget_by",
     "rank_normal",
+    "reach",
     "score_for_seats",
+    "seen_among",
     "veto_labels",
     "veto_terms",
+    "well_known_films",
     "with_budget",
 ]

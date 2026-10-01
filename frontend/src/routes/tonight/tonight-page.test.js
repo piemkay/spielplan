@@ -331,23 +331,26 @@ describe('solo asks for the mood before it picks (decision 532)', () => {
   ];
   /** The n-th pair this server draws. */
   const drawn = (n) => ({
-    selection: 'straddle',
-    reason: 'both near your line',
+    selection: 'adaptive',
+    reason: "the pair that would tell the most about tonight's mood",
     a: { title_id: 100 + 2 * n, name: `Left ${n}` },
     b: { title_id: 101 + 2 * n, name: `Right ${n}` }
   });
+  const USUAL = 'Your usual favourites · fits in 2h 10m';
+  const MOOD = 'Your mood tonight — tense · twists & turns · fits in 2h 10m';
   const solo = (over = {}) => ({
     picks,
     wildcard: null,
-    provenance: 'Unseen first',
+    provenance: USUAL,
+    no_round: null,
     empty: null,
     answered: 0,
     sharpened: false,
     wrapped: false,
     pair: null,
     stop_reason: null,
-    cap: 20,
-    typical: 10,
+    cap: 8,
+    typical: 5,
     escape_available: false,
     ...over
   });
@@ -362,8 +365,8 @@ describe('solo asks for the mood before it picks (decision 532)', () => {
   // A test that fails while holding would otherwise leave `busy` set for the tests after it.
   afterEach(() => release());
 
-  // A new pair on every request, as a hold-out draw can be; the escape opens at five answers.
-  function serve({ ends = 20 } = {}) {
+  // A new pair on every request, as solo's draw is; the escape opens at three answers.
+  function serve({ ends = 8, noRound = null } = {}) {
     posted = [];
     held = null;
     let draws = 0;
@@ -378,10 +381,11 @@ describe('solo asks for the mood before it picks (decision 532)', () => {
         solo({
           answered: n,
           sharpened: n > 0,
-          provenance: n ? `Tilted by your ${n} answer${n === 1 ? '' : 's'}` : 'Unseen first',
+          provenance: n ? MOOD : USUAL,
+          no_round: noRound,
           pair: asking ? drawn(draws++) : null,
           stop_reason: body.sharpen && !asking ? 'converged' : null,
-          escape_available: asking && n >= 5
+          escape_available: asking && n >= 3
         })
       );
     });
@@ -411,15 +415,33 @@ describe('solo asks for the mood before it picks (decision 532)', () => {
     expect(inFlow(), 'the round sits under the tab bar').toBe(true);
     expect(byTestId('tonight-picks'), 'the picks came before the mood was asked').toBeNull();
     expect(posted).toEqual([expect.objectContaining({ sharpen: true, offset: 0, answers: [] })]);
-    expect(byTestId('tonight-mood-count').textContent).toBe('Pair 1 · usually about 10');
-    expect(byTestId('tonight-mood-caption')).not.toBeNull();
+    expect(byTestId('tonight-mood-count').textContent).toBe('Pair 1 · usually about 5');
+    expect(byTestId('tonight-mood').textContent).toContain('Which feels more like tonight?');
+    expect(byTestId('tonight-first-pair').textContent).toContain("Two films you've liked.");
+    expect(byTestId('tonight-mood-undo').disabled, 'nothing to take back yet').toBe(true);
+    expect(byTestId('tonight-mood-A').textContent).toBe('This one');
+    expect(byTestId('tonight-mood-A').getAttribute('aria-label')).toBe('Left 0: this one');
 
     await tap('tonight-mood-A');
 
     expect(posted.at(-1).sharpen, 'the answer asked for no next pair').toBe(true);
     expect(posted.at(-1).answers).toEqual([{ seq: 1, title_a: 100, title_b: 101, answer: 'A' }]);
-    expect(byTestId('tonight-mood-count').textContent).toBe('Pair 2 · usually about 10');
-    expect(byTestId('tonight-mood-caption'), 'the caption outstays the first pair').toBeNull();
+    expect(byTestId('tonight-mood-count').textContent).toBe('Pair 2 · usually about 5');
+    expect(byTestId('tonight-first-pair'), 'the line outstays the first pair').toBeNull();
+    expect(byTestId('tonight-mood-undo').disabled).toBe(false);
+  });
+
+  it('opens About from a poster, without Not seen, and never answers', async () => {
+    serve();
+    await openSolo();
+    const sent = posted.length;
+
+    await tap('tonight-mood-about-A');
+
+    expect(document.querySelector('[data-testid="rate-peek"]'), 'no About sheet').not.toBeNull();
+    expect(document.querySelector('[data-testid="rate-peek-not-seen"]')).toBeNull();
+    expect(posted, 'a look answered for the film').toHaveLength(sent);
+    expect(byTestId('tonight-mood-count').textContent).toBe('Pair 1 · usually about 5');
   });
 
   it('lands on the picks, out of the flow, once a reply brings no pair', async () => {
@@ -429,28 +451,33 @@ describe('solo asks for the mood before it picks (decision 532)', () => {
 
     expect(byTestId('tonight-mood')).toBeNull();
     expect(byTestId('tonight-picks'), 'the round ended on nothing').not.toBeNull();
-    expect(byTestId('tonight-provenance').textContent).toContain('Tilted by your 1 answer');
+    expect(byTestId('tonight-provenance').textContent).toBe(MOOD);
+    expect(byTestId('tonight-no-round'), 'a round was asked, so no why').toBeNull();
     expect(inFlow(), 'the picks stayed a full-screen flow').toBe(false);
   });
 
-  it('lands on the picks at once when there is nothing to ask', async () => {
-    serve({ ends: 0 });
+  it('lands on the picks at once when there is nothing to ask, saying why', async () => {
+    const why =
+      'No mood questions tonight — they need 8 films on your ladder at Liked it or higher, and you have 5.';
+    serve({ ends: 0, noRound: why });
     await openSolo();
 
     expect(byTestId('tonight-mood')).toBeNull();
     expect(byTestId('tonight-picks')).not.toBeNull();
+    expect(byTestId('tonight-no-round').textContent).toBe(why);
+    expect(byTestId('tonight-provenance').textContent).toBe(USUAL);
   });
 
   it('keeps the escape locked until the server offers it, and takes it without asking again', async () => {
     serve();
     await openSolo();
-    for (let i = 0; i < 5; i += 1) {
+    for (let i = 0; i < 3; i += 1) {
       expect(byTestId('tonight-mood-escape'), `the escape opened at pair ${i + 1}`).toBeNull();
-      expect(byTestId('tonight-mood-escape-locked')).not.toBeNull();
+      expect(byTestId('tonight-mood-escape-locked').textContent).toContain('Available from pair 4');
       await tap('tonight-mood-EITHER');
     }
 
-    expect(byTestId('tonight-mood-count').textContent).toBe('Pair 6 · usually about 10');
+    expect(byTestId('tonight-mood-count').textContent).toBe('Pair 4 · usually about 5');
     expect(byTestId('tonight-mood-escape-locked')).toBeNull();
     const escape = byTestId('tonight-mood-escape');
     expect(escape.textContent).toBe('Just pick for me');
@@ -461,16 +488,16 @@ describe('solo asks for the mood before it picks (decision 532)', () => {
     expect(posted, 'the escape asked the server again').toHaveLength(sent);
     expect(byTestId('tonight-mood')).toBeNull();
     expect(byTestId('tonight-picks')).not.toBeNull();
-    expect(byTestId('tonight-provenance').textContent).toContain('Tilted by your 5 answers');
+    expect(byTestId('tonight-provenance').textContent).toBe(MOOD);
   });
 
   it('undoes the last answer and puts its pair back, not the one the server drew next', async () => {
     serve();
     await openSolo();
     await tap('tonight-mood-B');
-    expect(byTestId('tonight-mood-A').textContent).toContain('Left 1');
+    expect(byTestId('tonight-mood').textContent).toContain('Left 1');
     const shown = [];
-    const watcher = new MutationObserver(() => shown.push(byTestId('tonight-mood-A')?.textContent));
+    const watcher = new MutationObserver(() => shown.push(byTestId('tonight-mood')?.textContent));
     watcher.observe(target, { subtree: true, childList: true, characterData: true });
 
     await tap('tonight-mood-undo');
@@ -478,10 +505,10 @@ describe('solo asks for the mood before it picks (decision 532)', () => {
 
     expect(shown.join(' | '), 'the pair drawn and discarded was rendered').not.toContain('Left 2');
     expect(posted.at(-1)).toMatchObject({ sharpen: true, answers: [] });
-    expect(byTestId('tonight-mood-A').textContent, 'undo showed a pair never answered').toContain(
+    expect(byTestId('tonight-mood').textContent, 'undo showed a pair never answered').toContain(
       'Left 0'
     );
-    expect(byTestId('tonight-mood-count').textContent).toBe('Pair 1 · usually about 10');
+    expect(byTestId('tonight-mood-count').textContent).toBe('Pair 1 · usually about 5');
 
     await tap('tonight-mood-EITHER');
     expect(posted.at(-1).answers).toEqual([{ seq: 1, title_a: 100, title_b: 101, answer: 'EITHER' }]);
@@ -620,23 +647,58 @@ describe('the first household evening, on the screen (owner instruction of 2026-
     // A button with class "poster" would take design.css's 2:3 frame and fill the phone.
     tonight.lobby = room;
     tonight.round = {
-      participant_id: 11, answered: 0, cap: 20, typical: 10, ended_by: null, stop_reason: null,
+      participant_id: 11, answered: 0, cap: 8, typical: 5, ended_by: null, stop_reason: null,
       escape_available: false, card_token: 'card-11',
       pair: { a: { title_id: 5, name: 'Heat', year: 1995 }, b: { title_id: 6, name: 'Drive' } }
     };
+    tonight.activeSeat = 11;
     tonight.step = 'round';
     app = mount(TonightPage, { target });
     flushSync();
 
     for (const [side, id] of [['A', '5'], ['B', '6']]) {
-      const pick = byTestId(`tonight-pick-${side}`);
-      expect(pick.classList.contains('poster'), 'the button wears the global 2:3 frame').toBe(false);
-      const art = pick.querySelector('[data-testid="rate-poster"]');
-      expect(art, 'no shared poster inside the pick').not.toBeNull();
+      const about = byTestId(`tonight-pick-about-${side}`);
+      expect(about.classList.contains('poster'), 'the button wears the global 2:3 frame').toBe(false);
+      const art = about.querySelector('[data-testid="rate-poster"]');
+      expect(art, 'no shared poster on the side').not.toBeNull();
       expect(art.getAttribute('data-title-id'), 'the poster was not keyed on the title').toBe(id);
+      expect(byTestId(`tonight-pick-${side}`).textContent).toBe('This one');
     }
-    expect(byTestId('tonight-round-count').textContent).toContain('Pair 1 · usually about 10');
-    expect(byTestId('tonight-round-count').textContent).not.toContain('cap');
+    expect(byTestId('tonight-round-count').textContent).toContain('Pair 1 · usually about 5');
+    expect(byTestId('tonight-round-count').textContent).not.toContain('max');
+    expect(target.querySelectorAll('.dots span'), 'a dot per pair of the typical round').toHaveLength(5);
+    expect(byTestId('tonight-first-pair'), "a member's room seat: the lobby has said it").toBeNull();
+  });
+
+  it("tells a guest on the first pair they need not have seen the films", () => {
+    tonight.lobby = { ...room, seats: [hostSeat, guestSeat] };
+    tonight.round = {
+      participant_id: 12, answered: 0, cap: 8, typical: 5, ended_by: null, stop_reason: null,
+      escape_available: false, card_token: 'card-12',
+      pair: { a: { title_id: 5, name: 'Heat' }, b: { title_id: 6, name: 'Drive' } }
+    };
+    tonight.activeSeat = 12;
+    tonight.step = 'round';
+    app = mount(TonightPage, { target });
+    flushSync();
+
+    expect(byTestId('tonight-first-pair').textContent).toBe(
+      "Well-known films — you don't need to have seen them."
+    );
+  });
+
+  it('says why a seat with too few films on its ladder had no round', () => {
+    const why =
+      'No mood questions tonight — they need 8 films on your ladder at Liked it or higher, and you have 2.';
+    tonight.lobby = room;
+    tonight.round = { participant_id: 11, answered: 0, pair: null, ended_by: 'converged', no_round: why };
+    tonight.activeSeat = 11;
+    tonight.step = 'waiting';
+    app = mount(TonightPage, { target });
+    flushSync();
+
+    expect(byTestId('tonight-no-round').textContent).toBe(why);
+    expect(target.textContent).not.toContain('Your answers are in');
   });
 
   it('makes the ballot options and Submit two different objects, and Submit counts its picks', () => {
@@ -814,13 +876,13 @@ describe('the first household evening, on the screen (owner instruction of 2026-
   it('describes each title on a pair card for somebody who does not know it', () => {
     tonight.lobby = room;
     tonight.round = {
-      participant_id: 11, answered: 12, cap: 20, typical: 10, ended_by: null, stop_reason: null,
+      participant_id: 11, answered: 6, cap: 8, typical: 5, ended_by: null, stop_reason: null,
       escape_available: true, card_token: 'card-11',
       pair: {
         a: { title_id: 5, name: 'Warriors of the Wind', year: 1984, kind: 'movie',
              runtime_min: 117, genres: ['Adventure', 'Animation'] },
-        b: { title_id: 6, name: 'Wicked', year: 2024, kind: 'movie', runtime_min: 160,
-             over_budget_min: 40, fit_line: '40 min over', genres: ['Drama', 'Fantasy'] }
+        b: { title_id: 6, name: 'Wicked', year: 2024, kind: 'movie', runtime_min: 140,
+             genres: ['Drama', 'Fantasy'] }
       }
     };
     tonight.step = 'round';
@@ -830,8 +892,9 @@ describe('the first household evening, on the screen (owner instruction of 2026-
     const facts = (side) =>
       [...target.querySelectorAll(`[data-testid="tonight-pair-fact-${side}"]`)].map((n) => n.textContent);
     expect(facts('A')).toEqual(['1984 · 1h 57m', 'Adventure, Animation']);
-    expect(facts('B')).toEqual(['2024 · 2h 40m', '40 min over', 'Drama, Fantasy']);
-    expect(byTestId('tonight-round-count').textContent).toBe('Pair 13 · longer than most · max 20');
+    expect(facts('B')).toEqual(['2024 · 2h 20m', 'Drama, Fantasy']);
+    expect(byTestId('tonight-round-count').textContent).toBe('Pair 7 · longer than most · max 8');
+    expect(target.querySelectorAll('.dots span'), 'a dot for each pair shown, up to the cap').toHaveLength(7);
   });
 
   it('says under the slider that the budget is soft', () => {
