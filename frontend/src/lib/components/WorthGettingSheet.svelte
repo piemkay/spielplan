@@ -77,7 +77,7 @@
       {#each data?.items ?? [] as item (item.title_id)}
         <li>
           <button class="open" onclick={() => onSelect?.(toPosterTitle(item))}>
-            <span class="thumb"><RatePoster title={item} showName={false} lazy /></span>
+            <span class="thumb"><RatePoster title={item} showName="missing" lazy /></span>
             <span class="text">
               <span class="name">{item.name}</span>
               <span class="footnote meta">{meta(item)}</span>
@@ -156,6 +156,12 @@
   }
   .thumb :global(.poster) {
     border-radius: var(--r-xs);
+  }
+  .thumb :global(.poster .name) {
+    inset: auto 5px 5px;
+    font-family: var(--serif);
+    font-weight: 400;
+    line-height: 14px;
   }
   .text {
     flex: 1;

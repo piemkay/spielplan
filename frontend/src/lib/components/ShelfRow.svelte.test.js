@@ -305,6 +305,12 @@ describe('Worth getting (decision 544)', () => {
       'Like Heat · night city, cat and mouse',
       'Like Heat · night city, cat and mouse'
     ]);
+    // A row with no art names the title on its panel; one with art leaves the name beside it.
+    const panels = () => [...sheet.querySelectorAll('[data-testid="rate-poster"]')];
+    expect(panels().map((p) => p.querySelector('.name'))).toEqual([null, null]);
+    panels()[0].querySelector('img').dispatchEvent(new Event('error'));
+    flushSync();
+    expect(panels().map((p) => p.querySelector('.name')?.textContent ?? null)).toEqual(['Collateral', null]);
     const wants = () => [...sheet.querySelectorAll('[data-testid="worth-getting-want"]')];
     expect(wants().map((b) => [b.textContent.trim(), b.getAttribute('aria-pressed')])).toEqual([
       ['Wanted', 'true'],

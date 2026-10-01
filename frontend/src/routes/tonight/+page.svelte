@@ -414,7 +414,11 @@
             data-testid="{ids.pick}-about-{side}"
           >
             <RatePoster title={posterOf(title)} showName={false} />
-            <span class="info" aria-hidden="true"><Icon name="info" size={20} /></span>
+            <span class="info" aria-hidden="true">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                stroke-width="1.75" stroke-linecap="round"><circle cx="12" cy="7.5" r="1"
+                  fill="currentColor" stroke="none" /><path d="M12 10.75v5.75" /></svg>
+            </span>
           </button>
           <span class="choice-name">{title?.name}</span>
           {#each pairFacts(title) as fact, i (i)}

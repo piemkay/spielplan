@@ -232,7 +232,7 @@
     min-height: 44px;
     padding: 0 16px;
   }
-  .copynote {
+  .body > .copynote {
     margin-top: -14px;
   }
   pre {

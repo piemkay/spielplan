@@ -853,7 +853,9 @@
     font-size: var(--fs-subhead);
     line-height: 20px;
   }
+  /* Restated: the coarse-pointer touch floor on `button` outranks `.list-row`'s 52px. */
   .ranking .list-row {
+    min-height: 52px;
     gap: 8px;
     padding-right: 12px;
     color: var(--text);
