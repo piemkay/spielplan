@@ -744,12 +744,17 @@ async def _write_fit(
 async def _load_local(
     conn: asyncpg.Connection, *, user_id: int, kind: str, title_ids: Sequence[int], hp: Hyperparams
 ) -> tuple[list[Any], list[Any], list[Any], float]:
-    """Only the rows that touch these titles, plus the GLOBAL mean margin the weighting divides by."""
+    """Only the rows that touch these titles, plus the GLOBAL mean margin the weighting divides by.
+
+    The same rows `load_observations` reads, so this path agrees with the full fit.
+    """
     ids = list(title_ids)
+    cutover = observations.cutover_sql()
     verdicts = await conn.fetch(
-        """
+        f"""
         SELECT v.title_id, v.value, v.created_at FROM verdict v JOIN title t ON t.id = v.title_id
         WHERE v.user_id = $1 AND t.kind = $2 AND NOT v.is_reask AND v.title_id = ANY($3::int[])
+          AND {observations.NOT_SET_UP_SQL}
         ORDER BY v.id
         """,
         user_id,
@@ -757,10 +762,11 @@ async def _load_local(
         ids,
     )
     tier_edits = await conn.fetch(
-        """
+        f"""
         SELECT e.title_id, e.tier, e.n_levels, e.created_at
         FROM tier_edit e JOIN title t ON t.id = e.title_id
         WHERE e.user_id = $1 AND t.kind = $2 AND e.title_id = ANY($3::int[])
+          AND e.created_at >= {cutover} AND NOT {observations.SAME_ANSWER_SQL}
         ORDER BY e.id
         """,
         user_id,
@@ -768,11 +774,11 @@ async def _load_local(
         ids,
     )
     duels = await conn.fetch(
-        """
+        f"""
         SELECT d.title_a, d.title_b, d.outcome, d.margin, d.created_at
         FROM duel d JOIN title ta ON ta.id = d.title_a JOIN title tb ON tb.id = d.title_b
         WHERE d.user_id = $1 AND ta.kind = $2 AND tb.kind = $2
-          AND d.selection <> $4 AND NOT d.is_reask
+          AND d.selection <> $4 AND NOT d.is_reask AND d.created_at >= {cutover}
           AND (d.title_a = ANY($3::int[]) OR d.title_b = ANY($3::int[]))
         ORDER BY d.id
         """,
@@ -782,11 +788,11 @@ async def _load_local(
         observations.HELD_OUT,
     )
     mean_margin = await conn.fetchval(
-        """
+        f"""
         SELECT avg(coalesce(d.margin, $3::float8))
         FROM duel d JOIN title ta ON ta.id = d.title_a JOIN title tb ON tb.id = d.title_b
         WHERE d.user_id = $1 AND ta.kind = $2 AND tb.kind = $2
-          AND d.selection <> $4 AND NOT d.is_reask
+          AND d.selection <> $4 AND NOT d.is_reask AND d.created_at >= {cutover}
         """,
         user_id,
         kind,

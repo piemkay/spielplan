@@ -14,6 +14,7 @@ import asyncpg
 import numpy as np
 import pytest
 
+from spielplan.ledger import model, observations
 from spielplan.models.artifacts import ArtifactStore
 from spielplan.placement import reconcile
 from spielplan.scoring import backbone as bb
@@ -131,9 +132,13 @@ def synth(n_titles: int, n_labels: int, *, seed: int, prior_signal: float = 0.0)
         for i in range(n_titles)
     }
     picked = rng.choice(n_titles, size=n_labels, replace=False)
-    cuts = np.quantile(taste, [1 / 3, 2 / 3])
-    labels = [(int(i), int(np.searchsorted(cuts, taste[i], side="right"))) for i in picked]
-    return coords, list(coords.values()), labels
+    return coords, list(coords.values()), _steps(taste, picked)
+
+
+def _steps(taste: np.ndarray, picked: np.ndarray) -> list[tuple[int, int]]:
+    """§5.1's targets: each picked title's step on a seven-tier ladder, F = 0 to S = 6."""
+    cuts = np.quantile(taste, np.arange(1, 7) / 7)
+    return [(int(i), int(np.searchsorted(cuts, taste[i], side="right"))) for i in picked]
 
 
 def test_the_gate_is_the_crowd_support_curve_and_a_missing_row_is_exactly_zero():
@@ -469,6 +474,24 @@ def test_beta_is_capped_at_the_measured_optimum_and_the_clamp_is_visible():
     assert max(foldin.BETA_GRID) == 1.0, "a grid stopping at 0.8 makes the clamp untestable"
 
 
+def test_a_verdict_only_member_fits_as_the_three_class_target_did():
+    """§5.1: a verdict's step is its class's middle tier (C, B, A), three evenly spaced levels, so
+    the centred ridge fits the same v, λ and β as the retired -1/0/+1 target; only μ moves."""
+    coords, reference, _ = synth(300, 60, seed=11)
+    rng = np.random.default_rng(5)
+    classes = [(int(t), int(c)) for t, c in zip(rng.choice(300, 60, replace=False),
+                                                 rng.integers(0, 3, 60), strict=True)]
+    steps = foldin.fit_user(
+        [(t, model.class_step(c, 7)) for t, c in classes], coords, reference, seed=5
+    )
+    three = foldin.fit_user([(t, c - 1) for t, c in classes], coords, reference, seed=5)
+    assert [model.class_step(c, 7) for c in (0, 1, 2)] == [2, 3, 4]
+    assert np.allclose(steps.v, three.v)
+    assert (steps.beta, steps.lam) == (three.beta, three.lam)
+    assert steps.cv_rho == pytest.approx(three.cv_rho)
+    assert steps.mu == pytest.approx(three.mu + 3.0)
+
+
 def test_mu_shifts_every_score_and_reorders_nothing():
     """μ is added to every title of the kind, so it must not change an ordering."""
     coords, reference, labels = synth(120, 30, seed=23)
@@ -567,8 +590,7 @@ def test_on_a_support_weighted_basis_the_personal_top_is_taste_and_not_popularit
     tops = {}
     for sign in (1.0, -1.0):
         liking = sign * taste
-        cuts = np.quantile(liking, [1 / 3, 2 / 3])
-        labels = [(int(i), int(np.searchsorted(cuts, liking[i], side="right"))) for i in picked]
+        labels = _steps(liking, picked)
         fit = foldin.fit_user(labels, coords, reference, seed=11)
         order = sorted(foldin.score_many(fit, reference), key=lambda row: -row[2])
         chosen = [t for t, _, _ in order if t not in rated][:20]
@@ -582,7 +604,7 @@ def test_on_a_support_weighted_basis_the_personal_top_is_taste_and_not_popularit
         tops[sign] = set(chosen)
 
         # Anti-vacuity: the raw-row ridge's top twenty is the popular fifth, so the assertions can fail.
-        y = np.asarray([foldin.VERDICT_TO_Y[v] for _, v in labels], dtype=float)
+        y = np.asarray([step for _, step in labels], dtype=float)
         v_raw = foldin.fold_in(raw[[t for t, _ in labels]], y - y.mean(), 1.0)
         raw_top = [int(t) for t in np.argsort(-(raw @ v_raw)) if int(t) not in rated][:20]
         assert sum(bool(popular[t]) for t in raw_top) >= 15
@@ -867,11 +889,22 @@ async def test_the_gate_on_the_card_is_a_crowd_number_and_not_a_per_viewer_one(d
     assert patrick["b"] == jenny["b"]
 
 
+async def test_the_target_is_the_placed_step_else_the_middle_of_the_verdicts_class(db, world):
+    """§5.1 (decision 536): a placement's tier, F = 0 to S = 6, wins over its verdict; a title with a
+    verdict alone is fitted at C, B or A. Each answered title is one target."""
+    patrick = world["patrick"]
+    for title_id, value in ((1, 2), (2, 1), (3, 0)):
+        await observations.record_verdict(db, user_id=patrick, title_id=title_id, value=value)
+    await observations.record_tier_edit(db, user_id=patrick, title_id=3, tier=6)
+    await observations.record_tier_edit(db, user_id=patrick, title_id=4, tier=0)
+
+    targets = dict(await foldin.live_labels(db, user_id=patrick, kind="movie"))
+    assert targets == {1: 4, 2: 3, 3: 6, 4: 0}
+
+
 async def test_a_silent_reask_does_not_erase_the_label_it_re_asked(db, world):
     """`record_verdict` supersedes the previous row for a re-ask too, so `superseded_by IS NULL AND
     NOT is_reask` matched neither row. The label count must not move."""
-    from spielplan.ledger import observations
-
     patrick = world["patrick"]
     for title_id, value in ((1, 2), (2, 2), (3, 1), (4, 0), (5, 1)):
         await observations.record_verdict(db, user_id=patrick, title_id=title_id, value=value)
@@ -891,7 +924,9 @@ async def test_a_silent_reask_does_not_erase_the_label_it_re_asked(db, world):
 
     after = await foldin.live_labels(db, user_id=patrick, kind="movie")
     assert len(after) == 5, f"the re-ask erased a label: {sorted(before)} -> {sorted(after)}"
-    assert dict(after)[1] == 2, "and the erased title keeps the answer the person actually gave"
+    assert dict(after)[1] == model.class_step(2, 7), (
+        "and the erased title keeps the answer the person actually gave"
+    )
     assert sorted(after) == sorted(before), "a same-answer re-ask must change nothing at all"
 
     # The append-only history is intact; the fit reads one of the rows.

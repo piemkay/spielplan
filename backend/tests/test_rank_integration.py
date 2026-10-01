@@ -224,9 +224,10 @@ async def test_a_drop_narrates_itself_with_the_number_of_duels_it_wrote(db, sand
                            title_name="Drive")
     assert both.log == (
         "tier_edit(Drive → A+, via=drag_drop) + 2 margin-less duels vs new neighbours"
+        " + verdict = liked"
     )
-    alone = await drop.drop(db, user_id=board_of, title_id=3, tier=0, title_name="Heat")
-    assert alone.log == "tier_edit(Heat → F, via=drag_drop)"
+    alone = await drop.drop(db, user_id=board_of, title_id=4, tier=4, title_name="Drive")
+    assert alone.log == "tier_edit(Drive → A, via=drag_drop)"
 
 
 async def test_tap_to_tier_writes_exactly_what_the_pointer_path_writes(db, board_of):
@@ -269,19 +270,29 @@ async def test_a_tier_on_an_unrated_title_answers_the_verdict_it_stands_for(db, 
     assert next(t for t in after["tiers"] if t["index"] == 5)["count"] >= 1
 
 
-async def test_a_tier_on_a_rated_title_keeps_its_verdict_and_counts_it_seen(db, board_of):
-    """Decision 531: the verdict stands even where the tier's class says otherwise, and Not seen,
-    which never removed it, is undone by the tier."""
-    verdicts = "SELECT id, value, superseded_by FROM verdict WHERE user_id=$1 AND title_id=3"
-    before = [dict(r) for r in await db.fetch(verdicts, board_of)]
+async def test_a_move_into_another_class_writes_that_classs_verdict_and_counts_it_seen(db, board_of):
+    """Decision 536: a placed title's verdict is its tier's class, so a move into another class
+    records that class's verdict and a move inside it records none. Not seen, which never removed
+    the verdict, is undone by the tier."""
+    verdicts = (
+        "SELECT id, value, superseded_by, source FROM verdict WHERE user_id=$1 AND title_id=3 "
+        "ORDER BY id"
+    )
+    (fine,) = [dict(r) for r in await db.fetch(verdicts, board_of)]
+    assert fine["value"] == 1
     await observations.record_not_seen(db, user_id=board_of, title_id=3)
 
     await drop.drop(db, user_id=board_of, title_id=3, tier=0)
 
-    assert [dict(r) for r in await db.fetch(verdicts, board_of)] == before
+    old, new = [dict(r) for r in await db.fetch(verdicts, board_of)]
+    assert (new["value"], new["source"]) == (model.verdict_class_of_tier(0, 7), "tier") == (0, "tier")
+    assert old["id"] == fine["id"] and old["superseded_by"] == new["id"]
     assert await db.fetchval(
         "SELECT state FROM user_title WHERE user_id=$1 AND title_id=3", board_of
     ) == "seen"
+
+    await drop.drop(db, user_id=board_of, title_id=3, tier=1)
+    assert len(await db.fetch(verdicts, board_of)) == 2, "D is still disliked: no second verdict"
 
 
 async def test_ledger_cutpoints_is_keyed_by_user_and_kind(db, world):

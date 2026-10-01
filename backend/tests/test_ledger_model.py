@@ -687,6 +687,49 @@ def test_the_second_households_three_complaints_do_not_happen_on_a_board_like_th
     assert set(tiers[liked].tolist()) <= {4, 5, 6} and set(tiers[fine].tolist()) == {3}
 
 
+def test_a_ladder_with_no_verdict_arm_keeps_ordered_cuts_on_the_shape_prior():
+    """After a cut-over the fit reads no verdict (decision 537): gamma is held by its own prior and
+    still anchors the tier cuts, so placements alone fit ordered cuts near the measured shape and the
+    class bands stay the ones `verdict_tiers` names."""
+    rng = np.random.default_rng(1)
+    n = 40
+    e = rng.normal(size=(n, 64)) / 8.0
+    truth = e @ (rng.normal(size=64) / 8.0) + rng.normal(scale=0.5, size=n)
+    shape = np.quantile(truth, np.cumsum(model.MEASURED_TIER_SHARES)[:-1])
+    level = np.searchsorted(shape, truth, side="right")
+    obs = ObservationSet(
+        title_ids=np.arange(n, dtype=np.int64), embeddings=e, embedded=np.ones(n, dtype=bool),
+        ord_index=np.arange(n, dtype=np.int64), ord_level=level.astype(np.int64),
+        ord_arm=np.ones(n, dtype=np.int64), ord_weight=np.ones(n),
+    )
+    fitted = model.fit(obs, DEFAULTS)
+
+    assert fitted.converged
+    assert np.all(np.diff(fitted.cuts) > 0)
+    assert np.abs(fitted.cuts - model.initial_cutpoints(7)).max() < 1.0
+    assert np.abs(fitted.gamma - model.verdict_cutpoints()).max() < 0.5
+    assert np.all(np.diff([fitted.s[level == t].mean() for t in range(7)]) > 0)
+    fitted_tier = model.tier_of(fitted.s, fitted.cuts)
+    same_class = [
+        model.verdict_class_of_tier(int(a), 7) == model.verdict_class_of_tier(int(b), 7)
+        for a, b in zip(fitted_tier, level, strict=True)
+    ]
+    assert np.mean(same_class) >= 0.8
+
+
+def test_a_verdict_class_stands_for_its_tier_nearest_the_middle():
+    """§5.1's step for a verdict: C, B or A at K = 7, the tier decision 510 guesses a class at."""
+    assert [model.class_step(c, 7) for c in (0, 1, 2)] == [2, 3, 4]
+    assert [model.class_step(c, 2) for c in (0, 1, 2)] == [0, 0, 1]
+    for k in range(2, 13):
+        bands = model.verdict_tiers(k)
+        for c in (0, 1, 2):
+            assert bands[c, 0] <= model.class_step(c, k) <= bands[c, 1], f"K = {k}"
+        for c in (0, 2):
+            band = np.arange(bands[c, 0], bands[c, 1] + 1)
+            assert set(model.guess_tier(band, k).tolist()) == {model.class_step(c, k)}, f"K = {k}"
+
+
 def test_an_unrated_title_is_guessed_a_class_and_not_a_grade():
     """Decision 510: an unrated title wears its guessed class's middle tier, never a grade."""
     assert model.guess_tier(np.arange(7), 7).tolist() == [2, 2, 2, 3, 4, 4, 4]

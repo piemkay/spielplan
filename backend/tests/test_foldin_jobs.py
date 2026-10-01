@@ -64,11 +64,12 @@ async def _tick(conn, world, *, only_stale: bool = True) -> foldin.FoldInReport:
 async def _wait_out_the_pause(conn, user_id: int) -> None:
     """Make `foldin.PAUSE_SECONDS` have elapsed for this person, without spending it."""
     shift = foldin.PAUSE_SECONDS + 10
-    await conn.execute(
-        "UPDATE verdict SET created_at = created_at - ($2::int * interval '1 second') "
-        " WHERE user_id = $1",
-        user_id, shift,
-    )
+    for table in ("verdict", "tier_edit"):
+        await conn.execute(
+            f"UPDATE {table} SET created_at = created_at - ($2::int * interval '1 second') "
+            " WHERE user_id = $1",
+            user_id, shift,
+        )
     await conn.execute(
         "UPDATE user_vector SET updated_at = updated_at - ($2::int * interval '1 second') "
         " WHERE user_id = $1",
@@ -332,6 +333,22 @@ async def test_a_fold_in_whose_score_write_fails_leaves_no_user_vector_row(db, w
     assert (patrick, "movie") in (await _tick(db, world)).refit
 
 
+async def test_a_move_inside_a_class_writes_no_verdict_and_still_makes_the_fit_stale(db, world):
+    """§5.1 fits the step: a move from A to S keeps the verdict and the count, so only the tier
+    edit's own clock can say the target moved."""
+    patrick = world["patrick"]
+    await _rate(db, patrick)
+    await _tick(db, world)
+    await _wait_out_the_pause(db, patrick)
+
+    await observations.record_tier_edit(db, user_id=patrick, title_id=1, tier=6)
+    await _wait_out_the_pause(db, patrick)
+
+    assert (patrick, "movie") in (await _tick(db, world)).refit
+    assert dict(await foldin.live_labels(db, user_id=patrick, kind="movie"))[1] == 6
+    assert (await _fit(db, patrick))["label_count"] == len(SITTING)
+
+
 async def test_a_re_rating_committed_inside_the_fit_window_is_picked_up_by_the_next_tick(
     db, world, monkeypatch
 ):
@@ -490,10 +507,7 @@ def _held_out_table(
     ref_b = np.asarray([c.b for c in reference], dtype=np.float64)
     prior_mean, prior_sd = float(ref_b.mean()), float(ref_b.std())
     ordered = sorted(labels, key=lambda pair: int(pair[0]))
-    rows = [
-        (bb.directions([coords[t]])[0], foldin.VERDICT_TO_Y[int(v)], coords[t].b)
-        for t, v in ordered
-    ]
+    rows = [(bb.directions([coords[t]])[0], float(step), coords[t].b) for t, step in ordered]
     x = np.ascontiguousarray([r[0] for r in rows], dtype=np.float64)
     y_raw = np.asarray([r[1] for r in rows], dtype=np.float64)
     z_prior = (np.asarray([r[2] for r in rows], dtype=np.float64) - prior_mean) / prior_sd
