@@ -45,6 +45,7 @@
   const adminRoute = $derived($page.url.pathname.startsWith('/admin'));
 
   const TITLES = [
+    ['/rate/setup', 'Set up your ladder'],
     ['/rate', 'Rate'],
     ['/tonight', 'Tonight'],
     ['/rank', 'Rank'],
