@@ -1418,7 +1418,7 @@
     align-items: center;
     justify-content: flex-start;
     gap: 0;
-    padding-top: 20px;
+    padding: 20px 8px;
     border-radius: var(--r-sm);
     background: var(--surface-2);
     text-align: center;
@@ -1433,6 +1433,7 @@
     gap: 4px;
     font-size: var(--fs-caption);
     line-height: 16px;
+    text-wrap: balance;
   }
   .wide .letter {
     height: auto;
