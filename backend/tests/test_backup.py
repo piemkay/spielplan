@@ -51,6 +51,7 @@ USER_STATE = {
     "acquisition_job", "rate_session", "rate_observation", "session", "session_participant",
     "session_answer", "session_ballot", "session_result", "session_outcome", "auth_session",
     "webauthn_credential", "webauthn_challenge", "push_subscription",
+    "wish",
 }
 SECRET_CUSTODY = {"connector_config", "data_encryption_key", "app_setting"}
 # §10: recomputed by the rebuild set; carrying them would ship a stale basis.

@@ -1752,3 +1752,181 @@ async def test_the_title_card_names_a_top_pick_that_nothing_liked_explains(world
         "UPDATE user_score SET score = 5.0 WHERE user_id = $1 AND title_id = 1030", world.patrick
     )
     assert await _why(world.client, 1030) == "One of the ones we think you'll enjoy most"
+
+
+# --- Worth getting (decision 544) ---------------------------------------------------------------
+# Unowned films. WANTABLE carry the anchor's two themes, so each is like Home Film 1000; NO_CROWD has
+# no crowd rating and UNLIKE no liked title like it, and both outscore everything; the fillers are low.
+
+WANTABLE = (1060, 1061, 1062, 1063, 1064, 1065, 1069, 1068)
+NO_CROWD, UNLIKE = 1066, 1067
+UNOWNED_FILLER = tuple(range(1070, 1080))
+UNOWNED_SCORE = {
+    1060: 0.95, 1061: 0.94, 1062: 0.93, 1063: 0.92, 1064: 0.91, 1065: 0.90,
+    NO_CROWD: 0.99, UNLIKE: 0.98, 1068: 0.10, 1069: 0.11,
+    **{t: 0.001 * (t - 1069) for t in UNOWNED_FILLER},
+}
+LIKE_1000 = {"title_id": 1000, "name": "Home Film 1000", "terms": ["morally-grey", "obsession"]}
+
+
+async def _unowned(db, *, labels: int = 20) -> None:
+    users = [r["id"] for r in await db.fetch("SELECT id FROM app_user")]
+    for title_id, score in UNOWNED_SCORE.items():
+        await db.execute(
+            "INSERT INTO title (id, kind, name, year, runtime_min, is_owned) "
+            "VALUES ($1, 'movie', $2, 2010, 100, false)",
+            title_id, f"Wanted Film {title_id}",
+        )
+        await db.execute(
+            "INSERT INTO title_prior (title_id, bundle_version, b, b_i, item_n, gate, e_source) "
+            "VALUES ($1, $2, 0.5, 0.5, $3, 0.9, 'backbone')",
+            title_id, BUNDLE, 0 if title_id == NO_CROWD else 300,
+        )
+        for user_id in users:
+            await db.execute(
+                "INSERT INTO user_score (user_id, title_id, kind, bundle_version, score, cf) "
+                "VALUES ($1, $2, 'movie', $3, $4, 0.0)",
+                user_id, title_id, BUNDLE, score,
+            )
+        if title_id in (*WANTABLE, NO_CROWD):
+            await _tag(db, title_id, "obsession", "themes", 2)
+            await _tag(db, title_id, "morally-grey", "character", 2)
+        elif title_id == UNLIKE:
+            await _tag(db, title_id, "neon", "visual", 2)
+    await db.execute("UPDATE user_vector SET label_count = $1", labels)
+
+
+def _worth(payload, kind="movie"):
+    section = next(
+        (s for shelf in payload["shelves"] if shelf["id"] == "worth_getting"
+         for s in shelf["sections"] if s["kind"] == kind),
+        None,
+    )
+    return None if section is None else [c["title_id"] for c in section["items"]]
+
+
+async def _see_all(client, *, kind="movie", audience="me"):
+    response = await client.get("/api/home/worth-getting", params={"kind": kind, "with": audience})
+    assert response.status_code == 200, response.text
+    return response.json()
+
+
+async def test_worth_getting_opens_at_twenty_rated_titles_of_the_kind(world):
+    await _unowned(world.db, labels=19)
+    await world.client.post("/api/auth/preferences", json={"show_model": True})
+    payload = await world.home()
+    assert _worth(payload) is None
+    reason = next(s["reason"] for s in payload["suppressed"]
+                  if s["shelf"] == "worth_getting" and s["kind"] == "movie")
+    assert "19" in reason and "20" in reason, reason
+    assert (await _see_all(world.client))["items"] == [], "See all has no list while the shelf is shut"
+
+    await world.db.execute("UPDATE user_vector SET label_count = 20")
+    assert _worth(await world.home()) == list(WANTABLE)
+
+    await world.db.execute("UPDATE user_vector SET blend_beta = 0")
+    assert _worth(await world.home()) is None, "a crowd ranking is not one of your own"
+
+
+async def test_worth_getting_ranks_unowned_titles_each_like_a_liked_one(world):
+    """Unowned only, by the person's own score; no crowd rating or no liked title like it leaves."""
+    await _unowned(world.db)
+    payload = await world.home(kinds=("movie",))
+    shelf = next(shelf for shelf in payload["shelves"] if shelf["id"] == "worth_getting")
+    assert shelf["ranking"] is True
+    section = shelf["sections"][0]
+    assert (section["title"], section["why"]) == (
+        "Worth getting", "Not in the library yet, close to what you love"
+    )
+    assert [c["title_id"] for c in section["items"]] == list(WANTABLE)
+    assert {c["like"]["title_id"] for c in section["items"]} == {1000}
+    assert section["items"][0]["like"] == LIKE_1000
+    assert payload["shelves"][-1]["id"] == "worth_getting", "last in the table"
+
+
+async def test_worth_getting_leaves_out_the_seen_the_rated_the_wished_and_the_avoided(world):
+    await _unowned(world.db)
+    db, patrick = world.db, world.patrick
+    await db.execute(
+        "INSERT INTO user_title (user_id, title_id, state) VALUES ($1, 1060, 'seen')", patrick
+    )
+    await db.execute("INSERT INTO verdict (user_id, title_id, value) VALUES ($1, 1061, 1)", patrick)
+    await world.client.put("/api/wish/1062", json={"state": "want"})
+    await world.client.put("/api/wish/1063", json={"state": "not_for_me"})
+    term, facet, label = GORE
+    await _term(db, term, facet, label)
+    for title_id in GORE_CARRIERS:
+        await _tag(db, title_id, term, facet, 2)
+        await _verdict(db, patrick, title_id, 0)
+    await _tag(db, 1064, term, facet, 2)
+
+    assert _worth(await world.home(kinds=("movie",))) == [1065, 1069, 1068]
+    listed = (await _see_all(world.client))["items"]
+    assert [(c["title_id"], c["wanted"]) for c in listed] == [
+        (1062, True), (1065, False), (1069, False), (1068, False)
+    ], "See all keeps a wanted title, marked, and drops Not for me"
+
+
+async def test_worth_getting_neither_claims_nor_is_thinned_and_keeps_the_floor(world):
+    await _unowned(world.db)
+    assert "worth_getting" in shelves.RANKING_SHELVES
+    assert "worth_getting" not in shelves.CLAIMING_SHELVES
+    payload = await world.home()
+    for kind in ("movie", "series"):
+        assert len(_claiming_sections(payload, kind)) == 5
+    assert _worth(payload, "series") is None, "no unowned series: under the floor"
+
+    await world.db.execute(
+        "UPDATE title_prior SET item_n = 0 WHERE title_id = ANY($1::int[])", list(WANTABLE[2:])
+    )
+    await world.client.post("/api/auth/preferences", json={"show_model": True})
+    payload = await world.home()
+    assert _worth(payload) is None
+    reason = next(s["reason"] for s in payload["suppressed"]
+                  if s["shelf"] == "worth_getting" and s["kind"] == "movie")
+    assert reason.startswith("2 qualifying titles"), reason
+
+
+async def test_see_all_for_two_ranks_as_the_sweet_spot_and_honours_either_not_for_me(world):
+    await _unowned(world.db)
+    await _verdict(world.db, world.jenny, 1000, 2)
+    await world.db.execute(
+        "INSERT INTO user_vector (user_id, kind, purpose, vec, blend_beta, label_count, bundle_version) "
+        "VALUES ($1, 'movie', 'foldin', $2, 0.5, 20, $3)",
+        world.jenny, b"\x00" * 256, BUNDLE,
+    )
+    jenny = await world.sign_in_jenny()
+
+    pair = await _see_all(world.client, audience="pair")
+    assert pair["other"] == {"id": world.jenny, "name": "jenny"}
+    # The top 30% of the twenty unowned films for both, less the one with no crowd rating; the pair's
+    # list does not require a like, so the unlike title stays with none.
+    assert [c["title_id"] for c in pair["items"]] == [UNLIKE, 1060, 1061, 1062, 1063]
+    assert pair["items"][0]["like"] is None
+    assert pair["items"][1]["like"] == LIKE_1000
+    assert [c["title_id"] for c in (await _see_all(jenny, audience="pair"))["items"]] == [
+        UNLIKE, 1060, 1061, 1062, 1063
+    ]
+
+    await world.client.put("/api/wish/1061", json={"state": "not_for_me"})
+    for client in (world.client, jenny):
+        shown = [c["title_id"] for c in (await _see_all(client, audience="pair"))["items"]]
+        assert 1061 not in shown, "either person's Not for me leaves the list for two"
+    assert 1061 not in [c["title_id"] for c in (await _see_all(world.client))["items"]]
+    assert 1061 in [c["title_id"] for c in (await _see_all(jenny))["items"]], (
+        "Not for me hides a title from that person's own list only"
+    )
+    refused = await world.client.get(
+        "/api/home/worth-getting", params={"kind": "both", "with": "me"}
+    )
+    assert refused.status_code == 422
+
+
+async def test_new_in_the_library_marks_what_the_viewer_wanted(world):
+    await world.db.execute(
+        "INSERT INTO wish (user_id, title_id, state) VALUES ($1, 1008, 'want')", world.patrick
+    )
+    section = world.section(await world.home(kinds=("movie",)), "new_in_library", "movie")
+    assert {c["title_id"]: c["wanted"] for c in section["items"]} == {
+        1011: False, 1010: False, 1009: False, 1008: True
+    }

@@ -46,6 +46,8 @@ class ResolveReport:
     items: dict[str, int] = field(default_factory=dict)
     matched_title_ids: set[int] = field(default_factory=set)
     kinds: dict[int, str] = field(default_factory=dict)
+    # Titles this sweep turned from unowned to owned: the wish list's arrivals (decision 544).
+    arrived: set[int] = field(default_factory=set)
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -163,7 +165,7 @@ async def upsert_item(conn: asyncpg.Connection, item: dict, report: ResolveRepor
     jellyfin_id = str(item.get("Id") or "") or None
 
     row = await conn.fetchrow(
-        "SELECT kind, imdb_id, tmdb_id, tvdb_id FROM title WHERE id = $1", title_id
+        "SELECT kind, is_owned, imdb_id, tmdb_id, tvdb_id FROM title WHERE id = $1", title_id
     )
     fills = {c: ids[c] for c in FILLABLE if ids[c] is not None and row[c] is None}
 
@@ -198,6 +200,8 @@ async def upsert_item(conn: asyncpg.Connection, item: dict, report: ResolveRepor
 
     report.matched += 1
     report.matched_title_ids.add(title_id)
+    if not row["is_owned"]:
+        report.arrived.add(title_id)
     # The title's own kind, for decision 210's series rule.
     report.kinds[title_id] = row["kind"]
     for column in fills:

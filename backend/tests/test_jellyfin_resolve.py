@@ -203,6 +203,25 @@ async def test_a_title_the_sweep_un_owned_is_owned_again_when_it_comes_back(db):
     )
 
 
+async def test_only_the_sweep_that_makes_a_title_owned_reports_it_arrived(db):
+    """Decision 544's arrival is the false -> true flip, never the hourly re-check of an owned title."""
+    await _title(db, 1, "movie", "Heat", 1995, imdb_id="tt0113277")
+    await _title(db, 2, "movie", "Zodiac", 2007, imdb_id="tt0443706")
+    await db.execute("UPDATE title SET is_owned = true WHERE id = 2")
+    items = [
+        item(Id="jf-1", ProviderIds={"Imdb": "tt0113277"}),
+        item(Id="jf-2", Name="Zodiac", ProviderIds={"Imdb": "tt0443706"}),
+    ]
+
+    first = await resolve.upsert_items(db, items)
+    assert first.arrived == {1}
+
+    await db.execute("UPDATE title SET owned_checked_at = now() - interval '2 hours'")
+    refreshed = await resolve.upsert_items(db, items)
+    assert refreshed.arrived == set(), "an owned title re-checked after the hour did not arrive"
+    assert refreshed.matched == 2
+
+
 async def test_a_rebuilt_library_relinks_and_says_so(db):
     """The old id being gone from the library is what makes this a re-link; one item cannot see that."""
     await _title(db, 1, "movie", "Heat", 1995, imdb_id="tt0113277", jellyfin_id="old-id")

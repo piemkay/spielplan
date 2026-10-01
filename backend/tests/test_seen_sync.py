@@ -18,7 +18,10 @@ from spielplan.connectors.registry import (
     load_jellyfin,
     save_jellyfin,
 )
+from spielplan.push import keys
+from spielplan.push import send as push_send
 from spielplan.sync import seen
+from tests.test_push_sender import FakePushService, _decrypt, _device
 
 PATRICK_JF = "jf-user-patrick"
 JENNY_JF = "jf-user-jenny"
@@ -355,6 +358,31 @@ async def test_unlinking_forgets_the_token_and_keeps_the_seen_state(db, world):
     assert row["jellyfin_user_id"] is None and row["jellyfin_link_state"] is None
     assert (await load_jellyfin(db)).user_tokens == {}
     assert (await _state(db, world["patrick"], 1))["state"] == "seen"
+
+
+async def test_the_sweep_that_makes_a_wanted_title_owned_announces_it_once(db, world, monkeypatch):
+    """Decision 544: a push on the false -> true flip only, never on the hourly re-check after it."""
+    await keys.ensure_keypair(db)
+    phone = await _device(db, world["patrick"], "https://push.example.test/f/patrick-phone")
+    await db.execute(
+        "INSERT INTO wish (user_id, title_id, state) VALUES ($1, 2, 'want')", world["patrick"]
+    )
+    await _store_connector(db, world, tokens={str(world["patrick"]): world["token"]})
+    service = FakePushService()
+    deliver = push_send.send_to_user
+
+    async def through_the_fake(conn, user_id, payload, *, transport=None):
+        return await deliver(conn, user_id, payload, transport=service)
+
+    monkeypatch.setattr(push_send, "send_to_user", through_the_fake)
+
+    await seen.sync_all(db, world["client"])
+    assert [str(r.url) for r in service.requests] == [phone.endpoint]
+    assert _decrypt(service.requests[0].content, phone)["body"] == "Prisoners is here"
+
+    await db.execute("UPDATE title SET owned_checked_at = now() - interval '2 hours'")
+    await seen.sync_all(db, world["client"])
+    assert len(service.requests) == 1, "an owned title re-checked after the hour is no arrival"
 
 
 @pytest.fixture

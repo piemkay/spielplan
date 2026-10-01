@@ -21,6 +21,7 @@ from spielplan.connectors.registry import (
     JellyfinConfig,
     save_jellyfin,
 )
+from spielplan.home import wish
 
 log = logging.getLogger("spielplan.sync.seen")
 
@@ -510,6 +511,7 @@ async def sync_user(
     if resolved is None:
         resolved = await resolve.upsert_items(conn, await client.all_items(None))
         report.resolve = resolved.as_dict()
+        await wish.announce_arrivals(conn, resolved.arrived)
     # The per-user read is for `UserData` only: Played is per user, identity is not.
     collapsed = _collapse(await client.all_items(user.jf_user_id), resolved)
     open_prompts = await _open_prompt_titles(conn, user.app_user_id)
@@ -656,6 +658,7 @@ async def sync_all(
         resolved = await resolve.upsert_items(conn, library)
         # Once per sweep: resolution is user-independent.
         report.resolve = resolved.as_dict()
+        await wish.announce_arrivals(conn, resolved.arrived)
 
         # Before the per-user loop, so unseen pushes never target copies this read no longer lists.
         pruned = await resolve.prune_missing_items(conn, resolved)
