@@ -109,7 +109,7 @@ function backend({
   titles = (/** @type {URLSearchParams} */ _params) => ({ items: [], total: 0, hidden: {} }),
   facets = (/** @type {string[]} */ _kinds) => ({ genres: [], decades: [] }),
   home = (/** @type {string[]} */ _kinds) => ({}),
-  wish = () => ({ groups: [], copy_text: '' })
+  wish = () => ({ mine: [], others: [], copy_text: '' })
 } = {}) {
   const seen = [];
   vi.stubGlobal(
@@ -617,21 +617,16 @@ describe('a wanted film arrives, and the household wish list (decision 544)', ()
     expect(seen.filter((u) => u.startsWith('/api/home')).length).toBe(reads + 1);
   });
 
-  it('keeps the row under Worth getting and opens the list grouped by who wants each film', async () => {
+  it('keeps the row under Worth getting and opens the list as yours, then others\'', async () => {
+    const patrick = { id: 1, name: 'Patrick', role: 'admin' };
+    const sam = { id: 6, name: 'Sam' };
     const listing = {
-      groups: [
-        {
-          wanters: [{ id: 5, name: 'Jenny' }, { id: 1, name: 'Patrick', role: 'admin' }],
-          items: [{ title_id: 3, kind: 'movie', name: 'Princess Mononoke', year: 1997,
-                    since: '2026-09-14T08:00:00Z', mine: true, others_likely: [], link: null }]
-        },
-        {
-          wanters: [{ id: 1, name: 'Patrick', role: 'admin' }],
-          items: [{ title_id: 4, kind: 'movie', name: 'Wolf Children', year: 2012,
-                    since: '2026-09-30T08:00:00Z', mine: false,
-                    others_likely: [{ id: 5, name: 'Jenny', likely: 'likely' }], link: null }]
-        }
-      ],
+      mine: [{ title_id: 3, kind: 'movie', name: 'Princess Mononoke', year: 1997,
+               since: '2026-09-14T08:00:00Z', mine: true, likely: null, likely_too: ['Sam'],
+               wanters: [{ id: 5, name: 'Jenny' }, patrick], link: null }],
+      others: [{ title_id: 4, kind: 'movie', name: 'Wolf Children', year: 2012,
+                 since: '2026-09-30T08:00:00Z', mine: false, likely: 'likely', likely_too: [],
+                 wanters: [patrick, sam], link: null }],
       copy_text: 'Princess Mononoke (1997)\nWolf Children (2012)'
     };
     backend({
@@ -652,11 +647,15 @@ describe('a wanted film arrives, and the household wish list (decision 544)', ()
 
     const sheet = $('[data-testid="wish-list-sheet"]');
     expect([...sheet.querySelectorAll('h3')].map((h) => h.textContent)).toEqual([
-      'You both want', 'Patrick wants'
+      'You want', 'Others want'
     ]);
     const [mine, theirs] = [...sheet.querySelectorAll('[data-testid="wish-item"]')];
     expect(mine.textContent).toContain('1997 · since 14 Sep');
+    expect(mine.textContent).toContain('Sam would likely enjoy it too.');
+    expect(mine.querySelector('.faces').getAttribute('aria-label')).toBe('Also wanted by Patrick');
     expect(theirs.textContent).toContain('2012 · since 30 Sep · you: likely too');
+    expect(theirs.querySelector('.faces').getAttribute('aria-label')).toBe('Wanted by Patrick and Sam');
+    expect(theirs.querySelectorAll('.faces .avatar')).toHaveLength(2);
 
     mine.querySelector('[aria-label="Remove Princess Mononoke"]').click();
     await tick();

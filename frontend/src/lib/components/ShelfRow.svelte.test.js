@@ -22,6 +22,7 @@ vi.mock('$app/navigation', () => ({
 }));
 
 import { api, get } from '$lib/api.js';
+import { session } from '$lib/session.svelte.js';
 import ShelfRow from './ShelfRow.svelte';
 
 const COLD_NOTE = '[data-testid="shelf-cold-note"]';
@@ -279,17 +280,27 @@ describe('Worth getting (decision 544)', () => {
     unmount(app);
   });
 
-  it('opens the whole list from See all, for you or for two, with Want on every row', async () => {
+  it('opens the whole list from See all, for you or whomever you pick, with Want on every row', async () => {
+    session.user = { id: 1, name: 'Patrick', role: 'admin', must_change_password: false };
     const wanted = new Set([1]);
     const row = (title_id, name, like = heat) => ({
       title_id, kind: 'movie', name, year: 2004, runtime_min: 120, like, wanted: wanted.has(title_id)
     });
-    vi.mocked(get).mockImplementation(async (path) =>
-      path.includes('with=pair')
-        ? { kind: 'movie', with: 'pair', other: { id: 2, name: 'Jenny' }, items: [row(3, 'Ronin', null)] }
-        : { kind: 'movie', with: 'me', other: { id: 2, name: 'Jenny' },
-            items: [row(1, 'Collateral'), row(2, 'Thief')] }
-    );
+    const members = [
+      { id: 1, name: 'Patrick', role: 'admin', pickable: true, reason: null },
+      { id: 2, name: 'Jenny', role: 'member', pickable: true, reason: null },
+      { id: 3, name: 'Sam', role: 'member', pickable: false, reason: 'Not enough films rated yet' }
+    ];
+    vi.mocked(get).mockImplementation(async (path) => {
+      if (path.endsWith('for=everyone')) {
+        return { kind: 'movie', for: 'everyone', members, items: [row(3, 'Ronin', null)] };
+      }
+      if (path.endsWith('for=2')) {
+        return { kind: 'movie', for: { id: 2, name: 'Jenny' }, members, items: [row(4, 'Heat II')] };
+      }
+      return { kind: 'movie', for: { id: 1, name: 'Patrick' }, members,
+               items: [row(1, 'Collateral'), row(2, 'Thief')] };
+    });
     vi.mocked(api).mockImplementation(async (path) => {
       wanted.add(Number(path.split('/').pop()));
       return { state: 'want' };
@@ -299,7 +310,7 @@ describe('Worth getting (decision 544)', () => {
     await settle();
 
     const sheet = target.querySelector('[data-testid="worth-getting-sheet"]');
-    expect(vi.mocked(get)).toHaveBeenCalledWith('/home/worth-getting?kind=movie&with=me');
+    expect(vi.mocked(get)).toHaveBeenCalledWith('/home/worth-getting?kind=movie');
     expect(sheet.closest('[role="dialog"]').getAttribute('aria-label')).toBe('Worth getting');
     expect([...sheet.querySelectorAll('.reason')].map((el) => el.textContent)).toEqual([
       'Like Heat · night city, cat and mouse',
@@ -322,16 +333,53 @@ describe('Worth getting (decision 544)', () => {
     await settle();
     expect(vi.mocked(api)).toHaveBeenCalledWith('/wish/2', { method: 'PUT', body: { state: 'want' } });
     // A wish written anywhere, a card over the sheet included, re-reads the list.
-    expect(vi.mocked(get).mock.calls.slice(reads)).toEqual([['/home/worth-getting?kind=movie&with=me']]);
+    expect(vi.mocked(get).mock.calls.slice(reads)).toEqual([['/home/worth-getting?kind=movie']]);
     expect(wants()[1].getAttribute('aria-pressed')).toBe('true');
 
-    const pair = [...target.querySelectorAll('[aria-label="Whose list"] button')];
-    expect(pair.map((b) => b.textContent)).toEqual(['For you', 'For you and Jenny']);
-    pair[1].click();
+    const seat = target.querySelector('[data-testid="worth-getting-for"]');
+    expect(seat.textContent).toContain('For you');
+    seat.click();
     await settle();
-    expect(vi.mocked(get)).toHaveBeenLastCalledWith('/home/worth-getting?kind=movie&with=pair');
-    const reasons = [...target.querySelectorAll('[data-testid="worth-getting-sheet"] .reason')];
-    expect(reasons.map((el) => el.textContent)).toEqual(['Jenny too']);
+    // You first, the others, then Everyone; a member whose ratings do not open it is dimmed with why.
+    const options = () => [...target.querySelectorAll('[data-testid="worth-getting-picker"] [role="radio"]')];
+    expect(
+      options().map((o) => [
+        o.querySelector('.name').textContent,
+        o.getAttribute('aria-disabled'),
+        o.getAttribute('aria-checked')
+      ])
+    ).toEqual([
+      ['You', 'false', 'true'],
+      ['Jenny', 'false', 'false'],
+      ['Sam', 'true', 'false'],
+      ['Everyone', 'false', 'false']
+    ]);
+    expect(options()[2].textContent).toContain('Not enough films rated yet');
+    expect(options()[3].textContent).toContain('You and Jenny');
+
+    const before = vi.mocked(get).mock.calls.length;
+    options()[2].click();
+    await settle();
+    expect(vi.mocked(get).mock.calls.length, 'Sam cannot be picked').toBe(before);
+
+    options()[3].click();
+    await settle();
+    expect(vi.mocked(get)).toHaveBeenLastCalledWith('/home/worth-getting?kind=movie&for=everyone');
+    expect(seat.textContent).toContain('For everyone');
+    const reasons = () => [...sheet.querySelectorAll('.reason')].map((el) => el.textContent);
+    expect(reasons()).toEqual([]);
+    expect(sheet.querySelector(':scope > p.footnote').textContent).toContain('Seen one already?');
+
+    options()[1].click();
+    await settle();
+    expect(vi.mocked(get)).toHaveBeenLastCalledWith('/home/worth-getting?kind=movie&for=2');
+    expect(seat.textContent).toContain('For Jenny');
+    expect(target.querySelector('.lede').textContent).toContain('the ones Jenny rates highest');
+    expect(reasons(), "the like line stays the viewer's own").toEqual([
+      'Like Heat · night city, cat and mouse'
+    ]);
+    expect(sheet.querySelector(':scope > p.footnote'), 'rating it leaves only your own list').toBeNull();
     unmount(app);
+    session.user = null;
   });
 });

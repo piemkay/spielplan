@@ -3,15 +3,16 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   clearWish,
   dismissArrival,
-  groupHeading,
   likeLine,
   likelyTooLine,
   loadWorthGetting,
-  othersLine,
+  peopleLine,
   setWish,
   wishRowShown,
   wishSummary,
-  wishes
+  wishes,
+  worthLede,
+  youLine
 } from './wish.svelte.js';
 
 /** A fetch that answers `status` with `body`, recording what was asked. */
@@ -52,22 +53,17 @@ describe('the wish list in the viewer\'s own words', () => {
   const jenny = { id: 2, name: 'Jenny' };
   const sam = { id: 3, name: 'Sam' };
 
-  it('heads each group by who wants it, the viewer as you', () => {
-    expect(groupHeading([me], 1)).toBe('You want');
-    expect(groupHeading([me, jenny], 1)).toBe('You both want');
-    expect(groupHeading([jenny], 1)).toBe('Jenny wants');
-    expect(groupHeading([jenny, sam], 1)).toBe('Jenny and Sam want');
-    expect(groupHeading([me, jenny, sam], 1)).toBe('You, Jenny and Sam want');
+  it('names people as the viewer reads them, however many', () => {
+    expect(peopleLine([me], 1)).toBe('You');
+    expect(peopleLine([me, jenny], 1)).toBe('You and Jenny');
+    expect(peopleLine([jenny, sam], 1)).toBe('Jenny and Sam');
+    expect(peopleLine([me, jenny, sam], 1)).toBe('You, Jenny and Sam');
   });
 
-  it('says whether the others would likely enjoy it, and nothing where the scores do not say', () => {
-    const others = [
-      { ...jenny, likely: 'likely' },
-      { ...me, likely: 'maybe' },
-      { ...sam, likely: null }
-    ];
-    expect(othersLine(others, 1)).toBe('Jenny: likely too · you: maybe');
-    expect(othersLine([], 1)).toBe('');
+  it("says on others' titles whether the viewer would enjoy it, and nothing the scores do not say", () => {
+    expect(youLine('likely')).toBe('you: likely too');
+    expect(youLine('maybe')).toBe('you: maybe');
+    expect(youLine(null)).toBe('');
   });
 
   it("says on an unowned title's card who else would likely enjoy it, and nothing for nobody", () => {
@@ -77,12 +73,23 @@ describe('the wish list in the viewer\'s own words', () => {
     expect(likelyTooLine(undefined)).toBe('');
   });
 
-  it("names a Worth getting row's liked film, or for two the other first", () => {
+  it("names a Worth getting row's liked film, or nothing", () => {
     const item = { like: { title_id: 9, name: 'Heat', terms: ['night city', 'heists'] } };
     expect(likeLine(item)).toBe('Like Heat · night city, heists');
-    expect(likeLine(item, 'Jenny')).toBe('Jenny too · night city, heists');
-    expect(likeLine({ like: null }, 'Jenny')).toBe('Jenny too');
+    expect(likeLine({ like: { title_id: 9, name: 'Heat', terms: [] } })).toBe('Like Heat');
     expect(likeLine({ like: null })).toBe('');
+  });
+
+  it('says whom a Worth getting list is for, and names no one for everyone', () => {
+    expect(worthLede('movie', { id: 1, name: 'Patrick' }, 1)).toBe(
+      "Films the library doesn't have, closest to the ones you rate highest."
+    );
+    expect(worthLede('series', jenny, 1)).toBe(
+      "Series the library doesn't have, closest to the ones Jenny rates highest."
+    );
+    expect(worthLede('movie', 'everyone', 1)).toBe(
+      "Films the library doesn't have that would suit all of you, leaving out what anyone avoids."
+    );
   });
 });
 
@@ -112,9 +119,15 @@ describe('the wish routes', () => {
     expect(wishes.epoch).toBe(before);
   });
 
-  it('asks for For you or For you and the other by name', async () => {
+  it('asks for the viewer by default, or names a member or everyone', async () => {
     const fetch = answering({ items: [] });
-    await loadWorthGetting('series', 'pair');
-    expect(fetch.mock.calls[0][0]).toBe('/api/home/worth-getting?kind=series&with=pair');
+    await loadWorthGetting('series');
+    await loadWorthGetting('movie', 5);
+    await loadWorthGetting('movie', 'everyone');
+    expect(fetch.mock.calls.map(([url]) => url)).toEqual([
+      '/api/home/worth-getting?kind=series',
+      '/api/home/worth-getting?kind=movie&for=5',
+      '/api/home/worth-getting?kind=movie&for=everyone'
+    ]);
   });
 });

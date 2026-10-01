@@ -14,6 +14,7 @@ from spielplan.home import why as why_mod
 from spielplan.ledger import ladder, model, refit
 from spielplan.ledger.hyperparams import DEFAULTS
 from spielplan.rank import read
+from tests.helpers import insert_user
 
 BUNDLE = "test-home-v1"
 VOCAB = "v1"
@@ -1909,8 +1910,9 @@ def _worth(payload, kind="movie"):
     return None if section is None else [c["title_id"] for c in section["items"]]
 
 
-async def _see_all(client, *, kind="movie", audience="me"):
-    response = await client.get("/api/home/worth-getting", params={"kind": kind, "with": audience})
+async def _see_all(client, *, kind="movie", audience=None):
+    params = {"kind": kind} if audience is None else {"kind": kind, "for": audience}
+    response = await client.get("/api/home/worth-getting", params=params)
     assert response.status_code == 200, response.text
     return response.json()
 
@@ -1991,39 +1993,80 @@ async def test_worth_getting_neither_claims_nor_is_thinned_and_keeps_the_floor(w
     assert reason.startswith("2 qualifying titles"), reason
 
 
-async def test_see_all_for_two_ranks_as_the_sweet_spot_and_honours_either_not_for_me(world):
+async def _three_members(world) -> tuple[int, object]:
+    """Sam, whose ratings do not open the shelf, and Jenny, whose do: she likes a neon, cosy film
+    Patrick never rated, the one UNLIKE is like, and ranks 1060 below the other wantable films."""
+    sam = await insert_user(world.db, "sam")
     await _unowned(world.db)
+    await _tag(world.db, UNLIKE, "cosy", "mood", 2)
     await _verdict(world.db, world.jenny, 1000, 2)
+    await _verdict(world.db, world.jenny, 1008, 2)
+    await world.db.execute(
+        "UPDATE user_score SET score = 0.5 WHERE user_id = $1 AND title_id = 1060", world.jenny
+    )
     await world.db.execute(
         "INSERT INTO user_vector (user_id, kind, purpose, vec, blend_beta, label_count, bundle_version) "
         "VALUES ($1, 'movie', 'foldin', $2, 0.5, 20, $3)",
         world.jenny, b"\x00" * 256, BUNDLE,
     )
-    jenny = await world.sign_in_jenny()
+    return sam, await world.sign_in_jenny()
 
-    pair = await _see_all(world.client, audience="pair")
-    assert pair["other"] == {"id": world.jenny, "name": "jenny"}
-    # The top 30% of the twenty unowned films for both, less the one with no crowd rating; the pair's
-    # list does not require a like, so the unlike title stays with none.
-    assert [c["title_id"] for c in pair["items"]] == [UNLIKE, 1060, 1061, 1062, 1063]
-    assert pair["items"][0]["like"] is None
-    assert pair["items"][1]["like"] == LIKE_1000
-    assert [c["title_id"] for c in (await _see_all(jenny, audience="pair"))["items"]] == [
-        UNLIKE, 1060, 1061, 1062, 1063
+
+def _ids(listing) -> list[int]:
+    return [c["title_id"] for c in listing["items"]]
+
+
+async def test_see_all_for_one_member_ranks_by_their_score_and_likes_only_the_viewers_films(world):
+    sam, jenny = await _three_members(world)
+
+    mine = await _see_all(world.client)
+    assert mine["for"] == {"id": world.patrick, "name": "patrick"}, "the viewer by default"
+    assert [(m["name"], m["pickable"], m["reason"]) for m in mine["members"]] == [
+        ("patrick", True, None), ("jenny", True, None), ("sam", False, "Not enough films rated yet")
     ]
+    assert _ids(mine) == list(WANTABLE)
 
-    await world.client.put("/api/wish/1061", json={"state": "not_for_me"})
-    for client in (world.client, jenny):
-        shown = [c["title_id"] for c in (await _see_all(client, audience="pair"))["items"]]
-        assert 1061 not in shown, "either person's Not for me leaves the list for two"
-    assert 1061 not in [c["title_id"] for c in (await _see_all(world.client))["items"]]
-    assert 1061 in [c["title_id"] for c in (await _see_all(jenny))["items"]], (
-        "Not for me hides a title from that person's own list only"
-    )
+    hers = await _see_all(world.client, audience=world.jenny)
+    assert hers["for"] == {"id": world.jenny, "name": "jenny"}
+    assert _ids(hers)[:7] == [UNLIKE, 1061, 1062, 1063, 1064, 1065, 1060], "her own score orders it"
+    # The like line is the viewer's: UNLIKE is like only Jenny's neon film, so it names none.
+    assert hers["items"][0]["like"] is None
+    assert {c["like"]["title_id"] for c in hers["items"] if c["like"]} == {1000}
+    her_own = await _see_all(jenny)
+    assert her_own["items"][0]["title_id"] == UNLIKE
+    assert her_own["items"][0]["like"]["title_id"] == 1008
+
     refused = await world.client.get(
-        "/api/home/worth-getting", params={"kind": "both", "with": "me"}
+        "/api/home/worth-getting", params={"kind": "movie", "for": sam}
     )
     assert refused.status_code == 422
+    assert refused.json()["detail"]["reason"] == "not_pickable"
+    for params in ({"kind": "movie", "for": 999_999}, {"kind": "movie", "for": "pair"},
+                   {"kind": "both"}):
+        assert (await world.client.get("/api/home/worth-getting", params=params)).status_code == 422
+
+
+async def test_see_all_for_everyone_ranks_as_the_sweet_spot_over_the_pickable_members(world):
+    sam, jenny = await _three_members(world)
+    await world.db.execute(
+        "INSERT INTO user_title (user_id, title_id, state) VALUES ($1, $2, 'seen')", sam, UNLIKE
+    )
+
+    everyone = await _see_all(world.client, audience="everyone")
+    assert everyone["for"] == "everyone"
+    # The plain average of each one's rank-standardised score; Sam's seen title stays, he is not
+    # one of those the list is for.
+    assert _ids(everyone)[:5] == [UNLIKE, 1061, 1062, 1060, 1063]
+    assert NO_CROWD not in _ids(everyone)
+    assert everyone["items"][0]["like"] is None, "Jenny's liked film is not Patrick's to see"
+    assert _ids(await _see_all(jenny, audience="everyone")) == _ids(everyone)
+
+    await jenny.put("/api/wish/1061", json={"state": "not_for_me"})
+    assert 1061 not in _ids(await _see_all(world.client, audience="everyone"))
+    assert 1061 not in _ids(await _see_all(world.client, audience=world.jenny))
+    assert 1061 in _ids(await _see_all(world.client)), (
+        "Not for me leaves that person's lists and everyone's, not another's own"
+    )
 
 
 async def test_new_in_the_library_marks_what_the_viewer_wanted(world):
