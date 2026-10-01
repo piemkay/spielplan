@@ -1,8 +1,8 @@
-"""§6.3's drag-and-drop, as observations: a `tier_edit` plus one margin-less duel per neighbour.
+"""§6.3's drag-and-drop, as observations: a placement plus one margin-less duel per neighbour.
 
 Neighbours are re-checked under a per-user lock in the same transaction as the writes, so a duel is
 never stored against a title that has moved. Under a filter no neighbour duels are written (decision 204).
-A tier on a title with no verdict also answers the verdict it stands for (decision 531).
+The placement records its tier's verdict where the live one is none or another class (`ladder.place`).
 """
 
 from __future__ import annotations
@@ -14,16 +14,13 @@ import asyncpg
 import numpy as np
 
 from spielplan.home import rail
-from spielplan.ledger import model, observations
+from spielplan.ledger import ladder, model, observations
 from spielplan.rank import tiers
 
 log = logging.getLogger("spielplan.rank.drop")
 
 # §4.2: "context: profile_battle | tier_queue | tier_insert".
 INSERT_CONTEXT = "tier_insert"
-
-# Advisory-lock namespace, unique across features (6202 tonight finish, 6303 queue answer).
-_DROP_LOCK = 6304
 
 
 class DropRefused(ValueError):
@@ -54,21 +51,13 @@ async def _tiers_of(
     508's hold; not `ledger_state.tier`, which lags a boundary change. Absent means not on the board.
     """
     rows = await conn.fetch(
-        """
+        f"""
         SELECT ls.title_id, te.tier AS assigned, te.n_levels AS assigned_k, lv.value AS verdict,
                (SELECT count(*) FROM unnest(c.boundaries) AS b WHERE b <= ls.s) AS fitted
         FROM ledger_state ls
         LEFT JOIN ledger_cutpoints c ON c.user_id = ls.user_id AND c.kind = ls.kind
-        LEFT JOIN (
-            SELECT DISTINCT ON (title_id) title_id, tier, n_levels
-            FROM tier_edit WHERE user_id = $1
-            ORDER BY title_id, created_at DESC, id DESC
-        ) te ON te.title_id = ls.title_id
-        LEFT JOIN (
-            SELECT DISTINCT ON (title_id) title_id, value
-            FROM verdict WHERE user_id = $1 AND NOT is_reask
-            ORDER BY title_id, created_at DESC, id DESC
-        ) lv ON lv.title_id = ls.title_id
+        LEFT JOIN ({observations.latest_tier_edit_sql()}) te ON te.title_id = ls.title_id
+        LEFT JOIN ({observations.LIVE_LABEL_SQL}) lv ON lv.title_id = ls.title_id
         WHERE ls.user_id = $1 AND ls.observed AND ls.title_id = ANY($2::int[])
         """,
         user_id,
@@ -104,7 +93,7 @@ async def drop(
     title_name: str | None = None,
     filtered: bool = False,
 ) -> DropResult:
-    """One drop: the tier edit, and a duel per neighbour it landed between.
+    """One drop: the placement, and a duel per neighbour it landed between.
 
     `above` is the better neighbour and `below` the worse; either may be absent. `filtered`
     suppresses the neighbour duels only (decision 204). `undoes` names the edit a toast's Undo takes
@@ -125,7 +114,7 @@ async def drop(
     duel_ids: list[int] = []
     async with conn.transaction():
         # First, before the neighbours are read, so a concurrent drop cannot move one in between.
-        await conn.execute("SELECT pg_advisory_xact_lock($1, $2)", _DROP_LOCK, user_id)
+        await conn.execute("SELECT pg_advisory_xact_lock($1, $2)", ladder.LOCK, user_id)
         if undoes is not None and not await conn.fetchval(
             "SELECT 1 FROM tier_edit WHERE id = $1 AND user_id = $2 AND title_id = $3",
             undoes,
@@ -134,25 +123,15 @@ async def drop(
         ):
             raise DropRefused(f"tier_edit {undoes} is not this person's edit of this title")
         if named and not filtered:
-            placed = await _tiers_of(conn, user_id=user_id, title_ids=named, levels=len(tier_set))
+            where = await _tiers_of(conn, user_id=user_id, title_ids=named, levels=len(tier_set))
             for neighbour in named:
-                if placed.get(neighbour) != tier:
+                if where.get(neighbour) != tier:
                     raise DropRefused(
                         f"title {neighbour} is not in {tier_set[tier]} any more - reload the board"
                     )
-        answered: int | None = None
-        live = await conn.fetchval(
-            f"SELECT 1 FROM ({observations.LIVE_LABEL_SQL}) l WHERE l.title_id = $2",
-            user_id,
-            title_id,
-        )
-        if live is None:
-            answered = model.verdict_class_of_tier(tier, len(tier_set))
-            await observations.record_verdict(
-                conn, user_id=user_id, title_id=title_id, value=answered, source="tier"
-            )
-        edit = await observations.record_tier_edit(
-            conn, user_id=user_id, title_id=title_id, tier=tier, via=via, undoes=undoes
+        placed = await ladder.place(
+            conn, user_id=user_id, title_id=title_id, tier=tier, via=via, undoes=undoes,
+            source="tier",
         )
         if filtered and named:
             log.info(
@@ -181,14 +160,15 @@ async def drop(
         via=via,
         neighbour_duels=len(duel_ids),
     )
-    if answered is not None:
+    if placed.verdict is not None:
+        answered = model.verdict_class_of_tier(tier, len(tier_set))
         line += f" + verdict = {observations.VERDICT_LABELS[answered]}"
     return DropResult(
         user_id=user_id,
         title_id=title_id,
-        kind=edit.kind,
+        kind=placed.kind,
         tier=tier,
-        tier_edit_id=int(edit.row_id),
+        tier_edit_id=placed.tier_edit_id,
         duel_ids=tuple(duel_ids),
         log=line,
     )

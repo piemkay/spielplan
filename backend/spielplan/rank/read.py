@@ -1,7 +1,7 @@
 """The database side of §6.3's board: the queries that feed the pure `board` and `queue`.
 
 "Every rated title" is `ledger_state.observed`; the assigned tier is the latest `tier_edit`. Selector
-inputs exclude §13's held-out stream.
+inputs exclude §13's held-out stream and read since the member's cut-over (decision 537).
 """
 
 from __future__ import annotations
@@ -19,7 +19,9 @@ from spielplan.ledger.hyperparams import Hyperparams
 from spielplan.ledger.observations import (
     DEFAULT_TIER_SET,
     HELD_OUT,
+    cutover_sql,
     latest_tier_edit_sql,
+    live_label_sql,
     rescale_level,
 )
 from spielplan.rank import board, queue
@@ -82,14 +84,8 @@ async def items(
         FROM ledger_state ls
         JOIN title t ON t.id = ls.title_id
         LEFT JOIN ({latest_tier_edit_sql(user)}) te ON te.title_id = ls.title_id
-        -- The live verdict, which holds the model tier inside its band (decision 508). The same
-        -- reading as `observations.LIVE_LABEL_SQL`: the latest non-re-ask row per title.
-        LEFT JOIN (
-            SELECT DISTINCT ON (title_id) title_id, value
-            FROM verdict
-            WHERE user_id = {user} AND NOT is_reask
-            ORDER BY title_id, created_at DESC, id DESC
-        ) lv ON lv.title_id = ls.title_id
+        -- The live verdict, which holds the model tier inside its band (decision 508).
+        LEFT JOIN ({live_label_sql(user)}) lv ON lv.title_id = ls.title_id
         WHERE ls.user_id = {user} AND ls.kind = ${len(args) + 2} AND ls.observed
           AND {where}
         ORDER BY ls.s DESC, ls.title_id
@@ -125,16 +121,17 @@ async def items(
 async def comparison_counts(
     conn: asyncpg.Connection, *, user_id: int, kind: str
 ) -> dict[int, int]:
-    """How many comparisons each title carries, **excluding §13's held-out stream** (a selector input)."""
+    """How many comparisons each title carries since the cut-over, **excluding §13's held-out stream**
+    (a selector input)."""
     rows = await conn.fetch(
-        """
+        f"""
         SELECT side.title_id, count(*) AS n
         FROM (
             SELECT d.title_a AS title_id FROM duel d
-            WHERE d.user_id = $1 AND d.selection <> $3
+            WHERE d.user_id = $1 AND d.selection <> $3 AND d.created_at >= {cutover_sql()}
             UNION ALL
             SELECT d.title_b FROM duel d
-            WHERE d.user_id = $1 AND d.selection <> $3
+            WHERE d.user_id = $1 AND d.selection <> $3 AND d.created_at >= {cutover_sql()}
         ) side
         JOIN title t ON t.id = side.title_id AND t.kind = $2
         GROUP BY side.title_id
@@ -149,16 +146,17 @@ async def comparison_counts(
 async def asked_pairs(
     conn: asyncpg.Connection, *, user_id: int, kind: str
 ) -> set[frozenset[int]]:
-    """The unordered pairs this person has already judged in any context, **held-out excluded**.
+    """The unordered pairs this person has judged since the cut-over in any context, **held-out
+    excluded**.
 
     Neither adaptive arm re-serves one. Both sides are joined: a re-import can reclassify one side.
     """
     rows = await conn.fetch(
-        """
+        f"""
         SELECT d.title_a, d.title_b FROM duel d
         JOIN title ta ON ta.id = d.title_a AND ta.kind = $2
         JOIN title tb ON tb.id = d.title_b AND tb.kind = $2
-        WHERE d.user_id = $1 AND d.selection <> $3
+        WHERE d.user_id = $1 AND d.selection <> $3 AND d.created_at >= {cutover_sql()}
         """,
         user_id,
         kind,
@@ -175,11 +173,12 @@ async def recent_titles(
     Decision 494's no-repeat window; `tier_queue` only, since it is about the current sitting.
     """
     rows = await conn.fetch(
-        """
+        f"""
         SELECT d.title_a, d.title_b FROM duel d
         JOIN title ta ON ta.id = d.title_a AND ta.kind = $2
         JOIN title tb ON tb.id = d.title_b AND tb.kind = $2
         WHERE d.user_id = $1 AND d.context = 'tier_queue' AND d.selection <> $3
+          AND d.created_at >= {cutover_sql()}
         ORDER BY d.id DESC
         LIMIT $4
         """,

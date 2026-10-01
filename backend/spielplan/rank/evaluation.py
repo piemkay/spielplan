@@ -9,7 +9,7 @@ from dataclasses import dataclass
 
 import asyncpg
 
-from spielplan.ledger.observations import HELD_OUT
+from spielplan.ledger.observations import HELD_OUT, cutover_sql
 
 
 @dataclass(frozen=True)
@@ -49,10 +49,10 @@ async def held_out_agreement(
 ) -> Agreement:
     """How often the model's ordering agrees with a comparison it was never fitted on.
 
-    Only `uniform_holdout` rows: adaptive pairs inflate the number (§13).
+    Only `uniform_holdout` rows since the member's cut-over: adaptive pairs inflate the number (§13).
     """
     rows = await conn.fetch(
-        """
+        f"""
         SELECT d.outcome, a.s AS s_a, b.s AS s_b
         FROM duel d
         -- BOTH sides, as `observations.load_observations` joins them and for its reason: a
@@ -68,6 +68,7 @@ async def held_out_agreement(
         LEFT JOIN ledger_state b ON b.user_id = d.user_id AND b.title_id = d.title_b
         WHERE d.user_id = $1
           AND d.selection = $3
+          AND d.created_at >= {cutover_sql()}
           -- §13 stream (b) is a different instrument: a re-ask measures whether the PERSON
           -- gives the same answer twice, not whether the model agrees with them, and letting
           -- one row in twice would weight it double here as well as in the fit.
