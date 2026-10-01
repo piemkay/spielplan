@@ -222,7 +222,7 @@
         <button aria-pressed={sort === 'facet'} onclick={() => (sort = 'facet')}>By facet</button>
       </div>
     {/if}
-    <div class="legend" aria-hidden="true">
+    <div class="legend" class:line={all} aria-hidden="true">
       <span><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><path d="M15 5 8 12l7 7" /></svg><span class="phone">Lower</span><span class="desk">Lands lower</span></span>
       <span><span class="phone">Middle</span><span class="desk">Each one's middle</span></span>
       <span><span class="phone">High</span><span class="desk">Sits high</span><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><path d="m9.5 5.5 6.5 6.5-6.5 6.5" /></svg></span>
@@ -242,7 +242,8 @@
                 onOpen={(film) => (selected = film)}
                 expand={data.films_visible ? (term) => sharedGroups(taste.kind, seats[0], seats[1], term) : null}
                 none="None of the {NOUNS[taste.kind]} you've both placed has this."
-                wide
+                wide={!all}
+                line={all}
               />
             {/each}
           </div>
@@ -473,6 +474,11 @@
   .desk {
     display: none;
   }
+  @media (min-width: 721px) {
+    .legend {
+      width: calc(100% - 2 * var(--gutter) - 208px);
+    }
+  }
   /* The full sidebar's width (TasteChartDesktop): Most alike and Most different side by side. */
   @media (min-width: 1100px) {
     .compare {
@@ -488,6 +494,11 @@
       margin-left: 0;
       padding: 0 52px 0 var(--gutter);
       font-size: var(--fs-footnote);
+    }
+    .legend.line {
+      width: calc(100% - 2 * var(--gutter) - 468px);
+      margin-left: calc(var(--gutter) + 260px);
+      padding: 0;
     }
     .desk {
       display: inline;
