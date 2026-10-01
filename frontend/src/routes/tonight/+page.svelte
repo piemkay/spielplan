@@ -1668,6 +1668,23 @@
     gap: 2px;
     color: var(--text-3);
   }
+  /* A desktop window is short for its width: one line of question, the round's own 16px gaps, and
+     posters from the height the other rows leave (462px, the first-pair line included). */
+  @media (min-width: 721px) {
+    .flow .round {
+      gap: 16px;
+    }
+    .question {
+      max-width: none;
+    }
+    .choice .art {
+      width: clamp(
+        120px,
+        (100dvh - 462px - env(safe-area-inset-top) - env(safe-area-inset-bottom)) * 2 / 3,
+        200px
+      );
+    }
+  }
 
   /* The ballot. */
   .whose {
