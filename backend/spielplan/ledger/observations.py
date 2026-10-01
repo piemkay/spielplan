@@ -35,6 +35,17 @@ KINDS: tuple[str, ...] = ("movie", "series")
 # §4.2's default, repeated in `ledger_cutpoints.tier_set`'s DDL. Its size is K.
 DEFAULT_TIER_SET: tuple[str, ...] = ("F", "D", "C", "B", "A", "A+", "S")
 
+# §6.1's words for the default set (decision 550).
+TIER_WORDS: dict[str, str] = {
+    "S": "All-time favourite",
+    "A+": "Loved it",
+    "A": "Liked it",
+    "B": "It was fine",
+    "C": "Not really for me",
+    "D": "Didn't like it",
+    "F": "Hated it",
+}
+
 # §4.2: verdict values 0 / 1 / 2.
 VERDICT_LABELS: tuple[str, ...] = ("disliked", "fine", "liked")
 
@@ -89,27 +100,57 @@ async def _placement_pairs(
     }
 
 
+def tier_words(tier_set: Sequence[str]) -> tuple[str, ...]:
+    """A word per index (0 = worst): TIER_WORDS for the default set; a custom set's labels are its words."""
+    if tuple(tier_set) == DEFAULT_TIER_SET:
+        return tuple(TIER_WORDS[label] for label in tier_set)
+    return tuple(tier_set)
+
+
+def cutover_sql(user: str = "$1") -> str:
+    """The member's cut-over (decision 537) as a scalar expression; `-infinity` before their set-up."""
+    return (
+        f"COALESCE((SELECT finished_at FROM ladder_setup WHERE user_id = {user}), "
+        "'-infinity'::timestamptz)"
+    )
+
+
 def latest_tier_edit_sql(user: str = "$1") -> str:
-    """The person's latest drop per title (`title_id, tier, n_levels`); `user` is their placeholder.
+    """The person's latest drop per title since their cut-over (`title_id, tier, n_levels,
+    created_at, id`); `user` is their placeholder.
 
     One pass over their own `tier_edit` rows: a correlated subquery would re-run per board row.
     """
     return f"""
-    SELECT DISTINCT ON (title_id) title_id, tier, n_levels
+    SELECT DISTINCT ON (title_id) title_id, tier, n_levels, created_at, id
       FROM tier_edit
-     WHERE user_id = {user}
+     WHERE user_id = {user} AND created_at >= {cutover_sql(user)}
      ORDER BY title_id, created_at DESC, id DESC
 """
 
 
-# The person's CURRENT label on each title, `$1` = user id. Newest non-re-ask row, NOT
-# `superseded_by IS NULL`: a re-ask supersedes the original, so that predicate would drop the title.
-LIVE_LABEL_SQL = """
+def live_label_sql(user: str = "$1") -> str:
+    """The person's CURRENT verdict per title since their cut-over (`title_id, value, verdict_id,
+    created_at`). Newest non-re-ask row, NOT `superseded_by IS NULL`: a re-ask supersedes the
+    original, so that predicate would drop the title.
+    """
+    return f"""
     SELECT DISTINCT ON (v.title_id) v.title_id, v.value, v.id AS verdict_id, v.created_at
       FROM verdict v
-     WHERE v.user_id = $1 AND NOT v.is_reask
+     WHERE v.user_id = {user} AND NOT v.is_reask AND v.created_at >= {cutover_sql(user)}
      ORDER BY v.title_id, v.created_at DESC, v.id DESC
 """
+
+
+LIVE_LABEL_SQL = live_label_sql()
+
+# What the fit reads (§5.2, decisions 536 and 537), `$1` = user id: no verdict after a cut-over,
+# and no tier_edit `e` that re-asks an edit and lands on the same step (§13 stream b).
+NOT_SET_UP_SQL = "NOT EXISTS (SELECT 1 FROM ladder_setup s WHERE s.user_id = $1)"
+SAME_ANSWER_SQL = (
+    "EXISTS (SELECT 1 FROM tier_edit o WHERE o.id = e.reask_of AND o.tier = e.tier "
+    "AND o.n_levels IS NOT DISTINCT FROM e.n_levels)"
+)
 
 
 def standard_embeddings(
@@ -240,18 +281,22 @@ async def load_observations(
     hp: Hyperparams,
     embeddings: EmbeddingSource = zero_embeddings,
 ) -> Observations:
-    """Every observation the fit is allowed to see, for one (user, kind)."""
+    """Every observation the fit is allowed to see, for one (user, kind).
+
+    After the member's cut-over (decision 537) no verdict is read, and only the tier edits and duels
+    since it; before it, every row.
+    """
     _check_kind(kind)
     tier_set = await tier_set_of(conn, user_id=user_id, kind=kind)
 
     # Deliberately NO `superseded_by IS NULL`: superseded verdicts are §5.2's rewatch arm.
     # Re-asks (§13 stream b) are excluded by `is_reask`, not the nullable `reask_of`.
     verdicts = await conn.fetch(
-        """
+        f"""
         SELECT v.title_id, v.value, v.created_at
         FROM verdict v
         JOIN title t ON t.id = v.title_id
-        WHERE v.user_id = $1 AND t.kind = $2 AND NOT v.is_reask
+        WHERE v.user_id = $1 AND t.kind = $2 AND NOT v.is_reask AND {NOT_SET_UP_SQL}
         ORDER BY v.id
         """,
         user_id,
@@ -259,26 +304,28 @@ async def load_observations(
     )
 
     tier_edits = await conn.fetch(
-        """
-        SELECT e.title_id, e.tier, e.n_levels, e.created_at
+        f"""
+        SELECT e.title_id, e.tier, e.n_levels, e.created_at, {SAME_ANSWER_SQL} AS repeat
         FROM tier_edit e
         JOIN title t ON t.id = e.title_id
-        WHERE e.user_id = $1 AND t.kind = $2
+        WHERE e.user_id = $1 AND t.kind = $2 AND e.created_at >= {cutover_sql()}
         ORDER BY e.id
         """,
         user_id,
         kind,
     )
+    repeats = sum(1 for row in tier_edits if row["repeat"])
+    tier_edits = [row for row in tier_edits if not row["repeat"]]
 
     # Both sides of this kind (§4.1 rule 5), though `record_duel` already refuses cross-kind duels.
     duels = await conn.fetch(
-        """
+        f"""
         SELECT d.title_a, d.title_b, d.outcome, d.margin, d.created_at
         FROM duel d
         JOIN title ta ON ta.id = d.title_a
         JOIN title tb ON tb.id = d.title_b
         WHERE d.user_id = $1 AND ta.kind = $2 AND tb.kind = $2
-          AND d.selection <> $3 AND NOT d.is_reask
+          AND d.selection <> $3 AND NOT d.is_reask AND d.created_at >= {cutover_sql()}
         ORDER BY d.id
         """,
         user_id,
@@ -286,22 +333,22 @@ async def load_observations(
         HELD_OUT,
     )
     excluded = await conn.fetchrow(
-        """
+        f"""
         SELECT
           count(*) FILTER (WHERE d.selection = $3)                       AS held_out,
           count(*) FILTER (WHERE d.is_reask AND d.selection <> $3)       AS reask
         FROM duel d
         JOIN title ta ON ta.id = d.title_a
-        WHERE d.user_id = $1 AND ta.kind = $2
+        WHERE d.user_id = $1 AND ta.kind = $2 AND d.created_at >= {cutover_sql()}
         """,
         user_id,
         kind,
         HELD_OUT,
     )
     reask_verdicts = await conn.fetchval(
-        """
+        f"""
         SELECT count(*) FROM verdict v JOIN title t ON t.id = v.title_id
-        WHERE v.user_id = $1 AND t.kind = $2 AND v.is_reask
+        WHERE v.user_id = $1 AND t.kind = $2 AND v.is_reask AND {NOT_SET_UP_SQL}
         """,
         user_id,
         kind,
@@ -390,7 +437,7 @@ async def load_observations(
         n_tier_edits=len(tier_edits),
         n_duels=len(duels),
         n_held_out=int(excluded["held_out"] or 0),
-        n_reask=int(excluded["reask"] or 0) + int(reask_verdicts or 0),
+        n_reask=int(excluded["reask"] or 0) + int(reask_verdicts or 0) + repeats,
     )
 
 
@@ -634,6 +681,7 @@ async def record_tier_edit(
     tier: int,
     via: str = "drag_drop",
     undoes: int | None = None,
+    reask_of: int | None = None,
 ) -> Write:
     """§5.2 arm 3. A tier, like a verdict, implies `seen` (decision 531)."""
     if via not in ("drag_drop", "explicit"):
@@ -647,14 +695,15 @@ async def record_tier_edit(
         prior = await _capture_prior(conn, user_id=user_id, title_id=title_id)
         # `n_levels` records the K this index means (decision 11); no tier-set history exists.
         row_id = await conn.fetchval(
-            "INSERT INTO tier_edit (user_id, title_id, tier, via, n_levels, undoes) "
-            "VALUES ($1,$2,$3,$4,$5,$6) RETURNING id",
+            "INSERT INTO tier_edit (user_id, title_id, tier, via, n_levels, undoes, reask_of) "
+            "VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING id",
             user_id,
             title_id,
             tier,
             via,
             len(tier_set),
             undoes,
+            reask_of,
         )
         implied_seen = prior.state != "seen"
         # Only a change is written: a move of a seen title must not owe Jellyfin a push (§7.3).
@@ -833,7 +882,11 @@ __all__ = [
     "DEFAULT_TIER_SET",
     "HELD_OUT",
     "KINDS",
+    "LIVE_LABEL_SQL",
+    "NOT_SET_UP_SQL",
     "OUTCOMES",
+    "SAME_ANSWER_SQL",
+    "TIER_WORDS",
     "VERDICT_LABELS",
     "EmbeddingSource",
     "Kind",
@@ -842,8 +895,10 @@ __all__ = [
     "Undo",
     "UndoRefused",
     "Write",
+    "cutover_sql",
     "kind_of",
     "latest_tier_edit_sql",
+    "live_label_sql",
     "load_observations",
     "record_duel",
     "record_not_seen",
@@ -852,6 +907,7 @@ __all__ = [
     "rescale_level",
     "resolve_embeddings",
     "tier_set_of",
+    "tier_words",
     "undo",
     "zero_embeddings",
 ]
