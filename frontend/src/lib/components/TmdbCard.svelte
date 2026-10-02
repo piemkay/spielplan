@@ -21,7 +21,8 @@
   const noun = $derived(t.kind === 'series' ? 'series' : 'film');
   const genres = $derived(genreLine(hit ? hit.genres : title?.genres));
   const link = $derived(
-    hit?.link ?? (t.tmdb_id ? `https://www.themoviedb.org/${t.kind === 'series' ? 'tv' : 'movie'}/${t.tmdb_id}` : null)
+    hit?.link ??
+      (t.tmdb_id ? `https://www.themoviedb.org/${t.kind === 'series' ? 'tv' : 'movie'}/${t.tmdb_id}` : null)
   );
   // The minted title's own want, from its card until Want it moves it.
   let titleWish = $derived(title?.wish?.state ?? null);
@@ -99,7 +100,8 @@
           onclick={() => want(close)}
           data-testid="tmdb-want"
         >
-          <Icon name={wanted ? 'bookmark-fill' : 'bookmark'} size={20} />{wanted ? 'On the wish list' : 'Want it'}
+          <Icon name={wanted ? 'bookmark-fill' : 'bookmark'} size={20} />
+          {wanted ? 'On the wish list' : 'Want it'}
         </button>
         {#if note}<p class="footnote" role="status">{note}</p>{/if}
       </div>

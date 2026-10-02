@@ -163,7 +163,8 @@
                 onclick={() => want(hit)}
                 data-testid="tmdb-hit-want"
               >
-                <Icon name={wanted ? 'bookmark-fill' : 'bookmark'} size={16} />{wanted ? 'On the wish list' : 'Want it'}
+                <Icon name={wanted ? 'bookmark-fill' : 'bookmark'} size={16} />
+                {wanted ? 'On the wish list' : 'Want it'}
               </button>
             </li>
           {/each}
