@@ -299,6 +299,10 @@ async def test_the_first_page_caps_a_director_at_two_films(world):
     assert len(_ids(first)) == len(LIBRARY)
     later = await _ok(world.client, like=[str(ANCHOR)], offset=2, limit=10)
     assert not any("fold" in i for i in later["items"]), "only the first page is capped"
+    thin = await _ok(world.client, like=[str(ANCHOR)], decade=1990)
+    assert not any("fold" in i for i in thin["items"]) and sorted(_ids(thin)) == LIBRARY[:6], (
+        "under ten fits each shows, the Coens' third film of the nineties too"
+    )
 
 
 @pytest.mark.parametrize(

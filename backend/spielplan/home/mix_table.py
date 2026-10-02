@@ -298,7 +298,8 @@ async def recipe_page(
         chosen = np.concatenate([chosen[is_strong], chosen[~is_strong]])
 
     page = [int(r) for r in chosen[offset:offset + limit]]
-    cells = mix.director_cap(table, page) if offset == 0 else page
+    # A thin list ("Only N films in your library fit") shows every fit: a fold would hide one of a few.
+    cells = mix.director_cap(table, page) if offset == 0 and len(chosen) >= mix.THIN_UNDER else page
     cards = await _cards(conn, [int(table.ids[r]) for r in page] + [i.title_id for i in recipe], user_id)
 
     def card(row: int) -> dict[str, Any]:
