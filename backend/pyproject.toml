@@ -1,6 +1,6 @@
 [project]
 name = "spielplan"
-version = "1.1.0"
+version = "1.2.0"
 description = "Spielplan — household media graph: catalog, taste ledger, tonight sessions"
 requires-python = ">=3.12"
 dependencies = [
