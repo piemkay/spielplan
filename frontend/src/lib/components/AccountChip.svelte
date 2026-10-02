@@ -4,10 +4,11 @@
   // model, and Log out. No footnotes: each row's label says what it opens.
   import { authMethodLine, refreshUser, roleWord, session, setShowModel } from '$lib/session.svelte.js';
   import { get, post } from '$lib/api.js';
+  import { returningCard } from '$lib/cardJump.js';
   import { modelGateSettled } from '$lib/home.svelte.js';
   import { toggleRail } from '$lib/rail.svelte.js';
   import { loadWishSummary } from '$lib/wish.svelte.js';
-  import { goto } from '$app/navigation';
+  import { afterNavigate, goto } from '$app/navigation';
   import Avatar from './Avatar.svelte';
   import Sheet from './Sheet.svelte';
   import TitleDetail from './TitleDetail.svelte';
@@ -31,6 +32,13 @@
   const entries = $derived((session.user?.nav?.account ?? []).filter((e) => e.key !== 'taste'));
   const others = $derived(switchable.filter((u) => u.id !== session.user?.id));
   const showModel = $derived(!!session.user?.show_model);
+
+  // In the layout, so it reads where Back lands, on any page; the card reopens alone, without You
+  // and the wish list under it (decision 557 item 6).
+  afterNavigate(() => {
+    const back = returningCard('you');
+    if (back !== null) selected = { id: back };
+  });
 
   async function readWanted() {
     wanted = (await loadWishSummary().catch(() => null))?.wanted ?? null;
@@ -230,9 +238,9 @@
 {#if selected}
   <TitleDetail
     titleId={selected.id}
-    seed={selected}
+    seed={selected.name ? selected : undefined}
+    from="you"
     onClose={() => (selected = null)}
-    onPerson={() => (selected = null)}
     onStateChange={() => {}}
   />
 {/if}

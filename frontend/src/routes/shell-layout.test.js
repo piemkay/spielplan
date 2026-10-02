@@ -27,7 +27,8 @@ vi.mock('$app/navigation', () => ({
   goto: vi.fn(async (to) => {
     nav.gone.push(to);
   }),
-  beforeNavigate: () => {}
+  beforeNavigate: () => {},
+  afterNavigate: () => {}
 }));
 
 import { session } from '$lib/session.svelte.js';

@@ -1,6 +1,8 @@
 <script>
   // Compare (§6.5): the Taste chart for any two members, picked in two seats. Each row carries both
   // markers, told apart by their initials; the films behind a term come only to the two compared.
+  import { onMount } from 'svelte';
+  import { returningCard } from '$lib/cardJump.js';
   import Avatar, { avatarColour } from '$lib/components/Avatar.svelte';
   import Sheet from '$lib/components/Sheet.svelte';
   import TasteRow from '$lib/components/TasteRow.svelte';
@@ -80,6 +82,12 @@
     const kind = taste.kind;
     void modelGate.epoch;
     open(kind);
+  });
+
+  // Back from Home's grid reopens the card the jump there left from (decision 557 item 6).
+  onMount(() => {
+    const back = returningCard('compare');
+    if (back !== null) selected = { id: back };
   });
 
   async function open(kind) {
@@ -315,9 +323,9 @@
 {#if selected}
   <TitleDetail
     titleId={selected.id}
-    seed={selected}
+    seed={selected.name ? selected : undefined}
+    from="compare"
     onClose={() => (selected = null)}
-    onPerson={() => (selected = null)}
     onStateChange={() => open(taste.kind)}
   />
 {/if}

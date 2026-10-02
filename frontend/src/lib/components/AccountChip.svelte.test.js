@@ -6,6 +6,11 @@ import { flushSync, mount, unmount } from 'svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const server = vi.hoisted(() => ({ switchable: [], summary: { wanted: 3, both: 1, members: 2 } }));
+const COLLATERAL = vi.hoisted(() => ({
+  title: { id: 3, name: 'Collateral', kind: 'movie', year: 2004, runtime_min: 120, seen_state: 'unseen' },
+  genres: [], credits: [], platform_ratings: { items: [], note: '' }, dna: { extracted: [], projected: [] },
+  shares: [], actions: { play_on_jellyfin: null, play_reason: 'no_server' }
+}));
 const LISTING = vi.hoisted(() => ({
   mine: [{ title_id: 3, kind: 'movie', name: 'Collateral', year: 2004, since: '2026-09-14T08:00:00Z',
            mine: true, likely: null, likely_too: [], wanters: [{ id: 7, name: 'Jenny' }], link: null }],
@@ -17,23 +22,27 @@ vi.mock('$lib/api.js', () => ({
   get: vi.fn(async (path) => {
     if (path === '/auth/switchable') return server.switchable;
     if (path === '/wish/summary') return server.summary;
+    if (path === '/titles/3') return COLLATERAL;
     return path === '/wish' ? LISTING : [];
   }),
   post: vi.fn(),
   qs: (params) => `?${new URLSearchParams(params)}`
 }));
 
-const nav = vi.hoisted(() => ({ page: null }));
+const nav = vi.hoisted(() => ({ page: null, arrived: [] }));
 vi.mock('$app/stores', async () => {
   const { writable } = await import('svelte/store');
   nav.page = writable({ url: new URL('http://localhost/'), state: {} });
   return { page: nav.page };
 });
 vi.mock('$app/navigation', () => ({
+  afterNavigate: (fn) => nav.arrived.push(fn),
   goto: vi.fn(),
-  pushState: (_url, state) => nav.page.update((p) => ({ ...p, state }))
+  pushState: (_url, state) => nav.page.update((p) => ({ ...p, state })),
+  replaceState: (_url, state) => nav.page.update((p) => ({ ...p, state }))
 }));
 
+import { get as read } from 'svelte/store';
 import { get } from '$lib/api.js';
 import { session } from '$lib/session.svelte.js';
 import AccountChip from './AccountChip.svelte';
@@ -46,6 +55,8 @@ let target;
 let chip;
 
 beforeEach(() => {
+  nav.arrived = [];
+  nav.page.update((p) => ({ ...p, state: {} }));
   target = document.createElement('div');
   document.body.appendChild(target);
   server.switchable = [];
@@ -137,5 +148,32 @@ describe('You (decision 553)', () => {
     flushSync();
     expect(target.querySelector('[data-testid="wish-list-sheet"]')).toBeNull();
     expect(sheet.querySelector('[data-testid="you-wish-row"] .value').textContent).toBe('2');
+  });
+});
+
+describe('Back from a jump to Home (decision 557 item 6)', () => {
+  async function landOn(state) {
+    session.user = { ...JENNY, must_change_password: false, nav: { surfaces: [], account: [TASTE] } };
+    chip = mount(AccountChip, { target, props: { onLogout: () => {} } });
+    flushSync();
+    nav.page.update((p) => ({ ...p, state }));
+    for (const arrive of nav.arrived) arrive({ type: 'popstate' });
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+    flushSync();
+  }
+  const card = () => target.querySelector('[role="dialog"][aria-label="Title detail"]');
+
+  it('reopens the card a jump from You left, alone, and only once', async () => {
+    await landOn({ returnCard: { titleId: 3, from: 'you' } });
+    expect(card().querySelector('h2').textContent).toBe('Collateral');
+    expect(target.querySelector('[aria-label="You"]')).toBeNull();
+    expect(target.querySelector('[data-testid="wish-list-sheet"]')).toBeNull();
+    expect(read(nav.page).state.returnCard).toBeUndefined();
+  });
+
+  it("leaves a card another surface stamped to that surface", async () => {
+    await landOn({ returnCard: { titleId: 3, from: 'rank' } });
+    expect(card()).toBeNull();
+    expect(read(nav.page).state.returnCard).toEqual({ titleId: 3, from: 'rank' });
   });
 });

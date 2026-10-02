@@ -19,9 +19,11 @@ vi.mock('$app/navigation', () => ({
   goto: vi.fn(),
   pushState: (_url, state) => nav.page.update((p) => ({ ...p, state }))
 }));
+vi.mock('$lib/cardJump.js', () => ({ jumpHome: vi.fn() }));
 
 import { goto } from '$app/navigation';
 import { api, get, post } from '$lib/api.js';
+import { jumpHome } from '$lib/cardJump.js';
 import { hideToast, toast } from '$lib/toast.svelte.js';
 import { wishes } from '$lib/wish.svelte.js';
 import TitleDetail from './TitleDetail.svelte';
@@ -62,6 +64,7 @@ beforeEach(() => {
   vi.mocked(get).mockReset();
   vi.mocked(post).mockReset();
   vi.mocked(goto).mockReset();
+  vi.mocked(jumpHome).mockReset();
   nav.page.update((p) => ({ ...p, state: {} }));
   vi.spyOn(history, 'back').mockImplementation(() =>
     nav.page.update((p) => ({ ...p, state: { ...p.state, sheets: (p.state.sheets ?? []).slice(0, -1) } }))
@@ -1420,6 +1423,136 @@ describe('a title the household does not have (decision 544)', () => {
     try {
       expect(byTestId('title-unowned')).toBeNull();
       expect(target.querySelector('.play')).not.toBeNull();
+    } finally {
+      unmount(app);
+    }
+  });
+});
+
+describe('a credit and a term lead to Home (decision 557)', () => {
+  const sheets = () => read(nav.page).state.sheets ?? [];
+  const dialogs = () => [...target.querySelectorAll('[role="dialog"][aria-label="Title detail"]')];
+  // One human folded across two person rows, as `fold_credits` sends it.
+  const mann = { person_id: 1, person_ids: [1, 9], name: 'Michael Mann', job: 'Director', role_class: 'director' };
+  const quoted = (term, label) => ({
+    term, facet: term.split('.')[0], label, provider: '', evidence: [{ quote: `${label}.`, source: 'trakt:1' }]
+  });
+  const DNA = {
+    extracted: [quoted('themes.obsession', 'obsession'), quoted('place.los_angeles', 'Los Angeles')],
+    projected: [{ term: 'era.period', facet: 'era', label: 'period piece', weight: 3 }]
+  };
+  const SHARES = [11, 12, 13].map((title_id) => ({
+    title_id, kind: 'movie', name: `Share ${title_id}`, original_name: null, original_language: null,
+    year: 2004, runtime_min: 120, poster_path: null, seen: false,
+    term: { term: 'themes.heist', facet: 'themes', label: 'heist' }
+  }));
+  // A card opened anywhere but Home: no handler of Home's, and the surface that reopens it.
+  const ELSEWHERE = { onPerson: undefined, from: 'rank' };
+
+  /** Each close and each jump, with the sheets still open at that moment. */
+  function record(calls) {
+    vi.mocked(jumpHome).mockImplementation(async (href, card) => {
+      calls.push(['jump', href, card, sheets().length]);
+    });
+    return () => calls.push(['close', sheets().length]);
+  }
+
+  it('hands a credit to Home once the card has closed, and jumps from anywhere else', async () => {
+    const onPerson = vi.fn();
+    let app = await open({ kind: 'movie' }, { credits: [mann], props: { onPerson } });
+    try {
+      target.querySelector('.person').click();
+      await settle();
+      expect(onPerson).toHaveBeenCalledWith(mann);
+      expect(jumpHome).not.toHaveBeenCalled();
+    } finally {
+      unmount(app);
+    }
+
+    const calls = [];
+    app = await open({ kind: 'movie' }, { credits: [mann], props: { ...ELSEWHERE, onClose: record(calls) } });
+    try {
+      target.querySelector('.person').click();
+      await settle();
+      // A person filter lists both kinds, and the folded person is one chip.
+      expect(calls).toEqual([
+        ['close', 0],
+        ['jump', '/?person=1,9&kind=movie&kind=series', { titleId: 6, from: 'rank' }, 0]
+      ]);
+    } finally {
+      unmount(app);
+    }
+  });
+
+  it('closes the whole stack before a nested card jumps, and names the card it was tapped on', async () => {
+    vi.mocked(get).mockImplementation((path) =>
+      Promise.resolve(
+        path === '/titles/6'
+          ? { ...payload({ kind: 'movie' }), shares: SHARES }
+          : { ...payload({ id: 11, name: 'Share 11', kind: 'movie' }), credits: [mann] }
+      )
+    );
+    const calls = [];
+    const app = mount(TitleDetail, {
+      target,
+      props: { titleId: 6, from: 'taste', onClose: record(calls), onStateChange: () => {} }
+    });
+    try {
+      await settle();
+      byTestId('title-share').click();
+      await settle();
+      dialogs()[1].querySelector('.person').click();
+      await settle();
+      expect(dialogs()).toHaveLength(0);
+      expect(calls).toEqual([
+        ['close', 0],
+        ['jump', '/?person=1,9&kind=movie&kind=series', { titleId: 11, from: 'taste' }, 0]
+      ]);
+    } finally {
+      unmount(app);
+    }
+  });
+
+  it("offers Filter Home by this on the quoted term whose quotes are shown", async () => {
+    const onTerm = vi.fn();
+    const onClose = vi.fn();
+    let app = await open({ kind: 'movie' }, { dna: DNA, props: { onTerm, onClose } });
+    try {
+      const filter = byTestId('title-term-filter');
+      expect(byTestId('title-evidence').contains(filter)).toBe(true);
+      expect(filter.textContent.trim()).toBe('Filter Home by this');
+      // Picking another term still shows its quotes; the action follows the pick.
+      target.querySelectorAll('.tag')[1].click();
+      flushSync();
+      byTestId('title-term-filter').click();
+      await settle();
+      expect(onClose).toHaveBeenCalledTimes(1);
+      expect(onTerm).toHaveBeenCalledWith({ term: 'place.los_angeles', label: 'Los Angeles', facet: 'place' });
+      expect(jumpHome).not.toHaveBeenCalled();
+    } finally {
+      unmount(app);
+    }
+
+    app = await open({ kind: 'movie' }, { dna: DNA, props: ELSEWHERE });
+    try {
+      byTestId('title-term-filter').click();
+      await settle();
+      expect(jumpHome).toHaveBeenCalledWith('/?term=themes.obsession&kind=movie', { titleId: 6, from: 'rank' });
+    } finally {
+      unmount(app);
+    }
+  });
+
+  it('makes an our-read chip a button that filters by its term at once', async () => {
+    const onTerm = vi.fn();
+    const app = await open({ kind: 'movie' }, { dna: DNA, props: { onTerm } });
+    try {
+      const chip = target.querySelector('.chip.ourread');
+      expect(chip.tagName).toBe('BUTTON');
+      chip.click();
+      await settle();
+      expect(onTerm).toHaveBeenCalledWith({ term: 'era.period', label: 'period piece', facet: 'era' });
+      expect(dialogs()).toHaveLength(0);
     } finally {
       unmount(app);
     }

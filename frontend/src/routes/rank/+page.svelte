@@ -9,6 +9,7 @@
   import RatePoster from '$lib/components/RatePoster.svelte';
   import Sheet from '$lib/components/Sheet.svelte';
   import TitleDetail from '$lib/components/TitleDetail.svelte';
+  import { returningCard } from '$lib/cardJump.js';
   import { modelGate } from '$lib/home.svelte.js';
   import { flipFrom, ms, still } from '$lib/motion.js';
   import { session } from '$lib/session.svelte.js';
@@ -134,6 +135,9 @@
   onMount(() => {
     // Two rows' worth of each tier, generously: the grid measures its columns only once drawn.
     rank.perTier = window.innerWidth > 720 ? 2 * Math.ceil(window.innerWidth / 80) : 8;
+    // Back from Home's grid reopens the card the jump there left from (decision 557 item 6).
+    const back = returningCard('rank');
+    if (back !== null) openTitle({ title_id: back });
     loadFacets('movie');
     return load('movie');
   });
@@ -892,11 +896,10 @@
 {/if}
 
 {#if rank.opened !== null}
-  <!-- A credit tap closes the card (Rank has no list to filter); a seen change re-reads the board. -->
   <TitleDetail
     titleId={rank.opened}
+    from="rank"
     onClose={closeTitle}
-    onPerson={closeTitle}
     onStateChange={() => load(rank.kind)}
     onMove={(entry, tier) => move(entry, tier.index, null, null, 'explicit')}
   />

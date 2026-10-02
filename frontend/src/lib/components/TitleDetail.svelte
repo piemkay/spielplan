@@ -4,7 +4,9 @@
   // Show the model on.
   import { goto } from '$app/navigation';
   import { get, post } from '$lib/api.js';
+  import { jumpHome } from '$lib/cardJump.js';
   import { facetColour, modelGate } from '$lib/home.svelte.js';
+  import { homeHref } from '$lib/homeFilters.svelte.js';
   import { seed as seedPlace } from '$lib/place.svelte.js';
   import { cardMove } from '$lib/rank.svelte.js';
   import { runtimeLabel } from '$lib/rate.svelte.js';
@@ -36,8 +38,19 @@
 
   // `seed`: the title as the tapped poster had it, so the card opens on its poster and name before
   // the read lands. `onMove(entry, tier)`: Rank's own move, which also replaces its board; anywhere
-  // else the card drops the title itself (decision 531).
-  let { titleId, seed = undefined, onClose, onPerson, onStateChange, onMove = undefined } = $props();
+  // else the card drops the title itself (decision 531). `onPerson(credit)` and `onTerm({term, label,
+  // facet})` are Home's, which add to what is set; without them a tap opens Home's grid with that
+  // chip alone, and Back reopens this card on `from` (decision 557 item 6).
+  let {
+    titleId,
+    seed = undefined,
+    from = '',
+    onClose,
+    onPerson = undefined,
+    onTerm = undefined,
+    onStateChange,
+    onMove = undefined
+  } = $props();
 
   let open = $state(true);
   let data = $state(null);
@@ -51,9 +64,11 @@
   let justWatched = $state(false);
   let wishing = $state(null);
   let wishNote = $state('');
-  // A Shares title opened as a card of its own over this one, and this sheet's close for it.
+  // A Shares title opened as a card of its own over this one, this sheet's close for it, and its id,
+  // which a jump from it still needs once `nested` has cleared.
   let nested = $state(null);
   let closeThis = null;
+  let nestedId = null;
   // The server already omits the numbers when off; this gates only labels beside data always sent.
   const showModel = $derived(!!session.user?.show_model);
   const CREDIT_FOLD = 12;
@@ -99,6 +114,26 @@
     onClose?.();
     run?.();
   }
+
+  // `close` is this card's, or from a nested card the one under it, so the whole stack goes first.
+  function leave(close, run) {
+    afterClose = run;
+    close?.();
+  }
+
+  function toHome(handler, arg, query, cardId) {
+    return handler ? () => handler(arg) : () => jumpHome(homeHref(query), { titleId: cardId, from });
+  }
+  // A person on Both, since a person spans both kinds; a term on the card's own kind.
+  const personTap = (c, cardId = data.title.id) =>
+    toHome(onPerson, c, { person: c.person_ids ?? [c.person_id], kinds: ['movie', 'series'] }, cardId);
+  const termTap = (t, cardId = data.title.id) =>
+    toHome(
+      onTerm,
+      { term: t.term, label: termLabel(t), facet: t.facet },
+      { term: t.term, kinds: [data.title.kind] },
+      cardId
+    );
 
   // The server's own reading after a write, so the why line and the rest move together.
   async function reread() {
@@ -255,13 +290,7 @@
 
 <!-- Callers key rows by `creditKey` (person and role class), so `onPerson` stays attached. -->
 {#snippet person(c, close, chevron = false)}
-  <button
-    class="person"
-    onclick={() => {
-      afterClose = () => onPerson(c);
-      close();
-    }}
-  >
+  <button class="person" onclick={() => leave(close, personTap(c))}>
     <Headshot credit={c} />
     <span class="who">
       <span class="pname">{c.name}</span>
@@ -276,15 +305,16 @@
 {/snippet}
 
 <!-- Our read: outlined, apart from the quoted tier. A one-source chip is fainter, never absent. -->
-{#snippet chip(p)}
+{#snippet chip(p, close)}
   {@const n = p.weight == null ? null : Math.round(p.weight)}
-  <span
+  <button
     class="chip ourread"
     class:faint={n != null && n <= 1}
     title={[p.gloss, showModel && n != null ? `suggested by ${n} source${n === 1 ? '' : 's'}` : null]
       .filter(Boolean)
       .join(' - ') || undefined}
     data-weight={n}
+    onclick={() => leave(close, termTap(p))}
   >
     <span class="dot" style:background={facetColour(p.facet)}></span>
     <span class="chiplabel">{termLabel(p)}</span>
@@ -292,7 +322,7 @@
       <span class="n" aria-label={`${n} source${n === 1 ? '' : 's'}`}>{n}</span>
     {/if}
     {#if showModel}<span class="rawid">{p.term}</span>{/if}
-  </span>
+  </button>
 {/snippet}
 
 <Sheet {open} onClose={closed} label="Title detail" width={880}>
@@ -515,6 +545,7 @@
                     aria-haspopup="dialog"
                     onclick={() => {
                       closeThis = close;
+                      nestedId = s.title_id;
                       nested = s;
                     }}
                     data-testid="title-share"
@@ -577,6 +608,11 @@
                           .filter(Boolean)
                           .join(' · ')}</span>
                       {/if}
+                      <button
+                        class="tohome"
+                        onclick={() => leave(close, termTap(evidence))}
+                        data-testid="title-term-filter"
+                      >Filter Home by this{@render icon('chevron', 16)}</button>
                     </p>
                     {#each evidence.evidence as e}
                       <blockquote class="quote">“{quoteText(e.quote)}”</blockquote>
@@ -593,7 +629,7 @@
                   <p class="footnote">Our read · less certain</p>
                   {#if inferred.strong.length}
                     <div class="chips">
-                      {#each inferred.strong as p (p.facet + ':' + p.term)}{@render chip(p)}{/each}
+                      {#each inferred.strong as p (p.facet + ':' + p.term)}{@render chip(p, close)}{/each}
                     </div>
                   {/if}
                   {#if inferred.weak.length}
@@ -601,7 +637,7 @@
                     <details class="weak" data-testid="title-weak-chips">
                       <summary>Show {inferred.weak.length} more</summary>
                       <div class="chips">
-                        {#each inferred.weak as p (p.facet + ':' + p.term)}{@render chip(p)}{/each}
+                        {#each inferred.weak as p (p.facet + ':' + p.term)}{@render chip(p, close)}{/each}
                       </div>
                     </details>
                   {/if}
@@ -672,17 +708,15 @@
   />
 {/if}
 
-<!-- Outside the panel, whose transform would hold a fixed child. Back closes it alone; a person
-     closes this card too before the library filters. -->
+<!-- Outside the panel, whose transform would hold a fixed child. Back closes it alone; a tap that
+     leads to Home closes this card too, and a jump reopens the nested one on Back. -->
 {#if nested}
   <TitleDetail
     titleId={nested.title_id}
     seed={nested}
     onClose={() => (nested = null)}
-    onPerson={(c) => {
-      afterClose = () => onPerson(c);
-      closeThis?.();
-    }}
+    onPerson={(c) => leave(closeThis, personTap(c, nestedId))}
+    onTerm={(t) => leave(closeThis, termTap(t, nestedId))}
     {onStateChange}
     {onMove}
   />
@@ -1034,6 +1068,31 @@
     flex-direction: column;
     gap: 12px;
   }
+  /* Drawn the height of the line it sits in; the hit area reaches 48px. */
+  .tohome {
+    position: relative;
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    padding: 0 4px;
+    border: none;
+    background: none;
+    color: var(--accent-text);
+    font-size: var(--fs-subhead);
+    line-height: 20px;
+    white-space: nowrap;
+  }
+  .tohome::after {
+    content: '';
+    position: absolute;
+    inset: -12px -4px;
+  }
+  .tohome {
+    gap: 2px;
+    min-height: 22px;
+    margin: 0 -4px 0 auto;
+    font-weight: 600;
+  }
   .shares .strip {
     gap: 10px;
     list-style: none;
@@ -1194,7 +1253,6 @@
     box-shadow: inset 0 0 0 1px rgba(255, 240, 225, 0.16);
     color: var(--text-2);
     font-weight: 400;
-    cursor: default;
   }
   /* One source behind it: fainter, never absent (§4.1 rule 2). */
   .ourread.faint {
