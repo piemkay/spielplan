@@ -9,7 +9,7 @@ import {
 } from '../helpers.js';
 
 /**
- * §6.1's set-up, once (decision 547), through the screens: a member with no ladder finds Rate
+ * §6.1's set-up, once (decisions 547 and 556), through the screens: a member with no ladder finds Rate
  * closed and Home asking, steps from the best down, finds a film by name and finishes; the ladder
  * it made replaces Home's notice. A fresh member per project, since the set-up is once and the
  * phone pass runs on the stack the desktop pass used. The fixture holds six films, so each step's
@@ -50,7 +50,8 @@ test.describe('the ladder set-up', () => {
   });
 
   test('a member with no ladder sets it up step by step and lands on the ladder it made', async ({
-    page
+    page,
+    isMobile
   }) => {
     await signInAsMember(page, member);
 
@@ -69,13 +70,16 @@ test.describe('the ladder set-up', () => {
 
     const film = (name) => page.locator(`[data-testid="setup-film"][aria-label="${name}"]`);
 
-    await test.step('the first step opens on the best-rated films, with Watched marks', async () => {
+    await test.step('the first step opens on the films the member watched, with Watched marks', async () => {
       await page.goto('/rate');
       await page.getByTestId('rate-setup-cta').click();
       await expect(page).toHaveURL(/\/rate\/setup$/);
       await expect(page.getByTestId('setup-flow')).toContainText('Step 1 of 7');
       await expect(page.getByTestId('setup-step')).toHaveText('All-time favourite');
-      // Heat alone is well-known and scored: it leads the list.
+      await expect(page.getByTestId('setup-flow')).toContainText(
+        "Films you've watched first, then popular ones. Tap the ones you remember well."
+      );
+      // Heat is the one film the member watched: it leads the list.
       await expect(page.getByTestId('setup-film').first()).toHaveAccessibleName('Heat');
       await expect(page.getByTestId('setup-film')).toHaveCount(6);
       await expect(page.getByTestId('setup-end')).toHaveText(
@@ -88,6 +92,27 @@ test.describe('the ladder set-up', () => {
       await expect(page.getByTestId('setup-undo')).toBeDisabled();
       await expect(page.getByTestId('setup-next')).toHaveText('None for All-time favourite');
     });
+
+    if (!isMobile) {
+      await test.step('at 1024x768 the step sits beside the rail, six films across, Next by Undo', async () => {
+        const size = page.viewportSize();
+        await page.setViewportSize({ width: 1024, height: 768 });
+        const rail = await page.getByRole('navigation', { name: 'Main' }).boundingBox();
+        const flow = await page.getByTestId('setup-flow').boundingBox();
+        expect(flow.x, 'the set-up covers the rail').toBeGreaterThanOrEqual(rail.x + rail.width - 1);
+        const columns = await page
+          .getByRole('group', { name: 'Films for All-time favourite' })
+          .evaluate((el) => getComputedStyle(el).gridTemplateColumns.split(' ').length);
+        expect(columns).toBe(6);
+        await expect(page.getByTestId('setup-next')).toHaveCount(1);
+        const next = await page.getByTestId('setup-next').boundingBox();
+        const undo = await page.getByTestId('setup-undo').boundingBox();
+        const middle = (box) => box.y + box.height / 2;
+        expect(Math.abs(middle(next) - middle(undo)), 'Next is in the top row').toBeLessThan(4);
+        expect(next.x).toBeGreaterThan(undo.x);
+        await page.setViewportSize(size);
+      });
+    }
 
     await test.step('a pick is pressed, and leaves the next step for its strip', async () => {
       await film('Heat').click();
