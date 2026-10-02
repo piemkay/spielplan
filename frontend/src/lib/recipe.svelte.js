@@ -113,9 +113,10 @@ export function setGroups(id, groups) {
   return null;
 }
 
-/** A new recipe of this one film, liked, with the Filters open on it; other filters stay. */
+/** A new recipe of this one film, liked, with the Filters open on it; the search goes, the filters stay. */
 export function startWith(film) {
   remember(film);
+  homeFilters.q = '';
   homeFilters.like = [String(film.id ?? film.title_id)];
   homeFilters.less = [];
   homeFilters.panelOpen = true;
@@ -128,7 +129,9 @@ function join(names, amp = true) {
 
 const nameOf = (film) => film.name || '…';
 const lower = (keys) => join(keys.map((k) => GROUP[k].name.toLowerCase()));
-const theirs = (film) => `${nameOf(film)}'s ${lower(film.groups)}`;
+// "Fargo's mood", "Prisoners' mood".
+const owner = (name) => (/s$/i.test(name) ? `${name}'` : `${name}'s`);
+const theirs = (film) => `${owner(nameOf(film))} ${lower(film.groups)}`;
 
 function groupsLabel(keys) {
   const names = keys.map((k) => GROUP[k].name);
@@ -183,7 +186,7 @@ export function groupNote(film, groups, sign, films = fromParams()) {
     if (sign === 'less') return `Pushes away films like ${nameOf(film)}.`;
     return base ? `${nameOf(film)} counts as much as ${base}.` : `Every part of ${nameOf(film)} counts.`;
   }
-  const parts = `${nameOf(film)}'s ${lower(groups)}`;
+  const parts = `${owner(nameOf(film))} ${lower(groups)}`;
   if (sign === 'less') {
     return base
       ? `Pushes away the parts of ${parts} that ${base} ${others.length > 1 ? 'do' : 'does'} not share.`
@@ -232,7 +235,7 @@ export function applyTwist(twist) {
   };
 }
 
-const credit = (w) => (w.groups.length ? `${w.name}'s ${lower(w.groups)}` : w.name);
+const credit = (w) => (w.groups.length ? `${owner(w.name)} ${lower(w.groups)}` : w.name);
 
 /** The card's line for a recipe result: "From Dune: prestige address · but pulp, like Star Wars". */
 export function whyLine(why = []) {

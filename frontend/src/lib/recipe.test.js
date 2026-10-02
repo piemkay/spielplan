@@ -157,8 +157,11 @@ describe("the recipe's head", () => {
     expect(sentence([as(KNIVES, 'like'), as(ZODIAC, 'like'), as(OBSESSION, 'like', ['mood', 'sound', 'look'])])).toBe(
       "Knives Out and Zodiac, with Obsession's mood, sound & look in place of their own"
     );
+    expect(sentence([as(KNIVES, 'like'), as({ id: 2, name: 'Prisoners' }, 'like', ['mood'])])).toBe(
+      "Knives Out, with Prisoners' mood in place of its own"
+    );
     expect(sentence([as(KNIVES, 'like'), as(WARS, 'less', ['look'])])).toBe(
-      "Knives Out, pushed away from Star Wars's look"
+      "Knives Out, pushed away from Star Wars' look"
     );
   });
 
@@ -235,10 +238,10 @@ describe('twists', () => {
 });
 
 describe('More like this on Home (decision 559 item 7)', () => {
-  it('starts a new recipe of the title, liked, with the Filters open and the other filters kept', () => {
-    Object.assign(homeFilters, { genre: 'Crime', like: ['245'], less: ['11'] });
+  it('starts a new recipe of the title, liked, with the Filters open, the search gone and the filters kept', () => {
+    Object.assign(homeFilters, { q: 'fargo', genre: 'Crime', like: ['245'], less: ['11'] });
     startWith(FARGO);
-    expect(homeFilters).toMatchObject({ genre: 'Crime', like: ['275'], less: [], panelOpen: true });
+    expect(homeFilters).toMatchObject({ q: '', genre: 'Crime', like: ['275'], less: [], panelOpen: true });
     expect(chipLabel(film(FARGO.id))).toBe('Like Fargo');
   });
 });
