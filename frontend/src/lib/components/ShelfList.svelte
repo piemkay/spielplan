@@ -82,8 +82,8 @@
     {/if}
     {@render wishRow()}
   </div>
-{:else if !payload?.setup_notice}
-  <!-- Before the set-up Rate is closed and Home's notice already asks for it. -->
+{:else if !payload?.setup_notice && !payload?.setup_hidden}
+  <!-- Before the set-up Rate is closed and Home's notice asks for it, hidden for the day or not. -->
   <div class="card empty" data-testid="shelves-empty">
     <h2 class="section-title">No shelves yet</h2>
     <p class="why">Rate a few titles and your shelves arrive here, each with its reason.</p>

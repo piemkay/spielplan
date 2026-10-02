@@ -147,7 +147,7 @@
         <ul class="hits dims" aria-busy={tmdb.path !== tmdbAsk}>
           {#each hits as hit (tmdbKey(hit))}
             {@const wanted = tmdbWants[tmdbKey(hit)]?.state === 'want'}
-            <li class="hit" data-testid="tmdb-hit">
+            <li class="tmdb-row" data-testid="tmdb-hit">
               <button class="open" aria-haspopup="dialog" onclick={() => (opened = hit)}>
                 <span class="thumb"><RatePoster title={hit} showName={false} lazy /></span>
                 <span class="text">
@@ -232,14 +232,14 @@
     background: var(--surface-1);
     overflow: hidden;
   }
-  .hit {
+  .tmdb-row {
     display: flex;
     align-items: center;
     gap: 8px;
     min-width: 0;
     padding-right: 12px;
   }
-  .hit + .hit {
+  .tmdb-row + .tmdb-row {
     box-shadow: inset 0 0.5px 0 var(--separator);
   }
   .open {
@@ -305,6 +305,7 @@
   @media (min-width: 721px) {
     .grid {
       grid-template-columns: repeat(auto-fill, var(--shelf-poster));
+      justify-content: space-between;
       gap: 24px 16px;
     }
   }
@@ -317,11 +318,11 @@
       background: none;
       overflow: visible;
     }
-    .hit {
+    .tmdb-row {
       border-radius: var(--r-md);
       background: var(--surface-1);
     }
-    .hit + .hit {
+    .tmdb-row + .tmdb-row {
       box-shadow: none;
     }
   }

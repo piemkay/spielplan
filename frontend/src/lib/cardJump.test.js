@@ -18,7 +18,7 @@ vi.mock('$app/navigation', () => ({
 }));
 
 import { goto, replaceState } from '$app/navigation';
-import { jumpHome, returningCard } from './cardJump.js';
+import { jumpHome, jumpedFrom, returningCard } from './cardJump.js';
 
 const state = () => read(nav.page).state;
 const setState = (next) => nav.page.update((p) => ({ ...p, state: next }));
@@ -30,8 +30,8 @@ beforeEach(() => {
   setState({});
   vi.mocked(replaceState).mockClear();
   vi.mocked(goto).mockReset();
-  vi.mocked(goto).mockImplementation(async (href) => {
-    steps.push(['goto', href, state()]);
+  vi.mocked(goto).mockImplementation(async (href, opts) => {
+    steps.push(['goto', href, state(), opts]);
   });
 });
 
@@ -40,10 +40,15 @@ afterEach(() => {
 });
 
 describe('jumpHome', () => {
-  it('stamps the page it leaves with the card, then goes to Home', async () => {
+  it('stamps the page it leaves with the card, then goes to Home naming that page', async () => {
     await jumpHome('/?person=1&kind=movie&kind=series', { titleId: 5, from: 'rank' });
     expect(steps).toEqual([
-      ['goto', '/?person=1&kind=movie&kind=series', { returnCard: { titleId: 5, from: 'rank' } }]
+      [
+        'goto',
+        '/?person=1&kind=movie&kind=series',
+        { returnCard: { titleId: 5, from: 'rank' } },
+        { state: { jumpedFrom: 'rank' } }
+      ]
     ]);
   });
 
@@ -56,8 +61,22 @@ describe('jumpHome', () => {
     await jumpHome('/?like=1&kind=movie&filters=open', { titleId: 1, from: 'you' });
     expect(go).toHaveBeenCalledWith(-2);
     expect(steps).toEqual([
-      ['goto', '/?like=1&kind=movie&filters=open', { sheets: [], returnCard: { titleId: 1, from: 'you' } }]
+      [
+        'goto',
+        '/?like=1&kind=movie&filters=open',
+        { sheets: [], returnCard: { titleId: 1, from: 'you' } },
+        { state: { jumpedFrom: 'you' } }
+      ]
     ]);
+  });
+});
+
+describe('jumpedFrom', () => {
+  it("names the page Home's entry was jumped to from, and nothing elsewhere", () => {
+    setState({ jumpedFrom: 'compare' });
+    expect(jumpedFrom()).toBe('Compare');
+    setState({ sheets: [] });
+    expect(jumpedFrom()).toBe('');
   });
 });
 

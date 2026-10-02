@@ -5,6 +5,7 @@
   import { afterNavigate, beforeNavigate, replaceState } from '$app/navigation';
   import { page } from '$app/state';
   import { get, qs } from '$lib/api.js';
+  import { jumpedFrom, unwind } from '$lib/cardJump.js';
   import { session } from '$lib/session.svelte.js';
   import {
     KIND_CHOICES,
@@ -76,7 +77,6 @@
   // The filters outlive the page as Home's place does; a URL that carries any wins over them. Read
   // from `location`: Back leaves `page.url` at the address Home was entered with. An address that
   // still says what Home holds keeps all of it.
-  let lastSearch = page.url.search;
   const here = `${location.pathname}${location.search}`;
   const ours =
     homeKept.user === session.user?.id && here === writeHomeUrl(homeFilters, { kinds: homeKept.kinds ?? [] });
@@ -208,6 +208,10 @@
     // A recipe's grid reads for itself; this one reads again once the recipe is gone.
     if (reason === 'recipe') {
       loading = false;
+      // The recipe's read names no one, so a person a reload brought is named by an ordinary read.
+      if (!append && homeFilters.people.some((p) => !p.name)) {
+        get(titlesQuery(kinds, { limit: 1 })).then((res) => takeNames(res.applied)).catch(() => {});
+      }
       return;
     }
     const query = titlesQuery(kinds, { offset: append ? offset : 0 });
@@ -334,14 +338,16 @@
     await Promise.all([load(), loadFacets(), loadShelves()]);
   });
 
-  // A tab's link lands at the top, so Home puts back its kept place; Back restores its own.
+  // A tab's link lands at the top, so Home puts back its kept place; Back restores its own. Only a
+  // navigation from Home to Home finds the page already mounted.
   let restoreY = entry ? 0 : (kept?.scrollY ?? 0);
   beforeNavigate(() => {
     homeKept.scrollY = mode === 'shelves' ? window.scrollY : 0;
   });
-  afterNavigate(({ type }) => {
+  afterNavigate(({ type, from, to }) => {
     if (restoreY && type !== 'popstate') window.scrollTo(0, restoreY);
     restoreY = 0;
+    if (from && from.route.id === to?.route.id) followAddress();
   });
 
   // A Show the model flip re-reads the shelves once the server has the preference (the epoch, not
@@ -407,24 +413,32 @@
     debounce = setTimeout(() => load(), 220);
   }
 
-  // A URL with chips, as a card's tap on another page sends one (decision 557 item 6), when the
-  // client navigates here without remounting.
-  $effect(() => {
-    const search = page.url.search;
-    if (search === lastSearch) return;
-    lastSearch = search;
+  // The kinds of the shelves an address last took Home off, which a bare address puts back.
+  let kindsBefore = null;
+
+  // Home takes what the address says, as a reload would: a card's tap from You sends chips
+  // (decision 557 item 6), and Back or the Home tab a bare '/', which is the shelves.
+  function followAddress() {
+    mirrored = `${location.pathname}${location.search}`;
     const next = readHomeUrl(new URLSearchParams(location.search));
-    if (!next) return;
-    untrack(() => {
-      const named = fromUrl(next);
-      if (named && kindChoice(named) !== kindChoice(kinds)) {
-        kinds = named;
-        loadShelves();
-        loadFacets();
-      }
-      load();
-    });
-  });
+    let named = null;
+    if (next) {
+      if (mode === 'shelves') kindsBefore = kinds;
+      named = fromUrl(next);
+    } else if (mode === 'grid' || homeUrl !== '/') {
+      resetHomeFilters();
+      named = kindsBefore;
+      kindsBefore = null;
+    } else {
+      return;
+    }
+    if (named && kindChoice(named) !== kindChoice(kinds)) {
+      kinds = named;
+      loadShelves();
+      loadFacets();
+    }
+    load();
+  }
 
   // Every chip change is mirrored into the address, so a reload and Back hold. Never onto a
   // sheet's own history entry: closing it would take the change back off, so it waits.
@@ -435,6 +449,25 @@
     if (page.state?.sheets?.length || url === mirrored) return;
     mirrored = url;
     replaceState(url, page.state);
+  });
+
+  // A jump from another page's card shows the way back to it while its grid stands (board B9); an
+  // installed app has no Back of its own. Once its grid has stood and the shelves are back, the jump
+  // is over, written to Home's entry when no sheet's entry is on top. State, not derived: the shell
+  // draws it, and would re-read a derived of Home's as the page leaves.
+  let backTo = $state('');
+  let stood = false;
+  $effect(() => {
+    const from = jumpedFrom();
+    const grid = mode === 'grid';
+    backTo = grid ? from : '';
+    if (!from) stood = false;
+    else if (grid) stood = true;
+    else if (stood && !page.state.sheets?.length) {
+      stood = false;
+      const { jumpedFrom: _, ...rest } = page.state;
+      replaceState('', rest);
+    }
   });
 
   function removeChip(key) {
@@ -463,16 +496,33 @@
     });
   }
 
-  // The title card has closed itself by now, so its history entry is gone (decision 527). A tap
-  // adds to what is set (decision 557 item 6).
-  function cardPerson(person) {
-    addPerson(person);
+  // The title card has closed itself by now, so its history entry is gone (decision 527). Sheets
+  // still open under it (a See all, the wish list) close through their own Back before the grid
+  // replaces the shelves they stand on, or their entries would hold the mirror and swallow Back.
+  async function closeUnder() {
+    const depth = page.state?.sheets?.length ?? 0;
+    if (depth) await unwind(depth);
+  }
+
+  // Clearing the search switches Only in library back on (decision 558 item 4).
+  function clearSearch() {
+    if (!homeFilters.q.trim()) return;
     homeFilters.q = '';
+    homeFilters.owned = true;
+  }
+
+  // A tap adds to what is set (decision 557 item 6), and the search makes way for it.
+  async function cardPerson(person) {
+    await closeUnder();
+    addPerson(person);
+    clearSearch();
     load();
   }
 
-  function cardTerm(term) {
+  async function cardTerm(term) {
+    await closeUnder();
     setTerm(term, 'in');
+    clearSearch();
     load();
   }
 
@@ -504,7 +554,7 @@
   // A sticky notice's x (decision 554): gone at once, then the server's Home; Undo re-reads it.
   async function hideNotice(notice) {
     if (notice === 'pending') home.banner = null;
-    else if (notice === 'setup') home.setup_notice = null;
+    else if (notice === 'setup') Object.assign(home, { setup_notice: null, setup_hidden: true });
     else home.wish = { ...home.wish, hidden: true };
     try {
       await putAway(notice, loadShelves);
@@ -519,7 +569,12 @@
   $effect(() => {
     if (selected) likedCard = selected;
   });
-  const likeOnHome = (id) => startWith(likedCard?.id === id ? likedCard : { id });
+  async function likeOnHome(id) {
+    const film = likedCard?.id === id ? likedCard : { id };
+    await closeUnder();
+    clearSearch();
+    startWith(film);
+  }
 </script>
 
 {#snippet icon(name)}
@@ -577,6 +632,14 @@
 
 {#snippet homeBar()}
   <div class="bar">
+    {#if backTo}
+      <button
+        class="btn-plain back"
+        aria-label="Back to {backTo}"
+        data-testid="home-back"
+        onclick={() => history.back()}
+      ><Icon name="chevron-left" /><span>{backTo}</span></button>
+    {/if}
     <!-- On the shelves the switch partitions (§4.1 rule 5); on the grid it is only a filter. -->
     <div class="segmented kinds" role="group" aria-label="Kind">
       {#each KIND_CHOICES as choice (choice.id)}
@@ -695,28 +758,31 @@
   <p class="footnote kindnote" role="status" data-testid="kind-filter-note">{kindNote}</p>
 {/if}
 
-<div class="notice-stack">
-  <!-- Its answer moves the banner's population, so it re-reads the shelves (decision 212). -->
-  <FinishPrompt onAnswered={loadShelves} />
-  <PendingVerdicts banner={home?.banner} onHide={() => hideNotice('pending')} />
-  <ArrivedBanner arrived={home?.arrived ?? []} onSelect={(title) => (selected = title)} />
-  {#if home?.setup_notice}
-    {@const notice = home.setup_notice}
-    <div class="notice-bar wraps" role="status" data-testid="home-setup-notice">
-      <span class="dot" aria-hidden="true">{@render icon('ladder')}</span>
-      <div class="text">
-        <h2 class="headline">{notice.headline}</h2>
-        <p class="line">{notice.why}</p>
+<!-- The notices stand over the shelves; a grid answers one question and shows none (boards A3, A4). -->
+{#if mode === 'shelves'}
+  <div class="notice-stack">
+    <!-- Its answer moves the banner's population, so it re-reads the shelves (decision 212). -->
+    <FinishPrompt onAnswered={loadShelves} />
+    <PendingVerdicts banner={home?.banner} onHide={() => hideNotice('pending')} />
+    <ArrivedBanner arrived={home?.arrived ?? []} onSelect={(title) => (selected = title)} />
+    {#if home?.setup_notice}
+      {@const notice = home.setup_notice}
+      <div class="notice-bar wraps" role="status" data-testid="home-setup-notice">
+        <span class="dot" aria-hidden="true">{@render icon('ladder')}</span>
+        <div class="text">
+          <h2 class="headline">{notice.headline}</h2>
+          <p class="line">{notice.why}</p>
+        </div>
+        <div class="act">
+          <a class="pill primary" href={notice.cta.route}>{notice.cta.label}</a>
+        </div>
+        <button class="x" aria-label="Hide until tomorrow" onclick={() => hideNotice('setup')}>
+          {@render icon('close')}
+        </button>
       </div>
-      <div class="act">
-        <a class="pill primary" href={notice.cta.route}>{notice.cta.label}</a>
-      </div>
-      <button class="x" aria-label="Hide until tomorrow" onclick={() => hideNotice('setup')}>
-        {@render icon('close')}
-      </button>
-    </div>
-  {/if}
-</div>
+    {/if}
+  </div>
+{/if}
 
 <!-- One message for both roles; an admin also gets the door to Movie data. -->
 {#snippet noBundle()}
@@ -743,10 +809,16 @@
     <h2 class="section-title" data-testid="library-section-head">In your library</h2>
   {/if}
   <div class="gridhead" data-testid="home-mode" data-mode="grid" data-reason={reason}>
-    {#if headLine}
-      <p class="footnote" data-testid="grid-line">{headLine}</p>
-    {/if}
-    {#if items.length && sortOffered(reason, sortEcho, forYouAvailable)}
+    <div class="headtext">
+      {#if headLine}
+        <p class="footnote" data-testid="grid-line">{headLine}</p>
+      {/if}
+      {#if partitioned}
+        <p class="footnote" data-testid="grid-partition">{partitionLine(kinds, sortEcho)}</p>
+      {/if}
+    </div>
+    <!-- Offered over what is shown, never over a fold alone. -->
+    {#if strongItems.length && sortOffered(reason, sortEcho, forYouAvailable)}
       <!-- The pressed position is the order the server says it used, never the one asked for. -->
       <div class="segmented sort" role="group" aria-label="Order">
         {#each SORT_CHOICES as c (c.id)}
@@ -757,13 +829,10 @@
           >{c.label}</button>
         {/each}
       </div>
-    {:else if items.length && sortWaitingLine(reason, sortEcho, forYouAvailable)}
+    {:else if strongItems.length && sortWaitingLine(reason, sortEcho, forYouAvailable)}
       <p class="footnote" data-testid="sort-waiting">
         {sortWaitingLine(reason, sortEcho, forYouAvailable)}
       </p>
-    {/if}
-    {#if partitioned}
-      <p class="footnote" data-testid="grid-partition">{partitionLine(kinds, sortEcho)}</p>
     {/if}
   </div>
 
@@ -822,7 +891,7 @@
           {/if}
         </div>
       {:else}
-        {#if items.some(isColdPlaced)}
+        {#if (showWeak ? items : strongItems).some(isColdPlaced)}
           <!-- The badge's why, said once for the grid: a title= tooltip does not exist on touch. -->
           <p class="footnote" data-testid="catalog-cold-note">
             Titles marked New have no outside ratings yet — we placed them by what they're about.
@@ -931,6 +1000,12 @@
     display: flex;
     align-items: center;
     gap: 12px;
+  }
+  .back {
+    flex: none;
+    gap: 2px;
+    margin: 0 -8px 0 -10px;
+    padding: 0 6px 0 4px;
   }
   .kinds {
     flex: none;
@@ -1072,8 +1147,16 @@
   .gridhead p {
     margin: 0;
   }
+  .headtext {
+    flex: 1 1 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    min-width: 0;
+  }
   .sort {
     width: 200px;
+    margin-left: auto;
   }
   .grid {
     display: grid;
@@ -1148,6 +1231,9 @@
     .kinds {
       width: 240px;
     }
+    .back {
+      margin-right: 0;
+    }
     .bar .searchrow {
       flex: 0 1 460px;
       min-width: 0;
@@ -1201,8 +1287,10 @@
       font-size: var(--fs-subhead);
       line-height: 20px;
     }
+    /* Fixed columns (decision 554 item 3); what a row leaves over goes into its gaps. */
     .grid {
       grid-template-columns: repeat(auto-fill, var(--shelf-poster));
+      justify-content: space-between;
       gap: 24px 16px;
     }
   }

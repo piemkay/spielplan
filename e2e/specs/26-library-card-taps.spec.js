@@ -27,9 +27,12 @@ async function openHeatOnRank(page) {
   return card(page);
 }
 
-/** Back from Home's grid: Rank again, with Heat's card open over it, and one more Back closes it. */
-async function backToTheCard(page) {
-  await page.goBack();
+/**
+ * Back from Home's grid: Rank again, with Heat's card open over it, and one more Back closes it.
+ * `back` is the browser's, or Home's own way back, which an installed app without one needs (board B9).
+ */
+async function backToTheCard(page, back = () => page.goBack()) {
+  await back();
   await expect(page).toHaveURL(/\/rank$/);
   await expect(card(page).getByRole('heading', { name: 'Heat' })).toBeVisible();
   await page.goBack();
@@ -51,7 +54,9 @@ test("a credit on Rank's card opens Home's grid with that person alone, and Back
   await expect(page.getByTestId('person-chip')).toContainText('Michael Mann');
   await expect(page.getByTestId('term-chip')).toHaveCount(0);
 
-  await backToTheCard(page);
+  const homeBack = page.getByRole('button', { name: 'Back to Rank' });
+  await expect(homeBack).toBeVisible();
+  await backToTheCard(page, () => homeBack.click());
 });
 
 test("More like this, but... on Rank's card starts a recipe of it on Home, and Back reopens the card", async ({

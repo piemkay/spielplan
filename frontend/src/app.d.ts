@@ -5,6 +5,8 @@ declare global {
       sheets?: string[];
       /** The card a jump to Home left from, reopened on Back (decision 557 item 6). */
       returnCard?: { titleId: number; from: string };
+      /** On Home's entry after such a jump: the page it left, for Home's own way back. */
+      jumpedFrom?: string;
     }
   }
 }
