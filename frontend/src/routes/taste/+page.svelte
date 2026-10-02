@@ -1,6 +1,8 @@
 <script>
   // Your taste (§6.5): the DNA terms that sit high on the person's own ladder and those that land lower,
   // each read against their own middle. Opened from You, never a tab.
+  import { onMount } from 'svelte';
+  import { returningCard } from '$lib/cardJump.js';
   import { avatarColour } from '$lib/components/Avatar.svelte';
   import TasteRow from '$lib/components/TasteRow.svelte';
   import TitleDetail from '$lib/components/TitleDetail.svelte';
@@ -35,6 +37,12 @@
     const kind = taste.kind;
     void modelGate.epoch;
     read(kind);
+  });
+
+  // Back from Home's grid reopens the card the jump there left from (decision 557 item 6).
+  onMount(() => {
+    const back = returningCard('taste');
+    if (back !== null) selected = { id: back };
   });
 
   async function read(kind) {
@@ -129,9 +137,9 @@
 {#if selected}
   <TitleDetail
     titleId={selected.id}
-    seed={selected}
+    seed={selected.name ? selected : undefined}
+    from="taste"
     onClose={() => (selected = null)}
-    onPerson={() => (selected = null)}
     onStateChange={() => read(taste.kind)}
   />
 {/if}
