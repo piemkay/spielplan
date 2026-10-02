@@ -10,11 +10,12 @@
   import Icon from './Icon.svelte';
   import RatePoster from './RatePoster.svelte';
 
-  let { kind = 'movie', query = {} } = $props();
+  let { kinds = ['movie'], query = {} } = $props();
 
+  const both = $derived(kinds.length > 1);
   let seed = $state(0);
   let twists = $state([]);
-  const key = $derived(JSON.stringify([kind, query]));
+  const key = $derived(JSON.stringify([kinds, query]));
 
   let seq = 0;
   $effect(() => {
@@ -24,6 +25,7 @@
 
   async function load(next) {
     const mine = ++seq;
+    const kind = both ? 'both' : kinds[0];
     const res = await get(`/mix/twists${qs({ ...query, kind, seed: next })}`).catch(() => null);
     if (mine !== seq) return;
     seed = next;
@@ -36,14 +38,17 @@
   }
 
   const terms = (twist) => twist.terms.map((t) => t.label).join(', ');
-  const SKIPPED = 'Other twists. Twists that leave fewer than 10 films are skipped';
+  const noun = (twist) => plural(twist.kind ?? kinds[0], twist.library_n);
+  const skipped = $derived(
+    `Other twists. Twists that leave fewer than 10 ${both ? 'titles' : plural(kinds[0], 10)} are skipped`
+  );
 </script>
 
 {#if twists.length}
   <section class="twists" aria-label="Try a twist" data-testid="twist-row">
     <div class="top">
       <h2><span class="lead">Try a twist</span> <span aria-hidden="true">·</span> from films you placed high</h2>
-      <button class="shuffle" aria-label={SKIPPED} title={SKIPPED} onclick={() => load(seed + 1)}>
+      <button class="shuffle" aria-label={skipped} title={skipped} onclick={() => load(seed + 1)}>
         <Icon name="shuffle" size={20} />
       </button>
     </div>
@@ -52,7 +57,7 @@
         <button
           class="twist press"
           data-testid="twist"
-          aria-label="Add {t.group_name} like {t.name}, {t.library_n} {plural(kind, t.library_n)} in your library fit: {terms(t)}"
+          aria-label="Add {t.group_name} like {t.name}, {t.library_n} {noun(t)} in your library fit: {terms(t)}"
           onclick={() => add(t)}
         >
           <Icon name="plus" size={16} />
@@ -62,7 +67,7 @@
               <span class="dot" style:background={groupOf(t.group)?.colour ?? t.colour} aria-hidden="true"></span>
               <span>{t.group_name} like {t.name}</span>
             </span>
-            <span class="sub"><span class="n">{t.library_n} fit</span> · {terms(t)}</span>
+            <span class="sub"><span class="n">{t.library_n}{both ? ` ${noun(t)}` : ''} fit</span> · {terms(t)}</span>
           </span>
         </button>
       {/each}

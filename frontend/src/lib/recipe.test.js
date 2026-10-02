@@ -22,7 +22,7 @@ import {
   startWith,
   toParams,
   twistsOffered,
-  whyLine
+  whyLines
 } from './recipe.svelte.js';
 
 const KNIVES = { id: 245, kind: 'movie', name: 'Knives Out', year: 2019 };
@@ -188,6 +188,25 @@ describe("a film's sheet", () => {
     expect(lendNote(films[1], films)).toBe(
       'However many parts you take, Fargo counts as one of the 2 films that can lend parts. Obsession is the other.'
     );
+    expect(lendNote(films[0], films.slice(0, 2))).toBe(
+      'However many parts you take, Knives Out counts as one of the 2 films that can lend parts. Fargo is the other.'
+    );
+    expect(lendNote(films[0], films.slice(0, 1))).toBe(
+      'However many parts you take, Knives Out counts as one of the 2 films that can lend parts.'
+    );
+  });
+
+  it('names the two films that lend once a third cannot, and how to free a place', () => {
+    const films = [as(OBSESSION, 'like', ['mood']), as(FARGO, 'like', ['setting']), as(WARS, 'less')];
+    expect(lendNote(films[2], films)).toBe(
+      'Obsession and Fargo are the 2 films that can lend parts. To take parts of Star Wars, first choose ' +
+        'All of Obsession or All of Fargo.'
+    );
+  });
+
+  it('says nothing of the limit for a film with no group to lend', () => {
+    const thin = { ...as(ZODIAC, 'like'), sheet: [sheetRow('mood', ['tense']), sheetRow('look', [], ['grainy'])] };
+    expect(lendNote(thin, [as(FARGO, 'like', ['mood']), thin])).toBe('');
   });
 
   it('disables a thin group with its term, and every group once two other films lend', () => {
@@ -253,10 +272,13 @@ describe("a result's why (decision 559 item 5)", () => {
     { title_id: 11, name: 'Star Wars', groups: [], like: false, terms: [term('pulp')] }
   ];
 
-  it('names each liked film and its shared terms, and a less-liked film still carried', () => {
-    expect(whyLine(why)).toBe(
-      "From Knives Out: murder mystery, grand estate · Fargo's mood: deadpan & dry · but pulp, like Star Wars"
-    );
+  it('gives each credited film its own line: a liked film and its shared terms, a less-liked one still carried', () => {
+    expect(whyLines(why)).toEqual([
+      { title_id: 245, name: 'Knives Out', text: 'From Knives Out: murder mystery, grand estate', less: false },
+      { title_id: 275, name: 'Fargo', text: "Fargo's mood: deadpan & dry", less: false },
+      { title_id: 11, name: 'Star Wars', text: 'but pulp, like Star Wars', less: true }
+    ]);
+    expect(whyLines([{ ...why[0], terms: [] }])).toEqual([]);
   });
 
   it('captions a poster once per liked film with the strongest term they share', () => {

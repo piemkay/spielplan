@@ -380,7 +380,19 @@
                 <span></span><span class="play"></span><span class="label"></span><span class="pair"></span>
               </div>
             {:else}
-              {#if why}
+              {#if Array.isArray(why)}
+                <!-- A recipe result: one line per credited film, led by its poster (board C4). -->
+                <div class="why-lines" data-testid="title-why">
+                  {#each why as line (line.title_id)}
+                    <p class="why" class:less={line.less}>
+                      <span class="why-thumb" aria-hidden="true"
+                        ><RatePoster title={{ title_id: line.title_id, name: line.name }} showName={false} /></span
+                      >
+                      <span>{line.text}</span>
+                    </p>
+                  {/each}
+                </div>
+              {:else if why}
                 <p class="why" data-testid="title-why">{why}</p>
               {/if}
 
@@ -818,6 +830,32 @@
     display: flex;
     flex-direction: column;
     gap: 16px;
+  }
+  .why-lines {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .why-lines .why {
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+  }
+  .why-lines .less {
+    color: var(--text-3);
+  }
+  .why-thumb {
+    flex: none;
+    width: 12px;
+    margin-top: 1px;
+    border-radius: 2px;
+    overflow: hidden;
+  }
+  .less .why-thumb {
+    opacity: 0.55;
+  }
+  .why-thumb :global(.poster) {
+    border-radius: 0;
   }
   .pending {
     display: flex;

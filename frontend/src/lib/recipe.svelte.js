@@ -198,9 +198,17 @@ export function groupNote(film, groups, sign, films = fromParams()) {
 
 /** The sheet's foot: a film lending any number of groups is one of the two that may lend. */
 export function lendNote(film, films = fromParams()) {
-  const other = lenders(films).find((x) => x.id !== film.id);
+  if (film.sheet?.length && !film.sheet.some((r) => r.offered)) return '';
+  const others = lenders(films.filter((x) => x.id !== film.id));
+  if (!film.groups.length && others.length >= MAX_LENDING) {
+    const names = others.map(nameOf);
+    return (
+      `${join(names, false)} are the ${MAX_LENDING} films that can lend parts. To take parts of ` +
+      `${nameOf(film)}, first choose ${names.map((n) => `All of ${n}`).join(' or ')}.`
+    );
+  }
   const line = `However many parts you take, ${nameOf(film)} counts as one of the ${MAX_LENDING} films that can lend parts.`;
-  return other ? `${line} ${nameOf(other)} is the other.` : line;
+  return others.length ? `${line} ${nameOf(others[0])} is the other.` : line;
 }
 
 const lendingFull = (others) => `${join(others.map(nameOf), false)} already lend parts`;
@@ -237,16 +245,19 @@ export function applyTwist(twist) {
 
 const credit = (w) => (w.groups.length ? `${owner(w.name)} ${lower(w.groups)}` : w.name);
 
-/** The card's line for a recipe result: "From Dune: prestige address · but pulp, like Star Wars". */
-export function whyLine(why = []) {
+/** A recipe result's why, a line per credited film: "From Dune: …", "but pulp, like Star Wars". */
+export function whyLines(why = []) {
   return why
     .filter((w) => w.terms?.length)
     .map((w) => {
       const terms = w.terms.map((t) => t.label).join(', ');
-      if (!w.like) return `but ${terms}, like ${credit(w)}`;
-      return w.groups.length ? `${credit(w)}: ${terms}` : `From ${w.name}: ${terms}`;
-    })
-    .join(' · ');
+      const text = !w.like
+        ? `but ${terms}, like ${credit(w)}`
+        : w.groups.length
+          ? `${credit(w)}: ${terms}`
+          : `From ${w.name}: ${terms}`;
+      return { title_id: w.title_id, name: w.name, text, less: !w.like };
+    });
 }
 
 /** One poster caption per liked film: the strongest term the two share. */

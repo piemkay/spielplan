@@ -250,7 +250,7 @@
       }
       homeFilters.terms = homeFilters.terms.filter((t) => !unknown.includes(t.id));
       load();
-      kindNote = `${gone.map((t) => t.label).join(' and ')} cleared — no longer a taste term.`;
+      kindNote = termsCleared(gone);
     } finally {
       if (seq === requestSeq) loading = false;
     }
@@ -532,8 +532,16 @@
     load();
   }
 
+  function termsCleared(gone) {
+    return `${gone.map((t) => t.label).join(' and ')} cleared — no longer a taste term.`;
+  }
+
+  // A recipe's grid holds its own cards, so it hears each toggle as a new `{id, state}`.
+  let seenFlip = $state(null);
+
   // With the seen filter active, a toggled card stops matching and leaves.
   function onSeenChange(titleId, state) {
+    seenFlip = { id: titleId, state };
     items = items.map((t) => (t.id === titleId ? { ...t, seen_state: state } : t));
     if (homeFilters.seen !== 'any' && homeFilters.seen !== state) load();
     // The banner is the server's population, so re-read it.
@@ -841,7 +849,13 @@
 {/snippet}
 
 {#if mode === 'grid'}
-  {#if reason === 'recipe'}<RecipeGrid {kinds} params={catalogParams()} onSelect={(t) => (selected = t)} />{:else}
+  {#if reason === 'recipe'}<RecipeGrid
+      {kinds}
+      params={catalogParams()}
+      {seenFlip}
+      onCleared={(gone) => (kindNote = termsCleared(gone))}
+      onSelect={(t) => (selected = t)}
+    />{:else}
   {#if beyondSearch}
     <h2 class="section-title" data-testid="library-section-head">In your library</h2>
   {/if}

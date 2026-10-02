@@ -5,12 +5,17 @@
   import { get, qs } from '$lib/api.js';
   import { plural } from '$lib/home.svelte.js';
   import { homeFilters } from '$lib/homeFilters.svelte.js';
-  import { captions, recipe, remember, sentence, twistsOffered, whyLine } from '$lib/recipe.svelte.js';
+  import { captions, recipe, remember, sentence, twistsOffered, whyLines } from '$lib/recipe.svelte.js';
   import PosterCard from './PosterCard.svelte';
   import TwistRow from './TwistRow.svelte';
 
-  /** @type {{kinds?: string[], params?: Record<string, any>, onSelect?: (title: any) => void}} */
-  let { kinds = ['movie'], params = {}, onSelect = undefined } = $props();
+  // `seenFlip`: a card's seen toggle, `{id, state}`, new each time. `onCleared(terms)`: the term chips
+  // a stale link carried that the vocabulary no longer has, dropped here.
+  /**
+   * @type {{kinds?: string[], params?: Record<string, any>, seenFlip?: {id: number, state: string} | null,
+   *   onSelect?: (title: any) => void, onCleared?: (terms: any[]) => void}}
+   */
+  let { kinds = ['movie'], params = {}, seenFlip = null, onSelect = undefined, onCleared = undefined } = $props();
 
   const LIMIT = 60;
   const THIN = 10;
@@ -54,6 +59,22 @@
     return () => clearTimeout(timer);
   });
 
+  // A film marked seen keeps its place with its mark; under a Seen filter it leaves (decision 559 item 4).
+  $effect(() => {
+    const flip = seenFlip;
+    if (!flip) return;
+    untrack(() => {
+      if (!regions.length) return;
+      const one = (t) => (t.id === flip.id ? { ...t, seen_state: flip.state } : t);
+      const mark = (c) => (c.fold ? { fold: { ...c.fold, items: c.fold.items.map(one) } } : one(c));
+      for (const r of regions) {
+        r.cells = r.cells.map(mark);
+        if (r.beyond) r.beyond.cells = r.beyond.cells.map(mark);
+      }
+      if ((params.seen ?? 'any') !== 'any' && params.seen !== flip.state) load();
+    });
+  });
+
   const rowsIn = (cells) => cells.reduce((n, c) => n + (c.fold ? c.fold.items.length : 1), 0);
 
   function read(kind, pool, offset) {
@@ -83,10 +104,17 @@
       regions = pages.map((page, i) => ({ kind: kinds[i], page, cells: page.items, beyond: null, weak: false, opened: [], busy: false }));
       if (!folded) regions.forEach((r, i) => r.page.beyond_total && openBeyond(i));
     } catch (err) {
-      if (mine === seq) {
-        error = err.message;
-        regions = [];
+      if (mine !== seq) return;
+      // A term the vocabulary no longer has is dropped, as Home's own grid drops it (decision 557).
+      const unknown = err?.detail?.reason === 'unknown_term' ? (err.detail.terms ?? []) : [];
+      const gone = homeFilters.terms.filter((t) => unknown.includes(t.id));
+      if (gone.length) {
+        homeFilters.terms = homeFilters.terms.filter((t) => !unknown.includes(t.id));
+        onCleared?.(gone);
+        return;
       }
+      error = err.message;
+      regions = [];
     } finally {
       if (mine === seq) loading = false;
     }
@@ -124,7 +152,8 @@
   const labels = (terms) => terms.map((t) => t.label).join(', ');
 
   function open(t) {
-    onSelect?.({ ...t, whyLine: whyLine(t.why) });
+    const lines = whyLines(t.why);
+    onSelect?.({ ...t, whyLine: lines.length ? lines : '' });
   }
 </script>
 
@@ -173,7 +202,7 @@
   </div>
 
   {#if asked && twistsOffered(films) && !asks}
-    <TwistRow kind={kinds[0]} query={asked} />
+    <TwistRow {kinds} query={asked} />
   {/if}
 
   {#if error}
@@ -369,6 +398,7 @@
   @media (min-width: 721px) {
     .grid {
       grid-template-columns: repeat(auto-fill, var(--shelf-poster));
+      justify-content: space-between;
       gap: 24px 16px;
     }
   }

@@ -127,15 +127,32 @@ describe('a recipe on Home (decisions 559 and 560)', () => {
     expect(panel.lastElementChild.textContent).toContain('Like these films');
   });
 
-  it("opens a result's card with what it shares in place of the server's line", async () => {
+  it("opens a result's card with what it shares in place of the server's line, a line per film", async () => {
     homeFilters.like = ['245'];
     homeFilters.less = ['11'];
     await open();
     target.querySelector('[data-testid="recipe-region-movie"] .card-wrap').click();
     await settle();
-    expect(target.querySelector('[data-testid="title-why"]').textContent).toBe(
-      'From Knives Out: murder mystery, grand estate · but pulp, like Star Wars'
-    );
+    const lines = [...target.querySelectorAll('[data-testid="title-why"] .why')];
+    expect(lines.map((l) => l.textContent.trim())).toEqual([
+      'From Knives Out: murder mystery, grand estate',
+      'but pulp, like Star Wars'
+    ]);
+    expect(lines.map((l) => l.querySelector('[data-testid="rate-poster"]').dataset.titleId)).toEqual(['245', '11']);
+    expect(lines.map((l) => l.classList.contains('less'))).toEqual([false, true]);
+  });
+
+  it('marks a result seen from its card, and a grid of films not seen lets it go', async () => {
+    homeFilters.like = ['245'];
+    homeFilters.seen = 'unseen';
+    await open();
+    target.querySelector('[data-testid="recipe-region-movie"] .card-wrap').click();
+    await settle();
+    const reads = () => seen.filter((u) => u.startsWith('/api/mix/titles?')).length;
+    const before = reads();
+    target.querySelector('[data-testid="title-watched"]').click();
+    await settle();
+    expect(reads()).toBe(before + 1);
   });
 
   it('names a person a reloaded recipe address carries', async () => {
