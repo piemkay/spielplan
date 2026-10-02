@@ -13,8 +13,8 @@
   const parts = $derived(film.groups.length > 0);
 </script>
 
-{#snippet glyph(d)}
-  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path {d} /></svg>
+{#snippet glyph(name)}
+  <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d={name === 'x' ? 'M6 6l12 12M18 6 6 18' : 'm6 9.5 6 6 6-6'} /></svg>
 {/snippet}
 
 <span class="rchip" class:less={film.sign === 'less'} class:parts data-testid="recipe-chip">
@@ -40,9 +40,9 @@
         </span>
       {/if}
     </span>
-    {#if !onFlip}{@render glyph('m6 9.5 6 6 6-6')}{/if}
+    {#if !onFlip}{@render glyph('chevron')}{/if}
   </button>
-  <button class="x" aria-label="Remove {film.name || 'this film'}" onclick={onRemove}>{@render glyph('M6 6l12 12M18 6 6 18')}</button>
+  <button class="x" aria-label="Remove {film.name || 'this film'}" onclick={onRemove}>{@render glyph('x')}</button>
 </span>
 
 <style>
