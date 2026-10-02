@@ -332,6 +332,11 @@ async def _resolve_or_mint(ctx: StageContext, item: dict[str, Any]) -> Outcome:
                 ALREADY_PLACED.format(int(found)),
                 detail={"name": str(item.get("Name") or ""), "title_id": int(found)},
             )
+        # Decision 558: a row minted for a wish arrives as a title Spielplan acquired.
+        await ctx.conn.execute(
+            "UPDATE title SET origin = 'acquired', updated_at = now() WHERE id = $1 AND origin = 'wished'",
+            int(found),
+        )
         return advance({"identified": "resolved to an existing title"}, title_id=int(found))
 
     kind = resolve.kind_of(item)
