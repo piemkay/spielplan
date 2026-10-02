@@ -30,6 +30,8 @@
   let regions = $state([]);
   let loading = $state(true);
   let error = $state('');
+  // The query the grid last asked with: the twist row follows it, not every keystroke.
+  let asked = $state.raw(null);
 
   const films = $derived(recipe.films);
   const said = $derived(sentence(films));
@@ -69,6 +71,7 @@
 
   async function load() {
     const mine = ++seq;
+    asked = query;
     loading = true;
     error = '';
     try {
@@ -77,7 +80,7 @@
       for (const page of pages) {
         for (const film of page.recipe.ingredients) remember({ ...film, id: film.title_id });
       }
-      regions = pages.map((page, i) => ({ kind: kinds[i], page, cells: page.items, beyond: null, weak: false, opened: [] }));
+      regions = pages.map((page, i) => ({ kind: kinds[i], page, cells: page.items, beyond: null, weak: false, opened: [], busy: false }));
       if (!folded) regions.forEach((r, i) => r.page.beyond_total && openBeyond(i));
     } catch (err) {
       if (mine === seq) {
@@ -92,8 +95,12 @@
   async function more(i) {
     const mine = seq;
     const r = regions[i];
+    if (r.busy) return;
+    r.busy = true;
     const page = await read(r.kind, 'library', rowsIn(r.cells)).catch(() => null);
-    if (mine === seq && page) r.cells = [...r.cells, ...page.items];
+    if (mine !== seq) return;
+    r.busy = false;
+    if (page) r.cells = [...r.cells, ...page.items];
   }
 
   async function openBeyond(i) {
@@ -165,8 +172,8 @@
     {/if}
   </div>
 
-  {#if twistsOffered(films) && !asks}
-    <TwistRow kind={kinds[0]} {query} />
+  {#if asked && twistsOffered(films) && !asks}
+    <TwistRow kind={kinds[0]} query={asked} />
   {/if}
 
   {#if error}
@@ -207,20 +214,20 @@
           {/if}
           {#if split && r.cells.some((c) => !strong(c))}
             {#if r.weak}
-              <h3 class="list-header sub" data-testid="recipe-weak-head">Might also fit</h3>
+              <h3 class="list-header sub" data-testid="recipe-weak-head">{page.strong_total ? 'Might also fit' : 'Might fit'}</h3>
               <p class="footnote ours">Our read · less certain</p>
               <div class="grid">{@render cells(r, r.cells.filter((c) => !strong(c)))}</div>
             {:else}
               <div class="more">
                 <button class="btn-secondary" data-testid="recipe-weak" onclick={() => (r.weak = true)}>
-                  Show {(page.total - page.strong_total).toLocaleString()} more that might fit
+                  Show {(page.total - page.strong_total).toLocaleString()}{page.strong_total ? ' more' : ''} that might fit
                 </button>
               </div>
             {/if}
           {/if}
           {#if rowsIn(r.cells) < page.total && (!split || r.weak || r.cells.every(strong))}
             <div class="more">
-              <button class="btn-secondary" onclick={() => more(i)}>
+              <button class="btn-secondary" onclick={() => more(i)} disabled={r.busy}>
                 Show {(page.total - rowsIn(r.cells)).toLocaleString()} more
               </button>
             </div>

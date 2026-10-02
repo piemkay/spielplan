@@ -67,8 +67,9 @@ async function open(props = {}) {
   await settle();
 }
 
-const reads = () =>
-  vi.mocked(get).mock.calls.map(([p]) => new URL(p, 'http://localhost/api/')).filter((u) => u.pathname.endsWith('/mix/titles'));
+const asks = (route) =>
+  vi.mocked(get).mock.calls.map(([p]) => new URL(p, 'http://localhost/api/')).filter((u) => u.pathname.endsWith(route));
+const reads = () => asks('/mix/titles');
 const byTestId = (id) => target.querySelector(`[data-testid="${id}"]`);
 const text = (id) => byTestId(id)?.textContent.replace(/\s+/g, ' ').trim();
 
@@ -107,9 +108,11 @@ describe("a recipe's reads", () => {
         await settle();
       }
       expect(reads()).toHaveLength(1);
+      expect(asks('/mix/twists'), 'the twist row waits with the grid').toHaveLength(1);
       await vi.advanceTimersByTimeAsync(220);
       await settle();
       expect(reads().map((u) => u.searchParams.get('q'))).toEqual([null, 'gl']);
+      expect(asks('/mix/twists').map((u) => u.searchParams.get('q'))).toEqual([null, 'gl']);
     } finally {
       vi.useRealTimers();
     }
@@ -222,12 +225,32 @@ describe('the grid', () => {
     expect(target.querySelectorAll('.card-wrap')).toHaveLength(3);
   });
 
+  it('says "Show N that might fit" when no match is quoted', async () => {
+    answers = () => page({ total: 2, library_total: 2, strong_total: 0, items: [card(1, { match: 'weak' }), card(2, { match: 'weak' })] });
+    await open();
+    expect(text('recipe-weak')).toBe('Show 2 that might fit');
+    byTestId('recipe-weak').click();
+    flushSync();
+    expect(text('recipe-weak-head')).toBe('Might fit');
+  });
+
   it('captions each poster and hands the card its why line', async () => {
     const onSelect = vi.fn();
     await open({ onSelect });
     expect(target.querySelector('[data-testid="recipe-caption"]').textContent.trim()).toBe('From Knives Out: murder mystery');
     target.querySelector('.card-wrap').click();
     expect(onSelect.mock.calls[0][0]).toMatchObject({ id: 1, whyLine: 'From Knives Out: murder mystery' });
+  });
+
+  it('asks for the next page once, however often "Show N more" is pressed', async () => {
+    answers = (q) => page({ total: 3, library_total: 3, items: q.get('offset') ? [card(3)] : [card(1), card(2)] });
+    await open();
+    const next = [...target.querySelectorAll('.more button')].find((b) => b.textContent.includes('Show 1 more'));
+    next.click();
+    next.click();
+    await settle();
+    expect(reads().map((u) => u.searchParams.get('offset'))).toEqual([null, '2']);
+    expect(target.querySelectorAll('.card-wrap')).toHaveLength(3);
   });
 
   it('is Best match first, with For you one tap away as the server echoes it', async () => {

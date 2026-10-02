@@ -109,6 +109,19 @@ describe('the film picker on a desktop', () => {
     expect(homeFilters.like).toEqual([]);
   });
 
+  it('says nothing matched only once the answer is in', async () => {
+    vi.mocked(get).mockImplementation(async (path) => ({ items: path.includes('q=zz') ? [] : FOUND }));
+    open({ inline: true });
+    field().focus();
+    field().value = 'zz';
+    field().dispatchEvent(new Event('input', { bubbles: true }));
+    flushSync();
+    expect(target.textContent).not.toContain('No film found');
+    await vi.advanceTimersByTimeAsync(220);
+    flushSync();
+    expect(target.querySelector('[role="dialog"]').textContent).toContain('No film found for zz.');
+  });
+
   it('refuses a fifth film, saying why', async () => {
     for (const id of [1, 2, 3, 4]) remember({ id, name: `Film ${id}` });
     homeFilters.like = ['1', '2', '3', '4'];
@@ -134,6 +147,8 @@ describe('the film picker on a phone', () => {
     expect(homeFilters.less).toEqual(['245']);
     await type('far');
     expect(rows()).toHaveLength(3);
+    key('Enter');
+    expect(homeFilters.like, 'the search key takes no film').toEqual([]);
   });
 });
 

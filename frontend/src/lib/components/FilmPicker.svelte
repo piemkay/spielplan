@@ -14,6 +14,8 @@
 
   let q = $state('');
   let found = $state([]);
+  // The words `found` answers, so "No film found" waits for the answer.
+  let answered = $state('');
   let error = $state('');
   let active = $state(0);
   let focused = $state(false);
@@ -22,7 +24,9 @@
   const films = $derived(recipe.films);
   const full = $derived(films.length >= MAX_FILMS);
   const query = $derived(q.trim());
-  const listed = $derived(inline ? focused && Boolean(query) : open);
+  const listed = $derived(
+    inline ? focused && Boolean(query) && (found.length > 0 || answered === query || full || Boolean(error)) : open
+  );
 
   let seq = 0;
   let timer;
@@ -45,6 +49,7 @@
       const res = await get(`/mix/films${qs({ q: words, limit: 8 })}`);
       if (mine !== seq) return;
       found = res.items ?? [];
+      answered = words;
       error = '';
       active = 0;
     } catch (err) {
@@ -60,7 +65,9 @@
     error = addFilm(film, sign) ?? '';
   }
 
+  // A phone's search key only searches: no row is highlighted there to take.
   function onKey(event) {
+    if (!inline) return;
     if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
       event.preventDefault();
       const step = event.key === 'ArrowDown' ? 1 : -1;
@@ -129,8 +136,10 @@
         </div>
       {/each}
     </div>
-  {:else}
-    <p class="footnote note">{query ? `No film found for ${query}.` : 'Type the name of a film.'}</p>
+  {:else if !query}
+    <p class="footnote note">Type the name of a film.</p>
+  {:else if answered === query}
+    <p class="footnote note">No film found for {query}.</p>
   {/if}
   {#if inline && found.length}
     <p class="footnote note">Enter likes the highlighted film, Shift+Enter makes it less like.</p>
