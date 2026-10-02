@@ -188,6 +188,20 @@ describe("a film's sheet", () => {
     expect(lendNote(films[1], films)).toBe(
       'However many parts you take, Fargo counts as one of the 2 films that can lend parts. Obsession is the other.'
     );
+    expect(lendNote(films[0], films.slice(0, 2))).toBe(
+      'However many parts you take, Knives Out counts as one of the 2 films that can lend parts. Fargo is the other.'
+    );
+    expect(lendNote(films[0], films.slice(0, 1))).toBe(
+      'However many parts you take, Knives Out counts as one of the 2 films that can lend parts.'
+    );
+  });
+
+  it('names the two films that lend once a third cannot, and how to free a place', () => {
+    const films = [as(OBSESSION, 'like', ['mood']), as(FARGO, 'like', ['setting']), as(WARS, 'less')];
+    expect(lendNote(films[2], films)).toBe(
+      'Obsession and Fargo are the 2 films that can lend parts. To take parts of Star Wars, first choose ' +
+        'All of Obsession or All of Fargo.'
+    );
   });
 
   it('disables a thin group with its term, and every group once two other films lend', () => {

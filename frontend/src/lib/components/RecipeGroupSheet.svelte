@@ -49,6 +49,8 @@
       .join(' · ')
   );
 
+  const labels = (terms) => terms.map((t) => t.label).join(', ');
+
   function toggle(key) {
     sel = sel.includes(key) ? sel.filter((g) => g !== key) : [...sel, key];
   }
@@ -92,8 +94,10 @@
   <div class="rows" class:card={!desktop} role="group" aria-label="What to take from {film.name}">
     <button class="row all" role="checkbox" aria-checked={sel.length === 0} onclick={() => (sel = [])}>
       <span class="thumb small" aria-hidden="true"><RatePoster title={{ title_id: film.id, name: film.name }} showName={false} /></span>
-      <span class="name">All of {film.name}</span>
-      <span class="preview">The whole film, every part</span>
+      <span class="lines">
+        <span class="name">All of {film.name}</span>
+        <span class="preview">The whole film, every part</span>
+      </span>
       <span class="radio" aria-hidden="true"></span>
     </button>
     {#if !rows.length}
@@ -102,7 +106,6 @@
     {#each rows as r (r.group)}
       {@const state = groupRow(film, r, films)}
       {@const on = sel.includes(r.group)}
-      {@const all = [...r.quoted, ...r.inferred]}
       {@const colour = GROUPS.find((g) => g.key === r.group).colour}
       <div class="group" class:on data-testid="recipe-group">
         <button
@@ -113,9 +116,17 @@
           onclick={() => !state.disabled && toggle(r.group)}
         >
           <span class="dot" style:--c={colour} aria-hidden="true"></span>
-          <span class="name">{r.name}</span>
-          <span class="preview">
-            {#if state.reason}<span class="reason">{state.reason}</span>{:else if !on}{all.map((t) => t.label).join(', ')}{/if}
+          <span class="lines">
+            <span class="name">{r.name}</span>
+            {#if state.reason}
+              <span class="reason">{state.reason}</span>
+            {:else if !on}
+              <span class="preview"
+                >{labels(r.quoted)}{#if r.inferred.length}<span class="read"
+                    >{r.quoted.length ? ', ' : ''}{labels(r.inferred)}</span
+                  >{/if}</span
+              >
+            {/if}
           </span>
           <span class="box" aria-hidden="true">
             {#if on}<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><path d="m5 12.5 4.5 4.5L19 7.5" /></svg>{/if}
@@ -255,29 +266,41 @@
     flex-direction: column;
     gap: 2px;
   }
+  /* A phone's rows are two lines, the name over its terms or its reason (boards MA-2, MA-5). */
   .rows.card {
-    border-radius: var(--r-md);
-    background: var(--surface-1);
+    gap: 0;
+    padding: 0;
+    overflow: hidden;
+  }
+  .card > * + * {
+    box-shadow: inset 0 0.5px 0 var(--separator);
   }
   .desktop .rows {
     padding: 0 6px;
   }
   .group.on {
-    border-radius: var(--r-sm);
     background: var(--surface-2);
   }
   .row {
     width: 100%;
-    min-height: 48px;
+    min-height: 52px;
     display: flex;
     align-items: center;
-    gap: 10px;
-    padding: 6px 10px;
+    gap: 12px;
+    padding: 8px 16px;
     border: none;
-    border-radius: var(--r-sm);
     background: none;
     color: var(--text);
     text-align: left;
+  }
+  .desktop .row {
+    min-height: 48px;
+    gap: 10px;
+    padding: 6px 10px;
+  }
+  .desktop .row,
+  .desktop .group.on {
+    border-radius: var(--r-sm);
   }
   .all[aria-checked='true'] {
     background: var(--surface-2);
@@ -285,14 +308,30 @@
   .row[aria-disabled='true'] {
     cursor: default;
   }
+  .lines {
+    flex: 1;
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+  }
   .name {
+    font-size: var(--fs-body);
+    line-height: 22px;
+  }
+  .desktop .lines {
+    flex-direction: row;
+    align-items: center;
+    gap: 10px;
+  }
+  .desktop .name {
     flex: none;
     width: 104px;
     font-size: var(--fs-subhead);
     line-height: 20px;
     font-weight: 500;
   }
-  .all .name {
+  .desktop .all .name {
     width: auto;
     max-width: 50%;
     overflow: hidden;
@@ -302,18 +341,28 @@
   .row[aria-disabled='true'] .name {
     color: var(--text-3);
   }
-  .preview {
-    flex: 1;
+  .preview,
+  .reason {
     min-width: 0;
+    font-size: var(--fs-footnote);
+    line-height: 18px;
+  }
+  .desktop .preview,
+  .desktop .reason {
+    flex: 1;
+  }
+  .preview {
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
-    font-size: var(--fs-footnote);
-    line-height: 18px;
     color: var(--text-2);
   }
+  .read,
   .reason {
     color: var(--text-3);
+  }
+  .reason {
+    text-wrap: pretty;
   }
   .dot {
     flex: none;
@@ -367,6 +416,9 @@
     flex-direction: column;
     align-items: flex-start;
     gap: 6px;
+    padding: 0 16px 14px 44px;
+  }
+  .desktop .detail {
     padding: 0 10px 10px 36px;
   }
   .terms {
@@ -406,6 +458,9 @@
   .foot {
     margin: 0;
     padding: 12px 4px 0;
+  }
+  .card .wait {
+    padding: 12px 16px;
   }
   .desktop .foot {
     padding: 10px 10px 8px;

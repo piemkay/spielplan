@@ -198,9 +198,16 @@ export function groupNote(film, groups, sign, films = fromParams()) {
 
 /** The sheet's foot: a film lending any number of groups is one of the two that may lend. */
 export function lendNote(film, films = fromParams()) {
-  const other = lenders(films).find((x) => x.id !== film.id);
+  const others = lenders(films.filter((x) => x.id !== film.id));
+  if (!film.groups.length && others.length >= MAX_LENDING) {
+    const names = others.map(nameOf);
+    return (
+      `${join(names, false)} are the ${MAX_LENDING} films that can lend parts. To take parts of ` +
+      `${nameOf(film)}, first choose ${names.map((n) => `All of ${n}`).join(' or ')}.`
+    );
+  }
   const line = `However many parts you take, ${nameOf(film)} counts as one of the ${MAX_LENDING} films that can lend parts.`;
-  return other ? `${line} ${nameOf(other)} is the other.` : line;
+  return others.length ? `${line} ${nameOf(others[0])} is the other.` : line;
 }
 
 const lendingFull = (others) => `${join(others.map(nameOf), false)} already lend parts`;

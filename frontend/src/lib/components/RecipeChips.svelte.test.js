@@ -136,6 +136,25 @@ describe("a film's sheet (decision 560)", () => {
     click(chipBody('Knives Out'));
     expect(checkbox('Themes').getAttribute('aria-disabled')).toBe('true');
     expect(checkbox('Themes').textContent).toContain('Fargo and Obsession already lend parts');
+    expect(dialog().querySelector('.foot').textContent).toBe(
+      'Fargo and Obsession are the 2 films that can lend parts. To take parts of Knives Out, first choose ' +
+        'All of Fargo or All of Obsession.'
+    );
+  });
+
+  it("on a phone puts each group's terms, our read dimmer, or its reason on a line under its name", () => {
+    Object.defineProperty(window, 'innerWidth', { value: 390, configurable: true });
+    open(['245', '275']);
+    click(chipBody('Fargo'));
+    expect(dialog().querySelector('.desktop')).toBeNull();
+    const mood = checkbox('Mood');
+    expect(mood.querySelector('.lines > .name').textContent).toBe('Mood');
+    expect(mood.querySelector('.lines > .preview').textContent).toBe(
+      'dark comedy, deadpan & dry, absurdist, dark, bleak, witty, macabre'
+    );
+    expect(mood.querySelector('.preview .read').textContent).toBe(', absurdist, dark, bleak, witty, macabre');
+    expect(checkbox('Pace').querySelector('.lines > .reason').textContent).toBe('Only one term here: slow-paced');
+    expect(checkbox('All of Fargo').querySelector('.lines > .preview').textContent).toBe('The whole film, every part');
   });
 
   it('relabels with Less like, and Apply moves the film to the less side', () => {
