@@ -47,6 +47,11 @@
     q = '';
     found = [];
     asked = '';
+    // A search still pending when it closes must not answer the next opening.
+    return () => {
+      clearTimeout(timer);
+      seq++;
+    };
   });
 
   $effect(() => {
@@ -63,10 +68,11 @@
       return;
     }
     timer = setTimeout(async () => {
-      const people = await searchPeople(query, kinds).catch(() => []);
+      // A failed read is no answer: it must not say that no one matches.
+      const people = await searchPeople(query, kinds).catch(() => null);
       if (mine !== seq) return;
-      found = people;
-      asked = query;
+      found = people ?? [];
+      asked = people ? query : '';
     }, DEBOUNCE_MS);
   }
 

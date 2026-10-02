@@ -131,6 +131,33 @@ describe('the people picker', () => {
     expect(target.querySelector('[data-testid="people-none"]').textContent).toBe('No one matches zzq');
   });
 
+  it('does not say nobody matches when the search fails', async () => {
+    vi.mocked(get).mockRejectedValueOnce(new Error('offline'));
+    open();
+    type('vill');
+    await wait(220);
+    expect(target.querySelector('[data-testid="people-none"]')).toBeNull();
+    expect(rows()).toHaveLength(0);
+  });
+
+  it('forgets a search still pending when it closes', async () => {
+    Object.defineProperty(window, 'innerWidth', { value: 1280, configurable: true });
+    const props = $state({ open: true, kinds: ['movie'], chosen: [], anchor, onAdd: vi.fn(), onRemove: vi.fn(), onClose: vi.fn() });
+    app = mount(PeoplePicker, { target, props });
+    flushSync();
+    type('vill');
+    await wait(100);
+    props.open = false;
+    flushSync();
+    await wait(50);
+    props.open = true;
+    flushSync();
+    await wait(300);
+    expect(get).not.toHaveBeenCalled();
+    expect(field().value).toBe('');
+    expect(rows()).toHaveLength(0);
+  });
+
   it('is a sheet on a phone and a popover under its cell on a desktop', () => {
     open();
     expect(target.querySelector('[aria-modal="true"]')).not.toBeNull();
