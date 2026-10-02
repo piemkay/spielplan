@@ -159,6 +159,10 @@ describe('a search with Only in library off answers in three sections (decision 
     expect(reads(seen, '/titles?').at(-1)).toContain('offset=6');
     expect(names('[data-testid="beyond-catalogue"]')).toHaveLength(12);
     expect(el('[data-testid="beyond-catalogue-more"]').textContent.trim()).toBe('Show 2 more');
+
+    // A page of the last query must not land on the next one's list.
+    await type('dunes');
+    expect(el('[data-testid="beyond-catalogue-more"]').disabled).toBe(true);
   });
 
   it('shows none of it while Only in library is on', async () => {
@@ -168,7 +172,7 @@ describe('a search with Only in library off answers in three sections (decision 
     await type('dune');
     await wait(1000);
     expect(el('[data-testid="library-section-head"]')).toBeNull();
-    expect(el('[data-testid="search-beyond"]')).toBeNull();
+    expect(el('[data-testid="beyond-sections"]')).toBeNull();
     expect(reads(seen, '/wish/tmdb')).toEqual([]);
   });
 

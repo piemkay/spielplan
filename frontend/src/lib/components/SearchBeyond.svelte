@@ -98,7 +98,7 @@
   }
 </script>
 
-<div class="beyond" data-testid="search-beyond">
+<div class="beyond" data-testid="beyond-sections">
   <section class="part" data-testid="beyond-catalogue">
     <header class="head">
       <h2 class="section-title">More in Spielplan</h2>
@@ -124,7 +124,7 @@
             <button
               class="btn-secondary"
               data-testid="beyond-catalogue-more"
-              disabled={more.loading}
+              disabled={more.loading || more.query !== moreAsk}
               onclick={() => loadMore(moreSeq, more.query, true)}
             >
               {more.loading ? 'Loading…' : `Show ${(more.total - more.items.length).toLocaleString()} more`}
