@@ -13,7 +13,7 @@
   let { title, tiers = [], current = null, onPlace, onClose } = $props();
 
   // The placed shelf stays lit this long before the sheet closes, as on Rate.
-  const COMMIT_MS = 240;
+  const COMMIT_MS = 150;
 
   let open = $state(true);
   let shelves = $state(null);

@@ -5,17 +5,23 @@
 import { flushSync, mount, tick, unmount } from 'svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const nav = vi.hoisted(() => ({ goto: null }));
+const nav = vi.hoisted(() => ({ goto: null, before: null }));
 vi.mock('$app/navigation', () => {
   nav.goto = vi.fn();
-  return { afterNavigate: vi.fn(), goto: nav.goto, pushState: vi.fn() };
+  return {
+    afterNavigate: vi.fn(),
+    beforeNavigate: (fn) => (nav.before = fn),
+    goto: nav.goto,
+    pushState: vi.fn()
+  };
 });
 
 import SetupPage from './+page.svelte';
 
+const HINT = "Films you've watched first, then popular ones. Tap the ones you remember well.";
 const STEPS = [
-  { tier: 6, word: 'All-time favourite', hint: 'Highest rated first. Tap the ones you remember well.' },
-  { tier: 5, word: 'Loved it', hint: 'Highest rated first. Tap the ones you remember well.' }
+  { tier: 6, word: 'All-time favourite', hint: HINT },
+  { tier: 5, word: 'Loved it', hint: HINT }
 ];
 const film = (id, name, seen = false) => ({ id, name, year: 2000, poster_path: null, seen });
 const FILMS = [film(1, 'Heat', true), film(2, 'Zodiac'), film(3, 'Sicario')];
@@ -25,7 +31,13 @@ let app;
 let replies;
 let posted;
 
+/** The window's width, read by the page as it mounts. */
+function width(px) {
+  Object.defineProperty(window, 'innerWidth', { value: px, configurable: true, writable: true });
+}
+
 beforeEach(() => {
+  width(390);
   posted = [];
   replies = {
     '/api/ladder/setup': () => ({ done: false, earlier_ratings: 4, steps: STEPS }),
@@ -105,7 +117,7 @@ describe('the set-up, step by step', () => {
     await open();
     expect(target.textContent).toContain('Step 1 of 2');
     expect($('setup-step').textContent).toBe('All-time favourite');
-    expect(target.textContent).toContain('Highest rated first. Tap the ones you remember well.');
+    expect(target.textContent).toContain(HINT);
     expect(target.textContent).not.toMatch(/\bS\b|A\+/);
     expect(all('setup-film').map((el) => el.getAttribute('aria-label'))).toEqual(['Heat', 'Zodiac', 'Sicario']);
     expect($('setup-find').textContent.trim()).toBe('A film you have seen');
@@ -129,6 +141,7 @@ describe('the set-up, step by step', () => {
   it('toggles a pick, says None for an empty step, and shows the step above as the strip', async () => {
     await open();
     expect($('setup-next').textContent.trim()).toBe('None for All-time favourite');
+    expect($('setup-undo').parentElement.contains($('setup-next')), 'on a phone it is in the dock').toBe(false);
     await click(cell('Heat'));
     expect(cell('Heat').getAttribute('aria-pressed')).toBe('true');
     expect($('setup-next').textContent.trim()).toBe('Next');
@@ -241,5 +254,65 @@ describe('the set-up, step by step', () => {
     );
     expect(document.querySelector('a[href="/rate"]').textContent).toBe('Start rating');
     expect(document.querySelector('a[href="/"]').textContent).toBe('Done');
+  });
+});
+
+describe('the set-up on a desktop', () => {
+  it('puts Next and Finish in the top row beside Undo, once each, with the reason Finish waits', async () => {
+    width(1280);
+    await open();
+    const beside = (id) => $('setup-undo').parentElement.contains($(id));
+    expect(all('setup-next')).toHaveLength(1);
+    expect(beside('setup-next')).toBe(true);
+    expect($('setup-next').textContent.trim()).toBe('None for All-time favourite');
+
+    await click(cell('Heat'));
+    await click($('setup-next'));
+    expect(all('setup-finish')).toHaveLength(1);
+    expect(beside('setup-finish')).toBe(true);
+    const finish = /** @type {HTMLButtonElement} */ ($('setup-finish'));
+    expect(finish.disabled, 'a pick on the step above is on the ladder').toBe(false);
+
+    await click($('setup-undo'));
+    await click(cell('Heat'));
+    await click($('setup-next'));
+    expect(/** @type {HTMLButtonElement} */ ($('setup-finish')).disabled).toBe(true);
+    expect(document.getElementById($('setup-finish').getAttribute('aria-describedby')).textContent).toBe(
+      'Put at least one film on your ladder to finish.'
+    );
+
+    await click(cell('Zodiac'));
+    await click($('setup-finish'));
+    expect(all('setup-done')).toHaveLength(1);
+    expect(document.querySelectorAll('a[href="/rate"]'), 'Start rating, once').toHaveLength(1);
+  });
+
+  it('asks before a tap on the rail drops the picks, then goes where it was tapped', async () => {
+    width(1280);
+    await open();
+    nav.goto.mockClear();
+    const rail = async (path) => {
+      const tap = { type: 'link', to: { url: new URL(path, 'http://localhost') }, cancel: vi.fn() };
+      nav.before(tap);
+      await settle();
+      return tap;
+    };
+    const sheet = () => document.querySelector('[role="dialog"]');
+    const option = (label) => [...sheet().querySelectorAll('button')].find((b) => b.textContent.includes(label));
+
+    expect((await rail('/rank')).cancel, 'nothing picked, nothing to lose').not.toHaveBeenCalled();
+    await click(cell('Heat'));
+    expect((await rail('/rank')).cancel).toHaveBeenCalled();
+    expect(sheet().textContent).toContain("Leave the set-up? Your picks so far aren't kept.");
+    await click(option('Cancel'));
+    expect(nav.goto).not.toHaveBeenCalled();
+
+    await click($('setup-leave'));
+    await click(option('Leave the set-up'));
+    expect(nav.goto, 'Leave itself still goes back to Rate').toHaveBeenLastCalledWith('/rate');
+
+    await rail('/rank');
+    await click(option('Leave the set-up'));
+    expect(nav.goto).toHaveBeenLastCalledWith(new URL('http://localhost/rank'));
   });
 });

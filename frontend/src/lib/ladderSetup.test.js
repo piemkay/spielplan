@@ -20,10 +20,11 @@ import {
 } from './ladderSetup.svelte.js';
 import { homeKept } from './home.svelte.js';
 
+const HINT = 'Popular films first. Tap the ones you remember well.';
 const STEPS = [
-  { tier: 6, word: 'All-time favourite', hint: 'Highest rated first.' },
-  { tier: 5, word: 'Loved it', hint: 'Highest rated first.' },
-  { tier: 0, word: 'Hated it', hint: 'Lowest rated first.' }
+  { tier: 6, word: 'All-time favourite', hint: HINT },
+  { tier: 5, word: 'Loved it', hint: HINT },
+  { tier: 0, word: 'Hated it', hint: HINT }
 ];
 
 const film = (id, seen = false) => ({ id, name: `Film ${id}`, year: 2000, poster_path: null, seen });

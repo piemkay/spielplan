@@ -1,5 +1,6 @@
-"""The ladder's set-up (§6.1, decision 547): its steps, each step's films in platform-score order, and the
-finish that is the member's cut-over (decision 537). Needs TEST_DATABASE_URL."""
+"""The ladder's set-up (§6.1, decisions 547 and 556): its steps, each step's films (the household's watched
+films first, a widely seen film every fourth slot), and the finish that is the member's cut-over
+(decision 537). Needs TEST_DATABASE_URL."""
 
 from __future__ import annotations
 
@@ -7,53 +8,66 @@ import pytest
 
 from spielplan.ledger import ladder, observations
 from spielplan.rate import setup
-from tests.helpers import household
+from tests.helpers import household, insert_user
 
 BUNDLE = "test-setup-v1"
 
-# Well-known films (crowd support >= 1000), IMDb 9.0 down to 5.0: an exact 1/8 between neighbours.
+# Widely seen by IMDb's count, IMDb 9.0 down to 5.0, the lower scored with more votes.
 KNOWN = tuple(range(1, 10))
-# Less known, each scored another way, the first above every well-known film.
-OBSCURE_IMDB, OBSCURE_TMDB, OBSCURE_BOTH, OBSCURE_CRITIC = 11, 12, 13, 14
-# No platform score at all: the better known first.
-UNSCORED_KNOWN, UNSCORED = 21, 22
+# Widely seen by TMDB's count alone, 2,000 standing for 100,000; scored between films 6 and 7.
+TMDB_WIDE = 10
+# Less seen: just under the line by IMDb's count and by TMDB's, a small TMDB count, IMDb's score and
+# count winning over TMDB's, and neither IMDb nor TMDB.
+OBSCURE_IMDB, TMDB_SHORT, OBSCURE_TMDB, OBSCURE_BOTH, OBSCURE_CRITIC = 11, 15, 12, 13, 14
+UNSCORED_A, UNSCORED_B = 21, 22
 SERIES = 31
+
+WIDE_AT_TOP = [1, 2, 3, 4, 5, 6, TMDB_WIDE, 7, 8, 9]
+LESS_SEEN_AT_TOP = [TMDB_SHORT, OBSCURE_IMDB, OBSCURE_TMDB, OBSCURE_BOTH, OBSCURE_CRITIC]
+TOP = WIDE_AT_TOP + LESS_SEEN_AT_TOP + [UNSCORED_A, UNSCORED_B]
+
+TAP = " Tap the ones you remember well."
 
 
 async def _seed(db) -> None:
     await db.execute(
         "INSERT INTO artifact_bundle (version, manifest) VALUES ($1, '{}'::jsonb)", BUNDLE
     )
-    films = KNOWN + (OBSCURE_IMDB, OBSCURE_TMDB, OBSCURE_BOTH, OBSCURE_CRITIC, UNSCORED_KNOWN, UNSCORED)
+    films = KNOWN + (TMDB_WIDE, OBSCURE_IMDB, TMDB_SHORT, OBSCURE_TMDB, OBSCURE_BOTH, OBSCURE_CRITIC)
+    films += (UNSCORED_A, UNSCORED_B)
     for title_id in films + (SERIES,):
         await db.execute(
             "INSERT INTO title (id, kind, name, year, is_owned) VALUES ($1, $2, $3, 2000, $4)",
             title_id, "series" if title_id == SERIES else "movie", f"Film {title_id}",
-            title_id != UNSCORED,
+            title_id != UNSCORED_B,
         )
-    support = {t: 5000 for t in KNOWN} | {UNSCORED_KNOWN: 2000, UNSCORED: 50, SERIES: 9000}
-    for title_id in films + (SERIES,):
+    # Crowd support the set-up no longer reads, highest on the least seen.
+    for title_id in films:
         await db.execute(
             "INSERT INTO title_prior (title_id, bundle_version, b, b_i, item_n, gate, e_source) "
             "VALUES ($1, $2, 0.5, 0.5, $3, 0.9, 'backbone')",
-            title_id, BUNDLE, support.get(title_id, 100),
+            title_id, BUNDLE, 100 * title_id,
         )
-    rows = [(t, "imdb", "user_score", 9.0 - 0.5 * i, 10.0) for i, t in enumerate(KNOWN)]
+    rows = [
+        (t, "imdb", "user_score", 9.0 - 0.5 * i, 10.0, 200_000 + 10_000 * i) for i, t in enumerate(KNOWN)
+    ]
     rows += [
-        (OBSCURE_IMDB, "imdb", "user_score", 9.5, 10.0),
-        (OBSCURE_TMDB, "tmdb", "user_score", 7.0, 10.0),
-        # IMDb wins over TMDB, so this one sits low.
-        (OBSCURE_BOTH, "imdb", "user_score", 4.0, 10.0),
-        (OBSCURE_BOTH, "tmdb", "user_score", 9.9, 10.0),
-        # Neither IMDb nor TMDB: the mean of the others, each over its own scale (0.30).
-        (OBSCURE_CRITIC, "metacritic", "critic_score", 20.0, 100.0),
-        (OBSCURE_CRITIC, "rottentomatoes", "audience_score", 40.0, 100.0),
-        (OBSCURE_CRITIC, "tmdb", "popularity", 99.0, None),
-        (SERIES, "imdb", "user_score", 9.9, 10.0),
+        (TMDB_WIDE, "tmdb", "user_score", 6.2, 10.0, 2_000),
+        (OBSCURE_IMDB, "imdb", "user_score", 9.5, 10.0, 99_999),
+        (TMDB_SHORT, "tmdb", "user_score", 9.8, 10.0, 1_999),
+        # Film 5's score, with fewer votes.
+        (OBSCURE_TMDB, "tmdb", "user_score", 7.0, 10.0, 100),
+        (OBSCURE_BOTH, "imdb", "user_score", 4.0, 10.0, 500),
+        (OBSCURE_BOTH, "tmdb", "user_score", 9.9, 10.0, 10_000),
+        # The mean of the others, each over its own scale (0.30), and no count.
+        (OBSCURE_CRITIC, "metacritic", "critic_score", 20.0, 100.0, None),
+        (OBSCURE_CRITIC, "rottentomatoes", "audience_score", 40.0, 100.0, None),
+        (OBSCURE_CRITIC, "tmdb", "popularity", 99.0, None, None),
+        (SERIES, "imdb", "user_score", 9.9, 10.0, 900_000),
     ]
     await db.executemany(
-        "INSERT INTO display.platform_rating (title_id, platform, metric, score, scale) "
-        "VALUES ($1, $2, $3, $4, $5)",
+        "INSERT INTO display.platform_rating (title_id, platform, metric, score, scale, votes) "
+        "VALUES ($1, $2, $3, $4, $5, $6)",
         rows,
     )
 
@@ -81,7 +95,17 @@ async def _order(client, step, **params):
     return [f["id"] for f in (await _films(client, step, limit=48, **params))["films"]]
 
 
-LESS_KNOWN_BY_SCORE = [OBSCURE_IMDB, OBSCURE_TMDB, OBSCURE_BOTH, OBSCURE_CRITIC]
+async def _mark(db, user_id, *title_ids, state="seen"):
+    await db.executemany(
+        "INSERT INTO user_title (user_id, title_id, state) VALUES ($1, $2, $3)",
+        [(user_id, t, state) for t in title_ids],
+    )
+
+
+async def _inactive(db) -> int:
+    olga = await insert_user(db, "olga")
+    await db.execute("UPDATE app_user SET is_active = false WHERE id = $1", olga)
+    return olga
 
 
 # --- the steps ------------------------------------------------------------------------------
@@ -98,12 +122,26 @@ async def test_the_steps_run_best_first_named_by_their_words_with_no_letter(hous
         "All-time favourite", "Loved it", "Liked it", "It was fine",
         "Not really for me", "Didn't like it", "Hated it",
     ]
-    tap = " Tap the ones you remember well."
-    assert [s["hint"] for s in steps] == (
-        ["Highest rated first." + tap] * 3 + ["From the middle." + tap]
-        + ["Lowest rated first." + tap] * 3
-    )
+    assert [s["hint"] for s in steps] == ["Popular films first." + TAP] * 7
     assert all(set(s) == {"tier", "word", "hint"} for s in steps)
+
+
+async def test_the_hint_says_whose_watched_films_lead_the_page(house):
+    db, patrick, jenny = house["db"], house["patrick_id"], house["jenny_id"]
+
+    async def hints():
+        return {s["hint"] for s in (await house["patrick"].get("/api/ladder/setup")).json()["steps"]}
+
+    await _mark(db, await _inactive(db), 1)
+    await _mark(db, jenny, SERIES, 3)
+    await _mark(db, patrick, 3, state="unseen")
+    assert await hints() == {"Popular films first." + TAP}, (
+        "an inactive member's film, a series and a film marked not seen lead nothing"
+    )
+    await _mark(db, jenny, 4)
+    assert await hints() == {"Films your household has watched first, then popular ones." + TAP}
+    await _mark(db, patrick, 5)
+    assert await hints() == {"Films you've watched first, then popular ones." + TAP}
 
 
 async def test_a_custom_set_has_a_step_per_label(house):
@@ -123,44 +161,98 @@ def test_each_step_opens_where_its_tier_begins_in_the_measured_shape():
     assert [setup.start_of(tier, 5) for tier in reversed(range(5))] == [0.0, 0.25, 0.5, 0.75, 1.0]
 
 
+def test_each_step_reads_its_tiers_slice_of_the_measured_shape():
+    assert [setup.band_of(tier, 7) for tier in reversed(range(7))] == [
+        (0.0, 0.08), (0.08, 0.25), (0.25, 0.5), (0.5, 0.75), (0.75, 0.9), (0.9, 0.97), (0.97, 1.0),
+    ]
+    assert [setup.band_of(tier, 5) for tier in reversed(range(5))] == [
+        (0.0, 0.2), (0.2, 0.4), (0.4, 0.6), (0.6, 0.8), (0.8, 1.0),
+    ]
+
+
 # --- the films ------------------------------------------------------------------------------
 
 
-async def test_the_top_step_lists_well_known_films_best_first_then_the_rest_then_no_score(house):
+async def test_widely_seen_films_come_before_the_less_seen_and_unscored_films_last(house):
     order = await _order(house["patrick"], 6)
-    assert order == list(KNOWN) + LESS_KNOWN_BY_SCORE + [UNSCORED_KNOWN, UNSCORED]
+    assert order == TOP, "100,000 votes, IMDb's or 50 times TMDB's, make a film widely seen"
     assert SERIES not in order, "the set-up is for films only"
 
 
-async def test_the_bottom_step_lists_each_group_lowest_first_and_no_score_still_last(house):
-    order = await _order(house["patrick"], 0)
-    assert order == list(reversed(KNOWN)) + LESS_KNOWN_BY_SCORE[::-1] + [UNSCORED_KNOWN, UNSCORED]
+async def test_a_step_reads_its_band_most_voted_first_then_the_films_nearest_it(house):
+    # Liked it reads 25-50% of the widely seen order: films 4 and 5, then 3 and 6 just outside it.
+    assert (await _order(house["patrick"], 4))[:4] == [5, 4, 3, 6]
 
 
-async def test_a_middle_step_opens_at_its_start_and_breaks_ties_toward_the_middle(house):
-    # A+ opens at 8%: the second-best well-known film is nearer it than the best.
-    assert (await _order(house["patrick"], 5))[:3] == [2, 1, 3]
-    # A opens at 25%, on the third; films 4 and 2 sit an eighth either side, 5 and 1 a quarter.
-    assert (await _order(house["patrick"], 4))[:9] == [3, 4, 2, 5, 1, 6, 7, 8, 9]
+async def test_own_watched_films_lead_then_another_members_with_a_widely_seen_one_every_fourth(house):
+    db = house["db"]
+    await _mark(db, house["patrick_id"], 5, OBSCURE_TMDB, UNSCORED_A)
+    await _mark(db, house["jenny_id"], OBSCURE_TMDB, 2, OBSCURE_CRITIC, UNSCORED_B)
+    order = await _order(house["patrick"], 6)
+    assert order[:12] == [
+        5, OBSCURE_TMDB, UNSCORED_A, 1,
+        2, OBSCURE_CRITIC, UNSCORED_B, 3,
+        4, 6, TMDB_WIDE, 7,
+    ], "more votes first on a tie, unscored last, and the widely seen fill in once the household's end"
+    assert order[12:] == [8, 9, TMDB_SHORT, OBSCURE_IMDB, OBSCURE_BOTH]
 
 
-async def test_picks_of_the_other_steps_are_left_out(house):
-    order = await _order(house["patrick"], 6, exclude=f"1,{OBSCURE_IMDB},{UNSCORED}")
-    assert order == list(KNOWN[1:]) + LESS_KNOWN_BY_SCORE[1:] + [UNSCORED_KNOWN]
+async def test_a_film_the_member_marked_not_seen_stays_with_the_crowd(house):
+    db = house["db"]
+    await _mark(db, house["jenny_id"], 2, 9)
+    await _mark(db, house["patrick_id"], 9, state="unseen")
+    assert await _order(house["patrick"], 6) == [2] + [t for t in TOP if t != 2]
 
 
-async def test_a_step_pages_twelve_at_a_time_and_says_when_the_list_ends(house):
-    client = house["patrick"]
+async def test_an_inactive_members_watched_films_do_not_count(house):
+    await _mark(house["db"], await _inactive(house["db"]), 9, 8)
+    assert await _order(house["patrick"], 6) == TOP
+
+
+async def test_the_bottom_step_opens_on_the_members_lowest_scored_watched_films(house):
+    await _mark(house["db"], house["patrick_id"], 3, 5, OBSCURE_TMDB)
+    assert (await _order(house["patrick"], 0))[:4] == [OBSCURE_TMDB, 5, 3, 9]
+
+
+async def test_a_wished_stub_never_shows(house):
+    db = house["db"]
+    await db.execute("ALTER TABLE title DROP CONSTRAINT IF EXISTS title_origin_check")
+    await db.execute(
+        "INSERT INTO title (id, kind, name, year, origin) VALUES (41, 'movie', 'Wished', 2020, 'wished')"
+    )
+    await db.execute(
+        "INSERT INTO display.platform_rating (title_id, platform, metric, score, scale, votes) "
+        "VALUES (41, 'imdb', 'user_score', 9.9, 10.0, 900000)"
+    )
+    await _mark(db, house["patrick_id"], 41)
+    assert await _order(house["patrick"], 6) == TOP
+
+
+async def test_a_step_pages_twelve_at_a_time_without_the_other_steps_picks(house):
+    db, client = house["db"], house["patrick"]
+    await _mark(db, house["patrick_id"], 1, 2, 3, 4)
+    await _mark(db, house["jenny_id"], 5, 6, 7, 8, 9, TMDB_WIDE, OBSCURE_IMDB)
     first = await _films(client, 6)
-    assert len(first["films"]) == 12 and first["more"] is True
-    rest = await _films(client, 6, offset=12)
-    assert len(rest["films"]) == 3 and rest["more"] is False
-    ids = [f["id"] for f in first["films"] + rest["films"]]
-    assert ids == await _order(client, 6)
-    film = first["films"][0]
-    assert set(film) == {
+    assert [f["id"] for f in first["films"]] == [
+        1, 2, 3, TMDB_SHORT, 4, OBSCURE_IMDB, 5, OBSCURE_TMDB, 6, TMDB_WIDE, 7, OBSCURE_BOTH,
+    ]
+    assert first["more"] is True
+    assert set(first["films"][0]) == {
         "id", "name", "original_name", "original_language", "year", "poster_path", "seen",
     }
+    rest = await _films(client, 6, offset=12)
+    assert [f["id"] for f in rest["films"]] == [8, 9, OBSCURE_CRITIC, UNSCORED_A, UNSCORED_B]
+    assert rest["more"] is False
+
+    # The picks leave before the slots are counted, so a page keeps its widely seen at 4, 8 and 12.
+    out = f"1,{TMDB_SHORT}"
+    first = await _films(client, 6, exclude=out)
+    assert [f["id"] for f in first["films"]] == [
+        2, 3, 4, OBSCURE_TMDB, OBSCURE_IMDB, 5, 6, OBSCURE_BOTH, TMDB_WIDE, 7, 8, OBSCURE_CRITIC,
+    ]
+    rest = await _films(client, 6, offset=12, exclude=out)
+    assert [f["id"] for f in rest["films"]] == [9, UNSCORED_A, UNSCORED_B]
+    assert rest["more"] is False
 
 
 async def test_a_film_carries_the_members_own_watched_mark(house):

@@ -147,7 +147,7 @@
         onclick={() => tap(i)}
       >
         {#each postersOf(s) as f (f.id)}
-          <span class="p" style:--i={i}><RatePoster title={f} showName={false} /></span>
+          <span class="p"><RatePoster title={f} showName={false} /></span>
         {/each}
         <span class="word">{s.word}</span>
       </button>
@@ -221,7 +221,7 @@
     flex: none;
     width: calc(var(--ph) * 11 / 16);
     height: var(--ph);
-    animation: fadeIn var(--dur-quick) var(--ease) calc(var(--i) * 24ms) both;
+    animation: fadeIn var(--dur-press) var(--ease) both;
   }
   .p :global(.poster) {
     height: 100%;
@@ -260,18 +260,14 @@
   .shelf.lit {
     background: var(--accent);
     transition-duration: 0ms;
-    animation: press 180ms var(--ease);
+    animation: press var(--dur-quick) var(--ease);
   }
   .lit .word {
     color: var(--on-accent);
     font-weight: 600;
   }
-  .lit .p:first-child {
-    animation: fadeIn var(--dur-quick) var(--ease) 60ms both;
-  }
   .deciding .shelf:not(.lit) {
     opacity: 0.4;
-    transition-delay: 90ms;
   }
   .looking .shelf:not(.lifted) {
     opacity: 0.4;

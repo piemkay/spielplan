@@ -38,7 +38,7 @@
 
 <article class="ladder" data-testid="rate-card" data-card-token={card.token}>
   {#key card.token}
-    <div class="film" style:--enter-x={back ? '-14px' : null}>
+    <div class="film" style:--enter-x={back ? '-8px' : null}>
       <button
         class="art"
         class:greyed={pending === 'not_seen'}
@@ -94,12 +94,12 @@
     margin: 0;
   }
   .film {
-    --enter-x: 14px;
+    --enter-x: 8px;
     --enter-s: 0.985;
     display: flex;
     gap: 16px;
     align-items: flex-start;
-    animation: enter 260ms var(--ease) backwards;
+    animation: enter var(--dur-quick) var(--ease) backwards;
   }
   .art {
     flex: none;
@@ -181,7 +181,6 @@
   }
   .unseen.placing {
     transform: scale(0.97);
-    transition-delay: 90ms;
   }
   .face {
     height: 32px;
@@ -200,7 +199,7 @@
   .unseen[aria-busy='true'] .face {
     background: var(--accent);
     color: var(--on-accent);
-    animation: pop 180ms var(--ease);
+    animation: pop var(--dur-quick) var(--ease);
   }
   /* `--spare`: what a one-line name leaves under the last shelf (the screen less the top row, 8px, the
      126px head, 16px, seven 72px shelves and the tab bar). A second line costs 21px, so the name takes

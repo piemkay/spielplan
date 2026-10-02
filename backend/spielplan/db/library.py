@@ -589,8 +589,9 @@ _PLATFORM_SCORE = f"""
      GROUP BY title_id
 """
 
-# The crowd support at which a film counts as well-known, as the Rate queue's copy reads it.
-WELL_KNOWN_ITEM_N = 1000
+# Decision 556: a film is widely seen at this many votes, and every fourth slot of a page is one.
+WIDELY_SEEN_VOTES = 100_000
+CROWD_EVERY = 4
 
 
 async def films_by_platform_score(
@@ -598,40 +599,64 @@ async def films_by_platform_score(
     *,
     user_id: int,
     start: float,
+    band: tuple[float, float],
     offset: int,
     limit: int,
     exclude: Sequence[int] = (),
 ) -> tuple[list[dict[str, Any]], bool]:
-    """Every film in the set-up's order (decision 547), and whether more follow the page: well-known
-    films first, then the rest, each by distance from `start` (0 = the highest score, 1 = the lowest)
-    with ties toward the middle; films with no score last. Rule 3: this orders a pick list and feeds
-    no model."""
+    """Every film in the set-up's order (decision 556) and whether more follow the page: the
+    household's watched films first, the person's own before another member's, each group from `start`
+    in its own score order (0 = the highest, 1 = the lowest); a widely seen film every fourth slot, read
+    in `band` of the score order over every film; either list fills the page once the other runs out.
+    Rule 3: this orders a pick list and feeds no model."""
     rows = await conn.fetch(
         f"""
         WITH score AS ({_PLATFORM_SCORE}),
+        co_seen AS (
+            SELECT DISTINCT o.title_id
+              FROM user_title o
+              JOIN app_user au ON au.id = o.user_id
+             WHERE o.user_id <> $1 AND o.state = 'seen'
+               AND au.is_active AND au.role IN ('admin', 'member')
+        ),
         pool AS (
-            SELECT t.id, t.name, t.original_name, t.original_language, t.year, t.poster_path,
-                   COALESCE(tp.item_n, 0) AS item_n, s.score,
-                   CASE WHEN s.score IS NULL THEN 2
-                        WHEN COALESCE(tp.item_n, 0) >= $6 THEN 0 ELSE 1 END AS band
+            SELECT t.id, t.name, t.original_name, t.original_language, t.year, t.poster_path, s.score,
+                   COALESCE(s.votes, 0) AS votes,
+                   COALESCE(s.votes, 0) >= {WIDELY_SEEN_VOTES} AS wide,
+                   CASE WHEN ut.state = 'seen' THEN 0
+                        WHEN ut.state IS NULL AND c.title_id IS NOT NULL THEN 1
+                        ELSE 2 END AS grp
               FROM title t
               LEFT JOIN score s ON s.title_id = t.id
-              LEFT JOIN title_prior tp ON tp.title_id = t.id
-             WHERE t.kind = 'movie'
+              LEFT JOIN user_title ut ON ut.user_id = $1 AND ut.title_id = t.id
+              LEFT JOIN co_seen c ON c.title_id = t.id
+             WHERE t.kind = 'movie' AND t.origin <> 'wished'
         ),
         ranked AS (
-            SELECT p.*, percent_rank() OVER (PARTITION BY p.band ORDER BY p.score DESC, p.id) AS q
+            SELECT p.*,
+                   percent_rank() OVER (PARTITION BY p.grp, p.score IS NULL
+                                        ORDER BY p.score DESC, p.votes DESC, p.id) AS q_own,
+                   percent_rank() OVER (PARTITION BY p.wide, p.score IS NULL
+                                        ORDER BY p.score DESC, p.votes DESC, p.id) AS q_c
               FROM pool p
+        ),
+        kept AS (SELECT * FROM ranked WHERE id <> ALL($3::int[])),
+        listed AS (
+            SELECT k.*, row_number() OVER (
+                       ORDER BY k.grp, k.score IS NULL, abs(k.q_own - $2), k.votes DESC, k.id) - 1 AS n
+              FROM kept k
+             WHERE k.grp < 2
+            UNION ALL
+            SELECT k.*, row_number() OVER (
+                       ORDER BY NOT k.wide, k.score IS NULL, GREATEST($6 - k.q_c, k.q_c - $7, 0),
+                                k.votes DESC, k.id) - 1
+              FROM kept k
+             WHERE k.grp = 2
         )
-        SELECT r.id, r.name, r.original_name, r.original_language, r.year, r.poster_path,
-               COALESCE(ut.state = 'seen', false) AS seen
-          FROM ranked r
-          LEFT JOIN user_title ut ON ut.user_id = $1 AND ut.title_id = r.id
-         WHERE r.id <> ALL($3::int[])
-         ORDER BY r.band,
-                  CASE WHEN r.band < 2 THEN abs(r.q - $2) END,
-                  CASE WHEN r.band < 2 THEN abs(r.q - 0.5) END,
-                  r.item_n DESC, r.id
+        SELECT id, name, original_name, original_language, year, poster_path, grp = 0 AS seen
+          FROM listed
+         ORDER BY CASE WHEN grp < 2 THEN n + n / {CROWD_EVERY - 1}
+                       ELSE {CROWD_EVERY} * n + {CROWD_EVERY - 1} END
          LIMIT $4 OFFSET $5
         """,
         user_id,
@@ -639,7 +664,7 @@ async def films_by_platform_score(
         [int(t) for t in exclude],
         limit + 1,
         offset,
-        WELL_KNOWN_ITEM_N,
+        *band,
     )
     return [dict(r) for r in rows[:limit]], len(rows) > limit
 
