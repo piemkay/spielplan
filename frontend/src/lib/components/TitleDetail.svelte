@@ -38,9 +38,9 @@
 
   // `seed`: the title as the tapped poster had it, so the card opens on its poster and name before
   // the read lands. `onMove(entry, tier)`: Rank's own move, which also replaces its board; anywhere
-  // else the card drops the title itself (decision 531). `onPerson(credit)` and `onTerm({term, label,
-  // facet})` are Home's, which add to what is set; without them a tap opens Home's grid with that
-  // chip alone, and Back reopens this card on `from` (decision 557 item 6).
+  // else the card drops the title itself (decision 531). `onPerson(credit)`, `onTerm({term, label,
+  // facet})` and `onLike(titleId)` are Home's, which add to what is set; without them a tap opens
+  // Home's grid with that chip alone, and Back reopens this card on `from` (decision 557 item 6).
   let {
     titleId,
     seed = undefined,
@@ -48,6 +48,7 @@
     onClose,
     onPerson = undefined,
     onTerm = undefined,
+    onLike = undefined,
     onStateChange,
     onMove = undefined
   } = $props();
@@ -124,7 +125,7 @@
   function toHome(handler, arg, query, cardId) {
     return handler ? () => handler(arg) : () => jumpHome(homeHref(query), { titleId: cardId, from });
   }
-  // A person on Both, since a person spans both kinds; a term on the card's own kind.
+  // A person on Both, since a person spans both kinds; a term and a recipe on the card's own kind.
   const personTap = (c, cardId = data.title.id) =>
     toHome(onPerson, c, { person: c.person_ids ?? [c.person_id], kinds: ['movie', 'series'] }, cardId);
   const termTap = (t, cardId = data.title.id) =>
@@ -134,6 +135,7 @@
       { term: t.term, kinds: [data.title.kind] },
       cardId
     );
+  const likeTap = (id) => toHome(onLike, id, { like: id, kinds: [data.title.kind], open: true }, id);
 
   // The server's own reading after a write, so the why line and the rest move together.
   async function reread() {
@@ -266,6 +268,10 @@
   const quoted = $derived(extractedByTerm(data?.dna?.extracted));
   const inferred = $derived(projectedForCard(data?.dna?.projected, data?.dna?.extracted));
   const evidence = $derived(quoted.find((tag) => tag.key === picked) ?? quoted[0] ?? null);
+  // Only a title the recipe's film picker offers: two distinct DNA terms or more (decision 559 item 7).
+  const likeable = $derived(
+    new Set([...(data?.dna?.extracted ?? []), ...(data?.dna?.projected ?? [])].map((t) => t.term)).size > 1
+  );
   const kindNoun = $derived(data?.title?.kind === 'series' ? 'series' : 'film');
   const scores = $derived(data?.platform_ratings?.items ?? []);
   // Joined in JS: Svelte collapses the whitespace around {#if} blocks.
@@ -323,6 +329,15 @@
     {/if}
     {#if showModel}<span class="rawid">{p.term}</span>{/if}
   </button>
+{/snippet}
+
+{#snippet likeMore(close, alone = false)}
+  <button
+    class="likemore"
+    class:alone
+    onclick={() => leave(close, likeTap(data.title.id))}
+    data-testid="title-like-more"
+  >More like this, but…{#if alone}{@render icon('chevron', 16)}{/if}</button>
 {/snippet}
 
 <Sheet {open} onClose={closed} label="Title detail" width={880}>
@@ -534,7 +549,10 @@
         {#if data?.shares?.length}
           <section class="shares" data-testid="title-shares">
             <div class="heading">
-              <h3 class="section-title">Shares a lot with</h3>
+              <div class="headrow">
+                <h3 class="section-title">Shares a lot with</h3>
+                {#if likeable}{@render likeMore(close)}{/if}
+              </div>
               <p class="alt">From your library, closest first</p>
             </div>
             <ul class="strip" data-nobar>
@@ -566,6 +584,8 @@
               {/each}
             </ul>
           </section>
+        {:else if likeable}
+          <div class="likerow">{@render likeMore(close, true)}</div>
         {/if}
 
         <!-- A native <details>: the content stays in the document, and the browser owns the state. -->
@@ -717,6 +737,7 @@
     onClose={() => (nested = null)}
     onPerson={(c) => leave(closeThis, personTap(c, nestedId))}
     onTerm={(t) => leave(closeThis, termTap(t, nestedId))}
+    onLike={(id) => leave(closeThis, likeTap(id))}
     {onStateChange}
     {onMove}
   />
@@ -1068,7 +1089,17 @@
     flex-direction: column;
     gap: 12px;
   }
+  .headrow {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+  }
+  .headrow > h3 {
+    flex: 1;
+    min-width: 0;
+  }
   /* Drawn the height of the line it sits in; the hit area reaches 48px. */
+  .likemore,
   .tohome {
     position: relative;
     flex: none;
@@ -1082,10 +1113,24 @@
     line-height: 20px;
     white-space: nowrap;
   }
+  .likemore::after,
   .tohome::after {
     content: '';
     position: absolute;
     inset: -12px -4px;
+  }
+  .likemore {
+    min-height: 25px;
+    margin-right: -4px;
+  }
+  .likerow {
+    display: flex;
+    margin-left: -4px;
+  }
+  .likemore.alone {
+    gap: 2px;
+    font-size: var(--fs-body);
+    line-height: 22px;
   }
   .tohome {
     gap: 2px;

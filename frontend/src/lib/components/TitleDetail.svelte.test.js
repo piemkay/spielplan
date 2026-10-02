@@ -1429,7 +1429,7 @@ describe('a title the household does not have (decision 544)', () => {
   });
 });
 
-describe('a credit and a term lead to Home (decision 557)', () => {
+describe('a credit, a term and More like this lead to Home (decisions 557 and 559)', () => {
   const sheets = () => read(nav.page).state.sheets ?? [];
   const dialogs = () => [...target.querySelectorAll('[role="dialog"][aria-label="Title detail"]')];
   // One human folded across two person rows, as `fold_credits` sends it.
@@ -1553,6 +1553,69 @@ describe('a credit and a term lead to Home (decision 557)', () => {
       await settle();
       expect(onTerm).toHaveBeenCalledWith({ term: 'era.period', label: 'period piece', facet: 'era' });
       expect(dialogs()).toHaveLength(0);
+    } finally {
+      unmount(app);
+    }
+  });
+
+  it('puts More like this, but... right of the Shares heading, apart from the row', async () => {
+    const app = await open({ kind: 'movie' }, { dna: DNA, shares: SHARES });
+    try {
+      const like = byTestId('title-like-more');
+      expect(like.textContent.trim()).toBe('More like this, but…');
+      expect(like.closest('.headrow').querySelector('h3').textContent).toBe('Shares a lot with');
+    } finally {
+      unmount(app);
+    }
+  });
+
+  it("puts More like this, but... in the row's place when the row is absent", async () => {
+    const app = await open({ kind: 'movie' }, { dna: DNA, credits: [mann] });
+    try {
+      expect(byTestId('title-shares')).toBeNull();
+      const like = byTestId('title-like-more');
+      const cast = target.querySelector('.cast');
+      expect(cast.compareDocumentPosition(like) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+      expect(like.compareDocumentPosition(byTestId('title-more')) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    } finally {
+      unmount(app);
+    }
+  });
+
+  it('carries no More like this, but... on a title with fewer than two distinct terms', async () => {
+    const one = {
+      extracted: [quoted('themes.obsession', 'obsession')],
+      projected: [{ term: 'themes.obsession', facet: 'themes', label: 'obsession', weight: 2 }]
+    };
+    for (const dna of [one, { extracted: [], projected: [] }]) {
+      const app = await open({ kind: 'movie' }, { dna, shares: SHARES });
+      try {
+        expect(byTestId('title-shares')).not.toBeNull();
+        expect(byTestId('title-like-more')).toBeNull();
+      } finally {
+        unmount(app);
+      }
+    }
+  });
+
+  it("starts Home's recipe on Home, and from anywhere else opens it with the Filters open", async () => {
+    const onLike = vi.fn();
+    let app = await open({ kind: 'movie' }, { dna: DNA, props: { onLike } });
+    try {
+      byTestId('title-like-more').click();
+      await settle();
+      expect(onLike).toHaveBeenCalledWith(6);
+      expect(jumpHome).not.toHaveBeenCalled();
+    } finally {
+      unmount(app);
+    }
+
+    app = await open({ kind: 'movie' }, { dna: DNA, props: ELSEWHERE });
+    try {
+      byTestId('title-like-more').click();
+      await settle();
+      expect(dialogs()).toHaveLength(0);
+      expect(jumpHome).toHaveBeenCalledWith('/?like=6&kind=movie&filters=open', { titleId: 6, from: 'rank' });
     } finally {
       unmount(app);
     }
