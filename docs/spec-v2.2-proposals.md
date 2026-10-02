@@ -16655,9 +16655,8 @@ finds no term.
 **Design reference.** Canvas https://claude.ai/artifact/CAweFeR4NG9gL6qXh72utT, boards B1 (the
 Filters open), B2 and B3 (the term picker, browsing and typing), B4 (the people picker), B5 (a
 filtered grid and its fold), B6 (nothing matches), B7 (the chips), B8 (Rank's Filters and board) and
-B9 (card taps and the grid they open). B1-B9 were drawn before decision 558 and show "In my library";
-read them with Only in library, on by default. Board copy is illustrative; this decision states the
-rule, and where a board differs from it or from the spec, the spec wins.
+B9 (card taps and the grid they open), redrawn with Only in library, on by default. Board copy is
+illustrative; this decision states the rule, and where a board differs from it or from the spec, the spec wins.
 
 ### 558. Only in library is on by default, and search reaches beyond it, to the catalogue and to TMDB
 
@@ -16809,9 +16808,8 @@ Filters thin a recipe fast: under two hours about 4.5 of 10 still fit.
 
 **Design reference.** Canvas https://claude.ai/artifact/CAweFeR4NG9gL6qXh72utT, boards C1 (a recipe's
 grid), C2 (the title picker and the Like these films row), C3 (More like this, but… on Dune's card,
-and the grid it opens), C4 (a result's why) and C5 (one director capped; a thin library). C2 was drawn
-before decision 558 and shows "In my library"; read it with Only in library, on by default. Board copy
-is illustrative; this decision states the rule, and where a board differs from it or from the spec,
+and the grid it opens), C4 (a result's why) and C5 (one director capped; a thin library), C2 redrawn
+with Only in library, on by default. Board copy is illustrative; this decision states the rule, and where a board differs from it or from the spec,
 the spec wins.
 
 ### 560. A recipe can take one or more groups of a film: its mood, look, sound or another part
@@ -16886,9 +16884,9 @@ pairing per anchor, so most suggested twists are untested.
 
 **Design reference.** Canvas https://claude.ai/artifact/CAweFeR4NG9gL6qXh72utT, page "Film mixing by
 group", boards MA-1 (Like Knives Out, the start), MA-2 (narrowing Fargo to its mood), MA-3 (Knives Out
-· Mood like Fargo) and MA-4 (a twist: Interstellar · Pace like Mad Max: Fury Road; Groundhog Day ·
-Mood like The Shining); several groups at once ("Mood, Sound & Look like Obsession") and the twist
-guard are not drawn. The page's options B and C were not taken. Board copy is illustrative; this
+· Mood like Fargo), MA-4 (a twist: Interstellar · Pace like Mad Max: Fury Road; Groundhog Day ·
+Mood like The Shining; each twist with its count, the shuffle skipping thin ones) and MA-5 (Dune ·
+Mood, Sound & Look like Obsession, the sheet taking several groups at once). The page's options B and C were not taken. Board copy is illustrative; this
 decision states the rule, and where a board differs from it or from the spec, the spec wins.
 
 ### To do for 1.2.0 (owner, 2026-10-02)
