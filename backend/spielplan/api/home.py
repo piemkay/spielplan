@@ -11,7 +11,7 @@ from fastapi import APIRouter, HTTPException, Query, Request, status
 
 from spielplan.api.deps import DB, ActiveUser
 from spielplan.db import library
-from spielplan.home import rail, shelves
+from spielplan.home import notices, rail, shelves
 from spielplan.models import artifacts
 
 router = APIRouter(prefix="/api", tags=["home"])
@@ -69,6 +69,20 @@ async def worth_getting(
             status.HTTP_422_UNPROCESSABLE_CONTENT, {"reason": "not_pickable", "message": str(exc)}
         ) from exc
     return rail.redact(payload, show_model=rail.visible_to(user))
+
+
+Notice = Literal["pending", "setup", "wish_list"]
+
+
+@router.put("/home/notices/{notice}")
+async def hide_notice(notice: Notice, conn: DB, user: ActiveUser) -> dict[str, Any]:
+    """A sticky notice's x: hidden until tomorrow, or until something new joins it (decision 554)."""
+    return await notices.hide(conn, user_id=user.id, notice=notice)
+
+
+@router.delete("/home/notices/{notice}")
+async def unhide_notice(notice: Notice, conn: DB, user: ActiveUser) -> dict[str, Any]:
+    return await notices.unhide(conn, user_id=user.id, notice=notice)
 
 
 @router.get("/model-log")

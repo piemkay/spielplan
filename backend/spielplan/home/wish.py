@@ -8,6 +8,7 @@ which the sweep deletes it.
 from __future__ import annotations
 
 from collections.abc import Collection, Sequence
+from datetime import datetime
 from typing import Any
 
 import asyncpg
@@ -104,6 +105,23 @@ async def dismiss(conn: asyncpg.Connection, *, user_id: int, title_id: int) -> b
         user_id, title_id,
     )
     return deleted is not None
+
+
+async def restore_arrival(
+    conn: asyncpg.Connection, *, user_id: int, title_id: int, since: datetime
+) -> bool:
+    """A dismissed arrival's Undo: its want row back with its own `since`; False when the title is
+    not owned or a row already stands."""
+    restored = await conn.fetchval(
+        """
+        INSERT INTO wish (user_id, title_id, state, created_at)
+        SELECT $1::bigint, t.id, 'want', $3::timestamptz FROM title t WHERE t.id = $2 AND t.is_owned
+        ON CONFLICT (user_id, title_id) DO NOTHING
+        RETURNING 1
+        """,
+        user_id, title_id, since,
+    )
+    return restored is not None
 
 
 async def retire_settled(conn: asyncpg.Connection) -> None:
@@ -350,6 +368,7 @@ __all__ = [
     "household_list",
     "likely_too",
     "link_for",
+    "restore_arrival",
     "retire_settled",
     "set_state",
     "state_for",

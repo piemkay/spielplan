@@ -14,7 +14,7 @@ from typing import Any
 import asyncpg
 
 from spielplan.db import library
-from spielplan.home import suggest, taste, wish
+from spielplan.home import notices, suggest, taste, wish
 from spielplan.home import why as why_mod
 from spielplan.home.why import WhyTerm
 from spielplan.ledger import ladder
@@ -1152,7 +1152,7 @@ async def build_home(
     await library.carry_original_names(
         conn, [card for shelf in shelves for s in shelf.sections for card in s.items], key="title_id"
     )
-    return {
+    payload = {
         "kinds": chosen,
         "banner": await pending_verdicts(conn, user_id=user.id),
         "setup_notice": await setup_notice(conn, user_id=user.id) if bundle_version else None,
@@ -1167,6 +1167,7 @@ async def build_home(
         "arrived": await wish.arrived(conn, user_id=user.id),
         "wish": await wish.summary(conn),
     }
+    return await notices.apply_hidden(conn, user_id=user.id, payload=payload)
 
 
 async def _beta(conn: asyncpg.Connection, *, user_id: int, kind: str) -> float:

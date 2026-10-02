@@ -3,6 +3,7 @@ each writes only their own rows."""
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any, Literal
 
 from fastapi import APIRouter, HTTPException, status
@@ -17,6 +18,10 @@ router = APIRouter(prefix="/api/wish", tags=["wish"])
 
 class WishIn(BaseModel):
     state: Literal["want", "not_for_me"]
+
+
+class RestoreIn(BaseModel):
+    since: datetime
 
 
 @router.get("")
@@ -49,3 +54,17 @@ async def dismiss_arrival(title_id: int, conn: DB, user: ActiveUser) -> dict[str
     if not await wish.dismiss(conn, user_id=user.id, title_id=title_id):
         raise HTTPException(status.HTTP_404_NOT_FOUND, "nothing arrived to dismiss")
     return {"dismissed": True}
+
+
+@router.post("/{title_id}/restore")
+async def restore_arrival(title_id: int, body: RestoreIn, conn: DB, user: ActiveUser) -> dict[str, Any]:
+    """An arrival's Undo after its x (decision 554)."""
+    if not await wish.restore_arrival(conn, user_id=user.id, title_id=title_id, since=body.since):
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "nothing to restore")
+    return {"restored": True}
+
+
+@router.get("/summary")
+async def wish_summary(conn: DB, user: ActiveUser) -> dict[str, int]:
+    """You's Wish list row: the household's wanted count."""
+    return await wish.summary(conn)
