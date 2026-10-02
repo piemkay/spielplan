@@ -108,6 +108,38 @@ describe('a card beyond the library (decision 544)', () => {
   });
 });
 
+describe("a recipe result's captions (decision 559 item 5)", () => {
+  it('carries one line per liked film, its poster and the term they share, named for a reader', () => {
+    const app = mount(PosterCard, {
+      target,
+      props: {
+        title: title(),
+        onSelect: () => {},
+        captions: [
+          { title_id: 245, from: 'From Knives Out: ', term: 'murder mystery' },
+          { title_id: 275, from: "From Fargo's mood: ", term: 'deadpan & dry' }
+        ]
+      }
+    });
+    flushSync();
+    const lines = [...target.querySelectorAll('[data-testid="recipe-caption"]')];
+    expect(lines.map((el) => el.textContent.trim())).toEqual([
+      'From Knives Out: murder mystery',
+      "From Fargo's mood: deadpan & dry"
+    ]);
+    expect(lines[0].querySelector('.sr-only').textContent).toBe('From Knives Out: ');
+    expect(lines[1].querySelector('[data-testid="rate-poster"]').dataset.titleId).toBe('275');
+    unmount(app);
+  });
+
+  it('adds nothing to a card outside a recipe, and keeps the Worth getting line', () => {
+    const app = render(title({ like: { title_id: 9, name: 'Collateral' } }));
+    expect(target.querySelector('[data-testid="recipe-caption"]')).toBeNull();
+    expect(target.querySelector('[data-testid="like-line"]').textContent).toBe('Like Collateral');
+    unmount(app);
+  });
+});
+
 describe('the name on the card (decision 516)', () => {
   const langs = Object.getOwnPropertyDescriptor(Navigator.prototype, 'languages');
   afterEach(() => {

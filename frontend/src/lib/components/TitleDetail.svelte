@@ -37,7 +37,11 @@
   // `seed`: the title as the tapped poster had it, so the card opens on its poster and name before
   // the read lands. `onMove(entry, tier)`: Rank's own move, which also replaces its board; anywhere
   // else the card drops the title itself (decision 531).
-  let { titleId, seed = undefined, onClose, onPerson, onStateChange, onMove = undefined } = $props();
+  // `whyLine`: a recipe grid's reason for this card, in place of the server's (decision 559 item 5).
+  let {
+    titleId, seed = undefined, onClose, onPerson, onStateChange, onMove = undefined, onLike = undefined,
+    whyLine = ''
+  } = $props();
 
   let open = $state(true);
   let data = $state(null);
@@ -226,7 +230,7 @@
   const names = $derived(displayNames(lead));
   const directed = $derived(directedBy(data?.credits));
   // The server's reason for this member, or nothing: a card opened from search has none.
-  const why = $derived(typeof data?.why === 'string' ? data.why.trim() : '');
+  const why = $derived(whyLine || (typeof data?.why === 'string' ? data.why.trim() : ''));
   // Two tiers, two lists (§4.1 rule 1); nothing leaves the payload.
   const quoted = $derived(extractedByTerm(data?.dna?.extracted));
   const inferred = $derived(projectedForCard(data?.dna?.projected, data?.dna?.extracted));
