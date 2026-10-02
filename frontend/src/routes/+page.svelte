@@ -648,7 +648,7 @@
   {@const noun = kinds.length > 1 ? 'Titles' : kinds[0] === 'series' ? 'Series' : 'Films'}
   <!-- What the people alone leave, as their cell's head says it (board B4). -->
   {@const together =
-    n > 1 && !gridStale && chips.every((c) => c.variant === 'person')
+    n > 1 && reason === 'filter' && !gridStale && chips.every((c) => c.variant === 'person')
       ? `${noun} with ${n === 2 ? 'both' : `all ${n}`}: ${total.toLocaleString()} in your library`
       : ''}
   <!-- A cell is a list row on a phone and a label over its control from 721 px (decision 554). -->

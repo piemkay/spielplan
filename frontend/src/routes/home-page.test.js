@@ -1112,10 +1112,12 @@ describe('the pickers in the Filters panel', () => {
     expect(asked(seen).getAll('person')).toEqual(['12,13']);
   });
 
-  it('names what two people leave in the head of their cell', async () => {
+  it('names what two people leave in the head of their cell, and not what a search leaves', async () => {
     backend({ titles: (p) => ({ items: [film(1, 'Heat')], total: 4, hidden: {}, applied: applied(p) }) });
     at('/?person=12,13&person=1&kind=movie&filters=open');
     await openHome();
     expect($('[data-testid="people-combined"]').textContent).toBe('Films with both: 4 in your library');
+    await type('heat');
+    expect($('[data-testid="people-combined"]')).toBeNull();
   });
 });

@@ -38,7 +38,7 @@
     role="combobox"
     aria-label={label}
     aria-expanded={expanded}
-    aria-controls={controls}
+    aria-controls={expanded ? controls : undefined}
     aria-autocomplete="list"
     autocomplete="off"
     spellcheck="false"

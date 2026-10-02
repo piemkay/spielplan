@@ -480,7 +480,7 @@ test.describe('rank', () => {
     }
   });
 
-  test('all six filter dimensions in section 6.3 have a control', async () => {
+  test('all six filter dimensions in section 6.3 have a control', async ({}, testInfo) => {
     // "**Filters:** genre, kind (movie/series — separate by default), decade, runtime,
     // seen-state, and What it's like, §6.0's term picker; all but the kind sit behind one
     // Filters control" (decision 557 item 8: the free-text taste tag is gone).
@@ -500,7 +500,12 @@ test.describe('rank', () => {
     ]) {
       await expect(filters.locator('label', { has: page.getByTestId(id) })).toContainText(name);
     }
-    await expect(filters.getByRole('button', { name: "What it's like Add" })).toBeVisible();
+    // A row that opens the term sheet on a phone; on a desktop the row holds the field (board B8).
+    const terms =
+      testInfo.project.name === 'phone'
+        ? filters.getByRole('button', { name: "What it's like Add" })
+        : filters.getByRole('combobox', { name: 'Find a taste term' });
+    await expect(terms).toBeVisible();
     await expect(filters.getByTestId('rank-dna')).toHaveCount(0);
     await filters.getByRole('button', { name: 'Done' }).click();
     await expect(filters).toHaveCount(0);
