@@ -20,7 +20,7 @@
 
   /** @param {MouseEvent} event */
   function press(event) {
-    // A chip's own buttons flip or remove it; they open nothing.
+    // A chip's own buttons act on the chip; they open no list.
     if (event.target instanceof Element && event.target.closest('button')) return;
     input?.focus();
     onpress?.();

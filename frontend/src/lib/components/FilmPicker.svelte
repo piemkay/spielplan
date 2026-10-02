@@ -4,11 +4,12 @@
   // On a phone a sheet; on a desktop the Filters cell is its field, the recipe's films its chips,
   // and the list drops under it.
   import { get, qs } from '$lib/api.js';
-  import { FULL, MAX_FILMS, addFilm, recipe, removeFilm, setSign } from '$lib/recipe.svelte.js';
+  import { FULL, MAX_FILMS, addFilm, recipe, removeFilm } from '$lib/recipe.svelte.js';
   import Icon from './Icon.svelte';
   import Popover from './Popover.svelte';
   import RatePoster from './RatePoster.svelte';
   import RecipeChip from './RecipeChip.svelte';
+  import RecipeGroupSheet from './RecipeGroupSheet.svelte';
   import Sheet from './Sheet.svelte';
   import TokenField from './TokenField.svelte';
 
@@ -24,10 +25,14 @@
   // The inline drop, opened by a press or by typing.
   let dropped = $state(false);
   let field = $state();
+  // The chip whose film's groups are open (decision 560).
+  let openId = $state(null);
+  let anchor = $state(null);
 
   const films = $derived(recipe.films);
   const full = $derived(films.length >= MAX_FILMS);
   const query = $derived(q.trim());
+  const opened = $derived(films.find((f) => f.id === openId) ?? null);
   const listed = $derived(
     inline ? dropped && Boolean(query) && (found.length > 0 || answered === query || full || Boolean(error)) : open
   );
@@ -62,6 +67,12 @@
   }
 
   const signOf = (id) => films.find((f) => f.id === id)?.sign ?? null;
+
+  function openFilm(id, el) {
+    anchor = el;
+    openId = openId === id ? null : id;
+    dropped = false;
+  }
 
   // A pressed Like or Less like takes the film back out.
   function choose(film, sign) {
@@ -107,7 +118,8 @@
   {#each films as f (f.id)}
     <RecipeChip
       film={f}
-      onFlip={() => setSign(f.id, f.sign === 'like' ? 'less' : 'like')}
+      expanded={openId === f.id}
+      onOpen={(el) => openFilm(f.id, el)}
       onRemove={() => removeFilm(f.id)}
     />
   {/each}
@@ -154,7 +166,9 @@
   {/if}
   {#if inline && found.length}
     <p class="footnote note">
-      Enter likes the highlighted film, Shift+Enter makes it less like.{films.length ? ' Tap a chip to switch.' : ''}
+      Enter likes the highlighted film, Shift+Enter makes it less like.{films.length
+        ? ' Tap a chip to take one or more parts, like its mood or look.'
+        : ''}
     </p>
   {/if}
 {/snippet}
@@ -187,13 +201,15 @@
         {@render search()}
         {#if films.length}
           <div class="chosen" role="group" aria-label="In the recipe">{@render chips()}</div>
-          <p class="footnote hint">Tap a chip to switch between like and less like.</p>
+          <p class="footnote hint">Tap a chip to take one or more parts, like its mood or look.</p>
         {/if}
       </div>
     {/snippet}
     {#snippet children()}{@render list()}{/snippet}
   </Sheet>
 {/if}
+<!-- Outside the field and the picker's sheet, whose press and drag handlers it must not reach. -->
+<RecipeGroupSheet open={opened !== null} film={opened} {films} {anchor} onClose={() => (openId = null)} />
 
 <style>
   .sheethead {

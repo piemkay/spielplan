@@ -1,11 +1,11 @@
 <script>
   // A recipe film as a chip (decision 560, board MA): the body opens the film's sheet, the x
   // removes the film. Like is filled, Less like outlined; a film lending groups shows their dots
-  // and terms on a second line. With `onFlip` (the film picker's chips) the body switches the sign.
+  // and terms on a second line.
   import { chipLabel, chipTerms, groupOf } from '$lib/recipe.svelte.js';
   import RatePoster from './RatePoster.svelte';
 
-  let { film, expanded = false, onOpen = undefined, onFlip = undefined, onRemove } = $props();
+  let { film, expanded = false, onOpen, onRemove } = $props();
 
   let body = $state();
   const label = $derived(chipLabel(film));
@@ -21,12 +21,10 @@
   <button
     class="body"
     bind:this={body}
-    aria-haspopup={onFlip ? undefined : 'dialog'}
-    aria-expanded={onFlip ? undefined : expanded}
-    aria-label={onFlip
-      ? `${label}. Switch to ${film.sign === 'like' ? 'less like' : 'like'}`
-      : `${label}${terms ? `: ${terms}` : ''}. Choose like, less like, or ${parts ? 'other parts' : 'only parts of it'}`}
-    onclick={() => (onFlip ? onFlip() : onOpen?.(body))}
+    aria-haspopup="dialog"
+    aria-expanded={expanded}
+    aria-label={`${label}${terms ? `: ${terms}` : ''}. Choose like, less like, or ${parts ? 'other parts' : 'only parts of it'}`}
+    onclick={() => onOpen(body)}
   >
     <span class="thumb" aria-hidden="true"><RatePoster title={{ title_id: film.id, name: film.name }} showName={false} /></span>
     <span class="text">
@@ -40,7 +38,7 @@
         </span>
       {/if}
     </span>
-    {#if !onFlip}{@render glyph('chevron')}{/if}
+    {@render glyph('chevron')}
   </button>
   <button class="x" aria-label="Remove {film.name || 'this film'}" onclick={onRemove}>{@render glyph('x')}</button>
 </span>

@@ -64,11 +64,17 @@ test("a recipe's films, a film's groups and the limits", async ({ page, isMobile
   await expect(page).toHaveURL(new RegExp(`[?&]like=${PRISONERS}(&|$)`));
   await expect(page.getByRole('dialog', { name: 'Films to like or less like' })).toHaveCount(0);
 
-  // With the Filters open the films sit in their cell, where a tap switches like and less like
-  // (board C2); shut, the chip row's open a film's groups.
+  // With the Filters open the films sit in their cell, and a tap there opens a film's sheet as the
+  // chip row's does; its Like and Less like switch the film.
   await chipBody(page, 'Like Prisoners').click();
+  const sheet = sheetOf(page, 'Prisoners');
+  await sheet.getByRole('button', { name: 'Less like' }).click();
+  await sheet.getByRole('button', { name: 'Apply' }).click();
+  await expect(sheet).toHaveCount(0);
   await expect(page).toHaveURL(new RegExp(`[?&]less=${PRISONERS}(&|$)`));
   await chipBody(page, 'Less like Prisoners').click();
+  await sheet.getByRole('button', { name: 'Like', exact: true }).click();
+  await sheet.getByRole('button', { name: 'Apply' }).click();
   await expect(page).toHaveURL(new RegExp(`[?&]like=${PRISONERS}(&|$)`));
   await page.getByTestId('filter-toggle').click();
   await expect(page.getByTestId('filter-panel')).toHaveCount(0);
@@ -76,7 +82,6 @@ test("a recipe's films, a film's groups and the limits", async ({ page, isMobile
 
   // Prisoners' mood is two quoted terms; its storytelling one guess; the rest nothing.
   await chipBody(page, 'Like Prisoners').click();
-  const sheet = sheetOf(page, 'Prisoners');
   await expect(sheet).toBeVisible();
   const mood = sheet.getByRole('checkbox', { name: /^Mood/ });
   await expect(mood).toHaveAttribute('aria-disabled', 'false');

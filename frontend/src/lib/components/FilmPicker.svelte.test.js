@@ -144,18 +144,23 @@ describe('the film picker on a desktop', () => {
     expect(target.querySelector('[role="dialog"]')).toBeNull();
   });
 
-  it("holds the recipe's films as chips in the field, and a chip's tap switches it", async () => {
+  it("holds the recipe's films as chips in the field, and a chip's tap opens its film's groups", async () => {
     remember({ id: 245, name: 'Knives Out' });
     homeFilters.like = ['245'];
     open({ inline: true });
     const chip = target.querySelector('[data-testid="recipe-chip"]');
     expect(chip.parentElement.contains(field())).toBe(true);
+    await type('o');
+    expect(target.querySelector('[role="dialog"]').textContent).toContain(
+      'Tap a chip to take one or more parts, like its mood or look.'
+    );
     chip.querySelector('.body').click();
     flushSync();
-    expect(homeFilters.less).toEqual(['245']);
-    expect(target.querySelector('[role="dialog"]'), 'a chip opens no list').toBeNull();
-    await type('o');
-    expect(target.querySelector('[role="dialog"]').textContent).toContain('Tap a chip to switch.');
+    const dialogs = [...target.querySelectorAll('[role="dialog"]')];
+    expect(dialogs.map((d) => d.getAttribute('aria-label')), 'the list gives way').toEqual([
+      'Knives Out in your recipe'
+    ]);
+    expect(homeFilters.like, 'the tap alone switches nothing').toEqual(['245']);
   });
 
   it('refuses a fifth film, saying why', async () => {
@@ -171,14 +176,18 @@ describe('the film picker on a desktop', () => {
 });
 
 describe('the film picker on a phone', () => {
-  it('is a sheet whose chips switch a film between like and less like', async () => {
+  it("is a sheet whose chips open a film's groups, where Less like switches it", async () => {
     remember({ id: 245, name: 'Knives Out' });
     homeFilters.like = ['245'];
     open({ width: 390, open: true, onClose: () => {} });
     expect(target.querySelector('[role="dialog"]').getAttribute('aria-label')).toBe('Like these films');
-    const chip = target.querySelector('[data-testid="recipe-chip"] .body');
-    expect(chip.getAttribute('aria-label')).toBe('Like Knives Out. Switch to less like');
-    chip.click();
+    target.querySelector('[data-testid="recipe-chip"] .body').click();
+    flushSync();
+    const sheet = target.querySelector('[role="dialog"][aria-label="Knives Out in your recipe"]');
+    expect(sheet.closest('[aria-label="Like these films"]'), 'beside the picker, not in it').toBeNull();
+    const button = (name) => [...sheet.querySelectorAll('button')].find((b) => b.textContent === name);
+    button('Less like').click();
+    button('Apply').click();
     flushSync();
     expect(homeFilters.less).toEqual(['245']);
     await type('far');
@@ -202,19 +211,23 @@ describe("Like these films' cell", () => {
     expect(el.querySelector('[data-testid="film-search"]').placeholder).toBe('Add a film');
   });
 
-  it('is a row on a phone that opens the picker as a sheet, its films under it switching on a tap', () => {
-    remember({ id: 245, name: 'Knives Out' });
-    homeFilters.like = ['245'];
+  it('is a row on a phone that opens the picker as a sheet', () => {
     const el = cell(390);
     expect(el.closest('.cell').querySelector('.label').textContent).toBe('Like these films');
-    const chip = target.querySelector('.cell [data-testid="recipe-chip"] .body');
-    expect(chip.getAttribute('aria-label')).toBe('Like Knives Out. Switch to less like');
-    chip.click();
-    flushSync();
-    expect(homeFilters.less).toEqual(['245']);
-    expect(target.querySelector('[role="dialog"]')).toBeNull();
     el.click();
     flushSync();
     expect(target.querySelector('[role="dialog"]').getAttribute('aria-label')).toBe('Like these films');
+  });
+
+  it("opens a film's groups from a chip under the row, as the chip row does", () => {
+    remember({ id: 245, name: 'Knives Out' });
+    homeFilters.like = ['245'];
+    cell(390);
+    const chip = target.querySelector('.cell [data-testid="recipe-chip"] .body');
+    chip.click();
+    flushSync();
+    expect(target.querySelector('[role="dialog"]').getAttribute('aria-label')).toBe('Knives Out in your recipe');
+    expect(chip.getAttribute('aria-expanded')).toBe('true');
+    expect(homeFilters.like, 'the tap alone switches nothing').toEqual(['245']);
   });
 });

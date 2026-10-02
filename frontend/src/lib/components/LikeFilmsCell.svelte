@@ -1,11 +1,11 @@
 <script>
   // Like these films, the Filters panel's last cell (decision 559): on a phone a row that opens the
   // picker as a sheet, the recipe's films under it; from 721 px a field across the panel, its films
-  // as chips and its matches dropping under it. In the cell a chip's tap switches like and less like.
-  import { recipe, removeFilm, setSign } from '$lib/recipe.svelte.js';
+  // as chips and its matches dropping under it. A chip's tap opens its film's groups, as in the chip row.
+  import { recipe } from '$lib/recipe.svelte.js';
   import FilmPicker from './FilmPicker.svelte';
   import Icon from './Icon.svelte';
-  import RecipeChip from './RecipeChip.svelte';
+  import RecipeChips from './RecipeChips.svelte';
 
   let width = $state(typeof window === 'undefined' ? 390 : window.innerWidth);
   const desktop = $derived(width > 720);
@@ -31,15 +31,7 @@
       onclick={() => (open = true)}
     >Add<Icon name="chevron-right" size={16} /></button>
     {#if recipe.films.length}
-      <div class="picked" role="group" aria-label="In the recipe">
-        {#each recipe.films as f (f.id)}
-          <RecipeChip
-            film={f}
-            onFlip={() => setSign(f.id, f.sign === 'like' ? 'less' : 'like')}
-            onRemove={() => removeFilm(f.id)}
-          />
-        {/each}
-      </div>
+      <div class="picked" role="group" aria-label="In the recipe"><RecipeChips /></div>
     {/if}
   </div>
   <FilmPicker {open} onClose={() => (open = false)} />
