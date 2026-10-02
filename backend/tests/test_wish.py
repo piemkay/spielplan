@@ -268,7 +268,8 @@ async def test_dismissing_an_arrival_deletes_its_want_and_nothing_else(house):
     assert (await house.patrick.post(f"/api/wish/{PRISONERS}/dismiss")).status_code == 404
 
 
-async def test_an_arrival_is_pushed_to_each_member_who_wanted_it(house, secrets_key):
+# `secrets_key` before `house`: the app's boot mints the VAPID pair under whatever SECRETS_KEY it sees.
+async def test_an_arrival_is_pushed_to_each_member_who_wanted_it(secrets_key, house):
     db = house.db
     await keys.ensure_keypair(db)
     patricks = await _device(db, house.patrick_id, "https://push.example.test/f/patrick-phone")
