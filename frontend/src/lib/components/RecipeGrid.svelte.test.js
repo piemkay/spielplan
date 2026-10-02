@@ -125,7 +125,7 @@ describe("a recipe's reads", () => {
 });
 
 describe("the recipe's head", () => {
-  it('reads "more: ... · less: ..." and the hint while every film is whole', async () => {
+  it('reads "more: ... - less: ..." and the hint while every film is whole', async () => {
     answers = () => page({}, { less: [term('pulp', false)] });
     await open();
     expect(text('recipe-derived')).toBe('more: murder mystery, grand estate · less: pulp');
