@@ -127,9 +127,20 @@ export async function playInJellyfin(request, itemId, fraction = 0.96, sessionId
   expect(res.ok()).toBeTruthy();
 }
 
+/** Whether the household's library holds a title of this name, among the kinds named. */
+async function inLibrary(page, name, kinds) {
+  const kind = kinds.map((k) => `kind=${k === 'Series' ? 'series' : 'movie'}`).join('&');
+  const res = await page.request.get(
+    `/api/titles?${kind}&owned=only&limit=60&q=${encodeURIComponent(name)}`
+  );
+  expect(res.ok(), 'the catalogue answers a search (§6.0)').toBeTruthy();
+  return (await res.json()).items.some((title) => title.name === name);
+}
+
 /**
  * Open a title's detail sheet from the catalog. The card is matched by name, because the search
- * is debounced; Home shows Films only, so pass `['Films']` to leave that default alone.
+ * is debounced; Home shows Films only, so pass `['Films']` to leave that default alone. A title
+ * the library does not hold is searched for beyond it (decision 558).
  */
 export async function openTitle(page, name, { ensureKinds = ['Films', 'Series'] } = {}) {
   // The pending row lands with /api/home, above the grid: a tap aimed before it lands can hit the
@@ -145,6 +156,7 @@ export async function openTitle(page, name, { ensureKinds = ['Films', 'Series'] 
     await landed;
   }
   await page.getByRole('searchbox', { name: 'Search titles' }).fill(name);
+  if (!(await inLibrary(page, name, ensureKinds))) await page.getByTestId('search-beyond').click();
   const card = page.locator('.card-wrap', { hasText: name }).first();
   await card.click();
   const panel = page.getByRole('dialog', { name: 'Title detail' });
