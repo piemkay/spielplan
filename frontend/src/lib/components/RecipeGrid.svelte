@@ -369,6 +369,7 @@
   @media (min-width: 721px) {
     .grid {
       grid-template-columns: repeat(auto-fill, var(--shelf-poster));
+      justify-content: space-between;
       gap: 24px 16px;
     }
   }
