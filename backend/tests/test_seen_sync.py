@@ -1224,7 +1224,14 @@ async def test_the_sweep_does_not_adopt_while_a_finish_prompt_is_open(db, world)
     )
     assert await db.fetchval("SELECT prompt_state FROM playback_event") == "armed"
 
-    # The guard is the open prompt alone: once closed the same sweep adopts.
+    # The x on Home puts the prompt away for good (decision 554): the sweep still keeps away.
+    await db.execute("UPDATE playback_event SET prompt_state = 'closed'")
+    put_away = seen.SyncReport()
+    await seen.sync_user(db, world["client"], _linked(world), put_away)
+    assert put_away.adopted == 0
+    assert await _state(db, patrick, 1) is None
+
+    # Once answered the same sweep adopts.
     await db.execute("UPDATE playback_event SET prompt_state = 'dismissed'")
     answered = seen.SyncReport()
     await seen.sync_user(db, world["client"], _linked(world), answered)
