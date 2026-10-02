@@ -1,11 +1,12 @@
 <script>
-  // You (§3.2, decision 527): the avatar on every root opens this sheet. Who is signed in and how,
-  // Your taste, switching profile, the account and admin entries, Show the model, and Log out.
+  // You (§3.2, decisions 527 and 553): the avatar on every root opens this sheet. Who is signed in and
+  // how, Your taste and the wish list, switching profile, the account and admin entries, Show the
+  // model, and Log out. No footnotes: each row's label says what it opens.
   import { authMethodLine, refreshUser, roleWord, session, setShowModel } from '$lib/session.svelte.js';
   import { get, post } from '$lib/api.js';
   import { modelGateSettled } from '$lib/home.svelte.js';
   import { toggleRail } from '$lib/rail.svelte.js';
-  import { loadMembers, taste } from '$lib/taste.svelte.js';
+  import { loadWishSummary } from '$lib/wish.svelte.js';
   import { goto } from '$app/navigation';
   import Avatar from './Avatar.svelte';
   import Sheet from './Sheet.svelte';
@@ -19,8 +20,8 @@
   let switching = $state(null);
   let pin = $state('');
   let error = $state('');
-  // Whom Compare opens on beside the viewer, named in Your taste's footnote.
-  let partner = $state(null);
+  // The household's wanted count, Wish list's value; null until read.
+  let wanted = $state(null);
   let wishOpen = $state(false);
   // A title opened from the wish list.
   let selected = $state(null);
@@ -35,11 +36,13 @@
     open = true;
     error = '';
     switching = null;
-    const roster = tasteEntry ? loadMembers(taste.kind).catch(() => null) : null;
     // Re-read on every open: a PIN set on another phone makes that profile switchable.
-    switchable = (await get('/auth/switchable').catch(() => [])) ?? [];
-    const read = await roster;
-    partner = read?.members?.find((m) => m.id === read.default?.[1])?.name ?? null;
+    const [who, summary] = await Promise.all([
+      get('/auth/switchable').catch(() => []),
+      loadWishSummary().catch(() => null)
+    ]);
+    switchable = who ?? [];
+    wanted = summary?.wanted ?? null;
   }
 
   async function toggleModel() {
@@ -121,55 +124,47 @@
           </div>
         </section>
       {:else}
-        {#if tasteEntry}
-          <section class="group">
-            <div class="list-group">
+        <section class="group">
+          <div class="list-group">
+            {#if tasteEntry}
               <a class="list-row" href={tasteEntry.href} data-nav="taste" data-testid="taste-row" data-sveltekit-replacestate>
                 <span>{tasteEntry.label}</span>
                 {@render chevron()}
               </a>
-            </div>
-            <p class="list-footer">
-              What sits high on your ladder, and where you and {partner ?? 'someone else'} meet and part.
-            </p>
-          </section>
-        {/if}
-
-        <section class="group">
-          <div class="list-group">
-            <button class="list-row" data-testid="you-wish-row" onclick={() => (wishOpen = true)}>
+            {/if}
+            <button
+              class="list-row"
+              data-testid="you-wish-row"
+              aria-label={wanted === null ? undefined : `Wish list, ${wanted.toLocaleString()} wanted`}
+              onclick={() => (wishOpen = true)}
+            >
               <span>Wish list</span>
+              {#if wanted !== null}<span class="value">{wanted.toLocaleString()}</span>{/if}
               {@render chevron()}
             </button>
           </div>
-          <p class="list-footer">What the household wants that the library doesn't have yet.</p>
         </section>
 
-        <section class="group">
-          <h3 class="list-header">Switch profile</h3>
-          <div class="list-group">
-            {#each others as u (u.id)}
-              <button
-                class="list-row"
-                onclick={() => {
-                  switching = u;
-                  pin = '';
-                }}
-              >
-                <Avatar name={u.name} person={u} />
-                <span>{u.name}</span>
-              </button>
-            {:else}
-              <div class="list-row muted">No one else yet</div>
-            {/each}
-          </div>
-          {#if !others.length}
-            <p class="list-footer">
-              People appear here once they set a PIN on
-              <a href="/account" data-sveltekit-replacestate>their account page</a>.
-            </p>
-          {/if}
-        </section>
+        <!-- Only when someone else can be switched to (decision 553); the account page says how. -->
+        {#if others.length}
+          <section class="group">
+            <h3 class="list-header">Switch profile</h3>
+            <div class="list-group">
+              {#each others as u (u.id)}
+                <button
+                  class="list-row"
+                  onclick={() => {
+                    switching = u;
+                    pin = '';
+                  }}
+                >
+                  <Avatar name={u.name} person={u} />
+                  <span>{u.name}</span>
+                </button>
+              {/each}
+            </div>
+          </section>
+        {/if}
 
         <!-- Entries come from the server's nav payload: a member's browser never receives admin links. -->
         <section class="group">
@@ -210,9 +205,6 @@
               </button>
             {/if}
           </div>
-          <p class="list-footer" data-testid="show-model-hint">
-            Shows the numbers behind your suggestions, and a log of what changed them.
-          </p>
         </section>
       {/if}
 
@@ -282,12 +274,15 @@
     flex-direction: column;
     gap: 6px;
   }
-  .muted {
-    color: var(--text-3);
-  }
   .chev {
     margin-left: auto;
     color: rgba(245, 240, 232, 0.35);
+  }
+  .value {
+    font-variant-numeric: tabular-nums;
+  }
+  .value + .chev {
+    margin-left: 0;
   }
   .list-row[href] {
     color: var(--text);
