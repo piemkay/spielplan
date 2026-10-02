@@ -7,8 +7,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('$lib/api.js', async (importOriginal) => ({ ...(await importOriginal()), get: vi.fn() }));
 
-import { get } from '$lib/api.js';
-import { homeFilters, resetHomeFilters } from '$lib/homeFilters.svelte.js';
+import { ApiError, get } from '$lib/api.js';
+import { catalogParams, homeFilters, resetHomeFilters } from '$lib/homeFilters.svelte.js';
 import RecipeGrid from './RecipeGrid.svelte';
 
 const term = (label, quoted = true) => ({ term: `x.${label}`, label, facet: 'mood', quoted });
@@ -116,6 +116,39 @@ describe("a recipe's reads", () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('asks for twists of both kinds on Both', async () => {
+    await open({ kinds: ['movie', 'series'] });
+    expect(asks('/mix/twists').map((u) => u.searchParams.getAll('kind'))).toEqual([['both']]);
+  });
+
+  it('drops a term the vocabulary no longer has, says so, and reads again without it', async () => {
+    homeFilters.terms = [
+      { id: 'mood.old', label: 'old mood', facet: 'mood', mode: 'in' },
+      { id: 'mood.cozy', label: 'cozy & mellow', facet: 'mood', mode: 'in' }
+    ];
+    answers = (q) => {
+      if (!q.getAll('term').includes('mood.old')) return page();
+      throw new ApiError(422, 'Unprocessable', { reason: 'unknown_term', terms: ['mood.old'] });
+    };
+    const onCleared = vi.fn();
+    app = mount(RecipeGrid, {
+      target,
+      props: {
+        kinds: ['movie'],
+        get params() {
+          return catalogParams();
+        },
+        onCleared
+      }
+    });
+    await settle();
+    expect(homeFilters.terms.map((t) => t.id)).toEqual(['mood.cozy']);
+    expect(onCleared.mock.calls.map(([gone]) => gone.map((t) => t.label))).toEqual([['old mood']]);
+    expect(reads().map((u) => u.searchParams.getAll('term'))).toEqual([['mood.old', 'mood.cozy'], ['mood.cozy']]);
+    expect(target.querySelectorAll('.card-wrap')).toHaveLength(2);
+    expect(target.querySelector('.empty')).toBeNull();
   });
 
   it('marks itself as the grid of a recipe', async () => {
@@ -239,7 +272,10 @@ describe('the grid', () => {
     await open({ onSelect });
     expect(target.querySelector('[data-testid="recipe-caption"]').textContent.trim()).toBe('From Knives Out: murder mystery');
     target.querySelector('.card-wrap').click();
-    expect(onSelect.mock.calls[0][0]).toMatchObject({ id: 1, whyLine: 'From Knives Out: murder mystery' });
+    expect(onSelect.mock.calls[0][0]).toMatchObject({
+      id: 1,
+      whyLine: [{ title_id: 245, name: 'Knives Out', text: 'From Knives Out: murder mystery', less: false }]
+    });
   });
 
   it('asks for the next page once, however often "Show N more" is pressed', async () => {
@@ -261,5 +297,37 @@ describe('the grid', () => {
     await settle();
     expect(reads().at(-1).searchParams.get('sort')).toBe('for_you');
     expect(byTestId('recipe-sort-for_you').getAttribute('aria-pressed')).toBe('true');
+  });
+});
+
+describe('a film marked seen on its card (decision 559 item 4)', () => {
+  const seenMarks = () =>
+    [...target.querySelectorAll('.card-wrap')].map((c) => Boolean(c.querySelector('[data-testid="seen-badge"]')));
+
+  async function mountWith(seen) {
+    const props = $state({ kinds: ['movie'], params: { q: '', seen, owned: 'only' }, seenFlip: null });
+    app = mount(RecipeGrid, { target, props });
+    await settle();
+    return props;
+  }
+
+  it('keeps its place with its mark', async () => {
+    const props = await mountWith('any');
+    props.seenFlip = { id: 2, state: 'seen' };
+    await settle();
+    expect(seenMarks()).toEqual([false, true]);
+    props.seenFlip = { id: 2, state: 'unseen' };
+    await settle();
+    expect(seenMarks()).toEqual([false, false]);
+    expect(reads()).toHaveLength(1);
+  });
+
+  it('leaves a grid of films not seen', async () => {
+    const props = await mountWith('unseen');
+    answers = () => page({ total: 1, library_total: 1, items: [card(1)] });
+    props.seenFlip = { id: 2, state: 'seen' };
+    await settle();
+    expect(reads()).toHaveLength(2);
+    expect([...target.querySelectorAll('.card-wrap .name')].map((n) => n.textContent)).toEqual(['Film 1']);
   });
 });

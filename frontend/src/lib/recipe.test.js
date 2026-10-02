@@ -22,7 +22,7 @@ import {
   startWith,
   toParams,
   twistsOffered,
-  whyLine
+  whyLines
 } from './recipe.svelte.js';
 
 const KNIVES = { id: 245, kind: 'movie', name: 'Knives Out', year: 2019 };
@@ -267,10 +267,13 @@ describe("a result's why (decision 559 item 5)", () => {
     { title_id: 11, name: 'Star Wars', groups: [], like: false, terms: [term('pulp')] }
   ];
 
-  it('names each liked film and its shared terms, and a less-liked film still carried', () => {
-    expect(whyLine(why)).toBe(
-      "From Knives Out: murder mystery, grand estate · Fargo's mood: deadpan & dry · but pulp, like Star Wars"
-    );
+  it('gives each credited film its own line: a liked film and its shared terms, a less-liked one still carried', () => {
+    expect(whyLines(why)).toEqual([
+      { title_id: 245, name: 'Knives Out', text: 'From Knives Out: murder mystery, grand estate', less: false },
+      { title_id: 275, name: 'Fargo', text: "Fargo's mood: deadpan & dry", less: false },
+      { title_id: 11, name: 'Star Wars', text: 'but pulp, like Star Wars', less: true }
+    ]);
+    expect(whyLines([{ ...why[0], terms: [] }])).toEqual([]);
   });
 
   it('captions a poster once per liked film with the strongest term they share', () => {
