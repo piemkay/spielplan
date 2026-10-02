@@ -286,7 +286,9 @@ async def finish_setup(
         if len(set(ids)) != len(ids):
             raise SetupRefused("duplicate")
         films = await conn.fetchval(
-            "SELECT count(*) FROM title WHERE id = ANY($1::int[]) AND kind = 'movie'", ids
+            "SELECT count(*) FROM title"
+            " WHERE id = ANY($1::int[]) AND kind = 'movie' AND origin <> 'wished'",
+            ids,
         )
         if films != len(ids):
             raise SetupRefused("not_a_film")

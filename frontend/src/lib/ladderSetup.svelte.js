@@ -185,7 +185,7 @@ export async function finish() {
   }
 }
 
-/** Any film by name as the library's search finds it, looser matches left out; two letters at least. */
+/** Any film by name as the library's search finds it, looser matches and wished stubs left out. */
 export async function search(q) {
   const seq = ++searchSeq;
   const text = q.trim();
@@ -196,7 +196,8 @@ export async function search(q) {
   try {
     const res = await get(`/titles${qs({ kind: 'movie', q: text, limit: 16 })}`);
     if (seq !== searchSeq) return;
-    setup.hits = res.items.slice(0, strongEnd(res.items, text)).map((t) => ({
+    const held = res.items.slice(0, strongEnd(res.items, text)).filter((t) => t.origin !== 'wished');
+    setup.hits = held.map((t) => ({
       id: t.id,
       name: t.name,
       original_name: t.original_name ?? null,

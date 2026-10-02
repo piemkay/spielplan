@@ -145,8 +145,8 @@ async def titles_needing_placement(conn: Any, *, bundle_version: str, scope: str
         )
         return [int(r["id"]) for r in rows]
 
-    # A wished row carries nothing to place from until it arrives (decision 558).
-    owned = "t.origin <> 'wished'" if scope == "all_missing" else _SWEPT
+    # A wished row carries nothing to place from until it arrives, even rated (decision 558).
+    owned = "t.origin <> 'wished'" if scope == "all_missing" else f"t.origin <> 'wished' AND {_SWEPT}"
     rows = await conn.fetch(_MISSING_SQL.format(owned=owned), bundle_version)
     ids = [int(r["id"]) for r in rows]
     if scope == "reimport":

@@ -8,9 +8,10 @@ enters a score (§4.1 rule 2).
 
 from __future__ import annotations
 
+import itertools
 import math
 from collections import Counter
-from collections.abc import Iterable, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 
 import numpy as np
@@ -426,7 +427,9 @@ def why(
 def derived(
     t: Table, recipe: Sequence[Ingredient], operands: Mapping[int, Operand]
 ) -> tuple[list[tuple[int, bool]], list[tuple[int, bool]]]:
-    """The recipe head's display-only "more: ... · less: ..." terms, quoted first (decision 559 item 5)."""
+    """The recipe head's display-only "more: ... · less: ..." terms (decision 559 item 5): each side's
+    films name their strongest terms in turn, quoted first within a film, so each film is named; the
+    quoted terms lead the line."""
     parts = _parts(t, recipe, operands)
     carried = np.zeros(len(t.terms), dtype=bool)
     for part in parts:
@@ -434,19 +437,25 @@ def derived(
             carried |= part.whole
     sides = []
     for like in (True, False):
-        strength = np.zeros(len(t.terms))
-        quoted = np.zeros(len(t.terms), dtype=bool)
-        chosen = np.zeros(len(t.terms), dtype=bool)
+        ranked = []
         for part in parts:
             if part.ing.like != like:
                 continue
             op = operands[part.ing.title_id]
-            terms = part.terms if like else part.terms & ~carried
-            strength += np.where(terms, t.idf * _dense(t, op, op.rank), 0.0)
-            quoted |= terms & _dense(t, op, op.quoted)
-            chosen |= terms
-        cols = np.flatnonzero(chosen)
-        sides.append(_top(cols, strength[cols], quoted[cols], DERIVED, quoted_first=True))
+            cols = np.flatnonzero(part.terms if like else part.terms & ~carried)
+            strength, quoted = (t.idf * _dense(t, op, op.rank))[cols], _dense(t, op, op.quoted)[cols]
+            ranked.append(_top(cols, strength, quoted, len(cols), quoted_first=True))
+        named: dict[int, bool] = {}
+        for turn in itertools.zip_longest(*ranked):
+            for term in turn:
+                if term is None:
+                    continue
+                col, quoted = term
+                if col in named:
+                    named[col] |= quoted
+                elif len(named) < DERIVED:
+                    named[col] = quoted
+        sides.append(sorted(named.items(), key=lambda term: not term[1]))
     return sides[0], sides[1]
 
 
@@ -531,31 +540,29 @@ def director_cap(t: Table, rows: Sequence[int]) -> list[int | Fold]:
     return cells
 
 
-def twists(
-    t: Table,
-    recipe: Sequence[Ingredient],
-    operands: Mapping[int, Operand],
-    films: Sequence[Operand],
-    *,
-    seed: int,
-    rows: np.ndarray,
-) -> list[tuple[int, str, int]]:
-    """Up to TWISTS (film, group, library count): a group of one of `films` that no recipe film takes,
-    within the limits, kept only if the twisted recipe's DNA gates leave TWIST_MIN_LIBRARY of `rows`
-    (decision 560 item 7). A seeded shuffle orders the pairs; one twist per film."""
+def twist_pairs(
+    t: Table, recipe: Sequence[Ingredient], films: Sequence[Operand]
+) -> list[tuple[Operand, str]]:
+    """Every (film, group) a twist may add within the limits (decision 560 item 7): a group of one of
+    `films`, read on `t`, that the film carries and no recipe film takes."""
     if not recipe or len(recipe) >= MAX_FILMS or sum(bool(i.groups) for i in recipe) >= MAX_LENDING:
         return []
     taken = {g for i in recipe for g in i.groups}
     inside = {i.title_id for i in recipe}
-    pairs = [
+    return [
         (op, g)
         for op in sorted(films, key=lambda o: o.title_id)
         if op.title_id not in inside
         for g in GROUPS
         if g not in taken and not _thin(t, op, g)
     ]
-    if not pairs:
-        return []
+
+
+def twist_count(
+    t: Table, recipe: Sequence[Ingredient], operands: Mapping[int, Operand], rows: np.ndarray
+) -> Callable[[Operand, str], int]:
+    """How many of `rows` pass the recipe's DNA gates once a film's group joins it as a lent like: what
+    "Only N films in your library fit" would count for the twisted recipe."""
     view = _view(t, rows & ~_in_recipe(t, recipe))
     claimed = t.facet_mask(f for i in recipe if i.like for g in i.groups for f in GROUPS[g])
     lent = np.ones(len(view.rows), dtype=bool)
@@ -568,12 +575,9 @@ def twists(
             lent &= shared[:, part.facets].sum(1) >= 1
         else:
             whole.append(rare)
-    kept: list[tuple[int, str, int]] = []
     shared_with: dict[int, np.ndarray] = {}
-    for at in np.random.default_rng(seed).permutation(len(pairs)):
-        op, group = pairs[at]
-        if any(k[0] == op.title_id for k in kept):
-            continue
+
+    def count(op: Operand, group: str) -> int:
         facets = t.facet_mask(GROUPS[group])
         unclaimed = ~(claimed | facets)
         ok = lent & (view.rows != t.row_of.get(op.title_id, -1))
@@ -582,8 +586,36 @@ def twists(
         if op.title_id not in shared_with:
             shared_with[op.title_id] = _shared(t, view, _present(t, op))[0]
         ok &= shared_with[op.title_id][:, facets].sum(1) >= 1
-        if int(ok.sum()) >= TWIST_MIN_LIBRARY:
-            kept.append((op.title_id, group, int(ok.sum())))
-            if len(kept) == TWISTS:
-                break
-    return kept
+        return int(ok.sum())
+
+    return count
+
+
+def twists(
+    pairs: Sequence[tuple[str, Operand, str]],
+    counts: Mapping[str, Callable[[Operand, str], int]],
+    *,
+    seed: int,
+) -> list[tuple[str, int, str, int]]:
+    """Page `seed` of the (kind, film, group, library count) twists that keep TWIST_MIN_LIBRARY films of
+    their kind: TWISTS at a time in one fixed order, wrapping round, so each shuffle shows the next ones.
+    The order is a fixed shuffle of the pairs taking one group of each film a round; pairs are counted
+    only as far as the page needs."""
+    shuffled = [pairs[i] for i in np.random.default_rng(0).permutation(len(pairs))]
+    turn: Counter[int] = Counter()
+    rounds = []
+    for _kind, op, _group in shuffled:
+        rounds.append(turn[op.title_id])
+        turn[op.title_id] += 1
+    kept: list[tuple[str, int, str, int]] = []
+    end = (seed + 1) * TWISTS
+    for at in np.argsort(rounds, kind="stable"):
+        kind, op, group = shuffled[at]
+        n = counts[kind](op, group)
+        if n >= TWIST_MIN_LIBRARY:
+            kept.append((kind, op.title_id, group, n))
+            if len(kept) == end:
+                return kept[-TWISTS:]
+    if len(kept) <= TWISTS:
+        return kept
+    return [kept[(seed * TWISTS + j) % len(kept)] for j in range(TWISTS)]

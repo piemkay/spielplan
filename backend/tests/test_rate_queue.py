@@ -425,6 +425,17 @@ async def test_a_title_already_placed_or_explicitly_not_seen_never_returns(db, w
     ) == []
 
 
+async def test_a_wished_title_is_never_asked_until_it_arrives(db, world):
+    """Decision 558: a row minted for a wish has no step to be put on."""
+    await db.execute(
+        "INSERT INTO title (id, kind, name, year, origin) VALUES (11, 'movie', 'Wished', 2024, 'wished')"
+    )
+    cards = await queue.next_cards(
+        db, user_id=world["patrick"], kind="movie", limit=20, rng=random.Random(0)
+    )
+    assert {c.title_id for c in cards} == set(range(1, 9))
+
+
 async def test_the_banner_cta_pins_its_titles_to_the_front_and_exclude_holds_them_out(db, world):
     """`head` is the banner CTA's pin; `exclude` is the sitting's memory of cards already served."""
     patrick = world["patrick"]

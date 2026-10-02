@@ -298,7 +298,8 @@ async def recipe_page(
         chosen = np.concatenate([chosen[is_strong], chosen[~is_strong]])
 
     page = [int(r) for r in chosen[offset:offset + limit]]
-    cells = mix.director_cap(table, page) if offset == 0 else page
+    # A thin list ("Only N films in your library fit") shows every fit: a fold would hide one of a few.
+    cells = mix.director_cap(table, page) if offset == 0 and len(chosen) >= mix.THIN_UNDER else page
     cards = await _cards(conn, [int(table.ids[r]) for r in page] + [i.title_id for i in recipe], user_id)
 
     def card(row: int) -> dict[str, Any]:
@@ -349,27 +350,37 @@ async def twist_page(
     conn: asyncpg.Connection,
     *,
     user_id: int,
-    kind: str,
+    kinds: Sequence[str],
     recipe: Sequence[mix.Ingredient],
     eligible: library.Eligible | None,
     seed: int = 0,
 ) -> dict[str, Any]:
-    """`GET /api/mix/twists`: a group of one of the member's films placed A or above (decision 539),
-    kept where the twisted recipe leaves enough of the library under the request's filters."""
-    table, operands = await _recipe(app_state, conn, kind, recipe)
-    films, _word, _n = await tonight_pool.liked_films(conn, user_id=user_id, kind=kind)
-    by_id = {f["title_id"]: f for f in films if f["title_id"] in table.row_of}
-    rows = table.owned.copy()
-    if eligible is not None:
-        rows &= np.isin(table.ids, np.fromiter(eligible.ids, dtype=np.int64))
-    picks = mix.twists(table, recipe, operands, [table.operand(t) for t in by_id], seed=seed, rows=rows)
+    """`GET /api/mix/twists`: a group of one of the member's films of a kind shown, placed A or above
+    (decision 539), kept where the twisted recipe leaves enough of that kind's library under the
+    request's filters."""
+    pairs: list[tuple[str, mix.Operand, str]] = []
+    counts, shown = {}, {}
+    for kind in kinds:
+        table, operands = await _recipe(app_state, conn, kind, recipe)
+        films, _word, _n = await tonight_pool.liked_films(conn, user_id=user_id, kind=kind)
+        by_id = {f["title_id"]: f for f in films if f["title_id"] in table.row_of}
+        mine = mix.twist_pairs(table, recipe, [table.operand(t) for t in by_id])
+        if not mine:
+            continue
+        rows = table.owned.copy()
+        if eligible is not None:
+            rows &= np.isin(table.ids, np.fromiter(eligible.ids, dtype=np.int64))
+        pairs += [(kind, op, group) for op, group in mine]
+        counts[kind] = mix.twist_count(table, recipe, operands, rows)
+        shown[kind] = (table, by_id)
     out = []
-    for title_id, group, n in picks:
+    for kind, title_id, group, n in mix.twists(pairs, counts, seed=seed):
+        table, by_id = shown[kind]
         film = by_id[title_id]
         terms = mix.film_terms(table, mix.Ingredient(title_id, (group,)), table.operand(title_id),
                                mix.TWIST_TERMS)
         out.append({
-            "title_id": title_id, "name": film["name"], "year": film["year"],
+            "kind": kind, "title_id": title_id, "name": film["name"], "year": film["year"],
             "poster_path": film["poster_path"], "group": group, "group_name": mix.GROUP_NAMES[group],
             "colour": table.colours.get(mix.GROUPS[group][0]),
             "terms": [_term(table, c) for c, _q in terms], "library_n": n,

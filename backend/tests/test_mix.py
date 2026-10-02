@@ -254,6 +254,26 @@ def test_the_derived_line_names_quoted_terms_first():
     assert [(t.terms[c], q) for c, q in less] == [("themes.war", True), ("mood.grim", False)]
 
 
+def test_the_derived_line_names_every_liked_film_even_one_read_by_us_alone():
+    """Film 1's three quoted terms would fill the line; film 2, all our read, still gets its turn."""
+    t = make({1: ["mood.dark!", "themes.heist!", "structure.whodunit!", "sensibility.tense!"],
+              2: ["visual.pastel", "themes.family", "mood.cozy"], **filler(30)})
+    recipe = [Ingredient(1), Ingredient(2)]
+    more, _less = mix.derived(t, recipe, ops(t, recipe))
+    assert len(more) == mix.DERIVED
+    assert [q for _c, q in more] == [True, True, False], "quoted terms still lead the line"
+    assert len({c for c, _q in more} & set(t.operand(2).cols.tolist())) == 1
+
+
+def test_a_term_one_liked_film_quotes_reads_quoted_though_another_names_it_first():
+    t = make({1: ["mood.dark", "register.plain"], 2: ["mood.dark!", "visual.pastel!"], **filler(30)})
+    recipe = [Ingredient(1), Ingredient(2)]
+    more, _less = mix.derived(t, recipe, ops(t, recipe))
+    assert [(t.terms[c], q) for c, q in more] == [
+        ("mood.dark", True), ("visual.pastel", True), ("register.plain", False)
+    ]
+
+
 def test_the_why_credits_each_group_to_one_film_and_names_a_less_films_own_terms():
     t = make({
         1: A, 2: B, 3: ["themes.war", "mood.grim", "mood.dark"],
@@ -290,39 +310,56 @@ def _twist_world(extra_liked=()):
     return make(films)
 
 
+def twists(t, recipe, films, *, seed=0, rows=None) -> list[tuple[int, str, int]]:
+    """One kind's twists: (film, group, library count)."""
+    count = mix.twist_count(t, recipe, ops(t, recipe), t.owned if rows is None else rows)
+    pairs = [("movie", op, g) for op, g in mix.twist_pairs(t, recipe, [t.operand(f) for f in films])]
+    return [(f, g, n) for _k, f, g, n in mix.twists(pairs, {"movie": count}, seed=seed)]
+
+
 def test_a_twist_keeps_ten_library_films_and_takes_no_claimed_group():
     t = _twist_world()
     recipe = [Ingredient(1)]
-    picks = mix.twists(t, recipe, ops(t, recipe), [t.operand(70), t.operand(2)], seed=0, rows=t.owned)
+    picks = twists(t, recipe, [70, 2])
     assert {(f, g) for f, g, _n in picks} == {(70, "pace"), (2, "mood")}
     assert dict(((f, g), n) for f, g, n in picks)[(70, "pace")] == 12
     # Sound would leave five films; B's mood is taken once the recipe lends it.
     lent = [Ingredient(1), Ingredient(2, ("mood",))]
-    picks = mix.twists(t, lent, ops(t, lent), [t.operand(70)], seed=0, rows=t.owned)
-    assert [(f, g) for f, g, _n in picks] == [(70, "pace")]
+    assert [(f, g) for f, g, _n in twists(t, lent, [70])] == [(70, "pace")]
     narrowed = t.owned & ~np.isin(t.ids, [100, 101, 102])
-    assert mix.twists(t, recipe, ops(t, recipe), [t.operand(70)], seed=0, rows=narrowed) == []
+    assert twists(t, recipe, [70], rows=narrowed) == []
 
 
 def test_no_twist_at_four_films_or_two_lenders():
     t = _twist_world()
     four = [Ingredient(1), Ingredient(1000), Ingredient(1001), Ingredient(1002)]
-    assert mix.twists(t, four, ops(t, four), [t.operand(70)], seed=0, rows=t.owned) == []
+    assert twists(t, four, [70]) == []
     two = [Ingredient(1), Ingredient(2, ("mood",)), Ingredient(100, ("storytelling",))]
-    assert mix.twists(t, two, ops(t, two), [t.operand(70)], seed=0, rows=t.owned) == []
+    assert twists(t, two, [70]) == []
 
 
-def test_a_seed_reproduces_its_twists_one_per_film():
+def test_the_shuffle_pages_through_every_twist_and_wraps():
+    """Six films with two groups each: four pages of three, the first two naming each film once."""
     liked = {200 + i: ["pacing.fast", "pacing.kinetic", "mood.warm", "mood.cozy"] for i in range(6)}
     t = _twist_world(liked)
     recipe = [Ingredient(1)]
-    films = [t.operand(f) for f in liked]
-    first = mix.twists(t, recipe, ops(t, recipe), films, seed=4, rows=t.owned)
-    assert len(first) == mix.TWISTS
-    assert len({f for f, _g, _n in first}) == mix.TWISTS
-    assert mix.twists(t, recipe, ops(t, recipe), films, seed=4, rows=t.owned) == first
-    others = {tuple(mix.twists(t, recipe, ops(t, recipe), films, seed=s, rows=t.owned)) for s in range(8)}
-    assert len(others) > 1, "the shuffle offers other twists"
+    pages = [twists(t, recipe, liked, seed=s) for s in range(5)]
+    assert all(len(p) == mix.TWISTS for p in pages)
+    assert twists(t, recipe, liked, seed=1) == pages[1], "a seed is one page, always the same"
+    shown = [(f, g) for p in pages[:4] for f, g, _n in p]
+    assert sorted(shown) == sorted((f, g) for f in liked for g in ("mood", "pace")), "each twist once"
+    assert sorted(f for p in pages[:2] for f, _g, _n in p) == sorted(liked)
+    assert pages[4] == pages[0], "the shuffle wraps round"
+
+
+def test_a_page_short_of_three_wraps_and_three_or_fewer_always_show():
+    liked = {200 + i: ["pacing.fast", "pacing.kinetic"] for i in range(4)}
+    t = _twist_world(liked)
+    recipe = [Ingredient(1)]
+    first, second = twists(t, recipe, liked, seed=0), twists(t, recipe, liked, seed=1)
+    assert second[0] not in first and second[1:] == first[:2]
+    few = twists(t, recipe, [70, 2])
+    assert len(few) == 2 and twists(t, recipe, [70, 2], seed=5) == few
 
 
 def test_an_owned_flip_rederives_idf_without_new_terms():

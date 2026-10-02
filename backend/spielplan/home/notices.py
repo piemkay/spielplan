@@ -75,11 +75,13 @@ async def hidden(
 async def apply_hidden(
     conn: asyncpg.Connection, *, user_id: int, payload: dict[str, Any]
 ) -> dict[str, Any]:
-    """Home's payload with the member's hidden notices taken out; the wish list stays open from You."""
+    """Home's payload with the member's hidden notices taken out; the wish list stays open from You.
+    `setup_hidden` says a set-up is still owed while its notice is away."""
     gone = await hidden(conn, user_id=user_id)
     if "pending" in gone:
         payload["banner"] = None
-    if "setup" in gone:
+    payload["setup_hidden"] = "setup" in gone and payload["setup_notice"] is not None
+    if payload["setup_hidden"]:
         payload["setup_notice"] = None
     payload["wish"] = {**payload["wish"], "hidden": "wish_list" in gone}
     return payload

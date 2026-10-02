@@ -95,6 +95,19 @@ async def test_want_it_mints_one_wished_row_whose_card_renders_from_the_database
     ), "a wished row carries nothing the Cold Tower could place it from"
 
 
+async def test_a_rated_wished_row_is_still_never_placed(house):
+    """Rated by anyone puts a title on the sweep (decision 470), but a wished row has nothing to place."""
+    title_id = (await _want(house.patrick, "movie", 910001)).json()["title_id"]
+    jenny = await house.db.fetchval("SELECT id FROM app_user WHERE name = 'jenny'")
+    await house.db.execute(
+        "INSERT INTO verdict (user_id, title_id, value) VALUES ($1, $2, 2)", jenny, title_id
+    )
+    for scope in ("owned_missing", "reimport", "all_missing"):
+        assert title_id not in await reconcile.titles_needing_placement(
+            house.db, bundle_version="test-v1", scope=scope
+        ), scope
+
+
 async def test_a_second_member_wants_the_same_row(house):
     first = (await _want(house.patrick, "movie", 910001)).json()
     second = (await _want(house.jenny, "movie", 910001)).json()

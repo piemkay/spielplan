@@ -89,7 +89,8 @@ async def world(db, app):
 
 
 async def _mix(client, path="/api/mix/titles", **params):
-    query = [("kind", params.pop("kind", "movie"))]
+    kinds = params.pop("kind", "movie")
+    query = [("kind", k) for k in ([kinds] if isinstance(kinds, str) else kinds)]
     for key in ("like", "less"):
         query += [(key, v) for v in params.pop(key, [])]
     query += list(params.items())
@@ -299,6 +300,10 @@ async def test_the_first_page_caps_a_director_at_two_films(world):
     assert len(_ids(first)) == len(LIBRARY)
     later = await _ok(world.client, like=[str(ANCHOR)], offset=2, limit=10)
     assert not any("fold" in i for i in later["items"]), "only the first page is capped"
+    thin = await _ok(world.client, like=[str(ANCHOR)], decade=1990)
+    assert not any("fold" in i for i in thin["items"]) and sorted(_ids(thin)) == LIBRARY[:6], (
+        "under ten fits each shows, the Coens' third film of the nineties too"
+    )
 
 
 @pytest.mark.parametrize(
@@ -337,13 +342,54 @@ async def test_a_twist_takes_a_group_of_a_film_placed_high(world):
     body = await _ok(world.client, "/api/mix/twists", like=[str(ANCHOR)], seed=3)
     assert body["seed"] == 3
     (twist,) = body["twists"]
-    assert (twist["title_id"], twist["name"], twist["group"], twist["group_name"]) == (
-        LIKED, "Liked", "pace", "Pace"
+    assert (twist["kind"], twist["title_id"], twist["name"], twist["group"], twist["group_name"]) == (
+        "movie", LIKED, "Liked", "pace", "Pace"
     )
     assert [t["term"] for t in twist["terms"]] == ["pacing.kinetic", "pacing.fast"]
     assert twist["library_n"] == len(LIBRARY), "sound would leave none; mood is one term"
     narrowed = await _ok(world.client, "/api/mix/twists", like=[str(ANCHOR)], decade=1990)
     assert narrowed["twists"] == [], "six films of the nineties fit, under ten"
+
+
+async def _placed_high(world, title_id: int) -> None:
+    await world.db.execute(
+        "INSERT INTO tier_edit (user_id, title_id, tier, n_levels, via) VALUES ($1, $2, 6, 7, 'explicit')",
+        world.user_id, title_id,
+    )
+    await world.db.execute(
+        "INSERT INTO user_title (user_id, title_id, state) VALUES ($1, $2, 'seen')", world.user_id, title_id
+    )
+
+
+async def test_on_both_a_series_placed_high_is_a_twist_counted_in_the_series_library(world):
+    """Ten owned series share the anchor's heist and the show's pace, among fifty that make heist rare."""
+    db, show = world.db, 501
+    shows, filler = list(range(510, 520)), list(range(520, 570))
+    await db.executemany(
+        "INSERT INTO title (id, kind, name, year, is_owned) VALUES ($1, 'series', $2, 2010, true)",
+        [(t, f"Show {t}") for t in [show, *shows, *filler]],
+    )
+    await _terms(db, show, ["pacing.fast", "pacing.kinetic", "mood.warm"])
+    for t in shows:
+        await _terms(db, t, [*HEIST, "pacing.fast"])
+    for t in filler:
+        await _terms(db, t, COMMON)
+    await _placed_high(world, LIKED)
+    await _placed_high(world, show)
+
+    def offered(body):
+        return {(t["kind"], t["title_id"], t["group"], t["library_n"]) for t in body["twists"]}
+
+    both = await _ok(world.client, "/api/mix/twists", like=[str(ANCHOR)], kind=["movie", "series"])
+    assert offered(both) == {("movie", LIKED, "pace", len(LIBRARY)), ("series", show, "pace", len(shows))}
+    said = await _ok(world.client, "/api/mix/twists", like=[str(ANCHOR)], kind="both")
+    assert said["twists"] == both["twists"], "kind=both names the two kinds"
+    films = await _ok(world.client, "/api/mix/twists", like=[str(ANCHOR)])
+    assert offered(films) == {("movie", LIKED, "pace", len(LIBRARY))}, "a series only where series show"
+
+    await db.execute("DELETE FROM dna_projected WHERE title_id = $1 AND term = 'pacing.fast'", shows[0])
+    both = await _ok(world.client, "/api/mix/twists", like=[str(ANCHOR)], kind=["movie", "series"])
+    assert offered(both) == {("movie", LIKED, "pace", len(LIBRARY))}, "nine series would fit, under ten"
 
 
 async def test_the_picker_finds_either_kind_with_two_terms(world):

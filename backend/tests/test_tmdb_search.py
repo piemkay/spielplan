@@ -16,6 +16,7 @@ import pytest
 from spielplan.acquire.hosts import WEB_TMDB_POLICY
 from spielplan.art.poster import ArtService
 from spielplan.connectors import registry
+from spielplan.core import logs
 from spielplan.home import beyond
 from spielplan.sources import tmdb
 
@@ -200,3 +201,15 @@ async def test_the_query_reaches_no_log_line_and_no_raw_document(keyed, art, fak
     assert any("TMDB search unavailable" in line for line in lines), lines
     assert [line for line in lines if "harbour" in line.lower() or "glass" in line.lower()] == []
     assert await keyed.fetchval("SELECT count(*) FROM raw_document") == 0
+
+
+def test_an_access_line_keeps_its_path_and_drops_the_query():
+    """uvicorn's request line, shaped as its h11 and httptools protocols log it to the container."""
+    logs.configure()
+    access = logging.getLogger("uvicorn.access")
+    record = access.makeRecord(
+        access.name, logging.INFO, __file__, 0, '%s - "%s %s HTTP/%s" %d',
+        ("1.2.3.4:5", "GET", "/api/wish/tmdb?kind=movie&q=harbour", "1.1", 200), None,
+    )
+    assert access.filter(record)
+    assert record.getMessage() == '1.2.3.4:5 - "GET /api/wish/tmdb HTTP/1.1" 200'
