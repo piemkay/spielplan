@@ -28,6 +28,7 @@
     sortWaitingLine,
     strongEnd
   } from '$lib/home.svelte.js';
+  import { homeFilters } from '$lib/homeFilters.svelte.js';
   import { putAway } from '$lib/notices.js';
   import { publishSuppressed } from '$lib/rail.svelte.js';
   import { displayNames } from '$lib/titleCard.js';
@@ -38,6 +39,7 @@
   import FinishPrompt from '$lib/components/FinishPrompt.svelte';
   import PendingVerdicts from '$lib/components/PendingVerdicts.svelte';
   import PosterCard, { isColdPlaced } from '$lib/components/PosterCard.svelte';
+  import SearchBeyond from '$lib/components/SearchBeyond.svelte';
   import ShelfList from '$lib/components/ShelfList.svelte';
   import TitleDetail from '$lib/components/TitleDetail.svelte';
 
@@ -93,6 +95,8 @@
   // Everything after the last strong hit is weaker, loaded or not: the list is ordered by quality.
   const weakTotal = $derived(weakItems.length ? total - cut : 0);
   const partitioned = $derived(partitionedByKind(kinds, sortEcho));
+  // Only in library off, a search answers in three sections (decision 558).
+  const beyondSearch = $derived(reason === 'search' && !homeFilters.owned);
 
   // The shell renders Home's suppressed list; clear it on teardown, or it outlives this surface.
   $effect(() => {
@@ -525,6 +529,9 @@
 {/snippet}
 
 {#if mode === 'grid'}
+  {#if beyondSearch}
+    <h2 class="section-title" data-testid="library-section-head">In your library</h2>
+  {/if}
   <div class="gridhead" data-testid="home-mode" data-mode="grid" data-reason={reason}>
     {#if gridLine(reason)}
       <p class="footnote">{gridLine(reason)}</p>
@@ -622,6 +629,9 @@
         </div>
       {/if}
     </div>
+  {/if}
+  {#if beyondSearch}
+    <SearchBeyond {kinds} {q} params={{ q, genre, decade, seen }} onSelect={(t) => (selected = t)} />
   {/if}
 {:else if !session.hasBundle}
   <div class="empty card">
