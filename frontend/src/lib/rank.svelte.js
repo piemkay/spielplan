@@ -16,11 +16,24 @@ export const ROUND_SIZE = 15;
 export const ROUND_END_TITLE = `That's ${ROUND_SIZE}.`;
 export const ROUND_END_TEXT = `Stop here, or keep going for another ${ROUND_SIZE}.`;
 
-// The two DNA tiers stay distinguishable (§4.1 rule 1), named by what each is to a member.
-export const DNA_TIER_LABELS = { extracted: 'quoted', projected: 'our read' };
+// The two DNA tiers stay distinguishable (§4.1 rule 1), named by what each is to a member: a
+// survivor is `extracted` when a review names every include, else our read admitted it.
+export function dnaTierText(tier, terms) {
+  return tier === 'extracted' ? `${terms}, quoted` : `${terms} by our read`;
+}
 
-export function dnaTierText(tiers) {
-  return (tiers ?? []).map((t) => DNA_TIER_LABELS[t] ?? t).join(' + ');
+/** The includes a survivor was admitted by, in words: "heist and cozy & mellow". */
+export function includeLabels() {
+  return draft.terms
+    .filter((t) => t.mode === 'in')
+    .map((t) => t.label)
+    .join(' and ');
+}
+
+/** The board's legend for its marked posters, while any survivor rests on our read alone. */
+export function tierLegend() {
+  const ours = Object.values(rank.dnaTiers ?? {}).includes('projected');
+  return ours && includeLabels() ? `Our read says ${includeLabels()}; no review does` : '';
 }
 
 /** §6.3's genre and decade vocabularies, scoped to the kind on screen (as Home scopes them). */
@@ -57,7 +70,7 @@ export const rank = $state({
   fitting: false,
   /** @type {Record<string, any>} what the person has switched on */
   filters: {},
-  /** @type {Record<string, string[]> | null} §4.1 rule 1: which tier matched each survivor */
+  /** @type {Record<string, 'extracted' | 'projected'> | null} §4.1 rule 1: the tier that admitted each survivor */
   dnaTiers: null,
   /** @type {any} §6.7, present only when the model-log toggle is on */
   model: null,
@@ -82,8 +95,11 @@ export const draft = $state({
   decade: '',
   runtime_max: '',
   seen: 'any',
-  dna: ''
+  /** @type {{id: string, label: string, facet: string, mode: 'in' | 'out'}[]} includes and leave-outs (decision 557) */
+  terms: []
 });
+
+const termIds = (mode) => draft.terms.filter((t) => t.mode === mode).map((t) => t.id);
 
 function query() {
   return {
@@ -94,7 +110,8 @@ function query() {
     decade: draft.decade || undefined,
     runtime_max: draft.runtime_max || undefined,
     seen: draft.seen !== 'any' ? draft.seen : undefined,
-    dna: draft.dna || undefined
+    term: termIds('in'),
+    not_term: termIds('out')
   };
 }
 
@@ -436,9 +453,13 @@ export function searchHint() {
   return `Search ${rank.ratedTotal} rated ${nounFor(rank.ratedTotal)}`;
 }
 
-/** What the Filters control holds, as removable chips; the title search keeps its own box. */
+/** What the Filters control holds, as removable chips, includes and leave-outs first; the title
+ *  search keeps its own box. */
 export function filterChips() {
-  const chips = [];
+  /** @type {{key: string, text: string, term?: (typeof draft.terms)[number]}[]} */
+  const chips = ['in', 'out'].flatMap((mode) =>
+    draft.terms.filter((t) => t.mode === mode).map((t) => ({ key: `term:${t.id}`, text: t.label, term: t }))
+  );
   if (draft.genre) chips.push({ key: 'genre', text: draft.genre });
   if (draft.decade) chips.push({ key: 'decade', text: `${draft.decade}s` });
   if (draft.runtime_max) {
@@ -446,12 +467,26 @@ export function filterChips() {
     chips.push({ key: 'runtime_max', text: `Up to ${limit}` });
   }
   if (draft.seen !== 'any') chips.push({ key: 'seen', text: draft.seen === 'seen' ? 'Seen' : 'Not seen' });
-  if (draft.dna) chips.push({ key: 'dna', text: draft.dna });
   return chips;
 }
 
 export function clearFilter(key) {
-  draft[key] = key === 'seen' ? 'any' : '';
+  if (key.startsWith('term:')) draft.terms = draft.terms.filter((t) => `term:${t.id}` !== key);
+  else draft[key] = key === 'seen' ? 'any' : '';
+  return load(rank.kind);
+}
+
+/** Include or leave out a term from the picker, or switch one already chosen (decision 557 item 8). */
+export function setTerm({ term, label, facet }, mode) {
+  const chosen = draft.terms.find((t) => t.id === term);
+  if (chosen) chosen.mode = mode;
+  else draft.terms.push({ id: term, label, facet, mode });
+  return load(rank.kind);
+}
+
+export function flipTerm(id) {
+  const chosen = draft.terms.find((t) => t.id === id);
+  if (chosen) chosen.mode = chosen.mode === 'in' ? 'out' : 'in';
   return load(rank.kind);
 }
 
@@ -498,6 +533,6 @@ export function clearFilters() {
   draft.decade = '';
   draft.runtime_max = '';
   draft.seen = 'any';
-  draft.dna = '';
+  draft.terms = [];
   return load(rank.kind);
 }

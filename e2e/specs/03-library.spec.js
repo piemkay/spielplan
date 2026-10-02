@@ -4,8 +4,15 @@ import { kindToggle, openTitle, signedIn } from '../helpers.js';
 
 /** §6.0 the catalog; §4.1 rule 5: one kind or both, never neither (decisions 18, 474). */
 
-// The count is the search field's placeholder (decision 528).
+// The count is the search field's placeholder (decisions 528, 558).
 const search = (page) => page.getByTestId('home-search');
+
+/** Only in library off (decision 558): a title 08's sync left out of the library is beyond it. */
+async function beyondTheLibrary(page) {
+  await page.getByTestId('filter-toggle').click();
+  await page.getByTestId('filter-owned').click();
+  await expect(page.getByTestId('filter-owned')).toHaveAttribute('aria-checked', 'false');
+}
 
 test.beforeEach(async ({ page }) => {
   await signedIn(page);
@@ -16,7 +23,7 @@ test('films only, and the search says how many films the library holds', async (
   // §6.0 (decision 527): the count is of the kind shown; the kind not shown is not counted.
   await expect(kindToggle(page, 'Films')).toHaveAttribute('aria-pressed', 'true');
   await expect(kindToggle(page, 'Series')).toHaveAttribute('aria-pressed', 'false');
-  await expect(search(page)).toHaveAttribute('placeholder', /^Search \d+ films?$/);
+  await expect(search(page)).toHaveAttribute('placeholder', /^Search your \d+ films?$/);
 });
 
 test('both kinds on shows everything and nothing is reported hidden', async ({ page }) => {
@@ -24,7 +31,7 @@ test('both kinds on shows everything and nothing is reported hidden', async ({ p
   await expect(kindToggle(page, 'Both')).toHaveAttribute('aria-pressed', 'true');
   await expect(kindToggle(page, 'Films')).toHaveAttribute('aria-pressed', 'false');
   await expect(kindToggle(page, 'Series')).toHaveAttribute('aria-pressed', 'false');
-  await expect(search(page)).toHaveAttribute('placeholder', /^Search \d+ titles?$/);
+  await expect(search(page)).toHaveAttribute('placeholder', /^Search your \d+ titles?$/);
 });
 
 test('the kind switch selects one kind or both, never neither', async ({ page }) => {
@@ -85,25 +92,37 @@ test('an exact title is the first search hit', async ({ page }) => {
   await expect(page.locator('.grid .card-wrap').first()).toContainText('Heat');
 });
 
-test('owned titles are marked in the catalog and one pill narrows to them', async ({ page }) => {
-  await page.getByTestId('filter-toggle').click();
-  await page.getByTestId('filter-owned').click();
-  await expect(page.getByTestId('home-mode')).toHaveAttribute('data-mode', 'grid');
-  await expect(page.getByTestId('filter-owned')).toHaveAttribute('aria-checked', 'true');
-  await expect(search(page)).toHaveAttribute('placeholder', /^Search \d+ films? in your library$/);
+test('Only in library is on by default, and its pill widens the catalog beyond it', async ({ page }) => {
+  // Decision 558: on, a search reads the library and every card wears the mark; off is a chip.
+  await search(page).fill('e');
   const cards = page.locator('.grid .card-wrap');
   await expect(cards.first()).toBeVisible();
-  const n = await cards.count();
-  await expect(page.locator('.grid [data-testid="owned-chip"]')).toHaveCount(n);
+  await expect(page.locator('.grid [data-testid="owned-chip"]')).toHaveCount(await cards.count());
+  await search(page).fill('');
+
+  await page.getByTestId('filter-toggle').click();
+  await expect(page.getByTestId('filter-owned')).toHaveAttribute('aria-checked', 'true');
+  await expect(page.getByTestId('home-mode')).toHaveAttribute('data-mode', 'shelves');
+  await page.getByTestId('filter-owned').click();
+  await expect(page.getByTestId('home-mode')).toHaveAttribute('data-mode', 'grid');
+  await expect(search(page)).toHaveAttribute('placeholder', 'Search all films');
+  await expect(cards.first()).toBeVisible();
   await page.getByTestId('filter-toggle').click();
   await expect(page.getByTestId('filter-toggle')).toHaveText('Filters · 1');
-  await expect(page.getByTestId('owned-filter-chip')).toBeVisible();
+  const chip = page.getByTestId('owned-filter-chip');
+  await expect(chip).toHaveText(/Beyond your library/);
+  // Removing the chip turns it back on.
+  await chip.click();
+  await expect(page.getByTestId('home-mode')).toHaveAttribute('data-mode', 'shelves');
+  await expect(search(page)).toHaveAttribute('placeholder', /^Search your \d+ films?$/);
 });
 
 test('search matches an alias, not just the title', async ({ page }) => {
-  // The fixture's CJK title carries its English name only as an alias.
+  // The fixture's CJK title carries its English name only as an alias; neither Chungking is in
+  // the library once 08 has synced, so the search reaches past it.
+  await beyondTheLibrary(page);
   await page.getByLabel('Search titles').fill('chungking');
-  await expect(page.locator('.grid .card-wrap').first()).toBeVisible();
+  await expect(page.locator('.card-wrap', { hasText: /Chungking|重慶森林/ }).first()).toBeVisible();
 });
 
 test('a query with no matches says so instead of showing an empty grid', async ({ page }) => {
@@ -140,9 +159,7 @@ test('a search keeps its close matches in view and folds the looser ones', async
 test('a filtered grid names the order it is in, with the other one tap away', async ({ page }) => {
   // Without a fitted score the server answers newest whatever is asked (`for_you_available`),
   // and the page must then offer no "For you" that does nothing.
-  const probe = await (
-    await page.request.get('/api/titles?kind=movie&owned_only=true&limit=1')
-  ).json();
+  const probe = await (await page.request.get('/api/titles?kind=movie&owned=any&limit=1')).json();
   await page.getByTestId('filter-toggle').click();
   await page.getByTestId('filter-owned').click();
   const order = page.getByRole('group', { name: 'Order' });
@@ -165,6 +182,7 @@ test('a filtered grid names the order it is in, with the other one tap away', as
 
 test('non-ASCII titles survive to the screen', async ({ page }) => {
   // §4.1 rule 8: never "clean" non-ASCII. Searched in its own script, so the query round-trips too.
+  await beyondTheLibrary(page);
   await page.getByRole('searchbox', { name: 'Search titles' }).fill('重慶');
   await expect(page.getByTestId('home-mode')).toHaveAttribute('data-mode', 'grid');
   await expect(page.getByText('重慶森林')).toBeVisible();
@@ -183,7 +201,7 @@ test('a person filter keeps the kind partition and can be cleared', async ({ pag
   await expect(chip).toContainText(name ?? '');
   await expect(kindToggle(page, 'Films')).toHaveAttribute('aria-pressed', 'true');
 
-  await chip.click();
+  await chip.getByRole('button', { name: `Remove ${name}` }).click();
   await expect(chip).toHaveCount(0);
 });
 

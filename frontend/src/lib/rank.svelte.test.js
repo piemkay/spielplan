@@ -18,6 +18,7 @@ import {
   emptyState,
   facets,
   filterChips,
+  flipTerm,
   keepGoing,
   load,
   loadFacets,
@@ -28,6 +29,8 @@ import {
   rank,
   reset,
   roundLine,
+  setTerm,
+  tierLegend,
   searchHint,
   showAll,
   showLess,
@@ -35,6 +38,12 @@ import {
   typed
 } from './rank.svelte.js';
 import { hideToast, toast } from './toast.svelte.js';
+
+/** @typedef {{id: string, label: string, facet: string, mode: 'in' | 'out'}} Term */
+/** @type {Term} */
+const COSY = { id: 'mood.cosy', label: 'cozy & mellow', facet: 'mood', mode: 'in' };
+/** @type {Term} */
+const HEIST = { id: 'themes.heist', label: 'heist', facet: 'themes', mode: 'out' };
 
 const board = (over = {}) => ({
   kind: 'movie',
@@ -128,7 +137,7 @@ beforeEach(() => {
   draft.decade = '';
   draft.runtime_max = '';
   draft.seen = 'any';
-  draft.dna = '';
+  draft.terms = [];
   apply(board());
 });
 
@@ -382,7 +391,7 @@ describe("proposal 80's states", () => {
   });
 
   it('distinguishes "no match" from "not enough yet"', () => {
-    apply(board({ rated: 0, rated_total: 40, filters: { dna: 'cosy' } }));
+    apply(board({ rated: 0, rated_total: 40, filters: { terms: ['mood.cosy'] } }));
     const state = emptyState();
     expect(state.kind).toBe('no-match');
     // The chips above the board name each filter; the sentence points at them.
@@ -435,14 +444,32 @@ describe("proposal 80's states", () => {
 
 describe('filters', () => {
   it('are sent as query parameters and dropped when empty', async () => {
-    draft.dna = 'mood.cosy';
+    draft.terms = [COSY, HEIST];
     draft.runtime_max = '110';
     respond(board());
     await load('movie');
-    const url = fetchMock.mock.calls[0][0];
-    expect(url).toContain('dna=mood.cosy');
-    expect(url).toContain('runtime_max=110');
-    expect(url).not.toContain('genre=');
+    const url = new URL(fetchMock.mock.calls[0][0], 'http://localhost');
+    expect(url.searchParams.getAll('term')).toEqual(['mood.cosy']);
+    expect(url.searchParams.getAll('not_term')).toEqual(['themes.heist']);
+    expect(url.searchParams.get('runtime_max')).toBe('110');
+    expect(url.searchParams.has('genre')).toBe(false);
+    expect(url.searchParams.has('dna'), "the free-text taste tag is gone (decision 557)").toBe(false);
+  });
+
+  it('take a term from the picker, switch it between include and leave out, and drop it', async () => {
+    respond(board());
+    await setTerm({ term: 'mood.cosy', label: 'cozy & mellow', facet: 'mood' }, 'in');
+    expect(draft.terms).toEqual([COSY]);
+    respond(board());
+    await setTerm({ term: 'mood.cosy', label: 'cozy & mellow', facet: 'mood' }, 'out');
+    expect(draft.terms).toEqual([{ ...COSY, mode: 'out' }]);
+    respond(board());
+    await flipTerm('mood.cosy');
+    expect(draft.terms[0].mode).toBe('in');
+    respond(board());
+    await clearFilter('term:mood.cosy');
+    expect(draft.terms).toEqual([]);
+    expect(fetchMock.mock.calls.at(-1)[0]).not.toContain('term=');
   });
 
   it('show what the Filters control holds as chips, and a chip clears only its own', async () => {
@@ -451,14 +478,15 @@ describe('filters', () => {
     draft.decade = '1990';
     draft.runtime_max = '110';
     draft.seen = 'unseen';
-    draft.dna = 'cosy';
-    // The search keeps its own box, so it is no chip.
+    draft.terms = [HEIST, COSY];
+    // The search keeps its own box, so it is no chip; includes lead, then leave-outs.
     expect(filterChips().map((c) => c.text)).toEqual([
+      'cozy & mellow',
+      'heist',
       'Thriller',
       '1990s',
       'Up to 1h 50m',
-      'Not seen',
-      'cosy'
+      'Not seen'
     ]);
 
     respond(board());
@@ -471,15 +499,17 @@ describe('filters', () => {
     respond(board());
     await clearFilter('seen');
     expect(draft.seen).toBe('any');
-    expect(filterChips().map((c) => c.key)).toEqual(['genre', 'runtime_max', 'dna']);
+    expect(filterChips().map((c) => c.key)).toEqual([
+      'term:mood.cosy', 'term:themes.heist', 'genre', 'runtime_max'
+    ]);
   });
 
   it('clear back to nothing', async () => {
-    draft.dna = 'cosy';
+    draft.terms = [COSY];
     respond(board());
     await clearFilters();
-    expect(draft.dna).toBe('');
-    expect(fetchMock.mock.calls[0][0]).not.toContain('dna=');
+    expect(draft.terms).toEqual([]);
+    expect(fetchMock.mock.calls[0][0]).not.toContain('term=');
   });
 
   it('read the typed title after one pause, once for a burst of keystrokes (round-2 R5)', async () => {
@@ -765,7 +795,7 @@ describe('a kind switch (§4.1 rule 5)', () => {
     draft.decade = '1990';
     draft.runtime_max = '110';
     draft.seen = 'seen';
-    draft.dna = 'mood.cosy';
+    draft.terms = [COSY];
     respond({ genres: ['Drama'], decades: [2000] });
     respond(board({ kind: 'series' }));
     await chooseKind('series');
@@ -773,7 +803,7 @@ describe('a kind switch (§4.1 rule 5)', () => {
     expect(draft.genre).toBe('');
     expect(draft.decade).toBe('');
     expect(draft.q).toBe('heat');
-    expect(draft.dna).toBe('mood.cosy');
+    expect(draft.terms, 'a term spans both kinds').toEqual([COSY]);
     expect(draft.runtime_max).toBe('110');
     expect(draft.seen).toBe('seen');
 
@@ -916,7 +946,16 @@ describe('a tap opens a title (decision 496)', () => {
 });
 
 describe('the surface speaks the member register (decision 486)', () => {
-  it('names the two DNA tiers in words', () => {
-    expect(dnaTierText(['extracted', 'projected'])).toBe('quoted + our read');
+  it('names the tier that admitted a survivor in words', () => {
+    expect(dnaTierText('extracted', 'heist')).toBe('heist, quoted');
+    expect(dnaTierText('projected', 'heist and cozy & mellow')).toBe('heist and cozy & mellow by our read');
+  });
+
+  it("says once what the ring on our read's posters means, only while one is on the board", () => {
+    draft.terms = [{ ...COSY, label: 'heist', id: 'themes.heist', facet: 'themes' }, { ...COSY, mode: 'out' }];
+    apply(board({ dna_tiers: { 1: 'extracted', 2: 'extracted' } }));
+    expect(tierLegend()).toBe('');
+    apply(board({ dna_tiers: { 1: 'extracted', 2: 'projected' } }));
+    expect(tierLegend(), 'a leave-out admits nothing').toBe('Our read says heist; no review does');
   });
 });

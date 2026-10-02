@@ -290,6 +290,63 @@ test('a long genre option does not widen the page', async ({ page }) => {
   expect(box.x + box.width).toBeLessThanOrEqual(page.viewportSize().width + 1);
 });
 
+test("What it's like and People open where they belong: a popover on a desktop, a sheet on a phone", async ({
+  page,
+  isMobile
+}) => {
+  // Decisions 554 item 1 and 557: the two cells share one row from 721 px, and their pickers are
+  // overlays, a popover under the cell on a desktop and a sheet on a phone. Nothing is chosen.
+  const viewports = isMobile ? [page.viewportSize()] : [{ width: 1280, height: 800 }, { width: 1024, height: 768 }];
+  for (const viewport of viewports) {
+    await page.setViewportSize(viewport);
+    await page.goto('/');
+    await page.getByTestId('filter-toggle').click();
+    const terms = page.getByTestId('filter-terms');
+    const people = page.getByTestId('filter-people');
+    await expect(terms).toBeVisible();
+    const at = `at ${viewport.width}x${viewport.height}`;
+    const [termBox, peopleBox] = await Promise.all([terms.boundingBox(), people.boundingBox()]);
+    if (isMobile) {
+      expect(peopleBox.y, `People is not the row under What it's like ${at}`).toBeGreaterThan(termBox.y);
+    } else {
+      expect(Math.abs(termBox.y - peopleBox.y), `the two cells are not one row ${at}`).toBeLessThan(2);
+    }
+    for (const [cell, name] of [[terms, "What it's like"], [people, 'People']]) {
+      await cell.click();
+      const picker = page.getByRole('dialog', { name });
+      await expect(picker).toBeVisible();
+      const box = await picker.boundingBox();
+      expect(box.x, `the ${name} picker leaves the screen ${at}`).toBeGreaterThanOrEqual(0);
+      expect(box.x + box.width, `the ${name} picker leaves the screen ${at}`).toBeLessThanOrEqual(viewport.width + 1);
+      if (isMobile) {
+        expect(box.width, `the ${name} sheet is not the phone's width`).toBeGreaterThan(viewport.width * 0.95);
+        await picker.getByRole('button', { name: 'Done' }).click();
+      } else {
+        const cellBox = await cell.boundingBox();
+        expect(box.y, `the ${name} popover is not under its cell ${at}`).toBeGreaterThan(cellBox.y);
+        await page.keyboard.press('Escape');
+      }
+      await expect(picker).toHaveCount(0);
+    }
+  }
+});
+
+test('a long term label does not widen the page', async ({ page }) => {
+  // The fixture's labels are short, so this lengthens one chip's, as the genre test lengthens an option.
+  await page.goto('/?term=mood.cosy&kind=movie');
+  const chip = page.getByTestId('term-chip');
+  await expect(chip).toBeVisible();
+  await chip.locator('.label').evaluate((el) => {
+    el.textContent = 'the cost of an extraordinarily long vendetta across three generations of one family';
+  });
+  const overflow = await page.evaluate(
+    () => document.documentElement.scrollWidth - document.documentElement.clientWidth
+  );
+  expect(overflow, 'a long term label pushed the page wider than the screen').toBeLessThanOrEqual(1);
+  const box = await chip.boundingBox();
+  expect(box.x + box.width).toBeLessThanOrEqual(page.viewportSize().width + 1);
+});
+
 test('the title detail panel is full-width on a phone', async ({ page, isMobile }) => {
   test.skip(!isMobile, 'desktop shows it as a side panel');
 

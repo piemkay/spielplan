@@ -482,24 +482,26 @@ test.describe('rank', () => {
 
   test('all six filter dimensions in section 6.3 have a control', async () => {
     // "**Filters:** genre, kind (movie/series — separate by default), decade, runtime,
-    // seen-state, DNA facet/term predicates; all but the kind sit behind one Filters control".
+    // seen-state, and What it's like, §6.0's term picker; all but the kind sit behind one
+    // Filters control" (decision 557 item 8: the free-text taste tag is gone).
     await openRank(page);
     await expect(page.getByTestId('rank-genre')).toHaveCount(0);
     await page.getByTestId('rank-filters').click();
     const filters = page.getByRole('dialog', { name: 'Filters' });
     await expect(filters).toBeVisible();
-    for (const id of ['rank-genre', 'rank-decade', 'rank-runtime', 'rank-seen', 'rank-dna']) {
+    for (const id of ['rank-genre', 'rank-decade', 'rank-runtime', 'rank-seen', 'rank-terms']) {
       await expect(filters.getByTestId(id)).toBeVisible();
     }
     for (const [id, name] of [
       ['rank-genre', 'Genre'],
       ['rank-decade', 'Decade'],
       ['rank-runtime', 'Max length'],
-      ['rank-seen', 'Seen'],
-      ['rank-dna', 'Taste tag']
+      ['rank-seen', 'Seen']
     ]) {
       await expect(filters.locator('label', { has: page.getByTestId(id) })).toContainText(name);
     }
+    await expect(filters.getByRole('button', { name: "What it's like Add" })).toBeVisible();
+    await expect(filters.getByTestId('rank-dna')).toHaveCount(0);
     await filters.getByRole('button', { name: 'Done' }).click();
     await expect(filters).toHaveCount(0);
     // `kind` is the partition, beside the title rather than among the filters.

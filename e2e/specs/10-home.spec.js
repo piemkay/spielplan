@@ -221,24 +221,34 @@ test('search replaces the shelves with the catalog grid', async ({ page }) => {
   await expect(page.locator('.card-wrap', { hasText: film.name }).first()).toBeVisible();
 });
 
-test('clearing the search box returns the shelves', async ({ page }) => {
+test('clearing the search box returns the shelves and turns Only in library back on', async ({
+  page
+}) => {
   // §6.0: "clearing it returns the shelves".
   const search = page.getByTestId('home-search');
   await search.fill('the');
   await expect(page.getByTestId('home-mode')).toHaveAttribute('data-mode', 'grid');
   await expect(page.getByTestId('shelves')).toHaveCount(0);
 
+  // Decision 558: a search ends on the way beyond the library, which switches it off.
+  await page.getByTestId('search-beyond').click();
+  await expect(page.getByTestId('owned-filter-chip')).toBeVisible();
+  await expect(search).toHaveAttribute('placeholder', 'Search all films');
+
   await search.fill('');
 
   await expect(page.getByTestId('home-mode')).toHaveAttribute('data-mode', 'shelves');
   await expect(page.getByTestId('shelves')).toBeVisible();
   await expect(page.getByTestId('shelf-card').first()).toBeVisible();
+  await expect(page.getByTestId('owned-filter-chip')).toHaveCount(0);
+  await expect(search).toHaveAttribute('placeholder', /^Search your \d+ films?$/);
 });
 
 test('tapping a credit swaps the shelves for a filmography behind a person chip', async ({
   page
 }) => {
-  // Proposal 30's side effects: navigate to Home, close the title card, clear the search box.
+  // Proposal 30's side effects: close the title card, clear the search box; the tap adds its
+  // chip to what is set (decision 557 item 6), and the address carries it.
   const home = await homePayload(page.request, ['movie']);
   const credited = await creditedShelfCard(page.request, home);
   expect(credited, 'no shelf card carries a credit — there is no credit to tap').toBeTruthy();
@@ -259,8 +269,9 @@ test('tapping a credit swaps the shelves for a filmography behind a person chip'
   await expect(panel).toHaveCount(0);
   await expect(page.getByTestId('home-search')).toHaveValue('');
 
-  // Proposal 30: "the person chip is itself the clear control".
+  await expect(page.getByTestId('person-chip')).toHaveCount(1);
   await expect(page.getByTestId('person-chip')).toContainText(name ?? '');
+  await expect(page).toHaveURL(/[?&]person=\d+(,\d+)*(&|$)/);
 });
 
 test('removing the person chip returns the shelves', async ({ page }) => {
@@ -273,9 +284,10 @@ test('removing the person chip returns the shelves', async ({ page }) => {
 
   const chip = page.getByTestId('person-chip');
   await expect(chip).toBeVisible();
-  await chip.click();
+  await chip.getByRole('button', { name: /^Remove / }).click();
 
   await expect(page.getByTestId('person-chip')).toHaveCount(0);
+  await expect(page).toHaveURL(/\/$/);
   await expect(page.getByTestId('home-mode')).toHaveAttribute('data-mode', 'shelves');
   await expect(page.getByTestId('shelves')).toBeVisible();
   await expect(page.getByTestId('shelf-card').first()).toBeVisible();
@@ -328,7 +340,7 @@ test('the search counts the library the shelves come from, and New says its reas
   // library of the shown kind, and "New in the library", whose why-line is the badge's reason,
   // does not repeat it (decision 516).
   await expect(page.getByTestId('shelves')).toBeVisible();
-  await expect(page.getByTestId('home-search')).toHaveAttribute('placeholder', /^Search \d+ films?$/);
+  await expect(page.getByTestId('home-search')).toHaveAttribute('placeholder', /^Search your \d+ films?$/);
   const fresh = page.locator('[data-testid="shelf"][data-shelf="new_in_library"]');
   for (const row of await fresh.all()) {
     await expect(row.getByTestId('shelf-cold-note')).toHaveCount(0);

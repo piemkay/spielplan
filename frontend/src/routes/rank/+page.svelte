@@ -4,10 +4,13 @@
   import { onDestroy, onMount, tick } from 'svelte';
   import { flip } from 'svelte/animate';
   import { cubicOut } from 'svelte/easing';
+  import FilterChip from '$lib/components/FilterChip.svelte';
+  import Icon from '$lib/components/Icon.svelte';
   import RateBattleCard from '$lib/components/RateBattleCard.svelte';
   import RatePeek from '$lib/components/RatePeek.svelte';
   import RatePoster from '$lib/components/RatePoster.svelte';
   import Sheet from '$lib/components/Sheet.svelte';
+  import TermPicker from '$lib/components/TermPicker.svelte';
   import TitleDetail from '$lib/components/TitleDetail.svelte';
   import { modelGate } from '$lib/home.svelte.js';
   import { flipFrom, ms, still } from '$lib/motion.js';
@@ -29,6 +32,8 @@
     emptyState,
     facets,
     filterChips,
+    flipTerm,
+    includeLabels,
     keepGoing,
     load,
     loadFacets,
@@ -41,17 +46,22 @@
     reset,
     roundLine,
     searchHint,
+    setTerm,
     showAll,
     showLess,
     spot,
     stays,
+    tierLegend,
     typed
   } from '$lib/rank.svelte.js';
 
   const showModel = $derived(!!session.user?.show_model);
   const empty = $derived(emptyState());
   const chips = $derived(filterChips());
+  const termChips = $derived(chips.filter((chip) => chip.term));
   const filtersLabel = $derived(chips.length ? `Filters · ${chips.length}` : 'Filters');
+  const legend = $derived(tierLegend());
+  let termsOpen = $state(false);
 
   let width = $state(typeof window === 'undefined' ? 390 : window.innerWidth);
   const wide = $derived(width > 720);
@@ -173,7 +183,7 @@
       entry.name,
       entry.year,
       entry.straddle != null && 'between two tiers',
-      matched && dnaTierText(matched)
+      matched && dnaTierText(matched, includeLabels())
     ]
       .filter(Boolean)
       .join(', ');
@@ -555,16 +565,32 @@
   {#if chips.length}
     <div class="chips">
       {#each chips as chip (chip.key)}
-        <button
-          class="pill on"
-          onclick={() => clearFilter(chip.key)}
-          aria-label={`Remove ${chip.text}`}
-          data-testid={`rank-filter-chip-${chip.key}`}
-        >
-          {chip.text}
-          <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" /></svg>
-        </button>
+        {#if chip.term}
+          <FilterChip
+            variant="term"
+            mode={chip.term.mode}
+            label={chip.text}
+            facet={chip.term.facet}
+            testid="rank-term-chip"
+            onFlip={() => flipTerm(chip.term.id)}
+            onRemove={() => clearFilter(chip.key)}
+          />
+        {:else}
+          <button
+            class="pill on"
+            onclick={() => clearFilter(chip.key)}
+            aria-label={`Remove ${chip.text}`}
+            data-testid={`rank-filter-chip-${chip.key}`}
+          >
+            {chip.text}
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" aria-hidden="true"><path d="M6 6l12 12M18 6 6 18" /></svg>
+          </button>
+        {/if}
       {/each}
+      {#if legend}
+        <!-- The mark on a poster our read alone admitted (§4.1 rule 1, decision 557 item 8). -->
+        <p class="legend" data-testid="rank-tier-legend"><span class="ours" aria-hidden="true"></span>{legend}</p>
+      {/if}
     </div>
   {/if}
 
@@ -712,6 +738,7 @@
                   >
                     <RatePoster title={{ id: cell.entry.title_id, name: cell.entry.name }} showName="missing" lazy />
                     {#if cell.entry.straddle != null}<span class="dot" aria-hidden="true"></span>{/if}
+                    {#if rank.dnaTiers?.[cell.entry.title_id] === 'projected'}<span class="ours" aria-hidden="true"></span>{/if}
                   </button>
                 {:else if cell.resting}
                   <RatePoster title={{ id: cell.resting.title_id, name: cell.resting.name }} showName="missing" />
@@ -816,17 +843,33 @@
           />
           <span class="unit">min</span>
         </label>
-        <label class="list-row">
-          <span>Taste tag</span>
-          <input
-            class="value"
-            type="text"
-            placeholder="e.g. cosy"
-            bind:value={draft.dna}
-            oninput={typed}
-            data-testid="rank-dna"
-          />
-        </label>
+        <!-- Home's term picker, a sheet over this one (decision 557 item 8). -->
+        <div class="list-row adder">
+          <span id="rank-terms-label">What it's like</span>
+          <button
+            class="add"
+            aria-labelledby="rank-terms-label rank-terms"
+            aria-haspopup="dialog"
+            onclick={() => (termsOpen = true)}
+            id="rank-terms"
+            data-testid="rank-terms"
+          >Add<Icon name="chevron-right" size={18} /></button>
+        </div>
+        {#if termChips.length}
+          <div class="list-row picked">
+            {#each termChips as chip (chip.key)}
+              <FilterChip
+                variant="term"
+                mode={chip.term.mode}
+                label={chip.text}
+                facet={chip.term.facet}
+                testid="rank-sheet-term-chip"
+                onFlip={() => flipTerm(chip.term.id)}
+                onRemove={() => clearFilter(chip.key)}
+              />
+            {/each}
+          </div>
+        {/if}
       </div>
       {#if chips.length}
         <button class="btn-plain clear" onclick={clearFilters}>Clear all</button>
@@ -834,6 +877,16 @@
     </div>
   {/snippet}
 </Sheet>
+
+<TermPicker
+  open={termsOpen}
+  kinds={[rank.kind]}
+  chosen={draft.terms}
+  onInclude={(term) => setTerm(term, 'in')}
+  onLeaveOut={(term) => setTerm(term, 'out')}
+  onRemove={(term) => clearFilter(`term:${term.term}`)}
+  onClose={() => (termsOpen = false)}
+/>
 
 <Sheet open={rank.queueOpen} onClose={endRound} label="Sharpen your list" width={480}>
   {#snippet children(close)}
@@ -999,7 +1052,34 @@
   .chips {
     display: flex;
     flex-wrap: wrap;
+    align-items: center;
     gap: 8px;
+  }
+  .legend {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0 0 0 8px;
+    font-size: var(--fs-footnote);
+    line-height: 18px;
+    color: var(--text-3);
+  }
+  /* Our read's mark: a ring, apart from the quoted tier's fill (board B8). */
+  .ours {
+    flex: none;
+    display: grid;
+    place-items: center;
+    width: 18px;
+    height: 18px;
+    border-radius: var(--r-pill);
+    background: var(--surface-2);
+  }
+  .ours::before {
+    content: '';
+    width: 8px;
+    height: 8px;
+    border-radius: var(--r-pill);
+    box-shadow: inset 0 0 0 1.5px var(--text);
   }
 
   /* Phones: the tiers' letters and counts stay in view, and jump to a tier. */
@@ -1273,6 +1353,13 @@
     right: 6px;
     box-shadow: 0 0 0 2px var(--bg);
   }
+  /* Top left: a posterless title's name runs along the foot. */
+  .tile .ours {
+    position: absolute;
+    top: 6px;
+    left: 6px;
+    background: rgba(12, 11, 10, 0.72);
+  }
   .ghost {
     border-radius: var(--r-poster);
     outline: 1.5px dashed rgba(245, 240, 232, 0.28);
@@ -1517,6 +1604,34 @@
   }
   .unit {
     color: var(--text-3);
+  }
+  /* The whole row opens the term picker; its "Add" where a value would sit. */
+  .adder {
+    position: relative;
+  }
+  .adder .add {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 4px;
+    padding: 0 var(--gutter);
+    border: none;
+    background: none;
+    color: var(--text-2);
+    font: inherit;
+    cursor: pointer;
+  }
+  .adder .add:focus-visible {
+    outline-offset: -2px;
+  }
+  .filters .picked {
+    flex-wrap: wrap;
+    gap: 8px;
+    padding-top: 0;
+    padding-bottom: 12px;
+    box-shadow: none;
   }
   .clear {
     margin-left: 8px;
