@@ -68,9 +68,14 @@
     return named;
   }
 
-  // The filters outlive the page as Home's place does; a URL that carries any wins over them.
+  // The filters outlive the page as Home's place does; a URL that carries any wins over them. Read
+  // from `location`: Back leaves `page.url` at the address Home was entered with. An address that
+  // still says what Home holds keeps all of it.
   let lastSearch = page.url.search;
-  const entry = readHomeUrl(page.url.searchParams);
+  const here = `${location.pathname}${location.search}`;
+  const ours =
+    homeKept.user === session.user?.id && here === writeHomeUrl(homeFilters, { kinds: homeKept.kinds ?? [] });
+  const entry = ours ? null : readHomeUrl(new URLSearchParams(location.search));
   if (!entry && homeKept.user !== session.user?.id) resetHomeFilters();
 
   // One switch: Films, Series or Both, never neither (decisions 18, 474).
@@ -318,7 +323,7 @@
   });
 
   // A tab's link lands at the top, so Home puts back its kept place; Back restores its own.
-  let restoreY = kept?.scrollY ?? 0;
+  let restoreY = entry ? 0 : (kept?.scrollY ?? 0);
   beforeNavigate(() => {
     homeKept.scrollY = mode === 'shelves' ? window.scrollY : 0;
   });
@@ -388,7 +393,7 @@
     const search = page.url.search;
     if (search === lastSearch) return;
     lastSearch = search;
-    const next = readHomeUrl(page.url.searchParams);
+    const next = readHomeUrl(new URLSearchParams(location.search));
     if (!next) return;
     untrack(() => {
       const named = fromUrl(next);
@@ -403,7 +408,7 @@
 
   // Every chip change is mirrored into the address, so a reload and Back hold. Never onto a
   // sheet's own history entry: closing it would take the change back off, so it waits.
-  let mirrored = `${page.url.pathname}${page.url.search}`;
+  let mirrored = here;
   const homeUrl = $derived(writeHomeUrl(homeFilters, { kinds }));
   $effect(() => {
     const url = homeUrl;

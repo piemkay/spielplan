@@ -82,6 +82,7 @@ afterEach(() => {
   // Home's filters are module state, as its place is: one test's chips must not open the next.
   resetHomeFilters();
   nav.page.set({ url: new URL('http://localhost/'), state: {} });
+  history.replaceState(null, '', '/');
   nav.replaced = [];
   detail.props = null;
   vi.unstubAllGlobals();
@@ -803,7 +804,10 @@ const CAINE = { person_ids: [12, 13], person_id: 12, name: 'Michael Caine', phot
 const MANN = { person_ids: [1], person_id: 1, name: 'Michael Mann', photo: false };
 
 /** Home entered at this address, as a reload or a card's jump from another page enters it. */
-const at = (path) => nav.page.set({ url: new URL(path, 'http://localhost'), state: {} });
+const at = (path, entered = path) => {
+  history.replaceState(null, '', path);
+  nav.page.set({ url: new URL(entered, 'http://localhost'), state: {} });
+};
 const chipTexts = () =>
   [...target.querySelectorAll('.chips [data-testid]')].map(
     (c) => `${c.dataset.testid}:${c.querySelector('.label').textContent.trim()}`
@@ -901,6 +905,30 @@ describe("Home's URL (decision 557 item 6)", () => {
       ['mood.cozy'], ['themes.heist'], ['12,13']
     ]);
     expect(nav.replaced.at(-1)).toBe('/?term=mood.cozy&not_term=themes.heist&person=12,13&kind=series');
+  });
+
+  // Back leaves `page.url` at the address Home was entered with; the address is what Home left.
+  it('comes Back without the chip removed before leaving', async () => {
+    backend({ titles: (p) => ({ items: [film(1, 'Heat')], total: 1, hidden: {}, applied: applied(p) }) });
+    Object.assign(homeKept, { user: MEMBER.id, epoch: 0, kinds: ['movie'], payload: null });
+    at('/', '/?person=12,13&kind=movie');
+    await openHome();
+    expect(chipTexts()).toEqual([]);
+    expect($('[data-testid="home-mode"]').dataset.mode).toBe('shelves');
+  });
+
+  it('comes Back with the chips added before leaving, and the rest of its place', async () => {
+    const seen = backend({ titles: (p) => ({ items: [film(1, 'Heat')], total: 1, hidden: {}, applied: applied(p) }) });
+    Object.assign(homeKept, { user: MEMBER.id, epoch: 0, kinds: ['movie'], payload: null });
+    Object.assign(homeFilters, {
+      genre: 'Drama',
+      terms: [{ id: 'mood.cozy', label: 'cozy & mellow', facet: 'mood', mode: 'in' }],
+      people: [{ ...CAINE }]
+    });
+    at('/?term=mood.cozy&person=12,13&kind=movie', '/?person=12,13&kind=movie');
+    await openHome();
+    expect(chipTexts()).toEqual(['person-chip:Michael Caine', 'term-chip:cozy & mellow', 'genre-chip:Drama']);
+    expect(asked(seen).get('genre')).toBe('Drama');
   });
 });
 
