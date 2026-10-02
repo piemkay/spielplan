@@ -59,6 +59,28 @@ describe('posterSrc', () => {
     const src = posterSrc({ id: 1, poster_path: 'https://image.tmdb.org/t/p/w500/a.jpg' });
     expect(src.startsWith('/api/')).toBe(true);
   });
+
+  // Decision 558: a From TMDB hit has no title row, so the server names its poster by file name.
+  it("takes a From TMDB hit's own poster route, and nothing else a hit could carry", () => {
+    session.artEpoch = 'a1b2c3';
+    expect(posterSrc({ tmdb_id: 910001, poster: '/api/art/tmdb/harbourlights.jpg' })).toBe(
+      '/api/art/tmdb/harbourlights.jpg'
+    );
+    expect(posterSrc({ tmdb_id: 910001, poster: null })).toBeNull();
+    for (const poster of [
+      'https://image.tmdb.org/t/p/w342/harbourlights.jpg',
+      '/api/art/tmdb/../../admin.jpg',
+      '/api/art/tmdb/short.jpg'
+    ]) {
+      expect(posterSrc({ tmdb_id: 910001, poster })).toBeNull();
+    }
+  });
+
+  it('asks no more for a From TMDB poster that answered 404', () => {
+    const src = '/api/art/tmdb/glassorchard.jpg';
+    noteMissing(src);
+    expect(posterSrc({ tmdb_id: 910002, poster: src })).toBeNull();
+  });
 });
 
 describe('personSrc', () => {

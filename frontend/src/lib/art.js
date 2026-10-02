@@ -37,9 +37,13 @@ function artSrc(path, id) {
   return knownMissing(src) ? null : src;
 }
 
+// A From TMDB hit has no title row: the server names its poster by file, on this origin (decision 558).
+const TMDB_POSTER = /^\/api\/art\/tmdb\/[A-Za-z0-9]{8,40}\.(jpg|png)$/;
+
 export function posterSrc(title) {
   const id = titleIdOf(title);
-  return id === null ? null : artSrc(`/api/art/${id}/poster`, id);
+  if (id === null) return TMDB_POSTER.test(title?.poster ?? '') ? artSrc(title.poster, 0) : null;
+  return artSrc(`/api/art/${id}/poster`, id);
 }
 
 /** A credit's headshot, only where the payload says there is one to serve (decision 528). */

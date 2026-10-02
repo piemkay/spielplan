@@ -35,6 +35,7 @@
   import RatePoster from '$lib/components/RatePoster.svelte';
   import Sheet from '$lib/components/Sheet.svelte';
   import TitleDetail from './TitleDetail.svelte';
+  import TmdbCard from './TmdbCard.svelte';
 
   // `seed`: the title as the tapped poster had it, so the card opens on its poster and name before
   // the read lands. `onMove(entry, tier)`: Rank's own move, which also replaces its board; anywhere
@@ -252,6 +253,8 @@
   }
 
   const lead = $derived(data?.title ?? seed ?? null);
+  // Minted for a wish and not yet owned: the short card, Want it its one action (decision 558).
+  const stub = $derived(data?.title?.origin === 'wished' && data.title.is_owned === false);
   const runtime = $derived(runtimeLabel(lead));
   // `credits_for` returns every row; the disclosure spends what the payload holds.
   const shownCredits = $derived(
@@ -352,6 +355,7 @@
       <p class="footnote loading">Loading…</p>
     {:else}
       {@const t = lead}
+      {#if stub}<TmdbCard title={data} body />{:else}
       <div class="detail">
         <div class="lead">
           <div class="art"><RatePoster title={t} showName={false} /></div>
@@ -713,6 +717,7 @@
           </div>
         </details>
       </div>
+      {/if}
     {/if}
   {/snippet}
 </Sheet>

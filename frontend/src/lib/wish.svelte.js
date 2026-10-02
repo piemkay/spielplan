@@ -14,6 +14,16 @@ export async function setWish(titleId, state) {
   return changed(await api(`/wish/${titleId}`, { method: 'PUT', body: { state } }));
 }
 
+/**
+ * Want it on a title only TMDB knows (decision 558): `{title_id, state, owned, minted}`, where `owned`
+ * means the library holds it and nothing was wished.
+ *
+ * @param {'movie' | 'series'} kind @param {number} tmdbId
+ */
+export async function setWishTmdb(kind, tmdbId) {
+  return changed(await api(`/wish/tmdb/${kind}/${tmdbId}`, { method: 'PUT' }));
+}
+
 /** Remove from the list, or undo Not for me. @param {number} titleId */
 export async function clearWish(titleId) {
   return changed(await api(`/wish/${titleId}`, { method: 'DELETE' }));

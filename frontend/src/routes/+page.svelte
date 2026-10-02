@@ -53,6 +53,7 @@
   import PendingVerdicts from '$lib/components/PendingVerdicts.svelte';
   import PeoplePicker from '$lib/components/PeoplePicker.svelte';
   import PosterCard, { isColdPlaced } from '$lib/components/PosterCard.svelte';
+  import SearchBeyond from '$lib/components/SearchBeyond.svelte';
   import ShelfList from '$lib/components/ShelfList.svelte';
   import TermPicker from '$lib/components/TermPicker.svelte';
   import TitleDetail from '$lib/components/TitleDetail.svelte';
@@ -136,6 +137,8 @@
   // Everything after the last strong hit is weaker, loaded or not: the list is ordered by quality.
   const weakTotal = $derived(weakItems.length ? total - cut : 0);
   const partitioned = $derived(partitionedByKind(kinds, sortEcho));
+  // Only in library off, a search answers in three sections (decision 558).
+  const beyondSearch = $derived(reason === 'search' && !homeFilters.owned);
 
   // The shell renders Home's suppressed list; clear it on teardown, or it outlives this surface.
   $effect(() => {
@@ -711,6 +714,9 @@
 {/snippet}
 
 {#if mode === 'grid'}
+  {#if beyondSearch}
+    <h2 class="section-title" data-testid="library-section-head">In your library</h2>
+  {/if}
   <div class="gridhead" data-testid="home-mode" data-mode="grid" data-reason={reason}>
     {#if headLine}
       <p class="footnote" data-testid="grid-line">{headLine}</p>
@@ -857,6 +863,9 @@
         {/if}
       {/if}
     </div>
+  {/if}
+  {#if beyondSearch}
+    <SearchBeyond {kinds} q={homeFilters.q} params={catalogParams()} onSelect={(t) => (selected = t)} />
   {/if}
 {:else if !session.hasBundle}
   <div class="empty card">
