@@ -78,3 +78,20 @@ async def answer_finish_prompt(
     if not result["ok"]:
         raise HTTPException(status.HTTP_404_NOT_FOUND, str(result["reason"]))
     return result
+
+
+@router.post("/prompts/finish/{event_id}/close")
+async def close_finish_prompt(event_id: int, user: ActiveUser, conn: DB) -> dict:
+    """The prompt's x: no answer, and the seen sync stays away from the title (decision 554)."""
+    result = await playback.close(conn, user_id=user.id, event_id=event_id)
+    if not result["ok"]:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(result["reason"]))
+    return result
+
+
+@router.post("/prompts/finish/{event_id}/reopen")
+async def reopen_finish_prompt(event_id: int, user: ActiveUser, conn: DB) -> dict:
+    result = await playback.reopen(conn, user_id=user.id, event_id=event_id)
+    if not result["ok"]:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, str(result["reason"]))
+    return result

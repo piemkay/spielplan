@@ -18,6 +18,8 @@ from spielplan.connectors.jellyfin import JellyfinClient, JellyfinError, NowPlay
 log = logging.getLogger("spielplan.sync.playback")
 
 OPEN_STATES = ("armed", "shown")
+# A prompt put away by its x is answered by nobody, and the seen sync keeps away from it for good (§7.3).
+GUARD_STATES = (*OPEN_STATES, "closed")
 
 _outage = Outage(log)
 
@@ -60,7 +62,7 @@ async def arm(
     """Record a finished playback and arm its prompt. True if this call armed it.
 
     Idempotent via the partial unique index. Nothing for a title already `seen`, and nothing for a
-    viewing (`jf_session_id`) already declined; a rewatch on the same device is not asked again.
+    viewing (`jf_session_id`) already declined or closed; a rewatch on the same device is not asked again.
     """
     already_seen = await conn.fetchval(
         "SELECT 1 FROM user_title WHERE user_id = $1 AND title_id = $2 AND state = 'seen'",
@@ -75,7 +77,7 @@ async def arm(
         SELECT 'jellyfin', $1::integer, $2::bigint, true, $3::real, $4::text
          WHERE NOT EXISTS (SELECT 1 FROM playback_event
                             WHERE user_id = $2 AND title_id = $1 AND jf_session_id = $4
-                              AND prompt_state = 'dismissed')
+                              AND prompt_state IN ('dismissed', 'closed'))
         ON CONFLICT (user_id, title_id) WHERE finished AND prompt_state IN ('armed', 'shown')
         DO NOTHING
         RETURNING id
@@ -292,4 +294,41 @@ async def answer(
     return {"ok": True, "title_id": row["title_id"], "seen": finished, "sync": sync}
 
 
-__all__ = ["WatchReport", "answer", "arm", "observe", "pending", "poll"]
+async def close(conn: asyncpg.Connection, *, user_id: int, event_id: int) -> dict[str, Any]:
+    """The prompt's x on Home (decision 554): no answer, so no `user_title` write."""
+    title_id = await conn.fetchval(
+        "UPDATE playback_event SET prompt_state = 'closed' "
+        "WHERE id = $1 AND user_id = $2 AND prompt_state = ANY($3::text[]) RETURNING title_id",
+        event_id, user_id, list(OPEN_STATES),
+    )
+    if title_id is None:
+        return {"ok": False, "reason": "no open prompt with that id"}
+    return {"ok": True, "title_id": title_id}
+
+
+async def reopen(conn: asyncpg.Connection, *, user_id: int, event_id: int) -> dict[str, Any]:
+    """The x's Undo: back to `shown`, while no other prompt for the title has opened since."""
+    try:
+        reopened = await conn.fetchval(
+            """
+            UPDATE playback_event e SET prompt_state = 'shown'
+             WHERE e.id = $1 AND e.user_id = $2 AND e.prompt_state = 'closed'
+               AND NOT EXISTS (SELECT 1 FROM playback_event o
+                                WHERE o.user_id = e.user_id AND o.title_id = e.title_id
+                                  AND o.finished AND o.prompt_state = ANY($3::text[]))
+            RETURNING id
+            """,
+            event_id, user_id, list(OPEN_STATES),
+        )
+    except asyncpg.UniqueViolationError:
+        # Another prompt for the title armed between the check and the write.
+        reopened = None
+    if reopened is None:
+        return {"ok": False, "reason": "no closed prompt with that id to reopen"}
+    return {"ok": True}
+
+
+__all__ = [
+    "GUARD_STATES", "OPEN_STATES", "WatchReport", "answer", "arm", "close", "observe", "pending",
+    "poll", "reopen",
+]

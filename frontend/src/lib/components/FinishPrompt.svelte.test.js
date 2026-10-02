@@ -8,6 +8,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('$lib/api.js', () => ({ get: vi.fn(), post: vi.fn() }));
 
 import { get, post } from '$lib/api.js';
+import { hideToast, toast } from '$lib/toast.svelte.js';
 import FinishPrompt from './FinishPrompt.svelte';
 
 const CARD = '[data-finish-prompt]';
@@ -70,16 +71,55 @@ const tap = async (label) => {
 };
 
 describe('the card itself', () => {
-  it('asks about one title and says that either answer is recorded', async () => {
+  it('asks about one title in one line: how far Jellyfin saw it play', async () => {
     vi.mocked(post).mockResolvedValue(answerBody(true));
     const app = await open();
     try {
       const card = target.querySelector(CARD);
-      expect(card).not.toBeNull();
-      expect(card.textContent).toContain('Did you finish');
-      // A decline is an explicit `unseen` (decision 211), so the old promise would be false.
-      expect(card.textContent).not.toContain('Nothing is marked until you say so');
-      expect(card.textContent).toContain('no marks it not seen');
+      expect(card.querySelector('.headline').textContent).toBe('Did you finish Severance?');
+      expect([...card.querySelectorAll('.line')].map((p) => p.textContent)).toEqual([
+        'Jellyfin saw it play to 96%.'
+      ]);
+      expect(card.querySelectorAll('[data-testid="rate-poster"]')).toHaveLength(1);
+    } finally {
+      unmount(app);
+    }
+  });
+});
+
+describe('its x (decision 554)', () => {
+  afterEach(() => hideToast());
+
+  it('puts the question away without an answer, and Undo brings it back', async () => {
+    vi.mocked(post).mockResolvedValue({ ok: true, title_id: PROMPT.title_id });
+    const app = await open();
+    try {
+      target.querySelector(`${CARD} [aria-label="Dismiss Severance"]`).click();
+      await settle();
+      expect(vi.mocked(post).mock.calls).toEqual([['/prompts/finish/11/close']]);
+      expect(target.querySelector(CARD)).toBeNull();
+      expect(target.querySelector(HANDOFF), 'the x is no answer').toBeNull();
+      expect(answered).toEqual([]);
+      expect([toast.message, toast.actionLabel]).toEqual(['Removed', 'Undo']);
+
+      toast.action();
+      await settle();
+      expect(vi.mocked(post).mock.calls.at(-1)).toEqual(['/prompts/finish/11/reopen']);
+      expect(target.querySelector(CARD).getAttribute('data-finish-prompt')).toBe('7');
+    } finally {
+      unmount(app);
+    }
+  });
+
+  it('closes the answer that followed, on this screen only', async () => {
+    vi.mocked(post).mockResolvedValue(answerBody(true));
+    const app = await open();
+    try {
+      await tap('Yes');
+      target.querySelector(`${HANDOFF} [aria-label="Close"]`).click();
+      flushSync();
+      expect(target.querySelector(HANDOFF)).toBeNull();
+      expect(vi.mocked(post)).toHaveBeenCalledTimes(1);
     } finally {
       unmount(app);
     }

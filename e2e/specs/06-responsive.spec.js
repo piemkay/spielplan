@@ -204,6 +204,73 @@ test('a phone opens Home on the shelves, with the filters behind one control', a
   await expect(page.getByTestId('filter-genre')).toBeVisible();
 });
 
+test('Home on a desktop is one width, as Rank is', async ({ page, isMobile }) => {
+  // Decision 554: from 721 px the search joins the top row, every block in the flow spans the
+  // content width, and the grid's posters are the shelves' size. No x is pressed here: a sticky
+  // one would hide its notice for the rest of the day (section 8's state hazard).
+  test.skip(isMobile, 'a phone keeps the search under the top row');
+  for (const viewport of [{ width: 1280, height: 800 }, { width: 1024, height: 768 }]) {
+    await page.setViewportSize(viewport);
+    await page.goto('/');
+    await expect(page.getByTestId('home-mode')).toHaveAttribute('data-mode', 'shelves');
+    const at = `at ${viewport.width}x${viewport.height}`;
+
+    const top = await page.locator('header.topbar').boundingBox();
+    const search = await page.getByTestId('home-search').boundingBox();
+    expect(search.y + search.height, `the search is not in the top row ${at}`).toBeLessThanOrEqual(
+      top.y + top.height + 1
+    );
+
+    const spans = () =>
+      page.evaluate(() => {
+        const main = document.querySelector('main');
+        const style = getComputedStyle(main);
+        const left = main.getBoundingClientRect().left + parseFloat(style.paddingLeft);
+        const width = main.clientWidth - parseFloat(style.paddingLeft) - parseFloat(style.paddingRight);
+        const blocks = [...document.querySelectorAll(
+          '.notice-bar, [data-testid=shelf], #home-filters, .chips, .grid'
+        )];
+        return {
+          content: [Math.round(left), Math.round(width)],
+          off: blocks
+            .map((el) => {
+              const r = el.getBoundingClientRect();
+              return [el.dataset.testid || el.id || el.className, Math.round(r.left), Math.round(r.width)];
+            })
+            .filter(([, x, w]) => Math.abs(x - left) > 1 || Math.abs(w - width) > 1)
+        };
+      });
+    expect((await spans()).off, `blocks narrower than the content ${at}`).toEqual([]);
+
+    await page.getByTestId('filter-toggle').click();
+    await expect(page.getByTestId('filter-genre')).toBeVisible();
+    const panel = await spans();
+    expect(panel.off, `the Filters panel is not the content's width ${at}`).toEqual([]);
+    const [genre, owned] = await Promise.all([
+      page.getByTestId('filter-genre').boundingBox(),
+      page.getByTestId('filter-owned').boundingBox()
+    ]);
+    expect(Math.abs(genre.y - owned.y), `the Filters are not one row of cells ${at}`).toBeLessThan(40);
+    await page.getByTestId('filter-toggle').click();
+
+    const poster = await page.evaluate(() =>
+      parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--shelf-poster'))
+    );
+    const shelfCard = page.getByTestId('shelf-card').first();
+    if (await shelfCard.count()) {
+      expect(Math.round((await shelfCard.boundingBox()).width), `a shelf poster ${at}`).toBe(poster);
+    }
+    await page.getByTestId('home-search').fill('e');
+    await expect(page.getByTestId('home-mode')).toHaveAttribute('data-mode', 'grid');
+    const gridCard = page.locator('.grid .card-wrap').first();
+    await expect(gridCard).toBeVisible();
+    expect(Math.round((await gridCard.boundingBox()).width), `a search resized the posters ${at}`).toBe(
+      poster
+    );
+    expect((await spans()).off, `the grid is not the content's width ${at}`).toEqual([]);
+  }
+});
+
 test('a long genre option does not widen the page', async ({ page }) => {
   // A native select is as wide as its longest option; the fixture's genres are all short, so
   // this adds a long one.

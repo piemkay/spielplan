@@ -7,8 +7,9 @@
   import { kindRegions, shelfRows } from '$lib/home.svelte.js';
   import { wishRowShown, wishSummary } from '$lib/wish.svelte.js';
 
-  // `stale`: the shelves on screen answer another kind than the one asked for.
-  let { payload, onSelect, loading = false, stale = false } = $props();
+  // `stale`: the shelves on screen answer another kind than the one asked for. `onHideWish` puts the
+  // wish-list row away until tomorrow (decision 554).
+  let { payload, onSelect, onHideWish = null, loading = false, stale = false } = $props();
 
   const rows = $derived(shelfRows(payload));
   const regions = $derived(kindRegions(payload));
@@ -24,14 +25,19 @@
 <!-- Once, after the last shelf: under Worth getting, which the table puts last (decision 544). -->
 {#snippet wishRow()}
   {#if wishRowShown(payload)}
-    <button class="wishrow" data-testid="home-wish-row" onclick={() => (wishOpen = true)}>
-      <span class="glyph"><Icon name="bookmark" size={22} /></span>
-      <span class="text">
-        <span class="label">Wish list</span>
-        <span class="footnote">{wishSummary(payload.wish)}</span>
-      </span>
-      <span class="chev"><Icon name="chevron-right" size={16} /></span>
-    </button>
+    <div class="notice-bar wishrow" data-testid="home-wish-row">
+      <span class="dot" aria-hidden="true"><Icon name="bookmark" size={16} /></span>
+      <div class="text">
+        <p class="headline">Wish list</p>
+        <p class="line">{wishSummary(payload.wish)}</p>
+      </div>
+      <div class="act">
+        <button class="pill" data-testid="home-wish-open" onclick={() => (wishOpen = true)}>See all</button>
+      </div>
+      <button class="x" aria-label="Hide until tomorrow" onclick={() => onHideWish?.()}>
+        <Icon name="close" size={18} />
+      </button>
+    </div>
   {/if}
 {/snippet}
 
@@ -136,43 +142,12 @@
     padding: 0;
     margin-bottom: -20px;
   }
-  .wishrow {
-    max-width: 560px;
-    min-height: 56px;
-    padding: 8px 16px;
-    border: none;
-    border-radius: var(--r-md);
-    background: var(--surface-1);
-    color: var(--text);
-    display: flex;
-    align-items: center;
-    gap: 12px;
-    text-align: left;
-  }
   /* Closer to the shelf above than the shelves are to each other. */
   .shelves > .wishrow {
     margin-top: -12px;
   }
   .empty + .wishrow {
     margin-top: 16px;
-  }
-  .glyph {
-    flex: none;
-    color: var(--text-2);
-  }
-  .wishrow .text {
-    flex: 1;
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
-  }
-  .label {
-    font-size: var(--fs-body);
-    line-height: 22px;
-  }
-  .chev {
-    flex: none;
-    color: rgba(245, 240, 232, 0.35);
   }
   .empty {
     display: flex;
@@ -189,7 +164,7 @@
 
   @media (min-width: 721px) {
     .cells {
-      grid-auto-columns: 148px;
+      grid-auto-columns: var(--shelf-poster);
       gap: 16px;
       margin-right: 0;
     }

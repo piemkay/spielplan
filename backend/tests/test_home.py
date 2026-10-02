@@ -910,6 +910,21 @@ async def test_before_the_set_up_home_carries_the_notice_over_its_shelves(world)
     assert (await world.home())["setup_notice"] is None
 
 
+async def test_a_notice_put_away_leaves_home_and_the_shelves_stay(world):
+    """Decision 554: the x hides the set-up notice and the pending row for the day; Undo is a delete."""
+    before = await world.home()
+    assert before["setup_notice"] and before["banner"]
+    await world.client.put("/api/home/notices/setup")
+    await world.client.put("/api/home/notices/pending")
+
+    payload = await world.home()
+    assert (payload["setup_notice"], payload["banner"]) == (None, None)
+    assert payload["shelves"] == before["shelves"]
+
+    await world.client.delete("/api/home/notices/setup")
+    assert (await world.home())["setup_notice"] == before["setup_notice"]
+
+
 async def test_the_notice_counts_a_custom_sets_steps_and_says_nothing_of_ratings_never_given(world):
     """Jenny has rated nothing, so her shelves keep nothing; her set has three steps."""
     await world.db.execute(

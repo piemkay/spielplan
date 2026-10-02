@@ -508,3 +508,47 @@ async def test_an_open_prompt_closes_when_the_state_arrives_another_way(db, worl
 
     assert await playback.pending(db, world["patrick"]) == []
     assert (await _prompts(db, world["patrick"]))[0]["prompt_state"] == "answered"
+
+
+async def test_closing_a_prompt_writes_no_state_and_takes_it_off_the_queue(db, world):
+    """Decision 554: the x is no answer, so nothing reaches `user_title`."""
+    await playback.arm(db, user_id=world["patrick"], title_id=1, session_id="s", progress=0.95)
+    event = (await playback.pending(db, world["patrick"]))[0]
+
+    assert await playback.close(db, user_id=world["patrick"], event_id=event["id"]) == {
+        "ok": True, "title_id": 1
+    }
+    assert await db.fetchval("SELECT count(*) FROM user_title") == 0
+    assert await playback.pending(db, world["patrick"]) == []
+    assert (await _prompts(db, world["patrick"]))[0]["prompt_state"] == "closed"
+    assert (await playback.answer(
+        db, user_id=world["patrick"], event_id=event["id"], finished=True
+    ))["ok"] is False, "a closed prompt takes no answer"
+    assert (await playback.close(db, user_id=world["jenny"], event_id=event["id"]))["ok"] is False
+
+
+async def test_a_closed_viewing_is_not_asked_again(db, world):
+    report = playback.WatchReport()
+    await playback.observe(db, [watching(session="living-room-tv")], report)
+    event = (await _prompts(db, world["patrick"]))[0]
+    await playback.close(db, user_id=world["patrick"], event_id=event["id"])
+
+    for _ in range(3):
+        await playback.observe(db, [watching(session="living-room-tv")], report)
+    assert [r["prompt_state"] for r in await _prompts(db, world["patrick"])] == ["closed"]
+
+
+async def test_reopen_brings_a_closed_prompt_back_only_while_no_other_is_open(db, world):
+    await playback.arm(db, user_id=world["patrick"], title_id=1, session_id="tv", progress=0.95)
+    first = (await _prompts(db, world["patrick"]))[0]["id"]
+    assert (await playback.reopen(db, user_id=world["patrick"], event_id=first))["ok"] is False, (
+        "an open prompt is not closed"
+    )
+    await playback.close(db, user_id=world["patrick"], event_id=first)
+    assert await playback.reopen(db, user_id=world["patrick"], event_id=first) == {"ok": True}
+    assert [p["id"] for p in await playback.pending(db, world["patrick"])] == [first]
+
+    await playback.close(db, user_id=world["patrick"], event_id=first)
+    await playback.arm(db, user_id=world["patrick"], title_id=1, session_id="phone", progress=0.95)
+    assert (await playback.reopen(db, user_id=world["patrick"], event_id=first))["ok"] is False
+    assert [r["prompt_state"] for r in await _prompts(db, world["patrick"])] == ["closed", "armed"]

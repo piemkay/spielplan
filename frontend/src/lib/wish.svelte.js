@@ -24,6 +24,16 @@ export async function dismissArrival(titleId) {
   return changed(await post(`/wish/${titleId}/dismiss`));
 }
 
+/** An arrival's Undo: its want back, with its own date. @param {number} titleId @param {string} since */
+export async function restoreArrival(titleId, since) {
+  return changed(await post(`/wish/${titleId}/restore`, { since }));
+}
+
+/** The household's wanted count, for You. */
+export function loadWishSummary() {
+  return get('/wish/summary');
+}
+
 export function loadWishList() {
   return get('/wish');
 }
@@ -42,8 +52,10 @@ export function wishSummary(summary) {
   return `${wanted.toLocaleString()} wanted${both ? `, ${both.toLocaleString()} ${by}` : ''}`;
 }
 
-/** The row stands under Worth getting, or after the last shelf while the list holds anything. */
+/** The row stands under Worth getting, or after the last shelf while the list holds anything,
+ * unless the member put it away for the day (decision 554). */
 export function wishRowShown(payload) {
+  if (payload?.wish?.hidden) return false;
   const shelf = (payload?.shelves ?? []).some((s) => s.id === 'worth_getting');
   return shelf || (payload?.wish?.wanted ?? 0) > 0;
 }

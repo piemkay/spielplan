@@ -47,7 +47,7 @@ APP_ID_FLOOR = 1_000_000_000
 
 USER_STATE = {
     "app_user", "user_title", "verdict", "duel", "tier_edit", "ledger_state",
-    "ladder_setup",
+    "ladder_setup", "notice_hidden",
     "ledger_cutpoints", "user_vector", "ledger_fit", "user_score", "playback_event",
     "acquisition_job", "rate_session", "rate_observation", "session", "session_participant",
     "session_answer", "session_ballot", "session_result", "session_outcome", "auth_session",

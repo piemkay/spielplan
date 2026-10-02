@@ -231,7 +231,7 @@ async def test_a_wanted_title_leaves_the_list_and_arrives_for_its_wanters_only(h
     await _put(house.patrick, PRISONERS, "want")
     await _put(house.patrick, COLLATERAL, "want")
     home = (await house.patrick.get("/api/home", params={"kind": "movie"})).json()
-    assert home["wish"] == {"wanted": 2, "both": 0, "members": 2}
+    assert home["wish"] == {"wanted": 2, "both": 0, "members": 2, "hidden": False}
     assert home["arrived"] == []
 
     await db.execute("UPDATE title SET is_owned = true WHERE id = $1", PRISONERS)
@@ -239,7 +239,7 @@ async def test_a_wanted_title_leaves_the_list_and_arrives_for_its_wanters_only(h
         "mine": [("Collateral", ["patrick"])], "others": []
     }
     home = (await house.patrick.get("/api/home", params={"kind": "movie"})).json()
-    assert home["wish"] == {"wanted": 1, "both": 0, "members": 2}
+    assert home["wish"] == {"wanted": 1, "both": 0, "members": 2, "hidden": False}
     assert [(a["title_id"], a["name"], a["play_url"]) for a in home["arrived"]] == [
         (PRISONERS, "Prisoners", None)
     ]
@@ -266,6 +266,34 @@ async def test_dismissing_an_arrival_deletes_its_want_and_nothing_else(house):
     assert dismissed.json() == {"dismissed": True}
     assert await _card_state(house.patrick, PRISONERS) is None
     assert (await house.patrick.post(f"/api/wish/{PRISONERS}/dismiss")).status_code == 404
+
+
+async def test_an_arrivals_undo_puts_its_want_back_with_its_own_date(house):
+    """Decision 554: the x's Undo restores the row the dismissal deleted, and nothing else."""
+    await _put(house.patrick, PRISONERS, "want")
+    await house.db.execute("UPDATE title SET is_owned = true WHERE id = $1", PRISONERS)
+    home = (await house.patrick.get("/api/home", params={"kind": "movie"})).json()
+    since = home["arrived"][0]["since"]
+    await house.patrick.post(f"/api/wish/{PRISONERS}/dismiss")
+
+    restored = await house.patrick.post(f"/api/wish/{PRISONERS}/restore", json={"since": since})
+    assert restored.json() == {"restored": True}
+    home = (await house.patrick.get("/api/home", params={"kind": "movie"})).json()
+    assert [(a["title_id"], a["since"]) for a in home["arrived"]] == [(PRISONERS, since)]
+
+    again = await house.patrick.post(f"/api/wish/{PRISONERS}/restore", json={"since": since})
+    assert again.status_code == 404, "a row already stands"
+    unowned = await house.patrick.post(f"/api/wish/{COLLATERAL}/restore", json={"since": since})
+    assert unowned.status_code == 404, "an unowned title has no arrival to restore"
+    assert await _card_state(house.patrick, COLLATERAL) is None
+
+
+async def test_the_summary_counts_the_households_list_for_you(house):
+    await _put(house.patrick, PRISONERS, "want")
+    await _put(house.jenny, PRISONERS, "want")
+    await _put(house.jenny, COLLATERAL, "want")
+    summary = await house.jenny.get("/api/wish/summary")
+    assert summary.json() == {"wanted": 2, "both": 1, "members": 2}
 
 
 # `secrets_key` before `house`: the app's boot mints the VAPID pair under whatever SECRETS_KEY it sees.

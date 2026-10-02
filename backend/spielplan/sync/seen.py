@@ -477,17 +477,17 @@ def _collapse(
 
 
 async def _open_prompt_titles(conn: asyncpg.Connection, user_id: int) -> set[int]:
-    """The titles this member has an unanswered finish prompt for (decision 211).
+    """The titles this member has an unanswered finish prompt for, or one put away (decisions 211, 554).
 
-    `OPEN_STATES` is imported here to avoid a circular import with `sync/playback.py`.
+    `GUARD_STATES` is imported here to avoid a circular import with `sync/playback.py`.
     """
-    from spielplan.sync.playback import OPEN_STATES
+    from spielplan.sync.playback import GUARD_STATES
 
     rows = await conn.fetch(
         "SELECT DISTINCT title_id FROM playback_event "
         "WHERE user_id = $1 AND finished AND title_id IS NOT NULL "
         "AND prompt_state = ANY($2::text[])",
-        user_id, list(OPEN_STATES),
+        user_id, list(GUARD_STATES),
     )
     return {r["title_id"] for r in rows}
 
