@@ -9,7 +9,7 @@
   import PosterCard from './PosterCard.svelte';
   import TwistRow from './TwistRow.svelte';
 
-  let { kinds = ['movie'], params = {}, onSelect } = $props();
+  let { kinds = ['movie'], params = {}, onSelect = undefined } = $props();
 
   const LIMIT = 60;
   const THIN = 10;

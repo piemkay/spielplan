@@ -50,6 +50,7 @@ afterEach(() => {
   target.remove();
 });
 
+/** @param {{width?: number, [prop: string]: any}} [options] */
 function open({ width = 1280, ...props } = {}) {
   Object.defineProperty(window, 'innerWidth', { value: width, configurable: true });
   app = mount(FilmPicker, { target, props });
