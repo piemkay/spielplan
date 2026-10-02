@@ -1239,6 +1239,34 @@ describe('a grid speaks of what it shows, never of its fold alone', () => {
     flushSync();
     expect($('[data-testid="catalog-cold-note"]')).not.toBeNull();
   });
+
+  it('says what New means after the part that shows one, never above what is already read', async () => {
+    const follows = (a, b) => Boolean(a.compareDocumentPosition(b) & Node.DOCUMENT_POSITION_FOLLOWING);
+    let items = [row(2, 'Up', 'strong'), row(1, 'Heat', 'weak', true)];
+    backend({
+      titles: () => ({
+        items, total: items.length, strong_total: items.filter((t) => t.match === 'strong').length,
+        hidden: {}, beyond: 0, sort: 'for_you', for_you_available: true
+      })
+    });
+    at('/?term=mood.cozy&kind=movie');
+    await openHome();
+    $('[data-testid="weak-matches-toggle"]').click();
+    flushSync();
+    const note = $('[data-testid="catalog-cold-note"]');
+    expect(follows($('[data-testid="weak-matches"]'), note), 'the note follows the fold that shows New').toBe(true);
+    unmount(app);
+    app = null;
+
+    items = [row(2, 'Up', 'strong', true), row(1, 'Heat', 'weak')];
+    at('/?term=mood.cozy&kind=movie');
+    await openHome();
+    const grid = $('.dims > .grid');
+    expect(follows(grid, $('[data-testid="catalog-cold-note"]')), 'the note follows the grid').toBe(true);
+    $('[data-testid="weak-matches-toggle"]').click();
+    flushSync();
+    expect(follows($('[data-testid="catalog-cold-note"]'), $('[data-testid="weak-matches-head"]'))).toBe(true);
+  });
 });
 
 describe('an empty grid (decision 557 item 7)', () => {

@@ -141,6 +141,11 @@
   const strongItems = $derived(items.slice(0, cut));
   // Everything after the last strong hit is weaker, loaded or not: the list is ordered by quality.
   const weakTotal = $derived(weakItems.length ? total - cut : 0);
+  // The New badge's note follows the first part of the grid that shows one, so opening the fold
+  // never moves what is above the reader.
+  const coldIn = $derived(
+    strongItems.some(isColdPlaced) ? 'grid' : showWeak && weakItems.some(isColdPlaced) ? 'fold' : null
+  );
   const partitioned = $derived(partitionedByKind(kinds, sortEcho));
   // Only in library off, a search answers in three sections (decision 558).
   const beyondSearch = $derived(reason === 'search' && !homeFilters.owned);
@@ -831,6 +836,13 @@
   </div>
 {/if}
 
+{#snippet coldNote()}
+  <!-- The badge's why, said once for the grid: a title= tooltip does not exist on touch. -->
+  <p class="footnote" data-testid="catalog-cold-note">
+    Titles marked New have no outside ratings yet — we placed them by what they're about.
+  </p>
+{/snippet}
+
 <!-- One message for both roles; an admin also gets the door to Movie data. -->
 {#snippet noBundle()}
   <h2 class="section-title">Nothing to show yet</h2>
@@ -944,12 +956,6 @@
           {/if}
         </div>
       {:else}
-        {#if (showWeak ? items : strongItems).some(isColdPlaced)}
-          <!-- The badge's why, said once for the grid: a title= tooltip does not exist on touch. -->
-          <p class="footnote" data-testid="catalog-cold-note">
-            Titles marked New have no outside ratings yet — we placed them by what they're about.
-          </p>
-        {/if}
         <div class="grid">
           {#each strongItems as t, i (t.id)}
             {#if partitioned && kindHeading(strongItems, i)}
@@ -958,6 +964,7 @@
             <PosterCard title={t} onSelect={() => (selected = t)} />
           {/each}
         </div>
+        {#if coldIn === 'grid'}{@render coldNote()}{/if}
       {/if}
       {#if weakItems.length}
         <!-- A search's hits that only contain the letters, and an include's matches by our read
@@ -975,6 +982,7 @@
               <PosterCard title={t} onSelect={() => (selected = t)} />
             {/each}
           </div>
+          {#if coldIn === 'fold'}{@render coldNote()}{/if}
         {:else}
           <div class="more">
             <button class="btn-secondary" data-testid="weak-matches-toggle" onclick={() => (showWeak = true)}>
