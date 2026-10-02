@@ -5,9 +5,19 @@
 
   /** @type {{ open: boolean, title?: string, options: Array<{ label: string, detail?: string, checked?: boolean, destructive?: boolean, onSelect: () => void }>, onClose: () => void }} */
   let { open = false, title = '', options = [], onClose } = $props();
+
+  // The choice runs once the sheet's history entry is gone: WebKit drops a navigation started in the
+  // same task as the sheet's own Back.
+  let chosen = null;
+  function closed() {
+    const run = chosen;
+    chosen = null;
+    run?.();
+    onClose?.();
+  }
 </script>
 
-<Sheet {open} {onClose} label={title || 'Choose'} detent="fit" plain>
+<Sheet {open} onClose={closed} label={title || 'Choose'} detent="fit" plain>
   {#snippet children(close)}
     <div class="group" role="menu">
       {#if title}<p class="title">{title}</p>{/if}
@@ -18,8 +28,8 @@
           role="menuitem"
           aria-current={option.checked ? 'true' : undefined}
           onclick={() => {
+            chosen = option.onSelect;
             close();
-            option.onSelect();
           }}
         >
           <span class="label">{option.label}</span>

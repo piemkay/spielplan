@@ -94,6 +94,18 @@ describe('RatePoster', () => {
     expect(first.isConnected).toBe(false);
   });
 
+  it("sets a missing poster's name on its tile in the set-up, once the art fails", () => {
+    app = mount(RatePoster, { target, props: { title: { id: 4711, name: 'Heat Lightning' }, showName: 'tile' } });
+    flushSync();
+    const poster = target.querySelector('[data-testid="rate-poster"]');
+    expect(poster.textContent.trim(), 'no name over art on its way').toBe('');
+    poster.querySelector('img').dispatchEvent(new Event('error'));
+    flushSync();
+    expect(poster.querySelector('img')).toBeNull();
+    expect(poster.querySelector('.tile').textContent).toBe('Heat Lightning');
+    expect(poster.getAttribute('style')).toContain('160deg');
+  });
+
   it('draws no image for a card with no title to ask about', () => {
     app = mount(RatePoster, { target, props: { title: null } });
     flushSync();

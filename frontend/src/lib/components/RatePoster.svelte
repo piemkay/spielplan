@@ -4,8 +4,9 @@
   import { hueOf } from '$lib/rate.svelte.js';
   import { artReady, noteMissing, posterSrc, titleIdOf } from '$lib/art.js';
 
-  // `showName: 'missing'` names only a poster with no art; `lazy` suits a grid of many (Rank).
-  /** @type {{ title: any, showName?: boolean | 'missing', lazy?: boolean }} */
+  // `showName: 'missing'` names only a poster with no art, and `'tile'` sets that name in the serif face
+  // on a flatter panel (the set-up's boards); `lazy` suits a grid of many (Rank).
+  /** @type {{ title: any, showName?: boolean | 'missing' | 'tile', lazy?: boolean }} */
   let { title, showName = true, lazy = false } = $props();
 
   const h = $derived(hueOf(title?.name ?? String(titleIdOf(title) ?? '')));
@@ -13,13 +14,18 @@
   // The src that failed, rather than a flag: this component is reused as Rate's card changes,
   // and a flag would carry one title's missing art onto the next title's poster.
   let failed = $state(null);
+  const missing = $derived(!(src && failed !== src));
+  const tile = $derived(showName === 'tile' && missing);
 </script>
 
 <div
   class="poster"
   data-testid="rate-poster"
   data-title-id={titleIdOf(title)}
-  style:background="linear-gradient(150deg, hsl({h} 22% 17%), hsl({(h + 40) % 360} 18% 11%))"
+  class:tiled={showName === 'tile'}
+  style:background={tile
+    ? `linear-gradient(160deg, hsl(${h} 20% 22%), hsl(${(h + 28) % 360} 18% 10%))`
+    : `linear-gradient(150deg, hsl(${h} 22% 17%), hsl(${(h + 40) % 360} 18% 11%))`}
 >
   <!-- Keyed on the URL: a reused <img> keeps the old picture until the new src loads. -->
   {#key src}
@@ -40,7 +46,9 @@
       />
     {/if}
   {/key}
-  {#if showName === true || (showName === 'missing' && !(src && failed !== src))}
+  {#if tile}
+    <span class="tile">{title?.name ?? ''}</span>
+  {:else if showName === true || (showName === 'missing' && missing)}
     <span class="scrim"></span>
     <span class="name">{title?.name ?? '—'}</span>
   {/if}
@@ -68,6 +76,21 @@
     inset: auto 0 0 0;
     height: 46%;
     background: linear-gradient(to top, rgba(12, 11, 10, 0.88), rgba(12, 11, 10, 0));
+  }
+  .tiled {
+    container-type: inline-size;
+  }
+  .tile {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: flex-end;
+    padding: 9cqi;
+    font-family: var(--serif);
+    font-size: clamp(9px, 18cqi, 22px);
+    line-height: 1.08;
+    color: rgba(245, 240, 232, 0.88);
+    overflow-wrap: break-word;
   }
   .name {
     position: absolute;

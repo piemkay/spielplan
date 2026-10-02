@@ -20,6 +20,10 @@ const nav = vi.hoisted(() => {
     push(state) {
       value = { ...value, state };
       for (const run of runs) run(value);
+    },
+    // Back, as the browser's popstate would: the newest sheet's entry goes.
+    back() {
+      this.push({ ...value.state, sheets: (value.state.sheets ?? []).slice(0, -1) });
     }
   };
 });
@@ -720,6 +724,7 @@ describe('new-title alerts (decisions 418, 455)', () => {
 describe('people linked', () => {
   it('counts the links, and asks before an unlink drops a saved sign-in', async () => {
     vi.mocked(api).mockResolvedValue({ ok: true });
+    const back = vi.spyOn(history, 'back').mockImplementation(() => nav.back());
     const app = await open();
     try {
       expect(text(JELLYFIN)).toContain('People linked 1 of 2');
@@ -738,6 +743,7 @@ describe('people linked', () => {
       expect(api).toHaveBeenCalledWith('/admin/users/1/jellyfin', { method: 'DELETE' });
     } finally {
       unmount(app);
+      back.mockRestore();
     }
   });
 });

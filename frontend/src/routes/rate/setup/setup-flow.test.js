@@ -118,6 +118,7 @@ describe('the set-up, step by step', () => {
     expect(target.textContent).toContain('Step 1 of 2');
     expect($('setup-step').textContent).toBe('All-time favourite');
     expect(target.textContent).toContain(HINT);
+    expect($('setup-note'), 'no second line for a member with films of their own').toBeNull();
     expect(target.textContent).not.toMatch(/\bS\b|A\+/);
     expect(all('setup-film').map((el) => el.getAttribute('aria-label'))).toEqual(['Heat', 'Zodiac', 'Sicario']);
     expect($('setup-find').textContent.trim()).toBe('A film you have seen');
@@ -128,6 +129,18 @@ describe('the set-up, step by step', () => {
     expect($('setup-more')).toBeNull();
     expect($('setup-strip'), 'the first step has no step above it').toBeNull();
     expect($('setup-undo').hasAttribute('disabled')).toBe(true);
+  });
+
+  it("puts the step's note under its hint for a member who has watched nothing yet", async () => {
+    const note = "Jellyfin has nothing you've watched yet, so you start with theirs.";
+    replies['/api/ladder/setup'] = () => ({
+      done: false,
+      earlier_ratings: 0,
+      steps: STEPS.map((step) => ({ ...step, note }))
+    });
+    await open();
+    expect($('setup-note').textContent).toBe(note);
+    expect($('setup-note').previousElementSibling.textContent).toBe(HINT);
   });
 
   it('marks the films Jellyfin says were watched', async () => {

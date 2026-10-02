@@ -114,6 +114,19 @@ test.describe('the ladder set-up', () => {
       });
     }
 
+    await test.step('Leave with a pick held asks first, and its confirm goes back to Rate', async () => {
+      await film('Heat').click();
+      await page.getByTestId('setup-leave').click();
+      const sheet = page.getByRole('dialog');
+      await expect(sheet).toContainText("Leave the set-up? Your picks so far aren't kept.");
+      await sheet.getByRole('menuitem', { name: 'Leave the set-up' }).click();
+      await expect(page).toHaveURL(/\/rate$/);
+      await expect(page.getByTestId('setup-flow')).toHaveCount(0);
+      await page.getByTestId('rate-setup-cta').click();
+      await expect(page.getByTestId('setup-flow')).toContainText('Step 1 of 7');
+      await expect(film('Heat')).toHaveAttribute('aria-pressed', 'false');
+    });
+
     await test.step('a pick is pressed, and leaves the next step for its strip', async () => {
       await film('Heat').click();
       await expect(film('Heat')).toHaveAttribute('aria-pressed', 'true');

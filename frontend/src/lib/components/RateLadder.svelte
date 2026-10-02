@@ -50,9 +50,9 @@
         <h2 class="name" data-testid="rate-card-title">{name}</h2>
         {#if echo}
           <p class="line echo" data-testid="rate-echo">
-            <Icon name="check" size={14} /><span class="clip"
-              >{echo.name} · {echo.word}{#if guess}<span class="data">{guess}</span>{/if}</span
-            >
+            <Icon name="check" size={14} /><span class="clip">{echo.name}</span><span class="word"
+              >{` · ${echo.word}`}</span
+            >{#if guess}<span class="clip data">{guess}</span>{/if}
           </p>
         {:else}
           <p class="line meta" data-testid="rate-card-meta">{metaLine(title)}</p>
@@ -155,11 +155,21 @@
     overflow: hidden;
     text-overflow: ellipsis;
   }
+  /* The name clips; the word the film was put on stays whole. */
   .echo {
+    gap: 0;
     color: var(--text-2);
     animation: fadeIn var(--dur-quick) var(--ease) both;
   }
   .echo > :global(svg) {
+    flex: none;
+    margin-right: 4px;
+  }
+  .echo > .word,
+  .echo > .data {
+    white-space: pre;
+  }
+  .word {
     flex: none;
   }
   .unseen {
