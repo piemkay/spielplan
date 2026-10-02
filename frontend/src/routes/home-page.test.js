@@ -22,6 +22,7 @@ import HomePage from './+page.svelte';
 import PAGE_SOURCE from './+page.svelte?raw';
 import { homeKept } from '$lib/home.svelte.js';
 import { session } from '$lib/session.svelte.js';
+import { hideToast, toast } from '$lib/toast.svelte.js';
 import { topbar } from '$lib/topbar.svelte.js';
 
 const MEMBER = { id: 5, name: 'Jenny', role: 'member', nav: { account: [{ key: 'account' }] } };
@@ -59,6 +60,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  hideToast();
   if (app) unmount(app);
   app = null;
   Object.assign(session, { user: null, hasBundle: null, restartRequired: null });
@@ -147,6 +149,10 @@ async function openHome() {
 
 const $ = (sel) => target.querySelector(sel);
 const film = (id, name) => ({ id, kind: 'movie', name, year: 2000 });
+const calls = (method, path) =>
+  vi.mocked(globalThis.fetch).mock.calls.filter(
+    ([url, init]) => (init?.method ?? 'GET') === method && String(url) === path
+  );
 
 async function type(text) {
   const box = $('[data-testid="home-search"]');
@@ -259,17 +265,18 @@ describe('the top of Home (decision 528)', () => {
     }
   });
 
+  const banner = {
+    count: 2,
+    named: [
+      { title_id: 1, name: 'Heat', kind: 'movie' },
+      { title_id: 2, name: 'Zodiac', kind: 'movie' }
+    ],
+    head_title_ids: [1, 2],
+    copy: { headline: 'Rate 2 you watched', names: 'Heat · Zodiac' },
+    cta: { label: 'Rate', route: '/rate?head=1&head=2' }
+  };
+
   it('shows what waits for a verdict as one row: the count, the names and one Rate link', async () => {
-    const banner = {
-      count: 2,
-      named: [
-        { title_id: 1, name: 'Heat', kind: 'movie' },
-        { title_id: 2, name: 'Zodiac', kind: 'movie' }
-      ],
-      head_title_ids: [1, 2],
-      copy: { headline: 'Rate 2 you watched', names: 'Heat · Zodiac' },
-      cta: { label: 'Rate', route: '/rate?head=1&head=2' }
-    };
     backend({ home: (kinds) => ({ kinds, library: {}, shelves: [], shelves_total: 0, banner }) });
     await openHome();
     const row = $('[data-testid="pending-verdicts"]');
@@ -279,11 +286,33 @@ describe('the top of Home (decision 528)', () => {
     expect(row.querySelector('[data-testid="pending-verdicts-names"]').textContent).toBe(
       'Heat · Zodiac'
     );
-    expect(row.querySelectorAll('[data-testid="rate-poster"]')).toHaveLength(2);
+    // One 28 px thumb (decision 554), not the two small posters it had.
+    expect(row.querySelectorAll('[data-testid="rate-poster"]')).toHaveLength(1);
     const links = row.querySelectorAll('a');
     expect(links).toHaveLength(1);
     expect(links[0].getAttribute('href')).toBe('/rate?head=1&head=2');
     expect(links[0].textContent.trim()).toBe('Rate');
+  });
+
+  it('puts the row away until tomorrow with its x, and Undo brings it back (decision 554)', async () => {
+    let away = false;
+    backend({
+      home: (kinds) => ({ kinds, library: {}, shelves: [], shelves_total: 0, banner: away ? null : banner })
+    });
+    await openHome();
+    away = true;
+    $('[data-testid="pending-verdicts"] [aria-label="Hide until tomorrow"]').click();
+    flushSync();
+    expect($('[data-testid="pending-verdicts"]'), 'gone at once').toBeNull();
+    await tick();
+    expect(calls('PUT', '/api/home/notices/pending')).toHaveLength(1);
+    expect([toast.message, toast.actionLabel]).toEqual(['Hidden until tomorrow', 'Undo']);
+
+    away = false;
+    toast.action();
+    await tick();
+    expect(calls('DELETE', '/api/home/notices/pending')).toHaveLength(1);
+    expect($('[data-testid="pending-verdicts"]')).not.toBeNull();
   });
 });
 
@@ -314,11 +343,17 @@ describe('before the set-up (decision 550)', () => {
     await openHome();
     const card = $('[data-testid="home-setup-notice"]');
     expect(card.querySelector('h2').textContent).toBe('Set up your ladder.');
-    expect(card.querySelector('.why').textContent).toBe(notice.why);
+    expect(card.querySelector('.line').textContent).toBe(notice.why);
     const link = card.querySelector('a');
     expect(link.getAttribute('href')).toBe('/rate/setup');
     expect(link.textContent).toBe('Set up my ladder');
     expect($('[data-testid="shelf-title"]').textContent).toBe('Your top picks');
+
+    $('[data-testid="home-setup-notice"] [aria-label="Hide until tomorrow"]').click();
+    await tick();
+    expect(calls('PUT', '/api/home/notices/setup')).toHaveLength(1);
+    expect(toast.message).toBe('Hidden until tomorrow');
+    expect($('[data-testid="shelf-title"]').textContent, 'the shelves stay').toBe('Your top picks');
   });
 
   it('asks for no ratings in an empty shelf list while the notice stands, and is gone after it', async () => {
@@ -583,10 +618,6 @@ describe('Home keeps its place across tabs (decision 530)', () => {
 });
 
 describe('a wanted film arrives, and the household wish list (decision 544)', () => {
-  const calls = (method, path) =>
-    vi.mocked(globalThis.fetch).mock.calls.filter(
-      ([url, init]) => (init?.method ?? 'GET') === method && String(url) === path
-    );
   const worth = {
     id: 'worth_getting',
     sections: [{
@@ -615,6 +646,14 @@ describe('a wanted film arrives, and the household wish list (decision 544)', ()
     expect(calls('POST', '/api/wish/2/dismiss')).toHaveLength(1);
     expect($('[data-testid="home-arrived"]')).toBeNull();
     expect(seen.filter((u) => u.startsWith('/api/home')).length).toBe(reads + 1);
+
+    // For good, with Undo on its toast (decision 554): the want comes back with its own date.
+    expect([toast.message, toast.actionLabel]).toEqual(['Removed', 'Undo']);
+    toast.action();
+    await tick();
+    const [restore] = calls('POST', '/api/wish/2/restore');
+    expect(JSON.parse(String(restore[1].body))).toEqual({ since: arrived[0].since });
+    expect($('[data-testid="home-arrived"]')).not.toBeNull();
   });
 
   it('keeps the row under Worth getting and opens the list as yours, then others\'', async () => {
@@ -642,7 +681,7 @@ describe('a wanted film arrives, and the household wish list (decision 544)', ()
     expect(row.textContent).toContain('Wish list');
     expect(row.textContent).toContain('4 wanted, 1 by both of you');
     expect(row.previousElementSibling.dataset.shelf, 'directly under Worth getting').toBe('worth_getting');
-    row.click();
+    row.querySelector('[data-testid="home-wish-open"]').click();
     await tick();
 
     const sheet = $('[data-testid="wish-list-sheet"]');
@@ -681,6 +720,24 @@ describe('a wanted film arrives, and the household wish list (decision 544)', ()
     backend({ home: (kinds) => ({ kinds, library: {}, shelves: [], wish: { wanted: 2, both: 0 } }) });
     await openHome();
     expect($('[data-testid="home-wish-row"]').textContent).toContain('2 wanted');
+  });
+
+  it('puts the row away until tomorrow, and the server says so on the next read', async () => {
+    let hidden = false;
+    backend({
+      home: (kinds) => ({ kinds, library: {}, shelves: [worth], shelves_total: 1,
+                          wish: { wanted: 2, both: 0, members: 2, hidden } })
+    });
+    await openHome();
+    hidden = true;
+    $('[data-testid="home-wish-row"] [aria-label="Hide until tomorrow"]').click();
+    flushSync();
+    expect($('[data-testid="home-wish-row"]'), 'gone at once').toBeNull();
+    await tick();
+    expect(calls('PUT', '/api/home/notices/wish_list')).toHaveLength(1);
+    expect(toast.message).toBe('Hidden until tomorrow');
+    expect($('[data-testid="home-wish-row"]')).toBeNull();
+    expect($('[data-shelf="worth_getting"]'), 'Worth getting stays').not.toBeNull();
   });
 });
 

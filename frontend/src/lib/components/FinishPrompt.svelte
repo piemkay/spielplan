@@ -1,10 +1,12 @@
 <script>
   // One title per card, armed by playback; its first tap writes `seen`, and "no" writes an explicit
-  // `unseen` (decision 211). No inline verdict chips: Home has no rate session.
+  // `unseen` (decision 211). Its x answers nothing and puts the question away for good (decision 554).
   import { onMount } from 'svelte';
   import { get, post } from '$lib/api.js';
+  import Icon from '$lib/components/Icon.svelte';
   import RatePoster from '$lib/components/RatePoster.svelte';
   import { syncNote } from '$lib/titleCard.js';
+  import { showToast } from '$lib/toast.svelte.js';
 
   // Home re-reads its shelves here: either answer changes the server-rendered banner.
   let { onAnswered = null } = $props();
@@ -45,104 +47,88 @@
       busy = false;
     }
   }
+
+  async function close() {
+    if (!current || busy) return;
+    busy = true;
+    failure = '';
+    const card = current;
+    try {
+      await post(`/prompts/finish/${card.id}/close`);
+      queue = queue.filter((p) => p.id !== card.id);
+      showToast('Removed', { label: 'Undo', run: () => reopen(card) });
+    } catch (err) {
+      failure = err.message || 'could not put that away — try again';
+    } finally {
+      busy = false;
+    }
+  }
+
+  async function reopen(card) {
+    try {
+      await post(`/prompts/finish/${card.id}/reopen`);
+      queue = [card, ...queue.filter((p) => p.id !== card.id)];
+    } catch (err) {
+      showToast(err.message);
+    }
+  }
 </script>
 
 {#if current}
-  <div class="card prompt" role="status" data-finish-prompt={current.title_id}>
+  <div class="notice-bar wraps" role="status" data-finish-prompt={current.title_id}>
     <!-- Keyed on `title_id` by hand: this row's own `id` is the prompt's. -->
     <div class="thumb">
       <RatePoster title={{ title_id: current.title_id, name: current.name }} showName={false} />
     </div>
     <div class="text">
-      <p class="q">Did you finish <strong>{current.name}</strong>?</p>
-      <p class="footnote">
-        Jellyfin saw it play to {Math.round((current.progress ?? 0) * 100)}%. Nothing changes until
-        you answer: yes marks it seen, no marks it not seen.
-      </p>
-      {#if failure}<p class="footnote failure" role="alert">{failure}</p>{/if}
+      <p class="headline">Did you finish {current.name}?</p>
+      {#if failure}
+        <p class="line failure" role="alert">{failure}</p>
+      {:else}
+        <p class="line">Jellyfin saw it play to {Math.round((current.progress ?? 0) * 100)}%.</p>
+      {/if}
     </div>
-    <div class="row">
-      <button class="btn-tinted" onclick={() => answer(true)} disabled={busy}>
-        Yes — mark it seen
-      </button>
-      <button class="btn-secondary" onclick={() => answer(false)} disabled={busy}>
-        No — not seen
-      </button>
+    <div class="act">
+      <button class="pill" onclick={() => answer(true)} disabled={busy}>Yes — mark it seen</button>
+      <button class="pill plain" onclick={() => answer(false)} disabled={busy}>No — not seen</button>
     </div>
+    <button class="x" aria-label="Dismiss {current.name}" onclick={close} disabled={busy}>
+      <Icon name="close" size={18} />
+    </button>
   </div>
 {/if}
 
 <!-- A separate element: the question is over. `/rate?head=` puts this title first in the queue. -->
 {#if answered}
   <div
-    class="card handoff"
+    class="notice-bar wraps"
     role="status"
     data-finish-handoff={answered.title_id}
     data-answer={answered.seen ? 'seen' : 'unseen'}
   >
+    <div class="thumb">
+      <RatePoster title={{ title_id: answered.title_id, name: answered.name }} showName={false} />
+    </div>
     <div class="text">
-      <p class="q">
+      <p class="headline">
         {#if answered.seen}
-          Marked <strong>{answered.name}</strong> seen.
+          Marked {answered.name} seen.
         {:else}
           <!-- "this viewing": dismissal is per Jellyfin session, so a later viewing asks again. -->
-          Marked <strong>{answered.name}</strong> not seen — this viewing will not come back.
+          Marked {answered.name} not seen — this viewing will not come back.
         {/if}
       </p>
-      {#if answered.note}<p class="footnote">{answered.note}</p>{/if}
+      {#if answered.note}<p class="line">{answered.note}</p>{/if}
     </div>
     {#if answered.seen}
-      <div class="row">
-        <a
-          class="btn-tinted"
-          href={`/rate?head=${answered.title_id}`}
-          data-testid="finish-prompt-cta"
-        >
+      <div class="act">
+        <a class="pill" href={`/rate?head=${answered.title_id}`} data-testid="finish-prompt-cta">
           Rate it now
         </a>
       </div>
     {/if}
+    <button class="x" aria-label="Close" onclick={() => (answered = null)}>
+      <Icon name="close" size={18} />
+    </button>
   </div>
 {/if}
-
-<style>
-  .prompt,
-  .handoff {
-    margin-bottom: 16px;
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 12px 16px;
-    flex-wrap: wrap;
-  }
-  .thumb {
-    width: 44px;
-    flex: none;
-  }
-  .text {
-    flex: 1 1 12rem;
-    min-width: 0;
-    display: flex;
-    flex-direction: column;
-    gap: 2px;
-  }
-  p {
-    margin: 0;
-  }
-  .q {
-    font-size: var(--fs-callout);
-    line-height: 21px;
-  }
-  strong {
-    font-weight: 600;
-  }
-  .failure {
-    color: var(--negative);
-  }
-  /* A flex row blockifies the anchor, so design.css's min-height gives it its touch target. */
-  .row {
-    display: flex;
-    flex-wrap: wrap;
-    gap: 8px;
-  }
-</style>

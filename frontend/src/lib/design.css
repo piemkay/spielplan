@@ -105,6 +105,8 @@
   --r-lg: 20px;
   --r-pill: 999px;
   --r-poster: 8px;
+  /* A shelf's poster from 721 px; Home's grid uses it too, so a search never resizes a poster. */
+  --shelf-poster: 148px;
 
   /* Hit areas stay 48px (§6 preamble); a control may draw smaller and extend its hit area. */
   --touch: 48px;
@@ -456,6 +458,87 @@ button.switch:disabled { opacity: 0.45; cursor: default; }
 .badge.ok { background: var(--positive-tint); color: var(--positive); }
 .badge.warn { background: var(--warning-tint); color: var(--warning); }
 .badge.bad { background: var(--negative-tint); color: var(--negative); }
+
+/* Home's notices, one shape (decision 554): a thumb or dot, a headline and one line, the action as a
+   pill at the right, and an x. `.wraps` puts long actions on a second row on a phone. */
+.notice-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-bottom: 32px;
+}
+.notice-stack:not(:has(> *)) { display: none; }
+.notice-bar {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr) auto auto;
+  grid-template-areas: 'thumb text act x';
+  align-items: center;
+  column-gap: 12px;
+  min-height: 60px;
+  padding: 8px 4px 8px 12px;
+  border-radius: var(--r-md);
+  background: var(--surface-1);
+}
+.notice-bar > .thumb { grid-area: thumb; display: block; }
+.notice-bar > .thumb .poster { border-radius: var(--r-xs); }
+.notice-bar > .dot {
+  grid-area: thumb;
+  width: 28px;
+  height: 28px;
+  border-radius: 8px;
+  background: var(--surface-2);
+  color: var(--text-2);
+  display: grid;
+  place-items: center;
+}
+.notice-bar > .dot svg { width: 16px; height: 16px; }
+.notice-bar > .text { grid-area: text; min-width: 0; display: flex; flex-direction: column; }
+.notice-bar .headline,
+.notice-bar .line {
+  margin: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+.notice-bar .headline { font-size: var(--fs-subhead); line-height: 20px; font-weight: 600; }
+.notice-bar .line { font-size: var(--fs-footnote); line-height: 18px; color: var(--text-3); }
+.notice-bar .line.failure { color: var(--negative); }
+.notice-bar > .act { grid-area: act; display: flex; align-items: center; gap: 8px; }
+.notice-bar .pill {
+  min-height: 32px;
+  background: var(--accent-tint);
+  color: var(--accent-text);
+  font-weight: 600;
+}
+.notice-bar .pill.primary { background: var(--accent); color: var(--on-accent); }
+.notice-bar .pill.plain { background: var(--surface-2); color: var(--text); font-weight: 500; }
+.notice-bar .pill:disabled { opacity: 0.45; cursor: default; transition-delay: var(--busy-delay); }
+/* A 32 px pill, a 48 px tap. */
+.notice-bar .pill::after { content: ''; position: absolute; inset: -8px 0; }
+.notice-bar > .x {
+  grid-area: x;
+  width: 44px;
+  height: 44px;
+  min-height: 44px;
+  margin-left: -4px;
+  padding: 0;
+  border: none;
+  background: none;
+  color: var(--text-3);
+  display: grid;
+  place-items: center;
+}
+@media (max-width: 720px) {
+  .notice-bar .headline,
+  .notice-bar .line { white-space: normal; }
+  .notice-bar.wraps {
+    grid-template-columns: 28px minmax(0, 1fr) auto;
+    grid-template-areas: 'thumb text x' 'act act act';
+    row-gap: 8px;
+    padding-bottom: 12px;
+  }
+  .notice-bar.wraps > .act { flex-wrap: wrap; }
+}
 
 input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='file']),
 select,

@@ -280,13 +280,13 @@
     }
     .row,
     .row.worth {
-      grid-auto-columns: 148px;
+      grid-auto-columns: var(--shelf-poster);
       gap: 16px;
       padding: 0;
       scroll-padding-inline: 0;
     }
     .all {
-      grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
+      grid-template-columns: repeat(auto-fill, var(--shelf-poster));
       gap: 24px 16px;
     }
   }

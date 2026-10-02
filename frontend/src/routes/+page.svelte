@@ -28,8 +28,10 @@
     sortWaitingLine,
     strongEnd
   } from '$lib/home.svelte.js';
+  import { putAway } from '$lib/notices.js';
   import { publishSuppressed } from '$lib/rail.svelte.js';
   import { displayNames } from '$lib/titleCard.js';
+  import { showToast } from '$lib/toast.svelte.js';
   import { topbar } from '$lib/topbar.svelte.js';
   import { wishes } from '$lib/wish.svelte.js';
   import ArrivedBanner from '$lib/components/ArrivedBanner.svelte';
@@ -119,9 +121,9 @@
   const placeholder = $derived(count && !bundleNote ? `Search ${count}` : 'Search');
   const note = $derived(bundleNote.replace(/^./, (c) => c.toUpperCase()));
 
-  // The kind switch is the shell's top row; on a wide screen the search joins it (decision 528).
-  let width = $state(0);
-  const wide = $derived(width >= 1100);
+  // The kind switch is the shell's top row; from 721 px the search joins it, as on Rank (decision 554).
+  let width = $state(typeof window === 'undefined' ? 390 : window.innerWidth);
+  const wide = $derived(width > 720);
   $effect(() => {
     if (!topbar.host) return;
     topbar.content = homeBar;
@@ -330,6 +332,19 @@
     owned = !owned;
     load();
   }
+
+  // A sticky notice's x (decision 554): gone at once, then the server's Home; Undo re-reads it.
+  async function hideNotice(notice) {
+    if (notice === 'pending') home.banner = null;
+    else if (notice === 'setup') home.setup_notice = null;
+    else home.wish = { ...home.wish, hidden: true };
+    try {
+      await putAway(notice, loadShelves);
+    } catch (err) {
+      showToast(err.message);
+    }
+    loadShelves();
+  }
 </script>
 
 {#snippet icon(name)}
@@ -342,6 +357,8 @@
       <path d="M6 6l12 12M18 6 6 18" />
     {:else if name === 'chevron'}
       <path d="m5.5 9.5 6.5 6.5 6.5-6.5" />
+    {:else if name === 'ladder'}
+      <path d="M7.5 3.5v17M16.5 3.5v17M7.5 8h9M7.5 12.5h9M7.5 17h9" />
     {/if}
   </svg>
 {/snippet}
@@ -403,26 +420,27 @@
 </div>
 
 {#if filtersOpen}
+  <!-- A cell is a list row on a phone and a label over its control from 721 px (decision 554). -->
   <div class="list-group filterpanel" id="home-filters" data-testid="filter-panel">
-    <!-- The select covers its row, so a tap anywhere on the row opens the native picker. -->
-    <div class="list-row field">
-      <span>Genre</span>
+    <!-- On a phone the select covers its row, so a tap anywhere on the row opens the native picker. -->
+    <div class="cell list-row field">
+      <span class="label">Genre</span>
       <span class="value">{genre || 'Any'}{@render icon('chevron')}</span>
       <select bind:value={genre} onchange={() => load()} aria-label="Genre" data-testid="filter-genre">
         <option value="">Any genre</option>
         {#each facets.genres as g (g)}<option value={g}>{g}</option>{/each}
       </select>
     </div>
-    <div class="list-row field">
-      <span>Decade</span>
+    <div class="cell list-row field">
+      <span class="label">Decade</span>
       <span class="value">{decade ? `${decade}s` : 'Any'}{@render icon('chevron')}</span>
       <select bind:value={decade} onchange={() => load()} aria-label="Decade" data-testid="filter-decade">
         <option value="">Any decade</option>
         {#each facets.decades as d (d)}<option value={d}>{d}s</option>{/each}
       </select>
     </div>
-    <div class="list-row field">
-      <span>Seen</span>
+    <div class="cell list-row field">
+      <span class="label">Seen</span>
       <span class="value">{SEEN_WORDS[seen]}{@render icon('chevron')}</span>
       <select bind:value={seen} onchange={() => load()} aria-label="Seen state" data-testid="filter-seen">
         <option value="any">Seen or not</option>
@@ -430,8 +448,8 @@
         <option value="unseen">Not seen</option>
       </select>
     </div>
-    <div class="list-row">
-      <span id="owned-label">In my library</span>
+    <div class="cell list-row">
+      <span class="label" id="owned-label">In my library</span>
       <button
         class="switch"
         role="switch"
@@ -464,19 +482,28 @@
   <p class="footnote kindnote" role="status" data-testid="kind-filter-note">{kindNote}</p>
 {/if}
 
-<!-- Its answer moves the banner's population, so it re-reads the shelves (decision 212). -->
-<FinishPrompt onAnswered={loadShelves} />
-<PendingVerdicts banner={home?.banner} />
-<ArrivedBanner arrived={home?.arrived ?? []} onSelect={(title) => (selected = title)} />
-
-{#if home?.setup_notice}
-  {@const notice = home.setup_notice}
-  <div class="card notice" data-testid="home-setup-notice">
-    <h2 class="section-title">{notice.headline}</h2>
-    <p class="why">{notice.why}</p>
-    <a class="btn-primary" href={notice.cta.route}>{notice.cta.label}</a>
-  </div>
-{/if}
+<div class="notice-stack">
+  <!-- Its answer moves the banner's population, so it re-reads the shelves (decision 212). -->
+  <FinishPrompt onAnswered={loadShelves} />
+  <PendingVerdicts banner={home?.banner} onHide={() => hideNotice('pending')} />
+  <ArrivedBanner arrived={home?.arrived ?? []} onSelect={(title) => (selected = title)} />
+  {#if home?.setup_notice}
+    {@const notice = home.setup_notice}
+    <div class="notice-bar wraps" role="status" data-testid="home-setup-notice">
+      <span class="dot" aria-hidden="true">{@render icon('ladder')}</span>
+      <div class="text">
+        <h2 class="headline">{notice.headline}</h2>
+        <p class="line">{notice.why}</p>
+      </div>
+      <div class="act">
+        <a class="pill primary" href={notice.cta.route}>{notice.cta.label}</a>
+      </div>
+      <button class="x" aria-label="Hide until tomorrow" onclick={() => hideNotice('setup')}>
+        {@render icon('close')}
+      </button>
+    </div>
+  {/if}
+</div>
 
 <!-- One message for both roles; an admin also gets the door to Movie data. -->
 {#snippet noBundle()}
@@ -527,7 +554,7 @@
     <div class="empty card"><p class="why">{loadError}</p></div>
   {:else if gridStale && shown.reason !== reason}
     <div class="grid" aria-hidden="true">
-      {#each { length: 9 }, i (i)}<span class="skeleton cell"></span>{/each}
+      {#each { length: 9 }, i (i)}<span class="skeleton ghost"></span>{/each}
     </div>
   {:else if !items.length && !loading}
     <div class="empty card">
@@ -611,6 +638,7 @@
       loading={homeLoading}
       stale={shelvesStale}
       onSelect={(title) => (selected = title)}
+      onHideWish={() => hideNotice('wish_list')}
     />
   {/if}
 {/if}
@@ -725,19 +753,6 @@
   .kindnote {
     margin: 0 4px 16px;
   }
-  .notice {
-    display: flex;
-    flex-direction: column;
-    gap: 8px;
-    align-items: flex-start;
-    margin-bottom: 32px;
-  }
-  .notice .why {
-    margin: 0 0 4px;
-  }
-  .notice .btn-primary {
-    min-height: var(--touch);
-  }
 
   /* In flow, not absolute: `main` is not a containing block, so an absolute marker scrolled the page. */
   .sr-only {
@@ -770,7 +785,7 @@
     grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 20px 12px;
   }
-  .cell {
+  .ghost {
     display: block;
     aspect-ratio: 2 / 3;
   }
@@ -786,7 +801,6 @@
   }
   .more {
     display: flex;
-    justify-content: center;
     padding: 24px 0;
   }
   .empty {
@@ -810,20 +824,48 @@
     .kinds {
       width: 240px;
     }
-    .searchrow {
-      width: min(100%, 460px);
+    .bar .searchrow {
+      flex: 0 1 460px;
+      min-width: 0;
     }
     .filterpanel {
-      max-width: 460px;
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
     }
-    .notice {
-      max-width: 560px;
+    /* Each cell draws the hairlines above and before it; the panel clips the outer ones. */
+    .filterpanel > .cell {
+      flex-direction: column;
+      align-items: stretch;
+      gap: 6px;
+      min-height: 0;
+      padding: 12px 16px 14px;
+      box-shadow: -0.5px -0.5px 0 var(--separator);
     }
-    .notice .why {
-      text-wrap: pretty;
+    .cell > .label {
+      font-size: var(--fs-footnote);
+      line-height: 18px;
+      color: var(--text-3);
+    }
+    .field:focus-within {
+      outline: none;
+    }
+    .field .value {
+      display: none;
+    }
+    .field select {
+      position: static;
+      height: 40px;
+      min-height: 40px;
+      padding: 0 36px 0 12px;
+      opacity: 1;
+      font-size: var(--fs-subhead);
+      line-height: 20px;
+    }
+    .cell > .switch {
+      margin: 4.5px 0;
     }
     .grid {
-      grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
+      grid-template-columns: repeat(auto-fill, var(--shelf-poster));
       gap: 24px 16px;
     }
   }

@@ -5,8 +5,10 @@ import {
   dismissArrival,
   likeLine,
   likelyTooLine,
+  loadWishSummary,
   loadWorthGetting,
   peopleLine,
+  restoreArrival,
   setWish,
   wishRowShown,
   wishSummary,
@@ -45,6 +47,12 @@ describe("Home's wish list row", () => {
     expect(wishRowShown({ shelves: [], wish: { wanted: 1 } })).toBe(true);
     expect(wishRowShown({ shelves: [{ id: 'top_of_ledger' }], wish: { wanted: 0 } })).toBe(false);
     expect(wishRowShown(null)).toBe(false);
+  });
+
+  it('stands down for the day once the member puts it away (decision 554)', () => {
+    const shelf = { id: 'worth_getting', sections: [] };
+    expect(wishRowShown({ shelves: [shelf], wish: { wanted: 3, hidden: true } })).toBe(false);
+    expect(wishRowShown({ shelves: [shelf], wish: { wanted: 3, hidden: false } })).toBe(true);
   });
 });
 
@@ -110,6 +118,21 @@ describe('the wish routes', () => {
     const [dismissUrl, dismissInit] = vi.mocked(globalThis.fetch).mock.calls[0];
     expect([dismissUrl, dismissInit.method]).toEqual(['/api/wish/5/dismiss', 'POST']);
     expect(wishes.epoch).toBe(before + 3);
+  });
+
+  it("puts a dismissed arrival back with its own date, and reads You's count", async () => {
+    const fetch = answering({ restored: true });
+    const before = wishes.epoch;
+    await restoreArrival(5, '2026-09-12T10:00:00Z');
+    const [url, init] = fetch.mock.calls[0];
+    expect([url, init.method, JSON.parse(init.body)]).toEqual([
+      '/api/wish/5/restore', 'POST', { since: '2026-09-12T10:00:00Z' }
+    ]);
+    expect(wishes.epoch).toBe(before + 1);
+
+    answering({ wanted: 3, both: 1, members: 2 });
+    expect(await loadWishSummary()).toEqual({ wanted: 3, both: 1, members: 2 });
+    expect(vi.mocked(globalThis.fetch).mock.calls[0][0]).toBe('/api/wish/summary');
   });
 
   it('moves nothing when the server refuses', async () => {
