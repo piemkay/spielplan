@@ -5,8 +5,9 @@
 import { flushSync, mount, unmount } from 'svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-// The title card is a sheet, which pushes a history entry as it opens.
-const nav = vi.hoisted(() => ({ page: null }));
+// Sheets push a history entry as they open; Home mirrors its chips into its own with replaceState,
+// which keeps the URL the page was entered with, as SvelteKit's does.
+const nav = vi.hoisted(() => ({ page: null, replaced: [] }));
 vi.mock('$app/stores', async () => {
   const { writable } = await import('svelte/store');
   nav.page = writable({ url: new URL('http://localhost/'), state: {} });
@@ -14,13 +15,26 @@ vi.mock('$app/stores', async () => {
 });
 vi.mock('$app/navigation', () => ({
   pushState: (_url, state) => nav.page.update((p) => ({ ...p, state })),
+  replaceState: (url, state) => {
+    nav.replaced.push(url);
+    nav.page.update((p) => ({ ...p, state }));
+  },
   beforeNavigate: () => {},
   afterNavigate: () => {}
+}));
+
+// The card's own taps are TitleDetail's to test; Home's part is what it does with them.
+const detail = vi.hoisted(() => ({ props: null }));
+vi.mock('$lib/components/TitleDetail.svelte', () => ({
+  default: (_anchor, props) => {
+    detail.props = props;
+  }
 }));
 
 import HomePage from './+page.svelte';
 import PAGE_SOURCE from './+page.svelte?raw';
 import { homeKept } from '$lib/home.svelte.js';
+import { homeFilters, resetHomeFilters } from '$lib/homeFilters.svelte.js';
 import { session } from '$lib/session.svelte.js';
 import { hideToast, toast } from '$lib/toast.svelte.js';
 import { topbar } from '$lib/topbar.svelte.js';
@@ -65,6 +79,11 @@ afterEach(() => {
   app = null;
   Object.assign(session, { user: null, hasBundle: null, restartRequired: null });
   Object.assign(homeKept, { user: null, epoch: 0, kinds: null, payload: null, scrollY: 0 });
+  // Home's filters are module state, as its place is: one test's chips must not open the next.
+  resetHomeFilters();
+  nav.page.set({ url: new URL('http://localhost/'), state: {} });
+  nav.replaced = [];
+  detail.props = null;
   vi.unstubAllGlobals();
   target.remove();
 });
@@ -111,7 +130,9 @@ function backend({
   titles = (/** @type {URLSearchParams} */ _params) => ({ items: [], total: 0, hidden: {} }),
   facets = (/** @type {string[]} */ _kinds) => ({ genres: [], decades: [] }),
   home = (/** @type {string[]} */ _kinds) => ({}),
-  wish = () => ({ mine: [], others: [], copy_text: '' })
+  wish = () => ({ mine: [], others: [], copy_text: '' }),
+  vocabulary = { version: null, facets: [], terms: [] },
+  people = { people: [] }
 } = {}) {
   const seen = [];
   vi.stubGlobal(
@@ -124,6 +145,8 @@ function backend({
       else if (u.pathname === '/api/facets') payload = facets(u.searchParams.getAll('kind'));
       else if (u.pathname === '/api/home') payload = home(u.searchParams.getAll('kind'));
       else if (u.pathname === '/api/wish') payload = wish();
+      else if (u.pathname === '/api/vocabulary') payload = vocabulary;
+      else if (u.pathname === '/api/people') payload = people;
       else if (u.pathname.startsWith('/api/prompts/finish')) payload = [];
       return Promise.resolve({
         ok: true,
@@ -162,13 +185,15 @@ async function type(text) {
   await tick(80);
 }
 
+const FILTERS = ['filter-genre', 'filter-decade', 'filter-seen', 'filter-owned', 'filter-terms', 'filter-people'];
+
 describe('Home opens on the shelves, with the filters behind one control', () => {
-  it('shows the kind switch and the search, and the four filters only when asked', async () => {
+  it('shows the kind switch and the search, and the six filters only when asked', async () => {
     backend();
     await openHome();
     expect($('[data-testid="home-search"]')).not.toBeNull();
     expect($('[role="group"][aria-label="Kind"]')).not.toBeNull();
-    for (const id of ['filter-genre', 'filter-decade', 'filter-seen', 'filter-owned']) {
+    for (const id of FILTERS) {
       expect($(`[data-testid="${id}"]`), `${id} is on the first screen`).toBeNull();
     }
     const toggle = $('[data-testid="filter-toggle"]');
@@ -181,12 +206,19 @@ describe('Home opens on the shelves, with the filters behind one control', () =>
     expect(document.getElementById(toggle.getAttribute('aria-controls'))).toBe(
       $('[data-testid="filter-panel"]')
     );
-    for (const id of ['filter-genre', 'filter-decade', 'filter-seen', 'filter-owned']) {
+    const cells = [...$('[data-testid="filter-panel"]').children].map((cell) =>
+      cell.querySelector('.label').textContent.trim()
+    );
+    expect(cells).toEqual(['Genre', 'Decade', 'Seen', 'Only in library', "What it's like", 'People']);
+    for (const id of FILTERS) {
       expect($(`[data-testid="${id}"]`), `${id} is not in the panel`).not.toBeNull();
     }
+    // Only in library is on by default (decision 558), and on is no filter.
+    expect($('[data-testid="filter-owned"]').getAttribute('aria-checked')).toBe('true');
+    expect($('[data-testid="home-mode"]').dataset.mode).toBe('shelves');
   });
 
-  it('counts what is set on the control, and keeps each set filter as a chip once it is shut', async () => {
+  it('counts Only in library off as a filter, shows its chip open or shut, and its x turns it back on', async () => {
     backend();
     await openHome();
     $('[data-testid="filter-toggle"]').click();
@@ -194,13 +226,15 @@ describe('Home opens on the shelves, with the filters behind one control', () =>
     $('[data-testid="filter-owned"]').click();
     await tick();
     expect($('[data-testid="filter-toggle"]').textContent.trim()).toBe('Filters · 1');
-    expect($('[data-testid="owned-filter-chip"]'), 'a chip beside the open panel').toBeNull();
+    expect($('[data-testid="home-mode"]').dataset.mode).toBe('grid');
+    expect($('[data-testid="owned-filter-chip"]').textContent).toContain('Beyond your library');
     $('[data-testid="filter-toggle"]').click();
     flushSync();
     const chip = $('[data-testid="owned-filter-chip"]');
-    expect(chip.textContent).toContain('In my library');
+    expect(chip.textContent).toContain('Beyond your library');
     chip.click();
     await tick();
+    expect(homeFilters.owned).toBe(true);
     expect($('[data-testid="filter-toggle"]').textContent.trim()).toBe('Filters');
     expect($('[data-testid="home-mode"]').dataset.mode).toBe('shelves');
   });
@@ -212,11 +246,17 @@ describe('the shelves (decision 527)', () => {
       home: (kinds) => ({ kinds, library: { movie: 759, series: 127 }, shelves: [], shelves_total: 0 })
     });
     await openHome();
-    expect(placeholder()).toBe('Search 759 films');
+    expect(placeholder()).toBe('Search your 759 films');
     expect($('[data-testid="count-line"]'), 'the count is the placeholder (decision 528)').toBeNull();
     $('[data-testid="kind-both"]').click();
     await tick();
-    expect(placeholder()).toBe('Search 886 titles');
+    expect(placeholder()).toBe('Search your 886 titles');
+    // Off, the search reaches past the library and says so (decision 558).
+    $('[data-testid="filter-toggle"]').click();
+    flushSync();
+    $('[data-testid="filter-owned"]').click();
+    await tick();
+    expect(placeholder()).toBe('Search all titles');
   });
 
   it('head each shelf one level under its kind on Both, and at the top on one kind', async () => {
@@ -484,12 +524,14 @@ describe('an empty search names the other kind', () => {
     expect($('.grid .card-wrap').textContent).toContain('Broadchurch');
   });
 
-  it('says plainly that nothing matches when no kind has it', async () => {
-    backend({ titles: () => ({ items: [], total: 0, hidden: { series: 0 } }) });
+  it('says plainly that nothing in the library matches when no kind has it', async () => {
+    backend({ titles: () => ({ items: [], total: 0, hidden: { series: 0 }, beyond: 0 }) });
     await openHome();
     await type('zzzz');
     expect($('[data-testid="found-elsewhere"]')).toBeNull();
-    expect($('.empty.card').textContent).toContain('Nothing matches.');
+    expect($('.empty.card').textContent).toContain('Nothing in your library matches.');
+    // The way past the library is still offered (decision 558).
+    expect($('[data-testid="search-beyond"]')).not.toBeNull();
   });
 });
 
@@ -752,5 +794,283 @@ describe('the document never scrolls under the shell', () => {
     const rule = PAGE_SOURCE.match(/\.sr-only\s*\{([^}]*)\}/)[1];
     expect(rule).not.toMatch(/position\s*:\s*(absolute|fixed)/);
     expect(rule).toMatch(/height\s*:\s*1px/);
+  });
+});
+
+const COSY = { term: 'mood.cozy', label: 'cozy & mellow', facet: 'mood' };
+const HEIST = { term: 'themes.heist', label: 'heist', facet: 'themes' };
+const CAINE = { person_ids: [12, 13], person_id: 12, name: 'Michael Caine', photo: false };
+const MANN = { person_ids: [1], person_id: 1, name: 'Michael Mann', photo: false };
+
+/** Home entered at this address, as a reload or a card's jump from another page enters it. */
+const at = (path) => nav.page.set({ url: new URL(path, 'http://localhost'), state: {} });
+const chipTexts = () =>
+  [...target.querySelectorAll('.chips [data-testid]')].map(
+    (c) => `${c.dataset.testid}:${c.querySelector('.label').textContent.trim()}`
+  );
+const asked = (seen) =>
+  new URL(seen.filter((u) => u.startsWith('/api/titles?') && !u.includes('limit=1&')).at(-1), 'http://localhost')
+    .searchParams;
+const names = () => [...target.querySelectorAll('.grid .card-wrap .name')].map((n) => n.textContent);
+const applied = (p) => ({
+  terms: [COSY, HEIST].filter((t) => p.getAll('term').includes(t.term)),
+  not_terms: [COSY, HEIST].filter((t) => p.getAll('not_term').includes(t.term)),
+  people: [CAINE].filter((g) => p.getAll('person').includes(g.person_ids.join(',')))
+});
+
+describe("Home's URL (decision 557 item 6)", () => {
+  it('sets exactly the chips the address carries, every other filter at its default, over the kept place', async () => {
+    const seen = backend({
+      titles: (p) => ({ items: [film(1, 'Heat')], total: 1, hidden: {}, strong_total: 1, beyond: 0, applied: applied(p) })
+    });
+    Object.assign(homeKept, { user: MEMBER.id, epoch: 0, kinds: ['movie'], payload: null });
+    Object.assign(homeFilters, { genre: 'Drama', q: 'heat', panelOpen: true, owned: false });
+    at('/?term=mood.cozy&person=12,13&kind=series');
+    await openHome();
+
+    expect($('[data-testid="kind-series"]').getAttribute('aria-pressed')).toBe('true');
+    // The names are the server's: the address carries ids alone.
+    expect(chipTexts()).toEqual(['person-chip:Michael Caine', 'term-chip:cozy & mellow']);
+    expect(homeFilters).toMatchObject({ genre: '', q: '', panelOpen: false, owned: true });
+    const query = asked(seen);
+    expect(query.getAll('kind')).toEqual(['series']);
+    expect(query.getAll('term')).toEqual(['mood.cozy']);
+    expect(query.getAll('person')).toEqual(['12,13']);
+    expect(query.get('owned')).toBe('only');
+    expect(nav.replaced, 'the address already says it').toEqual([]);
+  });
+
+  it('mirrors each chip change into the address with replaceState', async () => {
+    backend({ titles: (p) => ({ items: [film(1, 'Heat')], total: 1, hidden: {}, applied: applied(p) }) });
+    at('/?term=mood.cozy&kind=movie');
+    await openHome();
+    $('[aria-label="Switch cozy & mellow to leave out"]').click();
+    await tick();
+    expect(nav.replaced.at(-1)).toBe('/?not_term=mood.cozy&kind=movie');
+    expect($('[data-testid="term-chip"]').dataset.mode).toBe('out');
+    $('[aria-label="Remove cozy & mellow"]').click();
+    await tick();
+    expect(nav.replaced.at(-1)).toBe('/');
+    expect($('[data-testid="home-mode"]').dataset.mode).toBe('shelves');
+  });
+
+  it('takes the chips of a client navigation here, without a remount', async () => {
+    const seen = backend({
+      titles: (p) => ({ items: [film(1, 'Heat')], total: 1, hidden: {}, applied: applied(p) })
+    });
+    await openHome();
+    at('/?person=12,13&kind=movie&kind=series');
+    await tick();
+    expect(chipTexts()).toEqual(['person-chip:Michael Caine']);
+    expect($('[data-testid="kind-both"]').getAttribute('aria-pressed')).toBe('true');
+    expect($('[data-testid="home-mode"]').dataset.reason).toBe('person');
+    expect(asked(seen).getAll('kind')).toEqual(['movie', 'series']);
+  });
+
+  it('drops a term the vocabulary no longer has, and says so (decision 557 item 9)', async () => {
+    backend({ titles: (p) => ({ items: [film(1, 'Heat')], total: 1, hidden: {}, applied: applied(p) }) });
+    const served = globalThis.fetch;
+    const refused = {
+      ok: false,
+      status: 422,
+      statusText: 'Unprocessable Entity',
+      headers: { get: () => null },
+      text: async () => JSON.stringify({ detail: { reason: 'unknown_term', terms: ['mood.gone'] } })
+    };
+    vi.stubGlobal(
+      'fetch',
+      vi.fn((url, init) => (String(url).includes('term=mood.gone') ? Promise.resolve(refused) : served(url, init)))
+    );
+    at('/?term=mood.gone&term=mood.cozy&kind=movie');
+    await openHome();
+    await tick();
+    expect(chipTexts()).toEqual(['term-chip:cozy & mellow']);
+    expect($('[data-testid="kind-filter-note"]').textContent).toBe('gone cleared — no longer a taste term.');
+    expect(names()).toEqual(['Heat']);
+  });
+
+  it('keeps every term and person chip across a kind switch', async () => {
+    const seen = backend({ titles: (p) => ({ items: [film(1, 'Heat')], total: 1, hidden: {}, applied: applied(p) }) });
+    at('/?term=mood.cozy&not_term=themes.heist&person=12,13&kind=movie');
+    await openHome();
+    $('[data-testid="kind-series"]').click();
+    await tick();
+    const query = asked(seen);
+    expect(query.getAll('kind')).toEqual(['series']);
+    expect([query.getAll('term'), query.getAll('not_term'), query.getAll('person')]).toEqual([
+      ['mood.cozy'], ['themes.heist'], ['12,13']
+    ]);
+    expect(nav.replaced.at(-1)).toBe('/?term=mood.cozy&not_term=themes.heist&person=12,13&kind=series');
+  });
+});
+
+describe("the title card's taps on Home (decision 557 item 6)", () => {
+  it('adds a credit to what is set, one chip per human, and clears the search', async () => {
+    backend({ titles: () => ({ items: [film(1, 'Heat')], total: 1, hidden: {} }) });
+    await openHome();
+    await type('heat');
+    $('.grid .card-wrap').click();
+    flushSync();
+    detail.props.onPerson(MANN);
+    await tick();
+    expect($('[data-testid="home-search"]').value).toBe('');
+    expect(chipTexts()).toEqual(['person-chip:Michael Mann']);
+    expect($('[data-testid="home-mode"]').dataset.reason).toBe('person');
+    // The same human from a second record is no second chip; another human is.
+    detail.props.onPerson({ ...MANN, person_ids: [1, 40], person_id: 40 });
+    detail.props.onPerson(CAINE);
+    await tick();
+    expect(chipTexts()).toEqual(['person-chip:Michael Mann', 'person-chip:Michael Caine']);
+    expect($('[data-testid="home-mode"]').dataset.reason).toBe('filter');
+  });
+
+  it('adds a term as an include', async () => {
+    const seen = backend({ titles: () => ({ items: [film(1, 'Heat')], total: 1, hidden: {} }) });
+    await openHome();
+    await type('heat');
+    $('.grid .card-wrap').click();
+    flushSync();
+    detail.props.onTerm(COSY);
+    await tick();
+    expect($('[data-testid="term-chip"]').dataset.mode).toBe('in');
+    expect(asked(seen).getAll('term')).toEqual(['mood.cozy']);
+  });
+});
+
+describe('an include folds what only our read finds (decision 557 item 2)', () => {
+  it('leads with the quoted matches and keeps the rest behind one row', async () => {
+    const row = (id, name, match) => ({ ...film(id, name), match });
+    backend({
+      titles: () => ({
+        items: [row(1, 'Heat', 'strong'), row(2, 'Up', 'strong'), row(3, 'Drive', 'weak')],
+        total: 5, strong_total: 2, hidden: {}, beyond: 0
+      })
+    });
+    at('/?term=mood.cozy&kind=movie');
+    await openHome();
+    expect(names()).toEqual(['Heat', 'Up']);
+    expect($('[data-testid="grid-line"]').textContent.trim()).toBe('2 films in your library');
+    const more = $('[data-testid="weak-matches-toggle"]');
+    expect(more.textContent.trim()).toBe('Show 3 more that might fit');
+    more.click();
+    flushSync();
+    const head = $('[data-testid="weak-matches-head"]').textContent;
+    expect(head).toContain('Might also fit');
+    expect(head).toContain('Our read · less certain');
+    expect(names()).toEqual(['Heat', 'Up', 'Drive']);
+  });
+});
+
+describe('an empty grid (decision 557 item 7)', () => {
+  it('names its chips and offers each drop with what it leaves, and the way beyond the library', async () => {
+    const seen = backend({
+      titles: (p) => {
+        const terms = p.getAll('term');
+        const total = terms.length === 2 ? 0 : terms.includes('mood.cozy') ? 2 : 51;
+        return {
+          items: total ? [film(1, 'Heat')] : [], total, strong_total: total, hidden: {}, beyond: 4, applied: applied(p)
+        };
+      }
+    });
+    at('/?term=mood.cozy&term=themes.heist&kind=movie');
+    await openHome();
+    await tick();
+    expect($('[data-testid="no-matches-line"]').textContent.trim()).toBe(
+      'Nothing in your library is cozy & mellow and heist.'
+    );
+    const drops = [...target.querySelectorAll('[data-testid="grid-drop"]')];
+    expect(drops.map((b) => b.textContent.trim())).toEqual([
+      'Without cozy & mellow: 51 films',
+      'Without heist: 2 films'
+    ]);
+    expect(seen.filter((u) => u.includes('limit=1&'))).toHaveLength(2);
+    expect($('.empty [data-testid="grid-beyond"]').textContent.trim()).toBe('4 more beyond your library');
+    drops[1].click();
+    await tick();
+    expect(chipTexts()).toEqual(['term-chip:cozy & mellow']);
+    expect(names()).toEqual(['Heat']);
+  });
+});
+
+describe('Only in library (decision 558)', () => {
+  it('ends a search on the way beyond it, and clearing the search turns it back on', async () => {
+    const seen = backend({
+      titles: (p) => ({ items: [film(1, 'Heat')], total: 1, hidden: {}, beyond: p.get('owned') === 'only' ? 3 : null })
+    });
+    await openHome();
+    await type('heat');
+    expect($('[data-testid="search-beyond"]').textContent.trim()).toBe('Search beyond your library');
+    expect($('.beyond .footnote').textContent).toBe('3 more in Spielplan');
+    $('[data-testid="search-beyond"]').click();
+    await tick();
+    expect(chipTexts()).toEqual(['owned-filter-chip:Beyond your library']);
+    expect(asked(seen).get('owned'), "a search's grid stays the library's part").toBe('only');
+    expect($('[data-testid="search-beyond"]')).toBeNull();
+    await type('');
+    expect(homeFilters.owned).toBe(true);
+    expect($('[data-testid="home-mode"]').dataset.mode).toBe('shelves');
+  });
+
+  it('ends a filtered grid on what it leaves out, which switches it off', async () => {
+    const seen = backend({
+      titles: (p) => ({ items: [film(1, 'Heat')], total: 1, hidden: {}, beyond: p.get('owned') === 'only' ? 12 : null })
+    });
+    await openHome();
+    $('[data-testid="filter-toggle"]').click();
+    flushSync();
+    const select = $('[data-testid="filter-seen"]');
+    select.value = 'unseen';
+    select.dispatchEvent(new Event('change', { bubbles: true }));
+    await tick();
+    const row = $('[data-testid="grid-beyond"]');
+    expect(row.textContent.trim()).toBe('12 more beyond your library');
+    row.click();
+    await tick();
+    expect(asked(seen).get('owned')).toBe('any');
+    expect($('[data-testid="grid-beyond"]')).toBeNull();
+  });
+});
+
+describe('the pickers in the Filters panel', () => {
+  const VOCAB = {
+    version: 'v1',
+    facets: [{ facet: 'mood', colour: '#c8613a' }],
+    terms: [{ term: 'mood.cozy', facet: 'mood', label: 'cozy & mellow', gloss: '', aliases: ['cosy'], owned: 51 }]
+  };
+
+  it("includes and leaves out a term from What it's like", async () => {
+    backend({ vocabulary: VOCAB, titles: (p) => ({ items: [film(1, 'Heat')], total: 1, hidden: {}, applied: applied(p) }) });
+    await openHome();
+    $('[data-testid="filter-toggle"]').click();
+    flushSync();
+    $('[data-testid="filter-terms"]').click();
+    await tick();
+    $('[aria-label="Include cozy & mellow"]').click();
+    await tick();
+    expect(chipTexts()).toEqual(['term-chip:cozy & mellow']);
+    $('[aria-label="Leave out cozy & mellow"]').click();
+    await tick();
+    expect($('.chips [data-testid="term-chip"]').dataset.mode).toBe('out');
+    expect(nav.replaced.at(-1)).toBe('/?not_term=mood.cozy&kind=movie&filters=open');
+  });
+
+  it('adds a person from People', async () => {
+    const seen = backend({
+      people: { people: [{ ...CAINE, role: 'cast', owned: 6, titles: 11 }] },
+      titles: (p) => ({ items: [film(1, 'Heat')], total: 1, hidden: {}, applied: applied(p) })
+    });
+    await openHome();
+    $('[data-testid="filter-toggle"]').click();
+    flushSync();
+    $('[data-testid="filter-people"]').click();
+    await tick();
+    const field = $('[data-testid="people-search"]');
+    field.value = 'cai';
+    field.dispatchEvent(new Event('input', { bubbles: true }));
+    await tick(100);
+    $('[aria-label="Add Michael Caine"]').click();
+    await tick();
+    expect(chipTexts()).toEqual(['person-chip:Michael Caine']);
+    expect(asked(seen).getAll('person')).toEqual(['12,13']);
   });
 });

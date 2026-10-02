@@ -23,18 +23,24 @@ export function loadModelLog(limit = 15) {
   return get(`/model-log${qs({ limit })}`);
 }
 
-// Any catalog filter switches to the grid too: a filter hidden under the shelves is a dead control.
+// Any filter away from its default switches to the grid, Only in library off included (decision
+// 558): a filter hidden under the shelves is a dead control. One person alone is a filmography.
 export function gridReason({
   q = '',
-  personId = null,
+  terms = [],
+  people = [],
+  like = [],
+  less = [],
   genre = '',
   decade = '',
   seen = 'any',
-  owned = false
+  owned = true
 } = {}) {
+  if (like.length + less.length > 0) return 'recipe';
   if (q && q.trim()) return 'search';
-  if (personId !== null && personId !== undefined && personId !== '') return 'person';
-  if (genre || decade || (seen && seen !== 'any') || owned) return 'filter';
+  const narrowed = Boolean(genre || decade || (seen && seen !== 'any') || !owned || terms.length);
+  if (people.length === 1 && !narrowed) return 'person';
+  if (people.length || narrowed) return 'filter';
   return null;
 }
 
@@ -42,19 +48,71 @@ export function homeMode(state) {
   return gridReason(state) ? 'grid' : 'shelves';
 }
 
-// The person filter is not counted: its chip is always on screen.
-export function activeFilterCount({ genre = '', decade = '', seen = 'any', owned = false } = {}) {
-  return [Boolean(genre), Boolean(decade), Boolean(seen && seen !== 'any'), Boolean(owned)].filter(
-    Boolean
-  ).length;
+export function activeFilterCount({
+  genre = '',
+  decade = '',
+  seen = 'any',
+  owned = true,
+  terms = [],
+  people = [],
+  like = [],
+  less = []
+} = {}) {
+  const set = [genre, decade, seen && seen !== 'any', !owned].filter(Boolean).length;
+  return set + terms.length + people.length + like.length + less.length;
 }
 
 // A filtered grid names its order with the order control, and its filters with their chips.
-/** @param {string | null} reason `gridReason`'s answer: 'search', 'person' or 'filter' */
+/** @param {string | null} reason `gridReason`'s answer */
 export function gridLine(reason) {
   if (reason === 'search') return 'Best match first';
-  if (reason === 'person') return 'Everything they worked on';
+  if (reason === 'person') return 'Their work in your library';
   return '';
+}
+
+const KIND_NOUNS = { movie: 'films', series: 'series' };
+
+/** The search field's words (decision 558): the library's count while Only in library is on. */
+export function searchPlaceholder({ library = null, kinds = [], owned = true } = {}) {
+  if (!owned) return `Search all ${kinds.length > 1 ? 'titles' : (KIND_NOUNS[kinds[0]] ?? 'films')}`;
+  return library ? `Search your ${libraryLabel({ library, kinds })}` : 'Search';
+}
+
+const listed = (parts) =>
+  parts.length > 1 ? `${parts.slice(0, -1).join(', ')} and ${parts.at(-1)}` : (parts[0] ?? '');
+
+/** An empty grid names its chips (decision 557 item 7). */
+export function emptyLine({ terms = [], people = [], genre = '', decade = '', seen = 'any', owned = true } = {}) {
+  const parts = [
+    ...terms.filter((t) => t.mode === 'in').map((t) => t.label),
+    ...terms.filter((t) => t.mode === 'out').map((t) => `not ${t.label}`),
+    ...people.map((p) => `by ${p.name}`),
+    ...(genre ? [genre] : []),
+    ...(decade ? [`from the ${decade}s`] : []),
+    ...(seen === 'seen' ? ['seen'] : seen === 'unseen' ? ['not seen'] : [])
+  ];
+  if (!parts.length) return '';
+  return `Nothing ${owned ? 'in your library ' : ''}is ${listed(parts)}.`;
+}
+
+/** The fields a chip's removal changes, by `chipOrder`'s key; removing Beyond your library turns
+ *  Only in library back on. */
+export function withoutChip(f, key) {
+  if (key.startsWith('term:')) return { terms: f.terms.filter((t) => `term:${t.id}` !== key) };
+  if (key.startsWith('person:')) {
+    return { people: f.people.filter((p) => `person:${p.person_ids.join(',')}` !== key) };
+  }
+  if (key === 'seen') return { seen: 'any' };
+  if (key === 'owned') return { owned: true };
+  return { [key]: '' };
+}
+
+/** An empty grid's drop: what removing one chip leaves ("Without heist: 51 films"). */
+export function dropLabel(chip, n, kinds) {
+  const left = countLabel({ total: n, kinds });
+  return chip.variant === 'term' && chip.mode === 'out'
+    ? `With ${chip.label} too: ${left}`
+    : `Without ${chip.label}: ${left}`;
 }
 
 // Offered for a filtered or person grid only (a search is best match first), only when the

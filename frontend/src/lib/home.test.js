@@ -3,7 +3,9 @@ import { describe, expect, it } from 'vitest';
 import {
   activeFilterCount,
   countLabel,
+  dropLabel,
   elsewhereLine,
+  emptyLine,
   eventTime,
   facetColour,
   gridLine,
@@ -18,18 +20,26 @@ import {
   otherKinds,
   partitionLine,
   plural,
+  searchPlaceholder,
   shelfRows,
   sortOffered,
   sortWaitingLine,
   strongEnd,
   toPosterTitle,
-  whyNumbersLine
+  whyNumbersLine,
+  withoutChip
 } from './home.svelte.js';
 
+const VILLENEUVE = { person_ids: [2], person_id: 2, name: 'Denis Villeneuve', photo: null };
+const MANN = { person_ids: [1, 9], person_id: 1, name: 'Michael Mann', photo: null };
+const COSY = { id: 'mood.cosy', label: 'cozy & mellow', facet: 'mood', mode: 'in' };
+const HEIST = { id: 'themes.heist', label: 'heist', facet: 'themes', mode: 'out' };
+
 describe('the two-mode state machine (§6.0)', () => {
-  it('shows shelves when nothing is filtering', () => {
+  it('shows shelves when nothing is filtering, Only in library on included', () => {
     expect(homeMode({})).toBe('shelves');
     expect(gridReason({})).toBeNull();
+    expect(gridReason({ owned: true, seen: 'any', terms: [], people: [] })).toBeNull();
   });
 
   it('switches to the grid on a search', () => {
@@ -41,29 +51,31 @@ describe('the two-mode state machine (§6.0)', () => {
     expect(gridReason({ q: '   ' })).toBeNull();
   });
 
-  it('switches to the grid on a person filter', () => {
-    expect(gridReason({ personId: 5 })).toBe('person');
+  it('reads one person and nothing else as a filmography', () => {
+    expect(gridReason({ people: [VILLENEUVE] })).toBe('person');
+    // Person id 0 is a real id: a falsy-but-valid id once silently stopped a filmography.
+    expect(gridReason({ people: [{ ...VILLENEUVE, person_ids: [0], person_id: 0 }] })).toBe('person');
   });
 
-  it('treats person id 0 as a real id', () => {
-    // A falsy-but-valid id is the classic way a filmography filter silently stops working.
-    expect(gridReason({ personId: 0 })).toBe('person');
+  it('reads two people, or a person with anything else, as a filter', () => {
+    expect(gridReason({ people: [VILLENEUVE, MANN] })).toBe('filter');
+    expect(gridReason({ people: [VILLENEUVE], terms: [COSY] })).toBe('filter');
+    expect(gridReason({ people: [VILLENEUVE], genre: 'Drama' })).toBe('filter');
+    expect(gridReason({ people: [VILLENEUVE], owned: false })).toBe('filter');
   });
 
-  it('returns to the shelves once the query and the chip are both gone', () => {
-    expect(homeMode({ q: '', personId: null })).toBe('shelves');
-  });
-
-  it('counts a catalog filter as a grid reason, so no control is dead', () => {
+  it('counts every filter away from its default as a grid reason, so no control is dead', () => {
     expect(gridReason({ genre: 'Drama' })).toBe('filter');
     expect(gridReason({ decade: '1990' })).toBe('filter');
     expect(gridReason({ seen: 'unseen' })).toBe('filter');
-    expect(gridReason({ owned: true })).toBe('filter');
-    expect(gridReason({ seen: 'any', owned: false })).toBeNull();
+    expect(gridReason({ terms: [HEIST] })).toBe('filter');
+    expect(gridReason({ owned: false }), 'Only in library off (decision 558)').toBe('filter');
   });
 
-  it('names search before person when both are set, so the copy is stable', () => {
-    expect(gridReason({ q: 'x', personId: 5 })).toBe('search');
+  it('puts a recipe first, then a search, then a person', () => {
+    expect(gridReason({ like: ['245'], q: 'x', people: [VILLENEUVE] })).toBe('recipe');
+    expect(gridReason({ less: ['6087:mood'] })).toBe('recipe');
+    expect(gridReason({ q: 'x', people: [VILLENEUVE] })).toBe('search');
   });
 });
 
@@ -92,6 +104,50 @@ describe('the count line (§6.0)', () => {
     expect(libraryLabel({ library, kinds: ['movie'] })).toBe('612 films');
     expect(libraryLabel({ library, kinds: ['movie', 'series'] })).toBe('874 titles');
     expect(libraryLabel({ library: { series: 1 }, kinds: ['series'] })).toBe('1 series');
+  });
+
+  it("puts the library's count in the search field while Only in library is on (decision 558)", () => {
+    const library = { movie: 759, series: 115 };
+    expect(searchPlaceholder({ library, kinds: ['movie'] })).toBe('Search your 759 films');
+    expect(searchPlaceholder({ library, kinds: ['movie', 'series'] })).toBe('Search your 874 titles');
+    expect(searchPlaceholder({ library: null, kinds: ['movie'] }), 'before Home is read').toBe('Search');
+  });
+
+  it('says the search reaches everything while it is off', () => {
+    expect(searchPlaceholder({ kinds: ['movie'], owned: false })).toBe('Search all films');
+    expect(searchPlaceholder({ kinds: ['series'], owned: false })).toBe('Search all series');
+    expect(searchPlaceholder({ kinds: ['movie', 'series'], owned: false })).toBe('Search all titles');
+  });
+});
+
+describe('an empty grid (decision 557 item 7)', () => {
+  it('names its chips: includes, leave-outs, people, then the rest', () => {
+    expect(emptyLine({ terms: [COSY], people: [VILLENEUVE] })).toBe(
+      'Nothing in your library is cozy & mellow and by Denis Villeneuve.'
+    );
+    expect(emptyLine({ terms: [HEIST, COSY], decade: '1990', seen: 'unseen' })).toBe(
+      'Nothing in your library is cozy & mellow, not heist, from the 1990s and not seen.'
+    );
+    expect(emptyLine({ genre: 'Drama', owned: false })).toBe('Nothing is Drama.');
+    expect(emptyLine({})).toBe('');
+  });
+
+  it('removes one chip at a time, and Beyond your library turns Only in library back on', () => {
+    const f = { terms: [COSY, HEIST], people: [VILLENEUVE, MANN], genre: 'Drama', seen: 'seen', owned: false };
+    expect(withoutChip(f, 'term:themes.heist')).toEqual({ terms: [COSY] });
+    expect(withoutChip(f, 'person:1,9')).toEqual({ people: [VILLENEUVE] });
+    expect(withoutChip(f, 'genre')).toEqual({ genre: '' });
+    expect(withoutChip(f, 'seen')).toEqual({ seen: 'any' });
+    expect(withoutChip(f, 'owned')).toEqual({ owned: true });
+  });
+
+  it('offers each drop with what it leaves', () => {
+    const term = (t) => ({ variant: 'term', mode: t.mode, label: t.label });
+    expect(dropLabel(term(COSY), 51, ['movie'])).toBe('Without cozy & mellow: 51 films');
+    expect(dropLabel(term(HEIST), 1, ['movie', 'series'])).toBe('With heist too: 1 title');
+    expect(dropLabel({ variant: 'person', label: 'Denis Villeneuve' }, 2, ['series'])).toBe(
+      'Without Denis Villeneuve: 2 series'
+    );
   });
 });
 
@@ -291,16 +347,21 @@ describe('two kind regions under Both (decision 474)', () => {
 });
 
 describe('the Filters control and the grid line', () => {
-  it('counts the four catalog filters that are set, and not the person', () => {
+  it('counts each filter that is set: every term, person and recipe film, and Only in library off', () => {
     expect(activeFilterCount({})).toBe(0);
-    expect(activeFilterCount({ genre: 'Drama', seen: 'unseen', owned: true })).toBe(3);
-    expect(activeFilterCount({ seen: 'any', decade: '' })).toBe(0);
+    expect(activeFilterCount({ seen: 'any', decade: '', owned: true })).toBe(0);
+    expect(activeFilterCount({ genre: 'Drama', seen: 'unseen' })).toBe(2);
+    expect(activeFilterCount({ owned: false })).toBe(1);
+    expect(
+      activeFilterCount({ terms: [COSY, HEIST], people: [VILLENEUVE], like: ['245'], less: ['1891'] })
+    ).toBe(5);
   });
 
-  it('names the order of a search and what a filmography is; the chips name a filter', () => {
+  it('names the order of a search and what a filmography is; the chips name a filter and a recipe', () => {
     expect(gridLine('search')).toBe('Best match first');
-    expect(gridLine('person')).toBe('Everything they worked on');
+    expect(gridLine('person')).toBe('Their work in your library');
     expect(gridLine('filter')).toBe('');
+    expect(gridLine('recipe')).toBe('');
   });
 
   it('offers the order control for a filtered or a person grid the server named an order for', () => {

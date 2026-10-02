@@ -1,8 +1,9 @@
 <script>
   // Two modes (§6.0): shelves from `/api/home`, and the catalog grid from `/api/titles`, the only
-  // route with every filter. Search or a person filter switches to the grid; clearing returns.
-  import { onMount } from 'svelte';
-  import { afterNavigate, beforeNavigate } from '$app/navigation';
+  // route with every filter. Any filter away from its default switches to the grid; clearing returns.
+  import { onMount, untrack } from 'svelte';
+  import { afterNavigate, beforeNavigate, replaceState } from '$app/navigation';
+  import { page } from '$app/state';
   import { get, qs } from '$lib/api.js';
   import { session } from '$lib/session.svelte.js';
   import {
@@ -10,7 +11,9 @@
     SORT_CHOICES,
     activeFilterCount,
     countLabel,
+    dropLabel,
     elsewhereLine,
+    emptyLine,
     gridLine,
     gridReason,
     homeKept,
@@ -18,16 +21,25 @@
     kindChoice,
     kindHeading,
     kindsFor,
-    libraryLabel,
     loadHome,
     modelGate,
     otherKinds,
     partitionLine,
     partitionedByKind,
+    searchPlaceholder,
     sortOffered,
     sortWaitingLine,
-    strongEnd
+    strongEnd,
+    withoutChip
   } from '$lib/home.svelte.js';
+  import {
+    catalogParams,
+    chipOrder,
+    homeFilters,
+    readHomeUrl,
+    resetHomeFilters,
+    writeHomeUrl
+  } from '$lib/homeFilters.svelte.js';
   import { putAway } from '$lib/notices.js';
   import { publishSuppressed } from '$lib/rail.svelte.js';
   import { displayNames } from '$lib/titleCard.js';
@@ -35,34 +47,52 @@
   import { topbar } from '$lib/topbar.svelte.js';
   import { wishes } from '$lib/wish.svelte.js';
   import ArrivedBanner from '$lib/components/ArrivedBanner.svelte';
+  import FilterChip from '$lib/components/FilterChip.svelte';
   import FinishPrompt from '$lib/components/FinishPrompt.svelte';
+  import Icon from '$lib/components/Icon.svelte';
   import PendingVerdicts from '$lib/components/PendingVerdicts.svelte';
+  import PeoplePicker from '$lib/components/PeoplePicker.svelte';
   import PosterCard, { isColdPlaced } from '$lib/components/PosterCard.svelte';
   import ShelfList from '$lib/components/ShelfList.svelte';
+  import TermPicker from '$lib/components/TermPicker.svelte';
   import TitleDetail from '$lib/components/TitleDetail.svelte';
 
   // Back from another tab, the last shelves show at once and are re-read quietly (decision 530).
   const kept = homeKept.user === session.user?.id && homeKept.epoch === modelGate.epoch ? homeKept : null;
 
+  /** A URL's chips with every other filter at its default (decision 557 item 6); its kinds, if named. */
+  function fromUrl(next) {
+    resetHomeFilters();
+    const { kinds: named, ...filters } = next;
+    Object.assign(homeFilters, filters);
+    return named;
+  }
+
+  // The filters outlive the page as Home's place does; a URL that carries any wins over them.
+  let lastSearch = page.url.search;
+  const entry = readHomeUrl(page.url.searchParams);
+  if (!entry && homeKept.user !== session.user?.id) resetHomeFilters();
+
   // One switch: Films, Series or Both, never neither (decisions 18, 474).
-  let kinds = $state(kept?.kinds ?? ['movie']);
-  let q = $state('');
-  let genre = $state('');
-  let decade = $state('');
-  let seen = $state('any');
-  let owned = $state(false);
-  // The person filter is a SET of person ids: see `filterToPerson`.
-  let personIds = $state(null);
-  let personName = $state('');
+  let kinds = $state((entry && fromUrl(entry)) ?? kept?.kinds ?? ['movie']);
 
   let items = $state([]);
   let total = $state(0);
+  // The quoted matches of an include, which lead the grid (decision 557 item 2); null without one.
+  let strongTotal = $state(null);
+  // What Only in library leaves out of this grid (decision 558); null while it is off.
+  let beyond = $state(null);
   let offset = $state(0);
   let loading = $state(false);
   let facets = $state({ genres: [], decades: [] });
   let selected = $state(null);
   let loadError = $state('');
-  let filtersOpen = $state(false);
+  let termsOpen = $state(false);
+  let peopleOpen = $state(false);
+  let termCell = $state();
+  let peopleCell = $state();
+  // An empty grid's chips, each with what dropping it leaves: `{chip, n}`.
+  let drops = $state([]);
   // `sortEcho` is the order the server says it used, which the control shows pressed.
   let sort = $state(null);
   let sortEcho = $state(null);
@@ -83,13 +113,21 @@
   const LIMIT = 60;
   const SEEN_WORDS = { any: 'Seen or not', seen: 'Seen', unseen: 'Not seen' };
 
-  const mode = $derived(homeMode({ q, personId: personIds, genre, decade, seen, owned }));
-  const reason = $derived(gridReason({ q, personId: personIds, genre, decade, seen, owned }));
-  const nFilters = $derived(activeFilterCount({ genre, decade, seen, owned }));
-  // The weak tail of a search is folded, not dropped.
-  const cut = $derived(reason === 'search' ? strongEnd(items, q) : 0);
-  const weakItems = $derived(cut ? items.slice(cut) : []);
-  const strongItems = $derived(weakItems.length ? items.slice(0, cut) : items);
+  const mode = $derived(homeMode(homeFilters));
+  const reason = $derived(gridReason(homeFilters));
+  const nFilters = $derived(activeFilterCount(homeFilters));
+  const chips = $derived(chipOrder(homeFilters));
+  // Off, a search's grid is still the library: the catalogue and TMDB answer under it (decision 558).
+  const scope = $derived(homeFilters.owned || reason === 'search' ? 'only' : 'any');
+  // A search's weak tail is folded, not dropped; so is an include's, after its quoted matches.
+  const termFold = $derived(reason !== 'search' && homeFilters.terms.some((t) => t.mode === 'in'));
+  const cut = $derived.by(() => {
+    if (reason === 'search') return strongEnd(items, homeFilters.q) || items.length;
+    const weak = termFold ? items.findIndex((t) => t.match === 'weak') : -1;
+    return weak === -1 ? items.length : weak;
+  });
+  const weakItems = $derived(items.slice(cut));
+  const strongItems = $derived(items.slice(0, cut));
   // Everything after the last strong hit is weaker, loaded or not: the list is ordered by quality.
   const weakTotal = $derived(weakItems.length ? total - cut : 0);
   const partitioned = $derived(partitionedByKind(kinds, sortEcho));
@@ -100,13 +138,11 @@
     return () => publishSuppressed([]);
   });
 
-  // The grid counts the catalog it lists; the shelves count the household's own library.
-  const count = $derived(
-    mode === 'grid'
-      ? countLabel({ total, kinds, owned })
-      : home?.library
-        ? libraryLabel({ library: home.library, kinds })
-        : ''
+  // A filtered grid counts what it leads with; a search and a filmography say what they are.
+  const headLine = $derived(
+    reason === 'filter' && strongItems.length
+      ? countLabel({ total: strongTotal ?? total, kinds, owned: scope === 'only' })
+      : gridLine(reason)
   );
 
   // The shell's own admin test, so Home and the header agree on who gets the door to Movie data.
@@ -116,9 +152,11 @@
   const bundleNote = $derived(
     session.hasBundle ? '' : session.restartRequired ? 'waiting for a restart' : 'no movie data yet'
   );
-  // The count is the search field's placeholder (decision 528). With no movie data a count of
+  // The count is the search field's placeholder (decisions 528, 558). With no movie data a count of
   // nothing says nothing: the note stands alone, under the field.
-  const placeholder = $derived(count && !bundleNote ? `Search ${count}` : 'Search');
+  const placeholder = $derived(
+    bundleNote ? 'Search' : searchPlaceholder({ library: home?.library, kinds, owned: homeFilters.owned })
+  );
   const note = $derived(bundleNote.replace(/^./, (c) => c.toUpperCase()));
 
   // The kind switch is the shell's top row; from 721 px the search joins it, as on Rank (decision 554).
@@ -140,17 +178,14 @@
   let shown = $state({ query: null, reason: null });
   const gridStale = $derived(shown.query !== titlesQuery(kinds));
 
-  function titlesQuery(forKinds, { limit = LIMIT, offset: from = 0 } = {}) {
+  function titlesQuery(forKinds, { limit = LIMIT, offset: from = 0, filters = homeFilters } = {}) {
+    const { q, ...params } = catalogParams(filters, { owned: scope });
     return `/titles${qs({
       kind: forKinds,
       q,
-      genre,
-      decade: decade || undefined,
-      seen: seen === 'any' ? undefined : seen,
-      person_id: personIds ?? undefined,
-      owned_only: owned || undefined,
+      ...params,
       // A search is best match first (decision 472) whatever order a filtered grid was put in.
-      sort: q.trim() ? undefined : (sort ?? undefined),
+      sort: q ? undefined : (sort ?? undefined),
       limit,
       offset: from
     })}`;
@@ -165,6 +200,7 @@
     if (!append) {
       showWeak = false;
       elsewhere = null;
+      drops = [];
       kindNote = '';
     }
     try {
@@ -173,16 +209,62 @@
       if (!append) shown = { query, reason: asked };
       items = append ? [...items, ...res.items] : res.items;
       total = res.total;
+      strongTotal = res.strong_total ?? null;
+      beyond = res.beyond ?? null;
       offset = (append ? offset : 0) + res.items.length;
       // Absent from a build that does not echo it, and then no order control is offered.
       sortEcho = res.sort ?? null;
       forYouAvailable = res.for_you_available ?? null;
-      if (!append && !res.items.length) findElsewhere(seq, res.hidden ?? {});
+      if (append) return;
+      named(res.applied);
+      if (!res.items.length) findElsewhere(seq, res.hidden ?? {});
+      if (!res.items.length || (termFold && strongTotal === 0)) findDrops(seq);
     } catch (err) {
-      if (seq === requestSeq) loadError = err.message;
+      if (seq !== requestSeq) return;
+      // A term the vocabulary no longer has (a stale link) is refused, as a genre is (decision 557).
+      const unknown = err?.detail?.reason === 'unknown_term' ? (err.detail.terms ?? []) : [];
+      const gone = homeFilters.terms.filter((t) => unknown.includes(t.id));
+      if (!gone.length) {
+        loadError = err.message;
+        return;
+      }
+      homeFilters.terms = homeFilters.terms.filter((t) => !unknown.includes(t.id));
+      load();
+      kindNote = `${gone.map((t) => t.label).join(' and ')} cleared — no longer a taste term.`;
     } finally {
       if (seq === requestSeq) loading = false;
     }
+  }
+
+  // Labels and names read from a URL are placeholders until the server names them.
+  function named(applied) {
+    if (!applied) return;
+    const terms = [...(applied.terms ?? []), ...(applied.not_terms ?? [])];
+    for (const t of homeFilters.terms) {
+      const known = terms.find((a) => a.term === t.id);
+      if (known && (known.label !== t.label || known.facet !== t.facet)) {
+        Object.assign(t, { label: known.label, facet: known.facet });
+      }
+    }
+    for (const p of homeFilters.people) {
+      const known = (applied.people ?? []).find((a) => a.person_ids.join(',') === p.person_ids.join(','));
+      if (known && !p.name) Object.assign(p, { name: known.name, person_id: known.person_id, photo: known.photo });
+    }
+  }
+
+  // Each chip of an empty grid with what dropping it leaves (decision 557 item 7), one count each.
+  async function findDrops(seq) {
+    const now = $state.snapshot(homeFilters);
+    const found = await Promise.all(
+      chips
+        .filter((chip) => chip.key !== 'owned')
+        .map(async (chip) => {
+          const filters = { ...now, ...withoutChip(now, chip.key) };
+          const res = await get(titlesQuery(kinds, { limit: 1, filters })).catch(() => null);
+          return res?.total ? { chip, n: res.total } : null;
+        })
+    );
+    if (seq === requestSeq) drops = found.filter(Boolean);
   }
 
   // An empty grid names matches in the kind it was not showing, tied to the grid's own seq.
@@ -274,13 +356,14 @@
     if (found === undefined) return;     // a newer tap is on its way and will load
     const dropped = [];
     // A failed read says nothing about the new kind's vocabulary, so it clears nothing.
+    const { genre, decade } = homeFilters;
     if (found && genre && !found.genres.includes(genre)) {
       dropped.push(genre);
-      genre = '';
+      homeFilters.genre = '';
     }
     if (found && decade && !found.decades.map(String).includes(String(decade))) {
       dropped.push(`${decade}s`);
-      decade = '';
+      homeFilters.decade = '';
     }
     // Load first: a new list clears the old note, then this switch names what it cleared.
     load();
@@ -293,43 +376,105 @@
 
   let debounce;
   function onQuery() {
+    // Clearing the search switches Only in library back on (decision 558 item 4); nothing else does.
+    if (!homeFilters.q.trim()) homeFilters.owned = true;
     clearTimeout(debounce);
     debounce = setTimeout(() => load(), 220);
   }
 
-  // The title card has closed itself by now, so its history entry is gone (decision 527).
-  function filterToPerson(person) {
-    // A credit row may fold several person rows of one human (`person_ids`), so filter by the set.
-    personIds = person.person_ids?.length ? person.person_ids : [person.person_id ?? person.id];
-    personName = person.name;
-    q = '';
+  // A URL with chips, as a card's tap on another page sends one (decision 557 item 6), when the
+  // client navigates here without remounting.
+  $effect(() => {
+    const search = page.url.search;
+    if (search === lastSearch) return;
+    lastSearch = search;
+    const next = readHomeUrl(page.url.searchParams);
+    if (!next) return;
+    untrack(() => {
+      const named = fromUrl(next);
+      if (named && kindChoice(named) !== kindChoice(kinds)) {
+        kinds = named;
+        loadShelves();
+        loadFacets();
+      }
+      load();
+    });
+  });
+
+  // Every chip change is mirrored into the address, so a reload and Back hold. Never onto a
+  // sheet's own history entry: closing it would take the change back off, so it waits.
+  let mirrored = `${page.url.pathname}${page.url.search}`;
+  const homeUrl = $derived(writeHomeUrl(homeFilters, { kinds }));
+  $effect(() => {
+    const url = homeUrl;
+    if (page.state?.sheets?.length || url === mirrored) return;
+    mirrored = url;
+    replaceState(url, page.state);
+  });
+
+  function removeChip(key) {
+    Object.assign(homeFilters, withoutChip(homeFilters, key));
+    load();
+  }
+
+  function setTerm(term, mode) {
+    const chosen = homeFilters.terms.find((t) => t.id === term.term);
+    if (chosen) chosen.mode = mode;
+    else homeFilters.terms.push({ id: term.term, label: term.label, facet: term.facet, mode });
+  }
+
+  function flipTerm(id) {
+    const chosen = homeFilters.terms.find((t) => t.id === id);
+    if (chosen) setTerm({ term: id }, chosen.mode === 'in' ? 'out' : 'in');
+    load();
+  }
+
+  // One chip per human: a credit folds several person rows (`person_ids`), as the card does.
+  function addPerson(person) {
+    const ids = person.person_ids?.length ? [...person.person_ids] : [person.person_id ?? person.id];
+    if (homeFilters.people.some((p) => p.person_ids.some((id) => ids.includes(id)))) return;
+    homeFilters.people.push({
+      person_ids: ids, person_id: person.person_id ?? ids[0], name: person.name, photo: person.photo ?? null
+    });
+  }
+
+  // The title card has closed itself by now, so its history entry is gone (decision 527). A tap
+  // adds to what is set (decision 557 item 6).
+  function cardPerson(person) {
+    addPerson(person);
+    homeFilters.q = '';
+    load();
+  }
+
+  function cardTerm(term) {
+    setTerm(term, 'in');
+    load();
+  }
+
+  const cardTaps = { onPerson: cardPerson, onTerm: cardTerm };
+
+  // The term picker's "Search titles for noir", for a word the vocabulary lacks.
+  function searchTitles(text) {
+    termsOpen = false;
+    homeFilters.q = text;
     load();
   }
 
   // With the seen filter active, a toggled card stops matching and leaves.
   function onSeenChange(titleId, state) {
     items = items.map((t) => (t.id === titleId ? { ...t, seen_state: state } : t));
-    if (seen !== 'any' && seen !== state) load();
+    if (homeFilters.seen !== 'any' && homeFilters.seen !== state) load();
     // The banner is the server's population, so re-read it.
     loadShelves();
   }
 
-  function clearPerson() {
-    personIds = null;
-    personName = '';
-    load();
-  }
-
-  function clearFilter(which) {
-    if (which === 'genre') genre = '';
-    if (which === 'decade') decade = '';
-    if (which === 'seen') seen = 'any';
-    if (which === 'owned') owned = false;
-    load();
-  }
-
   function toggleOwned() {
-    owned = !owned;
+    homeFilters.owned = !homeFilters.owned;
+    load();
+  }
+
+  function goBeyond() {
+    homeFilters.owned = false;
     load();
   }
 
@@ -363,13 +508,6 @@
   </svg>
 {/snippet}
 
-<!-- A removable chip: the whole chip clears what it names. -->
-{#snippet chip(label, testid, onclick)}
-  <button class="pill on" data-testid={testid} aria-label="Remove {label}" {onclick}>
-    {label}{@render icon('close')}
-  </button>
-{/snippet}
-
 {#snippet searchRow()}
   <div class="searchrow">
     <label class="search">
@@ -377,7 +515,7 @@
       <input
         type="search"
         data-testid="home-search"
-        bind:value={q}
+        bind:value={homeFilters.q}
         oninput={onQuery}
         {placeholder}
         aria-label="Search titles"
@@ -385,12 +523,26 @@
     </label>
     <button
       class="pill"
-      aria-expanded={filtersOpen}
-      aria-controls={filtersOpen ? 'home-filters' : undefined}
+      aria-expanded={homeFilters.panelOpen}
+      aria-controls={homeFilters.panelOpen ? 'home-filters' : undefined}
       data-testid="filter-toggle"
-      onclick={() => (filtersOpen = !filtersOpen)}
+      onclick={() => (homeFilters.panelOpen = !homeFilters.panelOpen)}
     >{@render icon('filter')}{nFilters ? `Filters · ${nFilters}` : 'Filters'}</button>
   </div>
+{/snippet}
+
+<!-- A picker's cell: a row that opens it on a phone, a field-like button under its label from 721 px. -->
+{#snippet adder(id, label, hint, open, toggle)}
+  <span class="label" id="{id}-label">{label}</span>
+  <button
+    class="add"
+    id="{id}-add"
+    aria-labelledby="{id}-label {id}-add"
+    aria-haspopup="dialog"
+    aria-expanded={open}
+    data-testid="filter-{id}"
+    onclick={toggle}
+  >{#if wide}{hint}{:else}Add<Icon name="chevron-right" size={18} />{/if}</button>
 {/snippet}
 
 {#snippet homeBar()}
@@ -419,62 +571,91 @@
   {#if note}<p class="footnote count" data-testid="count-line">{note}</p>{/if}
 </div>
 
-{#if filtersOpen}
+{#if homeFilters.panelOpen}
   <!-- A cell is a list row on a phone and a label over its control from 721 px (decision 554). -->
   <div class="list-group filterpanel" id="home-filters" data-testid="filter-panel">
     <!-- On a phone the select covers its row, so a tap anywhere on the row opens the native picker. -->
     <div class="cell list-row field">
       <span class="label">Genre</span>
-      <span class="value">{genre || 'Any'}{@render icon('chevron')}</span>
-      <select bind:value={genre} onchange={() => load()} aria-label="Genre" data-testid="filter-genre">
+      <span class="value">{homeFilters.genre || 'Any'}{@render icon('chevron')}</span>
+      <select bind:value={homeFilters.genre} onchange={() => load()} aria-label="Genre" data-testid="filter-genre">
         <option value="">Any genre</option>
         {#each facets.genres as g (g)}<option value={g}>{g}</option>{/each}
       </select>
     </div>
     <div class="cell list-row field">
       <span class="label">Decade</span>
-      <span class="value">{decade ? `${decade}s` : 'Any'}{@render icon('chevron')}</span>
-      <select bind:value={decade} onchange={() => load()} aria-label="Decade" data-testid="filter-decade">
+      <span class="value">{homeFilters.decade ? `${homeFilters.decade}s` : 'Any'}{@render icon('chevron')}</span>
+      <select bind:value={homeFilters.decade} onchange={() => load()} aria-label="Decade" data-testid="filter-decade">
         <option value="">Any decade</option>
         {#each facets.decades as d (d)}<option value={d}>{d}s</option>{/each}
       </select>
     </div>
     <div class="cell list-row field">
       <span class="label">Seen</span>
-      <span class="value">{SEEN_WORDS[seen]}{@render icon('chevron')}</span>
-      <select bind:value={seen} onchange={() => load()} aria-label="Seen state" data-testid="filter-seen">
+      <span class="value">{SEEN_WORDS[homeFilters.seen]}{@render icon('chevron')}</span>
+      <select bind:value={homeFilters.seen} onchange={() => load()} aria-label="Seen state" data-testid="filter-seen">
         <option value="any">Seen or not</option>
         <option value="seen">Seen</option>
         <option value="unseen">Not seen</option>
       </select>
     </div>
     <div class="cell list-row">
-      <span class="label" id="owned-label">In my library</span>
+      <span class="label" id="owned-label">Only in library</span>
       <button
         class="switch"
         role="switch"
-        aria-checked={owned}
+        aria-checked={homeFilters.owned}
         aria-labelledby="owned-label"
         onclick={toggleOwned}
         data-testid="filter-owned"
       ><span class="knob"></span></button>
     </div>
+    <div class="cell list-row adder half" bind:this={termCell}>
+      {@render adder('terms', "What it's like", 'Add a term', termsOpen, () => (termsOpen = !termsOpen))}
+    </div>
+    <div class="cell list-row adder half" bind:this={peopleCell}>
+      {@render adder('people', 'People', 'Add a person', peopleOpen, () => (peopleOpen = !peopleOpen))}
+    </div>
   </div>
+  <!-- A sheet on a phone, a popover under its cell on a desktop (decision 554 item 1). -->
+  <TermPicker
+    open={termsOpen}
+    {kinds}
+    chosen={homeFilters.terms}
+    anchor={termCell}
+    onInclude={(term) => (setTerm(term, 'in'), load())}
+    onLeaveOut={(term) => (setTerm(term, 'out'), load())}
+    onRemove={(term) => removeChip(`term:${term.term}`)}
+    onClose={() => (termsOpen = false)}
+    onSearchTitles={searchTitles}
+  />
+  <PeoplePicker
+    open={peopleOpen}
+    {kinds}
+    chosen={homeFilters.people}
+    anchor={peopleCell}
+    onAdd={(person) => (addPerson(person), load())}
+    onRemove={(person) => removeChip(`person:${person.person_ids.join(',')}`)}
+    onClose={() => (peopleOpen = false)}
+  />
 {/if}
 
-{#if personIds || (nFilters && !filtersOpen)}
-  <div class="chips">
-    {#if personIds}
-      <!-- The chip is the only way out of a filmography, so it is always visible. -->
-      {@render chip(personName, 'person-chip', clearPerson)}
-    {/if}
-    <!-- A narrowed grid never hides why it is narrow; the open panel already says it. -->
-    {#if !filtersOpen}
-      {#if genre}{@render chip(genre, 'genre-chip', () => clearFilter('genre'))}{/if}
-      {#if decade}{@render chip(`${decade}s`, 'decade-chip', () => clearFilter('decade'))}{/if}
-      {#if seen !== 'any'}{@render chip(SEEN_WORDS[seen], 'seen-chip', () => clearFilter('seen'))}{/if}
-      {#if owned}{@render chip('In my library', 'owned-filter-chip', () => clearFilter('owned'))}{/if}
-    {/if}
+<!-- Every set filter is a chip, the panel open or shut (decision 557, board B7). -->
+{#if chips.length || homeFilters.like.length || homeFilters.less.length}
+  <div class="chips" role="group" aria-label="Set filters">
+    {#each chips as chip (chip.key)}
+      <FilterChip
+        variant={chip.variant}
+        mode={chip.mode}
+        label={chip.label}
+        facet={chip.facet}
+        person={chip.person}
+        testid={chip.testid}
+        onFlip={chip.term ? () => flipTerm(chip.term.id) : undefined}
+        onRemove={() => removeChip(chip.key)}
+      />
+    {/each}
   </div>
 {/if}
 
@@ -526,10 +707,10 @@
 
 {#if mode === 'grid'}
   <div class="gridhead" data-testid="home-mode" data-mode="grid" data-reason={reason}>
-    {#if gridLine(reason)}
-      <p class="footnote">{gridLine(reason)}</p>
+    {#if headLine}
+      <p class="footnote" data-testid="grid-line">{headLine}</p>
     {/if}
-    {#if sortOffered(reason, sortEcho, forYouAvailable)}
+    {#if items.length && sortOffered(reason, sortEcho, forYouAvailable)}
       <!-- The pressed position is the order the server says it used, never the one asked for. -->
       <div class="segmented sort" role="group" aria-label="Order">
         {#each SORT_CHOICES as c (c.id)}
@@ -540,7 +721,7 @@
           >{c.label}</button>
         {/each}
       </div>
-    {:else if sortWaitingLine(reason, sortEcho, forYouAvailable)}
+    {:else if items.length && sortWaitingLine(reason, sortEcho, forYouAvailable)}
       <p class="footnote" data-testid="sort-waiting">
         {sortWaitingLine(reason, sortEcho, forYouAvailable)}
       </p>
@@ -556,51 +737,81 @@
     <div class="grid" aria-hidden="true">
       {#each { length: 9 }, i (i)}<span class="skeleton ghost"></span>{/each}
     </div>
-  {:else if !items.length && !loading}
-    <div class="empty card">
-      {#if !session.hasBundle}
-        {@render noBundle()}
-      {:else if elsewhere}
-        <h2 class="section-title">Not in {kindChoice(kinds) === 'series' ? 'series' : 'films'}</h2>
-        <p class="why" data-testid="found-elsewhere">
-          {elsewhereLine(elsewhere.kind, elsewhere.names, elsewhere.total)}
-        </p>
-        <button
-          class="btn-secondary"
-          data-testid="found-elsewhere-switch"
-          onclick={() => chooseKinds(elsewhere.kind)}
-        >{elsewhere.kind === 'series' ? 'Show series' : 'Show films'}</button>
-      {:else}
-        <h2 class="section-title">No matches</h2>
-        <!-- The grid lists the whole catalog unless "in my library" is on. -->
-        <p class="why">{owned ? 'Nothing in your library matches.' : 'Nothing matches.'}</p>
-        <!-- Names the dimensions the catalog search really has. -->
-        <p class="footnote" data-testid="no-matches-help">
-          Search reads titles and their aliases. The kind switch and Filters (genre, decade, seen
-          state, in my library) narrow it; clear a chip to widen it.
-        </p>
-      {/if}
-    </div>
   {:else}
     <div class="dims" aria-busy={gridStale}>
-      {#if items.some(isColdPlaced)}
-        <!-- The badge's why, said once for the grid: a title= tooltip does not exist on touch. -->
-        <p class="footnote" data-testid="catalog-cold-note">
-          Titles marked New have no outside ratings yet — we placed them by what they're about.
-        </p>
-      {/if}
-      <div class="grid">
-        {#each strongItems as t, i (t.id)}
-          {#if partitioned && kindHeading(strongItems, i)}
-            <h2 class="list-header kindhead" data-testid="grid-kind-{t.kind}">{kindHeading(strongItems, i)}</h2>
+      {#if !strongItems.length && !loading}
+        <div class="empty card">
+          {#if !session.hasBundle}
+            {@render noBundle()}
+          {:else if elsewhere}
+            <h2 class="section-title">Not in {kindChoice(kinds) === 'series' ? 'series' : 'films'}</h2>
+            <p class="why" data-testid="found-elsewhere">
+              {elsewhereLine(elsewhere.kind, elsewhere.names, elsewhere.total)}
+            </p>
+            <button
+              class="btn-secondary"
+              data-testid="found-elsewhere-switch"
+              onclick={() => chooseKinds(elsewhere.kind)}
+            >{elsewhere.kind === 'series' ? 'Show series' : 'Show films'}</button>
+          {:else}
+            <h2 class="section-title">No matches</h2>
+            {#if reason === 'search'}
+              <!-- A search's grid is the library's part; the rest is beyond it (decision 558). -->
+              <p class="why">Nothing in your library matches.</p>
+              <!-- Names the dimensions the catalog search really has. -->
+              <p class="footnote" data-testid="no-matches-help">
+                Search reads titles and their aliases. The kind switch and Filters (genre, decade, seen
+                state, Only in library, what it's like, people) narrow it; clear a chip to widen it.
+              </p>
+            {:else}
+              <p class="why" data-testid="no-matches-line">
+                {emptyLine({ ...homeFilters, owned: scope === 'only' })}
+              </p>
+            {/if}
+            {#if drops.length || (reason !== 'search' && scope === 'only' && beyond)}
+              <!-- Each chip to drop, with what that leaves (decision 557 item 7). -->
+              <div class="drops">
+                {#each drops as drop (drop.chip.key)}
+                  <button class="btn-secondary" data-testid="grid-drop" onclick={() => removeChip(drop.chip.key)}>
+                    {dropLabel(drop.chip, drop.n, kinds)}
+                  </button>
+                {/each}
+                {#if reason !== 'search' && scope === 'only' && beyond}
+                  <button class="btn-secondary" data-testid="grid-beyond" onclick={goBeyond}>
+                    {`${beyond.toLocaleString()} more beyond your library`}
+                  </button>
+                {/if}
+              </div>
+            {/if}
           {/if}
-          <PosterCard title={t} onSelect={() => (selected = t)} />
-        {/each}
-      </div>
+        </div>
+      {:else}
+        {#if items.some(isColdPlaced)}
+          <!-- The badge's why, said once for the grid: a title= tooltip does not exist on touch. -->
+          <p class="footnote" data-testid="catalog-cold-note">
+            Titles marked New have no outside ratings yet — we placed them by what they're about.
+          </p>
+        {/if}
+        <div class="grid">
+          {#each strongItems as t, i (t.id)}
+            {#if partitioned && kindHeading(strongItems, i)}
+              <h2 class="list-header kindhead" data-testid="grid-kind-{t.kind}">{kindHeading(strongItems, i)}</h2>
+            {/if}
+            <PosterCard title={t} onSelect={() => (selected = t)} />
+          {/each}
+        </div>
+      {/if}
       {#if weakItems.length}
-        <!-- Hits that only contain the letters wait behind one button. -->
+        <!-- A search's hits that only contain the letters, and an include's matches by our read
+             alone, wait behind one button (decisions 516, 557). -->
         {#if showWeak}
-          <h2 class="list-header weakhead" data-testid="weak-matches-head">Looser matches</h2>
+          <h2 class="list-header weakhead" data-testid="weak-matches-head">
+            {#if termFold}
+              {strongItems.length ? 'Might also fit' : 'Might fit'}<span class="footnote">Our read · less certain</span>
+            {:else}
+              Looser matches
+            {/if}
+          </h2>
           <div class="grid" data-testid="weak-matches">
             {#each weakItems as t (t.id)}
               <PosterCard title={t} onSelect={() => (selected = t)} />
@@ -609,7 +820,9 @@
         {:else}
           <div class="more">
             <button class="btn-secondary" data-testid="weak-matches-toggle" onclick={() => (showWeak = true)}>
-              {`Show ${weakTotal.toLocaleString()} looser ${weakTotal === 1 ? 'match' : 'matches'}`}
+              {termFold
+                ? `Show ${weakTotal.toLocaleString()}${strongItems.length ? ' more' : ''} that might fit`
+                : `Show ${weakTotal.toLocaleString()} looser ${weakTotal === 1 ? 'match' : 'matches'}`}
             </button>
           </div>
         {/if}
@@ -620,6 +833,23 @@
             {loading ? 'Loading…' : `Show ${(total - offset).toLocaleString()} more`}
           </button>
         </div>
+      {/if}
+      {#if !gridStale && homeFilters.owned}
+        <!-- Only in library ends a search and a filtered grid on the way past it (decision 558). -->
+        {#if reason === 'search'}
+          <div class="more beyond">
+            <button class="btn-secondary" data-testid="search-beyond" onclick={goBeyond}>
+              Search beyond your library
+            </button>
+            {#if beyond}<span class="footnote">{beyond.toLocaleString()} more in Spielplan</span>{/if}
+          </div>
+        {:else if beyond && strongItems.length}
+          <div class="more beyond">
+            <button class="btn-secondary" data-testid="grid-beyond" onclick={goBeyond}>
+              {`${beyond.toLocaleString()} more beyond your library`}
+            </button>
+          </div>
+        {/if}
       {/if}
     </div>
   {/if}
@@ -648,7 +878,7 @@
     titleId={selected.id}
     seed={selected}
     onClose={() => (selected = null)}
-    onPerson={filterToPerson}
+    {...cardTaps}
     onStateChange={onSeenChange}
   />
 {/if}
@@ -743,6 +973,28 @@
     opacity: 0;
     cursor: pointer;
   }
+  .adder {
+    position: relative;
+  }
+  /* On a phone the whole row opens the picker, its "Add" where a value would sit. */
+  .adder .add {
+    position: absolute;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 4px;
+    padding: 0 var(--gutter);
+    border: none;
+    border-radius: 0;
+    background: none;
+    color: var(--text-3);
+    font: inherit;
+    cursor: pointer;
+  }
+  .adder .add:focus-visible {
+    outline-offset: -2px;
+  }
 
   .chips {
     display: flex;
@@ -797,11 +1049,40 @@
     grid-column: 1 / -1;
   }
   .weakhead {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: baseline;
+    gap: 2px 12px;
     margin: 32px 0 12px;
+  }
+  .weakhead .footnote {
+    text-transform: none;
+    letter-spacing: normal;
   }
   .more {
     display: flex;
     padding: 24px 0;
+  }
+  .beyond {
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 8px 16px;
+  }
+  .more + .beyond {
+    padding-top: 0;
+  }
+  .beyond .footnote {
+    margin: 0;
+  }
+  .drops {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 8px;
+    margin-top: 8px;
+  }
+  .drops .btn-secondary {
+    margin-top: 0;
   }
   .empty {
     padding: var(--card-pad-roomy);
@@ -863,6 +1144,19 @@
     }
     .cell > .switch {
       margin: 4.5px 0;
+    }
+    .filterpanel > .half {
+      grid-column: span 2;
+    }
+    .adder .add {
+      position: static;
+      justify-content: flex-start;
+      height: 40px;
+      padding: 0 12px;
+      border-radius: var(--r-sm);
+      background: var(--surface-2);
+      font-size: var(--fs-subhead);
+      line-height: 20px;
     }
     .grid {
       grid-template-columns: repeat(auto-fill, var(--shelf-poster));
