@@ -1,4 +1,4 @@
-"""People by name, for the people picker (decision 557). One human is folded
+"""People by name, for the people picker and the chips it makes (decision 557). One human is folded
 across their person rows as the title card folds them (`library.fold_credits`)."""
 
 from __future__ import annotations
@@ -71,6 +71,25 @@ async def search_people(
             })
     people.sort(key=lambda p: (-p["owned"], -p["titles"], p["name"].lower(), p["person_id"]))
     return people[:limit]
+
+
+async def named(conn: asyncpg.Connection, groups: Sequence[Sequence[int]]) -> list[dict[str, Any]]:
+    """Each group's name and photo, so a person chip restored from Home's URL draws without a search."""
+    wanted = sorted({int(p) for group in groups for p in group})
+    if not wanted:
+        return []
+    rows = await conn.fetch(
+        "SELECT id AS person_id, name, imdb_id, tmdb_id, profile_path FROM person"
+        " WHERE id = ANY($1::int[])",
+        wanted,
+    )
+    found = {r["person_id"]: r for r in rows}
+    out = []
+    for group in groups:
+        members = [found[int(p)] for p in group if int(p) in found]
+        if members:
+            out.append({**_named(members), "person_ids": [int(p) for p in group]})
+    return out
 
 
 def _named(members: Sequence[Any]) -> dict[str, Any]:

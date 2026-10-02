@@ -7,6 +7,7 @@ from __future__ import annotations
 from collections.abc import Sequence
 from typing import Annotated, Any, Literal
 
+import asyncpg
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
 from spielplan.api.deps import DB, ActiveUser
@@ -34,23 +35,44 @@ def _kinds(kind: Sequence[str]) -> list[library.Kind]:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
 
 
-def catalog_filters(
+def terms_of(values: Sequence[str]) -> tuple[str, ...]:
+    return tuple(dict.fromkeys(v for v in values if v))
+
+
+async def refuse_unknown_terms(conn: asyncpg.Connection, terms: Sequence[str]) -> None:
+    """Decision 473's refusal, extended to terms (decision 557): a wrong question, not an empty grid."""
+    unknown = await dna_terms.unknown_terms(conn, terms)
+    if unknown:
+        raise HTTPException(
+            status.HTTP_422_UNPROCESSABLE_ENTITY, detail={"reason": "unknown_term", "terms": unknown}
+        )
+
+
+async def catalog_filters(
+    conn: DB,
     q: str | None = None,
     genre: str | None = None,
     decade: int | None = None,
     seen: Literal["any", "seen", "unseen"] = "any",
-    person_id: list[int] | None = Query(None),
-    owned_only: bool = False,
+    term: list[str] = Query([], description="Include: a vocabulary term id, either tier. Repeats."),
+    not_term: list[str] = Query([], description="Leave out: a vocabulary term id. Repeats."),
+    person: list[str] = Query([], description="One human's person ids, comma-joined. Repeats."),
+    owned: Literal["only", "not", "any"] = "any",
 ) -> dict[str, Any]:
     """The catalogue's filters as `library._filters` takes them, one set for every route that reads them."""
     try:
         # Decision 473: an unknown genre is a wrong question, not an empty grid.
         genre = genres.canonical(genre) if genre else None
+        groups = tuple(
+            ids for ids in (tuple(int(p) for p in v.split(",") if p.strip()) for v in person) if ids
+        )
     except ValueError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+    terms, not_terms = terms_of(term), terms_of(not_term)
+    await refuse_unknown_terms(conn, terms + not_terms)
     return {
-        "q": q, "genre": genre, "decade": decade, "seen": seen, "person_id": person_id,
-        "owned_only": owned_only,
+        "q": q, "genre": genre, "decade": decade, "seen": seen, "terms": terms,
+        "not_terms": not_terms, "people": groups, "owned": owned,
     }
 
 
@@ -67,9 +89,10 @@ async def list_titles(
     limit: int = Query(60, ge=1, le=200),
     offset: int = Query(0, ge=0),
 ) -> dict[str, Any]:
-    """`kind` and `person_id` repeat (`?kind=` is a 422, never "everything"). The response's `sort` is
-    the order really used: `match` under a search, `newest` when nothing of the member's ranks the
-    selection (decision 515); `for_you_available` says whether their order exists."""
+    """`kind` repeats (`?kind=` is a 422, never "everything"). The response's `sort` is the order
+    really used inside each run of strong and weak rows: `match` under a search, `newest` when nothing
+    of the member's ranks the selection (decision 515); `for_you_available` says whether their order
+    exists. `beyond` counts the titles Only in library leaves out (decision 558)."""
     kinds = _kinds(kind)
 
     bundle = await artifacts.active_bundle_version(conn)
@@ -84,7 +107,7 @@ async def list_titles(
     else:
         effective = "for_you"
 
-    rows, total = await library.list_titles(
+    rows, total, strong_total = await library.list_titles(
         conn,
         kinds=kinds,
         user_id=user.id,
@@ -96,13 +119,28 @@ async def list_titles(
     )
     # Decision 516: the card leads with the original title where it is the viewer's language.
     await library.carry_original_names(conn, rows)
+    beyond = None
+    if filters["owned"] == "only":
+        others = [k for k in library.KINDS if k not in kinds]
+        not_owned = {**filters, "owned": "not"}
+        beyond = sum(
+            (await library.count_by_kind(conn, exclude=others, user_id=user.id, **not_owned)).values()
+        )
     return {
         "kinds": kinds,
         "sort": effective,
         "for_you_available": bool(personal),
         "total": total,
+        "strong_total": strong_total,
+        "beyond": beyond,
         # §6.0: the hidden count, under the SAME filters as the list.
         "hidden": await library.count_by_kind(conn, exclude=kinds, user_id=user.id, **filters),
+        # What each chip names, so one restored from Home's URL draws without a second read.
+        "applied": {
+            "terms": await dna_terms.describe(conn, filters["terms"]),
+            "not_terms": await dna_terms.describe(conn, filters["not_terms"]),
+            "people": await people.named(conn, filters["people"]),
+        },
         "limit": limit,
         "offset": offset,
         "items": rows,

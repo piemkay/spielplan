@@ -914,76 +914,42 @@ async def test_combining_rank_filters_intersects(db, board_of):
     )
 
 
-async def test_a_dna_predicate_matches_bare_and_facet_qualified_alike(db, tagged):
-    """`dna_tag.term` holds `facet.term`; a bare term is what the placeholder invites. A different
-    facet before the same bare term is a different predicate."""
-    bare = await read.items(
-        db, user_id=tagged, kind="movie", filters=library.RankFilters(dna="cosy")
+async def _board(db, user_id: int, **filters) -> set[int]:
+    items = await read.items(
+        db, user_id=user_id, kind="movie", filters=library.RankFilters(**filters)
     )
-    qualified = await read.items(
-        db, user_id=tagged, kind="movie", filters=library.RankFilters(dna="mood.cosy")
-    )
-    assert {i.title_id for i in bare} == {i.title_id for i in qualified} == {1, 3}
-
-    other = await read.items(
-        db, user_id=tagged, kind="movie", filters=library.RankFilters(dna="bleak")
-    )
-    assert {i.title_id for i in other} == {2}
-
-    nothing = await read.items(
-        db, user_id=tagged, kind="movie", filters=library.RankFilters(dna="pacing.cosy")
-    )
-    assert nothing == [], "a wrong facet is a different predicate, not a looser one"
+    return {i.title_id for i in items}
 
 
-async def test_a_dna_predicate_reaches_both_tiers_and_keeps_them_apart(db, tagged):
-    """`dna_tag` alone would miss the projected tier; a fresh UNION would lose the tier column."""
-    survivors = await read.items(
-        db, user_id=tagged, kind="movie", filters=library.RankFilters(dna="cosy")
-    )
-    ids = [i.title_id for i in survivors]
-    assert set(ids) == {1, 3}
-
-    matched = await library.dna_tiers_for(db, title_ids=ids, dna="cosy")
-    assert matched[1] == ["extracted", "projected"], "a pair in both tiers reports both"
-    assert matched[3] == ["projected"]
+async def test_an_include_reaches_both_tiers_and_a_leave_out_drops_both(db, tagged):
+    """Decision 557: exact ids, either tier; another facet's term of the same name is another term."""
+    everything = await _board(db, tagged)
+    assert await _board(db, tagged, terms=("mood.cosy",)) == {1, 3}
+    assert await _board(db, tagged, terms=("mood.bleak",)) == {2}
+    assert await _board(db, tagged, terms=("pacing.cosy",)) == set()
+    assert await _board(db, tagged, not_terms=("mood.cosy",)) == everything - {1, 3}
 
 
-async def test_a_dna_predicate_matches_the_name_a_member_reads(db, tagged):
-    """Decision 486: members see a term's label, so the filter must match it as it matches the id."""
-    await db.execute("UPDATE dna_term SET label = 'Warm and Snug' WHERE term = 'mood.cosy'")
+async def test_includes_and_together(db, tagged):
     await db.execute(
-        "INSERT INTO dna_term (version, term, facet) VALUES ('v1', 'mood.slow_burn', 'mood')"
+        "INSERT INTO dna_projected (title_id, version, term, facet, weight) "
+        "VALUES (1, 'v1', 'mood.bleak', 'mood', 0.1)"
     )
-    await db.execute(
-        "INSERT INTO dna_tag (title_id, version, term, facet, salience, confidence, n_sources) "
-        "VALUES (2, 'v1', 'mood.slow_burn', 'mood', 2, 0.9, 1)"
-    )
+    assert await _board(db, tagged, terms=("mood.cosy", "mood.bleak")) == {1}
+    assert await _board(db, tagged, terms=("mood.cosy",), not_terms=("mood.bleak",)) == {3}
 
-    by_label = await read.items(
-        db, user_id=tagged, kind="movie", filters=library.RankFilters(dna="  Warm and snug ")
-    )
-    assert {i.title_id for i in by_label} == {1, 3}
-    matched = await library.dna_tiers_for(db, title_ids=[1, 3], dna="warm and snug")
-    assert matched == {1: ["extracted", "projected"], 3: ["projected"]}
 
-    unlabelled = await read.items(
-        db, user_id=tagged, kind="movie", filters=library.RankFilters(dna="slow burn")
-    )
-    assert {i.title_id for i in unlabelled} == {2}, "a term with no label is read by its leaf"
-
-    stranger = await read.items(
-        db, user_id=tagged, kind="movie", filters=library.RankFilters(dna="warm")
-    )
-    assert stranger == [], "a label is a name, matched whole, not a substring search"
+async def test_each_survivor_names_the_tier_that_admitted_it(db, tagged):
+    """§4.1 rule 1: a title quoted on every include is extracted, even where it is projected too."""
+    survivors = await _board(db, tagged, terms=("mood.cosy",))
+    matched = await library.dna_tiers_for(db, title_ids=sorted(survivors), terms=("mood.cosy",))
+    assert matched == {1: "extracted", 3: "projected"}
+    assert await library.dna_tiers_for(db, title_ids=sorted(survivors), terms=()) == {}
 
 
 async def test_no_rank_filter_puts_a_threshold_on_a_weight(db, tagged):
     """§4.1 rule 2: a 0.5 confidence cut deletes 44% of the extracted tier."""
-    survivors = await read.items(
-        db, user_id=tagged, kind="movie", filters=library.RankFilters(dna="cosy")
-    )
-    assert 1 in {i.title_id for i in survivors}
+    assert 1 in await _board(db, tagged, terms=("mood.cosy",))
 
 
 async def test_no_filter_suspends_the_kind_partition(db, world):

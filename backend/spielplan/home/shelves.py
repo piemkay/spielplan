@@ -1157,7 +1157,7 @@ async def build_home(
         "banner": await pending_verdicts(conn, user_id=user.id),
         "setup_notice": await setup_notice(conn, user_id=user.id) if bundle_version else None,
         # OWNED titles per kind: what the shelves draw on.
-        "library": await library.count_by_kind(conn, owned_only=True),
+        "library": await library.count_by_kind(conn, owned="only"),
         "shelves": [s.as_dict() for s in shelves],
         "shelves_total": len(shelves),
         "degraded": _degraded(bundle_version),

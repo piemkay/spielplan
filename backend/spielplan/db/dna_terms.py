@@ -78,6 +78,34 @@ async def labels_for(
     }
 
 
+async def _known(conn: asyncpg.Connection, terms: Sequence[str]) -> dict[str, asyncpg.Record]:
+    if not terms:
+        return {}
+    rows = await conn.fetch(
+        f"SELECT term, facet, label FROM dna_term WHERE version = {ACTIVE_VERSION} "
+        "AND term = ANY($1::text[])",
+        list(terms),
+    )
+    return {r["term"]: r for r in rows}
+
+
+async def unknown_terms(conn: asyncpg.Connection, terms: Iterable[str]) -> list[str]:
+    """The ids the active vocabulary lacks, in the order asked (decisions 473 and 557)."""
+    wanted = list(dict.fromkeys(terms))
+    known = await _known(conn, wanted)
+    return [t for t in wanted if t not in known]
+
+
+async def describe(conn: asyncpg.Connection, terms: Sequence[str]) -> list[dict[str, str]]:
+    """Each known id's label and facet, in the order asked, so a chip draws without the vocabulary."""
+    known = await _known(conn, terms)
+    return [
+        {"term": t, "label": label_of(t, known[t]["label"]), "facet": known[t]["facet"]}
+        for t in terms
+        if t in known
+    ]
+
+
 async def vocabulary(conn: asyncpg.Connection, *, kinds: Sequence[str]) -> dict[str, Any]:
     """The term picker's payload (decision 557): the facets in order, and every term with its label,
     gloss, every alias and how many owned titles of `kinds` carry it in either tier."""
@@ -121,6 +149,6 @@ async def vocabulary(conn: asyncpg.Connection, *, kinds: Sequence[str]) -> dict[
 
 
 __all__ = [
-    "ACTIVE_VERSION", "BOTH_TIERS", "TERM_WEIGHT", "active_version", "label_of", "labels_for",
-    "unvetoed", "vocabulary",
+    "ACTIVE_VERSION", "BOTH_TIERS", "TERM_WEIGHT", "active_version", "describe", "label_of",
+    "labels_for", "unknown_terms", "unvetoed", "vocabulary",
 ]

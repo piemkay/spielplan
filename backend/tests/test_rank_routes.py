@@ -957,6 +957,35 @@ async def test_an_unknown_genre_is_an_empty_board_and_not_an_error(db, ranked):
     assert known.json()["filters"] == {"genre": "Science Fiction"}
 
 
+async def test_a_term_filters_the_board_and_each_survivor_names_its_tier(db, ranked):
+    """Decision 557 item 8: an include reads either tier, and a term the vocabulary lacks is refused."""
+    client, _user_id = ranked
+    await db.execute("INSERT INTO dna_vocabulary (version, facet_count, term_count) VALUES ('v1', 1, 1)")
+    await db.execute("INSERT INTO dna_facet (version, facet, ord) VALUES ('v1', 'mood', 0)")
+    await db.execute("INSERT INTO dna_term (version, term, facet) VALUES ('v1', 'mood.cozy', 'mood')")
+    await db.execute(
+        "INSERT INTO dna_tag (title_id, version, term, facet, salience, provider)"
+        " VALUES (1, 'v1', 'mood.cozy', 'mood', 2, '')"
+    )
+    await db.execute(
+        "INSERT INTO dna_projected (title_id, version, term, facet, weight)"
+        " VALUES (3, 'v1', 'mood.cozy', 'mood', 1)"
+    )
+
+    included = (await client.get("/api/rank", params={"kind": "movie", "term": "mood.cozy"})).json()
+    assert sorted(e["title_id"] for t in included["tiers"] for e in t["entries"]) == [1, 3]
+    assert included["dna_tiers"] == {"1": "extracted", "3": "projected"}
+    assert included["filters"] == {"terms": ["mood.cozy"]}
+
+    left_out = (await client.get("/api/rank", params={"kind": "movie", "not_term": "mood.cozy"})).json()
+    assert sorted(e["title_id"] for t in left_out["tiers"] for e in t["entries"]) == [2, 4, 5, 6]
+    assert left_out["dna_tiers"] is None
+
+    refused = await client.get("/api/rank", params={"kind": "movie", "term": "mood.cosy"})
+    assert refused.status_code == 422, refused.text
+    assert refused.json()["detail"] == {"reason": "unknown_term", "terms": ["mood.cosy"]}
+
+
 async def test_the_tier_set_route_round_trips_and_warns(db, ranked):
     """Member register (decision 486): decision 11's two facts, without the model's nouns."""
     client, user_id = ranked
