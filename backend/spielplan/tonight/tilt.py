@@ -10,6 +10,7 @@ from __future__ import annotations
 import math
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from functools import cached_property
 
 import numpy as np
 
@@ -84,13 +85,18 @@ class Space:
     terms: tuple[str, ...]
     axes: np.ndarray
 
+    @cached_property
+    def _column(self) -> dict[str, int]:
+        return {t: i for i, t in enumerate(self.terms)}
+
     def project(self, vec: Vector) -> tuple[float, ...]:
-        """Where one title sits on each direction, from its centred vector."""
-        index = {t: i for i, t in enumerate(self.terms)}
+        """Where one title sits on each direction: its `centred` coordinates on the kept terms, read
+        from its own terms rather than the pool's whole vocabulary."""
         x = np.zeros(len(self.terms))
-        for t, v in centred(vec, self.frame).items():
-            if t in index:
-                x[index[t]] = v
+        for t, w in vec.items():
+            i = self._column.get(t)
+            if i is not None:
+                x[i] = (w - self.frame.mean[t]) / self.frame.spread[t]
         return tuple(float(v) for v in x @ self.axes)
 
 
@@ -115,12 +121,20 @@ def space(pool_dna: Mapping[int, Vector], *, k: int = round_rules.MOOD_DIRECTION
         w = weights[:, varies]
         x = np.where(carried[:, varies], (w - w.mean(axis=0)) / spread[varies], 0.0)
         # The principal directions of the centred vectors; a title still projects from its own
-        # vector, so one that carries nothing sits at zero on every direction.
-        _, singular, vt = np.linalg.svd(x - x.mean(axis=0), full_matrices=False)
-        sd = singular / math.sqrt(x.shape[0])
-        for i in range(min(k, singular.size)):
-            if sd[i] > MIN_SPREAD:
-                axes[:, i] = vt[i] / sd[i]
+        # vector, so one that carries nothing sits at zero on every direction. They come from the
+        # smaller Gram matrix, a fraction of a full SVD's work and of its BLAS thread hand-offs,
+        # which stall on a busy CPU; a wide pool's eigenvectors weigh titles, so map back to terms.
+        xc = x - x.mean(axis=0)
+        n = xc.shape[0]
+        tall = n >= xc.shape[1]
+        power, vecs = np.linalg.eigh(xc.T @ xc if tall else xc @ xc.T)
+        # Below this an eigenvalue is rounding: the pool has fewer directions than `k`.
+        floor = power[-1] * power.size * np.finfo(float).eps
+        for i in range(min(k, power.size)):
+            p, vec = power[-1 - i], vecs[:, -1 - i]
+            sd = math.sqrt(max(p, 0.0) / n)
+            if p > floor and sd > MIN_SPREAD:
+                axes[:, i] = (vec if tall else xc.T @ vec / math.sqrt(p)) / sd
     return Space(frame=f, terms=tuple(kept), axes=axes)
 
 
