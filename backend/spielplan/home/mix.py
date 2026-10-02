@@ -8,6 +8,7 @@ enters a score (§4.1 rule 2).
 
 from __future__ import annotations
 
+import itertools
 import math
 from collections import Counter
 from collections.abc import Iterable, Mapping, Sequence
@@ -426,7 +427,9 @@ def why(
 def derived(
     t: Table, recipe: Sequence[Ingredient], operands: Mapping[int, Operand]
 ) -> tuple[list[tuple[int, bool]], list[tuple[int, bool]]]:
-    """The recipe head's display-only "more: ... · less: ..." terms, quoted first (decision 559 item 5)."""
+    """The recipe head's display-only "more: ... · less: ..." terms (decision 559 item 5): each side's
+    films name their strongest terms in turn, quoted first within a film, so each film is named; the
+    quoted terms lead the line."""
     parts = _parts(t, recipe, operands)
     carried = np.zeros(len(t.terms), dtype=bool)
     for part in parts:
@@ -434,19 +437,20 @@ def derived(
             carried |= part.whole
     sides = []
     for like in (True, False):
-        strength = np.zeros(len(t.terms))
-        quoted = np.zeros(len(t.terms), dtype=bool)
-        chosen = np.zeros(len(t.terms), dtype=bool)
+        ranked = []
         for part in parts:
             if part.ing.like != like:
                 continue
             op = operands[part.ing.title_id]
-            terms = part.terms if like else part.terms & ~carried
-            strength += np.where(terms, t.idf * _dense(t, op, op.rank), 0.0)
-            quoted |= terms & _dense(t, op, op.quoted)
-            chosen |= terms
-        cols = np.flatnonzero(chosen)
-        sides.append(_top(cols, strength[cols], quoted[cols], DERIVED, quoted_first=True))
+            cols = np.flatnonzero(part.terms if like else part.terms & ~carried)
+            strength, quoted = (t.idf * _dense(t, op, op.rank))[cols], _dense(t, op, op.quoted)[cols]
+            ranked.append(_top(cols, strength, quoted, len(cols), quoted_first=True))
+        named: dict[int, bool] = {}
+        for turn in itertools.zip_longest(*ranked):
+            for term in turn:
+                if term is not None and len(named) < DERIVED:
+                    named.setdefault(*term)
+        sides.append(sorted(named.items(), key=lambda term: not term[1]))
     return sides[0], sides[1]
 
 

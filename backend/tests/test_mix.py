@@ -254,6 +254,17 @@ def test_the_derived_line_names_quoted_terms_first():
     assert [(t.terms[c], q) for c, q in less] == [("themes.war", True), ("mood.grim", False)]
 
 
+def test_the_derived_line_names_every_liked_film_even_one_read_by_us_alone():
+    """Film 1's three quoted terms would fill the line; film 2, all our read, still gets its turn."""
+    t = make({1: ["mood.dark!", "themes.heist!", "structure.whodunit!", "sensibility.tense!"],
+              2: ["visual.pastel", "themes.family", "mood.cozy"], **filler(30)})
+    recipe = [Ingredient(1), Ingredient(2)]
+    more, _less = mix.derived(t, recipe, ops(t, recipe))
+    assert len(more) == mix.DERIVED
+    assert [q for _c, q in more] == [True, True, False], "quoted terms still lead the line"
+    assert len({c for c, _q in more} & set(t.operand(2).cols.tolist())) == 1
+
+
 def test_the_why_credits_each_group_to_one_film_and_names_a_less_films_own_terms():
     t = make({
         1: A, 2: B, 3: ["themes.war", "mood.grim", "mood.dark"],
