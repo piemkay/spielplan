@@ -413,7 +413,7 @@
     debounce = setTimeout(() => load(), 220);
   }
 
-  // The kinds Home had when an address last set its chips, which a bare address puts back.
+  // The kinds of the shelves an address last took Home off, which a bare address puts back.
   let kindsBefore = null;
 
   // Home takes what the address says, as a reload would: a card's tap from You sends chips
@@ -423,7 +423,7 @@
     const next = readHomeUrl(new URLSearchParams(location.search));
     let named = null;
     if (next) {
-      kindsBefore = kinds;
+      if (mode === 'shelves') kindsBefore = kinds;
       named = fromUrl(next);
     } else if (mode === 'grid' || homeUrl !== '/') {
       resetHomeFilters();
@@ -452,19 +452,22 @@
   });
 
   // A jump from another page's card shows the way back to it while its grid stands (board B9); an
-  // installed app has no Back of its own. Back from the grid to the shelves, the jump is over. State,
-  // not derived: the shell draws it, and would re-read a derived of Home's as the page leaves.
+  // installed app has no Back of its own. Once its grid has stood and the shelves are back, the jump
+  // is over, written to Home's entry when no sheet's entry is on top. State, not derived: the shell
+  // draws it, and would re-read a derived of Home's as the page leaves.
   let backTo = $state('');
-  let wasGrid = false;
+  let stood = false;
   $effect(() => {
     const from = jumpedFrom();
     const grid = mode === 'grid';
     backTo = grid ? from : '';
-    if (from && wasGrid && !grid && !page.state.sheets?.length) {
+    if (!from) stood = false;
+    else if (grid) stood = true;
+    else if (stood && !page.state.sheets?.length) {
+      stood = false;
       const { jumpedFrom: _, ...rest } = page.state;
       replaceState('', rest);
     }
-    wasGrid = grid;
   });
 
   function removeChip(key) {

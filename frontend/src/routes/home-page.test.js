@@ -951,6 +951,17 @@ describe("Home's URL (decision 557 item 6)", () => {
     expect(homeFilters.owned).toBe(true);
   });
 
+  it('comes Back past two jumps to the kinds of the shelves the first one left', async () => {
+    backend({ titles: (p) => ({ items: [film(1, 'Heat')], total: 1, hidden: {}, applied: applied(p) }) });
+    await openHome();
+    await navigate('/?person=12,13&kind=movie&kind=series', 'goto', { jumpedFrom: 'you' });
+    await navigate('/?term=mood.cozy&kind=series', 'goto', { jumpedFrom: 'you' });
+    await navigate('/?person=12,13&kind=movie&kind=series', 'popstate', { jumpedFrom: 'you' });
+    await navigate('/', 'popstate');
+    expect($('[data-testid="home-mode"]').dataset.mode).toBe('shelves');
+    expect($('[data-testid="kind-movie"]').getAttribute('aria-pressed')).toBe('true');
+  });
+
   it('takes a second jump to the address it was entered with, after its chip went', async () => {
     backend({ titles: (p) => ({ items: [film(1, 'Heat')], total: 1, hidden: {}, applied: applied(p) }) });
     at('/?term=mood.cozy&kind=movie');
@@ -1133,6 +1144,22 @@ describe('the way back from a jump (board B9)', () => {
     expect($('[data-testid="home-mode"]').dataset.mode).toBe('shelves');
     expect($('[data-testid="home-back"]')).toBeNull();
     expect(readState().jumpedFrom).toBeUndefined();
+  });
+
+  it('is over too when the last chip goes under a sheet, once the sheet closes', async () => {
+    backend({ titles: (p) => ({ items: [film(1, 'Heat')], total: 1, hidden: {}, applied: applied(p) }) });
+    at('/?person=12,13&kind=movie', '/?person=12,13&kind=movie', { jumpedFrom: 'rank' });
+    await openHome();
+    nav.page.update((p) => ({ ...p, state: { ...p.state, sheets: ['people'] } }));
+    flushSync();
+    $('[aria-label="Remove Michael Caine"]').click();
+    await tick();
+    expect($('[data-testid="home-back"]')).toBeNull();
+    nav.page.update((p) => ({ ...p, state: { jumpedFrom: 'rank' } }));
+    await tick();
+    expect(readState().jumpedFrom).toBeUndefined();
+    await type('heat');
+    expect($('[data-testid="home-back"]'), 'a later grid is no jump').toBeNull();
   });
 
   it('shows nothing on an address Home was not jumped to', async () => {
