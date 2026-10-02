@@ -104,6 +104,15 @@ describe("Home's URL", () => {
     expect(read.terms).toEqual([{ id: 'mood.cozy', label: 'cozy', facet: 'mood', mode: 'in' }]);
   });
 
+  it('leaves out a search\'s Only in library off, which a reload would not clear with the search', () => {
+    Object.assign(homeFilters, { q: 'heat', genre: 'Crime', owned: false });
+    expect(writeHomeUrl(homeFilters, { kinds: ['movie'] })).toBe('/');
+    Object.assign(homeFilters, { terms: [COZY] });
+    expect(writeHomeUrl(homeFilters, { kinds: ['movie'] })).toBe('/?term=mood.cozy&kind=movie&owned=off');
+    Object.assign(homeFilters, { q: '', terms: [] });
+    expect(writeHomeUrl(homeFilters, { kinds: ['movie'] })).toBe('/?kind=movie&owned=off');
+  });
+
   it('is the bare page when nothing is set, whatever the kinds', () => {
     expect(writeHomeUrl(homeFilters, { kinds: ['series'] })).toBe('/');
   });

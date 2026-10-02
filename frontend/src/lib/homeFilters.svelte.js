@@ -106,7 +106,9 @@ export function writeHomeUrl(f = homeFilters, { kinds = [] } = {}) {
   ];
   const tail = [];
   if (f.panelOpen) tail.push(['filters', 'open']);
-  if (!f.owned) tail.push(['owned', 'off']);
+  // The search is not in the address, and clearing it switches Only in library back on
+  // (decision 558 item 4): beside a search, off holds only with a chip the address keeps.
+  if (!f.owned && (pairs.length || !f.q.trim())) tail.push(['owned', 'off']);
   if (!pairs.length && !tail.length) return '/';
   return `/?${[...pairs, ...kinds.map((k) => ['kind', k]), ...tail].map(pair).join('&')}`;
 }
