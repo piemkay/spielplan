@@ -10,6 +10,7 @@ import {
   peopleLine,
   restoreArrival,
   setWish,
+  setWishTmdb,
   wishRowShown,
   wishSummary,
   wishes,
@@ -133,6 +134,16 @@ describe('the wish routes', () => {
     answering({ wanted: 3, both: 1, members: 2 });
     expect(await loadWishSummary()).toEqual({ wanted: 3, both: 1, members: 2 });
     expect(vi.mocked(globalThis.fetch).mock.calls[0][0]).toBe('/api/wish/summary');
+  });
+
+  it('wants a title only TMDB knows by its kind and TMDB id, and tells Home to re-read', async () => {
+    const answer = { title_id: 1000000012, state: 'want', owned: false, minted: true };
+    const fetch = answering(answer);
+    const before = wishes.epoch;
+    expect(await setWishTmdb('series', 920001)).toEqual(answer);
+    const [url, init] = fetch.mock.calls[0];
+    expect([url, init.method, init.body]).toEqual(['/api/wish/tmdb/series/920001', 'PUT', undefined]);
+    expect(wishes.epoch).toBe(before + 1);
   });
 
   it('moves nothing when the server refuses', async () => {
