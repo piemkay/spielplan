@@ -8,8 +8,6 @@ import { haptic, ms } from '$lib/motion.js';
 
 /** How long "{film} · {word}" stands in for the next card's meta line (decision 550). */
 export const ECHO_MS = 1600;
-// The placed shelf stays lit this long before the next film deals in (decision 545's board).
-const PLACE_MS = 240;
 const PRESS_MS = 150;
 
 /** The title button's word for the kind on the table. */
@@ -218,7 +216,7 @@ export function place(tier) {
   if (!token) return;
   return send(() => post('/rate/place', { card_token: token, tier, latency_ms: latency(), head }), {
     pending: `place-${tier}`,
-    floor: PLACE_MS,
+    floor: PRESS_MS,
     answer: true
   });
 }

@@ -205,9 +205,9 @@ describe('the envelope', () => {
     vi.stubGlobal('matchMedia', () => ({ matches: true }));
     fetchMock.mockResolvedValue(ok(envelope({ card: card({ token: 't2' }) })));
     const tapped = place(6);
-    await vi.advanceTimersByTimeAsync(200);
+    await vi.advanceTimersByTimeAsync(140);
     expect(rate.card.token, 'the card swapped before its shelf had lit').toBe('t1');
-    await vi.advanceTimersByTimeAsync(40);
+    await vi.advanceTimersByTimeAsync(10);
     await tapped;
     expect(rate.card.token).toBe('t2');
   });
