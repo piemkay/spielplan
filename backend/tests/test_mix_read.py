@@ -357,6 +357,19 @@ async def test_the_picker_finds_either_kind_with_two_terms(world):
     assert (await _ok(world.client, "/api/mix/films", q=" "))["items"] == []
 
 
+async def test_the_picker_never_offers_a_wished_stub(world):
+    """Even one carrying terms; it is offered once it arrives (decision 559 item 7)."""
+    await world.db.execute(
+        "INSERT INTO title (id, kind, name, year, origin) VALUES (600, 'movie', 'Heist', 2024, 'wished')"
+    )
+    await _terms(world.db, 600, HEIST)
+    found = await _ok(world.client, "/api/mix/films", q="heist")
+    assert [i["id"] for i in found["items"]] == [SERIES]
+    await world.db.execute("UPDATE title SET origin = 'acquired' WHERE id = 600")
+    found = await _ok(world.client, "/api/mix/films", q="heist")
+    assert sorted(i["id"] for i in found["items"]) == [SERIES, 600]
+
+
 async def test_no_payload_carries_a_score_or_a_model_number(world):
     bodies = [
         await _ok(world.client, like=[str(ANCHOR), f"{LIKED}:pace"], less=[str(SERIES)]),
