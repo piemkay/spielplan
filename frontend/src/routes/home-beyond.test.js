@@ -108,6 +108,8 @@ beforeEach(() => {
   vi.useFakeTimers();
   target = document.createElement('div');
   document.body.appendChild(target);
+  // The same member's Home keeps its filters; a new member's starts from the defaults.
+  homeKept.user = MEMBER.id;
   homeFilters.owned = false;
 });
 

@@ -186,10 +186,12 @@ async function type(text) {
   await tick(80);
 }
 
-const FILTERS = ['filter-genre', 'filter-decade', 'filter-seen', 'filter-owned', 'filter-terms', 'filter-people'];
+const FILTERS = [
+  'filter-genre', 'filter-decade', 'filter-seen', 'filter-owned', 'filter-terms', 'filter-people', 'filter-like'
+];
 
 describe('Home opens on the shelves, with the filters behind one control', () => {
-  it('shows the kind switch and the search, and the six filters only when asked', async () => {
+  it('shows the kind switch and the search, and the seven filters only when asked', async () => {
     backend();
     await openHome();
     expect($('[data-testid="home-search"]')).not.toBeNull();
@@ -210,7 +212,9 @@ describe('Home opens on the shelves, with the filters behind one control', () =>
     const cells = [...$('[data-testid="filter-panel"]').children].map((cell) =>
       cell.querySelector('.label').textContent.trim()
     );
-    expect(cells).toEqual(['Genre', 'Decade', 'Seen', 'Only in library', "What it's like", 'People']);
+    expect(cells).toEqual([
+      'Genre', 'Decade', 'Seen', 'Only in library', "What it's like", 'People', 'Like these films'
+    ]);
     for (const id of FILTERS) {
       expect($(`[data-testid="${id}"]`), `${id} is not in the panel`).not.toBeNull();
     }

@@ -17,21 +17,8 @@ vi.mock('$app/navigation', () => ({
   beforeNavigate: () => {},
   afterNavigate: () => {}
 }));
-// Home's grid reasons as the plan's section 5.3 states them: a recipe is a reason of its own, ahead
-// of the rest, and each of its films counts as a filter.
-vi.mock('$lib/home.svelte.js', async (importOriginal) => {
-  const actual = /** @type {any} */ (await importOriginal());
-  const { homeFilters } = await import('$lib/homeFilters.svelte.js');
-  const films = () => homeFilters.like.length + homeFilters.less.length;
-  return {
-    ...actual,
-    gridReason: (state) => (films() ? 'recipe' : actual.gridReason(state)),
-    homeMode: (state) => (films() ? 'grid' : actual.homeMode(state)),
-    activeFilterCount: (state) => actual.activeFilterCount(state) + films()
-  };
-});
-
 import HomePage from './+page.svelte';
+import { homeKept } from '$lib/home.svelte.js';
 import { homeFilters, resetHomeFilters } from '$lib/homeFilters.svelte.js';
 import { session } from '$lib/session.svelte.js';
 
@@ -94,6 +81,7 @@ afterEach(() => {
   app = null;
   resetHomeFilters();
   Object.assign(session, { user: null, hasBundle: null, restartRequired: null });
+  Object.assign(homeKept, { user: null, epoch: 0, kinds: null, payload: null, scrollY: 0 });
   vi.unstubAllGlobals();
   target.remove();
 });
@@ -103,7 +91,9 @@ async function settle() {
   flushSync();
 }
 
+// The same member's Home keeps its recipe; a new member's starts from the defaults.
 async function open() {
+  homeKept.user = MEMBER.id;
   Object.assign(session, { user: MEMBER, hasBundle: true, restartRequired: false });
   app = mount(HomePage, { target });
   await settle();
