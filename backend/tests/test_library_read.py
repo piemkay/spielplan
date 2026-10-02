@@ -220,6 +220,22 @@ async def test_the_hidden_by_kind_count_agrees_with_the_escaped_listing(db, sear
     assert len(both) == total + hidden["series"]
 
 
+async def test_eligible_ids_is_none_until_a_filter_narrows(db):
+    await _titles(db, [(1, "movie", "Heat", 1995), (2, "movie", "Up", 2009), (3, "series", "Dark", 2017)])
+    await db.executemany(
+        "INSERT INTO title_genre (title_id, genre, source) VALUES ($1, $2, 'tmdb')",
+        [(1, "Crime"), (2, "Animation"), (3, "Crime")],
+    )
+    defaults = {"q": None, "genre": None, "decade": None, "seen": "any", "person_id": None}
+
+    # The owned scope is not a narrowing filter here: a recipe splits the library and beyond itself.
+    assert await library.eligible_ids(
+        db, kinds=["movie"], user_id=1, **defaults, owned_only=True
+    ) is None
+    crime = await library.eligible_ids(db, kinds=["movie"], user_id=1, **{**defaults, "genre": "Crime"})
+    assert crime == library.Eligible(ids=frozenset({1}))
+
+
 async def test_no_projected_term_outweighs_any_extracted_term(db, tmp_path):
     """`n_sources` reached 2.40 against an extracted cap of
     1.00; the corpus's eight is written in to reproduce it."""
