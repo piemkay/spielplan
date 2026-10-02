@@ -183,7 +183,7 @@ async def title_detail(title_id: int, conn: DB, user: ActiveUser, request: Reque
                 "id", "kind", "name", "original_name", "year", "runtime_min", "overview",
                 "tagline", "poster_path", "backdrop_path", "trailer_key", "is_owned",
                 "placement", "seen_state", "imdb_id", "tmdb_id",
-                "original_language",
+                "original_language", "origin",
             )
         },
         "genres": await library.title_genres(conn, title_id),

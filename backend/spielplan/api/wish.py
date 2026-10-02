@@ -3,13 +3,13 @@ each writes only their own rows."""
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Path, Query, Request, status
 from pydantic import BaseModel
 
-from spielplan.api.deps import DB, ActiveUser
-from spielplan.home import wish
+from spielplan.api.deps import DB, ActiveUser, ActiveUserBrief, brief_connection
+from spielplan.home import beyond, wish
 from spielplan.models import artifacts
 
 router = APIRouter(prefix="/api/wish", tags=["wish"])
@@ -36,6 +36,36 @@ async def set_wish(title_id: int, body: WishIn, conn: DB, user: ActiveUser) -> d
         raise HTTPException(
             status.HTTP_422_UNPROCESSABLE_CONTENT,
             {"reason": "owned", "message": "It's in the library already."},
+        ) from None
+
+
+# Decision 558's two TMDB reads: behind the brief session, so no pooled connection waits on TMDB.
+@router.get("/tmdb")
+async def tmdb_search(
+    request: Request,
+    user: ActiveUserBrief,
+    kind: list[Literal["movie", "series"]] = Query(...),
+    q: str = "",
+) -> dict[str, Any]:
+    return await beyond.search_tmdb(request.app.state.art.fetcher, brief_connection, kinds=kind, q=q)
+
+
+@router.put("/tmdb/{kind}/{tmdb_id}")
+async def want_tmdb(
+    kind: Literal["movie", "series"],
+    tmdb_id: Annotated[int, Path(ge=1, le=2_147_483_647)],
+    request: Request,
+    user: ActiveUserBrief,
+) -> dict[str, Any]:
+    try:
+        return await beyond.want_tmdb(
+            request.app.state.art.fetcher, brief_connection, user_id=user.id, kind=kind, tmdb_id=tmdb_id
+        )
+    except beyond.NoSuchTmdbTitle:
+        raise HTTPException(status.HTTP_404_NOT_FOUND, "TMDB has no such title") from None
+    except beyond.TmdbUnavailable:
+        raise HTTPException(
+            status.HTTP_503_SERVICE_UNAVAILABLE, {"reason": "tmdb_unavailable"}
         ) from None
 
 

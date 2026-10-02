@@ -28,9 +28,11 @@ from spielplan.acquire.fetch import (
 from spielplan.acquire.hosts import (
     DEFAULT_RPS,
     HOST_POLICIES,
+    WEB_TMDB_POLICY,
     normalise_host,
     policy_for,
 )
+from spielplan.core.config import settings
 
 # Hosts whose declared policy turns robots off, so a pacing count carries no robots.txt request.
 FAST = "api.themoviedb.org"       # rps 18, burst 20, threshold 8, cooldown 300
@@ -146,6 +148,36 @@ def test_an_unknown_host_is_crawled_at_the_slow_default():
     policy = policy_for("nobody-has-measured-this.example")
     assert policy.rps == DEFAULT_RPS
     assert policy.respect_robots is True
+
+
+def test_the_configured_tmdb_api_host_is_crawled_under_tmdbs_own_row(monkeypatch):
+    """`SPIELPLAN_TMDB_API_BASE` moves TMDB's API, not its rate: e2e's fake is asked under TMDB's row."""
+    monkeypatch.setenv("SPIELPLAN_TMDB_API_BASE", "http://tmdb-fake:8097/3")
+    settings.cache_clear()
+    try:
+        assert policy_for("tmdb-fake:8097") is HOST_POLICIES[FAST]
+        assert policy_for("tmdb-fake").rps == DEFAULT_RPS
+    finally:
+        settings.cache_clear()
+
+
+async def test_a_policy_handed_to_the_fetcher_outranks_the_declared_row():
+    """Decision 558: the web process asks TMDB in a bucket of its own, smaller than the worker's."""
+    assert WEB_TMDB_POLICY.rps < HOST_POLICIES[FAST].rps
+    assert (WEB_TMDB_POLICY.burst, WEB_TMDB_POLICY.max_concurrency) == (4, 2)
+    assert WEB_TMDB_POLICY.respect_robots is False and WEB_TMDB_POLICY.note
+    clock = _Clock()
+    async with _fetcher(_always(200), clock, policies={FAST: WEB_TMDB_POLICY}) as f:
+        for n in range(WEB_TMDB_POLICY.burst + 1):
+            await f.get(f"https://{FAST}/3/search/movie", params={"page": n})
+    assert clock.slept == [pytest.approx(1 / WEB_TMDB_POLICY.rps)], "the fifth waited one token"
+    assert [h["rps"] for h in f.host_report()] == [WEB_TMDB_POLICY.rps]
+
+    worker = _Clock()
+    async with _fetcher(_always(200), worker) as f:
+        for n in range(WEB_TMDB_POLICY.burst + 1):
+            await f.get(f"https://{FAST}/3/movie/{n}")
+    assert worker.slept == [], "the worker's own row is untouched"
 
 
 def test_the_three_paid_provider_hosts_are_declared_with_the_corpus_numbers_and_their_reasoning():

@@ -46,10 +46,14 @@ def test_a_route_without_conn_still_holds_a_pooled_connection_for_its_session():
 
 
 def test_the_poster_route_is_gated_and_holds_no_pooled_connection_for_its_request():
-    """Sixty posters against a pool of ten: this route must
-    not be behind `deps.db`, yet stays behind §3.1's lock."""
+    """Sixty posters against a pool of ten: this route must not be behind `deps.db`, yet stays behind
+    §3.1's lock. The routes that wait on TMDB (decision 558) are held to the same."""
     brief = paths_behind(deps.active_user_brief)
-    assert ("GET", "/api/art/{title_id}/poster") in brief, sorted(brief)
+    for route in (
+        ("GET", "/api/art/{title_id}/poster"), ("GET", "/api/art/tmdb/{file}"),
+        ("GET", "/api/wish/tmdb"), ("PUT", "/api/wish/tmdb/{kind}/{tmdb_id}"),
+    ):
+        assert route in brief, sorted(brief)
     held = brief & paths_behind(deps.db)
     assert not held, f"these hold a pooled connection for the whole request: {sorted(held)}"
 

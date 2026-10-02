@@ -9,6 +9,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from urllib.parse import urlsplit
 
+from spielplan.core.config import settings
+
 # A port equal to its scheme's default is the same host; two spellings would be two buckets.
 _DEFAULT_PORTS = {"http": 80, "https": 443}
 
@@ -91,6 +93,11 @@ HOST_POLICIES: dict[str, HostPolicy] = {
                                      breaker_cooldown_s=900),
 }
 
+# The web process's own TMDB API bucket, for a member's search and Want it alone (decision 558): smaller
+# than the worker's row, so it is never a second bucket at the worker's rate.
+WEB_TMDB_POLICY = HostPolicy(rps=4.0, burst=4, max_concurrency=2, respect_robots=False,
+                             note=_API_TERMS)
+
 
 # §8: the household's own Jellyfin is exempt, and its stock robots.txt would block the library
 # sync. A policy rather than an absence, for any later stage reaching it through this layer.
@@ -149,6 +156,12 @@ def jellyfin_key(value: str) -> str:
     return normalise_host(value, scheme="http" if port == 80 else "https")
 
 
+def tmdb_api_host() -> str:
+    """The host `SPIELPLAN_TMDB_API_BASE` names: TMDB's API, wherever it is reached."""
+    parts = urlsplit(settings().tmdb_api_base)
+    return normalise_host(parts.netloc, scheme=parts.scheme or "https")
+
+
 def policy_for(host: str, *, jellyfin_host: str = "") -> HostPolicy:
     """The policy this host is crawled under. An unknown host gets the slow default.
 
@@ -160,4 +173,6 @@ def policy_for(host: str, *, jellyfin_host: str = "") -> HostPolicy:
         and normalise_host(host) == jellyfin_key(jellyfin_host)
     ):
         return JELLYFIN_POLICY
+    if host and host not in HOST_POLICIES and host == tmdb_api_host():
+        return HOST_POLICIES["api.themoviedb.org"]
     return HOST_POLICIES.get(host, HostPolicy(rps=DEFAULT_RPS))

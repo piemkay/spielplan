@@ -1,4 +1,4 @@
-# End-to-end overlay: adds a fake Jellyfin that the real stack must never have. Never auto-loaded;
+# End-to-end overlay: adds a fake Jellyfin and a fake TMDB the real stack must never have. Never auto-loaded;
 # `node e2e/run.mjs` passes it itself:
 #
 #   docker compose -f docker-compose.yml -f ops/compose.dev.yml -f ops/compose.e2e.yml up -d
@@ -8,13 +8,29 @@ services:
       # Re-declared: this overlay replaces the dev overlay's list, so a constant would override DB_PORT.
       - "127.0.0.1:${DB_PORT:-5432}:5432"
 
-  # Decision 483's no-egress switch: a harness run asks no internet host for a poster.
+  # Decision 483's no-egress switch: a harness run asks no internet host for a poster. TMDB's API is the
+  # fake below, for both processes; no key is seeded, and the admin route that sets one cannot clear it.
   backend:
     environment:
       SPIELPLAN_ART_EGRESS: "false"
+      SPIELPLAN_TMDB_API_BASE: http://tmdb-fake:8097/3
   worker:
     environment:
       SPIELPLAN_ART_EGRESS: "false"
+      SPIELPLAN_TMDB_API_BASE: http://tmdb-fake:8097/3
+
+  tmdb-fake:
+    build:
+      context: .
+      dockerfile: ops/backend.Dockerfile
+    working_dir: /ops
+    command: ["uvicorn", "fake_tmdb:app", "--host", "0.0.0.0", "--port", "8097"]
+    volumes:
+      - ./ops/fake_tmdb.py:/ops/fake_tmdb.py:ro
+    environment:
+      FAKE_TMDB_API_KEY: ${FAKE_TMDB_API_KEY:-e2e-tmdb-key}
+    healthcheck:
+      disable: true
 
   jellyfin-fake:
     # The backend image only for its Python + uvicorn; the file is mounted, so an edit needs a

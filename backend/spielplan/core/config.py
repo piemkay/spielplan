@@ -43,6 +43,8 @@ class Settings(BaseSettings):
 
     # Decision 483's no-egress switch for posters; e2e turns it off. Jellyfin is asked either way.
     art_egress: bool = Field(default=True, alias="SPIELPLAN_ART_EGRESS")
+    # TMDB's API for both processes; e2e points it at `ops/fake_tmdb.py`.
+    tmdb_api_base: str = Field(default="https://api.themoviedb.org/3", alias="SPIELPLAN_TMDB_API_BASE")
 
     # 0 would not mean "disabled": it expires every session on arrival, hence gt=0.
     session_days: int = Field(default=90, gt=0, le=3650)

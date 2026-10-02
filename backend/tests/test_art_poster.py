@@ -284,6 +284,37 @@ async def test_a_redirect_off_the_allow_list_is_neither_stored_nor_served(row, s
     assert not (svc.cache.root / "7.img").exists()
 
 
+@pytest.mark.parametrize("file", [
+    "short.jpg", "harbourlights.gif", "../../etc/passwd.jpg", "harbour-lights.jpg",
+    "harbourlights.jpg/x", "https:%2F%2Fevil.example%2Fa.jpg",
+])
+async def test_a_tmdb_file_outside_the_name_rule_reaches_no_host(service, file):
+    """Decision 558: the route takes a name, never a host or a path."""
+    host = Host()
+    svc = await service(host)
+    answer = await svc.tmdb_poster(file)
+    assert (answer.status, answer.max_age) == (404, poster.BROWSER_NONE)
+    assert host.asked == []
+
+
+async def test_a_tmdb_file_is_fetched_at_w342_once_and_kept_apart_from_titles(service):
+    host = Host()
+    svc = await service(host)
+    first = await svc.tmdb_poster("harbourlights.jpg")
+    again = await svc.tmdb_poster("harbourlights.jpg")
+    assert host.asked == ["https://image.tmdb.org/t/p/w342/harbourlights.jpg"]
+    assert (first.status, first.body, first.max_age) == (200, JPEG, poster.BROWSER_MAX_AGE)
+    assert again.etag == first.etag
+    assert (svc.cache.root / "tmdb" / "harbourlights.jpg.img").is_file()
+
+
+async def test_with_egress_off_a_tmdb_file_is_a_404_and_no_host_is_asked(service):
+    host = Host()
+    svc = await service(host, egress=False)
+    answer = await svc.tmdb_poster("harbourlights.jpg")
+    assert answer.status == 404 and host.asked == []
+
+
 async def test_a_title_the_database_does_not_hold_is_a_cacheable_404(monkeypatch, service):
     async def read(conn, title_id):
         return None

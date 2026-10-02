@@ -66,3 +66,12 @@ def test_damage_to_the_cache_is_a_miss_and_never_an_error(tmp_path):
     (tmp_path / "8.img").unlink()
     assert store.read(8, "s") is None, "an ok sidecar with no bytes beside it vouches for nothing"
     assert not list(tmp_path.glob("*.tmp")), "every write lands whole or not at all"
+
+
+def test_a_tmdb_file_is_kept_under_its_own_name(tmp_path):
+    """Decision 558: a From TMDB hit has no title id, so its file's validated name is the key."""
+    store = cache.ArtCache(tmp_path, clock=Clock())
+    store.store("harbourlights.jpg", "s", PNG, content_type="image/png", source="poster_path", ttl=60)
+    assert store.read("harbourlights.jpg", "s").status == cache.OK
+    assert store.bytes_of("harbourlights.jpg") == PNG
+    assert sorted(p.name for p in tmp_path.iterdir()) == ["harbourlights.jpg.img", "harbourlights.jpg.json"]

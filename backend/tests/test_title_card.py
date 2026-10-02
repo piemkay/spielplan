@@ -113,6 +113,15 @@ async def test_the_card_and_the_catalog_carry_the_original_title_and_its_languag
     assert heat["original_name"] is None and heat["original_language"] is None
 
 
+async def test_the_card_says_whether_the_title_was_minted_for_a_wish(db, card):
+    """Decision 558: a wished row that is not owned keeps the short card, so the client is told."""
+    await db.execute(
+        "INSERT INTO title (id, kind, name, year, origin) VALUES (6, 'movie', 'Wanted', 2025, 'wished')"
+    )
+    assert (await card.get("/api/titles/6")).json()["title"]["origin"] == "wished"
+    assert (await card.get("/api/titles/1")).json()["title"]["origin"] == "bundle"
+
+
 async def test_the_card_names_its_genres_as_the_filter_does(db, card):
     """Every source's spelling folds into the facet's names; Wikidata's free text is not a genre."""
     await db.executemany(

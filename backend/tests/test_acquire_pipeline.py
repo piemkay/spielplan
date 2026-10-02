@@ -1041,6 +1041,26 @@ async def test_a_bundle_title_jellyfin_adds_is_placed_at_stage_nine(db, bundled)
     assert board["stage"] == 10 and board["status"] in ("ready", "parked"), dict(board)
 
 
+async def test_a_wished_title_jellyfin_adds_is_walked_as_one_spielplan_acquired(db, bundled):
+    """Decision 558: stage 1 resolves to the row minted for a wish and turns it 'acquired', so stage 8
+    projects it and stage 9 places it under the app-acquired scope, and nothing is minted twice."""
+    stub = await db.fetchval(
+        "INSERT INTO title (kind, name, year, imdb_id, tmdb_id, origin) "
+        "VALUES ('movie', 'The Duellists', 1977, 'tt5000001', 500001, 'wished') RETURNING id"
+    )
+    titles = await db.fetchval("SELECT count(*) FROM title")
+    report = await pipeline.run_task(db, await _leased(db, item=MOVIE))
+
+    assert report.title_id == stub
+    assert await db.fetchval("SELECT count(*) FROM title") == titles
+    assert await db.fetchval("SELECT origin FROM title WHERE id = $1", stub) == "acquired"
+    board = await _board(db, stub)
+    assert board["detail"]["identify"]["identified"] == "resolved to an existing title"
+    assert board["detail"]["project"]["origin"] == "acquired"
+    assert "projected" in board["detail"]["project"], board["detail"]["project"]
+    assert await db.fetchval("SELECT placement FROM title WHERE id = $1", stub) == "cold_tower"
+
+
 async def test_a_mint_for_an_item_jellyfin_never_showed_us_claims_no_ownership(db, bundled):
     """§7.2: a mint for an item with no `Id` claims no ownership,
     since `jellyfin_id IS NULL` escapes every un-own."""

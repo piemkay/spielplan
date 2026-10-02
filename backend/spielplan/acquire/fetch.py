@@ -218,9 +218,12 @@ class Fetcher:
         sleep: Callable[[float], Awaitable[None]] = asyncio.sleep,
         jitter: Callable[[float, float], float] = random.uniform,
         transport: httpx.AsyncBaseTransport | None = None,
+        policies: Mapping[str, HostPolicy] | None = None,
     ) -> None:
         self.conn = conn
         self.jellyfin_host = jellyfin_host
+        # Normalised host -> policy, consulted before the declared table (the web process's TMDB bucket).
+        self._policies = dict(policies or {})
         self._clock = clock
         self._sleep = sleep
         self._jitter = jitter
@@ -266,7 +269,7 @@ class Fetcher:
             rt = self._hosts.get(host)
             if rt is not None:
                 return rt
-            policy = policy_for(host, jellyfin_host=self.jellyfin_host)
+            policy = self._policies.get(host) or policy_for(host, jellyfin_host=self.jellyfin_host)
             rt = HostRuntime(
                 policy=policy,
                 bucket=TokenBucket(policy.rps, policy.burst, clock=self._clock,
