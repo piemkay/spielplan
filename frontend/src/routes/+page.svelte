@@ -476,8 +476,6 @@
     load();
   }
 
-  const cardTaps = { onPerson: cardPerson, onTerm: cardTerm };
-
   // The term picker's "Search titles for noir", for a word the vocabulary lacks.
   function searchTitles(text) {
     termsOpen = false;
@@ -920,7 +918,8 @@
     titleId={selected.id}
     seed={selected}
     onClose={() => (selected = null)}
-    {...cardTaps}
+    onPerson={cardPerson}
+    onTerm={cardTerm}
     onStateChange={onSeenChange}
     onLike={likeOnHome}
     whyLine={selected.whyLine}
