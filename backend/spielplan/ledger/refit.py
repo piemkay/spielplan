@@ -787,12 +787,14 @@ async def _load_local(
         ids,
         observations.HELD_OUT,
     )
+    # Key lookups, not joins: on tables not yet analysed the planner rescans the kind's titles per duel.
     mean_margin = await conn.fetchval(
         f"""
         SELECT avg(coalesce(d.margin, $3::float8))
-        FROM duel d JOIN title ta ON ta.id = d.title_a JOIN title tb ON tb.id = d.title_b
-        WHERE d.user_id = $1 AND ta.kind = $2 AND tb.kind = $2
-          AND d.selection <> $4 AND NOT d.is_reask AND d.created_at >= {cutover}
+        FROM duel d
+        WHERE d.user_id = $1 AND d.selection <> $4 AND NOT d.is_reask AND d.created_at >= {cutover}
+          AND (SELECT ta.kind FROM title ta WHERE ta.id = d.title_a) = $2
+          AND (SELECT tb.kind FROM title tb WHERE tb.id = d.title_b) = $2
         """,
         user_id,
         kind,
