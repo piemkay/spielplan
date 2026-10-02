@@ -39,6 +39,7 @@ from spielplan.api import home as home_api
 from spielplan.api import ladder as ladder_api
 from spielplan.api import library as library_api
 from spielplan.api import llm as llm_api
+from spielplan.api import mix as mix_api
 from spielplan.api import passkeys as passkeys_api
 from spielplan.api import push as push_api
 from spielplan.api import rank as rank_api
@@ -203,6 +204,7 @@ def create_app() -> FastAPI:
     app.include_router(rank_api.router)
     app.include_router(ladder_api.router)
     app.include_router(home_api.router)
+    app.include_router(mix_api.router)
     app.include_router(taste_api.router)
     app.include_router(tonight_api.router)
     app.include_router(push_api.router)
