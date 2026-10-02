@@ -108,6 +108,12 @@
   // Inside Rank's Filters, an Escape that shuts the list leaves the sheet open.
   function closeBelow(event) {
     if (!listed) return;
+    // The list's height re-centres the sheet: shut on the release, or the control pressed moves out
+    // from under the pointer and its click is lost.
+    if (event?.type === 'pointerdown') {
+      addEventListener('pointerup', () => (listed = false), { once: true });
+      return;
+    }
     listed = false;
     if (event?.type !== 'keydown') return;
     event.stopPropagation();

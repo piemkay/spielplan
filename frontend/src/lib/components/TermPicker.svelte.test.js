@@ -243,4 +243,16 @@ describe('the term picker on a desktop', () => {
     expect(sheet).not.toHaveBeenCalled();
     expect(document.activeElement).toBe(field());
   });
+
+  it("shuts Rank's list under its row once a press outside is released, not before", async () => {
+    await open({ inline: true, open: false, drop: 'below', testid: 'rank-terms' });
+    await press();
+    type('heist');
+    document.body.dispatchEvent(new MouseEvent('pointerdown', { bubbles: true }));
+    flushSync();
+    expect(rows()).toHaveLength(1);
+    document.body.dispatchEvent(new MouseEvent('pointerup', { bubbles: true }));
+    flushSync();
+    expect(rows()).toHaveLength(0);
+  });
 });
