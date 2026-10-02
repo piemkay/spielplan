@@ -439,6 +439,7 @@
     font-size: var(--fs-footnote);
     line-height: 18px;
     color: var(--text-2);
+    text-wrap: pretty;
   }
   .second {
     color: var(--text-3);
@@ -586,6 +587,7 @@
   .note {
     margin-top: 16px;
     text-align: center;
+    text-wrap: pretty;
   }
   .dock {
     flex: none;
