@@ -42,7 +42,7 @@
     </span>
     {#if !onFlip}{@render glyph('m6 9.5 6 6 6-6')}{/if}
   </button>
-  <button class="x" aria-label="Remove {film.name}" onclick={onRemove}>{@render glyph('M6 6l12 12M18 6 6 18')}</button>
+  <button class="x" aria-label="Remove {film.name || 'this film'}" onclick={onRemove}>{@render glyph('M6 6l12 12M18 6 6 18')}</button>
 </span>
 
 <style>
