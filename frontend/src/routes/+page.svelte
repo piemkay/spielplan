@@ -40,6 +40,11 @@
   import PosterCard, { isColdPlaced } from '$lib/components/PosterCard.svelte';
   import ShelfList from '$lib/components/ShelfList.svelte';
   import TitleDetail from '$lib/components/TitleDetail.svelte';
+  import LikeFilmsCell from '$lib/components/LikeFilmsCell.svelte';
+  import RecipeChips from '$lib/components/RecipeChips.svelte';
+  import RecipeGrid from '$lib/components/RecipeGrid.svelte';
+  import { catalogParams } from '$lib/homeFilters.svelte.js';
+  import { recipe, startWith } from '$lib/recipe.svelte.js';
 
   // Back from another tab, the last shelves show at once and are re-read quietly (decision 530).
   const kept = homeKept.user === session.user?.id && homeKept.epoch === modelGate.epoch ? homeKept : null;
@@ -345,6 +350,13 @@
     }
     loadShelves();
   }
+
+  // More like this on Home's own card: a new recipe of that title, named at once (decision 559).
+  let likedCard = null;
+  $effect(() => {
+    if (selected) likedCard = selected;
+  });
+  const likeOnHome = (id) => startWith(likedCard?.id === id ? likedCard : { id });
 </script>
 
 {#snippet icon(name)}
@@ -459,11 +471,13 @@
         data-testid="filter-owned"
       ><span class="knob"></span></button>
     </div>
+    <LikeFilmsCell />
   </div>
 {/if}
 
 {#if personIds || (nFilters && !filtersOpen)}
   <div class="chips">
+    <RecipeChips />
     {#if personIds}
       <!-- The chip is the only way out of a filmography, so it is always visible. -->
       {@render chip(personName, 'person-chip', clearPerson)}
@@ -525,6 +539,7 @@
 {/snippet}
 
 {#if mode === 'grid'}
+  {#if recipe.films.length}<RecipeGrid {kinds} params={catalogParams()} onSelect={(t) => (selected = t)} />{:else}
   <div class="gridhead" data-testid="home-mode" data-mode="grid" data-reason={reason}>
     {#if gridLine(reason)}
       <p class="footnote">{gridLine(reason)}</p>
@@ -623,6 +638,7 @@
       {/if}
     </div>
   {/if}
+  {/if}
 {:else if !session.hasBundle}
   <div class="empty card">
     {@render noBundle()}
@@ -650,6 +666,8 @@
     onClose={() => (selected = null)}
     onPerson={filterToPerson}
     onStateChange={onSeenChange}
+    onLike={likeOnHome}
+    whyLine={selected.whyLine}
   />
 {/if}
 
