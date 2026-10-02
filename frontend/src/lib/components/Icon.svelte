@@ -136,6 +136,9 @@
       <path d="M3.5 9h17M8 5v4M16 5v4" />
     {:else if name === 'close'}
       <path d="M6 6l12 12M18 6 6 18" />
+    {:else if name === 'search'}
+      <circle cx="11" cy="11" r="6.5" />
+      <path d="m16 16 4.5 4.5" />
     {:else if name === 'eye-off'}
       <path d="M3.5 3.5l17 17" />
       <path d="M10.6 5.1A9.6 9.6 0 0 1 12 5c5 0 8.5 4.5 9.5 7a13 13 0 0 1-2.7 3.9" />
