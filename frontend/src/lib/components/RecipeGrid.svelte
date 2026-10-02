@@ -173,7 +173,7 @@
   </div>
 
   {#if asked && twistsOffered(films) && !asks}
-    <TwistRow kind={kinds[0]} query={asked} />
+    <TwistRow {kinds} query={asked} />
   {/if}
 
   {#if error}

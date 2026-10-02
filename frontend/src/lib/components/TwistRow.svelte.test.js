@@ -45,11 +45,13 @@ async function settle() {
   flushSync();
 }
 
-async function open(answer) {
+async function open(answer, kinds = ['movie']) {
   vi.mocked(get).mockImplementation(async (path) => answer(new URL(path, 'http://localhost/api/').searchParams));
-  app = mount(TwistRow, { target, props: { kind: 'movie', query: { like: ['245'], genre: 'Crime' } } });
+  app = mount(TwistRow, { target, props: { kinds, query: { like: ['245'], genre: 'Crime' } } });
   await settle();
 }
+
+const seeds = () => vi.mocked(get).mock.calls.map(([p]) => new URL(p, 'http://localhost/api/').searchParams.get('seed'));
 
 const twists = () => [...target.querySelectorAll('[data-testid="twist"]')];
 
@@ -79,10 +81,19 @@ describe('Try a twist (decision 560 item 7)', () => {
     await settle();
     shuffle.click();
     await settle();
-    expect(vi.mocked(get).mock.calls.map(([p]) => new URL(p, 'http://localhost/api/').searchParams.get('seed'))).toEqual([
-      '0', '1', '2'
-    ]);
+    expect(seeds()).toEqual(['0', '1', '2']);
     expect(twists()[0].textContent).toContain('Pace like Mad Max: Fury Road');
+  });
+
+  it('on Both asks for twists of either kind and names the kind each one leaves', async () => {
+    const BREAKING = { ...MAD_MAX, title_id: 1396, name: 'Breaking Bad', kind: 'series', library_n: 11 };
+    await open(() => ({ seed: 0, twists: [{ ...SHINING, kind: 'movie' }, BREAKING] }), ['movie', 'series']);
+    expect(new URL(vi.mocked(get).mock.calls[0][0], 'http://localhost/api/').searchParams.getAll('kind')).toEqual(['both']);
+    expect(twists().map((b) => b.querySelector('.n').textContent)).toEqual(['10 films fit', '11 series fit']);
+    expect(twists()[1].getAttribute('aria-label')).toBe('Add Pace like Breaking Bad, 11 series in your library fit: relentless');
+    expect(target.querySelector('button[aria-label^="Other twists"]').getAttribute('aria-label')).toBe(
+      'Other twists. Twists that leave fewer than 10 titles are skipped'
+    );
   });
 
   it('adds a twist with an Undo toast that puts the recipe back', async () => {
