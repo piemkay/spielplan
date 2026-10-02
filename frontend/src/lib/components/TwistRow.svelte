@@ -100,14 +100,15 @@
     color: var(--text-2);
     font-weight: 600;
   }
+  /* The 44 px reach grows inward from the row's edge: past it, a tap pans a phone's page sideways. */
   .shuffle {
     position: relative;
     flex: none;
     display: grid;
-    place-items: center;
+    place-items: center end;
     width: 44px;
     height: 44px;
-    margin: -6px -10px -6px 0;
+    margin: -6px 0;
     padding: 0;
     border: none;
     border-radius: var(--r-pill);
