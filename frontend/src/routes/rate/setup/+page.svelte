@@ -1,6 +1,7 @@
 <script>
-  // The ladder's set-up (decision 547): a full-screen flow over the tab bar, one step per tier from the
-  // best down, each named by its word and never by a letter, then the ladder it made.
+  // The ladder's set-up (decision 547): a full-screen flow over the tab bar, beside the rail on a
+  // desktop, one step per tier from the best down, each named by its word and never by a letter, then
+  // the ladder it made.
   import { flushSync, onDestroy, onMount } from 'svelte';
   import { afterNavigate, goto } from '$app/navigation';
   import ActionSheet from '$lib/components/ActionSheet.svelte';
@@ -43,6 +44,10 @@
   // The strip: the films put on the step directly above.
   const above = $derived(setup.at > 0 ? setup.drafts[setup.at - 1].picks : []);
   const done = $derived(setup.result);
+
+  let width = $state(typeof window === 'undefined' ? 390 : window.innerWidth);
+  // On a desktop a step's action sits in the top row beside Undo, and there is no dock (boards D1-D3).
+  const wide = $derived(width > 720);
 
   let q = $state('');
   let searching = $state(false);
@@ -120,6 +125,28 @@
   <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="11" cy="11" r="6.5" /><path d="m16 16 4.5 4.5" /></svg>
 {/snippet}
 
+{#snippet action()}
+  {#if !last}
+    <button class="btn-primary" data-testid="setup-next" onclick={() => go(next)}>
+      {draft?.picks.length ? 'Next' : `None for ${step.word}`}
+    </button>
+  {:else}
+    <button
+      class="btn-primary"
+      data-testid="setup-finish"
+      disabled={!count || setup.busy}
+      aria-describedby={count ? undefined : 'setup-finish-why'}
+      onclick={finish}
+    >Finish</button>
+  {/if}
+{/snippet}
+
+{#snippet whyNot()}
+  {#if last && !count}
+    <p class="footnote why-not" id="setup-finish-why">Put at least one film on your ladder to finish.</p>
+  {/if}
+{/snippet}
+
 {#snippet poster(film, on, mark)}
   <span class="art" class:on>
     <RatePoster title={film} showName={false} lazy />
@@ -128,6 +155,8 @@
   </span>
 {/snippet}
 
+<svelte:window bind:innerWidth={width} />
+
 <section class="flow" data-testid="setup-flow"><div class="screen">
   {#if setup.status === 'done' && done}
     <div class="top">
@@ -135,7 +164,7 @@
       <h1 class="bar-title">Your ladder</h1>
       <a class="btn-plain end strong" href="/">Done</a>
     </div>
-    <div class="scroll" data-testid="setup-done">
+    <div class="scroll done" data-testid="setup-done">
       <h2 class="large-title ready">Your ladder is ready</h2>
       <p class="lede">{readyLine(done.placed)}</p>
       <p class="lede" data-testid="setup-learning">{LEARNING_LINE}</p>
@@ -156,10 +185,13 @@
       {#if historyLine(done.earlier_ratings, done.rated_before)}
         <p class="footnote history">{historyLine(done.earlier_ratings, done.rated_before)}</p>
       {/if}
+      {#if wide}<a class="btn-primary start" href="/rate">Start rating</a>{/if}
     </div>
-    <div class="dock">
-      <a class="btn-primary wide" href="/rate">Start rating</a>
-    </div>
+    {#if !wide}
+      <div class="dock">
+        <a class="btn-primary" href="/rate">Start rating</a>
+      </div>
+    {/if}
   {:else}
     {#if searching}
       <div class="top finding" role="search">
@@ -186,40 +218,48 @@
           Leave
         </button>
         <p class="counter">{#if step}Step {setup.at + 1} of {setup.steps.length}{/if}</p>
-        <button
-          class="btn-plain end"
-          disabled={setup.at === 0}
-          aria-label={setup.at > 0 ? `Undo, back to ${setup.steps[setup.at - 1].word}` : 'Undo'}
-          data-testid="setup-undo"
-          onclick={() => go(undo)}
-        >Undo</button>
+        <div class="end acts">
+          <button
+            class="btn-plain"
+            disabled={setup.at === 0}
+            aria-label={setup.at > 0 ? `Undo, back to ${setup.steps[setup.at - 1].word}` : 'Undo'}
+            data-testid="setup-undo"
+            onclick={() => go(undo)}
+          >Undo</button>
+          {#if wide && step}{@render action()}{/if}
+        </div>
       </div>
     {/if}
 
     <div class="scroll" class:covered={searching} bind:this={list}>
       {#if step && draft}
-        <h1 class="title-1 word" data-testid="setup-step" data-tier={step.tier}>{step.word}</h1>
-        <p class="hint">{step.hint}</p>
-
-        {#if above.length}
-          <div class="strip" data-testid="setup-strip">
-            <p class="strip-label">Not quite these · {setup.steps[setup.at - 1].word}</p>
-            <div class="refs" aria-hidden="true">
-              {#each (above.length > 6 ? above.slice(0, 5) : above) as film (film.id)}
-                <span class="ref"><RatePoster title={film} showName={false} /></span>
-              {/each}
-              {#if above.length > 6}<span class="ref rest">+{above.length - 5}</span>{/if}
-            </div>
+        <div class="head">
+          <div class="lead">
+            <h1 class="title-1 word" data-testid="setup-step" data-tier={step.tier}>{step.word}</h1>
+            <p class="hint">{step.hint}</p>
+            {#if wide}{@render whyNot()}{/if}
           </div>
-        {/if}
 
-        <button
-          class="search find"
-          aria-label="Find a film you have seen"
-          data-testid="setup-find"
-          bind:this={opener}
-          onclick={openSearch}
-        >{@render glass()}A film you have seen</button>
+          {#if above.length}
+            <div class="strip" data-testid="setup-strip">
+              <p class="strip-label">Not quite these · {setup.steps[setup.at - 1].word}</p>
+              <div class="refs" aria-hidden="true">
+                {#each (above.length > 6 ? above.slice(0, 5) : above) as film (film.id)}
+                  <span class="ref"><RatePoster title={film} showName={false} /></span>
+                {/each}
+                {#if above.length > 6}<span class="ref rest">+{above.length - 5}</span>{/if}
+              </div>
+            </div>
+          {/if}
+
+          <button
+            class="search find"
+            aria-label="Find a film you have seen"
+            data-testid="setup-find"
+            bind:this={opener}
+            onclick={openSearch}
+          >{@render glass()}A film you have seen</button>
+        </div>
 
         <div class="grid" role="group" aria-label="Films for {step.word}">
           {#each grid as film (film.id)}
@@ -242,7 +282,7 @@
           {/if}
         </div>
         {#if draft.more}
-          <button class="btn-secondary wide more" data-testid="setup-more" disabled={setup.loading} onclick={more}>
+          <button class="btn-secondary more" data-testid="setup-more" disabled={setup.loading} onclick={more}>
             Show {PAGE} more
           </button>
         {:else if draft.films.length && !setup.loading}
@@ -275,26 +315,10 @@
         {/if}
         {#if setup.error}<p class="footnote note" role="alert">{setup.error}</p>{/if}
       </div>
-    {:else if step}
+    {:else if step && !wide}
       <div class="dock">
-        {#if !last}
-          <button class="btn-primary wide" data-testid="setup-next" onclick={() => go(next)}>
-            {draft?.picks.length ? 'Next' : `None for ${step.word}`}
-          </button>
-        {:else}
-          <button
-            class="btn-primary wide"
-            data-testid="setup-finish"
-            disabled={!count || setup.busy}
-            aria-describedby={count ? undefined : 'setup-finish-why'}
-            onclick={finish}
-          >Finish</button>
-          {#if !count}
-            <p class="footnote why-not" id="setup-finish-why">
-              Put at least one film on your ladder to finish.
-            </p>
-          {/if}
-        {/if}
+        {@render action()}
+        {@render whyNot()}
       </div>
     {/if}
   {/if}
@@ -349,6 +373,11 @@
   }
   .end {
     justify-self: end;
+  }
+  .acts {
+    display: flex;
+    align-items: center;
+    gap: 8px;
   }
   .strong {
     font-weight: 600;
@@ -524,10 +553,8 @@
   .cell-skeleton {
     aspect-ratio: 2 / 3;
   }
-  .wide {
-    width: 100%;
-  }
   .more {
+    width: 100%;
     margin-top: 16px;
     min-height: 48px;
   }
@@ -544,6 +571,7 @@
     box-shadow: inset 0 0.5px 0 var(--separator);
   }
   .dock .btn-primary {
+    width: 100%;
     min-height: 50px;
   }
   .why-not {
@@ -607,25 +635,107 @@
     margin-top: 16px;
   }
 
-  /* The rows span the window, so the list scrolls under the pointer anywhere and the dock's bar runs
-     edge to edge; what they hold keeps the 560px column. */
+  /* Beside the rail (its 232px, or 72px under 1100px) on the shell's paddings; the step's action is in
+     the top row, its films six across. */
   @media (min-width: 721px) {
     .flow {
+      left: 232px;
       padding-top: calc(16px + env(safe-area-inset-top));
     }
     .screen {
-      --side: calc((100% - 560px) / 2);
       max-width: none;
     }
+    /* The counter stays centred until a long step word needs the room. */
     .top {
-      padding-inline: calc(var(--side) + 8px);
+      grid-template-columns: minmax(0, 1fr) auto minmax(max-content, 1fr);
+      column-gap: 16px;
+      padding: 0 40px 0 32px;
+    }
+    .acts .btn-primary {
+      white-space: nowrap;
     }
     .finding {
-      padding-left: calc(var(--side) + var(--gutter));
+      padding-left: 40px;
     }
-    .scroll,
-    .dock {
-      padding-inline: calc(var(--side) + var(--gutter));
+    .finding .search {
+      flex: 0 1 420px;
+    }
+    .scroll {
+      padding: 0 40px 32px;
+    }
+    .word {
+      font-size: var(--fs-display);
+      line-height: 48px;
+    }
+    .hint {
+      font-size: var(--fs-subhead);
+      line-height: 20px;
+    }
+    .find {
+      max-width: 420px;
+      margin-top: 16px;
+    }
+    .ref {
+      width: 60px;
+    }
+    .rest {
+      height: 90px;
+    }
+    .grid {
+      margin-top: 24px;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      gap: 16px;
+    }
+    .name {
+      font-size: var(--fs-footnote);
+      line-height: 18px;
+    }
+    .more {
+      width: auto;
+      min-height: 44px;
+      margin-top: 20px;
+    }
+    .note,
+    .why-not {
+      text-align: start;
+    }
+    .done > * {
+      max-width: 560px;
+    }
+    .start {
+      margin-top: 24px;
+    }
+  }
+  @media (min-width: 721px) and (max-width: 1099px) {
+    .flow {
+      left: 72px;
+    }
+    .ref {
+      width: 56px;
+    }
+    .rest {
+      height: 84px;
+    }
+  }
+  /* The step's word, hint and search beside the strip, once both fit. */
+  @media (min-width: 900px) {
+    .head {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      column-gap: 32px;
+    }
+    .find {
+      grid-area: 2 / 1;
+    }
+    .strip {
+      grid-area: 1 / 2 / 3;
+      align-self: end;
+    }
+    .strip-label {
+      margin-top: 0;
+    }
+    .refs {
+      margin-top: 8px;
     }
   }
 </style>
