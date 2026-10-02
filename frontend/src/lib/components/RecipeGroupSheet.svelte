@@ -87,6 +87,7 @@
 {/snippet}
 
 {#snippet body()}
+  {@const foot = lendNote(film, films)}
   <div class="takehead">
     <h3>Take from {film.name}</h3>
     <span>Pick one or more</span>
@@ -150,7 +151,7 @@
       </div>
     {/each}
   </div>
-  <p class="footnote foot">{lendNote(film, films)}</p>
+  {#if foot}<p class="footnote foot">{foot}</p>{/if}
 {/snippet}
 
 {#if film}

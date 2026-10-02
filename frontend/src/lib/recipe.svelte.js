@@ -198,6 +198,7 @@ export function groupNote(film, groups, sign, films = fromParams()) {
 
 /** The sheet's foot: a film lending any number of groups is one of the two that may lend. */
 export function lendNote(film, films = fromParams()) {
+  if (film.sheet?.length && !film.sheet.some((r) => r.offered)) return '';
   const others = lenders(films.filter((x) => x.id !== film.id));
   if (!film.groups.length && others.length >= MAX_LENDING) {
     const names = others.map(nameOf);

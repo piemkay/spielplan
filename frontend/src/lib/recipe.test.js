@@ -204,6 +204,11 @@ describe("a film's sheet", () => {
     );
   });
 
+  it('says nothing of the limit for a film with no group to lend', () => {
+    const thin = { ...as(ZODIAC, 'like'), sheet: [sheetRow('mood', ['tense']), sheetRow('look', [], ['grainy'])] };
+    expect(lendNote(thin, [as(FARGO, 'like', ['mood']), thin])).toBe('');
+  });
+
   it('disables a thin group with its term, and every group once two other films lend', () => {
     const films = [as(KNIVES, 'like'), as(FARGO, 'like', ['mood']), as(OBSESSION, 'like', ['look'])];
     expect(groupRow(films[0], sheetRow('storytelling', [], ['procedural']), films)).toEqual({
