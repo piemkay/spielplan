@@ -138,14 +138,18 @@ async def test_the_table_follows_dna_writes_and_owned_flips(db, monkeypatch):
     assert await mix_table.table_for(state, db, "movie") is first
     assert builds == ["movie"]
 
-    whodunit = first.terms.index("structure.whodunit")
+    whodunit, heist = first.terms.index("structure.whodunit"), first.terms.index("themes.heist")
     await db.execute(
         "INSERT INTO dna_tag (title_id, version, term, facet, salience, provider)"
-        " VALUES (113, $1, 'structure.whodunit', 'structure', 2, '')",
+        " VALUES (113, $1, 'structure.whodunit', 'structure', 2, ''),"
+        " (113, $1, 'themes.heist', 'themes', 2, '')",
         VOCAB,
     )
     tagged = await mix_table.table_for(state, db, "movie")
     assert whodunit in tagged.operand(113).cols and len(builds) == 2
+    # Heist is now in both tiers: one term, quoted.
+    op = tagged.operand(113)
+    assert list(op.cols).count(heist) == 1 and op.quoted[list(op.cols).index(heist)]
 
     # Stage 8's own upsert.
     await db.execute(
@@ -162,6 +166,15 @@ async def test_the_table_follows_dna_writes_and_owned_flips(db, monkeypatch):
     assert len(builds) == 3, "an owned flip re-derives the library without refetching the terms"
     assert flipped.cols is projected.cols
     assert not flipped.owned[flipped.row_of[105]] and flipped.n_owned == projected.n_owned - 1
+
+    # A curator's repoint renames a tag in place: same count, same ids.
+    await db.execute(
+        "UPDATE dna_tag SET term = 'mood.dark', facet = 'mood'"
+        " WHERE title_id = 113 AND version = $1 AND term = 'structure.whodunit'",
+        VOCAB,
+    )
+    repointed = await mix_table.table_for(state, db, "movie")
+    assert len(builds) == 4 and whodunit not in repointed.operand(113).cols
 
 
 async def test_a_recipe_lists_the_library_first_and_only_well_known_titles_beyond(world):

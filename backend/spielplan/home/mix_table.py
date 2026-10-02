@@ -20,27 +20,24 @@ from spielplan.placement import features
 from spielplan.scoring import serve
 from spielplan.tonight import pool as tonight_pool
 
-# One round trip per request: DNA writers insert, delete or replace rows (new ids), and Jellyfin flips
-# `is_owned`, which only re-derives the library's share.
+# One round trip per request: DNA writers insert, delete or replace rows (new ids), a curator's
+# repoint renames a tag in place, and Jellyfin flips `is_owned`, which only re-derives the library's share.
 _SIGNATURE = """
     SELECT (SELECT count(*) FROM dna_tag WHERE version = $1) AS tags,
            (SELECT max(id) FROM dna_tag WHERE version = $1) AS tag_max,
+           (SELECT sum(hashtext(term)) FROM dna_tag WHERE version = $1) AS tag_terms,
            (SELECT count(*) FROM dna_projected WHERE version = $1) AS projected,
            (SELECT max(id) FROM dna_projected WHERE version = $1) AS projected_max,
            (SELECT md5(string_agg(id::text, ',' ORDER BY id)) FROM title
              WHERE kind = $2 AND is_owned) AS owned
 """
 
+# Folded per (title, term) in `_rows`: a GROUP BY over every tagged row spills at the default
+# work_mem and takes seconds on a production-sized catalogue.
 _ROWS = f"""
-    SELECT g.title_id, array_agg(g.term ORDER BY g.term) AS terms,
-           array_agg(g.quoted ORDER BY g.term) AS quoted, array_agg(g.r ORDER BY g.term) AS rank
-      FROM (SELECT d.title_id, d.term, bool_or(d.tier = 'extracted') AS quoted,
-                   max({dna_terms.TERM_WEIGHT})::float8 AS r
-              FROM dna_tagged d JOIN title t ON t.id = d.title_id
-             WHERE d.version = $1 AND t.kind = $2
-             GROUP BY d.title_id, d.term) g
-     GROUP BY g.title_id
-     ORDER BY g.title_id
+    SELECT d.title_id, d.term, d.tier = 'extracted' AS quoted, ({dna_terms.TERM_WEIGHT})::float8 AS r
+      FROM dna_tagged d JOIN title t ON t.id = d.title_id
+     WHERE d.version = $1 AND t.kind = $2
 """
 
 _CARD = """
@@ -75,7 +72,7 @@ async def table_for(app_state: Any, conn: asyncpg.Connection, kind: str) -> mix.
     if version is None:
         return None
     sig = await conn.fetchrow(_SIGNATURE, version, kind)
-    key = (version, getattr(app_state, "basis_key", None), sig["tags"], sig["tag_max"],
+    key = (version, getattr(app_state, "basis_key", None), sig["tags"], sig["tag_max"], sig["tag_terms"],
            sig["projected"], sig["projected_max"])
     cache = _cache(app_state)
     async with cache.lock:
@@ -105,11 +102,7 @@ async def _build(app_state: Any, conn: asyncpg.Connection, kind: str, version: s
         "SELECT facet, colour FROM dna_facet WHERE version = $1 ORDER BY ord, facet", version
     )
     at = {r["term"]: i for i, r in enumerate(vocab)}
-    rows = []
-    for r in await conn.fetch(_ROWS, version, kind):
-        kept = [k for k, term in enumerate(r["terms"]) if term in at]
-        rows.append((r["title_id"], [at[r["terms"][k]] for k in kept],
-                     [r["quoted"][k] for k in kept], [r["rank"][k] for k in kept]))
+    rows = await asyncio.to_thread(_rows, await conn.fetch(_ROWS, version, kind), at)
     ids = [r[0] for r in rows]
     votes = await conn.fetch(
         f"WITH s AS ({library._PLATFORM_SCORE}) SELECT title_id, votes FROM s"
@@ -146,6 +139,35 @@ async def _build(app_state: Any, conn: asyncpg.Connection, kind: str, version: s
         )
 
     return await asyncio.to_thread(build)
+
+
+def _rows(
+    tagged: Sequence[asyncpg.Record], at: dict[str, int]
+) -> list[tuple[int, list[int], list[bool], list[float]]]:
+    """One entry per title and term of the vocabulary, ascending: quoted where either tier is, at its
+    higher naming rank."""
+    tagged = [r for r in tagged if r[1] in at]
+    n = len(tagged)
+    if not n:
+        return []
+    title = np.fromiter((r[0] for r in tagged), dtype=np.int64, count=n)
+    col = np.fromiter((at[r[1]] for r in tagged), dtype=np.int64, count=n)
+    order = np.lexsort((col, title))
+    title, col = title[order], col[order]
+    quoted = np.fromiter((r[2] for r in tagged), dtype=bool, count=n)[order]
+    rank = np.fromiter((r[3] for r in tagged), dtype=np.float64, count=n)[order]
+    new = np.ones(n, dtype=bool)
+    new[1:] = (title[1:] != title[:-1]) | (col[1:] != col[:-1])
+    starts = np.flatnonzero(new)
+    title, col = title[starts], col[starts]
+    quoted = np.logical_or.reduceat(quoted, starts)
+    rank = np.maximum.reduceat(rank, starts)
+    cut = np.flatnonzero(title[1:] != title[:-1]) + 1
+    return [
+        (int(t), c.tolist(), q.tolist(), w.tolist())
+        for t, c, q, w in zip(title[np.r_[0, cut]], np.split(col, cut), np.split(quoted, cut),
+                              np.split(rank, cut), strict=True)
+    ]
 
 
 def _directors(
