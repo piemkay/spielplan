@@ -372,6 +372,34 @@ async def count_by_kind(
     return {r["kind"]: r["n"] for r in rows}
 
 
+@dataclass(frozen=True)
+class Eligible:
+    """The titles the catalogue filters admit; `strong` is unset until terms filter."""
+
+    ids: frozenset[int]
+    strong: frozenset[int] | None = None
+
+
+def _narrows(value: Any) -> bool:
+    """A filter value other than its default: None, '', 'any', False or an empty sequence."""
+    if value is None or value is False or (isinstance(value, str) and value in ("", "any")):
+        return False
+    return not isinstance(value, (list, tuple, set, frozenset)) or bool(value)
+
+
+async def eligible_ids(
+    conn: asyncpg.Connection, *, kinds: Sequence[str], user_id: int, **filters: Any
+) -> Eligible | None:
+    """The titles `_filters` admits, or None when no filter narrows. The owned scope is not read: a
+    recipe splits the library and beyond itself (decision 559)."""
+    filters.pop("owned_only", None)
+    if not any(_narrows(v) for v in filters.values()):
+        return None
+    clause, args = _filters(kinds=kinds, user_id=user_id, **filters)
+    rows = await conn.fetch(f"SELECT t.id FROM title t WHERE {clause}", *args)
+    return Eligible(ids=frozenset(int(r["id"]) for r in rows))
+
+
 async def get_title(
     conn: asyncpg.Connection, title_id: int, *, user_id: int | None = None
 ) -> dict[str, Any] | None:
@@ -539,15 +567,23 @@ async def platform_ratings(conn: asyncpg.Connection, title_id: int) -> list[dict
     return [dict(r) for r in rows]
 
 
+# Decision 556 item 3: a TMDB vote stands for this many IMDb votes where IMDb has no count.
+TMDB_VOTE_FACTOR = 50
+
 # Decision 547: one score per title, IMDb's user score, else TMDB's, else the mean of the others, each
 # over its own scale.
-_PLATFORM_SCORE = """
+_PLATFORM_SCORE = f"""
     SELECT title_id,
            COALESCE(
                max(score / scale) FILTER (WHERE platform = 'imdb' AND metric = 'user_score'),
                max(score / scale) FILTER (WHERE platform = 'tmdb' AND metric = 'user_score'),
                avg(score / scale)
-           ) AS score
+           ) AS score,
+           COALESCE(
+               max(votes) FILTER (WHERE platform = 'imdb' AND metric = 'user_score'),
+               {TMDB_VOTE_FACTOR} * max(votes) FILTER (WHERE platform = 'tmdb' AND metric = 'user_score'),
+               0
+           ) AS votes
       FROM display.platform_rating
      WHERE score IS NOT NULL AND scale > 0
      GROUP BY title_id

@@ -4,9 +4,9 @@ measured bug (§4.1 rule 5), and a default would hide it.
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
-from fastapi import APIRouter, HTTPException, Query, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 
 from spielplan.api.deps import DB, ActiveUser
 from spielplan.connectors import registry
@@ -20,19 +20,37 @@ from spielplan.scoring import serve
 router = APIRouter(prefix="/api", tags=["library"])
 
 
-@router.get("/titles")
-async def list_titles(
-    conn: DB,
-    user: ActiveUser,
-    kind: list[Literal["movie", "series"]] = Query(
-        ..., description="§4.1 rule 5: one or both, never neither. Repeat the parameter for both."
-    ),
+def catalog_filters(
     q: str | None = None,
     genre: str | None = None,
     decade: int | None = None,
     seen: Literal["any", "seen", "unseen"] = "any",
     person_id: list[int] | None = Query(None),
     owned_only: bool = False,
+) -> dict[str, Any]:
+    """The catalogue's filters as `library._filters` takes them, one set for every route that reads them."""
+    try:
+        # Decision 473: an unknown genre is a wrong question, not an empty grid.
+        genre = genres.canonical(genre) if genre else None
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+    return {
+        "q": q, "genre": genre, "decade": decade, "seen": seen, "person_id": person_id,
+        "owned_only": owned_only,
+    }
+
+
+CatalogFilters = Annotated[dict[str, Any], Depends(catalog_filters)]
+
+
+@router.get("/titles")
+async def list_titles(
+    conn: DB,
+    user: ActiveUser,
+    filters: CatalogFilters,
+    kind: list[Literal["movie", "series"]] = Query(
+        ..., description="§4.1 rule 5: one or both, never neither. Repeat the parameter for both."
+    ),
     sort: Literal["for_you", "newest"] | None = None,
     limit: int = Query(60, ge=1, le=200),
     offset: int = Query(0, ge=0),
@@ -42,8 +60,6 @@ async def list_titles(
     selection (decision 515); `for_you_available` says whether their order exists."""
     try:
         kinds = library.normalise_kinds(kind)
-        # Decision 473: an unknown genre is a wrong question, not an empty grid.
-        genre = genres.canonical(genre) if genre else None
     except ValueError as exc:
         raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
 
@@ -51,6 +67,7 @@ async def list_titles(
     personal = await serve.personal_kinds(
         conn, user_id=user.id, kinds=kinds, bundle_version=bundle
     )
+    q = filters["q"]
     if q and q.strip():
         effective = "match"
     elif sort == "newest" or not personal:
@@ -62,12 +79,7 @@ async def list_titles(
         conn,
         kinds=kinds,
         user_id=user.id,
-        q=q,
-        genre=genre,
-        decade=decade,
-        seen=seen,
-        person_id=person_id,
-        owned_only=owned_only,
+        **filters,
         limit=limit,
         offset=offset,
         sort="for_you" if effective == "for_you" else "newest",
@@ -81,10 +93,7 @@ async def list_titles(
         "for_you_available": bool(personal),
         "total": total,
         # §6.0: the hidden count, under the SAME filters as the list.
-        "hidden": await library.count_by_kind(
-            conn, exclude=kinds, user_id=user.id, q=q, genre=genre, decade=decade,
-            seen=seen, person_id=person_id, owned_only=owned_only,
-        ),
+        "hidden": await library.count_by_kind(conn, exclude=kinds, user_id=user.id, **filters),
         "limit": limit,
         "offset": offset,
         "items": rows,
