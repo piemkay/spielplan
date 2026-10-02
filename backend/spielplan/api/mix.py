@@ -8,7 +8,7 @@ from typing import Any, Literal
 from fastapi import APIRouter, HTTPException, Query, Request, status
 
 from spielplan.api.deps import DB, ActiveUser
-from spielplan.api.library import CatalogFilters, Kinds
+from spielplan.api.library import CatalogFilters
 from spielplan.db import library
 from spielplan.home import mix, mix_table
 
@@ -63,15 +63,15 @@ async def twists(
     user: ActiveUser,
     request: Request,
     filters: CatalogFilters,
-    kind: Kinds,
+    kind: list[Literal["movie", "series", "both"]] = Query(),
     like: list[str] = Query([]),
     less: list[str] = Query([]),
     seed: int = Query(0, ge=0),
 ) -> dict[str, Any]:
-    """Up to three twists from the member's own films placed high, of each kind shown (`kind` repeats);
-    `seed + 1` is the shuffle, which pages through them and wraps."""
+    """Up to three twists from the member's own films placed high, of each kind shown (`kind` repeats,
+    or `both`); `seed + 1` is the shuffle, which pages through them and wraps."""
     try:
-        kinds = library.normalise_kinds(kind)
+        kinds = library.normalise_kinds(library.KINDS if "both" in kind else kind)
         recipe = _recipe(like, less)
         eligible = await library.eligible_ids(conn, kinds=kinds, user_id=user.id, **filters)
         return await mix_table.twist_page(

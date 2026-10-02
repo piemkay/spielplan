@@ -382,6 +382,8 @@ async def test_on_both_a_series_placed_high_is_a_twist_counted_in_the_series_lib
 
     both = await _ok(world.client, "/api/mix/twists", like=[str(ANCHOR)], kind=["movie", "series"])
     assert offered(both) == {("movie", LIKED, "pace", len(LIBRARY)), ("series", show, "pace", len(shows))}
+    said = await _ok(world.client, "/api/mix/twists", like=[str(ANCHOR)], kind="both")
+    assert said["twists"] == both["twists"], "kind=both names the two kinds"
     films = await _ok(world.client, "/api/mix/twists", like=[str(ANCHOR)])
     assert offered(films) == {("movie", LIKED, "pace", len(LIBRARY))}, "a series only where series show"
 
