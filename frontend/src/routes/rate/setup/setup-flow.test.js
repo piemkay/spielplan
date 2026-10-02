@@ -5,10 +5,15 @@
 import { flushSync, mount, tick, unmount } from 'svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const nav = vi.hoisted(() => ({ goto: null }));
+const nav = vi.hoisted(() => ({ goto: null, before: null }));
 vi.mock('$app/navigation', () => {
   nav.goto = vi.fn();
-  return { afterNavigate: vi.fn(), goto: nav.goto, pushState: vi.fn() };
+  return {
+    afterNavigate: vi.fn(),
+    beforeNavigate: (fn) => (nav.before = fn),
+    goto: nav.goto,
+    pushState: vi.fn()
+  };
 });
 
 import SetupPage from './+page.svelte';
@@ -280,5 +285,34 @@ describe('the set-up on a desktop', () => {
     await click($('setup-finish'));
     expect(all('setup-done')).toHaveLength(1);
     expect(document.querySelectorAll('a[href="/rate"]'), 'Start rating, once').toHaveLength(1);
+  });
+
+  it('asks before a tap on the rail drops the picks, then goes where it was tapped', async () => {
+    width(1280);
+    await open();
+    nav.goto.mockClear();
+    const rail = async (path) => {
+      const tap = { type: 'link', to: { url: new URL(path, 'http://localhost') }, cancel: vi.fn() };
+      nav.before(tap);
+      await settle();
+      return tap;
+    };
+    const sheet = () => document.querySelector('[role="dialog"]');
+    const option = (label) => [...sheet().querySelectorAll('button')].find((b) => b.textContent.includes(label));
+
+    expect((await rail('/rank')).cancel, 'nothing picked, nothing to lose').not.toHaveBeenCalled();
+    await click(cell('Heat'));
+    expect((await rail('/rank')).cancel).toHaveBeenCalled();
+    expect(sheet().textContent).toContain("Leave the set-up? Your picks so far aren't kept.");
+    await click(option('Cancel'));
+    expect(nav.goto).not.toHaveBeenCalled();
+
+    await click($('setup-leave'));
+    await click(option('Leave the set-up'));
+    expect(nav.goto, 'Leave itself still goes back to Rate').toHaveBeenLastCalledWith('/rate');
+
+    await rail('/rank');
+    await click(option('Leave the set-up'));
+    expect(nav.goto).toHaveBeenLastCalledWith(new URL('http://localhost/rank'));
   });
 });

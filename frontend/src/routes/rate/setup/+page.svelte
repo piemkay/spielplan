@@ -3,7 +3,7 @@
   // desktop, one step per tier from the best down, each named by its word and never by a letter, then
   // the ladder it made.
   import { flushSync, onDestroy, onMount } from 'svelte';
-  import { afterNavigate, goto } from '$app/navigation';
+  import { afterNavigate, beforeNavigate, goto } from '$app/navigation';
   import ActionSheet from '$lib/components/ActionSheet.svelte';
   import RatePoster from '$lib/components/RatePoster.svelte';
   import { displayNames } from '$lib/titleCard.js';
@@ -110,6 +110,23 @@
     else goto('/rate');
   }
 
+  // Beside the rail on a desktop: a tap on it asks first, as Leave does, and goes once the sheet is gone.
+  let away = null;
+  let going = $state(false);
+  beforeNavigate((nav) => {
+    if (nav.type !== 'link' || !count || setup.status !== 'steps') return;
+    nav.cancel();
+    ask(nav.to?.url);
+  });
+  $effect(() => {
+    if (going && !leaving) goto(away);
+  });
+
+  function ask(to = null) {
+    away = to;
+    leaving = true;
+  }
+
   function hitLabel(film) {
     const on = stepOf(film.id);
     const where = on < 0 ? '' : `, on your ladder as ${setup.steps[on].word}`;
@@ -214,7 +231,7 @@
       </div>
     {:else}
       <div class="top">
-        <button class="btn-plain" aria-haspopup="dialog" data-testid="setup-leave" onclick={() => (count ? (leaving = true) : leave())}>
+        <button class="btn-plain" aria-haspopup="dialog" data-testid="setup-leave" onclick={() => (count ? ask() : leave())}>
           Leave
         </button>
         <p class="counter">{#if step}Step {setup.at + 1} of {setup.steps.length}{/if}</p>
@@ -328,7 +345,9 @@
 <ActionSheet
   open={leaving}
   title="Leave the set-up? Your picks so far aren't kept."
-  options={[{ label: 'Leave the set-up', destructive: true, onSelect: leave }]}
+  options={[
+    { label: 'Leave the set-up', destructive: true, onSelect: () => (away ? (going = true) : leave()) }
+  ]}
   onClose={() => (leaving = false)}
 />
 
