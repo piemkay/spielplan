@@ -144,7 +144,8 @@ function backend({
   home = (/** @type {string[]} */ _kinds) => ({}),
   wish = () => ({ mine: [], others: [], copy_text: '' }),
   vocabulary = { version: null, facets: [], terms: [] },
-  people = { people: [] }
+  people = { people: [] },
+  prompts = []
 } = {}) {
   const seen = [];
   vi.stubGlobal(
@@ -159,6 +160,7 @@ function backend({
       else if (u.pathname === '/api/wish') payload = wish();
       else if (u.pathname === '/api/vocabulary') payload = vocabulary;
       else if (u.pathname === '/api/people') payload = people;
+      else if (u.pathname === '/api/prompts/finish') payload = prompts;
       else if (u.pathname.startsWith('/api/prompts/finish')) payload = [];
       return Promise.resolve({
         ok: true,
@@ -362,6 +364,21 @@ describe('the top of Home (decision 528)', () => {
     expect($('.notice-bar'), 'a search shows no notice').toBeNull();
     await type('');
     expect($('[data-testid="pending-verdicts"]')).not.toBeNull();
+  });
+
+  it("brings a finished film's Rate it now back with the shelves after a search", async () => {
+    backend({
+      titles: () => ({ items: [film(1, 'Heat')], total: 1, hidden: {} }),
+      prompts: [{ id: 3, title_id: 7, name: 'Zodiac', progress: 0.94 }]
+    });
+    await openHome();
+    $('[data-finish-prompt="7"] .pill').click();
+    await tick();
+    expect($('[data-finish-handoff="7"]')).not.toBeNull();
+    await type('heat');
+    expect($('[data-finish-handoff]'), 'a search shows no notice').toBeNull();
+    await type('');
+    expect($('[data-testid="finish-prompt-cta"]').getAttribute('href')).toBe('/rate?head=7');
   });
 
   it('puts the row away until tomorrow with its x, and Undo brings it back (decision 554)', async () => {

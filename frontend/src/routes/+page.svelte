@@ -111,6 +111,8 @@
   let showWeak = $state(false);
   // Describes one kind switch only, so the next list the page asks for clears it.
   let kindNote = $state('');
+  // An answered finish prompt's handoff, kept while a search hides the notices.
+  let finished = $state(null);
 
   /** @type {any} */
   let home = $state(kept?.payload ?? null);
@@ -807,7 +809,7 @@
 {#if mode === 'shelves'}
   <div class="notice-stack">
     <!-- Its answer moves the banner's population, so it re-reads the shelves (decision 212). -->
-    <FinishPrompt onAnswered={loadShelves} />
+    <FinishPrompt onAnswered={loadShelves} bind:answered={finished} />
     <PendingVerdicts banner={home?.banner} onHide={() => hideNotice('pending')} />
     <ArrivedBanner arrived={home?.arrived ?? []} onSelect={(title) => (selected = title)} />
     {#if home?.setup_notice}

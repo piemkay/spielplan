@@ -9,12 +9,11 @@
   import { showToast } from '$lib/toast.svelte.js';
 
   // Home re-reads its shelves here: either answer changes the server-rendered banner.
-  let { onAnswered = null } = $props();
+  let { onAnswered = null, answered = $bindable(null) } = $props();
 
   let queue = $state([]);
   let busy = $state(false);
   let failure = $state('');
-  let answered = $state(null);
   const current = $derived(queue[0] ?? null);
 
   onMount(async () => {
