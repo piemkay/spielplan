@@ -154,7 +154,7 @@ async def _mint(conn: asyncpg.Connection, detail: dict[str, Any]) -> int:
     if title_id < APP_ID_MIN:
         raise RuntimeError(
             f"title {title_id} was minted below the app's id range ({APP_ID_MIN}): title_id_seq has "
-            "moved, and decision 162's partition is what keeps it from a corpus id"
+            "moved, and that range is what keeps a minted title from a corpus id"
         )
     await conn.execute(
         "INSERT INTO title_genre (title_id, genre, source) SELECT $1, unnest($2::text[]), 'tmdb' "
