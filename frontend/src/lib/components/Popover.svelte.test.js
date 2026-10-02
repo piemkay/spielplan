@@ -37,9 +37,9 @@ afterEach(() => {
   anchor.remove();
 });
 
-function render(rect = { top: 100, bottom: 140, left: 300, right: 500 }) {
+function render(rect = { top: 100, bottom: 140, left: 300, right: 500 }, more = {}) {
   anchor.getBoundingClientRect = () => /** @type {DOMRect} */ ({ ...rect, width: 200, height: 40, x: rect.left, y: rect.top });
-  const props = $state({ open: true, anchor, label: 'People', onClose: vi.fn(() => (props.open = false)), children: body });
+  const props = $state({ open: true, anchor, label: 'People', onClose: vi.fn(() => (props.open = false)), children: body, ...more });
   app = mount(Popover, { target, props });
   flushSync();
   return props;
@@ -62,6 +62,11 @@ describe('a popover', () => {
     expect(pushState).not.toHaveBeenCalled();
     expect(replaceState).not.toHaveBeenCalled();
     expect(history.length).toBe(length);
+  });
+
+  it("takes its anchor's width when given none", () => {
+    render(undefined, { width: null });
+    expect(panel().style.width).toBe('200px');
   });
 
   it('opens above its anchor when there is no room below', () => {

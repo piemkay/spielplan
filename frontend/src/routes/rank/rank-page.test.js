@@ -210,6 +210,7 @@ afterEach(() => {
   app = null;
   reset();
   draft.terms = [];
+  draft.q = '';
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   target.remove();
@@ -768,7 +769,35 @@ describe("What it's like on Rank (decision 557 item 8)", () => {
   const boardReads = () =>
     fetchMock.mock.calls.map(([url]) => url).filter((url) => url.includes('/api/rank?'));
 
-  it('opens the term picker over the Filters, and asks the board for an include and a leave-out', async () => {
+  it("lists the terms under the Filters' own row on a desktop, and asks for an include and a leave-out", async () => {
+    await open();
+    $('rank-filters').click();
+    await settle();
+    $('rank-terms').click();
+    await settle();
+    expect(dialog("What it's like"), 'no second sheet over the Filters (board B8)').toBeNull();
+    expect(dialog('Filters').querySelector('[aria-label="Include heist"]')).toBeTruthy();
+    target.querySelector('[aria-label="Include heist"]').click();
+    await settle();
+    target.querySelector('[aria-label="Leave out violent"]').click();
+    await settle();
+    const asked = new URL(boardReads().at(-1), 'http://localhost').searchParams;
+    expect(asked.getAll('term')).toEqual(['themes.heist']);
+    expect(asked.getAll('not_term')).toEqual(['mood.violent']);
+    // The field holds them as chips, as the board's row does: an include filled, a leave-out
+    // outlined (board B7); the Filters count them.
+    const field = [...$('rank-terms').querySelectorAll('[data-testid="rank-sheet-term-chip"]')];
+    expect(field.map((c) => c.dataset.mode)).toEqual(['in', 'out']);
+    const chips = [...target.querySelectorAll('.chips [data-testid="rank-term-chip"]')];
+    expect(chips.map((c) => [c.dataset.mode, c.querySelector('.label').textContent.trim()])).toEqual([
+      ['in', 'heist'],
+      ['out', '− violent']
+    ]);
+    expect($('rank-filters').textContent.trim()).toBe('Filters · 2');
+  });
+
+  it('opens the term picker as a sheet over the Filters on a phone', async () => {
+    phone();
     await open();
     $('rank-filters').click();
     await settle();
@@ -778,18 +807,11 @@ describe("What it's like on Rank (decision 557 item 8)", () => {
     expect(dialog('Filters'), 'a sheet over the Filters sheet').toBeTruthy();
     target.querySelector('[aria-label="Include heist"]').click();
     await settle();
-    target.querySelector('[aria-label="Leave out violent"]').click();
+    expect(new URL(boardReads().at(-1), 'http://localhost').searchParams.getAll('term')).toEqual(['themes.heist']);
+    dialog("What it's like").querySelector('.done').click();
     await settle();
-    const asked = new URL(boardReads().at(-1), 'http://localhost').searchParams;
-    expect(asked.getAll('term')).toEqual(['themes.heist']);
-    expect(asked.getAll('not_term')).toEqual(['mood.violent']);
-    // An include is filled, a leave-out outlined (board B7); the Filters count them.
-    const chips = [...target.querySelectorAll('.chips [data-testid="rank-term-chip"]')];
-    expect(chips.map((c) => [c.dataset.mode, c.querySelector('.label').textContent.trim()])).toEqual([
-      ['in', 'heist'],
-      ['out', '− violent']
-    ]);
-    expect($('rank-filters').textContent.trim()).toBe('Filters · 2');
+    expect(dialog("What it's like")).toBeNull();
+    expect(dialog('Filters').querySelector('[data-testid="rank-sheet-term-chip"]').dataset.mode).toBe('in');
   });
 
   it('switches a term with its chip, and its x takes it off', async () => {

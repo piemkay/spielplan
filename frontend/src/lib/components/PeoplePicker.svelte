@@ -1,13 +1,14 @@
 <script>
   // People (decision 557, board B4): a word-start typeahead over names, one person folded across
-  // their records; a person is included in any role and never left out. A sheet on a phone; on a
-  // desktop a popover under the Filters cell that opened it.
+  // their records; a person is included in any role and never left out. A sheet on a phone; `inline`
+  // on a desktop, where the Filters cell is its field and the matches drop under it.
   import { searchPeople } from '$lib/filters.svelte.js';
   import FilterChip from './FilterChip.svelte';
   import Headshot from './Headshot.svelte';
   import Icon from './Icon.svelte';
   import Popover from './Popover.svelte';
   import Sheet from './Sheet.svelte';
+  import TokenField from './TokenField.svelte';
 
   let {
     open = false,
@@ -15,12 +16,14 @@
     chosen = [],
     onAdd,
     onRemove,
-    onClose,
-    anchor = null,
-    combinedLine = ''
+    onClose = undefined,
+    combinedLine = '',
+    inline = false,
+    testid = 'filter-people'
   } = $props();
 
   const DEBOUNCE_MS = 220;
+  const listId = $props.id();
   const ROLES = {
     cast: 'Actor',
     director: 'Director',
@@ -31,16 +34,19 @@
     prod_designer: 'Production designer'
   };
 
-  let width = $state(typeof window === 'undefined' ? 390 : window.innerWidth);
-  const desktop = $derived(Boolean(anchor) && width > 720);
-
   let q = $state('');
   let found = $state([]);
   // The query `found` answers; empty while nothing has been asked.
   let asked = $state('');
+  // The inline field's matches, opened by a press or by typing; Enter adds the highlighted one.
+  let listed = $state(false);
+  let active = $state(0);
   let field = $state();
+  let input = $state();
   let timer;
   let seq = 0;
+
+  const showing = $derived(listed && (found.length > 0 || Boolean(asked)));
 
   $effect(() => {
     if (!open) return;
@@ -52,10 +58,6 @@
       clearTimeout(timer);
       seq++;
     };
-  });
-
-  $effect(() => {
-    if (open && desktop && field) field.focus({ preventScroll: true });
   });
 
   function typed() {
@@ -73,6 +75,7 @@
       if (mine !== seq) return;
       found = people ?? [];
       asked = people ? query : '';
+      active = 0;
     }, DEBOUNCE_MS);
   }
 
@@ -86,18 +89,27 @@
     q = '';
     found = [];
     asked = '';
-    field?.focus({ preventScroll: true });
+    input?.focus({ preventScroll: true });
+  }
+
+  function onKey(event) {
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      listed = true;
+      active = Math.max(0, Math.min(found.length - 1, active + (event.key === 'ArrowDown' ? 1 : -1)));
+    } else if (event.key === 'Enter' && showing && found[active]) {
+      event.preventDefault();
+      add(found[active]);
+    }
   }
 </script>
-
-<svelte:window bind:innerWidth={width} />
 
 {#snippet top()}
   <label class="find">
     <Icon name="search" size={18} />
     <input
       type="search"
-      bind:this={field}
+      bind:this={input}
       bind:value={q}
       oninput={typed}
       autocomplete="off"
@@ -117,13 +129,20 @@
   {#if combinedLine}<p class="footnote combined" data-testid="people-combined">{combinedLine}</p>{/if}
 {/snippet}
 
+{#snippet fieldChips()}
+  {#each chosen as p (p.person_ids.join(','))}
+    <FilterChip variant="person" label={p.name} person={p} testid="person-chip" onRemove={() => onRemove?.(p)} />
+  {/each}
+{/snippet}
+
 {#snippet list()}
   {#if found.length}
-    <div class="results" class:list-group={!desktop}>
-      {#each found as p (p.person_id)}
+    <div class="results" class:list-group={!inline}>
+      {#each found as p, i (p.person_id)}
         {@const done = added(p)}
         <button
           class="row"
+          class:active={inline && i === active}
           disabled={done}
           aria-label={done ? `${p.name}, added` : `Add ${p.name}`}
           onclick={() => add(p)}
@@ -143,12 +162,27 @@
   {/if}
 {/snippet}
 
-{#if desktop}
-  <Popover {open} {anchor} label="People" {onClose}>
-    <div class="picker desktop">
-      <div class="top">{@render top()}</div>
-      <div class="list">{@render list()}</div>
-    </div>
+{#if inline}
+  <TokenField
+    bind:value={q}
+    bind:field
+    bind:input
+    label="Find a person"
+    placeholder="Add a person"
+    {testid}
+    inputTestid="people-search"
+    expanded={showing}
+    controls={listId}
+    onpress={() => (listed = true)}
+    oninput={() => {
+      listed = true;
+      typed();
+    }}
+    onkeydown={onKey}
+    chips={fieldChips}
+  />
+  <Popover open={showing} anchor={field} label="People" width={null} onClose={() => (listed = false)}>
+    <div class="picker desktop" id={listId}>{@render list()}</div>
   </Popover>
 {:else}
   <Sheet {open} {onClose} label="People">
@@ -286,24 +320,11 @@
   .picker.desktop {
     flex: 1 1 auto;
     min-height: 0;
-    display: flex;
-    flex-direction: column;
-  }
-  .desktop .top {
-    flex: none;
-    padding: 12px 12px 8px;
-  }
-  .desktop .find > input[type='search'][aria-label] {
-    min-height: 44px;
-  }
-  .desktop .list {
-    flex: 1 1 auto;
-    min-height: 0;
     overflow-y: auto;
-    padding: 0 6px 6px;
+    padding: 6px;
   }
   .desktop .none {
-    padding: 8px 10px 12px;
+    padding: 8px 10px;
   }
   .desktop .row {
     min-height: 52px;
@@ -312,6 +333,9 @@
   }
   .desktop .row + .row {
     box-shadow: none;
+  }
+  .desktop .row.active {
+    background: var(--surface-2);
   }
   @media (hover: hover) {
     .desktop .row:not(:disabled):hover {

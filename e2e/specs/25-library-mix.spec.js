@@ -62,6 +62,17 @@ test("a recipe's films, a film's groups and the limits", async ({ page, isMobile
   await likeFilm(page, isMobile, 'Prisoners');
   await expect(chips(page)).toHaveCount(2);
   await expect(page).toHaveURL(new RegExp(`[?&]like=${PRISONERS}(&|$)`));
+  await expect(page.getByRole('dialog', { name: 'Films to like or less like' })).toHaveCount(0);
+
+  // With the Filters open the films sit in their cell, where a tap switches like and less like
+  // (board C2); shut, the chip row's open a film's groups.
+  await chipBody(page, 'Like Prisoners').click();
+  await expect(page).toHaveURL(new RegExp(`[?&]less=${PRISONERS}(&|$)`));
+  await chipBody(page, 'Less like Prisoners').click();
+  await expect(page).toHaveURL(new RegExp(`[?&]like=${PRISONERS}(&|$)`));
+  await page.getByTestId('filter-toggle').click();
+  await expect(page.getByTestId('filter-panel')).toHaveCount(0);
+  await expect(chips(page)).toHaveCount(2);
 
   // Prisoners' mood is two quoted terms; its storytelling one guess; the rest nothing.
   await chipBody(page, 'Like Prisoners').click();
@@ -122,7 +133,7 @@ test('a fifth film is refused, with its reason', async ({ page, isMobile }) => {
 test('at 1024x768 the chips, the sheet and the picker stay inside the page', async ({ page, isMobile }) => {
   test.skip(isMobile, 'the phone pass has its own width');
   await page.setViewportSize({ width: 1024, height: 768 });
-  await page.goto(`/?like=${HEAT}&less=${PRISONERS}&kind=movie&filters=open`);
+  await page.goto(`/?like=${HEAT}&less=${PRISONERS}&kind=movie`);
   await expect(chips(page)).toHaveCount(2);
 
   await chipBody(page, 'Less like Prisoners').click();
@@ -134,8 +145,14 @@ test('at 1024x768 the chips, the sheet and the picker stay inside the page', asy
   await page.keyboard.press('Escape');
   await expect(sheet).toHaveCount(0);
 
+  await page.getByTestId('filter-toggle').click();
+  await expect(page.getByTestId('filter-like').getByTestId('recipe-chip')).toHaveCount(2);
   await page.getByTestId('film-search').fill('heat');
-  await expect(page.getByRole('dialog', { name: 'Films to like or less like' })).toBeVisible();
+  const drop = page.getByRole('dialog', { name: 'Films to like or less like' });
+  await expect(drop).toBeVisible();
+  const [field, under] = await Promise.all([page.getByTestId('film-search').boundingBox(), drop.boundingBox()]);
+  expect(under.y, 'the list covers its field').toBeGreaterThan(field.y + field.height);
+  expect(under.y + under.height).toBeLessThanOrEqual(768 + 1);
   const across = await page.evaluate(
     () => document.documentElement.scrollWidth - document.documentElement.clientWidth
   );

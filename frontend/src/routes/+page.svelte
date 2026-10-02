@@ -99,8 +99,6 @@
   let loadError = $state('');
   let termsOpen = $state(false);
   let peopleOpen = $state(false);
-  let termCell = $state();
-  let peopleCell = $state();
   // An empty grid's chips, each with what dropping it leaves: `{chip, n}`.
   let drops = $state([]);
   // `sortEcho` is the order the server says it used, which the control shows pressed.
@@ -127,6 +125,7 @@
   const reason = $derived(gridReason(homeFilters));
   const nFilters = $derived(activeFilterCount(homeFilters));
   const chips = $derived(chipOrder(homeFilters));
+  const rowChips = $derived(homeFilters.panelOpen ? chips.filter((c) => !c.term && !c.person) : chips);
   // Off, a search's grid is still the library: the catalogue and TMDB answer under it (decision 558).
   const scope = $derived(homeFilters.owned || reason === 'search' ? 'only' : 'any');
   // A search's weak tail is folded, not dropped; so is an include's, after its quoted matches.
@@ -616,8 +615,21 @@
   </div>
 {/snippet}
 
-<!-- A picker's cell: a row that opens it on a phone, a field-like button under its label from 721 px. -->
-{#snippet adder(id, label, hint, open, toggle)}
+{#snippet filterChip(chip)}
+  <FilterChip
+    variant={chip.variant}
+    mode={chip.mode}
+    label={chip.label}
+    facet={chip.facet}
+    person={chip.person}
+    testid={chip.testid}
+    onFlip={chip.term ? () => flipTerm(chip.term.id) : undefined}
+    onRemove={() => removeChip(chip.key)}
+  />
+{/snippet}
+
+<!-- A picker's cell on a phone: a row that opens its sheet, what it has chosen under it (board B1). -->
+{#snippet adder(id, label, open, toggle, chosen)}
   <span class="label" id="{id}-label">{label}</span>
   <button
     class="add"
@@ -627,7 +639,37 @@
     aria-expanded={open}
     data-testid="filter-{id}"
     onclick={toggle}
-  >{#if wide}{hint}{:else}Add<Icon name="chevron-right" size={18} />{/if}</button>
+  >Add<Icon name="chevron-right" size={18} /></button>
+  {#if chosen.length}
+    <div class="picked">{#each chosen as chip (chip.key)}{@render filterChip(chip)}{/each}</div>
+  {/if}
+{/snippet}
+
+{#snippet termPicker(inline)}
+  <TermPicker
+    {inline}
+    open={termsOpen}
+    {kinds}
+    chosen={homeFilters.terms}
+    onInclude={(term) => (setTerm(term, 'in'), load())}
+    onLeaveOut={(term) => (setTerm(term, 'out'), load())}
+    onRemove={(term) => removeChip(`term:${term.term}`)}
+    onClose={() => (termsOpen = false)}
+    onSearchTitles={searchTitles}
+  />
+{/snippet}
+
+{#snippet peoplePicker(inline, together)}
+  <PeoplePicker
+    {inline}
+    open={peopleOpen}
+    {kinds}
+    chosen={homeFilters.people}
+    combinedLine={together}
+    onAdd={(person) => (addPerson(person), load())}
+    onRemove={(person) => removeChip(`person:${person.person_ids.join(',')}`)}
+    onClose={() => (peopleOpen = false)}
+  />
 {/snippet}
 
 {#snippet homeBar()}
@@ -665,6 +707,13 @@
 </div>
 
 {#if homeFilters.panelOpen}
+  {@const n = homeFilters.people.length}
+  {@const noun = kinds.length > 1 ? 'Titles' : kinds[0] === 'series' ? 'Series' : 'Films'}
+  <!-- What the people alone leave, as their cell's head says it (board B4). -->
+  {@const together =
+    n > 1 && reason === 'filter' && !gridStale && chips.every((c) => c.variant === 'person')
+      ? `${noun} with ${n === 2 ? 'both' : `all ${n}`}: ${total.toLocaleString()} in your library`
+      : ''}
   <!-- A cell is a list row on a phone and a label over its control from 721 px (decision 554). -->
   <div class="list-group filterpanel" id="home-filters" data-testid="filter-panel">
     <!-- On a phone the select covers its row, so a tap anywhere on the row opens the native picker. -->
@@ -704,53 +753,41 @@
         data-testid="filter-owned"
       ><span class="knob"></span></button>
     </div>
-    <div class="cell list-row adder half" bind:this={termCell}>
-      {@render adder('terms', "What it's like", 'Add a term', termsOpen, () => (termsOpen = !termsOpen))}
-    </div>
-    <div class="cell list-row adder half" bind:this={peopleCell}>
-      {@render adder('people', 'People', 'Add a person', peopleOpen, () => (peopleOpen = !peopleOpen))}
-    </div>
+    <!-- From 721 px each picker's cell is its field, its chips in it (boards B1 to B4). -->
+    {#if wide}
+      <div class="cell half">
+        <span class="label">What it's like</span>
+        {@render termPicker(true)}
+      </div>
+      <div class="cell half">
+        <div class="cellhead">
+          <span class="label">People</span>
+          {#if together}<span class="footnote" data-testid="people-combined">{together}</span>{/if}
+        </div>
+        {@render peoplePicker(true, '')}
+      </div>
+    {:else}
+      <div class="cell list-row adder">
+        {@render adder('terms', "What it's like", termsOpen, () => (termsOpen = true), chips.filter((c) => c.term))}
+      </div>
+      <div class="cell list-row adder">
+        {@render adder('people', 'People', peopleOpen, () => (peopleOpen = true), chips.filter((c) => c.person))}
+      </div>
+    {/if}
     <LikeFilmsCell />
   </div>
-  <!-- A sheet on a phone, a popover under its cell on a desktop (decision 554 item 1). -->
-  <TermPicker
-    open={termsOpen}
-    {kinds}
-    chosen={homeFilters.terms}
-    anchor={termCell}
-    onInclude={(term) => (setTerm(term, 'in'), load())}
-    onLeaveOut={(term) => (setTerm(term, 'out'), load())}
-    onRemove={(term) => removeChip(`term:${term.term}`)}
-    onClose={() => (termsOpen = false)}
-    onSearchTitles={searchTitles}
-  />
-  <PeoplePicker
-    open={peopleOpen}
-    {kinds}
-    chosen={homeFilters.people}
-    anchor={peopleCell}
-    onAdd={(person) => (addPerson(person), load())}
-    onRemove={(person) => removeChip(`person:${person.person_ids.join(',')}`)}
-    onClose={() => (peopleOpen = false)}
-  />
+  {#if !wide}
+    {@render termPicker(false)}
+    {@render peoplePicker(false, together)}
+  {/if}
 {/if}
 
-<!-- Every set filter is a chip, the panel open or shut (decision 557, board B7). -->
-{#if chips.length || homeFilters.like.length || homeFilters.less.length}
+<!-- Every set filter is a chip (decision 557, board B7); with the panel open a term, a person or a
+     recipe's film shows in its own cell instead. -->
+{#if rowChips.length || (!homeFilters.panelOpen && (homeFilters.like.length || homeFilters.less.length))}
   <div class="chips" role="group" aria-label="Set filters">
-    <RecipeChips />
-    {#each chips as chip (chip.key)}
-      <FilterChip
-        variant={chip.variant}
-        mode={chip.mode}
-        label={chip.label}
-        facet={chip.facet}
-        person={chip.person}
-        testid={chip.testid}
-        onFlip={chip.term ? () => flipTerm(chip.term.id) : undefined}
-        onRemove={() => removeChip(chip.key)}
-      />
-    {/each}
+    {#if !homeFilters.panelOpen}<RecipeChips />{/if}
+    {#each rowChips as chip (chip.key)}{@render filterChip(chip)}{/each}
   </div>
 {/if}
 
@@ -1093,11 +1130,21 @@
   }
   .adder {
     position: relative;
+    flex-wrap: wrap;
   }
-  /* On a phone the whole row opens the picker, its "Add" where a value would sit. */
+  .adder > .label {
+    min-height: 36px;
+    display: flex;
+    align-items: center;
+  }
+  /* On a phone the row's first line opens the picker, its "Add" where a value would sit; the chips
+     under it keep their own taps. */
   .adder .add {
     position: absolute;
-    inset: 0;
+    top: 0;
+    left: 0;
+    right: 0;
+    height: 52px;
     display: flex;
     align-items: center;
     justify-content: flex-end;
@@ -1112,6 +1159,24 @@
   }
   .adder .add:focus-visible {
     outline-offset: -2px;
+  }
+  .picked {
+    flex: 1 0 100%;
+    min-width: 0;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding: 4px 0 6px;
+  }
+  .cellhead {
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 12px;
+  }
+  .cellhead .footnote {
+    margin: 0;
+    text-align: right;
   }
 
   .chips {
@@ -1244,6 +1309,7 @@
     }
     /* Each cell draws the hairlines above and before it; the panel clips the outer ones. */
     .filterpanel > .cell {
+      display: flex;
       flex-direction: column;
       align-items: stretch;
       gap: 6px;
@@ -1251,7 +1317,8 @@
       padding: 12px 16px 14px;
       box-shadow: -0.5px -0.5px 0 var(--separator);
     }
-    .cell > .label {
+    .cell > .label,
+    .cellhead > .label {
       font-size: var(--fs-footnote);
       line-height: 18px;
       color: var(--text-3);
@@ -1276,16 +1343,6 @@
     }
     .filterpanel > .half {
       grid-column: span 2;
-    }
-    .adder .add {
-      position: static;
-      justify-content: flex-start;
-      height: 40px;
-      padding: 0 12px;
-      border-radius: var(--r-sm);
-      background: var(--surface-2);
-      font-size: var(--fs-subhead);
-      line-height: 20px;
     }
     /* Fixed columns (decision 554 item 3); what a row leaves over goes into its gaps. */
     .grid {

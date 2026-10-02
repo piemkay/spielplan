@@ -70,9 +70,16 @@ export function rankTerms(vocab, q) {
   return hits.map(({ rank, ...hit }) => hit);
 }
 
-/** The facets in the vocabulary's order, each with its terms most carried first; `top` is the first eight. */
+const ORDER = FACETS.map(([facet]) => facet);
+const place = (facet) => (ORDER.includes(facet) ? ORDER.indexOf(facet) : ORDER.length);
+
+/**
+ * The facets in Taste's order, as the boards draw them, a facet it lacks after them in the
+ * vocabulary's; each with its terms most carried first; `top` is the first eight.
+ */
 export function browseFacets(vocab) {
-  return (vocab?.facets ?? [])
+  return [...(vocab?.facets ?? [])]
+    .sort((a, b) => place(a.facet) - place(b.facet))
     .map(({ facet }) => {
       const terms = (vocab.terms ?? [])
         .filter((t) => t.facet === facet)

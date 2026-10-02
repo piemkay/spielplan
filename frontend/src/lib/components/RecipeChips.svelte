@@ -1,5 +1,5 @@
 <script>
-  // The recipe's films, first in Home's chip row with the Filters open or shut (decision 560).
+  // The recipe's films, first in Home's chip row while the Filters are shut (decision 560).
   import { recipe, removeFilm } from '$lib/recipe.svelte.js';
   import RecipeChip from './RecipeChip.svelte';
   import RecipeGroupSheet from './RecipeGroupSheet.svelte';

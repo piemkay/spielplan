@@ -303,8 +303,9 @@ test("What it's like and People open where they belong: a popover on a desktop, 
   page,
   isMobile
 }) => {
-  // Decisions 554 item 1 and 557: the two cells share one row from 721 px, and their pickers are
-  // overlays, a popover under the cell on a desktop and a sheet on a phone. Nothing is chosen.
+  // Decisions 554 item 1 and 557: the two cells share one row from 721 px, each its own field, and
+  // their lists are overlays, a popover under the field on a desktop and a sheet on a phone. Nothing
+  // is chosen.
   const viewports = isMobile ? [page.viewportSize()] : [{ width: 1280, height: 800 }, { width: 1024, height: 768 }];
   for (const viewport of viewports) {
     await page.setViewportSize(viewport);
@@ -322,6 +323,8 @@ test("What it's like and People open where they belong: a popover on a desktop, 
     }
     for (const [cell, name] of [[terms, "What it's like"], [people, 'People']]) {
       await cell.click();
+      // A desktop's People field lists only what a name finds.
+      if (name === 'People' && !isMobile) await page.getByTestId('people-search').fill('vill');
       const picker = page.getByRole('dialog', { name });
       await expect(picker).toBeVisible();
       const box = await picker.boundingBox();

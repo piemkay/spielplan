@@ -21,7 +21,7 @@
     const a = anchor.getBoundingClientRect();
     const vw = window.innerWidth;
     const vh = window.innerHeight;
-    const w = Math.min(width, vw - 2 * EDGE);
+    const w = Math.min(width ?? a.width, vw - 2 * EDGE);
     const below = vh - a.bottom - GAP - EDGE;
     const above = a.top - GAP - EDGE;
     const up = below < Math.max(panel.scrollHeight, WANTED) && above > below;
@@ -45,7 +45,11 @@
     untrack(measure);
     window.addEventListener('resize', measure);
     window.addEventListener('scroll', measure, true);
+    // A field that grows a line of chips pushes the popover down with it.
+    const grows = typeof ResizeObserver === 'undefined' ? null : new ResizeObserver(() => measure());
+    if (anchor) grows?.observe(anchor);
     return () => {
+      grows?.disconnect();
       window.removeEventListener('resize', measure);
       window.removeEventListener('scroll', measure, true);
       place = null;
