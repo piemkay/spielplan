@@ -265,6 +265,15 @@ def test_the_derived_line_names_every_liked_film_even_one_read_by_us_alone():
     assert len({c for c, _q in more} & set(t.operand(2).cols.tolist())) == 1
 
 
+def test_a_term_one_liked_film_quotes_reads_quoted_though_another_names_it_first():
+    t = make({1: ["mood.dark", "register.plain"], 2: ["mood.dark!", "visual.pastel!"], **filler(30)})
+    recipe = [Ingredient(1), Ingredient(2)]
+    more, _less = mix.derived(t, recipe, ops(t, recipe))
+    assert [(t.terms[c], q) for c, q in more] == [
+        ("mood.dark", True), ("visual.pastel", True), ("register.plain", False)
+    ]
+
+
 def test_the_why_credits_each_group_to_one_film_and_names_a_less_films_own_terms():
     t = make({
         1: A, 2: B, 3: ["themes.war", "mood.grim", "mood.dark"],

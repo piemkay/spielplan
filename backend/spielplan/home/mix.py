@@ -448,8 +448,13 @@ def derived(
         named: dict[int, bool] = {}
         for turn in itertools.zip_longest(*ranked):
             for term in turn:
-                if term is not None and len(named) < DERIVED:
-                    named.setdefault(*term)
+                if term is None:
+                    continue
+                col, quoted = term
+                if col in named:
+                    named[col] |= quoted
+                elif len(named) < DERIVED:
+                    named[col] = quoted
         sides.append(sorted(named.items(), key=lambda term: not term[1]))
     return sides[0], sides[1]
 
