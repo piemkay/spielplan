@@ -42,6 +42,7 @@ _INT32_MAX = 2**31 - 1
 def api() -> str:
     return settings().tmdb_api_base.rstrip("/")
 
+
 # One call carries what would otherwise be ten.
 MOVIE_APPEND = ",".join([
     "credits", "keywords", "external_ids", "release_dates", "reviews",

@@ -9,7 +9,7 @@ services:
       - "127.0.0.1:${DB_PORT:-5432}:5432"
 
   # Decision 483's no-egress switch: a harness run asks no internet host for a poster. TMDB's API is the
-  # fake below, for both processes; no key is seeded, a spec sets and clears one.
+  # fake below, for both processes; no key is seeded, and the admin route that sets one cannot clear it.
   backend:
     environment:
       SPIELPLAN_ART_EGRESS: "false"

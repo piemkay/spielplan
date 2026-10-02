@@ -108,7 +108,8 @@ async def search_tmdb(
     """From TMDB's hits of the kinds, less those Spielplan holds; absent with no key, a query under three
     characters, or TMDB paused or failing."""
     absent: dict[str, Any] = {"available": False, "items": []}
-    query = " ".join(q.split()).casefold()
+    # lower, not casefold: casefold sends "weisse" for "weiße", which TMDB need not match.
+    query = " ".join(q.split()).lower()
     if len(query) < MIN_QUERY:
         return absent
     kinds = library.normalise_kinds(kinds)

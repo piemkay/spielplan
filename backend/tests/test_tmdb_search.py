@@ -146,6 +146,13 @@ async def test_a_repeat_is_answered_from_memory_for_ten_minutes(keyed, art, fake
     assert len(transport.asked) == 2
 
 
+async def test_the_query_reaches_tmdb_as_typed_but_for_case_and_spacing(keyed, art, fake_tmdb):
+    transport = Tmdb(fake_tmdb.app)
+    svc = await art(transport)
+    await _search(svc, keyed, "  Das  Weiße Band ")
+    assert transport.asked[0].params["query"] == "das weiße band"
+
+
 async def test_no_key_or_a_short_query_asks_nobody(db, secrets_key, art, fake_tmdb):
     transport = Tmdb(fake_tmdb.app)
     svc = await art(transport)
