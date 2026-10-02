@@ -82,12 +82,27 @@ class RecentLines(logging.Handler):
 HANDLER = RecentLines()
 
 
+class _PathOnly(logging.Filter):
+    """uvicorn's access line `(client, method, path?query, http version, status)` keeps the path alone:
+    a search's text is kept nowhere (decision 558)."""
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = record.args
+        if isinstance(args, tuple) and len(args) == 5:
+            record.args = (*args[:2], str(args[2]).split("?", 1)[0], *args[3:])
+        return True
+
+
+_PATH_ONLY = _PathOnly()
+
+
 def configure() -> None:
     """Root logging for both processes. httpx logs every request URL at INFO, query keys and push
-    endpoints included, so it stays at WARNING."""
+    endpoints included, so it stays at WARNING; the web process's access lines lose their query."""
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)-7s %(name)s %(message)s")
     for name in ("httpx", "httpcore"):
         logging.getLogger(name).setLevel(logging.WARNING)
+    logging.getLogger("uvicorn.access").addFilter(_PATH_ONLY)
 
 
 def install() -> None:
