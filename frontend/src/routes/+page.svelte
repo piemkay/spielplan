@@ -205,6 +205,11 @@
 
   async function load({ append = false } = {}) {
     const seq = ++requestSeq;
+    // A recipe's grid reads for itself; this one reads again once the recipe is gone.
+    if (reason === 'recipe') {
+      loading = false;
+      return;
+    }
     const query = titlesQuery(kinds, { offset: append ? offset : 0 });
     const asked = reason;
     loading = true;
@@ -385,6 +390,14 @@
       kindNote = `${dropped.join(' and ')} cleared — no ${noun} match ${them}.`;
     }
   }
+
+  // Nothing read this grid while a recipe stood in for it, and a recipe may have cleared the search.
+  let wasRecipe = false;
+  $effect(() => {
+    const now = reason === 'recipe';
+    if (wasRecipe && !now) untrack(() => load());
+    wasRecipe = now;
+  });
 
   let debounce;
   function onQuery() {

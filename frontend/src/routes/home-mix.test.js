@@ -139,4 +139,17 @@ describe('a recipe on Home (decisions 559 and 560)', () => {
     expect(homeFilters.like).toEqual([]);
     expect(target.querySelector('[data-testid="home-mode"]').dataset.mode).toBe('shelves');
   });
+
+  it('leaves the catalogue unread under a recipe, and reads it once the recipe goes', async () => {
+    homeFilters.like = ['245'];
+    homeFilters.terms = [{ id: 'x.heist', label: 'heist', facet: 'structure', mode: 'in' }];
+    await open();
+    const titles = () => seen.filter((u) => u.startsWith('/api/titles?'));
+    expect(titles()).toEqual([]);
+    target.querySelector('[data-testid="recipe-chip"] .x').click();
+    await settle();
+    // The grid's own read, then the empty grid's drop counts.
+    expect(titles()[0]).toMatch(/term=x\.heist.*limit=60/);
+    expect(target.querySelector('[data-testid="home-mode"]').dataset.reason).toBe('filter');
+  });
 });
