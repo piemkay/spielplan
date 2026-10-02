@@ -166,7 +166,7 @@
 
 {#snippet poster(film, on, mark)}
   <span class="art" class:on>
-    <RatePoster title={film} showName={false} lazy />
+    <RatePoster title={film} showName="tile" lazy />
     {#if film.seen}<span class="watched" data-testid="setup-watched">{@render check(14)}</span>{/if}
     {#if mark}<span class="badge">{@render check(16)}</span>{/if}
   </span>
@@ -254,6 +254,7 @@
           <div class="lead">
             <h1 class="title-1 word" data-testid="setup-step" data-tier={step.tier}>{step.word}</h1>
             <p class="hint">{step.hint}</p>
+            {#if step.note}<p class="hint second" data-testid="setup-note">{step.note}</p>{/if}
             {#if wide}{@render whyNot()}{/if}
           </div>
 
@@ -262,7 +263,7 @@
               <p class="strip-label">Not quite these · {setup.steps[setup.at - 1].word}</p>
               <div class="refs" aria-hidden="true">
                 {#each (above.length > 6 ? above.slice(0, 5) : above) as film (film.id)}
-                  <span class="ref"><RatePoster title={film} showName={false} /></span>
+                  <span class="ref"><RatePoster title={film} showName="tile" /></span>
                 {/each}
                 {#if above.length > 6}<span class="ref rest">+{above.length - 5}</span>{/if}
               </div>
@@ -439,6 +440,9 @@
     line-height: 18px;
     color: var(--text-2);
   }
+  .second {
+    color: var(--text-3);
+  }
   .strip-label {
     margin-top: 12px;
     font-size: var(--fs-footnote);
@@ -531,12 +535,14 @@
   .art.on {
     box-shadow: 0 0 0 2px var(--text);
   }
+  /* `.badge` also names design.css's status pill, whose padding would push the check off centre. */
   .watched,
   .badge {
     position: absolute;
     top: 6px;
     width: 22px;
     height: 22px;
+    padding: 0;
     display: grid;
     place-items: center;
   }

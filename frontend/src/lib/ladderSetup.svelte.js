@@ -13,7 +13,7 @@ export const PAGE = 12;
 export const setup = $state({
   /** @type {'loading' | 'steps' | 'done' | 'set' | 'error'} `set`: the ladder was set up before */
   status: 'loading',
-  /** @type {{ tier: number, word: string, hint: string }[]} best first */
+  /** @type {{ tier: number, word: string, hint: string, note?: string | null }[]} best first */
   steps: [],
   at: 0,
   /** @type {Draft[]} one per step */
