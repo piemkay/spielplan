@@ -30,15 +30,13 @@ import PeoplePicker from './PeoplePicker.svelte';
 const CAINE = { person_ids: [12, 13], person_id: 12, name: 'Michael Caine', photo: false };
 
 let target;
-let anchor;
 let app;
 
 beforeEach(() => {
   vi.useFakeTimers();
   vi.mocked(get).mockClear();
   target = document.createElement('div');
-  anchor = document.createElement('div');
-  document.body.append(anchor, target);
+  document.body.append(target);
 });
 
 afterEach(() => {
@@ -46,14 +44,12 @@ afterEach(() => {
   app = null;
   vi.useRealTimers();
   target.remove();
-  anchor.remove();
   history.replaceState(null, '');
 });
 
-/** @param {{width?: number, [prop: string]: any}} [options] */
-function open({ width = 390, ...props } = {}) {
-  Object.defineProperty(window, 'innerWidth', { value: width, configurable: true });
-  const all = { open: true, kinds: ['movie'], chosen: [], anchor, onAdd: vi.fn(), onRemove: vi.fn(), onClose: vi.fn(), ...props };
+/** @param {{[prop: string]: any}} [props] */
+function open(props = {}) {
+  const all = { open: true, kinds: ['movie'], chosen: [], onAdd: vi.fn(), onRemove: vi.fn(), onClose: vi.fn(), ...props };
   app = mount(PeoplePicker, { target, props: all });
   flushSync();
   return all;
@@ -141,8 +137,7 @@ describe('the people picker', () => {
   });
 
   it('forgets a search still pending when it closes', async () => {
-    Object.defineProperty(window, 'innerWidth', { value: 1280, configurable: true });
-    const props = $state({ open: true, kinds: ['movie'], chosen: [], anchor, onAdd: vi.fn(), onRemove: vi.fn(), onClose: vi.fn() });
+    const props = $state({ open: true, kinds: ['movie'], chosen: [], onAdd: vi.fn(), onRemove: vi.fn(), onClose: vi.fn() });
     app = mount(PeoplePicker, { target, props });
     flushSync();
     type('vill');
@@ -158,15 +153,36 @@ describe('the people picker', () => {
     expect(rows()).toHaveLength(0);
   });
 
-  it('is a sheet on a phone and a popover under its cell on a desktop', () => {
+  it('is a sheet without `inline`', () => {
     open();
     expect(target.querySelector('[aria-modal="true"]')).not.toBeNull();
     expect(target.querySelector('.popover')).toBeNull();
-    unmount(app);
-    app = null;
-    open({ width: 1024 });
-    expect(target.querySelector('.popover')).not.toBeNull();
-    expect(target.querySelector('[aria-modal="true"]')).toBeNull();
+  });
+});
+
+describe('the people field on a desktop', () => {
+  it("is the cell's field with its people as chips, and what is typed drops under it", async () => {
+    const props = open({ inline: true, open: false, chosen: [CAINE] });
+    const cell = target.querySelector('[data-testid="filter-people"]');
+    expect(cell.contains(field())).toBe(true);
+    expect(field().placeholder).toBe('Add a person');
+    const chip = cell.querySelector('[data-testid="person-chip"]');
+    chip.querySelector('[aria-label="Remove Michael Caine"]').click();
+    expect(props.onRemove).toHaveBeenCalledWith(CAINE);
+
+    field().focus();
+    type('vill');
+    expect(target.querySelector('.popover'), 'nothing to show before the answer').toBeNull();
+    await wait(220);
+    const popover = target.querySelector('.popover');
+    expect(popover.getAttribute('aria-label')).toBe('People');
+    expect(popover.querySelector('[data-testid="people-search"]'), 'no second field in the list').toBeNull();
+    expect(rows()[0].classList.contains('active')).toBe(true);
+    field().dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    flushSync();
+    expect(props.onAdd).toHaveBeenCalledWith(DENIS);
+    expect(field().value).toBe('');
+    expect(target.querySelector('.popover')).toBeNull();
     expect(document.activeElement).toBe(field());
   });
 });

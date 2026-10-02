@@ -122,6 +122,42 @@ describe('the film picker on a desktop', () => {
     expect(target.querySelector('[role="dialog"]').textContent).toContain('No film found for zz.');
   });
 
+  it('shuts on Escape or a press outside after a Like, and the focus it hands back opens nothing', async () => {
+    open({ inline: true });
+    await type('kn');
+    const like = rows()[0].querySelector('button');
+    like.focus();
+    press(0, 'Like');
+    document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+    flushSync();
+    expect(target.querySelector('[role="dialog"]')).toBeNull();
+    expect(document.activeElement).toBe(field());
+    flushSync();
+    expect(target.querySelector('[role="dialog"]')).toBeNull();
+
+    field().click();
+    flushSync();
+    expect(target.querySelector('[role="dialog"]'), 'a press on the field opens it again').not.toBeNull();
+    rows()[1].querySelector('button').focus();
+    document.body.dispatchEvent(new Event('pointerdown', { bubbles: true }));
+    flushSync();
+    expect(target.querySelector('[role="dialog"]')).toBeNull();
+  });
+
+  it("holds the recipe's films as chips in the field, and a chip's tap switches it", async () => {
+    remember({ id: 245, name: 'Knives Out' });
+    homeFilters.like = ['245'];
+    open({ inline: true });
+    const chip = target.querySelector('[data-testid="recipe-chip"]');
+    expect(chip.parentElement.contains(field())).toBe(true);
+    chip.querySelector('.body').click();
+    flushSync();
+    expect(homeFilters.less).toEqual(['245']);
+    expect(target.querySelector('[role="dialog"]'), 'a chip opens no list').toBeNull();
+    await type('o');
+    expect(target.querySelector('[role="dialog"]').textContent).toContain('Tap a chip to switch.');
+  });
+
   it('refuses a fifth film, saying why', async () => {
     for (const id of [1, 2, 3, 4]) remember({ id, name: `Film ${id}` });
     homeFilters.like = ['1', '2', '3', '4'];
@@ -166,9 +202,16 @@ describe("Like these films' cell", () => {
     expect(el.querySelector('[data-testid="film-search"]').placeholder).toBe('Add a film');
   });
 
-  it('is a row on a phone that opens the picker as a sheet', () => {
+  it('is a row on a phone that opens the picker as a sheet, its films under it switching on a tap', () => {
+    remember({ id: 245, name: 'Knives Out' });
+    homeFilters.like = ['245'];
     const el = cell(390);
-    expect(el.textContent.replace(/\s+/g, ' ').trim()).toBe('Like these films Add');
+    expect(el.closest('.cell').querySelector('.label').textContent).toBe('Like these films');
+    const chip = target.querySelector('.cell [data-testid="recipe-chip"] .body');
+    expect(chip.getAttribute('aria-label')).toBe('Like Knives Out. Switch to less like');
+    chip.click();
+    flushSync();
+    expect(homeFilters.less).toEqual(['245']);
     expect(target.querySelector('[role="dialog"]')).toBeNull();
     el.click();
     flushSync();

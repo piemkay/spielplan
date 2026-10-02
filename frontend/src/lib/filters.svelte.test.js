@@ -75,18 +75,24 @@ describe('a typed term', () => {
 });
 
 describe('browsing', () => {
-  it('groups by facet in the vocabulary\'s order, the most carried first, eight on top', () => {
+  it("groups by facet in Taste's order, not the vocabulary's, the most carried first, eight on top", () => {
     const many = Array.from({ length: 10 }, (_, i) => term(`themes.t${i}`, `t${i}`, i));
     const vocab = {
-      facets: [{ facet: 'themes' }, { facet: 'mood' }, { facet: 'era' }],
-      terms: [term('mood.calm', 'calm', 5), term('mood.bleak', 'bleak', 9), term('mood.airy', 'airy', 5), ...many]
+      // As a bundle without dna_facet.ord sends them: alphabetical, and one Taste does not know.
+      facets: [{ facet: 'era' }, { facet: 'lore' }, { facet: 'mood' }, { facet: 'themes' }],
+      terms: [
+        term('mood.calm', 'calm', 5), term('mood.bleak', 'bleak', 9), term('mood.airy', 'airy', 5),
+        term('lore.myth', 'myth', 2), term('era.noir', 'noir', 1), ...many
+      ]
     };
     const facets = browseFacets(vocab);
-    expect(facets.map((f) => [f.facet, f.name, f.total])).toEqual([['themes', 'Themes', 10], ['mood', 'Mood', 3]]);
-    expect(facets[0].top.map((t) => t.label)).toEqual(['t9', 't8', 't7', 't6', 't5', 't4', 't3', 't2']);
-    expect(facets[0].terms).toHaveLength(10);
-    expect(facets[1].top.map((t) => t.label)).toEqual(['bleak', 'airy', 'calm']);
-    expect(facets[1].colour).toBe('var(--facet-mood)');
+    expect(facets.map((f) => [f.facet, f.name, f.total])).toEqual([
+      ['mood', 'Mood', 3], ['themes', 'Themes', 10], ['era', 'Era', 1], ['lore', 'Lore', 1]
+    ]);
+    expect(facets[1].top.map((t) => t.label)).toEqual(['t9', 't8', 't7', 't6', 't5', 't4', 't3', 't2']);
+    expect(facets[1].terms).toHaveLength(10);
+    expect(facets[0].top.map((t) => t.label)).toEqual(['bleak', 'airy', 'calm']);
+    expect(facets[0].colour).toBe('var(--facet-mood)');
   });
 });
 

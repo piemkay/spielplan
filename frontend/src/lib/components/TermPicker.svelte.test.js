@@ -41,29 +41,25 @@ import TermPicker from './TermPicker.svelte';
 const COZY = { term: 'mood.cozy', label: 'cozy & mellow', facet: 'mood' };
 
 let target;
-let anchor;
 let app;
 
 beforeEach(() => {
   target = document.createElement('div');
-  anchor = document.createElement('div');
-  document.body.append(anchor, target);
+  document.body.append(target);
 });
 
 afterEach(() => {
   if (app) unmount(app);
   app = null;
   target.remove();
-  anchor.remove();
   session.user = null;
   history.replaceState(null, '');
 });
 
-/** @param {{width?: number, [prop: string]: any}} [options] */
-async function open({ width = 390, ...props } = {}) {
-  Object.defineProperty(window, 'innerWidth', { value: width, configurable: true });
+/** @param {{[prop: string]: any}} [props] */
+async function open(props = {}) {
   const all = {
-    open: true, kinds: ['movie'], chosen: [], anchor,
+    open: true, kinds: ['movie'], chosen: [],
     onInclude: vi.fn(), onLeaveOut: vi.fn(), onRemove: vi.fn(), onClose: vi.fn(),
     ...props
   };
@@ -84,7 +80,7 @@ const rows = () => [...target.querySelectorAll('[data-testid="term-row"]')];
 const labelOf = (row) => row.querySelector('.label').textContent;
 
 describe('the term picker on a phone', () => {
-  it('is a sheet that browses each facet in the vocabulary order, three terms each until All', async () => {
+  it("is a sheet that browses each facet in Taste's order, three terms each until All", async () => {
     await open();
     expect(target.querySelector('[role="dialog"]').getAttribute('aria-modal')).toBe('true');
     expect(target.querySelector('.popover')).toBeNull();
@@ -161,14 +157,36 @@ describe('the term picker on a phone', () => {
 });
 
 describe('the term picker on a desktop', () => {
-  it('is a popover under its cell, with the facets beside the open one\'s terms', async () => {
-    await open({ width: 1280 });
-    expect(target.querySelector('.popover')).not.toBeNull();
-    expect(target.querySelector('[aria-modal="true"]')).toBeNull();
-    expect(document.activeElement).toBe(target.querySelector('[data-testid="term-search"]'));
+  const field = () => /** @type {HTMLInputElement} */ (target.querySelector('[data-testid="term-search"]'));
+  const popover = () => target.querySelector('.popover');
+  const key = (k, el = field(), shiftKey = false) => {
+    el.dispatchEvent(new KeyboardEvent('keydown', { key: k, shiftKey, bubbles: true }));
+    flushSync();
+  };
+  async function press() {
+    field().focus();
+    field().click();
+    for (let i = 0; i < 4; i++) await Promise.resolve();
+    flushSync();
+  }
 
+  it("is the cell's field, its chips in it, and a press opens the facets beside the open one's terms", async () => {
+    const props = await open({ inline: true, open: false, chosen: [{ id: 'themes.heist', label: 'heist', facet: 'themes', mode: 'out' }] });
+    expect(target.querySelector('[data-testid="filter-terms"]').contains(field())).toBe(true);
+    expect(field().placeholder).toBe('Add a term');
+    const chip = target.querySelector('[data-testid="filter-terms"] [data-testid="term-chip"]');
+    expect(chip.dataset.mode).toBe('out');
+    chip.querySelector('[aria-label="Switch heist to include"]').click();
+    expect(props.onInclude).toHaveBeenCalledWith({ term: 'themes.heist', label: 'heist', facet: 'themes' });
+    expect(popover(), 'a chip of the field opens nothing').toBeNull();
+
+    await press();
+    expect(popover().getAttribute('aria-label')).toBe("What it's like");
+    expect(target.querySelector('[aria-modal="true"]')).toBeNull();
+    expect(popover().querySelector('[data-testid="term-search"]'), 'no second field in the list').toBeNull();
     const facets = [...target.querySelectorAll('.facet')];
     expect(facets.map((f) => f.querySelector('.name').textContent)).toEqual(['Mood', 'Themes']);
+    expect(facets[0].getAttribute('aria-pressed')).toBe('true');
     expect(facets[0].querySelector('.preview').textContent).toBe('tense, dark, bleak');
     expect(rows().map(labelOf)).toEqual(['tense', 'dark', 'bleak', 'cozy & mellow']);
     expect(rows()[0].querySelector('.n').textContent).toBe('328');
@@ -179,9 +197,50 @@ describe('the term picker on a desktop', () => {
     expect(rows().map(labelOf)).toEqual(['heist']);
   });
 
-  it('is a sheet without a cell to hang from', async () => {
-    await open({ width: 1280, anchor: null });
-    expect(target.querySelector('.popover')).toBeNull();
-    expect(target.querySelector('[aria-modal="true"]')).not.toBeNull();
+  it('includes the highlighted term on Enter and leaves the next out on Shift+Enter', async () => {
+    const props = await open({ inline: true, open: false });
+    await press();
+    type('e');
+    expect(rows().map(labelOf)).toEqual(['tense', 'bleak', 'cozy & mellow', 'heist']);
+    expect(rows()[0].classList.contains('active')).toBe(true);
+    key('Enter');
+    expect(props.onInclude).toHaveBeenCalledWith({ term: 'mood.tense', label: 'tense', facet: 'mood' });
+    key('ArrowDown');
+    key('ArrowDown');
+    key('Enter', field(), true);
+    expect(props.onLeaveOut).toHaveBeenCalledWith(COZY);
+  });
+
+  it('closes on Escape after a press inside it, and the focus it hands back opens nothing', async () => {
+    await open({ inline: true, open: false });
+    await press();
+    type('cosy');
+    const include = popover().querySelector('[aria-label="Include cozy & mellow"]');
+    include.focus();
+    include.click();
+    key('Escape', include);
+    expect(popover()).toBeNull();
+    expect(document.activeElement).toBe(field());
+    flushSync();
+    expect(popover()).toBeNull();
+    expect(field().getAttribute('aria-expanded')).toBe('false');
+  });
+
+  it("lists under its own row in Rank's Filters, where Escape shuts the list but not the sheet", async () => {
+    await open({ inline: true, open: false, drop: 'below', testid: 'rank-terms' });
+    const row = target.querySelector('[data-testid="rank-terms"]').closest('.list-row');
+    expect(row.textContent).toContain("What it's like");
+    await press();
+    expect(popover()).toBeNull();
+    expect(target.querySelectorAll('section').length).toBe(2);
+    type('heist');
+    expect(rows().map(labelOf)).toEqual(['heist']);
+    const sheet = vi.fn();
+    window.addEventListener('keydown', sheet);
+    key('Escape', rows()[0].querySelector('button'));
+    window.removeEventListener('keydown', sheet);
+    expect(rows()).toHaveLength(0);
+    expect(sheet).not.toHaveBeenCalled();
+    expect(document.activeElement).toBe(field());
   });
 });

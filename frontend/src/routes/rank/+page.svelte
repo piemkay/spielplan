@@ -847,19 +847,24 @@
           />
           <span class="unit">min</span>
         </label>
-        <!-- Home's term picker, a sheet over this one (decision 557 item 8). -->
-        <div class="list-row adder">
-          <span id="rank-terms-label">What it's like</span>
-          <button
-            class="add"
-            aria-labelledby="rank-terms-label rank-terms"
-            aria-haspopup="dialog"
-            onclick={() => (termsOpen = true)}
-            id="rank-terms"
-            data-testid="rank-terms"
-          >Add<Icon name="chevron-right" size={18} /></button>
-        </div>
-        {#if termChips.length}
+        <!-- Home's term picker (decision 557 item 8): in this row on a desktop (board B8), a sheet
+             over this one on a phone. -->
+        {#if wide}
+          {@render termPicker(true)}
+        {:else}
+          <div class="list-row adder">
+            <span id="rank-terms-label">What it's like</span>
+            <button
+              class="add"
+              aria-labelledby="rank-terms-label rank-terms"
+              aria-haspopup="dialog"
+              onclick={() => (termsOpen = true)}
+              id="rank-terms"
+              data-testid="rank-terms"
+            >Add<Icon name="chevron-right" size={18} /></button>
+          </div>
+        {/if}
+        {#if !wide && termChips.length}
           <div class="list-row picked">
             {#each termChips as chip (chip.key)}
               <FilterChip
@@ -882,15 +887,22 @@
   {/snippet}
 </Sheet>
 
-<TermPicker
-  open={termsOpen}
-  kinds={[rank.kind]}
-  chosen={draft.terms}
-  onInclude={(term) => setTerm(term, 'in')}
-  onLeaveOut={(term) => setTerm(term, 'out')}
-  onRemove={(term) => clearFilter(`term:${term.term}`)}
-  onClose={() => (termsOpen = false)}
-/>
+{#snippet termPicker(inline)}
+  <TermPicker
+    {inline}
+    drop="below"
+    open={termsOpen}
+    kinds={[rank.kind]}
+    chosen={draft.terms}
+    testid="rank-terms"
+    chipTestid="rank-sheet-term-chip"
+    onInclude={(term) => setTerm(term, 'in')}
+    onLeaveOut={(term) => setTerm(term, 'out')}
+    onRemove={(term) => clearFilter(`term:${term.term}`)}
+    onClose={() => (termsOpen = false)}
+  />
+{/snippet}
+{#if !wide}{@render termPicker(false)}{/if}
 
 <Sheet open={rank.queueOpen} onClose={endRound} label="Sharpen your list" width={480}>
   {#snippet children(close)}

@@ -1,7 +1,8 @@
 <script>
   // Like these films' title picker (decision 559 item 1, board C2): any title of either kind,
   // owned or not, that carries two or more taste terms; each joins the recipe liked or less liked.
-  // On a phone a sheet; on a desktop its field sits in the Filters cell and the list drops under it.
+  // On a phone a sheet; on a desktop the Filters cell is its field, the recipe's films its chips,
+  // and the list drops under it.
   import { get, qs } from '$lib/api.js';
   import { FULL, MAX_FILMS, addFilm, recipe, removeFilm, setSign } from '$lib/recipe.svelte.js';
   import Icon from './Icon.svelte';
@@ -9,8 +10,10 @@
   import RatePoster from './RatePoster.svelte';
   import RecipeChip from './RecipeChip.svelte';
   import Sheet from './Sheet.svelte';
+  import TokenField from './TokenField.svelte';
 
   let { open = false, inline = false, onClose = undefined } = $props();
+  const listId = $props.id();
 
   let q = $state('');
   let found = $state([]);
@@ -18,14 +21,15 @@
   let answered = $state('');
   let error = $state('');
   let active = $state(0);
-  let focused = $state(false);
+  // The inline drop, opened by a press or by typing.
+  let dropped = $state(false);
   let field = $state();
 
   const films = $derived(recipe.films);
   const full = $derived(films.length >= MAX_FILMS);
   const query = $derived(q.trim());
   const listed = $derived(
-    inline ? focused && Boolean(query) && (found.length > 0 || answered === query || full || Boolean(error)) : open
+    inline ? dropped && Boolean(query) && (found.length > 0 || answered === query || full || Boolean(error)) : open
   );
 
   let seq = 0;
@@ -65,14 +69,14 @@
     error = addFilm(film, sign) ?? '';
   }
 
-  // A phone's search key only searches: no row is highlighted there to take.
+  // The desktop field's keys; a phone's search key only searches, with no row highlighted to take.
   function onKey(event) {
-    if (!inline) return;
     if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
       event.preventDefault();
+      dropped = true;
       const step = event.key === 'ArrowDown' ? 1 : -1;
       active = Math.max(0, Math.min(found.length - 1, active + step));
-    } else if (event.key === 'Enter' && found[active]) {
+    } else if (event.key === 'Enter' && listed && found[active]) {
       event.preventDefault();
       choose(found[active], event.shiftKey ? 'less' : 'like');
     }
@@ -85,7 +89,7 @@
 </script>
 
 {#snippet search()}
-  <label class="find" class:inline bind:this={field}>
+  <label class="find">
     <Icon name="search" size={18} />
     <input
       type="search"
@@ -95,11 +99,18 @@
       aria-label="Find a film to like"
       placeholder="Add a film"
       data-testid="film-search"
-      onkeydown={onKey}
-      onfocus={() => (focused = true)}
-      oninput={() => (focused = true)}
     />
   </label>
+{/snippet}
+
+{#snippet chips()}
+  {#each films as f (f.id)}
+    <RecipeChip
+      film={f}
+      onFlip={() => setSign(f.id, f.sign === 'like' ? 'less' : 'like')}
+      onRemove={() => removeFilm(f.id)}
+    />
+  {/each}
 {/snippet}
 
 {#snippet list()}
@@ -142,14 +153,28 @@
     <p class="footnote note">No film found for {query}.</p>
   {/if}
   {#if inline && found.length}
-    <p class="footnote note">Enter likes the highlighted film, Shift+Enter makes it less like.</p>
+    <p class="footnote note">
+      Enter likes the highlighted film, Shift+Enter makes it less like.{films.length ? ' Tap a chip to switch.' : ''}
+    </p>
   {/if}
 {/snippet}
 
 {#if inline}
-  {@render search()}
-  <Popover open={listed} anchor={field} label="Films to like or less like" width={640} onClose={() => (focused = false)}>
-    <div class="drop">{@render list()}</div>
+  <TokenField
+    bind:value={q}
+    bind:field
+    label="Find a film to like"
+    placeholder="Add a film"
+    inputTestid="film-search"
+    expanded={listed}
+    controls={listId}
+    onpress={() => (dropped = true)}
+    oninput={() => (dropped = true)}
+    onkeydown={onKey}
+    {chips}
+  />
+  <Popover open={listed} anchor={field} label="Films to like or less like" width={640} onClose={() => (dropped = false)}>
+    <div class="drop" id={listId}>{@render list()}</div>
   </Popover>
 {:else}
   <Sheet {open} {onClose} label="Like these films">
@@ -161,15 +186,7 @@
       <div class="top">
         {@render search()}
         {#if films.length}
-          <div class="chosen" role="group" aria-label="In the recipe">
-            {#each films as f (f.id)}
-              <RecipeChip
-                film={f}
-                onFlip={() => setSign(f.id, f.sign === 'like' ? 'less' : 'like')}
-                onRemove={() => removeFilm(f.id)}
-              />
-            {/each}
-          </div>
+          <div class="chosen" role="group" aria-label="In the recipe">{@render chips()}</div>
           <p class="footnote hint">Tap a chip to switch between like and less like.</p>
         {/if}
       </div>
@@ -352,9 +369,5 @@
   }
   .drop .note {
     padding: 6px 8px;
-  }
-  .find.inline > input[type='search'][aria-label] {
-    min-height: 40px;
-    font-size: var(--fs-subhead);
   }
 </style>

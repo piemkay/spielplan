@@ -1079,11 +1079,17 @@ describe('the pickers in the Filters panel', () => {
     await tick();
     $('[aria-label="Include cozy & mellow"]').click();
     await tick();
-    expect(chipTexts()).toEqual(['term-chip:cozy & mellow']);
+    // While the panel is open the chip sits in its cell, not in the row (board B1).
+    expect(chipTexts()).toEqual([]);
+    const chip = () => $('[data-testid="filter-terms"] [data-testid="term-chip"]');
+    expect(chip().dataset.mode).toBe('in');
     $('[aria-label="Leave out cozy & mellow"]').click();
     await tick();
-    expect($('.chips [data-testid="term-chip"]').dataset.mode).toBe('out');
+    expect(chip().dataset.mode).toBe('out');
     expect(nav.replaced.at(-1)).toBe('/?not_term=mood.cozy&kind=movie&filters=open');
+    $('[data-testid="filter-toggle"]').click();
+    await tick();
+    expect($('.chips [data-testid="term-chip"]').dataset.mode).toBe('out');
   });
 
   it('adds a person from People', async () => {
@@ -1102,7 +1108,14 @@ describe('the pickers in the Filters panel', () => {
     await tick(100);
     $('[aria-label="Add Michael Caine"]').click();
     await tick();
-    expect(chipTexts()).toEqual(['person-chip:Michael Caine']);
+    expect($('[data-testid="filter-people"] [data-testid="person-chip"] .label').textContent).toBe('Michael Caine');
     expect(asked(seen).getAll('person')).toEqual(['12,13']);
+  });
+
+  it('names what two people leave in the head of their cell', async () => {
+    backend({ titles: (p) => ({ items: [film(1, 'Heat')], total: 4, hidden: {}, applied: applied(p) }) });
+    at('/?person=12,13&person=1&kind=movie&filters=open');
+    await openHome();
+    expect($('[data-testid="people-combined"]').textContent).toBe('Films with both: 4 in your library');
   });
 });

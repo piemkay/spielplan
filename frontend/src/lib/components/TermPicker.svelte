@@ -1,14 +1,18 @@
 <script>
-  // What it's like (decision 557, boards B2 and B3): the vocabulary, browsed by facet while the
-  // field is empty and ranked as it is typed, each term to include or leave out. A sheet on a
-  // phone; on a desktop a popover under the Filters cell that opened it.
+  // What it's like (decision 557, boards B2, B3 and B8): the vocabulary, browsed by facet while the
+  // field is empty and ranked as it is typed, each term to include or leave out. A sheet on a phone;
+  // `inline` on a desktop, where the Filters cell is its field and the list hangs under it: a popover
+  // on Home, rows under the field's own in Rank's Filters (`drop="below"`).
+  import { dismiss } from '$lib/dismiss.js';
   import { countLabel, facetColour } from '$lib/home.svelte.js';
   import { browseFacets, facetName, loadVocabulary, rankTerms } from '$lib/filters.svelte.js';
   import { session } from '$lib/session.svelte.js';
+  import { termLabel } from '$lib/terms.js';
   import FilterChip from './FilterChip.svelte';
   import Icon from './Icon.svelte';
   import Popover from './Popover.svelte';
   import Sheet from './Sheet.svelte';
+  import TokenField from './TokenField.svelte';
 
   let {
     open = false,
@@ -17,27 +21,34 @@
     onInclude,
     onLeaveOut,
     onRemove,
-    onClose,
-    anchor = null,
-    onSearchTitles = null
+    onClose = undefined,
+    onSearchTitles = null,
+    inline = false,
+    drop = 'popover',
+    testid = 'filter-terms',
+    chipTestid = 'term-chip'
   } = $props();
 
-  // Each facet's first rows on a phone; a desktop pane shows browseFacets' eight.
-  const PHONE_TOP = 3;
-
-  let width = $state(typeof window === 'undefined' ? 390 : window.innerWidth);
-  const desktop = $derived(Boolean(anchor) && width > 720);
+  // Each facet's first rows in a list of sections; Home's desktop pane shows browseFacets' eight.
+  const SECTION_TOP = 3;
+  const listId = $props.id();
 
   let vocab = $state(null);
   let error = $state('');
   let q = $state('');
+  // The inline field's list, opened by a press or by typing.
+  let listed = $state(false);
+  // The hit Enter takes.
+  let active = $state(0);
   // The facet the desktop pane shows, and the one listed whole after "All N in ...".
   let pane = $state('');
   let whole = $state('');
   let field = $state();
+  let input = $state();
   /** @type {Record<string, HTMLElement>} */
   const sections = $state({});
 
+  const below = $derived(drop === 'below');
   const kindsKey = $derived(kinds.join(','));
   const noun = $derived(kinds.length > 1 ? 'titles' : kinds[0] === 'series' ? 'series' : 'films');
   const facets = $derived(vocab ? browseFacets(vocab) : []);
@@ -49,10 +60,13 @@
 
   let reads = 0;
   $effect(() => {
-    if (!open) return;
+    if (!(inline ? listed : open)) return;
     const seq = ++reads;
-    q = '';
-    whole = '';
+    // A sheet opens on an empty field; the inline field keeps what was typed.
+    if (!inline) {
+      q = '';
+      whole = '';
+    }
     error = '';
     loadVocabulary(kindsKey.split(',')).then(
       (read) => {
@@ -62,11 +76,6 @@
         if (seq === reads) error = err.message;
       }
     );
-  });
-
-  // A popover is not a dialog that takes focus; the field it opens on does.
-  $effect(() => {
-    if (open && desktop && field) field.focus({ preventScroll: true });
   });
 
   const asTerm = (t) => ({ term: t.term ?? t.id, label: t.label, facet: t.facet });
@@ -81,21 +90,47 @@
 
   function hitMeta(t) {
     const parts = [facetName(t.facet), t.via ? `via ${t.via}` : null];
-    return [...parts, desktop ? null : countLabel({ total: t.owned, kinds })].filter(Boolean).join(' · ');
+    return [...parts, inline ? null : countLabel({ total: t.owned, kinds })].filter(Boolean).join(' · ');
+  }
+
+  // Arrows move the highlight, Enter includes it and Shift+Enter leaves it out (board B3).
+  function onKey(event) {
+    if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+      event.preventDefault();
+      listed = true;
+      active = Math.max(0, Math.min(hits.length - 1, active + (event.key === 'ArrowDown' ? 1 : -1)));
+    } else if (event.key === 'Enter' && listed && hits[active]) {
+      event.preventDefault();
+      pick(hits[active], event.shiftKey ? 'out' : 'in');
+    }
+  }
+
+  // Inside Rank's Filters, an Escape that shuts the list leaves the sheet open.
+  function closeBelow(event) {
+    if (!listed) return;
+    listed = false;
+    if (event?.type !== 'keydown') return;
+    event.stopPropagation();
+    input?.focus();
+  }
+
+  function searchTitles() {
+    const words = query;
+    q = '';
+    listed = false;
+    onSearchTitles?.(words);
   }
 </script>
 
-<svelte:window bind:innerWidth={width} />
-
-{#snippet row(t, meta)}
+{#snippet row(t, meta, on)}
   {@const mode = modeOf(t.term)}
-  <div class="row" data-testid="term-row">
+  <div class="row" class:active={on} data-testid="term-row">
     <span class="dot" style:background={facetColour(t.facet)} aria-hidden="true"></span>
     <span class="text">
       <span class="label">{t.label}{#if showModel}<span class="rawid">{t.term}</span>{/if}</span>
       {#if meta}<span class="meta">{meta}</span>{/if}
     </span>
-    {#if desktop}<span class="n">{t.owned.toLocaleString()}</span>{/if}
+    {#if inline}<span class="n">{t.owned.toLocaleString()}</span>{/if}
     <span class="acts">
       <button class="act press" aria-pressed={mode === 'in'} aria-label="Include {t.label}" onclick={() => pick(t, 'in')}>Include</button>
       <button class="act press" aria-pressed={mode === 'out'} aria-label="Leave out {t.label}" onclick={() => pick(t, 'out')}>Leave out</button>
@@ -121,7 +156,6 @@
     <Icon name="search" size={18} />
     <input
       type="search"
-      bind:this={field}
       bind:value={q}
       autocomplete="off"
       enterkeyhint="search"
@@ -145,7 +179,7 @@
       {/each}
     </div>
   {/if}
-  {#if !desktop && vocab && !query && facets.length}
+  {#if vocab && !query && facets.length}
     <nav class="jump" aria-label="Kinds of taste term" data-nobar>
       {#each facets as f (f.facet)}
         <button class="pill" onclick={() => sections[f.facet]?.scrollIntoView?.({ block: 'start' })}>
@@ -156,6 +190,41 @@
   {/if}
 {/snippet}
 
+{#snippet fieldChips()}
+  {#each chips as t (t.id)}
+    <FilterChip
+      variant="term"
+      mode={t.mode}
+      label={t.label || termLabel(t.id)}
+      facet={t.facet}
+      testid={chipTestid}
+      onFlip={() => (t.mode === 'in' ? onLeaveOut : onInclude)?.(asTerm(t))}
+      onRemove={() => onRemove?.(asTerm(t))}
+    />
+  {/each}
+{/snippet}
+
+{#snippet tokens()}
+  <TokenField
+    bind:value={q}
+    bind:field
+    bind:input
+    label="Find a taste term"
+    placeholder="Add a term"
+    {testid}
+    inputTestid="term-search"
+    expanded={listed}
+    controls={listId}
+    onpress={() => (listed = true)}
+    oninput={() => {
+      listed = true;
+      active = 0;
+    }}
+    onkeydown={onKey}
+    chips={fieldChips}
+  />
+{/snippet}
+
 {#snippet list()}
   {#if error}
     <p class="footnote note" role="alert">{error}</p>
@@ -163,26 +232,26 @@
     <p class="footnote note">Loading the taste terms…</p>
   {:else if query}
     {#if hits.length}
-      {#if desktop}
+      {#if inline}
         {@render colhead('Taste terms')}
-        {#each hits as t (t.term)}{@render row(t, hitMeta(t))}{/each}
+        {#each hits as t, i (t.term)}{@render row(t, hitMeta(t), i === active)}{/each}
       {:else}
         <p class="footnote note">Counts are {noun} in your library.</p>
         <div class="list-group">
-          {#each hits as t (t.term)}{@render row(t, hitMeta(t))}{/each}
+          {#each hits as t (t.term)}{@render row(t, hitMeta(t), false)}{/each}
         </div>
       {/if}
     {:else}
       <div class="none" data-testid="term-none">
         <p>No taste term matches {query}</p>
         {#if onSearchTitles}
-          <button class="btn-plain" onclick={() => onSearchTitles(query)}>Search titles for {query}</button>
+          <button class="btn-plain" onclick={searchTitles}>Search titles for {query}</button>
         {/if}
       </div>
     {/if}
   {:else if !facets.length}
     <p class="footnote note">No taste terms yet.</p>
-  {:else if desktop}
+  {:else if inline && !below}
     <div class="panes">
       <div class="facets" role="group" aria-label="Kinds of taste term">
         {#each facets as f (f.facet)}
@@ -207,7 +276,7 @@
           <span class="footnote">{current.total} terms</span>
         </div>
         {@render colhead('')}
-        {#each whole === current.facet ? current.terms : current.top as t (t.term)}{@render row(t, '')}{/each}
+        {#each whole === current.facet ? current.terms : current.top as t (t.term)}{@render row(t, '', false)}{/each}
         {#if whole !== current.facet && current.total > current.top.length}{@render all(current)}{/if}
       </section>
     </div>
@@ -219,24 +288,17 @@
           <span class="dot big" style:background={f.colour} aria-hidden="true"></span>{f.name}
         </h3>
         <div class="list-group">
-          {#each whole === f.facet ? f.terms : f.top.slice(0, PHONE_TOP) as t (t.term)}
-            {@render row(t, countLabel({ total: t.owned, kinds }))}
+          {#each whole === f.facet ? f.terms : f.top.slice(0, SECTION_TOP) as t (t.term)}
+            {@render row(t, inline ? '' : countLabel({ total: t.owned, kinds }), false)}
           {/each}
-          {#if whole !== f.facet && f.total > PHONE_TOP}{@render all(f)}{/if}
+          {#if whole !== f.facet && f.total > SECTION_TOP}{@render all(f)}{/if}
         </div>
       </section>
     {/each}
   {/if}
 {/snippet}
 
-{#if desktop}
-  <Popover {open} {anchor} label="What it's like" width={720} {onClose}>
-    <div class="picker desktop">
-      <div class="top">{@render top()}</div>
-      <div class="list">{@render list()}</div>
-    </div>
-  </Popover>
-{:else}
+{#if !inline}
   <Sheet {open} {onClose} label="What it's like">
     {#snippet header(close)}
       <div class="sheethead">
@@ -249,6 +311,19 @@
       {@render list()}
     {/snippet}
   </Sheet>
+{:else if below}
+  <div class="termbox" use:dismiss={closeBelow}>
+    <div class="list-row fieldrow">
+      <span>What it's like</span>
+      {@render tokens()}
+    </div>
+    {#if listed}<div class="picker desktop below" id={listId}>{@render list()}</div>{/if}
+  </div>
+{:else}
+  {@render tokens()}
+  <Popover open={listed} anchor={field} label="What it's like" width={720} onClose={() => (listed = false)}>
+    <div class="picker desktop" id={listId}>{@render list()}</div>
+  </Popover>
 {/if}
 
 <style>
@@ -426,27 +501,14 @@
     font-size: var(--fs-subhead);
   }
 
-  /* The desktop popover: the field and chips stay, the list scrolls, browsing is two panes. */
+  /* The desktop list: one scroller under the field; browsing on Home is two panes, each scrolling. */
   .picker.desktop {
     flex: 1 1 auto;
     min-height: 0;
     display: flex;
     flex-direction: column;
-  }
-  .desktop .top {
-    flex: none;
-    padding: 12px 12px 8px;
-  }
-  .desktop .find > input[type='search'][aria-label] {
-    min-height: 44px;
-  }
-  .desktop .list {
-    flex: 1 1 auto;
-    min-height: 0;
-    display: flex;
-    flex-direction: column;
     overflow-y: auto;
-    padding: 0 6px 6px;
+    padding: 6px;
   }
   .desktop .note {
     padding: 4px 8px 8px;
@@ -455,6 +517,9 @@
     min-height: 44px;
     padding: 0 8px 0 12px;
     border-radius: var(--r-sm);
+  }
+  .desktop .row.active {
+    background: var(--surface-2);
   }
   .desktop .text {
     flex-direction: row;
@@ -506,13 +571,12 @@
     text-transform: none;
   }
   .panes {
-    flex: 1 1 440px;
+    flex: 1 1 auto;
     min-height: 0;
     display: grid;
     grid-template-columns: 240px minmax(0, 1fr);
     grid-template-rows: minmax(0, 1fr);
-    margin: 0 -6px -6px;
-    box-shadow: inset 0 0.5px 0 var(--separator);
+    margin: -6px;
   }
   .facets,
   .pane {
@@ -580,5 +644,37 @@
   .pane .all {
     padding: 0 8px;
     border-radius: 8px;
+  }
+
+  /* Rank's Filters (board B8): the field in its row, the list as rows under it in the same sheet. */
+  .termbox {
+    display: flex;
+    flex-direction: column;
+    box-shadow: inset 0 0.5px 0 var(--separator);
+  }
+  .fieldrow > span {
+    flex: none;
+  }
+  .fieldrow > :global(.tokens) {
+    flex: 1;
+  }
+  .picker.below {
+    overflow: visible;
+    padding: 0 8px 8px;
+    box-shadow: inset 0 0.5px 0 var(--separator);
+  }
+  .below .row {
+    min-height: 50px;
+  }
+  .below .text {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 0;
+  }
+  .below .facethead {
+    padding: 16px 8px 6px;
+  }
+  .below .list-group {
+    background: none;
   }
 </style>

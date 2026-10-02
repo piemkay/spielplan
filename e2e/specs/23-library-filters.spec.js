@@ -17,7 +17,7 @@ test.beforeEach(async ({ page }) => {
   await page.goto('/');
 });
 
-/** The Filters open, then the term picker: a popover on a desktop, a sheet on a phone. */
+/** The Filters open, then the term picker: its cell's field and a popover on a desktop, a sheet on a phone. */
 async function openTermPicker(page) {
   const toggle = page.getByTestId('filter-toggle');
   if ((await toggle.getAttribute('aria-expanded')) !== 'true') await toggle.click();
@@ -36,7 +36,7 @@ async function closePicker(page, picker, isMobile) {
 
 test('includes a term found by its alias, and a tap on its chip leaves it out', async ({ page, isMobile }) => {
   const picker = await openTermPicker(page);
-  await picker.getByTestId('term-search').fill('cozy');
+  await page.getByTestId('term-search').fill('cozy');
   // The vocabulary's label is "cosy"; the row names the alias that found it.
   await expect(picker.getByTestId('term-row').filter({ hasText: 'via cozy' })).toBeVisible();
   await picker.getByRole('button', { name: 'Include cosy' }).click();
@@ -58,7 +58,7 @@ test('includes a term found by its alias, and a tap on its chip leaves it out', 
 test('a leave-out reads our read too, as a veto does', async ({ page, isMobile }) => {
   // Heat carries period by our read alone, and leaving period out still drops it (decision 557 item 3).
   const picker = await openTermPicker(page);
-  await picker.getByTestId('term-search').fill('period');
+  await page.getByTestId('term-search').fill('period');
   await picker.getByRole('button', { name: 'Leave out period' }).click();
   await closePicker(page, picker, isMobile);
   await expect(page.getByTestId('term-chip')).toHaveAttribute('data-mode', 'out');
@@ -69,9 +69,9 @@ test('a leave-out reads our read too, as a veto does', async ({ page, isMobile }
 test('adds a person from People, and the grid is their work in the library', async ({ page, isMobile }) => {
   await page.getByTestId('filter-toggle').click();
   await page.getByTestId('filter-people').click();
+  // On a desktop the cell is the field, and what a name finds drops under it.
+  await page.getByTestId('people-search').fill('vill');
   const picker = page.getByRole('dialog', { name: 'People' });
-  await expect(picker).toBeVisible();
-  await picker.getByTestId('people-search').fill('vill');
   await picker.getByRole('button', { name: 'Add Denis Villeneuve' }).click();
   await closePicker(page, picker, isMobile);
 
@@ -113,15 +113,16 @@ test("names an empty grid's chips and drops one with what that leaves", async ({
   await expect(page).toHaveURL(/\?term=mood\.cosy&kind=movie$/);
 });
 
-test('the term picker is a popover under its cell at 1024x768 too', async ({ page, isMobile }) => {
+test('the term picker hangs under its field at 1024x768 too', async ({ page, isMobile }) => {
   test.skip(isMobile, 'a phone opens it as a sheet');
   await page.setViewportSize({ width: 1024, height: 768 });
   await page.goto('/');
   const picker = await openTermPicker(page);
   const [cell, box] = await Promise.all([page.getByTestId('filter-terms').boundingBox(), picker.boundingBox()]);
-  expect(box.y, 'the popover is not under its cell').toBeGreaterThan(cell.y);
+  expect(box.y, 'the popover covers its field').toBeGreaterThanOrEqual(cell.y + cell.height);
   expect(box.x + box.width, 'the popover leaves the screen').toBeLessThanOrEqual(1024 + 1);
-  await picker.getByTestId('term-search').fill('dread');
+  expect(box.y + box.height, 'the popover runs past the screen').toBeLessThanOrEqual(768 + 1);
+  await page.getByTestId('term-search').fill('dread');
   await picker.getByRole('button', { name: 'Include dread' }).click();
   await closePicker(page, picker, false);
   await expect(card(page, 'Prisoners')).toBeVisible();
@@ -131,23 +132,30 @@ test('the term picker is a popover under its cell at 1024x768 too', async ({ pag
   expect(overflow).toBeLessThanOrEqual(1);
 });
 
-test("Rank's Filters include a term, and the board says our read admitted the survivor", async ({ page }) => {
+test("Rank's Filters include a term, and the board says our read admitted the survivor", async ({
+  page,
+  isMobile
+}) => {
   // The admin's board holds Heat (10-home's set-up), and period is Heat's by our read alone.
   await waitForBoard(page);
   await page.goto('/rank');
   await page.getByTestId('rank-filters').click();
   const filters = page.getByRole('dialog', { name: 'Filters' });
   await filters.getByTestId('rank-terms').click();
-  const picker = page.getByRole('dialog', { name: "What it's like" });
+  // A sheet over the Filters on a phone; on a desktop the terms list under the row (board B8).
+  const picker = isMobile ? page.getByRole('dialog', { name: "What it's like" }) : filters;
   await expect(picker).toBeVisible();
+  await expect(page.getByRole('dialog', { name: "What it's like" })).toHaveCount(isMobile ? 1 : 0);
   await picker.getByTestId('term-search').fill('period');
   const read = page.waitForResponse(
     (res) => res.url().includes('/api/rank?') && res.url().includes('term=era.period')
   );
   await picker.getByRole('button', { name: 'Include period' }).click();
   await read;
-  await picker.getByRole('button', { name: 'Done' }).click();
-  await expect(picker).toHaveCount(0);
+  if (isMobile) {
+    await picker.getByRole('button', { name: 'Done' }).click();
+    await expect(picker).toHaveCount(0);
+  }
   await expect(filters.getByTestId('rank-sheet-term-chip')).toHaveAttribute('data-mode', 'in');
   await filters.getByRole('button', { name: 'Done' }).click();
   await expect(filters).toHaveCount(0);
