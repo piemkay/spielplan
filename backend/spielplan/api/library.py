@@ -4,6 +4,7 @@ measured bug (§4.1 rule 5), and a default would hide it.
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from typing import Annotated, Any, Literal
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
@@ -11,13 +12,26 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from spielplan.api.deps import DB, ActiveUser
 from spielplan.connectors import registry
 from spielplan.core.config import settings
-from spielplan.db import dna_terms, genres, library
+from spielplan.db import dna_terms, genres, library, people
 from spielplan.home import rail, suggest, why, wish
 from spielplan.models import artifacts, basis
 from spielplan.rank import read as rank_read
 from spielplan.scoring import serve
 
 router = APIRouter(prefix="/api", tags=["library"])
+
+
+Kinds = Annotated[
+    list[Literal["movie", "series"]],
+    Query(description="§4.1 rule 5: one or both, never neither. Repeat the parameter for both."),
+]
+
+
+def _kinds(kind: Sequence[str]) -> list[library.Kind]:
+    try:
+        return library.normalise_kinds(kind)
+    except ValueError as exc:
+        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
 
 
 def catalog_filters(
@@ -48,9 +62,7 @@ async def list_titles(
     conn: DB,
     user: ActiveUser,
     filters: CatalogFilters,
-    kind: list[Literal["movie", "series"]] = Query(
-        ..., description="§4.1 rule 5: one or both, never neither. Repeat the parameter for both."
-    ),
+    kind: Kinds,
     sort: Literal["for_you", "newest"] | None = None,
     limit: int = Query(60, ge=1, le=200),
     offset: int = Query(0, ge=0),
@@ -58,10 +70,7 @@ async def list_titles(
     """`kind` and `person_id` repeat (`?kind=` is a 422, never "everything"). The response's `sort` is
     the order really used: `match` under a search, `newest` when nothing of the member's ranks the
     selection (decision 515); `for_you_available` says whether their order exists."""
-    try:
-        kinds = library.normalise_kinds(kind)
-    except ValueError as exc:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+    kinds = _kinds(kind)
 
     bundle = await artifacts.active_bundle_version(conn)
     personal = await serve.personal_kinds(
@@ -208,16 +217,31 @@ def _extracted(
     return shaped
 
 
+@router.get("/vocabulary")
+async def vocabulary(conn: DB, _: ActiveUser, kind: Kinds) -> dict[str, Any]:
+    """The term picker's vocabulary, each term counted in the library of `kind` (decision 557)."""
+    return await dna_terms.vocabulary(conn, kinds=_kinds(kind))
+
+
+@router.get("/people")
+async def people_search(
+    conn: DB,
+    _: ActiveUser,
+    kind: Kinds,
+    q: str = "",
+    limit: int = Query(8, ge=1, le=50),
+) -> dict[str, Any]:
+    """The people picker's word-start typeahead; under two characters it answers no one."""
+    return {"people": await people.search_people(conn, q=q, kinds=_kinds(kind), limit=limit)}
+
+
 @router.get("/facets")
 async def facets(
     conn: DB,
     _: ActiveUser,
     kind: list[Literal["movie", "series"]] = Query(default=["movie"]),
 ) -> dict[str, Any]:
-    try:
-        kinds = library.normalise_kinds(kind)
-    except ValueError as exc:
-        raise HTTPException(status.HTTP_422_UNPROCESSABLE_ENTITY, str(exc)) from exc
+    kinds = _kinds(kind)
     return {
         "kinds": kinds,
         "genres": await library.genres(conn, kinds),

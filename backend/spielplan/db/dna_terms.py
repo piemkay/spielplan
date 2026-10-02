@@ -4,7 +4,8 @@ labels. §4.1 rule 2: salience, confidence and `n_sources` appear in arithmetic 
 
 from __future__ import annotations
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Sequence
+from typing import Any
 
 import asyncpg
 
@@ -77,7 +78,49 @@ async def labels_for(
     }
 
 
+async def vocabulary(conn: asyncpg.Connection, *, kinds: Sequence[str]) -> dict[str, Any]:
+    """The term picker's payload (decision 557): the facets in order, and every term with its label,
+    gloss, every alias and how many owned titles of `kinds` carry it in either tier."""
+    version = await active_version(conn)
+    if version is None:
+        return {"version": None, "facets": [], "terms": []}
+    facets = await conn.fetch(
+        "SELECT facet, colour FROM dna_facet WHERE version = $1 ORDER BY ord, facet", version
+    )
+    rows = await conn.fetch(
+        """
+        SELECT m.term, m.facet, m.label, m.gloss,
+               COALESCE((SELECT array_agg(a.alias ORDER BY a.alias) FROM dna_alias a
+                          WHERE a.version = m.version AND a.term = m.term), '{}') AS aliases,
+               COALESCE(o.n, 0) AS owned
+          FROM dna_term m
+          JOIN dna_facet f ON f.version = m.version AND f.facet = m.facet
+          LEFT JOIN (
+              SELECT d.term, count(DISTINCT d.title_id) AS n
+                FROM dna_tagged d JOIN title t ON t.id = d.title_id
+               WHERE d.version = $1 AND t.is_owned AND t.kind = ANY($2::text[])
+               GROUP BY d.term
+          ) o ON o.term = m.term
+         WHERE m.version = $1
+         ORDER BY f.ord, m.term
+        """,
+        version,
+        list(kinds),
+    )
+    return {
+        "version": version,
+        "facets": [dict(f) for f in facets],
+        "terms": [
+            {
+                "term": r["term"], "facet": r["facet"], "label": label_of(r["term"], r["label"]),
+                "gloss": r["gloss"], "aliases": list(r["aliases"]), "owned": r["owned"],
+            }
+            for r in rows
+        ],
+    }
+
+
 __all__ = [
     "ACTIVE_VERSION", "BOTH_TIERS", "TERM_WEIGHT", "active_version", "label_of", "labels_for",
-    "unvetoed",
+    "unvetoed", "vocabulary",
 ]

@@ -4,7 +4,7 @@ never appear in a WHERE."""
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -463,10 +463,7 @@ def fold_credits(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
 
     folded = []
     for keys in buckets.values():
-        members = [people[pid] for pid, _ in keys]
-        agree = all(
-            len({m[field] for m in members if m[field]}) <= 1 for field in ("imdb_id", "tmdb_id")
-        )
+        agree = ids_agree([people[pid] for pid, _ in keys])
         for part in ([keys] if agree else [[k] for k in keys]):
             credit = _credit_row([row for key in part for row in groups[key]], part, people, rank)
             folded.append(((
@@ -476,11 +473,18 @@ def fold_credits(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
     return [credit for _key, credit in sorted(folded, key=lambda f: f[0])]
 
 
+def ids_agree(people: Sequence[Mapping[str, Any]]) -> bool:
+    """Person rows whose `loose_name` agrees are one human unless an IMDb or TMDB id disagrees."""
+    return all(len({p[field] for p in people if p[field]}) <= 1 for field in ("imdb_id", "tmdb_id"))
+
+
+def lead_person(people: Iterable[Mapping[str, Any]]) -> Mapping[str, Any]:
+    """The row a folded human is named and pictured by: the most ids, then the lowest id."""
+    return min(people, key=lambda p: (-(bool(p["imdb_id"]) + bool(p["tmdb_id"])), p["person_id"]))
+
+
 def _credit_row(rows, keys, people, rank) -> dict[str, Any]:
-    lead = min(
-        (people[pid] for pid, _ in keys),
-        key=lambda p: (-(bool(p["imdb_id"]) + bool(p["tmdb_id"])), p["person_id"]),
-    )
+    lead = lead_person(people[pid] for pid, _ in keys)
     cls = keys[0][1] if isinstance(keys[0][1], str) else None
     place = lambda row: rank.get(row["source"], len(rank))  # noqa: E731
     jobs: dict[str, tuple[int, str]] = {}
