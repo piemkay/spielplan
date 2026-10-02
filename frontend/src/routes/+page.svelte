@@ -216,7 +216,7 @@
       sortEcho = res.sort ?? null;
       forYouAvailable = res.for_you_available ?? null;
       if (append) return;
-      named(res.applied);
+      takeNames(res.applied);
       if (!res.items.length) findElsewhere(seq, res.hidden ?? {});
       if (!res.items.length || (termFold && strongTotal === 0)) findDrops(seq);
     } catch (err) {
@@ -237,7 +237,7 @@
   }
 
   // Labels and names read from a URL are placeholders until the server names them.
-  function named(applied) {
+  function takeNames(applied) {
     if (!applied) return;
     const terms = [...(applied.terms ?? []), ...(applied.not_terms ?? [])];
     for (const t of homeFilters.terms) {
@@ -425,7 +425,7 @@
 
   function flipTerm(id) {
     const chosen = homeFilters.terms.find((t) => t.id === id);
-    if (chosen) setTerm({ term: id }, chosen.mode === 'in' ? 'out' : 'in');
+    if (chosen) chosen.mode = chosen.mode === 'in' ? 'out' : 'in';
     load();
   }
 

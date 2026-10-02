@@ -95,7 +95,7 @@ export const draft = $state({
   decade: '',
   runtime_max: '',
   seen: 'any',
-  /** @type {{id: string, label: string, facet: string, mode: 'in' | 'out'}[]} Home's term picker's (decision 557) */
+  /** @type {{id: string, label: string, facet: string, mode: 'in' | 'out'}[]} includes and leave-outs (decision 557) */
   terms: []
 });
 
