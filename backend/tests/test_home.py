@@ -914,15 +914,25 @@ async def test_a_notice_put_away_leaves_home_and_the_shelves_stay(world):
     """Decision 554: the x hides the set-up notice and the pending row for the day; Undo is a delete."""
     before = await world.home()
     assert before["setup_notice"] and before["banner"]
+    assert before["setup_hidden"] is False
     await world.client.put("/api/home/notices/setup")
     await world.client.put("/api/home/notices/pending")
 
     payload = await world.home()
     assert (payload["setup_notice"], payload["banner"]) == (None, None)
+    assert payload["setup_hidden"] is True, "the set-up is still owed, so Home must not offer Rate"
     assert payload["shelves"] == before["shelves"]
 
     await world.client.delete("/api/home/notices/setup")
-    assert (await world.home())["setup_notice"] == before["setup_notice"]
+    restored = await world.home()
+    assert (restored["setup_notice"], restored["setup_hidden"]) == (before["setup_notice"], False)
+
+
+async def test_a_set_up_notice_hidden_and_then_owed_no_more_is_not_hidden(world):
+    await world.client.put("/api/home/notices/setup")
+    await _set_up(world)
+    payload = await world.home()
+    assert (payload["setup_notice"], payload["setup_hidden"]) == (None, False)
 
 
 async def test_the_notice_counts_a_custom_sets_steps_and_says_nothing_of_ratings_never_given(world):
