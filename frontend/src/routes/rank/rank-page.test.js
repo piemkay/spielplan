@@ -24,11 +24,12 @@ vi.mock('$app/navigation', () => ({
     nav.stack.push(nav.state);
     nav.state = state;
     publish();
-  }
+  },
+  beforeNavigate: () => {}
 }));
 
 import RankPage from './+page.svelte';
-import { load, rank, reset } from '$lib/rank.svelte.js';
+import { draft, load, rank, reset } from '$lib/rank.svelte.js';
 import { session } from '$lib/session.svelte.js';
 import { hideToast, toast } from '$lib/toast.svelte.js';
 
@@ -84,6 +85,16 @@ const board = (over = {}) => ({
   ...over
 });
 
+// Home's term picker reads the vocabulary (decision 557 item 8).
+const VOCAB = {
+  version: 'v1',
+  facets: [{ facet: 'mood', colour: '#c8613a' }, { facet: 'themes', colour: '#3f7f6f' }],
+  terms: [
+    { term: 'mood.violent', facet: 'mood', label: 'violent', gloss: '', aliases: [], owned: 139 },
+    { term: 'themes.heist', facet: 'themes', label: 'heist', gloss: '', aliases: [], owned: 40 }
+  ]
+};
+
 const pair = (over = {}) => ({
   title_a: 1,
   title_b: 2,
@@ -120,6 +131,7 @@ function route(url, init) {
   let payload;
   if (method !== 'GET') posts.push({ url, body });
   if (url.includes('/api/facets')) payload = { genres: ['Thriller'], decades: [1990] };
+  else if (url.includes('/api/vocabulary')) payload = VOCAB;
   else if (url.includes('/api/rank/queue/answer')) payload = queueReplies.shift();
   else if (url.includes('/api/rank/queue')) payload = queueReplies.shift();
   else if (url.includes('/api/rank/drop')) payload = board(boardOver);
@@ -197,6 +209,7 @@ afterEach(() => {
   if (app) unmount(app);
   app = null;
   reset();
+  draft.terms = [];
   vi.restoreAllMocks();
   vi.unstubAllGlobals();
   target.remove();
@@ -701,7 +714,7 @@ describe('search and one Filters control (§6.3)', () => {
     expect(reads.at(-1)).toContain('q=Taxi');
   });
 
-  it('holds genre, decade, seen, runtime and the taste tag, each named in its row', async () => {
+  it("holds genre, decade, seen, runtime and What it's like, each named in its row", async () => {
     await open();
     expect($('rank-genre')).toBeNull();
     $('rank-filters').click();
@@ -711,13 +724,15 @@ describe('search and one Filters control (§6.3)', () => {
       ['rank-genre', 'Genre'],
       ['rank-decade', 'Decade'],
       ['rank-seen', 'Seen'],
-      ['rank-runtime', 'Max length'],
-      ['rank-dna', 'Taste tag']
+      ['rank-runtime', 'Max length']
     ]) {
       const label = $(testid).closest('label');
       expect(label, `${testid} has no label`).toBeTruthy();
       expect(label.textContent).toContain(name);
     }
+    // The free-text taste tag is gone: the term picker is the one way to a term (decision 557).
+    expect($('rank-dna')).toBeNull();
+    expect($('rank-terms').closest('.list-row').textContent).toContain("What it's like");
   });
 
   it('shows a set filter as a chip that removes it', async () => {
@@ -746,5 +761,67 @@ describe('search and one Filters control (§6.3)', () => {
     for (const noun of ['cutpoint', 'refit', 'tier_edit', 'ledger', 'straddle', 'DNA', 'inferred']) {
       expect(text).not.toContain(noun);
     }
+  });
+});
+
+describe("What it's like on Rank (decision 557 item 8)", () => {
+  const boardReads = () =>
+    fetchMock.mock.calls.map(([url]) => url).filter((url) => url.includes('/api/rank?'));
+
+  it('opens the term picker over the Filters, and asks the board for an include and a leave-out', async () => {
+    await open();
+    $('rank-filters').click();
+    await settle();
+    $('rank-terms').click();
+    await settle();
+    expect(dialog("What it's like")).toBeTruthy();
+    expect(dialog('Filters'), 'a sheet over the Filters sheet').toBeTruthy();
+    target.querySelector('[aria-label="Include heist"]').click();
+    await settle();
+    target.querySelector('[aria-label="Leave out violent"]').click();
+    await settle();
+    const asked = new URL(boardReads().at(-1), 'http://localhost').searchParams;
+    expect(asked.getAll('term')).toEqual(['themes.heist']);
+    expect(asked.getAll('not_term')).toEqual(['mood.violent']);
+    // An include is filled, a leave-out outlined (board B7); the Filters count them.
+    const chips = [...target.querySelectorAll('.chips [data-testid="rank-term-chip"]')];
+    expect(chips.map((c) => [c.dataset.mode, c.querySelector('.label').textContent.trim()])).toEqual([
+      ['in', 'heist'],
+      ['out', '− violent']
+    ]);
+    expect($('rank-filters').textContent.trim()).toBe('Filters · 2');
+  });
+
+  it('switches a term with its chip, and its x takes it off', async () => {
+    draft.terms = [{ id: 'themes.heist', label: 'heist', facet: 'themes', mode: 'in' }];
+    await open();
+    target.querySelector('.chips [aria-label="Switch heist to leave out"]').click();
+    await settle();
+    expect(new URL(boardReads().at(-1), 'http://localhost').searchParams.getAll('not_term')).toEqual([
+      'themes.heist'
+    ]);
+    target.querySelector('.chips [aria-label="Remove heist"]').click();
+    await settle();
+    expect(boardReads().at(-1)).not.toContain('term=');
+    expect($('rank-term-chip')).toBeNull();
+  });
+
+  it('marks what our read alone admitted, says so once, and names the tier in each label', async () => {
+    draft.terms = [{ id: 'themes.heist', label: 'heist', facet: 'themes', mode: 'in' }];
+    boardOver = { dna_tiers: { 1: 'extracted', 2: 'projected', 3: 'extracted' } };
+    await open();
+    expect($('rank-tier-legend').textContent.trim()).toBe('Our read says heist; no review does');
+    expect($('rank-open-2').querySelector('.ours')).toBeTruthy();
+    expect($('rank-open-3').querySelector('.ours')).toBeNull();
+    expect($('rank-open-2').getAttribute('aria-label')).toBe('Drive, 2011, heist by our read');
+    expect($('rank-open-3').getAttribute('aria-label')).toBe('Prisoners, 2013, heist, quoted');
+  });
+
+  it('draws no legend while every survivor is quoted', async () => {
+    draft.terms = [{ id: 'themes.heist', label: 'heist', facet: 'themes', mode: 'in' }];
+    boardOver = { dna_tiers: { 1: 'extracted', 2: 'extracted', 3: 'extracted' } };
+    await open();
+    expect($('rank-tier-legend')).toBeNull();
+    expect(target.querySelector('.tile .ours')).toBeNull();
   });
 });
