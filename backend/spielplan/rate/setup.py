@@ -16,24 +16,24 @@ from spielplan.rate import session
 
 KIND = "movie"
 
-# By what leads every step's page: the person's own watched films, the household's, or neither.
-HINTS = (
-    "Films you've watched first, then popular ones.",
-    "Films your household has watched first, then popular ones.",
-    "Popular films first.",
-)
-TAP = " Tap the ones you remember well."
+# By what leads every step's page: the person's own watched films, the household's, or neither (boards
+# D1 and D4).
+OWN = "Films you've watched first, then popular ones. Tap the ones you remember well."
+THEIRS = "Films {who} watched first, then popular ones. Tap the ones you've seen and remember well."
+POPULAR = "Popular films first. Tap the ones you've seen and remember well."
+NOTE = "Jellyfin has nothing you've watched yet, so you start with theirs."
 
-# Which of HINTS, by the groups `films_by_platform_score` reads.
+# The members whose watched films `films_by_platform_score` puts first, the person first.
 _WATCHED = """
-    SELECT COALESCE(min(CASE WHEN ut.user_id = $1 THEN 0 ELSE 1 END), 2)
-      FROM user_title ut
-      JOIN title t ON t.id = ut.title_id
-      JOIN app_user au ON au.id = ut.user_id
-     WHERE ut.state = 'seen' AND t.kind = 'movie' AND t.origin <> 'wished'
-       AND (ut.user_id = $1
-            OR au.is_active AND au.role IN ('admin', 'member')
-               AND NOT EXISTS (SELECT 1 FROM user_title m WHERE m.user_id = $1 AND m.title_id = t.id))
+    SELECT au.id = $1 AS own, au.name
+      FROM app_user au
+     WHERE (au.id = $1 OR au.is_active AND au.role IN ('admin', 'member'))
+       AND EXISTS (
+           SELECT 1 FROM user_title ut JOIN title t ON t.id = ut.title_id
+            WHERE ut.user_id = au.id AND ut.state = 'seen' AND t.kind = 'movie' AND t.origin <> 'wished'
+              AND (au.id = $1 OR NOT EXISTS (
+                   SELECT 1 FROM user_title m WHERE m.user_id = $1 AND m.title_id = t.id)))
+     ORDER BY au.id <> $1, au.id
 """
 
 
@@ -42,6 +42,7 @@ class Step:
     tier: int
     word: str
     hint: str
+    note: str | None
 
 
 async def _tier_set(conn: asyncpg.Connection, user_id: int) -> tuple[str, ...]:
@@ -50,11 +51,24 @@ async def _tier_set(conn: asyncpg.Connection, user_id: int) -> tuple[str, ...]:
 
 async def steps(conn: asyncpg.Connection, *, user_id: int) -> list[Step]:
     """One step per tier of the person's film set, best first, named by its word (no letter, §6.1),
-    each with the person's one hint."""
+    each with the person's one hint, and a note when another member's films lead it."""
     tier_set = await _tier_set(conn, user_id)
     words = observations.tier_words(tier_set)
-    hint = HINTS[await conn.fetchval(_WATCHED, user_id)] + TAP
-    return [Step(tier, words[tier], hint) for tier in reversed(range(len(tier_set)))]
+    hint, note = _hint(await conn.fetch(_WATCHED, user_id))
+    return [Step(tier, words[tier], hint, note) for tier in reversed(range(len(tier_set)))]
+
+
+def _hint(watched: Sequence[asyncpg.Record]) -> tuple[str, str | None]:
+    if not watched:
+        return POPULAR, None
+    if watched[0]["own"]:
+        return OWN, None
+    names = [r["name"] for r in watched]
+    if len(names) > 3:
+        who = "your household"
+    else:
+        who = names[0] if len(names) == 1 else f"{', '.join(names[:-1])} and {names[-1]}"
+    return THEIRS.format(who=who), NOTE
 
 
 def start_of(tier: int, k: int) -> float:
@@ -137,4 +151,4 @@ async def finish(
     }
 
 
-__all__ = ["HINTS", "KIND", "Step", "band_of", "films_page", "finish", "start_of", "steps"]
+__all__ = ["KIND", "Step", "band_of", "films_page", "finish", "start_of", "steps"]

@@ -26,7 +26,9 @@ WIDE_AT_TOP = [1, 2, 3, 4, 5, 6, TMDB_WIDE, 7, 8, 9]
 LESS_SEEN_AT_TOP = [TMDB_SHORT, OBSCURE_IMDB, OBSCURE_TMDB, OBSCURE_BOTH, OBSCURE_CRITIC]
 TOP = WIDE_AT_TOP + LESS_SEEN_AT_TOP + [UNSCORED_A, UNSCORED_B]
 
-TAP = " Tap the ones you remember well."
+# Boards D1 and D4: a page led by films the member may not have seen asks for the ones they have.
+POPULAR = "Popular films first. Tap the ones you've seen and remember well."
+OWN = "Films you've watched first, then popular ones. Tap the ones you remember well."
 
 
 async def _seed(db) -> None:
@@ -122,26 +124,38 @@ async def test_the_steps_run_best_first_named_by_their_words_with_no_letter(hous
         "All-time favourite", "Loved it", "Liked it", "It was fine",
         "Not really for me", "Didn't like it", "Hated it",
     ]
-    assert [s["hint"] for s in steps] == ["Popular films first." + TAP] * 7
-    assert all(set(s) == {"tier", "word", "hint"} for s in steps)
+    assert [(s["hint"], s["note"]) for s in steps] == [(POPULAR, None)] * 7
+    assert all(set(s) == {"tier", "word", "hint", "note"} for s in steps)
 
 
 async def test_the_hint_says_whose_watched_films_lead_the_page(house):
     db, patrick, jenny = house["db"], house["patrick_id"], house["jenny_id"]
 
-    async def hints():
-        return {s["hint"] for s in (await house["patrick"].get("/api/ladder/setup")).json()["steps"]}
+    async def hint():
+        steps = (await house["patrick"].get("/api/ladder/setup")).json()["steps"]
+        assert len({(s["hint"], s["note"]) for s in steps}) == 1, "every step has the member's one hint"
+        return steps[0]["hint"], steps[0]["note"]
+
+    def theirs(who):
+        hint = f"Films {who} watched first, then popular ones. Tap the ones you've seen and remember well."
+        return hint, "Jellyfin has nothing you've watched yet, so you start with theirs."
 
     await _mark(db, await _inactive(db), 1)
     await _mark(db, jenny, SERIES, 3)
     await _mark(db, patrick, 3, state="unseen")
-    assert await hints() == {"Popular films first." + TAP}, (
+    assert await hint() == (POPULAR, None), (
         "an inactive member's film, a series and a film marked not seen lead nothing"
     )
     await _mark(db, jenny, 4)
-    assert await hints() == {"Films your household has watched first, then popular ones." + TAP}
+    assert await hint() == theirs("jenny")
+    await _mark(db, await insert_user(db, "sam"), 6)
+    assert await hint() == theirs("jenny and sam")
+    await _mark(db, await insert_user(db, "mia"), 4)
+    assert await hint() == theirs("jenny, sam and mia")
+    await _mark(db, await insert_user(db, "lou"), 7)
+    assert await hint() == theirs("your household"), "more than three are named as one"
     await _mark(db, patrick, 5)
-    assert await hints() == {"Films you've watched first, then popular ones." + TAP}
+    assert await hint() == (OWN, None)
 
 
 async def test_a_custom_set_has_a_step_per_label(house):
