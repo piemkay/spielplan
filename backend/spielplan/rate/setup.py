@@ -1,6 +1,6 @@
-"""The ladder's set-up, once (§6.1, decision 547): one step per tier from the best down, each a page of
-films in platform-score order. Finishing it is the member's cut-over (decision 537). Films only: series
-go straight onto the ladder (decision 550)."""
+"""The ladder's set-up, once (§6.1, decisions 547 and 556): one step per tier from the best down, each a
+page of films the household watched and widely seen ones, in platform-score order. Finishing it is the
+member's cut-over (decision 537). Films only: series go straight onto the ladder (decision 550)."""
 
 from __future__ import annotations
 
@@ -16,9 +16,25 @@ from spielplan.rate import session
 
 KIND = "movie"
 
-# By the verdict class the step stands for: where its films open in the platform-score order.
-HINTS = {2: "Highest rated first.", 1: "From the middle.", 0: "Lowest rated first."}
+# By what leads every step's page: the person's own watched films, the household's, or neither.
+HINTS = (
+    "Films you've watched first, then popular ones.",
+    "Films your household has watched first, then popular ones.",
+    "Popular films first.",
+)
 TAP = " Tap the ones you remember well."
+
+# Which of HINTS, by the groups `films_by_platform_score` reads.
+_WATCHED = """
+    SELECT COALESCE(min(CASE WHEN ut.user_id = $1 THEN 0 ELSE 1 END), 2)
+      FROM user_title ut
+      JOIN title t ON t.id = ut.title_id
+      JOIN app_user au ON au.id = ut.user_id
+     WHERE ut.state = 'seen' AND t.kind = 'movie' AND t.origin <> 'wished'
+       AND (ut.user_id = $1
+            OR au.is_active AND au.role IN ('admin', 'member')
+               AND NOT EXISTS (SELECT 1 FROM user_title m WHERE m.user_id = $1 AND m.title_id = t.id))
+"""
 
 
 @dataclass(frozen=True)
@@ -33,14 +49,12 @@ async def _tier_set(conn: asyncpg.Connection, user_id: int) -> tuple[str, ...]:
 
 
 async def steps(conn: asyncpg.Connection, *, user_id: int) -> list[Step]:
-    """One step per tier of the person's film set, best first, named by its word (no letter, §6.1)."""
+    """One step per tier of the person's film set, best first, named by its word (no letter, §6.1),
+    each with the person's one hint."""
     tier_set = await _tier_set(conn, user_id)
-    k = len(tier_set)
     words = observations.tier_words(tier_set)
-    return [
-        Step(tier, words[tier], HINTS[model.verdict_class_of_tier(tier, k)] + TAP)
-        for tier in reversed(range(k))
-    ]
+    hint = HINTS[await conn.fetchval(_WATCHED, user_id)] + TAP
+    return [Step(tier, words[tier], hint) for tier in reversed(range(len(tier_set)))]
 
 
 def start_of(tier: int, k: int) -> float:
@@ -53,6 +67,15 @@ def start_of(tier: int, k: int) -> float:
     if k == len(model.MEASURED_TIER_SHARES):
         return float(sum(model.MEASURED_TIER_SHARES[tier + 1:]))
     return (k - 1 - tier) / (k - 1)
+
+
+def band_of(tier: int, k: int) -> tuple[float, float]:
+    """The step's slice of the widely seen films' order (decision 556): its tier's share of the measured
+    shape at K = 7, equal slices at another K."""
+    shares = model.MEASURED_TIER_SHARES
+    if k == len(shares):
+        return float(sum(shares[tier + 1:])), float(sum(shares[tier:]))
+    return (k - 1 - tier) / k, (k - tier) / k
 
 
 async def films_page(
@@ -69,7 +92,13 @@ async def films_page(
     if not 0 <= step < k:
         raise ValueError(f"step {step} is outside a set of {k}")
     return await library.films_by_platform_score(
-        conn, user_id=user_id, start=start_of(step, k), offset=offset, limit=limit, exclude=exclude
+        conn,
+        user_id=user_id,
+        start=start_of(step, k),
+        band=band_of(step, k),
+        offset=offset,
+        limit=limit,
+        exclude=exclude,
     )
 
 
@@ -108,4 +137,4 @@ async def finish(
     }
 
 
-__all__ = ["HINTS", "KIND", "Step", "films_page", "finish", "start_of", "steps"]
+__all__ = ["HINTS", "KIND", "Step", "band_of", "films_page", "finish", "start_of", "steps"]
