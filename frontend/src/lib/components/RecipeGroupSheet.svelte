@@ -44,7 +44,7 @@
     film?.sheet ? GROUPS.map((g) => film.sheet.find((r) => r.group === g.key)).filter(Boolean) : []
   );
   const meta = $derived(
-    [film?.year, film?.is_owned === true ? 'In your library' : film?.is_owned === false ? 'Not in your library' : null]
+    [film?.year, film?.is_owned === true ? 'In your library' : film?.is_owned === false ? 'Not in the library' : null]
       .filter(Boolean)
       .join(' · ')
   );
