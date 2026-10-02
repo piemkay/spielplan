@@ -42,6 +42,7 @@
   // else the card drops the title itself (decision 531). `onPerson(credit)`, `onTerm({term, label,
   // facet})` and `onLike(titleId)` are Home's, which add to what is set; without them a tap opens
   // Home's grid with that chip alone, and Back reopens this card on `from` (decision 557 item 6).
+  // `whyLine`: a recipe grid's reason for this card, in place of the server's (decision 559 item 5).
   let {
     titleId,
     seed = undefined,
@@ -51,7 +52,8 @@
     onTerm = undefined,
     onLike = undefined,
     onStateChange,
-    onMove = undefined
+    onMove = undefined,
+    whyLine = ''
   } = $props();
 
   let open = $state(true);
@@ -266,7 +268,7 @@
   const names = $derived(displayNames(lead));
   const directed = $derived(directedBy(data?.credits));
   // The server's reason for this member, or nothing: a card opened from search has none.
-  const why = $derived(typeof data?.why === 'string' ? data.why.trim() : '');
+  const why = $derived(whyLine || (typeof data?.why === 'string' ? data.why.trim() : ''));
   // Two tiers, two lists (§4.1 rule 1); nothing leaves the payload.
   const quoted = $derived(extractedByTerm(data?.dna?.extracted));
   const inferred = $derived(projectedForCard(data?.dna?.projected, data?.dna?.extracted));

@@ -13,8 +13,10 @@
   import { artReady, noteMissing, posterSrc } from '$lib/art.js';
   import { displayNames } from '$lib/titleCard.js';
   import Icon from '$lib/components/Icon.svelte';
+  import RatePoster from '$lib/components/RatePoster.svelte';
 
-  let { title, onSelect } = $props();
+  // `captions`: a recipe's, one per liked film, `{title_id, from, term}` (decision 559 item 5).
+  let { title, onSelect, captions = [] } = $props();
 
   const names = $derived(displayNames(title));
 
@@ -93,6 +95,12 @@
     {#if title.like}
       <span class="like" data-testid="like-line">Like {title.like.name}</span>
     {/if}
+    {#each captions as c (c.title_id)}
+      <span class="like caption" data-testid="recipe-caption">
+        <span class="thumb" aria-hidden="true"><RatePoster title={{ title_id: c.title_id }} showName={false} lazy /></span>
+        <span class="said"><span class="sr-only">{c.from}</span>{c.term}</span>
+      </span>
+    {/each}
   </span>
 </button>
 
@@ -201,6 +209,25 @@
     color: var(--text-2);
     overflow: hidden;
     white-space: nowrap;
+    text-overflow: ellipsis;
+  }
+  .caption {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+  .thumb {
+    flex: none;
+    width: 12px;
+    border-radius: 2px;
+    overflow: hidden;
+  }
+  .thumb :global(.poster) {
+    border-radius: 0;
+  }
+  .said {
+    min-width: 0;
+    overflow: hidden;
     text-overflow: ellipsis;
   }
 </style>

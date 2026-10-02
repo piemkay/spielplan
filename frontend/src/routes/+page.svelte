@@ -57,6 +57,10 @@
   import ShelfList from '$lib/components/ShelfList.svelte';
   import TermPicker from '$lib/components/TermPicker.svelte';
   import TitleDetail from '$lib/components/TitleDetail.svelte';
+  import LikeFilmsCell from '$lib/components/LikeFilmsCell.svelte';
+  import RecipeChips from '$lib/components/RecipeChips.svelte';
+  import RecipeGrid from '$lib/components/RecipeGrid.svelte';
+  import { startWith } from '$lib/recipe.svelte.js';
 
   // Back from another tab, the last shelves show at once and are re-read quietly (decision 530).
   const kept = homeKept.user === session.user?.id && homeKept.epoch === modelGate.epoch ? homeKept : null;
@@ -498,6 +502,13 @@
     }
     loadShelves();
   }
+
+  // More like this on Home's own card: a new recipe of that title, named at once (decision 559).
+  let likedCard = null;
+  $effect(() => {
+    if (selected) likedCard = selected;
+  });
+  const likeOnHome = (id) => startWith(likedCard?.id === id ? likedCard : { id });
 </script>
 
 {#snippet icon(name)}
@@ -625,6 +636,7 @@
     <div class="cell list-row adder half" bind:this={peopleCell}>
       {@render adder('people', 'People', 'Add a person', peopleOpen, () => (peopleOpen = !peopleOpen))}
     </div>
+    <LikeFilmsCell />
   </div>
   <!-- A sheet on a phone, a popover under its cell on a desktop (decision 554 item 1). -->
   <TermPicker
@@ -652,6 +664,7 @@
 <!-- Every set filter is a chip, the panel open or shut (decision 557, board B7). -->
 {#if chips.length || homeFilters.like.length || homeFilters.less.length}
   <div class="chips" role="group" aria-label="Set filters">
+    <RecipeChips />
     {#each chips as chip (chip.key)}
       <FilterChip
         variant={chip.variant}
@@ -714,6 +727,7 @@
 {/snippet}
 
 {#if mode === 'grid'}
+  {#if reason === 'recipe'}<RecipeGrid {kinds} params={catalogParams()} onSelect={(t) => (selected = t)} />{:else}
   {#if beyondSearch}
     <h2 class="section-title" data-testid="library-section-head">In your library</h2>
   {/if}
@@ -867,6 +881,7 @@
   {#if beyondSearch}
     <SearchBeyond {kinds} q={homeFilters.q} params={catalogParams()} onSelect={(t) => (selected = t)} />
   {/if}
+  {/if}
 {:else if !session.hasBundle}
   <div class="empty card">
     {@render noBundle()}
@@ -894,6 +909,8 @@
     onClose={() => (selected = null)}
     {...cardTaps}
     onStateChange={onSeenChange}
+    onLike={likeOnHome}
+    whyLine={selected.whyLine}
   />
 {/if}
 
