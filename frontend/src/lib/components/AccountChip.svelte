@@ -32,17 +32,17 @@
   const others = $derived(switchable.filter((u) => u.id !== session.user?.id));
   const showModel = $derived(!!session.user?.show_model);
 
+  async function readWanted() {
+    wanted = (await loadWishSummary().catch(() => null))?.wanted ?? null;
+  }
+
   async function show() {
     open = true;
     error = '';
     switching = null;
     // Re-read on every open: a PIN set on another phone makes that profile switchable.
-    const [who, summary] = await Promise.all([
-      get('/auth/switchable').catch(() => []),
-      loadWishSummary().catch(() => null)
-    ]);
+    const [who] = await Promise.all([get('/auth/switchable').catch(() => []), readWanted()]);
     switchable = who ?? [];
-    wanted = summary?.wanted ?? null;
   }
 
   async function toggleModel() {
@@ -217,8 +217,16 @@
   {/snippet}
 </Sheet>
 
-<!-- Over You, so Back returns to it; a title opened from the list stacks over both. -->
-<WishListSheet open={wishOpen} onClose={() => (wishOpen = false)} onSelect={(title) => (selected = title)} />
+<!-- Over You, so Back returns to it and its count is read again; a title opened from the list stacks
+     over both. -->
+<WishListSheet
+  open={wishOpen}
+  onClose={() => {
+    wishOpen = false;
+    readWanted();
+  }}
+  onSelect={(title) => (selected = title)}
+/>
 {#if selected}
   <TitleDetail
     titleId={selected.id}

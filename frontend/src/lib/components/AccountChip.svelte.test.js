@@ -129,5 +129,13 @@ describe('You (decision 553)', () => {
     expect([...list.querySelectorAll('h3')].map((h) => h.textContent)).toEqual(['You want']);
     expect(list.querySelector('[data-testid="wish-item"]').textContent).toContain('Collateral');
     expect(target.querySelector('[aria-label="You"]'), 'You stays under it, for Back').not.toBeNull();
+
+    // Back from the list, after a Remove there: You reads the count again.
+    server.summary = { wanted: 2, both: 0, members: 2 };
+    nav.page.update((p) => ({ ...p, state: { ...p.state, sheets: p.state.sheets.slice(0, -1) } }));
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    flushSync();
+    expect(target.querySelector('[data-testid="wish-list-sheet"]')).toBeNull();
+    expect(sheet.querySelector('[data-testid="you-wish-row"] .value').textContent).toBe('2');
   });
 });
