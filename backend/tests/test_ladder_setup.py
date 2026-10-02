@@ -216,7 +216,6 @@ async def test_the_bottom_step_opens_on_the_members_lowest_scored_watched_films(
 
 async def test_a_wished_stub_never_shows(house):
     db = house["db"]
-    await db.execute("ALTER TABLE title DROP CONSTRAINT IF EXISTS title_origin_check")
     await db.execute(
         "INSERT INTO title (id, kind, name, year, origin) VALUES (41, 'movie', 'Wished', 2020, 'wished')"
     )
