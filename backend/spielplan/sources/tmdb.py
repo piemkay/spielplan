@@ -1,13 +1,17 @@
 """TMDB: the metadata backbone, and the only stage-2 source allowed to park it (decision 334).
 
 One `append_to_response` request per title. Writes identity only (decision 372) and never flips
-`kind`; a kind disagreement becomes a note.
+`kind`; a kind disagreement becomes a note. `search` and `detail_for_wish` are the web process's two
+reads (decision 558): never captured, and the query is never logged.
 """
 
 from __future__ import annotations
 
+import asyncio
 from typing import TYPE_CHECKING, Any
 
+from spielplan.acquire.fetch import Fetcher, FetchError
+from spielplan.core.config import settings
 from spielplan.sources import _ids, _views, credentials
 from spielplan.sources.base import SourceResult, json_get
 
@@ -15,7 +19,28 @@ if TYPE_CHECKING:
     from spielplan.acquire.stages import StageContext
 
 SOURCE = "tmdb"
-API = "https://api.themoviedb.org/3"
+
+# A member is waiting on these, so one attempt.
+WEB_TIMEOUT_S = 5.0
+
+# A search row carries genre ids only; TMDB's two lists.
+MOVIE_GENRES = {
+    28: "Action", 12: "Adventure", 16: "Animation", 35: "Comedy", 80: "Crime", 99: "Documentary",
+    18: "Drama", 10751: "Family", 14: "Fantasy", 36: "History", 27: "Horror", 10402: "Music",
+    9648: "Mystery", 10749: "Romance", 878: "Science Fiction", 10770: "TV Movie", 53: "Thriller",
+    10752: "War", 37: "Western",
+}
+TV_GENRES = {
+    10759: "Action & Adventure", 16: "Animation", 35: "Comedy", 80: "Crime", 99: "Documentary",
+    18: "Drama", 10751: "Family", 10762: "Kids", 9648: "Mystery", 10763: "News", 10764: "Reality",
+    10765: "Sci-Fi & Fantasy", 10766: "Soap", 10767: "Talk", 10768: "War & Politics", 37: "Western",
+}
+
+_INT32_MAX = 2**31 - 1
+
+
+def api() -> str:
+    return settings().tmdb_api_base.rstrip("/")
 
 # One call carries what would otherwise be ten.
 MOVIE_APPEND = ",".join([
@@ -49,7 +74,7 @@ async def _find(ctx: StageContext, row: Any, auth: tuple[dict[str, str], dict[st
     """
     headers, params = auth
     captured = await _views.capture(
-        ctx, source=SOURCE, kind="find", url=f"{API}/find/{imdb_id}", headers=headers,
+        ctx, source=SOURCE, kind="find", url=f"{api()}/find/{imdb_id}", headers=headers,
         params={**params, "external_source": "imdb_id"},
         request_meta={"imdb_id": imdb_id},
     )
@@ -124,7 +149,7 @@ async def detail(ctx: StageContext) -> SourceResult:
     is_movie = row["kind"] == "movie"
     captured = await _views.capture(
         ctx, source=SOURCE, kind=MOVIE_DETAIL if is_movie else TV_DETAIL,
-        url=f"{API}/{'movie' if is_movie else 'tv'}/{tmdb_id}", headers=headers,
+        url=f"{api()}/{'movie' if is_movie else 'tv'}/{tmdb_id}", headers=headers,
         params={**params, "append_to_response": MOVIE_APPEND if is_movie else TV_APPEND,
                 "language": "en-US"},
         request_meta={"tmdb_id": tmdb_id},
@@ -151,3 +176,86 @@ async def detail(ctx: StageContext) -> SourceResult:
         note=f"tmdb {tmdb_id}: {reviews} reviews"
              + (f", filled {', '.join(filled)}" if filled else ""),
     )
+
+
+def _segment(kind: str) -> str:
+    return "movie" if kind == "movie" else "tv"
+
+
+def _text(value: Any) -> str | None:
+    return (str(value).strip() or None) if value else None
+
+
+def _card(data: dict[str, Any], kind: str) -> dict[str, Any]:
+    movie = kind == "movie"
+    date = data.get("release_date" if movie else "first_air_date")
+    poster = data.get("poster_path")
+    return {
+        "tmdb_id": int(data["id"]),
+        "kind": kind,
+        "name": _text(data.get("title" if movie else "name")),
+        "original_name": _text(data.get("original_title" if movie else "original_name")),
+        "year": int(date[:4]) if isinstance(date, str) and date[:4].isdigit() else None,
+        "overview": _text(data.get("overview")),
+        "poster_path": poster if isinstance(poster, str) else None,
+    }
+
+
+async def _web_get(fetcher: Fetcher, url: str, auth: tuple[dict[str, str], dict[str, str]],
+                   **params: str) -> Any:
+    headers, keyed = auth
+    response = await asyncio.wait_for(
+        fetcher.get(url, headers=headers, params={**keyed, **params}, max_attempts=1,
+                    timeout=WEB_TIMEOUT_S),
+        WEB_TIMEOUT_S,
+    )
+    return response.json()
+
+
+async def search(
+    fetcher: Fetcher, auth: tuple[dict[str, str], dict[str, str]], *, kind: str, q: str
+) -> list[dict[str, Any]]:
+    """`/search/movie` or `/search/tv`, page one in TMDB's order, each row's genres named.
+    Raises `FetchError`, `TimeoutError` or `ValueError`."""
+    data = await _web_get(fetcher, f"{api()}/search/{_segment(kind)}", auth,
+                          query=q, include_adult="false")
+    names = MOVIE_GENRES if kind == "movie" else TV_GENRES
+    rows = []
+    for hit in data.get("results") or []:
+        if not isinstance(hit.get("id"), int) or not (row := _card(hit, kind))["name"]:
+            continue
+        row["genres"] = [names[g] for g in hit.get("genre_ids") or [] if g in names]
+        row["popularity"] = float(hit.get("popularity") or 0)
+        rows.append(row)
+    return rows
+
+
+async def detail_for_wish(
+    fetcher: Fetcher, auth: tuple[dict[str, str], dict[str, str]], *, kind: str, tmdb_id: int
+) -> dict[str, Any] | None:
+    """`/movie/{id}` or `/tv/{id}` with its external ids, read once for Want it; None when TMDB holds
+    no such title of the kind. Raises as `search` does."""
+    try:
+        data = await _web_get(fetcher, f"{api()}/{_segment(kind)}/{int(tmdb_id)}", auth,
+                              append_to_response="external_ids")
+    except FetchError as exc:
+        if exc.status == 404:
+            return None
+        raise
+    if not isinstance(data.get("id"), int):
+        raise ValueError(f"TMDB answered for {kind} {tmdb_id} with no id")
+    external = data.get("external_ids") or {}
+    if kind == "movie":
+        runtime = data.get("runtime")
+    else:
+        episodes = [m for m in data.get("episode_run_time") or [] if isinstance(m, int)]
+        runtime = round(sum(episodes) / len(episodes)) if episodes else None
+    tvdb = external.get("tvdb_id")
+    return {
+        **_card(data, kind),
+        "runtime_min": runtime if isinstance(runtime, int) and 0 < runtime <= _INT32_MAX else None,
+        "imdb_id": _ids.valid_imdb(external.get("imdb_id") or data.get("imdb_id")),
+        "tvdb_id": tvdb if kind == "series" and isinstance(tvdb, int) and 0 < tvdb <= _INT32_MAX
+        else None,
+        "genres": [g["name"] for g in data.get("genres") or [] if isinstance(g, dict) and g.get("name")],
+    }
