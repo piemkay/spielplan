@@ -39,3 +39,9 @@ async def poster(title_id: int, request: Request, user: ActiveUserBrief) -> Resp
 async def person(person_id: int, request: Request, user: ActiveUserBrief) -> Response:
     answer = await request.app.state.art.person(person_id, connect=deps.brief_connection)
     return deps.carry_slid_session_cookie(request, _response(request, answer))
+
+
+@router.get("/art/tmdb/{file}", response_class=Response)
+async def tmdb_poster(file: str, request: Request, user: ActiveUserBrief) -> Response:
+    answer = await request.app.state.art.tmdb_poster(file)
+    return deps.carry_slid_session_cookie(request, _response(request, answer))

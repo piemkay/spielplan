@@ -37,8 +37,10 @@ class ArtCache:
         self.root = root
         self._clock = clock
 
-    def _paths(self, title_id: int) -> tuple[Path, Path]:
-        return self.root / f"{int(title_id)}.img", self.root / f"{int(title_id)}.json"
+    def _paths(self, key: int | str) -> tuple[Path, Path]:
+        """An id, or a TMDB file name the route has already held to its pattern."""
+        name = key if isinstance(key, str) else int(key)
+        return self.root / f"{name}.img", self.root / f"{name}.json"
 
     def read(self, title_id: int, sig: str) -> Entry | None:
         """The entry if it answers these sources and is still fresh, else None; damage is a miss, never an

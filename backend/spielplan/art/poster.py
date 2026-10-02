@@ -1,7 +1,8 @@
 """A title's poster, from the cache or fetched once (§6.8, decisions 483-485).
 
 Never await upstream while holding a pooled connection; concurrent misses share one shielded task;
-one process-lifetime Fetcher is each image host's single bucket.
+one process-lifetime Fetcher is each image host's single bucket, and the web process's TMDB API bucket
+(decision 558).
 """
 
 from __future__ import annotations
@@ -10,6 +11,7 @@ import asyncio
 import contextlib
 import hashlib
 import logging
+import re
 import time
 from collections.abc import Callable
 from contextlib import AbstractAsyncContextManager
@@ -20,7 +22,7 @@ import asyncpg
 import httpx
 
 from spielplan.acquire.fetch import Fetcher, FetchError
-from spielplan.acquire.hosts import JELLYFIN_POLICY
+from spielplan.acquire.hosts import JELLYFIN_POLICY, WEB_TMDB_POLICY, tmdb_api_host
 from spielplan.art import cache, sources
 from spielplan.art.hosts import servable
 from spielplan.connectors import registry
@@ -54,6 +56,10 @@ JELLYFIN_WIDTH = 342
 # Seconds, retries and `Retry-After` included.
 UPSTREAM_DEADLINE_S = 20.0
 UPSTREAM_TIMEOUT_S = 8.0
+
+# A From TMDB hit's poster is named by its file alone (decision 558): no host or path from the client.
+TMDB_FILE = re.compile(r"[A-Za-z0-9]{8,40}\.(?:jpg|png)")
+TMDB_W342 = "https://image.tmdb.org/t/p/w342/"
 
 
 def sniff(data: bytes) -> str | None:
@@ -120,22 +126,26 @@ class ArtService:
         self.cache = cache.ArtCache(root, clock=clock)
         # Its own directory, so a person's id never answers for a title's.
         self.people = cache.ArtCache(root / "person", clock=clock)
+        self.tmdb = cache.ArtCache(root / "tmdb", clock=clock)
         # Egress off (e2e, CI) means no internet fetch; the household Jellyfin is asked either way.
         self.egress = egress
-        self._fetcher = Fetcher(transport=transport)
+        # Also the search's (`home/beyond.py`), under the web process's own TMDB policy.
+        self.fetcher = Fetcher(transport=transport, policies={
+            host: WEB_TMDB_POLICY for host in ("api.themoviedb.org", tmdb_api_host())
+        })
         self._opened = False
-        self._inflight: dict[tuple[Path, int], asyncio.Task[Answer]] = {}
+        self._inflight: dict[tuple[Path, int | str], asyncio.Task[Answer]] = {}
         self._jellyfin = asyncio.Semaphore(JELLYFIN_POLICY.max_concurrency)
 
     async def open(self) -> ArtService:
-        await self._fetcher.__aenter__()
+        await self.fetcher.__aenter__()
         self._opened = True
         return self
 
     async def close(self) -> None:
         if self._opened:
             self._opened = False
-            await self._fetcher.__aexit__(None, None, None)
+            await self.fetcher.__aexit__(None, None, None)
 
     async def poster(self, title_id: int, *, connect: Connect) -> Answer:
         async with connect() as conn:
@@ -148,7 +158,15 @@ class ArtService:
             row = await sources.read_person(conn, person_id)
         return await self._serve(self.people, person_id, row, connect)
 
-    async def _serve(self, store: cache.ArtCache, key: int, row, connect: Connect) -> Answer:
+    async def tmdb_poster(self, file: str) -> Answer:
+        """A From TMDB hit's poster, which has no title row, by its file's name at w342."""
+        if not TMDB_FILE.fullmatch(file):
+            return Answer.none(BROWSER_NONE)
+        row = sources.PosterRow(jellyfin_id=None, poster_path=f"{TMDB_W342}{file}",
+                                lookup_outcome=None, lookup_url=None, lookup_owed=False)
+        return await self._serve(self.tmdb, file, row, None)
+
+    async def _serve(self, store: cache.ArtCache, key: int | str, row, connect: Connect | None) -> Answer:
         if row is None:
             return Answer.none(BROWSER_NONE)
         candidates = row.candidates()
@@ -252,7 +270,7 @@ class ArtService:
             return _Outcome.SKIPPED, None
         try:
             response = await asyncio.wait_for(
-                self._fetcher.get(candidate.url, max_attempts=2, timeout=UPSTREAM_TIMEOUT_S),
+                self.fetcher.get(candidate.url, max_attempts=2, timeout=UPSTREAM_TIMEOUT_S),
                 UPSTREAM_DEADLINE_S,
             )
         except TimeoutError:

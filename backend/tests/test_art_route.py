@@ -227,6 +227,21 @@ async def test_a_credit_says_whether_the_person_route_has_a_photo_to_serve(db):
     ]
 
 
+async def test_a_from_tmdb_poster_is_served_by_its_file_name_behind_the_session(app, tmp_path):
+    """Decision 558: a hit with no title row; the client names a file, never a host."""
+    admin = await admin_client(app)
+    host = Host()
+    await _host(admin, tmp_path, host)
+    assert (await app().get("/api/art/tmdb/harbourlights.jpg")).status_code == 401
+    served = await admin.get("/api/art/tmdb/harbourlights.jpg")
+    assert served.status_code == 200 and served.content == JPEG
+    assert served.headers["cache-control"] == "private, max-age=15552000"
+    assert served.headers["x-content-type-options"] == "nosniff"
+    refused = await admin.get("/api/art/tmdb/no.jpg")
+    assert (refused.status_code, refused.headers["cache-control"]) == (404, "private, max-age=86400")
+    assert host.asked == ["https://image.tmdb.org/t/p/w342/harbourlights.jpg"]
+
+
 @pytest.mark.parametrize("title_id", ["x", "1.5"])
 async def test_a_title_id_that_is_not_a_number_is_refused_by_the_route(app, title_id):
     admin = await admin_client(app)
