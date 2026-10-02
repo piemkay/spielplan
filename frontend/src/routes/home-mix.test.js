@@ -42,6 +42,8 @@ const MIX = {
   }]
 };
 
+const CAINE = { person_ids: [12, 13], person_id: 12, name: 'Michael Caine', photo: false };
+
 const DETAIL = {
   title: { id: 7, name: 'Glass Onion', kind: 'movie', year: 2022, runtime_min: 139, seen_state: 'unseen', is_owned: true },
   why: 'Because you placed Knives Out high',
@@ -63,7 +65,11 @@ beforeEach(() => {
       let payload = {};
       if (u.pathname === '/api/mix/titles') payload = MIX;
       else if (u.pathname === '/api/mix/twists') payload = { seed: 0, twists: [] };
-      else if (u.pathname === '/api/titles') payload = { items: [], total: 0, hidden: {} };
+      else if (u.pathname === '/api/titles') {
+        // An ordinary read echoes the people it was asked for, by name.
+        const people = u.searchParams.getAll('person').includes('12,13') ? [CAINE] : [];
+        payload = { items: [], total: 0, hidden: {}, applied: { terms: [], not_terms: [], people } };
+      }
       else if (u.pathname === '/api/titles/7') payload = DETAIL;
       else if (u.pathname === '/api/facets') payload = { genres: [], decades: [] };
       else if (u.pathname.startsWith('/api/prompts/finish')) payload = [];
@@ -80,6 +86,7 @@ afterEach(() => {
   if (app) unmount(app);
   app = null;
   resetHomeFilters();
+  history.replaceState(null, '', '/');
   Object.assign(session, { user: null, hasBundle: null, restartRequired: null });
   Object.assign(homeKept, { user: null, epoch: 0, kinds: null, payload: null, scrollY: 0 });
   vi.unstubAllGlobals();
@@ -129,6 +136,13 @@ describe('a recipe on Home (decisions 559 and 560)', () => {
     expect(target.querySelector('[data-testid="title-why"]').textContent).toBe(
       'From Knives Out: murder mystery, grand estate · but pulp, like Star Wars'
     );
+  });
+
+  it('names a person a reloaded recipe address carries', async () => {
+    history.replaceState(null, '', '/?person=12,13&like=245&kind=movie');
+    await open();
+    expect(target.querySelector('[data-testid="home-mode"]').dataset.reason).toBe('recipe');
+    expect(target.querySelector('[data-testid="person-chip"] .label').textContent.trim()).toBe('Michael Caine');
   });
 
   it('returns the shelves once the last film is gone', async () => {

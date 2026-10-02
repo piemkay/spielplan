@@ -268,6 +268,15 @@ test('Home on a desktop is one width, as Rank is', async ({ page, isMobile }) =>
       poster
     );
     expect((await spans()).off, `the grid is not the content's width ${at}`).toEqual([]);
+    // The posters keep their size, and what a row leaves over goes into its gaps, not a ragged edge.
+    const row = await page.evaluate(() => {
+      const grid = document.querySelector('.grid');
+      const [a, b] = [...grid.querySelectorAll('.card-wrap')].map((el) => el.getBoundingClientRect());
+      const tracks = getComputedStyle(grid).gridTemplateColumns.split(' ').length;
+      const end = b && b.top === a.top ? a.left + tracks * a.width + (tracks - 1) * (b.left - a.right) : null;
+      return { end: end && Math.round(end), right: Math.round(grid.getBoundingClientRect().right) };
+    });
+    if (row.end) expect(row.end, `the grid's columns stop short of its edge ${at}`).toBe(row.right);
   }
 });
 

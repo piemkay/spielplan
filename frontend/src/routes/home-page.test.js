@@ -6,22 +6,31 @@ import { flushSync, mount, unmount } from 'svelte';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 // Sheets push a history entry as they open; Home mirrors its chips into its own with replaceState,
-// which keeps the URL the page was entered with, as SvelteKit's does.
-const nav = vi.hoisted(() => ({ page: null, replaced: [] }));
+// which keeps the URL the page was entered with, as SvelteKit's does. `afterNavigate` runs once for
+// the navigation that mounted the page, and again for each one `navigate` makes.
+const nav = vi.hoisted(() => ({ page: null, replaced: [], after: new Set() }));
 vi.mock('$app/stores', async () => {
   const { writable } = await import('svelte/store');
   nav.page = writable({ url: new URL('http://localhost/'), state: {} });
   return { page: nav.page };
 });
-vi.mock('$app/navigation', () => ({
-  pushState: (_url, state) => nav.page.update((p) => ({ ...p, state })),
-  replaceState: (url, state) => {
-    nav.replaced.push(url);
-    nav.page.update((p) => ({ ...p, state }));
-  },
-  beforeNavigate: () => {},
-  afterNavigate: () => {}
-}));
+vi.mock('$app/navigation', async () => {
+  const { onMount } = await import('svelte');
+  return {
+    pushState: (_url, state) => nav.page.update((p) => ({ ...p, state })),
+    replaceState: (url, state) => {
+      nav.replaced.push(url);
+      nav.page.update((p) => ({ ...p, state }));
+    },
+    beforeNavigate: () => {},
+    afterNavigate: (fn) =>
+      onMount(() => {
+        nav.after.add(fn);
+        fn({ type: 'enter', from: null, to: { route: { id: '/' } } });
+        return () => nav.after.delete(fn);
+      })
+  };
+});
 
 // The card's own taps are TitleDetail's to test; Home's part is what it does with them.
 const detail = vi.hoisted(() => ({ props: null }));
@@ -31,6 +40,7 @@ vi.mock('$lib/components/TitleDetail.svelte', () => ({
   }
 }));
 
+import { get as readStore } from 'svelte/store';
 import HomePage from './+page.svelte';
 import PAGE_SOURCE from './+page.svelte?raw';
 import { homeKept } from '$lib/home.svelte.js';
@@ -89,6 +99,7 @@ afterEach(() => {
   target.remove();
 });
 
+const readState = () => readStore(nav.page).state;
 const countLine = () => target.querySelector('[data-testid="count-line"]').textContent;
 const placeholder = () => target.querySelector('[data-testid="home-search"]').placeholder;
 const card = () => target.querySelector('.empty.card');
@@ -339,6 +350,20 @@ describe('the top of Home (decision 528)', () => {
     expect(links[0].textContent.trim()).toBe('Rate');
   });
 
+  it('shows its notices over the shelves alone, never over a grid', async () => {
+    backend({
+      home: (kinds) => ({ kinds, library: {}, shelves: [], shelves_total: 0, banner }),
+      titles: () => ({ items: [film(1, 'Heat')], total: 1, hidden: {} })
+    });
+    await openHome();
+    expect($('[data-testid="pending-verdicts"]')).not.toBeNull();
+    await type('heat');
+    expect($('[data-testid="home-mode"]').dataset.mode).toBe('grid');
+    expect($('.notice-bar'), 'a search shows no notice').toBeNull();
+    await type('');
+    expect($('[data-testid="pending-verdicts"]')).not.toBeNull();
+  });
+
   it('puts the row away until tomorrow with its x, and Undo brings it back (decision 554)', async () => {
     let away = false;
     backend({
@@ -413,6 +438,25 @@ describe('before the set-up (decision 550)', () => {
     await openHome();
     expect($('[data-testid="home-setup-notice"]')).toBeNull();
     expect($('[data-testid="shelves-empty"]')).not.toBeNull();
+  });
+
+  it('asks for no ratings either while the notice is hidden for the day', async () => {
+    let hidden = false;
+    backend({
+      home: (kinds) => ({
+        kinds, library: {}, shelves: [], shelves_total: 0,
+        setup_notice: hidden ? null : notice, setup_hidden: hidden
+      })
+    });
+    await openHome();
+    hidden = true;
+    $('[data-testid="home-setup-notice"] [aria-label="Hide until tomorrow"]').click();
+    flushSync();
+    expect($('[data-testid="home-setup-notice"]'), 'gone at once').toBeNull();
+    expect($('[data-testid="shelves-empty"]'), 'not even for a moment').toBeNull();
+    await tick();
+    expect(calls('PUT', '/api/home/notices/setup')).toHaveLength(1);
+    expect($('[data-testid="shelves-empty"]'), 'nor after the re-read').toBeNull();
   });
 });
 
@@ -808,10 +852,20 @@ const CAINE = { person_ids: [12, 13], person_id: 12, name: 'Michael Caine', phot
 const MANN = { person_ids: [1], person_id: 1, name: 'Michael Mann', photo: false };
 
 /** Home entered at this address, as a reload or a card's jump from another page enters it. */
-const at = (path, entered = path) => {
+const at = (path, entered = path, state = {}) => {
   history.replaceState(null, '', path);
-  nav.page.set({ url: new URL(entered, 'http://localhost'), state: {} });
+  nav.page.set({ url: new URL(entered, 'http://localhost'), state });
 };
+
+/** A client navigation to this address with Home mounted: a jump from You, Back, the Home tab. The
+ *  page renders its new entry before the navigation's callbacks run, as SvelteKit's does. */
+async function navigate(path, type = 'goto', state = {}) {
+  at(path, path, state);
+  flushSync();
+  const home = { route: { id: '/' } };
+  for (const fn of nav.after) fn({ type, from: home, to: home });
+  await tick();
+}
 const chipTexts = () =>
   [...target.querySelectorAll('.chips [data-testid]')].map(
     (c) => `${c.dataset.testid}:${c.querySelector('.label').textContent.trim()}`
@@ -867,12 +921,45 @@ describe("Home's URL (decision 557 item 6)", () => {
       titles: (p) => ({ items: [film(1, 'Heat')], total: 1, hidden: {}, applied: applied(p) })
     });
     await openHome();
-    at('/?person=12,13&kind=movie&kind=series');
-    await tick();
+    await navigate('/?person=12,13&kind=movie&kind=series');
     expect(chipTexts()).toEqual(['person-chip:Michael Caine']);
     expect($('[data-testid="kind-both"]').getAttribute('aria-pressed')).toBe('true');
     expect($('[data-testid="home-mode"]').dataset.reason).toBe('person');
     expect(asked(seen).getAll('kind')).toEqual(['movie', 'series']);
+  });
+
+  it('comes Back from a jump to the shelves and kinds it left, as the bare address says', async () => {
+    backend({ titles: (p) => ({ items: [film(1, 'Heat')], total: 1, hidden: {}, applied: applied(p) }) });
+    await openHome();
+    await navigate('/?person=12,13&kind=movie&kind=series', 'goto', { jumpedFrom: 'you' });
+    expect(chipTexts()).toEqual(['person-chip:Michael Caine']);
+    expect($('[data-testid="home-back"]').textContent.trim()).toBe('You');
+
+    await navigate('/', 'popstate');
+    expect(chipTexts()).toEqual([]);
+    expect($('[data-testid="home-mode"]').dataset.mode).toBe('shelves');
+    expect($('[data-testid="kind-movie"]').getAttribute('aria-pressed')).toBe('true');
+
+    // The Home tab on a grid of the member's own is the shelves too.
+    $('[data-testid="filter-toggle"]').click();
+    flushSync();
+    $('[data-testid="filter-owned"]').click();
+    await tick();
+    expect($('[data-testid="home-mode"]').dataset.mode).toBe('grid');
+    await navigate('/', 'link');
+    expect($('[data-testid="home-mode"]').dataset.mode).toBe('shelves');
+    expect(homeFilters.owned).toBe(true);
+  });
+
+  it('takes a second jump to the address it was entered with, after its chip went', async () => {
+    backend({ titles: (p) => ({ items: [film(1, 'Heat')], total: 1, hidden: {}, applied: applied(p) }) });
+    at('/?term=mood.cozy&kind=movie');
+    await openHome();
+    $('[aria-label="Remove cozy & mellow"]').click();
+    await tick();
+    expect(chipTexts()).toEqual([]);
+    await navigate('/?term=mood.cozy&kind=movie');
+    expect(chipTexts()).toEqual(['term-chip:cozy & mellow']);
   });
 
   it('drops a term the vocabulary no longer has, and says so (decision 557 item 9)', async () => {
@@ -956,7 +1043,7 @@ describe("the title card's taps on Home (decision 557 item 6)", () => {
     expect($('[data-testid="home-mode"]').dataset.reason).toBe('filter');
   });
 
-  it('adds a term as an include', async () => {
+  it('adds a term as an include, and clears the search as a credit does', async () => {
     const seen = backend({ titles: () => ({ items: [film(1, 'Heat')], total: 1, hidden: {} }) });
     await openHome();
     await type('heat');
@@ -965,7 +1052,94 @@ describe("the title card's taps on Home (decision 557 item 6)", () => {
     detail.props.onTerm(COSY);
     await tick();
     expect($('[data-testid="term-chip"]').dataset.mode).toBe('in');
+    expect($('[data-testid="home-search"]').value).toBe('');
     expect(asked(seen).getAll('term')).toEqual(['mood.cozy']);
+    expect(asked(seen).get('q')).toBeNull();
+  });
+
+  // Decision 558 item 4: clearing the search switches Only in library back on, however it goes.
+  it.each([
+    ['a credit', () => detail.props.onPerson(MANN)],
+    ['a term', () => detail.props.onTerm(COSY)]
+  ])('turns Only in library back on when %s clears the search', async (_tap, tap) => {
+    backend({ titles: () => ({ items: [film(1, 'Heat')], total: 1, hidden: {} }) });
+    await openHome();
+    $('[data-testid="filter-toggle"]').click();
+    flushSync();
+    $('[data-testid="filter-owned"]').click();
+    await tick();
+    await type('heat');
+    $('.grid .card-wrap').click();
+    flushSync();
+    tap();
+    await tick();
+    expect(homeFilters.owned).toBe(true);
+    expect($('[data-testid="owned-filter-chip"]')).toBeNull();
+  });
+
+  it('closes the wish list under the card first, so the address and Back hold', async () => {
+    const listing = {
+      mine: [{
+        title_id: 3, kind: 'movie', name: 'Princess Mononoke', year: 1997, since: '2026-09-14T08:00:00Z',
+        mine: true, likely: null, likely_too: [], wanters: [], link: null
+      }],
+      others: [],
+      copy_text: ''
+    };
+    backend({
+      home: (kinds) => ({ kinds, library: {}, shelves: [], wish: { wanted: 1, both: 0, members: 2 } }),
+      wish: () => listing,
+      titles: (p) => ({ items: [film(1, 'Heat')], total: 1, hidden: {}, applied: applied(p) })
+    });
+    const sheets = () => readState().sheets ?? [];
+    const go = vi.spyOn(history, 'go').mockImplementation((delta) => {
+      nav.page.update((p) => ({ ...p, state: { ...p.state, sheets: p.state.sheets.slice(0, delta) } }));
+      setTimeout(() => dispatchEvent(new PopStateEvent('popstate')));
+    });
+    try {
+      await openHome();
+      $('[data-testid="home-wish-open"]').click();
+      await tick();
+      expect(sheets()).toHaveLength(1);
+      $('[data-testid="wish-item"] button.open').click();
+      flushSync();
+      detail.props.onPerson(CAINE);
+      await tick();
+      expect(go).toHaveBeenCalledWith(-1);
+      expect(sheets()).toEqual([]);
+      expect($('[data-testid="wish-list-sheet"]')).toBeNull();
+      expect(nav.replaced.at(-1)).toBe('/?person=12,13&kind=movie');
+    } finally {
+      go.mockRestore();
+    }
+  });
+});
+
+describe('the way back from a jump (board B9)', () => {
+  it('names the page the card was on, goes Back to it, and is gone once the shelves are back', async () => {
+    backend({ titles: (p) => ({ items: [film(1, 'Heat')], total: 1, hidden: {}, applied: applied(p) }) });
+    at('/?person=12,13&kind=movie', '/?person=12,13&kind=movie', { jumpedFrom: 'rank' });
+    await openHome();
+    const back = $('[data-testid="home-back"]');
+    expect(back.getAttribute('aria-label')).toBe('Back to Rank');
+    expect(back.textContent.trim()).toBe('Rank');
+    const pop = vi.spyOn(history, 'back').mockImplementation(() => {});
+    back.click();
+    expect(pop).toHaveBeenCalledTimes(1);
+    pop.mockRestore();
+
+    $('[aria-label="Remove Michael Caine"]').click();
+    await tick();
+    expect($('[data-testid="home-mode"]').dataset.mode).toBe('shelves');
+    expect($('[data-testid="home-back"]')).toBeNull();
+    expect(readState().jumpedFrom).toBeUndefined();
+  });
+
+  it('shows nothing on an address Home was not jumped to', async () => {
+    backend({ titles: (p) => ({ items: [film(1, 'Heat')], total: 1, hidden: {}, applied: applied(p) }) });
+    at('/?person=12,13&kind=movie');
+    await openHome();
+    expect($('[data-testid="home-back"]')).toBeNull();
   });
 });
 
@@ -990,6 +1164,36 @@ describe('an include folds what only our read finds (decision 557 item 2)', () =
     expect(head).toContain('Might also fit');
     expect(head).toContain('Our read · less certain');
     expect(names()).toEqual(['Heat', 'Up', 'Drive']);
+  });
+});
+
+describe('a grid speaks of what it shows, never of its fold alone', () => {
+  const row = (id, name, match, cold = false) => ({
+    ...film(id, name), match, ...(cold ? { item_n: 0, e_source: 'cold_tower' } : { item_n: 9 })
+  });
+
+  it('offers no order over a fold alone, and names New only once a New title shows', async () => {
+    let items = [row(1, 'Heat', 'weak', true)];
+    backend({
+      titles: () => ({
+        items, total: items.length, strong_total: items.filter((t) => t.match === 'strong').length,
+        hidden: {}, beyond: 0, sort: 'for_you', for_you_available: true
+      })
+    });
+    at('/?term=mood.cozy&kind=movie');
+    await openHome();
+    expect($('[aria-label="Order"]'), 'nothing shown to order').toBeNull();
+    unmount(app);
+    app = null;
+
+    items = [row(2, 'Up', 'strong'), row(1, 'Heat', 'weak', true)];
+    at('/?term=mood.cozy&kind=movie');
+    await openHome();
+    expect($('[aria-label="Order"]')).not.toBeNull();
+    expect($('[data-testid="catalog-cold-note"]'), 'the New title is folded').toBeNull();
+    $('[data-testid="weak-matches-toggle"]').click();
+    flushSync();
+    expect($('[data-testid="catalog-cold-note"]')).not.toBeNull();
   });
 });
 
