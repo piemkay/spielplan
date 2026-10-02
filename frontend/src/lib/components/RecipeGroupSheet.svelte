@@ -159,7 +159,7 @@
     <Popover {open} {anchor} label="{film.name} in your recipe" width={480} {onClose}>
       <div class="sheet desktop">
         {@render head(onClose)}
-        {@render body()}
+        <div class="scroll">{@render body()}</div>
       </div>
     </Popover>
   {:else}
@@ -254,7 +254,6 @@
   }
   .desktop .takehead {
     padding: 8px 10px 4px;
-    box-shadow: inset 0 0.5px 0 var(--separator);
   }
   .takehead h3 {
     margin: 0;
@@ -466,7 +465,17 @@
   .desktop .foot {
     padding: 10px 10px 8px;
   }
+  /* The head and Apply stay put and the rows scroll, as in the phone's sheet. */
   .desktop {
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
     padding: 6px 0;
+  }
+  .scroll {
+    min-height: 0;
+    overflow-y: auto;
+    overscroll-behavior: contain;
+    border-top: 0.5px solid var(--separator);
   }
 </style>
