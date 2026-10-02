@@ -241,7 +241,7 @@ WITH household AS (
       LEFT JOIN placed      pd ON pd.title_id = t.id
       LEFT JOIN familiar    fa ON fa.kind = t.kind AND fa.lang = t.original_language
       LEFT JOIN familiar_kind fk ON fk.kind = t.kind
-     WHERE t.kind = $2
+     WHERE t.kind = $2 AND t.origin <> 'wished'
        AND NOT (t.id = ANY($3::int[]))
        AND (t.id = ANY($6::int[])
             OR (pd.title_id IS NULL AND NOT (ut.title_id IS NOT NULL AND ut.state = 'unseen')))

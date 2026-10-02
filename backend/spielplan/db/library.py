@@ -340,7 +340,7 @@ async def list_titles(
     lim, off = arg(limit), arg(offset)
     rows = await conn.fetch(
         f"""
-        SELECT t.id, t.kind, t.name, t.year, t.runtime_min, t.poster_path, t.is_owned,
+        SELECT t.id, t.kind, t.name, t.year, t.runtime_min, t.poster_path, t.is_owned, t.origin,
                t.placement, tp.item_n, tp.e_source, {seen_select}{match}
           FROM title t
           -- §8 stage 10's cold badge is about CROWD DATA, and `title.placement` stopped meaning

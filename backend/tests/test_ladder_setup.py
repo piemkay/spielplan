@@ -374,6 +374,21 @@ async def test_a_refused_finish_writes_nothing(house, picks, reason):
     assert await house["db"].fetchval("SELECT count(*) FROM tier_edit") == 0
 
 
+async def test_a_wished_stub_is_no_pick(house):
+    """The search names a row's origin so the set-up leaves a stub out; a pick of one is refused."""
+    db = house["db"]
+    await db.execute(
+        "INSERT INTO title (id, kind, name, year, origin) VALUES (41, 'movie', 'Wished', 2020, 'wished')"
+    )
+    found = (await house["patrick"].get("/api/titles", params={"kind": "movie", "q": "wished"})).json()
+    assert [(i["id"], i["origin"]) for i in found["items"]] == [(41, "wished")]
+
+    response = await _finish(house["patrick"], [(1, 6), (41, 5)])
+    assert response.status_code == 422, response.text
+    assert response.json()["detail"]["reason"] == "not_a_film"
+    assert await db.fetchval("SELECT count(*) FROM tier_edit") == 0
+
+
 async def test_one_members_set_up_leaves_the_others_untouched(house):
     assert (await _finish(house["patrick"], [(1, 6)])).status_code == 200
     jenny = (await house["jenny"].get("/api/ladder/setup")).json()

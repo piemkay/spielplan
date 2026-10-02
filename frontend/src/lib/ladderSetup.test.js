@@ -220,6 +220,13 @@ describe('the search', () => {
     await search('western');
     expect(setup.hits.map((f) => f.name)).toEqual(['Western', 'Brazilian Western']);
   });
+
+  it('leaves out a wished title, which nobody holds yet', async () => {
+    const item = (id, name, origin) => ({ id, kind: 'movie', name, year: 2024, poster_path: null, origin });
+    replies['/api/titles'] = { body: { items: [item(1, 'Paprika', 'bundle'), item(2, 'Paprika Two', 'wished')] } };
+    await search('paprika');
+    expect(setup.hits.map((f) => f.id)).toEqual([1]);
+  });
 });
 
 describe('the done screen', () => {
