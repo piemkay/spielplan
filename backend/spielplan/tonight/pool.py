@@ -14,6 +14,7 @@ from typing import Any
 import asyncpg
 
 from spielplan.db import genres as genre_vocab
+from spielplan.db.dna_terms import BOTH_TIERS, unvetoed
 from spielplan.ledger import ladder, model, observations
 from spielplan.tonight import round as round_rules
 
@@ -39,9 +40,6 @@ VETOES: dict[str, tuple[str, tuple[str, ...]]] = {
 }
 MAX_VETOES = 3
 
-# Both tiers, each by name (§4.1 rules 1-2): a veto wants recall over precision (decision 504).
-VETO_TIERS: tuple[str, ...] = ("extracted", "projected")
-
 
 def veto_terms(keys: Iterable[str]) -> list[str]:
     """The vocabulary terms a set of veto keys removes; an unknown key removes nothing."""
@@ -51,17 +49,6 @@ def veto_terms(keys: Iterable[str]) -> list[str]:
 def veto_labels(keys: Iterable[str]) -> list[str]:
     return [VETOES[k][0] for k in VETOES if k in set(keys)]
 
-
-def _unvetoed(terms: str, version: str, tiers: str) -> str:
-    """No vetoed term on `t` in either tier (decision 504); with no vocabulary version, nothing is."""
-    return f"""(
-        cardinality({terms}::text[]) = 0 OR {version}::text IS NULL
-        OR NOT EXISTS (
-            SELECT 1 FROM dna_tagged d
-             WHERE d.title_id = t.id AND d.version = {version} AND d.tier = ANY({tiers}::text[])
-               AND d.term = ANY({terms}::text[])
-        )
-    )"""
 
 # §6.2 step 1: "the pool admits up to budget + 40 min"; the spec's number, not a tunable.
 BUDGET_GRACE_MIN = 40
@@ -239,10 +226,10 @@ async def build(
                      )
                 )
            )
-           AND {_unvetoed("$5", "$6", "$7")}
+           AND {unvetoed("$5", "$6", "$7")}
         """,
         member_user_ids, kind, bundle_version, include_rewatches,
-        list(vetoed_terms), dna_version, list(VETO_TIERS),
+        list(vetoed_terms), dna_version, list(BOTH_TIERS),
     )
 
     grouped: dict[int, dict[str, Any]] = {}
@@ -302,9 +289,9 @@ async def liked_films(
         SELECT {_FILM}
           FROM title t
           JOIN user_title ut ON ut.title_id = t.id AND ut.user_id = $1 AND ut.state = 'seen'
-         WHERE t.id = ANY($2::int[]) AND t.kind = $3 AND {_unvetoed("$4", "$5", "$6")}
+         WHERE t.id = ANY($2::int[]) AND t.kind = $3 AND {unvetoed("$4", "$5", "$6")}
         """,
-        user_id, list(liked), kind, list(vetoed_terms), dna_version, list(VETO_TIERS),
+        user_id, list(liked), kind, list(vetoed_terms), dna_version, list(BOTH_TIERS),
     )
     word = observations.tier_words(tier_set)[int(model.verdict_tiers(k)[2][0])]
     return [{**dict(r), "step": liked[r["title_id"]]} for r in rows], word, len(liked)
@@ -325,10 +312,10 @@ async def well_known_films(
         SELECT {_FILM}
           FROM title t
           JOIN title_prior tp ON tp.title_id = t.id AND tp.bundle_version = $2
-         WHERE t.is_owned AND t.kind = $1 AND tp.item_n >= $3 AND {_unvetoed("$4", "$5", "$6")}
+         WHERE t.is_owned AND t.kind = $1 AND tp.item_n >= $3 AND {unvetoed("$4", "$5", "$6")}
         """,
         kind, bundle_version, round_rules.WELL_KNOWN_CROWD,
-        list(vetoed_terms), dna_version, list(VETO_TIERS),
+        list(vetoed_terms), dna_version, list(BOTH_TIERS),
     )
     return [{**dict(r), "step": None} for r in rows]
 
@@ -375,7 +362,6 @@ __all__ = [
     "SCALE_MARKER",
     "SCALE_SD",
     "VETOES",
-    "VETO_TIERS",
     "Candidate",
     "Seat",
     "admits",

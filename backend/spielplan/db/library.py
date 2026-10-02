@@ -4,7 +4,7 @@ never appear in a WHERE."""
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Any, Literal
 
@@ -19,6 +19,7 @@ from spielplan.importer import meta
 Kind = Literal["movie", "series"]
 KINDS: tuple[Kind, ...] = ("movie", "series")
 SeenFilter = Literal["any", "seen", "unseen"]
+Owned = Literal["only", "not", "any"]
 Sort = Literal["for_you", "newest"]
 
 # LIKE's default escape is backslash. Order matters: double it first, or later escapes get escaped.
@@ -68,6 +69,14 @@ def _text_tier_sql(n: str, nq: str) -> str:
     return f"LEAST({_tier_sql(n, nq)}, {_tier_sql(stripped, nq)})"
 
 
+# The best of the name's and the aliases' tiers; `sn`, `sq` and `salias` are `search_order_sql`'s joins.
+_SEARCH_QUALITY = (
+    f"LEAST({_text_tier_sql('sn.n', 'sq.n')} * 2,"
+    f" COALESCE(salias.tier, {SEARCH_TIERS - 1}) * 2 + 1)"
+)
+_TEXT_STRONG = f"{_SEARCH_QUALITY} < {WEAK_TIER} * 2"
+
+
 def search_order_sql(q_param: str) -> tuple[str, str, str]:
     """(joins, ORDER BY, match select), best match first (decision 472): name tier x2 or alias tier x2+1,
     then owned, crowd percentile within the title's own kind, year, name, id (a total order for OFFSET).
@@ -86,15 +95,11 @@ def search_order_sql(q_param: str) -> tuple[str, str, str]:
                 FROM title_prior pp JOIN title pt ON pt.id = pp.title_id
                WHERE pt.kind = ANY($1)
           ) spop ON spop.title_id = t.id"""
-    quality = (
-        f"LEAST({_text_tier_sql('sn.n', 'sq.n')} * 2,"
-        f" COALESCE(salias.tier, {SEARCH_TIERS - 1}) * 2 + 1)"
-    )
     order = (
-        f"{quality},"
+        f"{_SEARCH_QUALITY},"
         " t.is_owned DESC, COALESCE(spop.pct, 0) DESC, t.year DESC NULLS LAST, lower(t.name), t.id"
     )
-    match = f"CASE WHEN {quality} < {WEAK_TIER} * 2 THEN 'strong' ELSE 'weak' END AS match"
+    match = f"CASE WHEN {_TEXT_STRONG} THEN 'strong' ELSE 'weak' END AS match"
     return joins, order, match
 
 
@@ -115,15 +120,19 @@ async def household_ids(conn: asyncpg.Connection) -> list[int]:
     return [int(r["id"]) for r in rows]
 
 
-def _dna_term_matches(needle: str) -> str:
-    """`dt` matches the typed `needle` (stripped, lower-cased) by id, leaf, shipped label or fallback
-    label. Shared by `_filters` and `dna_tiers_for`, which must agree clause for clause."""
-    leaf = "split_part(lower(dt.term), '.', 2)"
-    return (
-        f"(lower(dt.term) = {needle} OR {leaf} = {needle}"
-        f" OR replace({leaf}, '_', ' ') = {needle}"
-        f" OR dt.term IN (SELECT dm.term FROM dna_term dm WHERE dm.version = {dna_terms.ACTIVE_VERSION}"
-        f" AND lower(btrim(dm.label)) = {needle}))"
+# The tier an include is quoted in (§4.1 rule 1).
+_QUOTED: tuple[str, ...] = ("extracted",)
+
+
+def _carries(arg: Callable[[Any], str], terms: Sequence[str], tiers: Sequence[str]) -> str:
+    """`t` carries every one of `terms` in one of `tiers`: one presence predicate per term, no weight
+    (§4.1 rules 1 and 2). The version is a subquery because the builders are synchronous."""
+    among = arg(list(tiers))
+    return " AND ".join(
+        f"EXISTS (SELECT 1 FROM dna_tagged dt WHERE dt.title_id = t.id"
+        f" AND dt.version = {dna_terms.ACTIVE_VERSION} AND dt.tier = ANY({among}::text[])"
+        f" AND dt.term = {arg(term)})"
+        for term in terms
     )
 
 
@@ -135,13 +144,15 @@ def _filters(
     genre: str | None = None,
     decade: int | None = None,
     seen: SeenFilter = "any",
-    person_id: int | Sequence[int] | None = None,
-    owned_only: bool = False,
+    people: Sequence[Sequence[int]] = (),
+    terms: Sequence[str] = (),
+    not_terms: Sequence[str] = (),
+    owned: Owned = "any",
     runtime_max: int | None = None,
     runtime_min: int | None = None,
-    dna: str | None = None,
 ) -> tuple[str, list[Any]]:
-    """The catalog's WHERE over alias `t`; the listing and the hidden-by-kind count share it."""
+    """The catalog's WHERE over alias `t`; the listing and the hidden-by-kind count share it. Each
+    group of `people` is one human's person rows, any role; groups AND, as `terms` do (decision 557)."""
     where = ["t.kind = ANY($1)"]
     args: list[Any] = [normalise_kinds(kinds)]
 
@@ -165,28 +176,26 @@ def _filters(
         )
     if decade is not None:
         where.append(f"t.year >= {arg(decade)} AND t.year < {arg(decade + 10)}")
-    if person_id is not None:
-        # A set: `fold_credits` folds one human's person rows and names them all in `person_ids`.
-        ids = [person_id] if isinstance(person_id, int) else [int(p) for p in person_id]
+    for group in people:
         where.append(
             "EXISTS (SELECT 1 FROM credit c WHERE c.title_id = t.id"
-            f" AND c.person_id = ANY({arg(ids)}::int[]))"
+            f" AND c.person_id = ANY({arg([int(p) for p in group])}::int[]))"
         )
     # `runtime_min` is minutes; an unknown runtime cannot satisfy a bound, so NULL is excluded.
     if runtime_max is not None:
         where.append(f"t.runtime_min IS NOT NULL AND t.runtime_min <= {arg(runtime_max)}")
     if runtime_min is not None:
         where.append(f"t.runtime_min IS NOT NULL AND t.runtime_min >= {arg(runtime_min)}")
-    if dna:
-        # §4.1 rules 1 and 2: `dna_tagged` keeps the tier, and no weight filters. The term id is already
-        # `facet.term`; the version is a subquery because this builder is synchronous.
-        needle = arg(dna.strip().lower())
-        where.append(
-            "EXISTS (SELECT 1 FROM dna_tagged dt WHERE dt.title_id = t.id"
-            f" AND dt.version = {dna_terms.ACTIVE_VERSION} AND {_dna_term_matches(needle)})"
-        )
-    if owned_only:
+    if terms:
+        where.append(_carries(arg, terms, dna_terms.BOTH_TIERS))
+    if not_terms:
+        where.append(dna_terms.unvetoed(
+            arg(list(not_terms)), dna_terms.ACTIVE_VERSION, arg(list(dna_terms.BOTH_TIERS))
+        ))
+    if owned == "only":
         where.append("t.is_owned")
+    elif owned == "not":
+        where.append("NOT t.is_owned")
     if seen != "any" and user_id is not None:
         # No user_title row means unseen.
         uid = arg(user_id)
@@ -213,14 +222,15 @@ class RankFilters:
     runtime_max: int | None = None
     runtime_min: int | None = None
     seen: SeenFilter = "any"
-    dna: str | None = None
+    terms: tuple[str, ...] = ()
+    not_terms: tuple[str, ...] = ()
 
     def active(self) -> dict[str, Any]:
         """What is switched on, for the "no match" state to list back."""
         return {
             name: value
             for name, value in vars(self).items()
-            if value not in (None, "", "any")
+            if value not in (None, "", "any", ())
         }
 
 
@@ -238,32 +248,29 @@ def rank_filters(
         seen=f.seen,
         runtime_max=f.runtime_max,
         runtime_min=f.runtime_min,
-        dna=f.dna,
+        terms=f.terms,
+        not_terms=f.not_terms,
     )
 
 
 async def dna_tiers_for(
-    conn: asyncpg.Connection, *, title_ids: Sequence[int], dna: str
-) -> dict[int, list[str]]:
-    """Which tier admitted each survivor of a `dna` filter (§4.1 rule 1). Same predicate as `_filters`."""
-    if not title_ids:
+    conn: asyncpg.Connection, *, title_ids: Sequence[int], terms: Sequence[str]
+) -> dict[int, Literal["extracted", "projected"]]:
+    """The tier that admitted each survivor of an include (§4.1 rule 1): extracted when every include
+    is quoted on it, projected otherwise."""
+    if not title_ids or not terms:
         return {}
+    args: list[Any] = [[int(t) for t in title_ids]]
+
+    def arg(value: Any) -> str:
+        args.append(value)
+        return f"${len(args)}"
+
     rows = await conn.fetch(
-        f"""
-        SELECT DISTINCT dt.title_id, dt.tier
-        FROM dna_tagged dt
-        WHERE dt.title_id = ANY($1::int[])
-          AND dt.version = {dna_terms.ACTIVE_VERSION}
-          AND {_dna_term_matches("$2")}
-        ORDER BY dt.title_id, dt.tier
-        """,
-        [int(t) for t in title_ids],
-        dna.strip().lower(),
+        f"SELECT t.id, {_carries(arg, terms, _QUOTED)} AS quoted FROM title t WHERE t.id = ANY($1::int[])",
+        *args,
     )
-    out: dict[int, list[str]] = {}
-    for row in rows:
-        out.setdefault(int(row["title_id"]), []).append(str(row["tier"]))
-    return out
+    return {int(r["id"]): "extracted" if r["quoted"] else "projected" for r in rows}
 
 
 async def list_titles(
@@ -272,41 +279,52 @@ async def list_titles(
     kinds: Sequence[str],
     user_id: int | None = None,
     q: str | None = None,
-    genre: str | None = None,
-    decade: int | None = None,
-    seen: SeenFilter = "any",
-    person_id: int | Sequence[int] | None = None,
-    owned_only: bool = False,
+    terms: Sequence[str] = (),
     limit: int = 60,
     offset: int = 0,
     sort: Sort = "newest",
     bundle_version: str | None = None,
-) -> tuple[list[dict[str, Any]], int]:
-    """`kinds` is mandatory (rule 5). `for_you` ranks by the member's score one kind at a time
-    (decision 515); unscored titles close their kind in year order."""
-    clause, args = _filters(
-        kinds=kinds, user_id=user_id, q=q, genre=genre, decade=decade, seen=seen,
-        person_id=person_id, owned_only=owned_only,
-    )
+    **filters: Any,
+) -> tuple[list[dict[str, Any]], int, int | None]:
+    """`kinds` is mandatory (rule 5); `filters` are `_filters`' own. `for_you` ranks by the member's
+    score one kind at a time (decision 515); unscored titles close their kind in year order. A row is
+    `strong` when its text match is (decision 516) and every include is quoted on it (decision 557);
+    strong rows lead across kinds, and the third value counts them while terms are set."""
+    clause, args = _filters(kinds=kinds, user_id=user_id, q=q, terms=terms, **filters)
+    counted = len(args)
 
     def arg(value: Any) -> str:
         args.append(value)
         return f"${len(args)}"
 
-    total = await conn.fetchval(f"SELECT count(*) FROM title t WHERE {clause}", *args)
+    searched = bool(q and q.strip())
+    strong = [_carries(arg, terms, _QUOTED)] if terms else []
+    # Unsearched listings keep the year order. `$1` holds kinds in `KINDS` order, so films lead.
+    joins, order = "", "t.year DESC NULLS LAST, lower(t.name), t.id"
+    if searched:
+        joins, order, _match = search_order_sql(arg(q))
+        strong.insert(0, _TEXT_STRONG)
+    if strong:
+        joins += f"\n          CROSS JOIN LATERAL (SELECT {' AND '.join(strong)} AS strong) m"
+
+    strong_total = None
+    if terms:
+        counts = await conn.fetchrow(
+            "SELECT count(*) AS total, count(*) FILTER (WHERE m.strong) AS strong"
+            f" FROM title t {joins} WHERE {clause}",
+            *args,
+        )
+        total, strong_total = counts["total"], counts["strong"]
+    else:
+        total = await conn.fetchval(f"SELECT count(*) FROM title t WHERE {clause}", *args[:counted])
 
     seen_join, seen_select = "", "NULL::text AS seen_state"
     if user_id is not None:
         seen_select = "COALESCE(ut.state, 'unseen') AS seen_state"
         seen_join = f"LEFT JOIN user_title ut ON ut.title_id = t.id AND ut.user_id = {arg(user_id)}"
 
-    # Unsearched listings keep the year order. `$1` holds kinds in `KINDS` order, so films lead.
-    search_joins, order, match = "", "t.year DESC NULLS LAST, lower(t.name), t.id", ""
-    if q and q.strip():
-        search_joins, order, match = search_order_sql(arg(q))
-        match = f", {match}"
-    elif sort == "for_you" and user_id is not None and bundle_version is not None:
-        search_joins = (
+    if not searched and sort == "for_you" and user_id is not None and bundle_version is not None:
+        joins += (
             f"\n          LEFT JOIN user_score fy ON fy.title_id = t.id AND fy.user_id = {arg(user_id)}"
             f" AND fy.bundle_version = {arg(bundle_version)}"
         )
@@ -314,6 +332,10 @@ async def list_titles(
             "array_position($1::text[], t.kind), fy.score DESC NULLS LAST, t.year DESC NULLS LAST,"
             " lower(t.name), t.id"
         )
+    match = ""
+    if strong:
+        match = ", CASE WHEN m.strong THEN 'strong' ELSE 'weak' END AS match"
+        order = f"m.strong DESC, {order}"
 
     lim, off = arg(limit), arg(offset)
     rows = await conn.fetch(
@@ -326,7 +348,7 @@ async def list_titles(
           -- support is placed by the Cold Tower so the blend can fire, while having plenty of
           -- crowd data behind it. `title_prior` carries the quantity the badge is named for.
           LEFT JOIN title_prior tp ON tp.title_id = t.id
-          {seen_join}{search_joins}
+          {seen_join}{joins}
          WHERE {clause}
          -- `t.id` is not decoration: §6.0 pages this list with LIMIT/OFFSET and the client
          -- appends, so a sort that is not a TOTAL order silently duplicates and drops rows.
@@ -343,7 +365,7 @@ async def list_titles(
         """,
         *args,
     )
-    return [dict(r) for r in rows], total
+    return [dict(r) for r in rows], total, strong_total
 
 
 async def count_by_kind(
@@ -351,21 +373,13 @@ async def count_by_kind(
     *,
     exclude: Sequence[str] = (),
     user_id: int | None = None,
-    q: str | None = None,
-    genre: str | None = None,
-    decade: int | None = None,
-    seen: SeenFilter = "any",
-    person_id: int | Sequence[int] | None = None,
-    owned_only: bool = False,
+    **filters: Any,
 ) -> dict[str, int]:
     """Under the listing's own filters: a count wider than the toggle can reveal is wrong (§6.0)."""
     hidden = [k for k in KINDS if k not in set(exclude)]
     if not hidden:
         return {}
-    clause, args = _filters(
-        kinds=hidden, user_id=user_id, q=q, genre=genre, decade=decade, seen=seen,
-        person_id=person_id, owned_only=owned_only,
-    )
+    clause, args = _filters(kinds=hidden, user_id=user_id, **filters)
     rows = await conn.fetch(
         f"SELECT t.kind, count(*) AS n FROM title t WHERE {clause} GROUP BY t.kind", *args
     )
@@ -390,14 +404,25 @@ def _narrows(value: Any) -> bool:
 async def eligible_ids(
     conn: asyncpg.Connection, *, kinds: Sequence[str], user_id: int, **filters: Any
 ) -> Eligible | None:
-    """The titles `_filters` admits, or None when no filter narrows. The owned scope is not read: a
-    recipe splits the library and beyond itself (decision 559)."""
-    filters.pop("owned_only", None)
+    """The titles `_filters` admits, or None when no filter narrows; `strong` holds those every include
+    is quoted on. The owned scope is not read: a recipe splits the library and beyond itself
+    (decision 559)."""
+    filters.pop("owned", None)
     if not any(_narrows(v) for v in filters.values()):
         return None
     clause, args = _filters(kinds=kinds, user_id=user_id, **filters)
-    rows = await conn.fetch(f"SELECT t.id FROM title t WHERE {clause}", *args)
-    return Eligible(ids=frozenset(int(r["id"]) for r in rows))
+
+    def arg(value: Any) -> str:
+        args.append(value)
+        return f"${len(args)}"
+
+    terms = filters.get("terms") or ()
+    quoted = _carries(arg, terms, _QUOTED) if terms else "NULL"
+    rows = await conn.fetch(f"SELECT t.id, {quoted} AS strong FROM title t WHERE {clause}", *args)
+    return Eligible(
+        ids=frozenset(int(r["id"]) for r in rows),
+        strong=frozenset(int(r["id"]) for r in rows if r["strong"]) if terms else None,
+    )
 
 
 async def get_title(
@@ -463,10 +488,7 @@ def fold_credits(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
 
     folded = []
     for keys in buckets.values():
-        members = [people[pid] for pid, _ in keys]
-        agree = all(
-            len({m[field] for m in members if m[field]}) <= 1 for field in ("imdb_id", "tmdb_id")
-        )
+        agree = ids_agree([people[pid] for pid, _ in keys])
         for part in ([keys] if agree else [[k] for k in keys]):
             credit = _credit_row([row for key in part for row in groups[key]], part, people, rank)
             folded.append(((
@@ -476,11 +498,18 @@ def fold_credits(rows: Sequence[Mapping[str, Any]]) -> list[dict[str, Any]]:
     return [credit for _key, credit in sorted(folded, key=lambda f: f[0])]
 
 
+def ids_agree(people: Sequence[Mapping[str, Any]]) -> bool:
+    """Person rows whose `loose_name` agrees are one human unless an IMDb or TMDB id disagrees."""
+    return all(len({p[field] for p in people if p[field]}) <= 1 for field in ("imdb_id", "tmdb_id"))
+
+
+def lead_person(people: Iterable[Mapping[str, Any]]) -> Mapping[str, Any]:
+    """The row a folded human is named and pictured by: the most ids, then the lowest id."""
+    return min(people, key=lambda p: (-(bool(p["imdb_id"]) + bool(p["tmdb_id"])), p["person_id"]))
+
+
 def _credit_row(rows, keys, people, rank) -> dict[str, Any]:
-    lead = min(
-        (people[pid] for pid, _ in keys),
-        key=lambda p: (-(bool(p["imdb_id"]) + bool(p["tmdb_id"])), p["person_id"]),
-    )
+    lead = lead_person(people[pid] for pid, _ in keys)
     cls = keys[0][1] if isinstance(keys[0][1], str) else None
     place = lambda row: rank.get(row["source"], len(rank))  # noqa: E731
     jobs: dict[str, tuple[int, str]] = {}

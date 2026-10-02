@@ -17,6 +17,7 @@ from itsdangerous import BadSignature, URLSafeSerializer
 from pydantic import BaseModel, Field
 
 from spielplan.api import deps
+from spielplan.api import library as catalogue
 from spielplan.api.deps import DB, ActiveUser, write_txn
 from spielplan.core.config import settings
 from spielplan.db import genres, library
@@ -117,24 +118,26 @@ def _queue_rng(user_id: int, kind: str, answered: int, stream: str = "") -> rand
     return random.Random(int.from_bytes(digest[:8], "big"))
 
 
-def _filters(
+async def _filters(
+    conn: DB,
     q: str | None = None,
     genre: str | None = None,
     decade: int | None = None,
     runtime_max: int | None = Query(None, ge=1),
     runtime_min: int | None = Query(None, ge=1),
     seen: Literal["any", "seen", "unseen"] = "any",
-    dna: str | None = Query(
-        None, description="§6.3: a term by its id, bare or facet-qualified, or by its label."
-    ),
+    term: list[str] = Query([], description="§6.3: include a vocabulary term id, either tier. Repeats."),
+    not_term: list[str] = Query([], description="§6.3: leave out a vocabulary term id. Repeats."),
 ) -> library.RankFilters:
     # Decision 473: an unknown genre lands in the board's no-match state rather than a 422.
     if genre:
         with contextlib.suppress(ValueError):
             genre = genres.canonical(genre)
+    terms, not_terms = catalogue.terms_of(term), catalogue.terms_of(not_term)
+    await catalogue.refuse_unknown_terms(conn, terms + not_terms)
     return library.RankFilters(
         q=q, genre=genre, decade=decade, runtime_max=runtime_max,
-        runtime_min=runtime_min, seen=seen, dna=dna,
+        runtime_min=runtime_min, seen=seen, terms=terms, not_terms=not_terms,
     )
 
 
@@ -201,10 +204,8 @@ async def _payload(
     unfiltered = rows if not filters.active() else await read.items(
         conn, user_id=user.id, kind=kind
     )
-    matched = (
-        await library.dna_tiers_for(conn, title_ids=[r.title_id for r in rows], dna=filters.dna)
-        if filters.dna
-        else {}
+    matched = await library.dna_tiers_for(
+        conn, title_ids=[r.title_id for r in rows], terms=filters.terms
     )
 
     # Decision 209: before the sweep's first fit, "0 rated" would read as "not started"; the owed
@@ -223,7 +224,7 @@ async def _payload(
         "rated_total": len(unfiltered),
         "fitting": fitting,
         "filters": filters.active(),
-        # §4.1 rule 1: which tier matched each DNA survivor; absent without a predicate.
+        # §4.1 rule 1: the tier that admitted each survivor of an include; absent without one.
         "dna_tiers": {str(k): v for k, v in matched.items()} or None,
     }
     if show_model:

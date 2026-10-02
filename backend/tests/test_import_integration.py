@@ -217,8 +217,8 @@ async def test_ledger_observations_survive_a_reimport(db, bundle, tmp_path):
 async def test_library_lists_titles_partitioned_by_kind(db, bundle, tmp_path):
     await _import(db, bundle, tmp_path / "artifacts")
 
-    movies, movie_total = await library.list_titles(db, kinds=["movie"])
-    series, series_total = await library.list_titles(db, kinds=["series"])
+    movies, movie_total, _ = await library.list_titles(db, kinds=["movie"])
+    series, series_total, _ = await library.list_titles(db, kinds=["series"])
 
     assert movie_total == 6
     assert series_total == 2
@@ -230,7 +230,7 @@ async def test_library_lists_titles_partitioned_by_kind(db, bundle, tmp_path):
 async def test_both_kinds_selected_returns_everything(db, bundle, tmp_path):
     """Owner decision 2026-08-29: kind is two toggles, either or both active."""
     await _import(db, bundle, tmp_path / "artifacts")
-    rows, total = await library.list_titles(db, kinds=["movie", "series"])
+    rows, total, _ = await library.list_titles(db, kinds=["movie", "series"])
     assert total == len(fx.TITLES)
     assert {t["kind"] for t in rows} == {"movie", "series"}
 
@@ -252,9 +252,9 @@ async def test_hidden_counts_report_the_unselected_kind(db, bundle, tmp_path):
 async def test_a_person_filter_keeps_the_kind_partition(db, bundle, tmp_path):
     """The person filter does NOT suspend the partition; both kinds is how a filmography is seen."""
     await _import(db, bundle, tmp_path / "artifacts")
-    both, total = await library.list_titles(db, kinds=["movie", "series"], person_id=1)
+    both, total, _ = await library.list_titles(db, kinds=["movie", "series"], people=[(1,)])
     assert total >= 1
-    films, film_total = await library.list_titles(db, kinds=["movie"], person_id=1)
+    films, film_total, _ = await library.list_titles(db, kinds=["movie"], people=[(1,)])
     assert film_total <= total
 
 
@@ -269,7 +269,7 @@ async def test_facet_vocabulary_spans_the_selected_kinds(db, bundle, tmp_path):
 
 async def test_library_search_matches_titles_and_aliases(db, bundle, tmp_path):
     await _import(db, bundle, tmp_path / "artifacts")
-    hits, total = await library.list_titles(db, kinds=["movie"], q="chungking")
+    hits, total, _ = await library.list_titles(db, kinds=["movie"], q="chungking")
     assert total >= 1
     # Id 5 carries "Chungking Express" only as an ALIAS; its name is the CJK original.
     assert 5 in {t["id"] for t in hits}
@@ -424,8 +424,8 @@ async def test_seen_filter_treats_a_missing_row_as_unseen(db, bundle, tmp_path):
         "INSERT INTO user_title (user_id, title_id, state) VALUES ($1, 1, 'seen')", user_id
     )
 
-    seen, seen_total = await library.list_titles(db, kinds=["movie"], user_id=user_id, seen="seen")
-    unseen, unseen_total = await library.list_titles(
+    seen, seen_total, _ = await library.list_titles(db, kinds=["movie"], user_id=user_id, seen="seen")
+    unseen, unseen_total, _ = await library.list_titles(
         db, kinds=["movie"], user_id=user_id, seen="unseen"
     )
 
@@ -439,7 +439,7 @@ async def test_combined_filters_number_their_parameters_correctly(db, bundle, tm
     user_id = await db.fetchval(
         "INSERT INTO app_user (name, role) VALUES ('mia', 'member') RETURNING id"
     )
-    rows, total = await library.list_titles(
+    rows, total, _ = await library.list_titles(
         db,
         kinds=["movie"],
         user_id=user_id,
@@ -447,8 +447,8 @@ async def test_combined_filters_number_their_parameters_correctly(db, bundle, tm
         genre="Crime",
         decade=1990,
         seen="unseen",
-        person_id=1,
-        owned_only=True,
+        people=[(1,)],
+        owned="only",
         limit=5,
         offset=0,
     )
@@ -459,28 +459,28 @@ async def test_combined_filters_number_their_parameters_correctly(db, bundle, tm
 async def test_genre_and_decade_filters_actually_narrow(db, bundle, tmp_path):
     await _import(db, bundle, tmp_path / "artifacts")
 
-    _, all_films = await library.list_titles(db, kinds=["movie"])
-    _, crime = await library.list_titles(db, kinds=["movie"], genre="Crime")
-    _, nineties = await library.list_titles(db, kinds=["movie"], decade=1990)
+    _, all_films, _ = await library.list_titles(db, kinds=["movie"])
+    _, crime, _ = await library.list_titles(db, kinds=["movie"], genre="Crime")
+    _, nineties, _ = await library.list_titles(db, kinds=["movie"], decade=1990)
 
     assert 0 < crime < all_films
     assert 0 < nineties < all_films
 
-    rows, _ = await library.list_titles(db, kinds=["movie"], decade=1990)
+    rows, _, _ = await library.list_titles(db, kinds=["movie"], decade=1990)
     assert all(1990 <= r["year"] < 2000 for r in rows)
 
 
 async def test_a_filter_that_matches_nothing_returns_nothing(db, bundle, tmp_path):
     """An empty result is a legitimate answer, not an error and not a silent fallback."""
     await _import(db, bundle, tmp_path / "artifacts")
-    rows, total = await library.list_titles(db, kinds=["movie"], genre="Documentary")
+    rows, total, _ = await library.list_titles(db, kinds=["movie"], genre="Documentary")
     assert total == 0 and rows == []
 
 
 async def test_pagination_returns_each_title_once(db, bundle, tmp_path):
     await _import(db, bundle, tmp_path / "artifacts")
-    first, total = await library.list_titles(db, kinds=["movie"], limit=3, offset=0)
-    second, _ = await library.list_titles(db, kinds=["movie"], limit=3, offset=3)
+    first, total, _ = await library.list_titles(db, kinds=["movie"], limit=3, offset=0)
+    second, _, _ = await library.list_titles(db, kinds=["movie"], limit=3, offset=3)
     ids = [t["id"] for t in first + second]
     assert len(ids) == len(set(ids)), "a page boundary must not repeat or drop a title"
     assert len(ids) == min(6, total)
@@ -491,9 +491,9 @@ async def test_the_person_filter_hides_the_other_kind_until_both_are_selected(db
     await _import(db, bundle, tmp_path / "artifacts")
     ada = await db.fetchval("SELECT id FROM person WHERE name = 'Ada Cross-Kind'")
 
-    films, film_total = await library.list_titles(db, kinds=["movie"], person_id=ada)
-    series, series_total = await library.list_titles(db, kinds=["series"], person_id=ada)
-    both, both_total = await library.list_titles(db, kinds=["movie", "series"], person_id=ada)
+    films, film_total, _ = await library.list_titles(db, kinds=["movie"], people=[(ada,)])
+    series, series_total, _ = await library.list_titles(db, kinds=["series"], people=[(ada,)])
+    both, both_total, _ = await library.list_titles(db, kinds=["movie", "series"], people=[(ada,)])
 
     assert film_total == 1 and series_total == 1
     assert both_total == 2, "with both kinds on, the filmography is complete"

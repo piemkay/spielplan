@@ -50,45 +50,13 @@ async def _projected(db, title_id: int, term: str, *, version: str = VOCAB, weig
     )
 
 
-async def _matching(db, dna: str, *, kind: str = "movie") -> list[int]:
+async def _matching(db, *terms: str, kind: str = "movie") -> list[int]:
     """Against `title` directly, not a fitted board: the predicate is under test."""
     clause, args = library.rank_filters(
-        kind=kind, user_id=1, filters=library.RankFilters(dna=dna)
+        kind=kind, user_id=1, filters=library.RankFilters(terms=terms)
     )
     rows = await db.fetch(f"SELECT t.id FROM title t WHERE {clause} ORDER BY t.id", *args)
     return [int(r["id"]) for r in rows]
-
-
-@pytest.fixture
-async def tagged(db):
-    await _titles(db, [(1, "movie", "Heat", 1995), (2, "movie", "Se7en", 1995),
-                       (3, "movie", "Paddington 2", 2017)])
-    await _vocabulary(db, VOCAB, facets=("mood", "sensibility"))
-    await _tag(db, 1, "mood.cosy")
-    await _tag(db, 2, "sensibility.bleak")
-    await _projected(db, 1, "mood.cosy")
-    await _projected(db, 3, "mood.cosy")
-
-
-async def test_the_bare_and_the_qualified_dna_term_select_the_same_rows(db, tagged):
-    """A different facet in front of the same bare term is a different id and selects nothing."""
-    assert await _matching(db, "mood.cosy") == [1, 3]
-    assert await _matching(db, "cosy") == [1, 3]
-    assert await _matching(db, "sensibility.bleak") == [2]
-    assert await _matching(db, "bleak") == [2]
-    assert await _matching(db, "pacing.cosy") == []
-
-    # `facet || '.' || term` over an already-qualified term: nobody can type it, so nothing must return.
-    assert await _matching(db, "mood.mood.cosy") == []
-
-
-async def test_dna_tiers_are_returned_for_both_spellings(db, tagged):
-    """`dna_tiers_for` is a second copy of the predicate and must agree about every spelling."""
-    for spelling in ("cosy", "mood.cosy"):
-        matched = await library.dna_tiers_for(db, title_ids=[1, 2, 3], dna=spelling)
-        assert matched[1] == ["extracted", "projected"], "a pair in both tiers reports both"
-        assert matched[3] == ["projected"]
-        assert 2 not in matched
 
 
 @pytest.fixture
@@ -122,10 +90,10 @@ async def test_two_vocabularies_do_not_mix_on_the_card_or_the_filter(db, two_voc
     assert [t["term"] for t in card["projected"]] == ["mood.current_projection"]
 
     # 2. the catalog/Rank DNA filter, both tiers
-    assert await _matching(db, "current") == [1, 2]
-    assert await _matching(db, "current_projection") == [1, 2]
-    assert await _matching(db, "superseded") == []
-    assert await _matching(db, "superseded_projection") == []
+    assert await _matching(db, "mood.current") == [1, 2]
+    assert await _matching(db, "mood.current_projection") == [1, 2]
+    assert await _matching(db, "mood.superseded") == []
+    assert await _matching(db, "mood.superseded_projection") == []
 
 
 async def test_two_vocabularies_written_in_one_transaction_still_resolve_to_one(db):
@@ -156,7 +124,7 @@ async def test_paging_over_ties_with_a_rewrite_between_pages_loses_and_repeats_n
 
     seen: list[int] = []
     for offset in range(0, total, page):
-        rows, reported = await library.list_titles(
+        rows, reported, _ = await library.list_titles(
             db, kinds=["movie"], limit=page, offset=offset
         )
         assert reported == total
@@ -190,7 +158,7 @@ async def searchable(db):
 
 
 async def _search(db, q: str, *, kinds=("movie",)) -> list[str]:
-    rows, _total = await library.list_titles(db, kinds=list(kinds), q=q, limit=60)
+    rows, _total, _ = await library.list_titles(db, kinds=list(kinds), q=q, limit=60)
     return sorted(r["name"] for r in rows)
 
 
@@ -208,7 +176,7 @@ async def test_like_metacharacters_in_the_search_needle_are_text(db, searchable)
 
 
 async def test_the_hidden_by_kind_count_agrees_with_the_escaped_listing(db, searchable):
-    rows, total = await library.list_titles(db, kinds=["movie"], q="100%", limit=60)
+    rows, total, _ = await library.list_titles(db, kinds=["movie"], q="100%", limit=60)
     assert [r["name"] for r in rows] == ["100% Wolf"]
     assert total == 1
 
@@ -216,7 +184,7 @@ async def test_the_hidden_by_kind_count_agrees_with_the_escaped_listing(db, sear
     assert hidden == {"series": 1}, "the count may only promise what the toggle can reveal"
 
     # The toggle keeps its promise: turning Series on reveals exactly what was counted.
-    both, _ = await library.list_titles(db, kinds=["movie", "series"], q="100%", limit=60)
+    both, _, _ = await library.list_titles(db, kinds=["movie", "series"], q="100%", limit=60)
     assert len(both) == total + hidden["series"]
 
 
@@ -226,11 +194,14 @@ async def test_eligible_ids_is_none_until_a_filter_narrows(db):
         "INSERT INTO title_genre (title_id, genre, source) VALUES ($1, $2, 'tmdb')",
         [(1, "Crime"), (2, "Animation"), (3, "Crime")],
     )
-    defaults = {"q": None, "genre": None, "decade": None, "seen": "any", "person_id": None}
+    defaults = {
+        "q": None, "genre": None, "decade": None, "seen": "any", "terms": (), "not_terms": (),
+        "people": (),
+    }
 
     # The owned scope is not a narrowing filter here: a recipe splits the library and beyond itself.
     assert await library.eligible_ids(
-        db, kinds=["movie"], user_id=1, **defaults, owned_only=True
+        db, kinds=["movie"], user_id=1, **defaults, owned="only"
     ) is None
     crime = await library.eligible_ids(db, kinds=["movie"], user_id=1, **{**defaults, "genre": "Crime"})
     assert crime == library.Eligible(ids=frozenset({1}))

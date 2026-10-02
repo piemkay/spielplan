@@ -39,7 +39,7 @@ async def _title(
 
 
 async def _names(db, q: str, **kwargs) -> list[str]:
-    rows, _ = await library.list_titles(db, kinds=kwargs.pop("kinds", ["movie"]), q=q, **kwargs)
+    rows, _, _ = await library.list_titles(db, kinds=kwargs.pop("kinds", ["movie"]), q=q, **kwargs)
     return [r["name"] for r in rows]
 
 
@@ -95,7 +95,7 @@ async def test_the_household_owned_copy_breaks_a_tie_before_the_crowd_does(db):
     await _bundle(db)
     await _title(db, 40, "Heat", 1995, item_n=35000)
     await _title(db, 41, "Heat", 1986, owned=True, item_n=500)
-    rows, _ = await library.list_titles(db, kinds=["movie"], q="heat")
+    rows, _, _ = await library.list_titles(db, kinds=["movie"], q="heat")
     assert [r["id"] for r in rows] == [41, 40]
 
 
@@ -108,7 +108,7 @@ async def test_the_crowd_tie_break_is_read_within_each_kind(db):
         await _title(db, 60 + i, f"Unrelated Film {i}", 2000, item_n=10000 + i)
     for i in range(3):
         await _title(db, 70 + i, f"Unrelated Series {i}", 2000, kind="series", item_n=0)
-    rows, _ = await library.list_titles(db, kinds=["movie", "series"], q="the bear")
+    rows, _, _ = await library.list_titles(db, kinds=["movie", "series"], q="the bear")
     assert [r["id"] for r in rows] == [51, 50]
 
 
@@ -119,12 +119,12 @@ async def test_a_hit_is_looser_only_when_its_name_and_aliases_contain_the_query_
     await _title(db, 81, "Fast Five", 2011, item_n=90000, aliases=("Fast & Furious 5: Rio Heist",))
     await _title(db, 82, "Sheisty Business", 2005, item_n=100)
     await _title(db, 83, "Nothing Alike", 2004, item_n=100, aliases=("Die Sheister",))
-    rows, _ = await library.list_titles(db, kinds=["movie"], q="heist")
+    rows, _, _ = await library.list_titles(db, kinds=["movie"], q="heist")
     assert {r["id"]: r["match"] for r in rows} == {
         80: "strong", 81: "strong", 82: "weak", 83: "weak"
     }
     assert [r["id"] for r in rows][:2] == [80, 81], "and the order still puts them first"
-    listed, _ = await library.list_titles(db, kinds=["movie"])
+    listed, _, _ = await library.list_titles(db, kinds=["movie"])
     assert all("match" not in r for r in listed)
 
 
@@ -135,7 +135,7 @@ async def test_search_order_is_total_across_pages(db):
         await _title(db, 80 + i, "Twin Peaks", 1990, item_n=100)
     seen: list[int] = []
     for offset in range(0, 8, 2):
-        rows, total = await library.list_titles(
+        rows, total, _ = await library.list_titles(
             db, kinds=["movie"], q="twin", limit=2, offset=offset
         )
         seen += [r["id"] for r in rows]
@@ -147,7 +147,7 @@ async def test_no_query_keeps_the_year_order(db):
     await _bundle(db)
     await _title(db, 90, "Up", 2009, item_n=40000)
     await _title(db, 91, "Supernova", 2024, item_n=10)
-    rows, _ = await library.list_titles(db, kinds=["movie"])
+    rows, _, _ = await library.list_titles(db, kinds=["movie"])
     assert [r["name"] for r in rows] == ["Supernova", "Up"]
 
 
@@ -185,7 +185,7 @@ async def test_a_canonical_genre_matches_every_structured_source(db):
     await _genre(db, 110, "science-fiction", "trakt")
     await _genre(db, 111, "Sci-Fi", "omdb")
     await _genre(db, 112, "science fiction film", "wikidata")
-    rows, total = await library.list_titles(db, kinds=["movie"], genre="Science Fiction")
+    rows, total, _ = await library.list_titles(db, kinds=["movie"], genre="Science Fiction")
     assert total == 2 and {r["id"] for r in rows} == {110, 111}, (
         "a Wikidata label answered a facet the control never offers"
     )
@@ -196,7 +196,7 @@ async def test_a_combined_tmdb_tv_genre_answers_both_halves(db):
     await _title(db, 120, "Severance", 2022, kind="series")
     await _genre(db, 120, "Sci-Fi & Fantasy", "tmdb")
     for genre in ("Science Fiction", "Fantasy"):
-        _, total = await library.list_titles(db, kinds=["series"], genre=genre)
+        _, total, _ = await library.list_titles(db, kinds=["series"], genre=genre)
         assert total == 1, genre
 
 
@@ -246,10 +246,10 @@ async def test_a_folded_credit_filters_the_library_by_every_person_it_names(app,
         [(1, 80), (2, 81), (3, 90), (4, 81)],
     )
 
-    rows, total = await library.list_titles(db, kinds=["movie"], person_id=[80, 81])
+    rows, total, _ = await library.list_titles(db, kinds=["movie"], people=[(80, 81)])
     assert {r["id"] for r in rows} == {1, 2} and total == 2
-    assert await library.count_by_kind(db, exclude=["movie"], person_id=[80, 81]) == {"series": 1}
-    lead_only, _ = await library.list_titles(db, kinds=["movie"], person_id=80)
+    assert await library.count_by_kind(db, exclude=["movie"], people=[(80, 81)]) == {"series": 1}
+    lead_only, _, _ = await library.list_titles(db, kinds=["movie"], people=[(80,)])
     assert {r["id"] for r in lead_only} == {1}
 
     client = app()
@@ -257,11 +257,9 @@ async def test_a_folded_credit_filters_the_library_by_every_person_it_names(app,
         "/api/setup/admin", json={"name": "patrick", "password": "an-admin-password"}
     )
     assert created.status_code == 201, created.text
-    both = await client.get(
-        "/api/titles", params=[("kind", "movie"), ("person_id", "80"), ("person_id", "81")]
-    )
+    both = await client.get("/api/titles", params=[("kind", "movie"), ("person", "80,81")])
     assert both.status_code == 200, both.text
     assert {i["id"] for i in both.json()["items"]} == {1, 2}
     assert both.json()["hidden"] == {"series": 1}
-    one = await client.get("/api/titles", params=[("kind", "movie"), ("person_id", "80")])
+    one = await client.get("/api/titles", params=[("kind", "movie"), ("person", "80")])
     assert {i["id"] for i in one.json()["items"]} == {1}
