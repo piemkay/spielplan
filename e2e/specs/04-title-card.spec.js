@@ -105,6 +105,38 @@ test('Shares a lot with is absent while fewer than three films share with Heat',
   const heat = listing.items.find((t) => t.name === 'Heat');
   expect((await (await page.request.get(`/api/titles/${heat.id}`)).json()).shares).toEqual([]);
   await expect(page.getByLabel('Title detail').getByTestId('title-shares')).toHaveCount(0);
+  // Decision 559 item 7: More like this, but... stands in the row's place, under its own test id.
+  await expect(page.getByLabel('Title detail').getByTestId('title-like-more')).toHaveText(
+    'More like this, but…'
+  );
+});
+
+test('a term tapped on the card adds its chip on Home, and a second adds to the first', async ({
+  page
+}) => {
+  // Decision 557 item 6: on Home a quoted term (through its quotes) and an our-read chip each add an
+  // include to what is set; nothing replaces it.
+  let panel = page.getByLabel('Title detail');
+  await openMore(panel);
+  await panel.locator('.tag').filter({ has: page.locator('.term', { hasText: /^obsession$/ }) }).click();
+  await panel.getByTestId('title-term-filter').click();
+  await expect(panel).toHaveCount(0);
+  const chips = page.getByTestId('term-chip');
+  await expect(chips).toHaveCount(1);
+  await expect(chips).toContainText('obsession');
+  await expect(page).toHaveURL(/[?&]term=themes\.obsession/);
+
+  // Heat carries the term, so the grid it opened holds Heat; its one guess is in the fold.
+  await page.locator('.card-wrap', { hasText: 'Heat' }).first().click();
+  panel = page.getByLabel('Title detail');
+  await expect(panel.getByRole('heading', { name: 'Heat' })).toBeVisible();
+  await openMore(panel);
+  const fold = panel.getByTestId('title-weak-chips');
+  await fold.locator('summary').click();
+  await fold.locator('.chip').first().click();
+  await expect(panel).toHaveCount(0);
+  await expect(chips).toHaveCount(2);
+  await expect(page.getByTestId('person-chip')).toHaveCount(0);
 });
 
 test('the two DNA tiers are visibly distinct, and a term in both is shown once, quoted', async ({
