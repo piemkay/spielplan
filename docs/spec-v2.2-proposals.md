@@ -16363,6 +16363,24 @@ the two views. The You row follows Your taste's on You.dc.html (canvas
 https://claude.ai/artifact/VD4kvtiYKnMmrBjWjzuPSs). Where a board differs from this decision or the
 spec, the spec wins.
 
+### To do for 1.1.0 (owner, 2026-10-01)
+
+- **A fresh export from the data curator, and a re-seed that keeps accounts and keys.** The owner
+  ran Sonnet DNA extraction on about 1,000 more titles in the curator database since bundle
+  v20260929; the vocabulary is unchanged (decision 163 is not touched). 1.1.0 ships on a new bundle
+  exported from it, and the owner accepts a re-seed of production for the release (2026-10-01), so
+  decision 162's seed-once rule holds: content is wiped and seeded from the new bundle. Accounts and
+  keys are kept, because their tables reference no content: `app_user`, `webauthn_credential`,
+  `push_subscription`, `data_encryption_key`, `connector_config`, `app_setting` and `setup_step`.
+  Steps: a full `pg_dump` of production first; a data-only dump of those seven tables; the same
+  `.env` (its `SECRETS_KEY` unwraps the kept key, so the stored API keys still decrypt); drop and
+  recreate the database, run the migrations, restore the seven tables, then import the new bundle
+  from Admin · Data. Rehearse it once on a throwaway database first, as v20260929 was, including
+  that sign-in, passkeys, push and every connector still work and that the import accepts an install
+  with accounts but no content. What the re-seed loses fits the release: ratings, duels and tier
+  edits start fresh anyway (decision 537), seen state comes back from the Jellyfin sync, and
+  Corrections ledger rows are lost unless exported first.
+
 ## Decisions taken (owner, 2026-10-02, the 1.2.0 design pass)
 
 ### 553. The You sheet is concise: no footnotes, and Switch profile only when there is someone to switch to
@@ -16394,9 +16412,9 @@ ladder" to a member who has none.
 Measured as a sketch on the live sheet, Patrick's sheet falls from 891 to 561 px on a phone and from
 845 to 569 px on a desktop, so it fits one screen at both sizes.
 
-This supersedes decision 518 item 2's "says how a person joins it" where nobody can be switched to:
-there is then no section, and the hint lives on the account page. Decision 552 item 1 stands; the
-count is new. The spec is amended in place (v2.1.19): §3.2's You.
+This supersedes decision 518 item 2's "says how a person joins it": You never says it, the switch
+group is absent while nobody can be switched to, and the hint lives on the account page. Decision
+552 item 1 stands; the count is new. The spec is amended in place (v2.1.19): §3.2's You.
 
 **Cost.** Three test assertions on the removed footnotes go, and so does the read of the household's
 members that only the Your taste footnote needed. A member who never opens the account page does not learn from You
@@ -16439,26 +16457,35 @@ sticky one coming back, and then for the wish-list row to be sticky too.
    open inline under the search.
 5. **One notice bar.** The finish prompt, the pending row, an arrival, the set-up notice and the
    wish-list row share one shape: a 28 px thumb or dot, a headline and one line, the action as a pill
-   at the right, and an ×. Notices sit 12 px apart and 32 px above the first shelf. On a phone the
-   same anatomy wraps.
+   at the right, and an ×. The notices above the shelves sit 12 px apart and 32 px above the first
+   shelf; the wish-list row keeps its place under Worth getting (decisions 544 and 552). On a phone
+   the same anatomy wraps.
 6. **One-time notices go for good.** The × on an arrival ("{film} is here") or on the finish prompt
    removes it for that member, with a "Removed" toast and Undo. The finish prompt's × is no answer: it
-   writes neither seen nor unseen.
+   writes neither seen nor unseen, and the seen sync does not adopt Jellyfin's Played for that title
+   afterwards, as while the prompt was open (decision 211 stands).
 7. **Sticky notices come back.** The × on the pending row ("Rate {n} you watched", or "Rate {n}
    again"), the set-up notice ("Set up your ladder.") or the wish-list row hides it for that member
-   until tomorrow, or sooner when something new joins it: a title newly waiting to be rated, or a new
-   wish from anyone in the household. The toast reads "Hidden until tomorrow", with Undo. The wish
-   list stays open from You (decision 552) while its row is hidden.
+   until tomorrow, or sooner when something new joins it. A new table, `notice_hidden(user_id,
+   notice, hidden_at)`, one row per member and notice, records it (§4.2, a new migration). The notice
+   returns at the next midnight after `hidden_at` in §2's `TZ`, or sooner: the pending row once a
+   title's seen state is written after `hidden_at`, the wish-list row once any member's want is made
+   after it (Me too and the viewer's own included), the set-up notice only with the day. The toast
+   reads "Hidden until tomorrow", and its Undo deletes the row. The wish list stays open from You
+   (decision 552) while its row is hidden.
 8. Toasts sit where the app's do: bottom right on a desktop, above the tab bar on a phone.
 9. On a phone only the notices' shape, gaps and × change.
 
-The notices keep their words (decisions 537 and 550). The spec is amended in place (v2.1.19): §6.0
-(Home's width on a desktop, the Filters cells, the notice bar and its ×) and §7.3 (the finish prompt's
-×).
+The notices keep their words (decisions 537 and 550). This narrows decision 528 item 2: from 721 px
+the search joins the top row, and the pending row shows one 28 px thumb in place of two small
+posters. The spec is amended in place (v2.1.19): §4.2 (`notice_hidden`), §6.0 (Home's width on a
+desktop, the Filters cells, the notice bar and its ×) and §7.3 (the finish prompt's ×).
 
-**Cost.** About 40 to 60 lines over five files for the widths, mostly deletions. The ×s need a
-per-member record of what was put away and when, which the build places. A sticky notice put away by
-mistake is back the next day at the latest; a one-time notice is gone once Undo's toast is.
+**Cost.** About 40 to 60 lines over five files for the widths, mostly deletions. The sticky ×s need
+one small table and a migration; the one-time ×s close what their notices already store (the
+arrival's want row, the prompt's state), and the seen sync's guard reads a prompt put away as an open
+one. A sticky notice put away by mistake is back the next day at the latest; a one-time notice is gone
+once Undo's toast is.
 
 **Design reference.** Canvas https://claude.ai/artifact/CAweFeR4NG9gL6qXh72utT, boards A1 (Home's
 shelves at desktop, rail and phone, with the ×s), A2 (the notice bars and the toast, desktop and
@@ -16532,8 +16559,9 @@ options, he chose nine household-watched films and three widely seen ones a page
    is its rank in that group's platform-score order, and the step lists first the films nearest its
    start, which is today's: S 0, A+ 0.08, A 0.25, B 0.50, C 0.75, D 0.90 and F 1.0 of that order.
    More votes go first on a tie, and unscored films last.
-3. **The widely seen films.** A film is widely seen at 100,000 IMDb votes or more, or else 50 times
-   its TMDB votes. Each step reads its tier's band of the widely seen films' platform-score order,
+3. **The widely seen films.** The crowd slots read every film outside the household's list. A film's
+   votes are IMDb's count, or 50 times TMDB's where IMDb has none, and a film is widely seen at
+   100,000 votes. Each step reads its tier's band of the widely seen films' platform-score order,
    the tier's slice of §6.3's measured shape (S 0-8%, A+ 8-25%, A 25-50%, B 50-75%, C 75-90%, D
    90-97%, F 97-100%), most voted first inside the band, then the films outside it by their distance
    from it; the less-seen films follow by the same rule, and unscored films come last. The order is
@@ -16599,15 +16627,17 @@ matches first, and for a tap on a card opened outside Home, Home's grid with tha
    across their records as the card folds them. A person is included in any role, and is never left
    out.
 5. **Several chips mean AND,** terms and people alike. Any chip switches Home to its grid, and a term
-   chip stays across a kind switch, since terms span both kinds.
+   or person chip stays across a kind switch, since both span both kinds.
 6. **Card taps.** On the title card a credit and a DNA term are both tappable. On Home a tap adds that
    person, or that term as an include, to what is set, and no longer replaces it. On a card opened
-   anywhere else (Rank, Taste, You) the tap opens Home's grid with that chip set, and Back returns to
-   where it was tapped.
+   anywhere else (Rank, Taste, You) the tap opens Home's grid with that chip alone, every other filter
+   at its default and the state carried in Home's URL (the filters study's route), and Back returns
+   to the card it was tapped on.
 7. **An empty grid** names its chips and offers the one to drop, with what that leaves: "Without
    heist: 51 films".
 8. **One term picker for Home and Rank.** Rank's Filters carry the same picker with Include and Leave
-   out, and Rank's free-text taste tag goes.
+   out, an include matching either tier; the board keeps its order, and each survivor names the tier
+   that admitted it. Rank's free-text taste tag goes.
 9. A term outside the active vocabulary is refused, as a genre is (decision 473).
 
 This supersedes decision 496 point 7 and §6.3's free-text term predicate. It extends decision 504's
@@ -16648,8 +16678,12 @@ when the search is cleared, and that the lookup and the wish cover films and ser
 **The decision.**
 1. **Only in library,** on by default, replaces "in my library": one setting for a search, the
    filtered grid and a recipe (decision 559). While it is on they read the library: a search ends on
-   one row, "Search beyond your library", that switches it off, and a recipe folds the films beyond
-   it. Off, it shows as a chip ("Beyond your library") and the Filters count it.
+   one row, "Search beyond your library", and a filtered grid on one row, "{n} more beyond your
+   library", each switching it off, the second also among an empty grid's drops; a recipe folds the
+   films beyond it. Off, it shows as a chip ("Beyond your library") and the Filters count it. The
+   search field's placeholder follows it: the library's count while it is on ("Search your 759
+   films", "Search your 874 titles" on Both), "Search all films" ("Search all series", "Search all
+   titles") while it is off.
 2. **Switched off, a search answers in three sections:** In your library; More in Spielplan, the
    catalogue's titles not owned; and From TMDB, the films or series of the kind shown that Spielplan
    does not hold (both kinds on Both). A TMDB hit Spielplan already holds is dropped.
@@ -16660,13 +16694,19 @@ when the search is cleared, and that the lookup and the wish cover films and ser
 5. **A TMDB-only title** opens a short card: poster, name, year, genres, overview, "Not in Spielplan
    yet", **Want it** and View on TMDB, with no taste, ranking or seen rows. Its poster is served from
    this app's origin, fetched from TMDB's image host by the file's name alone, so §6.8 holds.
-6. **Wanting it.** Want it reads the title's details from TMDB once and resolves them against
-   Spielplan's titles of the kind, by IMDb id and then TMDB id; a title found is wished as it is.
-   Otherwise it mints a minimal title row, `origin = 'wished'`, not owned and unplaced, with an id from
-   Spielplan's own range (decision 162), and wishes that. The row reaches no shelf and not Worth
-   getting, shows in later searches under More in Spielplan, and keeps the short card until it is
-   placed. When Jellyfin adds the film, §7.2 resolves to the row, its wishers are told it arrived
-   (decision 544 item 4), and §8 walks it as it walks any title it resolves to.
+6. **Wanting it.** Want it reads the title's details from TMDB once, with its external ids for a
+   series, and resolves them against Spielplan's titles of the kind, by IMDb id and then TMDB id; a
+   title found is wished as it is, or, where it is owned, its own card opens instead. Otherwise it
+   mints a minimal title row, `origin = 'wished'`, not owned and unplaced, with an id from
+   Spielplan's own range (decision 162), and wishes that. The row holds kind, name, original name,
+   year, runtime, its IMDb and TMDB ids (and a series' TVDB id), its overview, `poster_path` as the
+   full `image.tmdb.org` URL §6.8 already serves, and its genres as `title_genre` rows from source
+   tmdb, so its card renders from the database alone. The row reaches no shelf and not Worth getting,
+   shows in later searches under More in Spielplan, and keeps the short card while it is not owned.
+   When Jellyfin adds the film, §7.2 resolves to the row and its wishers are told it arrived
+   (decision 544 item 4); §8 stage 1 sets its origin to 'acquired' in the same transaction, so stages
+   8 and 9 and §10 treat it as a title Spielplan acquired. 'wished' means only: minted for a wish, not
+   yet in the library.
 7. **A new migration** lets `title.origin` be 'wished'.
 8. **The web process may call TMDB's API** for these two reads alone, the search and Want it's
    details, under a small declared policy of its own (the study proposed 4 requests a second, a burst
@@ -16674,8 +16714,10 @@ when the search is cleared, and that the lookup and the wish cover films and ser
    rate. Every other request to TMDB's API stays the worker's.
 
 This amends decision 485 (item 8 here) and decision 544 item 5: a member's search beyond the library, and
-a wish for a title Spielplan does not hold, ask TMDB; nothing is bought or requested. The spec is
-amended in place (v2.1.19): §1, §4.2's `wish`, §6.0's search and Filters, §6.8's art and §8's fetcher.
+a wish for a title Spielplan does not hold, ask TMDB; nothing is bought or requested. It amends
+decision 544 item 3 for a wished row, whose short card offers Want it and no Seen it, rate it or Not
+for me. The spec is amended in place (v2.1.19): §1, §4.2's `wish`, §6.0's search and Filters, §6.8's
+art, and §8's stage 1 and fetcher.
 
 **Cost.** About 900 lines with tests: a TMDB search source, a read beyond the library, a poster route
 by file name, a wish route that resolves or mints, a migration, the three sections and the short card,
@@ -16706,43 +16748,57 @@ subtraction; "who watches it" vectors 0.33 and 0.34, which find the audience and
 term-ranked result can say why. The owner chose the blend, in Home's Filters, with no typed sentence.
 
 **The decision.**
-1. **Like these films.** A Filters row opens a title picker that finds a film by name in Spielplan's
-   catalogue, owned or not. Each film joins the recipe as a chip, **like** or **less like**, and its
-   sheet (decision 560) can change which.
+1. **Like these films.** A Filters row opens a title picker that finds a title by name in
+   Spielplan's catalogue, owned or not, of either kind, among titles carrying at least two DNA terms.
+   Each joins the recipe as a chip, **like** or **less like**, and its sheet (decision 560) can change
+   which.
 2. **A recipe** is its films with whatever terms, people and filters are set (decision 557), at most
-   four films (decision 560). It ranks films of the kind shown (§4.1 rule 5) whatever the films' form:
-   decision 513's animated or live-action rule does not apply to it.
+   four films (decision 560). It ranks titles of the kind shown (§4.1 rule 5), each kind region on Both
+   on its own, whatever the films' form: decision 513's animated or live-action rule does not apply to
+   it. Like a term chip, a recipe stays across a kind switch. An include in a recipe folds as decision
+   557 item 2 has it, inside the library's list. A recipe with no liked film and no lent group ranks
+   nothing, and its grid asks for a film to like.
 3. **The ranking.** A film's likeness to a recipe film is decision 513's, the cosine of their
-   rarity-weighted terms over both tiers, rarity read over the library. A result shares at least two
-   rare terms with each liked film. Its DNA score is the geometric mean of its likeness to each liked
-   film, minus 0.7 times its greatest likeness to a less-liked one; its score is 0.7 of that and 0.3
-   of the same arithmetic over the review-text vectors, each standardised over the results. A film
-   with no review text ranks on DNA alone.
-4. **The order is Best match,** with For you (decision 515's order) one tap away. At most two films by
-   one director show on the first screen, the rest of theirs behind one row ("2 more by the Coens").
-   Seen films stay, with their mark (the study's recommendation).
+   rarity-weighted terms over both tiers, rarity read over the library's titles of the kind ranked.
+   A result shares at least two rare terms with each whole-film like, counted in the groups no other
+   film lends (decision 560): a term is rare at an idf of 1.5 or more, ln(N / carriers) over that
+   library, so carried by under 22% of it (the study's gate). Its DNA score is the geometric mean of
+   its likeness to each liked film, minus 0.7 times its greatest likeness to a less-liked one; its
+   score is 0.7 of that and 0.3 of the same arithmetic over the review-text vectors, each standardised
+   over every film the recipe reads, in the library and beyond it. A result, or a recipe, with no
+   review text ranks on DNA alone, at full weight.
+4. **The order is Best match,** with For you (decision 515's order) one tap away. Among the grid's
+   first page at most two films share a director; the rest of that director's films on the page fold
+   into one cell in the third's place ("2 more by the Coens"), and a film counts against each of its
+   directors. Seen films stay, with their mark (the study's recommendation).
 5. **It says why.** The grid is headed by the recipe's chips and one display-only line of the terms it
    read ("more: … · less: …"), quoted terms first. Each poster carries one caption per liked film, the
    strongest term they share; the card names each liked film and its shared terms ("From Knives Out:
-   grand estate, murder mystery · From Zodiac: amateur sleuth, murder mystery"), and says when a result
-   still carries a less-liked film's own terms ("but rousing & inspiring"). Every connection is a DNA
-   term (decision 550).
+   grand estate, murder mystery · From Zodiac: amateur sleuth, murder mystery"), in the place of
+   decision 515's line on a card opened from the recipe's grid, and says when a result still carries
+   a less-liked film's own terms ("but rousing & inspiring"). Every connection is a DNA term
+   (decision 550).
 6. **The library first.** While Only in library is on (decision 558) the grid lists the library, and
    well-known films beyond it wait behind one "N more beyond the library"; switched off, they follow
-   with no fold. The floor for well known is the build's (the study used 25,000 IMDb votes); it only
-   admits a film to the list and enters no model (§4.1 rule 3). When fewer than ten library films
-   fit, the grid says "Only N films in your library fit".
-7. **More like this, but…** in every title card's Shares a lot with opens Home's grid with that title
-   as the recipe's first liked film and the Filters open on the recipe; from a card opened outside
-   Home it leads there as a card's credit does (decision 557).
+   with no fold (this decision's reading: the owner set the fold while the library filter was off by
+   default). A title beyond the library is well known at 25,000 votes or more, votes read as decision
+   556 reads them, with Only in library on or off and for either kind. The floor is the study's and
+   its own, not §6.2's crowd count, and it only admits a title to the list and enters no model (§4.1
+   rule 3). When fewer than ten library films fit, the grid says "Only N films in your library fit".
+7. **More like this, but…** in every title card's Shares a lot with header, or in the row's place
+   where the row is absent, opens Home's grid with a new recipe of that title, liked, and the Filters
+   open on the recipe. On Home the other filters stay; from a card opened outside Home it leads there
+   as a card's credit does (decision 557). Only a title the picker cannot offer, such as a TMDB-only
+   title or an unarrived wished row, carries none.
 8. **No typed sentence in 1.2.0.** The LLM parse, its keyword predicate and its flywheel feed stay
    with the Map in M7.
 
-This supersedes decision 548 item 2 in part: arithmetic over titles and terms no longer waits for
-the Map, which stays in M7 with the typed sentence and the UMAP lens. Decision 515's For you becomes a
-recipe's other order, decision 513's form rule does not reach a recipe, and decisions 541 and 550's
-nameable edges hold. The spec is amended in place (v2.1.19): §6.0 (Like these films and Best match),
-§6.4's first bullet and Shares a lot with, and §12's M7 row.
+This supersedes decision 541 item 5 and decision 548 item 2 in part: arithmetic over titles and terms
+no longer waits for the Map, which stays in M7 with the typed sentence and the UMAP lens. Decision
+515's For you becomes a recipe's other order, decision 513's form rule does not reach a recipe, and
+decisions 541 and 550's nameable edges hold. The spec is amended in place (v2.1.19): §6.0 (Like these
+films and Best match), §6.4's first bullet and Shares a lot with, §8.4's first two feeds and §12's M7
+row.
 
 **Cost.** An in-memory table of film terms per bundle and kind (13,324 by 582, about 2 MB sparse),
 built once; a ranking module (16 ms for a two-film recipe over the whole catalogue, where today's
@@ -16753,7 +16809,8 @@ Filters thin a recipe fast: under two hours about 4.5 of 10 still fit.
 
 **Design reference.** Canvas https://claude.ai/artifact/CAweFeR4NG9gL6qXh72utT, boards C1 (a recipe's
 grid), C2 (the title picker and the Like these films row), C3 (More like this, but… on Dune's card,
-and the grid it opens), C4 (a result's why) and C5 (one director capped; a thin library). Board copy
+and the grid it opens), C4 (a result's why) and C5 (one director capped; a thin library). C2 was drawn
+before decision 558 and shows "In my library"; read it with Only in library, on by default. Board copy
 is illustrative; this decision states the rule, and where a board differs from it or from the spec,
 the spec wins.
 
@@ -16780,34 +16837,44 @@ recommendation".
 
 **The decision.**
 1. **A tap on a recipe film's chip opens a short sheet:** **All of {film}**, or its groups, each row
-   listing the film's terms in that group, quoted first and our read after, and **Like** or **Less
-   like**. Several groups may be chosen at once; the chip then reads "Mood, Sound & Look like
-   Obsession", and the recipe's head says what replace did ("Knives Out, with Fargo's mood in place of
-   its own").
+   listing the film's terms in that group, quoted first and our read after, with one **Like** or
+   **Less like** for the film. Several groups may be chosen at once; the chip then reads "Mood, Sound
+   & Look like Obsession", and the recipe's head says what replace did ("Knives Out, with Fargo's mood
+   in place of its own").
 2. **Eight groups:** Mood (mood and sensibility), Look (visual), Sound, Pace (pacing), Storytelling
    (structure), Setting (place and era), Characters and Themes. Register is not a group; it stays in
-   whole-film likeness and in the term filter.
-3. **A group is offered only where the film carries at least two terms in it.**
-4. **Replace.** A group a film lends is taken out of every whole-film like: Like Knives Out · Mood like
-   Fargo is Knives Out without its own mood, plus Fargo's mood. A lent group's likeness is decision
-   559's cosine read over that group's terms alone, the result's as well as the film's, and a result
-   shares at least one term with each lent group. Review text describes a whole film, so it reads the
+   whole-film likeness and in the term filter. The group names belong to the recipe sheet alone: the
+   term picker and Taste keep the vocabulary's eleven facets, where mood is mood alone.
+3. **A group is offered only where the film carries at least two terms in it;** a group with fewer
+   shows disabled with its term, so the member sees why (the study's recommendation).
+4. **Replace.** A group a film takes as Like is lent, and a lent group is taken out of every
+   whole-film like: Like Knives Out · Mood like Fargo is Knives Out without its own mood, plus Fargo's
+   mood. A film's lent groups form one ingredient: its likeness is decision 559's cosine over the
+   union of those groups' terms, the result's as well as the film's, one factor of the geometric mean,
+   and a result shares at least one term with it. Review text describes a whole film, so it reads the
    whole-film likes alone, and a recipe of lent groups alone ranks on DNA. The why-line credits each
    group to one film ("Fargo's mood: deadpan & dry, dark comedy").
-5. **Less like a group** pushes away only the film's terms in that group that no liked film carries.
-6. **Limits.** At most four films in a recipe, at most two of them lending groups; a film lending
-   several groups counts once. One film per group: a second film lending a group takes it over (the
-   study's recommendation). With these limits up to one recipe in ten leaves fewer than ten library
-   films, so decision 559's "Only N films in your library fit" carries weight here.
-7. **Try a twist.** Under a recipe, one quiet row offers three twists, each a group of one of the
-   member's own films placed A or above, with its terms ("Pace like Mad Max: Fury Road · relentless,
-   high-octane, kinetic"). One tap adds it, with an Undo toast, and a shuffle offers others. A twist is
-   offered only where it stays within the limits and its recipe keeps at least ten films in the
-   library, checked beforehand with the DNA score alone, so a twist never lands on a near-empty grid;
-   which twists come first, the build decides.
+5. **Less like a group** pushes away only the film's terms in that group that no liked film carries;
+   it takes nothing out of a whole-film like and gates no result.
+6. **Limits.** At most four films in a recipe, at most two of them taking groups, liked or less
+   liked; a film taking several groups counts once. One film per group, of either sign: a second film
+   taking a group takes it over (the study's recommendation), and a film whose last group is taken
+   over goes back to All of {film}, with its sign. At four films the picker adds none, and with two
+   films taking groups a third film's group rows are disabled. With these limits up to one recipe in
+   ten leaves fewer than ten library films, so decision 559's "Only N films in your library fit"
+   carries weight here.
+7. **Try a twist.** Under a recipe, one quiet row offers up to three twists, each adding a group of
+   one of the member's own films of the kind shown, placed A or above as Tonight's pairs are
+   (decision 539) and not in the recipe, a group no recipe film takes, with its terms ("Pace like Mad
+   Max: Fury Road · relentless, high-octane, kinetic"). One tap adds it, with an Undo toast, and a
+   shuffle cycles through the others. A twist is offered only where it stays within the limits and
+   its recipe keeps at least ten films in the library, counted as "Only N films in your library fit"
+   counts them (owned films of the kind that pass the twisted recipe's gates and every set filter)
+   and checked beforehand with the DNA score alone, so a twist never lands on a near-empty grid; with
+   none the row is absent. Which twists come first, the build decides.
 
-This extends decision 559 and changes none of its rules for whole films. The spec is amended in place
-(v2.1.19): §6.0.
+This extends decision 559 and changes none of its rules for a recipe that takes no group. The spec is
+amended in place (v2.1.19): §6.0.
 
 **Cost.** A table of per-facet norms beside decision 559's term table (13,324 by 11); a group's DNA
 score takes about 1 ms over the catalogue, and a recipe with its review blend and director cap 19 to
@@ -16819,28 +16886,17 @@ pairing per anchor, so most suggested twists are untested.
 
 **Design reference.** Canvas https://claude.ai/artifact/CAweFeR4NG9gL6qXh72utT, page "Film mixing by
 group", boards MA-1 (Like Knives Out, the start), MA-2 (narrowing Fargo to its mood), MA-3 (Knives Out
-· Mood like Fargo), MA-4 (a twist: Interstellar · Pace like Mad Max: Fury Road; Groundhog Day · Mood
-like The Shining) and MA-5 (Mood, Sound & Look like Obsession). The page's options B and C were not
-taken. Board copy is illustrative; this decision states the rule, and where a board differs from it
-or from the spec, the spec wins.
+· Mood like Fargo) and MA-4 (a twist: Interstellar · Pace like Mad Max: Fury Road; Groundhog Day ·
+Mood like The Shining); several groups at once ("Mood, Sound & Look like Obsession") and the twist
+guard are not drawn. The page's options B and C were not taken. Board copy is illustrative; this
+decision states the rule, and where a board differs from it or from the spec, the spec wins.
 
-### To do for 1.1.0 (owner, 2026-10-01)
+### To do for 1.2.0 (owner, 2026-10-02)
 
-- **A fresh export from the data curator, and a re-seed that keeps accounts and keys.** The owner
-  ran Sonnet DNA extraction on about 1,000 more titles in the curator database since bundle
-  v20260929; the vocabulary is unchanged (decision 163 is not touched). 1.1.0 ships on a new bundle
-  exported from it, and the owner accepts a re-seed of production for the release (2026-10-01), so
-  decision 162's seed-once rule holds: content is wiped and seeded from the new bundle. Accounts and
-  keys are kept, because their tables reference no content: `app_user`, `webauthn_credential`,
-  `push_subscription`, `data_encryption_key`, `connector_config`, `app_setting` and `setup_step`.
-  Steps: a full `pg_dump` of production first; a data-only dump of those seven tables; the same
-  `.env` (its `SECRETS_KEY` unwraps the kept key, so the stored API keys still decrypt); drop and
-  recreate the database, run the migrations, restore the seven tables, then import the new bundle
-  from Admin · Data. Rehearse it once on a throwaway database first, as v20260929 was, including
-  that sign-in, passkeys, push and every connector still work and that the import accepts an install
-  with accounts but no content. What the re-seed loses fits the release: ratings, duels and tier
-  edits start fresh anyway (decision 537), seen state comes back from the Jellyfin sync, and
-  Corrections ledger rows are lost unless exported first.
+- **One deploy.** 1.2.0 ships as one deploy carrying decisions 553-560; the owner chose it over the
+  recommended two, the small fixes first.
+- **A curator fix.** "White Christmas" carries a Black Mirror episode's IMDb id, so the set-up shows
+  it on S at IMDb 9.1 (decision 556); the data curator corrects the id.
 
 ## §6.2 — Tonight, rewritten (owner decision, 2026-08-29)
 
