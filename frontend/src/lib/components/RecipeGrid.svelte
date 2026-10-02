@@ -9,6 +9,7 @@
   import PosterCard from './PosterCard.svelte';
   import TwistRow from './TwistRow.svelte';
 
+  /** @type {{kinds?: string[], params?: Record<string, any>, onSelect?: (title: any) => void}} */
   let { kinds = ['movie'], params = {}, onSelect = undefined } = $props();
 
   const LIMIT = 60;
@@ -37,9 +38,18 @@
 
   const key = $derived(JSON.stringify([kinds, query, sort, folded]));
   let seq = 0;
+  // A typed search narrows the recipe as the catalogue's does: once the typing pauses.
+  let typed = null;
+  let timer;
   $effect(() => {
     key;
-    untrack(load);
+    untrack(() => {
+      clearTimeout(timer);
+      if (typed !== null && params.q !== typed) timer = setTimeout(load, 220);
+      else load();
+      typed = params.q;
+    });
+    return () => clearTimeout(timer);
   });
 
   const rowsIn = (cells) => cells.reduce((n, c) => n + (c.fold ? c.fold.items.length : 1), 0);

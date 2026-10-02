@@ -88,6 +88,33 @@ describe("a recipe's reads", () => {
     expect([...target.querySelectorAll('.kindhead')].map((h) => h.textContent)).toEqual(['Films', 'Series']);
   });
 
+  it('waits for a typed search to pause before it asks again', async () => {
+    vi.useFakeTimers();
+    try {
+      app = mount(RecipeGrid, {
+        target,
+        props: {
+          kinds: ['movie'],
+          get params() {
+            return { q: homeFilters.q, owned: 'only' };
+          }
+        }
+      });
+      await settle();
+      for (const q of ['g', 'gl']) {
+        homeFilters.q = q;
+        flushSync();
+        await settle();
+      }
+      expect(reads()).toHaveLength(1);
+      await vi.advanceTimersByTimeAsync(220);
+      await settle();
+      expect(reads().map((u) => u.searchParams.get('q'))).toEqual([null, 'gl']);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('marks itself as the grid of a recipe', async () => {
     await open();
     expect(byTestId('home-mode').dataset.reason).toBe('recipe');
