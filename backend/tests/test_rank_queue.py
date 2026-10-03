@@ -539,24 +539,26 @@ def _placed_board(shown, *, stale=None, since=None, terms=None):
     )
 
 
-def test_a_cross_tier_partner_is_shown_two_or_more_steps_away_the_smallest_gap_first():
-    pool_ = _placed_board({1: 5, 2: 4, 3: 3, 4: 3, 5: 0})
+def test_a_cross_tier_gap_is_drawn_as_a_uniform_pairs_gap_would_be():
+    """§13: were the gap always the smallest, every pair three or more steps apart would be held out."""
+    shown = dict(enumerate((0, 0, 1, 1, 2, 2, 2, 3, 3, 4, 4, 5, 5, 5), start=1))
+    pool_ = _placed_board(shown)
     by_id = {c.title_id: c for c in pool_}
     rng = random.Random(4)
     gaps = Counter()
-    for _ in range(2_000):
+    for _ in range(4_000):
         pair = queue._cross_tier(pool_, rng)
-        a, b = by_id[pair.title_a], by_id[pair.title_b]
-        gap = abs(a.shown - b.shown)
-        assert gap >= queue.CROSS_MIN_GAP
-        nearest_far = min(
-            abs(c.shown - a.shown) for c in pool_ if abs(c.shown - a.shown) >= queue.CROSS_MIN_GAP
-        )
-        assert gap == nearest_far, "the smallest qualifying gap goes first"
-        gaps[gap] += 1
+        gaps[abs(by_id[pair.title_a].shown - by_id[pair.title_b].shown)] += 1
     assert pair.arm == queue.ARM_CROSS
-    # S and B meet two steps apart; E reaches B at three; A only E, four away.
-    assert set(gaps) == {2, 3, 4}
+    assert min(gaps) >= queue.CROSS_MIN_GAP and gaps[3] and gaps[4] and gaps[5]
+    held = Counter()
+    for _ in range(20_000):
+        pair = queue._holdout(pool_, rng)
+        gap = abs(by_id[pair.title_a].shown - by_id[pair.title_b].shown)
+        if gap >= queue.CROSS_MIN_GAP:
+            held[gap] += 1
+    for gap in held:
+        assert gaps[gap] / gaps.total() == pytest.approx(held[gap] / held.total(), abs=0.05)
 
     adjacent = _placed_board({1: 5, 2: 4})
     assert queue._cross_tier(adjacent, rng) is None
