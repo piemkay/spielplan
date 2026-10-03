@@ -1738,6 +1738,9 @@
     display: flex;
     flex-direction: column;
     gap: 2px;
+    align-items: flex-start;
+    text-align: left;
+    color: var(--text);
     font-size: var(--fs-body);
   }
   .placed ul {
