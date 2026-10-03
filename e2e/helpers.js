@@ -138,6 +138,17 @@ async function inLibrary(page, name, kinds) {
 }
 
 /**
+ * Home's catalog grid, for a spec that needs any poster card: Home's shelves are unseen-only
+ * (decision 562), and by now the admin has seen nearly every owned film.
+ */
+export async function catalogGrid(page) {
+  await page.goto('/');
+  await page.getByRole('searchbox', { name: 'Search titles' }).fill('e');
+  await expect(page.getByTestId('home-mode')).toHaveAttribute('data-mode', 'grid');
+  return page.locator('.grid .card-wrap');
+}
+
+/**
  * Open a title's detail sheet from the catalog. The card is matched by name, because the search
  * is debounced; Home shows Films only, so pass `['Films']` to leave that default alone. A title
  * the library does not hold is searched for beyond it (decision 558).

@@ -1,6 +1,6 @@
 import { expect, test } from '@playwright/test';
 
-import { signedIn } from '../helpers.js';
+import { catalogGrid, signedIn } from '../helpers.js';
 
 /**
  * §6 preamble: "responsive PWA, phone-first (48 px targets, one-handed, swipe), desktop as
@@ -362,7 +362,7 @@ test('a long term label does not widen the page', async ({ page }) => {
 test('the title detail panel is full-width on a phone', async ({ page, isMobile }) => {
   test.skip(!isMobile, 'desktop shows it as a side panel');
 
-  await page.locator('.card-wrap').first().click();
+  await (await catalogGrid(page)).first().click();
   const panel = page.getByLabel('Title detail');
   await expect(panel).toBeVisible();
   const box = await panel.boundingBox();

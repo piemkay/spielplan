@@ -1,6 +1,13 @@
 import { expect, test } from '@playwright/test';
 
-import { createMember, login, openAccountMenu, signInAsMember, signedIn } from '../helpers.js';
+import {
+  catalogGrid,
+  createMember,
+  login,
+  openAccountMenu,
+  signInAsMember,
+  signedIn
+} from '../helpers.js';
 
 /**
  * The shell on the phone (§6 preamble, §6.8, §3.1, §3.2): the 16 px and 48 px rules, dismissal,
@@ -157,8 +164,7 @@ test("the account menu's entries and the overlay exits meet the touch floor", as
   }
   await page.keyboard.press('Escape');
 
-  await page.goto('/');
-  await page.locator('.card-wrap').first().click();
+  await (await catalogGrid(page)).first().click();
   const panel = page.getByLabel('Title detail');
   await expect(panel).toBeVisible();
   await meetsTheTouchFloor(panel.locator('.close'), "the title panel's close button");
@@ -219,14 +225,14 @@ test('every menu and overlay dismisses by outside tap and by Escape', async ({ p
   await expect(page).not.toHaveURL(/\/login$/);
 
   // --- the title detail panel
-  await page.goto('/');
-  await page.locator('.card-wrap').first().click();
+  const grid = await catalogGrid(page);
+  await grid.first().click();
   const panel = page.getByLabel('Title detail');
   await expect(panel).toBeVisible();
   await page.keyboard.press('Escape');
   await expect(panel, 'the title panel does not close on Escape').toHaveCount(0);
 
-  await page.locator('.card-wrap').first().click();
+  await grid.first().click();
   await expect(panel).toBeVisible();
   await outside.click();
   await expect(panel, 'the title panel has no outside-tap dismissal').toHaveCount(0);
@@ -618,13 +624,11 @@ test('the data sources are attributed once, on /account, and on no card', async 
 
   // No logo is asserted either way: the TMDB logo is an owed asset (decision 298).
 
-  // And no source names on the tiles. Cards always render; shelves only in shelf mode.
-  await page.goto('/');
-  const cards = page.locator('.card-wrap');
-  // Web-first: a count snapshot right after `goto` can precede `/api/home` entirely.
+  // And no source names on the tiles: the grid's cards, and any shelves Home draws.
+  const cards = await catalogGrid(page);
   await expect(
     cards.first(),
-    'Home drew no poster card, so nothing was checked for a source name'
+    'the grid drew no poster card, so nothing was checked for a source name'
   ).toBeVisible();
   await expect(
     cards.filter({ hasText: SOURCE_NAMES }),
