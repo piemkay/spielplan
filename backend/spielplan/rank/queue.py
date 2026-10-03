@@ -13,6 +13,7 @@ from collections import Counter
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import timedelta
+from functools import cached_property
 
 import numpy as np
 
@@ -88,6 +89,10 @@ class Candidate:
     @property
     def s(self) -> float:
         return self.item.s
+
+    @cached_property
+    def term_norm(self) -> float:
+        return math.sqrt(sum(v[0] ** 2 for v in self.terms.values()))
 
     @property
     def shown(self) -> int:
@@ -167,9 +172,7 @@ def likeness(a: Candidate, b: Candidate) -> float:
     signals = []
     if a.terms and b.terms:
         dot = sum(a.terms[t][0] ** 2 for t in a.terms.keys() & b.terms.keys())
-        norm = math.sqrt(
-            sum(v[0] ** 2 for v in a.terms.values()) * sum(v[0] ** 2 for v in b.terms.values())
-        )
+        norm = a.term_norm * b.term_norm
         signals.append(dot / norm if norm else 0.0)
     if a.embedding is not None and b.embedding is not None:
         signals.append(max(float(a.embedding @ b.embedding), 0.0))
@@ -323,29 +326,33 @@ def _cross_tier(
     recent: Iterable[int] | None = None,
     exposure: Mapping[int, int] | None = None,
 ) -> Pair | None:
-    """25%: any title, weighted by `cross_weight`, against one shown `CROSS_MIN_GAP` or more steps
-    away, the smallest gap first (decision 564)."""
+    """25%: a gap of `CROSS_MIN_GAP` or more steps, drawn as a uniform pair's gap would be so the gap
+    tells nothing about the arm, then a title weighted by `cross_weight` against one that far (decision
+    564)."""
     already = {frozenset(p) for p in (asked or ())}
     resting = _resting(recent, exposure)
     jitter = _jitter(pool, rng)
-    for anchor in _weighted_order(pool, rng, resting=resting, weight=cross_weight):
-        apart = [c for c in pool if abs(c.shown - anchor.shown) >= CROSS_MIN_GAP]
-
-        def closest(offered: list[Candidate], anchor: Candidate = anchor) -> list[Candidate]:
-            gap = min(abs(c.shown - anchor.shown) for c in offered)
-            return [c for c in offered if abs(c.shown - anchor.shown) == gap]
-
-        partner = _partner(
-            pool, apart, anchor, asked=already, resting=resting, exposure=exposure or {},
-            jitter=jitter, near=closest,
-        )
-        if partner is not None:
-            return Pair(
-                title_a=anchor.title_id,
-                title_b=partner.title_id,
-                arm=ARM_CROSS,
-                reason="its step against one two or more away",
+    steps = Counter(c.shown for c in pool)
+    pairs_at = Counter()
+    for low, n_low in steps.items():
+        for high, n_high in steps.items():
+            if high - low >= CROSS_MIN_GAP:
+                pairs_at[high - low] += n_low * n_high
+    for gap in sorted(pairs_at, key=lambda g: -(rng.random() ** (1.0 / pairs_at[g]))):
+        reach = [c for c in pool if steps[c.shown - gap] or steps[c.shown + gap]]
+        for anchor in _weighted_order(reach, rng, resting=resting, weight=cross_weight):
+            partner = _partner(
+                pool, [c for c in pool if abs(c.shown - anchor.shown) == gap], anchor,
+                asked=already, resting=resting, exposure=exposure or {}, jitter=jitter,
+                near=lambda offered: offered,
             )
+            if partner is not None:
+                return Pair(
+                    title_a=anchor.title_id,
+                    title_b=partner.title_id,
+                    arm=ARM_CROSS,
+                    reason="its step against one two or more away",
+                )
     return None
 
 

@@ -50,8 +50,9 @@ def due(
 
 async def settle(
     conn: asyncpg.Connection, *, user_id: int, kind: str
-) -> list[tuple[Move, ladder.Placement]]:
-    """Writes every due move under the member's lock, so two settles move a title once."""
+) -> list[tuple[Move, ladder.Placement, str]]:
+    """Writes every due move under the member's lock, so two settles move a title once; each with the
+    label of the step it left."""
     async with conn.transaction():
         await conn.execute("SELECT pg_advisory_xact_lock($1, $2)", ladder.LOCK, user_id)
         cuts = await read.cutpoints_of(conn, user_id=user_id, kind=kind)
@@ -65,7 +66,7 @@ async def settle(
                 conn, user_id=user_id, title_id=move.title_id, tier=move.target, via="sharpen",
                 source="tier",
             )
-            moved.append((move, placed))
+            moved.append((move, placed, cuts.tier_set[move.source]))
     return moved
 
 

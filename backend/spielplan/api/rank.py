@@ -463,9 +463,8 @@ async def settle(
     comes back with the moves, each undone by a drop back that names its `tier_edit_id`. Idempotent."""
     await deps.assert_active_basis(request, conn)
     await _set_up(conn, user.id)
-    tier_set = await tiers.tier_set_of(conn, user_id=user.id, kind=kind)
     moved = await moves.settle(conn, user_id=user.id, kind=kind)
-    lines = [rail.tier_edit_line(m.name, placed.label, via="sharpen") for m, placed in moved]
+    lines = [rail.tier_edit_line(m.name, placed.label, via="sharpen") for m, placed, _left in moved]
     for line in lines:
         rail.record(user_id=user.id, kind="tier_edit", line=line)
     payload = await _payload(
@@ -477,11 +476,11 @@ async def settle(
             "name": m.name,
             "from": m.source,
             "to": m.target,
-            "from_label": tier_set[m.source],
+            "from_label": left,
             "to_label": placed.label,
             "tier_edit_id": placed.tier_edit_id,
         }
-        for m, placed in moved
+        for m, placed, left in moved
     ]
     if lines:
         payload["log"] = lines
