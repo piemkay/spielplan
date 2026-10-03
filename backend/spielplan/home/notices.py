@@ -3,7 +3,7 @@ wish-list row hide until the next midnight in §2's `TZ`, or sooner when somethi
 
 from __future__ import annotations
 
-from datetime import UTC, datetime, tzinfo
+from datetime import UTC, date, datetime, tzinfo
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
@@ -40,6 +40,11 @@ def _zone() -> tzinfo:
         return ZoneInfo(settings().tz)
     except (ValueError, ZoneInfoNotFoundError):
         return UTC
+
+
+def today(now: datetime | None = None) -> date:
+    """The local date in §2's `TZ`."""
+    return (now or datetime.now(UTC)).astimezone(_zone()).date()
 
 
 def _midnight(now: datetime) -> datetime:
@@ -87,4 +92,4 @@ async def apply_hidden(
     return payload
 
 
-__all__ = ["NOTICES", "apply_hidden", "hidden", "hide", "unhide"]
+__all__ = ["NOTICES", "apply_hidden", "hidden", "hide", "today", "unhide"]

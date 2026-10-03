@@ -213,7 +213,8 @@ async def personal_kinds(
 
 
 async def top_scored(
-    conn, *, user_id: int, kind: Kind, bundle_version: str, limit: int, exclude: Sequence[int] = ()
+    conn, *, user_id: int, kind: Kind, bundle_version: str, limit: int, exclude: Sequence[int] = (),
+    unseen_only: bool = False,
 ) -> dict[str, Any]:
     """ONE kind's owned titles by score. `kind` is bound as a scalar: there is no merged ordering.
 
@@ -232,10 +233,11 @@ async def top_scored(
           LEFT JOIN ledger_state ls ON ls.user_id = us.user_id AND ls.title_id = us.title_id
          WHERE us.user_id = $1 AND us.kind = $2 AND us.bundle_version = $3 AND t.is_owned
            AND NOT (t.id = ANY($5::int[]))
+           AND (NOT $6 OR COALESCE(ut.state, 'unseen') = 'unseen')
          ORDER BY us.score DESC, t.id
          LIMIT $4
         """,
-        user_id, kind, bundle_version, limit, [int(t) for t in exclude],
+        user_id, kind, bundle_version, limit, [int(t) for t in exclude], unseen_only,
     )
     fit = await fit_row(conn, user_id=user_id, kind=kind)
     beta = float(fit["blend_beta"]) if fit and fit["blend_beta"] is not None else 0.0

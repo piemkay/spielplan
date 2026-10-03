@@ -33,6 +33,7 @@ PENDING = (21, 22, 23)          # seen, no live verdict — the banner's populat
 # No title repeats on a second shelf of its kind (decision 475), so every shelf has its own population.
 SHORT = (24, 25, 26, 27)
 FILLER = tuple(range(24, 50))
+TOP = tuple(range(38, 50))      # unseen, scored highest: Your top picks' population
 
 # Strict `<`, NULL runtime excluded; some titles sit exactly ON the threshold and some have none.
 RUNTIME = {
@@ -50,7 +51,7 @@ SERIES_RUNTIME = {
 FITTED_BETA = 0.62
 
 
-# DECOYS rank highest among the unseen: the sweet spot's population.
+# After TOP, DECOYS rank highest among the unseen: the sweet spot's population.
 UNSEEN_ORDER = DECOYS + MEMBERS + FRONTIER
 
 
@@ -62,10 +63,12 @@ def score_of(title_id: int) -> float:
         film = 0.11
     elif offset in UNSEEN_ORDER:
         film = 0.45 - 0.01 * UNSEEN_ORDER.index(offset)
+    elif offset in TOP:
+        film = 0.60 - 0.01 * (offset - TOP[0])
     elif offset in FILLER:
         film = 0.10 - 0.001 * (offset - FILLER[0])
     else:
-        film = 0.60 - 0.01 * (offset - 12)
+        film = 0.09 - 0.001 * (offset - 12)
     return film if base == 1000 else film + 1.0
 
 
@@ -92,9 +95,26 @@ class World:
         )
         return client
 
-    async def home(self, *, kinds=("movie", "series"), **params):
+    async def home(self, *, kinds=("movie", "series"), rest=True, **params):
+        """Both reads merged, as the page does: the first, then the rest of its day's rows."""
         query = [("kind", k) for k in kinds] + [(k, v) for k, v in params.items() if v is not None]
         response = await self.client.get("/api/home", params=query)
+        assert response.status_code == 200, response.text
+        payload = response.json()
+        if rest and payload["more"]:
+            more = await self.rows(payload, kinds=kinds)
+            payload["shelves"] += more["shelves"]
+            if "suppressed" in payload:
+                payload["suppressed"] += more["suppressed"]
+            payload["shelves_total"] += len(more["shelves"])
+        return payload
+
+    async def rows(self, head, *, kinds=("movie", "series")):
+        shown = {c["title_id"] for s in head["shelves"] for x in s["sections"] for c in x["items"]}
+        query = [("kind", k) for k in kinds] + [("day", head["more"]["day"])]
+        response = await self.client.get(
+            "/api/home/rows", params=query + [("shown", i) for i in sorted(shown)]
+        )
         assert response.status_code == 200, response.text
         return response.json()
 
@@ -241,7 +261,8 @@ async def seed(conn, *, patrick: int, jenny: int) -> None:
             patrick, kind,
         )
         rows = [(ANCHOR, 3.0, 0.98, 4)]
-        rows += [(o, 2.0, 0.90, 4) for o in LIKED]
+        # One step under the anchor, so it alone is at the top two steps.
+        rows += [(o, 2.0, 0.90, 3) for o in LIKED]
         rows += [(o, 1.0, 0.50, 3) for o in range(15, 21)]
         for offset, s, cdf, tier in rows:
             await conn.execute(
@@ -361,7 +382,7 @@ async def test_the_ledger_shelf_names_the_beta_its_own_ranking_used(world):
         assert section is not None
         assert "β" not in section["why"] and "0.62" not in section["why"], section["why"]
         assert "why_numbers" not in section, "a model number reached a member with the switch off"
-        assert "rewatches included" in section["why"]
+        assert section["why"] == "The ones we think you'll enjoy most"
 
     await world.client.post("/api/auth/preferences", json={"show_model": True})
     payload = await world.home()
@@ -1397,12 +1418,41 @@ async def test_the_floor_applies_after_the_claim_and_says_so(world):
     assert world.section(payload, "because_anchor", "series") is not None
 
 
-async def test_the_payload_keeps_the_tables_order_though_the_claim_runs_in_another(world):
-    payload = await world.home()
-    order = [shelf["id"] for shelf in payload["shelves"]]
-    assert order == [s for s in shelves.SHELF_IDS if s in order]
-    assert order[:2] == ["because_anchor", "top_of_ledger"], order
-    assert shelves.CLAIM_ORDER[0] == "top_of_ledger"
+def test_the_plan_pins_the_head_watch_again_and_the_tail_and_keeps_families_apart():
+    for day in ("2026-10-03", "2026-10-04", "2027-01-01"):
+        steps = shelves.plan(7, day)
+        assert steps[:2] == [("because_anchor", 0), ("top_of_ledger", 0)]
+        assert steps[3] == ("watch_again", 0)
+        assert steps[-2:] == [("new_in_library", 0), ("worth_getting", 0)]
+        assert len(set(steps)) == len(steps)
+        assert sum(f == "because_anchor" for f, _ in steps) == shelves.BECAUSE_ROWS
+        assert sum(f == "taste_term" for f, _ in steps) == shelves.TASTE_ROWS
+        families = [f for f, _ in steps]
+        assert all(a != b for a, b in zip(families, families[1:], strict=False)), families
+
+
+def test_the_plan_holds_for_a_day_and_changes_by_the_day():
+    assert shelves.plan(7, "2026-10-03") == shelves.plan(7, "2026-10-03")
+    days = [f"2026-10-{d:02d}" for d in range(1, 15)]
+    assert len({tuple(shelves.plan(7, d)) for d in days}) > 1
+    assert shelves.plan(7, "2026-10-03") != shelves.plan(8, "2026-10-03") or \
+        shelves.plan(7, "2026-10-04") != shelves.plan(8, "2026-10-04")
+
+
+async def test_the_first_read_holds_the_head_and_the_second_the_rest_without_repeats(world):
+    head = await world.home(rest=False)
+    assert head["more"]["day"] == shelves.notices.today().isoformat()
+    keys = [s["key"] for s in head["shelves"]]
+    assert len(keys) <= shelves.HEAD_SLOTS and keys[:2] == ["because_anchor:0", "top_of_ledger:0"]
+    rest = await world.rows(head)
+    assert rest["shelves"], "the second read built nothing"
+    assert not set(keys) & {s["key"] for s in rest["shelves"]}
+    shown = {c["title_id"] for s in head["shelves"] for x in s["sections"] for c in x["items"]}
+    for shelf in rest["shelves"]:
+        if shelf["id"] in shelves.CLAIMING_SHELVES:
+            for section in shelf["sections"]:
+                assert not shown & {c["title_id"] for c in section["items"]}, shelf["key"]
+    assert [s["id"] for s in rest["shelves"]][-1] in shelves.TAIL
 
 
 async def test_shelf_one_prefers_titles_most_like_the_anchor_over_the_widest_pair(world):
@@ -1515,6 +1565,9 @@ async def test_the_anchor_tie_break_reads_the_persons_verdict_not_the_reask(worl
     """The tie-break reads the person's verdict too."""
     await _tag(world.db, 1012, "obsession", "themes", 3)
     await _tag(world.db, 1012, "morally-grey", "character", 3)
+    await world.db.execute(
+        "UPDATE ledger_state SET tier = 4 WHERE user_id = $1 AND title_id = 1012", world.patrick
+    )
     # Same tier; 1000's own answer is "fine", its re-ask "liked".
     await _reask(world.db, world.patrick, 1000, real=1, reask=2)
     section = world.section(await world.home(), "because_anchor", "movie")
@@ -1694,29 +1747,30 @@ async def test_the_shared_shelf_leaves_out_what_either_member_avoids(world):
         await _tag(world.db, title_id, term, facet, 2)
         await _verdict(world.db, world.jenny, title_id, 0)
     await _tag(world.db, 1005, term, facet, 2)
+    await _tag(world.db, 1038, term, facet, 2)
 
     payload = await world.home(kinds=("movie",))
     assert payload["avoiding"]["labels"] == [], "Patrick liked all four; the pattern is Jenny's"
     sweet = world.section(payload, "shared_sweet_spot", "movie")
     assert sweet is None or 1005 not in {c["title_id"] for c in sweet["items"]}
     top = world.section(payload, "top_of_ledger", "movie")
-    assert 1012 in {c["title_id"] for c in top["items"]}, "his own shelf keeps what he liked"
+    assert 1038 in {c["title_id"] for c in top["items"]}, "his own shelf keeps what he liked"
 
 
 async def test_a_film_far_longer_than_anything_the_member_liked_leaves_the_shelves(world):
     """Past 30 minutes over the longest liked film and past three hours is left out; exactly 180 stays."""
-    await world.db.execute("UPDATE title SET runtime_min = 250 WHERE id = 1021")
-    await world.db.execute("UPDATE title SET runtime_min = 180 WHERE id = 1022")
+    await world.db.execute("UPDATE title SET runtime_min = 250 WHERE id = 1038")
+    await world.db.execute("UPDATE title SET runtime_min = 180 WHERE id = 1039")
     payload = await world.home(kinds=("movie",))
     assert payload["avoiding"] == {"labels": [], "runtime_max": 180}, payload["avoiding"]
     top = {c["title_id"] for c in world.section(payload, "top_of_ledger", "movie")["items"]}
-    assert 1021 not in top and 1022 in top, top
+    assert 1038 not in top and 1039 in top, top
 
     await world.db.execute("UPDATE title SET runtime_min = 230 WHERE id = 1012")
     payload = await world.home(kinds=("movie",))
     assert payload["avoiding"]["runtime_max"] == 260
     top = {c["title_id"] for c in world.section(payload, "top_of_ledger", "movie")["items"]}
-    assert 1021 in top, top
+    assert 1038 in top, top
 
 
 async def test_shelf_one_weighs_a_shared_term_by_how_rare_it_is(world):
@@ -2102,3 +2156,157 @@ async def test_new_in_the_library_marks_what_the_viewer_wanted(world):
     assert {c["title_id"]: c["wanted"] for c in section["items"]} == {
         1011: False, 1010: False, 1009: False, 1008: True
     }
+
+
+# --- decisions 562 and 563: unseen rows, rewatch rows, taste rows ----------------------------
+
+
+async def _loved(db, user_id: int, *title_ids: int) -> None:
+    """Into A, the board's second step: loved."""
+    await db.execute(
+        "UPDATE ledger_state SET tier = 4 WHERE user_id = $1 AND title_id = ANY($2::int[])",
+        user_id, list(title_ids),
+    )
+
+
+async def test_only_the_rewatch_rows_show_seen_titles_and_top_picks_shows_none(world):
+    await _loved(world.db, world.patrick, 1012, 1013, 1014)
+    payload = await world.home()
+    ids_ = {s["id"] for s in payload["shelves"]}
+    assert "watch_again" in ids_, payload.get("suppressed")
+    for shelf in payload["shelves"]:
+        assert shelf["seen_only"] == (shelf["id"] in shelves.REWATCH)
+        for section in shelf["sections"]:
+            assert {c["seen"] for c in section["items"]} == {shelf["seen_only"]}, shelf["key"]
+    top = world.section(payload, "top_of_ledger", "movie")
+    assert [c["title_id"] for c in top["items"]] == ids(1000, TOP)
+
+
+async def test_each_because_row_has_its_own_anchor(world):
+    await _tag(world.db, 1012, "obsession", "themes", 3)
+    await _project(world.db, 1012, "period", "era", 8)
+    await _loved(world.db, world.patrick, 1012)
+    # Too long for a school night, which may come before the second Because row today.
+    await world.db.execute("UPDATE title SET runtime_min = 120 WHERE id BETWEEN 1001 AND 1004")
+    # And seen by Jenny, so the sweet spot cannot take the second row's titles first.
+    for title_id in ids(1000, DECOYS):
+        await world.db.execute(
+            "INSERT INTO user_title (user_id, title_id, state) VALUES ($1, $2, 'seen')",
+            world.jenny, title_id,
+        )
+    payload = await world.home(kinds=("movie",))
+    rows = [s for s in payload["shelves"] if s["id"] == "because_anchor"]
+    anchors = [r["sections"][0]["anchor"]["title_id"] for r in rows]
+    assert sorted(anchors) == [1000, 1012], anchors
+    cards = [c["title_id"] for r in rows for c in r["sections"][0]["items"]]
+    assert len(cards) == len(set(cards))
+
+
+async def test_a_taste_row_pairs_two_liked_terms_of_different_groups_on_every_card(world):
+    await world.db.execute("INSERT INTO dna_facet (version, facet, ord) VALUES ($1, 'pacing', 9)", VOCAB)
+    await _term(world.db, "slow-burn", "pacing", "slow-burn")
+    await _term(world.db, "atmos", "mood", "atmospheric")
+    for title_id in (1015, 1016, 1017, 1030, 1031, 1032, 1033):
+        await _tag(world.db, title_id, "slow-burn", "pacing", 2)
+        await _tag(world.db, title_id, "atmos", "mood", 2)
+    # Played lately, so the pair is not first named by the rewatch row.
+    await world.db.execute(
+        "UPDATE user_title SET played_at = now() WHERE user_id = $1 AND title_id IN (1015, 1016, 1017)",
+        world.patrick,
+    )
+    payload = await world.home(kinds=("movie",))
+    row = world.section(payload, "taste_term", "movie")
+    assert row is not None, payload.get("suppressed")
+    assert row["title"] in ("Slow-burn & atmospheric", "Atmospheric & slow-burn"), row["title"]
+    assert row["why"] == "Like Home Film 1015 and Home Film 1016, which you liked"
+    assert {t["term"] for t in row["why_terms"]} == {"slow-burn", "atmos"}
+    assert sorted(c["title_id"] for c in row["items"]) == [1030, 1031, 1032, 1033]
+    assert sum(s["id"] == "taste_term" for s in payload["shelves"]) == 1, "a term named twice"
+
+
+async def test_hidden_gems_are_little_rated_and_close_to_your_taste(world):
+    await world.db.execute("UPDATE title_prior SET item_n = 5 WHERE title_id BETWEEN 1028 AND 1037")
+    await world.db.execute(
+        "UPDATE user_score SET score = 0.465 WHERE user_id = $1 AND title_id BETWEEN 1028 AND 1037",
+        world.patrick,
+    )
+    row = world.section(await world.home(kinds=("movie",)), "hidden_gems", "movie")
+    assert row is not None
+    assert {c["title_id"] for c in row["items"]} <= set(range(1028, 1038))
+    assert len(row["items"]) >= shelves.SECTION_FLOOR
+
+
+async def test_acclaimed_is_the_top_fifth_by_platform_score_among_the_widely_rated(world):
+    rated = list(range(1024, 1044))
+    for rank, title_id in enumerate([1030, 1031, 1032, 1033] + [t for t in rated if t not in
+                                                                   (1030, 1031, 1032, 1033)]):
+        await world.db.execute(
+            "INSERT INTO display.platform_rating (title_id, platform, metric, score, scale, votes) "
+            "VALUES ($1, 'imdb', 'user_score', $2, 10, 100000)",
+            title_id, 9.0 - 0.1 * rank,
+        )
+    await world.db.execute(
+        "INSERT INTO display.platform_rating (title_id, platform, metric, score, scale, votes) "
+        "VALUES (1034, 'tmdb', 'user_score', 9.9, 10, 10)",
+    )
+    row = world.section(await world.home(kinds=("movie",)), "acclaimed", "movie")
+    assert row is not None
+    assert [c["title_id"] for c in row["items"]] == [1030, 1031, 1032, 1033]
+
+
+async def test_the_other_members_loved_titles_show_without_their_step(world):
+    for title_id, tier in ((1030, 5), (1031, 4), (1032, 5), (1035, 4), (1033, 2), (1012, 5)):
+        await world.db.execute(
+            "INSERT INTO user_title (user_id, title_id, state) VALUES ($1, $2, 'seen') "
+            "ON CONFLICT (user_id, title_id) DO NOTHING",
+            world.jenny, title_id,
+        )
+        await world.db.execute(
+            "INSERT INTO ledger_state (user_id, title_id, s, sigma, cdf, tier, kind, observed) "
+            "VALUES ($1, $2, 1.0, 0.2, 0.9, $3, 'movie', true)",
+            world.jenny, title_id, tier,
+        )
+    row = world.section(await world.home(kinds=("movie",)), "partner_loved", "movie")
+    assert row is not None
+    assert row["title"] == "jenny loved these"
+    assert {c["title_id"] for c in row["items"]} == {1030, 1031, 1032, 1035}
+    assert {c["tier"] for c in row["items"]} == {None}
+
+
+async def test_watch_again_skips_a_real_play_this_year_and_keeps_none_known(world):
+    await _loved(world.db, world.patrick, 1012, 1013, 1014)
+    for title_id, days in ((1012, 30), (1013, 400)):
+        await world.db.execute(
+            "UPDATE user_title SET played_at = now() - make_interval(days => $3) "
+            "WHERE user_id = $1 AND title_id = $2",
+            world.patrick, title_id, days,
+        )
+    head = await world.home(kinds=("movie",), rest=False)
+    assert [s["key"] for s in head["shelves"]].count("watch_again:0") == 1
+    row = world.section(head, "watch_again", "movie")
+    order = [c["title_id"] for c in row["items"]]
+    assert set(order[:2]) == {1000, 1014} and order[2:] == [1013], order
+
+
+async def test_watch_again_together_is_liked_by_both_and_unplayed_by_both(world):
+    for title_id in (1012, 1013, 1014, 1015):
+        await _verdict(world.db, world.jenny, title_id, 2)
+    await world.db.execute(
+        "UPDATE user_title SET played_at = now() - interval '10 days' "
+        "WHERE user_id = $1 AND title_id = 1015",
+        world.jenny,
+    )
+    row = world.section(await world.home(kinds=("movie",)), "rewatch_together", "movie")
+    assert row is not None
+    assert row["title"] == "Watch again with jenny"
+    assert {c["title_id"] for c in row["items"]} == {1012, 1013, 1014}
+
+
+async def test_home_holds_row_cap_rows_a_kind_and_names_the_rest(world, monkeypatch):
+    monkeypatch.setattr(shelves, "ROW_CAP", shelves.HEAD_SLOTS + len(shelves.TAIL))
+    await world.client.post("/api/auth/preferences", json={"show_model": True})
+    payload = await world.home(kinds=("movie",))
+    assert len(payload["shelves"]) <= shelves.ROW_CAP
+    assert payload["shelves"][-1]["id"] == "new_in_library"
+    held = f"Home holds {shelves.ROW_CAP} rows of a kind"
+    assert any(s["reason"] == held for s in payload["suppressed"]), payload["suppressed"]

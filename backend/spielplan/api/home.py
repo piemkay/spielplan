@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+from datetime import date
 from typing import Any, Literal
 
 import asyncpg
@@ -46,6 +47,23 @@ async def home(
     """Kind-headed shelves (§6.0); the catalog grid is `/api/titles`."""
     payload = await shelves.build_home(
         conn, user=user, kinds=_kinds(kind), bundle_version=await _bundle(request, conn)
+    )
+    return rail.redact(payload, show_model=rail.visible_to(user))
+
+
+@router.get("/home/rows")
+async def home_rows(
+    conn: DB,
+    user: ActiveUser,
+    request: Request,
+    day: date,
+    kind: list[Literal["movie", "series"]] = Query(...),
+    shown: list[int] = Query([]),
+) -> dict[str, Any]:
+    """The rest of `day`'s rows after the first read, leaving out the titles it `shown` (decision 563)."""
+    payload = await shelves.build_rows(
+        conn, user=user, kinds=_kinds(kind), bundle_version=await _bundle(request, conn),
+        day=day.isoformat(), shown=shown,
     )
     return rail.redact(payload, show_model=rail.visible_to(user))
 
