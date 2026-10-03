@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from datetime import UTC, datetime, timedelta
 
 import asyncpg
 import httpx
@@ -1201,8 +1202,93 @@ def test_a_childless_series_folder_is_never_read_as_played():
 
     collapsed = seen._collapse([empty, watched], resolved)
 
-    assert collapsed[6] == (["jf-6"], False), "an empty folder's Played flag is nobody's opinion"
-    assert collapsed[7] == (["jf-7"], True), "a watched show is still adopted"
+    assert collapsed[6] == (["jf-6"], False, None), "an empty folder's Played flag is nobody's opinion"
+    assert collapsed[7] == (["jf-7"], True, None), "a watched show is still adopted"
+
+
+def test_collapse_keeps_the_latest_play_date_across_copies():
+    resolved = resolve.ResolveReport(items={"jf-1": 1, "jf-1b": 1, "jf-1c": 1}, kinds={1: "movie"})
+    items = [
+        {"Id": "jf-1", "UserData": {"Played": True, "LastPlayedDate": "2026-05-01T20:00:00.0000000Z"}},
+        {"Id": "jf-1b", "UserData": {"Played": False, "LastPlayedDate": "2026-08-01T20:00:00.0000000Z"}},
+        {"Id": "jf-1c", "UserData": {"Played": False}},
+    ]
+    assert seen._collapse(items, resolved)[1] == (
+        ["jf-1", "jf-1b", "jf-1c"], True, datetime(2026, 8, 1, 20, tzinfo=UTC)
+    )
+
+
+def _jf_date(when: datetime) -> str:
+    return when.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%S.%f") + "0Z"
+
+
+async def _played_at(db, user_id, title_id):
+    return await db.fetchval(
+        "SELECT played_at FROM user_title WHERE user_id = $1 AND title_id = $2", user_id, title_id
+    )
+
+
+async def test_an_adopted_title_keeps_its_jellyfin_play_date(db, world):
+    module, patrick = world["module"], world["patrick"]
+    module.state.played[PATRICK_JF].add("jf-1")
+    module.state.last_played[(PATRICK_JF, "jf-1")] = "2026-09-20T19:30:00.1234567Z"
+
+    await seen.sync_user(db, world["client"], _linked(world), seen.SyncReport())
+
+    assert await _played_at(db, patrick, 1) == datetime(2026, 9, 20, 19, 30, 0, 123456, tzinfo=UTC)
+
+
+async def test_the_apps_own_write_is_not_a_play_but_a_rewatch_after_it_is(db, world):
+    """Jellyfin stamps LastPlayedDate on every Played POST, the app's own included (decision 562)."""
+    module, patrick = world["module"], world["patrick"]
+    now = await db.fetchval("SELECT now()")
+    await db.execute(
+        "INSERT INTO user_title (user_id, title_id, state, state_changed_at, jf_synced_at) "
+        "VALUES ($1, 1, 'seen', $2, $3)",
+        patrick, now - timedelta(hours=1), now - timedelta(minutes=50),
+    )
+    module.state.played[PATRICK_JF].add("jf-1")
+    module.state.last_played[(PATRICK_JF, "jf-1")] = _jf_date(now - timedelta(minutes=55))
+
+    await seen.sync_user(db, world["client"], _linked(world), seen.SyncReport())
+    assert await _played_at(db, patrick, 1) is None
+
+    rewatch = (now - timedelta(minutes=10)).replace(microsecond=0)
+    module.state.last_played[(PATRICK_JF, "jf-1")] = _jf_date(rewatch)
+    await seen.sync_user(db, world["client"], _linked(world), seen.SyncReport())
+    assert await _played_at(db, patrick, 1) == rewatch
+
+
+async def test_a_play_date_never_moves_backwards(db, world):
+    module, patrick = world["module"], world["patrick"]
+    now = await db.fetchval("SELECT now()")
+    await db.execute(
+        "INSERT INTO user_title (user_id, title_id, state, state_changed_at, jf_synced_at, played_at) "
+        "VALUES ($1, 1, 'seen', $2, $2, $3)",
+        patrick, now - timedelta(days=30), now - timedelta(days=1),
+    )
+    module.state.played[PATRICK_JF].add("jf-1")
+    module.state.last_played[(PATRICK_JF, "jf-1")] = _jf_date(now - timedelta(days=2))
+
+    await seen.sync_user(db, world["client"], _linked(world), seen.SyncReport())
+
+    assert await _played_at(db, patrick, 1) == now - timedelta(days=1)
+
+
+async def test_a_bulk_marked_day_is_not_a_play(db, world, monkeypatch):
+    """Ten or more of one member's dates on one local day is a bulk mark (decision 562)."""
+    monkeypatch.setattr(seen, "BULK_DAY", 3)
+    module, patrick = world["module"], world["patrick"]
+    for item in ("jf-1", "jf-2", "jf-8"):
+        module.state.played[PATRICK_JF].add(item)
+        module.state.last_played[(PATRICK_JF, item)] = "2026-09-29T12:00:00.0000000Z"
+    module.state.played[PATRICK_JF].add("jf-3")
+    module.state.last_played[(PATRICK_JF, "jf-3")] = "2026-10-01T20:00:00.0000000Z"
+
+    await seen.sync_user(db, world["client"], _linked(world), seen.SyncReport())
+
+    assert [await _played_at(db, patrick, t) for t in (1, 2, 8)] == [None, None, None]
+    assert await _played_at(db, patrick, 3) == datetime(2026, 10, 1, 20, tzinfo=UTC)
 
 
 async def test_the_sweep_does_not_adopt_while_a_finish_prompt_is_open(db, world):

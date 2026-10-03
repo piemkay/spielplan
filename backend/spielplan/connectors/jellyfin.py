@@ -618,6 +618,18 @@ def played_of(item: dict) -> bool:
     return bool((item.get("UserData") or {}).get("Played"))
 
 
+def last_played_of(item: dict) -> datetime | None:
+    """UserData.LastPlayedDate as aware UTC; Jellyfin writes seven fractional digits and a `Z`."""
+    text = (item.get("UserData") or {}).get("LastPlayedDate")
+    if not text:
+        return None
+    try:
+        when = datetime.fromisoformat(re.sub(r"(\.\d{6})\d+", r"\1", str(text)))
+    except ValueError:
+        return None
+    return when.replace(tzinfo=UTC) if when.tzinfo is None else when.astimezone(UTC)
+
+
 __all__ = [
     "EPISODE_CACHE_LIMIT",
     "FIELDS",
@@ -630,6 +642,7 @@ __all__ = [
     "NowPlaying",
     "Outage",
     "canonical_id",
+    "last_played_of",
     "parse_version",
     "played_of",
     "version_supported",

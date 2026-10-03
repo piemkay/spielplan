@@ -281,9 +281,13 @@ async def test_answering_yes_writes_seen(db, world):
         db, user_id=world["patrick"], event_id=event["id"], finished=True
     )
     assert result["ok"] and result["seen"] is True
-    assert await db.fetchval(
-        "SELECT state FROM user_title WHERE user_id = $1 AND title_id = 1", world["patrick"]
-    ) == "seen"
+    row = await db.fetchrow(
+        "SELECT state, played_at FROM user_title WHERE user_id = $1 AND title_id = 1", world["patrick"]
+    )
+    assert row["state"] == "seen"
+    assert row["played_at"] == await db.fetchval(
+        "SELECT at FROM playback_event WHERE id = $1", event["id"]
+    ), "a confirmed finish is a real play, stamped at the viewing"
 
 
 async def test_answering_yes_pushes_to_jellyfin_under_the_users_token(db, world):
@@ -312,9 +316,11 @@ async def test_answering_no_writes_unseen(db, world):
         db, user_id=world["patrick"], event_id=event["id"], finished=False
     )
     assert result["ok"] and result["seen"] is False
-    assert await db.fetchval(
-        "SELECT state FROM user_title WHERE user_id = $1 AND title_id = 1", world["patrick"]
-    ) == "unseen"
+    row = await db.fetchrow(
+        "SELECT state, played_at FROM user_title WHERE user_id = $1 AND title_id = 1", world["patrick"]
+    )
+    assert row["state"] == "unseen"
+    assert row["played_at"] is None, "a viewing the member says they did not finish stamps nothing"
     assert (await _prompts(db, world["patrick"]))[0]["prompt_state"] == "dismissed"
 
 

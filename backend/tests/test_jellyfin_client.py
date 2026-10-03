@@ -15,6 +15,7 @@ from spielplan.connectors.jellyfin import (
     JellyfinClient,
     JellyfinError,
     NowPlaying,
+    last_played_of,
 )
 
 
@@ -294,6 +295,12 @@ async def test_an_unknown_series_has_no_episode_list(client):
         with pytest.raises(JellyfinError) as exc:
             await jf.episodes("jf-nope")
         assert exc.value.status == 404
+
+
+def test_last_played_reads_jellyfins_seven_digit_utc_date():
+    item = {"UserData": {"LastPlayedDate": "2026-09-29T21:14:03.1234567Z"}}
+    assert last_played_of(item) == datetime(2026, 9, 29, 21, 14, 3, 123456, tzinfo=UTC)
+    assert last_played_of({"UserData": {"Played": True}}) is None
 
 
 def test_a_session_with_no_runtime_is_not_ninety_percent_finished():
