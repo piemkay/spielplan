@@ -8,20 +8,28 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections import Counter
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
 
 import asyncpg
 
 from spielplan.connectors import resolve
-from spielplan.connectors.jellyfin import JellyfinClient, JellyfinError, Outage, played_of
+from spielplan.connectors.jellyfin import (
+    JellyfinClient,
+    JellyfinError,
+    Outage,
+    last_played_of,
+    played_of,
+)
 from spielplan.connectors.registry import (
     SECRETS_UNREADABLE_REASON,
     JellyfinConfig,
     save_jellyfin,
 )
-from spielplan.home import wish
+from spielplan.home import notices, wish
 
 log = logging.getLogger("spielplan.sync.seen")
 
@@ -45,6 +53,9 @@ _SWEEP_LOCK = 7304
 _PUSH_LOCK_TRIES = 20
 _PUSH_LOCK_WAIT_S = 0.1
 PUSH_BUSY_REASON = "another write for this title is in flight"
+
+# A local day carrying this many of one member's LastPlayedDates is a bulk mark, not plays (decision 562).
+BULK_DAY = 10
 
 # An outage logs once (§3.3). The sweep boundary stays the database's `now()`, never this clock.
 _outage = Outage(log)
@@ -421,16 +432,19 @@ async def set_state(
     return {"state": state, "synced": pushed, "reason": refusal}
 
 
-async def _adopt(conn: asyncpg.Connection, user_id: int, title_id: int, seen: bool) -> None:
+async def _adopt(
+    conn: asyncpg.Connection, user_id: int, title_id: int, seen: bool,
+    played_at: datetime | None = None,
+) -> None:
     """Take Jellyfin's value as ours and stamp the agreement."""
     await conn.execute(
         """
-        INSERT INTO user_title (user_id, title_id, state, state_changed_at, jf_synced_at)
-        VALUES ($1, $2, $3, now(), now())
+        INSERT INTO user_title (user_id, title_id, state, state_changed_at, jf_synced_at, played_at)
+        VALUES ($1, $2, $3, now(), now(), $4)
         ON CONFLICT (user_id, title_id) DO UPDATE
           SET state = EXCLUDED.state, state_changed_at = now(), jf_synced_at = now()
         """,
-        user_id, title_id, "seen" if seen else "unseen",
+        user_id, title_id, "seen" if seen else "unseen", played_at,
     )
 
 
@@ -456,13 +470,13 @@ def _folder_played(item: dict) -> bool:
 
 def _collapse(
     items: list[dict], resolved: resolve.ResolveReport
-) -> dict[int, tuple[list[str], bool]]:
-    """Group one user's page-set into `{title_id: (every copy of it, played on any copy)}`.
+) -> dict[int, tuple[list[str], bool, datetime | None]]:
+    """Group one user's page-set into `{title_id: (every copy, played on any copy, latest play date)}`.
 
     Pure over the sweep's resolution. Played is OR-ed across copies: per-item reconciliation let
     a duplicate nobody played overwrite an explicit `seen`.
     """
-    collapsed: dict[int, tuple[list[str], bool]] = {}
+    collapsed: dict[int, tuple[list[str], bool, datetime | None]] = {}
     for item in items:
         item_id = str(item.get("Id") or "")
         title_id = resolved.items.get(item_id)
@@ -471,8 +485,9 @@ def _collapse(
         played = (
             _folder_played(item) if resolved.kinds.get(title_id) == "series" else played_of(item)
         )
-        copies, was_played = collapsed.get(title_id, ([], False))
-        collapsed[title_id] = ([*copies, item_id], was_played or played)
+        copies, was_played, last = collapsed.get(title_id, ([], False, None))
+        when = max(filter(None, (last, last_played_of(item))), default=None)
+        collapsed[title_id] = ([*copies, item_id], was_played or played, when)
     return collapsed
 
 
@@ -514,6 +529,8 @@ async def sync_user(
         await wish.announce_arrivals(conn, resolved.arrived)
     # The per-user read is for `UserData` only: Played is per user, identity is not.
     collapsed = _collapse(await client.all_items(user.jf_user_id), resolved)
+    zone = notices._zone()
+    per_day = Counter(last.astimezone(zone).date() for _c, _p, last in collapsed.values() if last)
     open_prompts = await _open_prompt_titles(conn, user.app_user_id)
 
     # No per-user token: adopt-only for the whole member (§14 risk 3 forbids the admin key).
@@ -527,17 +544,30 @@ async def sync_user(
             report.needs_relink.append(user.name)
 
     completed = True
-    for title_id, (copies, jf_seen) in collapsed.items():
+    for title_id, (copies, jf_seen, last) in collapsed.items():
         kind = resolved.kinds.get(title_id)
         row = await conn.fetchrow(
             "SELECT state, state_changed_at, jf_synced_at FROM user_title "
             "WHERE user_id = $1 AND title_id = $2",
             user.app_user_id, title_id,
         )
+        if last is not None and per_day[last.astimezone(zone).date()] >= BULK_DAY:
+            last = None
+        if last is not None and row is not None:
+            own_write = (
+                row["jf_synced_at"] is not None
+                and row["state_changed_at"] <= last <= row["jf_synced_at"]
+            )
+            if not own_write:
+                await conn.execute(
+                    "UPDATE user_title SET played_at = $3 WHERE user_id = $1 AND title_id = $2 "
+                    "AND (played_at IS NULL OR played_at < $3)",
+                    user.app_user_id, title_id, last,
+                )
 
         if row is None:
             if jf_seen and title_id not in open_prompts:
-                await _adopt(conn, user.app_user_id, title_id, True)
+                await _adopt(conn, user.app_user_id, title_id, True, played_at=last)
                 report.adopted += 1
             else:
                 report.unchanged += 1

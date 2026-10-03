@@ -207,6 +207,7 @@ PASSWORD = os.environ.get("FAKE_JELLYFIN_PASSWORD", "jf-password")
 class State:
     def __init__(self) -> None:
         self.played: dict[str, set[str]] = {u["Id"]: set() for u in USERS}
+        self.last_played: dict[tuple[str, str], str] = {}  # (user, item) -> LastPlayedDate
         self.tokens: dict[str, str] = {}          # token -> jellyfin user id
         self.sessions: list[dict[str, Any]] = []
         self.write_log: list[dict[str, Any]] = []
@@ -378,6 +379,8 @@ async def items(
             projected["UserData"] = {
                 "Played": item["Id"] in played, "PlaybackPositionTicks": 0
             }
+            if (userId, item["Id"]) in state.last_played:
+                projected["UserData"]["LastPlayedDate"] = state.last_played[(userId, item["Id"])]
         page.append(projected)
     return {"Items": page, "TotalRecordCount": len(matching), "StartIndex": StartIndex}
 
@@ -456,6 +459,11 @@ async def authenticate(request: Request) -> dict[str, Any]:
     return {"AccessToken": token, "User": match}
 
 
+def _jellyfin_now() -> str:
+    """Now as Jellyfin writes LastPlayedDate: seven fractional digits and a Z."""
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%S.%f") + "0Z"
+
+
 @router.api_route("/UserPlayedItems/{item_id}", methods=["POST", "DELETE"])
 async def set_played(
     item_id: str,
@@ -477,8 +485,10 @@ async def set_played(
     played = request.method == "POST"
     if played:
         state.played[userId].add(item_id)
+        state.last_played[(userId, item_id)] = _jellyfin_now()
     else:
         state.played[userId].discard(item_id)
+        state.last_played.pop((userId, item_id), None)
     state.write_log.append({"user": userId, "item": item_id, "played": played})
     return {"Played": played, "ItemId": item_id, "UserId": userId}
 
@@ -490,6 +500,7 @@ class PlayedControl(BaseModel):
     user_id: str
     item_id: str
     played: bool = True
+    last_played: str | None = None
 
 
 class SessionControl(BaseModel):
@@ -514,6 +525,8 @@ async def force_played(body: PlayedControl) -> dict[str, Any]:
         state.played.setdefault(body.user_id, set()).add(body.item_id)
     else:
         state.played.setdefault(body.user_id, set()).discard(body.item_id)
+    if body.last_played is not None:
+        state.last_played[(body.user_id, body.item_id)] = body.last_played
     return {"ok": True, "played": sorted(state.played[body.user_id])}
 
 

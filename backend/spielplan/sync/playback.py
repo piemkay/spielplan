@@ -269,7 +269,7 @@ async def answer(
     answer. Not one transaction: the Jellyfin push must not hold database rows (§3.3).
     """
     row = await conn.fetchrow(
-        "SELECT title_id FROM playback_event "
+        "SELECT title_id, at FROM playback_event "
         "WHERE id = $1 AND user_id = $2 AND prompt_state = ANY($3::text[])",
         event_id, user_id, list(OPEN_STATES),
     )
@@ -287,6 +287,12 @@ async def answer(
         conn, client, cfg,
         user_id=user_id, title_id=row["title_id"], state="seen" if finished else "unseen",
     )
+    if finished:
+        await conn.execute(
+            "UPDATE user_title SET played_at = greatest(played_at, $3) "
+            "WHERE user_id = $1 AND title_id = $2",
+            user_id, row["title_id"], row["at"],
+        )
     await conn.execute(
         "UPDATE playback_event SET prompt_state = $2 WHERE id = $1",
         event_id, "answered" if finished else "dismissed",
