@@ -77,6 +77,8 @@ class Hyperparams:
     straddle_z: float = 0.15
     # §6.3's "disagrees strongly": the assigned tier lies outside this credible interval.
     tension_credible_mass: float = 0.80
+    # Decision 564: an answer's weight in the fit halves every this many days (floored).
+    recency_half_life_days: float = 730.0
     newton_tol: float = 1e-9
     newton_max_iter: int = 50
     lr_min: float = 1e-6
@@ -114,7 +116,7 @@ DEFAULTS = Hyperparams()
 _POSITIVE = (
     "lambda_ridge", "lambda_bt", "b_i_tau", "mu_prior_tau", "lr",
     "cutpoint_prior_precision", "tie_prior_precision", "sigma_inflation_grace_months",
-    "sigma_inflation_c", "margin_decisive", "margin_hesitant", "straddle_z",
+    "sigma_inflation_c", "margin_decisive", "margin_hesitant", "straddle_z", "recency_half_life_days",
     # `lr_min` at 0 makes `model.py`'s step-halving loop non-terminating.
     "newton_tol", "lr_min",
 )

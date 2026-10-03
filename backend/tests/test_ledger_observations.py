@@ -717,13 +717,15 @@ async def test_the_displayed_weight_is_the_cdf_of_the_persons_own_s_per_kind(db,
 
 
 async def test_freshness_inflates_sigma_eff_and_never_the_fitted_sigma(db, world):
-    """Inflation is for display and queueing; `ledger_state.sigma` must not move with the calendar."""
+    """Inflation is for display and queueing; `ledger_state.sigma` moves with the calendar only
+    through recency (decision 564), switched off here."""
     user = world["user"]
+    hp = Hyperparams(recency_half_life_days=1e12)
     await _rate(db, user, verdicts=[(1, 2), (2, 0), (3, 1), (4, 1)])
     now = datetime.now(UTC)
 
     await refit.refit_user(
-        db, user_id=user, kind="movie", hp=DEFAULTS, embeddings=fixture_embeddings, now=now
+        db, user_id=user, kind="movie", hp=hp, embeddings=fixture_embeddings, now=now
     )
     fresh = await db.fetchrow(
         "SELECT sigma, sigma_eff, sigma_prior FROM ledger_state WHERE user_id=$1 AND title_id=1",
@@ -732,7 +734,7 @@ async def test_freshness_inflates_sigma_eff_and_never_the_fitted_sigma(db, world
     assert fresh["sigma_eff"] == pytest.approx(fresh["sigma"]), "inflated inside the grace period"
 
     await refit.refit_user(
-        db, user_id=user, kind="movie", hp=DEFAULTS, embeddings=fixture_embeddings,
+        db, user_id=user, kind="movie", hp=hp, embeddings=fixture_embeddings,
         now=now + timedelta(days=int(26 * refit.DAYS_PER_MONTH)),
     )
     stale = await db.fetchrow(
@@ -843,6 +845,69 @@ async def test_the_incremental_block_solve_is_a_stationary_point_of_the_same_obj
     # And the answer it wrote is the answer it solved for.
     for row, i in zip(delta.rows, moved, strict=True):
         assert row.s == pytest.approx(cache.mu + loaded.obs.embeddings[i] @ cache.v + residuals[i])
+
+
+async def test_an_old_answer_weighs_less_and_never_under_the_floor_on_both_paths(db, world):
+    """Decision 564: 0.5 ** (age / 730 days), floored at 0.25, on every ordinal and duel row; the
+    incremental path weighs them as the full fit does."""
+    user = world["user"]
+    await _rate(
+        db, user,
+        verdicts=[(1, 2), (2, 1), (3, 0), (4, 1), (5, 2)],
+        duels=[(1, 2, "A"), (2, 3, "A"), (4, 5, "B")],
+    )
+    await db.execute("UPDATE verdict SET created_at = now() - interval '730 days' WHERE title_id = 1")
+    await db.execute("UPDATE verdict SET created_at = now() - interval '3650 days' WHERE title_id = 2")
+    await db.execute("UPDATE duel SET created_at = now() - interval '365 days' WHERE title_a = 1")
+    loaded = await observations.load_observations(
+        db, user_id=user, kind="movie", hp=DEFAULTS, embeddings=fixture_embeddings
+    )
+    by_title = dict(zip(loaded.obs.title_ids[loaded.obs.ord_index].tolist(),
+                        loaded.obs.ord_weight.tolist(), strict=True))
+    assert by_title[1] == pytest.approx(0.5, abs=1e-4)
+    assert by_title[2] == observations.RECENCY_FLOOR
+    assert by_title[3] == pytest.approx(1.0, abs=1e-4)
+    assert loaded.obs.duel_weight.tolist() == pytest.approx([0.5**0.5, 1.0, 1.0], abs=1e-4)
+
+    await refit.refit_user(db, user_id=user, kind="movie", hp=DEFAULTS, embeddings=fixture_embeddings)
+    await observations.record_duel(
+        db, user_id=user, title_a=1, title_b=5, outcome="B",
+        context="tier_queue", selection="boundary", decisive=False, hp=DEFAULTS,
+    )
+    await refit.update_incrementally(
+        db, user_id=user, kind="movie", title_ids=[1, 5], hp=DEFAULTS, embeddings=fixture_embeddings,
+    )
+    cache = await refit.load_cache(db, user_id=user, kind="movie", hp=DEFAULTS, lock=False)
+    loaded = await observations.load_observations(
+        db, user_id=user, kind="movie", hp=DEFAULTS, embeddings=fixture_embeddings
+    )
+    residuals = np.array(
+        [cache.r[int(np.flatnonzero(cache.title_ids == t)[0])] for t in loaded.obs.title_ids]
+    )
+    _gz, g_r, *_ = model._grad_hess(
+        loaded.obs, DEFAULTS, cache.mu, cache.v, cache.gamma, cache.cuts, cache.log_nu,
+        residuals, with_duels=True,
+    )
+    moved = [int(np.flatnonzero(loaded.obs.title_ids == t)[0]) for t in (1, 5)]
+    assert np.max(np.abs(g_r[moved])) < 1e-7
+
+
+async def test_a_sharpen_move_is_read_by_the_board_and_never_by_the_fit(db, world):
+    """Decision 564: the move renders; the person's own placement stays the fit's evidence."""
+    user = world["user"]
+    await observations.record_tier_edit(db, user_id=user, title_id=1, tier=2)
+    await observations.record_tier_edit(db, user_id=user, title_id=1, tier=4, via="sharpen")
+    latest = await db.fetchrow(
+        f"SELECT tier, via FROM ({observations.latest_tier_edit_sql()}) e WHERE e.title_id = 1", user
+    )
+    assert (latest["tier"], latest["via"]) == (4, "sharpen")
+
+    loaded = await observations.load_observations(db, user_id=user, kind="movie", hp=DEFAULTS)
+    assert loaded.n_tier_edits == 1 and loaded.obs.ord_level.tolist() == [2]
+    _verdicts, edits, _duels, _mean = await refit._load_local(
+        db, user_id=user, kind="movie", title_ids=[1], hp=DEFAULTS
+    )
+    assert [int(e["tier"]) for e in edits] == [2]
 
 
 async def test_the_incremental_path_serves_an_undo_with_the_same_call(db, world):

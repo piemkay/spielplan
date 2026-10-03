@@ -402,7 +402,7 @@ async def _refit_user(
     report = RefitReport(user_id=user_id, kind=kind, hyperparams_source=hp.source)
 
     loaded = await observations.load_observations(
-        conn, user_id=user_id, kind=kind, hp=hp, embeddings=embeddings
+        conn, user_id=user_id, kind=kind, hp=hp, embeddings=embeddings, now=now
     )
     obs = loaded.obs
     report.n_observed = obs.n
@@ -766,7 +766,7 @@ async def _load_local(
         SELECT e.title_id, e.tier, e.n_levels, e.created_at
         FROM tier_edit e JOIN title t ON t.id = e.title_id
         WHERE e.user_id = $1 AND t.kind = $2 AND e.title_id = ANY($3::int[])
-          AND e.created_at >= {cutover} AND NOT {observations.SAME_ANSWER_SQL}
+          AND e.created_at >= {cutover} AND e.via <> 'sharpen' AND NOT {observations.SAME_ANSWER_SQL}
         ORDER BY e.id
         """,
         user_id,
@@ -997,6 +997,7 @@ async def _update_incrementally(
     )
 
     ord_index, ord_level, ord_arm = [], [], []
+    ord_at = [row["created_at"] for row in verdicts] + [row["created_at"] for row in tier_edits]
     for row in verdicts:
         ord_index.append(position[int(row["title_id"])])
         ord_level.append(int(row["value"]))
@@ -1021,13 +1022,14 @@ async def _update_incrementally(
         ord_index=np.asarray(ord_index, dtype=np.int64),
         ord_level=np.asarray(ord_level, dtype=np.int64),
         ord_arm=np.asarray(ord_arm, dtype=np.int64),
-        ord_weight=np.ones(len(ord_index)),
+        ord_weight=observations.recency_weight(ord_at, now, hp),
         duel_a=np.asarray([position[int(r["title_a"])] for r in duels], dtype=np.int64),
         duel_b=np.asarray([position[int(r["title_b"])] for r in duels], dtype=np.int64),
         duel_outcome=np.asarray(
             [observations.OUTCOMES[r["outcome"]] for r in duels], dtype=np.int64
         ),
         duel_margin=margins,
+        duel_weight=observations.recency_weight([r["created_at"] for r in duels], now, hp),
         n_levels=n_levels,
     )
     hp_local = _local_hp(hp, margins, mean_margin)

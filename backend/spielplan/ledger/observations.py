@@ -10,7 +10,7 @@ import inspect
 import logging
 from collections.abc import Awaitable, Callable, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, Literal
 
 import asyncpg
@@ -52,6 +52,9 @@ OUTCOMES = {"A": OUT_A, "B": OUT_B, "TIE": OUT_TIE}
 
 # §13 stream (a). Held out from the fit; still written, still read by the evaluation.
 HELD_OUT = "uniform_holdout"
+
+# Decision 564: the oldest answer still weighs this much in the fit.
+RECENCY_FLOOR = 0.25
 
 # The arms the fit's ordinal block carries. `model.ObservationSet.ord_arm` numbers them.
 ARM_VERDICT, ARM_TIER = 0, 1
@@ -116,12 +119,12 @@ def cutover_sql(user: str = "$1") -> str:
 
 def latest_tier_edit_sql(user: str = "$1") -> str:
     """The person's latest drop per title since their cut-over (`title_id, tier, n_levels,
-    created_at, id`); `user` is their placeholder.
+    created_at, id, via`); `user` is their placeholder.
 
     One pass over their own `tier_edit` rows: a correlated subquery would re-run per board row.
     """
     return f"""
-    SELECT DISTINCT ON (title_id) title_id, tier, n_levels, created_at, id
+    SELECT DISTINCT ON (title_id) title_id, tier, n_levels, created_at, id, via
       FROM tier_edit
      WHERE user_id = {user} AND created_at >= {cutover_sql(user)}
      ORDER BY title_id, created_at DESC, id DESC
@@ -150,6 +153,12 @@ SAME_ANSWER_SQL = (
     "EXISTS (SELECT 1 FROM tier_edit o WHERE o.id = e.reask_of AND o.tier = e.tier "
     "AND o.n_levels IS NOT DISTINCT FROM e.n_levels)"
 )
+
+
+def recency_weight(created_at: Sequence[datetime], now: datetime, hp: Hyperparams) -> np.ndarray:
+    """Each row's weight in the fit: halved every `recency_half_life_days`, never under the floor."""
+    age = np.array([(now - at).total_seconds() / 86400.0 for at in created_at], dtype=float)
+    return np.maximum(0.5 ** (np.maximum(age, 0.0) / hp.recency_half_life_days), RECENCY_FLOOR)
 
 
 def standard_embeddings(
@@ -279,6 +288,7 @@ async def load_observations(
     kind: str,
     hp: Hyperparams,
     embeddings: EmbeddingSource = zero_embeddings,
+    now: datetime | None = None,
 ) -> Observations:
     """Every observation the fit is allowed to see, for one (user, kind).
 
@@ -308,6 +318,7 @@ async def load_observations(
         FROM tier_edit e
         JOIN title t ON t.id = e.title_id
         WHERE e.user_id = $1 AND t.kind = $2 AND e.created_at >= {cutover_sql()}
+          AND e.via <> 'sharpen'
         ORDER BY e.id
         """,
         user_id,
@@ -366,6 +377,7 @@ async def load_observations(
     ord_index: list[int] = []
     ord_level: list[int] = []
     ord_arm: list[int] = []
+    ord_at: list[datetime] = []
     touched: list[datetime | None] = [None] * n
 
     def _touch(title_id: int, at: datetime) -> None:
@@ -377,6 +389,7 @@ async def load_observations(
         ord_index.append(position[row["title_id"]])
         ord_level.append(int(row["value"]))
         ord_arm.append(ARM_VERDICT)
+        ord_at.append(row["created_at"])
         _touch(row["title_id"], row["created_at"])
 
     rescaled = 0
@@ -388,6 +401,7 @@ async def load_observations(
         ord_index.append(position[row["title_id"]])
         ord_level.append(level)
         ord_arm.append(ARM_TIER)
+        ord_at.append(row["created_at"])
         _touch(row["title_id"], row["created_at"])
     if rescaled:
         log.warning(
@@ -411,6 +425,7 @@ async def load_observations(
         _touch(row["title_b"], row["created_at"])
 
     matrix, embedded = await resolve_embeddings(embeddings, ids)
+    now = now or datetime.now(UTC)
     obs = ObservationSet(
         title_ids=np.asarray(ids, dtype=np.int64),
         embeddings=matrix,
@@ -418,12 +433,12 @@ async def load_observations(
         ord_index=np.asarray(ord_index, dtype=np.int64),
         ord_level=np.asarray(ord_level, dtype=np.int64),
         ord_arm=np.asarray(ord_arm, dtype=np.int64),
-        # No decay: §5.2's freshness rule acts on σ, not on the likelihood.
-        ord_weight=np.ones(len(ord_index)),
+        ord_weight=recency_weight(ord_at, now, hp),
         duel_a=np.asarray(duel_a, dtype=np.int64),
         duel_b=np.asarray(duel_b, dtype=np.int64),
         duel_outcome=np.asarray(duel_outcome, dtype=np.int64),
         duel_margin=np.asarray(duel_margin, dtype=float),
+        duel_weight=recency_weight([row["created_at"] for row in duels], now, hp),
         n_levels=n_levels,
     )
     return Observations(
@@ -683,8 +698,8 @@ async def record_tier_edit(
     reask_of: int | None = None,
 ) -> Write:
     """§5.2 arm 3. A tier, like a verdict, implies `seen` (decision 531)."""
-    if via not in ("drag_drop", "explicit"):
-        raise ValueError(f"via must be 'drag_drop' or 'explicit', not {via!r}")
+    if via not in ("drag_drop", "explicit", "sharpen"):
+        raise ValueError(f"via must be 'drag_drop', 'explicit' or 'sharpen', not {via!r}")
     kind = await kind_of(conn, title_id)
     tier_set = await tier_set_of(conn, user_id=user_id, kind=kind)
     if not 0 <= tier < len(tier_set):
@@ -897,6 +912,7 @@ __all__ = [
     "cutover_sql",
     "kind_of",
     "latest_tier_edit_sql",
+    "recency_weight",
     "live_label_sql",
     "load_observations",
     "record_duel",

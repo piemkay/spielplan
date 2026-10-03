@@ -293,6 +293,31 @@ def test_a_decisive_duel_teaches_more_than_a_hesitant_one():
     assert (decisive.s[0] - decisive.s[1]) > (hesitant.s[0] - hesitant.s[1])
 
 
+def test_a_duel_weight_scales_its_row_on_top_of_the_margin_weighting():
+    """Decision 564's recency: None is every row at 1, two halves are one whole, and lighter
+    evidence leaves a wider posterior."""
+    _truth, obs = synth(n=16, n_duels=30, seed=21)
+    plain = model.fit(obs, DEFAULTS)
+    ones = model.fit(dataclasses.replace(obs, duel_weight=np.ones(obs.duel_a.size)), DEFAULTS)
+    np.testing.assert_allclose(ones.s, plain.s, atol=1e-12)
+    np.testing.assert_allclose(ones.sigma, plain.sigma, atol=1e-12)
+
+    doubled = dataclasses.replace(
+        obs,
+        duel_a=np.concatenate([obs.duel_a, obs.duel_a]),
+        duel_b=np.concatenate([obs.duel_b, obs.duel_b]),
+        duel_outcome=np.concatenate([obs.duel_outcome, obs.duel_outcome]),
+        duel_margin=np.concatenate([obs.duel_margin, obs.duel_margin]),
+        duel_weight=np.full(2 * obs.duel_a.size, 0.5),
+    )
+    halves = model.fit(doubled, DEFAULTS)
+    np.testing.assert_allclose(halves.s, plain.s, atol=1e-8)
+
+    faded = model.fit(dataclasses.replace(obs, duel_weight=np.full(obs.duel_a.size, 0.25)), DEFAULTS)
+    duelled = np.unique(np.concatenate([obs.duel_a, obs.duel_b]))
+    assert np.all(faded.sigma[duelled] > plain.sigma[duelled])
+
+
 def test_a_tier_edit_is_data_on_the_same_latent():
     n = 8
     base = ObservationSet(
