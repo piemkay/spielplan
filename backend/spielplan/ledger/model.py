@@ -56,6 +56,8 @@ class ObservationSet:
     duel_outcome: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=np.int64))
     # The RAW margin, not a weight; `_duel_weights` applies §4.3's margin/mean(margin).
     duel_margin: np.ndarray = field(default_factory=lambda: np.zeros(0))
+    # A per-row multiplier on top of the margin weighting (recency); None weighs every row 1.
+    duel_weight: np.ndarray | None = None
     n_levels: int = 6                           # K, the size of the user's tier set
 
     @property
@@ -108,14 +110,11 @@ def feasible(gamma: np.ndarray, cuts: np.ndarray) -> bool:
 def _duel_weights(obs: ObservationSet, hp: Hyperparams) -> np.ndarray:
     """§4.3's margin/mean(margin): total duel evidence is invariant to how often "decisive" is tapped."""
     raw = obs.duel_margin
-    if raw.size == 0:
-        return raw
-    usable = np.isfinite(raw) & (raw > 0)
-    if not np.any(usable):
-        return np.ones(raw.size)
     weights = np.ones(raw.size)
-    weights[usable] = raw[usable] / float(raw[usable].mean())
-    return weights
+    usable = np.isfinite(raw) & (raw > 0)
+    if np.any(usable):
+        weights[usable] = raw[usable] / float(raw[usable].mean())
+    return weights if obs.duel_weight is None else weights * obs.duel_weight
 
 
 def _ordinal_terms(s: np.ndarray, level: np.ndarray, cuts: np.ndarray):

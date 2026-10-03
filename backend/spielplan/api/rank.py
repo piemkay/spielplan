@@ -9,6 +9,7 @@ import hashlib
 import hmac
 import logging
 import random
+from collections import Counter
 from typing import Annotated, Any, Literal
 
 import asyncpg
@@ -25,7 +26,7 @@ from spielplan.home import rail
 from spielplan.ledger import ladder, observations, refit
 from spielplan.ledger.hyperparams import Hyperparams
 from spielplan.rank import drop as drop_rules
-from spielplan.rank import evaluation, queue, read, tiers
+from spielplan.rank import evaluation, moves, queue, read, tiers
 from spielplan.rank import place as place_rules
 
 log = logging.getLogger("spielplan.api.rank")
@@ -340,12 +341,15 @@ async def drop(
 async def next_pair(
     conn: DB, user: ActiveUser, request: Request, kind: Kind = Query(...)
 ) -> dict[str, Any]:
-    """§6.3's 70/20/10 queue, with §13(b)'s re-asks. The arm travels sealed and gated, so no client
-    can steer or learn §13's held-out stream."""
+    """§6.3's queue, with §13(b)'s re-asks. The arm travels sealed and gated, so no client can steer
+    or learn §13's held-out stream."""
     await _set_up(conn, user.id)
     hp = deps.hyperparams(request)
     show_model = rail.visible_to(user)
-    pool = await read.candidates(conn, user_id=user.id, kind=kind, hp=hp)
+    pool = await read.candidates(
+        conn, user_id=user.id, kind=kind, hp=hp, embeddings=deps.embeddings(request, conn)
+    )
+    lately = await read.recent_pairs(conn, user_id=user.id, kind=kind)
     # One read for the draw and the seal, so a token's pair and its count cannot disagree.
     answered = await read.answered_comparisons(conn, user_id=user.id, kind=kind)
     pair = queue.reask(
@@ -355,10 +359,11 @@ async def next_pair(
     ) or queue.draw(
         pool,
         rng=_queue_rng(user.id, kind, answered),
-        # The adaptive arms skip pairs already asked and recent titles (decision 494); both reads leave
-        # out the held-out stream, which the selector must never consult.
+        # The adaptive arms skip asked pairs and rest recent titles (decisions 494, 564); these reads
+        # leave out the held-out stream, which the selector must never consult.
         asked=await read.asked_pairs(conn, user_id=user.id, kind=kind),
-        recent=await read.recent_titles(conn, user_id=user.id, kind=kind),
+        recent={t for pair in lately[: queue.RECENT_WINDOW] for t in pair},
+        exposure=Counter(t for pair in lately for t in pair),
     )
     if pair is None:
         # Which zero state it is (decision 495).
@@ -445,6 +450,41 @@ async def answer(
     payload["placed"] = placed
     payload["log"] = [line]
     payload["ledger"] = ledger
+    return rail.redact(payload, show_model=rail.visible_to(user))
+
+
+@router.post("/queue/settle")
+async def settle(
+    conn: DB, user: ActiveUser, request: Request, filters: Filters,
+    kind: Kind = Query(...),
+    per_tier: PerTier = None,
+) -> dict[str, Any]:
+    """Decision 564: the titles Sharpen's answers clearly put in another step move there; the board
+    comes back with the moves, each undone by a drop back that names its `tier_edit_id`. Idempotent."""
+    await deps.assert_active_basis(request, conn)
+    await _set_up(conn, user.id)
+    tier_set = await tiers.tier_set_of(conn, user_id=user.id, kind=kind)
+    moved = await moves.settle(conn, user_id=user.id, kind=kind)
+    lines = [rail.tier_edit_line(m.name, placed.label, via="sharpen") for m, placed in moved]
+    for line in lines:
+        rail.record(user_id=user.id, kind="tier_edit", line=line)
+    payload = await _payload(
+        conn, user=user, kind=kind, hp=deps.hyperparams(request), filters=filters, per_tier=per_tier
+    )
+    payload["moves"] = [
+        {
+            "title_id": m.title_id,
+            "name": m.name,
+            "from": m.source,
+            "to": m.target,
+            "from_label": tier_set[m.source],
+            "to_label": placed.label,
+            "tier_edit_id": placed.tier_edit_id,
+        }
+        for m, placed in moved
+    ]
+    if lines:
+        payload["log"] = lines
     return rail.redact(payload, show_model=rail.visible_to(user))
 
 

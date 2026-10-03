@@ -507,6 +507,34 @@ async def likeness(
     }
 
 
+async def term_vectors(
+    conn: asyncpg.Connection, title_ids: Sequence[int], *, kind: str, version: str
+) -> dict[int, dict[str, tuple[float, float, str]]]:
+    """Each title's terms as `term -> (idf, naming rank, label)`, weighed as `likeness` weighs them,
+    so a caller can take the same cosine for many pairs from one read."""
+    rows = await conn.fetch(
+        f"""
+        WITH {specificity_ctes("$2", "$3")}
+        SELECT d.title_id, d.term, max({TERM_RANK}) AS r, max(dl.label) AS label,
+               COALESCE(max(s.idf), ln((SELECT greatest(count(*), 1) FROM owned)::float8)) AS idf
+          FROM dna_tagged d
+          {LABEL_JOIN}
+          LEFT JOIN spec s ON s.term = d.term
+         WHERE d.version = $3 AND d.title_id = ANY($1::int[])
+         GROUP BY d.title_id, d.term
+        """,
+        [int(t) for t in title_ids],
+        kind,
+        version,
+    )
+    out: dict[int, dict[str, tuple[float, float, str]]] = {}
+    for r in rows:
+        out.setdefault(int(r["title_id"]), {})[r["term"]] = (
+            float(r["idf"]), float(r["r"]), dna_terms.label_of(r["term"], r["label"])
+        )
+    return out
+
+
 _SHARE_FIELDS = (
     "kind", "name", "original_name", "original_language", "year", "runtime_min", "poster_path",
 )

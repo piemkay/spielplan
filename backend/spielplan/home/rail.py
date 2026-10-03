@@ -150,6 +150,7 @@ def tier_edit_line(
 ARM_PHRASES: dict[str, str] = {
     "boundary": "boundary-targeted",
     "exploration": "exploration",
+    "cross_tier": "cross-tier check",
     "uniform_holdout": "uniform-random, held out",
     "random": "random",
 }

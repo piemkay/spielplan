@@ -833,13 +833,16 @@ async def test_an_arm_with_no_phrase_fails_loudly_rather_than_borrowing_one():
 
 
 def await_free_check_values() -> set[str]:
-    """Read out of 0005, so this runs without Postgres."""
+    """Read out of the last migration that constrains it, so this runs without Postgres."""
     import re
 
-    sql = (PACKAGE.parent / "migrations" / "0005_ledger.sql").read_text(encoding="utf-8")
-    match = re.search(r"CHECK \(selection IN \(([^)]*)\)\)", sql)
-    assert match, "0005 no longer constrains duel.selection"
-    return set(re.findall(r"'([a-z_]+)'", match.group(1)))
+    matches = [
+        m
+        for path in sorted((PACKAGE.parent / "migrations").glob("*.sql"))
+        for m in re.findall(r"CHECK \(selection IN \(([^)]*)\)\)", path.read_text(encoding="utf-8"))
+    ]
+    assert matches, "no migration constrains duel.selection"
+    return set(re.findall(r"'([a-z_]+)'", matches[-1]))
 
 
 @pytest.fixture

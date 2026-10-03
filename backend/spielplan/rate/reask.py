@@ -41,6 +41,7 @@ SELECT e.id, e.title_id, e.tier, e.created_at
   JOIN user_title ut ON ut.user_id = $1 AND ut.title_id = e.title_id
  WHERE t.kind = $2
    AND ut.state = 'seen'
+   AND e.via <> 'sharpen'
    AND e.created_at <= COALESCE($6::timestamptz, now()) - $3::interval
    AND NOT (e.title_id = ANY($4::int[]))
    AND NOT EXISTS (SELECT 1 FROM tier_edit r
@@ -77,7 +78,8 @@ async def placement_candidates(
     cooldown: timedelta = REASK_COOLDOWN,
 ) -> list[PlacementReask]:
     """Up to `limit` of the person's latest placements since their set-up that may be posed again, in
-    a uniformly random order: seen, `min_age` old, and the title not re-asked inside `cooldown`.
+    a uniformly random order: seen, `min_age` old, not a Sharpen move (decision 564), and the title
+    not re-asked inside `cooldown`.
 
     Both cutoffs use Postgres's clock, the one that stamped `created_at`; `now` overrides both.
     """
