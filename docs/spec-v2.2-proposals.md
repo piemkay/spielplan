@@ -16938,6 +16938,106 @@ The spec is amended in place (v2.1.20): §4.2, §5.1, §5.2, §6.1, §6.3, §6.7
 hated has no step of its own, and the leave-out rule, which needs four disliked titles sharing a
 term, fires less often. Each member spends about five minutes on a new set-up.
 
+## Decisions taken (owner, 2026-10-03, the 1.4.0 iteration)
+
+### 562. Home's rows show titles not yet seen, and rewatch rows show seen ones, by a real play date
+
+**What the record says.** §6.0's Your top picks includes seen titles ("rewatches included",
+proposal 25); every other shelf is unseen-only and none is about rewatching. `user_title` has no
+play date, and §7.3's sweep reads only Jellyfin's Played flag.
+
+**Why it changes.** The owner, 2026-10-03: rows of films not yet seen, and rows of films worth
+watching again. Jellyfin's `LastPlayedDate` is mostly the bulk mark, not a play: Jenny 93 of 93 and
+Patrick 51 of 78 fall on 2026-09-29, the 1.0 push. Jellyfin also stamps the date on every Played
+write, the app's own included, and production was re-seeded on 2026-10-02, so for those rows the
+app's write window alone reads the 2026-09-29 dates as real plays.
+
+**The decision.**
+1. Every Home row shows only titles the member has not seen, except the rewatch rows, which show
+   only seen ones; Your top picks drops "rewatches included".
+2. `user_title.played_at` is the member's last real play (migration 0050_played_at). It is
+   Jellyfin's `LastPlayedDate` unless that date falls in the app's own write window
+   (`state_changed_at` to `jf_synced_at`) or on a bulk day, a calendar day carrying 10 or more of
+   that member's play dates in one sweep's read; a confirmed finish (§7.3) stamps its time. It only
+   moves forward, and NULL reads as long ago.
+3. A real play holds a title out of the rewatch rows for 12 months.
+4. The rewatch rows are Watch again, Watch again with {other}, and "{label} & {label}, again".
+
+The spec is amended in place (v2.1.21): §4.2, §6.0, §7.3.
+
+**Cost.** One column, a date parse and two rules in the sweep, one write on a finish. A film played
+in Jellyfin before its app mark, or ten real plays in one day, reads as long ago.
+
+### 563. Home has taste rows, up to fifteen a kind, in an order that changes daily
+
+**What the record says.** §6.0 has seven shelves in a fixed order, one Because anchor and no row
+built from liked terms; decision 552 names no member's ratings to another.
+
+**Why it changes.** The owner, 2026-10-03, asked for more rows in the manner of a streaming
+service: several Because rows, rows of liked terms, hidden gems, acclaimed films and the other
+member's favourites, and not rows of people or decades. Home costs 343 to 465 ms today and each
+new row about 200 ms a kind, so the rows below the fold come by a second read.
+
+**The decision.**
+1. Up to four Because rows, each on its own anchor at the top two steps of the member's board.
+2. Up to three taste rows, each naming two liked terms from different groups (decisions 514 and
+   560) that every card carries, its why naming two liked films that carry both.
+3. Hidden gems (few crowd ratings, close to the member's taste) and Acclaimed (platform score at
+   25,000 votes or more, decision 547; it orders a row and enters no model).
+4. {other} loved these: the partner's top two steps, unseen by the viewer, minus the viewer's
+   avoid set, never showing the partner's step. This departs from decision 552 at the owner's
+   choice.
+5. Up to fifteen rows a kind: the first Because row and Your top picks lead, Watch again is
+   fourth, New in the library and Worth getting close, and the rest come in the day's order, dealt
+   so two rows of one family never touch; the same member sees the same Home all day. The claim
+   and the floor of three hold on every row.
+6. The first five rows come with Home; the rest by a second read that leaves out what the first
+   showed.
+
+The spec is amended in place (v2.1.21): §6.0.
+
+**Cost.** About 260 lines in `home/`, one route and 40 lines of frontend; the full Home about half
+a second more, below the fold; a daily order is less predictable than a fixed one.
+
+### 564. Sharpen checks films across steps, pairs alike films, rests the ones it just asked, and moves a film when its answers clearly place it elsewhere
+
+**What the record says.** §6.3's comparison queue draws 70% boundary pairs across an adjacent cut,
+20% exploration by nearest `s` and 10% held out, so no adaptive pair is two or more steps apart and
+a film placed two steps wrong is never compared with where it belongs. Only the last three pairs
+rest, so the same top-boundary films recur. Duels move `s`, never the shown step; the only trace of
+a disagreement is the title card's tension line. §5.2's fit weighs every placement since the
+cut-over alike (`ord_weight` is ones).
+
+**Why it changes.** The owner, 2026-10-03: compare films across steps that are not adjacent,
+since a first placement can be wrong and taste drifts; pair films that are alike in at least some
+way; do not keep asking about the same titles. When the cross-step evidence is clear the film
+moves, and the round's end lists the moves with Undo.
+
+**The decision.**
+1. The queue's arms are boundary 50%, cross-tier check 25%, exploration 15% and held out 10%
+   (migration 0051_sharpen adds `cross_tier` to `duel.selection`). The cross-tier check draws its
+   anchor from the whole board, weighted toward a placement that is old and little asked since,
+   and pairs it with a title whose shown step is two or more away, the smallest gap first. It
+   falls back to boundary, then exploration; the held-out arm never falls back and never receives.
+2. Each adaptive arm prefers a partner in the anchor's top quarter of likeness (shared DNA terms,
+   embedding, genre); the reason line names the steps and the strongest shared term or genre.
+3. A title rests while it is in the last three pairs or has appeared twice in the last fifteen.
+4. At a round's end, on Done and on closing the sheet, a title with at least two answers since its
+   latest placement and 80% of its posterior beyond its shown step's band moves to the step its
+   `s` falls in, by a `tier_edit` with `via = 'sharpen'` (and the class verdict if the class
+   changes) that the fit never reads. The round's end card lists the moves, each with Undo, a
+   `drag_drop` edit back.
+5. The fit weighs each placement and duel by its age, a half-life of two years floored at 0.25.
+6. §13 is untouched: the held-out arm reads none of this, cross-tier answers are adaptive and never
+   evaluated, and a move is not an observation.
+
+This supersedes the 70/20/10 mix of §6.3 and decision 494's anti-repetition window. The spec is
+amended in place (v2.1.21): §4.2, §5.2, §6.3, §13.
+
+**Cost.** A queue arm, a likeness read per anchor, a settle route and an end-card section; one full
+refit per board on deploy for the new hyperparameter. The recency weight does nothing for months on
+the household's fresh boards; a move the person did not make is visible, and undone by one tap.
+
 ## §6.2 — Tonight, rewritten (owner decision, 2026-08-29)
 
 Proposal 54 asked which slot carries the alternative on a split axis. The owner answered by
