@@ -177,12 +177,14 @@ class Ctx:
     day: str = ""
     nth: int = 0
     avoid: taste.Avoided | None = None
+    # Decision 567: concerts, left out of every row unless the member likes them.
+    hidden: frozenset[int] = frozenset()
     # Reads every row of a request shares, made once: rated pools, liked terms, named terms.
     memo: dict[Any, Any] = field(default_factory=dict, compare=False)
 
     @property
     def excluded(self) -> frozenset[int]:
-        return self.claimed | self.avoided
+        return self.claimed | self.avoided | self.hidden
 
     def tier_set(self, kind: str) -> tuple[str, ...]:
         return self.tier_sets.get(kind, DEFAULT_TIER_SET)
@@ -557,7 +559,7 @@ async def top_of_ledger(
         kind=kind,
         bundle_version=ctx.bundle_version,
         limit=SHELF_CAP,
-        exclude=sorted(ctx.avoided),
+        exclude=sorted(ctx.avoided | ctx.hidden),
         unseen_only=True,
     )
     # The β the ordering used: stored `blend_beta`, or 0.0 when never fitted.
@@ -1085,10 +1087,11 @@ async def new_in_library(
            AND COALESCE(ut.state, 'unseen') = 'unseen'
            AND (tp.e_source IS NULL OR tp.e_source IN ('cold_tower', 'none'))
            AND COALESCE(tp.item_n, 0) = 0
+           AND NOT (t.id = ANY($5::int[]))
          ORDER BY t.placement_at DESC NULLS LAST, t.id DESC
          LIMIT $4
         """,
-        ctx.user_id, kind, ctx.bundle_version, SHELF_CAP,
+        ctx.user_id, kind, ctx.bundle_version, SHELF_CAP, sorted(ctx.hidden),
     )
     wanted = await wish.wanted_by(
         conn, user_id=ctx.user_id, title_ids=[int(r["title_id"]) for r in rows]
@@ -1155,23 +1158,38 @@ async def _likes(
     )
 
 
+async def _likes_genre(conn: asyncpg.Connection, member_id: int, kind: str, genre: str) -> bool:
+    """Whether the member has liked enough titles of the kind carrying the canonical genre."""
+    liked = await conn.fetchval(
+        f"WITH lv AS ({live_label_sql('$1')}) SELECT count(*) FROM lv"
+        " JOIN title t ON t.id = lv.title_id AND t.kind = $2"
+        f" WHERE lv.value = 2 AND {genre_vocab.predicate('$3', '$4')}",
+        member_id, kind, genre_vocab.raw_labels(genre), list(genre_vocab.EXCLUDED_SOURCES),
+    )
+    return liked >= WORTH_GETTING_NICHE_LIKES
+
+
 async def _shut_genres(conn: asyncpg.Connection, member_ids: Sequence[int], kind: str) -> list[str]:
     """Raw genre labels left out: TV Movie always, a niche genre unless every member the list is for
-    has liked enough titles of the kind carrying it."""
+    likes it."""
     shut = ["tv movie"]
     for genre in WORTH_GETTING_NICHE:
-        raw = genre_vocab.raw_labels(genre)
         for member_id in member_ids:
-            liked = await conn.fetchval(
-                f"WITH lv AS ({live_label_sql('$1')}) SELECT count(*) FROM lv"
-                " JOIN title t ON t.id = lv.title_id AND t.kind = $2"
-                f" WHERE lv.value = 2 AND {genre_vocab.predicate('$3', '$4')}",
-                member_id, kind, raw, list(genre_vocab.EXCLUDED_SOURCES),
-            )
-            if liked < WORTH_GETTING_NICHE_LIKES:
-                shut += raw
+            if not await _likes_genre(conn, member_id, kind, genre):
+                shut += genre_vocab.raw_labels(genre)
                 break
     return shut
+
+
+async def _concerts(conn: asyncpg.Connection, *, user_id: int, kind: str) -> frozenset[int]:
+    """The titles of the kind carrying Music, unless the member likes it."""
+    if await _likes_genre(conn, user_id, kind, "Music"):
+        return frozenset()
+    rows = await conn.fetch(
+        f"SELECT t.id FROM title t WHERE t.kind = $1 AND {genre_vocab.predicate('$2', '$3')}",
+        kind, genre_vocab.raw_labels("Music"), list(genre_vocab.EXCLUDED_SOURCES),
+    )
+    return frozenset(int(r["id"]) for r in rows)
 
 
 def _feature_sql(shut: str, excluded: str, decade: str) -> str:
@@ -1196,9 +1214,9 @@ async def _unowned_for_one(
     keep_wanted: bool,
     decade: int | None = None,
 ) -> list[dict[str, Any]]:
-    """Unowned titles of the kind by one member's own score, with that member's leave-outs and a crowd
-    rating. The card and its Want are the viewer's; the viewer's own list keeps only titles like one
-    they liked (decision 515)."""
+    """Unowned titles of the kind by the personal half of one member's score (decision 567), with that
+    member's leave-outs and a crowd rating. The card and its Want are the viewer's; the viewer's own
+    list keeps only titles like one they liked (decision 515)."""
     avoided = await taste.avoided_titles(conn, avoids, kind=kind, version=ctx.version, owned=False)
     rows = await conn.fetch(
         f"WITH lv AS ({live_label_sql('$7')})" + CARD_SELECT + ", w.state AS wish_state" + CARD_FROM
@@ -1214,7 +1232,7 @@ async def _unowned_for_one(
                             AND x.user_id = $7 AND x.state = 'not_for_me')
            AND (w.state IS NULL OR $6)
            AND NOT (t.id = ANY($4::int[]))
-         ORDER BY ms.score DESC, t.id
+         ORDER BY ms.cf DESC NULLS LAST, ms.score DESC, t.id
          LIMIT $5
         """,
         ctx.user_id, kind, ctx.bundle_version, sorted(avoided), cap * WORTH_GETTING_POOL,
@@ -1235,8 +1253,9 @@ async def _unowned_for_everyone(
     cap: int,
     decade: int | None,
 ) -> list[dict[str, Any]]:
-    """Unowned titles ranked as the shared sweet spot ranks owned ones (decision 477), over every
-    member given, leaving out what any of them has seen, rated, avoids or said Not for me."""
+    """Unowned titles ranked as the shared sweet spot ranks owned ones (decision 477), by each
+    member's personal half (decision 567), over every member given, leaving out what any of them has
+    seen, rated, avoids or said Not for me."""
     avoided = await taste.avoided_titles(conn, avoids, kind=kind, version=ctx.version, owned=False)
     rows = await conn.fetch(
         f"""
@@ -1245,7 +1264,7 @@ async def _unowned_for_everyone(
         ),
         ranked AS (
             SELECT us.user_id, us.title_id,
-                   row_number() OVER (PARTITION BY us.user_id ORDER BY us.score, us.title_id)
+                   row_number() OVER (PARTITION BY us.user_id ORDER BY us.cf NULLS FIRST, us.title_id)
                        AS pos,
                    count(*) OVER (PARTITION BY us.user_id) AS n
               FROM user_score us
@@ -1506,6 +1525,7 @@ async def _context(
         household = [o for o in others if o["user_id"] in present]
         memo["household", kind] = household
         memo["mine", kind] = await taste.avoided_titles(conn, [avoid], kind=kind, version=version)
+        memo["hidden", kind] = await _concerts(conn, user_id=user.id, kind=kind)
         memo["shared", kind] = (
             await taste.avoided_titles(
                 conn, [avoid, *(theirs[o["user_id"]] for o in household)], kind=kind, version=version
@@ -1559,7 +1579,7 @@ async def build_shelves(
                                   "ledger this profile does not have"
                 )
                 continue
-            scoped = replace(ctx, nth=nth)
+            scoped = replace(ctx, nth=nth, hidden=ctx.memo["hidden", kind])
             if family in CLAIMING_SHELVES:
                 scoped = replace(
                     scoped,

@@ -1982,7 +1982,7 @@ async def _unowned(db, *, labels: int = 20) -> None:
         for user_id in users:
             await db.execute(
                 "INSERT INTO user_score (user_id, title_id, kind, bundle_version, score, cf) "
-                "VALUES ($1, $2, 'movie', $3, $4, 0.0)",
+                "VALUES ($1, $2, 'movie', $3, $4, $4)",
                 user_id, title_id, BUNDLE, score,
             )
         if title_id in (*WANTABLE, NO_CROWD):
@@ -2142,7 +2142,7 @@ async def _three_members(world) -> tuple[int, object]:
     await _verdict(world.db, world.jenny, 1000, 2)
     await _verdict(world.db, world.jenny, 1008, 2)
     await world.db.execute(
-        "UPDATE user_score SET score = 0.5 WHERE user_id = $1 AND title_id = 1060", world.jenny
+        "UPDATE user_score SET score = 0.5, cf = 0.5 WHERE user_id = $1 AND title_id = 1060", world.jenny
     )
     await world.db.execute(
         "INSERT INTO user_vector (user_id, kind, purpose, vec, blend_beta, label_count, bundle_version) "
@@ -2217,6 +2217,46 @@ async def test_new_in_the_library_marks_what_the_viewer_wanted(world):
     assert {c["title_id"]: c["wanted"] for c in section["items"]} == {
         1011: False, 1010: False, 1009: False, 1008: True
     }
+
+
+async def test_concerts_leave_every_row_until_the_viewer_likes_music(world):
+    def shown(payload):
+        return {c["title_id"] for shelf in payload["shelves"] for s in shelf["sections"]
+                for c in s["items"]}
+
+    db = world.db
+    for title_id in (1011, 1030):
+        await db.execute(
+            "INSERT INTO title_genre (title_id, genre, source) VALUES ($1, 'Music', 'tmdb')", title_id
+        )
+    payload = await world.home(kinds=("movie",))
+    assert [c["title_id"] for c in world.section(payload, "new_in_library", "movie")["items"]] == [
+        1010, 1009, 1008
+    ]
+    assert not shown(payload) & {1011, 1030}
+
+    for title_id in (1001, 1002, 1003):
+        await db.execute(
+            "INSERT INTO title_genre (title_id, genre, source) VALUES ($1, 'Musical', 'tmdb')", title_id
+        )
+        await _verdict(db, world.patrick, title_id, 2)
+    payload = await world.home(kinds=("movie",))
+    assert world.section(payload, "new_in_library", "movie")["items"][0]["title_id"] == 1011
+
+
+async def test_worth_getting_ranks_by_the_members_own_half_of_the_score(world):
+    _sam, _jenny = await _three_members(world)
+    await world.db.execute("UPDATE user_score SET cf = 2.0 WHERE title_id = 1068")
+    assert _worth(await world.home(kinds=("movie",)))[0] == 1068, "its blended score is the lowest"
+    assert _ids(await _see_all(world.client))[0] == 1068
+    assert _ids(await _see_all(world.client, audience=world.jenny))[0] == 1068
+    assert _ids(await _see_all(world.client, audience="everyone"))[0] == 1068
+
+    await world.db.execute(
+        "UPDATE user_score SET cf = 3.0 WHERE title_id = 1069 AND user_id = $1", world.jenny
+    )
+    everyone = _ids(await _see_all(world.client, audience="everyone"))
+    assert everyone[0] == 1068, "first and second for the two beats first for one alone"
 
 
 # --- decisions 562 and 563: unseen rows, rewatch rows, taste rows ----------------------------

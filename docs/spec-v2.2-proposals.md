@@ -17104,13 +17104,19 @@ have any filter options."
    Music only where each member the list is for has liked three titles of the kind carrying it.
 2. See all filters by decade, Any by default, the 1950s to the 2020s, before its cap of 60, and
    orders best match (the default) or newest first.
+3. Best match is the member's own half of the score, `cf`, not the blended score: on production
+   Patrick's fit weighs his half at 0.1, so the blend ranked arthouse classics, nearly Jenny's list,
+   though 76 of his 93 placed films are from 2000 on; by `cf` 55 of his 60 are. Everyone averages
+   each member's standardised `cf` rank.
+4. Titles carrying Music leave every Home row, owned ones too (New in the library was full of
+   concerts), unless the viewer has liked three titles of the kind carrying it.
 
 The spec is amended in place (v2.1.21): §6.0.
 
-**Cost.** One shared predicate and two query parameters. The floor counts platform votes, not the
-crowd dataset's ratings, which stop about 2019, so every decade to the 2020s fills. The floor drops
-the unknown, not the old: the person's own score favours classics, so the default list stays about
-two-thirds pre-1990, and the decade and Newest first are the way to recent films.
+**Cost.** One shared predicate, two query parameters and a Music set read once per Home. The floor
+counts platform votes, not the crowd dataset's ratings, which stop about 2019, so every decade to
+the 2020s fills. Ranking by `cf` ignores the crowd's and critics' view of an unowned film beyond the
+vote floor.
 
 ## §6.2 — Tonight, rewritten (owner decision, 2026-08-29)
 
