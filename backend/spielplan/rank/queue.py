@@ -329,9 +329,9 @@ def _cross_tier(
     recent: Iterable[int] | None = None,
     exposure: Mapping[int, int] | None = None,
 ) -> Pair | None:
-    """25%: a gap of `CROSS_MIN_GAP` to `CROSS_MAX_GAP` steps, drawn as a uniform pair's gap would be so the gap
-    tells nothing about the arm, then a title weighted by `cross_weight` against one that far (decision
-    564)."""
+    """25%: a gap of `CROSS_MIN_GAP` to `CROSS_MAX_GAP` steps, drawn as a uniform pair's would be so
+    the gap tells nothing about the arm, then a title weighted by `cross_weight` against one that
+    far (decision 564)."""
     already = {frozenset(p) for p in (asked or ())}
     resting = _resting(recent, exposure)
     jitter = _jitter(pool, rng)
