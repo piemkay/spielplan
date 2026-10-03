@@ -40,6 +40,12 @@ def test_a_title_two_steps_off_moves_both_steps_at_once():
     assert (move.source, move.target) == (2, 4)
 
 
+def test_a_move_goes_only_as_far_as_the_evidence_reaches():
+    # s = 1.3 sits in A, but 1.3 - 0.84 * 0.5 = 0.88 only clears C's edge: placed in C, it moves to B.
+    [move] = moves.due([item(1.3, 0.5, 2)], cuts=CUTS, answers_since={1: 4})
+    assert (move.source, move.target) == (2, 3)
+
+
 def answers_to_move(true_tier, placed_off, *, per_tier=8, background=60, seed=0):
     """A board placed where it belongs but for one title `placed_off` steps low; it then beats the
     titles of its true step, lowest first, until the rule fires. Returns (answers, target)."""

@@ -17023,8 +17023,8 @@ moves, and the round's end lists the moves with Undo.
    embedding, genre); the reason line names the steps and the strongest shared term or genre.
 3. A title rests while it is in the last three pairs or has appeared twice in the last fifteen.
 4. At a round's end, on Done and on closing the sheet, a title with at least two answers since its
-   latest placement and 80% of its posterior beyond its shown step's band moves to the step its
-   `s` falls in, by a `tier_edit` with `via = 'sharpen'` (and the class verdict if the class
+   latest placement and 80% of its posterior beyond its shown step's band moves to the step that
+   80% bound reaches (never past the evidence), by a `tier_edit` with `via = 'sharpen'` (and the class verdict if the class
    changes) that the fit never reads. The round's end card lists the moves, each with Undo, a
    `drag_drop` edit back.
 5. The fit weighs each placement and duel by its age, a half-life of two years floored at 0.25.

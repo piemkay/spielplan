@@ -33,15 +33,17 @@ def due(
     items: Sequence[board.Item], *, cuts: np.ndarray, answers_since: Mapping[int, int]
 ) -> list[Move]:
     """The placed titles whose posterior (displayed σ) lies `MOVE_Z` beyond one edge of the step they
-    are shown in, after `MOVE_MIN_ANSWERS` answers; the target is the model's tier, maybe two away."""
+    are shown in, after `MOVE_MIN_ANSWERS` answers; the target is the step that bound reaches."""
     cuts = np.asarray(cuts, dtype=float)
     out = []
     for item in items:
         if item.assigned_tier is None or answers_since.get(item.title_id, 0) < MOVE_MIN_ANSWERS:
             continue
         low, high = board._band(int(item.assigned_tier), cuts)
-        if item.s - MOVE_Z * item.sigma >= high or item.s + MOVE_Z * item.sigma < low:
-            target = int(model.tier_of(np.array([item.s]), cuts)[0])
+        floor, ceiling = item.s - MOVE_Z * item.sigma, item.s + MOVE_Z * item.sigma
+        # The step the 80% bound reaches, not the one `s` falls in: no overshoot past the evidence.
+        if floor >= high or ceiling < low:
+            target = int(model.tier_of(np.array([floor if floor >= high else ceiling]), cuts)[0])
             out.append(Move(item.title_id, item.name, int(item.assigned_tier), target))
     return out
 
