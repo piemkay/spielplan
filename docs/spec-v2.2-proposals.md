@@ -17040,6 +17040,35 @@ amended in place (v2.1.21): §4.2, §5.2, §6.3, §13.
 refit per board on deploy for the new hyperparameter. The recency weight does nothing for months on
 the household's fresh boards; a move the person did not make is visible, and undone by one tap.
 
+### 565. Home's household rows read every member, and each other member has a loved row
+
+**What the record says.** §3.1 makes any number of members first-class, but §6.0's shared rows
+read one partner: the other member with the most co-seen titles (proposal 26). The sweet spot,
+Watch again with {other} and {other} loved these name that one person, and the shared avoid set is
+two people's.
+
+**Why it changes.** The owner, 2026-10-03: "remove the 2 user assumption". A third member is
+invisible to these rows today and their dislikes are not left out.
+
+**The decision.**
+1. The household is every active non-guest member with a score or a board for the kind; a member
+   with nothing to read is left out. The sweet spot ranks titles unseen by every one of them and
+   outside the union of their avoid sets by the plain mean of each member's rank-standardised
+   score; it needs the viewer and one more. Two read "You and {other} would both enjoy these" /
+   "Neither of you has seen them…" as before; three or more read "You'd all enjoy these" / "None
+   of you has seen them — a good pick for a night in together".
+2. Watch again together: seen and liked by every household member, none with a real play in 12
+   months, outside the union avoid set. Two read "Watch again with {other}"; three or more "Watch
+   again together", why "You all liked these, and it's been a while".
+3. {other} loved these is one row per other member, up to three, in proposal 26's order (most
+   co-seen, then most recent, then id), dealt like the extra Because rows; a member with fewer than
+   three titles drops only their row. It never shows their step.
+
+The spec is amended in place (v2.1.21): §6.0, §6.5.
+
+**Cost.** About 40 lines in `home/shelves.py`, a read of each member's avoid set, and up to two
+more rows in the day's plan.
+
 ## §6.2 — Tonight, rewritten (owner decision, 2026-08-29)
 
 Proposal 54 asked which slot carries the alternative on a split axis. The owner answered by

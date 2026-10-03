@@ -847,7 +847,7 @@ async def _names(conn: asyncpg.Connection, *, user_id: int, title_id: int) -> tu
 
 
 def _placement_line(rater: str, title: str, label: str, *, refit_ms: float | None) -> str:
-    """§6.7's `tier_edit(jenny, Heat → A, via=explicit) → tier arm, incremental refit 31 ms`."""
+    """§6.7's `tier_edit(alex, Heat → A, via=explicit) → tier arm, incremental refit 31 ms`."""
     line = rail.tier_edit_line(title, label, via="explicit", rater=rater) + " → tier arm"
     if refit_ms is not None:
         line += f", incremental refit {refit_ms:.0f} ms"

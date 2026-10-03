@@ -2355,6 +2355,114 @@ async def test_watch_again_together_is_liked_by_both_and_unplayed_by_both(world)
     assert {c["title_id"] for c in row["items"]} == {1012, 1013, 1014}
 
 
+async def _third(world, *, scored: bool = True) -> int:
+    """Decision 565: a third member, scored like the other two unless `scored` is off."""
+    sam = await insert_user(world.db, "sam")
+    if scored:
+        for title_id in MOVIES + SERIES:
+            await world.db.execute(
+                "INSERT INTO user_score (user_id, title_id, kind, bundle_version, score, cf) "
+                "VALUES ($1, $2, $3, $4, $5, 0.0)",
+                sam, title_id, kind_of(title_id), BUNDLE, score_of(title_id),
+            )
+    return sam
+
+
+async def _seen(db, user_id: int, *title_ids: int) -> None:
+    for title_id in title_ids:
+        await db.execute(
+            "INSERT INTO user_title (user_id, title_id, state) VALUES ($1, $2, 'seen') "
+            "ON CONFLICT (user_id, title_id) DO NOTHING",
+            user_id, title_id,
+        )
+
+
+async def _sweet_spot(world):
+    """The sweet spot alone, so no row before it claims its titles."""
+    ctx, _ = await shelves._context(
+        world.db, user=_Anon(world.patrick), kinds=("movie",), bundle_version=BUNDLE, day="2026-10-03"
+    )
+    built, _ = await shelves.build_shelves(
+        world.db, ctx=ctx, steps=[("shared_sweet_spot", 0)], shown=(), zero_verdicts=False,
+        room=shelves.ROW_CAP,
+    )
+    return built[0].sections[0] if built else None
+
+
+async def test_with_three_members_the_sweet_spot_reads_every_one_of_them(world):
+    two = await _sweet_spot(world)
+    assert two.title == "You and jenny would both enjoy these"
+    order = [c["title_id"] for c in two.items]
+    assert order.index(1048) < order.index(1049)
+
+    sam = await _third(world)
+    await _seen(world.db, sam, 1040)
+    term, facet, label = GORE
+    await _term(world.db, term, facet, label)
+    for title_id in (1012, 1013, 1014, 1015):
+        await _tag(world.db, title_id, term, facet, 2)
+        await _verdict(world.db, sam, title_id, 0)
+    await _tag(world.db, 1041, term, facet, 2)
+    for title_id, score in ((1049, 5.0), (1047, -5.0)):
+        await world.db.execute(
+            "UPDATE user_score SET score = $3 WHERE user_id = $1 AND title_id = $2", sam, title_id, score
+        )
+
+    three = await _sweet_spot(world)
+    assert three.title == "You'd all enjoy these"
+    assert three.why == "None of you has seen them — a good pick for a night in together"
+    order = [c["title_id"] for c in three.items]
+    assert not {1040, 1041, 1047} & set(order), "seen, avoided or under the floor for sam"
+    assert order.index(1049) < order.index(1048), "sam's score enters the mean"
+
+
+async def test_a_member_with_nothing_to_read_is_left_out_of_the_household(world):
+    await _third(world, scored=False)
+    payload = await world.home()
+    for base in BASES:
+        section = world.section(payload, "shared_sweet_spot", kind_of(base))
+        assert section["title"] == "You and jenny would both enjoy these"
+        assert [c["title_id"] for c in section["items"]] == ids(base, DECOYS)
+
+
+async def test_watch_again_together_needs_every_member_to_have_liked_it(world):
+    for title_id in (1012, 1013, 1014, 1015, 1016):
+        await _verdict(world.db, world.jenny, title_id, 2)
+    await world.db.execute(
+        "UPDATE user_title SET played_at = now() - interval '10 days' "
+        "WHERE user_id = $1 AND title_id = 1015",
+        world.jenny,
+    )
+    sam = await _third(world)
+    await _seen(world.db, sam, 1012, 1013, 1014, 1015, 1016)
+    for title_id, value in ((1012, 2), (1013, 2), (1014, 1), (1015, 2), (1016, 2)):
+        await _verdict(world.db, sam, title_id, value)
+    row = world.section(await world.home(kinds=("movie",)), "rewatch_together", "movie")
+    assert row is not None
+    assert row["title"] == "Watch again together"
+    assert row["why"] == "You all liked these, and it's been a while"
+    assert {c["title_id"] for c in row["items"]} == {1012, 1013, 1016}
+
+
+async def test_each_other_member_gets_their_own_loved_row(world):
+    sam = await _third(world)
+    for user_id, loved in ((world.jenny, (1030, 1031, 1032)), (sam, (1035, 1036, 1037))):
+        await _seen(world.db, user_id, *loved)
+        for title_id in loved:
+            await world.db.execute(
+                "INSERT INTO ledger_state (user_id, title_id, s, sigma, cdf, tier, kind, observed) "
+                "VALUES ($1, $2, 1.0, 0.2, 0.9, 5, 'movie', true)",
+                user_id, title_id,
+            )
+    payload = await world.home(kinds=("movie",))
+    rows = [s for s in payload["shelves"] if s["id"] == "partner_loved"]
+    titles = [r["sections"][0]["title"] for r in rows]
+    assert sorted(titles) == ["jenny loved these", "sam loved these"], payload["suppressed"]
+    assert len({r["key"] for r in rows}) == 2
+    cards = {r["sections"][0]["title"]: {c["title_id"] for c in r["sections"][0]["items"]} for r in rows}
+    assert cards == {"jenny loved these": {1030, 1031, 1032}, "sam loved these": {1035, 1036, 1037}}
+
+
 async def test_home_holds_row_cap_rows_a_kind_and_names_the_rest(world, monkeypatch):
     monkeypatch.setattr(shelves, "ROW_CAP", shelves.HEAD_SLOTS + len(shelves.TAIL))
     await world.client.post("/api/auth/preferences", json={"show_model": True})

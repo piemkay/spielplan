@@ -440,12 +440,11 @@ async def test_the_household_predicate_is_the_one_the_home_partner_query_spells(
     """§6.0's partner query spells the intersection: `is_active AND role IN ('admin', 'member')`."""
     patrick, ana = world["patrick"], world["ana"]
     assert await household_ids(db) == sorted([patrick, ana])
-    partner = await shelves.partner_for(db, user_id=patrick)
-    assert partner is not None and partner["user_id"] == ana
+    assert [o["user_id"] for o in await shelves.others_for(db, user_id=patrick)] == [ana]
 
     await db.execute("UPDATE app_user SET is_active = false WHERE id = $1", ana)
     assert await household_ids(db) == [patrick], "a deactivated member is still in the household"
-    assert await shelves.partner_for(db, user_id=patrick) is None, (
+    assert await shelves.others_for(db, user_id=patrick) == [], (
         "§6.0 and the two nightly passes now disagree about who is here"
     )
 

@@ -75,6 +75,8 @@ BECAUSE_TRIES = 2
 TASTE_ROWS = 3
 TASTE_LEADS = 12
 TASTE_LIKED_MIN = 2
+# Decision 565: one "{name} loved these" row per other member, up to this many.
+PARTNER_ROWS = 3
 GEM_SHARE = 1 / 3
 GEM_MIN_CDF = 0.5
 ACCLAIMED_SHARE = 0.2
@@ -167,7 +169,6 @@ class Ctx:
     betas: dict[str, float] = field(default_factory=dict)
     day: str = ""
     nth: int = 0
-    partner: dict[str, Any] | None = None
     avoid: taste.Avoided | None = None
     # Reads every row of a request shares, made once: rated pools, liked terms, named terms.
     memo: dict[Any, Any] = field(default_factory=dict, compare=False)
@@ -644,16 +645,11 @@ async def never_watched_term(
 # --- shelf 4: shared_sweet_spot ---------------------------------------------------------------
 
 
-async def partner_for(conn: asyncpg.Connection, *, user_id: int) -> dict[str, Any] | None:
-    """Proposal 26: the active member with the most co-seen titles, then the most recent one.
-
-    LEFT JOIN, so zero co-seen titles still names a partner.
-    """
-    row = await conn.fetchrow(
+async def others_for(conn: asyncpg.Connection, *, user_id: int) -> list[dict[str, Any]]:
+    """Proposal 26's order: the other active members by co-seen titles, then the latest, then id."""
+    rows = await conn.fetch(
         """
-        SELECT u.id, u.name,
-               count(b.title_id) AS co_seen,
-               max(b.state_changed_at) AS last_co_seen
+        SELECT u.id, u.name
           FROM app_user u
           LEFT JOIN user_title b ON b.user_id = u.id AND b.state = 'seen'
                                 AND EXISTS (SELECT 1 FROM user_title a
@@ -662,13 +658,10 @@ async def partner_for(conn: asyncpg.Connection, *, user_id: int) -> dict[str, An
          WHERE u.id <> $1 AND u.is_active AND u.role IN ('admin', 'member')
          GROUP BY u.id, u.name
          ORDER BY count(b.title_id) DESC, max(b.state_changed_at) DESC NULLS LAST, u.id
-         LIMIT 1
         """,
         user_id,
     )
-    if row is None:
-        return None
-    return {"user_id": int(row["id"]), "name": row["name"], "co_seen": int(row["co_seen"])}
+    return [{"user_id": int(r["id"]), "name": r["name"]} for r in rows]
 
 
 def _standardised(pos: int, n: int) -> float:
@@ -678,19 +671,21 @@ def _standardised(pos: int, n: int) -> float:
 async def shared_sweet_spot(
     conn: asyncpg.Connection, *, ctx: Ctx, kind: str
 ) -> tuple[Section | None, Suppressed | None]:
-    """§6.0 — "You and {other} would both enjoy these": unseen by both, above both CDF floors.
+    """§6.0 — "You and {other} would both enjoy these" / "You'd all enjoy these": unseen by every
+    household member, above every member's CDF floor (decision 565).
 
     Ordered by the plain average of rank-standardised scores over the owned library, as Tonight's
-    pool is (decision 477). Either member's avoid set is excluded (decision 512).
+    pool is (decision 477). Any member's avoid set is excluded (decision 512).
     """
     sid = "shared_sweet_spot"
-    partner = ctx.partner
-    if partner is None:
-        return None, Suppressed(sid, kind, "no other member to share a sweet spot with")
+    others = ctx.memo["household", kind]
+    if not others:
+        return None, Suppressed(sid, kind, "no other member with scores to share a sweet spot with")
     if not ctx.bundle_version:
         return None, Suppressed(sid, kind, "no active artifact bundle — no scores to intersect")
 
     beta, tier_set = ctx.beta(kind), ctx.tier_set(kind)
+    members = [ctx.user_id, *(o["user_id"] for o in others)]
     # `pos`/`n` are each member's rank over the owned library of the kind, ties broken by id as
     # `tonight/pool.rank_normal` breaks them, so the quantile below is that function's.
     rows = await conn.fetch(
@@ -703,41 +698,35 @@ async def shared_sweet_spot(
                    count(*) OVER (PARTITION BY us.user_id) AS n
               FROM user_score us
               JOIN title o ON o.id = us.title_id AND o.is_owned
-             WHERE us.user_id = ANY($4) AND us.kind = $2 AND us.bundle_version = $3
+             WHERE us.user_id = ANY($4::int[]) AND us.kind = $2 AND us.bundle_version = $3
+        ), everyone AS (
+            SELECT title_id, array_agg(pos) AS pos, array_agg(n) AS n,
+                   min(cdf) FILTER (WHERE user_id <> $1) AS theirs_cdf
+              FROM ranked
+             GROUP BY title_id
+            HAVING count(*) FILTER (WHERE cdf >= $5) = cardinality($4::int[])
         )
         SELECT t.id AS title_id, t.kind, t.name, t.year, t.runtime_min, t.poster_path,
                t.placement, NULL::timestamptz AS placement_at,
                false AS seen,
                a.score, NULL::real AS cf, tp.b, tp.gate, tp.item_n, tp.e_source,
                ls.s, ls.sigma, ls.cdf, ls.tier,
-               a.cdf AS mine_cdf, b.cdf AS theirs_cdf,
-               a.pos AS mine_pos, a.n AS mine_n, b.pos AS theirs_pos, b.n AS theirs_n
+               a.cdf AS mine_cdf, e.theirs_cdf, e.pos, e.n
           FROM ranked a
-          JOIN ranked b ON b.title_id = a.title_id AND b.user_id = $5
+          JOIN everyone e ON e.title_id = a.title_id
           JOIN title t ON t.id = a.title_id
           LEFT JOIN title_prior  tp ON tp.title_id = t.id AND tp.bundle_version = $3
           LEFT JOIN ledger_state ls ON ls.title_id = t.id AND ls.user_id = $1
-         WHERE a.user_id = $1 AND t.is_owned AND a.cdf >= $6 AND b.cdf >= $6
+         WHERE a.user_id = $1 AND t.is_owned
            AND NOT EXISTS (SELECT 1 FROM user_title s WHERE s.title_id = t.id
-                            AND s.user_id = $1 AND s.state = 'seen')
-           AND NOT EXISTS (SELECT 1 FROM user_title s WHERE s.title_id = t.id
-                            AND s.user_id = $5 AND s.state = 'seen')
-           AND NOT (t.id = ANY($7))
+                            AND s.user_id = ANY($4::int[]) AND s.state = 'seen')
+           AND NOT (t.id = ANY($6))
         """,
-        ctx.user_id, kind, ctx.bundle_version,
-        [ctx.user_id, partner["user_id"]], partner["user_id"], SWEET_SPOT_MIN_CDF,
-        sorted(ctx.excluded),
+        ctx.user_id, kind, ctx.bundle_version, members, SWEET_SPOT_MIN_CDF, sorted(ctx.excluded),
     )
 
     paired = sorted(
-        (
-            (
-                (_standardised(r["mine_pos"], r["mine_n"])
-                 + _standardised(r["theirs_pos"], r["theirs_n"])) / 2.0,
-                r,
-            )
-            for r in rows
-        ),
+        ((fmean(map(_standardised, r["pos"], r["n"])), r) for r in rows),
         key=lambda pr: (-pr[0], int(pr[1]["title_id"])),
     )[:SHELF_CAP]
     items = [
@@ -751,13 +740,14 @@ async def shared_sweet_spot(
         )
         for i, (pair_score, row) in enumerate(paired)
     ]
+    two = len(others) == 1
     section = Section(
         kind=kind,
         heading=KIND_HEADINGS[kind],
-        title=f"You and {partner['name']} would both enjoy these",
-        why="Neither of you has seen them — a good pick for a night in together",
-        why_numbers={"min_cdf": SWEET_SPOT_MIN_CDF, "partner_user_id": partner["user_id"],
-                     "co_seen": partner["co_seen"]},
+        title=f"You and {others[0]['name']} would both enjoy these" if two else "You'd all enjoy these",
+        why=("Neither of you" if two else "None of you")
+        + " has seen them — a good pick for a night in together",
+        why_numbers={"min_cdf": SWEET_SPOT_MIN_CDF, "member_user_ids": members[1:]},
         caption=None,
         items=items,
     )
@@ -981,15 +971,18 @@ async def acclaimed(
 async def partner_loved(
     conn: asyncpg.Connection, *, ctx: Ctx, kind: str
 ) -> tuple[Section | None, Suppressed | None]:
-    """"{other} loved these": the other member's top two steps, never which (decision 563 item 4)."""
+    """"{other} loved these", row `ctx.nth` for the nth other member: their top two steps, never
+    which (decision 563 item 4)."""
     sid = "partner_loved"
-    if ctx.partner is None:
-        return None, Suppressed(sid, kind, "no other member")
-    theirs = await _rated_seen(conn, ctx, kind, ctx.partner["user_id"])
+    others = ctx.memo["others"]
+    if ctx.nth >= len(others):
+        return None, Suppressed(sid, kind, f"no other member {ctx.nth + 1}")
+    member = others[ctx.nth]
+    theirs = await _rated_seen(conn, ctx, kind, member["user_id"])
     section = Section(
-        kind=kind, heading=KIND_HEADINGS[kind], title=f"{ctx.partner['name']} loved these",
+        kind=kind, heading=KIND_HEADINGS[kind], title=f"{member['name']} loved these",
         why="You haven't seen them yet",
-        why_numbers={"partner_user_id": ctx.partner["user_id"]},
+        why_numbers={"partner_user_id": member["user_id"]},
         items=await _cards(
             conn, ctx, kind, [r["id"] for r in theirs if r["loved"] and r["id"] not in ctx.excluded]
         ),
@@ -1025,36 +1018,43 @@ async def watch_again(
 async def rewatch_together(
     conn: asyncpg.Connection, *, ctx: Ctx, kind: str
 ) -> tuple[Section | None, Suppressed | None]:
-    """"Watch again with {other}": seen and liked by both, neither with a real play in
-    REWATCH_MONTHS, ordered by the older of the two plays."""
+    """"Watch again with {other}" / "Watch again together": seen and liked by every household
+    member, none with a real play in REWATCH_MONTHS, ordered by the oldest play."""
     sid = "rewatch_together"
-    if ctx.partner is None:
+    others = ctx.memo["household", kind]
+    if not others:
         return None, Suppressed(sid, kind, "no other member to watch again with")
+    members = [ctx.user_id, *(o["user_id"] for o in others)]
     rows = await conn.fetch(
         f"""
-        WITH mine AS ({live_label_sql('$1')}), theirs AS ({live_label_sql('$4')})
-        SELECT t.id, a.played_at AS mine_at, b.played_at AS theirs_at
+        WITH lv AS (
+            SELECT m.id AS user_id, l.title_id, l.value
+              FROM unnest($3::int[]) m(id), LATERAL ({live_label_sql('m.id')}) l
+        )
+        SELECT t.id,
+               CASE WHEN bool_or(ut.played_at IS NULL) THEN NULL ELSE min(ut.played_at) END AS oldest
           FROM title t
-          JOIN user_title a ON a.title_id = t.id AND a.user_id = $1 AND a.state = 'seen'
-          JOIN user_title b ON b.title_id = t.id AND b.user_id = $4 AND b.state = 'seen'
-          JOIN mine m ON m.title_id = t.id AND m.value = {taste.LIKED}
-          JOIN theirs x ON x.title_id = t.id AND x.value = {taste.LIKED}
-         WHERE t.kind = $2 AND t.is_owned AND NOT (t.id = ANY($5::int[]))
-           AND {_long_ago("a.played_at", "$3")} AND {_long_ago("b.played_at", "$3")}
+          JOIN user_title ut ON ut.title_id = t.id AND ut.user_id = ANY($3::int[]) AND ut.state = 'seen'
+          JOIN lv ON lv.user_id = ut.user_id AND lv.title_id = t.id AND lv.value = {taste.LIKED}
+         WHERE t.kind = $1 AND t.is_owned AND NOT (t.id = ANY($4::int[]))
+           AND {_long_ago("ut.played_at", "$2")}
+         GROUP BY t.id
+        HAVING count(*) = cardinality($3::int[])
         """,
-        ctx.user_id, kind, REWATCH_MONTHS, ctx.partner["user_id"], sorted(ctx.excluded),
+        kind, REWATCH_MONTHS, members, sorted(ctx.excluded),
     )
     order = [
         int(r["id"]) for r in sorted(
             rows,
-            key=lambda r: (min(r["mine_at"] or _LONG_AGO, r["theirs_at"] or _LONG_AGO),
-                           _daily(ctx.user_id, ctx.day, f"title:{r['id']}")),
+            key=lambda r: (r["oldest"] or _LONG_AGO, _daily(ctx.user_id, ctx.day, f"title:{r['id']}")),
         )
     ]
+    two = len(others) == 1
     section = Section(
-        kind=kind, heading=KIND_HEADINGS[kind], title=f"Watch again with {ctx.partner['name']}",
-        why="You both liked these, and it's been a while",
-        why_numbers={"months": REWATCH_MONTHS, "partner_user_id": ctx.partner["user_id"]},
+        kind=kind, heading=KIND_HEADINGS[kind],
+        title=f"Watch again with {others[0]['name']}" if two else "Watch again together",
+        why=f"You {'both' if two else 'all'} liked these, and it's been a while",
+        why_numbers={"months": REWATCH_MONTHS, "member_user_ids": members[1:]},
         items=await _cards(conn, ctx, kind, order, seen=True, order=order),
     )
     return _finish(section, shelf_id=sid, ctx=ctx)
@@ -1387,11 +1387,14 @@ MIDDLE: tuple[str, ...] = (
 )
 # The rows of seen titles after Watch again sit lower, apart, so Home leads with unseen ones.
 LATE_REWATCH: tuple[tuple[str, int], ...] = (("rewatch_together", 8), ("rewatch_term", 11))
-MIDDLE_ROWS = {"because_anchor": range(1, BECAUSE_ROWS), "taste_term": range(TASTE_ROWS)}
+MIDDLE_ROWS = {
+    "because_anchor": range(1, BECAUSE_ROWS), "taste_term": range(TASTE_ROWS),
+    "partner_loved": range(PARTNER_ROWS),
+}
 TAIL: tuple[str, ...] = ("new_in_library", "worth_getting")
 # Decision 562: the only rows of seen titles.
 REWATCH: frozenset[str] = frozenset({"watch_again", "rewatch_together", "rewatch_term"})
-# The rows for two, which leave out what either member avoids (decision 512).
+# The household rows, which leave out what any member avoids (decision 512).
 SHARED: frozenset[str] = frozenset({"shared_sweet_spot", "rewatch_together"})
 
 # `ranking=True` for rows ordered by a ledger score. Every row partitions by kind regardless.
@@ -1436,18 +1439,30 @@ async def _context(
     """What both reads of Home resolve once, and whether the member has no verdicts yet."""
     chosen = library.normalise_kinds(kinds)
     version = await why_mod.vocabulary_version(conn)
-    partner = await partner_for(conn, user_id=user.id)
+    others = await others_for(conn, user_id=user.id)
     avoid = await taste.avoided_for(conn, user_id=user.id, version=version)
-    theirs = (
-        await taste.avoided_for(conn, user_id=partner["user_id"], version=version)
-        if partner is not None else None
-    )
-    memo: dict[Any, Any] = {}
+    theirs = {o["user_id"]: await taste.avoided_for(conn, user_id=o["user_id"], version=version)
+              for o in others}
+    memo: dict[Any, Any] = {"others": others}
     for kind in chosen:
+        # Decision 565: a member with nothing to read for the kind is left out, not a blocker.
+        present = {int(r["id"]) for r in await conn.fetch(
+            """
+            SELECT m.id FROM unnest($1::int[]) m(id)
+             WHERE EXISTS (SELECT 1 FROM user_score us WHERE us.user_id = m.id AND us.kind = $2
+                             AND us.bundle_version = $3)
+                OR EXISTS (SELECT 1 FROM ledger_state ls WHERE ls.user_id = m.id AND ls.kind = $2)
+            """,
+            list(theirs), kind, bundle_version,
+        )}
+        household = [o for o in others if o["user_id"] in present]
+        memo["household", kind] = household
         memo["mine", kind] = await taste.avoided_titles(conn, [avoid], kind=kind, version=version)
-        memo["both", kind] = (
-            await taste.avoided_titles(conn, [avoid, theirs], kind=kind, version=version)
-            if theirs is not None else memo["mine", kind]
+        memo["shared", kind] = (
+            await taste.avoided_titles(
+                conn, [avoid, *(theirs[o["user_id"]] for o in household)], kind=kind, version=version
+            )
+            if household else memo["mine", kind]
         )
     ctx = Ctx(
         user_id=user.id,
@@ -1457,7 +1472,6 @@ async def _context(
         tier_sets={k: await tier_set_of(conn, user_id=user.id, kind=k) for k in chosen},
         betas={k: await _beta(conn, user_id=user.id, kind=k) for k in chosen},
         day=day,
-        partner=partner,
         avoid=avoid,
         memo=memo,
     )
@@ -1502,7 +1516,7 @@ async def build_shelves(
                 scoped = replace(
                     scoped,
                     claimed=frozenset(claimed[kind]),
-                    avoided=ctx.memo["both" if family in SHARED else "mine", kind],
+                    avoided=ctx.memo["shared" if family in SHARED else "mine", kind],
                 )
             section, note = await FAMILIES[family](conn, ctx=scoped, kind=kind)
             if section is not None:
