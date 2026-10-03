@@ -1186,8 +1186,9 @@ async def _concerts(conn: asyncpg.Connection, *, user_id: int, kind: str) -> fro
     unless the member has liked enough of them; a musical such as Coco is no concert."""
     rows = await conn.fetch(
         "SELECT t.id, array_agg(g.genre) AS raw FROM title t JOIN title_genre g ON g.title_id = t.id"
-        " WHERE t.kind = $1 AND NOT (g.source = ANY($2::text[])) GROUP BY t.id",
-        kind, list(genre_vocab.EXCLUDED_SOURCES),
+        " WHERE t.kind = $1 AND NOT (g.source = ANY($2::text[]))"
+        f" AND {genre_vocab.predicate('$3', '$2')} GROUP BY t.id",
+        kind, list(genre_vocab.EXCLUDED_SOURCES), genre_vocab.raw_labels("Music"),
     )
     concerts = frozenset(
         int(r["id"]) for r in rows
