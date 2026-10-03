@@ -17069,6 +17069,25 @@ The spec is amended in place (v2.1.21): §6.0, §6.5.
 **Cost.** About 40 lines in `home/shelves.py`, a read of each member's avoid set, and up to two
 more rows in the day's plan.
 
+### 566. Rate serves the films in the library first
+
+**What the record says.** §6.1 orders Rate's fresh cards by the banner's pins, then titles recorded
+seen, then the seed list (decision 490), then P(seen), most likely first. Being in the library is
+one term of P(seen), worth 0.8 in log-odds, so a widely seen film outside the library often comes
+before one on the shelf.
+
+**Why it changes.** The owner, 2026-10-03: "Rate should first prioritize movies that are in the
+library". A film in the library can be played tonight, and a rating of it feeds every shelf.
+
+**The decision.** After the pins and the titles recorded seen, every title in the library comes
+before any title that is not; the seed list and P(seen) order each part as before. The set-up keeps
+its own order (decision 556).
+
+The spec is amended in place (v2.1.21): §6.1.
+
+**Cost.** One sort key. A widely seen film outside the library waits until the library's titles
+have been asked.
+
 ## §6.2 — Tonight, rewritten (owner decision, 2026-08-29)
 
 Proposal 54 asked which slot carries the alternative on a split axis. The owner answered by

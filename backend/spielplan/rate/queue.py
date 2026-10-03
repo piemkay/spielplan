@@ -267,6 +267,8 @@ SELECT s.*,
  ORDER BY s.head_pos ASC NULLS LAST,
           s.before_pos ASC NULLS LAST,
           NOT s.seen,
+          -- Decision 566: the library first, then the rest.
+          NOT s.owned,
           -- Decision 490: the seed list still leads, and inside it P(seen) decides.
           s.seed_position IS NULL,
           p_seen DESC,

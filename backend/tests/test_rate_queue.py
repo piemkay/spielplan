@@ -147,11 +147,26 @@ async def test_a_seed_title_in_the_library_leads_one_that_is_not(db, world):
     after = [
         c.title_id
         for c in await queue.next_cards(
-            db, user_id=patrick, kind="movie", limit=5, reask_rate=0.0
+            db, user_id=patrick, kind="movie", limit=50, reask_rate=0.0
         )
     ]
     assert before.index(2) < before.index(8) and before.index(2) < before.index(6)
     assert after.index(2) > after.index(8) and after.index(2) > after.index(6), after
+
+
+async def test_every_title_in_the_library_comes_before_any_that_is_not(db, world):
+    """Decision 566: the library first, the seed list and P(seen) only inside each part."""
+    patrick = world["patrick"]
+    await db.execute("UPDATE title SET is_owned = false WHERE id IN (2, 6)")
+    cards = await queue.next_cards(db, user_id=patrick, kind="movie", limit=50, reask_rate=0.0)
+    owned = dict(await db.fetch(
+        "SELECT id, is_owned FROM title WHERE id = ANY($1::int[])", [c.title_id for c in cards]
+    ))
+    seen = {r["title_id"] for r in await db.fetch(
+        "SELECT title_id FROM user_title WHERE user_id = $1 AND state = 'seen'", patrick
+    )}
+    flags = [owned[c.title_id] for c in cards if c.title_id not in seen]
+    assert False in flags and flags == sorted(flags, reverse=True), flags
 
 
 async def test_a_pinned_title_is_served_even_after_a_not_seen_answer_or_a_placement(db, world):
