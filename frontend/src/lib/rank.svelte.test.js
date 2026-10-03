@@ -991,6 +991,49 @@ describe('a round settles into moves (decision 564)', () => {
     expect(toast.actionLabel).toBe('Undo');
   });
 
+  /** A settle that answers only when the test says so. */
+  function settleLater(payload) {
+    let release = () => {};
+    fetchMock.mockReturnValueOnce(
+      new Promise((resolve) => {
+        release = () =>
+          resolve({ ok: true, status: 200, headers: { get: () => null }, text: async () => JSON.stringify(payload) });
+      })
+    );
+    return () => release();
+  }
+
+  it('the end card waits for the settle, and a close in the meantime toasts its moves', async () => {
+    rank.queueOpen = true;
+    rank.pair = pairN(14);
+    rank.roundAnswered = ROUND_SIZE - 1;
+    respond({ kind: 'movie', pair: pairN(15) });
+    const release = settleLater(board({ moves: [DUNE] }));
+    const answered = answer('A');
+    await vi.waitFor(() => expect(rank.settling).toBe(true));
+    expect(rank.roundDone).toBe(true);
+    const closed = closeQueue();
+    release();
+    await Promise.all([answered, closed]);
+    expect(rank.settling).toBe(false);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(toast.message).toBe('Drive moved to S');
+  });
+
+  it('Done then a swipe settles once, and the swipe toasts what moved', async () => {
+    rank.queueOpen = true;
+    rank.roundAnswered = 6;
+    const release = settleLater(board({ moves: [DUNE] }));
+    const done = finish();
+    const closed = closeQueue();
+    release();
+    expect(await done).toBe(false);
+    await closed;
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(toast.message).toBe('Drive moved to S');
+    expect(rank.roundDone).toBe(false);
+  });
+
   it('a Back close counts several moves, and its Undo takes them all back', async () => {
     rank.queueOpen = true;
     rank.roundAnswered = 3;

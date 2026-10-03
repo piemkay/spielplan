@@ -84,6 +84,8 @@ export const rank = $state({
   queueOpen: false,
   roundAnswered: 0,
   roundDone: false,
+  /** true while a settle is in flight, so the end card waits for its moves */
+  settling: false,
   /** @type {any[]} where the last answered pair's two titles sit now, from the answer route */
   placed: [],
   /** @type {any[]} the titles the last settle moved to a new step (decision 564), each with `undone` */
@@ -367,18 +369,28 @@ export async function openQueue() {
   await nextPair();
 }
 
-/** Decision 564: the titles the answers put beyond their step move there now; the moves come back. */
-export async function settle() {
-  requestSeq += 1;                        // a read started before the settle must not paint over it
-  try {
-    const res = await post(`/rank/queue/settle${qs(query())}`);
-    apply(await withOpened(res));
-    rank.moves = (res.moves ?? []).map((m) => ({ ...m, undone: false }));
-  } catch (err) {
-    fail(err);
-    rank.moves = [];
-  }
-  return rank.moves;
+let settling = null;
+
+/** Decision 564: the titles the answers put beyond their step move there now; the moves come back.
+ * One settle at a time: a second caller shares the one in flight. */
+export function settle() {
+  settling ??= (async () => {
+    requestSeq += 1;                      // a read started before the settle must not paint over it
+    rank.settling = true;
+    try {
+      const res = await post(`/rank/queue/settle${qs(query())}`);
+      apply(await withOpened(res));
+      rank.moves = (res.moves ?? []).map((m) => ({ ...m, undone: false }));
+    } catch (err) {
+      fail(err);
+      rank.moves = [];
+    } finally {
+      settling = null;
+      rank.settling = false;
+    }
+    return rank.moves;
+  })();
+  return settling;
 }
 
 /** Takes one move back as the person's own word (decision 534). */
@@ -393,7 +405,7 @@ export async function undoMove(m) {
 export async function finish() {
   if (rank.roundDone || rank.roundAnswered === 0) return false;
   const moved = await settle();
-  if (moved.length) {
+  if (moved.length && rank.queueOpen) {
     rank.roundDone = true;
     return true;
   }
@@ -403,7 +415,7 @@ export async function finish() {
 
 // Back or a swipe closes without the end card, so what moved is said in one toast.
 export async function closeQueue() {
-  const unsettled = rank.roundAnswered > 0 && !rank.roundDone;
+  const unsettled = settling || (rank.roundAnswered > 0 && !rank.roundDone);
   rank.queueOpen = false;
   rank.pair = null;
   startRound();

@@ -715,6 +715,37 @@ describe('the comparison sheet (decisions 483, 495)', () => {
     expect($('rank-move-undo-2')).toBeNull();
   });
 
+  it('holds Keep going while the round settles', async () => {
+    queueReplies.push({ kind: 'movie', pair: pair(), pool: 3 });
+    queueReplies.push({ kind: 'movie', pair: pair({ token: 'sealed-2' }) });
+    await open();
+    $('rank-sharpen').click();
+    await settle();
+    rank.roundAnswered = 14;
+    const release = hold('/api/rank/queue/settle');
+    $('rate-duel-A').click();
+    await settle();
+    expect($('rank-round-end')).toBeTruthy();
+    expect($('rank-round-more').disabled).toBe(true);
+    release();
+    await settle();
+    expect($('rank-round-more').disabled).toBe(false);
+  });
+
+  it('settles a round left by leaving the tab', async () => {
+    queueReplies.push({ kind: 'movie', pair: pair(), pool: 3 });
+    queueReplies.push({ kind: 'movie', pair: pair({ token: 'sealed-2' }) });
+    await open();
+    $('rank-sharpen').click();
+    await settle();
+    $('rate-duel-A').click();
+    await settle();
+    unmount(app);
+    app = null;
+    await settle();
+    expect(posts.filter((p) => p.url.includes('/api/rank/queue/settle'))).toHaveLength(1);
+  });
+
   it("shows the queue's selection label only with Show the model on (decision 117)", async () => {
     queueReplies.push({ kind: 'movie', pair: pair(), pool: 3 });
     await open();

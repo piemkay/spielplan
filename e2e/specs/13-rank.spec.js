@@ -67,6 +67,16 @@ async function openRank(page) {
   await expect(board(page)).toBeVisible();
 }
 
+// Done keeps the sheet open on the end card when the round's settle moved titles (decision 564).
+async function closeSharpen(page) {
+  await page.getByTestId('rank-queue-close').click();
+  const stop = page.getByTestId('rank-round-stop');
+  await expect(async () => {
+    if (await stop.isVisible()) await stop.click();
+    await expect(page.getByTestId('rank-queue')).toHaveCount(0, { timeout: 500 });
+  }).toPass();
+}
+
 /**
  * Arrangement: fill a tier over HTTP to `count` titles, so a gesture has an occupied tier to
  * drop into. No `above`/`below`, or the seed would write the duels the tests count.
@@ -399,8 +409,7 @@ test.describe('rank', () => {
     expect(replayed.status(), 'a replayed seal is a stale card').toBe(409);
     expect(served.pair.token).not.toBe(answeredToken);
 
-    await page.getByTestId('rank-queue-close').click();
-    await expect(page.getByTestId('rank-queue')).toHaveCount(0);
+    await closeSharpen(page);
   });
 
   test('the queue answer never lets the client name its own selection arm', async () => {
@@ -426,7 +435,7 @@ test.describe('rank', () => {
 
     expect(Object.keys(body).sort()).toEqual(['decisive', 'outcome', 'pair']);
     expect(body.pair, 'the pair travels sealed, not as two ids').not.toContain('title');
-    await page.getByTestId('rank-queue-close').click();
+    await closeSharpen(page);
   });
 
   test('a tap on a title opens its card and writes nothing', async () => {
@@ -465,7 +474,7 @@ test.describe('rank', () => {
     await expect(page.getByTestId('rank-round')).toHaveText('2 of 15 this round');
     await expect(page.getByTestId(`rank-placed-${served.title_a}`)).toBeVisible();
     await expect(page.getByTestId(`rank-placed-${served.title_b}`)).toBeVisible();
-    await page.getByTestId('rank-queue-close').click();
+    await closeSharpen(page);
   });
 
   test('every tier letter sits at the top of its tier', async () => {

@@ -49,6 +49,7 @@
     roundLine,
     searchHint,
     setTerm,
+    settle,
     showAll,
     showLess,
     spot,
@@ -158,6 +159,7 @@
   });
   onDestroy(() => {
     cancel();
+    if (rank.roundAnswered > 0 && !rank.roundDone) settle();
     reset({ board: false });
   });
 
@@ -946,7 +948,8 @@
             </section>
           {/if}
           <div class="round-actions">
-            <button class="btn-primary" onclick={keepGoing} data-testid="rank-round-more">Keep going</button>
+            <button class="btn-primary" onclick={keepGoing} disabled={rank.settling} data-testid="rank-round-more"
+              >Keep going</button>
             <button class="btn-secondary" onclick={close} data-testid="rank-round-stop">Done</button>
           </div>
         </div>

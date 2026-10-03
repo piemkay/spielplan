@@ -324,7 +324,9 @@
     try {
       res = await loadHome(asked);
       if (seq !== homeSeq) return;
-      home = res;
+      // A re-read of the kinds already shown keeps them whole until the rest lands.
+      const quiet = res.more && home && kindChoice(home.kinds ?? []) === kindChoice(asked);
+      if (!quiet) home = res;
       Object.assign(homeKept, { user: session.user?.id, epoch: modelGate.epoch, kinds: asked, payload: res });
     } catch (err) {
       if (seq === homeSeq) homeError = err.message;
@@ -338,9 +340,9 @@
     try {
       rest = await loadHomeRows(asked, res.more.day, shownIds(res));
     } catch {}
-    if (seq !== homeSeq) return;
-    home = withRows(res, rest);
-    homeKept.payload = home;
+    const whole = withRows(res, rest);
+    if (homeKept.payload === res) homeKept.payload = whole;
+    if (seq === homeSeq) home = whole;
   }
 
   // Its own counter: `load()` bumps `requestSeq` alone, which must not discard the newest facets read.

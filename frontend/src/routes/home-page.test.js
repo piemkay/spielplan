@@ -364,6 +364,32 @@ describe('the lower rows arrive in a second read (decision 563)', () => {
     expect($('[data-testid="home-wish-row"]')).not.toBeNull();
   });
 
+  it('keeps the kept rows whole through a quiet re-read until the rest lands', async () => {
+    /** @type {(rest: any) => void} */
+    let answer = () => {};
+    backend({
+      home: (kinds) => ({
+        kinds, library: {}, shelves_total: 1, more: { day: '2026-10-03' },
+        wish: { wanted: 1, both: 0, members: 2 },
+        shelves: [shelf('top_picks', 'top_picks', 'movie', [1])]
+      }),
+      rows: () => new Promise((resolve) => (answer = resolve))
+    });
+    const kept = {
+      kinds: ['movie'], library: {}, shelves_total: 3, wish: { wanted: 1, both: 0, members: 2 },
+      shelves: [shelf('top_picks', 'top_picks', 'movie', [1]), shelf('hidden_gems', 'hidden_gems', 'movie', [2]), worth]
+    };
+    Object.assign(homeKept, { user: MEMBER.id, epoch: 0, kinds: ['movie'], payload: kept });
+    await openHome();
+    expect(shelfKeys()).toEqual(['top_picks', 'hidden_gems', 'worth_getting']);
+    expect($('[data-testid="home-wish-row"]')).not.toBeNull();
+
+    answer({ shelves: [worth], suppressed: [] });
+    await tick();
+    expect(shelfKeys()).toEqual(['top_picks', 'worth_getting']);
+    expect(homeKept.payload.shelves.map((s) => s.key)).toEqual(['top_picks', 'worth_getting']);
+  });
+
   it('drops a rest that lands after a kind switch', async () => {
     const answers = [];
     backend({
