@@ -930,11 +930,15 @@
               <ul class="list-group">
                 {#each rank.moves as m (m.title_id)}
                   <li class="list-row" data-testid={`rank-move-${m.title_id}`}>
-                    <span class="name">{m.name}</span>
-                    {#if m.undone}
-                      <span class="footnote">Back in {m.from_label}</span>
-                    {:else}
-                      <span class="footnote data">{m.from_label} → {m.to_label}</span>
+                    <span class="name">
+                      <span>{m.name}</span>
+                      {#if m.undone}
+                        <span class="footnote">Back in {m.from_label}</span>
+                      {:else}
+                        <span class="footnote data">{m.from_label} → {m.to_label}</span>
+                      {/if}
+                    </span>
+                    {#if !m.undone}
                       <button
                         class="btn-plain"
                         onclick={() => undoMove(m)}
@@ -1731,6 +1735,10 @@
   .moves .name {
     flex: 1;
     min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    font-size: var(--fs-body);
   }
   .placed ul {
     margin: 0;
