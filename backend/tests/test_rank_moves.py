@@ -18,8 +18,8 @@ def item(s, sigma, assigned, title_id=1):
     return board.Item(title_id=title_id, name="Dune", s=s, sigma=sigma, assigned_tier=assigned)
 
 
-def test_a_title_moves_when_eighty_percent_of_it_lies_beyond_one_edge_of_its_shown_step():
-    # B is [0, 1.099): 1.6 - 0.84 * 1.0 = 0.76 is inside it, 1.94 - 0.84 = 1.10 is past it.
+def test_a_title_moves_when_seventy_five_percent_of_it_lies_beyond_one_edge_of_its_shown_step():
+    # B is [0, 1.099): 1.6 - 0.67 * 1.0 = 0.93 is inside it, 1.94 - 0.67 = 1.27 is past it.
     assert moves.due([item(1.6, 1.0, 3)], cuts=CUTS, answers_since={1: 5}) == []
     [move] = moves.due([item(1.94, 1.0, 3)], cuts=CUTS, answers_since={1: 5})
     assert (move.title_id, move.source, move.target) == (1, 3, 4)
@@ -41,7 +41,7 @@ def test_a_title_two_steps_off_moves_both_steps_at_once():
 
 
 def test_a_move_goes_only_as_far_as_the_evidence_reaches():
-    # s = 1.3 sits in A, but 1.3 - 0.84 * 0.5 = 0.88 only clears C's edge: placed in C, it moves to B.
+    # s = 1.3 sits in A, but 1.3 - 0.67 * 0.5 = 0.97 only clears C's edge: placed in C, it moves to B.
     [move] = moves.due([item(1.3, 0.5, 2)], cuts=CUTS, answers_since={1: 4})
     assert (move.source, move.target) == (2, 3)
 
@@ -92,9 +92,9 @@ def answers_to_move(true_tier, placed_off, *, per_tier=8, background=60, seed=0)
 
 @pytest.mark.parametrize(
     ("true_tier", "placed_off", "fewest", "most"),
-    [(3, 1, 3, 6), (4, 1, 3, 6), (3, 2, 2, 3), (4, 2, 2, 3)],
+    [(3, 1, 2, 6), (4, 1, 2, 6), (3, 2, 2, 3), (4, 2, 2, 3)],
 )
-def test_consistent_answers_move_an_adjacent_error_in_about_five_and_a_two_step_one_in_two_or_three(
+def test_consistent_answers_move_an_adjacent_error_in_two_to_six_and_a_two_step_one_in_two_or_three(
     true_tier, placed_off, fewest, most
 ):
     asked, target = answers_to_move(true_tier, placed_off)

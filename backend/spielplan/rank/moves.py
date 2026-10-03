@@ -17,8 +17,8 @@ from spielplan.rank import board, read
 
 # A move waits for this many Sharpen answers about the title since its latest placement.
 MOVE_MIN_ANSWERS = 2
-# One-sided 80%: this much of the posterior lies beyond one edge of the shown step.
-MOVE_Z = 0.84
+# One-sided 75%: this much of the posterior lies beyond one edge of the shown step.
+MOVE_Z = 0.67
 
 
 @dataclass(frozen=True)
@@ -41,7 +41,7 @@ def due(
             continue
         low, high = board._band(int(item.assigned_tier), cuts)
         floor, ceiling = item.s - MOVE_Z * item.sigma, item.s + MOVE_Z * item.sigma
-        # The step the 80% bound reaches, not the one `s` falls in: no overshoot past the evidence.
+        # The step the 75% bound reaches, not the one `s` falls in: no overshoot past the evidence.
         if floor >= high or ceiling < low:
             target = int(model.tier_of(np.array([floor if floor >= high else ceiling]), cuts)[0])
             out.append(Move(item.title_id, item.name, int(item.assigned_tier), target))
