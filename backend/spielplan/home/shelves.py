@@ -10,6 +10,7 @@ import hashlib
 from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
+from functools import partial
 from statistics import NormalDist, fmean
 from typing import Any
 
@@ -80,6 +81,10 @@ ACCLAIMED_SHARE = 0.2
 # Decision 562: a real play holds a title out of the rewatch rows this long.
 REWATCH_MONTHS = 12
 _LONG_AGO = datetime.min.replace(tzinfo=UTC)
+
+
+def _long_ago(col: str, months: str) -> str:
+    return f"({col} IS NULL OR {col} < now() - make_interval(months => {months}))"
 
 
 # --- payload types ------------------------------------------------------------------------------
@@ -409,8 +414,7 @@ async def _rated_seen(
             f"""
             SELECT t.id, t.name, t.is_owned, ls.tier AS model_tier, ut.played_at,
                    te.tier AS assigned, te.n_levels AS assigned_k, lv.value AS verdict,
-                   (ut.played_at IS NULL OR ut.played_at < now() - make_interval(months => $3))
-                       AS long_ago
+                   {_long_ago("ut.played_at", "$3")} AS long_ago
               FROM ledger_state ls
               JOIN title t ON t.id = ls.title_id
               JOIN user_title ut ON ut.user_id = ls.user_id AND ut.title_id = t.id
@@ -825,7 +829,7 @@ async def _taste(conn: asyncpg.Connection, ctx: Ctx, kind: str) -> _Taste:
         f"""
         WITH lv AS ({LIVE_LABEL_SQL})
         SELECT DISTINCT d.term, t.id, t.name, t.is_owned, ls.s,
-               (ut.played_at IS NULL OR ut.played_at < now() - make_interval(months => $4)) AS long_ago
+               {_long_ago("ut.played_at", "$4")} AS long_ago
           FROM lv
           JOIN title t ON t.id = lv.title_id AND t.kind = $2
           JOIN user_title ut ON ut.title_id = t.id AND ut.user_id = $1 AND ut.state = 'seen'
@@ -864,7 +868,7 @@ async def _term_pair(
     conn: asyncpg.Connection, *, ctx: Ctx, kind: str, again: bool
 ) -> tuple[Section | None, Suppressed | None]:
     """"{Label} & {label}": unseen owned titles carrying two liked terms of different groups, or with
-    `again` the liked ones not played in a long while. No term is named twice in one read."""
+    `again` the liked ones not played in a long while. No term is named twice in a kind's Home."""
     sid = "rewatch_term" if again else "taste_term"
     if not ctx.version:
         return None, Suppressed(sid, kind, "no DNA vocabulary imported — no terms to name")
@@ -873,7 +877,7 @@ async def _term_pair(
         (t.term for t, _aff in found.liked[:TASTE_LEADS]),
         key=lambda term: _daily(ctx.user_id, ctx.day, f"term:{term}"),
     )
-    named = ctx.memo.setdefault("named", set())
+    named = ctx.memo.setdefault(("named", kind), set())
     pair = why_mod.taste_pair(
         found.liked,
         {term: set(ids) for term, ids in found.carried.items()},
@@ -917,16 +921,8 @@ async def _term_pair(
     return section, note
 
 
-async def taste_term(
-    conn: asyncpg.Connection, *, ctx: Ctx, kind: str
-) -> tuple[Section | None, Suppressed | None]:
-    return await _term_pair(conn, ctx=ctx, kind=kind, again=False)
-
-
-async def rewatch_term(
-    conn: asyncpg.Connection, *, ctx: Ctx, kind: str
-) -> tuple[Section | None, Suppressed | None]:
-    return await _term_pair(conn, ctx=ctx, kind=kind, again=True)
+taste_term = partial(_term_pair, again=False)
+rewatch_term = partial(_term_pair, again=True)
 
 
 # --- hidden gems, acclaimed, the other member's (decision 563) --------------------------------
@@ -941,17 +937,16 @@ async def hidden_gems(
     rows = await conn.fetch(
         """
         WITH k AS (
-            SELECT t.id,
-                   cume_dist() OVER (ORDER BY COALESCE(tp.item_n, 0)) AS crowd,
-                   percent_rank() OVER (ORDER BY us.score NULLS FIRST) AS mine
+            SELECT t.id, tp.item_n, percent_rank() OVER (ORDER BY us.score NULLS FIRST) AS mine
               FROM title t
               LEFT JOIN title_prior tp ON tp.title_id = t.id AND tp.bundle_version = $3
               LEFT JOIN user_score us ON us.title_id = t.id AND us.user_id = $1
                                      AND us.kind = t.kind AND us.bundle_version = $3
              WHERE t.kind = $2 AND t.is_owned
+        ), g AS (
+            SELECT id, mine, cume_dist() OVER (ORDER BY item_n) AS crowd FROM k WHERE item_n > 0
         )
-        SELECT k.id FROM k JOIN title_prior tp ON tp.title_id = k.id AND tp.bundle_version = $3
-         WHERE tp.item_n > 0 AND k.crowd <= $4 AND k.mine >= $5
+        SELECT id FROM g WHERE crowd <= $4 AND mine >= $5
         """,
         ctx.user_id, kind, ctx.bundle_version, GEM_SHARE, GEM_MIN_CDF,
     )
@@ -1044,8 +1039,7 @@ async def rewatch_together(
           JOIN mine m ON m.title_id = t.id AND m.value = {taste.LIKED}
           JOIN theirs x ON x.title_id = t.id AND x.value = {taste.LIKED}
          WHERE t.kind = $2 AND t.is_owned AND NOT (t.id = ANY($5::int[]))
-           AND (a.played_at IS NULL OR a.played_at < now() - make_interval(months => $3))
-           AND (b.played_at IS NULL OR b.played_at < now() - make_interval(months => $3))
+           AND {_long_ago("a.played_at", "$3")} AND {_long_ago("b.played_at", "$3")}
         """,
         ctx.user_id, kind, REWATCH_MONTHS, ctx.partner["user_id"], sorted(ctx.excluded),
     )
@@ -1575,11 +1569,15 @@ async def build_rows(
     bundle_version: str | None,
     day: str,
     shown: Sequence[int],
+    named: Sequence[str] = (),
 ) -> dict[str, Any]:
-    """Home's second read: the rest of `day`'s plan, with what the first read `shown` claimed."""
+    """Home's second read: the rest of `day`'s plan, with what the first read `shown` claimed and the
+    `named` terms ("kind:term") its term rows named."""
     ctx, zero_verdicts = await _context(
         conn, user=user, kinds=kinds, bundle_version=bundle_version, day=day
     )
+    for kind, _, term in (n.partition(":") for n in named):
+        ctx.memo.setdefault(("named", kind), set()).add(term)
     shelves, dropped = await build_shelves(
         conn, ctx=ctx, steps=plan(user.id, day)[HEAD_SLOTS:], shown=shown,
         zero_verdicts=zero_verdicts, room=ROW_CAP - len(TAIL) - HEAD_SLOTS,

@@ -109,11 +109,16 @@ class World:
             payload["shelves_total"] += len(more["shelves"])
         return payload
 
-    async def rows(self, head, *, kinds=("movie", "series")):
+    async def rows(self, head, *, kinds=("movie", "series"), named=None):
         shown = {c["title_id"] for s in head["shelves"] for x in s["sections"] for c in x["items"]}
+        if named is None:
+            named = [f"{x['kind']}:{t['term']}" for s in head["shelves"]
+                     if s["id"] in ("taste_term", "rewatch_term")
+                     for x in s["sections"] for t in x["why_terms"]]
         query = [("kind", k) for k in kinds] + [("day", head["more"]["day"])]
         response = await self.client.get(
-            "/api/home/rows", params=query + [("shown", i) for i in sorted(shown)]
+            "/api/home/rows",
+            params=query + [("shown", i) for i in sorted(shown)] + [("named", n) for n in named],
         )
         assert response.status_code == 200, response.text
         return response.json()
@@ -2222,6 +2227,51 @@ async def test_a_taste_row_pairs_two_liked_terms_of_different_groups_on_every_ca
     assert {t["term"] for t in row["why_terms"]} == {"slow-burn", "atmos"}
     assert sorted(c["title_id"] for c in row["items"]) == [1030, 1031, 1032, 1033]
     assert sum(s["id"] == "taste_term" for s in payload["shelves"]) == 1, "a term named twice"
+
+
+async def test_the_rows_below_name_no_term_the_head_named_in_that_kind(world):
+    await world.db.execute("INSERT INTO dna_facet (version, facet, ord) VALUES ($1, 'pacing', 9)", VOCAB)
+    await _term(world.db, "slow-burn", "pacing", "slow-burn")
+    await _term(world.db, "atmos", "mood", "atmospheric")
+    for title_id in (1015, 1016, 1017, 1030, 1031, 1032, 1033):
+        await _tag(world.db, title_id, "slow-burn", "pacing", 2)
+        await _tag(world.db, title_id, "atmos", "mood", 2)
+    await world.db.execute(
+        "UPDATE user_title SET played_at = now() WHERE user_id = $1 AND title_id IN (1015, 1016, 1017)",
+        world.patrick,
+    )
+    head = {"shelves": [], "more": {"day": shelves.notices.today().isoformat()}}
+
+    def terms(rest):
+        return [{t["term"] for t in x["why_terms"]} for s in rest["shelves"]
+                if s["id"] in ("taste_term", "rewatch_term") for x in s["sections"]]
+
+    other_kind = await world.rows(head, kinds=("movie",), named=["series:slow-burn", "series:atmos"])
+    assert {"slow-burn", "atmos"} in terms(other_kind)
+    same_kind = await world.rows(head, kinds=("movie",), named=["movie:slow-burn", "movie:atmos"])
+    assert not any(t & {"slow-burn", "atmos"} for t in terms(same_kind)), terms(same_kind)
+
+
+async def test_hidden_gems_rank_the_crowd_among_crowd_rated_titles_only(world):
+    await world.db.execute("UPDATE title_prior SET item_n = 0 WHERE title_id BETWEEN 1001 AND 1020")
+    await world.db.execute("UPDATE title_prior SET item_n = 5 WHERE title_id BETWEEN 1029 AND 1037")
+    await world.db.execute(
+        "UPDATE user_score SET score = 0.465 WHERE user_id = $1 AND title_id BETWEEN 1029 AND 1037",
+        world.patrick,
+    )
+    row = world.section(await world.home(kinds=("movie",)), "hidden_gems", "movie")
+    assert row is not None
+    assert {c["title_id"] for c in row["items"]} <= set(range(1029, 1038))
+
+
+async def test_the_rows_read_refuses_ids_beyond_int32_and_an_unbounded_list(world):
+    query = [("kind", "movie"), ("day", "2026-10-03")]
+    for bad in ([("shown", 2**31)], [("shown", 0)], [("shown", i) for i in range(1, 2000)],
+                [("named", f"movie:t{i}") for i in range(500)]):
+        response = await world.client.get("/api/home/rows", params=query + bad)
+        assert response.status_code == 422, (bad[:1], response.text)
+    response = await world.client.get("/api/home/rows", params=query + [("shown", 2**31 - 1)])
+    assert response.status_code == 200, response.text
 
 
 async def test_hidden_gems_are_little_rated_and_close_to_your_taste(world):

@@ -16,8 +16,19 @@ export function loadHome(kinds) {
 }
 
 // The rows below the head (decision 563): that day's plan, none of the titles the head shows.
-export function loadHomeRows(kinds, day, shown) {
-  return get(`/home/rows${qs({ kind: kinds, day, shown })}`);
+export function loadHomeRows(kinds, day, shown, named = []) {
+  return get(`/home/rows${qs({ kind: kinds, day, shown, named })}`);
+}
+
+const TERM_ROWS = new Set(['taste_term', 'rewatch_term']);
+
+// The terms the head's term rows named, per kind, so the rows below name others.
+export function namedTerms(payload) {
+  return (payload?.shelves ?? [])
+    .filter((shelf) => TERM_ROWS.has(shelf.id))
+    .flatMap((shelf) =>
+      (shelf.sections ?? []).flatMap((s) => (s.why_terms ?? []).map((t) => `${s.kind}:${t.term}`))
+    );
 }
 
 export function shownIds(payload) {

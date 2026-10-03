@@ -19,6 +19,7 @@ import {
   matchStrength,
   otherKinds,
   partitionLine,
+  namedTerms,
   plural,
   searchPlaceholder,
   shelfRows,
@@ -222,6 +223,22 @@ describe('the two reads of Home (decision 563)', () => {
   it('lists every card the head shows', () => {
     expect(shownIds(head)).toEqual([1, 2, 3]);
     expect(shownIds(null)).toEqual([]);
+  });
+
+  it("names the head's term-row terms by kind, and no other row's", () => {
+    const term = (t) => ({ term: t, facet: t.split('.')[0] });
+    const withTerms = {
+      shelves: [
+        { id: 'taste_term', sections: [{ kind: 'movie', why_terms: [term('mood.cosy'), term('era.wwii')] }] },
+        { id: 'rewatch_term', sections: [{ kind: 'series', why_terms: [term('themes.heist'), term('place.sea')] }] },
+        { id: 'because_anchor', sections: [{ kind: 'movie', why_terms: [term('mood.dark')] }] }
+      ]
+    };
+    expect(namedTerms(withTerms)).toEqual([
+      'movie:mood.cosy', 'movie:era.wwii', 'series:themes.heist', 'series:place.sea'
+    ]);
+    expect(namedTerms(head)).toEqual([]);
+    expect(namedTerms(null)).toEqual([]);
   });
 
   it('appends the rest below the head, counts it, and has no more to read', () => {
