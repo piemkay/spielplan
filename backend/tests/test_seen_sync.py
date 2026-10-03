@@ -1253,6 +1253,11 @@ async def test_the_apps_own_write_is_not_a_play_but_a_rewatch_after_it_is(db, wo
     await seen.sync_user(db, world["client"], _linked(world), seen.SyncReport())
     assert await _played_at(db, patrick, 1) is None
 
+    # Jellyfin's clock may run a few minutes off the database's.
+    module.state.last_played[(PATRICK_JF, "jf-1")] = _jf_date(now - timedelta(minutes=45))
+    await seen.sync_user(db, world["client"], _linked(world), seen.SyncReport())
+    assert await _played_at(db, patrick, 1) is None
+
     rewatch = (now - timedelta(minutes=10)).replace(microsecond=0)
     module.state.last_played[(PATRICK_JF, "jf-1")] = _jf_date(rewatch)
     await seen.sync_user(db, world["client"], _linked(world), seen.SyncReport())

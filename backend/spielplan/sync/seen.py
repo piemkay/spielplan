@@ -11,7 +11,7 @@ import logging
 from collections import Counter
 from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any
 
 import asyncpg
@@ -56,6 +56,8 @@ PUSH_BUSY_REASON = "another write for this title is in flight"
 
 # A local day carrying this many of one member's LastPlayedDates is a bulk mark, not plays (decision 562).
 BULK_DAY = 10
+# Jellyfin runs on its own host: its stamp of the app's own Played write may drift this far.
+PUSH_SKEW = timedelta(minutes=10)
 
 # An outage logs once (§3.3). The sweep boundary stays the database's `now()`, never this clock.
 _outage = Outage(log)
@@ -556,7 +558,7 @@ async def sync_user(
         if last is not None and row is not None:
             own_write = (
                 row["jf_synced_at"] is not None
-                and row["state_changed_at"] <= last <= row["jf_synced_at"]
+                and row["state_changed_at"] - PUSH_SKEW <= last <= row["jf_synced_at"] + PUSH_SKEW
             )
             if not own_write:
                 await conn.execute(
