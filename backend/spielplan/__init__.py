@@ -4,4 +4,4 @@ Spec: docs/spielplan-spec_v2.1.md. Every non-obvious decision in this package ci
 section that mandates it; if the code and the spec disagree, the spec wins.
 """
 
-__version__ = "1.2.0"
+__version__ = "1.3.0"
