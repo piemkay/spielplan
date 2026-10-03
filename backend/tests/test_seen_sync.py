@@ -1280,6 +1280,23 @@ async def test_a_play_date_never_moves_backwards(db, world):
     assert await _played_at(db, patrick, 1) == now - timedelta(days=1)
 
 
+async def test_no_play_date_is_read_while_a_push_is_owed(db, world):
+    """An owed row's Jellyfin date may be the app's own earlier write; it is not a play (decision 562)."""
+    module, patrick = world["module"], world["patrick"]
+    now = await db.fetchval("SELECT now()")
+    await db.execute(
+        "INSERT INTO user_title (user_id, title_id, state, state_changed_at) "
+        "VALUES ($1, 1, 'seen', $2)",
+        patrick, now - timedelta(hours=1),
+    )
+    module.state.played[PATRICK_JF].add("jf-1")
+    module.state.last_played[(PATRICK_JF, "jf-1")] = _jf_date(now - timedelta(days=3))
+
+    await seen.sync_user(db, world["client"], _linked(world), seen.SyncReport())
+
+    assert await _played_at(db, patrick, 1) is None
+
+
 async def test_a_bulk_marked_day_is_not_a_play(db, world, monkeypatch):
     """Ten or more of one member's dates on one local day is a bulk mark (decision 562)."""
     monkeypatch.setattr(seen, "BULK_DAY", 3)

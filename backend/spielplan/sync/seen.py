@@ -549,23 +549,22 @@ async def sync_user(
     for title_id, (copies, jf_seen, last) in collapsed.items():
         kind = resolved.kinds.get(title_id)
         row = await conn.fetchrow(
-            "SELECT state, state_changed_at, jf_synced_at FROM user_title "
+            "SELECT state, state_changed_at, jf_synced_at, played_at FROM user_title "
             "WHERE user_id = $1 AND title_id = $2",
             user.app_user_id, title_id,
         )
         if last is not None and per_day[last.astimezone(zone).date()] >= BULK_DAY:
             last = None
-        if last is not None and row is not None:
-            own_write = (
-                row["jf_synced_at"] is not None
-                and row["state_changed_at"] - PUSH_SKEW <= last <= row["jf_synced_at"] + PUSH_SKEW
+        # While a push is owed (`jf_synced_at` NULL) an earlier write's stamp would read as a real play.
+        if (
+            last is not None and row is not None and row["jf_synced_at"] is not None
+            and (row["played_at"] is None or row["played_at"] < last)
+            and not row["state_changed_at"] - PUSH_SKEW <= last <= row["jf_synced_at"] + PUSH_SKEW
+        ):
+            await conn.execute(
+                "UPDATE user_title SET played_at = $3 WHERE user_id = $1 AND title_id = $2",
+                user.app_user_id, title_id, last,
             )
-            if not own_write:
-                await conn.execute(
-                    "UPDATE user_title SET played_at = $3 WHERE user_id = $1 AND title_id = $2 "
-                    "AND (played_at IS NULL OR played_at < $3)",
-                    user.app_user_id, title_id, last,
-                )
 
         if row is None:
             if jf_seen and title_id not in open_prompts:
