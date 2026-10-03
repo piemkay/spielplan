@@ -16961,7 +16961,7 @@ app's write window alone reads the 2026-09-29 dates as real plays.
    that member's play dates in one sweep's read; a confirmed finish (§7.3) stamps its time. It only
    moves forward, and NULL reads as long ago.
 3. A real play holds a title out of the rewatch rows for 12 months.
-4. The rewatch rows are Watch again, Watch again with {other}, and "{label} & {label}, again".
+4. The rewatch rows are Watch again, Watch again with {other}, and "{label} & {label}, again" (a comma where a label carries its own "&").
 
 The spec is amended in place (v2.1.21): §4.2, §6.0, §7.3.
 
@@ -16988,7 +16988,7 @@ new row about 200 ms a kind, so the rows below the fold come by a second read.
    avoid set, never showing the partner's step. This departs from decision 552 at the owner's
    choice.
 5. Up to fifteen rows a kind: the first Because row and Your top picks lead, Watch again is
-   fourth, New in the library and Worth getting close, and the rest come in the day's order, dealt
+   fourth, the other two rewatch rows ninth and twelfth, New in the library and Worth getting close, and the rest come in the day's order, dealt
    so two rows of one family never touch; the same member sees the same Home all day. The claim
    and the floor of three hold on every row.
 6. The first five rows come with Home; the rest by a second read that leaves out what the first
