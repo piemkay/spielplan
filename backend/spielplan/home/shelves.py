@@ -896,7 +896,8 @@ async def _term_pair(
             f"{_thinned_by(ctx)}",
         )
     first, second, ids = pair
-    title = f"{first.name} & {second.name}"
+    # Labels such as "twists & turns" carry their own ampersand.
+    title = f"{first.name}{', ' if '&' in first.name + second.name else ' & '}{second.name}"
     title = title[:1].upper() + title[1:]
     if again:
         order = sorted(ids, key=lambda i: _daily(ctx.user_id, ctx.day, f"title:{i}"))
@@ -1382,8 +1383,10 @@ FAMILIES = {
 # Decision 563: the families dealt in the day's order, with their rows; one row unless named.
 MIDDLE: tuple[str, ...] = (
     "because_anchor", "taste_term", "never_watched_term", "shared_sweet_spot", "hidden_gems",
-    "acclaimed", "partner_loved", "school_night", "rewatch_together", "rewatch_term",
+    "acclaimed", "partner_loved", "school_night",
 )
+# The rows of seen titles after Watch again sit lower, apart, so Home leads with unseen ones.
+LATE_REWATCH: tuple[tuple[str, int], ...] = (("rewatch_together", 8), ("rewatch_term", 11))
 MIDDLE_ROWS = {"because_anchor": range(1, BECAUSE_ROWS), "taste_term": range(TASTE_ROWS)}
 TAIL: tuple[str, ...] = ("new_in_library", "worth_getting")
 # Decision 562: the only rows of seen titles.
@@ -1416,6 +1419,9 @@ def plan(user_id: int, day: str) -> list[tuple[str, int]]:
                 del left[family]
     steps = [("because_anchor", 0), ("top_of_ledger", 0), *middle]
     steps.insert(3, ("watch_again", 0))
+    late = sorted((f for f, _ in LATE_REWATCH), key=lambda f: _daily(user_id, day, f))
+    for family, (_, at) in zip(late, LATE_REWATCH, strict=True):
+        steps.insert(min(at, len(steps)), (family, 0))
     return steps + [(family, 0) for family in TAIL]
 
 

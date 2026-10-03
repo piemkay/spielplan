@@ -1434,6 +1434,9 @@ def test_the_plan_pins_the_head_watch_again_and_the_tail_and_keeps_families_apar
         assert sum(f == "taste_term" for f, _ in steps) == shelves.TASTE_ROWS
         families = [f for f, _ in steps]
         assert all(a != b for a, b in zip(families, families[1:], strict=False)), families
+        seen_at = [i for i, f in enumerate(families) if f in shelves.REWATCH]
+        assert seen_at[0] == 3 and min(seen_at[1:]) >= 8
+        assert all(b - a > 1 for a, b in zip(seen_at, seen_at[1:], strict=False))
 
 
 def test_the_plan_holds_for_a_day_and_changes_by_the_day():
