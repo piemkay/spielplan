@@ -22,8 +22,8 @@ TERMS = {
     **{f"themes.t{g:02d}": f"T{g:02d}" for g in range(1, 13)},
 }
 
-# Twelve groups of four films, group g carrying term t{g+1}. These steps average 3 over all 48.
-GROUP_STEPS = (6, 6, 5, 5, 4, 4, 2, 2, 1, 1, 0, 0)
+# Twelve groups of four films, group g carrying term t{g+1}. These steps average 2.5 over all 48.
+GROUP_STEPS = (5, 5, 4, 4, 3, 3, 2, 2, 1, 1, 0, 0)
 
 
 @pytest.fixture
@@ -73,8 +73,8 @@ def terms(rows) -> list[str]:
     return [r["term"] for r in rows]
 
 
-# Eight films, mean step 27/8.
-EIGHT = {1: 6, 2: 6, 3: 5, 4: 4, 5: 3, 6: 2, 7: 1, 8: 0}
+# Eight films, mean step 22/8.
+EIGHT = {1: 5, 2: 5, 3: 4, 4: 3, 5: 2, 6: 2, 7: 1, 8: 0}
 
 
 async def test_a_term_needs_four_carriers(world):
@@ -114,24 +114,24 @@ async def test_two_providers_tagging_one_film_count_it_once(world):
 async def test_a_term_sits_high_or_low_against_the_persons_own_mean(world):
     user = await insert_user(world, "patrick", "admin")
     await place(world, user, EIGHT)
-    await tag(world, "mood.dark", (1, 2, 3, 4))          # mean 5.25: the strongest
-    await tag(world, "themes.heist", (4, 6, 7, 8))       # mean 1.75
-    await tag(world, "pacing.slow_burn", (2, 4, 6, 8))   # mean 3.0, just under 3.375
+    await tag(world, "mood.dark", (1, 2, 3, 4))          # mean 4.25: the strongest
+    await tag(world, "themes.heist", (4, 6, 7, 8))       # mean 1.5
+    await tag(world, "pacing.slow_burn", (2, 4, 6, 8))   # mean 2.5, just under 2.75
 
     read = await chart.chart(world, user_id=user, kind="movie")
     pos = {r["term"]: r["pos"] for r in read["all"]}
 
     assert pos["mood.dark"] == 0.9
-    assert pos["themes.heist"] == pytest.approx(-0.9 * 1.625 / 1.875, abs=1e-4)
-    assert pos["pacing.slow_burn"] == pytest.approx(-0.9 * 0.375 / 1.875, abs=1e-4)
+    assert pos["themes.heist"] == pytest.approx(-0.9 * 1.25 / 1.5, abs=1e-4)
+    assert pos["pacing.slow_burn"] == pytest.approx(-0.9 * 0.25 / 1.5, abs=1e-4)
     assert terms(read["high"]) == ["mood.dark"]
     assert terms(read["low"]) == ["themes.heist", "pacing.slow_burn"]
 
 
 async def test_a_tie_goes_to_more_carriers_then_the_label(world):
     user = await insert_user(world, "patrick", "admin")
-    # Mean 3: four films at 6, four at 0, four at 3.
-    await place(world, user, {**dict.fromkeys(range(1, 5), 6), **dict.fromkeys(range(5, 9), 0),
+    # Mean 3: four films at 5, four at 1, four at 3.
+    await place(world, user, {**dict.fromkeys(range(1, 5), 5), **dict.fromkeys(range(5, 9), 1),
                               **dict.fromkeys(range(9, 13), 3)})
     await tag(world, "mood.dark", (1, 2, 3, 4))
     await tag(world, "pacing.slow_burn", (1, 9, 10, 11))
@@ -161,7 +161,7 @@ async def test_five_sit_high_and_five_land_lowest_first(world):
 
 async def test_posters_lead_with_the_highest_placed_on_a_high_row_and_the_lowest_on_a_low_one(world):
     user = await insert_user(world, "patrick", "admin")
-    await place(world, user, {1: 6, 2: 6, 3: 5, 4: 4, 5: 3, 6: 0, 7: 0, 8: 0, 9: 0, 10: 1})
+    await place(world, user, {1: 5, 2: 5, 3: 4, 4: 3, 5: 3, 6: 0, 7: 0, 8: 0, 9: 0, 10: 1})
     # Within a step, the person's own Rank order.
     await world.executemany(
         "INSERT INTO ledger_state (user_id, title_id, kind, s, sigma) VALUES ($1, $2, 'movie', $3, 1)",
@@ -183,8 +183,8 @@ async def test_posters_lead_with_the_highest_placed_on_a_high_row_and_the_lowest
 
 async def test_a_terms_films_split_at_the_persons_middle_each_in_their_own_order(world):
     user = await insert_user(world, "patrick", "admin")
-    # Mean step 2.5.
-    await place(world, user, {1: 6, 2: 6, 3: 5, 4: 4, 5: 3, 6: 0, 7: 0, 8: 0, 9: 0, 10: 1})
+    # Mean step 2.1.
+    await place(world, user, {1: 5, 2: 5, 3: 4, 4: 3, 5: 3, 6: 0, 7: 0, 8: 0, 9: 0, 10: 1})
     await world.executemany(
         "INSERT INTO ledger_state (user_id, title_id, kind, s, sigma) VALUES ($1, $2, 'movie', $3, 1)",
         [(user, 1, 0.5), (user, 2, 1.0)],
@@ -204,7 +204,7 @@ async def test_a_terms_films_split_at_the_persons_middle_each_in_their_own_order
 async def test_films_and_series_are_read_apart(world):
     user = await insert_user(world, "patrick", "admin")
     await place(world, user, EIGHT)
-    await place(world, user, {101: 6, 102: 0, 103: 0, 104: 0, 105: 0})
+    await place(world, user, {101: 5, 102: 0, 103: 0, 104: 0, 105: 0})
     await tag(world, "mood.dark", (1, 2, 3, 4))
     await tag(world, "mood.cosy", (102, 103, 104, 105))
 
@@ -265,7 +265,7 @@ async def pair(db) -> dict[str, int]:
     """Jenny and Lena placed the same 48 films, read on twelve terms; Patrick placed none."""
     who = {name: await insert_user(db, name) for name in ("jenny", "lena", "patrick")}
     await place(db, who["jenny"], groups())
-    await place(db, who["lena"], groups((6, 0, 5, 1, 4, 2, 2, 4, 1, 5, 0, 6)))
+    await place(db, who["lena"], groups((5, 0, 4, 1, 3, 2, 2, 3, 1, 4, 0, 5)))
     await tag_groups(db)
     return who
 
@@ -276,7 +276,8 @@ async def test_compare_names_where_two_members_part_and_where_they_meet(world):
     read = await chart.compare(world, viewer_id=who["jenny"], kind="movie", a=who["jenny"], b=who["lena"])
 
     assert terms(read["different"]) == [f"themes.t{g:02d}" for g in (2, 12, 4, 10, 6)]
-    assert terms(read["alike"]) == [f"themes.t{g:02d}" for g in (1, 3, 5, 7, 9)]
+    # t05 and t07 sit near both middles, so they follow the terms that sit clearly high or low.
+    assert terms(read["alike"]) == [f"themes.t{g:02d}" for g in (1, 3, 9, 11, 5)]
     assert read["note"] is None
     t02 = next(r for r in read["all"] if r["term"] == "themes.t02")
     assert (t02["pa"], t02["pb"]) == (0.9, -0.9)
@@ -286,7 +287,7 @@ async def test_compare_names_where_two_members_part_and_where_they_meet(world):
 async def test_the_films_behind_a_term_go_only_to_the_two_compared_in_the_viewers_order(world):
     who = await pair(world)
     # On t01 Jenny puts film 4 above films 1-3; Lena placed the four alike.
-    await place(world, who["jenny"], {1: 5, 2: 5, 3: 5})
+    await place(world, who["jenny"], {1: 4, 2: 4, 3: 4})
 
     seated = await chart.compare(
         world, viewer_id=who["jenny"], kind="movie", a=who["lena"], b=who["jenny"]
@@ -306,8 +307,8 @@ async def test_a_terms_films_on_compare_are_those_both_placed_in_each_viewers_ow
     who = await pair(world)
     jenny, lena = who["jenny"], who["lena"]
     # On t01 Jenny puts film 4 above films 1-3 and Lena places the four alike; each placed one alone.
-    await place(world, jenny, {1: 5, 2: 5, 3: 5, 49: 6})
-    await place(world, lena, {50: 6})
+    await place(world, jenny, {1: 4, 2: 4, 3: 4, 49: 5})
+    await place(world, lena, {50: 5})
     await tag(world, "themes.t01", (49, 50))
 
     def read(viewer: int, a: int = lena, b: int = jenny, term: str = "themes.t01"):
@@ -355,7 +356,7 @@ async def test_no_payload_carries_another_members_steps_letters_or_counts(world,
     p, j = await ids(patrick), await ids(jenny)
     lena = await insert_user(world, "lena")
     await place(world, j, groups())
-    await place(world, lena, groups((6, 0, 5, 1, 4, 2, 2, 4, 1, 5, 0, 6)))
+    await place(world, lena, groups((5, 0, 4, 1, 3, 2, 2, 3, 1, 4, 0, 5)))
     await tag_groups(world)
 
     for client in (patrick, jenny):
@@ -377,7 +378,7 @@ async def test_a_terms_whole_film_list_goes_to_its_reader_and_to_no_one_outside_
     j = await ids(jenny)
     lena = await insert_user(world, "lena")
     await place(world, j, groups())
-    await place(world, lena, groups((6, 0, 5, 1, 4, 2, 2, 4, 1, 5, 0, 6)))
+    await place(world, lena, groups((5, 0, 4, 1, 3, 2, 2, 3, 1, 4, 0, 5)))
     await tag_groups(world)
     params = {"kind": "movie", "a": j, "b": lena, "term": "themes.t01"}
 
@@ -407,5 +408,5 @@ async def test_the_numbers_behind_a_row_wait_for_show_the_numbers(world, app):
     on = (await patrick.get("/api/taste", params={"kind": "movie"})).json()
 
     assert "model" not in off["all"][0]
-    assert on["all"][0]["model"] == {"d": 1.875, "carriers": 4}
+    assert on["all"][0]["model"] == {"d": 1.5, "carriers": 4}
     assert (await patrick.get("/api/taste", params={"kind": "both"})).status_code == 422

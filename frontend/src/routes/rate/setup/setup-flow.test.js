@@ -20,8 +20,8 @@ import SetupPage from './+page.svelte';
 
 const HINT = "Films you've watched first, then popular ones. Tap the ones you remember well.";
 const STEPS = [
-  { tier: 6, word: 'All-time favourite', hint: HINT },
-  { tier: 5, word: 'Loved it', hint: HINT }
+  { tier: 5, word: 'All-time favourite', hint: HINT },
+  { tier: 4, word: 'Excellent', hint: HINT }
 ];
 const film = (id, name, seen = false) => ({ id, name, year: 2000, poster_path: null, seen });
 const FILMS = [film(1, 'Heat', true), film(2, 'Zodiac'), film(3, 'Sicario')];
@@ -49,9 +49,9 @@ beforeEach(() => {
       done: true,
       placed: 2,
       tiers: [
-        { tier: 6, word: 'All-time favourite', count: 1, first: { id: 1, name: 'Heat', poster_path: null } },
-        { tier: 5, word: 'Loved it', count: 1, first: { id: 2, name: 'Zodiac', poster_path: null } },
-        { tier: 4, word: 'Liked it', count: 0, first: null }
+        { tier: 5, word: 'All-time favourite', count: 1, first: { id: 1, name: 'Heat', poster_path: null } },
+        { tier: 4, word: 'Excellent', count: 1, first: { id: 2, name: 'Zodiac', poster_path: null } },
+        { tier: 3, word: 'Very good', count: 0, first: null }
       ],
       earlier_ratings: 4,
       rated_before: 3
@@ -161,7 +161,7 @@ describe('the set-up, step by step', () => {
 
     await click($('setup-next'));
     expect(target.textContent).toContain('Step 2 of 2');
-    expect($('setup-step').textContent).toBe('Loved it');
+    expect($('setup-step').textContent).toBe('Excellent');
     expect($('setup-strip').textContent).toContain('Not quite these · All-time favourite');
     expect($('setup-strip').querySelectorAll('[data-testid="rate-poster"]')).toHaveLength(1);
     expect(cell('Heat'), "an earlier step's pick leaves this list").toBeUndefined();
@@ -245,7 +245,7 @@ describe('the set-up, step by step', () => {
     await click($('setup-next'));
     await click(cell('Zodiac'));
     await click($('setup-finish'));
-    expect(posted.at(-1)).toEqual({ picks: [{ title_id: 1, tier: 6 }, { title_id: 2, tier: 5 }] });
+    expect(posted.at(-1)).toEqual({ picks: [{ title_id: 1, tier: 5 }, { title_id: 2, tier: 4 }] });
 
     const done = $('setup-done');
     expect(done.querySelector('h2').textContent).toBe('Your ladder is ready');
@@ -255,7 +255,7 @@ describe('the set-up, step by step', () => {
     );
     const rungs = [...done.querySelectorAll('li')];
     expect(rungs.map((li) => li.querySelector('.rung-word').textContent)).toEqual([
-      'All-time favourite', 'Loved it', 'Liked it'
+      'All-time favourite', 'Excellent', 'Very good'
     ]);
     expect(rungs[0].textContent).toContain('1 film');
     expect(rungs[0].querySelector('[data-testid="rate-poster"]').getAttribute('data-title-id')).toBe('1');

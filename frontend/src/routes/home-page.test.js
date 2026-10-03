@@ -406,7 +406,7 @@ describe('the top of Home (decision 528)', () => {
 describe('before the set-up (decision 550)', () => {
   const notice = {
     headline: 'Set up your ladder.',
-    why: 'Rating is one tap now, on seven steps of your own. The set-up takes about a minute',
+    why: 'Rating is one tap now, on six steps of your own. The set-up takes about a minute',
     cta: { label: 'Set up my ladder', route: '/rate/setup' }
   };
   const section = {

@@ -655,7 +655,7 @@ async def test_a_refit_over_an_empty_observation_set_empties_the_board_it_cannot
     await db.execute("UPDATE title SET is_owned = true")
     for title_id, value in LABELS:
         await observations.record_verdict(db, user_id=user_id, title_id=title_id, value=value)
-    for title_id, tier in ((1, 6), (2, 5), (3, 3), (4, 0), (5, 2)):
+    for title_id, tier in ((1, 5), (2, 4), (3, 3), (4, 0), (5, 2)):
         await observations.record_tier_edit(db, user_id=user_id, title_id=title_id, tier=tier)
     assert (await refit.refit_user(db, user_id=user_id, kind="movie", hp=DEFAULTS)).fitted
     fitted_cuts = [

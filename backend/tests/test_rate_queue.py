@@ -474,7 +474,7 @@ async def test_films_rated_before_the_set_up_come_first_behind_a_pin_newest_answ
     sentence that never names the old answer; before it, nothing is "rated before"."""
     patrick = world["patrick"]
     await observations.record_verdict(db, user_id=patrick, title_id=3, value=0)
-    await observations.record_tier_edit(db, user_id=patrick, title_id=7, tier=6)
+    await observations.record_tier_edit(db, user_id=patrick, title_id=7, tier=5)
     await db.execute("UPDATE verdict SET created_at = now() - interval '2 days'")
     await db.execute("UPDATE tier_edit SET created_at = now() - interval '1 day'")
     before = await queue.next_cards(db, user_id=patrick, kind="movie", limit=8, reask_rate=0.0)
@@ -494,7 +494,7 @@ async def test_films_rated_before_the_set_up_come_first_behind_a_pin_newest_answ
     assert [c.title_id for c in pinned] == [1, 7, 3]
 
     # A new step takes a film off the list, and so does Not seen (plan reading 12).
-    await ladder.place(db, user_id=patrick, title_id=7, tier=5)
+    await ladder.place(db, user_id=patrick, title_id=7, tier=4)
     await observations.record_not_seen(db, user_id=patrick, title_id=3)
     after = await queue.next_cards(db, user_id=patrick, kind="movie", limit=8, reask_rate=0.0)
     assert not {7, 3} & {c.title_id for c in after}

@@ -121,8 +121,10 @@ def test_no_other_starting_point_finds_a_lower_objective(fits):
     rng = np.random.default_rng(99)
     # A budget of nothing, which `hyperparams.load` would refuse: it only answers "did the start arrive".
     idle = dataclasses.replace(DEFAULTS, newton_max_iter=0, steps=0)
+    # Optima, not budgets: stage B's default budget stops some duel-heavy boards short.
+    full = dataclasses.replace(DEFAULTS, steps=1000)
     worse, unread = [], []
-    for i, (obs, f) in enumerate(fits[:40]):
+    for i, (obs, _) in enumerate(fits[:40]):
         lay = model._Layout(obs.n, obs.n_levels)
         cuts = np.sort(rng.normal(scale=1.5, size=lay.n_cuts))
         gamma = np.sort(rng.normal(scale=1.5, size=2))
@@ -139,9 +141,10 @@ def test_no_other_starting_point_finds_a_lower_objective(fits):
                 f"board {i}: started at mu={mu0!r}, a fit of no steps reports {idled.mu!r}"
             )
 
-        other = model.fit(obs, DEFAULTS, z0=z0, r0=r0)
-        if other.objective < f.objective - 1e-6 * max(1.0, abs(f.objective)):
-            worse.append(f"board {i}: default {f.objective:.6f} vs {other.objective:.6f}")
+        best = model.fit(obs, full)
+        other = model.fit(obs, full, z0=z0, r0=r0)
+        if other.objective < best.objective - 1e-6 * max(1.0, abs(best.objective)):
+            worse.append(f"board {i}: default {best.objective:.6f} vs {other.objective:.6f}")
     assert not unread, f"fit did not start where it was told to: {unread[:4]}"
     assert not worse, f"a different start found a better optimum: {worse[:4]}"
 

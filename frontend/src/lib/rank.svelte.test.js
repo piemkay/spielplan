@@ -47,10 +47,10 @@ const HEIST = { id: 'themes.heist', label: 'heist', facet: 'themes', mode: 'out'
 
 const board = (over = {}) => ({
   kind: 'movie',
-  tier_set: ['F', 'D', 'C', 'B', 'A', 'A+', 'S'],
+  tier_set: ['E', 'D', 'C', 'B', 'A', 'S'],
   tiers: [
     {
-      index: 6,
+      index: 5,
       label: 'S',
       word: 'All-time favourite',
       entries: [
@@ -58,20 +58,19 @@ const board = (over = {}) => ({
           title_id: 1,
           name: 'Heat',
           year: 1995,
-          tier: 6,
+          tier: 5,
           assigned_tier: null,
-          straddle: 5,
-          straddle_badge: 'S or A+?',
+          straddle: 4,
+          straddle_badge: 'S or A?',
           badge: 'S — the only one',
           tension: null
         }
       ]
     },
-    { index: 5, label: 'A+', word: 'Loved it', entries: [] },
     {
       index: 4,
       label: 'A',
-      word: 'Liked it',
+      word: 'Excellent',
       entries: [
         {
           title_id: 2,
@@ -96,7 +95,8 @@ const board = (over = {}) => ({
           tension: null
         }
       ]
-    }
+    },
+    { index: 3, label: 'B', word: 'Very good', entries: [] }
   ],
   rated: 3,
   rated_total: 3,
@@ -167,11 +167,11 @@ function held(payload) {
 
 describe('the board comes from the server', () => {
   it('replaces the tiers wholesale rather than merging them', async () => {
-    respond(board({ tiers: [{ index: 0, label: 'F', entries: [] }], rated: 0, rated_total: 0 }));
+    respond(board({ tiers: [{ index: 0, label: 'E', entries: [] }], rated: 0, rated_total: 0 }));
     respond(board());
     await load('movie');
     expect(rank.tiers).toHaveLength(1);
-    expect(rank.tiers[0].label).toBe('F');
+    expect(rank.tiers[0].label).toBe('E');
   });
 
   it('reads decision 117 as an absence, not an empty object', async () => {
@@ -210,7 +210,7 @@ describe('a move (decision 528)', () => {
 
   it('undoes by taking the tier back, naming no neighbour and the edit it undoes', async () => {
     respond({ ...board(), tier_edit_id: 41 });
-    await move(rank.tiers[2].entries[1], 6, 1, null);
+    await move(rank.tiers[1].entries[1], 5, 1, null);
     respond(board());
     await toast.action();
     expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({
@@ -243,14 +243,14 @@ describe('a move (decision 528)', () => {
 
   it('offers no undo for a new spot in the same tier', async () => {
     respond(board());
-    await move(rank.tiers[2].entries[0], 4, 3, null);
+    await move(rank.tiers[1].entries[0], 4, 3, null);
     expect(toast.message).toBe('Drive moved to A');
     expect(toast.actionLabel).toBe('');
   });
 
   it('writes nothing when the title stays where it is', async () => {
-    await move(rank.tiers[0].entries[0], 6);
-    await move(rank.tiers[2].entries[0], 4, null, 3);
+    await move(rank.tiers[0].entries[0], 5);
+    await move(rank.tiers[1].entries[0], 4, null, 3);
     expect(fetchMock).not.toHaveBeenCalled();
     expect(toast.message).toBe('');
   });
@@ -264,8 +264,8 @@ describe('a move (decision 528)', () => {
 });
 
 describe('a move from a title card off Rank (decision 531)', () => {
-  const heat = { title_id: 1, name: 'Heat', kind: 'series', tier: 6 };
-  const tierC = { index: 2, label: 'C', word: 'Not really for me' };
+  const heat = { title_id: 1, name: 'Heat', kind: 'series', tier: 5 };
+  const tierC = { index: 2, label: 'C', word: 'Good' };
 
   it('drops the title for its own kind and leaves the board on Rank alone', async () => {
     const before = JSON.stringify(rank.tiers);
@@ -279,11 +279,11 @@ describe('a move from a title card off Rank (decision 531)', () => {
 
     respond(board());
     await toast.action();
-    expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({ title_id: 1, tier: 6, undoes: 52 });
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({ title_id: 1, tier: 5, undoes: 52 });
   });
 
   it('offers no Undo for a first placement, and writes nothing for the tier it holds', async () => {
-    expect(await cardMove(heat, { index: 6, label: 'S' })).toBe(false);
+    expect(await cardMove(heat, { index: 5, label: 'S' })).toBe(false);
     expect(fetchMock).not.toHaveBeenCalled();
     respond(board());
     await cardMove({ ...heat, tier: null }, tierC);
@@ -306,7 +306,7 @@ describe('the neighbours a drop lands between', () => {
   });
 
   it('names none when the tier is empty', () => {
-    expect(neighboursAt(5, { title_id: 1 }, 0)).toEqual({ above: null, below: null });
+    expect(neighboursAt(3, { title_id: 1 }, 0)).toEqual({ above: null, below: null });
   });
 
   it('counts the spots without the title being dropped', () => {
@@ -566,9 +566,9 @@ describe("the search field's placeholder carries the count (decision 528)", () =
 describe('a tier pages (decision 528)', () => {
   const paged = () =>
     board({
-      tiers: [{ index: 6, label: 'S', word: 'All-time favourite', count: 3, entries: [board().tiers[0].entries[0]] }]
+      tiers: [{ index: 5, label: 'S', word: 'All-time favourite', count: 3, entries: [board().tiers[0].entries[0]] }]
     });
-  const rest = { index: 6, count: 3, offset: 1, entries: [{ title_id: 7 }, { title_id: 8 }] };
+  const rest = { index: 5, count: 3, offset: 1, entries: [{ title_id: 7 }, { title_id: 8 }] };
 
   it('asks for the first entries of each tier, and for the rest once one is opened', async () => {
     rank.perTier = 8;
@@ -579,23 +579,23 @@ describe('a tier pages (decision 528)', () => {
 
     respond(paged());
     respond(rest);
-    await showAll(6);
+    await showAll(5);
     const tierRead = fetchMock.mock.calls[2][0];
     expect(tierRead).toContain('/api/rank/tier?');
-    expect(tierRead).toContain('index=6');
+    expect(tierRead).toContain('index=5');
     expect(tierRead).toContain('offset=1');
     expect(tierRead).not.toContain('per_tier');
     expect(rank.tiers[0].entries.map((e) => e.title_id)).toEqual([1, 7, 8]);
   });
 
   it('keeps an opened tier whole across a drop, and Show less closes it without a read', async () => {
-    rank.expanded = [6];
+    rank.expanded = [5];
     respond(paged());
     respond(rest);
-    await drop({ title_id: 3, tier: 6 });
+    await drop({ title_id: 3, tier: 5 });
     expect(rank.tiers[0].entries).toHaveLength(3);
 
-    showLess(6);
+    showLess(5);
     expect(rank.expanded).toEqual([]);
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
@@ -628,7 +628,7 @@ describe('a drop', () => {
   it('refuses to start a second one while the first is in flight', async () => {
     const release = held(board());
     const first = drop({ title_id: 1, tier: 0 });
-    await drop({ title_id: 2, tier: 6 });
+    await drop({ title_id: 2, tier: 5 });
     expect(fetchMock).toHaveBeenCalledTimes(1);
     release();
     await first;
@@ -664,7 +664,7 @@ describe('the spot a drop lands in (§6.3)', () => {
   });
 
   it('names only the tier for a drop on its letter', () => {
-    expect(spot('A+', neighboursAt(5, { title_id: 1 }))).toEqual({ chip: 'A+', said: 'In A+.' });
+    expect(spot('B', neighboursAt(3, { title_id: 1 }))).toEqual({ chip: 'B', said: 'In B.' });
   });
 });
 
@@ -701,7 +701,7 @@ describe('overlapping requests', () => {
 
 describe('reset', () => {
   it("forgets one person's board, card, pair and round before the next person's", () => {
-    openTitle(rank.tiers[2].entries[0]);
+    openTitle(rank.tiers[1].entries[0]);
     rank.straddling = 4;
     rank.pair = pairN(1);
     rank.queueOpen = true;
@@ -917,8 +917,8 @@ describe('after an answer the sheet names where both titles sit', () => {
     rank.queueOpen = true;
     rank.pair = pairN(1);
     const placed = [
-      { title_id: 1, name: 'Heat', tier: 6, badge: 'S — just above Drive' },
-      { title_id: 2, name: 'Drive', tier: 6, badge: 'S — just below Heat' }
+      { title_id: 1, name: 'Heat', tier: 5, badge: 'S — just above Drive' },
+      { title_id: 2, name: 'Drive', tier: 5, badge: 'S — just below Heat' }
     ];
     respond({ kind: 'movie', pair: pairN(2), placed });
     respond(board());
@@ -937,7 +937,7 @@ describe('after an answer the sheet names where both titles sit', () => {
 
 describe('a tap opens a title (decision 496)', () => {
   it('opens the card and writes nothing', () => {
-    openTitle(rank.tiers[2].entries[0]);
+    openTitle(rank.tiers[1].entries[0]);
     expect(rank.opened).toBe(2);
     expect(fetchMock).not.toHaveBeenCalled();
     closeTitle();

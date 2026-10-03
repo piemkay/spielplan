@@ -44,24 +44,23 @@ const entry = (over) => ({
 /** One `GET /api/rank` payload, in `api/rank.py::_payload`'s shape. */
 const board = (over = {}) => ({
   kind: 'movie',
-  tier_set: ['F', 'D', 'C', 'B', 'A', 'A+', 'S'],
+  tier_set: ['E', 'D', 'C', 'B', 'A', 'S'],
   tiers: [
     {
-      index: 6,
+      index: 5,
       label: 'S',
       word: 'All-time favourite',
       entries: [
         entry({
-          title_id: 1, name: 'Heat', year: 1995, tier: 6, straddle: 5, straddle_badge: 'S or A+?',
+          title_id: 1, name: 'Heat', year: 1995, tier: 5, straddle: 4, straddle_badge: 'S or A?',
           badge: 'S — the only one'
         })
       ]
     },
-    { index: 5, label: 'A+', word: 'Loved it', entries: [] },
     {
       index: 4,
       label: 'A',
-      word: 'Liked it',
+      word: 'Excellent',
       entries: [
         entry({
           title_id: 2, name: 'Drive', year: 2011, tier: 4, assigned_tier: 4, badge: 'A — just above Prisoners',
@@ -70,10 +69,10 @@ const board = (over = {}) => ({
         entry({ title_id: 3, name: 'Prisoners', year: 2013, tier: 4, badge: 'A — just below Drive' })
       ]
     },
-    { index: 3, label: 'B', word: 'It was fine', entries: [] },
-    { index: 2, label: 'C', word: 'Not really for me', entries: [] },
-    { index: 1, label: 'D', word: "Didn't like it", entries: [] },
-    { index: 0, label: 'F', word: 'Hated it', entries: [] }
+    { index: 3, label: 'B', word: 'Very good', entries: [] },
+    { index: 2, label: 'C', word: 'Good', entries: [] },
+    { index: 1, label: 'D', word: 'OK', entries: [] },
+    { index: 0, label: 'E', word: 'Not for me', entries: [] }
   ],
   rated: 3,
   rated_total: 40,
@@ -256,12 +255,12 @@ describe('the board (decision 528)', () => {
   it('heads each tier with its letter, its word and its count, best first', async () => {
     await open();
     const heads = [...target.querySelectorAll('[data-tier]')].map((t) => t.getAttribute('data-tier'));
-    expect(heads).toEqual(['S', 'A+', 'A', 'B', 'C', 'D', 'F']);
+    expect(heads).toEqual(['S', 'A', 'B', 'C', 'D', 'E']);
     expect($('rank-letter-S').textContent).toBe('S');
-    expect(target.querySelector('#tier-name-6').textContent.trim()).toBe('S All-time favourite');
-    expect($('rank-tier-B').textContent).toContain('It was fine');
+    expect(target.querySelector('#tier-name-5').textContent.trim()).toBe('S All-time favourite');
+    expect($('rank-tier-B').textContent).toContain('Very good');
     expect($('rank-tier-A').textContent).toContain('2 films');
-    expect(target.querySelector('[data-tier="A+"]').textContent).toContain('Nothing here yet');
+    expect(target.querySelector('[data-tier="B"]').textContent).toContain('Nothing here yet');
   });
 
   it('names a custom tier once, its label being its word', async () => {
@@ -416,8 +415,7 @@ describe('before the set-up (decision 550)', () => {
 
 describe('the title card opened from Rank (decisions 528 and 545)', () => {
   const WORDS = {
-    S: 'All-time favourite', 'A+': 'Loved it', A: 'Liked it', B: 'It was fine',
-    C: 'Not really for me', D: "Didn't like it", F: 'Hated it'
+    S: 'All-time favourite', A: 'Excellent', B: 'Very good', C: 'Good', D: 'OK', E: 'Not for me'
   };
   const reply = (payload) =>
     Promise.resolve({ ok: true, status: 200, headers: { get: () => null }, text: async () => JSON.stringify(payload) });
@@ -448,7 +446,7 @@ describe('the title card opened from Rank (decisions 528 and 545)', () => {
   const shelves = () => ({
     title_id: 1,
     kind: 'movie',
-    current: { tier: 6, word: WORDS.S },
+    current: { tier: 5, word: WORDS.S },
     shelves: board(boardOver).tiers.map((t) => ({ tier: t.index, word: WORDS[t.label], count: 0, films: [] }))
   });
 
@@ -474,7 +472,7 @@ describe('the title card opened from Rank (decisions 528 and 545)', () => {
     await settle();
     const shelf = (tier) => $('ladder-sheet').querySelector(`[data-testid="ladder-shelf"][data-tier="${tier}"]`);
     expect([...$('ladder-sheet').querySelectorAll('.word')].map((w) => w.textContent)).toEqual(Object.values(WORDS));
-    expect(shelf(6).getAttribute('aria-current')).toBe('true');
+    expect(shelf(5).getAttribute('aria-current')).toBe('true');
     $('ladder-done').click();
     await settle();
     expect($('ladder-sheet')).toBeNull();
@@ -489,7 +487,7 @@ describe('the title card opened from Rank (decisions 528 and 545)', () => {
     expect(posts[0].body).toEqual({ title_id: 1, tier: 4, above: null, below: null, via: 'explicit' });
     expect(toast.message).toBe('Heat moved to A');
     expect($('ladder-sheet')).toBeNull();
-    expect($('rank-card-tier').getAttribute('aria-label')).toBe('In your ranking: A, Liked it');
+    expect($('rank-card-tier').getAttribute('aria-label')).toBe('In your ranking: A, Excellent');
   });
 
   it('offers Place with questions, about log2(n) of them', async () => {
@@ -512,7 +510,7 @@ describe('a tier shows two rows until opened (decision 528)', () => {
 
   it('shows seven posters and +N on a phone, opens in place, and Show less closes it', async () => {
     phone();
-    boardOver = { tiers: [{ index: 4, label: 'A', word: 'Liked it', count: 12, entries: many(8, 10) }] };
+    boardOver = { tiers: [{ index: 4, label: 'A', word: 'Excellent', count: 12, entries: many(8, 10) }] };
     tierReply = { index: 4, count: 12, offset: 8, entries: many(4, 30) };
     await open();
     const reads = fetchMock.mock.calls.map(([url]) => url).filter((u) => u.includes('/api/rank?'));
@@ -541,8 +539,8 @@ describe('a tier shows two rows until opened (decision 528)', () => {
     const chips = [...target.querySelectorAll('nav[aria-label="Tiers"] button')];
     expect(chips.slice(0, 3).map((c) => c.getAttribute('aria-label'))).toEqual([
       'S, 1 film',
-      'A+, 0 films',
-      'A, 2 films'
+      'A, 2 films',
+      'B, 0 films'
     ]);
     expect(chips[0].getAttribute('aria-current')).toBe('true');
     chips[2].click();
@@ -634,8 +632,8 @@ describe('the comparison sheet (decisions 483, 495)', () => {
       kind: 'movie',
       pair: pair({ title_a: 3, name_a: 'Prisoners', token: 'sealed-2' }),
       placed: [
-        { title_id: 1, name: 'Heat', tier: 6, badge: 'S — just above Drive' },
-        { title_id: 2, name: 'Drive', tier: 6, badge: 'S — just below Heat' }
+        { title_id: 1, name: 'Heat', tier: 5, badge: 'S — just above Drive' },
+        { title_id: 2, name: 'Drive', tier: 5, badge: 'S — just below Heat' }
       ]
     });
     await open();

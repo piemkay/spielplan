@@ -533,13 +533,13 @@ async def _set_tier_set(db, user_id: int, labels: Sequence[str], *, kind: str = 
 
 
 def test_rescale_level_maps_by_cumulative_prior_mass_and_clamps_only_last():
-    """MASS, not index; monotone; identity at equal K; and the clamp is LAST (7 -> 12 of level 6 is 11,
-    not 6). `tier_edit.tier` has no CHECK against the set."""
+    """MASS, not index; monotone; identity at equal K; and the clamp is LAST (6 -> 12 of level 5 is 11,
+    not 5). `tier_edit.tier` has no CHECK against the set."""
     rescale = observations.rescale_level
 
-    assert [rescale(level, k_from=7, k_to=12) for level in range(7)] == [0, 0, 2, 4, 7, 10, 11]
-    assert [rescale(level, k_from=7, k_to=4) for level in range(7)] == [0, 0, 0, 1, 2, 3, 3]
-    assert rescale(6, k_from=7, k_to=12) == 11, "a clamp-first reading would give 6"
+    assert [rescale(level, k_from=6, k_to=12) for level in range(6)] == [0, 1, 4, 7, 9, 11]
+    assert [rescale(level, k_from=6, k_to=4) for level in range(6)] == [0, 0, 1, 2, 3, 3]
+    assert rescale(5, k_from=6, k_to=12) == 11, "a clamp-first reading would give 5"
     assert rescale(6, k_from=12, k_to=4) == 2, "a clamp-first reading would give 3"
 
     for k_from in range(2, 15):
@@ -551,21 +551,21 @@ def test_rescale_level_maps_by_cumulative_prior_mass_and_clamps_only_last():
         assert [rescale(level, k_from=k, k_to=k) for level in range(k)] == list(range(k))
 
     # The clamp, reached only after the map: every level the column can hold, from both ends.
-    for level in (-40, -1, 7, 12, 400):
-        assert 0 <= rescale(level, k_from=7, k_to=4) <= 3
-        assert 0 <= rescale(level, k_from=None, k_to=7) <= 6
+    for level in (-40, -1, 6, 12, 400):
+        assert 0 <= rescale(level, k_from=6, k_to=4) <= 3
+        assert 0 <= rescale(level, k_from=None, k_to=6) <= 5
     # An unknown board (`n_levels` NULL) is read as written.
-    assert rescale(5, k_from=None, k_to=7) == 5
+    assert rescale(5, k_from=None, k_to=6) == 5
     assert rescale(5, k_from=None, k_to=4) == 3
     with pytest.raises(ValueError, match="at least one level"):
-        rescale(0, k_from=7, k_to=0)
+        rescale(0, k_from=6, k_to=0)
 
 
 async def test_a_tier_edit_records_the_tier_set_size_it_was_written_under(db, world):
     """`ledger_cutpoints.tier_set` is overwritten in place, so the row is the only record of its K."""
     user = world["user"]
-    first = await observations.record_tier_edit(db, user_id=user, title_id=1, tier=6)
-    assert await db.fetchval("SELECT n_levels FROM tier_edit WHERE id = $1", first.row_id) == 7
+    first = await observations.record_tier_edit(db, user_id=user, title_id=1, tier=5)
+    assert await db.fetchval("SELECT n_levels FROM tier_edit WHERE id = $1", first.row_id) == 6
 
     await _set_tier_set(db, user, [f"T{i}" for i in range(12)])
     second = await observations.record_tier_edit(db, user_id=user, title_id=2, tier=11)
@@ -573,15 +573,15 @@ async def test_a_tier_edit_records_the_tier_set_size_it_was_written_under(db, wo
     rows = await db.fetch(
         "SELECT id, tier, n_levels FROM tier_edit WHERE user_id = $1 ORDER BY id", user
     )
-    assert [(r["tier"], r["n_levels"]) for r in rows] == [(6, 7), (11, 12)]
+    assert [(r["tier"], r["n_levels"]) for r in rows] == [(5, 6), (11, 12)]
     assert rows[0]["id"] == first.row_id and rows[1]["id"] == second.row_id
 
 
-async def test_an_edit_at_six_of_seven_is_read_at_eleven_of_twelve(db, world):
-    """The raw index left every S edit at tier 6 of 12; the fit must see the top tier."""
+async def test_an_edit_at_five_of_six_is_read_at_eleven_of_twelve(db, world):
+    """The raw index left every S edit at tier 5 of 12; the fit must see the top tier."""
     user = world["user"]
     await observations.record_verdict(db, user_id=user, title_id=1, value=2)
-    await observations.record_tier_edit(db, user_id=user, title_id=1, tier=6)
+    await observations.record_tier_edit(db, user_id=user, title_id=1, tier=5)
     await _set_tier_set(db, user, [f"T{i}" for i in range(12)])
 
     loaded = await observations.load_observations(db, user_id=user, kind="movie", hp=DEFAULTS)
@@ -591,20 +591,20 @@ async def test_an_edit_at_six_of_seven_is_read_at_eleven_of_twelve(db, world):
         for level, arm in zip(loaded.obs.ord_level, loaded.obs.ord_arm, strict=True)
         if int(arm) == observations.ARM_TIER
     ]
-    assert tier_levels == [11], "the edit is still being read as level 6 of a 12-level set"
+    assert tier_levels == [11], "the edit is still being read as level 5 of a 12-level set"
     assert loaded.obs.n_levels == 12
 
     # §4.2 is append-only, so the rescale is a READ.
     stored = await db.fetchrow("SELECT tier, n_levels FROM tier_edit WHERE user_id = $1", user)
-    assert dict(stored) == {"tier": 6, "n_levels": 7}
+    assert dict(stored) == {"tier": 5, "n_levels": 6}
 
 
 async def test_shrinking_to_four_labels_keeps_an_s_edit_above_a_b_edit(db, world):
     """Mapped by mass the ORDER survives a shrink, where the clamp merged B..S."""
     user = world["user"]
     await observations.record_verdict(db, user_id=user, title_id=3, value=1)
-    await observations.record_tier_edit(db, user_id=user, title_id=1, tier=6)   # S of F..S
-    await observations.record_tier_edit(db, user_id=user, title_id=2, tier=3)   # B of F..S
+    await observations.record_tier_edit(db, user_id=user, title_id=1, tier=5)   # S of E..S
+    await observations.record_tier_edit(db, user_id=user, title_id=2, tier=3)   # B of E..S
     await _set_tier_set(db, user, ["bad", "ok", "good", "best"])
 
     loaded = await observations.load_observations(db, user_id=user, kind="movie", hp=DEFAULTS)
@@ -615,7 +615,7 @@ async def test_shrinking_to_four_labels_keeps_an_s_edit_above_a_b_edit(db, world
         )
         if int(arm) == observations.ARM_TIER
     }
-    assert by_title == {1: 3, 2: 1}
+    assert by_title == {1: 3, 2: 2}
     assert by_title[1] > by_title[2], "the clamp collapsed S and B into one tier"
 
 
@@ -638,7 +638,7 @@ async def test_the_nightly_refit_writes_the_board_the_cutpoints_and_the_cache(db
         db, user,
         verdicts=[(1, 2), (2, 2), (3, 1), (4, 1), (5, 0), (6, 0)],
         duels=[(1, 2, "A"), (3, 4, "TIE"), (5, 6, "B"), (1, 5, "A")],
-        tier_edits=[(1, 6), (5, 0)],
+        tier_edits=[(1, 5), (5, 0)],
     )
     report = await refit.refit_user(
         db, user_id=user, kind="movie", hp=DEFAULTS, embeddings=fixture_embeddings
@@ -654,7 +654,7 @@ async def test_the_nightly_refit_writes_the_board_the_cutpoints_and_the_cache(db
     assert ranked.index(1) < ranked.index(3) < ranked.index(5), (
         "the board does not order the liked pile above the fine pile above the disliked one"
     )
-    assert {r.tier for r in board} != {None} and all(0 <= r.tier <= 6 for r in board)
+    assert {r.tier for r in board} != {None} and all(0 <= r.tier <= 5 for r in board)
     assert await db.fetchval(
         "SELECT count(*) FROM ledger_state WHERE user_id=$1 AND kind='series'", user
     ) == 0, "the movie refit wrote into the series partition"
@@ -1088,7 +1088,7 @@ async def _rate_at_scale(db, user, pool, rng, taste, *, n_verdicts, n_duels, n_e
         """,
         user,
         [int(t) for t in edited],
-        [int(np.clip(3 + round(truth[int(t)] * 400), 0, 6)) for t in edited],
+        [int(np.clip(3 + round(truth[int(t)] * 400), 0, 5)) for t in edited],
     )
 
 
@@ -1136,7 +1136,7 @@ async def test_a_full_map_refit_of_both_users_over_the_owned_library_lands_insid
     fitted = [r for r in reports if r.fitted]
     assert len(fitted) == 4, [r.as_dict() for r in reports]
     assert all(r.converged for r in fitted), "a nightly fit did not converge"
-    assert all(len(r.cutpoints) == 6 and r.cutpoints == sorted(r.cutpoints) for r in fitted)
+    assert all(len(r.cutpoints) == 5 and r.cutpoints == sorted(r.cutpoints) for r in fitted)
     assert elapsed < 60.0, f"§5.3's nightly refit took {elapsed:.1f} s"
 
     for user in users:

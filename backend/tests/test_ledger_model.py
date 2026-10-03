@@ -28,7 +28,7 @@ def synth(n=30, n_verdicts=None, n_duels=40, *, seed=3, tiers=0, embed=True):
 
     if tiers:
         ti = rng.choice(vi, size=tiers, replace=False)
-        tier_cuts = np.quantile(truth, np.linspace(0, 1, 8)[1:-1])
+        tier_cuts = np.quantile(truth, np.linspace(0, 1, 7)[1:-1])
         ord_index += list(ti)
         ord_level += list(np.searchsorted(tier_cuts, truth[ti], side="right"))
         ord_arm += [1] * tiers
@@ -51,6 +51,7 @@ def synth(n=30, n_verdicts=None, n_duels=40, *, seed=3, tiers=0, embed=True):
         duel_outcome=outcome.astype(np.int64),
         # Unequal margins: the only condition under which normalising them can change anything.
         duel_margin=np.where(rng.random(len(pairs)) < 0.4, 1.6, 1.0),
+        n_levels=6,
     )
 
 
@@ -166,7 +167,7 @@ def test_a_duel_couples_its_pair_and_leaves_the_shared_location_alone():
     )
     hp = DEFAULTS
     mu, v = 0.1, np.zeros(64)
-    gamma, cuts, log_nu = np.array([-0.4, 0.4]), model.initial_cutpoints(7), -0.5
+    gamma, cuts, log_nu = np.array([-0.4, 0.4]), model.initial_cutpoints(6), -0.5
     r = np.array([0.2, -0.1, 0.05, 0.0])
     h = 1e-5
 
@@ -382,8 +383,8 @@ def test_the_fitted_cutpoints_are_the_displayed_boundaries():
 
 def test_the_initial_cutpoints_carry_the_measured_tier_shape():
     """A level nobody has used sits where the crowd puts it rather than at infinity."""
-    cuts = model.initial_cutpoints(7)
-    assert cuts.size == 6
+    cuts = model.initial_cutpoints(6)
+    assert cuts.size == 5
     assert list(cuts) == sorted(cuts)
     shares = np.diff(np.concatenate([[0.0], 1 / (1 + np.exp(-cuts)), [1.0]]))
     assert np.allclose(shares, model.MEASURED_TIER_SHARES, atol=1e-9)
@@ -405,7 +406,7 @@ def test_a_posterior_that_reaches_the_next_tier_is_flagged():
 
 def test_a_straddle_never_names_a_tier_that_is_not_adjacent():
     """Decision 205: the badge names only an adjacent tier, however many cuts the interval crosses."""
-    cuts = model.initial_cutpoints(7)
+    cuts = model.initial_cutpoints(6)
     rng = np.random.default_rng(19)
     s = rng.normal(scale=2.0, size=600)
     sigma = rng.uniform(0.01, 3.0, size=600)
@@ -421,7 +422,7 @@ def test_a_straddle_never_names_a_tier_that_is_not_adjacent():
 
 def test_restricting_the_named_tier_does_not_narrow_the_straddling_set():
     """The badge and queue eligibility are one predicate: some cutpoint in (s - zσ, s + zσ]."""
-    cuts = model.initial_cutpoints(7)
+    cuts = model.initial_cutpoints(6)
     rng = np.random.default_rng(23)
     s = rng.normal(scale=2.0, size=400)
     sigma = rng.uniform(0.01, 3.0, size=400)
@@ -434,16 +435,16 @@ def test_restricting_the_named_tier_does_not_narrow_the_straddling_set():
 
 def test_a_posterior_reaching_both_neighbours_names_the_nearer_cut():
     """The nearer cut wins; a tie keeps the downward choice, so the answer is not iteration order."""
-    cuts = model.initial_cutpoints(7)
+    cuts = model.initial_cutpoints(6)
     wide = np.array([reach_sigma(1.0)])   # an interval reaching one unit either way
-    assert model.tier_of(np.array([0.9]), cuts)[0] == 4, "s = 0.9 sits in A on the measured set"
-    assert model.straddle(np.array([0.9]), wide, cuts, DEFAULTS)[0] == 5
+    assert model.tier_of(np.array([0.9]), cuts)[0] == 3, "s = 0.9 sits in B on the measured set"
+    assert model.straddle(np.array([0.9]), wide, cuts, DEFAULTS)[0] == 4
 
-    nearer_below = float(cuts[3]) + 0.1
-    assert model.straddle(np.array([nearer_below]), wide, cuts, DEFAULTS)[0] == 3
+    nearer_below = float(cuts[2]) + 0.1
+    assert model.straddle(np.array([nearer_below]), wide, cuts, DEFAULTS)[0] == 2
 
-    midway = (float(cuts[3]) + float(cuts[4])) / 2.0
-    assert model.straddle(np.array([midway]), wide, cuts, DEFAULTS)[0] == 3
+    midway = (float(cuts[2]) + float(cuts[3])) / 2.0
+    assert model.straddle(np.array([midway]), wide, cuts, DEFAULTS)[0] == 2
 
 
 def test_sigma_does_not_move_inside_the_grace_period():
@@ -542,28 +543,28 @@ def test_an_empty_ledger_is_not_an_error():
 
 
 def test_the_tier_prior_starts_on_the_verdict_prior_for_every_tier_set():
-    """Decision 508: where the shape has cuts at exactly 25%
-    and 50%, the prior mean is `initial_cutpoints(K)`."""
+    """Decision 508: where the shape has cuts at exactly 5%
+    and 20%, the prior mean is `initial_cutpoints(K)`."""
     prior = model.verdict_cutpoints()
-    for k in (2, 4, 7, 8, 12):
+    for k in (6, 20):
         assert np.allclose(model.cut_prior_mean(prior, k), model.initial_cutpoints(k)), f"K = {k}"
-    for k in (3, 5, 6, 9, 10, 11):
+    for k in (3, 4, 5, 7, 8, 9, 10, 11, 12):
         mean, shape = model.cut_prior_mean(prior, k), model.initial_cutpoints(k)
         lower, upper = model.anchored_cuts(k)
         assert mean[lower] == pytest.approx(prior[0]) and mean[upper] == pytest.approx(prior[1])
         assert np.allclose(np.diff(mean[: lower + 1]), np.diff(shape[: lower + 1])), f"K = {k}"
         assert np.allclose(np.diff(mean[upper:]), np.diff(shape[upper:])), f"K = {k}"
         assert np.all(np.diff(mean) > 0), f"K = {k}"
-    # The verdict prior is the measured shape's C/B and B/A masses, 25% and 50%.
-    assert np.allclose(prior, np.log([0.25 / 0.75, 1.0]))
+    # The verdict prior is the measured shape's E/D and D/C masses, 5% and 20%.
+    assert np.allclose(prior, np.log([0.05 / 0.95, 0.20 / 0.80]))
 
 
-def test_with_no_tier_edit_the_c_b_and_b_a_boundaries_are_the_verdict_cutpoints():
+def test_with_no_tier_edit_the_e_d_and_d_c_boundaries_are_the_verdict_cutpoints():
     _truth, obs = synth(n=40, n_duels=30, seed=21)
     fitted = model.fit(obs, DEFAULTS)
-    assert fitted.cuts[2] == pytest.approx(fitted.gamma[0], abs=1e-6)
-    assert fitted.cuts[3] == pytest.approx(fitted.gamma[1], abs=1e-6)
-    assert np.allclose(fitted.cuts, model.cut_prior_mean(fitted.gamma, 7), atol=1e-6)
+    assert fitted.cuts[0] == pytest.approx(fitted.gamma[0], abs=1e-6)
+    assert fitted.cuts[1] == pytest.approx(fitted.gamma[1], abs=1e-6)
+    assert np.allclose(fitted.cuts, model.cut_prior_mean(fitted.gamma, 6), atol=1e-6)
 
 
 def test_the_coupled_cutpoint_prior_has_the_curvature_it_claims():
@@ -573,19 +574,19 @@ def test_the_coupled_cutpoint_prior_has_the_curvature_it_claims():
     rng = np.random.default_rng(1)
     mu, v = 0.1, rng.normal(size=64) / 10.0
     gamma = np.array([-1.2, 0.3])
-    cuts = model.cut_prior_mean(gamma, obs.n_levels) + rng.normal(scale=0.05, size=6)
+    cuts = model.cut_prior_mean(gamma, obs.n_levels) + rng.normal(scale=0.05, size=5)
     log_nu, r = -0.2, rng.normal(size=obs.n) / 10.0
     _g, _gr, h_zz, *_ = model._grad_hess(obs, hp, mu, v, gamma, cuts, log_nu, r, with_duels=False)
     h = 1e-6
-    for j in range(8):
-        step = np.zeros(8)
+    for j in range(7):
+        step = np.zeros(7)
         step[j] = h
         plus = model._grad_hess(obs, hp, mu, v, gamma + step[:2], cuts + step[2:], log_nu, r,
                                 with_duels=False)[0]
         minus = model._grad_hess(obs, hp, mu, v, gamma - step[:2], cuts - step[2:], log_nu, r,
                                  with_duels=False)[0]
-        column = (plus[65:73] - minus[65:73]) / (2 * h)
-        assert np.allclose(h_zz[65:73, 65 + j], column, atol=1e-5), f"column {j}"
+        column = (plus[65:72] - minus[65:72]) / (2 * h)
+        assert np.allclose(h_zz[65:72, 65 + j], column, atol=1e-5), f"column {j}"
 
 
 def test_on_every_tier_count_a_tier_stands_for_the_class_the_verdict_cutpoints_give_its_s():
@@ -607,8 +608,8 @@ def test_on_every_tier_count_a_tier_stands_for_the_class_the_verdict_cutpoints_g
 
 
 def test_each_verdict_names_the_tiers_it_renders_in():
-    assert model.verdict_tiers(7).tolist() == [[0, 2], [3, 3], [4, 6]]
-    assert [model.verdict_class_of_tier(t, 7) for t in range(7)] == [0, 0, 0, 1, 2, 2, 2]
+    assert model.verdict_tiers(6).tolist() == [[0, 0], [1, 1], [2, 5]]
+    assert [model.verdict_class_of_tier(t, 6) for t in range(6)] == [0, 1, 2, 2, 2, 2]
     for k in range(2, 13):
         bands = model.verdict_tiers(k)
         assert bands[0, 0] == 0 and bands[2, 1] == k - 1, f"K = {k}"
@@ -617,12 +618,12 @@ def test_each_verdict_names_the_tiers_it_renders_in():
 
 
 def test_a_rated_title_is_held_inside_its_verdicts_tiers_and_reaches_toward_its_s():
-    tier = np.array([4, 3, 2, 5, 1])
-    straddle = np.array([-1, 4, -1, -1, -1])
+    tier = np.array([3, 1, 0, 4, 1])
+    straddle = np.array([-1, 2, -1, -1, -1])
     verdict = np.array([0, 2, 0, 1, -1])
-    held, reach = model.hold_to_verdict(tier, straddle, verdict, 7)
-    assert held.tolist() == [2, 4, 2, 3, 1]
-    assert reach.tolist() == [3, 3, -1, 4, -1]
+    held, reach = model.hold_to_verdict(tier, straddle, verdict, 6)
+    assert held.tolist() == [0, 2, 0, 1, 1]
+    assert reach.tolist() == [1, 1, -1, 2, -1]
 
 
 def test_the_live_verdict_is_the_last_one_and_a_drop_holds_nothing():
@@ -674,17 +675,18 @@ def test_the_second_households_three_complaints_do_not_happen_on_a_board_like_th
         duel_b=np.array([loser, tie_b], dtype=np.int64),
         duel_outcome=np.array([OUT_A, OUT_TIE], dtype=np.int64),
         duel_margin=np.array([1.0, 1.0]),
+        n_levels=6,
     )
     fitted = model.fit(obs, DEFAULTS)
     tiers, _reach = model.hold_to_verdict(
-        model.tier_of(fitted.s, fitted.cuts), np.full(n + 1, -1), model.live_verdicts(obs), 7
+        model.tier_of(fitted.s, fitted.cuts), np.full(n + 1, -1), model.live_verdicts(obs), 6
     )
     la_la_land = n
-    assert tiers[la_la_land] <= 2, "a disliked title rendered above the disliked tiers"
+    assert tiers[la_la_land] == 0, "a disliked title rendered above the disliked tier"
     assert fitted.s[la_la_land] < fitted.s[liked].min(), "a disliked title above a liked one"
     assert fitted.s[winner] > fitted.s[loser], "the pick did not move the winner up"
-    assert tiers[tie_a] == tiers[tie_b] == 3, "about the same, and two tiers apart"
-    assert set(tiers[liked].tolist()) <= {4, 5, 6} and set(tiers[fine].tolist()) == {3}
+    assert tiers[tie_a] == tiers[tie_b] == 1, "about the same, and two tiers apart"
+    assert set(tiers[liked].tolist()) <= {2, 3, 4, 5} and set(tiers[fine].tolist()) == {1}
 
 
 def test_a_ladder_with_no_verdict_arm_keeps_ordered_cuts_on_the_shape_prior():
@@ -700,26 +702,26 @@ def test_a_ladder_with_no_verdict_arm_keeps_ordered_cuts_on_the_shape_prior():
     obs = ObservationSet(
         title_ids=np.arange(n, dtype=np.int64), embeddings=e, embedded=np.ones(n, dtype=bool),
         ord_index=np.arange(n, dtype=np.int64), ord_level=level.astype(np.int64),
-        ord_arm=np.ones(n, dtype=np.int64), ord_weight=np.ones(n),
+        ord_arm=np.ones(n, dtype=np.int64), ord_weight=np.ones(n), n_levels=6,
     )
     fitted = model.fit(obs, DEFAULTS)
 
     assert fitted.converged
     assert np.all(np.diff(fitted.cuts) > 0)
-    assert np.abs(fitted.cuts - model.initial_cutpoints(7)).max() < 1.0
+    assert np.abs(fitted.cuts - model.initial_cutpoints(6)).max() < 1.0
     assert np.abs(fitted.gamma - model.verdict_cutpoints()).max() < 0.5
-    assert np.all(np.diff([fitted.s[level == t].mean() for t in range(7)]) > 0)
+    assert np.all(np.diff([fitted.s[level == t].mean() for t in range(6)]) > 0)
     fitted_tier = model.tier_of(fitted.s, fitted.cuts)
     same_class = [
-        model.verdict_class_of_tier(int(a), 7) == model.verdict_class_of_tier(int(b), 7)
+        model.verdict_class_of_tier(int(a), 6) == model.verdict_class_of_tier(int(b), 6)
         for a, b in zip(fitted_tier, level, strict=True)
     ]
     assert np.mean(same_class) >= 0.8
 
 
 def test_a_verdict_class_stands_for_its_tier_nearest_the_middle():
-    """§5.1's step for a verdict: C, B or A at K = 7, the tier decision 510 guesses a class at."""
-    assert [model.class_step(c, 7) for c in (0, 1, 2)] == [2, 3, 4]
+    """§5.1's step for a verdict: E, D or C at K = 6, the tier decision 510 guesses a class at."""
+    assert [model.class_step(c, 6) for c in (0, 1, 2)] == [0, 1, 2]
     assert [model.class_step(c, 2) for c in (0, 1, 2)] == [0, 0, 1]
     for k in range(2, 13):
         bands = model.verdict_tiers(k)
@@ -732,7 +734,7 @@ def test_a_verdict_class_stands_for_its_tier_nearest_the_middle():
 
 def test_an_unrated_title_is_guessed_a_class_and_not_a_grade():
     """Decision 510: an unrated title wears its guessed class's middle tier, never a grade."""
-    assert model.guess_tier(np.arange(7), 7).tolist() == [2, 2, 2, 3, 4, 4, 4]
+    assert model.guess_tier(np.arange(6), 6).tolist() == [0, 1, 2, 2, 2, 2]
     for k in range(2, 13):
         for tier in range(k):
             guessed = int(model.guess_tier(np.array([tier]), k)[0])

@@ -33,17 +33,16 @@ Kind = Literal["movie", "series"]
 KINDS: tuple[str, ...] = ("movie", "series")
 
 # §4.2's default, repeated in `ledger_cutpoints.tier_set`'s DDL. Its size is K.
-DEFAULT_TIER_SET: tuple[str, ...] = ("F", "D", "C", "B", "A", "A+", "S")
+DEFAULT_TIER_SET: tuple[str, ...] = ("E", "D", "C", "B", "A", "S")
 
-# §6.1's words for the default set (decision 550).
+# §6.1's words for the default set (decision 561).
 TIER_WORDS: dict[str, str] = {
     "S": "All-time favourite",
-    "A+": "Loved it",
-    "A": "Liked it",
-    "B": "It was fine",
-    "C": "Not really for me",
-    "D": "Didn't like it",
-    "F": "Hated it",
+    "A": "Excellent",
+    "B": "Very good",
+    "C": "Good",
+    "D": "OK",
+    "E": "Not for me",
 }
 
 # §4.2: verdict values 0 / 1 / 2.
@@ -248,7 +247,7 @@ async def tier_set_of(conn: asyncpg.Connection, *, user_id: int, kind: str) -> t
 
 
 def _tier_shares(k: int) -> np.ndarray:
-    """§6.3's measured level shares at K = 7, equal mass at any other K (as `model.initial_cutpoints`)."""
+    """§6.3's level shares at K = 6, equal mass at any other K (as `model.initial_cutpoints`)."""
     shares = MEASURED_TIER_SHARES if k == len(MEASURED_TIER_SHARES) else (1.0 / k,) * k
     return np.asarray(shares, dtype=float)
 

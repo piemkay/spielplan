@@ -11,17 +11,16 @@ const film = (id, name) => ({ id, name, original_name: name, original_language: 
 /** Best first, as `rate/shelves.shelves_for` sends them. */
 const SHELVES = [
   {
-    tier: 6,
+    tier: 5,
     word: 'All-time favourite',
     count: 5,
     films: [film(1, 'Zodiac'), film(2, 'Heat'), film(3, 'Se7en'), film(4, 'Alien')]
   },
-  { tier: 5, word: 'Loved it', count: 1, films: [film(5, 'Drive')] },
-  { tier: 4, word: 'Liked it', count: 2, films: [film(6, 'Up'), film(7, 'Coco')] },
-  { tier: 3, word: 'It was fine', count: 0, films: [] },
-  { tier: 2, word: 'Not really for me', count: 0, films: [] },
-  { tier: 1, word: "Didn't like it", count: 0, films: [] },
-  { tier: 0, word: 'Hated it', count: 1, films: [film(8, 'Cats')] }
+  { tier: 4, word: 'Excellent', count: 1, films: [film(5, 'Drive')] },
+  { tier: 3, word: 'Very good', count: 2, films: [film(6, 'Up'), film(7, 'Coco')] },
+  { tier: 2, word: 'Good', count: 0, films: [] },
+  { tier: 1, word: 'OK', count: 0, films: [] },
+  { tier: 0, word: 'Not for me', count: 1, films: [film(8, 'Cats')] }
 ];
 
 let target;
@@ -54,7 +53,7 @@ function open(over = {}) {
   flushSync();
   // jsdom lays nothing out: 72px shelves from the top, 358px wide.
   const list = target.querySelector('[role="group"]');
-  list.getBoundingClientRect = () => /** @type {any} */ ({ top: 0, bottom: 504, left: 0, right: 358 });
+  list.getBoundingClientRect = () => /** @type {any} */ ({ top: 0, bottom: 432, left: 0, right: 358 });
   rows().forEach((row, i) => {
     row.getBoundingClientRect = () => /** @type {any} */ ({ top: i * 72, bottom: (i + 1) * 72, left: 0, right: 358 });
   });
@@ -70,27 +69,27 @@ describe('the shelves (decisions 545, 550 and 551)', () => {
   it('draws one button per tier, best first, with up to four of the person\'s films and the word', () => {
     open();
     expect(target.querySelector('[role="group"]').getAttribute('aria-label')).toBe('Where does Collateral sit?');
-    expect(rows().map((r) => r.dataset.tier)).toEqual(['6', '5', '4', '3', '2', '1', '0']);
+    expect(rows().map((r) => r.dataset.tier)).toEqual(['5', '4', '3', '2', '1', '0']);
     expect(rows().map((r) => r.querySelector('.word').textContent)).toEqual(SHELVES.map((s) => s.word));
     expect(rows()[0].getAttribute('aria-label')).toBe('All-time favourite, with Zodiac, Heat, Se7en and Alien');
-    expect(rows()[2].getAttribute('aria-label')).toBe('Liked it, with Up and Coco');
+    expect(rows()[2].getAttribute('aria-label')).toBe('Very good, with Up and Coco');
     expect(rows()[0].querySelectorAll('[data-testid="rate-poster"]')).toHaveLength(4);
     // An empty shelf keeps its word and still places.
-    expect(rows()[3].getAttribute('aria-label')).toBe('It was fine');
+    expect(rows()[3].getAttribute('aria-label')).toBe('Good');
     expect(rows()[3].querySelectorAll('[data-testid="rate-poster"]')).toHaveLength(0);
-    expect(target.textContent, 'no tier letter on Rate').not.toMatch(/\b(S|A\+|A|B|C|D|F)\b/);
+    expect(target.textContent, 'no tier letter on Rate').not.toMatch(/\b(S|A|B|C|D|E)\b/);
   });
 
   it('places with one tap, empty shelves included', () => {
     open();
     rows()[1].click();
     rows()[3].click();
-    expect(placed).toEqual([5, 3]);
+    expect(placed).toEqual([4, 2]);
   });
 
   it('lights the chosen shelf, puts the film on it first, and takes no second answer', () => {
     const { props } = open();
-    props.lit = 6;
+    props.lit = 5;
     flushSync();
     expect(rows()[0].classList.contains('lit')).toBe(true);
     const posters = [...rows()[0].querySelectorAll('[data-testid="rate-poster"]')];
@@ -117,26 +116,26 @@ describe('the shelves (decisions 545, 550 and 551)', () => {
 
     list.dispatchEvent(pointer('pointermove', 160));
     flushSync();
-    expect(look().querySelector('.look-word').textContent).toBe('Liked it');
+    expect(look().querySelector('.look-word').textContent).toBe('Very good');
     expect(look().querySelector('.look-count').textContent).toBe('2 films');
     list.dispatchEvent(pointer('pointerup', 160));
     flushSync();
     expect(look()).toBeNull();
-    expect(placed).toEqual([4]);
+    expect(placed).toEqual([3]);
     // The click the release brings with it is not a second answer.
     rows()[2].click();
-    expect(placed).toEqual([4]);
+    expect(placed).toEqual([3]);
   });
 
   it('opens the larger view at once when the finger slides first, and places nothing outside', () => {
     vi.useFakeTimers();
     const { list } = open();
-    list.dispatchEvent(pointer('pointerdown', 450));
-    list.dispatchEvent(pointer('pointermove', 470));
+    list.dispatchEvent(pointer('pointerdown', 380));
+    list.dispatchEvent(pointer('pointermove', 400));
     flushSync();
-    expect(target.querySelector('.look .look-word').textContent).toBe('Hated it');
+    expect(target.querySelector('.look .look-word').textContent).toBe('Not for me');
     expect(target.querySelector('.look .look-count').textContent).toBe('1 film');
-    list.dispatchEvent(pointer('pointerup', 470, 500));
+    list.dispatchEvent(pointer('pointerup', 400, 500));
     flushSync();
     expect(target.querySelector('.look')).toBeNull();
     expect(placed).toEqual([]);
@@ -144,7 +143,7 @@ describe('the shelves (decisions 545, 550 and 551)', () => {
 
   it("counts a series shelf in series, and marks the shelf the title already sits on", () => {
     vi.useFakeTimers();
-    const { list } = open({ kind: 'series', current: 5, testid: 'rate-shelf' });
+    const { list } = open({ kind: 'series', current: 4, testid: 'rate-shelf' });
     expect(rows()[1].getAttribute('aria-current')).toBe('true');
     expect(rows()[0].hasAttribute('aria-current')).toBe(false);
     list.dispatchEvent(pointer('pointerdown', 20));

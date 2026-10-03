@@ -21,9 +21,9 @@
     };
   });
 
-  const count = $derived(steps ? (COUNTS[steps.length] ?? String(steps.length)) : 'seven');
+  const count = $derived(steps ? (COUNTS[steps.length] ?? String(steps.length)) : 'six');
   const first = $derived(steps?.[0]?.word ?? 'All-time favourite');
-  const last = $derived(steps?.at(-1)?.word ?? 'Hated it');
+  const last = $derived(steps?.at(-1)?.word ?? 'Not for me');
 </script>
 
 <section class="closed" data-testid="rate-before-setup">

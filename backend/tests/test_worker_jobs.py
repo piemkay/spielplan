@@ -102,7 +102,7 @@ async def rated(db, worker_env, two_members):
         db, user_id=patrick, title_a=1, title_b=2,
         outcome="A", context="profile_battle", decisive=True, hp=DEFAULTS,
     )
-    await observations.record_tier_edit(db, user_id=patrick, title_id=1, tier=6)
+    await observations.record_tier_edit(db, user_id=patrick, title_id=1, tier=5)
     return store, patrick
 
 
@@ -389,7 +389,7 @@ async def test_one_members_failing_refit_does_not_strand_another_members(
     )
     assert await db.fetchval(
         "SELECT max(tier) FROM ledger_state WHERE user_id = $1 AND kind = 'movie'", ana
-    ) <= 3, "Ana's board is still indexed against the seven-level set the fit replaced"
+    ) <= 3, "Ana's board is still indexed against the six-level set the fit replaced"
 
 
 # The loop, not the work: a wedged job used to end the worker, and failing sweeps logged like

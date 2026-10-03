@@ -125,7 +125,7 @@ test.describe('tonight', () => {
   });
 
   test('solo with too few films on the ladder lands on the picks at once, saying why', async () => {
-    // Decision 539: fewer than eight films placed Liked it or higher, so no round; still no
+    // Decision 539: fewer than eight films placed Good or higher, so no round; still no
     // session, no room published and no ballot drawn.
     test.setTimeout(120_000);
     await atTheDoor();
@@ -133,7 +133,7 @@ test.describe('tonight', () => {
     await soloPicksAtOnce();
 
     await expect(page.getByTestId('tonight-no-round')).toHaveText(
-      /^No mood questions tonight — they need 8 films on your ladder at Liked it or higher, and you have \d\.$/
+      /^No mood questions tonight — they need 8 films on your ladder at Good or higher, and you have \d\.$/
     );
     await expect(soloPicks()).toHaveCount(3);
     await expect(page.getByTestId('tonight-solo-wildcard')).toBeVisible();

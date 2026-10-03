@@ -458,7 +458,7 @@ describe('solo asks for the mood before it picks (decision 532)', () => {
 
   it('lands on the picks at once when there is nothing to ask, saying why', async () => {
     const why =
-      'No mood questions tonight — they need 8 films on your ladder at Liked it or higher, and you have 5.';
+      'No mood questions tonight — they need 8 films on your ladder at Good or higher, and you have 5.';
     serve({ ends: 0, noRound: why });
     await openSolo();
 
@@ -689,7 +689,7 @@ describe('the first household evening, on the screen (owner instruction of 2026-
 
   it('says why a seat with too few films on its ladder had no round', () => {
     const why =
-      'No mood questions tonight — they need 8 films on your ladder at Liked it or higher, and you have 2.';
+      'No mood questions tonight — they need 8 films on your ladder at Good or higher, and you have 2.';
     tonight.lobby = room;
     tonight.round = { participant_id: 11, answered: 0, pair: null, ended_by: 'converged', no_round: why };
     tonight.activeSeat = 11;

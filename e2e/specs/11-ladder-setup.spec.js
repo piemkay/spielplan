@@ -74,7 +74,7 @@ test.describe('the ladder set-up', () => {
       await page.goto('/rate');
       await page.getByTestId('rate-setup-cta').click();
       await expect(page).toHaveURL(/\/rate\/setup$/);
-      await expect(page.getByTestId('setup-flow')).toContainText('Step 1 of 7');
+      await expect(page.getByTestId('setup-flow')).toContainText('Step 1 of 6');
       await expect(page.getByTestId('setup-step')).toHaveText('All-time favourite');
       await expect(page.getByTestId('setup-flow')).toContainText(
         "Films you've watched first, then popular ones. Tap the ones you remember well."
@@ -123,7 +123,7 @@ test.describe('the ladder set-up', () => {
       await expect(page).toHaveURL(/\/rate$/);
       await expect(page.getByTestId('setup-flow')).toHaveCount(0);
       await page.getByTestId('rate-setup-cta').click();
-      await expect(page.getByTestId('setup-flow')).toContainText('Step 1 of 7');
+      await expect(page.getByTestId('setup-flow')).toContainText('Step 1 of 6');
       await expect(film('Heat')).toHaveAttribute('aria-pressed', 'false');
     });
 
@@ -131,7 +131,7 @@ test.describe('the ladder set-up', () => {
       await film('Heat').click();
       await expect(film('Heat')).toHaveAttribute('aria-pressed', 'true');
       await page.getByTestId('setup-next').click();
-      await expect(page.getByTestId('setup-step')).toHaveText('Loved it');
+      await expect(page.getByTestId('setup-step')).toHaveText('Excellent');
       await expect(page.getByTestId('setup-strip')).toContainText('Not quite these');
       await expect(page.getByTestId('setup-film')).toHaveCount(5);
       await expect(film('Heat')).toHaveCount(0);
@@ -148,13 +148,13 @@ test.describe('the ladder set-up', () => {
     });
 
     await test.step('the empty steps pass, and Finish is the last', async () => {
-      for (const word of ['Liked it', 'It was fine', 'Not really for me', "Didn't like it"]) {
+      for (const word of ['Very good', 'Good', 'OK']) {
         await page.getByTestId('setup-next').click();
         await expect(page.getByTestId('setup-step')).toHaveText(word);
         await expect(page.getByTestId('setup-next')).toHaveText(`None for ${word}`);
       }
       await page.getByTestId('setup-next').click();
-      await expect(page.getByTestId('setup-flow')).toContainText('Step 7 of 7');
+      await expect(page.getByTestId('setup-flow')).toContainText('Step 6 of 6');
       await expect(page.getByTestId('setup-next')).toHaveCount(0);
       await page.getByTestId('setup-finish').click();
     });
@@ -164,10 +164,10 @@ test.describe('the ladder set-up', () => {
       await expect(done.getByRole('heading', { name: 'Your ladder is ready' })).toBeVisible();
       await expect(done).toContainText('2 films are on it.');
       const rungs = done.getByRole('listitem');
-      await expect(rungs).toHaveCount(7);
+      await expect(rungs).toHaveCount(6);
       await expect(rungs.nth(0)).toContainText('All-time favourite');
       await expect(rungs.nth(0)).toContainText('1 film');
-      await expect(rungs.nth(1)).toContainText('Loved it');
+      await expect(rungs.nth(1)).toContainText('Excellent');
       await expect(rungs.nth(1)).toContainText('1 film');
       await expect(rungs.nth(2)).not.toContainText('film');
       // Nothing rated before, so nothing kept as history.

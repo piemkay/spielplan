@@ -228,34 +228,33 @@ async def test_the_card_ranks_a_title_with_no_letter_before_the_persons_own_answ
     uid = await db.fetchval("SELECT id FROM app_user WHERE name = 'jenny'")
     await db.execute(
         "INSERT INTO ledger_state (user_id, title_id, kind, s, sigma, tier, observed) "
-        "VALUES ($1, 4, 'movie', 2.0, 0.3, 6, false)",
+        "VALUES ($1, 4, 'movie', 2.0, 0.3, 5, false)",
         uid,
     )
     ranking = (await card.get("/api/titles/4")).json()["ranking"]
     assert ranking["tier"] is None and ranking["tension"] is None
     assert [(t["label"], t["word"], t["count"]) for t in ranking["tiers"]] == [
-        ("S", "All-time favourite", 0), ("A+", "Loved it", 0), ("A", "Liked it", 0),
-        ("B", "It was fine", 0), ("C", "Not really for me", 0), ("D", "Didn't like it", 0),
-        ("F", "Hated it", 0),
+        ("S", "All-time favourite", 0), ("A", "Excellent", 0), ("B", "Very good", 0),
+        ("C", "Good", 0), ("D", "OK", 0), ("E", "Not for me", 0),
     ]
 
     # Decision 550: before the set-up the row reads "Set up your ladder first", and a tap writes nothing.
     assert ranking["set_up"] is False
-    early = await card.post("/api/rank/drop?kind=movie&per_tier=1", json={"title_id": 4, "tier": 5})
+    early = await card.post("/api/rank/drop?kind=movie&per_tier=1", json={"title_id": 4, "tier": 4})
     assert early.status_code == 409 and early.json()["detail"]["reason"] == "not_set_up"
     assert await db.fetchval("SELECT count(*) FROM tier_edit WHERE user_id = $1", uid) == 0
 
     await db.execute("INSERT INTO ladder_setup (user_id) VALUES ($1)", uid)
     assert (await card.get("/api/titles/4")).json()["ranking"]["set_up"] is True
-    placed = await card.post("/api/rank/drop?kind=movie&per_tier=1", json={"title_id": 4, "tier": 5})
+    placed = await card.post("/api/rank/drop?kind=movie&per_tier=1", json={"title_id": 4, "tier": 4})
     assert placed.status_code == 200, placed.text
     # The first observation of a kind is fitted by the sweep, not in the request; until then the row
     # still names the person's own placement.
     early = (await card.get("/api/titles/4")).json()["ranking"]
-    assert (early["tier"], early["tension"]) == (5, None)
+    assert (early["tier"], early["tension"]) == (4, None)
     await refit.refit_user(db, user_id=uid, kind="movie", hp=DEFAULTS)
     body = (await card.get("/api/titles/4")).json()
-    assert body["ranking"]["tier"] == 5
+    assert body["ranking"]["tier"] == 4
     assert body["title"]["seen_state"] == "seen"
     assert await db.fetchval(
         "SELECT value FROM verdict WHERE user_id = $1 AND title_id = 4 AND superseded_by IS NULL", uid

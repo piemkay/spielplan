@@ -12,8 +12,8 @@ from spielplan.ledger import model
 from spielplan.ledger.hyperparams import DEFAULTS
 from spielplan.rank import board, queue
 
-TIER_SET = ("F", "D", "C", "B", "A", "A+", "S")
-CUTS = model.initial_cutpoints(7)
+TIER_SET = ("E", "D", "C", "B", "A", "S")
+CUTS = model.initial_cutpoints(6)
 
 
 def sigma_for(reach: float) -> float:
@@ -244,8 +244,8 @@ def test_the_selector_reads_no_held_out_comparison():
 
 
 def board_of(spec, *, comparisons=None, genres=None):
-    """`(title_id, s, reach)`, reach 0 for a settled title. The cuts are §6.3's prior: B/A at 0.0,
-    A+/S at 2.442."""
+    """`(title_id, s, reach)`, reach 0 for a settled title. The cuts are §6.3's prior: C/B at 0.0,
+    A/S at 2.197."""
     items = [
         board.Item(
             title_id=title_id, name=f"T{title_id}", s=float(s),
@@ -258,28 +258,28 @@ def board_of(spec, *, comparisons=None, genres=None):
     )
 
 
-# Three straddlers at B/A, three at A+/S, and settled titles across each cut.
+# Three straddlers at C/B, three at A/S, and settled titles across each cut.
 TWO_BOUNDARIES = [
     (1, -0.01, 0.05), (2, -0.02, 0.05), (3, -0.03, 0.05),
-    (4, 2.43, 0.05), (5, 2.42, 0.05), (6, 2.41, 0.05),
+    (4, 2.19, 0.05), (5, 2.18, 0.05), (6, 2.17, 0.05),
     (11, 0.3, 0), (12, 0.5, 0), (13, 0.7, 0),
     (14, 3.0, 0), (15, 3.2, 0), (16, 3.4, 0),
 ]
 
 
 def test_the_boundary_arm_favours_boundaries_near_the_top():
-    """Decision 494: anchors are weighted by boundary height, so A+/S (6) is drawn 1.5 times as
-    often as B/A (4)."""
+    """Decision 494: anchors are weighted by boundary height, so A/S (5) is drawn 5/3 times as
+    often as C/B (3)."""
     candidates = board_of(TWO_BOUNDARIES)
     by_id = {c.title_id: c for c in candidates}
-    assert {by_id[t].straddle for t in (1, 2, 3)} == {4}
-    assert {by_id[t].straddle for t in (4, 5, 6)} == {6}
-    assert [queue.boundary_height(by_id[t]) for t in (1, 4)] == [4, 6]
+    assert {by_id[t].straddle for t in (1, 2, 3)} == {3}
+    assert {by_id[t].straddle for t in (4, 5, 6)} == {5}
+    assert [queue.boundary_height(by_id[t]) for t in (1, 4)] == [3, 5]
 
     rng = random.Random(41)
     anchors = Counter(queue._boundary(candidates, rng).title_a for _ in range(20_000))
     top = sum(anchors[t] for t in (4, 5, 6)) / 20_000
-    assert top == pytest.approx(6 / (6 + 4), abs=0.015), f"the A+/S share was {top:.3f}"
+    assert top == pytest.approx(5 / (5 + 3), abs=0.015), f"the A/S share was {top:.3f}"
     # Weighted, never restricted: every straddler is still an anchor (M4.10 finding 12).
     assert set(anchors) == {1, 2, 3, 4, 5, 6}
 
@@ -323,11 +323,11 @@ def test_a_title_its_verdict_holds_is_a_candidate_in_the_tier_the_board_renders(
     """Decision 508 rule 5: the queue's tier is the board's held tier, not the raw `tier_of`."""
     settled = 1e-6
     items = [
-        board.Item(title_id=1, name="L1", s=-0.5, sigma=settled, verdict=2),
-        board.Item(title_id=2, name="L2", s=-0.45, sigma=settled, verdict=2),
-        board.Item(title_id=3, name="F1", s=-0.3, sigma=settled, verdict=1),
-        board.Item(title_id=4, name="D1", s=0.5, sigma=settled, verdict=0),
-        board.Item(title_id=5, name="A1", s=0.6, sigma=settled, verdict=2),
+        board.Item(title_id=1, name="L1", s=-1.9, sigma=settled, verdict=2),
+        board.Item(title_id=2, name="L2", s=-1.85, sigma=settled, verdict=2),
+        board.Item(title_id=3, name="F1", s=-1.7, sigma=settled, verdict=1),
+        board.Item(title_id=4, name="D1", s=-1.0, sigma=settled, verdict=0),
+        board.Item(title_id=5, name="A1", s=-0.5, sigma=settled, verdict=2),
     ]
     rendered = {
         e.title_id: e.model_tier
@@ -336,17 +336,17 @@ def test_a_title_its_verdict_holds_is_a_candidate_in_the_tier_the_board_renders(
     }
     candidates = queue.candidates(items, cuts=CUTS, tier_set=TIER_SET, hp=DEFAULTS)
     by_id = {c.title_id: c for c in candidates}
-    assert {t: c.tier for t, c in by_id.items()} == rendered == {1: 4, 2: 4, 3: 3, 4: 2, 5: 4}
+    assert {t: c.tier for t, c in by_id.items()} == rendered == {1: 2, 2: 2, 3: 1, 4: 0, 5: 2}
     assert all(c.straddle != c.tier for c in candidates), "a straddle names another tier"
-    # B/A weighs as B/A (4) for the held liked films, and C/B (3) for the held disliked one.
-    assert [queue.boundary_height(by_id[t]) for t in (1, 4)] == [4, 3]
+    # D/C weighs as D/C (2) for the held liked films, and E/D (1) for the held disliked one.
+    assert [queue.boundary_height(by_id[t]) for t in (1, 4)] == [2, 1]
 
     rng = random.Random(7)
     for _ in range(500):
         pair = queue._boundary(candidates, rng)
         anchor, partner = by_id[pair.title_a], by_id[pair.title_b]
         assert rendered[partner.title_id] == anchor.straddle, (pair, "not across the cut")
-        assert partner.title_id == 3, "the one title the board renders in B"
+        assert partner.title_id == 3, "the one title the board renders in D"
 
 
 def test_an_exhausted_boundary_arm_falls_through_to_exploration_and_says_so():
@@ -409,7 +409,7 @@ def test_exploration_breaks_ties_toward_the_top_of_the_board():
 
 
 def test_exploration_still_explores_a_board_that_is_all_bottom_tiers():
-    """The weighting orders anchors and removes none, so an all-F/D board is still explored."""
+    """The weighting orders anchors and removes none, so an all-E/D board is still explored."""
     spec = [(i, -4.0 + 0.2 * i, 0) for i in range(1, 7)]
     candidates = board_of(spec)
     assert {c.tier for c in candidates} <= {0, 1}
@@ -476,7 +476,7 @@ def _tagged(assigned, genres, tier_set=TIER_SET):
 def test_a_pairs_reason_names_its_steps_lower_first_and_the_rarest_genre_both_share():
     """Decision 550's form, from the steps the board renders and the genre fewest of its titles carry."""
     by_id = _tagged(
-        {1: 5, 2: 5, 3: 4, 4: 3, 5: None},
+        {1: 4, 2: 4, 3: 3, 4: 2, 5: None},
         {
             1: ("Drama", "Crime"),
             2: ("Thriller", "Crime", "Drama"),
@@ -485,14 +485,14 @@ def test_a_pairs_reason_names_its_steps_lower_first_and_the_rarest_genre_both_sh
             5: ("Drama",),
         },
     )
-    assert queue.why(by_id[1], by_id[2], TIER_SET, "movie") == "Both in A+ · both crime films"
-    assert queue.why(by_id[2], by_id[1], TIER_SET, "series") == "Both in A+ · both crime series"
+    assert queue.why(by_id[1], by_id[2], TIER_SET, "movie") == "Both in A · both crime films"
+    assert queue.why(by_id[2], by_id[1], TIER_SET, "series") == "Both in A · both crime series"
     for a, b in ((1, 3), (3, 1)):
         assert queue.why(by_id[a], by_id[b], TIER_SET, "movie") == (
-            "One in A, one in A+ · both drama films"
+            "One in B, one in A · both drama films"
         )
-    # A title nobody placed renders where the model holds it: B/A's 0.0 opens A.
-    assert queue.why(by_id[5], by_id[4], TIER_SET, "movie") == "One in B, one in A · both drama films"
+    # A title nobody placed renders where the model holds it: C/B's 0.0 opens B.
+    assert queue.why(by_id[5], by_id[4], TIER_SET, "movie") == "One in C, one in B · both drama films"
 
     bare = _tagged({1: 2, 2: 2, 3: 0}, {1: ("Crime",), 3: ("Crime",)}, tier_set=("bad", "ok", "good"))
     assert queue.why(bare[1], bare[2], ("bad", "ok", "good"), "movie") == "Both in good"

@@ -119,12 +119,11 @@ async def test_the_steps_run_best_first_named_by_their_words_with_no_letter(hous
     payload = response.json()
     assert payload["done"] is False and payload["earlier_ratings"] == 0
     steps = payload["steps"]
-    assert [s["tier"] for s in steps] == [6, 5, 4, 3, 2, 1, 0]
+    assert [s["tier"] for s in steps] == [5, 4, 3, 2, 1, 0]
     assert [s["word"] for s in steps] == [
-        "All-time favourite", "Loved it", "Liked it", "It was fine",
-        "Not really for me", "Didn't like it", "Hated it",
+        "All-time favourite", "Excellent", "Very good", "Good", "OK", "Not for me",
     ]
-    assert [(s["hint"], s["note"]) for s in steps] == [(POPULAR, None)] * 7
+    assert [(s["hint"], s["note"]) for s in steps] == [(POPULAR, None)] * 6
     assert all(set(s) == {"tier", "word", "hint", "note"} for s in steps)
 
 
@@ -169,15 +168,15 @@ async def test_a_custom_set_has_a_step_per_label(house):
 
 
 def test_each_step_opens_where_its_tier_begins_in_the_measured_shape():
-    assert [setup.start_of(tier, 7) for tier in reversed(range(7))] == [
-        0.0, 0.08, 0.25, 0.5, 0.75, 0.9, 1.0,
+    assert [setup.start_of(tier, 6) for tier in reversed(range(6))] == [
+        0.0, 0.1, 0.25, 0.5, 0.8, 1.0,
     ]
     assert [setup.start_of(tier, 5) for tier in reversed(range(5))] == [0.0, 0.25, 0.5, 0.75, 1.0]
 
 
 def test_each_step_reads_its_tiers_slice_of_the_measured_shape():
-    assert [setup.band_of(tier, 7) for tier in reversed(range(7))] == [
-        (0.0, 0.08), (0.08, 0.25), (0.25, 0.5), (0.5, 0.75), (0.75, 0.9), (0.9, 0.97), (0.97, 1.0),
+    assert [setup.band_of(tier, 6) for tier in reversed(range(6))] == [
+        (0.0, 0.1), (0.1, 0.25), (0.25, 0.5), (0.5, 0.8), (0.8, 0.95), (0.95, 1.0),
     ]
     assert [setup.band_of(tier, 5) for tier in reversed(range(5))] == [
         (0.0, 0.2), (0.2, 0.4), (0.4, 0.6), (0.6, 0.8), (0.8, 1.0),
@@ -188,21 +187,21 @@ def test_each_step_reads_its_tiers_slice_of_the_measured_shape():
 
 
 async def test_widely_seen_films_come_before_the_less_seen_and_unscored_films_last(house):
-    order = await _order(house["patrick"], 6)
+    order = await _order(house["patrick"], 5)
     assert order == TOP, "100,000 votes, IMDb's or 50 times TMDB's, make a film widely seen"
     assert SERIES not in order, "the set-up is for films only"
 
 
 async def test_a_step_reads_its_band_most_voted_first_then_the_films_nearest_it(house):
-    # Liked it reads 25-50% of the widely seen order: films 4 and 5, then 3 and 6 just outside it.
-    assert (await _order(house["patrick"], 4))[:4] == [5, 4, 3, 6]
+    # Very good reads 25-50% of the widely seen order: films 4 and 5, then 3 and 6 just outside it.
+    assert (await _order(house["patrick"], 3))[:4] == [5, 4, 3, 6]
 
 
 async def test_own_watched_films_lead_then_another_members_with_a_widely_seen_one_every_fourth(house):
     db = house["db"]
     await _mark(db, house["patrick_id"], 5, OBSCURE_TMDB, UNSCORED_A)
     await _mark(db, house["jenny_id"], OBSCURE_TMDB, 2, OBSCURE_CRITIC, UNSCORED_B)
-    order = await _order(house["patrick"], 6)
+    order = await _order(house["patrick"], 5)
     assert order[:12] == [
         5, OBSCURE_TMDB, UNSCORED_A, 1,
         2, OBSCURE_CRITIC, UNSCORED_B, 3,
@@ -215,12 +214,12 @@ async def test_a_film_the_member_marked_not_seen_stays_with_the_crowd(house):
     db = house["db"]
     await _mark(db, house["jenny_id"], 2, 9)
     await _mark(db, house["patrick_id"], 9, state="unseen")
-    assert await _order(house["patrick"], 6) == [2] + [t for t in TOP if t != 2]
+    assert await _order(house["patrick"], 5) == [2] + [t for t in TOP if t != 2]
 
 
 async def test_an_inactive_members_watched_films_do_not_count(house):
     await _mark(house["db"], await _inactive(house["db"]), 9, 8)
-    assert await _order(house["patrick"], 6) == TOP
+    assert await _order(house["patrick"], 5) == TOP
 
 
 async def test_the_bottom_step_opens_on_the_members_lowest_scored_watched_films(house):
@@ -238,14 +237,14 @@ async def test_a_wished_stub_never_shows(house):
         "VALUES (41, 'imdb', 'user_score', 9.9, 10.0, 900000)"
     )
     await _mark(db, house["patrick_id"], 41)
-    assert await _order(house["patrick"], 6) == TOP
+    assert await _order(house["patrick"], 5) == TOP
 
 
 async def test_a_step_pages_twelve_at_a_time_without_the_other_steps_picks(house):
     db, client = house["db"], house["patrick"]
     await _mark(db, house["patrick_id"], 1, 2, 3, 4)
     await _mark(db, house["jenny_id"], 5, 6, 7, 8, 9, TMDB_WIDE, OBSCURE_IMDB)
-    first = await _films(client, 6)
+    first = await _films(client, 5)
     assert [f["id"] for f in first["films"]] == [
         1, 2, 3, TMDB_SHORT, 4, OBSCURE_IMDB, 5, OBSCURE_TMDB, 6, TMDB_WIDE, 7, OBSCURE_BOTH,
     ]
@@ -253,17 +252,17 @@ async def test_a_step_pages_twelve_at_a_time_without_the_other_steps_picks(house
     assert set(first["films"][0]) == {
         "id", "name", "original_name", "original_language", "year", "poster_path", "seen",
     }
-    rest = await _films(client, 6, offset=12)
+    rest = await _films(client, 5, offset=12)
     assert [f["id"] for f in rest["films"]] == [8, 9, OBSCURE_CRITIC, UNSCORED_A, UNSCORED_B]
     assert rest["more"] is False
 
     # The picks leave before the slots are counted, so a page keeps its widely seen at 4, 8 and 12.
     out = f"1,{TMDB_SHORT}"
-    first = await _films(client, 6, exclude=out)
+    first = await _films(client, 5, exclude=out)
     assert [f["id"] for f in first["films"]] == [
         2, 3, 4, OBSCURE_TMDB, OBSCURE_IMDB, 5, 6, OBSCURE_BOTH, TMDB_WIDE, 7, 8, OBSCURE_CRITIC,
     ]
-    rest = await _films(client, 6, offset=12, exclude=out)
+    rest = await _films(client, 5, offset=12, exclude=out)
     assert [f["id"] for f in rest["films"]] == [9, UNSCORED_A, UNSCORED_B]
     assert rest["more"] is False
 
@@ -273,14 +272,14 @@ async def test_a_film_carries_the_members_own_watched_mark(house):
         "INSERT INTO user_title (user_id, title_id, state) VALUES ($1, 1, 'seen'), ($1, 2, 'unseen')",
         house["patrick_id"],
     )
-    films = {f["id"]: f["seen"] for f in (await _films(house["patrick"], 6))["films"]}
+    films = {f["id"]: f["seen"] for f in (await _films(house["patrick"], 5))["films"]}
     assert (films[1], films[2], films[3]) == (True, False, False)
-    jenny = {f["id"]: f["seen"] for f in (await _films(house["jenny"], 6))["films"]}
+    jenny = {f["id"]: f["seen"] for f in (await _films(house["jenny"], 5))["films"]}
     assert jenny[1] is False, "another member's Watched mark is theirs alone"
 
 
 async def test_a_step_outside_the_set_is_a_422(house):
-    for step in (-1, 7):
+    for step in (-1, 6):
         response = await house["patrick"].get("/api/ladder/setup/films", params={"step": step})
         assert response.status_code == 422, response.text
         assert response.json()["detail"]["reason"] == "bad_step"
@@ -301,7 +300,7 @@ async def test_finishing_is_the_cut_over_and_each_pick_a_placement(house):
     await db.execute(
         "INSERT INTO user_title (user_id, title_id, state) VALUES ($1, 3, 'unseen')", patrick
     )
-    response = await _finish(house["patrick"], [(1, 6), (2, 6), (3, 3), (OBSCURE_IMDB, 0)])
+    response = await _finish(house["patrick"], [(1, 5), (2, 5), (3, 1), (OBSCURE_IMDB, 0)])
     assert response.status_code == 200, response.text
 
     assert await ladder.set_up_at(db, user_id=patrick) is not None
@@ -309,7 +308,7 @@ async def test_finishing_is_the_cut_over_and_each_pick_a_placement(house):
         "SELECT title_id, tier, via FROM tier_edit WHERE user_id = $1 ORDER BY title_id", patrick
     )
     assert [(r["title_id"], r["tier"], r["via"]) for r in edits] == [
-        (1, 6, "explicit"), (2, 6, "explicit"), (3, 3, "explicit"), (OBSCURE_IMDB, 0, "explicit"),
+        (1, 5, "explicit"), (2, 5, "explicit"), (3, 1, "explicit"), (OBSCURE_IMDB, 0, "explicit"),
     ]
     live = await db.fetch(
         f"SELECT title_id, value FROM ({observations.LIVE_LABEL_SQL}) l ORDER BY title_id", patrick
@@ -335,13 +334,13 @@ async def test_the_done_screen_counts_each_step_and_names_its_first_pick(house):
     await observations.record_verdict(db, user_id=patrick, title_id=5, value=2)
     await observations.record_verdict(db, user_id=patrick, title_id=SERIES, value=1)
 
-    done = (await _finish(house["patrick"], [(2, 6), (1, 6), (5, 4)])).json()
+    done = (await _finish(house["patrick"], [(2, 5), (1, 5), (5, 3)])).json()
     assert done["done"] is True and done["placed"] == 3
     assert (done["earlier_ratings"], done["rated_before"]) == (2, 1)
     tiers = done["tiers"]
-    assert [t["tier"] for t in tiers] == [6, 5, 4, 3, 2, 1, 0]
-    assert [t["word"] for t in tiers][:3] == ["All-time favourite", "Loved it", "Liked it"]
-    assert [t["count"] for t in tiers] == [2, 0, 1, 0, 0, 0, 0]
+    assert [t["tier"] for t in tiers] == [5, 4, 3, 2, 1, 0]
+    assert [t["word"] for t in tiers][:3] == ["All-time favourite", "Excellent", "Very good"]
+    assert [t["count"] for t in tiers] == [2, 0, 1, 0, 0, 0]
     assert tiers[0]["first"] == {"id": 2, "name": "Film 2", "poster_path": None}
     assert tiers[2]["first"]["id"] == 5
     assert tiers[1]["first"] is None
@@ -350,7 +349,7 @@ async def test_the_done_screen_counts_each_step_and_names_its_first_pick(house):
 async def test_finishing_ends_the_live_rate_session(house):
     db, patrick = house["db"], house["patrick_id"]
     await db.execute("INSERT INTO rate_session (user_id, kinds) VALUES ($1, ARRAY['movie'])", patrick)
-    assert (await _finish(house["patrick"], [(1, 6)])).status_code == 200
+    assert (await _finish(house["patrick"], [(1, 5)])).status_code == 200
     assert await db.fetchval(
         "SELECT count(*) FROM rate_session WHERE user_id = $1 AND ended_at IS NULL", patrick
     ) == 0
@@ -358,11 +357,11 @@ async def test_finishing_ends_the_live_rate_session(house):
 
 async def test_a_second_finish_is_refused_and_the_films_route_closes(house):
     client = house["patrick"]
-    assert (await _finish(client, [(1, 6)])).status_code == 200
-    again = await _finish(client, [(2, 5)])
+    assert (await _finish(client, [(1, 5)])).status_code == 200
+    again = await _finish(client, [(2, 4)])
     assert again.status_code == 409, again.text
     assert again.json()["detail"]["reason"] == "already_set_up"
-    films = await client.get("/api/ladder/setup/films", params={"step": 6})
+    films = await client.get("/api/ladder/setup/films", params={"step": 5})
     assert films.status_code == 409 and films.json()["detail"]["reason"] == "already_set_up"
     assert (await client.get("/api/ladder/setup")).json()["done"] is True
     assert await house["db"].fetchval(
@@ -374,9 +373,9 @@ async def test_a_second_finish_is_refused_and_the_films_route_closes(house):
     ("picks", "reason"),
     [
         ([], "empty"),
-        ([(1, 6), (1, 5)], "duplicate"),
-        ([(1, 6), (SERIES, 6)], "not_a_film"),
-        ([(1, 7)], "bad_tier"),
+        ([(1, 5), (1, 4)], "duplicate"),
+        ([(1, 5), (SERIES, 5)], "not_a_film"),
+        ([(1, 6)], "bad_tier"),
         ([(1, -1)], "bad_tier"),
     ],
 )
@@ -397,14 +396,14 @@ async def test_a_wished_stub_is_no_pick(house):
     found = (await house["patrick"].get("/api/titles", params={"kind": "movie", "q": "wished"})).json()
     assert [(i["id"], i["origin"]) for i in found["items"]] == [(41, "wished")]
 
-    response = await _finish(house["patrick"], [(1, 6), (41, 5)])
+    response = await _finish(house["patrick"], [(1, 5), (41, 4)])
     assert response.status_code == 422, response.text
     assert response.json()["detail"]["reason"] == "not_a_film"
     assert await db.fetchval("SELECT count(*) FROM tier_edit") == 0
 
 
 async def test_one_members_set_up_leaves_the_others_untouched(house):
-    assert (await _finish(house["patrick"], [(1, 6)])).status_code == 200
+    assert (await _finish(house["patrick"], [(1, 5)])).status_code == 200
     jenny = (await house["jenny"].get("/api/ladder/setup")).json()
     assert jenny["done"] is False
-    assert (await _films(house["jenny"], 6))["films"][0]["id"] == 1, "picks are per member"
+    assert (await _films(house["jenny"], 5))["films"][0]["id"] == 1, "picks are per member"

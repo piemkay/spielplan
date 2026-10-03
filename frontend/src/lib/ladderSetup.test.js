@@ -22,9 +22,9 @@ import { homeKept } from './home.svelte.js';
 
 const HINT = 'Popular films first. Tap the ones you remember well.';
 const STEPS = [
-  { tier: 6, word: 'All-time favourite', hint: HINT },
-  { tier: 5, word: 'Loved it', hint: HINT },
-  { tier: 0, word: 'Hated it', hint: HINT }
+  { tier: 5, word: 'All-time favourite', hint: HINT },
+  { tier: 4, word: 'Excellent', hint: HINT },
+  { tier: 0, word: 'Not for me', hint: HINT }
 ];
 
 const film = (id, seen = false) => ({ id, name: `Film ${id}`, year: 2000, poster_path: null, seen });
@@ -70,7 +70,7 @@ describe('the draft', () => {
     await start();
     expect(setup.status).toBe('steps');
     expect(setup.at).toBe(0);
-    expect(filmCalls()[0].params.get('step')).toBe('6');
+    expect(filmCalls()[0].params.get('step')).toBe('5');
     expect(filmCalls()[0].params.get('offset')).toBe('0');
     expect(filmCalls()[0].params.get('limit')).toBe('12');
     expect(cells().map((f) => f.id)).toEqual([1, 2]);
@@ -89,7 +89,7 @@ describe('the draft', () => {
     await next();
     expect(setup.at).toBe(1);
     expect(excluded()).toEqual([1]);
-    expect(filmCalls().at(-1).params.get('step')).toBe('5');
+    expect(filmCalls().at(-1).params.get('step')).toBe('4');
     expect(filmCalls().at(-1).params.get('exclude')).toBe('1');
     expect(cells().map((f) => f.id)).toEqual([2, 3]);
     toggle(film(3));
@@ -145,8 +145,8 @@ describe('the draft', () => {
     await next();
     toggle(film(3));
     expect(payload()).toEqual([
-      { title_id: 1, tier: 6 },
-      { title_id: 2, tier: 5 },
+      { title_id: 1, tier: 5 },
+      { title_id: 2, tier: 4 },
       { title_id: 3, tier: 0 }
     ]);
     await finish();

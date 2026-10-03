@@ -475,21 +475,21 @@ def test_beta_is_capped_at_the_measured_optimum_and_the_clamp_is_visible():
 
 
 def test_a_verdict_only_member_fits_as_the_three_class_target_did():
-    """§5.1: a verdict's step is its class's middle tier (C, B, A), three evenly spaced levels, so
+    """§5.1: a verdict's step is its class's middle tier (E, D, C), three evenly spaced levels, so
     the centred ridge fits the same v, λ and β as the retired -1/0/+1 target; only μ moves."""
     coords, reference, _ = synth(300, 60, seed=11)
     rng = np.random.default_rng(5)
     classes = [(int(t), int(c)) for t, c in zip(rng.choice(300, 60, replace=False),
                                                  rng.integers(0, 3, 60), strict=True)]
     steps = foldin.fit_user(
-        [(t, model.class_step(c, 7)) for t, c in classes], coords, reference, seed=5
+        [(t, model.class_step(c, 6)) for t, c in classes], coords, reference, seed=5
     )
     three = foldin.fit_user([(t, c - 1) for t, c in classes], coords, reference, seed=5)
-    assert [model.class_step(c, 7) for c in (0, 1, 2)] == [2, 3, 4]
+    assert [model.class_step(c, 6) for c in (0, 1, 2)] == [0, 1, 2]
     assert np.allclose(steps.v, three.v)
     assert (steps.beta, steps.lam) == (three.beta, three.lam)
     assert steps.cv_rho == pytest.approx(three.cv_rho)
-    assert steps.mu == pytest.approx(three.mu + 3.0)
+    assert steps.mu == pytest.approx(three.mu + 1.0)
 
 
 def test_mu_shifts_every_score_and_reorders_nothing():
@@ -890,16 +890,16 @@ async def test_the_gate_on_the_card_is_a_crowd_number_and_not_a_per_viewer_one(d
 
 
 async def test_the_target_is_the_placed_step_else_the_middle_of_the_verdicts_class(db, world):
-    """§5.1 (decision 536): a placement's tier, F = 0 to S = 6, wins over its verdict; a title with a
-    verdict alone is fitted at C, B or A. Each answered title is one target."""
+    """§5.1 (decision 536): a placement's tier, E = 0 to S = 5, wins over its verdict; a title with a
+    verdict alone is fitted at E, D or C. Each answered title is one target."""
     patrick = world["patrick"]
     for title_id, value in ((1, 2), (2, 1), (3, 0)):
         await observations.record_verdict(db, user_id=patrick, title_id=title_id, value=value)
-    await observations.record_tier_edit(db, user_id=patrick, title_id=3, tier=6)
+    await observations.record_tier_edit(db, user_id=patrick, title_id=3, tier=5)
     await observations.record_tier_edit(db, user_id=patrick, title_id=4, tier=0)
 
     targets = dict(await foldin.live_labels(db, user_id=patrick, kind="movie"))
-    assert targets == {1: 4, 2: 3, 3: 6, 4: 0}
+    assert targets == {1: 2, 2: 1, 3: 5, 4: 0}
 
 
 async def test_a_silent_reask_does_not_erase_the_label_it_re_asked(db, world):
@@ -924,7 +924,7 @@ async def test_a_silent_reask_does_not_erase_the_label_it_re_asked(db, world):
 
     after = await foldin.live_labels(db, user_id=patrick, kind="movie")
     assert len(after) == 5, f"the re-ask erased a label: {sorted(before)} -> {sorted(after)}"
-    assert dict(after)[1] == model.class_step(2, 7), (
+    assert dict(after)[1] == model.class_step(2, 6), (
         "and the erased title keeps the answer the person actually gave"
     )
     assert sorted(after) == sorted(before), "a same-answer re-ask must change nothing at all"

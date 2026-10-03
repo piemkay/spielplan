@@ -42,7 +42,7 @@ async def tag(db, title_id, term, salience):
     )
 
 
-# Decision 539: a member's pairs are their own seen films placed A or above (A, A+, S at K = 7); a
+# Decision 539: a member's pairs are their own seen films placed C or above (C, B, A, S at K = 6); a
 # guest's are owned films with 30,000 crowd ratings. Neither set is scored, so neither is a candidate.
 FILMS = list(range(301, 311))      # both members' liked films; 311 is Patrick's alone
 GUEST_FILMS = list(range(401, 411))
@@ -62,7 +62,7 @@ async def seed_films(db, members):
     for user_id, films in members.items():
         await db.execute(
             "INSERT INTO tier_edit (user_id, title_id, tier, n_levels, via) "
-            "SELECT $1, g, 4 + g % 3, 7, 'explicit' FROM unnest($2::int[]) g",
+            "SELECT $1, g, 3 + g % 3, 6, 'explicit' FROM unnest($2::int[]) g",
             user_id, films,
         )
         await db.execute(
@@ -1063,7 +1063,7 @@ async def _films_of(db, room, role):
 
 
 async def test_a_members_pairs_are_their_own_seen_films_placed_liked_or_higher(db, world):
-    """Decision 539: seen, of the evening's kind, placed A or above (A, A+, S at K = 7)."""
+    """Decision 539: seen, of the evening's kind, placed C or above (C, B, A, S at K = 6)."""
     patrick = world["patrick"]
     await db.execute(
         "INSERT INTO title (id, kind, name, year, runtime_min, is_owned) VALUES "
@@ -1072,8 +1072,8 @@ async def test_a_members_pairs_are_their_own_seen_films_placed_liked_or_higher(d
     )
     await db.execute(
         "INSERT INTO tier_edit (user_id, title_id, tier, n_levels, via) VALUES "
-        "($1, 321, 3, 7, 'explicit'), ($1, 322, 6, 7, 'explicit'), ($1, 323, 6, 7, 'explicit'), "
-        "($1, 310, 2, 7, 'drag_drop')",
+        "($1, 321, 1, 6, 'explicit'), ($1, 322, 5, 6, 'explicit'), ($1, 323, 5, 6, 'explicit'), "
+        "($1, 310, 0, 6, 'drag_drop')",
         patrick,
     )
     await db.execute(
@@ -1084,8 +1084,8 @@ async def test_a_members_pairs_are_their_own_seen_films_placed_liked_or_higher(d
     room = await running_room(db, world)
 
     assert await _films_of(db, room, "host") == {*FILMS[:-1], 311}, (
-        "B is not liked, a film marked Not seen is not seen, a series is not tonight's kind, and the "
-        "latest placement of film 310 is C"
+        "D is not liked, a film marked Not seen is not seen, a series is not tonight's kind, and the "
+        "latest placement of film 310 is E"
     )
     assert await _films_of(db, room, "member") == set(FILMS), "Jenny's films are her own"
 
@@ -1112,7 +1112,7 @@ async def test_a_seat_with_fewer_than_eight_films_goes_straight_to_the_picks_say
     state = await play.state_for(db, member)
     assert state["pair"] is None and state["ended_by"] == rnd.CONVERGED
     assert state["no_round"] == (
-        "No mood questions tonight — they need 8 films on your ladder at Liked it or higher, "
+        "No mood questions tonight — they need 8 films on your ladder at Good or higher, "
         "and you have 5."
     )
     row = await db.fetchrow("SELECT answered_count, tilt FROM session_participant WHERE id = $1", member)
@@ -1155,7 +1155,7 @@ async def test_the_no_round_line_says_why_placed_films_do_not_count(db, world):
     why = {s["role"]: snapshot.round_of(s["id"]).no_round for s in seats}
 
     assert why["host"] == (
-        "No mood questions tonight — they need 8 films on your ladder at Liked it or higher that "
+        "No mood questions tonight — they need 8 films on your ladder at Good or higher that "
         "you've seen and tonight's vetoes leave in, and you have 7."
     ), "eleven placed: three marked Not seen, one vetoed"
     assert why["member"] is None
@@ -1171,7 +1171,7 @@ async def test_the_no_round_line_says_why_placed_films_do_not_count(db, world):
     )
     out = await solo_picks(db, world, sharpen=True)
     assert out["no_round"] == (
-        "No mood questions tonight — they need 8 films on your ladder at Liked it or higher that "
+        "No mood questions tonight — they need 8 films on your ladder at Good or higher that "
         "you've seen, and you have 7."
     )
 
@@ -1517,7 +1517,7 @@ async def test_solo_with_too_few_films_lands_on_the_picks_saying_why(db, world):
     assert out["pair"] is None and out["stop_reason"] == rnd.CONVERGED
     assert len(out["picks"]) == solo.PICKS
     assert out["no_round"] == (
-        "No mood questions tonight — they need 8 films on your ladder at Liked it or higher, "
+        "No mood questions tonight — they need 8 films on your ladder at Good or higher, "
         "and you have 7."
     )
     assert out["provenance"] == "Your usual favourites · fits in 2h 10m"
@@ -2838,7 +2838,7 @@ async def household(app, db):
         )
         await db.execute(
             "INSERT INTO tier_edit (user_id, title_id, tier, n_levels, via) "
-            "SELECT $1, g, 5, 7, 'explicit' FROM generate_series(101, 110) AS g",
+            "SELECT $1, g, 4, 6, 'explicit' FROM generate_series(101, 110) AS g",
             user_id,
         )
         await db.execute(

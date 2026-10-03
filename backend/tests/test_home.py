@@ -237,7 +237,7 @@ async def seed(conn, *, patrick: int, jenny: int) -> None:
         kind = kind_of(base)
         await conn.execute(
             "INSERT INTO ledger_cutpoints (user_id, kind, boundaries) "
-            "VALUES ($1, $2, ARRAY[-2.0, -1.0, 0.0, 1.0, 2.0, 3.0]::double precision[])",
+            "VALUES ($1, $2, ARRAY[-2.0, -1.0, 0.0, 1.0, 2.0]::double precision[])",
             patrick, kind,
         )
         rows = [(ANCHOR, 3.0, 0.98, 4)]
@@ -607,7 +607,7 @@ async def test_the_anchor_follows_the_tier_the_owner_assigned(world):
         world.patrick,
     )
     film = world.section(await world.home(), "because_anchor", "movie")
-    assert film["anchor"]["tier"] == "F", "Home is still naming the tier the model fitted"
+    assert film["anchor"]["tier"] == "E", "Home is still naming the tier the model fitted"
     assert film["title"] == "Because you liked Home Film 1000", film["title"]
 
     # After the refit too: `tier_edit` is append-only, so the anchor is stable by construction.
@@ -620,14 +620,14 @@ async def test_the_anchor_follows_the_tier_the_owner_assigned(world):
     after = world.section(await world.home(), "because_anchor", "movie")
     assert after is not None, "the refit suppressed shelf 1"
     assert after["anchor"]["title_id"] == 1000
-    assert after["anchor"]["tier"] == "F", after["anchor"]
+    assert after["anchor"]["tier"] == "E", after["anchor"]
 
     model_after = await world.db.fetchval(
         "SELECT tier FROM ledger_state WHERE user_id = $1 AND title_id = 1000", world.patrick
     )
     assert model_after != 0, (
-        f"the refit fitted the anchor into F itself (tier {model_after}), so the anchor would "
-        "read F whichever column it took — this assertion has stopped being falsifiable"
+        f"the refit fitted the anchor into E itself (tier {model_after}), so the anchor would "
+        "read E whichever column it took — this assertion has stopped being falsifiable"
     )
 
 
@@ -636,7 +636,7 @@ async def test_the_anchor_is_at_the_tier_rank_renders_after_a_k_change(world):
     labels = [f"T{i}" for i in range(12)]
     await world.db.execute(
         "INSERT INTO tier_edit (user_id, title_id, tier, via, n_levels) "
-        "VALUES ($1, 1000, 6, 'drag_drop', 7)",
+        "VALUES ($1, 1000, 5, 'drag_drop', 6)",
         world.patrick,
     )
     before = world.section(await world.home(), "because_anchor", "movie")
@@ -834,7 +834,7 @@ async def test_before_the_set_up_the_session_the_cards_not_seen_opens_narrows_no
     assert (await world.home())["banner"]["count"] == 6, "both kinds count before the set-up"
 
 
-async def _set_up(world, picks=((1012, 6),)):
+async def _set_up(world, picks=((1012, 5),)):
     """The admin's set-up, as the finish route writes it."""
     return await ladder.finish_setup(world.db, user_id=world.patrick, picks=list(picks))
 
@@ -900,7 +900,7 @@ async def test_before_the_set_up_home_carries_the_notice_over_its_shelves(world)
     payload = await world.home()
     assert payload["setup_notice"] == {
         "headline": "Set up your ladder.",
-        "why": "Rating is one tap now, on seven steps of your own. The set-up takes about a minute"
+        "why": "Rating is one tap now, on six steps of your own. The set-up takes about a minute"
                " — until then your shelves keep using your earlier ratings",
         "cta": {"label": "Set up my ladder", "route": "/rate/setup"},
     }
@@ -1529,7 +1529,7 @@ async def test_the_anchor_is_the_highest_tier_the_board_shows_after_a_k_change(w
     await _tag(world.db, 1012, "morally-grey", "character", 3)
     await world.db.execute(
         "INSERT INTO tier_edit (user_id, title_id, tier, via, n_levels) "
-        "VALUES ($1, 1012, 6, 'drag_drop', 7)",
+        "VALUES ($1, 1012, 5, 'drag_drop', 6)",
         world.patrick,
     )
     await world.db.execute(

@@ -212,12 +212,12 @@
     animation: pop var(--dur-quick) var(--ease);
   }
   /* `--spare`: what a one-line name leaves under the last shelf (the screen less the top row, 8px, the
-     126px head, 16px, seven 72px shelves and the tab bar). A second line costs 21px, so the name takes
+     126px head, 16px, six 72px shelves and the tab bar). A second line costs 21px, so the name takes
      it where the shelves still clear the tab bar, or where the page scrolls anyway (§6.1). */
   @media (max-width: 720px) {
     .name {
       --spare: calc(
-        100dvh - 44px - env(safe-area-inset-top) - var(--tabbar) - env(safe-area-inset-bottom) - 654px
+        100dvh - 44px - env(safe-area-inset-top) - var(--tabbar) - env(safe-area-inset-bottom) - 582px
       );
       max-height: calc(
         34px + clamp(0px, (var(--spare) - 20px) * 34, 34px) + clamp(0px, var(--spare) * -34, 34px)

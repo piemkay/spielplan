@@ -73,7 +73,7 @@ def _hint(watched: Sequence[asyncpg.Record]) -> tuple[str, str | None]:
 
 def start_of(tier: int, k: int) -> float:
     """Where a step opens in the order (0 = the highest rated, 1 = the lowest): where its tier begins in
-    the measured shape at K = 7, the bottom step at the lowest; equal steps at another K."""
+    the shape at K = 6, the bottom step at the lowest; equal steps at another K."""
     if k < 2:
         return 0.0
     if tier == 0:
@@ -85,7 +85,7 @@ def start_of(tier: int, k: int) -> float:
 
 def band_of(tier: int, k: int) -> tuple[float, float]:
     """The step's slice of the widely seen films' order (decision 556): its tier's share of the measured
-    shape at K = 7, equal slices at another K."""
+    shape at K = 6, equal slices at another K."""
     shares = model.MEASURED_TIER_SHARES
     if k == len(shares):
         return float(sum(shares[tier + 1:])), float(sum(shares[tier:]))

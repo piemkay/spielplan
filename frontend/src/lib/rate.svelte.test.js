@@ -19,16 +19,14 @@ import {
   undo
 } from './rate.svelte.js';
 
-const WORDS = [
-  'Hated it', "Didn't like it", 'Not really for me', 'It was fine', 'Liked it', 'Loved it', 'All-time favourite'
-];
+const WORDS = ['Not for me', 'OK', 'Good', 'Very good', 'Excellent', 'All-time favourite'];
 const film = (id, name) => ({ id, name, original_name: name, original_language: 'en', poster_path: null });
 const shelves = () =>
-  [6, 5, 4, 3, 2, 1, 0].map((tier) => ({
+  [5, 4, 3, 2, 1, 0].map((tier) => ({
     tier,
     word: WORDS[tier],
-    count: tier === 4 ? 2 : 0,
-    films: tier === 4 ? [film(9, 'Zodiac')] : []
+    count: tier === 3 ? 2 : 0,
+    films: tier === 3 ? [film(9, 'Zodiac')] : []
   }));
 const card = (over = {}) => ({
   token: 't1',
@@ -78,7 +76,7 @@ function conflict(detail) {
 
 describe('pure helpers', () => {
   it('writes a label the way a member reads it', () => {
-    expect(sentenceCase('loved it')).toBe('Loved it');
+    expect(sentenceCase('very good')).toBe('Very good');
     expect(sentenceCase(null)).toBe('');
   });
 
@@ -143,7 +141,7 @@ describe('the envelope', () => {
 
   it('opens on the served card with its counter, set-up and undo state', () => {
     expect(rate.card.token).toBe('t1');
-    expect(rate.card.shelves).toHaveLength(7);
+    expect(rate.card.shelves).toHaveLength(6);
     expect(rate.session.block.counter).toBe('1 of 15');
     expect(rate.setup.done).toBe(true);
     expect(rate.undo).toEqual({ available: false, kind: null, name: null });
@@ -164,20 +162,20 @@ describe('the envelope', () => {
         envelope({
           session: { kinds: ['movie'], kind: 'movie', block: { slot: 2, size: 15, counter: '2 of 15' } },
           card: card({ token: 't2', title: { ...card().title, id: 2, name: 'Drive' } }),
-          echo: { title_id: 1, name: 'Heat', tier: 5, word: 'Loved it' },
+          echo: { title_id: 1, name: 'Heat', tier: 4, word: 'Excellent' },
           undo: { available: true, kind: 'placement', name: 'Heat' }
         })
       )
     );
-    await place(5);
+    await place(4);
 
     const [url, body] = sent();
     expect(url).toBe('/api/rate/place');
-    expect(body).toMatchObject({ card_token: 't1', tier: 5 });
+    expect(body).toMatchObject({ card_token: 't1', tier: 4 });
     expect(typeof body.latency_ms).toBe('number');
     expect(rate.card.token).toBe('t2');
     expect(rate.session.block.counter).toBe('2 of 15');
-    expect(rate.echo).toEqual({ title_id: 1, name: 'Heat', tier: 5, word: 'Loved it' });
+    expect(rate.echo).toEqual({ title_id: 1, name: 'Heat', tier: 4, word: 'Excellent' });
     expect(rate.undo).toEqual({ available: true, kind: 'placement', name: 'Heat' });
 
     vi.advanceTimersByTime(ECHO_MS - 1);
@@ -204,7 +202,7 @@ describe('the envelope', () => {
   it('keeps the lit shelf up for its commit before the next film deals in', async () => {
     vi.stubGlobal('matchMedia', () => ({ matches: true }));
     fetchMock.mockResolvedValue(ok(envelope({ card: card({ token: 't2' }) })));
-    const tapped = place(6);
+    const tapped = place(5);
     await vi.advanceTimersByTimeAsync(140);
     expect(rate.card.token, 'the card swapped before its shelf had lit').toBe('t1');
     await vi.advanceTimersByTimeAsync(10);
@@ -226,10 +224,10 @@ describe('the envelope', () => {
 
   it('takes the last answer back: the echo goes and the film comes back from the left', async () => {
     fetchMock.mockResolvedValue(
-      ok(envelope({ card: card({ token: 't2' }), echo: { title_id: 1, name: 'Heat', tier: 4, word: 'Liked it' } }))
+      ok(envelope({ card: card({ token: 't2' }), echo: { title_id: 1, name: 'Heat', tier: 3, word: 'Very good' } }))
     );
-    await place(4);
-    expect(rate.echo.word).toBe('Liked it');
+    await place(3);
+    expect(rate.echo.word).toBe('Very good');
 
     fetchMock.mockResolvedValue(ok(envelope({ card: card({ token: 't3' }) })));
     await undo();

@@ -341,11 +341,11 @@ async def test_a_move_inside_a_class_writes_no_verdict_and_still_makes_the_fit_s
     await _tick(db, world)
     await _wait_out_the_pause(db, patrick)
 
-    await observations.record_tier_edit(db, user_id=patrick, title_id=1, tier=6)
+    await observations.record_tier_edit(db, user_id=patrick, title_id=1, tier=5)
     await _wait_out_the_pause(db, patrick)
 
     assert (patrick, "movie") in (await _tick(db, world)).refit
-    assert dict(await foldin.live_labels(db, user_id=patrick, kind="movie"))[1] == 6
+    assert dict(await foldin.live_labels(db, user_id=patrick, kind="movie"))[1] == 5
     assert (await _fit(db, patrick))["label_count"] == len(SITTING)
 
 

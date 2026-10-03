@@ -209,13 +209,13 @@ async def test_a_drop_under_an_active_filter_writes_the_edit_and_no_neighbour_du
 
 
 async def test_the_board_renders_the_drop_and_does_not_snap_it_back(db, board_of):
-    await drop.drop(db, user_id=board_of, title_id=5, tier=6)
+    await drop.drop(db, user_id=board_of, title_id=5, tier=5)
     await fitted(db, board_of)
 
     tiers, cuts, _rows = await read.load(db, user_id=board_of, kind="movie", hp=DEFAULTS)
     placed = {e.title_id: e for t in tiers for e in t.entries}
-    assert placed[5].tier == 6 == placed[5].assigned_tier
-    assert cuts.tier_set[6] == "S"
+    assert placed[5].tier == 5 == placed[5].assigned_tier
+    assert cuts.tier_set[5] == "S"
 
 
 async def test_a_drop_narrates_itself_with_the_number_of_duels_it_wrote(db, sandwich):
@@ -223,7 +223,7 @@ async def test_a_drop_narrates_itself_with_the_number_of_duels_it_wrote(db, sand
     both = await drop.drop(db, user_id=board_of, title_id=4, tier=5, above=1, below=2,
                            title_name="Drive")
     assert both.log == (
-        "tier_edit(Drive → A+, via=drag_drop) + 2 margin-less duels vs new neighbours"
+        "tier_edit(Drive → S, via=drag_drop) + 2 margin-less duels vs new neighbours"
         " + verdict = liked"
     )
     alone = await drop.drop(db, user_id=board_of, title_id=4, tier=4, title_name="Drive")
@@ -249,19 +249,19 @@ async def test_a_tier_on_an_unrated_title_answers_the_verdict_it_stands_for(db, 
     verdict it would sit on Home's banner, so the tier's verdict comes with it."""
     before = await read.standing(db, user_id=board_of, kind="movie", title_id=7, hp=DEFAULTS)
     assert before["tier"] is None, "the model's guess for an unrated title reached the card"
-    assert [t["label"] for t in before["tiers"]] == ["S", "A+", "A", "B", "C", "D", "F"]
+    assert [t["label"] for t in before["tiers"]] == ["S", "A", "B", "C", "D", "E"]
 
     result = await drop.drop(db, user_id=board_of, title_id=7, tier=5, title_name="Thief")
 
     rows = await db.fetch("SELECT value, source FROM verdict WHERE user_id=$1 AND title_id=7", board_of)
-    assert [(r["value"], r["source"]) for r in rows] == [(model.verdict_class_of_tier(5, 7), "tier")]
+    assert [(r["value"], r["source"]) for r in rows] == [(model.verdict_class_of_tier(5, 6), "tier")]
     assert await db.fetchval(
         "SELECT state FROM user_title WHERE user_id=$1 AND title_id=7", board_of
     ) == "seen"
     assert await db.fetchval(
         "SELECT tier FROM tier_edit WHERE user_id=$1 AND title_id=7", board_of
     ) == 5
-    assert result.log == "tier_edit(Thief → A+, via=drag_drop) + verdict = liked"
+    assert result.log == "tier_edit(Thief → S, via=drag_drop) + verdict = liked"
     assert await shelves.pending_verdicts(db, user_id=board_of) is None
 
     await fitted(db, board_of)
@@ -282,17 +282,17 @@ async def test_a_move_into_another_class_writes_that_classs_verdict_and_counts_i
     assert fine["value"] == 1
     await observations.record_not_seen(db, user_id=board_of, title_id=3)
 
-    await drop.drop(db, user_id=board_of, title_id=3, tier=0)
+    await drop.drop(db, user_id=board_of, title_id=3, tier=2)
 
     old, new = [dict(r) for r in await db.fetch(verdicts, board_of)]
-    assert (new["value"], new["source"]) == (model.verdict_class_of_tier(0, 7), "tier") == (0, "tier")
+    assert (new["value"], new["source"]) == (model.verdict_class_of_tier(2, 6), "tier") == (2, "tier")
     assert old["id"] == fine["id"] and old["superseded_by"] == new["id"]
     assert await db.fetchval(
         "SELECT state FROM user_title WHERE user_id=$1 AND title_id=3", board_of
     ) == "seen"
 
-    await drop.drop(db, user_id=board_of, title_id=3, tier=1)
-    assert len(await db.fetch(verdicts, board_of)) == 2, "D is still disliked: no second verdict"
+    await drop.drop(db, user_id=board_of, title_id=3, tier=3)
+    assert len(await db.fetch(verdicts, board_of)) == 2, "B is still liked: no second verdict"
 
 
 async def test_ledger_cutpoints_is_keyed_by_user_and_kind(db, world):
@@ -327,7 +327,7 @@ async def test_a_boundary_list_that_does_not_match_the_tier_set_is_refused(db, w
 
 
 async def test_saving_a_new_tier_set_reinitialises_to_equal_mass_quantiles(db, board_of):
-    """The measured F3/D7/C15 shape is authored for K = 7 only."""
+    """The measured E5/D15/C30 shape is authored for K = 6 only."""
     report = await tiers.save_tier_set(db, user_id=board_of, tier_set=["bad", "ok", "good"])
     assert report.k_changed and report.initialised["movie"] == "quantile"
 
@@ -354,7 +354,7 @@ async def test_saving_a_new_tier_set_queues_a_refit_for_that_user_alone(db, boar
     """Queued, not run: a full MAP refit takes seconds, beyond a settings save's budget."""
     await rate(db, world["jenny"], verdicts=[(1, 2), (2, 0)])
     await fitted(db, world["jenny"])
-    await tiers.save_tier_set(db, user_id=world["jenny"], tier_set=["F", "D", "C", "B", "A", "A+", "S"])
+    await tiers.save_tier_set(db, user_id=world["jenny"], tier_set=["E", "D", "C", "B", "A", "S"])
 
     await tiers.save_tier_set(db, user_id=board_of, tier_set=["bad", "ok", "good"])
 
@@ -375,7 +375,7 @@ async def test_a_relabel_at_the_same_size_keeps_the_learned_boundaries(db, board
         )
     )
     report = await tiers.save_tier_set(
-        db, user_id=board_of, tier_set=["E", "D", "C", "B", "A", "A+", "S"]
+        db, user_id=board_of, tier_set=["F", "D", "C", "B", "A", "S"]
     )
     after = list(
         await db.fetchval(
@@ -389,7 +389,7 @@ async def test_a_relabel_at_the_same_size_keeps_the_learned_boundaries(db, board
 
 
 async def test_saving_a_new_tier_set_leaves_the_tier_edit_rows_intact(db, board_of):
-    await drop.drop(db, user_id=board_of, title_id=1, tier=6)
+    await drop.drop(db, user_id=board_of, title_id=1, tier=5)
     await drop.drop(db, user_id=board_of, title_id=5, tier=0)
     before = await db.fetch(
         "SELECT id, title_id, tier, via FROM tier_edit WHERE user_id=$1 ORDER BY id", board_of
@@ -405,7 +405,7 @@ async def test_saving_a_new_tier_set_leaves_the_tier_edit_rows_intact(db, board_
 
 async def test_a_shrunk_tier_set_still_fits_and_the_old_edits_still_count(db, board_of):
     """`load_observations` clamps an edit's level past the new K rather than raising."""
-    await drop.drop(db, user_id=board_of, title_id=1, tier=6)
+    await drop.drop(db, user_id=board_of, title_id=1, tier=5)
     await tiers.save_tier_set(db, user_id=board_of, tier_set=["bad", "ok", "good"])
 
     report = await fitted(db, board_of)
@@ -430,9 +430,9 @@ async def test_a_tier_set_change_invalidates_the_fit_rather_than_leaving_the_old
     assert await refit.load_cache(db, user_id=board_of, kind="movie", hp=DEFAULTS, lock=False)
 
     # A relabel at the same K invalidates nothing: the boundaries still mean what they meant.
-    await tiers.save_tier_set(db, user_id=board_of, tier_set=list("ABCDEFG"))
+    await tiers.save_tier_set(db, user_id=board_of, tier_set=list("ABCDEF"))
     kept = await refit.load_cache(db, user_id=board_of, kind="movie", hp=DEFAULTS, lock=False)
-    assert kept is not None and kept.n_levels == 7, "a relabel is not a change of basis"
+    assert kept is not None and kept.n_levels == 6, "a relabel is not a change of basis"
 
     await tiers.save_tier_set(db, user_id=board_of, tier_set=[f"T{i}" for i in range(12)])
     assert await refit.load_cache(
@@ -465,14 +465,14 @@ async def test_the_loader_the_incremental_path_and_the_board_rescale_through_one
     db, board_of
 ):
     """One `observations.rescale_level` for loader, incremental path and board. The incremental half
-    runs twice from one deterministic cache, `n_levels` 7 and a lying 12, as the control."""
-    assert observations.rescale_level(6, k_from=7, k_to=12) == 11, (
+    runs twice from one deterministic cache, `n_levels` 6 and a lying 12, as the control."""
+    assert observations.rescale_level(5, k_from=6, k_to=12) == 11, (
         "the rescale a preserved tier_edit row takes on the incremental path is not the identity"
     )
-    await drop.drop(db, user_id=board_of, title_id=1, tier=6)
+    await drop.drop(db, user_id=board_of, title_id=1, tier=5)
     assert await db.fetchval(
         "SELECT n_levels FROM tier_edit WHERE user_id=$1 AND title_id=1", board_of
-    ) == 7
+    ) == 6
 
     await tiers.save_tier_set(db, user_id=board_of, tier_set=[f"T{i}" for i in range(12)])
     report = await fitted(db, board_of)
@@ -484,7 +484,7 @@ async def test_the_loader_the_incremental_path_and_the_board_rescale_through_one
         for level, arm in zip(loaded.obs.ord_level, loaded.obs.ord_arm, strict=True)
         if int(arm) == observations.ARM_TIER
     ]
-    assert levels == [11], "the loader still reads the drop as level 6 of a 12-level set"
+    assert levels == [11], "the loader still reads the drop as level 5 of a 12-level set"
 
     rendered, cuts, _rows = await read.load(db, user_id=board_of, kind="movie", hp=DEFAULTS)
     assert len(cuts.tier_set) == 12
@@ -510,7 +510,7 @@ async def test_the_loader_the_incremental_path_and_the_board_rescale_through_one
         "UPDATE tier_edit SET n_levels = 12 WHERE user_id = $1 AND title_id = 1", board_of
     )
     lying = await incremental_s()
-    print(f"\nincremental s for the dropped title: {honest:.4f} read at 11, {lying:.4f} read at 6")
+    print(f"\nincremental s for the dropped title: {honest:.4f} read at 11, {lying:.4f} read at 5")
     assert honest > lying, (
         "the incremental path is not reading the K the edit was written under: a top-tier drop and "
         "a mid-board one produced the same score"
@@ -522,7 +522,7 @@ async def test_a_drop_beside_a_pre_k_change_neighbour_is_checked_at_the_rendered
 ):
     """`drop._tiers_of` must read the level the board renders; the clamp and the map only diverge
     once K changes."""
-    await drop.drop(db, user_id=board_of, title_id=1, tier=6)
+    await drop.drop(db, user_id=board_of, title_id=1, tier=5)
     await tiers.save_tier_set(db, user_id=board_of, tier_set=[f"T{i}" for i in range(12)])
     assert (await fitted(db, board_of)).fitted
 
@@ -539,8 +539,8 @@ async def test_a_drop_beside_a_pre_k_change_neighbour_is_checked_at_the_rendered
     ) == 1
 
     # Only an API call can send the stale level, but duels are append-only, so it is refused.
-    with pytest.raises(drop.DropRefused, match="not in T6 any more"):
-        await drop.drop(db, user_id=board_of, title_id=3, tier=6, above=1)
+    with pytest.raises(drop.DropRefused, match="not in T5 any more"):
+        await drop.drop(db, user_id=board_of, title_id=3, tier=5, above=1)
 
 
 @pytest.fixture
@@ -641,7 +641,7 @@ async def test_the_tier_set_is_read_for_the_kind_that_is_asked(db, board_of):
         "mid",
         "high",
     )
-    assert len(await tiers.tier_set_of(db, user_id=board_of, kind="movie")) == 7
+    assert len(await tiers.tier_set_of(db, user_id=board_of, kind="movie")) == 6
 
 
 async def test_a_drop_resolves_the_tier_set_of_the_titles_own_kind(db, board_of):
@@ -1099,7 +1099,7 @@ async def test_a_board_with_no_cutpoints_row_falls_back_to_the_prior_not_to_perc
 
     cuts = await read.cutpoints_of(db, user_id=world["jenny"], kind="movie")
     assert cuts.tier_set == observations.DEFAULT_TIER_SET
-    assert np.allclose(cuts.boundaries, model.initial_cutpoints(7))
+    assert np.allclose(cuts.boundaries, model.initial_cutpoints(6))
 
 
 async def test_the_public_projection_carries_no_ungated_model_number(db, board_of):

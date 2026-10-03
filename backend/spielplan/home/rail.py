@@ -139,7 +139,7 @@ def tier_edit_line(
     title_name: str, tier: str, *, via: str, neighbour_duels: int = 0, rater: str | None = None
 ) -> str:
     """`tier_edit(Drive → A, via=drag_drop) + 2 margin-less duels vs new neighbours`, or with the
-    rater `tier_edit(jenny, Heat → A+, via=explicit)` (§6.7)."""
+    rater `tier_edit(jenny, Heat → A, via=explicit)` (§6.7)."""
     who = f"{_elide(rater)}, " if rater else ""
     line = f"tier_edit({who}{_elide(title_name)} → {tier}, via={via})"
     if neighbour_duels:

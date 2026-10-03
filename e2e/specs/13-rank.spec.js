@@ -166,7 +166,7 @@ test.describe('rank', () => {
     // Decision 550: Rank writes wait for the set-up, so set up, then place the rest through Rate
     // across the board, so the cutpoints do not collapse into one tier. Both are a no-op on reuse.
     await setUpLadder(page.request);
-    await placeThroughRate(page.request, 'movie', [6, 4, 3, 1]);
+    await placeThroughRate(page.request, 'movie', [5, 3, 1, 0]);
     // The board arrives with the worker's refit, however this run got its placements.
     await waitForBoard(page, { atLeast: 3 });
   });
@@ -182,10 +182,10 @@ test.describe('rank', () => {
     const labels = await board(page).locator('[data-tier]').evaluateAll((rows) =>
       rows.map((row) => row.getAttribute('data-tier'))
     );
-    expect(labels).toEqual(['S', 'A+', 'A', 'B', 'C', 'D', 'F']);
+    expect(labels).toEqual(['S', 'A', 'B', 'C', 'D', 'E']);
     await expect(page.getByTestId('rank-tier-S')).toContainText('All-time favourite');
-    await expect(page.getByTestId('rank-tier-B')).toContainText('It was fine');
-    await expect(page.getByTestId('rank-tier-F')).toContainText('Hated it');
+    await expect(page.getByTestId('rank-tier-B')).toContainText('Very good');
+    await expect(page.getByTestId('rank-tier-E')).toContainText('Not for me');
     // Decisions 486 and 528: the count in the person's words, in the search field.
     await expect(await searchBox(page)).toHaveAttribute('placeholder', /^Search \d+ rated films?$/);
     await expect(page.getByRole('region', { name: 'Needs a look' })).toContainText(
@@ -204,7 +204,7 @@ test.describe('rank', () => {
 
     const writes = await writesDuring(page, async () => {
       await openLadder(page, titleId);
-      await expect(ladder(page).getByTestId('ladder-shelf')).toHaveCount(7);
+      await expect(ladder(page).getByTestId('ladder-shelf')).toHaveCount(6);
       // Every shelf carries its word, so the current step's is looked for outside them.
       const named = await ladder(page).evaluate((sheet) => {
         const copy = sheet.cloneNode(true);
@@ -609,13 +609,13 @@ test.describe('rank before the set-up', () => {
     await expect(page.getByRole('region', { name: 'Needs a look' })).toHaveCount(0);
     await expect(page.getByTestId('rank-empty')).toHaveCount(0);
     // Its empty tiers stay on screen, and neither a head nor a strip letter takes a drop.
-    await expect(board(page).locator('[data-tier]')).toHaveCount(7);
+    await expect(board(page).locator('[data-tier]')).toHaveCount(6);
     await expect(page.locator('[data-drop-tier]')).toHaveCount(0);
 
     const film = (await (await page.request.get('/api/titles?kind=movie&limit=1')).json()).items[0];
     const refusals = {
       'a drop': await page.request.post('/api/rank/drop?kind=movie', {
-        data: { title_id: film.id, tier: 6, via: 'explicit' }
+        data: { title_id: film.id, tier: 5, via: 'explicit' }
       }),
       'a pair': await page.request.get('/api/rank/queue?kind=movie'),
       'Place with questions': await page.request.post('/api/rank/place', {

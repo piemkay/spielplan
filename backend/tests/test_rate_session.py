@@ -167,7 +167,7 @@ async def test_a_placement_is_one_tier_edit_its_verdict_and_one_journal_row(db, 
     verdict = await db.fetchrow(
         "SELECT id, value, source FROM verdict WHERE user_id = $1 AND title_id = $2", user, title_id
     )
-    assert (verdict["value"], verdict["source"]) == (2, "ladder"), "A+ stands for liked"
+    assert (verdict["value"], verdict["source"]) == (2, "ladder"), "S stands for liked"
     row = await db.fetchrow(
         "SELECT kind_of, tier_edit_id, verdict_id, title_ids, advances FROM rate_observation "
         "WHERE session_id = $1",
@@ -182,13 +182,15 @@ async def test_a_placement_is_one_tier_edit_its_verdict_and_one_journal_row(db, 
 
     assert out.session.slot == 2
     assert out.session.current_card["title_id"] != title_id, "the next card rode in with the answer"
-    assert out.echo == {"title_id": title_id, "name": f"Title {title_id}", "tier": 5, "word": "Loved it"}
+    assert out.echo == {
+        "title_id": title_id, "name": f"Title {title_id}", "tier": 5, "word": "All-time favourite",
+    }
 
 
 async def test_a_step_outside_the_set_is_refused_before_anything_is_written(db, world):
     user = world["user"]
     s = await open_session(db, user)
-    for tier in (7, -1):
+    for tier in (6, -1):
         with pytest.raises(session.BadTier):
             await session.record_placement(db, s, card_token=token(s), tier=tier, hp=HP)
     assert await db.fetchval("SELECT count(*) FROM tier_edit") == 0
@@ -256,8 +258,8 @@ async def test_the_card_carries_no_model_belief_and_no_letter_and_the_guess_arri
     assert all(set(shelf) == {"tier", "word", "count", "films"} for shelf in card["shelves"])
 
     out = await session.record_placement(db, s, card_token=token(s), tier=4, hp=HP)
-    assert out.echo["word"] == "Liked it"
-    assert out.echo["model"] == {"guess_word": "Loved it", "cdf": round(MARKER_CDF, 2)}, (
+    assert out.echo["word"] == "Excellent"
+    assert out.echo["model"] == {"guess_word": "All-time favourite", "cdf": round(MARKER_CDF, 2)}, (
         "the stored row said step 5 at that cdf"
     )
     assert_no_model_belief((await session.payload(db, out.session))["card"])
@@ -266,7 +268,7 @@ async def test_the_card_carries_no_model_belief_and_no_letter_and_the_guess_arri
 async def test_the_guess_is_read_before_the_write_and_not_after_it(db, world):
     """A handler reading after the update would echo the placement back as its own guess."""
     user = world["user"]
-    await place(db, user, {1: 6, 2: 5, 3: 2, 4: 1})
+    await place(db, user, {1: 5, 2: 4, 3: 2, 4: 1})
     await seed_ledger(db, user, range(1, 21), fitted=True)
     s = await put(db, await session.open_or_resume(db, user_id=user, kinds=["movie"]), 9)
 
@@ -312,7 +314,7 @@ async def test_the_guess_reads_an_unowned_film_off_the_cached_fit(db, world):
             title_id, name,
         )
     signal = {1: -1.0, 2: -1.0, 3: -1.0, 4: 0.0, 5: 1.0, 6: 1.0, 98: 1.0, 99: -1.0}
-    await place(db, user, {1: 0, 2: 1, 3: 1, 4: 3, 5: 5, 6: 6})
+    await place(db, user, {1: 0, 2: 1, 3: 1, 4: 3, 5: 4, 6: 5})
     src = _embeddings_from(signal)
     report = await refit.refit_user(db, user_id=user, kind="movie", hp=HP, embeddings=src)
     assert report.fitted, report.error
@@ -399,13 +401,13 @@ async def db_rated_before_world(db):
 async def test_undo_takes_back_a_placement_its_verdict_and_its_seen_and_restores_the_card(db, world):
     """The card that comes back is the one that produced the observation, under a fresh token."""
     user = world["user"]
-    await place(db, user, {1: 6, 2: 5, 3: 2, 4: 1})
+    await place(db, user, {1: 5, 2: 4, 3: 2, 4: 1})
     await seed_ledger(db, user, range(1, 21), fitted=True)
     s = await open_session(db, user)
     title_id = s.current_card["title_id"]
     card_before = dict(s.current_card)
 
-    s = (await session.record_placement(db, s, card_token=token(s), tier=6, hp=HP)).session
+    s = (await session.record_placement(db, s, card_token=token(s), tier=5, hp=HP)).session
     assert await session.undo_availability(db, s) == {
         "available": True, "kind": "placement", "name": f"Title {title_id}",
     }
@@ -501,9 +503,9 @@ async def test_the_fifteenth_tap_stays_undoable_until_the_sixteenth_lands(db, wo
 
 async def test_undo_walks_back_to_the_first_observation_of_the_block_and_then_refuses(db, world):
     user = world["user"]
-    await place(db, user, {20: 6})
+    await place(db, user, {20: 5})
     s = await open_session(db, user)
-    for tier in (0, 3, 6):
+    for tier in (0, 3, 5):
         s = (await session.record_placement(db, s, card_token=token(s), tier=tier, hp=HP)).session
     for expected_slot in (3, 2, 1):
         s = (await session.undo(db, s, hp=HP)).session
@@ -519,23 +521,23 @@ async def test_undo_walks_back_to_the_first_observation_of_the_block_and_then_re
 
 
 async def test_the_card_shows_the_persons_own_placed_films_on_their_shelves(db, world):
-    """Seven shelves best first; an empty one keeps its word; never the film being placed."""
+    """Six shelves best first; an empty one keeps its word; never the film being placed."""
     user = world["user"]
-    await place(db, user, {1: 6, 2: 0, 3: 6})
+    await place(db, user, {1: 5, 2: 0, 3: 5})
     s = await put(db, await session.open_or_resume(db, user_id=user, kinds=["movie"]), 4)
     shelves = (await session.public_card(db, s, version=None))["shelves"]
-    assert [shelf["tier"] for shelf in shelves] == [6, 5, 4, 3, 2, 1, 0]
+    assert [shelf["tier"] for shelf in shelves] == [5, 4, 3, 2, 1, 0]
     by_tier = {shelf["tier"]: shelf for shelf in shelves}
-    assert sorted(f["id"] for f in by_tier[6]["films"]) == [1, 3] and by_tier[6]["count"] == 2
+    assert sorted(f["id"] for f in by_tier[5]["films"]) == [1, 3] and by_tier[5]["count"] == 2
     assert [f["id"] for f in by_tier[0]["films"]] == [2]
-    assert by_tier[3] == {"tier": 3, "word": "It was fine", "count": 0, "films": []}
+    assert by_tier[3] == {"tier": 3, "word": "Very good", "count": 0, "films": []}
     assert set(by_tier[0]["films"][0]) == {
         "id", "name", "original_name", "original_language", "poster_path",
     }
 
     s = await put(db, s, 1)
-    six = (await session.public_card(db, s, version=None))["shelves"][0]
-    assert [f["id"] for f in six["films"]] == [3] and six["count"] == 1
+    top = (await session.public_card(db, s, version=None))["shelves"][0]
+    assert [f["id"] for f in top["films"]] == [3] and top["count"] == 1
 
 
 async def test_a_placed_film_never_returns_unless_it_is_pinned_and_then_it_is_placed_anew(db, world):
@@ -551,11 +553,11 @@ async def test_a_placed_film_never_returns_unless_it_is_pinned_and_then_it_is_pl
 
     s = await session.ensure_card(db, s, head=[7])
     assert s.current_card["title_id"] == 7 and s.current_card["reask_of"] is None
-    await session.record_placement(db, s, card_token=token(s), tier=6, hp=HP)
+    await session.record_placement(db, s, card_token=token(s), tier=5, hp=HP)
     assert [r["reask_of"] for r in await db.fetch(
         "SELECT reask_of FROM tier_edit WHERE user_id = $1 AND title_id = 7 ORDER BY id", user
     )] == [None, None]
-    assert (await ladder.placements(db, user_id=user, kind="movie"))[7] == 6
+    assert (await ladder.placements(db, user_id=user, kind="movie"))[7] == 5
 
 
 async def test_the_queue_drained_says_so_and_preloads_nothing(db):
@@ -575,7 +577,7 @@ async def test_the_queue_drained_says_so_and_preloads_nothing(db):
 async def test_the_preload_names_the_next_cards_art(db, world):
     """§6: the next card preloaded: its poster first, then its shelves' posters, from this origin."""
     user = world["user"]
-    await place(db, user, {19: 6, 20: 1})
+    await place(db, user, {19: 5, 20: 1})
     s = await open_session(db, user)
     body = await session.payload(db, s)
     assert body["preload"][0].startswith("/api/art/") and body["preload"][0].endswith("/poster")
@@ -587,7 +589,7 @@ async def test_the_preload_names_the_next_cards_art(db, world):
     # An app-minted id carries the art epoch the client puts on its own poster URLs.
     minted = 1_000_000_001
     await make_titles(db, [(minted, "movie", "Minted")])
-    await place(db, user, {minted: 6})
+    await place(db, user, {minted: 5})
     epoch = await url_epoch(db)
     assert epoch and f"/api/art/{minted}/poster?v={epoch}" in (await session.payload(db, s))["preload"]
 
@@ -1001,7 +1003,7 @@ async def test_the_loser_of_a_double_tap_never_tells_jellyfin(db, pg_url, linked
                 await db.execute(f"DELETE FROM {table}")
             s = await open_session(db, user)
             results = await asyncio.gather(
-                session.record_placement(db, s, card_token=token(s), tier=6, hp=HP, jf=jf),
+                session.record_placement(db, s, card_token=token(s), tier=5, hp=HP, jf=jf),
                 session.record_placement(other, s, card_token=token(s), tier=0, hp=HP, jf=jf),
                 return_exceptions=True,
             )
@@ -1193,7 +1195,7 @@ async def test_the_route_serves_the_envelope_and_the_placement_answers_with_the_
     body = answered.json()
     name = card["title"]["name"]
     assert body["echo"] == {"title_id": card["title"]["id"], "name": name, "tier": 5,
-                            "word": "Loved it"}, "no guess with Show the model off"
+                            "word": "All-time favourite"}, "no guess with Show the model off"
     assert body["session"]["block"]["slot"] == 2
     assert body["card"] is not None and body["card"]["token"] != card["token"]
     assert body["undo"] == {"available": True, "kind": "placement", "name": name}
@@ -1202,7 +1204,7 @@ async def test_the_route_serves_the_envelope_and_the_placement_answers_with_the_
     await client.post("/api/auth/preferences", json={"show_model": True})
     nxt = body["card"]
     body = (await client.post("/api/rate/place", json={"card_token": nxt["token"], "tier": 1})).json()
-    assert body["echo"]["model"] == {"guess_word": "Loved it", "cdf": round(MARKER_CDF, 2)}
+    assert body["echo"]["model"] == {"guess_word": "All-time favourite", "cdf": round(MARKER_CDF, 2)}
     assert set(body) == ENVELOPE | {"ledger", "log"}
 
 
@@ -1215,7 +1217,7 @@ async def test_the_route_refuses_a_stale_card_a_bad_step_and_an_empty_undo(db, r
     assert undo.status_code == 409
     assert undo.json()["detail"] == {"reason": "nothing_to_undo", "message": "Nothing to undo yet"}
 
-    bad = await client.post("/api/rate/place", json={"card_token": card["token"], "tier": 7})
+    bad = await client.post("/api/rate/place", json={"card_token": card["token"], "tier": 6})
     assert bad.status_code == 422 and bad.json()["detail"]["reason"] == "bad_tier"
     assert (await client.post(
         "/api/rate/place", json={"card_token": card["token"], "tier": 2}
@@ -1247,12 +1249,12 @@ async def test_the_session_route_switches_the_kind_and_refuses_two(db, rate_clie
 async def test_the_shelves_route_is_the_title_cards_ladder_sheet(db, rate_client):
     client, user_id = rate_client
     await make_titles(db, [(i, "movie", f"Title {i}") for i in range(1, 6)])
-    await place(db, user_id, {1: 6, 2: 4})
+    await place(db, user_id, {1: 5, 2: 3})
 
     sheet = (await client.get("/api/rate/shelves", params={"title_id": 2})).json()
     assert sheet["title_id"] == 2 and sheet["kind"] == "movie"
-    assert sheet["current"] == {"tier": 4, "word": "Liked it"}
-    assert [s["tier"] for s in sheet["shelves"]] == [6, 5, 4, 3, 2, 1, 0]
+    assert sheet["current"] == {"tier": 3, "word": "Very good"}
+    assert [s["tier"] for s in sheet["shelves"]] == [5, 4, 3, 2, 1, 0]
     assert [f["id"] for f in sheet["shelves"][0]["films"]] == [1]
     assert sheet["shelves"][2]["films"] == [], "never the film itself"
 
@@ -1283,7 +1285,7 @@ async def test_a_placement_reaches_the_rail_in_section_6_7s_form(db, rate_client
     client, user_id = rate_client
     rail.forget()
     await make_titles(db, [(i, "movie", films[i - 1]) for i in range(1, 9)])
-    await place(db, user_id, {1: 6, 2: 5, 3: 2, 4: 1})
+    await place(db, user_id, {1: 5, 2: 4, 3: 2, 4: 1})
     await seed_ledger(db, user_id, range(1, 9), fitted=True)
 
     card = (await client.get("/api/rate")).json()["card"]
@@ -1293,11 +1295,11 @@ async def test_a_placement_reaches_the_rail_in_section_6_7s_form(db, rate_client
 
     await client.post("/api/auth/preferences", json={"show_model": True})
     nxt = body["card"]
-    body = (await client.post("/api/rate/place", json={"card_token": nxt["token"], "tier": 5})).json()
+    body = (await client.post("/api/rate/place", json={"card_token": nxt["token"], "tier": 4})).json()
     assert body["ledger"]["applied"] is True
     ms = body["ledger"]["ms"]
     line = body["log"][0]
-    assert line == f"tier_edit(patrick, {nxt['title']['name']} → A+, via=explicit) → tier arm" + (
+    assert line == f"tier_edit(patrick, {nxt['title']['name']} → A, via=explicit) → tier arm" + (
         f", incremental refit {ms:.0f} ms"
     )
     events = [e for e in rail.recent(user_id=user_id) if e["text"].startswith("tier_edit(")]
@@ -1373,7 +1375,7 @@ async def test_films_rated_before_the_set_up_come_first_without_their_old_answer
     assert body["card"]["title"]["id"] == 4
     assert body["card"]["reason"] == queue.RATED_BEFORE_REASON
     wire = json.dumps(body)
-    assert "disliked" not in wire and "Not really" not in json.dumps(body["card"]["title"])
+    assert "disliked" not in wire and "Not for me" not in json.dumps(body["card"]["title"])
 
 
 async def test_the_banner_cta_serves_a_named_title_even_over_a_standing_session(db, rate_client):

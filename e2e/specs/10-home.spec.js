@@ -68,7 +68,7 @@ async function seedLedger(request) {
   if (done && shelfCards(await homePayload(request)).length) return; // this profile already has one
 
   await setUpLadder(request);
-  await placeThroughRate(request, 'series', [5, 2]);
+  await placeThroughRate(request, 'series', [4, 0]);
 
   expect(
     shelfCards(await homePayload(request)).length,
@@ -169,7 +169,7 @@ test(BEFORE_SET_UP, async ({ page }) => {
 
   const notice = page.getByTestId('home-setup-notice');
   await expect(notice.getByRole('heading')).toHaveText('Set up your ladder.');
-  await expect(notice).toContainText('Rating is one tap now, on seven steps of your own.');
+  await expect(notice).toContainText('Rating is one tap now, on six steps of your own.');
   await expect(notice.getByRole('link', { name: 'Set up my ladder' })).toHaveAttribute(
     'href',
     '/rate/setup'

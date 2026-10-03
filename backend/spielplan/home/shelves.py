@@ -1194,7 +1194,7 @@ async def setup_notice(conn: asyncpg.Connection, *, user_id: int) -> dict[str, A
         return None
     k = len(await tier_set_of(conn, user_id=user_id, kind="movie"))
     why = (
-        f"Rating is one tap now, on {'seven' if k == 7 else k} steps of your own. "
+        f"Rating is one tap now, on {'six' if k == 6 else k} steps of your own. "
         "The set-up takes about a minute"
     )
     if state.earlier_ratings:

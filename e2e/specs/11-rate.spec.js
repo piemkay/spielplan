@@ -32,15 +32,7 @@ const BELIEF_KEYS = [
 ];
 
 // Best first, as the shelves stand (decision 550).
-const WORDS = [
-  'All-time favourite',
-  'Loved it',
-  'Liked it',
-  'It was fine',
-  'Not really for me',
-  "Didn't like it",
-  'Hated it'
-];
+const WORDS = ['All-time favourite', 'Excellent', 'Very good', 'Good', 'OK', 'Not for me'];
 
 // Decision 550: a placement may take a median 3.5 s from film shown to tap, so the app's own share
 // of it, the round trip to the next film, stays well inside that.
@@ -109,7 +101,7 @@ test.describe('rate', () => {
     await page?.close();
   });
 
-  test('a film sits over seven shelves named by their words, with no letter and no belief', async () => {
+  test('a film sits over six shelves named by their words, with no letter and no belief', async () => {
     await openRate(page);
     await expect(page.getByTestId('rate-card-title')).not.toBeEmpty();
     await expect(page.getByTestId('rate-kind')).toContainText('Films');
@@ -118,10 +110,10 @@ test.describe('rate', () => {
     await expect(undoButton(page)).toBeDisabled();
 
     const shelves = page.getByTestId('rate-shelf');
-    await expect(shelves).toHaveCount(7);
+    await expect(shelves).toHaveCount(6);
     // A shelf's posters carry no names, so its text is its word alone: no letter (§6.1).
     await expect(shelves).toHaveText(WORDS);
-    for (const [i, tier] of [6, 5, 4, 3, 2, 1, 0].entries()) {
+    for (const [i, tier] of [5, 4, 3, 2, 1, 0].entries()) {
       await expect(shelves.nth(i)).toHaveAttribute('data-tier', String(tier));
     }
 
@@ -129,7 +121,7 @@ test.describe('rate', () => {
     const before = await envelope(page);
     expect(before.echo, 'no echo before a placement').toBeNull();
     const { shelves: own, ...rest } = before.card;
-    expect(own).toHaveLength(7);
+    expect(own).toHaveLength(6);
     const keys = keysOf(rest);
     for (const key of BELIEF_KEYS) {
       expect(keys.has(key), `the card must not carry '${key}' before the answer`).toBe(false);
@@ -148,8 +140,8 @@ test.describe('rate', () => {
     expect(res.ok(), `placing through Rate: ${res.status()}`).toBeTruthy();
     expect(res.request().postDataJSON()).toMatchObject({ tier: 4 });
     const body = await res.json();
-    expect(body.echo).toMatchObject({ name: title, word: 'Liked it' });
-    if (body.card) await expect(page.getByTestId('rate-echo')).toContainText(`${title} · Liked it`);
+    expect(body.echo).toMatchObject({ name: title, word: 'Excellent' });
+    if (body.card) await expect(page.getByTestId('rate-echo')).toContainText(`${title} · Excellent`);
 
     await expect(undoButton(page)).toBeEnabled();
     await expect(undoButton(page)).toHaveAttribute('data-undo-kind', 'placement');
@@ -169,7 +161,7 @@ test.describe('rate', () => {
 
     let reply = written(page, '/api/rate/place');
     await page.keyboard.press('2');
-    expect((await reply).request().postDataJSON()).toMatchObject({ tier: 5 });
+    expect((await reply).request().postDataJSON()).toMatchObject({ tier: 4 });
     await expect(undoButton(page)).toHaveAttribute('data-undo-kind', 'placement');
     reply = written(page, '/api/rate/undo');
     await page.keyboard.press('z');
@@ -241,8 +233,8 @@ test.describe('rate', () => {
         await expect(phone.getByTestId(id), `${id} is on the screen`).toBeInViewport({ ratio: 1 });
       }
       const shelves = phone.getByTestId('rate-shelf');
-      await expect(shelves).toHaveCount(7);
-      for (let i = 0; i < 7; i++) {
+      await expect(shelves).toHaveCount(6);
+      for (let i = 0; i < 6; i++) {
         await expect(shelves.nth(i), `shelf ${i + 1} is on the screen`).toBeInViewport({ ratio: 1 });
       }
       const clear = await phone.evaluate(() => {
@@ -285,7 +277,7 @@ test.describe('rate', () => {
     for (let i = 0; i < 8 && (await card(page).count()); i++) {
       const token = await card(page).getAttribute('data-card-token');
       const reply = written(page, '/api/rate/place');
-      await page.keyboard.press('4');
+      await page.keyboard.press('5');
       expect((await reply).ok(), 'placing a film through Rate').toBeTruthy();
       // The next film deals in after the lit shelf has played; a key before then is not taken.
       await expect(page.locator(`[data-testid="rate-card"]:not([data-card-token="${token}"])`).or(drained))

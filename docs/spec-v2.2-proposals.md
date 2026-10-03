@@ -16896,6 +16896,48 @@ decision states the rule, and where a board differs from it or from the spec, th
 - **A curator fix.** "White Christmas" carries a Black Mirror episode's IMDb id, so the set-up shows
   it on S at IMDb 9.1 (decision 556); the data curator corrects the id.
 
+## Decisions taken (owner, 2026-10-03, the six-step ladder)
+
+### 561. The ladder has six steps in graded words, one of them for a film the person did not like
+
+**What the record says.** Decisions 536 and 550 give the ladder seven steps, S to F, worded as
+feelings: All-time favourite, Loved it, Liked it, It was fine, Not really for me, Didn't like it,
+Hated it. §6.3 initialises them from DNA_MODEL §4.5's crowd shape F 3 / D 7 / C 15 / B 25 / A 25 /
+A+ 17 / S 8 %, and decision 508 anchors the verdict classes at its 25% and 50% masses, so three of
+the seven steps stand for disliked.
+
+**Why it changes.** The owner, 2026-10-03, on 1.2.0: "There is a lot of resolution on not like
+movies that is not needed... In reality most movies are at least ok", and "if I hated a movie I
+probably wouldn't finish it". The household's answers agree: 3 of 107 and 2 of 104 films disliked
+before the ladder, and in the September lab 4 of about 51 ladder films below B, none on F. Research
+read for the owner: 5 to 7 labelled points are optimal (Preston and Colman 2000; Krosnick and
+Presser 2010); a scale running from dislike to like leaves its negative half unused (Schwarz et
+al. 1991, German adults); rated products add steps on the liked side (Netflix's thumbs, Goodreads);
+three near-empty steps add about 0.04 bits a tap and cutpoints the fit cannot learn. Measured word
+strength (Rohrmann 2007) spaces Excellent 9.7, Very good 8.5, Good 7.2 and OK about 5 evenly, and
+a German reader takes them as the school grades ausgezeichnet, sehr gut, gut; feelings and grades
+mixed would put Loved it and Great at the same strength.
+
+**The decision.**
+1. The default tier set is six steps, E, D, C, B, A, S: S All-time favourite, A Excellent, B Very
+   good, C Good, D OK, E Not for me. The letters show where they showed (Rank, the title card).
+2. Liked is C and up, fine is D, disliked is E: the verdict cutpoints anchor at 5% and 20%, and a
+   verdict's middle step is E, D or C.
+3. The shape is the household's own: E 5 / D 15 / C 30 / B 25 / A 15 / S 10 %. The set-up's step
+   starts (S 0, A 0.10, B 0.25, C 0.50, D 0.80, E 1.0) and widely seen bands follow it.
+4. Every member on the old default moves to the new set at the shape's cutpoints and sets the ladder
+   up again (migration 0049): their placements so far become earlier ratings, as any history is
+   (decision 537). The grade is the model's information at every step; the line in item 2 serves
+   only the yes/no readers (Home's avoid set and why lines, Tonight's "at Good or higher", the
+   leave-out rule).
+
+This supersedes the words of decision 550 and the tier shape and anchors of §6.3 and decision 508.
+The spec is amended in place (v2.1.20): §4.2, §5.1, §5.2, §6.1, §6.3, §6.7.
+
+**Cost.** Constants and words; one migration; the tests that pinned seven steps. A film the person
+hated has no step of its own, and the leave-out rule, which needs four disliked titles sharing a
+term, fires less often. Each member spends about five minutes on a new set-up.
+
 ## §6.2 — Tonight, rewritten (owner decision, 2026-08-29)
 
 Proposal 54 asked which slot carries the alternative on a split axis. The owner answered by

@@ -14,7 +14,7 @@ const pair = (token = 't1') => ({
   kind: 'movie',
   left: { id: 1, name: 'Heat', year: 1995, runtime_min: 170, outcome: 'A' },
   right: { id: 2, name: 'Drive', year: 2011, runtime_min: 100, outcome: 'B' },
-  reason: 'Both in A+ · both crime films',
+  reason: 'Both in A · both crime films',
   corrections: { label: 'not seen', sides: ['left', 'both', 'right'] }
 });
 
@@ -113,7 +113,7 @@ describe('the pair card (decision 528)', () => {
 
   it('says why these two in one line, and offers no "Why these?"', () => {
     open();
-    expect(q('[data-testid="rate-battle-reason"]').textContent).toBe('Both in A+ · both crime films');
+    expect(q('[data-testid="rate-battle-reason"]').textContent).toBe('Both in A · both crime films');
     expect(target.textContent).not.toContain('Why these?');
   });
 });

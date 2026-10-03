@@ -5,7 +5,7 @@ import { createMember, setUpLadder, signInAsMember, signedIn, waitForPool } from
 /**
  * Tonight with two people in two browsers (§6.2 steps 2, 6, 7): the open-rooms list and the lobby
  * update live without a reload, a seat's round is its own, and the result card carries its whole
- * inventory. Neither member has eight films on their ladder at Liked it or higher, so both seats
+ * inventory. Neither member has eight films on their ladder at Good or higher, so both seats
  * skip the round (decision 539) and the room goes straight on to the ballot. Two pages for the
  * file, built once. Desktop only.
  */
@@ -144,7 +144,7 @@ test.describe('tonight together', () => {
     expect(card.pair, 'the fixture cannot give a seat eight liked films').toBeNull();
     expect(card.ended_by).toBe('converged');
     expect(card.no_round).toMatch(
-      /^No mood questions tonight — they need 8 films on your ladder at Liked it or higher, and you have \d\.$/
+      /^No mood questions tonight — they need 8 films on your ladder at Good or higher, and you have \d\.$/
     );
 
     const progress = await b.evaluate(async (id) => {

@@ -21,16 +21,14 @@ import RatePage from './+page.svelte';
 import { rate, reset } from '$lib/rate.svelte.js';
 import { session } from '$lib/session.svelte.js';
 
-const WORDS = [
-  'Hated it', "Didn't like it", 'Not really for me', 'It was fine', 'Liked it', 'Loved it', 'All-time favourite'
-];
+const WORDS = ['Not for me', 'OK', 'Good', 'Very good', 'Excellent', 'All-time favourite'];
 const film = (id, name) => ({ id, name, original_name: name, original_language: 'en', poster_path: null });
 const shelves = () =>
-  [6, 5, 4, 3, 2, 1, 0].map((tier) => ({
+  [5, 4, 3, 2, 1, 0].map((tier) => ({
     tier,
     word: WORDS[tier],
-    count: tier === 5 ? 1 : 0,
-    films: tier === 5 ? [film(9, 'Zodiac')] : []
+    count: tier === 4 ? 1 : 0,
+    films: tier === 4 ? [film(9, 'Zodiac')] : []
   }));
 const card = (over = {}) => ({
   token: 'tok-1',
@@ -75,7 +73,7 @@ function route(url, init) {
   const path = url.replace(/^.*\/api/, '');
   let payload;
   if (path.startsWith('/ladder/setup')) {
-    const steps = WORDS.slice().reverse().map((word, i) => ({ tier: 6 - i, word }));
+    const steps = WORDS.slice().reverse().map((word, i) => ({ tier: 5 - i, word }));
     payload = { done: false, earlier_ratings: 0, steps };
   } else if (path.startsWith('/titles/')) {
     payload = { title: { id: 41, name: 'Heat', overview: 'A heist.' }, genres: [], credits: [] };
@@ -146,7 +144,7 @@ describe('before the set-up (decision 550)', () => {
     await open(closed(104));
     const card = $('rate-before-setup');
     expect(card.querySelector('h2').textContent).toBe('Rate on your own ladder.');
-    expect(card.textContent).toContain('one of seven steps, from All-time favourite down to Hated it');
+    expect(card.textContent).toContain('one of six steps, from All-time favourite down to Not for me');
     expect($('rate-earlier').textContent).toContain('Your 104 earlier ratings are kept as history.');
     expect($('rate-setup-cta').getAttribute('href')).toBe('/rate/setup');
     for (const id of ['rate-card', 'rate-undo', 'rate-counter', 'rate-kind', 'rate-done', 'rate-drained']) {
@@ -169,15 +167,15 @@ describe('before the set-up (decision 550)', () => {
 });
 
 describe('the ladder card (decisions 545 and 551)', () => {
-  it('shows the film, its meta line, its reason, Not seen and seven shelves, no letter anywhere', async () => {
+  it('shows the film, its meta line, its reason, Not seen and six shelves, no letter anywhere', async () => {
     await open(envelope());
     expect($('rate-card-title').textContent).toBe('Heat');
     expect($('rate-card-meta').textContent).toBe('1995 · 2h 50m');
     expect($('rate-reason').textContent.trim()).toBe("It's in your library.");
     expect($('rate-not-seen').getAttribute('aria-label')).toBe('Not seen: Heat');
     expect(shelfRows().map((row) => row.querySelector('.word').textContent)).toEqual(WORDS.slice().reverse());
-    expect(shelfRows()[1].getAttribute('aria-label')).toBe('Loved it, with Zodiac');
-    expect($('rate-card').textContent).not.toMatch(/\b(S|A\+|A|B|C|D|F)\b/);
+    expect(shelfRows()[1].getAttribute('aria-label')).toBe('Excellent, with Zodiac');
+    expect($('rate-card').textContent).not.toMatch(/\b(S|A|B|C|D|E)\b/);
     expect(target.textContent).not.toMatch(/P\(seen\)|cdf|guess/);
 
     expect($('rate-kind').textContent).toContain('Films');
@@ -191,7 +189,7 @@ describe('the ladder card (decisions 545 and 551)', () => {
       envelope({
         card: DRIVE,
         session: { kinds: ['movie'], kind: 'movie', block: { slot: 5, size: 15, counter: '5 of 15' } },
-        echo: { title_id: 41, name: 'Heat', tier: 5, word: 'Loved it' },
+        echo: { title_id: 41, name: 'Heat', tier: 4, word: 'Excellent' },
         undo: { available: true, kind: 'placement', name: 'Heat' }
       })
     );
@@ -202,9 +200,9 @@ describe('the ladder card (decisions 545 and 551)', () => {
     await settle();
     expect($('rate-not-seen').classList.contains('placing')).toBe(false);
 
-    expect(writes()).toEqual([['/rate/place', expect.objectContaining({ card_token: 'tok-1', tier: 5 })]]);
+    expect(writes()).toEqual([['/rate/place', expect.objectContaining({ card_token: 'tok-1', tier: 4 })]]);
     expect($('rate-card-title').textContent).toBe('Drive');
-    expect($('rate-echo').textContent.trim()).toBe('Heat · Loved it');
+    expect($('rate-echo').textContent.trim()).toBe('Heat · Excellent');
     expect($('rate-card-meta'), 'the echo stands in for the meta line').toBeNull();
     expect($('rate-counter').textContent).toBe('5 of 15');
     expect($('rate-undo').getAttribute('aria-label')).toBe('Undo placing Heat');
@@ -218,7 +216,7 @@ describe('the ladder card (decisions 545 and 551)', () => {
     await vi.runAllTimersAsync();
     flushSync();
     const list = target.querySelector('[role="group"]');
-    list.getBoundingClientRect = () => /** @type {any} */ ({ top: 0, bottom: 504, left: 0, right: 358 });
+    list.getBoundingClientRect = () => /** @type {any} */ ({ top: 0, bottom: 432, left: 0, right: 358 });
     shelfRows().forEach((row, i) => {
       row.getBoundingClientRect = () => /** @type {any} */ ({ top: i * 72, bottom: (i + 1) * 72 });
     });
@@ -228,7 +226,7 @@ describe('the ladder card (decisions 545 and 551)', () => {
     list.dispatchEvent(pointer('pointerdown', 300));
     vi.advanceTimersByTime(250);
     flushSync();
-    expect(target.querySelector('.look .look-word').textContent).toBe('Not really for me');
+    expect(target.querySelector('.look .look-word').textContent).toBe('OK');
     expect($('rate-not-seen').classList.contains('aside'), 'Not seen steps back while a shelf is held').toBe(true);
     list.dispatchEvent(pointer('pointermove', 30));
     list.dispatchEvent(pointer('pointerup', 30));
@@ -237,7 +235,7 @@ describe('the ladder card (decisions 545 and 551)', () => {
     await vi.runAllTimersAsync();
     flushSync();
     vi.useRealTimers();
-    expect(writes()).toEqual([['/rate/place', expect.objectContaining({ tier: 6 })]]);
+    expect(writes()).toEqual([['/rate/place', expect.objectContaining({ tier: 5 })]]);
   });
 
   it('adds the guess and P(seen) in the data voice only with Show the numbers on', async () => {
@@ -247,12 +245,12 @@ describe('the ladder card (decisions 545 and 551)', () => {
     replies.push(
       envelope({
         card: DRIVE,
-        echo: { title_id: 41, name: 'Heat', tier: 5, word: 'Loved it', model: { guess_word: 'Liked it', cdf: 0.812 } }
+        echo: { title_id: 41, name: 'Heat', tier: 4, word: 'Excellent', model: { guess_word: 'Very good', cdf: 0.812 } }
       })
     );
     shelfRows()[1].click();
     await settle();
-    expect($('rate-echo').textContent.trim()).toBe('Heat · Loved it · guess Liked it · cdf 0.81');
+    expect($('rate-echo').textContent.trim()).toBe('Heat · Excellent · guess Very good · cdf 0.81');
     expect($('rate-echo').textContent).not.toMatch(/\bA\+?\b/);
   });
 
@@ -312,15 +310,15 @@ describe('the ladder card (decisions 545 and 551)', () => {
 });
 
 describe('the keyboard (decision 550)', () => {
-  it('places with 1 to 7 from the top, says Not seen with N and undoes with Z', async () => {
+  it('places with 1 to 6 from the top, says Not seen with N and undoes with Z', async () => {
     await open(envelope({ undo: { available: true, kind: 'placement', name: 'Up' } }));
-    for (const key of ['1', '7', 'n', 'Z']) {
+    for (const key of ['1', '6', 'n', 'Z']) {
       replies.push(envelope({ undo: { available: true, kind: 'placement', name: 'Up' } }));
       press(key);
       await settle();
     }
     expect(writes().map(([url, body]) => [url, body.tier])).toEqual([
-      ['/rate/place', 6],
+      ['/rate/place', 5],
       ['/rate/place', 0],
       ['/rate/not-seen', undefined],
       ['/rate/undo', undefined]

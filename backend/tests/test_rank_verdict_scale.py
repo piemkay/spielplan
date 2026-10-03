@@ -72,20 +72,19 @@ async def _rows(db, user):
 async def test_a_film_the_taste_vector_loves_and_the_person_disliked_sits_in_a_disliked_tier(
     db, household
 ):
-    """R1: stored and rendered tiers both put the disliked film in F/D/C; fine films share B."""
+    """R1: stored and rendered tiers both put the disliked film in E; fine films share D."""
     await _fit(db, household)
     stored = await _rows(db, household)
-    assert stored[LA_LA_LAND][1] <= 2, stored[LA_LA_LAND]
+    assert stored[LA_LA_LAND][1] == 0, stored[LA_LA_LAND]
     liked = [t for t in range(1, 25) if _verdict(t) == 2]
     fine = [t for t in range(1, 25) if _verdict(t) == 1]
     assert stored[LA_LA_LAND][0] < min(stored[t][0] for t in liked)
-    assert {stored[t][1] for t in fine} == {3}
-    assert {stored[t][1] for t in liked} <= {4, 5, 6}
+    assert {stored[t][1] for t in fine} == {1}
+    assert {stored[t][1] for t in liked} <= {2, 3, 4, 5}
 
     tiers, _cuts, _items = await read.load(db, user_id=household, kind="movie", hp=DEFAULTS)
     shown = {e.title_id: t.label for t in tiers for e in t.entries}
-    assert shown[LA_LA_LAND] in {"F", "D", "C"}
-    assert any(label == "C" for label in shown.values()), "C stood empty on a board of dislikes"
+    assert shown[LA_LA_LAND] == "E"
 
 
 async def test_a_pick_in_the_queue_lifts_the_winner_over_the_title_it_beat(db, household):
@@ -109,7 +108,7 @@ async def test_a_pick_in_the_queue_lifts_the_winner_over_the_title_it_beat(db, h
 
 
 async def test_a_title_its_verdict_holds_is_a_neighbour_where_the_board_shows_it(db, household):
-    """The hold renders La La Land in C, so a drag beside it there must not be refused."""
+    """The hold renders La La Land in E, so a drag beside it there must not be refused."""
     liked = [t for t in range(1, 25) if _verdict(t) == 2][:3]
     for other in liked:
         await observations.record_duel(
@@ -119,14 +118,14 @@ async def test_a_title_its_verdict_holds_is_a_neighbour_where_the_board_shows_it
     await _fit(db, household)
     tiers, cuts, _items = await read.load(db, user_id=household, kind="movie", hp=DEFAULTS)
     entry = next(e for t in tiers for e in t.entries if e.title_id == LA_LA_LAND)
-    assert entry.tier == 2, entry
-    assert int(model.tier_of(np.array([entry.s]), cuts.boundaries)[0]) > 2, (
+    assert entry.tier == 0, entry
+    assert int(model.tier_of(np.array([entry.s]), cuts.boundaries)[0]) > 0, (
         "the hold did not bind, so this does not test it"
     )
     result = await drop.drop(
-        db, user_id=household, title_id=2, tier=2, above=LA_LA_LAND, below=None
+        db, user_id=household, title_id=2, tier=0, above=LA_LA_LAND, below=None
     )
-    assert result.tier == 2 and result.neighbour_duels == 1
+    assert result.tier == 0 and result.neighbour_duels == 1
 
 
 async def test_rates_guess_is_the_tier_home_shows_owned_or_not(db, household):
@@ -156,7 +155,7 @@ async def test_rates_guess_is_the_tier_home_shows_owned_or_not(db, household):
     unrated = await db.fetch(
         "SELECT tier FROM ledger_state WHERE user_id = $1 AND NOT observed", household
     )
-    assert unrated and {int(r["tier"]) for r in unrated} <= {2, 3, 4}, (
+    assert unrated and {int(r["tier"]) for r in unrated} <= {0, 1, 2}, (
         "an unrated title wears a class's middle tier, never a grade (decision 510)"
     )
 

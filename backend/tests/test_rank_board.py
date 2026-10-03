@@ -12,7 +12,7 @@ from spielplan.ledger.hyperparams import DEFAULTS
 from spielplan.ledger.model import MEASURED_TIER_SHARES, OUT_A, OUT_B, OUT_TIE, ObservationSet
 from spielplan.rank import board
 
-TIER_SET = ("F", "D", "C", "B", "A", "A+", "S")
+TIER_SET = ("E", "D", "C", "B", "A", "S")
 
 
 def items(values, *, sigma=0.01, assigned=None, names=None):
@@ -47,22 +47,22 @@ def by_id(tiers) -> dict[int, board.Entry]:
 def test_an_unrated_tier_set_starts_at_the_measured_quantile_shape():
     """The literal percentages: comparing against `MEASURED_TIER_SHARES` only proves that logit and
     sigmoid round-trip."""
-    authored = (0.03, 0.07, 0.15, 0.25, 0.25, 0.17, 0.08)
-    assert authored == MEASURED_TIER_SHARES, "§6.3's shape, F first"
+    authored = (0.05, 0.15, 0.30, 0.25, 0.15, 0.10)
+    assert authored == MEASURED_TIER_SHARES, "§6.3's shape, E first"
     assert sum(authored) == pytest.approx(1.0)
 
-    cuts = model.initial_cutpoints(7)
+    cuts = model.initial_cutpoints(6)
     implied = np.diff(np.concatenate([[0.0], 1.0 / (1.0 + np.exp(-cuts)), [1.0]]))
     assert np.allclose(implied, authored, atol=1e-9)
     assert np.allclose(
-        cuts, [-3.4761, -2.1972, -1.0986, 0.0, 1.0986, 2.4423], atol=1e-4
+        cuts, [-2.9444, -1.3863, 0.0, 1.0986, 2.1972], atol=1e-4
     )
 
 
 def test_the_tier_a_title_shows_comes_from_the_cutpoints_it_was_given():
     """Percentile cuts cannot move when boundaries shift; learned ones empty every tier but one."""
     values = np.linspace(-1.0, 1.0, 40)
-    cuts = model.initial_cutpoints(7)
+    cuts = model.initial_cutpoints(6)
 
     here = board.build(items(values), cuts=cuts, tier_set=TIER_SET, hp=DEFAULTS)
     assert sum(len(t.entries) for t in here if t.entries) > 1, "the board spans several tiers"
@@ -74,7 +74,7 @@ def test_the_tier_a_title_shows_comes_from_the_cutpoints_it_was_given():
 def test_a_lopsided_board_keeps_its_learned_boundaries():
     """The measured shape is an initialisation, not a rendering rule."""
     values = np.concatenate([np.full(18, -3.0), np.full(18, 3.0)])
-    tiers = board.build(items(values), cuts=model.initial_cutpoints(7), tier_set=TIER_SET,
+    tiers = board.build(items(values), cuts=model.initial_cutpoints(6), tier_set=TIER_SET,
                         hp=DEFAULTS)
 
     occupied = [len(t.entries) for t in tiers if t.entries]
@@ -86,19 +86,18 @@ def test_a_lopsided_board_keeps_its_learned_boundaries():
 
 def test_the_board_renders_best_first_and_keeps_empty_tiers():
     """An empty tier stays on screen: it is still a drop target."""
-    tiers = board.build(items([-3.0, 3.0]), cuts=model.initial_cutpoints(7),
+    tiers = board.build(items([-3.0, 3.0]), cuts=model.initial_cutpoints(6),
                         tier_set=TIER_SET, hp=DEFAULTS)
-    assert [t.label for t in tiers] == ["S", "A+", "A", "B", "C", "D", "F"]
+    assert [t.label for t in tiers] == ["S", "A", "B", "C", "D", "E"]
     assert len(tiers) == len(TIER_SET)
     assert sum(1 for t in tiers if not t.entries) == len(TIER_SET) - 2
 
 
 def test_each_section_head_names_its_tiers_word():
-    """Decision 550's words on the default set; a custom set's labels are their own words."""
-    tiers = board.build([], cuts=model.initial_cutpoints(7), tier_set=TIER_SET, hp=DEFAULTS)
+    """Decision 561's words on the default set; a custom set's labels are their own words."""
+    tiers = board.build([], cuts=model.initial_cutpoints(6), tier_set=TIER_SET, hp=DEFAULTS)
     assert [t.word for t in tiers] == [
-        "All-time favourite", "Loved it", "Liked it", "It was fine", "Not really for me",
-        "Didn't like it", "Hated it",
+        "All-time favourite", "Excellent", "Very good", "Good", "OK", "Not for me",
     ]
     three = board.build([], cuts=np.array([-1.0, 1.0]), tier_set=("meh", "ok", "great"), hp=DEFAULTS)
     assert [t.word for t in three] == ["great", "ok", "meh"]
@@ -106,7 +105,7 @@ def test_each_section_head_names_its_tiers_word():
 
 def test_a_row_carries_its_year():
     heat = board.Item(title_id=1, name="Heat", s=0.0, sigma=0.01, year=1995)
-    tiers = board.build([heat], cuts=model.initial_cutpoints(7), tier_set=TIER_SET, hp=DEFAULTS)
+    tiers = board.build([heat], cuts=model.initial_cutpoints(6), tier_set=TIER_SET, hp=DEFAULTS)
     assert by_id(tiers)[1].public()["year"] == 1995
 
 
@@ -151,7 +150,7 @@ def test_a_title_alone_in_its_tier_claims_no_neighbours():
 
 def test_the_badge_never_names_the_title_it_is_attached_to():
     values = np.linspace(-1.0, 1.0, 30)
-    tiers = board.build(items(values), cuts=model.initial_cutpoints(7), tier_set=TIER_SET,
+    tiers = board.build(items(values), cuts=model.initial_cutpoints(6), tier_set=TIER_SET,
                         hp=DEFAULTS)
     for entry in by_id(tiers).values():
         assert entry.above != entry.name
@@ -174,7 +173,7 @@ def test_the_badged_set_and_the_queue_pool_are_the_same_set(seed):
     n = 60
     values = rng.normal(size=n)
     sigmas = rng.uniform(0.01, 0.6, size=n)
-    cuts = model.initial_cutpoints(7)
+    cuts = model.initial_cutpoints(6)
     pool = items(values, sigma=sigmas)
 
     badged = {e.title_id for e in by_id(
@@ -188,7 +187,7 @@ def test_the_badged_set_and_the_queue_pool_are_the_same_set(seed):
     # A guard, not a regression test: `board.straddles` never reads `assigned_tier`, so this passes
     # either side of finding 14. It catches a reach clamped to the rendered tier.
     dropped = [
-        dataclasses.replace(item, assigned_tier=int(rng.integers(0, 7)))
+        dataclasses.replace(item, assigned_tier=int(rng.integers(0, len(TIER_SET))))
         for item in pool
     ]
     entries = by_id(board.build(dropped, cuts=cuts, tier_set=TIER_SET, hp=DEFAULTS))
@@ -208,7 +207,7 @@ def test_moving_the_straddle_threshold_moves_both_sets_together():
 
     rng = np.random.default_rng(11)
     pool = items(rng.normal(size=80), sigma=rng.uniform(0.01, 0.5, size=80))
-    cuts = model.initial_cutpoints(7)
+    cuts = model.initial_cutpoints(6)
 
     seen = []
     for z in (0.25, 1.0, 3.0):
@@ -235,7 +234,7 @@ def test_a_fitted_boards_straddle_badge_is_a_minority_of_the_board():
     # A maturer board than the release ships, so the generous case.
     verdicts = np.searchsorted(np.array([-0.4, 0.4]), truth, side="right")
     dropped = rng.choice(n, size=90, replace=False)
-    tier_cuts = np.quantile(truth, np.linspace(0, 1, 8)[1:-1])
+    tier_cuts = np.quantile(truth, np.linspace(0, 1, len(TIER_SET) + 1)[1:-1])
     duels = rng.choice(n, size=(200, 2))
     duels = duels[duels[:, 0] != duels[:, 1]]
     gap = truth[duels[:, 0]] - truth[duels[:, 1]]
@@ -257,6 +256,7 @@ def test_a_fitted_boards_straddle_badge_is_a_minority_of_the_board():
                 np.abs(gap) < 0.15, OUT_TIE, np.where(gap > 0, OUT_A, OUT_B)
             ).astype(np.int64),
             duel_margin=np.where(rng.random(len(duels)) < 0.4, 1.6, 1.0),
+            n_levels=len(TIER_SET),
         ),
         DEFAULTS,
     )
@@ -281,20 +281,20 @@ def test_a_fitted_boards_straddle_badge_is_a_minority_of_the_board():
 
 def test_the_top_and_bottom_tiers_never_straddle_into_themselves():
     """At the ends there is one direction to reach, so the badge names that side, never its own tier."""
-    cuts = model.initial_cutpoints(7)
+    cuts = model.initial_cutpoints(6)
     tiers = board.build(
         items([float(cuts[-1]) + 0.15, float(cuts[0]) - 0.15], sigma=reach_sigma(0.4)),
         cuts=cuts, tier_set=TIER_SET, hp=DEFAULTS,
     )
     top, bottom = by_id(tiers)[1], by_id(tiers)[2]
     assert top.tier == len(TIER_SET) - 1 and bottom.tier == 0
-    assert top.straddle_badge == "S or A+?"
-    assert bottom.straddle_badge == "F or D?"
+    assert top.straddle_badge == "S or A?"
+    assert bottom.straddle_badge == "E or D?"
 
 
 def test_a_straddle_badge_never_repeats_the_titles_own_tier():
     """Both halves of the badge come from the posterior; the rendered tier is the person's drop."""
-    cuts = model.initial_cutpoints(7)
+    cuts = model.initial_cutpoints(6)
     rng = np.random.default_rng(7)
     pool = items(rng.normal(scale=2.0, size=120), sigma=rng.uniform(0.01, 4.0, size=120))
     # Assigned tiers too, so an index taken from the wrong place would show.
@@ -315,43 +315,43 @@ def test_a_straddle_badge_never_repeats_the_titles_own_tier():
 
 def test_the_straddle_chip_is_built_from_the_posteriors_own_placement():
     """The drop decides where the row renders and nothing about the chip (finding 14)."""
-    cuts = model.initial_cutpoints(7)
+    cuts = model.initial_cutpoints(6)
     entry = by_id(board.build(
-        items([0.9], sigma=reach_sigma(1.0), assigned={1: 5}),
+        items([0.9], sigma=reach_sigma(1.0), assigned={1: 4}),
         cuts=cuts, tier_set=TIER_SET, hp=DEFAULTS,
     ))[1]
-    assert entry.tier == 5, "§6.3: it stays where it was put"
-    assert entry.model_tier == 4 and entry.straddle == 5
+    assert entry.tier == 4, "§6.3: it stays where it was put"
+    assert entry.model_tier == 3 and entry.straddle == 4
     assert entry.tension is None, "the bands meet, so the straddle chip is the one on screen"
-    assert entry.straddle_badge == "A or A+?"
+    assert entry.straddle_badge == "B or A?"
 
 
 def test_a_queue_eligible_title_dropped_into_the_tier_it_reaches_still_wears_a_chip():
     """Dropping a straddler into the tier it reaches must keep the chip: the queue still counts it."""
-    cuts = model.initial_cutpoints(7)
+    cuts = model.initial_cutpoints(6)
     entry = by_id(board.build(
-        items([0.9], sigma=reach_sigma(1.0), assigned={1: 3}),
+        items([0.9], sigma=reach_sigma(1.0), assigned={1: 2}),
         cuts=cuts, tier_set=TIER_SET, hp=DEFAULTS,
     ))[1]
     assert entry.straddle is not None, "still queue-eligible"
-    assert entry.tier == 3 and entry.tension is None
-    assert entry.straddle_badge == "A or A+?"
+    assert entry.tier == 2 and entry.tension is None
+    assert entry.straddle_badge == "B or A?"
 
 
 def test_a_tier_outside_the_eighty_percent_interval_is_tension():
     """Proposal 71's "disagrees strongly": the assigned tier and the 80% interval are disjoint."""
     tiers = board.build(
-        items([0.0], sigma=0.01, assigned={1: 6}),
-        cuts=model.initial_cutpoints(7), tier_set=TIER_SET, hp=DEFAULTS,
+        items([0.0], sigma=0.01, assigned={1: 5}),
+        cuts=model.initial_cutpoints(6), tier_set=TIER_SET, hp=DEFAULTS,
     )
     entry = by_id(tiers)[1]
     assert entry.tension is not None
-    assert entry.tier == 6, "and it stays where it was put"
+    assert entry.tier == 5, "and it stays where it was put"
 
 
 def test_a_one_level_disagreement_inside_the_interval_is_not_tension():
     """A neighbouring tier the posterior reaches is not tension; badging it would badge most rows."""
-    cuts = model.initial_cutpoints(7)
+    cuts = model.initial_cutpoints(6)
     s = float(cuts[3]) - 0.05
     below = model.tier_of(np.array([s]), cuts)[0]
     tiers = board.build(
@@ -364,20 +364,20 @@ def test_a_one_level_disagreement_inside_the_interval_is_not_tension():
 
 
 def test_a_tension_badge_names_both_tiers():
-    # s = -1.5 sits inside C's band, so the two tiers in the line are genuinely different.
+    # s = -0.7 sits inside C's band, so the two tiers in the line are genuinely different.
     tiers = board.build(
-        items([-1.5], sigma=0.01, assigned={1: 6}, names={1: "Drive"}),
-        cuts=model.initial_cutpoints(7), tier_set=TIER_SET, hp=DEFAULTS,
+        items([-0.7], sigma=0.01, assigned={1: 5}, names={1: "Drive"}),
+        cuts=model.initial_cutpoints(6), tier_set=TIER_SET, hp=DEFAULTS,
     )
     entry = by_id(tiers)[1]
-    assert entry.model_tier == 2 and entry.tier == 6
+    assert entry.model_tier == 2 and entry.tier == 5
     # Member register (decision 486): no model nouns on a chip every member reads.
     assert entry.tension == "You put it in S — your other answers still point to C"
     assert "ledger" not in entry.tension
 
 
 def test_the_board_never_moves_a_title_out_of_the_tier_it_was_dropped_in():
-    cuts = model.initial_cutpoints(7)
+    cuts = model.initial_cutpoints(6)
     for assigned_tier in range(len(TIER_SET)):
         tiers = board.build(
             items([0.0], sigma=0.2, assigned={1: assigned_tier}),
@@ -390,7 +390,7 @@ def test_the_board_never_moves_a_title_out_of_the_tier_it_was_dropped_in():
 
 
 def test_an_untouched_title_is_placed_by_the_model():
-    cuts = model.initial_cutpoints(7)
+    cuts = model.initial_cutpoints(6)
     entry = by_id(board.build(items([0.42]), cuts=cuts, tier_set=TIER_SET, hp=DEFAULTS))[1]
     assert entry.assigned_tier is None
     assert entry.tier == entry.model_tier == model.tier_of(np.array([0.42]), cuts)[0]
@@ -399,10 +399,10 @@ def test_an_untouched_title_is_placed_by_the_model():
 
 def test_the_tension_threshold_comes_from_the_bundle():
     """A wider credible interval must make tension strictly rarer; a hard-coded 80% would not move."""
-    cuts = model.initial_cutpoints(7)
+    cuts = model.initial_cutpoints(6)
     rng = np.random.default_rng(4)
     values = rng.normal(size=50)
-    assigned = {i + 1: int(rng.integers(0, 7)) for i in range(50)}
+    assigned = {i + 1: int(rng.integers(0, len(TIER_SET))) for i in range(50)}
     pool = items(values, sigma=0.25, assigned=assigned)
 
     counts = []
@@ -429,10 +429,10 @@ def test_a_tier_edit_above_the_new_tier_set_renders_instead_of_crashing():
     )
 
 
-@pytest.mark.parametrize("assigned", [-3, -1, 7, 40])
+@pytest.mark.parametrize("assigned", [-3, -1, 6, 40])
 def test_no_out_of_range_assignment_can_take_the_board_down(assigned):
     """`tier_edit.tier` has no CHECK against the tier set, so survive anything a smallint holds."""
-    cuts = model.initial_cutpoints(7)
+    cuts = model.initial_cutpoints(6)
     tiers = board.build(
         items([0.0], sigma=0.4, assigned={1: assigned}),
         cuts=cuts, tier_set=TIER_SET, hp=DEFAULTS,
@@ -443,22 +443,22 @@ def test_no_out_of_range_assignment_can_take_the_board_down(assigned):
 
 
 def test_a_rated_title_renders_inside_the_tiers_its_verdict_names():
-    """Decision 508: a rated title stays inside its verdict's tiers (disliked F/D/C, fine B, liked
-    A/A+/S), ordered by `s`; its straddle names the next tier toward the fit. Drops are left alone."""
-    cuts = model.initial_cutpoints(7)                     # C/B at -1.10, B/A at 0
+    """Decision 508: a rated title stays inside its verdict's tiers (disliked E, fine D, liked
+    C/B/A/S), ordered by `s`; its straddle names the next tier toward the fit. Drops are left alone."""
+    cuts = model.initial_cutpoints(6)                     # E/D at -2.94, D/C at -1.39
     rows = [
         board.Item(title_id=1, name="La La Land", s=0.5, sigma=0.01, verdict=0),
         board.Item(title_id=2, name="Psycho", s=0.4, sigma=0.01, verdict=1),
-        board.Item(title_id=3, name="Heat", s=-0.3, sigma=0.01, verdict=2),
-        board.Item(title_id=4, name="Twilight", s=-1.5, sigma=0.01, verdict=0),
-        board.Item(title_id=5, name="Saw", s=0.6, sigma=0.01, verdict=0, assigned_tier=5),
+        board.Item(title_id=3, name="Heat", s=-2.0, sigma=0.01, verdict=2),
+        board.Item(title_id=4, name="Twilight", s=-3.5, sigma=0.01, verdict=0),
+        board.Item(title_id=5, name="Saw", s=0.6, sigma=0.01, verdict=0, assigned_tier=4),
     ]
     tiers = {t.label: t for t in board.build(rows, cuts=cuts, tier_set=TIER_SET, hp=DEFAULTS)}
     placed = {e.name: (label, e) for label, t in tiers.items() for e in t.entries}
-    assert placed["La La Land"][0] == "C" and placed["La La Land"][1].straddle == 3
-    assert placed["La La Land"][1].straddle_badge == "C or B?"
-    assert [e.name for e in tiers["C"].entries] == ["La La Land", "Twilight"]
-    assert placed["Psycho"][0] == "B" and placed["Heat"][0] == "A"
-    assert placed["Saw"][0] == "A+" and placed["Saw"][1].model_tier == 4, "a drop is not held"
+    assert placed["La La Land"][0] == "E" and placed["La La Land"][1].straddle == 1
+    assert placed["La La Land"][1].straddle_badge == "E or D?"
+    assert [e.name for e in tiers["E"].entries] == ["La La Land", "Twilight"]
+    assert placed["Psycho"][0] == "D" and placed["Heat"][0] == "C"
+    assert placed["Saw"][0] == "A" and placed["Saw"][1].model_tier == 3, "a drop is not held"
     eligible = [i.title_id for i in rows if board.straddles(i, cuts=cuts, hp=DEFAULTS) is not None]
     assert 1 in eligible, "the held title's chip and its queue eligibility are one predicate"

@@ -70,15 +70,15 @@ async def test_a_shelf_shows_the_most_alike_placed_films_first_and_four_at_most(
     await film(db, 13)
     await film(db, 15, HEIST, TENSE)
     await film(db, 18)
-    await place(db, person, {12: 6, 13: 6, 11: 6, 15: 6, 18: 6})
+    await place(db, person, {12: 5, 13: 5, 11: 5, 15: 5, 18: 5})
 
     by_tier, found = await shown(db, person, 10)
-    assert by_tier[6] == [11, 15, 12, 18], "the two that share nothing go newest-placed first"
+    assert by_tier[5] == [11, 15, 12, 18], "the two that share nothing go newest-placed first"
     assert found[0].count == 5 and found[0].word == "All-time favourite"
-    assert [shelf.tier for shelf in found] == [6, 5, 4, 3, 2, 1, 0], "best first, every tier"
-    assert all(by_tier[tier] == [] for tier in range(6))
+    assert [shelf.tier for shelf in found] == [5, 4, 3, 2, 1, 0], "best first, every tier"
+    assert all(by_tier[tier] == [] for tier in range(5))
     assert {shelf.word for shelf in found if shelf.count == 0} == {
-        "Loved it", "Liked it", "It was fine", "Not really for me", "Didn't like it", "Hated it",
+        "Excellent", "Very good", "Good", "OK", "Not for me",
     }, "an empty shelf keeps its word"
 
 
@@ -107,13 +107,13 @@ async def test_never_the_film_itself_and_always_its_kind(db, person):
     await film(db, 10, HEIST, TENSE)
     await film(db, 19, HEIST)
     await film(db, 30, HEIST, TENSE, kind="series")
-    await place(db, person, {10: 4, 19: 4, 30: 6})
+    await place(db, person, {10: 3, 19: 3, 30: 5})
 
     by_tier, found = await shown(db, person, 10)
-    assert by_tier[4] == [19] and found[2].count == 1, "a placed film is not its own neighbour"
-    assert by_tier[6] == [], "a series never sits on a film's shelf"
+    assert by_tier[3] == [19] and found[2].count == 1, "a placed film is not its own neighbour"
+    assert by_tier[5] == [], "a series never sits on a film's shelf"
     series, _ = await shown(db, person, 30, kind="series")
-    assert series[6] == [] and series[4] == []
+    assert series[5] == [] and series[3] == []
 
 
 async def test_an_unowned_film_on_top_and_unowned_placed_films_take_part(db, person):
@@ -121,10 +121,10 @@ async def test_an_unowned_film_on_top_and_unowned_placed_films_take_part(db, per
     await film(db, 12, HEIST)
     await film(db, 40, HEIST, RARE, owned=False)
     await film(db, 16, HEIST, RARE, owned=False)
-    await place(db, person, {12: 5, 16: 5})
+    await place(db, person, {12: 4, 16: 4})
 
     by_tier, found = await shown(db, person, 40)
-    assert by_tier[5] == [16, 12]
+    assert by_tier[4] == [16, 12]
     assert found[1].films[0].name == "Film 16"
 
 
@@ -147,11 +147,11 @@ async def test_the_same_film_always_shows_the_same_shelves(db, person):
 async def test_the_sheet_names_the_current_step_by_its_word(db, person):
     await film(db, 10, HEIST)
     await film(db, 11, HEIST)
-    await place(db, person, {10: 1, 11: 6})
+    await place(db, person, {10: 1, 11: 5})
     sheet = await shelves.sheet(db, user_id=person, title_id=10)
-    assert sheet["current"] == {"tier": 1, "word": "Didn't like it"}
+    assert sheet["current"] == {"tier": 1, "word": "OK"}
     assert sheet["shelves"][0] == {
-        "tier": 6, "word": "All-time favourite", "count": 1,
+        "tier": 5, "word": "All-time favourite", "count": 1,
         "films": [{"id": 11, "name": "Film 11", "original_name": None, "original_language": None,
                    "poster_path": None}],
     }

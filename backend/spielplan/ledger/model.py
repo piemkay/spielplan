@@ -14,12 +14,12 @@ from spielplan.ledger.hyperparams import Hyperparams
 
 EMBED_DIM = 64
 
-# §6.3's measured tier shape: the prior mean for the K = 7 default tier set.
-MEASURED_TIER_SHARES: tuple[float, ...] = (0.03, 0.07, 0.15, 0.25, 0.25, 0.17, 0.08)
+# §6.3's tier shape: the prior mean for the K = 6 default tier set (decision 561).
+MEASURED_TIER_SHARES: tuple[float, ...] = (0.05, 0.15, 0.30, 0.25, 0.15, 0.10)
 
-# Decision 508: the verdict arm's two cutpoints sit at the shape's C/B and B/A masses, so the tier
-# and verdict arms describe one latent (disliked F/D/C, fine B, liked A/A+/S).
-VERDICT_ANCHOR_SHARES: tuple[float, float] = (0.25, 0.50)
+# Decision 508: the verdict arm's two cutpoints sit at the shape's E/D and D/C masses, so the tier
+# and verdict arms describe one latent (disliked E, fine D, liked C/B/A/S; decision 561).
+VERDICT_ANCHOR_SHARES: tuple[float, float] = (0.05, 0.20)
 
 # Outcome codes for the duel arm.
 OUT_A, OUT_B, OUT_TIE = 0, 1, 2
@@ -56,7 +56,7 @@ class ObservationSet:
     duel_outcome: np.ndarray = field(default_factory=lambda: np.zeros(0, dtype=np.int64))
     # The RAW margin, not a weight; `_duel_weights` applies §4.3's margin/mean(margin).
     duel_margin: np.ndarray = field(default_factory=lambda: np.zeros(0))
-    n_levels: int = 7                           # K, the size of the user's tier set
+    n_levels: int = 6                           # K, the size of the user's tier set
 
     @property
     def n(self) -> int:
@@ -197,20 +197,20 @@ def _duel_terms(d: np.ndarray, outcome: np.ndarray, log_nu: float):
 
 
 def initial_cutpoints(k: int) -> np.ndarray:
-    """Cutpoints whose level shares match §6.3's measured shape at K = 7, else equal mass."""
+    """Cutpoints whose level shares match §6.3's shape at K = 6, else equal mass."""
     shares = MEASURED_TIER_SHARES if k == len(MEASURED_TIER_SHARES) else (1.0 / k,) * k
     cumulative = np.cumsum(np.asarray(shares, dtype=float))[:-1]
     return np.log(cumulative / (1.0 - cumulative))
 
 
 def verdict_cutpoints() -> np.ndarray:
-    """The verdict arm's prior cutpoints: the shape's C/B and B/A masses (decision 508)."""
+    """The verdict arm's prior cutpoints: the shape's E/D and D/C masses (decisions 508, 561)."""
     shares = np.asarray(VERDICT_ANCHOR_SHARES, dtype=float)
     return np.log(shares / (1.0 - shares))
 
 
 def anchored_cuts(k: int) -> tuple[int | None, int]:
-    """Decision 508: the cut indices nearest the 25% and 50% masses (ties go to the fine class).
+    """Decision 508: the cut indices nearest the anchor masses (ties go to the fine class).
 
     Two tiers have one cut, the fine/liked one.
     """
@@ -281,7 +281,7 @@ def verdict_class_of_tier(tier: int, k: int) -> int:
 
 
 def class_step(cls: int, k: int) -> int:
-    """The step a verdict class stands for: its tier nearest the middle, C, B or A at K = 7 (§5.1).
+    """The step a verdict class stands for: its tier nearest the middle, E, D or C at K = 6 (§5.1).
 
     At K = 2 disliked and fine share the lower tier.
     """
@@ -290,9 +290,9 @@ def class_step(cls: int, k: int) -> int:
 
 
 def guess_tier(tier: np.ndarray, k: int) -> np.ndarray:
-    """Decision 510: an unrated title wears its guessed class's tier nearest the middle (C, B or A)."""
-    bands = verdict_tiers(k)
-    return np.clip(np.asarray(tier, dtype=np.int64), bands[0, 1], bands[2, 0])
+    """Decision 510: an unrated title wears its guessed class's tier nearest the middle (E, D or C)."""
+    steps = np.array([class_step(verdict_class_of_tier(t, k), k) for t in range(k)], dtype=np.int64)
+    return steps[np.clip(np.asarray(tier, dtype=np.int64), 0, k - 1)]
 
 
 def live_verdicts(obs: ObservationSet) -> np.ndarray:

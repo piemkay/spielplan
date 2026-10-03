@@ -217,7 +217,7 @@ describe('the shelf card (proposal 29)', () => {
       e_source: 'backbone',
       seen: true,
       rank: 3,
-      tier: 'A+'
+      tier: 'A'
     };
     expect(toPosterTitle(item)).toEqual({
       id: 1012,

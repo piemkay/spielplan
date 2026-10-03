@@ -214,13 +214,13 @@ async def test_a_pair_can_only_be_answered_once(db, ranked):
 
 async def test_a_drop_does_not_invalidate_a_pair_on_the_table(db, ranked):
     """The counter is over comparisons, so a drop mid-queue must not discard the pair. Title 1 is
-    seated in tier 6 first, so the drop is the legal gesture (finding 18)."""
+    seated in tier 5 first, so the drop is the legal gesture (finding 18)."""
     client, _user_id = ranked
-    seated = await client.post("/api/rank/drop?kind=movie", json={"title_id": 1, "tier": 6})
+    seated = await client.post("/api/rank/drop?kind=movie", json={"title_id": 1, "tier": 5})
     assert seated.status_code == 200, seated.text
     served = (await client.get("/api/rank/queue?kind=movie")).json()["pair"]
     dropped = await client.post(
-        "/api/rank/drop?kind=movie", json={"title_id": 3, "tier": 6, "above": 1}
+        "/api/rank/drop?kind=movie", json={"title_id": 3, "tier": 5, "above": 1}
     )
     assert dropped.status_code == 200, dropped.text
     answered = await client.post(
@@ -241,7 +241,7 @@ async def test_a_tier_label_long_enough_to_break_the_rail_is_refused_at_the_save
         observations.DEFAULT_TIER_SET
     )
 
-    dropped = await client.post("/api/rank/drop?kind=movie", json={"title_id": 1, "tier": 6})
+    dropped = await client.post("/api/rank/drop?kind=movie", json={"title_id": 1, "tier": 5})
     assert dropped.status_code == 200
     assert await db.fetchval(
         "SELECT count(*) FROM tier_edit WHERE user_id = $1", user_id
@@ -477,7 +477,7 @@ async def test_a_refused_refit_does_not_lose_the_drop(db, ranked, monkeypatch):
     await client.post("/api/auth/preferences", json={"show_model": True})
     _refuses_to_fit(monkeypatch)
 
-    dropped = await client.post("/api/rank/drop?kind=movie", json={"title_id": 1, "tier": 6})
+    dropped = await client.post("/api/rank/drop?kind=movie", json={"title_id": 1, "tier": 5})
     assert dropped.status_code == 200, dropped.text
     ledger = dropped.json()["ledger"]
     assert ledger["applied"] is False
@@ -850,7 +850,7 @@ async def test_the_drop_route_answers_with_the_board_under_the_filters_it_was_gi
 
     dropped = (
         await client.post(
-            "/api/rank/drop?kind=movie&runtime_max=120", json={"title_id": 1, "tier": 6}
+            "/api/rank/drop?kind=movie&runtime_max=120", json={"title_id": 1, "tier": 5}
         )
     ).json()
     assert dropped["filters"] == {"runtime_max": 120}
@@ -860,12 +860,12 @@ async def test_the_drop_route_answers_with_the_board_under_the_filters_it_was_gi
     # `q=Title` matches every fixture title, so only "was a filter on?" differs between the drops.
     duels = "SELECT count(*) FROM duel WHERE user_id = $1 AND context = 'tier_insert'"
     edits = "SELECT count(*) FROM tier_edit WHERE user_id = $1"
-    seated = await client.post("/api/rank/drop?kind=movie", json={"title_id": 2, "tier": 6})
+    seated = await client.post("/api/rank/drop?kind=movie", json={"title_id": 2, "tier": 5})
     assert seated.status_code == 200, seated.text
     before_duels = await db.fetchval(duels, user_id)
     before_edits = await db.fetchval(edits, user_id)
 
-    sandwiched = {"title_id": 3, "tier": 6, "above": 1, "below": 2}
+    sandwiched = {"title_id": 3, "tier": 5, "above": 1, "below": 2}
     under_filter = await client.post("/api/rank/drop?kind=movie&q=Title", json=sandwiched)
     assert under_filter.status_code == 200, under_filter.text
     assert await db.fetchval(duels, user_id) == before_duels, (
@@ -1026,14 +1026,14 @@ async def test_the_whole_rank_surface_is_behind_a_session(db, app):
 async def test_a_tier_pick_and_the_undo_that_takes_it_back_are_recorded_as_such(db, app, ranked):
     """Decision 534: the sheet's pick is `explicit`, and an Undo names the edit it takes back."""
     client, user_id = ranked
-    seated = await client.post("/api/rank/drop?kind=movie", json={"title_id": 1, "tier": 6})
+    seated = await client.post("/api/rank/drop?kind=movie", json={"title_id": 1, "tier": 5})
     picked = await client.post(
         "/api/rank/drop?kind=movie", json={"title_id": 1, "tier": 2, "via": "explicit"}
     )
     assert picked.status_code == 200, picked.text
     edit = picked.json()["tier_edit_id"]
     undone = await client.post(
-        "/api/rank/drop?kind=movie", json={"title_id": 1, "tier": 6, "undoes": edit}
+        "/api/rank/drop?kind=movie", json={"title_id": 1, "tier": 5, "undoes": edit}
     )
     assert undone.status_code == 200, undone.text
 
@@ -1041,13 +1041,13 @@ async def test_a_tier_pick_and_the_undo_that_takes_it_back_are_recorded_as_such(
         "SELECT id, tier, via, undoes FROM tier_edit WHERE user_id = $1 ORDER BY id", user_id
     )
     assert [(r["tier"], r["via"], r["undoes"]) for r in rows] == [
-        (6, "drag_drop", None), (2, "explicit", None), (6, "drag_drop", edit),
+        (5, "drag_drop", None), (2, "explicit", None), (5, "drag_drop", edit),
     ]
     assert seated.json()["tier_edit_id"] == rows[0]["id"]
 
     # An Undo may only name this person's edit of this title.
     other_title = await client.post(
-        "/api/rank/drop?kind=movie", json={"title_id": 2, "tier": 6, "undoes": edit}
+        "/api/rank/drop?kind=movie", json={"title_id": 2, "tier": 5, "undoes": edit}
     )
     assert other_title.status_code == 422
     assert await db.fetchval("SELECT count(*) FROM tier_edit WHERE user_id = $1", user_id) == 3
@@ -1082,7 +1082,7 @@ async def test_every_rank_write_waits_for_the_set_up_and_the_board_stays_readabl
     )
     before = await db.fetchrow(counts)
     for method, path, body in (
-        ("post", "/api/rank/drop?kind=movie", {"title_id": 1, "tier": 6, "via": "explicit"}),
+        ("post", "/api/rank/drop?kind=movie", {"title_id": 1, "tier": 5, "via": "explicit"}),
         ("get", "/api/rank/queue?kind=movie", None),
         ("post", "/api/rank/queue/answer", {"pair": "x", "outcome": "A"}),
         ("post", "/api/rank/place", {"title_id": 1, "kind": "movie"}),

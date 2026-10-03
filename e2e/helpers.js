@@ -219,13 +219,13 @@ export async function loginAsMember(page, member) {
 }
 
 /**
- * The set-up's picks (§6.1) by the fixture bundle's ids: Heat (1) on "Loved it" and Prisoners (2) on
- * "It was fine". Both run long, so Home's school-night shelf keeps its three short films unseen,
+ * The set-up's picks (§6.1) by the fixture bundle's ids: Heat (1) on "Excellent" and Prisoners (2) on
+ * "OK". Both run long, so Home's school-night shelf keeps its three short films unseen,
  * and four films are left for Rate: Paddington 2, Chungking Express, its CJK twin and Tampopo.
  */
 export const DEFAULT_SETUP_PICKS = [
-  { title_id: 1, tier: 5 },
-  { title_id: 2, tier: 3 }
+  { title_id: 1, tier: 4 },
+  { title_id: 2, tier: 1 }
 ];
 
 /** Finish this session's member's set-up over HTTP; a member already set up counts as done. */
@@ -278,7 +278,7 @@ export async function seedFilmLedger(page, rounds = 8) {
   return placeThroughRate(
     page.request,
     'movie',
-    Array.from({ length: rounds }, (_, i) => [5, 3, 1][i % 3])
+    Array.from({ length: rounds }, (_, i) => [4, 1, 0][i % 3])
   );
 }
 

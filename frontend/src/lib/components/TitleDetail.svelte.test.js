@@ -947,13 +947,12 @@ describe('the ranking rows and the ladder sheet (decisions 531, 545 and 550)', (
   // `api/library.py`'s `ranking`: the person's tier set, best first, each with its word and count.
   const TIERS = [
     ['S', 'All-time favourite', 1],
-    ['A+', 'Loved it', 0],
-    ['A', 'Liked it', 3],
-    ['B', 'It was fine', 2],
-    ['C', 'Not really for me', 0],
-    ['D', "Didn't like it", 0],
-    ['F', 'Hated it', 0]
-  ].map(([label, word, count], i) => ({ index: 6 - i, label, word, count, entries: [] }));
+    ['A', 'Excellent', 3],
+    ['B', 'Very good', 2],
+    ['C', 'Good', 0],
+    ['D', 'OK', 0],
+    ['E', 'Not for me', 0]
+  ].map(([label, word, count], i) => ({ index: 5 - i, label, word, count, entries: [] }));
   const ranking = (tier, { tension = null, set_up = true } = {}) => ({ set_up, tier, tension, tiers: TIERS });
   const heat = { kind: 'movie', name: 'Heat' };
   const zodiac = { id: 31, name: 'Zodiac', original_name: null, original_language: null, poster_path: null };
@@ -983,9 +982,9 @@ describe('the ranking rows and the ladder sheet (decisions 531, 545 and 550)', (
     const app = await open({ ...heat, seen_state: 'seen' }, { ranking: ranking(4), props: { onStateChange } });
     try {
       const row = byTestId('rank-card-tier');
-      expect(row.getAttribute('aria-label')).toBe('In your ranking: A, Liked it');
+      expect(row.getAttribute('aria-label')).toBe('In your ranking: A, Excellent');
       expect(row.querySelector('.letter').textContent).toBe('A');
-      expect(row.textContent).toContain('Liked it');
+      expect(row.textContent).toContain('Excellent');
       expect(byTestId('rank-card-place').getAttribute('href')).toBe('/rank/place/6?kind=movie');
       expect(byTestId('rank-card-place').textContent).toContain('2 quick questions');
 
@@ -994,11 +993,11 @@ describe('the ranking rows and the ladder sheet (decisions 531, 545 and 550)', (
       expect(vi.mocked(get)).toHaveBeenCalledWith('/rate/shelves?title_id=6');
       const dialog = target.querySelector('[role="dialog"][aria-label="In your ranking"]');
       expect(dialog.querySelector('h2').textContent).toBe('Heat');
-      expect(dialog.querySelector('.footnote').textContent).toBe('Liked it');
+      expect(dialog.querySelector('.footnote').textContent).toBe('Excellent');
       expect([...sheet().querySelectorAll('.word')].map((w) => w.textContent)).toEqual(TIERS.map((t) => t.word));
       expect(shelf(4).getAttribute('aria-current')).toBe('true');
-      expect(shelf(4).getAttribute('aria-label')).toBe('Liked it, with Zodiac');
-      expect(sheet().textContent, 'no letter on the shelves').not.toMatch(/\b(S|A\+|A|B|C|D|F)\b/);
+      expect(shelf(4).getAttribute('aria-label')).toBe('Excellent, with Zodiac');
+      expect(sheet().textContent, 'no letter on the shelves').not.toMatch(/\b(S|A|B|C|D|E)\b/);
 
       shelf(2).click();
       await settle();
@@ -1008,7 +1007,7 @@ describe('the ranking rows and the ladder sheet (decisions 531, 545 and 550)', (
       expect(toast.message).toBe('Heat moved to C');
       expect(toast.actionLabel).toBe('Undo');
       expect(sheet(), 'a shelf tap closes the sheet').toBeNull();
-      expect(byTestId('rank-card-tier').getAttribute('aria-label')).toBe('In your ranking: C, Not really for me');
+      expect(byTestId('rank-card-tier').getAttribute('aria-label')).toBe('In your ranking: C, Good');
       expect(onStateChange, 'a rated, seen title moved touches Home not at all').not.toHaveBeenCalled();
 
       await toast.action();
@@ -1026,8 +1025,8 @@ describe('the ranking rows and the ladder sheet (decisions 531, 545 and 550)', (
       );
       await openLadder();
       const tiers = [...sheet().querySelectorAll('[data-testid="ladder-shelf"]')].map((s) => s.dataset.tier);
-      expect(tiers).toEqual(['6', '5', '4', '3', '2', '1', '0']);
-      expect(shelf(6).getAttribute('aria-label')).toBe('All-time favourite');
+      expect(tiers).toEqual(['5', '4', '3', '2', '1', '0']);
+      expect(shelf(5).getAttribute('aria-label')).toBe('All-time favourite');
     } finally {
       unmount(app);
     }
@@ -1061,7 +1060,7 @@ describe('the ranking rows and the ladder sheet (decisions 531, 545 and 550)', (
       });
       expect(toast.message).toBe('Heat placed in A');
       expect(toast.actionLabel, 'a first placement has no tier to go back to').toBe('');
-      expect(byTestId('rank-card-tier').getAttribute('aria-label')).toBe('In your ranking: A, Liked it');
+      expect(byTestId('rank-card-tier').getAttribute('aria-label')).toBe('In your ranking: A, Excellent');
       expect(byTestId('title-watched').textContent.trim()).toBe('Watched');
       expect(byTestId('title-why')).toBeNull();
       expect(onStateChange).toHaveBeenCalledWith(6, 'seen');
@@ -1070,7 +1069,7 @@ describe('the ranking rows and the ladder sheet (decisions 531, 545 and 550)', (
     }
   });
 
-  it('places with the keys 1 to 7 from the top, and closes with Done or Escape writing nothing', async () => {
+  it('places with the keys 1 to 6 from the top, and closes with Done or Escape writing nothing', async () => {
     vi.mocked(post).mockResolvedValue({});
     const app = await open({ ...heat, seen_state: 'seen' }, { ranking: ranking(4) });
     const press = (key) => window.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }));
@@ -1087,11 +1086,11 @@ describe('the ranking rows and the ladder sheet (decisions 531, 545 and 550)', (
       expect(byTestId('title-watched'), 'Escape closed the ladder alone').not.toBeNull();
       expect(vi.mocked(post)).not.toHaveBeenCalled();
 
-      press('7');
+      press('6');
       await settle();
       expect(vi.mocked(post), 'no key places with the sheet closed').not.toHaveBeenCalled();
       await openLadder();
-      press('7');
+      press('6');
       await settle();
       expect(vi.mocked(post)).toHaveBeenCalledWith('/rank/drop?kind=movie&per_tier=1', {
         title_id: 6, tier: 0, via: 'explicit'
@@ -1128,10 +1127,10 @@ describe('the ranking rows and the ladder sheet (decisions 531, 545 and 550)', (
       await settle();
       expect(onMove).toHaveBeenCalledWith(
         { title_id: 6, name: 'Heat', kind: 'movie', tier: 4 },
-        expect.objectContaining({ index: 2, label: 'C', word: 'Not really for me' })
+        expect.objectContaining({ index: 2, label: 'C', word: 'Good' })
       );
       expect(vi.mocked(post)).not.toHaveBeenCalled();
-      expect(byTestId('rank-card-tier').getAttribute('aria-label')).toBe('In your ranking: C, Not really for me');
+      expect(byTestId('rank-card-tier').getAttribute('aria-label')).toBe('In your ranking: C, Good');
       expect(byTestId('rank-card-tension'), 'the line described the old placement').toBeNull();
     } finally {
       unmount(app);
@@ -1292,8 +1291,8 @@ describe('Shares a lot with (decisions 541 and 550)', () => {
 });
 
 describe('a title the household does not have (decision 544)', () => {
-  const tiers = ['S', 'A+', 'A', 'B', 'C', 'D', 'F'].map((label, i) => ({
-    index: 6 - i, label, word: label, count: 0, entries: []
+  const tiers = ['S', 'A', 'B', 'C', 'D', 'E'].map((label, i) => ({
+    index: 5 - i, label, word: label, count: 0, entries: []
   }));
   const unowned = { kind: 'movie', name: 'Prisoners', is_owned: false, seen_state: 'unseen' };
   const opened = (extra = {}) =>
@@ -1388,7 +1387,7 @@ describe('a title the household does not have (decision 544)', () => {
       byTestId('title-seen-rate').click();
       await settle();
       expect(byTestId('ladder-sheet')).not.toBeNull();
-      expect(target.querySelectorAll('[data-testid="ladder-shelf"]')).toHaveLength(7);
+      expect(target.querySelectorAll('[data-testid="ladder-shelf"]')).toHaveLength(6);
     } finally {
       unmount(app);
     }

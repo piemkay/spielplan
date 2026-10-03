@@ -50,7 +50,7 @@ async def _history(db, user):
     """What a member answered before the ladder: verdicts, a drag, comparisons, a series verdict."""
     for title_id, value in ((1, 2), (2, 2), (3, 1), (4, 0), (5, 1), (11, 2)):
         await observations.record_verdict(db, user_id=user, title_id=title_id, value=value)
-    await observations.record_tier_edit(db, user_id=user, title_id=2, tier=6)
+    await observations.record_tier_edit(db, user_id=user, title_id=2, tier=5)
     await observations.record_duel(
         db, user_id=user, title_a=1, title_b=2, outcome="A", context="tier_queue",
         decisive=True, hp=DEFAULTS,
@@ -61,7 +61,7 @@ async def _history(db, user):
     )
 
 
-async def _set_up(db, user, picks=((1, 5), (6, 3), (7, 0))):
+async def _set_up(db, user, picks=((1, 4), (6, 1), (7, 0))):
     return await ladder.finish_setup(db, user_id=user, picks=list(picks))
 
 
@@ -78,7 +78,7 @@ async def test_before_the_set_up_every_answer_is_read_as_today(db, world):
     loaded = await observations.load_observations(db, user_id=patrick, kind="movie", hp=DEFAULTS)
     assert (loaded.n_verdicts, loaded.n_tier_edits, loaded.n_duels) == (5, 1, 1)
     assert dict(await foldin.live_labels(db, user_id=patrick, kind="movie")) == {
-        1: 4, 2: 6, 3: 3, 4: 2, 5: 3,
+        1: 2, 2: 5, 3: 1, 4: 0, 5: 1,
     }
     state = await ladder.state(db, user_id=patrick)
     assert (state.done, state.earlier_ratings, state.rated_before) == (False, 6, 0)
@@ -104,7 +104,7 @@ async def test_after_the_set_up_the_fit_reads_only_the_set_up_and_what_came_afte
     series = await observations.load_observations(db, user_id=patrick, kind="series", hp=DEFAULTS)
     assert series.obs.is_empty(), "the series history stops at the film set-up as well"
 
-    assert dict(await foldin.live_labels(db, user_id=patrick, kind="movie")) == {1: 5, 6: 3, 7: 0}
+    assert dict(await foldin.live_labels(db, user_id=patrick, kind="movie")) == {1: 4, 6: 1, 7: 0}
     assert await foldin.live_labels(db, user_id=patrick, kind="series") == []
 
     live = await db.fetch(
@@ -115,8 +115,8 @@ async def test_after_the_set_up_the_fit_reads_only_the_set_up_and_what_came_afte
         f"SELECT title_id, tier FROM ({observations.latest_tier_edit_sql()}) e ORDER BY title_id",
         patrick,
     )
-    assert [(r["title_id"], r["tier"]) for r in edits] == [(1, 5), (6, 3), (7, 0)]
-    assert await ladder.placements(db, user_id=patrick, kind="movie") == {1: 5, 6: 3, 7: 0}
+    assert [(r["title_id"], r["tier"]) for r in edits] == [(1, 4), (6, 1), (7, 0)]
+    assert await ladder.placements(db, user_id=patrick, kind="movie") == {1: 4, 6: 1, 7: 0}
 
     # The history is kept, append-only.
     assert await db.fetchval("SELECT count(*) FROM verdict WHERE user_id = $1", patrick) == 6 + 3
@@ -145,7 +145,7 @@ async def test_the_set_up_rows_share_the_cut_over_instant(db, world):
     )
     assert [r["via"] for r in edits] == ["explicit"] * 3
     assert [(p.tier, p.label, p.word) for p in result.placed] == [
-        (5, "A+", "Loved it"), (3, "B", "It was fine"), (0, "F", "Hated it"),
+        (4, "A", "Excellent"), (1, "D", "OK"), (0, "E", "Not for me"),
     ]
 
 
@@ -222,7 +222,7 @@ async def test_the_board_and_its_duel_readers_start_at_the_cut_over(db, world):
 
     items = {i.title_id: i for i in await read.items(db, user_id=patrick, kind="movie")}
     assert set(items) == {1, 6, 7}
-    assert [(items[t].assigned_tier, items[t].verdict) for t in (1, 6, 7)] == [(5, 2), (3, 1), (0, 0)]
+    assert [(items[t].assigned_tier, items[t].verdict) for t in (1, 6, 7)] == [(4, 2), (1, 1), (0, 0)]
 
     assert await read.comparison_counts(db, user_id=patrick, kind="movie") == {6: 1, 7: 1}
     assert await read.asked_pairs(db, user_id=patrick, kind="movie") == {frozenset((6, 7))}
@@ -281,7 +281,7 @@ async def test_a_second_finish_is_refused_and_writes_nothing(db, world):
     await _set_up(db, patrick)
     edits = await db.fetchval("SELECT count(*) FROM tier_edit WHERE user_id = $1", patrick)
     with pytest.raises(ladder.AlreadySetUp):
-        await _set_up(db, patrick, picks=((2, 6),))
+        await _set_up(db, patrick, picks=((2, 5),))
     assert await db.fetchval("SELECT count(*) FROM tier_edit WHERE user_id = $1", patrick) == edits
 
 
@@ -289,10 +289,10 @@ async def test_a_second_finish_is_refused_and_writes_nothing(db, world):
     ("picks", "reason"),
     [
         ((), "empty"),
-        (((1, 6), (1, 5)), "duplicate"),
-        (((1, 6), (11, 5)), "not_a_film"),
-        (((1, 6), (999, 5)), "not_a_film"),
-        (((1, 7),), "bad_tier"),
+        (((1, 5), (1, 4)), "duplicate"),
+        (((1, 5), (11, 4)), "not_a_film"),
+        (((1, 5), (999, 4)), "not_a_film"),
+        (((1, 6),), "bad_tier"),
         (((1, -1),), "bad_tier"),
     ],
 )
@@ -311,8 +311,8 @@ async def test_a_placement_records_its_class_where_the_live_verdict_is_none_or_a
     await observations.record_verdict(db, user_id=patrick, title_id=2, value=0)
 
     none = await ladder.place(db, user_id=patrick, title_id=3, tier=4)
-    same = await ladder.place(db, user_id=patrick, title_id=1, tier=6)
-    other = await ladder.place(db, user_id=patrick, title_id=2, tier=5)
+    same = await ladder.place(db, user_id=patrick, title_id=1, tier=5)
+    other = await ladder.place(db, user_id=patrick, title_id=2, tier=3)
 
     assert none.verdict is not None and none.superseded_verdict_id is None
     assert same.verdict is None and same.verdict_id is None
@@ -326,11 +326,11 @@ async def test_a_placement_records_its_class_where_the_live_verdict_is_none_or_a
         [none.verdict_id, other.verdict_id],
     )
     assert {r["source"] for r in sources} == {"ladder"}
-    assert (none.kind, none.label, none.word, none.implied_seen) == ("movie", "A", "Liked it", True)
+    assert (none.kind, none.label, none.word, none.implied_seen) == ("movie", "A", "Excellent", True)
     assert same.implied_seen is False and same.prior_state == ()
 
     with pytest.raises(ValueError):
-        await ladder.place(db, user_id=patrick, title_id=3, tier=7)
+        await ladder.place(db, user_id=patrick, title_id=3, tier=6)
 
 
 async def test_a_placement_after_the_cut_over_records_a_verdict_even_where_history_agrees(db, world):
@@ -338,7 +338,7 @@ async def test_a_placement_after_the_cut_over_records_a_verdict_even_where_histo
     await observations.record_verdict(db, user_id=patrick, title_id=2, value=2)
     await _set_up(db, patrick)
 
-    placed = await ladder.place(db, user_id=patrick, title_id=2, tier=6)
+    placed = await ladder.place(db, user_id=patrick, title_id=2, tier=5)
     assert placed.verdict is not None, "the old liked verdict is history; the placement needs its own"
 
 
@@ -376,18 +376,18 @@ async def test_a_same_step_re_ask_is_recorded_and_not_fitted_and_a_different_one
     patrick = world["patrick"]
     setup = {p.edit.title_ids[0]: p.tier_edit_id for p in (await _set_up(db, patrick)).placed}
 
-    same = await ladder.place(db, user_id=patrick, title_id=6, tier=3, reask_of=setup[6])
+    same = await ladder.place(db, user_id=patrick, title_id=6, tier=1, reask_of=setup[6])
     assert same.verdict is None
     stored = await db.fetchval("SELECT reask_of FROM tier_edit WHERE id = $1", same.tier_edit_id)
     assert stored == setup[6]
     loaded = await observations.load_observations(db, user_id=patrick, kind="movie", hp=DEFAULTS)
     assert (loaded.n_tier_edits, loaded.n_reask) == (3, 1)
 
-    moved = await ladder.place(db, user_id=patrick, title_id=7, tier=2, reask_of=setup[7])
-    assert moved.verdict is None, "C is still disliked"
+    moved = await ladder.place(db, user_id=patrick, title_id=1, tier=3, reask_of=setup[1])
+    assert moved.verdict is None, "B is still liked"
     loaded = await observations.load_observations(db, user_id=patrick, kind="movie", hp=DEFAULTS)
     assert (loaded.n_tier_edits, loaded.n_reask) == (4, 1)
-    assert await ladder.placements(db, user_id=patrick, kind="movie") == {1: 5, 6: 3, 7: 2}
+    assert await ladder.placements(db, user_id=patrick, kind="movie") == {1: 3, 6: 1, 7: 0}
 
     # The incremental path skips the same-step re-ask too.
     await _fitted(db, patrick)
@@ -409,7 +409,7 @@ async def test_films_rated_before_wait_until_they_are_placed_again(db, world):
     assert await ladder.rated_before(db, user_id=patrick, kinds=["series"]) == [11]
     assert (result.earlier_ratings, result.rated_before) == (6, 4)
 
-    await ladder.place(db, user_id=patrick, title_id=5, tier=3)
+    await ladder.place(db, user_id=patrick, title_id=5, tier=1)
     state = await ladder.state(db, user_id=patrick)
     assert (state.done, state.earlier_ratings, state.rated_before) == (True, 6, 3)
 
@@ -418,8 +418,8 @@ async def test_a_placed_film_marked_not_seen_keeps_its_step(db, world):
     patrick = world["patrick"]
     await _set_up(db, patrick)
     await observations.record_not_seen(db, user_id=patrick, title_id=6)
-    assert (await ladder.placements(db, user_id=patrick, kind="movie"))[6] == 3
-    assert dict(await foldin.live_labels(db, user_id=patrick, kind="movie"))[6] == 3
+    assert (await ladder.placements(db, user_id=patrick, kind="movie"))[6] == 1
+    assert dict(await foldin.live_labels(db, user_id=patrick, kind="movie"))[6] == 1
 
 
 async def test_one_members_set_up_cuts_nobody_elses_history(db, world):
@@ -442,7 +442,6 @@ async def test_the_set_up_goes_with_its_member(db, world):
 
 def test_the_words_follow_the_default_set_and_a_custom_set_names_itself():
     assert observations.tier_words(observations.DEFAULT_TIER_SET) == (
-        "Hated it", "Didn't like it", "Not really for me", "It was fine", "Liked it", "Loved it",
-        "All-time favourite",
+        "Not for me", "OK", "Good", "Very good", "Excellent", "All-time favourite",
     )
     assert observations.tier_words(("Meh", "Good", "Great")) == ("Meh", "Good", "Great")
