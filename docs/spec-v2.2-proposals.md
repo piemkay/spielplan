@@ -17088,6 +17088,29 @@ The spec is amended in place (v2.1.21): §6.1.
 **Cost.** One sort key. A widely seen film outside the library waits until the library's titles
 have been asked.
 
+### 567. Worth getting shows well-known feature films, and its See all filters by decade
+
+**What the record says.** §6.0's Worth getting ranks every unowned title of the kind with any crowd
+rating by the person's own score (decisions 544 and 552). On the gate's copy of production, 37 to 42
+of each 60-film See all were from before 1990, many barely known (Harakiri, 3,066 crowd ratings),
+with TV episodes (Decalogue), stage recordings, concerts and a cartoon short among them.
+
+**Why it changes.** The owner, 2026-10-03: "It shows currently mainly very old movies. I don't
+have any filter options."
+
+**The decision.**
+1. The row and See all, for anyone, show well-known feature films only: at least 5,000 crowd
+   ratings, 60 minutes or more (an unknown runtime is left out), never TV Movie, and Documentary or
+   Music only where each member the list is for has liked three titles of the kind carrying it.
+2. See all filters by decade, Any by default, the 1950s to the 2020s, before its cap of 60, and
+   orders best match (the default) or newest first.
+
+The spec is amended in place (v2.1.21): §6.0.
+
+**Cost.** One shared predicate and two query parameters. Crowd counts gather with age, so the floor
+keeps more classics than it drops: the default list stays old, and the decade and Newest first are
+the way to recent films. A film newer than the bundle's crowd data waits for the next bundle.
+
 ## §6.2 — Tonight, rewritten (owner decision, 2026-08-29)
 
 Proposal 54 asked which slot carries the alternative on a split axis. The owner answered by

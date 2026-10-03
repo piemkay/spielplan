@@ -382,4 +382,37 @@ describe('Worth getting (decision 544)', () => {
     unmount(app);
     session.user = null;
   });
+
+  it('filters the whole list by decade and orders it newest first, Any undoing the decade', async () => {
+    session.user = { id: 1, name: 'Patrick', role: 'admin', must_change_password: false };
+    vi.mocked(get).mockResolvedValue({
+      kind: 'movie', for: { id: 1, name: 'Patrick' }, members: [], items: []
+    });
+    const app = renderWorth();
+    target.querySelector('[data-testid="shelf-see-all"]').click();
+    await settle();
+    const decades = () => [...target.querySelectorAll('[data-testid="worth-getting-decades"] button')];
+    const sorts = () => [...target.querySelectorAll('[data-testid="worth-getting-sort"] button')];
+    const pressed = (buttons) => buttons.filter((b) => b.getAttribute('aria-pressed') === 'true')
+      .map((b) => b.textContent);
+    expect(decades().map((b) => b.textContent)).toEqual(
+      ['Any', '1950s', '1960s', '1970s', '1980s', '1990s', '2000s', '2010s', '2020s']
+    );
+    expect([pressed(decades()), pressed(sorts())]).toEqual([['Any'], ['Best match']]);
+
+    decades()[5].click();
+    await settle();
+    expect(vi.mocked(get)).toHaveBeenLastCalledWith('/home/worth-getting?kind=movie&decade=1990');
+    sorts()[1].click();
+    await settle();
+    expect(vi.mocked(get)).toHaveBeenLastCalledWith('/home/worth-getting?kind=movie&decade=1990&sort=newest');
+    expect([pressed(decades()), pressed(sorts())]).toEqual([['1990s'], ['Newest first']]);
+
+    decades()[0].click();
+    sorts()[0].click();
+    await settle();
+    expect(vi.mocked(get)).toHaveBeenLastCalledWith('/home/worth-getting?kind=movie');
+    unmount(app);
+    session.user = null;
+  });
 });

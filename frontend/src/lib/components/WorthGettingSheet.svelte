@@ -1,6 +1,7 @@
 <script>
-  // Worth getting's See all: the whole list for one member or for everyone (decision 552), each row
-  // with Want. A row's like line is always one of the viewer's own films.
+  // Worth getting's See all: the whole list for one member or for everyone (decision 552), in one
+  // decade or newest first (decision 567), each row with Want. A row's like line is always one of
+  // the viewer's own films.
   import Avatar from '$lib/components/Avatar.svelte';
   import Icon from '$lib/components/Icon.svelte';
   import RatePoster from '$lib/components/RatePoster.svelte';
@@ -20,8 +21,16 @@
 
   let { open = false, onClose, kind = 'movie', onSelect } = $props();
 
+  const DECADES = [1950, 1960, 1970, 1980, 1990, 2000, 2010, 2020];
+  const SORTS = [
+    { id: 'match', label: 'Best match' },
+    { id: 'newest', label: 'Newest first' }
+  ];
+
   // Whom the list is for: null is the viewer, else another member's id or 'everyone'.
   let audience = $state(null);
+  let decade = $state(null);
+  let sort = $state('match');
   let picking = $state(false);
   let data = $state(null);
   let failure = $state('');
@@ -38,27 +47,30 @@
   const forName = $derived(everyone ? 'everyone' : chosen?.id === viewer ? 'you' : chosen?.name);
   const yours = $derived(everyone ? pickable.some((m) => m.id === viewer) : audience === null);
   // The list on screen answers another choice until the new one lands.
-  const showing = $derived(
-    data?.for === 'everyone' ? 'everyone' : data?.for?.id === viewer ? null : (data?.for?.id ?? null)
-  );
-  const stale = $derived(!!data && showing !== audience);
+  const asked = $derived(`${audience}|${decade}|${sort}`);
+  let shown = $state(null);
+  const stale = $derived(!!data && shown !== asked);
 
   let seq = 0;
-  async function load(forKind, forAudience) {
+  async function load(forKind, forAudience, filters, key) {
     const mine = ++seq;
     failure = '';
     try {
-      const res = await loadWorthGetting(forKind, forAudience);
-      if (mine === seq) data = res;
+      const res = await loadWorthGetting(forKind, forAudience, filters);
+      if (mine === seq) {
+        data = res;
+        shown = key;
+      }
     } catch (err) {
       if (mine === seq) failure = err.message;
     }
   }
 
-  // Opening it, choosing whom it is for, or a wish written from a card over it reads the list.
+  // Opening it, choosing whom it is for or a filter, or a wish written from a card over it reads
+  // the list.
   $effect(() => {
     void wishes.epoch;
-    if (open) load(kind, audience);
+    if (open) load(kind, audience, { decade, sort }, asked);
   });
 
   function choose(next, close) {
@@ -113,6 +125,19 @@
       <span class="name">For {forName}</span>
       <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5.5 9.5 6.5 6.5 6.5-6.5" /></svg>
     </button>
+    <div class="filters">
+      <div class="decades" role="group" aria-label="Decade" data-testid="worth-getting-decades">
+        <button class="pill" aria-pressed={decade === null} onclick={() => (decade = null)}>Any</button>
+        {#each DECADES as d (d)}
+          <button class="pill" aria-pressed={decade === d} onclick={() => (decade = d)}>{d}s</button>
+        {/each}
+      </div>
+      <div class="segmented sort" role="group" aria-label="Order" data-testid="worth-getting-sort">
+        {#each SORTS as c (c.id)}
+          <button aria-pressed={sort === c.id} onclick={() => (sort = c.id)}>{c.label}</button>
+        {/each}
+      </div>
+    </div>
   {/snippet}
   <div class="list" data-testid="worth-getting-sheet" data-for={audience ?? 'you'}>
     {#if failure}<p class="footnote" role="alert">{failure}</p>{/if}
@@ -236,6 +261,26 @@
     font-size: var(--fs-body);
     line-height: 22px;
     text-align: left;
+  }
+  .filters {
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    margin: 8px 0 10px;
+  }
+  .decades {
+    display: flex;
+    gap: 8px;
+    margin: 0 calc(-1 * var(--gutter));
+    padding: 0 var(--gutter);
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .decades::-webkit-scrollbar {
+    display: none;
+  }
+  .decades .pill {
+    flex: none;
   }
   .all {
     flex: none;
@@ -366,8 +411,14 @@
   }
 
   @media (min-width: 721px) {
-    .seat {
+    .seat,
+    .sort {
       max-width: 320px;
+    }
+    .decades {
+      flex-wrap: wrap;
+      margin: 0;
+      padding: 0;
     }
   }
 </style>

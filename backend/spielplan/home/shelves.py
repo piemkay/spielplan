@@ -16,6 +16,7 @@ from typing import Any
 
 import asyncpg
 
+from spielplan.db import genres as genre_vocab
 from spielplan.db import library
 from spielplan.home import mix, notices, suggest, taste, wish
 from spielplan.home import why as why_mod
@@ -66,6 +67,11 @@ WORTH_GETTING_MIN_LABELS = 20
 WORTH_GETTING_POOL = 4
 # See all's whole list, longer than a shelf.
 WORTH_GETTING_LIST_CAP = 60
+# Decision 567: well-known feature films only; a niche genre opens on this many liked titles carrying it.
+WORTH_GETTING_MIN_CROWD = 5000
+WORTH_GETTING_MIN_RUNTIME = 60
+WORTH_GETTING_NICHE = ("Documentary", "Music")
+WORTH_GETTING_NICHE_LIKES = 3
 
 # Decision 563: rows a kind, the first read's slots, and each family's rows and limits.
 ROW_CAP = 15
@@ -1148,6 +1154,34 @@ async def _likes(
     )
 
 
+async def _shut_genres(conn: asyncpg.Connection, member_ids: Sequence[int], kind: str) -> list[str]:
+    """Raw genre labels left out: TV Movie always, a niche genre unless every member the list is for
+    has liked enough titles of the kind carrying it."""
+    shut = ["tv movie"]
+    for genre in WORTH_GETTING_NICHE:
+        raw = genre_vocab.raw_labels(genre)
+        for member_id in member_ids:
+            liked = await conn.fetchval(
+                f"WITH lv AS ({live_label_sql('$1')}) SELECT count(*) FROM lv"
+                " JOIN title t ON t.id = lv.title_id AND t.kind = $2"
+                f" WHERE lv.value = 2 AND {genre_vocab.predicate('$3', '$4')}",
+                member_id, kind, raw, list(genre_vocab.EXCLUDED_SOURCES),
+            )
+            if liked < WORTH_GETTING_NICHE_LIKES:
+                shut += raw
+                break
+    return shut
+
+
+def _feature_sql(shut: str, excluded: str, decade: str) -> str:
+    """Over aliases `t` and `tp`: a well-known feature film, in the decade when one is bound."""
+    return f"""
+           AND tp.item_n >= {WORTH_GETTING_MIN_CROWD} AND t.runtime_min >= {WORTH_GETTING_MIN_RUNTIME}
+           AND NOT {genre_vocab.predicate(shut, excluded)}
+           AND ({decade}::int IS NULL OR t.year >= {decade}::int AND t.year < {decade}::int + 10)
+    """
+
+
 async def _unowned_for_one(
     conn: asyncpg.Connection,
     *,
@@ -1157,6 +1191,7 @@ async def _unowned_for_one(
     avoids: Sequence[taste.Avoided],
     cap: int,
     keep_wanted: bool,
+    decade: int | None = None,
 ) -> list[dict[str, Any]]:
     """Unowned titles of the kind by one member's own score, with that member's leave-outs and a crowd
     rating. The card and its Want are the viewer's; the viewer's own list keeps only titles like one
@@ -1168,7 +1203,7 @@ async def _unowned_for_one(
           JOIN user_score ms ON ms.title_id = t.id AND ms.user_id = $7 AND ms.kind = t.kind
                             AND ms.bundle_version = $3
           LEFT JOIN wish w ON w.title_id = t.id AND w.user_id = $1
-         WHERE t.kind = $2 AND NOT t.is_owned AND tp.item_n > 0
+         WHERE t.kind = $2 AND NOT t.is_owned""" + _feature_sql("$8", "$9", "$10") + """
            AND NOT EXISTS (SELECT 1 FROM user_title s WHERE s.title_id = t.id
                             AND s.user_id = $7 AND s.state = 'seen')
            AND t.id NOT IN (SELECT title_id FROM lv)
@@ -1180,7 +1215,8 @@ async def _unowned_for_one(
          LIMIT $5
         """,
         ctx.user_id, kind, ctx.bundle_version, sorted(avoided), cap * WORTH_GETTING_POOL,
-        keep_wanted, member_id,
+        keep_wanted, member_id, await _shut_genres(conn, [member_id], kind),
+        list(genre_vocab.EXCLUDED_SOURCES), decade,
     )
     likes = await _likes(conn, rows, ctx=ctx, kind=kind)
     return _with_likes(rows, likes, ctx=ctx, kind=kind, cap=cap, required=member_id == ctx.user_id)
@@ -1194,6 +1230,7 @@ async def _unowned_for_everyone(
     member_ids: Sequence[int],
     avoids: Sequence[taste.Avoided],
     cap: int,
+    decade: int | None,
 ) -> list[dict[str, Any]]:
     """Unowned titles ranked as the shared sweet spot ranks owned ones (decision 477), over every
     member given, leaving out what any of them has seen, rated, avoids or said Not for me."""
@@ -1214,9 +1251,9 @@ async def _unowned_for_everyone(
         )
         SELECT r.title_id, array_agg(r.pos) AS pos, array_agg(r.n) AS n
           FROM ranked r
+          JOIN title t ON t.id = r.title_id
           JOIN title_prior tp ON tp.title_id = r.title_id AND tp.bundle_version = $3
-                             AND tp.item_n > 0
-         WHERE r.title_id NOT IN (SELECT title_id FROM rated)
+         WHERE r.title_id NOT IN (SELECT title_id FROM rated){_feature_sql("$5", "$6", "$7")}
            AND NOT EXISTS (SELECT 1 FROM user_title s WHERE s.title_id = r.title_id
                             AND s.user_id = ANY($1::bigint[]) AND s.state = 'seen')
            AND NOT EXISTS (SELECT 1 FROM wish x WHERE x.title_id = r.title_id
@@ -1226,6 +1263,7 @@ async def _unowned_for_everyone(
         HAVING count(*) = cardinality($1::bigint[])
         """,
         list(member_ids), kind, ctx.bundle_version, sorted(avoided),
+        await _shut_genres(conn, member_ids, kind), list(genre_vocab.EXCLUDED_SOURCES), decade,
     )
     top = sorted(
         rows,
@@ -1311,10 +1349,13 @@ async def worth_getting_list(
     kind: str,
     audience: int | str | None,
     bundle_version: str | None,
+    decade: int | None = None,
+    sort: str = "match",
 ) -> dict[str, Any]:
     """See all, for one member (the viewer unless `audience` names another) or for "everyone" whose
-    own ratings open the shelf (decision 552). Naming a member they do not open it for is refused;
-    the viewer's own list is empty while their shelf is absent."""
+    own ratings open the shelf (decision 552), in one decade when asked, best match or newest
+    first. Naming a member they do not open it for is refused; the viewer's own list is empty while
+    their shelf is absent."""
     members = await _worth_getting_members(conn, viewer_id=user_id, kind=kind)
     pickable = [m["id"] for m in members if m["pickable"]]
     member = None
@@ -1346,13 +1387,17 @@ async def worth_getting_list(
         if member:
             items = await _unowned_for_one(
                 conn, ctx=ctx, kind=kind, member_id=member["id"], avoids=avoids,
-                cap=WORTH_GETTING_LIST_CAP, keep_wanted=True,
+                cap=WORTH_GETTING_LIST_CAP, keep_wanted=True, decade=decade,
             )
         else:
             items = await _unowned_for_everyone(
                 conn, ctx=ctx, kind=kind, member_ids=audience_ids, avoids=avoids,
-                cap=WORTH_GETTING_LIST_CAP,
+                cap=WORTH_GETTING_LIST_CAP, decade=decade,
             )
+        if sort == "newest":
+            items.sort(key=lambda c: -(c["year"] or 0))
+            for i, card in enumerate(items, 1):
+                card["rank"] = i
         await library.carry_original_names(conn, items, key="title_id")
     return {
         "kind": kind,

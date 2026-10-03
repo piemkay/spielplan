@@ -1972,7 +1972,7 @@ async def _unowned(db, *, labels: int = 20) -> None:
         await db.execute(
             "INSERT INTO title_prior (title_id, bundle_version, b, b_i, item_n, gate, e_source) "
             "VALUES ($1, $2, 0.5, 0.5, $3, 0.9, 'backbone')",
-            title_id, BUNDLE, 0 if title_id == NO_CROWD else 300,
+            title_id, BUNDLE, 0 if title_id == NO_CROWD else shelves.WORTH_GETTING_MIN_CROWD,
         )
         for user_id in users:
             await db.execute(
@@ -1997,8 +1997,8 @@ def _worth(payload, kind="movie"):
     return None if section is None else [c["title_id"] for c in section["items"]]
 
 
-async def _see_all(client, *, kind="movie", audience=None):
-    params = {"kind": kind} if audience is None else {"kind": kind, "for": audience}
+async def _see_all(client, *, kind="movie", audience=None, **filters):
+    params = {"kind": kind, **filters} if audience is None else {"kind": kind, "for": audience, **filters}
     response = await client.get("/api/home/worth-getting", params=params)
     assert response.status_code == 200, response.text
     return response.json()
@@ -2058,6 +2058,53 @@ async def test_worth_getting_leaves_out_the_seen_the_rated_the_wished_and_the_av
     assert [(c["title_id"], c["wanted"]) for c in listed] == [
         (1062, True), (1065, False), (1069, False), (1068, False)
     ], "See all keeps a wanted title, marked, and drops Not for me"
+
+
+async def test_worth_getting_serves_well_known_features_and_a_documentary_once_one_is_liked(world):
+    await _unowned(world.db)
+    db = world.db
+    await db.execute(
+        "INSERT INTO title_genre (title_id, genre, source) "
+        "VALUES (1060, 'TV Movie', 'tmdb'), (1061, 'Documentary', 'tmdb')"
+    )
+    await db.execute("UPDATE title SET runtime_min = 45 WHERE id = 1062")
+    await db.execute("UPDATE title SET runtime_min = NULL WHERE id = 1063")
+    await db.execute(
+        "UPDATE title_prior SET item_n = $1 WHERE title_id = 1064", shelves.WORTH_GETTING_MIN_CROWD - 1
+    )
+    assert _worth(await world.home(kinds=("movie",))) == [1065, 1069, 1068]
+    assert _ids(await _see_all(world.client)) == [1065, 1069, 1068]
+
+    for title_id in (1001, 1002, 1003):
+        await db.execute(
+            "INSERT INTO title_genre (title_id, genre, source) VALUES ($1, 'Documentary', 'tmdb')", title_id
+        )
+        await _verdict(db, world.patrick, title_id, 2 if title_id < 1003 else 1)
+    assert 1061 not in _ids(await _see_all(world.client)), "two liked documentaries are not a taste"
+    await _verdict(db, world.patrick, 1003, 2)
+    assert _ids(await _see_all(world.client)) == [1061, 1065, 1069, 1068]
+
+
+async def test_see_all_filters_by_decade_before_the_cap_and_sorts_newest_first(world, monkeypatch):
+    await _unowned(world.db)
+    years = {1060: 1994, 1061: 1985, 1062: 1999, 1063: 1990, 1064: 2003, 1065: 1971, 1069: 1992,
+             1068: 2015, UNLIKE: 1980}
+    for title_id, year in years.items():
+        await world.db.execute("UPDATE title SET year = $2 WHERE id = $1", title_id, year)
+
+    newest = (await _see_all(world.client, sort="newest"))["items"]
+    assert [c["title_id"] for c in newest] == [1068, 1064, 1062, 1060, 1069, 1063, 1061, 1065]
+    assert [c["rank"] for c in newest] == list(range(1, 9))
+
+    monkeypatch.setattr(shelves, "WORTH_GETTING_LIST_CAP", 3)
+    monkeypatch.setattr(shelves, "WORTH_GETTING_POOL", 1)
+    assert _ids(await _see_all(world.client, decade=1990)) == [1060, 1062, 1063], "still fills"
+    assert _ids(await _see_all(world.client, audience="everyone", decade=1990)) == [1060, 1062, 1063]
+    assert _ids(await _see_all(world.client, decade=1960)) == []
+
+    for bad in ({"decade": 1995}, {"decade": "nineties"}, {"sort": "oldest"}):
+        response = await world.client.get("/api/home/worth-getting", params={"kind": "movie", **bad})
+        assert response.status_code == 422, bad
 
 
 async def test_worth_getting_neither_claims_nor_is_thinned_and_keeps_the_floor(world):

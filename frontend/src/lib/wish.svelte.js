@@ -48,9 +48,12 @@ export function loadWishList() {
   return get('/wish');
 }
 
-/** @param {'movie' | 'series'} kind @param {number | 'everyone' | null} audience null is the viewer */
-export function loadWorthGetting(kind, audience = null) {
-  return get(`/home/worth-getting${qs({ kind, for: audience })}`);
+/**
+ * @param {'movie' | 'series'} kind @param {number | 'everyone' | null} audience null is the viewer
+ * @param {{ decade?: number | null, sort?: 'match' | 'newest' }} [filters]
+ */
+export function loadWorthGetting(kind, audience = null, { decade = null, sort = 'match' } = {}) {
+  return get(`/home/worth-getting${qs({ kind, for: audience, decade, sort: sort === 'newest' ? sort : null })}`);
 }
 
 /** Home's row under Worth getting: "4 wanted, 1 by both of you", where the household is two. */

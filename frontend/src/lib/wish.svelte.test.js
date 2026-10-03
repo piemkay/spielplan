@@ -158,10 +158,14 @@ describe('the wish routes', () => {
     await loadWorthGetting('series');
     await loadWorthGetting('movie', 5);
     await loadWorthGetting('movie', 'everyone');
+    await loadWorthGetting('movie', null, { decade: 1980, sort: 'newest' });
+    await loadWorthGetting('movie', null, { decade: null, sort: 'match' });
     expect(fetch.mock.calls.map(([url]) => url)).toEqual([
       '/api/home/worth-getting?kind=series',
       '/api/home/worth-getting?kind=movie&for=5',
-      '/api/home/worth-getting?kind=movie&for=everyone'
+      '/api/home/worth-getting?kind=movie&for=everyone',
+      '/api/home/worth-getting?kind=movie&decade=1980&sort=newest',
+      '/api/home/worth-getting?kind=movie'
     ]);
   });
 });

@@ -82,12 +82,14 @@ async def worth_getting(
     request: Request,
     kind: Literal["movie", "series"],
     for_: int | Literal["everyone"] | None = Query(None, alias="for"),
+    decade: Annotated[int, Field(ge=1870, le=2090, multiple_of=10)] | None = None,
+    sort: Literal["match", "newest"] = "match",
 ) -> dict[str, Any]:
     """Worth getting's See all: for one member, the viewer by default, or for everyone."""
     try:
         payload = await shelves.worth_getting_list(
             conn, user_id=user.id, kind=kind, audience=for_,
-            bundle_version=await _bundle(request, conn),
+            bundle_version=await _bundle(request, conn), decade=decade, sort=sort,
         )
     except shelves.NotPickable as exc:
         raise HTTPException(
