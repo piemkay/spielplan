@@ -71,7 +71,7 @@ WORTH_GETTING_LIST_CAP = 60
 # this many liked titles carrying it.
 WORTH_GETTING_MIN_VOTES = mix.WELL_KNOWN_VOTES
 WORTH_GETTING_MIN_RUNTIME = 60
-WORTH_GETTING_NICHE = ("Documentary", "Music")
+WORTH_GETTING_NICHE = ("Documentary",)
 WORTH_GETTING_NICHE_LIKES = 3
 
 # Decision 563: rows a kind, the first read's slots, and each family's rows and limits.
@@ -1182,14 +1182,24 @@ async def _shut_genres(conn: asyncpg.Connection, member_ids: Sequence[int], kind
 
 
 async def _concerts(conn: asyncpg.Connection, *, user_id: int, kind: str) -> frozenset[int]:
-    """The titles of the kind carrying Music, unless the member likes it."""
-    if await _likes_genre(conn, user_id, kind, "Music"):
-        return frozenset()
+    """Concerts and music documentaries of the kind (Music, and no genre but Music or Documentary),
+    unless the member has liked enough of them; a musical such as Coco is no concert."""
     rows = await conn.fetch(
-        f"SELECT t.id FROM title t WHERE t.kind = $1 AND {genre_vocab.predicate('$2', '$3')}",
-        kind, genre_vocab.raw_labels("Music"), list(genre_vocab.EXCLUDED_SOURCES),
+        "SELECT t.id, array_agg(g.genre) AS raw FROM title t JOIN title_genre g ON g.title_id = t.id"
+        " WHERE t.kind = $1 AND NOT (g.source = ANY($2::text[])) GROUP BY t.id",
+        kind, list(genre_vocab.EXCLUDED_SOURCES),
     )
-    return frozenset(int(r["id"]) for r in rows)
+    concerts = frozenset(
+        int(r["id"]) for r in rows
+        if "Music" in (names := set(genre_vocab.facet([g.lower() for g in r["raw"]])))
+        and names <= {"Music", "Documentary"}
+    )
+    liked = await conn.fetchval(
+        f"WITH lv AS ({live_label_sql('$1')}) SELECT count(*) FROM lv"
+        " WHERE lv.value = 2 AND lv.title_id = ANY($2::int[])",
+        user_id, sorted(concerts),
+    )
+    return frozenset() if liked >= WORTH_GETTING_NICHE_LIKES else concerts
 
 
 def _feature_sql(shut: str, excluded: str, decade: str) -> str:
@@ -1218,6 +1228,7 @@ async def _unowned_for_one(
     member's leave-outs and a crowd rating. The card and its Want are the viewer's; the viewer's own
     list keeps only titles like one they liked (decision 515)."""
     avoided = await taste.avoided_titles(conn, avoids, kind=kind, version=ctx.version, owned=False)
+    avoided |= await _concerts(conn, user_id=member_id, kind=kind)
     rows = await conn.fetch(
         f"WITH lv AS ({live_label_sql('$7')})" + CARD_SELECT + ", w.state AS wish_state" + CARD_FROM
         + """
@@ -1257,6 +1268,8 @@ async def _unowned_for_everyone(
     member's personal half (decision 567), over every member given, leaving out what any of them has
     seen, rated, avoids or said Not for me."""
     avoided = await taste.avoided_titles(conn, avoids, kind=kind, version=ctx.version, owned=False)
+    for member_id in member_ids:
+        avoided |= await _concerts(conn, user_id=member_id, kind=kind)
     rows = await conn.fetch(
         f"""
         WITH rated AS (

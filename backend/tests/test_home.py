@@ -2219,16 +2219,26 @@ async def test_new_in_the_library_marks_what_the_viewer_wanted(world):
     }
 
 
-async def test_concerts_leave_every_row_until_the_viewer_likes_music(world):
+async def test_concerts_leave_every_row_until_the_viewer_likes_them(world):
     def shown(payload):
         return {c["title_id"] for shelf in payload["shelves"] for s in shelf["sections"]
                 for c in s["items"]}
 
     db = world.db
-    for title_id in (1011, 1030):
+
+    async def concert(title_id):
+        await db.execute("DELETE FROM title_genre WHERE title_id = $1", title_id)
         await db.execute(
             "INSERT INTO title_genre (title_id, genre, source) VALUES ($1, 'Music', 'tmdb')", title_id
         )
+
+    for title_id in (1011, 1030):
+        await concert(title_id)
+    # A musical is no concert: it keeps its place.
+    await db.execute(
+        "INSERT INTO title_genre (title_id, genre, source)"
+        " VALUES (1010, 'Musical', 'tmdb'), (1010, 'Animation', 'tmdb')"
+    )
     payload = await world.home(kinds=("movie",))
     assert [c["title_id"] for c in world.section(payload, "new_in_library", "movie")["items"]] == [
         1010, 1009, 1008
@@ -2236,9 +2246,7 @@ async def test_concerts_leave_every_row_until_the_viewer_likes_music(world):
     assert not shown(payload) & {1011, 1030}
 
     for title_id in (1001, 1002, 1003):
-        await db.execute(
-            "INSERT INTO title_genre (title_id, genre, source) VALUES ($1, 'Musical', 'tmdb')", title_id
-        )
+        await concert(title_id)
         await _verdict(db, world.patrick, title_id, 2)
     payload = await world.home(kinds=("movie",))
     assert world.section(payload, "new_in_library", "movie")["items"][0]["title_id"] == 1011

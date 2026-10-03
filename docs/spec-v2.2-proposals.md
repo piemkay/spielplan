@@ -17100,20 +17100,22 @@ have any filter options."
 
 **The decision.**
 1. The row and See all, for anyone, show well-known feature films only: at least 25,000 platform
-   votes, the Acclaimed row's floor (decision 547's reader), 60 minutes or more (an unknown runtime is left out), never TV Movie, and Documentary or
-   Music only where each member the list is for has liked three titles of the kind carrying it.
+   votes, the Acclaimed row's floor (decision 547's reader), 60 minutes or more (an unknown runtime is left out), never TV Movie, a documentary only
+   where each member the list is for has liked three documentaries of the kind, and no concert
+   (item 4) such a member has not opened.
 2. See all filters by decade, Any by default, the 1950s to the 2020s, before its cap of 60, and
    orders best match (the default) or newest first.
 3. Best match is the member's own half of the score, `cf`, not the blended score: on production
    Patrick's fit weighs his half at 0.1, so the blend ranked arthouse classics, nearly Jenny's list,
    though 76 of his 93 placed films are from 2000 on; by `cf` 55 of his 60 are. Everyone averages
    each member's standardised `cf` rank.
-4. Titles carrying Music leave every Home row, owned ones too (New in the library was full of
-   concerts), unless the viewer has liked three titles of the kind carrying it.
+4. Concerts leave every Home row, owned ones too (New in the library was full of them), unless the
+   viewer has liked three: a concert is a title carrying Music and no genre but Music or
+   Documentary, so a musical such as Coco or The Pianist's Music label keeps its place.
 
 The spec is amended in place (v2.1.21): §6.0.
 
-**Cost.** One shared predicate, two query parameters and a Music set read once per Home. The floor
+**Cost.** One shared predicate, two query parameters and a concert set read once per Home. The floor
 counts platform votes, not the crowd dataset's ratings, which stop about 2019, so every decade to
 the 2020s fills. Ranking by `cf` ignores the crowd's and critics' view of an unowned film beyond the
 vote floor.
