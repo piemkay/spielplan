@@ -117,6 +117,7 @@ let target;
 let app;
 let boardOver;
 let tierReply;
+let moves;
 
 /** A phone's width, read by the page as it mounts. */
 function phone(width = 390) {
@@ -132,6 +133,7 @@ function route(url, init) {
   if (url.includes('/api/facets')) payload = { genres: ['Thriller'], decades: [1990] };
   else if (url.includes('/api/vocabulary')) payload = VOCAB;
   else if (url.includes('/api/rank/queue/answer')) payload = queueReplies.shift();
+  else if (url.includes('/api/rank/queue/settle')) payload = { ...board(boardOver), moves };
   else if (url.includes('/api/rank/queue')) payload = queueReplies.shift();
   else if (url.includes('/api/rank/drop')) payload = board(boardOver);
   else if (url.includes('/api/rank/tier')) payload = tierReply;
@@ -175,6 +177,7 @@ beforeEach(() => {
   queueReplies = [];
   boardOver = {};
   tierReply = null;
+  moves = [];
   phone(1024);
   // jsdom measures nothing, so the desktop grid reads as one column wide.
   vi.stubGlobal('ResizeObserver', class { observe() {} unobserve() {} disconnect() {} });
@@ -684,6 +687,32 @@ describe('the comparison sheet (decisions 483, 495)', () => {
     await settle();
     expect($('rank-queue')).toBeNull();
     expect(rank.queueOpen).toBe(false);
+  });
+
+  it('Done mid-round lists the films that changed step, and Undo takes one back (decision 564)', async () => {
+    queueReplies.push({ kind: 'movie', pair: pair(), pool: 3 });
+    queueReplies.push({ kind: 'movie', pair: pair({ token: 'sealed-2' }) });
+    moves = [{ title_id: 2, name: 'Drive', from: 4, to: 5, from_label: 'A', to_label: 'S', tier_edit_id: 71 }];
+    await open();
+    $('rank-sharpen').click();
+    await settle();
+    $('rate-duel-A').click();
+    await settle();
+    $('rank-queue-close').click();
+    await settle();
+
+    expect(rank.queueOpen).toBe(true);
+    expect($('rank-round-end').textContent).toContain("That's 1.");
+    expect($('rank-moves').textContent).toContain('Changed step');
+    expect($('rank-moves').textContent).toContain('Your answers put these in a new step.');
+    expect($('rank-move-2').textContent).toContain('Drive');
+    expect($('rank-move-2').textContent).toContain('A → S');
+
+    $('rank-move-undo-2').click();
+    await settle();
+    expect(posts.at(-1).body).toMatchObject({ title_id: 2, tier: 4, undoes: 71 });
+    expect($('rank-move-2').textContent).toContain('Back in A');
+    expect($('rank-move-undo-2')).toBeNull();
   });
 
   it("shows the queue's selection label only with Show the model on (decision 117)", async () => {

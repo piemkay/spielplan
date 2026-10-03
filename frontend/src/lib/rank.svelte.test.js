@@ -18,6 +18,7 @@ import {
   emptyState,
   facets,
   filterChips,
+  finish,
   flipTerm,
   keepGoing,
   load,
@@ -35,7 +36,8 @@ import {
   showAll,
   showLess,
   spot,
-  typed
+  typed,
+  undoMove
 } from './rank.svelte.js';
 import { hideToast, toast } from './toast.svelte.js';
 
@@ -129,6 +131,7 @@ beforeEach(() => {
   rank.roundAnswered = 0;
   rank.roundDone = false;
   rank.placed = [];
+  rank.moves = [];
   rank.expanded = [];
   rank.perTier = null;
   // `draft` is module state, so reset it or a test depends on the last one's filters.
@@ -881,7 +884,8 @@ describe('a sitting is a round of fifteen (decision 495)', () => {
     rank.queueOpen = true;
     rank.roundAnswered = 7;
     rank.placed = [{ title_id: 1, name: 'Heat', badge: 'S — the only one' }];
-    closeQueue();
+    respond(board({ moves: [] }));
+    await closeQueue();
     expect(rank.roundAnswered).toBe(0);
     expect(rank.roundDone).toBe(false);
     expect(rank.placed).toEqual([]);
@@ -909,6 +913,95 @@ describe('a sitting is a round of fifteen (decision 495)', () => {
     await openQueue();
     expect(rank.roundAnswered).toBe(5);
     expect(fetchMock).not.toHaveBeenCalled();
+  });
+});
+
+const DUNE = { title_id: 2, name: 'Drive', from: 4, to: 5, from_label: 'A', to_label: 'S', tier_edit_id: 71 };
+const HEAT = { title_id: 1, name: 'Heat', from: 5, to: 4, from_label: 'S', to_label: 'A', tier_edit_id: 72 };
+const sent = (i) => [fetchMock.mock.calls[i][0], JSON.parse(fetchMock.mock.calls[i][1].body ?? 'null')];
+
+describe('a round settles into moves (decision 564)', () => {
+  it('settles on the fifteenth answer and lists what moved', async () => {
+    rank.queueOpen = true;
+    rank.pair = pairN(14);
+    rank.roundAnswered = ROUND_SIZE - 1;
+    respond({ kind: 'movie', pair: pairN(15) });
+    respond(board({ moves: [DUNE] }));
+    await answer('A');
+    expect(rank.roundDone).toBe(true);
+    expect(sent(1)[0]).toMatch(/^\/api\/rank\/queue\/settle\?kind=movie/);
+    expect(fetchMock.mock.calls[1][1].method).toBe('POST');
+    expect(rank.moves).toEqual([{ ...DUNE, undone: false }]);
+  });
+
+  it('Done mid-round shows the end card when something moved', async () => {
+    rank.queueOpen = true;
+    rank.roundAnswered = 6;
+    respond(board({ moves: [DUNE] }));
+    expect(await finish()).toBe(true);
+    expect(rank.roundDone).toBe(true);
+    expect(roundLine()).toBe(`6 of ${ROUND_SIZE} this round`);
+    expect(rank.moves).toHaveLength(1);
+  });
+
+  it('Done mid-round closes when nothing moved, and the close settles nothing again', async () => {
+    rank.queueOpen = true;
+    rank.roundAnswered = 6;
+    respond(board({ moves: [] }));
+    expect(await finish()).toBe(false);
+    await closeQueue();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(toast.message).toBe('');
+  });
+
+  it('Done with no answers settles nothing', async () => {
+    rank.queueOpen = true;
+    expect(await finish()).toBe(false);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('Undo takes one move back as a drop that names the edit, and marks the row', async () => {
+    rank.moves = [{ ...DUNE, undone: false }];
+    respond(board());
+    expect(await undoMove(rank.moves[0])).toBe(true);
+    expect(sent(0)[0]).toMatch(/^\/api\/rank\/drop/);
+    expect(sent(0)[1]).toMatchObject({ title_id: 2, tier: 4, undoes: 71 });
+    expect(rank.moves[0].undone).toBe(true);
+  });
+
+  it('Keep going and a close clear the moves', async () => {
+    rank.moves = [{ ...DUNE, undone: false }];
+    rank.roundDone = true;
+    keepGoing();
+    expect(rank.moves).toEqual([]);
+    rank.moves = [{ ...DUNE, undone: false }];
+    rank.roundAnswered = ROUND_SIZE;
+    rank.roundDone = true;
+    await closeQueue();
+    expect(rank.moves).toEqual([]);
+    expect(fetchMock).not.toHaveBeenCalled();     // the fifteenth answer already settled
+  });
+
+  it('a Back close settles and says one move by name', async () => {
+    rank.queueOpen = true;
+    rank.roundAnswered = 3;
+    respond(board({ moves: [DUNE] }));
+    await closeQueue();
+    expect(toast.message).toBe('Drive moved to S');
+    expect(toast.actionLabel).toBe('Undo');
+  });
+
+  it('a Back close counts several moves, and its Undo takes them all back', async () => {
+    rank.queueOpen = true;
+    rank.roundAnswered = 3;
+    respond(board({ moves: [DUNE, HEAT] }));
+    await closeQueue();
+    expect(toast.message).toBe('2 films changed step');
+    respond(board());
+    respond(board());
+    await toast.action();
+    expect(sent(1)[1]).toMatchObject({ title_id: 2, tier: 4, undoes: 71 });
+    expect(sent(2)[1]).toMatchObject({ title_id: 1, tier: 5, undoes: 72 });
   });
 });
 

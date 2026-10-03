@@ -20,7 +20,6 @@
   import {
     KIND_LABELS,
     ROUND_END_TEXT,
-    ROUND_END_TITLE,
     ROUND_SIZE,
     answer,
     chooseKind,
@@ -33,6 +32,7 @@
     emptyState,
     facets,
     filterChips,
+    finish as finishRound,
     flipTerm,
     includeLabels,
     keepGoing,
@@ -45,6 +45,7 @@
     openTitle,
     rank,
     reset,
+    roundEndTitle,
     roundLine,
     searchHint,
     setTerm,
@@ -53,7 +54,8 @@
     spot,
     stays,
     tierLegend,
-    typed
+    typed,
+    undoMove
   } from '$lib/rank.svelte.js';
 
   const showModel = $derived(!!session.user?.show_model);
@@ -136,6 +138,9 @@
   function endRound() {
     held = null;
     closeQueue();
+  }
+  async function done(close) {
+    if (!(await finishRound())) close();
   }
   function open(entry) {
     if (suppressClick) return;
@@ -908,14 +913,38 @@
   {#snippet children(close)}
     <div class="bar">
       <span class="footnote data" data-testid="rank-round">{roundLine()}</span>
-      <button class="btn-plain" onclick={close} data-testid="rank-queue-close">Done</button>
+      <button class="btn-plain" onclick={() => done(close)} data-testid="rank-queue-close">Done</button>
     </div>
     <div class="queue" data-testid="rank-queue">
       {#if rank.notice}<p class="footnote" role="status">{rank.notice}</p>{/if}
       {#if rank.roundDone}
         <div class="round-end" data-testid="rank-round-end">
-          <h2 class="title-1">{ROUND_END_TITLE}</h2>
+          <h2 class="title-1">{roundEndTitle()}</h2>
           <p class="why">{ROUND_END_TEXT}</p>
+          {#if rank.moves.length}
+            <section class="moves" data-testid="rank-moves">
+              <h3 class="list-header">Changed step</h3>
+              <p class="footnote">Your answers put these in a new step.</p>
+              <ul class="list-group">
+                {#each rank.moves as m (m.title_id)}
+                  <li class="list-row" data-testid={`rank-move-${m.title_id}`}>
+                    <span class="name">{m.name}</span>
+                    {#if m.undone}
+                      <span class="footnote">Back in {m.from_label}</span>
+                    {:else}
+                      <span class="footnote data">{m.from_label} → {m.to_label}</span>
+                      <button
+                        class="btn-plain"
+                        onclick={() => undoMove(m)}
+                        disabled={rank.busy}
+                        data-testid={`rank-move-undo-${m.title_id}`}>Undo</button
+                      >
+                    {/if}
+                  </li>
+                {/each}
+              </ul>
+            </section>
+          {/if}
           <div class="round-actions">
             <button class="btn-primary" onclick={keepGoing} data-testid="rank-round-more">Keep going</button>
             <button class="btn-secondary" onclick={close} data-testid="rank-round-stop">Done</button>
@@ -1682,6 +1711,23 @@
   .round-actions button {
     width: 100%;
     min-height: 50px;
+  }
+  .moves {
+    align-self: stretch;
+    margin-top: 16px;
+    text-align: start;
+  }
+  .moves > p {
+    padding: 0 var(--gutter);
+  }
+  .moves ul {
+    margin: 8px 0 0;
+    padding: 0;
+    list-style: none;
+  }
+  .moves .name {
+    flex: 1;
+    min-width: 0;
   }
   .placed ul {
     margin: 0;

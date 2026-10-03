@@ -85,7 +85,9 @@ export const rank = $state({
   roundAnswered: 0,
   roundDone: false,
   /** @type {any[]} where the last answered pair's two titles sit now, from the answer route */
-  placed: []
+  placed: [],
+  /** @type {any[]} the titles the last settle moved to a new step (decision 564), each with `undone` */
+  moves: []
 });
 
 /** The filter state the person is editing, kept out of `rank` so a redraw cannot clobber typing. */
@@ -234,6 +236,7 @@ export function reset({ board = true } = {}) {
   rank.roundAnswered = 0;
   rank.roundDone = false;
   rank.placed = [];
+  rank.moves = [];
   rank.log = [];
   rank.error = '';
   rank.notice = '';
@@ -364,16 +367,72 @@ export async function openQueue() {
   await nextPair();
 }
 
-export function closeQueue() {
+/** Decision 564: the titles the answers put beyond their step move there now; the moves come back. */
+export async function settle() {
+  requestSeq += 1;                        // a read started before the settle must not paint over it
+  try {
+    const res = await post(`/rank/queue/settle${qs(query())}`);
+    apply(await withOpened(res));
+    rank.moves = (res.moves ?? []).map((m) => ({ ...m, undone: false }));
+  } catch (err) {
+    fail(err);
+    rank.moves = [];
+  }
+  return rank.moves;
+}
+
+/** Takes one move back as the person's own word (decision 534). */
+export async function undoMove(m) {
+  if (m.undone) return false;
+  const edit = await drop({ title_id: m.title_id, tier: m.from, undoes: m.tier_edit_id });
+  if (edit) m.undone = true;
+  return !!edit;
+}
+
+/** Done: true when the round settles into moves, so the sheet stays open on the end card. */
+export async function finish() {
+  if (rank.roundDone || rank.roundAnswered === 0) return false;
+  const moved = await settle();
+  if (moved.length) {
+    rank.roundDone = true;
+    return true;
+  }
+  startRound();                           // settled: the close that follows has nothing to settle
+  return false;
+}
+
+// Back or a swipe closes without the end card, so what moved is said in one toast.
+export async function closeQueue() {
+  const unsettled = rank.roundAnswered > 0 && !rank.roundDone;
   rank.queueOpen = false;
   rank.pair = null;
   startRound();
+  if (!unsettled) return;
+  const moved = await settle();
+  if (!moved.length) return;
+  const text =
+    moved.length === 1
+      ? `${moved[0].name} moved to ${moved[0].to_label}`
+      : `${moved.length} ${nounFor(moved.length)} changed step`;
+  showToast(text, {
+    label: 'Undo',
+    run: async () => {
+      for (const m of moved) await undoMove(m);
+    }
+  });
 }
 
 function startRound() {
   rank.roundAnswered = 0;
   rank.roundDone = false;
   rank.placed = [];
+  rank.moves = [];
+}
+
+/** The end card's head: a Done that settled mid-round counts what was answered. */
+export function roundEndTitle() {
+  const n = rank.roundAnswered;
+  return n > 0 && n < ROUND_SIZE ? `That's ${n}.` : ROUND_END_TITLE;
 }
 
 export function keepGoing() {
@@ -381,7 +440,7 @@ export function keepGoing() {
 }
 
 export function roundLine() {
-  const slot = rank.roundDone ? ROUND_SIZE : Math.min(rank.roundAnswered + 1, ROUND_SIZE);
+  const slot = rank.roundDone ? rank.roundAnswered || ROUND_SIZE : Math.min(rank.roundAnswered + 1, ROUND_SIZE);
   return `${slot} of ${ROUND_SIZE} this round`;
 }
 
@@ -436,9 +495,11 @@ export async function answer(outcome, decisive = false) {
     rank.busy = false;
     rank.pending = null;
   }
-  // Re-read the refitted board, then restore the log line that `apply()` blanks.
-  await load(rank.kind);
-  if (mine === answerSeq) rank.log = line;
+  // Re-read the refitted board (the round's last answer settles it), then restore the log line that
+  // `apply()` blanks unless the settle wrote its own.
+  if (rank.roundDone) await settle();
+  else await load(rank.kind);
+  if (mine === answerSeq && !rank.moves.length) rank.log = line;
 }
 
 /** The kind's own word for `n` titles: "film", "films", "series". */
